@@ -847,13 +847,18 @@ private:
 
     // ---------------------------------------------------------------- samples of the scan (local)
     std::vector<uint8_t> sheetTri;
+    double density{25};            // samples per m2 used for every metric of this run
     void sampleScan() {
         const auto& s = R.scan;
         sheetTri.assign(s.triangles(), 0);
         for (size_t t = 0; t < s.triangles(); ++t) if (triPlane[t] >= 0 && regions[static_cast<size_t>(triPlane[t])].sheet) sheetTri[t] = 1;
         std::vector<uint8_t> use(s.triangles(), 0);
         for (size_t t = 0; t < s.triangles(); ++t) use[t] = ext[t] && !sheetTri[t];
-        S = sg::sampleTriangles(lp, s.tri, P.metricDensity, 7, &use);
+        // 25 samples per m2, fewer over a very large scan (the cost is the samples: 60k keep a district's building under a few seconds)
+        double extArea = 0;
+        for (size_t t = 0; t < s.triangles(); ++t) if (use[t]) extArea += s.area[t];
+        density = std::min(P.metricDensity, std::max(4.0, 60000.0 / std::max(1.0, extArea)));
+        S = sg::sampleTriangles(lp, s.tri, density, 7, &use);
         sGround.assign(S.size(), 0);
         for (size_t i = 0; i < S.size(); ++i) {
             const auto& q = S[i];
@@ -1832,7 +1837,15 @@ private:
         }
         // the primitive: one per band, its parameters per bay (6 + 1 each), and its corrections
         buildPassageSweep(y0, y1, sAx, tAx, sMin, sMax, tMin, tMax, bays, supports, F, order);
-        (void)lowest;
+        if (lowest) {
+            // the band's plan: its rectangle along the passage axis, less the bays (the passage is open at both ends, so it is no hole)
+            Loop L;
+            for (const auto& q : {std::pair<double, double>{sMin, tMin}, {sMax, tMin}, {sMax, tMax}, {sMin, tMax}}) { L.pts.push_back(sAx * q.first + tAx * q.second); L.bulge.push_back(0); }
+            double open = 0;
+            for (const auto& b : bays) open += (b.sR - b.sL) * (tMax - tMin);
+            R.footprint.push_back(L);
+            R.footprintArea += (sMax - sMin) * (tMax - tMin) - open;
+        }
         return true;
     }
 
@@ -2608,7 +2621,7 @@ private:
         sg::ScratchboxMesh fm = sg::toMesh(fpos, ftri);
         bvh::BvhTree ftree;
         if (!ftri.empty()) ftree.build(fm);
-        auto FS = sg::sampleTriangles(fpos, ftri, P.metricDensity, 33);
+        auto FS = sg::sampleTriangles(fpos, ftri, density, 33);
         std::vector<Vec3> FP, FN;
         for (const auto& q : FS) { FP.push_back(q.p); FN.push_back(q.n); }
         sg::GroundOccluder G;
@@ -2683,7 +2696,7 @@ private:
                 std::vector<Vec3> rp;
                 for (const auto& v : scene.mesh.vertices) rp.push_back(R.frame.toLocal(v.position));
                 std::vector<uint32_t> rt = scene.mesh.indices;
-                auto RS = sg::sampleTriangles(rp, rt, P.metricDensity, 44);
+                auto RS = sg::sampleTriangles(rp, rt, density, 44);
                 std::vector<std::pair<double, double>> rd;
                 std::vector<double> dd(RS.size(), 0);
                 sg::parallelFor(RS.size(), [&](size_t i) { auto [d, t] = sgrid.nearest(RS[i].p, 3.0); dd[i] = t == UINT32_MAX ? 3.0 : d; });
@@ -2887,6 +2900,7 @@ private:
             const Vec3 w = R.frame.toWorld(Vec3(static_cast<float>(p.x), 0, static_cast<float>(p.y)));
             key += std::to_string(std::lround(w.x / 0.25)) + "," + std::to_string(std::lround(w.z / 0.25)) + ";";
         }
+        if (key.empty()) key = std::to_string(std::lround(structX0 / 0.25)) + "," + std::to_string(std::lround(structX1 / 0.25)) + "," + std::to_string(std::lround(structZ0 / 0.25)) + "," + std::to_string(std::lround(structZ1 / 0.25));
         key += "|" + std::to_string(std::lround(Q.anchorX * 100)) + "," + std::to_string(std::lround(Q.anchorZ * 100));
         R.buildingId = hex16(fnv1a(key));
         // counts and tile-frame output
