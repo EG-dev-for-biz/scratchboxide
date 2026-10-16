@@ -67,7 +67,17 @@ function shortDegradation(d: DegradationRecord): string {
     return `${d.stage} fell to ${d.fellTo} (${d.reasonCode}${model})`;
 }
 
-/** Rule "digest": status and degradations first, then the retry handle, within 200 characters. */
+/** "<stage>: <reasonCode>[ (<model> <status>)]": one degradation, as short as it gets. */
+function codeDegradation(d: DegradationRecord): string {
+    const model = d.model && d.model.outcome === 'failed' ? ` (${d.model.used || d.model.requested}${d.model.error ? ` ${(/\b\d{3}\b/.exec(d.model.error) ?? [''])[0]}` : ''})`.replace(' )', ')') : '';
+    return `${d.stage}: ${d.reasonCode}${model}`;
+}
+
+/**
+ * Rule "digest": status and degradations first, then the retry handle, within 200 characters: each degradation in
+ * full ("remesh fell to … (remesh_failed)") when they all fit, else by stage and reason code, else as many as fit
+ * and the count of the rest.
+ */
 export function stagedDigest(input: StagedSummaryInput): string {
     const max = STAGED_SUMMARY_LIMITS.digestMaxChars;
     const done = input.stages.filter(s => s.status === 'committed').map(s => s.stage);
@@ -75,16 +85,17 @@ export function stagedDigest(input: StagedSummaryInput): string {
     const retryStages = [...new Set(input.degradations.filter(d => d.transient && d.retry).map(d => d.retry!.args.retryStage))];
     const stopped = input.stages.filter(s => s.status === 'stopped').map(s => s.stage);
     const retry = `retry retryRunId ${input.runId}${retryStages.length ? ` stage ${retryStages[0]}` : stopped.length ? ` stage ${stopped[0]}` : ''}.`;
-    const parts: string[] = [];
     const degr = input.degradations.filter(d => d.reasonCode !== 'pass_through');
-    if (input.status === 'stopped' && stopped.length) parts.push(`stopped before ${stopped.join(', ')}`);
-    for (const d of degr) parts.push(shortDegradation(d));
-    let text = `${head}${parts.length ? `; ${parts.join('; ')}` : ''}; ${retry}`;
-    if (text.length <= max) return text;
-    // keep the status, as many degradations as fit, the count of the rest, and the retry handle
+    const lead = input.status === 'stopped' && stopped.length ? [`stopped before ${stopped.join(', ')}`] : [];
+    const compose = (parts: string[]) => `${head}${parts.length ? `; ${parts.join('; ')}` : ''}; ${retry}`;
+    for (const form of [shortDegradation, codeDegradation]) {
+        const text = compose([...lead, ...degr.map(form)]);
+        if (text.length <= max) return text;
+    }
+    // as many short forms as fit, the count of the rest, and the retry handle
+    const parts = [...lead, ...degr.map(codeDegradation)];
     for (let keep = parts.length - 1; keep >= 0; keep--) {
-        const rest = parts.length - keep;
-        text = `${head}${keep ? `; ${parts.slice(0, keep).join('; ')}` : ''}; +${rest} more degraded; ${retry}`;
+        const text = `${head}${keep ? `; ${parts.slice(0, keep).join('; ')}` : ''}; +${parts.length - keep} more degraded; ${retry}`;
         if (text.length <= max) return text;
     }
     return `${`Staged build ${input.status}; ${degr.length} degraded`.slice(0, max - retry.length - 2)}; ${retry}`.slice(0, max);

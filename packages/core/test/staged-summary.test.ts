@@ -46,9 +46,11 @@ const ruleCase: Record<string, () => void> = {
     digest: () => {
         const d = stagedDigest(input());
         expect(d.length).toBeLessThanOrEqual(200);
-        expect(d.startsWith('Staged build degraded: tiles, remesh, fit committed; ')).toBe(true);
-        expect(d).toContain('vision fell to the flat fitted face (vision_unavailable, gemini-4-argon 503)');
-        expect(d.endsWith(`retry retryRunId ${RUN_ID} stage vision.`)).toBe(true);
+        // both degradations do not fit in full: each by stage and reason code
+        expect(d).toBe(`Staged build degraded: tiles, remesh, fit committed; vision: vision_unavailable (gemini-4-argon 503); trees: trees_failed; retry retryRunId ${RUN_ID} stage vision.`);
+        // one fits in full: what fell to what
+        const one = stagedDigest(input({ degradations: [input().degradations[0]] }));
+        expect(one).toBe(`Staged build degraded: tiles, remesh, fit committed; vision fell to the flat fitted face (vision_unavailable, gemini-4-argon 503); retry retryRunId ${RUN_ID} stage vision.`);
         // many degradations: still ≤ 200, status first, retry handle last, the rest counted
         const many: DegradationRecord[] = Array.from({ length: 12 }, (_, i) => ({ ...input().degradations[1], id: `d-${i}`, part: { description: `part ${i}` } }));
         const crowded = stagedDigest(input({ degradations: [input().degradations[0], ...many] }));
