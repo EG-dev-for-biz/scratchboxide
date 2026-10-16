@@ -10,6 +10,7 @@
 import * as http from 'http';
 import { createStandaloneServer, createToolsServer, resolveLaunchToken } from './app';
 import { resolveRendererDist } from './renderer-dist';
+import { warmNativeEngine } from '../../packages/core/src/node/3d-engine/native-warmup';
 
 const PORT = parseInt(process.env.PORT || process.env.SCRATCHBOX_API_PORT || '3001', 10);
 const TOOLS_PORT = parseInt(process.env.SCRATCHBOX_TOOLS_PORT || '3002', 10);
@@ -59,6 +60,8 @@ const apiServer = app.listen(PORT, HOST, () => {
     } else if (process.env.SCRATCHBOX_PRINT_LAUNCH_TOKEN === '1') {
         console.log(`[Scratchbox API] Launch token: ${app.locals.launchToken}`);
     }
+    // Build the native engines a location request needs now that the server is up, so the first request finds them ready.
+    void warmNativeEngine();
 });
 attachListenErrorHandler(apiServer, 'API', PORT);
 

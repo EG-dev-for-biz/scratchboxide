@@ -18,6 +18,7 @@ import type { UserMemoriesService } from '../user-memories-service';
 import type { WorkspaceConfigService } from '../workspace-config-service';
 import { isReadOnlyMode } from './tool-permissions';
 import { OBJECT_BUILD_SOURCE, type BuiltObjectRecord } from '../../common/spatial/object-build-spec';
+import { stagedBuildContext } from '../3d-engine/staged-location/staged-summary';
 
 /** Workspace-intelligence services the system instruction draws context from. */
 export interface PromptContextServices {
@@ -988,6 +989,8 @@ export function buildContents(request: GeminiGenerateRequest): Content[] {
                 objects: media4dSummary,
                 recentOperators: (sceneData.operatorStack || []).slice(-10)
             };
+            // a staged location build on the canvas: its run state, degradations and retry handle, ahead of the capped summary
+            userPrompt += stagedBuildContext(sceneData);
             userPrompt += `\n[Active 3D Scene In-Memory State: ${JSON.stringify(sceneSummary).slice(0, 5000)}]`;
             userPrompt += activeObjectBuildContext(sceneData);
         }

@@ -17,6 +17,7 @@ import type {
     SubagentResponse
 } from '../../common/gemini-protocol';
 import type { CanvasArtifact, McpExecutionState } from '../../browser/generative-canvas/canvas-types';
+import type { StageEvent } from '../../common/spatial/staged-location-contracts';
 import {
     DEFAULT_SUBAGENT_MODEL,
     GeminiClient,
@@ -982,8 +983,23 @@ export class StreamingEngine {
             if (Date.now() - lastEmitAt >= 1000) emitRunning();
         };
 
+        // A staged build's stage changed status: a status event carrying the running card and the stageEvent, plus
+        // the scene artifact on a commit, degrade or finish (which mounts it). Restarts the idle limit like progress.
+        const emitStage = (stage: StageEvent, artifact?: CanvasArtifact) => {
+            if (settled) return;
+            lastProgressAt = Date.now();
+            progressText = `${stage.title} — ${stage.status}`.slice(0, 200);
+            armIdle();
+            lastEmitAt = Date.now();
+            onEvent({
+                type: 'status', text: `${toolName}: ${progressText}`, modelUsed: model,
+                mcpExecution: runningExecution(execId, toolName, toolCall.args, `${progressText} (${elapsedS()}s)`),
+                stageEvent: stage, ...(artifact ? { artifact } : {})
+            });
+        };
+
         emitRunning();
-        const work = this.executeToolCall(toolCall, request, { signal: controller.signal, reportProgress });
+        const work = this.executeToolCall(toolCall, request, { signal: controller.signal, reportProgress, emitStage });
         work.catch(() => undefined);
 
         try {
@@ -1027,7 +1043,7 @@ export class StreamingEngine {
     async executeToolCall(
         toolCall: GeminiFunctionCall,
         request: GeminiGenerateRequest,
-        extras: Pick<ToolContext, 'signal' | 'reportProgress'> = {}
+        extras: Pick<ToolContext, 'signal' | 'reportProgress' | 'emitStage'> = {}
     ): Promise<ToolExecutionResult> {
         const toolName = toolCall.name || '';
         const blocked = toolBlockedReason(request.mode, toolName);

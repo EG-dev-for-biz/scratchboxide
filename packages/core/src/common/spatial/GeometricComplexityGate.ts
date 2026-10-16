@@ -9,6 +9,8 @@
  * - Minimum geometric entropy & density enforcement (>=25,000 vertices for full scenes)
  ********************************************************************************/
 
+import { validateContract, type ProvenanceLabel, type StructureFit } from './staged-location-contracts';
+
 export interface GeometricMeshSummary {
     name: string;
     vertexCount: number;
@@ -69,7 +71,28 @@ export interface ComplexityGateOptions {
      * Default: true.
      */
     enforceCompoundCurvature?: boolean;
+
+    /**
+     * Measured geometry is exempt from the vertex floor (AGENTS.md, Measured-Geometry Exemption) and judged by its fit
+     * to the scan instead; it is never padded to pass. The density, triangle, hierarchy and curvature checks count only
+     * the submeshes no exemption covers. A measured rebuild is exempt only when the gate itself finds its StructureFit
+     * valid and accepted: numbers a caller passes in are never trusted.
+     */
+    exemptions?: ComplexityExemption[];
 }
+
+/** Why a submesh is exempt from the vertex floor. */
+export type ComplexityExemption =
+    /** Google 3D Tiles as scanned, flattened or remeshed: the tiles' own density at their leaf error. */
+    | { scanDerived: { submeshes: string[]; label: ProvenanceLabel; leafGeometricErrorM: number } }
+    /** A scan-fitted rebuild (fitted body, outlines, pass-through, its detail), exempt only on a valid, accepted StructureFit. */
+    | { measuredRebuild: { submeshes: string[]; structureFit: StructureFit; structureFitSha256: string } }
+    /**
+     * SB-Veggie trees grown inside crowns measured in the tile scan: each tree's position, extent and height are the
+     * scan's, so the layer's vertex count follows the crowns measured and is never padded. Exempt only for a positive
+     * whole number of crowns, which the caller reads from the strip's crown list.
+     */
+    | { measuredCrowns: { submeshes: string[]; crowns: number } };
 
 export interface ComplexityGateReport {
     passed: boolean;
@@ -78,6 +101,26 @@ export interface ComplexityGateReport {
     submeshCount: number;
     violations: string[];
     isNativeKernel: boolean;
+    /** Each exemption granted, with its basis ("vertex floor: scan-derived layer (…)"). */
+    exemptions: string[];
+    /** Exemptions asked for and refused, with why (their submeshes were counted). */
+    exemptionsRefused: string[];
+}
+
+/** Minimums a StructureFit must meet, read from the StructureFit itself, for its rebuild to be exempt. */
+export const MEASURED_REBUILD_MIN_COVERAGE = 0.85;
+export const MEASURED_REBUILD_MAX_SCAN_TO_FIT_RMS_M = 0.06;
+
+/** Why a StructureFit does not earn the measured-rebuild exemption, or undefined when it does. */
+export function measuredRebuildRefusal(fit: StructureFit): string | undefined {
+    const problems = validateContract('StructureFit', fit);
+    if (problems.length) return `its StructureFit is not valid (${problems.slice(0, 3).join('; ')})`;
+    if (fit.accepted !== true) return 'its StructureFit was not accepted';
+    const failed = fit.gates.filter(g => !g.passed);
+    if (failed.length) return `its StructureFit failed ${failed.map(g => g.gate).join(', ')}`;
+    if (!(fit.metrics.coverage >= MEASURED_REBUILD_MIN_COVERAGE)) return `its coverage ${Math.round(fit.metrics.coverage * 100)}% is under ${Math.round(MEASURED_REBUILD_MIN_COVERAGE * 100)}%`;
+    if (!(fit.metrics.scanToFit.rmsM <= MEASURED_REBUILD_MAX_SCAN_TO_FIT_RMS_M)) return `its scan→fit rms ${(fit.metrics.scanToFit.rmsM * 100).toFixed(1)} cm is over ${MEASURED_REBUILD_MAX_SCAN_TO_FIT_RMS_M * 100} cm`;
+    return undefined;
 }
 
 export class GeometricFidelityViolationError extends Error {
@@ -119,24 +162,68 @@ export class GeometricComplexityGate {
         const disallowed = options.disallowedGenerators ?? this.BANNED_PRIMITIVE_GENERATORS;
 
         const violations: string[] = [];
+        const kernel = (metrics.engineKernel || '').toLowerCase();
+        const isNativeKernel = kernel.includes('c++') || kernel.includes('nanobind') || kernel.includes('scratchbox');
+
+        // Exemptions: which submeshes are measured geometry, judged by their fit to the scan instead of the floor
+        const exemptNames = new Set<string>();
+        const exemptions: string[] = [];
+        const exemptionsRefused: string[] = [];
+        const byName = new Map(metrics.submeshes.map(m => [m.name, m]));
+        const countOf = (names: string[]) => names.reduce((s, n) => s + (byName.get(n)?.vertexCount ?? 0), 0);
+        for (const e of options.exemptions ?? []) {
+            if ('scanDerived' in e) {
+                const names = e.scanDerived.submeshes.filter(n => byName.has(n));
+                if (!names.length) continue;
+                names.forEach(n => exemptNames.add(n));
+                exemptions.push(`vertex floor: scan-derived layer (${countOf(names).toLocaleString()} vertices, the tiles' own density at leaf error ${e.scanDerived.leafGeometricErrorM.toFixed(1)} m, ${e.scanDerived.label})`);
+            } else if ('measuredCrowns' in e) {
+                const names = e.measuredCrowns.submeshes.filter(n => byName.has(n));
+                if (!names.length) continue;
+                const crowns = e.measuredCrowns.crowns;
+                if (!Number.isInteger(crowns) || crowns < 1) {
+                    exemptionsRefused.push(`measured crowns ${names.join(', ')}: ${Number.isFinite(crowns) ? crowns : 'no'} measured crowns is not a whole number of at least 1`);
+                    continue;
+                }
+                names.forEach(n => exemptNames.add(n));
+                exemptions.push(`vertex floor: SB-Veggie trees grown to ${crowns.toLocaleString()} measured crown${crowns === 1 ? '' : 's'} (${countOf(names).toLocaleString()} vertices; each tree's position, extent and height come from the tile scan)`);
+            } else {
+                const names = e.measuredRebuild.submeshes.filter(n => byName.has(n));
+                if (!names.length) continue;
+                const fit = e.measuredRebuild.structureFit;
+                const refusal = measuredRebuildRefusal(fit);
+                if (refusal) {
+                    exemptionsRefused.push(`measured rebuild ${names.join(', ')}: ${refusal}`);
+                    continue;
+                }
+                names.forEach(n => exemptNames.add(n));
+                exemptions.push(`vertex floor: measured rebuild (${countOf(names).toLocaleString()} vertices; StructureFit ${e.measuredRebuild.structureFitSha256.slice(0, 8)} accepted, ${(fit.metrics.scanToFit.rmsM * 100).toFixed(1)} cm rms over ${Math.round(fit.metrics.coverage * 100)}% of the visible scan)`);
+            }
+        }
+        const counted = exemptNames.size ? metrics.submeshes.filter(m => !exemptNames.has(m.name)) : metrics.submeshes;
+        const allExempt = exemptNames.size > 0 && counted.length === 0;
+        const countedVertices = exemptNames.size ? counted.reduce((s, m) => s + m.vertexCount, 0) : metrics.totalVertices;
+        const countedTriangles = exemptNames.size ? counted.reduce((s, m) => s + m.triangleCount, 0) : metrics.totalTriangles;
+        const countedMetrics: GeometricSceneMetrics = { ...metrics, submeshes: counted };
 
         // 1. Vertex Density Audit
-        if (metrics.totalVertices < minVertices) {
+        if (!allExempt && countedVertices < minVertices) {
             violations.push(
-                `Insufficient geometric density: scene has ${metrics.totalVertices.toLocaleString()} vertices, minimum required is ${minVertices.toLocaleString()} vertices. ` +
-                `This indicates a prohibited low-fidelity JavaScript primitive fallback.`
+                `Insufficient geometric density: scene has ${countedVertices.toLocaleString()} ${exemptNames.size ? 'non-exempt ' : ''}vertices, minimum required is ${minVertices.toLocaleString()} vertices.` +
+                // only a script kernel can have fallen back to JavaScript primitives; a native or scanned layer has not
+                (kernel && !isNativeKernel ? ' This indicates a prohibited low-fidelity JavaScript primitive fallback.' : '')
             );
         }
 
         // 2. Triangle Count Audit
-        if (metrics.totalTriangles < minTriangles) {
+        if (!allExempt && countedTriangles < minTriangles) {
             violations.push(
-                `Insufficient polygon resolution: scene has ${metrics.totalTriangles.toLocaleString()} triangles, minimum required is ${minTriangles.toLocaleString()} triangles.`
+                `Insufficient polygon resolution: scene has ${countedTriangles.toLocaleString()} ${exemptNames.size ? 'non-exempt ' : ''}triangles, minimum required is ${minTriangles.toLocaleString()} triangles.`
             );
         }
 
-        // 3. Multi-Mesh Hierarchy Audit
-        if (requireMultiMesh && metrics.submeshes.length < 2) {
+        // 3. Multi-Mesh Hierarchy Audit (a generated scene's 70-20-10 rule; measured layers are what the scan holds)
+        if (!allExempt && requireMultiMesh && metrics.submeshes.length < 2) {
             violations.push(
                 `Missing architectural hierarchy: scene contains only ${metrics.submeshes.length} submesh. ` +
                 `The 70-20-10 rule requires distinct primary massing, secondary wings, and tertiary botanical/architectural detail.`
@@ -154,8 +241,6 @@ export class GeometricComplexityGate {
         }
 
         // 5. Engine Kernel Audit
-        const kernel = (metrics.engineKernel || '').toLowerCase();
-        const isNativeKernel = kernel.includes('c++') || kernel.includes('nanobind') || kernel.includes('scratchbox');
         if (kernel && !isNativeKernel) {
             violations.push(
                 `Unsanctioned 3D engine kernel: "${metrics.engineKernel}". Only the native C++20 / Python engine kernels are permitted.`
@@ -170,7 +255,7 @@ export class GeometricComplexityGate {
 
         // 7. Compound Curvature Audit (Anti-Box-Stacking Invariant)
         if (options.enforceCompoundCurvature ?? true) {
-            const curvatureViolations = this.evaluateCurvatureFidelity(metrics);
+            const curvatureViolations = this.evaluateCurvatureFidelity(countedMetrics);
             violations.push(...curvatureViolations);
         }
 
@@ -180,7 +265,9 @@ export class GeometricComplexityGate {
             totalTriangles: metrics.totalTriangles,
             submeshCount: metrics.submeshes.length,
             violations,
-            isNativeKernel
+            isNativeKernel,
+            exemptions,
+            exemptionsRefused
         };
     }
 

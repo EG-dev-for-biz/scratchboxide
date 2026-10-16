@@ -249,6 +249,32 @@ describe('runLocationClayPipeline', () => {
         expect(err.message).toContain('the budget was the treeTriangleBudget asked for');
     });
 
+    it('passes relief, the anchor and the strip ROI through, and summarizeTrees gives the same trees as the pipeline', async () => {
+        const stub = refineStub();
+        const strips: Array<TileVegetationStripRequest & { roi?: unknown }> = [];
+        const roi = { schema: 'scratchbox.strip-roi/1' as const, polygon: [[-20, -20], [20, -20], [20, 20], [-20, 20]] as Array<[number, number]> };
+        const recording: LocationClayDeps = {
+            vegetation: { strip: req => { strips.push(req); return vegetation.strip({ tilePath: req.tilePath, signal: req.signal }); }, plant: req => vegetation.plant(req) },
+            refine: stub.refine
+        };
+        const r = await runLocationClayPipeline({
+            rawTilePath: path.join(root, 'district.glb'), workspaceRoot: root, isolate: true, trees: true, flavour: 'clay', publishBase: 'passthrough',
+            relief: false, anchor: { x: 9.5, z: -10.5 }, roi
+        }, recording);
+        expect(stub.calls[0]).toMatchObject({ relief: false, anchor: { x: 9.5, z: -10.5 }, isolate: true });
+        expect(strips[0].roi).toEqual(roi);
+        // the default leaves relief on: nothing is sent, tile_refine's own default (on) applies
+        const plain = refineStub();
+        await runLocationClayPipeline({ rawTilePath: path.join(root, 'district.glb'), workspaceRoot: root, isolate: false, trees: false, flavour: 'clay', publishBase: 'relief_default' }, deps(plain));
+        expect(plain.calls[0].relief).toBeUndefined();
+        expect(plain.calls[0].anchor).toBeUndefined();
+        // the extracted summary is the pipeline's own
+        const { summarizeTrees } = await import('../src/node/3d-engine/location-clay-pipeline');
+        const strip = await vegetation.strip({ tilePath: path.join(root, 'district.glb') });
+        expect(summarizeTrees(strip, undefined, { isolate: false, stripMs: 0 })).toMatchObject({ measured: 3, count: 0, crownsJson: strip.crownsJson });
+        expect(r.trees!.onIsolatedStructure).toBe(true);
+    });
+
     it('skips the trees entirely when they are not asked for', async () => {
         const stub = refineStub();
         const r = await runLocationClayPipeline({ rawTilePath: path.join(root, 'district.glb'), workspaceRoot: root, isolate: false, trees: false, flavour: 'textured', publishBase: 'textured_only' }, deps(stub));

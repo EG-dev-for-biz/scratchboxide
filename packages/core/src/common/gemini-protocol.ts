@@ -14,6 +14,7 @@ import type {
     GroundingSupport,
     McpExecutionState
 } from '../browser/generative-canvas/canvas-types';
+import type { StageEvent } from './spatial/staged-location-contracts';
 
 export type {
     GroundingChunk,
@@ -227,6 +228,8 @@ export interface GeminiStreamEvent {
     questionCard?: import('../browser/generative-canvas/canvas-types').InteractiveQuestionCardData;
     executionPlanCard?: import('../browser/generative-canvas/canvas-types').ExecutionPlanCardData;
     taskList?: AgentTaskListItem[];
+    /** A staged build's stage changed status (on a `status` event; a commit, degrade or finish also carries `artifact`). */
+    stageEvent?: StageEvent;
 }
 
 /**

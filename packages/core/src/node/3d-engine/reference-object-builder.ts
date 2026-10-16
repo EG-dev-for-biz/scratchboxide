@@ -45,6 +45,8 @@ import {
 } from '../../common/spatial/object-build-spec';
 import { classifyMediaGenerationError } from '../../common/media-generation-protocol';
 import { GeminiClient, errorMessage, isModelNotFoundError } from '../gemini/gemini-client';
+import { describeThinking } from '../gemini/thinking-config';
+import { VisionModelChain } from '../gemini/vision-model-chain';
 import { NativePythonRunnerService, type PythonExecutionOptions, type PythonExecutionResult } from './native-python-runner-service';
 import {
     analyzePartConnectivityAsync,
@@ -207,6 +209,8 @@ export interface VisionModelUse extends ModelUse {
     source: 'request' | 'chat-default';
     /** Models tried before `used`, each with the reason it was passed over. */
     skipped: Array<{ model: string; reason: string }>;
+    /** The thinking the spec read asked the model for (LOW on Gemini 4; a 512-token budget on 3.x). */
+    thinking?: { level: 'LOW' | 'MEDIUM' | 'HIGH' } | { budget: number };
 }
 
 export interface RevisionFailure {
@@ -443,33 +447,46 @@ export function schemaInstruction(schema: Record<string, unknown>): string {
     return `Reply with one JSON object only, no prose or code fences, that follows this JSON Schema exactly:\n${JSON.stringify(schema)}`;
 }
 
+/** Thinking tokens for the spec read: LOW on Gemini 4 (thinkingConfigFor), a 512-token budget on 3.x. */
+export const SPEC_READ_THINKING_BUDGET = 512;
+
 /**
- * The vision model for one build. Its first call walks the chat's candidate list the way chat does: only a "model
- * not found" answer moves on to the next model, and each skipped model is recorded with its error. After a model
- * answers, every later call in the build uses that model only.
+ * The vision model for one build, on the shared visible fallback chain (vision-model-chain): its first call walks the
+ * chat's candidate list the way chat does, only a "model not found" answer moves on to the next model, and each skipped
+ * model is recorded with its error. After a model answers, every later call in the build uses that model only. Only the
+ * spec read asks for LOW thinking; the comparisons keep the model's default.
  */
 class VisionModel {
-    private model?: string;
-    private answeredVersion?: string;
-    /** True once any model was asked. */
-    private asked = false;
-    readonly skipped: Array<{ model: string; reason: string }> = [];
+    private readonly chain: VisionModelChain<ObjectBuildStage>;
+    /** The thinking the spec read asked for, as recorded on the result. */
+    private specThinking?: VisionModelUse['thinking'];
 
     constructor(
-        private readonly client: GenerateContentClient,
+        client: GenerateContentClient,
         private readonly candidates: string[],
         readonly source: 'request' | 'chat-default',
-        private readonly deps: ReferenceObjectBuilderDeps,
-        private readonly signal?: AbortSignal
-    ) {}
+        deps: ReferenceObjectBuilderDeps,
+        signal?: AbortSignal
+    ) {
+        this.chain = new VisionModelChain<ObjectBuildStage>({
+            client,
+            candidates,
+            signal,
+            sleep: deps.sleep ?? defaultSleep,
+            makeError: (stage, message, details) => new ReferenceObjectBuildError(stage, message, { ...details })
+        });
+    }
 
     get current(): string {
-        return this.model ?? this.candidates[this.skipped.length];
+        return this.chain.current;
     }
 
     use(): VisionModelUse {
-        const used = this.model ?? this.current;
-        return { requested: this.candidates[0], used, answered: this.answeredVersion ?? used, source: this.source, skipped: [...this.skipped] };
+        const used = this.chain.answeredModel ?? this.current;
+        return {
+            requested: this.candidates[0], used, answered: this.chain.answered ?? used, source: this.source, skipped: [...this.chain.skipped],
+            ...(this.specThinking ? { thinking: this.specThinking } : {})
+        };
     }
 
     /**
@@ -477,41 +494,30 @@ class VisionModel {
      * stands in for and why that one was skipped. A stop is left as it is.
      */
     annotate(err: unknown): unknown {
-        if (!(err instanceof ReferenceObjectBuildError) || !this.asked || err.details.aborted) return err;
+        if (!(err instanceof ReferenceObjectBuildError) || !this.chain.wasAsked || err.details.aborted) return err;
         const requested = this.candidates[0];
         const chatModel = `the chat's ${this.source === 'chat-default' ? 'default ' : ''}model ${requested}`;
+        const skipped = this.chain.skipped;
+        const used = this.chain.answeredModel;
         // "None of the chat's models is served" already lists every skipped model.
-        const note = this.skipped.length && !Array.isArray(err.details.skipped)
-            ? ` (The spec was ${this.model ? 'read by' : 'asked of'} ${this.model ?? this.current} because ${chatModel} is not served: ${this.skipped.map(s => `${s.model}: ${s.reason}`).join('; ')}.)`
+        const note = skipped.length && !Array.isArray(err.details.skipped)
+            ? ` (The spec was ${used ? 'read by' : 'asked of'} ${used ?? this.current} because ${chatModel} is not served: ${skipped.map(s => `${s.model}: ${s.reason}`).join('; ')}.)`
             : '';
         const visionModel = {
             requested,
             source: this.source,
-            ...(this.model ? { used: this.model, answered: this.answeredVersion ?? this.model } : { asked: this.current ?? null, answered: null }),
-            skipped: [...this.skipped]
+            ...(used ? { used, answered: this.chain.answered ?? used } : { asked: this.current ?? null, answered: null }),
+            skipped: [...skipped],
+            ...(this.specThinking ? { thinking: this.specThinking } : {})
         };
         return new ReferenceObjectBuildError(err.stage, err.message + note, { ...err.details, visionModel });
     }
 
-    async generate(params: Omit<GenerateContentParameters, 'model'>, stage: ObjectBuildStage): Promise<GenerateContentResponse> {
-        this.asked = true;
-        if (this.model) return callModel(this.client, { ...params, model: this.model }, stage, this.deps, this.signal);
-        for (let i = this.skipped.length; i < this.candidates.length; i++) {
-            const model = this.candidates[i];
-            try {
-                const response = await callModel(this.client, { ...params, model }, stage, this.deps, this.signal);
-                this.model = model;
-                this.answeredVersion = response.modelVersion || model;
-                return response;
-            } catch (err) {
-                const notFound = err instanceof ReferenceObjectBuildError && err.details.modelNotFound === true;
-                if (!notFound) throw err;
-                this.skipped.push({ model, reason: err.message });
-            }
-        }
-        throw new ReferenceObjectBuildError(stage,
-            `None of the chat's models is served: ${this.skipped.map(s => `${s.model} (${s.reason})`).join('; ')}`,
-            { skipped: this.skipped });
+    async generate(params: Omit<GenerateContentParameters, 'model'>, stage: ObjectBuildStage, thinkingBudget?: number): Promise<GenerateContentResponse> {
+        if (thinkingBudget !== undefined) this.specThinking = this.chain.thinkingFor(thinkingBudget);
+        const result = await this.chain.generate(params, { stage, ...(thinkingBudget !== undefined ? { thinkingBudget } : {}) });
+        if (result.thinking) this.specThinking = describeThinking(result.thinking);
+        return result.response;
     }
 }
 
@@ -526,13 +532,13 @@ interface JsonReply {
  * responseJsonSchema with the spec schema on the chat model (400 INVALID_ARGUMENT, verified live), so the schema is
  * stated in the request and every reply is checked here instead.
  */
-async function callJson(vision: VisionModel, contents: Content[], schema: Record<string, unknown>, stage: ObjectBuildStage, signal?: AbortSignal): Promise<JsonReply> {
+async function callJson(vision: VisionModel, contents: Content[], schema: Record<string, unknown>, stage: ObjectBuildStage, signal?: AbortSignal, thinkingBudget?: number): Promise<JsonReply> {
     const last = contents[contents.length - 1];
     const withSchema: Content[] = [...contents.slice(0, -1), { ...last, parts: [...(last.parts || []), { text: schemaInstruction(schema) }] }];
     const response = await vision.generate({
         contents: withSchema,
         config: { responseMimeType: 'application/json', temperature: 0.2, abortSignal: signal }
-    }, stage);
+    }, stage, thinkingBudget);
     const blocked = response.promptFeedback?.blockReason;
     if (blocked) throw new ReferenceObjectBuildError(stage, `${vision.current} refused the request (${blocked}).`, { model: vision.current });
     const text = responseText(response);
@@ -732,7 +738,7 @@ async function requestBuildableSpec(
     };
     const finder = (a: Attempt) => a.timedOut ? 'the build ran out of time' : a.from === 'build' ? 'the interpreter found' : 'the validator found';
 
-    const first = await callJson(vision, contents, OBJECT_BUILD_SPEC_JSON_SCHEMA, 'build-spec', signal);
+    const first = await callJson(vision, contents, OBJECT_BUILD_SPEC_JSON_SCHEMA, 'build-spec', signal, SPEC_READ_THINKING_BUDGET);
     const one = await attempt(first);
     if (one.build && one.spec) return { spec: one.spec, build: one.build, specRequests: 1 };
 
@@ -740,7 +746,7 @@ async function requestBuildableSpec(
         ...contents,
         { role: 'model', parts: [{ text: first.text }] },
         { role: 'user', parts: [{ text: buildCorrectionPrompt(one.problems) }] }
-    ], OBJECT_BUILD_SPEC_JSON_SCHEMA, 'build-spec', signal);
+    ], OBJECT_BUILD_SPEC_JSON_SCHEMA, 'build-spec', signal, SPEC_READ_THINKING_BUDGET);
     const two = await attempt(corrected);
     if (two.build && two.spec) return { spec: two.spec, build: two.build, specRequests: 2, correctedProblems: one.problems };
     const errors = two.problems;

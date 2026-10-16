@@ -33,6 +33,7 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import { TileExtractionError, type TileExtractionStage } from '../../common/errors/pipeline-errors';
+import type { StripRoi } from '../../common/spatial/staged-location-contracts';
 import { getTileRefineService, summarizeTileRefineStats, type TileRefineRequest, type TileRefineResult } from './tile-refine-service';
 import {
     getTileVegetationService,
@@ -45,7 +46,8 @@ import {
 } from './tile-vegetation-service';
 
 export interface LocationClayDeps {
-    vegetation: { strip(req: TileVegetationStripRequest): Promise<TileVegetationStripResult>; plant(req: TileVegetationPlantRequest): Promise<TileVegetationPlantResult> };
+    /** strip takes `roi` where the engine supports it (tile_vegetation --roi-json); without that support it is not sent. */
+    vegetation: { strip(req: TileVegetationStripRequest & { roi?: StripRoi }): Promise<TileVegetationStripResult>; plant(req: TileVegetationPlantRequest): Promise<TileVegetationPlantResult> };
     refine: { refine(req: TileRefineRequest): Promise<TileRefineResult> };
 }
 
@@ -67,6 +69,12 @@ export interface LocationClayRequest {
      * trees: a target per tree that grows with its crown, all within SCENE_TREE_TRIANGLE_CAP.
      */
     treeTriangleBudget?: number;
+    /** tile_refine's photometric relief (default on: gated and labelled inferred); false passes --no-relief. */
+    relief?: boolean;
+    /** Where strip may measure and regrow trees (an isolated structure's outline grown by the crown reach). */
+    roi?: StripRoi;
+    /** The structure's seed in the tile frame, given to tile_refine as its anchor (isolate). */
+    anchor?: { x: number; z: number };
     signal?: AbortSignal;
     reportProgress?: (message: string) => void;
 }
@@ -273,7 +281,7 @@ export async function runLocationClayPipeline(req: LocationClayRequest, deps?: L
         const ts = Date.now();
         strip = await stage('vegetation', req.signal, async () => {
             try {
-                return await d.vegetation.strip({ tilePath: req.rawTilePath, signal: req.signal });
+                return await d.vegetation.strip({ tilePath: req.rawTilePath, signal: req.signal, ...(req.roi ? { roi: req.roi } : {}) });
             } catch (err) {
                 if (err instanceof TileVegetationError) {
                     throw new TileVegetationError(err.code, `${err.message}. The trees could not be measured, so nothing was remeshed or mounted; ask again with trees false for the remeshed tiles without rebuilt trees.`, err.detail);
@@ -288,7 +296,10 @@ export async function runLocationClayPipeline(req: LocationClayRequest, deps?: L
     const tr = Date.now();
     const base = locationPublishBase(req.publishBase, req.isolate, req.trees);
     const refined = await stage('remesh', req.signal, async () => {
-        const r = await d.refine.refine({ tilePath: strip ? strip.devegetatedGlb : req.rawTilePath, isolate: req.isolate || undefined, publishAs: base });
+        const r = await d.refine.refine({
+            tilePath: strip ? strip.devegetatedGlb : req.rawTilePath, isolate: req.isolate || undefined, publishAs: base,
+            ...(req.relief === false ? { relief: false } : {}), ...(req.anchor ? { anchor: req.anchor } : {})
+        });
         const url = req.flavour === 'clay' ? r.published?.urls.clay : r.published?.urls.textured;
         if (!url) throw new Error('tile_refine did not publish a model');
         const file = req.flavour === 'clay' ? r.clayGlb : r.texturedGlb;
@@ -303,139 +314,25 @@ export async function runLocationClayPipeline(req: LocationClayRequest, deps?: L
 
     let trees: LocationClayTrees | undefined;
     if (strip) {
-        const crownsDoc = JSON.parse(fs.readFileSync(strip.crownsJson, 'utf8'));
-        const crowns: Array<{
-            id: number; status: string; areaM2?: number; reachesBoundary?: boolean; apexAboveSupport?: number;
-            regrowth?: { reason?: string; reasonCode?: string; colonisation?: string }; keptSkirt?: { areaM2: number; topY: number; bottomY: number };
-        }> = Array.isArray(crownsDoc.crowns) ? crownsDoc.crowns : [];
+        const crowns = readCrowns(strip.crownsJson);
         const measuredTrees = crowns.filter(c => c.status === 'tree');
-        const count = (s: string) => crowns.filter(c => c.status === s).length;
-        const st = strip.stats;
-        // trees the regrown SB-Veggie tree does not fill: the strip left them in the scan, each with its reason
-        const keptAsScanned: KeptAsScannedTree[] = crowns.filter(c => c.status === 'not_regrowable').map(c => {
-            if (!c.regrowth?.reason) throw new TileExtractionError('vegetation', new Error(`crown ${c.id} was kept as scanned without a reason`));
-            return {
-                crownId: c.id, reasonCode: String(c.regrowth.reasonCode ?? ''), reason: c.regrowth.reason,
-                ...(c.regrowth.colonisation ? { colonisation: String(c.regrowth.colonisation) } : {}),
-                areaM2: Number(c.areaM2 ?? 0), heightM: Number(c.apexAboveSupport ?? 0),
-                ...(c.keptSkirt && c.keptSkirt.areaM2 > 0 ? { closedSide: { areaM2: Number(c.keptSkirt.areaM2), topY: Number(c.keptSkirt.topY), bottomY: Number(c.keptSkirt.bottomY) } } : {})
-            };
-        });
-        trees = {
-            measured: measuredTrees.length + keptAsScanned.length,
-            count: 0,
-            notRegrowable: keptAsScanned.length,
-            keptAsScanned,
-            shortOfCrown: [],
-            offGround: [],
-            outcome: '',
-            triangles: 0,
-            triangleBudget: 0,
-            canopyAreaM2: Number(st.canopyAreaM2 ?? 0),
-            measuredTreeCanopyAreaM2: Number(st.treeCanopyAreaM2 ?? 0),
-            treeCanopyAreaM2: 0,
-            filledCanopyAreaM2: 0,
-            reachingBoundary: 0,
-            cutAtBoundary: count('cut_at_boundary'),
-            cutRemoved: count('cut_at_boundary_removed'),
-            cutCanopyRemovedM2: Number(st.cutCanopyRemovedM2 ?? 0),
-            belowMinHeight: count('below_min_height'),
-            noMeasuredGround: count('no_measured_ground'),
-            hangingBelowSupport: Number(st.crowns?.hangingBelowSupport ?? 0),
-            supportedUnderStem: Number(st.crowns?.supportedUnderStem ?? 0),
-            notOnStructure: 0,
-            onIsolatedStructure: req.isolate,
-            smallCanopyPatches: Number(st.crowns?.tooSmall ?? 0),
-            canopyTakenWithTreesM2: Number(st.drape?.canopyTakenWithTreesM2 ?? 0),
-            crownsJson: strip.crownsJson,
-            inferred: {},
-            strip: {
-                removedTriangles: st.triangles?.removed,
-                capTriangles: st.triangles?.cap,
-                skirtTriangles: st.triangles?.skirt,
-                openEdges: st.openEdges,
-                skirtAreaM2: st.skirts?.areaM2,
-                skirtMaxHeightM: st.skirts?.maxHeightByHangM,
-                capMaxRiseM: st.holes?.capMaxRiseM
-            },
-            ms: { strip: timings.vegetation ?? 0, plant: 0 }
-        };
+        const kept = crowns.filter(c => c.status === 'not_regrowable');
+        let planted: TileVegetationPlantResult | undefined;
         // an isolate request with trees kept as scanned asks plant which of them stand on the structure, even with no
         // tree to plant
-        if (measuredTrees.length > 0 || (req.isolate && keptAsScanned.length > 0)) {
+        if (measuredTrees.length > 0 || (req.isolate && kept.length > 0)) {
             if (measuredTrees.length > 0) req.reportProgress?.(`Growing ${measuredTrees.length} SB-Veggie trees from the measured crowns`);
             const tp = Date.now();
-            const planted = await stage('planting', req.signal, async () => {
-                // the user's own budget, or one sized from the measured trees within the scene's cap (never from the
-                // buildings: a park has many trees and few triangles of building)
-                const budget = req.treeTriangleBudget !== undefined ? { triangleBudget: Math.floor(req.treeTriangleBudget) } : { sceneTriangleCap: SCENE_TREE_TRIANGLE_CAP };
-                try {
-                    return await d.vegetation.plant({
-                        crownsPath: strip!.crownsJson,
-                        ...budget,
-                        // the seed the strip regrew the trees with to decide which to remove (its default)
-                        seed: strip!.tileSha256.slice(0, 16),
-                        supportMeshPath: req.isolate ? refined.r.clayGlb : undefined,
-                        // every trunk base is measured against the model the trees are mounted on
-                        groundMeshPath: refined.file,
-                        publishAs: measuredTrees.length > 0 ? `${base}_trees.glb` : undefined,
-                        signal: req.signal
-                    });
-                } catch (err) {
-                    if (err instanceof TileVegetationError && err.code === 'budget_too_small') {
-                        if (req.treeTriangleBudget !== undefined) {
-                            throw new TileVegetationError(err.code, `${err.message}; the budget was the treeTriangleBudget asked for. Ask again with treeTriangleBudget set to at least that many triangles, or with trees false.`, err.detail);
-                        }
-                        throw new TileVegetationError(err.code, `${err.message}. Ask again with a smaller radiusMeters (fewer trees), or with treeTriangleBudget set to at least that many triangles to go over the cap, or with trees false.`, err.detail);
-                    }
-                    throw err;
-                }
-            });
+            planted = await stage('planting', req.signal, () => plantTrees(d, strip!, {
+                treeTriangleBudget: req.treeTriangleBudget,
+                supportMeshPath: req.isolate ? refined.r.clayGlb : undefined,
+                groundMeshPath: refined.file,
+                publishAs: measuredTrees.length > 0 ? `${base}_trees.glb` : undefined,
+                signal: req.signal
+            }));
             timings.planting = Date.now() - tp;
-            trees.ms.plant = timings.planting;
-            trees.count = Number(planted.stats.trees ?? 0);
-            trees.triangles = Number(planted.stats.triangles ?? 0);
-            trees.triangleBudget = Number(planted.stats.triangleBudget ?? 0);
-            if (typeof planted.stats.triangleBudgetSource === 'string') trees.triangleBudgetSource = planted.stats.triangleBudgetSource;
-            if (typeof planted.stats.targetTriangles === 'number') trees.targetTriangles = planted.stats.targetTriangles;
-            if (req.treeTriangleBudget === undefined) trees.sceneTriangleCap = SCENE_TREE_TRIANGLE_CAP;
-            trees.notOnStructure = Array.isArray(planted.stats.skipped) ? planted.stats.skipped.length : 0;
-            if (req.isolate) {
-                // an isolated structure: the trees kept as scanned it names are those standing on it; the others stand
-                // elsewhere in the extracted district, as the trees not planted on it do
-                const keptOff = new Set<number>((Array.isArray(planted.stats.keptNotOnSupportMesh) ? planted.stats.keptNotOnSupportMesh : []).map(Number));
-                trees.keptAsScanned = trees.keptAsScanned.filter(k => !keptOff.has(k.crownId));
-                trees.notRegrowable = trees.keptAsScanned.length;
-                trees.notOnStructure += keptOff.size;
-                trees.measured -= trees.notOnStructure;
-            }
-            trees.inferred = planted.stats.inferred ?? {};
-            trees.shortOfCrown = (Array.isArray(planted.stats.shortOfCrown) ? planted.stats.shortOfCrown : []).map((t: any) => ({
-                crownId: Number(t.crownId), crownSurfaceReached: Number(t.crownSurfaceReached), budget: Number(t.budget), reason: String(t.reason)
-            }));
-            trees.groundToleranceM = typeof planted.stats.groundTolerance === 'number' ? planted.stats.groundTolerance : undefined;
-            trees.offGround = (Array.isArray(planted.stats.offGround) ? planted.stats.offGround : []).map((t: any) => ({
-                crownId: Number(t.crownId), gapM: typeof t.gapM === 'number' ? t.gapM : null
-            }));
-            // what the planted trees were grown into: their own measured crowns (an isolate request plants a subset)
-            const byId = new Map(crowns.map(c => [c.id, c]));
-            const short = new Set(trees.shortOfCrown.map(t => t.crownId));
-            for (const t of Array.isArray(planted.stats.perTree) ? planted.stats.perTree : []) {
-                const crown = byId.get(Number(t.crownId));
-                if (!crown) throw new TileExtractionError('planting', new Error(`the trees model names crown ${t.crownId}, which the measurement does not list`));
-                trees.treeCanopyAreaM2 += Number(crown.areaM2 ?? 0);
-                if (!short.has(Number(t.crownId))) trees.filledCanopyAreaM2 += Number(crown.areaM2 ?? 0);
-                if (crown.reachesBoundary) trees.reachingBoundary++;
-                const reached = Number(t.crownSurfaceReached);
-                if (Number.isFinite(reached)) trees.lowestCrownSurfaceReached = Math.min(trees.lowestCrownSurfaceReached ?? 1, reached);
-            }
-            if (trees.count > 0) {
-                if (!planted.published?.url) throw new TileExtractionError('planting', new Error('the trees model was not published'));
-                trees.url = planted.published.url;
-                trees.glbPath = planted.treesGlb;
-            }
         }
-        trees.outcome = describeTreeOutcome(trees);
+        trees = summarizeTrees(strip, planted, { isolate: req.isolate, stripMs: timings.vegetation ?? 0, plantMs: timings.planting ?? 0, treeTriangleBudget: req.treeTriangleBudget });
     }
 
     timings.total = Date.now() - t0;
@@ -458,6 +355,161 @@ export async function runLocationClayPipeline(req: LocationClayRequest, deps?: L
     };
 }
 
+interface CrownRecord {
+    id: number; status: string; areaM2?: number; reachesBoundary?: boolean; apexAboveSupport?: number;
+    regrowth?: { reason?: string; reasonCode?: string; colonisation?: string }; keptSkirt?: { areaM2: number; topY: number; bottomY: number };
+}
+
+function readCrowns(crownsJson: string): CrownRecord[] {
+    const doc = JSON.parse(fs.readFileSync(crownsJson, 'utf8'));
+    return Array.isArray(doc.crowns) ? doc.crowns : [];
+}
+
+/**
+ * plant with the budget rule (the user's own treeTriangleBudget, or one sized from the measured trees within the
+ * scene's cap) and the strip's seed; a budget too small says how to ask again.
+ */
+export async function plantTrees(
+    d: Pick<LocationClayDeps, 'vegetation'>,
+    strip: TileVegetationStripResult,
+    opts: { treeTriangleBudget?: number; supportMeshPath?: string; groundMeshPath?: string; publishAs?: string; signal?: AbortSignal }
+): Promise<TileVegetationPlantResult> {
+    // never from the buildings: a park has many trees and few triangles of building
+    const budget = opts.treeTriangleBudget !== undefined ? { triangleBudget: Math.floor(opts.treeTriangleBudget) } : { sceneTriangleCap: SCENE_TREE_TRIANGLE_CAP };
+    try {
+        return await d.vegetation.plant({
+            crownsPath: strip.crownsJson,
+            ...budget,
+            // the seed the strip regrew the trees with to decide which to remove (its default)
+            seed: strip.tileSha256.slice(0, 16),
+            supportMeshPath: opts.supportMeshPath,
+            // every trunk base is measured against the model the trees are mounted on
+            groundMeshPath: opts.groundMeshPath,
+            publishAs: opts.publishAs,
+            signal: opts.signal
+        });
+    } catch (err) {
+        if (err instanceof TileVegetationError && err.code === 'budget_too_small') {
+            if (opts.treeTriangleBudget !== undefined) {
+                throw new TileVegetationError(err.code, `${err.message}; the budget was the treeTriangleBudget asked for. Ask again with treeTriangleBudget set to at least that many triangles, or with trees false.`, err.detail);
+            }
+            throw new TileVegetationError(err.code, `${err.message}. Ask again with a smaller radiusMeters (fewer trees), or with treeTriangleBudget set to at least that many triangles to go over the cap, or with trees false.`, err.detail);
+        }
+        throw err;
+    }
+}
+
+/**
+ * The trees of a location, from strip's measurement and, when trees were planted, plant's stats: what was measured,
+ * rebuilt, kept as scanned (each with why), short of its crown or off the mounted ground, and what closing the ground
+ * added. `url` is where the trees model is served (plant's own publish by default).
+ */
+export function summarizeTrees(
+    strip: TileVegetationStripResult,
+    planted: TileVegetationPlantResult | undefined,
+    opts: { isolate: boolean; stripMs: number; plantMs?: number; treeTriangleBudget?: number; url?: string }
+): LocationClayTrees {
+    const crowns = readCrowns(strip.crownsJson);
+    const measuredTrees = crowns.filter(c => c.status === 'tree');
+    const count = (s: string) => crowns.filter(c => c.status === s).length;
+    const st = strip.stats;
+    // trees the regrown SB-Veggie tree does not fill: the strip left them in the scan, each with its reason
+    const keptAsScanned: KeptAsScannedTree[] = crowns.filter(c => c.status === 'not_regrowable').map(c => {
+        if (!c.regrowth?.reason) throw new TileExtractionError('vegetation', new Error(`crown ${c.id} was kept as scanned without a reason`));
+        return {
+            crownId: c.id, reasonCode: String(c.regrowth.reasonCode ?? ''), reason: c.regrowth.reason,
+            ...(c.regrowth.colonisation ? { colonisation: String(c.regrowth.colonisation) } : {}),
+            areaM2: Number(c.areaM2 ?? 0), heightM: Number(c.apexAboveSupport ?? 0),
+            ...(c.keptSkirt && c.keptSkirt.areaM2 > 0 ? { closedSide: { areaM2: Number(c.keptSkirt.areaM2), topY: Number(c.keptSkirt.topY), bottomY: Number(c.keptSkirt.bottomY) } } : {})
+        };
+    });
+    const trees: LocationClayTrees = {
+        measured: measuredTrees.length + keptAsScanned.length,
+        count: 0,
+        notRegrowable: keptAsScanned.length,
+        keptAsScanned,
+        shortOfCrown: [],
+        offGround: [],
+        outcome: '',
+        triangles: 0,
+        triangleBudget: 0,
+        canopyAreaM2: Number(st.canopyAreaM2 ?? 0),
+        measuredTreeCanopyAreaM2: Number(st.treeCanopyAreaM2 ?? 0),
+        treeCanopyAreaM2: 0,
+        filledCanopyAreaM2: 0,
+        reachingBoundary: 0,
+        cutAtBoundary: count('cut_at_boundary'),
+        cutRemoved: count('cut_at_boundary_removed'),
+        cutCanopyRemovedM2: Number(st.cutCanopyRemovedM2 ?? 0),
+        belowMinHeight: count('below_min_height'),
+        noMeasuredGround: count('no_measured_ground'),
+        hangingBelowSupport: Number(st.crowns?.hangingBelowSupport ?? 0),
+        supportedUnderStem: Number(st.crowns?.supportedUnderStem ?? 0),
+        notOnStructure: 0,
+        onIsolatedStructure: opts.isolate,
+        smallCanopyPatches: Number(st.crowns?.tooSmall ?? 0),
+        canopyTakenWithTreesM2: Number(st.drape?.canopyTakenWithTreesM2 ?? 0),
+        crownsJson: strip.crownsJson,
+        inferred: {},
+        strip: {
+            removedTriangles: st.triangles?.removed,
+            capTriangles: st.triangles?.cap,
+            skirtTriangles: st.triangles?.skirt,
+            openEdges: st.openEdges,
+            skirtAreaM2: st.skirts?.areaM2,
+            skirtMaxHeightM: st.skirts?.maxHeightByHangM,
+            capMaxRiseM: st.holes?.capMaxRiseM
+        },
+        ms: { strip: opts.stripMs, plant: opts.plantMs ?? 0 }
+    };
+    if (planted) {
+        trees.count = Number(planted.stats.trees ?? 0);
+        trees.triangles = Number(planted.stats.triangles ?? 0);
+        trees.triangleBudget = Number(planted.stats.triangleBudget ?? 0);
+        if (typeof planted.stats.triangleBudgetSource === 'string') trees.triangleBudgetSource = planted.stats.triangleBudgetSource;
+        if (typeof planted.stats.targetTriangles === 'number') trees.targetTriangles = planted.stats.targetTriangles;
+        if (opts.treeTriangleBudget === undefined) trees.sceneTriangleCap = SCENE_TREE_TRIANGLE_CAP;
+        trees.notOnStructure = Array.isArray(planted.stats.skipped) ? planted.stats.skipped.length : 0;
+        if (opts.isolate) {
+            // an isolated structure: the trees kept as scanned it names are those standing on it; the others stand
+            // elsewhere in the extracted district, as the trees not planted on it do
+            const keptOff = new Set<number>((Array.isArray(planted.stats.keptNotOnSupportMesh) ? planted.stats.keptNotOnSupportMesh : []).map(Number));
+            trees.keptAsScanned = trees.keptAsScanned.filter(k => !keptOff.has(k.crownId));
+            trees.notRegrowable = trees.keptAsScanned.length;
+            trees.notOnStructure += keptOff.size;
+            trees.measured -= trees.notOnStructure;
+        }
+        trees.inferred = planted.stats.inferred ?? {};
+        trees.shortOfCrown = (Array.isArray(planted.stats.shortOfCrown) ? planted.stats.shortOfCrown : []).map((t: any) => ({
+            crownId: Number(t.crownId), crownSurfaceReached: Number(t.crownSurfaceReached), budget: Number(t.budget), reason: String(t.reason)
+        }));
+        trees.groundToleranceM = typeof planted.stats.groundTolerance === 'number' ? planted.stats.groundTolerance : undefined;
+        trees.offGround = (Array.isArray(planted.stats.offGround) ? planted.stats.offGround : []).map((t: any) => ({
+            crownId: Number(t.crownId), gapM: typeof t.gapM === 'number' ? t.gapM : null
+        }));
+        // what the planted trees were grown into: their own measured crowns (an isolate request plants a subset)
+        const byId = new Map(crowns.map(c => [c.id, c]));
+        const short = new Set(trees.shortOfCrown.map(t => t.crownId));
+        for (const t of Array.isArray(planted.stats.perTree) ? planted.stats.perTree : []) {
+            const crown = byId.get(Number(t.crownId));
+            if (!crown) throw new TileExtractionError('planting', new Error(`the trees model names crown ${t.crownId}, which the measurement does not list`));
+            trees.treeCanopyAreaM2 += Number(crown.areaM2 ?? 0);
+            if (!short.has(Number(t.crownId))) trees.filledCanopyAreaM2 += Number(crown.areaM2 ?? 0);
+            if (crown.reachesBoundary) trees.reachingBoundary++;
+            const reached = Number(t.crownSurfaceReached);
+            if (Number.isFinite(reached)) trees.lowestCrownSurfaceReached = Math.min(trees.lowestCrownSurfaceReached ?? 1, reached);
+        }
+        if (trees.count > 0) {
+            const url = opts.url ?? planted.published?.url;
+            if (!url) throw new TileExtractionError('planting', new Error('the trees model was not published'));
+            trees.url = url;
+            trees.glbPath = planted.treesGlb;
+        }
+    }
+    trees.outcome = describeTreeOutcome(trees);
+    return trees;
+}
+
 /** One or two sentences for a tool summary, so the model tells the user exactly what it got. */
 export function describeLocationClay(result: LocationClayResult | undefined, flavour: 'clay' | 'textured'): string {
     if (!result) return ' Returned as raw tiles (not remeshed), as asked.';
@@ -466,50 +518,59 @@ export function describeLocationClay(result: LocationClayResult | undefined, fla
     let s = ` Remeshed${result.isolate ? ' the structure at the anchor' : ''} (${counts}) in ${(r.ms / 1000).toFixed(1)} s${r.cached ? ' (cached)' : ''}; the mounted ${flavour === 'clay' ? 'clay ' : ''}model is ${result.url}.`;
     if (r.binaryWarning) s += ` Note: tile_refine ${r.binaryWarning}.`;
     const t = result.trees;
-    if (t) {
-        const kept: string[] = [];
-        if (t.cutAtBoundary) kept.push(`${plural(t.cutAtBoundary, 'crown')} cut by the extraction boundary (${t.cutAtBoundary === 1 ? 'its top lies' : 'their tops lie'} outside it)`);
-        if (t.belowMinHeight) kept.push(`${plural(t.belowMinHeight, 'low planting')} (under the minimum tree height)`);
-        if (t.noMeasuredGround) {
-            const hanging = Math.min(t.hangingBelowSupport ?? 0, t.noMeasuredGround), flat = t.noMeasuredGround - hanging;
-            const them = (n: number) => (n === 1 ? 'it' : 'them');
-            if (!hanging) {
-                kept.push(`${plural(t.noMeasuredGround, 'crown')} with no ground measurable around ${them(t.noMeasuredGround)} (no surface gentle enough to stand on, such as a steep slope)`);
-            } else {
-                const why = [`${hanging.toLocaleString()} hanging below the level surfaces measured around ${them(hanging)} (canopy tops, not ground) with nothing standable under ${hanging === 1 ? 'its stem' : 'their stems'}`];
-                if (flat) why.unshift(`${flat.toLocaleString()} with no surface gentle enough to stand on around ${them(flat)}, such as a steep slope`);
-                kept.push(`${plural(t.noMeasuredGround, 'crown')} with no ground measurable for ${them(t.noMeasuredGround)}: ${why.join('; ')}`);
-            }
-        }
-        if (t.smallCanopyPatches) kept.push(`${plural(t.smallCanopyPatches, 'canopy patch', 'canopy patches')} too small to measure as a crown`);
-        let notes = kept.length ? ` Kept as scanned: ${kept.join(', ')}.` : '';
-        if (t.supportedUnderStem) {
-            const one = t.supportedUnderStem === 1;
-            notes += ` ${plural(t.supportedUnderStem, 'crown')} ${one ? 'stands' : 'stand'} on the ground the scan has under ${one ? 'its stem' : 'their stems'}, not on the level surfaces measured around ${one ? 'it' : 'them'}: those were canopy tops (${one ? 'its crown hung' : 'their crowns hung'} below them, or nothing standable lay between ${one ? 'it' : 'them'} and the ground).`;
-        }
-        if (t.cutRemoved) notes += ` Taken out with the trees ${t.cutRemoved === 1 ? 'it was' : 'they were'} joined to, and not rebuilt (${t.cutRemoved === 1 ? 'its trunk lies' : 'their trunks lie'} outside the extraction): ${plural(t.cutRemoved, 'cut crown')}, ${Math.round(t.cutCanopyRemovedM2)} m² of canopy.`;
-        if (t.canopyTakenWithTreesM2 >= 1) notes += ` ${Math.round(t.canopyTakenWithTreesM2)} m² of canopy outside the measured crowns hung on the removed trees and went with them.`;
-        notes += describeGroundClosing(t);
-        // the trees are measured, and the ground closed, over the whole extraction; an isolated structure is part of it
-        if (notes && result.isolate) notes = ` In the extracted district around it:${notes}`;
-        if (t.measured > 0) s += ` ${t.outcome || describeTreeOutcome(t)}.`;
-        if (t.count > 0) {
-            s += t.shortOfCrown?.length
-                ? ` The rebuilt trees (space colonisation, studio clay) are grown into ${Math.round(t.treeCanopyAreaM2)} m² of measured crown, ${Math.round(t.filledCanopyAreaM2)} m² of it by trees whose leaves fill their crown`
-                : ` The rebuilt trees (space colonisation, studio clay) fill ${Math.round(t.treeCanopyAreaM2)} m² of measured crown`;
-            if (t.reachingBoundary) s += ` (${t.reachingBoundary} of them ${t.reachingBoundary === 1 ? 'runs' : 'run'} to the extraction's edge and ${t.reachingBoundary === 1 ? 'was' : 'were'} rebuilt up to it)`;
-            s += `, ${t.triangles.toLocaleString()} triangles within a budget of ${t.triangleBudget.toLocaleString()}${describeTreeBudget(t)}; the trees model is ${t.url}.`;
-        } else if (t.measured === 0 && t.notOnStructure > 0) {
-            s += ` The photo tiles show ${plural(t.notOnStructure, 'measured tree')} in the extracted district, none standing on the isolated structure, so no trees were added to it.`;
-        } else if (t.measured > 0) {
-            s += ' No trees model was added.';
-        } else if (t.canopyAreaM2 > 0) {
-            s += ` The photo tiles show ${Math.round(t.canopyAreaM2)} m² of vegetation but no crown that measures as a tree, so no trees were added.`;
+    if (t) s += describeTrees(t, result.isolate);
+    return s;
+}
+
+/**
+ * What the trees stage did, in sentences for a tool summary: the outcome (rebuilt, kept as scanned, with why), the budget,
+ * the crowns kept as scanned and taken out, and what closing the ground under the removed trees added (not in the
+ * scan). Leads with a space. `isolate`: the structure at the anchor was asked for alone.
+ */
+export function describeTrees(t: LocationClayTrees, isolate: boolean): string {
+    let s = '';
+    const kept: string[] = [];
+    if (t.cutAtBoundary) kept.push(`${plural(t.cutAtBoundary, 'crown')} cut by the extraction boundary (${t.cutAtBoundary === 1 ? 'its top lies' : 'their tops lie'} outside it)`);
+    if (t.belowMinHeight) kept.push(`${plural(t.belowMinHeight, 'low planting')} (under the minimum tree height)`);
+    if (t.noMeasuredGround) {
+        const hanging = Math.min(t.hangingBelowSupport ?? 0, t.noMeasuredGround), flat = t.noMeasuredGround - hanging;
+        const them = (n: number) => (n === 1 ? 'it' : 'them');
+        if (!hanging) {
+            kept.push(`${plural(t.noMeasuredGround, 'crown')} with no ground measurable around ${them(t.noMeasuredGround)} (no surface gentle enough to stand on, such as a steep slope)`);
         } else {
-            s += ' No tree canopy was measured in the photo tiles, so no trees were added.';
+            const why = [`${hanging.toLocaleString()} hanging below the level surfaces measured around ${them(hanging)} (canopy tops, not ground) with nothing standable under ${hanging === 1 ? 'its stem' : 'their stems'}`];
+            if (flat) why.unshift(`${flat.toLocaleString()} with no surface gentle enough to stand on around ${them(flat)}, such as a steep slope`);
+            kept.push(`${plural(t.noMeasuredGround, 'crown')} with no ground measurable for ${them(t.noMeasuredGround)}: ${why.join('; ')}`);
         }
-        s += notes;
     }
+    if (t.smallCanopyPatches) kept.push(`${plural(t.smallCanopyPatches, 'canopy patch', 'canopy patches')} too small to measure as a crown`);
+    let notes = kept.length ? ` Kept as scanned: ${kept.join(', ')}.` : '';
+    if (t.supportedUnderStem) {
+        const one = t.supportedUnderStem === 1;
+        notes += ` ${plural(t.supportedUnderStem, 'crown')} ${one ? 'stands' : 'stand'} on the ground the scan has under ${one ? 'its stem' : 'their stems'}, not on the level surfaces measured around ${one ? 'it' : 'them'}: those were canopy tops (${one ? 'its crown hung' : 'their crowns hung'} below them, or nothing standable lay between ${one ? 'it' : 'them'} and the ground).`;
+    }
+    if (t.cutRemoved) notes += ` Taken out with the trees ${t.cutRemoved === 1 ? 'it was' : 'they were'} joined to, and not rebuilt (${t.cutRemoved === 1 ? 'its trunk lies' : 'their trunks lie'} outside the extraction): ${plural(t.cutRemoved, 'cut crown')}, ${Math.round(t.cutCanopyRemovedM2)} m² of canopy.`;
+    if (t.canopyTakenWithTreesM2 >= 1) notes += ` ${Math.round(t.canopyTakenWithTreesM2)} m² of canopy outside the measured crowns hung on the removed trees and went with them.`;
+    notes += describeGroundClosing(t);
+    // the trees are measured, and the ground closed, over the whole extraction; an isolated structure is part of it
+    if (notes && isolate) notes = ` In the extracted district around it:${notes}`;
+    if (t.measured > 0) s += ` ${t.outcome || describeTreeOutcome(t)}.`;
+    if (t.count > 0) {
+        s += t.shortOfCrown?.length
+            ? ` The rebuilt trees (space colonisation, studio clay) are grown into ${Math.round(t.treeCanopyAreaM2)} m² of measured crown, ${Math.round(t.filledCanopyAreaM2)} m² of it by trees whose leaves fill their crown`
+            : ` The rebuilt trees (space colonisation, studio clay) fill ${Math.round(t.treeCanopyAreaM2)} m² of measured crown`;
+        if (t.reachingBoundary) s += ` (${t.reachingBoundary} of them ${t.reachingBoundary === 1 ? 'runs' : 'run'} to the extraction's edge and ${t.reachingBoundary === 1 ? 'was' : 'were'} rebuilt up to it)`;
+        s += `, ${t.triangles.toLocaleString()} triangles within a budget of ${t.triangleBudget.toLocaleString()}${describeTreeBudget(t)}; the trees model is ${t.url}.`;
+    } else if (t.measured === 0 && t.notOnStructure > 0) {
+        s += ` The photo tiles show ${plural(t.notOnStructure, 'measured tree')} in the extracted district, none standing on the isolated structure, so no trees were added to it.`;
+    } else if (t.measured > 0) {
+        s += ' No trees model was added.';
+    } else if (t.canopyAreaM2 > 0) {
+        s += ` The photo tiles show ${Math.round(t.canopyAreaM2)} m² of vegetation but no crown that measures as a tree, so no trees were added.`;
+    } else {
+        s += ' No tree canopy was measured in the photo tiles, so no trees were added.';
+    }
+    s += notes;
     return s;
 }
 

@@ -14,6 +14,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { createStandaloneServer, createToolsServer, resolveLaunchToken } from '../server/app';
 import { resolveRendererDist } from '../server/renderer-dist';
+import { warmNativeEngine } from '../../packages/core/src/node/3d-engine/native-warmup';
 
 function resolveAppIconPath(): string | undefined {
     const candidates = [
@@ -142,6 +143,8 @@ async function startBackendServer(): Promise<void> {
         serverInstance = serverApp.listen(BACKEND_PORT, BACKEND_HOST, () => {
             console.log(`[Electron] Internal Backend Server listening on http://${BACKEND_HOST}:${BACKEND_PORT}`);
             markDone();
+            // Build the native engines a location request needs now that the server is up, so the first request finds them ready.
+            void warmNativeEngine();
         });
         attachListenErrorHandler(serverInstance, 'API', BACKEND_PORT, markDone);
 
