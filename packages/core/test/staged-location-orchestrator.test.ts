@@ -23,7 +23,7 @@ import * as path from 'path';
 import { runStagedLocation, StagedLocationHardFailure, type ScanFitDeps, type StagedLocationDeps } from '../src/node/3d-engine/staged-location/orchestrator';
 import { StageCache } from '../src/node/3d-engine/staged-location/stage-cache';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
-import { validateContract, type StageEvent, type StructureFit } from '../src/common/spatial/staged-location-contracts';
+import { DEFAULT_PROVENANCE_LEGEND, validateContract, type StageEvent, type StructureFit } from '../src/common/spatial/staged-location-contracts';
 import type { CanvasArtifact } from '../src/browser/generative-canvas/canvas-types';
 import type { VisionGenAIClient } from '../src/node/gemini/vision-model-chain';
 import { budgetError, fakeNative, writeTris, building, groundGrid, type WorldSpec } from './helpers/staged-synthetic-world';
@@ -300,6 +300,24 @@ function streetViewStandIn(delayMs = 0) {
 
 const sleepMs = (ms: number) => new Promise(r => setTimeout(r, ms));
 
+/** Screenshot of the scene a result holds: every layer not superseded, in its provenance colour, so a blank or empty scene cannot pass. */
+function saveSceneShot(root: string, result: { artifact: unknown }, name: string, region?: [number, number, number, number]): { visible: string[]; trianglesDrawn: number } {
+    const build = (result.artifact as any).data.stagedBuild;
+    const superseded = new Set<string>(build.layers.flatMap((l: any) => l.supersedes));
+    const colors = new Map<string, [number, number, number]>(DEFAULT_PROVENANCE_LEGEND.map(e => [e.label as string, [1, 3, 5].map(k => parseInt(e.color.slice(k, k + 2), 16) / 255) as [number, number, number]]));
+    const layers = build.layers.filter((l: any) => !superseded.has(l.objectId) && !l.retired).map((l: any) => ({
+        id: l.objectId, glb: readGlbTriangles(fs.readFileSync(path.join(root, 'public', 'models', path.basename(l.url)))), color: colors.get(l.provenance.label)
+    }));
+    const drawn = layers.reduce((n: number, l: any) => n + l.glb.indices.length / 3, 0);
+    expect(drawn).toBeGreaterThan(0);
+    fs.mkdirSync(STAGED_SCREENSHOT_DIR, { recursive: true });
+    fs.writeFileSync(path.join(STAGED_SCREENSHOT_DIR, `${name}.png`), renderClayPng(
+        layers.map((l: any) => ({ positions: l.glb.positions, indices: l.glb.indices, ...(l.color ? { color: l.color } : {}) })),
+        { kind: 'aerial', width: 900, height: 600, bearingDeg: 200, elevationDeg: 35, ...(region ? { region } : {}) }
+    ));
+    return { visible: layers.map((l: any) => l.id), trianglesDrawn: drawn };
+}
+
 describe('an isolated structure', () => {
     it('without the scan fitter: the remeshed structure stands, and the rebuild stages say why', async () => {
         const s = setup(ARCH);
@@ -547,6 +565,8 @@ describe('the call settles before it returns or throws', () => {
         // the finish event is the last event of the run
         const finish = s.events.find(x => x.e.stage === 'finish')!;
         expect(Math.max(...s.events.map(x => x.e.seq))).toBe(finish.e.seq);
+        // screenshot: the remeshed structure stands where the rejected fit was
+        saveSceneShot(s.root, result, 'orchestrator_rejected_fit_remeshed_structure_stands', [-30, -30, 30, 30]);
         // the result is the record of the call: the fetch that was let go changes nothing in it afterwards
         const frozen = JSON.stringify([result.stages, result.degradations, result.extraction, result.cache, result.digest, result.summary]);
         const eventsAtReturn = s.events.length;
@@ -639,6 +659,8 @@ describe('what the result says about the extraction, the correction and the gate
         // the fit that was not corrected stays measured
         expect(byLayer.l3b.provenance).toMatchObject({ label: 'fitted', measuredGeometry: true });
         expect(validateContract('StagedLocationResult', result)).toEqual([]);
+        // screenshot: the corrected faces in the photo-corrected colour over the fitted body and the pass-through scan
+        saveSceneShot(s.root, result, 'orchestrator_photo_corrected_layers', [-30, -30, 30, 30]);
     });
 
     it('a leaf-tile cap that stops a district short is reported as the radius reached, in the headline and as a degradation', async () => {
@@ -653,6 +675,7 @@ describe('what the result says about the extraction, the correction and the gate
         });
         expect(result.stages.find(x => x.stage === 'tiles')!.status).toBe('degraded');
         expect(result.summary).toContain('in clay from Google 3D Tiles within 33 m (60 m asked for; the leaf-tile cap stopped it short): the remeshed scan.');
+        saveSceneShot(s.root, result, 'orchestrator_district_cut_short_by_the_leaf_cap', [-45, -45, 45, 45]);
         expect(validateContract('StagedLocationResult', result)).toEqual([]);
         // a district the tiles cover whole reports the radius asked for
         const whole = setup(PARK);
@@ -677,6 +700,7 @@ describe('what the result says about the extraction, the correction and the gate
         expect(rec.retry!.args).toEqual({ retryRunId: 'a1b2c301', retryStage: 'tiles' });
         // the district was remeshed without a rebuild
         expect(s.native.refineCalls[0].isolate).toBeUndefined();
+        saveSceneShot(s.root, result, 'orchestrator_containment_round_failed_district_kept', [-40, -40, 40, 40]);
         expect(result.stages.find(x => x.stage === 'remesh')!.status).toBe('committed');
     });
 
@@ -693,6 +717,8 @@ describe('what the result says about the extraction, the correction and the gate
         const park = await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: true }, d.deps, d.ctx);
         expect(park.result.complexityGate.passed).toBe(true);
         expect(park.result.complexityGate.exemptions.some(e => e.includes('grown to 3 measured crowns'))).toBe(true);
+        const shot = saveSceneShot(d.root, park.result, 'orchestrator_trees_grown_to_measured_crowns_exempt', [-45, -45, 45, 45]);
+        expect(shot.visible.length).toBe(2); // the tiles are superseded by the remesh: the remeshed district and the grown trees are what is drawn
     });
 
     it('the headline names the layer on screen when the tiles stage degraded and the remesh never started', async () => {
