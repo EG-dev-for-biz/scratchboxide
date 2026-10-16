@@ -545,6 +545,12 @@ describe('pass 1: the draft survey', () => {
         expect((result.artifact as any).data.stagedBuild.materialHints).toEqual(hints);
         expect(result.photoCost!.byStage.survey).toEqual({ images: 4, visionCalls: 1, seconds: expect.any(Number) });
         expect(result.photoCost!.total.visionCalls).toBeGreaterThanOrEqual(2); // the survey and the reading
+        // pass 2 starts from the survey: its elements are cast onto the fitted faces, and the reading is given them as placed hints
+        expect(result.ornament!.surveyLocated!.elements).toBeGreaterThan(0);
+        expect(result.ornament!.surveyLocated!.crops).toBeGreaterThan(0);
+        const readingPrompt = JSON.stringify(calls[0].contents[0].parts.filter((x: any) => x.text).map((x: any) => x.text));
+        expect(readingPrompt).toMatch(/Survey: a first look at the whole structure/);
+        expect(readingPrompt).toMatch(/the survey saw/);
         expect(validateContract('StagedLocationResult', result)).toEqual([]);
         expect(JSON.stringify(result)).not.toMatch(/inlineData|\/9j\//);
     });

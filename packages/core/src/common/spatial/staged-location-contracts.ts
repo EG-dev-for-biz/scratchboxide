@@ -573,7 +573,11 @@ export interface OrnamentElement {
     continuesBeyondView?: boolean;
     evidence: ElementEvidence[];
     /** The deterministic evidence checks it passed. */
-    checks: { slotOverlap: number; minFeatureM: number; nativeSampleM: number };
+    checks: {
+        slotOverlap: number; minFeatureM: number; nativeSampleM: number;
+        /** Set when the element was snapped to the scan-anchored geometry: the error it carried and what changed (photo-corrected). */
+        anchor?: { errorM: number; toleranceM: number; changes: string[] };
+    };
     /** 'photo-inferred', measuredGeometry false, confidence = element confidence. */
     provenance: ProvenanceRecord;
     buildOrder: number;
@@ -931,6 +935,10 @@ export interface StagedLocationResult {
         /** streetView ≤ MAX_STREET_VIEW_IMAGES_PER_BUILDING. */
         evidence: { tileOrthos: number; streetView: number };
         model: VisionModelUse; revisionPass: boolean; dropped: number; specPath: string;
+        /** What the scan-anchoring snapped or clipped (photo-corrected inside the 0.31 m tolerance), with the error each carried. */
+        anchoring?: Array<{ elementId: string; slotId: string; kind: string; errorM: number; toleranceM: number; note: string }>;
+        /** The survey's elements placed on the fitted slots by casting their image boxes, and the narrow crops that followed. */
+        surveyLocated?: { elements: number; unlocated: number; slots: number; crops: number };
     };
     /** The draft survey's materials and measured colours. */
     materialHints?: MaterialHints;
@@ -1453,7 +1461,7 @@ const DEFINITIONS = {
         elements: arr(obj(['id', 'slotId', 'spec', 'confidence', 'depthBasis', 'evidence', 'checks', 'provenance', 'buildOrder'], {
             id: STR, slotId: STR, label: STR, spec: ref('operatorSpec'), confidence: ref('unit'),
             depthBasis: STR, continuesBeyondView: BOOL, evidence: arr(ref('evidence'), { minItems: 1 }),
-            checks: obj(['slotOverlap', 'minFeatureM', 'nativeSampleM'], { slotOverlap: ref('unit'), minFeatureM: NUM, nativeSampleM: NUM }),
+            checks: obj(['slotOverlap', 'minFeatureM', 'nativeSampleM'], { slotOverlap: ref('unit'), minFeatureM: NUM, nativeSampleM: NUM, anchor: obj(['errorM', 'toleranceM', 'changes'], { errorM: ref('nonneg'), toleranceM: ref('nonneg'), changes: arr(STR) }) }),
             provenance: ref('provenance'), buildOrder: NONNEG_INT
         })),
         corrections: arr(ref('correction')),
@@ -1635,7 +1643,9 @@ const DEFINITIONS = {
             elements: NONNEG_INT, slotsFilled: NONNEG_INT, slotsEmpty: NONNEG_INT,
             confidence: obj(['min', 'median', 'max'], { min: ref('unit'), median: ref('unit'), max: ref('unit') }),
             evidence: obj(['tileOrthos', 'streetView'], { tileOrthos: NONNEG_INT, streetView: { type: 'integer', minimum: 0, maximum: MAX_STREET_VIEW_IMAGES_PER_BUILDING } }),
-            model: ref('visionModelUse'), revisionPass: BOOL, dropped: NONNEG_INT, specPath: STR
+            model: ref('visionModelUse'), revisionPass: BOOL, dropped: NONNEG_INT, specPath: STR,
+            anchoring: arr(obj(['elementId', 'slotId', 'kind', 'errorM', 'toleranceM', 'note'], { elementId: STR, slotId: STR, kind: STR, errorM: ref('nonneg'), toleranceM: ref('nonneg'), note: STR })),
+            surveyLocated: obj(['elements', 'unlocated', 'slots', 'crops'], { elements: NONNEG_INT, unlocated: NONNEG_INT, slots: NONNEG_INT, crops: NONNEG_INT })
         }),
         materialHints: ref('materialHints'), figures: arr(ref('figureRecord')),
         photoCost: obj(['total', 'byStage'], { total: ref('stageCost'), byStage: { type: 'object', additionalProperties: ref('stageCost') } }),

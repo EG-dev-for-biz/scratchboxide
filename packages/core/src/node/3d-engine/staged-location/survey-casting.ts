@@ -167,6 +167,8 @@ export interface BoxCast {
     regionUv: { u0: number; v0: number; u1: number; v1: number };
     centreUv: Vec2;
     centre: Vec3;
+    /** Where the left and right edges of the box, at its middle height, land on the face (a run's two ends). */
+    ends: [Vec3, Vec3];
     /** How many of the five rays (four corners and the centre) landed on this face. */
     hits: number;
     /** Metres per pixel on the face at the centre. */
@@ -192,13 +194,17 @@ export function castBox(view: CastView, box1000: [number, number, number, number
     const hs = byFace.get(bestId)!;
     const us = hs.map(h => h.u), vs = hs.map(h => h.v);
     const centreHit = hits[4]?.faceId === bestId ? hits[4]! : hs[0];
+    const onFace = faces.filter(f => f.id === bestId);
+    const ym = (b.y0 + b.y1) / 2;
+    const endOf = (x: number, fallback: Vec3): Vec3 => castRay(pixelRay(cam, x, ym), onFace, 1e3)?.point ?? fallback;
+    const ends: [Vec3, Vec3] = [endOf(b.x0, centreHit.point), endOf(b.x1, centreHit.point)];
     const pxStep = Math.hypot(view.widthPx, view.heightPx) / 400;
     const probe = castRay(pixelRay(cam, (b.x0 + b.x1) / 2 + pxStep, (b.y0 + b.y1) / 2), faces.filter(f => f.id === bestId));
     const metresPerPx = probe ? Math.hypot(probe.point[0] - centreHit.point[0], probe.point[1] - centreHit.point[1], probe.point[2] - centreHit.point[2]) / pxStep : (centreHit.distanceM * (view.fovDeg * Math.PI / 180)) / view.widthPx;
     return {
         faceId: bestId, source: centreHit.source, hits: hs.length,
         regionUv: { u0: Math.min(...us), v0: Math.min(...vs), u1: Math.max(...us), v1: Math.max(...vs) },
-        centreUv: [centreHit.u, centreHit.v], centre: centreHit.point, metresPerPx, distanceM: centreHit.distanceM
+        centreUv: [centreHit.u, centreHit.v], centre: centreHit.point, ends, metresPerPx, distanceM: centreHit.distanceM
     };
 }
 
@@ -241,4 +247,22 @@ function distToSegment(p: Vec3, a: Vec3, b: Vec3): number {
     const t = Math.max(0, Math.min(1, dot(ap, ab) / (dot(ab, ab) || 1)));
     const q = add(a, scale(ab, t));
     return Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+}
+
+/** Arc length along a polyline of the point nearest to `p`, metres from the first point, and the polyline's total length. */
+export function carrierArc(points: Vec3[], p: Vec3): { s: number; total: number } {
+    let best = { s: 0, d: Infinity };
+    let acc = 0;
+    for (let i = 0; i < points.length - 1; i++) {
+        const a = points[i], b = points[i + 1];
+        const ab = sub(b, a), ap = sub(p, a);
+        const len2 = dot(ab, ab) || 1;
+        const t = Math.max(0, Math.min(1, dot(ap, ab) / len2));
+        const q = add(a, scale(ab, t));
+        const d = Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+        const segLen = Math.sqrt(len2);
+        if (d < best.d) best = { s: acc + t * segLen, d };
+        acc += segLen;
+    }
+    return { s: best.s, total: acc };
 }

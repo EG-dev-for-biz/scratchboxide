@@ -88,6 +88,8 @@ import {
 } from './streetview-evidence';
 import { selectViewsForFit } from './evidence-aim';
 import { describeSurvey, runFaceSurvey, surveyFaceTargets, SURVEY_IMAGE_TIMEOUT_MS, SURVEY_VISION_TIMEOUT_MS, type SurveyResult } from './face-survey';
+import { describeLocated, planDetailFromSurvey, type DetailPlan } from './survey-detail';
+import type { AnchorNote } from './ornament-anchor';
 import { EVIDENCE_DISCOVERY_ALLOWANCE_MS } from './streetview-evidence';
 import { nominalPose, projectSlots } from './slot-projection';
 import {
@@ -901,12 +903,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // ---------------- evidence (starts when the fit is accepted: a rejected fit has nothing to place a photo on, and no image is fetched for it) ----------------
         const visionAvailable = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
         const rebuildPossible = isolateMode && !!deps.scanFit;
-        let evidencePromise = undefined as Promise<{ images: EvidenceImage[]; panos: PanoCandidate[]; cost: EvidenceCost; status: string }> | undefined;
+        let evidencePromise = undefined as Promise<{ images: EvidenceImage[]; panos: PanoCandidate[]; cost: EvidenceCost; plan?: DetailPlan; status: string }> | undefined;
         // ended (skipped, as not needed) when the run ends before the evidence does
         const evidenceStop = new AbortController();
 
         const startEvidence = (fit: StructureFit): void => {
-            evidencePromise = runner.stage<{ images: EvidenceImage[]; panos: PanoCandidate[]; cost: EvidenceCost }>({
+            // the close-ups are planned from what the survey found: they wait for it (it began long before the fit ended)
+            const surveyDone = surveyPromise ? surveyPromise.catch(() => undefined) : Promise.resolve(undefined);
+            evidencePromise = surveyDone.then(surveyOut => runner.stage<{ images: EvidenceImage[]; panos: PanoCandidate[]; cost: EvidenceCost; plan?: DetailPlan }>({
                 id: 'evidence',
                 run: async io => {
                     const sv = deps.streetView ?? {};
@@ -922,11 +926,15 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     }
                     io.progress('finding Google Street View panoramas around the facades');
                     const found = await discoverOnce();
-                    const views = selectViewsForFit(found.panos, fit, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top);
+                    // from the survey: each element located on the fitted faces, one narrow crop per slot group; with no survey (or nothing located)
+                    // the views are aimed at the scan-only slots
+                    const plan = surveyOut?.result ? planDetailFromSurvey(surveyOut.result, fit) : undefined;
+                    const views = plan?.views.length ? plan.views : selectViewsForFit(found.panos, fit, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top);
+                    if (plan) io.progress(describeLocated(surveyOut!.result!.faces, plan));
                     const discovery = { metadataCalls: found.metadataCalls, cachedCalls: found.cachedCalls };
                     if (!views.length) {
                         return {
-                            status: 'degraded', value: { images: [], panos: found.panos, cost: { ...NO_EVIDENCE_COST, ...discovery } }, source: 'no Street View images', reason: 'no Google Street View panorama looks at the fitted slots',
+                            status: 'degraded', value: { images: [], panos: found.panos, cost: { ...NO_EVIDENCE_COST, ...discovery }, ...(plan ? { plan } : {}) }, source: 'no Street View images', reason: 'no Google Street View panorama looks at the fitted slots',
                             degradations: [run.degrade(record('evidence', 'no_street_view', {
                                 part: { description: 'Street View close-ups of the structure' }, intended: 'up to 4 Street View images (© Google)', fellTo: 'no Street View images',
                                 provenanceAfter: PROVENANCE.photoInferred, reason: `no Google-captured Street View panorama within 12-60 m looks at the facades (${found.panos.length} found nearby)`, transient: false, runId, now: now()
@@ -946,7 +954,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const cost: EvidenceCost = { ...discovery, imagesRequested: views.length, imagesFetched: got.images.length, fetchMs: got.elapsedMs };
                     run.summary('evidence').cost = { images: got.images.length, visionCalls: 0, seconds: round(got.elapsedMs / 1000, 1) };
                     return {
-                        status, value: { images: got.images, panos: found.panos, cost }, source: `${got.images.length} of ${views.length} Street View images (© Google), kept in memory only`,
+                        status, value: { images: got.images, panos: found.panos, cost, ...(plan ? { plan } : {}) }, source: `${got.images.length} of ${views.length} Street View images (© Google), kept in memory only`,
                         ...(got.images.length ? {} : { reason: 'every Street View image failed to fetch' }),
                         degradations
                     };
@@ -958,7 +966,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         provenanceAfter: PROVENANCE.photoInferred, reason: `no Street View close-ups (${errorMessage(err)})`, cause: err, transient: true, runId, now: now()
                     }))]
                 })
-            }, evidenceStop.signal).then(r => ({ images: r.value?.images ?? [], panos: r.value?.panos ?? [], cost: r.value?.cost ?? NO_EVIDENCE_COST, status: r.status }));
+            }, evidenceStop.signal).then(r => ({ images: r.value?.images ?? [], panos: r.value?.panos ?? [], cost: r.value?.cost ?? NO_EVIDENCE_COST, ...(r.value?.plan ? { plan: r.value.plan } : {}), status: r.status })));
             // a Stop rejects it; whoever awaits it sees that, and nobody else is left holding a rejection nobody handles
             evidencePromise.catch(() => undefined);
             siblings.push(evidencePromise);
@@ -1252,7 +1260,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         siblings.push(treesPromise);
 
         // ---------------- the rebuild (isolated structure) ----------------
-        type Rebuild = { fit?: ScanFitFitResult; refit?: ScanFitFitResult; spec?: OrnamentSpec; rejected?: PrimitiveCorrection[]; detail?: ScanFitOrnamentResult; droppedNotResolvable: number; sourceLimits?: SourceLimits; evidenceCounts?: { tileOrthos: number; streetView: number } };
+        type Rebuild = { anchored?: AnchorNote[]; located?: DetailPlan; fit?: ScanFitFitResult; refit?: ScanFitFitResult; spec?: OrnamentSpec; rejected?: PrimitiveCorrection[]; detail?: ScanFitOrnamentResult; droppedNotResolvable: number; sourceLimits?: SourceLimits; evidenceCounts?: { tileOrthos: number; streetView: number } };
         const rebuildOut: Rebuild = { droppedNotResolvable: 0 };
         const rebuildRun = async (): Promise<Rebuild> => {
             const out = rebuildOut;
@@ -1356,7 +1364,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 runner.skip('detail', 'no detail was read');
                 return out;
             }
-            const evidence = evidencePromise ? await evidencePromise : { images: [] as EvidenceImage[], panos: [] as PanoCandidate[], cost: NO_EVIDENCE_COST, status: 'skipped' };
+            const evidence: { images: EvidenceImage[]; panos: PanoCandidate[]; cost: EvidenceCost; plan?: DetailPlan; status: string } = evidencePromise ? await evidencePromise : { images: [], panos: [], cost: NO_EVIDENCE_COST, status: 'skipped' };
+            const located = evidence.plan?.located ?? [];
             // the evidence the reading gets: the fit's facade orthos of the tile photos, then the Street View close-ups with the slots projected into them
             type Projected = { inputs: EvidenceInput[]; refs: EvidenceImageRef[] };
             const readOrthos = (): EvidenceInput[] => {
@@ -1418,6 +1427,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const ref = projected.value?.refs[k];
                 if (ref) inputs.push({ ref, bytes: img.bytes, mimeType: img.mimeType, caption: streetViewCaption(ref) });
             });
+            if (evidence.plan) out.located = evidence.plan;
             out.evidenceCounts = { tileOrthos: inputs.filter(i => i.ref.kind === 'tile-ortho').length, streetView: inputs.filter(i => i.ref.kind === 'streetview-grounding').length };
             const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...(deps.sleep ? { sleep: deps.sleep } : {}) });
             let fitSha = '';
@@ -1427,19 +1437,20 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 run: async io => {
                     if (!inputs.length) return { status: 'skipped', source: '', reason: 'no image shows the structure' };
                     fitSha = sha256File(fit.outputs.reportJson);
-                    visionKey = stageKey('ornament-vision/v2', ORNAMENT_PROMPT_VERSION, visionAvailable.candidates, ORNAMENT_THINKING_BUDGET, fitSha, inputs.map(i => i.ref.id), inputs.map(i => i.ref.sha256));
+                    visionKey = stageKey('ornament-vision/v3', ORNAMENT_PROMPT_VERSION, visionAvailable.candidates, ORNAMENT_THINKING_BUDGET, fitSha, inputs.map(i => i.ref.id), inputs.map(i => i.ref.sha256), located.map(l => [l.id, l.slotId, l.repeat?.count, l.runAlongM, l.regionUv]));
                     run.keys.vision = visionKey;
-                    const hit = !bypass('vision') ? cache.get<{ spec: OrnamentSpec; supportTestRequired: string[] }>('vision', visionKey) : undefined;
+                    const hit = !bypass('vision') ? cache.get<{ spec: OrnamentSpec; supportTestRequired: string[]; anchored?: AnchorNote[] }>('vision', visionKey) : undefined;
                     if (hit) {
                         run.cacheStatus.vision = 'hit';
                         run.state.visionModel = hit.value.spec.model;
+                        out.anchored = hit.value.anchored ?? [];
                         return { status: 'committed', value: hit.value.spec, source: `${hit.value.spec.elements.length} photo-inferred elements (cached reading by ${hit.value.spec.model.used})`, model: hit.value.spec.model, cached: true, builtAtMs: hit.builtAtMs };
                     }
                     run.cacheStatus.vision = bypass('vision') ? 'bypassed' : 'miss';
-                    const reading = await readOrnament({ fit, fitSha256: fitSha, evidence: inputs, chain, signal: io.signal, onProgress: m => io.progress(m) });
+                    const reading = await readOrnament({ fit, fitSha256: fitSha, evidence: inputs, chain, signal: io.signal, onProgress: m => io.progress(m), located });
                     await cache.run('vision', visionKey, async dir => {
                         fs.writeFileSync(path.join(dir, 'replies.json'), JSON.stringify(reading.replies));
-                        return { value: { spec: reading.spec, supportTestRequired: reading.supportTestRequired } };
+                        return { value: { spec: reading.spec, supportTestRequired: reading.supportTestRequired, anchored: reading.anchored } };
                     }, { bypass: true });
                     run.state.visionModel = reading.spec.model;
                     run.summary('vision').cost = { images: inputs.length, visionCalls: reading.spec.revision.passes + 1, seconds: round(reading.spec.model.ms / 1000, 1) };
@@ -1449,6 +1460,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     })));
                     out.droppedNotResolvable = reading.dropped.filter(d => d.reasonCode === 'not_resolvable_in_evidence').length;
                     out.rejected = reading.rejectedCorrections;
+                    out.anchored = reading.anchored;
                     return {
                         status: degradations.length ? 'degraded' : 'committed', value: reading.spec,
                         source: `${reading.spec.elements.length} photo-inferred elements read by ${reading.spec.model.used} (${'level' in reading.spec.model.thinking ? `thinking ${reading.spec.model.thinking.level.toLowerCase()}` : `budget ${reading.spec.model.thinking.budget}`}, ${(reading.spec.model.ms / 1000).toFixed(1)} s)`,
@@ -1672,7 +1684,7 @@ interface FinishInput {
     groundLayerId?: string;
     trees?: LocationClayTrees;
     putBack?: { triangles: number; crowns: number; reason: string };
-    rebuild: { fit?: ScanFitFitResult; refit?: ScanFitFitResult; spec?: OrnamentSpec; rejected?: PrimitiveCorrection[]; detail?: ScanFitOrnamentResult; droppedNotResolvable: number; sourceLimits?: SourceLimits; evidenceCounts?: { tileOrthos: number; streetView: number } };
+    rebuild: { anchored?: AnchorNote[]; located?: DetailPlan; fit?: ScanFitFitResult; refit?: ScanFitFitResult; spec?: OrnamentSpec; rejected?: PrimitiveCorrection[]; detail?: ScanFitOrnamentResult; droppedNotResolvable: number; sourceLimits?: SourceLimits; evidenceCounts?: { tileOrthos: number; streetView: number } };
     strip?: TileVegetationStripResult;
     now: () => number;
     persist: () => void;
@@ -1771,6 +1783,8 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
                 elements: ornament.elements.length, slotsFilled: new Set(ornament.elements.map(e => e.slotId)).size, slotsEmpty: ornament.emptySlots.length,
                 confidence: { min: confidences[0] ?? 0, median: confidences[Math.floor(confidences.length / 2)] ?? 0, max: confidences[confidences.length - 1] ?? 0 },
                 evidence: f.rebuild.evidenceCounts ?? { tileOrthos: 0, streetView: 0 }, model: ornament.model, revisionPass: ornament.revision.passes === 1,
+                ...(f.rebuild.anchored?.length ? { anchoring: f.rebuild.anchored.map(n => ({ elementId: n.elementId, slotId: n.slotId, kind: n.kind, errorM: n.errorM, toleranceM: n.toleranceM, note: n.note })) } : {}),
+                ...(f.rebuild.located ? { surveyLocated: { elements: f.rebuild.located.located.length, unlocated: f.rebuild.located.unlocated.length, slots: new Set(f.rebuild.located.located.map(l => l.slotId)).size, crops: f.rebuild.located.views.length } } : {}),
                 dropped: ornament.dropped.length, specPath: run.keys.vision ? path.join('.scratchbox', 'cache', 'staged_location', 'vision', run.keys.vision, 'done.json') : ''
             }
         } : {}),

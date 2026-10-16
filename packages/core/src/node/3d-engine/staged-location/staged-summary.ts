@@ -182,6 +182,16 @@ export function photoInferredSentence(input: StagedSummaryInput): string {
     return `They are photo-inferred, confidence ${o.confidence.min.toFixed(2)}–${o.confidence.max.toFixed(2)}${dropped ? `; ${n(dropped)} element${dropped === 1 ? ' was' : 's were'} dropped as not resolvable in ${dropped === 1 ? 'its' : 'their'} evidence` : ''}.`;
 }
 
+/** What the scan anchored in the photo reading: each snap or clip, labelled photo-corrected, with the error it carried. */
+export function anchoringSentence(input: StagedSummaryInput): string {
+    const a = input.ornament?.anchoring;
+    const located = input.ornament?.surveyLocated;
+    const parts: string[] = [];
+    if (located) parts.push(`The survey placed ${n(located.elements)} element${located.elements === 1 ? '' : 's'} on ${n(located.slots)} fitted slot${located.slots === 1 ? '' : 's'} from the photo geometry (${n(located.crops)} close-up${located.crops === 1 ? '' : 's'})${located.unlocated ? `, ${n(located.unlocated)} found no slot` : ''}.`);
+    if (a?.length) parts.push(`${n(a.length)} measurement${a.length === 1 ? ' was' : 's were'} photo-corrected to the scan's geometry (largest disagreement ${Math.max(...a.map(x => x.errorM)).toFixed(2)} m, tolerance ${a[0].toleranceM} m).`);
+    return parts.join(' ');
+}
+
 /** Rule "corrections": one sentence each, accepted ones only (a rejected correction changes nothing). */
 export function correctionSentences(input: StagedSummaryInput): string[] {
     return (input.structureFit?.corrections ?? []).filter(c => c.check.accepted).map(c =>
@@ -280,6 +290,7 @@ export function summarizeStagedBuild(input: StagedSummaryInput): { digest: strin
         surveySentence(input),
         evidenceSentence(input),
         photoInferredSentence(input),
+        anchoringSentence(input),
         ...correctionSentences(input),
         ...degradationSentences(input),
         treesSentence(input),

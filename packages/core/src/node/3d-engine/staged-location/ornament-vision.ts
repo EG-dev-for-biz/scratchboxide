@@ -48,7 +48,9 @@ import {
 } from '../../../common/spatial/staged-location-contracts';
 import { describeThinking, thinkingConfigFor } from '../../gemini/thinking-config';
 import type { VisionAttempt, VisionModelChain } from '../../gemini/vision-model-chain';
+import { anchorElements, type AnchorNote } from './ornament-anchor';
 import { expandElements, expandEvidence, type ExpandedElement } from './ornament-expand';
+import { surveyHintLines, type LocatedElement } from './survey-detail';
 
 export const ORNAMENT_PROMPT_VERSION = 'ornament/v2';
 /** Thinking tokens asked for: LOW on Gemini 4 (thinkingConfigFor), a 512-token budget on 3.x. */
@@ -140,7 +142,7 @@ export function streetViewCaption(ref: EvidenceImageRef): string {
 }
 
 /** The ornament/v2 prompt text around the images (the images go between the preamble and the tables). */
-export function ornamentPromptText(fit: StructureFit, evidence: EvidenceImageRef[]): { preamble: string; tables: string } {
+export function ornamentPromptText(fit: StructureFit, evidence: EvidenceImageRef[], located: LocatedElement[] = []): { preamble: string; tables: string } {
     const l = fit.sourceLimits;
     const preamble = `You are reading architectural ornament on one real structure from photographs. It will be added as parametric detail to a clay model that was fitted to a 3D scan. The scan resolves shapes of about ${f2(l.meshResolvableM)} m and the tile photos about ${f2(l.photoResolvableM)} m. Everything you add is labelled "photo-inferred" with the confidence you give, and anything smaller than the image you cite can show is discarded.\n\nImages (cite them by index):`;
     const inImages = (slotId: string) => evidence.filter(e => e.slotsShown.some(s => s.slotId === slotId)).map(e => e.index);
@@ -166,6 +168,7 @@ export function ornamentPromptText(fit: StructureFit, evidence: EvidenceImageRef
     const tables = [
         `Slots: ${slots.join('\n')}`,
         `Slot polygons in Street View images: ${polys.length ? polys.join('\n') : 'none'}`,
+        ...(located.length ? [`Survey: a first look at the whole structure found these, each already placed in its slot by casting its place in the photo onto the fitted face, so you do not place anything: measure it. Its metres come from the scan; the repeat counts are the survey's rough count. Give counts and sizes you can read in the close-up; count × pitch will be held to the run below.\n${surveyHintLines(located, fit.slots).join('\n')}`] : []),
         `Correctable fit values: ${correctable.length ? correctable.join('\n') : 'none'}`,
         `Rules:\n${rules.join('\n')}`,
         `Reply with JSON only, matching this schema: ${schema}`
@@ -173,8 +176,8 @@ export function ornamentPromptText(fit: StructureFit, evidence: EvidenceImageRef
     return { preamble, tables };
 }
 
-export function ornamentContents(fit: StructureFit, evidence: EvidenceInput[]): Content[] {
-    const { preamble, tables } = ornamentPromptText(fit, evidence.map(e => e.ref));
+export function ornamentContents(fit: StructureFit, evidence: EvidenceInput[], located: LocatedElement[] = []): Content[] {
+    const { preamble, tables } = ornamentPromptText(fit, evidence.map(e => e.ref), located);
     const parts: Part[] = [{ text: preamble }];
     for (const e of evidence) {
         parts.push({ inlineData: { mimeType: e.mimeType, data: e.bytes.toString('base64') } });
@@ -188,12 +191,12 @@ export function ornamentContents(fit: StructureFit, evidence: EvidenceInput[]): 
 // geometry of an expanded element in its slot
 // ----------------------------------------------------------------------------------------------------------------
 
-interface Rect { u0: number; v0: number; u1: number; v1: number }
+export interface Rect { u0: number; v0: number; u1: number; v1: number }
 const rectArea = (r: Rect) => Math.max(0, r.u1 - r.u0) * Math.max(0, r.v1 - r.v0);
-const bbox = (pts: Vec2[]): Rect => ({ u0: Math.min(...pts.map(p => p[0])), v0: Math.min(...pts.map(p => p[1])), u1: Math.max(...pts.map(p => p[0])), v1: Math.max(...pts.map(p => p[1])) });
+export const bbox = (pts: Vec2[]): Rect => ({ u0: Math.min(...pts.map(p => p[0])), v0: Math.min(...pts.map(p => p[1])), u1: Math.max(...pts.map(p => p[0])), v1: Math.max(...pts.map(p => p[1])) });
 const TOL = 0.01;
 
-function pointInPolygon(u: number, v: number, poly: Vec2[], tol = TOL): boolean {
+export function pointInPolygon(u: number, v: number, poly: Vec2[], tol = TOL): boolean {
     let inside = false;
     for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
         const [ui, vi] = poly[i], [uj, vj] = poly[j];
@@ -242,7 +245,7 @@ function leafFootprint(spec: OperatorSpec, slot: OrnamentSlot, at: Vec2 = [0, 0]
 }
 
 /** Instance origins of a replicate in the slot frame. */
-function instances(spec: OperatorSpec, slot: OrnamentSlot): Vec2[] {
+export function instances(spec: OperatorSpec, slot: OrnamentSlot): Vec2[] {
     if (spec.operator !== 'replicate') return [[0, 0]];
     const d = spec.replicate.domain;
     const L = 'edge' in slot.host ? slot.host.edge.carrier.lengthM : 0;
@@ -256,7 +259,7 @@ function instances(spec: OperatorSpec, slot: OrnamentSlot): Vec2[] {
     return out;
 }
 
-function footprint(spec: OperatorSpec, slot: OrnamentSlot): Vec2[] {
+export function footprint(spec: OperatorSpec, slot: OrnamentSlot): Vec2[] {
     if (spec.operator === 'replicate') return instances(spec, slot).flatMap(at => leafFootprint(spec.replicate.seed as OperatorSpec, slot, at));
     return leafFootprint(spec, slot);
 }
@@ -366,6 +369,8 @@ function uncertainty1000(ref: EvidenceImageRef): [number, number] {
 // ----------------------------------------------------------------------------------------------------------------
 
 export interface ReplyCheck {
+    /** What anchoring changed (photo-corrected within the scan tolerance). */
+    anchored?: AnchorNote[];
     /** Rules 1-8: things the model can fix, numbered for the revision request. */
     problems: string[];
     reply?: VisionOrnamentReply;
@@ -385,7 +390,7 @@ export interface ReplyCheck {
  * Checks one reply. `final` marks the reply after the revision: problems of rules 3-8 then drop their element instead of
  * asking again.
  */
-export function checkReply(text: string, finishReason: string | undefined, fit: StructureFit, evidence: EvidenceImageRef[], method: string, final = false): ReplyCheck {
+export function checkReply(text: string, finishReason: string | undefined, fit: StructureFit, evidence: EvidenceImageRef[], method: string, final = false, located: LocatedElement[] = []): ReplyCheck {
     const result: ReplyCheck = { problems: [], kept: [], dropped: [], supportTestRequired: [], corrections: [], rejectedCorrections: [], emptySlots: [] };
     // rule 1
     if (finishReason && finishReason !== 'STOP') {
@@ -428,6 +433,10 @@ export function checkReply(text: string, finishReason: string | undefined, fit: 
     for (const [slot, n] of perSlot) if (n > MAX_ELEMENTS_PER_SLOT) result.problems.push(`rule 9 of the prompt: slot ${slot} has ${n} elements, at most ${MAX_ELEMENTS_PER_SLOT}`);
 
     const expanded: ExpandedElement[] = expandElements(reply.elements, fit, evidence, method);
+    // anchor the model's estimates to the scan's geometry before the slot rules: within the tolerance they are snapped, beyond it they are problems
+    const anchored = anchorElements(expanded, fit, located);
+    result.anchored = anchored.notes;
+    for (const [i, ps] of anchored.problems) for (const p of ps) add(i, p);
     // rules 5-8 per element
     for (const x of expanded) {
         const slot = slotById.get(x.element.slotId)!;
@@ -519,7 +528,7 @@ export function checkReply(text: string, finishReason: string | undefined, fit: 
             result.dropped.push({ elementId: el.id, slotId: el.slotId, by: 'validator', problems, reasonCode });
             continue;
         }
-        el.checks = { slotOverlap: Math.round(bestOverlap * 1000) / 1000, minFeatureM: Math.round(smallest * 1000) / 1000, nativeSampleM: finest };
+        el.checks = { ...el.checks, slotOverlap: Math.round(bestOverlap * 1000) / 1000, minFeatureM: Math.round(smallest * 1000) / 1000, nativeSampleM: finest };
         if (cited.every(c => c.kind !== 'streetview-grounding')) {
             result.supportTestRequired.push(el.id);
             el.provenance.note = 'cites only the tile photo: kept only if the ornament builder finds it in the photo\'s pixels';
@@ -574,6 +583,8 @@ export interface OrnamentReading {
     supportTestRequired: string[];
     dropped: ReplyCheck['dropped'];
     rejectedCorrections: PrimitiveCorrection[];
+    /** What anchoring snapped or clipped, each with the error it carried. */
+    anchored: AnchorNote[];
 }
 
 function responseText(r: { candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }> }): string {
@@ -603,6 +614,8 @@ export interface ReadOrnamentInput {
     signal?: AbortSignal;
     onProgress?: (message: string) => void;
     timeoutMs?: number;
+    /** The survey's elements, each already placed in a slot: hints in the prompt, and the geometry the measurements are anchored to. */
+    located?: LocatedElement[];
 }
 
 /** One combined call, at most one revision; throws VisionStageError when no usable reply comes. */
@@ -610,7 +623,8 @@ export async function readOrnament(input: ReadOrnamentInput): Promise<OrnamentRe
     const { fit, chain } = input;
     const refs = input.evidence.map(e => e.ref);
     const timeoutMs = input.timeoutMs ?? ORNAMENT_VISION_TIMEOUT_MS;
-    const first = ornamentContents(fit, input.evidence);
+    const located = input.located ?? [];
+    const first = ornamentContents(fit, input.evidence, located);
     const replies: string[] = [];
     let usage: { promptTokens?: number; outputTokens?: number; thinkingTokens?: number; finishReason?: string } = {};
     const call = async (contents: Content[]): Promise<{ text: string; finishReason?: string }> => {
@@ -650,7 +664,7 @@ export async function readOrnament(input: ReadOrnamentInput): Promise<OrnamentRe
 
     input.onProgress?.(`reading ${refs.length} photos with ${chain.current}`);
     const one = await call(first);
-    let check = checkReply(one.text, one.finishReason, fit, refs, method);
+    let check = checkReply(one.text, one.finishReason, fit, refs, method, false, located);
     let passes: 0 | 1 = 0;
     let problems: string[] = [];
     if (check.problems.length) {
@@ -661,7 +675,7 @@ export async function readOrnament(input: ReadOrnamentInput): Promise<OrnamentRe
             : `These parts cannot be built: ${check.problems.map((p, i) => `${i + 1}. ${p}`).join(' ')} Reply with the complete corrected JSON.`;
         input.onProgress?.(`asking ${chain.answeredModel ?? chain.current} once to fix ${check.problems.length} problem${check.problems.length === 1 ? '' : 's'}`);
         const two = await call([...first, { role: 'model', parts: [{ text: one.text }] }, { role: 'user', parts: [{ text: ask }] }]);
-        check = checkReply(two.text, two.finishReason, fit, refs, method, true);
+        check = checkReply(two.text, two.finishReason, fit, refs, method, true, located);
         if (!check.reply) {
             const why = `the reply was invalid twice (${check.problems.slice(0, 3).join('; ')})`;
             throw new VisionStageError(why, visionUse(chain, 'failed', { ...usage, error: why }), false, 'vision_invalid_reply');
@@ -682,7 +696,7 @@ export async function readOrnament(input: ReadOrnamentInput): Promise<OrnamentRe
         revision: { passes, problems },
         dropped: check.dropped.map(d => ({ elementId: d.elementId, slotId: d.slotId, by: d.by, problems: d.problems }))
     };
-    return { spec, replies, supportTestRequired: check.supportTestRequired, dropped: check.dropped, rejectedCorrections: check.rejectedCorrections };
+    return { spec, replies, supportTestRequired: check.supportTestRequired, dropped: check.dropped, rejectedCorrections: check.rejectedCorrections, anchored: check.anchored ?? [] };
 }
 
 /** The thinking a VisionModelUse records for a model when no call was made (a failure before any attempt). */
