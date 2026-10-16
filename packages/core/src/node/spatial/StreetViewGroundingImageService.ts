@@ -69,8 +69,11 @@ export function isGoogleCapture(copyright: string | undefined): boolean {
 export class StreetViewGroundingImageService {
     constructor(private readonly deps: StreetViewGroundingDeps) {}
 
-    async retrieveGroundingImage(req: GroundingImageRequest): Promise<GroundingImage> {
+    /** `signal` aborts the request in flight and any retry wait (it rejects with the signal's reason, or an AbortError). */
+    async retrieveGroundingImage(req: GroundingImageRequest, signal?: AbortSignal): Promise<GroundingImage> {
         if (!req.panoId) throw new Error('retrieveGroundingImage: panoId is required.');
+        const stopped = () => (signal?.reason instanceof Error ? signal.reason : Object.assign(new Error('Street View grounding request was stopped'), { name: 'AbortError' }));
+        if (signal?.aborted) throw stopped();
         const headingDegree = req.headingDegree ?? 0;
         const pitchDegree = Math.max(-90, Math.min(90, req.pitchDegree ?? 0));
         const fovDegree = Math.max(1, Math.min(90, req.fovDegree ?? 90));
@@ -90,13 +93,18 @@ export class StreetViewGroundingImageService {
                     Authorization: `Bearer ${token}`,
                     'X-Goog-User-Project': projectNumber
                 },
-                body: JSON.stringify(body)
+                body: JSON.stringify(body),
+                ...(signal ? { signal } : {})
             }
         );
         // The endpoint intermittently answers 503 "Deadline expired"; retry transient statuses with backoff.
         let res = await call();
         for (let attempt = 1; attempt <= 2 && [429, 500, 503].includes(res.status); attempt++) {
-            await new Promise(r => setTimeout(r, (this.deps.retryDelayMs ?? 1500) * attempt));
+            await new Promise<void>((resolve, reject) => {
+                const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve(); }, (this.deps.retryDelayMs ?? 1500) * attempt);
+                const onAbort = () => { clearTimeout(timer); reject(stopped()); };
+                signal?.addEventListener('abort', onAbort, { once: true });
+            });
             res = await call();
         }
         const text = await res.text();
