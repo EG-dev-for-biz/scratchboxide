@@ -9,8 +9,8 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import type { ContinuousMaterialDescriptor } from '../../common/adaptive-material-types.js';
-import type { AlgorithmicUvOptions, AlgorithmicUvResult, TextureImageReport } from '../spatial/AlgorithmicUvEngine.js';
+import type { ContinuousMaterialDescriptor } from '../../common/adaptive-material-types';
+import type { AlgorithmicUvOptions, AlgorithmicUvResult, TextureImageReport } from '../spatial/AlgorithmicUvEngine';
 
 export type AdaptiveUvStrategy =
   | 'auto'
@@ -302,13 +302,13 @@ export class AdaptiveUvOrchestrator {
 
     // 1. Dispatch to strategy-specific pipeline
     if (appliedStrategy === 'recipe_hybrid') {
-      const { HybridRecipePbrService } = await import('./hybrid-recipe-pbr-service.js');
+      const { HybridRecipePbrService } = await import('./hybrid-recipe-pbr-service');
       const recipeRes = await HybridRecipePbrService.processGlb(rawBuffer, {
         outputMode: request.recipeOutputMode || 'webgl-recipe'
       });
       finalGlbBuffer = recipeRes.recipeGlbBuffer;
     } else if (appliedStrategy === 'elevation_stratified_conformal') {
-      const { AlgorithmicUvEngine } = await import('../spatial/AlgorithmicUvEngine.js');
+      const { AlgorithmicUvEngine } = await import('../spatial/AlgorithmicUvEngine');
       const solar = request.solarDelighting;
       if (solar) {
         const { latitude, longitude, timestampIso } = solar;
@@ -371,7 +371,7 @@ export class AdaptiveUvOrchestrator {
       const resMap: Record<string, number> = { '1K': 1024, '2K': 2048, '4K': 4096, '8K': 8192, '12K': 12288 };
       const px = resMap[request.resolution || '2K'] || 2048;
 
-      const { NativeMaterialPbrService } = await import('./native-material-pbr-service.js');
+      const { NativeMaterialPbrService } = await import('./native-material-pbr-service');
       const nativePbr = new NativeMaterialPbrService();
       const pbrTextures = await nativePbr.synthesizePbrTextureSet({
         descriptor: request.continuousDescriptor,
@@ -385,7 +385,7 @@ export class AdaptiveUvOrchestrator {
 
       // 2. Generate MaterialX if requested
       if (formats.includes('materialx')) {
-        const { MaterialXService } = await import('./materialx-service.js');
+        const { MaterialXService } = await import('./materialx-service');
         const albedoFile = `${baseName}_Albedo.png`;
         const normalFile = `${baseName}_Normal.png`;
         const ormFile = `${baseName}_ORM.png`;
@@ -406,7 +406,7 @@ export class AdaptiveUvOrchestrator {
 
       // 3. Generate USDZ if requested
       if (formats.includes('usdz')) {
-        const { UsdzPacker } = await import('./usdz-packer.js');
+        const { UsdzPacker } = await import('./usdz-packer');
         const usdzRes = UsdzPacker.packMaterialUsdz({
           materialName: request.materialName || baseName,
           descriptor: request.continuousDescriptor,
