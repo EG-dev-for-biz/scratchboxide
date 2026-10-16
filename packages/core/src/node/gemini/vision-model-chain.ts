@@ -204,7 +204,9 @@ export class VisionModelChain<Stage extends string = string> {
                 }
                 const classified = classifyMediaGenerationError(err, model);
                 const notFound = isModelNotFoundError(err);
-                const retryable = !notFound && (classified.code === 'transient' || classified.code === 'quota');
+                // the call's own abort signal (a per-call time limit) ended it: asking again would only end the same way
+                const callAborted = (params.config as { abortSignal?: AbortSignal } | undefined)?.abortSignal?.aborted === true;
+                const retryable = !notFound && !callAborted && (classified.code === 'transient' || classified.code === 'quota');
                 const record: VisionAttempt = {
                     model, ...(thinking ? { thinking: describeThinking(thinking) } : {}), ms, error: classified.message,
                     ...(classified.status !== undefined ? { httpStatus: classified.status } : {}), code: classified.code,
