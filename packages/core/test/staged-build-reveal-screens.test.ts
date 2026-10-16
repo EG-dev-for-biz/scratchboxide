@@ -20,10 +20,11 @@
 
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { PROVENANCE_BACKGROUND, PROVENANCE, type DegradationRecord, type StagedBuildState } from '../src/common/spatial/staged-location-contracts';
-import { hexToRgb01 } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/provenanceShading';
+import { STRIPE_COVERAGE, hexToRgb01 } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/provenanceShading';
 import { buildStagedFixture, fixtureLayer, fixtureState, objectIdOf, FIXTURE_RUN_ID, type FixtureLayerId, type StagedFixtureGlbs } from './helpers/staged-glb-fixture';
 import { openStagedPage, serveFixture, stagedChrome, type StagedPage } from './helpers/staged-build-chrome';
 import { stagedSceneData } from './helpers/staged-build-scene';
+import { patchGlbJson } from './helpers/staged-glb-patch';
 
 let fixture: StagedFixtureGlbs;
 beforeAll(() => { fixture = buildStagedFixture(); });
@@ -212,26 +213,52 @@ describe.skipIf(!stagedChrome.ok)('every stage revealed in its real build order 
         expect(hues.filter(h => hueDistance(h, photoHue) < 22).length + hues.filter(h => hueDistance(h, remeshHue) < 22).length).toBeGreaterThanOrEqual(hues.length * 0.8);
     });
 
+    test('provenance tints a fitted surface by its fit RMS: dots break it up in proportion, and an unobserved face by its confidence', async () => {
+        // A stopped run shows its end state at once, so the surfaces can be read under provenance straight away.
+        const st = fixtureState([L('l1'), L('l2'), L('l3a'), L('l3b')], { runState: 'stopped', stageStatus: { vision: 'stopped', detail: 'stopped', trees: 'stopped' } });
+        await page.eval(`sbHarness.mount(${JSON.stringify(stagedSceneData(st))})`);
+        await page.waitFor('sbHarness.ready()');
+        for (const l of ['l2', 'l3b'] as const) await page.waitFor(`sbHarness.attached(${JSON.stringify(objectIdOf(l))})`);
+        await page.step(4, STEP);
+        await page.eval(`sbHarness.setCameraView([0, 7, 0], { theta: 0.5, phi: 1.1, distance: 34 })`);
+        await page.eval(`sbHarness.click('[data-testid="sb-staged-provenance-toggle"]')`);
+        await page.step(6, STEP);
+        await page.screenshot('provenance_rms_tint_fitted_surfaces');
+        const nodes = await page.eval<Array<{ node: string; label?: string; pixels: number; share: number }>>(`sbHarness.patternShare(${JSON.stringify(objectIdOf('l3b'))})`);
+        const rms: Record<string, number> = { 's-ground': 0.012, 's-cornice': 0.022, 's-attic': 0.026, 's-pier-w': 0.028, 's-pier-e': 0.031, 's-spandrel-s': 0.036, 's-soffit': 0.044 };
+        const seen = nodes.filter(n => n.node in rms && n.pixels >= 300).sort((a, b) => rms[a.node] - rms[b.node]);
+        const report = nodes.map(n => `${n.node} ${n.pixels}px share ${n.share.toFixed(3)}`).join('; ');
+        expect(seen.length, `fitted surfaces with enough pixels: ${report}`).toBeGreaterThanOrEqual(4);
+        // The pattern takes 0.6 × rms / 10 cm of a fitted surface (the antialiased dots keep the share continuous).
+        for (const n of seen) expect(Math.abs(n.share - 0.6 * Math.min(1, rms[n.node] / 0.1)), `${n.node}: pattern share ${n.share.toFixed(3)} for rms ${rms[n.node]} (${report})`).toBeLessThanOrEqual(0.03);
+        const byRms = [...new Map(seen.map(n => [rms[n.node], n.share])).entries()].sort((a, b) => a[0] - b[0]);
+        for (let i = 1; i < byRms.length; i++) expect(byRms[i][1], `a larger residual is dotted more: ${report}`).toBeGreaterThan(byRms[i - 1][1] - 0.004);
+        expect(byRms.at(-1)![1] - byRms[0][1], 'the range across surfaces is visible').toBeGreaterThan(0.12);
+        // A face the fit placed without scan samples carries its confidence (0.35) too.
+        // (It faces north: look at it from there.)
+        await page.eval(`sbHarness.setCameraView([0, 7, 0], { theta: ${Math.PI + 0.4}, phi: 1.1, distance: 34 })`);
+        await page.step(4, STEP);
+        await page.screenshot('provenance_unobserved_face_dotted_by_confidence');
+        const north = await page.eval<Array<{ node: string; label?: string; pixels: number; share: number }>>(`sbHarness.patternShare(${JSON.stringify(objectIdOf('l3b'))})`);
+        const unobserved = north.find(n => n.label === 'fitted-unobserved' && n.pixels >= 200);
+        expect(unobserved, `the unobserved face is visible from the north: ${north.map(n => `${n.node} ${n.pixels}px ${n.label}`).join('; ')}`).toBeDefined();
+        // The stripes mark the variant (35%) and the dots its confidence (0.6 × 0.65 = 39%); the two overlap by chance.
+        const expectedShare = 1 - (1 - STRIPE_COVERAGE) * (1 - 0.6 * 0.65);
+        expect(Math.abs(unobserved!.share - expectedShare), `${unobserved!.node}: ${unobserved!.share.toFixed(3)} vs ${expectedShare.toFixed(3)}`).toBeLessThanOrEqual(0.04);
+    });
+
     test('an entity nobody planned for: an unlisted stage, layer code, kind and label reveal and shade with no code change', async () => {
         // The trees GLB with its stage, reveal kind and provenance label replaced by words no code or legend knows.
-        const buf = fixture.glbs.l5;
-        const jl = buf.readUInt32LE(12);
-        const json = JSON.parse(buf.toString('utf8', 20, 20 + jl));
-        const bin = buf.subarray(20 + jl + 8, 20 + jl + 8 + buf.readUInt32LE(20 + jl));
         let changed = 0;
-        for (const n of json.nodes ?? []) {
-            const sb = n.extras?.sb;
-            if (!sb) continue;
-            sb.stage = 'geothermal-spore-towers'; sb.revealKind = 'bloom'; sb.provenance.label = 'methane-geyser-inferred';
-            changed++;
-        }
+        const alien = patchGlbJson(fixture.glbs.l5, json => {
+            for (const n of json.nodes ?? []) {
+                const sb = n.extras?.sb;
+                if (!sb) continue;
+                sb.stage = 'geothermal-spore-towers'; sb.revealKind = 'bloom'; sb.provenance.label = 'methane-geyser-inferred';
+                changed++;
+            }
+        });
         expect(changed, 'the fixture trees carry staged node extras').toBeGreaterThan(0);
-        let j = Buffer.from(JSON.stringify(json));
-        j = Buffer.concat([j, Buffer.alloc((4 - (j.length % 4)) % 4, 0x20)]);
-        const head = Buffer.alloc(12); head.writeUInt32LE(0x46546c67, 0); head.writeUInt32LE(2, 4); head.writeUInt32LE(12 + 8 + j.length + 8 + bin.length, 8);
-        const jh = Buffer.alloc(8); jh.writeUInt32LE(j.length, 0); jh.writeUInt32LE(0x4e4f534a, 4);
-        const bh = Buffer.alloc(8); bh.writeUInt32LE(bin.length, 0); bh.writeUInt32LE(0x004e4942, 4);
-        const alien = Buffer.concat([head, jh, j, bh, bin]);
 
         const id = objectIdOf('l5');
         const st = fixtureState([L('l5', { revealAfter: [], url: '/models/alien.glb' })], { runState: 'running' });

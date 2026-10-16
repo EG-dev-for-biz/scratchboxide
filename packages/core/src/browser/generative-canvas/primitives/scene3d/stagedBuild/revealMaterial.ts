@@ -102,6 +102,12 @@ export function stagedKindOf(m: THREE.Material): StagedMaterialKind | undefined 
     return m.userData?.[STAMP] as StagedMaterialKind | undefined;
 }
 
+/** What a staged material is drawing with right now (diagnostics and tests; nothing in the viewport reads it). */
+export function stagedMaterialUniforms(m: THREE.Material): { progress: number; stagger: number; fade: number; presence: number; background: THREE.Vector3 } | undefined {
+    const u = UNIFORMS.get(m);
+    return u ? { progress: u.uSbProgress.value, stagger: u.uSbStagger.value, fade: u.uSbFade.value, presence: u.uSbPresence.value, background: u.uSbBackground.value } : undefined;
+}
+
 /** The material a staged material stands in for. */
 export function baseMaterialOf(m: THREE.Material): THREE.Material | undefined {
     return BASE.get(m);
@@ -159,9 +165,21 @@ varying vec2 vSbPattern;
 #endif
 float sbDither(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
 bool sbStripe(vec2 p, float period, float coverage, float dir) { return mod(p.x + dir * p.y, period) < coverage * period; }
-bool sbDot(vec2 p, float period, float coverage) {
+// A stripe whose edges are antialiased over one device pixel, so its share of the surface is the coverage at any pixel
+// density (the diagonal x + y only takes whole values on the pixel grid, which gave a 35 percent stripe a share of 50).
+float sbStripeAlpha(vec2 p, float period, float coverage, float dir, float pxScale) {
+    float hw = 0.5 * coverage * period;
+    float d = abs(mod(p.x + dir * p.y, period) - hw);
+    d = min(d, period - d);
+    return clamp((hw - d) * pxScale + 0.5, 0.0, 1.0);
+}
+// How much of a pixel a round dot covers: the dot's area is the coverage share of its cell, and its edge is antialiased
+// over one device pixel, so the share of the surface the dots take stays proportional to the coverage at any pixel
+// density (a hard edge would give every coverage under 16 percent the same four pixels at 1x).
+float sbDotAlpha(vec2 p, float period, float coverage, float pxScale) {
     vec2 c = mod(p, period) - 0.5 * period;
-    return length(c) < sqrt(coverage * period * period / 3.14159265);
+    float r = sqrt(coverage * period * period / 3.14159265);
+    return clamp((r - length(c)) * pxScale + 0.5, 0.0, 1.0);
 }
 `;
 
@@ -204,11 +222,11 @@ const FRAGMENT_END = `
         vec2 sbP = gl_FragCoord.xy / max(uSbPxScale, 1e-3);
 #ifdef SB_PROVENANCE
         vec2 sbPat = vec2(floor(vSbPattern.x + 0.5), vSbPattern.y);
-        bool sbGap = false;
-        if (sbPat.x > 0.5 && sbPat.x < 1.5) sbGap = sbStripe(sbP, ${STRIPE_PERIOD_PX.toFixed(1)}, ${STRIPE_COVERAGE.toFixed(3)}, 1.0);
-        else if (sbPat.x > 1.5 && sbPat.x < 2.5) sbGap = sbStripe(sbP, ${STRIPE_PERIOD_PX.toFixed(1)}, ${STRIPE_COVERAGE.toFixed(3)}, 1.0) || sbStripe(sbP, ${STRIPE_PERIOD_PX.toFixed(1)}, ${STRIPE_COVERAGE.toFixed(3)}, -1.0);
-        if (sbPat.y > 0.0 && sbDot(sbP + vec2(3.0), ${STRIPE_PERIOD_PX.toFixed(1)}, sbPat.y)) sbGap = true;
-        if (sbGap) gl_FragColor.rgb = uSbBackground;
+        float sbStripes = 0.0;
+        if (sbPat.x > 0.5 && sbPat.x < 1.5) sbStripes = sbStripeAlpha(sbP, ${STRIPE_PERIOD_PX.toFixed(1)}, ${STRIPE_COVERAGE.toFixed(3)}, 1.0, uSbPxScale);
+        else if (sbPat.x > 1.5 && sbPat.x < 2.5) sbStripes = 1.0 - (1.0 - sbStripeAlpha(sbP, ${STRIPE_PERIOD_PX.toFixed(1)}, ${STRIPE_COVERAGE.toFixed(3)}, 1.0, uSbPxScale)) * (1.0 - sbStripeAlpha(sbP, ${STRIPE_PERIOD_PX.toFixed(1)}, ${STRIPE_COVERAGE.toFixed(3)}, -1.0, uSbPxScale));
+        float sbDots = sbPat.y > 0.0 ? sbDotAlpha(sbP + vec2(3.0), ${STRIPE_PERIOD_PX.toFixed(1)}, sbPat.y, uSbPxScale) : 0.0;
+        gl_FragColor.rgb = mix(gl_FragColor.rgb, uSbBackground, 1.0 - (1.0 - sbStripes) * (1.0 - sbDots));
 #endif
         if (uSbMark > 0.5 && sbStripe(sbP, 10.0, 0.2, -1.0)) gl_FragColor.rgb = uSbMarkColor;
     }

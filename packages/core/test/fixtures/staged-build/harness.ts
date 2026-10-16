@@ -20,6 +20,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import * as THREE from 'three';
 import { Scene3DPrimitive } from '../../../src/browser/generative-canvas/primitives/Scene3DPrimitive';
 import { stagedRevealStats } from '../../../src/browser/generative-canvas/primitives/scene3d/stagedBuild/useStagedBuild';
+import { stagedMaterialUniforms } from '../../../src/browser/generative-canvas/primitives/scene3d/stagedBuild/revealMaterial';
 import { publishStageEvent } from '../../../src/browser/generative-canvas/primitives/scene3d/stagedBuild/stagedBuildState';
 import '../../../src/style.css';
 
@@ -77,12 +78,10 @@ function coverage(threshold = 12): { covered: number; total: number } {
  * those pixels in its last frame. Pixels on a node's edge (antialiased with what is behind) and pattern gaps (the
  * background colour between legend-coloured pixels) are left out.
  */
-function sampleNodes(objectId: string, perNode = 24): Array<{ node: string; label?: string; pixels: number; samples: Array<{ x: number; y: number; rgb: [number, number, number] }> }> {
+/** The ID pass: every visible mesh drawn in a flat unique colour through the viewport's camera (the staged guard bypassed). */
+function idPass(): { ids: Uint8Array; idOf: Map<THREE.Mesh, number>; width: number; height: number } {
     const stack = w.__SB_3D_STACK__!;
-    const rootObj = w.__SB_3D_EXTERNAL_OBJECTS__?.get(objectId);
-    if (!rootObj) return [];
-    const frame = readPixels();
-    const { width, height } = frame;
+    const { width, height } = readPixels();
     const renderer = stack.renderer, scene = stack.scene, camera = stack.camera;
     const meshes: THREE.Mesh[] = [];
     scene.traverseVisible(o => { if ((o as THREE.Mesh).isMesh) meshes.push(o as THREE.Mesh); });
@@ -115,28 +114,93 @@ function sampleNodes(objectId: string, perNode = 24): Array<{ node: string; labe
     scene.background = bg;
     hiddenLines.forEach(o => { o.visible = true; });
     for (const [m, mat] of saved) { (m.material as THREE.Material).dispose(); m.material = mat; }
+    return { ids, idOf, width, height };
+}
 
+/** The interior pixels (all four neighbours on the same mesh) of each node of a layer, as indices into the frame. */
+function nodeInteriors(objectId: string, ids: Uint8Array, idOf: Map<THREE.Mesh, number>, width: number, height: number): Map<THREE.Object3D, { set: Set<number>; interior: number[] }> {
+    const rootObj = w.__SB_3D_EXTERNAL_OBJECTS__?.get(objectId);
+    const out = new Map<THREE.Object3D, { set: Set<number>; interior: number[] }>();
+    if (!rootObj) return out;
     const idAt = (x: number, y: number) => { const o = (y * width + x) * 4; return ids[o] | (ids[o + 1] << 8) | (ids[o + 2] << 16); };
-    const isGap = (o: number) => Math.abs(frame.data[o] - 0x1c) + Math.abs(frame.data[o + 1] - 0x20) + Math.abs(frame.data[o + 2] - 0x26) < 24;
-    const out: Array<{ node: string; label?: string; pixels: number; samples: Array<{ x: number; y: number; rgb: [number, number, number] }> }> = [];
-    const byNode = new Map<THREE.Object3D, Set<number>>();
     rootObj.traverse(o => {
         const mesh = o as THREE.Mesh;
         if (!mesh.isMesh || !idOf.has(mesh)) return;
         let node: THREE.Object3D = mesh;
         for (let p: THREE.Object3D | null = mesh; p && p !== rootObj; p = p.parent) if ((p.userData as { sb?: unknown }).sb) { node = p; break; }
-        if (!byNode.has(node)) byNode.set(node, new Set());
-        byNode.get(node)!.add(idOf.get(mesh)!);
+        if (!out.has(node)) out.set(node, { set: new Set(), interior: [] });
+        out.get(node)!.set.add(idOf.get(mesh)!);
     });
-    for (const [node, set] of byNode) {
-        const interior: number[] = [];
+    for (const entry of out.values()) {
         for (let y = 1; y < height - 1; y++) for (let x = 1; x < width - 1; x++) {
             const id = idAt(x, y);
-            if (!set.has(id)) continue;
+            if (!entry.set.has(id)) continue;
             if (idAt(x + 1, y) !== id || idAt(x - 1, y) !== id || idAt(x, y + 1) !== id || idAt(x, y - 1) !== id) continue;
-            if (isGap((y * width + x) * 4)) continue;
-            interior.push(y * width + x);
+            entry.interior.push(y * width + x);
         }
+    }
+    return out;
+}
+
+/**
+ * The share of each node's interior pixels the provenance pattern takes (dots, stripes), measured exactly: the pattern
+ * mixes the surface colour toward the provenance background, so drawing the same frame again with a magenta background
+ * colour changes every pixel by (share of that pixel) × (magenta - background), and the mean of that share over the
+ * node's interior is what the user sees as the pattern's coverage. The viewport's own frame is the baseline.
+ */
+function patternShare(objectId: string): Array<{ node: string; label?: string; pixels: number; share: number }> {
+    const stack = w.__SB_3D_STACK__!;
+    const scene = stack.scene, renderer = stack.renderer, camera = stack.camera;
+    const base = readPixels();
+    const { ids, idOf, width, height } = idPass();
+    const staged: Array<{ background: THREE.Vector3; saved: THREE.Vector3 }> = [];
+    scene.traverse(o => {
+        const m = (o as THREE.Mesh).material as THREE.Material | undefined;
+        const u = m && !Array.isArray(m) ? stagedMaterialUniforms(m) : undefined;
+        if (u) staged.push({ background: u.background, saved: u.background.clone() });
+    });
+    const bg = [0x1c, 0x20, 0x26];
+    const magenta = [255, 0, 255];
+    for (const u of staged) u.background.set(1, 0, 1);
+    const guard = scene.onBeforeRender;
+    scene.onBeforeRender = () => undefined;
+    renderer.render(scene, camera);
+    const mixed = readPixels();
+    scene.onBeforeRender = guard;
+    for (const u of staged) u.background.copy(u.saved);
+    const denom = magenta.reduce((a, m, c) => a + (m - bg[c]) ** 2, 0);
+    const out: Array<{ node: string; label?: string; pixels: number; share: number }> = [];
+    for (const [node, { interior }] of nodeInteriors(objectId, ids, idOf, width, height)) {
+        if (interior.length === 0) continue;
+        let sum = 0;
+        for (const i of interior) {
+            const o = i * 4;
+            let num = 0;
+            for (let c = 0; c < 3; c++) num += (mixed.data[o + c] - base.data[o + c]) * (magenta[c] - bg[c]);
+            sum += Math.min(1, Math.max(0, num / denom));
+        }
+        const label = (node.userData as { sb?: { provenance?: { label?: string } } }).sb?.provenance?.label;
+        out.push({ node: node.name, label, pixels: interior.length, share: sum / interior.length });
+    }
+    return out;
+}
+
+/**
+ * Which node of a layer draws each pixel (the ID pass), then the colour the viewport actually drew at those pixels in its
+ * last frame. Pixels on a node's edge (antialiased with what is behind) and pattern gaps (the background colour between
+ * legend-coloured pixels) are left out.
+ */
+function sampleNodes(objectId: string, perNode = 24): Array<{ node: string; label?: string; pixels: number; gapFraction: number; samples: Array<{ x: number; y: number; rgb: [number, number, number] }> }> {
+    const rootObj = w.__SB_3D_EXTERNAL_OBJECTS__?.get(objectId);
+    if (!rootObj) return [];
+    const frame = readPixels();
+    const { width, height, ids, idOf } = idPass();
+    const isGap = (o: number) => Math.abs(frame.data[o] - 0x1c) + Math.abs(frame.data[o + 1] - 0x20) + Math.abs(frame.data[o + 2] - 0x26) < 24;
+    const out: Array<{ node: string; label?: string; pixels: number; gapFraction: number; samples: Array<{ x: number; y: number; rgb: [number, number, number] }> }> = [];
+    for (const [node, { interior: all }] of nodeInteriors(objectId, ids, idOf, width, height)) {
+        const interior: number[] = [];
+        let gaps = 0;
+        for (const i of all) { if (isGap(i * 4)) gaps++; else interior.push(i); }
         const step = Math.max(1, Math.floor(interior.length / perNode));
         const samples: Array<{ x: number; y: number; rgb: [number, number, number] }> = [];
         for (let k = 0; k < interior.length && samples.length < perNode; k += step) {
@@ -144,7 +208,7 @@ function sampleNodes(objectId: string, perNode = 24): Array<{ node: string; labe
             samples.push({ x: i % width, y: height - 1 - Math.floor(i / width), rgb: [frame.data[o], frame.data[o + 1], frame.data[o + 2]] });
         }
         const label = (node.userData as { sb?: { provenance?: { label?: string } } }).sb?.provenance?.label;
-        if (samples.length > 0) out.push({ node: node.name, label, pixels: interior.length, samples });
+        if (samples.length > 0) out.push({ node: node.name, label, pixels: interior.length, gapFraction: gaps / Math.max(1, gaps + interior.length), samples });
     }
     return out;
 }
@@ -219,6 +283,7 @@ w.sbHarness = {
     clearReference: () => { reference = undefined; },
     coverage,
     sampleNodes,
+    patternShare,
     boxes,
     camera: () => {
         const c = w.__SB_3D_STACK__!.camera;
@@ -227,12 +292,14 @@ w.sbHarness = {
     setCameraView: (target: [number, number, number], rot: { theta: number; phi: number; distance: number }) => w.__SB_SET_CAMERA_VIEW__?.(target, rot),
     meshStates: (id: string) => {
         const r = w.__SB_3D_EXTERNAL_OBJECTS__?.get(id);
-        const out: Array<{ name: string; visible: boolean; staged: string | null; material: string }> = [];
+        const out: Array<{ name: string; node: string; visible: boolean; staged: string | null; material: string; uniforms: { progress: number; stagger: number; fade: number; presence: number } | null }> = [];
         r?.traverse(o => {
             const m = o as THREE.Mesh;
             if (!m.isMesh && !(o as THREE.Line).isLine) return;
             const mat = m.material as THREE.Material;
-            out.push({ name: o.name, visible: o.visible, staged: (mat?.userData?.sbStagedPatch as string) ?? null, material: mat?.type ?? '' });
+            let node: THREE.Object3D = o;
+            for (let p: THREE.Object3D | null = o; p && p !== r; p = p.parent) if ((p.userData as { sb?: unknown }).sb) { node = p; break; }
+            out.push({ name: o.name, node: node.name, visible: o.visible, staged: (mat?.userData?.sbStagedPatch as string) ?? null, material: mat?.type ?? '', uniforms: (mat && stagedMaterialUniforms(mat)) ?? null });
         });
         return out;
     },
