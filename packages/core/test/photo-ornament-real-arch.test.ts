@@ -237,7 +237,7 @@ function report(label: string, run: Run): string {
         `  dropped by the checks: ${JSON.stringify((r.degradations as any[]).filter(d => d.stage === 'vision' || d.stage === 'detail').map(d => `${d.reasonCode}: ${String(d.reason).slice(0, 160)}`))}`
     ].join('\n');
     fs.writeFileSync(path.join(STAGED_RESULTS_DIR, `photo_ornament_${label}.txt`), text);
-    fs.writeFileSync(path.join(STAGED_RESULTS_DIR, `photo_ornament_${label}_result.json`), JSON.stringify({ stages: r.stages, degradations: r.degradations, ornament: r.ornament, materialHints: r.materialHints, figures: r.figures, photoCost: r.photoCost, grounding: run.log.grounding, vision: run.log.vision }, null, 1));
+    fs.writeFileSync(path.join(STAGED_RESULTS_DIR, `photo_ornament_${label}_result.json`), JSON.stringify({ complexityGate: r.complexityGate, exemptionsRefused: r.exemptionsRefused, status: r.status, stages: r.stages, degradations: r.degradations, ornament: r.ornament, materialHints: r.materialHints, figures: r.figures, photoCost: r.photoCost, grounding: run.log.grounding, vision: run.log.vision }, null, 1));
     return text;
 }
 
