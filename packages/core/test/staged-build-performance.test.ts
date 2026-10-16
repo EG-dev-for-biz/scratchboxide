@@ -29,7 +29,7 @@ import { fixtureState } from './helpers/staged-glb-fixture';
 import { openStagedPage, stagedChrome, type StagedPage } from './helpers/staged-build-chrome';
 import { stagedSceneData } from './helpers/staged-build-scene';
 import { REPO_ROOT } from './helpers/requirements';
-import { MAX_NEW_MATERIALS_PER_FRAME } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/useStagedBuild';
+import { MAX_NEW_MATERIALS_PER_FRAME, MAX_RESTORES_PER_FRAME } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/useStagedBuild';
 
 const SOURCE = path.join(REPO_ROOT, '..', 'integration-behaviour', 'public', 'models');
 const SOURCE_ALT = '/Users/eligreen/Dev/scratchbox-ide-master/.claude/worktrees/integration-behaviour/public/models';
@@ -100,7 +100,11 @@ function counts(buf: Buffer): { vertices: number; triangles: number } {
 }
 
 const pct = (xs: number[], p: number) => { if (xs.length === 0) return NaN; const s = [...xs].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(p * (s.length - 1)))]; };
-const summary = (xs: number[]) => ({ n: xs.length, p50: +pct(xs, 0.5).toFixed(2), p95: +pct(xs, 0.95).toFixed(2), max: +Math.max(...xs).toFixed(2) });
+const summary = (xs: number[]) => ({
+    n: xs.length, p50: +pct(xs, 0.5).toFixed(2), p95: +pct(xs, 0.95).toFixed(2), max: +Math.max(...xs).toFixed(2),
+    /** The three slowest frames and where in the run they fell: a lone hitch in the first frames is a one-time cost. */
+    worst: xs.map((v, i) => [i, +v.toFixed(1)] as const).sort((a, b) => b[1] - a[1]).slice(0, 3)
+});
 const intervals = (ts: number[]) => ts.slice(1).map((t, i) => t - ts[i]);
 
 describe.skipIf(!stagedChrome.ok || !srcDir)('Central Park trees: reveal performance on real data', () => {
@@ -148,11 +152,11 @@ describe.skipIf(!stagedChrome.ok || !srcDir)('Central Park trees: reveal perform
         await page.eval(`sbHarness.setCameraView([-30, 0, 10], { theta: -0.55, phi: 0.95, distance: 330 })`);
     }
 
-    async function frameRun(ms: number): Promise<{ intervals: number[]; renderMs: number[]; gpuMs: number[]; triangles: number[] }> {
+    async function frameRun(ms: number): Promise<{ intervals: number[]; renderMs: number[]; gpuMs: number[]; triangles: number[]; programs: number[] }> {
         await page.eval('sbHarness.startFrameLog()');
         await new Promise(r => setTimeout(r, ms));
-        const log = await page.eval<{ times: number[]; renderMs: number[]; gpuMs: number[]; triangles: number[] }>('sbHarness.stopFrameLog()');
-        return { intervals: intervals(log.times), renderMs: log.renderMs, gpuMs: log.gpuMs, triangles: log.triangles };
+        const log = await page.eval<{ times: number[]; renderMs: number[]; gpuMs: number[]; triangles: number[]; programs: number[] }>('sbHarness.stopFrameLog()');
+        return { intervals: intervals(log.times), renderMs: log.renderMs, gpuMs: log.gpuMs, triangles: log.triangles, programs: log.programs };
     }
 
     test('baseline, staggered fade and growth: frame times, chunking, the material cap and culling', async () => {
@@ -178,10 +182,16 @@ describe.skipIf(!stagedChrome.ok || !srcDir)('Central Park trees: reveal perform
             await page.screenshot(`perf_cp_${variant.name}_early`);
             const run = await frameRun(2700);
             await page.screenshot(`perf_cp_${variant.name}_end`);
-            const stats = await page.eval<{ guardMs: number[]; newMaterials: number[]; drawnStagedMeshes: number[] }>('sbHarness.stats()');
+            // The restore budget spreads the end of the reveal over a few frames: wait until every tree has its own material back.
+            await page.waitFor(`sbHarness.meshStates('stg-788091ff-l5').every(m => m.staged === null)`, 10_000, 'tree meshes back on their original materials');
+            const stats = await page.eval<{ guardMs: number[]; newMaterials: number[]; restored: number[]; drawnStagedMeshes: number[] }>('sbHarness.stats()');
             const phase = await page.eval<{ phase: string }>(`sbHarness.layer('stg-788091ff-l5')`);
             expect(phase.phase, `${variant.name}: the reveal finished within its 2.5 s`).toBe('revealed');
             expect(Math.max(...stats.newMaterials), `${variant.name}: new staged materials per frame`).toBeLessThanOrEqual(MAX_NEW_MATERIALS_PER_FRAME);
+            // The reveal's end puts 2,000 original materials back: never more than the budget in one frame, and all of them back soon after.
+            expect(Math.max(...stats.restored), `${variant.name}: original materials restored per frame`).toBeLessThanOrEqual(MAX_RESTORES_PER_FRAME);
+            expect(stats.restored.reduce((a: number, b: number) => a + b, 0), `${variant.name}: the reveal's materials were restored`).toBeGreaterThan(2000);
+
             const meshesTotal = 2086 + 1;
             const firstFrames = stats.drawnStagedMeshes.filter(n => n > 0).slice(0, 5);
             report[variant.name] = {
@@ -190,8 +200,11 @@ describe.skipIf(!stagedChrome.ok || !srcDir)('Central Park trees: reveal perform
                 gpuMs: run.gpuMs.length ? summary(run.gpuMs) : 'timer query unavailable',
                 guardMs: summary(stats.guardMs),
                 newMaterialsPerFrameMax: Math.max(...stats.newMaterials),
+                restoredPerFrameMax: Math.max(...stats.restored),
                 drawnStagedMeshes: { firstFrames, early: early[0], max: Math.max(...stats.drawnStagedMeshes), of: meshesTotal },
-                trianglesDrawn: summary(run.triangles)
+                trianglesDrawn: summary(run.triangles),
+                /** Shader programs alive at the start of the run, and the frames in which that number grew (a compile is a one-off hitch). */
+                programs: { atStart: run.programs[0], atEnd: run.programs.at(-1), grewAtFrames: run.programs.map((n, i) => (i > 0 && n > run.programs[i - 1] ? i : -1)).filter(i => i >= 0) }
             };
             // Chunked: the first frames of the trees reveal draw only the trees that have started.
             expect(Math.min(...firstFrames), `${variant.name}: first frames ${firstFrames.join(',')}`).toBeLessThan(meshesTotal * 0.5);

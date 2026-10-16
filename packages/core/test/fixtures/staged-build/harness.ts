@@ -233,10 +233,10 @@ function boxes(): Record<string, { x: number; y: number; width: number; height: 
 }
 
 /** Frame pacing and render cost, recorded while `frameLog.on` (real clock only). */
-const frameLog = { on: false, times: [] as number[], renderMs: [] as number[], gpuMs: [] as number[], triangles: [] as number[], calls: [] as number[] };
+const frameLog = { on: false, times: [] as number[], renderMs: [] as number[], gpuMs: [] as number[], triangles: [] as number[], calls: [] as number[], programs: [] as number[] };
 function startFrameLog(): void {
     frameLog.on = true;
-    frameLog.times = []; frameLog.renderMs = []; frameLog.gpuMs = []; frameLog.triangles = []; frameLog.calls = [];
+    frameLog.times = []; frameLog.renderMs = []; frameLog.gpuMs = []; frameLog.triangles = []; frameLog.calls = []; frameLog.programs = [];
     const stack = w.__SB_3D_STACK__!;
     const renderer = stack.renderer as THREE.WebGLRenderer & { __sbTimed?: boolean };
     if (!renderer.__sbTimed) {
@@ -255,6 +255,7 @@ function startFrameLog(): void {
                 frameLog.renderMs.push(performance.now() - t0);
                 frameLog.triangles.push(renderer.info.render.triangles);
                 frameLog.calls.push(renderer.info.render.calls);
+                frameLog.programs.push(renderer.info.programs?.length ?? 0);
             }
             while (ext && pending.length > 0 && gl.getQueryParameter(pending[0], gl.QUERY_RESULT_AVAILABLE)) {
                 const done = pending.shift()!;
@@ -269,7 +270,7 @@ function startFrameLog(): void {
 
 w.sbHarness = {
     startFrameLog,
-    stopFrameLog: () => { frameLog.on = false; return { times: frameLog.times, renderMs: frameLog.renderMs, gpuMs: frameLog.gpuMs, triangles: frameLog.triangles, calls: frameLog.calls }; },
+    stopFrameLog: () => { frameLog.on = false; return { times: frameLog.times, renderMs: frameLog.renderMs, gpuMs: frameLog.gpuMs, triangles: frameLog.triangles, calls: frameLog.calls, programs: frameLog.programs }; },
     gpuInfo: () => {
         const gl = w.__SB_3D_STACK__!.renderer.getContext();
         const dbg = gl.getExtension('WEBGL_debug_renderer_info');
@@ -310,8 +311,8 @@ w.sbHarness = {
         return bg && bg.isColor ? `#${bg.getHexString()}` : null;
     },
     layer: (id: string) => stagedRevealStats.layers.find(l => l.objectId === id) ?? null,
-    stats: () => ({ ...stagedRevealStats, guardMs: [...stagedRevealStats.guardMs], newMaterials: [...stagedRevealStats.newMaterials], drawnStagedMeshes: [...stagedRevealStats.drawnStagedMeshes] }),
-    resetStats: () => { stagedRevealStats.guardMs.length = 0; stagedRevealStats.newMaterials.length = 0; stagedRevealStats.drawnStagedMeshes.length = 0; },
+    stats: () => ({ ...stagedRevealStats, guardMs: [...stagedRevealStats.guardMs], newMaterials: [...stagedRevealStats.newMaterials], restored: [...stagedRevealStats.restored], drawnStagedMeshes: [...stagedRevealStats.drawnStagedMeshes] }),
+    resetStats: () => { stagedRevealStats.guardMs.length = 0; stagedRevealStats.newMaterials.length = 0; stagedRevealStats.restored.length = 0; stagedRevealStats.drawnStagedMeshes.length = 0; },
     renderInfo: () => {
         const info = w.__SB_3D_STACK__!.renderer.info;
         return { calls: info.render.calls, triangles: info.render.triangles, programs: info.programs?.length ?? 0 };

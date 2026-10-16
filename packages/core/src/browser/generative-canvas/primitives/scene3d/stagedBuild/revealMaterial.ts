@@ -352,6 +352,9 @@ function shareKey(mesh: THREE.Mesh | THREE.LineSegments, base: THREE.Material, l
     return `${(mesh as THREE.LineSegments).isLine ? 'line' : 'mesh'}|${(base as THREE.MeshStandardMaterial).side ?? 0}|${flags}|${classCount}|${p.nodeColor}|${look.mark ? 1 : 0}|${classes}`;
 }
 
+/** A reveal at its end: every item shown, no fade, nothing replaced. */
+const FULL_REVEAL_LOOK: MeshStagedLook = { reveal: { progress: 1, stagger: 0, fade: 1, presence: 1 } };
+
 /** The staged materials of one guard, with the base each mesh wore, so every one can be put back. */
 export class StagedMaterialRegistry {
     /** Mesh → the material it wore before (its clay or shaded material): what restore() puts back. */
@@ -366,16 +369,36 @@ export class StagedMaterialRegistry {
     /** castShadow values taken away while a node reveals (an unrevealed mesh must not cast a shadow). */
     private readonly shadows = new Map<THREE.Object3D, boolean>();
 
+    /** Meshes this frame that kept their (fully revealed) staged material because the frame's restore budget was spent. */
+    private deferred = 0;
+
     get size(): number { return this.meshes.size; }
     get sharedMaterials(): number { return this.shared.size; }
+    /** Meshes still waiting to get their original material back: the guard must stay up until this is 0. */
+    get deferredRestores(): number { return this.deferred; }
+
+    /** Starts a frame's accounting of deferred restores. */
+    beginFrame(): void { this.deferred = 0; }
 
     /**
      * Makes `mesh` look as `look` says. Returns true when a new material had to be built (the per-frame budget
      * counts these); with `allowCreate` false and no fitting material yet, the mesh is hidden for this frame.
      */
-    apply(mesh: THREE.Mesh | THREE.LineSegments, look: MeshStagedLook | null, opts: { allowCreate: boolean; pxScale: number; classCount: number }): boolean {
+    apply(mesh: THREE.Mesh | THREE.LineSegments, look: MeshStagedLook | null, opts: { allowCreate: boolean; pxScale: number; classCount: number; restores?: { left: number } }): boolean {
         this.fixClayStash(mesh);
         if (!look || (!look.reveal && !look.provenance && !look.mark)) {
+            // Putting a mesh's own material back disposes it (the renderer releases its program reference), which costs
+            // about 20 µs: a district's 2,000 trees would stall the frame their reveal ends. Over the frame's budget a
+            // mesh stays on its staged material, drawn fully revealed (identical pixels), and gets its own a frame later.
+            const wearing = mesh.material as THREE.Material | THREE.Material[];
+            if (opts.restores && !Array.isArray(wearing) && isStagedMaterial(wearing) && !this.sharedKeyOf.has(wearing)) {
+                if (opts.restores.left <= 0) {
+                    setUniforms(wearing, mesh, FULL_REVEAL_LOOK, opts.pxScale);
+                    this.deferred++;
+                    return false;
+                }
+                opts.restores.left--;
+            }
             this.restore(mesh);
             return false;
         }

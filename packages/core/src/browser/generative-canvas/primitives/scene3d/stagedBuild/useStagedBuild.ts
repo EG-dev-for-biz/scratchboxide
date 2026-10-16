@@ -45,6 +45,8 @@ import { isInterrupted, isRunSettled, stageEventsFor, streamedProgress, subscrib
 
 /** Staged materials built per frame at most; meshes past the budget stay hidden one more frame. */
 export const MAX_NEW_MATERIALS_PER_FRAME = 256;
+/** Original materials put back per frame at most (each disposes a staged one); the rest keep their fully revealed staged material a frame longer. */
+export const MAX_RESTORES_PER_FRAME = 256;
 /** A frame slower than this, ten frames in a row while revealing, skips the remaining reveals to their end. */
 export const SLOW_FRAME_MS = 40;
 export const SLOW_FRAME_RUN = 10;
@@ -59,7 +61,7 @@ const OVERLAY_REFRESH_MS = 250;
 
 /** Per-frame cost of the guard itself (ms of JS) and what it did, for the performance check; ring buffers. */
 export const stagedRevealStats = {
-    guardMs: [] as number[], newMaterials: [] as number[], drawnStagedMeshes: [] as number[], max: 600,
+    guardMs: [] as number[], newMaterials: [] as number[], restored: [] as number[], drawnStagedMeshes: [] as number[], max: 600,
     /** The last frame's layers, for diagnostics: phase, progress and presence per object id. */
     layers: [] as Array<{ objectId: string; phase: string; progress: number; presence: number; hidden: boolean }>
 };
@@ -515,6 +517,8 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
             }
         }
         const registry = registryRef.current;
+        registry.beginFrame();
+        const restores = { left: MAX_RESTORES_PER_FRAME };
         const pxScale = renderer.getPixelRatio();
         registry.updateSharedPixelScale(pxScale);
         let budget = MAX_NEW_MATERIALS_PER_FRAME;
@@ -530,7 +534,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
                     if (look === 'conceal') registry.conceal(mesh);
                     else if (look === 'hide') registry.hide(mesh);
                     else {
-                        if (registry.apply(mesh, look, { allowCreate: budget > 0, pxScale, classCount: lg.classes.length })) budget--;
+                        if (registry.apply(mesh, look, { allowCreate: budget > 0, pxScale, classCount: lg.classes.length, restores })) budget--;
                         if (mesh.visible) drawn++;
                     }
                 }
@@ -548,6 +552,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         stagedRevealStats.layers = frame.layers.map(f => ({ objectId: f.objectId, phase: f.phase, progress: f.progress, presence: f.presence, hidden: f.hidden }));
         recordStat(stagedRevealStats.guardMs, performance.now() - t0);
         recordStat(stagedRevealStats.newMaterials, MAX_NEW_MATERIALS_PER_FRAME - budget);
+        recordStat(stagedRevealStats.restored, MAX_RESTORES_PER_FRAME - restores.left);
         recordStat(stagedRevealStats.drawnStagedMeshes, drawn);
     }, [objectRootsRef, legendFor, sidecarFor, rootInfoFor]);
 
@@ -572,7 +577,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
             const stale = !!f && !!L.state && (f.layers.length !== L.state.layers.length || f.layers.some(x => !L.state!.layers.some(l => l.objectId === x.objectId)));
             // "Replay build" is consumed by the next scheduled frame, so it needs the guard even when everything is revealed.
             const replayPending = !!scheduleRef.current && scheduleRef.current.epoch !== L.replayEpoch;
-            const needsGuard = !f || stale || replayPending || f.animating || f.pending || L.provenanceOn || highlightOn || ghosts;
+            const needsGuard = !f || stale || replayPending || f.animating || f.pending || L.provenanceOn || highlightOn || ghosts || registryRef.current.deferredRestores > 0;
             if (scene && needsGuard && guardRef.current?.scene !== scene) {
                 guardRef.current?.uninstall();
                 guardRef.current = { scene, uninstall: installRenderGuard(scene, renderer => onFrame(renderer as THREE.WebGLRenderer, scene)) };
