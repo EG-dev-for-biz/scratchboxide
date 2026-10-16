@@ -385,7 +385,8 @@ function runSentence(state: StagedBuildState, interrupted: boolean): string {
     const head = interrupted ? 'Interrupted' : state.runState === 'stopped' ? 'Stopped' : state.runState === 'failed' ? 'Failed' : 'Finished';
     const by = (...statuses: StageStatus[]) => state.stages.filter(s => statuses.includes(s.status));
     const list = (stages: StageSummary[]) => {
-        const items = stages.map(s => { const why = stageReason(state, s); return why ? `${s.title} (${why})` : s.title; });
+        // A reason is a sentence; inside parentheses it loses its full stop.
+        const items = stages.map(s => { const why = stageReason(state, s); return why ? `${s.title} (${why.replace(/[.\s]+$/, '')})` : s.title; });
         return items.join(stages.some(s => stageReason(state, s)) ? '; ' : ', ');
     };
     const committed = by('committed');

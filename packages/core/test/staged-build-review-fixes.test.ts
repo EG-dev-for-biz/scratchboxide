@@ -250,7 +250,7 @@ describe('finding 5: the run sentence and the chips say what fell, what was skip
         const sentence = text(markup(props(degradedRun())));
         expect(sentence).toContain('Finished: Google 3D Tiles, Remeshed scan, Scan-fitted rebuild in the scene.');
         expect(sentence).not.toMatch(/Finished:[^.]*Reading the photos/);
-        expect(sentence).toContain('Fell to simpler real data: Reading the photos (gemini-4-argon (thinking LOW) returned 503 twice; the fitted faces stay flat.).');
+        expect(sentence).toContain('Fell to simpler real data: Reading the photos (gemini-4-argon (thinking LOW) returned 503 twice; the fitted faces stay flat).');
         expect(sentence).toContain('Skipped: Facade detail (no photo-read elements to build).');
     });
 
@@ -286,7 +286,7 @@ describe('finding 5: the run sentence and the chips say what fell, what was skip
     test('a failed run says why', () => {
         const st = fixtureState([], { runState: 'failed', stageStatus: { tiles: 'failed' }, stageReason: { tiles: 'No Photorealistic 3D Tiles coverage at this place.' } });
         const sentence = text(markup(props(st)));
-        expect(sentence).toContain('Failed. Not built: Google 3D Tiles (No Photorealistic 3D Tiles coverage at this place.).');
+        expect(sentence).toContain('Failed. Not built: Google 3D Tiles (No Photorealistic 3D Tiles coverage at this place).');
     });
 });
 
@@ -542,7 +542,7 @@ describe.skipIf(!stagedChrome.ok)('the real viewport (Scene3DPrimitive, its load
         await page.step(30, STEP);
         const sentence = await page.eval<string>(`sbHarness.text('[data-testid="sb-staged-runstate"]')`);
         expect(sentence).toContain('Finished: Google 3D Tiles, Remeshed scan, Scan-fitted rebuild in the scene.');
-        expect(sentence).toContain('Fell to simpler real data: Reading the photos (gemini-4-argon (thinking LOW) returned 503 twice; the fitted faces stay flat.).');
+        expect(sentence).toContain('Fell to simpler real data: Reading the photos (gemini-4-argon (thinking LOW) returned 503 twice; the fitted faces stay flat).');
         expect(sentence).toContain('Skipped: Facade detail (no photo-read elements to build).');
         await page.screenshot('review_overlay_finished_degraded_reasons');
         expect(page.consoleErrors().filter(e => !/favicon|404|Failed to load resource/i.test(e))).toEqual([]);
