@@ -61,7 +61,7 @@ export interface TreeLodStats {
     /** Visible trees whose share is wholly level 0 / 1 / 2, and those in a crossfade. */
     atLevel: [number, number, number];
     fading: number;
-    /** Estimated triangles the visible trees draw, counting each level by the share of the hash it draws. */
+    /** Triangles submitted for the visible trees: every level that shows any share of the hash counts in full. */
     estimatedTriangles: number;
     commits: number;
     deferredCommits: number;
@@ -106,6 +106,7 @@ export class TreeLodController {
     private readonly opts: Required<Omit<TreeLodOptions, 'now'>> & { now: () => number };
     private readonly variants = new Map<THREE.Material, Map<string, THREE.Material>>();
     private bias = 1;
+    private forced: 0 | 1 | 2 | undefined;
     private lastMs: number | undefined;
     private readonly frustum = new THREE.Frustum();
     private readonly pv = new THREE.Matrix4();
@@ -117,7 +118,7 @@ export class TreeLodController {
         this.opts = {
             hysteresisM: options.hysteresisM ?? 2, fadeSeconds: options.fadeSeconds ?? 0.35,
             maxCommitsPerFrame: options.maxCommitsPerFrame ?? 400, maxNewVariantsPerFrame: options.maxNewVariantsPerFrame ?? 6,
-            triangleBudget: options.triangleBudget ?? 8_000_000, minBias: options.minBias ?? 0.25,
+            triangleBudget: options.triangleBudget ?? 8_000_000, minBias: options.minBias ?? 0.1,
             now: options.now ?? (() => performance.now())
         };
         this.psiSeason = (root.userData?.sbTrees as TreesGlbRootExtras | undefined)?.psiSeason;
@@ -168,6 +169,12 @@ export class TreeLodController {
         };
     }
 
+    /** Shows every tree wholly at one level whatever its distance (QA, comparison shots); null returns to distance-driven levels. */
+    forceLevel(level: 0 | 1 | 2 | null): void {
+        this.forced = level ?? undefined;
+        for (const t of this.trees) t.snap = true;
+    }
+
     /** The distance edges a given tree currently has, for diagnostics and tests. */
     edgesOf(index: number): LodEdges { return { ...this.trees[index].edges }; }
     /** Draw state of each level of a tree ('off', 'full' or a quantised range), for diagnostics and tests. */
@@ -186,12 +193,12 @@ export class TreeLodController {
         s.visibleTrees = 0; s.culledTrees = 0; s.atLevel = [0, 0, 0]; s.fading = 0; s.estimatedTriangles = 0; s.commits = 0; s.deferredCommits = 0; s.newVariants = 0;
         const dirty: TreeState[] = [];
         const sphere = new THREE.Sphere();
+        const visible: TreeState[] = [];
         for (const t of this.trees) {
             t.node.updateWorldMatrix(true, false);
             sphere.center.copy(t.centerLocal).applyMatrix4(t.node.matrixWorld);
             sphere.radius = t.radiusLocal * Math.max(1e-6, t.node.matrixWorld.getMaxScaleOnAxis());
-            const inView = this.frustum.intersectsSphere(sphere);
-            if (!inView) {
+            if (!this.frustum.intersectsSphere(sphere)) {
                 t.culled = true; t.snap = true;
                 if (t.node.visible) t.node.visible = false;
                 s.culledTrees++;
@@ -200,18 +207,38 @@ export class TreeLodController {
             if (!t.node.visible) t.node.visible = true;
             t.dist = Math.max(0, sphere.center.distanceTo(camPos) - sphere.radius);
             t.filteredD = hysteresisDistance(t.snap ? undefined : t.filteredD, t.dist, this.opts.hysteresisM);
-            const target = targetEdges(t.filteredD / this.bias, t.bands);
+            t.culled = false;
+            visible.push(t);
+        }
+        s.visibleTrees = visible.length;
+        // Budget, on where the trees are heading (not where the dissolves have got to): stretch every distance until the
+        // levels the targets submit fit, up to a few corrections per frame; ease back slowly when there is headroom.
+        const targetOf = (t: TreeState): LodEdges => this.forced === undefined ? targetEdges(t.filteredD! / this.bias, t.bands)
+            : { e0: this.forced === 0 ? 1 : 0, e1: this.forced === 2 ? 0 : 1 };
+        const submitted = (e: LodEdges, t: TreeState): number => {
+            let n = 0;
+            for (let k = 0; k < 3; k++) if (quantiseRange(levelRange(e, k as 0 | 1 | 2)) !== null) n += t.levels[k].triangles;
+            return n;
+        };
+        if (this.forced === undefined) {
+            for (let pass = 0; pass < 4; pass++) {
+                let est = 0;
+                for (const t of visible) est += submitted(targetOf(t), t);
+                if (est > this.opts.triangleBudget && this.bias > this.opts.minBias) this.bias = Math.max(this.opts.minBias, this.bias * Math.max(0.5, this.opts.triangleBudget / est));
+                else { if (est < 0.8 * this.opts.triangleBudget && this.bias < 1) this.bias = Math.min(1, this.bias * 1.01); break; }
+            }
+        }
+        for (const t of visible) {
+            const target = targetOf(t);
             t.edges = t.snap ? target : stepEdges(t.edges, target, maxStep);
-            t.snap = false; t.culled = false;
-            s.visibleTrees++;
+            t.snap = false;
             let changed = false;
             for (let k = 0; k < 3; k++) {
                 const w = keyOf(levelRange(t.edges, k as 0 | 1 | 2));
                 t.want[k] = w;
                 if (w !== t.levels[k].applied) changed = true;
-                const [lo, hi] = levelRange(t.edges, k as 0 | 1 | 2);
-                s.estimatedTriangles += t.levels[k].triangles * Math.max(0, hi - lo);
             }
+            s.estimatedTriangles += submitted(t.edges, t);     // what is submitted: a level in a dissolve still draws all of its triangles (the dither drops them in the shader)
             if (t.edges.e0 >= 1 - 1e-6) s.atLevel[0]++; else if (t.edges.e0 <= 1e-6 && t.edges.e1 >= 1 - 1e-6) s.atLevel[1]++; else if (t.edges.e0 <= 1e-6 && t.edges.e1 <= 1e-6) s.atLevel[2]++; else s.fading++;
             if (changed) dirty.push(t);
         }
@@ -234,9 +261,6 @@ export class TreeLodController {
             if (!done) s.deferredCommits++;
             s.commits++;
         }
-        // Budget: stretch the distances while the estimate is over, ease back when there is headroom.
-        if (s.estimatedTriangles > this.opts.triangleBudget) this.bias = Math.max(this.opts.minBias, this.bias * 0.96);
-        else if (s.estimatedTriangles < 0.8 * this.opts.triangleBudget && this.bias < 1) this.bias = Math.min(1, this.bias * 1.01);
         s.bias = this.bias;
         s.updateMs = this.opts.now() - t0;
         return s;
