@@ -51,6 +51,8 @@
 #include "scratchbox_staged_glb.hpp"
 
 #include <chrono>
+#include <cstdlib>
+#include <fstream>
 #include <cstdio>
 #include <set>
 #include <sstream>
@@ -64,6 +66,8 @@ using math::Vec3;
 using sg::P2;
 using sg::Residual;
 namespace sj = staged_glb::json;
+
+inline std::array<uint8_t, 4> cividis(double x);
 
 class ScanFitError : public std::runtime_error {
 public:
@@ -100,8 +104,9 @@ struct Params {
     double boxSupportMin{0.5};
     double metricDensity{25};
     double inlierBandM{0.07};
+    double backedBandM{0.25};   // the rebuild's surface within this of the scan is backed by it
     // global gates
-    double gateCoverage{0.85}, gateScanToFitM{0.06}, gateFitToScanM{0.06}, gateHausdorffM{0.6};
+    double gateCoverage{0.85}, gateScanToFitM{0.06}, gateFitToScanM{0.06}, gateHausdorffM{0.6}, gatePassShare{0.35}, gateUnobservedShare{0.35};
     // the arc sweep's chord sagitta (m)
     double sagittaM{0.005};
     // refit overrides: primitive id -> parameter index -> value
@@ -245,6 +250,7 @@ struct FitRequest {
     size_t inputTriangles{0};
     const std::vector<uint8_t>* remeshGlb{nullptr};
     const gltf::GltfScene* textured{nullptr};  // for the photo texel (orthos are scan_ortho's)
+    std::function<void(double, const std::string&)> progress;  // 0..1 and a message, after each step
 };
 
 struct FitResult {
@@ -258,7 +264,9 @@ struct FitResult {
     std::vector<Surface> surfaces;
     std::vector<Slot> slots;
     std::vector<PassRegion> pass;
-    Residual scanToFit, fitToScan, scanToFitPlusPass, remeshToScan;
+    Residual scanToFit, fitToScan, fitToScanAll, scanToFitPlusPass, remeshToScan;
+    double coverageWithPass{0}, passShare{0}, buriedScanArea{0};
+    double unobservedShare{0};   // the share of the rebuild's visible surface that the scan does not back
     bool haveRemesh{false};
     double coverage{0}, hausdorff{0};
     std::vector<GateRec> gates;
@@ -355,6 +363,13 @@ public:
         planes();
         lap("planes");
         sampleScan();
+        if (std::getenv("SCAN_FIT_DEBUG_DIR")) {
+            for (size_t i = 0; i < regions.size(); ++i) {
+                const auto& r = regions[i];
+                if (r.area < 15 || std::fabs(r.pl.n.y) > 0.5) continue;
+                std::fprintf(stderr, "region %zu area %.1f n=(%.3f,%.3f,%.3f) lean %.2f deg rms %.3f y[%.1f,%.1f] sheet %d\n", i, r.area, r.pl.n.x, r.pl.n.y, r.pl.n.z, deg(std::asin(std::clamp((double)r.pl.n.y, -1.0, 1.0))), r.rms, r.lo.y, r.hi.y, r.sheet ? 1 : 0);
+            }
+        }
         bandsAndFootprints();
         lap("bands_footprints_openings_columns");
         meshModel();
@@ -376,7 +391,12 @@ private:
     const FitRequest Q;
     FitResult R;
     Clock::time_point t0;
-    void lap(const char* n) { const auto now = Clock::now(); R.timings[n] = std::chrono::duration<double, std::milli>(now - t0).count(); t0 = now; }
+    void lap(const char* n) {
+        const auto now = Clock::now();
+        R.timings[n] = std::chrono::duration<double, std::milli>(now - t0).count();
+        t0 = now;
+        if (Q.progress) { static const char* order[] = {"load_weld_select", "frame_ground", "visibility", "planes", "bands_footprints_openings_columns", "mesh", "attachments_passthrough", "metrics", "slots_gates"}; for (int i = 0; i < 9; ++i) if (std::string(n) == order[i]) Q.progress((i + 1) / 10.0, n); }
+    }
 
     // local copy of the selected scan
     std::vector<Vec3> lp;          // local positions (welded ids)
@@ -388,6 +408,7 @@ private:
     struct Region { sg::Plane pl; std::vector<uint32_t> tris; double area{0}, rms{0}; Vec3 lo, hi, c; bool sheet{false}; };
     std::vector<Region> regions;
     double structX0{0}, structX1{0}, structZ0{0}, structZ1{0}, structTop{0};
+    double frameShare{1};          // the share of the vertical faces' area along the frame's axes
     std::vector<sg::Sample> S;     // exterior structure samples (local)
     std::vector<uint8_t> sGround;  // per sample: ground or clutter
 
@@ -508,6 +529,7 @@ private:
             if (std::fabs(d) <= 0.6) { sx += a * d; ws += a; }
         }
         const double share = tot > 0 ? ws / tot : 0;
+        frameShare = share;
         double yaw = mode + (ws > 0 ? sx / ws : 0);
         if (share < 0.35) {
             // not rectilinear: the principal axes of the plan (area-weighted centroids)
@@ -734,11 +756,15 @@ private:
     // ---------------------------------------------------------------- 4-6. bands, footprints, passages, columns
     sg::Raster gridProto;       // cell layout
     std::vector<float> dsm;     // top surface per cell (local y)
+    /** The surfaces a vertical line through a cell's centre crosses, by height; up: the face looks up (it is the top of something solid). */
+    struct Crossing { float y; bool up; };
+    std::vector<std::vector<Crossing>> layers;
 
     void buildDsm() {
         const double m = 1.0;
         gridProto.init(structX0 - m - 2, structZ0 - m - 2, structX1 + m + 2, structZ1 + m + 2, P.cellM);
         dsm.assign(gridProto.v.size(), -1e30f);
+        layers.assign(gridProto.v.size(), {});
         const auto& s = R.scan;
         for (size_t t = 0; t < s.triangles(); ++t) {
             if (isGround[t] || sheetTri[t]) continue;
@@ -757,12 +783,122 @@ private:
                 }
                 float& h = dsm[gridProto.id(i, k)];
                 h = std::max(h, y);
+                if (std::fabs(d) >= 1e-12 && std::fabs(ln[t].y) >= 0.02f) layers[gridProto.id(i, k)].push_back({y, ln[t].y > 0});
             }
+        }
+        // sorted by height; a face met twice on a shared edge counts once, and opposed faces within 3 cm (a sheet) cancel
+        for (auto& L : layers) {
+            std::sort(L.begin(), L.end(), [](const Crossing& a, const Crossing& b) { return a.y < b.y || (a.y == b.y && a.up < b.up); });
+            std::vector<Crossing> out;
+            for (const auto& c : L) {
+                if (!out.empty() && c.y - out.back().y < 0.03f) { if (out.back().up == c.up) continue; out.pop_back(); continue; }
+                out.push_back(c);
+            }
+            L.swap(out);
         }
     }
 
-    /** The structure occupied at height h: the slice's inside (closed against cracks) where the top surface stands above h. */
+    /**
+     * The structure occupied at height h, by what the scan's walls say about each cell, and not by whether they close.
+     * A slice through the scan gives wall segments, each with the side it faces out to. From a cell, a ray along each of the
+     * frame's four horizontal directions meets a wall first or none; a ray that meets one while leaving a solid (the wall
+     * faces away along the ray) votes inside, one that meets a wall from its outer side votes outside. A cell is inside
+     * when at least one ray leaves a solid and none enters one, and it stands under some surface of the scan (the roof, a
+     * ceiling, a cap). A pier whose far walls were never scanned is thus still a pier (the two walls that were scanned
+     * leave it behind them), a passage between piers is not (every wall it sees faces it), and the open sky is not.
+     */
+    /** Per cell: how many of the four horizontal rays leave a solid (exits) and how many enter one (enters), from the walls at height h. */
+    void wallVotes(double h, std::vector<uint8_t>& exits, std::vector<uint8_t>& enters) const {
+        const sg::Raster& o = gridProto;
+        struct Seg { double ax, az, bx, bz, nx, nz; };
+        std::vector<Seg> segs;
+        const auto& s = R.scan;
+        const bool aligned = frameShare >= 0.35;  // a rectilinear plan: only walls along its axes make its footprint; the rest are residual
+        const float cosAlign = static_cast<float>(std::cos(rad(12.0)));
+        for (size_t t = 0; t < s.triangles(); ++t) {
+            if (isGround[t] || sheetTri[t] || std::fabs(ln[t].y) > 0.75f) continue;
+            const double nl = std::hypot(ln[t].x, ln[t].z);
+            if (nl < 1e-3) continue;
+            const double nx = ln[t].x / nl, nz = ln[t].z / nl;
+            if (aligned && std::max(std::fabs(nx), std::fabs(nz)) < cosAlign) continue;
+            const Vec3* v[3] = {&lp[s.tri[3 * t]], &lp[s.tri[3 * t + 1]], &lp[s.tri[3 * t + 2]]};
+            P2 pts[2];
+            int n = 0;
+            for (int j = 0; j < 3 && n < 2; ++j) {
+                const Vec3 &a = *v[j], &b = *v[(j + 1) % 3];
+                if ((a.y - h) * (b.y - h) < 0) { const double f = (h - a.y) / (b.y - a.y); pts[n++] = P2(a.x + f * (b.x - a.x), a.z + f * (b.z - a.z)); }
+            }
+            if (n == 2) segs.push_back({pts[0].x, pts[0].y, pts[1].x, pts[1].y, nx, nz});
+        }
+        // crossings of every grid row (along +x) and column (along +z): (position, outward normal component along the line)
+        std::vector<std::vector<std::pair<double, int>>> rows(static_cast<size_t>(o.nz)), cols(static_cast<size_t>(o.nx));
+        for (const auto& g : segs) {
+            if (std::fabs(g.bz - g.az) > 1e-9) {
+                const double lo = std::min(g.az, g.bz), hi = std::max(g.az, g.bz);
+                for (int k = std::max(0, o.iz(lo)); k <= std::min(o.nz - 1, o.iz(hi)); ++k) {
+                    const double z = o.cz(k);
+                    if (z < lo || z >= hi) continue;
+                    const double x = g.ax + (z - g.az) / (g.bz - g.az) * (g.bx - g.ax);
+                    if (std::fabs(g.nx) > 0.2) rows[static_cast<size_t>(k)].push_back({x, g.nx > 0 ? 1 : -1});
+                }
+            }
+            if (std::fabs(g.bx - g.ax) > 1e-9) {
+                const double lo = std::min(g.ax, g.bx), hi = std::max(g.ax, g.bx);
+                for (int i = std::max(0, o.ix(lo)); i <= std::min(o.nx - 1, o.ix(hi)); ++i) {
+                    const double x = o.cx(i);
+                    if (x < lo || x >= hi) continue;
+                    const double z = g.az + (x - g.ax) / (g.bx - g.ax) * (g.bz - g.az);
+                    if (std::fabs(g.nz) > 0.2) cols[static_cast<size_t>(i)].push_back({z, g.nz > 0 ? 1 : -1});
+                }
+            }
+        }
+        for (auto& r : rows) std::sort(r.begin(), r.end());
+        for (auto& c : cols) std::sort(c.begin(), c.end());
+        exits.assign(o.v.size(), 0);
+        enters.assign(o.v.size(), 0);
+        // along a line: the nearest crossing on each side; a ray toward +: leaves a solid when the wall faces +; toward -: when it faces -
+        auto sweep = [&](const std::vector<std::pair<double, int>>& xs, int n, const std::function<double(int)>& pos, const std::function<size_t(int)>& id) {
+            size_t j = 0;
+            for (int i = 0; i < n; ++i) {
+                const double p = pos(i);
+                while (j < xs.size() && xs[j].first < p) ++j;
+                if (j < xs.size()) { (xs[j].second > 0 ? exits : enters)[id(i)]++; }          // the ray toward +
+                if (j > 0) { (xs[j - 1].second < 0 ? exits : enters)[id(i)]++; }              // the ray toward -
+            }
+        };
+        for (int k = 0; k < o.nz; ++k) sweep(rows[static_cast<size_t>(k)], o.nx, [&](int i) { return o.cx(i); }, [&](int i) { return o.id(i, k); });
+        for (int i = 0; i < o.nx; ++i) sweep(cols[static_cast<size_t>(i)], o.nz, [&](int k) { return o.cz(k); }, [&](int k) { return o.id(i, k); });
+    }
+
     sg::Raster occAt(double h) const {
+        sg::Raster o = gridProto;
+        std::fill(o.v.begin(), o.v.end(), 0);
+        std::vector<uint8_t> exits, enters;
+        wallVotes(h, exits, enters);
+        for (size_t c = 0; c < o.v.size(); ++c) {
+            if (exits[c] < 1 || enters[c] > 0) continue;
+            const int i = static_cast<int>(c % static_cast<size_t>(o.nx)), k = static_cast<int>(c / static_cast<size_t>(o.nx));
+            if (o.cx(i) < structX0 || o.cx(i) > structX1 || o.cz(k) < structZ0 || o.cz(k) > structZ1) continue;
+            // one ray leaving a solid needs the scan to stand over the cell (a roof, a ceiling, a cap); two do not
+            const auto& L = layers[c];
+            if (exits[c] < 2 && (L.empty() || L.back().y < h + 0.01f)) continue;
+            o.v[c] = 1;
+        }
+        return o;
+    }
+
+    /** Cells the walls at height h put outside: a ray enters a solid from them and none leaves one. */
+    sg::Raster outsideAt(double h) const {
+        sg::Raster o = gridProto;
+        std::fill(o.v.begin(), o.v.end(), 0);
+        std::vector<uint8_t> exits, enters;
+        wallVotes(h, exits, enters);
+        for (size_t c = 0; c < o.v.size(); ++c) o.v[c] = (enters[c] > 0 && exits[c] == 0) ? 1 : 0;
+        return o;
+    }
+
+    /** The slice through the scan at height h: its inside (closed against cracks) where the top surface stands above h. */
+    sg::Raster sliceAt(double h, int close = 1) const {
         sg::Raster wall = gridProto;
         std::fill(wall.v.begin(), wall.v.end(), 0);
         const auto& s = R.scan;
@@ -782,8 +918,8 @@ private:
             }
             if (n == 2) sg::rasterSegment(wall, pts[0].x, pts[0].y, pts[1].x, pts[1].y);
         }
-        sg::Raster thick = sg::dilate(wall, 1);
-        sg::Raster in = sg::erode(sg::enclosed(thick), 1);
+        sg::Raster thick = sg::dilate(wall, close);
+        sg::Raster in = sg::erode(sg::enclosed(thick), close);
         for (size_t c = 0; c < in.v.size(); ++c) if (in.v[c] && dsm[c] < h - 0.02) in.v[c] = 0;
         return in;
     }
@@ -819,6 +955,51 @@ private:
             return a.first.area > b.first.area || (a.first.area == b.first.area && (ca.x < cb.x || (ca.x == cb.x && ca.y < cb.y)));
         });
         return out;
+    }
+
+    /**
+     * Where a wall stands, measured from the scan's own exterior samples and not from a plane that happened to be grown there:
+     * the samples facing along the outward normal m (within 18 degrees, near-vertical faces), within `window` of the offset
+     * `c0` (m . (x, z)), along the wall between `tLo` and `tHi` (t along the perpendicular direction) and in the heights
+     * [y0, y1], binned at 1 cm by area. The wall is the outermost peak that holds at least 20 % of the area near the
+     * strongest one (a pilaster or a projecting pier may be proud of the face behind it, and the sides of the cornice are
+     * not the wall), refined as the area-weighted mean within 4 cm of it. Returns false with fewer than 0.5 m2 of samples.
+     */
+    bool measureWall(const P2& m, double c0, double tLo, double tHi, double y0, double y1, double window, double& offset, double* mass = nullptr) const {
+        const P2 d(-m.y, m.x);
+        const int nb = static_cast<int>(std::ceil(2 * window / 0.01)) + 1;
+        std::vector<double> h(static_cast<size_t>(nb), 0.0);
+        double tot = 0;
+        for (size_t i = 0; i < S.size(); ++i) {
+            if (sGround[i]) continue;
+            const auto& q = S[i];
+            if (q.p.y < y0 || q.p.y > y1 || std::fabs(q.n.y) > 0.35f) continue;
+            const double hl = std::hypot(q.n.x, q.n.z);
+            if (hl < 1e-6 || (q.n.x * m.x + q.n.z * m.y) / hl < std::cos(rad(18.0))) continue;
+            const double t = d.x * q.p.x + d.y * q.p.z;
+            if (t < tLo || t > tHi) continue;
+            const double o = m.x * q.p.x + m.y * q.p.z - c0;
+            if (std::fabs(o) > window) continue;
+            h[static_cast<size_t>((o + window) / 0.01)] += q.w;
+            tot += q.w;
+        }
+        if (tot < 0.5) return false;
+        std::vector<double> sm(h.size(), 0.0);
+        for (size_t b = 0; b < h.size(); ++b) for (int k = -4; k <= 4; ++k) { const long j = static_cast<long>(b) + k; if (j >= 0 && j < static_cast<long>(h.size())) sm[b] += h[static_cast<size_t>(j)]; }
+        const size_t top = static_cast<size_t>(std::max_element(sm.begin(), sm.end()) - sm.begin());
+        size_t pick = top;
+        for (size_t b = h.size(); b-- > top + 1;) {
+            if (sm[b] < 0.2 * sm[top]) continue;
+            bool peak = true;
+            for (int k = -6; k <= 6; ++k) { const long j = static_cast<long>(b) + k; if (j >= 0 && j < static_cast<long>(sm.size()) && sm[static_cast<size_t>(j)] > sm[b]) peak = false; }
+            if (peak) { pick = b; break; }
+        }
+        double sw = 0, so = 0;
+        for (int k = -4; k <= 4; ++k) { const long j = static_cast<long>(pick) + k; if (j >= 0 && j < static_cast<long>(h.size())) { sw += h[static_cast<size_t>(j)]; so += h[static_cast<size_t>(j)] * (-window + (j + 0.5) * 0.01); } }
+        if (sw <= 0) return false;
+        offset = c0 + so / sw;
+        if (mass) *mass = sw;
+        return true;
     }
 
     /** A vertical plane's trace in plan at height y: unit normal m (x, z) and offset c with m . (x, z) = c. */
@@ -882,6 +1063,14 @@ private:
                 // snap to the vertical plane this run lies on
                 const P2 nOut = hole ? P2(-sgm.dir.y, sgm.dir.x) : P2(sgm.dir.y, -sgm.dir.x);
                 const double cOff = nOut.dot(sgm.point);
+                double measured = 0;
+                const P2 tDir(-nOut.y, nOut.x);
+                const double ta = tDir.dot(sgm.a), tb = tDir.dot(sgm.b);
+                if (!hole && measureWall(nOut, cOff, std::min(ta, tb) - 0.2, std::max(ta, tb) + 0.2, y0 + 0.1, y1 - 0.1, 0.5, measured)) {
+                    sgm.point = sgm.point + nOut * (measured - cOff);
+                    segs.push_back(sgm);
+                    continue;
+                }
                 double bestArea = 0;
                 for (const auto& r : regions) {
                     P2 m; double c;
@@ -979,6 +1168,29 @@ private:
 
     void bandsAndFootprints() {
         buildDsm();
+        if (const char* dd = std::getenv("SCAN_FIT_DEBUG_DIR")) {
+            sg::Raster vr = gridProto, hr = gridProto;
+            std::fill(vr.v.begin(), vr.v.end(), 0); std::fill(hr.v.begin(), hr.v.end(), 0);
+            const auto& sc = R.scan;
+            for (size_t t = 0; t < sc.triangles(); ++t) {
+                if (std::fabs(ln[t].y) > 0.3f || sc.area[t] < 0.2f) continue;
+                const Vec3 &a = lp[sc.tri[3 * t]], &b = lp[sc.tri[3 * t + 1]], &c = lp[sc.tri[3 * t + 2]];
+                const Vec3 pp[3] = {a, b, c};
+                double best = -1; int bi = 0, bj = 1;
+                for (int i = 0; i < 3; ++i) for (int j = i + 1; j < 3; ++j) { const double d = std::hypot(pp[i].x - pp[j].x, pp[i].z - pp[j].z); if (d > best) { best = d; bi = i; bj = j; } }
+                sg::rasterSegment(isGround[t] ? hr : vr, pp[bi].x, pp[bi].z, pp[bj].x, pp[bj].z);
+            }
+            const auto png = sg::rasterPng(vr, &hr);
+            std::ofstream(std::string(dd) + "/verticals.png", std::ios::binary).write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+        }
+        if (std::getenv("SCAN_FIT_DEBUG_DIR")) {
+            for (const auto& ik : std::vector<std::pair<int, int>>{{150, 170}, {440, 140}, {430, 135}, {420, 150}, {440, 200}, {410, 215}}) {
+                const auto& L = layers[gridProto.id(ik.first, ik.second)];
+                std::fprintf(stderr, "cell (%d,%d) crossings:", ik.first, ik.second);
+                for (const auto& c : L) std::fprintf(stderr, " %.2f%s", c.y, c.up ? "^" : "v");
+                std::fprintf(stderr, "\n");
+            }
+        }
         // ledges: horizontal planes that span the plan
         struct Ledge { double y; double area; int region; };
         std::vector<Ledge> ledges;
@@ -1012,6 +1224,40 @@ private:
             int n = 0;
             for (const auto& m : mids) n += m.v[c];
             F.v[c] = 2 * n >= K ? 1 : 0;
+        }
+        // the band's top and bottom walls veto cells they put outside (a missing far wall must not let the footprint run on
+        // to the next surface above it)
+        {
+            const sg::Raster vt = outsideAt(y1 - std::min(0.25, 0.08 * H)), vb = outsideAt(y0 + std::min(0.25, 0.08 * H) + 0.05);
+            for (size_t c = 0; c < F.v.size(); ++c) if (F.v[c] && (vt.v[c] || vb.v[c])) F.v[c] = 0;
+        }
+        if (const char* dd = std::getenv("SCAN_FIT_DEBUG_DIR")) {
+            const auto png = sg::rasterPng(F);
+            std::ofstream(std::string(dd) + "/band_" + std::to_string(static_cast<int>(y0 * 100)) + ".png", std::ios::binary).write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+            for (size_t k = 0; k < mids.size(); ++k) {
+                const auto pk = sg::rasterPng(mids[k]);
+                std::ofstream(std::string(dd) + "/band_" + std::to_string(static_cast<int>(y0 * 100)) + "_mid" + std::to_string(k) + ".png", std::ios::binary).write(reinterpret_cast<const char*>(pk.data()), static_cast<std::streamsize>(pk.size()));
+            }
+            {
+                sg::Raster gr = gridProto;
+                std::fill(gr.v.begin(), gr.v.end(), 0);
+                const auto& sc = R.scan;
+                for (size_t t = 0; t < sc.triangles(); ++t) {
+                    if (!isGround[t]) continue;
+                    const Vec3 &a = lp[sc.tri[3 * t]], &b = lp[sc.tri[3 * t + 1]], &c = lp[sc.tri[3 * t + 2]];
+                    for (int k = std::max(0, gr.iz(std::min({a.z, b.z, c.z}))); k <= std::min(gr.nz - 1, gr.iz(std::max({a.z, b.z, c.z}))); ++k)
+                        for (int i = std::max(0, gr.ix(std::min({a.x, b.x, c.x}))); i <= std::min(gr.nx - 1, gr.ix(std::max({a.x, b.x, c.x}))); ++i) {
+                            const double x = gr.cx(i), z = gr.cz(k);
+                            const double d = (b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z);
+                            if (std::fabs(d) < 1e-12) continue;
+                            const double w1 = ((x - a.x) * (c.z - a.z) - (c.x - a.x) * (z - a.z)) / d, w2 = ((b.x - a.x) * (z - a.z) - (x - a.x) * (b.z - a.z)) / d;
+                            if (w1 >= 0 && w2 >= 0 && w1 + w2 <= 1) gr.v[gr.id(i, k)] = 1;
+                        }
+                }
+                const auto pg = sg::rasterPng(F, &gr);
+                std::ofstream(std::string(dd) + "/band_" + std::to_string(static_cast<int>(y0 * 100)) + "_ground.png", std::ios::binary).write(reinterpret_cast<const char*>(pg.data()), static_cast<std::streamsize>(pg.size()));
+            }
+            std::fprintf(stderr, "band y %.2f..%.2f K=%d F cells %zu grid %dx%d cell %.3f\n", y0, y1, K, F.count(), F.nx, F.nz, F.cell);
         }
         // passages: cells solid at the band's top but empty through its middle, open to the outside on two sides
         if (H >= 2.0 && tryPassageBand(y0, y1, F, order, lowest)) return;
@@ -1282,6 +1528,8 @@ private:
         sg::Raster V = gridProto;
         std::fill(V.v.begin(), V.v.end(), 0);
         for (size_t c = 0; c < V.v.size(); ++c) V.v[c] = top.v[c] && !F.v[c];
+        // a passage is wider than the slivers where a footprint's edge and the band top's differ by a few cells
+        { const int r = std::max(1, static_cast<int>(std::lround(0.4 / P.cellM))); V = sg::dilate(sg::erode(V, r), r); }
         int nv = 0;
         const auto lab = sg::rasterComponents(V, &nv);
         std::vector<size_t> area(nv, 0);
@@ -1341,7 +1589,22 @@ private:
             }
             v = best;
         };
-        snap(sMin, sAx * -1.0); snap(sMax, sAx); snap(tMin, tAx * -1.0); snap(tMax, tAx);
+        if (std::getenv("SCAN_FIT_DEBUG_DIR")) std::fprintf(stderr, "passage axis t=(%.3f,%.3f) before snap s[%.2f,%.2f] t[%.2f,%.2f]\n", tAx.x, tAx.y, sMin, sMax, tMin, tMax);
+        {
+            // each side where the scan's own samples put the wall (the outermost face holding a fifth of the side), the
+            // grown plane nearest it when there are none
+            auto side = [&](double& v, const P2& axis, double sign, double lo, double hi, const P2& other) {
+                const P2 m = axis * sign;
+                double got = 0;
+                const double dir = P2(-m.y, m.x).dot(other);  // the wall's own direction against the other axis: +1 or -1
+                double a = dir * lo, b = dir * hi;
+                if (a > b) std::swap(a, b);
+                if (measureWall(m, sign * v, a, b, y0 + 0.25, y1 - 0.25, 0.6, got)) v = sign * got;
+                else snap(v, m);
+            };
+            side(sMin, sAx, -1.0, tMin, tMax, tAx); side(sMax, sAx, 1.0, tMin, tMax, tAx);
+            side(tMin, tAx, -1.0, sMin, sMax, sAx); side(tMax, tAx, 1.0, sMin, sMax, sAx);
+        }
         // rectangular enough?
         size_t inRect = 0;
         for (size_t q = 0; q < ss.size(); ++q) (void)q;
@@ -1352,6 +1615,11 @@ private:
             inRect += s >= sMin - 0.1 && s <= sMax + 0.1 && t >= tMin - 0.1 && t <= tMax + 0.1;
         }
         const double rectArea = (sMax - sMin) * (tMax - tMin);
+        if (const char* dd = std::getenv("SCAN_FIT_DEBUG_DIR")) {
+            std::fprintf(stderr, "passage rect s[%.2f,%.2f] t[%.2f,%.2f] area %.1f topArea %.1f inRect %zu of %zu\n", sMin, sMax, tMin, tMax, rectArea, ss.size() * P.cellM * P.cellM, inRect, ss.size());
+            const auto png = sg::rasterPng(top);
+            std::ofstream(std::string(dd) + "/passage_top.png", std::ios::binary).write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+        }
         if (rectArea <= 0 || ss.size() * P.cellM * P.cellM < 0.85 * rectArea || inRect < 0.97 * ss.size()) {
             R.notes.push_back("a passage through the band from " + sj::num(std::round(y0 * 100) / 100) + " m is not fitted: the band is not a rectangle along the passage axis");
             return false;
@@ -1391,6 +1659,13 @@ private:
         // jambs: snap each bay side to the vertical plane facing into the bay
         for (auto& b : bays) {
             auto snapSide = [&](double& v, const P2& facing) {
+                // the jamb faces into the bay: the outermost face (the one reaching furthest into the bay) holding a fifth of it
+                double got = 0;
+                const P2 other = tAx;
+                const double dir = P2(-facing.y, facing.x).dot(other);
+                double a = dir * (tMin + 0.2), b2 = dir * (tMax - 0.2);
+                if (a > b2) std::swap(a, b2);
+                if (measureWall(facing, facing.dot(sAx) * v, a, b2, y0 + 0.3, y0 + std::min(0.5 * (y1 - y0), 8.0), 0.5, got)) { v = facing.dot(sAx) * got; return; }
                 double bestArea = 0, best = v;
                 for (const auto& r : regions) {
                     P2 m; double c;
@@ -2124,7 +2399,8 @@ private:
         for (uint32_t t : passTris) for (int j = 0; j < 3; ++j) { ptri.push_back(static_cast<uint32_t>(ppos.size())); ppos.push_back(lp[R.scan.tri[3 * t + j]]); }
         sg::TriGrid pgrid;
         pgrid.build(ppos, ptri, 1.0);
-        double visArea = 0, covArea = 0;
+        double visArea = 0, covArea = 0, covPassArea = 0, passArea = 0, buriedArea = 0;
+        std::vector<std::pair<double, double>> sfHausdorff;
         std::map<int, std::vector<std::pair<double, double>>> perSurface;
         for (size_t i = 0; i < S.size(); ++i) {
             if (sGround[i]) continue;
@@ -2134,13 +2410,74 @@ private:
             double dp = dFit[i];
             if (!ptri.empty()) { const auto [d2, t2] = pgrid.nearest(S[i].p, dFit[i]); if (t2 != UINT32_MAX) dp = std::min(dp, d2); }
             sfPlus.push_back({dp, w});
-            if (!inPass[i]) { sfNoPass.push_back({dFit[i], w}); if (dFit[i] <= P.inlierBandM) covArea += w; }
+            if (!inPass[i]) {
+                sfNoPass.push_back({dFit[i], w});
+                if (dFit[i] <= P.inlierBandM) { covArea += w; covPassArea += w; }
+                // scan surface standing inside the rebuilt solid, deeper than the band, is hidden by it: counted, and not part of
+                // the Hausdorff (it does not show in the rebuild)
+                if (dFit[i] > P.inlierBandM && insideFitted(S[i].p)) buriedArea += w; else sfHausdorff.push_back({dFit[i], w});
+            } else passArea += w;
             if (dFit[i] <= P.inlierBandM && nearestSurface[i] >= 0) perSurface[nearestSurface[i]].push_back({dFit[i], w});
+        }
+        if (const char* dd = std::getenv("SCAN_FIT_DEBUG_DIR")) {
+            // the scan's triangles coloured by the largest distance of their samples to the fit (0..0.5 m)
+            std::vector<double> mx(R.scan.triangles(), -1);
+            for (size_t i = 0; i < S.size(); ++i) if (!sGround[i]) mx[S[i].tri] = std::max(mx[S[i].tri], dFit[i]);
+            {
+                double a[2][3] = {{0, 0, 0}, {0, 0, 0}};
+                for (size_t i = 0; i < S.size(); ++i) { if (sGround[i]) continue; const int in = insideFitted(S[i].p) ? 1 : 0; const int b = dFit[i] <= 0.07 ? 0 : dFit[i] <= 0.25 ? 1 : 2; a[in][b] += S[i].w; }
+                std::fprintf(stderr, "scan samples (m2): outside the fit: <=7cm %.1f 7-25cm %.1f >25cm %.1f | inside the fit: <=7cm %.1f 7-25cm %.1f >25cm %.1f\n", a[0][0], a[0][1], a[0][2], a[1][0], a[1][1], a[1][2]);
+            }
+            {
+                std::map<int, std::array<double, 3>> by;  // surface -> area beyond 7 cm, mean distance numerator, area beyond 25 cm
+                for (size_t i = 0; i < S.size(); ++i) { if (sGround[i] || dFit[i] <= 0.07) continue; auto& e = by[nearestSurface[i]]; e[0] += S[i].w; e[1] += S[i].w * dFit[i]; if (dFit[i] > 0.25) e[2] += S[i].w; }
+                std::vector<std::pair<double, int>> order;
+                for (const auto& [k, v] : by) order.push_back({-v[0], k});
+                std::sort(order.begin(), order.end());
+                for (size_t q = 0; q < std::min<size_t>(order.size(), 14); ++q) { const auto& v = by[order[q].second]; std::fprintf(stderr, "beyond 7cm: nearest surface %s: %.1f m2 mean %.3f m (>25cm: %.1f m2)\n", order[q].second >= 0 ? R.surfaces[static_cast<size_t>(order[q].second)].id.c_str() : "none", v[0], v[1] / std::max(1e-9, v[0]), v[2]); }
+            }
+            {
+                std::set<uint32_t> bad;
+                for (size_t i = 0; i < S.size(); ++i) if (!sGround[i] && !inPass[i] && dFit[i] > 0.25) bad.insert(S[i].tri);
+                staged_glb::StagedNode node;
+                node.name = "unexplained";
+                staged_glb::StagedPrimitive pr;
+                for (uint32_t t : bad) for (int j = 0; j < 3; ++j) { pr.indices.push_back(static_cast<uint32_t>(pr.positions.size())); pr.positions.push_back(R.scan.pos[R.scan.tri[3 * t + j]]); }
+                if (pr.positions.empty()) pr.positions = {Vec3(0, 0, 0), Vec3(0, 0.001f, 0), Vec3(0.001f, 0, 0)}, pr.indices = {0, 1, 2};
+                node.primitives.push_back(std::move(pr));
+                node.extrasJson = "{\"sb\":{}}";
+                staged_glb::WriteOptions opt;
+                const auto glb = staged_glb::write({node}, opt);
+                std::ofstream(std::string(dd) + "/scan_unexplained.glb", std::ios::binary).write(reinterpret_cast<const char*>(glb.data()), static_cast<std::streamsize>(glb.size()));
+                std::fprintf(stderr, "unexplained (not pass-through, >25 cm): %zu triangles\n", bad.size());
+            }
+            const char* names[3] = {"ok", "mid", "bad"};
+            for (int band = 0; band < 3; ++band) {
+                staged_glb::StagedNode node;
+                node.name = "scan_residual";
+                staged_glb::StagedPrimitive pr;
+                for (size_t t = 0; t < R.scan.triangles(); ++t) {
+                    if (mx[t] < 0) continue;
+                    const int b = mx[t] <= 0.07 ? 0 : mx[t] <= 0.25 ? 1 : 2;
+                    if (b != band) continue;
+                    for (int j = 0; j < 3; ++j) { pr.indices.push_back(static_cast<uint32_t>(pr.positions.size())); pr.positions.push_back(R.scan.pos[R.scan.tri[3 * t + j]]); }
+                }
+                if (pr.positions.empty()) pr.positions.push_back(Vec3(0, 0, 0)), pr.positions.push_back(Vec3(0, 0.001f, 0)), pr.positions.push_back(Vec3(0.001f, 0, 0)), pr.indices = {0, 1, 2};
+                node.primitives.push_back(std::move(pr));
+                node.extrasJson = "{\"sb\":{}}";
+                staged_glb::WriteOptions opt;
+                const auto glb = staged_glb::write({node}, opt);
+                std::ofstream(std::string(dd) + "/scan_residual_" + names[band] + ".glb", std::ios::binary).write(reinterpret_cast<const char*>(glb.data()), static_cast<std::streamsize>(glb.size()));
+            }
         }
         R.scanToFit = sg::residualOf(sf, P.inlierBandM);
         R.scanToFitPlusPass = sg::residualOf(sfPlus, P.inlierBandM);
         const Residual noPass = sg::residualOf(sfNoPass, P.inlierBandM);
         R.coverage = visArea > 0 ? covArea / visArea : 0;
+        R.coverageWithPass = visArea > 0 ? (covPassArea + passArea) / visArea : 0;
+        R.passShare = visArea > 0 ? passArea / visArea : 0;
+        R.buriedScanArea = buriedArea;
+        if (buriedArea >= 0.5) R.notes.push_back(sj::num(std::round(buriedArea * 10) / 10) + " m2 of the scan stands inside the rebuilt solid, deeper than " + sj::num(std::round(P.inlierBandM * 1000) / 10) + " cm: surfaces the rebuild hides (scan slivers, or relief the fit filled)");
         // fit -> scan on the fitted model's visible surface
         sg::ScratchboxMesh fm = sg::toMesh(fpos, ftri);
         bvh::BvhTree ftree;
@@ -2158,6 +2495,7 @@ private:
         for (size_t t = 0; t < R.scan.triangles(); ++t) if (ext[t] && !isGround[t]) extTri.insert(extTri.end(), {R.scan.tri[3 * t], R.scan.tri[3 * t + 1], R.scan.tri[3 * t + 2]});
         sgrid.build(lp, extTri, 1.0);
         std::vector<std::pair<double, double>> fs;
+        std::vector<int> fsSurface;
         std::vector<double> dScan(FS.size(), 0);
         sg::parallelFor(FS.size(), [&](size_t i) {
             auto [d, t] = sgrid.nearest(FS[i].p, 3.0);
@@ -2172,10 +2510,10 @@ private:
             if (FS[i].n.y < -0.9f && FS[i].p.y < R.baseY + 0.1) continue;
             surfVis[si] += FS[i].w;
             fs.push_back({dScan[i], FS[i].w});
+            fsSurface.push_back(si);
             if (dScan[i] <= P.inlierBandM) surfSup[si] += FS[i].w;
         }
-        R.fitToScan = sg::residualOf(fs, P.inlierBandM);
-        R.hausdorff = std::max(noPass.max, R.fitToScan.max);
+        R.fitToScan = sg::residualOf(fs, P.inlierBandM);  // over all of the rebuild's visible surface; the backed part is measured below
         // per surface
         for (size_t si = 0; si < R.surfaces.size(); ++si) {
             Surface& s = R.surfaces[si];
@@ -2190,6 +2528,22 @@ private:
             if (boxFaceMeasured.count(static_cast<int>(si))) s.supportFraction = std::max(s.supportFraction, measuredSupport);
             else s.supportFraction = measuredSupport;
             if (s.supportFraction < 0.5 && s.visibleFraction > 0) R.unobservedArea += s.area;
+        }
+        // fit -> scan over the rebuild's visible surface that has scan within 25 cm of it (the part the scan backs); the rest is
+        // the rebuild placing faces where the scan has no samples (a face the scan never saw): reported as unobserved, and
+        // gated by its share. A wall placed far from where the scan shows it does not hide here: its scan side is uncovered.
+        {
+            std::vector<std::pair<double, double>> backed;
+            double visTotal = 0, visUnobserved = 0;
+            for (size_t i = 0; i < fs.size(); ++i) {
+                visTotal += fs[i].second;
+                if (fs[i].first <= P.backedBandM) backed.push_back(fs[i]); else visUnobserved += fs[i].second;
+            }
+            R.fitToScanAll = R.fitToScan;
+            R.fitToScan = sg::residualOf(backed, P.inlierBandM);
+            R.unobservedShare = visTotal > 0 ? visUnobserved / visTotal : 0;
+            R.hausdorff = std::max(sg::residualOf(sfHausdorff, P.inlierBandM).max, R.fitToScan.max);
+            if (std::getenv("SCAN_FIT_DEBUG_DIR")) std::fprintf(stderr, "hausdorff: scan side %.3f (noPass max %.3f), rebuild side (backed) %.3f; rebuild unobserved %.1f of %.1f m2\n", R.hausdorff, noPass.max, R.fitToScan.max, visUnobserved, visTotal);
         }
         // per primitive: its surfaces' residual
         for (auto& pr : R.prims) {
@@ -2392,10 +2746,12 @@ private:
         bool body = false;
         for (const auto& pr : R.prims) body = body || (pr.body && pr.accepted);
         const double scanGate = std::max(P.gateScanToFitM, R.haveRemesh ? R.remeshToScan.rms : 0.0);
-        R.gates.push_back({"coverage", R.coverage, P.gateCoverage, false, "ratio"});
-        R.gates.push_back({"scan→fit rms", R.scanToFit.rms, scanGate, true, "m"});
-        R.gates.push_back({"fit→scan rms", R.fitToScan.rms, P.gateFitToScanM, true, "m"});
+        R.gates.push_back({"coverage by the fit or kept as scanned", R.coverageWithPass, P.gateCoverage, false, "ratio"});
+        R.gates.push_back({"share of the scan kept as scanned", R.passShare, P.gatePassShare, true, "ratio"});
+        R.gates.push_back({"scan→fit rms (kept-as-scanned regions count as exact)", R.scanToFitPlusPass.rms, scanGate, true, "m"});
+        R.gates.push_back({"fit→scan rms (faces the scan backs)", R.fitToScan.rms, P.gateFitToScanM, true, "m"});
         R.gates.push_back({"Hausdorff without pass-through", R.hausdorff, P.gateHausdorffM, true, "m"});
+        R.gates.push_back({"unobserved share of the rebuild's visible surface", R.unobservedShare, P.gateUnobservedShare, true, "ratio"});
         R.gates.push_back({"accepted body primitives", body ? 1.0 : 0.0, 1.0, false, "count"});
         R.accepted = true;
         for (const auto& g : R.gates) R.accepted = R.accepted && g.passed();

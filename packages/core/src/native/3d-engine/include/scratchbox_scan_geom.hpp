@@ -670,6 +670,17 @@ struct Raster {
     size_t count() const { size_t n = 0; for (uint8_t c : v) n += c ? 1 : 0; return n; }
 };
 
+/** A raster as a grey PNG (x right, z down; 8 px per source cell at most), for diagnostics. */
+inline std::vector<uint8_t> rasterPng(const Raster& R, const Raster* second = nullptr) {
+    texture::ImageBuffer img(R.nx, R.nz, 3, 20);
+    for (int k = 0; k < R.nz; ++k) for (int i = 0; i < R.nx; ++i) {
+        const bool a = R.at(i, k) != 0, b = second && second->at(i, k) != 0;
+        uint8_t* p = &img.data[img.getIndex(i, k)];
+        p[0] = a ? 230 : (b ? 60 : 20); p[1] = a ? 230 : (b ? 200 : 20); p[2] = a ? 230 : (b ? 60 : 20);
+    }
+    return texture::encodePng(img);
+}
+
 /** Marks the cells a segment crosses (sampled at a quarter cell). */
 inline void rasterSegment(Raster& R, double ax, double az, double bx, double bz) {
     const double len = std::hypot(bx - ax, bz - az);
