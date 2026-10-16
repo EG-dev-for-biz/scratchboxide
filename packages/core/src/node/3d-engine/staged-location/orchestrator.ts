@@ -990,7 +990,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const cost: EvidenceCost = { ...discovery, imagesRequested: views.length, imagesFetched: got.images.length, fetchMs: got.elapsedMs };
                     run.summary('evidence').cost = { images: got.images.length + (match?.images ?? 0), visionCalls: match?.visionCalls ?? 0, seconds: round(got.elapsedMs / 1000 + (match?.seconds ?? 0), 1) };
                     return {
-                        status, value: { images: got.images, panos: found.panos, cost, ...(plan ? { plan } : {}), ...(registration ? { registration } : {}), ...(match ? { match } : {}) }, source: `${got.images.length} of ${views.length} Street View images (© Google), kept in memory only`,
+                        status, value: { images: got.images, panos: found.panos, cost, ...(plan ? { plan } : {}), ...(registration ? { registration } : {}), ...(match ? { match } : {}) }, source: `${got.images.length} of ${views.length} Street View images (© Google), kept in memory only${match ? `; ${match.images} ring views, ${match.correspondences.length} matched element pairs${registration ? `, ${registration.perPano.length} pano poses registered (disagreement ${registration.beforeRmsM.toFixed(2)} m before, ${registration.afterRmsM.toFixed(2)} m after, ${registration.used} pairs used, ${registration.rejected} rejected)` : ', no pose registered'}${match.failures.length ? `; ${match.failures.length} matching call${match.failures.length === 1 ? '' : 's'} failed (${match.failures[0].slice(0, 80)})` : ''}` : ''}`,
                         ...(got.images.length ? {} : { reason: 'every Street View image failed to fetch' }),
                         degradations
                     };

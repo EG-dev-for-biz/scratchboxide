@@ -1458,7 +1458,7 @@ const DEFINITIONS = {
         emptySlots: arr(obj(['slot', 'why'], { slot: STR, why: { type: 'string', maxLength: 80 } }))
     }),
     evidenceImage: obj(['id', 'index', 'kind', 'widthPx', 'heightPx', 'sha256', 'nativeSampleM', 'slotsShown'], {
-        id: STR, index: { type: 'integer', minimum: 0, maximum: 15 }, kind: STR, widthPx: INT, heightPx: INT,
+        id: STR, index: { type: 'integer', minimum: 0, maximum: 63 }, kind: STR, widthPx: INT, heightPx: INT,
         sha256: STR, nativeSampleM: ref('nonneg'), surfaceId: STR, gsdM: NUM, texelM: NUM, panoId: STR,
         captureDate: STR, copyright: STR, headingDeg: NUM, pitchDeg: NUM, fovDeg: NUM, distanceM: NUM,
         pose: obj(['eye', 'registered', 'uncertaintyM', 'uncertaintyDeg'], { eye: ref('vec3'), registered: BOOL, uncertaintyM: NUM, uncertaintyDeg: NUM }),
