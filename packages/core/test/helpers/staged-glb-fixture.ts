@@ -132,7 +132,7 @@ export class MeshBuilder {
             for (let j = 0; j < sides; j++) {
                 const a = base + i * sides + j, b = base + i * sides + ((j + 1) % sides);
                 const c = a + sides, d = b + sides;
-                this.indices.push(a, c, b, b, c, d);
+                this.indices.push(a, b, c, b, d, c);   // outward: (along the path) × (around the ring) points out
             }
         }
     }
@@ -183,7 +183,7 @@ function surfaces(): SurfaceDef[] {
                 }
                 for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) {
                     const a = base + j * (nu + 1) + i, b = a + 1, c = a + nu + 1, d = c + 1;
-                    m.indices.push(a, c, b, b, c, d);
+                    m.indices.push(a, b, c, b, d, c);   // facing down, out of the vault
                 }
             }
         },
@@ -543,7 +543,7 @@ function detailNodes(): NodeSpec[] {
         }
         for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) {
             const a = base + j * (nu + 1) + i, b = a + 1, c = a + nu + 1, d = c + 1;
-            m.indices.push(a, c, b, b, c, d);
+            m.indices.push(a, b, c, b, d, c);
         }
         nodes.push({
             name: 'e001-coffers', prims: [m.prim()],
@@ -583,7 +583,7 @@ function detailNodes(): NodeSpec[] {
         const disp = mul(n, rise);
         m.grid([x0, y0, Z + rise], [x1 - x0, 0, 0], [0, y1 - y0, 0], 18, 4, { attr: () => ({ _REVEAL: [2 / elements, 0], _DISP: disp }) });
         for (const [o, u] of [[[x0, y0, Z], [x1 - x0, 0, 0]], [[x1, y1, Z], [x0 - x1, 0, 0]]] as Array<[V3, V3]>) {
-            m.grid(o, u, [0, 0, rise], 18, 1, { attr: (_s, t) => ({ _REVEAL: [2 / elements, 0], _DISP: mul(disp, t) }), flip: o[1] === y0 });
+            m.grid(o, u, [0, 0, rise], 18, 1, { attr: (_s, t) => ({ _REVEAL: [2 / elements, 0], _DISP: mul(disp, t) }) });
         }
         nodes.push({
             name: 'e003-panel', prims: [m.prim()],
@@ -732,7 +732,7 @@ const TITLES: Record<string, [string, string, number]> = {
 
 /** A StagedBuildState with the given committed layers; stages after the last committed one are running or pending. */
 export function fixtureState(layers: StagedLayer[], opts: { runState?: StagedBuildState['runState']; updatedAtMs?: number; running?: string[]; degradations?: DegradationRecord[]; stageStatus?: Record<string, StageSummary['status']>; visionModel?: StagedBuildState['visionModel'] } = {}): StagedBuildState {
-    const t0 = Date.UTC(2026, 9, 15, 12);
+    const t0 = (opts.updatedAtMs ?? Date.now()) - 20_000;
     const stages: StageSummary[] = Object.entries(TITLES).map(([stage, [title, source, order]], i) => {
         const own = layers.filter(l => l.stage === stage);
         const status: StageSummary['status'] = opts.stageStatus?.[stage] ?? (own.length > 0 ? 'committed' : opts.running?.includes(stage) ? 'running' : 'pending');

@@ -30,6 +30,7 @@ import {
 } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/revealScheduler';
 import {
     isInterrupted,
+    isRunSettled,
     markStagedRun,
     mergeStageEvent,
     publishStageEvent,
@@ -189,6 +190,13 @@ describe('durations, stop, interruption, reduced motion', () => {
         expect(isInterrupted({ ...st, runState: 'finished', updatedAtMs: 1_000 }, 2_000)).toBe(false);
     });
 
+    test('a finished run saved before this page loaded is shown at its end state, not replayed', () => {
+        const st = fixtureState([layer('l1')], { runState: 'finished', updatedAtMs: 1_000 });
+        expect(isRunSettled(st, 2_000)).toBe(true);
+        expect(isRunSettled({ ...st, updatedAtMs: 3_000 }, 2_000)).toBe(false);
+        expect(isRunSettled({ ...st, runState: 'stopped', updatedAtMs: 3_000 }, 2_000)).toBe(true);
+    });
+
     test('reduced motion shows the end state at once and says why', () => {
         const c = new Clock(fixtureState([layer('l1')]), 0, { reducedMotion: true }).load('l1');
         const f = c.step();
@@ -228,6 +236,22 @@ describe('crossfade and supersede', () => {
         expect(c.of(f, 'l2').phase).toBe('revealed');
         expect(c.of(f, 'l1').hidden).toBe(true);
         expect(c.of(f, 'l1').presence).toBe(0);
+    });
+
+    test('under a staggered replacement the source stays whole until the replacement has revealed', () => {
+        const c = new Clock(fixtureState([layer('l1'), layer('l2'), layer('l3a'), layer('l3b')])).load('l1', 'l2', 'l3a', 'l3b');
+        let f = c.step();
+        for (let i = 0; i < 200 && c.of(f, 'l3b').phase !== 'revealing'; i++) f = c.step(50);
+        expect(c.of(f, 'l3b').phase).toBe('revealing');
+        expect(c.of(f, 'l3b').overSource).toBe(true);
+        f = c.step(400);
+        expect(c.of(f, 'l3b').progress).toBeGreaterThan(0.3);
+        expect(c.of(f, 'l2').presence).toBe(1);
+        expect(c.of(f, 'l2').hidden).toBe(false);
+        f = c.step(900);
+        expect(c.of(f, 'l3b').phase).toBe('revealed');
+        expect(c.of(f, 'l3b').overSource).toBe(false);
+        expect(c.of(f, 'l2').hidden).toBe(true);
     });
 
     test('a crossfade source that disappears mid-crossfade ends that crossfade at once', () => {
