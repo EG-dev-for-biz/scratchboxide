@@ -213,7 +213,7 @@ export const StagedBuildOverlay: React.FC<StagedBuildOverlayProps> = props => {
             <div ref={panelRef} className="sb-staged-overlay" data-testid="sb-staged-overlay" data-collapsed="true" style={{ ...panelStyle, minWidth: 0, padding: '6px 10px' }} onKeyDown={onKeyDown}>
                 <style>{FOCUS_CSS}</style>
                 {live}
-                <button type="button" style={BUTTON} aria-expanded={false} aria-label={`Staged build: ${word}. Show details`} onClick={() => setCollapsed(false)}>
+                <button type="button" className="sb-staged-build-button" style={BUTTON} aria-expanded={false} aria-label={`Staged build: ${word}. Show details`} onClick={() => setCollapsed(false)}>
                     {current ? `${GLYPH[current.status]} ${current.title} — ${current.status}` : `Staged build — ${runWord}`}
                 </button>
             </div>
@@ -229,7 +229,7 @@ export const StagedBuildOverlay: React.FC<StagedBuildOverlayProps> = props => {
                     {current ? `${current.title} — ${GLYPH[current.status]} ${current.status}` : 'Staged build'}
                     {current && stageTime(current, props.wallNowMs) !== undefined ? <span style={{ color: MUTED, fontWeight: 400 }}>{` · ${seconds(stageTime(current, props.wallNowMs))}`}</span> : null}
                 </div>
-                <button type="button" style={{ ...BUTTON, padding: '0 6px' }} aria-expanded={true} aria-label="Collapse the staged build panel" onClick={() => setCollapsed(true)}>–</button>
+                <button type="button" className="sb-staged-build-button" style={{ ...BUTTON, padding: '0 6px' }} aria-expanded={true} aria-label="Collapse the staged build panel" onClick={() => setCollapsed(true)}>–</button>
             </div>
             {current?.source ? <div style={{ color: MUTED }} data-testid="sb-staged-source">{current.source}</div> : null}
             {liveProgress?.message || liveProgress?.progress !== undefined
@@ -266,7 +266,7 @@ export const StagedBuildOverlay: React.FC<StagedBuildOverlayProps> = props => {
 
             {degradations.length > 0 ? (
                 <div style={{ marginTop: 8 }}>
-                    <button type="button" style={BUTTON} aria-expanded={degradedOpen} onClick={() => setDegradedOpen(o => !o)} data-testid="sb-staged-degraded-toggle">
+                    <button type="button" className="sb-staged-build-button" style={BUTTON} aria-expanded={degradedOpen} onClick={() => setDegradedOpen(o => !o)} data-testid="sb-staged-degraded-toggle">
                         {`${degradedOpen ? '▾' : '▸'} ${degradations.length} degraded ${degradations.length === 1 ? 'part' : 'parts'}`}
                     </button>
                     {degradedOpen ? (
@@ -276,7 +276,7 @@ export const StagedBuildOverlay: React.FC<StagedBuildOverlayProps> = props => {
                                 const where = placementSentence(state, note);
                                 return (
                                     <li key={d.id}>
-                                        <button type="button" style={{ ...BUTTON, width: '100%', ...(props.highlightedId === d.id ? { borderColor: '#D55E00' } : {}) }}
+                                        <button type="button" className="sb-staged-build-button" style={{ ...BUTTON, width: '100%', ...(props.highlightedId === d.id ? { borderColor: '#D55E00' } : {}) }}
                                             aria-pressed={props.highlightedId === d.id}
                                             aria-label={`${d.part.description} fell to ${d.fellTo}: ${d.reason}${note?.scope === 'none' ? ' It has no separate part to highlight in the viewport.' : ' Highlight it in the viewport.'}`}
                                             onClick={() => props.onHighlight(d)}>
@@ -293,20 +293,20 @@ export const StagedBuildOverlay: React.FC<StagedBuildOverlayProps> = props => {
             ) : null}
             {retryable.map(d => (
                 <div key={`retry-${d.id}`} style={{ marginTop: 6 }}>
-                    <button type="button" style={BUTTON} onClick={() => props.onRetry(d)} aria-label={`Retry the ${stageTitle(state, d.stage)} stage`}>
+                    <button type="button" className="sb-staged-build-button" style={BUTTON} onClick={() => props.onRetry(d)} aria-label={`Retry the ${stageTitle(state, d.stage)} stage`}>
                         {`Retry ${stageTitle(state, d.stage)}`}
                     </button>
                 </div>
             ))}
 
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-                <button type="button" style={{ ...BUTTON, ...(props.provenanceOn ? { background: 'rgba(86,180,233,0.25)', borderColor: '#56B4E9' } : {}) }} aria-pressed={props.provenanceOn} onClick={props.onToggleProvenance} data-testid="sb-staged-provenance-toggle">
+                <button type="button" className="sb-staged-build-button" style={{ ...BUTTON, ...(props.provenanceOn ? { background: 'rgba(86,180,233,0.25)', borderColor: '#56B4E9' } : {}) }} aria-pressed={props.provenanceOn} onClick={props.onToggleProvenance} data-testid="sb-staged-provenance-toggle">
                     Provenance
                 </button>
                 {runOver ? (
                     <>
-                        <button type="button" style={BUTTON} onClick={props.onReplay} data-testid="sb-staged-replay">Replay build</button>
-                        <button type="button" style={{ ...BUTTON, ...(props.showReplaced ? { background: 'rgba(255,255,255,0.2)' } : {}) }} aria-pressed={props.showReplaced} onClick={props.onToggleShowReplaced} data-testid="sb-staged-show-replaced">Show replaced layers</button>
+                        <button type="button" className="sb-staged-build-button" style={BUTTON} onClick={props.onReplay} data-testid="sb-staged-replay">Replay build</button>
+                        <button type="button" className="sb-staged-build-button" style={{ ...BUTTON, ...(props.showReplaced ? { background: 'rgba(255,255,255,0.2)' } : {}) }} aria-pressed={props.showReplaced} onClick={props.onToggleShowReplaced} data-testid="sb-staged-show-replaced">Show replaced layers</button>
                     </>
                 ) : null}
             </div>

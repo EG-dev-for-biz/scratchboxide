@@ -725,7 +725,9 @@ describe('a location request returns remeshed geometry', () => {
         expect(payload.status).toBe('degraded');
         expect(Object.keys(layersOf(payload))).toEqual(['l1']);
         expect(veg.plant).not.toHaveBeenCalled();
-        const remesh = payload.degradations.find((x: any) => x.stage === 'remesh');
+        // the scan fitter is part of the app now: the ladder tries to flatten the raw scan first, and says so when that fails too
+        expect(payload.degradations.filter((x: any) => x.stage === 'remesh').map((x: any) => x.reasonCode)).toEqual(['flatten_failed', 'remesh_failed']);
+        const remesh = payload.degradations.find((x: any) => x.stage === 'remesh' && x.reasonCode === 'remesh_failed');
         expect(remesh).toMatchObject({ reasonCode: 'remesh_failed', provenanceAfter: 'as-scanned', transient: true, retry: { tool: 'google_3d_tiles_get_clay', args: { retryStage: 'remesh' } } });
         expect(remesh.reason).toContain('tile_refine binary could not be built');
         expect(payload.remesh).toMatchObject({ ok: false, error: expect.stringContaining('tile_refine binary could not be built') });

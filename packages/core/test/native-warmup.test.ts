@@ -20,6 +20,7 @@ import { nativeWarmupSteps, warmNativeEngine, type WarmupStep } from '../src/nod
 import { loadScanFit } from '../src/node/3d-engine/scan-fit-loader';
 import { TileVegetationService } from '../src/node/3d-engine/tile-vegetation-service';
 import { TileRefineService } from '../src/node/3d-engine/tile-refine-service';
+import { ScanFitService } from '../src/node/3d-engine/scan-fit-service';
 import { NativePythonRunnerService } from '../src/node/3d-engine/native-python-runner-service';
 
 afterEach(() => vi.restoreAllMocks());
@@ -39,6 +40,7 @@ describe('warmNativeEngine', () => {
         };
         vi.spyOn(TileVegetationService.prototype, 'ensureBinary').mockImplementation(async () => { await track('tile_vegetation', 15)(); return '/bin/tv'; });
         vi.spyOn(TileRefineService.prototype, 'ensureBinary').mockImplementation(async () => { await track('tile_refine', 5)(); return { path: '/bin/tr', built: false }; });
+        vi.spyOn(ScanFitService.prototype, 'ensureBinary').mockImplementation(async () => { await track('scan_fit', 5)(); return '/bin/sf'; });
         vi.spyOn(NativePythonRunnerService.prototype, 'ensureNativeModule').mockImplementation(async () => { await track('python', 1)(); return null; });
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-warm-'));
         try {
@@ -46,9 +48,9 @@ describe('warmNativeEngine', () => {
             const report = await warmNativeEngine(root, { log: m => lines.push(m), env: {} });
             expect(report.steps.map(s => s.name)).toEqual(['tile_vegetation', 'tile_refine', 'scan_fit', 'scratchbox_native (Python module)']);
             expect(report.steps.map(s => s.ok)).toEqual([true, true, true, true]);
-            // the fitter is not part of this build: said so, not hidden and not an error
-            expect(report.steps[2].note).toBe('the scan fitter (scan-fit-service) is not part of this build of the app');
-            expect(events).toEqual(['start tile_vegetation', 'end tile_vegetation', 'start tile_refine', 'end tile_refine', 'start python', 'end python']);
+            // the fitter is part of this build: it is built in its place in the order, with no note
+            expect(report.steps[2].note).toBeUndefined();
+            expect(events).toEqual(['start tile_vegetation', 'end tile_vegetation', 'start tile_refine', 'end tile_refine', 'start scan_fit', 'end scan_fit', 'start python', 'end python']);
             expect(maxActive).toBe(1);
             expect(lines).toHaveLength(4);
             expect(lines[0]).toMatch(/\[native warm-up\] tile_vegetation: ready \(\d+\.\d s\)/);
@@ -100,7 +102,7 @@ describe('warmNativeEngine', () => {
 
 describe('loadScanFit', () => {
     it('says the fitter is not part of this build, with no stack, when the service module is absent', async () => {
-        const r = await loadScanFit('/unused-root-a');
+        const r = await loadScanFit('/unused-root-a', './scan-fit-service-that-does-not-exist');
         expect(r.service).toBeUndefined();
         expect(r.unavailable).toBe('the scan fitter (scan-fit-service) is not part of this build of the app');
     });

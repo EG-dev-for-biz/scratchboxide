@@ -202,7 +202,9 @@ describe('createStagedLocationDeps: the real dependencies', () => {
         expect(deps.vision).toEqual({ unavailable: expect.stringMatching(/no Gemini credentials/) });
         expect(deps.streetView!.grounding).toBeUndefined();
         expect(deps.streetView!.groundingUnavailable).toMatch(/no Google Cloud service account is configured for the Maps Imagery Grounding API/);
-        expect(deps.scanFitUnavailable).toMatch(/scan fitter|scan-fit-service/);
+        // the scan fitter is part of this build and needs no credentials
+        expect(deps.scanFit).toBeDefined();
+        expect(deps.scanFitUnavailable).toBeUndefined();
     });
 
     it('wires Street View to StreetViewGroundingImageService only, and the vision chain to the staged default model first', async () => {

@@ -1689,7 +1689,7 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
     return {
         result,
         compat: {
-            remesh: f.remeshed ? { ok: true, url: remeshLayer?.url } : { ok: false, error: run.state.degradations.find(d => d.stage === 'remesh')?.reason ?? 'the remesh did not run' },
+            remesh: f.remeshed ? { ok: true, url: remeshLayer?.url } : { ok: false, error: (run.state.degradations.find(d => d.stage === 'remesh' && d.reasonCode === 'remesh_failed') ?? run.state.degradations.find(d => d.stage === 'remesh'))?.reason ?? 'the remesh did not run' },
             resolvedAddress: f.place.formattedAddress,
             geoAnchor: f.extraction.geoAnchor,
             glbPath: f.extraction.rawGlbPath ?? f.extraction.texturedGlb,
