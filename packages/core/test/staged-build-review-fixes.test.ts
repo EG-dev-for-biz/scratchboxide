@@ -272,6 +272,16 @@ describe('finding 5: the run sentence and the chips say what fell, what was skip
         expect(markup(props(skippedOnly))).toContain('no Street View and no tile photos resolve this face');
     });
 
+    test('a stopped or interrupted run shows no live progress line from the stage it stopped in', () => {
+        const progress = new Map([['remesh', { stage: 'remesh', progress: 0.4, message: 'flattening facades', seq: 3 }]]);
+        const running = fixtureState([L('l1')], { runState: 'running', running: ['remesh'] });
+        expect(text(markup(props(running, { progress })))).toContain('40% · flattening facades');
+        const stopped = fixtureState([L('l1')], { runState: 'stopped', stageStatus: { remesh: 'stopped' } });
+        expect(text(markup(props(stopped, { progress })))).not.toContain('flattening facades');
+        const interrupted = fixtureState([L('l1')], { runState: 'running', running: ['remesh'] });
+        expect(text(markup(props(interrupted, { progress, interrupted: true })))).not.toContain('flattening facades');
+    });
+
     test('a failed run says why', () => {
         const st = fixtureState([], { runState: 'failed', stageStatus: { tiles: 'failed' }, stageReason: { tiles: 'No Photorealistic 3D Tiles coverage at this place.' } });
         const sentence = text(markup(props(st)));

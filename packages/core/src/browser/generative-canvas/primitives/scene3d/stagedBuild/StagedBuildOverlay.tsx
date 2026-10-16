@@ -187,7 +187,8 @@ export const StagedBuildOverlay: React.FC<StagedBuildOverlayProps> = props => {
         return [...state.stages].filter(s => s.status !== 'pending' && s.status !== 'skipped')
             .sort((a, b) => (b.timings.endedAtMs ?? b.timings.startedAtMs) - (a.timings.endedAtMs ?? a.timings.startedAtMs))[0];
     })();
-    const liveProgress = current ? props.progress.get(current.stage) : undefined;
+    // The last progress line of a stage that is still running; a stopped or ended stage has no live progress.
+    const liveProgress = current && current.status === 'running' && !runOver ? props.progress.get(current.stage) : undefined;
     const chips = state.stages.filter(s => s.layerIds.length > 0 || s.order >= 0 || s.status === 'degraded' || s.status === 'failed' || s.status === 'skipped' || s.status === 'stopped');
     const notes = props.layers.flatMap(l => [
         ...(l.outOfOrder ? [l.outOfOrder] : []),
