@@ -20,7 +20,8 @@ import { readGlbTriangles, renderClayPng, type ClayLayer, type ClayView } from '
 
 export const SHOT_DIR = path.resolve(__dirname, '../../../..', 'test-results/screenshots/staged');
 
-export type ShotLayer = { file: string; color?: [number, number, number] };
+/** `hide`: nodes of the file that the shot leaves out (a surface that a recut copy replaces), by their name and extras. */
+export type ShotLayer = { file: string; color?: [number, number, number]; hide?: (node: { name?: string; extras?: any }) => boolean };
 
 export interface Shot { path: string; covered: number; width: number; height: number }
 
@@ -39,7 +40,13 @@ function bounds(layers: ClayLayer[]): { x0: number; x1: number; z0: number; z1: 
 export function saveClayShot(name: string, files: ShotLayer[], view: Partial<ClayView> & { kind?: 'top' | 'aerial' } = {}, size: [number, number] = [900, 650]): Shot {
     const layers: ClayLayer[] = files.map(f => {
         const t = readGlbTriangles(fs.readFileSync(f.file));
-        return { positions: t.positions, indices: t.indices, color: f.color };
+        if (!f.hide) return { positions: t.positions, indices: t.indices, color: f.color };
+        const keep: number[] = [];
+        for (const r of t.nodeRanges) {
+            if (f.hide({ name: r.name, extras: r.extras })) continue;
+            for (let k = r.firstTriangle * 3; k < (r.firstTriangle + r.triangleCount) * 3; k++) keep.push(t.indices[k]);
+        }
+        return { positions: t.positions, indices: Uint32Array.from(keep), color: f.color };
     });
     const b = bounds(layers);
     const span = Math.max(b.x1 - b.x0, b.z1 - b.z0, (b.y1 - b.y0) * 1.1) * (view.kind === 'top' ? 1.1 : 2.1);

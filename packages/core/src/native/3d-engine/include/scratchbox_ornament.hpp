@@ -1079,7 +1079,7 @@ inline bool buildRecut(const Surface& S, const std::vector<ReliefPatch>& patches
 struct Limits {
     size_t elementTriangles{60000}, layerTriangles{400000};
     double penetrationM{0.005}, embedM{0.001}, envelopeToleranceM{0.005}, insideSlotShare{0.98}, slotToleranceM{0.02};
-    double pitchPeakRatio{3.0}, gradientRatio{1.5}, gradientFloor{0.02};
+    double pitchPeakRatio{3.0}, pitchWindow{0.15}, gradientRatio{1.5}, gradientFloor{0.02};
 };
 
 /** What building one element made: its geometry and what the checks need to know about how it was made. */
@@ -1669,8 +1669,11 @@ inline Support supportTest(const scan_ortho::Renderer& rend, const Surface& S, c
             }
             if (sig.size() < 8) continue;
             const double f0 = 1.0 / pitches[a];
-            double peak = 0;
-            for (double f = 0.85 * f0; f <= 1.15 * f0 + 1e-12; f += 0.01 * f0) peak = std::max(peak, dftPower(sig, texel, f));
+            // the strongest periodicity in the band 0.5 to 2 times the claimed frequency, searched finely: it is the claimed pitch (within the
+            // window) or the photo does not show that pitch; the leakage of a strong peak a little outside the window is not a peak of its own
+            double peak = 0, fPeak = 0;
+            for (double f = 0.5 * f0; f <= 2.0 * f0 + 1e-12; f += 0.01 * f0) { const double w = dftPower(sig, texel, f); if (w > peak) { peak = w; fPeak = f; } }
+            if (std::fabs(fPeak - f0) > lim.pitchWindow * f0 + 1e-9) continue;
             std::vector<double> band;
             for (double f = 0.5 * f0; f <= 2.0 * f0 + 1e-12; f += 0.05 * f0) band.push_back(dftPower(sig, texel, f));
             std::nth_element(band.begin(), band.begin() + static_cast<long>(band.size() / 2), band.end());
@@ -1879,7 +1882,7 @@ inline Output buildOrnament(const std::string& fitJson, const std::vector<uint8_
 
     // slots that were asked for detail and got none
     std::vector<std::string> degraded;
-    for (const auto& [slotId, n] : requested) if (n > 0 && produced[slotId] == 0) degraded.push_back(slotId);
+    for (const auto& [slotId, n] : requested) if (n > 0 && produced[slotId] == 0 && fit.slots.count(slotId)) degraded.push_back(slotId);  // a slot the fit does not have has no outline to draw
 
     // the nodes
     std::vector<staged_glb::StagedNode> nodes;
