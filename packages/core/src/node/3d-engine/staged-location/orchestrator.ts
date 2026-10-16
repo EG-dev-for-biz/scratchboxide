@@ -1618,6 +1618,8 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
     run.state.runState = 'finished';
     const retryStages = [...new Set(run.state.degradations.filter(d => d.transient && d.retry).map(d => d.retry!.args.retryStage))];
     if (retryStages.length) run.state.retry = { retryRunId: run.runId, stages: retryStages };
+    // Street View imagery is credited where it was read; a fetch the fit's failure made moot shows nothing to credit
+    if (!f.rebuild.evidenceCounts?.streetView) run.state.attribution = run.state.attribution.filter(a => a !== 'Street View ©Google');
     const sourceLimits = f.rebuild.sourceLimits ?? { leafGeometricErrorM: f.extraction.leafGeometricErrorM, meshEdgeP50M: 0, meshResolvableM: round(0.25 * f.extraction.leafGeometricErrorM), texelM: 0, photoResolvableM: 0 };
     const fit = fitResult?.value;
     const ornament = f.rebuild.spec;

@@ -575,6 +575,21 @@ describe('the call settles before it returns or throws', () => {
         expect(s.events.length).toBe(eventsAtReturn);
     });
 
+    it('Street View is credited only where an image was read: a fit rejected after the images came back credits none', async () => {
+        const sv = streetViewStandIn();
+        const calls: any[] = [];
+        const s = setup(ARCH, {}, {
+            scanFit: fakeScanFit(path.join(TMP, 'sf-late-rej2'), { rejected: true, fitDelayMs: 500 }).deps,
+            vision: { client: visionClient(REPLY, calls), candidates: ['gemini-4-argon'] }, streetView: sv.deps
+        });
+        const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
+        expect(sv.requested.sort()).toEqual(['PE', 'PN', 'PS', 'PW']); // the images were fetched while the fit ran
+        expect(result.stages.find(x => x.stage === 'evidence')!.status).toBe('committed');
+        expect(calls).toEqual([]); // and none reached the model
+        expect(result.extraction.attribution).toEqual(['Map data ©Google']);
+        expect((result.artifact as any).data.stagedBuild.attribution).toEqual(['Map data ©Google']);
+    });
+
     it('Stop during a slow fit, with the Street View fetch and the trees in flight, leaves nothing running and no unhandled rejection', async () => {
         const unhandled: unknown[] = [];
         const onUnhandled = (reason: unknown) => { unhandled.push(reason); };

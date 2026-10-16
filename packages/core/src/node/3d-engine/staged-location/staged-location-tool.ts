@@ -63,8 +63,9 @@ export const STAGED_ISOLATE_DESCRIPTION =
 
 export const STAGED_RADIUS_DESCRIPTION =
     'Extraction radius in metres around the anchor for a district (default 250). The nearest 524 leaf tiles are kept; when the radius holds more, the result ' +
-    'reports the smaller radius actually covered (coveredRadiusMeters, truncated). A radius that selects more than 6000 leaf tiles fails. Ignored with isolate, ' +
-    'whose extraction is sized to the structure (the result says how far it reached).';
+    'reports the smaller radius actually covered as extraction.radiusM (extraction.requestedRadiusM is what was asked) with a radius_truncated degradation, and ' +
+    'the summary says so. A radius that selects more than 6000 leaf tiles fails. Ignored with isolate, whose extraction is sized to the structure ' +
+    '(extraction.radiusM says how far it reached).';
 
 export const STAGED_RETRY_RUN_DESCRIPTION =
     'Retry one stage of an earlier run: the retryRunId the last result gave (8 hex digits). The recorded request is rebuilt from the run, so the other ' +
