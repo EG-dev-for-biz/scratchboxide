@@ -6,6 +6,7 @@
  * of this file, via any medium, is strictly prohibited without explicit written
  * permission from Scratchbox LLC.
  ********************************************************************************/
+import { thinkingConfigFor, type GeminiThinkingConfig } from './thinking-config';
 import * as fs from 'fs-extra';
 import * as os from 'os';
 import * as path from 'path';
@@ -22,7 +23,7 @@ export const FALLBACK_SUBAGENT_MODELS = ['gemini-3.1-flash-lite-preview', 'gemin
 
 export const DEFAULT_THINKING_BUDGET = 1024;
 
-export type GeminiThinkingConfig = { thinkingBudget: number } | { thinkingLevel: 'LOW' | 'MEDIUM' | 'HIGH' };
+export type { GeminiThinkingConfig } from './thinking-config';
 /** Gemini 3.x publisher models are served only from the `global` location; regional endpoints 404. */
 export const VERTEX_LOCATION = 'global';
 
@@ -472,10 +473,7 @@ export class GeminiClient {
      */
     getThinkingConfig(request: Pick<GeminiGenerateRequest, 'thinkingBudget'>, model?: string): GeminiThinkingConfig {
         const thinkingBudget = request.thinkingBudget !== undefined ? request.thinkingBudget : this.thinkingBudget;
-        if (Number(/^gemini-(\d+)/.exec(model ?? '')?.[1] ?? 0) >= 4) {
-            return { thinkingLevel: thinkingBudget < 1024 ? 'LOW' : thinkingBudget < 2048 ? 'MEDIUM' : 'HIGH' };
-        }
-        return { thinkingBudget };
+        return thinkingConfigFor(model, thinkingBudget);
     }
 
     vertexModelUrl(projectId: string, model: string, method: 'streamGenerateContent' | 'generateContent'): string {

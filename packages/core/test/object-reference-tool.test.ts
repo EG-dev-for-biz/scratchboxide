@@ -522,8 +522,32 @@ describe('build_3d_object_from_reference', () => {
         expect(out.status, String(out.resultPayload.error)).toBe('completed');
         expect(client.calls.filter(c => !c.config?.responseModalities).every(c => c.model === CHAT_MODEL)).toBe(true);
         const build = (out.resultPayload.artifact as any).data.objectBuild;
-        expect(build.visionModel).toEqual({ requested: CHAT_MODEL, used: CHAT_MODEL, answered: CHAT_MODEL, source: 'chat-default', skipped: [] });
+        expect(build.visionModel).toEqual({ requested: CHAT_MODEL, used: CHAT_MODEL, answered: CHAT_MODEL, source: 'chat-default', skipped: [], thinking: { level: 'LOW' } });
         expect(out.summaryResult).toContain(`spec read by ${CHAT_MODEL}, the chat's default model`);
+    }, 180_000);
+
+    it('asks for LOW thinking on the spec read only, computed for the model that answers; the comparisons keep the model default', async () => {
+        const client = fakeClient({ specs: [JSON.stringify(VASE)] });
+        const out = await handlerWith(client).run({ request: 'a fluted vase with a knob on top' }, ctx(CHAT_MODEL));
+        expect(out.status, String(out.resultPayload.error)).toBe('completed');
+        const specCalls = client.calls.filter(isSpecCall);
+        const comparisons = client.calls.filter(isComparisonCall);
+        expect(specCalls.length).toBeGreaterThan(0);
+        expect(comparisons.length).toBeGreaterThan(0);
+        // gemini-4-argon takes a thinking level: the 512-token spec-read budget maps to LOW
+        for (const c of specCalls) expect(c.config.thinkingConfig).toEqual({ thinkingLevel: 'LOW' });
+        for (const c of comparisons) expect(c.config.thinkingConfig).toBeUndefined();
+        // the reference image call is untouched
+        for (const c of client.calls.filter(c => c.config?.responseModalities)) expect(c.config.thinkingConfig).toBeUndefined();
+
+        // a fallback to a 3.x model gets the budget itself, computed when that model is called
+        const fallback = fakeClient({ specs: [JSON.stringify(VASE)], unserved: [CHAT_MODEL] });
+        const viaFallback = await handlerWith(fallback).run({ request: 'a fluted vase with a knob on top' }, ctx(CHAT_MODEL));
+        expect(viaFallback.status, String(viaFallback.resultPayload.error)).toBe('completed');
+        const fallbackSpec = fallback.calls.filter(isSpecCall);
+        expect(fallbackSpec[0]).toMatchObject({ model: CHAT_MODEL, config: { thinkingConfig: { thinkingLevel: 'LOW' } } });
+        for (const c of fallbackSpec.slice(1)) expect(c).toMatchObject({ model: FALLBACK_MODEL, config: { thinkingConfig: { thinkingBudget: 512 } } });
+        expect((viaFallback.resultPayload.artifact as any).data.objectBuild.visionModel).toMatchObject({ used: FALLBACK_MODEL, thinking: { budget: 512 } });
     }, 180_000);
 
     it('moves to the chat\'s next model when the named one is not served, and records why', async () => {
