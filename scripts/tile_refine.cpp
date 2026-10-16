@@ -50,6 +50,7 @@ static void usage() {
         "  --out-raw-clay PATH     also write the (isolated) raw scan, unmodified, as studio clay\n"
         "  --roi-radius M          relief region of interest: the anchor's footprint grown by M (default 60; <0 = whole tile)\n"
         "  --no-relief             skip the photometric relief (rectified scan only)\n"
+        "  --relief-own-regions    relief: grow its own facade regions instead of using the detected wall planes\n"
         "  --flatten-band M        facade flatten: vertices within M of a detected wall plane move onto it (default 0.10)\n"
         "  --no-flatten            skip the facade flatten\n"
         "  --flatten-parallel-deg DEG  facade flatten: a face lies along a plane within DEG (default 30)\n"
@@ -108,6 +109,7 @@ int main(int argc, char** argv) {
         else if (a == "--interior-inset") p.isolateInteriorInset = num();
         else if (a == "--out-raw-clay") p.rawClayPath = next();
         else if (a == "--no-relief") p.relief = false;
+        else if (a == "--relief-own-regions") p.reliefOnWallPlanes = false;
         else if (a == "--flatten-band") p.flatten.band = num();
         else if (a == "--no-flatten") p.flatten.band = 0;
         else if (a == "--flatten-parallel-deg") p.flatten.parallelDeg = num();

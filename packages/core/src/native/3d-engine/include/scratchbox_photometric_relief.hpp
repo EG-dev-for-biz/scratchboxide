@@ -64,6 +64,7 @@
 #include <deque>
 #include <fstream>
 #include <functional>
+#include <map>
 #include <limits>
 #include <numeric>
 #include <sstream>
@@ -95,7 +96,26 @@ struct P3 {
     }
 };
 
+/**
+ * A facade plane supplied by the caller (n.p = d, unit n, t1 a unit in-plane axis; the support box spans [lo1, hi1] along
+ * t1 and [lo2, hi2] along n x t1).
+ */
+struct FacadePlane {
+    P3 n, t1;
+    double d{0}, lo1{0}, hi1{0}, lo2{0}, hi2{0};
+};
+
 struct ReliefParams {
+    // Facade regions from the caller's planes: when set, every candidate triangle lying on one (normal within
+    // facadePlaneAngleDeg, every vertex within facadePlaneOffset of it, centroid inside its support box grown by
+    // facadePlaneMargin) joins that plane, and the region growth below is skipped. A plane's members whose footprints on
+    // it come within facadeSectionGap of each other form one section (pieces of the plane on separate wings or tiers stay
+    // apart): one region, and one lattice, per contiguous facade section.
+    std::vector<FacadePlane> facadePlanes;
+    double facadePlaneAngleDeg{20.0};
+    double facadePlaneOffset{0.25};  // m
+    double facadePlaneMargin{1.0};   // m
+    double facadeSectionGap{2.0};    // m
     // Facade regions
     double wallMaxAbsNy{0.2};        // candidate facade triangles: |normal.y| at most this
     double planeAngleDeg{2.0};       // region growth: normal agreement with the seed
@@ -117,10 +137,21 @@ struct ReliefParams {
     double maxPitch{8.0};
     double minPeriodicity{0.15};     // normalized autocorrelation of the chosen peak
     double minLatticeConfirmation{0.4};  // cells / strips are kept only when confirmed at this share of the sites tested
+    int minLatticeSites{4};              // ...and at this many sites at least (fewer is a coincidence, not a repeat)
+    // Lattice rows: the modes of the confirmed cells' centres along t (across all columns, at least half a t pitch
+    // apart, each carried by at least two cells). A cell within latticeMaxRowResidual x the window height of a row moves
+    // onto it; with two rows or more, any other cell is dropped (the grid does not explain it). A site of the row/column grid with no confirmed cell is filled
+    // as periodic-inferred only inside the lattice (confirmed cells on both sides in its row and above and below in its
+    // column), when the photo there is no brighter than its frame, at least latticeMinOnGrid of the confirmed cells sit
+    // on rows and their residual (rms) is within latticeMaxRowResidual x the window height.
+    double latticeMaxRowResidual{0.25};
+    double latticeMinOnGrid{0.8};
+    bool latticeFill{true};
     double minProminence{0.08};      // peak height above the preceding dip
     double minTemplateContrast{0.015};
     double darkRunMinDepth{0.15};    // a dark band of the folded profile dips at least this share of its contrast below mid level
-    double darkRunSplit{0.2};        // ...and splits at an interior bright bar this high (share of the band's depth)
+    double darkRunSplit{0.5};        // ...and splits at an interior bright bar this high (share of the band's depth): a
+                                     // sash or a glass reflection inside a window is lower than that, so the window stays whole
     // Period search scales: the luminance is detrended along the lag axis only, at radii maxPitch / 2^k (k <
     // periodScales, radius >= minPitch / 2); a radius r searches pitches up to scalePitchReach * r and the most periodic
     // estimate over the scales wins. Small radii keep a weak floor rhythm from drowning in tier-scale variation.
@@ -208,6 +239,7 @@ struct ReliefFeature {
     double si0{0}, si1{0}, ti0{0}, ti1{0};  // inner rectangle (full height)
     double height{0};              // along the facade normal; negative = recessed
     double evidence{0};
+    uint8_t lattice{0};            // 1 photo-observed recess (lattice cell or strip), 2 periodic-inferred cell, 0 other
 };
 
 struct FacadeAnalysis {
@@ -220,6 +252,10 @@ struct FacadeAnalysis {
     bool latticeRejected{false};     // below minLatticeConfirmation: its features were dropped
     int latticeFeaturesDropped{0};
     int proudClampedDropped{0};      // shadowed bands whose inferred depth exceeded maxDepth
+    // the lattice of cells (rows from the confirmed cells' own centres, columns from the s fold)
+    int latticeRows{0}, latticeCols{0}, observedCells{0}, inferredCells{0}, inferredContradicted{0}, cellsAtMaxDepth{0}, offGridCells{0};
+    double rowPitch{0}, rowResidualRms{0}, rowResidualMax{0};
+    bool latticeFilled{false};       // the row residual allowed periodic-inferred cells
     std::vector<StructuralLine> lines;
     std::vector<ReliefFeature> features;
     double meanLuminance{0};
@@ -227,6 +263,7 @@ struct FacadeAnalysis {
 
 struct FacadeReport {
     int id{0};
+    int planeIndex{-1};  // index into ReliefParams::facadePlanes (-1: a region the relief grew itself)
     size_t inputTriangles{0};
     double area{0};
     P3 centroid, normal, axisS, axisT;
@@ -241,6 +278,7 @@ struct FacadeReport {
     size_t sLines{0}, tLines{0};
     double minHeight{0}, maxHeight{0};
     double recessArea{0}, proudArea{0};
+    double analysisMs{0};
 };
 
 struct OutputTriangle {
@@ -280,6 +318,7 @@ struct ReliefResult {
     size_t recessedVertices{0}, proudVertices{0};
     double recessArea{0}, proudArea{0};
     size_t latticesRejected{0}, latticeFeaturesDropped{0}, proudClampedDropped{0};
+    size_t observedCells{0}, inferredCells{0}, inferredContradicted{0}, cellsAtMaxDepth{0};
     std::vector<std::pair<std::string, double>> timingsMs;
 };
 
@@ -848,6 +887,175 @@ inline double shadowBandWidth(const View& v, const LineCandidate& lc, bool darkA
 // Orthophoto analysis (pure image -> relief features; exposed for reuse and tests)
 // ============================================================================================
 
+/**
+ * The lattice of a facade's confirmed cells (see ReliefParams::latticeMaxRowResidual): rows are the modes of the cells'
+ * own centres across all columns, a cell near a row moves onto it (never further than latticeMaxRowResidual x the window
+ * height), and interior sites of the row/column grid with no confirmed cell are filled as periodic-inferred (lattice 2)
+ * when the photo does not contradict them and the rows fit the confirmed cells. Columns are the s fold's (one pitch and
+ * phase per facade), so cells already share them.
+ */
+template <class ContrastFn>
+inline void latticeRowsAndFill(const Orthophoto& o, FacadeAnalysis& fa, const ReliefParams& p, double Pt, double hT, double g, const ContrastFn& cellContrast) {
+    struct Obs { size_t f; double tc; int row{-1}; int col{-1}; };
+    std::vector<Obs> obs;
+    for (size_t i = 0; i < fa.features.size(); ++i) {
+        const auto& f = fa.features[i];
+        if (f.lattice == 1) obs.push_back({i, 0.5 * (f.t0 + f.t1)});
+    }
+    if (obs.empty() || !(Pt > 0) || !(hT > 0)) return;
+    // rows: modes of the cell centres (Gaussian kernel of a tenth of the window height), at least half a pitch apart and
+    // carried by at least two cells within the snap distance
+    const double snap = p.latticeMaxRowResidual * hT;
+    std::vector<double> rowCentre;
+    {
+        double lo = 1e300, hi = -1e300;
+        for (const auto& c : obs) { lo = std::min(lo, c.tc); hi = std::max(hi, c.tc); }
+        const double bin = std::max(0.01, 0.05 * hT), sig = std::max(bin, 0.1 * hT);
+        const int nb = static_cast<int>(std::ceil((hi - lo) / bin)) + 1;
+        std::vector<double> dens(static_cast<size_t>(nb), 0.0);
+        const int reach = static_cast<int>(std::ceil(3 * sig / bin));
+        for (const auto& c : obs) {
+            const int b0 = static_cast<int>(std::lround((c.tc - lo) / bin));
+            for (int b = std::max(0, b0 - reach); b <= std::min(nb - 1, b0 + reach); ++b) {
+                const double d = lo + b * bin - c.tc;
+                dens[static_cast<size_t>(b)] += std::exp(-0.5 * d * d / (sig * sig));
+            }
+        }
+        std::vector<int> peaks;
+        for (int b = 0; b < nb; ++b) {
+            const double v = dens[static_cast<size_t>(b)];
+            if ((b > 0 && dens[static_cast<size_t>(b - 1)] >= v) || (b + 1 < nb && dens[static_cast<size_t>(b + 1)] > v)) continue;
+            peaks.push_back(b);
+        }
+        std::sort(peaks.begin(), peaks.end(), [&](int a, int b) { return dens[static_cast<size_t>(a)] > dens[static_cast<size_t>(b)]; });
+        std::vector<double> chosen;
+        for (int b : peaks) {
+            const double t = lo + b * bin;
+            bool clear = true;
+            for (double c : chosen) if (std::abs(c - t) < 0.5 * Pt) clear = false;
+            if (!clear) continue;
+            int support = 0;
+            for (const auto& c : obs) if (std::abs(c.tc - t) <= snap) ++support;
+            if (support >= 2) chosen.push_back(t);
+        }
+        std::sort(chosen.begin(), chosen.end());
+        // each row's centre: the mean of the cells it takes
+        std::vector<double> sum(chosen.size(), 0.0);
+        std::vector<int> cnt(chosen.size(), 0);
+        for (auto& c : obs) {
+            int best = -1;
+            double bd = snap;
+            for (size_t r = 0; r < chosen.size(); ++r) if (std::abs(c.tc - chosen[r]) <= bd) { bd = std::abs(c.tc - chosen[r]); best = static_cast<int>(r); }
+            c.row = best;
+            if (best >= 0) { sum[static_cast<size_t>(best)] += c.tc; ++cnt[static_cast<size_t>(best)]; }
+        }
+        std::vector<int> remap(chosen.size(), -1);
+        for (size_t r = 0; r < chosen.size(); ++r) {
+            if (!cnt[r]) continue;
+            remap[r] = static_cast<int>(rowCentre.size());
+            rowCentre.push_back(sum[r] / cnt[r]);
+        }
+        for (auto& c : obs) if (c.row >= 0) c.row = remap[static_cast<size_t>(c.row)];
+        if (std::getenv("SB_DEBUG_LATTICE")) {
+            // distance of every cell to the nearest chosen row, in window heights
+            int hist[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+            for (const auto& c : obs) {
+                double bd = 1e300;
+                for (double r : chosen) bd = std::min(bd, std::abs(c.tc - r));
+                hist[std::min(7, static_cast<int>(bd / (0.125 * hT)))]++;
+            }
+            std::fprintf(stderr, "lattice: cells %zu rows %zu hT %.2f Pt %.2f px %.3f | dist/hT in 0.125 bins: %d %d %d %d %d %d %d %d+\n", obs.size(), rowCentre.size(), hT, Pt,
+                         o.pixel, hist[0], hist[1], hist[2], hist[3], hist[4], hist[5], hist[6], hist[7]);
+        }
+    }
+    // columns: the distinct cell s ranges (on the fold's grid), ordered along s
+    std::vector<double> colS;
+    for (const auto& c : obs) colS.push_back(fa.features[c.f].s0);
+    std::sort(colS.begin(), colS.end());
+    colS.erase(std::unique(colS.begin(), colS.end(), [](double a, double b) { return std::abs(a - b) < 1e-6; }), colS.end());
+    for (auto& c : obs) c.col = static_cast<int>(std::lower_bound(colS.begin(), colS.end(), fa.features[c.f].s0 - 1e-6) - colS.begin());
+    // one cell per (row, column): the strongest; the others are dropped. A cell off every row of a lattice (two rows or
+    // more) is a dark spot the window grid does not explain (a spandrel, a stain) and is dropped too; without a lattice
+    // the cells keep their own places.
+    std::map<std::pair<int, int>, size_t> site;
+    std::vector<uint8_t> drop(fa.features.size(), 0);
+    for (size_t i = 0; i < obs.size(); ++i) {
+        if (obs[i].row < 0) {
+            ++fa.offGridCells;
+            if (rowCentre.size() >= 2) drop[obs[i].f] = 1;
+            continue;
+        }
+        auto it = site.emplace(std::make_pair(obs[i].row, obs[i].col), i);
+        if (it.second) continue;
+        size_t& keep = it.first->second;
+        if (fa.features[obs[i].f].evidence > fa.features[obs[keep].f].evidence) { drop[obs[keep].f] = 1; keep = i; }
+        else drop[obs[i].f] = 1;
+    }
+    // residual of the kept cells to their rows, then every kept cell moves onto its row
+    double s2 = 0, mx = 0;
+    size_t nk = 0;
+    for (const auto& kv : site) {
+        const Obs& c = obs[kv.second];
+        const double r = c.tc - rowCentre[static_cast<size_t>(c.row)];
+        s2 += r * r; mx = std::max(mx, std::abs(r)); ++nk;
+        auto& f = fa.features[c.f];
+        const double dt = -r;
+        f.t0 += dt; f.t1 += dt; f.ti0 += dt; f.ti1 += dt;
+    }
+    fa.rowResidualRms = nk ? std::sqrt(s2 / nk) : 0;
+    fa.rowResidualMax = mx;
+    fa.latticeRows = static_cast<int>(rowCentre.size());
+    fa.latticeCols = static_cast<int>(colS.size());
+    if (rowCentre.size() > 1) {
+        std::vector<double> d;
+        for (size_t i = 1; i < rowCentre.size(); ++i) d.push_back(rowCentre[i] - rowCentre[i - 1]);
+        std::nth_element(d.begin(), d.begin() + static_cast<std::ptrdiff_t>(d.size() / 2), d.end());
+        fa.rowPitch = d[d.size() / 2];
+    }
+    // periodic fill: interior sites only, when the lattice is confirmed and its rows fit the cells
+    const double confirmation = fa.cellsTested > 0 ? static_cast<double>(fa.cellsAccepted) / fa.cellsTested : 0.0;
+    const double onGrid = obs.empty() ? 0.0 : 1.0 - static_cast<double>(fa.offGridCells) / obs.size();
+    std::vector<ReliefFeature> fill;
+    if (p.latticeFill && confirmation >= p.minLatticeConfirmation && fa.cellsAccepted >= p.minLatticeSites && onGrid >= p.latticeMinOnGrid &&
+        fa.rowResidualRms <= p.latticeMaxRowResidual * hT &&
+        rowCentre.size() >= 3 && colS.size() >= 3) {
+        fa.latticeFilled = true;
+        std::vector<double> depths;
+        for (const auto& kv : site) depths.push_back(fa.features[obs[kv.second].f].height);
+        std::nth_element(depths.begin(), depths.begin() + static_cast<std::ptrdiff_t>(depths.size() / 2), depths.end());
+        const double depth = depths[depths.size() / 2];
+        const int R = static_cast<int>(rowCentre.size()), C = static_cast<int>(colS.size());
+        std::vector<int> rowMin(R, C), rowMax(R, -1), colMin(C, R), colMax(C, -1);
+        std::vector<double> colWidth(C, 0);
+        for (const auto& kv : site) {
+            const int r = kv.first.first, c = kv.first.second;
+            rowMin[r] = std::min(rowMin[r], c); rowMax[r] = std::max(rowMax[r], c);
+            colMin[c] = std::min(colMin[c], r); colMax[c] = std::max(colMax[c], r);
+            const auto& f = fa.features[obs[kv.second].f];
+            colWidth[c] = f.s1 - f.s0;
+        }
+        for (int r = 0; r < R; ++r)
+            for (int c = 0; c < C; ++c) {
+                if (site.count({r, c})) continue;
+                if (!(c > rowMin[r] && c < rowMax[r] && r > colMin[c] && r < colMax[c])) continue;
+                const double s0 = colS[static_cast<size_t>(c)], s1 = s0 + colWidth[static_cast<size_t>(c)];
+                const double t0 = rowCentre[static_cast<size_t>(r)] - 0.5 * hT, t1 = rowCentre[static_cast<size_t>(r)] + 0.5 * hT;
+                if (t0 - g < o.tMax - o.height * o.pixel || t1 + g > o.tMax) continue;
+                const double contrast = cellContrast(s0, s1, t0, t1, g);
+                if (!(contrast >= 0)) { ++fa.inferredContradicted; continue; }
+                fill.push_back(detail::makeFeature("periodic-cell", s0, s1, t0, t1, depth, contrast, p.jambWidth));
+                fill.back().lattice = 2;
+            }
+    }
+    std::vector<ReliefFeature> kept;
+    for (size_t i = 0; i < fa.features.size(); ++i) if (!drop[i]) kept.push_back(fa.features[i]);
+    fa.observedCells = 0;
+    for (const auto& f : kept) if (f.lattice == 1) ++fa.observedCells;
+    fa.inferredCells = static_cast<int>(fill.size());
+    kept.insert(kept.end(), fill.begin(), fill.end());
+    fa.features.swap(kept);
+}
+
 inline FacadeAnalysis analyzeOrthophoto(const Orthophoto& o, double texel, const ReliefParams& p, unsigned threads = 1) {
     FacadeAnalysis fa;
     const int W = o.width, H = o.height;
@@ -1090,56 +1298,61 @@ inline FacadeAnalysis analyzeOrthophoto(const Orthophoto& o, double texel, const
         std::vector<RowMin> mins;
         std::vector<double> prof(static_cast<size_t>(H)), dpf(static_cast<size_t>(H)), cps(static_cast<size_t>(H) + 1), cpc(static_cast<size_t>(H) + 1);
         std::vector<uint8_t> ok(static_cast<size_t>(H));
+        // window columns: the fold's dark runs at its pitch
+        std::vector<std::pair<double, double>> columns;
         for (const auto& rS : fa.cell.runsS) {
-            const double ws = rS.second;
             const int i0 = static_cast<int>(std::floor((o.sMin - rS.first) / Ps)) - 1;
             const int i1 = static_cast<int>(std::ceil((sMaxImg - rS.first) / Ps)) + 1;
             for (int i = i0; i <= i1; ++i) {
-                const double q0 = rS.first + i * Ps, q1 = q0 + ws;
-                if (q0 - gS < o.sMin || q1 + gS > sMaxImg) continue;
-                int x0, x1, cx0, cx1;
-                detail::View::range(q0 - gS, q1 + gS, o.sMin, px, W, x0, x1);
-                detail::View::range(q0 + 0.2 * ws, q1 - 0.2 * ws, o.sMin, px, W, cx0, cx1);
-                if (x1 < x0 || cx1 < cx0) continue;
-                for (int y = 0; y < H; ++y) {
-                    bool full = true;
-                    for (int x = x0; x <= x1 && full; ++x) full = o.cov[static_cast<size_t>(y) * W + x] != 0;
-                    double s = 0;
-                    if (full) for (int x = cx0; x <= cx1; ++x) s += o.lum[static_cast<size_t>(y) * W + x];
-                    ok[static_cast<size_t>(y)] = full ? 1 : 0;
-                    prof[static_cast<size_t>(y)] = full ? s / (cx1 - cx0 + 1) : 0.0;
-                    cps[static_cast<size_t>(y) + 1] = cps[static_cast<size_t>(y)] + prof[static_cast<size_t>(y)];
-                    cpc[static_cast<size_t>(y) + 1] = cpc[static_cast<size_t>(y)] + (full ? 1.0 : 0.0);
-                }
-                for (int y = 0; y < H; ++y) {
-                    if (!ok[static_cast<size_t>(y)]) continue;
-                    const size_t a = static_cast<size_t>(std::max(0, y - rad)), b = static_cast<size_t>(std::min(H, y + rad + 1));
-                    dpf[static_cast<size_t>(y)] = prof[static_cast<size_t>(y)] - (cps[b] - cps[a]) / (cpc[b] - cpc[a]);
-                }
-                for (int y = span; y + span < H; ++y) {
-                    if (cpc[static_cast<size_t>(y + span + 1)] - cpc[static_cast<size_t>(y - span)] < 2 * span + 1) continue;  // gap in the column
-                    const double v = dpf[static_cast<size_t>(y)];
-                    bool isMin = true;
-                    for (int k = y - sep; k <= y + sep && isMin; ++k)
-                        if (k != y && (dpf[static_cast<size_t>(k)] < v || (dpf[static_cast<size_t>(k)] == v && k < y))) isMin = false;
-                    if (!isMin) continue;
-                    double lm = v, rm = v;
-                    for (int k = y - span; k < y; ++k) lm = std::max(lm, dpf[static_cast<size_t>(k)]);
-                    for (int k = y + 1; k <= y + span; ++k) rm = std::max(rm, dpf[static_cast<size_t>(k)]);
-                    const double depth = std::min(lm, rm) - v;
-                    const double level = (cps[static_cast<size_t>(y + span + 1)] - cps[static_cast<size_t>(y - span)]) / (2 * span + 1);
-                    const double rel = depth / std::max(level, 0.05);
-                    if (rel < p.cellMinRowContrast) continue;
-                    // half-depth crossings on both sides (pixel-centre units; the bright side of each lies inside the span)
-                    const double lvl = v + 0.5 * depth;
-                    int k = y;
-                    while (k > y - span && dpf[static_cast<size_t>(k - 1)] < lvl) --k;
-                    const double top = k > y - span ? k - (lvl - dpf[static_cast<size_t>(k)]) / std::max(1e-12, dpf[static_cast<size_t>(k - 1)] - dpf[static_cast<size_t>(k)]) : k - 0.5;
-                    k = y;
-                    while (k < y + span && dpf[static_cast<size_t>(k + 1)] < lvl) ++k;
-                    const double bot = k < y + span ? k + (lvl - dpf[static_cast<size_t>(k)]) / std::max(1e-12, dpf[static_cast<size_t>(k + 1)] - dpf[static_cast<size_t>(k)]) : k + 0.5;
-                    mins.push_back({q0, q1, 0.5 * (top + bot), bot - top, rel});
-                }
+                const double q0 = rS.first + i * Ps;
+                if (q0 - gS >= o.sMin && q0 + rS.second + gS <= sMaxImg) columns.push_back({q0, q0 + rS.second});
+            }
+        }
+        for (const auto& col : columns) {
+            const double ws = col.second - col.first;
+            const double q0 = col.first, q1 = col.second;
+            int x0, x1, cx0, cx1;
+            detail::View::range(q0 - gS, q1 + gS, o.sMin, px, W, x0, x1);
+            detail::View::range(q0 + 0.2 * ws, q1 - 0.2 * ws, o.sMin, px, W, cx0, cx1);
+            if (x1 < x0 || cx1 < cx0) continue;
+            for (int y = 0; y < H; ++y) {
+                bool full = true;
+                for (int x = x0; x <= x1 && full; ++x) full = o.cov[static_cast<size_t>(y) * W + x] != 0;
+                double s = 0;
+                if (full) for (int x = cx0; x <= cx1; ++x) s += o.lum[static_cast<size_t>(y) * W + x];
+                ok[static_cast<size_t>(y)] = full ? 1 : 0;
+                prof[static_cast<size_t>(y)] = full ? s / (cx1 - cx0 + 1) : 0.0;
+                cps[static_cast<size_t>(y) + 1] = cps[static_cast<size_t>(y)] + prof[static_cast<size_t>(y)];
+                cpc[static_cast<size_t>(y) + 1] = cpc[static_cast<size_t>(y)] + (full ? 1.0 : 0.0);
+            }
+            for (int y = 0; y < H; ++y) {
+                if (!ok[static_cast<size_t>(y)]) continue;
+                const size_t a = static_cast<size_t>(std::max(0, y - rad)), b = static_cast<size_t>(std::min(H, y + rad + 1));
+                dpf[static_cast<size_t>(y)] = prof[static_cast<size_t>(y)] - (cps[b] - cps[a]) / (cpc[b] - cpc[a]);
+            }
+            for (int y = span; y + span < H; ++y) {
+                if (cpc[static_cast<size_t>(y + span + 1)] - cpc[static_cast<size_t>(y - span)] < 2 * span + 1) continue;  // gap in the column
+                const double v = dpf[static_cast<size_t>(y)];
+                bool isMin = true;
+                for (int k = y - sep; k <= y + sep && isMin; ++k)
+                    if (k != y && (dpf[static_cast<size_t>(k)] < v || (dpf[static_cast<size_t>(k)] == v && k < y))) isMin = false;
+                if (!isMin) continue;
+                double lm = v, rm = v;
+                for (int k = y - span; k < y; ++k) lm = std::max(lm, dpf[static_cast<size_t>(k)]);
+                for (int k = y + 1; k <= y + span; ++k) rm = std::max(rm, dpf[static_cast<size_t>(k)]);
+                const double depth = std::min(lm, rm) - v;
+                const double level = (cps[static_cast<size_t>(y + span + 1)] - cps[static_cast<size_t>(y - span)]) / (2 * span + 1);
+                const double rel = depth / std::max(level, 0.05);
+                if (rel < p.cellMinRowContrast) continue;
+                // half-depth crossings on both sides (pixel-centre units; the bright side of each lies inside the span)
+                const double lvl = v + 0.5 * depth;
+                int k = y;
+                while (k > y - span && dpf[static_cast<size_t>(k - 1)] < lvl) --k;
+                const double top = k > y - span ? k - (lvl - dpf[static_cast<size_t>(k)]) / std::max(1e-12, dpf[static_cast<size_t>(k - 1)] - dpf[static_cast<size_t>(k)]) : k - 0.5;
+                k = y;
+                while (k < y + span && dpf[static_cast<size_t>(k + 1)] < lvl) ++k;
+                const double bot = k < y + span ? k + (lvl - dpf[static_cast<size_t>(k)]) / std::max(1e-12, dpf[static_cast<size_t>(k + 1)] - dpf[static_cast<size_t>(k)]) : k + 0.5;
+                mins.push_back({q0, q1, 0.5 * (top + bot), bot - top, rel});
             }
         }
         if (!mins.empty()) {
@@ -1165,13 +1378,15 @@ inline FacadeAnalysis analyzeOrthophoto(const Orthophoto& o, double texel, const
                 if (fa.features.size() > colStart) {
                     ReliefFeature& prev = fa.features.back();
                     if (t1 + g > prev.t0 && t0 - g < prev.t1) {
-                        if (contrast > prev.evidence) prev = detail::makeFeature("dark-cell", m.q0, m.q1, t0, t1, -depthFor(contrast), contrast, p.jambWidth);
+                        if (contrast > prev.evidence) { prev = detail::makeFeature("dark-cell", m.q0, m.q1, t0, t1, -depthFor(contrast), contrast, p.jambWidth); prev.lattice = 1; }
                         continue;
                     }
                 }
                 fa.features.push_back(detail::makeFeature("dark-cell", m.q0, m.q1, t0, t1, -depthFor(contrast), contrast, p.jambWidth));
+                fa.features.back().lattice = 1;
             }
             fa.cellsAccepted = static_cast<int>(fa.features.size());
+            if (fa.cellsAccepted > 0) latticeRowsAndFill(o, fa, p, Pt, hT, g, cellContrast);
         }
     }
 
@@ -1238,6 +1453,7 @@ inline FacadeAnalysis analyzeOrthophoto(const Orthophoto& o, double texel, const
                 detail::viewRectToPlane(v, q0, q1, v.along(ys), v.along(ye + 1), s0, s1, t0, t1);
                 ++fa.stripRuns;
                 fa.features.push_back(detail::makeFeature("dark-strip", s0, s1, t0, t1, -depthFor(contrast), contrast, p.jambWidth));
+                fa.features.back().lattice = 1;
             }
             if (fa.stripRuns > runsBefore) ++fa.stripsConfirmed;
         }
@@ -1266,7 +1482,7 @@ inline FacadeAnalysis analyzeOrthophoto(const Orthophoto& o, double texel, const
         const int confirmed = fa.cellsAccepted + fa.stripsConfirmed;
         if (tested > 0) {
             fa.latticeConfirmation = static_cast<double>(confirmed) / tested;
-            if (fa.latticeConfirmation < p.minLatticeConfirmation && !fa.features.empty()) {
+            if ((fa.latticeConfirmation < p.minLatticeConfirmation || confirmed < p.minLatticeSites) && !fa.features.empty()) {
                 fa.latticeRejected = true;
                 fa.latticeFeaturesDropped = static_cast<int>(fa.features.size());
                 rejectedLattice.swap(fa.features);
@@ -1355,6 +1571,7 @@ inline FacadeAnalysis analyzeOrthophoto(const Orthophoto& o, double texel, const
             fa.lines.push_back(L);
         }
     }
+    for (const auto& f : fa.features) if (f.lattice != 0 && f.height <= -(p.recessMax - 1e-9)) ++fa.cellsAtMaxDepth;
     return fa;
 }
 
@@ -1615,6 +1832,10 @@ private:
             cand.push_back(static_cast<uint32_t>(t));
         }
         result_.candidateTriangles = cand.size();
+        if (!p_.facadePlanes.empty()) {
+            planeRegions(cand);
+            return;
+        }
         std::vector<uint8_t> isCand(T, 0);
         for (uint32_t t : cand) isCand[t] = 1;
         std::vector<uint32_t> bySize = cand;
@@ -1733,6 +1954,15 @@ private:
             regionOf_[t] = rid;
             regions_[static_cast<size_t>(rid)].tris.push_back(t);
         }
+        finishRegions();
+        markInteriorSeams(cand);
+    }
+
+    std::vector<P3> regionPlaneN_;      // per region: the caller's plane normal (plane regions only)
+    std::vector<int> regionPlaneIndex_; // per region: index into facadePlanes (plane regions only)
+
+    /** Area, normal, centroid, in-plane axes and extent of every region. */
+    void finishRegions() {
         for (auto& R : regions_) {
             double area = 0;
             P3 nsum, csum;
@@ -1743,7 +1973,7 @@ private:
                 csum = csum + (wpos_[w[0]] + wpos_[w[1]] + wpos_[w[2]]) * (farea_[t] / 3.0);
             }
             R.area = area;
-            R.n = nsum.normalized();
+            R.n = static_cast<size_t>(R.id) < regionPlaneN_.size() ? regionPlaneN_[static_cast<size_t>(R.id)] : nsum.normalized();
             R.c = csum * (1.0 / area);
             R.centroid = R.c;
             P3 up(0, 1, 0);
@@ -1762,36 +1992,178 @@ private:
                 }
             }
         }
+    }
 
-        // 4. open edges that lie on another patch of the same region are interior seams
-        if (tol > 0) {
-            for (const auto& R : regions_) {
-                for (uint32_t t : R.tris) {
-                    const auto& w = wtri_[t];
-                    for (int k = 0; k < 3; ++k) {
-                        uint64_t ek = detail::edgeKey(w[k], w[(k + 1) % 3]);
-                        auto it = edgeTris_.find(ek);
-                        if (it == edgeTris_.end() || it->second.size() != 1) continue;
-                        const P3& a = wpos_[w[k]];
-                        const P3& b = wpos_[w[(k + 1) % 3]];
-                        bool interior = true;
-                        for (double f : {0.0, 0.5, 1.0}) {
-                            P3 q = a + (b - a) * f;
-                            bool hit = false;
-                            if (const auto* list = nearby(q)) {
-                                for (uint32_t u : *list) {
-                                    if (regionOf_[u] != R.id || patchOf_[u] == patchOf_[t]) continue;
-                                    if (distToTriangle(q, u) <= tol) { hit = true; break; }
-                                }
+    /** Open edges that lie on another patch of the same region are interior seams (displaced with their surface). */
+    void markInteriorSeams(const std::vector<uint32_t>& cand) {
+        const double tol = std::max(0.0, p_.seamTolerance);
+        if (!(tol > 0)) return;
+        const double cell = std::max(p_.seamGridCell, 4.0 * tol);
+        auto cellKey = [](int64_t i, int64_t j, int64_t k) {
+            return detail::mix64(static_cast<uint64_t>(i) * 0x100000001B3ull ^ detail::mix64(static_cast<uint64_t>(j) ^ detail::mix64(static_cast<uint64_t>(k))));
+        };
+        auto cellOf = [&](double x) { return static_cast<int64_t>(std::floor(x / cell)); };
+        std::unordered_map<uint64_t, std::vector<uint32_t>> grid;
+        for (uint32_t t : cand) {
+            if (regionOf_[t] < 0) continue;
+            const auto& w = wtri_[t];
+            P3 lo(1e300, 1e300, 1e300), hi(-1e300, -1e300, -1e300);
+            for (int k = 0; k < 3; ++k) {
+                const P3& q = wpos_[w[k]];
+                lo = P3(std::min(lo.x, q.x), std::min(lo.y, q.y), std::min(lo.z, q.z));
+                hi = P3(std::max(hi.x, q.x), std::max(hi.y, q.y), std::max(hi.z, q.z));
+            }
+            for (int64_t i = cellOf(lo.x - tol); i <= cellOf(hi.x + tol); ++i)
+                for (int64_t j = cellOf(lo.y - tol); j <= cellOf(hi.y + tol); ++j)
+                    for (int64_t k = cellOf(lo.z - tol); k <= cellOf(hi.z + tol); ++k) grid[cellKey(i, j, k)].push_back(t);
+        }
+        auto nearby = [&](const P3& q) -> const std::vector<uint32_t>* {
+            auto it = grid.find(cellKey(cellOf(q.x), cellOf(q.y), cellOf(q.z)));
+            return it == grid.end() ? nullptr : &it->second;
+        };
+        for (const auto& R : regions_) {
+            for (uint32_t t : R.tris) {
+                const auto& w = wtri_[t];
+                for (int k = 0; k < 3; ++k) {
+                    uint64_t ek = detail::edgeKey(w[k], w[(k + 1) % 3]);
+                    auto it = edgeTris_.find(ek);
+                    if (it == edgeTris_.end() || it->second.size() != 1) continue;
+                    const P3& a = wpos_[w[k]];
+                    const P3& b = wpos_[w[(k + 1) % 3]];
+                    bool interior = true;
+                    for (double f : {0.0, 0.5, 1.0}) {
+                        P3 q = a + (b - a) * f;
+                        bool hit = false;
+                        if (const auto* list = nearby(q)) {
+                            for (uint32_t u : *list) {
+                                if (regionOf_[u] != R.id || patchOf_[u] == patchOf_[t]) continue;
+                                if (distToTriangle(q, u) <= tol) { hit = true; break; }
                             }
-                            if (!hit) { interior = false; break; }
                         }
-                        if (interior) internalSeam_.emplace(ek, 1);
+                        if (!hit) { interior = false; break; }
                     }
+                    if (interior) internalSeam_.emplace(ek, 1);
                 }
             }
         }
         result_.internalSeamEdges = internalSeam_.size();
+    }
+
+    /**
+     * Regions from the caller's facade planes (ReliefParams::facadePlanes): a candidate joins the plane it lies on (the
+     * nearest when several qualify); a plane's members joined over welded edges form its patches (chunk pieces), and a
+     * plane with enough area is a region.
+     */
+    void planeRegions(const std::vector<uint32_t>& cand) {
+        const size_t T = wtri_.size();
+        const auto& FP = p_.facadePlanes;
+        const double cosA = std::cos(p_.facadePlaneAngleDeg * 3.14159265358979323846 / 180.0);
+        std::vector<int32_t> planeOf(T, -1);
+        for (uint32_t t : cand) {
+            const auto& w = wtri_[t];
+            const P3 c = (wpos_[w[0]] + wpos_[w[1]] + wpos_[w[2]]) * (1.0 / 3.0);
+            int best = -1;
+            double bestOff = 1e300;
+            for (size_t k = 0; k < FP.size(); ++k) {
+                const auto& pl = FP[k];
+                if (fnorm_[t].dot(pl.n) < cosA) continue;
+                double off = 0;
+                bool on = true;
+                for (int m = 0; m < 3 && on; ++m) {
+                    const double e = std::abs(pl.n.dot(wpos_[w[m]]) - pl.d);
+                    on = e <= p_.facadePlaneOffset;
+                    off += e;
+                }
+                if (!on) continue;
+                const P3 t2 = pl.n.cross(pl.t1);
+                const double a1 = pl.t1.dot(c), a2 = t2.dot(c);
+                if (a1 < pl.lo1 - p_.facadePlaneMargin || a1 > pl.hi1 + p_.facadePlaneMargin || a2 < pl.lo2 - p_.facadePlaneMargin || a2 > pl.hi2 + p_.facadePlaneMargin) continue;
+                if (off < bestOff) { bestOff = off; best = static_cast<int>(k); }
+            }
+            planeOf[t] = best;
+        }
+        UnionFind uf(T);
+        for (uint32_t t : cand) {
+            if (planeOf[t] < 0) continue;
+            const auto& w = wtri_[t];
+            for (int k = 0; k < 3; ++k) {
+                auto it = edgeTris_.find(detail::edgeKey(w[k], w[(k + 1) % 3]));
+                if (it == edgeTris_.end()) continue;
+                for (uint32_t u : it->second) if (u != t && planeOf[u] == planeOf[t]) uf.unite(static_cast<int>(t), static_cast<int>(u));
+            }
+        }
+        size_t patches = 0;
+        for (uint32_t t : cand) {
+            if (planeOf[t] < 0) continue;
+            patchOf_[t] = uf.find(static_cast<int>(t));
+            if (patchOf_[t] == static_cast<int>(t)) ++patches;
+        }
+        result_.regionsFound = patches;
+        // sections: cells of facadeSectionGap on each plane covered by its members' footprints, joined with their 8
+        // neighbours; a triangle belongs to the section of the cells it covers
+        const double gap = std::max(0.25, p_.facadeSectionGap);
+        auto key = [](int k, int64_t i, int64_t j) {
+            return (static_cast<uint64_t>(k) << 48) ^ (static_cast<uint64_t>(i + (int64_t{1} << 23)) << 24) ^ static_cast<uint64_t>(j + (int64_t{1} << 23));
+        };
+        std::unordered_map<uint64_t, int> cellId;
+        std::vector<std::array<int64_t, 4>> triCells(T);  // i0, i1, j0, j1
+        for (uint32_t t : cand) {
+            const int k = planeOf[t];
+            if (k < 0) continue;
+            const auto& pl = FP[static_cast<size_t>(k)];
+            const P3 t2 = pl.n.cross(pl.t1);
+            double a0 = 1e300, a1 = -1e300, b0 = 1e300, b1 = -1e300;
+            for (int m = 0; m < 3; ++m) {
+                const P3& q = wpos_[wtri_[t][m]];
+                a0 = std::min(a0, pl.t1.dot(q)); a1 = std::max(a1, pl.t1.dot(q));
+                b0 = std::min(b0, t2.dot(q)); b1 = std::max(b1, t2.dot(q));
+            }
+            triCells[t] = {static_cast<int64_t>(std::floor(a0 / gap)), static_cast<int64_t>(std::floor(a1 / gap)),
+                           static_cast<int64_t>(std::floor(b0 / gap)), static_cast<int64_t>(std::floor(b1 / gap))};
+            for (int64_t i = triCells[t][0]; i <= triCells[t][1]; ++i)
+                for (int64_t j = triCells[t][2]; j <= triCells[t][3]; ++j) cellId.emplace(key(k, i, j), static_cast<int>(cellId.size()));
+        }
+        UnionFind cu(cellId.size());
+        for (const auto& kv : cellId) {
+            const int k = static_cast<int>(kv.first >> 48);
+            const int64_t i = static_cast<int64_t>((kv.first >> 24) & 0xffffff) - (int64_t{1} << 23);
+            const int64_t j = static_cast<int64_t>(kv.first & 0xffffff) - (int64_t{1} << 23);
+            for (int64_t di = -1; di <= 1; ++di)
+                for (int64_t dj = -1; dj <= 1; ++dj) {
+                    auto it = cellId.find(key(k, i + di, j + dj));
+                    if (it != cellId.end()) cu.unite(kv.second, it->second);
+                }
+        }
+        std::vector<int> sectionOf(T, -1);
+        std::unordered_map<int, double> sectionArea;
+        std::unordered_map<int, int> sectionPlane;
+        for (uint32_t t : cand) {
+            const int k = planeOf[t];
+            if (k < 0) continue;
+            const int sec = cu.find(cellId.at(key(k, triCells[t][0], triCells[t][2])));
+            sectionOf[t] = sec;
+            sectionArea[sec] += farea_[t];
+            sectionPlane[sec] = k;
+        }
+        std::unordered_map<int, int> regionOfSection;
+        for (uint32_t t : cand) {
+            const int sec = sectionOf[t];
+            if (sec < 0 || sectionArea[sec] < p_.minRegionArea) continue;
+            auto it = regionOfSection.find(sec);
+            if (it == regionOfSection.end()) {
+                it = regionOfSection.emplace(sec, static_cast<int>(regions_.size())).first;
+                Region R;
+                R.id = static_cast<int>(regions_.size());
+                regions_.push_back(std::move(R));
+                const int k = sectionPlane[sec];
+                regionPlaneN_.push_back(FP[static_cast<size_t>(k)].n);
+                regionPlaneIndex_.push_back(k);
+            }
+            regionOf_[t] = it->second;
+            regions_[static_cast<size_t>(it->second)].tris.push_back(t);
+        }
+        finishRegions();
+        markInteriorSeams(cand);
     }
 
     // ----------------------------------------------------------------------------------------
@@ -2003,6 +2375,7 @@ private:
             rep.area = R.area;
             rep.centroid = R.centroid;
             rep.normal = R.n;
+            rep.planeIndex = static_cast<size_t>(R.id) < regionPlaneIndex_.size() ? regionPlaneIndex_[static_cast<size_t>(R.id)] : -1;
             rep.axisS = R.u;
             rep.axisT = R.v;
             rep.sMin = R.sMin; rep.sMax = R.sMax; rep.tMin = R.tMin; rep.tMax = R.tMax;
@@ -2021,7 +2394,9 @@ private:
             size_t covered = 0;
             for (uint8_t c : o.cov) covered += c;
             rep.coverage = o.cov.empty() ? 0.0 : static_cast<double>(covered) / o.cov.size();
+            const auto a0 = Clock::now();
             rep.analysis = analyzeOrthophoto(o, rep.texel, p_, innerThreads);
+            rep.analysisMs = std::chrono::duration<double, std::milli>(Clock::now() - a0).count();
             analysed[oi] = 1;
             R.features = rep.analysis.features;
             if (R.features.empty()) rep.skipReason = rep.analysis.latticeRejected ? "lattice not confirmed" : "no photometric relief evidence";
@@ -2047,6 +2422,12 @@ private:
             if (an.latticeRejected) ++result_.latticesRejected;
             result_.latticeFeaturesDropped += static_cast<size_t>(an.latticeFeaturesDropped);
             result_.proudClampedDropped += static_cast<size_t>(an.proudClampedDropped);
+            if (!an.features.empty()) {
+                result_.observedCells += static_cast<size_t>(an.observedCells);
+                result_.inferredCells += static_cast<size_t>(an.inferredCells);
+                result_.inferredContradicted += static_cast<size_t>(an.inferredContradicted);
+                result_.cellsAtMaxDepth += static_cast<size_t>(an.cellsAtMaxDepth);
+            }
             if (analysed[oi] && !debugDir_.empty() && debugWritten < debugMax_) {
                 writeDebug(reps[oi], keep[oi]);
                 ++debugWritten;
@@ -2074,26 +2455,32 @@ private:
         }
     }
 
-    double heightAt(const Region& R, double s, double t) const {
+    /** The relief height at (s, t); `lattice` receives the lattice label of the feature that sets it (0 = none). */
+    double heightAt(const Region& R, double s, double t, uint8_t* lattice = nullptr) const {
         int i = std::clamp(static_cast<int>(std::floor((s - R.bs0) / R.cell)), 0, R.bw - 1);
         int j = std::clamp(static_cast<int>(std::floor((t - R.bt0) / R.cell)), 0, R.bh - 1);
         const double tol = 2e-6;  // cut lines are snapped to canonical values within 1e-6
         double recess = 0, proud = 0;
+        uint8_t recessLattice = 0, proudLattice = 0;
         for (uint32_t k : R.buckets[static_cast<size_t>(j) * R.bw + i]) {
             const auto& f = R.features[k];
             if (s < f.si0 - tol || s > f.si1 + tol || t < f.ti0 - tol || t > f.ti1 + tol) continue;
-            if (f.height < 0) recess = std::min(recess, f.height);
-            else proud = std::max(proud, f.height);
+            if (f.height < 0) { if (f.height < recess) { recess = f.height; recessLattice = f.lattice; } }
+            else if (f.height > proud) { proud = f.height; proudLattice = f.lattice; }
         }
         double h = recess < 0 ? recess : proud;
+        if (lattice) *lattice = recess < 0 ? recessLattice : (proud > 0 ? proudLattice : 0);
         return std::clamp(h, -p_.maxDepth, p_.maxDepth);
     }
 
-    uint32_t newPosition(const P3& base, const Region* R, double h) {
+    std::vector<float> latticeCell_;  // per output position: _LATTICE_CELL
+
+    uint32_t newPosition(const P3& base, const Region* R, double h, uint8_t lattice = 0) {
         uint32_t id = static_cast<uint32_t>(result_.mesh.positions.size());
         result_.mesh.positions.push_back(R ? base + R->n * h : base);
         result_.mesh.heights.push_back(static_cast<float>(h));
         result_.mesh.positionRegion.push_back(R && h != 0 ? R->id : -1);
+        latticeCell_.push_back(h != 0 ? static_cast<float>(lattice) : 0.0f);
         return id;
     }
 
@@ -2104,12 +2491,13 @@ private:
         auto it = keys_.find(k);
         if (it != keys_.end()) return it->second;
         double h = 0;
+        uint8_t lattice = 0;
         if (R && !boundaryVertex_[w]) {
             double s, t;
             R->project(wpos_[w], s, t);
-            h = heightAt(*R, s, t);
+            h = heightAt(*R, s, t, &lattice);
         }
-        uint32_t id = newPosition(wpos_[w], R, h);
+        uint32_t id = newPosition(wpos_[w], R, h, lattice);
         keys_.emplace(k, id);
         return id;
     }
@@ -2133,8 +2521,9 @@ private:
         auto it = keys_.find(k);
         if (it != keys_.end()) return it->second;
         uint64_t ek = detail::edgeKey(a, b);
-        double h = isBoundaryEdge(R, ek) ? 0.0 : heightAt(R, s, t);
-        uint32_t id = newPosition(base, &R, h);
+        uint8_t lattice = 0;
+        double h = isBoundaryEdge(R, ek) ? 0.0 : heightAt(R, s, t, &lattice);
+        uint32_t id = newPosition(base, &R, h, lattice);
         keys_.emplace(k, id);
         edgeInserts_[ek].push_back({lam, id});
         return id;
@@ -2148,7 +2537,9 @@ private:
         k.y = detail::bitsOf(t);
         auto it = keys_.find(k);
         if (it != keys_.end()) return it->second;
-        uint32_t id = newPosition(base, &R, heightAt(R, s, t));
+        uint8_t lattice = 0;
+        const double h = heightAt(R, s, t, &lattice);
+        uint32_t id = newPosition(base, &R, h, lattice);
         keys_.emplace(k, id);
         return id;
     }
@@ -2702,6 +3093,8 @@ private:
 
     void summarize() {
         auto& m = result_.mesh;
+        if (latticeCell_.size() == m.positions.size())
+            m.attributes.push_back({"_LATTICE_CELL", "on relief-displaced vertices: 1 = photo-observed recess (lattice cell or strip), 2 = periodic-inferred lattice cell, 0 = other relief", std::move(latticeCell_)});
         double rs = 0, ps = 0;
         result_.minHeight = 0;
         result_.maxHeight = 0;
@@ -3078,7 +3471,9 @@ inline std::string PhotometricRelief::statsJson(const ReliefResult& r, const Rel
     s << "  \"relief\": {\"minHeight\": " << fmt(r.minHeight) << ", \"maxHeight\": " << fmt(r.maxHeight) << ", \"meanRecess\": " << fmt(r.meanRecess)
       << ", \"meanProud\": " << fmt(r.meanProud) << ", \"recessedVertices\": " << r.recessedVertices << ", \"proudVertices\": " << r.proudVertices
       << ", \"recessArea\": " << fmt(r.recessArea) << ", \"proudArea\": " << fmt(r.proudArea) << ", \"provenance\": \"inferred\""
-      << ", \"latticesRejected\": " << r.latticesRejected << ", \"latticeFeaturesDropped\": " << r.latticeFeaturesDropped << ", \"proudClampedDropped\": " << r.proudClampedDropped << "},\n";
+      << ", \"latticesRejected\": " << r.latticesRejected << ", \"latticeFeaturesDropped\": " << r.latticeFeaturesDropped << ", \"proudClampedDropped\": " << r.proudClampedDropped
+      << ", \"observedCells\": " << r.observedCells << ", \"inferredCells\": " << r.inferredCells << ", \"inferredContradicted\": " << r.inferredContradicted
+      << ", \"cellsAtMaxDepth\": " << r.cellsAtMaxDepth << ", \"recessDepthSource\": \"photo-contrast\"},\n";
     s << "  \"timingsMs\": {";
     for (size_t i = 0; i < r.timingsMs.size(); ++i) s << (i ? ", " : "") << "\"" << r.timingsMs[i].first << "\": " << fmt(r.timingsMs[i].second);
     s << "},\n  \"facades\": [";
@@ -3108,6 +3503,10 @@ inline std::string PhotometricRelief::statsJson(const ReliefResult& r, const Rel
           << ", \"stripsTested\": " << a.stripsTested << ", \"stripRuns\": " << a.stripRuns << ", \"stripsConfirmed\": " << a.stripsConfirmed
           << ", \"latticeConfirmation\": " << fmt(a.latticeConfirmation) << ", \"latticeRejected\": " << (a.latticeRejected ? "true" : "false")
           << ", \"latticeFeaturesDropped\": " << a.latticeFeaturesDropped << ", \"proudClampedDropped\": " << a.proudClampedDropped
+          << ", \"planeIndex\": " << f.planeIndex << ", \"lattice\": {\"rows\": " << a.latticeRows << ", \"cols\": " << a.latticeCols << ", \"rowPitch\": " << fmt(a.rowPitch)
+          << ", \"observedCells\": " << a.observedCells << ", \"inferredCells\": " << a.inferredCells << ", \"inferredContradicted\": " << a.inferredContradicted
+          << ", \"rowResidualRms\": " << fmt(a.rowResidualRms) << ", \"rowResidualMax\": " << fmt(a.rowResidualMax) << ", \"offGridCells\": " << a.offGridCells << ", \"filled\": " << (a.latticeFilled ? "true" : "false")
+          << ", \"cellsAtMaxDepth\": " << a.cellsAtMaxDepth << "}"
           << ", \"sLines\": " << f.sLines << ", \"tLines\": " << f.tLines
           << ", \"minHeight\": " << fmt(f.minHeight) << ", \"maxHeight\": " << fmt(f.maxHeight) << ", \"recessArea\": " << fmt(f.recessArea) << ", \"proudArea\": " << fmt(f.proudArea);
         size_t nRecess = 0, nProud = 0;
