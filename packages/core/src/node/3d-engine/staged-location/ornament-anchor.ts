@@ -81,22 +81,34 @@ export function anchorElements(
             const carrier = along.carrier;
             const t0Slot = 'slot' in carrier ? carrier.slot : undefined;
             const run = pickRun(here, along.count);
-            if (run) {
+            // The located run is the survey model's own box cast through the nominal pano pose: its place is good to run.locationUncertaintyM.
+            // Only a run that is trustworthy to the photo-correction tolerance may overwrite a pitch; a looser one is a cross-check only, and the
+            // reading is then held against the fitted edge's length (measured), below.
+            const usable = run && run.locationUncertaintyM <= toleranceM;
+            if (run && usable) {
                 let a = run.runAlongM![0], b = run.runAlongM![1];
-                if (b - a >= 0.9 * L) { a = 0; b = L; }
+                let extended = '';
+                if (b - a >= 0.9 * L && b - a < L - 1e-4) { extended = `; the located run (${r3(b - a)} m) was ≥ 90% of the ${r3(L)} m edge and was taken as the whole edge`; a = 0; b = L; }
                 const runLen = b - a;
                 const error = Math.abs(along.count * along.pitchM - runLen);
+                const src = `run from ${run.placeSource}, good to ±${run.locationUncertaintyM} m`;
                 if (error <= toleranceM) {
                     const before = `${along.count} × ${mm(along.pitchM)} = ${r3(along.count * along.pitchM)} m`;
                     along.pitchM = r3(runLen / along.count);
                     along.startOffsetM = 0;
                     if (t0Slot) t0Slot.t0 = r3(a / L);
-                    if (error > 1e-4) note(x, { kind: 'run-snapped', errorM: r3(error), before, after: `${along.count} × ${mm(along.pitchM)} = ${r3(runLen)} m, from ${a.toFixed(2)} m`, note: `count × pitch was ${r3(error)} m off the ${r3(runLen)} m run the survey located on the fitted edge; snapped (within ${toleranceM} m)` });
+                    if (error > 1e-4 || extended) note(x, { kind: 'run-snapped', errorM: r3(error + run.locationUncertaintyM), before, after: `${along.count} × ${mm(along.pitchM)} = ${r3(runLen)} m, from ${a.toFixed(2)} m`, note: `count × pitch was ${r3(error)} m off the ${r3(runLen)} m ${src}; snapped (within ${toleranceM} m); the error carried includes the ±${run.locationUncertaintyM} m of the run's own place${extended}` });
                 } else {
-                    problem(x, `anchor: ${along.count} repeats × ${mm(along.pitchM)} = ${r3(along.count * along.pitchM)} m, but the run located on ${slot.id} from the survey spans ${r3(runLen)} m (${r3(error)} m apart, more than ${toleranceM} m): recount the repeats or re-measure the pitch so count × pitch matches that run`);
+                    problem(x, `anchor: the crop was read as ${along.count} repeats × ${mm(along.pitchM)} = ${r3(along.count * along.pitchM)} m, while the ${src} spans ${r3(runLen)} m on ${slot.id}, ${r3(error)} m apart (more than ${toleranceM} m). Look at the image again and re-read the repeat count and the pitch as they appear; do not adjust them to match the span, which is only approximate`);
                 }
             } else {
-                // no located run: the repeat must still fit the fitted edge
+                // no trustworthy located run (none, or one placed more loosely than the tolerance): the repeat must still fit the fitted edge, which is measured
+                if (run) {
+                    // a cross-check only: it can raise the discrepancy for a re-read, it never changes a number
+                    const runLen = run.runAlongM![1] - run.runAlongM![0];
+                    const gap = Math.abs(along.count * along.pitchM - runLen);
+                    if (gap > toleranceM + run.locationUncertaintyM) problem(x, `anchor: the crop was read as ${along.count} repeats × ${mm(along.pitchM)} = ${r3(along.count * along.pitchM)} m, while the survey's box puts the run at about ${r3(runLen)} m (±${run.locationUncertaintyM} m, from ${run.placeSource}), ${r3(gap)} m apart. Look at the image again and re-read the repeat count and the pitch as they appear; do not adjust them to match that span, which is only approximate`);
+                }
                 const start = (t0Slot?.t0 ?? 0) * L + along.startOffsetM;
                 const end = start + (along.count - 1) * along.pitchM;
                 if (end > L + 1e-4) {

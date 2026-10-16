@@ -228,13 +228,13 @@ export function slotForCast(cast: BoxCast, fit: Pick<StructureFit, 'slots' | 'su
             if (!e.surfaceIds.includes(cast.faceId)) continue;
             const surface = surfaces.get(cast.faceId);
             if (!surface) continue;
-            // an edge slot is a band along a crease: its overlap is how close the crease runs to the element's centre, in the element's own height
+            // an edge slot is a band along a crease: its overlap is how close the crease runs to the element's centre, in the element's own height, on the same 0-1 scale as a surface slot's area fraction (1 = the crease runs through the centre), so an element sitting on a crease takes the edge slot and one clear of it takes the surface
             const pts = e.carrier.points;
             let dMin = Infinity;
             for (let i = 0; i < pts.length - 1; i++) dMin = Math.min(dMin, distToSegment(cast.centre, pts[i] as Vec3, pts[i + 1] as Vec3));
             const reach = Math.max(0.6, 0.5 * (r.v1 - r.v0) + 0.5);
             if (dMin <= reach) {
-                const overlap = Math.max(0.01, 1 - dMin / reach) * 0.5;
+                const overlap = Math.max(0.01, 1 - dMin / reach);
                 if (!best || overlap > best.overlap) best = { slotId: slot.id, overlap };
             }
         }

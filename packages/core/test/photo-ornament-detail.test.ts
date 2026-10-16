@@ -84,7 +84,9 @@ describe('locating the survey\'s elements by geometry', () => {
         expect(medallion.headingDeg).toBeGreaterThan(180); expect(medallion.headingDeg).toBeLessThan(200); // west of the centre line, which is to the right when looking south
         expect(planDetailViews(plan.located, survey(), 1).length).toBe(1);
         expect(planDetailViews(plan.located, survey(), 0)).toEqual([]);
-        expect(surveyHintLines(plan.located, fit.slots).join('\n')).toMatch(/S02: the survey saw "dentil course".*18 repeats/);
+        expect(surveyHintLines(plan.located, fit.slots).join('\n')).toMatch(/S02: the survey saw "dentil course".*count it from the crop yourself.*good to about \d/);
+        // the survey's own count and pitch are not passed on as a prior for the second reading
+        expect(surveyHintLines(plan.located, fit.slots).join('\n')).not.toMatch(/18 repeats|mm per cell/);
         expect(ornamentPromptText(fit, [], plan.located).tables).toMatch(/Survey: a first look at the whole structure/);
         expect(ornamentPromptText(fit, [], []).tables).not.toMatch(/Survey:/);
     });
@@ -100,14 +102,17 @@ const expand = (els: CompactElement[]) => expandElements(els, fit, [svRef()], 't
 
 describe('anchoring the measurements to the scan', () => {
     const located = () => locateSurveyElements(survey(), fit).located;
+    /** The same located elements as if the pano pose had been registered (a place good to 0.1 m): only then may a run overwrite a pitch. */
+    const registered = () => located().map(l => ({ ...l, locationUncertaintyM: 0.1 }));
 
     it('snaps count x pitch to the located run inside the 0.31 m tolerance and labels the element photo-corrected, with the error it carried', () => {
         // 18 dentils at 0.37 m = 6.66 m against a 6.48 m run: 0.18 m apart
         const x = expand([compact({ slot: 'S02', op: { replicate: { seed: { sweep: { t: [0, 14], profile: [0, 0, 250, 0, 250, 100, 0, 100] } }, along: [0, 370, 18] } } })]);
-        const r = anchorElements(x, fit, located());
+        const r = anchorElements(x, fit, registered());
         expect(r.problems.size).toBe(0);
         expect(r.notes).toEqual([expect.objectContaining({ kind: 'run-snapped', slotId: 'S02', toleranceM: PHOTO_CORRECTION_TOLERANCE_M })]);
-        expect(r.notes[0].errorM).toBeGreaterThan(0.05); expect(r.notes[0].errorM).toBeLessThan(0.3); // 6.66 m against the 6.5 m run the box casts to
+        expect(r.notes[0].errorM).toBeGreaterThan(0.05); expect(r.notes[0].errorM).toBeLessThan(0.45); // 6.66 m against the 6.5 m run the box casts to, plus the run's own 0.1 m
+        expect(r.notes[0].note).toMatch(/survey model's bounding box cast through the nominal \(unregistered\) pano pose, good to ±0\.1 m/);
         const spec = x[0].element.spec as any;
         expect(spec.replicate.domain.along.count).toBe(18);
         expect(spec.replicate.domain.along.pitchM).toBeCloseTo(6.48 / 18, 1);
@@ -120,10 +125,26 @@ describe('anchoring the measurements to the scan', () => {
     it('outside the tolerance nothing is snapped: the problem goes back with the numbers', () => {
         const x = expand([compact({ slot: 'S02', op: { replicate: { seed: { sweep: { t: [0, 14], profile: [0, 0, 250, 0, 250, 100, 0, 100] } }, along: [0, 700, 18] } } })]);
         const before = JSON.stringify(x[0].element.spec);
-        const r = anchorElements(x, fit, located());
+        const r = anchorElements(x, fit, registered());
         expect(JSON.stringify(x[0].element.spec)).toBe(before);
         expect(r.notes).toEqual([]);
-        expect(r.problems.get(0)![0]).toMatch(/anchor: 18 repeats × 700 mm = 12\.6 m, but the run located on S02 from the survey spans 6\.\d+ m/);
+        expect(r.problems.get(0)![0]).toMatch(/anchor: the crop was read as 18 repeats × 700 mm = 12\.6 m, while the run from the survey model's bounding box.* spans 6\.\d+ m/);
+        // the revision asks for a re-read of the image, never for a match to the span
+        expect(r.problems.get(0)![0]).toMatch(/re-read the repeat count and the pitch as they appear; do not adjust them to match the span/);
+    });
+
+    it('a run placed only by the nominal pano pose (good to metres) never overwrites the photo-read pitch, and a gross gap goes back as a re-read', () => {
+        const near = expand([compact({ slot: 'S02', op: { replicate: { seed: { sweep: { t: [0, 14], profile: [0, 0, 250, 0, 250, 100, 0, 100] } }, along: [0, 370, 18] } } })]);
+        const loose = located();
+        expect(loose.every(l => l.locationUncertaintyM > PHOTO_CORRECTION_TOLERANCE_M)).toBe(true);
+        const r = anchorElements(near, fit, loose);
+        expect(r.problems.size).toBe(0);
+        expect((near[0].element.spec as any).replicate.domain.along.pitchM).toBeCloseTo(0.37, 3); // untouched: 18 x 0.37 = 6.66 m is within the run's own uncertainty
+        expect(r.notes.filter(n => n.kind === 'run-snapped')).toEqual([]);
+        const gross = expand([compact({ slot: 'S02', op: { replicate: { seed: { sweep: { t: [0, 14], profile: [0, 0, 250, 0, 250, 100, 0, 100] } }, along: [0, 700, 18] } } })]);
+        const g = anchorElements(gross, fit, loose);
+        expect(g.problems.get(0)![0]).toMatch(/±\d+(\.\d+)? m, from the survey model's bounding box/);
+        expect(g.problems.get(0)![0]).toMatch(/do not adjust them to match that span/);
     });
 
     it('a row that runs past the fitted edge is shortened to what fits when no run was located, and says so', () => {

@@ -162,6 +162,28 @@ describe('the crops, the one reading and the constrained build', () => {
         for (const s of f.scale) { expect(s).toBeGreaterThanOrEqual(FIGURE_SCALE_LIMITS[0]); expect(s).toBeLessThanOrEqual(FIGURE_SCALE_LIMITS[1]); }
     });
 
+    it('is a rotation, not a reflection: winding is kept and a nub on the figure\'s right stays on the viewer\'s right', () => {
+        // a closed tetrahedron whose apex nub sits at local +x
+        const positions = Float32Array.from([-1, 0, -1, -1, 0, 1, -1, 2, 0, 1, 0.5, 0]);
+        const indices = Uint32Array.from([0, 2, 1, 0, 1, 3, 1, 2, 3, 2, 0, 3]);
+        const volume = (p: ArrayLike<number>, ix: Uint32Array): number => {
+            let v = 0;
+            for (let t = 0; t < ix.length; t += 3) {
+                const a = ix[t] * 3, b = ix[t + 1] * 3, c = ix[t + 2] * 3;
+                v += p[a] * (p[b + 1] * p[c + 2] - p[b + 2] * p[c + 1]) - p[a + 1] * (p[b] * p[c + 2] - p[b + 2] * p[c]) + p[a + 2] * (p[b] * p[c + 1] - p[b + 1] * p[c]);
+            }
+            return v / 6;
+        };
+        const b: FigureBlob = { ...blob(), axisDeg: 0, alongM: 1, acrossM: 1.5, heightM: 2, centre: [10, 1, 10], min: [9.25, 0, 9.5], max: [10.75, 2, 10.5] };
+        const eye: [number, number, number] = [10, 1, 30]; // south of the figure, looking north (-z): the viewer's right is world +x
+        const f = constrainFigure({ positions, indices }, b, eye);
+        const before = volume(positions, indices), after = volume(f.positions, f.indices);
+        expect(Math.abs(before)).toBeGreaterThan(0.1);
+        expect(Math.sign(after)).toBe(Math.sign(before));
+        // the nub (vertex 3) lies to the viewer's right of the figure's centre, which is world +x here
+        expect(f.positions[9] - b.centre[0]).toBeGreaterThan(0.1);
+    });
+
     it('rejects a spec that disagrees with the scan by more than a factor of two', () => {
         const b = { ...blob(), heightM: 7.0, min: [-4.5, 1.4, -7.9] as [number, number, number], max: [-3.5, 8.4, -7.1] as [number, number, number] };
         expect(() => constrainFigure(parseGlbNodes(figureGlb())[0], b, [-4, 2.5, -33])).toThrow(/spec disagrees with the scan/);

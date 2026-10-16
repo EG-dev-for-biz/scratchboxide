@@ -115,6 +115,30 @@ describe('the camera model and box casting', () => {
     });
 });
 
+describe('the cost words keep fetched images apart from images sent to the model', () => {
+    it('a stage that only sent images already fetched reports 0 fetched and the number sent', async () => {
+        const { costWords } = await import('../src/browser/generative-canvas/primitives/scene3d/stagedBuild/StagedBuildOverlay');
+        expect(costWords({ images: 0, imagesSent: 10, visionCalls: 1, seconds: 3 })).toBe('10 sent to the model · 1 vision call');
+        expect(costWords({ images: 3, visionCalls: 1, seconds: 3 })).toBe('3 images fetched · 1 vision call');
+    });
+});
+
+describe('edge versus surface slot for an element on a crease', () => {
+    it('a band centred on a crease takes the edge slot; one clear below it keeps the surface slot', () => {
+        const surface = { id: 'w', kind: 'plane' } as any;
+        const fit = {
+            surfaces: [surface],
+            slots: [
+                { id: 'S_wall', host: { surface: { surfaceId: 'w', regionUv: [[0, 0], [20, 0], [20, 10], [0, 10]] } } },
+                { id: 'S_edge', host: { edge: { surfaceIds: ['w'], carrier: { points: [[0, 10, 0], [20, 10, 0]], lengthM: 20 } } } }
+            ]
+        } as any;
+        const cast = (v0: number, v1: number) => ({ faceId: 'w', centre: [10, (v0 + v1) / 2, 0], regionUv: { u0: 4, u1: 16, v0, v1 } }) as any;
+        expect(slotForCast(cast(9.75, 10.25), fit)?.slotId).toBe('S_edge');
+        expect(slotForCast(cast(8.5, 9), fit)?.slotId).toBe('S_wall');
+    });
+});
+
 describe('the image limit and the retries', () => {
     const view = (panoId: string): SelectedView => ({ panoId, eye: [0, 2.5, 0], facadeHeadingDeg: 0, headingDeg: 0, pitchDeg: 20, fovDeg: 60, aspectRatio: 'RATIO_4X3', distanceM: 30, score: 1 });
     const jpeg = bandJpeg([STONE]);

@@ -380,7 +380,7 @@ export function constrainFigure(built: { positions: Float32Array; indices?: Uint
     const chosen = options[0].distortion <= options[1].distortion ? options[0] : options[1];
     const front = chosen.dir[0] * toEye[0] + chosen.dir[1] * toEye[1] >= 0 ? 1 : -1;
     const frontDir: [number, number] = [chosen.dir[0] * front, chosen.dir[1] * front];
-    const rightDir: [number, number] = [-frontDir[1], frontDir[0]]; // the figure's +x in the world: its front turned a quarter clockwise seen from above
+    const rightDir: [number, number] = [frontDir[1], -frontDir[0]]; // the figure's +x in the world; with y up, (x,z) -> (right,front) has determinant +1, a rotation
     const scale = chosen.scale;
     for (const s of scale) if (s < FIGURE_SCALE_LIMITS[0] || s > FIGURE_SCALE_LIMITS[1]) {
         throw new Error(`the built figure differs from the scan's bounds by a factor of ${s.toFixed(2)} (allowed ${FIGURE_SCALE_LIMITS[0]}-${FIGURE_SCALE_LIMITS[1]}): the spec disagrees with the scan`);
@@ -394,7 +394,7 @@ export function constrainFigure(built: { positions: Float32Array; indices?: Uint
         out[i + 2] = blob.centre[2] + rightDir[1] * x + frontDir[1] * z;
     }
     const idx = built.indices ?? Uint32Array.from({ length: p.length / 3 }, (_, i) => i);
-    // a reflection (negative determinant) would flip the winding: x -> right, z -> front is a rotation, so none is needed
+    // a reflection (negative determinant) would flip the winding and mirror the figure: right = (front.z, -front.x) keeps the determinant +1, so none is needed
     let min: Vec3 = [Infinity, Infinity, Infinity], max: Vec3 = [-Infinity, -Infinity, -Infinity];
     for (let i = 0; i < out.length; i += 3) for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], out[i + k]); max[k] = Math.max(max[k], out[i + k]); }
     return { positions: out, indices: idx, scale: [Math.round(scale[0] * 1000) / 1000, Math.round(scale[1] * 1000) / 1000, Math.round(scale[2] * 1000) / 1000], yawDeg: Math.round(((Math.atan2(frontDir[0], -frontDir[1]) / DEG) + 360) % 360), fits: { min, max } };

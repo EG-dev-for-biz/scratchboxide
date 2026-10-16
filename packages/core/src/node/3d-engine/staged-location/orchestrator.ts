@@ -1649,7 +1649,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         return { value: { spec: reading.spec, supportTestRequired: reading.supportTestRequired, anchored: reading.anchored } };
                     }, { bypass: true });
                     run.state.visionModel = reading.spec.model;
-                    run.summary('vision').cost = { images: inputs.length, visionCalls: reading.spec.revision.passes + 1, seconds: round(reading.spec.model.ms / 1000, 1) };
+                    run.summary('vision').cost = { images: 0, imagesSent: inputs.length, visionCalls: reading.spec.revision.passes + 1, seconds: round(reading.spec.model.ms / 1000, 1) };
                     const degradations = reading.dropped.map(d => run.degrade(record('vision', d.reasonCode, {
                         part: { description: `photo-read element ${d.elementId} in slot ${d.slotId}`, slotId: d.slotId, elementId: d.elementId, buildingId: fit.buildingId },
                         intended: 'photo-inferred detail', fellTo: 'the flat fitted face', provenanceAfter: PROVENANCE.fitted, reason: d.problems.join('; '), transient: false, runId, now: now(), suffix: d.elementId

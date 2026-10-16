@@ -21,7 +21,7 @@
 import type { OrnamentSlot, StructureFit, SurveyedFace, SurveyElement, Vec2, Vec3 } from '../../../common/spatial/staged-location-contracts';
 import { MAX_STREET_VIEW_IMAGES_PER_BUILDING } from '../../../common/spatial/staged-location-contracts';
 import type { GroundingAspectRatio } from '../../spatial/StreetViewGroundingImageService';
-import { bearingDeg, type SelectedView } from './streetview-evidence';
+import { bearingDeg, NOMINAL_POSE_UNCERTAINTY, type SelectedView } from './streetview-evidence';
 import type { SurveyResult } from './face-survey';
 import { carrierArc, castBox, fitFaces, slotForCast, type BoxCast } from './survey-casting';
 import { pointInPolygon } from './ornament-vision';
@@ -59,6 +59,12 @@ export interface LocatedElement {
     material: string;
     weathering: string;
     confidence: number;
+    /** Metres from the pano to the cast point. */
+    distanceM: number;
+    /** Where the located place can be wrong by, metres: the nominal (unregistered) pano pose's position and heading error carried to the cast point. */
+    locationUncertaintyM: number;
+    /** Where the place came from, said plainly: the survey model's own box, cast through the nominal pano pose. */
+    placeSource: string;
 }
 
 export interface UnlocatedElement { faceId: string; kind: string; reason: string }
@@ -67,6 +73,14 @@ export interface DetailPlan {
     unlocated: UnlocatedElement[];
     /** The crops to fetch, narrow, aimed at the located groups; at most `max`. */
     views: SelectedView[];
+}
+
+export const LOCATED_PLACE_SOURCE = 'the survey model\'s bounding box cast through the nominal (unregistered) pano pose';
+
+/** The nominal pose's position and heading error carried to a point `distanceM` away, metres (the two add in quadrature). */
+export function poseUncertaintyAt(distanceM: number): number {
+    const a = distanceM * Math.tan(NOMINAL_POSE_UNCERTAINTY.degrees * Math.PI / 180);
+    return Math.round(Math.hypot(NOMINAL_POSE_UNCERTAINTY.meters, a) * 100) / 100;
 }
 
 /** Casts every surveyed element onto the fitted faces and finds its slot. */
@@ -101,7 +115,8 @@ export function locateSurveyElements(survey: Pick<SurveyResult, 'faces' | 'read'
                 id: `${face.faceId}.e${k}`, faceId: face.faceId, headingDeg: face.headingDeg, panoId: r.view.panoId, imageIndex: r.imageIndex, kind: el.kind, box: el.box,
                 slotId: slot.slotId, slotOverlap: Math.round(slot.overlap * 1000) / 1000, surfaceId: cast.faceId, regionUv: cast.regionUv, widthM: Math.round(widthM * 1000) / 1000, heightM: Math.round(heightM * 1000) / 1000,
                 centre: cast.centre, metresPerPx: Math.round(cast.metresPerPx * 10000) / 10000,
-                ...(repeat ? { repeat } : {}), ...(runAlongM ? { runAlongM } : {}), material: el.material, weathering: el.weathering, confidence: el.confidence
+                ...(repeat ? { repeat } : {}), ...(runAlongM ? { runAlongM } : {}), material: el.material, weathering: el.weathering, confidence: el.confidence,
+                distanceM: Math.round(cast.distanceM * 100) / 100, locationUncertaintyM: poseUncertaintyAt(cast.distanceM), placeSource: LOCATED_PLACE_SOURCE
             });
         });
     }
@@ -194,13 +209,14 @@ export function surveyHintLines(located: LocatedElement[], slots: OrnamentSlot[]
         const here = located.filter(l => l.slotId === slot.id);
         if (!here.length) continue;
         for (const l of here) {
-            const rep = l.repeat ? `, ${l.repeat.count} repeats (${l.repeat.axis}) about ${Math.round(l.repeat.pitchM * 1000)} mm per cell` : '';
+            // the survey's own repeat count and pitch are NOT passed on: the close crop is read afresh, so the two readings stay independent
+            const rep = l.repeat ? `, a repeating element (count it from the crop yourself)` : '';
             // a surface slot: where the element stands INSIDE the slot's own region (the element's box cut with the region's polygon), in the chart
             // axes the reply uses, with the point of most room: so nothing needs placing in a frame the model cannot see
             const inside = 'surface' in slot.host ? insideSlot(l, slot.host.surface.regionUv) : undefined;
             const run = l.runAlongM ? `, running ${l.runAlongM[0].toFixed(2)}-${l.runAlongM[1].toFixed(2)} m along the edge`
                 : `, ${l.widthM.toFixed(2)} × ${l.heightM.toFixed(2)} m on the face${inside ? `, inside the slot over u ${inside.u0.toFixed(2)}-${inside.u1.toFixed(2)} m, v ${inside.v0.toFixed(2)}-${inside.v1.toFixed(2)} m, with most room at u ${inside.cu.toFixed(2)} m, v ${inside.cv.toFixed(2)} m (about ${inside.roomM.toFixed(2)} m clear all round; the slot's own chart axes, the ones your reply uses)` : ''}`;
-            lines.push(`${slot.id}: the survey saw "${l.kind}" (${l.material}; ${l.weathering}; confidence ${l.confidence})${run}${rep}`);
+            lines.push(`${slot.id}: the survey saw "${l.kind}" (${l.material}; ${l.weathering}; confidence ${l.confidence})${run}${rep}; the place comes from ${l.placeSource} and is good to about ${l.locationUncertaintyM.toFixed(1)} m`);
         }
     }
     return lines;

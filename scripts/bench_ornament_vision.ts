@@ -108,7 +108,7 @@ async function main(): Promise<void> {
         const grounding = createStreetViewGroundingImageService(gemini);
         for (const v of views) {
             const shot = await grounding.retrieveGroundingImage({
-                panoId: v.panoId, headingDegree: v.headingDeg, pitchDegree: v.pitchDeg, fovDegree: v.fovDeg, aspectRatio: v.aspectRatio as never
+                panoId: v.panoId, headingDegree: v.headingDeg, pitchDegree: groundingPitchForElevation(v.pitchDeg), fovDegree: v.fovDeg, aspectRatio: v.aspectRatio as never
             });
             const size = readJpegSize(shot.image) ?? { width: 0, height: 0 };
             const ref: EvidenceImageRef = {

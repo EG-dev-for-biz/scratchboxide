@@ -58,8 +58,8 @@ export interface StagedBuildOverlayProps {
 }
 
 /** "4 images · 1 vision call". */
-export function costWords(c: { images: number; visionCalls: number; seconds: number }): string {
-    const parts = [c.images ? `${c.images} image${c.images === 1 ? '' : 's'}` : '', c.visionCalls ? `${c.visionCalls} vision call${c.visionCalls === 1 ? '' : 's'}` : ''].filter(Boolean);
+export function costWords(c: { images: number; visionCalls: number; seconds: number; imagesSent?: number }): string {
+    const parts = [c.images ? `${c.images} image${c.images === 1 ? '' : 's'} fetched` : '', c.imagesSent ? `${c.imagesSent} sent to the model` : '', c.visionCalls ? `${c.visionCalls} vision call${c.visionCalls === 1 ? '' : 's'}` : ''].filter(Boolean);
     return parts.join(' · ');
 }
 

@@ -1001,7 +1001,8 @@ export const STAGED_SUMMARY_RULES: ReadonlyArray<{ id: string; rule: string }> =
 // =============================================================================
 
 /** What a stage spent: images fetched, vision calls made, seconds taken. Reported per stage and in the result. */
-export interface StageCost { images: number; visionCalls: number; seconds: number }
+/** `images` counts Street View images FETCHED by the stage (the billed ones); `imagesSent` counts the images a vision call was given, which may include images fetched by an earlier stage and non-fetched renders. */
+export interface StageCost { images: number; visionCalls: number; seconds: number; imagesSent?: number }
 
 /** One colour measured from the pixels of a Street View image (decoded in memory), in sRGB. */
 export interface MeasuredColour { srgb: [number, number, number]; hex: string; /** Share of the face's pixels (0..1). */ share: number }
@@ -1539,7 +1540,7 @@ const DEFINITIONS = {
         startedAtMs: NUM, endedAtMs: NUM, ms: NUM, cached: BOOL, builtAtMs: NUM, waitedForEngineMs: NUM,
         breakdownMs: numberMap
     }),
-    stageCost: obj(['images', 'visionCalls', 'seconds'], { images: NONNEG_INT, visionCalls: NONNEG_INT, seconds: ref('nonneg') }),
+    stageCost: obj(['images', 'visionCalls', 'seconds'], { images: NONNEG_INT, visionCalls: NONNEG_INT, seconds: ref('nonneg'), imagesSent: NONNEG_INT }),
     measuredColour: obj(['srgb', 'hex', 'share'], { srgb: arr({ type: 'integer', minimum: 0, maximum: 255 }, { minItems: 3, maxItems: 3 }), hex: { type: 'string', pattern: '^#[0-9a-f]{6}$' }, share: ref('unit') }),
     facePalette: obj(['colours', 'method', 'pixels', 'measuredFromPhoto'], { colours: arr(ref('measuredColour')), method: STR, pixels: NONNEG_INT, measuredFromPhoto: { const: true } }),
     surveyElement: obj(['kind', 'box', 'material', 'weathering', 'confidence'], {
