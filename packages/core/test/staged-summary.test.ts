@@ -102,8 +102,26 @@ const ruleCase: Record<string, () => void> = {
         const putBack = summarizeStagedBuild(input({ treesPutBack: { triangles: 8840, crowns: 6, reason: 'tile_vegetation plant exited with code 134' } })).summary;
         expect(putBack).toContain('The tree stage failed (tile_vegetation plant exited with code 134), so the scanned trees were put back, labelled as scanned (8,840 triangles over 6 measured crowns).');
         const grown = input();
-        grown.trees = { outcome: '940 of 941 trees rebuilt as SB-Veggie; 1 left as scanned: crown 1139', count: 940 } as any;
-        expect(summarizeStagedBuild(grown).summary).toContain('Trees, grown to the measured crown: 940 of 941 trees rebuilt as SB-Veggie; 1 left as scanned: crown 1139.');
+        grown.trees = {
+            outcome: '940 of 941 trees rebuilt as SB-Veggie; 1 left as scanned: crown 1139', measured: 941, count: 940, notRegrowable: 1, keptAsScanned: [], shortOfCrown: [], offGround: [],
+            cutAtBoundary: 2, belowMinHeight: 5, cutRemoved: 1, cutCanopyRemovedM2: 30, canopyTakenWithTreesM2: 0, treeCanopyAreaM2: 61_000, filledCanopyAreaM2: 61_000, reachingBoundary: 0,
+            triangles: 1_100_000, triangleBudget: 1_500_000, canopyAreaM2: 70_000,
+            strip: { removedTriangles: 9000, skirtAreaM2: { onWalls: 80, onLevelSurfaces: 0, onKeptCanopy: 0, onOther: 40 }, skirtMaxHeightM: { onWalls: 12.5, onLevelSurfaces: 0, onKeptCanopy: 0, onOther: 6 } },
+            url: '/models/x_trees.glb'
+        } as any;
+        const text = summarizeStagedBuild(grown).summary;
+        expect(text).toContain('Trees, grown to the measured crown: 940 of 941 trees rebuilt as SB-Veggie; 1 left as scanned: crown 1139.');
+        // what the model needs to tell the user about the trees, not only the headline: what stayed as scanned, what was taken out, what was added
+        expect(text).toContain('Kept as scanned: 2 crowns cut by the extraction boundary (their tops lie outside it), 5 low plantings (under the minimum tree height).');
+        expect(text).toContain('Taken out with the trees it was joined to, and not rebuilt');
+        expect(text).toContain('walls and building sides the trees hid were continued straight down to that ground (80 m², up to 12.5 m tall; not in the scan)');
+        expect(text).toContain('the edges of other surfaces left standing over it were closed down to it (40 m², up to 6.0 m tall; not in the scan)');
+        // a district with no measurable crown says so, and does not lead with the trees heading
+        const none = input();
+        none.trees = { outcome: '', measured: 0, count: 0, canopyAreaM2: 0, notOnStructure: 0, keptAsScanned: [], shortOfCrown: [], offGround: [], strip: { skirtAreaM2: {}, skirtMaxHeightM: {} } } as any;
+        const noneText = summarizeStagedBuild(none).summary;
+        expect(noneText).toContain('No tree canopy was measured in the photo tiles, so no trees were added.');
+        expect(noneText).not.toContain('Trees, grown to the measured crown:');
     },
     resolution: () => {
         expect(summarizeStagedBuild(input()).summary).toContain('The scan resolves shapes of about 0.7 m (median triangle edge 0.69 m, leaf error 2.0 m); the photo texture resolves about 0.31 m (15 cm texels). Finer detail is photo-inferred.');

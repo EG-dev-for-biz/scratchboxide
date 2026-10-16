@@ -102,6 +102,8 @@ export interface StagedLayerObjectMeta {
     /** Vegetation layers are marked so the viewport never seats anything on them. */
     vegetation?: boolean;
     resolvedAddress: string;
+    /** More facts for the object's metadata (the raw extraction it came from, the tree counts), kept beside the standard ones. */
+    extra?: Record<string, unknown>;
 }
 
 /** One objects[] entry for a committed layer. */
@@ -125,7 +127,8 @@ export function layerObject(layer: StagedLayer, meta: StagedLayerObjectMeta): Me
                 provenance: layer.provenance.label,
                 remeshed: layer.provenanceLabels.includes('remeshed'),
                 vertexCount: layer.counts.vertices,
-                triangleCount: layer.counts.triangles
+                triangleCount: layer.counts.triangles,
+                ...(meta.extra ?? {})
             }
         } as Media4DObject['content'],
         space: { spatial3d: { x: 0, y: 0, z: 0 } } as Media4DObject['space'],

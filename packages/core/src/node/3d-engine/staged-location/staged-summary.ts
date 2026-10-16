@@ -22,6 +22,7 @@ import {
     type StageSummary,
     type VisionModelUse
 } from '../../../common/spatial/staged-location-contracts';
+import { describeTrees } from '../location-clay-pipeline';
 
 /** Everything the summary reads: the result fields, plus the facts only the run knows. */
 export interface StagedSummaryInput extends Omit<StagedLocationResult, 'digest' | 'summary' | 'artifact'> {
@@ -186,7 +187,9 @@ export function treesSentence(input: StagedSummaryInput): string {
     }
     const t = input.trees;
     if (!t) return '';
-    return `Trees, grown to the measured crown: ${t.outcome}.`;
+    // the outcome, then the budget, the crowns kept as scanned or taken out, and what closing the ground added (not in the scan)
+    const detail = describeTrees(t, input.extraction.sizedTo === 'structure').trim();
+    return t.measured > 0 ? `Trees, grown to the measured crown: ${detail}` : detail;
 }
 
 /** Rule "resolution": the scan's and the photo's resolution, kept apart. */

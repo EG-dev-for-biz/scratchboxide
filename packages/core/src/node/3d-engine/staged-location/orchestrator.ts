@@ -146,6 +146,8 @@ export interface StagedLocationRequest {
 export interface StagedExtraction {
     /** The photo-textured extraction: strip, remesh and the orthos read it. */
     texturedGlb: string;
+    /** Where the raw high-resolution extraction is kept for reuse (public/models/..._textured.glb); the result reports it. */
+    rawGlbPath?: string;
     /** L1: the same leaves without images, textures or UVs, one node per leaf primitive with run-independent extras. */
     geometryGlb: string;
     /** {leafId: rank} in download-completion order (published beside L1, never in its bytes). */
@@ -175,7 +177,7 @@ export interface StagedLocationDeps {
     cache: StageCache;
     geocode(query: string, signal?: AbortSignal): Promise<ResolvedPlace>;
     /** Extracts the leaves within radiusM of (lat, lng) into `outDir` (textured.glb, geometry.glb). */
-    extract(req: { lat: number; lng: number; radiusM: number; outDir: string; signal?: AbortSignal; onProgress?: (message: string) => void }): Promise<StagedExtraction>;
+    extract(req: { lat: number; lng: number; radiusM: number; outDir: string; place: ResolvedPlace; signal?: AbortSignal; onProgress?: (message: string) => void }): Promise<StagedExtraction>;
     vegetation: {
         strip(req: TileVegetationStripRequest & { roi?: StripRoi }): Promise<TileVegetationStripResult>;
         plant(req: TileVegetationPlantRequest): Promise<TileVegetationPlantResult>;
@@ -232,7 +234,10 @@ export interface StagedLocationOutcome {
         remesh: { ok: boolean; url?: string; error?: string };
         resolvedAddress: string;
         geoAnchor: StagedExtraction['geoAnchor'];
-        glbPath?: string;
+        /** The raw high-resolution textured extraction. */
+        glbPath: string;
+        /** The clay ground the objects stand on (the remeshed scan, or its rung). */
+        groundGlbPath?: string;
         trees?: LocationClayTrees;
     };
 }
@@ -688,7 +693,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 if (fs.existsSync(v.texturedGlb) && fs.existsSync(v.geometryGlb)) return { extraction: v, key, cached: true, builtAtMs: hit.builtAtMs };
             }
             const entry = await cache.run('tiles', key, async dir => {
-                const x = await deps.extract({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM, outDir: dir, signal: io.signal, onProgress: m => io.progress(m) });
+                const x = await deps.extract({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM, outDir: dir, place: placeValue!, signal: io.signal, onProgress: m => io.progress(m) });
                 return { value: { ...x, texturedGlb: path.relative(dir, x.texturedGlb), geometryGlb: path.relative(dir, x.geometryGlb) } };
             }, { bypass: true });
             return { extraction: inEntry(entry.dir, entry.value), key, cached: false, builtAtMs: entry.builtAtMs };
@@ -744,7 +749,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     reveal: { durationMs: 1200, stagger: 1, crossfadeFrom: [], ...(orderUrl ? { orderUrl } : {}) },
                     cached: value.cached, builtAtMs: value.builtAtMs, counts: layerCounts(e.geometryGlb)
                 };
-                run.commit(layer, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, isGround: true });
+                run.commit(layer, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, isGround: true, extra: { rawGlbPath: e.rawGlbPath ?? e.texturedGlb } });
                 if (st) {
                     run.state.structure = { seed: [st.seed.x, st.seed.z], geocodeToStructureM: st.geocodeToStructureM, footprintAreaM2: st.areaM2, extractionRadiusM: e.radiusM, containmentRounds: value.rounds };
                 }
@@ -887,7 +892,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [l1.objectId] },
                     cached: r.cached, builtAtMs: remembered.builtAtMs, counts: layerCounts(r.clayGlb)
                 };
-                run.commit(layer, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress });
+                run.commit(layer, {
+                    source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress,
+                    // the trees measured in the photo tiles were taken out of this model (and are regrown in the trees layer)
+                    extra: { rawGlbPath: extraction.rawGlbPath ?? extraction.texturedGlb, treesRemoved: Number(strip?.stats?.triangles?.removed ?? 0) > 0 }
+                });
                 run.setGround(layer.objectId);
                 const degradations: DegradationRecord[] = [];
                 let status: 'committed' | 'degraded' = 'committed';
@@ -1019,9 +1028,17 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             reveal: { durationMs: 1500, stagger: 0.3, crossfadeFrom: [] }, cached: planted.cached, builtAtMs: remembered.builtAtMs,
                             counts: layerCounts(planted.treesGlb)
                         });
-                        run.commit(layers[0], { source: 'SB-Veggie', vegetation: true, resolvedAddress: placeValue!.formattedAddress });
                     }
                     summaryTrees = summarizeTrees(strip!, planted, { isolate: isolateMode, stripMs: strip!.ms, plantMs: planted.ms, treeTriangleBudget: request.treeTriangleBudget, ...(url ? { url } : {}) });
+                    if (layers[0]) {
+                        run.commit(layers[0], {
+                            source: 'SB-Veggie', vegetation: true, resolvedAddress: placeValue!.formattedAddress,
+                            extra: {
+                                generator: 'space colonisation from the measured crowns', treeCount: summaryTrees.count, treesLeftAsScanned: summaryTrees.notRegrowable,
+                                canopyAreaM2: summaryTrees.treeCanopyAreaM2, measuredFrom: extraction.rawGlbPath ?? extraction.texturedGlb
+                            }
+                        });
+                    }
                     run.note(PROVENANCE.grownToMeasuredCrown, `SB-Veggie trees grown to the measured crown: ${summaryTrees.outcome}`);
                     const degradations = summaryTrees.keptAsScanned.map(k => run.degrade(record('trees', 'not_regrowable', {
                         part: { description: `measured tree, crown ${k.crownId}`, crownId: k.crownId }, intended: 'a tree grown to the measured crown', fellTo: 'that tree kept as scanned',
@@ -1518,7 +1535,8 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
             remesh: f.remeshed ? { ok: true, url: remeshLayer?.url } : { ok: false, error: run.state.degradations.find(d => d.stage === 'remesh')?.reason ?? 'the remesh did not run' },
             resolvedAddress: f.place.formattedAddress,
             geoAnchor: f.extraction.geoAnchor,
-            ...(f.groundFile ? { glbPath: f.groundFile } : {}),
+            glbPath: f.extraction.rawGlbPath ?? f.extraction.texturedGlb,
+            ...(f.groundFile ? { groundGlbPath: f.groundFile } : {}),
             ...(f.trees ? { trees: f.trees } : {})
         }
     };

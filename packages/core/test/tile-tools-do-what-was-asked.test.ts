@@ -105,6 +105,7 @@ const TILESET = {
 
 const realFetch = globalThis.fetch;
 const realKey = process.env.GOOGLE_MAPS_API_KEY;
+const realRoot = process.env.SCRATCHBOX_ROOT;
 const scratch: string[] = [];
 
 /** Serves the tileset, its leaves and the elevation API; records every requested path. */
@@ -124,6 +125,10 @@ function serveTiles(tileset: unknown = TILESET, leaves: Record<string, Buffer> =
         return new Response('not served by this test', { status: 404 });
     }) as typeof fetch;
     process.env.GOOGLE_MAPS_API_KEY = 'TEST_KEY';
+    // The staged build keeps its caches and published models under the workspace root; keep them out of the checkout too.
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tile-tools-root-')));
+    scratch.push(root);
+    process.env.SCRATCHBOX_ROOT = root;
     // The crawler caches leaves under cwd/.scratchbox; keep them out of the checkout.
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'tile-tools-cwd-'));
     scratch.push(cwd);
@@ -154,6 +159,8 @@ afterEach(() => {
     globalThis.fetch = realFetch;
     if (realKey === undefined) delete process.env.GOOGLE_MAPS_API_KEY;
     else process.env.GOOGLE_MAPS_API_KEY = realKey;
+    if (realRoot === undefined) delete process.env.SCRATCHBOX_ROOT;
+    else process.env.SCRATCHBOX_ROOT = realRoot;
 });
 
 afterAll(() => {
@@ -443,17 +450,19 @@ describe('a location request returns remeshed geometry', () => {
     let remeshDir = '';
     const fakeRefine = (fail?: string) => vi.spyOn(TileRefineService.prototype, 'refine').mockImplementation(async (req: any) => {
         if (fail) throw new Error(fail);
-        const base = String(req.publishAs);
-        if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(base)) throw new Error('publishAs must be a plain name ([A-Za-z0-9_-], up to 64 chars)');
+        // the old tools name their published models (tile_refine's rule); the staged build publishes through its own cache
+        const base = req.publishAs === undefined ? undefined : String(req.publishAs);
+        if (base !== undefined && !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(base)) throw new Error('publishAs must be a plain name ([A-Za-z0-9_-], up to 64 chars)');
         remeshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tile-remesh-'));
         scratch.push(remeshDir);
         const quad = leafGlb([[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]], [0, 1, 2, 1, 3, 2]);
         fs.writeFileSync(path.join(remeshDir, 'textured.glb'), quad);
         fs.writeFileSync(path.join(remeshDir, 'clay.glb'), quad);
         return {
-            texturedGlb: path.join(remeshDir, 'textured.glb'), clayGlb: path.join(remeshDir, 'clay.glb'), cached: false, ms: 12_300, cacheKey: 'k',
+            texturedGlb: path.join(remeshDir, 'textured.glb'), clayGlb: path.join(remeshDir, 'clay.glb'), cached: false, ms: 12_300,
+            cacheKey: crypto.createHash('sha256').update(`refine|${req.tilePath ?? req.glbPath}|${remeshDir}`).digest('hex'),
             stats: { triangles: { input: 403_385, hidden: 0, droppedDegenerate: 0, kept: 403_385 }, outputs: { triangles: 46_220 } },
-            published: { urls: { textured: `/models/${base}_refined.glb`, clay: `/models/${base}_refined_clay.glb` }, backups: [] },
+            ...(base ? { published: { urls: { textured: `/models/${base}_refined.glb`, clay: `/models/${base}_refined_clay.glb` }, backups: [] } } : {}),
             binary: { path: path.join(remeshDir, 'tile_refine'), built: false }
         } as any;
     });
@@ -476,10 +485,12 @@ describe('a location request returns remeshed geometry', () => {
             ...(opts.keptSkirt ? { keptSkirt: { areaM2: 329.4, topY: 9.48, bottomY: -0.53 } } : {})
         }));
         fs.writeFileSync(crowns, JSON.stringify({ version: 1, crowns: [...list, ...kept, { id: 97, status: 'cut_at_boundary_removed', areaM2: 30 }, { id: 98, status: 'cut_at_boundary' }, { id: 99, status: 'below_min_height' }] }));
-        const strip = vi.spyOn(TileVegetationService.prototype, 'strip').mockImplementation(async () => {
+        const strip = vi.spyOn(TileVegetationService.prototype, 'strip').mockImplementation(async (req: any) => {
             if (opts.fail === 'strip') throw new TileVegetationError('texture_decode', 'photo texture 3 could not be decoded: bad Huffman code');
+            // what strip leaves of the tile it was given (the stand-in removes nothing it could show)
+            fs.copyFileSync(req.tilePath, path.join(dir, 'devegetated.glb'));
             return {
-                devegetatedGlb: path.join(dir, 'devegetated.glb'), crownsJson: crowns, tileSha256: 'ab'.repeat(32), cached: false, ms: 900, cacheKey: 'v',
+                devegetatedGlb: path.join(dir, 'devegetated.glb'), crownsJson: crowns, tileSha256: 'ab'.repeat(32), cached: false, ms: 900, cacheKey: crypto.createHash('sha256').update(`strip|${dir}`).digest('hex'),
                 stats: {
                     canopyAreaM2: opts.canopyAreaM2 ?? 812.5, treeCanopyAreaM2: opts.trees ? 640 : 0, cutCanopyRemovedM2: 30,
                     triangles: { removed: opts.removed ?? 9000, cap: 700, skirt: 120 }, openEdges: { before: 100, after: 90 },
@@ -490,8 +501,9 @@ describe('a location request returns remeshed geometry', () => {
         const plant = vi.spyOn(TileVegetationService.prototype, 'plant').mockImplementation(async (req: any) => {
             if (opts.fail === 'plant') throw new TileVegetationError('budget_too_small', "the 13,000 measured trees need at least 1,560,000 triangles at 120 each, more than the scene's cap of 1,500,000 triangles for trees");
             if (opts.fail === 'plant_explicit') throw new TileVegetationError('budget_too_small', 'a triangle budget of 10 cannot hold 3 trees at 120 triangles each (they need at least 360)');
+            fs.writeFileSync(path.join(dir, 'trees.glb'), leafGlb([[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]], [0, 1, 2, 1, 3, 2]));
             return {
-                treesGlb: path.join(dir, 'trees.glb'), cached: false, ms: 400, cacheKey: 'p',
+                treesGlb: path.join(dir, 'trees.glb'), cached: false, ms: 400, cacheKey: crypto.createHash('sha256').update(`plant|${dir}|${req.triangleBudget ?? ''}`).digest('hex'),
                 stats: {
                     trees: opts.trees, triangles: 21_000, triangleBudget: req.triangleBudget ?? 23_500, triangleBudgetSource: req.triangleBudget !== undefined ? 'explicit' : 'crown_targets', targetTriangles: 23_500,
                     skipped: [], inferred: { crownBaseRatio: 0.35, trunkRadiusPerHeight: 0.016, shellDepth: 0.8 },
@@ -530,44 +542,56 @@ describe('a location request returns remeshed geometry', () => {
         expect(payload.mode).toBe('full-texture');
     });
 
-    it('google_3d_tiles_get_clay remeshes the devegetated photo tiles and mounts SB-Veggie trees grown from the measured crowns', async () => {
+    /** The layers of the mounted scene, by their stage layer name (l1 tiles, l2 remesh, l5 trees). */
+    const layersOf = (payload: any): Record<string, any> => Object.fromEntries(payload.artifact.data.objects.map((o: any) => [o.content.metadata.stagedLayer, o]));
+
+    it('google_3d_tiles_get_clay builds the district in stages: the tiles, the remeshed devegetated tiles, then SB-Veggie trees grown from the measured crowns', async () => {
         serveTiles();
         const refine = fakeRefine();
         const veg = fakeVegetation({ trees: 3 });
         const outcome = await ask('google_3d_tiles_get_clay', {}, 'clay_trees.glb');
         const payload: any = outcome.resultPayload;
         expect(outcome.exec.status).toBe('completed');
-        // the trees are measured in the photo tiles, remeshing runs on what is left, the trees are grown afterwards
-        expect(payload.mode).toBe('full-texture');
-        expect(veg.strip.mock.calls[0][0]).toMatchObject({ tilePath: payload.glbPath });
+        expect(payload.status).toBe('complete');
+        expect(payload.mode).toBe('clay');
+        // the trees are measured in the photo tiles (the textured extraction), remeshing runs on what is left, the trees are grown afterwards
+        expect(path.basename(veg.strip.mock.calls[0][0].tilePath)).toBe('textured.glb');
+        expect(fs.readFileSync(payload.glbPath)).toEqual(fs.readFileSync(veg.strip.mock.calls[0][0].tilePath));
         expect(refine.mock.calls[0][0]).toMatchObject({ tilePath: path.join(veg.dir, 'devegetated.glb') });
+        expect(refine.mock.calls[0][0].isolate).toBeUndefined();
         expect(veg.plant).toHaveBeenCalledTimes(1);
         // no budget given: the trees' budget comes from the measured crowns within the scene's cap, not from the remeshed tile
-        expect(veg.plant.mock.calls[0][0]).toMatchObject({ crownsPath: path.join(veg.dir, 'crowns.json'), sceneTriangleCap: 1_500_000, seed: 'abababababababab', supportMeshPath: undefined });
+        expect(veg.plant.mock.calls[0][0]).toMatchObject({ crownsPath: path.join(veg.dir, 'crowns.json'), sceneTriangleCap: 1_500_000, seed: 'abababababababab', supportMeshPath: undefined, groundMeshPath: path.join(remeshDir, 'clay.glb') });
         expect(veg.plant.mock.calls[0][0].triangleBudget).toBeUndefined();
-        const [env, trees] = payload.artifact.data.objects;
-        expect(payload.artifact.data.objects).toHaveLength(2);
-        expect(env.content.metadata).toMatchObject({ role: 'environment', remeshed: true, treesRemoved: true });
-        expect(env.content.durableUri.endsWith('_sbveggie_refined_clay.glb')).toBe(true);
-        // the trees belong to the location layer: the viewer never re-seats an environment object on the ground under
-        // its origin (it would lift every tree onto whatever stands at the anchor)
-        // ... and they are not ground: nothing placed under a crown stands on top of it
-        expect(trees.content.metadata).toMatchObject({ source: 'SB-Veggie', role: 'environment', layer: 'vegetation', isGround: false, treeCount: 3, triangleCount: 21_000 });
-        // the canopy reported with the trees is the measured crowns they were grown into (100 + 110 + 120 m²)
-        expect(trees.content.metadata.canopyAreaM2).toBe(330);
-        expect(trees.content.durableUri.endsWith('_sbveggie_trees.glb')).toBe(true);
-        expect(trees.space.spatial3d).toEqual(env.space.spatial3d);
+        // the scene: the tiles as downloaded, the remesh that supersedes them (the ground objects stand on), the trees
+        const layers = layersOf(payload);
+        expect(Object.keys(layers)).toEqual(['l1', 'l2', 'l5']);
+        expect(layers.l2.content.metadata).toMatchObject({ role: 'environment', remeshed: true, treesRemoved: true, isGround: true, source: 'Google3DTilesClay' });
+        expect(layers.l1.content.metadata.isGround).toBe(false);
+        expect(layers.l2.content.durableUri).toMatch(/^\/models\/.+_remesh_[0-9a-f]{8}\.glb$/);
+        // the trees belong to the location layer: the viewer never re-seats an environment object on the ground under its
+        // origin; they are not ground: nothing placed under a crown stands on top of it
+        expect(layers.l5.content.metadata).toMatchObject({ source: 'SB-Veggie', role: 'environment', layer: 'vegetation', isGround: false, treeCount: 3, treesLeftAsScanned: 0, canopyAreaM2: 330, provenance: 'grown to the measured crown' });
+        expect(layers.l5.content.durableUri).toMatch(/^\/models\/.+_trees_[0-9a-f]{8}\.glb$/);
+        expect(layers.l5.space.spatial3d).toEqual(layers.l2.space.spatial3d);
         expect(payload.artifact.data.renderMode).toBe('clay');
-        expect(payload.trees).toMatchObject({ measured: 3, count: 3, notRegrowable: 0, triangles: 21_000, triangleBudget: 23_500, triangleBudgetSource: 'crown_targets', cutAtBoundary: 1, cutRemoved: 1, belowMinHeight: 1, canopyAreaM2: 812.5, treeCanopyAreaM2: 330, reachingBoundary: 1 });
+        expect(payload.trees).toMatchObject({ measured: 3, count: 3, notRegrowable: 0, triangles: 21_000, triangleBudget: 23_500, triangleBudgetSource: 'crown_targets', cutAtBoundary: 1, cutRemoved: 1, belowMinHeight: 1 });
         expect(payload.trees.outcome).toBe('3 of 3 trees rebuilt as SB-Veggie; 0 left as scanned');
-        expect(payload.artifact.summary).toContain('; 3 of 3 trees rebuilt as SB-Veggie; 0 left as scanned.');
-        const summary = outcome.exec.summaryResult!;
-        expect(summary).toContain('3 of 3 trees rebuilt as SB-Veggie; 0 left as scanned. The rebuilt trees (space colonisation, studio clay) fill 330 m² of measured crown (1 of them runs to the extraction\'s edge and was rebuilt up to it), 21,000 triangles within a budget of 23,500 (sized from the measured crowns)');
+        // what the model reads says all of it
+        const summary = payload.summary as string;
+        expect(outcome.exec.summaryResult).toBe(payload.digest);
+        expect(summary).toContain('Trees, grown to the measured crown: 3 of 3 trees rebuilt as SB-Veggie; 0 left as scanned. The rebuilt trees (space colonisation, studio clay) fill 330 m² of measured crown (1 of them runs to the extraction\'s edge and was rebuilt');
         expect(summary).toContain('Kept as scanned: 1 crown cut by the extraction boundary (its top lies outside it), 1 low planting');
         expect(summary).toContain('Taken out with the trees it was joined to, and not rebuilt (its trunk lies outside the extraction): 1 cut crown, 30 m² of canopy.');
         // what closing the ground added is said, not hidden in the payload
         expect(summary).toContain('walls and building sides the trees hid were continued straight down to that ground (80 m², up to 12.5 m tall; not in the scan)');
         expect(summary).toContain('the edges of other surfaces left standing over it were closed down to it (40 m², up to 6.0 m tall; not in the scan)');
+        // every published model is a plain name under public/models, written whole
+        for (const o of payload.artifact.data.objects) {
+            const file = path.join(process.env.SCRATCHBOX_ROOT!, 'public', 'models', path.basename(o.content.durableUri));
+            expect(path.basename(file)).toMatch(/^[A-Za-z0-9._-]+$/);
+            expect(fs.statSync(file).size).toBeGreaterThan(0);
+        }
     });
 
     it('google_3d_tiles_get_clay reports zero trees when no crown measures as a tree, and mounts only the tiles', async () => {
@@ -578,9 +602,9 @@ describe('a location request returns remeshed geometry', () => {
         const payload: any = outcome.resultPayload;
         expect(outcome.exec.status).toBe('completed');
         expect(veg.plant).not.toHaveBeenCalled();
-        expect(payload.artifact.data.objects).toHaveLength(1);
+        expect(Object.keys(layersOf(payload))).toEqual(['l1', 'l2']);
         expect(payload.trees).toMatchObject({ count: 0, canopyAreaM2: 812.5 });
-        expect(outcome.exec.summaryResult).toContain('no crown that measures as a tree, so no trees were added');
+        expect(payload.summary).toContain('no crown that measures as a tree, so no trees were added');
     });
 
     it('google_3d_tiles_get_clay marks the tiles as devegetated only when the strip removed something', async () => {
@@ -590,26 +614,37 @@ describe('a location request returns remeshed geometry', () => {
         const outcome = await ask('google_3d_tiles_get_clay', {}, 'clay_nothing_removed.glb');
         const payload: any = outcome.resultPayload;
         expect(outcome.exec.status).toBe('completed');
-        expect(payload.artifact.data.objects[0].content.metadata).toMatchObject({ remeshed: true, treesRemoved: false });
-        expect(outcome.exec.summaryResult).toContain('No tree canopy was measured in the photo tiles, so no trees were added.');
-        expect(outcome.exec.summaryResult).not.toContain('ground was rebuilt');
+        expect(layersOf(payload).l2.content.metadata).toMatchObject({ remeshed: true, treesRemoved: false });
+        expect(payload.summary).toContain('No tree canopy was measured in the photo tiles, so no trees were added.');
+        expect(payload.summary).not.toContain('ground was rebuilt');
     });
 
-    it('google_3d_tiles_get_clay plants within the treeTriangleBudget the model gives, and passes the chat\'s stop signal to the extraction', async () => {
+    it('google_3d_tiles_get_clay plants within the treeTriangleBudget the model gives, and the chat\'s stop reaches the extraction', async () => {
         serveTiles();
         fakeRefine();
         const veg = fakeVegetation({ trees: 3 });
-        const fetchSpy = vi.spyOn(Google3DTileBlockoutPipelineService.prototype, 'fetch3DObject');
-        const stop = new AbortController();
         const outcome = await createDefaultToolRegistry().dispatch('google_3d_tiles_get_clay',
             { query: `${ANCHOR.lat}, ${ANCHOR.lng}`, radiusMeters: 120, outputGlbPath: outGlb('clay_budget.glb'), treeTriangleBudget: '50000' },
-            { request: { prompt: 'Show me the Flatiron Building' }, signal: stop.signal } as any);
+            { request: { prompt: 'Show me the Flatiron Building' } } as any);
         expect(outcome.exec.status).toBe('completed');
         expect(veg.plant.mock.calls[0][0]).toMatchObject({ triangleBudget: 50_000 });
-        expect(fetchSpy.mock.calls[0][2]).toMatchObject({ signal: stop.signal });
         const bad = await ask('google_3d_tiles_get_clay', { treeTriangleBudget: -5 }, 'clay_budget_bad.glb');
         expect(bad.exec.status).toBe('failed');
         expect((bad.resultPayload as any).error).toContain('google_3d_tiles_get_clay needs a treeTriangleBudget of at least 1 triangle: got -5');
+
+        // a stop while the tiles download stops the extraction and mounts nothing
+        const stop = new AbortController();
+        let seen: AbortSignal | undefined;
+        vi.spyOn(Google3DTileBlockoutPipelineService.prototype, 'fetch3DObject').mockImplementation(((_q: unknown, _m: unknown, options?: { signal?: AbortSignal }) => {
+            seen = options?.signal;
+            queueMicrotask(() => stop.abort());
+            return new Promise((_, reject) => options!.signal!.addEventListener('abort', () => reject(Object.assign(new Error('Google 3D Tiles extraction was stopped'), { name: 'AbortError' })), { once: true }));
+        }) as never);
+        const stopped = await createDefaultToolRegistry().dispatch('google_3d_tiles_get_clay',
+            { query: `${ANCHOR.lat}, ${ANCHOR.lng}`, radiusMeters: 90, trees: false }, { request: { prompt: 'Show me the Flatiron Building' }, signal: stop.signal } as any);
+        expect(seen?.aborted).toBe(true);
+        expect(stopped.exec.status).toBe('failed');
+        expect((stopped.resultPayload as any).artifact).toBeUndefined();
     });
 
     it('google_3d_tiles_get_clay keeps the scanned canopy out of the trees step when trees is false', async () => {
@@ -620,24 +655,40 @@ describe('a location request returns remeshed geometry', () => {
         const payload: any = outcome.resultPayload;
         expect(outcome.exec.status).toBe('completed');
         expect(veg.strip).not.toHaveBeenCalled();
-        expect(refine.mock.calls[0][0]).toMatchObject({ tilePath: payload.glbPath });
-        expect(payload.artifact.data.objects).toHaveLength(1);
+        expect(path.basename(refine.mock.calls[0][0].tilePath)).toBe('textured.glb');
+        expect(Object.keys(layersOf(payload))).toEqual(['l1', 'l2']);
         expect(payload.trees).toBeUndefined();
     });
 
-    for (const name of ['google_3d_tiles_get_full_texture', 'google_3d_tiles_get_clay']) {
-        it(`${name} isolates the structure at the anchor when asked`, async () => {
-            serveTiles();
-            const refine = fakeRefine();
-            const veg = fakeVegetation({ trees: 2 });
-            const outcome = await ask(name, { isolate: true }, `${name}_iso.glb`);
-            expect(outcome.exec.status).toBe('completed');
-            expect(refine.mock.calls[0][0]).toMatchObject({ isolate: true });
-            expect(String(refine.mock.calls[0][0].publishAs)).toMatch(/_isolated/);
-            // trees are only planted where they stand on the isolated structure
-            if (name.endsWith('_clay')) expect(veg.plant.mock.calls[0][0]).toMatchObject({ supportMeshPath: path.join(remeshDir, 'clay.glb') });
-        });
+    it('google_3d_tiles_get_full_texture isolates the structure at the anchor when asked', async () => {
+        serveTiles();
+        const refine = fakeRefine();
+        fakeVegetation({ trees: 2 });
+        const outcome = await ask('google_3d_tiles_get_full_texture', { isolate: true }, 'google_3d_tiles_get_full_texture_iso.glb');
+        expect(outcome.exec.status).toBe('completed');
+        expect(refine.mock.calls[0][0]).toMatchObject({ isolate: true });
+        expect(String(refine.mock.calls[0][0].publishAs)).toMatch(/_isolated/);
+    });
 
+    it('google_3d_tiles_get_clay with isolate shows the district, and says so, when no structure stands at the anchor', async () => {
+        serveTiles(); // a flat ground leaf and a roof 200 m away: nothing 3 m tall within 30 m of the anchor
+        const refine = fakeRefine();
+        fakeVegetation({ trees: 2 });
+        const outcome = await ask('google_3d_tiles_get_clay', { isolate: true }, 'clay_iso.glb');
+        const payload: any = outcome.resultPayload;
+        expect(outcome.exec.status).toBe('completed');
+        expect(payload.status).toBe('degraded');
+        // no isolate is asked of tile_refine for a structure that was not found
+        expect(refine.mock.calls[0][0].isolate).toBeUndefined();
+        const d = payload.degradations.find((x: any) => x.reasonCode === 'no_structure_at_anchor');
+        expect(d).toMatchObject({ stage: 'tiles', reasonCode: 'no_structure_at_anchor', fellTo: 'the remeshed area around the place, without a rebuild', provenanceAfter: 'remeshed' });
+        expect(payload.summary).toContain('no structure 3 m or taller stands within 30 m of the place; showing the area around it');
+        // the rebuild stages are skipped, not failed, and the rest of the build stands
+        for (const stage of ['fit', 'vision', 'detail']) expect(payload.stages.find((x: any) => x.stage === stage).status).toBe('skipped');
+        expect(Object.keys(layersOf(payload))).toEqual(['l1', 'l2', 'l5']);
+    });
+
+    for (const name of ['google_3d_tiles_get_full_texture', 'google_3d_tiles_get_clay']) {
         it(`${name} returns the raw tiles when remesh is false`, async () => {
             serveTiles();
             const refine = fakeRefine();
@@ -650,19 +701,43 @@ describe('a location request returns remeshed geometry', () => {
             expect(outcome.exec.summaryResult).toContain('Returned as raw tiles (not remeshed), as asked.');
             expect((outcome.resultPayload as any).mode).toBe(name.endsWith('_clay') ? 'clay' : 'full-texture');
         });
+    }
 
-        it(`${name} fails, and mounts nothing, when remeshing fails`, async () => {
-            serveTiles();
-            fakeRefine('tile_refine binary could not be built');
-            fakeVegetation({ trees: 2 });
-            const outcome = await ask(name, {}, `${name}_fail.glb`);
-            const payload: any = outcome.resultPayload;
-            expect(outcome.exec.status).toBe('failed');
-            expect(payload.error).toContain('Tile extraction failed at remesh: tile_refine binary could not be built');
-            expect(payload.artifact).toBeUndefined();
-        });
+    it('google_3d_tiles_get_full_texture fails, and mounts nothing, when remeshing fails', async () => {
+        serveTiles();
+        fakeRefine('tile_refine binary could not be built');
+        fakeVegetation({ trees: 2 });
+        const outcome = await ask('google_3d_tiles_get_full_texture', {}, 'tex_fail.glb');
+        const payload: any = outcome.resultPayload;
+        expect(outcome.exec.status).toBe('failed');
+        expect(payload.error).toContain('Tile extraction failed at remesh: tile_refine binary could not be built');
+        expect(payload.artifact).toBeUndefined();
+    });
 
+    it('google_3d_tiles_get_clay shows the raw scan, and says the remesh failed and why, when remeshing fails', async () => {
+        serveTiles();
+        fakeRefine('tile_refine binary could not be built');
+        const veg = fakeVegetation({ trees: 2 });
+        const outcome = await ask('google_3d_tiles_get_clay', {}, 'clay_fail.glb');
+        const payload: any = outcome.resultPayload;
+        // the call succeeds with what is real: the tiles as downloaded; nothing is planted over their scanned canopy
+        expect(outcome.exec.status).toBe('completed');
+        expect(payload.status).toBe('degraded');
+        expect(Object.keys(layersOf(payload))).toEqual(['l1']);
+        expect(veg.plant).not.toHaveBeenCalled();
+        const remesh = payload.degradations.find((x: any) => x.stage === 'remesh');
+        expect(remesh).toMatchObject({ reasonCode: 'remesh_failed', provenanceAfter: 'as-scanned', transient: true, retry: { tool: 'google_3d_tiles_get_clay', args: { retryStage: 'remesh' } } });
+        expect(remesh.reason).toContain('tile_refine binary could not be built');
+        expect(payload.remesh).toMatchObject({ ok: false, error: expect.stringContaining('tile_refine binary could not be built') });
+        expect(payload.summary).toContain('tile_refine binary could not be built');
+        expect(outcome.exec.summaryResult).toMatch(/^Staged build degraded: .*remesh: remesh_failed.*retry retryRunId [0-9a-f]{8} stage remesh\.$/);
+        // the isolated trees stay in the scan they were measured in: the layer of the tiles is the ground
+        expect(layersOf(payload).l1.content.metadata.isGround).toBe(true);
+    });
+
+    for (const name of ['google_3d_tiles_get_full_texture', 'google_3d_tiles_get_clay']) {
         it(`${name} refuses placeholder (mock) tiles instead of mounting them as real ones`, async () => {
+            serveTiles();
             vi.spyOn(Google3DTileBlockoutPipelineService.prototype, 'fetch3DObject').mockResolvedValue({
                 success: true, mock: true, mode: 'full-texture', glbPath: '/tmp/mock.glb', mesh: { vertexCount: 4, triangleCount: 2 }
             } as any);
@@ -670,60 +745,76 @@ describe('a location request returns remeshed geometry', () => {
             const outcome = await ask(name, {}, `${name}_mock.glb`);
             expect(outcome.exec.status).toBe('failed');
             expect((outcome.resultPayload as any).error).toContain('placeholder tiles, not Google 3D Tiles');
+            expect((outcome.resultPayload as any).artifact).toBeUndefined();
             expect(refine).not.toHaveBeenCalled();
         });
     }
 
-    // W1's default extraction names carry a lat/lng ('.') and addresses run long; tile_refine accepts only
-    // [A-Za-z0-9_-] up to 64 characters, and a remesh failure fails the call, so the name must always pass
-    for (const file of ['flatiron_building_40.74110_-73.98970_r250_textured.glb', 'flatiron_building_175_5th_ave_new_york_ny_10010_usa_textured.glb']) {
-        it(`google_3d_tiles_get_clay publishes ${file} under a name tile_refine accepts`, async () => {
-            serveTiles();
-            const refine = fakeRefine();
-            fakeVegetation({ trees: 2 });
-            const outcome = await ask('google_3d_tiles_get_clay', { isolate: true }, file);
-            expect(outcome.exec.status).toBe('completed');
-            const base = String(refine.mock.calls[0][0].publishAs);
-            expect(base).toMatch(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/);
-            expect(base).toMatch(/^flatiron_building_.*_[0-9a-f]{8}_isolated_sbveggie$/);
-        });
-    }
-
-    it('google_3d_tiles_get_clay fails, and mounts nothing, when measuring the trees fails', async () => {
+    // The staged build names its published models itself: a plain name from the place (at most 40 characters) and the
+    // stage key, whatever the place's address looks like. tile_refine's own naming rule applies to the textured tool.
+    it('google_3d_tiles_get_clay publishes plain names for a place with a long address', async () => {
         serveTiles();
-        const refine = fakeRefine();
-        fakeVegetation({ trees: 2, fail: 'strip' });
-        const outcome = await ask('google_3d_tiles_get_clay', {}, 'clay_strip_fail.glb');
-        const payload: any = outcome.resultPayload;
-        expect(outcome.exec.status).toBe('failed');
-        expect(payload.error).toContain('Tile extraction failed at vegetation: photo texture 3 could not be decoded: bad Huffman code');
-        expect(payload.artifact).toBeUndefined();
-        expect(refine).not.toHaveBeenCalled();
+        fakeRefine();
+        fakeVegetation({ trees: 2 });
+        const geocode = vi.spyOn(Google3DTileBlockoutPipelineService.prototype, 'resolveAddress').mockResolvedValue({
+            lat: ANCHOR.lat, lng: ANCHOR.lng, formattedAddress: 'Flatiron Building, 175 5th Ave, New York, NY 10010, USA (the triangular 1902 building between Broadway and Fifth Avenue)', landmarkName: 'Flatiron'
+        } as any);
+        const outcome = await ask('google_3d_tiles_get_clay', { query: 'Flatiron Building, 175 5th Ave, New York, NY 10010, USA (the triangular 1902 building)' }, 'flatiron_textured.glb');
+        expect(geocode).toHaveBeenCalled();
+        expect(outcome.exec.status).toBe('completed');
+        const names = (outcome.resultPayload as any).artifact.data.objects.map((o: any) => path.basename(o.content.durableUri));
+        expect(names.length).toBe(3);
+        for (const name of names) {
+            expect(name).toMatch(/^flatiron_building_175_5th_ave_new_york_n_(tiles|remesh|trees)_[0-9a-f]{8}\.glb$/);
+        }
     });
 
-    it('google_3d_tiles_get_clay fails, and mounts nothing, when the measured trees need more than the scene cap', async () => {
+    it('google_3d_tiles_get_clay keeps the scanned trees and remeshes the raw tile, and says the trees were not measured, when measuring them fails', async () => {
+        serveTiles();
+        const refine = fakeRefine();
+        const veg = fakeVegetation({ trees: 2, fail: 'strip' });
+        const outcome = await ask('google_3d_tiles_get_clay', {}, 'clay_strip_fail.glb');
+        const payload: any = outcome.resultPayload;
+        expect(outcome.exec.status).toBe('completed');
+        expect(payload.status).toBe('degraded');
+        // the remesh runs on the raw extraction, its scanned trees in it; nothing is planted
+        expect(path.basename(refine.mock.calls[0][0].tilePath)).toBe('textured.glb');
+        expect(veg.plant).not.toHaveBeenCalled();
+        expect(Object.keys(layersOf(payload))).toEqual(['l1', 'l2']);
+        const d = payload.degradations.find((x: any) => x.stage === 'trees-measure');
+        expect(d).toMatchObject({ reasonCode: 'trees_not_measured', fellTo: "the scan's own trees, left in the remeshed scan", provenanceAfter: 'remeshed', transient: false });
+        expect(d.reason).toContain('photo texture 3 could not be decoded: bad Huffman code');
+        expect(payload.summary).toContain('photo texture 3 could not be decoded: bad Huffman code');
+    });
+
+    it('google_3d_tiles_get_clay puts the scanned trees back, and says why, when the measured trees need more than the scene cap', async () => {
         serveTiles();
         fakeRefine();
         fakeVegetation({ trees: 3, fail: 'plant' });
         const outcome = await ask('google_3d_tiles_get_clay', {}, 'clay_plant_fail.glb');
         const payload: any = outcome.resultPayload;
-        expect(outcome.exec.status).toBe('failed');
-        expect(payload.error).toContain("Tile extraction failed at planting: the 13,000 measured trees need at least 1,560,000 triangles at 120 each, more than the scene's cap of 1,500,000 triangles for trees.");
+        expect(outcome.exec.status).toBe('completed');
+        expect(payload.status).toBe('degraded');
+        const d = payload.degradations.find((x: any) => x.stage === 'trees' && x.reasonCode === 'trees_failed');
+        expect(d.provenanceAfter === 'as-scanned' || d.fellTo.includes('nothing')).toBe(true);
+        expect(d.reason).toContain("the 13,000 measured trees need at least 1,560,000 triangles at 120 each, more than the scene's cap of 1,500,000 triangles for trees.");
         // the model is told how to ask for fewer trees, or a budget that holds them
-        expect(payload.error).toContain('Ask again with a smaller radiusMeters (fewer trees), or with treeTriangleBudget set to at least that many triangles to go over the cap, or with trees false.');
-        expect(payload.artifact).toBeUndefined();
+        expect(d.reason).toContain('Ask again with a smaller radiusMeters (fewer trees), or with treeTriangleBudget set to at least that many triangles to go over the cap, or with trees false.');
+        expect(payload.summary).toContain('Ask again with a smaller radiusMeters (fewer trees)');
+        // the tiles and the remesh stay committed
+        expect(Object.keys(layersOf(payload)).slice(0, 2)).toEqual(['l1', 'l2']);
     });
 
-    it('google_3d_tiles_get_clay fails, and mounts nothing, when the treeTriangleBudget asked for cannot hold the trees', async () => {
+    it('google_3d_tiles_get_clay puts the scanned trees back when the treeTriangleBudget asked for cannot hold the trees', async () => {
         serveTiles();
         fakeRefine();
         fakeVegetation({ trees: 3, fail: 'plant_explicit' });
         const outcome = await ask('google_3d_tiles_get_clay', { treeTriangleBudget: 10 }, 'clay_plant_fail_explicit.glb');
         const payload: any = outcome.resultPayload;
-        expect(outcome.exec.status).toBe('failed');
-        expect(payload.error).toContain('Tile extraction failed at planting: a triangle budget of 10 cannot hold 3 trees at 120 triangles each (they need at least 360); the budget was the treeTriangleBudget asked for.');
-        expect(payload.error).toContain('Ask again with treeTriangleBudget set to at least that many triangles, or with trees false.');
-        expect(payload.artifact).toBeUndefined();
+        expect(outcome.exec.status).toBe('completed');
+        const d = payload.degradations.find((x: any) => x.stage === 'trees' && x.reasonCode === 'trees_failed');
+        expect(d.reason).toContain('a triangle budget of 10 cannot hold 3 trees at 120 triangles each (they need at least 360); the budget was the treeTriangleBudget asked for.');
+        expect(d.reason).toContain('Ask again with treeTriangleBudget set to at least that many triangles, or with trees false.');
     });
 
     it('google_3d_tiles_get_clay names the measured trees left as scanned, with why, and never counts them as rebuilt', async () => {
@@ -740,18 +831,18 @@ describe('a location request returns remeshed geometry', () => {
         }]);
         const said = "3 of 4 trees rebuilt as SB-Veggie; 1 left as scanned: crown 50 (479 m², 3.7 m tall), the regrown tree's leaves reach 89% of its measured crown surface (162 of 182 samples within 1.4 m; 90% needed)";
         expect(payload.trees.outcome).toBe(said);
-        expect(outcome.exec.summaryResult).toContain(` ${said}.`);
-        expect(payload.artifact.summary).toContain(said);
-        const trees = payload.artifact.data.objects[1];
-        expect(trees.content.metadata).toMatchObject({ treeCount: 3, treesLeftAsScanned: 1 });
+        expect(payload.summary).toContain(` ${said}.`);
+        // that tree is a degraded part of its own: kept as scanned, with its reason, for the viewport to shade and the model to read
+        expect(payload.degradations.find((x: any) => x.reasonCode === 'not_regrowable')).toMatchObject({ stage: 'trees', fellTo: 'that tree kept as scanned', provenanceAfter: 'as-scanned', part: { crownId: 50 } });
+        expect(layersOf(payload).l5.content.metadata).toMatchObject({ treeCount: 3, treesLeftAsScanned: 1 });
     });
 
-    it('google_3d_tiles_get_clay says, in the artifact summary too, the side closed beside a tree kept as scanned and every rebuilt tree short of its crown or off the mounted ground', async () => {
+    it('google_3d_tiles_get_clay says, in the summary, the side closed beside a tree kept as scanned and every rebuilt tree short of its crown or off the mounted ground', async () => {
         serveTiles();
         fakeRefine();
         const veg = fakeVegetation({
             trees: 3, notRegrowable: 1, keptSkirt: true,
-            shortOfCrown: [{ crownId: 1, budget: 120, ownBudget: 812, neededTriangles: 334, crownSurfaceReached: 0.776, reason: 'within its budget of 120 triangles its 5 leaf masses reach 77.6% of its measured crown surface (164 of 211 samples within 1.8 m; 90% needed; 5 of the 14 masses that reach it fit)' }],
+            shortOfCrown: [{ crownId: 1, budget: 120, ownBudget: 812, neededTriangles: 334, crownSurfaceReached: 0.776, reason: 'within its budget of 120 triangles its 5 leaf masses reach 77.6% of its measured crown surface (164 of 211 samples within 1.4 m; 90% needed)' }],
             offGround: [{ crownId: 2, gapM: 17.7 }]
         });
         const outcome = await ask('google_3d_tiles_get_clay', {}, 'clay_short.glb');
@@ -768,28 +859,10 @@ describe('a location request returns remeshed geometry', () => {
             '1 rebuilt tree stands more than 0.5 m off the mounted model at its trunk base, measured under each stem: crown 2 (17.7 m above it)'
         ]) {
             expect(payload.trees.outcome).toContain(part);
-            expect(payload.artifact.summary).toContain(part);
-            expect(outcome.exec.summaryResult).toContain(part);
+            expect(payload.summary).toContain(part);
         }
         // a tree short of its crown is not said to fill it
-        expect(outcome.exec.summaryResult).toContain('The rebuilt trees (space colonisation, studio clay) are grown into 330 m² of measured crown, 220 m² of it by trees whose leaves fill their crown');
-    });
-
-    it('google_3d_tiles_get_clay with isolate names only the trees on the isolated structure, in the artifact summary too', async () => {
-        serveTiles();
-        fakeRefine();
-        // crowns 50 and 51 are kept as scanned; only 51 stands on the structure; all 3 rebuilt trees stand on it
-        fakeVegetation({ trees: 3, notRegrowable: 2, keptNotOnSupportMesh: [50] });
-        const outcome = await ask('google_3d_tiles_get_clay', { isolate: true }, 'clay_isolate_kept.glb');
-        const payload: any = outcome.resultPayload;
-        expect(outcome.exec.status).toBe('completed');
-        expect(payload.trees).toMatchObject({ measured: 4, count: 3, notRegrowable: 1, notOnStructure: 1, onIsolatedStructure: true });
-        expect(payload.trees.keptAsScanned.map((k: any) => k.crownId)).toEqual([51]);
-        const said = '3 of 4 trees on the isolated structure rebuilt as SB-Veggie; 1 left as scanned: crown 51';
-        expect(payload.trees.outcome.startsWith(said)).toBe(true);
-        expect(payload.trees.outcome.endsWith('; 1 measured tree in the extracted district does not stand on it')).toBe(true);
-        expect(payload.artifact.summary).toContain(payload.trees.outcome);
-        expect(payload.artifact.summary).not.toContain('crown 50');
+        expect(payload.summary).toContain('The rebuilt trees (space colonisation, studio clay) are grown into 330 m² of measured crown, 220 m² of it by trees whose leaves fill their crown');
     });
 
     it('both extraction tools fail with a typed missing-input error when no place is given', async () => {
@@ -819,7 +892,7 @@ describe('a location request returns remeshed geometry', () => {
             expect(props.remesh.type).toBe('BOOLEAN');
             expect(props.isolate.type).toBe('BOOLEAN');
             expect(props.mockExecution).toBeUndefined();
-            expect(props.remesh.description).toContain('the call fails with the reason');
+            expect(props.remesh.description).toMatch(/If remeshing fails/);
         }
         expect((registry.get('google_3d_tiles_get_clay')!.declaration.parameters as any).properties.trees.type).toBe('BOOLEAN');
         expect((registry.get('google_3d_tiles_get_clay')!.declaration.parameters as any).properties.treeTriangleBudget.type).toBe('NUMBER');

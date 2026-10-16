@@ -518,50 +518,59 @@ export function describeLocationClay(result: LocationClayResult | undefined, fla
     let s = ` Remeshed${result.isolate ? ' the structure at the anchor' : ''} (${counts}) in ${(r.ms / 1000).toFixed(1)} s${r.cached ? ' (cached)' : ''}; the mounted ${flavour === 'clay' ? 'clay ' : ''}model is ${result.url}.`;
     if (r.binaryWarning) s += ` Note: tile_refine ${r.binaryWarning}.`;
     const t = result.trees;
-    if (t) {
-        const kept: string[] = [];
-        if (t.cutAtBoundary) kept.push(`${plural(t.cutAtBoundary, 'crown')} cut by the extraction boundary (${t.cutAtBoundary === 1 ? 'its top lies' : 'their tops lie'} outside it)`);
-        if (t.belowMinHeight) kept.push(`${plural(t.belowMinHeight, 'low planting')} (under the minimum tree height)`);
-        if (t.noMeasuredGround) {
-            const hanging = Math.min(t.hangingBelowSupport ?? 0, t.noMeasuredGround), flat = t.noMeasuredGround - hanging;
-            const them = (n: number) => (n === 1 ? 'it' : 'them');
-            if (!hanging) {
-                kept.push(`${plural(t.noMeasuredGround, 'crown')} with no ground measurable around ${them(t.noMeasuredGround)} (no surface gentle enough to stand on, such as a steep slope)`);
-            } else {
-                const why = [`${hanging.toLocaleString()} hanging below the level surfaces measured around ${them(hanging)} (canopy tops, not ground) with nothing standable under ${hanging === 1 ? 'its stem' : 'their stems'}`];
-                if (flat) why.unshift(`${flat.toLocaleString()} with no surface gentle enough to stand on around ${them(flat)}, such as a steep slope`);
-                kept.push(`${plural(t.noMeasuredGround, 'crown')} with no ground measurable for ${them(t.noMeasuredGround)}: ${why.join('; ')}`);
-            }
-        }
-        if (t.smallCanopyPatches) kept.push(`${plural(t.smallCanopyPatches, 'canopy patch', 'canopy patches')} too small to measure as a crown`);
-        let notes = kept.length ? ` Kept as scanned: ${kept.join(', ')}.` : '';
-        if (t.supportedUnderStem) {
-            const one = t.supportedUnderStem === 1;
-            notes += ` ${plural(t.supportedUnderStem, 'crown')} ${one ? 'stands' : 'stand'} on the ground the scan has under ${one ? 'its stem' : 'their stems'}, not on the level surfaces measured around ${one ? 'it' : 'them'}: those were canopy tops (${one ? 'its crown hung' : 'their crowns hung'} below them, or nothing standable lay between ${one ? 'it' : 'them'} and the ground).`;
-        }
-        if (t.cutRemoved) notes += ` Taken out with the trees ${t.cutRemoved === 1 ? 'it was' : 'they were'} joined to, and not rebuilt (${t.cutRemoved === 1 ? 'its trunk lies' : 'their trunks lie'} outside the extraction): ${plural(t.cutRemoved, 'cut crown')}, ${Math.round(t.cutCanopyRemovedM2)} m² of canopy.`;
-        if (t.canopyTakenWithTreesM2 >= 1) notes += ` ${Math.round(t.canopyTakenWithTreesM2)} m² of canopy outside the measured crowns hung on the removed trees and went with them.`;
-        notes += describeGroundClosing(t);
-        // the trees are measured, and the ground closed, over the whole extraction; an isolated structure is part of it
-        if (notes && result.isolate) notes = ` In the extracted district around it:${notes}`;
-        if (t.measured > 0) s += ` ${t.outcome || describeTreeOutcome(t)}.`;
-        if (t.count > 0) {
-            s += t.shortOfCrown?.length
-                ? ` The rebuilt trees (space colonisation, studio clay) are grown into ${Math.round(t.treeCanopyAreaM2)} m² of measured crown, ${Math.round(t.filledCanopyAreaM2)} m² of it by trees whose leaves fill their crown`
-                : ` The rebuilt trees (space colonisation, studio clay) fill ${Math.round(t.treeCanopyAreaM2)} m² of measured crown`;
-            if (t.reachingBoundary) s += ` (${t.reachingBoundary} of them ${t.reachingBoundary === 1 ? 'runs' : 'run'} to the extraction's edge and ${t.reachingBoundary === 1 ? 'was' : 'were'} rebuilt up to it)`;
-            s += `, ${t.triangles.toLocaleString()} triangles within a budget of ${t.triangleBudget.toLocaleString()}${describeTreeBudget(t)}; the trees model is ${t.url}.`;
-        } else if (t.measured === 0 && t.notOnStructure > 0) {
-            s += ` The photo tiles show ${plural(t.notOnStructure, 'measured tree')} in the extracted district, none standing on the isolated structure, so no trees were added to it.`;
-        } else if (t.measured > 0) {
-            s += ' No trees model was added.';
-        } else if (t.canopyAreaM2 > 0) {
-            s += ` The photo tiles show ${Math.round(t.canopyAreaM2)} m² of vegetation but no crown that measures as a tree, so no trees were added.`;
+    if (t) s += describeTrees(t, result.isolate);
+    return s;
+}
+
+/**
+ * What the trees stage did, in sentences for a tool summary: the outcome (rebuilt, kept as scanned, with why), the budget,
+ * the crowns kept as scanned and taken out, and what closing the ground under the removed trees added (not in the
+ * scan). Leads with a space. `isolate`: the structure at the anchor was asked for alone.
+ */
+export function describeTrees(t: LocationClayTrees, isolate: boolean): string {
+    let s = '';
+    const kept: string[] = [];
+    if (t.cutAtBoundary) kept.push(`${plural(t.cutAtBoundary, 'crown')} cut by the extraction boundary (${t.cutAtBoundary === 1 ? 'its top lies' : 'their tops lie'} outside it)`);
+    if (t.belowMinHeight) kept.push(`${plural(t.belowMinHeight, 'low planting')} (under the minimum tree height)`);
+    if (t.noMeasuredGround) {
+        const hanging = Math.min(t.hangingBelowSupport ?? 0, t.noMeasuredGround), flat = t.noMeasuredGround - hanging;
+        const them = (n: number) => (n === 1 ? 'it' : 'them');
+        if (!hanging) {
+            kept.push(`${plural(t.noMeasuredGround, 'crown')} with no ground measurable around ${them(t.noMeasuredGround)} (no surface gentle enough to stand on, such as a steep slope)`);
         } else {
-            s += ' No tree canopy was measured in the photo tiles, so no trees were added.';
+            const why = [`${hanging.toLocaleString()} hanging below the level surfaces measured around ${them(hanging)} (canopy tops, not ground) with nothing standable under ${hanging === 1 ? 'its stem' : 'their stems'}`];
+            if (flat) why.unshift(`${flat.toLocaleString()} with no surface gentle enough to stand on around ${them(flat)}, such as a steep slope`);
+            kept.push(`${plural(t.noMeasuredGround, 'crown')} with no ground measurable for ${them(t.noMeasuredGround)}: ${why.join('; ')}`);
         }
-        s += notes;
     }
+    if (t.smallCanopyPatches) kept.push(`${plural(t.smallCanopyPatches, 'canopy patch', 'canopy patches')} too small to measure as a crown`);
+    let notes = kept.length ? ` Kept as scanned: ${kept.join(', ')}.` : '';
+    if (t.supportedUnderStem) {
+        const one = t.supportedUnderStem === 1;
+        notes += ` ${plural(t.supportedUnderStem, 'crown')} ${one ? 'stands' : 'stand'} on the ground the scan has under ${one ? 'its stem' : 'their stems'}, not on the level surfaces measured around ${one ? 'it' : 'them'}: those were canopy tops (${one ? 'its crown hung' : 'their crowns hung'} below them, or nothing standable lay between ${one ? 'it' : 'them'} and the ground).`;
+    }
+    if (t.cutRemoved) notes += ` Taken out with the trees ${t.cutRemoved === 1 ? 'it was' : 'they were'} joined to, and not rebuilt (${t.cutRemoved === 1 ? 'its trunk lies' : 'their trunks lie'} outside the extraction): ${plural(t.cutRemoved, 'cut crown')}, ${Math.round(t.cutCanopyRemovedM2)} m² of canopy.`;
+    if (t.canopyTakenWithTreesM2 >= 1) notes += ` ${Math.round(t.canopyTakenWithTreesM2)} m² of canopy outside the measured crowns hung on the removed trees and went with them.`;
+    notes += describeGroundClosing(t);
+    // the trees are measured, and the ground closed, over the whole extraction; an isolated structure is part of it
+    if (notes && isolate) notes = ` In the extracted district around it:${notes}`;
+    if (t.measured > 0) s += ` ${t.outcome || describeTreeOutcome(t)}.`;
+    if (t.count > 0) {
+        s += t.shortOfCrown?.length
+            ? ` The rebuilt trees (space colonisation, studio clay) are grown into ${Math.round(t.treeCanopyAreaM2)} m² of measured crown, ${Math.round(t.filledCanopyAreaM2)} m² of it by trees whose leaves fill their crown`
+            : ` The rebuilt trees (space colonisation, studio clay) fill ${Math.round(t.treeCanopyAreaM2)} m² of measured crown`;
+        if (t.reachingBoundary) s += ` (${t.reachingBoundary} of them ${t.reachingBoundary === 1 ? 'runs' : 'run'} to the extraction's edge and ${t.reachingBoundary === 1 ? 'was' : 'were'} rebuilt up to it)`;
+        s += `, ${t.triangles.toLocaleString()} triangles within a budget of ${t.triangleBudget.toLocaleString()}${describeTreeBudget(t)}; the trees model is ${t.url}.`;
+    } else if (t.measured === 0 && t.notOnStructure > 0) {
+        s += ` The photo tiles show ${plural(t.notOnStructure, 'measured tree')} in the extracted district, none standing on the isolated structure, so no trees were added to it.`;
+    } else if (t.measured > 0) {
+        s += ' No trees model was added.';
+    } else if (t.canopyAreaM2 > 0) {
+        s += ` The photo tiles show ${Math.round(t.canopyAreaM2)} m² of vegetation but no crown that measures as a tree, so no trees were added.`;
+    } else {
+        s += ' No tree canopy was measured in the photo tiles, so no trees were added.';
+    }
+    s += notes;
     return s;
 }
 

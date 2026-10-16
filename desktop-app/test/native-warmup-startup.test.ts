@@ -54,15 +54,14 @@ describe('native warm-up placement', () => {
         const savedEnv = { PORT: process.env.PORT, TOOLS: process.env.SCRATCHBOX_TOOLS_PORT };
         process.env.PORT = '0';
         process.env.SCRATCHBOX_TOOLS_PORT = '0';
-        const listeners = { rejection: process.listeners('unhandledRejection'), exception: process.listeners('uncaughtException') };
+        const handlersBefore = { rejection: process.listeners('unhandledRejection'), exception: process.listeners('uncaughtException') };
         try {
             await import('../server/index');
             expect(order).toEqual(['api listening', 'warm-up']);
         } finally {
             // the entry point installs process-wide handlers; leave the test process as it was
-            for (const [event, before] of [['unhandledRejection', listeners.rejection], ['uncaughtException', listeners.exception]] as const) {
-                for (const l of process.listeners(event)) if (!before.includes(l as never)) process.removeListener(event, l as never);
-            }
+            for (const l of process.listeners('unhandledRejection')) if (!handlersBefore.rejection.includes(l)) process.removeListener('unhandledRejection', l);
+            for (const l of process.listeners('uncaughtException')) if (!handlersBefore.exception.includes(l)) process.removeListener('uncaughtException', l);
             if (savedEnv.PORT === undefined) delete process.env.PORT; else process.env.PORT = savedEnv.PORT;
             if (savedEnv.TOOLS === undefined) delete process.env.SCRATCHBOX_TOOLS_PORT; else process.env.SCRATCHBOX_TOOLS_PORT = savedEnv.TOOLS;
         }

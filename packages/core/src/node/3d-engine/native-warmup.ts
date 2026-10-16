@@ -23,7 +23,8 @@
  * services share one in-flight promise and one cross-process lock) and reports the wait.
  */
 
-import { findTileRefineRepoRoot, getTileRefineService } from './tile-refine-service';
+import { getTileRefineService } from './tile-refine-service';
+import { stagedWorkspaceRoot } from './staged-location/stage-cache';
 import { getTileVegetationService } from './tile-vegetation-service';
 import { NativePythonRunnerService } from './native-python-runner-service';
 import { loadScanFit } from './scan-fit-loader';
@@ -84,7 +85,7 @@ export function nativeWarmupSteps(workspaceRoot: string): WarmupStep[] {
  * Builds the engines in order. Resolves with what each step did; it never rejects. It is meant to be started without
  * awaiting it (`void warmNativeEngine(root)`).
  */
-export async function warmNativeEngine(workspaceRoot: string = findTileRefineRepoRoot(), options: WarmupOptions = {}): Promise<WarmupReport> {
+export async function warmNativeEngine(workspaceRoot: string = stagedWorkspaceRoot(), options: WarmupOptions = {}): Promise<WarmupReport> {
     const log = options.log ?? ((m: string) => console.log(m));
     const now = options.now ?? Date.now;
     const env = options.env ?? process.env;

@@ -29,8 +29,17 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { resolveWithinRoot } from '../../security/path-guard';
+import { findTileRefineRepoRoot } from '../tile-refine-service';
 
 export const STAGE_CACHE_VERSION = 'staged_location/v1';
+
+/**
+ * The workspace a staged build keeps its caches and published models in: SCRATCHBOX_ROOT when set (the extraction
+ * already treats it as the root of public/models), else the checkout that holds the native sources.
+ */
+export function stagedWorkspaceRoot(): string {
+    return process.env.SCRATCHBOX_ROOT || findTileRefineRepoRoot();
+}
 
 export interface PublishedFile {
     /** File name under public/models. */

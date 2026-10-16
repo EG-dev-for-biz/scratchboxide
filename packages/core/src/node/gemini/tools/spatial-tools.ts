@@ -89,6 +89,9 @@ import { createStreetViewGroundingImageService, GROUNDING_ASPECT_RATIOS, StreetV
 import { GeminiClient } from '../gemini-client';
 import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
 import { describeLocationClay, runLocationClayPipeline, type LocationClayResult } from '../../3d-engine/location-clay-pipeline';
+import {
+    runStagedLocationTool, STAGED_CLAY_TOOL_DESCRIPTION, STAGED_ISOLATE_DESCRIPTION, STAGED_RADIUS_DESCRIPTION, STAGED_RETRY_RUN_DESCRIPTION, STAGED_RETRY_STAGE_DESCRIPTION
+} from '../../3d-engine/staged-location/staged-location-tool';
 import { findTileRefineRepoRoot } from '../../3d-engine/tile-refine-service';
 import type { ToolContext, ToolDeclaration, ToolHandler, ToolHandlerOutcome, ToolParameterSchema, ToolResultPayload } from './types';
 
@@ -164,7 +167,7 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'google_3d_tiles_get_clay',
-        description: 'Ingest real-world geographic coordinates or address as a studio grey clay 3D GLB object from Google Maps Photorealistic 3D Tiles at highest leaf LOD quality (errorTarget <= 0.5, 4K screen-space error budget): the photo tiles are remeshed and shown in clay, with the trees measured in them rebuilt as SB-Veggie clay trees. Returns glbPath, the mounted models and geometric mesh statistics.',
+        description: STAGED_CLAY_TOOL_DESCRIPTION,
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -178,7 +181,7 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 radiusMeters: {
                     type: 'NUMBER',
-                    description: 'Extraction radius in metres around the anchor (default 250). The nearest 524 leaf tiles are kept; when the radius holds more, the result reports the smaller radius actually covered (coveredRadiusMeters, truncated). A radius that selects more than 6000 leaf tiles fails.'
+                    description: STAGED_RADIUS_DESCRIPTION
                 },
                 stageIntoActiveScene: {
                     type: 'BOOLEAN',
@@ -186,19 +189,19 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 remesh: {
                     type: 'BOOLEAN',
-                    description: 'Remesh the extracted photogrammetry before returning it (default true): hidden shells culled, facades snapped to planes, cracks closed, facade relief added, in one native pass of about 10-60 s. If remeshing fails, the call fails with the reason; nothing else is shown instead. Set false only when the user asks for the raw tiles.'
+                    description: 'Remesh the extracted photogrammetry before returning it (default true): hidden shells culled, facades snapped to planes, cracks closed, facade relief added, in one native pass of about 10-60 s. If remeshing fails, the raw scan is shown with its facades flattened onto fitted planes (labelled scan-flattened) or, failing that, as downloaded, its scanned trees left in it, and the result says so with the reason. Set false only when the user asks for the raw tiles.'
                 },
                 trees: {
                     type: 'BOOLEAN',
-                    description: 'Rebuild the trees measured in the photo tiles as SB-Veggie clay trees (default true): each tree crown found in the photogrammetry is regrown in its measured place, height and spread, and taken out of the remeshed ground, within a triangle budget. A tree whose regrown SB-Veggie tree would not fill its measured crown is not taken out: it stays as scanned, and the result names it with the reason ("N of M trees rebuilt as SB-Veggie; K left as scanned: ..."). The result also names, by crown, any rebuilt tree whose leaves do not fill its crown within the budget and any whose trunk does not meet the mounted ground. Low roof plantings, and crowns cut by the extraction edge (their tops outside it), stay as scanned unless a cut crown is joined to a removed tree, when it goes with it unrebuilt; the result says how many of each, and what was added to close the ground. Set false only when the user asks for no trees. Needs remesh (raw tiles keep their scanned trees).'
+                    description: 'Rebuild the trees measured in the photo tiles as SB-Veggie clay trees (default true): each tree crown found in the photogrammetry is regrown in its measured place, height and spread, and taken out of the remeshed ground, within a triangle budget. A tree whose regrown SB-Veggie tree would not fill its measured crown is not taken out: it stays as scanned, and the result names it with the reason ("N of M trees rebuilt as SB-Veggie; K left as scanned: ..."). The result also names, by crown, any rebuilt tree whose leaves do not fill its crown within the budget and any whose trunk does not meet the mounted ground. Low roof plantings, and crowns cut by the extraction edge (their tops outside it), stay as scanned unless a cut crown is joined to a removed tree, when it goes with it unrebuilt; the result says how many of each, and what was added to close the ground. If the tree stage fails, the scanned trees are put back, labelled as scanned, and the result says so with the reason. For isolate, only trees that could stand on the structure or its apron are measured. Set false only when the user asks for no trees. Needs remesh (raw tiles keep their scanned trees).'
                 },
                 treeTriangleBudget: {
                     type: 'NUMBER',
-                    description: 'Total triangles all rebuilt trees together may use. Default: sized from the measured trees, a budget per tree that grows with its crown and covers the leaf masses its measured crown needs (never under 120 triangles), all within a cap of 1,500,000 triangles for the trees of a scene. A budget too small for the leaves of a tree to fill its crown is reported for that tree. Set it when the user gives a budget, or when a call failed because the measured trees need more than the cap (the error says how many they need; a smaller radiusMeters also has fewer trees).'
+                    description: 'Total triangles all rebuilt trees together may use. Default: sized from the measured trees, a budget per tree that grows with its crown and covers the leaf masses its measured crown needs (never under 120 triangles), all within a cap of 1,500,000 triangles for the trees of a scene. A budget too small for the leaves of a tree to fill its crown is reported for that tree. Set it when the user gives a budget, or when the result says the trees were put back as scanned because the measured trees need more than the cap (it says how many they need; a smaller radiusMeters also has fewer trees).'
                 },
                 isolate: {
                     type: 'BOOLEAN',
-                    description: 'Return only the structure at the anchor (its whole connected footprint and everything above it, never cut, with a small ground apron) instead of the whole district. Use it when the user asks for one building or object rather than an area.'
+                    description: STAGED_ISOLATE_DESCRIPTION
                 },
                 atomicBuildingIntegrity: {
                     type: 'BOOLEAN',
@@ -211,6 +214,14 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 zenithAltitudeMeters: {
                     type: 'NUMBER',
                     description: 'Altitude in meters for zenith contextual sky camera (defaults to 1800m, min 1800m)'
+                }
+                ,retryRunId: {
+                    type: 'STRING',
+                    description: STAGED_RETRY_RUN_DESCRIPTION
+                },
+                retryStage: {
+                    type: 'STRING',
+                    description: STAGED_RETRY_STAGE_DESCRIPTION
                 }
             },
             required: ['query']
@@ -465,6 +476,9 @@ function modelUri(mountPath: string): string {
  * fails the call with its reason; nothing else is mounted in its place.
  */
 async function extractLocation(toolName: string, args: Record<string, unknown>, ctx: ToolContext, flavour: 'clay' | 'textured'): Promise<ToolHandlerOutcome> {
+    // The clay tool, remeshing: the staged build. Each stage commits as it finishes, a failing stage drops to a simpler
+    // version of the same real data and says so, and a retry rebuilds one stage from the recorded run.
+    if (flavour === 'clay' && args.remesh !== false) return runStagedLocationTool(toolName, args, ctx);
     const query = asString(args.query);
     if (!query) throw new MissingInputError(toolName, 'query', 'a place name, address or "lat, lng"');
     const remeshing = args.remesh !== false;
