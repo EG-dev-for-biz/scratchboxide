@@ -546,7 +546,9 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
             const highlightOn = !!L.highlight && L.highlight.untilMs > Date.now();
             const ghosts = L.showReplaced && !!f?.layers.some(x => x.hidden || x.phase === 'retired');
             const stale = !!f && !!L.state && (f.layers.length !== L.state.layers.length || f.layers.some(x => !L.state!.layers.some(l => l.objectId === x.objectId)));
-            const needsGuard = !f || stale || f.animating || f.pending || L.provenanceOn || highlightOn || ghosts;
+            // "Replay build" is consumed by the next scheduled frame, so it needs the guard even when everything is revealed.
+            const replayPending = !!scheduleRef.current && scheduleRef.current.epoch !== L.replayEpoch;
+            const needsGuard = !f || stale || replayPending || f.animating || f.pending || L.provenanceOn || highlightOn || ghosts;
             if (scene && needsGuard && guardRef.current?.scene !== scene) {
                 guardRef.current?.uninstall();
                 guardRef.current = { scene, uninstall: installRenderGuard(scene, renderer => onFrame(renderer as THREE.WebGLRenderer, scene)) };

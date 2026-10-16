@@ -212,6 +212,52 @@ describe.skipIf(!stagedChrome.ok)('every stage revealed in its real build order 
         expect(hues.filter(h => hueDistance(h, photoHue) < 22).length + hues.filter(h => hueDistance(h, remeshHue) < 22).length).toBeGreaterThanOrEqual(hues.length * 0.8);
     });
 
+    test('a retired layer is out of the scene; Show replaced layers and Replay build bring it back, and both release it again', async () => {
+        // The district case: L1 is superseded by the remesh and, being large, left out of the scene at finish (retired).
+        const st = fixtureState([L('l1'), L('l2')], { runState: 'finished' });
+        st.layers[0] = { ...st.layers[0], retired: true };
+        const id1 = objectIdOf('l1'), id2 = objectIdOf('l2');
+        expect(stagedSceneData(st).objects, 'the retired layer is not among the scene objects').toHaveLength(1);
+        await page.eval(`sbHarness.mount(${JSON.stringify(stagedSceneData(st))})`);
+        await page.waitFor('sbHarness.ready()');
+        await page.waitFor(`sbHarness.attached(${JSON.stringify(id2)})`);
+        await advanceTo(page, 'l2', 1);
+        await page.step(4, STEP);
+        expect(await page.eval<boolean>(`sbHarness.attached(${JSON.stringify(id1)})`), 'the retired layer was never loaded').toBe(false);
+        expect(await page.eval<boolean>(`!!document.querySelector('[data-testid="sb-staged-show-replaced"]')`), 'Show replaced layers is offered').toBe(true);
+        await page.screenshot('retired_layer_out_of_scene');
+
+        // Show replaced layers: the retired layer is loaded again and drawn as a ghost under the remesh.
+        await page.eval(`sbHarness.click('[data-testid="sb-staged-show-replaced"]')`);
+        await page.waitFor(`sbHarness.attached(${JSON.stringify(id1)})`, 30_000, 'retired layer re-added');
+        await page.step(60, STEP);
+        const ghost = await layerFrame(page, 'l1');
+        expect(ghost!.hidden, 'a superseded layer stays superseded').toBe(true);
+        const states = await meshStates(page, 'l1');
+        expect(states.some(m => m.visible), 'the ghost is drawn').toBe(true);
+        expect(states.filter(m => m.visible).every(m => m.staged !== null), 'the ghost carries the staged material').toBe(true);
+        await page.screenshot('retired_layer_ghost');
+
+        // Off again: the layer leaves the scene (the loader releases it) and the remesh is untouched.
+        await page.eval(`sbHarness.click('[data-testid="sb-staged-show-replaced"]')`);
+        await page.step(30, STEP);
+        await page.waitFor(`!sbHarness.attached(${JSON.stringify(id1)})`, 30_000, 'retired layer released');
+        expect((await layerFrame(page, 'l2'))!.phase).toBe('revealed');
+
+        // Replay build re-adds it too, reveals every layer from 0 again, and releases it when the replay is over.
+        await page.eval(`sbHarness.click('[data-testid="sb-staged-replay"]')`);
+        await page.waitFor(`sbHarness.attached(${JSON.stringify(id1)})`, 30_000, 'retired layer re-added for replay');
+        const trace: string[] = [];
+        for (let i = 0; i < 6; i++) { await page.step(1, STEP); const a = await layerFrame(page, 'l1'), b = await layerFrame(page, 'l2'); trace.push(`${a?.phase}/${a?.progress.toFixed(2)} ${b?.phase}/${b?.progress.toFixed(2)}`); }
+        const replaying = await layerFrame(page, 'l2');
+        expect(replaying!.phase, `the replay starts the remesh again: ${trace.join(' | ')}`).toMatch(/revealing|queued|held/);
+        await page.screenshot('retired_layer_replay_start');
+        await advanceTo(page, 'l2', 1);
+        await page.step(200, STEP);
+        await page.waitFor(`!sbHarness.attached(${JSON.stringify(id1)})`, 30_000, 'retired layer released after the replay');
+        expect((await layerFrame(page, 'l2'))!.phase).toBe('revealed');
+    });
+
     test('Stop, an interrupted run and a failed tree stage that puts the scanned trees back', async () => {
         // A run stopped after the fit: every committed layer at its end state at once, nothing animating.
         const stopped = fixtureState([L('l1'), L('l2'), L('l3a'), L('l3b')], { runState: 'stopped', stageStatus: { vision: 'stopped', detail: 'stopped', trees: 'stopped' } });
@@ -243,7 +289,10 @@ describe.skipIf(!stagedChrome.ok)('every stage revealed in its real build order 
         const degraded = fixtureState([L('l1'), L('l2'), L('l3a'), L('l3b'), L('l5x')], { runState: 'finished', degradations: [trees], stageStatus: { trees: 'degraded', vision: 'skipped', detail: 'skipped' } });
         await page.eval(`sbHarness.mount(${JSON.stringify(stagedSceneData(degraded))})`);
         for (const l of ['l2', 'l3b', 'l5x'] as const) await page.waitFor(`sbHarness.attached(${JSON.stringify(objectIdOf(l))})`);
-        await page.step(200, STEP);
+        // To the end state (a screenshot of a half-faded layer would show the dither, not the put-back trees).
+        await advanceTo(page, 'l5x', 1);
+        await page.step(4, STEP);
+        expect((await layerFrame(page, 'l5x'))!.phase, 'the put-back trees are fully revealed').toBe('revealed');
         await page.eval(`sbHarness.click('[data-testid="sb-staged-degraded-toggle"]')`);
         await page.step(2, STEP);
         const list = await page.eval<string>(`sbHarness.text('[data-testid="sb-staged-degraded-list"]')`);
