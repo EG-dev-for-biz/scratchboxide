@@ -48,8 +48,8 @@ export function findArchData(): ArchData | undefined {
                 if (!fs.existsSync(stats) || !['raw_clay.glb', 'clay.glb', 'textured.glb'].every(f => fs.existsSync(path.join(dir, f)))) continue;
                 try {
                     const s = JSON.parse(fs.readFileSync(stats, 'utf8'));
-                    // the arch: an isolated 22 m structure whose footprint is about 158 m2
-                    if (s.isolate?.enabled && Math.abs(s.isolate.footprintArea_m2 - 158) < 5 && Math.abs(s.isolate.height_m - 22.26) < 1) {
+                    // the arch as isolated for the r250 tile (22.26 m tall; the 25 m sized isolate, 22.53 m, is findSizedArchData's)
+                    if (s.isolate?.enabled && Math.abs(s.isolate.footprintArea_m2 - 158) < 5 && Math.abs(s.isolate.height_m - 22.26) < 0.05) {
                         return { rawClay: path.join(dir, 'raw_clay.glb'), remeshClay: path.join(dir, 'clay.glb'), texturedIsolated: path.join(dir, 'textured.glb'), from: dir };
                     }
                 } catch { /* not a tile_refine entry */ }
