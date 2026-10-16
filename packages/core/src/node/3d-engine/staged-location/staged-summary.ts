@@ -165,6 +165,15 @@ export function evidenceSentence(input: StagedSummaryInput): string {
     return `The details were read by ${model.used} (${thinkingWords(model)}, ${s1(model.ms)}) from ${sources}.${fallback}`;
 }
 
+/** The draft survey: how many faces, the cost, what it measured; hints only, never called measured geometry. */
+export function surveySentence(input: StagedSummaryInput): string {
+    const h = input.materialHints;
+    if (!h) return '';
+    const faces = h.faces.filter(f => !f.skipped);
+    const colours = faces.reduce((c, f) => c + (f.palette?.colours.length ?? 0), 0);
+    return `The draft survey read ${n(faces.length)} of ${n(h.faces.length)} faces from ${n(h.cost.images)} Street View image${h.cost.images === 1 ? '' : 's'} (© Google) in ${n(h.cost.visionCalls)} call (${s1(h.cost.seconds * 1000)}); its materials are photo-inferred hints and its ${n(colours)} colour${colours === 1 ? '' : 's'} are measured from the photo pixels, not used as textures.`;
+}
+
 /** Rule "photo-inferred-wording". */
 export function photoInferredSentence(input: StagedSummaryInput): string {
     const o = input.ornament;
@@ -268,6 +277,7 @@ export function summarizeStagedBuild(input: StagedSummaryInput): { digest: strin
     const sentences = [
         stopSentence(input),
         mountedSentence(input),
+        surveySentence(input),
         evidenceSentence(input),
         photoInferredSentence(input),
         ...correctionSentences(input),

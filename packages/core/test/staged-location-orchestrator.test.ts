@@ -32,6 +32,7 @@ import { readGlbTriangles, renderClayPng } from './helpers/clay-glb-render';
 import { STAGED_SCREENSHOT_DIR } from './helpers/staged-real-data';
 import { scanToGeodetic } from '../src/node/spatial/StreetViewSurveyPlanner';
 import { spyOnFsWrites } from './helpers/fs-write-spy';
+import { bandJpeg, GREY, SKY, STONE, surveyReply } from './helpers/photo-ornament-fixtures';
 
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-staged-orch-')));
 afterAll(() => fs.rmSync(TMP, { recursive: true, force: true }));
@@ -252,12 +253,22 @@ function fakeScanFit(dir: string, opts: { fitFails?: Error & { code?: string }; 
     return { deps, calls };
 }
 
+/** What the pass-1 survey call answers in the test running now (undefined: the default survey reply). */
+const surveyBehaviour: { reply?: object | Error } = {};
+
 /** A vision client answering with one roundel on the north spandrel and a correction of the body's height. */
-function visionClient(reply: object | Error, record: any[] = []): VisionGenAIClient {
+function visionClient(reply: object | Error, record: any[] = [], surveyRecord: any[] = []): VisionGenAIClient {
     return {
         models: {
             generateContent: async () => { throw new Error('streaming expected'); },
             generateContentStream: async (params: any) => {
+                // the pass-1 survey is its own call with its own reply; `record` holds the ornament reading's calls only
+                if (/surveying one real structure/.test(JSON.stringify(params.contents?.[0]?.parts?.filter((x: any) => x.text).map((x: any) => x.text) ?? []))) {
+                    surveyRecord.push(params);
+                    if (surveyBehaviour.reply instanceof Error) throw surveyBehaviour.reply;
+                    const text = JSON.stringify(surveyBehaviour.reply ?? surveyReply());
+                    return (async function* () { yield { candidates: [{ content: { parts: [{ text }] }, finishReason: 'STOP' }], modelVersion: `${params.model}-001` } as any; })();
+                }
                 record.push(params);
                 if (reply instanceof Error) throw reply;
                 const text = JSON.stringify(reply);
@@ -285,17 +296,18 @@ function streetViewStandIn(delayMs = 0) {
         return { ok: true, status: 200, statusText: 'OK', json: async () => body } as any;
     }) as typeof fetch;
     const requested: string[] = [];
+    const surveyRequested: string[] = [];
     const grounding = {
         retrieveGroundingImage: async (req: any) => {
-            requested.push(req.panoId);
+            (req.fovDegree >= 55 ? surveyRequested : requested).push(req.panoId);
             if (delayMs) await new Promise(r => setTimeout(r, delayMs));
             const portrait = req.aspectRatio === 'RATIO_3X4';
             const w = portrait ? 480 : 640, h = portrait ? 640 : 480;
-            const bytes = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, h >> 8, h & 255, w >> 8, w & 255, 0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01]), crypto.randomBytes(2000), Buffer.from([0xff, 0xd9])]);
+            const bytes = bandJpeg(req.panoId === 'PN' ? [SKY, STONE, STONE] : req.panoId === 'PE' ? [GREY] : [STONE, GREY], w, h);
             return { image: bytes, mimeType: 'image/jpeg', panoId: req.panoId, headingDegree: req.headingDegree, pitchDegree: req.pitchDegree, fovDegree: req.fovDegree };
         }
     };
-    return { deps: { mapsApiKey: 'maps-key', grounding, fetchImpl: metadata }, requested };
+    return { deps: { mapsApiKey: 'maps-key', grounding, fetchImpl: metadata }, requested, surveyRequested };
 }
 
 const sleepMs = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -390,12 +402,13 @@ describe('an isolated structure', () => {
         // distinctive, undecodable JPEGs: SOI, an SOF0 header giving the size, a random payload
         const sent = new Map<string, Buffer>();
         const requested: string[] = [];
+        const surveyed: string[] = [];
         const grounding = {
             retrieveGroundingImage: async (req: any) => {
-                requested.push(req.panoId);
+                (req.fovDegree >= 55 ? surveyed : requested).push(req.panoId);
                 const portrait = req.aspectRatio === 'RATIO_3X4';
                 const w = portrait ? 480 : 640, h = portrait ? 640 : 480;
-                const bytes = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, h >> 8, h & 255, w >> 8, w & 255, 0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01]), crypto.randomBytes(4000), Buffer.from([0xff, 0xd9])]);
+                const bytes = bandJpeg(req.panoId === 'PN' ? [SKY, STONE, STONE] : req.panoId === 'PE' ? [GREY] : [STONE, GREY], w, h);
                 sent.set(req.panoId, bytes);
                 return { image: bytes, mimeType: 'image/jpeg', panoId: req.panoId, headingDegree: req.headingDegree, pitchDegree: req.pitchDegree, fovDegree: req.fovDegree };
             }
@@ -417,6 +430,8 @@ describe('an isolated structure', () => {
             spy.restore();
             // the fixture's slots sit on the north face: only the pano that stands in front of them is asked, through the grounding service and no other route
             expect([...new Set(requested)]).toEqual(['PN']);
+            // and the pass-1 survey took one wide view of each face, through the same service
+            expect(surveyed.sort()).toEqual(['PE', 'PN', 'PS', 'PW']);
             expect(requested.length).toBeGreaterThanOrEqual(1);
             expect(requested.length).toBeLessThanOrEqual(4);
             expect(result.ornament!.evidence).toEqual({ tileOrthos: 1, streetView: requested.length });
@@ -427,7 +442,7 @@ describe('an isolated structure', () => {
             expect(inline).toHaveLength(requested.length);
             for (const b of inline) expect([...sent.values()].some(o => o.equals(b))).toBe(true);
             // no write anywhere (the spies saw them all) held an image, or named a JPEG
-            const marks = [...sent.values()].map(b => b.subarray(30, 90));
+            const marks = [...sent.values()].map(b => b.subarray(300, 360));
             expect(written.length).toBeGreaterThan(0); // the spies were live: the build wrote its own files
             expect(written.filter(w => w.data && marks.some(m => w.data!.includes(m)))).toEqual([]);
             expect(written.filter(w => /\.jpe?g$/i.test(w.target))).toEqual([]);
@@ -506,6 +521,65 @@ describe('an isolated structure', () => {
     });
 });
 
+describe('pass 1: the draft survey', () => {
+    it('runs beside the remesh and the fit, reads four faces in one call, measures the colours, and puts the hints on the result and in the scene', async () => {
+        const sv = streetViewStandIn();
+        const calls: any[] = [], surveyCalls: any[] = [];
+        const s = setup(ARCH, {}, {
+            scanFit: fakeScanFit(path.join(TMP, 'sf-survey'), { fitDelayMs: 150 }).deps,
+            vision: { client: visionClient(REPLY, calls, surveyCalls), candidates: ['gemini-4-argon'] }, streetView: sv.deps
+        });
+        const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
+        const survey = result.stages.find(x => x.stage === 'survey')!;
+        expect(survey).toMatchObject({ title: 'Surveying the four faces', status: 'committed', cost: { images: 4, visionCalls: 1 } });
+        expect(survey.source).toMatch(/^4 of 4 faces surveyed in [\d.]+ s \(4 images, 1 vision call by gemini-4-argon\)/);
+        expect(surveyCalls.length).toBe(1);
+        // it starts as soon as the structure is known, not after the fit: it began before the fit ended
+        const fit = result.stages.find(x => x.stage === 'fit')!;
+        expect(survey.timings.startedAtMs).toBeLessThan(fit.timings.endedAtMs!);
+        // materials and MEASURED colours, labelled; clay stays one grey; no texture from the photos
+        const hints = result.materialHints!;
+        expect(hints).toMatchObject({ label: 'photo-inferred', palette: 'measured-from-photo' });
+        expect(hints.faces.filter(f => f.palette?.colours.length).length).toBe(4);
+        expect(hints.faces.map(f => f.panoId).sort()).toEqual(['PE', 'PN', 'PS', 'PW']);
+        expect((result.artifact as any).data.stagedBuild.materialHints).toEqual(hints);
+        expect(result.photoCost!.byStage.survey).toEqual({ images: 4, visionCalls: 1, seconds: expect.any(Number) });
+        expect(result.photoCost!.total.visionCalls).toBeGreaterThanOrEqual(2); // the survey and the reading
+        expect(validateContract('StagedLocationResult', result)).toEqual([]);
+        expect(JSON.stringify(result)).not.toMatch(/inlineData|\/9j\//);
+    });
+
+    it('a survey that fails (the model gives nothing usable) degrades one rung: the detail passes go on from the scan-only slots, and it says why', async () => {
+        const sv = streetViewStandIn();
+        surveyBehaviour.reply = { nothing: 'here' };
+        try {
+            const calls: any[] = [];
+            const s = setup(ARCH, {}, { scanFit: fakeScanFit(path.join(TMP, 'sf-survey-bad')).deps, vision: { client: visionClient(REPLY, calls), candidates: ['gemini-4-argon'] }, streetView: sv.deps });
+            const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
+            expect(result.stages.find(x => x.stage === 'survey')).toMatchObject({ status: 'degraded' });
+            const rec = result.degradations.find(d => d.reasonCode === 'survey_failed')!;
+            expect(rec).toMatchObject({ stage: 'survey', fellTo: 'the detail passes aim at the scan-only slots' });
+            expect(rec.reason).toMatch(/no "faces" list/);
+            expect(rec.model).toMatchObject({ requested: 'gemini-4-argon', outcome: 'failed' });
+            expect(result.materialHints).toBeUndefined();
+            // the reading and the detail went on
+            expect(result.stages.find(x => x.stage === 'detail')!.status).toBe('committed');
+            expect(result.ornament!.elements).toBe(1);
+        } finally {
+            surveyBehaviour.reply = undefined;
+        }
+    });
+
+    it('with no Street View service the survey degrades with the missing credential, and nothing is fetched', async () => {
+        const calls: any[] = [], surveyCalls: any[] = [];
+        const s = setup(ARCH, {}, { scanFit: fakeScanFit(path.join(TMP, 'sf-survey-none')).deps, vision: { client: visionClient(REPLY, calls, surveyCalls), candidates: ['gemini-4-argon'] } });
+        const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
+        expect(result.stages.find(x => x.stage === 'survey')).toMatchObject({ status: 'degraded' });
+        expect(result.degradations.find(d => d.stage === 'survey')).toMatchObject({ reasonCode: 'no_street_view', reason: expect.stringContaining('Street View not configured') });
+        expect(surveyCalls).toEqual([]);
+    });
+});
+
 describe('Stop, the deadline and hard failures', () => {
     it('Stop after the remesh commits: no later stage runs, the run is recorded stopped', async () => {
         const s = setup(PARK);
@@ -554,7 +628,7 @@ describe('the call settles before it returns or throws', () => {
             vision: { client: visionClient(REPLY, calls), candidates: ['gemini-4-argon'] }, streetView: sv.deps
         });
         const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
-        expect(sv.requested).toEqual([]); // the fetch starts when the fit is accepted: a rejected fit never started it
+        expect(sv.requested).toEqual([]); // the close-ups start when the fit is accepted: a rejected fit never started them (the wide survey does not wait for the fit)
         const evidence = result.stages.find(x => x.stage === 'evidence')!;
         expect(evidence).toMatchObject({ status: 'skipped', reason: 'there is no accepted fit to place detail on' });
         expect(statusOf(s.events, 'evidence')).toEqual(['skipped']);
@@ -577,7 +651,7 @@ describe('the call settles before it returns or throws', () => {
         expect(s.events.length).toBe(eventsAtReturn);
     });
 
-    it('Street View is credited only where an image was read: a rejected fit fetched none and credits none', async () => {
+    it('Street View is credited only where an image was read: a rejected fit fetched no close-up, the survey read four wide views and is credited', async () => {
         const sv = streetViewStandIn();
         const calls: any[] = [];
         const s = setup(ARCH, {}, {
@@ -585,11 +659,12 @@ describe('the call settles before it returns or throws', () => {
             vision: { client: visionClient(REPLY, calls), candidates: ['gemini-4-argon'] }, streetView: sv.deps
         });
         const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
-        expect(sv.requested).toEqual([]); // no image was fetched for a fit that was then rejected
+        expect(sv.requested).toEqual([]); // no close-up was fetched for a fit that was then rejected
         expect(result.stages.find(x => x.stage === 'evidence')!.status).toBe('skipped');
         expect(calls).toEqual([]); // and none reached the model
-        expect(result.extraction.attribution).toEqual(['Map data ©Google']);
-        expect((result.artifact as any).data.stagedBuild.attribution).toEqual(['Map data ©Google']);
+        expect(result.extraction.attribution).toEqual(['Map data ©Google', 'Street View ©Google']);
+        expect((result.artifact as any).data.stagedBuild.attribution).toEqual(['Map data ©Google', 'Street View ©Google']);
+        expect(sv.surveyRequested.sort()).toEqual(['PE', 'PN', 'PS', 'PW']);
     });
 
     it('Stop during a slow fit, with the Street View fetch and the trees in flight, leaves nothing running and no unhandled rejection', async () => {

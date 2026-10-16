@@ -767,6 +767,8 @@ export interface StageSummary {
     layerIds: string[];
     timings: StageTimings;
     degradationIds: string[];
+    /** Images, vision calls and seconds this stage spent (stages that spend any). */
+    cost?: StageCost;
 }
 
 /** Isolated structure: which structure was picked, and how far it is from the geocoded point. */
@@ -800,6 +802,8 @@ export interface StagedBuildState {
     provenanceLegend: ProvenanceLegendEntry[];
     /** Also on failure (outcome 'failed'). */
     visionModel?: VisionModelUse;
+    /** The draft survey's materials and measured colours (photo-inferred hints; clay stays one grey). */
+    materialHints?: MaterialHints;
     /** "Map data ©Google", "Street View ©Google". */
     attribution: string[];
     /** Stages that can be retried from this run. */
@@ -883,6 +887,9 @@ export const STAGED_DEGRADE_LADDER: readonly DegradeRung[] = [
     { stage: 'remesh', failure: "tile_refine's isolated structure is not the one picked (IoU < 0.7)", fellTo: 'the remeshed scan, without a rebuild', provenanceAfter: PROVENANCE.remeshed, reasonCode: 'isolate_mismatch' },
     { stage: 'fit', failure: 'scan_fit fails or its global gate fails', fellTo: 'the remeshed scan', provenanceAfter: PROVENANCE.remeshed, reasonCode: 'fit_rejected' },
     { stage: 'fit', failure: 'a primitive gate fails, or a residual slab is not box-like', fellTo: 'that region as scanned (pass-through)', provenanceAfter: PROVENANCE.asScanned, reasonCode: 'pass_through' },
+    { stage: 'survey', failure: 'Street View is not configured, or no Google pano looks at any face, or every survey image fails', fellTo: 'no survey: the detail passes aim at the scan-only slots', provenanceAfter: PROVENANCE.photoInferred, reasonCode: 'no_street_view' },
+    { stage: 'survey', failure: 'the one vision call times out, is invalid, or the model chain is exhausted', fellTo: 'no survey: the detail passes aim at the scan-only slots', provenanceAfter: PROVENANCE.photoInferred, reasonCode: 'survey_failed' },
+    { stage: 'survey', failure: 'a face has no Google pano looking at it, or its image does not arrive', fellTo: 'that face is left out of the survey and reported', provenanceAfter: PROVENANCE.photoInferred, reasonCode: 'face_not_surveyed' },
     { stage: 'evidence', failure: 'Street View is not configured, has no Google pano, or every fetch fails', fellTo: 'detail read from the tile photos only', provenanceAfter: PROVENANCE.photoInferred, reasonCode: 'no_street_view' },
     { stage: 'vision', failure: 'the model chain is exhausted, the reply is invalid twice, or the call times out', fellTo: 'the flat fitted face', provenanceAfter: PROVENANCE.fitted, reasonCode: 'vision_unavailable' },
     { stage: 'vision', failure: 'an element is not shown or not resolved by the image it cites', fellTo: 'the flat fitted face', provenanceAfter: PROVENANCE.fitted, reasonCode: 'not_resolvable_in_evidence' },
@@ -925,6 +932,11 @@ export interface StagedLocationResult {
         evidence: { tileOrthos: number; streetView: number };
         model: VisionModelUse; revisionPass: boolean; dropped: number; specPath: string;
     };
+    /** The draft survey's materials and measured colours. */
+    materialHints?: MaterialHints;
+    figures?: FigureRecord[];
+    /** Street View images, vision calls and seconds, in all and per stage. */
+    photoCost?: { total: StageCost; byStage: Record<string, StageCost> };
     /** trees-fix's summary; its trees are labelled "grown to the measured crown". */
     trees?: LocationClayTrees;
     complexityGate: { passed: boolean; totalVertices: number; totalTriangles: number; violations: string[]; exemptions: string[] };
@@ -970,6 +982,80 @@ export const STAGED_SUMMARY_RULES: ReadonlyArray<{ id: string; rule: string }> =
     { id: 'gate-exemptions', rule: 'State any vertex-floor exemption with its basis (scan-derived layer, or a measured rebuild with its StructureFit id).' },
     { id: 'no-adjectives', rule: 'No quality adjectives ("photorealistic", "perfect", "high-fidelity"); every number carries a unit; every count matches the result fields.' }
 ];
+
+// =============================================================================
+// §3.9b The draft survey (pass 1) and the figures (pass 2): contracts
+// =============================================================================
+
+/** What a stage spent: images fetched, vision calls made, seconds taken. Reported per stage and in the result. */
+export interface StageCost { images: number; visionCalls: number; seconds: number }
+
+/** One colour measured from the pixels of a Street View image (decoded in memory), in sRGB. */
+export interface MeasuredColour { srgb: [number, number, number]; hex: string; /** Share of the face's pixels (0..1). */ share: number }
+
+/** A face's palette: Lab k-means with CIEDE2000 merging over the image's pixels. Measured, never named by the model. */
+export interface FacePalette { colours: MeasuredColour[]; method: string; pixels: number; measuredFromPhoto: true }
+
+/**
+ * An element the survey saw on one face. `kind` is an open string (the model's own word), never a closed list. Boxes are
+ * [y0, x0, y1, x1] in 0..1000 of the face's image; size and pitch are ratios of the visible face, not metres (the scan
+ * anchors the metres later).
+ */
+export interface SurveyElement {
+    kind: string;
+    box: [number, number, number, number];
+    /** Width and height of the element over the face's visible width and height. */
+    sizeRatio?: [number, number];
+    repeat?: { count: number; /** Pitch over the visible face width (axis 'h') or height ('v'). */ pitchRatio: number; axis: 'h' | 'v' | 'grid' | (string & {}) };
+    material: string;
+    weathering: string;
+    /** 0..100, the model's. */
+    confidence: number;
+}
+
+export interface SurveyMaterial { description: string; weathering?: string; where?: string }
+
+/** What the one vision call returns for one image. */
+export interface SurveyFaceReply { image: number; elements: SurveyElement[]; materials: SurveyMaterial[] }
+export interface FaceSurveyReply { faces: SurveyFaceReply[] }
+
+/** One surveyed face with its measured palette. A face without a pano is listed with `skipped`. */
+export interface SurveyedFace {
+    faceId: string;
+    /** Outward direction of the face, degrees clockwise from north. */
+    headingDeg: number;
+    source: 'fit' | 'footprint';
+    panoId?: string;
+    captureDate?: string;
+    skipped?: string;
+    palette?: FacePalette;
+    elements: SurveyElement[];
+    materials: SurveyMaterial[];
+}
+
+/**
+ * The materials and colours the survey read, for the later texture and PBR steps. Clay stays one grey; these are hints,
+ * labelled photo-inferred, and the palette is marked measured-from-photo. No Street View pixel is ever used as a texture.
+ */
+export interface MaterialHints {
+    schema: 'scratchbox.material-hints/1';
+    label: 'photo-inferred';
+    palette: 'measured-from-photo';
+    textureUse: 'none: the Street View pixels are not projected onto the model';
+    faces: SurveyedFace[];
+    model: VisionModelUse;
+    cost: StageCost;
+}
+
+/** One figure the figures stage tried: built from a photo, or fallen one rung to the smoothed scan. */
+export interface FigureRecord {
+    id: string;
+    outcome: 'photo-inferred' | 'smoothed-scan' | (string & {});
+    reason?: string;
+    boundsM: { min: Vec3; max: Vec3 };
+    panoId?: string;
+    confidence?: number;
+}
 
 // =============================================================================
 // §3.10 (g) Native <-> server interfaces
@@ -1440,6 +1526,32 @@ const DEFINITIONS = {
         startedAtMs: NUM, endedAtMs: NUM, ms: NUM, cached: BOOL, builtAtMs: NUM, waitedForEngineMs: NUM,
         breakdownMs: numberMap
     }),
+    stageCost: obj(['images', 'visionCalls', 'seconds'], { images: NONNEG_INT, visionCalls: NONNEG_INT, seconds: ref('nonneg') }),
+    measuredColour: obj(['srgb', 'hex', 'share'], { srgb: arr({ type: 'integer', minimum: 0, maximum: 255 }, { minItems: 3, maxItems: 3 }), hex: { type: 'string', pattern: '^#[0-9a-f]{6}$' }, share: ref('unit') }),
+    facePalette: obj(['colours', 'method', 'pixels', 'measuredFromPhoto'], { colours: arr(ref('measuredColour')), method: STR, pixels: NONNEG_INT, measuredFromPhoto: { const: true } }),
+    surveyElement: obj(['kind', 'box', 'material', 'weathering', 'confidence'], {
+        kind: { type: 'string', minLength: 1, maxLength: 60 }, box: arr({ type: 'integer', minimum: 0, maximum: 1000 }, { minItems: 4, maxItems: 4 }),
+        sizeRatio: arr(NUM, { minItems: 2, maxItems: 2 }),
+        repeat: obj(['count', 'pitchRatio', 'axis'], { count: { type: 'integer', minimum: 2, maximum: 400 }, pitchRatio: NUM, axis: STR }),
+        material: { type: 'string', maxLength: 120 }, weathering: { type: 'string', maxLength: 120 }, confidence: { type: 'integer', minimum: 0, maximum: 100 }
+    }),
+    surveyMaterial: obj(['description'], { description: { type: 'string', minLength: 1, maxLength: 160 }, weathering: { type: 'string', maxLength: 120 }, where: { type: 'string', maxLength: 120 } }),
+    FaceSurveyReply: obj(['faces'], {
+        faces: arr(obj(['image', 'elements', 'materials'], {
+            image: NONNEG_INT, elements: arr(ref('surveyElement'), { maxItems: 40 }), materials: arr(ref('surveyMaterial'), { maxItems: 8 })
+        }), { maxItems: MAX_STREET_VIEW_IMAGES_PER_BUILDING })
+    }),
+    surveyedFace: obj(['faceId', 'headingDeg', 'source', 'elements', 'materials'], {
+        faceId: STR, headingDeg: NUM, source: { enum: ['fit', 'footprint'] }, panoId: STR, captureDate: STR, skipped: STR,
+        palette: ref('facePalette'), elements: arr(ref('surveyElement')), materials: arr(ref('surveyMaterial'))
+    }),
+    materialHints: obj(['schema', 'label', 'palette', 'textureUse', 'faces', 'model', 'cost'], {
+        schema: { const: 'scratchbox.material-hints/1' }, label: { const: 'photo-inferred' }, palette: { const: 'measured-from-photo' },
+        textureUse: STR, faces: arr(ref('surveyedFace')), model: ref('visionModelUse'), cost: ref('stageCost')
+    }),
+    figureRecord: obj(['id', 'outcome', 'boundsM'], {
+        id: STR, outcome: STR, reason: STR, boundsM: obj(['min', 'max'], { min: ref('vec3'), max: ref('vec3') }), panoId: STR, confidence: ref('unit')
+    }),
     stageStatus: { enum: ['pending', 'running', 'committed', 'degraded', 'skipped', 'failed', 'stopped'] },
     stagedLayer: obj(['objectId', 'stage', 'layer', 'order', 'url', 'bytes', 'provenance', 'provenanceLabels', 'supersedes', 'revealAfter', 'reveal', 'cached', 'builtAtMs', 'counts'], {
         objectId: { type: 'string', pattern: '^stg-[0-9a-f]{8}-[a-z0-9]+$' }, stage: STR, layer: { type: 'string', pattern: '^l[0-9][a-z0-9]*$' },
@@ -1455,7 +1567,7 @@ const DEFINITIONS = {
     }),
     stageSummary: obj(['stage', 'order', 'title', 'source', 'status', 'layerIds', 'timings', 'degradationIds'], {
         stage: STR, order: INT, title: STR, source: STR, status: ref('stageStatus'), reason: STR,
-        layerIds: arr(STR), timings: ref('stageTimings'), degradationIds: arr(STR)
+        layerIds: arr(STR), timings: ref('stageTimings'), degradationIds: arr(STR), cost: ref('stageCost')
     }),
     structurePick: obj(['seed', 'geocodeToStructureM', 'footprintAreaM2', 'extractionRadiusM', 'containmentRounds'], {
         buildingId: STR, seed: ref('vec2'), geocodeToStructureM: ref('nonneg'), footprintAreaM2: ref('nonneg'), extractionRadiusM: ref('nonneg'),
@@ -1489,7 +1601,7 @@ const DEFINITIONS = {
         provenanceLegend: arr(obj(['label', 'color', 'pattern', 'description'], {
             label: STR, color: { type: 'string', pattern: '^#[0-9a-fA-F]{6}$' }, pattern: STR, description: STR
         })),
-        visionModel: ref('visionModelUse'), attribution: arr(STR),
+        visionModel: ref('visionModelUse'), materialHints: ref('materialHints'), attribution: arr(STR),
         retry: obj(['retryRunId', 'stages'], { retryRunId: { type: 'string', pattern: '^[0-9a-f]{8}$' }, stages: arr(STR) })
     }),
     StageEvent: obj(['schema', 'runId', 'seq', 'stage', 'order', 'status', 'title', 'source', 'degradations', 'timings'], {
@@ -1525,6 +1637,8 @@ const DEFINITIONS = {
             evidence: obj(['tileOrthos', 'streetView'], { tileOrthos: NONNEG_INT, streetView: { type: 'integer', minimum: 0, maximum: MAX_STREET_VIEW_IMAGES_PER_BUILDING } }),
             model: ref('visionModelUse'), revisionPass: BOOL, dropped: NONNEG_INT, specPath: STR
         }),
+        materialHints: ref('materialHints'), figures: arr(ref('figureRecord')),
+        photoCost: obj(['total', 'byStage'], { total: ref('stageCost'), byStage: { type: 'object', additionalProperties: ref('stageCost') } }),
         // trees-fix's LocationClayTrees (node/3d-engine/location-clay-pipeline.ts) owns its own shape
         trees: { type: 'object' },
         complexityGate: obj(['passed', 'totalVertices', 'totalTriangles', 'violations', 'exemptions'], {
@@ -1552,7 +1666,7 @@ export const STAGED_LOCATION_SCHEMA: { $schema: string; $id: string; definitions
 /** The contracts other code reads or writes whole (the rest are shared parts). */
 export const STAGED_CONTRACT_NAMES = [
     'StructureFit', 'VisionOrnamentReply', 'OrnamentSpec', 'OrnamentBuildReport', 'FlattenStats', 'CanopyMask', 'StripRoi',
-    'StagedNodeExtras', 'StagedGlbRootExtras', 'DegradationRecord', 'StagedBuildState', 'StageEvent', 'StagedLocationResult'
+    'StagedNodeExtras', 'StagedGlbRootExtras', 'DegradationRecord', 'StagedBuildState', 'StageEvent', 'StagedLocationResult', 'FaceSurveyReply'
 ] as const satisfies readonly StagedSchemaName[];
 
 /**

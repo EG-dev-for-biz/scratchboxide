@@ -87,6 +87,8 @@ import {
     discoverPanos, facadeGeometry, fetchViews, missingCredentials, EVIDENCE_STAGE_BUDGET_MS, type EvidenceImage, type PanoCandidate, type StreetViewEvidenceDeps
 } from './streetview-evidence';
 import { selectViewsForFit } from './evidence-aim';
+import { describeSurvey, runFaceSurvey, surveyFaceTargets, SURVEY_IMAGE_TIMEOUT_MS, SURVEY_VISION_TIMEOUT_MS, type SurveyResult } from './face-survey';
+import { EVIDENCE_DISCOVERY_ALLOWANCE_MS } from './streetview-evidence';
 import { nominalPose, projectSlots } from './slot-projection';
 import {
     orthoCaption, orthoRef, plannedThinking, readOrnament, streetViewCaption, visionUse, VisionStageError, ORNAMENT_PROMPT_VERSION,
@@ -106,6 +108,7 @@ const NO_EVIDENCE_COST: EvidenceCost = { metadataCalls: 0, cachedCalls: 0, image
 export const STAGES = {
     resolve: { order: -1, title: 'Place', budgetMs: 10_000 },
     tiles: { order: 1, title: 'Google 3D Tiles', budgetMs: 360_000 },
+    survey: { order: -1, title: 'Surveying the four faces', budgetMs: EVIDENCE_DISCOVERY_ALLOWANCE_MS + SURVEY_IMAGE_TIMEOUT_MS + SURVEY_VISION_TIMEOUT_MS + 15_000 },
     evidence: { order: -1, title: 'Street View close-ups', budgetMs: EVIDENCE_STAGE_BUDGET_MS },
     'trees-measure': { order: -1, title: 'Measuring the trees', budgetMs: 300_000 },
     remesh: { order: 2, title: 'Remeshed scan', budgetMs: 300_000 },
@@ -831,6 +834,70 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         const structure = request.isolate && t.sizedTo === 'structure' ? t.structure : undefined;
         const isolateMode = !!structure;
 
+        // ---------------- survey (pass 1: starts now and runs beside the remesh and the fit; needs only the structure pick) ----------------
+        const visionForSurvey = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
+        // the free pano discovery is done once for the survey and the close-ups; it ends only with the call
+        const discoveryStop = new AbortController();
+        ctx.signal?.addEventListener('abort', () => discoveryStop.abort(), { once: true });
+        let panoDiscovery: ReturnType<typeof discoverPanos> | undefined;
+        const discoverOnce = (): ReturnType<typeof discoverPanos> => {
+            panoDiscovery ??= (async () => {
+                const origin: GeodeticOrigin = { lat: placeValue!.lat, lng: placeValue!.lng, heightMeters: extraction.originEllipsoidalHeightM };
+                return discoverPanos(origin, facadeGeometry(structure!), { ...(deps.streetView ?? {}), metadataCachePath: path.join(cache.dir, 'streetview', 'metadata.json') }, discoveryStop.signal, structure!.centroid);
+            })();
+            return panoDiscovery;
+        };
+        const surveyStop = new AbortController();
+        let surveyPromise: Promise<{ result?: SurveyResult; status: string }> | undefined;
+        if (isolateMode && visionForSurvey) {
+            const noSurvey = (reasonCode: string, reason: string, cause?: unknown, model?: VisionModelUse, transient = false) => ({
+                status: 'degraded' as const, source: 'no survey: the detail passes aim at the scan-only slots', reason,
+                ...(model ? { model } : {}),
+                degradations: [run.degrade(record('survey', reasonCode, {
+                    part: { description: 'the draft survey of the structure\'s faces' }, intended: 'an inventory of the faces, their materials and measured colours, from up to 4 wide Street View views',
+                    fellTo: 'the detail passes aim at the scan-only slots', provenanceAfter: PROVENANCE.photoInferred, reason, ...(cause ? { cause } : {}), ...(model ? { model } : {}), transient, runId, now: now()
+                }))]
+            });
+            surveyPromise = runner.stage<SurveyResult>({
+                id: 'survey',
+                run: async io => {
+                    const sv = deps.streetView ?? {};
+                    const missing = missingCredentials(sv);
+                    if (missing) return noSurvey('no_street_view', missing);
+                    io.progress('finding Google Street View panoramas around the structure');
+                    const found = await discoverOnce();
+                    const faces = surveyFaceTargets(structure!);
+                    let result: SurveyResult;
+                    const chain = new VisionModelChain<string>({ client: visionForSurvey.client, candidates: visionForSurvey.candidates, signal: ctx.signal, ...(deps.sleep ? { sleep: deps.sleep } : {}) });
+                    try {
+                        result = await runFaceSurvey({
+                            faces, panos: found.panos, structure: structure!, ground: t.ground!, top: t.unmaskedTop ?? t.ground!.top, deps: sv, chain, signal: io.signal, onProgress: m => io.progress(m), now
+                        });
+                    } catch (err) {
+                        if (isAbort(err) || io.signal.aborted) throw err;
+                        const model = err instanceof VisionStageError ? err.model : visionUse(chain, 'failed', { error: errorMessage(err) });
+                        run.state.visionModel ??= model;
+                        return noSurvey(err instanceof VisionStageError && err.reasonCode === 'no_street_view' ? 'no_street_view' : 'survey_failed',
+                            `no survey (${errorMessage(err)}); the detail passes aim at the scan-only slots`, err, model, err instanceof VisionStageError ? err.transient : true);
+                    }
+                    run.state.materialHints = result.hints;
+                    run.summary('survey').cost = result.cost;
+                    if (result.faces.some(f => f.panoId)) run.state.attribution = [...new Set([...run.state.attribution, 'Street View ©Google'])];
+                    const degradations = result.faces.filter(f => f.skipped).map(f => run.degrade(record('survey', 'face_not_surveyed', {
+                        part: { description: `the ${Math.round(f.headingDeg)}° face of the structure` }, intended: 'a wide Street View view of this face in the survey',
+                        fellTo: 'this face is left out of the survey and reported', provenanceAfter: PROVENANCE.photoInferred, reason: `the ${Math.round(f.headingDeg)}° face was not surveyed: ${f.skipped}`,
+                        transient: /did not arrive/.test(f.skipped ?? ''), runId, now: now(), suffix: f.faceId
+                    })));
+                    return { status: degradations.length ? 'degraded' : 'committed', value: result, source: describeSurvey(result), model: result.model, degradations };
+                },
+                degrade: async err => noSurvey('survey_failed', `no survey (${errorMessage(err)}); the detail passes aim at the scan-only slots`, err, undefined, true)
+            }, surveyStop.signal).then(r => ({ result: r.value, status: r.status }));
+            surveyPromise.catch(() => undefined);
+            siblings.push(surveyPromise);
+        } else {
+            runner.skip('survey', isolateMode ? (deps.vision && 'unavailable' in deps.vision ? deps.vision.unavailable : 'no vision model is configured') : 'not an isolated structure');
+        }
+
         // ---------------- evidence (starts when the fit is accepted: a rejected fit has nothing to place a photo on, and no image is fetched for it) ----------------
         const visionAvailable = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
         const rebuildPossible = isolateMode && !!deps.scanFit;
@@ -853,10 +920,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             }))]
                         };
                     }
-                    const origin: GeodeticOrigin = { lat: placeValue!.lat, lng: placeValue!.lng, heightMeters: extraction.originEllipsoidalHeightM };
-                    const facades = facadeGeometry(structure!);
                     io.progress('finding Google Street View panoramas around the facades');
-                    const found = await discoverPanos(origin, facades, { ...sv, metadataCachePath: path.join(cache.dir, 'streetview', 'metadata.json') }, io.signal, structure!.centroid);
+                    const found = await discoverOnce();
                     const views = selectViewsForFit(found.panos, fit, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top);
                     const discovery = { metadataCalls: found.metadataCalls, cachedCalls: found.cachedCalls };
                     if (!views.length) {
@@ -879,6 +944,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (got.images.length) run.state.attribution = [...new Set([...run.state.attribution, 'Street View ©Google'])];
                     const status = got.images.length ? (degradations.length ? 'degraded' : 'committed') : 'degraded';
                     const cost: EvidenceCost = { ...discovery, imagesRequested: views.length, imagesFetched: got.images.length, fetchMs: got.elapsedMs };
+                    run.summary('evidence').cost = { images: got.images.length, visionCalls: 0, seconds: round(got.elapsedMs / 1000, 1) };
                     return {
                         status, value: { images: got.images, panos: found.panos, cost }, source: `${got.images.length} of ${views.length} Street View images (© Google), kept in memory only`,
                         ...(got.images.length ? {} : { reason: 'every Street View image failed to fetch' }),
@@ -1376,6 +1442,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         return { value: { spec: reading.spec, supportTestRequired: reading.supportTestRequired } };
                     }, { bypass: true });
                     run.state.visionModel = reading.spec.model;
+                    run.summary('vision').cost = { images: inputs.length, visionCalls: reading.spec.revision.passes + 1, seconds: round(reading.spec.model.ms / 1000, 1) };
                     const degradations = reading.dropped.map(d => run.degrade(record('vision', d.reasonCode, {
                         part: { description: `photo-read element ${d.elementId} in slot ${d.slotId}`, slotId: d.slotId, elementId: d.elementId, buildingId: fit.buildingId },
                         intended: 'photo-inferred detail', fellTo: 'the flat fitted face', provenanceAfter: PROVENANCE.fitted, reason: d.problems.join('; '), transient: false, runId, now: now(), suffix: d.elementId
@@ -1507,7 +1574,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         siblings.push(rebuildPromise);
 
         // both branches, and the Street View fetch, are settled before the call goes on: none runs, or rejects unseen, after it
-        const settled = await Promise.allSettled([treesPromise, rebuildPromise, ...(evidencePromise ? [evidencePromise] : [])]);
+        const settled = await Promise.allSettled([treesPromise, rebuildPromise, ...(evidencePromise ? [evidencePromise] : []), ...(surveyPromise ? [surveyPromise] : [])]);
         const failure = settled.find((r): r is PromiseRejectedResult => r.status === 'rejected');
         if (failure) throw failure.reason;
         const treesOut = (settled[0] as PromiseFulfilledResult<Awaited<typeof treesPromise>>).value;
@@ -1655,7 +1722,7 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
     const retryStages = [...new Set(run.state.degradations.filter(d => d.transient && d.retry).map(d => d.retry!.args.retryStage))];
     if (retryStages.length) run.state.retry = { retryRunId: run.runId, stages: retryStages };
     // Street View imagery is credited where it was read; a fetch the fit's failure made moot shows nothing to credit
-    if (!f.rebuild.evidenceCounts?.streetView) run.state.attribution = run.state.attribution.filter(a => a !== 'Street View ©Google');
+    if (!f.rebuild.evidenceCounts?.streetView && !run.state.materialHints?.cost.images) run.state.attribution = run.state.attribution.filter(a => a !== 'Street View ©Google');
     const sourceLimits = f.rebuild.sourceLimits ?? { leafGeometricErrorM: f.extraction.leafGeometricErrorM, meshEdgeP50M: 0, meshResolvableM: round(0.25 * f.extraction.leafGeometricErrorM), texelM: 0, photoResolvableM: 0 };
     const fit = fitResult?.value;
     const ornament = f.rebuild.spec;
@@ -1669,6 +1736,11 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
     const remeshLayer = run.state.layers.find(l => l.layer === 'l2' && l.stage === 'remesh' && l.provenance.label === PROVENANCE.remeshed);
     const byStage = Object.fromEntries(run.state.stages.filter(s => s.timings.ms !== undefined).map(s => [s.stage, s.timings.ms!]));
     const confidences = ornament?.elements.map(e => e.confidence).sort((a, b) => a - b) ?? [];
+    const costed = run.state.stages.filter(x => x.cost);
+    const photoCost = costed.length ? {
+        total: { images: costed.reduce((n, x) => n + x.cost!.images, 0), visionCalls: costed.reduce((n, x) => n + x.cost!.visionCalls, 0), seconds: round(costed.reduce((n, x) => n + x.cost!.seconds, 0), 1) },
+        byStage: Object.fromEntries(costed.map(x => [x.stage, x.cost!]))
+    } : undefined;
     const base: Omit<StagedLocationResult, 'digest' | 'summary' | 'artifact'> = {
         success: true,
         status,
@@ -1702,6 +1774,8 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
                 dropped: ornament.dropped.length, specPath: run.keys.vision ? path.join('.scratchbox', 'cache', 'staged_location', 'vision', run.keys.vision, 'done.json') : ''
             }
         } : {}),
+        ...(run.state.materialHints ? { materialHints: run.state.materialHints } : {}),
+        ...(photoCost ? { photoCost } : {}),
         ...(f.trees ? { trees: f.trees } : {}),
         complexityGate: { passed: gate.passed, totalVertices: gate.totalVertices, totalTriangles: gate.totalTriangles, violations: gate.violations, exemptions: gate.exemptions },
         sourceLimits,
