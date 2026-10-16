@@ -56,6 +56,7 @@
 #include <fstream>
 #include <cstdio>
 #include <set>
+#include <unordered_set>
 #include <sstream>
 
 namespace scratchbox {
@@ -262,6 +263,7 @@ struct FitResult {
     double groundTiltDeg{0}, groundRms{0}, baseY{0};
     std::vector<Loop> footprint;   // the lowest band's outer loops (local)
     std::vector<std::vector<Loop>> footprintHoles;   // the holes of each outer loop, in the same order
+    std::vector<P2> footprintHullTile;   // when no band traced a loop: the scan's plan hull (tile frame), measured and said so in the notes
     SourceLimits limits;
     std::vector<Primitive> prims;
     std::vector<Surface> surfaces;
@@ -350,6 +352,25 @@ inline std::vector<P2> tessellate(const Loop& L, double sag) {
 // ============================================================================================
 // The fitter
 // ============================================================================================
+
+/**
+ * A vertex a real tile scan can hold: finite, within `kSaneRadiusM` of the centre in plan and `kSaneHeightM` of it vertically.
+ * A stray spike (a mis-registered tile vertex, an Inf from a bad decode) would otherwise size the occupancy raster and the
+ * hash grids from its coordinates and take gigabytes. Triangles with a vertex outside are dropped before anything is sized.
+ */
+constexpr double kSaneRadiusM = 600.0, kSaneHeightM = 1500.0;
+inline bool saneVertex(const Vec3& p, double cx, double cy, double cz) {
+    if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) return false;
+    return std::hypot(p.x - cx, p.z - cz) <= kSaneRadiusM && std::fabs(p.y - cy) <= kSaneHeightM;
+}
+/** Median of the finite vertices (plan and height): the centre when no anchor is given. */
+inline Vec3 saneCentre(const std::vector<Vec3>& v) {
+    std::vector<float> xs, ys, zs;
+    for (const auto& p : v) if (std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z)) { xs.push_back(p.x); ys.push_back(p.y); zs.push_back(p.z); }
+    if (xs.empty()) return Vec3(0, 0, 0);
+    auto med = [](std::vector<float>& a) { std::nth_element(a.begin(), a.begin() + static_cast<long>(a.size() / 2), a.end()); return a[a.size() / 2]; };
+    return Vec3(med(xs), med(ys), med(zs));
+}
 
 class Fitter {
 public:
@@ -492,10 +513,28 @@ private:
     void load(const std::vector<uint8_t>& glb) {
         auto scene = gltf::GlbSceneReader::parse(glb.data(), glb.size());
         if (!scene.ok) throw ScanFitError("input_unreadable", "cannot read the scan: " + scene.error);
+        // only the vertices a tile can hold, and only the triangles made of them (see saneVertex)
+        const auto& mv = scene.mesh.vertices;
         std::vector<Vec3> pos;
-        pos.reserve(scene.mesh.vertices.size());
-        for (const auto& v : scene.mesh.vertices) pos.push_back(v.position);
-        sg::Scan all = sg::weldScan(pos, scene.mesh.indices, P.weldM);
+        std::vector<uint32_t> sidx;
+        {
+            const Vec3 ctr = saneCentre([&] { std::vector<Vec3> q; q.reserve(mv.size()); for (const auto& v : mv) q.push_back(v.position); return q; }());
+            std::vector<int64_t> remap(mv.size(), -1);
+            std::vector<uint8_t> ok(mv.size());
+            for (size_t v = 0; v < mv.size(); ++v) ok[v] = saneVertex(mv[v].position, Q.anchorX, ctr.y, Q.anchorZ);
+            size_t dropped = 0;
+            const auto& ix = scene.mesh.indices;
+            for (size_t t = 0; t + 2 < ix.size(); t += 3) {
+                if (ix[t] >= mv.size() || ix[t + 1] >= mv.size() || ix[t + 2] >= mv.size() || !ok[ix[t]] || !ok[ix[t + 1]] || !ok[ix[t + 2]]) { ++dropped; continue; }
+                for (int j = 0; j < 3; ++j) {
+                    const uint32_t v = ix[t + j];
+                    if (remap[v] < 0) { remap[v] = static_cast<int64_t>(pos.size()); pos.push_back(mv[v].position); }
+                    sidx.push_back(static_cast<uint32_t>(remap[v]));
+                }
+            }
+            if (dropped) R.notes.push_back("scan_fit dropped " + std::to_string(dropped) + " triangle(s) with a non-finite vertex or one more than " + std::to_string(static_cast<int>(kSaneRadiusM)) + " m (plan) or " + std::to_string(static_cast<int>(kSaneHeightM)) + " m (height) from the anchor");
+        }
+        sg::Scan all = sg::weldScan(pos, sidx, P.weldM);
         if (all.triangles() == 0) throw ScanFitError("input_unreadable", "the scan has no triangles");
         int nc = 0;
         const auto lab = sg::components(all, &nc);
@@ -856,25 +895,46 @@ private:
         // merge coplanar planes
         const float cosM = static_cast<float>(std::cos(rad(P.mergeAngleDeg)));
         const double offM = std::max(P.mergeOffsetM, mergeOffsetM), maxRmsM = std::max(P.planeMaxRmsM, mergeMaxRmsM);
-        bool merged = true;
-        while (merged) {
-            merged = false;
-            for (size_t a = 0; a < regions.size() && !merged; ++a) {
-                for (size_t b = a + 1; b < regions.size() && !merged; ++b) {
-                    if (regions[a].pl.n.dot(regions[b].pl.n) < cosM) continue;
-                    if (std::fabs(regions[a].pl.dist(regions[b].c)) > offM || std::fabs(regions[b].pl.dist(regions[a].c)) > offM) continue;
-                    Region m;
-                    m.tris = regions[a].tris;
-                    m.tris.insert(m.tris.end(), regions[b].tris.begin(), regions[b].tris.end());
-                    std::sort(m.tris.begin(), m.tris.end());
-                    m.pl = fitRegion(m.tris, regions[a].pl.n);
-                    stats(m);
-                    if (m.rms > maxRmsM) continue;
-                    regions[a] = std::move(m);
-                    regions.erase(regions.begin() + static_cast<long>(b));
-                    merged = true;
+        // Passes over the live regions in index order, each merge replacing `a` in place and killing `b` (no restart from 0, no
+        // erase): a pair that failed the thickness test is remembered by the two regions' stamps, so it is refitted only when
+        // one of them has changed. The cost is the merges themselves, not the number of regions cubed.
+        {
+            const size_t R0 = regions.size();
+            std::vector<uint8_t> alive(R0, 1);
+            std::vector<uint64_t> stamp(R0);
+            for (size_t i = 0; i < R0; ++i) stamp[i] = i;
+            uint64_t nextStamp = R0;
+            std::unordered_set<uint64_t> failed;
+            bool merged = true;
+            while (merged) {
+                merged = false;
+                for (size_t a = 0; a < R0; ++a) {
+                    if (!alive[a]) continue;
+                    for (size_t b = a + 1; b < R0; ++b) {
+                        if (!alive[b]) continue;
+                        if (regions[a].pl.n.dot(regions[b].pl.n) < cosM) continue;
+                        if (std::fabs(regions[a].pl.dist(regions[b].c)) > offM || std::fabs(regions[b].pl.dist(regions[a].c)) > offM) continue;
+                        const uint64_t key = (stamp[a] << 32) ^ stamp[b];
+                        if (failed.count(key)) continue;
+                        Region m;
+                        m.tris = regions[a].tris;
+                        m.tris.insert(m.tris.end(), regions[b].tris.begin(), regions[b].tris.end());
+                        std::sort(m.tris.begin(), m.tris.end());
+                        m.pl = fitRegion(m.tris, regions[a].pl.n);
+                        stats(m);
+                        if (m.rms > maxRmsM) { failed.insert(key); continue; }
+                        regions[a] = std::move(m);
+                        stamp[a] = nextStamp++;
+                        regions[b].tris.clear(); regions[b].tris.shrink_to_fit();
+                        alive[b] = 0;
+                        merged = true;
+                    }
                 }
             }
+            std::vector<Region> kept;
+            kept.reserve(R0);
+            for (size_t i = 0; i < R0; ++i) if (alive[i]) kept.push_back(std::move(regions[i]));
+            regions.swap(kept);
         }
         // opposed sheets under sheetGapM apart that overlap: internal plates, not solids
         for (size_t a = 0; a < regions.size(); ++a) {
@@ -1337,6 +1397,52 @@ private:
     // model under construction
     struct ColumnSpec { P2 centre; double y0{0}, y1{0}; double rTrace{0}; std::vector<std::array<double, 2>> profile; double rms{0}; double heightCoverage{0}; };
 
+    struct FootprintCandidate { double y0{0}, area{0}; Loop outer; std::vector<Loop> holes; };
+    std::vector<FootprintCandidate> fpCand;
+
+    /**
+     * The footprint is the plan at the structure's foot. When the lowest band traced nothing, or only a sliver of what the
+     * bands above trace (a scan whose street level is missing or hollow), it is the lowest band whose plan is at least half of
+     * the largest plan traced; when no band traced a loop (columns only), the scan's own plan hull. Both are measured and named in
+     * the notes; nothing is invented.
+     */
+    void chooseFootprint() {
+        double have = 0;
+        for (size_t i = 0; i < R.footprint.size(); ++i) {
+            double a = std::fabs(sg::signedArea(R.footprint[i].pts));
+            for (const auto& h : R.footprintHoles[i]) a -= std::fabs(sg::signedArea(h.pts));
+            have = std::max(have, a);
+        }
+        double maxA = 0;
+        for (const auto& c : fpCand) maxA = std::max(maxA, c.area);
+        if (maxA > 0 && have < 0.5 * maxA) {
+            const FootprintCandidate* pick = nullptr;
+            for (const auto& c : fpCand) if (c.area >= 0.5 * maxA && (!pick || c.y0 < pick->y0)) pick = &c;
+            if (pick) {
+                R.footprint = {pick->outer};
+                R.footprintHoles = {pick->holes};
+                R.notes.push_back("the footprint is the plan of the band from " + sj::num(std::round(pick->y0 * 10) / 10) + " m above the base (" + sj::num(std::round(pick->area)) + " m2): the lowest band traced only " + sj::num(std::round(have)) + " m2, the scan having little structure at street level");
+            }
+        } else if (R.footprint.empty()) {
+            std::vector<P2> pts;
+            for (const auto& v : R.scan.pos) pts.push_back(P2(v.x, v.z));
+            std::sort(pts.begin(), pts.end(), [](const P2& a, const P2& b) { return a.x < b.x || (a.x == b.x && a.y < b.y); });
+            pts.erase(std::unique(pts.begin(), pts.end(), [](const P2& a, const P2& b) { return a.x == b.x && a.y == b.y; }), pts.end());
+            if (pts.size() >= 3) {
+                std::vector<P2> h(2 * pts.size());
+                size_t k = 0;
+                auto cross = [](const P2& o, const P2& a, const P2& b) { return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x); };
+                for (size_t i = 0; i < pts.size(); ++i) { while (k >= 2 && cross(h[k - 2], h[k - 1], pts[i]) <= 0) --k; h[k++] = pts[i]; }
+                for (size_t i = pts.size() - 1, t = k + 1; i > 0; --i) { while (k >= t && cross(h[k - 2], h[k - 1], pts[i - 1]) <= 0) --k; h[k++] = pts[i - 1]; }
+                h.resize(k - 1);
+                if (h.size() >= 3 && std::fabs(sg::signedArea(h)) > 0) {
+                    R.footprintHullTile = h;
+                    R.notes.push_back("no band traced a footprint loop: the footprint is the convex hull of the scan in plan (" + sj::num(std::round(std::fabs(sg::signedArea(h)))) + " m2)");
+                }
+            }
+        }
+    }
+
     void bandsAndFootprints() {
         buildDsm();
         // ledges: horizontal planes that span the plan
@@ -1358,6 +1464,7 @@ private:
         if (structTop > breaks.back() + 0.05) breaks.push_back(structTop);
         int order = 0;
         for (size_t b = 0; b + 1 < breaks.size(); ++b) buildBand(breaks[b], breaks[b + 1], order, b == 0);
+        chooseFootprint();
     }
 
     /** With SCAN_FIT_DEBUG_DIR set, a raster as a PNG there (the footprint of each band: white is structure). */
@@ -1406,6 +1513,13 @@ private:
         std::vector<Loop> holes;
         for (const auto& h : holesRaw) holes.push_back(fitLoop(h.pts, y0, y1, true));
         if (lowest) { R.footprint.push_back(outer); R.footprintHoles.push_back(holes); }
+        {
+            FootprintCandidate c;
+            c.y0 = y0; c.outer = outer; c.holes = holes;
+            c.area = std::fabs(sg::signedArea(outer.pts));
+            for (const auto& h : holes) c.area -= std::fabs(sg::signedArea(h.pts));
+            fpCand.push_back(std::move(c));
+        }
         addPrism(outer, holes, y0, y1, order);
     }
 
@@ -3022,9 +3136,21 @@ inline FlattenOutput flattenScan(const std::vector<uint8_t>& glb, const std::vec
     std::vector<uint8_t> keep(T, 1);
     double footprintArea = 0;
     size_t dropped = 0;
+    {
+        std::vector<Vec3> q;
+        q.reserve(m.vertices.size());
+        for (const auto& v : m.vertices) q.push_back(v.position);
+        const Vec3 ctr = saneCentre(q);
+        for (size_t t = 0; t < T; ++t) {
+            bool ok = true;
+            for (int j = 0; j < 3 && ok; ++j) ok = m.indices[3 * t + j] < q.size() && saneVertex(q[m.indices[3 * t + j]], ctr.x, ctr.y, ctr.z);
+            if (!ok) keep[t] = 0;
+        }
+    }
     if (footprint.size() >= 3) {
         footprintArea = std::fabs(sg::signedArea(footprint));
         for (size_t t = 0; t < T; ++t) {
+            if (!keep[t]) continue;
             const Vec3 c = (m.vertices[m.indices[3 * t]].position + m.vertices[m.indices[3 * t + 1]].position + m.vertices[m.indices[3 * t + 2]].position) * (1.0f / 3.0f);
             const P2 q(c.x, c.z);
             keep[t] = sg::insidePolygon(footprint, q.x, q.y) || sg::polygonDistance(footprint, q) <= dilateM;
@@ -3180,7 +3306,8 @@ inline std::string structureFitJson(const FitResult& R, const FitRequest& Q, con
             area = bigArea;
             for (const auto& h : R.footprintHoles[big]) { holes.push_back(toTile(h)); area -= std::fabs(sg::signedArea(holes.back())); }
         }
-        if (outer.size() < 3) outer = {P2(Q.anchorX, Q.anchorZ), P2(Q.anchorX + 0.01, Q.anchorZ), P2(Q.anchorX, Q.anchorZ + 0.01)};
+        if (outer.size() < 3 && R.footprintHullTile.size() >= 3) { outer = R.footprintHullTile; area = std::fabs(sg::signedArea(outer)); }
+        if (outer.size() < 3) throw ScanFitError("no_structure", "no footprint could be measured: the scan holds no plan");
         sj::Object f;
         f.raw("outer", polyJ(outer));
         if (!holes.empty()) { std::string hs = "["; for (size_t i = 0; i < holes.size(); ++i) hs += (i ? "," : "") + polyJ(holes[i]); hs += "]"; f.raw("holes", hs); }

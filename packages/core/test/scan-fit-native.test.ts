@@ -29,8 +29,8 @@ import * as path from 'path';
 import { ScanFitError, ScanFitService } from '../src/node/3d-engine/scan-fit-service';
 import { validateContract, type StructureFit } from '../src/common/spatial/staged-location-contracts';
 import * as S from './helpers/synthetic-structure-scan';
-import { writeGlb } from './helpers/synthetic-scan-glb';
-import { findArchData } from './helpers/real-arch-data';
+import { writeGlb, quad, flat, type Chunk, type V3 } from './helpers/synthetic-scan-glb';
+import { findArchData, findTileRefineEntry, findPublicModel } from './helpers/real-arch-data';
 import { readGlbTriangles } from './helpers/clay-glb-render';
 import { saveClayShot } from './helpers/staged-shots';
 
@@ -309,6 +309,106 @@ describe('scan_fit flatten', () => {
         expect(minX).toBeGreaterThan(8 - 4 - 4.5);   // within the dilation, plus a triangle's own reach
         expect(saveClayShot('scan_fit_flatten_tree', [{ file: r.glb, color: [0.7, 0.72, 0.75] }], { bearingDeg: 200, elevationDeg: 25 }).covered).toBeGreaterThan(0.03);
     }, 300_000);
+});
+
+/** A tower 80 m wide and 32 m tall whose four walls are 1.6 m panels at random depths within 5 cm, with the steps between them: tens of thousands of triangles and a wall of regions to merge. */
+function panelledTower(file: string): number {
+    const cell = 1.6, W = 80, H = 32, depth = 0.05;
+    const nx = Math.round(W / cell), ny = Math.round(H / cell);
+    const chunks: Chunk[] = [];
+    const wall = (o: V3, u: V3, n: V3) => {
+        const d = (i: number, j: number) => { let h = (i * 73856093) ^ (j * 19349663) ^ ((o[0] * 83492791) | 0) ^ ((o[2] * 2654435) | 0); h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h >>> 0) / 4294967296 - 0.5) * 2 * depth; };
+        const P = (s: number, y: number, dd: number): V3 => [o[0] + u[0] * s + n[0] * dd, y, o[2] + u[2] * s + n[2] * dd];
+        const sub = (a: V3, b: V3, c: V3, na: number, nb: number) => quad(a, [b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]], na, nb);
+        for (let i = 0; i < nx; i++) for (let j = 0; j < ny; j++) {
+            const s0 = i * cell, s1 = (i + 1) * cell, y0 = j * cell, y1 = (j + 1) * cell, dd = d(i, j);
+            chunks.push(sub(P(s0, y0, dd), P(s1, y0, dd), P(s0, y1, dd), 2, 2));
+            if (i + 1 < nx && d(i + 1, j) !== dd) chunks.push(sub(P(s1, y0, dd), P(s1, y0, d(i + 1, j)), P(s1, y1, dd), 1, 2));
+            if (j + 1 < ny && d(i, j + 1) !== dd) chunks.push(sub(P(s0, y1, dd), P(s1, y1, dd), P(s0, y1, d(i, j + 1)), 2, 1));
+        }
+    };
+    wall([0, 0, 0], [1, 0, 0], [0, 0, -1]);
+    wall([W, 0, 0], [0, 0, 1], [1, 0, 0]);
+    wall([W, 0, W], [-1, 0, 0], [0, 0, 1]);
+    wall([0, 0, W], [0, 0, -1], [-1, 0, 0]);
+    chunks.push(flat(-0.1, W + 0.1, -0.1, W + 0.1, H, 10), flat(-30, W + 30, -30, W + 30, 0, 12));
+    writeGlb(file, chunks);
+    return chunks.reduce((n, c) => n + c.indices.length / 3, 0);
+}
+
+describe('scan_fit on district-sized and spiky scans', () => {
+    it('flattens a 63,000-triangle panelled tower, every vertex within its band, in seconds', async () => {
+        const file = path.join(work, 'scenes', 'panelled_tower.glb');
+        const tris = panelledTower(file);
+        expect(tris).toBeGreaterThan(50_000);
+        const t0 = Date.now();
+        const r = await svc.flatten({ inputGlb: rel(file), bandM: 0.1 });
+        expect(r.value.inputTriangles).toBe(tris);
+        expect(r.value.planes).toBeGreaterThan(4);
+        expect(r.value.movedVertices).toBeGreaterThan(50);
+        expect(r.value.maxMoveM).toBeLessThanOrEqual(0.1 + 1e-6);
+        expect(Date.now() - t0).toBeLessThan(40_000);
+    }, 150_000);
+
+    // the 82,000-triangle Washington Square district (a 233 x 167 m footprint, 11,000 planes): the cubic merge ran for minutes and the service killed it at 120 s
+    const plaza = findPublicModel('the_plaza_40_76463', '_raw_clay.glb');
+    it.skipIf(!plaza)('flattens the real 82,000-triangle district scan in seconds (it ran past four minutes before the merge was incremental)', async () => {
+        fs.mkdirSync(path.join(work, 'real'), { recursive: true });
+        fs.copyFileSync(plaza!, path.join(work, 'real/plaza_raw_clay.glb'));
+        const t0 = Date.now();
+        const r = await svc.flatten({ inputGlb: 'real/plaza_raw_clay.glb', bandM: 0.1 });
+        expect(r.value.inputTriangles).toBeGreaterThan(80_000);
+        expect(r.value.planes).toBeGreaterThan(1000);
+        expect(r.value.maxMoveM).toBeLessThanOrEqual(0.1 + 1e-6);
+        expect(Date.now() - t0).toBeLessThan(60_000);
+        expect(saveClayShot('scan_fit_flatten_district', [{ file: r.glb, color: [0.72, 0.74, 0.77] }], { bearingDeg: 215, elevationDeg: 28 }).covered).toBeGreaterThan(0.03);
+    }, 200_000);
+
+    const spikes: Array<[string, number]> = [['2 km out', 2000], ['10,000 km out', 1e7], ['Infinity', Infinity], ['NaN', NaN]];
+    for (const [name, far] of spikes) {
+        it(`fits a tower whose top has one connected vertex ${name} without hanging, and its footprint is the tower's plan`, async () => {
+            const tri = readGlbTriangles(fs.readFileSync(scenes.triangle.glb));
+            const positions = Array.from(tri.positions);
+            let top = 0;
+            for (let v = 0; v < positions.length / 3; v++) if (positions[3 * v + 1] > positions[3 * top + 1]) top = v;
+            positions[3 * top] = far; positions[3 * top + 2] = far;
+            const file = path.join(work, 'scenes', `spiky_${name.replace(/\W+/g, '_')}.glb`);
+            writeGlb(file, [{ positions, indices: Array.from(tri.indices) }]);
+            const t0 = Date.now();
+            const r = await svc.fit({ scanGlb: rel(file), anchor: { x: 0, z: 0 }, sourceLimits: LIMITS });
+            expect(Date.now() - t0).toBeLessThan(30_000);
+            expect(validateContract('StructureFit', r.value)).toEqual([]);
+            // the plan is the triangle's (135.5 m2), with the dropped roof triangles' share possibly missing from the fit but not from the plan
+            expect(r.value.footprint.areaM2).toBeGreaterThan(120);
+            expect(r.value.footprint.areaM2).toBeLessThan(150);
+        }, 90_000);
+    }
+
+    it('flattens a scan with a non-finite vertex: the triangles it belongs to are dropped, the rest is flattened', async () => {
+        const tri = readGlbTriangles(fs.readFileSync(scenes.triangle.glb));
+        const positions = Array.from(tri.positions);
+        positions[0] = Infinity;
+        const file = path.join(work, 'scenes', 'flatten_inf.glb');
+        writeGlb(file, [{ positions, indices: Array.from(tri.indices) }]);
+        const r = await svc.flatten({ inputGlb: rel(file), bandM: 0.1 });
+        expect(r.value.keptTriangles).toBeLessThan(r.value.inputTriangles);
+        expect(r.value.keptTriangles).toBeGreaterThan(r.value.inputTriangles - 12);
+        expect(r.value.planes).toBeGreaterThan(2);
+    }, 90_000);
+
+    // the real Flatiron isolate whose street level tile_refine left hollow (it dropped 820 m2 of "low attachment"): the lowest band traces nothing
+    const flatiron = findTileRefineEntry(i => Math.abs(i.height_m - 93.9157) < 0.01 && i.footprintArea_m2 === 1054);
+    it.skipIf(!flatiron)('writes the real Flatiron isolate\'s measured plan, not a placeholder, when its street level is missing from the scan', async () => {
+        fs.mkdirSync(path.join(work, 'real'), { recursive: true });
+        fs.copyFileSync(flatiron!.rawClay, path.join(work, 'real/flatiron_raw_clay.glb'));
+        const r = await svc.fit({ scanGlb: 'real/flatiron_raw_clay.glb', anchor: { x: 0, z: 0 }, sourceLimits: LIMITS });
+        // it is not accepted (the scan has no street-level facade to fit), and says so; but the footprint it holds is a plan of the tower
+        expect(r.value.footprint.areaM2).toBeGreaterThan(300);
+        expect(r.value.footprint.areaM2).toBeLessThan(1400);
+        expect(r.value.footprint.outer.length).toBeGreaterThanOrEqual(3);
+        const ex = (i: number) => r.value.footprint.outer.map(p => p[i]);
+        expect(Math.max(...ex(0)) - Math.min(...ex(0)) + Math.max(...ex(1)) - Math.min(...ex(1))).toBeGreaterThan(30);
+    }, 120_000);
 });
 
 const arch = findArchData();

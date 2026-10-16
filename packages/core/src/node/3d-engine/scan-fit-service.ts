@@ -264,6 +264,13 @@ export class ScanFitService {
         }
         const problems = validateContract(name, value);
         if (problems.length) throw new ScanFitError('invalid_output', `scan_fit wrote a ${name} that does not validate: ${problems.slice(0, 6).join('; ')}`);
+        // the contract holds the footprint's shape; a polygon that encloses nothing is a placeholder, and a consumer would isolate or size by it
+        if (name === 'StructureFit') {
+            const fp = (value as { footprint?: { outer: number[][]; areaM2: number } }).footprint;
+            let a = 0;
+            if (fp) for (let i = 0; i < fp.outer.length; i++) { const p = fp.outer[i], q = fp.outer[(i + 1) % fp.outer.length]; a += p[0] * q[1] - q[0] * p[1]; }
+            if (!fp || !(Math.abs(a) / 2 > 1e-6) || !(fp.areaM2 > 0)) throw new ScanFitError('invalid_output', `scan_fit wrote a StructureFit whose footprint encloses no area (${fp ? fp.areaM2 : 'missing'} m2)`);
+        }
         return value as T;
     }
 

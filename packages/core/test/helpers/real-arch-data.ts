@@ -64,3 +64,32 @@ export function findArchData(): ArchData | undefined {
     }
     return undefined;
 }
+
+/** A tile_refine cache entry (raw_clay.glb and its stats.json) whose isolate satisfies `pred`, from this checkout, the main one or a sibling worktree. */
+export function findTileRefineEntry(pred: (isolate: any) => boolean): { rawClay: string; isolate: any; from: string } | undefined {
+    for (const root of roots()) {
+        const cache = path.join(root, '.scratchbox/cache/tile_refine');
+        if (!fs.existsSync(cache)) continue;
+        for (const d of fs.readdirSync(cache)) {
+            const dir = path.join(cache, d);
+            const stats = path.join(dir, 'stats.json');
+            if (!fs.existsSync(stats) || !fs.existsSync(path.join(dir, 'raw_clay.glb'))) continue;
+            try {
+                const s = JSON.parse(fs.readFileSync(stats, 'utf8'));
+                if (s.isolate?.enabled && pred(s.isolate)) return { rawClay: path.join(dir, 'raw_clay.glb'), isolate: s.isolate, from: dir };
+            } catch { /* not a tile_refine entry */ }
+        }
+    }
+    return undefined;
+}
+
+/** A scan from public/models (this checkout, the main one or a sibling worktree) whose file name contains `part` and ends in `suffix`. */
+export function findPublicModel(part: string, suffix: string): string | undefined {
+    for (const root of roots()) {
+        const models = path.join(root, 'public/models');
+        if (!fs.existsSync(models)) continue;
+        const hit = fs.readdirSync(models).find(n => n.includes(part) && n.endsWith(suffix));
+        if (hit) return path.join(models, hit);
+    }
+    return undefined;
+}
