@@ -30,9 +30,17 @@ Every stage has one lower rung built from the same real data. A degraded part ge
 | a tree that cannot regrow | that tree stays as scanned | as-scanned |
 | the whole tree stage | the scanned trees are put back as their own layer, labelled as scanned (never "no trees") | as-scanned |
 | measuring the trees | the raw tile is remeshed with its own trees | remeshed |
-| Street View | tile orthos only | photo-inferred |
+| Street View | no Street View images; the fit's tile orthos are still read (the record says nothing about reading, since a failed fit reads nothing) | photo-inferred |
+| the images shown to the vision model | the tile photos that can still be read | photo-inferred |
+| a containment round, or the 60 m district, that cannot be extracted | the district at the last radius that did come back | remeshed |
+| a request the leaf-tile cap cut short | the nearest leaf tiles; the covered radius is `extraction.radiusM` and `radius_truncated` names the missing outer ring | as-scanned |
+| an unexpected error between the rebuild stages, or around the tree stage | what has not run is skipped with the reason; the other branch finishes first; the call returns | remeshed / fitted |
 
 Only an unresolved place and a place with no tile coverage fail the call (`StagedLocationHardFailure`); nothing real is discarded then.
+
+A stage the run ends because nothing downstream can use it (the Street View fetch once the fit failed) is `skipped` with the reason it was ended for. It is not a time limit and records no degradation. Every stage promise is settled before the call returns or throws, the result holds copies of the stages and degradations, and work a Stop or a time limit abandoned can no longer commit or stream.
+
+The `GeometricComplexityGate` verdict is reported, never thrown. Scan-derived layers, a measured rebuild (on an accepted StructureFit the gate checks itself) and SB-Veggie trees grown to measured crowns (`measuredCrowns`, a whole number of crowns of at least 1) are exempt from the vertex floor, each with its basis; a gate that does not pass, and an exemption it refused, are stated in the summary. The photo-corrected layers are `measuredGeometry: false` with the correction's confidence.
 
 ## Provenance labels (what the viewport shades and the model reports)
 
