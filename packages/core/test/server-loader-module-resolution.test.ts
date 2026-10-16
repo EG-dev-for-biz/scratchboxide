@@ -102,6 +102,13 @@ import { pbrMaterialHandlers } from ${JSON.stringify(path.join(REPO, 'packages/c
         const outGlb = fs.readdirSync(work).find(f => f.endsWith('_adaptive_pbr.glb'));
         expect(outGlb, `no adaptive_pbr GLB written: ${fs.readdirSync(work).join(', ')}`).toBeTruthy();
         const json = readGlbJson(path.join(work, outGlb!));
+        expect((json.images || []).length, 'the output GLB carries real texture images').toBeGreaterThan(0);
         expect((json.materials || []).length).toBeGreaterThan(0);
+        const material = json.materials[json.meshes[0].primitives[0].material];
+        expect(material.pbrMetallicRoughness.baseColorTexture, 'the primitive\'s material samples the albedo image').toBeDefined();
+        expect(material.normalTexture).toBeDefined();
+        expect(json.images.every((i: any) => i.mimeType === 'image/png')).toBe(true);
+        expect(fs.readFileSync(path.join(work, outGlb!)).equals(fs.readFileSync(mesh)), 'the output is not the input').toBe(false);
+        expect(out).toMatch(/RESULT \{[^\n]*box_projection_uv/);
     }, 300_000);
 });
