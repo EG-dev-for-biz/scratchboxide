@@ -28,6 +28,7 @@ export function getActiveUserName(customName?: string): string {
 }
 
 import type { VideoTimelineData, TimelineTrack, KeyframeEasing } from './services/video/videoTypes';
+import type { StagedBuildState } from '../../common/spatial/staged-location-contracts';
 export type { VideoTimelineData, TimelineTrack };
 export * from './services/video/videoTypes';
 
@@ -821,6 +822,11 @@ export interface Scene3DData {
     subtitle?: string;
     worldBranch?: string;
     groundTileMode?: GroundTileMode;
+    /**
+     * A staged location build (google_3d_tiles_get_clay): its stages, the committed layers in objects[], their reveal
+     * order, the degraded parts and the provenance legend. The viewport reveals, labels and shades from it.
+     */
+    stagedBuild?: StagedBuildState;
     /**
      * Optional semantic domain or classification token.
      * 

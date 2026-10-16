@@ -8,7 +8,8 @@
  ********************************************************************************/
 
 import type { GeminiGenerateRequest, SubagentRequest, SubagentResponse } from '../../../common/gemini-protocol';
-import type { McpExecutionState } from '../../../browser/generative-canvas/canvas-types';
+import type { CanvasArtifact, McpExecutionState } from '../../../browser/generative-canvas/canvas-types';
+import type { StageEvent } from '../../../common/spatial/staged-location-contracts';
 import type { ContainerSandboxService } from '../../container-sandbox-service';
 import type { LspDiagnosticFeedbackService } from '../../lsp-diagnostic-feedback-service';
 import type { ProjectContextGraphService } from '../../project-context-graph-service';
@@ -78,6 +79,13 @@ export interface ToolContext {
      * idle limit (see tool-time-budgets.ts). `fraction` is 0..1 when known.
      */
     reportProgress?: (message: string, fraction?: number) => void;
+    /**
+     * A staged build's stage changed status (running, committed, degraded, skipped, failed, stopped). Streamed on the
+     * chat as a status event carrying the running card and the stageEvent; `artifact` is passed only on a commit, a
+     * degrade or the finish, and then mounts (and focuses) the scene with the layers committed so far. Restarts the
+     * tool's idle limit like reportProgress; calls after the tool call has settled are ignored.
+     */
+    emitStage?: (event: StageEvent, artifact?: CanvasArtifact) => void;
 }
 
 export interface SubagentRunResult {
