@@ -183,6 +183,13 @@ describe.skipIf(!stagedChrome.ok)('every stage revealed in its real build order 
         await page.step(3, STEP);
         await page.screenshot('provenance_on_synthetic_detail');
         await expectHue('l4', PROVENANCE.photoInferred, '#CC79A7');
+        // Photo-inferred detail is broken up by 0.6 × (1 - its confidence): the less sure, the more of it is background.
+        const l4 = JSON.parse(fixture.glbs.l4.toString('utf8', 20, 20 + fixture.glbs.l4.readUInt32LE(12)));
+        const confidence = new Map<string, number>((l4.nodes ?? []).filter((n: any) => n.extras?.sb?.provenance?.confidence !== undefined).map((n: any) => [n.name, n.extras.sb.provenance.confidence] as const));
+        const shares = (await page.eval<Array<{ node: string; pixels: number; share: number }>>(`sbHarness.patternShare(${JSON.stringify(objectIdOf('l4'))})`)).filter(n => confidence.has(n.node) && n.pixels >= 150);
+        const shareReport = shares.map(n => `${n.node} conf ${confidence.get(n.node)} → ${n.share.toFixed(3)}`).join('; ');
+        expect(new Set(shares.map(n => confidence.get(n.node))).size, `detail nodes at different confidences are in view: ${shareReport}`).toBeGreaterThanOrEqual(2);
+        for (const n of shares) expect(Math.abs(n.share - 0.6 * (1 - confidence.get(n.node)!)), `${n.node}: ${shareReport}`).toBeLessThanOrEqual(0.04);
 
         await page.eval(`sbHarness.click('[data-testid="sb-staged-provenance-toggle"]')`);
         await page.step(4, STEP);
@@ -245,6 +252,74 @@ describe.skipIf(!stagedChrome.ok)('every stage revealed in its real build order 
         // The stripes mark the variant (35%) and the dots its confidence (0.6 × 0.65 = 39%); the two overlap by chance.
         const expectedShare = 1 - (1 - STRIPE_COVERAGE) * (1 - 0.6 * 0.65);
         expect(Math.abs(unobserved!.share - expectedShare), `${unobserved!.node}: ${unobserved!.share.toFixed(3)} vs ${expectedShare.toFixed(3)}`).toBeLessThanOrEqual(0.04);
+    });
+
+    test('a refit changes only the primitives vision corrected: they animate and show as photo-corrected, the rest stay put', async () => {
+        const REFIT = 'stg-7c1e04bb-l3br';
+        const corrected = 'p-attic';
+        const refitGlb = patchGlbJson(fixture.glbs.l3b, json => {
+            for (const n of json.nodes ?? []) {
+                const sb = n.extras?.sb;
+                if (sb?.ids?.primitiveId !== corrected) continue;
+                sb.provenance = {
+                    label: PROVENANCE.photoCorrected, measuredGeometry: false, confidence: 0.7,
+                    method: 'vision corrected one fitted parameter inside the range the scan residual allows',
+                    sources: [{ kind: 'stage-output', id: 'vision:fixture' }], note: 'moved 0.12 m, inside the 0.31 m tolerance'
+                };
+            }
+        });
+        page.serve('refit.glb', refitGlb);
+        const base = fixtureState([L('l1'), L('l2'), L('l3a'), L('l3b')], { runState: 'running' });
+        await page.eval(`sbHarness.mount(${JSON.stringify(stagedSceneData(base))})`);
+        await page.waitFor('sbHarness.ready()');
+        for (const l of ['l2', 'l3a', 'l3b'] as const) await page.waitFor(`sbHarness.attached(${JSON.stringify(objectIdOf(l))})`);
+        await advanceTo(page, 'l3b', 1);
+        await page.step(4, STEP);
+        const original = base.layers.find(l => l.layer === 'l3b')!;
+        const refit = {
+            ...original, objectId: REFIT, layer: 'l3br', url: '/models/refit.glb', cached: false,
+            supersedes: [original.objectId], revealAfter: [original.objectId], provenanceLabels: [PROVENANCE.fitted, PROVENANCE.photoCorrected],
+            reveal: { durationMs: 900, stagger: 0, crossfadeFrom: [original.objectId], only: { primitiveIds: [corrected] } }
+        };
+        const refitState: StagedBuildState = { ...base, layers: [...base.layers, refit] };
+        await page.eval(`sbHarness.update(${JSON.stringify(stagedSceneData(refitState))})`);
+        await page.waitFor(`sbHarness.attached(${JSON.stringify(REFIT)})`);
+        const frame = () => page.eval<{ phase: string; progress: number; presence: number; hidden: boolean } | null>(`sbHarness.layer(${JSON.stringify(REFIT)})`);
+        for (let i = 0; i < 300; i++) { const f = await frame(); if (f && (f.phase === 'revealed' || (f.phase === 'revealing' && f.progress >= 0.5))) break; await page.step(1, STEP); }
+        expect((await frame())!.phase, 'the refit is mid-reveal').toBe('revealing');
+        await page.screenshot('refit_photo_corrected_mid_reveal');
+        const mid = await page.eval<Array<{ node: string; visible: boolean; uniforms: { fade: number; progress: number } | null }>>(`sbHarness.meshStates(${JSON.stringify(REFIT)})`);
+        const mine = mid.filter(m => m.node === 's-attic'), others = mid.filter(m => m.node !== 's-attic' && m.visible);
+        expect(mine.length, 'the corrected primitive is in the refit').toBeGreaterThan(0);
+        expect(mine.every(m => m.uniforms && m.uniforms.fade > 0.2 && m.uniforms.fade < 0.9), `the corrected primitive is mid-fade: ${JSON.stringify(mid.map(m => [m.node, m.visible, m.uniforms]))}`).toBe(true);
+        // The layer it replaces fades out in step: at every pixel one of the two draws the corrected primitive.
+        const fit = (await frame())!, first = (await page.eval<{ presence: number; hidden: boolean }>(`sbHarness.layer(${JSON.stringify(original.objectId)})`));
+        expect(Math.abs(mine[0].uniforms!.fade + first.presence - 1), `corrected fade ${mine[0].uniforms!.fade} + the first fit's presence ${first.presence}`).toBeLessThan(0.05);
+        expect(Math.abs(fit.presence - 1), 'the refit itself is never faded out').toBeLessThan(1e-6);
+        expect(others.length, 'the rest of the refit is drawn').toBeGreaterThan(3);
+        expect(others.every(m => m.uniforms && m.uniforms.fade === 1 && m.uniforms.progress === 1), `every other primitive starts revealed: ${JSON.stringify(others.map(m => [m.node, m.uniforms]))}`).toBe(true);
+
+        // The end: the refit replaces the first fit (its meshes hidden), and the corrected primitive is a different kind of part.
+        for (let i = 0; i < 300; i++) { if ((await frame())!.phase === 'revealed') break; await page.step(1, STEP); }
+        await page.step(3, STEP);
+        expect((await page.eval<{ hidden: boolean }>(`sbHarness.layer(${JSON.stringify(original.objectId)})`)).hidden, 'the first fit is superseded').toBe(true);
+        expect((await page.eval<Array<{ visible: boolean }>>(`sbHarness.meshStates(${JSON.stringify(original.objectId)})`)).every(m => !m.visible)).toBe(true);
+        await page.eval(`sbHarness.click('[data-testid="sb-staged-provenance-toggle"]')`);
+        await page.step(6, STEP);
+        await page.screenshot('refit_photo_corrected_provenance');
+        const legend = await page.eval<string>(`sbHarness.text('[data-testid="sb-staged-legend"]')`);
+        expect(legend).toContain('photo-corrected');
+        const shares = await page.eval<Array<{ node: string; label?: string; pixels: number; share: number }>>(`sbHarness.patternShare(${JSON.stringify(REFIT)})`);
+        const attic = shares.find(n => n.node === 's-attic' && n.pixels >= 150);
+        expect(attic, `the corrected attic is in view: ${shares.map(n => `${n.node} ${n.pixels}`).join(', ')}`).toBeDefined();
+        expect(attic!.label).toBe(PROVENANCE.photoCorrected);
+        expect(Math.abs(attic!.share - 0.6 * 0.3), `corrected primitive pattern share ${attic!.share.toFixed(3)} for confidence 0.7`).toBeLessThanOrEqual(0.04);
+        const nodes = await page.eval<Array<{ node: string; samples: Array<{ rgb: [number, number, number] }> }>>(`sbHarness.sampleNodes(${JSON.stringify(REFIT)}, 40)`);
+        const yellow = hue([0xf0, 0xe4, 0x42]), blue = hue([0x00, 0x72, 0xb2]);
+        const atticHues = nodes.filter(n => n.node === 's-attic').flatMap(n => n.samples.map(x => hue(x.rgb))).filter(h => h >= 0);
+        const restHues = nodes.filter(n => n.node !== 's-attic').flatMap(n => n.samples.map(x => hue(x.rgb))).filter(h => h >= 0);
+        expect(atticHues.filter(h => hueDistance(h, yellow) <= 20).length / atticHues.length, `the corrected primitive is photo-corrected yellow: hues ${atticHues.map(h => h.toFixed(0)).join(',')}`).toBeGreaterThanOrEqual(0.9);
+        expect(restHues.filter(h => hueDistance(h, blue) <= 20).length / restHues.length, 'the uncorrected primitives are fitted blue').toBeGreaterThanOrEqual(0.9);
     });
 
     test('an entity nobody planned for: an unlisted stage, layer code, kind and label reveal and shade with no code change', async () => {

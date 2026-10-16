@@ -166,8 +166,10 @@ function patternShare(objectId: string): Array<{ node: string; label?: string; p
     scene.onBeforeRender = () => undefined;
     renderer.render(scene, camera);
     const mixed = readPixels();
-    scene.onBeforeRender = guard;
+    // Draw the frame again as the viewport had it, so the canvas holds what the user sees (and a later read sees it too).
     for (const u of staged) u.background.copy(u.saved);
+    renderer.render(scene, camera);
+    scene.onBeforeRender = guard;
     const denom = magenta.reduce((a, m, c) => a + (m - bg[c]) ** 2, 0);
     const out: Array<{ node: string; label?: string; pixels: number; share: number }> = [];
     for (const [node, { interior }] of nodeInteriors(objectId, ids, idOf, width, height)) {

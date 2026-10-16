@@ -190,8 +190,14 @@ export function buildRootInfo(layer: StagedLayer, root: THREE.Object3D, ranks: R
         nodes.forEach((n, i) => { n.order = i; n.count = nodes.length; });
     }
     const rootBuilding = (root.userData as { sb?: { buildingId?: string } })?.sb?.buildingId;
+    // A refit animates only the primitives vision corrected. They fade in together across the whole reveal, in step with the
+    // layer they replace fading out (its presence falls with the layer's progress), so no corrected part ever has a hole;
+    // every other node is drawn whole from the first frame (lookFor).
+    const only = layer.reveal.only ? new Set(layer.reveal.only.primitiveIds) : undefined;
     for (const n of nodes) {
-        n.window = nodeRevealWindow({ order: n.order, count: n.count, stagger: layer.reveal.stagger, durationShare: n.durationShare, perVertex: n.perVertex });
+        n.window = only && n.ids.primitiveId !== undefined && only.has(n.ids.primitiveId)
+            ? { start: 0, span: 1 }
+            : nodeRevealWindow({ order: n.order, count: n.count, stagger: layer.reveal.stagger, durationShare: n.durationShare, perVertex: n.perVertex });
         n.degradationIds = degradations.filter(d => partMatches(d, layer, n, rootBuilding)).map(d => d.id);
     }
     return { objectId: layer.objectId, root, key: '', nodes };
