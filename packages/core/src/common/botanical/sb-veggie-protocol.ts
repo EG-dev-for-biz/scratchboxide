@@ -5,7 +5,46 @@
 
  ********************************************************************************/
 
-export type SbVeggieArchetype = 'decurrent' | 'conifer' | 'palmate' | 'columnar';
+/**
+ * How a tree grows and carries its leaves, in continuous quantities. There is no tree class to pick: a spreading, a
+ * conical and a columnar crown differ in these numbers, and every value between them is as valid as the ends. Omitted
+ * fields keep the engine's neutral values.
+ */
+export interface SbVeggieMorphologyParams {
+    /** 0..1: how far the leader outgrows the laterals */
+    apicalDominance?: number;
+    /** Mean angle of laterals from the leader (radians) */
+    branchAngleMeanRad?: number;
+    /** Spread (standard deviation) of that angle (radians) */
+    branchAngleSpreadRad?: number;
+    /** Crown height / crown width (1 = the canonical template) */
+    crownAspect?: number;
+    /** Distance between successive nodes along a shoot (m) */
+    internodeLengthM?: number;
+    /** Along a shoot a leaf sits at ((i + 0.5) / n)^exponent of the reach: below 1 it crowds towards the tip */
+    leafDistributionExponent?: number;
+    /** Angle between successive leaves around the shoot (radians; the golden angle by default) */
+    divergenceAngleRad?: number;
+    blade?: SbVeggieBladeParams;
+}
+
+/** A leaf blade's outline, continuous. */
+export interface SbVeggieBladeParams {
+    /** Blade width / blade length */
+    widthRatio?: number;
+    /** Half-width profile t^a (1 - t)^b along the blade: a sets how far the widest point lies from the base */
+    outlineA?: number;
+    /** ... and b how it tapers to the tip */
+    outlineB?: number;
+    /** Lobes along the margin, and their depth as a share of the half-width (0 = entire margin) */
+    lobeCount?: number;
+    lobeDepth?: number;
+    /** Teeth along the margin, and their depth as a share of the half-width (0 = entire margin) */
+    serrationCount?: number;
+    serrationDepth?: number;
+    /** Interior rows of the outline (resolution; lobes and teeth need more rows than a plain blade) */
+    rows?: number;
+}
 
 export interface SbVeggieShapeParams {
     /** 16 Morphological Shape Coefficients (beta) */
@@ -53,8 +92,6 @@ export interface SbVeggieShapingParams {
     collarFlare?: number;
     /** Stress-adapted elliptical cross section multiplier (default 1.0) */
     reactionWood?: number;
-    /** 0 = Lobed Oak 3D blade, 1 = Serrated Birch, 2 = Conifer Needles, 3 = Cypress Scale Cards, 4 = Lanceolate Olive */
-    leafMorphology?: number;
     /** Parabolic 3D lamina cupping and sunken midrib strength (default 1.0) */
     leafCupping?: number;
     /** Transfer smooth envelope normals from cluster centroid with upward sky bias */
@@ -62,7 +99,7 @@ export interface SbVeggieShapingParams {
 }
 
 export interface SbVeggieSynthesizeOptions {
-    archetype?: SbVeggieArchetype;
+    morphology?: SbVeggieMorphologyParams;
     shape?: SbVeggieShapeParams;
     pose?: SbVeggiePoseParams;
     phenology?: SbVeggiePhenologyParams;
@@ -73,7 +110,7 @@ export interface SbVeggieSynthesizeOptions {
 export interface SbVeggieInversionOptions {
     /** The scan to fit (.glb with vertex-coloured vegetation); required, never replaced by a synthetic stand-in */
     inputScanPath: string;
-    archetype?: SbVeggieArchetype;
+    morphology?: SbVeggieMorphologyParams;
     maxIterations?: number;
     phenology?: SbVeggiePhenologyParams;
     shaping?: SbVeggieShapingParams;
@@ -94,7 +131,6 @@ export interface SbVeggieInversionTelemetry {
 }
 
 export interface SbVeggieTelemetry {
-    archetype: SbVeggieArchetype;
     canonicalTemplate: string;
     templateVertices: number;
     templateJoints: number;
@@ -116,7 +152,6 @@ export interface SbVeggieResult {
 }
 
 // Backward-compatible type aliases for legacy SMPL-Tree nomenclature
-export type SmplTreeArchetype = SbVeggieArchetype;
 export type SmplTreeShapeParams = SbVeggieShapeParams;
 export type SmplTreePoseParams = SbVeggiePoseParams;
 export type SmplTreePhenologyParams = SbVeggiePhenologyParams;

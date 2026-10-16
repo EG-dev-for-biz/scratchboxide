@@ -159,7 +159,8 @@ export {
     SmplTreeService
 } from './node/3d-engine/sb-veggie-service';
 export {
-    type SbVeggieArchetype,
+    type SbVeggieMorphologyParams,
+    type SbVeggieBladeParams,
     type SbVeggieShapeParams,
     type SbVeggiePoseParams,
     type SbVeggiePhenologyParams,
@@ -169,7 +170,6 @@ export {
     type SbVeggieInversionTelemetry,
     type SbVeggieTelemetry,
     type SbVeggieResult,
-    type SmplTreeArchetype,
     type SmplTreeShapeParams,
     type SmplTreePoseParams,
     type SmplTreePhenologyParams,

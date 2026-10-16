@@ -53,7 +53,7 @@ The **Adaptive Domain Architecture (ADA)** is the foundational architectural par
 - Instead of picking from fixed presets, models project their semantic reasoning into **continuous physical schemas**:
   - Topographical fields: Peak altitude ($m$), cirque sharpness, arête knife-edge exponents, talus scree angles, valley floor datum, snow line threshold.
   - Architectural massing: Archie `BuildingConfig` (bay width, sill/header height, window recess depth, mullion profiles, structural buttress pylon dimensions, parapet coping).
-  - Botanical ecology: SB-Veggie archetypes (`ExcurrentConifer`, `DeciduousOak`, etc.), branching levels, phyllotaxis divergence, transferred envelope normals.
+  - Botanical ecology: SB-Veggie continuous morphology (`SbVeggieMorphology`: apical dominance, branch-angle mean and spread, crown aspect, internode length, leaf distribution, blade outline; no tree classes), branching levels, phyllotaxis divergence, transferred envelope normals.
   - Atmospheric ephemeris: Diurnal solar zenith/azimuth, Rayleigh/Mie scattering coefficients, turbidity, Kelvin color temperatures ($1,000\text{K} - 40,000\text{K}$).
 - The schemas define **structural contracts**, never static content.
 

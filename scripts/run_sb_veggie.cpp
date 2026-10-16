@@ -41,7 +41,6 @@ static int fail(int code, const std::string& message) {
 int main(int argc, char** argv) {
     std::string outputPath = "sb_veggie_output.glb";
     std::string fitScanPath = "";
-    std::string archetypeStr = "decurrent";
     bool exportOverlay = false;
     bool sideBySide = false;
     int maxIterations = 25;
@@ -59,8 +58,6 @@ int main(int argc, char** argv) {
         std::string arg = argv[i];
         if ((arg == "--output" || arg == "-o" || arg == "--out") && i + 1 < argc) {
             outputPath = argv[++i];
-        } else if (arg == "--archetype" && i + 1 < argc) {
-            archetypeStr = argv[++i];
         } else if ((arg == "--fit-scan" || arg == "--fitScan" || arg == "--fit" || arg == "--scan") && i + 1 < argc) {
             fitScanPath = argv[++i];
         } else if (arg == "--mode" && i + 1 < argc) {
@@ -102,8 +99,36 @@ int main(int argc, char** argv) {
             userDensitySpecified = true;
             userDensity = std::stof(argv[++i]);
             params.psi_leafDensity = userDensity;
-        } else if (arg == "--leaf-morphology" && i + 1 < argc) {
-            params.leafMorphology = std::stoi(argv[++i]);
+        } else if (arg == "--apical-dominance" && i + 1 < argc) {
+            params.morphology.apicalDominance = std::stof(argv[++i]);
+        } else if (arg == "--branch-angle" && i + 1 < argc) {
+            params.morphology.branchAngleMeanRad = std::stof(argv[++i]);
+        } else if (arg == "--branch-angle-spread" && i + 1 < argc) {
+            params.morphology.branchAngleSpreadRad = std::stof(argv[++i]);
+        } else if (arg == "--crown-aspect" && i + 1 < argc) {
+            params.morphology.crownAspect = std::stof(argv[++i]);
+        } else if (arg == "--internode" && i + 1 < argc) {
+            params.morphology.internodeLengthM = std::stof(argv[++i]);
+        } else if (arg == "--leaf-distribution" && i + 1 < argc) {
+            params.morphology.leafDistributionExponent = std::stof(argv[++i]);
+        } else if (arg == "--divergence-angle" && i + 1 < argc) {
+            params.morphology.divergenceAngleRad = std::stof(argv[++i]);
+        } else if (arg == "--blade-width-ratio" && i + 1 < argc) {
+            params.morphology.blade.widthRatio = std::stof(argv[++i]);
+        } else if (arg == "--blade-outline-a" && i + 1 < argc) {
+            params.morphology.blade.outlineA = std::stof(argv[++i]);
+        } else if (arg == "--blade-outline-b" && i + 1 < argc) {
+            params.morphology.blade.outlineB = std::stof(argv[++i]);
+        } else if (arg == "--blade-lobes" && i + 1 < argc) {
+            params.morphology.blade.lobeCount = std::stof(argv[++i]);
+        } else if (arg == "--blade-lobe-depth" && i + 1 < argc) {
+            params.morphology.blade.lobeDepth = std::stof(argv[++i]);
+        } else if (arg == "--blade-serrations" && i + 1 < argc) {
+            params.morphology.blade.serrationCount = std::stof(argv[++i]);
+        } else if (arg == "--blade-serration-depth" && i + 1 < argc) {
+            params.morphology.blade.serrationDepth = std::stof(argv[++i]);
+        } else if (arg == "--blade-rows" && i + 1 < argc) {
+            params.morphology.blade.rows = std::max(1, std::stoi(argv[++i]));
         } else if (arg == "--leaf-cupping" && i + 1 < argc) {
             params.leafCupping = std::stof(argv[++i]);
         } else if (arg == "--branch-curvature" && i + 1 < argc) {
@@ -139,14 +164,10 @@ int main(int argc, char** argv) {
         }
     }
 
-    SbVeggieArchetype archetype = SbVeggieArchetype::DecurrentHardwood;
-    if (archetypeStr == "conifer") archetype = SbVeggieArchetype::ExcurrentConifer;
-    else if (archetypeStr == "palmate") archetype = SbVeggieArchetype::Palmate;
-    else if (archetypeStr == "columnar") archetype = SbVeggieArchetype::FastigiateColumnar;
 
     // 1. Build Canonical Model Template
     auto startBuild = std::chrono::high_resolution_clock::now();
-    SbVeggieTemplate tmpl = SbVeggieModelBuilder::buildCanonicalTemplate(archetype);
+    SbVeggieTemplate tmpl = SbVeggieModelBuilder::buildCanonicalTemplate(params.morphology);
     auto endBuild = std::chrono::high_resolution_clock::now();
     double buildTimeMs = std::chrono::duration<double, std::milli>(endBuild - startBuild).count();
 
@@ -194,14 +215,14 @@ int main(int argc, char** argv) {
         SbVeggieOptimizerOptions opt;
         opt.maxIterations = maxIterations;
         optResult = SbVeggieOptimizer::fitToScan(scanPoints, tmpl, opt, hasExplicitAnchor ? &harvestedAnchor : nullptr);
-        int savedMorphology = params.leafMorphology;
+        const auto savedMorphology = params.morphology;
         float savedCupping = params.leafCupping;
         float savedCurvature = params.branchCurvature;
         float savedCollar = params.collarFlare;
         float savedColorInfluence = params.colorInfluenceWeight;
         int savedColorMode = params.colorInfluenceMode;
         params = optResult.fittedParams;
-        params.leafMorphology = savedMorphology;
+        params.morphology = savedMorphology;
         params.leafCupping = savedCupping;
         params.branchCurvature = savedCurvature;
         params.collarFlare = savedCollar;
@@ -420,7 +441,6 @@ int main(int argc, char** argv) {
     std::cout << "\n======================================================================\n";
     std::cout << "  SCRATCHBOX SB-VEGGIE BOTANICAL SYNTHESIS TELEMETRY\n";
     std::cout << "======================================================================\n";
-    std::cout << "  Archetype:               " << archetypeStr << "\n";
     std::cout << "  Canonical Template:      " << tmpl.name << " (" << tmpl.canonicalVertices.size() << " verts, " << tmpl.skeleton.size() << " joints)\n";
     std::cout << "  Template Build Time:     " << buildTimeMs << " ms\n";
     std::cout << "  Evaluator Render Time:   " << evalTimeMs << " ms\n";
