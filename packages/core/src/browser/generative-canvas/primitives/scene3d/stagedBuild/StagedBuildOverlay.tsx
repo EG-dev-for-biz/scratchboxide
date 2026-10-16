@@ -18,7 +18,7 @@
  */
 
 import * as React from 'react';
-import type { DegradationRecord, StageStatus, StageSummary, StagedBuildState } from '../../../../../common/spatial/staged-location-contracts';
+import type { DegradationRecord, StageStatus, StageSummary, StagedBuildState, StagedLayer } from '../../../../../common/spatial/staged-location-contracts';
 import type { LayerRevealFrame } from './revealScheduler';
 import type { LegendRow } from './provenanceShading';
 import type { StageProgress } from './stagedBuildState';
@@ -314,13 +314,19 @@ function stageTitle(state: StagedBuildState, stage: string): string {
     return state.stages.find(s => s.stage === stage)?.title || stage;
 }
 
+/** A layer's name in a sentence: its stage's title, with the layer's own code when the stage owns several layers. */
+function layerName(state: StagedBuildState, layer: StagedLayer): string {
+    const title = stageTitle(state, layer.stage);
+    return state.layers.filter(l => l.stage === layer.stage).length > 1 ? `${title} (${layer.layer})` : title;
+}
+
 function titleForLayer(state: StagedBuildState, l: LayerRevealFrame): string {
-    return stageTitle(state, l.layer.stage);
+    return layerName(state, l.layer);
 }
 
 function titleForId(state: StagedBuildState, objectId: string): string {
     const layer = state.layers.find(l => l.objectId === objectId);
-    if (layer) return stageTitle(state, layer.stage);
+    if (layer) return layerName(state, layer);
     const owner = state.stages.find(s => s.layerIds.includes(objectId));
     return owner?.title || objectId;
 }

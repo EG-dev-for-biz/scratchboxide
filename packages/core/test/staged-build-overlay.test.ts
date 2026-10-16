@@ -73,6 +73,20 @@ describe('overlay words and accessibility', () => {
         expect(html).toContain('Provenance');
     });
 
+    test('a layer waiting for another names both; two layers of one stage carry their layer codes', () => {
+        const st = fixtureState([L('l1'), L('l2'), L('l3a'), L('l3b')], { running: ['trees'] });
+        const body = st.layers.find(l => l.layer === 'l3b')!;
+        const outlines = st.layers.find(l => l.layer === 'l3a')!;
+        expect(body.stage, 'the outlines and the body belong to one stage').toBe(outlines.stage);
+        const held = { objectId: body.objectId, layer: body, phase: 'held' as const, progress: 0, presence: 1, overSource: false, hidden: false, heldBy: [outlines.objectId], durationMs: 900 };
+        const html = markup(props(st, { layers: [held] }));
+        expect(html).toContain('Scan-fitted rebuild (l3b) waits for Scan-fitted rebuild (l3a) to reveal');
+        // A stage with one layer is named by its title alone.
+        const remesh = st.layers.find(l => l.layer === 'l2')!;
+        const heldRemesh = { ...held, objectId: remesh.objectId, layer: remesh, heldBy: [st.layers.find(l => l.layer === 'l1')!.objectId] };
+        expect(markup(props(st, { layers: [heldRemesh] }))).toContain('Remeshed scan waits for Google 3D Tiles to reveal');
+    });
+
     test('the vision line names the model, its thinking level and time, any fallback, and a failure', () => {
         const answered = fixtureState([L('l1')], { visionModel: visionModelUse('answered') });
         expect(markup(props(answered))).toContain(`Detail read by ${STAGED_VISION_MODEL_DEFAULT.model} (thinking low; first token 4.1 s, 12.4 s)`);
