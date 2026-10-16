@@ -57,6 +57,13 @@ export interface NativePbrTextureSet {
     normalRgba: Buffer;
     ormRgba: Buffer;
     executionTimeMs: number;
+    /**
+     * Which synthesizer produced these maps. 'native-cpp20' is the compiled scratchbox_pbr_manifold.hpp kernel;
+     * 'typescript-analytical' is the in-process equivalent, used when the test environment or SCRATCHBOX_PREFER_FALLBACK
+     * asks for it or when the native compile/run failed (the failure is in `reason`).
+     */
+    synthesizer: 'native-cpp20' | 'typescript-analytical';
+    reason?: string;
 }
 
 export interface NativeTexturePeriodicityOptions {
@@ -219,6 +226,17 @@ export class NativeMaterialPbrService {
     }
 
     /**
+     * Exact lookup by catalog id, key or display name (key matching ignores case, spaces and dashes). Unlike
+     * `resolveArchetype` it never substitutes a nearby or default entry: an unknown name is `undefined`.
+     */
+    public findArchetype(input: string | number): Pbr50CatalogEntry | undefined {
+        if (typeof input === 'number') return PBR_50_ARCHETYPE_CATALOG.find(e => e.archetypeId === input);
+        if (typeof input !== 'string') return undefined;
+        const keyNorm = input.toLowerCase().trim().replace(/[-\s]+/g, '_');
+        return PBR_50_ARCHETYPE_CATALOG.find(e => e.key === keyNorm || e.displayName.toLowerCase() === input.toLowerCase().trim());
+    }
+
+    /**
      * Calibrated continuous biophysical descriptor for any of the landmark archetypes.
      * Complies with ADA Pillar 8 (Continuous Dimensional Parameter Manifold).
      */
@@ -324,7 +342,9 @@ export class NativeMaterialPbrService {
         const seed = options.seed ?? 1337;
 
         if (process.env.SCRATCHBOX_PREFER_FALLBACK === '1' || process.env.NODE_ENV === 'test') {
-            return this.synthesizeContinuousManifoldFallback(descriptor, width, height, seed, options.outputDir);
+            const fallback = this.synthesizeContinuousManifoldFallback(descriptor, width, height, seed, options.outputDir);
+            fallback.reason = process.env.SCRATCHBOX_PREFER_FALLBACK === '1' ? 'SCRATCHBOX_PREFER_FALLBACK=1' : 'NODE_ENV=test';
+            return fallback;
         }
 
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbox_manifold_'));
@@ -501,11 +521,14 @@ int main(int argc, char** argv) {
                 albedoRgba,
                 normalRgba,
                 ormRgba,
-                executionTimeMs: durationMs
+                executionTimeMs: durationMs,
+                synthesizer: 'native-cpp20'
             };
-        } catch {
-            // High-speed analytical procedural synthesis fallback (Two-Tier resiliency)
-            return this.synthesizeContinuousManifoldFallback(descriptor, width, height, seed, options.outputDir);
+        } catch (err) {
+            // High-speed analytical procedural synthesis fallback (Two-Tier resiliency); the result names it and why.
+            const fallback = this.synthesizeContinuousManifoldFallback(descriptor, width, height, seed, options.outputDir);
+            fallback.reason = `native C++20 synthesis failed: ${(err as Error)?.message ?? String(err)}`.slice(0, 500);
+            return fallback;
         } finally {
             try {
                 fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -699,7 +722,8 @@ int main(int argc, char** argv) {
             albedoRgba,
             normalRgba,
             ormRgba,
-            executionTimeMs: 15
+            executionTimeMs: 15,
+            synthesizer: 'typescript-analytical'
         };
     }
 
