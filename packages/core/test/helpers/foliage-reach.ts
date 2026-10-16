@@ -14,7 +14,7 @@
  * the ray from the mass's vertex centroid, the masses being stars around it) or within `reach` of one of its triangles.
  */
 
-import { parseGlb } from './clay-glb-render';
+import { parseGlb, readAccessor } from './clay-glb-render';
 
 export interface TreeFoliage {
     crownId: number;
@@ -23,27 +23,31 @@ export interface TreeFoliage {
     indices: Uint32Array;
 }
 
-/** Every tree node's foliage primitive (positions and indices, in the tile frame: tree nodes carry no transform). */
+/**
+ * Every tree node's foliage primitive (positions in the tile frame and indices). Tree nodes sit under an untransformed
+ * root; a quantised file (KHR_mesh_quantization) gives each its own translation and scale, applied here, with its
+ * normalised positions read as glTF defines them.
+ */
 export function readTreeFoliage(glb: Buffer): TreeFoliage[] {
     const { json, bin } = parseGlb(glb);
-    const read = (index: number, float: boolean) => {
-        const acc = json.accessors[index];
-        const view = json.bufferViews[acc.bufferView];
-        const comps = acc.type === 'VEC3' ? 3 : 1;
-        const base = (view.byteOffset ?? 0) + (acc.byteOffset ?? 0);
-        const out = float ? new Float32Array(acc.count * comps) : new Uint32Array(acc.count * comps);
-        for (let i = 0; i < acc.count * comps; i++) {
-            out[i] = float ? bin.readFloatLE(base + 4 * i) : acc.componentType === 5125 ? bin.readUInt32LE(base + 4 * i) : bin.readUInt16LE(base + 2 * i);
-        }
-        return out;
-    };
     const trees: TreeFoliage[] = [];
     for (const node of json.nodes ?? []) {
         if (node.mesh === undefined || node.extras?.crownId === undefined) continue;
-        if (node.matrix || node.translation || node.rotation || node.scale) throw new Error(`tree node ${node.name} carries a transform`);
-        const prims = json.meshes[node.mesh].primitives;
+        if (node.matrix || node.rotation) throw new Error(`tree node ${node.name} carries a rotation`);
+        const prims = json.meshes[node.mesh].primitives.filter((p: any) => (p.mode ?? 4) === 4);
+        if (!prims.length) continue;
         const foliage = prims[prims.length - 1];
-        trees.push({ crownId: node.extras.crownId, extras: node.extras, positions: read(foliage.attributes.POSITION, true) as Float32Array, indices: read(foliage.indices, false) as Uint32Array });
+        const [tx, ty, tz] = node.translation ?? [0, 0, 0];
+        const [sx, sy, sz] = node.scale ?? [1, 1, 1];
+        const p = readAccessor(json, bin, foliage.attributes.POSITION).data;
+        const positions = new Float32Array(p.length);
+        for (let i = 0; i < p.length; i += 3) {
+            positions[i] = tx + sx * p[i];
+            positions[i + 1] = ty + sy * p[i + 1];
+            positions[i + 2] = tz + sz * p[i + 2];
+        }
+        const indices = Uint32Array.from(readAccessor(json, bin, foliage.indices).data);
+        trees.push({ crownId: node.extras.crownId, extras: node.extras, positions, indices });
     }
     return trees;
 }

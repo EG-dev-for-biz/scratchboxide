@@ -19,7 +19,7 @@ export interface GlbTriangles {
     /** World-space positions (node transforms applied), 3 per vertex. */
     positions: Float32Array;
     indices: Uint32Array;
-    /** Triangle range per node that carries a mesh, in node order. */
+    /** Triangle range per node that carries triangles, in node order. */
     nodeRanges: Array<{ node: number; name?: string; extras?: any; firstTriangle: number; triangleCount: number }>;
 }
 
@@ -38,7 +38,7 @@ export function parseGlb(buffer: Buffer): { json: any; bin: Buffer } {
     return { json, bin };
 }
 
-function readAccessor(json: any, bin: Buffer, index: number): { data: Float64Array; comps: number } {
+export function readAccessor(json: any, bin: Buffer, index: number): { data: Float64Array; comps: number } {
     const acc = json.accessors[index];
     const view = json.bufferViews[acc.bufferView];
     const comps = COMPONENTS[acc.type];
@@ -49,11 +49,14 @@ function readAccessor(json: any, bin: Buffer, index: number): { data: Float64Arr
     for (let e = 0; e < acc.count; e++) {
         for (let c = 0; c < comps; c++) {
             const p = base + e * stride + c * size;
+            // normalised integers (KHR_mesh_quantization, COLOR_0) as glTF defines them: max(c / (2^(bits-1) - 1), -1) signed
             switch (acc.componentType) {
                 case 5126: data[e * comps + c] = bin.readFloatLE(p); break;
                 case 5125: data[e * comps + c] = bin.readUInt32LE(p); break;
-                case 5123: data[e * comps + c] = bin.readUInt16LE(p); break;
-                case 5121: data[e * comps + c] = bin.readUInt8(p); break;
+                case 5123: data[e * comps + c] = acc.normalized ? bin.readUInt16LE(p) / 65535 : bin.readUInt16LE(p); break;
+                case 5122: data[e * comps + c] = acc.normalized ? Math.max(bin.readInt16LE(p) / 32767, -1) : bin.readInt16LE(p); break;
+                case 5121: data[e * comps + c] = acc.normalized ? bin.readUInt8(p) / 255 : bin.readUInt8(p); break;
+                case 5120: data[e * comps + c] = acc.normalized ? Math.max(bin.readInt8(p) / 127, -1) : bin.readInt8(p); break;
                 default: throw new Error(`unsupported componentType ${acc.componentType}`);
             }
         }
@@ -61,7 +64,7 @@ function readAccessor(json: any, bin: Buffer, index: number): { data: Float64Arr
     return { data, comps };
 }
 
-function nodeMatrix(node: any): number[] {
+export function nodeMatrix(node: any): number[] {
     if (Array.isArray(node.matrix)) return node.matrix;
     const [tx, ty, tz] = node.translation ?? [0, 0, 0];
     const [qx, qy, qz, qw] = node.rotation ?? [0, 0, 0, 1];
@@ -104,7 +107,8 @@ export function readGlbTriangles(buffer: Buffer): GlbTriangles {
                 if (prim.indices !== undefined) for (const i of readAccessor(json, bin, prim.indices).data) idx.push(base + i);
                 else for (let v = 0; v < p.length / 3; v++) idx.push(base + v);
             }
-            nodeRanges.push({ node: n, name: node.name, extras: node.extras, firstTriangle: first, triangleCount: idx.length / 3 - first });
+            // nodes with triangles only (a node of LINES alone, such as an outline, holds none)
+            if (idx.length / 3 > first) nodeRanges.push({ node: n, name: node.name, extras: node.extras, firstTriangle: first, triangleCount: idx.length / 3 - first });
         }
         for (const c of node.children ?? []) walk(c, world);
     };

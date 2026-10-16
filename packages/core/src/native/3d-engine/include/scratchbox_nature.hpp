@@ -1133,6 +1133,18 @@ struct TreeBudgetReport {
     size_t surfacePointsCovered{0}; // ... and the surface points those bring within reach (by their inner balls)
 };
 
+/**
+ * When each vertex of a budgeted tree mesh grew (meshWithinBudget), in the skeleton's real growth order: node ids are
+ * appended in creation order (trunk, scaffold limbs, then each colonisation iteration's new nodes), so a node's id over
+ * max(1, nodes - 1) is how far through the growth it appeared. A wood segment's start ring takes its start node's value
+ * and its end ring its end node's, so a branch grows along its length; a leaf mass takes the largest value among the leaf
+ * nodes it holds (within its hold radius; the nearest leaf node when it holds none), so it appears once the last of them
+ * has grown. One value per vertex of the wood and foliage meshes, each in [0, 1].
+ */
+struct MeshGrowth {
+    std::vector<float> wood, foliage;
+};
+
 /** How colonisation went (growSkeleton). `stop` is a diagnostic label; nothing branches on it. */
 struct ColonizationReport {
     int iterations{0};              // colonisation iterations run
@@ -1498,7 +1510,8 @@ public:
      * Meshes a skeleton growSkeleton grew from `cfg` within cfg.triangleBudget (> 0): the same meshes
      * generateTreeComponents gives for that budget, without growing the skeleton again.
      */
-    static std::pair<geometry::Mesh, geometry::Mesh> meshGrownSkeleton(const SpaceColonizationConfig& cfg, const std::vector<ColonizationNode>& nodes, TreeBudgetReport* report = nullptr) {
+    static std::pair<geometry::Mesh, geometry::Mesh> meshGrownSkeleton(const SpaceColonizationConfig& cfg, const std::vector<ColonizationNode>& nodes, TreeBudgetReport* report = nullptr,
+                                                                       MeshGrowth* growth = nullptr) {
         geometry::Mesh woodMesh("Tree_Wood");
         woodMesh.material = geometry::PbrMaterial::roughWood();
         woodMesh.material.name = "PBR_Redwood_Bark";
@@ -1512,7 +1525,7 @@ public:
         foliageMesh.material.alphaMode = "MASK";
         foliageMesh.material.alphaCutoff = 0.45f;
         TreeBudgetReport local;
-        if (cfg.triangleBudget > 0.0f) meshWithinBudget(cfg, nodes, woodMesh, foliageMesh, report ? *report : local);
+        if (cfg.triangleBudget > 0.0f) meshWithinBudget(cfg, nodes, woodMesh, foliageMesh, report ? *report : local, growth);
         for (const auto& v : woodMesh.vertices) woodMesh.bounds.expand(v);
         for (const auto& v : foliageMesh.vertices) foliageMesh.bounds.expand(v);
         return {woodMesh, foliageMesh};
@@ -2072,11 +2085,14 @@ private:
      * mass is kept inside the crown (LeafEnvelope).
      */
     static void meshWithinBudget(const SpaceColonizationConfig& cfg, const std::vector<ColonizationNode>& g,
-                                 geometry::Mesh& wood, geometry::Mesh& foliage, TreeBudgetReport& rep) {
+                                 geometry::Mesh& wood, geometry::Mesh& foliage, TreeBudgetReport& rep, MeshGrowth* growth = nullptr) {
         const size_t N = g.size();
         rep = TreeBudgetReport{};
         rep.skeletonNodes = N;
+        if (growth) { growth->wood.clear(); growth->foliage.clear(); }
         if (N < 2) return;
+        // a node's place in the growth: its id (creation order) over max(1, nodes - 1)
+        const float growthDen = static_cast<float>(std::max<size_t>(1, N - 1));
         const size_t budget = static_cast<size_t>(std::max(0.0f, cfg.triangleBudget));
         auto node = [&](int i) -> const ColonizationNode& { return g[static_cast<size_t>(i)]; };
 
@@ -2177,7 +2193,13 @@ private:
         }
         for (const auto& s : segs) {
             if (!s.trunk && rad(s.a) < rMin) continue;
+            const size_t before = wood.vertices.size();
             appendBranchCylinder(wood, node(s.a).position, node(s.b).position, rad(s.a), rad(s.b), cfg.woodColor, sides(rad(s.a), sidesMax));
+            if (growth) {
+                // the cylinder's vertices alternate start ring, end ring
+                const float ga = static_cast<float>(s.a) / growthDen, gb = static_cast<float>(s.b) / growthDen;
+                for (size_t v = before; v < wood.vertices.size(); ++v) growth->wood.push_back(((v - before) % 2 == 0) ? ga : gb);
+            }
             ++rep.woodSegments;
         }
         rep.woodTriangles = wood.indices.size() / 3;
@@ -2187,9 +2209,10 @@ private:
         // crown break (and, with leavesOnCrownBranches, the branches that grew through the measured crown).
         const float twigRadius = std::max(rMin, kTwigRadiusShare * rRef);
         std::vector<Vec3> pts;
+        std::vector<uint32_t> ptsNode;  // the leaf node each point is (its id: when it grew)
         const std::vector<uint8_t> leafy = leafyNodes(cfg, g, twigRadius, &radius);
         for (size_t i = 0; i < N; ++i) {
-            if (leafy[i]) pts.push_back(g[i].position);
+            if (leafy[i]) { pts.push_back(g[i].position); ptsNode.push_back(static_cast<uint32_t>(i)); }
         }
         const size_t foliageBudget = budget > rep.woodTriangles ? budget - rep.woodTriangles : 0;
         if (pts.empty() || foliageBudget < 20) return;
@@ -2294,6 +2317,38 @@ private:
         }
         rep.foliageClumps = masses.size();
         rep.foliageTriangles = foliage.indices.size() / 3;
+        if (growth && !masses.empty()) {
+            // each mass appears once the last leaf node it holds has grown (the nearest leaf node when it holds none)
+            float cell = 1e-3f;
+            for (const auto& m : masses) cell = std::max(cell, m.size * kLeafJitterMax);
+            auto key = [&](const Vec3& p, int dx, int dy, int dz) {
+                const int64_t a = static_cast<int64_t>(std::floor(p.x / cell)) + dx, b = static_cast<int64_t>(std::floor(p.y / cell)) + dy, c = static_cast<int64_t>(std::floor(p.z / cell)) + dz;
+                return (static_cast<uint64_t>(a & 0x1FFFFF) << 42) | (static_cast<uint64_t>(b & 0x1FFFFF) << 21) | static_cast<uint64_t>(c & 0x1FFFFF);
+            };
+            std::unordered_map<uint64_t, std::vector<uint32_t>> grid;
+            for (uint32_t k = 0; k < pts.size(); ++k) grid[key(pts[k], 0, 0, 0)].push_back(k);
+            growth->foliage.reserve(foliage.vertices.size());
+            for (const auto& m : masses) {
+                const float hold2 = (m.size * kLeafJitterMax) * (m.size * kLeafJitterMax);
+                long held = -1;
+                for (int dz = -1; dz <= 1; ++dz) for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) {
+                    auto it = grid.find(key(m.center, dx, dy, dz));
+                    if (it == grid.end()) continue;
+                    for (uint32_t k : it->second) {
+                        if ((pts[k] - m.center).lengthSquared() <= hold2) held = std::max(held, static_cast<long>(ptsNode[k]));
+                    }
+                }
+                if (held < 0) {
+                    float best = std::numeric_limits<float>::infinity();
+                    for (uint32_t k = 0; k < pts.size(); ++k) {
+                        const float d2 = (pts[k] - m.center).lengthSquared();
+                        if (d2 < best) { best = d2; held = static_cast<long>(ptsNode[k]); }
+                    }
+                }
+                const float value = static_cast<float>(held) / growthDen;
+                growth->foliage.insert(growth->foliage.end(), sphere.size(), value);
+            }
+        }
     }
 };
 

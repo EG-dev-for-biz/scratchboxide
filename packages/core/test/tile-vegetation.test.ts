@@ -265,7 +265,7 @@ describe('tile_vegetation plant (SB-Veggie, space colonisation)', () => {
         expect(glb.json.materials[0].pbrMetallicRoughness).toMatchObject({ baseColorFactor: [0.55, 0.57, 0.6, 1], metallicFactor: 0, roughnessFactor: 0.85 });
         // nothing geodetic goes into the published model: the trees sit in the tile frame, mounted with the tile; the
         // crowns' lat/lng stay in the strip's cache entry (crowns.json)
-        expect(glb.json.extras).toEqual({ frame: 'x = east, y = up, z = south (metres)', sbVeggie: expect.any(Object) });
+        expect(glb.json.extras).toEqual({ frame: 'x = east, y = up, z = south (metres)', sbVeggie: expect.any(Object), sb: expect.objectContaining({ schema: 'scratchbox.staged-glb/2', stage: 'trees' }) });
         expect(JSON.stringify(glb.json)).not.toMatch(/LatLng|localToEcef|anchor/);
         const tris = readGlbTriangles(fs.readFileSync(planted.treesGlb));
         expect(tris.indices.length / 3).toBe(planted.stats.triangles);
