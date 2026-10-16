@@ -106,6 +106,13 @@ describe('overlay words and accessibility', () => {
         expect(markup(props(interrupted, { interrupted: true }))).toContain('Interrupted. Google 3D Tiles stay in the scene. Not built: Remeshed scan');
     });
 
+    test('a failed run keeps what it built and names the stage that failed', () => {
+        const st = fixtureState([L('l1')], { runState: 'failed', stageStatus: { remesh: 'failed' } });
+        const html = markup(props(st));
+        expect(html).toContain('Failed. Google 3D Tiles stay in the scene. Not built: Remeshed scan.');
+        expect(html).toContain('✕ Remeshed scan failed');
+    });
+
     test('degraded parts: a count, a list of what fell to what and why, and Retry with the record args', () => {
         const st = fixtureState([L('l1'), L('l2'), L('l3a'), L('l3b')], { runState: 'finished', degradations: [visionFailure()], stageStatus: { vision: 'degraded' } });
         const html = markup(props(st));

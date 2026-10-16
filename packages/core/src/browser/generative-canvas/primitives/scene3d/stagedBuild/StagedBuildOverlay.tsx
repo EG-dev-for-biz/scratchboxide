@@ -345,7 +345,7 @@ function visionSentence(vm: NonNullable<StagedBuildState['visionModel']>): strin
 
 function runSentence(state: StagedBuildState, interrupted: boolean): string {
     const committed = state.stages.filter(s => s.status === 'committed' || s.status === 'degraded').map(s => s.title);
-    const stopped = state.stages.filter(s => s.status === 'stopped').map(s => s.title);
+    const stopped = state.stages.filter(s => s.status === 'stopped' || s.status === 'failed').map(s => s.title);
     const head = interrupted ? 'Interrupted' : state.runState === 'stopped' ? 'Stopped' : state.runState === 'failed' ? 'Failed' : 'Finished';
     if (state.runState === 'finished' && !interrupted) return `Finished: ${committed.join(', ')} in the scene.`;
     const kept = committed.length > 0 ? ` ${committed.join(', ')} stay in the scene.` : '';
