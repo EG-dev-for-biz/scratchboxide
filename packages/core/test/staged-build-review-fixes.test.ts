@@ -26,6 +26,7 @@ import { StagedBuildOverlay, type StagedBuildOverlayProps } from '../src/browser
 import { placeDegradations, type PlacementRoot } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/degradationPlacement';
 import { legendRows, resolveLegend } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/provenanceShading';
 import { publishStageEvent, stageEventsFor, subscribeStageEvents, withStreamedEvents } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/stagedBuildState';
+import { stepRevealSchedule, type RevealSchedule } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/revealScheduler';
 import { visionModelUse } from './helpers/staged-location-fixtures';
 import { buildStagedFixture, fixtureLayer, fixtureState, objectIdOf, FIXTURE_RUN_ID, type FixtureLayerId, type StagedFixtureGlbs } from './helpers/staged-glb-fixture';
 import { openStagedPage, serveFixture, stagedChrome, type StagedPage } from './helpers/staged-build-chrome';
@@ -290,6 +291,49 @@ describe('finding 5: the run sentence and the chips say what fell, what was skip
 });
 
 // -------------------------------------------------------------------------------------------------------------------
+// A layer whose file did not load must not hold the real layers that wait for it
+// -------------------------------------------------------------------------------------------------------------------
+
+describe('a layer whose file failed to load releases the layers that waited for it', () => {
+    const run = (failed: boolean) => {
+        const st = runOf('feed0009', fixtureState([L('l1'), L('l2'), L('l5')], { runState: 'finished' }));
+        let schedule: RevealSchedule | undefined;
+        let frame!: ReturnType<typeof stepRevealSchedule>['frame'];
+        for (let i = 1; i <= 400; i++) {
+            const r = stepRevealSchedule(schedule, {
+                state: st, nowMs: i * STEP, reducedMotion: false, settled: false, replayEpoch: 0,
+                loads: {
+                    [objectIdOf('l1')]: { ready: true, readyAtMs: 0 },
+                    [objectIdOf('l2')]: failed ? { ready: false, failed: true } : { ready: false },
+                    [objectIdOf('l5')]: { ready: true, readyAtMs: 0 }
+                }
+            });
+            schedule = r.schedule;
+            frame = r.frame;
+        }
+        return frame;
+    };
+
+    test('the trees that wait for the remesh are revealed after 6.4 s when the remesh failed to load, and the note says so', () => {
+        const frame = run(true);
+        const trees = frame.layers.find(f => f.objectId === objectIdOf('l5'))!;
+        const remesh = frame.layers.find(f => f.objectId === objectIdOf('l2'))!;
+        expect(trees.phase, 'not held for good by a layer that will never come').toBe('revealed');
+        expect(remesh).toMatchObject({ phase: 'loading', loadFailed: true });
+        expect(frame.pending, 'nothing is left to wait for, so the guard can come off').toBe(false);
+        expect(trees.outOfOrder, 'a layer that failed is not "not ready yet"').toBeUndefined();
+        const st = runOf('feed0009', fixtureState([L('l1'), L('l2'), L('l5')], { runState: 'finished' }));
+        expect(text(markup(props(st, { layers: frame.layers })))).toContain('Remeshed scan: its file could not be loaded, so it is not drawn');
+    });
+
+    test('while the remesh is only loading (not failed) the trees keep waiting for it', () => {
+        const frame = run(false);
+        expect(frame.layers.find(f => f.objectId === objectIdOf('l5'))).toMatchObject({ phase: 'held', heldBy: [objectIdOf('l2')] });
+        expect(frame.pending).toBe(true);
+    });
+});
+
+// -------------------------------------------------------------------------------------------------------------------
 // The real viewport
 // -------------------------------------------------------------------------------------------------------------------
 
@@ -459,6 +503,30 @@ describe.skipIf(!stagedChrome.ok)('the real viewport (Scene3DPrimitive, its load
         } finally {
             await page.eval(`Date.now = window.__realDateNow`);
         }
+    });
+
+    test('a remesh whose file will not load does not hold the trees that wait for it: they grow, and the overlay says why the scan is missing', async () => {
+        const run = 'beef0006';
+        page.serve('bad-remesh.glb', Buffer.from('this is not a binary glTF'));
+        const st = runOf(run, fixtureState([L('l1'), L('l2', { url: '/models/bad-remesh.glb' }), L('l5')], { runState: 'finished' }));
+        await page.eval(`sbHarness.mount(${JSON.stringify(stagedSceneData(st))})`);
+        await page.waitFor('sbHarness.ready()');
+        await page.waitFor(`sbHarness.attached(${JSON.stringify(objectIdOf('l5'))})`, 30_000, 'trees attached');
+        // The load error arrives between frames; then the trees are no longer held.
+        for (let i = 0; i < 200; i++) {
+            const f = await layerFrame(page, 'l5');
+            if (f && f.phase !== 'held' && f.phase !== 'loading') break;
+            await page.step(1, STEP);
+        }
+        expect((await layerFrame(page, 'l5'))!.phase, 'not held for good').toMatch(/revealing|revealed/);
+        await advanceTo(page, 'l5', 1);
+        await page.step(30, STEP);
+        expect(await overlayText(page)).toContain('Remeshed scan: its file could not be loaded, so it is not drawn');
+        expect(await attached(page, 'l2'), 'the corrupt file never became a layer').toBe(false);
+        await page.screenshot('review_failed_remesh_trees_still_grow');
+        await page.eval('sbHarness.resetStats()');
+        await page.step(30, STEP);
+        expect((await page.eval<{ guardMs: number[] }>('sbHarness.stats()')).guardMs.length, 'nothing left to wait for: the guard is off').toBe(0);
     });
 
     test('finding 5 on screen: the finished sentence and the stage chips give the reasons', async () => {

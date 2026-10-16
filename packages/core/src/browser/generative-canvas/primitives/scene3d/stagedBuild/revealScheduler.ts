@@ -84,6 +84,8 @@ export interface LayerRevealFrame {
     outOfOrder?: string;
     skipped?: string;
     cutShort?: boolean;
+    /** The layer's file did not load (a download or parse error): it is not drawn, and nothing waits for it. */
+    loadFailed?: boolean;
     /** Effective duration (half when cached, 0 when skipped). */
     durationMs: number;
 }
@@ -147,12 +149,14 @@ function titleOf(state: StagedBuildState, layer: StagedLayer): string {
 }
 
 /**
- * A revealAfter dependency is met when that layer finished revealing, or when it will never come: its stage ended
- * without committing it (degraded, failed, skipped or stopped), or the run itself ended without it.
+ * A revealAfter dependency is met when that layer finished revealing, or when it will never come: it was retired,
+ * its file failed to load, its stage ended without committing it (degraded, failed, skipped or stopped), or the run
+ * itself ended without it.
  */
-function dependencyMet(id: string, state: StagedBuildState, revealed: (id: string) => boolean): boolean {
+function dependencyMet(id: string, state: StagedBuildState, revealed: (id: string) => boolean, loadFailed: (id: string) => boolean): boolean {
     const layer = state.layers.find(l => l.objectId === id);
-    if (layer) return !!layer.retired || revealed(id);
+    // A layer whose file did not load never reveals; the real layers that waited for it are shown, not held for good.
+    if (layer) return !!layer.retired || revealed(id) || loadFailed(id);
     const owner = state.stages.find(s => s.layerIds.includes(id));
     if (owner) return TERMINAL.has(owner.status);
     return state.runState !== 'running';
@@ -191,7 +195,8 @@ export function stepRevealSchedule(prev: RevealSchedule | undefined, input: Reve
     }
 
     const revealing = () => layers.filter(l => timelines[l.objectId] && timelines[l.objectId].endedAtMs === undefined).length;
-    const heldByOf = (layer: StagedLayer) => layer.revealAfter.filter(id => !dependencyMet(id, state, revealedNow));
+    const loadFailed = (id: string) => !!loads[id]?.failed;
+    const heldByOf = (layer: StagedLayer) => layer.revealAfter.filter(id => !dependencyMet(id, state, revealedNow, loadFailed));
 
     // Start every layer whose conditions hold, in canonical order.
     for (const layer of layers) {
@@ -209,7 +214,7 @@ export function stepRevealSchedule(prev: RevealSchedule | undefined, input: Reve
             if (earlierRevealing.length > 0 && !waitedLong) continue;
             if (revealing() >= MAX_CONCURRENT_REVEALS) continue;
         }
-        const notYet = earlier.find(o => !revealedNow(o.objectId) && !timelines[o.objectId]);
+        const notYet = earlier.find(o => !revealedNow(o.objectId) && !timelines[o.objectId] && !loadFailed(o.objectId));
         const skipped = input.settled ? undefined : input.reducedMotion ? 'reduced motion' : input.skipReason ?? layerSkip;
         const durationMs = endState ? 0 : effectiveDurationMs(layer);
         timelines[id] = {
@@ -250,7 +255,8 @@ export function stepRevealSchedule(prev: RevealSchedule | undefined, input: Reve
             durationMs: t ? t.durationMs : effectiveDurationMs(layer),
             ...(t?.outOfOrder ? { outOfOrder: t.outOfOrder } : {}),
             ...(t?.skipped ? { skipped: t.skipped } : {}),
-            ...(t?.cutShort ? { cutShort: true } : {})
+            ...(t?.cutShort ? { cutShort: true } : {}),
+            ...(!t && !layer.retired && loadFailed(id) ? { loadFailed: true } : {})
         });
     }
     for (const layer of layers) {

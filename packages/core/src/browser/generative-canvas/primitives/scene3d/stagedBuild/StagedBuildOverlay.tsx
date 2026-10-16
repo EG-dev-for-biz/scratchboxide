@@ -194,7 +194,8 @@ export const StagedBuildOverlay: React.FC<StagedBuildOverlayProps> = props => {
         ...(l.outOfOrder ? [l.outOfOrder] : []),
         ...(l.phase === 'held' && l.heldBy.length > 0 ? [`${titleForLayer(state, l)} waits for ${l.heldBy.map(id => titleForId(state, id)).join(', ')} to reveal`] : []),
         ...(l.cutShort ? [`${titleForLayer(state, l)}: crossfade ended at once (the layer it replaced was removed)`] : []),
-        ...(l.skipped ? [`${titleForLayer(state, l)}: reveal skipped (${l.skipped})`] : [])
+        ...(l.skipped ? [`${titleForLayer(state, l)}: reveal skipped (${l.skipped})`] : []),
+        ...(l.loadFailed ? [`${titleForLayer(state, l)}: its file could not be loaded, so it is not drawn`] : [])
     ]);
     const skippedLine = props.skipNote ? `reveal skipped (${props.skipNote})` : undefined;
     const vm = state.visionModel;
