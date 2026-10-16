@@ -140,6 +140,8 @@ struct FacadeFlattenParams {
 
 struct TileRefineParams {
     FacadeFlattenParams flatten;
+    bool reliefOnWallPlanes{true};     // relief facades are the detected wall planes (one lattice per plane); false: the
+                                       // relief grows its own regions
     int threads{0};
     double anchorX{0}, anchorZ{0};
     double roiRadius{60.0};            // the region of interest is the anchor's footprint grown by this (m)
@@ -724,6 +726,9 @@ private:
     scan_rectifier::ScanRectifierResult rect;
     photometric_relief::ReliefResult relief;
     std::vector<uint32_t> keptTris;            // raw triangle index of every rectified triangle passed on
+    // a wall plane (see detectWallPlanes): n.p = d, in-plane support box [lo1, hi1] x [lo2, hi2] along t1, t2
+    struct WallPlane { V3 n, c, t1, t2; double d{0}, area{0}, lo1{0}, hi1{0}, lo2{0}, hi2{0}, rmsIn{0}; std::vector<uint32_t> tris, inl; };
+    std::vector<WallPlane> flattenPlanes;      // the facade flatten's wall planes (they also frame the relief)
     bool roiEnabled{false};
     double roiMinX{0}, roiMaxX{0}, roiMinZ{0}, roiMaxZ{0};
 
@@ -808,6 +813,23 @@ private:
             rp.roiEnabled = roiEnabled;
             rp.roiMinX = roiMinX; rp.roiMaxX = roiMaxX; rp.roiMinZ = roiMinZ; rp.roiMaxZ = roiMaxZ;
             rp.creaseAngleDeg = P.creaseAngleDeg;
+            if (P.reliefOnWallPlanes) {
+                // one relief region, and one window lattice, per wall plane of the rectified surface
+                std::vector<WallPlane> planes = flattenPlanes;
+                if (planes.empty()) {
+                    std::vector<V3> Q(V);
+                    for (size_t v = 0; v < V; ++v) Q[v] = V3{rect.positions[3 * v], rect.positions[3 * v + 1], rect.positions[3 * v + 2]};
+                    size_t it = 0;
+                    planes = detectWallPlanes(Q, keptTris, it);
+                }
+                for (const auto& pl : planes) {
+                    photometric_relief::FacadePlane fp;
+                    fp.n = photometric_relief::P3(pl.n.x, pl.n.y, pl.n.z);
+                    fp.t1 = photometric_relief::P3(pl.t1.x, pl.t1.y, pl.t1.z);
+                    fp.d = pl.d; fp.lo1 = pl.lo1; fp.hi1 = pl.hi1; fp.lo2 = pl.lo2; fp.hi2 = pl.hi2;
+                    rp.facadePlanes.push_back(fp);
+                }
+            }
             // diagnostics: SB_DEBUG_RELIEF_DIR receives annotated orthophotos of the largest analysed regions
             const char* reliefDebug = std::getenv("SB_DEBUG_RELIEF_DIR");
             if (reliefDebug) std::filesystem::create_directories(reliefDebug);
@@ -1993,8 +2015,6 @@ private:
     // Wall planes of the faces `kept` at positions Q (see FacadeFlattenParams): (azimuth, offset) density modes of the
     // near-vertical faces, each refit robustly and coplanar ones merged, with their in-plane support boxes
     // ----------------------------------------------------------------------------------------
-    struct WallPlane { V3 n, c, t1, t2; double d{0}, area{0}, lo1{0}, hi1{0}, lo2{0}, hi2{0}, rmsIn{0}; std::vector<uint32_t> tris, inl; };
-
     std::vector<WallPlane> detectWallPlanes(const std::vector<V3>& Q, const std::vector<uint32_t>& kept, size_t& detectIterations) const {
         const FacadeFlattenParams& FP = P.flatten;
         const double kPi = 3.14159265358979323846;
@@ -2426,6 +2446,7 @@ private:
         // ---- planes
         size_t detectIterations = 0;
         const std::vector<WallPlane> planes = detectWallPlanes(Q0, kept, detectIterations);
+        flattenPlanes = planes;
         const int K = static_cast<int>(planes.size());
         stage("planes");
 
@@ -3045,7 +3066,10 @@ private:
            << ", \"meanRecess_m\": " << num(relief.meanRecess) << ", \"meanProud_m\": " << num(relief.meanProud) << ", \"recessArea_m2\": " << num(relief.recessArea)
            << ", \"proudArea_m2\": " << num(relief.proudArea) << ", \"provenance\": \"" << (relief.regionsTreated ? "inferred" : "none") << "\""
            << ", \"latticesRejected\": " << relief.latticesRejected << ", \"latticeFeaturesDropped\": " << relief.latticeFeaturesDropped
-           << ", \"proudClampedDropped\": " << relief.proudClampedDropped << ", \"insertedBorderVertices\": " << relief.insertedBorderVertices << ", \"earClipFallbacks\": " << relief.earClipFallbacks << ", \"earClipUnfilled\": " << relief.earClipUnfilled
+           << ", \"proudClampedDropped\": " << relief.proudClampedDropped << ", \"facadesFromWallPlanes\": " << (P.reliefOnWallPlanes ? "true" : "false")
+           << ", \"observedCells\": " << relief.observedCells << ", \"inferredCells\": " << relief.inferredCells << ", \"inferredContradicted\": " << relief.inferredContradicted
+           << ", \"cellsAtMaxDepth\": " << relief.cellsAtMaxDepth << ", \"recessDepthSource\": \"photo-contrast\""
+           << ", \"insertedBorderVertices\": " << relief.insertedBorderVertices << ", \"earClipFallbacks\": " << relief.earClipFallbacks << ", \"earClipUnfilled\": " << relief.earClipUnfilled
            << ", \"outputTriangles\": " << m.triangles.size() << ", \"flips\": " << flips << ", \"revealFacesTiltedPastParentPlane\": " << revealsPastParent
            << ", \"flipChecked\": " << checked << ", \"facades\": [";
         if (std::getenv("SB_DEBUG_FACADES"))
@@ -3064,6 +3088,25 @@ private:
             js << (i ? "," : "") << "{\"id\": " << f.id << ", \"area_m2\": " << num(f.area) << ", \"pattern\": \"" << jsonEscape(f.analysis.pattern)
                << "\", \"latticeConfirmation\": " << num(f.analysis.latticeConfirmation) << ", \"features\": " << f.analysis.features.size() << ", \"minHeight_m\": " << num(f.minHeight) << ", \"maxHeight_m\": " << num(f.maxHeight)
                << ", \"centroid\": " << vec(V3{f.centroid.x, f.centroid.y, f.centroid.z}) << "}";
+        }
+        js << "], \"lattices\": [";
+        {
+            // every facade whose window cells form a lattice: one per wall plane when the relief runs on them
+            std::vector<const photometric_relief::FacadeReport*> withLattice;
+            for (const auto& f : relief.facades) if (f.analysis.latticeRows > 0 && !f.analysis.features.empty()) withLattice.push_back(&f);
+            std::sort(withLattice.begin(), withLattice.end(), [](auto* a, auto* b) { return a->area > b->area; });
+            for (size_t i = 0; i < std::min<size_t>(64, withLattice.size()); ++i) {
+                const auto& f = *withLattice[i];
+                const auto& a = f.analysis;
+                js << (i ? "," : "") << "{\"facadeId\": " << f.id << ", \"planeIndex\": " << f.planeIndex << ", \"normal\": " << vec(V3{f.normal.x, f.normal.y, f.normal.z})
+                   << ", \"area_m2\": " << num(f.area) << ", \"treated\": " << (f.treated ? "true" : "false") << ", \"pitchS_m\": " << num(a.periodS.pitch)
+                   << ", \"phaseS_m\": " << num(a.cell.phaseS) << ", \"rowPitch_m\": " << num(a.rowPitch) << ", \"windowHeight_m\": " << num(a.cell.heightT)
+                   << ", \"rows\": " << a.latticeRows << ", \"cols\": " << a.latticeCols << ", \"observedCells\": " << a.observedCells
+                   << ", \"inferredCells\": " << a.inferredCells << ", \"inferredContradicted\": " << a.inferredContradicted << ", \"filled\": " << (a.latticeFilled ? "true" : "false")
+                   << ", \"rowResidualRms_m\": " << num(a.rowResidualRms) << ", \"rowResidualMax_m\": " << num(a.rowResidualMax) << ", \"offGridCells\": " << a.offGridCells
+                   << ", \"cellsTested\": " << a.cellsTested << ", \"cellsAtMaxDepth\": " << a.cellsAtMaxDepth << ", \"extent_m\": [" << num(f.sMax - f.sMin) << "," << num(f.tMax - f.tMin) << "]"
+                   << ", \"ortho\": [" << f.orthoWidth << "," << f.orthoHeight << "], \"analysisMs\": " << num(f.analysisMs) << "}";
+            }
         }
         js << "]},\n";
         finalFlips = flips;
