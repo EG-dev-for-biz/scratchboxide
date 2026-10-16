@@ -88,19 +88,10 @@ function writeCrowns(name: string, crowns: any[]): string {
     return name;
 }
 
-/** Foliage (the second primitive of each tree mesh) positions, per tree node. */
+/** Foliage (the second primitive of each tree mesh) positions in the tile frame, per tree node (quantised or not). */
 function foliageOf(glbFile: string): Map<number, Float32Array> {
-    const { json, bin } = parseGlb(fs.readFileSync(glbFile));
     const out = new Map<number, Float32Array>();
-    for (const node of json.nodes ?? []) {
-        if (node.mesh === undefined || !node.extras) continue;
-        const prims = json.meshes[node.mesh].primitives;
-        const acc = json.accessors[prims[prims.length - 1].attributes.POSITION];
-        const view = json.bufferViews[acc.bufferView];
-        const p = new Float32Array(acc.count * 3);
-        for (let i = 0; i < acc.count * 3; i++) p[i] = bin.readFloatLE((view.byteOffset ?? 0) + (acc.byteOffset ?? 0) + 4 * i);
-        out.set(node.extras.crownId, p);
-    }
+    for (const f of readTreeFoliage(fs.readFileSync(glbFile))) out.set(f.crownId, f.positions);
     return out;
 }
 

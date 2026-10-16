@@ -34,7 +34,8 @@ import * as path from 'path';
 import { SCENE_TREE_TRIANGLE_CAP, TileVegetationService, type TileVegetationStripResult } from '../src/node/3d-engine/tile-vegetation-service';
 import { TileRefineService } from '../src/node/3d-engine/tile-refine-service';
 import { describeLocationClay, runLocationClayPipeline, type LocationClayResult } from '../src/node/3d-engine/location-clay-pipeline';
-import { readGlbTriangles, renderClayPng, type GlbTriangles } from './helpers/clay-glb-render';
+import { parseGlb, readAccessor, readGlbTriangles, renderClayPng, type GlbTriangles } from './helpers/clay-glb-render';
+import { validateContract } from '../src/common/spatial/staged-location-contracts';
 import { crownSurfaceAboveBase, foliageReach, readTreeFoliage } from './helpers/foliage-reach';
 
 const REPO = fs.realpathSync(path.resolve(__dirname, '../../..'));
@@ -176,37 +177,84 @@ describe.skipIf(!haveTile)('tile vegetation on the Central Park photo extraction
         Object.assign(report, { measured: t.measured, rebuilt: t.count, triangles: t.triangles, triangleBudget: t.triangleBudget, triangleBudgetSource: t.triangleBudgetSource, targetTriangles: t.targetTriangles });
     });
 
-    it('stands crowns that hang below the canopy they were measured on on the ground the scan has under them', () => {
+    it('stands every trunk on what the scan shows under its crown, and on the ground rebuilt under its stem', () => {
         const t = pipeline.trees!;
+        const tol = crownsDoc.params.groundTolerance ?? 0.5;
+        const band = 1.5;
+        const trees = crownsDoc.crowns.filter((c: any) => c.status === 'tree');
         const under = crownsDoc.crowns.filter((c: any) => c.supportSource === 'under_stem');
         expect(t.supportedUnderStem).toBe(under.length);
-        // Central Park's continuous canopy: level patches of canopy tops around a crown are no ground
+        // Central Park's continuous canopy: the level patches around many crowns are canopy tops, a path below a mound,
+        // the street beside a terrace; the scan shows the ground under them
         expect(under.length).toBeGreaterThanOrEqual(50);
-        let hung = 0, onlyGround = 0;
-        for (const c of under) {
-            // either its crown hung below the level patches around it, or under its stem the scan has nothing standable
-            // between its crown and the ground the terrain model has there
-            if (/^\d+% of its measured crown lies more than 1\.0 m below the surface measured around it/.test(c.supportNote)) hung++;
-            else {
-                expect(c.supportNote).toMatch(/^the surfaces around it stand at -?[\d.]+ m, but under its stem the scan has nothing standable between its crown and the ground/);
-                expect(Math.abs(c.supportY - c.terrainY)).toBeLessThanOrEqual(2);
-                onlyGround++;
+        let shownUnder = 0, moved = 0, aroundOnly = 0;
+        for (const c of trees) {
+            const surfaces: number[][] = c.supportEvidence.surfaces;
+            // what it stands on is a surface the scan shows under its footprint (facing up, not canopy) ...
+            if (c.supportSource === 'under_stem' || c.supportSource === 'under_footprint') {
+                if (c.supportMovedM === undefined) expect(surfaces.some(([y]) => Math.abs(y - c.supportY) < 1e-6)).toBe(true);
+                shownUnder++;
+            } else {
+                expect(c.supportSource).toBe('surrounding_surface');
+                aroundOnly++;
             }
-            // the crown does not hang below what it stands on now
+            // ... and the ground rebuilt (or kept) under its stem holds it; a trunk stood onto that ground was stood there
+            // only where the scan shows that surface under the crown (or around it), within the support band
+            expect(Math.abs(c.groundAtStemY - c.supportY)).toBeLessThanOrEqual(tol + 1e-6);
+            if (c.supportMovedM !== undefined) {
+                moved++;
+                const near = (y: number) => Math.abs(y - c.groundAtStemY) <= band;
+                expect(surfaces.some(([y]) => near(y)) || (c.surroundingY !== undefined && near(c.surroundingY)) || Math.abs(c.supportMovedM) <= band).toBe(true);
+            }
+            // the crown does not hang below what it stands on
             const below = c.samples.filter((s: number[]) => s[1] < c.supportY - 1).length / c.samples.length;
             expect(below).toBeLessThanOrEqual(0.1);
         }
-        expect(hung).toBeGreaterThan(0);
-        expect(onlyGround).toBeGreaterThan(0);
-        report.supportedUnderStemHung = hung;
-        report.supportedUnderStemOnlyGround = onlyGround;
-        // crown 704 (support measured on canopy at 25.45 m, its own crown down to 8.2 m, ground under its stem at -0.2 m)
+        // crown 704 (canopy at 25.45 m around it, its own crown down to 8.2 m): on the ground under its stem
         const c704 = crownsDoc.crowns.find((c: any) => c.id === 704);
         expect(c704.supportSource).toBe('under_stem');
         expect(c704.supportY).toBeLessThan(1);
-        report.supportedUnderStem = under.length;
-        report.noMeasuredGround = t.noMeasuredGround;
-        report.hangingBelowSupport = t.hangingBelowSupport;
+        // the five furthest off the mounted ground before this criterion (17.7, 17.4, 12.1, 11.3 and 10.4 m above it):
+        // each stands on the lowest upward-facing surface the raw scan has under its stem, the ground there
+        const rawTiles = readGlbTriangles(fs.readFileSync(path.join(root, 'central_park.glb')));
+        const groundUnder = (x: number, z: number): number => {
+            const P = rawTiles.positions, I = rawTiles.indices;
+            let lowest = Infinity;
+            for (let f = 0; f < I.length / 3; f++) {
+                const [a, b, cc] = [I[3 * f], I[3 * f + 1], I[3 * f + 2]];
+                const ax = P[3 * a], az = P[3 * a + 2], bx = P[3 * b], bz = P[3 * b + 2], cx = P[3 * cc], cz = P[3 * cc + 2];
+                if (Math.max(ax, bx, cx) < x || Math.min(ax, bx, cx) > x || Math.max(az, bz, cz) < z || Math.min(az, bz, cz) > z) continue;
+                const d = (bx - ax) * (cz - az) - (cx - ax) * (bz - az);
+                if (Math.abs(d) < 1e-12) continue;
+                const w1 = ((x - ax) * (cz - az) - (cx - ax) * (z - az)) / d, w2 = ((bx - ax) * (z - az) - (x - ax) * (bz - az)) / d;
+                if (w1 < -1e-9 || w2 < -1e-9 || 1 - w1 - w2 < -1e-9) continue;
+                const ux = bx - ax, uy = P[3 * b + 1] - P[3 * a + 1], uz = bz - az, vx = cx - ax, vy = P[3 * cc + 1] - P[3 * a + 1], vz = cz - az;
+                const ny = uz * vx - ux * vz;
+                if (ny / Math.hypot(uy * vz - uz * vy, ny, ux * vy - uy * vx) < 0.85) continue;
+                lowest = Math.min(lowest, (1 - w1 - w2) * P[3 * a + 1] + w1 * P[3 * b + 1] + w2 * P[3 * cc + 1]);
+            }
+            return lowest;
+        };
+        const formerlyFloating: Record<string, unknown> = {};
+        for (const id of [949, 964, 764, 813, 798]) {
+            const c = crownsDoc.crowns.find((k: any) => k.id === id);
+            expect(c.status).toBe('tree');
+            const g = groundUnder(c.stem[0], c.stem[1]);
+            expect(Math.abs(c.supportY - g)).toBeLessThanOrEqual(1.0);
+            formerlyFloating[id] = { supportY: c.supportY, scanGroundUnderStemY: g, supportSource: c.supportSource };
+        }
+        // a tree whose support the rebuilt ground does not decide stays as scanned, with its reason
+        const undecided = crownsDoc.crowns.filter((c: any) => c.ground?.reasonCode === 'support_undecided');
+        for (const c of undecided) {
+            expect(c.status).toBe('no_measured_ground');
+            expect(c.ground.reason).toMatch(/what it stands on is undecided/);
+        }
+        expect(strip.stats.trunkGround.supportUndecided).toBe(undecided.length);
+        Object.assign(report, {
+            support: { shownUnderFootprint: shownUnder, surroundingSurfaceOnly: aroundOnly, underStem: under.length, stoodOnRebuiltGround: moved, undecided: undecided.map((c: any) => ({ crownId: c.id, reason: c.ground.reason })) },
+            trunkGround: strip.stats.trunkGround,
+            formerlyFloating
+        });
     });
 
     it('delivers each tree into its measured crown: its leaf masses, read from the trees model, reach it as the result says', () => {
@@ -271,6 +319,11 @@ describe.skipIf(!haveTile)('tile vegetation on the Central Park photo extraction
         }
         expect(worstBase).toBeLessThan(0.6);
         expect(disagreements).toBe(0);
+        // every trunk stands on the support the scan shows under its crown, which the ground rebuilt under its stem holds:
+        // on the mounted (remeshed) clay, at most the few the remesh itself moved by more than the tolerance (90 before:
+        // 68 floating up to 17.7 m and 22 buried)
+        expect(t.offGround.length).toBeLessThanOrEqual(3);
+        for (const k of t.offGround) expect(k.gapM === null ? Infinity : Math.abs(k.gapM)).toBeLessThan(1.0);
         // every tree off the mounted ground is named in the outcome (the first five, then the rest by crown id)
         if (t.offGround.length) {
             expect(t.outcome).toContain(`${t.offGround.length.toLocaleString()} rebuilt tree${t.offGround.length === 1 ? ' stands' : 's stand'} more than ${tol} m off the mounted model`);
@@ -286,6 +339,64 @@ describe.skipIf(!haveTile)('tile vegetation on the Central Park photo extraction
             worstBaseOffSupportM: worstBase
         });
     });
+
+    it('writes the trees as a staged layer: each tree grows from its trunk in its real order, and the file is quantised within 1 cm', async () => {
+        const t = pipeline.trees!;
+        const bytes = fs.readFileSync(path.join(root, 'public', t.url!));
+        const { json, bin } = parseGlb(bytes);
+        expect(json.extensionsRequired).toContain('KHR_mesh_quantization');
+        const q = json.asset.extras.scratchbox.quantization;
+        expect(q.positionMaxErrorM).toBeLessThanOrEqual(0.01);
+        // the root and every tree say what they are (StagedGlbRootExtras, StagedNodeExtras)
+        expect(validateContract('StagedGlbRootExtras', json.extras)).toEqual([]);
+        expect(json.scenes[0].extras).toEqual(json.extras);
+        const treeNodes = json.nodes.filter((n: any) => n.extras?.sb && n.extras.sb.revealKind === 'grow');
+        expect(treeNodes).toHaveLength(t.count);
+        let pairs = 0, backwards = 0;
+        treeNodes.forEach((n: any, rank: number) => {
+            expect(validateContract('StagedNodeExtras', n.extras)).toEqual([]);
+            expect(n.extras.sb.provenance.label).toBe('grown to the measured crown');
+            expect(n.extras.sb.buildOrder).toBe(rank);
+            const prims = json.meshes[n.mesh].primitives;
+            prims.forEach((pr: any, k: number) => {
+                const r = readAccessor(json, bin, pr.attributes._REVEAL).data;
+                for (let v = 0; v < r.length; v += 2) {
+                    // x: the plant rank over max(1, trees - 1); y: when the vertex grew, in [0, 1]
+                    expect(Math.abs(r[v] - rank / Math.max(1, treeNodes.length - 1))).toBeLessThanOrEqual(1 / 65535);
+                    expect(r[v + 1]).toBeGreaterThanOrEqual(0);
+                    expect(r[v + 1]).toBeLessThanOrEqual(1);
+                }
+                if (k === 0) {
+                    // wood: each branch segment's start ring grew before its end ring (start, end vertices alternate),
+                    // and the trunk's first node is the first thing grown
+                    let first = Infinity;
+                    for (let v = 0; v + 3 < r.length; v += 4) {
+                        pairs++;
+                        if (r[v + 1] > r[v + 3] + 1e-9) backwards++;
+                        first = Math.min(first, r[v + 1]);
+                    }
+                    expect(first).toBe(0);
+                }
+            });
+        });
+        expect(pairs).toBeGreaterThan(100_000);
+        expect(backwards).toBe(0);
+        // the same planting written unquantised: every position agrees within the error the file reports
+        const vegetation = new TileVegetationService({ workspaceRoot: root, repoRoot: REPO });
+        const plain = await vegetation.plant({ crownsPath: t.crownsJson, sceneTriangleCap: SCENE_TREE_TRIANGLE_CAP, seed: strip.tileSha256.slice(0, 16), groundMeshPath: pipeline.glbPath, quantize: false });
+        const a = readGlbTriangles(bytes), b = readGlbTriangles(fs.readFileSync(plain.treesGlb));
+        expect(a.positions.length).toBe(b.positions.length);
+        expect(Array.from(a.indices)).toEqual(Array.from(b.indices));
+        let worst = 0;
+        for (let i = 0; i < a.positions.length; i += 3) {
+            worst = Math.max(worst, Math.hypot(a.positions[i] - b.positions[i], a.positions[i + 1] - b.positions[i + 1], a.positions[i + 2] - b.positions[i + 2]));
+        }
+        expect(worst).toBeLessThanOrEqual(0.01);
+        expect(Math.abs(worst - q.positionMaxErrorM)).toBeLessThan(1e-4);
+        const plainBytes = fs.statSync(plain.treesGlb).size;
+        expect(bytes.length).toBeLessThan(0.75 * plainBytes);
+        Object.assign(report, { treesGlb: { bytes: bytes.length, unquantizedBytes: plainBytes, positionMaxErrorM: worst, reportedPositionMaxErrorM: q.positionMaxErrorM, normalMaxErrorDeg: q.normalMaxErrorDeg, beforeThisChangeBytes: 46_920_548 } });
+    }, 600_000);
 
     it('keeps the scan of any tree it could not regrow in the tile, untouched, and names the side closed beside it', () => {
         const kept = crownsDoc.crowns.filter((c: any) => c.status === 'not_regrowable');

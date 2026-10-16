@@ -407,6 +407,34 @@ describe.skipIf(!haveTile)('tile vegetation on the Flatiron / Madison Square Par
         if (fs.existsSync(REPORT)) fs.writeFileSync(REPORT, JSON.stringify({ ...JSON.parse(fs.readFileSync(REPORT, 'utf8')), walls: wallReport }, null, 2));
     });
 
+    it('keeps the tree on the roof on its roof: crown 229 stands at 47.5 m, on the mounted clay roof, not the street the hollow building mesh holds under it', () => {
+        const c = crownsDoc.crowns.find((k: any) => k.id === 229);
+        expect(c.status).toBe('tree');
+        expect(Math.abs(c.supportY - 47.5)).toBeLessThanOrEqual(0.5);
+        // the street is under its footprint too (the building mesh is hollow): the roof around it continues under it
+        const surfaces: number[][] = c.supportEvidence.surfaces;
+        expect(surfaces.some(([y]) => Math.abs(y - 47.5) <= 0.5)).toBe(true);
+        expect(surfaces.some(([y]) => y < 2)).toBe(true);
+        expect(c.supportMovedM).toBeUndefined();
+        expect(Math.abs(c.groundAtStemY - c.supportY)).toBeLessThanOrEqual(0.5);
+        // its planted trunk base, and the mounted (remeshed) clay under its stem
+        expect(pipeline.trees!.offGround.some(k => k.crownId === 229)).toBe(false);
+        const grown = readGlbTriangles(fs.readFileSync(path.join(root, 'public', pipeline.trees!.url!)));
+        const range = grown.nodeRanges.find(r => r.extras?.crownId === 229)!;
+        let base = Infinity;
+        for (let f = range.firstTriangle; f < range.firstTriangle + range.triangleCount; f++) {
+            for (let j = 0; j < 3; j++) base = Math.min(base, grown.positions[grown.indices[3 * f + j] * 3 + 1]);
+        }
+        expect(Math.abs(base - 47.5)).toBeLessThanOrEqual(0.6);
+        if (fs.existsSync(REPORT)) fs.writeFileSync(REPORT, JSON.stringify({ ...JSON.parse(fs.readFileSync(REPORT, 'utf8')), roofTree229: { supportY: c.supportY, supportSource: c.supportSource, groundAtStemY: c.groundAtStemY, plantedBaseY: base, evidence: surfaces } }, null, 2));
+    });
+
+    it('stands every trunk on the ground rebuilt under its stem, and the mounted clay holds every one', () => {
+        for (const c of trees) expect(Math.abs(c.groundAtStemY - c.supportY)).toBeLessThanOrEqual(0.5);
+        expect(pipeline.trees!.offGround).toEqual([]);
+        if (fs.existsSync(REPORT)) fs.writeFileSync(REPORT, JSON.stringify({ ...JSON.parse(fs.readFileSync(REPORT, 'utf8')), trunkGround: strip.stats.trunkGround, offGround: pipeline.trees!.offGround }, null, 2));
+    });
+
     it('runs the whole location pipeline: remeshed clay plus SB-Veggie trees within budget, with screenshots', () => {
         expect(pipeline.trees!.count).toBe(trees.length);
         expect(pipeline.trees!.measured).toBe(trees.length + pipeline.trees!.notRegrowable);

@@ -8,15 +8,20 @@
  ********************************************************************************/
 
 /**
- * CLI for the tile vegetation pipeline (scratchbox_tile_vegetation.hpp). Two subcommands:
+ * CLI for the tile vegetation pipeline (scratchbox_tile_vegetation.hpp). Three subcommands:
  *
  *   strip  photo-textured tile GLB -> devegetated tile GLB (trees removed, holes closed) + crowns.json + stats JSON.
  *          Every tree crown is regrown first (with --seed and the growth ratios); one the regrown tree does not fill is
  *          kept as scanned (status not_regrowable, with the reason) instead of being removed.
- *   plant  crowns.json -> SB-Veggie trees GLB (one node per measured crown, studio clay), within the caller's
+ *   plant  crowns.json -> SB-Veggie trees GLB (one node per measured crown, studio clay, with its growth order in
+ *          `_REVEAL` and staged-build node extras; LINES rings over crowns kept as scanned; KHR_mesh_quantization unless
+ *          --quantize 0), within the caller's
  *          --triangle-budget, or sized from the crowns under --scene-triangle-cap. Every tree's delivered leaf masses are
  *          measured against its crown; one that does not fill it within its budget is reported (shortOfCrown), and with
  *          --ground-mesh every trunk base is measured against the model the trees are mounted on (offGround).
+ *
+ *   canopy photo-textured tile GLB -> the cells strip's own classifier calls canopy (scratchbox.canopy-mask/1 JSON), with
+ *          no regrowth or removal: the same classifier, so a probe's idea of "tree" matches what strip later removes.
  *
  * Every flag is a continuous metric quantity. Errors exit non-zero with "ERROR <code>: <message>" on stderr.
  *
@@ -27,6 +32,7 @@
 
 #include "scratchbox_tile_vegetation.hpp"
 
+#include <array>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -51,10 +57,17 @@ static void usage() {
         "    --canopy-min-height M (2) --min-tree-height M (3) --min-crown-area M2 (4)\n"
         "    --window-base M (0.6) --window-slope V (0.11) --window-min M (1.5) --window-max M (4.5) --climb-limit M (1)\n"
         "    --support-step M (1) --support-search M (25) --max-crown-below-support V (0.1) --ground-terrain-band M (2)\n"
+        "    --min-support-evidence V (0.2: share of the footprint's vertical lines that must show a surface for a trunk to stand on it)\n"
+        "    --ground-tolerance M (0.5: a trunk base further than this from the ground rebuilt under its stem is re-stood or kept)\n"
+        "    --ground-passes N (6: removal passes at most while trees are kept as scanned)\n"
         "    --footprint-dilation M (1) --drape-reach M (10) --clearance M (0.3) --support-band M (1.5)\n"
         "    --skirt-min M (0.3) --fragment-max-area M2 (300) --cap-grid M (1.5) --seam-gap M (1) --sample-spacing M (0.7) --threads N\n"
         "    regrowth (white apex: a tree the regrown tree does not fill, kept as scanned):\n"
         "    --seed HEX (0) --crown-base-ratio V (0.35) --trunk-radius-per-height V (0.016) --shell-depth V (0.8) --min-surface-reached V (0.9)\n"
+        "    --roi-json PATH           a scratchbox.strip-roi/1 polygon: trees whose stem lies outside it are neither regrown nor\n"
+        "                              removed (status outside_roi, kept as scanned)\n"
+        "  tile_vegetation canopy --tile <tile.glb> --out <mask.json> [--cell M (0.5)] [strip classifier options]\n"
+        "    the cells strip's own classifier calls canopy, as a scratchbox.canopy-mask/1 run-length mask; nothing is regrown or removed\n"
         "  tile_vegetation plant --crowns <crowns.json> --out <trees.glb> --stats <stats.json> (--triangle-budget N | --scene-triangle-cap N) [options]\n"
         "    --triangle-budget N       total triangles all trees may use (the caller's own budget)\n"
         "    --scene-triangle-cap N    no budget given: each tree gets a target from its crown, all within this cap\n"
@@ -62,6 +75,9 @@ static void usage() {
         "    --support-mesh PATH       keep only crowns whose trunk base lies on this mesh (isolate requests)\n"
         "    --ground-mesh PATH        measure every trunk base against this mesh (the model the trees are mounted on)\n"
         "    --support-tolerance M (0.3) --ground-tolerance M (0.5) --min-triangles-per-tree N (120) --triangles-per-crown-m2 V (4) --wood-share V (0.4)\n"
+        "    --quantize 0|1 (1: KHR_mesh_quantization, positions within --max-quantization-error M (0.01) measured on the file)\n"
+        "    --stage-key KEY           the staged build's stage key for the root extras (the caller's cache key)\n"
+        "    --reveal 0|1 (1: each tree's growth order on its vertices as _REVEAL; 0: the same meshes without it)\n"
         "    --crown-base-ratio V --trunk-radius-per-height V --shell-depth V --min-surface-reached V\n"
         "                              (default: what crowns.json recorded as its growth, else 0.35, 0.016, 0.8, 0.9;\n"
         "                              a value other than the recorded one is refused)\n"
@@ -127,10 +143,27 @@ static Args parseArgs(int argc, char** argv, int from) {
     return a;
 }
 
-static int runStrip(const Args& a) {
-    for (const char* req : {"input", "out", "crowns", "stats"}) {
-        if (!a.has(req)) throw VegetationError("bad_request", std::string("strip needs --") + req);
+/** A StripRoi file ({"schema":"scratchbox.strip-roi/1","polygon":[[x, z], ...]}, tile frame metres). */
+static std::vector<std::array<double, 2>> readRoi(const std::string& path) {
+    const auto bytes = readFileBytes(path);
+    const io::GlbJsonValue doc = json::parse(std::string(bytes.begin(), bytes.end()));
+    if (doc.type != io::GlbJsonValue::Object || doc["schema"].asString() != "scratchbox.strip-roi/1") throw VegetationError("bad_request", "--roi-json must hold a scratchbox.strip-roi/1 object");
+    const auto& poly = doc["polygon"];
+    if (poly.type != io::GlbJsonValue::Array || poly.arr.size() < 3) throw VegetationError("bad_request", "the region of interest needs a polygon of at least 3 points");
+    std::vector<std::array<double, 2>> out;
+    for (const auto& p : poly.arr) {
+        if (p.type != io::GlbJsonValue::Array || p.arr.size() != 2 || p[0].type != io::GlbJsonValue::Number || p[1].type != io::GlbJsonValue::Number ||
+            !std::isfinite(p[0].num) || !std::isfinite(p[1].num)) {
+            throw VegetationError("bad_request", "every region-of-interest point must be [x, z] in metres");
+        }
+        out.push_back({p[0].num, p[1].num});
     }
+    return out;
+}
+
+static StripParams readStripParams(const Args& a);
+
+static StripParams readStripParams(const Args& a) {
     StripParams P;
     P.cell = a.num("cell", P.cell);
     P.terrainCell = a.num("terrain-cell", P.terrainCell);
@@ -156,6 +189,12 @@ static int runStrip(const Args& a) {
     P.maxCrownBelowSupport = a.num("max-crown-below-support", P.maxCrownBelowSupport);
     P.groundTerrainBand = a.num("ground-terrain-band", P.groundTerrainBand);
     if (P.maxCrownBelowSupport < 0 || P.maxCrownBelowSupport > 1) throw VegetationError("bad_request", "--max-crown-below-support must be in [0, 1]");
+    P.minSupportEvidence = a.num("min-support-evidence", P.minSupportEvidence);
+    if (P.minSupportEvidence < 0 || P.minSupportEvidence > 1) throw VegetationError("bad_request", "--min-support-evidence must be in [0, 1]");
+    P.groundTolerance = a.num("ground-tolerance", P.groundTolerance);
+    if (!(P.groundTolerance >= 0)) throw VegetationError("bad_request", "--ground-tolerance must be >= 0");
+    P.groundPasses = static_cast<int>(a.num("ground-passes", P.groundPasses));
+    if (P.groundPasses < 1 || P.groundPasses > 32) throw VegetationError("bad_request", "--ground-passes must be in [1, 32]");
     P.footprintDilation = a.num("footprint-dilation", P.footprintDilation);
     P.drapeReach = a.num("drape-reach", P.drapeReach);
     P.clearance = a.num("clearance", P.clearance);
@@ -169,6 +208,16 @@ static int runStrip(const Args& a) {
     readGrowthFlags(a, P.growth);
     P.growth.seed = parseSeed(a);
     if (P.cell <= 0 || P.terrainCell <= 0 || P.sampleSpacing <= 0 || P.capGrid <= 0) throw VegetationError("bad_request", "cell sizes and spacings must be > 0");
+
+    if (a.has("roi-json")) P.roi = readRoi(a.str("roi-json"));
+    return P;
+}
+
+static int runStrip(const Args& a) {
+    for (const char* req : {"input", "out", "crowns", "stats"}) {
+        if (!a.has(req)) throw VegetationError("bad_request", std::string("strip needs --") + req);
+    }
+    const StripParams P = readStripParams(a);
 
     const auto glb = readFileBytes(a.str("input"));
     const bool topDown = a.has("topdown");
@@ -205,6 +254,20 @@ static int runStrip(const Args& a) {
     return 0;
 }
 
+static int runCanopy(const Args& a) {
+    for (const char* req : {"tile", "out"}) {
+        if (!a.has(req)) throw VegetationError("bad_request", std::string("canopy needs --") + req);
+    }
+    StripParams P = readStripParams(a);
+    if (a.has("cell") && !(P.cell > 0)) throw VegetationError("bad_request", "--cell must be > 0");
+    const auto glb = readFileBytes(a.str("tile"));
+    const CanopyMaskResult m = TileVegetation::canopyMask(glb, P);
+    const std::string text = canopyMaskJson(m);
+    if (!writeFile(a.str("out"), text.data(), text.size())) throw VegetationError("io", "cannot write " + a.str("out"));
+    std::cout << "{\"ok\":true,\"canopyCells\":" << m.canopyCells << ",\"nx\":" << m.nx << ",\"nz\":" << m.nz << ",\"ms\":" << json::num(m.ms) << "}\n";
+    return 0;
+}
+
 static int runPlant(const Args& a) {
     for (const char* req : {"crowns", "out", "stats"}) {
         if (!a.has(req)) throw VegetationError("bad_request", std::string("plant needs --") + req);
@@ -222,6 +285,19 @@ static int runPlant(const Args& a) {
     P.groundTolerance = a.num("ground-tolerance", P.groundTolerance);
     if (!(P.groundTolerance >= 0)) throw VegetationError("bad_request", "--ground-tolerance must be >= 0");
     P.threads = static_cast<int>(a.num("threads", 0));
+    if (a.has("quantize")) {
+        const std::string q = a.str("quantize");
+        if (q != "0" && q != "1") throw VegetationError("bad_request", "--quantize must be 0 or 1");
+        P.quantize = q == "1";
+    }
+    P.maxQuantizationErrorM = a.num("max-quantization-error", P.maxQuantizationErrorM);
+    if (!(P.maxQuantizationErrorM > 0)) throw VegetationError("bad_request", "--max-quantization-error must be > 0");
+    P.stageKey = a.str("stage-key");
+    if (a.has("reveal")) {
+        const std::string r = a.str("reveal");
+        if (r != "0" && r != "1") throw VegetationError("bad_request", "--reveal must be 0 or 1");
+        P.reveal = r == "1";
+    }
     if (P.woodShare < 0 || P.woodShare > 1) throw VegetationError("bad_request", "--wood-share must be in [0, 1]");
     if (!(P.minTrianglesPerTree >= 1)) throw VegetationError("bad_request", "--min-triangles-per-tree must be at least 1");
     if (P.trianglesPerCrownM2 < 0) throw VegetationError("bad_request", "--triangles-per-crown-m2 must be >= 0");
@@ -266,7 +342,8 @@ static int runPlant(const Args& a) {
     if (withSupport) readMesh(a.str("support-mesh"), "support mesh", supportPos, supportIdx);
     if (withGround) readMesh(a.str("ground-mesh"), "ground mesh", groundPos, groundIdx);
     PlantResult r = plant(doc, P, withSupport ? &supportPos : nullptr, withSupport ? &supportIdx : nullptr, withGround ? &groundPos : nullptr, withGround ? &groundIdx : nullptr);
-    const auto glb = writeTreesGlb(r, doc, P);
+    TreesGlbReport glbReport;
+    const auto glb = writeTreesGlb(r, doc, P, &glbReport);
     if (!writeFile(a.str("out"), glb.data(), glb.size())) throw VegetationError("io", "cannot write " + a.str("out"));
 
     std::ostringstream s;
@@ -331,7 +408,15 @@ static int runPlant(const Args& a) {
           << ", \"bounds\": [[" << json::num(lo.x) << "," << json::num(lo.y) << "," << json::num(lo.z) << "],[" << json::num(hi.x) << "," << json::num(hi.y) << "," << json::num(hi.z) << "]]"
           << ", \"seed\": " << t.seed << "}";
     }
-    s << "\n  ],\n  \"totalMs\": " << json::num(r.ms) << "\n}\n";
+    s << "\n  ],\n";
+    // the trees GLB as written: its size, and with KHR_mesh_quantization the largest position and normal error measured on
+    // the written values, with the size the same nodes take unquantised
+    s << "  \"glb\": {\"bytes\": " << glbReport.glb.bytes << ", \"quantized\": " << (glbReport.glb.quantized ? "true" : "false")
+      << ", \"unquantizedBytes\": " << glbReport.unquantizedBytes << ", \"positionMaxErrorM\": " << json::num(glbReport.glb.maxPositionErrorM)
+      << ", \"normalMaxErrorDeg\": " << json::num(glbReport.glb.maxNormalErrorDeg) << ", \"vertices\": " << glbReport.glb.vertices
+      << ", \"triangles\": " << glbReport.glb.triangles << ", \"u16IndexPrimitives\": " << glbReport.glb.u16IndexPrimitives
+      << ", \"u32IndexPrimitives\": " << glbReport.glb.u32IndexPrimitives << ", \"keptAsScannedRings\": " << glbReport.rings << "},\n";
+    s << "  \"totalMs\": " << json::num(r.ms) << "\n}\n";
     const std::string stats = s.str();
     if (!writeFile(a.str("stats"), stats.data(), stats.size())) throw VegetationError("io", "cannot write " + a.str("stats"));
     std::cout << stats;
@@ -348,6 +433,7 @@ int main(int argc, char** argv) {
         const Args a = parseArgs(argc, argv, 2);
         if (cmd == "strip") return runStrip(a);
         if (cmd == "plant") return runPlant(a);
+        if (cmd == "canopy") return runCanopy(a);
         usage();
         return fail("bad_request", "unknown subcommand '" + cmd + "'");
     } catch (const VegetationError& e) {

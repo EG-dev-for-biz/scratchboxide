@@ -14,13 +14,23 @@
  *   crown list (crowns.json) and stats out. Every tree crown is regrown first (seeded with the tile's sha256 unless the
  *   request gives a seed) and meshed within its own budget; a crown whose regrown tree's delivered leaves do not fill it
  *   stays as scanned (status not_regrowable, with the reason in crowns.json and stats.notRegrowable), and only the
- *   others are removed. A crown whose measured surface hangs below the surface measured around it stands on what the
- *   scan has under its stem (supportSource under_stem), or with nothing there stays as scanned (no_measured_ground).
+ *   others are removed. A trunk stands on what the scan shows under its crown's footprint and stem (supportEvidence in
+ *   crowns.json: the share of the footprint's vertical lines that meet each surface): the surface around it where the
+ *   footprint shows it continuing under the crown (supportSource under_footprint), else the one under the stem
+ *   (under_stem; the surface around it was canopy tops, a path below a mound), else the surface around it. Once the ground
+ *   under the removed trees is rebuilt, every trunk base is measured against it: a trunk off it by more than
+ *   groundTolerance is stood on it when the scan shows that surface under the crown (and it still regrows there:
+ *   supportMovedM), else the tree is kept as scanned with its support undecided (no_measured_ground, support_undecided).
+ *   With a region of interest (roi), trees whose stem lies outside it are neither regrown nor removed (outside_roi).
+ * - canopy: the cells strip's own classifier calls canopy (CanopyMask), with nothing regrown or removed.
  * - plant: crowns.json in; one SB-Veggie tree per measured crown (space colonisation, studio clay), the same trees
  *   strip grew, within the caller's triangle budget or, without one, each tree's own budget within a scene cap
  *   (SCENE_TREE_TRIANGLE_CAP), as one GLB in the tile frame. Every tree's delivered leaves are measured against its
  *   crown (stats.shortOfCrown lists those that do not fill it within their budget), and with a ground mesh every trunk
- *   base is measured against the model the trees are mounted on (stats.offGround).
+ *   base is measured against the model the trees are mounted on (stats.offGround). The GLB is a staged-build layer: each
+ *   tree's vertices carry `_REVEAL` (x its plant rank, y when it grew: node creation order) and its node extras.sb
+ *   (provenance "grown to the measured crown"); crowns kept as scanned get an as-scanned LINES ring at their measured
+ *   footprint; it is written with KHR_mesh_quantization (stats.glb: size, measured error, unquantised size).
  *
  * Paths are confined to the workspace root. The binary is built with clang++ on first use and rebuilt when one of
  * its sources (clang's -MMD list) is newer, once across processes (native-build); a failed build is an error, never an
@@ -32,6 +42,7 @@ import { execFile } from 'child_process';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import { validateContract, type CanopyMask, type StripRoi } from '../../common/spatial/staged-location-contracts';
 import { resolveWithinRoot } from '../security/path-guard';
 import { buildNativeIfStale } from './native-build';
 
@@ -75,6 +86,19 @@ export interface TileVegetationStripParams {
     minSurfaceReached?: number;
     /** Share of a crown's measured surface that may hang more than supportStep below its support before that support is not its ground (0.1). */
     maxCrownBelowSupport?: number;
+    /**
+     * A surface the scan shows under a crown (facing up, not canopy) is what its trunk stands on only when at least this
+     * share of the vertical lines through its footprint meet it, one of them in its inner half (0.2).
+     */
+    minSupportEvidence?: number;
+    /**
+     * After the ground under the removed trees is rebuilt, a trunk base further than this from the surface under its stem
+     * is stood on that surface when the scan shows it under the crown (re-checked to regrow), else the tree is kept as
+     * scanned with its support undecided (0.5 m).
+     */
+    groundTolerance?: number;
+    /** Removal passes at most while trees are kept as scanned between them (6). */
+    groundPasses?: number;
 }
 
 /**
@@ -94,6 +118,8 @@ export interface TileVegetationPlantParams {
     supportTolerance?: number;
     /** With groundMeshPath: a trunk base further than this from the mounted model at its stem is reported (0.5 m). */
     groundTolerance?: number;
+    /** The largest position error KHR_mesh_quantization may introduce in the trees GLB, measured on the file (0.01 m). */
+    maxQuantizationError?: number;
 }
 
 /**
@@ -113,6 +139,11 @@ export interface TileVegetationStripRequest {
     /** Photo-textured tile GLB, relative to the workspace root or absolute inside it. */
     tilePath: string;
     params?: TileVegetationStripParams;
+    /**
+     * Where trees may be measured and regrown (tile frame polygon). A tree whose stem lies outside it is neither regrown
+     * nor removed: its canopy stays as scanned (status outside_roi, stats.crowns.outsideRoi).
+     */
+    roi?: StripRoi;
     /** Also write a top-down PNG of the measurement. */
     topDown?: boolean;
     /** Hex seed (1-16 digits) the trees are regrown with to decide which to remove; default the tile's sha256 (16 hex digits), as plant is seeded by the pipeline. */
@@ -148,12 +179,57 @@ export interface TileVegetationPlantRequest {
     /** The model the trees are mounted on: every trunk base is measured against it at its stem (stats.offGround). */
     groundMeshPath?: string;
     params?: TileVegetationPlantParams;
+    /**
+     * Write the trees GLB with KHR_mesh_quantization (default true; three's GLTFLoader reads it natively). stats.glb gives
+     * its size, the largest position and normal error measured on the file, and the size the same trees take unquantised.
+     */
+    quantize?: boolean;
+    /** Write each tree's growth order on its vertices as `_REVEAL` (default true); off, the same meshes without it. */
+    reveal?: boolean;
     /** Copy the trees GLB to public/models/<publishAs> (a plain *.glb name). */
     publishAs?: string;
     threads?: number;
     timeoutMs?: number;
     /** Stops this request (it rejects with an AbortError); the native run is killed once no request waits on it. */
     signal?: AbortSignal;
+}
+
+export interface TileVegetationCanopyRequest {
+    /** Photo-textured tile GLB, relative to the workspace root or absolute inside it. */
+    tilePath: string;
+    /** Surface model cell (m), strip's own by default (0.5). */
+    cellM?: number;
+    /** strip's classifier parameters (exgMin, roughnessMin, canopyMinHeight, ...). */
+    params?: TileVegetationStripParams;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+}
+
+export interface TileVegetationCanopyResult {
+    /** Cell (i, k) covers [x0 + i cellM, x0 + (i + 1) cellM) x [z0 + k cellM, z0 + (k + 1) cellM); runs over k * nx + i, first run not canopy. */
+    mask: CanopyMask;
+    cached: boolean;
+    ms: number;
+    cacheKey: string;
+}
+
+/** Decodes a CanopyMask's runs into one 0/1 value per cell (k * nx + i). */
+export function decodeCanopyMask(mask: CanopyMask): Uint8Array {
+    const out = new Uint8Array(mask.nx * mask.nz);
+    let at = 0;
+    mask.runs.forEach((run, i) => {
+        if (i % 2 === 1) out.fill(1, at, Math.min(out.length, at + run));
+        at += run;
+    });
+    if (at !== out.length) throw new TileVegetationError('failed', `canopy mask runs cover ${at} cells, not ${out.length}`);
+    return out;
+}
+
+function checkRoi(roi: StripRoi): StripRoi {
+    const problems = validateContract('StripRoi', roi);
+    if (problems.length) throw new TileVegetationError('bad_request', `roi is not a StripRoi: ${problems.slice(0, 3).join('; ')}`);
+    if (roi.polygon.some(p => !p.every(Number.isFinite))) throw new TileVegetationError('bad_request', 'roi points must be finite metres');
+    return { schema: roi.schema, polygon: roi.polygon.map(p => [p[0], p[1]] as [number, number]) };
 }
 
 export interface TileVegetationPlantResult {
@@ -189,7 +265,7 @@ export interface TileVegetationServiceOptions {
 const CLI_SOURCE = path.join('scripts', 'tile_vegetation.cpp');
 const INCLUDE_DIR = path.join('packages', 'core', 'src', 'native', '3d-engine', 'include');
 const BINARY = path.join('build', '3d-native', 'tile_vegetation');
-const CACHE_VERSION = 'tile_vegetation/v4';
+const CACHE_VERSION = 'tile_vegetation/v5';
 const PUBLISH_FILE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}\.glb$/;
 const KNOWN_CODES = new Set<TileVegetationErrorCode>(['bad_request', 'not_found', 'timeout', 'failed', 'build_failed', 'bad_input', 'texture_decode', 'no_photo_texture', 'budget_too_small', 'budget_exceeded', 'plant_failed', 'io']);
 
@@ -424,12 +500,17 @@ export class TileVegetationService {
         const tileSha256 = fileSha256(input);
         if (req.seed !== undefined && (typeof req.seed !== 'string' || !/^[0-9a-fA-F]{1,16}$/.test(req.seed))) throw new TileVegetationError('bad_request', 'seed must be 1-16 hex digits');
         const seed = (req.seed ?? tileSha256.slice(0, 16)).toLowerCase();
+        const roi = req.roi === undefined ? undefined : checkRoi(req.roi);
         const key = crypto.createHash('sha256').update(CACHE_VERSION).update('\0strip\0').update(this.hashBinary(bin)).update('\0')
-            .update(tileSha256).update('\0').update(JSON.stringify({ ...keyParams, topDown: !!req.topDown, seed })).digest('hex');
+            .update(tileSha256).update('\0').update(JSON.stringify({ ...keyParams, topDown: !!req.topDown, seed, ...(roi ? { roi: roi.polygon } : {}) })).digest('hex');
         const outputs = ['devegetated.glb', 'crowns.json', 'stats.json', ...(req.topDown ? ['topdown.png'] : [])];
         const res = await this.cached(key, outputs, async (dir, signal) => {
             const args = ['strip', '--input', input, '--out', path.join(dir, 'devegetated.glb'), '--crowns', path.join(dir, 'crowns.json'),
                 '--stats', path.join(dir, 'stats.json'), '--seed', seed, ...flags];
+            if (roi) {
+                fs.writeFileSync(path.join(dir, 'roi.json'), JSON.stringify(roi));
+                args.push('--roi-json', path.join(dir, 'roi.json'));
+            }
             if (req.topDown) args.push('--topdown', path.join(dir, 'topdown.png'));
             if (req.threads !== undefined) args.push('--threads', String(req.threads));
             await runFile(bin, args, timeoutMs, signal);
@@ -439,6 +520,39 @@ export class TileVegetationService {
             topDownPng: req.topDown ? path.join(dir, 'topdown.png') : undefined,
             stats: JSON.parse(fs.readFileSync(path.join(dir, 'stats.json'), 'utf8')),
             tileSha256,
+            cached,
+            ms: 0,
+            cacheKey: key
+        }), req.signal);
+        return { ...res, ms: Date.now() - t0 };
+    }
+
+    /**
+     * The cells strip's own classifier calls canopy in a tile, without regrowing or removing anything (the same
+     * classifier, so a structure picked on a canopy-masked surface model matches what strip later removes). The mask is
+     * checked against the CanopyMask contract.
+     */
+    async canopy(req: TileVegetationCanopyRequest): Promise<TileVegetationCanopyResult> {
+        const t0 = Date.now();
+        const input = this.resolveInput(req.tilePath, 'tilePath', '.glb');
+        if (req.cellM !== undefined && !(typeof req.cellM === 'number' && Number.isFinite(req.cellM) && req.cellM > 0 && req.cellM <= 10)) {
+            throw new TileVegetationError('bad_request', 'cellM must be a number in (0, 10] metres');
+        }
+        const { flags, key: keyParams } = paramFlags(req.params);
+        const timeoutMs = req.timeoutMs ?? this.defaultTimeoutMs;
+        const bin = await this.ensureBinary();
+        const tileSha256 = fileSha256(input);
+        const cell = req.cellM ?? 0.5;
+        const key = crypto.createHash('sha256').update(CACHE_VERSION).update('\0canopy\0').update(this.hashBinary(bin)).update('\0')
+            .update(tileSha256).update('\0').update(JSON.stringify({ ...keyParams, cell })).digest('hex');
+        const res = await this.cached(key, ['canopy.json'], async (dir, signal) => {
+            const paramArgs = flags.filter((_, i, all) => !(all[i] === '--cell' || all[i - 1] === '--cell'));
+            await runFile(bin, ['canopy', '--tile', input, '--out', path.join(dir, 'canopy.json'), '--cell', String(cell), ...paramArgs], timeoutMs, signal);
+            const mask = JSON.parse(fs.readFileSync(path.join(dir, 'canopy.json'), 'utf8'));
+            const problems = validateContract('CanopyMask', mask);
+            if (problems.length) throw new TileVegetationError('failed', `tile_vegetation canopy wrote a mask that is not a CanopyMask: ${problems.slice(0, 5).join('; ')}`);
+        }, (dir, cached) => ({
+            mask: JSON.parse(fs.readFileSync(path.join(dir, 'canopy.json'), 'utf8')) as CanopyMask,
             cached,
             ms: 0,
             cacheKey: key
@@ -466,12 +580,17 @@ export class TileVegetationService {
         if (support) sha256File(support, hash);
         hash.update('\0');
         if (ground) sha256File(ground, hash);
-        hash.update('\0').update(JSON.stringify({ ...keyParams, ...budget, seed: req.seed.toLowerCase() }));
+        if (req.quantize !== undefined && typeof req.quantize !== 'boolean') throw new TileVegetationError('bad_request', 'quantize must be a boolean');
+        if (req.reveal !== undefined && typeof req.reveal !== 'boolean') throw new TileVegetationError('bad_request', 'reveal must be a boolean');
+        const quantize = req.quantize ?? true;
+        const reveal = req.reveal ?? true;
+        hash.update('\0').update(JSON.stringify({ ...keyParams, ...budget, seed: req.seed.toLowerCase(), quantize, reveal }));
         const key = hash.digest('hex');
         const res = await this.cached(key, ['trees.glb', 'stats.json'], async (dir, signal) => {
+            // the stage key in the GLB's root extras is this cache key: the same bytes in every run that reuses them
             const args = ['plant', '--crowns', crowns, '--out', path.join(dir, 'trees.glb'), '--stats', path.join(dir, 'stats.json'),
                 ...('triangleBudget' in budget ? ['--triangle-budget', String(budget.triangleBudget)] : ['--scene-triangle-cap', String(budget.sceneTriangleCap)]),
-                '--seed', req.seed, ...flags];
+                '--seed', req.seed, '--quantize', quantize ? '1' : '0', '--reveal', reveal ? '1' : '0', '--stage-key', key, ...flags];
             if (support) args.push('--support-mesh', support);
             if (ground) args.push('--ground-mesh', ground);
             if (req.threads !== undefined) args.push('--threads', String(req.threads));
