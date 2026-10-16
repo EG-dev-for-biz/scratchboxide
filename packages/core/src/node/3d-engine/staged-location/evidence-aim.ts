@@ -36,9 +36,9 @@ export const GROUNDING_NATIVE_WIDTH_PX = 1920;
 export const MIN_VIEW_FOV_DEG = 30;
 export const MAX_VIEW_FOV_DEG = 60;
 /** A pano must stand within this angle of a slot's outward normal. */
-export const MAX_OFF_NORMAL_DEG = 60;
+export const MAX_OFF_NORMAL_DEG = 75;
 export const MIN_VIEW_DISTANCE_M = 6;
-export const MAX_VIEW_DISTANCE_M = 90;
+export const MAX_VIEW_DISTANCE_M = 130;
 const ASPECTS: Array<{ name: GroundingAspectRatio; ratio: number }> = [
     { name: 'RATIO_1X1', ratio: 1 }, { name: 'RATIO_4X3', ratio: 4 / 3 }, { name: 'RATIO_3X4', ratio: 3 / 4 },
     { name: 'RATIO_16X9', ratio: 16 / 9 }, { name: 'RATIO_21X9', ratio: 21 / 9 }

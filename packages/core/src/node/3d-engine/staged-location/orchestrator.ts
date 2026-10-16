@@ -89,8 +89,11 @@ import {
     discoverPanos, facadeGeometry, fetchViews, missingCredentials, EVIDENCE_STAGE_BUDGET_MS, type EvidenceImage, type PanoCandidate, type StreetViewEvidenceDeps
 } from './streetview-evidence';
 import { selectViewsForFit } from './evidence-aim';
-import { describeSurvey, runFaceSurvey, surveyFaceTargets, SURVEY_IMAGE_TIMEOUT_MS, SURVEY_VISION_TIMEOUT_MS, type SurveyResult } from './face-survey';
+import { describeSurvey, runFaceSurvey, surveyCandidates, surveyFaceTargets, SURVEY_IMAGE_TIMEOUT_MS, SURVEY_VISION_TIMEOUT_MS, type SurveyResult } from './face-survey';
 import { describeLocated, planDetailFromSurvey, type DetailPlan } from './survey-detail';
+import { registerPanos, type Registration } from './pano-registration';
+import { MATCH_TIMEOUT_MS, runViewMatch, type MatchResult } from './view-match';
+import { fitFaces } from './survey-casting';
 import type { AnchorNote } from './ornament-anchor';
 import { EVIDENCE_DISCOVERY_ALLOWANCE_MS } from './streetview-evidence';
 import {
@@ -101,7 +104,8 @@ import { parseGlbNodes, readGlbNodes } from './glb-nodes';
 import { writeStagedGlbFile, type StagedGlbNode } from './staged-glb-writer';
 import { buildObjectFromSpec } from '../reference-object-builder';
 import type { ObjectBuildSpec } from '../../../common/spatial/object-build-spec';
-import { nominalPose, projectSlots } from './slot-projection';
+import { nominalPose, projectSlots, registeredPose } from './slot-projection';
+import { registeredUncertaintyAt } from './survey-detail';
 import {
     orthoCaption, orthoRef, plannedThinking, readOrnament, streetViewCaption, visionUse, VisionStageError, ORNAMENT_PROMPT_VERSION,
     ORNAMENT_THINKING_BUDGET, ORNAMENT_VISION_TIMEOUT_MS, type EvidenceInput
@@ -121,7 +125,7 @@ export const STAGES = {
     resolve: { order: -1, title: 'Place', budgetMs: 10_000 },
     tiles: { order: 1, title: 'Google 3D Tiles', budgetMs: 360_000 },
     survey: { order: -1, title: 'Surveying the four faces', budgetMs: EVIDENCE_DISCOVERY_ALLOWANCE_MS + SURVEY_IMAGE_TIMEOUT_MS + SURVEY_VISION_TIMEOUT_MS + 15_000 },
-    evidence: { order: -1, title: 'Street View close-ups', budgetMs: EVIDENCE_STAGE_BUDGET_MS },
+    evidence: { order: -1, title: 'Street View close-ups', budgetMs: EVIDENCE_STAGE_BUDGET_MS + 30_000 + MATCH_TIMEOUT_MS + 60_000 },
     'trees-measure': { order: -1, title: 'Measuring the trees', budgetMs: 300_000 },
     remesh: { order: 2, title: 'Remeshed scan', budgetMs: 300_000 },
     fit: { order: 3, title: 'Scan-fitted rebuild', budgetMs: 30_000 },
@@ -916,14 +920,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // ---------------- evidence (starts when the fit is accepted: a rejected fit has nothing to place a photo on, and no image is fetched for it) ----------------
         const visionAvailable = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
         const rebuildPossible = isolateMode && !!deps.scanFit;
-        let evidencePromise = undefined as Promise<{ images: EvidenceImage[]; panos: PanoCandidate[]; cost: EvidenceCost; plan?: DetailPlan; status: string }> | undefined;
+        let evidencePromise = undefined as Promise<{ images: EvidenceImage[]; panos: PanoCandidate[]; cost: EvidenceCost; plan?: DetailPlan; registration?: Registration; match?: MatchResult; status: string }> | undefined;
         // ended (skipped, as not needed) when the run ends before the evidence does
         const evidenceStop = new AbortController();
 
         const startEvidence = (fit: StructureFit): void => {
             // the close-ups are planned from what the survey found: they wait for it (it began long before the fit ended)
             const surveyDone = surveyPromise ? surveyPromise.catch(() => undefined) : Promise.resolve(undefined);
-            evidencePromise = surveyDone.then(surveyOut => runner.stage<{ images: EvidenceImage[]; panos: PanoCandidate[]; cost: EvidenceCost; plan?: DetailPlan }>({
+            evidencePromise = surveyDone.then(surveyOut => runner.stage<{ images: EvidenceImage[]; panos: PanoCandidate[]; cost: EvidenceCost; plan?: DetailPlan; registration?: Registration; match?: MatchResult }>({
                 id: 'evidence',
                 run: async io => {
                     const sv = deps.streetView ?? {};
@@ -941,7 +945,26 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const found = await discoverOnce();
                     // from the survey: each element located on the fitted faces, one narrow crop per slot group; with no survey (or nothing located)
                     // the views are aimed at the scan-only slots
-                    const plan = surveyOut?.result ? planDetailFromSurvey(surveyOut.result, fit) : undefined;
+                    // a ring of further views of the surveyed faces from other panos: the surveyed elements are found again in them, and the
+                    // poses of the panos are solved so that the rays through the same element agree on the fitted faces (pano-registration.ts)
+                    let match: MatchResult | undefined;
+                    let registration: Registration | undefined;
+                    if (surveyOut?.result && visionAvailable) {
+                        try {
+                            const surveyFaces = surveyFaceTargets(structure!);
+                            const candidates = surveyCandidates(found.panos, surveyFaces, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top);
+                            const matchChain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...(deps.sleep ? { sleep: deps.sleep } : {}) });
+                            match = await runViewMatch({ faces: surveyFaces, survey: surveyOut.result, candidates, deps: sv, chain: matchChain, signal: io.signal, onProgress: m => io.progress(m) });
+                            if (match.correspondences.length) {
+                                registration = registerPanos(match.correspondences, fitFaces(fit));
+                                io.progress(`pano poses registered from ${registration.used} matched elements: ${registration.beforeRmsM.toFixed(2)} m disagreement before, ${registration.afterRmsM.toFixed(2)} m after`);
+                            } else io.progress(`no element could be matched across views (${match.failures.length} failed call${match.failures.length === 1 ? '' : 's'}); the nominal pano poses stand, good to ±2 m`);
+                        } catch (err) {
+                            if (isAbort(err) || io.signal.aborted) throw err;
+                            io.progress(`pose registration failed (${errorMessage(err)}); the nominal pano poses stand, good to ±2 m`);
+                        }
+                    }
+                    const plan = surveyOut?.result ? planDetailFromSurvey(surveyOut.result, fit, undefined, registration) : undefined;
                     const views = plan?.views.length ? plan.views : selectViewsForFit(found.panos, fit, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top);
                     if (plan) io.progress(describeLocated(surveyOut!.result!.faces, plan));
                     const discovery = { metadataCalls: found.metadataCalls, cachedCalls: found.cachedCalls };
@@ -965,9 +988,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (got.images.length) run.state.attribution = [...new Set([...run.state.attribution, 'Street View ©Google'])];
                     const status = got.images.length ? (degradations.length ? 'degraded' : 'committed') : 'degraded';
                     const cost: EvidenceCost = { ...discovery, imagesRequested: views.length, imagesFetched: got.images.length, fetchMs: got.elapsedMs };
-                    run.summary('evidence').cost = { images: got.images.length, visionCalls: 0, seconds: round(got.elapsedMs / 1000, 1) };
+                    run.summary('evidence').cost = { images: got.images.length + (match?.images ?? 0), visionCalls: match?.visionCalls ?? 0, seconds: round(got.elapsedMs / 1000 + (match?.seconds ?? 0), 1) };
                     return {
-                        status, value: { images: got.images, panos: found.panos, cost, ...(plan ? { plan } : {}) }, source: `${got.images.length} of ${views.length} Street View images (© Google), kept in memory only`,
+                        status, value: { images: got.images, panos: found.panos, cost, ...(plan ? { plan } : {}), ...(registration ? { registration } : {}), ...(match ? { match } : {}) }, source: `${got.images.length} of ${views.length} Street View images (© Google), kept in memory only`,
                         ...(got.images.length ? {} : { reason: 'every Street View image failed to fetch' }),
                         degradations
                     };
@@ -979,7 +1002,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         provenanceAfter: PROVENANCE.photoInferred, reason: `no Street View close-ups (${errorMessage(err)})`, cause: err, transient: true, runId, now: now()
                     }))]
                 })
-            }, evidenceStop.signal).then(r => ({ images: r.value?.images ?? [], panos: r.value?.panos ?? [], cost: r.value?.cost ?? NO_EVIDENCE_COST, ...(r.value?.plan ? { plan: r.value.plan } : {}), status: r.status })));
+            }, evidenceStop.signal).then(r => ({ images: r.value?.images ?? [], panos: r.value?.panos ?? [], cost: r.value?.cost ?? NO_EVIDENCE_COST, ...(r.value?.plan ? { plan: r.value.plan } : {}), ...(r.value?.registration ? { registration: r.value.registration } : {}), ...(r.value?.match ? { match: r.value.match } : {}), status: r.status })));
             // a Stop rejects it; whoever awaits it sees that, and nobody else is left holding a rejection nobody handles
             evidencePromise.catch(() => undefined);
             siblings.push(evidencePromise);
@@ -1560,7 +1583,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 runner.skip('detail', 'no detail was read');
                 return out;
             }
-            const evidence: { images: EvidenceImage[]; panos: PanoCandidate[]; cost: EvidenceCost; plan?: DetailPlan; status: string } = evidencePromise ? await evidencePromise : { images: [], panos: [], cost: NO_EVIDENCE_COST, status: 'skipped' };
+            const evidence: { images: EvidenceImage[]; panos: PanoCandidate[]; cost: EvidenceCost; plan?: DetailPlan; registration?: Registration; match?: MatchResult; status: string } = evidencePromise ? await evidencePromise : { images: [], panos: [], cost: NO_EVIDENCE_COST, status: 'skipped' };
             const located = evidence.plan?.located ?? [];
             // the evidence the reading gets: the fit's facade orthos of the tile photos, then the Street View close-ups with the slots projected into them
             type Projected = { inputs: EvidenceInput[]; refs: EvidenceImageRef[] };
@@ -1589,17 +1612,18 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (!evidence.images.length) return { status: 'skipped', value: { inputs: orthos, refs: [] }, source: '', reason: 'no Street View image to project the slots into' };
                     const occluder = loadMesh([fit.outputs.fittedGlb, fit.outputs.passThroughGlb]);
                     const refs = evidence.images.map((img, k) => {
-                        const slotsShown = projectSlots(fit, { eye: img.view.eye, headingDeg: img.view.headingDeg, pitchDeg: img.view.pitchDeg, fovDeg: img.view.fovDeg, widthPx: img.widthPx, heightPx: img.heightPx }, occluder);
+                        const correction = evidence.registration?.corrections.get(img.view.panoId);
+                        const slotsShown = projectSlots(fit, { eye: img.view.eye, headingDeg: img.view.headingDeg, pitchDeg: img.view.pitchDeg, fovDeg: img.view.fovDeg, widthPx: img.widthPx, heightPx: img.heightPx, ...(correction ? { correction } : {}) }, occluder);
                         const ref: EvidenceImageRef = {
                             id: img.id, index: orthos.length + k, kind: 'streetview-grounding', widthPx: img.widthPx, heightPx: img.heightPx, sha256: img.sha256, nativeSampleM: img.nativeSampleM,
                             panoId: img.view.panoId, ...(img.view.date ? { captureDate: img.view.date } : {}), copyright: img.view.copyright ?? '© Google',
                             headingDeg: img.view.headingDeg, pitchDeg: img.view.pitchDeg, fovDeg: img.view.fovDeg, distanceM: img.view.distanceM,
-                            pose: nominalPose(img.view.eye), slotsShown
+                            pose: correction ? registeredPose(img.view.eye, correction, registeredUncertaintyAt(img.view.distanceM, evidence.registration!.afterRmsM, 0)) : nominalPose(img.view.eye), slotsShown
                         };
                         return ref;
                     });
                     return {
-                        status: 'committed', value: { inputs: orthos, refs }, source: `${refs.reduce((n, r) => n + r.slotsShown.length, 0)} slot outlines in ${refs.length} Street View images (nominal pose, ±2 m)`
+                        status: 'committed', value: { inputs: orthos, refs }, source: `${refs.reduce((n, r) => n + r.slotsShown.length, 0)} slot outlines in ${refs.length} Street View images (${refs.filter(r => r.pose?.registered).length} with registered poses, ${refs.filter(r => !r.pose?.registered).length} nominal, ±2 m)`
                     };
                 },
                 // the images could not be prepared: the model gets whichever tile photos can still be read, and no Street View close-up

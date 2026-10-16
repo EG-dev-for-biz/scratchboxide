@@ -51,7 +51,9 @@ import type { LocationClayTrees } from '../../node/3d-engine/location-clay-pipel
 export const PHOTO_CORRECTION_TOLERANCE_M = 0.31;
 
 /** Street View images per building, all fetched through StreetViewGroundingImageService (Maps Imagery Grounding API). */
-export const MAX_STREET_VIEW_IMAGES_PER_BUILDING = 4;
+export const MAX_STREET_VIEW_IMAGES_PER_BUILDING = 16;
+/** Faces of one structure that are surveyed (the survey takes a ring of views of each, up to the image budget). */
+export const MAX_SURVEY_FACES = 4;
 
 /** tile_refine's photometric relief stays on: it is gated (confirmed patterns only) and labelled inferred (906a62d4). */
 export const TILE_REFINE_RELIEF_DEFAULT = true;

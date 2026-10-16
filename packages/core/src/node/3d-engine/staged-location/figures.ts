@@ -30,7 +30,7 @@
 
 import type { Content, Part } from '@google/genai';
 import {
-    MAX_STREET_VIEW_IMAGES_PER_BUILDING, PROVENANCE,
+    MAX_SURVEY_FACES, PROVENANCE,
     type FigureRecord, type FittedSurface, type PassThroughRegion, type ProvenanceRecord, type StagedNodeExtras, type StructureFit, type Vec3, type VisionModelUse
 } from '../../../common/spatial/staged-location-contracts';
 import { OBJECT_BUILD_SPEC_JSON_SCHEMA, validateObjectBuildSpec, type ObjectBuildSpec } from '../../../common/spatial/object-build-spec';
@@ -60,7 +60,7 @@ export const FIGURE_CRITERIA = {
     pedestalDepthShare: 0.6,
     /** Height of the blob's base above the fitted ground. */
     baseAboveGroundM: [0.05, 14] as const,
-    maxFigures: MAX_STREET_VIEW_IMAGES_PER_BUILDING
+    maxFigures: MAX_SURVEY_FACES
 };
 export const FIGURE_VISION_TIMEOUT_MS = 150_000;
 export const FIGURE_FOV_MIN_DEG = 30;
