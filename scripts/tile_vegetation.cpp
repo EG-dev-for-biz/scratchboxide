@@ -445,7 +445,7 @@ static int runPlant(const Args& a) {
         }
         s << (i ? ",\n    " : "\n    ") << "{\"crownId\": " << t.crownId << ", \"heightAboveSupportM\": " << json::num(t.heightAboveSupport)
           << ", \"target\": " << t.target << ", \"neededTriangles\": " << t.needed << ", \"ownBudget\": " << t.ownBudget << ", \"budget\": " << t.budget
-          << ", \"triangles\": " << ((t.hasLod ? t.lod.woodTriangles : t.wood.indices.size() / 3) + t.foliage.indices.size() / 3)
+          << ", \"triangles\": " << (t.wood.indices.size() + t.foliage.indices.size()) / 3
           << ", \"wood\": " << t.report.woodTriangles << ", \"foliage\": " << t.report.foliageTriangles << ", \"clumps\": " << t.report.foliageClumps
           << ", \"surfaceMasses\": " << t.report.surfaceMasses << ", \"surfaceMassesNeeded\": " << t.report.surfaceMassesNeeded
           << ", \"crownSurfaceReached\": " << json::num(t.leaves.share()) << ", \"within1mShare\": " << json::num(t.leavesStrict.share()) << ", \"grownSurfaceReached\": " << json::num(t.grownShare)

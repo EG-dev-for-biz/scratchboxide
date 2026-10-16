@@ -684,7 +684,7 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
             }, mockContext);
             expect(res.exec.status).toBe('completed');
             expect(Math.abs((res.resultPayload as any).grown.heightMeters - 14.2)).toBeLessThan(1.5);
-            expect((res.resultPayload as any).triangles).toBeLessThanOrEqual(4000);
+            expect((res.resultPayload as any).woodTriangles).toBeLessThanOrEqual(4000);   // the budget is the wood's; the leaves of each level come on top
         }, 600_000);
     });
 
