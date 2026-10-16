@@ -529,11 +529,18 @@ int main(int argc, char** argv) {
     // 2. Build Archie Architectural Compound (skipped in distant chunks)
     ${chunkContainsArch ? 'ScratchboxMesh citadelMesh = buildArchitecturalCompound();' : 'ScratchboxMesh citadelMesh("ArchCompound_Skipped"); // not in this chunk'}
 
-    // 3. Build SB-Veggie Conifer Templates
-    SbVeggieTemplate baseTmpl = SbVeggieModelBuilder::buildCanonicalTemplate(SbVeggieArchetype::ExcurrentConifer);
+    // 3. Build SB-Veggie narrow-crowned, needle-leaved trees: a tall narrow crown (crownAspect), a dominant leader and
+    //    needle-thin blades (widthRatio) are continuous numbers, not a class
+    SbVeggieMorphology coniferMorphology;
+    coniferMorphology.crownAspect = 1.6f;
+    coniferMorphology.apicalDominance = 0.9f;
+    coniferMorphology.blade.widthRatio = 0.06f;
+    coniferMorphology.blade.rows = 1;
+    coniferMorphology.leafDistributionExponent = 0.9f;
+    SbVeggieTemplate baseTmpl = SbVeggieModelBuilder::buildCanonicalTemplate(coniferMorphology);
 
     SbVeggieParams paramsTall = SbVeggieParams::createNeutral();
-    paramsTall.leafMorphology = 2; // Conifer needles
+    paramsTall.morphology = coniferMorphology;
     paramsTall.psi_leafDensity = 0.22f;
     paramsTall.transferEnvelopeNormals = true;
     paramsTall.beta[0] = 0.35f;
@@ -542,7 +549,7 @@ int main(int argc, char** argv) {
     auto decompTall = SbVeggieEvaluator::evaluateDecomposed(baseTmpl, paramsTall, true);
 
     SbVeggieParams paramsMed = SbVeggieParams::createNeutral();
-    paramsMed.leafMorphology = 2;
+    paramsMed.morphology = coniferMorphology;
     paramsMed.psi_leafDensity = 0.20f;
     paramsMed.transferEnvelopeNormals = true;
     paramsMed.beta[0] = 0.0f;
@@ -551,7 +558,7 @@ int main(int argc, char** argv) {
     auto decompMed = SbVeggieEvaluator::evaluateDecomposed(baseTmpl, paramsMed, true);
 
     SbVeggieParams paramsCompact = SbVeggieParams::createNeutral();
-    paramsCompact.leafMorphology = 2;
+    paramsCompact.morphology = coniferMorphology;
     paramsCompact.psi_leafDensity = 0.25f;
     paramsCompact.transferEnvelopeNormals = true;
     paramsCompact.beta[0] = -0.25f;

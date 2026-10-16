@@ -300,7 +300,7 @@ describe('strip keeps a tree it cannot regrow as scanned', () => {
         const strip = await svc.strip({ tilePath: 'district.glb' });
         const doc = JSON.parse(fs.readFileSync(strip.crownsJson, 'utf8'));
         // the growth the removal was decided with, for plant to grow the same trees
-        expect(doc.growth).toEqual({ seed: strip.tileSha256.slice(0, 16), crownBaseRatio: 0.35, trunkRadiusPerHeight: 0.016, shellDepth: 0.8, minSurfaceReached: 0.9 });
+        expect(doc.growth).toEqual({ seed: strip.tileSha256.slice(0, 16), crownBaseRatio: 0.35, trunkRadiusPerHeight: 0.016, shellDepth: 0.8, minSurfaceReached: 0.9, crownBaseSpread: 0.1, branchAngleSpreadRad: 0.2, trunkLeanShare: 0.45, apicalDominance: 0.5, branchAngleMeanRad: 0.80795, internodeLengthM: 0 });
         const trees = doc.crowns.filter((c: any) => c.status === 'tree');
         expect(trees).toHaveLength(3);
         for (const c of trees) {
@@ -330,7 +330,7 @@ describe('strip keeps a tree it cannot regrow as scanned', () => {
     it('keeps the crowns it cannot regrow in the scan, untouched, each with its reason, and removes only the others', async () => {
         // With the crown base inferred at 99 % of a tree's height, the two lower crowns have no measured surface above
         // it: no tree can be grown into them. They stay exactly as scanned; the third is removed and replanted.
-        const strip = await svc.strip({ tilePath: 'district.glb', params: { crownBaseRatio: 0.99 } });
+        const strip = await svc.strip({ tilePath: 'district.glb', params: { crownBaseRatio: 0.99, crownBaseSpread: 0 } });
         const crowns = JSON.parse(fs.readFileSync(strip.crownsJson, 'utf8')).crowns;
         const kept = crowns.filter((c: any) => c.status === 'not_regrowable');
         const rebuilt = crowns.filter((c: any) => c.status === 'tree');
@@ -360,7 +360,7 @@ describe('strip keeps a tree it cannot regrow as scanned', () => {
     });
 
     it('keeps every crown as scanned when none can be regrown, removing nothing', async () => {
-        const strip = await svc.strip({ tilePath: 'district.glb', params: { crownBaseRatio: 0.9999 } });
+        const strip = await svc.strip({ tilePath: 'district.glb', params: { crownBaseRatio: 0.9999, crownBaseSpread: 0 } });
         const crowns = JSON.parse(fs.readFileSync(strip.crownsJson, 'utf8')).crowns;
         expect(crowns.length).toBeGreaterThan(0);
         expect(crowns.every((c: any) => c.status === 'not_regrowable')).toBe(true);

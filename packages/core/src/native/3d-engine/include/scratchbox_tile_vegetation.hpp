@@ -57,6 +57,7 @@
 #include "scratchbox_io.hpp"
 #include "scratchbox_nature.hpp"
 #include "scratchbox_staged_glb.hpp"
+#include "scratchbox_tree_lod.hpp"
 #include "scratchbox_texture.hpp"
 #include <algorithm>
 #include <array>
@@ -75,6 +76,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -306,18 +308,9 @@ struct GlbBuilder {
     }
 };
 
-inline uint64_t mix64(uint64_t h) {
-    h ^= h >> 33;
-    h *= 0xff51afd7ed558ccdull;
-    h ^= h >> 33;
-    h *= 0xc4ceb9fe1a85ec53ull;
-    h ^= h >> 33;
-    return h;
-}
+inline uint64_t mix64(uint64_t h) { return tree_lod::mix64(h); }
 
-inline double hashUnit(uint64_t seed, uint64_t a, uint64_t b) {
-    return static_cast<double>(mix64(seed ^ mix64(a * 0x9E3779B97F4A7C15ull + b)) >> 11) / 9007199254740992.0;
-}
+inline double hashUnit(uint64_t seed, uint64_t a, uint64_t b) { return tree_lod::hashUnit(seed, a, b); }
 
 /** Weld key: positions quantised to `q` metres. */
 struct WeldKey {
@@ -525,6 +518,15 @@ struct GrowthParams {
     double shellDepth{0.8};             // share of each surface sample's height above the crown base the crown fills
     double minSurfaceReached{0.9};      // share of the measured crown surface the regrown tree's leaves must reach
     uint64_t seed{0};                   // mixed with each crown id
+    // Seeded per crown (a hash of seed and crown id: the same crown grows the same tree, no two alike):
+    double crownBaseSpread{0.10};       // the crown base ratio varies by +/- this, so trunks do not all fork at the same relative height
+    int attempts{4};                    // trees tried (the seed varied) for a crown the first does not fill
+    double trunkLeanShare{0.45};        // the trunk has leaned this share of the way to the measured apex's offset by the crown's height
+    // How the tree grows and carries its leaves (continuous; no tree classes): apicalDominance sets a branch's momentum, the
+    // branch angle's mean and spread the scaffold limbs' angle from the leader (the spread by +/- between crowns, by +/- half of
+    // it between limbs), internodeLengthM the step along a shoot (0: from the tree's height); the rest (leaf distribution,
+    // divergence, blade outline) shapes the leaf clusters plant writes.
+    sb_veggie::SbVeggieMorphology morphology;
 };
 
 /** A measured crown, as crowns.json carries it (strip writes these values at full precision, so plant reads them back exactly). */
@@ -540,6 +542,7 @@ struct CrownShape {
 struct CrownGrowth {
     uint32_t seed{0};
     double heightAboveSupport{0}, crownBaseY{0}, trunkRadius{0};
+    double crownBaseRatio{0};           // this crown's (the ratio varied by the seeded spread)
     double attractorSpacing{0};         // voxel of the attractor cloud (m)
     nature::SpaceColonizationConfig cfg;
     std::vector<nature::ColonizationNode> skeleton;
@@ -605,13 +608,14 @@ inline std::string fixed(double v, int digits) {
  * the crown base, and reach the apex height to within reachRadius. That is the skeleton; what its meshed leaves reach
  * within a budget is measured on the mesh (meshCrown), and strip removes a tree only when both do.
  */
-inline CrownGrowth growCrown(const CrownShape& c, const GrowthParams& G, double sampleSpacing) {
+inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, double sampleSpacing, int attempt) {
     CrownGrowth g;
-    g.seed = detail::crownSeed(G.seed, c.id);
+    g.seed = detail::crownSeed(G.seed ^ (static_cast<uint64_t>(attempt) * 0x9E3779B97F4A7C15ull), c.id);
     const double support = c.supportY;
     const double H = std::max(0.5, static_cast<double>(c.apex.y) - support);
     g.heightAboveSupport = H;
-    g.crownBaseY = support + G.crownBaseRatio * H;
+    g.crownBaseRatio = std::clamp(G.crownBaseRatio + G.crownBaseSpread * (2.0 * detail::hashUnit(g.seed, 9001, 1) - 1.0), 0.0, 0.9999);
+    g.crownBaseY = support + g.crownBaseRatio * H;
     g.trunkRadius = G.trunkRadiusPerHeight * H;
     double radius = 0;
     for (double r : c.sectorRadii) radius += r / 16.0;
@@ -662,8 +666,17 @@ inline CrownGrowth growCrown(const CrownShape& c, const GrowthParams& G, double 
     cfg.crownExtents = Vec3(std::max(0.5f, (hi.x - lo.x) * 0.5f), std::max(0.5f, (hi.y - lo.y) * 0.5f), std::max(0.5f, (hi.z - lo.z) * 0.5f));
     cfg.clearTrunkHeight = static_cast<float>(g.crownBaseY - support);
     cfg.baseRadius = static_cast<float>(g.trunkRadius);
-    const double step = std::clamp(H / 40.0, 0.2, 0.6);
+    // a narrow crown (mean radius under a quarter of its height) gets proportionally finer growth: with the step, kill and
+    // perception radii a wider crown needs, its attractors lie inside the trunk's own reach and the tree is a bare pole
+    const double narrow = std::clamp(radius / (0.25 * H), 0.4, 1.0);
+    const double step = std::max(0.12, (G.morphology.internodeLengthM > 0.0f ? static_cast<double>(G.morphology.internodeLengthM) : std::clamp(H / 40.0, 0.2, 0.6)) * narrow);
     cfg.branchStepLength = static_cast<float>(step);
+    cfg.trunkLeanToward = c.apex;
+    cfg.trunkLeanShare = static_cast<float>(G.trunkLeanShare);
+    cfg.scaffoldBranchCount = 2 + static_cast<int>(std::floor(detail::hashUnit(g.seed, 9002, 1) * 3.0));
+    cfg.scaffoldAngleFromLeaderRad = G.morphology.branchAngleMeanRad + static_cast<float>(G.morphology.branchAngleSpreadRad * (2.0 * detail::hashUnit(g.seed, 9003, 1) - 1.0));
+    cfg.scaffoldAngleSpreadRad = 0.5f * G.morphology.branchAngleSpreadRad;
+    cfg.growthMomentumFactor = 0.76f * G.morphology.apicalDominance;
     // A node that reaches an attractor (comes within the kill reach, 1.25 x the kill radius, of it) must still see the
     // attractors next to that one: the gap between neighbouring attractors (the link) plus the kill reach. With the
     // link alone, a branch that reached an attractor could lose sight of the ones beyond it and colonisation stop with
@@ -736,6 +749,21 @@ inline CrownGrowth growCrown(const CrownShape& c, const GrowthParams& G, double 
     return g;
 }
 
+/**
+ * Grows the tree of a crown: the seeded growth of growCrownAttempt, and when it does not fill the measured crown, up to
+ * GrowthParams::attempts - 1 more with the seed varied (a different tree of the same crown, still a pure function of the
+ * crown, the seed and the parameters, so strip and plant grow the same one). The first that fills the crown is the tree; when
+ * none does, the one that reached most of it, whose failure says why.
+ */
+inline CrownGrowth growCrown(const CrownShape& c, const GrowthParams& G, double sampleSpacing) {
+    CrownGrowth best = growCrownAttempt(c, G, sampleSpacing, 0);
+    for (int attempt = 1; attempt < std::max(1, G.attempts) && !best.ok() && best.failureCode != "no_crown_above_base"; ++attempt) {
+        CrownGrowth next = growCrownAttempt(c, G, sampleSpacing, attempt);
+        if (next.ok() || next.surfaceShare() > best.surfaceShare()) best = std::move(next);
+    }
+    return best;
+}
+
 /** A crown as crowns.json carries it (plant). */
 inline CrownShape crownShapeFromJson(const io::GlbJsonValue& c) {
     CrownShape s;
@@ -780,6 +808,18 @@ struct PlantParams {
     std::string stageKey;
     // each tree's growth order on its vertices (`_REVEAL`); off, the meshes are the same and carry no attribute
     bool reveal{true};
+    // Level of detail (scratchbox_tree_lod.hpp): every tree is written at three levels on its one skeleton, 0 near (wood with
+    // the whole budget, twigs and leaf clusters instanced), 1 mid (the same cluster positions, fewer larger leaves), 2 far (the
+    // blob masses meshCrown builds, whose budget decides what strip removes). Off, a tree is the blob level alone.
+    bool lod{true};
+    double psiSeason{1.0};           // 0 bare .. 1 full summer: scales leaf density at every level
+    tree_lod::LodParams treeLod;     // leaf size, cluster and station parameters (psiSeason is copied in)
+    // The distances (m from the camera) at which a viewport changes level, per tree: level 0 up to lodNearPerHeight x its
+    // height (within [lodNearMinM, lodNearMaxM]), level 1 up to lodFarPerHeight x its height (within [lodFarMinM, lodFarMaxM]),
+    // level 2 beyond; fadeM is the width of the band over which two levels dither into each other.
+    double lodNearPerHeight{2.0}, lodNearMinM{20.0}, lodNearMaxM{60.0};
+    double lodFarPerHeight{6.0}, lodFarMinM{70.0}, lodFarMaxM{200.0};
+    double lodFadeM{6.0};
 };
 
 /** The triangles a crown's size asks for (see PlantParams::trianglesPerCrownM2), never fewer than minTrianglesPerTree. */
@@ -814,26 +854,8 @@ struct FoliageReach {
 
 namespace detail {
 
-/** Distance from p to triangle abc (closest point, Ericson). */
-inline double pointTriangleDistance(const Vec3& p, const Vec3& a, const Vec3& b, const Vec3& c) {
-    const Vec3 ab = b - a, ac = c - a, ap = p - a;
-    const float d1 = ab.dot(ap), d2 = ac.dot(ap);
-    if (d1 <= 0 && d2 <= 0) return (p - a).length();
-    const Vec3 bp = p - b;
-    const float d3 = ab.dot(bp), d4 = ac.dot(bp);
-    if (d3 >= 0 && d4 <= d3) return (p - b).length();
-    const float vc = d1 * d4 - d3 * d2;
-    if (vc <= 0 && d1 >= 0 && d3 <= 0) return (p - (a + ab * (d1 / (d1 - d3)))).length();
-    const Vec3 cp = p - c;
-    const float d5 = ab.dot(cp), d6 = ac.dot(cp);
-    if (d6 >= 0 && d5 <= d6) return (p - c).length();
-    const float vb = d5 * d2 - d1 * d6;
-    if (vb <= 0 && d2 >= 0 && d6 <= 0) return (p - (a + ac * (d2 / (d2 - d6)))).length();
-    const float va = d3 * d6 - d5 * d4;
-    if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0) return (p - (b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6))))).length();
-    const float den = 1.0f / (va + vb + vc);
-    return (p - (a + ab * (vb * den) + ac * (vc * den))).length();
-}
+/** Distance from p to triangle abc (closest point). */
+inline double pointTriangleDistance(const Vec3& p, const Vec3& a, const Vec3& b, const Vec3& c) { return tree_lod::pointTriangleDistance(p, a, b, c); }
 
 /** Ray o + t d (t > 0) against triangle abc: t at the hit, or -1. */
 inline double rayTriangle(const Vec3& o, const Vec3& d, const Vec3& a, const Vec3& b, const Vec3& c) {
@@ -3537,7 +3559,10 @@ inline std::string crownsJson(const StripResult& r, const StripParams& P) {
     std::snprintf(seedHex, sizeof(seedHex), "%016llx", static_cast<unsigned long long>(P.growth.seed));
     s << "\"growth\":{\"seed\":" << json::str(seedHex) << ",\"crownBaseRatio\":" << json::numPrecise(P.growth.crownBaseRatio)
       << ",\"trunkRadiusPerHeight\":" << json::numPrecise(P.growth.trunkRadiusPerHeight) << ",\"shellDepth\":" << json::numPrecise(P.growth.shellDepth)
-      << ",\"minSurfaceReached\":" << json::numPrecise(P.growth.minSurfaceReached) << "},\n\"crowns\":[";
+      << ",\"minSurfaceReached\":" << json::numPrecise(P.growth.minSurfaceReached) << ",\"crownBaseSpread\":" << json::numPrecise(P.growth.crownBaseSpread)
+      << ",\"branchAngleSpreadRad\":" << json::num(std::stod(detail::fixed(P.growth.morphology.branchAngleSpreadRad, 6))) << ",\"trunkLeanShare\":" << json::numPrecise(P.growth.trunkLeanShare)
+      << ",\"apicalDominance\":" << json::num(std::stod(detail::fixed(P.growth.morphology.apicalDominance, 6))) << ",\"branchAngleMeanRad\":" << json::num(std::stod(detail::fixed(P.growth.morphology.branchAngleMeanRad, 6)))
+      << ",\"internodeLengthM\":" << json::num(std::stod(detail::fixed(P.growth.morphology.internodeLengthM, 6))) << "},\n\"crowns\":[";
     for (size_t i = 0; i < r.crowns.size(); ++i) {
         const auto& c = r.crowns[i];
         s << (i ? ",\n" : "\n") << "{\"id\":" << c.id << ",\"status\":" << json::str(c.status) << ",\"reachesBoundary\":" << (c.reachesBoundary ? "true" : "false") << ",\"apex\":" << v3(c.apex)
@@ -3683,11 +3708,16 @@ struct PlantedTree {
     size_t budget{0};                // triangles it was given
     nature::TreeBudgetReport report;
     nature::ColonizationReport colonisation;
-    geometry::Mesh wood, foliage;
+    geometry::Mesh wood, foliage;    // level 2: the shipped blob tree (wood within its woodShare, leaf masses)
     nature::MeshGrowth growth;       // when each wood and foliage vertex grew (node creation order), for the reveal
+    tree_lod::TreeLod lod;           // levels 0 and 1 (PlantParams::lod): wood with the whole budget, twigs and leaf-cluster instances
+    bool hasLod{false};
+    double lodMs{0};                 // wall time building levels 0 and 1
+    double crownBaseRatio{0};        // this crown's (growth.crownBaseRatio varied by its seeded spread)
     double heightAboveSupport{0}, crownBaseY{0}, trunkRadius{0};
     double grownShare{0}, reachRadius{0};  // the grown skeleton's leaf nodes: share of the measured surface within reach
     FoliageReach leaves;             // the delivered leaf masses: what they reach of the measured surface, and how high
+    FoliageReach leavesStrict;       // ... within 1 m of a leaf triangle (the yardstick the leaf levels are measured with)
     std::string shortOfCrown;        // why its delivered leaves do not fill its crown within its budget (empty: they do)
     bool groundChecked{false};
     double groundGapM{std::numeric_limits<double>::quiet_NaN()};  // trunk base minus the nearest ground-mesh surface at its stem (NaN: none there)
@@ -3697,6 +3727,7 @@ struct PlantedTree {
 
 struct PlantResult {
     std::vector<PlantedTree> trees;
+    std::shared_ptr<tree_lod::ClusterLibrary> library;  // the leaf clusters and twig every tree's instances copy (PlantParams::lod)
     std::vector<std::pair<int, std::string>> skipped;  // crown id, reason
     std::vector<int> keptOnSupport, keptNotOnSupport;  // with a support mesh: trees kept as scanned on it, and not on it
     size_t triangles{0};
@@ -3873,6 +3904,11 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
 
     R.trees.resize(n);
     errors.assign(n, "");
+    tree_lod::LodParams lodParams = P.treeLod;
+    lodParams.psiSeason = P.psiSeason;
+    lodParams.morphology = P.growth.morphology;
+    if (P.lod) R.library = std::make_shared<tree_lod::ClusterLibrary>(tree_lod::buildClusterLibrary(lodParams));
+    const double psi = std::clamp(P.psiSeason, 0.0, 1.0);
     detail::forEachIndex(n, P.threads, [&](size_t i) {
         PlantedTree& tr = R.trees[i];
         try {
@@ -3890,14 +3926,38 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
             tr.grownShare = g.surfaceShare();
             tr.reachRadius = g.reachRadius;
             tr.colonisation = g.colonisation;
-            MeshedCrown m = meshCrown(g, tr.budget, P.woodShare, P.reveal ? &tr.growth : nullptr);
+            tr.crownBaseRatio = g.crownBaseRatio;
+            // the far level: the shipped blob tree; a bare request (psiSeason < 1) gives the leaf masses a share of their budget
+            // in proportion to the season
+            MeshedCrown m = meshCrown(g, tr.budget, 1.0 - (1.0 - P.woodShare) * psi, P.reveal ? &tr.growth : nullptr);
             tr.report = m.report;
             tr.leaves = m.reach;
-            if (m.foliage.indices.empty()) {
+            tr.leavesStrict = measureFoliage(m.foliage, m.report.foliageClumps, g.surface, P.treeLod.strictReachM);
+            if (m.foliage.indices.empty() && psi >= 1.0) {
                 errors[i] = "crown " + std::to_string(tr.crownId) + ": " + m.shortfall(g, shapes[i], P.growth.minSurfaceReached, tr.budget);
                 return;
             }
-            tr.shortOfCrown = m.shortfall(g, shapes[i], P.growth.minSurfaceReached, tr.budget);
+            if (psi >= 1.0) tr.shortOfCrown = m.shortfall(g, shapes[i], P.growth.minSurfaceReached, tr.budget);
+            if (P.lod) {
+                tree_lod::TreeLodInput in;
+                in.cfg = &g.cfg;
+                in.skeleton = &g.skeleton;
+                in.stemX = shapes[i].stemX;
+                in.stemZ = shapes[i].stemZ;
+                in.supportY = shapes[i].supportY;
+                in.apex = shapes[i].apex;
+                in.sectorRadii = shapes[i].sectorRadii;
+                in.surface = &g.surface;
+                in.reachRadius = g.reachRadius;
+                in.heightAboveSupport = g.heightAboveSupport;
+                in.seed = g.seed;
+                in.woodBudget = tr.budget;
+                const auto tLod = std::chrono::steady_clock::now();
+                tree_lod::buildTreeLod(tr.lod, in, *R.library);
+                tr.lodMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tLod).count();
+                if (!tr.lod.error.empty()) { errors[i] = "crown " + std::to_string(tr.crownId) + ": " + tr.lod.error; return; }
+                tr.hasLod = true;
+            }
             tr.wood = std::move(m.wood);
             tr.foliage = std::move(m.foliage);
             if (ground.p) {
@@ -3932,6 +3992,83 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
     return R;
 }
 
+/** Where a viewport changes a tree's level (m from the camera): level 0 up to d0, level 1 up to d1, level 2 beyond, dithered over `fade`. */
+struct LodBands { double d0{0}, d1{0}, fade{0}; };
+
+inline LodBands lodBandsFor(double heightM, const PlantParams& P) {
+    LodBands b;
+    b.fade = P.lodFadeM;
+    b.d0 = std::clamp(P.lodNearPerHeight * heightM, P.lodNearMinM, P.lodNearMaxM);
+    b.d1 = std::max(b.d0 + P.lodFadeM, std::clamp(P.lodFarPerHeight * heightM, P.lodFarMinM, P.lodFarMaxM));
+    return b;
+}
+
+/** What a viewport draws of the planted trees: triangles per frame over a grid of camera poses (see estimateLodFrames). */
+struct LodFrameEstimate {
+    size_t poses{0};
+    double median{0}, p95{0}, max{0};                // an 80 degree view; every tree within 8 m is in it
+    double allAroundMedian{0}, allAroundMax{0};      // no view culling (a bound, not a frame)
+    double allLevel0{0}, allLevel1{0}, allLevel2{0}; // triangles when every tree is at that level
+    std::array<size_t, 3> worstTreesPerLevel{};
+};
+
+/**
+ * Estimates what a park view draws: camera poses every `gridM` metres over the trees' bounds, 8 headings each, every tree
+ * at the level its distance calls for (the middle of the dither band), and only the trees within 40 degrees of the heading
+ * (or 8 m) counted. Drawn triangles are those of the level (wood, twigs and clusters at level 0 and 1, wood and blob leaf
+ * masses at level 2), instances expanded.
+ */
+inline LodFrameEstimate estimateLodFrames(const PlantResult& R, const PlantParams& P, double gridM = 30.0) {
+    struct T { double x, z; LodBands b; std::array<double, 3> tri; };
+    std::vector<T> trees;
+    for (const auto& tr : R.trees) {
+        if (!tr.hasLod) continue;
+        T t;
+        t.x = (*tr.crown)["stem"][0].num;
+        t.z = (*tr.crown)["stem"][1].num;
+        t.b = lodBandsFor(tr.heightAboveSupport, P);
+        t.tri = {static_cast<double>(tr.lod.drawnLevel0()), static_cast<double>(tr.lod.drawnLevel1()), static_cast<double>(tr.lod.woodTriangles + tr.foliage.indices.size() / 3)};
+        trees.push_back(t);
+    }
+    LodFrameEstimate E;
+    if (trees.empty()) return E;
+    double x0 = 1e30, x1 = -1e30, z0 = 1e30, z1 = -1e30;
+    for (const auto& t : trees) { x0 = std::min(x0, t.x); x1 = std::max(x1, t.x); z0 = std::min(z0, t.z); z1 = std::max(z1, t.z); E.allLevel0 += t.tri[0]; E.allLevel1 += t.tri[1]; E.allLevel2 += t.tri[2]; }
+    auto levelAt = [](const LodBands& b, double d) { return d < b.d0 ? 0 : (d < b.d1 ? 1 : 2); };
+    std::vector<double> frames, around;
+    for (double x = x0; x <= x1 + 1e-9; x += gridM) {
+        for (double z = z0; z <= z1 + 1e-9; z += gridM) {
+            double all = 0;
+            std::array<double, 8> byHeading{};
+            std::array<std::array<size_t, 3>, 8> cnt{};
+            for (const auto& t : trees) {
+                const double d = std::hypot(t.x - x, t.z - z);
+                const int lv = levelAt(t.b, d);
+                all += t.tri[static_cast<size_t>(lv)];
+                const double ang = std::atan2(t.z - z, t.x - x) * 180.0 / M_PI;
+                for (int h = 0; h < 8; ++h) {
+                    double da = std::fmod(ang - 45.0 * h + 540.0, 360.0) - 180.0;
+                    if (std::abs(da) <= 40.0 || d < 8.0) { byHeading[static_cast<size_t>(h)] += t.tri[static_cast<size_t>(lv)]; ++cnt[static_cast<size_t>(h)][static_cast<size_t>(lv)]; }
+                }
+            }
+            around.push_back(all);
+            for (int h = 0; h < 8; ++h) {
+                frames.push_back(byHeading[static_cast<size_t>(h)]);
+                if (byHeading[static_cast<size_t>(h)] >= *std::max_element(frames.begin(), frames.end())) E.worstTreesPerLevel = cnt[static_cast<size_t>(h)];
+            }
+        }
+    }
+    std::sort(frames.begin(), frames.end());
+    std::sort(around.begin(), around.end());
+    E.poses = frames.size();
+    E.median = frames[frames.size() / 2];
+    E.p95 = frames[static_cast<size_t>(0.95 * static_cast<double>(frames.size() - 1))];
+    E.max = frames.back();
+    E.allAroundMedian = around[around.size() / 2];
+    E.allAroundMax = around.back();
+    return E;
+}
+
 /** What writing the trees GLB measured: its size, and with quantisation its error and the size it would have had unquantised. */
 struct TreesGlbReport {
     staged_glb::WriteReport glb;
@@ -3949,7 +4086,7 @@ inline std::string treeExtrasMembers(const PlantedTree& tr, const PlantParams& P
        << ",\"supportY\":" << json::num(c["supportY"].num) << ",\"supportSource\":" << json::write(c["supportSource"])
        << ",\"heightAboveSupportM\":" << json::num(tr.heightAboveSupport) << ",\"crownAreaM2\":" << json::num(c["areaM2"].num)
        << ",\"sectorRadiiM\":" << json::write(c["sectorRadii"]);
-    ex << ",\"inferred\":{\"crownBaseY\":" << json::num(tr.crownBaseY) << ",\"crownBaseRatio\":" << json::num(P.growth.crownBaseRatio)
+    ex << ",\"inferred\":{\"crownBaseY\":" << json::num(tr.crownBaseY) << ",\"crownBaseRatio\":" << json::numPrecise(tr.crownBaseRatio)
        << ",\"trunkRadiusM\":" << json::num(tr.trunkRadius) << ",\"trunkRadiusPerHeight\":" << json::num(P.growth.trunkRadiusPerHeight) << "}"
        // measured on the delivered leaf masses (this mesh): the share of the crown's surface samples above its crown
        // base inside one or within reachM of one, and how far their top lies below the apex; grownSurfaceReached is
@@ -3981,7 +4118,13 @@ inline bool keptAsScanned(const io::GlbJsonValue& c) {
  * The trees layer of a staged location build (stage "trees"): one node per planted tree and one LINES ring per crown
  * kept as scanned, in the tile frame, studio clay.
  *
- * A tree node holds its wood and foliage primitives (the foliage last), its measurements as extras (unchanged), and
+ * With PlantParams::lod (the default) a tree node holds no mesh: it has three child nodes, the levels of detail (extras.sbLod,
+ * the contract's TreeLodExtras): level 0 holds the wood (the whole triangle budget) and, as child nodes instancing library
+ * meshes (EXT_mesh_gpu_instancing, positions in the level's quantisation frame), its pruned twigs and leaf clusters; level 1
+ * shares the wood mesh and instances the same cluster positions with fewer larger leaves (its instance data is level 0's);
+ * level 2 holds the same wood (its primitive reuses level 0's accessors) and the blob leaf masses meshCrown builds. The library
+ * (the cluster meshes, the twig tubes) and psiSeason are in the root extras `sbTrees`. Without levels a tree node holds its wood
+ * and foliage primitives (the foliage last). Either way it holds its measurements as extras, and
  * extras.sb (StagedNodeExtras): provenance "grown to the measured crown" (stem, crown extent and height measured from
  * the tiles, branching grown into the measured crown; what ratios set is listed as inferred), its plant rank as
  * buildOrder, and `_REVEAL` on every vertex: x = plant rank / max(1, trees - 1), y = when the vertex grew (node creation
@@ -4013,34 +4156,133 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
         staged_glb::StagedNode node;
         node.name = "sb_veggie_crown_" + std::to_string(tr.crownId);
         const float x = staged_glb::rankUnit(rank, planted.size());
-        size_t vertices = 0, triangles = 0;
-        const std::pair<const geometry::Mesh*, const std::vector<float>*> parts[] = {{&tr.wood, &tr.growth.wood}, {&tr.foliage, &tr.growth.foliage}};
-        for (const auto& [m, grown] : parts) {
-            if (m->indices.empty()) continue;
-            if (P.reveal && grown->size() != m->vertices.size()) throw VegetationError("failed", "crown " + std::to_string(tr.crownId) + ": " + std::to_string(grown->size()) + " growth values for " + std::to_string(m->vertices.size()) + " vertices");
+        auto primitiveOf = [&](const geometry::Mesh& m, const std::vector<float>& grown) {
+            if (P.reveal && grown.size() != m.vertices.size()) throw VegetationError("failed", "crown " + std::to_string(tr.crownId) + ": " + std::to_string(grown.size()) + " growth values for " + std::to_string(m.vertices.size()) + " vertices");
             staged_glb::StagedPrimitive pr;
-            pr.positions = m->vertices;
-            pr.normals.reserve(m->vertices.size());
-            for (size_t v = 0; v < m->vertices.size(); ++v) pr.normals.push_back(v < m->normals.size() ? m->normals[v] : Vec3(0, 1, 0));
-            pr.indices = m->indices;
+            pr.positions = m.vertices;
+            pr.normals.reserve(m.vertices.size());
+            for (size_t v = 0; v < m.vertices.size(); ++v) pr.normals.push_back(v < m.normals.size() ? m.normals[v] : Vec3(0, 1, 0));
+            pr.indices = m.indices;
             if (P.reveal) {
-                pr.reveal.reserve(m->vertices.size());
-                for (float y : *grown) pr.reveal.push_back({x, y});
+                pr.reveal.reserve(m.vertices.size());
+                for (float y : grown) pr.reveal.push_back({x, y});
             }
-            vertices += m->vertices.size();
-            triangles += m->indices.size() / 3;
-            node.primitives.push_back(std::move(pr));
+            return pr;
+        };
+        // a tree without levels is the shipped blob tree: its wood and its leaf masses
+        const bool levels = tr.hasLod && R.library;
+        std::vector<staged_glb::StagedPrimitive> blobPrims;
+        size_t vertices = 0, triangles = 0;
+        if (!levels) {
+            const std::pair<const geometry::Mesh*, const std::vector<float>*> parts[] = {{&tr.wood, &tr.growth.wood}, {&tr.foliage, &tr.growth.foliage}};
+            for (const auto& [m, grown] : parts) {
+                if (m->indices.empty()) continue;
+                blobPrims.push_back(primitiveOf(*m, *grown));
+                vertices += m->vertices.size();
+                triangles += m->indices.size() / 3;
+            }
+        } else {
+            // levels: the wood (written once, shared by levels 0, 1 and 2) and the level-2 leaf masses
+            vertices = tr.lod.wood.vertices.size() + tr.foliage.vertices.size();
+            triangles = tr.lod.woodTriangles + tr.foliage.indices.size() / 3;
+        }
+        std::string lodMembers;
+        if (levels) {
+            const auto& lib = *R.library;
+            const tree_lod::TreeLod& L = tr.lod;
+            const std::string base = node.name;
+            const double H = tr.heightAboveSupport;
+            const LodBands bands = lodBandsFor(H, P);
+            const double d0 = bands.d0, d1 = bands.d1, fade = bands.fade;
+            auto lodExtras = [&](int level, double lo, double hi, size_t tris, bool instanced) {
+                return "{\"sbLod\":{\"level\":" + std::to_string(level) + ",\"minDistM\":" + json::num(std::max(0.0, lo)) + ",\"maxDistM\":" + json::num(hi) +
+                       ",\"fadeM\":" + json::num(fade) + ",\"triangles\":" + std::to_string(tris) + ",\"instanced\":" + (instanced ? "true" : "false") + "}}";
+            };
+            auto instancesOf = [&](const std::vector<tree_lod::Instance>& in, const std::string& mesh) {
+                staged_glb::StagedInstances si;
+                si.libraryMesh = mesh;
+                si.translations.reserve(in.size());
+                for (const auto& i : in) {
+                    si.translations.push_back(i.t);
+                    si.rotations.push_back({i.q.x, i.q.y, i.q.z, i.q.w});
+                    si.scales.push_back(i.s);
+                    if (P.reveal) si.reveal.push_back({x, i.order});
+                }
+                return si;
+            };
+            auto clusterExtras = [&](const std::string& variant, uint64_t salt) {
+                return "{\"sbCluster\":{\"clusterMesh\":" + json::str(variant) + ",\"hashSeed\":" + std::to_string(static_cast<uint32_t>(tree_lod::mix64(tr.seed ^ salt) & 0xFFFFFFFFull)) + "}}";
+            };
+            staged_glb::StagedNode l0, l1, l2;
+            l0.name = base + "_lod0";
+            l1.name = base + "_lod1";
+            l2.name = base + "_lod2";
+            l0.primitives.push_back(primitiveOf(L.wood, L.woodGrowth));
+            l0.frameGroup = l2.frameGroup = base;
+            l1.meshFrom = l0.name;
+            for (size_t k = 0; k < L.twigs.size(); ++k) {
+                if (L.twigs[k].empty()) continue;
+                staged_glb::StagedNode tw;
+                tw.name = base + "_lod0_twigs" + std::to_string(k);
+                tw.extrasJson = clusterExtras(lib.twigs[k].name, 0x7716ull + k);
+                tw.instances.push_back(instancesOf(L.twigs[k], lib.twigs[k].name));
+                l0.children.push_back(std::move(tw));
+            }
+            for (size_t k = 0; k < L.clusters.size(); ++k) {
+                if (L.clusters[k].empty()) continue;
+                const auto& v = lib.variants[k];
+                staged_glb::StagedNode c0, c1;
+                c0.name = base + "_lod0_c" + std::to_string(k);
+                c0.extrasJson = clusterExtras(v.name, 0xC100ull + k);
+                c0.instances.push_back(instancesOf(L.clusters[k], v.level0.name));
+                c1.name = base + "_lod1_c" + std::to_string(k);
+                c1.extrasJson = clusterExtras(v.name, 0xC100ull + k);
+                staged_glb::StagedInstances s1;
+                s1.libraryMesh = v.level1.name;
+                s1.sameDataAs = c0.name;
+                c1.instances.push_back(std::move(s1));
+                l0.children.push_back(std::move(c0));
+                l1.children.push_back(std::move(c1));
+            }
+            const bool instanced0 = !l0.children.empty(), instanced1 = !l1.children.empty();
+            l0.extrasJson = lodExtras(0, 0.0, d0 + 0.5 * fade, L.drawnLevel0(), instanced0);
+            l1.extrasJson = lodExtras(1, d0 - 0.5 * fade, d1 + 0.5 * fade, L.drawnLevel1(), instanced1);
+            // level 2: the same wood (written once, in the level-0 node), and the blob masses meshCrown builds on the same skeleton
+            {
+                staged_glb::StagedPrimitive woodRef;
+                woodRef.reuseNode = l0.name;
+                woodRef.reuseIndex = 0;
+                l2.primitives.push_back(std::move(woodRef));
+                if (!tr.foliage.indices.empty()) l2.primitives.push_back(primitiveOf(tr.foliage, tr.growth.foliage));
+            }
+            const size_t level2Triangles = L.woodTriangles + tr.foliage.indices.size() / 3;
+            l2.extrasJson = lodExtras(2, d1 - 0.5 * fade, 1.0e6, level2Triangles, false);
+            node.children.push_back(std::move(l0));
+            node.children.push_back(std::move(l1));
+            node.children.push_back(std::move(l2));
+            auto levelJson = [&](const tree_lod::LeafLevelMeasure& m, size_t drawn) {
+                return "{\"leaves\":" + std::to_string(m.leaves) + ",\"drawnTriangles\":" + std::to_string(drawn) + ",\"crownSurfaceReached\":" + json::num(m.share()) +
+                       ",\"crownSurfaceWithin1m\":" + json::num(m.strictShare()) + ",\"leavesBelowApexM\":" + json::num(static_cast<double>((*tr.crown)["apex"][1].num) - m.topY) + "}";
+            };
+            lodMembers = ",\"lod\":{\"leafLengthM\":" + json::num(L.leafLengthM) + ",\"stations\":" + std::to_string(L.stations) + ",\"repairStations\":" + std::to_string(L.repairStations) +
+                         ",\"twigs\":" + std::to_string(L.twigCount()) + ",\"woodTriangles\":" + std::to_string(L.woodTriangles) +
+                         ",\"level0\":" + levelJson(L.level0, L.drawnLevel0()) + ",\"level1\":" + levelJson(L.level1, L.drawnLevel1()) + "}";
+            lodMembers += ",\"sbTree\":{\"id\":" + std::to_string(tr.crownId) + ",\"hashSeed\":" + std::to_string(tr.seed) + ",\"label\":\"grown to the measured crown\"}";
+        } else {
+            node.primitives = std::move(blobPrims);
         }
         const auto& c = *tr.crown;
         staged_glb::NodeExtras sb;
         sb.stage = "trees";
         sb.provenance.label = "grown to the measured crown";
         sb.provenance.measuredGeometry = true;
-        sb.provenance.method = "SB-Veggie space colonisation grown into the crown measured in the photo tiles: stem, crown extent and height measured, branching grown inside the measured crown";
+        sb.provenance.method = "SB-Veggie space colonisation grown into the crown measured in the photo tiles: stem, crown extent and height measured, branching grown inside the measured crown" +
+                               std::string(tr.hasLod ? "; leaves are instanced SB-Veggie clusters placed on that branching, not measured" : "");
         sb.provenance.sources.push_back({"tile-extraction", "crown-" + std::to_string(tr.crownId), "the crown tile_vegetation strip measured (crowns.json)"});
         sb.provenance.note = "trunk stands at " + detail::fixed(c["supportY"].num, 2) + " m (" + c["supportSource"].asString() + ")" +
                              (c["supportMovedM"].type == io::GlbJsonValue::Number ? "; stood " + detail::fixed(std::abs(c["supportMovedM"].num), 2) + " m " + (c["supportMovedM"].num < 0 ? "lower" : "higher") + " onto the ground rebuilt under its stem" : std::string());
-        sb.provenance.inferred = {{"crownBaseRatio", P.growth.crownBaseRatio}, {"trunkRadiusPerHeight", P.growth.trunkRadiusPerHeight}, {"crownBaseY", tr.crownBaseY}, {"trunkRadiusM", tr.trunkRadius}};
+        sb.provenance.inferred = {{"crownBaseRatio", tr.crownBaseRatio}, {"trunkRadiusPerHeight", P.growth.trunkRadiusPerHeight}, {"crownBaseY", tr.crownBaseY}, {"trunkRadiusM", tr.trunkRadius}};
+        if (tr.hasLod) sb.provenance.inferred.push_back({"leafLengthM", tr.lod.leafLengthM});
         sb.buildOrder = static_cast<long long>(rank);
         sb.buildCount = static_cast<long long>(buildCount);
         sb.revealKind = "grow";
@@ -4049,7 +4291,7 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
         sb.crownId = tr.crownId;
         sb.vertices = static_cast<long long>(vertices);
         sb.triangles = static_cast<long long>(triangles);
-        node.extrasJson = sb.toJson(detail::treeExtrasMembers(tr, P));
+        node.extrasJson = sb.toJson(detail::treeExtrasMembers(tr, P) + lodMembers);
         nodes.push_back(std::move(node));
     }
     for (size_t k = 0; k < rings.size(); ++k) {
@@ -4112,6 +4354,29 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
                (R.groundChecked ? ",\"offGround\":" + std::to_string(R.offGround) : std::string()) + ",\"keptAsScannedRings\":" + std::to_string(rings.size()) +
                ",\"generator\":\"space colonisation\"}";
     staged_glb::WriteOptions opt;
+    if (R.library) {
+        const auto& lib = *R.library;
+        auto libMesh = [&](const tree_lod::LibraryMesh& m) {
+            staged_glb::StagedLibraryMesh lm;
+            lm.name = m.name;
+            lm.primitive.positions = m.positions;
+            lm.primitive.normals = m.normals;
+            lm.primitive.indices = m.indices;
+            return lm;
+        };
+        std::string variants;
+        for (const auto& v : lib.variants) {
+            opt.library.push_back(libMesh(v.level0));
+            opt.library.push_back(libMesh(v.level1));
+            variants += (variants.empty() ? "" : ",") + std::string("{\"mesh\":") + json::str(v.name) + ",\"leavesLevel0\":" + std::to_string(v.level0.leaves) + ",\"leavesLevel1\":" + std::to_string(v.level1.leaves) + "}";
+        }
+        for (const auto& tw : lib.twigs) {
+            opt.library.push_back(libMesh(tw));
+            variants += "," + std::string("{\"mesh\":") + json::str(tw.name) + ",\"leavesLevel0\":0,\"leavesLevel1\":0}";
+        }
+        members += ",\"sbTrees\":{\"schema\":\"scratchbox.trees-lod/1\",\"psiSeason\":" + json::num(std::clamp(P.psiSeason, 0.0, 1.0)) + ",\"clusterLibrary\":{\"variants\":[" + variants +
+                   "],\"leafSizeModel\":{\"sizeRatioToCrownHeight\":" + json::num(lib.params.leafSizeRatioToCrownHeight) + ",\"minM\":" + json::num(lib.params.leafMinM) + ",\"maxM\":" + json::num(lib.params.leafMaxM) + "}}}";
+    }
     opt.generator = "Scratchbox SB-Veggie (space colonisation, tile_vegetation plant)";
     opt.rootName = "sb_veggie_trees";
     opt.rootExtrasJson = staged_glb::rootExtrasJson("trees", P.stageKey, frameName, std::string(), members);

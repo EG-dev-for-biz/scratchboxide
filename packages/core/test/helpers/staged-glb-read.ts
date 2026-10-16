@@ -33,6 +33,10 @@ export interface StagedNodeRead {
     extras: any;
     sb: any;
     primitives: StagedPrimitiveRead[];
+    children: number[];
+    /** Of a tree with levels: its three level nodes by level (and the wood mesh level 2 shares with level 0 is the first primitive of both). */
+    translation?: number[];
+    scale?: number[];
 }
 
 export interface StagedGlbRead {
@@ -41,6 +45,8 @@ export interface StagedGlbRead {
     root: any;
     nodes: StagedNodeRead[];
     byName: (name: string) => StagedNodeRead;
+    /** A tree node's level child (0 near, 1 mid, 2 far), or undefined for a tree without levels. */
+    level: (tree: StagedNodeRead, level: 0 | 1 | 2) => StagedNodeRead | undefined;
 }
 
 export function readStagedGlb(file: string): StagedGlbRead {
@@ -56,10 +62,11 @@ export function readStagedGlb(file: string): StagedGlbRead {
             colors: p.attributes.COLOR_0 !== undefined ? readAccessor(json, bin, p.attributes.COLOR_0).data : undefined,
             attributes: Object.keys(p.attributes)
         }));
-        return { index, name: n.name ?? '', extras: n.extras, sb: n.extras?.sb, primitives };
+        return { index, name: n.name ?? '', extras: n.extras, sb: n.extras?.sb, primitives, children: n.children ?? [], translation: n.translation, scale: n.scale };
     });
     return {
         json, bin, root: json.extras, nodes,
+        level: (tree: StagedNodeRead, level: 0 | 1 | 2) => tree.children.map(i => nodes[i]).find(c => c.extras?.sbLod?.level === level),
         byName: (name: string) => {
             const n = nodes.find(x => x.name === name);
             if (!n) throw new Error(`no node named ${name} in ${file}: ${nodes.map(x => x.name).join(', ')}`);

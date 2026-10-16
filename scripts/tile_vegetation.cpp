@@ -127,10 +127,28 @@ static void readGrowthFlags(const Args& a, GrowthParams& G) {
     G.trunkRadiusPerHeight = a.num("trunk-radius-per-height", G.trunkRadiusPerHeight);
     G.shellDepth = a.num("shell-depth", G.shellDepth);
     G.minSurfaceReached = a.num("min-surface-reached", G.minSurfaceReached);
+    G.crownBaseSpread = a.num("crown-base-spread", G.crownBaseSpread);
+    G.morphology.branchAngleSpreadRad = static_cast<float>(a.num("branch-angle-spread", G.morphology.branchAngleSpreadRad));
+    G.morphology.branchAngleMeanRad = static_cast<float>(a.num("branch-angle", G.morphology.branchAngleMeanRad));
+    G.morphology.apicalDominance = static_cast<float>(a.num("apical-dominance", G.morphology.apicalDominance));
+    G.morphology.internodeLengthM = static_cast<float>(a.num("internode", G.morphology.internodeLengthM));
+    G.morphology.leafDistributionExponent = static_cast<float>(a.num("leaf-distribution", G.morphology.leafDistributionExponent));
+    G.morphology.divergenceAngleRad = static_cast<float>(a.num("divergence-angle", G.morphology.divergenceAngleRad));
+    G.morphology.blade.widthRatio = static_cast<float>(a.num("blade-width-ratio", G.morphology.blade.widthRatio));
+    G.morphology.blade.outlineA = static_cast<float>(a.num("blade-outline-a", G.morphology.blade.outlineA));
+    G.morphology.blade.outlineB = static_cast<float>(a.num("blade-outline-b", G.morphology.blade.outlineB));
+    G.morphology.blade.lobeCount = static_cast<float>(a.num("blade-lobes", G.morphology.blade.lobeCount));
+    G.morphology.blade.lobeDepth = static_cast<float>(a.num("blade-lobe-depth", G.morphology.blade.lobeDepth));
+    G.morphology.blade.serrationCount = static_cast<float>(a.num("blade-serrations", G.morphology.blade.serrationCount));
+    G.morphology.blade.serrationDepth = static_cast<float>(a.num("blade-serration-depth", G.morphology.blade.serrationDepth));
+    G.trunkLeanShare = a.num("trunk-lean", G.trunkLeanShare);
     if (G.crownBaseRatio < 0 || G.crownBaseRatio >= 1) throw VegetationError("bad_request", "--crown-base-ratio must be in [0, 1)");
     if (!(G.trunkRadiusPerHeight > 0)) throw VegetationError("bad_request", "--trunk-radius-per-height must be > 0");
     if (G.shellDepth < 0 || G.shellDepth > 1) throw VegetationError("bad_request", "--shell-depth must be in [0, 1]");
     if (G.minSurfaceReached < 0 || G.minSurfaceReached > 1) throw VegetationError("bad_request", "--min-surface-reached must be in [0, 1]");
+    if (G.crownBaseSpread < 0 || G.crownBaseSpread > 0.3) throw VegetationError("bad_request", "--crown-base-spread must be in [0, 0.3]");
+    if (G.morphology.branchAngleSpreadRad < 0 || G.morphology.branchAngleSpreadRad > 0.6) throw VegetationError("bad_request", "--branch-angle-spread must be in [0, 0.6] radians");
+    if (G.trunkLeanShare < 0 || G.trunkLeanShare > 1) throw VegetationError("bad_request", "--trunk-lean must be in [0, 1]");
 }
 
 static Args parseArgs(int argc, char** argv, int from) {
@@ -301,6 +319,26 @@ static int runPlant(const Args& a) {
         if (r != "0" && r != "1") throw VegetationError("bad_request", "--reveal must be 0 or 1");
         P.reveal = r == "1";
     }
+    if (a.has("lod")) {
+        const std::string l = a.str("lod");
+        if (l != "0" && l != "1") throw VegetationError("bad_request", "--lod must be 0 or 1");
+        P.lod = l == "1";
+    }
+    P.psiSeason = a.num("psi-season", P.psiSeason);
+    if (P.psiSeason < 0 || P.psiSeason > 1) throw VegetationError("bad_request", "--psi-season must be in [0, 1]");
+    P.treeLod.leafSizeRatioToCrownHeight = a.num("leaf-size-ratio", P.treeLod.leafSizeRatioToCrownHeight);
+    P.treeLod.leafMinM = a.num("leaf-min", P.treeLod.leafMinM);
+    P.treeLod.leafMaxM = a.num("leaf-max", P.treeLod.leafMaxM);
+    P.treeLod.leavesPerCluster = a.num("leaves-per-cluster", P.treeLod.leavesPerCluster);
+    P.treeLod.clusterRadiusPerLeaf = a.num("cluster-radius-per-leaf", P.treeLod.clusterRadiusPerLeaf);
+    P.treeLod.shellDepthPerHeight = a.num("shell-depth-per-height", P.treeLod.shellDepthPerHeight);
+    P.treeLod.spacingRatio = a.num("station-spacing", P.treeLod.spacingRatio);
+    P.lodNearPerHeight = a.num("lod-near-per-height", P.lodNearPerHeight);
+    P.lodFarPerHeight = a.num("lod-far-per-height", P.lodFarPerHeight);
+    P.lodNearMaxM = a.num("lod-near-max", P.lodNearMaxM);
+    P.lodFarMaxM = a.num("lod-far-max", P.lodFarMaxM);
+    P.lodFadeM = a.num("lod-fade", P.lodFadeM);
+    if (!(P.treeLod.leafMinM > 0) || P.treeLod.leafMaxM < P.treeLod.leafMinM) throw VegetationError("bad_request", "--leaf-min must be > 0 and --leaf-max at least --leaf-min");
     if (P.woodShare < 0 || P.woodShare > 1) throw VegetationError("bad_request", "--wood-share must be in [0, 1]");
     if (!(P.minTrianglesPerTree >= 1)) throw VegetationError("bad_request", "--min-triangles-per-tree must be at least 1");
     if (P.trianglesPerCrownM2 < 0) throw VegetationError("bad_request", "--triangles-per-crown-m2 must be >= 0");
@@ -315,12 +353,19 @@ static int runPlant(const Args& a) {
     const auto& recorded = doc["growth"];
     if (recorded.type == io::GlbJsonValue::Object) {
         const std::pair<const char*, double*> fields[] = {{"crownBaseRatio", &P.growth.crownBaseRatio}, {"trunkRadiusPerHeight", &P.growth.trunkRadiusPerHeight},
-                                                          {"shellDepth", &P.growth.shellDepth}, {"minSurfaceReached", &P.growth.minSurfaceReached}};
+                                                          {"shellDepth", &P.growth.shellDepth}, {"minSurfaceReached", &P.growth.minSurfaceReached},
+                                                          {"crownBaseSpread", &P.growth.crownBaseSpread}, {"trunkLeanShare", &P.growth.trunkLeanShare}};
+        const std::pair<const char*, float*> floatFields[] = {{"branchAngleSpreadRad", &P.growth.morphology.branchAngleSpreadRad}, {"apicalDominance", &P.growth.morphology.apicalDominance},
+                                                              {"branchAngleMeanRad", &P.growth.morphology.branchAngleMeanRad}, {"internodeLengthM", &P.growth.morphology.internodeLengthM}};
+        for (const auto& [name, field] : floatFields) {
+            if (recorded[name].type == io::GlbJsonValue::Number) *field = static_cast<float>(recorded[name].num);
+        }
         for (const auto& [name, field] : fields) {
             if (recorded[name].type == io::GlbJsonValue::Number) *field = recorded[name].num;
         }
         const std::pair<const char*, const char*> flags[] = {{"crown-base-ratio", "crownBaseRatio"}, {"trunk-radius-per-height", "trunkRadiusPerHeight"},
-                                                             {"shell-depth", "shellDepth"}, {"min-surface-reached", "minSurfaceReached"}};
+                                                             {"shell-depth", "shellDepth"}, {"min-surface-reached", "minSurfaceReached"},
+                                                             {"crown-base-spread", "crownBaseSpread"}, {"trunk-lean", "trunkLeanShare"}};
         for (const auto& [flag, name] : flags) {
             if (a.has(flag) && recorded[name].type == io::GlbJsonValue::Number && a.num(flag, 0) != recorded[name].num) {
                 throw VegetationError("bad_request", std::string("--") + flag + " " + a.str(flag) + " differs from the " + json::num(recorded[name].num) +
@@ -403,13 +448,39 @@ static int runPlant(const Args& a) {
           << ", \"triangles\": " << (t.wood.indices.size() + t.foliage.indices.size()) / 3
           << ", \"wood\": " << t.report.woodTriangles << ", \"foliage\": " << t.report.foliageTriangles << ", \"clumps\": " << t.report.foliageClumps
           << ", \"surfaceMasses\": " << t.report.surfaceMasses << ", \"surfaceMassesNeeded\": " << t.report.surfaceMassesNeeded
-          << ", \"crownSurfaceReached\": " << json::num(t.leaves.share()) << ", \"grownSurfaceReached\": " << json::num(t.grownShare)
+          << ", \"crownSurfaceReached\": " << json::num(t.leaves.share()) << ", \"within1mShare\": " << json::num(t.leavesStrict.share()) << ", \"grownSurfaceReached\": " << json::num(t.grownShare)
           << ", \"leavesBelowApexM\": " << json::num(static_cast<double>((*t.crown)["apex"][1].num) - t.leaves.topY) << ", \"reachM\": " << json::num(t.reachRadius);
         if (t.groundChecked) s << ", \"groundGapM\": " << (std::isfinite(t.groundGapM) ? json::num(t.groundGapM) : std::string("null"));
         s << ", \"colonisation\": {\"iterations\": " << t.colonisation.iterations
           << ", \"stop\": " << json::str(t.colonisation.stop) << ", \"trunkSeekSteps\": " << t.colonisation.trunkSeekSteps << "}"
           << ", \"bounds\": [[" << json::num(lo.x) << "," << json::num(lo.y) << "," << json::num(lo.z) << "],[" << json::num(hi.x) << "," << json::num(hi.y) << "," << json::num(hi.z) << "]]"
-          << ", \"seed\": " << t.seed << "}";
+          << ", \"seed\": " << t.seed << ", \"crownBaseRatio\": " << json::num(t.crownBaseRatio);
+        if (t.hasLod) {
+            const auto& L = t.lod;
+            auto lvl = [&](const tree_lod::LeafLevelMeasure& m, size_t drawn) {
+                double sMax = 0, sMin = 1e9;
+                size_t over = 0;
+                for (int k = 0; k < 16; ++k) {
+                    const double rr = (*t.crown)["sectorRadii"][static_cast<size_t>(k)].num;
+                    if (rr <= 0) continue;
+                    const double ratio = m.spread[static_cast<size_t>(k)] / rr;
+                    sMax = std::max(sMax, ratio); sMin = std::min(sMin, ratio);
+                    if (ratio > 1.5) ++over;
+                }
+                std::ostringstream o;
+                o << "{\"leaves\": " << m.leaves << ", \"leafTriangles\": " << m.leafTriangles << ", \"drawnTriangles\": " << drawn << ", \"samples\": " << m.samples
+                  << ", \"reached\": " << m.reached << ", \"within1m\": " << m.reachedStrict << ", \"crownSurfaceReached\": " << json::num(m.share()) << ", \"within1mShare\": " << json::num(m.strictShare())
+                  << ", \"leavesBelowApexM\": " << json::num(static_cast<double>((*t.crown)["apex"][1].num) - m.topY) << ", \"spreadMaxRatio\": " << json::num(sMax)
+                  << ", \"spreadMinRatio\": " << json::num(sMin == 1e9 ? 0.0 : sMin) << ", \"sectorsOver1p5\": " << over << "}";
+                return o.str();
+            };
+            s << ", \"lod\": {\"leafLengthM\": " << json::num(L.leafLengthM) << ", \"stations\": " << L.stations << ", \"repairStations\": " << L.repairStations << ", \"fitShrunk\": " << L.fitShrunk
+              << ", \"unfit\": " << L.unfit << ", \"inset\": " << L.inset << ", \"outsideCrown\": " << L.outsideCrown << ", \"prunedBelowRadiusM\": " << json::num(L.prunedBelowRadiusM) << ", \"skeletonNodes\": " << t.report.skeletonNodes << ", \"twigs\": " << L.twigCount() << ", \"twigRadiusMinM\": " << json::num(L.twigRadiusMinM) << ", \"twigRadiusMedianM\": " << json::num(L.twigRadiusMedianM) << ", \"twigRadiusMaxM\": " << json::num(L.twigRadiusMaxM) << ", \"woodTriangles\": " << L.woodTriangles
+              << ", \"level0\": " << lvl(L.level0, L.drawnLevel0()) << ", \"level1\": " << lvl(L.level1, L.drawnLevel1()) << ", \"level2Triangles\": " << (t.wood.indices.size() + t.foliage.indices.size()) / 3
+              << ", \"ms\": " << json::num(t.lodMs) << ", \"msWood\": " << json::num(L.msWood) << ", \"msTwigs\": " << json::num(L.msTwigs) << ", \"msStations\": " << json::num(L.msStations)
+              << ", \"msRepair\": " << json::num(L.msRepair) << ", \"msMeasure\": " << json::num(L.msMeasure) << "}";
+        }
+        s << "}";
     }
     s << "\n  ],\n";
     // the trees GLB as written: its size, and with KHR_mesh_quantization the largest position and normal error measured on
@@ -418,7 +489,19 @@ static int runPlant(const Args& a) {
       << ", \"unquantizedBytes\": " << glbReport.unquantizedBytes << ", \"positionMaxErrorM\": " << json::num(glbReport.glb.maxPositionErrorM)
       << ", \"normalMaxErrorDeg\": " << json::num(glbReport.glb.maxNormalErrorDeg) << ", \"vertices\": " << glbReport.glb.vertices
       << ", \"triangles\": " << glbReport.glb.triangles << ", \"u16IndexPrimitives\": " << glbReport.glb.u16IndexPrimitives
-      << ", \"u32IndexPrimitives\": " << glbReport.glb.u32IndexPrimitives << ", \"keptAsScannedRings\": " << glbReport.rings << "},\n";
+      << ", \"u32IndexPrimitives\": " << glbReport.glb.u32IndexPrimitives << ", \"keptAsScannedRings\": " << glbReport.rings
+      << ", \"instances\": " << glbReport.glb.instances << ", \"instancedTriangles\": " << glbReport.glb.instancedTriangles << ", \"jsonBytes\": " << glbReport.glb.jsonBytes
+      << ", \"binBytes\": " << glbReport.glb.binBytes << "},\n";
+    {
+        const LodFrameEstimate f = estimateLodFrames(r, P);
+        s << "  \"psiSeason\": " << json::num(P.psiSeason) << ",\n  \"lod\": " << (P.lod ? "true" : "false") << ",\n";
+        if (P.lod) {
+            s << "  \"lodFrames\": {\"poses\": " << f.poses << ", \"median\": " << json::num(f.median) << ", \"p95\": " << json::num(f.p95) << ", \"max\": " << json::num(f.max)
+              << ", \"allAroundMedian\": " << json::num(f.allAroundMedian) << ", \"allAroundMax\": " << json::num(f.allAroundMax) << ", \"allLevel0\": " << json::num(f.allLevel0)
+              << ", \"allLevel1\": " << json::num(f.allLevel1) << ", \"allLevel2\": " << json::num(f.allLevel2) << ", \"worstTreesPerLevel\": [" << f.worstTreesPerLevel[0] << ", " << f.worstTreesPerLevel[1] << ", "
+              << f.worstTreesPerLevel[2] << "]},\n";
+        }
+    }
     s << "  \"totalMs\": " << json::num(r.ms) << "\n}\n";
     const std::string stats = s.str();
     if (!writeFile(a.str("stats"), stats.data(), stats.size())) throw VegetationError("io", "cannot write " + a.str("stats"));

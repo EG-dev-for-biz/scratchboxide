@@ -94,7 +94,10 @@ describe('SB-Veggie Parametric Botanical Synthesis & Inversion Engine (C++20 & N
         expect(veggieContent).toContain('class SbVeggieEvaluator');
         expect(veggieContent).toContain('struct SbVeggieTemplate');
         expect(veggieContent).toContain('struct SbVeggieParams');
-        expect(veggieContent).toContain('enum class SbVeggieArchetype');
+        // tree form is continuous: a morphology struct, and no closed archetype or leaf-morphology class
+        expect(veggieContent).toContain('struct SbVeggieMorphology');
+        expect(veggieContent).toContain('class SbVeggieFoliage');
+        expect(veggieContent).not.toMatch(/SbVeggieArchetype|leafMorphology/);
 
         // Canonical SB-Veggie Optimizer header
         const veggieOptHeaderPath = path.join(sdkInclude, 'scratchbox_sb_veggie_optimizer.hpp');
@@ -124,7 +127,6 @@ describe('SB-Veggie Parametric Botanical Synthesis & Inversion Engine (C++20 & N
 
     it('3. should synthesize neutral canonical Decurrent Oak tree with valid glTF 2.0 binary', async () => {
         const result = await service.synthesizeTree({
-            archetype: 'decurrent',
             phenology: {
                 season: 1.0,
                 generateLeaves: true
@@ -152,7 +154,6 @@ describe('SB-Veggie Parametric Botanical Synthesis & Inversion Engine (C++20 & N
     it('4. should morph tree shape via morphological parameters (beta)', async () => {
         // High DBH and high crown spread
         const resultMorphed = await service.synthesizeTree({
-            archetype: 'decurrent',
             shape: {
                 dbhCaliper: 1.5,
                 crownSpread: 1.8,
@@ -175,7 +176,6 @@ describe('SB-Veggie Parametric Botanical Synthesis & Inversion Engine (C++20 & N
 
     it('5. should support seasonal winter defoliation (bare branches)', async () => {
         const resultWinter = await service.synthesizeTree({
-            archetype: 'decurrent',
             phenology: {
                 season: 0.0,
                 generateLeaves: false

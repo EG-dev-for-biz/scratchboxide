@@ -50,6 +50,8 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <functional>
+#include <unordered_map>
 #include <vector>
 
 namespace scratchbox {
@@ -292,12 +294,36 @@ struct StagedPrimitive {
     std::vector<std::array<uint8_t, 4>> colors;      // optional COLOR_0 (RGBA 0..255)
     std::vector<std::array<float, 2>> reveal;        // optional _REVEAL (0..1 each)
     std::vector<Vec3> disp;                          // optional _DISP (metres)
+    // Reuses the buffers of a primitive written earlier (nothing is written again): the node named here must be in the same
+    // frameGroup, and `reuseIndex` counts that node's written primitives. All other members are then empty.
+    std::string reuseNode;
+    size_t reuseIndex{0};
+};
+
+/** Copies of a library mesh (EXT_mesh_gpu_instancing), in the tile frame; the writer expresses them in the parent node's frame. */
+struct StagedInstances {
+    std::string libraryMesh;                         // WriteOptions::library name
+    std::vector<Vec3> translations;
+    std::vector<std::array<float, 4>> rotations;     // x, y, z, w (unit quaternions)
+    std::vector<Vec3> scales;
+    std::vector<std::array<float, 2>> reveal;        // optional `_REVEAL` per instance (VEC2 UNSIGNED_SHORT normalised)
+    std::string sameDataAs;                          // the name of an earlier node whose instance data this one reuses (nothing is written again)
 };
 
 struct StagedNode {
     std::string name;
     std::vector<StagedPrimitive> primitives;
-    std::string extrasJson;                          // the node's extras object (must hold "sb"); empty: none
+    std::string extrasJson;                          // the node's extras object; a top-level node must hold "sb"; empty: none
+    std::vector<StagedNode> children;                // child nodes (level-of-detail nodes of a tree, a tree's instanced leaf clusters)
+    std::string meshFrom;                            // the name of an earlier node whose mesh (and quantisation frame) this node shares
+    std::string frameGroup;                          // nodes with the same group share one quantisation cube (over all their own primitives), so they can share primitives
+    std::vector<StagedInstances> instances;          // at most one: the node instances a library mesh (and then holds no primitives)
+};
+
+/** A mesh written once and instanced by nodes (always float positions: it is small, and instances carry its scale). */
+struct StagedLibraryMesh {
+    std::string name;
+    StagedPrimitive primitive;
 };
 
 struct WriteOptions {
@@ -309,13 +335,17 @@ struct WriteOptions {
     std::string rootExtrasJson;
     std::array<double, 4> clayColor{0.55, 0.57, 0.6, 1.0};
     double clayRoughness{0.85};
+    std::vector<StagedLibraryMesh> library;          // meshes nodes instance (StagedNode::instances)
     bool quantize{false};                            // KHR_mesh_quantization (see the file comment)
     double maxPositionErrorM{0.01};                  // the largest position error a quantised write may have
 };
 
 struct WriteReport {
     size_t bytes{0};
-    size_t nodes{0}, triangles{0}, lineSegments{0}, vertices{0};
+    size_t nodes{0}, triangles{0}, lineSegments{0}, vertices{0};   // nodes: the top-level ones; triangles and vertices: stored once
+    size_t instances{0};                             // instances written (EXT_mesh_gpu_instancing)
+    size_t instancedTriangles{0};                    // triangles those instances draw
+    size_t jsonBytes{0}, binBytes{0};
     bool quantized{false};
     double maxPositionErrorM{0};                     // measured on the written values (0 unquantised)
     double maxNormalErrorDeg{0};
@@ -339,6 +369,30 @@ struct Builder {
         if (target) v.i("target", target);
         views.push_back(v.text());
         return static_cast<int>(views.size()) - 1;
+    }
+
+    /** Reserves a buffer view's place in the list now (its accessors can refer to it), to be filled later by fillView. */
+    int reserveView() {
+        views.push_back(std::string());
+        return static_cast<int>(views.size()) - 1;
+    }
+    void fillView(int index, const void* data, size_t bytes) {
+        while (bin.size() % 4) bin.push_back(0);
+        const size_t offset = bin.size();
+        const auto* p = static_cast<const uint8_t*>(data);
+        bin.insert(bin.end(), p, p + bytes);
+        json::Object v;
+        v.i("buffer", 0).i("byteOffset", static_cast<long long>(offset)).i("byteLength", static_cast<long long>(bytes));
+        views[static_cast<size_t>(index)] = v.text();
+    }
+
+    /** An accessor into a view at a byte offset into it. */
+    int addAccessorAt(int view, size_t byteOffset, int componentType, size_t count, const char* type, bool normalized) {
+        json::Object a;
+        a.i("bufferView", view).i("byteOffset", static_cast<long long>(byteOffset)).i("componentType", componentType).i("count", static_cast<long long>(count)).s("type", type);
+        if (normalized) a.b("normalized", true);
+        accessors.push_back(a.text());
+        return static_cast<int>(accessors.size()) - 1;
     }
 
     int addAccessor(int view, int componentType, size_t count, const char* type, bool normalized,
@@ -410,7 +464,95 @@ inline std::vector<uint8_t> write(const std::vector<StagedNode>& nodesIn, const 
     rep.quantized = opt.quantize;
     detail::Builder gb;
     std::vector<std::string> meshes, nodes, children;
-    for (const auto& node : nodesIn) {
+    // library meshes (instanced by nodes): float positions and normals, written once
+    std::unordered_map<std::string, int> libraryMesh;
+    std::unordered_map<std::string, size_t> libraryTriangles;
+    for (const auto& lm : opt.library) {
+        const StagedPrimitive& pr = lm.primitive;
+        const size_t nv = pr.positions.size();
+        if (pr.mode != 4 || nv == 0 || pr.indices.empty() || pr.indices.size() % 3) throw StagedGlbError("library mesh '" + lm.name + "' is not a non-empty triangle list");
+        for (uint32_t i : pr.indices) if (i >= nv) throw StagedGlbError("library mesh '" + lm.name + "': index " + std::to_string(i) + " is past its " + std::to_string(nv) + " vertices");
+        if (libraryMesh.count(lm.name)) throw StagedGlbError("library mesh '" + lm.name + "' is given twice");
+        const std::vector<Vec3> computed = pr.normals.empty() ? detail::vertexNormals(pr.positions, pr.indices) : std::vector<Vec3>();
+        const std::vector<Vec3>& nrm = pr.normals.empty() ? computed : pr.normals;
+        if (nrm.size() != nv) throw StagedGlbError("library mesh '" + lm.name + "': " + std::to_string(nrm.size()) + " normals for " + std::to_string(nv) + " vertices");
+        std::vector<float> f(nv * 3), g(nv * 3);
+        std::vector<double> flo(3, std::numeric_limits<double>::infinity()), fhi(3, -std::numeric_limits<double>::infinity());
+        for (size_t v = 0; v < nv; ++v) {
+            const float p3[3] = {pr.positions[v].x, pr.positions[v].y, pr.positions[v].z};
+            Vec3 u = nrm[v];
+            const float l = u.length();
+            u = l > 1e-12f ? u / l : Vec3(0, 1, 0);
+            for (int a = 0; a < 3; ++a) {
+                f[v * 3 + static_cast<size_t>(a)] = p3[a];
+                flo[static_cast<size_t>(a)] = std::min(flo[static_cast<size_t>(a)], static_cast<double>(p3[a]));
+                fhi[static_cast<size_t>(a)] = std::max(fhi[static_cast<size_t>(a)], static_cast<double>(p3[a]));
+            }
+            g[v * 3] = u.x; g[v * 3 + 1] = u.y; g[v * 3 + 2] = u.z;
+        }
+        json::Object attrs;
+        attrs.i("POSITION", gb.addAccessor(gb.addView(f.data(), f.size() * 4, 34962), 5126, nv, "VEC3", false, &flo, &fhi));
+        attrs.i("NORMAL", gb.addAccessor(gb.addView(g.data(), g.size() * 4, 34962), 5126, nv, "VEC3", false));
+        int indexAccessor;
+        if (nv < 65535) {
+            std::vector<uint16_t> ix(pr.indices.begin(), pr.indices.end());
+            indexAccessor = gb.addAccessor(gb.addView(ix.data(), ix.size() * 2, 34963), 5123, ix.size(), "SCALAR", false);
+        } else {
+            indexAccessor = gb.addAccessor(gb.addView(pr.indices.data(), pr.indices.size() * 4, 34963), 5125, pr.indices.size(), "SCALAR", false);
+        }
+        json::Object p;
+        p.raw("attributes", attrs.text()).i("indices", indexAccessor).i("material", 0).i("mode", 4);
+        json::Object m;
+        m.s("name", lm.name).raw("primitives", json::array({p.text()}));
+        meshes.push_back(m.text());
+        libraryMesh[lm.name] = static_cast<int>(meshes.size()) - 1;
+        libraryTriangles[lm.name] = pr.indices.size() / 3;
+    }
+
+    // quantisation cubes shared by frame groups: the bounds of every primitive of every node in the group
+    std::unordered_map<std::string, std::array<double, 6>> groupBounds;
+    std::function<void(const StagedNode&)> collectGroups = [&](const StagedNode& n) {
+        if (!n.frameGroup.empty()) {
+            auto it = groupBounds.emplace(n.frameGroup, std::array<double, 6>{std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(),
+                                                                                -std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()}).first;
+            for (const auto& pr : n.primitives) {
+                for (const auto& p : pr.positions) {
+                    const double v[3] = {p.x, p.y, p.z};
+                    for (int a = 0; a < 3; ++a) {
+                        it->second[static_cast<size_t>(a)] = std::min(it->second[static_cast<size_t>(a)], v[a]);
+                        it->second[static_cast<size_t>(3 + a)] = std::max(it->second[static_cast<size_t>(3 + a)], v[a]);
+                    }
+                }
+            }
+        }
+        for (const auto& c : n.children) collectGroups(c);
+    };
+    for (const auto& n : nodesIn) collectGroups(n);
+    std::unordered_map<std::string, std::vector<std::string>> writtenPrimitives;  // node name -> its primitives' JSON, for reuse
+
+    // a node's quantisation frame (its children's instances are expressed in it), and what a node that shares its mesh needs
+    struct Frame { bool quant{false}; double c[3]{0, 0, 0}; double h{1}; };
+    struct Emitted { int mesh{-1}; Frame frame; };
+    std::unordered_map<std::string, Emitted> emitted;
+    // every instance of the file lives in four shared buffer views (translations, rotations, scales, reveal), each node's
+    // accessors pointing into them: the document names four views, not four per instanced node
+    std::vector<float> instT, instS;
+    std::vector<int16_t> instR;
+    std::vector<uint16_t> instV;
+    std::function<bool(const StagedNode&)> hasInstances = [&](const StagedNode& n) {
+        if (!n.instances.empty()) return true;
+        for (const auto& c : n.children) if (hasInstances(c)) return true;
+        return false;
+    };
+    bool anyInstances = false;
+    for (const auto& n : nodesIn) anyInstances = anyInstances || hasInstances(n);
+    const int viewT = anyInstances ? gb.reserveView() : -1, viewR = anyInstances ? gb.reserveView() : -1, viewS = anyInstances ? gb.reserveView() : -1, viewV = anyInstances ? gb.reserveView() : -1;
+    struct InstanceData { std::array<int, 4> acc{-1, -1, -1, -1}; size_t n{0}; };  // TRANSLATION, ROTATION, SCALE, _REVEAL (-1: none)
+    std::unordered_map<std::string, InstanceData> instanceAccessors;  // by node name
+    bool usesInstancing = false;
+    std::function<int(const StagedNode&, const Frame&)> emit = [&](const StagedNode& node, const Frame& parentFrame) -> int {
+        const int myIndex = static_cast<int>(nodes.size()) + 1;  // the root node is node 0
+        nodes.push_back(std::string());
         // validate, and the node's bounding cube when quantising
         double lo[3] = {std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity()};
         double hi[3] = {-std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()};
@@ -434,9 +576,15 @@ inline std::vector<uint8_t> write(const std::vector<StagedNode>& nodesIn, const 
             }
             nodeVerts += nv;
         }
+        bool reuses = false;
+        for (const auto& pr : node.primitives) reuses = reuses || !pr.reuseNode.empty();
+        if (!node.frameGroup.empty()) {
+            const auto& gbnd = groupBounds.at(node.frameGroup);
+            for (int a = 0; a < 3; ++a) { lo[a] = gbnd[static_cast<size_t>(a)]; hi[a] = gbnd[static_cast<size_t>(3 + a)]; }
+        }
         // node transform (quantised): centre and uniform half extent, both float32 as the loader keeps them on the GPU
         double centre[3] = {0, 0, 0}, half = 1.0;
-        const bool quantNode = opt.quantize && nodeVerts > 0;
+        const bool quantNode = opt.quantize && (nodeVerts > 0 || reuses) && std::isfinite(lo[0]);
         if (quantNode) {
             half = 0;
             for (int a = 0; a < 3; ++a) {
@@ -449,6 +597,12 @@ inline std::vector<uint8_t> write(const std::vector<StagedNode>& nodesIn, const 
 
         std::vector<std::string> prims;
         for (const auto& pr : node.primitives) {
+            if (!pr.reuseNode.empty()) {
+                auto it = writtenPrimitives.find(pr.reuseNode);
+                if (it == writtenPrimitives.end() || pr.reuseIndex >= it->second.size()) throw StagedGlbError("node '" + node.name + "' reuses primitive " + std::to_string(pr.reuseIndex) + " of '" + pr.reuseNode + "', which was not written before it");
+                prims.push_back(it->second[pr.reuseIndex]);
+                continue;
+            }
             const size_t nv = pr.positions.size();
             if (nv == 0 || pr.indices.empty()) continue;
             json::Object attrs;
@@ -561,22 +715,116 @@ inline std::vector<uint8_t> write(const std::vector<StagedNode>& nodesIn, const 
             rep.vertices += nv;
             if (pr.mode == 4) rep.triangles += pr.indices.size() / 3; else rep.lineSegments += pr.indices.size() / 2;
         }
+        writtenPrimitives[node.name] = prims;
         json::Object nd;
         nd.s("name", node.name);
-        if (!prims.empty()) {
+        Frame thisFrame;
+        if (!node.meshFrom.empty()) {
+            if (!prims.empty()) throw StagedGlbError("node '" + node.name + "' shares the mesh of '" + node.meshFrom + "' and holds primitives of its own");
+            auto it = emitted.find(node.meshFrom);
+            if (it == emitted.end()) throw StagedGlbError("node '" + node.name + "' shares the mesh of '" + node.meshFrom + "', which was not written before it");
+            thisFrame = it->second.frame;
+            nd.i("mesh", it->second.mesh);
+            if (thisFrame.quant) {
+                nd.raw("translation", "[" + json::num(thisFrame.c[0]) + "," + json::num(thisFrame.c[1]) + "," + json::num(thisFrame.c[2]) + "]");
+                nd.raw("scale", "[" + json::num(thisFrame.h) + "," + json::num(thisFrame.h) + "," + json::num(thisFrame.h) + "]");
+            }
+        } else if (!prims.empty()) {
             json::Object m;
             m.s("name", node.name).raw("primitives", json::array(prims));
             meshes.push_back(m.text());
             nd.i("mesh", static_cast<long long>(meshes.size()) - 1);
+            thisFrame.quant = quantNode;
+            thisFrame.c[0] = centre[0]; thisFrame.c[1] = centre[1]; thisFrame.c[2] = centre[2]; thisFrame.h = half;
             if (quantNode) {
                 nd.raw("translation", "[" + json::num(centre[0]) + "," + json::num(centre[1]) + "," + json::num(centre[2]) + "]");
                 nd.raw("scale", "[" + json::num(half) + "," + json::num(half) + "," + json::num(half) + "]");
             }
+            emitted[node.name] = Emitted{static_cast<int>(meshes.size()) - 1, thisFrame};
         }
         if (!node.extrasJson.empty()) nd.raw("extras", node.extrasJson);
-        nodes.push_back(nd.text());
-        children.push_back(std::to_string(nodes.size()));  // the root node is node 0
+        // instances: EXT_mesh_gpu_instancing, in the parent's frame (a quantised parent's translation and uniform scale undone)
+        if (!node.instances.empty()) {
+            if (node.instances.size() > 1) throw StagedGlbError("node '" + node.name + "' instances more than one library mesh");
+            if (!prims.empty() || !node.meshFrom.empty()) throw StagedGlbError("node '" + node.name + "' instances a library mesh and holds a mesh of its own");
+            const StagedInstances& si = node.instances.front();
+            auto lib = libraryMesh.find(si.libraryMesh);
+            if (lib == libraryMesh.end()) throw StagedGlbError("node '" + node.name + "' instances '" + si.libraryMesh + "', which is not in the library");
+            const size_t n = si.translations.size();
+            std::array<int, 4> acc{-1, -1, -1, -1};
+            size_t count = n;
+            if (!si.sameDataAs.empty()) {
+                auto it = instanceAccessors.find(si.sameDataAs);
+                if (it == instanceAccessors.end()) throw StagedGlbError("node '" + node.name + "' reuses the instances of '" + si.sameDataAs + "', which were not written before it");
+                acc = it->second.acc;
+                count = it->second.n;
+            } else {
+                if (n == 0 || si.rotations.size() != n || si.scales.size() != n || (!si.reveal.empty() && si.reveal.size() != n)) {
+                    throw StagedGlbError("node '" + node.name + "': instance attributes differ in length (" + std::to_string(n) + " translations, " + std::to_string(si.rotations.size()) + " rotations, " +
+                                         std::to_string(si.scales.size()) + " scales)");
+                }
+                const double inv = parentFrame.quant ? 1.0 / parentFrame.h : 1.0;
+                const size_t base = instT.size() / 3;
+                instT.resize(instT.size() + n * 3);
+                instS.resize(instS.size() + n * 3);
+                instR.resize(instR.size() + n * 4);
+                for (size_t i = 0; i < n; ++i) {
+                    const Vec3& tr = si.translations[i];
+                    const double w[3] = {tr.x, tr.y, tr.z};
+                    for (int a = 0; a < 3; ++a) instT[(base + i) * 3 + static_cast<size_t>(a)] = static_cast<float>(parentFrame.quant ? (w[a] - parentFrame.c[a]) * inv : w[a]);
+                    instS[(base + i) * 3] = static_cast<float>(si.scales[i].x * inv); instS[(base + i) * 3 + 1] = static_cast<float>(si.scales[i].y * inv); instS[(base + i) * 3 + 2] = static_cast<float>(si.scales[i].z * inv);
+                    double l2 = 0;
+                    for (int a = 0; a < 4; ++a) l2 += static_cast<double>(si.rotations[i][static_cast<size_t>(a)]) * si.rotations[i][static_cast<size_t>(a)];
+                    const double il = l2 > 0 ? 1.0 / std::sqrt(l2) : 1.0;
+                    for (int a = 0; a < 4; ++a) instR[(base + i) * 4 + static_cast<size_t>(a)] = detail::snorm16(si.rotations[i][static_cast<size_t>(a)] * il);
+                    if (!std::isfinite(instT[(base + i) * 3]) || !std::isfinite(instT[(base + i) * 3 + 1]) || !std::isfinite(instT[(base + i) * 3 + 2])) throw StagedGlbError("node '" + node.name + "' has a non-finite instance translation");
+                }
+                acc[0] = gb.addAccessorAt(viewT, base * 12, 5126, n, "VEC3", false);
+                acc[1] = gb.addAccessorAt(viewR, base * 8, 5122, n, "VEC4", true);
+                acc[2] = gb.addAccessorAt(viewS, base * 12, 5126, n, "VEC3", false);
+                if (!si.reveal.empty()) {
+                    // reveal is written for every instance of the file or none (a view is one array): a node without it gets zeros
+                    instV.resize(base * 2, 0);
+                    for (size_t i = 0; i < n; ++i) {
+                        if (!std::isfinite(si.reveal[i][0]) || !std::isfinite(si.reveal[i][1])) throw StagedGlbError("node '" + node.name + "' has a non-finite instance _REVEAL value");
+                        instV.push_back(unorm16(si.reveal[i][0]));
+                        instV.push_back(unorm16(si.reveal[i][1]));
+                    }
+                    acc[3] = gb.addAccessorAt(viewV, base * 4, 5123, n, "VEC2", true);
+                }
+                instanceAccessors[node.name] = InstanceData{acc, n};
+                rep.instances += n;
+            }
+            rep.instancedTriangles += count * libraryTriangles[si.libraryMesh];
+            usesInstancing = true;
+            nd.i("mesh", lib->second);
+            json::Object at;
+            at.i("TRANSLATION", acc[0]).i("ROTATION", acc[1]).i("SCALE", acc[2]);
+            if (acc[3] >= 0) at.i("_REVEAL", acc[3]);
+            json::Object inst;
+            inst.raw("attributes", at.text());
+            json::Object ext;
+            ext.raw("EXT_mesh_gpu_instancing", inst.text());
+            nd.raw("extensions", ext.text());
+        }
+        if (!node.children.empty()) {
+            std::vector<std::string> kids;
+            for (const auto& c : node.children) kids.push_back(std::to_string(emit(c, thisFrame)));
+            nd.raw("children", json::array(kids));
+        }
+        nodes[static_cast<size_t>(myIndex - 1)] = nd.text();
+        return myIndex;
+    };
+    for (const auto& node : nodesIn) {
+        children.push_back(std::to_string(emit(node, Frame{})));
         ++rep.nodes;
+    }
+    if (usesInstancing) {
+        gb.fillView(viewT, instT.data(), instT.size() * 4);
+        gb.fillView(viewR, instR.data(), instR.size() * 2);
+        gb.fillView(viewS, instS.data(), instS.size() * 4);
+        if (instV.empty()) instV.push_back(0);   // no node carries _REVEAL: the view is a placeholder nothing refers to
+        gb.fillView(viewV, instV.data(), instV.size() * 2);
     }
     if (opt.quantize && rep.maxPositionErrorM > opt.maxPositionErrorM) {
         throw StagedGlbError("quantised positions are off by up to " + json::num(rep.maxPositionErrorM) + " m, over the " + json::num(opt.maxPositionErrorM) + " m allowed");
@@ -592,7 +840,13 @@ inline std::vector<uint8_t> write(const std::vector<StagedNode>& nodesIn, const 
         asset.raw("extras", "{\"scratchbox\":{\"quantization\":" + q.text() + "}}");
     }
     std::string j = "{\"asset\":" + asset.text() + ",";
-    if (opt.quantize) j += "\"extensionsUsed\":[\"KHR_mesh_quantization\"],\"extensionsRequired\":[\"KHR_mesh_quantization\"],";
+    if (opt.quantize || usesInstancing) {
+        std::vector<std::string> used;
+        if (opt.quantize) used.push_back("\"KHR_mesh_quantization\"");
+        if (usesInstancing) used.push_back("\"EXT_mesh_gpu_instancing\"");
+        j += "\"extensionsUsed\":" + json::array(used) + ",";
+        if (opt.quantize) j += "\"extensionsRequired\":[\"KHR_mesh_quantization\"],";
+    }
     j += "\"scene\":0,\"scenes\":[{\"nodes\":[0]" + (opt.rootExtrasJson.empty() ? std::string() : ",\"extras\":" + opt.rootExtrasJson) + "}],\"nodes\":[";
     {
         json::Object root;
@@ -617,6 +871,8 @@ inline std::vector<uint8_t> write(const std::vector<StagedNode>& nodesIn, const 
     }
     if (!opt.rootExtrasJson.empty()) j += ",\"extras\":" + opt.rootExtrasJson;
     j += "}";
+    rep.jsonBytes = j.size();
+    rep.binBytes = gb.bin.size();
     std::vector<uint8_t> out = gb.finish(j);
     rep.bytes = out.size();
     if (reportOut) *reportOut = rep;

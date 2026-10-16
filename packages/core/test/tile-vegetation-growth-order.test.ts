@@ -64,14 +64,24 @@ function writeCrowns(name: string, crowns: any[]): string {
     return name;
 }
 
-/** Per tree node of a trees GLB: its rank-order extras and its primitives' _REVEAL values. */
-function revealOf(file: string): Array<{ node: any; reveal: Float64Array[]; positions: Float64Array[] }> {
+/**
+ * Per tree node of a trees GLB: its rank-order extras and the _REVEAL values of its wood and its leaf masses. A tree with
+ * levels holds its wood in level 0 (shared by levels 1 and 2) and its blob leaf masses in level 2.
+ */
+function revealOf(file: string): Array<{ node: any; reveal: Float64Array[]; positions: Float64Array[]; instanceReveal: Float64Array[] }> {
     const { json, bin } = parseGlb(fs.readFileSync(file));
-    return json.nodes.filter((n: any) => n.extras?.sb?.revealKind === 'grow').map((n: any) => ({
-        node: n,
-        reveal: json.meshes[n.mesh].primitives.map((p: any) => readAccessor(json, bin, p.attributes._REVEAL).data),
-        positions: json.meshes[n.mesh].primitives.map((p: any) => readAccessor(json, bin, p.attributes.POSITION).data)
-    }));
+    return json.nodes.filter((n: any) => n.extras?.sb?.revealKind === 'grow').map((n: any) => {
+        const kids = (n.children ?? []).map((i: number) => json.nodes[i]);
+        const l0 = kids.find((k: any) => k.extras?.sbLod?.level === 0), l2 = kids.find((k: any) => k.extras?.sbLod?.level === 2);
+        const prims = [json.meshes[l0.mesh].primitives[0], ...json.meshes[l2.mesh].primitives.slice(1)];
+        const inst = (l0.children ?? []).map((i: number) => json.nodes[i].extensions.EXT_mesh_gpu_instancing.attributes._REVEAL).filter((a: any) => a !== undefined);
+        return {
+            node: n,
+            reveal: prims.map((p: any) => readAccessor(json, bin, p.attributes._REVEAL).data),
+            positions: prims.map((p: any) => readAccessor(json, bin, p.attributes.POSITION).data),
+            instanceReveal: inst.map((a: number) => readAccessor(json, bin, a).data)
+        };
+    });
 }
 
 beforeAll(async () => {
@@ -91,7 +101,7 @@ describe('the trees layer carries its real growth order', () => {
         const planted = await svc.plant({ crownsPath: writeCrowns('three.json', CROWNS), triangleBudget: 9000, seed: 'abc', quantize: false });
         const trees = revealOf(planted.treesGlb);
         expect(trees).toHaveLength(3);
-        trees.forEach(({ node, reveal }, rank) => {
+        trees.forEach(({ node, reveal, instanceReveal }, rank) => {
             expect(node.extras.sb.buildOrder).toBe(rank);
             expect(node.extras.sb.reveal).toEqual({ attribute: '_REVEAL', displacement: null, durationShare: 1 });
             expect(validateContract('StagedNodeExtras', node.extras)).toEqual([]);
@@ -117,6 +127,16 @@ describe('the trees layer carries its real growth order', () => {
             let foliageMin = Infinity;
             for (let v = 1; v < foliage.length; v += 2) foliageMin = Math.min(foliageMin, foliage[v]);
             expect(foliageMin).toBeGreaterThan(0);
+            // the instances carry it too: x the plant rank, y the growth order of the skeleton node they hang from
+            expect(instanceReveal.length).toBeGreaterThan(1);
+            for (const r of instanceReveal) {
+                expect(r.length).toBeGreaterThan(0);
+                for (let v = 0; v < r.length; v += 2) {
+                    expect(Math.abs(r[v] - rank / 2)).toBeLessThanOrEqual(1 / 65535);
+                    expect(r[v + 1]).toBeGreaterThanOrEqual(0);
+                    expect(r[v + 1]).toBeLessThanOrEqual(1);
+                }
+            }
         });
         // the tree drawn at three moments of its growth (triangles whose every vertex has grown)
         fs.mkdirSync(SHOTS, { recursive: true });
@@ -144,7 +164,7 @@ describe('the trees layer carries its real growth order', () => {
         const withOrder = await svc.plant({ crownsPath: writeCrowns('same.json', CROWNS), triangleBudget: 9000, seed: '5eed', quantize: false });
         const without = await svc.plant({ crownsPath: writeCrowns('same.json', CROWNS), triangleBudget: 9000, seed: '5eed', quantize: false, reveal: false });
         const a = parseGlb(fs.readFileSync(withOrder.treesGlb)), b = parseGlb(fs.readFileSync(without.treesGlb));
-        const meshesA = a.json.nodes.filter((n: any) => n.mesh !== undefined), meshesB = b.json.nodes.filter((n: any) => n.mesh !== undefined);
+        const meshesA = a.json.nodes.filter((n: any) => n.mesh !== undefined && n.extras?.sbLod), meshesB = b.json.nodes.filter((n: any) => n.mesh !== undefined && n.extras?.sbLod);
         expect(meshesA.length).toBe(meshesB.length);
         for (let k = 0; k < meshesA.length; k++) {
             const pa = a.json.meshes[meshesA[k].mesh].primitives, pb = b.json.meshes[meshesB[k].mesh].primitives;
@@ -154,15 +174,15 @@ describe('the trees layer carries its real growth order', () => {
                 expect(Array.from(readAccessor(a.json, a.bin, pa[j].indices).data)).toEqual(Array.from(readAccessor(b.json, b.bin, pb[j].indices).data));
                 expect(pb[j].attributes._REVEAL).toBeUndefined();
             }
-            expect(meshesB[k].extras.sb.reveal.attribute).toBeNull();
         }
+        for (const t of b.json.nodes.filter((n: any) => n.extras?.sb?.revealKind === 'grow')) expect(t.extras.sb.reveal.attribute).toBeNull();
         expect(without.stats.triangles).toBe(withOrder.stats.triangles);
     }, 300_000);
 
     it('orders one tree at 0 and two at 0 and 1, never NaN', async () => {
         const one = revealOf((await svc.plant({ crownsPath: writeCrowns('one.json', [CROWNS[0]]), triangleBudget: 3000, seed: '1' })).treesGlb);
         expect(one).toHaveLength(1);
-        for (const r of one[0].reveal) for (let v = 0; v < r.length; v += 2) expect(r[v]).toBe(0);
+        for (const r of [...one[0].reveal, ...one[0].instanceReveal]) for (let v = 0; v < r.length; v += 2) expect(r[v]).toBe(0);
         expect(one[0].node.extras.sb).toMatchObject({ buildOrder: 0, buildCount: 1 });
         const two = revealOf((await svc.plant({ crownsPath: writeCrowns('two.json', CROWNS.slice(0, 2)), triangleBudget: 6000, seed: '1' })).treesGlb);
         expect(two.map(t => t.reveal[0][0])).toEqual([0, 1]);
@@ -210,24 +230,33 @@ describe('the trees layer carries its real growth order', () => {
         expect(gltf.userData.sb).toMatchObject({ schema: 'scratchbox.staged-glb/2', stage: 'trees' });
         expect(gltf.scene.userData.sb).toMatchObject({ schema: 'scratchbox.staged-glb/2', stage: 'trees' });
         gltf.scene.updateMatrixWorld(true);
+        // the blob level (level 2) of every tree, as the loader gives it, against the unquantised file's
         const plain = readGlbTriangles(fs.readFileSync((await svc.plant({ crownsPath: 'loader.json', triangleBudget: 9000, seed: 'abc', quantize: false })).treesGlb));
-        let meshes = 0, worst = 0, offset = 0;
-        gltf.scene.traverse((o: any) => {
-            if (!o.isMesh) return;
-            meshes++;
-            const g = o.geometry as InstanceType<typeof THREE.BufferGeometry>;
-            expect(g.getAttribute('_reveal')).toBeDefined();
-            expect(g.getAttribute('_reveal').itemSize).toBe(2);
-            const pos = g.getAttribute('position');
-            const v = new THREE.Vector3();
-            for (let i = 0; i < pos.count; i++) {
-                v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
-                const k = (offset + i) * 3;
-                worst = Math.max(worst, Math.hypot(v.x - plain.positions[k], v.y - plain.positions[k + 1], v.z - plain.positions[k + 2]));
+        const level2: any[] = [];
+        gltf.scene.traverse((o: any) => { if (typeof o.name === 'string' && o.name.endsWith('_lod2')) level2.push(o); });
+        expect(level2).toHaveLength(3);
+        let worst = 0, offset = 0, meshes = 0, instanced = 0;
+        for (const holder of level2) {
+            const ms: any[] = [];
+            holder.traverse((o: any) => { if (o.isMesh) ms.push(o); });
+            for (const o of ms) {
+                meshes++;
+                const g = o.geometry as InstanceType<typeof THREE.BufferGeometry>;
+                expect(g.getAttribute('_reveal')).toBeDefined();
+                expect(g.getAttribute('_reveal').itemSize).toBe(2);
+                const pos = g.getAttribute('position');
+                const v = new THREE.Vector3();
+                for (let i = 0; i < pos.count; i++) {
+                    v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
+                    const k = (offset + i) * 3;
+                    worst = Math.max(worst, Math.hypot(v.x - plain.positions[k], v.y - plain.positions[k + 1], v.z - plain.positions[k + 2]));
+                }
+                offset += pos.count;
             }
-            offset += pos.count;
-        });
+        }
+        gltf.scene.traverse((o: any) => { if (o.isInstancedMesh) { instanced++; expect(o.count).toBeGreaterThan(0); } });
         expect(meshes).toBe(6);
+        expect(instanced).toBeGreaterThan(6);
         expect(worst).toBeLessThan(0.001);
         const parents = new Set<any>();
         gltf.scene.traverse((o: any) => { if (o.userData?.sb?.revealKind === 'grow') parents.add(o.userData.crownId); });
