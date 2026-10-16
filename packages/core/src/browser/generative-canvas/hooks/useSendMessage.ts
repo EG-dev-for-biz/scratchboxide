@@ -55,6 +55,8 @@ import { resolveModeForArtifact } from '../guardrails-service';
 import { cleanMessageTextSmart } from '../ChatMarkdownRenderer';
 import { ProjectArtifactController } from '../project-artifact-controller';
 import { WorkspaceConfigClient } from '../workspace-config-client';
+import { markStagedRun, publishStageEvent, settleStagedRunInSession } from '../primitives/scene3d/stagedBuild/stagedBuildState';
+import type { StageEvent } from '../../../common/spatial/staged-location-contracts';
 import { ProjectItem } from '../ProjectsModal';
 
 type Setter<T> = (value: T | ((prev: T) => T)) => void;
@@ -464,6 +466,7 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                 if (signal.aborted) {
                     return;
                 }
+                publishStageEvent((event as { stageEvent?: StageEvent }).stageEvent);
                 const visible = targetVisible();
                 const isReplyText = !!event.text && event.type !== 'status' && event.type !== 'thought' && event.type !== 'subagent_start' && event.type !== 'subagent_done';
                 if (event.artifact || event.mcpExecution || event.type === 'delta' || isReplyText) {
@@ -897,7 +900,7 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
             const latest = depsRef.current;
             const stopped = buildStoppedReply(partialReplyFrom(ctx));
             settleGlobalExecutions(latest, ctx.progress, USER_STOP);
-            commitAssistantMessage(latest, ctx, stopped, ctx.progress.artifact);
+            commitAssistantMessage(latest, ctx, stopped, markStagedRun(ctx.progress.artifact, 'stopped'));
         };
         const onAbort = () => {
             if (!userStopsRef.current.has(signal)) {
@@ -932,6 +935,7 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
                 resetLiveState();
             }
         } finally {
+            settleStagedRunInSession(depsRef.current, ctx.progress.artifact, 'interrupted');
             releaseController();
         }
     }, [abortInFlight]);

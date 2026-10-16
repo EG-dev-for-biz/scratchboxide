@@ -48,9 +48,13 @@ export function isInterrupted(state: StagedBuildState, pageLoadedAtMs: number): 
     return state.runState === 'running' && state.updatedAtMs < pageLoadedAtMs;
 }
 
-/** The run is over (finished, stopped, failed or interrupted): committed layers show their end state. */
+/**
+ * Committed layers show their end state at once: the run was stopped, failed or interrupted, or it finished before
+ * this page loaded (a saved scene reopened is not replayed; "Replay build" does that on request).
+ */
 export function isRunSettled(state: StagedBuildState, pageLoadedAtMs: number): boolean {
-    return state.runState === 'stopped' || state.runState === 'failed' || isInterrupted(state, pageLoadedAtMs);
+    if (state.runState === 'stopped' || state.runState === 'failed' || isInterrupted(state, pageLoadedAtMs)) return true;
+    return state.runState === 'finished' && state.updatedAtMs < pageLoadedAtMs;
 }
 
 const STATUS_RANK: Record<StageStatus, number> = { pending: 0, running: 1, committed: 2, degraded: 2, skipped: 2, failed: 2, stopped: 2 };

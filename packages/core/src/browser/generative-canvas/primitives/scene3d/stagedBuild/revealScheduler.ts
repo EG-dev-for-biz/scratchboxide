@@ -70,10 +70,13 @@ export interface LayerRevealFrame {
     /** 0..1 of the layer's own reveal. */
     progress: number;
     /**
-     * 1 = fully present. A crossfade source falls to 0 as the layer replacing it reveals, using the dither
-     * complementary to that layer's (presenceInverted), so the two never double-draw or leave holes.
+     * 1 = fully present. A crossfade source under a uniform (stagger 0) replacement falls to 0 as that layer reveals,
+     * with the dither complementary to the replacement's, so the two never double-draw or leave holes; under a
+     * staggered replacement it stays whole until the replacement has revealed.
      */
     presence: number;
+    /** Being revealed over a crossfade source that stays drawn: drawn in front of it (polygon offset). */
+    overSource: boolean;
     /** Superseded after its replacement finished revealing: its meshes are hidden (the root stays loaded). */
     hidden: boolean;
     /** revealAfter ids this layer still waits for (a real data dependency, never timed out). */
@@ -243,6 +246,7 @@ export function stepRevealSchedule(prev: RevealSchedule | undefined, input: Reve
             objectId: id, layer, phase,
             progress: layer.retired ? 1 : progressOf(id),
             presence: 1, hidden: false, heldBy,
+            overSource: phase === 'revealing' && layer.reveal.crossfadeFrom.length > 0 && layer.reveal.stagger > 0,
             durationMs: t ? t.durationMs : effectiveDurationMs(layer),
             ...(t?.outOfOrder ? { outOfOrder: t.outOfOrder } : {}),
             ...(t?.skipped ? { skipped: t.skipped } : {}),
@@ -259,9 +263,12 @@ export function stepRevealSchedule(prev: RevealSchedule | undefined, input: Reve
             if (f.phase === 'revealed' || f.phase === 'retired') {
                 src.hidden = true;
                 src.presence = 0;
-            } else if (layer.reveal.crossfadeFrom.includes(srcId)) {
+            } else if (layer.reveal.crossfadeFrom.includes(srcId) && layer.reveal.stagger <= 0) {
+                // One uniform fade: the source takes exactly the pixels the replacing layer has not taken yet.
                 src.presence = Math.min(src.presence, 1 - f.progress);
             }
+            // A staggered replacement fades in part by part: its source stays whole underneath (the replacement is
+            // drawn in front of it) until the replacement has revealed, so no part ever shows a hole.
         }
     }
 

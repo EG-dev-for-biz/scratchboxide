@@ -164,6 +164,8 @@ import type { VectorRoadmapConfig } from '../canvas-types';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { CINEMATIC_RIGS, computeSceneBudgetTelemetry } from './scene3d/lightingRigs';
 import type { SceneBudgetTelemetry } from './scene3d/lightingRigs';
+import { useStagedBuild } from './scene3d/stagedBuild/useStagedBuild';
+import { readStagedBuild } from './scene3d/stagedBuild/stagedBuildState';
 
 // Aircraft helpers live in services/mesh/aircraft.ts (single source of truth, shared with the
 // transformer engine's sandbox template); re-exported here to keep the public API stable.
@@ -1275,7 +1277,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             const hasNewTitle = data.title && data.title !== prev.title;
             const hasNewGlb = (data.pythonGenerator?.glbBase64 && data.pythonGenerator.glbBase64 !== prev.pythonGenerator?.glbBase64) ||
                               (data.cppGenerator?.glbBase64 && data.cppGenerator.glbBase64 !== prev.cppGenerator?.glbBase64);
-            if (!hasNewPython && !hasNewCpp && !hasNewObjects && !hasNewTitle && !hasNewGlb) {
+            const hasNewStaged = !!readStagedBuild(data) && readStagedBuild(data) !== readStagedBuild(prev);
+            if (!hasNewPython && !hasNewCpp && !hasNewObjects && !hasNewTitle && !hasNewGlb && !hasNewStaged) {
                 return prev;
             }
             return {
@@ -2940,6 +2943,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         };
     }, []);
 
+    // ---- 5d. Staged location builds: each committed layer revealed in its real build order, overlay, provenance ----
+    const staged = useStagedBuild({ state: readStagedBuild(sceneData), stackRef, objectRootsRef: externalObjectsMapRef, loadStatus: externalLoadStatus, mutateSceneData, onPromptAction });
+
     // ---- 6. Custom meshes from schema (id-diffed, updated in place) ---------------
     React.useEffect(() => {
         const stack = stackRef.current;
@@ -3483,6 +3489,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 )}
                 <ViewportNotice notices={viewportNotices} />
             </div>
+            {staged.overlay({ bottomInsetPx: isTimelineDrawerOpen ? 255 : 16 })}
 
             {/* Precision Creative Vertical Tool Strip (Left Docked - 50% Compact Scale) */}
             <div className="sb-3d-toolstrip absolute top-16 left-3 z-20 flex flex-col items-center gap-0.5 p-1 rounded-xl bg-[#121216]/85 backdrop-blur-2xl border border-white/10 shadow-2xl pointer-events-auto select-none animate-fadeIn">
