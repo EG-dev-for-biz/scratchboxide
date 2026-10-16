@@ -10,6 +10,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { PROVENANCE, type StagedNodeExtras } from '../../common/spatial/staged-location-contracts';
 
 /**
  * Extracts a district of Google Photorealistic 3D Tiles at the finest level of detail the service has,
@@ -63,6 +64,8 @@ export interface ParsedLeafTile {
     worldMatrix: number[];
     image: { bytes: Buffer; mimeType: string } | null;
     copyright: string | null;
+    /** The leaf this primitive came from (LeafTileRef.id), when the caller passed it; written into the node's extras. */
+    leafId?: string;
 }
 
 export interface DistrictGlbResult {
@@ -350,11 +353,15 @@ export class GoogleTileDistrictCrawler {
         return { leaves, session, requests, excludedCoarseLeaves };
     }
 
-    /** Downloads leaf GLBs (using the cache when present), preserving the input order. */
-    async downloadLeaves(leaves: LeafTileRef[], session: string | null): Promise<Buffer[]> {
+    /**
+     * Downloads leaf GLBs (using the cache when present), preserving the input order. `onComplete(index, rank)` is
+     * called as each leaf lands: its place in `leaves` and its 0-based completion rank. The ranks vary with network
+     * timing, so they belong in a sidecar beside the district GLB and never in its bytes.
+     */
+    async downloadLeaves(leaves: LeafTileRef[], session: string | null, onComplete?: (leafIndex: number, rank: number) => void): Promise<Buffer[]> {
         if (this.cacheDir) fs.mkdirSync(this.cacheDir, { recursive: true });
         let done = 0;
-        return Promise.all(leaves.map(leaf => this.limited(async () => {
+        return Promise.all(leaves.map((leaf, i) => this.limited(async () => {
             const cachePath = this.cacheDir ? path.join(this.cacheDir, `${leaf.id}.glb`) : null;
             let bytes: Buffer | null = cachePath && fs.existsSync(cachePath) ? fs.readFileSync(cachePath) : null;
             if (!bytes) {
@@ -365,13 +372,15 @@ export class GoogleTileDistrictCrawler {
                 }
                 if (cachePath) fs.writeFileSync(cachePath, bytes);
             }
-            this.onProgress?.('download', ++done, leaves.length);
+            const rank = done++;
+            onComplete?.(i, rank);
+            this.onProgress?.('download', done, leaves.length);
             return bytes;
         })));
     }
 
     /** Parses every triangle primitive of a leaf GLB. */
-    static parseLeafGlbPrimitives(glb: Buffer): ParsedLeafTile[] {
+    static parseLeafGlbPrimitives(glb: Buffer, leafId?: string): ParsedLeafTile[] {
         if (glb.toString('utf8', 0, 4) !== 'glTF' || glb.readUInt32LE(4) !== 2) throw new Error('Not a glTF 2.0 binary');
         let offset = 12;
         let json: any = null;
@@ -438,7 +447,7 @@ export class GoogleTileDistrictCrawler {
                     const indices = prim.indices !== undefined
                         ? readIndices(prim.indices)
                         : Uint32Array.from({ length: positions.length / 3 }, (_, i) => i);
-                    out.push({ positions, uvs, indices, worldMatrix: world, image: readImage(prim.material), copyright });
+                    out.push({ positions, uvs, indices, worldMatrix: world, image: readImage(prim.material), copyright, ...(leafId ? { leafId } : {}) });
                 }
             }
             for (const child of node.children ?? []) walk(child, world);
@@ -525,8 +534,14 @@ export class GoogleTileDistrictCrawler {
             originEllipsoidalHeightM?: number;
             clay?: boolean;
             clayPreset?: string;
+            /**
+             * The staged build's first layer: the same triangles as downloaded, with no images, textures, samplers or
+             * UVs and one clay material (so the browser holds a fraction of the textured bytes). Implies `clay`.
+             */
+            geometryOnly?: boolean;
         } = {}
     ): DistrictGlbResult {
+        if (options.geometryOnly) options = { ...options, clay: true };
         if (leaves.length === 0) throw new Error('No leaf tiles to build a district from');
         const heightGuess = anchor.heightGuessM ?? 0;
         const frame0 = GoogleTileDistrictCrawler.localFrame(anchor.lat, anchor.lng, heightGuess);
@@ -543,6 +558,19 @@ export class GoogleTileDistrictCrawler {
             }
             return out;
         });
+
+        // Run-independent build order: the leaf primitives by the distance of their centroid from the anchor (the frame
+        // origin), then by leaf id. It is what the staged viewport replays; the download order is a sidecar instead.
+        const centroidDistanceM = local.map(arr => {
+            const n = Math.max(1, arr.length / 3);
+            let sx = 0, sz = 0;
+            for (let i = 0; i < arr.length; i += 3) { sx += arr[i]; sz += arr[i + 2]; }
+            return Math.round(Math.hypot(sx / n, sz / n) * 1000) / 1000;
+        });
+        const buildOrder = new Array<number>(leaves.length);
+        leaves.map((_, i) => i)
+            .sort((a, b) => centroidDistanceM[a] - centroidDistanceM[b] || (leaves[a].leafId ?? '').localeCompare(leaves[b].leafId ?? '') || a - b)
+            .forEach((li, rank) => { buildOrder[li] = rank; });
 
         const ground = options.originEllipsoidalHeightM !== undefined
             ? options.originEllipsoidalHeightM - heightGuess
@@ -658,7 +686,23 @@ export class GoogleTileDistrictCrawler {
                 materialIndex = materials.length - 1;
             }
             meshes.push({ primitives: [{ attributes, indices: indicesAccessor, mode: 4, ...(materialIndex !== undefined ? { material: materialIndex } : {}) }] });
-            nodes.push({ name: `tile_${li}`, mesh: meshes.length - 1 });
+            const nodeExtras: StagedNodeExtras = {
+                sb: {
+                    schema: 'scratchbox.staged-node/2',
+                    stage: 'tiles',
+                    provenance: {
+                        label: PROVENANCE.asScanned, measuredGeometry: true, method: 'Google Photorealistic 3D Tiles leaf, as downloaded',
+                        sources: leaf.leafId ? [{ kind: 'tile-leaf', id: leaf.leafId }] : []
+                    },
+                    buildOrder: buildOrder[li],
+                    buildCount: leaves.length,
+                    revealKind: 'appear',
+                    reveal: { attribute: null, displacement: null, durationShare: 1 / Math.max(1, leaves.length) },
+                    ids: leaf.leafId ? { leafId: leaf.leafId } : {},
+                    counts: { vertices: pos.length / 3, triangles: Math.floor(idx.length / 3) }
+                }
+            };
+            nodes.push({ name: `tile_${li}`, mesh: meshes.length - 1, extras: nodeExtras });
             nodes[0].children.push(nodes.length - 1);
 
             vertexCount += pos.length / 3;

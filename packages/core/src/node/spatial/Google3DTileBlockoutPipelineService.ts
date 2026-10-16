@@ -243,6 +243,18 @@ export interface Google3DTile3DObjectResult {
    * originEllipsoidalHeightM above the WGS84 ellipsoid, so a vertex's ellipsoid height is y + originEllipsoidalHeightM.
    */
   frame?: { lat: number; lng: number; originEllipsoidalHeightM: number; localToEcef: number[] };
+  /** The leaf tiles in the GLB, by their stable ids (direct tile crawl only). */
+  leafIds?: string[];
+  /** Data providers of the tiles, most frequent first, as Google's attribution rules require (direct tile crawl only). */
+  copyrights?: string[];
+  /** When the tiles were fetched, ISO 8601 (direct tile crawl only). */
+  fetchedAt?: string;
+  /** The largest geometric error among the leaves in the GLB, in metres (direct tile crawl only). */
+  leafGeometricErrorM?: number;
+  /** The geometry-only GLB written when `geometryGlbPath` was asked for. */
+  geometryGlbPath?: string;
+  /** {leafId: rank}: the order the leaf downloads completed in. Varies with network timing, so it is never in a GLB. */
+  downloadOrder?: Record<string, number>;
 }
 
 export interface Google3DTilesQueryOptions {
@@ -262,6 +274,11 @@ export interface Google3DTilesQueryOptions {
   enforceZeroBuildingClipping?: boolean;
   zenithAltitudeMeters?: number;
   maxLeaves?: number;
+  /**
+   * Also write the staged build's first layer here: the same triangles with no images, textures or UVs and one clay
+   * material, with run-independent node extras (stage, provenance, build order, leaf id). Direct tile crawl only.
+   */
+  geometryGlbPath?: string;
   /** Injected for tests: used for the Places lookup and the tile requests. Defaults to the global fetch. */
   fetchImpl?: typeof fetch;
   /** Stops the extraction (fetch3DObject): pending Places and tile requests are aborted and no GLB is written. */
@@ -2515,8 +2532,10 @@ export class Google3DTileBlockoutPipelineService {
       : radiusMeters;
 
     let buffers: Buffer[];
+    let downloadRanks: number[] = [];
+    const fetchedAt = new Date().toISOString();
     try {
-      buffers = await crawler.downloadLeaves(leafSubset, session);
+      buffers = await crawler.downloadLeaves(leafSubset, session, (index, rank) => { downloadRanks[index] = rank; });
     } catch (err) {
       stopIfAborted();
       throw new TileExtractionError('download', err);
@@ -2525,19 +2544,33 @@ export class Google3DTileBlockoutPipelineService {
 
     let parsed: ReturnType<typeof GoogleTileDistrictCrawler.parseLeafGlbPrimitives>;
     let district: ReturnType<typeof GoogleTileDistrictCrawler.buildDistrictGlb>;
+    let geometryDistrict: ReturnType<typeof GoogleTileDistrictCrawler.buildDistrictGlb> | undefined;
     try {
-      parsed = buffers.flatMap(b => GoogleTileDistrictCrawler.parseLeafGlbPrimitives(b));
+      parsed = buffers.flatMap((b, i) => GoogleTileDistrictCrawler.parseLeafGlbPrimitives(b, leafSubset[i].id));
       district = GoogleTileDistrictCrawler.buildDistrictGlb(parsed, anchor, {
         clay: mode === 'clay',
         clayPreset: options?.clayPreset || 'studio-grey',
         groundSearchRadiusM: Math.min(radiusMeters, 80)
       });
+      // The first staged layer is built from the same leaves in the same frame (the origin is the textured build's, so
+      // both GLBs line up exactly), so the viewer can show the tiles before the textured model is touched.
+      if (options?.geometryGlbPath) {
+        geometryDistrict = GoogleTileDistrictCrawler.buildDistrictGlb(parsed, anchor, {
+          geometryOnly: true,
+          clayPreset: options?.clayPreset || 'studio-grey',
+          originEllipsoidalHeightM: district.originEllipsoidalHeightM
+        });
+      }
     } catch (err) {
       throw new TileExtractionError('parse', err);
     }
 
     fs.mkdirSync(path.dirname(outputGlbPath), { recursive: true });
     fs.writeFileSync(outputGlbPath, district.glb);
+    if (options?.geometryGlbPath && geometryDistrict) {
+      fs.mkdirSync(path.dirname(options.geometryGlbPath), { recursive: true });
+      fs.writeFileSync(options.geometryGlbPath, geometryDistrict.glb);
+    }
 
     // The street surface measured in the tiles, as height above sea level, when the caller stated none.
     if (geoAnchor.elevation === undefined) {
@@ -2577,6 +2610,12 @@ export class Google3DTileBlockoutPipelineService {
       coveredRadiusMeters,
       truncated,
       leafTiles: { kept: leafSubset.length, selected: sortedLeaves.length },
+      leafIds: leafSubset.map(l => l.id),
+      copyrights: district.copyrights,
+      fetchedAt,
+      leafGeometricErrorM: Math.max(...leafSubset.map(leaf => leaf.geometricError)),
+      downloadOrder: Object.fromEntries(leafSubset.map((l, i) => [l.id, downloadRanks[i] ?? 0])),
+      ...(options?.geometryGlbPath && geometryDistrict ? { geometryGlbPath: options.geometryGlbPath } : {}),
       mesh,
       // What the crawl measured: it selects leaf tiles directly (no viewport, no screen-space error, no settle) and
       // renders nothing, so there is no resolution, settle state or render block to report.
