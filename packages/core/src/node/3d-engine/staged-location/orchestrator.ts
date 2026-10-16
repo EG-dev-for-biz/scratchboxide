@@ -45,6 +45,7 @@ import {
     type DegradationRecord,
     type EvidenceImageRef,
     type OrnamentSpec,
+    type StructureFit,
     type PrimitiveCorrection,
     type ProvenanceLabel,
     type ProvenanceRecord,
@@ -83,14 +84,19 @@ import {
     footprintIoU, grownOutline, isolatedStructureCells, sizeExtraction, ISOLATE_IOU_MIN, NO_STRUCTURE_DISTRICT_RADIUS_M, type StructurePickResult
 } from './extraction-sizing';
 import {
-    discoverPanos, facadeGeometry, fetchViews, missingCredentials, selectViews, type EvidenceImage, type StreetViewEvidenceDeps
+    discoverPanos, facadeGeometry, fetchViews, missingCredentials, EVIDENCE_STAGE_BUDGET_MS, type EvidenceImage, type PanoCandidate, type StreetViewEvidenceDeps
 } from './streetview-evidence';
+import { selectViewsForFit } from './evidence-aim';
 import { nominalPose, projectSlots } from './slot-projection';
 import {
     orthoCaption, orthoRef, plannedThinking, readOrnament, streetViewCaption, visionUse, VisionStageError, ORNAMENT_PROMPT_VERSION,
     ORNAMENT_THINKING_BUDGET, ORNAMENT_VISION_TIMEOUT_MS, type EvidenceInput
 } from './ornament-vision';
 import { summarizeStagedBuild, type StagedSummaryInput } from './staged-summary';
+
+/** What the evidence stage spent: free metadata queries, billed images and the seconds the images took. */
+export interface EvidenceCost { metadataCalls: number; cachedCalls: number; imagesRequested: number; imagesFetched: number; fetchMs: number }
+const NO_EVIDENCE_COST: EvidenceCost = { metadataCalls: 0, cachedCalls: 0, imagesRequested: 0, imagesFetched: 0, fetchMs: 0 };
 
 // ----------------------------------------------------------------------------------------------------------------
 // stages
@@ -100,7 +106,7 @@ import { summarizeStagedBuild, type StagedSummaryInput } from './staged-summary'
 export const STAGES = {
     resolve: { order: -1, title: 'Place', budgetMs: 10_000 },
     tiles: { order: 1, title: 'Google 3D Tiles', budgetMs: 360_000 },
-    evidence: { order: -1, title: 'Street View close-ups', budgetMs: 60_000 },
+    evidence: { order: -1, title: 'Street View close-ups', budgetMs: EVIDENCE_STAGE_BUDGET_MS },
     'trees-measure': { order: -1, title: 'Measuring the trees', budgetMs: 300_000 },
     remesh: { order: 2, title: 'Remeshed scan', budgetMs: 300_000 },
     fit: { order: 3, title: 'Scan-fitted rebuild', budgetMs: 30_000 },
@@ -828,19 +834,19 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // ---------------- evidence (starts when the fit is accepted: a rejected fit has nothing to place a photo on, and no image is fetched for it) ----------------
         const visionAvailable = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
         const rebuildPossible = isolateMode && !!deps.scanFit;
-        let evidencePromise = undefined as Promise<{ images: EvidenceImage[]; status: string }> | undefined;
+        let evidencePromise = undefined as Promise<{ images: EvidenceImage[]; panos: PanoCandidate[]; cost: EvidenceCost; status: string }> | undefined;
         // ended (skipped, as not needed) when the run ends before the evidence does
         const evidenceStop = new AbortController();
 
-        const startEvidence = (): void => {
-            evidencePromise = runner.stage<{ images: EvidenceImage[] }>({
+        const startEvidence = (fit: StructureFit): void => {
+            evidencePromise = runner.stage<{ images: EvidenceImage[]; panos: PanoCandidate[]; cost: EvidenceCost }>({
                 id: 'evidence',
                 run: async io => {
                     const sv = deps.streetView ?? {};
                     const missing = missingCredentials(sv);
                     if (missing) {
                         return {
-                            status: 'degraded', value: { images: [] }, source: 'no Street View images', reason: missing,
+                            status: 'degraded', value: { images: [], panos: [], cost: NO_EVIDENCE_COST }, source: 'no Street View images', reason: missing,
                             degradations: [run.degrade(record('evidence', 'no_street_view', {
                                 part: { description: 'Street View close-ups of the structure' }, intended: `up to 4 Street View images (© Google)`, fellTo: 'no Street View images',
                                 provenanceAfter: PROVENANCE.photoInferred, reason: missing, transient: false, runId, now: now()
@@ -850,11 +856,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const origin: GeodeticOrigin = { lat: placeValue!.lat, lng: placeValue!.lng, heightMeters: extraction.originEllipsoidalHeightM };
                     const facades = facadeGeometry(structure!);
                     io.progress('finding Google Street View panoramas around the facades');
-                    const found = await discoverPanos(origin, facades, { ...sv, metadataCachePath: path.join(cache.dir, 'streetview', 'metadata.json') }, io.signal);
-                    const views = selectViews(found.panos, facades, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top);
+                    const found = await discoverPanos(origin, facades, { ...sv, metadataCachePath: path.join(cache.dir, 'streetview', 'metadata.json') }, io.signal, structure!.centroid);
+                    const views = selectViewsForFit(found.panos, fit, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top);
+                    const discovery = { metadataCalls: found.metadataCalls, cachedCalls: found.cachedCalls };
                     if (!views.length) {
                         return {
-                            status: 'degraded', value: { images: [] }, source: 'no Street View images', reason: 'no Google Street View panorama looks at the facades',
+                            status: 'degraded', value: { images: [], panos: found.panos, cost: { ...NO_EVIDENCE_COST, ...discovery } }, source: 'no Street View images', reason: 'no Google Street View panorama looks at the fitted slots',
                             degradations: [run.degrade(record('evidence', 'no_street_view', {
                                 part: { description: 'Street View close-ups of the structure' }, intended: 'up to 4 Street View images (© Google)', fellTo: 'no Street View images',
                                 provenanceAfter: PROVENANCE.photoInferred, reason: `no Google-captured Street View panorama within 12-60 m looks at the facades (${found.panos.length} found nearby)`, transient: false, runId, now: now()
@@ -871,20 +878,21 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     })));
                     if (got.images.length) run.state.attribution = [...new Set([...run.state.attribution, 'Street View ©Google'])];
                     const status = got.images.length ? (degradations.length ? 'degraded' : 'committed') : 'degraded';
+                    const cost: EvidenceCost = { ...discovery, imagesRequested: views.length, imagesFetched: got.images.length, fetchMs: got.elapsedMs };
                     return {
-                        status, value: { images: got.images }, source: `${got.images.length} of ${views.length} Street View images (© Google), kept in memory only`,
+                        status, value: { images: got.images, panos: found.panos, cost }, source: `${got.images.length} of ${views.length} Street View images (© Google), kept in memory only`,
                         ...(got.images.length ? {} : { reason: 'every Street View image failed to fetch' }),
                         degradations
                     };
                 },
                 degrade: async err => ({
-                    status: 'degraded', value: { images: [] }, source: 'no Street View images', reason: `no Street View close-ups: ${errorMessage(err)}`,
+                    status: 'degraded', value: { images: [], panos: [], cost: NO_EVIDENCE_COST }, source: 'no Street View images', reason: `no Street View close-ups: ${errorMessage(err)}`,
                     degradations: [run.degrade(record('evidence', 'no_street_view', {
                         part: { description: 'Street View close-ups of the structure' }, intended: 'up to 4 Street View images (© Google)', fellTo: 'no Street View images',
                         provenanceAfter: PROVENANCE.photoInferred, reason: `no Street View close-ups (${errorMessage(err)})`, cause: err, transient: true, runId, now: now()
                     }))]
                 })
-            }, evidenceStop.signal).then(r => ({ images: r.value?.images ?? [], status: r.status }));
+            }, evidenceStop.signal).then(r => ({ images: r.value?.images ?? [], panos: r.value?.panos ?? [], cost: r.value?.cost ?? NO_EVIDENCE_COST, status: r.status }));
             // a Stop rejects it; whoever awaits it sees that, and nobody else is left holding a rejection nobody handles
             evidencePromise.catch(() => undefined);
             siblings.push(evidencePromise);
@@ -1261,7 +1269,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             out.fit = fitted.value;
             const fit = fitted.value.value;
             persist();
-            if (rebuildPossible && visionAvailable) startEvidence();
+            if (rebuildPossible && visionAvailable) startEvidence(fit);
 
             // evidence, projection, vision
             if (!visionAvailable) {
@@ -1282,7 +1290,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 runner.skip('detail', 'no detail was read');
                 return out;
             }
-            const evidence = evidencePromise ? await evidencePromise : { images: [], status: 'skipped' };
+            const evidence = evidencePromise ? await evidencePromise : { images: [] as EvidenceImage[], panos: [] as PanoCandidate[], cost: NO_EVIDENCE_COST, status: 'skipped' };
             // the evidence the reading gets: the fit's facade orthos of the tile photos, then the Street View close-ups with the slots projected into them
             type Projected = { inputs: EvidenceInput[]; refs: EvidenceImageRef[] };
             const readOrthos = (): EvidenceInput[] => {

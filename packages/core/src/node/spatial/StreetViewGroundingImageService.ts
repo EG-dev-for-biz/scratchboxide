@@ -23,11 +23,26 @@ export const GROUNDING_ASPECT_RATIOS: readonly GroundingAspectRatio[] = [
     'RATIO_4X5', 'RATIO_5X4', 'RATIO_9X16', 'RATIO_16X9', 'RATIO_21X9'
 ];
 
+/** The grounding API's pitch for a view aimed `elevationDeg` above the horizon (up positive): the API counts down as positive. */
+export function groundingPitchForElevation(elevationDeg: number): number {
+    return Math.max(-90, Math.min(90, -elevationDeg)) + 0; // + 0 turns -0 into 0
+}
+
+/** The elevation (up positive) a grounding pitch looks at. */
+export function elevationForGroundingPitch(pitchDegree: number): number {
+    return -pitchDegree + 0;
+}
+
 export interface GroundingImageRequest {
     panoId: string;
     /** Degrees clockwise from north (0 = north, 90 = east). */
     headingDegree?: number;
-    /** Degrees, 90 = straight up, -90 = straight down. */
+    /**
+     * Degrees, in the API's own sign: POSITIVE looks DOWN, NEGATIVE looks UP (measured against the live endpoint:
+     * +38 returned pavement, -34 returned a cornice and the spandrels), so +90 is straight down and -90 straight up.
+     * The rest of the app speaks elevation (up positive, as streetViewForward does); convert with
+     * groundingPitchForElevation at the call, never by hand.
+     */
     pitchDegree?: number;
     /** Horizontal field of view, 0-90 degrees (API limit). */
     fovDegree?: number;

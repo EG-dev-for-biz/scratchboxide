@@ -34,8 +34,9 @@ vi.mock('../src/node/spatial/StreetViewPoseRegistrar', async orig => ({
 }));
 
 import {
-    discoverPanos, facadeGeometry, fetchViews, missingCredentials, selectViews, bearingDeg, type PanoCandidate
+    discoverPanos, facadeGeometry, fetchViews, missingCredentials, type PanoCandidate, type SelectedView
 } from '../src/node/3d-engine/staged-location/streetview-evidence';
+import { selectViewsForFit } from '../src/node/3d-engine/staged-location/evidence-aim';
 import { projectSlots, uncertaintyPx, chartPoint } from '../src/node/3d-engine/staged-location/slot-projection';
 import { geodeticToScan, scanToGeodetic } from '../src/node/spatial/StreetViewSurveyPlanner';
 import { MAX_STREET_VIEW_IMAGES_PER_BUILDING } from '../src/common/spatial/staged-location-contracts';
@@ -92,7 +93,7 @@ describe('Street View evidence', () => {
         expect(missingCredentials({ mapsApiKey: 'k', grounding: { retrieveGroundingImage: async () => { throw new Error('x'); } } })).toBeUndefined();
     });
 
-    it('discovers Google captures only, newest within 3 years, thinned to 6 m, and caches only ids, places and dates', async () => {
+    it('discovers Google captures only (old ones kept for the score to weigh), thinned to 6 m, and caches only ids, places and dates', async () => {
         const facades = facadeGeometry(STRUCTURE);
         const north = scanToGeodetic(ORIGIN, 0, 0, -30), north2 = scanToGeodetic(ORIGIN, 3, 0, -30), east = scanToGeodetic(ORIGIN, 35, 0, 0), old = scanToGeodetic(ORIGIN, 0, 0, 40), user = scanToGeodetic(ORIGIN, -35, 0, 0);
         const fetchImpl = (async (url: string) => {
@@ -109,7 +110,7 @@ describe('Street View evidence', () => {
         }) as typeof fetch;
         const cachePath = path.join(TMP, 'sv_meta.json');
         const d = await discoverPanos(ORIGIN, facades, { mapsApiKey: 'test-key', fetchImpl, metadataCachePath: cachePath });
-        expect(d.panos.map(p => p.panoId).sort()).toEqual(['E1', 'N1']); // N2 thinned (3 m from N1, older), OLD too old, USER not Google
+        expect(d.panos.map(p => p.panoId).sort()).toEqual(['E1', 'N1', 'OLD']); // N2 thinned (3 m from N1, older), USER not Google; age is a score factor, not a filter
         expect(d.rejectedNotGoogle).toBe(1);
         const cached = fs.readFileSync(cachePath, 'utf8');
         expect(cached).not.toContain('test-key');
@@ -117,47 +118,42 @@ describe('Street View evidence', () => {
         // a repeat is served from the cache
         const again = await discoverPanos(ORIGIN, facades, { mapsApiKey: 'test-key', fetchImpl: (() => { throw new Error('no network'); }) as any, metadataCachePath: cachePath });
         expect(again.metadataCalls).toBe(0);
-        expect(again.panos.map(p => p.panoId).sort()).toEqual(['E1', 'N1']);
+        expect(again.panos.map(p => p.panoId).sort()).toEqual(['E1', 'N1', 'OLD']);
     });
 
-    it('selects at most 4 views, the best per facade first, framed on the facade', () => {
-        const facades = facadeGeometry(STRUCTURE);
-        const expected = [[0, -5.5], [13.15, 0], [0, 5.5], [-13.15, 0]];
-        facades.forEach((f, i) => { expect(f.centre[0]).toBeCloseTo(expected[i][0], 9); expect(f.centre[1]).toBeCloseTo(expected[i][1], 9); });
+    it('selects views from the fitted slots: only panos in front of a slot, framed on it, never more than 4', () => {
+        const fit = structureFit();
         const pano = (id: string, x: number, z: number, date = '2025-06'): PanoCandidate => ({ panoId: id, lat: 0, lng: 0, x, z, date, copyright: '© Google' });
-        const panos = [pano('N1', 0, -30), pano('N2', 14, -27), pano('E1', 40, 2), pano('S1', -5, 35), pano('W1', -40, 0), pano('FAR', 0, -90), pano('BEHIND', 0, 3)];
-        const views = selectViews(panos, facades, STRUCTURE, GROUND, new Float32Array(0));
-        expect(views.length).toBe(MAX_STREET_VIEW_IMAGES_PER_BUILDING);
-        expect(new Set(views.map(v => v.facadeHeadingDeg))).toEqual(new Set([0, 90, 180, 270]));
-        expect(views.some(v => v.panoId === 'FAR' || v.panoId === 'BEHIND')).toBe(false);
-        const n1 = views.find(v => v.facadeHeadingDeg === 0)!;
+        // the fixture's slots S01 (north spandrel) and S02 (cornice) sit on the NORTH face (outward -z); S03 is the soffit
+        const panos = [pano('N1', -6, -30), pano('SOUTH', 0, 40), pano('FAR', 0, -190)];
+        const views = selectViewsForFit(panos, fit, STRUCTURE, GROUND, new Float32Array(0));
+        expect(views.length).toBeGreaterThan(0);
+        expect(views.length).toBeLessThanOrEqual(MAX_STREET_VIEW_IMAGES_PER_BUILDING);
+        // a pano south of the arch never looks at the north face's slots; one 190 m away is out of range
+        expect(views.some(v => v.panoId === 'SOUTH' || v.panoId === 'FAR')).toBe(false);
+        const n1 = views[0];
         expect(n1.panoId).toBe('N1');
-        // heading = bearing from the eye to the facade centre; pitch to mid-height; fov = 1.15 × the facade's angular width
-        expect(n1.headingDeg).toBeCloseTo(bearingDeg(0, -30, 0, -5.5), 1);
-        expect(n1.headingDeg).toBeCloseTo(180, 1);
-        expect(n1.pitchDeg).toBeCloseTo(Math.atan2(12.2 - 2.5, 24.5) * 180 / Math.PI, 0);
-        expect(n1.fovDeg).toBeCloseTo(Math.min(90, 2 * Math.atan(13.15 / 24.5) * 180 / Math.PI * 1.15), 0);
-        expect(n1.aspectRatio).toBe('RATIO_4X3');
-        // the east face is narrower than it is tall: a portrait image, and the fov floor applies at 26.85 m
-        const e1 = views.find(v => v.facadeHeadingDeg === 90)!;
-        expect(e1.aspectRatio).toBe('RATIO_3X4');
-        expect(e1.fovDeg).toBeGreaterThanOrEqual(20);
-        expect(selectViews(panos, facades, STRUCTURE, GROUND, new Float32Array(0), 9).length).toBe(4); // never more than 4
-        expect(selectViews(panos, facades, STRUCTURE, GROUND, new Float32Array(0), 0)).toEqual([]);
+        // looks south at the slot: heading near 180, aimed up (elevation positive = up in the app's convention)
+        expect(n1.headingDeg).toBeGreaterThan(150); expect(n1.headingDeg).toBeLessThan(200);
+        expect(n1.pitchDeg).toBeGreaterThan(0);
+        expect(n1.fovDeg).toBeGreaterThanOrEqual(30); expect(n1.fovDeg).toBeLessThanOrEqual(60);
+        expect(n1.aimedSlotIds?.length).toBe(1);
+        expect(views.every(v => v.panoId === 'N1')).toBe(true);
+        expect(selectViewsForFit(panos, fit, STRUCTURE, GROUND, new Float32Array(0), 0)).toEqual([]);
     });
 
     it('fetches in parallel, times one image out while the others land, and keeps the bytes in memory only, undecoded', async () => {
-        const facades = facadeGeometry(STRUCTURE);
-        const views = selectViews([
-            { panoId: 'N1', lat: 0, lng: 0, x: 0, z: -30, date: '2025-06', copyright: '© Google' },
-            { panoId: 'E1', lat: 0, lng: 0, x: 40, z: 0, date: '2025-06', copyright: '© Google' },
-            { panoId: 'S1', lat: 0, lng: 0, x: 0, z: 35, date: '2025-06', copyright: '© Google' }
-        ], facades, STRUCTURE, GROUND, new Float32Array(0));
+        const mk = (panoId: string, x: number, z: number, aspectRatio: 'RATIO_4X3' | 'RATIO_3X4', pitchDeg: number): SelectedView => ({
+            panoId, date: '2025-06', copyright: '© Google', eye: [x, 2.5, z], facadeHeadingDeg: 0, headingDeg: 90, pitchDeg, fovDeg: 50, aspectRatio, distanceM: 30, score: 1
+        });
+        const views = [mk('N1', 0, -30, 'RATIO_4X3', 20), mk('E1', 40, 0, 'RATIO_3X4', 20), mk('S1', 0, 35, 'RATIO_4X3', 20)];
         const sent = new Map<string, Buffer>();
         const signals: Array<AbortSignal | undefined> = [];
+        const pitchSent = new Map<string, number>();
         const grounding = {
             retrieveGroundingImage: async (req: any, signal?: AbortSignal) => {
                 signals.push(signal);
+                pitchSent.set(req.panoId, req.pitchDegree);
                 if (req.panoId === 'S1') {
                     return new Promise<never>((_, reject) => signal!.addEventListener('abort', () => reject(signal!.reason)));
                 }
@@ -175,6 +171,8 @@ describe('Street View evidence', () => {
         expect(r.images.map(i => i.view.panoId).sort()).toEqual(['E1', 'N1']);
         expect(r.failures).toEqual([expect.objectContaining({ error: 'timed out after 0.3 s', transient: true })]);
         expect(signals.every(s => s instanceof AbortSignal)).toBe(true);
+        // the app's elevation +20 (up) goes to the API as pitch -20: the grounding API counts down as positive
+        expect(pitchSent.get('N1')).toBe(-20);
         for (const img of r.images) {
             // the bytes sent are the bytes received, and the size came from the header
             expect(img.bytes.equals(sent.get(img.view.panoId)!)).toBe(true);

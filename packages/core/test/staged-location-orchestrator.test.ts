@@ -375,7 +375,7 @@ describe('an isolated structure', () => {
         expect(t('trees').startedAtMs).toBeLessThan(t('detail').endedAtMs!);
     });
 
-    it('reads Street View close-ups through the grounding service only: four images, their bytes unchanged into the vision request, never written anywhere', async () => {
+    it('reads Street View close-ups through the grounding service only: views aimed at the fitted slots, their bytes unchanged into the vision request, never written anywhere', async () => {
         const sf = fakeScanFit(path.join(TMP, 'sf-sv'));
         const place = { lat: 40.73122, lng: -73.99709 };
         const origin = { ...place, heightMeters: 0 };
@@ -415,14 +415,16 @@ describe('an isolated structure', () => {
             });
             const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
             spy.restore();
-            // four images, one per facade, each fetched through the grounding service and no other route
-            expect(requested.sort()).toEqual(['PE', 'PN', 'PS', 'PW']);
-            expect(result.ornament!.evidence).toEqual({ tileOrthos: 1, streetView: 4 });
+            // the fixture's slots sit on the north face: only the pano that stands in front of them is asked, through the grounding service and no other route
+            expect([...new Set(requested)]).toEqual(['PN']);
+            expect(requested.length).toBeGreaterThanOrEqual(1);
+            expect(requested.length).toBeLessThanOrEqual(4);
+            expect(result.ornament!.evidence).toEqual({ tileOrthos: 1, streetView: requested.length });
             expect(result.extraction.attribution).toContain('Street View ©Google');
             // the vision request carries exactly the bytes the service returned
             const parts: any[] = calls[0].contents[0].parts;
             const inline = parts.filter(p => p.inlineData && p.inlineData.mimeType === 'image/jpeg').map(p => Buffer.from(p.inlineData.data, 'base64'));
-            expect(inline).toHaveLength(4);
+            expect(inline).toHaveLength(requested.length);
             for (const b of inline) expect([...sent.values()].some(o => o.equals(b))).toBe(true);
             // no write anywhere (the spies saw them all) held an image, or named a JPEG
             const marks = [...sent.values()].map(b => b.subarray(30, 90));

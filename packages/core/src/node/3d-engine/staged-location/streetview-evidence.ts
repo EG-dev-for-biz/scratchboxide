@@ -31,14 +31,23 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { MAX_STREET_VIEW_IMAGES_PER_BUILDING, type Vec3 } from '../../../common/spatial/staged-location-contracts';
 import { fetchStreetViewPanoMetadata } from '../../spatial/StreetViewPanoramaProjectionService';
-import { isGoogleCapture, type GroundingAspectRatio, type GroundingImage, type GroundingImageRequest } from '../../spatial/StreetViewGroundingImageService';
+import { groundingPitchForElevation, isGoogleCapture, type GroundingAspectRatio, type GroundingImage, type GroundingImageRequest } from '../../spatial/StreetViewGroundingImageService';
 import { geodeticToScan, scanToGeodetic, type GeodeticOrigin, type GroundModel } from '../../spatial/StreetViewSurveyPlanner';
 import { readJpegSize } from '../../spatial/StreetViewPoseRegistrar';
 import type { StructurePickResult } from './extraction-sizing';
 
 const DEG = Math.PI / 180;
-export const EVIDENCE_IMAGE_TIMEOUT_MS = 8000;
-export const EVIDENCE_STAGE_BUDGET_MS = 20_000;
+/**
+ * One image, retries included. The grounding endpoint answers in 0.5-25 s and sometimes with 503 "Deadline expired"
+ * (the service retries those twice), so 8 s cut off answers that were coming. The images of a stage are fetched in
+ * parallel, so the stage's fetch costs one of these at most.
+ */
+export const EVIDENCE_IMAGE_TIMEOUT_MS = 30_000;
+/** Pano discovery (free metadata queries, 8 at a time) before the fetch; the stage's budget is this plus one image. */
+export const EVIDENCE_DISCOVERY_ALLOWANCE_MS = 45_000;
+export const EVIDENCE_STAGE_BUDGET_MS = EVIDENCE_DISCOVERY_ALLOWANCE_MS + EVIDENCE_IMAGE_TIMEOUT_MS + 15_000;
+/** Panos kept for selection: the nearest to the structure. */
+export const MAX_CANDIDATE_PANOS = 40;
 export const STREET_VIEW_EYE_HEIGHT_M = 2.5;
 /** The nominal pose's stated uncertainty (pano position, car camera height, heading): registration is not run in v1. */
 export const NOMINAL_POSE_UNCERTAINTY = { meters: 2, degrees: 2 } as const;
@@ -63,11 +72,15 @@ export interface SelectedView {
     /** The facade heading (outward, clockwise from north) this view looks at. */
     facadeHeadingDeg: number;
     headingDeg: number;
+    /** Elevation of the view axis, degrees, UP POSITIVE (the app's convention). fetchViews converts it to the API's sign. */
     pitchDeg: number;
     fovDeg: number;
     aspectRatio: GroundingAspectRatio;
     distanceM: number;
     score: number;
+    /** The fitted slots this view was aimed at (the crop) and those it shows, by projection of their 3D outlines. */
+    aimedSlotIds?: string[];
+    coveredSlotIds?: string[];
 }
 
 export interface EvidenceImage {
@@ -82,6 +95,8 @@ export interface EvidenceImage {
     id: string;
     /** distance × fov (rad) / width: the smallest distance one pixel spans on the facade. */
     nativeSampleM: number;
+    /** Seconds-level cost: how long this image took to come back, retries included. */
+    fetchMs: number;
 }
 
 export interface EvidenceRecord {
@@ -154,14 +169,26 @@ export function facadeGeometry(structure: Pick<StructurePickResult, 'outline' | 
     });
 }
 
-/** Street points on rings 12-60 m out (10 m steps) from each facade centre, within ±30° of its heading. */
-export function candidatePoints(facades: FacadeGeometry[]): Array<{ x: number; z: number }> {
+/**
+ * Street points to ask the metadata endpoint about. It answers with the NEAREST pano only, so one query per place
+ * finds one pano: the points are rings (12-60 m, 10 m steps) round each facade centre within ±30° of its heading, and
+ * rings (15-100 m) all the way round the structure, every 30°, so panos on every side of it come up.
+ */
+export function candidatePoints(facades: FacadeGeometry[], centre?: { x: number; z: number }): Array<{ x: number; z: number }> {
     const pts: Array<{ x: number; z: number }> = [];
     for (const f of facades) {
         for (let r = 12; r <= 60; r += 10) {
             for (const off of [-30, -15, 0, 15, 30]) {
                 const [dx, dz] = headingDir(f.headingDeg + off);
                 pts.push({ x: f.centre[0] + dx * r, z: f.centre[1] + dz * r });
+            }
+        }
+    }
+    if (centre) {
+        for (const r of [15, 30, 50, 75, 100]) {
+            for (let a = 0; a < 360; a += 30) {
+                const [dx, dz] = headingDir(a + (r % 20 === 0 ? 15 : 0));
+                pts.push({ x: centre.x + dx * r, z: centre.z + dz * r });
             }
         }
     }
@@ -180,11 +207,13 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
 const months = (d?: string) => { const m = /^(\d{4})-(\d{2})/.exec(d ?? ''); return m ? Number(m[1]) * 12 + Number(m[2]) - 1 : -Infinity; };
 
 /**
- * Google panos near the facades: metadata at each candidate point (8 m radius, 8 at a time, cached by point), Google
- * captures only, at most 3 years older than the newest one found, thinned to 6 m (newest first).
+ * Google panos near the structure: metadata at each candidate point (8 m radius, 8 at a time, cached by point), Google
+ * captures only, thinned to 6 m (newest first), the nearest MAX_CANDIDATE_PANOS kept. Age does not drop a pano (the
+ * arch has about 24 within 100 m, most of them from 2021 and one from 2026: a 3-year window would have kept the one);
+ * recency is a factor in the view score instead.
  */
-export async function discoverPanos(origin: GeodeticOrigin, facades: FacadeGeometry[], deps: StreetViewEvidenceDeps, signal?: AbortSignal): Promise<{ panos: PanoCandidate[]; metadataCalls: number; cachedCalls: number; rejectedNotGoogle: number }> {
-    const points = candidatePoints(facades);
+export async function discoverPanos(origin: GeodeticOrigin, facades: FacadeGeometry[], deps: StreetViewEvidenceDeps, signal?: AbortSignal, centre?: { x: number; z: number }): Promise<{ panos: PanoCandidate[]; metadataCalls: number; cachedCalls: number; rejectedNotGoogle: number }> {
+    const points = candidatePoints(facades, centre);
     const cache: Record<string, any> = deps.metadataCachePath && fs.existsSync(deps.metadataCachePath) ? JSON.parse(fs.readFileSync(deps.metadataCachePath, 'utf8')) : {};
     let calls = 0, cached = 0;
     const answers = await mapLimit(points, 8, async p => {
@@ -210,16 +239,17 @@ export async function discoverPanos(origin: GeodeticOrigin, facades: FacadeGeome
     }
     const ok = answers.filter(a => a && a.status === 'OK');
     const google = ok.filter(a => isGoogleCapture(a.copyright));
-    const newest = Math.max(...google.map(a => months(a.date)));
     const byId = new Map<string, PanoCandidate>();
     for (const a of google) {
-        if (byId.has(a.panoId) || months(a.date) < newest - 36) continue;
+        if (byId.has(a.panoId)) continue;
         const q = geodeticToScan(origin, a.lat, a.lng);
         byId.set(a.panoId, { panoId: a.panoId, lat: a.lat, lng: a.lng, date: a.date, copyright: a.copyright, x: q.x, z: q.z });
     }
     const sorted = [...byId.values()].sort((a, b) => months(b.date) - months(a.date) || a.panoId.localeCompare(b.panoId));
     const kept: PanoCandidate[] = [];
     for (const p of sorted) if (!kept.some(q => Math.hypot(q.x - p.x, q.z - p.z) < 6)) kept.push(p);
+    if (centre) kept.sort((a, b) => Math.hypot(a.x - centre.x, a.z - centre.z) - Math.hypot(b.x - centre.x, b.z - centre.z));
+    kept.splice(MAX_CANDIDATE_PANOS);
     return { panos: kept, metadataCalls: calls, cachedCalls: cached, rejectedNotGoogle: new Set(ok.filter(a => !isGoogleCapture(a.copyright)).map(a => a.panoId)).size };
 }
 
@@ -249,84 +279,27 @@ export function facadeVisibility(eye: Vec3, facade: FacadeGeometry, structure: P
     return seen / 25;
 }
 
-/**
- * The views to fetch: per facade, panos within 50° of its heading and 12-60 m from its centre, scored by angular
- * width × incidence cosine × visibility × recency; the best per facade first, then by score, up to `max`.
- */
-export function selectViews(
-    panos: PanoCandidate[],
-    facades: FacadeGeometry[],
-    structure: Pick<StructurePickResult, 'cells' | 'groundY' | 'heightM'>,
-    ground: Pick<GroundModel, 'cellIndex' | 'groundAt'>,
-    unmaskedTop: Float32Array,
-    max = MAX_STREET_VIEW_IMAGES_PER_BUILDING
-): SelectedView[] {
-    const limit = Math.max(0, Math.min(MAX_STREET_VIEW_IMAGES_PER_BUILDING, max));
-    const newest = Math.max(...panos.map(p => months(p.date)));
-    const perFacade: SelectedView[][] = facades.map(f => {
-        const out: SelectedView[] = [];
-        for (const p of panos) {
-            const distanceM = Math.hypot(p.x - f.centre[0], p.z - f.centre[1]);
-            if (distanceM < 12 || distanceM > 60) continue;
-            const from = bearingDeg(f.centre[0], f.centre[1], p.x, p.z);
-            const off = angleDiff(from, f.headingDeg);
-            if (off > 50) continue;
-            const g = ground.groundAt(p.x, p.z);
-            const eye: Vec3 = [p.x, (g === g ? g : structure.groundY) + STREET_VIEW_EYE_HEIGHT_M, p.z];
-            const visibility = facadeVisibility(eye, f, structure, ground, unmaskedTop);
-            if (visibility <= 0) continue;
-            const angularWidth = 2 * Math.atan(f.widthM / 2 / distanceM);
-            const recency = Number.isFinite(newest) && Number.isFinite(months(p.date)) ? Math.max(0.5, 1 - (newest - months(p.date)) / 72) : 0.75;
-            const score = angularWidth * Math.cos(off * DEG) * visibility * recency;
-            const midY = structure.groundY + structure.heightM / 2;
-            const tall = structure.heightM > f.widthM;
-            out.push({
-                panoId: p.panoId, date: p.date, copyright: p.copyright, eye, facadeHeadingDeg: f.headingDeg,
-                headingDeg: Math.round(bearingDeg(p.x, p.z, f.centre[0], f.centre[1]) * 10) / 10,
-                pitchDeg: Math.round(Math.max(-10, Math.min(45, Math.atan2(midY - eye[1], distanceM) / DEG)) * 10) / 10,
-                // choosing the fov is the crop: the image comes back framed on the facade
-                fovDeg: Math.round(Math.max(20, Math.min(90, (angularWidth / DEG) * 1.15)) * 10) / 10,
-                aspectRatio: tall ? 'RATIO_3X4' : 'RATIO_4X3',
-                distanceM: Math.round(distanceM * 100) / 100,
-                score
-            });
-        }
-        return out.sort((a, b) => b.score - a.score || a.panoId.localeCompare(b.panoId));
-    });
-    const chosen: SelectedView[] = [];
-    const used = new Set<string>();
-    const key = (v: SelectedView) => `${v.panoId}:${v.facadeHeadingDeg}`;
-    for (const list of perFacade) {
-        const best = list.find(v => !used.has(key(v)));
-        if (best && chosen.length < limit) { chosen.push(best); used.add(key(best)); }
-    }
-    const rest = perFacade.flat().filter(v => !used.has(key(v))).sort((a, b) => b.score - a.score || a.panoId.localeCompare(b.panoId));
-    for (const v of rest) {
-        if (chosen.length >= limit) break;
-        chosen.push(v);
-        used.add(key(v));
-    }
-    return chosen;
-}
-
 export function evidenceImageId(v: Pick<SelectedView, 'panoId' | 'headingDeg' | 'pitchDeg' | 'fovDeg'>): string {
     return `sv:${v.panoId}:${v.headingDeg}:${v.pitchDeg}:${v.fovDeg}`;
 }
 
 /**
- * Fetches the views in parallel, each with an 8 s timeout and the request's signal; a failed image is recorded and the
+ * Fetches the views in parallel, each with a 30 s timeout (retries of 503s included) and the request's signal; a failed image is recorded and the
  * others continue. The bytes stay in memory as they arrived.
  */
-export async function fetchViews(views: SelectedView[], deps: StreetViewEvidenceDeps, signal?: AbortSignal, timeoutMs = EVIDENCE_IMAGE_TIMEOUT_MS): Promise<{ images: EvidenceImage[]; failures: Array<{ view: SelectedView; error: string; transient: boolean }> }> {
+export async function fetchViews(views: SelectedView[], deps: StreetViewEvidenceDeps, signal?: AbortSignal, timeoutMs = EVIDENCE_IMAGE_TIMEOUT_MS): Promise<{ images: EvidenceImage[]; failures: Array<{ view: SelectedView; error: string; transient: boolean }>; elapsedMs: number }> {
+    const started = (deps.now ?? Date.now)();
     if (!deps.grounding) throw new Error(missingCredentials(deps) ?? 'Street View not configured');
     const grounding = deps.grounding;
     const results = await Promise.all(views.map(async view => {
+        const t0 = (deps.now ?? Date.now)();
         const own = new AbortController();
         const timer = setTimeout(() => own.abort(Object.assign(new Error(`timed out after ${timeoutMs / 1000} s`), { name: 'TimeoutError' })), timeoutMs);
         const combined = signal ? AbortSignal.any([signal, own.signal]) : own.signal;
         try {
+            // pitchDeg is elevation (up positive); the grounding API counts down as positive
             const img = await grounding.retrieveGroundingImage({
-                panoId: view.panoId, headingDegree: view.headingDeg, pitchDegree: view.pitchDeg, fovDegree: view.fovDeg, aspectRatio: view.aspectRatio
+                panoId: view.panoId, headingDegree: view.headingDeg, pitchDegree: groundingPitchForElevation(view.pitchDeg), fovDegree: view.fovDeg, aspectRatio: view.aspectRatio
             }, combined);
             const size = readJpegSize(img.image);
             if (!size) throw new Error('the grounding image is not a JPEG with a readable size');
@@ -336,7 +309,8 @@ export async function fetchViews(views: SelectedView[], deps: StreetViewEvidence
                 image: {
                     view, bytes: img.image, mimeType: img.mimeType, widthPx: size.width, heightPx: size.height, sha256,
                     id: evidenceImageId(view),
-                    nativeSampleM: (view.distanceM * view.fovDeg * DEG) / size.width
+                    nativeSampleM: (view.distanceM * view.fovDeg * DEG) / size.width,
+                    fetchMs: (deps.now ?? Date.now)() - t0
                 } satisfies EvidenceImage
             };
         } catch (err) {
@@ -348,6 +322,7 @@ export async function fetchViews(views: SelectedView[], deps: StreetViewEvidence
     }));
     return {
         images: results.flatMap(r => (r.ok ? [r.image] : [])),
-        failures: results.flatMap(r => (r.ok ? [] : [{ view: r.view, error: r.error, transient: r.transient }]))
+        failures: results.flatMap(r => (r.ok ? [] : [{ view: r.view, error: r.error, transient: r.transient }])),
+        elapsedMs: (deps.now ?? Date.now)() - started
     };
 }

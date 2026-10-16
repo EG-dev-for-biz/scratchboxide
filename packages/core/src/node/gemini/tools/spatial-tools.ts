@@ -1737,7 +1737,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 lat: { type: 'NUMBER', description: 'Latitude to find the nearest Google-captured panorama, when no panoId is given.' },
                 lng: { type: 'NUMBER', description: 'Longitude to find the nearest Google-captured panorama, when no panoId is given.' },
                 headingDegree: { type: 'NUMBER', description: 'View heading, degrees clockwise from north (0 = north, 90 = east). Default 0.' },
-                pitchDegree: { type: 'NUMBER', description: 'View pitch, degrees (90 = up, -90 = down). Default 0.' },
+                pitchDegree: { type: 'NUMBER', description: 'View pitch, degrees in the grounding API sign: POSITIVE looks DOWN, NEGATIVE looks UP (+90 straight down, -90 straight up; verified against the live endpoint). Default 0.' },
                 fovDegree: { type: 'NUMBER', description: 'Horizontal field of view, 1-90 degrees. Default 90.' },
                 aspectRatio: { type: 'STRING', enum: ['RATIO_1X1', 'RATIO_2X3', 'RATIO_3X2', 'RATIO_3X4', 'RATIO_4X3', 'RATIO_4X5', 'RATIO_5X4', 'RATIO_9X16', 'RATIO_16X9', 'RATIO_21X9'], description: 'Output aspect ratio; defaults to the source image ratio.' }
             }
