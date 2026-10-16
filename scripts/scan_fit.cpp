@@ -32,6 +32,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -111,8 +112,10 @@ static io::GlbJsonValue parseJsonFile(const std::string& path) {
 static void progress(double f, const std::string& msg) { std::cerr << "PROGRESS " << f << " " << msg << "\n"; }
 
 static void makeDir(const std::string& d) {
-    std::string cmd = "mkdir -p '" + d + "'";
-    if (std::system(cmd.c_str()) != 0) throw CliError("io", "cannot create " + d);
+    // no shell: a directory name with a quote or a space in it is a name, not a command
+    std::error_code ec;
+    std::filesystem::create_directories(d, ec);
+    if (ec || !std::filesystem::is_directory(d)) throw CliError("io", "cannot create " + d);
 }
 
 static std::pair<double, double> readAnchor(const std::string& s) {

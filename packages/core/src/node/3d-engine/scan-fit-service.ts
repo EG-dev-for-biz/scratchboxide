@@ -254,7 +254,14 @@ export class ScanFitService {
 
     /** Reads a JSON output and refuses it unless it is the contract's. */
     private readContract<T>(file: string, name: 'StructureFit' | 'OrnamentBuildReport' | 'FlattenStats'): T {
-        const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+        // a binary that exits cleanly having written nothing, or something that is not JSON, is an invalid output, not an untyped fault
+        if (!fs.existsSync(file)) throw new ScanFitError('invalid_output', `scan_fit did not write ${path.basename(file)}`);
+        let value: unknown;
+        try {
+            value = JSON.parse(fs.readFileSync(file, 'utf8'));
+        } catch (err) {
+            throw new ScanFitError('invalid_output', `scan_fit wrote ${path.basename(file)} and it is not JSON: ${(err as Error).message}`);
+        }
         const problems = validateContract(name, value);
         if (problems.length) throw new ScanFitError('invalid_output', `scan_fit wrote a ${name} that does not validate: ${problems.slice(0, 6).join('; ')}`);
         return value as T;
