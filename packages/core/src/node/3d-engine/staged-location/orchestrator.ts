@@ -1740,7 +1740,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const layer: StagedLayer = {
                         objectId: layerObjectId(r.key, 'l4'), stage: 'detail', layer: 'l4', order: STAGES.detail.order, url: pub.url, bytes: pub.bytes,
                         provenance: { label: PROVENANCE.photoInferred, measuredGeometry: false, confidence: Math.min(...spec.elements.map(e => e.confidence)), method: 'scan_fit ornament: the photo-read elements built with the four operators in their host charts', sources: spec.evidence.map(e => ({ kind: e.kind, id: e.id })) },
-                        provenanceLabels: [PROVENANCE.photoInferred], supersedes: [], revealAfter: bodyId ? [bodyId] : [],
+                        provenanceLabels: [PROVENANCE.photoInferred, ...(spec.elements.some(e => e.provenance.label === PROVENANCE.photoCorrected) ? [PROVENANCE.photoCorrected] : [])], supersedes: [], revealAfter: bodyId ? [bodyId] : [],
                         reveal: { durationMs: 1200, stagger: 0.5, crossfadeFrom: [] }, cached: r.cached, builtAtMs: r.builtAtMs, counts: r.value.counts
                     };
                     // every element dropped by the evidence checks: nothing was built, so there is no photo-inferred layer to show (an empty

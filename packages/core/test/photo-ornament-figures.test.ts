@@ -18,6 +18,8 @@ import {
 import { parseGlbNodes } from '../src/node/3d-engine/staged-location/glb-nodes';
 import { structureFit } from './helpers/staged-location-fixtures';
 import { figureGlb, figureSpec, figuresReply, lumpMesh } from './helpers/photo-ornament-fixtures';
+import { buildObjectFromSpec } from '../src/node/3d-engine/reference-object-builder';
+import { NativePythonRunnerService } from '../src/node/3d-engine/native-python-runner-service';
 
 const bounds = (p: Float32Array) => {
     const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
@@ -195,4 +197,21 @@ describe('the rung under a figure: the scanned lump, smoothed inside the scan to
     it('a mesh with no connected surface cannot be smoothed and says so', () => {
         expect(() => smoothLump({ positions: new Float32Array([0, 0, 0]), indices: new Uint32Array([]) }, 0.1)).toThrow(/no connected surface/);
     });
+});
+
+describe('the default figure builder: the repo\'s native object build (real engine, no fake)', () => {
+    const engineReady = (() => { try { return NativePythonRunnerService.getInstance().isNativeModuleFresh(); } catch { return false; } })();
+    it.skipIf(!engineReady)('builds a figure spec natively and the result sets onto a blob\'s bounds', async () => {
+        const built = await buildObjectFromSpec(figureSpec(), {});
+        const nodes = parseGlbNodes(built.glb);
+        expect(nodes.length).toBeGreaterThan(0);
+        const positions = Float32Array.from(nodes.flatMap(n => Array.from(n.positions)));
+        const indices = Uint32Array.from(nodes.flatMap((n, k) => { const off = nodes.slice(0, k).reduce((a, m) => a + m.positions.length / 3, 0); return Array.from(n.indices ?? [], v => v + off); }));
+        expect(built.checks.connectivity.passed).toBe(true);
+        const b = detect().figures[0];
+        const f = constrainFigure({ positions, indices }, b, [-4, 2.5, -33]);
+        expect(f.fits.min[1]).toBeCloseTo(b.min[1], 3);
+        expect(f.fits.max[1] - f.fits.min[1]).toBeCloseTo(b.heightM, 1);
+        expect(indices.length / 3).toBeGreaterThan(1000);
+    }, 600_000);
 });
