@@ -48,6 +48,7 @@
  */
 
 #include "scratchbox_scan_geom.hpp"
+#include "scratchbox_scan_ortho.hpp"
 #include "scratchbox_staged_glb.hpp"
 
 #include <chrono>
@@ -363,13 +364,6 @@ public:
         planes();
         lap("planes");
         sampleScan();
-        if (std::getenv("SCAN_FIT_DEBUG_DIR")) {
-            for (size_t i = 0; i < regions.size(); ++i) {
-                const auto& r = regions[i];
-                if (r.area < 15 || std::fabs(r.pl.n.y) > 0.5) continue;
-                std::fprintf(stderr, "region %zu area %.1f n=(%.3f,%.3f,%.3f) lean %.2f deg rms %.3f y[%.1f,%.1f] sheet %d\n", i, r.area, r.pl.n.x, r.pl.n.y, r.pl.n.z, deg(std::asin(std::clamp((double)r.pl.n.y, -1.0, 1.0))), r.rms, r.lo.y, r.hi.y, r.sheet ? 1 : 0);
-            }
-        }
         bandsAndFootprints();
         lap("bands_footprints_openings_columns");
         meshModel();
@@ -383,6 +377,47 @@ public:
         gates();
         lap("slots_gates");
         return std::move(R);
+    }
+
+    /** What flattening a scan found: the planes, and where each welded vertex of `scan` goes (tile frame). */
+    struct Flattened { sg::Scan scan; std::vector<Vec3> moved; std::vector<uint8_t> isMoved; int planes{0}; std::map<std::string, double> timings; };
+
+    /**
+     * Steps 1 to 3 of the fit on `scan` (welded, whole): the frame and ground, the exterior faces, the planes grown over
+     * them. Every vertex within `bandM` of a plane whose triangles all belong to that plane is moved onto it; a vertex on
+     * the edge between two planes, or on anything else, stays. Nothing is added or removed.
+     */
+    Flattened flatten(sg::Scan scan, double bandM) {
+        t0 = Clock::now();
+        R.scan = std::move(scan);
+        groundAndFrame();
+        lap("frame_ground");
+        visibility();
+        lap("visibility");
+        planes();
+        lap("planes");
+        Flattened F;
+        const auto& s = R.scan;
+        F.planes = static_cast<int>(regions.size());
+        F.moved = s.pos;
+        F.isMoved.assign(s.pos.size(), 0);
+        std::vector<int> owner(s.pos.size(), -2);  // the plane every triangle at a vertex belongs to, -2 none seen, -1 mixed
+        for (size_t t = 0; t < s.triangles(); ++t) {
+            const int r = triPlane[t] >= 0 && !regions[static_cast<size_t>(triPlane[t])].sheet ? triPlane[t] : -1;
+            for (int j = 0; j < 3; ++j) { int& o = owner[s.tri[3 * t + j]]; o = o == -2 ? r : (o == r ? o : -1); }
+        }
+        for (size_t v = 0; v < s.pos.size(); ++v) {
+            if (owner[v] < 0) continue;
+            const auto& pl = regions[static_cast<size_t>(owner[v])].pl;
+            const Vec3 l = R.frame.toLocal(s.pos[v]);
+            const double d = pl.dist(l);
+            if (std::fabs(d) > bandM) continue;
+            F.moved[v] = R.frame.toWorld(l - pl.n * static_cast<float>(d));
+            F.isMoved[v] = 1;
+        }
+        F.timings = R.timings;
+        F.scan = R.scan;
+        return F;
     }
 
 private:
@@ -1168,29 +1203,6 @@ private:
 
     void bandsAndFootprints() {
         buildDsm();
-        if (const char* dd = std::getenv("SCAN_FIT_DEBUG_DIR")) {
-            sg::Raster vr = gridProto, hr = gridProto;
-            std::fill(vr.v.begin(), vr.v.end(), 0); std::fill(hr.v.begin(), hr.v.end(), 0);
-            const auto& sc = R.scan;
-            for (size_t t = 0; t < sc.triangles(); ++t) {
-                if (std::fabs(ln[t].y) > 0.3f || sc.area[t] < 0.2f) continue;
-                const Vec3 &a = lp[sc.tri[3 * t]], &b = lp[sc.tri[3 * t + 1]], &c = lp[sc.tri[3 * t + 2]];
-                const Vec3 pp[3] = {a, b, c};
-                double best = -1; int bi = 0, bj = 1;
-                for (int i = 0; i < 3; ++i) for (int j = i + 1; j < 3; ++j) { const double d = std::hypot(pp[i].x - pp[j].x, pp[i].z - pp[j].z); if (d > best) { best = d; bi = i; bj = j; } }
-                sg::rasterSegment(isGround[t] ? hr : vr, pp[bi].x, pp[bi].z, pp[bj].x, pp[bj].z);
-            }
-            const auto png = sg::rasterPng(vr, &hr);
-            std::ofstream(std::string(dd) + "/verticals.png", std::ios::binary).write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
-        }
-        if (std::getenv("SCAN_FIT_DEBUG_DIR")) {
-            for (const auto& ik : std::vector<std::pair<int, int>>{{150, 170}, {440, 140}, {430, 135}, {420, 150}, {440, 200}, {410, 215}}) {
-                const auto& L = layers[gridProto.id(ik.first, ik.second)];
-                std::fprintf(stderr, "cell (%d,%d) crossings:", ik.first, ik.second);
-                for (const auto& c : L) std::fprintf(stderr, " %.2f%s", c.y, c.up ? "^" : "v");
-                std::fprintf(stderr, "\n");
-            }
-        }
         // ledges: horizontal planes that span the plan
         struct Ledge { double y; double area; int region; };
         std::vector<Ledge> ledges;
@@ -1230,34 +1242,6 @@ private:
         {
             const sg::Raster vt = outsideAt(y1 - std::min(0.25, 0.08 * H)), vb = outsideAt(y0 + std::min(0.25, 0.08 * H) + 0.05);
             for (size_t c = 0; c < F.v.size(); ++c) if (F.v[c] && (vt.v[c] || vb.v[c])) F.v[c] = 0;
-        }
-        if (const char* dd = std::getenv("SCAN_FIT_DEBUG_DIR")) {
-            const auto png = sg::rasterPng(F);
-            std::ofstream(std::string(dd) + "/band_" + std::to_string(static_cast<int>(y0 * 100)) + ".png", std::ios::binary).write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
-            for (size_t k = 0; k < mids.size(); ++k) {
-                const auto pk = sg::rasterPng(mids[k]);
-                std::ofstream(std::string(dd) + "/band_" + std::to_string(static_cast<int>(y0 * 100)) + "_mid" + std::to_string(k) + ".png", std::ios::binary).write(reinterpret_cast<const char*>(pk.data()), static_cast<std::streamsize>(pk.size()));
-            }
-            {
-                sg::Raster gr = gridProto;
-                std::fill(gr.v.begin(), gr.v.end(), 0);
-                const auto& sc = R.scan;
-                for (size_t t = 0; t < sc.triangles(); ++t) {
-                    if (!isGround[t]) continue;
-                    const Vec3 &a = lp[sc.tri[3 * t]], &b = lp[sc.tri[3 * t + 1]], &c = lp[sc.tri[3 * t + 2]];
-                    for (int k = std::max(0, gr.iz(std::min({a.z, b.z, c.z}))); k <= std::min(gr.nz - 1, gr.iz(std::max({a.z, b.z, c.z}))); ++k)
-                        for (int i = std::max(0, gr.ix(std::min({a.x, b.x, c.x}))); i <= std::min(gr.nx - 1, gr.ix(std::max({a.x, b.x, c.x}))); ++i) {
-                            const double x = gr.cx(i), z = gr.cz(k);
-                            const double d = (b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z);
-                            if (std::fabs(d) < 1e-12) continue;
-                            const double w1 = ((x - a.x) * (c.z - a.z) - (c.x - a.x) * (z - a.z)) / d, w2 = ((b.x - a.x) * (z - a.z) - (x - a.x) * (b.z - a.z)) / d;
-                            if (w1 >= 0 && w2 >= 0 && w1 + w2 <= 1) gr.v[gr.id(i, k)] = 1;
-                        }
-                }
-                const auto pg = sg::rasterPng(F, &gr);
-                std::ofstream(std::string(dd) + "/band_" + std::to_string(static_cast<int>(y0 * 100)) + "_ground.png", std::ios::binary).write(reinterpret_cast<const char*>(pg.data()), static_cast<std::streamsize>(pg.size()));
-            }
-            std::fprintf(stderr, "band y %.2f..%.2f K=%d F cells %zu grid %dx%d cell %.3f\n", y0, y1, K, F.count(), F.nx, F.nz, F.cell);
         }
         // passages: cells solid at the band's top but empty through its middle, open to the outside on two sides
         if (H >= 2.0 && tryPassageBand(y0, y1, F, order, lowest)) return;
@@ -1589,7 +1573,6 @@ private:
             }
             v = best;
         };
-        if (std::getenv("SCAN_FIT_DEBUG_DIR")) std::fprintf(stderr, "passage axis t=(%.3f,%.3f) before snap s[%.2f,%.2f] t[%.2f,%.2f]\n", tAx.x, tAx.y, sMin, sMax, tMin, tMax);
         {
             // each side where the scan's own samples put the wall (the outermost face holding a fifth of the side), the
             // grown plane nearest it when there are none
@@ -1615,11 +1598,6 @@ private:
             inRect += s >= sMin - 0.1 && s <= sMax + 0.1 && t >= tMin - 0.1 && t <= tMax + 0.1;
         }
         const double rectArea = (sMax - sMin) * (tMax - tMin);
-        if (const char* dd = std::getenv("SCAN_FIT_DEBUG_DIR")) {
-            std::fprintf(stderr, "passage rect s[%.2f,%.2f] t[%.2f,%.2f] area %.1f topArea %.1f inRect %zu of %zu\n", sMin, sMax, tMin, tMax, rectArea, ss.size() * P.cellM * P.cellM, inRect, ss.size());
-            const auto png = sg::rasterPng(top);
-            std::ofstream(std::string(dd) + "/passage_top.png", std::ios::binary).write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
-        }
         if (rectArea <= 0 || ss.size() * P.cellM * P.cellM < 0.85 * rectArea || inRect < 0.97 * ss.size()) {
             R.notes.push_back("a passage through the band from " + sj::num(std::round(y0 * 100) / 100) + " m is not fitted: the band is not a rectangle along the passage axis");
             return false;
@@ -2419,57 +2397,6 @@ private:
             } else passArea += w;
             if (dFit[i] <= P.inlierBandM && nearestSurface[i] >= 0) perSurface[nearestSurface[i]].push_back({dFit[i], w});
         }
-        if (const char* dd = std::getenv("SCAN_FIT_DEBUG_DIR")) {
-            // the scan's triangles coloured by the largest distance of their samples to the fit (0..0.5 m)
-            std::vector<double> mx(R.scan.triangles(), -1);
-            for (size_t i = 0; i < S.size(); ++i) if (!sGround[i]) mx[S[i].tri] = std::max(mx[S[i].tri], dFit[i]);
-            {
-                double a[2][3] = {{0, 0, 0}, {0, 0, 0}};
-                for (size_t i = 0; i < S.size(); ++i) { if (sGround[i]) continue; const int in = insideFitted(S[i].p) ? 1 : 0; const int b = dFit[i] <= 0.07 ? 0 : dFit[i] <= 0.25 ? 1 : 2; a[in][b] += S[i].w; }
-                std::fprintf(stderr, "scan samples (m2): outside the fit: <=7cm %.1f 7-25cm %.1f >25cm %.1f | inside the fit: <=7cm %.1f 7-25cm %.1f >25cm %.1f\n", a[0][0], a[0][1], a[0][2], a[1][0], a[1][1], a[1][2]);
-            }
-            {
-                std::map<int, std::array<double, 3>> by;  // surface -> area beyond 7 cm, mean distance numerator, area beyond 25 cm
-                for (size_t i = 0; i < S.size(); ++i) { if (sGround[i] || dFit[i] <= 0.07) continue; auto& e = by[nearestSurface[i]]; e[0] += S[i].w; e[1] += S[i].w * dFit[i]; if (dFit[i] > 0.25) e[2] += S[i].w; }
-                std::vector<std::pair<double, int>> order;
-                for (const auto& [k, v] : by) order.push_back({-v[0], k});
-                std::sort(order.begin(), order.end());
-                for (size_t q = 0; q < std::min<size_t>(order.size(), 14); ++q) { const auto& v = by[order[q].second]; std::fprintf(stderr, "beyond 7cm: nearest surface %s: %.1f m2 mean %.3f m (>25cm: %.1f m2)\n", order[q].second >= 0 ? R.surfaces[static_cast<size_t>(order[q].second)].id.c_str() : "none", v[0], v[1] / std::max(1e-9, v[0]), v[2]); }
-            }
-            {
-                std::set<uint32_t> bad;
-                for (size_t i = 0; i < S.size(); ++i) if (!sGround[i] && !inPass[i] && dFit[i] > 0.25) bad.insert(S[i].tri);
-                staged_glb::StagedNode node;
-                node.name = "unexplained";
-                staged_glb::StagedPrimitive pr;
-                for (uint32_t t : bad) for (int j = 0; j < 3; ++j) { pr.indices.push_back(static_cast<uint32_t>(pr.positions.size())); pr.positions.push_back(R.scan.pos[R.scan.tri[3 * t + j]]); }
-                if (pr.positions.empty()) pr.positions = {Vec3(0, 0, 0), Vec3(0, 0.001f, 0), Vec3(0.001f, 0, 0)}, pr.indices = {0, 1, 2};
-                node.primitives.push_back(std::move(pr));
-                node.extrasJson = "{\"sb\":{}}";
-                staged_glb::WriteOptions opt;
-                const auto glb = staged_glb::write({node}, opt);
-                std::ofstream(std::string(dd) + "/scan_unexplained.glb", std::ios::binary).write(reinterpret_cast<const char*>(glb.data()), static_cast<std::streamsize>(glb.size()));
-                std::fprintf(stderr, "unexplained (not pass-through, >25 cm): %zu triangles\n", bad.size());
-            }
-            const char* names[3] = {"ok", "mid", "bad"};
-            for (int band = 0; band < 3; ++band) {
-                staged_glb::StagedNode node;
-                node.name = "scan_residual";
-                staged_glb::StagedPrimitive pr;
-                for (size_t t = 0; t < R.scan.triangles(); ++t) {
-                    if (mx[t] < 0) continue;
-                    const int b = mx[t] <= 0.07 ? 0 : mx[t] <= 0.25 ? 1 : 2;
-                    if (b != band) continue;
-                    for (int j = 0; j < 3; ++j) { pr.indices.push_back(static_cast<uint32_t>(pr.positions.size())); pr.positions.push_back(R.scan.pos[R.scan.tri[3 * t + j]]); }
-                }
-                if (pr.positions.empty()) pr.positions.push_back(Vec3(0, 0, 0)), pr.positions.push_back(Vec3(0, 0.001f, 0)), pr.positions.push_back(Vec3(0.001f, 0, 0)), pr.indices = {0, 1, 2};
-                node.primitives.push_back(std::move(pr));
-                node.extrasJson = "{\"sb\":{}}";
-                staged_glb::WriteOptions opt;
-                const auto glb = staged_glb::write({node}, opt);
-                std::ofstream(std::string(dd) + "/scan_residual_" + names[band] + ".glb", std::ios::binary).write(reinterpret_cast<const char*>(glb.data()), static_cast<std::streamsize>(glb.size()));
-            }
-        }
         R.scanToFit = sg::residualOf(sf, P.inlierBandM);
         R.scanToFitPlusPass = sg::residualOf(sfPlus, P.inlierBandM);
         const Residual noPass = sg::residualOf(sfNoPass, P.inlierBandM);
@@ -2543,7 +2470,6 @@ private:
             R.fitToScan = sg::residualOf(backed, P.inlierBandM);
             R.unobservedShare = visTotal > 0 ? visUnobserved / visTotal : 0;
             R.hausdorff = std::max(sg::residualOf(sfHausdorff, P.inlierBandM).max, R.fitToScan.max);
-            if (std::getenv("SCAN_FIT_DEBUG_DIR")) std::fprintf(stderr, "hausdorff: scan side %.3f (noPass max %.3f), rebuild side (backed) %.3f; rebuild unobserved %.1f of %.1f m2\n", R.hausdorff, noPass.max, R.fitToScan.max, visUnobserved, visTotal);
         }
         // per primitive: its surfaces' residual
         for (auto& pr : R.prims) {
@@ -2767,6 +2693,143 @@ private:
         for (auto& s : R.surfaces) { R.verticesOut += s.lpos.size(); R.trianglesOut += s.tri.size() / 3; }
     }
 };
+
+// ============================================================================================
+// Orthos of the fitted surfaces
+// ============================================================================================
+
+/** One ortho request per fitted surface worth showing (a square metre or more, a third of it seen), its slots drawn on it. */
+inline std::vector<scan_ortho::Request> orthoRequests(const FitResult& R) {
+    std::vector<scan_ortho::Request> out;
+    for (const auto& s : R.surfaces) {
+        if (s.area < 1.0 || s.visibleFraction < 0.3) continue;
+        scan_ortho::Request rq;
+        rq.surfaceId = s.id;
+        auto& C = rq.chart;
+        C.cylinder = s.kind == ChartKind::Cylinder;
+        if (C.cylinder) {
+            C.axisOrigin = s.axisOrigin; C.axisDir = s.axisDir; C.thetaZeroDir = s.thetaZeroDir; C.radius = s.radius;
+            C.thetaDeg[0] = s.th0; C.thetaDeg[1] = s.th1; C.zM[0] = s.z0; C.zM[1] = s.z1; C.normalSign = s.normalSign;
+        } else {
+            C.origin = s.origin; C.u = s.u; C.v = s.v; C.n = s.n; C.extentUv = s.extentUv;
+        }
+        // chart coordinates of a tile-frame point on this surface
+        const Vec3 e2 = C.cylinder ? s.axisDir.cross(s.thetaZeroDir).normalized() : Vec3(0, 0, 0);
+        auto toUv = [&](const Vec3& p) {
+            if (!C.cylinder) return P2((p - s.origin).dot(s.u), (p - s.origin).dot(s.v));
+            const Vec3 d = p - s.axisOrigin;
+            const double z = d.dot(s.axisDir), x = d.dot(s.thetaZeroDir), y = d.dot(e2);
+            double th = std::atan2(y, x);
+            const double lo = s.th0 * sg::kPi / 180.0;
+            while (th < lo - 1e-9) th += 2 * sg::kPi;
+            while (th > lo + 2 * sg::kPi) th -= 2 * sg::kPi;
+            return P2(s.radius * th, z);
+        };
+        for (const auto& sl : R.slots) {
+            scan_ortho::Slot os;
+            os.id = sl.id;
+            if (!sl.edge) {
+                if (sl.surfaceId != s.id) continue;
+                os.uv = sl.regionUv;
+            } else {
+                if (std::find(sl.surfaceIds.begin(), sl.surfaceIds.end(), s.id) == sl.surfaceIds.end()) continue;
+                for (const auto& p : sl.carrier) os.uv.push_back(toUv(p));
+                os.closed = false;
+            }
+            if (os.uv.size() >= 2) rq.slots.push_back(std::move(os));
+        }
+        out.push_back(std::move(rq));
+    }
+    return out;
+}
+
+// ============================================================================================
+// Flatten: the remesh rung (a failed remesh becomes the scan with its facades flattened)
+// ============================================================================================
+
+struct FlattenOutput { std::vector<uint8_t> glb; std::string statsJson; size_t moved{0}; double maxMoveM{0}; };
+
+/**
+ * `glb` (a photo-textured or clay scan) isolated by `footprint` (tile-frame [x, z] points, empty: the whole scan), whole
+ * triangles whose centroid lies within `dilateM` of it, no height cap, nothing cut; then flattened (see Fitter::flatten).
+ * The result is clay with the input's UVs. Every number is measured on this run.
+ */
+inline FlattenOutput flattenScan(const std::vector<uint8_t>& glb, const std::vector<P2>& footprint, double bandM, double dilateM = 4.0) {
+    const auto t0 = std::chrono::steady_clock::now();
+    auto scene = gltf::GlbSceneReader::parse(glb.data(), glb.size());
+    if (!scene.ok) throw ScanFitError("input_unreadable", "cannot read the scan: " + scene.error);
+    const auto& m = scene.mesh;
+    const size_t T = m.indices.size() / 3;
+    if (T == 0) throw ScanFitError("input_unreadable", "the scan has no triangles");
+    std::vector<uint8_t> keep(T, 1);
+    double footprintArea = 0;
+    size_t dropped = 0;
+    if (footprint.size() >= 3) {
+        footprintArea = std::fabs(sg::signedArea(footprint));
+        for (size_t t = 0; t < T; ++t) {
+            const Vec3 c = (m.vertices[m.indices[3 * t]].position + m.vertices[m.indices[3 * t + 1]].position + m.vertices[m.indices[3 * t + 2]].position) * (1.0f / 3.0f);
+            const P2 q(c.x, c.z);
+            keep[t] = sg::insidePolygon(footprint, q.x, q.y) || sg::polygonDistance(footprint, q) <= dilateM;
+            if (!keep[t]) ++dropped;
+        }
+    }
+    std::vector<Vec3> pos;
+    std::vector<uint32_t> idx;
+    std::vector<int64_t> remap(m.vertices.size(), -1);
+    std::vector<uint32_t> origOf;
+    for (size_t t = 0; t < T; ++t) {
+        if (!keep[t]) continue;
+        for (int j = 0; j < 3; ++j) {
+            const uint32_t v = m.indices[3 * t + j];
+            if (remap[v] < 0) { remap[v] = static_cast<int64_t>(pos.size()); pos.push_back(m.vertices[v].position); origOf.push_back(v); }
+            idx.push_back(static_cast<uint32_t>(remap[v]));
+        }
+    }
+    if (idx.size() < 12) throw ScanFitError("no_structure", "no triangle of the scan lies within the footprint");
+    // the welded scan, and the map from the kept vertices to its welded ids (a seam's two vertices move together)
+    std::vector<uint32_t> wid;
+    sg::Scan sc = sg::weldScan(pos, idx, 0.001, &wid);
+    double ax = 0, az = 0;
+    for (const auto& p : sc.pos) { ax += p.x; az += p.z; }
+    ax /= std::max<size_t>(1, sc.pos.size()); az /= std::max<size_t>(1, sc.pos.size());
+    FitRequest q;
+    q.anchorX = ax; q.anchorZ = az;
+    Params P;
+    Fitter fitter(P, q);
+    const auto F = fitter.flatten(std::move(sc), bandM);
+    // the output: the kept triangles with their own vertices and UVs, moved vertices placed, normals recomputed
+    geometry::ScratchboxMesh out("flattened");
+    std::vector<double> moves;
+    size_t moved = 0;
+    for (size_t v = 0; v < pos.size(); ++v) {
+        geometry::Vertex vx(pos[v]);
+        vx.uv = m.vertices[origOf[v]].uv;
+        if (F.isMoved[wid[v]]) { vx.position = F.moved[wid[v]]; moves.push_back((vx.position - pos[v]).length()); ++moved; }
+        out.vertices.push_back(vx);
+    }
+    out.indices = idx;
+    out.recomputeNormals();
+    std::sort(moves.begin(), moves.end());
+    const double maxMove = moves.empty() ? 0 : moves.back(), p95 = moves.empty() ? 0 : moves[static_cast<size_t>(0.95 * (moves.size() - 1))];
+    FlattenOutput o;
+    o.glb = io::GlbWriter::writeGlb(out);
+    o.moved = moved;
+    o.maxMoveM = maxMove;
+    sj::Object st;
+    st.s("schema", "scratchbox.flatten-stats/1").i("inputTriangles", static_cast<long long>(T)).i("keptTriangles", static_cast<long long>(idx.size() / 3));
+    if (footprint.size() >= 3) {
+        sj::Object iso;
+        iso.n("footprintAreaM2", footprintArea).n("dilationM", dilateM).i("droppedTriangles", static_cast<long long>(dropped));
+        st.raw("isolate", iso.text());
+    }
+    st.i("planes", F.planes).i("movedVertices", static_cast<long long>(moved)).n("maxMoveM", maxMove).n("p95MoveM", p95).n("bandM", bandM);
+    sj::Object tm;
+    for (const auto& [k, v] : F.timings) tm.n(k, v);
+    tm.n("total", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+    st.raw("timingsMs", tm.text());
+    o.statsJson = st.text();
+    return o;
+}
 
 // ============================================================================================
 // Output: StructureFit JSON and the GLBs

@@ -176,6 +176,25 @@ static int emitFit(const Args& a, FitRun& run, const std::string& dir) {
     const std::string key = a.str("stage-key", "scan_fit");
     auto& R = run.result;
     scan_fit::Outputs out;
+    // the orthos: the textured extraction's own photo laid out on each fitted surface, with the slots drawn on it
+    if (run.request.textured) {
+        progress(0.82, "rendering the facade orthos");
+        makeDir(dir + "/orthos");
+        scan_ortho::Renderer renderer(*run.request.textured);
+        for (const auto& rq : scan_fit::orthoRequests(R)) {
+            const auto im = renderer.render(rq);
+            if (im.png.empty() || im.coveredShare < 0.05) continue;
+            const std::string rel = "orthos/ortho_" + rq.surfaceId + ".png";
+            writeBytes(dir + "/" + rel, im.png.data(), im.png.size());
+            sj::Object o;
+            std::vector<std::string> drawn;
+            for (const auto& id : im.slotsDrawn) drawn.push_back(sj::str(id));
+            o.s("id", im.id).s("surfaceId", im.surfaceId).s("path", rel).i("widthPx", im.widthPx).i("heightPx", im.heightPx).n("gsdM", im.gsdM)
+                .n("texelM", im.texelM > 0 ? im.texelM : R.limits.texelM).raw("originUv", "[" + sj::num(im.originUv.x) + "," + sj::num(im.originUv.y) + "]")
+                .raw("slotsDrawn", sj::array(drawn)).s("sha256", im.sha256);
+            out.orthoJson.push_back(o.text());
+        }
+    }
     out.fittedGlb = "fitted.glb";
     out.outlinesGlb = "outlines.glb";
     if (!R.pass.empty()) out.passThroughGlb = "passthrough.glb";
@@ -207,6 +226,68 @@ static int runFit(const Args& a) {
     return emitFit(a, run, a.str("out-dir"));
 }
 
+static int runRefit(const Args& a) {
+    for (const char* req : {"fit", "scan", "out-dir"}) if (!a.has(req)) throw CliError("bad_request", std::string("refit needs --") + req);
+    if (!a.has("set")) throw CliError("bad_request", "refit needs at least one --set <primitive id>:<parameter index>=<value>");
+    const auto prior = parseJsonFile(a.str("fit"));
+    if (prior["schema"].str != "scratchbox.structure-fit/2") throw CliError("bad_request", "--fit must hold a scratchbox.structure-fit/2 object");
+    const auto& anc = prior["input"]["anchor"];
+    if (anc.type != io::GlbJsonValue::Array || anc.arr.size() != 2) throw CliError("bad_request", "the fit has no anchor");
+    scan_fit::SourceLimits limits;
+    limits.leafGeometricErrorM = prior["sourceLimits"]["leafGeometricErrorM"].num;
+    if (!(limits.leafGeometricErrorM > 0)) throw CliError("bad_request", "the fit has no leaf geometric error");
+    FitRun run;
+    for (const auto& kv : a.all("set")) {
+        const auto colon = kv.find(':'), eq = kv.find('=');
+        if (colon == std::string::npos || eq == std::string::npos || eq < colon) throw CliError("bad_request", "--set must be <primitive id>:<parameter index>=<value>, got '" + kv + "'");
+        char* e1 = nullptr;
+        char* e2 = nullptr;
+        const long idx = std::strtol(kv.c_str() + colon + 1, &e1, 10);
+        const double val = std::strtod(kv.c_str() + eq + 1, &e2);
+        if (e1 != kv.c_str() + eq || !e2 || *e2 != '\0' || idx < 0 || !std::isfinite(val)) throw CliError("bad_request", "--set has a bad parameter index or value: '" + kv + "'");
+        run.params.overrides[kv.substr(0, colon)][static_cast<int>(idx)] = val;
+    }
+    runFitCore(a, run, anc.arr[0].num, anc.arr[1].num, limits);
+    // an override that named a primitive or a parameter the fit does not have is an error, not a silent no-op
+    for (const auto& [pid, ps] : run.params.overrides) {
+        const scan_fit::Primitive* found = nullptr;
+        for (const auto& pr : run.result.prims) if (pr.id == pid) found = &pr;
+        if (!found) throw CliError("bad_request", "the fit has no primitive " + pid);
+        for (const auto& [pi, v] : ps) {
+            bool ok = false;
+            for (const auto& c : found->correctable) ok = ok || c.param == pi;
+            if (!ok) throw CliError("bad_request", "primitive " + pid + " has no correctable parameter " + std::to_string(pi));
+            (void)v;
+        }
+    }
+    return emitFit(a, run, a.str("out-dir"));
+}
+
+static int runFlatten(const Args& a) {
+    for (const char* req : {"input", "out", "stats"}) if (!a.has(req)) throw CliError("bad_request", std::string("flatten needs --") + req);
+    const double band = a.num("band", 0.10);
+    if (!(band > 0 && band <= 1)) throw CliError("bad_request", "--band must be in (0, 1] metres");
+    std::vector<scan_geom::P2> fp;
+    if (a.has("footprint-json")) {
+        const auto d = parseJsonFile(a.str("footprint-json"));
+        const auto& poly = d["polygon"];
+        if (poly.type != io::GlbJsonValue::Array || poly.arr.size() < 3) throw CliError("bad_request", "--footprint-json needs a polygon of at least three points");
+        for (const auto& p : poly.arr) {
+            if (p.type != io::GlbJsonValue::Array || p.arr.size() != 2 || !std::isfinite(p[0].num) || !std::isfinite(p[1].num)) throw CliError("bad_request", "every footprint point is [x, z] in metres");
+            fp.push_back(scan_geom::P2(p[0].num, p[1].num));
+        }
+    }
+    progress(0.05, "reading the scan");
+    const auto bytes = readBytes(a.str("input"));
+    progress(0.2, "isolating and flattening");
+    const auto r = scan_fit::flattenScan(bytes, fp, band);
+    writeBytes(a.str("out"), r.glb.data(), r.glb.size());
+    writeText(a.str("stats"), r.statsJson);
+    progress(1.0, "done");
+    std::cout << "{\"ok\":true,\"movedVertices\":" << r.moved << ",\"maxMoveM\":" << num(r.maxMoveM) << "}\n";
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc < 2 || std::strcmp(argv[1], "--help") == 0 || std::strcmp(argv[1], "-h") == 0) {
         usage();
@@ -216,6 +297,8 @@ int main(int argc, char** argv) {
     try {
         const Args a = parseArgs(argc, argv, 2);
         if (cmd == "fit") return runFit(a);
+        if (cmd == "refit") return runRefit(a);
+        if (cmd == "flatten") return runFlatten(a);
         usage();
         throw CliError("bad_request", "unknown subcommand '" + cmd + "'");
     } catch (const CliError& e) {
