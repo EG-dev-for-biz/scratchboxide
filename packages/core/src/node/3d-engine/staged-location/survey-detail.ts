@@ -18,12 +18,13 @@
  * measurements are anchored to afterwards (ornament-anchor.ts).
  */
 
-import type { OrnamentSlot, StructureFit, SurveyedFace, SurveyElement, Vec3 } from '../../../common/spatial/staged-location-contracts';
+import type { OrnamentSlot, StructureFit, SurveyedFace, SurveyElement, Vec2, Vec3 } from '../../../common/spatial/staged-location-contracts';
 import { MAX_STREET_VIEW_IMAGES_PER_BUILDING } from '../../../common/spatial/staged-location-contracts';
 import type { GroundingAspectRatio } from '../../spatial/StreetViewGroundingImageService';
 import { bearingDeg, type SelectedView } from './streetview-evidence';
 import type { SurveyResult } from './face-survey';
 import { carrierArc, castBox, fitFaces, slotForCast, type BoxCast } from './survey-casting';
+import { pointInPolygon } from './ornament-vision';
 
 const DEG = Math.PI / 180;
 export const DETAIL_FOV_MIN_DEG = 30;
@@ -161,6 +162,32 @@ export function planDetailFromSurvey(survey: Pick<SurveyResult, 'faces' | 'read'
 }
 
 /** The hints table the reading prompt carries: per slot, what the survey saw there and where it stands, as the scan measures it. */
+/** The part of a located element that lies inside a surface slot's region: its extent and the point with the most room (the farthest from the region's edge). */
+export function insideSlot(l: Pick<LocatedElement, 'regionUv'>, region: Vec2[]): { u0: number; u1: number; v0: number; v1: number; cu: number; cv: number; roomM: number } | undefined {
+    const r = l.regionUv;
+    const N = 24;
+    let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+    let best: { cu: number; cv: number; room: number } | undefined;
+    const edgeDist = (u: number, v: number): number => {
+        let d = Infinity;
+        for (let i = 0, j = region.length - 1; i < region.length; j = i++) {
+            const [ax, ay] = region[j], [bx, by] = region[i];
+            const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy || 1;
+            const t = Math.max(0, Math.min(1, ((u - ax) * dx + (v - ay) * dy) / l2));
+            d = Math.min(d, Math.hypot(u - (ax + t * dx), v - (ay + t * dy)));
+        }
+        return d;
+    };
+    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+        const u = r.u0 + ((r.u1 - r.u0) * (i + 0.5)) / N, v = r.v0 + ((r.v1 - r.v0) * (j + 0.5)) / N;
+        if (!pointInPolygon(u, v, region, 0)) continue;
+        u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v);
+        const room = Math.min(edgeDist(u, v), u - r.u0 + (r.u1 - r.u0) / N, r.u1 - u + (r.u1 - r.u0) / N, v - r.v0 + (r.v1 - r.v0) / N, r.v1 - v + (r.v1 - r.v0) / N);
+        if (!best || room > best.room) best = { cu: u, cv: v, room };
+    }
+    return best ? { u0, u1, v0, v1, cu: best.cu, cv: best.cv, roomM: best.room } : undefined;
+}
+
 export function surveyHintLines(located: LocatedElement[], slots: OrnamentSlot[]): string[] {
     const lines: string[] = [];
     for (const slot of slots) {
@@ -168,7 +195,11 @@ export function surveyHintLines(located: LocatedElement[], slots: OrnamentSlot[]
         if (!here.length) continue;
         for (const l of here) {
             const rep = l.repeat ? `, ${l.repeat.count} repeats (${l.repeat.axis}) about ${Math.round(l.repeat.pitchM * 1000)} mm per cell` : '';
-            const run = l.runAlongM ? `, running ${l.runAlongM[0].toFixed(2)}-${l.runAlongM[1].toFixed(2)} m along the edge` : `, ${l.widthM.toFixed(2)} × ${l.heightM.toFixed(2)} m on the face`;
+            // a surface slot: where the element stands INSIDE the slot's own region (the element's box cut with the region's polygon), in the chart
+            // axes the reply uses, with the point of most room: so nothing needs placing in a frame the model cannot see
+            const inside = 'surface' in slot.host ? insideSlot(l, slot.host.surface.regionUv) : undefined;
+            const run = l.runAlongM ? `, running ${l.runAlongM[0].toFixed(2)}-${l.runAlongM[1].toFixed(2)} m along the edge`
+                : `, ${l.widthM.toFixed(2)} × ${l.heightM.toFixed(2)} m on the face${inside ? `, inside the slot over u ${inside.u0.toFixed(2)}-${inside.u1.toFixed(2)} m, v ${inside.v0.toFixed(2)}-${inside.v1.toFixed(2)} m, with most room at u ${inside.cu.toFixed(2)} m, v ${inside.cv.toFixed(2)} m (about ${inside.roomM.toFixed(2)} m clear all round; the slot's own chart axes, the ones your reply uses)` : ''}`;
             lines.push(`${slot.id}: the survey saw "${l.kind}" (${l.material}; ${l.weathering}; confidence ${l.confidence})${run}${rep}`);
         }
     }

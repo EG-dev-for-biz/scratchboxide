@@ -57,6 +57,38 @@ export interface StagedBuildOverlayProps {
     skipNote?: string;
 }
 
+/** "4 images · 1 vision call". */
+export function costWords(c: { images: number; visionCalls: number; seconds: number }): string {
+    const parts = [c.images ? `${c.images} image${c.images === 1 ? '' : 's'}` : '', c.visionCalls ? `${c.visionCalls} vision call${c.visionCalls === 1 ? '' : 's'}` : ''].filter(Boolean);
+    return parts.join(' · ');
+}
+
+/** The survey's materials and measured colours: swatches per face, labelled as photo-inferred hints (clay stays one grey; no texture). */
+function SurveyHints({ hints }: { hints: NonNullable<StagedBuildState['materialHints']> }): React.ReactElement {
+    return (
+        <div style={{ marginTop: 6 }} data-testid="sb-staged-survey" aria-label="Survey of the faces: materials and colours measured from the photos">
+            <div style={{ color: MUTED }}>{`Survey (photo-inferred hints, colours measured from the photos, ${costWords(hints.cost)}, ${hints.cost.seconds.toFixed(1)} s)`}</div>
+            <ul style={{ listStyle: 'none', margin: '4px 0 0', padding: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {hints.faces.map(f => (
+                    <li key={f.faceId} data-face={f.faceId} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ minWidth: 44 }}>{`${Math.round(f.headingDeg)}°`}</span>
+                        {f.skipped
+                            ? <span style={{ color: MUTED }}>{`not surveyed: ${f.skipped}`}</span>
+                            : (
+                                <>
+                                    <span aria-label={`palette ${f.palette?.colours.map(c => c.hex).join(', ') ?? 'none'}`} style={{ display: 'inline-flex', gap: 2 }}>
+                                        {(f.palette?.colours ?? []).map(c => <span key={c.hex} title={`${c.hex} · ${Math.round(c.share * 100)}%`} data-swatch={c.hex} style={{ width: 14, height: 14, borderRadius: 3, background: c.hex, border: '1px solid rgba(255,255,255,0.35)', display: 'inline-block' }} />)}
+                                    </span>
+                                    <span style={{ color: MUTED }}>{`${f.elements.length} element${f.elements.length === 1 ? '' : 's'}${f.materials[0] ? ` · ${f.materials[0].description}` : ''}`}</span>
+                                </>
+                            )}
+                    </li>
+                ))}
+            </ul>
+        </div>
+    );
+}
+
 const GLYPH: Record<StageStatus, string> = { pending: '○', running: '●', committed: '✓', degraded: '↓', skipped: '–', failed: '✕', stopped: '■' };
 
 const PANEL: React.CSSProperties = {
@@ -245,10 +277,11 @@ export const StagedBuildOverlay: React.FC<StagedBuildOverlayProps> = props => {
                     // a committed stage can still hold geometry that is not measurement: the chip says so beside the status
                     const inferredHere = s.status === 'committed' ? state.layers.filter(l => l.stage === s.stage && !l.retired && l.provenance.measuredGeometry === false) : [];
                     const inferredText = inferredHere.length ? `includes inferred or grown geometry (${[...new Set(inferredHere.map(l => String(l.provenance.label)))].join(', ')})` : '';
-                    const label = `${s.title}: ${s.status}${inferredText ? `, ${inferredText}` : ''}${t !== undefined ? `, ${(t / 1000).toFixed(1)} seconds` : ''}${cached ? `, ${cached}` : ''}${why ? `. ${why}` : ''}`;
+                    const costText = s.cost ? costWords(s.cost) : '';
+                    const label = `${s.title}: ${s.status}${inferredText ? `, ${inferredText}` : ''}${t !== undefined ? `, ${(t / 1000).toFixed(1)} seconds` : ''}${costText ? `, ${costText}` : ''}${cached ? `, ${cached}` : ''}${why ? `. ${why}` : ''}`;
                     return (
                         <li key={s.stage} aria-label={label} data-stage-status={s.status} style={{ padding: '2px 6px', borderRadius: 6, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)', ...(why ? { flex: '1 1 100%' } : {}) }}>
-                            <span aria-hidden="true">{`${GLYPH[s.status]} ${s.title} ${s.status}${inferredText ? ' · inferred' : ''}${t !== undefined ? ` · ${seconds(t)}` : ''}${cached ? ` · ${cached}` : ''}`}</span>
+                            <span aria-hidden="true">{`${GLYPH[s.status]} ${s.title} ${s.status}${inferredText ? ' · inferred' : ''}${t !== undefined ? ` · ${seconds(t)}` : ''}${costText ? ` · ${costText}` : ''}${cached ? ` · ${cached}` : ''}`}</span>
                             {why ? <div aria-hidden="true" data-testid="sb-staged-stage-reason" style={{ color: MUTED }}>{why}</div> : null}
                         </li>
                     );
@@ -260,6 +293,7 @@ export const StagedBuildOverlay: React.FC<StagedBuildOverlayProps> = props => {
                     {`Structure ${formatM(state.structure.geocodeToStructureM)} from the geocoded point; extracted ${formatM(state.structure.extractionRadiusM)} around it (${state.structure.containmentRounds} ${state.structure.containmentRounds === 1 ? 'round' : 'rounds'})`}
                 </div>
             ) : null}
+            {state.materialHints ? <SurveyHints hints={state.materialHints} /> : null}
             {vm ? <div style={{ marginTop: 4, color: MUTED }} data-testid="sb-staged-vision">{visionSentence(vm)}</div> : null}
             {notes.length > 0 || skippedLine ? (
                 <ul style={{ margin: '6px 0 0', paddingLeft: 16, color: MUTED }} data-testid="sb-staged-notes">

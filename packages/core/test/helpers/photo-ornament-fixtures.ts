@@ -130,8 +130,8 @@ export function figureSpec(): any {
 }
 
 /** The figure a fake native build returns for any spec: a clean 0.6 x 2.0 x 0.4 m figure, front +Z, origin at the centre of its base. */
-export function figureGlb(): Buffer {
-    const m = lumpMesh(0, 0, 0, 0.6, 2.0, 0.4, 0, 3);
+export function figureGlb(width = 0.6, height = 2.0, depth = 0.4): Buffer {
+    const m = lumpMesh(0, 0, 0, width, height, depth, 0, 3);
     return writeStagedGlb([{ name: 'body', positions: m.positions, indices: m.indices }]);
 }
 

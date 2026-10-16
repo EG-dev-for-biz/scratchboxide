@@ -69,6 +69,8 @@ export interface StagedPageOptions {
     /** Frames run only when the test steps them, on a clock the test advances (deterministic reveals). */
     manualFrames?: boolean;
     reducedMotion?: boolean;
+    /** Where screenshots go (default test-results/screenshots/staged). */
+    shotDir?: string;
 }
 
 export interface StagedPage {
@@ -216,9 +218,9 @@ ${opts.manualFrames ? MANUAL_FRAMES : ''}</head><body><div id="root"></div><scri
             await evaluate(`(async () => { for (let i = 0; i < ${n}; i++) { if (window.__sbStep) window.__sbStep(1, ${dtMs}); await new Promise(r => setTimeout(r, 0)); } await new Promise(r => setTimeout(r, 0)); })()`);
         },
         async screenshot(name) {
-            fs.mkdirSync(SHOT_DIR, { recursive: true });
+            fs.mkdirSync(opts.shotDir ?? SHOT_DIR, { recursive: true });
             const r = await send('Page.captureScreenshot', { format: 'png' });
-            const file = path.join(SHOT_DIR, `${name}.png`);
+            const file = path.join(opts.shotDir ?? SHOT_DIR, `${name}.png`);
             fs.writeFileSync(file, Buffer.from(r.data, 'base64'));
             return file;
         },

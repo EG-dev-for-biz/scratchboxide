@@ -55,13 +55,26 @@ describe('detecting figures by a measured criterion', () => {
         expect(f.centre[0]).toBeCloseTo(-4, 1);
     });
 
+    it('a lump whose lower part is the pedestal\'s own top (the real arch: lump from 1.45 m, pedestal top at 2.53 m) is a figure from the pedestal top up', () => {
+        const lump = lumpMesh(-5.2, 1.45, -8.45, 1.5, 4.3, 0.9, 0.05, 7); // spans y 1.45 .. 5.75
+        const fit = { ...structureFit(), surfaces: [...structureFit().surfaces, pedestal('s101', -5.53, 2.53, -9.7, 1.2, 1.9)] };
+        fit.passThrough = { ...fit.passThrough, regions: [region('x11', lump)] };
+        const out = detectFigureBlobs(fit, [{ name: 'x11', positions: lump.positions, indices: lump.indices }]);
+        expect(out.rejected).toEqual([]);
+        const f = out.figures[0];
+        expect(f.pedestal).toMatchObject({ surfaceId: 's101' });
+        expect(f.min[1]).toBeCloseTo(2.53, 2);                       // the figure stands on the pedestal's top
+        expect(f.heightM).toBeCloseTo(5.75 - 2.53, 1);                // and is what rises above it
+        expect(f.baseAboveGroundM).toBeCloseTo(2.53, 1);
+    });
+
     it('rejects, with the measured reason, what is too big, too squat, floating, at ground level, or not on a pedestal', () => {
         const tooBig = lumpMesh(8, 1.4, -7.5, 6, 3, 6, 0, 2);
         const squat = lumpMesh(-3, 1.4, -7, 3.4, 1.0, 3.4, 0, 3);
         const floating = lumpMesh(-4.2, 3.9, -7.5, 0.9, 2.4, 0.7, 0, 4);
         const onGround = lumpMesh(-4, 0, -7.5, 0.9, 2.4, 0.7, 0, 5);
         const noPedestal = lumpMesh(5, 1.4, 5, 0.9, 2.4, 0.7, 0, 6);
-        const d = detect([{ id: 'big', mesh: tooBig }, { id: 'squat', mesh: squat }, { id: 'float', mesh: floating }, { id: 'ground', mesh: onGround }, { id: 'nopeds', mesh: noPedestal }]);
+        const d = detect([{ id: 'big', mesh: tooBig }, { id: 'squat', mesh: squat }, { id: 'float', mesh: floating }, { id: 'ground', mesh: onGround }, { id: 'nopeds', mesh: noPedestal }], [pedestal('s90', -5.5, 1.4, -9, 3, 3), pedestal('sbig', 4, 1.4, -11, 8, 8), pedestal('ssq', -5, 1.4, -9, 4, 4)]);
         expect(d.figures.map(f => f.regionId)).toEqual(['r2']);
         const why = Object.fromEntries(d.rejected.map(r => [r.regionId, r.why]));
         expect(why.big).toMatch(/footprint 6\.\d+ m is outside/);

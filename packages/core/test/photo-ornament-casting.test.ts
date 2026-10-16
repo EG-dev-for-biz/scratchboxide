@@ -15,7 +15,9 @@ import { describe, it, expect } from 'vitest';
 import { elevationForGroundingPitch, groundingPitchForElevation } from '../src/node/spatial/StreetViewGroundingImageService';
 import { projectToFrame } from '../src/node/spatial/StreetViewPoseRegistrar';
 import { boxPixels, castBox, castCamera, castRay, fitFaces, footprintFaces, pixelRay, slotForCast, type CastFace, type CastView } from '../src/node/3d-engine/staged-location/survey-casting';
-import { fetchViews, type SelectedView } from '../src/node/3d-engine/staged-location/streetview-evidence';
+import { EVIDENCE_IMAGE_TIMEOUT_MS, fetchViews, type SelectedView } from '../src/node/3d-engine/staged-location/streetview-evidence';
+import { StreetViewGroundingImageService } from '../src/node/spatial/StreetViewGroundingImageService';
+import { bandJpeg, STONE } from './helpers/photo-ornament-fixtures';
 import { structureFit } from './helpers/staged-location-fixtures';
 
 const NORTH: CastFace = { id: 'north', source: 'fit', chart: { plane: { origin: [-13, 0, -5.5], u: [1, 0, 0], v: [0, 1, 0], normal: [0, 0, -1], extentUv: [[0, 0], [26, 24]] } } };
@@ -110,5 +112,42 @@ describe('the camera model and box casting', () => {
         expect(fpCast.source).toBe('footprint');
         expect(fpCast.centre[2]).toBeCloseTo(-5.5, 6);
         expect(fpCast.regionUv.v0).toBeGreaterThan(12);
+    });
+});
+
+describe('the image limit and the retries', () => {
+    const view = (panoId: string): SelectedView => ({ panoId, eye: [0, 2.5, 0], facadeHeadingDeg: 0, headingDeg: 0, pitchDeg: 20, fovDeg: 60, aspectRatio: 'RATIO_4X3', distanceM: 30, score: 1 });
+    const jpeg = bandJpeg([STONE]);
+    const ok = () => ({ ok: true, status: 200, text: async () => JSON.stringify({ redactedImage: { data: jpeg.toString('base64'), mimeType: 'image/jpeg' } }) } as any);
+    const unavailable = () => ({ ok: false, status: 503, text: async () => JSON.stringify({ error: { message: 'Deadline expired before operation could complete.' } }) } as any);
+
+    it('an image gets 30 s, not 8: the endpoint answers in 0.5-25 s', () => {
+        expect(EVIDENCE_IMAGE_TIMEOUT_MS).toBe(30_000);
+    });
+
+    it('two 503s then an answer arrive inside the limit (the service retries); the request carries the API\'s pitch sign', async () => {
+        const bodies: any[] = [];
+        let n = 0;
+        const service = new StreetViewGroundingImageService({
+            getAccessToken: async () => 'tok', getProjectNumber: async () => '491718041258', retryDelayMs: 1,
+            fetchImpl: (async (_url: string, init: any) => { bodies.push(JSON.parse(init.body)); return ++n < 3 ? unavailable() : ok(); }) as any
+        });
+        const r = await fetchViews([view('P1')], { mapsApiKey: 'k', grounding: service }, undefined, 5_000);
+        expect(r.images).toHaveLength(1);
+        expect(r.failures).toEqual([]);
+        expect(n).toBe(3);
+        expect(bodies.every(b => b.panoIdLocation.pitchDegree === -20)).toBe(true); // up 20 degrees is -20 for the API
+    });
+
+    it('an image that never answers is given up on at the limit, as transient, while the others land', async () => {
+        const grounding = {
+            retrieveGroundingImage: async (req: any, signal?: AbortSignal) => {
+                if (req.panoId === 'SLOW') return new Promise<never>((_, reject) => signal!.addEventListener('abort', () => reject(signal!.reason)));
+                return { image: jpeg, mimeType: 'image/jpeg', panoId: req.panoId, headingDegree: 0, pitchDegree: 0, fovDegree: 60 };
+            }
+        };
+        const r = await fetchViews([view('FAST'), view('SLOW')], { mapsApiKey: 'k', grounding }, undefined, 250);
+        expect(r.images.map(i => i.view.panoId)).toEqual(['FAST']);
+        expect(r.failures).toEqual([expect.objectContaining({ error: 'timed out after 0.25 s', transient: true })]);
     });
 });

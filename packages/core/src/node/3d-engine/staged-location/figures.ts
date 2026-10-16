@@ -54,8 +54,10 @@ export const FIGURE_CRITERIA = {
     heightM: [0.8, 6.0] as const,
     /** Height over the larger footprint side: standing, not lying or squat. */
     minSlenderness: 0.8,
-    /** The blob's lowest point against the pedestal's top plane. */
+    /** How far below the lump's base a fitted surface's plane may be and still hold it. */
     pedestalContactM: 0.5,
+    /** The pedestal's top plane may cut the lump anywhere in this share of its height above its base: below it is the pedestal's own top, which the fit holds. */
+    pedestalDepthShare: 0.6,
     /** Height of the blob's base above the fitted ground. */
     baseAboveGroundM: [0.05, 14] as const,
     maxFigures: MAX_STREET_VIEW_IMAGES_PER_BUILDING
@@ -157,29 +159,41 @@ export function detectFigureBlobs(
     for (const region of fit.passThrough.regions) {
         const node = byId.get(region.id);
         const min = region.aabbMin, max = region.aabbMax;
-        const heightM = max[1] - min[1];
         const reject = (why: string) => { rejected.push({ regionId: region.id, why }); };
         if (!node || !node.positions.length) { reject('its triangles are not in the pass-through layer'); continue; }
-        const ax = footprintAxis(node.positions);
+        const lumpHeight = max[1] - min[1];
+        const baseAbove = min[1] - fit.ground.baseY;
+        if (baseAbove < C.baseAboveGroundM[0] || baseAbove > C.baseAboveGroundM[1]) { reject(`its base is ${baseAbove.toFixed(2)} m above the fitted ground, outside ${C.baseAboveGroundM[0]}-${C.baseAboveGroundM[1]} m`); continue; }
+        // the footprint centre of the whole lump decides which fitted surface it can stand on
+        const whole = footprintAxis(node.positions);
+        // it stands on the highest fitted up-facing surface whose plane cuts the lump between its base (less the contact tolerance) and the first
+        // C.pedestalDepthShare of its height: the lump's lower part is the pedestal's own top, which the fit already holds
+        let pedestal: FigureBlob['pedestal'] | undefined;
+        for (const p of planes) {
+            if (!p.contains(whole.cx, whole.cz)) continue;
+            const topY = p.y(whole.cx, whole.cz);
+            if (topY < min[1] - C.pedestalContactM || topY > min[1] + C.pedestalDepthShare * lumpHeight) continue;
+            if (!pedestal || topY > pedestal.topY) pedestal = { surfaceId: p.id, topY, contactM: Math.abs(min[1] - topY) };
+        }
+        if (!pedestal) { reject('it does not stand on the top of a fitted surface'); continue; }
+        // the figure is what stands above the pedestal's top
+        const baseY = Math.max(min[1], pedestal.topY);
+        const above: number[] = [];
+        for (let i = 0; i < node.positions.length; i += 3) if (node.positions[i + 1] >= baseY - 0.02) above.push(node.positions[i], node.positions[i + 1], node.positions[i + 2]);
+        if (above.length < 9) { reject('nothing of it stands above the pedestal top'); continue; }
+        const ax = footprintAxis(Float32Array.from(above));
+        const heightM = max[1] - baseY;
         const footprintMax = Math.max(ax.alongM, ax.acrossM);
         if (footprintMax > C.footprintM[1] || footprintMax < C.footprintM[0]) { reject(`footprint ${footprintMax.toFixed(2)} m is outside ${C.footprintM[0]}-${C.footprintM[1]} m`); continue; }
         if (heightM < C.heightM[0] || heightM > C.heightM[1]) { reject(`height ${heightM.toFixed(2)} m is outside ${C.heightM[0]}-${C.heightM[1]} m`); continue; }
         if (heightM / footprintMax < C.minSlenderness) { reject(`not standing: height ${heightM.toFixed(2)} m over footprint ${footprintMax.toFixed(2)} m is under ${C.minSlenderness}`); continue; }
-        const baseAbove = min[1] - fit.ground.baseY;
-        if (baseAbove < C.baseAboveGroundM[0] || baseAbove > C.baseAboveGroundM[1]) { reject(`its base is ${baseAbove.toFixed(2)} m above the fitted ground, outside ${C.baseAboveGroundM[0]}-${C.baseAboveGroundM[1]} m`); continue; }
-        let pedestal: FigureBlob['pedestal'] | undefined;
-        for (const p of planes) {
-            if (!p.contains(ax.cx, ax.cz)) continue;
-            const topY = p.y(ax.cx, ax.cz);
-            const contact = Math.abs(min[1] - topY);
-            if (contact <= C.pedestalContactM && (!pedestal || contact < pedestal.contactM)) pedestal = { surfaceId: p.id, topY, contactM: contact };
-        }
-        if (!pedestal) { reject('it does not stand on the top of a fitted surface'); continue; }
-        const centre: Vec3 = [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2];
+        let lo: Vec3 = [Infinity, baseY, Infinity], hi: Vec3 = [-Infinity, max[1], -Infinity];
+        for (let i = 0; i < above.length; i += 3) { lo[0] = Math.min(lo[0], above[i]); hi[0] = Math.max(hi[0], above[i]); lo[2] = Math.min(lo[2], above[i + 2]); hi[2] = Math.max(hi[2], above[i + 2]); }
+        const centre: Vec3 = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2];
         found.push({
-            regionId: region.id, triangles: region.triangles, min, max, centre, axisDeg: Math.round(ax.axisDeg * 10) / 10, alongM: Math.round(ax.alongM * 100) / 100, acrossM: Math.round(ax.acrossM * 100) / 100,
+            regionId: region.id, triangles: region.triangles, min: lo, max: hi, centre, axisDeg: Math.round(ax.axisDeg * 10) / 10, alongM: Math.round(ax.alongM * 100) / 100, acrossM: Math.round(ax.acrossM * 100) / 100,
             heightM: Math.round(heightM * 100) / 100, pedestal: { ...pedestal, topY: Math.round(pedestal.topY * 1000) / 1000, contactM: Math.round(pedestal.contactM * 1000) / 1000 },
-            baseAboveGroundM: Math.round(baseAbove * 100) / 100, score: region.triangles * (1 - pedestal.contactM / (C.pedestalContactM + 1e-6) * 0.5)
+            baseAboveGroundM: Math.round((baseY - fit.ground.baseY) * 100) / 100, score: region.triangles
         });
     }
     found.sort((a, b) => b.score - a.score || a.regionId.localeCompare(b.regionId));
