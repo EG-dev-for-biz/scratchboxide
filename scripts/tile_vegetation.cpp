@@ -437,7 +437,7 @@ static int runPlant(const Args& a) {
         const auto& t = r.trees[i];
         // bounds of what was grown (measured from the meshes, not echoed from the crown)
         Vec3 lo(1e30f, 1e30f, 1e30f), hi(-1e30f, -1e30f, -1e30f);
-        for (const geometry::Mesh* m : {&t.wood, &t.foliage}) {
+        for (const geometry::Mesh* m : {t.hasLod ? &t.lod.wood : &t.wood, &t.foliage}) {
             for (const auto& v : m->vertices) {
                 lo.x = std::min(lo.x, v.x); lo.y = std::min(lo.y, v.y); lo.z = std::min(lo.z, v.z);
                 hi.x = std::max(hi.x, v.x); hi.y = std::max(hi.y, v.y); hi.z = std::max(hi.z, v.z);
@@ -445,7 +445,7 @@ static int runPlant(const Args& a) {
         }
         s << (i ? ",\n    " : "\n    ") << "{\"crownId\": " << t.crownId << ", \"heightAboveSupportM\": " << json::num(t.heightAboveSupport)
           << ", \"target\": " << t.target << ", \"neededTriangles\": " << t.needed << ", \"ownBudget\": " << t.ownBudget << ", \"budget\": " << t.budget
-          << ", \"triangles\": " << (t.wood.indices.size() + t.foliage.indices.size()) / 3
+          << ", \"triangles\": " << ((t.hasLod ? t.lod.woodTriangles : t.wood.indices.size() / 3) + t.foliage.indices.size() / 3)
           << ", \"wood\": " << t.report.woodTriangles << ", \"foliage\": " << t.report.foliageTriangles << ", \"clumps\": " << t.report.foliageClumps
           << ", \"surfaceMasses\": " << t.report.surfaceMasses << ", \"surfaceMassesNeeded\": " << t.report.surfaceMassesNeeded
           << ", \"crownSurfaceReached\": " << json::num(t.leaves.share()) << ", \"within1mShare\": " << json::num(t.leavesStrict.share()) << ", \"grownSurfaceReached\": " << json::num(t.grownShare)
@@ -476,7 +476,7 @@ static int runPlant(const Args& a) {
             };
             s << ", \"lod\": {\"leafLengthM\": " << json::num(L.leafLengthM) << ", \"stations\": " << L.stations << ", \"repairStations\": " << L.repairStations << ", \"fitShrunk\": " << L.fitShrunk
               << ", \"unfit\": " << L.unfit << ", \"inset\": " << L.inset << ", \"outsideCrown\": " << L.outsideCrown << ", \"prunedBelowRadiusM\": " << json::num(L.prunedBelowRadiusM) << ", \"skeletonNodes\": " << t.report.skeletonNodes << ", \"twigs\": " << L.twigCount() << ", \"twigRadiusMinM\": " << json::num(L.twigRadiusMinM) << ", \"twigRadiusMedianM\": " << json::num(L.twigRadiusMedianM) << ", \"twigRadiusMaxM\": " << json::num(L.twigRadiusMaxM) << ", \"woodTriangles\": " << L.woodTriangles
-              << ", \"level0\": " << lvl(L.level0, L.drawnLevel0()) << ", \"level1\": " << lvl(L.level1, L.drawnLevel1()) << ", \"level2Triangles\": " << (t.wood.indices.size() + t.foliage.indices.size()) / 3
+              << ", \"level0\": " << lvl(L.level0, L.drawnLevel0()) << ", \"level1\": " << lvl(L.level1, L.drawnLevel1()) << ", \"level2Triangles\": " << (L.woodTriangles + t.foliage.indices.size() / 3)
               << ", \"ms\": " << json::num(t.lodMs) << ", \"msWood\": " << json::num(L.msWood) << ", \"msTwigs\": " << json::num(L.msTwigs) << ", \"msStations\": " << json::num(L.msStations)
               << ", \"msRepair\": " << json::num(L.msRepair) << ", \"msMeasure\": " << json::num(L.msMeasure) << "}";
         }

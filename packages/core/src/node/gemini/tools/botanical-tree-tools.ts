@@ -33,7 +33,7 @@ export const BOTANICAL_TREE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 crownBaseHeightMeters: { type: 'NUMBER', description: 'Height of the lowest crown branches above the ground, metres. When omitted it is 0.35 of the height and reported as inferred.' },
                 trunkRadiusMeters: { type: 'NUMBER', description: 'Trunk radius above the root flare, metres. When omitted it is 0.016 of the height and reported as inferred.' },
                 position: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Trunk base [x, y, z] in metres (default: the origin).' },
-                triangleBudget: { type: 'NUMBER', description: 'Maximum triangles for the tree (default 8000).' },
+                triangleBudget: { type: 'NUMBER', description: 'Triangle budget for the tree\'s wood (default 8000). The tree is delivered at three levels of detail on that one skeleton; the leaves of each level come on top of the wood, and the triangles of every level are reported.' },
                 label: { type: 'STRING', description: 'Optional free-text label for the tree (e.g. what kind of tree it is); stored in the GLB, it does not change the geometry.' },
                 seed: { type: 'STRING', description: 'Optional hex seed (1-16 digits) for a different but reproducible branching.' },
                 outputGlbPath: { type: 'STRING', description: 'Optional workspace path to copy the resulting .glb to.' }
@@ -133,11 +133,13 @@ export const botanicalTreeHandlers: Record<string, ToolHandler> = {
                 requested: { heightMeters: height, crownDiameterMeters: diameter },
                 grown: { heightMeters: grownHeight, crownSpreadMeters: grownSpread, bounds: tree.bounds },
                 triangles: tree.triangles,
+                woodTriangles: tree.wood,
+                levelTriangles: tree.lod ? [tree.lod.level0?.drawnTriangles, tree.lod.level1?.drawnTriangles, tree.lod.level2Triangles] : undefined,
                 triangleBudget: budget,
                 inferred,
                 seed
             } as unknown as ToolResultPayload,
-            summaryResult: `Grew one SB-Veggie tree (space colonisation, studio clay): ${grownHeight.toFixed(1)} m tall and ${grownSpread.toFixed(1)} m across (asked for ${height} m and ${diameter} m), ${tree.triangles} triangles. ${Object.keys(inferred).length ? `Inferred, not given: ${Object.entries(inferred).map(([k, v]) => `${k} ${v}`).join(', ')}. ` : ''}GLB: ${outputGlbPath}.`
+            summaryResult: `Grew one SB-Veggie tree (space colonisation, studio clay): ${grownHeight.toFixed(1)} m tall and ${grownSpread.toFixed(1)} m across (asked for ${height} m and ${diameter} m), ${tree.triangles} triangles at the far level (${tree.wood} of them wood, within the ${budget} budget for wood; nearer levels draw ${tree.lod?.level0?.drawnTriangles ?? 'n/a'} and ${tree.lod?.level1?.drawnTriangles ?? 'n/a'}). ${Object.keys(inferred).length ? `Inferred, not given: ${Object.entries(inferred).map(([k, v]) => `${k} ${v}`).join(', ')}. ` : ''}GLB: ${outputGlbPath}.`
         };
     }
 };
