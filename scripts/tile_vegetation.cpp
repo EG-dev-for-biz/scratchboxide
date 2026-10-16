@@ -64,6 +64,8 @@ static void usage() {
         "    --skirt-min M (0.3) --fragment-max-area M2 (300) --cap-grid M (1.5) --seam-gap M (1) --sample-spacing M (0.7) --threads N\n"
         "    regrowth (white apex: a tree the regrown tree does not fill, kept as scanned):\n"
         "    --seed HEX (0) --crown-base-ratio V (0.35) --trunk-radius-per-height V (0.016) --shell-depth V (0.8) --min-surface-reached V (0.9)\n"
+        "    --removed-out PATH        also write what the removal took, as scanned, one node per crown (put back when the\n"
+        "                              tree stage fails)\n"
         "    --roi-json PATH           a scratchbox.strip-roi/1 polygon: trees whose stem lies outside it are neither regrown nor\n"
         "                              removed (status outside_roi, kept as scanned)\n"
         "  tile_vegetation canopy --tile <tile.glb> --out <mask.json> [--cell M (0.5)] [strip classifier options]\n"
@@ -223,6 +225,7 @@ static int runStrip(const Args& a) {
     const bool topDown = a.has("topdown");
     StripResult r = TileVegetation::strip(glb, P, topDown);
     if (!writeFile(a.str("out"), r.devegetatedGlb.data(), r.devegetatedGlb.size())) throw VegetationError("io", "cannot write " + a.str("out"));
+    if (a.has("removed-out") && !writeFile(a.str("removed-out"), r.removedGlb.data(), r.removedGlb.size())) throw VegetationError("io", "cannot write " + a.str("removed-out"));
     const std::string crowns = crownsJson(r, P);
     if (!writeFile(a.str("crowns"), crowns.data(), crowns.size())) throw VegetationError("io", "cannot write " + a.str("crowns"));
     const std::string stats = stripStatsJson(r);

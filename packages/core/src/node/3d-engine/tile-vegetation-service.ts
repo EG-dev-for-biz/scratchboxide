@@ -156,6 +156,11 @@ export interface TileVegetationStripRequest {
 
 export interface TileVegetationStripResult {
     devegetatedGlb: string;
+    /**
+     * What the removal took, as scanned (one node per crown, provenance as-scanned; the staged trees layer l5x): mounted
+     * when the tree stage fails, so the scanned trees are put back rather than leaving their ground empty.
+     */
+    removedTreesGlb: string;
     crownsJson: string;
     topDownPng?: string;
     stats: Record<string, any>;
@@ -503,10 +508,10 @@ export class TileVegetationService {
         const roi = req.roi === undefined ? undefined : checkRoi(req.roi);
         const key = crypto.createHash('sha256').update(CACHE_VERSION).update('\0strip\0').update(this.hashBinary(bin)).update('\0')
             .update(tileSha256).update('\0').update(JSON.stringify({ ...keyParams, topDown: !!req.topDown, seed, ...(roi ? { roi: roi.polygon } : {}) })).digest('hex');
-        const outputs = ['devegetated.glb', 'crowns.json', 'stats.json', ...(req.topDown ? ['topdown.png'] : [])];
+        const outputs = ['devegetated.glb', 'removed_trees.glb', 'crowns.json', 'stats.json', ...(req.topDown ? ['topdown.png'] : [])];
         const res = await this.cached(key, outputs, async (dir, signal) => {
-            const args = ['strip', '--input', input, '--out', path.join(dir, 'devegetated.glb'), '--crowns', path.join(dir, 'crowns.json'),
-                '--stats', path.join(dir, 'stats.json'), '--seed', seed, ...flags];
+            const args = ['strip', '--input', input, '--out', path.join(dir, 'devegetated.glb'), '--removed-out', path.join(dir, 'removed_trees.glb'),
+                '--crowns', path.join(dir, 'crowns.json'), '--stats', path.join(dir, 'stats.json'), '--seed', seed, ...flags];
             if (roi) {
                 fs.writeFileSync(path.join(dir, 'roi.json'), JSON.stringify(roi));
                 args.push('--roi-json', path.join(dir, 'roi.json'));
@@ -516,6 +521,7 @@ export class TileVegetationService {
             await runFile(bin, args, timeoutMs, signal);
         }, (dir, cached) => ({
             devegetatedGlb: path.join(dir, 'devegetated.glb'),
+            removedTreesGlb: path.join(dir, 'removed_trees.glb'),
             crownsJson: path.join(dir, 'crowns.json'),
             topDownPng: req.topDown ? path.join(dir, 'topdown.png') : undefined,
             stats: JSON.parse(fs.readFileSync(path.join(dir, 'stats.json'), 'utf8')),

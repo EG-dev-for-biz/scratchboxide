@@ -1118,6 +1118,10 @@ struct StripResult {
     std::vector<CrownRecord> crowns;
     StripStats stats;
     std::vector<uint8_t> devegetatedGlb;
+    // what the removal took, as scanned, one node per crown that took it (staged trees layer l5x): mounted when the tree
+    // stage fails, so the scanned trees are put back rather than leaving their ground empty
+    std::vector<uint8_t> removedGlb;
+    size_t removedNodes{0};
     texture::ImageBuffer topDown;
     double topDownX0{0}, topDownZ0{0}, topDownCell{1};  // pixel (i, k) covers x0 + i * cell, z0 + k * cell
     TileFrame frame;
@@ -1328,6 +1332,7 @@ private:
         removeAndCapOnGround();
         lap("remove_and_cap");
         writeDevegetated();
+        writeRemoved();
         lap("write");
         if (wantTopDown) drawTopDown();
         return std::move(R);
@@ -3313,6 +3318,72 @@ private:
     }
 
     // ---------------------------------------------------------------- output
+    /**
+     * The scan the removal took, as scanned (clay, no texture), one node per crown that took it, in crown order: the
+     * removed trees, their drape and fragments, and cut canopy taken with them. Provenance "as-scanned"; positions are
+     * quantised (KHR_mesh_quantization) with the error measured on the file.
+     */
+    void writeRemoved() {
+        std::map<int, std::vector<size_t>> byCrown;  // record index -> triangles
+        for (size_t t = 0; t < T; ++t) {
+            if (removedBy[t] < 0) continue;
+            const int ri = work[static_cast<size_t>(removedBy[t])].recordIndex;
+            if (ri >= 0) byCrown[ri].push_back(t);
+        }
+        std::vector<staged_glb::StagedNode> nodes;
+        size_t rank = 0;
+        for (const auto& [ri, tris] : byCrown) {
+            const CrownRecord& rec = R.crowns[static_cast<size_t>(ri)];
+            staged_glb::StagedPrimitive pr;
+            std::unordered_map<uint32_t, uint32_t> map;
+            for (size_t t : tris) {
+                for (int j = 0; j < 3; ++j) {
+                    const uint32_t v = wtri[3 * t + static_cast<size_t>(j)];
+                    auto it = map.find(v);
+                    if (it == map.end()) { it = map.emplace(v, static_cast<uint32_t>(pr.positions.size())).first; pr.positions.push_back(weldPos[v]); }
+                    pr.indices.push_back(it->second);
+                }
+            }
+            staged_glb::StagedNode node;
+            node.name = "scanned_crown_" + std::to_string(rec.id);
+            node.primitives.push_back(std::move(pr));
+            nodes.push_back(std::move(node));
+            ++rank;
+        }
+        // extras once the count is known
+        for (size_t k = 0; k < nodes.size(); ++k) {
+            const auto& c = R.crowns[static_cast<size_t>(std::next(byCrown.begin(), static_cast<long>(k))->first)];
+            staged_glb::NodeExtras sb;
+            sb.stage = "trees";
+            sb.provenance.label = "as-scanned";
+            sb.provenance.measuredGeometry = true;
+            sb.provenance.method = "the photo tiles' triangles the tree removal took for this crown (its canopy, drape and fragments), as scanned";
+            sb.provenance.sources.push_back({"tile-extraction", "crown-" + std::to_string(c.id), "tile_vegetation strip"});
+            sb.provenance.note = "put back as scanned when the trees are not rebuilt; crown status " + c.status;
+            sb.buildOrder = static_cast<long long>(k);
+            sb.buildCount = static_cast<long long>(nodes.size());
+            sb.revealKind = "appear";
+            sb.crownId = c.id;
+            sb.vertices = static_cast<long long>(nodes[k].primitives[0].positions.size());
+            sb.triangles = static_cast<long long>(nodes[k].primitives[0].indices.size() / 3);
+            nodes[k].extrasJson = sb.toJson("\"crownId\":" + std::to_string(c.id));
+        }
+        staged_glb::WriteOptions opt;
+        opt.generator = "Scratchbox tile_vegetation strip (the scanned trees it removed)";
+        opt.rootName = "scanned_trees";
+        opt.quantize = true;
+        std::string members;
+        std::string frameName = "tile frame: x east, y up, z south (metres)";
+        if (R.frame.known) members = "\"frame\":\"x = east, y = up, z = south (metres)\"";
+        opt.rootExtrasJson = staged_glb::rootExtrasJson("trees", "", frameName, std::string(), members);
+        try {
+            R.removedGlb = staged_glb::write(nodes, opt);
+        } catch (const staged_glb::StagedGlbError& e) {
+            throw VegetationError("failed", std::string("the removed trees could not be written: ") + e.what());
+        }
+        R.removedNodes = nodes.size();
+    }
+
     void writeDevegetated() {
         const size_t M = std::max<size_t>(scene.materials.size(), 1);
         struct Prim { std::vector<float> p, n, uv; std::vector<uint32_t> i; std::unordered_map<uint32_t, uint32_t> map; };
@@ -3586,6 +3657,7 @@ inline std::string stripStatsJson(const StripResult& r) {
     }
     s << "],\n";
     s << "  \"cutCanopyRemovedM2\": " << json::num(st.cutCanopyRemovedM2) << ",\n";
+    s << "  \"removedAsScanned\": {\"nodes\": " << r.removedNodes << ", \"bytes\": " << r.removedGlb.size() << "},\n";
     auto q3 = [](const std::array<double, 3>& q) { return "[" + json::num(q[0]) + ", " + json::num(q[1]) + ", " + json::num(q[2]) + "]"; };
     s << "  \"dispersionQuartiles\": {\"green\": " << q3(st.greenDispersionQuartiles) << ", \"other\": " << q3(st.otherDispersionQuartiles) << "},\n";
     if (!r.topDown.empty()) s << "  \"topDown\": {\"x0\": " << json::num(r.topDownX0) << ", \"z0\": " << json::num(r.topDownZ0) << ", \"cell\": " << json::num(r.topDownCell) << ", \"width\": " << r.topDown.width << ", \"height\": " << r.topDown.height << "},\n";

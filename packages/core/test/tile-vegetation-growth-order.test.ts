@@ -272,6 +272,22 @@ describe('strip: region of interest and canopy mask', () => {
         expect(near(all.devegetatedGlb, OUTSIDE)).toBe(0);
         for (const t of INSIDE) expect(near(roi.devegetatedGlb, t)).toBe(0);
         await expect(svc.strip({ tilePath: 'roi_tile.glb', roi: { schema: 'scratchbox.strip-roi/1', polygon: [[0, 0], [1, 1]] } as StripRoi })).rejects.toThrow(/StripRoi/);
+        // what the removal took, as scanned, one node per crown: what a failed tree stage puts back
+        const removed = parseGlb(fs.readFileSync(all.removedTreesGlb));
+        const removedNodes = removed.json.nodes.filter((n: any) => n.extras?.sb);
+        expect(removedNodes.length).toBe(crownsAll.length);
+        let removedTris = 0;
+        for (const n of removedNodes) {
+            expect(validateContract('StagedNodeExtras', n.extras)).toEqual([]);
+            expect(n.extras.sb.provenance.label).toBe('as-scanned');
+            removedTris += n.extras.sb.counts.triangles;
+        }
+        expect(removedTris).toBe(all.stats.triangles.removed);
+        expect(validateContract('StagedGlbRootExtras', removed.json.extras)).toEqual([]);
+        const back = readGlbTriangles(fs.readFileSync(all.removedTreesGlb));
+        expect(back.indices.length / 3).toBe(all.stats.triangles.removed);
+        // put back over the devegetated tile, the outside tree's scan is there again
+        expect(near(all.removedTreesGlb, OUTSIDE)).toBe(near(raw, OUTSIDE));
     }, 600_000);
 
     it('masks the canopy strip itself classifies, without regrowing or removing anything', async () => {
