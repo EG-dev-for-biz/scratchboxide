@@ -193,7 +193,7 @@ export interface StagedExtraction {
     geoAnchor: { lat: number; lng: number; elevation?: number; [k: string]: unknown };
 }
 
-export interface ResolvedPlace { lat: number; lng: number; formattedAddress: string; placeId?: string; elevation?: number }
+export interface ResolvedPlace { lat: number; lng: number; formattedAddress: string; placeId?: string; elevation?: number; alternatives?: NonNullable<StagedBuildState['place']['alternatives']> }
 
 export interface ScanFitDeps {
     fit(req: ScanFitFitRequest): Promise<ScanFitFitResult>;
@@ -757,7 +757,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         });
         if (resolved.status === 'stopped' || !resolved.value) throw new StagedLocationHardFailure('resolve', 'run_deadline', `The run reached its time limit before the place was resolved, so there is nothing to show.`);
         placeValue = resolved.value;
-        run.state.place = { query: request.query, resolvedAddress: placeValue.formattedAddress, lat: placeValue.lat, lng: placeValue.lng };
+        run.state.place = { query: request.query, resolvedAddress: placeValue.formattedAddress, lat: placeValue.lat, lng: placeValue.lng, ...(placeValue.alternatives?.length ? { alternatives: placeValue.alternatives } : {}) };
         persist();
 
         // ---------------- tiles ----------------
@@ -2019,7 +2019,7 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
     const base: Omit<StagedLocationResult, 'digest' | 'summary' | 'artifact'> = {
         success: true,
         status,
-        place: { query: f.request.query, resolvedAddress: f.place.formattedAddress, lat: f.place.lat, lng: f.place.lng, ...(typeof f.extraction.geoAnchor.elevation === 'number' ? { elevationM: f.extraction.geoAnchor.elevation } : {}) },
+        place: { query: f.request.query, resolvedAddress: f.place.formattedAddress, lat: f.place.lat, lng: f.place.lng, ...(typeof f.extraction.geoAnchor.elevation === 'number' ? { elevationM: f.extraction.geoAnchor.elevation } : {}), ...(f.place.alternatives?.length ? { alternatives: f.place.alternatives } : {}) },
         ...(run.state.structure ? { structure: run.state.structure } : {}),
         extraction: {
             ...(f.request.isolate ? {} : { requestedRadiusM: f.request.radiusM ?? 250 }),

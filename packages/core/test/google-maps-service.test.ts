@@ -76,7 +76,7 @@ async function runGoogleMapsServiceTests() {
     assert.strictEqual(calls[0].url, 'https://places.googleapis.com/v1/places:searchText');
     assert.strictEqual(calls[0].init.method, 'POST');
     assert.strictEqual(calls[0].init.headers['X-Goog-Api-Key'], testKey);
-    assert.strictEqual(calls[0].init.headers['X-Goog-FieldMask'], 'places.displayName,places.formattedAddress,places.location,places.viewport,places.types');
+    assert.strictEqual(calls[0].init.headers['X-Goog-FieldMask'], 'places.id,places.displayName,places.formattedAddress,places.location,places.viewport,places.types,places.userRatingCount');
     assert.strictEqual(JSON.parse(calls[0].init.body).textQuery, 'San Francisco Ferry Building');
 
     // Landmark 2: Independence Hall Philadelphia (1776 theme)

@@ -828,7 +828,8 @@ export interface StagedBuildState {
     requestKey: string;
     /** "scene-stg-<runId>" or the active scene's id: never ends in a run of 10 or more digits. */
     artifactId: string;
-    place: { query: string; resolvedAddress: string; lat: number; lng: number };
+    /** `alternatives`: other distinct places Google found for the same text, present only when it was ambiguous. */
+    place: { query: string; resolvedAddress: string; lat: number; lng: number; alternatives?: Array<{ name?: string; formattedAddress: string; lat: number; lng: number; placeId?: string; userRatingCount?: number }> };
     structure?: StructurePick;
     runState: 'running' | 'finished' | 'stopped' | 'failed' | 'interrupted';
     /** Server clock at the last artifact emission. */
@@ -946,7 +947,7 @@ export interface StagedLocationResult {
     /** Real data was mounted; with none, the tool throws a hard failure instead. */
     success: true;
     status: 'complete' | 'degraded' | 'stopped';
-    place: { query: string; resolvedAddress: string; lat: number; lng: number; elevationM?: number };
+    place: { query: string; resolvedAddress: string; lat: number; lng: number; elevationM?: number; alternatives?: Array<{ name?: string; formattedAddress: string; lat: number; lng: number; placeId?: string; userRatingCount?: number }> };
     structure?: StructurePick;
     extraction: {
         requestedRadiusM?: number; radiusM: number;
@@ -1663,7 +1664,7 @@ const DEFINITIONS = {
         schema: { const: 'scratchbox.staged-build/2' }, runId: { type: 'string', pattern: '^[0-9a-f]{8}$' }, requestKey: STR,
         // resolveCanvasArtifactId re-keys an id ending in 10+ digits, which would remount the viewport at the end of the turn
         artifactId: { type: 'string', minLength: 1, pattern: '^(?![\\s\\S]*[0-9]{10}$)' },
-        place: obj(['query', 'resolvedAddress', 'lat', 'lng'], { query: STR, resolvedAddress: STR, lat: NUM, lng: NUM }),
+        place: obj(['query', 'resolvedAddress', 'lat', 'lng'], { query: STR, resolvedAddress: STR, lat: NUM, lng: NUM, alternatives: arr(obj(['formattedAddress', 'lat', 'lng'], { name: STR, formattedAddress: STR, lat: NUM, lng: NUM, placeId: STR, userRatingCount: NUM })) }),
         structure: ref('structurePick'),
         runState: { enum: ['running', 'finished', 'stopped', 'failed', 'interrupted'] }, updatedAtMs: NUM, stages: arr(ref('stageSummary')),
         layers: arr(ref('stagedLayer')), degradations: arr(ref('DegradationRecord')),
@@ -1685,7 +1686,7 @@ const DEFINITIONS = {
     }),
     StagedLocationResult: obj(['success', 'status', 'place', 'extraction', 'stages', 'degradations', 'provenance', 'complexityGate', 'sourceLimits', 'timingsMs', 'cache', 'artifact', 'digest', 'summary'], {
         success: { const: true }, status: { enum: ['complete', 'degraded', 'stopped'] },
-        place: obj(['query', 'resolvedAddress', 'lat', 'lng'], { query: STR, resolvedAddress: STR, lat: NUM, lng: NUM, elevationM: NUM }),
+        place: obj(['query', 'resolvedAddress', 'lat', 'lng'], { query: STR, resolvedAddress: STR, lat: NUM, lng: NUM, elevationM: NUM, alternatives: arr(obj(['formattedAddress', 'lat', 'lng'], { name: STR, formattedAddress: STR, lat: NUM, lng: NUM, placeId: STR, userRatingCount: NUM })) }),
         structure: ref('structurePick'),
         extraction: obj(['radiusM', 'sizedTo', 'leafTiles', 'cached', 'geometricErrorM', 'texelM', 'attribution'], {
             requestedRadiusM: ref('nonneg'), radiusM: ref('nonneg'), sizedTo: { enum: ['structure', 'request', 'district-fallback'] },

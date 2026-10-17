@@ -155,7 +155,8 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
             const anchor = await new Google3DTileBlockoutPipelineService().resolveAddress(query, undefined, stoppableFetch(signal));
             return {
                 lat: anchor.lat, lng: anchor.lng, formattedAddress: anchor.formattedAddress ?? `${anchor.lat.toFixed(6)}, ${anchor.lng.toFixed(6)}`,
-                ...(anchor.elevation !== undefined ? { elevation: anchor.elevation } : {})
+                ...(anchor.elevation !== undefined ? { elevation: anchor.elevation } : {}),
+                ...(anchor.alternatives?.length ? { alternatives: anchor.alternatives } : {})
             } satisfies ResolvedPlace;
         },
         extract: async req => {
