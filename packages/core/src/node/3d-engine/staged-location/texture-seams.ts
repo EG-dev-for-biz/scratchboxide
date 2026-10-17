@@ -146,8 +146,10 @@ export function selectViewsPerRegion(atlas: UvAtlas, samples: ViewSamples[], ind
         if (list.length >= 2) {
             // cast shadow: well below the block's median luminance across the views that see it (L* -> log luminance)
             const logY = list.map(c => Math.log(Math.max(1e-4, ((c.lab[0] + 16) / 116) ** 3)));
-            // the upper median: with two views, the darker is measured against the brighter
-            const med = [...logY].sort((a, b) => a - b)[logY.length >> 1];
+            // the median (with two views, their mean: the darker is in shadow when it is 2 tau below the brighter; the upper
+            // median, the brighter itself, penalised every darker view and raised the views' disagreement at the cuts by 3 to 6 dE00 on the live arch)
+            const so = [...logY].sort((a, b) => a - b);
+            const med = so.length % 2 ? so[so.length >> 1] : (so[so.length / 2 - 1] + so[so.length / 2]) / 2;
             list.forEach((c, i) => {
                 // reported as in shadow past a fixed 0.2 (18% darker), whatever the cost's threshold
                 if (med - logY[i] > 0.2) c.dark = true;
