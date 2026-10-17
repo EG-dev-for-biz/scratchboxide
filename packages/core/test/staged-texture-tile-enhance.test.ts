@@ -177,6 +177,31 @@ describe('tile photo enhancement (tile-photo-enhanced)', () => {
         saveStrip('enhance_per_chart_accept_reject', [planePanel(SIDE, SIDE, transfer.albedo), planePanel(SIDE, SIDE, res.planes.albedo)], 3);
     });
 
+    it('keeps the charts already accepted when the time budget runs out, and records the timeout once', async () => {
+        const atlas = twoChartAtlas();
+        const transfer = await transferred(atlas);
+        const budget = new AbortController();
+        const fast = replayClient({ 'facade_left/s00': answerWith(img => unsharp(img, 1.2)) });
+        // the right chart's model never answers (and ignores the abort): only the budget can end the wait
+        const client: EnhanceModelClient = req => req.label === 'facade_left/s00'
+            ? fast(req).then(a => { setTimeout(() => budget.abort(new Error('budget')), 5); return a; })
+            : new Promise<EnhanceModelAnswer>(() => undefined);
+        const res = await enhanceTransferredAtlas({ atlas, transfer, views: views(), client, concurrency: 2, budgetSignal: budget.signal });
+        expect(res.charts.map(c => c.decision)).toEqual(['accepted', 'timeout']);
+        expect(res.planes.provenance.map(p => p.source)).toEqual(['tile-photo-transfer', 'tile-photo-enhanced']);
+        expect(res.planes.provenance[1].coverage).toBeCloseTo(0.5, 6);
+        const timeouts = res.planes.degradations.filter(d => d.reasonCode === 'enhance_timeout');
+        expect(timeouts).toHaveLength(1);
+        expect(timeouts[0].reason).toMatch(/1 of 2 charts unfinished.*1 chart already accepted are kept/);
+        expect(timeouts[0].texelShare).toBeCloseTo(0.5, 6);
+        // a budget already spent sends nothing and changes nothing
+        const calls: EnhanceModelRequest[] = [];
+        const none = await enhanceTransferredAtlas({ atlas, transfer, views: views(), client: replayClient({}, calls), budgetSignal: AbortSignal.abort() });
+        expect(calls).toHaveLength(0);
+        expect(none.charts.every(c => c.decision === 'timeout')).toBe(true);
+        expect(Buffer.from(none.planes.albedo).equals(Buffer.from(transfer.albedo))).toBe(true);
+    });
+
     it('records a model failure as a degradation with the real reason and keeps the transfer byte-identical', async () => {
         const atlas = facadeAtlas(SIDE);
         const transfer = await transferred(atlas);

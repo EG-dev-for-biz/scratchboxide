@@ -105,7 +105,7 @@ export interface TextureLayerOutcome {
     degradations: TexturePassDegradation[];
     projection?: Pick<ProjectionBakeReport, 'bakedTexels' | 'multiViewTexels' | 'maxSeamDeltaE' | 'p95SeamDeltaE' | 'delight'> & { views: number; paletteDeltaE?: number };
     tileMethod?: string;
-    enhance?: { charts: number; accepted: number; rejected: number; failed: number; modelsUsed: string[] };
+    enhance?: { charts: number; accepted: number; rejected: number; failed: number; timedOut?: number; modelsUsed: string[] };
     modelsUsed: string[];
     timingsMs: Record<string, number>;
 }
@@ -291,30 +291,25 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
                 progress('enhancing the transferred tile texels with an image model (edge-gated)');
                 // the enhancement has its own time budget inside the stage's: past it the unenhanced transfer stands
                 const budgetMs = src.enhance.budgetMs ?? ENHANCE_BUDGET_MS;
-                const stop = new AbortController();
-                let timedOut = false;
-                const timer = setTimeout(() => { timedOut = true; stop.abort(Object.assign(new Error(`the enhancement passed its ${Math.round(budgetMs / 1000)} s budget`), { name: 'TimeoutError' })); }, budgetMs);
-                const onOuter = () => stop.abort(src.signal?.reason);
-                src.signal?.addEventListener('abort', onOuter, { once: true });
+                // past the budget the charts already accepted stand and the rest keep the unenhanced transfer (enhanceTransferredAtlas)
+                const budget = new AbortController();
+                const timer = setTimeout(() => budget.abort(Object.assign(new Error(`the enhancement passed its ${Math.round(budgetMs / 1000)} s budget`), { name: 'TimeoutError' })), budgetMs);
                 try {
                     const refs: EnhanceReferenceView[] = src.views.map(v => ({ panoId: v.panoId, camera: v.camera, image: v.image }));
-                    const res = await enhanceTransferredAtlas({ atlas, transfer, views: refs, client: src.enhance.client, ...(src.enhance.models ? { models: src.enhance.models } : {}), signal: stop.signal });
+                    const res = await enhanceTransferredAtlas({ atlas, transfer, views: refs, client: src.enhance.client, ...(src.enhance.models ? { models: src.enhance.models } : {}), signal: src.signal, budgetSignal: budget.signal });
                     const before = new Set(transfer.degradations);
                     degradations.push(...res.planes.degradations.filter(d => !before.has(d)));
                     transfer = res.planes;
                     modelsUsed.push(...res.modelsUsed);
                     enhance = {
                         charts: res.charts.length, accepted: res.charts.filter(c => c.decision === 'accepted').length, rejected: res.charts.filter(c => c.decision === 'rejected').length,
-                        failed: res.charts.filter(c => c.decision === 'model_failed').length, modelsUsed: res.modelsUsed
+                        failed: res.charts.filter(c => c.decision === 'model_failed').length, timedOut: res.charts.filter(c => c.decision === 'timeout').length, modelsUsed: res.modelsUsed
                     };
                 } catch (err) {
                     if (src.signal?.aborted) throw err;
-                    degradations.push(timedOut
-                        ? { stage: 'enhance', reasonCode: 'enhance_timeout', layerKey: layer.layerKey, reason: `The model enhancement did not finish within its ${Math.round(budgetMs / 1000)} s budget; the de-lit tile transfer stands unenhanced.` }
-                        : { stage: 'enhance', reasonCode: 'enhance_failed', layerKey: layer.layerKey, reason: `The model enhancement failed (${(err as Error)?.message ?? String(err)}); the de-lit tile transfer stands unenhanced.` });
+                    degradations.push({ stage: 'enhance', reasonCode: 'enhance_failed', layerKey: layer.layerKey, reason: `The model enhancement failed (${(err as Error)?.message ?? String(err)}); the de-lit tile transfer stands unenhanced.` });
                 } finally {
                     clearTimeout(timer);
-                    src.signal?.removeEventListener('abort', onOuter);
                 }
                 timingsMs.enhance = Date.now() - te;
             } else if (src.enhanceUnavailable) {

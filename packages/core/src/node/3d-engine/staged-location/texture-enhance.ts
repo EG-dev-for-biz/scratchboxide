@@ -313,9 +313,15 @@ export interface EnhanceTransferInput {
     /** Charts in flight at once. Default 4. */
     concurrency?: number;
     signal?: AbortSignal;
+    /**
+     * The enhancement's own time budget. When it fires, no new chart starts, charts in flight are abandoned (decision
+     * 'timeout'), and the charts already accepted are kept: the result is partial, never discarded. `signal` (the
+     * stage's stop) still aborts everything.
+     */
+    budgetSignal?: AbortSignal;
 }
 
-export type ChartEnhanceDecision = 'accepted' | 'rejected' | 'model_failed' | 'skipped' | (string & {});
+export type ChartEnhanceDecision = 'accepted' | 'rejected' | 'model_failed' | 'skipped' | 'timeout' | (string & {});
 
 export interface ChartEnhanceRecord {
     mapIndex: number;
@@ -368,7 +374,10 @@ function boxDownsample(img: RgbaImage8, maxSide: number): RgbaImage8 {
 
 /** Enhances the transferred texels chart by chart; returns new planes plus a per-chart record. */
 export async function enhanceTransferredAtlas(input: EnhanceTransferInput): Promise<EnhanceTransferResult> {
-    const { atlas, transfer, views, client, signal } = input;
+    const { atlas, transfer, views, client, budgetSignal } = input;
+    const outer = input.signal;
+    // what a model request listens to: the stage's stop and the budget
+    const signal = outer && budgetSignal ? AbortSignal.any([outer, budgetSignal]) : (outer ?? budgetSignal);
     const gate = { ...DEFAULT_ENHANCE_GATE, ...(input.gate || {}) };
     const models = input.models?.length ? input.models : [...IMAGE_MODEL_PRIORITY];
     const maxSide = input.maxModelSide ?? 2048;
@@ -420,11 +429,37 @@ export async function enhanceTransferredAtlas(input: EnhanceTransferInput): Prom
         return { record: { ...withModel, decision: 'accepted', metrics: verdict.metrics }, enhanced: candidate, costUsd: answer.costUsd };
     };
 
-    // Bounded concurrency, results kept in chart order.
-    const results: Array<Awaited<ReturnType<typeof runJob>>> = new Array(jobs.length);
+    // Bounded concurrency, results kept in chart order. Past the budget a chart is recorded as timed out (in flight: abandoned,
+    // even when the client ignores the abort; not started: never sent) and the finished charts stand.
+    type JobResult = Awaited<ReturnType<typeof runJob>>;
+    const timedOut = (job: ChartJob, started: boolean): JobResult => ({ record: {
+        mapIndex: job.mapIndex, label: job.label, texels: job.count, decision: 'timeout', referencePanoIds: [], reasonCode: 'enhance_timeout',
+        reason: `the enhancement's time budget ran out ${started ? 'while the model was answering' : 'before'} ${job.label}; the transferred texture is kept`
+    } });
+    const budgetOver = budgetSignal ? new Promise<'budget'>(resolve => {
+        if (budgetSignal.aborted) resolve('budget'); else budgetSignal.addEventListener('abort', () => resolve('budget'), { once: true });
+    }) : undefined;
+    const results: JobResult[] = new Array(jobs.length);
     let next = 0;
-    const worker = async () => { while (next < jobs.length) { const k = next++; results[k] = await runJob(jobs[k]); } };
+    const worker = async () => {
+        while (next < jobs.length) {
+            const k = next++;
+            if (outer?.aborted) throw outer.reason instanceof Error ? outer.reason : new Error('enhancement aborted');
+            if (budgetSignal?.aborted) { results[k] = timedOut(jobs[k], false); continue; }
+            const running = runJob(jobs[k]);
+            if (!budgetOver) { results[k] = await running; continue; }
+            running.catch(() => undefined);
+            const r = await Promise.race([running.then(v => ({ v }), e => ({ e })), budgetOver]);
+            if (r === 'budget') { if (outer?.aborted) throw outer.reason; results[k] = timedOut(jobs[k], true); continue; }
+            if ('e' in r) {
+                if (budgetSignal?.aborted && !outer?.aborted) { results[k] = timedOut(jobs[k], true); continue; }
+                throw r.e;
+            }
+            results[k] = r.v;
+        }
+    };
     await Promise.all(Array.from({ length: Math.max(1, Math.min(input.concurrency ?? 4, jobs.length)) }, worker));
+    const timeouts = results.filter(r => r.record.decision === 'timeout');
 
     const albedo = Uint8Array.from(transfer.albedo);
     const confidence: ConfidencePlane = { width: transfer.width, height: transfer.height, data: Uint8Array.from(transfer.confidence.data) };
@@ -438,7 +473,7 @@ export async function enhanceTransferredAtlas(input: EnhanceTransferInput): Prom
         if (r.costUsd !== undefined) costUsd = (costUsd ?? 0) + r.costUsd;
         const job = jobs[k];
         if (!r.enhanced) {
-            if (r.record.reasonCode) {
+            if (r.record.reasonCode && r.record.decision !== 'timeout') {
                 degradations.push({
                     stage: 'enhance', reasonCode: r.record.reasonCode, reason: r.record.reason || r.record.reasonCode, layerKey: atlas.layerKey,
                     fromRung: TILE_TRANSFER_RUNG, toRung: TILE_TRANSFER_RUNG, texelShare: atlasTexels ? job.count / atlasTexels : 0
@@ -456,6 +491,15 @@ export async function enhanceTransferredAtlas(input: EnhanceTransferInput): Prom
             enhancedTexels++;
         }
     });
+
+    if (timeouts.length) {
+        const share = timeouts.reduce((s, r) => s + r.record.texels, 0);
+        degradations.push({
+            stage: 'enhance', reasonCode: 'enhance_timeout', layerKey: atlas.layerKey, fromRung: TILE_TRANSFER_RUNG, toRung: TILE_TRANSFER_RUNG,
+            texelShare: atlasTexels ? share / atlasTexels : 0,
+            reason: `The enhancement's time budget ran out with ${timeouts.length} of ${jobs.length} charts unfinished; their de-lit tile transfer stands unenhanced, and the ${accepted.length} chart${accepted.length === 1 ? '' : 's'} already accepted are kept.`
+        });
+    }
 
     // Provenance: the transfer entries lose the enhanced texels, which get their own entry naming the model(s).
     const provenance: TexelProvenance[] = transfer.provenance.map(p => ({ ...p }));
