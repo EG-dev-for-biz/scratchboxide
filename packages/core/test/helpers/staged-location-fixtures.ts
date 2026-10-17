@@ -14,6 +14,7 @@
  * Each builder returns a fresh object, so a test may mutate it.
  */
 
+import { textureLayerBundle, texturePassRecord } from './texture-pass-fixtures';
 import {
     PHOTO_CORRECTION_TOLERANCE_M,
     PROVENANCE,
@@ -507,6 +508,8 @@ export function validExamples(): Array<[string, unknown]> {
         ['StagedLocationResult', stagedLocationResult()],
         ['vertexProvenance', vertexProvenance()],
         ['correction', correction()],
-        ['visionModelUse', visionModelUse('failed')]
+        ['visionModelUse', visionModelUse('failed')],
+        ['TextureLayerBundle', textureLayerBundle()],
+        ['TexturePassRecord', texturePassRecord()]
     ];
 }

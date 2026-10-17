@@ -1643,6 +1643,29 @@ const DEFINITIONS = {
         buildingId: STR, seed: ref('vec2'), geocodeToStructureM: ref('nonneg'), footprintAreaM2: ref('nonneg'), extractionRadiusM: ref('nonneg'),
         containmentRounds: NONNEG_INT, isolateIoU: ref('unit')
     }),
+    // texture pass (texture-pass-contracts.ts): labels and sources are open strings, nothing branches on them
+    texelProvenance: obj(['source', 'label', 'method', 'coverage'], {
+        source: { type: 'string', minLength: 1 }, label: { type: 'string', minLength: 1 }, method: STR,
+        panoIds: arr(STR), coverage: ref('unit')
+    }),
+    surfaceUvMap: obj(['nodeName', 'kind', 'texelsPerMeter', 'atlasRect'], {
+        nodeName: { type: 'string', minLength: 1 }, kind: STR, texelsPerMeter: { type: 'number', exclusiveMinimum: 0 },
+        atlasRect: arr(ref('unit'), { minItems: 4, maxItems: 4 }), chartId: STR
+    }),
+    texturePassDegradation: obj(['stage', 'reasonCode', 'reason'], {
+        stage: STR, reasonCode: { type: 'string', minLength: 1 }, reason: { type: 'string', minLength: 1 },
+        layerKey: STR, fromRung: NONNEG_INT, toRung: NONNEG_INT, texelShare: ref('unit')
+    }),
+    TextureLayerBundle: obj(['layerKey', 'maps', 'uv', 'provenance', 'ladderRung', 'confidence'], {
+        layerKey: { type: 'string', minLength: 1 },
+        maps: obj(['albedo'], { albedo: STR, normal: STR, roughness: STR }),
+        uv: arr(ref('surfaceUvMap')), provenance: arr(ref('texelProvenance'), { minItems: 1 }),
+        ladderRung: NONNEG_INT, rungReason: STR, confidence: { type: 'string', minLength: 1 }
+    }),
+    TexturePassRecord: obj(['passVersion', 'layers', 'degradations', 'timingsMs'], {
+        passVersion: { type: 'string', minLength: 1 }, layers: arr(ref('TextureLayerBundle')),
+        degradations: arr(ref('texturePassDegradation')), costUsd: ref('nonneg'), timingsMs: numberMap
+    }),
     DegradationRecord: obj(['id', 'stage', 'part', 'intended', 'fellTo', 'provenanceAfter', 'reasonCode', 'reason', 'transient', 'atMs'], {
         id: { type: 'string', minLength: 1 }, stage: STR,
         part: obj(['description'], {
@@ -1741,7 +1764,8 @@ export const STAGED_LOCATION_SCHEMA: { $schema: string; $id: string; definitions
 /** The contracts other code reads or writes whole (the rest are shared parts). */
 export const STAGED_CONTRACT_NAMES = [
     'StructureFit', 'VisionOrnamentReply', 'OrnamentSpec', 'OrnamentBuildReport', 'FlattenStats', 'CanopyMask', 'StripRoi',
-    'StagedNodeExtras', 'StagedGlbRootExtras', 'TreesGlbRootExtras', 'DegradationRecord', 'StagedBuildState', 'StageEvent', 'StagedLocationResult', 'FaceSurveyReply'
+    'StagedNodeExtras', 'StagedGlbRootExtras', 'TreesGlbRootExtras', 'DegradationRecord', 'StagedBuildState', 'StageEvent', 'StagedLocationResult', 'FaceSurveyReply',
+    'TextureLayerBundle', 'TexturePassRecord'
 ] as const satisfies readonly StagedSchemaName[];
 
 /**
