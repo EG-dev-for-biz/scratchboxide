@@ -26,6 +26,7 @@
  * them, logs them, or hands them to a codec.
  */
 
+import { groundingFocalPx } from '../../spatial/StreetViewPoseRegistrar';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -309,7 +310,7 @@ export async function fetchViews(views: SelectedView[], deps: StreetViewEvidence
                 image: {
                     view, bytes: img.image, mimeType: img.mimeType, widthPx: size.width, heightPx: size.height, sha256,
                     id: evidenceImageId(view),
-                    nativeSampleM: (view.distanceM * view.fovDeg * DEG) / size.width,
+                    nativeSampleM: view.distanceM / groundingFocalPx(view.fovDeg, size.width, size.height),
                     fetchMs: (deps.now ?? Date.now)() - t0
                 } satisfies EvidenceImage
             };
