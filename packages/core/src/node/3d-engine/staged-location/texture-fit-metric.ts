@@ -85,7 +85,44 @@ export interface LayerFit {
     /** Held-out pixels over all layer pixels the views see: how much of the layer is judged by a view that did not make it. */
     heldOutShare: number;
     widthPx: number;
+    /** Leave one pano out for real (leaveOnePanoOut), when measured. */
+    loo?: LooFit;
     ms: number;
+}
+
+/** The leave-one-pano-out fit: per pano, the photo tier baked without its views, judged by its views (pixel-weighted means). */
+export interface LooFit { chamferPx: number | null; gradNcc: number | null; pixels: number; panos: number; skipped: number; perPano: Array<{ panoId: string; pixels: number; chamferPx: number | null; gradNcc: number | null }> }
+
+/** Budget of the leave-one-pano-out re-bakes per layer, and the most panos it judges by (the ones with most views first). */
+export const LOO_BUDGET_MS = 90_000;
+export const LOO_MAX_PANOS = 6;
+
+/**
+ * Leave one pano out: for each pano, the layer's photo tier is baked again from the other panos' views alone (the same bake,
+ * `bake`), and the pano's own views score it (measureLayerFit; every texel is held out). Nothing the judge shows made the
+ * texture it judges.
+ */
+export async function leaveOnePanoOut(atlas: UvAtlas, views: Array<FitScoreView & { poseQuality?: number }>, bake: (views: any[]) => Promise<Pick<BakedTexturePlanes, 'albedo' | 'confidence' | 'provenance'>>,
+    depthFor: (v: FitScoreView) => DepthMap, signal?: AbortSignal, budgetMs = LOO_BUDGET_MS): Promise<LooFit> {
+    const t0 = Date.now();
+    const count = new Map<string, number>();
+    for (const v of views) count.set(v.panoId, (count.get(v.panoId) ?? 0) + 1);
+    const panos = [...count.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).map(e => e[0]).slice(0, LOO_MAX_PANOS);
+    const perPano: LooFit['perPano'] = [];
+    let skipped = 0;
+    for (const p of panos) {
+        if (signal?.aborted) break;
+        if (Date.now() - t0 > budgetMs) { skipped++; continue; }
+        const others = views.filter(v => v.panoId !== p);
+        if (!others.length) continue;
+        const planes = await bake(others);
+        const f = measureLayerFit({ atlas, planes, views: views.filter(v => v.panoId === p), depthFor, ...(signal ? { signal } : {}) });
+        const px = f.views.reduce((s, v) => s + (v.chamferPx !== null ? v.pixels : 0), 0);
+        perPano.push({ panoId: p, pixels: px, chamferPx: f.chamferPx, gradNcc: f.gradNcc });
+    }
+    let s = 0, n = 0, sn = 0, nn = 0;
+    for (const q of perPano) { if (q.chamferPx !== null) { s += q.chamferPx * q.pixels; n += q.pixels; } if (q.gradNcc !== null) { sn += q.gradNcc * q.pixels; nn += q.pixels; } }
+    return { chamferPx: n ? r3(s / n) : null, gradNcc: nn ? r3(sn / nn) : null, pixels: n, panos: perPano.length, skipped, perPano };
 }
 
 const EMPTY = 1e8;

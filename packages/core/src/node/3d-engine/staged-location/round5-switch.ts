@@ -8,16 +8,23 @@
  ********************************************************************************/
 
 /**
- * Measurement switch for the round-5 registration and view-selection changes (docs/processes/staged_location_texture_pass_live_arch.md).
- * With SCRATCHBOX_STAGED_ROUND4_BASELINE=1 the pass runs as round 4 did (per-pano pose choice, round-4 view selection, photos
- * projected on every fitted texel), so the held-out fit of the same run can be compared before and after on the same measure.
- * Off by default; read at call time so a test can set it.
+ * Measurement switches for the round-5 registration and texture changes (docs/processes/staged_location_texture_pass_live_arch.md),
+ * so the held-out fit of the same inputs can be compared with and without each. All on by default; read at call time.
+ *  - SCRATCHBOX_STAGED_ROUND4_BASELINE=1 turns all of them off (the pass as round 4 ran it);
+ *  - SCRATCHBOX_STAGED_ROUND5_OFF=joint,viewSelection,offScan turns off the ones listed.
  */
+export type Round5Feature = 'joint' | 'viewSelection' | 'offScan';
+
 export function round4Baseline(): boolean {
     return process.env.SCRATCHBOX_STAGED_ROUND4_BASELINE === '1';
 }
 
+export function round5Enabled(feature: Round5Feature): boolean {
+    if (round4Baseline()) return false;
+    return !(process.env.SCRATCHBOX_STAGED_ROUND5_OFF ?? '').split(',').map(s => s.trim()).includes(feature);
+}
+
 /** The joint pano registration runs (pano-joint-registration.ts). */
 export function jointRegistrationEnabled(): boolean {
-    return !round4Baseline();
+    return round5Enabled('joint');
 }

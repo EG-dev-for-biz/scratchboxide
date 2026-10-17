@@ -1713,6 +1713,10 @@ const DEFINITIONS = {
         fit: obj(['chamferPx', 'clayChamferPx', 'gradNcc', 'scoredViews', 'heldOutShare', 'widthPx', 'views'], {
             chamferPx: NUM_OR_NULL, clayChamferPx: NUM_OR_NULL, gradNcc: NUM_OR_NULL, scoredViews: NONNEG_INT, heldOutShare: ref('unit'), widthPx: NONNEG_INT,
             photo: obj(['chamferPx', 'gradNcc', 'pixels'], { chamferPx: NUM_OR_NULL, gradNcc: NUM_OR_NULL, pixels: NONNEG_INT }),
+            loo: obj(['chamferPx', 'gradNcc', 'pixels', 'panos', 'skipped', 'perPano'], {
+                chamferPx: NUM_OR_NULL, gradNcc: NUM_OR_NULL, pixels: NONNEG_INT, panos: NONNEG_INT, skipped: NONNEG_INT,
+                perPano: arr(obj(['panoId', 'pixels', 'chamferPx', 'gradNcc'], { panoId: STR, pixels: NONNEG_INT, chamferPx: NUM_OR_NULL, gradNcc: NUM_OR_NULL }))
+            }),
             views: arr(obj(['panoId', 'pixels', 'ownPixels', 'chamferPx', 'clayChamferPx', 'gradNcc'], {
                 panoId: STR, pixels: NONNEG_INT, ownPixels: NONNEG_INT, chamferPx: NUM_OR_NULL, clayChamferPx: NUM_OR_NULL, gradNcc: NUM_OR_NULL,
                 photoPixels: NONNEG_INT, photoChamferPx: NUM_OR_NULL, photoGradNcc: NUM_OR_NULL

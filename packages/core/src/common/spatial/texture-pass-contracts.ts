@@ -107,6 +107,8 @@ export interface TextureLayerFit {
     widthPx: number;
     /** The same on the photo-tier texels only. */
     photo?: { chamferPx: number | null; gradNcc: number | null; pixels: number };
+    /** Leave one pano out for real: the photo tier baked again without each pano's views, judged by that pano's views. */
+    loo?: { chamferPx: number | null; gradNcc: number | null; pixels: number; panos: number; skipped: number; perPano: Array<{ panoId: string; pixels: number; chamferPx: number | null; gradNcc: number | null }> };
     views: Array<{ panoId: string; pixels: number; ownPixels: number; chamferPx: number | null; clayChamferPx: number | null; gradNcc: number | null; photoPixels?: number; photoChamferPx?: number | null; photoGradNcc?: number | null }>;
 }
 

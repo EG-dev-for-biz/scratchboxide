@@ -18,7 +18,9 @@ import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import type { Vec3 } from '../src/common/spatial/staged-location-contracts';
 import type { BakedTexturePlanes, DecodedImage, DepthMap, PinholeCamera, TexelProvenance } from '../src/common/spatial/texture-pass-contracts';
-import { measureLayerFit, type FitScoreView } from '../src/node/3d-engine/staged-location/texture-fit-metric';
+import { leaveOnePanoOut, measureLayerFit, type FitScoreView } from '../src/node/3d-engine/staged-location/texture-fit-metric';
+import { bakeStreetViewProjection } from '../src/node/3d-engine/staged-location/texture-projection';
+import type { ProjectionView } from '../src/common/spatial/texture-pass-contracts';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { FACADE, facadeAtlas, lookAtCamera } from './helpers/texture-pass-fixtures';
 
@@ -120,4 +122,20 @@ describe('held-out texture fit metric', () => {
         const p = planes(atlas, u => (u < FACADE.widthM / 3 ? 0 : 0.4));
         fs.writeFileSync(path.join(out, 'texture_fit_metric_atlas_own_only.png'), encodePng(atlas.width, atlas.height, p.albedo, 4));
     }, 60_000);
+
+    it('leaves one pano out for real: a pano whose stated pose is 0.4 m off paints the others wrong where they judge it', async () => {
+        const { atlas, views } = scene();
+        const depthFor = (v: FitScoreView) => (views.find(x => x.panoId === v.panoId) as typeof views[number]).depth;
+        const pv = (v: typeof views[number], shiftM = 0): ProjectionView => ({ panoId: v.panoId, image: v.image, poseQuality: 1, poseSigmaPx: 0,
+            camera: { ...v.camera, eye: [v.camera.eye[0] + shiftM, v.camera.eye[1], v.camera.eye[2]] } });
+        const bake = (vs: ProjectionView[]) => bakeStreetViewProjection({ atlas, views: vs, depthFor: v => depthFor(v as unknown as FitScoreView), options: { align: false, refinePose: false } });
+        const right = await leaveOnePanoOut(atlas, views.map(v => pv(v)), bake, depthFor);
+        // pano B's photo is right, its stated pose is not: what it paints lands 0.4 m off on the wall
+        const wrong = await leaveOnePanoOut(atlas, views.map(v => pv(v, v.panoId === 'B' ? 0.4 : 0)), bake, depthFor);
+        expect(right.panos).toBe(3);
+        expect(right.chamferPx!).toBeLessThan(1.5);
+        expect(wrong.chamferPx!).toBeGreaterThan(right.chamferPx! + 1);
+        // the judges A and C see B's error; B judging A and C's texture sees its own pose error too
+        for (const p of ['A', 'C']) expect(wrong.perPano.find(q => q.panoId === p)!.chamferPx!).toBeGreaterThan(right.perPano.find(q => q.panoId === p)!.chamferPx!);
+    }, 120_000);
 });

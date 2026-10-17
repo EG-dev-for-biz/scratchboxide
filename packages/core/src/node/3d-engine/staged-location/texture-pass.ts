@@ -42,9 +42,9 @@ import type { Registration } from './pano-registration';
 import type { EvidenceImage } from './streetview-evidence';
 import { buildUvAtlas, type LaidOutUvAtlas } from './texture-uv';
 import { mergeBakedPlanes, transferTilePhoto, type TileTextureSurface } from './tile-texture-transfer';
-import { describeLayerFit, measureLayerFit, type LayerFit } from './texture-fit-metric';
+import { describeLayerFit, leaveOnePanoOut, measureLayerFit, type LayerFit } from './texture-fit-metric';
 import { measureScanDeviation, type ScanDeviation } from './scan-deviation';
-import { round4Baseline } from './round5-switch';
+import { round5Enabled } from './round5-switch';
 
 /** Part of every texture cache key: a change to the pass's maths is a new version. */
 export const TEXTURE_PASS_VERSION = 'texture-pass/6';
@@ -266,7 +266,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
 
     // where a fitted surface stands off the scan the photos show, they are not projected onto it (the scan carries them there)
     let offScan: ScanDeviation | undefined;
-    if (layer.surfaces?.length && src.occluder && src.views.length && !round4Baseline()) {
+    if (layer.surfaces?.length && src.occluder && src.views.length && round5Enabled('offScan')) {
         t = Date.now();
         offScan = measureScanDeviation(atlas, src.occluder);
         timingsMs.scanDeviation = Date.now() - t;
@@ -283,12 +283,15 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
 
     // C: Street View projection (rungs 0 and 1)
     t = Date.now();
+    /** The same bake with another set of views (the leave-one-pano-out fit below). */
+    let looBake: ((views: ProjectionView[]) => Promise<BakedTexturePlanes>) | undefined;
     if (src.views.length && src.occluder) {
         progress(`projecting ${src.views.length} Street View views`);
         try {
             // off-scan texels are projected from the scan's surface under them (same layout, positions moved)
             const projAtlas = offScan?.offTexels ? { ...atlas, texels: { ...atlas.texels, position: (() => { const pos = Float32Array.from(atlas.texels.position); for (let i = 0; i < offScan!.off.length; i++) if (offScan!.off[i] && !offScan!.noScan[i]) { pos[i * 3] = offScan!.onScan[i * 3]; pos[i * 3 + 1] = offScan!.onScan[i * 3 + 1]; pos[i * 3 + 2] = offScan!.onScan[i * 3 + 2]; } return pos; })() } } : atlas;
-            const res = await bakeStreetViewProjection({
+            looBake = views => bakeStreetViewProjection({ ...request, views });
+            const request = {
                 atlas: projAtlas, views: src.views, depthFor: depthForMesh(src.occluder), ...(src.context ? { contextDepthFor: depthForMesh(src.context) } : {}), paletteLab: src.palette.length ? paletteLab(src.palette) : undefined,
                 signal: src.signal, options: {
                     // the tile photo is registered to the geometry, so the per-chart alignment uses it as its reference
@@ -298,9 +301,10 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
                     } } : {}),
                     ...(src.delight ? { delight: src.delight } : {}), ...(src.observedSurface ? { observedSurface: src.observedSurface } : {}), ...(src.poseEdgeGuardShare ? { poseEdgeGuardShare: src.poseEdgeGuardShare } : {}),
                     // view selection: no grazing or coarse views, photo-inconsistent views rejected per region (round 5)
-                    ...(round4Baseline() ? {} : { minCosIncidence: VIEW_MIN_COS_INCIDENCE, minResolution: VIEW_MIN_RESOLUTION, regionSelect: { outlierDeltaE: VIEW_OUTLIER_DELTA_E } }),
+                    ...(!round5Enabled('viewSelection') ? {} : { minCosIncidence: VIEW_MIN_COS_INCIDENCE, minResolution: VIEW_MIN_RESOLUTION, regionSelect: { outlierDeltaE: VIEW_OUTLIER_DELTA_E } }),
                     ...(offScan?.noScanTexels ? { excludeTexels: offScan.noScan } : {}) }
-            });
+            };
+            const res = await bakeStreetViewProjection(request);
             planes = res;
             degradations.push(...res.degradations);
             projection = {
@@ -415,6 +419,19 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
             progress(`the held-out fit could not be measured (${(err as Error)?.message ?? String(err)})`);
         }
         timingsMs.fit = Date.now() - t;
+        // leave one pano out, for real: the projection baked again without each pano's views, and that pano's photos judge it
+        if (looBake && fit) {
+            t = Date.now();
+            try {
+                const loo = await leaveOnePanoOut(atlas, src.views.filter(v => v.poseQuality > 0), looBake, depthForMesh(judge), src.signal);
+                fit = { ...fit, loo };
+                progress(`leave-one-pano-out fit over ${loo.panos} panos: texture edge chamfer ${loo.chamferPx ?? 'n/a'} px, gradient NCC ${loo.gradNcc ?? 'n/a'}${loo.skipped ? ` (${loo.skipped} panos past the budget)` : ''}`);
+            } catch (err) {
+                if (src.signal?.aborted) throw err;
+                progress(`the leave-one-pano-out fit could not be measured (${(err as Error)?.message ?? String(err)})`);
+            }
+            timingsMs.fitLoo = Date.now() - t;
+        }
     }
     t = Date.now();
     const twin = writeTexturedTwinGlb({ clayGlb: layer.clayGlb, atlas, planes });
@@ -427,7 +444,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
         layerKey: layer.layerKey, glb: twin.glb,
         bundle: {
             layerKey: layer.layerKey, uv: twin.uv, provenance: m.provenance, ladderRung: worst,
-            ...(fit && fit.scoredViews ? { fit: { chamferPx: fit.chamferPx, clayChamferPx: fit.clayChamferPx, gradNcc: fit.gradNcc, scoredViews: fit.scoredViews, heldOutShare: fit.heldOutShare, widthPx: fit.widthPx, photo: fit.photo, views: fit.views } } : {}),
+            ...(fit && fit.scoredViews ? { fit: { chamferPx: fit.chamferPx, clayChamferPx: fit.clayChamferPx, gradNcc: fit.gradNcc, scoredViews: fit.scoredViews, heldOutShare: fit.heldOutShare, widthPx: fit.widthPx, photo: fit.photo, ...(fit.loo ? { loo: fit.loo } : {}), views: fit.views } } : {}),
             rungReason: `${Math.round(m.rungShares[worst] * 100)} percent of the texels are at '${TEXTURE_LADDER_RUNGS[worst]}' (the worst rung above 10 percent)`
         },
         rungShares: m.rungShares, rungTexels: m.rungTexels, atlasTexels: m.total,

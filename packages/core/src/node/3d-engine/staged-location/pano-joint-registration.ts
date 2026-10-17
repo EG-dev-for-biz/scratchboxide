@@ -33,7 +33,7 @@
 
 import type { Vec3 } from '../../../common/spatial/staged-location-contracts';
 import type { RenderMesh3D } from '../../spatial/HeadlessMeshSilhouetteRenderer';
-import { meshEdgeSamples, StreetViewCrossViewRefiner, type CrossViewFrame, type CrossViewMatch, type CrossViewResult } from '../../spatial/StreetViewCrossViewRefiner';
+import { meshEdgeSamples, StreetViewCrossViewRefiner, type CrossViewFrame, type CrossViewMatch, type CrossViewOptions, type CrossViewResult } from '../../spatial/StreetViewCrossViewRefiner';
 import {
     buildValidMask, detectLineSegments, distanceTransform, frameCamera, gaussianBlur, luminance, projectToFrame, renderFrameDepth, segmentSky, sobel,
     ZERO_CORRECTION, type FrameCamera, type PoseCorrection, type RgbaImage
@@ -53,9 +53,15 @@ export const JOINT_REGISTRATION_BUDGET_MS = 120_000;
 /** Warp lattice (nodes across the pano's directions) and its cap (deg). */
 export const WARP_GRID = [16, 12] as const;
 export const WARP_MAX_DEG = 0.6;
-/** A candidate must be better by this chamfer (px) or this NCC, and no worse than the other's tolerance on the other. */
+/**
+ * A candidate must be better by this chamfer (px) or this NCC, and no worse than the tolerance on the other. The NCC of the
+ * carried-over photos is near its noise (0.08-0.12 live), so a chamfer gain tolerates a larger NCC loss than the reverse:
+ * on a recorded live run the joint poses gained 0.65 px of chamfer for 0.014 of NCC, and the leave-one-pano-out texture fit on
+ * close-ups the fit never saw preferred them (round 5, docs/processes/staged_location_texture_pass_live_arch.md).
+ */
 export const ACCEPT_CHAMFER_GAIN_PX = 0.15;
 export const ACCEPT_NCC_GAIN = 0.01;
+export const ACCEPT_NCC_LOSS_WITH_CHAMFER_GAIN = 0.02;
 
 const EMPTY = 1e8;
 const DEG = Math.PI / 180;
@@ -264,7 +270,7 @@ export function fitIsBetter(c: PoseFit, b: PoseFit): boolean {
     if (c.chamferPx === null || c.gradNcc === null) return false;
     if (b.chamferPx === null || b.gradNcc === null) return true;
     const dC = b.chamferPx - c.chamferPx, dN = c.gradNcc - b.gradNcc;
-    return (dC >= ACCEPT_CHAMFER_GAIN_PX && dN >= -ACCEPT_NCC_GAIN) || (dN >= ACCEPT_NCC_GAIN && dC >= -ACCEPT_CHAMFER_GAIN_PX);
+    return (dC >= ACCEPT_CHAMFER_GAIN_PX && dN >= -ACCEPT_NCC_LOSS_WITH_CHAMFER_GAIN) || (dN >= ACCEPT_NCC_GAIN && dC >= -ACCEPT_CHAMFER_GAIN_PX);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -375,6 +381,8 @@ export interface JointRegistrationInput {
     /** Per pano, the box pose and the edge pose with whether the edge search locked onto the scan; the start is the better of the two. */
     candidates: Map<string, { box: PoseCorrection; edge?: PoseCorrection; edgeLocked: boolean }>;
     budgetMs?: number;
+    /** Overrides of the refiner's settings (both scales). */
+    refiner?: Partial<CrossViewOptions>;
     log?: (m: string) => void;
 }
 
@@ -451,10 +459,13 @@ export function registerPanosJointly(input: JointRegistrationInput): JointRegist
         const refiner = new StreetViewCrossViewRefiner(input.mesh, prepared.map(crossViewFrame), {
             outerIterations: 2, initialSearchPx: s === 0 ? 16 : 6, searchPx: s === 0 ? 4 : 3, finalSearchPx: 6,
             patchPx: Math.round(40 * width / 640), stridePx: Math.round(24 * width / 640), minOverlapPx: Math.round(6000 * (width / 900) ** 2),
-            minDepthMeters: 3,
-            priors: { horizontalSigmaMeters: 1.5, verticalSigmaMeters: 0.5, angleSigmaDeg: 1 },
+            // street photos of different days match less sharply than the refiner's defaults assume; these, and the priors,
+            // were chosen on the held-out cells of a recorded live run (docs/processes/staged_location_texture_pass_live_arch.md, round 5)
+            minDepthMeters: 3, minPeak: 0.4, minPeakMargin: 0.06,
+            priors: { horizontalSigmaMeters: 0.8, verticalSigmaMeters: 0.3, angleSigmaDeg: 0.6 },
             bounds: { horizontalMeters: 9, verticalMeters: 2.5, yawDeg: 8, pitchDeg: 5, rollDeg: 3 },
-            silhouetteEquivalentMatches: 40, edgeEquivalentMatches: 40, pointFilter: X => trainCell(X), budgetMs: Math.max(5000, left - 8000), log
+            silhouetteEquivalentMatches: 40, edgeEquivalentMatches: 40, pointFilter: X => trainCell(X), budgetMs: Math.max(5000, left - 8000), log,
+            ...(input.refiner ?? {})
         });
         if (s === JOINT_WIDTHS_PX.length - 1) { before = refiner.measure(corrs); fineFrames = prepared; }
         res = refiner.run(corrs, start);
