@@ -154,3 +154,38 @@ describe('Street View projection: per-chart image alignment', () => {
         expect(gradAgreement(atlas, res.albedo)).toBeGreaterThan(0.9);
     }, 120_000);
 });
+
+/** Mean absolute luminance gradient of the bake over the atlas (a double image halves the contrast of every joint). */
+function sharpness(atlas: UvAtlas, albedo: Uint8Array): number {
+    const S = atlas.width;
+    let s = 0, n = 0;
+    for (let y = 0; y + 1 < S; y++) for (let x = 0; x + 1 < S; x++) {
+        const i = y * S + x;
+        if (!albedo[i * 4 + 3] || !albedo[(i + 1) * 4 + 3] || !albedo[(i + S) * 4 + 3]) continue;
+        s += Math.abs(albedo[(i + 1) * 4] - albedo[i * 4]) + Math.abs(albedo[(i + S) * 4] - albedo[i * 4]); n++;
+    }
+    return s / n;
+}
+
+describe('Street View projection: one view per region', () => {
+    const atlas = facadeAtlas(160);
+
+    it('draws each region from one view, so misregistered views do not double the detail, and blends where they meet', async () => {
+        const v = views([[0.6, -0.3], [-0.5, 0.4], [0.3, 0.5]]);
+        const truthSharp = sharpness(atlas, (await bake(atlas, views([[0, 0], [0, 0], [0, 0]]), { align: false, regionSelect: false })).albedo);
+        const blend = await bake(atlas, v, { align: false, regionSelect: false });
+        const regions = await bake(atlas, v, { align: false, bandSigmasTexels: [1, 2, 4, 12, 32] });
+        const sb = sharpness(atlas, blend.albedo), sr = sharpness(atlas, regions.albedo);
+        expect(regions.report.regions, 'the region selection ran').toBeDefined();
+        // the weighted blend of shifted views loses joint contrast; one view per region keeps it near a registered bake
+        expect(sr, `sharpness: blend ${sb.toFixed(2)}, regions ${sr.toFixed(2)}, registered ${truthSharp.toFixed(2)}`).toBeGreaterThan(1.2 * sb);
+        expect(sr).toBeGreaterThan(0.85 * truthSharp);
+        // where regions meet, the output step is no larger than the texture's own contrast inside a region
+        const seam = regions.report.outputSeam;
+        expect(seam.p95DeltaE, JSON.stringify(seam)).toBeLessThanOrEqual(seam.interiorP95DeltaE + 2);
+        fs.mkdirSync(SHOTS, { recursive: true });
+        fs.writeFileSync(path.join(SHOTS, 'regions_blend.png'), encodePng(atlas.width, atlas.height, Buffer.from(blend.albedo)));
+        fs.writeFileSync(path.join(SHOTS, 'regions_selected.png'), encodePng(atlas.width, atlas.height, Buffer.from(regions.albedo)));
+        fs.writeFileSync(path.join(SHOTS, 'regions_report.json'), JSON.stringify({ sharpness: { blend: sb, regions: sr, registered: truthSharp }, seam, regions: regions.report.regions }));
+    }, 120_000);
+});

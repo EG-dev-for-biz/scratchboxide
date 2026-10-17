@@ -93,12 +93,12 @@ export interface ProjectionBakeOptions {
     /** Huber threshold (CIE76 Delta E) and the view count it starts at. Default 10 and 3. */
     huberDeltaE?: number;
     huberMinViews?: number;
-    /** Gaussian sigmas (texels) between the bands of the seam blend. Default [1, 2, 4]. Empty disables the band blend. */
+    /** Gaussian sigmas (texels) between the bands of the seam blend. Default [1, 2, 4, 12, 32]. Empty disables the band blend. */
     bandSigmasTexels?: number[];
     /**
      * One view per region instead of a per-texel weighted mean (texture-seams.ts): per (chart, view) exposure gains, then a
      * block MRF picks each region's view so boundaries run where the views agree; the band blend then blends the chosen
-     * views at those boundaries only. Off by default (every view blended by weight).
+     * views at those boundaries only. Default on; false blends every view by weight (the old behaviour).
      */
     regionSelect?: boolean | RegionSelectOptions;
     /** Relative per-view exposure gains. Default true. */
@@ -311,7 +311,7 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
         ...(o.poseEdgeGuardShare ? { poseEdgeGuardShare: o.poseEdgeGuardShare } : {})
     };
     const huberK = o.huberDeltaE ?? 10, huberMin = o.huberMinViews ?? 3;
-    const bandSigmas = o.bandSigmasTexels ?? [1, 2, 4];
+    const bandSigmas = o.bandSigmasTexels ?? [1, 2, 4, 12, 32];
     const { atlas, views } = input;
     const W = atlas.width, H = atlas.height, n = W * H;
     const { covered, gutter, mapIndex, normal } = atlas.texels;
@@ -477,7 +477,7 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
     // ---- 6a: one view per region (per-chart gains, block MRF); the band blend below then blends at region boundaries ------
     let label: Int32Array | undefined;
     let regions: ProjectionBakeReport['regions'];
-    if (o.regionSelect && views.length >= 2) {
+    if (o.regionSelect !== false && views.length >= 2) {
         const g = chartLocalGains(atlas, samples, index, mean);
         if (g.pairs) {
             // the mean again, with the gained colours (same weights)

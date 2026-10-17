@@ -285,9 +285,12 @@ describe('Street View projection bake', () => {
         expect(g['pano-front']).toBeCloseTo(1, 2);
         expect(g['pano-left']).toBeCloseTo(1 / 1.25, 1);
         expect(g['pano-right']).toBeCloseTo(1 / 0.65, 1);
-        // the same views without exposure compensation do show the seam: the solve is what removes it
-        const raw = await bake(rig([facadeRect()], { gains }), atlas, { exposure: false });
+        // the same views without any exposure compensation do show the seam: the solve is what removes it
+        const raw = await bake(rig([facadeRect()], { gains }), atlas, { exposure: false, regionSelect: false });
         expect(raw.report.maxSeamDeltaE).toBeGreaterThan(3);
+        // the per-chart gains of the region selection remove it on their own as well
+        const local = await bake(rig([facadeRect()], { gains }), atlas, { exposure: false });
+        expect(local.report.maxSeamDeltaE).toBeLessThanOrEqual(3);
     });
 
     it('the palette gate pulls a view whose exposure is far off the measured palette back onto it', async () => {
