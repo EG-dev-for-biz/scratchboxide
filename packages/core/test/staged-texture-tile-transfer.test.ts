@@ -44,7 +44,7 @@ describe('tile photo transfer (tier 2)', () => {
         const atlas = facadeAtlas(SIDE);
         const glb = buildTileGlb([facadeTileSheet(0.05)]);
         const raw = await transferTilePhotoFromGlb(glb, { atlas, maxDistanceM: 0.25 }, { delight: false });
-        const delit = await transferTilePhotoFromGlb(glb, { atlas, maxDistanceM: 0.25 });
+        const delit = await transferTilePhotoFromGlb(glb, { atlas, maxDistanceM: 0.25, liftCap: false });
         let maxErrRaw = 0, maxErrDelit = 0;
         for (let i = 0; i < SIDE * SIDE; i++) {
             const t = facadeAlbedo(...texelUv(i));
@@ -108,7 +108,7 @@ describe('tile photo transfer (tier 2)', () => {
         const lit = (u: number, v: number): Vec3 => { const c = facadeAlbedo(u, v); const k = v < 2 ? 0.3 : 1; return [c[0] * k, c[1] * k, c[2] * k]; };
         const glb = buildTileGlb([facadeTileSheet(0.05, lit)]);
         const raw = await transferTilePhotoFromGlb(glb, { atlas, maxDistanceM: 0.25 }, { delight: false });
-        const delit = await transferTilePhotoFromGlb(glb, { atlas, maxDistanceM: 0.25 });
+        const delit = await transferTilePhotoFromGlb(glb, { atlas, maxDistanceM: 0.25, liftCap: false });
         const lumaLin = (a: Uint8Array, i: number) => 0.299 * SRGB8_TO_LINEAR[a[i * 4]] + 0.587 * SRGB8_TO_LINEAR[a[i * 4 + 1]] + 0.114 * SRGB8_TO_LINEAR[a[i * 4 + 2]];
         let shadowed = 0, mid = 0;
         for (let i = 0; i < SIDE * SIDE; i++) {

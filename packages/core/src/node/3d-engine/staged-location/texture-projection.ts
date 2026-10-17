@@ -16,9 +16,9 @@
  *  2. visibility against the occluder depth (`depthFor`: scan plus fitted solid, camera-z metres): keep when
  *     z <= depth + (0.20 m + 0.02 z); drop within 3 px of a depth discontinuity, judged against the depth the texel's own
  *     tangent plane predicts at those pixels (so a tilted wall is not an edge and anything proud of it is);
- *  3. weight w = cos^2(incidence) * min(1, s / GSD) * poseQuality * edgeFeather * exp(-(sigma_px / 3)^2), zero inside
+ *  3. weight w = cos^2(incidence) * min(1, s / GSD) * poseQuality * edgeFeather * poseSigmaTerm, zero inside
  *     redaction rects and below cos 0.15; GSD = z / (fx cos) is the view's ground sample distance on the surface, so a
- *     view resolving finer than the texel gains nothing more; sigma_px = poseSigmaPx / max(1, z);
+ *     view resolving finer than the texel gains nothing more; poseSigmaTerm = 1 / (1 + (sigma_m / 2 m)^2), sigma_m the pose error on the surface;
  *  4. de-light each view's samples (optional, needs a place and a capture time): divide by the solar irradiance E(n) of
  *     the view's own sun relative to its mean (AlgorithmicUvEngine's NOAA ephemeris + SH9 sky helpers), then after the blend
  *     lift shadows / compress highlights with the shared photogrammetric de-light function (delightLinearRgb);
@@ -40,7 +40,7 @@ import {
     type BakedTexturePlanes, type ConfidencePlane, type DepthMap, type ProjectionBakeInput, type ProjectionView,
     type TexelProvenance, type TexturePassDegradation
 } from '../../../common/spatial/texture-pass-contracts';
-import { delightLinearRgb, PHOTOGRAMMETRIC_DELIGHT } from '../../../common/spatial/photogrammetric-delight';
+import { delightLinearPlane, PHOTOGRAMMETRIC_DELIGHT, TEXTURE_LIFT_CAP, type DelightPlaneReport } from '../../../common/spatial/photogrammetric-delight';
 import { AlgorithmicUvEngine } from '../../spatial/AlgorithmicUvEngine';
 import {
     SRGB_TO_LINEAR, deltaE00, linearToLab, linearToSrgb255, paletteGate, solveRelativeGains,
@@ -60,6 +60,11 @@ export interface ProjectionDelightOptions {
     highlightCompress?: number;
     /** Layer-frame normal -> ENU (x east, y up, z south, the solar helper's frame). Identity by default (the tile frame is Y-up ENU). */
     layerToEnu?: (n: Vec3) => Vec3;
+    /**
+     * Cap of the shadow lift by local contrast (photogrammetric-delight.ts delightLinearPlane), so a genuinely dark
+     * surface (a window opening) is not lifted toward grey. Default TEXTURE_LIFT_CAP (1.5 m, gain 2); false = uncapped.
+     */
+    liftCap?: { radiusM: number; contrastGain: number } | false;
 }
 
 export interface ProjectionBakeOptions {
@@ -114,10 +119,31 @@ export interface ProjectionBakeReport {
     maxSeamDeltaE: number;
     p95SeamDeltaE: number;
     seamSamples: number;
+    /** The shadow lift as applied: how much of it the local-contrast cap kept. Present when de-lit. */
+    delight?: DelightPlaneReport;
     timingsMs: Record<string, number>;
 }
 
 export type ProjectionBakeResult = BakedTexturePlanes & { report: ProjectionBakeReport };
+
+/**
+ * Pose-uncertainty term of the weight, measured on the surface and saturating (Cauchy), never collapsing.
+ *
+ * sigma_px = poseSigmaPx / max(1, z) is the pose error in image pixels at the texel; times the view's ground sample
+ * distance (z / (fx cos)) it is the shift on the surface in metres, ~ residual / cos. The design's exp(-(sigma_px / 3)^2)
+ * measured that shift in image pixels, where the real ~1.3 m registration residual is 60 to 110 px at 20 m: every view's
+ * term underflowed to ~0, so each single-view texel's confidence was ~0 and the tile transfer overwrote it. Here
+ * term = 1 / (1 + (sigma_m / POSE_SIGMA_SCALE_M)^2) with POSE_SIGMA_SCALE_M = 2 m, the registration's pose prior sigma
+ * (POSE_PRIOR_SIGMA.meters): a pose error equal to what a pano is expected to be off by halves the weight. Frontal, the live
+ * 1.3 m residual gives 0.70; at 60 degrees incidence (2.6 m on the surface) 0.37; a 4 m error 0.20; the tail keeps the
+ * relative ranking between views and the absolute confidence comparable with the tile's (capped at 0.5).
+ */
+export const POSE_SIGMA_SCALE_M = 2;
+export function poseSigmaTerm(poseSigmaPx: number, z: number, gsdM: number): number {
+    const sigmaM = (poseSigmaPx / Math.max(1, z)) * gsdM;
+    if (!Number.isFinite(sigmaM)) return 0;
+    return 1 / (1 + (sigmaM / POSE_SIGMA_SCALE_M) ** 2);
+}
 
 interface RawSamples { texel: number[]; rgb: number[]; logW: number[]; wAbs: number[] }
 
@@ -210,8 +236,7 @@ function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: De
         const res = Math.min(1, sizeM[t] / gsd);
         const feather = smoothstep01(edgeDist / opts.featherPx);
         if (!(feather > 0)) continue;
-        const sigma = view.poseSigmaPx / Math.max(1, z);
-        const logW = Math.log(cos * cos * res * view.poseQuality * feather) - (sigma / 3) ** 2;
+        const logW = Math.log(cos * cos * res * view.poseQuality * feather * poseSigmaTerm(view.poseSigmaPx, z, gsd));
         if (!Number.isFinite(logW)) continue;
         sampleLinear(view, x, y, col);
         out.texel.push(t);
@@ -477,13 +502,24 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
     const keyId = new Map<string, number>();
     const dominant = new Int32Array(n).fill(-1);
     let baked = 0, single = 0;
+    // shadow lift / highlight compression over the whole plane, the lift capped by local contrast (delightLinearPlane)
+    let delightReport: DelightPlaneReport | undefined;
+    if (o.delight) {
+        const has = new Uint8Array(n);
+        const sizes: number[] = [];
+        for (let t = 0; t < n; t++) if (index.start[t + 1] > index.start[t]) { has[t] = 1; if ((t & 63) === 0) sizes.push(atlas.texels.sizeM[t]); }
+        sizes.sort((x, y) => x - y);
+        const texelM = sizes.length ? sizes[sizes.length >> 1] : 0.05;
+        const capOpt = o.delight.liftCap === undefined ? TEXTURE_LIFT_CAP : o.delight.liftCap;
+        delightReport = delightLinearPlane(final, has, W, H, delightParams,
+            capOpt ? { radiusTexels: capOpt.radiusM / Math.max(1e-3, texelM), contrastGain: capOpt.contrastGain } : undefined);
+    }
     for (let t = 0; t < n; t++) {
         const a = index.start[t], b = index.start[t + 1];
         if (a === b) continue;
         baked++;
         if (b - a === 1) single++;
-        let rgb: Vec3 = [final[t * 3], final[t * 3 + 1], final[t * 3 + 2]];
-        if (o.delight) rgb = delightLinearRgb(rgb[0], rgb[1], rgb[2], delightParams);
+        const rgb: Vec3 = [final[t * 3], final[t * 3 + 1], final[t * 3 + 2]];
         albedo[t * 4] = Math.round(linearToSrgb255(rgb[0]));
         albedo[t * 4 + 1] = Math.round(linearToSrgb255(rgb[1]));
         albedo[t * 4 + 2] = Math.round(linearToSrgb255(rgb[2]));
@@ -614,6 +650,7 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
         layerKey: atlas.layerKey, width: W, height: H, albedo, confidence, provenance, degradations, paletteDeltaE,
         report: {
             targetTexels, coveredTexels, bakedTexels: baked, multiViewTexels, overlapPairs, maxSeamDeltaE: maxSeam, p95SeamDeltaE: p95Seam, seamSamples: seams.length, timingsMs,
+            ...(delightReport ? { delight: delightReport } : {}),
             views: views.map((v, k) => ({ panoId: v.panoId, samples: samples[k].texel.length, gain: gains[k], anchor: anchors.has(k), paletteGate: gateReports[k], solarDelit: solarDelit[k] }))
         }
     };

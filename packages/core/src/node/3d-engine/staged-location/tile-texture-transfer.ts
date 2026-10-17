@@ -38,7 +38,8 @@ import {
     type TileTransferInput, type TransferTilePhoto
 } from '../../../common/spatial/texture-pass-contracts';
 import {
-    delightLinearRgb, linearToSrgb255, PHOTOGRAMMETRIC_DELIGHT, SRGB8_TO_LINEAR, type PhotogrammetricDelightParams
+    delightLinearPlane, delightLinearRgb, linearToSrgb255, PHOTOGRAMMETRIC_DELIGHT, SRGB8_TO_LINEAR, TEXTURE_LIFT_CAP,
+    type DelightPlaneReport, type PhotogrammetricDelightParams
 } from '../../../common/spatial/photogrammetric-delight';
 import { decodePng } from '../../texture-processing';
 import { decodeJpegInMemory } from './photo-palette';
@@ -322,7 +323,11 @@ export interface TileSurfaceOptions {
     maxNormalAngleDeg?: number;
 }
 
-export interface TileSample { rgb: Vec3; distanceM: number; cosNormal: number }
+export interface TileSample {
+    rgb: Vec3; distanceM: number; cosNormal: number;
+    /** The colour before de-lighting, linear 0..1 (the transfer re-de-lights the plane with the lift cap). Absent when the surface does not de-light. */
+    litLinear?: Vec3;
+}
 
 /** A textured tile ready for nearest-surface lookups; its `sample` is the contract's `tileSample`. */
 export interface TileTextureSurface {
@@ -411,7 +416,10 @@ export function buildTileSurface(tris: TileTriangles, options: TileSurfaceOption
                 col[0] = tris.flatLinear[bestT * 3]; col[1] = tris.flatLinear[bestT * 3 + 1]; col[2] = tris.flatLinear[bestT * 3 + 2];
             }
             const lin = delight ? delightLinearRgb(col[0], col[1], col[2], delight) : [col[0], col[1], col[2]];
-            return { rgb: [linearToSrgb255(lin[0]), linearToSrgb255(lin[1]), linearToSrgb255(lin[2])], distanceM: Math.sqrt(bestD2), cosNormal: bestCos };
+            return {
+                rgb: [linearToSrgb255(lin[0]), linearToSrgb255(lin[1]), linearToSrgb255(lin[2])], distanceM: Math.sqrt(bestD2), cosNormal: bestCos,
+                ...(delight ? { litLinear: [col[0], col[1], col[2]] as Vec3 } : {})
+            };
         }
     };
 }
@@ -431,6 +439,11 @@ export interface TileTransferTuning {
     surface?: Pick<TileTextureSurface, 'maxNormalAngleDeg' | 'delight' | 'texelSizeM'>;
     /** Minimum normal cosine the sampler accepts (for the weight ramp). Default cos 60 deg. */
     minCosNormal?: number;
+    /**
+     * Cap the de-light's shadow lift by local contrast (delightLinearPlane) so genuinely dark surfaces keep their
+     * darkness. Default TEXTURE_LIFT_CAP; false = the sampler's per-texel de-light as is. Needs samples with litLinear.
+     */
+    liftCap?: { radiusM: number; contrastGain: number } | false;
 }
 
 const luma = (r: number, g: number, b: number): number => 0.2126 * r + 0.7152 * g + 0.0722 * b;
@@ -476,7 +489,10 @@ export const transferTilePhoto: TransferTilePhoto = async (input: TileTransferIn
 
     // 1. One tile sample per texel the atlas covers (gutter excluded: it is filled by bleed).
     const cand = new Float32Array(N * 3), candW = new Float32Array(N), hasCand = new Uint8Array(N);
+    let litLin: Float32Array | undefined;
+    const hasLit = new Uint8Array(N);
     let wanted = 0;
+    let liftReport: DelightPlaneReport | undefined;
     for (let y = 0; y < H; y++) {
         if ((y & 31) === 0) { throwIfAborted(signal); if (y) await new Promise<void>(r => setImmediate(r)); }
         for (let x = 0; x < W; x++) {
@@ -490,10 +506,24 @@ export const transferTilePhoto: TransferTilePhoto = async (input: TileTransferIn
             const agree = Math.min(1, Math.max(0, (cosN - minCos) / Math.max(1e-6, 1 - minCos)));
             const near = 1 - 0.5 * Math.min(1, s.distanceM / Math.max(1e-6, maxDistanceM));
             cand[i * 3] = s.rgb[0]; cand[i * 3 + 1] = s.rgb[1]; cand[i * 3 + 2] = s.rgb[2];
+            const lit = (s as TileSample).litLinear;
+            if (lit) { if (!litLin) litLin = new Float32Array(N * 3); litLin[i * 3] = lit[0]; litLin[i * 3 + 1] = lit[1]; litLin[i * 3 + 2] = lit[2]; hasLit[i] = 1; }
             // Never zero for an accepted sample: the weight carries the cap and the two ramps, floor 1/255.
             candW[i] = Math.max(1 / 255, TILE_CONFIDENCE_CAP * (0.5 + 0.5 * agree) * near);
             hasCand[i] = 1;
         }
+    }
+
+    // 1b. Re-de-light the transferred plane with the lift capped by local contrast (a dark window opening stays dark).
+    const delightParams = input.surface?.delight;
+    const capOpt = input.liftCap === undefined ? TEXTURE_LIFT_CAP : input.liftCap;
+    if (litLin && capOpt && delightParams) {
+        const sizes: number[] = [];
+        for (let i = 0; i < N; i += 61) if (hasLit[i]) sizes.push(atlas.texels.sizeM[i]);
+        sizes.sort((a, b) => a - b);
+        const texelM = sizes.length ? sizes[sizes.length >> 1] : 0.05;
+        liftReport = delightLinearPlane(litLin, hasLit, W, H, delightParams, { radiusTexels: capOpt.radiusM / Math.max(1e-3, texelM), contrastGain: capOpt.contrastGain });
+        for (let i = 0; i < N; i++) if (hasLit[i]) for (let c = 0; c < 3; c++) cand[i * 3 + c] = linearToSrgb255(litLin[i * 3 + c]);
     }
 
     // 2. Fusion rule against tier 1: fill uncovered texels; replace a single-view texel only when the tile is both
@@ -511,19 +541,27 @@ export const transferTilePhoto: TransferTilePhoto = async (input: TileTransferIn
         // The tile's neighbourhood as it would be after the fill: tile where it has a candidate, else tier 1.
         const mixL = new Float32Array(N), mixHas = new Uint8Array(N);
         for (let i = 0; i < N; i++) { if (hasCand[i]) { mixL[i] = cdL[i]; mixHas[i] = 1; } else if (exHas[i]) { mixL[i] = exL[i]; mixHas[i] = 1; } }
-        // Local detail energy: Sobel energy averaged over the 3x3 window (one texel alone can sit on a flat stretch).
+        // Local detail energy: Sobel energy averaged over the 3x3 window (one texel alone can sit on a flat stretch),
+        // divided by the window's squared mean luma so the two sources compare as contrast, not as exposure: a brighter
+        // tile is not "sharper" for being brighter.
         const exSob = new Float32Array(N), mixSob = new Float32Array(N);
         for (let i = 0; i < N; i++) {
             if (exHas[i]) exSob[i] = sobelAt(exL, exHas, W, H, i);
             if (mixHas[i]) mixSob[i] = sobelAt(mixL, mixHas, W, H, i);
         }
+        const contrastEnergy = (E: Float32Array, L: Float32Array, has: Uint8Array, i: number): number => {
+            const m = windowMean(L, has, W, H, i);
+            return windowMean(E, has, W, H, i) / Math.max(1, m * m);
+        };
         for (let i = 0; i < N; i++) {
             if (!hasCand[i]) continue;
             if (!exHas[i]) { take[i] = 1; continue; }
             const e = unpackConfidenceTexel(existing.confidence, i);
-            if (e.rung <= 0) { continue; }
-            if (e.weight01 >= candW[i]) { continue; }
-            if (windowMean(exSob, exHas, W, H, i) >= windowMean(mixSob, mixHas, W, H, i)) continue;
+            // a multi-view texel is never replaced
+            if (e.rung <= 0) continue;
+            // a Street View texel is kept unless the tile is BOTH more confident AND strictly sharper there
+            if (!(e.weight01 < candW[i])) continue;
+            if (!(contrastEnergy(mixSob, mixL, mixHas, i) > contrastEnergy(exSob, exL, exHas, i))) continue;
             take[i] = 1;
         }
     }
@@ -540,7 +578,7 @@ export const transferTilePhoto: TransferTilePhoto = async (input: TileTransferIn
     }
     const atlasTexels = countCovered(atlas.texels.covered);
     const d = input.surface?.delight;
-    const delightLine = d === false ? 'not de-lit' : `de-lit (shadowLift ${(d || PHOTOGRAMMETRIC_DELIGHT.defaults).shadowLift}, highlightCompress ${(d || PHOTOGRAMMETRIC_DELIGHT.defaults).highlightCompress})`;
+    const delightLine = d === false ? 'not de-lit' : `de-lit (shadowLift ${(d || PHOTOGRAMMETRIC_DELIGHT.defaults).shadowLift}, highlightCompress ${(d || PHOTOGRAMMETRIC_DELIGHT.defaults).highlightCompress}${liftReport ? `; lift capped by local contrast, ${Math.round(liftReport.meanLiftKept * 100)} percent of it kept on average` : ''})`;
     const provenance: TexelProvenance[] = [{
         source: 'tile-photo-transfer', label: 'photo-inferred',
         method: `nearest tile surface (BVH, <= ${round3(maxDistanceM)} m, normal within ${round3(Math.acos(minCos) * 180 / Math.PI)} deg), bilinear in tile UV`
@@ -619,7 +657,7 @@ export function mergeBakedPlanes(base: BakedTexturePlanes, over: BakedTexturePla
 /** Wires a tile GLB to the contract: parses it, builds the surface, and runs the transfer. */
 export async function transferTilePhotoFromGlb(
     tileGlb: Uint8Array,
-    input: Omit<TileTransferInput, 'tileSample'>,
+    input: Omit<TileTransferInput, 'tileSample'> & Pick<TileTransferTuning, 'liftCap' | 'minCosNormal'>,
     options: TileSurfaceOptions = {}
 ): Promise<{ planes: BakedTexturePlanes; surface: TileTextureSurface }> {
     const surface = loadTileSurface(tileGlb, options);

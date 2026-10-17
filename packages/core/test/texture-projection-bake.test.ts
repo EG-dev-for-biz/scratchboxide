@@ -384,11 +384,11 @@ describe('Street View projection bake', () => {
         const atlas = facadeAtlas(32);
         const views = rig([facadeRect()], { ids: ['pano-front'] });
         views[0].view.captureDate = '2024-06';
-        const noTime = await bake(views, atlas, { delight: { latitude: 41.9, longitude: 12.48 } });
+        const noTime = await bake(views, atlas, { delight: { latitude: 41.9, longitude: 12.48, liftCap: false } });
         expect(noTime.degradations.some((d) => d.reasonCode === 'capture_time_unknown')).toBe(true);
         expect(noTime.report.views[0].solarDelit).toBe(false);
         views[0].view.captureDate = '2024-06-12T15:30:00Z';
-        const res = await bake(views, atlas, { delight: { latitude: 41.9, longitude: 12.48 } });
+        const res = await bake(views, atlas, { delight: { latitude: 41.9, longitude: 12.48, liftCap: false } });
         expect(res.report.views[0].solarDelit).toBe(true);
         // one plane: E(n) is the same for every texel, so the solar step is neutral and the result is the shared lift of the truth
         const lifted = (u: number, v: number): Vec3 => {
