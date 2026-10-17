@@ -270,6 +270,17 @@ interface LookContext {
 /** The rung colours as the shader takes them. */
 const RUNG_LOOK: NonNullable<MeshStagedLook['rungs']> = { colors: TEXTURE_RUNG_COLORS.map(c => new THREE.Color(c)) };
 
+/**
+ * Whether "Show replaced layers" draws this hidden layer as a ghost. A layer a clay <-> textured swap hid (the clay copy
+ * under its twin, or the model a later swap left) is the same geometry as the one drawn: ghosting it puts a 25% dither
+ * of the other material over the whole of it (the stipple seen on the live arch). Only layers another layer replaced are
+ * ghosts; an engaged layer is never replaced by one (twinEligible), so it and its swap layers are skipped.
+ */
+export function ghostOf(f: Pick<LayerRevealFrame, 'objectId' | 'hidden' | 'phase'>, showReplaced: boolean, engaged: ReadonlyMap<string, unknown>): boolean {
+    if (!showReplaced || !(f.hidden || f.phase === 'retired')) return false;
+    return !isMaterialSwapLayer(f) && !engaged.has(f.objectId);
+}
+
 /** The look of one node of an attached layer this frame: a staged look, hidden (not started), concealed (superseded) or untouched (null). */
 export function lookFor(f: LayerRevealFrame, n: NodeInfo, ctx: LookContext): MeshStagedLook | 'hide' | 'conceal' | null {
     // Attached but not ready yet (its download-order sidecar is still loading): hidden, never drawn unpatched.
@@ -458,7 +469,8 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
     const registryRef = React.useRef(new StagedMaterialRegistry());
     const rootsRef = React.useRef(new Map<string, RootInfo>());
     const sidecarsRef = React.useRef(new Map<string, Sidecar>());
-    const statsRef = React.useRef({ lastFrameAt: 0, slowRun: 0, skipReason: undefined as string | undefined, frames: 0 });
+    /** `ghosts`: layers the last guard frame drew as ghosts; the guard stays up until a frame has concealed them again. */
+    const statsRef = React.useRef({ lastFrameAt: 0, slowRun: 0, skipReason: undefined as string | undefined, frames: 0, ghosts: 0 });
     const backgroundRef = React.useRef<{ saved: THREE.Scene['background']; scene: THREE.Scene } | undefined>(undefined);
     const legendRef = React.useRef<Legend | undefined>(undefined);
     /** Where each degraded part is on the loaded nodes (degradationPlacement.ts), recomputed when the nodes or the records change. */
@@ -476,7 +488,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         frameRef.current = undefined;
         readyAtRef.current.clear();
         rootsRef.current.clear();
-        statsRef.current = { lastFrameAt: 0, slowRun: 0, skipReason: undefined, frames: 0 };
+        statsRef.current = { lastFrameAt: 0, slowRun: 0, skipReason: undefined, frames: 0, ghosts: 0 };
         registryRef.current.restoreAll();
         placementRef.current = { sig: '', placements: new Map(), version: placementRef.current.version + 1 };
         setProvenanceOn(false);
@@ -615,9 +627,11 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         registry.updateSharedPixelScale(pxScale);
         let budget = MAX_NEW_MATERIALS_PER_FRAME;
         let drawn = 0;
+        stats.ghosts = 0;
         const highlightOn = L.highlight && L.highlight.untilMs > Date.now() ? L.highlight.id : undefined;
         for (const [f, info] of infos) {
-            const ghost = L.showReplaced && (f.hidden || f.phase === 'retired');
+            const ghost = ghostOf(f, L.showReplaced, twinRef.current.engaged);
+            if (ghost) stats.ghosts++;
             const only = f.layer.reveal.only ? new Set(f.layer.reveal.only.primitiveIds) : undefined;
             const swap = parseSwapId(f.objectId);
             const overridden = !!L.overriddenIds?.has(modelIdOf(f.objectId));
@@ -669,11 +683,13 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
             const f = frameRef.current;
             const L = live.current;
             const highlightOn = !!L.highlight && L.highlight.untilMs > Date.now();
-            const ghosts = L.showReplaced && !!f?.layers.some(x => x.hidden || x.phase === 'retired');
+            const ghosts = !!f?.layers.some(x => ghostOf(x, L.showReplaced, twinRef.current.engaged));
             const stale = !!f && !!L.state && (f.layers.length !== L.state.layers.length || f.layers.some(x => !L.state!.layers.some(l => l.objectId === x.objectId)));
             // "Replay build" is consumed by the next scheduled frame, so it needs the guard even when everything is revealed.
             const replayPending = !!scheduleRef.current && scheduleRef.current.epoch !== L.replayEpoch;
-            const needsGuard = !f || stale || replayPending || f.animating || f.pending || L.provenanceOn || highlightOn || ghosts || registryRef.current.deferredRestores > 0;
+            // A ghost drawn last frame must be concealed by a frame of the guard before it goes: restoring materials alone
+            // would leave the replaced layer unhidden, drawn whole over (and z-fighting with) the layer that replaced it.
+            const needsGuard = !f || stale || replayPending || f.animating || f.pending || L.provenanceOn || highlightOn || ghosts || statsRef.current.ghosts > 0 || registryRef.current.deferredRestores > 0;
             if (scene && needsGuard && guardRef.current?.scene !== scene) {
                 guardRef.current?.uninstall();
                 guardRef.current = { scene, uninstall: installRenderGuard(scene, renderer => onFrame(renderer as THREE.WebGLRenderer, scene)) };
