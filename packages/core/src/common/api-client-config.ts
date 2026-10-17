@@ -46,7 +46,7 @@ interface HostGlobal {
     scratchboxDesktop?: { getLaunchToken?: () => unknown };
     location?: { href: string; origin: string };
     history?: { replaceState(data: unknown, unused: string, url?: string): void };
-    sessionStorage?: { getItem(key: string): string | null; setItem(key: string, value: string): void };
+    sessionStorage?: { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem?(key: string): void };
     fetch?: (...args: any[]) => Promise<any>;
     EventSource?: any;
     Headers?: any;
@@ -199,6 +199,32 @@ export function withApiTokenQuery(url: string): string {
 
 let installed = false;
 
+/**
+ * A tab that outlives a dev-server restart still holds the previous launch's token (kept in sessionStorage), and the
+ * server answers 401. Under the Vite dev proxy a request that carries no token gets the current one injected, so drop
+ * the stale session token and repeat the request once. Hosts that provide the token themselves (Electron) are left alone.
+ */
+async function retryWithoutStaleToken(
+    win: HostGlobal,
+    response: { status: number; clone?: () => { json: () => Promise<any> } },
+    url: string,
+    init: RequestInitLike | undefined,
+    send: (url: string, init?: RequestInitLike) => Promise<any>
+): Promise<any | undefined> {
+    const body = init?.body;
+    if (response.status !== 401 || !cachedToken || windowConfig()?.launchToken) return undefined;
+    if (body !== undefined && body !== null && typeof body !== 'string' && !(typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams)) return undefined;
+    try {
+        const payload = await response.clone?.().json();
+        if (payload?.error !== 'unauthorized') return undefined;
+    } catch {
+        return undefined;
+    }
+    cachedToken = undefined;
+    try { win.sessionStorage?.removeItem(SESSION_TOKEN_KEY); } catch { /* storage blocked */ }
+    return send(url, init);
+}
+
 const LAUNCH_URL_TOKEN_PARAM = 'token';
 const SESSION_TOKEN_KEY = 'scratchbox.launchToken';
 
@@ -291,7 +317,8 @@ export function installApiAuth(): void {
             const headers = mergeHeaders(input.headers, getApiHeaders());
             return originalFetch(new RequestCtor(resolvedUrl, { ...input, headers }), init);
         }
-        return originalFetch(resolvedUrl, withApiHeaders(init ?? {}));
+        const response = await originalFetch(resolvedUrl, withApiHeaders(init ?? {}));
+        return (await retryWithoutStaleToken(win, response, resolvedUrl, init, originalFetch)) ?? response;
     };
 
     if (typeof win.EventSource === 'function') {

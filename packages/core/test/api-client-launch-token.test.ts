@@ -55,3 +55,27 @@ test('token survives a reload within the tab session', async () => {
     const mod = await import('../src/common/api-client-config');
     await expect(mod.acquireLaunchToken()).resolves.toBe('persisted');
 });
+
+test('a stale session token that the server rejects is dropped and the request repeats once without it', async () => {
+    const { store } = fakeBrowser('http://127.0.0.1:3030/');
+    store.set('scratchbox.launchToken', 'stale');
+    (g.sessionStorage as any).removeItem = (k: string) => store.delete(k);
+    const seen: Array<Record<string, string>> = [];
+    g.fetch = async (_url: string, init: { headers?: Record<string, string> } = {}) => {
+        const headers = init.headers ?? {};
+        seen.push(headers);
+        const stale = headers['X-Scratchbox-Token'] === 'stale';
+        const body = stale ? { error: 'unauthorized', message: 'Missing or invalid Scratchbox launch token' } : { ok: true };
+        const res = { status: stale ? 401 : 200, ok: !stale, json: async () => body, clone: () => res };
+        return res;
+    };
+    const mod = await import('../src/common/api-client-config');
+    mod.installApiAuth();
+    const res: any = await g.fetch('/gemini/models', { method: 'POST', body: '{}' });
+    expect(res.status).toBe(200);
+    expect(seen).toHaveLength(2);
+    expect(seen[0]['X-Scratchbox-Token']).toBe('stale');
+    expect(seen[1]['X-Scratchbox-Token']).toBeUndefined();
+    expect(store.has('scratchbox.launchToken')).toBe(false);
+    expect(mod.getLaunchToken()).toBeUndefined();
+});
