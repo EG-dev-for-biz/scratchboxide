@@ -102,7 +102,7 @@ const PANEL: React.CSSProperties = {
 const MUTED = '#b4b4bb';
 const BUTTON: React.CSSProperties = {
     font: 'inherit', fontSize: 12, color: '#e4e4e7', background: 'rgba(255, 255, 255, 0.08)',
-    border: '1px solid rgba(255, 255, 255, 0.18)', borderRadius: 6, padding: '2px 8px', cursor: 'pointer', textAlign: 'left'
+    borderWidth: 1, borderStyle: 'solid', borderColor: 'rgba(255, 255, 255, 0.18)', borderRadius: 6, padding: '2px 8px', cursor: 'pointer', textAlign: 'left'
 };
 const HIDDEN: React.CSSProperties = { position: 'absolute', width: 1, height: 1, margin: -1, padding: 0, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 };
 /** The HUD row (Fit to View, scene badge) sits within the top 48 px. */

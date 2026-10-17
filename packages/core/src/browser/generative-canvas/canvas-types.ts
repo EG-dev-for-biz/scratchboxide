@@ -738,6 +738,28 @@ export interface Media4DObject {
     lineage?: LineageDimension;
     physics?: PhysicsBodyConfig;
     keyframes?: AnimationKeyframe[];
+    /**
+     * An explicit material the user or agent set on this object (sb_set_material_pbr). When present the viewport draws every
+     * surface of the loaded model with it, over the scene's clay look and over the model's own materials; removing it brings
+     * the previous look back. Continuous physical fields only.
+     */
+    material?: ObjectMaterialOverride;
+}
+
+/** Physical surface fields of an explicit material override; colours are CSS strings or 0xRRGGBB numbers. */
+export interface ObjectMaterialOverride {
+    color?: number | string;
+    roughness?: number;
+    metalness?: number;
+    emissive?: number | string;
+    emissiveIntensity?: number;
+    clearcoat?: number;
+    clearcoatRoughness?: number;
+    transmission?: number;
+    ior?: number;
+    thickness?: number;
+    wireframe?: boolean;
+    [field: string]: unknown;
 }
 
 /** Continuous body classification for the Scene3D viewport's runtime integrator (sb_add_physics). */

@@ -54,6 +54,8 @@ export function applyClayRenderMode(roots: Array<THREE.Object3D | null | undefin
         root?.traverse(obj => {
             const mesh = obj as THREE.Mesh;
             if (!mesh.isMesh) return;
+            // An explicit material (sb_set_material_pbr) wins over the clay default.
+            if (mesh.userData.sbMaterialOverride) return;
             if (mesh.userData.sbTreeLodMesh) {
                 // base only: the controller puts it (or its dither variant) on the mesh at the next frame
                 if (enabled) {

@@ -9,6 +9,7 @@
 
 import * as THREE from 'three';
 import type { OperatorDefinition } from './types';
+import { resolveOverrideColor } from '../../primitives/scene3d/overrideColor';
 import {
     TileClayProcessor,
     type ClayPresetId
@@ -137,16 +138,26 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
         }) => {
             let targetMat: any;
 
+            if (!params.materialId && !params.objectId) {
+                throw new Error('sb_set_material_pbr needs a materialId or an objectId naming what to change. Nothing was changed.');
+            }
+            for (const key of ['color', 'attenuationColor', 'sheenColor', 'emissive'] as const) {
+                if (params[key] !== undefined && !resolveOverrideColor(params[key])) {
+                    throw new Error(`sb_set_material_pbr: ${key} ${JSON.stringify(params[key])} is not a colour (use #rrggbb, a CSS colour name, rgb(...) or a 0xRRGGBB number). Nothing was changed.`);
+                }
+            }
+
             if (params.materialId) {
                 targetMat = ctx.getMaterial(params.materialId);
             }
 
             if (params.objectId) {
                 const found = ctx.findObject(params.objectId);
-                if (found) {
-                    if (!found.object.material) found.object.material = {};
-                    targetMat = found.object.material;
+                if (!found) {
+                    throw new Error(`sb_set_material_pbr: no object with id "${params.objectId}" in the scene, so no material was changed.`);
                 }
+                if (!found.object.material) found.object.material = {};
+                targetMat = found.object.material;
             }
 
             if (!targetMat && params.materialId) {

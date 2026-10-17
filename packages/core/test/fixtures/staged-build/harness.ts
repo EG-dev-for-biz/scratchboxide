@@ -285,6 +285,19 @@ w.sbHarness = {
     setReference: () => { reference = readPixels().data.slice(); },
     clearReference: () => { reference = undefined; },
     coverage,
+    /** Mean colour of the model's pixels (everything that differs from the corner background) and how many there are. */
+    meanColor: () => {
+        const { data, width, height } = readPixels();
+        const bg = [data[0], data[1], data[2]];
+        let r = 0, g = 0, b = 0, n = 0, red = 0;
+        for (let i = 0; i < width * height; i++) {
+            const o = i * 4;
+            if (Math.max(Math.abs(data[o] - bg[0]), Math.abs(data[o + 1] - bg[1]), Math.abs(data[o + 2] - bg[2])) <= 12) continue;
+            r += data[o]; g += data[o + 1]; b += data[o + 2]; n++;
+            if (data[o] > 120 && data[o] > data[o + 1] * 2.2 && data[o] > data[o + 2] * 2.2) red++;
+        }
+        return { r: n ? r / n : 0, g: n ? g / n : 0, b: n ? b / n : 0, pixels: n, redPixels: red };
+    },
     sampleNodes,
     patternShare,
     boxes,

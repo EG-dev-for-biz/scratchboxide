@@ -493,6 +493,44 @@ describe('viewport undo/redo: generated staged-location layers are not edits and
         rig.detach();
     });
 
+    it('an agent material edit on staged layers is one undoable entry; the layers\' geometry still never is', () => {
+        const rig = createRig({ ...baseScene(), objects: [layer('terrain'), layer('buildings')], stagedBuild: staged(['terrain', 'buildings']) } as any);
+        const before = rig.data();
+        // one agent turn: sb_set_material_pbr on both stg layers (the node-side engine writes object.material and logs the operators)
+        const red = { color: '#ff0000', roughness: 0.5 };
+        const after = {
+            ...before,
+            objects: before.objects!.map(o => ({ ...o, material: red })),
+            operatorStack: [...(before.operatorStack ?? []), { operator: 'sb_set_material_pbr', params: { objectId: 'terrain' } }, { operator: 'sb_set_material_pbr', params: { objectId: 'buildings' } }]
+        } as any;
+        rig.controller.recordExternalChange(before, after);
+        rig.setData(after);
+        expect(rig.history.labels().undo).toEqual(['Agent: Set material pbr']);
+
+        // the pipeline then commits a third layer: not an edit, and undo must not drop it
+        const mid = rig.data();
+        rig.setData({ ...mid, objects: [...mid.objects!, layer('roads')], stagedBuild: staged(['terrain', 'buildings', 'roads']) } as any);
+
+        rig.controller.undo();
+        let data = rig.data() as any;
+        expect(data.objects.map((o: any) => o.id)).toEqual(['terrain', 'buildings', 'roads']);
+        expect(data.objects.map((o: any) => o.material)).toEqual([undefined, undefined, undefined]);
+        rig.controller.redo();
+        data = rig.data() as any;
+        expect(data.objects.slice(0, 2).map((o: any) => o.material)).toEqual([red, red]);
+        expect(data.objects[2].id).toBe('roads');
+        rig.detach();
+    });
+
+    it('a pipeline re-merge of a staged layer (new url, no material change) is not an entry even when an operator is logged', () => {
+        const rig = createRig({ ...baseScene(), objects: [layer('terrain')], stagedBuild: staged(['terrain']) } as any);
+        const before = rig.data();
+        const after = { ...before, objects: before.objects!.map(o => ({ ...o, content: { ...o.content, durableUri: '/m/terrain-v2.glb' } })), operatorStack: [...(before.operatorStack ?? []), { operator: 'stage_commit' }] } as any;
+        rig.controller.recordExternalChange(before, after);
+        expect(rig.history.canUndo()).toBe(false);
+        rig.detach();
+    });
+
     it('regenerated content (a new generator GLB) resets the history instead of leaving edits made against the old geometry', () => {
         const rig = createRig();
         rig.mutate(prev => ({ ...prev, title: 'renamed' }), { operator: 'sb_rename' });
