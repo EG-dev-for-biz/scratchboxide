@@ -310,6 +310,14 @@ export class StageCache {
         fs.renameSync(tmp, file);
     }
 
+    /** A side file of a run (the registration's inputs: views and boxes, never image bytes), beside its record. */
+    writeRunNote(runId: string, name: string, data: unknown): void {
+        if (!/^[a-z_-]+$/.test(name)) throw new Error(`stage cache: bad run note name "${name}"`);
+        const file = path.join(path.dirname(this.runRecordPath(runId)), `${name}.json`);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, JSON.stringify(data));
+    }
+
     readRunRecord<T>(runId: string): T | undefined {
         const file = this.runRecordPath(runId);
         if (!fs.existsSync(file)) return undefined;

@@ -25,7 +25,7 @@ import { surveyAim, surveyImageBytes, type SurveyCandidate, type SurveyFaceTarge
 import { fetchViews, type EvidenceImage, type StreetViewEvidenceDeps } from './streetview-evidence';
 import type { Box1000, Correspondence, RegView } from './pano-registration';
 
-export const RING_VIEWS_PER_FACE = 3;
+export const RING_VIEWS_PER_FACE = 5;
 /** A ring view stands at least this far from the survey's own pano (otherwise it adds nothing to triangulate with). */
 export const RING_MIN_BASELINE_M = 4;
 export const MATCH_PROMPT_VERSION = 'view-match/v1';
@@ -190,6 +190,14 @@ export async function runViewMatch(input: MatchInput): Promise<MatchResult> {
             const parsed = parseMatchReply(responseText(r.response), r.response.candidates?.[0]?.finishReason as string | undefined, els.map(e => e.id), images.length);
             result.problems.push(...parsed.problems.map(p => `${faceId}: ${p}`));
             const regPrimary: RegView = { eye: primary.view.eye, headingDeg: primary.view.headingDeg, pitchDeg: primary.view.pitchDeg, fovDeg: primary.view.fovDeg, widthPx: primary.widthPx, heightPx: primary.heightPx, panoId: primary.view.panoId };
+            const viewOf = (im: EvidenceImage): RegView => ({ eye: im.view.eye, headingDeg: im.view.headingDeg, pitchDeg: im.view.pitchDeg, fovDeg: im.view.fovDeg, widthPx: im.widthPx, heightPx: im.heightPx, panoId: im.view.panoId });
+            // the same element found in two ring views is a pair between those two as well: the ring panos then constrain one another, not only the survey's pano
+            const byElement = new Map<string, Array<{ im: EvidenceImage; box: Box1000 }>>();
+            for (const m of parsed.matches) byElement.set(m.element, [...(byElement.get(m.element) ?? []), { im: images[m.image - 1], box: m.box }]);
+            for (const [elementId, found] of byElement) for (let i = 0; i < found.length; i++) for (let j = i + 1; j < found.length; j++) {
+                if (found[i].im.view.panoId === found[j].im.view.panoId) continue;
+                result.correspondences.push({ id: `${faceId}.${elementId}@${found[i].im.view.panoId}~${found[j].im.view.panoId}`, a: { view: viewOf(found[i].im), box: found[i].box }, b: { view: viewOf(found[j].im), box: found[j].box } });
+            }
             for (const m of parsed.matches) {
                 const im = images[m.image - 1];
                 const el = els.find(e => e.id === m.element)!;

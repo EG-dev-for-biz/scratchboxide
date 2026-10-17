@@ -67,8 +67,34 @@ function samples(box: Box1000, v: CastView): Array<{ x: number; y: number; w: nu
 type Corrections = Map<string, PoseCorrection>;
 const withCorr = (v: RegView, c: Corrections): CastView => ({ ...v, correction: c.get(v.panoId) ?? ZERO_CORRECTION });
 
+/** A box this much wider than tall (or taller than wide) in either image is a run or a band: where it starts and ends along its length is not a place. */
+export const ELONGATED_ASPECT = 3;
+/** The share of the disagreement along a run's length that still counts (its ends are where the viewer happened to see them end). */
+export const ALONG_RUN_WEIGHT = 0.12;
+
+const elongated = (c: Correspondence): boolean => {
+    const asp = (b: Box1000, v: CastView) => { const w = Math.max(1, (b[3] - b[1]) * v.widthPx), h = Math.max(1, (b[2] - b[0]) * v.heightPx); return Math.max(w / h, h / w); };
+    return asp(c.a.box, c.a.view) >= ELONGATED_ASPECT || asp(c.b.box, c.b.view) >= ELONGATED_ASPECT;
+};
+
+/** The direction along a face's length at a hit (horizontal for a plane's u, the tangent for a cylinder), the direction a run's extent is free in. */
+function alongDir(face: CastFace | undefined, p: Vec3): Vec3 | undefined {
+    if (!face) return undefined;
+    if ('plane' in face.chart) { const u = face.chart.plane.u; const l = len(u) || 1; return [u[0] / l, u[1] / l, u[2] / l]; }
+    const c = face.chart.cylinder;
+    const axis = c.axisDir, al = len(axis) || 1;
+    const a: Vec3 = [axis[0] / al, axis[1] / al, axis[2] / al];
+    const rel = sub(p, c.axisOrigin);
+    const radial = sub(rel, [a[0] * dot(rel, a), a[1] * dot(rel, a), a[2] * dot(rel, a)]);
+    const rl = len(radial) || 1;
+    const r: Vec3 = [radial[0] / rl, radial[1] / rl, radial[2] / rl];
+    const t: Vec3 = [a[1] * r[2] - a[2] * r[1], a[2] * r[0] - a[0] * r[2], a[0] * r[1] - a[1] * r[0]];
+    return t;
+}
+
 /** The disagreement vectors (metres) of one correspondence, one per sample point, weighted. */
 function disagreement(c: Correspondence, corr: Corrections, faces: CastFace[]): Array<{ v: Vec3; w: number; point?: Vec3 }> {
+    const band = elongated(c);
     const camA = castCamera(withCorr(c.a.view, corr)), camB = castCamera(withCorr(c.b.view, corr));
     const sa = samples(c.a.box, c.a.view), sb = samples(c.b.box, c.b.view);
     const out: Array<{ v: Vec3; w: number; point?: Vec3 }> = [];
@@ -76,7 +102,12 @@ function disagreement(c: Correspondence, corr: Corrections, faces: CastFace[]): 
         const ra = pixelRay(camA, sa[k].x, sa[k].y), rb = pixelRay(camB, sb[k].x, sb[k].y);
         const ha = castRay(ra, faces, 0.5), hb = castRay(rb, faces, 0.5);
         if (ha && hb && ha.faceId === hb.faceId) {
-            out.push({ v: sub(ha.point, hb.point), w: sa[k].w, point: [(ha.point[0] + hb.point[0]) / 2, (ha.point[1] + hb.point[1]) / 2, (ha.point[2] + hb.point[2]) / 2] });
+            let v = sub(ha.point, hb.point);
+            if (band) {
+                const dir = alongDir(faces.find(f => f.id === ha.faceId), ha.point);
+                if (dir) { const along = dot(v, dir); v = [v[0] - dir[0] * along * (1 - ALONG_RUN_WEIGHT), v[1] - dir[1] * along * (1 - ALONG_RUN_WEIGHT), v[2] - dir[2] * along * (1 - ALONG_RUN_WEIGHT)]; }
+            }
+            out.push({ v, w: sa[k].w, point: [(ha.point[0] + hb.point[0]) / 2, (ha.point[1] + hb.point[1]) / 2, (ha.point[2] + hb.point[2]) / 2] });
         } else {
             const t = triangulate(ra, rb);
             out.push(t.ok && t.ahead ? { v: [t.gapM, 0, 0] as Vec3, w: sa[k].w * 0.5, point: t.point } : { v: [0, 0, 0] as Vec3, w: 0 });
@@ -87,6 +118,8 @@ function disagreement(c: Correspondence, corr: Corrections, faces: CastFace[]): 
 
 export interface PairReport {
     id: string;
+    /** The two panos the pair joins. */
+    panos?: [string, string];
     /** Distance between the two views' points on the face, after the fit (the rays' gap where they missed the faces), metres. */
     residualM: number;
     beforeM: number;
@@ -97,7 +130,9 @@ export interface PairReport {
 
 export interface Registration {
     corrections: Corrections;
-    perPano: Array<{ panoId: string; dxM: number; dzM: number; dyawDeg: number; pairs: number }>;
+    perPano: Array<{ panoId: string; dxM: number; dzM: number; dyawDeg: number; dpitchDeg: number; pairs: number; beforeRmsM: number; afterRmsM: number }>;
+    /** Panos whose solved shift was implausible (a bad match, not a pose): their pairs were left out and the rest solved again; their poses stay nominal. */
+    setAside: Array<{ panoId: string; reason: string; dxM: number; dzM: number; dyawDeg: number; dpitchDeg: number }>;
     pairs: PairReport[];
     /** RMS disagreement of the used pairs before and after the fit, metres. */
     beforeRmsM: number;
@@ -135,14 +170,25 @@ export const MAX_PLAUSIBLE_YAW_DEG = 5;
 /** Solves the poses; a pano whose solved shift is implausible is set aside (with the pairs that name it) and the rest are solved again. */
 export function registerPanos(corrs: Correspondence[], faces: CastFace[], opts: { iterations?: number } = {}): Registration {
     let set = corrs;
+    const setAside: Registration['setAside'] = [];
     for (let round = 0; round < 4; round++) {
         const r = solvePanos(set, faces, opts);
-        const bad = r.perPano.filter(p => Math.hypot(p.dxM, p.dzM) > MAX_PLAUSIBLE_SHIFT_M || Math.abs(p.dyawDeg) > MAX_PLAUSIBLE_YAW_DEG).map(p => p.panoId);
-        if (!bad.length) return corrs === set ? r : { ...r, pairs: [...r.pairs, ...corrs.filter(c => !set.includes(c)).map(c => ({ id: c.id, residualM: Infinity, beforeM: Infinity, used: false }))], rejected: r.rejected + (corrs.length - set.length) };
-        set = set.filter(c => !bad.includes(c.a.view.panoId) && !bad.includes(c.b.view.panoId));
+        const bad = r.perPano.filter(p => Math.hypot(p.dxM, p.dzM) > MAX_PLAUSIBLE_SHIFT_M || Math.abs(p.dyawDeg) > MAX_PLAUSIBLE_YAW_DEG || Math.abs(p.dpitchDeg) > MAX_PLAUSIBLE_PITCH_DEG);
+        if (!bad.length) {
+            return corrs === set ? { ...r, setAside } : { ...r, setAside, pairs: [...r.pairs, ...corrs.filter(c => !set.includes(c)).map(c => ({ id: c.id, panos: [c.a.view.panoId, c.b.view.panoId] as [string, string], residualM: Infinity, beforeM: Infinity, used: false }))], rejected: r.rejected + (corrs.length - set.length) };
+        }
+        for (const p of bad) setAside.push({ panoId: p.panoId, dxM: p.dxM, dzM: p.dzM, dyawDeg: p.dyawDeg, dpitchDeg: p.dpitchDeg, reason: `its solved shift (${Math.hypot(p.dxM, p.dzM).toFixed(1)} m, ${p.dyawDeg.toFixed(1)}° heading, ${p.dpitchDeg.toFixed(1)}° pitch) was beyond what a pano's metadata can be off by (${MAX_PLAUSIBLE_SHIFT_M} m, ${MAX_PLAUSIBLE_YAW_DEG}°, ${MAX_PLAUSIBLE_PITCH_DEG}°), so its matches were treated as wrong and its pose left as stated` });
+        const ids = bad.map(p => p.panoId);
+        set = set.filter(c => !ids.includes(c.a.view.panoId) && !ids.includes(c.b.view.panoId));
     }
-    return solvePanos(set, faces, opts);
+    return { ...solvePanos(set, faces, opts), setAside };
 }
+
+/** Per pano the solve has four values: eye shift east and north (metres), heading and pitch (degrees). */
+const K = 4;
+/** A tilt of the pano's pitch of more than this is a bad match (the pitch asked of the grounding API is exact to a fraction of a degree). */
+export const MAX_PLAUSIBLE_PITCH_DEG = 3;
+const PITCH_PRIOR_SIGMA_DEG = 1.5;
 
 function solvePanos(corrs: Correspondence[], faces: CastFace[], opts: { iterations?: number } = {}): Registration {
     const nominal: Corrections = new Map();
@@ -151,63 +197,77 @@ function solvePanos(corrs: Correspondence[], faces: CastFace[], opts: { iteratio
     const keep = corrs.filter((_, i) => before[i] <= MAX_PRIOR_DISAGREEMENT_M);
     const panoIds = [...new Set(keep.flatMap(c => [c.a.view.panoId, c.b.view.panoId]))].sort();
     const P = panoIds.length;
-    const idx = new Map(panoIds.map((id, i) => [id, i]));
     const toCorr = (x: number[]): Corrections => {
         const m: Corrections = new Map();
-        panoIds.forEach((id, i) => m.set(id, { ...ZERO_CORRECTION, dx: x[3 * i], dz: x[3 * i + 1], dyawDeg: x[3 * i + 2] }));
+        panoIds.forEach((id, i) => m.set(id, { ...ZERO_CORRECTION, dx: x[K * i], dz: x[K * i + 1], dyawDeg: x[K * i + 2], dpitchDeg: x[K * i + 3] }));
         return m;
     };
-    const residuals = (x: number[], set: Correspondence[]): number[] => {
+    // a pair's weight in the solve: 1 while it agrees to within `delta` metres, delta / its disagreement beyond (a Huber loss, by reweighting)
+    const residuals = (x: number[], set: Correspondence[], weight: number[]): number[] => {
         const corr = toCorr(x);
         const r: number[] = [];
-        for (const c of set) for (const d of disagreement(c, corr, faces)) {
-            const w = Math.sqrt(d.w) / BOX_PLACEMENT_SIGMA_M;
-            r.push(d.v[0] * w, d.v[1] * w, d.v[2] * w);
-        }
-        for (let i = 0; i < P; i++) r.push(x[3 * i] / POSE_PRIOR_SIGMA.meters, x[3 * i + 1] / POSE_PRIOR_SIGMA.meters, x[3 * i + 2] / POSE_PRIOR_SIGMA.degrees);
+        set.forEach((c, n) => {
+            const robust = Math.sqrt(weight[n]);
+            for (const d of disagreement(c, corr, faces)) {
+                const w = (Math.sqrt(d.w) * robust) / BOX_PLACEMENT_SIGMA_M;
+                r.push(d.v[0] * w, d.v[1] * w, d.v[2] * w);
+            }
+        });
+        for (let i = 0; i < P; i++) r.push(x[K * i] / POSE_PRIOR_SIGMA.meters, x[K * i + 1] / POSE_PRIOR_SIGMA.meters, x[K * i + 2] / POSE_PRIOR_SIGMA.degrees, x[K * i + 3] / PITCH_PRIOR_SIGMA_DEG);
         return r;
     };
-    const fit = (set: Correspondence[], x0: number[]): number[] => {
+    const fit = (set: Correspondence[], x0: number[], weight: number[]): number[] => {
         let x = x0.slice();
         let lambda = 1;
-        let r = residuals(x, set);
+        let r = residuals(x, set, weight);
         let cost = r.reduce((s, v) => s + v * v, 0);
-        const steps = [0.05, 0.05, 0.05];
+        const steps = [0.05, 0.05, 0.05, 0.05];
         for (let it = 0; it < (opts.iterations ?? 25); it++) {
-            const J: number[][] = r.map(() => new Array<number>(3 * P).fill(0));
-            for (let j = 0; j < 3 * P; j++) {
-                const xp = x.slice(); xp[j] += steps[j % 3];
-                const xm = x.slice(); xm[j] -= steps[j % 3];
-                const rp = residuals(xp, set), rm = residuals(xm, set);
-                for (let i = 0; i < r.length; i++) J[i][j] = (rp[i] - rm[i]) / (2 * steps[j % 3]);
+            const J: number[][] = r.map(() => new Array<number>(K * P).fill(0));
+            for (let j = 0; j < K * P; j++) {
+                const xp = x.slice(); xp[j] += steps[j % K];
+                const xm = x.slice(); xm[j] -= steps[j % K];
+                const rp = residuals(xp, set, weight), rm = residuals(xm, set, weight);
+                for (let i = 0; i < r.length; i++) J[i][j] = (rp[i] - rm[i]) / (2 * steps[j % K]);
             }
-            const H: number[][] = Array.from({ length: 3 * P }, () => new Array<number>(3 * P).fill(0));
-            const g = new Array<number>(3 * P).fill(0);
-            for (let i = 0; i < r.length; i++) for (let a = 0; a < 3 * P; a++) { g[a] += J[i][a] * r[i]; for (let b = 0; b < 3 * P; b++) H[a][b] += J[i][a] * J[i][b]; }
+            const H: number[][] = Array.from({ length: K * P }, () => new Array<number>(K * P).fill(0));
+            const g = new Array<number>(K * P).fill(0);
+            for (let i = 0; i < r.length; i++) for (let a = 0; a < K * P; a++) { g[a] += J[i][a] * r[i]; for (let b = 0; b < K * P; b++) H[a][b] += J[i][a] * J[i][b]; }
             let improved = false;
             for (let tries = 0; tries < 8 && !improved; tries++) {
                 const Hl = H.map((row, a) => row.map((v, b) => v + (a === b ? lambda * (v || 1) : 0)));
                 const delta = solve(Hl, g.map(v => -v));
                 const xn = x.map((v, i) => v + delta[i]);
-                const rn = residuals(xn, set);
+                const rn = residuals(xn, set, weight);
                 const cn = rn.reduce((s, v) => s + v * v, 0);
-                if (cn < cost) { x = xn; r = rn; improved = cn < cost - 1e-9; cost = cn; lambda = Math.max(1e-4, lambda / 3); improved = true; } else lambda *= 4;
+                if (cn < cost) { x = xn; r = rn; cost = cn; lambda = Math.max(1e-4, lambda / 3); improved = true; } else lambda *= 4;
             }
             if (!improved) break;
         }
         return x;
     };
-    let x = new Array<number>(3 * P).fill(0);
+    let x = new Array<number>(K * P).fill(0);
     let used = keep;
     if (P && keep.length) {
-        x = fit(used, x);
-        // a second pass without the pairs that still disagree by more than three times the median: they were matches of the wrong thing
+        // iteratively reweighted: the pairs that still disagree are given less say each round, so a few wrong or sloppy matches stop pulling the poses
+        let weight = keep.map(() => 1);
+        for (let round = 0; round < 4; round++) {
+            x = fit(keep, x, weight);
+            const corr = toCorr(x);
+            const res = keep.map(c => rmsPair(c, corr, faces));
+            const finite = res.filter(Number.isFinite).sort((a, b) => a - b);
+            const med = finite.length ? finite[Math.floor(finite.length / 2)] : 0;
+            const delta = Math.max(0.4, 1.5 * med);
+            weight = res.map(r => (Number.isFinite(r) ? (r <= delta ? 1 : delta / r) : 0));
+        }
+        // the pairs that are still wrong by more than three times the median are matches of the wrong thing: reported as set aside
         const corr1 = toCorr(x);
-        const after1 = used.map(c => rmsPair(c, corr1, faces)).filter(Number.isFinite).sort((a, b) => a - b);
+        const after1 = keep.map(c => rmsPair(c, corr1, faces)).filter(Number.isFinite).sort((a, b) => a - b);
         const med = after1.length ? after1[Math.floor(after1.length / 2)] : 0;
         const cut = Math.max(3 * med, 1.5);
-        const inliers = used.filter(c => rmsPair(c, corr1, faces) <= cut);
-        if (inliers.length < used.length && inliers.length >= Math.max(1, Math.floor(used.length / 2))) { used = inliers; x = fit(used, x); }
+        const inliers = keep.filter(c => rmsPair(c, corr1, faces) <= cut);
+        if (inliers.length >= Math.max(1, Math.floor(keep.length / 2))) used = inliers;
+        if (used.length < keep.length) x = fit(used, x, used.map(() => 1));
     }
     const corrections = toCorr(x);
     const usedIds = new Set(used.map(c => c.id));
@@ -217,20 +277,23 @@ function solvePanos(corrs: Correspondence[], faces: CastFace[], opts: { iteratio
         const t = triangulate(pixelRay(camA, sa.x, sa.y), pixelRay(camB, sb.x, sb.y));
         const baselineM = len(sub(camA.eye, camB.eye));
         return {
-            id: c.id, residualM: Math.round(rmsPair(c, corrections, faces) * 1000) / 1000, beforeM: Math.round(before[i] * 1000) / 1000,
+            id: c.id, panos: [c.a.view.panoId, c.b.view.panoId] as [string, string], residualM: Math.round(rmsPair(c, corrections, faces) * 1000) / 1000, beforeM: Math.round(before[i] * 1000) / 1000,
             ...(t.ok && t.ahead ? { triangulated: { point: t.point, gapM: Math.round(t.gapM * 1000) / 1000, angleDeg: Math.round(t.angleDeg * 10) / 10, baselineM: Math.round(baselineM * 100) / 100 } } : {}),
             used: usedIds.has(c.id)
         };
     });
     const rmsOf = (vals: number[]) => (vals.length ? Math.sqrt(vals.reduce((s, v) => s + v * v, 0) / vals.length) : 0);
     const usedPairs = pairs.filter(p => p.used && Number.isFinite(p.residualM));
-    const perPano = panoIds.map((id, i) => ({
-        panoId: id, dxM: Math.round(x[3 * i] * 1000) / 1000, dzM: Math.round(x[3 * i + 1] * 1000) / 1000, dyawDeg: Math.round(x[3 * i + 2] * 100) / 100,
-        pairs: used.filter(c => c.a.view.panoId === id || c.b.view.panoId === id).length
-    }));
-    void idx;
+    const perPano = panoIds.map((id, i) => {
+        const mine = usedPairs.filter(p => p.panos?.includes(id));
+        return {
+            panoId: id, dxM: Math.round(x[K * i] * 1000) / 1000, dzM: Math.round(x[K * i + 1] * 1000) / 1000, dyawDeg: Math.round(x[K * i + 2] * 100) / 100, dpitchDeg: Math.round(x[K * i + 3] * 100) / 100,
+            pairs: used.filter(c => c.a.view.panoId === id || c.b.view.panoId === id).length,
+            beforeRmsM: Math.round(rmsOf(mine.map(p => p.beforeM)) * 1000) / 1000, afterRmsM: Math.round(rmsOf(mine.map(p => p.residualM)) * 1000) / 1000
+        };
+    });
     return {
-        corrections, perPano, pairs, used: used.length, rejected: corrs.length - used.length,
+        corrections, perPano, setAside: [], pairs, used: used.length, rejected: corrs.length - used.length,
         beforeRmsM: Math.round(rmsOf(usedPairs.map(p => p.beforeM)) * 1000) / 1000, afterRmsM: Math.round(rmsOf(usedPairs.map(p => p.residualM)) * 1000) / 1000
     };
 }

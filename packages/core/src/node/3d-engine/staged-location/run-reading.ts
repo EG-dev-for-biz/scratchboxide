@@ -130,12 +130,13 @@ export function planRunViews(
         // the crop is asked of the pano in its own frame: the stated heading is the registered one less the pano's yaw correction
         const heading = (((bearingDeg(eye[0], eye[2], l.centre[0], l.centre[2]) - (corr?.dyawDeg ?? 0)) % 360) + 360) % 360;
         const widthPx = 1000, heightPx = Math.round(1000 / aspect.ratio);
-        const shown = projectSlots(fit, { eye: p.eye, headingDeg: heading, pitchDeg: elevationDeg, fovDeg, widthPx, heightPx, ...(corr ? { correction: corr } : {}) }, occluder)
+        const statedPitch = elevationDeg - (corr?.dpitchDeg ?? 0);
+        const shown = projectSlots(fit, { eye: p.eye, headingDeg: heading, pitchDeg: statedPitch, fovDeg, widthPx, heightPx, ...(corr ? { correction: corr } : {}) }, occluder)
             .find(s => s.slotId === target.slotId);
         if (!shown || shown.visibleFraction < MIN_SHOWN_FRACTION) continue;
         const view: SelectedView = {
             panoId: p.panoId, date: p.date, copyright: p.copyright, eye: p.eye, facadeHeadingDeg: Math.round(((Math.atan2(normal[0], -normal[2]) / DEG) + 360) % 360),
-            headingDeg: Math.round(heading * 10) / 10, pitchDeg: Math.round(elevationDeg * 10) / 10, fovDeg, aspectRatio: aspect.name,
+            headingDeg: Math.round(heading * 10) / 10, pitchDeg: Math.round(statedPitch * 10) / 10, fovDeg, aspectRatio: aspect.name,
             distanceM: Math.round(dist3 * 100) / 100, score: 0, aimedSlotIds: [target.slotId], coveredSlotIds: [target.slotId]
         };
         // nearer is sharper, squarer is clearer, a registered pose is better placed

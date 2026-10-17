@@ -25,6 +25,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { runStagedLocation, type StagedExtraction, type StagedLocationDeps } from '../src/node/3d-engine/staged-location/orchestrator';
+import { RING_VIEWS_PER_FACE } from '../src/node/3d-engine/staged-location/view-match';
 import { StageCache } from '../src/node/3d-engine/staged-location/stage-cache';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
 import { readGlbScene } from '../src/node/spatial/StreetViewPoseRegistrar';
@@ -345,7 +346,7 @@ describe.skipIf(!arch.requirement.ok || !stagedChrome.ok)('photo-read refinement
         // whatever the real fit decided, the survey ran beside it and never took long enough to hold the run
         expect(['committed', 'degraded']).toContain(stage('survey').status);
         // a ring of further wide views per surveyed face (matched across views), then close-ups: bounded by the image budget
-        expect(run.log.grounding.filter(g => g.kind === 'wide').length).toBeLessThanOrEqual(4 * (1 + 3));
+        expect(run.log.grounding.filter(g => g.kind === 'wide').length).toBeLessThanOrEqual(4 * (1 + RING_VIEWS_PER_FACE));
         // the wide reading's close-ups, and up to two narrow crops per repeating run or band (run-reading.ts)
         expect(run.log.grounding.filter(g => g.kind === 'close').length).toBeLessThanOrEqual(16 + 12 * 2);
         expect(run.log.vision.filter(v => v.kind === 'survey').length).toBe(1);

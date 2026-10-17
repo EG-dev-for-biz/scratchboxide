@@ -197,6 +197,11 @@ export function anchoringSentence(input: StagedSummaryInput): string {
     const parts: string[] = [];
     const so = input.ornament?.slotsOffered;
     if (so) parts.push(`The reading was offered ${n(so.offered)} of ${n(so.total)} fitted slots: ${n(so.hidden)} sit on hidden or interior faces and ${n(so.unseen)} are shown by no image, so they were not asked about.`);
+    const reg = input.ornament?.registration;
+    if (reg) {
+        const worst = [...reg.perPano].sort((a, b) => b.afterRmsM - a.afterRmsM)[0];
+        parts.push(`The Street View poses were registered from ${n(reg.used)} of ${n(reg.pairs)} matched pairs: the pairs disagreed by ${reg.beforeRmsM.toFixed(2)} m RMS before and ${reg.afterRmsM.toFixed(2)} m after${worst ? ` (per pano after: ${reg.perPano.map(p => `${p.afterRmsM.toFixed(2)} m`).join(', ')}; the loosest is ${worst.afterRmsM.toFixed(2)} m)` : ''}${reg.setAside.length ? `; ${n(reg.setAside.length)} pano${reg.setAside.length === 1 ? ' was' : 's were'} set aside as implausible and keep the stated pose` : ''}. What it places is good to about that disagreement, not better.`);
+    }
     const rr = input.ornament?.runReadings;
     if (rr && rr.targets) parts.push(`${n(rr.read)} of ${n(rr.targets)} repeating runs and bands the survey found were read again alone from narrow crops, giving ${n(rr.elements)} element${rr.elements === 1 ? '' : 's'}${rr.replaced ? ` that replaced ${n(rr.replaced)} from the wide reading` : ''}${rr.skipped.length ? `; ${n(rr.skipped.length)} stayed as they were (${rr.skipped.slice(0, 2).map(x => x.reason).join('; ')})` : ''}.`);
     if (located) parts.push(`The survey placed ${n(located.elements)} element${located.elements === 1 ? '' : 's'} on ${n(located.slots)} fitted slot${located.slots === 1 ? '' : 's'} from the photo geometry (${n(located.crops)} close-up${located.crops === 1 ? '' : 's'})${located.unlocated ? `, ${n(located.unlocated)} found no slot` : ''}.`);

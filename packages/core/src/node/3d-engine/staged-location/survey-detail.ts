@@ -207,7 +207,7 @@ export function planDetailViews(located: LocatedElement[], survey: Pick<SurveyRe
             const heading = (((bearingDeg(eye[0], eye[2], cx, cz) - (corr?.dyawDeg ?? 0)) % 360) + 360) % 360;
             views.push({
                 panoId, date: r.view.date, copyright: r.view.copyright, eye: nominalEye, facadeHeadingDeg: Math.round(inPano[0].headingDeg),
-                headingDeg: Math.round(heading * 10) / 10, pitchDeg: Math.round(elevationDeg * 10) / 10, fovDeg, aspectRatio: aspect.name,
+                headingDeg: Math.round(heading * 10) / 10, pitchDeg: Math.round((elevationDeg - (corr?.dpitchDeg ?? 0)) * 10) / 10, fovDeg, aspectRatio: aspect.name,
                 distanceM: Math.round(Math.hypot(d, cy - eye[1]) * 100) / 100, score: Math.round(g.weight * 1000) / 1000, aimedSlotIds: [g.slotId], coveredSlotIds: [g.slotId]
             });
         }
