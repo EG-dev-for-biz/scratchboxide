@@ -427,9 +427,12 @@ describe('an isolated structure', () => {
         const sent = new Map<string, Buffer>();
         const requested: string[] = [];
         const surveyed: string[] = [];
+        // the focused run pass asks the same service for its own narrow crops after the wide reading has been requested
+        const focused: string[] = [];
+        let calls: any[] = [];
         const grounding = {
             retrieveGroundingImage: async (req: any) => {
-                (req.fovDegree >= 55 ? surveyed : requested).push(req.panoId);
+                (req.fovDegree >= 55 ? surveyed : calls.length ? focused : requested).push(req.panoId);
                 const portrait = req.aspectRatio === 'RATIO_3X4';
                 const w = portrait ? 480 : 640, h = portrait ? 640 : 480;
                 const bytes = bandJpeg(req.panoId === 'PN' ? [SKY, STONE, STONE] : req.panoId === 'PE' ? [GREY] : [STONE, GREY], w, h);
@@ -445,7 +448,7 @@ describe('an isolated structure', () => {
         expect(written.filter(w => w.api === 'writeFileSync' && w.data?.equals(canary))).toHaveLength(1);
         written.length = 0;
         try {
-            const calls: any[] = [];
+            calls = [];
             const s = setup(ARCH, {}, {
                 scanFit: sf.deps, vision: { client: visionClient(REPLY, calls), candidates: ['gemini-4-argon'] },
                 streetView: { mapsApiKey: 'maps-key', grounding, fetchImpl: metadata }

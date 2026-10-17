@@ -34,8 +34,10 @@ function glbNodeNames(file: string): string[] {
 export function readFittedShells(fit: Pick<StructureFit, 'surfaces' | 'outputs'>): FittedShells | undefined {
     const file = fit.outputs.fittedGlb;
     if (!file || !fs.existsSync(file)) return undefined;
-    const names = glbNodeNames(file);
-    const prims = readGlbScene(file);
+    // a cut-short or unreadable body is "could not be read" (callers then say exposure was not judged), not a thrown error
+    let names: string[];
+    let prims: ReturnType<typeof readGlbScene>;
+    try { names = glbNodeNames(file); prims = readGlbScene(file); } catch { return undefined; }
     if (names.length !== prims.length) return undefined;
     const primitiveOf = new Map(fit.surfaces.map(s => [s.id, s.primitiveId || s.id]));
     const groups = new Map<string, Array<{ positions: Float32Array; indices: Uint32Array }>>();
