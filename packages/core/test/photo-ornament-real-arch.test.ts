@@ -39,6 +39,7 @@ import { openStagedPage, stagedChrome, type StagedPage } from './helpers/staged-
 import { stagedSceneData } from './helpers/staged-build-scene';
 import { REPO_ROOT } from './helpers/requirements';
 import { bandJpeg, figureGlb, figuresReply, GREY, SKY, STONE } from './helpers/photo-ornament-fixtures';
+import { FIGURE_READ_ATTEMPTS } from '../src/node/3d-engine/staged-location/figures';
 
 const WORK = path.join(REPO_ROOT, 'test-results', 'photo-ornament-e2e');
 const SHOTS = path.join(REPO_ROOT, 'test-results', 'screenshots', 'photo_ornament');
@@ -365,7 +366,8 @@ describe.skipIf(!arch.requirement.ok || !stagedChrome.ok)('photo-read refinement
         expect(run.log.vision.filter(v => v.kind === 'survey').length).toBe(1);
         // the wide reading (and its one revision) and at most one small focused reading per repeating run or band (run-reading.ts)
         expect(run.log.vision.filter(v => v.kind === 'ornament').length).toBeLessThanOrEqual(2 + 12 * 2);
-        expect(run.log.vision.filter(v => v.kind === 'figures').length).toBeLessThanOrEqual(1);
+        // one call per figure crop, asked again at most FIGURE_READ_ATTEMPTS times when its reply cannot be read or built
+        expect(run.log.vision.filter(v => v.kind === 'figures').length).toBeLessThanOrEqual(Math.max(1, stage('figures').cost?.images ?? 0) * FIGURE_READ_ATTEMPTS);
         for (const l of (run.result.artifact.data.stagedBuild.layers as any[]).filter(x => x.layer === 'l4' || x.layer === 'l4f')) expect(l.counts.triangles).toBeGreaterThan(0);
     }, 1_800_000);
 });
