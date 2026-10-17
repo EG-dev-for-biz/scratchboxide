@@ -50,7 +50,7 @@ describe('Unified Botanical & Vegetation Pipeline Codebase API (Stages 11-15)', 
         const result = await service.synthesizeVegetation({
             inputGlbPath: 'benchmark',
             mode: 'tree',
-            leafMorphology: 'lobed',
+            leafOutline: { lobeDepth: 0.42 },
             leafSize: 0.30,
             leafDensityScale: 1.0
         });
@@ -80,7 +80,7 @@ describe('Unified Botanical & Vegetation Pipeline Codebase API (Stages 11-15)', 
         const result = await service.synthesizeVegetation({
             inputGlbPath: 'benchmark',
             mode: 'shrub',
-            leafMorphology: 'serrated',
+            leafOutline: { gain: 2.1, riseExponent: 0.5, fallExponent: 0.7, serrationDepth: 0.09, lobeDepth: 0 },
             leafSize: 0.25,
             leafDensityScale: 0.8
         });
@@ -97,7 +97,7 @@ describe('Unified Botanical & Vegetation Pipeline Codebase API (Stages 11-15)', 
 
     it('4. should synthesize full rectified streetscape with tree collar and clinging ivy', async () => {
         const result = await service.synthesizeStreetscape('benchmark', {
-            leafMorphology: 'ovate',
+            leafOutline: { gain: 2.2, riseExponent: 0.55, fallExponent: 0.75, lobeDepth: 0 },
             leafSize: 0.28,
             enableIvy: true
         });

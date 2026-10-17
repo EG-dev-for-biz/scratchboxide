@@ -285,7 +285,7 @@ int main() {
     treeCfg.seed = 2026;
     treeCfg.useDetailedLeaves = true;
     treeCfg.useTwigSprays = true;
-    treeCfg.leafMorphology = LeafMorphology::LobedOakMaple;
+    treeCfg.leafOutline = LeafOutline{1.95f, 0.45f, 0.55f, 14.0f, 0.0f, 0.42f, 5.0f, 0.0f};
     treeCfg.leafSize = 0.36f;
     treeCfg.leafColor = Vec4(0.20f, 0.46f, 0.14f, 1.0f);
     treeCfg.woodColor = Vec4(0.32f, 0.22f, 0.15f, 1.0f);
@@ -303,7 +303,7 @@ int main() {
     shrubCfg.seed = 7788;
     shrubCfg.useDetailedLeaves = true;
     shrubCfg.useTwigSprays = true;
-    shrubCfg.leafMorphology = LeafMorphology::OvateSimple;
+    shrubCfg.leafOutline = LeafOutline{};
     shrubCfg.leafSize = 0.20f;
     shrubCfg.leafColor = Vec4(0.14f, 0.40f, 0.12f, 1.0f);
     shrubCfg.woodColor = Vec4(0.25f, 0.18f, 0.12f, 1.0f);

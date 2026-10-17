@@ -63,7 +63,7 @@ using math::DEG_TO_RAD;
 using geometry::Vertex;
 using geometry::Mesh;
 using geometry::ScratchboxMesh;
-using nature::LeafMorphology;
+using nature::LeafOutline;
 using nature::DetailedLeafConfig;
 using nature::DetailedLeafGenerator;
 using nature::TwigClusterConfig;

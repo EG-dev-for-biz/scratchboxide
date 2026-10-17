@@ -47,7 +47,7 @@ int main() {
     // -------------------------------------------------------------------------
     std::cout << "\n[Test 1] Generating Single Ovate Simple Leaf..." << std::endl;
     DetailedLeafConfig ovateCfg;
-    ovateCfg.morphology = LeafMorphology::OvateSimple;
+    ovateCfg.outline = LeafOutline{2.2f, 0.55f, 0.75f, 14.0f, 0.0f, 0.0f, 5.0f, 0.0f};
     ovateCfg.length = 0.35f;
     ovateCfg.widthRatio = 0.58f;
     ovateCfg.petioleLength = 0.08f;
@@ -74,7 +74,7 @@ int main() {
     // -------------------------------------------------------------------------
     std::cout << "\n[Test 2] Generating Single Serrated Leaf (Birch/Cherry)..." << std::endl;
     DetailedLeafConfig serratedCfg;
-    serratedCfg.morphology = LeafMorphology::SerratedBirch;
+    serratedCfg.outline = LeafOutline{2.1f, 0.50f, 0.70f, 14.0f, 0.09f, 0.0f, 5.0f, 0.0f};
     serratedCfg.length = 0.32f;
     serratedCfg.widthRatio = 0.62f;
     serratedCfg.petioleLength = 0.07f;
@@ -82,8 +82,8 @@ int main() {
     serratedCfg.midribDepth = 0.014f;
     serratedCfg.laminaCupping = 0.030f;
     serratedCfg.droopCurvature = 0.040f;
-    serratedCfg.serrationFrequency = 16.0f;
-    serratedCfg.serrationAmplitude = 0.12f;
+    serratedCfg.outline.serrationCount = 16.0f;
+    serratedCfg.outline.serrationDepth = 0.12f;
     serratedCfg.lengthSubdivs = 18;
     serratedCfg.widthSubdivs = 10;
     serratedCfg.veinColor = Vec4(0.52f, 0.82f, 0.25f, 1.0f);
@@ -103,7 +103,7 @@ int main() {
     // -------------------------------------------------------------------------
     std::cout << "\n[Test 3] Generating Single Lobed Leaf (Oak/Maple)..." << std::endl;
     DetailedLeafConfig lobedCfg;
-    lobedCfg.morphology = LeafMorphology::LobedOakMaple;
+    lobedCfg.outline = LeafOutline{1.95f, 0.45f, 0.55f, 14.0f, 0.0f, 0.42f, 5.0f, 0.0f};
     lobedCfg.length = 0.36f;
     lobedCfg.widthRatio = 0.70f;
     lobedCfg.petioleLength = 0.09f;
@@ -140,7 +140,7 @@ int main() {
     twigCfg.twigColor = Vec4(0.35f, 0.25f, 0.16f, 1.0f);
     
     // Leaf parameters for twig spray
-    twigCfg.leafConfig.morphology = LeafMorphology::OvateSimple;
+    twigCfg.leafConfig.outline = LeafOutline{};
     twigCfg.leafConfig.length = 0.24f;
     twigCfg.leafConfig.widthRatio = 0.56f;
     twigCfg.leafConfig.petioleLength = 0.045f;
@@ -178,7 +178,7 @@ int main() {
     treeCfg.generateLeaves = true;
     treeCfg.useDetailedLeaves = true;
     treeCfg.useTwigSprays = true;
-    treeCfg.leafMorphology = LeafMorphology::OvateSimple;
+    treeCfg.leafOutline = LeafOutline{};
     treeCfg.leafSize = 0.32f;
     treeCfg.woodColor = Vec4(0.28f, 0.20f, 0.14f, 1.0f);
     treeCfg.leafColor = Vec4(0.16f, 0.46f, 0.11f, 1.0f);

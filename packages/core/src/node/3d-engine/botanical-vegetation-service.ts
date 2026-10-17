@@ -18,14 +18,29 @@ import { buildNativeIfStale } from './native-build';
 const execFileAsync = promisify(execFile);
 
 export type BotanicalMode = 'tree' | 'shrub' | 'auto' | 'streetscape';
-export type LeafMorphologyType = 'ovate' | 'serrated' | 'lobed';
+/**
+ * A leaf blade's outline as continuous numbers (the half width along the blade is gain * width * t^rise * (1 - t)^fall, times a
+ * tooth term and a lobe term, blended toward a heart-shaped base by `cordate`). Any blade lies somewhere in this space; the
+ * default is the lobed blade the pipeline has always grown.
+ */
+export interface LeafOutlineParams {
+    gain: number;
+    riseExponent: number;
+    fallExponent: number;
+    serrationCount: number;
+    serrationDepth: number;
+    lobeDepth: number;
+    lobeHalfCycles: number;
+    cordate: number;
+}
+export const DEFAULT_LEAF_OUTLINE: LeafOutlineParams = { gain: 1.95, riseExponent: 0.45, fallExponent: 0.55, serrationCount: 14, serrationDepth: 0, lobeDepth: 0.42, lobeHalfCycles: 5, cordate: 0 };
 
 export interface BotanicalPipelineOptions {
     /** The scan (.glb) to rebuild, or 'benchmark' for the built-in synthetic benchmark scan; required by the CLI. */
     inputGlbPath?: string;
     outputGlbPath?: string;
     mode?: BotanicalMode;
-    leafMorphology?: LeafMorphologyType;
+    leafOutline?: Partial<LeafOutlineParams>;
     leafSize?: number;
     leafDensityScale?: number;
     enableIvy?: boolean;
@@ -36,7 +51,7 @@ export interface BotanicalPipelineOptions {
 export interface BotanicalPipelineTelemetry {
     vegetationType: string;
     mode: BotanicalMode;
-    leafMorphology: LeafMorphologyType;
+    leafOutline: LeafOutlineParams;
     totalHeightMeters: number;
     clearTrunkHeightMeters: number;
     crownBaseHeightMeters: number;
@@ -111,14 +126,15 @@ export class BotanicalVegetationService {
         }
         const tmpOutput = options.outputGlbPath || path.join(artifactsDir, `botanical_${Date.now()}.glb`);
         const mode = options.mode ?? 'auto';
-        const leaf = options.leafMorphology ?? 'lobed';
+        const leaf: LeafOutlineParams = { ...DEFAULT_LEAF_OUTLINE, ...options.leafOutline };
+        for (const [k, v] of Object.entries(leaf)) if (!Number.isFinite(v)) throw new GeneratorFailedError('cpp', `leafOutline.${k} must be a finite number`);
         const leafSize = options.leafSize ?? 0.32;
         const density = options.leafDensityScale ?? 1.0;
         const ivy = (options.enableIvy ?? false) ? 1 : 0;
         const ghost = (options.includeGhostOverlay ?? false) ? 1 : 0;
 
         // an argument list (no shell): paths may hold any character
-        const args = ['--output', tmpOutput, '--mode', mode, '--leaf', leaf, '--leaf-size', String(leafSize), '--density', String(density), '--ivy', String(ivy), '--ghost', String(ghost)];
+        const args = ['--output', tmpOutput, '--mode', mode, '--leaf-outline', [leaf.gain, leaf.riseExponent, leaf.fallExponent, leaf.serrationCount, leaf.serrationDepth, leaf.lobeDepth, leaf.lobeHalfCycles, leaf.cordate].join(','), '--leaf-size', String(leafSize), '--density', String(density), '--ivy', String(ivy), '--ghost', String(ghost)];
         if (options.inputGlbPath) args.push('--input', options.inputGlbPath);
 
         let stdout: string, stderr: string;
@@ -144,7 +160,7 @@ export class BotanicalVegetationService {
         const telemetry: BotanicalPipelineTelemetry = {
             vegetationType: typeMatch[1].trim(),
             mode,
-            leafMorphology: leaf,
+            leafOutline: leaf,
             totalHeightMeters: read('total height', /Total Height:\s*([0-9.]+)\s*m/),
             clearTrunkHeightMeters: read('clear trunk height', /Clear Trunk Height:\s*([0-9.]+)\s*m/),
             crownBaseHeightMeters: read('crown base height', /Crown Base Height:\s*([0-9.]+)\s*m/),

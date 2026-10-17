@@ -61,7 +61,7 @@ enum class BotanicalPipelineMode {
 
 struct BotanicalPipelineOptions {
     BotanicalPipelineMode mode{BotanicalPipelineMode::AutoDetect};
-    LeafMorphology leafMorphology{LeafMorphology::LobedOakMaple};
+    LeafOutline leafOutline{1.95f, 0.45f, 0.55f, 14.0f, 0.0f, 0.42f, 5.0f, 0.0f};
     float leafSize{0.32f};
     Vec4 leafColor{0.18f, 0.44f, 0.12f, 1.0f};
     Vec4 woodColor{0.30f, 0.20f, 0.14f, 1.0f};
@@ -156,7 +156,7 @@ public:
         // --------------------------------------------------------------------
         SpaceColonizationConfig cfg = SpaceColonizationConfig::fromBlobTelemetry(tel);
         cfg.seed = options.seed;
-        cfg.leafMorphology = options.leafMorphology;
+        cfg.leafOutline = options.leafOutline;
         cfg.leafSize = options.leafSize;
         cfg.leafColor = options.leafColor;
         cfg.woodColor = options.woodColor;
