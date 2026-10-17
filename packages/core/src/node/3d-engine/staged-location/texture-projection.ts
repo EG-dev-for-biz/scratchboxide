@@ -42,6 +42,7 @@ import {
 } from '../../../common/spatial/texture-pass-contracts';
 import { delightLinearPlane, PHOTOGRAMMETRIC_DELIGHT, TEXTURE_LIFT_CAP, type DelightPlaneReport } from '../../../common/spatial/photogrammetric-delight';
 import { AlgorithmicUvEngine } from '../../spatial/AlgorithmicUvEngine';
+import { refinePosesFromAlignment, type PanoRefinement, type PoseRefineOptions } from './texture-pose-refine';
 import { blurWithinMaps, chartLocalGains, poissonBlendRegions, selectViewsPerRegion, type PoissonBlendOptions, type PoissonBlendReport, type RegionSelectOptions } from './texture-seams';
 import { alignViewsPerChart, type AlignmentOptions, type AlignmentReport } from './texture-alignment';
 import {
@@ -118,6 +119,11 @@ export interface ProjectionBakeOptions {
      * false disables it.
      */
     align?: boolean | AlignmentOptions;
+    /**
+     * After the alignment, refine each pano's pose from its correspondences (texture-pose-refine.ts) and project and align
+     * again from the refined poses. Default on (needs the alignment); false keeps the registered poses.
+     */
+    refinePose?: boolean | PoseRefineOptions;
     /** The photo-textured tile's linear RGB at a world point (the alignment's geometry-registered reference). */
     alignReference?: (position: Vec3, normal: Vec3) => Vec3 | undefined;
 }
@@ -165,6 +171,17 @@ export interface ProjectionBakeReport {
     regions?: { chartGains: number; meanAbsLogGain: number; blocks: number; boundaryTexels: number; refinedTexels: number; sunShadedViews: number; /** Blocks left on a view that is in shadow there while another view is not. */ shadowedBlocks: number };
     /** The gradient-domain blend (present when it ran). */
     poisson?: PoissonBlendReport;
+    /**
+     * The second pose registration (present when it ran): surface RMS of the alignment's correspondences with the registered
+     * and the refined poses, per pano, and the first pass's inter-view gradient NCC (the `alignment` report is then the
+     * pass from the refined poses).
+     */
+    poseRefine?: {
+        rmsBeforeM: number; rmsAfterM: number; points: number; applied: number; perPano: PanoRefinement[];
+        firstPassGradNcc?: { before: number; after: number }; secondPassGradNcc?: { before: number; after: number };
+        /** Whether the refined poses were kept (they must raise the views' agreement), and why not. */
+        kept?: boolean; reason?: string;
+    };
     /** The per-chart image alignment (present when it ran): shifts kept and the inter-view gradient NCC before and after. */
     alignment?: AlignmentReport;
     /** The shadow lift as applied: how much of it the local-contrast cap kept. Present when de-lit. */
@@ -187,6 +204,8 @@ export type ProjectionBakeResult = BakedTexturePlanes & { report: ProjectionBake
  * relative ranking between views and the absolute confidence comparable with the tile's (capped at 0.5).
  */
 export const POSE_SIGMA_SCALE_M = 2;
+/** Least inter-view gradient NCC after the alignment for its correspondences to re-pose the views (texture-pose-refine.ts). */
+export const MIN_NCC_FOR_POSE_REFINE = 0.35;
 export function poseSigmaTerm(poseSigmaPx: number, z: number, gsdM: number): number {
     const sigmaM = (poseSigmaPx / Math.max(1, z)) * gsdM;
     if (!Number.isFinite(sigmaM)) return 0;
@@ -323,66 +342,116 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
     };
     const huberK = o.huberDeltaE ?? 10, huberMin = o.huberMinViews ?? 3;
     const bandSigmas = o.bandSigmasTexels ?? [1, 2, 4, 12, 32];
-    const { atlas, views } = input;
+    const { atlas } = input;
     const W = atlas.width, H = atlas.height, n = W * H;
     const { covered, gutter, mapIndex, normal } = atlas.texels;
     const degradations: TexturePassDegradation[] = [];
     let targetTexels = 0, coveredTexels = 0;
     for (let t = 0; t < n; t++) { if (covered[t]) coveredTexels++; if (covered[t] && !gutter[t]) targetTexels++; }
 
-    // ---- 1-3: project every view ------------------------------------------------------------------------------
-    const raw: RawSamples[] = [];
-    for (const view of views) {
-        checkAbort(input.signal);
-        if (!(view.poseQuality > 0)) {
-            degradations.push({ stage: 'bake-projection', reasonCode: 'pano_set_aside', layerKey: atlas.layerKey,
-                reason: `Pano ${view.panoId} has no usable registered pose (pose quality 0), so it was not projected.` });
-            raw.push({ texel: [], rgb: [], logW: [], wAbs: [], x: [], y: [] });
-            continue;
-        }
-        if (view.image.rgba.length !== view.image.width * view.image.height * 4 || view.image.width !== view.camera.width || view.image.height !== view.camera.height) {
-            degradations.push({ stage: 'bake-projection', reasonCode: 'pano_image_invalid', layerKey: atlas.layerKey,
-                reason: `Pano ${view.panoId}'s image is not the ${view.camera.width}x${view.camera.height} RGBA its camera expects, so it was not projected.` });
-            raw.push({ texel: [], rgb: [], logW: [], wAbs: [], x: [], y: [] });
-            continue;
-        }
-        const s = projectView(input, view, input.depthFor(view), opts);
-        if (!s.texel.length) {
-            degradations.push({ stage: 'bake-projection', reasonCode: 'pano_sees_nothing', layerKey: atlas.layerKey,
-                reason: `Pano ${view.panoId} sees none of this layer's texels unoccluded at a usable angle.` });
-        }
-        raw.push(s);
-    }
-    timingsMs.project = Date.now() - t0;
-
-    const samples: ViewSamples[] = raw.map((r) => ({ texel: Int32Array.from(r.texel), rgb: Float32Array.from(r.rgb) }));
-    const logW = raw.map((r) => Float64Array.from(r.logW));
-
-    // ---- 3b: per-view, per-chart alignment, then each shifted sample re-reads its colour from the photo -------------
+    // ---- 1-3: project every view; 3b: align; 3c: a second pose registration from the alignment's correspondences
+    // (texture-pose-refine.ts), then project and align once more from the refined poses ---------------------------
+    let views = input.views;
+    let raw: RawSamples[] = [];
+    let samples: ViewSamples[] = [];
+    let logW: Float64Array[] = [];
     let alignment: AlignmentReport | undefined;
-    if (o.align !== false && views.length >= 2) {
-        const tAlign = Date.now();
-        const al = alignViewsPerChart(atlas, views, raw.map((r, k) => ({ texel: samples[k].texel, x: Float32Array.from(r.x), y: Float32Array.from(r.y), logW: logW[k] })),
-            {
-                ...(typeof o.align === 'object' ? o.align : {}), ...(input.signal ? { signal: input.signal } : {}),
-                ...(o.alignReference ? { reference: (t: number) => o.alignReference!([atlas.texels.position[t * 3], atlas.texels.position[t * 3 + 1], atlas.texels.position[t * 3 + 2]], [normal[t * 3], normal[t * 3 + 1], normal[t * 3 + 2]]) } : {})
-            });
-        alignment = al.report;
-        if (al.report.timedOut) {
-            degradations.push({ stage: 'bake-projection', reasonCode: 'alignment_timeout', layerKey: atlas.layerKey,
-                reason: `The per-chart image alignment used its time budget after ${Math.round(al.report.ms / 1000)} s; the charts it had not reached keep their registered poses.` });
-        }
-        const col = new Float64Array(3);
-        samples.forEach((s, k) => {
-            const r = raw[k];
-            for (let i = 0; i < s.texel.length; i++) {
-                if (!al.dx[k][i] && !al.dy[k][i]) continue;
-                sampleLinear(views[k], r.x[i] + al.dx[k][i], r.y[i] + al.dy[k][i], col);
-                s.rgb[i * 3] = col[0]; s.rgb[i * 3 + 1] = col[1]; s.rgb[i * 3 + 2] = col[2];
+    let poseRefine: ProjectionBakeReport['poseRefine'];
+    let pass0: { views: ProjectionView[]; raw: RawSamples[]; samples: ViewSamples[]; logW: Float64Array[]; alignment: AlignmentReport | undefined; degradations: TexturePassDegradation[] } | undefined;
+    const passDegradations: TexturePassDegradation[] = [];
+    for (let pass = 0; pass < 2; pass++) {
+        passDegradations.length = 0;
+        raw = [];
+        const tProj = Date.now();
+        for (const view of views) {
+            checkAbort(input.signal);
+            if (!(view.poseQuality > 0)) {
+                passDegradations.push({ stage: 'bake-projection', reasonCode: 'pano_set_aside', layerKey: atlas.layerKey,
+                    reason: `Pano ${view.panoId} has no usable registered pose (pose quality 0), so it was not projected.` });
+                raw.push({ texel: [], rgb: [], logW: [], wAbs: [], x: [], y: [] });
+                continue;
             }
-        });
-        timingsMs.align = Date.now() - tAlign;
+            if (view.image.rgba.length !== view.image.width * view.image.height * 4 || view.image.width !== view.camera.width || view.image.height !== view.camera.height) {
+                passDegradations.push({ stage: 'bake-projection', reasonCode: 'pano_image_invalid', layerKey: atlas.layerKey,
+                    reason: `Pano ${view.panoId}'s image is not the ${view.camera.width}x${view.camera.height} RGBA its camera expects, so it was not projected.` });
+                raw.push({ texel: [], rgb: [], logW: [], wAbs: [], x: [], y: [] });
+                continue;
+            }
+            const s = projectView(input, view, input.depthFor(view), opts);
+            if (!s.texel.length) {
+                passDegradations.push({ stage: 'bake-projection', reasonCode: 'pano_sees_nothing', layerKey: atlas.layerKey,
+                    reason: `Pano ${view.panoId} sees none of this layer's texels unoccluded at a usable angle.` });
+            }
+            raw.push(s);
+        }
+        timingsMs[pass ? 'reproject' : 'project'] = Date.now() - tProj;
+
+        samples = raw.map((r) => ({ texel: Int32Array.from(r.texel), rgb: Float32Array.from(r.rgb) }));
+        logW = raw.map((r) => Float64Array.from(r.logW));
+
+        // ---- 3b: per-view, per-chart alignment, then each shifted sample re-reads its colour from the photo -------------
+        alignment = undefined;
+        let al: ReturnType<typeof alignViewsPerChart> | undefined;
+        if (o.align !== false && views.length >= 2) {
+            const tAlign = Date.now();
+            const res = alignViewsPerChart(atlas, views, raw.map((r, k) => ({ texel: samples[k].texel, x: Float32Array.from(r.x), y: Float32Array.from(r.y), logW: logW[k] })),
+                {
+                    ...(typeof o.align === 'object' ? o.align : {}), ...(input.signal ? { signal: input.signal } : {}),
+                    ...(o.alignReference ? { reference: (t: number) => o.alignReference!([atlas.texels.position[t * 3], atlas.texels.position[t * 3 + 1], atlas.texels.position[t * 3 + 2]], [normal[t * 3], normal[t * 3 + 1], normal[t * 3 + 2]]) } : {})
+                });
+            al = res;
+            alignment = res.report;
+            if (res.report.timedOut) {
+                passDegradations.push({ stage: 'bake-projection', reasonCode: 'alignment_timeout', layerKey: atlas.layerKey,
+                    reason: `The per-chart image alignment used its time budget after ${Math.round(res.report.ms / 1000)} s; the charts it had not reached keep their registered poses.` });
+            }
+            const col = new Float64Array(3);
+            samples.forEach((s, k) => {
+                const r = raw[k];
+                for (let i = 0; i < s.texel.length; i++) {
+                    if (!res.dx[k][i] && !res.dy[k][i]) continue;
+                    sampleLinear(views[k], r.x[i] + res.dx[k][i], r.y[i] + res.dy[k][i], col);
+                    s.rgb[i * 3] = col[0]; s.rgb[i * 3 + 1] = col[1]; s.rgb[i * 3 + 2] = col[2];
+                }
+            });
+            timingsMs[pass ? 'realign' : 'align'] = Date.now() - tAlign;
+        }
+        if (pass || !al || o.refinePose === false) break;
+        const tRefine = Date.now();
+        const ref = refinePosesFromAlignment(atlas, views, raw.map((r, k) => ({ texel: samples[k].texel, x: Float32Array.from(r.x), y: Float32Array.from(r.y) })), al.dx, al.dy, al.shifts,
+            typeof o.refinePose === 'object' ? o.refinePose : {});
+        timingsMs.poseRefine = Date.now() - tRefine;
+        poseRefine = {
+            rmsBeforeM: ref.rmsBeforeM, rmsAfterM: ref.rmsAfterM, points: ref.points, applied: ref.applied, perPano: ref.perPano,
+            ...(alignment ? { firstPassGradNcc: { before: alignment.interViewGradNccBefore, after: alignment.interViewGradNccAfter } } : {})
+        };
+        if (!ref.applied) break;
+        // the alignment's correspondences say something about the pose only where the alignment itself is trustworthy:
+        // below this agreement its shifts are mostly whole-course jumps on repeated coursing (measured on the live arch: at
+        // 0.07 to 0.23 the refined poses always lowered the views' agreement), so the second pass is not spent
+        if ((alignment?.interViewGradNccAfter ?? 0) < MIN_NCC_FOR_POSE_REFINE) {
+            poseRefine.kept = false;
+            poseRefine.reason = `the alignment's own agreement (inter-view gradient NCC ${(alignment?.interViewGradNccAfter ?? 0).toFixed(3)}) is below ${MIN_NCC_FOR_POSE_REFINE}, too weak to re-pose the views from`;
+            break;
+        }
+        pass0 = { views, raw, samples, logW, alignment, degradations: passDegradations.slice() };
+        views = ref.views;
     }
+    // the refined poses stand only if they explain the agreement (the views agree better from the poses alone, before any
+    // shift, than from the registered poses) and the final agreement is no worse; else the registered poses' pass is kept
+    if (pass0 && poseRefine) {
+        const before0 = pass0.alignment?.interViewGradNccBefore ?? 0, after0 = pass0.alignment?.interViewGradNccAfter ?? 0;
+        const before1 = alignment?.interViewGradNccBefore ?? 0, after1 = alignment?.interViewGradNccAfter ?? 0;
+        poseRefine.secondPassGradNcc = { before: before1, after: after1 };
+        if (!(before1 >= before0 + 0.05 && after1 >= after0 - 0.005)) {
+            poseRefine.kept = false;
+            poseRefine.reason = `the refined poses did not bring the views into better agreement (inter-view gradient NCC from the poses alone ${before0.toFixed(3)} -> ${before1.toFixed(3)}, after the alignment ${after0.toFixed(3)} -> ${after1.toFixed(3)}), so the registered poses were kept`;
+            ({ views, raw, samples, logW, alignment } = pass0);
+            passDegradations.length = 0;
+            passDegradations.push(...pass0.degradations);
+        } else poseRefine.kept = true;
+    }
+    degradations.push(...passDegradations);
     const wAbs = raw.map((r) => Float32Array.from(r.wAbs));
     raw.length = 0;
 
@@ -840,6 +909,7 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
             outputSeam: { p95DeltaE: pct(outA, 0.95), maxDeltaE: outA.length ? outA[outA.length - 1] : 0, samples: outA.length, interiorP95DeltaE: pct(outI, 0.95), lowFreqP95DeltaE: pct(lowA, 0.95), lowFreqMedianDeltaE: pct(lowA, 0.5), lowFreqInteriorP95DeltaE: pct(lowI, 0.95), lowFreqInteriorMedianDeltaE: pct(lowI, 0.5) },
             ...(delightReport ? { delight: delightReport } : {}),
             ...(alignment ? { alignment } : {}),
+            ...(poseRefine ? { poseRefine } : {}),
             ...(regions ? { regions } : {}),
             ...(poisson ? { poisson } : {}),
             views: views.map((v, k) => ({ panoId: v.panoId, samples: samples[k].texel.length, gain: gains[k], anchor: anchors.has(k), paletteGate: gateReports[k], solarDelit: solarDelit[k] }))
