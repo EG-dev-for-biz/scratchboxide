@@ -42,6 +42,7 @@
  */
 
 import type { LocationClayTrees } from '../../node/3d-engine/location-clay-pipeline';
+import type { TexturePassRecord } from './texture-pass-contracts';
 
 // =============================================================================
 // Decisions shared by every workstream
@@ -787,6 +788,28 @@ export interface StagedLayer {
     /** Removed from objects[] at finish to free memory. */
     retired?: boolean;
     counts: { vertices: number; triangles: number };
+    /**
+     * The textured twin of this layer from the background texture pass (texture-pass-contracts.ts): the same node names
+     * and byte-identical positions, plus TEXCOORD_0, a de-lit photo albedo and the per-texel confidence plane. The
+     * viewport keeps the clay layer mounted and shows the twin only when the material mode is 'textured'.
+     */
+    textured?: StagedTexturedVariant;
+}
+
+/** A cached textured variant of a staged layer (the texture pass's output for that layer). */
+export interface StagedTexturedVariant {
+    url: string;
+    bytes: number;
+    /** Layer-level rung (TEXTURE_LADDER_RUNGS): the worst rung holding more than 10 percent of the layer's texels. */
+    ladderRung: number;
+    /** Share of the layer's atlas texels per rung, indexed like TEXTURE_LADDER_RUNGS (sums to 1). */
+    rungShares: number[];
+    /** The provenance entries of the layer's texels (labels and sources are open strings). */
+    provenance: Array<{ source: string; label: string; method: string; panoIds?: string[]; coverage: number }>;
+    /** What the confidence image's channels mean. */
+    confidenceChannels: string;
+    builtAtMs: number;
+    cached: boolean;
 }
 
 export interface ScenePatch { upsertObjects: string[]; removeObjects: string[]; supersede: Array<{ objectId: string; by: string }> }
@@ -847,6 +870,21 @@ export interface StagedBuildState {
     attribution: string[];
     /** Stages that can be retried from this run. */
     retry?: { retryRunId: string; stages: string[] };
+    /** How the staged layers are drawn: 'clay' (default, the first result) or 'textured' (each layer's textured twin where it has one). Open. */
+    materialMode?: 'clay' | 'textured' | (string & {});
+    /** The background texture pass: its progress and per-layer outcome, while it runs and after. */
+    texturePass?: StagedTexturePassState;
+}
+
+/** The texture pass as the viewport and the model see it. */
+export interface StagedTexturePassState {
+    status: 'pending' | 'running' | 'committed' | 'degraded' | 'skipped' | 'failed' | 'stopped';
+    /** Layers with a textured twin published, of the layers the pass works on. */
+    layersDone: number;
+    layersTotal: number;
+    /** Share of all atlas texels per rung over every textured layer (TEXTURE_LADDER_RUNGS order). */
+    rungShares?: number[];
+    message?: string;
 }
 
 /** Streamed during the run on the chat SSE as GeminiStreamEvent.stageEvent. */
@@ -987,6 +1025,8 @@ export interface StagedLocationResult {
         runReadings?: { targets: number; read: number; elements: number; replaced: number; skipped: Array<{ id: string; kind: string; slotId?: string; reason: string }> };
     };
     /** The draft survey's materials and measured colours. */
+    /** The background texture pass (textured twins of the staged layers), when it ran. */
+    texturePass?: TexturePassRecord;
     materialHints?: MaterialHints;
     figures?: FigureRecord[];
     /** Street View images, vision calls and seconds, in all and per stage. */
@@ -1633,7 +1673,11 @@ const DEFINITIONS = {
             only: obj(['primitiveIds'], { primitiveIds: arr(STR) })
         }),
         cached: BOOL, builtAtMs: NUM, retired: BOOL,
-        counts
+        counts,
+        textured: obj(['url', 'bytes', 'ladderRung', 'rungShares', 'provenance', 'confidenceChannels', 'builtAtMs', 'cached'], {
+            url: STR, bytes: NONNEG_INT, ladderRung: NONNEG_INT, rungShares: arr(ref('unit')), provenance: arr(ref('texelProvenance')),
+            confidenceChannels: STR, builtAtMs: NUM, cached: BOOL
+        })
     }),
     stageSummary: obj(['stage', 'order', 'title', 'source', 'status', 'layerIds', 'timings', 'degradationIds'], {
         stage: STR, order: INT, title: STR, source: STR, status: ref('stageStatus'), reason: STR,
@@ -1695,7 +1739,11 @@ const DEFINITIONS = {
             label: STR, color: { type: 'string', pattern: '^#[0-9a-fA-F]{6}$' }, pattern: STR, description: STR
         })),
         visionModel: ref('visionModelUse'), materialHints: ref('materialHints'), attribution: arr(STR),
-        retry: obj(['retryRunId', 'stages'], { retryRunId: { type: 'string', pattern: '^[0-9a-f]{8}$' }, stages: arr(STR) })
+        retry: obj(['retryRunId', 'stages'], { retryRunId: { type: 'string', pattern: '^[0-9a-f]{8}$' }, stages: arr(STR) }),
+        materialMode: STR,
+        texturePass: obj(['status', 'layersDone', 'layersTotal'], {
+            status: ref('stageStatus'), layersDone: NONNEG_INT, layersTotal: NONNEG_INT, rungShares: arr(ref('unit')), message: STR
+        })
     }),
     StageEvent: obj(['schema', 'runId', 'seq', 'stage', 'order', 'status', 'title', 'source', 'degradations', 'timings'], {
         schema: { const: 'scratchbox.stage-event/2' }, runId: { type: 'string', pattern: '^[0-9a-f]{8}$' }, seq: NONNEG_INT, stage: STR, order: INT,
@@ -1735,7 +1783,7 @@ const DEFINITIONS = {
             registration: obj(['pairs', 'used', 'beforeRmsM', 'afterRmsM', 'perPano', 'setAside'], { pairs: NONNEG_INT, used: NONNEG_INT, beforeRmsM: ref('nonneg'), afterRmsM: ref('nonneg'), perPano: arr(obj(['panoId', 'pairs', 'beforeRmsM', 'afterRmsM', 'dxM', 'dzM', 'dyawDeg', 'dpitchDeg'], { panoId: STR, pairs: NONNEG_INT, beforeRmsM: ref('nonneg'), afterRmsM: ref('nonneg'), dxM: { type: 'number' }, dzM: { type: 'number' }, dyawDeg: { type: 'number' }, dpitchDeg: { type: 'number' } })), setAside: arr(obj(['panoId', 'reason'], { panoId: STR, reason: STR })) }),
             runReadings: obj(['targets', 'read', 'elements', 'replaced', 'skipped'], { targets: NONNEG_INT, read: NONNEG_INT, elements: NONNEG_INT, replaced: NONNEG_INT, skipped: arr(obj(['id', 'kind', 'reason'], { id: STR, kind: STR, slotId: STR, reason: STR })) })
         }),
-        materialHints: ref('materialHints'), figures: arr(ref('figureRecord')),
+        materialHints: ref('materialHints'), texturePass: ref('TexturePassRecord'), figures: arr(ref('figureRecord')),
         photoCost: obj(['total', 'byStage'], { total: ref('stageCost'), byStage: { type: 'object', additionalProperties: ref('stageCost') } }),
         // trees-fix's LocationClayTrees (node/3d-engine/location-clay-pipeline.ts) owns its own shape
         trees: { type: 'object' },
