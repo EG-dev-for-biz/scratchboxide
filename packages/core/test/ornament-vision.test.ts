@@ -175,6 +175,12 @@ describe('the checks of §5.5, one by one', () => {
         const zero: CompactElement = { ...ROUNDEL, op: { replicate: { seed: { relief: { box: [0, 0, 300, 300], depth: 40 } }, grid: [2000, 12000, 500, 500, 0, 2, 0] } } };
         expect(check([zero]).problems.join(' ')).toMatch(/rule 7: a grid needs whole counts of at least 1 and positive pitches/);
     });
+    it('rule 7: a repeat along an edge with a zero count is sent back (it failed the build schema live), a single one keeps a pitch', () => {
+        const zero: CompactElement = { ...CORNICE, op: { replicate: { seed: { revolve: { at: [0, 200], axis: 'n', profile: [0, 0, 100, 0, 0, 60] } }, along: [0, 500, 0] } } };
+        expect(check([zero]).problems.join(' ')).toMatch(/rule 7: a repeat along an edge needs a whole count of at least 1 and a positive pitch \(count 0/);
+        const one: CompactElement = { ...CORNICE, op: { replicate: { seed: { revolve: { at: [0, 200], axis: 'n', profile: [0, 0, 100, 0, 0, 60] } }, along: [0, 0, 1] } } };
+        expect(check([one]).problems.join(' ')).not.toMatch(/positive pitch/);
+    });
     it('rule 8: overlapping elements in one slot, unless one contains the other', () => {
         const a: CompactElement = { ...ROUNDEL, op: { relief: { box: [2000, 12000, 5000, 15000], depth: 50 } } };
         const b: CompactElement = { ...ROUNDEL, op: { relief: { box: [4000, 14000, 7000, 17000], depth: 50 } } };

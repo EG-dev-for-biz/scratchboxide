@@ -523,6 +523,12 @@ export function checkReply(text: string, finishReason: string | undefined, fit: 
             for (const k of [0, 1] as const) if (g.counts[k] === 1 && !(g.pitchUv[k] > 0)) g.pitchUv[k] = 1;
             if (!g.counts.every(c => Number.isInteger(c) && c >= 1) || !g.pitchUv.every(v => v > 0)) add(x.replyIndex, `rule 7: a grid needs whole counts of at least 1 and positive pitches (counts ${g.counts.join(' × ')}, pitches ${g.pitchUv.map(v => Math.round(v * 1000)).join(' × ')} mm)`);
         }
+        if (spec.operator === 'replicate' && 'along' in spec.replicate.domain) {
+            const a = spec.replicate.domain.along;
+            if (a.count === 1 && !(a.pitchM > 0)) a.pitchM = 1;
+            // a zero count passed the reading and failed the build's schema (OrnamentSpec along.count >= 1) on the live arch
+            if (!(Number.isInteger(a.count) && a.count >= 1) || !(a.pitchM > 0)) add(x.replyIndex, `rule 7: a repeat along an edge needs a whole count of at least 1 and a positive pitch (count ${a.count}, pitch ${Math.round(a.pitchM * 1000)} mm)`);
+        }
         if (spec.operator === 'replicate' && 'lattice' in spec.replicate.domain && 'surface' in slot.host) {
             const b = bbox(slot.host.surface.regionUv);
             const inst = instances(spec, slot);
