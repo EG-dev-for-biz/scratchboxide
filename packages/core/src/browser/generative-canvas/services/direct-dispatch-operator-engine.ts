@@ -19,6 +19,16 @@ import {
     type OperatorDefinition,
     ALL_CORE_OPERATORS
 } from './operators';
+import { ViewportHistory } from './viewport-history';
+import {
+    ObjectEditCapture,
+    SceneEditEntry,
+    applySceneDelta,
+    cloneJsonLike,
+    computeSceneDelta,
+    SCENE_BOOKKEEPING_KEYS
+} from './viewport-history-deltas';
+import type { SceneDelta } from './viewport-history-deltas';
 
 export * from './operators';
 
@@ -41,6 +51,9 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
     private historyStack: Scene3DData[] = [];
     private historyIndex: number = -1;
     private maxHistory: number = 50;
+    /** Shared viewport timeline; when attached it replaces the private whole-scene snapshots above. */
+    private sharedHistory?: ViewportHistory;
+    private recordingDepth = 0;
 
     constructor(initialScene?: Scene3DData) {
         this.sceneData = initialScene ? JSON.parse(JSON.stringify(initialScene)) : {
@@ -90,7 +103,17 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
         this.sceneData = JSON.parse(JSON.stringify(data));
         this.historyStack = [];
         this.historyIndex = -1;
+        this.sharedHistory?.clear();
         this.recordState('Load Scene');
+    }
+
+    /**
+     * Records every dispatch / batch as one entry on the viewport's shared timeline (compact scene deltas
+     * and sparse vertex deltas), and makes sb_undo / sb_redo walk that timeline, so agent operator edits
+     * and the user's gizmo / sculpt / inspector edits undo in one order.
+     */
+    public attachHistory(history: ViewportHistory | undefined): void {
+        this.sharedHistory = history;
     }
 
     public getThreeScene(): THREE.Scene | undefined {
@@ -183,6 +206,7 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
     // ------------------------------------------------------------------------
 
     public recordState(_description?: string): void {
+        if (this.sharedHistory) return;
         if (this.historyIndex < this.historyStack.length - 1) {
             this.historyStack = this.historyStack.slice(0, this.historyIndex + 1);
         }
@@ -196,6 +220,7 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
     }
 
     public undo(): boolean {
+        if (this.sharedHistory) return this.sharedHistory.undo() !== null;
         if (this.historyIndex > 0) {
             this.historyIndex--;
             this.sceneData = JSON.parse(JSON.stringify(this.historyStack[this.historyIndex]));
@@ -206,6 +231,7 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
     }
 
     public redo(): boolean {
+        if (this.sharedHistory) return this.sharedHistory.redo() !== null;
         if (this.historyIndex < this.historyStack.length - 1) {
             this.historyIndex++;
             this.sceneData = JSON.parse(JSON.stringify(this.historyStack[this.historyIndex]));
@@ -216,6 +242,8 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
     }
 
     public resetScene(initialData?: Partial<Scene3DData>): void {
+        // A reset removes every Three.js child, so earlier entries have nothing left to act on.
+        this.sharedHistory?.clear();
         this.sceneData = {
             title: initialData?.title || 'Reset 3D Scene',
             renderMode: initialData?.renderMode || 'pbr',
@@ -294,8 +322,14 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
             };
         }
 
+        const trackEdit = !!this.sharedHistory && this.recordingDepth === 0 && op.category !== 'inspect'
+            && operatorName !== 'sb_undo' && operatorName !== 'sb_redo' && operatorName !== 'sb_reset_scene'
+            && options?.recordHistory !== false && (params as any)?.recordHistory !== false;
+        const tracker = trackEdit ? this.beginTrackedEdit([{ operator: operatorName, params }]) : undefined;
+
         try {
             const data = op.execute(this, params);
+            tracker?.commit();
             
             const shouldRecord = options?.recordHistory !== false && (params as any)?.recordHistory !== false && op.category !== 'inspect';
             if (shouldRecord && operatorName !== 'sb_undo' && operatorName !== 'sb_redo') {
@@ -332,6 +366,8 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
                 timestamp: Date.now()
             };
         } catch (err: any) {
+            // Whatever the operator changed before failing is still a change the user can undo.
+            tracker?.commit();
             const endTime = getNowMs();
             const executionTimeMs = Math.max(0.001, endTime - startTime);
 
@@ -366,6 +402,16 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
         const results: OperatorResult[] = [];
         const isAtomic = options?.atomic === true;
         const snapshotBeforeBatch = isAtomic ? JSON.parse(JSON.stringify(this.sceneData)) : undefined;
+        // A batch is one tool call: one shared-timeline entry, however many operators it runs.
+        const tracker = this.sharedHistory && this.recordingDepth === 0 && options?.recordHistory !== false
+            ? this.beginTrackedEdit(commands)
+            : undefined;
+        if (tracker) this.recordingDepth++;
+        const finishTracking = (commit: boolean) => {
+            if (!tracker) return;
+            this.recordingDepth--;
+            if (commit) tracker.commit();
+        };
 
         for (const cmd of commands) {
             const res = this.dispatch(cmd.operator, cmd.params || {}, { recordHistory: !isAtomic });
@@ -377,6 +423,7 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
                     this.sceneData = snapshotBeforeBatch;
                     this.syncToThreeScene();
                 }
+                finishTracking(!isAtomic);
                 const batchEndTime = getNowMs();
                 return {
                     success: false,
@@ -387,6 +434,7 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
             }
         }
 
+        finishTracking(true);
         if (isAtomic && options?.recordHistory !== false) {
             this.recordState('Batch Execution');
         }
@@ -396,6 +444,55 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
             success: true,
             results,
             totalExecutionTimeMs: Math.max(0.001, batchEndTime - batchStartTime)
+        };
+    }
+
+    // ------------------------------------------------------------------------
+    // Shared-timeline recording
+    // ------------------------------------------------------------------------
+
+    /** Three.js objects the commands name through the objectId / objectIds convention. */
+    private targetsOf(commands: BatchCommand[]): THREE.Object3D[] {
+        const found = new Set<THREE.Object3D>();
+        for (const cmd of commands) {
+            const p = (cmd.params ?? {}) as { objectId?: unknown; objectIds?: unknown };
+            const ids = [p.objectId, ...(Array.isArray(p.objectIds) ? p.objectIds : [])];
+            for (const id of ids) {
+                if (typeof id !== 'string') continue;
+                const obj = this.getThreeObject(id);
+                if (obj) found.add(obj);
+            }
+        }
+        return Array.from(found);
+    }
+
+    private beginTrackedEdit(commands: BatchCommand[]): { commit: () => void } {
+        const history = this.sharedHistory!;
+        const before = cloneJsonLike(this.sceneData);
+        const capture = new ObjectEditCapture(this.targetsOf(commands));
+        const name = (op: string) => op.replace(/^sb_/, '').replace(/[_-]+/g, ' ');
+        const first = commands[0];
+        const objectId = (first?.params as { objectId?: unknown } | undefined)?.objectId;
+        const label = commands.length === 1
+            ? `${name(first.operator).replace(/^./, c => c.toUpperCase())}${typeof objectId === 'string' ? `: ${objectId}` : ''}`
+            : `Agent batch: ${commands.length} operators`;
+        return {
+            commit: () => {
+                const delta = computeSceneDelta(before, this.sceneData, { clone: true, ignoreKeys: SCENE_BOOKKEEPING_KEYS });
+                const live = capture.finish();
+                if (!delta && !live) return;
+                history.record(new SceneEditEntry({
+                    label,
+                    delta,
+                    live,
+                    target: {
+                        applyDelta: (d: SceneDelta, direction) => {
+                            this.sceneData = applySceneDelta(this.sceneData, d, direction, true);
+                            this.syncToThreeScene();
+                        }
+                    }
+                }));
+            }
         };
     }
 

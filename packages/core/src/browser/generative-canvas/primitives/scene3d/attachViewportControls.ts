@@ -9,7 +9,9 @@
 
 import * as THREE from 'three';
 import type { Scene3DData, SculptSettings, TransformGizmoMode, TransformGizmoSpace, ViewportToolMode } from '../../canvas-types';
-import { applySculptStroke, MeshHistoryStack } from '../../services/mesh-sculpting-engine';
+import { applySculptStroke } from '../../services/mesh-sculpting-engine';
+import { ObjectEditCapture } from '../../services/viewport-history-deltas';
+import type { LiveEdit } from '../../services/viewport-history-deltas';
 import {
     TransformGizmoEngine,
     computeAxisTranslation,
@@ -57,15 +59,22 @@ export interface ViewportControlContext {
     selectionBox: Ref<THREE.BoxHelper | null>;
     /** Objects that must never be pick targets (starfield, grid, ...). */
     ignoredPickObjects: () => Array<THREE.Object3D | null | undefined>;
-    history: Ref<MeshHistoryStack>;
 
     resolveSelectableObject: (hit: THREE.Object3D, root: THREE.Object3D) => THREE.Object3D;
     selectObject: Ref<(obj: THREE.Object3D | null) => void>;
-    mutateSceneData: Ref<(mutator: (prev: Scene3DData) => Scene3DData, opInfo?: { operator: string; params?: any }) => void>;
+    /**
+     * Writes a scene edit. `options.history` describes the undoable step it is (label, the Three.js side
+     * of the edit); pass it for every user edit, `false` for view-only changes.
+     */
+    mutateSceneData: Ref<(
+        mutator: (prev: Scene3DData) => Scene3DData,
+        opInfo?: { operator: string; params?: any },
+        options?: { history?: { label?: string; live?: LiveEdit | null; scene?: boolean; coalesce?: boolean; requireLive?: boolean; selectionId?: string | null } | false }
+    ) => void>;
+    /** Records an undoable step that changes no scene data (a sculpt stroke, a part inside a loaded model moved). */
+    recordEdit: Ref<(label: string, live: LiveEdit | null, meta?: { selectionId?: string | null }) => void>;
     setSelectedObjectId: (id: string | null) => void;
     setSelectedObjectName: (name: string) => void;
-    setCanUndo: (v: boolean) => void;
-    setCanRedo: (v: boolean) => void;
 }
 
 const vec3 = (o: THREE.Vector3): [number, number, number] => [o.x, o.y, o.z];
@@ -111,6 +120,10 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
     let downY = 0;
     let isSculpting = false;
     let isGizmoDragging = false;
+    // Local transform of the selection when the drag began; the whole drag is one history step.
+    let gizmoCapture: ObjectEditCapture | null = null;
+    // Position buffers when the stroke began; the stroke's changed vertices are one history step.
+    let sculptCapture: ObjectEditCapture | null = null;
     let activeHandle: GizmoHandleType | null = null;
     let dragStartRay: { origin: THREE.Vector3; dir: THREE.Vector3 } | null = null;
     // Drag start pose of the selection in WORLD space, plus the inverse world rotation of its parent
@@ -171,6 +184,7 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
             if (hit) {
                 isGizmoDragging = true;
                 isDragging = false;
+                gizmoCapture = new ObjectEditCapture([selected], { geometry: false });
                 activeHandle = hit.handleType;
                 dragStartRay = { origin: raycaster.ray.origin.clone(), dir: raycaster.ray.direction.clone() };
                 readWorldPose(selected, dragInitialPos, dragInitialQuat);
@@ -195,9 +209,7 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
                 isDragging = false;
                 lastSculptHit = validHit.point.clone();
 
-                ctx.history.current.pushState(targetMesh.geometry);
-                ctx.setCanUndo(ctx.history.current.canUndo());
-                ctx.setCanRedo(ctx.history.current.canRedo());
+                sculptCapture = new ObjectEditCapture([targetMesh], { transform: false });
 
                 applySculptStroke(targetMesh.geometry, validHit.point, surfaceNormal(validHit, targetMesh), ctx.sculptSettings.current);
                 return;
@@ -342,12 +354,12 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
 
     const commitSculptStroke = () => {
         isSculpting = false;
-        ctx.setCanUndo(ctx.history.current.canUndo());
-        ctx.setCanRedo(ctx.history.current.canRedo());
-
         const sculptMesh = ctx.sculptMesh.current;
         const objId = sculptMesh?.name || 'sb-sculptable-mesh';
         const settings = ctx.sculptSettings.current;
+        // The stroke's vertex edit and the mesh record the write below syncs are one undoable step.
+        const strokeEdit = sculptCapture?.finish() ?? null;
+        sculptCapture = null;
         ctx.mutateSceneData.current(prev => {
             // Parts of a loaded model are not customMeshes; an entry for them would be rebuilt as a
             // placeholder primitive whenever it syncs before the model has loaded.
@@ -368,6 +380,8 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
         }, {
             operator: 'sb_deform_vertices',
             params: { objectId: objId, brush: settings.brush, radius: settings.radius, strength: settings.strength, falloff: settings.falloff }
+        }, {
+            history: { label: `Sculpt ${settings.brush}: ${objId}`, live: strokeEdit, coalesce: false, requireLive: true, selectionId: objId }
         });
     };
 
@@ -375,6 +389,10 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
         isGizmoDragging = false;
         activeHandle = null;
         const currentMode = ctx.transformMode.current;
+        const verb = currentMode === 'rotate' ? 'Rotate' : currentMode === 'scale' ? 'Scale' : 'Move';
+        const dragEdit = gizmoCapture?.finish() ?? null;
+        gizmoCapture = null;
+        const historyMeta = (label: string) => ({ label: `${verb} ${label}`, live: dragEdit, coalesce: false });
         const opName = currentMode === 'rotate' ? 'sb_rotate' : currentMode === 'scale' ? 'sb_scale' : 'sb_translate';
         const transformParams = { position: vec3(selObj.position), rotation: euler3(selObj.rotation), scale: vec3(selObj.scale) };
 
@@ -382,14 +400,18 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
         // slot: the edit stays live in the viewport and nothing is written for it.
         const externalRoot = findExternalObjectRoot(selObj);
         if (externalRoot) {
-            if (externalRoot !== selObj) return;
+            if (externalRoot !== selObj) {
+                // A part inside a loaded model has no schema slot; its move is still one undoable step.
+                ctx.recordEdit.current(`${verb} ${selObj.name || 'part'}`, dragEdit, { selectionId: selObj.name || selObj.uuid });
+                return;
+            }
             const objectId = externalObjectIdOf(externalRoot);
             ctx.mutateSceneData.current(prev => ({
                 ...prev,
                 objects: (prev.objects || []).map(o => o.id === objectId
                     ? { ...o, space: { ...o.space, spatial3d: spatial3dOf(selObj) } }
                     : o)
-            }), { operator: opName, params: { objectId, ...transformParams } });
+            }), { operator: opName, params: { objectId, ...transformParams } }, { history: historyMeta(objectId) });
             return;
         }
 
@@ -410,7 +432,7 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
         }, {
             operator: opName,
             params: { objectId: objId, ...transformParams }
-        });
+        }, { history: historyMeta(objId) });
     };
 
     const handleMouseUp = (e: MouseEvent) => {

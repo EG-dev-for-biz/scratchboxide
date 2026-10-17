@@ -24,7 +24,6 @@ import {
 } from '../src/browser/generative-canvas/primitives/scene3d/attachViewportControls';
 import type { ViewportControlContext } from '../src/browser/generative-canvas/primitives/scene3d/attachViewportControls';
 import { resolveSelectableObject, EXTERNAL_OBJECT_ROOT_PREFIX } from '../src/browser/generative-canvas/primitives/scene3d/selection';
-import { MeshHistoryStack } from '../src/browser/generative-canvas/services/mesh-sculpting-engine';
 import type { Scene3DData, SculptSettings } from '../src/browser/generative-canvas/canvas-types';
 import type { RendererStack } from '../src/browser/generative-canvas/primitives/scene3d/types';
 import { saveViewportSnapshot } from './helpers/scene3d-viewport-snapshot';
@@ -112,14 +111,12 @@ function createHarness(initialData: Partial<Scene3DData> = {}): Harness {
         brushCursor: { current: null },
         selectionBox: { current: null },
         ignoredPickObjects: () => [],
-        history: { current: new MeshHistoryStack(4) },
         resolveSelectableObject,
         selectObject: { current: (obj) => { selections.push(obj); selectedObject.current = obj; } },
         mutateSceneData: { current: (mutator, opInfo) => { data = mutator(data); mutations.push({ operator: opInfo?.operator }); } },
         setSelectedObjectId: () => undefined,
         setSelectedObjectName: () => undefined,
-        setCanUndo: () => undefined,
-        setCanRedo: () => undefined
+        recordEdit: { current: () => undefined }
     };
 
     const stack = { container, scene, camera } as unknown as RendererStack;
