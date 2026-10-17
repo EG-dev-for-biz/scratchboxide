@@ -42,6 +42,8 @@ import {
 } from '../../../common/spatial/texture-pass-contracts';
 import { delightLinearPlane, PHOTOGRAMMETRIC_DELIGHT, TEXTURE_LIFT_CAP, type DelightPlaneReport } from '../../../common/spatial/photogrammetric-delight';
 import { AlgorithmicUvEngine } from '../../spatial/AlgorithmicUvEngine';
+import { blurWithinMaps, chartLocalGains, selectViewsPerRegion, type RegionSelectOptions } from './texture-seams';
+import { alignViewsPerChart, type AlignmentOptions, type AlignmentReport } from './texture-alignment';
 import {
     SRGB_TO_LINEAR, deltaE00, linearToLab, linearToSrgb255, paletteGate, solveRelativeGains,
     type PaletteGateReport, type TexelSampleIndex, type ViewSamples
@@ -91,14 +93,28 @@ export interface ProjectionBakeOptions {
     /** Huber threshold (CIE76 Delta E) and the view count it starts at. Default 10 and 3. */
     huberDeltaE?: number;
     huberMinViews?: number;
-    /** Gaussian sigmas (texels) between the 4 bands of the seam blend. Default [1, 2, 4]. Empty disables the band blend. */
+    /** Gaussian sigmas (texels) between the bands of the seam blend. Default [1, 2, 4]. Empty disables the band blend. */
     bandSigmasTexels?: number[];
+    /**
+     * One view per region instead of a per-texel weighted mean (texture-seams.ts): per (chart, view) exposure gains, then a
+     * block MRF picks each region's view so boundaries run where the views agree; the band blend then blends the chosen
+     * views at those boundaries only. Off by default (every view blended by weight).
+     */
+    regionSelect?: boolean | RegionSelectOptions;
     /** Relative per-view exposure gains. Default true. */
     exposure?: boolean;
     /** Palette gate distance (CIEDE2000). Default 6. */
     paletteGateDeltaE?: number;
     /** Solar de-lighting and shadow lift; off unless given (a place is never assumed). */
     delight?: ProjectionDelightOptions;
+    /**
+     * Per-view, per-chart image alignment before blending (texture-alignment.ts): each view's projection of each chart
+     * is moved by the image shift that best matches the other views' gradients, within the pose uncertainty. Default on;
+     * false disables it.
+     */
+    align?: boolean | AlignmentOptions;
+    /** The photo-textured tile's linear RGB at a world point (the alignment's geometry-registered reference). */
+    alignReference?: (position: Vec3, normal: Vec3) => Vec3 | undefined;
 }
 
 export type ProjectionBakeRequest = ProjectionBakeInput & { options?: ProjectionBakeOptions };
@@ -130,6 +146,16 @@ export interface ProjectionBakeReport {
     maxSeamDeltaE: number;
     p95SeamDeltaE: number;
     seamSamples: number;
+    /**
+     * The seam the output shows: across each boundary between dominant (chosen) views, CIEDE2000 between the final colour's
+     * 5 x 5 means centred 2 texels back on either side (6 apart); `interiorP95DeltaE` is the same measure between neighbours inside one
+     * view's region (the texture's own contrast), so a seam is invisible when its p95 is near that.
+     */
+    outputSeam: { p95DeltaE: number; maxDeltaE: number; samples: number; interiorP95DeltaE: number };
+    /** One view per region (present when it ran): per-chart gains applied, MRF blocks labelled, label changes between neighbouring texels. */
+    regions?: { chartGains: number; meanAbsLogGain: number; blocks: number; boundaryTexels: number };
+    /** The per-chart image alignment (present when it ran): shifts kept and the inter-view gradient NCC before and after. */
+    alignment?: AlignmentReport;
     /** The shadow lift as applied: how much of it the local-contrast cap kept. Present when de-lit. */
     delight?: DelightPlaneReport;
     timingsMs: Record<string, number>;
@@ -156,7 +182,7 @@ export function poseSigmaTerm(poseSigmaPx: number, z: number, gsdM: number): num
     return 1 / (1 + (sigmaM / POSE_SIGMA_SCALE_M) ** 2);
 }
 
-interface RawSamples { texel: number[]; rgb: number[]; logW: number[]; wAbs: number[] }
+interface RawSamples { texel: number[]; rgb: number[]; logW: number[]; wAbs: number[]; x: number[]; y: number[] }
 
 function checkAbort(signal?: AbortSignal): void {
     if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('Street View projection bake aborted');
@@ -183,7 +209,7 @@ function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: De
     'featherPx' | 'minCosIncidence' | 'depthToleranceBaseM' | 'depthTolerancePerMeter' | 'edgeGuardPx'>> & Pick<ProjectionBakeOptions, 'observedSurface' | 'poseEdgeGuardShare'>): RawSamples {
     const { atlas } = input;
     const cam = view.camera;
-    const out: RawSamples = { texel: [], rgb: [], logW: [], wAbs: [] };
+    const out: RawSamples = { texel: [], rgb: [], logW: [], wAbs: [], x: [], y: [] };
     if (!(view.poseQuality > 0)) return out;
     if (depth.width !== cam.width || depth.height !== cam.height) {
         throw new Error(`depthFor(${view.panoId}) returned ${depth.width}x${depth.height}, the camera is ${cam.width}x${cam.height}`);
@@ -265,44 +291,9 @@ function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: De
         out.rgb.push(col[0], col[1], col[2]);
         out.logW.push(logW);
         out.wAbs.push(Math.min(1, Math.exp(logW)));
+        out.x.push(x); out.y.push(y);
     }
     return out;
-}
-
-/** Separable Gaussian of `fields` (each n long) weighted by `mask`, never mixing texels of different atlas maps. Returns blurred fields and blurred mask. */
-function blurWithinMaps(fields: Float64Array[], mask: Float64Array, sigma: number, W: number, H: number, mapIndex: Uint16Array, covered: Uint8Array): { f: Float64Array[]; m: Float64Array } {
-    const r = Math.max(1, Math.ceil(3 * sigma));
-    const k = new Float64Array(2 * r + 1);
-    for (let i = -r; i <= r; i++) k[i + r] = Math.exp(-(i * i) / (2 * sigma * sigma));
-    const n = W * H;
-    const pass = (src: Float64Array[], srcM: Float64Array, horizontal: boolean): { f: Float64Array[]; m: Float64Array } => {
-        const f = src.map(() => new Float64Array(n));
-        const m = new Float64Array(n);
-        for (let y = 0; y < H; y++) {
-            for (let x = 0; x < W; x++) {
-                const i = y * W + x;
-                if (!covered[i]) continue;
-                const mi = mapIndex[i];
-                let sm = 0;
-                const acc = new Float64Array(src.length);
-                for (let d = -r; d <= r; d++) {
-                    const xx = horizontal ? x + d : x, yy = horizontal ? y : y + d;
-                    if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
-                    const j = yy * W + xx;
-                    if (!covered[j] || mapIndex[j] !== mi) continue;
-                    const w = k[d + r];
-                    sm += w * srcM[j];
-                    for (let c = 0; c < src.length; c++) acc[c] += w * src[c][j];
-                }
-                m[i] = sm;
-                for (let c = 0; c < src.length; c++) f[c][i] = acc[c];
-            }
-        }
-        return { f, m };
-    };
-    const pre = fields.map((fl) => { const o = new Float64Array(n); for (let i = 0; i < n; i++) o[i] = fl[i] * mask[i]; return o; });
-    const h = pass(pre, mask, true);
-    return pass(h.f, h.m, false);
 }
 
 /** The bake. Implements BakeStreetViewProjection; extra options ride on the input. */
@@ -335,13 +326,13 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
         if (!(view.poseQuality > 0)) {
             degradations.push({ stage: 'bake-projection', reasonCode: 'pano_set_aside', layerKey: atlas.layerKey,
                 reason: `Pano ${view.panoId} has no usable registered pose (pose quality 0), so it was not projected.` });
-            raw.push({ texel: [], rgb: [], logW: [], wAbs: [] });
+            raw.push({ texel: [], rgb: [], logW: [], wAbs: [], x: [], y: [] });
             continue;
         }
         if (view.image.rgba.length !== view.image.width * view.image.height * 4 || view.image.width !== view.camera.width || view.image.height !== view.camera.height) {
             degradations.push({ stage: 'bake-projection', reasonCode: 'pano_image_invalid', layerKey: atlas.layerKey,
                 reason: `Pano ${view.panoId}'s image is not the ${view.camera.width}x${view.camera.height} RGBA its camera expects, so it was not projected.` });
-            raw.push({ texel: [], rgb: [], logW: [], wAbs: [] });
+            raw.push({ texel: [], rgb: [], logW: [], wAbs: [], x: [], y: [] });
             continue;
         }
         const s = projectView(input, view, input.depthFor(view), opts);
@@ -355,6 +346,28 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
 
     const samples: ViewSamples[] = raw.map((r) => ({ texel: Int32Array.from(r.texel), rgb: Float32Array.from(r.rgb) }));
     const logW = raw.map((r) => Float64Array.from(r.logW));
+
+    // ---- 3b: per-view, per-chart alignment, then each shifted sample re-reads its colour from the photo -------------
+    let alignment: AlignmentReport | undefined;
+    if (o.align !== false && views.length >= 2) {
+        const tAlign = Date.now();
+        const al = alignViewsPerChart(atlas, views, raw.map((r, k) => ({ texel: samples[k].texel, x: Float32Array.from(r.x), y: Float32Array.from(r.y), logW: logW[k] })),
+            {
+                ...(typeof o.align === 'object' ? o.align : {}), ...(input.signal ? { signal: input.signal } : {}),
+                ...(o.alignReference ? { reference: (t: number) => o.alignReference!([atlas.texels.position[t * 3], atlas.texels.position[t * 3 + 1], atlas.texels.position[t * 3 + 2]], [normal[t * 3], normal[t * 3 + 1], normal[t * 3 + 2]]) } : {})
+            });
+        alignment = al.report;
+        const col = new Float64Array(3);
+        samples.forEach((s, k) => {
+            const r = raw[k];
+            for (let i = 0; i < s.texel.length; i++) {
+                if (!al.dx[k][i] && !al.dy[k][i]) continue;
+                sampleLinear(views[k], r.x[i] + al.dx[k][i], r.y[i] + al.dy[k][i], col);
+                s.rgb[i * 3] = col[0]; s.rgb[i * 3 + 1] = col[1]; s.rgb[i * 3 + 2] = col[2];
+            }
+        });
+        timingsMs.align = Date.now() - tAlign;
+    }
     const wAbs = raw.map((r) => Float32Array.from(r.wAbs));
     raw.length = 0;
 
@@ -461,7 +474,27 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
         }
     }
 
-    // ---- 6b: 4-band seam blend of each view's residual against the mean -----------------------------------------
+    // ---- 6a: one view per region (per-chart gains, block MRF); the band blend below then blends at region boundaries ------
+    let label: Int32Array | undefined;
+    let regions: ProjectionBakeReport['regions'];
+    if (o.regionSelect && views.length >= 2) {
+        const g = chartLocalGains(atlas, samples, index, mean);
+        if (g.pairs) {
+            // the mean again, with the gained colours (same weights)
+            for (let t = 0; t < n; t++) {
+                const a = index.start[t], b = index.start[t + 1];
+                if (a === b) continue;
+                let r = 0, gg = 0, bl = 0;
+                for (let p = a; p < b; p++) { const w = index.weight[p], q = index.sample[p] * 3, rgb = samples[index.view[p]].rgb; r += w * rgb[q]; gg += w * rgb[q + 1]; bl += w * rgb[q + 2]; }
+                mean[t * 3] = r; mean[t * 3 + 1] = gg; mean[t * 3 + 2] = bl;
+            }
+        }
+        const sel = selectViewsPerRegion(atlas, samples, index, typeof o.regionSelect === 'object' ? o.regionSelect : {});
+        label = sel.label;
+        regions = { chartGains: g.pairs, meanAbsLogGain: g.meanAbsLogGain, blocks: sel.blocks, boundaryTexels: sel.changes };
+    }
+
+    // ---- 6b: band seam blend of each view's residual against the mean: the views by weight, or the chosen view per region ----
     const final = Float64Array.from(mean);
     let multiViewTexels = 0;
     for (let t = 0; t < n; t++) if (index.start[t + 1] - index.start[t] >= 2) multiViewTexels++;
@@ -482,17 +515,27 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
                 M[t] = 1;
                 Dr[t] = s.rgb[i * 3] - mean[t * 3]; Dg[t] = s.rgb[i * 3 + 1] - mean[t * 3 + 1]; Db[t] = s.rgb[i * 3 + 2] - mean[t * 3 + 2];
             }
-            for (let t = 0; t < n; t++) {
-                const a = index.start[t], b = index.start[t + 1];
-                for (let p = a; p < b; p++) if (index.view[p] === k) { Wk[t] = index.weight[p]; break; }
+            if (label) {
+                for (let i = 0; i < s.texel.length; i++) if (label[s.texel[i]] === k) Wk[s.texel[i]] = 1;
+            } else {
+                for (let t = 0; t < n; t++) {
+                    const a = index.start[t], b = index.start[t + 1];
+                    for (let p = a; p < b; p++) if (index.view[p] === k) { Wk[t] = index.weight[p]; break; }
+                }
             }
+            // the blur only runs over the view's texels and their reach
+            const reach = Math.ceil(3 * Math.max(...bandSigmas));
+            let rx0 = W, ry0 = H, rx1 = -1, ry1 = 0;
+            for (const t of s.texel) { if (!(Wk[t] > 0)) continue; const x = t % W, y = (t - x) / W; if (x < rx0) rx0 = x; if (x > rx1) rx1 = x; if (y < ry0) ry0 = y; if (y > ry1) ry1 = y; }
+            if (rx1 < 0) return; // the view is chosen nowhere: it adds nothing to any band
+            const rect: [number, number, number, number] = [Math.max(0, rx0 - reach), Math.max(0, ry0 - reach), Math.min(W, rx1 + reach + 1), Math.min(H, ry1 + reach + 1)];
             // Gaussian stack of the residual (normalised over the view's support) and of the weight (over the atlas map)
             const gD: Float64Array[][] = [[Dr, Dg, Db]];
             const gW: Float64Array[] = [Wk];
             for (const sg of bandSigmas) {
-                const bd = blurWithinMaps([Dr, Dg, Db], M, sg, W, H, mapIndex, coveredMask);
+                const bd = blurWithinMaps([Dr, Dg, Db], M, sg, W, H, mapIndex, coveredMask, rect);
                 gD.push(bd.f.map((f) => { const out = new Float64Array(n); for (let t = 0; t < n; t++) out[t] = bd.m[t] > 1e-12 ? f[t] / bd.m[t] : 0; return out; }));
-                const bw = blurWithinMaps([Wk], ones, sg, W, H, mapIndex, coveredMask);
+                const bw = blurWithinMaps([Wk], ones, sg, W, H, mapIndex, coveredMask, rect);
                 const out = new Float64Array(n);
                 for (let t = 0; t < n; t++) out[t] = bw.m[t] > 1e-12 ? bw.f[0][t] / bw.m[t] : 0;
                 gW.push(out);
@@ -557,7 +600,7 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
         const vs: number[] = [];
         let best = -1, bw = -1;
         for (let p = a; p < b; p++) { vs.push(index.view[p]); if (index.weight[p] > bw) { bw = index.weight[p]; best = index.view[p]; } }
-        dominant[t] = best;
+        dominant[t] = label && label[t] >= 0 ? label[t] : best;
         vs.sort((x, y) => x - y);
         const key = vs.join(',');
         let id = keyId.get(key);
@@ -645,6 +688,37 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
         }
     }
     seams.sort((a, b) => a - b);
+    // the seam as the output shows it: across each boundary between chosen views, the final colour's low frequency (5 x 5
+    // means centred 3 texels back) on each side, against the same measure between neighbours inside one view's region
+    const outA: number[] = [], outI: number[] = [];
+    {
+        const mean3 = (c: number): Vec3 | undefined => {
+            const cx = c % W, cy = (c - cx) / W;
+            let r = 0, g = 0, b = 0, m = 0;
+            for (let yy = Math.max(0, cy - 2); yy <= Math.min(H - 1, cy + 2); yy++) for (let xx = Math.max(0, cx - 2); xx <= Math.min(W - 1, cx + 2); xx++) {
+                const u = yy * W + xx;
+                if (dominant[u] < 0 || mapIndex[u] !== mapIndex[c]) continue;
+                r += final[u * 3]; g += final[u * 3 + 1]; b += final[u * 3 + 2]; m++;
+            }
+            return m ? linearToLab(Math.max(0, r / m), Math.max(0, g / m), Math.max(0, b / m)) : undefined;
+        };
+        let k = 0;
+        for (let y = 4; y < H - 4; y++) for (let x = 4; x < W - 4; x++) {
+            const t = y * W + x;
+            if (dominant[t] < 0) continue;
+            for (const d of [1, W]) {
+                const u = t + d;
+                if (dominant[u] < 0 || mapIndex[u] !== mapIndex[t]) continue;
+                const boundary = dominant[u] !== dominant[t];
+                if (!boundary && (k++ % 13)) continue;
+                if (mapIndex[t - 2 * d] !== mapIndex[t] || mapIndex[u + 2 * d] !== mapIndex[t]) continue;
+                const a = mean3(t - 2 * d), b = mean3(u + 2 * d);
+                if (a && b) (boundary ? outA : outI).push(deltaE00(a, b));
+            }
+        }
+        outA.sort((a, b) => a - b); outI.sort((a, b) => a - b);
+    }
+    const pct = (v: number[], q: number) => (v.length ? v[Math.min(v.length - 1, Math.floor(v.length * q))] : 0);
     const maxSeam = seams.length ? seams[seams.length - 1] : 0;
     const p95Seam = seams.length ? seams[Math.min(seams.length - 1, Math.floor(seams.length * 0.95))] : 0;
     const labOf = (t: number): Vec3 => linearToLab(SRGB_TO_LINEAR[albedo[t * 4]], SRGB_TO_LINEAR[albedo[t * 4 + 1]], SRGB_TO_LINEAR[albedo[t * 4 + 2]]);
@@ -680,7 +754,10 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
         layerKey: atlas.layerKey, width: W, height: H, albedo, confidence, provenance, degradations, paletteDeltaE,
         report: {
             targetTexels, coveredTexels, bakedTexels: baked, multiViewTexels, overlapPairs, maxSeamDeltaE: maxSeam, p95SeamDeltaE: p95Seam, seamSamples: seams.length, timingsMs,
+            outputSeam: { p95DeltaE: pct(outA, 0.95), maxDeltaE: outA.length ? outA[outA.length - 1] : 0, samples: outA.length, interiorP95DeltaE: pct(outI, 0.95) },
             ...(delightReport ? { delight: delightReport } : {}),
+            ...(alignment ? { alignment } : {}),
+            ...(regions ? { regions } : {}),
             views: views.map((v, k) => ({ panoId: v.panoId, samples: samples[k].texel.length, gain: gains[k], anchor: anchors.has(k), paletteGate: gateReports[k], solarDelit: solarDelit[k] }))
         }
     };

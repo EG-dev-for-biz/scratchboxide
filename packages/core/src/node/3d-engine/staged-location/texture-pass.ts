@@ -251,7 +251,10 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
         try {
             const res = await bakeStreetViewProjection({
                 atlas, views: src.views, depthFor: depthForMesh(src.occluder), paletteLab: src.palette.length ? paletteLab(src.palette) : undefined,
-                signal: src.signal, options: { ...(src.delight ? { delight: src.delight } : {}), ...(src.observedSurface ? { observedSurface: src.observedSurface } : {}), ...(src.poseEdgeGuardShare ? { poseEdgeGuardShare: src.poseEdgeGuardShare } : {}) }
+                signal: src.signal, options: {
+                    // the tile photo is registered to the geometry, so the per-chart alignment uses it as its reference
+                    ...(src.tile ? { alignReference: (P: Vec3, N: Vec3) => src.tile!.sample(P, N, Math.max(0.25, 2 * (src.registrationResidualM ?? 0)))?.rgb } : {}),
+                    ...(src.delight ? { delight: src.delight } : {}), ...(src.observedSurface ? { observedSurface: src.observedSurface } : {}), ...(src.poseEdgeGuardShare ? { poseEdgeGuardShare: src.poseEdgeGuardShare } : {}) }
             });
             planes = res;
             degradations.push(...res.degradations);
