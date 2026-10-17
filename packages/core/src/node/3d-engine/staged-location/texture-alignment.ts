@@ -79,7 +79,7 @@ export interface AlignmentReport {
     /** Kept chart shifts by kind. */
     kept: Record<string, number>;
     /** Per view: median kept shift (px) and how many charts it was measured on (a pose-level correction, reported). */
-    perView: Array<{ panoId: string; medianDx: number; medianDy: number; charts: number; yawDeg: number; pitchDeg: number }>;
+    perView: Array<{ panoId: string; medianDx: number; medianDy: number; charts: number; yawDeg: number; pitchDeg: number; /** Median search half-width over the view's charts, px. */ windowPx?: number }>;
     /** Mean inter-view gradient NCC over overlapping view pairs on the same chart (weighted by shared grid points). */
     interViewGradNccBefore: number;
     interViewGradNccAfter: number;
@@ -327,7 +327,7 @@ export function alignViewsPerChart(atlas: UvAtlas, views: ProjectionView[], samp
                 zs.push((P[t] - cam.eye[0]) * cam.fwd[0] + (P[t + 1] - cam.eye[1]) * cam.fwd[1] + (P[t + 2] - cam.eye[2]) * cam.fwd[2]);
             }
             const z = Math.max(1, median(zs));
-            win.set(k, Math.round(Math.min(maxWin, Math.max(minWin, sigmaWindow * views[k].poseSigmaPx / z))));
+            win.set(k, Math.round(Math.min(maxWin, Math.max(minWin, (views[k].alignSigmas ?? sigmaWindow) * views[k].poseSigmaPx / z))));
         }
         const order = [...at.keys()].sort((a, b) => weight.get(b)! - weight.get(a)!);
         // the reference on the grid (texel positions of the chart's grid points; sqrt luminance like the views)
@@ -452,7 +452,7 @@ export function alignViewsPerChart(atlas: UvAtlas, views: ProjectionView[], samp
                 placed.add(k);
                 if (!cons) continue;
                 const R = p.win.get(k)!;
-                const prior = (dx: number, dy: number) => priorWeight * ((dx * dx + dy * dy) / ((R / sigmaWindow) ** 2));
+                const prior = (dx: number, dy: number) => priorWeight * ((dx * dx + dy * dy) / ((R / (views[k].alignSigmas ?? sigmaWindow)) ** 2));
                 const score = (level: number, dx: number, dy: number) => gradNcc(p.field(k, level, dx, dy), cons[level], p.edges).ncc;
                 const r = search(score, prior, R);
                 alignedPairs++;
@@ -568,7 +568,8 @@ export function alignViewsPerChart(atlas: UvAtlas, views: ProjectionView[], samp
     const perView = views.map((v, k) => {
         const mine = shifts.filter(s => s.view === k && s.kind === 'aligned');
         const mdx = median(mine.map(s => s.dx)), mdy = median(mine.map(s => s.dy));
-        return { panoId: v.panoId, medianDx: mdx, medianDy: mdy, charts: mine.length, yawDeg: (Math.atan(mdx / v.camera.fx) * 180) / Math.PI, pitchDeg: (-Math.atan(mdy / v.camera.fy) * 180) / Math.PI };
+        const wins = pending.flatMap(p => (p.win.has(k) ? [p.win.get(k)!] : []));
+        return { panoId: v.panoId, medianDx: mdx, medianDy: mdy, charts: mine.length, yawDeg: (Math.atan(mdx / v.camera.fx) * 180) / Math.PI, pitchDeg: (-Math.atan(mdy / v.camera.fy) * 180) / Math.PI, ...(wins.length ? { windowPx: median(wins) } : {}) };
     });
     return {
         shifts, dx: dxOut, dy: dyOut,

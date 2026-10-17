@@ -53,6 +53,9 @@ export function poseQualityFromResidual(residualM: number | undefined): number {
     return Math.exp(-0.5 * (residualM / NOMINAL_POSE_UNCERTAINTY.meters) ** 2);
 }
 
+/** Alignment search half-width, in pose sigmas, of a view posed against the scan's edges (its residual, not two of it). */
+export const EDGE_POSE_ALIGN_SIGMAS = 1;
+
 /** A ProjectionView of a registered grounding view; the camera is sized to the decoded image. */
 export function projectionViewFromRegistered(input: RegisteredViewInput): ProjectionView {
     const frame = decodeJpegInMemory(input.jpeg);
@@ -65,6 +68,7 @@ export function projectionViewFromRegistered(input: RegisteredViewInput): Projec
         image,
         poseQuality: poseQualityFromResidual(residual),
         poseSigmaPx: residual === undefined ? 0 : camera.fx * residual,
+        ...(input.registration?.perPano.find((p) => p.panoId === input.view.panoId)?.method === 'edges' ? { alignSigmas: EDGE_POSE_ALIGN_SIGMAS } : {}),
         captureDate: input.captureDate,
         redactionRects: input.redactionRects
     };

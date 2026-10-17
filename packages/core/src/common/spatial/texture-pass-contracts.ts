@@ -177,6 +177,12 @@ export interface ProjectionView {
     poseQuality: number;
     /** Pose uncertainty in pixels at 1 m, for the weight exp(-(sigma/3)^2); from uncertaintyPx. */
     poseSigmaPx: number;
+    /**
+     * Half-width of the per-chart alignment search for this view, in pose sigmas (default: the alignment's sigmaWindow). A pose
+     * registered against the scan's edges is searched only within its own residual, so the search cannot reach the next
+     * course of a repeating wall.
+     */
+    alignSigmas?: number;
     /** ISO capture date of the pano, for solar de-lighting. */
     captureDate?: string;
     /** Pixel rects [x0,y0,x1,y1] of detected redaction blur; weight is zeroed inside. */
