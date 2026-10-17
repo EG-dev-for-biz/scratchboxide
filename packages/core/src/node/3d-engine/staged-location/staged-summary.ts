@@ -195,6 +195,8 @@ export function anchoringSentence(input: StagedSummaryInput): string {
     const a = input.ornament?.anchoring;
     const located = input.ornament?.surveyLocated;
     const parts: string[] = [];
+    const so = input.ornament?.slotsOffered;
+    if (so) parts.push(`The reading was offered ${n(so.offered)} of ${n(so.total)} fitted slots: ${n(so.hidden)} sit on hidden or interior faces and ${n(so.unseen)} are shown by no image, so they were not asked about.`);
     if (located) parts.push(`The survey placed ${n(located.elements)} element${located.elements === 1 ? '' : 's'} on ${n(located.slots)} fitted slot${located.slots === 1 ? '' : 's'} from the photo geometry (${n(located.crops)} close-up${located.crops === 1 ? '' : 's'})${located.unlocated ? `, ${n(located.unlocated)} found no slot` : ''}.`);
     if (a?.length) parts.push(`${n(a.length)} measurement${a.length === 1 ? ' was' : 's were'} photo-corrected to the scan's geometry (largest disagreement ${Math.max(...a.map(x => x.errorM)).toFixed(2)} m, tolerance ${a[0].toleranceM} m).`);
     return parts.join(' ');

@@ -51,8 +51,9 @@ import type { VisionAttempt, VisionModelChain } from '../../gemini/vision-model-
 import { anchorElements, type AnchorNote } from './ornament-anchor';
 import { expandElements, expandEvidence, type ExpandedElement } from './ornament-expand';
 import { surveyHintLines, type LocatedElement } from './survey-detail';
+import type { SlotOffer } from './slot-exposure';
 
-export const ORNAMENT_PROMPT_VERSION = 'ornament/v3';
+export const ORNAMENT_PROMPT_VERSION = 'ornament/v4';
 /** Thinking tokens asked for: LOW on Gemini 4 (thinkingConfigFor), a 512-token budget on 3.x. */
 export const ORNAMENT_THINKING_BUDGET = 512;
 export const ORNAMENT_MAX_OUTPUT_TOKENS = 16_384;
@@ -142,16 +143,20 @@ export function streetViewCaption(ref: EvidenceImageRef): string {
 }
 
 /** The ornament/v2 prompt text around the images (the images go between the preamble and the tables). */
-export function ornamentPromptText(fit: StructureFit, evidence: EvidenceImageRef[], located: LocatedElement[] = []): { preamble: string; tables: string } {
+export function ornamentPromptText(fit: StructureFit, evidence: EvidenceImageRef[], located: LocatedElement[] = [], offer?: SlotOffer): { preamble: string; tables: string } {
     const l = fit.sourceLimits;
     const preamble = `You are reading architectural ornament on one real structure from photographs. It will be added as parametric detail to a clay model that was fitted to a 3D scan. The scan resolves shapes of about ${f2(l.meshResolvableM)} m and the tile photos about ${f2(l.photoResolvableM)} m. Everything you add is labelled "photo-inferred" with the confidence you give, and anything smaller than the image you cite can show is discarded.\n\nImages (cite them by index):`;
-    const inImages = (slotId: string) => evidence.filter(e => e.slotsShown.some(s => s.slotId === slotId)).map(e => e.index);
-    const slots = fit.slots.map(s => {
+    // only slots on an open, exterior face that some image shows (slot-exposure.ts) are offered, each with the images that show it and how much
+    const offered = offer ? fit.slots.filter(s => offer.offeredIds.has(s.id)) : fit.slots;
+    const inImages = (slotId: string) => offer
+        ? (offer.entries.find(e => e.slotId === slotId)?.images ?? []).map(i => `${i.index} (${Math.round(i.visibleFraction * 100)}% of the slot visible)`)
+        : evidence.filter(e => e.slotsShown.some(s => s.slotId === slotId)).map(e => String(e.index));
+    const slots = offered.map(s => {
         const host = 'surface' in s.host ? `surface ${s.host.surface.surfaceId}` : `edge along ${s.host.edge.surfaceIds.join('+')}, ${f2(s.host.edge.carrier.lengthM)} m`;
         const env = 'edge' in s.host ? `, envelope [u out, v up] mm ${JSON.stringify(s.host.edge.envelope.map(p => [Math.round(p[0] * 1000), Math.round(p[1] * 1000)]))}` : '';
         return `${s.id}: ${host}, ${f2(s.sizeM[0])} × ${f2(s.sizeM[1])} m, maxProud ${Math.round(s.bounds.maxProudM * 1000)} mm, maxRecess ${Math.round(s.bounds.maxRecessM * 1000)} mm${env}, in images [${inImages(s.id).join(', ')}]`;
     });
-    const polys = evidence.filter(e => e.kind === 'streetview-grounding').map(e => `[${e.index}] ${e.slotsShown.map(s => `${s.slotId} → ${JSON.stringify(s.polygon1000)}`).join('; ') || 'no slot'}`);
+    const polys = evidence.filter(e => e.kind === 'streetview-grounding').map(e => `[${e.index}] ${e.slotsShown.filter(s => !offer || offer.offeredIds.has(s.slotId)).map(s => `${s.slotId} → ${JSON.stringify(s.polygon1000)}`).join('; ') || 'no slot'}`);
     const correctable = fit.primitives.flatMap(p => p.correctable.map(c => `${p.id} (${p.label ?? 'primitive'}): param ${c.param} (${c.key}) = ${c.value} ${c.unit}, admissible ${c.min}–${c.max}; ${c.description}`));
     const rules = [
         '1. Report only elements you can see in an image that shows their slot. Cite each with [image index, y0, x0, y1, x1] in 0–1000.',
@@ -166,9 +171,9 @@ export function ornamentPromptText(fit: StructureFit, evidence: EvidenceImageRef
     ];
     const schema = JSON.stringify(schemaClosure('VisionOrnamentReply'));
     const tables = [
-        `Slots: ${slots.join('\n')}`,
+        `Slots offered (${offered.length}${offer ? ` of ${fit.slots.length} fitted; the others are on hidden or interior faces or shown by no image, and are not offered` : ''}): ${slots.join('\n')}`,
         `Slot polygons in Street View images: ${polys.length ? polys.join('\n') : 'none'}`,
-        ...(located.length ? [`Survey: a first look at the whole structure found these, each already placed in its slot by casting its place in the photo onto the fitted face, so you do not place anything: measure it. Its metres come from the scan; the repeat counts are the survey's rough count. Give counts and sizes you can read in the close-up; count × pitch will be held to the run below.\n${surveyHintLines(located, fit.slots).join('\n')}`] : []),
+        ...(located.length ? [`Survey: a first look at the whole structure found these, each already placed in its slot by casting its place in the photo onto the fitted face, so you do not place anything: measure it. Its metres come from the scan; the repeat counts are the survey's rough count. Give counts and sizes you can read in the close-up; count × pitch will be held to the run below.\n${surveyHintLines(located, offered).join('\n')}`] : []),
         `Correctable fit values: ${correctable.length ? correctable.join('\n') : 'none'}`,
         `Rules:\n${rules.join('\n')}`,
         `Reply with JSON only, matching this schema: ${schema}`
@@ -176,8 +181,8 @@ export function ornamentPromptText(fit: StructureFit, evidence: EvidenceImageRef
     return { preamble, tables };
 }
 
-export function ornamentContents(fit: StructureFit, evidence: EvidenceInput[], located: LocatedElement[] = []): Content[] {
-    const { preamble, tables } = ornamentPromptText(fit, evidence.map(e => e.ref), located);
+export function ornamentContents(fit: StructureFit, evidence: EvidenceInput[], located: LocatedElement[] = [], offer?: SlotOffer): Content[] {
+    const { preamble, tables } = ornamentPromptText(fit, evidence.map(e => e.ref), located, offer);
     const parts: Part[] = [{ text: preamble }];
     for (const e of evidence) {
         parts.push({ inlineData: { mimeType: e.mimeType, data: e.bytes.toString('base64') } });
@@ -635,6 +640,8 @@ export interface ReadOrnamentInput {
     timeoutMs?: number;
     /** The survey's elements, each already placed in a slot: hints in the prompt, and the geometry the measurements are anchored to. */
     located?: LocatedElement[];
+    /** The slots worth asking about (exterior, shown by an image); absent: every slot. */
+    offer?: SlotOffer;
 }
 
 /** One combined call, at most one revision; throws VisionStageError when no usable reply comes. */
@@ -643,7 +650,7 @@ export async function readOrnament(input: ReadOrnamentInput): Promise<OrnamentRe
     const refs = input.evidence.map(e => e.ref);
     const timeoutMs = input.timeoutMs ?? ORNAMENT_VISION_TIMEOUT_MS;
     const located = input.located ?? [];
-    const first = ornamentContents(fit, input.evidence, located);
+    const first = ornamentContents(fit, input.evidence, located, input.offer);
     const replies: string[] = [];
     let usage: { promptTokens?: number; outputTokens?: number; thinkingTokens?: number; finishReason?: string } = {};
     const call = async (contents: Content[]): Promise<{ text: string; finishReason?: string }> => {

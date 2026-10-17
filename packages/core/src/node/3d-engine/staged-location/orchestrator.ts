@@ -105,6 +105,7 @@ import { writeStagedGlbFile, type StagedGlbNode } from './staged-glb-writer';
 import { buildObjectFromSpec } from '../reference-object-builder';
 import type { ObjectBuildSpec } from '../../../common/spatial/object-build-spec';
 import { nominalPose, projectSlots, registeredPose } from './slot-projection';
+import { computeSlotOffer, describeOffer } from './slot-exposure';
 import { registeredUncertaintyAt } from './survey-detail';
 import {
     orthoCaption, orthoRef, plannedThinking, readOrnament, streetViewCaption, visionUse, VisionStageError, ORNAMENT_PROMPT_VERSION,
@@ -1479,7 +1480,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         siblings.push(treesPromise);
 
         // ---------------- the rebuild (isolated structure) ----------------
-        type Rebuild = { figures?: FigureRecord[]; anchored?: AnchorNote[]; located?: DetailPlan; fit?: ScanFitFitResult; refit?: ScanFitFitResult; spec?: OrnamentSpec; rejected?: PrimitiveCorrection[]; detail?: ScanFitOrnamentResult; droppedNotResolvable: number; sourceLimits?: SourceLimits; evidenceCounts?: { tileOrthos: number; streetView: number } };
+        type Rebuild = { figures?: FigureRecord[]; anchored?: AnchorNote[]; located?: DetailPlan; fit?: ScanFitFitResult; refit?: ScanFitFitResult; spec?: OrnamentSpec; rejected?: PrimitiveCorrection[]; detail?: ScanFitOrnamentResult; droppedNotResolvable: number; sourceLimits?: SourceLimits; evidenceCounts?: { tileOrthos: number; streetView: number }; slotsOffered?: { offered: number; total: number; hidden: number; unseen: number; exposureJudged: boolean } };
         const rebuildOut: Rebuild = { droppedNotResolvable: 0 };
         const rebuildRun = async (): Promise<Rebuild> => {
             const out = rebuildOut;
@@ -1653,12 +1654,16 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...(deps.sleep ? { sleep: deps.sleep } : {}) });
             let fitSha = '';
             let visionKey = '';
+            let offer: ReturnType<typeof computeSlotOffer> | undefined;
             const read = await runner.stage<OrnamentSpec>({
                 id: 'vision',
                 run: async io => {
                     if (!inputs.length) return { status: 'skipped', source: '', reason: 'no image shows the structure' };
                     fitSha = sha256File(fit.outputs.reportJson);
-                    visionKey = stageKey('ornament-vision/v3', ORNAMENT_PROMPT_VERSION, visionAvailable.candidates, ORNAMENT_THINKING_BUDGET, fitSha, inputs.map(i => i.ref.id), inputs.map(i => i.ref.sha256), located.map(l => [l.id, l.slotId, l.repeat?.count, l.runAlongM, l.regionUv]));
+                    offer = computeSlotOffer(fit, inputs.map(i => i.ref));
+                    out.slotsOffered = { offered: offer.offeredIds.size, total: fit.slots.length, hidden: offer.hidden, unseen: offer.unseen, exposureJudged: offer.exposureJudged };
+                    io.progress(describeOffer(offer, fit.slots.length));
+                    visionKey = stageKey('ornament-vision/v4', ORNAMENT_PROMPT_VERSION, visionAvailable.candidates, ORNAMENT_THINKING_BUDGET, fitSha, inputs.map(i => i.ref.id), inputs.map(i => i.ref.sha256), [...offer.offeredIds].sort(), located.map(l => [l.id, l.slotId, l.repeat?.count, l.runAlongM, l.regionUv]));
                     run.keys.vision = visionKey;
                     const hit = !bypass('vision') ? cache.get<{ spec: OrnamentSpec; supportTestRequired: string[]; anchored?: AnchorNote[] }>('vision', visionKey) : undefined;
                     if (hit) {
@@ -1668,7 +1673,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         return { status: 'committed', value: hit.value.spec, source: `${hit.value.spec.elements.length} photo-inferred elements (cached reading by ${hit.value.spec.model.used})`, model: hit.value.spec.model, cached: true, builtAtMs: hit.builtAtMs };
                     }
                     run.cacheStatus.vision = bypass('vision') ? 'bypassed' : 'miss';
-                    const reading = await readOrnament({ fit, fitSha256: fitSha, evidence: inputs, chain, signal: io.signal, onProgress: m => io.progress(m), located });
+                    const reading = await readOrnament({ fit, fitSha256: fitSha, evidence: inputs, chain, signal: io.signal, onProgress: m => io.progress(m), located, offer });
                     await cache.run('vision', visionKey, async dir => {
                         fs.writeFileSync(path.join(dir, 'replies.json'), JSON.stringify(reading.replies));
                         return { value: { spec: reading.spec, supportTestRequired: reading.supportTestRequired, anchored: reading.anchored } };
@@ -1905,7 +1910,7 @@ interface FinishInput {
     groundLayerId?: string;
     trees?: LocationClayTrees;
     putBack?: { triangles: number; crowns: number; reason: string };
-    rebuild: { figures?: FigureRecord[]; anchored?: AnchorNote[]; located?: DetailPlan; fit?: ScanFitFitResult; refit?: ScanFitFitResult; spec?: OrnamentSpec; rejected?: PrimitiveCorrection[]; detail?: ScanFitOrnamentResult; droppedNotResolvable: number; sourceLimits?: SourceLimits; evidenceCounts?: { tileOrthos: number; streetView: number } };
+    rebuild: { figures?: FigureRecord[]; anchored?: AnchorNote[]; located?: DetailPlan; fit?: ScanFitFitResult; refit?: ScanFitFitResult; spec?: OrnamentSpec; rejected?: PrimitiveCorrection[]; detail?: ScanFitOrnamentResult; droppedNotResolvable: number; sourceLimits?: SourceLimits; evidenceCounts?: { tileOrthos: number; streetView: number }; slotsOffered?: { offered: number; total: number; hidden: number; unseen: number; exposureJudged: boolean } };
     strip?: TileVegetationStripResult;
     now: () => number;
     persist: () => void;
@@ -2009,6 +2014,7 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
                 confidence: { min: confidences[0] ?? 0, median: confidences[Math.floor(confidences.length / 2)] ?? 0, max: confidences[confidences.length - 1] ?? 0 },
                 evidence: f.rebuild.evidenceCounts ?? { tileOrthos: 0, streetView: 0 }, model: ornament.model, revisionPass: ornament.revision.passes === 1,
                 ...(f.rebuild.anchored?.length ? { anchoring: f.rebuild.anchored.map(n => ({ elementId: n.elementId, slotId: n.slotId, kind: n.kind, errorM: n.errorM, toleranceM: n.toleranceM, note: n.note })) } : {}),
+                ...(f.rebuild.slotsOffered ? { slotsOffered: f.rebuild.slotsOffered } : {}),
                 ...(f.rebuild.located ? { surveyLocated: { elements: f.rebuild.located.located.length, unlocated: f.rebuild.located.unlocated.length, slots: new Set(f.rebuild.located.located.map(l => l.slotId)).size, crops: f.rebuild.located.views.length } } : {}),
                 dropped: ornament.dropped.length, specPath: run.keys.vision ? path.join('.scratchbox', 'cache', 'staged_location', 'vision', run.keys.vision, 'done.json') : ''
             }

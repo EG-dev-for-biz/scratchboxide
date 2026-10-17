@@ -949,6 +949,8 @@ export interface StagedLocationResult {
         anchoring?: Array<{ elementId: string; slotId: string; kind: string; errorM: number; toleranceM: number; note: string }>;
         /** The survey's elements placed on the fitted slots by casting their image boxes, and the narrow crops that followed. */
         surveyLocated?: { elements: number; unlocated: number; slots: number; crops: number };
+        /** Which fitted slots the reading was asked about: only those on an open exterior face that an image shows. */
+        slotsOffered?: { offered: number; total: number; hidden: number; unseen: number; exposureJudged: boolean };
     };
     /** The draft survey's materials and measured colours. */
     materialHints?: MaterialHints;
@@ -1656,7 +1658,8 @@ const DEFINITIONS = {
             evidence: obj(['tileOrthos', 'streetView'], { tileOrthos: NONNEG_INT, streetView: { type: 'integer', minimum: 0, maximum: MAX_STREET_VIEW_IMAGES_PER_BUILDING } }),
             model: ref('visionModelUse'), revisionPass: BOOL, dropped: NONNEG_INT, specPath: STR,
             anchoring: arr(obj(['elementId', 'slotId', 'kind', 'errorM', 'toleranceM', 'note'], { elementId: STR, slotId: STR, kind: STR, errorM: ref('nonneg'), toleranceM: ref('nonneg'), note: STR })),
-            surveyLocated: obj(['elements', 'unlocated', 'slots', 'crops'], { elements: NONNEG_INT, unlocated: NONNEG_INT, slots: NONNEG_INT, crops: NONNEG_INT })
+            surveyLocated: obj(['elements', 'unlocated', 'slots', 'crops'], { elements: NONNEG_INT, unlocated: NONNEG_INT, slots: NONNEG_INT, crops: NONNEG_INT }),
+            slotsOffered: obj(['offered', 'total', 'hidden', 'unseen', 'exposureJudged'], { offered: NONNEG_INT, total: NONNEG_INT, hidden: NONNEG_INT, unseen: NONNEG_INT, exposureJudged: BOOL })
         }),
         materialHints: ref('materialHints'), figures: arr(ref('figureRecord')),
         photoCost: obj(['total', 'byStage'], { total: ref('stageCost'), byStage: { type: 'object', additionalProperties: ref('stageCost') } }),
