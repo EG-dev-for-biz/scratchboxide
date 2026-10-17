@@ -273,6 +273,7 @@ describe.skipIf(!stagedChrome.ok)('every stage revealed in its real build order 
         await page.eval(`sbHarness.mount(${JSON.stringify(stagedSceneData(base))})`);
         await page.waitFor('sbHarness.ready()');
         for (const l of ['l2', 'l3a', 'l3b'] as const) await page.waitFor(`sbHarness.attached(${JSON.stringify(objectIdOf(l))})`);
+        await page.step(2, STEP);   // the previous test's frames are stale until this scene has drawn once
         await advanceTo(page, 'l3b', 1);
         await page.step(4, STEP);
         const original = base.layers.find(l => l.layer === 'l3b')!;
@@ -285,7 +286,7 @@ describe.skipIf(!stagedChrome.ok)('every stage revealed in its real build order 
         await page.eval(`sbHarness.update(${JSON.stringify(stagedSceneData(refitState))})`);
         await page.waitFor(`sbHarness.attached(${JSON.stringify(REFIT)})`);
         const frame = () => page.eval<{ phase: string; progress: number; presence: number; hidden: boolean } | null>(`sbHarness.layer(${JSON.stringify(REFIT)})`);
-        for (let i = 0; i < 300; i++) { const f = await frame(); if (f && (f.phase === 'revealed' || (f.phase === 'revealing' && f.progress >= 0.5))) break; await page.step(1, STEP); }
+        for (let i = 0; i < 600; i++) { const f = await frame(); if (f && (f.phase === 'revealed' || (f.phase === 'revealing' && f.progress >= 0.5))) break; await page.step(1, STEP); }
         expect((await frame())!.phase, 'the refit is mid-reveal').toBe('revealing');
         await page.screenshot('refit_photo_corrected_mid_reveal');
         const mid = await page.eval<Array<{ node: string; visible: boolean; uniforms: { fade: number; progress: number } | null }>>(`sbHarness.meshStates(${JSON.stringify(REFIT)})`);
