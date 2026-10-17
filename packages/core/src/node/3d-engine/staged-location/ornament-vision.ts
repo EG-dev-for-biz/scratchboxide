@@ -704,6 +704,11 @@ export interface ReadOrnamentInput {
     stallRetries?: number;
     /** Epoch ms by which this reading must be done: no call outlives it, no retry or revision starts without time for it. */
     deadlineAt?: number;
+    /**
+     * Epoch ms by which a revision must be done, when the revision has its own budget beyond `deadlineAt` (a first reply that
+     * came late still gets its one revision). Absent: the revision shares `deadlineAt`.
+     */
+    revisionDeadlineAt?: number;
     /** Clock (tests). */
     now?: () => number;
     /** Output token cap per call (default ORNAMENT_MAX_OUTPUT_TOKENS). */
@@ -741,7 +746,9 @@ export async function readOrnament(input: ReadOrnamentInput): Promise<OrnamentRe
     const firstTokenStallMs = input.firstTokenStallMs ?? ORNAMENT_FIRST_TOKEN_STALL_MS;
     const stallMs = input.stallMs ?? ORNAMENT_STREAM_STALL_MS;
     const stallRetries = input.stallRetries ?? ORNAMENT_STALL_RETRIES;
-    const left = () => (input.deadlineAt === undefined ? Infinity : input.deadlineAt - clock());
+    // the deadline the current call is held to: the reading's, then the revision's own when it has one
+    let deadline = input.deadlineAt;
+    const left = () => (deadline === undefined ? Infinity : deadline - clock());
     const located = input.located ?? [];
     const first = ornamentContents(fit, input.evidence, located, input.offer, input.focus, input.scope);
     const replies: string[] = [];
@@ -819,6 +826,7 @@ export async function readOrnament(input: ReadOrnamentInput): Promise<OrnamentRe
         // the first reply as it stands, with the elements that broke a fixable rule dropped (what a revision that does not come leaves)
         const standing = () => checkReply(one.text, one.finishReason, fit, refs, method, true, located, input.offer?.covers);
         let unrevised: string | undefined;
+        if (input.revisionDeadlineAt !== undefined) deadline = Math.max(deadline ?? -Infinity, input.revisionDeadlineAt);
         if (left() < firstTokenStallMs) unrevised = `no time was left for a revision (${Math.max(0, Math.round(left() / 1000))} s)`;
         else {
             passes = 1;

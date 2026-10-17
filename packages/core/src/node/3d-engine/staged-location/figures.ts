@@ -357,15 +357,52 @@ export function parseFigureReply(text: string, finishReason: string | undefined,
 
 export interface ReadFiguresInput { images: FigureImage[]; chain: VisionModelChain<string>; signal?: AbortSignal; onProgress?: (m: string) => void; timeoutMs?: number }
 
-/** One call, and one more when the reply came back unreadable (cut off or not JSON): the model's long replies fail that way now and then, and a second try costs one call. */
-export async function readFigures(input: ReadFiguresInput): Promise<{ parsed: ParsedFigures; model: VisionModelUse }> {
-    try {
-        return await readFiguresOnce(input);
-    } catch (err) {
-        if (input.signal?.aborted || !/not valid JSON|cut off|ended with|no "figures"/.test((err as Error).message)) throw err;
-        input.onProgress?.(`the reply could not be read (${(err as Error).message.slice(0, 80)}); asking once more`);
-        return readFiguresOnce(input);
-    }
+/** A figure's reading is asked this many times at most when its reply comes back unreadable (cut off, not JSON). */
+export const FIGURE_READ_ATTEMPTS = 3;
+const UNREADABLE = /not valid JSON|cut off|ended with|no "figures"/;
+
+/**
+ * One call per figure, in parallel, each asked again (up to FIGURE_READ_ATTEMPTS) when its reply came back unreadable: a reply
+ * for one figure is short, so a cut-off or truncated stream costs that figure one more call, not every figure the whole reading.
+ * The attempts of one figure share `timeoutMs` (the first gets all of it, a retry what is left). A figure whose every attempt
+ * failed is a problem of its image, and the others stand; when every figure failed the first error is thrown.
+ */
+export async function readFigures(input: ReadFiguresInput): Promise<{ parsed: ParsedFigures; model: VisionModelUse; calls: number }> {
+    const total = input.timeoutMs ?? FIGURE_VISION_TIMEOUT_MS;
+    let calls = 0;
+    const one = async (im: FigureImage): Promise<{ reading?: FigureReading; problems?: string[]; model?: VisionModelUse; error?: unknown }> => {
+        const started = Date.now();
+        let last: unknown;
+        for (let attempt = 0; attempt < FIGURE_READ_ATTEMPTS; attempt++) {
+            const left = total - (Date.now() - started);
+            if (attempt > 0 && left < 20_000) break;
+            calls++;
+            try {
+                const r = await readFiguresOnce({ ...input, images: [{ ...im, index: 0 }], timeoutMs: left });
+                const reading = r.parsed.readings.get(0);
+                return { ...(reading ? { reading: { ...reading, index: im.index } } : {}), ...(r.parsed.problems.get(0) ? { problems: r.parsed.problems.get(0)! } : {}), model: r.model };
+            } catch (err) {
+                last = err;
+                if (input.signal?.aborted || !UNREADABLE.test((err as Error).message)) break;
+                input.onProgress?.(`the reply for figure ${im.index + 1} could not be read (${(err as Error).message.slice(0, 80)}); asking again`);
+            }
+        }
+        return { error: last };
+    };
+    const results = await Promise.all(input.images.map(one));
+    if (input.signal?.aborted) throw input.signal.reason;
+    const readings = new Map<number, FigureReading>();
+    const problems = new Map<number, string[]>();
+    let model: VisionModelUse | undefined;
+    input.images.forEach((im, k) => {
+        const r = results[k];
+        if (r.reading) readings.set(im.index, r.reading);
+        if (r.problems) problems.set(im.index, r.problems);
+        if (r.error) problems.set(im.index, [`its reading failed (${(r.error as Error)?.message ?? String(r.error)})`]);
+        if (r.model && !model) model = r.model;
+    });
+    if (!model) throw results.find(r => r.error)?.error ?? new Error('no figure was read');
+    return { parsed: { readings, problems }, model, calls };
 }
 
 async function readFiguresOnce(input: ReadFiguresInput): Promise<{ parsed: ParsedFigures; model: VisionModelUse }> {

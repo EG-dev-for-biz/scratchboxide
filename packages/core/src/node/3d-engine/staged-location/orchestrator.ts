@@ -109,7 +109,7 @@ import type { ObjectBuildSpec } from '../../../common/spatial/object-build-spec'
 import { nominalPose, projectSlots, registeredPose } from './slot-projection';
 import { computeSlotOffer, describeOffer } from './slot-exposure';
 import { readRuns, RUN_PASS_BUDGET_MS, type RunReadingReport } from './run-reading';
-import { readOrnamentBatched, ORNAMENT_PASS_BUDGET_MS } from './ornament-batches';
+import { readOrnamentBatched, ORNAMENT_PASS_BUDGET_MS, ORNAMENT_REVISION_BUDGET_MS } from './ornament-batches';
 import { registeredUncertaintyAt } from './survey-detail';
 import {
     orthoCaption, orthoRef, plannedThinking, streetViewCaption, visionUse, VisionStageError, ORNAMENT_PROMPT_VERSION,
@@ -150,7 +150,7 @@ export const STAGES = {
     project: { order: -1, title: 'Slots in the photos', budgetMs: 10_000 },
     // the batched wide reading (bounded by its own budget), then the focused run readings in what is left, then the margin the
     // stage keeps so that its own limit never discards a reading that finished
-    vision: { order: -1, title: 'Reading the photos', budgetMs: ORNAMENT_PASS_BUDGET_MS + VISION_RUNS_ALLOWANCE_MS + VISION_STAGE_MARGIN_MS },
+    vision: { order: -1, title: 'Reading the photos', budgetMs: ORNAMENT_PASS_BUDGET_MS + ORNAMENT_REVISION_BUDGET_MS + VISION_RUNS_ALLOWANCE_MS + VISION_STAGE_MARGIN_MS },
     correct: { order: 3, title: 'Photo corrections', budgetMs: 30_000 },
     // the build, the reprojection gate, and a second build without the elements it rejects
     detail: { order: 4, title: 'Photo-inferred detail', budgetMs: 45_000 },
@@ -1182,7 +1182,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             try {
                                 const read = await readFigures({ images, chain, signal: io.signal, onProgress: m => io.progress(m) });
                                 model = read.model;
-                                cost.visionCalls = 1;
+                                cost.visionCalls = read.calls;
                                 const builder = deps.figureBuilder ?? (async (spec: ObjectBuildSpec, signal?: AbortSignal) => ({ glb: (await buildObjectFromSpec(spec, { signal })).glb }));
                                 let order = 0;
                                 for (const im of images) {

@@ -53,6 +53,11 @@ export const ORNAMENT_BATCH_MAX_OUTPUT_TOKENS = 8_192;
 export const ORNAMENT_BATCH_TIMEOUT_MS = 100_000;
 /** The whole batched reading: no batch call, retry or revision outlives it. */
 export const ORNAMENT_PASS_BUDGET_MS = 180_000;
+/**
+ * Each batch's revision has this budget of its own beyond the pass budget: a batch whose first reply came back late and
+ * invalid is still asked once to fix it (live, round 3: batch b7 ended invalid with no time left to revise it).
+ */
+export const ORNAMENT_REVISION_BUDGET_MS = 75_000;
 /** The pass's own abort comes this long after the deadline its calls are held to. */
 const BUDGET_BACKSTOP_MS = 2_000;
 /** Street View close-ups are downscaled to this longest side before they are sent. */
@@ -237,6 +242,8 @@ async function pool<T, R>(items: T[], n: number, fn: (x: T, k: number) => Promis
 export interface ReadOrnamentBatchedInput extends Omit<ReadOrnamentInput, 'focus' | 'scope' | 'deadlineAt'> {
     /** The whole reading's budget (default ORNAMENT_PASS_BUDGET_MS). */
     budgetMs?: number;
+    /** Each batch's revision budget beyond `budgetMs` (default ORNAMENT_REVISION_BUDGET_MS). */
+    revisionBudgetMs?: number;
     /** Batches read at once (default: all). */
     concurrency?: number;
     limits?: BatchLimits;
@@ -298,7 +305,8 @@ export async function readOrnamentBatched(input: ReadOrnamentBatchedInput): Prom
     // each batch's calls are cut at the deadline by their own limit (so a revision cut there leaves the first reply standing);
     // this is the backstop for anything that does not end with them
     const budget = new AbortController();
-    const budgetTimer = setTimeout(() => budget.abort(Object.assign(new Error(`the reading's ${Math.round(budgetMs / 1000)} s budget ran out`), { name: 'TimeoutError' })), budgetMs + BUDGET_BACKSTOP_MS);
+    const revisionMs = input.revisionBudgetMs ?? ORNAMENT_REVISION_BUDGET_MS;
+    const budgetTimer = setTimeout(() => budget.abort(Object.assign(new Error(`the reading's ${Math.round(budgetMs / 1000)} s budget (and ${Math.round(revisionMs / 1000)} s for revisions) ran out`), { name: 'TimeoutError' })), budgetMs + revisionMs + BUDGET_BACKSTOP_MS);
     const signal = input.signal ? AbortSignal.any([input.signal, budget.signal]) : budget.signal;
     type Done = { plan: OrnamentBatchPlan; evidence: EvidenceInput[]; reading?: OrnamentReading; failure?: VisionStageError | Error; calls: number; retries: number; ms: number };
     let results: Done[];
@@ -310,7 +318,7 @@ export async function readOrnamentBatched(input: ReadOrnamentBatchedInput): Prom
             let calls = 0, retries = 0;
             try {
                 const reading = await readOrnament({
-                    fit, fitSha256: input.fitSha256, evidence, chain, signal, deadlineAt,
+                    fit, fitSha256: input.fitSha256, evidence, chain, signal, deadlineAt, revisionDeadlineAt: deadlineAt + revisionMs,
                     timeoutMs: input.timeoutMs ?? ORNAMENT_BATCH_TIMEOUT_MS, maxOutputTokens: input.maxOutputTokens ?? ORNAMENT_BATCH_MAX_OUTPUT_TOKENS,
                     ...(input.firstTokenStallMs !== undefined ? { firstTokenStallMs: input.firstTokenStallMs } : {}),
                     ...(input.stallMs !== undefined ? { stallMs: input.stallMs } : {}),

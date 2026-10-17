@@ -23,7 +23,7 @@ import * as http from 'http';
 import { GoogleGenAI } from '@google/genai';
 import {
     downscaleEvidence, planOrnamentBatches, readOrnamentBatched, ORNAMENT_BATCH_MAX_IMAGES, ORNAMENT_BATCH_MAX_OUTPUT_TOKENS, ORNAMENT_BATCH_MAX_SLOTS,
-    ORNAMENT_PASS_BUDGET_MS
+    ORNAMENT_PASS_BUDGET_MS, ORNAMENT_REVISION_BUDGET_MS
 } from '../src/node/3d-engine/staged-location/ornament-batches';
 import { orthoCaption, orthoRef, streetViewCaption, ORNAMENT_THINKING_BUDGET, type EvidenceInput } from '../src/node/3d-engine/staged-location/ornament-vision';
 import { STAGES, VISION_RUNS_ALLOWANCE_MS, VISION_STAGE_MARGIN_MS } from '../src/node/3d-engine/staged-location/orchestrator';
@@ -251,6 +251,18 @@ describe('the batched reading', () => {
         expect(r.spec.revision.problems.some(p => /^b0: the revision gave no reply \(the vision call stalled/.test(p))).toBe(true);
     });
 
+    it('a first reply that comes back invalid at the end of the pass budget still gets its revision, from the revision budget', async () => {
+        const f = structureFit();
+        // the north batch's first reply arrives ~120 ms into a 200 ms pass budget (too late for a revision inside it) and is invalid;
+        // its revision answers properly
+        const fake = promptReader((text, nth) => (offeredIn(text).includes('S01') && nth === 0 ? 'broken' : 'answer'), 120);
+        const r = await readOrnamentBatched({ fit: f, fitSha256: 'b'.repeat(64), evidence: evidence(f), chain: chainOf(fake.client), ...FAST, budgetMs: 200, revisionBudgetMs: 3_000 });
+        const north = r.batches.find(b => b.id === 'b0')!;
+        expect(north).toMatchObject({ status: 'answered', revised: true, calls: 2 });
+        expect(r.spec.elements.map(e => e.slotId).sort()).toEqual(['S01', 'S02', 'S03']);
+        expect(r.dropped).toEqual([]);
+    });
+
     it('fails only when every batch fails, naming each', async () => {
         const f = structureFit();
         const fake = promptReader(() => 'hang');
@@ -311,8 +323,8 @@ describe('thinking LOW in the request body, and the stage bounds', () => {
         }
     });
 
-    it('the vision stage holds the batched reading, the run readings and a margin, so its own limit never ends a finished reading', () => {
-        expect(STAGES.vision.budgetMs).toBe(ORNAMENT_PASS_BUDGET_MS + VISION_RUNS_ALLOWANCE_MS + VISION_STAGE_MARGIN_MS);
+    it('the vision stage holds the batched reading, the revision budget, the run readings and a margin, so its own limit never ends a finished reading', () => {
+        expect(STAGES.vision.budgetMs).toBe(ORNAMENT_PASS_BUDGET_MS + ORNAMENT_REVISION_BUDGET_MS + VISION_RUNS_ALLOWANCE_MS + VISION_STAGE_MARGIN_MS);
         // the run readings are given what is left, never their own longer budget
         expect(VISION_RUNS_ALLOWANCE_MS).toBeLessThan(RUN_PASS_BUDGET_MS);
     });
