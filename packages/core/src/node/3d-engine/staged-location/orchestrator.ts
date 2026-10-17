@@ -92,7 +92,9 @@ import { selectViewsForFit } from './evidence-aim';
 import { describeSurvey, runFaceSurvey, surveyCandidates, surveyFaceTargets, surveyImageBytes, SURVEY_IMAGE_TIMEOUT_MS, SURVEY_VISION_TIMEOUT_MS, type SurveyResult } from './face-survey';
 import { describeLocated, locateSurveyElements, planDetailFromSurvey, type DetailPlan } from './survey-detail';
 import { DETAIL_REPROJECTION_MIN_IOU, reprojectDetail } from './detail-reprojection';
-import { EDGE_REGISTRATION_BUDGET_MS, edgeFramesFromImages, registerPanosByEdges, describeEdgeRegistration, type EdgeRegistrationResult } from './pano-edge-registration';
+import { EDGE_MAX_RESIDUAL_PX, EDGE_REGISTRATION_BUDGET_MS, edgeFramesFromImages, registerPanosByEdges, describeEdgeRegistration, type EdgeRegistrationResult } from './pano-edge-registration';
+import { describeJointRegistration, JOINT_REGISTRATION_BUDGET_MS, registerPanosJointly } from './pano-joint-registration';
+import { jointRegistrationEnabled } from './round5-switch';
 import { registerPanos, type Registration } from './pano-registration';
 import { MATCH_TIMEOUT_MS, matchRingImages, runViewMatch, type MatchResult } from './view-match';
 import { castCamera, fitFaces } from './survey-casting';
@@ -143,7 +145,7 @@ export const STAGES = {
     resolve: { order: -1, title: 'Place', budgetMs: 10_000 },
     tiles: { order: 1, title: 'Google 3D Tiles', budgetMs: 360_000 },
     survey: { order: -1, title: 'Surveying the four faces', budgetMs: EVIDENCE_DISCOVERY_ALLOWANCE_MS + SURVEY_IMAGE_TIMEOUT_MS + SURVEY_VISION_TIMEOUT_MS + 15_000 },
-    evidence: { order: -1, title: 'Street View close-ups', budgetMs: EVIDENCE_STAGE_BUDGET_MS + 30_000 + MATCH_TIMEOUT_MS + 60_000 + EDGE_REGISTRATION_BUDGET_MS + 15_000 },
+    evidence: { order: -1, title: 'Street View close-ups', budgetMs: EVIDENCE_STAGE_BUDGET_MS + 30_000 + MATCH_TIMEOUT_MS + 60_000 + EDGE_REGISTRATION_BUDGET_MS + 15_000 + JOINT_REGISTRATION_BUDGET_MS + 30_000 },
     'trees-measure': { order: -1, title: 'Measuring the trees', budgetMs: 300_000 },
     remesh: { order: 2, title: 'Remeshed scan', budgetMs: 300_000 },
     fit: { order: 3, title: 'Scan-fitted rebuild', budgetMs: 30_000 },
@@ -1109,6 +1111,27 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 // pass 2 places the surveyed elements through the chosen poses (the close-ups stay as aimed)
                                 if (plan && surveyOut?.result) plan = { ...plan, ...locateSurveyElements(surveyOut.result, fit, registration) };
                             }
+                            // joint registration: all panos together (edges against the scan, cross-view photo consistency through it,
+                            // priors), from the better of box and edge per pano; kept only when the held-out fit improves (pano-joint-registration.ts)
+                            if (jointRegistrationEnabled() && edgeReg.registration && edgeReg.panos.length >= 2) {
+                                io.progress(`registering ${edgeReg.panos.length} panos jointly (edges, cross-view consistency through the scan, priors)`);
+                                const candidates = new Map(edgeReg.panos.map(p => [p.panoId, {
+                                    box: p.prior, ...(p.edge ? { edge: p.edge } : {}),
+                                    edgeLocked: p.edgeResidualPx.edge !== null && p.edgeResidualPx.edge <= EDGE_MAX_RESIDUAL_PX && (p.edgeResidualPx.prior === null || p.edgeResidualPx.edge < p.edgeResidualPx.prior)
+                                }]));
+                                const joint = registerPanosJointly({ frames, mesh, current: registration ?? edgeReg.registration, candidates, budgetMs: JOINT_REGISTRATION_BUDGET_MS, log: m => io.progress(m) });
+                                io.progress(describeJointRegistration(joint));
+                                cache.writeRunNote(runId, 'joint_registration', {
+                                    chosen: joint.chosen, reason: joint.reason, matches: joint.matches, timingsMs: joint.timingsMs, panos: joint.panos,
+                                    fit: Object.fromEntries(Object.entries(joint.fit).map(([k, v]) => [k, v && { chamferPx: v.chamferPx, clayChamferPx: v.clayChamferPx, gradNcc: v.gradNcc, views: v.views }])),
+                                    warps: joint.warps.map(w => ({ panoId: w.panoId, samples: w.samples, medianDeg: w.medianDeg }))
+                                });
+                                if (joint.chosen !== 'current') {
+                                    registration = joint.registration;
+                                    // the surveyed elements are placed again through the joint poses, so the built detail and the texture agree
+                                    if (plan && surveyOut?.result) plan = { ...plan, ...locateSurveyElements(surveyOut.result, fit, registration) };
+                                }
+                            }
                         }
                     } catch (err) {
                         if (isAbort(err) || io.signal.aborted) throw err;
@@ -1374,7 +1397,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     // the full tile mesh: the real opening, the statues, the trees and the buildings behind decide what each photo shows
                     const context = loadMesh([extraction.geometryGlb]);
                     const residual = evidence?.registration?.afterRmsM;
-                    const poseHash = evidence?.registration ? [...evidence.registration.corrections.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)) : [];
+                    const poseHash = evidence?.registration ? [
+                        ...[...evidence.registration.corrections.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)),
+                        ...[...(evidence.registration.warps?.entries() ?? [])].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([id, w]) => [id, Array.from(w.dh), Array.from(w.dp)])
+                    ] : [];
                     const tileSha = tile ? sha256File(extraction.texturedGlb) : 'no-tile';
                     const enhance = deps.textures?.enhance;
                     const outcomes: Array<{ layer: StagedLayer; out: Omit<TextureLayerOutcome, 'glb'>; url: string; bytes: number; cached: boolean; builtAtMs: number }> = [];

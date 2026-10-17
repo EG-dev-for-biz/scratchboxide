@@ -25,6 +25,7 @@ import type { Registration, RegView } from './pano-registration';
 import { decodeJpegInMemory } from './photo-palette';
 import { NOMINAL_POSE_UNCERTAINTY } from './streetview-evidence';
 import { castCamera } from './survey-casting';
+import { warpLatticeForView } from './pano-joint-registration';
 
 export interface RegisteredViewInput {
     view: RegView;
@@ -42,8 +43,8 @@ export function registeredResidualM(panoId: string, registration?: Registration)
     if (!registration) return NOMINAL_POSE_UNCERTAINTY.meters;
     if (registration.setAside.some((s) => s.panoId === panoId)) return undefined;
     const p = registration.perPano.find((q) => q.panoId === panoId);
-    // a pano posed against the scan's edges is as good as its edge residual, not as the boxes it was not fitted to
-    if (p?.method === 'edges' && p.edgeResidualM !== undefined && Number.isFinite(p.edgeResidualM)) return p.edgeResidualM;
+    // a pano posed against the scan (its edges, or jointly with the other panos) is as good as that residual, not as the boxes it was not fitted to
+    if ((p?.method === 'edges' || p?.method === 'joint') && p.edgeResidualM !== undefined && Number.isFinite(p.edgeResidualM)) return p.edgeResidualM;
     const rms = p && p.pairs > 0 && Number.isFinite(p.afterRmsM) ? p.afterRmsM : registration.afterRmsM;
     return Number.isFinite(rms) ? rms : NOMINAL_POSE_UNCERTAINTY.meters;
 }
@@ -68,7 +69,8 @@ export function projectionViewFromRegistered(input: RegisteredViewInput): Projec
         image,
         poseQuality: poseQualityFromResidual(residual),
         poseSigmaPx: residual === undefined ? 0 : camera.fx * residual,
-        ...(input.registration?.perPano.find((p) => p.panoId === input.view.panoId)?.method === 'edges' ? { alignSigmas: EDGE_POSE_ALIGN_SIGMAS } : {}),
+        ...(['edges', 'joint'].includes(input.registration?.perPano.find((p) => p.panoId === input.view.panoId)?.method ?? '') ? { alignSigmas: EDGE_POSE_ALIGN_SIGMAS } : {}),
+        ...(input.registration?.warps?.get(input.view.panoId) ? { warp: warpLatticeForView(input.registration.warps.get(input.view.panoId)!, camera) } : {}),
         captureDate: input.captureDate,
         redactionRects: input.redactionRects
     };

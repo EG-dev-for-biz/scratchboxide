@@ -243,6 +243,14 @@ function sampleLinear(view: ProjectionView, x: number, y: number, out: Float64Ar
 
 const smoothstep01 = (t: number): number => { const x = Math.min(1, Math.max(0, t)); return x * x * (3 - 2 * x); };
 
+/** Bilinear lookup of a view's warp lattice (nodes span [0, W] x [0, H]). */
+function latticeAt(w: NonNullable<ProjectionView['warp']>, x: number, y: number, W: number, H: number): [number, number] {
+    const fx = Math.min(w.gw - 1, Math.max(0, (x / W) * (w.gw - 1))), fy = Math.min(w.gh - 1, Math.max(0, (y / H) * (w.gh - 1)));
+    const x0 = Math.min(w.gw - 2, Math.floor(fx)), y0 = Math.min(w.gh - 2, Math.floor(fy)), ax = fx - x0, ay = fy - y0, k = y0 * w.gw + x0;
+    const bl = (a: Float32Array) => (a[k] * (1 - ax) + a[k + 1] * ax) * (1 - ay) + (a[k + w.gw] * (1 - ax) + a[k + w.gw + 1] * ax) * ay;
+    return [bl(w.dx), bl(w.dy)];
+}
+
 /** Steps 1 to 3 for one view: its visible samples with weights. */
 function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: DepthMap, opts: Required<Pick<ProjectionBakeOptions,
     'featherPx' | 'minCosIncidence' | 'depthToleranceBaseM' | 'depthTolerancePerMeter' | 'edgeGuardPx'>> & Pick<ProjectionBakeOptions, 'observedSurface' | 'poseEdgeGuardShare'>, context?: DepthMap): RawSamples {
@@ -271,6 +279,7 @@ function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: De
         out.caught = [0, 0, 0];
     }
     const rects = (view.redactionRects ?? []).map(([x0, y0, x1, y1]) => [x0 - 1, y0 - 1, x1 + 1, y1 + 1]);
+    const warp = view.warp;
     const col = new Float64Array(3);
     const g = opts.edgeGuardPx;
     /** Probe offsets of the depth-edge guard: the 4 axes and the 4 diagonals (a corner is diagonal from the pixel). */
@@ -349,12 +358,15 @@ function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: De
         if (!(feather > 0)) continue;
         const logW = Math.log(cos * cos * res * view.poseQuality * feather * poseSigmaTerm(view.poseSigmaPx, z, gsd));
         if (!Number.isFinite(logW)) continue;
-        sampleLinear(view, x, y, col);
+        // the photo's content for this texel, through the pano's non-rigid warp when it has one
+        let sx = x, sy = y;
+        if (warp) { const d = latticeAt(warp, x, y, W, H); sx = Math.min(W - 0.01, Math.max(0, x + d[0])); sy = Math.min(H - 0.01, Math.max(0, y + d[1])); }
+        sampleLinear(view, sx, sy, col);
         out.texel.push(t);
         out.rgb.push(col[0], col[1], col[2]);
         out.logW.push(logW);
         out.wAbs.push(Math.min(1, Math.exp(logW)));
-        out.x.push(x); out.y.push(y);
+        out.x.push(sx); out.y.push(sy);
     }
     return out;
 }

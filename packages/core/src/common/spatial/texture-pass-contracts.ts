@@ -204,6 +204,11 @@ export interface ProjectionView {
     captureDate?: string;
     /** Pixel rects [x0,y0,x1,y1] of detected redaction blur; weight is zeroed inside. */
     redactionRects?: Array<[number, number, number, number]>;
+    /**
+     * Non-rigid correction of the photo (the joint registration's per-pano warp, pano-joint-registration.ts): pixel displacement
+     * at `gw` x `gh` lattice nodes spanning the image. The colour of a texel the pose puts at (x, y) is read at (x, y) + d(x, y).
+     */
+    warp?: { gw: number; gh: number; dx: Float32Array; dy: Float32Array };
 }
 
 /** Software depth (metres along `fwd`, row-major, Infinity where nothing) of the occluder as seen from a view. */
