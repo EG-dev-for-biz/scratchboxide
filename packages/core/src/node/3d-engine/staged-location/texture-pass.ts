@@ -43,13 +43,19 @@ import type { EvidenceImage } from './streetview-evidence';
 import { buildUvAtlas, type LaidOutUvAtlas } from './texture-uv';
 import { mergeBakedPlanes, transferTilePhoto, type TileTextureSurface } from './tile-texture-transfer';
 import { describeLayerFit, measureLayerFit, type LayerFit } from './texture-fit-metric';
+import { measureScanDeviation, type ScanDeviation } from './scan-deviation';
+import { round4Baseline } from './round5-switch';
 
 /** Part of every texture cache key: a change to the pass's maths is a new version. */
-export const TEXTURE_PASS_VERSION = 'texture-pass/5';
+export const TEXTURE_PASS_VERSION = 'texture-pass/6';
 export const RUNG_PALETTE = 3;
 export const RUNG_GENERATED_PBR = 4;
 /** The enhancement rung's own time budget per layer (layers run in parallel inside the stage's 600 s). */
 export const ENHANCE_BUDGET_MS = 150_000;
+/** View selection: incidence floor (cos 68 degrees: grazing views smear the stone), resolution floor (view GSD at most ~7 texels), photo-consistency outlier distance (CIE76). */
+export const VIEW_MIN_COS_INCIDENCE = 0.375;
+export const VIEW_MIN_RESOLUTION = 0.15;
+export const VIEW_OUTLIER_DELTA_E = 14;
 /** 18% studio grey clay (sb.PbrMaterial.clay()), linear. */
 const CLAY_LINEAR: Vec3 = [0.55, 0.57, 0.60];
 
@@ -258,6 +264,20 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
     let planes = emptyPlanes(atlas);
     let projection: TextureLayerOutcome['projection'];
 
+    // where a fitted surface stands off the scan the photos show, they are not projected onto it (the scan carries them there)
+    let offScan: ScanDeviation | undefined;
+    if (layer.surfaces?.length && src.occluder && src.views.length && !round4Baseline()) {
+        t = Date.now();
+        offScan = measureScanDeviation(atlas, src.occluder);
+        timingsMs.scanDeviation = Date.now() - t;
+        if (offScan.offTexels) {
+            const share = offScan.offTexels / Math.max(1, countCovered(atlas));
+            degradations.push({ stage: 'bake-projection', reasonCode: 'fitted_off_scan', layerKey: layer.layerKey, fromRung: 0, toRung: 2, texelShare: share,
+                reason: `${(100 * share).toFixed(1)} percent of the fitted surface stands more than ${Math.round(offScan.tolM * 100)} cm from the scan (median ${offScan.offMedianM !== null ? (offScan.offMedianM * 100).toFixed(0) : 'n/a'} cm, 95th percentile ${offScan.offP95M !== null ? (offScan.offP95M * 100).toFixed(0) : 'n/a'} cm), where the photos show the scanned surface; they were not projected there (the views would disagree by parallax), so those texels keep the tile photo or clay, and the remeshed scan carries the photos.` });
+            progress(`${offScan.offTexels} of ${offScan.checked} fitted texels stand off the scan by more than ${Math.round(offScan.tolM * 100)} cm (median ${offScan.offMedianM} m); not projected`);
+        }
+    }
+
     // C: Street View projection (rungs 0 and 1)
     t = Date.now();
     if (src.views.length && src.occluder) {
@@ -271,7 +291,10 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
                         const c = src.tile!.sample(P, N, Math.max(0.25, 2 * (src.registrationResidualM ?? 0)))?.rgb; // sRGB 0..255
                         return c && [0, 1, 2].map(i => SRGB8_TO_LINEAR[Math.max(0, Math.min(255, Math.round(c[i])))]) as Vec3;
                     } } : {}),
-                    ...(src.delight ? { delight: src.delight } : {}), ...(src.observedSurface ? { observedSurface: src.observedSurface } : {}), ...(src.poseEdgeGuardShare ? { poseEdgeGuardShare: src.poseEdgeGuardShare } : {}) }
+                    ...(src.delight ? { delight: src.delight } : {}), ...(src.observedSurface ? { observedSurface: src.observedSurface } : {}), ...(src.poseEdgeGuardShare ? { poseEdgeGuardShare: src.poseEdgeGuardShare } : {}),
+                    // view selection: no grazing or coarse views, photo-inconsistent views rejected per region (round 5)
+                    ...(round4Baseline() ? {} : { minCosIncidence: VIEW_MIN_COS_INCIDENCE, minResolution: VIEW_MIN_RESOLUTION, regionSelect: { outlierDeltaE: VIEW_OUTLIER_DELTA_E } }),
+                    ...(offScan?.offTexels ? { excludeTexels: offScan.off } : {}) }
             });
             planes = res;
             degradations.push(...res.degradations);
