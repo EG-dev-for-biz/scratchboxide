@@ -465,6 +465,12 @@ export function checkReply(text: string, finishReason: string | undefined, fit: 
         const depth = depthRange(spec);
         if (depth.proud > slot.bounds.maxProudM + 1e-6) add(x.replyIndex, `rule 6: ${Math.round(depth.proud * 1000)} mm proud is more than slot ${slot.id} allows (${Math.round(slot.bounds.maxProudM * 1000)} mm)`);
         if (depth.recess > slot.bounds.maxRecessM + 1e-6) add(x.replyIndex, `rule 6: ${Math.round(depth.recess * 1000)} mm recess is more than slot ${slot.id} allows (${Math.round(slot.bounds.maxRecessM * 1000)} mm)`);
+        if (spec.operator === 'replicate' && 'lattice' in spec.replicate.domain) {
+            const g = spec.replicate.domain.lattice;
+            // a single row or column has no pitch to speak of: the builder wants a positive one, and it moves nothing
+            for (const k of [0, 1] as const) if (g.counts[k] === 1 && !(g.pitchUv[k] > 0)) g.pitchUv[k] = 1;
+            if (!g.counts.every(c => Number.isInteger(c) && c >= 1) || !g.pitchUv.every(v => v > 0)) add(x.replyIndex, `rule 7: a grid needs whole counts of at least 1 and positive pitches (counts ${g.counts.join(' × ')}, pitches ${g.pitchUv.map(v => Math.round(v * 1000)).join(' × ')} mm)`);
+        }
         if (spec.operator === 'replicate' && 'lattice' in spec.replicate.domain && 'surface' in slot.host) {
             const b = bbox(slot.host.surface.regionUv);
             const inst = instances(spec, slot);
