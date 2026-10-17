@@ -27,7 +27,9 @@ import { insideSolid, type FittedShells } from './fitted-solid';
 export const COVER_OFFSETS_M = [0.004, 0.03, 0.15] as const;
 /** The first probe off the crease: inside the builder's 5 mm tolerance of the host face, so a neighbour standing a centimetre proud of the wall is found. */
 const SKIN_M = 0.003;
-const MAX_CELLS = 24;
+/** How far past a cell's own corner the corner probes look. */
+const CORNER_PUSH_M = 0.03;
+const MAX_CELLS = 16;
 const CELL_M = 0.5;
 
 export interface SurfaceCover { kind: 'surface'; u0: number; v0: number; du: number; dv: number; nu: number; nv: number; covered: Uint8Array; inRegion: Uint8Array; share: number }
@@ -78,7 +80,15 @@ export function computeSlotCover(slot: OrnamentSlot, fit: Pick<StructureFit, 'su
             inRegion[j * nu + i] = 1;
             n++;
             const depths = COVER_OFFSETS_M.map(d => Math.min(d, Math.max(0.004, slot.bounds.maxProudM * 0.5)));
-            if (depths.some(d => insideSolid(solid, chartPoint(surface.chart, u, v, d)))) { covered[j * nu + i] = 1; c++; }
+            let hit = depths.some(d => insideSolid(solid, chartPoint(surface.chart, u, v, d)));
+            // the cell's corners pushed a little beyond it: a neighbour that overhangs or abuts the edge of the region (a slab over the top of a wall) is in the way of anything built up to the edge
+            if (!hit) {
+                const hu = du / 2 + CORNER_PUSH_M, hv = dv / 2 + CORNER_PUSH_M;
+                outer: for (const [su, sv] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) for (const d of depths.slice(1)) {
+                    if (insideSolid(solid, chartPoint(surface.chart, u + su * hu, v + sv * hv, d))) { hit = true; break outer; }
+                }
+            }
+            if (hit) { covered[j * nu + i] = 1; c++; }
         }
         return { kind: 'surface', u0, v0, du, dv, nu, nv, covered, inRegion, share: n ? c / n : 0 };
     }

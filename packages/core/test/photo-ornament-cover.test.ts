@@ -85,13 +85,14 @@ describe.skipIf(!archData.data)('a slot whose free space a neighbouring prism fi
         const env = (edgeSlot!.host as any).edge.envelope as Vec2[];
         const outMax = Math.max(...env.map(p => p[0])), upMax = Math.max(...env.map(p => p[1]));
         const sweep: OperatorSpec = { operator: 'sweep', sweep: { carrier: { slot: { slotId: edgeSlot!.id, t0: 0, t1: 1, offset: [0, 0] } }, profile: { outer: [[0.01, 0.01], [outMax * 0.9, 0.01], [outMax * 0.9, upMax * 0.9], [0.01, upMax * 0.9]] }, miterLimit: 4, caps: true } };
-        // a surface slot partly covered (a plinth against a wall)
-        const surfSlot = fit.slots.find(s => { const c = covers.get(s.id); return c?.kind === 'surface' && c.share > 0.03 && c.share < 0.6; });
-        expect(surfSlot, 'a surface slot partly covered').toBeDefined();
-        const sc = covers.get(surfSlot!.id) as SurfaceCover;
-        const box = coveredBoxes(sc)[0];
-        const surfId = (surfSlot!.host as any).surface.surfaceId as string;
-        const panelAt = (b: { u0: number; u1: number; v0: number; v1: number }): OperatorSpec => ({ operator: 'relief', relief: { surfaceId: surfId, region: { outer: [[b.u0 + 0.1, b.v0 + 0.1], [b.u1 - 0.1, b.v0 + 0.1], [b.u1 - 0.1, b.v1 - 0.1], [b.u0 + 0.1, b.v1 - 0.1]] }, height: { panel: { depthM: 0.05, edgeWidthM: 0.05, edgeProfile: [[0, 0], [1, 1]] } }, maxEdgeM: 0.1 } });
+        // a surface slot partly covered (a plinth against a wall, a slab over its top): found below, among the partly covered ones, as the first
+        // whose covered part a panel really sinks into when the real builder builds it
+        const surfCandidates = fit.slots.filter(s => { const c = covers.get(s.id); return c?.kind === 'surface' && c.share > 0.03 && c.share < 0.7; });
+        expect(surfCandidates.length, 'surface slots partly covered').toBeGreaterThan(0);
+        const panelFor = (surfId: string, b: { u0: number; u1: number; v0: number; v1: number }): OperatorSpec => ({ operator: 'relief', relief: { surfaceId: surfId, region: { outer: [[b.u0 + 0.1, b.v0 + 0.1], [b.u1 - 0.1, b.v0 + 0.1], [b.u1 - 0.1, b.v1 - 0.1], [b.u0 + 0.1, b.v1 - 0.1]] }, height: { panel: { depthM: 0.05, edgeWidthM: 0.05, edgeProfile: [[0, 0], [1, 1]] } }, maxEdgeM: 0.1 } });
+        const panelAt = (b: { u0: number; u1: number; v0: number; v1: number }): OperatorSpec => panelFor(surfId, b);
+        let surfSlot = surfCandidates[0], sc = covers.get(surfSlot.id) as SurfaceCover, box = coveredBoxes(sc)[0];
+        let surfId = (surfSlot.host as any).surface.surfaceId as string;
         const mk = (id: string, slotId: string, spec: OperatorSpec, order: number): ExpandedElement => ({ element: element(id, slotId, JSON.parse(JSON.stringify(spec)), order), replyIndex: order });
         const build = async (els: OrnamentElement[]) => {
             const base = FX.ornamentSpec();
@@ -100,16 +101,26 @@ describe.skipIf(!archData.data)('a slot whose free space a neighbouring prism fi
         };
 
         // 1. reproduced: the unclipped sweep and the panel over the covered part sink
-        const raw = await build([element('sweep_raw', edgeSlot!.id, sweep, 0), element('panel_raw', surfSlot!.id, panelAt(box), 1)]);
-        const sank = raw.value.dropped.filter(d => d.checks.some(c => c.check === 'penetration of the fitted solid')).map(d => d.elementId);
-        expect(sank.sort()).toEqual(['panel_raw', 'sweep_raw']);
+        const raw = await build([element('sweep_raw', edgeSlot!.id, sweep, 0)]);
+        expect(raw.value.dropped.filter(d => d.checks.some(c => c.check === 'penetration of the fitted solid')).map(d => d.elementId)).toEqual(['sweep_raw']);
+        let panelSank = false;
+        for (const cand of surfCandidates) {
+            const c2 = covers.get(cand.id) as SurfaceCover;
+            const sid = (cand.host as any).surface.surfaceId as string;
+            for (const b2 of coveredBoxes(c2)) {
+                const r2 = await build([element('panel_raw', cand.id, panelFor(sid, b2), 1)]);
+                if (r2.value.dropped.some(d => d.checks.some(c => c.check === 'penetration of the fitted solid'))) { surfSlot = cand; sc = c2; box = b2; surfId = sid; panelSank = true; break; }
+            }
+            if (panelSank) break;
+        }
+        expect(panelSank, 'a panel over a covered part sinks natively').toBe(true);
 
         // 2. the prompt names the covered parts
         expect(describeCover(ec)).toMatch(/another part of the structure in the way; free at t/);
         expect(describeCover(sc)).toMatch(/covered by another part of the structure \(u /);
 
         // 3. anchored: the sweep is clipped into a free stretch (labelled), the panel over the covered part is sent back
-        const sweepX = mk('sweep_fix', edgeSlot!.id, sweep, 0), panelX = mk('panel_fix', surfSlot!.id, panelAt(box), 1);
+        const sweepX = mk('sweep_fix', edgeSlot!.id, sweep, 0), panelX = mk('panel_fix', surfSlot.id, panelAt(box), 1);
         const anchored = anchorElements([sweepX, panelX], fit, [], undefined, false, covers);
         const clip = anchored.notes.find(n => n.elementId === 'sweep_fix');
         expect(clip?.kind).toBe('clipped-to-open');
@@ -125,9 +136,15 @@ describe.skipIf(!archData.data)('a slot whose free space a neighbouring prism fi
         expect(built.value.dropped.map(d => [d.elementId, d.checks.map(x => x.check)])).toEqual([]);
         expect(built.value.built.map(b => b.elementId)).toContain('sweep_fix');
 
-        // 4. a panel in the free part of the same slot is untouched
-        const free = { u0: sc.u0, u1: sc.u0 + (box.u0 - sc.u0 > 0.8 ? box.u0 - sc.u0 : 0.8), v0: Math.max(box.v1 + 0.2, sc.v0 + sc.nv * sc.dv * 0.6), v1: sc.v0 + sc.nv * sc.dv - 0.3 };
-        const freeX = mk('panel_free', surfSlot!.id, panelAt(free), 2);
+        // 4. a panel in the free part of the same slot (a block of free cells, a panel in the middle of the middle one) is left alone
+        let freeAt: { u0: number; u1: number; v0: number; v1: number } | undefined;
+        for (let j = 1; j < sc.nv - 1 && !freeAt; j++) for (let i = 1; i < sc.nu - 1 && !freeAt; i++) {
+            let ok = true;
+            for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) if (sc.covered[(j + dj) * sc.nu + i + di] || !sc.inRegion[(j + dj) * sc.nu + i + di]) ok = false;
+            if (ok) freeAt = { u0: sc.u0 + (i + 0.2) * sc.du, u1: sc.u0 + (i + 0.8) * sc.du, v0: sc.v0 + (j + 0.2) * sc.dv, v1: sc.v0 + (j + 0.8) * sc.dv };
+        }
+        expect(freeAt, 'a free block of cells in the partly covered slot').toBeDefined();
+        const freeX = mk('panel_free', surfSlot.id, panelAt(freeAt!), 2);
         const a2 = anchorElements([freeX], fit, [], undefined, false, covers);
         expect(a2.problems.size).toBe(0);
     }, 900_000);

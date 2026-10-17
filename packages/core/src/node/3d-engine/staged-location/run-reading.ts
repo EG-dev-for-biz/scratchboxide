@@ -232,6 +232,7 @@ export async function readRuns(input: RunReadingInput): Promise<RunReadingResult
     if (!targets.length) return emptyBase;
     const solid: FittedShells | undefined = readFittedShells(fit);
     const slotById = new Map(fit.slots.map(s => [s.id, s]));
+    const coverCache = new Map<string, import('./slot-cover').SlotCover | undefined>();
     const candidates = input.panos.map(p => {
         const g = input.groundAt(p.x, p.z);
         return { panoId: p.panoId, date: p.date, copyright: p.copyright, eye: [p.x, (g === g ? g : input.fallbackGroundY) + STREET_VIEW_EYE_HEIGHT_M, p.z] as Vec3 };
@@ -277,7 +278,7 @@ export async function readRuns(input: RunReadingInput): Promise<RunReadingResult
             return { ref, bytes: im.bytes, mimeType: im.mimeType, caption: streetViewCaption(ref) };
         });
         // the slot is offered only when it is on an open exterior face and a crop shows it
-        const offerAll = computeSlotOffer(fit, evidence.map(e => e.ref), solid);
+        const offerAll = computeSlotOffer(fit, evidence.map(e => e.ref), solid, new Set([t.slotId]), coverCache);
         const entry = offerAll.entries.find(e => e.slotId === t.slotId);
         if (!entry?.offered) {
             report.skipped.push({ id: t.id, kind: t.located.kind, slotId: t.slotId, reason: entry?.why ?? 'its slot is not shown' });

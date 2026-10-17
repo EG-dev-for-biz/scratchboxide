@@ -54,7 +54,7 @@ import { surveyHintLines, type LocatedElement } from './survey-detail';
 import type { SlotOffer } from './slot-exposure';
 import { describeCover, type SlotCover } from './slot-cover';
 
-export const ORNAMENT_PROMPT_VERSION = 'ornament/v4';
+export const ORNAMENT_PROMPT_VERSION = 'ornament/v5';
 /** Thinking tokens asked for: LOW on Gemini 4 (thinkingConfigFor), a 512-token budget on 3.x. */
 export const ORNAMENT_THINKING_BUDGET = 512;
 export const ORNAMENT_MAX_OUTPUT_TOKENS = 16_384;
@@ -169,7 +169,7 @@ export function ornamentPromptText(fit: StructureFit, evidence: EvidenceImageRef
     const correctable = fit.primitives.flatMap(p => p.correctable.map(c => `${p.id} (${p.label ?? 'primitive'}): param ${c.param} (${c.key}) = ${c.value} ${c.unit}, admissible ${c.min}–${c.max}; ${c.description}`));
     const rules = [
         '1. Report only elements you can see in an image that shows their slot. Cite each with [image index, y0, x0, y1, x1] in 0–1000.',
-        '2. Build each element with one operator: sweep (a profile along the slot\'s edge, or along a path in the slot), revolve (a profile around an axis, with K lobes), replicate (one seed repeated along the edge or over a grid), or relief (a raised or recessed region). Use integer millimetres in the slot\'s own axes: u along the surface to the right, v up, n out of the surface. Along an edge, t is per-mille of its length.',
+        '2. Build each element with one operator: sweep (a profile along the slot\'s edge, or along a path in the slot; a block or a run of blocks on an edge, such as a row of small repeated blocks, is a sweep of its section over a short t span, repeated with replicate), revolve (a profile around an axis, with K lobes), replicate (one seed repeated along the edge or over a grid), or relief (a raised or recessed region). Use integer millimetres in the slot\'s own axes: u along the surface to the right, v up, n out of the surface. Along an edge, t is per-mille of its length.',
         '3. Nothing but a relief may go below the surface: a sweep along a path or a revolve about the normal stays at n >= 0 (z >= 0); a recess is a relief with negative depth. In an edge section [out, up], the quarter with out < 0 and up < 0 is inside the wall: a swept profile stays at out >= 0 or up >= 0. Do not give a size smaller than the image you cite can show. Depths are estimates from shading, shadows or silhouettes. Keep them within the slot bounds, keep edge profiles inside the edge envelope, and say how you judged them (depthBasis).',
         '4. For repeats, count what you see. If a row runs out of view, give the visible count and set beyondView.',
         '5. Figures and lettering are a low relief outline only, at most 50 mm deep.',
@@ -477,7 +477,7 @@ export function checkReply(text: string, finishReason: string | undefined, fit: 
         } else {
             const e = slot.host.edge;
             const L = e.carrier.lengthM;
-            if (spec.operator === 'relief') add(x.replyIndex, `rule 5: a relief needs a surface slot; ${slot.id} is an edge (use sweep or replicate along it)`);
+            if (spec.operator === 'relief' || (spec.operator === 'replicate' && spec.replicate.seed.operator === 'relief')) add(x.replyIndex, `rule 5: a relief needs a surface slot; ${slot.id} is an edge (build a block or a run along an edge as a sweep of its section over a short t span, repeated with replicate)`);
             if (spec.operator === 'sweep' && 'slot' in spec.sweep.carrier) {
                 const c = spec.sweep.carrier.slot;
                 if (!(c.t0 < c.t1)) add(x.replyIndex, `rule 5: t must run forward along the edge (t0 ${Math.round(c.t0 * 1000)} ≥ t1 ${Math.round(c.t1 * 1000)})`);

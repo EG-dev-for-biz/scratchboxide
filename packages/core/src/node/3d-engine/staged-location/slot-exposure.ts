@@ -58,11 +58,13 @@ export interface SlotOffer {
     exposureJudged: boolean;
 }
 
-export function computeSlotOffer(fit: Pick<StructureFit, 'slots' | 'surfaces' | 'outputs'>, evidence: EvidenceImageRef[], solid: FittedShells | undefined = readFittedShells(fit)): SlotOffer {
+/** `only`: judge just these slots (a focused reading asks about one); `coverCache`: covers already worked out for this fit's solid, filled as they are. */
+export function computeSlotOffer(fit: Pick<StructureFit, 'slots' | 'surfaces' | 'outputs'>, evidence: EvidenceImageRef[], solid: FittedShells | undefined = readFittedShells(fit), only?: Set<string>, coverCache?: Map<string, SlotCover | undefined>): SlotOffer {
     const entries: SlotOfferEntry[] = [];
     const covers = new Map<string, SlotCover>();
     let hidden = 0, unseen = 0;
     for (const slot of fit.slots) {
+        if (only && !only.has(slot.id)) continue;
         const images = evidence.flatMap(e => {
             const s = e.slotsShown.find(x => x.slotId === slot.id);
             return s && s.visibleFraction >= MIN_SHOWN_FRACTION ? [{ index: e.index, visibleFraction: s.visibleFraction }] : [];
@@ -70,7 +72,8 @@ export function computeSlotOffer(fit: Pick<StructureFit, 'slots' | 'surfaces' | 
         let exposedShare: number | undefined;
         let cover: SlotCover | undefined;
         if (solid) {
-            cover = computeSlotCover(slot, fit, solid);
+            if (coverCache?.has(slot.id)) cover = coverCache.get(slot.id);
+            else { cover = computeSlotCover(slot, fit, solid); coverCache?.set(slot.id, cover); }
             exposedShare = cover ? 1 - cover.share : 0;
             if (cover && cover.share > 0) covers.set(slot.id, cover);
         }
