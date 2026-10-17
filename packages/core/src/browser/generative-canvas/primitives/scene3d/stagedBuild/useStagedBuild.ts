@@ -76,6 +76,8 @@ export interface UseStagedBuildOptions {
     stackRef: React.MutableRefObject<RendererStack | null>;
     /** Loaded model roots by object id (Scene3DPrimitive's externalObjectsMapRef). */
     objectRootsRef: React.MutableRefObject<Map<string, THREE.Object3D>>;
+    /** Layers whose object carries an explicit material: they draw it, never the provenance shading or degradation marks. */
+    overriddenIds?: ReadonlySet<string>;
     /** Scene3DPrimitive's per-object load status (only `phase` is read). */
     loadStatus: Readonly<Record<string, { phase: string } | undefined>>;
     mutateSceneData: (mutator: (prev: Scene3DData) => Scene3DData) => void;
@@ -245,6 +247,8 @@ interface LookContext {
     highlightOn?: string;
     provenanceOn: boolean;
     lg: Legend;
+    /** The layer's object has an explicit material: no provenance shading or mark over it. */
+    overridden?: boolean;
 }
 
 /** The look of one node of an attached layer this frame: a staged look, hidden (not started), concealed (superseded) or untouched (null). */
@@ -268,9 +272,10 @@ export function lookFor(f: LayerRevealFrame, n: NodeInfo, ctx: LookContext): Mes
     } else if (presence < 1) {
         reveal = { progress: 1, stagger, fade: 1, presence };
     }
-    const mark = (!!ctx.highlightOn && n.degradationIds.includes(ctx.highlightOn)) || (ctx.provenanceOn && n.degradationIds.length > 0);
+    const shaded = ctx.provenanceOn && !ctx.overridden;
+    const mark = !ctx.overridden && ((!!ctx.highlightOn && n.degradationIds.includes(ctx.highlightOn)) || (ctx.provenanceOn && n.degradationIds.length > 0));
     let provenance: MeshStagedLook['provenance'];
-    if (ctx.provenanceOn) {
+    if (shaded) {
         const style = styleFor(n.provenance.label, ctx.lg.legend);
         const key = `${style.color}|${style.pattern}|${ctx.lg.classes.length}`;
         if (!n.prov || n.prov.key !== key) {
@@ -305,7 +310,7 @@ const OverlayHost: React.FC<{ store: OverlayStore; render: (frame: RevealFrame |
 };
 
 export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
-    const { state, stackRef, objectRootsRef, loadStatus, mutateSceneData, onPromptAction } = opts;
+    const { state, stackRef, objectRootsRef, loadStatus, mutateSceneData, onPromptAction, overriddenIds } = opts;
     const runId = state?.runId;
     const pageLoadedAtMs = React.useRef(typeof performance !== 'undefined' ? performance.timeOrigin : 0).current;
 
@@ -374,8 +379,8 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
     }, [effective, wantRetired, mutateSceneData]);
 
     // Everything the per-frame guard reads, kept current without re-installing it.
-    const live = React.useRef({ state: effective, settled, reducedMotion, provenanceOn, showReplaced, replayEpoch, highlight, loadStatus, replaying });
-    live.current = { state: effective, settled, reducedMotion, provenanceOn, showReplaced, replayEpoch, highlight, loadStatus, replaying };
+    const live = React.useRef({ overriddenIds, state: effective, settled, reducedMotion, provenanceOn, showReplaced, replayEpoch, highlight, loadStatus, replaying });
+    live.current = { overriddenIds, state: effective, settled, reducedMotion, provenanceOn, showReplaced, replayEpoch, highlight, loadStatus, replaying };
 
     const scheduleRef = React.useRef<RevealSchedule | undefined>(undefined);
     const frameRef = React.useRef<RevealFrame | undefined>(undefined);
@@ -537,7 +542,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
             const only = f.layer.reveal.only ? new Set(f.layer.reveal.only.primitiveIds) : undefined;
             for (const n of info.nodes) {
                 const replaced = n.ids.surfaceId !== undefined && n.replaces.length === 0 ? replacedPresence.get(n.ids.surfaceId) : undefined;
-                const look = lookFor(f, n, { ghost, only, replaced, highlightOn, provenanceOn: L.provenanceOn, lg });
+                const look = lookFor(f, n, { ghost, only, replaced, highlightOn, provenanceOn: L.provenanceOn, lg, overridden: !!L.overriddenIds?.has(f.objectId) });
                 for (const mesh of n.meshes) {
                     if (look === 'conceal') registry.conceal(mesh);
                     else if (look === 'hide') registry.hide(mesh);

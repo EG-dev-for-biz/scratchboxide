@@ -154,6 +154,7 @@ import { NumericPrecisionInspector } from './scene3d/NumericPrecisionInspector';
 import { computeSceneGeometryBounds, calculateStandoffCamera } from './scene3d/autoFraming';
 import type { RendererStack, AtmosphereHandle, TilesLayerHandle, SceneContentHandle, WasmMeshHandle, VectorRoadmapHandle, Scene3DRenderMode } from './scene3d/types';
 import { applyClayRenderMode } from './scene3d/clayRenderMode';
+import { syncObjectMaterial } from './scene3d/materialOverride';
 import { TreeLodController, findShadowCamera } from './scene3d/treeLod/TreeLodController';
 import { disposeObject3DDeep, releaseObject3D } from './scene3d/disposeObject';
 import {
@@ -2879,6 +2880,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     const lod = new TreeLodController(model);
                     if (lod.hasTrees) model.userData.sbTreeLod = lod;
                     applyClayRenderMode([model], renderModeRef.current === 'clay');
+                    // An explicit material on the object wins over the clay default.
+                    syncObjectMaterial(model, latestDef(obj).material, renderModeRef.current === 'clay');
                     currentMap.set(obj.id, model);
                     setStatus(obj.id, { phase: 'ready', loaded: 0, total: 0 });
 
@@ -2969,8 +2972,26 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         };
     }, []);
 
+    // ---- 5c2. Explicit object materials (sb_set_material_pbr): drawn over the clay default; removed (undo) they bring it back ----
+    const materialOverrideFingerprint = React.useMemo(
+        () => JSON.stringify((sceneData.objects || []).map(o => [o.id, o.material ?? null])),
+        [sceneData.objects]
+    );
+    const materialOverriddenIds = React.useMemo(
+        () => new Set((sceneData.objects || []).filter(o => o.material && Object.keys(o.material).length > 0).map(o => o.id)),
+        [materialOverrideFingerprint] // eslint-disable-line react-hooks/exhaustive-deps
+    );
+    React.useEffect(() => {
+        const byId = new Map((sceneDataRef.current.objects || []).map(o => [o.id, o]));
+        externalObjectsMapRef.current.forEach((root, id) => {
+            const def = byId.get(id);
+            const override = def?.material && Object.keys(def.material).length > 0 ? def.material : undefined;
+            syncObjectMaterial(root, override, renderModeRef.current === 'clay');
+        });
+    }, [materialOverrideFingerprint, externalLoadStatus]);
+
     // ---- 5d. Staged location builds: each committed layer revealed in its real build order, overlay, provenance ----
-    const staged = useStagedBuild({ state: readStagedBuild(sceneData), stackRef, objectRootsRef: externalObjectsMapRef, loadStatus: externalLoadStatus, mutateSceneData, onPromptAction });
+    const staged = useStagedBuild({ state: readStagedBuild(sceneData), overriddenIds: materialOverriddenIds, stackRef, objectRootsRef: externalObjectsMapRef, loadStatus: externalLoadStatus, mutateSceneData, onPromptAction });
 
     // ---- 6. Custom meshes from schema (id-diffed, updated in place) ---------------
     React.useEffect(() => {

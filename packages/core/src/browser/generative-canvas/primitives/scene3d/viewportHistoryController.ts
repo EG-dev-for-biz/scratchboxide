@@ -13,9 +13,10 @@ import {
     SCENE_BOOKKEEPING_KEYS,
     SceneEditEntry,
     applySceneDelta,
-    computeSceneDelta
+    computeSceneDelta,
+    deepEqual
 } from '../../services/viewport-history-deltas';
-import type { LiveEdit, SceneDelta } from '../../services/viewport-history-deltas';
+import type { ItemChange, LiveEdit, SceneDelta } from '../../services/viewport-history-deltas';
 import { readStagedBuild } from './stagedBuild/stagedBuildState';
 
 export type OpInfo = { operator: string; params?: any };
@@ -63,6 +64,26 @@ export function describeEdit(opInfo: OpInfo | undefined, scene: Scene3DData, met
     if (!opInfo) return 'Edit';
     const name = targetName(scene, opInfo.params?.objectId ?? opInfo.params?.mesh?.id);
     return name ? `${humanizeOperator(opInfo.operator)}: ${name}` : humanizeOperator(opInfo.operator);
+}
+
+/** Staged-layer objects whose explicit material differs: undo restores the old material on the current object. */
+function stagedMaterialChanges(prev: Scene3DData, next: Scene3DData, staged: ReadonlySet<string>): ItemChange[] {
+    const before = new Map((prev.objects ?? []).map(o => [o.id, o]));
+    const out: ItemChange[] = [];
+    (next.objects ?? []).forEach((item, index) => {
+        const old = before.get(item.id);
+        if (!old || !staged.has(item.id) || deepEqual(old.material, item.material)) return;
+        const { material: _drop, ...rest } = item;
+        out.push({ id: item.id, index, before: old.material === undefined ? rest : { ...rest, material: old.material }, after: item });
+    });
+    return out;
+}
+
+function mergeMaterialEdits(delta: SceneDelta | null, edits: ItemChange[]): SceneDelta | null {
+    if (edits.length === 0) return delta;
+    const out: SceneDelta = delta ?? { fields: {}, collections: {} };
+    out.collections.objects = [...(out.collections.objects ?? []), ...edits];
+    return out;
 }
 
 function layerObjectIds(scene: Scene3DData): Set<string> {
@@ -164,11 +185,15 @@ export class ViewportHistoryController {
             ignoreKeys: [...SCENE_BOOKKEEPING_KEYS, ...GENERATED_KEYS],
             ignoreItem: (key, item) => key === 'objects' && staged.has(item?.id)
         });
-        if (!delta) return;
+        // Staged layers' geometry is a pipeline result and stays out of history; an explicit material set on one
+        // (sb_set_material_pbr) is an edit of the user's own, recorded with the object as it stands now.
+        const materialEdits = stagedMaterialChanges(prev, next, staged);
+        const merged = mergeMaterialEdits(delta, materialEdits);
+        if (!merged) return;
         const names = Array.from(new Set(added.map(o => humanizeOperator(o.operator))));
         this.history.record(new SceneEditEntry({
             label: `Agent: ${names.slice(0, 3).join(', ')}${names.length > 3 ? ', ...' : ''}`,
-            delta,
+            delta: merged,
             target: this.target,
             selection: { undo: this.args.getSelectedId() }
         }));
