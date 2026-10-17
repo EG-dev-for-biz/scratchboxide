@@ -18,7 +18,7 @@
  * pixels at 1 m is fx times that RMS.
  */
 
-import type { DecodedImage, DepthMap, ProjectionView } from '../../../common/spatial/texture-pass-contracts';
+import type { DecodedImage, DepthMap, PinholeCamera, ProjectionView } from '../../../common/spatial/texture-pass-contracts';
 import { renderFrameDepth } from '../../spatial/StreetViewPoseRegistrar';
 import type { RenderMesh3D } from '../../spatial/HeadlessMeshSilhouetteRenderer';
 import type { Registration, RegView } from './pano-registration';
@@ -75,8 +75,8 @@ export function projectionViewFromRegistered(input: RegisteredViewInput): Projec
 }
 
 /** depthFor of the bake: the occluder mesh (scan plus fitted solid, tile frame) rendered from each view, cached per view. */
-export function depthForMesh(mesh: RenderMesh3D): (view: ProjectionView) => DepthMap {
-    const cache = new WeakMap<ProjectionView, DepthMap>();
+export function depthForMesh(mesh: RenderMesh3D): (view: { camera: PinholeCamera }) => DepthMap {
+    const cache = new WeakMap<{ camera: PinholeCamera }, DepthMap>();
     return (view) => {
         let d = cache.get(view);
         if (!d) {

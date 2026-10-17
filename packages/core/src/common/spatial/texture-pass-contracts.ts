@@ -89,6 +89,23 @@ export interface TextureLayerBundle {
     rungReason?: string;
     /** Ref of the baked per-texel confidence plane (ConfidencePlane, PNG): R = index into provenance[], G = weight, B = rung. */
     confidence: string;
+    /** Held-out fit of the textured layer against the Street View photos (texture-fit-metric.ts); absent when no view scored. */
+    fit?: TextureLayerFit;
+}
+
+/**
+ * How well a textured layer, rendered from each Street View pose, lines up with that photo, scored only on texels the
+ * photo's own pano did not make (leave one pano out). Chamfer distances in pixels at `widthPx` (lower is better), NCC of the
+ * surface's luminance gradients (higher is better). Pixel-weighted means over the scoring views.
+ */
+export interface TextureLayerFit {
+    chamferPx: number | null;
+    clayChamferPx: number | null;
+    gradNcc: number | null;
+    scoredViews: number;
+    heldOutShare: number;
+    widthPx: number;
+    views: Array<{ panoId: string; pixels: number; ownPixels: number; chamferPx: number | null; clayChamferPx: number | null; gradNcc: number | null }>;
 }
 
 export interface TexturePassDegradation {

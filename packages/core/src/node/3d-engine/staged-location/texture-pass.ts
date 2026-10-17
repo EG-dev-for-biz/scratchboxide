@@ -42,6 +42,7 @@ import type { Registration } from './pano-registration';
 import type { EvidenceImage } from './streetview-evidence';
 import { buildUvAtlas, type LaidOutUvAtlas } from './texture-uv';
 import { mergeBakedPlanes, transferTilePhoto, type TileTextureSurface } from './tile-texture-transfer';
+import { describeLayerFit, measureLayerFit, type LayerFit } from './texture-fit-metric';
 
 /** Part of every texture cache key: a change to the pass's maths is a new version. */
 export const TEXTURE_PASS_VERSION = 'texture-pass/5';
@@ -117,6 +118,8 @@ export interface TextureLayerOutcome {
     };
     tileMethod?: string;
     enhance?: { charts: number; accepted: number; rejected: number; failed: number; timedOut?: number; modelsUsed: string[] };
+    /** Held-out fit of the final textured layer against the Street View photos (texture-fit-metric.ts). */
+    fit?: LayerFit;
     modelsUsed: string[];
     timingsMs: Record<string, number>;
 }
@@ -371,6 +374,20 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
     // measured provenance and rungs, then the twin
     const m = measurePlanes(atlas, planes);
     planes = { ...planes, provenance: m.provenance };
+    // the held-out fit: the final layer rendered from every view's pose against that photo, on what the view's pano did not make
+    let fit: LayerFit | undefined;
+    const judge = src.context ?? src.occluder;
+    if (src.views.length && judge) {
+        t = Date.now();
+        try {
+            fit = measureLayerFit({ atlas, planes, views: src.views.filter(v => v.poseQuality > 0), depthFor: depthForMesh(judge), ...(src.signal ? { signal: src.signal } : {}) });
+            progress(describeLayerFit(fit));
+        } catch (err) {
+            if (src.signal?.aborted) throw err;
+            progress(`the held-out fit could not be measured (${(err as Error)?.message ?? String(err)})`);
+        }
+        timingsMs.fit = Date.now() - t;
+    }
     t = Date.now();
     const twin = writeTexturedTwinGlb({ clayGlb: layer.clayGlb, atlas, planes });
     timingsMs.write = Date.now() - t;
@@ -382,11 +399,12 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
         layerKey: layer.layerKey, glb: twin.glb,
         bundle: {
             layerKey: layer.layerKey, uv: twin.uv, provenance: m.provenance, ladderRung: worst,
+            ...(fit && fit.scoredViews ? { fit: { chamferPx: fit.chamferPx, clayChamferPx: fit.clayChamferPx, gradNcc: fit.gradNcc, scoredViews: fit.scoredViews, heldOutShare: fit.heldOutShare, widthPx: fit.widthPx, views: fit.views } } : {}),
             rungReason: `${Math.round(m.rungShares[worst] * 100)} percent of the texels are at '${TEXTURE_LADDER_RUNGS[worst]}' (the worst rung above 10 percent)`
         },
         rungShares: m.rungShares, rungTexels: m.rungTexels, atlasTexels: m.total,
         atlas: { width: atlas.width, height: atlas.height, texelsPerMeter: atlas.layout.stats.texelsPerMeter, charts: atlas.layout.stats.charts, islands: atlas.layout.stats.islands },
-        degradations: unique, ...(projection ? { projection } : {}), ...(tileMethod ? { tileMethod } : {}), ...(enhance ? { enhance } : {}),
+        degradations: unique, ...(projection ? { projection } : {}), ...(tileMethod ? { tileMethod } : {}), ...(enhance ? { enhance } : {}), ...(fit ? { fit } : {}),
         modelsUsed: [...new Set(modelsUsed)], timingsMs
     };
 }
