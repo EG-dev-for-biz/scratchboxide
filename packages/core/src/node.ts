@@ -149,7 +149,8 @@ export {
 export {
     BotanicalVegetationService,
     BotanicalMode,
-    LeafMorphologyType,
+    LeafOutlineParams,
+    DEFAULT_LEAF_OUTLINE,
     BotanicalPipelineOptions,
     BotanicalPipelineTelemetry,
     BotanicalPipelineResult

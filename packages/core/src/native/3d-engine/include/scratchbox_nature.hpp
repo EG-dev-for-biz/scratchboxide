@@ -117,12 +117,17 @@ inline void appendBranchCylinder(
     float rStart,
     float rEnd,
     const Vec4& woodColor,
-    int segments = 6
+    int segments = 6,
+    bool roundEnd = false,
+    float startExtend = 0.0f,   // the tube runs this much past its ends along its own axis, to cover the wedge a bend opens
+    float endExtend = 0.0f      // against the next tube (a joint of two tubes at an angle)
 ) {
     Vec3 dir = end - start;
     float len = dir.length();
     if (len < 1e-4f) return;
     dir = dir / len;
+    const Vec3 start0 = start;
+    (void)start0;
 
     // Build orthonormal frame
     Vec3 up = std::abs(dir.y) < 0.99f ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
@@ -140,13 +145,13 @@ inline void appendBranchCylinder(
         Vec3 ringRadial = side * cosA + up * sinA;
 
         // Bottom vertex
-        mesh.vertices.push_back(start + ringRadial * rStart);
+        mesh.vertices.push_back((start - dir * startExtend) + ringRadial * rStart);
         mesh.normals.push_back(ringRadial);
         mesh.vertexColors.push_back(woodColor);
         mesh.uvs.push_back(Vec2(u * 2.0f, start.y * 1.5f));
 
         // Top vertex
-        mesh.vertices.push_back(end + ringRadial * rEnd);
+        mesh.vertices.push_back((end + dir * endExtend) + ringRadial * rEnd);
         mesh.normals.push_back(ringRadial);
         mesh.vertexColors.push_back(woodColor);
         mesh.uvs.push_back(Vec2(u * 2.0f, end.y * 1.5f));
@@ -166,6 +171,24 @@ inline void appendBranchCylinder(
         mesh.indices.push_back(b1);
         mesh.indices.push_back(t0);
         mesh.indices.push_back(t1);
+    }
+
+    // a branch that ends here (nothing continues from this node) closes with a cone, one triangle a side, instead of an open cut
+    if (roundEnd) {
+        // two apex vertices at one point (alternate triangles use each), so a cylinder still adds an even number of vertices, in
+        // start/end pairs, as the growth order of its vertices assumes
+        const uint32_t apex = static_cast<uint32_t>(mesh.vertices.size());
+        for (int k = 0; k < 2; ++k) {
+            mesh.vertices.push_back(end + dir * (endExtend + 0.9f * std::max(rEnd, 1e-3f)));
+            mesh.normals.push_back(dir);
+            mesh.vertexColors.push_back(woodColor);
+            mesh.uvs.push_back(Vec2(1.0f, end.y * 1.5f));
+        }
+        for (int i = 0; i < segments; ++i) {
+            mesh.indices.push_back(baseIndex + (i + 1) * 2 + 1);
+            mesh.indices.push_back(baseIndex + i * 2 + 1);
+            mesh.indices.push_back(apex + static_cast<uint32_t>(i & 1));
+        }
     }
 }
 
@@ -716,15 +739,26 @@ inline void simulateThermalErosion(
 // 5. Detailed Botanical Leaf & Twig Generator (Infiniti / Sapling / MTree)
 // ============================================================================
 
-enum class LeafMorphology {
-    OvateSimple,      // Beech, Elm, Magnolia: superelliptic smooth boundary
-    SerratedBirch,    // Birch, Cherry, Hornbeam: high-frequency tooth serrations
-    LobedOakMaple,    // Oak, Maple, Liquidambar: 5-point lobed margin
-    CordateLinden     // Linden, Catalpa: heart-shaped base with pointed tip
+/**
+ * The outline of a leaf blade as continuous numbers: the half-width along the blade is
+ *   gain * widthRatio * length * t^rise * (1 - t)^fall   (t = 0 at the base, 1 at the tip),
+ * times a tooth term 1 + serrationDepth sin(2 pi serrationCount t) and a lobe term 1 + lobeDepth sin(pi lobeHalfCycles t) sin(pi t),
+ * blended by `cordate` (0..1) toward a heart-shaped base. Any blade a tree can carry lies somewhere in this space;
+ * nothing branches on a name for it.
+ */
+struct LeafOutline {
+    float gain{2.2f};
+    float riseExponent{0.55f};
+    float fallExponent{0.75f};
+    float serrationCount{14.0f};      // Teeth along the margin
+    float serrationDepth{0.0f};       // Tooth depth modulation
+    float lobeDepth{0.0f};            // Lobe depth modulation
+    float lobeHalfCycles{5.0f};       // Half cycles of the lobe term along the blade
+    float cordate{0.0f};              // 0 tapered base .. 1 heart-shaped base with a pointed tip
 };
 
 struct DetailedLeafConfig {
-    LeafMorphology morphology{LeafMorphology::OvateSimple};
+    LeafOutline outline;
     float length{0.22f};              // Leaf blade length (meters)
     float widthRatio{0.55f};          // Width-to-length ratio
     float petioleLength{0.05f};       // Stalk length (meters)
@@ -732,9 +766,6 @@ struct DetailedLeafConfig {
     float midribDepth{0.010f};        // Sunken furrow depth at midrib
     float laminaCupping{0.022f};      // Upward parabolic curl of leaf blade edges
     float droopCurvature{0.028f};     // Downward parabolic droop along the spine
-    float serrationFrequency{14.0f};  // Teeth count along leaf margin
-    float serrationAmplitude{0.09f};  // Tooth depth modulation
-    int lobeCount{5};                 // Lobes for LobedOakMaple
     int lengthSubdivs{5};             // Longitudinal quad resolution along spine
     int widthSubdivs{4};              // Transverse quad resolution across blade
     bool doubleSidedTriangles{false}; // glTF materials use doubleSided=true; avoid duplicate backfaces
@@ -804,20 +835,13 @@ public:
             float t = static_cast<float>(i) / static_cast<float>(N);
             float w0 = 0.0f;
 
-            if (cfg.morphology == LeafMorphology::OvateSimple) {
-                w0 = leafLen * cfg.widthRatio * 2.2f * std::pow(std::max(0.001f, t), 0.55f) * std::pow(std::max(0.001f, 1.0f - t), 0.75f);
-            } else if (cfg.morphology == LeafMorphology::SerratedBirch) {
-                float base = leafLen * cfg.widthRatio * 2.1f * std::pow(std::max(0.001f, t), 0.50f) * std::pow(std::max(0.001f, 1.0f - t), 0.70f);
-                float teeth = 1.0f + cfg.serrationAmplitude * std::sin(cfg.serrationFrequency * math::TWO_PI * t);
-                w0 = base * std::max(0.2f, teeth);
-            } else if (cfg.morphology == LeafMorphology::LobedOakMaple) {
-                float base = leafLen * cfg.widthRatio * 1.95f * std::pow(std::max(0.001f, t), 0.45f) * std::pow(std::max(0.001f, 1.0f - t), 0.55f);
-                float lobeMod = 1.0f + 0.42f * std::sin(5.0f * math::PI * t) * std::sin(math::PI * t);
-                w0 = base * std::max(0.2f, lobeMod);
-            } else { // CordateLinden
-                float base = leafLen * cfg.widthRatio * 2.0f * (1.1f - t * 0.35f) * std::sin(math::PI * std::pow(std::max(0.001f, t), 0.45f));
-                w0 = base;
-            }
+            const LeafOutline& o = cfg.outline;
+            const float tc = std::max(0.001f, t), tr = std::max(0.001f, 1.0f - t);
+            const float teeth = 1.0f + o.serrationDepth * std::sin(o.serrationCount * math::TWO_PI * t);
+            const float lobes = 1.0f + o.lobeDepth * std::sin(o.lobeHalfCycles * math::PI * t) * std::sin(math::PI * t);
+            const float tapered = leafLen * cfg.widthRatio * o.gain * std::pow(tc, o.riseExponent) * std::pow(tr, o.fallExponent) * std::max(0.2f, teeth) * std::max(0.2f, lobes);
+            const float heart = leafLen * cfg.widthRatio * 2.0f * (1.1f - t * 0.35f) * std::sin(math::PI * std::pow(tc, 0.45f));
+            w0 = tapered + (heart - tapered) * std::clamp(o.cordate, 0.0f, 1.0f);
 
             if (i == N) w0 = 0.0f; // Apex closes to sharp tip
             if (i == 0) w0 = std::min(w0, petRad * 2.2f); // Base matches petiole
@@ -1019,7 +1043,7 @@ struct SpaceColonizationConfig {
     bool generateLeaves{true};
     bool useDetailedLeaves{false};
     bool useTwigSprays{false};
-    LeafMorphology leafMorphology{LeafMorphology::OvateSimple};
+    LeafOutline leafOutline;
     float leafSize{0.42f};
     int leavesPerTip{4};
     Vec4 woodColor{0.28f, 0.20f, 0.14f, 1.0f};
@@ -1679,7 +1703,7 @@ public:
 
             if (cfg.useDetailedLeaves) {
                 DetailedLeafConfig lCfg;
-                lCfg.morphology = cfg.leafMorphology;
+                lCfg.outline = cfg.leafOutline;
                 lCfg.length = cfg.leafSize;
                 lCfg.widthRatio = 0.55f;
                 lCfg.petioleLength = cfg.leafSize * 0.22f;
@@ -2140,7 +2164,7 @@ private:
             }
         }
         // Douglas-Peucker on each chain; the first chain from a single-child root is the trunk.
-        struct Seg { int a, b; bool trunk; };
+        struct Seg { int a, b; bool trunk; float rA; };   // rA: the radius the segment starts with
         std::vector<Seg> segs;
         for (size_t ci = 0; ci < chains.size(); ++ci) {
             const auto& c = chains[ci];
@@ -2174,7 +2198,9 @@ private:
             int prev = -1;
             for (size_t m = 0; m < c.size(); ++m) {
                 if (!keep[m]) continue;
-                if (prev >= 0) segs.push_back({prev, c[m], trunk});
+                // pipe model: the branch that leaves a fork carries its own radius from the fork on (the fork node's radius is
+                // its parent's, the sum of its children's), so a child chain starts as thick as the child, not as the limb it leaves
+                if (prev >= 0) segs.push_back({prev, c[m], trunk, (prev == c[0] && c.size() > 1 && node(c[0]).children.size() >= 2) ? rad(c[1]) : rad(prev)});
                 prev = c[m];
             }
         }
@@ -2182,10 +2208,20 @@ private:
         auto sides = [&](float r, int sidesMax) {
             return std::clamp(static_cast<int>(std::lround(sidesMax * std::sqrt(std::max(0.0f, r) / rRef))), 3, sidesMax);
         };
+        // a kept segment whose end node starts no kept segment is a branch end: it is closed with a cone (one triangle a side)
+        std::vector<std::vector<uint32_t>> startsAt(N);
+        for (size_t k = 0; k < segs.size(); ++k) startsAt[static_cast<size_t>(segs[k].a)].push_back(static_cast<uint32_t>(k));
+        auto isKept = [&](const Seg& s, float rMin) { return s.trunk || s.rA >= rMin; };
+        auto endsHere = [&](const Seg& s, float rMin) {
+            for (uint32_t k : startsAt[static_cast<size_t>(s.b)]) if (isKept(segs[k], rMin)) return false;
+            return true;
+        };
         auto woodTris = [&](float rMin, int sidesMax) {
             size_t t = 0;
             for (const auto& s : segs) {
-                if (s.trunk || rad(s.a) >= rMin) t += 2 * static_cast<size_t>(sides(rad(s.a), sidesMax));
+                if (!isKept(s, rMin)) continue;
+                const size_t n = static_cast<size_t>(sides(s.rA, sidesMax));
+                t += 2 * n + (endsHere(s, rMin) ? n : 0);
             }
             return t;
         };
@@ -2204,17 +2240,48 @@ private:
             }
             rMin = hi;
         }
+        // joints: a kept segment continuing into exactly one other kept segment bends at its end node; both tubes run on past the node by
+        // r tan(half the bend) so the wedge the bend opens on the outside is covered (what read as ring joints)
+        std::vector<int> keptIn(N, -1), keptInCount(N, 0);
+        for (size_t k = 0; k < segs.size(); ++k) {
+            if (!isKept(segs[k], rMin)) continue;
+            const size_t bnode = static_cast<size_t>(segs[k].b);
+            keptIn[bnode] = static_cast<int>(k);
+            ++keptInCount[bnode];
+        }
+        auto jointExtend = [&](const Seg& s, bool atEnd) -> float {
+            const Seg* other = nullptr;
+            if (atEnd) {
+                int count = 0;
+                for (uint32_t k : startsAt[static_cast<size_t>(s.b)]) if (isKept(segs[k], rMin)) { other = &segs[k]; ++count; }
+                if (count != 1) return 0.0f;
+            } else {
+                const size_t an = static_cast<size_t>(s.a);
+                if (keptInCount[an] != 1 || startsAt[an].size() != 1) return 0.0f;
+                other = &segs[static_cast<size_t>(keptIn[an])];
+            }
+            const Vec3 d0 = (node(s.b).position - node(s.a).position).normalized();
+            const Vec3 d1 = (node(other->b).position - node(other->a).position).normalized();
+            const float c = std::clamp(d0.dot(d1), -1.0f, 1.0f);
+            const float halfBend = 0.5f * std::acos(c);
+            const float r = atEnd ? rad(s.b) : s.rA;
+            const float len = (node(s.b).position - node(s.a).position).length();
+            return std::min({r * std::tan(std::min(halfBend, 1.2f)), r, 0.45f * len});
+        };
         for (const auto& s : segs) {
-            if (!s.trunk && rad(s.a) < rMin) {
-                if (growth) growth->pruned.push_back({s.a, s.b, rad(s.a), rad(s.b)});
+            if (!s.trunk && s.rA < rMin) {
+                if (growth) growth->pruned.push_back({s.a, s.b, s.rA, rad(s.b)});
                 continue;
             }
             const size_t before = wood.vertices.size();
-            appendBranchCylinder(wood, node(s.a).position, node(s.b).position, rad(s.a), rad(s.b), cfg.woodColor, sides(rad(s.a), sidesMax));
+            const bool ends = endsHere(s, rMin);
+            appendBranchCylinder(wood, node(s.a).position, node(s.b).position, s.rA, rad(s.b), cfg.woodColor, sides(s.rA, sidesMax), ends,
+                                 jointExtend(s, false), jointExtend(s, true));
             if (growth) {
-                // the cylinder's vertices alternate start ring, end ring
+                // the cylinder's vertices alternate start ring, end ring (a closing cone's two apex vertices are the end's)
                 const float ga = static_cast<float>(s.a) / growthDen, gb = static_cast<float>(s.b) / growthDen;
-                for (size_t v = before; v < wood.vertices.size(); ++v) growth->wood.push_back(((v - before) % 2 == 0) ? ga : gb);
+                const size_t rings = wood.vertices.size() - before - (ends && wood.vertices.size() > before ? 2 : 0);
+                for (size_t v = before; v < wood.vertices.size(); ++v) growth->wood.push_back((v - before < rings && (v - before) % 2 == 0) ? ga : gb);
             }
             ++rep.woodSegments;
         }

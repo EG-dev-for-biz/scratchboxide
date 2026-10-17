@@ -26,7 +26,7 @@ const run = chromeAvailable();
 
 interface Perf { camera: string; frames: number; frameMs: { median: number; p95: number; max: number }; updateMs: { median: number; max: number };
     drawnTriangles: { median: number; p95: number; max: number }; drawCalls: { median: number; max: number }; estimatedTriangles: { median: number; max: number };
-    atMidpoint: { level0: number; level1: number; level2: number; fading: number; visibleTrees: number; culledTrees: number; bias: number }; trees: number }
+    atMidpoint: { level0: number; level1: number; level2: number; fading: number; visibleTrees: number; culledTrees: number; demotedTrees: number }; trees: number }
 interface Shot { nonBackground: number; meanLuma: number; hash: number[]; triangles: number; calls: number; stats: { atLevel: number[]; fading: number } }
 const diff = (a: number[], b: number[]): number => a.reduce((s, v, i) => s + Math.abs(v - b[i]), 0) / a.length;
 

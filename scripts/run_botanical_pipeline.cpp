@@ -31,6 +31,7 @@
 #include "scratchbox_io.hpp"
 
 #include <iostream>
+#include <cstdio>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -178,7 +179,7 @@ int main(int argc, char* argv[]) {
     std::string inputPath = "";
     std::string outputPath = "public/models/botanical_synthesized_output.glb";
     std::string modeStr = "auto";
-    std::string leafStr = "lobed";
+    std::string leafStr = "1.95,0.45,0.55,14,0,0.42,5,0";   // the blade outline: gain, rise, fall, serration count, serration depth, lobe depth, lobe half cycles, cordate
     float leafSize = 0.32f;
     float densityScale = 1.0f;
     bool enableIvy = false;
@@ -193,7 +194,7 @@ int main(int argc, char* argv[]) {
             outputPath = argv[++i];
         } else if (arg == "--mode" && i + 1 < argc) {
             modeStr = argv[++i];
-        } else if (arg == "--leaf" && i + 1 < argc) {
+        } else if (arg == "--leaf-outline" && i + 1 < argc) {
             leafStr = argv[++i];
         } else if (arg == "--leaf-size" && i + 1 < argc) {
             leafSize = std::stof(argv[++i]);
@@ -220,9 +221,14 @@ int main(int argc, char* argv[]) {
     else if (modeStr == "streetscape") options.mode = BotanicalPipelineMode::IntegratedStreetscape;
     else options.mode = BotanicalPipelineMode::AutoDetect;
 
-    if (leafStr == "ovate") options.leafMorphology = LeafMorphology::OvateSimple;
-    else if (leafStr == "serrated") options.leafMorphology = LeafMorphology::SerratedBirch;
-    else options.leafMorphology = LeafMorphology::LobedOakMaple;
+    {
+        float v[8];
+        if (std::sscanf(leafStr.c_str(), "%f,%f,%f,%f,%f,%f,%f,%f", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7]) != 8) {
+            std::cerr << "--leaf-outline wants gain,rise,fall,serrationCount,serrationDepth,lobeDepth,lobeHalfCycles,cordate\n";
+            return 2;
+        }
+        options.leafOutline = LeafOutline{v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]};
+    }
 
     options.leafSize = leafSize;
     options.leafDensityScale = densityScale;
@@ -294,7 +300,7 @@ int main(int argc, char* argv[]) {
         result.telemetry.printSummary();
         std::cout << "\n[Botanical Pipeline Output & Telemetry]\n";
         std::cout << "  Vegetation Mode:         " << modeStr << "\n";
-        std::cout << "  Leaf Morphology:         " << leafStr << "\n";
+        std::cout << "  Leaf outline:            " << leafStr << "\n";
         std::cout << "  Total Height:            " << result.telemetry.totalHeight << " m\n";
         std::cout << "  Clear Trunk Height:      " << result.telemetry.clearTrunkHeight << " m\n";
         std::cout << "  Crown Base Height:       " << result.telemetry.crownBaseHeight << " m\n";

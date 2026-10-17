@@ -579,7 +579,11 @@ export function describeTrees(t: LocationClayTrees, isolate: boolean): string {
             ? ` The rebuilt trees (space colonisation, studio clay) are grown into ${Math.round(t.treeCanopyAreaM2)} m² of measured crown, ${Math.round(t.filledCanopyAreaM2)} m² of it by trees whose leaves fill their crown`
             : ` The rebuilt trees (space colonisation, studio clay) fill ${Math.round(t.treeCanopyAreaM2)} m² of measured crown`;
         if (t.reachingBoundary) s += ` (${t.reachingBoundary} of them ${t.reachingBoundary === 1 ? 'runs' : 'run'} to the extraction's edge and ${t.reachingBoundary === 1 ? 'was' : 'were'} rebuilt up to it)`;
-        s += `, ${t.triangles.toLocaleString()} triangles within a budget of ${t.triangleBudget.toLocaleString()}${describeTreeBudget(t)}; the trees model is ${t.url}.`;
+        // the budget bounds each tree's wood (and the blob tree the far masses are fitted to); the far level the file holds is the
+        // wood under those masses, so say what it holds
+        s += t.levelTriangles
+            ? `, ${t.levelTriangles.level2.toLocaleString()} triangles at the far level (the wood, within a budget of ${t.triangleBudget.toLocaleString()}${describeTreeBudget(t)}, under the leaf masses); the trees model is ${t.url}.`
+            : `, ${t.triangles.toLocaleString()} triangles within a budget of ${t.triangleBudget.toLocaleString()}${describeTreeBudget(t)}; the trees model is ${t.url}.`;
         // every tree is written at three levels of detail; the leaves are placed on the grown branching, not measured
         if (t.drawnPerFrame) {
             s += ` Each tree has three levels of detail (leaf clusters near, fewer larger leaves mid, blob masses far; the leaves are placed on the grown branching, only the crown it grows into is measured)`

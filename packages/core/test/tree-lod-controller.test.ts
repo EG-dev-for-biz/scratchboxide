@@ -165,17 +165,26 @@ describe('TreeLodController on the contract fixture', () => {
         expect(mats.size).toBe(4);                                    // 12 trees share 4 variants
     });
 
-    it('stretches distances when the estimate is over the triangle budget, and eases back when there is room', async () => {
-        const root = await loadFixture(1);
+    it('holds the farthest trees a level down first when the estimate is over the triangle budget, and none when there is room', async () => {
+        const root = await loadFixture(3);
+        const trees = treeNodes(root);
+        trees.forEach((t, i) => t.position.x += i * 40);              // three trees, 40 m apart along x
+        root.updateMatrixWorld(true);
+        const cam = cameraAt(trees[0], 8);
+        cam.position.x -= 30; cam.lookAt(trees[1].position); cam.updateMatrixWorld(true);
         const c = clock();
-        const tree = treeNodes(root)[0];
-        const lod = new TreeLodController(root, { now: c.now, triangleBudget: 1, minBias: 0.25 });
-        for (let i = 0; i < 120; i++) { c.tick(); lod.update(cameraAt(tree, 30)); }
-        expect(lod.stats.bias).toBeCloseTo(0.25, 5);
-        expect(lod.edgesOf(0).e0).toBeLessThan(1);                    // 30 m / 0.25 = 120 m: no longer level 0
+        const tight = new TreeLodController(root, { now: c.now, triangleBudget: 1 });
+        tight.update(cam);
+        expect(tight.stats.demotedTrees).toBeGreaterThan(0);
+        // the nearest tree is the last to give anything up
+        const nearest = [0, 1, 2].reduce((a, k) => (trees[k].position.distanceTo(cam.position) < trees[a].position.distanceTo(cam.position) ? k : a), 0);
+        const farthest = [0, 1, 2].reduce((a, k) => (trees[k].position.distanceTo(cam.position) > trees[a].position.distanceTo(cam.position) ? k : a), 0);
+        for (let i = 0; i < 120; i++) { c.tick(); tight.update(cam); }
+        const level = (k: number) => { const e = tight.edgesOf(k); return e.e0 > 0.5 ? 0 : e.e1 > 0.5 ? 1 : 2; };
+        expect(level(farthest)).toBeGreaterThanOrEqual(level(nearest));
         const roomy = new TreeLodController(await loadFixture(1), { now: c.now, triangleBudget: 1e9 });
         for (let i = 0; i < 20; i++) { c.tick(); roomy.update(cameraAt(treeNodes(roomy.root)[0], 30)); }
-        expect(roomy.stats.bias).toBe(1);
+        expect(roomy.stats.demotedTrees).toBe(0);
     });
 
     it('gives wood and leaves, at every level and in every dissolve state, one shared clay grey', async () => {
@@ -236,3 +245,57 @@ describe('TreeLodController on the contract fixture', () => {
         }
     });
 });
+
+describe('TreeLodController shadows', () => {
+    const castingLevels = (tree: THREE.Object3D): number[] => {
+        const out: number[] = [];
+        for (const g of tree.children.filter(c => c.name.startsWith('sb-lod-gate-'))) {
+            let any = false;
+            g.traverse(o => { const m = o as THREE.Mesh; if (m.isMesh && m.castShadow) any = true; });
+            if (any) out.push(Number(g.name.replace('sb-lod-gate-', '')));
+        }
+        return out;
+    };
+
+    it('lets only the dominant level of a tree in a crossfade cast, and counts the shadow pass in the budget', async () => {
+        const root = await loadFixture(1);
+        root.traverse(o => { if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).castShadow = true; });
+        const c = clock();
+        const lod = new TreeLodController(root, { now: c.now });
+        const tree = treeNodes(root)[0];
+        const cam = cameraAt(tree, 20);
+        const shadowCam = new THREE.OrthographicCamera(-500, 500, 500, -500, 0.1, 2000);
+        shadowCam.position.copy(cam.position).add(new THREE.Vector3(0, 400, 0)); shadowCam.lookAt(cam.position); shadowCam.updateMatrixWorld(true);
+        lod.update(cam, shadowCam);
+        expect(castingLevels(tree)).toEqual([0]);
+        expect(lod.stats.estimatedShadowTriangles).toBeGreaterThan(0);
+        expect(lod.stats.estimatedShadowTriangles).toBeLessThanOrEqual(lod.stats.estimatedTriangles);
+        for (const d of [120, 400]) {
+            lod.forceLevel(null);
+            for (let i = 0; i < 60; i++) { c.tick(); lod.update(cameraAt(tree, d), shadowCam); }
+            expect(castingLevels(tree)).toHaveLength(1);
+        }
+        lod.dispose();
+        let all = true; tree.traverse(o => { const m = o as THREE.Mesh; if (m.isMesh && !m.castShadow) all = false; });
+        expect(all).toBe(true);
+    });
+
+    it('keeps a tree that only the shadow camera sees drawable, never at the near level', async () => {
+        const root = await loadFixture(1);
+        root.traverse(o => { if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).castShadow = true; });
+        const lod = new TreeLodController(root, { now: clock().now });
+        const tree = treeNodes(root)[0];
+        const cam = cameraAt(tree, 20);
+        cam.lookAt(cam.position.clone().add(new THREE.Vector3(0, 0, 100))); cam.updateMatrixWorld(true);   // turn away from the tree
+        const shadowCam = new THREE.OrthographicCamera(-500, 500, 500, -500, 0.1, 2000);
+        shadowCam.position.copy(sphereOf(tree).center).add(new THREE.Vector3(0, 400, 0)); shadowCam.lookAt(sphereOf(tree).center); shadowCam.updateMatrixWorld(true);
+        lod.update(cam, shadowCam);
+        expect(lod.stats.shadowOnlyTrees).toBe(1);
+        expect(tree.visible).toBe(true);
+        expect(castingLevels(tree)).toHaveLength(1);
+        expect(castingLevels(tree)[0]).toBeGreaterThanOrEqual(1);
+        lod.update(cam, null);
+        expect(tree.visible).toBe(false);
+    });
+});
+

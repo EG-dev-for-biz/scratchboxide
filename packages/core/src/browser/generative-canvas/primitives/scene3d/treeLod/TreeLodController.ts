@@ -28,11 +28,15 @@ import { FADE_STEPS, hysteresisDistance, levelRange, quantiseRange, stepEdges, t
  *
  * Work is bounded per frame: at most `maxCommitsPerFrame` trees change their drawn state (nearest first, the rest keep
  * their previous state one more frame) and `maxNewVariantsPerFrame` material variants are made; when the estimated
- * triangles exceed `triangleBudget` every distance is stretched (a bias that eases back when there is headroom).
+ * triangles (main pass and shadow pass) exceed `triangleBudget` the farthest trees give up a level first.
  *
  * Wood and leaves share whatever material the mesh's base says: `mesh.userData.sbLodBase` (set by clayRenderMode to
  * the one shared studio-clay material), else the material the loader gave it. A mesh the staged-build hook has
  * dressed (reveal, provenance) is left to the hook, and its tree switches level without a dissolve meanwhile.
+ * Shadows: the depth pass has no dither, so every level of a tree that is drawn into the shadow map is drawn in full. Each
+ * tree therefore lets only the level with the largest share cast (the others have castShadow off), a tree that only the
+ * shadow camera sees stays drawable at level 1 or 2 (never the leaf-bearing near level) so its shadow still falls into
+ * view, and the triangle budget counts the shadow pass beside the main pass when a shadow camera is given.
  * Trees are labelled by the layer ("grown to the measured crown") at every level; nothing here names a species.
  */
 
@@ -47,8 +51,6 @@ export interface TreeLodOptions {
     maxNewVariantsPerFrame?: number;
     /** Drawn triangles per frame the estimate may reach before levels are pushed farther away. */
     triangleBudget?: number;
-    /** Smallest distance scale the budget may force (1 = none). */
-    minBias?: number;
     /** Clock in ms, replaceable in tests. */
     now?: () => number;
 }
@@ -63,10 +65,15 @@ export interface TreeLodStats {
     fading: number;
     /** Triangles submitted for the visible trees: every level that shows any share of the hash counts in full. */
     estimatedTriangles: number;
+    /** Triangles the shadow pass draws for the trees in the shadow camera's frustum (0 without a shadow camera): the casting level of each, in full. */
+    estimatedShadowTriangles: number;
+    /** Trees that only the shadow camera sees (drawn for their shadow, culled by the main camera). */
+    shadowOnlyTrees: number;
     commits: number;
     deferredCommits: number;
     newVariants: number;
-    bias: number;
+    /** Trees the budget held a level below where their distance puts them. */
+    demotedTrees: number;
     /** JS time spent in update() (ms). */
     updateMs: number;
 }
@@ -83,6 +90,10 @@ interface TreeState {
     edges: LodEdges;
     snap: boolean;
     culled: boolean;
+    target: LodEdges;
+    inMain: boolean;
+    inShadow: boolean;
+    castLevel: number;
     // per-frame scratch
     dist: number;
     want: [string, string, string];
@@ -95,6 +106,26 @@ const triangleCountOf = (m: THREE.Mesh): number => {
     return per * ((m as THREE.InstancedMesh).isInstancedMesh ? (m as THREE.InstancedMesh).count : 1);
 };
 
+/** The level that casts a tree's shadow: the one with the largest share of the hash (the farther level on a tie). */
+const castingLevel = (e: LodEdges): number => {
+    const share = [e.e0, e.e1 - e.e0, 1 - e.e1];
+    let best = 2;
+    if (share[1] > share[best]) best = 1;
+    if (share[0] > share[best]) best = 0;
+    return best;
+};
+
+/** The shadow camera of the first light under `scene` that casts shadows, or null when no shadow map is rendered. */
+export function findShadowCamera(scene: THREE.Object3D, shadowMapEnabled: boolean): THREE.Camera | null {
+    if (!shadowMapEnabled) return null;
+    let found: THREE.Camera | null = null;
+    scene.traverseVisible(o => {
+        const l = o as THREE.Light & { shadow?: THREE.LightShadow };
+        if (!found && l.isLight && l.castShadow && l.shadow?.camera) found = l.shadow.camera;
+    });
+    return found;
+}
+
 const keyOf = (r: [number, number]): string => {
     const q = quantiseRange(r);
     return q === null ? 'off' : q === 'full' ? 'full' : `${q[0]}-${q[1]}`;
@@ -105,20 +136,21 @@ export class TreeLodController {
     private readonly trees: TreeState[] = [];
     private readonly opts: Required<Omit<TreeLodOptions, 'now'>> & { now: () => number };
     private readonly variants = new Map<THREE.Material, Map<string, THREE.Material>>();
-    private bias = 1;
     private forced: 0 | 1 | 2 | undefined;
     private lastMs: number | undefined;
     private readonly frustum = new THREE.Frustum();
     private readonly pv = new THREE.Matrix4();
+    private readonly pvShadow = new THREE.Matrix4();
+    private readonly shadowFrustum = new THREE.Frustum();
     private readonly tmp = new THREE.Vector3();
-    readonly stats: TreeLodStats = { trees: 0, visibleTrees: 0, culledTrees: 0, atLevel: [0, 0, 0], fading: 0, estimatedTriangles: 0, commits: 0, deferredCommits: 0, newVariants: 0, bias: 1, updateMs: 0 };
+    readonly stats: TreeLodStats = { trees: 0, visibleTrees: 0, culledTrees: 0, atLevel: [0, 0, 0], fading: 0, estimatedTriangles: 0, estimatedShadowTriangles: 0, shadowOnlyTrees: 0, commits: 0, deferredCommits: 0, newVariants: 0, demotedTrees: 0, updateMs: 0 };
 
     /** Finds the trees under `root` (a loaded trees GLB scene) and puts a gate above each level node. Returns nothing to do when there are none. */
     constructor(readonly root: THREE.Object3D, options: TreeLodOptions = {}) {
         this.opts = {
             hysteresisM: options.hysteresisM ?? 2, fadeSeconds: options.fadeSeconds ?? 0.35,
             maxCommitsPerFrame: options.maxCommitsPerFrame ?? 400, maxNewVariantsPerFrame: options.maxNewVariantsPerFrame ?? 6,
-            triangleBudget: options.triangleBudget ?? 8_000_000, minBias: options.minBias ?? 0.1,
+            triangleBudget: options.triangleBudget ?? 8_000_000,
             now: options.now ?? (() => performance.now())
         };
         this.psiSeason = (root.userData?.sbTrees as TreesGlbRootExtras | undefined)?.psiSeason;
@@ -155,6 +187,7 @@ export class TreeLodController {
                 if (!m.isMesh) return;
                 m.userData.sbTreeLodMesh = true;
                 if (m.userData.sbLodBase === undefined && !Array.isArray(m.material)) m.userData.sbLodBase = m.material;
+                if (m.userData.sbLodCast === undefined) m.userData.sbLodCast = m.castShadow;
                 meshes.push(m);
             });
             return { gate, meshes, triangles: meshes.reduce((a, m) => a + triangleCountOf(m), 0), applied: 'off' };
@@ -165,7 +198,7 @@ export class TreeLodController {
         return {
             node, id: (node.userData.sbTree as TreeNodeExtras).id, bands, levels,
             centerLocal: node.worldToLocal(sphere.center.clone()), radiusLocal: sphere.radius / scale,
-            filteredD: undefined, edges: { e0: 0, e1: 0 }, snap: true, culled: false, dist: 0, want: ['off', 'off', 'off']
+            filteredD: undefined, edges: { e0: 0, e1: 0 }, snap: true, culled: false, target: { e0: 0, e1: 0 }, inMain: true, inShadow: false, castLevel: -1, dist: 0, want: ['off', 'off', 'off']
         };
     }
 
@@ -180,7 +213,11 @@ export class TreeLodController {
     /** Draw state of each level of a tree ('off', 'full' or a quantised range), for diagnostics and tests. */
     stateOf(index: number): [string, string, string] { return this.trees[index].levels.map(l => l.applied) as [string, string, string]; }
 
-    update(camera: THREE.Camera): TreeLodStats {
+    /**
+     * `shadowCamera`: the camera of the light that casts the shadows (its matrices as the last shadow pass left them),
+     * or null/undefined when no shadow map is rendered.
+     */
+    update(camera: THREE.Camera, shadowCamera?: THREE.Camera | null): TreeLodStats {
         const t0 = this.opts.now();
         const dt = this.lastMs === undefined ? 1 : Math.min(0.1, Math.max(0, (t0 - this.lastMs) / 1000));
         this.lastMs = t0;
@@ -189,8 +226,14 @@ export class TreeLodController {
         this.pv.multiplyMatrices((camera as THREE.PerspectiveCamera).projectionMatrix, camera.matrixWorldInverse);
         this.frustum.setFromProjectionMatrix(this.pv);
         const camPos = camera.getWorldPosition(this.tmp.set(0, 0, 0)).clone();
+        let shadowFrustum: THREE.Frustum | undefined;
+        if (shadowCamera) {
+            shadowCamera.updateMatrixWorld();
+            shadowFrustum = this.shadowFrustum;
+            shadowFrustum.setFromProjectionMatrix(this.pvShadow.multiplyMatrices((shadowCamera as THREE.OrthographicCamera).projectionMatrix, shadowCamera.matrixWorldInverse));
+        }
         const s = this.stats;
-        s.visibleTrees = 0; s.culledTrees = 0; s.atLevel = [0, 0, 0]; s.fading = 0; s.estimatedTriangles = 0; s.commits = 0; s.deferredCommits = 0; s.newVariants = 0;
+        s.visibleTrees = 0; s.culledTrees = 0; s.shadowOnlyTrees = 0; s.estimatedShadowTriangles = 0; s.atLevel = [0, 0, 0]; s.fading = 0; s.estimatedTriangles = 0; s.commits = 0; s.deferredCommits = 0; s.newVariants = 0;
         const dirty: TreeState[] = [];
         const sphere = new THREE.Sphere();
         const visible: TreeState[] = [];
@@ -198,7 +241,9 @@ export class TreeLodController {
             t.node.updateWorldMatrix(true, false);
             sphere.center.copy(t.centerLocal).applyMatrix4(t.node.matrixWorld);
             sphere.radius = t.radiusLocal * Math.max(1e-6, t.node.matrixWorld.getMaxScaleOnAxis());
-            if (!this.frustum.intersectsSphere(sphere)) {
+            t.inMain = this.frustum.intersectsSphere(sphere);
+            t.inShadow = !!shadowFrustum && shadowFrustum.intersectsSphere(sphere);
+            if (!t.inMain && !t.inShadow) {
                 t.culled = true; t.snap = true;
                 if (t.node.visible) t.node.visible = false;
                 s.culledTrees++;
@@ -210,26 +255,45 @@ export class TreeLodController {
             t.culled = false;
             visible.push(t);
         }
-        s.visibleTrees = visible.length;
-        // Budget, on where the trees are heading (not where the dissolves have got to): stretch every distance until the
-        // levels the targets submit fit, up to a few corrections per frame; ease back slowly when there is headroom.
-        const targetOf = (t: TreeState): LodEdges => this.forced === undefined ? targetEdges(t.filteredD! / this.bias, t.bands)
-            : { e0: this.forced === 0 ? 1 : 0, e1: this.forced === 2 ? 0 : 1 };
+        s.visibleTrees = visible.reduce((n, t) => n + (t.inMain ? 1 : 0), 0);
+        s.shadowOnlyTrees = visible.length - s.visibleTrees;
+        s.culledTrees = this.trees.length - visible.length;
+        // Budget, on where the trees are heading (not where the dissolves have got to): when the levels the targets submit (and cast
+        // into the shadow map) exceed `triangleBudget`, the trees farthest from the camera give up a level first (leaf clusters to
+        // mid, mid to far), one level a pass over at most two passes, until they fit. The near trees keep their detail; a tree
+        // only the shadow camera sees goes before any the camera sees.
+        const baseTarget = (t: TreeState): LodEdges => {
+            const e: LodEdges = this.forced === undefined ? targetEdges(t.filteredD!, t.bands) : { e0: this.forced === 0 ? 1 : 0, e1: this.forced === 2 ? 0 : 1 };
+            // a tree only the shadow camera sees never wears the near level: its shadow does not need the small leaves
+            return t.inMain ? e : { e0: 0, e1: Math.max(0, e.e1) };
+        };
         const submitted = (e: LodEdges, t: TreeState): number => {
             let n = 0;
             for (let k = 0; k < 3; k++) if (quantiseRange(levelRange(e, k as 0 | 1 | 2)) !== null) n += t.levels[k].triangles;
             return n;
         };
-        if (this.forced === undefined) {
-            for (let pass = 0; pass < 4; pass++) {
-                let est = 0;
-                for (const t of visible) est += submitted(targetOf(t), t);
-                if (est > this.opts.triangleBudget && this.bias > this.opts.minBias) this.bias = Math.max(this.opts.minBias, this.bias * Math.max(0.5, this.opts.triangleBudget / est));
-                else { if (est < 0.8 * this.opts.triangleBudget && this.bias < 1) this.bias = Math.min(1, this.bias * 1.01); break; }
+        // what the shadow pass draws of a tree: its casting level, in full (the depth pass has no dither)
+        const shadowCost = (e: LodEdges, t: TreeState): number => (t.inShadow ? t.levels[castingLevel(e)].triangles : 0);
+        const costOf = (e: LodEdges, t: TreeState): number => (t.inMain ? submitted(e, t) : 0) + shadowCost(e, t);
+        let total = 0;
+        for (const t of visible) { t.target = baseTarget(t); total += costOf(t.target, t); }
+        s.demotedTrees = 0;
+        if (this.forced === undefined && total > this.opts.triangleBudget) {
+            const order = [...visible].sort((a, b) => (b.filteredD! + (b.inMain ? 0 : 1e6)) - (a.filteredD! + (a.inMain ? 0 : 1e6)));
+            for (let pass = 0; pass < 2 && total > this.opts.triangleBudget; pass++) {
+                for (const t of order) {
+                    const e = t.target;
+                    if (e.e0 <= 0 && e.e1 <= 0) continue;                       // already wholly the far level
+                    const coarser: LodEdges = { e0: 0, e1: e.e0 > 0 ? e.e1 : 0 };
+                    const gain = costOf(e, t) - costOf(coarser, t);
+                    if (gain <= 0) continue;
+                    t.target = coarser; total -= gain; s.demotedTrees++;
+                    if (total <= this.opts.triangleBudget) break;
+                }
             }
         }
         for (const t of visible) {
-            const target = targetOf(t);
+            const target = t.target;
             t.edges = t.snap ? target : stepEdges(t.edges, target, maxStep);
             t.snap = false;
             let changed = false;
@@ -238,7 +302,14 @@ export class TreeLodController {
                 t.want[k] = w;
                 if (w !== t.levels[k].applied) changed = true;
             }
-            s.estimatedTriangles += submitted(t.edges, t);     // what is submitted: a level in a dissolve still draws all of its triangles (the dither drops them in the shader)
+            s.estimatedShadowTriangles += shadowCost(t.edges, t);
+            const cast = castingLevel(t.edges);
+            if (cast !== t.castLevel) {
+                t.castLevel = cast;
+                for (let k = 0; k < 3; k++) for (const m of t.levels[k].meshes) m.castShadow = k === cast && m.userData.sbLodCast !== false;
+            }
+            if (t.inMain) s.estimatedTriangles += submitted(t.edges, t);     // what is submitted: a level in a dissolve still draws all of its triangles (the dither drops them in the shader)
+            if (!t.inMain) { if (changed) dirty.push(t); continue; }
             if (t.edges.e0 >= 1 - 1e-6) s.atLevel[0]++; else if (t.edges.e0 <= 1e-6 && t.edges.e1 >= 1 - 1e-6) s.atLevel[1]++; else if (t.edges.e0 <= 1e-6 && t.edges.e1 <= 1e-6) s.atLevel[2]++; else s.fading++;
             if (changed) dirty.push(t);
         }
@@ -261,7 +332,6 @@ export class TreeLodController {
             if (!done) s.deferredCommits++;
             s.commits++;
         }
-        s.bias = this.bias;
         s.updateMs = this.opts.now() - t0;
         return s;
     }
@@ -306,6 +376,7 @@ export class TreeLodController {
                     const base = m.userData.sbLodBase as THREE.Material | undefined;
                     if (base && !isStagedMaterial(m.material as THREE.Material)) m.material = base;
                     delete m.userData.sbTreeLodMesh;
+                    if (m.userData.sbLodCast !== undefined) { m.castShadow = m.userData.sbLodCast as boolean; delete m.userData.sbLodCast; }
                 }
                 const child = l.gate.children[0];
                 if (child) t.node.add(child);
