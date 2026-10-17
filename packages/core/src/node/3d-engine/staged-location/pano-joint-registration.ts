@@ -35,7 +35,7 @@ import type { Vec3 } from '../../../common/spatial/staged-location-contracts';
 import type { RenderMesh3D } from '../../spatial/HeadlessMeshSilhouetteRenderer';
 import { meshEdgeSamples, StreetViewCrossViewRefiner, type CrossViewFrame, type CrossViewMatch, type CrossViewOptions, type CrossViewResult } from '../../spatial/StreetViewCrossViewRefiner';
 import {
-    buildValidMask, detectLineSegments, distanceTransform, frameCamera, gaussianBlur, luminance, projectToFrame, renderFrameDepth, segmentSky, sobel,
+    buildValidMask, detectLineSegments, distanceTransform, frameCamera, gaussianBlur, groundingHorizontalFovDeg, luminance, projectToFrame, renderFrameDepth, segmentSky, sobel,
     ZERO_CORRECTION, type FrameCamera, type PoseCorrection, type RgbaImage
 } from '../../spatial/StreetViewPoseRegistrar';
 import { downscaleRgba, EDGE_REG_MIN_FOV_DEG, EDGE_RESIDUAL_FLOOR_M, type EdgeRegFrame } from './pano-edge-registration';
@@ -141,7 +141,8 @@ function prepare(f: EdgeRegFrame, width: number, refHeadingDeg: number): Prepare
     const image = downscaleRgba(f.image, width);
     const valid = buildValidMask(image.width, image.height, { watermarkBottomPx: Math.ceil((24 * image.width) / Math.max(1, f.image.width)) + 2 });
     return {
-        key: f.key, panoId: f.view.panoId, nominalEye: [f.view.eye[0], f.view.eye[1], f.view.eye[2]], headingDeg: f.view.headingDeg, pitchDeg: f.view.pitchDeg, fovDeg: f.view.fovDeg,
+        // the crop's true horizontal fov (the requested fov is that of the 1920 px grounding frame)
+        key: f.key, panoId: f.view.panoId, nominalEye: [f.view.eye[0], f.view.eye[1], f.view.eye[2]], headingDeg: f.view.headingDeg, pitchDeg: f.view.pitchDeg, fovDeg: groundingHorizontalFovDeg(f.view.fovDeg, f.image.width, f.image.height),
         refHeadingDeg, image, valid, lum: luminance(image.rgba, image.width, image.height)
     };
 }

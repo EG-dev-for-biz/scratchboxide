@@ -93,6 +93,35 @@ export function verticalFovDeg(horizontalFovDeg: number, width: number, height: 
     return 2 * Math.atan(Math.tan(horizontalFovDeg * DEG / 2) * height / width) / DEG;
 }
 
+/**
+ * Street View grounding images (Maps Imagery Grounding API): the requested `fov` is the horizontal fov of a 1920 x 1280 frame,
+ * and every aspect ratio is a centred crop of that frame at the same focal length (1920 x 1080, 1707 x 1280, 1280 x 1280,
+ * 720 x 1280; measured live with rotated and re-cropped views of one pano). So fx = 960 / tan(fov / 2) at the delivered size,
+ * not width / (2 tan(fov / 2)), which is 11 % short for 4:3 and 33-63 % for square and portrait crops.
+ */
+export const GROUNDING_FRAME_WIDTH_PX = 1920;
+export const GROUNDING_FRAME_HEIGHT_PX = 1280;
+
+/** Delivered width of a grounding crop of this aspect (width / height) at full resolution. */
+export function groundingCropWidthPx(aspect: number): number {
+    return Math.min(GROUNDING_FRAME_WIDTH_PX, GROUNDING_FRAME_HEIGHT_PX * aspect);
+}
+
+/** Focal length (px) of a grounding image `width` x `height` (any downscale of a delivered crop) requested with `fovDeg`. */
+export function groundingFocalPx(fovDeg: number, width: number, height: number): number {
+    return (width / groundingCropWidthPx(width / height)) * (GROUNDING_FRAME_WIDTH_PX / 2) / Math.tan(fovDeg * DEG / 2);
+}
+
+/** The true horizontal fov of a grounding image requested with `fovDeg` (what a pinhole of the image's own width needs). */
+export function groundingHorizontalFovDeg(fovDeg: number, width: number, height: number): number {
+    return 2 * Math.atan(width / 2 / groundingFocalPx(fovDeg, width, height)) / DEG;
+}
+
+/** The fov to request for a crop of this aspect so that its true horizontal fov is `horizontalFovDeg`. */
+export function groundingRequestFovDeg(horizontalFovDeg: number, aspect: number): number {
+    return 2 * Math.atan(Math.tan(horizontalFovDeg * DEG / 2) * GROUNDING_FRAME_WIDTH_PX / groundingCropWidthPx(aspect)) / DEG;
+}
+
 export function streetViewIntrinsics(horizontalFovDeg: number, width: number, height: number): PinholeIntrinsics {
     const fx = width / (2 * Math.tan(horizontalFovDeg * DEG / 2));
     return {
