@@ -27,6 +27,7 @@ import * as FX from './helpers/staged-location-fixtures';
 import { archRealData } from './helpers/staged-real-data';
 import { readFittedShells } from '../src/node/3d-engine/staged-location/fitted-solid';
 import { computeSlotCover, coveredBoxes, describeCover, openStretches, type EdgeCover, type SurfaceCover } from '../src/node/3d-engine/staged-location/slot-cover';
+import { sunkBelowSurface } from '../src/node/3d-engine/staged-location/ornament-vision';
 import { anchorElements } from '../src/node/3d-engine/staged-location/ornament-anchor';
 import type { ExpandedElement } from '../src/node/3d-engine/staged-location/ornament-expand';
 
@@ -49,6 +50,21 @@ beforeAll(async () => {
     await svc.ensureBinary();
 }, 900_000);
 afterAll(() => { if (work) fs.rmSync(work, { recursive: true, force: true }); });
+
+describe('what goes below the surface', () => {
+    it('is found in a sweep along a path, a revolve about the normal and a repeat of either; a relief and an edge sweep are not its business', () => {
+        const rev: OperatorSpec = { operator: 'revolve', revolve: { axisOrigin: [0, 0, 0], axisDir: [0, 0, 1], profile: [[0.11, 0], [0.1, -0.07], [0.07, -0.11], [0, -0.035]], lobes: 8, lobeAmplitude: 0.012, helixTurns: 0, startAngleDeg: 0, sweepAngleDeg: 360, segments: 32 } };
+        const path: OperatorSpec = { operator: 'sweep', sweep: { carrier: { chart: { pointsUv: [[0, 0], [1, 0], [1, 1]], closed: true } }, profile: { outer: [[-0.03, 0], [-0.02, -0.025], [0.02, -0.025], [0.03, 0]] }, miterLimit: 4, caps: true } };
+        const rep: OperatorSpec = { operator: 'replicate', replicate: { seed: rev as any, domain: { lattice: { originUv: [0, 0], pitchUv: [1, 1], counts: [2, 2], rowOffsetU: 0 } }, alignToSurface: true } };
+        const relief: OperatorSpec = { operator: 'relief', relief: { surfaceId: 's', region: { outer: [[0, 0], [1, 0], [1, 1]] }, height: { panel: { depthM: -0.1, edgeWidthM: 0.02, edgeProfile: [[0, 0], [1, 1]] } }, maxEdgeM: 0.1 } };
+        const edge: OperatorSpec = { operator: 'sweep', sweep: { carrier: { slot: { slotId: 'S', t0: 0, t1: 1, offset: [0, 0] } }, profile: { outer: [[0, -1], [0.1, 0.1]] }, miterLimit: 4, caps: true } };
+        expect(sunkBelowSurface(rev)).toBeCloseTo(0.11, 6);
+        expect(sunkBelowSurface(path)).toBeCloseTo(0.025, 6);
+        expect(sunkBelowSurface(rep)).toBeCloseTo(0.11, 6);
+        expect(sunkBelowSurface(relief)).toBe(0);
+        expect(sunkBelowSurface(edge)).toBe(0);
+    });
+});
 
 describe.skipIf(!archData.data)('a slot whose free space a neighbouring prism fills (the real arch fit, the real builder)', () => {
     it('the covered part of an edge slot and of a surface slot is found, an element built there sinks, and the anchored one does not', async () => {
@@ -101,9 +117,13 @@ describe.skipIf(!archData.data)('a slot whose free space a neighbouring prism fi
         expect(anchored.problems.get(1)?.[0]).toMatch(/^cover: the element on /);
         const c = (sweepX.element.spec as any).sweep.carrier.slot;
         expect(openStretches(ec).some(([a, b]) => c.t0 >= a - 1e-6 && c.t1 <= b + 1e-6)).toBe(true);
-        const built = await build([sweepX.element]);
+        // a sweep that runs down the wall below the crease as well (the shape of the live sink on S71): its stretch is clipped by the whole section, not only the part above
+        const lowSweep: OperatorSpec = { operator: 'sweep', sweep: { carrier: { slot: { slotId: edgeSlot!.id, t0: 0, t1: 1, offset: [0, 0] } }, profile: { outer: [[0.01, Math.min(...env.map(p => p[1])) * 0.8], [outMax * 0.9, Math.min(...env.map(p => p[1])) * 0.8], [outMax * 0.9, upMax * 0.9], [0.01, upMax * 0.9]] }, miterLimit: 4, caps: true } };
+        const lowX = mk('sweep_low', edgeSlot!.id, lowSweep, 3);
+        const lowAnchored = anchorElements([lowX], fit, [], undefined, false, covers);
+        const built = await build([sweepX.element, ...(lowAnchored.problems.size ? [] : [lowX.element])]);
         expect(built.value.dropped.map(d => [d.elementId, d.checks.map(x => x.check)])).toEqual([]);
-        expect(built.value.built.map(b => b.elementId)).toEqual(['sweep_fix']);
+        expect(built.value.built.map(b => b.elementId)).toContain('sweep_fix');
 
         // 4. a panel in the free part of the same slot is untouched
         const free = { u0: sc.u0, u1: sc.u0 + (box.u0 - sc.u0 > 0.8 ? box.u0 - sc.u0 : 0.8), v0: Math.max(box.v1 + 0.2, sc.v0 + sc.nv * sc.dv * 0.6), v1: sc.v0 + sc.nv * sc.dv - 0.3 };

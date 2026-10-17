@@ -104,12 +104,13 @@ export function computeSlotCover(slot: OrnamentSlot, fit: Pick<StructureFit, 'su
         // the whole outward quadrant of the section: a profile stands attached to the crease, so anything of it at out > 0 or up > 0 needs
         // free space from the crease out (a neighbour flush with the wall a few centimetres back already makes a profile rooted at the crease sink)
         const at = (o: number, u: number): Vec3 => add(add(p, scale(fr.out, o)), scale(fr.up, u));
+        const upMin = Math.min(0, ...e.envelope.map(q => q[1]));
         const outs = outMax > 0.03 ? [SKIN_M, outMax * 0.35, outMax * 0.9] : [];
-        const ups = upMax > 0.03 ? [SKIN_M, upMax * 0.35, upMax * 0.9] : [];
+        // above the crease (up > 0) and in front of the wall below it (out > 0, up < 0): every place a profile rooted at the crease can reach
+        const ups = [...(upMin < -0.05 ? [upMin * 0.9, upMin * 0.5, upMin * 0.15] : []), ...(upMax > 0.03 ? [SKIN_M, upMax * 0.35, upMax * 0.9] : [])];
         const probes: Vec3[] = [];
         for (const o of outs) for (const u of ups) probes.push(at(o, u));
-        for (const o of outs) probes.push(at(o, SKIN_M));
-        for (const u of ups) probes.push(at(SKIN_M, u));
+        if (upMax > 0.03) for (const u of ups.filter(v => v > 0)) probes.push(at(SKIN_M, u));
         if (probes.some(q => insideSolid(solid, q))) { blocked[k] = 1; b++; }
     }
     return { kind: 'edge', lengthM: L, n, blocked, share: b / n };

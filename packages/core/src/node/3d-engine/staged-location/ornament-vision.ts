@@ -170,7 +170,7 @@ export function ornamentPromptText(fit: StructureFit, evidence: EvidenceImageRef
     const rules = [
         '1. Report only elements you can see in an image that shows their slot. Cite each with [image index, y0, x0, y1, x1] in 0–1000.',
         '2. Build each element with one operator: sweep (a profile along the slot\'s edge, or along a path in the slot), revolve (a profile around an axis, with K lobes), replicate (one seed repeated along the edge or over a grid), or relief (a raised or recessed region). Use integer millimetres in the slot\'s own axes: u along the surface to the right, v up, n out of the surface. Along an edge, t is per-mille of its length.',
-        '3. In an edge section [out, up], the quarter with out < 0 and up < 0 is inside the wall: a swept profile stays at out >= 0 or up >= 0. Do not give a size smaller than the image you cite can show. Depths are estimates from shading, shadows or silhouettes. Keep them within the slot bounds, keep edge profiles inside the edge envelope, and say how you judged them (depthBasis).',
+        '3. Nothing but a relief may go below the surface: a sweep along a path or a revolve about the normal stays at n >= 0 (z >= 0); a recess is a relief with negative depth. In an edge section [out, up], the quarter with out < 0 and up < 0 is inside the wall: a swept profile stays at out >= 0 or up >= 0. Do not give a size smaller than the image you cite can show. Depths are estimates from shading, shadows or silhouettes. Keep them within the slot bounds, keep edge profiles inside the edge envelope, and say how you judged them (depthBasis).',
         '4. For repeats, count what you see. If a row runs out of view, give the visible count and set beyondView.',
         '5. Figures and lettering are a low relief outline only, at most 50 mm deep.',
         '6. Shadows, stains, trees, people, vehicles and statues standing in front of a wall are not ornament on that wall. Do not add anything you know about this building but cannot see in these images.',
@@ -297,6 +297,14 @@ export function smallestDimension(spec: OperatorSpec): number {
 }
 
 /** Depth extremes (+ proud, − recess) of a spec (rule 6). */
+/** How far a sweep along a path in a surface slot, or a revolve about the surface normal, goes below the surface: inside the wall, which only a relief can recess into. */
+export function sunkBelowSurface(spec: OperatorSpec): number {
+    if (spec.operator === 'replicate') return sunkBelowSurface(spec.replicate.seed as OperatorSpec);
+    if (spec.operator === 'revolve') return spec.revolve.axisDir[2] !== 0 ? Math.max(0, ...spec.revolve.profile.map(p => -p[1])) : 0;
+    if (spec.operator === 'sweep' && 'chart' in spec.sweep.carrier) return Math.max(0, ...spec.sweep.profile.outer.map(p => -p[1]));
+    return 0;
+}
+
 function depthRange(spec: OperatorSpec): { proud: number; recess: number } {
     if (spec.operator === 'replicate') return depthRange(spec.replicate.seed as OperatorSpec);
     if (spec.operator === 'relief') {
@@ -475,6 +483,10 @@ export function checkReply(text: string, finishReason: string | undefined, fit: 
                 if (inWall.length) add(x.replyIndex, `rule 6: ${inWall.length} profile point(s) of the sweep on ${slot.id} lie inside the wall (out < 0 and up < 0 is the fitted solid); keep a swept profile at out >= 0 or up >= 0`);
             }
             if (pts.some(p => p[0] < -TOL || p[0] > L + TOL)) add(x.replyIndex, `rule 7: the element runs past the ${L.toFixed(2)} m edge ${slot.id}`);
+        }
+        if ('surface' in slot.host) {
+            const sunk = sunkBelowSurface(spec);
+            if (sunk > 0.005) add(x.replyIndex, `rule 6: the ${spec.operator === 'replicate' ? 'repeated seed' : spec.operator} on ${slot.id} goes ${Math.round(sunk * 1000)} mm below the surface, which is inside the wall; keep sweeps and revolves at n >= 0 (z >= 0) and recess only with a relief of negative depth`);
         }
         const depth = depthRange(spec);
         if (depth.proud > slot.bounds.maxProudM + 1e-6) add(x.replyIndex, `rule 6: ${Math.round(depth.proud * 1000)} mm proud is more than slot ${slot.id} allows (${Math.round(slot.bounds.maxProudM * 1000)} mm)`);
