@@ -36,8 +36,8 @@ export interface Correspondence {
 /** How well one box edge/centre can be placed in the image by the vision model: about 1% of the frame. */
 export const BOX_PLACEMENT_SIGMA_M = 0.35;
 export const POSE_PRIOR_SIGMA = { meters: 2, degrees: 2 } as const;
-/** A pair further apart than this before the fit is a wrong match, not a pose error. */
-export const MAX_PRIOR_DISAGREEMENT_M = 18;
+/** A pair further apart than this before the fit is a wrong match, not a pose error (a pano is good to a few metres and a couple of degrees: 4 m at the distances of these views; with 18 m, wild pairs bent the poses of half the panos past what they can be off by and the panos were set aside; 4 m on the live pairs keeps 214 of 319 and sets two panos aside, not seven). */
+export const MAX_PRIOR_DISAGREEMENT_M = 4;
 
 const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
