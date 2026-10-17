@@ -48,7 +48,7 @@ export const MAX_RUN_VIEW_DISTANCE_M = 70;
 /** A view whose line of sight meets the face more obliquely than this (cosine of the angle to the normal) is not used. */
 export const MIN_FACE_COSINE = 0.35;
 export const RUN_READ_TIMEOUT_MS = 150_000;
-/** The whole pass is given this long once the crops are in: a reading still out when it ends is left as the wide reading had it. */
+/** The whole pass, the crop fetches included, is given at most this long (the caller passes less when its stage has less left): a reading still out when it ends is left as the wide reading had it. */
 export const RUN_PASS_BUDGET_MS = 300_000;
 const ASPECTS: Array<{ name: GroundingAspectRatio; ratio: number }> = [
     { name: 'RATIO_1X1', ratio: 1 }, { name: 'RATIO_4X3', ratio: 4 / 3 }, { name: 'RATIO_3X4', ratio: 3 / 4 }, { name: 'RATIO_16X9', ratio: 16 / 9 }
@@ -222,6 +222,8 @@ async function pool<T, R>(items: T[], n: number, fn: (x: T) => Promise<R>): Prom
 
 export async function readRuns(input: RunReadingInput): Promise<RunReadingResult> {
     const { fit } = input;
+    // the pass's budget counts from here, so fetching the crops comes out of it too (the caller sizes it to the time it has left)
+    const budgetStarted = Date.now();
     const targets = selectRunTargets(input.located);
     const report: RunReadingReport = { targets: targets.length, read: 0, elements: 0, replaced: 0, skipped: [], perTarget: [] };
     const anchored: AnchorNote[] = [];
@@ -259,7 +261,7 @@ export async function readRuns(input: RunReadingInput): Promise<RunReadingResult
 
     // 3. one small focused reading per target, several at a time
     const budget = new AbortController();
-    const budgetTimer = setTimeout(() => budget.abort(new Error('budget')), input.budgetMs ?? RUN_PASS_BUDGET_MS);
+    const budgetTimer = setTimeout(() => budget.abort(new Error('budget')), Math.max(0, (input.budgetMs ?? RUN_PASS_BUDGET_MS) - (Date.now() - budgetStarted)));
     const readSignal = input.signal ? AbortSignal.any([input.signal, budget.signal]) : budget.signal;
     const results = await pool(planned, input.concurrency ?? Math.max(1, planned.length), async ({ t }) => {
         const mine = wanted.filter(w => w.t === t).map(w => imageFor.get(w.view)).filter((x): x is EvidenceImage => !!x);

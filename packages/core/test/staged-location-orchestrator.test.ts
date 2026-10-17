@@ -463,10 +463,14 @@ describe('an isolated structure', () => {
             expect(requested.length).toBeLessThanOrEqual(4);
             expect(result.ornament!.evidence).toEqual({ tileOrthos: 1, streetView: requested.length });
             expect(result.extraction.attribution).toContain('Street View ©Google');
-            // the vision request carries exactly the bytes the service returned
-            const parts: any[] = calls[0].contents[0].parts;
-            const inline = parts.filter(p => p.inlineData && p.inlineData.mimeType === 'image/jpeg').map(p => Buffer.from(p.inlineData.data, 'base64'));
-            expect(inline).toHaveLength(requested.length);
+            // the vision requests carry exactly the bytes the service returned (the wide reading is split into batches, each sending
+            // only the images that show its slots: together they send each close-up the reading uses, unchanged)
+            const wide = calls.filter(c => (c.contents[0].parts as any[]).some(p => typeof p.text === 'string' && p.text.includes('reading architectural ornament')));
+            expect(wide.length).toBeGreaterThanOrEqual(1);
+            const inline = wide.flatMap(c => (c.contents[0].parts as any[]).filter(p => p.inlineData && p.inlineData.mimeType === 'image/jpeg').map(p => Buffer.from(p.inlineData.data, 'base64')));
+            const distinct = inline.filter((b, i) => inline.findIndex(o => o.equals(b)) === i);
+            expect(distinct.length).toBeGreaterThanOrEqual(1);
+            expect(distinct.length).toBeLessThanOrEqual(requested.length);
             for (const b of inline) expect([...sent.values()].some(o => o.equals(b))).toBe(true);
             // no write anywhere (the spies saw them all) held an image, or named a JPEG
             const marks = [...sent.values()].map(b => b.subarray(300, 360));

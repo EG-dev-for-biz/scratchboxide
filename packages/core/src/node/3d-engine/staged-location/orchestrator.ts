@@ -106,11 +106,12 @@ import { buildObjectFromSpec } from '../reference-object-builder';
 import type { ObjectBuildSpec } from '../../../common/spatial/object-build-spec';
 import { nominalPose, projectSlots, registeredPose } from './slot-projection';
 import { computeSlotOffer, describeOffer } from './slot-exposure';
-import { readRuns, type RunReadingReport } from './run-reading';
+import { readRuns, RUN_PASS_BUDGET_MS, type RunReadingReport } from './run-reading';
+import { readOrnamentBatched, ORNAMENT_PASS_BUDGET_MS } from './ornament-batches';
 import { registeredUncertaintyAt } from './survey-detail';
 import {
-    orthoCaption, orthoRef, plannedThinking, readOrnament, streetViewCaption, visionUse, VisionStageError, ORNAMENT_PROMPT_VERSION,
-    ORNAMENT_THINKING_BUDGET, ORNAMENT_VISION_TIMEOUT_MS, type EvidenceInput
+    orthoCaption, orthoRef, plannedThinking, streetViewCaption, visionUse, VisionStageError, ORNAMENT_PROMPT_VERSION,
+    ORNAMENT_THINKING_BUDGET, type EvidenceInput
 } from './ornament-vision';
 import { buildSwitchLocationPills, switchLocationMarkdown } from '../../../common/spatial/switch-location';
 import { summarizeStagedBuild, type StagedSummaryInput } from './staged-summary';
@@ -128,6 +129,13 @@ const NO_EVIDENCE_COST: EvidenceCost = { metadataCalls: 0, cachedCalls: 0, image
 // stages
 // ----------------------------------------------------------------------------------------------------------------
 
+/** The focused run readings get at most this long after the wide reading (and less when the wide reading ran long). */
+export const VISION_RUNS_ALLOWANCE_MS = 120_000;
+/** What the vision stage keeps back from its limit: the merge, the cache write and the records after the readings. */
+export const VISION_STAGE_MARGIN_MS = 20_000;
+/** Below this, the focused run readings are not started: there is no time for a call to answer. */
+const MIN_RUNS_WINDOW_MS = 30_000;
+
 /** Canonical order (-1: no layer), overlay title and per-stage time limit. */
 export const STAGES = {
     resolve: { order: -1, title: 'Place', budgetMs: 10_000 },
@@ -138,7 +146,9 @@ export const STAGES = {
     remesh: { order: 2, title: 'Remeshed scan', budgetMs: 300_000 },
     fit: { order: 3, title: 'Scan-fitted rebuild', budgetMs: 30_000 },
     project: { order: -1, title: 'Slots in the photos', budgetMs: 10_000 },
-    vision: { order: -1, title: 'Reading the photos', budgetMs: 2 * ORNAMENT_VISION_TIMEOUT_MS + 10_000 },
+    // the batched wide reading (bounded by its own budget), then the focused run readings in what is left, then the margin the
+    // stage keeps so that its own limit never discards a reading that finished
+    vision: { order: -1, title: 'Reading the photos', budgetMs: ORNAMENT_PASS_BUDGET_MS + VISION_RUNS_ALLOWANCE_MS + VISION_STAGE_MARGIN_MS },
     correct: { order: 3, title: 'Photo corrections', budgetMs: 30_000 },
     detail: { order: 4, title: 'Photo-inferred detail', budgetMs: 20_000 },
     figures: { order: 4, title: 'Figures', budgetMs: EVIDENCE_DISCOVERY_ALLOWANCE_MS + SURVEY_IMAGE_TIMEOUT_MS + 2 * FIGURE_VISION_TIMEOUT_MS + 4 * 120_000 + 30_000 },
@@ -1892,6 +1902,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             const read = await runner.stage<OrnamentSpec>({
                 id: 'vision',
                 run: async io => {
+                    const stageStarted = Date.now();
                     if (!inputs.length) return { status: 'skipped', source: '', reason: 'no image shows the structure' };
                     fitSha = sha256File(fit.outputs.reportJson);
                     offer = computeSlotOffer(fit, inputs.map(i => i.ref));
@@ -1909,36 +1920,57 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         return { status: 'committed', value: hit.value.spec, source: `${hit.value.spec.elements.length} photo-inferred elements (cached reading by ${hit.value.spec.model.used})`, model: hit.value.spec.model, cached: true, builtAtMs: hit.builtAtMs };
                     }
                     run.cacheStatus.vision = bypass('vision') ? 'bypassed' : 'miss';
-                    const reading = await readOrnament({ fit, fitSha256: fitSha, evidence: inputs, chain, signal: io.signal, onProgress: m => io.progress(m), located, offer });
+                    const reading = await readOrnamentBatched({ fit, fitSha256: fitSha, evidence: inputs, chain, signal: io.signal, onProgress: m => io.progress(m), located, offer, budgetMs: ORNAMENT_PASS_BUDGET_MS });
+                    const batchFailures = reading.batches.filter(b => b.status === 'failed');
+                    io.progress(`${reading.batches.length - batchFailures.length} of ${reading.batches.length} batches read in ${(reading.spec.model.ms / 1000).toFixed(1)} s (${reading.calls} calls${reading.retries ? `, ${reading.retries} asked again after a stall` : ''})${batchFailures.length ? `; ${batchFailures.map(b => `${b.id} failed: ${b.reason}`).join('; ')}` : ''}`);
                     // the targeted second pass: every repeating run or band the survey found, read again alone from narrow crops (run-reading.ts)
                     let spec = reading.spec;
                     let anchored = reading.anchored;
                     let runReport: RunReadingReport | undefined;
                     const runDropped: Array<{ elementId: string; slotId: string; reasonCode: string; problems: string[] }> = [];
                     const svDeps = deps.streetView ?? {};
-                    if (evidence.plan?.located.length && !missingCredentials(svDeps) && t.ground) {
+                    // the run readings get what the stage has left, minus its margin, and are cut there: the wide reading is never lost to them
+                    const runsWindowMs = Math.min(RUN_PASS_BUDGET_MS, STAGES.vision.budgetMs - VISION_STAGE_MARGIN_MS - (Date.now() - stageStarted));
+                    if (evidence.plan?.located.length && runsWindowMs < MIN_RUNS_WINDOW_MS) io.progress(`the focused run readings were not started: ${Math.max(0, Math.round(runsWindowMs / 1000))} s of the stage were left; the wide reading stands`);
+                    if (evidence.plan?.located.length && runsWindowMs >= MIN_RUNS_WINDOW_MS && !missingCredentials(svDeps) && t.ground) {
+                        const runsCut = new AbortController();
+                        const runsTimer = setTimeout(() => runsCut.abort(Object.assign(new Error(`the focused run readings ran past their ${Math.round(runsWindowMs / 1000)} s`), { name: 'TimeoutError' })), runsWindowMs + 5_000);
                         try {
                             const rr = await readRuns({
                                 fit, fitSha256: fitSha, base: reading.spec, located: evidence.plan.located, panos: evidence.panos, groundAt: (x, z) => t.ground!.groundAt(x, z), fallbackGroundY: structure!.groundY,
-                                ...(evidence.registration ? { registration: evidence.registration } : {}), occluder: loadMesh([fit.outputs.fittedGlb, fit.outputs.passThroughGlb]), streetView: svDeps, chain, signal: io.signal, onProgress: m => io.progress(m)
+                                ...(evidence.registration ? { registration: evidence.registration } : {}), occluder: loadMesh([fit.outputs.fittedGlb, fit.outputs.passThroughGlb]), streetView: svDeps, chain,
+                                signal: AbortSignal.any([io.signal, runsCut.signal]), budgetMs: runsWindowMs, onProgress: m => io.progress(m)
                             });
                             spec = rr.spec; anchored = [...reading.anchored, ...rr.anchored]; runReport = rr.report; runDropped.push(...rr.dropped);
                             io.progress(`${rr.report.read} of ${rr.report.targets} runs and bands read from narrow crops: ${rr.report.elements} elements${rr.report.replaced ? `, replacing ${rr.report.replaced} from the wide reading` : ''}${rr.report.skipped.length ? `; ${rr.report.skipped.length} left as they were (${rr.report.skipped[0].reason})` : ''}`);
                         } catch (err) {
-                            if (isAbort(err) || io.signal.aborted) throw err;
-                            io.progress(`the focused run readings failed (${errorMessage(err)}); the wide reading stands`);
+                            // a stop or the stage's own limit ends the stage; the runs' own cut does not
+                            if (io.signal.aborted || (isAbort(err) && !runsCut.signal.aborted)) throw err;
+                            io.progress(`the focused run readings failed (${runsCut.signal.aborted ? (runsCut.signal.reason as Error).message : errorMessage(err)}); the wide reading stands`);
+                        } finally {
+                            clearTimeout(runsTimer);
                         }
                     }
-                    await cache.run('vision', visionKey, async dir => {
+                    // a reading with a failed batch is not cached: a retry reads every batch again
+                    if (!batchFailures.length) await cache.run('vision', visionKey, async dir => {
                         fs.writeFileSync(path.join(dir, 'replies.json'), JSON.stringify(reading.replies));
                         return { value: { spec, supportTestRequired: reading.supportTestRequired, anchored, ...(runReport ? { runReadings: runReport } : {}) } };
                     }, { bypass: true });
                     run.state.visionModel = spec.model;
-                    run.summary('vision').cost = { images: runReport ? runReport.perTarget.reduce((n, p) => n + p.views, 0) : 0, imagesSent: inputs.length, visionCalls: reading.spec.revision.passes + 1 + (runReport?.read ?? 0), seconds: round(reading.spec.model.ms / 1000, 1) };
-                    const degradations = [...reading.dropped, ...runDropped].map(d => run.degrade(record('vision', d.reasonCode, {
-                        part: { description: `photo-read element ${d.elementId} in slot ${d.slotId}`, slotId: d.slotId, elementId: d.elementId, buildingId: fit.buildingId },
-                        intended: 'photo-inferred detail', fellTo: 'the flat fitted face', provenanceAfter: PROVENANCE.fitted, reason: d.problems.join('; '), transient: false, runId, now: now(), suffix: d.elementId
-                    })));
+                    run.summary('vision').cost = { images: runReport ? runReport.perTarget.reduce((n, p) => n + p.views, 0) : 0, imagesSent: inputs.length, visionCalls: reading.calls + (runReport?.read ?? 0), seconds: round(reading.spec.model.ms / 1000, 1) };
+                    const degradations = [
+                        // a batch that gave no usable reply: its slots stay flat, with why; the other batches stand
+                        ...batchFailures.map(b => run.degrade(record('vision', 'vision_batch_failed', {
+                            part: { description: `facade detail of slots ${b.slotIds.join(', ')} (reading batch ${b.id}, ${b.imageIds.length} images)`, buildingId: fit.buildingId },
+                            intended: 'photo-inferred detail', fellTo: 'the flat fitted face', provenanceAfter: PROVENANCE.fitted,
+                            reason: `batch ${b.id} of the reading gave no usable reply (${b.reasonCode ?? 'vision_unavailable'}: ${b.reason}); its ${b.slotIds.length} slots stay flat, the other batches stand`,
+                            ...(b.model ? { model: b.model } : {}), transient: b.transient ?? true, runId, now: now(), suffix: b.id, reuses: ['resolve', 'tiles', 'remesh', 'fit', 'evidence']
+                        }))),
+                        ...[...reading.dropped, ...runDropped].map(d => run.degrade(record('vision', d.reasonCode, {
+                            part: { description: `photo-read element ${d.elementId} in slot ${d.slotId}`, slotId: d.slotId, elementId: d.elementId, buildingId: fit.buildingId },
+                            intended: 'photo-inferred detail', fellTo: 'the flat fitted face', provenanceAfter: PROVENANCE.fitted, reason: d.problems.join('; '), transient: false, runId, now: now(), suffix: d.elementId
+                        })))
+                    ];
                     out.droppedNotResolvable = [...reading.dropped, ...runDropped].filter(d => d.reasonCode === 'not_resolvable_in_evidence').length;
                     out.rejected = reading.rejectedCorrections;
                     out.anchored = anchored;

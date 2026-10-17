@@ -8,8 +8,10 @@
  ********************************************************************************/
 
 /**
- * Facade detail read from photos: one combined, low-thinking vision call per building (gemini-4-argon at thinking LOW
- * by user decision, any fallback visible), at most one revision pass, and a deterministic check of every reply.
+ * Facade detail read from photos: one low-thinking vision reading (gemini-4-argon at thinking LOW by user decision, any
+ * fallback visible), at most one revision pass, and a deterministic check of every reply. The wide reading of a building
+ * is split into per-face batches read at once (ornament-batches.ts); each batch is one readOrnament here. Every call
+ * streams under a stall watch (no first token, or a silent stream) with one retry for a stall.
  *
  * The images are the fit's tile orthos (this app's own renders of the tile photo, slot outlines drawn on them) and up
  * to 4 Street View images (sent exactly as the grounding API returned them, with their slot outlines given as text).
@@ -54,7 +56,7 @@ import { surveyHintLines, type LocatedElement } from './survey-detail';
 import type { SlotOffer } from './slot-exposure';
 import { describeCover, type SlotCover } from './slot-cover';
 
-export const ORNAMENT_PROMPT_VERSION = 'ornament/v5';
+export const ORNAMENT_PROMPT_VERSION = 'ornament/v6';
 /** Thinking tokens asked for: LOW on Gemini 4 (thinkingConfigFor), a 512-token budget on 3.x. */
 export const ORNAMENT_THINKING_BUDGET = 512;
 export const ORNAMENT_MAX_OUTPUT_TOKENS = 16_384;
@@ -63,6 +65,15 @@ export const ORNAMENT_MAX_OUTPUT_TOKENS = 16_384;
  * took 59 s at its default thinking (round1_w4-object-builds), so the limit leaves room above that.
  */
 export const ORNAMENT_VISION_TIMEOUT_MS = 120_000;
+/**
+ * A call that has not streamed its first token by now has stalled. The live combined call (22 images, about 85k prompt
+ * tokens) took 32-75 s to its first token; a batch of at most 6 images is about a third of that prompt.
+ */
+export const ORNAMENT_FIRST_TOKEN_STALL_MS = 60_000;
+/** Once tokens flow, a stream silent for this long has stalled. */
+export const ORNAMENT_STREAM_STALL_MS = 30_000;
+/** A stalled call is asked again once, when time is left for it (a call cut by its hard limit is not). */
+export const ORNAMENT_STALL_RETRIES = 1;
 export const MIN_ELEMENT_CONFIDENCE = 35;
 export const MIN_CORRECTION_CONFIDENCE = 70;
 export const MIN_SLOT_VISIBLE_FRACTION = 0.3;
@@ -150,7 +161,17 @@ export interface FocusedReading {
     task: string;
 }
 
-export function ornamentPromptText(fit: StructureFit, evidence: EvidenceImageRef[], located: LocatedElement[] = [], offer?: SlotOffer, focus?: FocusedReading): { preamble: string; tables: string } {
+/** How one reading is scoped when the wide reading is split into batches (ornament-batches.ts). */
+export interface ReadingScope {
+    /** "At most … in all" (default MAX_ELEMENTS_PER_READING). */
+    maxElements?: number;
+    /** Only these primitives' correctable values are listed (a batch is asked about the primitives its slots belong to). */
+    correctablePrimitiveIds?: Set<string>;
+}
+
+export const MAX_ELEMENTS_PER_READING = 60;
+
+export function ornamentPromptText(fit: StructureFit, evidence: EvidenceImageRef[], located: LocatedElement[] = [], offer?: SlotOffer, focus?: FocusedReading, scope: ReadingScope = {}): { preamble: string; tables: string } {
     const l = fit.sourceLimits;
     const preamble = focus
         ? `You are reading ONE repeating or banded group of ornament on a real structure from one photograph. It will be added as parametric detail to a clay model fitted to a 3D scan, which resolves shapes of about ${f2(l.meshResolvableM)} m. Everything you add is labelled "photo-inferred" with the confidence you give. ${focus.task}\n\nImage (cite it by index):`
@@ -166,7 +187,7 @@ export function ornamentPromptText(fit: StructureFit, evidence: EvidenceImageRef
         return `${s.id}: ${host}, ${f2(s.sizeM[0])} × ${f2(s.sizeM[1])} m, maxProud ${Math.round(s.bounds.maxProudM * 1000)} mm, maxRecess ${Math.round(s.bounds.maxRecessM * 1000)} mm${env}, in images [${inImages(s.id).join(', ')}]${offer?.covers.get(s.id) ? `; ${describeCover(offer.covers.get(s.id)!)}` : ''}`;
     });
     const polys = evidence.filter(e => e.kind === 'streetview-grounding').map(e => `[${e.index}] ${e.slotsShown.filter(s => !offer || offer.offeredIds.has(s.slotId)).map(s => `${s.slotId} → ${JSON.stringify(s.polygon1000)}`).join('; ') || 'no slot'}`);
-    const correctable = fit.primitives.flatMap(p => p.correctable.map(c => `${p.id} (${p.label ?? 'primitive'}): param ${c.param} (${c.key}) = ${c.value} ${c.unit}, admissible ${c.min}–${c.max}; ${c.description}`));
+    const correctable = fit.primitives.filter(p => !scope.correctablePrimitiveIds || scope.correctablePrimitiveIds.has(p.id)).flatMap(p => p.correctable.map(c => `${p.id} (${p.label ?? 'primitive'}): param ${c.param} (${c.key}) = ${c.value} ${c.unit}, admissible ${c.min}–${c.max}; ${c.description}`));
     const rules = [
         '1. Report only elements you can see in an image that shows their slot. Cite each with [image index, y0, x0, y1, x1] in 0–1000.',
         '2. Build each element with one operator: sweep (a profile along the slot\'s edge, or along a path in the slot; a block or a run of blocks on an edge, such as a row of small repeated blocks, is a sweep of its section over a short t span, repeated with replicate), revolve (a profile around an axis, with K lobes), replicate (one seed repeated along the edge or over a grid), or relief (a raised or recessed region). Use integer millimetres in the slot\'s own axes: u along the surface to the right, v up, n out of the surface. Along an edge, t is per-mille of its length.',
@@ -176,7 +197,7 @@ export function ornamentPromptText(fit: StructureFit, evidence: EvidenceImageRef
         '6. Shadows, stains, trees, people, vehicles and statues standing in front of a wall are not ornament on that wall. Do not add anything you know about this building but cannot see in these images.',
         '7. If a photo clearly contradicts a correctable value, propose a correction inside its admissible range, with evidence. Otherwise propose none.',
         '8. List the slots where you see nothing, or that no image shows, in emptySlots.',
-        `9. At most ${MAX_ELEMENTS_PER_SLOT} elements per slot and 60 in all, highest confidence first.`
+        `9. At most ${MAX_ELEMENTS_PER_SLOT} elements per slot and ${scope.maxElements ?? MAX_ELEMENTS_PER_READING} in all, highest confidence first.`
     ];
     const schema = JSON.stringify(schemaClosure('VisionOrnamentReply'));
     const tables = [
@@ -190,8 +211,8 @@ export function ornamentPromptText(fit: StructureFit, evidence: EvidenceImageRef
     return { preamble, tables };
 }
 
-export function ornamentContents(fit: StructureFit, evidence: EvidenceInput[], located: LocatedElement[] = [], offer?: SlotOffer, focus?: FocusedReading): Content[] {
-    const { preamble, tables } = ornamentPromptText(fit, evidence.map(e => e.ref), located, offer, focus);
+export function ornamentContents(fit: StructureFit, evidence: EvidenceInput[], located: LocatedElement[] = [], offer?: SlotOffer, focus?: FocusedReading, scope: ReadingScope = {}): Content[] {
+    const { preamble, tables } = ornamentPromptText(fit, evidence.map(e => e.ref), located, offer, focus, scope);
     const parts: Part[] = [{ text: preamble }];
     for (const e of evidence) {
         parts.push({ inlineData: { mimeType: e.mimeType, data: e.bytes.toString('base64') } });
@@ -635,6 +656,10 @@ export interface OrnamentReading {
     rejectedCorrections: PrimitiveCorrection[];
     /** What anchoring snapped or clipped, each with the error it carried. */
     anchored: AnchorNote[];
+    /** Model calls made (first reply, retries after a stall, the revision). */
+    calls: number;
+    /** Calls asked again after a stall. */
+    retries: number;
 }
 
 function responseText(r: { candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }> }): string {
@@ -663,35 +688,79 @@ export interface ReadOrnamentInput {
     chain: VisionModelChain<string>;
     signal?: AbortSignal;
     onProgress?: (message: string) => void;
+    /** Hard limit on one call, ms (default ORNAMENT_VISION_TIMEOUT_MS). */
     timeoutMs?: number;
+    /** No token for this long after the call starts: the call has stalled (default ORNAMENT_FIRST_TOKEN_STALL_MS). */
+    firstTokenStallMs?: number;
+    /** No chunk for this long once tokens flow: the stream has stalled (default ORNAMENT_STREAM_STALL_MS). */
+    stallMs?: number;
+    /** A stalled call is asked again this many times while time is left (default ORNAMENT_STALL_RETRIES). */
+    stallRetries?: number;
+    /** Epoch ms by which this reading must be done: no call outlives it, no retry or revision starts without time for it. */
+    deadlineAt?: number;
+    /** Clock (tests). */
+    now?: () => number;
+    /** Output token cap per call (default ORNAMENT_MAX_OUTPUT_TOKENS). */
+    maxOutputTokens?: number;
     /** The survey's elements, each already placed in a slot: hints in the prompt, and the geometry the measurements are anchored to. */
     located?: LocatedElement[];
     /** The slots worth asking about (exterior, shown by an image); absent: every slot. */
     offer?: SlotOffer;
     /** A small focused reading of one group (no corrections are asked for). */
     focus?: FocusedReading;
+    /** The scope of one batch of a split reading. */
+    scope?: ReadingScope;
+    /** Called as each model call starts, and as a stalled one is asked again (a caller counting calls of parallel readings). */
+    onCall?: () => void;
+    onRetry?: () => void;
 }
 
-/** One combined call, at most one revision; throws VisionStageError when no usable reply comes. */
+/** Why a call ended early: its own hard limit, or a stream that went silent. */
+type CallCut = 'timeout' | 'stall';
+
+/**
+ * One reading, at most one revision; throws VisionStageError when no usable reply comes.
+ *
+ * Every call streams and is watched: no token within `firstTokenStallMs`, or no chunk for `stallMs` once tokens flow, ends
+ * it as stalled; `timeoutMs` ends it outright. A stalled call is asked again (`stallRetries`) while the deadline leaves
+ * room for it. A revision that cannot be had (no time left, or it fails) leaves the first reply standing with
+ * the elements that broke a fixable rule dropped and recorded, as after a revision: nothing is added that was not read.
+ */
 export async function readOrnament(input: ReadOrnamentInput): Promise<OrnamentReading> {
     const { fit, chain } = input;
     const refs = input.evidence.map(e => e.ref);
+    const clock = input.now ?? Date.now;
+    const started = clock();
     const timeoutMs = input.timeoutMs ?? ORNAMENT_VISION_TIMEOUT_MS;
+    const firstTokenStallMs = input.firstTokenStallMs ?? ORNAMENT_FIRST_TOKEN_STALL_MS;
+    const stallMs = input.stallMs ?? ORNAMENT_STREAM_STALL_MS;
+    const stallRetries = input.stallRetries ?? ORNAMENT_STALL_RETRIES;
+    const left = () => (input.deadlineAt === undefined ? Infinity : input.deadlineAt - clock());
     const located = input.located ?? [];
-    const first = ornamentContents(fit, input.evidence, located, input.offer, input.focus);
+    const first = ornamentContents(fit, input.evidence, located, input.offer, input.focus, input.scope);
     const replies: string[] = [];
+    let calls = 0, retries = 0;
     let usage: { promptTokens?: number; outputTokens?: number; thinkingTokens?: number; finishReason?: string } = {};
-    const call = async (contents: Content[]): Promise<{ text: string; finishReason?: string }> => {
-        const own = new AbortController();
-        const timer = setTimeout(() => own.abort(Object.assign(new Error(`the vision call took longer than ${Math.round(timeoutMs / 1000)} s`), { name: 'TimeoutError' })), timeoutMs);
-        const signal = input.signal ? AbortSignal.any([input.signal, own.signal]) : own.signal;
+    let ttftMs: number | undefined;
+    const own = (extra: Partial<VisionModelUse>) => ({ ...usage, ms: clock() - started, ...(ttftMs !== undefined ? { ttftMs } : {}), ...extra });
+    const callOnce = async (contents: Content[]): Promise<{ text: string; finishReason?: string }> => {
+        const limit = Math.max(1, Math.min(timeoutMs, left()));
+        const ctl = new AbortController();
+        let cut: CallCut | undefined;
+        const stop = (why: CallCut, message: string) => { if (ctl.signal.aborted) return; cut = why; ctl.abort(Object.assign(new Error(message), { name: 'TimeoutError' })); };
+        const hard = setTimeout(() => stop('timeout', `the vision call took longer than ${Math.round(limit / 1000)} s`), limit);
+        let watch = setTimeout(() => stop('stall', `the vision call stalled: no token within ${Math.round(firstTokenStallMs / 1000)} s`), firstTokenStallMs);
+        const onChunk = () => { clearTimeout(watch); watch = setTimeout(() => stop('stall', `the vision stream stalled: no token for ${Math.round(stallMs / 1000)} s`), stallMs); };
+        const signal = input.signal ? AbortSignal.any([input.signal, ctl.signal]) : ctl.signal;
+        calls++;
+        input.onCall?.();
         try {
             const r = await chain.generate({
                 contents,
-                config: { responseMimeType: 'application/json', temperature: 0.2, maxOutputTokens: ORNAMENT_MAX_OUTPUT_TOKENS, abortSignal: signal }
+                config: { responseMimeType: 'application/json', temperature: 0.2, maxOutputTokens: input.maxOutputTokens ?? ORNAMENT_MAX_OUTPUT_TOKENS, abortSignal: signal }
             }, {
-                stage: 'vision', thinkingBudget: ORNAMENT_THINKING_BUDGET, stream: true,
-                onFirstToken: ms => input.onProgress?.(`reading the photos (first token after ${(ms / 1000).toFixed(1)} s)`)
+                stage: 'vision', thinkingBudget: ORNAMENT_THINKING_BUDGET, stream: true, onChunk,
+                onFirstToken: ms => { ttftMs ??= ms; input.onProgress?.(`reading the photos (first token after ${(ms / 1000).toFixed(1)} s)`); }
             });
             const u = r.response.usageMetadata;
             const finishReason = r.response.candidates?.[0]?.finishReason as string | undefined;
@@ -705,13 +774,28 @@ export async function readOrnament(input: ReadOrnamentInput): Promise<OrnamentRe
             replies.push(text);
             return { text, finishReason };
         } catch (err) {
-            const timedOut = own.signal.aborted && !input.signal?.aborted;
-            const message = timedOut ? `the vision call took longer than ${Math.round(timeoutMs / 1000)} s` : (err as Error).message;
             if (input.signal?.aborted) throw err;
-            const transient = timedOut || /transient|quota|429|5\d\d|network|fetch failed|None of the chat's models is served/.test(message);
-            throw new VisionStageError(message, visionUse(chain, 'failed', { ...usage, error: message }), transient);
+            const message = cut ? (ctl.signal.reason as Error).message : (err as Error).message;
+            const transient = !!cut || /transient|quota|429|5\d\d|network|fetch failed|None of the chat's models is served/.test(message);
+            throw Object.assign(new VisionStageError(message, visionUse(chain, 'failed', own({ error: message })), transient, cut === 'stall' ? 'vision_stalled' : cut === 'timeout' ? 'vision_timeout' : 'vision_unavailable'), { cut });
         } finally {
-            clearTimeout(timer);
+            clearTimeout(hard);
+            clearTimeout(watch);
+        }
+    };
+    /** A call, asked again after a stall while the deadline leaves at least a first-token window for it. */
+    const call = async (contents: Content[]): Promise<{ text: string; finishReason?: string }> => {
+        for (let attempt = 0; ; attempt++) {
+            try {
+                return await callOnce(contents);
+            } catch (err) {
+                const cut = (err as { cut?: CallCut }).cut;
+                // only a stall is asked again: a call that streamed for its whole limit would most likely do so again
+                if (cut !== 'stall' || attempt >= stallRetries || left() < firstTokenStallMs) throw err;
+                retries++;
+                input.onRetry?.();
+                input.onProgress?.(`${(err as Error).message}; asking again`);
+            }
         }
     };
     const method = `${chain.current} (${'level' in chain.thinkingFor(ORNAMENT_THINKING_BUDGET) ? 'thinking low' : 'thinking budget 512'}) reading ${refs.length} images, expanded slot-relative`;
@@ -723,20 +807,40 @@ export async function readOrnament(input: ReadOrnamentInput): Promise<OrnamentRe
     let problems: string[] = [];
     if (check.problems.length) {
         problems = check.problems;
-        passes = 1;
         const ask = one.finishReason === 'MAX_TOKENS'
             ? 'Your reply was cut off. Reply with at most 30 elements, highest confidence first.'
             : `These parts cannot be built: ${check.problems.map((p, i) => `${i + 1}. ${p}`).join(' ')} Reply with the complete corrected JSON.`;
-        input.onProgress?.(`asking ${chain.answeredModel ?? chain.current} once to fix ${check.problems.length} problem${check.problems.length === 1 ? '' : 's'}`);
-        const two = await call([...first, { role: 'model', parts: [{ text: one.text }] }, { role: 'user', parts: [{ text: ask }] }]);
-        check = checkReply(two.text, two.finishReason, fit, refs, method, true, located, input.offer?.covers);
+        // the first reply as it stands, with the elements that broke a fixable rule dropped (what a revision that does not come leaves)
+        const standing = () => checkReply(one.text, one.finishReason, fit, refs, method, true, located, input.offer?.covers);
+        let unrevised: string | undefined;
+        if (left() < firstTokenStallMs) unrevised = `no time was left for a revision (${Math.max(0, Math.round(left() / 1000))} s)`;
+        else {
+            passes = 1;
+            input.onProgress?.(`asking ${chain.answeredModel ?? chain.current} once to fix ${check.problems.length} problem${check.problems.length === 1 ? '' : 's'}`);
+            try {
+                const two = await call([...first, { role: 'model', parts: [{ text: one.text }] }, { role: 'user', parts: [{ text: ask }] }]);
+                check = checkReply(two.text, two.finishReason, fit, refs, method, true, located, input.offer?.covers);
+            } catch (err) {
+                if (input.signal?.aborted || !(err instanceof VisionStageError)) throw err;
+                unrevised = `the revision gave no reply (${err.message})`;
+            }
+        }
+        if (unrevised !== undefined) {
+            check = standing();
+            problems = [...problems, `${unrevised}: the first reply stands, and its elements that broke a fixable rule are dropped`];
+            if (!check.reply) {
+                const why = `the reply was invalid and ${unrevised} (${problems.slice(0, 3).join('; ')})`;
+                throw new VisionStageError(why, visionUse(chain, 'failed', own({ error: why })), true, 'vision_invalid_reply');
+            }
+        }
         if (!check.reply) {
             const why = `the reply was invalid twice (${check.problems.slice(0, 3).join('; ')})`;
-            throw new VisionStageError(why, visionUse(chain, 'failed', { ...usage, error: why }), false, 'vision_invalid_reply');
+            throw new VisionStageError(why, visionUse(chain, 'failed', own({ error: why })), false, 'vision_invalid_reply');
         }
     }
     const thinking = chain.attempts.length ? chain.attempts[chain.attempts.length - 1].thinking : undefined;
-    const model = visionUse(chain, 'answered', { ...usage, ...(thinking ? { thinking } : {}) });
+    // this reading's own time (parallel readings share the chain, whose attempts sum every one of them)
+    const model = visionUse(chain, 'answered', own(thinking ? { thinking } : {}));
     // a replicate read past the builder's per-axis limit is split into blocks placing the same instances (never clamped)
     const sized = splitOversizeReplicates(check.kept);
     const supportTestRequired = check.supportTestRequired.flatMap(id => sized.split.find(x => x.elementId === id)?.parts ?? [id]);
@@ -753,7 +857,7 @@ export async function readOrnament(input: ReadOrnamentInput): Promise<OrnamentRe
         revision: { passes, problems },
         dropped: check.dropped.map(d => ({ elementId: d.elementId, slotId: d.slotId, by: d.by, problems: d.problems }))
     };
-    return { spec, replies, supportTestRequired, dropped: check.dropped, rejectedCorrections: check.rejectedCorrections, anchored: check.anchored ?? [] };
+    return { spec, replies, supportTestRequired, dropped: check.dropped, rejectedCorrections: check.rejectedCorrections, anchored: check.anchored ?? [], calls, retries };
 }
 
 /** The thinking a VisionModelUse records for a model when no call was made (a failure before any attempt). */

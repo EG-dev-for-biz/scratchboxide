@@ -89,6 +89,8 @@ export interface VisionCallOptions<Stage extends string> {
     stream?: boolean;
     /** Called once when the first streamed chunk arrives, with the time since the call started. */
     onFirstToken?: (ms: number) => void;
+    /** Called on every streamed chunk (thought chunks too): a caller watching for a stalled stream re-arms its timer here. */
+    onChunk?: () => void;
 }
 
 export interface VisionCallResult {
@@ -117,12 +119,13 @@ function raceAbort<T>(work: Promise<T>, signals: Array<AbortSignal | undefined>)
 const defaultSleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
 /** Joins streamed chunks into one response: text parts concatenated, the last chunk's metadata kept. */
-async function joinStream(stream: AsyncIterable<GenerateContentResponse>, onFirst: () => void): Promise<GenerateContentResponse> {
+async function joinStream(stream: AsyncIterable<GenerateContentResponse>, onFirst: () => void, onChunk?: () => void): Promise<GenerateContentResponse> {
     let text = '';
     let last: GenerateContentResponse | undefined;
     let first = true;
     for await (const chunk of stream) {
         if (first) { first = false; onFirst(); }
+        onChunk?.();
         for (const p of chunk.candidates?.[0]?.content?.parts ?? []) {
             if (typeof p.text === 'string' && !(p as { thought?: boolean }).thought) text += p.text;
         }
@@ -206,7 +209,7 @@ export class VisionModelChain<Stage extends string = string> {
                     ? (async () => joinStream(await stream.call(this.options.client.models, full), () => {
                         ttftMs = this.now() - started;
                         opts.onFirstToken?.(ttftMs);
-                    }))()
+                    }, opts.onChunk))()
                     : this.options.client.models.generateContent(full);
                 const response = await raceAbort(work, [callSignal, signal]);
                 const ms = this.now() - started;
@@ -259,7 +262,8 @@ export class VisionModelChain<Stage extends string = string> {
             } catch (err) {
                 const details = (err as { details?: VisionErrorDetails }).details;
                 if (details?.modelNotFound !== true) throw err;
-                this.skipped.push({ model, reason: (err as Error).message });
+                // calls made in parallel before any model answered each walk the candidates: a model is passed over once
+                if (!this.skipped.some(s => s.model === model)) this.skipped.push({ model, reason: (err as Error).message });
             }
         }
         throw this.makeError(opts.stage,
