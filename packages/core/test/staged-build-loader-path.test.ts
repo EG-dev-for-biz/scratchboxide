@@ -22,6 +22,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { buildStagedFixture, fixtureLayer, fixtureState, objectIdOf, FIXTURE_RUN_ID, type StagedFixtureGlbs } from './helpers/staged-glb-fixture';
 import { openStagedPage, serveFixture, stagedChrome, type StagedPage } from './helpers/staged-build-chrome';
 import { stagedSceneData } from './helpers/staged-build-scene';
+import { PACED_REVEAL_DWELL_MS } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/revealScheduler';
 import type { StageEvent } from '../src/common/spatial/staged-location-contracts';
 
 let fixture: StagedFixtureGlbs;
@@ -70,8 +71,8 @@ describe.skipIf(!stagedChrome.ok)('staged reveal through the real loader', () =>
         await page.step(1, STEP);
         expect(await coverage(page), 'the reveal starts at progress 0').toBe(0);
 
-        // Reveal: 800 ms for tiles. Progress counts from the frame the layer became ready.
-        const at = async (p: number) => { await page.step(Math.round((800 * p) / STEP), STEP); return coverage(page); };
+        // Reveal: 800 ms for tiles, held to the pacing dwell as the first reveal. Progress counts from the frame the layer became ready.
+        const at = async (p: number) => { await page.step(Math.round((Math.max(800, PACED_REVEAL_DWELL_MS) * p) / STEP), STEP); return coverage(page); };
         const c0 = await coverage(page);
         const c25 = await at(0.25);
         await page.screenshot('loader_path_tiles_025');

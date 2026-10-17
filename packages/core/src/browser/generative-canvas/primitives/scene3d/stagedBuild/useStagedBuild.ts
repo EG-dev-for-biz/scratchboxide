@@ -476,7 +476,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         }
         const wasAnimating = !!frameRef.current?.animating;
         const { schedule, frame } = stepRevealSchedule(scheduleRef.current, {
-            state: scheduleState, loads, nowMs: t0, reducedMotion: L.reducedMotion, settled: L.settled && !L.replaying,
+            state: scheduleState, loads, nowMs: t0, pace: true, reducedMotion: L.reducedMotion, settled: L.settled && !L.replaying,
             skipReason: stats.skipReason, replayEpoch: L.replayEpoch,
             skipLayer: layer => (layer.counts.vertices > SKIP_REVEAL_ABOVE_VERTICES ? `over ${SKIP_REVEAL_ABOVE_VERTICES / 1e6} M vertices` : undefined)
         });
