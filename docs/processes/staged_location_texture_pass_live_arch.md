@@ -270,3 +270,77 @@ The first live run, with the textures cached cold the same way, accepted 10 of 1
 
 - A `staged_location_texture_report` tool. The numbers now in the layer record are what it would return.
 - An app hook to set the active 3D view's camera by target, heading, pitch and distance. I set it through the React refs of `Scene3DPrimitive` from the console.
+
+## Round 4 (branch `geo-registration`, 2026-10-17)
+
+Worktree `.claude/worktrees/geo-registration`, from `origin/main` `e6ea6f5b`. Ports: web 3062, API 3063, tools 3064 (server started from the worktree root with `npm run dev`). Three cold live runs of `Washington Square Arch` (runs `1147e5bb`, `5026cb65`, `30529604`; code fixes between them, see below). Screenshots of the last run: `test-results/screenshots/texture_live_v4/` (`clay_*`, `tex_*`, `prov_*`, same 9 view names as v3; gitignored). The poses were set with `window.__SB_SET_CAMERA_VIEW__` from the facade heading (33° front, 213° back) around the l3b bounding box, so they are close to v3's but not identical.
+
+### What changed
+
+1. **Geometric pano registration** (`pano-edge-registration.ts`). Every pano with a wide image in hand (survey and ring views, at least 50° wide) is posed against the full tile mesh (`extraction.geometryGlb`: the real opening, statues, trees, the buildings behind) by `StreetViewPoseRegistrar`: chamfer distance (truncated, orientation-binned distance transforms) from the mesh's sky silhouette, occluding contours and long creases (rendered with `HeadlessMeshSilhouetteRenderer`) to the photo's sky boundary and structural line segments. The photo is read at structural scale (reduced to 900 px, blur 2 px, segments of at least 30 px and gradient 6), so the joints between courses barely register. The search starts at the box pose (local 1 m / 1° grid, then bounded Nelder-Mead). Per pano the edge pose is kept only when a held-out measure prefers it: the inter-view gradient NCC through the scan (blur 3 px) with the other panos. The box-pair RMS is reported, never used to choose (the box poses were fitted to it). The chosen poses feed the located elements (pass 2), the close-ups' poses in the vision stage, the texture projection, and the pose sigma (edge residual, floor 0.25 m). A pose correction can now carry its reference heading, so all frames of a pano share one rigid rotation.
+   - Live fix after run 1: the narrow close-ups (30-45° crops of carved faces) held the fit at the truncation and drowned the held-out measure, so only views of at least 50° register and judge a pano, and an edge pose must end below 5 px and below where it started.
+2. **Occlusion from the true geometry** (`texture-projection.ts`, pass `texture-pass/5`). The full tile mesh rides along as `contextDepthFor`: a texel is hidden by the nearer of the scan and the remeshed occluder, and the photo must show the scan's own surface at the texel, not what lies past an opening. Samples the remeshed occluder alone would have kept are counted as caught leaks (hidden, seen past, at an edge).
+3. **Reprojection accept gate** (`detail-reprojection.ts`). Each built photo-read element is rendered through the registered camera of every Street View image it cites (hidden behind the fitted structure where it stands behind it); the box of what shows is compared with the cited box (IoU, Dice). Below IoU 0.15 in every cited image, or not showing at all, the element is rejected with that reason and the detail is rebuilt without it. Elements read only from tile orthos are not gated. Scores: run note `detail_reprojection.json`.
+4. **Robustness.** The figures are read one call per figure, in parallel, each asked again (up to 3 attempts) when the reply is cut off, not JSON, or a spec the builder refuses (the last added after run 2, where a relief part attached to a parent sent a figure to the smoothed scan). Each detail batch's revision has its own 75 s budget beyond the pass budget (the vision stage limit includes it).
+5. **Alignment within the residual.** A view of an edge-posed pano is searched by the per-chart alignment within one pose sigma (its edge residual), not two, so the search cannot reach the next course. Live search half-widths: 15-21 px for the edge-posed views, 160 px (the cap) for the box-posed ones.
+
+### Synthetic checks (all fail without the change)
+
+- Repeated coursing facade (`staged-location-edge-registration.test.ts`): two panos off by one course and half a block. The texture cannot tell the stated pose from the true one (NCC within 0.15). The edge registration recovers the eye to < 0.2 m and the angles to < 0.3°, and the held-out NCC prefers it.
+- Opening plus statue (`texture-projection-context-occlusion.test.ts`): against the fitted face alone, 300 texels in the opening and the statue land on the wall (leak share 27%); with the full scan, 0 leaked texels.
+- Gate (`photo-ornament-reprojection-gate.test.ts`), figure retries (`photo-ornament-figures-reading.test.ts`), revision budget (`photo-ornament-batches.test.ts`), alignment window (`texture-alignment-edge-window.test.ts`).
+
+### Registration, before and after
+
+Replay on the v3 inputs (the 13 ring views of v3 run `f573fe2a`, fetched again; scratch harness): the edge pose won on all 12 panos. The edge residual went from the 12 px truncation at the box poses to 1.5-3.3 px (7 px on one pano, which the held-out measure then rejected in the stricter live version). Inter-view gradient NCC went from 0.001 (box poses) to 0.075. Overlays of the mesh edges on the photos showed the box poses drawing the arch's top about 1.5-2 m low; the edge poses sit on the silhouette.
+
+Live:
+
+| Run | Box solve RMS (fitted, m) | Panos posed by edges | Inter-view gradient NCC (box → chosen) | Box-pair RMS at chosen poses (m) | Time |
+|---|---|---|---|---|---|
+| 1 (close-ups included) | 1.87 → 1.38 | 5 of 17 | −0.012 → −0.003 | 1.48 | 67 s |
+| 2 | 1.82 → 1.04 | 8 of 17 | 0.011 → 0.030 | 1.54 | 41 s |
+| 3 (final) | 1.87 → 1.33 | 6 of 17 | 0.011 → 0.034 | 1.77 | 38 s |
+
+- The box-pair RMS (the round 3 "1.32-1.38 m") does not fall: it is the box solve's own objective, so the box poses are best on it by construction. Held out for the edge poses, the pairs that name an edge-posed pano usually got closer in run 2 (for example 2.26 → 1.53 m, 2.28 → 1.51 m, 2.19 → 1.40 m), and rose in others. Before any solve, the pairs disagree by 1.82-1.87 m.
+- The edge poses move the eye 1-4 m and the heading up to 2.5° from the box pose. The sky edge pins rotation better than translation, so a large move may trade translation against heading. Tightening the bounds to 2 m and the prior to 1 m lowered the held-out NCC in the replay (0.075 → 0.030), so the looser search was kept.
+- Most panos stay on the box pose by the held-out measure, so the views mix two pose families.
+
+### Texture, detail, figures (final run)
+
+| Layer | Street View share | Source seam p95 (v3) | Output step p95 / interior | Alignment NCC | Leak share caught by the scan (hidden / seen past / edge) | Enhancement |
+|---|---|---|---|---|---|---|
+| l2 | 33.6% | 25.8 (32.4) | 13.5 / 14.7 | 0.072 → −0.220 | 1.7% (6425 / 37 / 4228) | 0 of 1 |
+| l3b | 30.2% | 31.4 (26.2) | 14.8 / 13.4 | −0.049 → 0.101 | 2.3% (5968 / 1 / 3942) | 11 of 112 |
+| l3cf | 69.2% | 22.3 (20.8) | 14.3 / 17.1 | −0.026 → 0.167 | 0.3% (709 / 0 / 1221) | 0 of 38 |
+| l4 | 46.7% | 20.8 (23.1) | 11.3 / 11.6 | −0.047 → 0.204 | 2.1% (3928 / 0 / 2377) | 0 of 29 |
+| l4f | 26.5% | 26.1 (11.1) | 4.5 / 24.8 | – | 1.1% (19 / 0 / 62) | 0 of 2 |
+
+- Pose feedback still rejected on l3b (RMS 1.45 → 1.41 m; NCC from the poses alone 0.181 → 0.147 in run 1) and l3cf (the alignment's own NCC under 0.35).
+- Reprojection gate: run 1 rejected 10 of 22 gated elements, run 2 7 of 23, run 3 13 of 31 (12 more cited tile orthos only). The threshold 0.15 sits in the gap of the live distributions: kept elements have IoU 0.16-0.80; rejected ones are built far from or at another size than what was cited. Examples (run 2): a dentil course cited across the whole frame `[485,0,610,980]` but built as a sliver `[344,403,363,441]` (IoU 0); a high-relief eagle cited at `[636,422,798,754]` built at `[559,272,591,469]` (0.002); the left and right attic festoon panels built over a box ten times the cited one (0.05, 0.01). Real features built in the wrong place are rejected too (the keystone eagle in run 3).
+- Figures: committed in runs 1 and 3 (per-figure calls; no truncated JSON). Run 2 degraded on a refused spec, now asked again.
+- No new server errors in any run. The browser showed 404s for v3 model URLs left in the persisted chat sessions (files not in this worktree).
+
+### What I saw (`texture_live_v4` against v3)
+
+- **Better:**
+  - Front (`tex_front`): the trophy-panel medallions and the spandrel Victories read cleanly and in place; the pale statue ghost on the front left pier is gone (only faint relief behind the figure in `tex_pier_front_left`).
+  - The invented back attic roundels and the attic triangle of v3 are not in the build.
+  - Inner right pier (`tex_opening`): the tree seen through the arch is no longer painted on it.
+- **Still wrong:**
+  - Back spandrels (`tex_frieze_back`): worse than v3. The region is a patchwork of offset blocks, some carrying horizontal mouldings that are not there. The back panos are mostly edge-posed while their neighbours stay box-posed, so adjacent regions come from two pose families.
+  - Inner right pier: a park fence and a cornice from the background are still painted near its foot; the coffers of the vault appear on its upper part.
+  - Front left pier: two rings, the built l4 medallion and the texture's ring, sit offset from each other.
+  - The attic inscription is not readable (soft tile texture and stripes).
+
+### Open issues (after round 4)
+
+- Mixed pose families: per-pano choice by a weak held-out measure leaves neighbouring views on different poses, and the seams on the back show it. A joint choice (all panos of a face together), or a joint refinement of all panos by photo consistency through the scan with the edge term as the anchor (`StreetViewCrossViewRefiner`), would be the next step.
+- Translation is weakly determined by the silhouette; the edge poses move 1-4 m. The held-out NCC prefers them, but it is low in absolute terms (0.03-0.08).
+- Leaks through the opening are reduced, not removed: the remaining ones are on texels the tile mesh itself places where the photo shows the background (the scan's opening is eroded).
+- Pose feedback is still rejected on every layer.
+
+### Candidate tool/service ideas
+
+- A `staged_location_set_view` tool (target, heading, elevation, distance) and a capture endpoint that writes the active view to a file: I used `__SB_SET_CAMERA_VIEW__`, `__scratchbox_capture_active_3d_scene` and a localhost receiver.
+- A registration overlay endpoint: the mesh edges at the box and the edge pose on each grounding image (what the scratch harness drew), so a reviewer can see each pano's registration.
