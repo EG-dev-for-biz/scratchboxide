@@ -89,10 +89,11 @@ import {
     discoverPanos, facadeGeometry, fetchViews, missingCredentials, EVIDENCE_STAGE_BUDGET_MS, type EvidenceImage, type PanoCandidate, type StreetViewEvidenceDeps
 } from './streetview-evidence';
 import { selectViewsForFit } from './evidence-aim';
-import { describeSurvey, runFaceSurvey, surveyCandidates, surveyFaceTargets, SURVEY_IMAGE_TIMEOUT_MS, SURVEY_VISION_TIMEOUT_MS, type SurveyResult } from './face-survey';
-import { describeLocated, planDetailFromSurvey, type DetailPlan } from './survey-detail';
+import { describeSurvey, runFaceSurvey, surveyCandidates, surveyFaceTargets, surveyImageBytes, SURVEY_IMAGE_TIMEOUT_MS, SURVEY_VISION_TIMEOUT_MS, type SurveyResult } from './face-survey';
+import { describeLocated, locateSurveyElements, planDetailFromSurvey, type DetailPlan } from './survey-detail';
+import { EDGE_REGISTRATION_BUDGET_MS, edgeFramesFromImages, registerPanosByEdges, describeEdgeRegistration, type EdgeRegistrationResult } from './pano-edge-registration';
 import { registerPanos, type Registration } from './pano-registration';
-import { MATCH_TIMEOUT_MS, runViewMatch, type MatchResult } from './view-match';
+import { MATCH_TIMEOUT_MS, matchRingImages, runViewMatch, type MatchResult } from './view-match';
 import { fitFaces } from './survey-casting';
 import type { AnchorNote } from './ornament-anchor';
 import { EVIDENCE_DISCOVERY_ALLOWANCE_MS } from './streetview-evidence';
@@ -141,7 +142,7 @@ export const STAGES = {
     resolve: { order: -1, title: 'Place', budgetMs: 10_000 },
     tiles: { order: 1, title: 'Google 3D Tiles', budgetMs: 360_000 },
     survey: { order: -1, title: 'Surveying the four faces', budgetMs: EVIDENCE_DISCOVERY_ALLOWANCE_MS + SURVEY_IMAGE_TIMEOUT_MS + SURVEY_VISION_TIMEOUT_MS + 15_000 },
-    evidence: { order: -1, title: 'Street View close-ups', budgetMs: EVIDENCE_STAGE_BUDGET_MS + 30_000 + MATCH_TIMEOUT_MS + 60_000 },
+    evidence: { order: -1, title: 'Street View close-ups', budgetMs: EVIDENCE_STAGE_BUDGET_MS + 30_000 + MATCH_TIMEOUT_MS + 60_000 + EDGE_REGISTRATION_BUDGET_MS + 15_000 },
     'trees-measure': { order: -1, title: 'Measuring the trees', budgetMs: 300_000 },
     remesh: { order: 2, title: 'Remeshed scan', budgetMs: 300_000 },
     fit: { order: 3, title: 'Scan-fitted rebuild', budgetMs: 30_000 },
@@ -1064,7 +1065,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             io.progress(`pose registration failed (${errorMessage(err)}); the nominal pano poses stand, good to ±2 m`);
                         }
                     }
-                    const plan = surveyOut?.result ? planDetailFromSurvey(surveyOut.result, fit, undefined, registration) : undefined;
+                    let plan = surveyOut?.result ? planDetailFromSurvey(surveyOut.result, fit, undefined, registration) : undefined;
                     const views = plan?.views.length ? plan.views : selectViewsForFit(found.panos, fit, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top);
                     if (plan) io.progress(describeLocated(surveyOut!.result!.faces, plan));
                     const discovery = { metadataCalls: found.metadataCalls, cachedCalls: found.cachedCalls };
@@ -1086,11 +1087,36 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         provenanceAfter: PROVENANCE.photoInferred, reason: `the image could not be fetched: ${f.error}`, cause: f.error, transient: f.transient, runId, now: now(), suffix: f.view.panoId
                     })));
                     if (got.images.length) run.state.attribution = [...new Set([...run.state.attribution, 'Street View ©Google'])];
+                    // geometric registration: every pano with an image in hand (survey, ring and close-ups) is posed against the full tile
+                    // mesh by its silhouette and edges; the pose that agrees better with the other panos is kept per pano (pano-edge-registration.ts)
+                    let edgeReg: EdgeRegistrationResult | undefined;
+                    try {
+                        const surveyFrames = (surveyOut?.result?.read ?? []).flatMap(r => {
+                            const bytes = surveyImageBytes(surveyOut!.result!, r.imageIndex);
+                            return bytes ? [{ id: `survey:${r.imageIndex}`, bytes, widthPx: r.widthPx, heightPx: r.heightPx, view: r.view }] : [];
+                        });
+                        const frames = edgeFramesFromImages([...surveyFrames, ...(match ? matchRingImages(match) : []), ...got.images]);
+                        if (frames.length >= 2) {
+                            io.progress(`registering ${new Set(frames.map(f => f.view.panoId)).size} panos against the scan's silhouette and edges (${frames.length} images)`);
+                            const mesh = loadMesh([extraction.geometryGlb]);
+                            edgeReg = registerPanosByEdges({ frames, mesh, ...(registration ? { prior: registration } : {}), correspondences: match?.correspondences ?? [], faces: fitFaces(fit), budgetMs: EDGE_REGISTRATION_BUDGET_MS });
+                            io.progress(describeEdgeRegistration(edgeReg));
+                            cache.writeRunNote(runId, 'edge_registration', { panos: edgeReg.panos, ncc: edgeReg.ncc, boxRmsM: edgeReg.boxRmsM, ms: edgeReg.ms, skipped: edgeReg.skipped });
+                            if (edgeReg.panos.some(p => p.chosen === 'edges')) {
+                                registration = edgeReg.registration;
+                                // pass 2 places the surveyed elements through the chosen poses (the close-ups stay as aimed)
+                                if (plan && surveyOut?.result) plan = { ...plan, ...locateSurveyElements(surveyOut.result, fit, registration) };
+                            }
+                        }
+                    } catch (err) {
+                        if (isAbort(err) || io.signal.aborted) throw err;
+                        io.progress(`geometric registration failed (${errorMessage(err)}); the box registration stands`);
+                    }
                     const status = got.images.length ? (degradations.length ? 'degraded' : 'committed') : 'degraded';
                     const cost: EvidenceCost = { ...discovery, imagesRequested: views.length, imagesFetched: got.images.length, fetchMs: got.elapsedMs };
                     run.summary('evidence').cost = { images: got.images.length + (match?.images ?? 0), visionCalls: match?.visionCalls ?? 0, seconds: round(got.elapsedMs / 1000 + (match?.seconds ?? 0), 1) };
                     return {
-                        status, value: { images: got.images, panos: found.panos, cost, ...(plan ? { plan } : {}), ...(registration ? { registration } : {}), ...(match ? { match } : {}) }, source: `${got.images.length} of ${views.length} Street View images (© Google), kept in memory only${match ? `; ${match.images} ring views, ${match.correspondences.length} matched element pairs${registration ? `, ${describeRegistration(registration, match.correspondences.length)}` : ', no pose registered'}${match.failures.length ? `; ${match.failures.length} matching call${match.failures.length === 1 ? '' : 's'} failed (${match.failures[0].slice(0, 80)})` : ''}` : ''}`,
+                        status, value: { images: got.images, panos: found.panos, cost, ...(plan ? { plan } : {}), ...(registration ? { registration } : {}), ...(match ? { match } : {}) }, source: `${got.images.length} of ${views.length} Street View images (© Google), kept in memory only${match ? `; ${match.images} ring views, ${match.correspondences.length} matched element pairs${registration ? `, ${describeRegistration(registration, match.correspondences.length)}` : ', no pose registered'}${edgeReg ? `; ${describeEdgeRegistration(edgeReg)}` : ''}${match.failures.length ? `; ${match.failures.length} matching call${match.failures.length === 1 ? '' : 's'} failed (${match.failures[0].slice(0, 80)})` : ''}` : ''}`,
                         ...(got.images.length ? {} : { reason: 'every Street View image failed to fetch' }),
                         degradations
                     };

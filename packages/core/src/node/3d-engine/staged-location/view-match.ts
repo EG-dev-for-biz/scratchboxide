@@ -149,6 +149,10 @@ export interface MatchResult {
 const responseText = (r: { candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }> }): string =>
     (r.candidates?.[0]?.content?.parts ?? []).filter(p => !p.thought).map(p => p.text ?? '').join('');
 
+/** The ring images of a match, held in memory beside it (never in the result's own fields, so they are never serialised). */
+const RING_IMAGES = new WeakMap<MatchResult, EvidenceImage[]>();
+export function matchRingImages(result: MatchResult): EvidenceImage[] { return RING_IMAGES.get(result) ?? []; }
+
 /** Fetches the ring views and asks, per face, where the surveyed elements are in them. A face whose call fails costs only its own correspondences. */
 export async function runViewMatch(input: MatchInput): Promise<MatchResult> {
     const started = Date.now();
@@ -159,6 +163,7 @@ export async function runViewMatch(input: MatchInput): Promise<MatchResult> {
     const got = await fetchViews(ring, input.deps, input.signal, 30_000);
     for (const f of got.failures) result.failures.push(`${f.view.panoId}: ${f.error}`);
     result.images = got.images.length;
+    RING_IMAGES.set(result, got.images);
     const byFace = new Map<string, EvidenceImage[]>();
     for (const im of got.images) {
         const fid = (im.view as RingView).faceId;

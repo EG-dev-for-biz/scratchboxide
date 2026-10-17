@@ -136,7 +136,7 @@ export interface ProjectedView {
 
 /** The nominal camera of a view (the requested fov taken as horizontal). */
 export function viewCamera(v: ProjectedView, width = v.widthPx, height = v.heightPx): FrameCamera {
-    return frameCamera(v.eye as [number, number, number], v.headingDeg, v.pitchDeg, v.fovDeg, width, height, v.correction ?? ZERO_CORRECTION, v.headingDeg);
+    return frameCamera(v.eye as [number, number, number], v.headingDeg, v.pitchDeg, v.fovDeg, width, height, v.correction ?? ZERO_CORRECTION, v.correction?.referenceHeadingDeg ?? v.headingDeg);
 }
 
 /** Every slot as seen in one view: its polygon (0-1000, [y, x, …]) and the share of its samples not occluded. */

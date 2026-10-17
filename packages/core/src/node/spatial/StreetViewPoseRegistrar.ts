@@ -114,6 +114,11 @@ export interface PoseCorrection {
     dpitchDeg: number;
     /** Tilt about the pano reference heading's horizontal forward axis (positive lowers the camera's right side). */
     drollDeg: number;
+    /**
+     * The heading the pitch and roll are about, when the correction is one rigid rotation shared by frames of different
+     * headings (a pano registered as a whole). Absent: each frame's own heading (the box registration's convention).
+     */
+    referenceHeadingDeg?: number;
 }
 
 export const ZERO_CORRECTION: PoseCorrection = Object.freeze({ dx: 0, dy: 0, dz: 0, dyawDeg: 0, dpitchDeg: 0, drollDeg: 0 }) as PoseCorrection;

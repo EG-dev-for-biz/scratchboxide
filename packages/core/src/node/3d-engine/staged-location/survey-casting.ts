@@ -43,7 +43,7 @@ export interface CastView {
 }
 
 export function castCamera(v: CastView): FrameCamera {
-    return frameCamera(v.eye, v.headingDeg, v.pitchDeg, v.fovDeg, v.widthPx, v.heightPx, v.correction ?? ZERO_CORRECTION, v.headingDeg);
+    return frameCamera(v.eye, v.headingDeg, v.pitchDeg, v.fovDeg, v.widthPx, v.heightPx, v.correction ?? ZERO_CORRECTION, v.correction?.referenceHeadingDeg ?? v.headingDeg);
 }
 
 /** The ray through a pixel (x right, y down), unit direction in the tile frame. */

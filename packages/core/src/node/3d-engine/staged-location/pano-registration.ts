@@ -130,7 +130,13 @@ export interface PairReport {
 
 export interface Registration {
     corrections: Corrections;
-    perPano: Array<{ panoId: string; dxM: number; dzM: number; dyawDeg: number; dpitchDeg: number; pairs: number; beforeRmsM: number; afterRmsM: number }>;
+    perPano: Array<{
+        panoId: string; dxM: number; dzM: number; dyawDeg: number; dpitchDeg: number; pairs: number; beforeRmsM: number; afterRmsM: number;
+        /** 'edges' when the pose is the geometric (edge) registration's (pano-edge-registration.ts); absent for the box solve. */
+        method?: 'edges';
+        /** The edge registration's residual at the frames' distance, metres (set with method 'edges'). */
+        edgeResidualM?: number;
+    }>;
     /** Panos whose solved shift was implausible (a bad match, not a pose): their pairs were left out and the rest solved again; their poses stay nominal. */
     setAside: Array<{ panoId: string; reason: string; dxM: number; dzM: number; dyawDeg: number; dpitchDeg: number }>;
     pairs: PairReport[];
@@ -140,6 +146,9 @@ export interface Registration {
     used: number;
     rejected: number;
 }
+
+/** A pair's disagreement on the faces (metres) under a set of pano corrections. */
+export function pairResidualM(c: Correspondence, corr: Map<string, PoseCorrection>, faces: CastFace[]): number { return rmsPair(c, corr, faces); }
 
 function rmsPair(c: Correspondence, corr: Corrections, faces: CastFace[]): number {
     const d = disagreement(c, corr, faces);
