@@ -13,6 +13,9 @@ import { calculateNOAASolarPosition, getSunVectorFromAngles } from './solar-posi
 import { classifyDiurnalPhase } from './diurnal-lighting';
 import { MissingInputError } from '../../../../common/errors/pipeline-errors';
 import { assertUsableCoordinates } from '../../../../common/coordinate/parse-coordinates';
+import { PHOTOGRAMMETRIC_DELIGHT as PD } from '../../../../common/spatial/photogrammetric-delight';
+
+const glslFloat = (x: number): string => (Number.isInteger(x) ? x.toFixed(1) : String(x));
 
 export type StoneType = 'travertine' | 'limestone' | 'sandstone' | 'granite' | 'terracotta' | 'marble' | 'concrete' | 'neutral' | 'asphalt' | 'brick' | 'glass_metal';
 
@@ -176,15 +179,15 @@ export const LOCATION_DELIGHT_FRAGMENT_CHUNK = `
         baseRgb = baseRgb / meshShading;
     #else
         // Luminance of photogrammetric diffuse sample
-        float dLuma = dot(baseRgb, vec3(0.299, 0.587, 0.114));
+        float dLuma = dot(baseRgb, vec3(${PD.luma.map(glslFloat).join(', ')}));
 
         // 1. Lift baked shadow crevices toward stone albedo baseline
-        float shadowFactor = clamp(1.0 - (dLuma * 2.2), 0.0, 1.0);
-        vec3 liftedRgb = baseRgb + (vec3(dLuma * 1.6 + 0.14) - baseRgb) * (shadowFactor * uShadowLift);
+        float shadowFactor = clamp(1.0 - (dLuma * ${glslFloat(PD.shadowSlope)}), 0.0, 1.0);
+        vec3 liftedRgb = baseRgb + (vec3(dLuma * ${glslFloat(PD.liftGain)} + ${glslFloat(PD.liftOffset)}) - baseRgb) * (shadowFactor * uShadowLift);
 
         // 2. Compress burnt midday solar highlights
-        float highlightFactor = smoothstep(0.60, 0.98, dLuma);
-        baseRgb = mix(liftedRgb, liftedRgb * 0.76, highlightFactor * uHighlightCompress);
+        float highlightFactor = smoothstep(${glslFloat(PD.highlightLo)}, ${glslFloat(PD.highlightHi)}, dLuma);
+        baseRgb = mix(liftedRgb, liftedRgb * ${glslFloat(PD.highlightScale)}, highlightFactor * uHighlightCompress);
     #endif
 
     // 3. Apply calibrated stone albedo reflectance tint
@@ -417,8 +420,8 @@ export class LocationObjectLightingService {
             uRealDelightEnabled: { value: config?.uRealDelightEnabled !== false ? 1.0 : 0.0 },
             uMeshShading: { value: config?.uMeshShading ?? 1.0 },
             // Legacy heuristic GLSL fallbacks (deprecated in favor of C++20 NativeTileLightingService)
-            uShadowLift: { value: config?.uShadowLift ?? 0.60 },
-            uHighlightCompress: { value: config?.uHighlightCompress ?? 0.45 },
+            uShadowLift: { value: config?.uShadowLift ?? PD.defaults.shadowLift },
+            uHighlightCompress: { value: config?.uHighlightCompress ?? PD.defaults.highlightCompress },
             uStoneAlbedoTint: {
                 value: new THREE.Color(
                     config?.uStoneAlbedoTint ? config.uStoneAlbedoTint[0] : 0.86,
