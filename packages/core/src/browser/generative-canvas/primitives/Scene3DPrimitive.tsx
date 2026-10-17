@@ -34,6 +34,11 @@ import {
 import type {
     SculptBrushOptions
 } from '../services/mesh-sculpting-engine';
+import { useViewportHistory } from './scene3d/useViewportHistory';
+import { ViewportHistoryButtons } from './scene3d/ViewportHistoryButtons';
+import type { HistoryEditMeta } from './scene3d/useViewportHistory';
+import { ObjectEditCapture, createGeometrySwapEdit } from '../services/viewport-history-deltas';
+import { attachHistoryShortcuts } from '../services/viewport-history';
 import {
     TransformGizmoEngine,
     computeAxisTranslation,
@@ -1044,6 +1049,40 @@ const HUD_SEGMENT_ACTIVE_STYLE: React.CSSProperties = {
     color: '#dbeafe'
 };
 
+/** Scene data after an external (agent / pipeline) `data` update, or `prev` itself when nothing relevant changed. */
+function mergeExternalSceneData(prev: Scene3DData, data: Scene3DData): Scene3DData {
+    const hasNewPython = data.pythonGenerator && data.pythonGenerator.sourceCode !== prev.pythonGenerator?.sourceCode;
+    const hasNewCpp = data.cppGenerator && data.cppGenerator.sourceCode !== prev.cppGenerator?.sourceCode;
+    const hasNewObjects = data.objects && data.objects !== prev.objects;
+    const hasNewTitle = data.title && data.title !== prev.title;
+    const hasNewGlb = (data.pythonGenerator?.glbBase64 && data.pythonGenerator.glbBase64 !== prev.pythonGenerator?.glbBase64) ||
+                      (data.cppGenerator?.glbBase64 && data.cppGenerator.glbBase64 !== prev.cppGenerator?.glbBase64);
+    const hasNewStaged = !!readStagedBuild(data) && readStagedBuild(data) !== readStagedBuild(prev);
+    if (!hasNewPython && !hasNewCpp && !hasNewObjects && !hasNewTitle && !hasNewGlb && !hasNewStaged) {
+        return prev;
+    }
+    return {
+        ...prev,
+        ...data,
+        pythonGenerator: data.pythonGenerator
+            ? {
+                ...prev.pythonGenerator,
+                ...data.pythonGenerator,
+                glbBase64: data.pythonGenerator.glbBase64 || prev.pythonGenerator?.glbBase64
+              }
+            : prev.pythonGenerator,
+        cppGenerator: data.cppGenerator
+            ? {
+                ...prev.cppGenerator,
+                ...data.cppGenerator,
+                glbBase64: data.cppGenerator.glbBase64 || prev.cppGenerator?.glbBase64
+              }
+            : prev.cppGenerator,
+        objects: data.objects ?? prev.objects,
+        customMeshes: data.customMeshes ?? prev.customMeshes
+    };
+}
+
 export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     data,
     onUpdate,
@@ -1109,8 +1148,6 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const [transformMode, setTransformMode] = React.useState<TransformGizmoMode>(data?.transformMode || 'translate');
     const [transformSpace, setTransformSpace] = React.useState<TransformGizmoSpace>(data?.transformSpace || 'world');
     const [selectedShape, setSelectedShape] = React.useState<'sphere' | 'plane' | 'box' | 'cylinder' | 'torus'>('sphere');
-    const [canUndo, setCanUndo] = React.useState<boolean>(false);
-    const [canRedo, setCanRedo] = React.useState<boolean>(false);
 
     const [selectedObjectId, setSelectedObjectId] = React.useState<string | null>(data?.selectedMeshId || null);
     const [selectedObjectName, setSelectedObjectName] = React.useState<string>('');
@@ -1134,8 +1171,6 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     // is never fetched and parsed twice, while a changed URL for the same id still starts a new load.
     const pendingExternalLoadsRef = React.useRef<Map<string, string>>(new Map());
     const loadProgressStampRef = React.useRef<Record<string, number>>({});
-    // Selecting outside sculpt mode skips the (multi-MB) history snapshot; it is taken when sculpt mode is entered.
-    const historyBaselinePendingRef = React.useRef<THREE.Mesh | null>(null);
 
     // Sculpting & Gizmo High-Performance Refs (always-fresh mirrors for the imperative viewport code)
     const toolModeRef = useLatest(toolMode);
@@ -1143,7 +1178,6 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const transformModeRef = useLatest(transformMode);
     const transformSpaceRef = useLatest(transformSpace);
 
-    const historyStackRef = React.useRef<MeshHistoryStack>(new MeshHistoryStack(30));
     const sculptMeshRef = React.useRef<THREE.Mesh | null>(null);
     const brushCursorMeshRef = React.useRef<THREE.Mesh | null>(null);
     const transformGizmoGroupRef = React.useRef<THREE.Group | null>(null);
@@ -1230,7 +1264,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     // component's render, which triggers "Cannot update a component while rendering
     // a different component". Compute `next` from the latest value, commit, then notify.
     const sceneDataRef = useLatest(sceneData);
-    const mutateSceneData = React.useCallback((
+    const selectedObjectIdRef = useLatest(selectedObjectId);
+    const restoreSelectionRef = React.useRef<(id: string | null) => void>(() => undefined);
+    const applySceneMutation = React.useCallback((
         mutator: (prev: Scene3DData) => Scene3DData,
         opInfo?: { operator: string; params?: any }
     ) => {
@@ -1265,43 +1301,38 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         sceneDataRef.current = next;
         setSceneData(next);
         onUpdate?.(next);
+        return { prev, next };
     }, [onUpdate, sceneDataRef]);
+
+    // One undo/redo timeline for every viewport edit (gizmo, sculpt, inspector, agent); see scene3d/useViewportHistory.
+    const viewportHistory = useViewportHistory({
+        sceneDataRef,
+        commit: (update, opInfo) => { applySceneMutation(update, opInfo); },
+        getSelectedId: () => selectedObjectIdRef.current,
+        restoreSelection: id => restoreSelectionRef.current(id)
+    });
+    const { recordSceneEdit, recordLiveEdit, recordExternalChange, snapshot: historySnapshot } = viewportHistory;
+
+    /** Applies a scene edit and records it as one undoable step (pass `history: false` for view-only changes). */
+    const mutateSceneData = React.useCallback((
+        mutator: (prev: Scene3DData) => Scene3DData,
+        opInfo?: { operator: string; params?: any },
+        options?: { history?: HistoryEditMeta | false }
+    ) => {
+        const { prev, next } = applySceneMutation(mutator, opInfo);
+        recordSceneEdit(prev, next, opInfo, options?.history);
+    }, [applySceneMutation, recordSceneEdit]);
 
     // Sync external data prop updates into sceneData
     React.useEffect(() => {
         if (!data) return;
-        setSceneData(prev => {
-            const hasNewPython = data.pythonGenerator && data.pythonGenerator.sourceCode !== prev.pythonGenerator?.sourceCode;
-            const hasNewCpp = data.cppGenerator && data.cppGenerator.sourceCode !== prev.cppGenerator?.sourceCode;
-            const hasNewObjects = data.objects && data.objects !== prev.objects;
-            const hasNewTitle = data.title && data.title !== prev.title;
-            const hasNewGlb = (data.pythonGenerator?.glbBase64 && data.pythonGenerator.glbBase64 !== prev.pythonGenerator?.glbBase64) ||
-                              (data.cppGenerator?.glbBase64 && data.cppGenerator.glbBase64 !== prev.cppGenerator?.glbBase64);
-            const hasNewStaged = !!readStagedBuild(data) && readStagedBuild(data) !== readStagedBuild(prev);
-            if (!hasNewPython && !hasNewCpp && !hasNewObjects && !hasNewTitle && !hasNewGlb && !hasNewStaged) {
-                return prev;
-            }
-            return {
-                ...prev,
-                ...data,
-                pythonGenerator: data.pythonGenerator
-                    ? {
-                        ...prev.pythonGenerator,
-                        ...data.pythonGenerator,
-                        glbBase64: data.pythonGenerator.glbBase64 || prev.pythonGenerator?.glbBase64
-                      }
-                    : prev.pythonGenerator,
-                cppGenerator: data.cppGenerator
-                    ? {
-                        ...prev.cppGenerator,
-                        ...data.cppGenerator,
-                        glbBase64: data.cppGenerator.glbBase64 || prev.cppGenerator?.glbBase64
-                      }
-                    : prev.cppGenerator,
-                objects: data.objects ?? prev.objects,
-                customMeshes: data.customMeshes ?? prev.customMeshes
-            };
-        });
+        const prev = sceneDataRef.current;
+        const next = mergeExternalSceneData(prev, data);
+        if (next === prev) return;
+        // What the agent changed on this tool call is one undoable step (or, for regenerated content, a history reset).
+        recordExternalChange(prev, next);
+        sceneDataRef.current = next;
+        setSceneData(next);
     }, [data]);
 
     // ---------------------------------------------------------
@@ -1353,17 +1384,6 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             }
             if (meshCandidate && meshCandidate.geometry) {
                 sculptMeshRef.current = meshCandidate;
-                historyStackRef.current.clear();
-                // The baseline copies the whole position buffer (tens of MB on scan-scale meshes), so
-                // outside sculpt mode it is deferred until sculpt mode is entered.
-                if (toolModeRef.current === 'sculpt') {
-                    historyStackRef.current.pushState(meshCandidate.geometry);
-                    historyBaselinePendingRef.current = null;
-                } else {
-                    historyBaselinePendingRef.current = meshCandidate;
-                }
-                setCanUndo(false);
-                setCanRedo(false);
             }
 
             // Update gizmo transform immediately (world pose: the selection may be a part nested in a
@@ -1425,17 +1445,20 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         frameObject(targetObj);
     }, [selectObject, frameObject]);
 
-    // Entering sculpt mode with a selection made elsewhere takes the deferred history baseline.
+    // Undo / redo selects the object an edit was about to change (or just changed) again. The scene
+    // sync runs after the data commit, so a re-created object is looked up on the next tick.
     React.useEffect(() => {
-        const pending = historyBaselinePendingRef.current;
-        if (toolMode !== 'sculpt' || !pending) return;
-        historyBaselinePendingRef.current = null;
-        if (sculptMeshRef.current !== pending || !pending.geometry) return;
-        historyStackRef.current.clear();
-        historyStackRef.current.pushState(pending.geometry);
-        setCanUndo(false);
-        setCanRedo(false);
-    }, [toolMode]);
+        const find = (id: string): THREE.Object3D | null =>
+            threeSceneRef.current?.getObjectByName(id) ||
+            customMeshRegistryRef.current.get(id)?.mesh ||
+            threeSceneRef.current?.getObjectByName(`${EXTERNAL_OBJECT_ROOT_PREFIX}${id}`) || null;
+        restoreSelectionRef.current = (id: string | null) => {
+            if (id === null) { selectObjectRef.current(null); return; }
+            const now = find(id);
+            if (now) { selectObjectRef.current(now); return; }
+            setTimeout(() => selectObjectRef.current(find(id)), 0);
+        };
+    }, []);
 
     const handleToggleObjectVisibility = React.useCallback((entityId: string, e?: React.MouseEvent) => {
         e?.stopPropagation();
@@ -1754,6 +1777,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const projectCoordsRef = useLatest(projectCoords);
     const selectObjectRef = useLatest(selectObject);
     const mutateSceneDataRef = useLatest(mutateSceneData);
+    const recordLiveEditRef = useLatest(recordLiveEdit);
     const dataRef = useLatest(data);
     // sceneDataRef is declared next to mutateSceneData above.
 
@@ -1968,14 +1992,12 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             brushCursor: brushCursorMeshRef,
             selectionBox: selectionBoxRef,
             ignoredPickObjects: () => [atmosphereRef.current?.starsMesh, stack.gridHelper],
-            history: historyStackRef,
             resolveSelectableObject,
             selectObject: selectObjectRef,
             mutateSceneData: mutateSceneDataRef,
+            recordEdit: recordLiveEditRef,
             setSelectedObjectId,
-            setSelectedObjectName,
-            setCanUndo,
-            setCanRedo
+            setSelectedObjectName
         });
         const detachResize = attachViewportResize(stack, (w, h) => aerialPerspectiveRef.current?.setSize(w, h));
 
@@ -2398,12 +2420,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         dynamicScriptHooksRef.current = handle.scriptHooks;
         setScriptError(handle.scriptError);
 
-        // Rebuilt content: no sculpt target or selection carries over, and the sculpt history starts empty.
+        // Rebuilt content: no sculpt target or selection carries over. History entries whose objects
+        // were rebuilt find them detached and are dropped when reached (see ObjectLiveEdit).
         sculptMeshRef.current = null;
         selectedObjectRef.current = null;
-        historyStackRef.current.clear();
-        setCanUndo(false);
-        setCanRedo(false);
 
         // Outliner entities + initial selection
         const initialEntities = extractSceneOutlinerItems(stack.scene);
@@ -2917,16 +2937,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         // Same for the sculpt target and its undo snapshots: the brush would hover invisible geometry,
         // S would snapshot a mesh that is not in the scene, and the copies (tens of MB on scan-scale
         // meshes) would stay pinned until the next selection.
-        const pendingBaseline = historyBaselinePendingRef.current;
-        if (pendingBaseline && findExternalObjectRoot(pendingBaseline) && !isAttachedTo(pendingBaseline, scene)) {
-            historyBaselinePendingRef.current = null;
-        }
         const sculptTarget = sculptMeshRef.current;
         if (sculptTarget && findExternalObjectRoot(sculptTarget) && !isAttachedTo(sculptTarget, scene)) {
             sculptMeshRef.current = null;
-            historyStackRef.current.clear();
-            setCanUndo(false);
-            setCanRedo(false);
             if (brushCursorMeshRef.current) brushCursorMeshRef.current.visible = false;
         }
     }, [externalObjectsFingerprint]);
@@ -3093,68 +3106,42 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         };
     }, [sceneData.timeline?.tracks, sceneData.title, durationMs, currentTimeMs, isPlaying, timelineZoom]);
 
-    const handleUndo = React.useCallback(() => {
-        if (sculptMeshRef.current && historyStackRef.current) {
-            const ok = historyStackRef.current.undo(sculptMeshRef.current.geometry);
-            if (ok) {
-                setCanUndo(historyStackRef.current.canUndo());
-                setCanRedo(historyStackRef.current.canRedo());
-                mutateSceneData(prev => ({
-                    ...prev,
-                    sculptSettings: sculptSettingsRef.current
-                }), { operator: 'sb_undo', params: { target: 'sculpt-mesh' } });
-            }
-        }
-    }, [mutateSceneData]);
-
-    const handleRedo = React.useCallback(() => {
-        if (sculptMeshRef.current && historyStackRef.current) {
-            const ok = historyStackRef.current.redo(sculptMeshRef.current.geometry);
-            if (ok) {
-                setCanUndo(historyStackRef.current.canUndo());
-                setCanRedo(historyStackRef.current.canRedo());
-                mutateSceneData(prev => ({
-                    ...prev,
-                    sculptSettings: sculptSettingsRef.current
-                }), { operator: 'sb_redo', params: { target: 'sculpt-mesh' } });
-            }
-        }
-    }, [mutateSceneData]);
+    const handleUndo = viewportHistory.undo;
+    const handleRedo = viewportHistory.redo;
 
     const handleSwitchShape = React.useCallback((shape: 'sphere' | 'plane' | 'box' | 'cylinder' | 'torus') => {
         setSelectedShape(shape);
         if (threeSceneRef.current && sculptMeshRef.current) {
             const newGeo = createSculptableGeometry(shape, { radius: 3.5, width: 12, height: 12, segments: 64 });
-            sculptMeshRef.current.geometry.dispose();
-            sculptMeshRef.current.geometry = newGeo;
-            historyStackRef.current.clear();
-            historyStackRef.current.pushState(newGeo);
-            setCanUndo(false);
-            setCanRedo(false);
+            const mesh = sculptMeshRef.current;
+            const oldGeo = mesh.geometry;
+            mesh.geometry = newGeo;
             mutateSceneData(prev => ({
                 ...prev,
                 sculptSettings: { ...prev.sculptSettings, ...sculptSettingsRef.current }
-            }), { operator: 'sb_subdivide_mesh', params: { shape } });
+            }), { operator: 'sb_subdivide_mesh', params: { shape } }, {
+                history: { label: `Switch shape: ${shape}`, live: createGeometrySwapEdit(mesh, oldGeo, newGeo), scene: false, coalesce: false }
+            });
         }
     }, [mutateSceneData]);
 
     const handleResetMesh = React.useCallback(() => {
         if (sculptMeshRef.current) {
             const newGeo = createSculptableGeometry(selectedShape, { radius: 3.5, width: 12, height: 12, segments: 64 });
-            sculptMeshRef.current.geometry.dispose();
-            sculptMeshRef.current.geometry = newGeo;
-            historyStackRef.current.clear();
-            historyStackRef.current.pushState(newGeo);
-            setCanUndo(false);
-            setCanRedo(false);
+            const mesh = sculptMeshRef.current;
+            const oldGeo = mesh.geometry;
+            mesh.geometry = newGeo;
             mutateSceneData(prev => ({
                 ...prev
-            }), { operator: 'sb_reset_mesh', params: { shape: selectedShape } });
+            }), { operator: 'sb_reset_mesh', params: { shape: selectedShape } }, {
+                history: { label: 'Reset mesh', live: createGeometrySwapEdit(mesh, oldGeo, newGeo), scene: false, coalesce: false }
+            });
         }
     }, [selectedShape, mutateSceneData]);
 
     const handleResetTransform = React.useCallback(() => {
         if (selectedObjectRef.current) {
+            const capture = new ObjectEditCapture([selectedObjectRef.current], { geometry: false });
             selectedObjectRef.current.position.set(0, 0, 0);
             selectedObjectRef.current.quaternion.set(0, 0, 0, 1);
             selectedObjectRef.current.scale.set(1, 1, 1);
@@ -3162,7 +3149,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             mutateSceneData(prev => {
                 const meshes = (prev.customMeshes || []).map(m => (m.id === objId || m.name === objId) ? { ...m, position: [0, 0, 0] as [number, number, number], rotation: [0, 0, 0] as [number, number, number], scale: [1, 1, 1] as [number, number, number] } : m);
                 return { ...prev, customMeshes: meshes };
-            }, { operator: 'sb_set_transform', params: { objectId: objId, position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] } });
+            }, { operator: 'sb_set_transform', params: { objectId: objId, position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] } }, {
+                history: { label: `Reset transform: ${objId}`, live: capture.finish(), coalesce: false }
+            });
         }
     }, [mutateSceneData]);
 
@@ -3190,7 +3179,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         mutateSceneData(prev => ({
             ...prev,
             camera: { position: [px, py, pz], target: [tx, ty, tz] }
-        }), { operator: 'sb_set_camera', params: { position: [px, py, pz], target: [tx, ty, tz] } });
+        }), { operator: 'sb_set_camera', params: { position: [px, py, pz], target: [tx, ty, tz] } }, { history: false });
     }, [sceneData.camera, mutateSceneData]);
 
     const handleUpdateVectorRoadmap = React.useCallback((updated: Partial<VectorRoadmapConfig>) => {
@@ -3274,32 +3263,18 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         return () => window.removeEventListener('sb-3d-fit-to-view', onFit);
     }, [handleFitToView]);
 
+    // Cmd/Ctrl+Z, Shift+Cmd/Ctrl+Z, Ctrl/Cmd+Y reverse / replay the latest edit whichever tool made it (ignored while typing).
+    React.useEffect(() => attachHistoryShortcuts(window, { undo: handleUndo, redo: handleRedo }), [handleUndo, handleRedo]);
+
     // Global Keyboard Shortcut Listener for 3D Viewport Tools
     React.useEffect(() => {
         const handleGlobalKeyDown = (e: KeyboardEvent) => {
             const activeTag = (document.activeElement?.tagName || '').toLowerCase();
-            if (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select') {
+            if (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select' || (document.activeElement as HTMLElement | null)?.isContentEditable) {
                 return;
             }
 
             const key = e.key.toLowerCase();
-            const isCmdOrCtrl = e.metaKey || e.ctrlKey;
-
-            if (isCmdOrCtrl) {
-                if (key === 'z') {
-                    e.preventDefault();
-                    if (e.shiftKey) {
-                        handleRedo();
-                    } else {
-                        handleUndo();
-                    }
-                    return;
-                } else if (key === 'y') {
-                    e.preventDefault();
-                    handleRedo();
-                    return;
-                }
-            }
 
             if (key === 'v') {
                 setToolMode('view');
@@ -3741,39 +3716,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     </svg>
                 </button>
 
-                {/* 13. Undo (⌘Z) */}
-                <button
-                    type="button"
-                    disabled={!canUndo}
-                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-5 h-5 rounded-md transition-all ${
-                        canUndo
-                            ? 'text-zinc-300 hover:text-white hover:bg-white/10 border border-transparent'
-                            : 'text-zinc-600 cursor-not-allowed border border-transparent opacity-40'
-                    }`}
-                    onClick={handleUndo}
-                    title="Undo Stroke (⌘Z / Ctrl+Z)"
-                >
-                    <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M3 7v6h6M3 13a9 9 0 1 1 3 7.7" />
-                    </svg>
-                </button>
-
-                {/* 14. Redo (⌘⇧Z) */}
-                <button
-                    type="button"
-                    disabled={!canRedo}
-                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-5 h-5 rounded-md transition-all ${
-                        canRedo
-                            ? 'text-zinc-300 hover:text-white hover:bg-white/10 border border-transparent'
-                            : 'text-zinc-600 cursor-not-allowed border border-transparent opacity-40'
-                    }`}
-                    onClick={handleRedo}
-                    title="Redo Stroke (⌘⇧Z / Ctrl+Y)"
-                >
-                    <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M21 7v6h-6M21 13a9 9 0 1 0-3 7.7" />
-                    </svg>
-                </button>
+                {/* 13-14. Undo / Redo (⌘Z, ⌘⇧Z) and history position */}
+                <ViewportHistoryButtons snapshot={historySnapshot} onUndo={handleUndo} onRedo={handleRedo} />
 
                 {/* Divider */}
                 <div className="sb-3d-toolstrip-divider w-3.5 h-[1px] bg-white/10 my-0.5" />
