@@ -62,7 +62,7 @@ export const FIGURE_CRITERIA = {
     baseAboveGroundM: [0.05, 14] as const,
     maxFigures: MAX_SURVEY_FACES
 };
-export const FIGURE_VISION_TIMEOUT_MS = 150_000;
+export const FIGURE_VISION_TIMEOUT_MS = 330_000;
 export const FIGURE_FOV_MIN_DEG = 30;
 export const FIGURE_FOV_MAX_DEG = 45;
 /** A built figure may differ from its blob's bounds by at most this factor per axis; beyond it the spec disagrees with the scan. */

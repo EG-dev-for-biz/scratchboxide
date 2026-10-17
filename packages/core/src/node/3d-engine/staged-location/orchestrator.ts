@@ -957,6 +957,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             match = await runViewMatch({ faces: surveyFaces, survey: surveyOut.result, candidates, deps: sv, chain: matchChain, signal: io.signal, onProgress: m => io.progress(m) });
                             if (match.correspondences.length) {
                                 registration = registerPanos(match.correspondences, fitFaces(fit));
+                                console.info(`[staged] pano registration: ${match.correspondences.length} pairs, ${registration.used} used; ${registration.beforeRmsM} -> ${registration.afterRmsM} m; ${JSON.stringify(registration.perPano)}`);
                                 io.progress(`pano poses registered from ${registration.used} matched elements: ${registration.beforeRmsM.toFixed(2)} m disagreement before, ${registration.afterRmsM.toFixed(2)} m after`);
                             } else io.progress(`no element could be matched across views (${match.failures.length} failed call${match.failures.length === 1 ? '' : 's'}); the nominal pano poses stand, good to ±2 m`);
                         } catch (err) {

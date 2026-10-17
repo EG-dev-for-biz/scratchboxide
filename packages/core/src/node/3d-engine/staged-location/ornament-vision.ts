@@ -501,6 +501,9 @@ export function checkReply(text: string, finishReason: string | undefined, fit: 
         let reasonCode = '';
         const cited = el.evidence.map(ev => evidence.find(e => e.id === ev.imageId)!);
         let bestOverlap = 0;
+        // an element stands when at least one image it cites shows its slot with the box on it; the citations that do not are removed from it
+        // (a model that cites six images for one element is not wrong because two of them look the other way)
+        const keep: number[] = [];
         for (let k = 0; k < cited.length; k++) {
             const img = cited[k], ev = el.evidence[k];
             const shown = img.slotsShown.find(s => s.slotId === el.slotId);
@@ -510,8 +513,14 @@ export function checkReply(text: string, finishReason: string | undefined, fit: 
             }
             const [dx, dy] = uncertainty1000(img);
             const on = boxOnSlot(ev.box1000, shown.polygon1000, dx, dy);
+            if (on < MIN_BOX_ON_SLOT) { problems.push(`rule 9: the box in image ${img.index} lies ${Math.round(on * 100)}% on slot ${el.slotId} (${Math.round(MIN_BOX_ON_SLOT * 100)}% needed)`); continue; }
             bestOverlap = Math.max(bestOverlap, on);
-            if (on < MIN_BOX_ON_SLOT) problems.push(`rule 9: the box in image ${img.index} lies ${Math.round(on * 100)}% on slot ${el.slotId} (${Math.round(MIN_BOX_ON_SLOT * 100)}% needed)`);
+            keep.push(k);
+        }
+        if (keep.length) {
+            // the citations that failed are dropped from the element, not held against it
+            problems.length = 0;
+            if (keep.length < cited.length) { el.evidence = keep.map(k => el.evidence[k]); cited.splice(0, cited.length, ...keep.map(k => cited[k])); }
         }
         if (problems.length) reasonCode = 'slot_not_shown';
         const finest = Math.min(...cited.map(c => c.nativeSampleM));

@@ -178,6 +178,14 @@ describe('the checks of §5.5, one by one', () => {
         expect(r.dropped[0].problems).toEqual(['rule 9: image 0 does not show slot S03']);
         expect(r.dropped[1].problems[0]).toMatch(/^rule 9: the box in image 1 lies \d+% on slot S02 \(50% needed\)$/);
     });
+    it('rule 9: an element that cites two images stands on the one that shows it; the citation that does not is removed, not held against it', () => {
+        const two: CompactElement = { ...CORNICE, ev: [[1, 600, 60, 700, 300], CORNICE.ev[0]] };
+        const r = check([two]);
+        expect(r.dropped).toEqual([]);
+        expect(r.kept.map(k => k.id)).toEqual(['e000']);
+        expect(r.kept[0].evidence).toHaveLength(1);
+        expect(r.kept[0].evidence[0].box1000).toEqual([CORNICE.ev[0][1], CORNICE.ev[0][2], CORNICE.ev[0][3], CORNICE.ev[0][4]]);
+    });
     it('rule 10: dropped when smaller than twice what its image can show (a 0.2 m rosette on a 0.154 m texel)', () => {
         const rosette: CompactElement = { ...ROUNDEL, op: { revolve: { at: [5000, 15000], axis: 'n', profile: [0, 0, 100, 0, 100, 40, 0, 60] } } };
         const r = check([rosette]);
