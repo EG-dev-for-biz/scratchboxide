@@ -46,6 +46,13 @@ export const EDGE_REG_MAX_WIDTH_PX = 900;
 export const EDGE_NCC_MARGIN = 0.01;
 /** Blur of the luminance before the inter-view gradient agreement (px at the registration width): tolerant of the scan's coarse surface. */
 export const INTER_VIEW_GRADIENT_SIGMA_PX = 3;
+/**
+ * Only views at least this wide register a pano (and judge it): a narrow close-up of a carved face shows little sky and
+ * few structural edges, and live it left the fit at the truncation. The close-ups take their pano's pose.
+ */
+export const EDGE_REG_MIN_FOV_DEG = 50;
+/** An edge pose whose median residual stays above this (px at the registration width) did not lock onto the scan. */
+export const EDGE_MAX_RESIDUAL_PX = 5;
 /** A pano's edge residual in metres is never stated below this: the edges pin the image, not the depth along the view. */
 export const EDGE_RESIDUAL_FLOOR_M = 0.25;
 
@@ -252,7 +259,7 @@ export function registerPanosByEdges(input: EdgeRegistrationInput): EdgeRegistra
     const t0 = now();
     const budget = input.budgetMs ?? 90_000;
     const maxW = input.maxWidthPx ?? EDGE_REG_MAX_WIDTH_PX;
-    const frames = input.frames.map(f => ({ ...f, image: downscaleRgba(f.image, maxW) }));
+    const frames = input.frames.filter(f => f.view.fovDeg >= EDGE_REG_MIN_FOV_DEG).map(f => ({ ...f, image: downscaleRgba(f.image, maxW) }));
     const prior = input.prior;
     const priorCorr = (id: string): PoseCorrection => prior?.corrections.get(id) ?? ZERO_CORRECTION;
     const registrar = edgeRegistrar(input.mesh, input.creases, input.log);
@@ -294,7 +301,7 @@ export function registerPanosByEdges(input: EdgeRegistrationInput): EdgeRegistra
         const e = edge.get(id);
         if (!e) return false;
         const before = edgeResidual(e.res, 'initial'), after = edgeResidual(e.res, 'final');
-        return !(after !== null && before !== null && after > before);
+        return after !== null && after <= EDGE_MAX_RESIDUAL_PX && !(before !== null && after >= before);
     };
     for (const id of panoIds) if (usable(id)) chosen.set(id, edge.get(id)!.corr);
     for (let sweep = 0; sweep < 2; sweep++) {
@@ -309,7 +316,7 @@ export function registerPanosByEdges(input: EdgeRegistrationInput): EdgeRegistra
             let reason: string;
             let take = false;
             // chosen by the inter-view agreement alone: the box pairs are what the box pose was fitted to, so they are reported, not used
-            if (!usable(id)) reason = `the edge search ended worse than it started (${before} → ${after} px)`;
+            if (!usable(id)) reason = `the edge search did not lock onto the scan (median residual ${before ?? 'n/a'} → ${after ?? 'n/a'} px; at most ${EDGE_MAX_RESIDUAL_PX} px and better than the start is required)`;
             else if (sEdge.ncc === null || sBox.ncc === null) reason = 'no other pano sees the same scan surface, so the edge pose cannot be checked; the box pose stands';
             else if (sEdge.ncc < sBox.ncc + EDGE_NCC_MARGIN) reason = `the edge pose does not agree better with the other panos (gradient NCC ${sBox.ncc.toFixed(3)} with the box pose, ${sEdge.ncc.toFixed(3)} with the edge pose)`;
             else { take = true; reason = `the edge pose agrees better with the other panos (gradient NCC ${sBox.ncc.toFixed(3)} → ${sEdge.ncc.toFixed(3)})`; }
