@@ -151,15 +151,29 @@ describe('the checks of §5.5, one by one', () => {
     it('rule 5: outside the slot', () => {
         expect(check([{ ...ROUNDEL, op: { relief: { box: [0, 0, 1000, 1000], depth: 50 } } }]).problems).toEqual(['element 0: rule 5: the element runs outside slot S01']);
     });
+    it('rule 5: a relief in an edge slot is sent back (the builder needs a surface slot for it)', () => {
+        const bad: CompactElement = { ...CORNICE, op: { relief: { box: [0, 0, 1000, 1000], depth: 50 } } };
+        expect(check([bad]).problems.join(' ')).toContain('rule 5: a relief needs a surface slot; S02 is an edge');
+    });
     it('rule 6: beyond the slot\'s depth bounds, or outside the edge envelope', () => {
         const deep: CompactElement = { slot: 'S03', op: { relief: { box: [1000, 1000, 2000, 2000], depth: -400 } }, conf: 60, depthBasis: 'x', ev: [[1, 500, 400, 700, 600]] };
         expect(check([deep]).problems).toEqual(['element 0: rule 6: 400 mm recess is more than slot S03 allows (300 mm)']);
         const fat: CompactElement = { ...CORNICE, op: { sweep: { t: [0, 1000], offset: [0, 300], profile: [0, 0, 180, 0, 180, 90] } } };
         expect(check([fat]).problems).toEqual(['element 0: rule 6: the profile leaves the edge envelope of S02 at 1 point(s)']);
     });
+    it('rule 6: a swept profile inside the wall (out < 0 and up < 0 of an edge section) is sent back', () => {
+        const sunk: CompactElement = { ...CORNICE, op: { sweep: { t: [0, 1000], offset: [0, 0], profile: [-50, -100, 100, -100, 100, 0, -50, 0] } } };
+        expect(check([sunk]).problems.join(' ')).toMatch(/rule 6: \d+ profile point\(s\) of the sweep on S02 lie inside the wall/);
+    });
     it('rule 7: a repeat that does not fit its edge', () => {
         const long: CompactElement = { ...CORNICE, op: { replicate: { seed: { revolve: { at: [0, 200], axis: 'n', profile: [0, 0, 100, 0, 0, 60] } }, along: [0, 5000, 7] } } };
         expect(check([long]).problems).toEqual(['element 0: rule 7: the element runs past the 26.30 m edge S02']);
+    });
+    it('rule 7: a grid of one column keeps a positive pitch (it moves nothing); a grid with a zero count is sent back', () => {
+        const one: CompactElement = { ...ROUNDEL, op: { replicate: { seed: { relief: { box: [0, 0, 300, 300], depth: 40 } }, grid: [2000, 12000, 500, 0, 3, 1, 0] } } };
+        expect(check([one]).problems.join(' ')).not.toMatch(/positive pitches/);
+        const zero: CompactElement = { ...ROUNDEL, op: { replicate: { seed: { relief: { box: [0, 0, 300, 300], depth: 40 } }, grid: [2000, 12000, 500, 500, 0, 2, 0] } } };
+        expect(check([zero]).problems.join(' ')).toMatch(/rule 7: a grid needs whole counts of at least 1 and positive pitches/);
     });
     it('rule 8: overlapping elements in one slot, unless one contains the other', () => {
         const a: CompactElement = { ...ROUNDEL, op: { relief: { box: [2000, 12000, 5000, 15000], depth: 50 } } };
@@ -177,6 +191,14 @@ describe('the checks of §5.5, one by one', () => {
         expect(r.dropped.map(d => [d.elementId, d.reasonCode])).toEqual([['e000', 'slot_not_shown'], ['e001', 'slot_not_shown']]);
         expect(r.dropped[0].problems).toEqual(['rule 9: image 0 does not show slot S03']);
         expect(r.dropped[1].problems[0]).toMatch(/^rule 9: the box in image 1 lies \d+% on slot S02 \(50% needed\)$/);
+    });
+    it('rule 9: an element that cites two images stands on the one that shows it; the citation that does not is removed, not held against it', () => {
+        const two: CompactElement = { ...CORNICE, ev: [[1, 600, 60, 700, 300], CORNICE.ev[0]] };
+        const r = check([two]);
+        expect(r.dropped).toEqual([]);
+        expect(r.kept.map(k => k.id)).toEqual(['e000']);
+        expect(r.kept[0].evidence).toHaveLength(1);
+        expect(r.kept[0].evidence[0].box1000).toEqual([CORNICE.ev[0][1], CORNICE.ev[0][2], CORNICE.ev[0][3], CORNICE.ev[0][4]]);
     });
     it('rule 10: dropped when smaller than twice what its image can show (a 0.2 m rosette on a 0.154 m texel)', () => {
         const rosette: CompactElement = { ...ROUNDEL, op: { revolve: { at: [5000, 15000], axis: 'n', profile: [0, 0, 100, 0, 100, 40, 0, 60] } } };

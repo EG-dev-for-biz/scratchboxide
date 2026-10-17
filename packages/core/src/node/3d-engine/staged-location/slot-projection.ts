@@ -19,7 +19,7 @@
  */
 
 import type { RenderMesh3D } from '../../spatial/HeadlessMeshSilhouetteRenderer';
-import { frameCamera, projectToFrame, renderFrameDepth, ZERO_CORRECTION, type FrameCamera } from '../../spatial/StreetViewPoseRegistrar';
+import { frameCamera, projectToFrame, renderFrameDepth, ZERO_CORRECTION, type FrameCamera, type PoseCorrection } from '../../spatial/StreetViewPoseRegistrar';
 import type { EvidenceImageRef, FittedSurface, OrnamentSlot, StructureFit, SurfaceChart, Vec2, Vec3 } from '../../../common/spatial/staged-location-contracts';
 import { NOMINAL_POSE_UNCERTAINTY } from './streetview-evidence';
 
@@ -130,11 +130,13 @@ export interface ProjectedView {
     fovDeg: number;
     widthPx: number;
     heightPx: number;
+    /** The registered pose's offset from the nominal one (absent: the nominal pose). */
+    correction?: PoseCorrection;
 }
 
 /** The nominal camera of a view (the requested fov taken as horizontal). */
 export function viewCamera(v: ProjectedView, width = v.widthPx, height = v.heightPx): FrameCamera {
-    return frameCamera(v.eye as [number, number, number], v.headingDeg, v.pitchDeg, v.fovDeg, width, height, ZERO_CORRECTION, v.headingDeg);
+    return frameCamera(v.eye as [number, number, number], v.headingDeg, v.pitchDeg, v.fovDeg, width, height, v.correction ?? ZERO_CORRECTION, v.headingDeg);
 }
 
 /** Every slot as seen in one view: its polygon (0-1000, [y, x, …]) and the share of its samples not occluded. */
@@ -172,6 +174,11 @@ export function projectSlots(fit: Pick<StructureFit, 'slots' | 'surfaces'>, view
         });
     }
     return shown;
+}
+
+/** The pose of an image whose pano was registered: the eye as corrected, the uncertainty left after the fit. */
+export function registeredPose(eye: Vec3, corr: PoseCorrection, uncertaintyM: number): NonNullable<EvidenceImageRef['pose']> {
+    return { eye: [eye[0] + corr.dx, eye[1] + corr.dy, eye[2] + corr.dz], registered: true, uncertaintyM, uncertaintyDeg: 0.5 };
 }
 
 /** The nominal pose an evidence image is stated with. */

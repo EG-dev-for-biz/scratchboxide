@@ -177,9 +177,17 @@ export function surveySentence(input: StagedSummaryInput): string {
 /** Rule "photo-inferred-wording". */
 export function photoInferredSentence(input: StagedSummaryInput): string {
     const o = input.ornament;
-    if (!o || o.elements === 0) return '';
+    if (!o) return '';
+    // what was read and what was built are different counts: only a built element, committed as a layer, is in the scene
+    const read = o.read ?? o.elements;
+    const notBuilt = read - o.elements;
+    const why = input.degradations.filter(d => d.stage === 'detail').map(d => String(d.reason)).slice(0, 2);
+    const readNotBuilt = notBuilt > 0
+        ? `The photo reading kept ${n(read)} element${read === 1 ? '' : 's'}; ${o.elements > 0 ? `${n(o.elements)} ${o.elements === 1 ? 'was' : 'were'} built and ${o.elements === 1 ? 'is' : 'are'} in the scene, ${n(notBuilt)} ${notBuilt === 1 ? 'was' : 'were'} not` : 'none was built, so no photo-inferred detail is in the scene'}${why.length ? ` (${why.join('; ')})` : ''}.`
+        : '';
+    if (o.elements === 0) return readNotBuilt;
     const dropped = input.droppedNotResolvable ?? 0;
-    return `They are photo-inferred, confidence ${o.confidence.min.toFixed(2)}–${o.confidence.max.toFixed(2)}${dropped ? `; ${n(dropped)} element${dropped === 1 ? ' was' : 's were'} dropped as not resolvable in ${dropped === 1 ? 'its' : 'their'} evidence` : ''}.`;
+    return `${readNotBuilt ? `${readNotBuilt} ` : ''}They are photo-inferred, confidence ${o.confidence.min.toFixed(2)}–${o.confidence.max.toFixed(2)}${dropped ? `; ${n(dropped)} element${dropped === 1 ? ' was' : 's were'} dropped as not resolvable in ${dropped === 1 ? 'its' : 'their'} evidence` : ''}.`;
 }
 
 /** What the scan anchored in the photo reading: each snap or clip, labelled photo-corrected, with the error it carried. */

@@ -179,6 +179,7 @@ inline std::map<std::string, NodeMesh> readNodeMeshes(const std::vector<uint8_t>
 
 struct Surface {
     std::string id;
+    std::string primitiveId;                  // the fitted primitive (a closed shell with its sibling surfaces) this face belongs to
     bool cyl{false};
     D3 origin, u, v, n;                       // plane
     std::vector<P2> extent;
@@ -245,6 +246,7 @@ inline Fit loadFit(const std::string& fitJsonText, const std::map<std::string, N
     for (const auto& sj_ : doc["surfaces"].arr) {
         Surface s;
         s.id = str(sj_["id"]);
+        s.primitiveId = str(sj_["primitiveId"]);
         const auto& ch = sj_["chart"];
         if (ch.has("plane")) {
             const auto& p = ch["plane"];
@@ -1508,46 +1510,62 @@ inline size_t selfIntersections(const std::vector<D3>& p, const std::vector<uint
     return found;
 }
 
-/** The fitted surfaces together, for the penetration test. */
+/**
+ * The fitted solid, for the penetration test: the union of the fitted primitives, each tested as its own closed shell.
+ * (The fit stacks prisms that share faces. Parity over all the surfaces together counts a shared face once instead of twice, so a
+ * point outside the structure whose ray crossed an interface read as inside it and a panel standing proud of a wall "sank".)
+ */
 class FittedSolid {
 public:
     explicit FittedSolid(const Fit& fit) {
+        std::map<std::string, size_t> byPrimitive;
         for (const auto& [id, s] : fit.surfaces) {
-            const uint32_t base = static_cast<uint32_t>(mesh_.vertices.size());
-            for (const auto& q : s.mesh.pos) mesh_.vertices.push_back(geometry::Vertex(q.f()));
-            for (uint32_t i : s.mesh.tri) mesh_.indices.push_back(base + i);
+            const std::string key = s.primitiveId.empty() ? id : s.primitiveId;
+            auto it = byPrimitive.find(key);
+            if (it == byPrimitive.end()) { shells_.push_back(std::make_unique<Shell>()); it = byPrimitive.emplace(key, shells_.size() - 1).first; }
+            Shell& sh = *shells_[it->second];
+            const uint32_t base = static_cast<uint32_t>(sh.mesh.vertices.size());
+            for (const auto& q : s.mesh.pos) sh.mesh.vertices.push_back(geometry::Vertex(q.f()));
+            for (uint32_t i : s.mesh.tri) sh.mesh.indices.push_back(base + i);
         }
-        if (!mesh_.indices.empty()) tree_.build(mesh_);
+        for (auto& sh : shells_) if (!sh->mesh.indices.empty()) sh->tree.build(sh->mesh);
     }
-    bool empty() const { return mesh_.indices.empty(); }
+    bool empty() const {
+        for (const auto& sh : shells_) if (!sh->mesh.indices.empty()) return false;
+        return true;
+    }
 
-    /** How far a point is inside the solid: 0 outside (or on it), else the distance to its surface. Parity of three rays. */
+    /** How far a point is inside the solid: 0 outside (or on it), else the distance to the surface of the deepest shell holding it. Parity of three rays per shell. */
     double depth(const D3& p) const {
-        if (empty()) return 0;
-        static const D3 dirs[3] = {D3(0.267, 0.535, 0.802), D3(-0.702, 0.302, 0.644), D3(0.12, -0.97, 0.21)};
-        int votes = 0;
-        for (const auto& d : dirs) {
-            const D3 u = d.unit();
-            int crossings = 0;
-            D3 o = p;
-            for (int k = 0; k < 64; ++k) {
-                math::Ray ray(o.f(), u.f());
-                bvh::RayHit hit;
-                if (!tree_.raycast(ray, hit)) break;
-                ++crossings;
-                o = o + u * (static_cast<double>(hit.t) + 1e-4);
+        double deepest = 0;
+        for (const auto& sh : shells_) {
+            if (sh->mesh.indices.empty()) continue;
+            static const D3 dirs[3] = {D3(0.267, 0.535, 0.802), D3(-0.702, 0.302, 0.644), D3(0.12, -0.97, 0.21)};
+            int votes = 0;
+            for (const auto& d : dirs) {
+                const D3 u = d.unit();
+                int crossings = 0;
+                D3 o = p;
+                for (int k = 0; k < 64; ++k) {
+                    math::Ray ray(o.f(), u.f());
+                    bvh::RayHit hit;
+                    if (!sh->tree.raycast(ray, hit)) break;
+                    ++crossings;
+                    o = o + u * (static_cast<double>(hit.t) + 1e-4);
+                }
+                votes += crossings % 2;
             }
-            votes += crossings % 2;
+            if (votes < 2) continue;
+            float d2 = 0;
+            sh->tree.closestPoint(p.f(), d2);
+            deepest = std::max(deepest, std::sqrt(static_cast<double>(d2)));
         }
-        if (votes < 2) return 0;
-        float d2 = 0;
-        tree_.closestPoint(p.f(), d2);
-        return std::sqrt(static_cast<double>(d2));
+        return deepest;
     }
 
 private:
-    geometry::ScratchboxMesh mesh_;
-    bvh::BvhTree tree_;
+    struct Shell { geometry::ScratchboxMesh mesh; bvh::BvhTree tree; };
+    std::vector<std::unique_ptr<Shell>> shells_;
 };
 
 // ============================================================================================

@@ -26,7 +26,7 @@
 
 import type { Content, Part } from '@google/genai';
 import {
-    MAX_STREET_VIEW_IMAGES_PER_BUILDING, schemaClosure, STAGED_VISION_MODEL_DEFAULT, validateContract,
+    MAX_STREET_VIEW_IMAGES_PER_BUILDING, MAX_SURVEY_FACES, schemaClosure, STAGED_VISION_MODEL_DEFAULT, validateContract,
     type FaceSurveyReply, type FittedSurface, type MaterialHints, type StageCost, type StructureFit, type SurveyedFace, type SurveyElement,
     type SurveyMaterial, type Vec3, type VisionModelUse
 } from '../../../common/spatial/staged-location-contracts';
@@ -47,9 +47,11 @@ export const SURVEY_FOV_MIN_DEG = 55;
 export const SURVEY_FOV_MAX_DEG = 70;
 export const SURVEY_IMAGE_TIMEOUT_MS = 30_000;
 /** One call, so one limit: the model reads four images and writes a reply of a few thousand tokens. */
-export const SURVEY_VISION_TIMEOUT_MS = 90_000;
+export const SURVEY_VISION_TIMEOUT_MS = 240_000;
 /** A pano must stand within this angle of a face's outward normal. */
-export const SURVEY_MAX_OFF_NORMAL_DEG = 60;
+export const SURVEY_MAX_OFF_NORMAL_DEG = 80;
+/** Share of a face a pano must see to survey it. */
+export const SURVEY_MIN_FACE_SEEN = 0.3;
 /** Bearings of the chosen panos, seen from the structure, are kept at least this far apart where the choice allows. */
 export const SURVEY_MIN_BEARING_SEPARATION_DEG = 25;
 
@@ -77,7 +79,7 @@ export interface SurveyFaceTarget {
 
 /** The compass faces of the footprint: one per facade heading the structure pick found, at most four. */
 export function footprintSurveyFaces(structure: Pick<StructurePickResult, 'outline' | 'centroid' | 'facadeHeadingsDeg' | 'groundY' | 'heightM'>): SurveyFaceTarget[] {
-    return facadeGeometry(structure).slice(0, MAX_STREET_VIEW_IMAGES_PER_BUILDING).map(f => {
+    return facadeGeometry(structure).slice(0, MAX_SURVEY_FACES).map(f => {
         const dir: Vec3 = [Math.sin(f.headingDeg * DEG), 0, -Math.cos(f.headingDeg * DEG)];
         return {
             faceId: `h${Math.round(f.headingDeg)}`, headingDeg: f.headingDeg, source: 'footprint' as const,
@@ -101,7 +103,7 @@ export function fitSurveyFaces(fit: Pick<StructureFit, 'surfaces'>, structure: P
     }
     verticals.sort((a, b) => b.s.areaM2 - a.s.areaM2);
     const groups: typeof verticals = [];
-    for (const v of verticals) if (groups.length < MAX_STREET_VIEW_IMAGES_PER_BUILDING && groups.every(g => angleBetween(g.heading, v.heading) > 35)) groups.push(v);
+    for (const v of verticals) if (groups.length < MAX_SURVEY_FACES && groups.every(g => angleBetween(g.heading, v.heading) > 35)) groups.push(v);
     if (groups.length < 2) return footprintSurveyFaces(structure);
     return groups.sort((a, b) => a.heading - b.heading).map(g => {
         const ext = (g.s.chart as { plane: { extentUv: Array<[number, number]> } }).plane.extentUv;
@@ -151,6 +153,41 @@ export function surveyAim(eye: Vec3, face: SurveyFaceTarget): { headingDeg: numb
     };
 }
 
+export interface SurveyCandidate { pano: PanoCandidate; eye: Vec3; score: number; bearing: number }
+
+/** Every pano that can look at each face from its outward side (within SURVEY_MAX_OFF_NORMAL_DEG of the normal, MIN-MAX view distance, the face at least 30% seen), best first. */
+export function surveyCandidates(
+    panos: PanoCandidate[],
+    faces: SurveyFaceTarget[],
+    structure: Pick<StructurePickResult, 'cells' | 'groundY' | 'centroid'>,
+    ground: Pick<GroundModel, 'cellIndex' | 'groundAt'>,
+    top: Float32Array
+): Map<string, SurveyCandidate[]> {
+    const newest = Math.max(-Infinity, ...panos.map(p => months(p.date)));
+    const candidates = new Map<string, SurveyCandidate[]>();
+    for (const face of faces) {
+        const list: SurveyCandidate[] = [];
+        for (const p of panos) {
+            const g = ground.groundAt(p.x, p.z);
+            const eye: Vec3 = [p.x, (g === g ? g : structure.groundY) + STREET_VIEW_EYE_HEIGHT_M, p.z];
+            const toEye = unit(sub(eye, face.centre));
+            const flat = unit([toEye[0], 0, toEye[2]]);
+            const cosOff = dot(flat, face.outward);
+            const d = Math.hypot(face.centre[0] - eye[0], face.centre[2] - eye[2]);
+            if (cosOff < Math.cos(SURVEY_MAX_OFF_NORMAL_DEG * DEG) || d < MIN_VIEW_DISTANCE_M || d > MAX_VIEW_DISTANCE_M) continue;
+            const seen = faceSeen(eye, face, structure, ground, top);
+            if (seen < SURVEY_MIN_FACE_SEEN) continue;
+            const recency = Number.isFinite(newest) && Number.isFinite(months(p.date)) ? Math.max(0.5, 1 - (newest - months(p.date)) / 72) : 0.75;
+            // the distance that frames the face at the widest fov, and a little more: nearer crops it, farther loses pixels
+            const ideal = (face.widthM / 2) * 1.12 / Math.tan((SURVEY_FOV_MAX_DEG / 2) * DEG);
+            const distFit = d < ideal ? 0.6 + 0.4 * (d / ideal) : 1 / (1 + Math.max(0, d / ideal - 1.8));
+            list.push({ pano: p, eye, score: seen * cosOff * recency * distFit, bearing: bearingDeg(structure.centroid.x, structure.centroid.z, p.x, p.z) });
+        }
+        candidates.set(face.faceId, list.sort((a, b) => b.score - a.score || a.pano.panoId.localeCompare(b.pano.panoId)));
+    }
+    return candidates;
+}
+
 /**
  * One pano per face, each looking at its face from the outward side, all different, at different bearings from the
  * structure where the candidates allow. A face no pano sees is skipped, with the reason. The faces with the fewest
@@ -162,32 +199,10 @@ export function selectSurveyViews(
     structure: Pick<StructurePickResult, 'cells' | 'groundY' | 'centroid'>,
     ground: Pick<GroundModel, 'cellIndex' | 'groundAt'>,
     top: Float32Array,
-    max = MAX_STREET_VIEW_IMAGES_PER_BUILDING
+    max = MAX_SURVEY_FACES
 ): SurveyPlan {
-    const limit = Math.max(0, Math.min(MAX_STREET_VIEW_IMAGES_PER_BUILDING, max));
-    const newest = Math.max(-Infinity, ...panos.map(p => months(p.date)));
-    interface Cand { pano: PanoCandidate; eye: Vec3; score: number; bearing: number }
-    const candidates = new Map<string, Cand[]>();
-    for (const face of faces) {
-        const list: Cand[] = [];
-        for (const p of panos) {
-            const g = ground.groundAt(p.x, p.z);
-            const eye: Vec3 = [p.x, (g === g ? g : structure.groundY) + STREET_VIEW_EYE_HEIGHT_M, p.z];
-            const toEye = unit(sub(eye, face.centre));
-            const flat = unit([toEye[0], 0, toEye[2]]);
-            const cosOff = dot(flat, face.outward);
-            const d = Math.hypot(face.centre[0] - eye[0], face.centre[2] - eye[2]);
-            if (cosOff < Math.cos(SURVEY_MAX_OFF_NORMAL_DEG * DEG) || d < MIN_VIEW_DISTANCE_M || d > MAX_VIEW_DISTANCE_M) continue;
-            const seen = faceSeen(eye, face, structure, ground, top);
-            if (seen < 0.4) continue;
-            const recency = Number.isFinite(newest) && Number.isFinite(months(p.date)) ? Math.max(0.5, 1 - (newest - months(p.date)) / 72) : 0.75;
-            // the distance that frames the face at the widest fov, and a little more: nearer crops it, farther loses pixels
-            const ideal = (face.widthM / 2) * 1.12 / Math.tan((SURVEY_FOV_MAX_DEG / 2) * DEG);
-            const distFit = d < ideal ? 0.6 + 0.4 * (d / ideal) : 1 / (1 + Math.max(0, d / ideal - 1.8));
-            list.push({ pano: p, eye, score: seen * cosOff * recency * distFit, bearing: bearingDeg(structure.centroid.x, structure.centroid.z, p.x, p.z) });
-        }
-        candidates.set(face.faceId, list.sort((a, b) => b.score - a.score || a.pano.panoId.localeCompare(b.pano.panoId)));
-    }
+    const limit = Math.max(0, Math.min(MAX_SURVEY_FACES, max));
+    const candidates = surveyCandidates(panos, faces, structure, ground, top);
     const order = [...faces].sort((a, b) => candidates.get(a.faceId)!.length - candidates.get(b.faceId)!.length || a.headingDeg - b.headingDeg);
     const used = new Set<string>();
     const bearings: number[] = [];
@@ -291,6 +306,10 @@ function responseText(r: { candidates?: Array<{ content?: { parts?: Array<{ text
 // ----------------------------------------------------------------------------------------------------------------
 // the stage
 // ----------------------------------------------------------------------------------------------------------------
+
+/** The survey's decoded-free image bytes, held in memory for the matching call only (never serialised with the result). */
+const SURVEY_IMAGES = new WeakMap<object, Map<number, Buffer>>();
+export function surveyImageBytes(result: object, imageIndex: number): Buffer | undefined { return SURVEY_IMAGES.get(result)?.get(imageIndex); }
 
 export interface SurveyResult {
     plan: SurveyPlan;
@@ -399,7 +418,9 @@ export async function runFaceSurvey(input: RunSurveyInput): Promise<SurveyResult
         schema: 'scratchbox.material-hints/1', label: 'photo-inferred', palette: 'measured-from-photo',
         textureUse: 'none: the Street View pixels are not projected onto the model', faces, model, cost
     };
-    return { plan, faces, read, hints, model, cost, problems: parsed.problems, fetchFailures };
+    const out: SurveyResult = { plan, faces, read, hints, model, cost, problems: parsed.problems, fetchFailures };
+    SURVEY_IMAGES.set(out, new Map(images.map(im => [im.index, im.bytes])));
+    return out;
 }
 
 /** One sentence of what the survey found, for the overlay's source line. */

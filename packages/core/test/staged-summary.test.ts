@@ -270,4 +270,22 @@ describe('the headline follows the layers on screen, not the stage status alone'
         expect(s).toContain('The geometric complexity gate did not pass (Insufficient geometric density: scene has 78 non-exempt vertices, minimum required is 25,000 vertices).');
         expect(summarizeStagedBuild(input()).summary).not.toContain('did not pass');
     });
+
+    it('says what was built, not what was read: five kept elements and an empty detail layer is "none built", never "5 photo-inferred details"', () => {
+        const base = withDetail();
+        const notBuilt: StagedSummaryInput = {
+            ...base,
+            stages: base.stages.map(s => s.stage === 'detail' ? { ...s, status: 'degraded' as const, layerIds: [] } : s),
+            degradations: [...base.degradations, { ...input().degradations[0], id: 'd-detail', stage: 'detail', reasonCode: 'detail_failed', reason: 'the element sinks into the fitted solid' } as DegradationRecord],
+            ornament: { ...base.ornament!, elements: 0, read: 5, slotsFilled: 0 }
+        };
+        const s = summarizeStagedBuild(notBuilt).summary;
+        expect(s).toContain('The photo reading kept 5 elements; none was built, so no photo-inferred detail is in the scene (the element sinks into the fitted solid).');
+        expect(s).not.toMatch(/\d+ photo-inferred details/);
+        // some built: both counts, and only the built are "in the scene"
+        const some: StagedSummaryInput = { ...base, ornament: { ...base.ornament!, elements: 2, read: 5 } };
+        expect(summarizeStagedBuild(some).summary).toContain('The photo reading kept 5 elements; 2 were built and are in the scene, 3 were not');
+        // all built: no extra sentence
+        expect(summarizeStagedBuild(base).summary).not.toContain('The photo reading kept');
+    });
 });

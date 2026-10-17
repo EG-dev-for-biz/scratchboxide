@@ -52,7 +52,7 @@ import { anchorElements, type AnchorNote } from './ornament-anchor';
 import { expandElements, expandEvidence, type ExpandedElement } from './ornament-expand';
 import { surveyHintLines, type LocatedElement } from './survey-detail';
 
-export const ORNAMENT_PROMPT_VERSION = 'ornament/v2';
+export const ORNAMENT_PROMPT_VERSION = 'ornament/v3';
 /** Thinking tokens asked for: LOW on Gemini 4 (thinkingConfigFor), a 512-token budget on 3.x. */
 export const ORNAMENT_THINKING_BUDGET = 512;
 export const ORNAMENT_MAX_OUTPUT_TOKENS = 16_384;
@@ -156,7 +156,7 @@ export function ornamentPromptText(fit: StructureFit, evidence: EvidenceImageRef
     const rules = [
         '1. Report only elements you can see in an image that shows their slot. Cite each with [image index, y0, x0, y1, x1] in 0–1000.',
         '2. Build each element with one operator: sweep (a profile along the slot\'s edge, or along a path in the slot), revolve (a profile around an axis, with K lobes), replicate (one seed repeated along the edge or over a grid), or relief (a raised or recessed region). Use integer millimetres in the slot\'s own axes: u along the surface to the right, v up, n out of the surface. Along an edge, t is per-mille of its length.',
-        '3. Do not give a size smaller than the image you cite can show. Depths are estimates from shading, shadows or silhouettes. Keep them within the slot bounds, keep edge profiles inside the edge envelope, and say how you judged them (depthBasis).',
+        '3. In an edge section [out, up], the quarter with out < 0 and up < 0 is inside the wall: a swept profile stays at out >= 0 or up >= 0. Do not give a size smaller than the image you cite can show. Depths are estimates from shading, shadows or silhouettes. Keep them within the slot bounds, keep edge profiles inside the edge envelope, and say how you judged them (depthBasis).',
         '4. For repeats, count what you see. If a row runs out of view, give the visible count and set beyondView.',
         '5. Figures and lettering are a low relief outline only, at most 50 mm deep.',
         '6. Shadows, stains, trees, people, vehicles and statues standing in front of a wall are not ornament on that wall. Do not add anything you know about this building but cannot see in these images.',
@@ -434,7 +434,7 @@ export function checkReply(text: string, finishReason: string | undefined, fit: 
 
     const expanded: ExpandedElement[] = expandElements(reply.elements, fit, evidence, method);
     // anchor the model's estimates to the scan's geometry before the slot rules: within the tolerance they are snapped, beyond it they are problems
-    const anchored = anchorElements(expanded, fit, located);
+    const anchored = anchorElements(expanded, fit, located, undefined, final);
     result.anchored = anchored.notes;
     for (const [i, ps] of anchored.problems) for (const p of ps) add(i, p);
     // rules 5-8 per element
@@ -450,17 +450,27 @@ export function checkReply(text: string, finishReason: string | undefined, fit: 
         } else {
             const e = slot.host.edge;
             const L = e.carrier.lengthM;
+            if (spec.operator === 'relief') add(x.replyIndex, `rule 5: a relief needs a surface slot; ${slot.id} is an edge (use sweep or replicate along it)`);
             if (spec.operator === 'sweep' && 'slot' in spec.sweep.carrier) {
                 const c = spec.sweep.carrier.slot;
                 if (!(c.t0 < c.t1)) add(x.replyIndex, `rule 5: t must run forward along the edge (t0 ${Math.round(c.t0 * 1000)} ≥ t1 ${Math.round(c.t1 * 1000)})`);
                 const outside = spec.sweep.profile.outer.filter(p => !pointInPolygon(p[0] + c.offset[0], p[1] + c.offset[1], e.envelope, 0.005));
                 if (outside.length) add(x.replyIndex, `rule 6: the profile leaves the edge envelope of ${slot.id} at ${outside.length} point(s)`);
+                // an edge section is [out of the face, up]: the part with both below zero is the wall itself, and a swept shell there is inside the fitted solid
+                const inWall = spec.sweep.profile.outer.filter(p => p[0] + c.offset[0] < -0.005 && p[1] + c.offset[1] < -0.005);
+                if (inWall.length) add(x.replyIndex, `rule 6: ${inWall.length} profile point(s) of the sweep on ${slot.id} lie inside the wall (out < 0 and up < 0 is the fitted solid); keep a swept profile at out >= 0 or up >= 0`);
             }
             if (pts.some(p => p[0] < -TOL || p[0] > L + TOL)) add(x.replyIndex, `rule 7: the element runs past the ${L.toFixed(2)} m edge ${slot.id}`);
         }
         const depth = depthRange(spec);
         if (depth.proud > slot.bounds.maxProudM + 1e-6) add(x.replyIndex, `rule 6: ${Math.round(depth.proud * 1000)} mm proud is more than slot ${slot.id} allows (${Math.round(slot.bounds.maxProudM * 1000)} mm)`);
         if (depth.recess > slot.bounds.maxRecessM + 1e-6) add(x.replyIndex, `rule 6: ${Math.round(depth.recess * 1000)} mm recess is more than slot ${slot.id} allows (${Math.round(slot.bounds.maxRecessM * 1000)} mm)`);
+        if (spec.operator === 'replicate' && 'lattice' in spec.replicate.domain) {
+            const g = spec.replicate.domain.lattice;
+            // a single row or column has no pitch to speak of: the builder wants a positive one, and it moves nothing
+            for (const k of [0, 1] as const) if (g.counts[k] === 1 && !(g.pitchUv[k] > 0)) g.pitchUv[k] = 1;
+            if (!g.counts.every(c => Number.isInteger(c) && c >= 1) || !g.pitchUv.every(v => v > 0)) add(x.replyIndex, `rule 7: a grid needs whole counts of at least 1 and positive pitches (counts ${g.counts.join(' × ')}, pitches ${g.pitchUv.map(v => Math.round(v * 1000)).join(' × ')} mm)`);
+        }
         if (spec.operator === 'replicate' && 'lattice' in spec.replicate.domain && 'surface' in slot.host) {
             const b = bbox(slot.host.surface.regionUv);
             const inst = instances(spec, slot);
@@ -501,6 +511,9 @@ export function checkReply(text: string, finishReason: string | undefined, fit: 
         let reasonCode = '';
         const cited = el.evidence.map(ev => evidence.find(e => e.id === ev.imageId)!);
         let bestOverlap = 0;
+        // an element stands when at least one image it cites shows its slot with the box on it; the citations that do not are removed from it
+        // (a model that cites six images for one element is not wrong because two of them look the other way)
+        const keep: number[] = [];
         for (let k = 0; k < cited.length; k++) {
             const img = cited[k], ev = el.evidence[k];
             const shown = img.slotsShown.find(s => s.slotId === el.slotId);
@@ -510,8 +523,14 @@ export function checkReply(text: string, finishReason: string | undefined, fit: 
             }
             const [dx, dy] = uncertainty1000(img);
             const on = boxOnSlot(ev.box1000, shown.polygon1000, dx, dy);
+            if (on < MIN_BOX_ON_SLOT) { problems.push(`rule 9: the box in image ${img.index} lies ${Math.round(on * 100)}% on slot ${el.slotId} (${Math.round(MIN_BOX_ON_SLOT * 100)}% needed)`); continue; }
             bestOverlap = Math.max(bestOverlap, on);
-            if (on < MIN_BOX_ON_SLOT) problems.push(`rule 9: the box in image ${img.index} lies ${Math.round(on * 100)}% on slot ${el.slotId} (${Math.round(MIN_BOX_ON_SLOT * 100)}% needed)`);
+            keep.push(k);
+        }
+        if (keep.length) {
+            // the citations that failed are dropped from the element, not held against it
+            problems.length = 0;
+            if (keep.length < cited.length) { el.evidence = keep.map(k => el.evidence[k]); cited.splice(0, cited.length, ...keep.map(k => cited[k])); }
         }
         if (problems.length) reasonCode = 'slot_not_shown';
         const finest = Math.min(...cited.map(c => c.nativeSampleM));

@@ -237,7 +237,7 @@ function report(label: string, run: Run): string {
         `  dropped by the checks: ${JSON.stringify((r.degradations as any[]).filter(d => d.stage === 'vision' || d.stage === 'detail').map(d => `${d.reasonCode}: ${String(d.reason).slice(0, 160)}`))}`
     ].join('\n');
     fs.writeFileSync(path.join(STAGED_RESULTS_DIR, `photo_ornament_${label}.txt`), text);
-    fs.writeFileSync(path.join(STAGED_RESULTS_DIR, `photo_ornament_${label}_result.json`), JSON.stringify({ stages: r.stages, degradations: r.degradations, ornament: r.ornament, materialHints: r.materialHints, figures: r.figures, photoCost: r.photoCost, grounding: run.log.grounding, vision: run.log.vision }, null, 1));
+    fs.writeFileSync(path.join(STAGED_RESULTS_DIR, `photo_ornament_${label}_result.json`), JSON.stringify({ layers: (r.artifact.data.stagedBuild.layers as any[]).map((l: any) => [l.objectId, l.layer, l.provenance?.label, l.counts?.vertices, l.retired ?? false]), complexityGate: r.complexityGate, exemptionsRefused: r.exemptionsRefused, status: r.status, stages: r.stages, degradations: r.degradations, ornament: r.ornament, materialHints: r.materialHints, figures: r.figures, photoCost: r.photoCost, grounding: run.log.grounding, vision: run.log.vision }, null, 1));
     return text;
 }
 
@@ -344,8 +344,9 @@ describe.skipIf(!arch.requirement.ok || !stagedChrome.ok)('photo-read refinement
         expect(stage('survey')).toBeDefined();
         // whatever the real fit decided, the survey ran beside it and never took long enough to hold the run
         expect(['committed', 'degraded']).toContain(stage('survey').status);
-        expect(run.log.grounding.filter(g => g.kind === 'wide').length).toBeLessThanOrEqual(4);
-        expect(run.log.grounding.filter(g => g.kind === 'close').length).toBeLessThanOrEqual(8);
+        // a ring of further wide views per surveyed face (matched across views), then close-ups: bounded by the image budget
+        expect(run.log.grounding.filter(g => g.kind === 'wide').length).toBeLessThanOrEqual(4 * (1 + 3));
+        expect(run.log.grounding.filter(g => g.kind === 'close').length).toBeLessThanOrEqual(16);
         expect(run.log.vision.filter(v => v.kind === 'survey').length).toBe(1);
     }, 1_800_000);
 

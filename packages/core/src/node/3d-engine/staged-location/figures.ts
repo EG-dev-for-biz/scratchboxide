@@ -30,7 +30,7 @@
 
 import type { Content, Part } from '@google/genai';
 import {
-    MAX_STREET_VIEW_IMAGES_PER_BUILDING, PROVENANCE,
+    MAX_SURVEY_FACES, PROVENANCE,
     type FigureRecord, type FittedSurface, type PassThroughRegion, type ProvenanceRecord, type StagedNodeExtras, type StructureFit, type Vec3, type VisionModelUse
 } from '../../../common/spatial/staged-location-contracts';
 import { OBJECT_BUILD_SPEC_JSON_SCHEMA, validateObjectBuildSpec, type ObjectBuildSpec } from '../../../common/spatial/object-build-spec';
@@ -60,9 +60,9 @@ export const FIGURE_CRITERIA = {
     pedestalDepthShare: 0.6,
     /** Height of the blob's base above the fitted ground. */
     baseAboveGroundM: [0.05, 14] as const,
-    maxFigures: MAX_STREET_VIEW_IMAGES_PER_BUILDING
+    maxFigures: MAX_SURVEY_FACES
 };
-export const FIGURE_VISION_TIMEOUT_MS = 150_000;
+export const FIGURE_VISION_TIMEOUT_MS = 330_000;
 export const FIGURE_FOV_MIN_DEG = 30;
 export const FIGURE_FOV_MAX_DEG = 45;
 /** A built figure may differ from its blob's bounds by at most this factor per axis; beyond it the spec disagrees with the scan. */
@@ -263,7 +263,51 @@ export function planFigureViews(
 // ----------------------------------------------------------------------------------------------------------------
 
 export interface FigureImage { index: number; blob: FigureBlob; view: FigureView; bytes: Buffer; mimeType: string; widthPx: number; heightPx: number }
-export interface FigureReading { index: number; spec: ObjectBuildSpec; confidence: number }
+export interface FigureReading { index: number; spec: ObjectBuildSpec; confidence: number; /** What the conventions normaliser changed in the spec, in words. */ normalised?: string[] }
+
+/**
+ * The spec conventions for placement, applied to a reply before it is validated: a model that gives a child part (one with parentId and
+ * attach) absolute coordinates has said where the part is in the wrong frame, and the builder refuses it. A child starts at its attach
+ * point, so a child sweep's control points are made relative to its first point, and a child revolve's axis passes through the attach
+ * point, so its axisOrigin is moved to zero (the component along the axis becomes an axial shift of the meridian, so the shape is kept).
+ * Where the part stands is the attach's business (u, angleDeg, normalOffsetMeters), which the model also gave.
+ */
+export function normaliseFigureSpec(spec: unknown): { spec: unknown; notes: string[] } {
+    const notes: string[] = [];
+    if (!spec || typeof spec !== 'object' || !Array.isArray((spec as any).parts)) return { spec, notes };
+    const out: any = JSON.parse(JSON.stringify(spec));
+    for (const part of out.parts) {
+        if (!part || typeof part !== 'object' || !part.parentId) continue;
+        const id = String(part.id ?? '?');
+        if (part.sweep && Array.isArray(part.sweep.controlPoints) && Array.isArray(part.sweep.controlPoints[0]) && part.sweep.controlPoints[0].length === 3) {
+            const o = part.sweep.controlPoints[0] as number[];
+            if (Math.hypot(o[0], o[1], o[2]) > 1e-6) {
+                part.sweep.controlPoints = part.sweep.controlPoints.map((p: number[]) => (Array.isArray(p) && p.length === 3 ? [p[0] - o[0], p[1] - o[1], p[2] - o[2]] : p));
+                notes.push(`${id}: the child sweep's control points were given in the object's frame; made relative to its first point (offset ${o.map(v => v.toFixed(2)).join(', ')} m)`);
+            }
+        }
+        const r = part.revolve;
+        if (r && Array.isArray(r.axisOrigin) && r.axisOrigin.length === 3 && Math.hypot(r.axisOrigin[0], r.axisOrigin[1], r.axisOrigin[2]) > 1e-6) {
+            const o = r.axisOrigin as number[];
+            const d = Array.isArray(r.axisDirection) && r.axisDirection.length === 3 ? (r.axisDirection as number[]) : [0, 1, 0];
+            const dl2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] || 1;
+            const along = (o[0] * d[0] + o[1] * d[1] + o[2] * d[2]) / dl2;
+            if (Array.isArray(r.meridian)) r.meridian = r.meridian.map((m: number[]) => (Array.isArray(m) && m.length === 2 ? [m[0] + along, m[1]] : m));
+            r.axisOrigin = [0, 0, 0];
+            notes.push(`${id}: the child revolve's axis was given away from its attach point; axisOrigin set to [0, 0, 0] with the axial offset ${along.toFixed(2)} m moved into the meridian`);
+        }
+        if (r && Array.isArray(r.meridian) && r.meridian.every((m: unknown) => Array.isArray(m) && m.length === 2)) {
+            const ax = (r.meridian as number[][]).map(m => m[0]);
+            const lo = Math.min(...ax), hi = Math.max(...ax);
+            if (lo > 1e-6 || hi < -1e-6) {
+                const shift = lo > 1e-6 ? -lo : -hi;
+                r.meridian = r.meridian.map((m: number[]) => [m[0] + shift, m[1]]);
+                notes.push(`${id}: the child revolve did not reach its attach point; its meridian was shifted ${shift.toFixed(2)} m along the axis so it does`);
+            }
+        }
+    }
+    return { spec: out, notes };
+}
 
 export function figurePrompt(images: Array<{ index: number; blob: FigureBlob; view: FigureView; widthPx: number; heightPx: number }>): { preamble: string; captions: string[]; closing: string } {
     const preamble = `You are reading standing figures that sit on pedestals, each from one Google Street View crop, so that each can be built as a clean model. The 3D scan only holds each as a rough lump, whose measured bounds are given. For every image, describe the ONE figure at the middle of the crop as a build spec. Everything you give is labelled "photo-inferred".`;
@@ -275,6 +319,7 @@ export function figurePrompt(images: Array<{ index: number; blob: FigureBlob; vi
         '3. Describe the whole figure including sides the crop hides: infer them from symmetry and from how such figures are made. Pose, proportions, drapery and held objects are what the crop shows; do not add what you cannot see.',
         '4. "confidence" is 0..100: how well the crop lets you read the figure.',
         '5. If an image shows no figure at its middle, leave it out of the list.',
+        '6. Placement: ONE root part (no parentId) holds the main mass in absolute coordinates. Every other part has parentId and attach, and is placed ONLY by its attach (u, angleDeg, normalOffsetMeters): a child sweep\'s controlPoints[0] is exactly [0, 0, 0] with the rest relative to it, and a child revolve\'s axisOrigin is exactly [0, 0, 0] with a meridian that spans axial distance 0. Never give a child part an absolute position.',
         '',
         specConventions()
     ].join('\n');
@@ -302,16 +347,28 @@ export function parseFigureReply(text: string, finishReason: string | undefined,
     for (const f of value.figures) {
         if (!f || !Number.isInteger(f.image) || f.image < 0 || f.image >= imageCount) continue;
         if (readings.has(f.image)) continue;
-        const errors = validateObjectBuildSpec(f.spec);
+        const norm = normaliseFigureSpec(f.spec);
+        const errors = validateObjectBuildSpec(norm.spec);
         if (errors.length) { problems.set(f.image, errors.slice(0, 4)); continue; }
-        readings.set(f.image, { index: f.image, spec: f.spec as ObjectBuildSpec, confidence: Math.max(0, Math.min(100, Number(f.confidence) || 0)) });
+        readings.set(f.image, { index: f.image, spec: norm.spec as ObjectBuildSpec, confidence: Math.max(0, Math.min(100, Number(f.confidence) || 0)), ...(norm.notes.length ? { normalised: norm.notes } : {}) });
     }
     return { readings, problems };
 }
 
 export interface ReadFiguresInput { images: FigureImage[]; chain: VisionModelChain<string>; signal?: AbortSignal; onProgress?: (m: string) => void; timeoutMs?: number }
 
+/** One call, and one more when the reply came back unreadable (cut off or not JSON): the model's long replies fail that way now and then, and a second try costs one call. */
 export async function readFigures(input: ReadFiguresInput): Promise<{ parsed: ParsedFigures; model: VisionModelUse }> {
+    try {
+        return await readFiguresOnce(input);
+    } catch (err) {
+        if (input.signal?.aborted || !/not valid JSON|cut off|ended with|no "figures"/.test((err as Error).message)) throw err;
+        input.onProgress?.(`the reply could not be read (${(err as Error).message.slice(0, 80)}); asking once more`);
+        return readFiguresOnce(input);
+    }
+}
+
+async function readFiguresOnce(input: ReadFiguresInput): Promise<{ parsed: ParsedFigures; model: VisionModelUse }> {
     const timeoutMs = input.timeoutMs ?? FIGURE_VISION_TIMEOUT_MS;
     const own = new AbortController();
     const timer = setTimeout(() => own.abort(Object.assign(new Error(`the vision call took longer than ${Math.round(timeoutMs / 1000)} s`), { name: 'TimeoutError' })), timeoutMs);

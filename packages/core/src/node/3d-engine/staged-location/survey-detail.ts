@@ -25,12 +25,15 @@ import { bearingDeg, NOMINAL_POSE_UNCERTAINTY, type SelectedView } from './stree
 import type { SurveyResult } from './face-survey';
 import { carrierArc, castBox, fitFaces, slotForCast, type BoxCast } from './survey-casting';
 import { pointInPolygon } from './ornament-vision';
+import type { Registration } from './pano-registration';
 
 const DEG = Math.PI / 180;
 export const DETAIL_FOV_MIN_DEG = 30;
 export const DETAIL_FOV_MAX_DEG = 45;
 /** An element whose box lands on a slot with less than this share of its own area is not given to that slot (surface slots). */
 export const MIN_SLOT_OVERLAP = 0.15;
+/** A group wider than one narrow crop frames is read in overlapping crops, at most this many. */
+export const MAX_CROPS_PER_GROUP = 3;
 
 export interface LocatedElement {
     /** "f<face>.e<index>": stable for one survey. */
@@ -77,6 +80,17 @@ export interface DetailPlan {
 
 export const LOCATED_PLACE_SOURCE = 'the survey model\'s bounding box cast through the nominal (unregistered) pano pose';
 
+/** Where a registered element's place can still be wrong by: the pairs' disagreement left after the fit, plus a quarter degree of heading at the distance, never looser than the nominal pose. */
+export function registeredUncertaintyAt(distanceM: number, afterRmsM: number, pairResidualM: number): number {
+    const v = Math.hypot(Math.max(0.05, afterRmsM), pairResidualM, distanceM * Math.tan(0.25 * Math.PI / 180));
+    return Math.min(poseUncertaintyAt(distanceM), Math.round(v * 100) / 100);
+}
+
+export function registeredPlaceSource(reg: Registration, panoId: string, pairs: number): string {
+    const p = reg.perPano.find(x => x.panoId === panoId);
+    return `the survey model's bounding box cast through pano ${panoId}'s pose registered against ${pairs} matched view${pairs === 1 ? '' : 's'} (eye shifted ${p ? Math.hypot(p.dxM, p.dzM).toFixed(2) : '0'} m, heading ${p ? p.dyawDeg.toFixed(2) : '0'}°; the matched boxes disagree by ${reg.afterRmsM.toFixed(2)} m RMS after the fit, ${reg.beforeRmsM.toFixed(2)} m before)`;
+}
+
 /** The nominal pose's position and heading error carried to a point `distanceM` away, metres (the two add in quadrature). */
 export function poseUncertaintyAt(distanceM: number): number {
     const a = distanceM * Math.tan(NOMINAL_POSE_UNCERTAINTY.degrees * Math.PI / 180);
@@ -84,7 +98,7 @@ export function poseUncertaintyAt(distanceM: number): number {
 }
 
 /** Casts every surveyed element onto the fitted faces and finds its slot. */
-export function locateSurveyElements(survey: Pick<SurveyResult, 'faces' | 'read'>, fit: Pick<StructureFit, 'slots' | 'surfaces'>): { located: LocatedElement[]; unlocated: UnlocatedElement[] } {
+export function locateSurveyElements(survey: Pick<SurveyResult, 'faces' | 'read'>, fit: Pick<StructureFit, 'slots' | 'surfaces'>, registration?: Registration): { located: LocatedElement[]; unlocated: UnlocatedElement[] } {
     const faces = fitFaces(fit);
     const located: LocatedElement[] = [];
     const unlocated: UnlocatedElement[] = [];
@@ -92,7 +106,8 @@ export function locateSurveyElements(survey: Pick<SurveyResult, 'faces' | 'read'
         const r = survey.read.find(x => x.view.faceId === face.faceId);
         if (!r || face.skipped) continue;
         face.elements.forEach((el: SurveyElement, k) => {
-            const view = { eye: r.view.eye, headingDeg: r.view.headingDeg, pitchDeg: r.view.pitchDeg, fovDeg: r.view.fovDeg, widthPx: r.widthPx, heightPx: r.heightPx };
+            const correction = registration?.corrections.get(r.view.panoId);
+            const view = { eye: r.view.eye, headingDeg: r.view.headingDeg, pitchDeg: r.view.pitchDeg, fovDeg: r.view.fovDeg, widthPx: r.widthPx, heightPx: r.heightPx, ...(correction ? { correction } : {}) };
             const cast = castBox(view, el.box, faces);
             if (!cast) { unlocated.push({ faceId: face.faceId, kind: el.kind, reason: 'its box does not land on any fitted face' }); return; }
             const slot = slotForCast(cast, fit);
@@ -116,11 +131,19 @@ export function locateSurveyElements(survey: Pick<SurveyResult, 'faces' | 'read'
                 slotId: slot.slotId, slotOverlap: Math.round(slot.overlap * 1000) / 1000, surfaceId: cast.faceId, regionUv: cast.regionUv, widthM: Math.round(widthM * 1000) / 1000, heightM: Math.round(heightM * 1000) / 1000,
                 centre: cast.centre, metresPerPx: Math.round(cast.metresPerPx * 10000) / 10000,
                 ...(repeat ? { repeat } : {}), ...(runAlongM ? { runAlongM } : {}), material: el.material, weathering: el.weathering, confidence: el.confidence,
-                distanceM: Math.round(cast.distanceM * 100) / 100, locationUncertaintyM: poseUncertaintyAt(cast.distanceM), placeSource: LOCATED_PLACE_SOURCE
+                distanceM: Math.round(cast.distanceM * 100) / 100,
+                ...placeOf(registration, r.view.panoId, face.faceId, k, cast.distanceM)
             });
         });
     }
     return { located, unlocated };
+}
+
+function placeOf(reg: Registration | undefined, panoId: string, faceId: string, k: number, distanceM: number): { locationUncertaintyM: number; placeSource: string } {
+    const mine = reg?.pairs.filter(p => p.used && p.id.startsWith(`${faceId}.e${k}@`)) ?? [];
+    const panoPairs = reg?.perPano.find(p => p.panoId === panoId)?.pairs ?? 0;
+    if (!reg || !mine.length || panoPairs < 1) return { locationUncertaintyM: poseUncertaintyAt(distanceM), placeSource: LOCATED_PLACE_SOURCE };
+    return { locationUncertaintyM: registeredUncertaintyAt(distanceM, reg.afterRmsM, Math.max(...mine.map(p => p.residualM))), placeSource: registeredPlaceSource(reg, panoId, mine.length) };
 }
 
 const ASPECTS: Array<{ name: GroundingAspectRatio; ratio: number }> = [
@@ -132,7 +155,7 @@ const ASPECTS: Array<{ name: GroundingAspectRatio; ratio: number }> = [
  * group, field of view framing the group but kept to 30-45°. The slots with the most confident, largest groups come
  * first; at most `max` crops (the per-building image budget).
  */
-export function planDetailViews(located: LocatedElement[], survey: Pick<SurveyResult, 'read'>, max = MAX_STREET_VIEW_IMAGES_PER_BUILDING): SelectedView[] {
+export function planDetailViews(located: LocatedElement[], survey: Pick<SurveyResult, 'read'>, max = MAX_STREET_VIEW_IMAGES_PER_BUILDING, registration?: Registration): SelectedView[] {
     const bySlot = new Map<string, LocatedElement[]>();
     for (const l of located) bySlot.set(l.slotId, [...(bySlot.get(l.slotId) ?? []), l]);
     const groups = [...bySlot.entries()].map(([slotId, els]) => {
@@ -148,32 +171,54 @@ export function planDetailViews(located: LocatedElement[], survey: Pick<SurveyRe
         const panoId = [...byImage.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0];
         const r = survey.read.find(x => x.view.panoId === panoId);
         if (!r) continue;
-        const eye = r.view.eye;
+        const nominalEye = r.view.eye;
+        // the pano's true place and heading are the registered ones: the crop is aimed from there (the stated heading is relative to the pano's own frame)
+        const corr = registration?.corrections.get(panoId);
+        const eye: Vec3 = corr ? [nominalEye[0] + corr.dx, nominalEye[1] + corr.dy, nominalEye[2] + corr.dz] : nominalEye;
         const inPano = g.els.filter(e => e.panoId === panoId);
         const u0 = Math.min(...inPano.map(e => e.regionUv.u0)), u1 = Math.max(...inPano.map(e => e.regionUv.u1));
         const v0 = Math.min(...inPano.map(e => e.regionUv.v0)), v1 = Math.max(...inPano.map(e => e.regionUv.v1));
-        const cx = inPano.reduce((s, e) => s + e.centre[0], 0) / inPano.length, cy = inPano.reduce((s, e) => s + e.centre[1], 0) / inPano.length, cz = inPano.reduce((s, e) => s + e.centre[2], 0) / inPano.length;
-        const d = Math.hypot(cx - eye[0], cz - eye[2]);
-        const elevationDeg = Math.max(-20, Math.min(60, Math.atan2(cy - eye[1], Math.max(0.1, d)) / DEG));
+        // the group's extent along its own horizontal axis (the farthest-apart pair of element centres); a group wider than one crop frames is split
+        // into overlapping crops along it, so a long row is read in pieces each close enough to count
+        const meanC: Vec3 = [inPano.reduce((s, e) => s + e.centre[0], 0) / inPano.length, inPano.reduce((s, e) => s + e.centre[1], 0) / inPano.length, inPano.reduce((s, e) => s + e.centre[2], 0) / inPano.length];
+        let axis: [number, number] = [0, 0];
+        let far = 0;
+        for (const p of inPano) for (const q of inPano) { const l = Math.hypot(p.centre[0] - q.centre[0], p.centre[2] - q.centre[2]); if (l > far) { far = l; axis = [(q.centre[0] - p.centre[0]) / l, (q.centre[2] - p.centre[2]) / l]; } }
         const widthM = Math.max(0.5, u1 - u0), heightM = Math.max(0.5, v1 - v0);
-        const aspect = ASPECTS.reduce((best, a) => (Math.abs(Math.log(a.ratio / (widthM / heightM))) < Math.abs(Math.log(best.ratio / (widthM / heightM))) ? a : best), ASPECTS[1]);
-        // fov (horizontal) that frames the larger need with 25% margin; kept to 30-45
-        const needH = 2 * Math.atan(((widthM / 2) * 1.25) / Math.max(1, d)) / DEG;
-        const needV = 2 * Math.atan((((heightM / 2) * 1.25) / Math.max(1, d)) * aspect.ratio) / DEG;
-        const fovDeg = Math.round(Math.max(DETAIL_FOV_MIN_DEG, Math.min(DETAIL_FOV_MAX_DEG, Math.max(needH, needV))) * 10) / 10;
-        views.push({
-            panoId, date: r.view.date, copyright: r.view.copyright, eye, facadeHeadingDeg: Math.round(inPano[0].headingDeg),
-            headingDeg: Math.round(bearingDeg(eye[0], eye[2], cx, cz) * 10) / 10, pitchDeg: Math.round(elevationDeg * 10) / 10, fovDeg, aspectRatio: aspect.name,
-            distanceM: Math.round(Math.hypot(d, cy - eye[1]) * 100) / 100, score: Math.round(g.weight * 1000) / 1000, aimedSlotIds: [g.slotId], coveredSlotIds: [g.slotId]
-        });
+        const dMean = Math.hypot(meanC[0] - eye[0], meanC[2] - eye[2]);
+        const coverM = 2 * Math.tan((DETAIL_FOV_MAX_DEG * DEG) / 2) * Math.max(1, dMean) / 1.25;
+        let t0 = 0, t1 = 0;
+        if (far > 0) { const proj = inPano.flatMap(e => { const t = (e.centre[0] - meanC[0]) * axis[0] + (e.centre[2] - meanC[2]) * axis[1]; return [t - e.widthM / 2, t + e.widthM / 2]; }); t0 = Math.min(...proj); t1 = Math.max(...proj); }
+        const spanM = Math.max(far > 0 ? t1 - t0 : widthM, widthM);
+        const n = Math.max(1, Math.min(MAX_CROPS_PER_GROUP, Math.ceil(spanM / (0.7 * coverM))));
+        for (let k = 0; k < n; k++) {
+            if (views.length >= Math.max(0, Math.min(MAX_STREET_VIEW_IMAGES_PER_BUILDING, max))) break;
+            const frac = n === 1 ? 0.5 : (k + 0.5) / n;
+            const tc = n === 1 || far <= 0 ? 0 : t0 + (t1 - t0) * frac - 0;
+            const cx = meanC[0] + (n === 1 ? 0 : axis[0] * tc), cz = meanC[2] + (n === 1 ? 0 : axis[1] * tc), cy = meanC[1];
+            const winW = n === 1 ? widthM : Math.max(0.5, spanM / n * 1.4);
+            const d = Math.hypot(cx - eye[0], cz - eye[2]);
+            const elevationDeg = Math.max(-20, Math.min(60, Math.atan2(cy - eye[1], Math.max(0.1, d)) / DEG));
+            const aspect = ASPECTS.reduce((best, a) => (Math.abs(Math.log(a.ratio / (winW / heightM))) < Math.abs(Math.log(best.ratio / (winW / heightM))) ? a : best), ASPECTS[1]);
+            // fov (horizontal) that frames the larger need with 25% margin; kept to 30-45
+            const needH = 2 * Math.atan(((winW / 2) * 1.25) / Math.max(1, d)) / DEG;
+            const needV = 2 * Math.atan((((heightM / 2) * 1.25) / Math.max(1, d)) * aspect.ratio) / DEG;
+            const fovDeg = Math.round(Math.max(DETAIL_FOV_MIN_DEG, Math.min(DETAIL_FOV_MAX_DEG, Math.max(needH, needV))) * 10) / 10;
+            const heading = (((bearingDeg(eye[0], eye[2], cx, cz) - (corr?.dyawDeg ?? 0)) % 360) + 360) % 360;
+            views.push({
+                panoId, date: r.view.date, copyright: r.view.copyright, eye: nominalEye, facadeHeadingDeg: Math.round(inPano[0].headingDeg),
+                headingDeg: Math.round(heading * 10) / 10, pitchDeg: Math.round(elevationDeg * 10) / 10, fovDeg, aspectRatio: aspect.name,
+                distanceM: Math.round(Math.hypot(d, cy - eye[1]) * 100) / 100, score: Math.round(g.weight * 1000) / 1000, aimedSlotIds: [g.slotId], coveredSlotIds: [g.slotId]
+            });
+        }
     }
     return views;
 }
 
 /** Locate the survey's elements on a fit and plan the crops. A survey with nothing locatable plans nothing. */
-export function planDetailFromSurvey(survey: Pick<SurveyResult, 'faces' | 'read'>, fit: Pick<StructureFit, 'slots' | 'surfaces'>, max = MAX_STREET_VIEW_IMAGES_PER_BUILDING): DetailPlan {
-    const { located, unlocated } = locateSurveyElements(survey, fit);
-    return { located, unlocated, views: planDetailViews(located, survey, max) };
+export function planDetailFromSurvey(survey: Pick<SurveyResult, 'faces' | 'read'>, fit: Pick<StructureFit, 'slots' | 'surfaces'>, max = MAX_STREET_VIEW_IMAGES_PER_BUILDING, registration?: Registration): DetailPlan {
+    const { located, unlocated } = locateSurveyElements(survey, fit, registration);
+    return { located, unlocated, views: planDetailViews(located, survey, max, registration) };
 }
 
 /** The hints table the reading prompt carries: per slot, what the survey saw there and where it stands, as the scan measures it. */

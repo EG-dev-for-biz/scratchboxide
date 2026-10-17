@@ -47,7 +47,7 @@ export const EVIDENCE_IMAGE_TIMEOUT_MS = 30_000;
 export const EVIDENCE_DISCOVERY_ALLOWANCE_MS = 45_000;
 export const EVIDENCE_STAGE_BUDGET_MS = EVIDENCE_DISCOVERY_ALLOWANCE_MS + EVIDENCE_IMAGE_TIMEOUT_MS + 15_000;
 /** Panos kept for selection: the nearest to the structure. */
-export const MAX_CANDIDATE_PANOS = 40;
+export const MAX_CANDIDATE_PANOS = 90;
 export const STREET_VIEW_EYE_HEIGHT_M = 2.5;
 /** The nominal pose's stated uncertainty (pano position, car camera height, heading): registration is not run in v1. */
 export const NOMINAL_POSE_UNCERTAINTY = { meters: 2, degrees: 2 } as const;
@@ -171,23 +171,23 @@ export function facadeGeometry(structure: Pick<StructurePickResult, 'outline' | 
 
 /**
  * Street points to ask the metadata endpoint about. It answers with the NEAREST pano only, so one query per place
- * finds one pano: the points are rings (12-60 m, 10 m steps) round each facade centre within ±30° of its heading, and
- * rings (15-100 m) all the way round the structure, every 30°, so panos on every side of it come up.
+ * finds one pano: the points are rings (10-90 m, 8 m steps) round each facade centre within ±75° of its heading (oblique views of a face), and
+ * rings (12-130 m) all the way round the structure, every 15°, so panos on every side of it come up.
  */
 export function candidatePoints(facades: FacadeGeometry[], centre?: { x: number; z: number }): Array<{ x: number; z: number }> {
     const pts: Array<{ x: number; z: number }> = [];
     for (const f of facades) {
-        for (let r = 12; r <= 60; r += 10) {
-            for (const off of [-30, -15, 0, 15, 30]) {
+        for (let r = 10; r <= 90; r += 8) {
+            for (let off = -75; off <= 75; off += 15) {
                 const [dx, dz] = headingDir(f.headingDeg + off);
                 pts.push({ x: f.centre[0] + dx * r, z: f.centre[1] + dz * r });
             }
         }
     }
     if (centre) {
-        for (const r of [15, 30, 50, 75, 100]) {
-            for (let a = 0; a < 360; a += 30) {
-                const [dx, dz] = headingDir(a + (r % 20 === 0 ? 15 : 0));
+        for (const r of [12, 20, 30, 42, 56, 72, 90, 110, 130]) {
+            for (let a = 0; a < 360; a += 15) {
+                const [dx, dz] = headingDir(a + (r % 20 === 0 ? 7.5 : 0));
                 pts.push({ x: centre.x + dx * r, z: centre.z + dz * r });
             }
         }

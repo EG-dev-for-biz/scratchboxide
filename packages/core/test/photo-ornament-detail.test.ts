@@ -133,6 +133,24 @@ describe('anchoring the measurements to the scan', () => {
         expect(r.problems.get(0)![0]).toMatch(/re-read the repeat count and the pitch as they appear; do not adjust them to match the span/);
     });
 
+    it('after the one re-read, a reading within reach of the measured span is kept on it, labelled with the error; an impossible one (a row of 72 m on a 6.5 m run) is still rejected', () => {
+        const mk = (pitch: number, count: number) => expand([compact({ slot: 'S02', op: { replicate: { seed: { sweep: { t: [0, 14], profile: [0, 0, 250, 0, 250, 100, 0, 100] } }, along: [0, pitch, count] } } })]);
+        const x = mk(700, 18);
+        const first = anchorElements(x, fit, registered());
+        expect(first.problems.size).toBe(1); // asked once
+        const r = anchorElements(x, fit, registered(), undefined, true);
+        expect(r.problems.size).toBe(0);
+        expect(r.notes[0]).toMatchObject({ kind: 'pitch-snapped' });
+        expect(r.notes[0].errorM).toBeGreaterThan(PHOTO_CORRECTION_TOLERANCE_M);
+        expect((x[0].element.spec as any).replicate.domain.along.pitchM).toBeCloseTo(6.48 / 18, 1);
+        expect(x[0].element.provenance.label).toBe(PROVENANCE.photoCorrected);
+        expect(x[0].element.provenance.note).toMatch(/off by more than the 0\.31 m tolerance, and the error is labelled/);
+        const impossible = mk(360, 200);
+        const bad = anchorElements(impossible, fit, registered(), undefined, true);
+        expect(bad.problems.get(0)![0]).toMatch(/72 mm|72 m|72\.0 m/);
+        expect(bad.notes).toEqual([]);
+    });
+
     it('a run placed only by the nominal pano pose (good to metres) never overwrites the photo-read pitch, and a gross gap goes back as a re-read', () => {
         const near = expand([compact({ slot: 'S02', op: { replicate: { seed: { sweep: { t: [0, 14], profile: [0, 0, 250, 0, 250, 100, 0, 100] } }, along: [0, 370, 18] } } })]);
         const loose = located();
@@ -162,6 +180,18 @@ describe('anchoring the measurements to the scan', () => {
         expect((ok[0].element.spec as any).revolve.axisOrigin[0]).toBeLessThanOrEqual(7.7 + 1e-6);
         const far = expand([small(9.9)]);
         expect(anchorElements(far, fit, []).notes).toEqual([]);
+    });
+
+    it('after the one re-read, a medallion 0.7 m outside its slot is moved back in with the error labelled; the first look leaves it alone', () => {
+        const at = (u: number) => compact({ slot: 'S01', op: { revolve: { at: [u * 1000, 15000], axis: 'n', profile: [0, 0, 300, 0, 300, 100, 0, 100] } } });
+        const first = expand([at(8.4)]);
+        expect(anchorElements(first, fit, []).notes).toEqual([]);
+        const last = expand([at(8.4)]);
+        const r = anchorElements(last, fit, [], undefined, true);
+        expect(r.notes[0]).toMatchObject({ kind: 'clipped-to-slot' });
+        expect(r.notes[0].errorM).toBeGreaterThan(0.31);
+        expect(last[0].element.provenance.note).toMatch(/off by more than the 0\.31 m tolerance/);
+        expect((last[0].element.spec as any).revolve.axisOrigin[0]).toBeLessThanOrEqual(7.7 + 1e-6);
     });
 });
 

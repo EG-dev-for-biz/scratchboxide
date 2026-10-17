@@ -51,7 +51,9 @@ import type { LocationClayTrees } from '../../node/3d-engine/location-clay-pipel
 export const PHOTO_CORRECTION_TOLERANCE_M = 0.31;
 
 /** Street View images per building, all fetched through StreetViewGroundingImageService (Maps Imagery Grounding API). */
-export const MAX_STREET_VIEW_IMAGES_PER_BUILDING = 4;
+export const MAX_STREET_VIEW_IMAGES_PER_BUILDING = 16;
+/** Faces of one structure that are surveyed (the survey takes a ring of views of each, up to the image budget). */
+export const MAX_SURVEY_FACES = 4;
 
 /** tile_refine's photometric relief stays on: it is gated (confirmed patterns only) and labelled inferred (906a62d4). */
 export const TILE_REFINE_RELIEF_DEFAULT = true;
@@ -935,7 +937,10 @@ export interface StagedLocationResult {
         gates: GateResult[]; corrections: PrimitiveCorrection[]; reportPath: string;
     };
     ornament?: {
+        /** The elements BUILT and committed to the detail layer (what is visible); 0 when the detail build did not commit a layer. */
         elements: number; slotsFilled: number; slotsEmpty: number;
+        /** The elements the reading kept after its checks, whether or not they were then built. */
+        read?: number;
         confidence: { min: number; median: number; max: number };
         /** streetView ≤ MAX_STREET_VIEW_IMAGES_PER_BUILDING. */
         evidence: { tileOrthos: number; streetView: number };
@@ -1453,7 +1458,7 @@ const DEFINITIONS = {
         emptySlots: arr(obj(['slot', 'why'], { slot: STR, why: { type: 'string', maxLength: 80 } }))
     }),
     evidenceImage: obj(['id', 'index', 'kind', 'widthPx', 'heightPx', 'sha256', 'nativeSampleM', 'slotsShown'], {
-        id: STR, index: { type: 'integer', minimum: 0, maximum: 15 }, kind: STR, widthPx: INT, heightPx: INT,
+        id: STR, index: { type: 'integer', minimum: 0, maximum: 63 }, kind: STR, widthPx: INT, heightPx: INT,
         sha256: STR, nativeSampleM: ref('nonneg'), surfaceId: STR, gsdM: NUM, texelM: NUM, panoId: STR,
         captureDate: STR, copyright: STR, headingDeg: NUM, pitchDeg: NUM, fovDeg: NUM, distanceM: NUM,
         pose: obj(['eye', 'registered', 'uncertaintyM', 'uncertaintyDeg'], { eye: ref('vec3'), registered: BOOL, uncertaintyM: NUM, uncertaintyDeg: NUM }),
@@ -1646,7 +1651,7 @@ const DEFINITIONS = {
             gates: arr(ref('gate')), corrections: arr(ref('correction')), reportPath: STR
         }),
         ornament: obj(['elements', 'slotsFilled', 'slotsEmpty', 'confidence', 'evidence', 'model', 'revisionPass', 'dropped', 'specPath'], {
-            elements: NONNEG_INT, slotsFilled: NONNEG_INT, slotsEmpty: NONNEG_INT,
+            elements: NONNEG_INT, slotsFilled: NONNEG_INT, slotsEmpty: NONNEG_INT, read: NONNEG_INT,
             confidence: obj(['min', 'median', 'max'], { min: ref('unit'), median: ref('unit'), max: ref('unit') }),
             evidence: obj(['tileOrthos', 'streetView'], { tileOrthos: NONNEG_INT, streetView: { type: 'integer', minimum: 0, maximum: MAX_STREET_VIEW_IMAGES_PER_BUILDING } }),
             model: ref('visionModelUse'), revisionPass: BOOL, dropped: NONNEG_INT, specPath: STR,

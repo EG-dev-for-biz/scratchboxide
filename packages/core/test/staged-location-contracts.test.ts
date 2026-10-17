@@ -283,7 +283,7 @@ const INVALID: InvalidCase[] = [
         message: 'OrnamentSpec.corrections[0].check.toleranceM: 0.32 is above the maximum 0.31'
     },
     {
-        kind: 'user decision: at most 4 Street View images per building', name: 'StagedLocationResult',
+        kind: 'user decision: at most 16 Street View images per building', name: 'StagedLocationResult',
         make: () => ({
             ...fx.stagedLocationResult(),
             ornament: {
@@ -292,7 +292,7 @@ const INVALID: InvalidCase[] = [
                 specPath: '.scratchbox/cache/staged_location/ornament/ornament_spec.json'
             }
         }),
-        message: 'StagedLocationResult.ornament.evidence.streetView: 5 is above the maximum 4'
+        message: 'StagedLocationResult.ornament.evidence.streetView: 17 is above the maximum 16'
     }
 ];
 
@@ -390,9 +390,9 @@ describe('user decisions', () => {
             .toEqual(['visionModelUse.skipped[0]: required property "reason" is missing']);
     });
 
-    it('keeps tile_refine relief on, 4 Street View images and a 0.31 m correction tolerance', () => {
+    it('keeps tile_refine relief on, 16 Street View images and a 0.31 m correction tolerance', () => {
         expect(TILE_REFINE_RELIEF_DEFAULT).toBe(true);
-        expect(MAX_STREET_VIEW_IMAGES_PER_BUILDING).toBe(4);
+        expect(MAX_STREET_VIEW_IMAGES_PER_BUILDING).toBe(16);
         expect(PHOTO_CORRECTION_TOLERANCE_M).toBe(0.31);
         const atLimit = fx.ornamentSpec();
         atLimit.corrections[0].check.toleranceM = 0.31;

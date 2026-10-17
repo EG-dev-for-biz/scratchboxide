@@ -21,7 +21,7 @@
  */
 
 import type { FittedSurface, StructureFit, Vec2, Vec3 } from '../../../common/spatial/staged-location-contracts';
-import { frameCamera, ZERO_CORRECTION, type FrameCamera } from '../../spatial/StreetViewPoseRegistrar';
+import { frameCamera, ZERO_CORRECTION, type FrameCamera, type PoseCorrection } from '../../spatial/StreetViewPoseRegistrar';
 
 const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const add = (a: Vec3, b: Vec3): Vec3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
@@ -38,10 +38,12 @@ export interface CastView {
     fovDeg: number;
     widthPx: number;
     heightPx: number;
+    /** The registered pose's offset from the nominal one (eye shift in the tile frame, yaw); absent for the nominal pose. */
+    correction?: PoseCorrection;
 }
 
 export function castCamera(v: CastView): FrameCamera {
-    return frameCamera(v.eye, v.headingDeg, v.pitchDeg, v.fovDeg, v.widthPx, v.heightPx, ZERO_CORRECTION, v.headingDeg);
+    return frameCamera(v.eye, v.headingDeg, v.pitchDeg, v.fovDeg, v.widthPx, v.heightPx, v.correction ?? ZERO_CORRECTION, v.headingDeg);
 }
 
 /** The ray through a pixel (x right, y down), unit direction in the tile frame. */

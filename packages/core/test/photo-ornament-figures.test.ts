@@ -13,8 +13,9 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-    constrainFigure, detectFigureBlobs, figureContents, FIGURE_CRITERIA, FIGURE_SCALE_LIMITS, footprintAxis, parseFigureReply, planFigureViews, smoothLump, type FigureBlob
+    constrainFigure, detectFigureBlobs, figureContents, FIGURE_CRITERIA, FIGURE_SCALE_LIMITS, footprintAxis, normaliseFigureSpec, parseFigureReply, planFigureViews, smoothLump, type FigureBlob
 } from '../src/node/3d-engine/staged-location/figures';
+import { validateObjectBuildSpec } from '../src/common/spatial/object-build-spec';
 import { parseGlbNodes } from '../src/node/3d-engine/staged-location/glb-nodes';
 import { structureFit } from './helpers/staged-location-fixtures';
 import { figureGlb, figureSpec, figuresReply, lumpMesh } from './helpers/photo-ornament-fixtures';
@@ -219,6 +220,66 @@ describe('the rung under a figure: the scanned lump, smoothed inside the scan to
     it('a mesh with no connected surface cannot be smoothed and says so', () => {
         expect(() => smoothLump({ positions: new Float32Array([0, 0, 0]), indices: new Uint32Array([]) }, 0.1)).toThrow(/no connected surface/);
     });
+});
+
+/** The spec shapes the live run produced (child parts placed in absolute coordinates), for a figure on a base. */
+function logSpec(): any {
+    const profile = [{ t: 0, widthMeters: 0.1, heightMeters: 0.08, exponent: 2 }, { t: 1, widthMeters: 0.08, heightMeters: 0.06, exponent: 2 }];
+    return {
+        subject: 'a standing figure', observations: ['draped'], boundingMeters: [0.6, 2.0, 0.4], expectedBodies: 1,
+        parts: [
+            { id: 'torso', label: 'torso', revolve: { axisOrigin: [0, 0, 0], axisDirection: [0, 1, 0], meridian: [[0, 0], [0, 0.4], [1.3, 0.42], [2.0, 0.25], [2.3, 0]], smoothing: 0.3, lobeCount: 0, lobeDepthRatio: 0, helixPitchMeters: 0 } },
+            { id: 'support_column', label: 'column', parentId: 'torso', attach: { u: 0.1, angleDeg: 180, normalOffsetMeters: -0.05 }, revolve: { axisOrigin: [0, 0.4, -0.2], axisDirection: [0, 1, 0], meridian: [[0, 0], [0, 0.06], [0.6, 0.06], [0.6, 0]], smoothing: 0.2, lobeCount: 0, lobeDepthRatio: 0, helixPitchMeters: 0 } },
+            { id: 'pelvis', label: 'pelvis', parentId: 'torso', attach: { u: 0.2, angleDeg: 0, normalOffsetMeters: -0.05 }, sweep: { controlPoints: [[0, 0.9, 0], [0, 1.1, 0.02]], closedLoop: false, smoothing: 0.5, profile } },
+            { id: 'left_foot', label: 'left foot', parentId: 'torso', attach: { u: 0.0, angleDeg: 270, normalOffsetMeters: -0.03 }, sweep: { controlPoints: [[-0.12, 0, 0.05], [-0.12, 0.03, 0.15]], closedLoop: false, smoothing: 0.5, profile } },
+            { id: 'right_foot', label: 'right foot', parentId: 'torso', attach: { u: 0.0, angleDeg: 90, normalOffsetMeters: -0.03 }, sweep: { controlPoints: [[0.12, 0, 0.05], [0.12, 0.03, 0.15]], closedLoop: false, smoothing: 0.5, profile } }
+        ]
+    };
+}
+
+describe('the spec conventions: child parts are placed by their attach, not by absolute coordinates', () => {
+    it('the shapes from the live run fail the native builder\'s rules as given, and pass once the conventions are applied, with what changed said in words', () => {
+        const errs = validateObjectBuildSpec(logSpec());
+        expect(errs.join('|')).toMatch(/child revolve's axis passes through its attach point, so axisOrigin must be \[0, 0, 0\]/);
+        expect(errs.join('|')).toMatch(/child sweep starts at its attach point, so controlPoints\[0\] must be \[0, 0, 0\]/);
+        const n = normaliseFigureSpec(logSpec());
+        expect(validateObjectBuildSpec(n.spec)).toEqual([]);
+        expect(n.notes.length).toBeGreaterThanOrEqual(4);
+        const foot = (n.spec as any).parts.find((p: any) => p.id === 'left_foot').sweep.controlPoints;
+        expect(foot[0]).toEqual([0, 0, 0]);
+        expect(foot[1][1]).toBeCloseTo(0.03, 9); expect(foot[1][2]).toBeCloseTo(0.1, 9);
+        // the shape is kept: the column's meridian moved along the axis by the 0.4 m its axis origin carried, then shifted to span the attach point
+        const col = (n.spec as any).parts.find((p: any) => p.id === 'support_column').revolve;
+        expect(col.axisOrigin).toEqual([0, 0, 0]);
+        expect(Math.min(...col.meridian.map((m: number[]) => m[0]))).toBeLessThanOrEqual(1e-6);
+        expect(Math.max(...col.meridian.map((m: number[]) => m[0])) - Math.min(...col.meridian.map((m: number[]) => m[0]))).toBeCloseTo(0.6, 6);
+        // a spec that already follows the conventions is untouched
+        expect(normaliseFigureSpec(figureSpec()).notes).toEqual([]);
+    });
+
+    it('the parser applies them: the reading is kept, with the notes; a spec broken in another way is still refused', () => {
+        const ok = parseFigureReply(JSON.stringify({ figures: [{ image: 0, confidence: 70, spec: logSpec() }] }), 'STOP', 1);
+        expect([...ok.readings.keys()]).toEqual([0]);
+        expect(ok.readings.get(0)!.normalised!.length).toBeGreaterThanOrEqual(4);
+        const broken = logSpec(); broken.parts[3].sweep.profile = [];
+        expect(parseFigureReply(JSON.stringify({ figures: [{ image: 0, confidence: 70, spec: broken }] }), 'STOP', 1).problems.get(0)!.join(' ')).toMatch(/profile/);
+    });
+
+    const engineReady2 = (() => { try { return NativePythonRunnerService.getInstance().isNativeModuleFresh(); } catch { return false; } })();
+    it.skipIf(!engineReady2)('the normalised log spec builds natively, connected, and sets onto a blob: the figure stands inside the scan\'s lump bounds', async () => {
+        const parsed = parseFigureReply(JSON.stringify({ figures: [{ image: 0, confidence: 70, spec: logSpec() }] }), 'STOP', 1).readings.get(0)!;
+        const built = await buildObjectFromSpec(parsed.spec, {});
+        expect(built.checks.connectivity.passed).toBe(true);
+        const nodes = parseGlbNodes(built.glb);
+        const positions = Float32Array.from(nodes.flatMap(n => Array.from(n.positions)));
+        const indices = Uint32Array.from(nodes.flatMap((n, k) => { const off = nodes.slice(0, k).reduce((a, m) => a + m.positions.length / 3, 0); return Array.from(n.indices ?? [], v => v + off); }));
+        expect(indices.length / 3).toBeGreaterThan(1000);
+        const b = detect().figures[0];
+        const f = constrainFigure({ positions, indices }, b, [-4, 2.5, -33]);
+        expect(f.fits.min[1]).toBeCloseTo(b.min[1], 3);
+        expect(f.fits.max[1] - f.fits.min[1]).toBeCloseTo(b.heightM, 1);
+        for (const a of [0, 2]) { expect(f.fits.min[a]).toBeGreaterThanOrEqual(b.min[a] - 0.05); expect(f.fits.max[a]).toBeLessThanOrEqual(b.max[a] + 0.05); }
+    }, 600_000);
 });
 
 describe('the default figure builder: the repo\'s native object build (real engine, no fake)', () => {
