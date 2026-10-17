@@ -149,7 +149,7 @@ import { NumericPrecisionInspector } from './scene3d/NumericPrecisionInspector';
 import { computeSceneGeometryBounds, calculateStandoffCamera } from './scene3d/autoFraming';
 import type { RendererStack, AtmosphereHandle, TilesLayerHandle, SceneContentHandle, WasmMeshHandle, VectorRoadmapHandle, Scene3DRenderMode } from './scene3d/types';
 import { applyClayRenderMode } from './scene3d/clayRenderMode';
-import { TreeLodController } from './scene3d/treeLod/TreeLodController';
+import { TreeLodController, findShadowCamera } from './scene3d/treeLod/TreeLodController';
 import { disposeObject3DDeep, releaseObject3D } from './scene3d/disposeObject';
 import {
     resolveSelectableObject,
@@ -2109,9 +2109,12 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 }
 
                 // 12.9 Tree levels of detail: per-tree level, dither and culling for loaded trees GLBs (before the render).
+                let treeShadowCamera: THREE.Camera | null | undefined;
                 externalObjectsMapRef.current.forEach(model => {
                     const lod = model.parent ? (model.userData.sbTreeLod as TreeLodController | undefined) : undefined;
-                    if (lod) lod.update(camera);
+                    if (!lod) return;
+                    if (treeShadowCamera === undefined) treeShadowCamera = findShadowCamera(stack.scene, !!stack.renderer?.shadowMap?.enabled);
+                    lod.update(camera, treeShadowCamera);
                 });
 
                 // 13. Gaussian Splat viewer camera sync & depth sort
