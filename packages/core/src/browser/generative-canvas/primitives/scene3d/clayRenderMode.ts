@@ -20,6 +20,19 @@ function makeClay(): THREE.MeshStandardMaterial {
     return mat;
 }
 
+/**
+ * Wood and leaves of the trees (meshes the tree level-of-detail controller owns) share this one material at every level:
+ * the same grey, with no value difference between wood and leaves. The controller reads it from `userData.sbLodBase`.
+ */
+let sharedTreeClay: THREE.MeshStandardMaterial | undefined;
+export function sharedTreeClayMaterial(): THREE.MeshStandardMaterial {
+    if (!sharedTreeClay) {
+        sharedTreeClay = makeClay();
+        sharedTreeClay.userData.sbSharedClay = true;
+    }
+    return sharedTreeClay;
+}
+
 function resetClay(mat: THREE.MeshStandardMaterial): void {
     mat.color.setHex(CLAY_SURFACE.color);
     mat.roughness = CLAY_SURFACE.roughness;
@@ -41,6 +54,20 @@ export function applyClayRenderMode(roots: Array<THREE.Object3D | null | undefin
         root?.traverse(obj => {
             const mesh = obj as THREE.Mesh;
             if (!mesh.isMesh) return;
+            if (mesh.userData.sbTreeLodMesh) {
+                // base only: the controller puts it (or its dither variant) on the mesh at the next frame
+                if (enabled) {
+                    if (mesh.userData.sbLodBase !== sharedTreeClayMaterial()) { mesh.userData[ORIGINAL_KEY] = mesh.userData.sbLodBase; mesh.userData.sbLodBase = sharedTreeClayMaterial(); }
+                    mesh.material = sharedTreeClayMaterial();
+                    touched++;
+                } else if (mesh.userData[ORIGINAL_KEY]) {
+                    mesh.userData.sbLodBase = mesh.userData[ORIGINAL_KEY];
+                    mesh.material = mesh.userData.sbLodBase;
+                    delete mesh.userData[ORIGINAL_KEY];
+                    touched++;
+                }
+                return;
+            }
             const current = mesh.material as THREE.Material;
             const isClay = !Array.isArray(current) && !!current?.userData?.[CLAY_FLAG];
             if (enabled) {

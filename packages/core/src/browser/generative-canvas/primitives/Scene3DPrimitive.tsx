@@ -154,6 +154,7 @@ import { NumericPrecisionInspector } from './scene3d/NumericPrecisionInspector';
 import { computeSceneGeometryBounds, calculateStandoffCamera } from './scene3d/autoFraming';
 import type { RendererStack, AtmosphereHandle, TilesLayerHandle, SceneContentHandle, WasmMeshHandle, VectorRoadmapHandle, Scene3DRenderMode } from './scene3d/types';
 import { applyClayRenderMode } from './scene3d/clayRenderMode';
+import { TreeLodController } from './scene3d/treeLod/TreeLodController';
 import { disposeObject3DDeep, releaseObject3D } from './scene3d/disposeObject';
 import {
     resolveSelectableObject,
@@ -2129,6 +2130,12 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     }
                 }
 
+                // 12.9 Tree levels of detail: per-tree level, dither and culling for loaded trees GLBs (before the render).
+                externalObjectsMapRef.current.forEach(model => {
+                    const lod = model.parent ? (model.userData.sbTreeLod as TreeLodController | undefined) : undefined;
+                    if (lod) lod.update(camera);
+                });
+
                 // 13. Gaussian Splat viewer camera sync & depth sort
                 if (splatViewerRef.current && typeof splatViewerRef.current.updateCamera === 'function') {
                     splatViewerRef.current.updateCamera(camera);
@@ -2865,6 +2872,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     const attach = isActiveNow(def);
                     if (attach) liveScene.add(model);
                     model.updateMatrixWorld(true);
+                    // A trees GLB (nodes with extras sbTree) gets its level-of-detail controller before the clay pass, so wood and leaves share one material.
+                    const lod = new TreeLodController(model);
+                    if (lod.hasTrees) model.userData.sbTreeLod = lod;
                     applyClayRenderMode([model], renderModeRef.current === 'clay');
                     currentMap.set(obj.id, model);
                     setStatus(obj.id, { phase: 'ready', loaded: 0, total: 0 });

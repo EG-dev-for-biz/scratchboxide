@@ -83,16 +83,23 @@ function mul(a: number[], b: number[]): number[] {
     return o;
 }
 
-/** Every triangle primitive of every node instance, in world space. */
-export function readGlbTriangles(buffer: Buffer): GlbTriangles {
+/**
+ * Every triangle primitive of every node instance, in world space. A trees GLB with levels (scratchbox.trees-lod/1) holds
+ * each tree three times (nodes tagged extras.sbLod, instanced leaf clusters under levels 0 and 1): only the `level` asked
+ * for is read (default 2, the blob level every tree has whole in the file), its ranges named and tagged as its tree's, and
+ * instanced nodes are not expanded (their instances are not triangles of the file).
+ */
+export function readGlbTriangles(buffer: Buffer, level: 0 | 1 | 2 = 2): GlbTriangles {
     const { json, bin } = parseGlb(buffer);
     const pos: number[] = [];
     const idx: number[] = [];
     const nodeRanges: GlbTriangles['nodeRanges'] = [];
     const nodes = json.nodes ?? [];
     const roots: number[] = json.scenes?.[json.scene ?? 0]?.nodes ?? nodes.map((_: any, i: number) => i);
-    const walk = (n: number, parent: number[]) => {
+    const walk = (n: number, parent: number[], tree?: any) => {
         const node = nodes[n];
+        if (node.extensions?.EXT_mesh_gpu_instancing) return;
+        if (node.extras?.sbLod && node.extras.sbLod.level !== level) return;
         const world = mul(parent, nodeMatrix(node));
         if (node.mesh !== undefined) {
             const first = idx.length / 3;
@@ -108,9 +115,9 @@ export function readGlbTriangles(buffer: Buffer): GlbTriangles {
                 else for (let v = 0; v < p.length / 3; v++) idx.push(base + v);
             }
             // nodes with triangles only (a node of LINES alone, such as an outline, holds none)
-            if (idx.length / 3 > first) nodeRanges.push({ node: n, name: node.name, extras: node.extras, firstTriangle: first, triangleCount: idx.length / 3 - first });
+            if (idx.length / 3 > first) nodeRanges.push({ node: n, name: tree ? tree.name : node.name, extras: tree ? tree.extras : node.extras, firstTriangle: first, triangleCount: idx.length / 3 - first });
         }
-        for (const c of node.children ?? []) walk(c, world);
+        for (const c of node.children ?? []) walk(c, world, node.extras?.sbTree ? node : tree);
     };
     const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
     for (const r of roots) walk(r, identity);

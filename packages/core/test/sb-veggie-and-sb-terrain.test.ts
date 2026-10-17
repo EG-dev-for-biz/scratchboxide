@@ -38,7 +38,6 @@ describe('SB-Veggie Botanical Engine Core', () => {
 
     it('2. should synthesize canonical Decurrent Oak with glTF 2.0 binary and valid foliage', async () => {
         const result = await veggieService.synthesizeTree({
-            archetype: 'decurrent',
             phenology: {
                 season: 1.0,
                 generateLeaves: true
@@ -63,7 +62,6 @@ describe('SB-Veggie Botanical Engine Core', () => {
 
     it('3. should support seasonal winter defoliation with bare branch morphology', async () => {
         const resultWinter = await veggieService.synthesizeTree({
-            archetype: 'decurrent',
             phenology: {
                 season: 0.0,
                 generateLeaves: false
@@ -83,7 +81,6 @@ describe('SB-Veggie Botanical Engine Core', () => {
 
     it('4. should morph tree shape via morphological parameters (beta)', async () => {
         const resultMorphed = await veggieService.synthesizeTree({
-            archetype: 'decurrent',
             shape: {
                 dbhCaliper: 1.6,
                 crownSpread: 1.5,

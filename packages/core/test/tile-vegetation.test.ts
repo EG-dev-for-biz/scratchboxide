@@ -265,17 +265,19 @@ describe('tile_vegetation plant (SB-Veggie, space colonisation)', () => {
         expect(glb.json.materials[0].pbrMetallicRoughness).toMatchObject({ baseColorFactor: [0.55, 0.57, 0.6, 1], metallicFactor: 0, roughnessFactor: 0.85 });
         // nothing geodetic goes into the published model: the trees sit in the tile frame, mounted with the tile; the
         // crowns' lat/lng stay in the strip's cache entry (crowns.json)
-        expect(glb.json.extras).toEqual({ frame: 'x = east, y = up, z = south (metres)', sbVeggie: expect.any(Object), sb: expect.objectContaining({ schema: 'scratchbox.staged-glb/2', stage: 'trees' }) });
+        expect(glb.json.extras).toEqual({ frame: 'x = east, y = up, z = south (metres)', sbVeggie: expect.any(Object), sbTrees: expect.any(Object), sb: expect.objectContaining({ schema: 'scratchbox.staged-glb/2', stage: 'trees' }) });
         expect(JSON.stringify(glb.json)).not.toMatch(/LatLng|localToEcef|anchor/);
         const tris = readGlbTriangles(fs.readFileSync(planted.treesGlb));
-        expect(tris.indices.length / 3).toBe(planted.stats.triangles);
+        // the level every tree has whole: its wood (shared by the levels) and its blob leaf masses
+        expect(tris.indices.length / 3).toBe(tris.nodeRanges.reduce((n, r) => n + r.extras.lod.woodTriangles + r.extras.foliageTriangles, 0));
         expect(tris.nodeRanges).toHaveLength(INTERIOR.length);
         for (const range of tris.nodeRanges) {
             expect(range.name).toMatch(/^sb_veggie_crown_\d+$/);
             const ex = range.extras;
             const crown = crowns.find(c => c.id === ex.crownId);
             expect(crown.status).toBe('tree');
-            expect(ex.inferred).toMatchObject({ crownBaseRatio: 0.35, trunkRadiusPerHeight: 0.016 });
+            expect(ex.inferred.trunkRadiusPerHeight).toBe(0.016);
+            expect(Math.abs(ex.inferred.crownBaseRatio - 0.35)).toBeLessThanOrEqual(0.1 + 1e-9);   // 0.35 varied by the crown's seeded spread
             expect(ex.triangles).toBeLessThanOrEqual(ex.triangleBudget);
             let minY = Infinity, maxY = -Infinity, maxR = 0;
             for (let i = range.firstTriangle * 3; i < (range.firstTriangle + range.triangleCount) * 3; i++) {

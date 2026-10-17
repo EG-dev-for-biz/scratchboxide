@@ -41,7 +41,10 @@ describe('botanical_synthesize_tree (SB-Veggie, space colonisation)', () => {
         const r: any = outcome.resultPayload;
         expect(r.success).toBeUndefined();
         expect(r.generator).toBe('SB-Veggie (space colonisation)');
-        expect(r.triangles).toBeLessThanOrEqual(3000);
+        // the budget is the wood's; the leaves of each level come on top, and every level is reported
+        expect(r.woodTriangles).toBeLessThanOrEqual(3000);
+        expect(r.levelTriangles).toHaveLength(3);
+        expect(r.triangles).toBe(r.levelTriangles[2]);
         // the leaf masses stay inside the requested crown even at a coarse budget
         expect(Math.abs(r.grown.heightMeters - 12)).toBeLessThan(1.0);
         expect(r.grown.crownSpreadMeters).toBeGreaterThan(0.85 * 8);
@@ -72,7 +75,7 @@ describe('botanical_synthesize_tree (SB-Veggie, space colonisation)', () => {
         const r: any = (await botanicalTreeHandlers.botanical_synthesize_tree(
             { heightMeters: 9, crownDiameterMeters: 6, crownBaseHeightMeters: 3, trunkRadiusMeters: 0.2, triangleBudget: 2000 }, ctx)).resultPayload;
         expect(r.inferred).toEqual({});
-        expect(r.triangles).toBeLessThanOrEqual(2000);
+        expect(r.woodTriangles).toBeLessThanOrEqual(2000);
     }, 600_000);
 
     it('fails, with nothing grown, when a measurement is missing or impossible', async () => {

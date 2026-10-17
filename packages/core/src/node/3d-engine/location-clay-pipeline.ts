@@ -69,6 +69,12 @@ export interface LocationClayRequest {
      * trees: a target per tree that grows with its crown, all within SCENE_TREE_TRIANGLE_CAP.
      */
     treeTriangleBudget?: number;
+    /**
+     * 0 bare .. 1 full summer (default 1): scales the leaf density of the trees at every level of detail (0 gives the
+     * wood alone). Trees are written at three levels (near: instanced leaf clusters, mid: fewer larger leaves, far: blob
+     * masses) and a viewport draws one per tree by its distance.
+     */
+    treeSeason?: number;
     /** tile_refine's photometric relief (default on: gated and labelled inferred); false passes --no-relief. */
     relief?: boolean;
     /** Where strip may measure and regrow trees (an isolated structure's outline grown by the crown reach). */
@@ -141,6 +147,11 @@ export interface LocationClayTrees {
     /** The triangles the measured crowns' sizes ask for together, and the scene's cap on trees (when it applied). */
     targetTriangles?: number;
     sceneTriangleCap?: number;
+    /** What a viewport draws of the trees in a park view (camera poses on a grid, an 80 degree view), from the written trees: stats.lodFrames. */
+    drawnPerFrame?: { medianTriangles: number; p95Triangles: number; maxTriangles: number; poses: number };
+    /** Triangles the three levels draw when every tree is at that level, and the leaves' season (0 bare .. 1). */
+    levelTriangles?: { level0: number; level1: number; level2: number };
+    psiSeason?: number;
     /** All vegetation measured in the photo tiles above the canopy height (m²). */
     canopyAreaM2: number;
     /** Crown area of every crown measured as a tree in the photo tiles (m²). */
@@ -325,6 +336,7 @@ export async function runLocationClayPipeline(req: LocationClayRequest, deps?: L
             const tp = Date.now();
             planted = await stage('planting', req.signal, () => plantTrees(d, strip!, {
                 treeTriangleBudget: req.treeTriangleBudget,
+                treeSeason: req.treeSeason,
                 supportMeshPath: req.isolate ? refined.r.clayGlb : undefined,
                 groundMeshPath: refined.file,
                 publishAs: measuredTrees.length > 0 ? `${base}_trees.glb` : undefined,
@@ -372,7 +384,7 @@ function readCrowns(crownsJson: string): CrownRecord[] {
 export async function plantTrees(
     d: Pick<LocationClayDeps, 'vegetation'>,
     strip: TileVegetationStripResult,
-    opts: { treeTriangleBudget?: number; supportMeshPath?: string; groundMeshPath?: string; publishAs?: string; signal?: AbortSignal }
+    opts: { treeTriangleBudget?: number; treeSeason?: number; supportMeshPath?: string; groundMeshPath?: string; publishAs?: string; signal?: AbortSignal }
 ): Promise<TileVegetationPlantResult> {
     // never from the buildings: a park has many trees and few triangles of building
     const budget = opts.treeTriangleBudget !== undefined ? { triangleBudget: Math.floor(opts.treeTriangleBudget) } : { sceneTriangleCap: SCENE_TREE_TRIANGLE_CAP };
@@ -386,6 +398,7 @@ export async function plantTrees(
             // every trunk base is measured against the model the trees are mounted on
             groundMeshPath: opts.groundMeshPath,
             publishAs: opts.publishAs,
+            ...(opts.treeSeason !== undefined ? { params: { psiSeason: opts.treeSeason } } : {}),
             signal: opts.signal
         });
     } catch (err) {
@@ -468,6 +481,12 @@ export function summarizeTrees(
         trees.triangleBudget = Number(planted.stats.triangleBudget ?? 0);
         if (typeof planted.stats.triangleBudgetSource === 'string') trees.triangleBudgetSource = planted.stats.triangleBudgetSource;
         if (typeof planted.stats.targetTriangles === 'number') trees.targetTriangles = planted.stats.targetTriangles;
+        if (planted.stats.lodFrames) {
+            const f = planted.stats.lodFrames;
+            trees.drawnPerFrame = { medianTriangles: Number(f.median), p95Triangles: Number(f.p95), maxTriangles: Number(f.max), poses: Number(f.poses) };
+            trees.levelTriangles = { level0: Number(f.allLevel0), level1: Number(f.allLevel1), level2: Number(f.allLevel2) };
+            if (typeof planted.stats.psiSeason === 'number') trees.psiSeason = planted.stats.psiSeason;
+        }
         if (opts.treeTriangleBudget === undefined) trees.sceneTriangleCap = SCENE_TREE_TRIANGLE_CAP;
         trees.notOnStructure = Array.isArray(planted.stats.skipped) ? planted.stats.skipped.length : 0;
         if (opts.isolate) {
@@ -561,6 +580,11 @@ export function describeTrees(t: LocationClayTrees, isolate: boolean): string {
             : ` The rebuilt trees (space colonisation, studio clay) fill ${Math.round(t.treeCanopyAreaM2)} m² of measured crown`;
         if (t.reachingBoundary) s += ` (${t.reachingBoundary} of them ${t.reachingBoundary === 1 ? 'runs' : 'run'} to the extraction's edge and ${t.reachingBoundary === 1 ? 'was' : 'were'} rebuilt up to it)`;
         s += `, ${t.triangles.toLocaleString()} triangles within a budget of ${t.triangleBudget.toLocaleString()}${describeTreeBudget(t)}; the trees model is ${t.url}.`;
+        // every tree is written at three levels of detail; the leaves are placed on the grown branching, not measured
+        if (t.drawnPerFrame) {
+            s += ` Each tree has three levels of detail (leaf clusters near, fewer larger leaves mid, blob masses far; the leaves are placed on the grown branching, only the crown it grows into is measured)`
+                + `; a park view draws ${(t.drawnPerFrame.medianTriangles / 1e6).toFixed(1)} million triangles of trees at the median and at most ${(t.drawnPerFrame.maxTriangles / 1e6).toFixed(1)} million.`;
+        }
     } else if (t.measured === 0 && t.notOnStructure > 0) {
         s += ` The photo tiles show ${plural(t.notOnStructure, 'measured tree')} in the extracted district, none standing on the isolated structure, so no trees were added to it.`;
     } else if (t.measured > 0) {

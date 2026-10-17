@@ -32,13 +32,21 @@ export function readTreeFoliage(glb: Buffer): TreeFoliage[] {
     const { json, bin } = parseGlb(glb);
     const trees: TreeFoliage[] = [];
     for (const node of json.nodes ?? []) {
-        if (node.mesh === undefined || node.extras?.crownId === undefined) continue;
-        if (node.matrix || node.rotation) throw new Error(`tree node ${node.name} carries a rotation`);
-        const prims = json.meshes[node.mesh].primitives.filter((p: any) => (p.mode ?? 4) === 4);
+        if (node.extras?.crownId === undefined) continue;
+        // a tree with levels (scratchbox.trees-lod/1) holds its blob leaf masses in its level-2 child (the last primitive);
+        // a tree without holds them in its own mesh
+        let holder = node;
+        if (Array.isArray(node.children) && node.children.length) {
+            holder = node.children.map((i: number) => json.nodes[i]).find((c: any) => c.extras?.sbLod?.level === 2);
+            if (!holder) continue;
+        }
+        if (holder.mesh === undefined) continue;
+        if (holder.matrix || holder.rotation) throw new Error(`tree node ${holder.name} carries a rotation`);
+        const prims = json.meshes[holder.mesh].primitives.filter((p: any) => (p.mode ?? 4) === 4);
         if (!prims.length) continue;
         const foliage = prims[prims.length - 1];
-        const [tx, ty, tz] = node.translation ?? [0, 0, 0];
-        const [sx, sy, sz] = node.scale ?? [1, 1, 1];
+        const [tx, ty, tz] = holder.translation ?? [0, 0, 0];
+        const [sx, sy, sz] = holder.scale ?? [1, 1, 1];
         const p = readAccessor(json, bin, foliage.attributes.POSITION).data;
         const positions = new Float32Array(p.length);
         for (let i = 0; i < p.length; i += 3) {

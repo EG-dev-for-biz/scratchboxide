@@ -126,6 +126,8 @@ type Legend = { state?: StagedBuildState; labels: string; legend: Map<Provenance
 function nodeOf(mesh: THREE.Object3D, root: THREE.Object3D): THREE.Object3D {
     for (let o: THREE.Object3D | null = mesh; o && o !== root; o = o.parent) {
         if ((o.userData as { sb?: unknown })?.sb) return o;
+        // a tree (all three levels, wood and instanced leaf clusters) is one node: one reveal, one label at every level
+        if ((o.userData as { sbTree?: unknown })?.sbTree) return o;
     }
     // Without extras: a multi-primitive glTF node is a Group of meshes; a single-primitive node is the mesh itself.
     const p = mesh.parent;

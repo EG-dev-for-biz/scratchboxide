@@ -17,11 +17,26 @@ import {
     SbVeggieInversionOptions,
     SbVeggieResult,
     SbVeggieTelemetry,
-    SbVeggieArchetype
+    SbVeggieMorphologyParams
 } from '../../common/botanical/sb-veggie-protocol';
 
 const execFileAsync = promisify(execFile);
 const RUN_OPTIONS = { maxBuffer: 64 * 1024 * 1024 };
+
+/** The CLI flags for a morphology: one flag per continuous quantity that was given. */
+function morphologyArgs(m?: SbVeggieMorphologyParams): string[] {
+    if (!m) return [];
+    const flag = (name: string, v: number | undefined): string[] => (v === undefined ? [] : [name, String(v)]);
+    const b = m.blade;
+    return [
+        ...flag('--apical-dominance', m.apicalDominance), ...flag('--branch-angle', m.branchAngleMeanRad), ...flag('--branch-angle-spread', m.branchAngleSpreadRad),
+        ...flag('--crown-aspect', m.crownAspect), ...flag('--internode', m.internodeLengthM), ...flag('--leaf-distribution', m.leafDistributionExponent),
+        ...flag('--divergence-angle', m.divergenceAngleRad),
+        ...flag('--blade-width-ratio', b?.widthRatio), ...flag('--blade-outline-a', b?.outlineA), ...flag('--blade-outline-b', b?.outlineB),
+        ...flag('--blade-lobes', b?.lobeCount), ...flag('--blade-lobe-depth', b?.lobeDepth),
+        ...flag('--blade-serrations', b?.serrationCount), ...flag('--blade-serration-depth', b?.serrationDepth), ...flag('--blade-rows', b?.rows)
+    ];
+}
 /** Builds in flight per binary path, so concurrent callers in one process share one compile. */
 const building = new Map<string, Promise<string>>();
 
@@ -90,9 +105,7 @@ export class SbVeggieService {
         }
 
         const tmpOutput = options.outputGlbPath || path.join(artifactsDir, `sb_veggie_${Date.now()}.glb`);
-        const archetype = options.archetype ?? 'decurrent';
-
-        const args: string[] = ['--output', tmpOutput, '--archetype', archetype];
+        const args: string[] = ['--output', tmpOutput, ...morphologyArgs(options.morphology)];
 
         // Morphological Shape (beta)
         if (options.shape) {
@@ -126,7 +139,6 @@ export class SbVeggieService {
             if (shaping.branchCurvature !== undefined) args.push('--branch-curvature', String(shaping.branchCurvature));
             if (shaping.collarFlare !== undefined) args.push('--collar-flare', String(shaping.collarFlare));
             if (shaping.reactionWood !== undefined) args.push('--reaction-wood', String(shaping.reactionWood));
-            if (shaping.leafMorphology !== undefined) args.push('--leaf-morphology', String(shaping.leafMorphology));
             if (shaping.leafCupping !== undefined) args.push('--leaf-cupping', String(shaping.leafCupping));
             if (shaping.transferEnvelopeNormals !== undefined) {
                 args.push('--envelope-normals', String(shaping.transferEnvelopeNormals ? 1 : 0));
@@ -144,7 +156,7 @@ export class SbVeggieService {
             }
         }
 
-        return this.run(bin, args, tmpOutput, archetype);
+        return this.run(bin, args, tmpOutput);
     }
 
     /**
@@ -161,17 +173,12 @@ export class SbVeggieService {
         }
 
         const tmpOutput = options.outputGlbPath || path.join(artifactsDir, `sb_veggie_fitted_${Date.now()}.glb`);
-        const archetype = options.archetype ?? 'decurrent';
-
-        const args: string[] = ['--output', tmpOutput, '--archetype', archetype, '--fit-scan', path.resolve(options.inputScanPath)];
+        const args: string[] = ['--output', tmpOutput, ...morphologyArgs(options.morphology), '--fit-scan', path.resolve(options.inputScanPath)];
         if (options.maxIterations !== undefined) {
             args.push('--max-iterations', String(options.maxIterations));
         }
         if (options.phenology?.season !== undefined) {
             args.push('--season', String(options.phenology.season));
-        }
-        if (options.shaping?.leafMorphology !== undefined) {
-            args.push('--leaf-morphology', String(options.shaping.leafMorphology));
         }
         if (options.shaping?.leafCupping !== undefined) {
             args.push('--leaf-cupping', String(options.shaping.leafCupping));
@@ -189,20 +196,19 @@ export class SbVeggieService {
             args.push('--color-mode', String(options.colorInfluenceMode));
         }
 
-        return this.run(bin, args, tmpOutput, archetype);
+        return this.run(bin, args, tmpOutput);
     }
 
-    private async run(bin: string, args: string[], tmpOutput: string, archetype: SbVeggieArchetype): Promise<SbVeggieResult> {
+    private async run(bin: string, args: string[], tmpOutput: string): Promise<SbVeggieResult> {
         try {
             const { stdout, stderr } = await execFileAsync(bin, args, RUN_OPTIONS);
-            return this.parseStdoutTelemetry(String(stdout), String(stderr), tmpOutput, archetype);
+            return this.parseStdoutTelemetry(String(stdout), String(stderr), tmpOutput);
         } catch (err: any) {
             return {
                 success: false,
                 outputGlbPath: tmpOutput,
                 telemetry: {
-                    archetype,
-                    canonicalTemplate: archetype,
+                    canonicalTemplate: 'Canonical_Template',
                     templateVertices: 0,
                     templateJoints: 0,
                     outputVertices: 0,
@@ -219,7 +225,7 @@ export class SbVeggieService {
     /**
      * Parses standard output telemetry from the C++20 engine.
      */
-    private parseStdoutTelemetry(stdout: string, stderr: string, outputPath: string, defaultArchetype: SbVeggieArchetype): SbVeggieResult {
+    private parseStdoutTelemetry(stdout: string, stderr: string, outputPath: string): SbVeggieResult {
         let glbBuffer: Buffer | undefined;
         let glbBase64: string | undefined;
 
@@ -239,8 +245,7 @@ export class SbVeggieService {
         };
 
         const telemetry: SbVeggieTelemetry = {
-            archetype: defaultArchetype,
-            canonicalTemplate: defaultArchetype,
+            canonicalTemplate: 'Canonical_Template',
             templateVertices: extractInt('Template Vertices'),
             templateJoints: extractInt('Template Joints'),
             outputVertices: extractInt('Total Output Vertices') || extractInt('Output Vertices'),

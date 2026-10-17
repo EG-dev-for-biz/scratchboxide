@@ -41,14 +41,37 @@ using geometry::PbrMaterial;
 using botanical::BotanicalPbrTextureSynthesizer;
 
 // ============================================================================
-// 1. Botanical Macro-Archetype Enumeration
+// 1. Continuous Morphology (no archetype classes)
 // ============================================================================
+//
+// Tree form is a point in a continuous space; no field below names a kind of tree, and nothing branches on a name. A
+// columnar crown, a spreading one and a conical one differ in these numbers (and the measured crown they grow into),
+// and any value between them is as valid as the ends.
 
-enum class SbVeggieArchetype : uint32_t {
-    DecurrentHardwood = 0,    // Spreading dome canopy, bifurcating trunk (Oak, Maple, Elm)
-    ExcurrentConifer = 1,     // Conical canopy, central leader trunk (Pine, Fir, Spruce)
-    Palmate = 2,              // Bare column stipe, apical frond crown (Palm, Cycad)
-    FastigiateColumnar = 3    // Upright hugging branches (Cypress, Lombardy Poplar)
+/** A leaf blade's outline, in continuous quantities. */
+struct SbVeggieBlade {
+    float widthRatio{0.70f};           // blade width / blade length
+    float outlineA{0.55f};             // half-width profile t^a (1 - t)^b along the blade: a sets how far the widest point lies from the base ...
+    float outlineB{0.75f};             // ... and b how it tapers to the tip
+    float lobeCount{0.0f};             // lobes along the margin (cosine terms); no effect at depth 0
+    float lobeDepth{0.0f};             // lobe amplitude as a share of the half-width (0 = entire margin)
+    float serrationCount{0.0f};        // teeth along the margin
+    float serrationDepth{0.0f};        // tooth amplitude as a share of the half-width (0 = entire margin)
+    int rows{3};                       // interior rows of the outline (resolution: lobes and teeth need more rows than a plain blade)
+    float undersideNormalBlend{0.7f};  // underside normals: 0 the flipped upper normals ... 1 the upper side's
+    float petioleRatio{0.38f};         // petiole length / blade length (0: none drawn)
+};
+
+/** How a tree grows and carries its leaves. All continuous; defaults are the neutral values the canonical template was drawn with. */
+struct SbVeggieMorphology {
+    float apicalDominance{0.5f};       // 0..1: how far the leader outgrows the laterals (a grown tree: the momentum of a branch along its heading, 0.76 x this)
+    float branchAngleMeanRad{0.80795f};// mean angle of laterals from the leader (atan2(0.68, 0.65): the direction scaffold limbs have always sprouted in)
+    float branchAngleSpreadRad{0.2f};  // spread of that angle: between crowns and (half of it) between the limbs of one
+    float crownAspect{1.0f};           // crown height / crown width (1 = the canonical template; a grown tree has the aspect of its measured crown)
+    float internodeLengthM{0.0f};      // distance between successive nodes along a shoot (0: the grower derives it from the tree's height)
+    float leafDistributionExponent{0.58f}; // along a shoot, a leaf sits at ((i + 0.5) / n)^exponent of the reach: below 1 it crowds towards the tip
+    float divergenceAngleRad{2.39996f};    // angle between successive leaves around the shoot (the golden angle, 137.5 degrees, by default)
+    SbVeggieBlade blade;
 };
 
 // ============================================================================
@@ -106,8 +129,7 @@ struct SbVeggieFoliageAnchor {
 // ============================================================================
 
 struct SbVeggieTemplate {
-    SbVeggieArchetype archetype{SbVeggieArchetype::DecurrentHardwood};
-    std::string name{"Canonical_Decurrent_Oak"};
+    std::string name{"Canonical_Template"};
     
     // Watertight unposed canonical manifold geometry T_bar
     std::vector<Vertex> canonicalVertices;
@@ -186,7 +208,7 @@ struct SbVeggieParams {
     float branchCurvature{1.0f};        // Catenary/phototropic arch and gravitropic droop
     float collarFlare{1.0f};            // Swelling branch collar at bifurcations
     float reactionWood{1.0f};           // Stress-adapted elliptical cross section
-    int leafMorphology{0};              // 0 = Lobed Oak (3D anatomical), 1 = Serrated Birch, 2 = Planar Quad
+    SbVeggieMorphology morphology;      // leaf outline, leaf distribution and divergence along a shoot (continuous)
     float leafCupping{1.0f};            // Parabolic 3D lamina cupping amplitude
     bool transferEnvelopeNormals{true}; // Blender-style radial envelope normal transfer with sky bias
     float colorInfluenceWeight{0.0f};   // 0.0 = canonical botanical color, 1.0 = full scan color influence
@@ -209,7 +231,6 @@ struct SbVeggieParams {
         p.branchCurvature = 1.0f;
         p.collarFlare = 1.0f;
         p.reactionWood = 1.0f;
-        p.leafMorphology = 0;
         p.leafCupping = 1.0f;
         p.transferEnvelopeNormals = true;
         p.colorInfluenceWeight = 0.0f;
@@ -225,11 +246,8 @@ struct SbVeggieParams {
 
 class SbVeggieModelBuilder {
 public:
-    static SbVeggieTemplate buildCanonicalTemplate(
-        SbVeggieArchetype archetype = SbVeggieArchetype::DecurrentHardwood
-    ) {
+    static SbVeggieTemplate buildCanonicalTemplate(const SbVeggieMorphology& morphology = SbVeggieMorphology{}) {
         SbVeggieTemplate tmpl;
-        tmpl.archetype = archetype;
 
         // Configure default PBR materials
         tmpl.barkMaterial.name = "PBR_Wood_Bark";
@@ -251,7 +269,11 @@ public:
         // 16..39: 24 Secondary Limbs (each primary bough trifurcates)
         // 40..87: 48 Tertiary Branchlets (each secondary bough bifurcates)
         // 88..111: 24 Terminal & Apical Twigs (4 crown apex twigs + 20 peripheral terminal twigs)
-        auto addJoint = [&](int id, int parentId, const std::string& name, const Vec3& pos) {
+        // crown width follows crownAspect (height / width): every joint past the trunk spine is drawn closer to or further
+        // from the trunk axis (the canonical template is 1)
+        const float crownWidthScale = 1.0f / std::max(0.2f, morphology.crownAspect);
+        auto addJoint = [&](int id, int parentId, const std::string& name, const Vec3& drawn) {
+            const Vec3 pos = id >= 8 ? Vec3(drawn.x * crownWidthScale, drawn.y, drawn.z * crownWidthScale) : drawn;
             SbVeggieJoint j;
             j.id = id;
             j.parentId = parentId;
@@ -954,6 +976,279 @@ public:
 };
 
 // ============================================================================
+// 6A. Leaf Blades & Leaf Clusters (template-free foliage library)
+// ============================================================================
+//
+// One blade outline generator serves the template's foliage cards and the standalone leaf clusters below. A blade is
+// described by continuous quantities only (width ratio, where the widest point lies and how it rounds, lobes,
+// serration, cupping); there is no leaf class to pick, and nothing here branches on a name.
+
+/** A blade placed in space: its petiole, and the frame its blade lies in. */
+struct SbVeggieBladePlacement {
+    Vec3 petioleBase;      // where the petiole leaves the twig
+    Vec3 petioleTip;       // where the blade starts
+    Vec3 tangent;          // rachis direction (unit), base to tip
+    Vec3 bitangent;        // across the blade (unit)
+    Vec3 normal;           // upper side (unit)
+    float lengthM{0.1f};   // blade length base to tip
+};
+
+/** One vertex of a generated blade. `underside` marks the back faces, `petiole` the stalk. */
+struct SbVeggieBladeVertex {
+    Vec3 position, normal;
+    Vec2 uv;
+    bool underside{false};
+    bool petiole{false};
+};
+
+class SbVeggieBladeBuilder {
+public:
+    /**
+     * Appends one blade (upper side, underside, optional petiole quad) to `verts` / `indices`. The outline is an ovate
+     * half-width profile t^a (1 - t)^b over `rows` interior rows of the card's frame, modulated by lobes and serration
+     * (cosine terms of continuous depth; depth 0 leaves the margin entire), cupped by `cupping` with a sunken midrib and
+     * a drooping tip. The first indices appended are the blade (both sides), the petiole's two triangles last.
+     * Returns the number of blade triangles (both sides, without the petiole).
+     */
+    static size_t append(const SbVeggieBlade& b, const SbVeggieBladePlacement& pl, float cupping,
+                         std::vector<SbVeggieBladeVertex>& verts, std::vector<uint32_t>& indices, bool withPetiole = true) {
+        const int R = std::max(0, b.rows);
+        const float L = pl.lengthM;
+        const float W = std::max(1e-4f, b.widthRatio) * L;
+        auto ovate = [&](float t) { return std::pow(std::max(1e-4f, t), b.outlineA) * std::pow(std::max(1e-4f, 1.0f - t), b.outlineB); };
+        float ovMax = 1e-6f;
+        for (int k = 1; k < 100; ++k) ovMax = std::max(ovMax, ovate(k / 100.0f));
+        const float cup = 0.20f * W * cupping, sink = 0.09f * W * cupping, droop = 0.17f * L * cupping;
+        auto halfWidth = [&](float t) {
+            float h = 0.5f * W * ovate(t) / ovMax;
+            if (b.lobeDepth > 0.0f && b.lobeCount > 0.0f) h *= 1.0f + b.lobeDepth * std::cos(TWO_PI * b.lobeCount * t);
+            if (b.serrationDepth > 0.0f && b.serrationCount > 0.0f) h *= 1.0f + b.serrationDepth * (2.0f * (b.serrationCount * t - std::floor(b.serrationCount * t)) - 1.0f);
+            return std::max(0.0f, h);
+        };
+        const Vec3 origin = pl.petioleTip;
+        std::vector<Vec3> P;
+        std::vector<uint32_t> tri;
+        P.push_back(origin);
+        if (R == 0) {
+            // no interior rows: a kite, the widest point at the outline's own widest t, folded along the midrib by the cupping
+            float tMax = 0.45f, best = 0.0f;
+            for (int k = 1; k < 100; ++k) { const float v = ovate(k / 100.0f); if (v > best) { best = v; tMax = k / 100.0f; } }
+            const float h = halfWidth(tMax);
+            const Vec3 along = origin + pl.tangent * (L * tMax) - pl.normal * (droop * tMax * tMax);
+            P.push_back(along - pl.bitangent * h + pl.normal * cup);
+            P.push_back(along + pl.bitangent * h + pl.normal * cup);
+            P.push_back(origin + pl.tangent * L - pl.normal * droop);
+            tri = {0u, 1u, 2u, 1u, 3u, 2u};
+        } else {
+            for (int k = 1; k <= R; ++k) {
+                const float t = static_cast<float>(k) / (R + 1);
+                const float h = halfWidth(t);
+                const float edge = cup * (h / (0.5f * W)) * (h / (0.5f * W));
+                const Vec3 along = origin + pl.tangent * (L * t) - pl.normal * (droop * t * t);
+                P.push_back(along - pl.bitangent * h + pl.normal * edge);
+                P.push_back(along - pl.normal * (sink * (1.0f - 0.5f * t)));
+                P.push_back(along + pl.bitangent * h + pl.normal * edge);
+            }
+            P.push_back(origin + pl.tangent * L - pl.normal * droop);
+            const uint32_t T = static_cast<uint32_t>(P.size() - 1);
+            auto Lk = [&](int k) { return static_cast<uint32_t>(1 + 3 * (k - 1)); };
+            tri = {0u, Lk(1), Lk(1) + 1, 0u, Lk(1) + 1, Lk(1) + 2};
+            for (int k = 1; k < R; ++k) {
+                const uint32_t l0 = Lk(k), m0 = l0 + 1, r0 = l0 + 2, l1 = Lk(k + 1), m1 = l1 + 1, r1 = l1 + 2;
+                tri.insert(tri.end(), {l0, l1, m1, l0, m1, m0, m0, m1, r1, m0, r1, r0});
+            }
+            const uint32_t lr = Lk(R), mr = lr + 1, rr = lr + 2;
+            tri.insert(tri.end(), {mr, lr, T, mr, T, rr});
+        }
+        // smooth normals of the upper side (area weighted), oriented to the blade's upper side
+        std::vector<Vec3> N(P.size(), Vec3(0, 0, 0));
+        for (size_t i = 0; i + 2 < tri.size(); i += 3) {
+            const Vec3 f = (P[tri[i + 1]] - P[tri[i]]).cross(P[tri[i + 2]] - P[tri[i]]);
+            for (int j = 0; j < 3; ++j) N[tri[i + static_cast<size_t>(j)]] += f;
+        }
+        for (auto& n : N) {
+            n = n.lengthSquared() > 1e-18f ? n.normalized() : pl.normal;
+            if (n.dot(pl.normal) < 0.0f) n = n * -1.0f;
+        }
+        const float tv = static_cast<float>(R + 1);
+        auto uvOf = [&](size_t q) {
+            if (q == 0) return Vec2(0.5f, 0.0f);
+            if (q == P.size() - 1) return Vec2(0.5f, 1.0f);
+            if (R == 0) return Vec2(q == 1 ? 0.0f : 1.0f, 0.45f);
+            const int row = static_cast<int>((q - 1) / 3) + 1, col = static_cast<int>((q - 1) % 3);
+            return Vec2(0.5f * col, row / tv);
+        };
+        uint32_t base = static_cast<uint32_t>(verts.size());
+        for (size_t q = 0; q < P.size(); ++q) verts.push_back(SbVeggieBladeVertex{P[q], N[q], uvOf(q), false, false});
+        indices.insert(indices.end(), tri.begin(), tri.end());
+        // the upper side's indices are relative to its own vertices
+        for (size_t i = indices.size() - tri.size(); i < indices.size(); ++i) indices[i] += base;
+        const uint32_t underBase = static_cast<uint32_t>(verts.size());
+        for (size_t q = 0; q < P.size(); ++q) {
+            // the underside keeps the upper side's normal where a leaf is lit through (undersideNormalBlend 1) and
+            // the flipped one where it is seen from below (0)
+            Vec3 nb = N[q] * -(1.0f - b.undersideNormalBlend) + N[q] * b.undersideNormalBlend;
+            nb = nb.lengthSquared() < 1e-6f ? N[q] : nb.normalized();
+            verts.push_back(SbVeggieBladeVertex{P[q], nb, uvOf(q), true, false});
+        }
+        for (size_t i = 0; i + 2 < tri.size(); i += 3) indices.insert(indices.end(), {underBase + tri[i], underBase + tri[i + 2], underBase + tri[i + 1]});
+        const size_t bladeTriangles = tri.size() / 3 * 2;
+        if (withPetiole && b.petioleRatio > 0.0f) {
+            // the petiole: one triangle, as wide as a stalk at the twig and a point at the blade
+            const Vec3 w = pl.bitangent * (0.5f * W * 0.045f * 2.0f);
+            const uint32_t pb = static_cast<uint32_t>(verts.size());
+            verts.push_back(SbVeggieBladeVertex{pl.petioleBase - w, pl.normal, Vec2(0.5f, 0.01f), false, true});
+            verts.push_back(SbVeggieBladeVertex{pl.petioleBase + w, pl.normal, Vec2(0.5f, 0.01f), false, true});
+            verts.push_back(SbVeggieBladeVertex{pl.petioleTip, pl.normal, Vec2(0.5f, 0.05f), false, true});
+            indices.insert(indices.end(), {pb, pb + 1, pb + 2});
+        }
+        return bladeTriangles;
+    }
+};
+
+/** A standalone cluster of leaves on a spray of sub-shoots, built in its own frame: it attaches at the origin and points along +Z. */
+struct SbVeggieClusterParams {
+    int leafCount{26};
+    float radiusM{0.85f};              // reach of the sub-shoot spray
+    float reachScale{1.0f};            // multiplies the reach (a tip spray reaches further than a lateral one: 1.15 / 0.92)
+    float leafLengthM{0.10f};          // blade length
+    float orientationRadiusM{2.2f};    // distance of the cluster from the virtual crown centre behind it: how parallel its blades face outward
+    float shootletRadiusM{0.010f};     // radius of the sub-shoots at their base (0: none drawn)
+    uint64_t seed{0};
+    SbVeggieMorphology morphology;
+    float cupping{1.0f};
+    bool petioles{true};
+};
+
+struct SbVeggieClusterMesh {
+    std::vector<Vec3> positions, normals;
+    std::vector<uint32_t> indices;     // the leaf cards first (blades and petioles), the sub-shoot tubes after
+    size_t leafIndexCount{0};
+    std::vector<uint32_t> bladeFrontIndices; // the blades' upper-side triangles alone (no underside, no petioles): the surface a leaf measurement needs
+    int leaves{0};
+    float reach{0.0f};                 // farthest vertex from the attachment point
+    std::vector<Vec3> support;         // extreme points in a Fibonacci sphere of directions: the cluster's hull, for fitting it into a crown
+    size_t triangles() const { return indices.size() / 3; }
+    size_t leafTriangles() const { return leafIndexCount / 3; }
+};
+
+class SbVeggieFoliage {
+public:
+    static float unitHash(uint64_t seed, uint64_t a) {
+        uint64_t h = seed + 0x9E3779B97F4A7C15ull * (a + 1);
+        h ^= h >> 30; h *= 0xBF58476D1CE4E5B9ull; h ^= h >> 27; h *= 0x94D049BB133111EBull; h ^= h >> 31;
+        return static_cast<float>(static_cast<double>(h >> 11) / 9007199254740992.0);
+    }
+
+    /**
+     * Builds one leaf cluster without a template: `leafCount` blades spread along four sub-shoots that fan out from the
+     * attachment point (phyllotactic roll by the morphology's divergence angle, reach fraction ((i + 0.5) / n)^distribution),
+     * each on a petiole, oriented outward from a virtual crown centre `orientationRadiusM` behind the cluster with the
+     * sky bias SB-Veggie's foliage cards use, plus the sub-shoots as thin tapered tubes.
+     */
+    static SbVeggieClusterMesh buildCluster(const SbVeggieClusterParams& cp, int supportDirections = 98) {
+        SbVeggieClusterMesh out;
+        const SbVeggieMorphology& mo = cp.morphology;
+        const int n = std::max(1, cp.leafCount);
+        const float seedPhase = unitHash(cp.seed, 7) * TWO_PI;
+        const Vec3 shootDir(0, 0, 1);
+        const Vec3 perp1 = shootDir.cross(Vec3(0, 1, 0)).normalized();
+        const Vec3 perp2 = shootDir.cross(perp1).normalized();
+        const Vec3 crownCenter(0, 0, -cp.orientationRadiusM);
+        const float effR = cp.radiusM * cp.reachScale;
+        std::vector<SbVeggieBladeVertex> verts;
+        std::vector<uint32_t> idx;
+        for (int i = 0; i < n; ++i) {
+            const float subPhase = (i % 4) * (PI * 0.5f) + seedPhase;
+            const Vec3 subDir = (shootDir * 0.48f + (perp1 * std::cos(subPhase) + perp2 * std::sin(subPhase)) * 0.72f + Vec3(0, 0.28f, 0)).normalized();
+            const float frac = std::pow((i + 0.5f) / n, mo.leafDistributionExponent);
+            const float jit = (unitHash(cp.seed, 100 + i) * 2.0f - 1.0f) * 0.14f * effR;
+            const Vec3 twigNode = subDir * (frac * effR) + (perp1 * std::sin(i * 1.7f + seedPhase) + perp2 * std::cos(i * 2.3f + seedPhase)) * jit;
+            const float outLen = twigNode.length();
+            const Vec3 outDir = outLen > 1e-4f ? twigNode / outLen : subDir;
+            const float roll = i * mo.divergenceAngleRad + seedPhase;
+            const Vec3 lateral = (perp1 * std::cos(roll) + perp2 * std::sin(roll)).normalized();
+            const Vec3 petioleDir = (outDir * 0.50f + lateral * 0.38f + Vec3(0.0f, 0.38f, 0.0f)).normalized();
+            const float lenJit = 0.85f + 0.30f * unitHash(cp.seed, 200 + i);
+            const float L = cp.leafLengthM * lenJit;
+            const float petLen = cp.leafLengthM * mo.blade.petioleRatio * (0.85f + 0.30f * unitHash(cp.seed, 300 + i));
+            SbVeggieBladePlacement pl;
+            pl.petioleBase = twigNode;
+            pl.petioleTip = twigNode + petioleDir * petLen;
+            const Vec3 rachis = (petioleDir * 0.68f + outDir * 0.28f + Vec3(0.0f, 0.22f, 0.0f)).normalized();
+            Vec3 normal = (pl.petioleTip - crownCenter);
+            const float envDist = normal.length();
+            normal = (envDist > 1e-4f ? normal / envDist : Vec3(0, 1, 0)) + Vec3(0.0f, 0.40f, 0.0f);
+            normal = normal.normalized();
+            pl.bitangent = normal.cross(rachis).normalized();
+            pl.tangent = rachis;
+            pl.normal = normal;
+            pl.lengthM = L;
+            const size_t before = idx.size();
+            const size_t bladeTris = appendLeaf(cp, mo, pl, verts, idx);
+            out.bladeFrontIndices.insert(out.bladeFrontIndices.end(), idx.begin() + static_cast<std::ptrdiff_t>(before), idx.begin() + static_cast<std::ptrdiff_t>(before + bladeTris / 2 * 3));
+        }
+        out.leaves = n;
+        for (const auto& v : verts) { out.positions.push_back(v.position); out.normals.push_back(v.normal); }
+        out.indices = idx;
+        out.leafIndexCount = idx.size();
+        // sub-shoots
+        if (cp.shootletRadiusM > 0.0f) {
+            for (int sub = 0; sub < 4; ++sub) {
+                const float phase = sub * (PI * 0.5f) + seedPhase;
+                const Vec3 d = (shootDir * 0.48f + (perp1 * std::cos(phase) + perp2 * std::sin(phase)) * 0.72f + Vec3(0, 0.28f, 0)).normalized();
+                appendTube(out, Vec3(0, 0, 0), d * (effR * 0.97f), cp.shootletRadiusM, cp.shootletRadiusM * 0.4f, 4);
+            }
+        }
+        for (const auto& q : out.positions) out.reach = std::max(out.reach, q.length());
+        // hull: the extreme point in each of a Fibonacci sphere of directions
+        std::vector<uint8_t> used(out.positions.size(), 0);
+        const int D = std::max(6, supportDirections);
+        for (int d = 0; d < D; ++d) {
+            const double zz = 1.0 - 2.0 * (d + 0.5) / D, rr = std::sqrt(std::max(0.0, 1.0 - zz * zz)), ph = d * 2.399963229728653;
+            const Vec3 dir(static_cast<float>(rr * std::cos(ph)), static_cast<float>(zz), static_cast<float>(rr * std::sin(ph)));
+            size_t best = 0; float bd = -1e9f;
+            for (size_t i = 0; i < out.positions.size(); ++i) { const float dd = out.positions[i].dot(dir); if (dd > bd) { bd = dd; best = i; } }
+            if (!used[best]) { used[best] = 1; out.support.push_back(out.positions[best]); }
+        }
+        return out;
+    }
+
+    /** A tapered tube from `a` to `b` (radius ra to rb, `sides` around, flat ends closed at the tip), appended to a cluster mesh. */
+    static void appendTube(SbVeggieClusterMesh& m, const Vec3& a, const Vec3& b, float ra, float rb, int sides) {
+        const Vec3 ax = b - a;
+        const float len = ax.length();
+        if (len < 1e-6f) return;
+        const Vec3 f = ax / len;
+        Vec3 u = f.cross(Vec3(0, 1, 0));
+        if (u.lengthSquared() < 1e-4f) u = f.cross(Vec3(1, 0, 0));
+        u = u.normalized();
+        const Vec3 v = f.cross(u).normalized();
+        const uint32_t base = static_cast<uint32_t>(m.positions.size());
+        for (int ring = 0; ring < 2; ++ring) {
+            for (int s = 0; s < sides; ++s) {
+                const float ang = TWO_PI * s / sides;
+                const Vec3 radial = u * std::cos(ang) + v * std::sin(ang);
+                m.positions.push_back((ring ? b : a) + radial * (ring ? rb : ra));
+                m.normals.push_back(radial);
+            }
+        }
+        for (int s = 0; s < sides; ++s) {
+            const uint32_t a0 = base + s, a1 = base + (s + 1) % sides, b0 = base + sides + s, b1 = base + sides + (s + 1) % sides;
+            m.indices.insert(m.indices.end(), {a0, a1, b1, a0, b1, b0});
+        }
+    }
+
+private:
+    static size_t appendLeaf(const SbVeggieClusterParams& cp, const SbVeggieMorphology& mo, const SbVeggieBladePlacement& pl,
+                           std::vector<SbVeggieBladeVertex>& verts, std::vector<uint32_t>& idx) {
+        SbVeggieBlade b = mo.blade;
+        if (!cp.petioles) b.petioleRatio = 0.0f;
+        return SbVeggieBladeBuilder::append(b, pl, cp.cupping, verts, idx, cp.petioles);
+    }
+};
+
+// ============================================================================
 // 6B. Spatial Color Field (Photogrammetric Inversion & Color Transfer)
 // ============================================================================
 
@@ -1287,6 +1582,9 @@ private:
         // NOAA Solar Ephemeris Direction (Authentic NYC afternoon sunlight vector)
         // Azimuth: 215 deg (SW), Elevation: 52 deg
         const Vec3 sunDir = Vec3(0.368f, 0.788f, -0.493f).normalized();
+        // the template's own top, read from its joints (no joint is singled out by index)
+        float templateTopY = 0.0f;
+        for (const auto& j : tmpl.skeleton) templateTopY = std::max(templateTopY, j.restPosition.y);
 
         for (size_t a = 0; a < tmpl.foliageAnchors.size(); ++a) {
             const auto& anchor = tmpl.foliageAnchors[a];
@@ -1366,7 +1664,6 @@ private:
 
                 // Leaf card scale jitter (+/- 20% organic variance)
                 float scaleJitter = 0.85f + 0.30f * std::sin(i * 1.7f + a * 3.1f);
-                float leafWidth = baseLeafSize * scaleJitter;
                 float leafHeight = baseLeafSize * scaleJitter * 1.15f;
 
                 // ================================================================
@@ -1376,7 +1673,7 @@ private:
                 float crownRadius = 4.2f * spreadScale;
                 float radialRatio = std::clamp(distFromCenter / crownRadius, 0.25f, 1.0f);
                 float crownBaseY = 2.0f * heightScale;
-                float crownTopY = (tmpl.skeleton[7].restPosition.y + 2.5f) * heightScale;
+                float crownTopY = (templateTopY + 2.5f) * heightScale;
                 float heightRatio = std::clamp((petioleTip.y - crownBaseY) / std::max(1.0f, crownTopY - crownBaseY), 0.20f, 1.0f);
                 float ambientOcclusion = std::clamp(radialRatio * 0.55f + heightRatio * 0.45f, 0.28f, 1.0f);
 
@@ -1504,96 +1801,25 @@ private:
                     return (geomN * 0.35f + envSky * 0.65f).normalized();
                 };
 
-                uint32_t baseIdx = static_cast<uint32_t>(mesh.vertices.size());
-
-                if (params.leafMorphology == 0) {
-                    // 3D Anatomical Lobed Leaf Blade with Parabolic Cupping and Sunken Midrib
-                    float cup = leafWidth * 0.22f * params.leafCupping;
-                    float midribSink = leafWidth * 0.10f * params.leafCupping;
-                    float droop = leafHeight * 0.18f * params.leafCupping;
-
-                    Vec3 v0_pos = petioleTip;
-                    Vec3 v1_pos = petioleTip + tangent * (leafHeight * 0.45f) - bitangent * (leafWidth * 0.55f) + normal * cup;
-                    Vec3 v2_pos = petioleTip + tangent * (leafHeight * 0.45f) - normal * midribSink;
-                    Vec3 v3_pos = petioleTip + tangent * (leafHeight * 0.45f) + bitangent * (leafWidth * 0.55f) + normal * cup;
-                    Vec3 v4_pos = petioleTip + tangent * leafHeight - normal * droop;
-                    Vec3 v5_pos = petioleTip + tangent * (leafHeight * 0.75f) - normal * (midribSink * 0.75f);
-
-                    Vec3 n0 = calcNormal(v0_pos, normal);
-                    Vec3 n1 = calcNormal(v1_pos, normal - bitangent * 0.35f);
-                    Vec3 n2 = calcNormal(v2_pos, normal);
-                    Vec3 n3 = calcNormal(v3_pos, normal + bitangent * 0.35f);
-                    Vec3 n4 = calcNormal(v4_pos, normal + tangent * 0.35f);
-                    Vec3 n5 = calcNormal(v5_pos, normal);
-
-                    // Upper Waxy Cuticle (Front Faces)
-                    mesh.vertices.push_back(Vertex{v0_pos, n0, Vec2(0.5f, 0.0f), leafColor});
-                    mesh.vertices.push_back(Vertex{v1_pos, n1, Vec2(0.0f, 0.35f), leafColor});
-                    mesh.vertices.push_back(Vertex{v2_pos, n2, Vec2(0.5f, 0.35f), leafColor});
-                    mesh.vertices.push_back(Vertex{v3_pos, n3, Vec2(1.0f, 0.35f), leafColor});
-                    mesh.vertices.push_back(Vertex{v4_pos, n4, Vec2(0.5f, 1.0f), leafColor});
-                    mesh.vertices.push_back(Vertex{v5_pos, n5, Vec2(0.5f, 0.70f), leafColor});
-
-                    mesh.indices.push_back(baseIdx + 0); mesh.indices.push_back(baseIdx + 1); mesh.indices.push_back(baseIdx + 2);
-                    mesh.indices.push_back(baseIdx + 0); mesh.indices.push_back(baseIdx + 2); mesh.indices.push_back(baseIdx + 3);
-                    mesh.indices.push_back(baseIdx + 2); mesh.indices.push_back(baseIdx + 1); mesh.indices.push_back(baseIdx + 5);
-                    mesh.indices.push_back(baseIdx + 2); mesh.indices.push_back(baseIdx + 5); mesh.indices.push_back(baseIdx + 3);
-                    mesh.indices.push_back(baseIdx + 5); mesh.indices.push_back(baseIdx + 1); mesh.indices.push_back(baseIdx + 4);
-                    mesh.indices.push_back(baseIdx + 5); mesh.indices.push_back(baseIdx + 4); mesh.indices.push_back(baseIdx + 3);
-
-                    // Glaucous Underside (Back Faces with Inverted Normals & Translucent Shading)
-                    uint32_t underBase = baseIdx + 6;
-                    mesh.vertices.push_back(Vertex{v0_pos, -n0, Vec2(0.5f, 0.0f), undersideColor});
-                    mesh.vertices.push_back(Vertex{v1_pos, -n1, Vec2(0.0f, 0.35f), undersideColor});
-                    mesh.vertices.push_back(Vertex{v2_pos, -n2, Vec2(0.5f, 0.35f), undersideColor});
-                    mesh.vertices.push_back(Vertex{v3_pos, -n3, Vec2(1.0f, 0.35f), undersideColor});
-                    mesh.vertices.push_back(Vertex{v4_pos, -n4, Vec2(0.5f, 1.0f), undersideColor});
-                    mesh.vertices.push_back(Vertex{v5_pos, -n5, Vec2(0.5f, 0.70f), undersideColor});
-
-                    mesh.indices.push_back(underBase + 0); mesh.indices.push_back(underBase + 2); mesh.indices.push_back(underBase + 1);
-                    mesh.indices.push_back(underBase + 0); mesh.indices.push_back(underBase + 3); mesh.indices.push_back(underBase + 2);
-                    mesh.indices.push_back(underBase + 2); mesh.indices.push_back(underBase + 5); mesh.indices.push_back(underBase + 1);
-                    mesh.indices.push_back(underBase + 2); mesh.indices.push_back(underBase + 3); mesh.indices.push_back(underBase + 5);
-                    mesh.indices.push_back(underBase + 5); mesh.indices.push_back(underBase + 4); mesh.indices.push_back(underBase + 1);
-                    mesh.indices.push_back(underBase + 5); mesh.indices.push_back(underBase + 3); mesh.indices.push_back(underBase + 4);
-
-                    // Slender Woody Petiole connecting twig node directly to leaf base
-                    Vec3 petioleWidth = bitangent * (leafWidth * 0.045f);
-                    Vec4 petioleColor(0.32f, 0.22f, 0.15f, 1.0f);
-                    uint32_t petBaseIdx = static_cast<uint32_t>(mesh.vertices.size());
-
-                    mesh.vertices.push_back(Vertex{petioleStemBase - petioleWidth, normal, Vec2(0.5f, 0.01f), petioleColor});
-                    mesh.vertices.push_back(Vertex{petioleStemBase + petioleWidth, normal, Vec2(0.5f, 0.01f), petioleColor});
-                    mesh.vertices.push_back(Vertex{petioleTip + petioleWidth, normal, Vec2(0.5f, 0.05f), petioleColor});
-                    mesh.vertices.push_back(Vertex{petioleTip - petioleWidth, normal, Vec2(0.5f, 0.05f), petioleColor});
-
-                    mesh.indices.push_back(petBaseIdx + 0); mesh.indices.push_back(petBaseIdx + 1); mesh.indices.push_back(petBaseIdx + 2);
-                    mesh.indices.push_back(petBaseIdx + 0); mesh.indices.push_back(petBaseIdx + 2); mesh.indices.push_back(petBaseIdx + 3);
-                } else {
-                    // Planar Quad Fallback with Envelope Normals
-                    Vec3 p0 = petioleTip - bitangent * (leafWidth * 0.5f);
-                    Vec3 p1 = petioleTip + bitangent * (leafWidth * 0.5f);
-                    Vec3 p2 = petioleTip + tangent * leafHeight + bitangent * (leafWidth * 0.5f);
-                    Vec3 p3 = petioleTip + tangent * leafHeight - bitangent * (leafWidth * 0.5f);
-
-                    Vec3 n0 = calcNormal(p0, normal - bitangent * 0.25f);
-                    Vec3 n1 = calcNormal(p1, normal + bitangent * 0.25f);
-                    Vec3 n2 = calcNormal(p2, normal + tangent * 0.25f + bitangent * 0.25f);
-                    Vec3 n3 = calcNormal(p3, normal + tangent * 0.25f - bitangent * 0.25f);
-
-                    mesh.vertices.push_back(Vertex{p0, n0, Vec2(0, 0), leafColor});
-                    mesh.vertices.push_back(Vertex{p1, n1, Vec2(1, 0), leafColor});
-                    mesh.vertices.push_back(Vertex{p2, n2, Vec2(1, 1), leafColor});
-                    mesh.vertices.push_back(Vertex{p3, n3, Vec2(0, 1), leafColor});
-
-                    mesh.indices.push_back(baseIdx + 0);
-                    mesh.indices.push_back(baseIdx + 1);
-                    mesh.indices.push_back(baseIdx + 2);
-
-                    mesh.indices.push_back(baseIdx + 0);
-                    mesh.indices.push_back(baseIdx + 2);
-                    mesh.indices.push_back(baseIdx + 3);
+                // The blade: SB-Veggie's one blade generator (continuous outline, cupping, sunken midrib), upper side, underside, petiole
+                SbVeggieBladePlacement pl;
+                pl.petioleBase = petioleStemBase;
+                pl.petioleTip = petioleTip;
+                pl.tangent = tangent;
+                pl.bitangent = bitangent;
+                pl.normal = normal;
+                pl.lengthM = leafHeight;
+                const SbVeggieBlade& blade = params.morphology.blade;
+                std::vector<SbVeggieBladeVertex> bv;
+                std::vector<uint32_t> bi;
+                SbVeggieBladeBuilder::append(blade, pl, params.leafCupping, bv, bi);
+                const uint32_t baseIdx = static_cast<uint32_t>(mesh.vertices.size());
+                for (const auto& v : bv) {
+                    Vec4 col = v.petiole ? Vec4(0.32f, 0.22f, 0.15f, 1.0f) : (v.underside ? undersideColor : leafColor);
+                    const Vec3 nrm = v.petiole ? v.normal : calcNormal(v.position, v.normal);
+                    mesh.vertices.push_back(Vertex{v.position, v.underside ? nrm : nrm, v.uv, col});
                 }
+                for (uint32_t id : bi) mesh.indices.push_back(baseIdx + id);
             }
         }
     }
@@ -1605,7 +1831,6 @@ private:
 // Backward-compatible type aliases for legacy code
 namespace smpl_tree {
     using namespace sb_veggie;
-    using SmplTreeArchetype = sb_veggie::SbVeggieArchetype;
     using SmplTreeJoint = sb_veggie::SbVeggieJoint;
     using SmplSkinWeight = sb_veggie::SbVeggieSkinWeight;
     using SmplFoliageAnchor = sb_veggie::SbVeggieFoliageAnchor;
