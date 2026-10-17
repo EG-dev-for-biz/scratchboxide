@@ -207,7 +207,12 @@ export function ornamentContents(fit: StructureFit, evidence: EvidenceInput[], l
 
 export interface Rect { u0: number; v0: number; u1: number; v1: number }
 const rectArea = (r: Rect) => Math.max(0, r.u1 - r.u0) * Math.max(0, r.v1 - r.v0);
-export const bbox = (pts: Vec2[]): Rect => ({ u0: Math.min(...pts.map(p => p[0])), v0: Math.min(...pts.map(p => p[1])), u1: Math.max(...pts.map(p => p[0])), v1: Math.max(...pts.map(p => p[1])) });
+/** The bounding rectangle of points (a loop: a repeat of thousands of instances has more points than a spread can take). */
+export function bbox(pts: Vec2[]): Rect {
+    let u0 = Infinity, v0 = Infinity, u1 = -Infinity, v1 = -Infinity;
+    for (const p of pts) { if (p[0] < u0) u0 = p[0]; if (p[0] > u1) u1 = p[0]; if (p[1] < v0) v0 = p[1]; if (p[1] > v1) v1 = p[1]; }
+    return { u0, v0, u1, v1 };
+}
 const TOL = 0.01;
 
 export function pointInPolygon(u: number, v: number, poly: Vec2[], tol = TOL): boolean {
