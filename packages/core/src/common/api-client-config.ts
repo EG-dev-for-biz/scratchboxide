@@ -221,7 +221,7 @@ async function retryWithoutStaleToken(
         return undefined;
     }
     cachedToken = undefined;
-    try { win.sessionStorage?.removeItem(SESSION_TOKEN_KEY); } catch { /* storage blocked */ }
+    try { win.sessionStorage?.removeItem?.(SESSION_TOKEN_KEY); } catch { /* storage blocked */ }
     return send(url, init);
 }
 
