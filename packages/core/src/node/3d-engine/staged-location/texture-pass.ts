@@ -253,7 +253,10 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
                 atlas, views: src.views, depthFor: depthForMesh(src.occluder), paletteLab: src.palette.length ? paletteLab(src.palette) : undefined,
                 signal: src.signal, options: {
                     // the tile photo is registered to the geometry, so the per-chart alignment uses it as its reference
-                    ...(src.tile ? { alignReference: (P: Vec3, N: Vec3) => src.tile!.sample(P, N, Math.max(0.25, 2 * (src.registrationResidualM ?? 0)))?.rgb } : {}),
+                    ...(src.tile ? { alignReference: (P: Vec3, N: Vec3) => {
+                        const c = src.tile!.sample(P, N, Math.max(0.25, 2 * (src.registrationResidualM ?? 0)))?.rgb; // sRGB 0..255
+                        return c && [0, 1, 2].map(i => SRGB8_TO_LINEAR[Math.max(0, Math.min(255, Math.round(c[i])))]) as Vec3;
+                    } } : {}),
                     ...(src.delight ? { delight: src.delight } : {}), ...(src.observedSurface ? { observedSurface: src.observedSurface } : {}), ...(src.poseEdgeGuardShare ? { poseEdgeGuardShare: src.poseEdgeGuardShare } : {}) }
             });
             planes = res;

@@ -719,8 +719,18 @@ function describeRegistration(r: Registration, pairs: number): string {
 /** The texture bake's observed-surface tolerance against the scan: 0.5 m + 3 cm per metre of view distance (the scan's
  *  leaf error is ~0.6 m median edge; fitted faces sit within centimetres of the scan where the scan has samples). */
 export const TEXTURE_OBSERVED_SURFACE = { baseM: 0.5, perMeter: 0.03 };
-/** Half the pose uncertainty (live: ~1.3 m residual, so ~0.65 m on the surface) is kept clear of every silhouette. */
-export const TEXTURE_POSE_EDGE_GUARD_SHARE = 0.5;
+/**
+ * A quarter of the pose uncertainty (live: ~1.2 m residual, so ~0.3 m on the surface) is kept clear of every silhouette.
+ * Measured on the live Washington Square Arch (replayed bake, Street View share of the layer's texels / share of baked
+ * texels whose 5 x 5 colour is > 25 CIEDE2000 from the tile photo there, a background-leak proxy):
+ *   l3b  0: 33.1 % / 7.4 %   0.15: 29.3 % / 6.5 %   0.25: 25.8 % / 6.6 %   0.3: 23.9 % / 7.1 %   0.5: 18.3 % / 4.1 %
+ *   l2   0: 32.7 % / 4.0 %   0.25: 26.2 % / 3.9 %   0.5: 18.9 % / 3.3 %
+ * The texels 0.5 -> 0.25 adds are 'far' about 13 % (l3b) and 5 % (l2) of the time (against 4 % and 3 % of what 0.5 keeps),
+ * the ones 0.25 -> 0 adds 10 % and 4 %. 0.25 gives back 40 % of the coverage 0.5 cost (l3b 18 -> 26 %) for a leak proxy
+ * between the two ends (l3b 6.6 % against 4.1 % and 7.4 %); the per-chart alignment and one view per region now take
+ * part of what the wider guard was for (a sample carried across a silhouette by the pose error).
+ */
+export const TEXTURE_POSE_EDGE_GUARD_SHARE = 0.25;
 
 /** What the texture stage hands the result and the summary. */
 export interface TextureStageValue {
