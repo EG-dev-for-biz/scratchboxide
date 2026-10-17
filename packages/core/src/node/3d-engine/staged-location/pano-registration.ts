@@ -202,47 +202,75 @@ function solvePanos(corrs: Correspondence[], faces: CastFace[], opts: { iteratio
         panoIds.forEach((id, i) => m.set(id, { ...ZERO_CORRECTION, dx: x[K * i], dz: x[K * i + 1], dyawDeg: x[K * i + 2], dpitchDeg: x[K * i + 3] }));
         return m;
     };
-    // a pair's weight in the solve: 1 while it agrees to within `delta` metres, delta / its disagreement beyond (a Huber loss, by reweighting)
-    const residuals = (x: number[], set: Correspondence[], weight: number[]): number[] => {
-        const corr = toCorr(x);
+    const panoIndex = new Map(panoIds.map((id, i) => [id, i]));
+    /** One pair's weighted residuals (fixed length: five samples of three). A pair's weight is 1 while it agrees to within `delta` metres, delta / its disagreement beyond (a Huber loss, by reweighting). */
+    const block = (c: Correspondence, corr: Corrections, robust: number): number[] => {
+        const out: number[] = [];
+        for (const d of disagreement(c, corr, faces)) {
+            const w = (Math.sqrt(d.w) * robust) / BOX_PLACEMENT_SIGMA_M;
+            out.push(d.v[0] * w, d.v[1] * w, d.v[2] * w);
+        }
+        return out;
+    };
+    const priorOf = (x: number[]): number[] => {
         const r: number[] = [];
-        set.forEach((c, n) => {
-            const robust = Math.sqrt(weight[n]);
-            for (const d of disagreement(c, corr, faces)) {
-                const w = (Math.sqrt(d.w) * robust) / BOX_PLACEMENT_SIGMA_M;
-                r.push(d.v[0] * w, d.v[1] * w, d.v[2] * w);
-            }
-        });
         for (let i = 0; i < P; i++) r.push(x[K * i] / POSE_PRIOR_SIGMA.meters, x[K * i + 1] / POSE_PRIOR_SIGMA.meters, x[K * i + 2] / POSE_PRIOR_SIGMA.degrees, x[K * i + 3] / PITCH_PRIOR_SIGMA_DEG);
         return r;
     };
+    const costOf = (blocks: number[][], x: number[]): number => {
+        let c = 0;
+        for (const b of blocks) for (const v of b) c += v * v;
+        for (const v of priorOf(x)) c += v * v;
+        return c;
+    };
     const fit = (set: Correspondence[], x0: number[], weight: number[]): number[] => {
+        const N = K * P;
+        const robust = weight.map(w => Math.sqrt(w));
+        const panos = set.map(c => [panoIndex.get(c.a.view.panoId)!, panoIndex.get(c.b.view.panoId)!]);
+        // a pano's pose moves only the pairs that name it: a column of the Jacobian is built from those blocks alone
+        const pairsOf: number[][] = Array.from({ length: P }, () => []);
+        panos.forEach(([ia, ib], n) => { pairsOf[ia].push(n); if (ib !== ia) pairsOf[ib].push(n); });
         let x = x0.slice();
         let lambda = 1;
-        let r = residuals(x, set, weight);
-        let cost = r.reduce((s, v) => s + v * v, 0);
-        const steps = [0.05, 0.05, 0.05, 0.05];
-        for (let it = 0; it < (opts.iterations ?? 25); it++) {
-            const J: number[][] = r.map(() => new Array<number>(K * P).fill(0));
-            for (let j = 0; j < K * P; j++) {
-                const xp = x.slice(); xp[j] += steps[j % K];
-                const xm = x.slice(); xm[j] -= steps[j % K];
-                const rp = residuals(xp, set, weight), rm = residuals(xm, set, weight);
-                for (let i = 0; i < r.length; i++) J[i][j] = (rp[i] - rm[i]) / (2 * steps[j % K]);
+        let blocks = set.map((c, n) => block(c, toCorr(x), robust[n]));
+        let cost = costOf(blocks, x);
+        const step = 0.05;
+        for (let it = 0; it < (opts.iterations ?? 10); it++) {
+            const H: number[][] = Array.from({ length: N }, () => new Array<number>(N).fill(0));
+            const g = new Array<number>(N).fill(0);
+            // d block / d parameter, central differences, only for the pairs that name the pano
+            const dBlock: Array<Map<number, number[]>> = set.map(() => new Map());
+            for (let i = 0; i < P; i++) for (let k = 0; k < K; k++) {
+                const j = K * i + k;
+                const xp = x.slice(); xp[j] += step;
+                const cp = toCorr(xp);
+                for (const n of pairsOf[i]) {
+                    const bp = block(set[n], cp, robust[n]);
+                    dBlock[n].set(j, bp.map((v, q) => (v - blocks[n][q]) / step));
+                }
             }
-            const H: number[][] = Array.from({ length: K * P }, () => new Array<number>(K * P).fill(0));
-            const g = new Array<number>(K * P).fill(0);
-            for (let i = 0; i < r.length; i++) for (let a = 0; a < K * P; a++) { g[a] += J[i][a] * r[i]; for (let b = 0; b < K * P; b++) H[a][b] += J[i][a] * J[i][b]; }
+            set.forEach((_, n) => {
+                const cols = [...dBlock[n].keys()];
+                for (let q = 0; q < blocks[n].length; q++) for (const a of cols) {
+                    const ja = dBlock[n].get(a)![q];
+                    g[a] += ja * blocks[n][q];
+                    for (const b of cols) H[a][b] += ja * dBlock[n].get(b)![q];
+                }
+            });
+            const prior = priorOf(x);
+            const sig = (j: number) => [POSE_PRIOR_SIGMA.meters, POSE_PRIOR_SIGMA.meters, POSE_PRIOR_SIGMA.degrees, PITCH_PRIOR_SIGMA_DEG][j % K];
+            for (let j = 0; j < N; j++) { g[j] += prior[j] / sig(j); H[j][j] += 1 / (sig(j) * sig(j)); }
             let improved = false;
             for (let tries = 0; tries < 8 && !improved; tries++) {
                 const Hl = H.map((row, a) => row.map((v, b) => v + (a === b ? lambda * (v || 1) : 0)));
                 const delta = solve(Hl, g.map(v => -v));
                 const xn = x.map((v, i) => v + delta[i]);
-                const rn = residuals(xn, set, weight);
-                const cn = rn.reduce((s, v) => s + v * v, 0);
-                if (cn < cost) { x = xn; r = rn; cost = cn; lambda = Math.max(1e-4, lambda / 3); improved = true; } else lambda *= 4;
+                const cn0 = toCorr(xn);
+                const bn = set.map((c, n) => block(c, cn0, robust[n]));
+                const cn = costOf(bn, xn);
+                if (cn < cost) { const gain = cost - cn; x = xn; blocks = bn; cost = cn; if (gain < 1e-4 * cn) { improved = true; lambda = 0; break; } lambda = Math.max(1e-4, lambda / 3); improved = true; } else lambda *= 4;
             }
-            if (!improved) break;
+            if (!improved || lambda === 0) break;
         }
         return x;
     };
@@ -251,7 +279,7 @@ function solvePanos(corrs: Correspondence[], faces: CastFace[], opts: { iteratio
     if (P && keep.length) {
         // iteratively reweighted: the pairs that still disagree are given less say each round, so a few wrong or sloppy matches stop pulling the poses
         let weight = keep.map(() => 1);
-        for (let round = 0; round < 4; round++) {
+        for (let round = 0; round < 3; round++) {
             x = fit(keep, x, weight);
             const corr = toCorr(x);
             const res = keep.map(c => rmsPair(c, corr, faces));

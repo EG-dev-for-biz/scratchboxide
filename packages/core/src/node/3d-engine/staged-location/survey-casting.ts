@@ -86,21 +86,37 @@ function inExtent(extent: Vec2[], u: number, v: number, slack: number): boolean 
     return u >= Math.min(...us) - slack && u <= Math.max(...us) + slack && v >= Math.min(...vs) - slack && v <= Math.max(...vs) + slack;
 }
 
+/** What a plane face needs for a ray test, worked out once per face (registration casts the same faces hundreds of thousands of times). */
+interface PlaneConsts { n: Vec3; o: Vec3; u: Vec3; v: Vec3; iu: number; iv: number; u0: number; u1: number; v0: number; v1: number; hasExtent: boolean }
+const planeCache = new WeakMap<object, PlaneConsts>();
+function planeConsts(pl: Extract<FittedSurface['chart'], { plane: unknown }>['plane']): PlaneConsts {
+    let c = planeCache.get(pl);
+    if (!c) {
+        const us = pl.extentUv.map(p => p[0]), vs = pl.extentUv.map(p => p[1]);
+        c = {
+            n: unit(pl.normal), o: pl.origin, u: pl.u, v: pl.v, iu: 1 / (dot(pl.u, pl.u) || 1), iv: 1 / (dot(pl.v, pl.v) || 1),
+            u0: Math.min(...us), u1: Math.max(...us), v0: Math.min(...vs), v1: Math.max(...vs), hasExtent: pl.extentUv.length > 0
+        };
+        planeCache.set(pl, c);
+    }
+    return c;
+}
+
 /** The nearest hit of a ray on the faces, only on the side the face faces (a face seen from behind is not hit). */
 export function castRay(ray: { origin: Vec3; dir: Vec3 }, faces: CastFace[], slackM = 0.3): FaceHit | undefined {
     let best: FaceHit | undefined;
     for (const f of faces) {
         let hit: { t: number; u: number; v: number } | undefined;
         if ('plane' in f.chart) {
-            const pl = f.chart.plane;
-            const n = unit(pl.normal);
-            const denom = dot(ray.dir, n);
+            const k = planeConsts(f.chart.plane);
+            const denom = ray.dir[0] * k.n[0] + ray.dir[1] * k.n[1] + ray.dir[2] * k.n[2];
             if (denom >= -1e-6) continue;
-            const t = dot(sub(pl.origin, ray.origin), n) / denom;
+            const t = ((k.o[0] - ray.origin[0]) * k.n[0] + (k.o[1] - ray.origin[1]) * k.n[1] + (k.o[2] - ray.origin[2]) * k.n[2]) / denom;
             if (t <= 0.1) continue;
-            const p = add(ray.origin, scale(ray.dir, t));
-            const [u, v] = planeUv(pl, p);
-            if (!inExtent(pl.extentUv, u, v, slackM)) continue;
+            if (best && t >= best.distanceM) continue;
+            const dx = ray.origin[0] + ray.dir[0] * t - k.o[0], dy = ray.origin[1] + ray.dir[1] * t - k.o[1], dz = ray.origin[2] + ray.dir[2] * t - k.o[2];
+            const u = (dx * k.u[0] + dy * k.u[1] + dz * k.u[2]) * k.iu, v = (dx * k.v[0] + dy * k.v[1] + dz * k.v[2]) * k.iv;
+            if (k.hasExtent && !(u >= k.u0 - slackM && u <= k.u1 + slackM && v >= k.v0 - slackM && v <= k.v1 + slackM)) continue;
             hit = { t, u, v };
         } else {
             const c = f.chart.cylinder;

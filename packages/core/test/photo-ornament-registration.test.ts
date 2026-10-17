@@ -131,3 +131,29 @@ describe('registering panos from realistic boxes (noisy extents, bands, a pitch 
         expect(r.afterRmsM).toBeLessThan(0.8);
     });
 });
+
+describe('registering many panos at once (the live scale: twenty panos, hundreds of pairs, a hundred faces)', () => {
+    it('solves in seconds, not minutes (the solve is synchronous: it must not hold the process while calls are out)', () => {
+        let seed = 11;
+        const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647 - 0.5; };
+        // 120 faces: the north wall and a hundred small slivers beside it, as a real fit has
+        const faces: CastFace[] = [NORTH];
+        for (let i = 0; i < 119; i++) faces.push({ id: `f${i}`, source: 'fit', chart: { plane: { origin: [-13 + i * 0.2, 0, -5.4 - i * 0.01], u: [1, 0, 0], v: [0, 1, 0], normal: [0, 0, -1], extentUv: [[0, 0], [0.18, 3]] } } });
+        const panos: Array<{ t: RegView; n: RegView }> = Array.from({ length: 20 }, (_, i) => {
+            const t: RegView = { panoId: `P${i}`, eye: [-20 + i * 2, 2.5, -30 - (i % 5) * 2], headingDeg: 180, pitchDeg: 20, fovDeg: 60, widthPx: W, heightPx: H };
+            return { t, n: { ...t, eye: [t.eye[0] + rnd() * 4, 2.5, t.eye[2] + rnd() * 4], headingDeg: 180 + rnd() * 3 } };
+        });
+        const cs: Correspondence[] = [];
+        for (let k = 0; k < 300; k++) {
+            const i = Math.floor((rnd() + 0.5) * 20), j = (i + 1 + Math.floor((rnd() + 0.5) * 18)) % 20;
+            const p: [number, number, number] = [-9 + (rnd() + 0.5) * 18, 6 + (rnd() + 0.5) * 12, -5.5];
+            cs.push({ id: `p${k}`, a: { view: panos[i].n, box: boxAt(panos[i].t, p) }, b: { view: panos[j].n, box: boxAt(panos[j].t, p) } });
+        }
+        const t0 = Date.now();
+        const r = registerPanos(cs, faces);
+        const secs = (Date.now() - t0) / 1000;
+        expect(r.perPano.length).toBeGreaterThan(10);
+        expect(r.afterRmsM).toBeLessThan(r.beforeRmsM);
+        expect(secs).toBeLessThan(25);
+    }, 60_000);
+});
