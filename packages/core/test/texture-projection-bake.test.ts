@@ -26,6 +26,10 @@ import { deltaE00, SRGB_TO_LINEAR, linearToSrgb255 } from '../src/node/3d-engine
 import { measurePalette } from '../src/node/3d-engine/staged-location/photo-palette';
 import { ProColorGradeMatchingService as Colour } from '../src/node/image/ProColorGradeMatchingService';
 import { encodePng } from '../src/node/texture-processing';
+import * as jpegJs from 'jpeg-js';
+import { castCamera } from '../src/node/3d-engine/staged-location/survey-casting';
+import type { Registration, RegView } from '../src/node/3d-engine/staged-location/pano-registration';
+import { depthForMesh, poseQualityFromResidual, projectionViewFromRegistered } from '../src/node/3d-engine/staged-location/texture-projection-views';
 import { FACADE, facadeAlbedo, facadeAtlas, lookAtCamera } from './helpers/texture-pass-fixtures';
 
 const SHOTS = path.resolve(__dirname, '../../../test-results/screenshots/texture_bake');
@@ -422,5 +426,72 @@ describe('Street View projection bake', () => {
         expect(fs.statSync(p2).size).toBeGreaterThan(1000);
         fs.writeFileSync(path.join(SHOTS, 'bake_report.json'), JSON.stringify({ ...res.report, views: res.report.views.map((v) => ({ id: v.panoId, n: v.samples, gain: v.gain.map((g) => +g.toFixed(3)) })) }));
         expect(res.report.p95SeamDeltaE).toBeLessThanOrEqual(3);
+    });
+});
+
+describe('registered grounding views -> bake inputs', () => {
+    /** A facade grid mesh (20 x 12 quads) plus the proud panel: the occluder the registration renders depth from. */
+    function sceneMesh(): { vertices: number[]; indices: number[] } {
+        const vertices: number[] = [], indices: number[] = [];
+        const quadGrid = (o: Vec3, w: number, h: number, nx: number, ny: number) => {
+            const base = vertices.length / 3;
+            for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) vertices.push(o[0] + (w * i) / nx, o[1] + (h * j) / ny, o[2]);
+            for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+                const a = base + j * (nx + 1) + i;
+                indices.push(a, a + 1, a + nx + 2, a, a + nx + 2, a + nx + 1);
+            }
+        };
+        quadGrid([0, 0, 0], FACADE.widthM, FACADE.heightM, 20, 12);
+        quadGrid([4, 0, -1], 2, 4, 4, 8);
+        return { vertices, indices };
+    }
+
+    it('decodes grounding JPEGs in memory, applies the pose correction, renders occluder depth with renderFrameDepth, and bakes', async () => {
+        const occ = panel(4, 6, 0, 4, 1.0);
+        const scene = [facadeRect(), occ];
+        // nominal eyes are 0.5 m off; the registration's correction puts them back where the photos were taken
+        const shots: Array<[string, Vec3, number]> = [['pano-a', [5, 1.7, -14], 180], ['pano-b', [-3, 1.7, -12], 146.3], ['pano-c', [13, 1.7, -12], 213.7]];
+        const registration = {
+            corrections: {}, setAside: [{ panoId: 'pano-c', reason: 'implausible shift', dxM: 6, dzM: 0, dyawDeg: 0, dpitchDeg: 0 }],
+            perPano: [{ panoId: 'pano-a', dxM: 0.5, dzM: 0, dyawDeg: 0, dpitchDeg: 0, pairs: 12, beforeRmsM: 2, afterRmsM: 0.4 },
+                { panoId: 'pano-b', dxM: 0.5, dzM: 0, dyawDeg: 0, dpitchDeg: 0, pairs: 9, beforeRmsM: 2, afterRmsM: 1.3 }],
+            pairs: [], beforeRmsM: 2, afterRmsM: 0.9, used: 21, rejected: 0
+        } as unknown as Registration;
+        const views = shots.map(([panoId, eye, headingDeg]) => {
+            const view: RegView = { panoId, eye: [eye[0] - 0.5, eye[1], eye[2]], headingDeg, pitchDeg: 4, fovDeg: 80, widthPx: 320, heightPx: 200,
+                correction: { dx: 0.5, dy: 0, dz: 0, dyawDeg: 0, dpitchDeg: 0, drollDeg: 0 } };
+            const { image } = render(castCamera(view), scene);
+            const jpeg = new Uint8Array(jpegJs.encode({ width: image.width, height: image.height, data: Buffer.from(image.rgba) }, 95).data);
+            return projectionViewFromRegistered({ view, jpeg, registration, captureDate: '2024-06' });
+        });
+        expect(views[0].camera.eye[0]).toBeCloseTo(5, 9);
+        expect(views[0].poseQuality).toBeCloseTo(poseQualityFromResidual(0.4), 9);
+        expect(views[1].poseQuality).toBeLessThan(views[0].poseQuality);
+        expect(views[2].poseQuality).toBe(0);
+        expect(views[0].poseSigmaPx).toBeCloseTo(views[0].camera.fx * 0.4, 6);
+        const atlas = facadeAtlas(96);
+        const res = await bakeStreetViewProjection({ atlas, views, depthFor: depthForMesh(sceneMesh()) });
+        expect(res.degradations.some((d) => d.reasonCode === 'pano_set_aside' && d.reason.includes('pano-c'))).toBe(true);
+        expect(res.provenance.every((p) => !p.panoIds!.includes('pano-c'))).toBe(true);
+        const err = albedoError(res, atlas, facadeAlbedo);
+        expect(err.n).toBeGreaterThan(96 * 96 * 0.5);
+        expect(err.mean).toBeLessThan(1.5); // JPEG q95 round trip
+        expect(err.max).toBeLessThanOrEqual(8);
+        // nothing behind the panel is baked: texels the panel hides from both used views stay uncovered
+        let hidden = 0;
+        for (let t = 0; t < 96 * 96; t++) {
+            const P: Vec3 = [atlas.texels.position[t * 3], atlas.texels.position[t * 3 + 1], atlas.texels.position[t * 3 + 2]];
+            const hiddenFromAll = views.slice(0, 2).every((v) => {
+                const cam = v.camera;
+                const d: Vec3 = [P[0] - cam.eye[0], P[1] - cam.eye[1], P[2] - cam.eye[2]];
+                const sp = (occ.origin[2] - cam.eye[2]) / d[2];
+                const q = [cam.eye[0] + sp * d[0], cam.eye[1] + sp * d[1]];
+                return q[0] >= 4 && q[0] <= 6 && q[1] >= 0 && q[1] <= 4;
+            });
+            if (!hiddenFromAll) continue;
+            hidden++;
+            expect(res.albedo[t * 4 + 3]).toBe(0);
+        }
+        expect(hidden).toBeGreaterThan(20);
     });
 });
