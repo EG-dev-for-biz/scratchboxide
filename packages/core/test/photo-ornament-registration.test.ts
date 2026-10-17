@@ -73,3 +73,87 @@ describe('registering panos from corresponding boxes', () => {
         expect(r.used).toBe(0);
     });
 });
+
+// ----------------------------------------------------------------------------------------------------------------
+// what the real boxes are like: a pitch error as well as a heading one, boxes of different extents (a band seen to end at different
+// places from different panos), a few wrong matches, and the placement noise of a vision model
+// ----------------------------------------------------------------------------------------------------------------
+describe('registering panos from realistic boxes (noisy extents, bands, a pitch error, wrong matches)', () => {
+    let seed = 7;
+    const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647 - 0.5; };
+    const TRUE_C: RegView = { panoId: 'C', eye: [0, 2.5, -41], headingDeg: 180, pitchDeg: 20, fovDeg: 60, widthPx: W, heightPx: H };
+    const NOM_C: RegView = { ...TRUE_C, eye: [1.9, 2.5, -39.2], headingDeg: 181.4 };
+    const views: Array<[RegView, RegView]> = [[TRUE_A, NOM_A], [TRUE_B, NOM_B], [TRUE_C, NOM_C]];
+    // the real pano's pitch is a degree off as well: the nominal camera is built with the stated pitch, the truth is tilted
+    const PITCH_ERR = [0.8, -1.1, 0.6];
+    const trueWithPitch = views.map(([t], i) => ({ ...t, pitchDeg: t.pitchDeg + PITCH_ERR[i] }));
+    const boxOf = (v: RegView, p: [number, number, number], halfW: number, halfH: number, shiftU = 0): [number, number, number, number] => {
+        const px = projectToFrame(castCamera(v), [p[0] + shiftU, p[1], p[2]])!;
+        const j = () => rnd() * 14;
+        return [((px[1] - halfH + j()) / H) * 1000, ((px[0] - halfW + j()) / W) * 1000, ((px[1] + halfH + j()) / H) * 1000, ((px[0] + halfW + j()) / W) * 1000];
+    };
+    const make = (): Correspondence[] => {
+        const out: Correspondence[] = [];
+        const spots: Array<[number, number, number]> = [[-8, 13, -5.5], [-3, 16, -5.5], [3, 12, -5.5], [7, 15, -5.5], [-6, 18, -5.5], [1, 9, -5.5]];
+        let n = 0;
+        for (const p of spots) for (const [i, j] of [[0, 1], [0, 2], [1, 2]]) {
+            const band = n % 2 === 0;
+            const a = trueWithPitch[i], b = trueWithPitch[j];
+            // a band: wide boxes whose ends differ between the two views by a metre or two along the wall
+            const ba = band ? boxOf(a, p, 120, 14, rnd() * 3) : boxOf(a, p, 20 + rnd() * 10, 20 + rnd() * 10);
+            const bb = band ? boxOf(b, p, 120, 14, rnd() * 3) : boxOf(b, p, 20 + rnd() * 10, 20 + rnd() * 10);
+            out.push({ id: `p${n++}`, a: { view: views[i][1], box: ba }, b: { view: views[j][1], box: bb } });
+        }
+        // two wrong matches
+        out.push({ id: 'w0', a: out[0].a, b: { view: NOM_B, box: boxOf(trueWithPitch[1], [-9.5, 3, -5.5], 20, 20) } });
+        out.push({ id: 'w1', a: out[3].a, b: { view: NOM_C, box: boxOf(trueWithPitch[2], [9, 20, -5.5], 25, 25) } });
+        return out;
+    };
+
+    it('lands within a few tens of centimetres of agreement, sets the wrong matches aside, and reports each pano', () => {
+        const r = registerPanos(make(), [NORTH]);
+        expect(r.afterRmsM).toBeLessThan(0.6);
+        expect(r.afterRmsM).toBeLessThan(r.beforeRmsM / 3);
+        expect(r.pairs.filter(p => /^w/.test(p.id) && p.used).length).toBe(0);
+        expect(r.perPano.length).toBe(3);
+        for (const p of r.perPano) { expect(p.pairs).toBeGreaterThan(3); expect(p.afterRmsM).toBeLessThan(p.beforeRmsM); }
+        expect(r.setAside).toEqual([]);
+        // the pitch is solved too: each pano's pitch moves toward the truth's tilt
+        for (const [i, p] of ['A', 'B', 'C'].entries()) expect(Math.abs(r.perPano.find(x => x.panoId === p)!.dpitchDeg - PITCH_ERR[i])).toBeLessThan(Math.abs(PITCH_ERR[i]) + 0.2);
+    });
+
+    it('sets aside a pano whose solved shift is implausible, and says so', () => {
+        const cs = make();
+        // a pano whose every match is of the wrong thing
+        for (let i = 0; i < 6; i++) cs.push({ id: `bad${i}`, a: { view: NOM_A, box: boxOf(TRUE_A, [-8 + i * 3, 14, -5.5], 20, 20) }, b: { view: { ...NOM_B, panoId: 'Z', eye: [30, 2.5, -20] }, box: boxOf(TRUE_B, [-8 + i * 3, 14, -5.5], 20, 20) } });
+        const r = registerPanos(cs, [NORTH]);
+        expect(r.setAside.every(a => a.reason.length > 20)).toBe(true);
+        expect(r.afterRmsM).toBeLessThan(0.8);
+    });
+});
+
+describe('registering many panos at once (the live scale: twenty panos, hundreds of pairs, a hundred faces)', () => {
+    it('solves in seconds, not minutes (the solve is synchronous: it must not hold the process while calls are out)', () => {
+        let seed = 11;
+        const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647 - 0.5; };
+        // 120 faces: the north wall and a hundred small slivers beside it, as a real fit has
+        const faces: CastFace[] = [NORTH];
+        for (let i = 0; i < 119; i++) faces.push({ id: `f${i}`, source: 'fit', chart: { plane: { origin: [-13 + i * 0.2, 0, -5.4 - i * 0.01], u: [1, 0, 0], v: [0, 1, 0], normal: [0, 0, -1], extentUv: [[0, 0], [0.18, 3]] } } });
+        const panos: Array<{ t: RegView; n: RegView }> = Array.from({ length: 20 }, (_, i) => {
+            const t: RegView = { panoId: `P${i}`, eye: [-20 + i * 2, 2.5, -30 - (i % 5) * 2], headingDeg: 180, pitchDeg: 20, fovDeg: 60, widthPx: W, heightPx: H };
+            return { t, n: { ...t, eye: [t.eye[0] + rnd() * 4, 2.5, t.eye[2] + rnd() * 4], headingDeg: 180 + rnd() * 3 } };
+        });
+        const cs: Correspondence[] = [];
+        for (let k = 0; k < 300; k++) {
+            const i = Math.floor((rnd() + 0.5) * 20), j = (i + 1 + Math.floor((rnd() + 0.5) * 18)) % 20;
+            const p: [number, number, number] = [-9 + (rnd() + 0.5) * 18, 6 + (rnd() + 0.5) * 12, -5.5];
+            cs.push({ id: `p${k}`, a: { view: panos[i].n, box: boxAt(panos[i].t, p) }, b: { view: panos[j].n, box: boxAt(panos[j].t, p) } });
+        }
+        const t0 = Date.now();
+        const r = registerPanos(cs, faces);
+        const secs = (Date.now() - t0) / 1000;
+        expect(r.perPano.length).toBeGreaterThan(10);
+        expect(r.afterRmsM).toBeLessThan(r.beforeRmsM);
+        expect(secs).toBeLessThan(25);
+    }, 60_000);
+});

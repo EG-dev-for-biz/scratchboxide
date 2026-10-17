@@ -146,3 +146,25 @@ describe('VisionModelChain', () => {
         expect(chain.attempts.map(a => a.outcome)).toEqual(['stopped']);
     });
 });
+
+describe('a stream that stalls', () => {
+    it('ends when the call\'s own time limit fires, even though the request underneath ignores the abort', async () => {
+        // a stream that sends one chunk and then never yields again, and never looks at the abort signal
+        const stalled = {
+            models: {
+                generateContent: async () => { throw new Error('streaming expected'); },
+                generateContentStream: async () => (async function* () {
+                    yield { candidates: [{ content: { parts: [{ text: '{"a":' }] } }] } as any;
+                    await new Promise(() => undefined);
+                })()
+            }
+        } as unknown as VisionGenAIClient;
+        const chain = new VisionModelChain<string>({ client: stalled, candidates: ['gemini-3.8-flash'], sleep: async () => undefined });
+        const own = new AbortController();
+        const timer = setTimeout(() => own.abort(Object.assign(new Error('the call took too long'), { name: 'TimeoutError' })), 150);
+        const t0 = Date.now();
+        await expect(chain.generate({ contents: [{ role: 'user', parts: [{ text: 'x' }] }], config: { abortSignal: own.signal } }, { stage: 'vision', stream: true })).rejects.toThrow();
+        clearTimeout(timer);
+        expect(Date.now() - t0).toBeLessThan(3000);
+    });
+});

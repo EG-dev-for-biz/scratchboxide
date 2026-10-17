@@ -978,6 +978,12 @@ export interface StagedLocationResult {
         anchoring?: Array<{ elementId: string; slotId: string; kind: string; errorM: number; toleranceM: number; note: string }>;
         /** The survey's elements placed on the fitted slots by casting their image boxes, and the narrow crops that followed. */
         surveyLocated?: { elements: number; unlocated: number; slots: number; crops: number };
+        /** Which fitted slots the reading was asked about: only those on an open exterior face that an image shows. */
+        slotsOffered?: { offered: number; total: number; hidden: number; unseen: number; exposureJudged: boolean };
+        /** How the Street View poses were registered: the disagreement of the matched pairs before and after, per pano, and any pano set aside as implausible. */
+        registration?: { pairs: number; used: number; beforeRmsM: number; afterRmsM: number; perPano: Array<{ panoId: string; pairs: number; beforeRmsM: number; afterRmsM: number; dxM: number; dzM: number; dyawDeg: number; dpitchDeg: number }>; setAside: Array<{ panoId: string; reason: string }> };
+        /** The targeted second pass: repeating runs and bands read again alone from narrow crops. */
+        runReadings?: { targets: number; read: number; elements: number; replaced: number; skipped: Array<{ id: string; kind: string; slotId?: string; reason: string }> };
     };
     /** The draft survey's materials and measured colours. */
     materialHints?: MaterialHints;
@@ -1700,7 +1706,10 @@ const DEFINITIONS = {
             evidence: obj(['tileOrthos', 'streetView'], { tileOrthos: NONNEG_INT, streetView: { type: 'integer', minimum: 0, maximum: MAX_STREET_VIEW_IMAGES_PER_BUILDING } }),
             model: ref('visionModelUse'), revisionPass: BOOL, dropped: NONNEG_INT, specPath: STR,
             anchoring: arr(obj(['elementId', 'slotId', 'kind', 'errorM', 'toleranceM', 'note'], { elementId: STR, slotId: STR, kind: STR, errorM: ref('nonneg'), toleranceM: ref('nonneg'), note: STR })),
-            surveyLocated: obj(['elements', 'unlocated', 'slots', 'crops'], { elements: NONNEG_INT, unlocated: NONNEG_INT, slots: NONNEG_INT, crops: NONNEG_INT })
+            surveyLocated: obj(['elements', 'unlocated', 'slots', 'crops'], { elements: NONNEG_INT, unlocated: NONNEG_INT, slots: NONNEG_INT, crops: NONNEG_INT }),
+            slotsOffered: obj(['offered', 'total', 'hidden', 'unseen', 'exposureJudged'], { offered: NONNEG_INT, total: NONNEG_INT, hidden: NONNEG_INT, unseen: NONNEG_INT, exposureJudged: BOOL }),
+            registration: obj(['pairs', 'used', 'beforeRmsM', 'afterRmsM', 'perPano', 'setAside'], { pairs: NONNEG_INT, used: NONNEG_INT, beforeRmsM: ref('nonneg'), afterRmsM: ref('nonneg'), perPano: arr(obj(['panoId', 'pairs', 'beforeRmsM', 'afterRmsM', 'dxM', 'dzM', 'dyawDeg', 'dpitchDeg'], { panoId: STR, pairs: NONNEG_INT, beforeRmsM: ref('nonneg'), afterRmsM: ref('nonneg'), dxM: { type: 'number' }, dzM: { type: 'number' }, dyawDeg: { type: 'number' }, dpitchDeg: { type: 'number' } })), setAside: arr(obj(['panoId', 'reason'], { panoId: STR, reason: STR })) }),
+            runReadings: obj(['targets', 'read', 'elements', 'replaced', 'skipped'], { targets: NONNEG_INT, read: NONNEG_INT, elements: NONNEG_INT, replaced: NONNEG_INT, skipped: arr(obj(['id', 'kind', 'reason'], { id: STR, kind: STR, slotId: STR, reason: STR })) })
         }),
         materialHints: ref('materialHints'), figures: arr(ref('figureRecord')),
         photoCost: obj(['total', 'byStage'], { total: ref('stageCost'), byStage: { type: 'object', additionalProperties: ref('stageCost') } }),

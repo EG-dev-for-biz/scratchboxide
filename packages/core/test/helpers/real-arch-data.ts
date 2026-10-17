@@ -117,3 +117,20 @@ export function findSizedArchData(): { rawClay: string; remeshClay: string; from
     }
     return undefined;
 }
+
+/** A real fit of the arch (scan_fit's structure_fit.json with its fitted and pass-through GLBs) from a scan_fit cache of this checkout or a sibling worktree. */
+export function findArchFit(): { fitPath: string; dir: string } | undefined {
+    for (const root of roots()) {
+        const cache = path.join(root, '.scratchbox/cache/scan_fit');
+        if (!fs.existsSync(cache)) continue;
+        for (const d of fs.readdirSync(cache)) {
+            const dir = path.join(cache, d), fitPath = path.join(dir, 'structure_fit.json');
+            if (!fs.existsSync(fitPath) || !fs.existsSync(path.join(dir, 'fitted.glb')) || !fs.existsSync(path.join(dir, 'passthrough.glb'))) continue;
+            try {
+                const j = JSON.parse(fs.readFileSync(fitPath, 'utf8'));
+                if (j.accepted && j.primitives?.length === 11 && j.slots?.length > 40 && Math.abs(j.footprint.areaM2 - 150) < 30) return { fitPath, dir };
+            } catch { /* not a fit */ }
+        }
+    }
+    return undefined;
+}

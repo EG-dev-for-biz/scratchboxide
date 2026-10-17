@@ -105,6 +105,8 @@ import { writeStagedGlbFile, type StagedGlbNode } from './staged-glb-writer';
 import { buildObjectFromSpec } from '../reference-object-builder';
 import type { ObjectBuildSpec } from '../../../common/spatial/object-build-spec';
 import { nominalPose, projectSlots, registeredPose } from './slot-projection';
+import { computeSlotOffer, describeOffer } from './slot-exposure';
+import { readRuns, type RunReadingReport } from './run-reading';
 import { registeredUncertaintyAt } from './survey-detail';
 import {
     orthoCaption, orthoRef, plannedThinking, readOrnament, streetViewCaption, visionUse, VisionStageError, ORNAMENT_PROMPT_VERSION,
@@ -687,6 +689,13 @@ function layerCounts(file: string): { vertices: number; triangles: number } {
     return glbMeshCounts(file);
 }
 
+/** The registration in words for the stage panel: the overall disagreement, each pano's, and any pano set aside. */
+function describeRegistration(r: Registration, pairs: number): string {
+    const per = r.perPano.map(p => `${p.panoId.slice(0, 6)}: ${p.pairs} pairs, ${p.beforeRmsM.toFixed(2)} -> ${p.afterRmsM.toFixed(2)} m (shift ${Math.hypot(p.dxM, p.dzM).toFixed(2)} m, heading ${p.dyawDeg.toFixed(2)}°, pitch ${p.dpitchDeg.toFixed(2)}°)`).join('; ');
+    const aside = r.setAside.length ? `; set aside as implausible and left at their stated poses: ${r.setAside.map(a => `${a.panoId.slice(0, 6)} (${a.reason})`).join('; ')}` : '';
+    return `pano poses registered from ${r.used} of ${pairs} matched pairs: ${r.beforeRmsM.toFixed(2)} m RMS disagreement before, ${r.afterRmsM.toFixed(2)} m after. Per pano ${per}${aside}`;
+}
+
 function loadMesh(files: Array<string | undefined>): RenderMesh3D {
     const prims = files.filter((f): f is string => !!f && fs.existsSync(f)).flatMap(f => readGlbScene(f));
     return sceneToRenderMesh(prims);
@@ -957,8 +966,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             match = await runViewMatch({ faces: surveyFaces, survey: surveyOut.result, candidates, deps: sv, chain: matchChain, signal: io.signal, onProgress: m => io.progress(m) });
                             if (match.correspondences.length) {
                                 registration = registerPanos(match.correspondences, fitFaces(fit));
-                                console.info(`[staged] pano registration: ${match.correspondences.length} pairs, ${registration.used} used; ${registration.beforeRmsM} -> ${registration.afterRmsM} m; ${JSON.stringify(registration.perPano)}`);
-                                io.progress(`pano poses registered from ${registration.used} matched elements: ${registration.beforeRmsM.toFixed(2)} m disagreement before, ${registration.afterRmsM.toFixed(2)} m after`);
+                                io.progress(describeRegistration(registration, match.correspondences.length));
+                                cache.writeRunNote(runId, 'registration', { correspondences: match.correspondences, registration: { ...registration, corrections: [...registration.corrections.entries()] } });
                             } else io.progress(`no element could be matched across views (${match.failures.length} failed call${match.failures.length === 1 ? '' : 's'}); the nominal pano poses stand, good to ±2 m`);
                         } catch (err) {
                             if (isAbort(err) || io.signal.aborted) throw err;
@@ -991,7 +1000,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const cost: EvidenceCost = { ...discovery, imagesRequested: views.length, imagesFetched: got.images.length, fetchMs: got.elapsedMs };
                     run.summary('evidence').cost = { images: got.images.length + (match?.images ?? 0), visionCalls: match?.visionCalls ?? 0, seconds: round(got.elapsedMs / 1000 + (match?.seconds ?? 0), 1) };
                     return {
-                        status, value: { images: got.images, panos: found.panos, cost, ...(plan ? { plan } : {}), ...(registration ? { registration } : {}), ...(match ? { match } : {}) }, source: `${got.images.length} of ${views.length} Street View images (© Google), kept in memory only${match ? `; ${match.images} ring views, ${match.correspondences.length} matched element pairs${registration ? `, ${registration.perPano.length} pano poses registered (disagreement ${registration.beforeRmsM.toFixed(2)} m before, ${registration.afterRmsM.toFixed(2)} m after, ${registration.used} pairs used, ${registration.rejected} rejected)` : ', no pose registered'}${match.failures.length ? `; ${match.failures.length} matching call${match.failures.length === 1 ? '' : 's'} failed (${match.failures[0].slice(0, 80)})` : ''}` : ''}`,
+                        status, value: { images: got.images, panos: found.panos, cost, ...(plan ? { plan } : {}), ...(registration ? { registration } : {}), ...(match ? { match } : {}) }, source: `${got.images.length} of ${views.length} Street View images (© Google), kept in memory only${match ? `; ${match.images} ring views, ${match.correspondences.length} matched element pairs${registration ? `, ${describeRegistration(registration, match.correspondences.length)}` : ', no pose registered'}${match.failures.length ? `; ${match.failures.length} matching call${match.failures.length === 1 ? '' : 's'} failed (${match.failures[0].slice(0, 80)})` : ''}` : ''}`,
                         ...(got.images.length ? {} : { reason: 'every Street View image failed to fetch' }),
                         degradations
                     };
@@ -1479,7 +1488,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         siblings.push(treesPromise);
 
         // ---------------- the rebuild (isolated structure) ----------------
-        type Rebuild = { figures?: FigureRecord[]; anchored?: AnchorNote[]; located?: DetailPlan; fit?: ScanFitFitResult; refit?: ScanFitFitResult; spec?: OrnamentSpec; rejected?: PrimitiveCorrection[]; detail?: ScanFitOrnamentResult; droppedNotResolvable: number; sourceLimits?: SourceLimits; evidenceCounts?: { tileOrthos: number; streetView: number } };
+        type Rebuild = { figures?: FigureRecord[]; anchored?: AnchorNote[]; located?: DetailPlan; fit?: ScanFitFitResult; refit?: ScanFitFitResult; spec?: OrnamentSpec; rejected?: PrimitiveCorrection[]; detail?: ScanFitOrnamentResult; droppedNotResolvable: number; sourceLimits?: SourceLimits; evidenceCounts?: { tileOrthos: number; streetView: number }; runReadings?: RunReadingReport; registration?: NonNullable<NonNullable<StagedLocationResult['ornament']>['registration']>; slotsOffered?: { offered: number; total: number; hidden: number; unseen: number; exposureJudged: boolean } };
         const rebuildOut: Rebuild = { droppedNotResolvable: 0 };
         const rebuildRun = async (): Promise<Rebuild> => {
             const out = rebuildOut;
@@ -1653,39 +1662,65 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...(deps.sleep ? { sleep: deps.sleep } : {}) });
             let fitSha = '';
             let visionKey = '';
+            let offer: ReturnType<typeof computeSlotOffer> | undefined;
             const read = await runner.stage<OrnamentSpec>({
                 id: 'vision',
                 run: async io => {
                     if (!inputs.length) return { status: 'skipped', source: '', reason: 'no image shows the structure' };
                     fitSha = sha256File(fit.outputs.reportJson);
-                    visionKey = stageKey('ornament-vision/v3', ORNAMENT_PROMPT_VERSION, visionAvailable.candidates, ORNAMENT_THINKING_BUDGET, fitSha, inputs.map(i => i.ref.id), inputs.map(i => i.ref.sha256), located.map(l => [l.id, l.slotId, l.repeat?.count, l.runAlongM, l.regionUv]));
+                    offer = computeSlotOffer(fit, inputs.map(i => i.ref));
+                    if (evidence.registration) out.registration = { pairs: evidence.match?.correspondences.length ?? evidence.registration.pairs.length, used: evidence.registration.used, beforeRmsM: evidence.registration.beforeRmsM, afterRmsM: evidence.registration.afterRmsM, perPano: evidence.registration.perPano, setAside: evidence.registration.setAside.map(a => ({ panoId: a.panoId, reason: a.reason })) };
+                    out.slotsOffered = { offered: offer.offeredIds.size, total: fit.slots.length, hidden: offer.hidden, unseen: offer.unseen, exposureJudged: offer.exposureJudged };
+                    io.progress(describeOffer(offer, fit.slots.length));
+                    visionKey = stageKey('ornament-vision/v4', ORNAMENT_PROMPT_VERSION, visionAvailable.candidates, ORNAMENT_THINKING_BUDGET, fitSha, inputs.map(i => i.ref.id), inputs.map(i => i.ref.sha256), [...offer.offeredIds].sort(), located.map(l => [l.id, l.slotId, l.repeat?.count, l.runAlongM, l.regionUv]));
                     run.keys.vision = visionKey;
-                    const hit = !bypass('vision') ? cache.get<{ spec: OrnamentSpec; supportTestRequired: string[]; anchored?: AnchorNote[] }>('vision', visionKey) : undefined;
+                    const hit = !bypass('vision') ? cache.get<{ spec: OrnamentSpec; supportTestRequired: string[]; anchored?: AnchorNote[]; runReadings?: RunReadingReport }>('vision', visionKey) : undefined;
                     if (hit) {
                         run.cacheStatus.vision = 'hit';
                         run.state.visionModel = hit.value.spec.model;
                         out.anchored = hit.value.anchored ?? [];
+                        if (hit.value.runReadings) out.runReadings = hit.value.runReadings;
                         return { status: 'committed', value: hit.value.spec, source: `${hit.value.spec.elements.length} photo-inferred elements (cached reading by ${hit.value.spec.model.used})`, model: hit.value.spec.model, cached: true, builtAtMs: hit.builtAtMs };
                     }
                     run.cacheStatus.vision = bypass('vision') ? 'bypassed' : 'miss';
-                    const reading = await readOrnament({ fit, fitSha256: fitSha, evidence: inputs, chain, signal: io.signal, onProgress: m => io.progress(m), located });
+                    const reading = await readOrnament({ fit, fitSha256: fitSha, evidence: inputs, chain, signal: io.signal, onProgress: m => io.progress(m), located, offer });
+                    // the targeted second pass: every repeating run or band the survey found, read again alone from narrow crops (run-reading.ts)
+                    let spec = reading.spec;
+                    let anchored = reading.anchored;
+                    let runReport: RunReadingReport | undefined;
+                    const runDropped: Array<{ elementId: string; slotId: string; reasonCode: string; problems: string[] }> = [];
+                    const svDeps = deps.streetView ?? {};
+                    if (evidence.plan?.located.length && !missingCredentials(svDeps) && t.ground) {
+                        try {
+                            const rr = await readRuns({
+                                fit, fitSha256: fitSha, base: reading.spec, located: evidence.plan.located, panos: evidence.panos, groundAt: (x, z) => t.ground!.groundAt(x, z), fallbackGroundY: structure!.groundY,
+                                ...(evidence.registration ? { registration: evidence.registration } : {}), occluder: loadMesh([fit.outputs.fittedGlb, fit.outputs.passThroughGlb]), streetView: svDeps, chain, signal: io.signal, onProgress: m => io.progress(m)
+                            });
+                            spec = rr.spec; anchored = [...reading.anchored, ...rr.anchored]; runReport = rr.report; runDropped.push(...rr.dropped);
+                            io.progress(`${rr.report.read} of ${rr.report.targets} runs and bands read from narrow crops: ${rr.report.elements} elements${rr.report.replaced ? `, replacing ${rr.report.replaced} from the wide reading` : ''}${rr.report.skipped.length ? `; ${rr.report.skipped.length} left as they were (${rr.report.skipped[0].reason})` : ''}`);
+                        } catch (err) {
+                            if (isAbort(err) || io.signal.aborted) throw err;
+                            io.progress(`the focused run readings failed (${errorMessage(err)}); the wide reading stands`);
+                        }
+                    }
                     await cache.run('vision', visionKey, async dir => {
                         fs.writeFileSync(path.join(dir, 'replies.json'), JSON.stringify(reading.replies));
-                        return { value: { spec: reading.spec, supportTestRequired: reading.supportTestRequired, anchored: reading.anchored } };
+                        return { value: { spec, supportTestRequired: reading.supportTestRequired, anchored, ...(runReport ? { runReadings: runReport } : {}) } };
                     }, { bypass: true });
-                    run.state.visionModel = reading.spec.model;
-                    run.summary('vision').cost = { images: 0, imagesSent: inputs.length, visionCalls: reading.spec.revision.passes + 1, seconds: round(reading.spec.model.ms / 1000, 1) };
-                    const degradations = reading.dropped.map(d => run.degrade(record('vision', d.reasonCode, {
+                    run.state.visionModel = spec.model;
+                    run.summary('vision').cost = { images: runReport ? runReport.perTarget.reduce((n, p) => n + p.views, 0) : 0, imagesSent: inputs.length, visionCalls: reading.spec.revision.passes + 1 + (runReport?.read ?? 0), seconds: round(reading.spec.model.ms / 1000, 1) };
+                    const degradations = [...reading.dropped, ...runDropped].map(d => run.degrade(record('vision', d.reasonCode, {
                         part: { description: `photo-read element ${d.elementId} in slot ${d.slotId}`, slotId: d.slotId, elementId: d.elementId, buildingId: fit.buildingId },
                         intended: 'photo-inferred detail', fellTo: 'the flat fitted face', provenanceAfter: PROVENANCE.fitted, reason: d.problems.join('; '), transient: false, runId, now: now(), suffix: d.elementId
                     })));
-                    out.droppedNotResolvable = reading.dropped.filter(d => d.reasonCode === 'not_resolvable_in_evidence').length;
+                    out.droppedNotResolvable = [...reading.dropped, ...runDropped].filter(d => d.reasonCode === 'not_resolvable_in_evidence').length;
                     out.rejected = reading.rejectedCorrections;
-                    out.anchored = reading.anchored;
+                    out.anchored = anchored;
+                    if (runReport) out.runReadings = runReport;
                     return {
-                        status: degradations.length ? 'degraded' : 'committed', value: reading.spec,
-                        source: `${reading.spec.elements.length} photo-inferred elements read by ${reading.spec.model.used} (${'level' in reading.spec.model.thinking ? `thinking ${reading.spec.model.thinking.level.toLowerCase()}` : `budget ${reading.spec.model.thinking.budget}`}, ${(reading.spec.model.ms / 1000).toFixed(1)} s)`,
-                        degradations, model: reading.spec.model
+                        status: degradations.length ? 'degraded' : 'committed', value: spec,
+                        source: `${spec.elements.length} photo-inferred elements read by ${spec.model.used} (${'level' in spec.model.thinking ? `thinking ${spec.model.thinking.level.toLowerCase()}` : `budget ${spec.model.thinking.budget}`}, ${(spec.model.ms / 1000).toFixed(1)} s)${runReport ? `; ${runReport.elements} of them from ${runReport.read} focused run readings` : ''}`,
+                        degradations, model: spec.model
                     };
                 },
                 degrade: async err => {
@@ -1908,7 +1943,7 @@ interface FinishInput {
     groundLayerId?: string;
     trees?: LocationClayTrees;
     putBack?: { triangles: number; crowns: number; reason: string };
-    rebuild: { figures?: FigureRecord[]; anchored?: AnchorNote[]; located?: DetailPlan; fit?: ScanFitFitResult; refit?: ScanFitFitResult; spec?: OrnamentSpec; rejected?: PrimitiveCorrection[]; detail?: ScanFitOrnamentResult; droppedNotResolvable: number; sourceLimits?: SourceLimits; evidenceCounts?: { tileOrthos: number; streetView: number } };
+    rebuild: { figures?: FigureRecord[]; anchored?: AnchorNote[]; located?: DetailPlan; fit?: ScanFitFitResult; refit?: ScanFitFitResult; spec?: OrnamentSpec; rejected?: PrimitiveCorrection[]; detail?: ScanFitOrnamentResult; droppedNotResolvable: number; sourceLimits?: SourceLimits; evidenceCounts?: { tileOrthos: number; streetView: number }; runReadings?: RunReadingReport; registration?: NonNullable<NonNullable<StagedLocationResult['ornament']>['registration']>; slotsOffered?: { offered: number; total: number; hidden: number; unseen: number; exposureJudged: boolean } };
     strip?: TileVegetationStripResult;
     now: () => number;
     persist: () => void;
@@ -2012,6 +2047,9 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
                 confidence: { min: confidences[0] ?? 0, median: confidences[Math.floor(confidences.length / 2)] ?? 0, max: confidences[confidences.length - 1] ?? 0 },
                 evidence: f.rebuild.evidenceCounts ?? { tileOrthos: 0, streetView: 0 }, model: ornament.model, revisionPass: ornament.revision.passes === 1,
                 ...(f.rebuild.anchored?.length ? { anchoring: f.rebuild.anchored.map(n => ({ elementId: n.elementId, slotId: n.slotId, kind: n.kind, errorM: n.errorM, toleranceM: n.toleranceM, note: n.note })) } : {}),
+                ...(f.rebuild.slotsOffered ? { slotsOffered: f.rebuild.slotsOffered } : {}),
+                ...(f.rebuild.registration ? { registration: f.rebuild.registration } : {}),
+                ...(f.rebuild.runReadings ? { runReadings: { targets: f.rebuild.runReadings.targets, read: f.rebuild.runReadings.read, elements: f.rebuild.runReadings.elements, replaced: f.rebuild.runReadings.replaced, skipped: f.rebuild.runReadings.skipped } } : {}),
                 ...(f.rebuild.located ? { surveyLocated: { elements: f.rebuild.located.located.length, unlocated: f.rebuild.located.unlocated.length, slots: new Set(f.rebuild.located.located.map(l => l.slotId)).size, crops: f.rebuild.located.views.length } } : {}),
                 dropped: ornament.dropped.length, specPath: run.keys.vision ? path.join('.scratchbox', 'cache', 'staged_location', 'vision', run.keys.vision, 'done.json') : ''
             }

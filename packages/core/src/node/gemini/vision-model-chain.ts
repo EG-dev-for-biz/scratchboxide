@@ -99,6 +99,21 @@ export interface VisionCallResult {
     thinking?: GeminiThinkingConfig;
 }
 
+/**
+ * Ends the wait when a signal fires even if the request underneath ignores it: a stream that stalls mid-answer would otherwise hold
+ * the call (and the stage waiting on it) far past its time limit, because aborting the request does not always end the iteration.
+ */
+function raceAbort<T>(work: Promise<T>, signals: Array<AbortSignal | undefined>): Promise<T> {
+    const live = signals.filter((s): s is AbortSignal => !!s);
+    if (!live.length) return work;
+    return new Promise<T>((resolve, reject) => {
+        const onAbort = (s: AbortSignal) => () => reject(s.reason instanceof Error ? s.reason : Object.assign(new Error('the call was aborted'), { name: 'AbortError' }));
+        const handlers = live.map(s => ({ s, h: onAbort(s) }));
+        for (const { s, h } of handlers) { if (s.aborted) { h(); break; } s.addEventListener('abort', h, { once: true }); }
+        work.then(resolve, reject).finally(() => { for (const { s, h } of handlers) s.removeEventListener('abort', h); });
+    });
+}
+
 const defaultSleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
 /** Joins streamed chunks into one response: text parts concatenated, the last chunk's metadata kept. */
@@ -186,12 +201,14 @@ export class VisionModelChain<Stage extends string = string> {
             let ttftMs: number | undefined;
             try {
                 const stream = opts.stream ? this.options.client.models.generateContentStream : undefined;
-                const response = stream
-                    ? await joinStream(await stream.call(this.options.client.models, full), () => {
+                const callSignal = (params.config as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+                const work = stream
+                    ? (async () => joinStream(await stream.call(this.options.client.models, full), () => {
                         ttftMs = this.now() - started;
                         opts.onFirstToken?.(ttftMs);
-                    })
-                    : await this.options.client.models.generateContent(full);
+                    }))()
+                    : this.options.client.models.generateContent(full);
+                const response = await raceAbort(work, [callSignal, signal]);
                 const ms = this.now() - started;
                 this.attempts.push({ model, ...(thinking ? { thinking: describeThinking(thinking) } : {}), ms, ...(ttftMs !== undefined ? { ttftMs } : {}), outcome: 'answered' });
                 return { response, model, ms, ...(ttftMs !== undefined ? { ttftMs } : {}), ...(thinking ? { thinking } : {}) };
