@@ -25,23 +25,14 @@
 
 import type { Vec3 } from '../../../common/spatial/staged-location-contracts';
 import { ProColorGradeMatchingService as Colour } from '../../image/ProColorGradeMatchingService';
+import { SRGB8_TO_LINEAR as SRGB_TO_LINEAR, linearToSrgb255 } from '../../../common/spatial/photogrammetric-delight';
 
 // =============================================================================
 // Colour helpers (linear RGB 0..1 <-> sRGB 0..255 <-> Lab)
 // =============================================================================
 
-/** sRGB byte -> linear 0..1. */
-export const SRGB_TO_LINEAR: Float32Array = (() => {
-    const t = new Float32Array(256);
-    for (let i = 0; i < 256; i++) { const c = i / 255; t[i] = c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
-    return t;
-})();
-
-/** Linear 0..1 -> sRGB 0..255 (unrounded, clamped). */
-export function linearToSrgb255(c: number): number {
-    const x = Math.min(1, Math.max(0, c));
-    return 255 * (x <= 0.0031308 ? 12.92 * x : 1.055 * Math.pow(x, 1 / 2.4) - 0.055);
-}
+/** sRGB byte -> linear 0..1, and back: the shared helpers of the de-light module. */
+export { SRGB_TO_LINEAR, linearToSrgb255 };
 
 /** Linear RGB 0..1 -> CIE Lab (D65). */
 export function linearToLab(r: number, g: number, b: number): Vec3 {

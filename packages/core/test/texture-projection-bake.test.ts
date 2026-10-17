@@ -20,7 +20,7 @@ import type { Vec3 } from '../src/common/spatial/staged-location-contracts';
 import {
     unpackConfidenceTexel, type DecodedImage, type DepthMap, type PinholeCamera, type ProjectionView, type UvAtlas
 } from '../src/common/spatial/texture-pass-contracts';
-import { liftShadowsCompressHighlights } from '../src/common/spatial/photogrammetric-delight';
+import { delightLinearRgb } from '../src/common/spatial/photogrammetric-delight';
 import { bakeStreetViewProjection, type ProjectionBakeOptions, type ProjectionBakeResult } from '../src/node/3d-engine/staged-location/texture-projection';
 import { deltaE00, SRGB_TO_LINEAR, linearToSrgb255 } from '../src/node/3d-engine/staged-location/texel-exposure';
 import { measurePalette } from '../src/node/3d-engine/staged-location/photo-palette';
@@ -371,9 +371,9 @@ describe('Street View projection bake', () => {
             counted[c.provenanceIndex]++;
             expect(c.rung).toBe(a.provenance[c.provenanceIndex].panoIds!.length >= 2 ? 0 : 1);
         }
-        a.provenance.forEach((p, i) => expect(p.coverage).toBeCloseTo(counted[i] / (48 * 48), 6));
+        a.provenance.forEach((p, i) => expect(p.coverage).toBeCloseTo(counted[i] / a.report.coveredTexels, 6));
         const covered = a.provenance.reduce((s, p) => s + p.coverage, 0);
-        expect(covered).toBeCloseTo(a.report.bakedTexels / a.report.targetTexels, 6);
+        expect(covered).toBeCloseTo(a.report.bakedTexels / a.report.coveredTexels, 6);
     });
 
     it('de-lights through the shared helpers: solar irradiance per view when its capture time is known, shadow lift after', async () => {
@@ -389,7 +389,7 @@ describe('Street View projection bake', () => {
         // one plane: E(n) is the same for every texel, so the solar step is neutral and the result is the shared lift of the truth
         const lifted = (u: number, v: number): Vec3 => {
             const g = facadeAlbedo(u, v).map((c) => SRGB_TO_LINEAR[Math.round(c)]) as Vec3;
-            return liftShadowsCompressHighlights(g).map((c) => linearToSrgb255(c)) as Vec3;
+            return delightLinearRgb(g[0], g[1], g[2]).map((c) => linearToSrgb255(c)) as Vec3;
         };
         expect(albedoError(res, atlas, lifted).max).toBeLessThanOrEqual(3);
         expect(albedoError(res, atlas, facadeAlbedo).max).toBeGreaterThan(5);

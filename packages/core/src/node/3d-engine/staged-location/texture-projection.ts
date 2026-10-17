@@ -21,7 +21,7 @@
  *     view resolving finer than the texel gains nothing more; sigma_px = poseSigmaPx / max(1, z);
  *  4. de-light each view's samples (optional, needs a place and a capture time): divide by the solar irradiance E(n) of
  *     the view's own sun relative to its mean (AlgorithmicUvEngine's NOAA ephemeris + SH9 sky helpers), then after the blend
- *     lift shadows / compress highlights with the shared photogrammetric de-light function;
+ *     lift shadows / compress highlights with the shared photogrammetric de-light function (delightLinearRgb);
  *  5. exposure: per-view log-gains by least squares over overlap texels, anchored per group to the median view, then
  *     the measured-palette gate (texel-exposure.ts);
  *  6. blend in linear RGB: per-texel normalised weights, Huber reweighting (CIE76 residual) at >= 3 views, then a 4-band
@@ -40,7 +40,7 @@ import {
     type BakedTexturePlanes, type ConfidencePlane, type DepthMap, type ProjectionBakeInput, type ProjectionView,
     type TexelProvenance, type TexturePassDegradation
 } from '../../../common/spatial/texture-pass-contracts';
-import { liftShadowsCompressHighlights, PHOTOGRAMMETRIC_DELIGHT_HIGHLIGHT_COMPRESS, PHOTOGRAMMETRIC_DELIGHT_SHADOW_LIFT } from '../../../common/spatial/photogrammetric-delight';
+import { delightLinearRgb, PHOTOGRAMMETRIC_DELIGHT } from '../../../common/spatial/photogrammetric-delight';
 import { AlgorithmicUvEngine } from '../../spatial/AlgorithmicUvEngine';
 import {
     SRGB_TO_LINEAR, deltaE00, linearToLab, linearToSrgb255, paletteGate, solveRelativeGains,
@@ -99,8 +99,10 @@ export interface ProjectionViewReport {
 }
 
 export interface ProjectionBakeReport {
-    /** Covered, non-gutter texels of the atlas. */
+    /** Covered, non-gutter texels of the atlas (the ones projected). */
     targetTexels: number;
+    /** Covered texels of the atlas, gutters included: the denominator of provenance coverage. */
+    coveredTexels: number;
     bakedTexels: number;
     multiViewTexels: number;
     overlapPairs: number;
@@ -274,8 +276,8 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
     const W = atlas.width, H = atlas.height, n = W * H;
     const { covered, gutter, mapIndex, normal } = atlas.texels;
     const degradations: TexturePassDegradation[] = [];
-    let targetTexels = 0;
-    for (let t = 0; t < n; t++) if (covered[t] && !gutter[t]) targetTexels++;
+    let targetTexels = 0, coveredTexels = 0;
+    for (let t = 0; t < n; t++) { if (covered[t]) coveredTexels++; if (covered[t] && !gutter[t]) targetTexels++; }
 
     // ---- 1-3: project every view ------------------------------------------------------------------------------
     const raw: RawSamples[] = [];
@@ -466,8 +468,10 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
     // ---- outputs: albedo, confidence, provenance -----------------------------------------------------------------
     const albedo = new Uint8Array(n * 4);
     const confidence: ConfidencePlane = { width: W, height: H, data: new Uint8Array(n * 4) };
-    const lift = o.delight?.shadowLift ?? PHOTOGRAMMETRIC_DELIGHT_SHADOW_LIFT;
-    const compress = o.delight?.highlightCompress ?? PHOTOGRAMMETRIC_DELIGHT_HIGHLIGHT_COMPRESS;
+    const delightParams = {
+        shadowLift: o.delight?.shadowLift ?? PHOTOGRAMMETRIC_DELIGHT.defaults.shadowLift,
+        highlightCompress: o.delight?.highlightCompress ?? PHOTOGRAMMETRIC_DELIGHT.defaults.highlightCompress
+    };
     const setKey = new Int32Array(n).fill(-1);
     const keys: string[] = [];
     const keyId = new Map<string, number>();
@@ -479,7 +483,7 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
         baked++;
         if (b - a === 1) single++;
         let rgb: Vec3 = [final[t * 3], final[t * 3 + 1], final[t * 3 + 2]];
-        if (o.delight) rgb = liftShadowsCompressHighlights(rgb, lift, compress);
+        if (o.delight) rgb = delightLinearRgb(rgb[0], rgb[1], rgb[2], delightParams);
         albedo[t * 4] = Math.round(linearToSrgb255(rgb[0]));
         albedo[t * 4 + 1] = Math.round(linearToSrgb255(rgb[1]));
         albedo[t * 4 + 2] = Math.round(linearToSrgb255(rgb[2]));
@@ -506,7 +510,8 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
     const methodOf = (views: number): string => views >= 2
         ? `weighted linear-RGB mean of ${views} registered Street View views (cos^2 incidence x resolution x pose quality x edge feather), ${views >= huberMin ? 'Huber-reweighted, ' : ''}4-band seam blend, per-view exposure log-gain${input.paletteLab?.length ? ' with palette gate' : ''}${o.delight ? ', de-lit' : ''}`
         : `one registered Street View view, depth-tested projection, exposure log-gain${input.paletteLab?.length ? ' with palette gate' : ''}${o.delight ? ', de-lit' : ''}`;
-    const denomTexels = Math.max(1, targetTexels);
+    // coverage is a share of the atlas's covered texels (gutters included), the convention all rungs share so entries add to 1
+    const denomTexels = Math.max(1, coveredTexels);
     if (keys.length <= 250) {
         keys.forEach((key, id) => {
             const vs = key.split(',').map(Number);
@@ -608,7 +613,7 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
     return {
         layerKey: atlas.layerKey, width: W, height: H, albedo, confidence, provenance, degradations, paletteDeltaE,
         report: {
-            targetTexels, bakedTexels: baked, multiViewTexels, overlapPairs, maxSeamDeltaE: maxSeam, p95SeamDeltaE: p95Seam, seamSamples: seams.length, timingsMs,
+            targetTexels, coveredTexels, bakedTexels: baked, multiViewTexels, overlapPairs, maxSeamDeltaE: maxSeam, p95SeamDeltaE: p95Seam, seamSamples: seams.length, timingsMs,
             views: views.map((v, k) => ({ panoId: v.panoId, samples: samples[k].texel.length, gain: gains[k], anchor: anchors.has(k), paletteGate: gateReports[k], solarDelit: solarDelit[k] }))
         }
     };
