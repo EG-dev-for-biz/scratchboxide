@@ -25,7 +25,7 @@
  */
 
 import * as THREE from 'three';
-import { DEGRADED_OUTLINE_COLOR, PROVENANCE_BACKGROUND, VERTEX_ATTRIBUTE, STRIPE_COVERAGE, STRIPE_PERIOD_PX, hexToRgb01, vertexClassGlsl } from './provenanceShading';
+import { DEGRADED_OUTLINE_COLOR, PROVENANCE_BACKGROUND, TEXTURE_RUNG_COLORS, VERTEX_ATTRIBUTE, STRIPE_COVERAGE, STRIPE_PERIOD_PX, hexToRgb01, vertexClassGlsl } from './provenanceShading';
 
 /** Stamp on every material the guard installs; its value says which variant. */
 const STAMP = 'sbStagedPatch';
@@ -39,7 +39,18 @@ const CLAY_FLAG = 'sbClay';
 export const REVEAL_ATTRIBUTE = '_reveal';
 export const DISP_ATTRIBUTE = '_disp';
 
-export type StagedMaterialKind = 'reveal' | 'provenance';
+export type StagedMaterialKind = 'reveal' | 'provenance' | 'rungs';
+
+/**
+ * Where a textured twin's material keeps its confidence texture (R provenance index, G weight, B ladder rung, A produced),
+ * set by prepareTexturedTwinModel (texturedTwinModel.ts) from the material's extras.sbTexture.confidenceTexture.
+ */
+export const CONFIDENCE_MAP_KEY = 'sbConfidenceMap';
+
+export function confidenceMapOf(m: THREE.Material | undefined): THREE.Texture | undefined {
+    const t = m?.userData?.[CONFIDENCE_MAP_KEY] as THREE.Texture | undefined;
+    return t && t.isTexture ? t : undefined;
+}
 
 /** What one staged mesh should look like this frame. */
 export interface MeshStagedLook {
@@ -54,6 +65,8 @@ export interface MeshStagedLook {
         presence: number;
         /** Revealed over a source that stays drawn: pulled in front of it so coincident surfaces never z-fight. */
         overSource?: boolean;
+        /** A material swap (clay <-> textured twin): the geometry is final, so `_DISP` is not animated. */
+        noDisp?: boolean;
     };
     provenance?: {
         nodeColor: string;
@@ -65,6 +78,11 @@ export interface MeshStagedLook {
     };
     /** Vermillion hatch: a degraded part, or one the user highlighted from the overlay. */
     mark?: boolean;
+    /**
+     * Per-texel texture rungs of a textured twin: each texel drawn in the colour of its rung (the base material's
+     * confidence texture, B channel; texels no stage produced, and surfaces without the texture, in the clay rung's).
+     */
+    rungs?: { colors: THREE.Color[] };
 }
 
 interface StagedUniforms {
@@ -83,6 +101,7 @@ interface StagedUniforms {
     uSbMarkColor: { value: THREE.Vector3 };
     uSbClassColor?: { value: THREE.Color[] };
     uSbClassPattern?: { value: THREE.Vector2[] };
+    uSbRungColor?: { value: THREE.Color[] };
 }
 
 const BASE = new WeakMap<THREE.Material, THREE.Material>();
@@ -151,6 +170,9 @@ const VERTEX_BODY = `
 `;
 
 const FRAGMENT_DECL = `
+#ifdef SB_RUNGS
+uniform vec3 uSbRungColor[SB_RUNG_COUNT];
+#endif
 uniform float uSbProgress;
 uniform float uSbFade;
 uniform float uSbPresence;
@@ -212,7 +234,7 @@ const FRAGMENT_PROVENANCE_COLOR = `
  */
 export const PROVENANCE_LIGHT_FLOOR = 0.35;
 const FRAGMENT_PROVENANCE_FLOOR = `
-#ifdef SB_PROVENANCE
+#if defined( SB_PROVENANCE ) || defined( SB_RUNGS )
     totalEmissiveRadiance += diffuseColor.rgb * ${PROVENANCE_LIGHT_FLOOR.toFixed(2)};
 #endif
 `;
@@ -232,6 +254,23 @@ const FRAGMENT_END = `
     }
 `;
 
+/**
+ * The rung of each texel from the confidence texture (sampled nearest, never colour-converted): B is the rung index,
+ * A is 255 where a stage produced the texel. Replaces the map's colour; the lighting stays, so the shape reads.
+ */
+const FRAGMENT_RUNGS = `
+#ifdef SB_RUNGS
+    {
+        vec4 sbConf = texture2D( map, vMapUv );
+        int sbRung = int( clamp( floor( sbConf.b * 255.0 + 0.5 ), 0.0, float( SB_RUNG_COUNT - 1 ) ) );
+        if ( sbConf.a < 0.5 ) sbRung = SB_RUNG_COUNT - 1;
+        diffuseColor.rgb = uSbRungColor[ sbRung ];
+    }
+#else
+#include <map_fragment>
+#endif
+`;
+
 function injectShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms: StagedUniforms): void {
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader = shader.vertexShader
@@ -240,6 +279,7 @@ function injectShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms
     shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', `#include <common>\n${FRAGMENT_DECL}`)
         .replace('vec4 diffuseColor = vec4( diffuse, opacity );', FRAGMENT_PROVENANCE_COLOR)
+        .replace('#include <map_fragment>', FRAGMENT_RUNGS)
         .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>\n${FRAGMENT_DISCARD}`)
         .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\n${FRAGMENT_PROVENANCE_FLOOR}`)
         .replace('#include <dithering_fragment>', `#include <dithering_fragment>\n${FRAGMENT_END}`);
@@ -274,8 +314,13 @@ export function createStagedMaterial(mesh: THREE.Mesh | THREE.LineSegments, base
     const geometry = mesh.geometry as THREE.BufferGeometry;
     const isLine = (mesh as THREE.LineSegments).isLine === true;
     let mat: THREE.Material;
+    const confidence = kind === 'rungs' && !isLine ? confidenceMapOf(base) : undefined;
     if (kind === 'reveal') {
         mat = base.clone();
+    } else if (kind === 'rungs' && !isLine) {
+        // Lit like the provenance shading; the confidence texture is bound as the map only to be sampled for its rungs.
+        mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, metalness: 0, map: confidence ?? null, side: (base as THREE.MeshStandardMaterial).side ?? THREE.FrontSide });
+        mat.toneMapped = false;
     } else if (isLine) {
         const hasColor = !!geometry.getAttribute('color');
         mat = new THREE.LineBasicMaterial({ vertexColors: hasColor, color: 0xffffff });
@@ -292,8 +337,16 @@ export function createStagedMaterial(mesh: THREE.Mesh | THREE.LineSegments, base
         defs.defines = { ...(defs.defines ?? {}), SB_PROVENANCE: '', SB_CLASSES: provenanceClasses };
     }
     if (withReveal) defs.defines = { ...(defs.defines ?? {}), SB_REVEAL: '' };
+    if (confidence) {
+        uniforms.uSbRungColor = { value: TEXTURE_RUNG_COLORS.map(c => new THREE.Color(c)) };
+        defs.defines = { ...(defs.defines ?? {}), SB_RUNGS: '', SB_RUNG_COUNT: TEXTURE_RUNG_COLORS.length };
+    } else if (kind === 'rungs' && !isLine) {
+        // no confidence texture on this surface (a primitive the pass did not texture): the clay rung, flat
+        (mat as THREE.MeshStandardMaterial).color.set(TEXTURE_RUNG_COLORS[TEXTURE_RUNG_COLORS.length - 1]);
+        defs.defines = { ...(defs.defines ?? {}), SB_RUNG_FLAT: '' };
+    }
     mat.onBeforeCompile = shader => injectShader(shader, uniforms);
-    const cacheKey = `sb-staged-v2:${kind}:${provenanceClasses}:${withReveal ? 'r' : 's'}`;
+    const cacheKey = `sb-staged-v3:${kind}:${provenanceClasses}:${withReveal ? 'r' : 's'}:${confidence ? 'c' : ''}`;
     mat.customProgramCacheKey = () => cacheKey;
     mat.userData = { ...(kind === 'reveal' ? mat.userData : {}), [STAMP]: kind, [REVEAL_VARIANT]: withReveal, ...(kind === 'reveal' && base.userData?.[CLAY_FLAG] ? { [CLAY_FLAG]: true } : {}) };
     mat.needsUpdate = true;
@@ -312,7 +365,7 @@ function setUniforms(mat: THREE.Material, mesh: THREE.Object3D, look: MeshStaged
     u.uSbFade.value = r ? r.fade : 1;
     u.uSbPresence.value = r ? r.presence : 1;
     u.uSbHasReveal.value = geometry.getAttribute(REVEAL_ATTRIBUTE) ? 1 : 0;
-    u.uSbHasDisp.value = geometry.getAttribute(DISP_ATTRIBUTE) ? 1 : 0;
+    u.uSbHasDisp.value = geometry.getAttribute(DISP_ATTRIBUTE) && !r?.noDisp ? 1 : 0;
     u.uSbHasRelief.value = geometry.getAttribute(VERTEX_ATTRIBUTE.reliefHeight) ? 1 : 0;
     u.uSbHasProud.value = geometry.getAttribute(VERTEX_ATTRIBUTE.proudBlock) ? 1 : 0;
     u.uSbHasRectify.value = geometry.getAttribute(VERTEX_ATTRIBUTE.rectifyDisplacement) ? 1 : 0;
@@ -335,6 +388,12 @@ function setUniforms(mat: THREE.Material, mesh: THREE.Object3D, look: MeshStaged
     if (p && (mat as THREE.LineBasicMaterial).isLineBasicMaterial && !(mat as THREE.LineBasicMaterial).vertexColors) {
         (mat as THREE.LineBasicMaterial).color.set(p.nodeColor);
     }
+    const rc = look.rungs?.colors;
+    if (rc && u.uSbRungColor) {
+        for (let i = 0; i < u.uSbRungColor.value.length; i++) if (rc[i]) u.uSbRungColor.value[i].copy(rc[i]);
+    } else if (rc && (mat as THREE.LineBasicMaterial).isLineBasicMaterial && !(mat as THREE.LineBasicMaterial).vertexColors) {
+        (mat as THREE.LineBasicMaterial).color.copy(rc[rc.length - 1]);
+    }
 }
 
 /**
@@ -343,6 +402,12 @@ function setUniforms(mat: THREE.Material, mesh: THREE.Object3D, look: MeshStaged
  * per-draw uniform uploads (and the frame time) at or below the plain clay scene's. Revealing nodes keep their own.
  */
 function shareKey(mesh: THREE.Mesh | THREE.LineSegments, base: THREE.Material, look: MeshStagedLook, classCount: number): string | undefined {
+    if (!look.reveal && !look.provenance && look.rungs) {
+        // one material per confidence texture (every node of a twin layer that shares its atlas)
+        const conf = confidenceMapOf(base);
+        const g = mesh.geometry as THREE.BufferGeometry;
+        return `rungs|${(mesh as THREE.LineSegments).isLine ? 'line' : 'mesh'}|${(base as THREE.MeshStandardMaterial).side ?? 0}|${conf?.uuid ?? 'flat'}|${g.getAttribute('uv') ? 1 : 0}|${look.mark ? 1 : 0}|${look.rungs.colors.map(c => c.getHexString()).join(',')}`;
+    }
     if (look.reveal || !look.provenance) return undefined;
     const g = mesh.geometry as THREE.BufferGeometry;
     const p = look.provenance;
@@ -386,7 +451,7 @@ export class StagedMaterialRegistry {
      */
     apply(mesh: THREE.Mesh | THREE.LineSegments, look: MeshStagedLook | null, opts: { allowCreate: boolean; pxScale: number; classCount: number; restores?: { left: number } }): boolean {
         this.fixClayStash(mesh);
-        if (!look || (!look.reveal && !look.provenance && !look.mark)) {
+        if (!look || (!look.reveal && !look.provenance && !look.mark && !look.rungs)) {
             // Putting a mesh's own material back disposes it (the renderer releases its program reference), which costs
             // about 20 µs: a district's 2,000 trees would stall the frame their reveal ends. Over the frame's budget a
             // mesh stays on its staged material, drawn fully revealed (identical pixels), and gets its own a frame later.
@@ -405,10 +470,10 @@ export class StagedMaterialRegistry {
         const current = mesh.material as THREE.Material | THREE.Material[];
         if (Array.isArray(current)) return false;
         const base = isStagedMaterial(current) ? (this.meshes.get(mesh) ?? BASE.get(current) ?? current) : current;
-        const wantKind: StagedMaterialKind = look.provenance ? 'provenance' : 'reveal';
+        const wantKind: StagedMaterialKind = look.provenance ? 'provenance' : look.rungs ? 'rungs' : 'reveal';
         // The key depends only on the node's (cached) provenance look, the mark and the mesh: computed once per change.
         const cachedKey = this.keyCache.get(mesh);
-        const key = !look.reveal && cachedKey && cachedKey.p === look.provenance && cachedKey.mark === !!look.mark && cachedKey.base === base
+        const key = !look.reveal && look.provenance && cachedKey && cachedKey.p === look.provenance && cachedKey.mark === !!look.mark && cachedKey.base === base
             ? cachedKey.key
             : shareKey(mesh, base, look, opts.classCount);
         if (!look.reveal && look.provenance) this.keyCache.set(mesh, { p: look.provenance, mark: !!look.mark, base, key });

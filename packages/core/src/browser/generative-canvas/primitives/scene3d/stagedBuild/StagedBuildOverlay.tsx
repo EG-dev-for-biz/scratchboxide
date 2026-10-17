@@ -18,7 +18,7 @@
  */
 
 import * as React from 'react';
-import type { DegradationRecord, StageStatus, StageSummary, StagedBuildState, StagedLayer } from '../../../../../common/spatial/staged-location-contracts';
+import type { DegradationRecord, StageStatus, StageSummary, StagedBuildState, StagedLayer, StagedTexturePassState } from '../../../../../common/spatial/staged-location-contracts';
 import type { LayerRevealFrame } from './revealScheduler';
 import type { LegendRow } from './provenanceShading';
 import type { StageProgress } from './stagedBuildState';
@@ -28,6 +28,22 @@ export interface DegradationPlacementNote {
     scope: 'part' | 'layer' | 'none';
     /** Layers the shaded nodes are in. */
     layerIds: string[];
+}
+
+/** Clay or textured, as the overlay reports it (useStagedBuild's materialsSummary). */
+export interface MaterialsSummary {
+    mode: 'clay' | 'textured';
+    /** Layers in the scene with a textured twin. */
+    available: number;
+    /** Layers that show (or are switching to) their twin this session. */
+    engaged: number;
+    /** Layers whose twin is revealing or revealed in the current mode. */
+    shown: number;
+    /** Layers whose twin file did not load (they stay clay). */
+    failedLayerIds: string[];
+    pass?: StagedTexturePassState;
+    /** Share of texels per rung (TEXTURE_LADDER_RUNGS order). */
+    rungShares?: number[];
 }
 
 export interface StagedBuildOverlayProps {
@@ -55,6 +71,36 @@ export interface StagedBuildOverlayProps {
     bottomInsetPx: number;
     /** Why reveals currently show their end state at once (frame time, hidden document). */
     skipNote?: string;
+    /** Clay or textured; the toggle shows when a layer has a textured twin or the texture pass is under way. */
+    materials?: MaterialsSummary;
+    onToggleMaterials?: () => void;
+    /** Per-texel rung legend (provenance on, textured mode). */
+    rungLegend?: LegendRow[];
+}
+
+const PASS_ACTIVE: ReadonlySet<string> = new Set(['pending', 'running']);
+
+/** "Real textures on 2 of 3 layers (photo-inferred, labelled per texel)" / "Clay; real textures ready for 3 layers". */
+export function materialsSentence(state: StagedBuildState, m: MaterialsSummary): string {
+    const failed = m.failedLayerIds.map(id => { const l = state.layers.find(x => x.objectId === id); return l ? layerName(state, l) : id; });
+    const parts: string[] = [];
+    if (m.mode === 'textured') {
+        parts.push(m.available > 0
+            ? `Real textures on ${m.shown} of ${m.available} ${m.available === 1 ? 'layer' : 'layers'} (photo-inferred, labelled per texel); the rest stay clay`
+            : 'Real textures asked for; none published yet, the scene stays clay');
+    } else if (m.available > 0) {
+        parts.push(`Clay. Real textures ready for ${m.available} ${m.available === 1 ? 'layer' : 'layers'}`);
+    } else {
+        parts.push('Clay');
+    }
+    const pass = m.pass;
+    if (pass && PASS_ACTIVE.has(pass.status)) {
+        parts.push(`texture pass ${pass.status}: ${pass.layersDone} of ${pass.layersTotal} layers${pass.message ? ` · ${pass.message}` : ''}${m.mode === 'textured' ? '; each layer switches as its textures arrive' : ''}`);
+    } else if (pass && pass.status !== 'committed') {
+        parts.push(`texture pass ${pass.status}${pass.message ? `: ${pass.message}` : ''}`);
+    }
+    if (failed.length > 0) parts.push(`textures of ${failed.join(', ')} could not be loaded, so ${failed.length === 1 ? 'it stays' : 'they stay'} clay`);
+    return `${parts.join('. ')}.`;
 }
 
 /** "4 images · 1 vision call". */
@@ -237,6 +283,7 @@ export const StagedBuildOverlay: React.FC<StagedBuildOverlayProps> = props => {
     const live = <div role="status" aria-live="polite" style={HIDDEN}>{props.announcement}</div>;
 
     const compact = collapsed || box.narrow;
+    const materialsShown = !!props.materials && (props.materials.available > 0 || props.materials.mode === 'textured' || (!!props.materials.pass && PASS_ACTIVE.has(props.materials.pass.status)));
     const panelStyle: React.CSSProperties = { ...PANEL, bottom: box.bottom, left: box.left, ...(box.maxHeight !== undefined ? { maxHeight: box.maxHeight } : {}) };
 
     if (compact) {
@@ -336,7 +383,14 @@ export const StagedBuildOverlay: React.FC<StagedBuildOverlayProps> = props => {
                 </div>
             ))}
 
+            {materialsShown ? <div style={{ marginTop: 6, color: MUTED }} data-testid="sb-staged-texture-status">{materialsSentence(state, props.materials!)}</div> : null}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                {materialsShown && props.onToggleMaterials ? (
+                    <button type="button" className="sb-staged-build-button" style={{ ...BUTTON, ...(props.materials!.mode === 'textured' ? { background: 'rgba(0,158,115,0.25)', borderColor: '#009E73' } : {}) }}
+                        aria-pressed={props.materials!.mode === 'textured'} onClick={props.onToggleMaterials} data-testid="sb-staged-materials-toggle">
+                        {props.materials!.mode === 'textured' ? 'Show clay' : 'Show real textures'}
+                    </button>
+                ) : null}
                 <button type="button" className="sb-staged-build-button" style={{ ...BUTTON, ...(props.provenanceOn ? { background: 'rgba(86,180,233,0.25)', borderColor: '#56B4E9' } : {}) }} aria-pressed={props.provenanceOn} onClick={props.onToggleProvenance} data-testid="sb-staged-provenance-toggle">
                     Provenance
                 </button>
@@ -347,6 +401,19 @@ export const StagedBuildOverlay: React.FC<StagedBuildOverlayProps> = props => {
                     </>
                 ) : null}
             </div>
+            {props.provenanceOn && props.rungLegend && props.rungLegend.length > 0 ? (
+                <div style={{ marginTop: 8 }}>
+                    <div style={{ color: MUTED }}>Textured layers: where each texel came from</div>
+                    <ul style={{ listStyle: 'none', margin: '4px 0 0', padding: 0, display: 'flex', flexDirection: 'column', gap: 3 }} aria-label="Texture source legend" data-testid="sb-staged-rung-legend">
+                        {props.rungLegend.map(row => (
+                            <li key={row.key} data-rung-color={row.color} style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+                                <SwatchBox row={row} />
+                                <span>{row.text}</span>
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            ) : null}
             {props.provenanceOn ? (
                 <ul style={{ listStyle: 'none', margin: '8px 0 0', padding: 0, display: 'flex', flexDirection: 'column', gap: 3 }} aria-label="Provenance legend" data-testid="sb-staged-legend">
                     {props.legend.map(row => (

@@ -22,6 +22,10 @@
  * skipped to its end state when frames take over 40 ms ten times in a row, when the page is hidden, or for a layer
  * over 3 M vertices. The overlay refreshes on its own (a small store), so a running stage's clock never re-renders the
  * whole viewport.
+ *
+ * Clay or textured (texturedTwins.ts): a layer with a textured twin keeps its clay model; in textured mode the twin is
+ * added as a second scene object and swapped in by the same reveal (a crossfade, material only), and back again. The
+ * scene's stagedBuild.materialMode is the model's request; the overlay's toggle overrides it until the next request.
  */
 
 import * as React from 'react';
@@ -37,12 +41,16 @@ import type {
     StagedNodeExtras
 } from '../../../../../common/spatial/staged-location-contracts';
 import type { RendererStack } from '../types';
-import { StagedBuildOverlay, type DegradationPlacementNote } from './StagedBuildOverlay';
+import { StagedBuildOverlay, type DegradationPlacementNote, type MaterialsSummary } from './StagedBuildOverlay';
 import { placeDegradations, type Placement, type PlacementRoot } from './degradationPlacement';
 import { nodeProgress, nodeRevealWindow, stepRevealSchedule, type LayerLoadState, type LayerRevealFrame, type RevealFrame, type RevealSchedule } from './revealScheduler';
 import { REVEAL_ATTRIBUTE, StagedMaterialRegistry, installRenderGuard, type MeshStagedLook } from './revealMaterial';
-import { classUniforms, legendRows, patternCode, provenanceBackground, resolveLegend, shadingClasses, styleFor, uncertaintyCoverage, type LegendStyle } from './provenanceShading';
+import { TEXTURE_RUNG_COLORS, classUniforms, legendRows, patternCode, provenanceBackground, resolveLegend, shadingClasses, styleFor, textureRungLegendRows, uncertaintyCoverage, type LegendStyle } from './provenanceShading';
 import { isInterrupted, isRunSettled, stageEventsFor, streamedProgress, subscribeStageEvents, withStreamedEvents, type StageProgress } from './stagedBuildState';
+import {
+    INITIAL_SWITCH, deriveMaterialLayers, isMaterialSwapLayer, materialModeOf, modelIdOf, nextSwitch, parseSwapId, twinObjectFor, twinObjectId, twinSourceOf,
+    type DerivedMaterialState, type EngagedTwin, type MaterialMode, type MaterialSwitch
+} from './texturedTwins';
 
 /** Staged materials built per frame at most; meshes past the budget stay hidden one more frame. */
 export const MAX_NEW_MATERIALS_PER_FRAME = 256;
@@ -80,8 +88,12 @@ export interface UseStagedBuildOptions {
     overriddenIds?: ReadonlySet<string>;
     /** Scene3DPrimitive's per-object load status (only `phase` is read). */
     loadStatus: Readonly<Record<string, { phase: string } | undefined>>;
-    mutateSceneData: (mutator: (prev: Scene3DData) => Scene3DData) => void;
+    mutateSceneData: (mutator: (prev: Scene3DData) => Scene3DData, opInfo?: { operator: string; params?: unknown }, options?: { history?: false }) => void;
     onPromptAction?: (prompt: string) => void;
+    /** The scene's objects: textured twins are added to it (and removed) as the material mode needs them. */
+    sceneObjects?: readonly Media4DObject[];
+    /** The scene's view request beside stagedBuild (staged_location_material_mode's provenance flag). */
+    view?: { provenance?: boolean };
 }
 
 export interface StagedBuildHandle {
@@ -249,7 +261,14 @@ interface LookContext {
     lg: Legend;
     /** The layer's object has an explicit material: no provenance shading or mark over it. */
     overridden?: boolean;
+    /** A material swap layer (clay <-> textured twin): the geometry is final, nothing is displaced in. */
+    swap?: boolean;
+    /** Provenance on a textured twin: per-texel rungs instead of the node's label. */
+    rungs?: MeshStagedLook['rungs'];
 }
+
+/** The rung colours as the shader takes them. */
+const RUNG_LOOK: NonNullable<MeshStagedLook['rungs']> = { colors: TEXTURE_RUNG_COLORS.map(c => new THREE.Color(c)) };
 
 /** The look of one node of an attached layer this frame: a staged look, hidden (not started), concealed (superseded) or untouched (null). */
 export function lookFor(f: LayerRevealFrame, n: NodeInfo, ctx: LookContext): MeshStagedLook | 'hide' | 'conceal' | null {
@@ -269,10 +288,12 @@ export function lookFor(f: LayerRevealFrame, n: NodeInfo, ctx: LookContext): Mes
         // growing chunks instead of discarding every fragment of every node from the first frame.
         if (p <= 0 || (n.perVertex && p < 1 && p <= n.itemStart * stagger)) return 'hide';
         reveal = n.perVertex ? { progress: p, stagger, fade: 1, presence, overSource: f.overSource } : { progress: 1, stagger, fade: p, presence, overSource: f.overSource };
+        if (ctx.swap) reveal.noDisp = true;
     } else if (presence < 1) {
         reveal = { progress: 1, stagger, fade: 1, presence };
     }
-    const shaded = ctx.provenanceOn && !ctx.overridden;
+    const rungs = ctx.provenanceOn && !ctx.overridden ? ctx.rungs : undefined;
+    const shaded = ctx.provenanceOn && !ctx.overridden && !rungs;
     const mark = !ctx.overridden && ((!!ctx.highlightOn && n.degradationIds.includes(ctx.highlightOn)) || (ctx.provenanceOn && n.degradationIds.length > 0));
     let provenance: MeshStagedLook['provenance'];
     if (shaded) {
@@ -286,8 +307,8 @@ export function lookFor(f: LayerRevealFrame, n: NodeInfo, ctx: LookContext): Mes
         }
         provenance = n.prov.look;
     }
-    if (!reveal && !provenance && !mark) return null;
-    return { ...(reveal ? { reveal } : {}), ...(provenance ? { provenance } : {}), ...(mark ? { mark } : {}) };
+    if (!reveal && !provenance && !mark && !rungs) return null;
+    return { ...(reveal ? { reveal } : {}), ...(provenance ? { provenance } : {}), ...(rungs ? { rungs } : {}), ...(mark ? { mark } : {}) };
 }
 
 /** What the overlay host reads; it re-renders itself when notified, not the viewport. */
@@ -310,7 +331,7 @@ const OverlayHost: React.FC<{ store: OverlayStore; render: (frame: RevealFrame |
 };
 
 export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
-    const { state, stackRef, objectRootsRef, loadStatus, mutateSceneData, onPromptAction, overriddenIds } = opts;
+    const { state, stackRef, objectRootsRef, loadStatus, mutateSceneData, onPromptAction, overriddenIds, sceneObjects, view } = opts;
     const runId = state?.runId;
     const pageLoadedAtMs = React.useRef(typeof performance !== 'undefined' ? performance.timeOrigin : 0).current;
 
@@ -331,6 +352,21 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
     const [highlight, setHighlight] = React.useState<{ id: string; untilMs: number } | undefined>();
     const [reducedMotion, setReducedMotion] = React.useState(prefersReducedMotion);
     const [announcement, setAnnouncement] = React.useState('');
+
+    // Clay or textured. The scene's request (stagedBuild.materialMode, set by staged_location_material_mode) holds until
+    // the overlay's toggle overrides it; a new request from the scene drops the override. A state streamed later without
+    // the field keeps the last request.
+    const sceneMode = materialModeOf(state?.materialMode);
+    const lastSceneMode = React.useRef<{ runId?: string; mode?: MaterialMode }>({});
+    if (lastSceneMode.current.runId !== runId) lastSceneMode.current = { runId };
+    if (sceneMode) lastSceneMode.current.mode = sceneMode;
+    const [userMode, setUserMode] = React.useState<MaterialMode | undefined>(undefined);
+    React.useEffect(() => { if (sceneMode) setUserMode(undefined); }, [sceneMode, runId]);
+    const wantedMode: MaterialMode = userMode ?? lastSceneMode.current.mode ?? 'clay';
+    const twinRef = React.useRef<{ runId?: string; sw: MaterialSwitch; engaged: Map<string, EngagedTwin>; seen: boolean; mountEpoch: number }>({ sw: INITIAL_SWITCH, engaged: new Map(), seen: false, mountEpoch: 0 });
+    if (twinRef.current.runId !== runId) twinRef.current = { runId, sw: INITIAL_SWITCH, engaged: new Map(), seen: false, mountEpoch: 0 };
+    twinRef.current.sw = nextSwitch(twinRef.current.sw, wantedMode);
+    const sw = twinRef.current.sw;
 
     React.useEffect(() => {
         if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
@@ -378,11 +414,45 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         }
     }, [effective, wantRetired, mutateSceneData]);
 
-    // Everything the per-frame guard reads, kept current without re-installing it.
-    const live = React.useRef({ overriddenIds, state: effective, settled, reducedMotion, provenanceOn, showReplaced, replayEpoch, highlight, loadStatus, replaying });
-    live.current = { overriddenIds, state: effective, settled, reducedMotion, provenanceOn, showReplaced, replayEpoch, highlight, loadStatus, replaying };
-
     const scheduleRef = React.useRef<RevealSchedule | undefined>(undefined);
+
+    // The scheduler's view: the build's layers plus the swap layers of the current clay/textured switch.
+    const derived: DerivedMaterialState | undefined = React.useMemo(() => {
+        if (!effective) return undefined;
+        const t = twinRef.current;
+        if (!t.seen) t.mountEpoch = sw.epoch;
+        const out = deriveMaterialLayers(effective, sw, t.engaged, { started: id => !!scheduleRef.current?.layers[id], live: t.seen });
+        t.seen = true;
+        return out;
+    }, [effective, sw]);
+    const stagedState = derived?.state;
+    /** A swap the viewer asked for now plays even over a finished run; one saved with the scene shows at once. */
+    const exemptFromSettled = React.useCallback((layer: StagedLayer): boolean => {
+        const p = parseSwapId(layer.objectId);
+        if (!p) return false;
+        const t = twinRef.current;
+        return p.epoch > t.mountEpoch || !!t.engaged.get(p.layerId)?.live;
+    }, []);
+
+    // Everything the per-frame guard reads, kept current without re-installing it.
+    const live = React.useRef({ overriddenIds, state: stagedState, owner: derived?.owner, settled, reducedMotion, provenanceOn, showReplaced, replayEpoch, highlight, loadStatus, replaying });
+    live.current = { overriddenIds, state: stagedState, owner: derived?.owner, settled, reducedMotion, provenanceOn, showReplaced, replayEpoch, highlight, loadStatus, replaying };
+
+    // The twins the switch needs are scene objects (loaded by the viewport like any layer); twins no longer needed go.
+    React.useEffect(() => {
+        if (!sceneObjects || !derived) return;
+        const byId = new Map(sceneObjects.map(o => [o.id, o]));
+        const wanted = derived.twins;
+        const missing = wanted.filter(l => (byId.get(twinObjectId(l.objectId))?.content as { durableUri?: string } | undefined)?.durableUri !== l.textured!.url);
+        const stale = sceneObjects.filter(o => { const src = twinSourceOf(o); return !!src && !wanted.some(l => l.objectId === src); });
+        if (missing.length === 0 && stale.length === 0) return;
+        const drop = new Set([...stale.map(o => o.id), ...missing.map(l => twinObjectId(l.objectId))]);
+        mutateSceneData(prev => {
+            const objs = prev.objects ?? [];
+            const add = missing.map(l => twinObjectFor(l, objs.find(o => o.id === l.objectId)));
+            return { ...prev, objects: [...objs.filter(o => !drop.has(o.id)), ...add] };
+        }, { operator: 'staged_material_mode_twins' }, { history: false });
+    }, [derived, sceneObjects, mutateSceneData]);
     const frameRef = React.useRef<RevealFrame | undefined>(undefined);
     const readyAtRef = React.useRef(new Map<string, number>());
     const registryRef = React.useRef(new StagedMaterialRegistry());
@@ -414,6 +484,12 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         setHighlight(undefined);
         lastStatuses.current.clear();
     }, [runId]);
+
+    // The scene's provenance request (staged_location_material_mode's provenance flag), applied when it changes.
+    const requestedProvenance = view?.provenance;
+    React.useEffect(() => {
+        if (typeof requestedProvenance === 'boolean') setProvenanceOn(requestedProvenance);
+    }, [requestedProvenance, runId]);
 
     const legendFor = React.useCallback((st: StagedBuildState, extra: Iterable<ProvenanceLabel>): Legend => {
         const extraList = [...extra];
@@ -473,18 +549,19 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         const scheduleState: StagedBuildState = layers.every((l, i) => l === st.layers[i]) ? st : { ...st, layers };
         const loads: Record<string, LayerLoadState> = {};
         for (const layer of layers) {
-            const root = objectRootsRef.current.get(layer.objectId);
+            const model = modelIdOf(layer.objectId);
+            const root = objectRootsRef.current.get(model);
             const attached = !!root && !!root.parent;
             const sidecar = layer.reveal.orderUrl ? sidecarFor(layer.reveal.orderUrl) : undefined;
             const ready = attached && (!sidecar || sidecar.status !== 'loading');
             if (ready && !readyAtRef.current.has(layer.objectId)) readyAtRef.current.set(layer.objectId, t0);
             if (!ready) readyAtRef.current.delete(layer.objectId);
-            loads[layer.objectId] = { ready, readyAtMs: readyAtRef.current.get(layer.objectId), failed: L.loadStatus[layer.objectId]?.phase === 'error' };
+            loads[layer.objectId] = { ready, readyAtMs: readyAtRef.current.get(layer.objectId), failed: L.loadStatus[model]?.phase === 'error' };
         }
         const wasAnimating = !!frameRef.current?.animating;
         const { schedule, frame } = stepRevealSchedule(scheduleRef.current, {
             state: scheduleState, loads, nowMs: t0, pace: true, reducedMotion: L.reducedMotion, settled: L.settled && !L.replaying,
-            skipReason: stats.skipReason, replayEpoch: L.replayEpoch,
+            skipReason: stats.skipReason, replayEpoch: L.replayEpoch, exemptFromSettled,
             skipLayer: layer => (layer.counts.vertices > SKIP_REVEAL_ABOVE_VERTICES ? `over ${SKIP_REVEAL_ABOVE_VERTICES / 1e6} M vertices` : undefined)
         });
         scheduleRef.current = schedule;
@@ -508,7 +585,9 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         const replacedPresence = new Map<string, number>();
         const infos: Array<[LayerRevealFrame, RootInfo]> = [];
         for (const f of frame.layers) {
-            const root = objectRootsRef.current.get(f.objectId);
+            // a model two layers stand for (a layer and its swap back to clay) is driven by the newest of them
+            if ((L.owner?.get(f.objectId) ?? f.objectId) !== f.objectId) continue;
+            const root = objectRootsRef.current.get(modelIdOf(f.objectId));
             if (!root || !root.parent) continue;
             const info = rootInfoFor(f.layer, root);
             infos.push([f, info]);
@@ -540,9 +619,11 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         for (const [f, info] of infos) {
             const ghost = L.showReplaced && (f.hidden || f.phase === 'retired');
             const only = f.layer.reveal.only ? new Set(f.layer.reveal.only.primitiveIds) : undefined;
+            const swap = parseSwapId(f.objectId);
+            const overridden = !!L.overriddenIds?.has(modelIdOf(f.objectId));
             for (const n of info.nodes) {
                 const replaced = n.ids.surfaceId !== undefined && n.replaces.length === 0 ? replacedPresence.get(n.ids.surfaceId) : undefined;
-                const look = lookFor(f, n, { ghost, only, replaced, highlightOn, provenanceOn: L.provenanceOn, lg, overridden: !!L.overriddenIds?.has(f.objectId) });
+                const look = lookFor(f, n, { ghost, only, replaced, highlightOn, provenanceOn: L.provenanceOn, lg, overridden, swap: !!swap, ...(swap?.kind === 'tex' ? { rungs: RUNG_LOOK } : {}) });
                 for (const mesh of n.meshes) {
                     if (look === 'conceal') registry.conceal(mesh);
                     else if (look === 'hide') registry.hide(mesh);
@@ -556,8 +637,10 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         // Forget meshes of models the loader released (every 30 frames; the check walks the registry).
         if (stats.frames % 30 === 0) {
             const liveMeshes = new Set<THREE.Object3D>();
-            for (const info of rootsRef.current.values()) {
-                if (objectRootsRef.current.get(info.objectId) !== info.root) continue;
+            for (const [id, info] of [...rootsRef.current]) {
+                // layers gone from the schedule (an earlier swap) no longer hold their meshes
+                if (!st.layers.some(l => l.objectId === id)) { rootsRef.current.delete(id); continue; }
+                if (objectRootsRef.current.get(modelIdOf(info.objectId)) !== info.root) continue;
                 for (const n of info.nodes) for (const m of n.meshes) liveMeshes.add(m);
             }
             registry.prune(m => liveMeshes.has(m));
@@ -567,16 +650,16 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         recordStat(stagedRevealStats.newMaterials, MAX_NEW_MATERIALS_PER_FRAME - budget);
         recordStat(stagedRevealStats.restored, MAX_RESTORES_PER_FRAME - restores.left);
         recordStat(stagedRevealStats.drawnStagedMeshes, drawn);
-    }, [objectRootsRef, legendFor, sidecarFor, rootInfoFor]);
+    }, [objectRootsRef, legendFor, sidecarFor, rootInfoFor, exemptFromSettled]);
 
     // The guard is on while anything reveals or waits to, while provenance, a highlight or ghosts are on; it follows
     // the renderer stack if that is re-created (StrictMode / HMR). This rAF loop keeps the guard and the overlay
     // current, and stops once the steady state is reached (no guard needed, run over).
     const guardRef = React.useRef<{ scene: THREE.Scene; uninstall: () => void } | undefined>(undefined);
     React.useEffect(() => {
-        if (!effective) return;
+        if (!stagedState) return;
         // The last frame was computed for the previous state: until the guard computes one for this state, assume work.
-        if (frameRef.current && frameRef.current.layers.length !== effective.layers.length) frameRef.current = undefined;
+        if (frameRef.current && (frameRef.current.layers.length !== stagedState.layers.length || frameRef.current.layers.some(x => !stagedState.layers.some(l => l.objectId === x.objectId)))) frameRef.current = undefined;
         let raf = 0;
         let lastOverlay = 0;
         let lastSig = '';
@@ -620,7 +703,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         // Synchronously: a layer the loader attaches before the next animation frame must already meet the guard.
         tick();
         return () => cancelAnimationFrame(raf);
-    }, [effective, provenanceOn, showReplaced, replayEpoch, highlight, onFrame, stackRef, store, pageLoadedAtMs]);
+    }, [stagedState, provenanceOn, showReplaced, replayEpoch, highlight, onFrame, stackRef, store, pageLoadedAtMs]);
 
     // Off for good on unmount: the guard, the staged materials, the background.
     React.useEffect(() => () => {
@@ -633,7 +716,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
 
     const render = React.useCallback((frame: RevealFrame | undefined, skipNote: string | undefined, bottomInsetPx: number) => {
         const st = live.current.state;
-        if (!st) return null;
+        if (!st || !effective) return null;
         const labels = provenanceOn ? [...rootsRef.current.values()].flatMap(i => i.nodes.map(n => n.provenance.label)) : [];
         const lg = legendFor(st, labels);
         // Where each record is, once every layer that is going to show has loaded (before that, a part may only be unplaced yet).
@@ -642,10 +725,15 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
             for (const [id, pl] of placementRef.current.placements) placements.set(id, { scope: pl.scope, layerIds: pl.layerIds });
         }
         const hasOutlines = [...rootsRef.current.values()].some(i => i.nodes.some(n => n.meshes.some(m => (m as THREE.LineSegments).isLine && !!(m.geometry as THREE.BufferGeometry).getAttribute('color'))));
+        const materials = materialsSummary(effective, frame, sw, derived);
         return React.createElement(StagedBuildOverlay, {
-            state: st,
-            interrupted: isInterrupted(st, pageLoadedAtMs),
-            layers: frame?.layers ?? [],
+            state: effective,
+            interrupted: isInterrupted(effective, pageLoadedAtMs),
+            // swap reveals are reported by the materials line, not as build notes
+            layers: (frame?.layers ?? []).filter(l => !isMaterialSwapLayer(l)),
+            materials,
+            onToggleMaterials: () => setUserMode(materials.mode === 'textured' ? 'clay' : 'textured'),
+            rungLegend: provenanceOn && materials.mode === 'textured' && materials.shown > 0 ? textureRungLegendRows(materials.rungShares) : undefined,
             progress: progress as Map<string, StageProgress>,
             nowMs: performance.now(),
             wallNowMs: Date.now(),
@@ -667,7 +755,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
             bottomInsetPx,
             skipNote
         });
-    }, [legendFor, provenanceOn, showReplaced, highlight, announcement, progress, onPromptAction, pageLoadedAtMs]);
+    }, [legendFor, provenanceOn, showReplaced, highlight, announcement, progress, onPromptAction, pageLoadedAtMs, effective, sw, derived]);
 
     const overlay = React.useCallback((o: { bottomInsetPx: number }) => {
         if (!live.current.state) return null;
@@ -675,4 +763,28 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
     }, [store, render]);
 
     return { active: !!effective, overlay };
+}
+
+/** What the overlay says about clay and textures: the mode, how many layers show their twin, the pass's progress. */
+export function materialsSummary(state: StagedBuildState, frame: RevealFrame | undefined, sw: MaterialSwitch, derived: DerivedMaterialState | undefined): MaterialsSummary {
+    const available = state.layers.filter(l => !l.retired && l.textured).length;
+    const engaged = derived?.twins.length ?? 0;
+    let shown = 0;
+    const failed: string[] = [];
+    for (const f of frame?.layers ?? []) {
+        const p = parseSwapId(f.objectId);
+        if (!p || p.kind !== 'tex' || p.epoch !== sw.epoch) continue;
+        if (f.phase === 'revealing' || f.phase === 'revealed') shown++;
+        if (f.loadFailed) failed.push(p.layerId);
+    }
+    // the pass's own measured shares, else the layers' (weighted by their bytes as a proxy for texels)
+    let rungShares = state.texturePass?.rungShares;
+    if (!rungShares) {
+        const ls = state.layers.filter(l => !l.retired && l.textured?.rungShares?.length);
+        const w = ls.reduce((a, l) => a + Math.max(1, l.textured!.bytes), 0);
+        if (ls.length > 0) {
+            rungShares = TEXTURE_RUNG_COLORS.map((_, i) => ls.reduce((a, l) => a + (l.textured!.rungShares[i] ?? 0) * Math.max(1, l.textured!.bytes), 0) / w);
+        }
+    }
+    return { mode: sw.mode, available, engaged, shown, failedLayerIds: failed, ...(state.texturePass ? { pass: state.texturePass } : {}), ...(rungShares ? { rungShares } : {}) };
 }

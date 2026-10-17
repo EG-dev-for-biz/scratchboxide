@@ -172,7 +172,9 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { CINEMATIC_RIGS, computeSceneBudgetTelemetry } from './scene3d/lightingRigs';
 import type { SceneBudgetTelemetry } from './scene3d/lightingRigs';
 import { useStagedBuild } from './scene3d/stagedBuild/useStagedBuild';
-import { readStagedBuild } from './scene3d/stagedBuild/stagedBuildState';
+import { readStagedBuild, type StagedSceneData } from './scene3d/stagedBuild/stagedBuildState';
+import { carryTwinObjects } from './scene3d/stagedBuild/texturedTwins';
+import { prepareTexturedTwinModel } from './scene3d/stagedBuild/texturedTwinModel';
 
 // Aircraft helpers live in services/mesh/aircraft.ts (single source of truth, shared with the
 // transformer engine's sandbox template); re-exported here to keep the public API stable.
@@ -1080,7 +1082,8 @@ function mergeExternalSceneData(prev: Scene3DData, data: Scene3DData): Scene3DDa
                 glbBase64: data.cppGenerator.glbBase64 || prev.cppGenerator?.glbBase64
               }
             : prev.cppGenerator,
-        objects: data.objects ?? prev.objects,
+        // textured twins the staged-build view added are not in the agent's objects[]: they stay while their layer does
+        objects: carryTwinObjects(prev.objects, data.objects) ?? prev.objects,
         customMeshes: data.customMeshes ?? prev.customMeshes
     };
 }
@@ -2879,6 +2882,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     // A trees GLB (nodes with extras sbTree) gets its level-of-detail controller before the clay pass, so wood and leaves share one material.
                     const lod = new TreeLodController(model);
                     if (lod.hasTrees) model.userData.sbTreeLod = lod;
+                    // A staged layer's textured twin keeps its photo material under the clay pass, and its confidence texture is loaded.
+                    void prepareTexturedTwinModel(gltf);
                     applyClayRenderMode([model], renderModeRef.current === 'clay');
                     // An explicit material on the object wins over the clay default.
                     syncObjectMaterial(model, latestDef(obj).material, renderModeRef.current === 'clay');
@@ -2991,7 +2996,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     }, [materialOverrideFingerprint, externalLoadStatus]);
 
     // ---- 5d. Staged location builds: each committed layer revealed in its real build order, overlay, provenance ----
-    const staged = useStagedBuild({ state: readStagedBuild(sceneData), overriddenIds: materialOverriddenIds, stackRef, objectRootsRef: externalObjectsMapRef, loadStatus: externalLoadStatus, mutateSceneData, onPromptAction });
+    const staged = useStagedBuild({
+        state: readStagedBuild(sceneData), overriddenIds: materialOverriddenIds, stackRef, objectRootsRef: externalObjectsMapRef, loadStatus: externalLoadStatus, mutateSceneData, onPromptAction,
+        sceneObjects: sceneData.objects, view: (sceneData as StagedSceneData).stagedBuildView
+    });
 
     // ---- 6. Custom meshes from schema (id-diffed, updated in place) ---------------
     React.useEffect(() => {

@@ -25,7 +25,11 @@ import { compareLayers, isStageTerminal } from './revealScheduler';
  * Scene3DData.stagedBuild. The contracts commit was to add this field to Scene3DData (canvas-types.ts); until it does,
  * the viewport reads it through this view of the scene data.
  */
-export type StagedSceneData = Scene3DData & { stagedBuild?: StagedBuildState };
+export type StagedSceneData = Scene3DData & {
+    stagedBuild?: StagedBuildState;
+    /** How the viewer asked to see the staged build (outside stagedBuild, which the server owns): provenance shading on or off. */
+    stagedBuildView?: { provenance?: boolean };
+};
 
 export function readStagedBuild(data: Scene3DData | undefined | null): StagedBuildState | undefined {
     const staged = (data as StagedSceneData | undefined)?.stagedBuild;

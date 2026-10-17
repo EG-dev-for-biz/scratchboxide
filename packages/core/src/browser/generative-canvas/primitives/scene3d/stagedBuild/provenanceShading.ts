@@ -40,6 +40,7 @@ import {
     type StagedBuildState,
     type VertexBand
 } from '../../../../../common/spatial/staged-location-contracts';
+import { TEXTURE_LADDER_RUNGS } from '../../../../../common/spatial/texture-pass-contracts';
 
 /** Colour of a label no legend lists. */
 export const UNKNOWN_LABEL_COLOR = '#C9CDD3';
@@ -332,4 +333,30 @@ export function legendRows(state: StagedBuildState, legend: Map<ProvenanceLabel,
     if (opts.hasOutlines) rows.push({ key: 'scale:fit-error', label: 'fit error', color: cividis(1), pattern: 'cividis', text: `outlines: local fit error, cividis 0 cm (${cividis(0)}) to ${RMS_SHADING_FULL_M * 100} cm (${cividis(1)})` });
     if (state.degradations.length > 0) rows.push({ key: 'degraded', label: 'degraded', color: DEGRADED_OUTLINE_COLOR, pattern: 'hatch', text: `degraded parts (${state.degradations.length}): vermillion hatch over the rung they fell to` });
     return rows;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Texture rungs: where each texel of a textured twin came from (the confidence texture's B channel)
+// ---------------------------------------------------------------------------------------------------------------
+
+/**
+ * One colour per TEXTURE_LADDER_RUNGS entry, by index (Okabe-Ito, distinguishable under the common colour-vision
+ * deficiencies; the clay rung keeps the studio clay grey). A rung index past the list draws the last colour.
+ */
+export const TEXTURE_RUNG_COLORS: readonly string[] = ['#009E73', '#56B4E9', '#E69F00', '#CC79A7', '#D55E00', '#B0B8C4'];
+
+export function textureRungColor(rung: number): string {
+    return TEXTURE_RUNG_COLORS[Math.min(TEXTURE_RUNG_COLORS.length - 1, Math.max(0, Math.floor(rung)))];
+}
+
+/**
+ * Legend rows for the per-texel rung shading of textured layers: one row per rung (TEXTURE_LADDER_RUNGS names), with
+ * the share of texels when the run measured it.
+ */
+export function textureRungLegendRows(shares?: readonly number[]): LegendRow[] {
+    return TEXTURE_LADDER_RUNGS.map((name, i) => {
+        const share = shares?.[i];
+        const pct = share !== undefined && Number.isFinite(share) ? ` (${share > 0 && share < 0.005 ? '<1' : Math.round(share * 100)}% of texels)` : '';
+        return { key: `rung:${i}`, label: name, color: textureRungColor(i), pattern: 'solid', text: `${name}${pct}` };
+    });
 }

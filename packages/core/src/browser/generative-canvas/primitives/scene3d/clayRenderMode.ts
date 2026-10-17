@@ -56,6 +56,8 @@ export function applyClayRenderMode(roots: Array<THREE.Object3D | null | undefin
             if (!mesh.isMesh) return;
             // An explicit material (sb_set_material_pbr) wins over the clay default.
             if (mesh.userData.sbMaterialOverride) return;
+            // A textured twin of a staged layer (texturedTwinModel.ts) is shown only to show its photo texture; clay is its clay layer.
+            if (mesh.userData.sbKeepAuthoredMaterial) return;
             if (mesh.userData.sbTreeLodMesh) {
                 // base only: the controller puts it (or its dither variant) on the mesh at the next frame
                 if (enabled) {

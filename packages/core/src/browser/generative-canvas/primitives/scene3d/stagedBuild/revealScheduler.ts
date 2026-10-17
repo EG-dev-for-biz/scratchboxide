@@ -41,6 +41,11 @@ export interface RevealInput {
     skipLayer?: (layer: StagedLayer) => string | undefined;
     /** Pace the first PACED_REVEAL_COUNT reveals (live viewport presentation). Off = every reveal plays at its own duration. */
     pace?: boolean;
+    /**
+     * Layers that still animate when the run is settled: a change the viewer asked for now (a material swap between a
+     * clay layer and its textured twin) is not part of the recorded build, so it plays even over a finished run.
+     */
+    exemptFromSettled?: (layer: StagedLayer) => boolean;
 }
 
 export interface LayerTimeline {
@@ -247,7 +252,8 @@ export function stepRevealSchedule(prev: RevealSchedule | undefined, input: Reve
         const readyAt = loads[id]?.readyAtMs ?? nowMs;
         const waitedLong = nowMs - readyAt >= OUT_OF_ORDER_WAIT_MS;
         const layerSkip = input.skipLayer?.(layer);
-        const endState = input.settled || input.reducedMotion || !!input.skipReason || !!layerSkip;
+        const settledHere = input.settled && !input.exemptFromSettled?.(layer);
+        const endState = settledHere || input.reducedMotion || !!input.skipReason || !!layerSkip;
         const pacedStart = pace && !endState && Object.keys(timelines).length < PACED_REVEAL_COUNT;
         if (!endState) {
             // A paced reveal never jumps the queue: it waits for the earlier paced ones, however long they take.
@@ -255,7 +261,7 @@ export function stepRevealSchedule(prev: RevealSchedule | undefined, input: Reve
             if (revealing() >= MAX_CONCURRENT_REVEALS) continue;
         }
         const notYet = earlier.find(o => !revealedNow(o.objectId) && !timelines[o.objectId] && !loadFailed(o.objectId));
-        const skipped = input.settled ? undefined : input.reducedMotion ? 'reduced motion' : input.skipReason ?? layerSkip;
+        const skipped = settledHere ? undefined : input.reducedMotion ? 'reduced motion' : input.skipReason ?? layerSkip;
         const dwell = flushShareMs !== undefined ? Math.min(PACED_REVEAL_DWELL_MS, flushShareMs) : PACED_REVEAL_DWELL_MS;
         const durationMs = endState ? 0 : pacedStart ? Math.max(effectiveDurationMs(layer), dwell) : effectiveDurationMs(layer);
         timelines[id] = {
@@ -273,6 +279,7 @@ export function stepRevealSchedule(prev: RevealSchedule | undefined, input: Reve
     if (input.settled || input.reducedMotion || input.skipReason) {
         for (const layer of layers) {
             const t = timelines[layer.objectId];
+            if (input.settled && !input.reducedMotion && !input.skipReason && input.exemptFromSettled?.(layer)) continue;
             if (t && t.endedAtMs === undefined) {
                 timelines[layer.objectId] = { ...t, endedAtMs: nowMs, ...(input.settled ? {} : { skipped: input.reducedMotion ? 'reduced motion' : input.skipReason }) };
             }
