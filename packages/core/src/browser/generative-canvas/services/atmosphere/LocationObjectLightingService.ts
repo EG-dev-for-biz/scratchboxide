@@ -12,6 +12,7 @@ import { kelvinToRGB } from './kelvin';
 import { calculateNOAASolarPosition, getSunVectorFromAngles } from './solar-position';
 import { classifyDiurnalPhase } from './diurnal-lighting';
 import { MissingInputError } from '../../../../common/errors/pipeline-errors';
+import { PHOTOGRAMMETRIC_DELIGHT_HIGHLIGHT_COMPRESS, PHOTOGRAMMETRIC_DELIGHT_SHADOW_LIFT } from '../../../../common/spatial/photogrammetric-delight';
 import { assertUsableCoordinates } from '../../../../common/coordinate/parse-coordinates';
 
 export type StoneType = 'travertine' | 'limestone' | 'sandstone' | 'granite' | 'terracotta' | 'marble' | 'concrete' | 'neutral' | 'asphalt' | 'brick' | 'glass_metal';
@@ -178,7 +179,7 @@ export const LOCATION_DELIGHT_FRAGMENT_CHUNK = `
         // Luminance of photogrammetric diffuse sample
         float dLuma = dot(baseRgb, vec3(0.299, 0.587, 0.114));
 
-        // 1. Lift baked shadow crevices toward stone albedo baseline
+        // 1. Lift baked shadow crevices toward stone albedo baseline (same formula as liftShadowsCompressHighlights in common/spatial/photogrammetric-delight.ts)
         float shadowFactor = clamp(1.0 - (dLuma * 2.2), 0.0, 1.0);
         vec3 liftedRgb = baseRgb + (vec3(dLuma * 1.6 + 0.14) - baseRgb) * (shadowFactor * uShadowLift);
 
@@ -417,8 +418,8 @@ export class LocationObjectLightingService {
             uRealDelightEnabled: { value: config?.uRealDelightEnabled !== false ? 1.0 : 0.0 },
             uMeshShading: { value: config?.uMeshShading ?? 1.0 },
             // Legacy heuristic GLSL fallbacks (deprecated in favor of C++20 NativeTileLightingService)
-            uShadowLift: { value: config?.uShadowLift ?? 0.60 },
-            uHighlightCompress: { value: config?.uHighlightCompress ?? 0.45 },
+            uShadowLift: { value: config?.uShadowLift ?? PHOTOGRAMMETRIC_DELIGHT_SHADOW_LIFT },
+            uHighlightCompress: { value: config?.uHighlightCompress ?? PHOTOGRAMMETRIC_DELIGHT_HIGHLIGHT_COMPRESS },
             uStoneAlbedoTint: {
                 value: new THREE.Color(
                     config?.uStoneAlbedoTint ? config.uStoneAlbedoTint[0] : 0.86,
