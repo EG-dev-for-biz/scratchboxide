@@ -37,6 +37,8 @@ export interface StagedSummaryInput extends Omit<StagedLocationResult, 'digest' 
     exemptionsRefused?: string[];
     /** Exempted layers that are partly inferred or grown rather than measured, with the share. */
     exemptInferred?: string[];
+    /** Pill markdown for the other places Google found (one list item each), empty when there are none. */
+    switchLocation?: string;
 }
 
 /** "1,234". */
@@ -333,7 +335,10 @@ export function summarizeStagedBuild(input: StagedSummaryInput): { digest: strin
         gateSentence(input),
         timingsSentence(input)
     ].filter(Boolean);
-    return { digest: stagedDigest(input), summary: sentences.join(' ') };
+    const switchBlock = input.switchLocation
+        ? `\n\nSwitch location: other places Google found for this text. Put these lines in your reply unchanged, as they are pill buttons the user can click to redo the build at that place:\n${input.switchLocation}`
+        : '';
+    return { digest: stagedDigest(input), summary: sentences.join(' ') + switchBlock };
 }
 
 // ----------------------------------------------------------------------------------------------------------------
