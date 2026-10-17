@@ -17,12 +17,12 @@ import { createHash } from 'crypto';
 import { describe, expect, it } from 'vitest';
 import type { Vec3 } from '../src/common/spatial/staged-location-contracts';
 import { unpackConfidenceTexel, type UvAtlas } from '../src/common/spatial/texture-pass-contracts';
-import { describeModelUsed, IMAGE_MODEL_PRIORITY } from '../src/common/media-generation-protocol';
+import { describeModelUsed, IMAGE_MODEL_ASPECT_RATIOS, IMAGE_MODEL_PRIORITY, nearestImageAspectRatio } from '../src/common/media-generation-protocol';
 import { MediaModelUnavailableError } from '../src/common/errors/pipeline-errors';
 import { decodePng, encodePng } from '../src/node/texture-processing';
 import { decodeImageInMemory, transferTilePhotoFromGlb, type RgbaImage8 } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 import {
-    enhancementGate, enhanceTransferredAtlas, type EnhanceModelAnswer, type EnhanceModelClient, type EnhanceModelRequest
+    enhancementGate, enhanceTransferredAtlas, resizeRgba, type EnhanceModelAnswer, type EnhanceModelClient, type EnhanceModelRequest
 } from '../src/node/3d-engine/staged-location/texture-enhance';
 import { facadeAlbedo, facadeAtlas, facadeViews } from './helpers/texture-pass-fixtures';
 import { buildTileGlb, facadeTileSheet } from './helpers/tile-photo-glb';
@@ -148,7 +148,11 @@ describe('tile photo enhancement (tile-photo-enhanced)', () => {
         for (const c of calls) {
             expect(c.references.length).toBeGreaterThanOrEqual(2);
             expect(c.references.length).toBeLessThanOrEqual(3);
-            expect(decodePng(Buffer.from(c.image.bytes)).width).toBe(SIDE / 2);
+            // the crop (SIDE / 2 x SIDE) is sent padded to the model's nearest supported aspect ratio
+            const sentPng = decodePng(Buffer.from(c.image.bytes));
+            expect(sentPng.height).toBe(SIDE);
+            expect(sentPng.width).toBeGreaterThanOrEqual(SIDE / 2);
+            expect(nearestImageAspectRatio(sentPng.width, sentPng.height)).toBe(nearestImageAspectRatio(SIDE / 2, SIDE));
             expect(c.prompt).toMatch(/Keep every feature exactly where it is/);
             expect(c.models).toEqual(IMAGE_MODEL_PRIORITY);
         }
@@ -175,6 +179,42 @@ describe('tile photo enhancement (tile-photo-enhanced)', () => {
         }
         expect(changedLeft).toBeGreaterThan(1000);
         saveStrip('enhance_per_chart_accept_reject', [planePanel(SIDE, SIDE, transfer.albedo), planePanel(SIDE, SIDE, res.planes.albedo)], 3);
+    });
+
+    it('pads each crop to the model\'s aspect ratio, so an answer at that ratio lines up with the crop', async () => {
+        const atlas = twoChartAtlas();
+        const transfer = await transferred(atlas);
+        // like the real model: it answers at its own supported aspect ratio nearest the request, recomposed (the picture
+        // keeps its proportions and is cropped to that ratio, centred), 1024 px on the long side
+        const atModelAspect: Recording = req => {
+            const img = decodeImageInMemory(req.image.bytes);
+            const name = nearestImageAspectRatio(img.width, img.height), r = IMAGE_MODEL_ASPECT_RATIOS.find(a => a[0] === name)![1];
+            const cw = Math.min(img.width, Math.round(img.height * r)), ch = Math.min(img.height, Math.round(img.width / r));
+            const cx = Math.floor((img.width - cw) / 2), cy = Math.floor((img.height - ch) / 2);
+            const cut = new Uint8Array(cw * ch * 4);
+            for (let y = 0; y < ch; y++) cut.set(img.rgba.subarray(((cy + y) * img.width + cx) * 4, ((cy + y) * img.width + cx + cw) * 4), y * cw * 4);
+            const out = resizeRgba(unsharp({ width: cw, height: ch, rgba: cut }, 1.2), r >= 1 ? 1024 : Math.round(1024 * r), r >= 1 ? Math.round(1024 / r) : 1024);
+            return { bytes: toPng(out), mimeType: 'image/png', modelUsed: IMAGE_MODEL_PRIORITY[0], requestedModels: req.models, skippedModels: [], modelNote: describeModelUsed(IMAGE_MODEL_PRIORITY[0], []) };
+        };
+        const res = await enhanceTransferredAtlas({ atlas, transfer, views: views(), client: replayClient({ 'facade_left/s00': atModelAspect, 'facade_right/s01': atModelAspect }) });
+        expect(res.charts.map(c => c.decision), JSON.stringify(res.charts.map(c => c.metrics))).toEqual(['accepted', 'accepted']);
+        for (const c of res.charts) expect(c.metrics!.edgeNcc!).toBeGreaterThan(0.97);
+    });
+
+    it('does not send a chart whose texels are scattered fragments the gate cannot judge, and says so', async () => {
+        const atlas = twoChartAtlas();
+        const transfer = await transferred(atlas);
+        // the right chart keeps only scattered single texels (every 7th row and column)
+        for (let i = 0; i < SIDE * SIDE; i++) {
+            const x = i % SIDE, y = Math.floor(i / SIDE);
+            if (x >= SIDE / 2 && (x % 7 || y % 7)) transfer.albedo[i * 4 + 3] = 0;
+        }
+        const calls: EnhanceModelRequest[] = [];
+        const res = await enhanceTransferredAtlas({ atlas, transfer, views: views(), client: replayClient({ 'facade_left/s00': answerWith(img => unsharp(img, 1.2)) }, calls) });
+        expect(calls.map(c => c.label)).toEqual(['facade_left/s00']);
+        const right = res.charts.find(c => c.label === 'facade_right/s01')!;
+        expect(right).toMatchObject({ decision: 'skipped', reasonCode: 'enhance_not_gateable' });
+        expect(right.reason).toMatch(/inside its border for the edge gate|fill only/);
     });
 
     it('keeps the charts already accepted when the time budget runs out, and records the timeout once', async () => {

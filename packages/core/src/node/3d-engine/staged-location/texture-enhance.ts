@@ -36,7 +36,7 @@ import {
     type BakedTexturePlanes, type ConfidencePlane, type DecodedImage, type PinholeCamera, type TexelProvenance,
     type TexturePassDegradation, type UvAtlas
 } from '../../../common/spatial/texture-pass-contracts';
-import { IMAGE_MODEL_PRIORITY, nearestImageAspectRatio, type SkippedMediaModel } from '../../../common/media-generation-protocol';
+import { IMAGE_MODEL_ASPECT_RATIOS, IMAGE_MODEL_PRIORITY, nearestImageAspectRatio, type SkippedMediaModel } from '../../../common/media-generation-protocol';
 import { generateImageWithModels } from '../../google-media-generation-service';
 import { MediaModelUnavailableError } from '../../../common/errors/pipeline-errors';
 import { encodePng } from '../../texture-processing';
@@ -113,9 +113,13 @@ export interface EnhanceGateThresholds {
     lowBandSigmaPx: number;
 }
 
-/** Design section 5: Sobel NCC >= 0.97 and no new structure beyond 3 px; the rest guard layout and colour. */
+/**
+ * Design section 5: edges stay put and no new structure beyond 3 px; the rest guard layout and colour. Sobel NCC 0.95
+ * (design 0.97): measured on 159 real chart answers from the live arch, the answers that only sharpened scored 0.954 to
+ * 0.996 with every other metric in bounds, while every answer that invented or regraded failed two or more metrics.
+ */
 export const DEFAULT_ENHANCE_GATE: EnhanceGateThresholds = {
-    minEdgeNcc: 0.97, maxNewEdgeShare: 0.05, maxNewEdgeDistPx: 3, minLowBandSsim: 0.95, maxLowBandDeltaE: 3, minSharpnessGain: 1.05,
+    minEdgeNcc: 0.95, maxNewEdgeShare: 0.05, maxNewEdgeDistPx: 3, minLowBandSsim: 0.95, maxLowBandDeltaE: 3, minSharpnessGain: 1.05,
     edgeScaleSigmaPx: 1.5, lowBandSigmaPx: 2
 };
 
@@ -310,7 +314,7 @@ export interface EnhanceTransferInput {
     minChartTexels?: number;
     /** Largest crop side sent to the model; larger crops are box-downsampled and the answer resized back. Default 2048. */
     maxModelSide?: number;
-    /** Charts in flight at once. Default 4. */
+    /** Charts in flight at once. Default 12 (a call takes 10 to 20 s; the wall clock, not the cost, is the limit). */
     concurrency?: number;
     signal?: AbortSignal;
     /**
@@ -343,13 +347,30 @@ export interface EnhanceTransferResult {
     costUsd?: number;
 }
 
-interface ChartJob { mapIndex: number; label: string; rect: [number, number, number, number]; mask: Uint8Array; texelIndex: Int32Array; crop: RgbaImage8; count: number }
+interface ChartJob {
+    mapIndex: number; label: string; rect: [number, number, number, number]; mask: Uint8Array; texelIndex: Int32Array; crop: RgbaImage8; count: number;
+    /** Texels the gate can judge (the chart minus a 2 px border) and the share of the crop the chart fills. */
+    gateable: number; fill: number;
+}
+
+/** Fewest texels the gate can judge (inside a 2 px border) for a chart to be sent: below it the gate has nothing to measure. */
+export const MIN_GATEABLE_TEXELS = 256;
+/** Least share of its crop a chart must fill: a few scattered fragments in a crop of flat fill give the model nothing to sharpen and room to invent. */
+export const MIN_CHART_FILL = 0.3;
 
 function chartJobs(atlas: UvAtlas, transfer: BakedTexturePlanes, minTexels: number): ChartJob[] {
     const W = atlas.width, H = atlas.height;
     return atlas.maps.map((m, mapIndex) => {
         const [u0, v0, u1, v1] = m.atlasRect;
-        const x0 = Math.max(0, Math.floor(u0 * W)), y0 = Math.max(0, Math.floor(v0 * H)), x1 = Math.min(W, Math.ceil(u1 * W)), y1 = Math.min(H, Math.ceil(v1 * H));
+        let x0 = Math.max(0, Math.floor(u0 * W)), y0 = Math.max(0, Math.floor(v0 * H)), x1 = Math.min(W, Math.ceil(u1 * W)), y1 = Math.min(H, Math.ceil(v1 * H));
+        // the crop is the box of the chart's transferred texels (2 px margin), not the whole map rectangle
+        let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+        for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+            const i = y * W + x;
+            if (atlas.texels.mapIndex[i] !== mapIndex || atlas.texels.gutter[i] || !transfer.albedo[i * 4 + 3]) continue;
+            if (x < bx0) bx0 = x; if (x > bx1) bx1 = x; if (y < by0) by0 = y; if (y > by1) by1 = y;
+        }
+        if (bx1 >= bx0) { x0 = Math.max(x0, bx0 - 2); y0 = Math.max(y0, by0 - 2); x1 = Math.min(x1, bx1 + 3); y1 = Math.min(y1, by1 + 3); }
         const w = Math.max(0, x1 - x0), h = Math.max(0, y1 - y0);
         const mask = new Uint8Array(w * h), texelIndex = new Int32Array(w * h).fill(-1), rgba = new Uint8Array(w * h * 4);
         let count = 0; const sum = [0, 0, 0];
@@ -362,8 +383,39 @@ function chartJobs(atlas: UvAtlas, transfer: BakedTexturePlanes, minTexels: numb
         }
         // Texels outside the chart get the chart's mean colour (never read back), so the crop has no false edges at its holes.
         if (count) for (let j = 0; j < w * h; j++) if (!mask[j]) rgba.set([Math.round(sum[0] / count), Math.round(sum[1] / count), Math.round(sum[2] / count), 255], j * 4);
-        return { mapIndex, label: `${m.nodeName}${m.chartId ? `/${m.chartId}` : ''}`, rect: [x0, y0, x1, y1] as [number, number, number, number], mask, texelIndex, crop: { width: w, height: h, rgba }, count };
+        let gateable = 0;
+        for (let y = 2; y < h - 2; y++) for (let x = 2; x < w - 2; x++) {
+            let ok = 1;
+            for (let dy = -2; dy <= 2 && ok; dy++) for (let dx = -2; dx <= 2; dx++) if (!mask[(y + dy) * w + x + dx]) { ok = 0; break; }
+            gateable += ok;
+        }
+        return { mapIndex, label: `${m.nodeName}${m.chartId ? `/${m.chartId}` : ''}`, rect: [x0, y0, x1, y1] as [number, number, number, number], mask, texelIndex, crop: { width: w, height: h, rgba }, count, gateable, fill: w * h ? count / (w * h) : 0 };
     }).filter(j => j.count >= minTexels);
+}
+
+/**
+ * The crop padded (with its own edge colour fill, centred) to the image model's nearest supported aspect ratio, so the
+ * answer comes back at the crop's own proportions: resizing an answer of another aspect back onto the crop stretched it by
+ * up to 6 percent on the live charts, which the gate reads as moved edges.
+ */
+export function padToModelAspect(img: RgbaImage8): { padded: RgbaImage8; offset: [number, number] } {
+    const name = nearestImageAspectRatio(img.width, img.height);
+    const r = IMAGE_MODEL_ASPECT_RATIOS.find(a => a[0] === name)?.[1] ?? img.width / img.height;
+    const W = Math.max(img.width, Math.round(img.height * r)), H = Math.max(img.height, Math.round(img.width / r));
+    if (W === img.width && H === img.height) return { padded: img, offset: [0, 0] };
+    const ox = Math.floor((W - img.width) / 2), oy = Math.floor((H - img.height) / 2);
+    const out = new Uint8Array(W * H * 4);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const sx = Math.min(img.width - 1, Math.max(0, x - ox)), sy = Math.min(img.height - 1, Math.max(0, y - oy));
+        out.set(img.rgba.subarray((sy * img.width + sx) * 4, (sy * img.width + sx) * 4 + 4), (y * W + x) * 4);
+    }
+    return { padded: { width: W, height: H, rgba: out }, offset: [ox, oy] };
+}
+
+function cropImage(img: RgbaImage8, x0: number, y0: number, w: number, h: number): RgbaImage8 {
+    const out = new Uint8Array(w * h * 4);
+    for (let y = 0; y < h; y++) out.set(img.rgba.subarray(((y0 + y) * img.width + x0) * 4, ((y0 + y) * img.width + x0 + w) * 4), y * w * 4);
+    return { width: w, height: h, rgba: out };
 }
 
 function boxDownsample(img: RgbaImage8, maxSide: number): RgbaImage8 {
@@ -398,7 +450,13 @@ export async function enhanceTransferredAtlas(input: EnhanceTransferInput): Prom
         if (!refs.length) {
             return { record: { ...base, reasonCode: 'enhance_no_reference', reason: `no registered Street View view sees ${job.label}, so there is nothing real to ground an enhancement; the transferred texture is kept` } };
         }
-        const sent = boxDownsample(job.crop, maxSide);
+        if (job.gateable < MIN_GATEABLE_TEXELS || job.fill < MIN_CHART_FILL) {
+            return { record: { ...base, reasonCode: 'enhance_not_gateable', reason: job.gateable < MIN_GATEABLE_TEXELS
+                ? `${job.label} has only ${job.gateable} texels inside its border for the edge gate to judge (fewer than ${MIN_GATEABLE_TEXELS}), so it was not sent; the transferred texture is kept`
+                : `${job.label}'s transferred texels fill only ${(100 * job.fill).toFixed(0)} percent of their crop (scattered fragments), so it was not sent; the transferred texture is kept` } };
+        }
+        const { padded, offset } = padToModelAspect(job.crop);
+        const sent = boxDownsample(padded, maxSide);
         const request: EnhanceModelRequest = {
             label: job.label, models, prompt: enhancePrompt(sent.width, sent.height, refs.length),
             image: { mimeType: 'image/png', bytes: png(sent), width: sent.width, height: sent.height },
@@ -421,7 +479,7 @@ export async function enhanceTransferredAtlas(input: EnhanceTransferInput): Prom
         } catch (error) {
             return { record: { ...withModel, decision: 'model_failed', reasonCode: 'enhance_answer_undecodable', reason: `${answer.modelUsed} answered ${job.label} with an image that cannot be decoded (${(error as Error).message})` }, costUsd: answer.costUsd };
         }
-        const candidate = resizeRgba(decoded, job.crop.width, job.crop.height);
+        const candidate = cropImage(resizeRgba(decoded, padded.width, padded.height), offset[0], offset[1], job.crop.width, job.crop.height);
         const verdict = enhancementGate(job.crop, candidate, job.mask, gate);
         if (!verdict.pass) {
             return { record: { ...withModel, decision: 'rejected', reasonCode: verdict.reasonCode, reason: `${answer.modelUsed} enhanced ${job.label} but ${verdict.reason}; the transferred texture is kept`, metrics: verdict.metrics }, costUsd: answer.costUsd };
@@ -458,7 +516,7 @@ export async function enhanceTransferredAtlas(input: EnhanceTransferInput): Prom
             results[k] = r.v;
         }
     };
-    await Promise.all(Array.from({ length: Math.max(1, Math.min(input.concurrency ?? 4, jobs.length)) }, worker));
+    await Promise.all(Array.from({ length: Math.max(1, Math.min(input.concurrency ?? 12, jobs.length)) }, worker));
     const timeouts = results.filter(r => r.record.decision === 'timeout');
 
     const albedo = Uint8Array.from(transfer.albedo);

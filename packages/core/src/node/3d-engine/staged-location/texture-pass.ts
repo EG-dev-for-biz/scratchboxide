@@ -47,8 +47,8 @@ import { mergeBakedPlanes, transferTilePhoto, type TileTextureSurface } from './
 export const TEXTURE_PASS_VERSION = 'texture-pass/4';
 export const RUNG_PALETTE = 3;
 export const RUNG_GENERATED_PBR = 4;
-/** The enhancement rung's own time budget per layer (the stage's whole budget is 300 s for every layer). */
-export const ENHANCE_BUDGET_MS = 75_000;
+/** The enhancement rung's own time budget per layer (layers run in parallel inside the stage's 600 s). */
+export const ENHANCE_BUDGET_MS = 150_000;
 /** 18% studio grey clay (sb.PbrMaterial.clay()), linear. */
 const CLAY_LINEAR: Vec3 = [0.55, 0.57, 0.60];
 
