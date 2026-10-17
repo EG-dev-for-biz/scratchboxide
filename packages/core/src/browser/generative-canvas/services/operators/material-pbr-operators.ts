@@ -9,6 +9,8 @@
 
 import * as THREE from 'three';
 import type { OperatorDefinition } from './types';
+import type { Scene3DData } from '../../canvas-types';
+import { readStagedBuild, type StagedSceneData } from '../../primitives/scene3d/stagedBuild/stagedBuildState';
 import { resolveOverrideColor } from '../../primitives/scene3d/overrideColor';
 import {
     TileClayProcessor,
@@ -40,7 +42,53 @@ export const PBR_PRESETS: Record<string, any> = {
     ceramic_porcelain: { name: 'Glazed White Porcelain', color: '#f5f2f0', metalness: 0.0, roughness: 0.12, clearcoat: 0.50, clearcoatRoughness: 0.02 }
 };
 
+/** What switching a staged build between clay and its textured twins did (sb_set_staged_material_mode). */
+export interface StagedMaterialModeResult {
+    mode: 'clay' | 'textured';
+    provenance?: boolean;
+    /** Layers in the scene with a textured twin (they switch; the rest stay clay). */
+    texturedLayers: number;
+    layers: number;
+    texturePass?: { status: string; layersDone: number; layersTotal: number };
+}
+
+/**
+ * Sets how a staged location build is shown: stagedBuild.materialMode ('clay' | 'textured') and, optionally, the
+ * provenance view (stagedBuildView.provenance). Scene data only: no layer, object or geometry is touched; the viewport
+ * loads each layer's textured twin and crossfades to it (or back), and layers without one stay clay. Mutates `data`.
+ */
+export function applyStagedMaterialMode(data: Scene3DData, params: { mode?: unknown; provenance?: unknown }): StagedMaterialModeResult {
+    const mode = params.mode;
+    if (mode !== 'clay' && mode !== 'textured') throw new Error(`mode must be "clay" or "textured" (got ${JSON.stringify(mode)}).`);
+    if (params.provenance !== undefined && typeof params.provenance !== 'boolean') throw new Error(`provenance must be true or false (got ${JSON.stringify(params.provenance)}).`);
+    const staged = readStagedBuild(data);
+    if (!staged) throw new Error('The active scene is not a staged location build (no stagedBuild): stage a place with google_3d_tiles_get_clay first.');
+    const scene = data as StagedSceneData;
+    scene.stagedBuild = { ...staged, materialMode: mode };
+    if (typeof params.provenance === 'boolean') scene.stagedBuildView = { ...(scene.stagedBuildView ?? {}), provenance: params.provenance };
+    const live = staged.layers.filter(l => !l.retired);
+    const tp = staged.texturePass;
+    return {
+        mode,
+        ...(typeof params.provenance === 'boolean' ? { provenance: params.provenance } : {}),
+        texturedLayers: live.filter(l => l.textured).length,
+        layers: live.length,
+        ...(tp ? { texturePass: { status: tp.status, layersDone: tp.layersDone, layersTotal: tp.layersTotal } } : {})
+    };
+}
+
 export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
+    {
+        name: 'sb_set_staged_material_mode',
+        category: 'materials_pbr',
+        description: 'Shows a staged location build in studio clay (the default) or with its photo-inferred textures (each layer that has a textured twin crossfades to it; the rest stay clay). Optional provenance: true shades textured layers by where each texel came from. Changes no geometry.',
+        parametersSchema: { mode: { type: 'string', enum: ['clay', 'textured'] }, provenance: { type: 'boolean' } },
+        execute: (ctx, params: { mode: 'clay' | 'textured'; provenance?: boolean }) => {
+            const result = applyStagedMaterialMode(ctx.getSceneData(), params);
+            ctx.recordState(`Staged build: ${result.mode}`);
+            return result;
+        }
+    },
     {
         name: 'sb_create_material',
         category: 'materials_pbr',
