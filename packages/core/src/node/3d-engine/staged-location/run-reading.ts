@@ -48,6 +48,8 @@ export const MAX_RUN_VIEW_DISTANCE_M = 70;
 /** A view whose line of sight meets the face more obliquely than this (cosine of the angle to the normal) is not used. */
 export const MIN_FACE_COSINE = 0.35;
 export const RUN_READ_TIMEOUT_MS = 150_000;
+/** The whole pass is given this long once the crops are in: a reading still out when it ends is left as the wide reading had it. */
+export const RUN_PASS_BUDGET_MS = 300_000;
 const ASPECTS: Array<{ name: GroundingAspectRatio; ratio: number }> = [
     { name: 'RATIO_1X1', ratio: 1 }, { name: 'RATIO_4X3', ratio: 4 / 3 }, { name: 'RATIO_3X4', ratio: 3 / 4 }, { name: 'RATIO_16X9', ratio: 16 / 9 }
 ];
@@ -191,8 +193,9 @@ export interface RunReadingInput {
     chain: VisionModelChain<string>;
     signal?: AbortSignal;
     onProgress?: (message: string) => void;
-    /** Parallel readings at once. */
+    /** Parallel readings at once (default: all). */
     concurrency?: number;
+    budgetMs?: number;
 }
 
 export interface RunReadingResult {
@@ -254,7 +257,10 @@ export async function readRuns(input: RunReadingInput): Promise<RunReadingResult
     }
 
     // 3. one small focused reading per target, several at a time
-    const results = await pool(planned, input.concurrency ?? 4, async ({ t }) => {
+    const budget = new AbortController();
+    const budgetTimer = setTimeout(() => budget.abort(new Error('budget')), input.budgetMs ?? RUN_PASS_BUDGET_MS);
+    const readSignal = input.signal ? AbortSignal.any([input.signal, budget.signal]) : budget.signal;
+    const results = await pool(planned, input.concurrency ?? Math.max(1, planned.length), async ({ t }) => {
         const mine = wanted.filter(w => w.t === t).map(w => imageFor.get(w.view)).filter((x): x is EvidenceImage => !!x);
         if (!mine.length) return undefined;
         const slot = slotById.get(t.slotId);
@@ -281,17 +287,19 @@ export async function readRuns(input: RunReadingInput): Promise<RunReadingResult
         const length = 'edge' in slot.host ? slot.host.edge.carrier.lengthM : undefined;
         try {
             const reading = await readOrnament({
-                fit, fitSha256: input.fitSha256, evidence, chain: input.chain, ...(input.signal ? { signal: input.signal } : {}),
+                fit, fitSha256: input.fitSha256, evidence, chain: input.chain, signal: readSignal,
                 timeoutMs: RUN_READ_TIMEOUT_MS, located: [t.located], offer, focus: { task: focusTask(t, length) }
             });
             return { t, reading, refs: evidence.map(e => e.ref) };
         } catch (err) {
             if (input.signal?.aborted) throw err;
+            if (budget.signal.aborted) { report.skipped.push({ id: t.id, kind: t.located.kind, slotId: t.slotId, reason: `the focused readings' time budget (${Math.round((input.budgetMs ?? RUN_PASS_BUDGET_MS) / 1000)} s) ran out before this one answered` }); return undefined; }
             report.skipped.push({ id: t.id, kind: t.located.kind, slotId: t.slotId, reason: `the focused reading gave nothing usable (${err instanceof VisionStageError ? err.message : (err as Error).message})` });
             return undefined;
         }
     });
 
+    clearTimeout(budgetTimer);
     // 4. merge: ids made unique, the focused reading replaces whatever the wide reading put on the same stretch of the same slot
     let k = 0;
     const merged: OrnamentElement[] = [];
