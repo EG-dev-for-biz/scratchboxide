@@ -161,6 +161,10 @@ describe('the checks of §5.5, one by one', () => {
         const fat: CompactElement = { ...CORNICE, op: { sweep: { t: [0, 1000], offset: [0, 300], profile: [0, 0, 180, 0, 180, 90] } } };
         expect(check([fat]).problems).toEqual(['element 0: rule 6: the profile leaves the edge envelope of S02 at 1 point(s)']);
     });
+    it('rule 6: a swept profile inside the wall (out < 0 and up < 0 of an edge section) is sent back', () => {
+        const sunk: CompactElement = { ...CORNICE, op: { sweep: { t: [0, 1000], offset: [0, 0], profile: [-50, -100, 100, -100, 100, 0, -50, 0] } } };
+        expect(check([sunk]).problems.join(' ')).toMatch(/rule 6: \d+ profile point\(s\) of the sweep on S02 lie inside the wall/);
+    });
     it('rule 7: a repeat that does not fit its edge', () => {
         const long: CompactElement = { ...CORNICE, op: { replicate: { seed: { revolve: { at: [0, 200], axis: 'n', profile: [0, 0, 100, 0, 0, 60] } }, along: [0, 5000, 7] } } };
         expect(check([long]).problems).toEqual(['element 0: rule 7: the element runs past the 26.30 m edge S02']);

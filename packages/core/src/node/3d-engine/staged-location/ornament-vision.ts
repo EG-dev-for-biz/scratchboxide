@@ -52,7 +52,7 @@ import { anchorElements, type AnchorNote } from './ornament-anchor';
 import { expandElements, expandEvidence, type ExpandedElement } from './ornament-expand';
 import { surveyHintLines, type LocatedElement } from './survey-detail';
 
-export const ORNAMENT_PROMPT_VERSION = 'ornament/v2';
+export const ORNAMENT_PROMPT_VERSION = 'ornament/v3';
 /** Thinking tokens asked for: LOW on Gemini 4 (thinkingConfigFor), a 512-token budget on 3.x. */
 export const ORNAMENT_THINKING_BUDGET = 512;
 export const ORNAMENT_MAX_OUTPUT_TOKENS = 16_384;
@@ -156,7 +156,7 @@ export function ornamentPromptText(fit: StructureFit, evidence: EvidenceImageRef
     const rules = [
         '1. Report only elements you can see in an image that shows their slot. Cite each with [image index, y0, x0, y1, x1] in 0–1000.',
         '2. Build each element with one operator: sweep (a profile along the slot\'s edge, or along a path in the slot), revolve (a profile around an axis, with K lobes), replicate (one seed repeated along the edge or over a grid), or relief (a raised or recessed region). Use integer millimetres in the slot\'s own axes: u along the surface to the right, v up, n out of the surface. Along an edge, t is per-mille of its length.',
-        '3. Do not give a size smaller than the image you cite can show. Depths are estimates from shading, shadows or silhouettes. Keep them within the slot bounds, keep edge profiles inside the edge envelope, and say how you judged them (depthBasis).',
+        '3. In an edge section [out, up], the quarter with out < 0 and up < 0 is inside the wall: a swept profile stays at out >= 0 or up >= 0. Do not give a size smaller than the image you cite can show. Depths are estimates from shading, shadows or silhouettes. Keep them within the slot bounds, keep edge profiles inside the edge envelope, and say how you judged them (depthBasis).',
         '4. For repeats, count what you see. If a row runs out of view, give the visible count and set beyondView.',
         '5. Figures and lettering are a low relief outline only, at most 50 mm deep.',
         '6. Shadows, stains, trees, people, vehicles and statues standing in front of a wall are not ornament on that wall. Do not add anything you know about this building but cannot see in these images.',
@@ -456,6 +456,9 @@ export function checkReply(text: string, finishReason: string | undefined, fit: 
                 if (!(c.t0 < c.t1)) add(x.replyIndex, `rule 5: t must run forward along the edge (t0 ${Math.round(c.t0 * 1000)} ≥ t1 ${Math.round(c.t1 * 1000)})`);
                 const outside = spec.sweep.profile.outer.filter(p => !pointInPolygon(p[0] + c.offset[0], p[1] + c.offset[1], e.envelope, 0.005));
                 if (outside.length) add(x.replyIndex, `rule 6: the profile leaves the edge envelope of ${slot.id} at ${outside.length} point(s)`);
+                // an edge section is [out of the face, up]: the part with both below zero is the wall itself, and a swept shell there is inside the fitted solid
+                const inWall = spec.sweep.profile.outer.filter(p => p[0] + c.offset[0] < -0.005 && p[1] + c.offset[1] < -0.005);
+                if (inWall.length) add(x.replyIndex, `rule 6: ${inWall.length} profile point(s) of the sweep on ${slot.id} lie inside the wall (out < 0 and up < 0 is the fitted solid); keep a swept profile at out >= 0 or up >= 0`);
             }
             if (pts.some(p => p[0] < -TOL || p[0] > L + TOL)) add(x.replyIndex, `rule 7: the element runs past the ${L.toFixed(2)} m edge ${slot.id}`);
         }
