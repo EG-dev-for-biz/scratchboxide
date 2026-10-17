@@ -181,6 +181,18 @@ describe('anchoring the measurements to the scan', () => {
         const far = expand([small(9.9)]);
         expect(anchorElements(far, fit, []).notes).toEqual([]);
     });
+
+    it('after the one re-read, a medallion 0.7 m outside its slot is moved back in with the error labelled; the first look leaves it alone', () => {
+        const at = (u: number) => compact({ slot: 'S01', op: { revolve: { at: [u * 1000, 15000], axis: 'n', profile: [0, 0, 300, 0, 300, 100, 0, 100] } } });
+        const first = expand([at(8.4)]);
+        expect(anchorElements(first, fit, []).notes).toEqual([]);
+        const last = expand([at(8.4)]);
+        const r = anchorElements(last, fit, [], undefined, true);
+        expect(r.notes[0]).toMatchObject({ kind: 'clipped-to-slot' });
+        expect(r.notes[0].errorM).toBeGreaterThan(0.31);
+        expect(last[0].element.provenance.note).toMatch(/off by more than the 0\.31 m tolerance/);
+        expect((last[0].element.spec as any).revolve.axisOrigin[0]).toBeLessThanOrEqual(7.7 + 1e-6);
+    });
 });
 
 describe('the whole check: a reply that used to fail on "outside the slot" and on a count x pitch the scan contradicts', () => {

@@ -133,7 +133,7 @@ export const STAGES = {
     vision: { order: -1, title: 'Reading the photos', budgetMs: 2 * ORNAMENT_VISION_TIMEOUT_MS + 10_000 },
     correct: { order: 3, title: 'Photo corrections', budgetMs: 30_000 },
     detail: { order: 4, title: 'Photo-inferred detail', budgetMs: 20_000 },
-    figures: { order: 4, title: 'Figures', budgetMs: EVIDENCE_DISCOVERY_ALLOWANCE_MS + SURVEY_IMAGE_TIMEOUT_MS + FIGURE_VISION_TIMEOUT_MS + 4 * 120_000 + 30_000 },
+    figures: { order: 4, title: 'Figures', budgetMs: EVIDENCE_DISCOVERY_ALLOWANCE_MS + SURVEY_IMAGE_TIMEOUT_MS + 2 * FIGURE_VISION_TIMEOUT_MS + 4 * 120_000 + 30_000 },
     trees: { order: 5, title: 'Trees', budgetMs: 300_000 }
 } as const;
 export type StageId = keyof typeof STAGES;

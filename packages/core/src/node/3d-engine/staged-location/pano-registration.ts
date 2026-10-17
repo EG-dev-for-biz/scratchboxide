@@ -128,8 +128,23 @@ function solve(A: number[][], b: number[]): number[] {
     return x;
 }
 
-/** Solves every pano's eye shift (x, z) and yaw from the correspondences. Panos that appear in no pair keep the nominal pose. */
+/** A pano position is good to a few metres and its heading to a degree or two: a solved shift past 2.5 sigma of that is a bad match, not a pose. */
+export const MAX_PLAUSIBLE_SHIFT_M = 5;
+export const MAX_PLAUSIBLE_YAW_DEG = 5;
+
+/** Solves the poses; a pano whose solved shift is implausible is set aside (with the pairs that name it) and the rest are solved again. */
 export function registerPanos(corrs: Correspondence[], faces: CastFace[], opts: { iterations?: number } = {}): Registration {
+    let set = corrs;
+    for (let round = 0; round < 4; round++) {
+        const r = solvePanos(set, faces, opts);
+        const bad = r.perPano.filter(p => Math.hypot(p.dxM, p.dzM) > MAX_PLAUSIBLE_SHIFT_M || Math.abs(p.dyawDeg) > MAX_PLAUSIBLE_YAW_DEG).map(p => p.panoId);
+        if (!bad.length) return corrs === set ? r : { ...r, pairs: [...r.pairs, ...corrs.filter(c => !set.includes(c)).map(c => ({ id: c.id, residualM: Infinity, beforeM: Infinity, used: false }))], rejected: r.rejected + (corrs.length - set.length) };
+        set = set.filter(c => !bad.includes(c.a.view.panoId) && !bad.includes(c.b.view.panoId));
+    }
+    return solvePanos(set, faces, opts);
+}
+
+function solvePanos(corrs: Correspondence[], faces: CastFace[], opts: { iterations?: number } = {}): Registration {
     const nominal: Corrections = new Map();
     const before = corrs.map(c => rmsPair(c, nominal, faces));
     // wrong matches (the same word on a different thing) are not pose errors

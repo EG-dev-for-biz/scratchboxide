@@ -357,7 +357,18 @@ export function parseFigureReply(text: string, finishReason: string | undefined,
 
 export interface ReadFiguresInput { images: FigureImage[]; chain: VisionModelChain<string>; signal?: AbortSignal; onProgress?: (m: string) => void; timeoutMs?: number }
 
+/** One call, and one more when the reply came back unreadable (cut off or not JSON): the model's long replies fail that way now and then, and a second try costs one call. */
 export async function readFigures(input: ReadFiguresInput): Promise<{ parsed: ParsedFigures; model: VisionModelUse }> {
+    try {
+        return await readFiguresOnce(input);
+    } catch (err) {
+        if (input.signal?.aborted || !/not valid JSON|cut off|ended with|no "figures"/.test((err as Error).message)) throw err;
+        input.onProgress?.(`the reply could not be read (${(err as Error).message.slice(0, 80)}); asking once more`);
+        return readFiguresOnce(input);
+    }
+}
+
+async function readFiguresOnce(input: ReadFiguresInput): Promise<{ parsed: ParsedFigures; model: VisionModelUse }> {
     const timeoutMs = input.timeoutMs ?? FIGURE_VISION_TIMEOUT_MS;
     const own = new AbortController();
     const timer = setTimeout(() => own.abort(Object.assign(new Error(`the vision call took longer than ${Math.round(timeoutMs / 1000)} s`), { name: 'TimeoutError' })), timeoutMs);

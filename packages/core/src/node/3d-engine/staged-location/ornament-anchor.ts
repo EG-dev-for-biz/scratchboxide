@@ -188,14 +188,16 @@ export function anchorElements(
             if (outside.length) {
                 const b = bbox(poly);
                 const over = Math.max(...outside.map(p => Math.max(b.u0 - p[0], p[0] - b.u1, b.v0 - p[1], p[1] - b.v1, 0)));
-                if (over > 0 && over <= toleranceM) {
+                // after the one re-read, an element that still runs out of its slot by up to a metre is moved back in, and says so (the slot is measured, the box is a photo's)
+                const reach = final ? Math.max(toleranceM, 1.0) : toleranceM;
+                if (over > 0 && over <= reach) {
                     const fp = bbox(footprint(spec, slot));
                     // shift the element back into the slot's bounding box by the overshoot, then keep it only if it is then inside the region
                     const du = fp.u0 < b.u0 ? b.u0 - fp.u0 : fp.u1 > b.u1 ? b.u1 - fp.u1 : 0;
                     const dv = fp.v0 < b.v0 ? b.v0 - fp.v0 : fp.v1 > b.v1 ? b.v1 - fp.v1 : 0;
                     const moved = shiftSpec(spec, du, dv);
                     if (moved && footprint(spec, slot).every(p => pointInPolygon(p[0], p[1], poly))) {
-                        note(x, { kind: 'clipped-to-slot', errorM: r3(over), before: 'ran outside the slot', after: `moved ${mm(du)} in u and ${mm(dv)} in v`, note: `the element ran ${r3(over)} m outside slot ${slot.id}; moved back inside it (within ${toleranceM} m)` });
+                        note(x, { kind: 'clipped-to-slot', errorM: r3(over), before: 'ran outside the slot', after: `moved ${mm(du)} in u and ${mm(dv)} in v`, note: over <= toleranceM ? `the element ran ${r3(over)} m outside slot ${slot.id}; moved back inside it (within ${toleranceM} m)` : `the element ran ${r3(over)} m outside slot ${slot.id}, beyond the ${toleranceM} m tolerance, after the re-read; moved back inside it and the error is carried in this label` });
                     } else if (moved) shiftSpec(spec, -du, -dv);
                 }
             }
