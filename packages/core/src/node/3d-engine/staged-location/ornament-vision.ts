@@ -450,6 +450,7 @@ export function checkReply(text: string, finishReason: string | undefined, fit: 
         } else {
             const e = slot.host.edge;
             const L = e.carrier.lengthM;
+            if (spec.operator === 'relief') add(x.replyIndex, `rule 5: a relief needs a surface slot; ${slot.id} is an edge (use sweep or replicate along it)`);
             if (spec.operator === 'sweep' && 'slot' in spec.sweep.carrier) {
                 const c = spec.sweep.carrier.slot;
                 if (!(c.t0 < c.t1)) add(x.replyIndex, `rule 5: t must run forward along the edge (t0 ${Math.round(c.t0 * 1000)} ≥ t1 ${Math.round(c.t1 * 1000)})`);

@@ -151,6 +151,10 @@ describe('the checks of §5.5, one by one', () => {
     it('rule 5: outside the slot', () => {
         expect(check([{ ...ROUNDEL, op: { relief: { box: [0, 0, 1000, 1000], depth: 50 } } }]).problems).toEqual(['element 0: rule 5: the element runs outside slot S01']);
     });
+    it('rule 5: a relief in an edge slot is sent back (the builder needs a surface slot for it)', () => {
+        const bad: CompactElement = { ...CORNICE, op: { relief: { box: [0, 0, 1000, 1000], depth: 50 } } };
+        expect(check([bad]).problems.join(' ')).toContain('rule 5: a relief needs a surface slot; S02 is an edge');
+    });
     it('rule 6: beyond the slot\'s depth bounds, or outside the edge envelope', () => {
         const deep: CompactElement = { slot: 'S03', op: { relief: { box: [1000, 1000, 2000, 2000], depth: -400 } }, conf: 60, depthBasis: 'x', ev: [[1, 500, 400, 700, 600]] };
         expect(check([deep]).problems).toEqual(['element 0: rule 6: 400 mm recess is more than slot S03 allows (300 mm)']);

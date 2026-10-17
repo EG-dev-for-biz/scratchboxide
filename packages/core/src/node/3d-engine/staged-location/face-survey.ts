@@ -47,7 +47,7 @@ export const SURVEY_FOV_MIN_DEG = 55;
 export const SURVEY_FOV_MAX_DEG = 70;
 export const SURVEY_IMAGE_TIMEOUT_MS = 30_000;
 /** One call, so one limit: the model reads four images and writes a reply of a few thousand tokens. */
-export const SURVEY_VISION_TIMEOUT_MS = 90_000;
+export const SURVEY_VISION_TIMEOUT_MS = 240_000;
 /** A pano must stand within this angle of a face's outward normal. */
 export const SURVEY_MAX_OFF_NORMAL_DEG = 80;
 /** Share of a face a pano must see to survey it. */
