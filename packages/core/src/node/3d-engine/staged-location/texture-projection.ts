@@ -77,6 +77,12 @@ export interface ProjectionBakeOptions {
     depthTolerancePerMeter?: number;
     /** Distance to a depth discontinuity under which a sample is dropped, px. Default 3. */
     edgeGuardPx?: number;
+    /**
+     * Require the occluder to show a surface at the texel: drop a sample when the occluder depth at its pixel is empty
+     * or farther than z + baseM + perMeter * z (the camera sees past the texel). Use with a scan-only occluder, so a
+     * fitted face over an opening is not painted with the sky or the background seen through it. Off by default.
+     */
+    observedSurface?: { baseM: number; perMeter: number };
     /** Huber threshold (CIE76 Delta E) and the view count it starts at. Default 10 and 3. */
     huberDeltaE?: number;
     huberMinViews?: number;
@@ -169,7 +175,7 @@ const smoothstep01 = (t: number): number => { const x = Math.min(1, Math.max(0, 
 
 /** Steps 1 to 3 for one view: its visible samples with weights. */
 function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: DepthMap, opts: Required<Pick<ProjectionBakeOptions,
-    'featherPx' | 'minCosIncidence' | 'depthToleranceBaseM' | 'depthTolerancePerMeter' | 'edgeGuardPx'>>): RawSamples {
+    'featherPx' | 'minCosIncidence' | 'depthToleranceBaseM' | 'depthTolerancePerMeter' | 'edgeGuardPx'>> & Pick<ProjectionBakeOptions, 'observedSurface'>): RawSamples {
     const { atlas } = input;
     const cam = view.camera;
     const out: RawSamples = { texel: [], rgb: [], logW: [], wAbs: [] };
@@ -213,6 +219,13 @@ function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: De
         const tol = opts.depthToleranceBaseM + opts.depthTolerancePerMeter * z;
         const dc = depthAt(px, py);
         if (dc < EMPTY_DEPTH && dc < z - tol) continue;
+        // observed surface: the photo must show a surface where the texel is. When the occluder (the scan) at this pixel is
+        // much farther than the texel, or there is nothing (sky), the camera sees PAST the texel: a face the fit placed
+        // where the scan has no surface (an arch opening, a gap), and the pixel holds the sky or what stands behind it.
+        if (opts.observedSurface) {
+            const far = opts.observedSurface.baseM + opts.observedSurface.perMeter * z;
+            if (!(dc < EMPTY_DEPTH) || dc > z + far) continue;
+        }
         // depth-edge guard: the occluder depth at +-g px must be where the texel's own tangent plane predicts it
         // (so a steeply tilted wall is not an edge, and a thing standing proud of it is, whatever the angle)
         const cHas = dc < EMPTY_DEPTH;
@@ -293,7 +306,8 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
         minCosIncidence: o.minCosIncidence ?? 0.15,
         depthToleranceBaseM: o.depthToleranceBaseM ?? 0.20,
         depthTolerancePerMeter: o.depthTolerancePerMeter ?? 0.02,
-        edgeGuardPx: o.edgeGuardPx ?? 3
+        edgeGuardPx: o.edgeGuardPx ?? 3,
+        ...(o.observedSurface ? { observedSurface: o.observedSurface } : {})
     };
     const huberK = o.huberDeltaE ?? 10, huberMin = o.huberMinViews ?? 3;
     const bandSigmas = o.bandSigmasTexels ?? [1, 2, 4];

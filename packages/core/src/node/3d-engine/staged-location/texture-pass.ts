@@ -44,9 +44,11 @@ import { buildUvAtlas, type LaidOutUvAtlas } from './texture-uv';
 import { mergeBakedPlanes, transferTilePhoto, type TileTextureSurface } from './tile-texture-transfer';
 
 /** Part of every texture cache key: a change to the pass's maths is a new version. */
-export const TEXTURE_PASS_VERSION = 'texture-pass/1';
+export const TEXTURE_PASS_VERSION = 'texture-pass/2';
 export const RUNG_PALETTE = 3;
 export const RUNG_GENERATED_PBR = 4;
+/** The enhancement rung's own time budget per layer (the stage's whole budget is 300 s for every layer). */
+export const ENHANCE_BUDGET_MS = 75_000;
 /** 18% studio grey clay (sb.PbrMaterial.clay()), linear. */
 const CLAY_LINEAR: Vec3 = [0.55, 0.57, 0.60];
 
@@ -64,8 +66,10 @@ export interface TexturePassSources {
     /** Registered grounding views (C); empty when there are none, with the reason. */
     views: ProjectionView[];
     viewsUnavailable?: string;
-    /** Occluder for C's depth test (the remeshed scan plus the fitted solid). */
+    /** Occluder for C's depth test: the scan (the remeshed layer). */
     occluder?: RenderMesh3D;
+    /** C's observed-surface check against the occluder (texture-projection.ts ProjectionBakeOptions.observedSurface). */
+    observedSurface?: { baseM: number; perMeter: number };
     /** De-light options for C (place; solar per view when its capture time is known). */
     delight?: ProjectionDelightOptions;
     /** The photo-textured tile surface (D); absent with the reason. */
@@ -74,7 +78,7 @@ export interface TexturePassSources {
     /** Registration residual (m) for D's distance gate max(0.25, 2 * residual). */
     registrationResidualM?: number;
     /** Optional model enhancement of D's texels; absent = the rung is not attempted, with the reason. */
-    enhance?: { client: EnhanceModelClient; models?: string[] };
+    enhance?: { client: EnhanceModelClient; models?: string[]; budgetMs?: number };
     enhanceUnavailable?: string;
     /** The survey's measured palettes. */
     palette: PaletteFace[];
@@ -245,7 +249,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
         try {
             const res = await bakeStreetViewProjection({
                 atlas, views: src.views, depthFor: depthForMesh(src.occluder), paletteLab: src.palette.length ? paletteLab(src.palette) : undefined,
-                signal: src.signal, options: { ...(src.delight ? { delight: src.delight } : {}) }
+                signal: src.signal, options: { ...(src.delight ? { delight: src.delight } : {}), ...(src.observedSurface ? { observedSurface: src.observedSurface } : {}) }
             });
             planes = res;
             degradations.push(...res.degradations);
@@ -283,9 +287,16 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
             if (src.enhance) {
                 const te = Date.now();
                 progress('enhancing the transferred tile texels with an image model (edge-gated)');
+                // the enhancement has its own time budget inside the stage's: past it the unenhanced transfer stands
+                const budgetMs = src.enhance.budgetMs ?? ENHANCE_BUDGET_MS;
+                const stop = new AbortController();
+                let timedOut = false;
+                const timer = setTimeout(() => { timedOut = true; stop.abort(Object.assign(new Error(`the enhancement passed its ${Math.round(budgetMs / 1000)} s budget`), { name: 'TimeoutError' })); }, budgetMs);
+                const onOuter = () => stop.abort(src.signal?.reason);
+                src.signal?.addEventListener('abort', onOuter, { once: true });
                 try {
                     const refs: EnhanceReferenceView[] = src.views.map(v => ({ panoId: v.panoId, camera: v.camera, image: v.image }));
-                    const res = await enhanceTransferredAtlas({ atlas, transfer, views: refs, client: src.enhance.client, ...(src.enhance.models ? { models: src.enhance.models } : {}), signal: src.signal });
+                    const res = await enhanceTransferredAtlas({ atlas, transfer, views: refs, client: src.enhance.client, ...(src.enhance.models ? { models: src.enhance.models } : {}), signal: stop.signal });
                     const before = new Set(transfer.degradations);
                     degradations.push(...res.planes.degradations.filter(d => !before.has(d)));
                     transfer = res.planes;
@@ -295,9 +306,13 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
                         failed: res.charts.filter(c => c.decision === 'model_failed').length, modelsUsed: res.modelsUsed
                     };
                 } catch (err) {
-                    if ((err as Error)?.name === 'AbortError' || src.signal?.aborted) throw err;
-                    degradations.push({ stage: 'enhance', reasonCode: 'enhance_failed', layerKey: layer.layerKey,
-                        reason: `The model enhancement failed (${(err as Error)?.message ?? String(err)}); the de-lit tile transfer stands unenhanced.` });
+                    if (src.signal?.aborted) throw err;
+                    degradations.push(timedOut
+                        ? { stage: 'enhance', reasonCode: 'enhance_timeout', layerKey: layer.layerKey, reason: `The model enhancement did not finish within its ${Math.round(budgetMs / 1000)} s budget; the de-lit tile transfer stands unenhanced.` }
+                        : { stage: 'enhance', reasonCode: 'enhance_failed', layerKey: layer.layerKey, reason: `The model enhancement failed (${(err as Error)?.message ?? String(err)}); the de-lit tile transfer stands unenhanced.` });
+                } finally {
+                    clearTimeout(timer);
+                    src.signal?.removeEventListener('abort', onOuter);
                 }
                 timingsMs.enhance = Date.now() - te;
             } else if (src.enhanceUnavailable) {
@@ -343,6 +358,9 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
     const twin = writeTexturedTwinGlb({ clayGlb: layer.clayGlb, atlas, planes });
     timingsMs.write = Date.now() - t;
     const worst = m.ladderRung;
+    // one entry per distinct cause (a pano seen in several close-ups reports the same cause once per image)
+    const seen = new Set<string>();
+    const unique = degradations.filter(d => { const k = `${d.stage}|${d.reasonCode}|${d.reason}`; if (seen.has(k)) return false; seen.add(k); return true; });
     return {
         layerKey: layer.layerKey, glb: twin.glb,
         bundle: {
@@ -351,7 +369,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
         },
         rungShares: m.rungShares, rungTexels: m.rungTexels, atlasTexels: m.total,
         atlas: { width: atlas.width, height: atlas.height, texelsPerMeter: atlas.layout.stats.texelsPerMeter, charts: atlas.layout.stats.charts, islands: atlas.layout.stats.islands },
-        degradations, ...(projection ? { projection } : {}), ...(tileMethod ? { tileMethod } : {}), ...(enhance ? { enhance } : {}),
+        degradations: unique, ...(projection ? { projection } : {}), ...(tileMethod ? { tileMethod } : {}), ...(enhance ? { enhance } : {}),
         modelsUsed: [...new Set(modelsUsed)], timingsMs
     };
 }

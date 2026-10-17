@@ -7,10 +7,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Vec3 } from '../src/common/spatial/staged-location-contracts';
 import { packConfidenceTexel, unpackConfidenceTexel, type BakedTexturePlanes } from '../src/common/spatial/texture-pass-contracts';
-import { poseSigmaTerm, POSE_SIGMA_SCALE_M } from '../src/node/3d-engine/staged-location/texture-projection';
-import { poseQualityFromResidual } from '../src/node/3d-engine/staged-location/texture-projection-views';
+import { bakeStreetViewProjection, poseSigmaTerm, POSE_SIGMA_SCALE_M } from '../src/node/3d-engine/staged-location/texture-projection';
+import { linearToSrgb255, SRGB8_TO_LINEAR } from '../src/common/spatial/photogrammetric-delight';
+import { depthForMesh, poseQualityFromResidual } from '../src/node/3d-engine/staged-location/texture-projection-views';
 import { loadTileSurface, TILE_CONFIDENCE_CAP, transferTilePhoto } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
-import { emptyConfidencePlane, FACADE, facadeAlbedo, facadeAtlas } from './helpers/texture-pass-fixtures';
+import { emptyConfidencePlane, FACADE, facadeAlbedo, facadeAtlas, facadeViews } from './helpers/texture-pass-fixtures';
 import { buildTileGlb, facadeTileSheet } from './helpers/tile-photo-glb';
 
 const SIDE = 64;
@@ -76,5 +77,53 @@ describe('tile fusion keeps Street View unless the tile is more confident AND sh
         // a near-zero-weight but sharper Street View texel is kept: the tile is more confident but not sharper there
         expect(keptSharp / sharpN).toBeGreaterThan(0.95);
         for (let i = 0; i < SIDE * SIDE; i++) if (tile.albedo[i * 4 + 3]) expect(unpackConfidenceTexel(tile.confidence, i).weight01).toBeLessThanOrEqual(TILE_CONFIDENCE_CAP + 1e-9);
+    });
+});
+
+describe('tile exposure match and the observed-surface check', () => {
+    it('matches the tile photo exposure to the Street View texels where both cover', async () => {
+        const atlas = facadeAtlas(SIDE);
+        // the tile photo is 60 percent as bright (linear) as the Street View texels of the same surface
+        const dim = (u: number, v: number): Vec3 => facadeAlbedo(u, v).map(c => linearToSrgb255(SRGB8_TO_LINEAR[Math.round(c)] * 0.6)) as Vec3;
+        const surface = loadTileSurface(buildTileGlb([facadeTileSheet(0.05, dim)]), { delight: false });
+        const existing: BakedTexturePlanes = {
+            layerKey: 'fit', width: SIDE, height: SIDE, albedo: new Uint8Array(SIDE * SIDE * 4), confidence: emptyConfidencePlane(SIDE, SIDE),
+            provenance: [{ source: 'street-view-projection', label: 'photo-inferred', method: 'synthetic', coverage: 0.5 }], degradations: []
+        };
+        // Street View holds the left half (multi-view, never replaced); the right half is uncovered for the tile to fill
+        for (let i = 0; i < SIDE * SIDE; i++) {
+            if (i % SIDE >= SIDE / 2) continue;
+            const c = facadeAlbedo(...texelUv(i));
+            existing.albedo.set([Math.round(c[0]), Math.round(c[1]), Math.round(c[2]), 255], i * 4);
+            packConfidenceTexel(existing.confidence, i, 0, 0.9, 0);
+        }
+        const run = (matchExposure: boolean) => transferTilePhoto({ atlas, tileSample: surface.sample, surface, maxDistanceM: 0.25, existing, matchExposure } as any);
+        const matched = await run(true), raw = await run(false);
+        let errMatched = 0, errRaw = 0, n = 0;
+        for (let i = 0; i < SIDE * SIDE; i++) {
+            if (i % SIDE < SIDE / 2 + 2 || !matched.albedo[i * 4 + 3]) continue;
+            const t = facadeAlbedo(...texelUv(i));
+            for (let c = 0; c < 3; c++) { errMatched += Math.abs(matched.albedo[i * 4 + c] - t[c]); errRaw += Math.abs(raw.albedo[i * 4 + c] - t[c]); }
+            n += 3;
+        }
+        expect(errRaw / n).toBeGreaterThan(15);
+        expect(errMatched / n).toBeLessThan(3);
+        expect(matched.provenance[0].method).toMatch(/exposure matched to the Street View texels \(linear gain 1\.6\d\/1\.6\d\/1\.6\d\)/);
+    });
+
+    it('drops samples of texels the photo sees past (a face where the scan has no surface)', async () => {
+        const atlas = facadeAtlas(32);
+        // the texels float 2 m in front of the only scanned surface (the facade at z = 0): an opening the fit closed
+        for (let i = 0; i < 32 * 32; i++) atlas.texels.position[i * 3 + 2] -= 2;
+        const facade = { vertices: Float32Array.from([0, 0, 0, 10, 0, 0, 10, 6, 0, 0, 6, 0]), indices: Uint32Array.from([0, 2, 1, 0, 3, 2]) };
+        const views = facadeViews().map(v => ({ ...v, poseQuality: 1, poseSigmaPx: 0 }));
+        const open = await bakeStreetViewProjection({ atlas, views, depthFor: depthForMesh(facade) });
+        const checked = await bakeStreetViewProjection({ atlas, views, depthFor: depthForMesh(facade), options: { observedSurface: { baseM: 0.5, perMeter: 0.03 } } });
+        expect(open.report.bakedTexels).toBeGreaterThan(200);
+        expect(checked.report.bakedTexels).toBe(0);
+        // a texel on the scanned surface is kept by the check
+        const onSurface = facadeAtlas(32);
+        const kept = await bakeStreetViewProjection({ atlas: onSurface, views, depthFor: depthForMesh(facade), options: { observedSurface: { baseM: 0.5, perMeter: 0.03 } } });
+        expect(kept.report.bakedTexels).toBeGreaterThan(200);
     });
 });

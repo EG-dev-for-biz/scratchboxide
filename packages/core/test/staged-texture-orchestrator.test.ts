@@ -14,6 +14,7 @@ import { validateContract, type StageEvent } from '../src/common/spatial/staged-
 import { TEXTURE_LADDER_RUNGS } from '../src/common/spatial/texture-pass-contracts';
 import type { CanvasArtifact } from '../src/browser/generative-canvas/canvas-types';
 import { SHOW_TEXTURES_PILL } from '../src/node/3d-engine/staged-location/staged-summary';
+import { TEXTURE_PASS_VERSION } from '../src/node/3d-engine/staged-location/texture-pass';
 import { parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { encodePng } from '../src/node/texture-processing';
 import { building, fakeNative, readTris, writeTris, type Tri, type WorldSpec } from './helpers/staged-synthetic-world';
@@ -155,7 +156,7 @@ describe('the texture stage of the staged location build', () => {
         expect(sb.texturePass).toMatchObject({ status: 'committed', layersDone: 2, layersTotal: 2 });
         // the record in the result, and the summary says the same numbers
         const rec = result.texturePass!;
-        expect(rec.passVersion).toBe('texture-pass/1');
+        expect(rec.passVersion).toBe(TEXTURE_PASS_VERSION);
         expect(rec.layers.map(l => l.layerKey).sort()).toEqual(['l2', 'l3b']);
         expect(rec.degradations.some(d => d.reasonCode === 'no_street_view')).toBe(true);
         expect(rec.degradations.some(d => d.reasonCode === 'enhance_not_run')).toBe(true);

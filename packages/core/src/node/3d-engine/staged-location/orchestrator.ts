@@ -712,6 +712,10 @@ function describeRegistration(r: Registration, pairs: number): string {
     return `pano poses registered from ${r.used} of ${pairs} matched pairs: ${r.beforeRmsM.toFixed(2)} m RMS disagreement before, ${r.afterRmsM.toFixed(2)} m after. Per pano ${per}${aside}`;
 }
 
+/** The texture bake's observed-surface tolerance against the scan: 0.5 m + 3 cm per metre of view distance (the scan's
+ *  leaf error is ~0.6 m median edge; fitted faces sit within centimetres of the scan where the scan has samples). */
+export const TEXTURE_OBSERVED_SURFACE = { baseM: 0.5, perMeter: 0.03 };
+
 /** What the texture stage hands the result and the summary. */
 export interface TextureStageValue {
     record: TexturePassRecord;
@@ -1299,7 +1303,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const bestSample = Math.min(...images.map(i => i.nativeSampleM).filter(v => v > 0), ...(tile && Number.isFinite(tile.texelSizeM) && !views.length ? [tile.texelSizeM] : []));
                     const cap = deps.textures?.maxDensityTexelsPerMeter ?? 20;
                     const density = Number.isFinite(bestSample) && bestSample > 0 ? Math.min(cap, 1 / bestSample) : cap;
-                    const occluder = loadMesh([remeshed?.clayGlb, bodyFile]);
+                    // the scan is the occluder and the judge of what the photos show: a fitted face where the scan has no surface
+                    // (an arch opening) is not painted with the sky seen through it
+                    const occluder = loadMesh([remeshed?.clayGlb]);
                     const residual = evidence?.registration?.afterRmsM;
                     const poseHash = evidence?.registration ? [...evidence.registration.corrections.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)) : [];
                     const tileSha = tile ? sha256File(extraction.texturedGlb) : 'no-tile';
@@ -1319,7 +1325,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048);
                         const entry = await cache.run<Omit<TextureLayerOutcome, 'glb'>>('textures', key, async dir => {
                             const out = await textureLayer({ layerKey: target.layer.layer, clayGlb: clay, ...(target.surfaces?.length ? { surfaces: target.surfaces } : {}) }, {
-                                views, ...(viewsUnavailable ? { viewsUnavailable } : {}), occluder,
+                                views, ...(viewsUnavailable ? { viewsUnavailable } : {}), occluder, observedSurface: TEXTURE_OBSERVED_SURFACE,
                                 delight: { latitude: run.geoAnchor.lat, longitude: run.geoAnchor.lng },
                                 ...(tile ? { tile } : {}), ...(tileUnavailable ? { tileUnavailable } : {}),
                                 ...(residual !== undefined ? { registrationResidualM: residual } : {}),

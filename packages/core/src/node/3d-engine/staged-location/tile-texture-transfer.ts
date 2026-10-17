@@ -444,7 +444,12 @@ export interface TileTransferTuning {
      * darkness. Default TEXTURE_LIFT_CAP; false = the sampler's per-texel de-light as is. Needs samples with litLinear.
      */
     liftCap?: { radiusM: number; contrastGain: number } | false;
+    /** Match the tile's exposure to the Street View texels of `existing` where both cover (default true). */
+    matchExposure?: boolean;
 }
+
+/** Overlap texels the exposure match needs. */
+export const MIN_EXPOSURE_OVERLAP = 500;
 
 const luma = (r: number, g: number, b: number): number => 0.2126 * r + 0.7152 * g + 0.0722 * b;
 
@@ -526,6 +531,32 @@ export const transferTilePhoto: TransferTilePhoto = async (input: TileTransferIn
         for (let i = 0; i < N; i++) if (hasLit[i]) for (let c = 0; c < 3; c++) cand[i * 3 + c] = linearToSrgb255(litLin[i * 3 + c]);
     }
 
+    // 1c. Exposure match to tier 1: the tile photo and the Street View views were taken under different light and white
+    //     balance, so a tile texel next to a Street View texel shows a colour step (a seam). Per channel, the median of
+    //     the linear ratio Street View / tile over the texels both cover is applied to every tile texel (clamped to
+    //     [0.5, 2]); needs MIN_EXPOSURE_OVERLAP texels of overlap, else the tile keeps its own exposure.
+    let exposureGain: Vec3 | undefined;
+    if (existing && input.matchExposure !== false) {
+        const ratios: number[][] = [[], [], []];
+        for (let i = 0; i < N; i++) {
+            if (!hasCand[i] || !existing.albedo[i * 4 + 3]) continue;
+            const e = unpackConfidenceTexel(existing.confidence, i);
+            if (!e.covered || e.rung > 1) continue;
+            for (let c = 0; c < 3; c++) {
+                const t = SRGB8_TO_LINEAR[Math.round(Math.min(255, Math.max(0, cand[i * 3 + c])))];
+                if (t > 0.02) ratios[c].push(SRGB8_TO_LINEAR[existing.albedo[i * 4 + c]] / t);
+            }
+        }
+        if (ratios[0].length >= MIN_EXPOSURE_OVERLAP) {
+            const med = (a: number[]) => { a.sort((x, y) => x - y); return a[a.length >> 1]; };
+            exposureGain = ratios.map(r => Math.min(2, Math.max(0.5, med(r)))) as Vec3;
+            for (let i = 0; i < N; i++) {
+                if (!hasCand[i]) continue;
+                for (let c = 0; c < 3; c++) cand[i * 3 + c] = linearToSrgb255(SRGB8_TO_LINEAR[Math.round(Math.min(255, Math.max(0, cand[i * 3 + c])))] * exposureGain[c]);
+            }
+        }
+    }
+
     // 2. Fusion rule against tier 1: fill uncovered texels; replace a single-view texel only when the tile is both
     //    more confident and at least as sharp there.
     const take = new Uint8Array(N);
@@ -578,11 +609,12 @@ export const transferTilePhoto: TransferTilePhoto = async (input: TileTransferIn
     }
     const atlasTexels = countCovered(atlas.texels.covered);
     const d = input.surface?.delight;
+    const exposureLine = `${exposureGain ? `, exposure matched to the Street View texels (linear gain ${exposureGain.map(g => g.toFixed(2)).join('/')})` : ''}`;
     const delightLine = d === false ? 'not de-lit' : `de-lit (shadowLift ${(d || PHOTOGRAMMETRIC_DELIGHT.defaults).shadowLift}, highlightCompress ${(d || PHOTOGRAMMETRIC_DELIGHT.defaults).highlightCompress}${liftReport ? `; lift capped by local contrast, ${Math.round(liftReport.meanLiftKept * 100)} percent of it kept on average` : ''})`;
     const provenance: TexelProvenance[] = [{
         source: 'tile-photo-transfer', label: 'photo-inferred',
         method: `nearest tile surface (BVH, <= ${round3(maxDistanceM)} m, normal within ${round3(Math.acos(minCos) * 180 / Math.PI)} deg), bilinear in tile UV`
-            + `${input.surface && Number.isFinite(input.surface.texelSizeM) ? ` (tile texel ${round3(input.surface.texelSizeM)} m)` : ''}, ${delightLine}, confidence <= ${TILE_CONFIDENCE_CAP}`,
+            + `${input.surface && Number.isFinite(input.surface.texelSizeM) ? ` (tile texel ${round3(input.surface.texelSizeM)} m)` : ''}, ${delightLine}${exposureLine}, confidence <= ${TILE_CONFIDENCE_CAP}`,
         coverage: atlasTexels ? filled / atlasTexels : 0
     }];
 
