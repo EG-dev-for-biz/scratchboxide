@@ -455,14 +455,26 @@ inline Creased splitByCrease(const std::vector<Vec3>& pos, const std::vector<uin
     return out;
 }
 
-/** A triangle mesh's signed volume (positive: the triangles face outward). */
-inline double signedVolume(const std::vector<D3>& p, const std::vector<uint32_t>& idx) {
+inline void flip(std::vector<uint32_t>& idx) { for (size_t t = 0; t + 2 < idx.size(); t += 3) std::swap(idx[t + 1], idx[t + 2]); }
+
+/**
+ * Turns a closed shell's triangles outward (counter-clockwise seen from outside: positive signed volume). The volume is
+ * taken about the shell's own centroid, so a shell far from the tile frame's origin is judged as exactly as one at it. A
+ * shell is oriented on its own: one element's shells are never judged together (a mirrored shell would hide behind an
+ * outward one's volume, or flip it).
+ */
+inline void orientClosedShell(const std::vector<D3>& pos, std::vector<uint32_t>& idx) {
+    if (idx.size() < 12) return;
+    D3 c;
+    for (uint32_t i : idx) c = c + pos[i];
+    c = c * (1.0 / static_cast<double>(idx.size()));
     double v = 0;
-    for (size_t t = 0; t + 2 < idx.size(); t += 3) v += p[idx[t]].dot(p[idx[t + 1]].cross(p[idx[t + 2]])) / 6.0;
-    return v;
+    for (size_t t = 0; t + 2 < idx.size(); t += 3) v += (pos[idx[t]] - c).dot((pos[idx[t + 1]] - c).cross(pos[idx[t + 2]] - c));
+    if (v < 0) flip(idx);
 }
 
-inline void flip(std::vector<uint32_t>& idx) { for (size_t t = 0; t + 2 < idx.size(); t += 3) std::swap(idx[t + 1], idx[t + 2]); }
+/** Handedness of a frame: +1 when (a, b, c) is right-handed (a x b along c), -1 when it is mirrored. */
+inline double handedness(const D3& a, const D3& b, const D3& c) { return a.cross(b).dot(c) < 0 ? -1.0 : 1.0; }
 
 /** A point of a piecewise-linear [t, value] curve (flat beyond its ends); an empty curve is `def`. */
 inline double curveAt(const std::vector<P2>& c, double t, double def) {
@@ -538,13 +550,17 @@ inline D3 place(const Station& s, bool out, double pu, double pv) { return s.c +
  * ear clipping. Scale and twist curves are read at the station's share of the carrier's length. `offU`, `offV` shift the
  * profile in the section (the carrier's offset).
  */
-inline void buildSweep(const std::vector<Station>& st, const SweepSpec& sp, double offU, double offV, Gen& g, float instance) {
+inline void buildSweep(const std::vector<Station>& st, const SweepSpec& sp, double offU, double offV, Gen& g, float instance, bool closedCarrier = false) {
     if (st.size() < 2) throw OrnamentError("invalid_spec", "a sweep's carrier has no length");
     const double total = std::max(1e-9, st.back().s - st.front().s);
     std::vector<const std::vector<P2>*> loops{&sp.profile.outer};
     for (const auto& h : sp.profile.holes) loops.push_back(&h);
     using Ring = std::vector<std::vector<uint32_t>>;   // per loop: vertex ids
     std::vector<Ring> rings;
+    // per ring: the handedness of the frame it was placed in. The profile is counter-clockwise in (u, v); in a right-handed
+    // frame (u x v along the travel) the sides and caps below face outward, in a mirrored one (a crease whose v was turned
+    // toward the second face, a left-handed chart) they would face inward, so each is wound by its ring's handedness
+    std::vector<double> hand;
     // the profile point at a station, with the scale and twist of its place along the carrier
     auto point = [&](const Station& s, bool out, const P2& q, double* mitreOffset) {
         const double tn = (s.s - st.front().s) / total;
@@ -559,6 +575,7 @@ inline void buildSweep(const std::vector<Station>& st, const SweepSpec& sp, doub
         Ring ring;
         for (const auto* L : loops) { std::vector<uint32_t> ids; for (const auto& q : *L) ids.push_back(g.add(point(s, out, q, nullptr), tn, instance)); ring.push_back(std::move(ids)); }
         rings.push_back(std::move(ring));
+        hand.push_back(out ? handedness(s.uOut, s.vOut, s.tOut) : handedness(s.uIn, s.vIn, s.tIn));
     };
     for (const Station& s : st) {
         if (!s.corner) { plain(s, false); continue; }
@@ -585,13 +602,16 @@ inline void buildSweep(const std::vector<Station>& st, const SweepSpec& sp, doub
         Ring ring;
         for (const auto& ps : pts) { std::vector<uint32_t> ids; for (const auto& p : ps) ids.push_back(g.add(p, tn, instance)); ring.push_back(std::move(ids)); }
         rings.push_back(std::move(ring));
+        hand.push_back(handedness(s.uIn, s.vIn, s.tIn));
     }
+    // a triangle wound as the frame's handedness says
+    auto tri = [&](double h, uint32_t a, uint32_t b, uint32_t c) { if (h < 0) g.tri(a, c, b); else g.tri(a, b, c); };
     for (size_t r = 0; r + 1 < rings.size(); ++r) {
         for (size_t l = 0; l < loops.size(); ++l) {
             const size_t n = loops[l]->size();
             for (size_t i = 0; i < n; ++i) {
                 const uint32_t a = rings[r][l][i], b = rings[r][l][(i + 1) % n], c = rings[r + 1][l][(i + 1) % n], d = rings[r + 1][l][i];
-                g.tri(a, b, c); g.tri(a, c, d);
+                tri(hand[r], a, b, c); tri(hand[r], a, c, d);
             }
         }
     }
@@ -602,12 +622,15 @@ inline void buildSweep(const std::vector<Station>& st, const SweepSpec& sp, doub
             for (size_t l = 0; l < loops.size(); ++l) for (size_t i = 0; i < loops[l]->size(); ++i) if (((*loops[l])[i] - q).len() < 1e-12) return ring[l][i];
             return ring[0][0];
         };
+        // the triangulation is counter-clockwise in (u, v): the start cap faces back along the travel, the end cap along it
         for (size_t t = 0; t + 2 < tris.size(); t += 3) {
-            g.tri(idOf(rings.front(), verts[tris[t]]), idOf(rings.front(), verts[tris[t + 2]]), idOf(rings.front(), verts[tris[t + 1]]));
-            g.tri(idOf(rings.back(), verts[tris[t]]), idOf(rings.back(), verts[tris[t + 1]]), idOf(rings.back(), verts[tris[t + 2]]));
+            tri(hand.front(), idOf(rings.front(), verts[tris[t]]), idOf(rings.front(), verts[tris[t + 2]]), idOf(rings.front(), verts[tris[t + 1]]));
+            tri(hand.back(), idOf(rings.back(), verts[tris[t]]), idOf(rings.back(), verts[tris[t + 1]]), idOf(rings.back(), verts[tris[t + 2]]));
         }
-        if (signedVolume(g.pos, g.idx) < 0) flip(g.idx);  // outward: a closed shell has positive volume
     }
+    // a closed shell (capped, or swept round a closed carrier) is outward by its volume too: a mitre or a twist that folds the
+    // frame can still turn it, and the volume is what outward means
+    if (sp.caps || closedCarrier) orientClosedShell(g.pos, g.idx);
 }
 
 // ============================================================================================
@@ -623,8 +646,12 @@ struct RevolveSpec {
 
 /** A solid of revolution in host coordinates (u, v, n), then mapped through the host. */
 inline void buildRevolve(const Host& host, const RevolveSpec& rs, const D3& origin, double rotate, Gen& g, float instance) {
-    const auto& pr = rs.profile;
-    if (pr.size() < 2) throw OrnamentError("invalid_spec", "a revolve's profile needs at least two points");
+    if (rs.profile.size() < 2) throw OrnamentError("invalid_spec", "a revolve's profile needs at least two points");
+    // the meridian profile counter-clockwise in (r, z): the sides below then face away from the profile's inside, and the
+    // cut faces of a partial sweep (triangulated counter-clockwise) agree with them
+    std::vector<P2> profileCcw = rs.profile;
+    if (rs.profile.size() >= 3 && sg::signedArea(profileCcw) < 0) std::reverse(profileCcw.begin(), profileCcw.end());
+    const auto& pr = profileCcw;
     D3 zax = rs.axisD.len() > 1e-12 ? rs.axisD.unit() : D3(0, 0, 1);
     D3 e1 = std::fabs(zax.x) < 0.9 ? D3(1, 0, 0) : D3(0, 1, 0);
     e1 = (e1 - zax * e1.dot(zax)).unit();
@@ -667,13 +694,15 @@ inline void buildRevolve(const Host& host, const RevolveSpec& rs, const D3& orig
     if (!full) {
         std::vector<P2> verts;
         const auto tris = sg::triangulate(pr, {}, verts);
-        auto vid = [&](const P2& q, int col) { for (size_t i = 0; i < M; ++i) if ((pr[i] - q).len() < 1e-12 || (sg::signedArea(pr) < 0 && false)) return ring[i][static_cast<size_t>(col)]; return ring[0][static_cast<size_t>(col)]; };
+        auto vid = [&](const P2& q, int col) { for (size_t i = 0; i < M; ++i) if ((pr[i] - q).len() < 1e-12) return ring[i][static_cast<size_t>(col)]; return ring[0][static_cast<size_t>(col)]; };
+        // a counter-clockwise meridian triangle faces r x z = -theta: out of the start face as it stands, out of the end face reversed
         for (size_t t = 0; t + 2 < tris.size(); t += 3) {
-            g.tri(vid(verts[tris[t]], 0), vid(verts[tris[t + 2]], 0), vid(verts[tris[t + 1]], 0));
-            g.tri(vid(verts[tris[t]], cols - 1), vid(verts[tris[t + 1]], cols - 1), vid(verts[tris[t + 2]], cols - 1));
+            g.tri(vid(verts[tris[t]], 0), vid(verts[tris[t + 1]], 0), vid(verts[tris[t + 2]], 0));
+            g.tri(vid(verts[tris[t]], cols - 1), vid(verts[tris[t + 2]], cols - 1), vid(verts[tris[t + 1]], cols - 1));
         }
     }
-    if (signedVolume(g.pos, g.idx) < 0) flip(g.idx);
+    // consistent now; outward through a mirrored host (a left-handed chart, a crease's frame) or a negative sweep by its own volume
+    orientClosedShell(g.pos, g.idx);
 }
 
 
@@ -901,7 +930,9 @@ inline bool tessellateRelief(const ReliefSpec& spec, const P2& shift, size_t tri
 }
 
 /** A proud relief: a closed shell, its top displaced by dh, its foot embedded 1 mm into the host. */
-inline void buildProudShell(const Surface& S, const ReliefPatch& P, Gen& g, float instance) {
+inline void buildProudShell(const Surface& S, const ReliefPatch& P, Gen& out, float instance) {
+    // built on its own and oriented on its own, then appended: the element's earlier shells never decide this one's winding
+    Gen g;
     const double embed = 0.001;
     const size_t n = P.mesh.v.size();
     std::vector<uint32_t> top(n), bot(n);
@@ -934,7 +965,8 @@ inline void buildProudShell(const Surface& S, const ReliefPatch& P, Gen& g, floa
         g.tri(top[a], bot[a], bot[b]);
         g.tri(top[a], bot[b], top[b]);
     }
-    if (signedVolume(g.pos, g.idx) < 0) flip(g.idx);
+    orientClosedShell(g.pos, g.idx);
+    out.append(g);
 }
 
 
@@ -1210,7 +1242,7 @@ private:
         }
         if (closed) sp.caps = false;
         Gen g;
-        buildSweep(st, sp, offU, offV, g, rank);
+        buildSweep(st, sp, offU, offV, g, rank, closed);
         b.carrierLengthM = std::max(b.carrierLengthM, st.back().s - st.front().s);
         b.sweep = true;
         // for the checks: the profile as placed, in the section

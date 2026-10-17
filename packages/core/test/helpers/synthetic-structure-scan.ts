@@ -246,22 +246,23 @@ function stripedPng(size = 256, stripePx = 16, blank = false): Buffer {
 // ------------------------------------------------------------------------------------------------------------------
 
 /** The elevation polygon of a block over an opening: (s, y), counter-clockwise, the notch an arc through (sL, yL) and (sR, yR). */
-function elevationWithArch(sMin: number, sMax: number, y1: number, sL: number, sR: number, spring: number, rise: number): P2[] {
+function elevationWithArch(sMin: number, sMax: number, y1: number, sL: number, sR: number, spring: number, rise: number, arcSegments = 40): P2[] {
     const half = (sR - sL) / 2, r = (half * half + rise * rise) / (2 * rise), cy = spring + rise - r, cx = (sL + sR) / 2;
     const a0 = Math.atan2(spring - cy, sL - cx), a1 = Math.atan2(spring - cy, sR - cx);
     const e: P2[] = [[sMin, 0], [sL, 0], [sL, spring]];
     // the arc from the left springing over the top to the right springing (a0 > a1: clockwise in (s, y))
-    for (const p of arc(cx, cy, r, a0, a1, 40).slice(1, -1)) e.push(p);
+    for (const p of arc(cx, cy, r, a0, a1, arcSegments).slice(1, -1)) e.push(p);
     e.push([sR, spring], [sR, 0], [sMax, 0], [sMax, y1], [sMin, y1]);
     return e;
 }
 
-export function segmentalArch(dir: string, yawDeg = 33): SyntheticScan {
+/** `arcSegments`: the facets of the opening's arc (the soffit and the elevation faces' notch). */
+export function segmentalArch(dir: string, yawDeg = 33, arcSegments = 40): SyntheticScan {
     const span = 8.0, pier = 3.2, depth = 5.0, spring = 8.0, rise = 3.0, h = 14.0;
     const sMin = -(span / 2 + pier), sMax = span / 2 + pier;
     const sc = new Scene(11, yawDeg);
     const t0 = -depth / 2, t1 = depth / 2;
-    const E = elevationWithArch(sMin, sMax, h, -span / 2, span / 2, spring, rise);
+    const E = elevationWithArch(sMin, sMax, h, -span / 2, span / 2, spring, rise, arcSegments);
     // the elevation faces (front and back), each a polygon in (s, y) at constant t
     const face = (t: number, front: boolean) => {
         const idx = earClip(E);
@@ -281,7 +282,7 @@ export function segmentalArch(dir: string, yawDeg = 33): SyntheticScan {
     {
         const half = span / 2, r = (half * half + rise * rise) / (2 * rise), cy = spring + rise - r;
         const a0 = Math.atan2(spring - cy, -half), a1 = Math.atan2(spring - cy, half);
-        const pts = arc(0, cy, r, a0, a1, 40);
+        const pts = arc(0, cy, r, a0, a1, arcSegments);
         const positions: V3[] = [], indices: number[] = [];
         for (const p of pts) { positions.push([p[0], p[1], t0]); positions.push([p[0], p[1], t1]); }
         for (let i = 0; i + 1 < pts.length; i++) { const a = 2 * i, b = a + 1, c = a + 2, d = a + 3; indices.push(a, c, d, a, d, b); }
