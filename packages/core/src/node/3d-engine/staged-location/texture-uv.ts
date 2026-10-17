@@ -52,7 +52,12 @@ export interface AtlasPrimitiveLayout {
     uv: Float32Array;
     /** Twin triangles, same triangle order as the clay primitive. */
     indices: Uint32Array;
+    /** Per triangle: index into UvAtlasLayout.rects (the chart or island it was laid out in). */
+    rectOfTriangle: Uint32Array;
 }
+
+/** One packed chart or island, in texels: the outer rect includes `gutterTexels` on every side. */
+export interface AtlasRect { x: number; y: number; width: number; height: number; kind: 'chart' | 'island'; mapIndex: number }
 
 export interface UvAtlasStats {
     charts: number;
@@ -76,6 +81,7 @@ export interface UvAtlasLayout {
     /** sha256 of the clay GLB this layout indexes into; the twin writer refuses another one. */
     claySha256: string;
     gutterTexels: number;
+    rects: AtlasRect[];
     primitives: AtlasPrimitiveLayout[];
     /** Primitives left without UVs (not triangles), with the reason; the twin keeps them clay. */
     untextured: Array<{ nodeName: string; reason: string }>;
@@ -428,25 +434,24 @@ export async function buildUvAtlas(input: BuildUvAtlasOptions): Promise<LaidOutU
             it.pack.w = it.wC + 2 * G; it.pack.h = it.hC + 2 * G;
             area += it.pack.w * it.pack.h; widest = Math.max(widest, it.pack.w, it.pack.h);
         }
-        let side = Math.max(16, nextPow2(Math.max(Math.sqrt(area), widest)));
-        let used = Infinity;
-        while (side <= input.maxSide) {
-            used = shelfPack(items.map(i => i.pack), side);
-            if (used <= side) break;
-            side *= 2;
+        // power-of-two sizes (mipmaps); try each width from the narrowest that can hold the widest rect and keep the smallest atlas
+        let best: { w: number; h: number } | undefined;
+        for (let w = Math.max(16, nextPow2(widest)); w <= input.maxSide; w *= 2) {
+            const h = Math.max(16, nextPow2(shelfPack(items.map(i => i.pack), w)));
+            if (h <= input.maxSide && (!best || w * h < best.w * best.h || (w * h === best.w * best.h && Math.abs(w - h) < Math.abs(best.w - best.h)))) best = { w, h };
         }
-        if (side <= input.maxSide && used <= side) { W = side; H = Math.max(16, nextPow2(used)); break; }
+        if (best) { W = best.w; H = best.h; shelfPack(items.map(i => i.pack), W); break; }
         if (attempt > 60 || d < 1e-3) throw new Error(`the layer does not fit in ${input.maxSide}x${input.maxSide} texels even at ${d.toFixed(4)} texels/m`);
         d *= Math.min(0.95, Math.sqrt((input.maxSide * input.maxSide * 0.8) / area));
     }
 
     // per-vertex UVs and the per-primitive layout (clay triangle order kept)
-    const layoutOf = new Map<Prim, { verts: Array<{ src: Uint32Array; uv: Float32Array }>; tri: Uint32Array }>();
+    const layoutOf = new Map<Prim, { verts: Array<{ src: Uint32Array; uv: Float32Array }>; tri: Uint32Array; rect: Uint32Array }>();
     const pixel = (it: Item, k: number): [number, number] => [it.pack.x + G + it.local[k * 2] * d, it.pack.y + G + it.hC - it.local[k * 2 + 1] * d];
     const vertexBase = new Map<Prim, number>();
-    for (const it of items) {
+    for (const [itemIndex, it] of items.entries()) {
         let L = layoutOf.get(it.prim);
-        if (!L) { L = { verts: [], tri: new Uint32Array(it.prim.indices.length) }; layoutOf.set(it.prim, L); vertexBase.set(it.prim, 0); }
+        if (!L) { L = { verts: [], tri: new Uint32Array(it.prim.indices.length), rect: new Uint32Array(it.prim.indices.length / 3) }; layoutOf.set(it.prim, L); vertexBase.set(it.prim, 0); }
         const base = vertexBase.get(it.prim)!;
         const uv = new Float32Array(it.sourceVertex.length * 2);
         for (let k = 0; k < it.sourceVertex.length; k++) { const [X, Y] = pixel(it, k); uv[k * 2] = X / W; uv[k * 2 + 1] = Y / H; }
@@ -455,6 +460,7 @@ export async function buildUvAtlas(input: BuildUvAtlasOptions): Promise<LaidOutU
         const nTri = it.indices.length / 3;
         for (let k = 0; k < nTri; k++) {
             const t = order ? order[k] : k;
+            L.rect[t] = itemIndex;
             for (let c = 0; c < 3; c++) L.tri[t * 3 + c] = it.indices[k * 3 + c] + base;
         }
         vertexBase.set(it.prim, base + it.sourceVertex.length);
@@ -465,7 +471,7 @@ export async function buildUvAtlas(input: BuildUvAtlasOptions): Promise<LaidOutU
         const sourceVertex = new Uint32Array(n), uv = new Float32Array(n * 2);
         let o = 0;
         for (const x of L.verts) { sourceVertex.set(x.src, o); uv.set(x.uv, o * 2); o += x.src.length; }
-        return { nodeIndex: p.nodeIndex, nodeName: p.nodeName, meshIndex: p.meshIndex, primitiveIndex: p.primitiveIndex, mapIndex: p.mapIndex, sourceVertex, uv, indices: L.tri };
+        return { nodeIndex: p.nodeIndex, nodeName: p.nodeName, meshIndex: p.meshIndex, primitiveIndex: p.primitiveIndex, mapIndex: p.mapIndex, sourceVertex, uv, indices: L.tri, rectOfTriangle: L.rect };
     });
 
     // rasterise: texel centres inside each triangle; world position and normal per texel
@@ -568,6 +574,7 @@ export async function buildUvAtlas(input: BuildUvAtlasOptions): Promise<LaidOutU
         texels: { covered, gutter, mapIndex, position, normal, sizeM },
         layout: {
             claySha256: crypto.createHash('sha256').update(input.clayGlb).digest('hex'), gutterTexels: G, primitives, untextured,
+            rects: items.map(it => ({ x: it.pack.x, y: it.pack.y, width: it.pack.w, height: it.pack.h, kind: it.chart ? 'chart' as const : 'island' as const, mapIndex: it.prim.mapIndex })),
             stats: {
                 charts: items.filter(i => i.chart).length, islands: items.filter(i => !i.chart).length, chartsRejected, overlapTexels,
                 coverage: content / N, gutterShare: gutterCount / N, requestedTexelsPerMeter: input.densityTexelsPerMeter, texelsPerMeter: d,
