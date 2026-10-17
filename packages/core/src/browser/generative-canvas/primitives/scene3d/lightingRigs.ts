@@ -81,17 +81,19 @@ export function kelvinToRgb(kelvin: number): THREE.Color {
  */
 export const CINEMATIC_RIGS: Record<string, CinematicRigDefinition> = {
     // The default for `lighting: 'studio'`: a neutral CAD/DCC viewport light. White directional key, fill and
-    // top light plus neutral ambient, so surfaces show their true color at any model size.
+    // top light plus neutral ambient, so surfaces show their true color at any model size. Levels are set so a mid-grey
+    // (sRGB 128) Lambertian surface averages about sRGB 128 over its lit and shaded faces after ACES tone mapping
+    // (measured on the staged Washington Square Arch and the staged fixture; staged-texture-viewport-lighting.test.ts).
     studio: {
         name: 'studio',
         label: 'Neutral Studio',
-        description: 'Neutral white key, fill and top light with soft ambient; true-color, size-independent.',
+        description: 'Neutral white key, fill and top light with white ambient; true-color, size-independent.',
         ambientColor: 0xffffff,
-        ambientIntensity: 0.3,
+        ambientIntensity: 1.0,
         lights: [
-            { name: 'Studio_Key', type: 'directional', position: [4, 6, 5], color: 0xffffff, intensity: 1.5 },
-            { name: 'Studio_Fill', type: 'directional', position: [-5, 2.5, 3], color: 0xffffff, intensity: 0.45 },
-            { name: 'Studio_Top', type: 'directional', position: [0, 6, -4], color: 0xffffff, intensity: 0.35 }
+            { name: 'Studio_Key', type: 'directional', position: [4, 6, 5], color: 0xffffff, intensity: 2.25 },
+            { name: 'Studio_Fill', type: 'directional', position: [-5, 2.5, 3], color: 0xffffff, intensity: 0.7 },
+            { name: 'Studio_Top', type: 'directional', position: [0, 6, -4], color: 0xffffff, intensity: 0.5 }
         ]
     },
     three_point_studio: {
@@ -410,8 +412,10 @@ export function buildThreeJsLightingRig(
     const rig = CINEMATIC_RIGS[key] || CINEMATIC_RIGS.three_point_studio;
     const lights: THREE.Light[] = [];
 
-    // Ambient light baseline (boosted with sky fill for large geospatial scenes)
-    const ambientColor = options?.isLargeScale ? 0xb0c4de : rig.ambientColor;
+    // Ambient light baseline (boosted for large geospatial scenes). Its colour is the rig's own: a sky-blue fill here tinted
+    // every neutral studio scene with a geo anchor (the staged locations drew navy clay and blue photo textures), and a sky is
+    // opt-in (AGENTS.md, zero uninvited atmosphere).
+    const ambientColor = rig.ambientColor;
     const ambientIntensity = options?.isLargeScale
         ? Math.max(rig.ambientIntensity, 0.6)
         : rig.ambientIntensity;

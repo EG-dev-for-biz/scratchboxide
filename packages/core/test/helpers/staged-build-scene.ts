@@ -16,6 +16,8 @@ export interface StagedSceneOpts {
     camera?: { position: [number, number, number]; target: [number, number, number] };
     /** Omit stagedBuild: the same objects as a plain scene (the static reference render). */
     plain?: boolean;
+    /** A geodetic anchor as the live staged artifact carries (it makes the viewport treat the scene as geospatial, large scale). */
+    geoAnchor?: { lat: number; lng: number; elevation?: number };
 }
 
 export const FIXTURE_CAMERA = { position: [30, 21, 33] as [number, number, number], target: [0, 6, 0] as [number, number, number] };
@@ -39,6 +41,7 @@ export function stagedSceneData(state: StagedBuildState, opts: StagedSceneOpts =
         groundTileMode: 'photoreal-clay',
         camera: opts.camera ?? FIXTURE_CAMERA,
         objects,
+        ...(opts.geoAnchor ? { geoAnchor: opts.geoAnchor } : {}),
         ...(opts.plain ? {} : { stagedBuild: state })
     };
 }
