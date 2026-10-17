@@ -52,6 +52,7 @@ import { anchorElements, type AnchorNote } from './ornament-anchor';
 import { expandElements, expandEvidence, type ExpandedElement } from './ornament-expand';
 import { surveyHintLines, type LocatedElement } from './survey-detail';
 import type { SlotOffer } from './slot-exposure';
+import { describeCover, type SlotCover } from './slot-cover';
 
 export const ORNAMENT_PROMPT_VERSION = 'ornament/v4';
 /** Thinking tokens asked for: LOW on Gemini 4 (thinkingConfigFor), a 512-token budget on 3.x. */
@@ -162,7 +163,7 @@ export function ornamentPromptText(fit: StructureFit, evidence: EvidenceImageRef
     const slots = offered.map(s => {
         const host = 'surface' in s.host ? `surface ${s.host.surface.surfaceId}` : `edge along ${s.host.edge.surfaceIds.join('+')}, ${f2(s.host.edge.carrier.lengthM)} m`;
         const env = 'edge' in s.host ? `, envelope [u out, v up] mm ${JSON.stringify(s.host.edge.envelope.map(p => [Math.round(p[0] * 1000), Math.round(p[1] * 1000)]))}` : '';
-        return `${s.id}: ${host}, ${f2(s.sizeM[0])} × ${f2(s.sizeM[1])} m, maxProud ${Math.round(s.bounds.maxProudM * 1000)} mm, maxRecess ${Math.round(s.bounds.maxRecessM * 1000)} mm${env}, in images [${inImages(s.id).join(', ')}]`;
+        return `${s.id}: ${host}, ${f2(s.sizeM[0])} × ${f2(s.sizeM[1])} m, maxProud ${Math.round(s.bounds.maxProudM * 1000)} mm, maxRecess ${Math.round(s.bounds.maxRecessM * 1000)} mm${env}, in images [${inImages(s.id).join(', ')}]${offer?.covers.get(s.id) ? `; ${describeCover(offer.covers.get(s.id)!)}` : ''}`;
     });
     const polys = evidence.filter(e => e.kind === 'streetview-grounding').map(e => `[${e.index}] ${e.slotsShown.filter(s => !offer || offer.offeredIds.has(s.slotId)).map(s => `${s.slotId} → ${JSON.stringify(s.polygon1000)}`).join('; ') || 'no slot'}`);
     const correctable = fit.primitives.flatMap(p => p.correctable.map(c => `${p.id} (${p.label ?? 'primitive'}): param ${c.param} (${c.key}) = ${c.value} ${c.unit}, admissible ${c.min}–${c.max}; ${c.description}`));
@@ -403,7 +404,7 @@ export interface ReplyCheck {
  * Checks one reply. `final` marks the reply after the revision: problems of rules 3-8 then drop their element instead of
  * asking again.
  */
-export function checkReply(text: string, finishReason: string | undefined, fit: StructureFit, evidence: EvidenceImageRef[], method: string, final = false, located: LocatedElement[] = []): ReplyCheck {
+export function checkReply(text: string, finishReason: string | undefined, fit: StructureFit, evidence: EvidenceImageRef[], method: string, final = false, located: LocatedElement[] = [], covers?: Map<string, SlotCover>): ReplyCheck {
     const result: ReplyCheck = { problems: [], kept: [], dropped: [], supportTestRequired: [], corrections: [], rejectedCorrections: [], emptySlots: [] };
     // rule 1
     if (finishReason && finishReason !== 'STOP') {
@@ -447,7 +448,7 @@ export function checkReply(text: string, finishReason: string | undefined, fit: 
 
     const expanded: ExpandedElement[] = expandElements(reply.elements, fit, evidence, method);
     // anchor the model's estimates to the scan's geometry before the slot rules: within the tolerance they are snapped, beyond it they are problems
-    const anchored = anchorElements(expanded, fit, located, undefined, final);
+    const anchored = anchorElements(expanded, fit, located, undefined, final, covers);
     result.anchored = anchored.notes;
     for (const [i, ps] of anchored.problems) for (const p of ps) add(i, p);
     // rules 5-8 per element
@@ -700,7 +701,7 @@ export async function readOrnament(input: ReadOrnamentInput): Promise<OrnamentRe
 
     input.onProgress?.(`reading ${refs.length} photos with ${chain.current}`);
     const one = await call(first);
-    let check = checkReply(one.text, one.finishReason, fit, refs, method, false, located);
+    let check = checkReply(one.text, one.finishReason, fit, refs, method, false, located, input.offer?.covers);
     let passes: 0 | 1 = 0;
     let problems: string[] = [];
     if (check.problems.length) {
@@ -711,7 +712,7 @@ export async function readOrnament(input: ReadOrnamentInput): Promise<OrnamentRe
             : `These parts cannot be built: ${check.problems.map((p, i) => `${i + 1}. ${p}`).join(' ')} Reply with the complete corrected JSON.`;
         input.onProgress?.(`asking ${chain.answeredModel ?? chain.current} once to fix ${check.problems.length} problem${check.problems.length === 1 ? '' : 's'}`);
         const two = await call([...first, { role: 'model', parts: [{ text: one.text }] }, { role: 'user', parts: [{ text: ask }] }]);
-        check = checkReply(two.text, two.finishReason, fit, refs, method, true, located);
+        check = checkReply(two.text, two.finishReason, fit, refs, method, true, located, input.offer?.covers);
         if (!check.reply) {
             const why = `the reply was invalid twice (${check.problems.slice(0, 3).join('; ')})`;
             throw new VisionStageError(why, visionUse(chain, 'failed', { ...usage, error: why }), false, 'vision_invalid_reply');

@@ -26,11 +26,12 @@ import { PHOTO_CORRECTION_TOLERANCE_M, PROVENANCE, type OperatorSpec, type Ornam
 import type { ExpandedElement } from './ornament-expand';
 import { bbox, footprint, pointInPolygon } from './ornament-vision';
 import type { LocatedElement } from './survey-detail';
+import { blockedAt, coveredAt, coveredBoxes, coveredShare, openStretches, type SlotCover } from './slot-cover';
 
 export interface AnchorNote {
     elementId: string;
     slotId: string;
-    kind: 'run-snapped' | 'pitch-snapped' | 'count-clipped' | 'clipped-to-slot' | (string & {});
+    kind: 'run-snapped' | 'pitch-snapped' | 'count-clipped' | 'clipped-to-slot' | 'clipped-to-open' | (string & {});
     /** How far the model's value was from the scan-anchored one, metres. */
     errorM: number;
     toleranceM: number;
@@ -73,7 +74,8 @@ export function anchorElements(
     fit: Pick<StructureFit, 'slots'>,
     located: LocatedElement[],
     toleranceM = PHOTO_CORRECTION_TOLERANCE_M,
-    final = false
+    final = false,
+    covers?: Map<string, SlotCover>
 ): AnchorResult {
     const notes: AnchorNote[] = [];
     const problems = new Map<number, string[]>();
@@ -200,6 +202,78 @@ export function anchorElements(
                         note(x, { kind: 'clipped-to-slot', errorM: r3(over), before: 'ran outside the slot', after: `moved ${mm(du)} in u and ${mm(dv)} in v`, note: over <= toleranceM ? `the element ran ${r3(over)} m outside slot ${slot.id}; moved back inside it (within ${toleranceM} m)` : `the element ran ${r3(over)} m outside slot ${slot.id}, beyond the ${toleranceM} m tolerance, after the re-read; moved back inside it and the error is carried in this label` });
                     } else if (moved) shiftSpec(spec, -du, -dv);
                 }
+            }
+        }
+
+        // where another fitted primitive fills the slot's free space nothing can stand free of the solid: clip into the open part, or send back
+        const cover = covers?.get(slot.id);
+        if (cover?.kind === 'edge' && 'edge' in slot.host) {
+            const L = slot.host.edge.carrier.lengthM;
+            if (spec.operator === 'sweep' && 'slot' in spec.sweep.carrier) {
+                const c = spec.sweep.carrier.slot;
+                const t0 = Math.max(0, c.t0), t1 = Math.min(1, c.t1);
+                let hit = false;
+                for (let k = 0; k < 24 && !hit; k++) if (blockedAt(cover, t0 + ((t1 - t0) * (k + 0.5)) / 24)) hit = true;
+                if (hit) {
+                    let best: [number, number] | undefined;
+                    for (const [a, b] of openStretches(cover)) {
+                        const lo = Math.max(a, t0), hi = Math.min(b, t1);
+                        if (hi - lo > (best ? best[1] - best[0] : 0)) best = [lo, hi];
+                    }
+                    if (best && ((best[1] - best[0]) * L >= 1.0 || (best[1] - best[0]) >= 0.25 * (t1 - t0))) {
+                        const lost = ((t1 - t0) - (best[1] - best[0])) * L;
+                        note(x, { kind: 'clipped-to-open', errorM: r3(lost), before: `t ${c.t0.toFixed(3)}..${c.t1.toFixed(3)}`, after: `t ${best[0].toFixed(3)}..${best[1].toFixed(3)}`, note: `${r3(lost)} m of the sweep lay where another part of the fitted structure fills the space beside the edge; clipped to the longest free stretch (${r3((best[1] - best[0]) * L)} m)` });
+                        c.t0 = best[0]; c.t1 = best[1];
+                    } else problem(x, `cover: the sweep along ${slot.id} runs where another part of the structure fills the space beside the edge; the free stretches are t ${openStretches(cover).map(([a, b]) => `${Math.round(a * 1000)}-${Math.round(b * 1000)}`).join(', ') || 'none'} per-mille. Build only inside one of them`);
+                }
+            } else if (spec.operator === 'replicate' && 'along' in spec.replicate.domain) {
+                const along = spec.replicate.domain.along;
+                const carrier = along.carrier;
+                const t0Slot = 'slot' in carrier ? carrier.slot : undefined;
+                const start = (t0Slot?.t0 ?? 0) * L + along.startOffsetM;
+                const open: boolean[] = [];
+                for (let k = 0; k < along.count; k++) open.push(!blockedAt(cover, Math.min(0.9999, (start + k * along.pitchM) / L)));
+                let bestA = -1, bestN = 0;
+                for (let k = 0; k < open.length; k++) {
+                    if (!open[k]) continue;
+                    let n = 0;
+                    while (k + n < open.length && open[k + n]) n++;
+                    if (n > bestN) { bestN = n; bestA = k; }
+                    k += n;
+                }
+                if (bestN < along.count) {
+                    if (bestN >= Math.max(2, Math.ceil(along.count / 2))) {
+                        const before = `${along.count} × ${mm(along.pitchM)} from ${start.toFixed(2)} m`;
+                        const newStart = start + bestA * along.pitchM;
+                        along.count = bestN;
+                        along.startOffsetM = r3(newStart - (t0Slot?.t0 ?? 0) * L);
+                        note(x, { kind: 'count-clipped', errorM: r3((open.length - bestN) * along.pitchM), before, after: `${along.count} × ${mm(along.pitchM)} from ${newStart.toFixed(2)} m`, note: `${open.length - bestN} of the ${open.length} repeats stood where another part of the fitted structure fills the space beside the edge; the longest free run of ${bestN} was kept` });
+                    } else problem(x, `cover: the repeat along ${slot.id} runs where another part of the structure fills the space beside the edge; the free stretches are t ${openStretches(cover).map(([a, b]) => `${Math.round(a * 1000)}-${Math.round(b * 1000)}`).join(', ') || 'none'} per-mille. Count and place only the repeats inside one of them`);
+                }
+            }
+        } else if (cover?.kind === 'surface' && 'surface' in slot.host) {
+            if (spec.operator === 'replicate' && 'lattice' in spec.replicate.domain) {
+                const g = spec.replicate.domain.lattice;
+                const cell = (i: number, j: number) => coveredAt(cover, g.originUv[0] + i * g.pitchUv[0] + (j % 2 ? g.rowOffsetU : 0), g.originUv[1] + j * g.pitchUv[1]);
+                const rowAll = (j: number) => Array.from({ length: g.counts[0] }, (_, i) => cell(i, j)).every(Boolean);
+                const colAll = (i: number) => Array.from({ length: g.counts[1] }, (_, j) => cell(i, j)).every(Boolean);
+                const before = `${g.counts[0]} × ${g.counts[1]}`;
+                let trimmed = false;
+                for (let guard = 0; guard < 64; guard++) {
+                    if (g.counts[1] > 1 && rowAll(0)) { g.originUv[1] += g.pitchUv[1]; g.counts[1]--; trimmed = true; continue; }
+                    if (g.counts[1] > 1 && rowAll(g.counts[1] - 1)) { g.counts[1]--; trimmed = true; continue; }
+                    if (g.counts[0] > 1 && colAll(0)) { g.originUv[0] += g.pitchUv[0]; g.counts[0]--; trimmed = true; continue; }
+                    if (g.counts[0] > 1 && colAll(g.counts[0] - 1)) { g.counts[0]--; trimmed = true; continue; }
+                    break;
+                }
+                let any = false;
+                for (let j = 0; j < g.counts[1]; j++) for (let i = 0; i < g.counts[0]; i++) if (cell(i, j)) any = true;
+                if (any) problem(x, `cover: the grid on ${slot.id} stands partly over ${coveredBoxes(cover).map(b => `u ${r3(b.u0)}-${r3(b.u1)} m, v ${r3(b.v0)}-${r3(b.v1)} m`).join('; ')}, which another part of the structure covers. Keep every cell out of it`);
+                else if (trimmed) note(x, { kind: 'count-clipped', errorM: 0, before, after: `${g.counts[0]} × ${g.counts[1]}`, note: 'rows or columns of the grid stood over a part of the slot that another fitted primitive covers; they were left out' });
+            } else if (spec.operator !== 'replicate') {
+                const fp = bbox(footprint(spec, slot));
+                const share = coveredShare(cover, fp);
+                if (share > 0.02) problem(x, `cover: the element on ${slot.id} stands ${Math.round(share * 100)}% over ${coveredBoxes(cover).map(b => `u ${r3(b.u0)}-${r3(b.u1)} m, v ${r3(b.v0)}-${r3(b.v1)} m`).join('; ')}, which another part of the structure covers and nothing can stand there. Move it into the free part of the slot`);
             }
         }
 
