@@ -285,6 +285,8 @@ export class TileClayProcessor {
 
     const applyToMesh = (mesh: THREE.Mesh) => {
       if (!mesh || !mesh.isMesh) return;
+      // a mesh that draws its own authored material (a staged layer's textured twin) is never clayed over
+      if (mesh.userData?.sbKeepAuthoredMaterial) return;
 
       // Enable casting and receiving shadows for depth cues on the clay surface
       mesh.castShadow = true;
