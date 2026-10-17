@@ -35,7 +35,7 @@ import { SRGB_TO_LINEAR } from './texel-exposure';
 export interface AlignSamples { texel: Int32Array; x: Float32Array; y: Float32Array; logW: Float64Array }
 
 export interface AlignmentOptions {
-    /** Grid points per chart (texels subsampled on a regular stride). Default 6000. */
+    /** Grid points per chart (texels subsampled on a regular stride). Default 3000. */
     gridPoints?: number;
     /** Fewest shared grid points between a view and the consensus to align. Default 150. */
     minShared?: number;
@@ -48,6 +48,8 @@ export interface AlignmentOptions {
     maxWindowPx?: number;
     /** Rounds (the second re-aligns every view against the others). Default 2. */
     rounds?: number;
+    /** Time budget (ms); past it no further chart or view is searched and the shifts found so far stand. Default 20 000. */
+    budgetMs?: number;
     /** Half-width (px) of the tile refinement the affine shift field is fitted to. Default 3. */
     affineWindowPx?: number;
     /** Correlation a shift of one pose sigma costs in the search (a Gaussian pose prior). Default 0 (measured on the live arch: any prior kept wrong near peaks over right far ones). */
@@ -83,6 +85,8 @@ export interface AlignmentReport {
     interViewGradNccAfter: number;
     pairs: number;
     ms: number;
+    /** True when the time budget ended the search early (the shifts found by then stand). */
+    timedOut?: boolean;
 }
 
 export interface AlignmentResult { shifts: ChartShift[]; /** dx, dy per view per sample (0 where unshifted). */ dx: Float32Array[]; dy: Float32Array[]; report: AlignmentReport }
@@ -200,12 +204,15 @@ const median = (v: number[]): number => { if (!v.length) return 0; const s = [..
  */
 export function alignViewsPerChart(atlas: UvAtlas, views: ProjectionView[], samples: AlignSamples[], opts: AlignmentOptions = {}): AlignmentResult {
     const t0 = Date.now();
-    const gridTarget = opts.gridPoints ?? 6000, minShared = opts.minShared ?? 150;
+    const gridTarget = opts.gridPoints ?? 3000, minShared = opts.minShared ?? 150;
     const minNcc = opts.minNcc ?? 0.2, minGain = opts.minGain ?? 0.03;
     const sigmaWindow = opts.sigmaWindow ?? 2, minWin = opts.minWindowPx ?? 6, maxWin = opts.maxWindowPx ?? 160;
     const rounds = Math.max(1, opts.rounds ?? 2);
     const priorWeight = opts.priorWeight ?? 0;
     const affineWin = opts.affineWindowPx ?? 3;
+    const deadline = t0 + (opts.budgetMs ?? 20_000);
+    let timedOut = false;
+    const outOfTime = (): boolean => { if (Date.now() > deadline) timedOut = true; return timedOut; };
     const W = atlas.width;
     const { mapIndex } = atlas.texels;
     const nMaps = atlas.maps.length;
@@ -229,7 +236,7 @@ export function alignViewsPerChart(atlas: UvAtlas, views: ProjectionView[], samp
 
     const shifts: ChartShift[] = [];
     const pending: Array<{ map: number; views: number[]; edges: Int32Array; win: Map<number, number>; weight: Map<number, number>; baseOf: (k: number) => number; ref?: (k: number, level: number) => Float64Array;
-        field: (k: number, level: number, dx: number, dy: number, aff?: ChartShift['affine']) => Float64Array; gridPos: (t: number) => [number, number]; gw: number; gh: number }> = [];
+        field: (k: number, level: number, dx: number, dy: number, aff?: ChartShift['affine'], only?: Int32Array) => Float64Array; gridPos: (t: number) => [number, number]; gw: number; gh: number }> = [];
     const refShare = opts.referenceShare ?? 1;
     let nccBeforeSum = 0, nccAfterSum = 0, pairWeight = 0, pairs = 0, alignedPairs = 0;
 
@@ -292,10 +299,12 @@ export function alignViewsPerChart(atlas: UvAtlas, views: ProjectionView[], samp
             gridPx.set(k, Math.max(1e-3, gpx));
         }
         const hw = Math.max(1, gw / 2), hh = Math.max(1, gh / 2);
-        const field = (k: number, level: number, dx: number, dy: number, aff?: ChartShift['affine']): Float64Array => {
+        const field = (k: number, level: number, dx: number, dy: number, aff?: ChartShift['affine'], only?: Int32Array): Float64Array => {
             const g = at.get(k)!, p = pyr(k), img = p.levels[base.get(k)! + level], s = samples[k];
             const f = new Float64Array(g.length).fill(NaN);
-            for (let q = 0; q < g.length; q++) {
+            const nq = only ? only.length : g.length;
+            for (let qi = 0; qi < nq; qi++) {
+                const q = only ? only[qi] : qi;
                 const i = g[q];
                 if (i < 0) continue;
                 if (aff) {
@@ -354,17 +363,23 @@ export function alignViewsPerChart(atlas: UvAtlas, views: ProjectionView[], samp
     const search = (score: (level: number, dx: number, dy: number) => number, prior: (dx: number, dy: number) => number, R: number): { dx: number; dy: number; ncc: number; ncc0: number; onEdge: boolean } => {
         const ncc0 = score(0, 0, 0);
         let bx = 0, by = 0, best = -Infinity;
-        const step = Math.max(2, Math.round(R / 8));
+        const step = Math.max(2, Math.round(R / 6));
         for (let dy = -R; dy <= R; dy += step) for (let dx = -R; dx <= R; dx += step) {
             const v = score(2, dx, dy) - prior(dx, dy);
             if (v > best) { best = v; bx = dx; by = dy; }
         }
+        // the middle level in two passes: a quarter-step grid over the coarse cell, then whole pixels around its best
         let cx = bx, cy = by;
-        best = -Infinity;
-        for (let dy = cy - step; dy <= cy + step; dy++) for (let dx = cx - step; dx <= cx + step; dx++) {
-            if (Math.abs(dx) > R || Math.abs(dy) > R) continue;
-            const v = score(1, dx, dy) - prior(dx, dy);
-            if (v > best) { best = v; bx = dx; by = dy; }
+        const s2 = Math.max(1, Math.round(step / 4));
+        for (const [half, st] of [[step, s2], [s2, 1]] as Array<[number, number]>) {
+            best = -Infinity;
+            for (let dy = cy - half; dy <= cy + half; dy += st) for (let dx = cx - half; dx <= cx + half; dx += st) {
+                if (Math.abs(dx) > R || Math.abs(dy) > R) continue;
+                const v = score(1, dx, dy) - prior(dx, dy);
+                if (v > best) { best = v; bx = dx; by = dy; }
+            }
+            cx = bx; cy = by;
+            if (st === 1) break;
         }
         cx = bx; cy = by;
         best = -Infinity;
@@ -430,6 +445,7 @@ export function alignViewsPerChart(atlas: UvAtlas, views: ProjectionView[], samp
             if (opts.signal?.aborted) throw opts.signal.reason instanceof Error ? opts.signal.reason : new Error('alignment aborted');
             const placed = new Set<number>();
             for (const k of p.views) {
+                if (outOfTime()) break;
                 // round 0 without a reference: the chart's first view stays where its pose puts it (the gauge)
                 if (round === 0 && !p.ref && placed.size === 0) { placed.add(k); continue; }
                 const cons = consensusOf(p, k, round === 0 ? (v => placed.has(v)) : (() => true));
@@ -473,6 +489,7 @@ export function alignViewsPerChart(atlas: UvAtlas, views: ProjectionView[], samp
         const nt = Math.max(2, Math.min(4, Math.round(Math.min(p.gw, p.gh) / 20)));
         if (Math.min(p.gw, p.gh) < 2 * 12) continue;
         for (const k of p.views) {
+            if (outOfTime()) break;
             const s = cur.get(key(p.map, k))!;
             if (s.kind === 'none') continue;
             const cons = consensusOf(p, k, () => true);
@@ -487,9 +504,11 @@ export function alignViewsPerChart(atlas: UvAtlas, views: ProjectionView[], samp
                 }
                 if (sub.length < 2 * 60) continue;
                 const te = Int32Array.from(sub);
+                const pts = Int32Array.from(new Set(sub));
                 let bx = s.dx, by = s.dy, best = -Infinity, n = 0;
                 for (let dy = -affineWin; dy <= affineWin; dy += 0.5) for (let dx = -affineWin; dx <= affineWin; dx += 0.5) {
-                    const g = gradNcc(p.field(k, 0, s.dx + dx, s.dy + dy), cons[0], te);
+                    if (outOfTime()) break;
+                    const g = gradNcc(p.field(k, 0, s.dx + dx, s.dy + dy, undefined, pts), cons[0], te);
                     if (g.ncc > best) { best = g.ncc; bx = s.dx + dx; by = s.dy + dy; n = g.n; }
                 }
                 if (best > 0.1 && Math.abs(bx - s.dx) < affineWin && Math.abs(by - s.dy) < affineWin) {
@@ -557,7 +576,7 @@ export function alignViewsPerChart(atlas: UvAtlas, views: ProjectionView[], samp
             charts: pending.length, alignedPairs, kept, perView,
             interViewGradNccBefore: pairWeight ? nccBeforeSum / pairWeight : 0,
             interViewGradNccAfter: pairWeight ? nccAfterSum / pairWeight : 0,
-            pairs, ms: Date.now() - t0
+            pairs, ms: Date.now() - t0, ...(timedOut ? { timedOut: true } : {})
         }
     };
 }

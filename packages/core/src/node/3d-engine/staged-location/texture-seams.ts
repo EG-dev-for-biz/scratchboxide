@@ -196,7 +196,7 @@ export function blurWithinMaps(fields: Float64Array[], mask: Float64Array, sigma
     rect: [number, number, number, number] = [0, 0, W, H]): { f: Float64Array[]; m: Float64Array } {
     const n = W * H, nf = fields.length;
     const [x0, y0, x1, y1] = rect;
-    if (sigma > 4) return boxBlurWithinMaps(fields, mask, sigma, W, mapIndex, covered, rect);
+    if (sigma >= 2) return boxBlurWithinMaps(fields, mask, sigma, W, mapIndex, covered, rect);
     const r = Math.max(1, Math.ceil(3 * sigma));
     const k = new Float64Array(2 * r + 1);
     for (let i = -r; i <= r; i++) k[i + r] = Math.exp(-(i * i) / (2 * sigma * sigma));

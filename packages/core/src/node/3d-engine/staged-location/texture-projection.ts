@@ -357,6 +357,10 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
                 ...(o.alignReference ? { reference: (t: number) => o.alignReference!([atlas.texels.position[t * 3], atlas.texels.position[t * 3 + 1], atlas.texels.position[t * 3 + 2]], [normal[t * 3], normal[t * 3 + 1], normal[t * 3 + 2]]) } : {})
             });
         alignment = al.report;
+        if (al.report.timedOut) {
+            degradations.push({ stage: 'bake-projection', reasonCode: 'alignment_timeout', layerKey: atlas.layerKey,
+                reason: `The per-chart image alignment used its time budget after ${Math.round(al.report.ms / 1000)} s; the charts it had not reached keep their registered poses.` });
+        }
         const col = new Float64Array(3);
         samples.forEach((s, k) => {
             const r = raw[k];
@@ -477,6 +481,7 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
     // ---- 6a: one view per region (per-chart gains, block MRF); the band blend below then blends at region boundaries ------
     let label: Int32Array | undefined;
     let regions: ProjectionBakeReport['regions'];
+    const tRegions = Date.now();
     if (o.regionSelect !== false && views.length >= 2) {
         const g = chartLocalGains(atlas, samples, index, mean);
         if (g.pairs) {
@@ -492,7 +497,9 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
         const sel = selectViewsPerRegion(atlas, samples, index, typeof o.regionSelect === 'object' ? o.regionSelect : {});
         label = sel.label;
         regions = { chartGains: g.pairs, meanAbsLogGain: g.meanAbsLogGain, blocks: sel.blocks, boundaryTexels: sel.changes };
+        timingsMs.regions = Date.now() - tRegions;
     }
+    const tBands = Date.now();
 
     // ---- 6b: band seam blend of each view's residual against the mean: the views by weight, or the chosen view per region ----
     const final = Float64Array.from(mean);
@@ -502,57 +509,95 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
         const bands = bandSigmas.length + 1;
         const num = Array.from({ length: bands }, () => new Float64Array(n * 3));
         const den = Array.from({ length: bands }, () => new Float64Array(n));
-        const ones = new Float64Array(n);
-        for (let t = 0; t < n; t++) ones[t] = covered[t] ? 1 : 0;
-        const coveredMask = covered;
-        samples.forEach((s, k) => {
+        // map by map (blurs never cross atlas maps), in the map's own rectangle; a map with no texel two views see, or (one
+        // view per region) no boundary between chosen views, has nothing to blend and is skipped
+        const rectOf = (m: number): [number, number, number, number] => {
+            const [u0, v0, u1, v1] = atlas.maps[m].atlasRect;
+            return [Math.max(0, Math.floor(u0 * W)), Math.max(0, Math.floor(v0 * H)), Math.min(W, Math.ceil(u1 * W)), Math.min(H, Math.ceil(v1 * H))];
+        };
+        const blended = new Uint8Array(atlas.maps.length);
+        for (let m = 0; m < atlas.maps.length; m++) {
             checkAbort(input.signal);
-            if (!s.texel.length) return;
-            const M = new Float64Array(n);
-            const Dr = new Float64Array(n), Dg = new Float64Array(n), Db = new Float64Array(n), Wk = new Float64Array(n);
-            for (let i = 0; i < s.texel.length; i++) {
-                const t = s.texel[i];
-                M[t] = 1;
-                Dr[t] = s.rgb[i * 3] - mean[t * 3]; Dg[t] = s.rgb[i * 3 + 1] - mean[t * 3 + 1]; Db[t] = s.rgb[i * 3 + 2] - mean[t * 3 + 2];
+            const [x0, y0, x1, y1] = rectOf(m);
+            const w = x1 - x0, h = y1 - y0;
+            if (w <= 0 || h <= 0) continue;
+            const inMap = (t: number) => mapIndex[t] === m && covered[t];
+            let needed = false;
+            const viewsHere = new Set<number>();
+            for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+                const t = y * W + x;
+                if (!inMap(t)) continue;
+                const a = index.start[t], b = index.start[t + 1];
+                for (let p = a; p < b; p++) viewsHere.add(index.view[p]);
+                if (b - a < 2) continue;
+                if (!label) needed = true;
+                else if ((x + 1 < x1 && inMap(t + 1) && label[t + 1] >= 0 && label[t + 1] !== label[t]) || (y + 1 < y1 && inMap(t + W) && label[t + W] >= 0 && label[t + W] !== label[t])) needed = true;
             }
-            if (label) {
-                for (let i = 0; i < s.texel.length; i++) if (label[s.texel[i]] === k) Wk[s.texel[i]] = 1;
-            } else {
-                for (let t = 0; t < n; t++) {
-                    const a = index.start[t], b = index.start[t + 1];
-                    for (let p = a; p < b; p++) if (index.view[p] === k) { Wk[t] = index.weight[p]; break; }
-                }
-            }
-            // the blur only runs over the view's texels and their reach
-            const reach = Math.ceil(3 * Math.max(...bandSigmas));
-            let rx0 = W, ry0 = H, rx1 = -1, ry1 = 0;
-            for (const t of s.texel) { if (!(Wk[t] > 0)) continue; const x = t % W, y = (t - x) / W; if (x < rx0) rx0 = x; if (x > rx1) rx1 = x; if (y < ry0) ry0 = y; if (y > ry1) ry1 = y; }
-            if (rx1 < 0) return; // the view is chosen nowhere: it adds nothing to any band
-            const rect: [number, number, number, number] = [Math.max(0, rx0 - reach), Math.max(0, ry0 - reach), Math.min(W, rx1 + reach + 1), Math.min(H, ry1 + reach + 1)];
-            // Gaussian stack of the residual (normalised over the view's support) and of the weight (over the atlas map)
-            const gD: Float64Array[][] = [[Dr, Dg, Db]];
-            const gW: Float64Array[] = [Wk];
-            for (const sg of bandSigmas) {
-                const bd = blurWithinMaps([Dr, Dg, Db], M, sg, W, H, mapIndex, coveredMask, rect);
-                gD.push(bd.f.map((f) => { const out = new Float64Array(n); for (let t = 0; t < n; t++) out[t] = bd.m[t] > 1e-12 ? f[t] / bd.m[t] : 0; return out; }));
-                const bw = blurWithinMaps([Wk], ones, sg, W, H, mapIndex, coveredMask, rect);
-                const out = new Float64Array(n);
-                for (let t = 0; t < n; t++) out[t] = bw.m[t] > 1e-12 ? bw.f[0][t] / bw.m[t] : 0;
-                gW.push(out);
-            }
-            for (let i = 0; i < s.texel.length; i++) {
-                const t = s.texel[i];
-                for (let bnd = 0; bnd < bands; bnd++) {
-                    const w = gW[bnd][t];
-                    if (!(w > 0)) continue;
-                    for (let c = 0; c < 3; c++) {
-                        const band = bnd < bands - 1 ? gD[bnd][c][t] - gD[bnd + 1][c][t] : gD[bnd][c][t];
-                        num[bnd][t * 3 + c] += w * band;
+            if (!needed || viewsHere.size < 2) continue;
+            blended[m] = 1;
+            const nl = w * h;
+            const covL = new Uint8Array(nl), mapL = new Uint16Array(nl), ones = new Float64Array(nl);
+            for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const t = (y0 + y) * W + x0 + x; if (inMap(t)) { covL[y * w + x] = 1; ones[y * w + x] = 1; } }
+            for (const k of viewsHere) {
+                const M = new Float64Array(nl), Dr = new Float64Array(nl), Dg = new Float64Array(nl), Db = new Float64Array(nl), Wk = new Float64Array(nl);
+                const local: number[] = [];
+                let anyW = false;
+                for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+                    const l = y * w + x;
+                    if (!covL[l]) continue;
+                    const t = (y0 + y) * W + x0 + x;
+                    for (let p = index.start[t]; p < index.start[t + 1]; p++) {
+                        if (index.view[p] !== k) continue;
+                        const q = index.sample[p] * 3, rgb = samples[k].rgb;
+                        M[l] = 1; local.push(l);
+                        Dr[l] = rgb[q] - mean[t * 3]; Dg[l] = rgb[q + 1] - mean[t * 3 + 1]; Db[l] = rgb[q + 2] - mean[t * 3 + 2];
+                        Wk[l] = label ? (label[t] === k ? 1 : 0) : index.weight[p];
+                        if (Wk[l] > 0) anyW = true;
+                        break;
                     }
-                    den[bnd][t] += w;
+                }
+                if (!anyW) continue; // chosen nowhere on this map: it adds nothing to any band
+                // Gaussian stack of the residual (normalised over the view's support) and of the weight (over the map),
+                // normalised only where they are read (the view's own texels)
+                const bd = bandSigmas.map(sg => blurWithinMaps([Dr, Dg, Db], M, sg, w, h, mapL, covL));
+                const bw = bandSigmas.map(sg => blurWithinMaps([Wk], ones, sg, w, h, mapL, covL));
+                const resid = (bnd: number, c: number, l: number): number => {
+                    if (bnd === 0) return c === 0 ? Dr[l] : c === 1 ? Dg[l] : Db[l];
+                    const b = bd[bnd - 1];
+                    return b.m[l] > 1e-12 ? b.f[c][l] / b.m[l] : 0;
+                };
+                const weight = (bnd: number, l: number): number => {
+                    if (bnd === 0) return Wk[l];
+                    const b = bw[bnd - 1];
+                    return b.m[l] > 1e-12 ? b.f[0][l] / b.m[l] : 0;
+                };
+                for (const l of local) {
+                    const t = (y0 + Math.floor(l / w)) * W + x0 + (l % w);
+                    for (let bnd = 0; bnd < bands; bnd++) {
+                        const wt = weight(bnd, l);
+                        if (!(wt > 0)) continue;
+                        for (let c = 0; c < 3; c++) {
+                            const band = bnd < bands - 1 ? resid(bnd, c, l) - resid(bnd + 1, c, l) : resid(bnd, c, l);
+                            num[bnd][t * 3 + c] += wt * band;
+                        }
+                        den[bnd][t] += wt;
+                    }
                 }
             }
-        });
+        }
+        // one view per region on a map with no boundary: every texel is its chosen view's colour (the bands would add
+        // exactly the difference to the mean)
+        if (label) {
+            for (let t = 0; t < n; t++) {
+                if (index.start[t + 1] - index.start[t] < 2 || !(mapIndex[t] < blended.length) || blended[mapIndex[t]]) continue;
+                for (let p = index.start[t]; p < index.start[t + 1]; p++) {
+                    if (index.view[p] !== label[t]) continue;
+                    const q = index.sample[p] * 3, rgb = samples[label[t]].rgb;
+                    final[t * 3] = rgb[q]; final[t * 3 + 1] = rgb[q + 1]; final[t * 3 + 2] = rgb[q + 2];
+                    break;
+                }
+            }
+        }
         for (let t = 0; t < n; t++) {
             if (index.start[t + 1] - index.start[t] < 2) continue;
             for (let bnd = 0; bnd < bands; bnd++) {
@@ -561,6 +606,7 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
             }
         }
     }
+    timingsMs.bands = Date.now() - tBands;
     timingsMs.blend = Date.now() - tBlend;
 
     // ---- outputs: albedo, confidence, provenance -----------------------------------------------------------------
