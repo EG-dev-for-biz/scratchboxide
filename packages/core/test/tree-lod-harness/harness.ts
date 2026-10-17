@@ -98,7 +98,7 @@ async function perf(cam: Cam, frames: number, force?: 0 | 1 | 2): Promise<Record
         frameMs: { median: pct(ms, 0.5), p95: pct(ms, 0.95), max: Math.max(...ms) }, updateMs: { median: pct(upd, 0.5), max: Math.max(...upd) },
         drawnTriangles: { median: pct(tris, 0.5), p95: pct(tris, 0.95), max: Math.max(...tris) }, drawCalls: { median: pct(calls, 0.5), max: Math.max(...calls) },
         estimatedTriangles: { median: pct(est, 0.5), max: Math.max(...est) },
-        atMidpoint: { level0: levels[0], level1: levels[1], level2: levels[2], fading: levels[3], visibleTrees: s.visibleTrees, culledTrees: s.culledTrees, bias: s.bias },
+        atMidpoint: { level0: levels[0], level1: levels[1], level2: levels[2], fading: levels[3], visibleTrees: s.visibleTrees, culledTrees: s.culledTrees, demotedTrees: s.demotedTrees },
         trees: s.trees
     };
 }

@@ -165,17 +165,26 @@ describe('TreeLodController on the contract fixture', () => {
         expect(mats.size).toBe(4);                                    // 12 trees share 4 variants
     });
 
-    it('stretches distances when the estimate is over the triangle budget, and eases back when there is room', async () => {
-        const root = await loadFixture(1);
+    it('holds the farthest trees a level down first when the estimate is over the triangle budget, and none when there is room', async () => {
+        const root = await loadFixture(3);
+        const trees = treeNodes(root);
+        trees.forEach((t, i) => t.position.x += i * 40);              // three trees, 40 m apart along x
+        root.updateMatrixWorld(true);
+        const cam = cameraAt(trees[0], 8);
+        cam.position.x -= 30; cam.lookAt(trees[1].position); cam.updateMatrixWorld(true);
         const c = clock();
-        const tree = treeNodes(root)[0];
-        const lod = new TreeLodController(root, { now: c.now, triangleBudget: 1, minBias: 0.25 });
-        for (let i = 0; i < 120; i++) { c.tick(); lod.update(cameraAt(tree, 30)); }
-        expect(lod.stats.bias).toBeCloseTo(0.25, 5);
-        expect(lod.edgesOf(0).e0).toBeLessThan(1);                    // 30 m / 0.25 = 120 m: no longer level 0
+        const tight = new TreeLodController(root, { now: c.now, triangleBudget: 1 });
+        tight.update(cam);
+        expect(tight.stats.demotedTrees).toBeGreaterThan(0);
+        // the nearest tree is the last to give anything up
+        const nearest = [0, 1, 2].reduce((a, k) => (trees[k].position.distanceTo(cam.position) < trees[a].position.distanceTo(cam.position) ? k : a), 0);
+        const farthest = [0, 1, 2].reduce((a, k) => (trees[k].position.distanceTo(cam.position) > trees[a].position.distanceTo(cam.position) ? k : a), 0);
+        for (let i = 0; i < 120; i++) { c.tick(); tight.update(cam); }
+        const level = (k: number) => { const e = tight.edgesOf(k); return e.e0 > 0.5 ? 0 : e.e1 > 0.5 ? 1 : 2; };
+        expect(level(farthest)).toBeGreaterThanOrEqual(level(nearest));
         const roomy = new TreeLodController(await loadFixture(1), { now: c.now, triangleBudget: 1e9 });
         for (let i = 0; i < 20; i++) { c.tick(); roomy.update(cameraAt(treeNodes(roomy.root)[0], 30)); }
-        expect(roomy.stats.bias).toBe(1);
+        expect(roomy.stats.demotedTrees).toBe(0);
     });
 
     it('gives wood and leaves, at every level and in every dissolve state, one shared clay grey', async () => {

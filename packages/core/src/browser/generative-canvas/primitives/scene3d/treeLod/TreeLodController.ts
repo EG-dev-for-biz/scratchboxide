@@ -28,7 +28,7 @@ import { FADE_STEPS, hysteresisDistance, levelRange, quantiseRange, stepEdges, t
  *
  * Work is bounded per frame: at most `maxCommitsPerFrame` trees change their drawn state (nearest first, the rest keep
  * their previous state one more frame) and `maxNewVariantsPerFrame` material variants are made; when the estimated
- * triangles exceed `triangleBudget` every distance is stretched (a bias that eases back when there is headroom).
+ * triangles (main pass and shadow pass) exceed `triangleBudget` the farthest trees give up a level first.
  *
  * Wood and leaves share whatever material the mesh's base says: `mesh.userData.sbLodBase` (set by clayRenderMode to
  * the one shared studio-clay material), else the material the loader gave it. A mesh the staged-build hook has
@@ -51,8 +51,6 @@ export interface TreeLodOptions {
     maxNewVariantsPerFrame?: number;
     /** Drawn triangles per frame the estimate may reach before levels are pushed farther away. */
     triangleBudget?: number;
-    /** Smallest distance scale the budget may force (1 = none). */
-    minBias?: number;
     /** Clock in ms, replaceable in tests. */
     now?: () => number;
 }
@@ -74,7 +72,8 @@ export interface TreeLodStats {
     commits: number;
     deferredCommits: number;
     newVariants: number;
-    bias: number;
+    /** Trees the budget held a level below where their distance puts them. */
+    demotedTrees: number;
     /** JS time spent in update() (ms). */
     updateMs: number;
 }
@@ -91,6 +90,7 @@ interface TreeState {
     edges: LodEdges;
     snap: boolean;
     culled: boolean;
+    target: LodEdges;
     inMain: boolean;
     inShadow: boolean;
     castLevel: number;
@@ -136,7 +136,6 @@ export class TreeLodController {
     private readonly trees: TreeState[] = [];
     private readonly opts: Required<Omit<TreeLodOptions, 'now'>> & { now: () => number };
     private readonly variants = new Map<THREE.Material, Map<string, THREE.Material>>();
-    private bias = 1;
     private forced: 0 | 1 | 2 | undefined;
     private lastMs: number | undefined;
     private readonly frustum = new THREE.Frustum();
@@ -144,14 +143,14 @@ export class TreeLodController {
     private readonly pvShadow = new THREE.Matrix4();
     private readonly shadowFrustum = new THREE.Frustum();
     private readonly tmp = new THREE.Vector3();
-    readonly stats: TreeLodStats = { trees: 0, visibleTrees: 0, culledTrees: 0, atLevel: [0, 0, 0], fading: 0, estimatedTriangles: 0, estimatedShadowTriangles: 0, shadowOnlyTrees: 0, commits: 0, deferredCommits: 0, newVariants: 0, bias: 1, updateMs: 0 };
+    readonly stats: TreeLodStats = { trees: 0, visibleTrees: 0, culledTrees: 0, atLevel: [0, 0, 0], fading: 0, estimatedTriangles: 0, estimatedShadowTriangles: 0, shadowOnlyTrees: 0, commits: 0, deferredCommits: 0, newVariants: 0, demotedTrees: 0, updateMs: 0 };
 
     /** Finds the trees under `root` (a loaded trees GLB scene) and puts a gate above each level node. Returns nothing to do when there are none. */
     constructor(readonly root: THREE.Object3D, options: TreeLodOptions = {}) {
         this.opts = {
             hysteresisM: options.hysteresisM ?? 2, fadeSeconds: options.fadeSeconds ?? 0.35,
             maxCommitsPerFrame: options.maxCommitsPerFrame ?? 400, maxNewVariantsPerFrame: options.maxNewVariantsPerFrame ?? 6,
-            triangleBudget: options.triangleBudget ?? 8_000_000, minBias: options.minBias ?? 0.1,
+            triangleBudget: options.triangleBudget ?? 8_000_000,
             now: options.now ?? (() => performance.now())
         };
         this.psiSeason = (root.userData?.sbTrees as TreesGlbRootExtras | undefined)?.psiSeason;
@@ -199,7 +198,7 @@ export class TreeLodController {
         return {
             node, id: (node.userData.sbTree as TreeNodeExtras).id, bands, levels,
             centerLocal: node.worldToLocal(sphere.center.clone()), radiusLocal: sphere.radius / scale,
-            filteredD: undefined, edges: { e0: 0, e1: 0 }, snap: true, culled: false, inMain: true, inShadow: false, castLevel: -1, dist: 0, want: ['off', 'off', 'off']
+            filteredD: undefined, edges: { e0: 0, e1: 0 }, snap: true, culled: false, target: { e0: 0, e1: 0 }, inMain: true, inShadow: false, castLevel: -1, dist: 0, want: ['off', 'off', 'off']
         };
     }
 
@@ -259,10 +258,12 @@ export class TreeLodController {
         s.visibleTrees = visible.reduce((n, t) => n + (t.inMain ? 1 : 0), 0);
         s.shadowOnlyTrees = visible.length - s.visibleTrees;
         s.culledTrees = this.trees.length - visible.length;
-        // Budget, on where the trees are heading (not where the dissolves have got to): stretch every distance until the
-        // levels the targets submit fit, up to a few corrections per frame; ease back slowly when there is headroom.
-        const targetOf = (t: TreeState): LodEdges => {
-            const e: LodEdges = this.forced === undefined ? targetEdges(t.filteredD! / this.bias, t.bands) : { e0: this.forced === 0 ? 1 : 0, e1: this.forced === 2 ? 0 : 1 };
+        // Budget, on where the trees are heading (not where the dissolves have got to): when the levels the targets submit (and cast
+        // into the shadow map) exceed `triangleBudget`, the trees farthest from the camera give up a level first (leaf clusters to
+        // mid, mid to far), one level a pass over at most two passes, until they fit. The near trees keep their detail; a tree
+        // only the shadow camera sees goes before any the camera sees.
+        const baseTarget = (t: TreeState): LodEdges => {
+            const e: LodEdges = this.forced === undefined ? targetEdges(t.filteredD!, t.bands) : { e0: this.forced === 0 ? 1 : 0, e1: this.forced === 2 ? 0 : 1 };
             // a tree only the shadow camera sees never wears the near level: its shadow does not need the small leaves
             return t.inMain ? e : { e0: 0, e1: Math.max(0, e.e1) };
         };
@@ -273,16 +274,26 @@ export class TreeLodController {
         };
         // what the shadow pass draws of a tree: its casting level, in full (the depth pass has no dither)
         const shadowCost = (e: LodEdges, t: TreeState): number => (t.inShadow ? t.levels[castingLevel(e)].triangles : 0);
-        if (this.forced === undefined) {
-            for (let pass = 0; pass < 4; pass++) {
-                let est = 0;
-                for (const t of visible) { const e = targetOf(t); est += (t.inMain ? submitted(e, t) : 0) + shadowCost(e, t); }
-                if (est > this.opts.triangleBudget && this.bias > this.opts.minBias) this.bias = Math.max(this.opts.minBias, this.bias * Math.max(0.5, this.opts.triangleBudget / est));
-                else { if (est < 0.8 * this.opts.triangleBudget && this.bias < 1) this.bias = Math.min(1, this.bias * 1.01); break; }
+        const costOf = (e: LodEdges, t: TreeState): number => (t.inMain ? submitted(e, t) : 0) + shadowCost(e, t);
+        let total = 0;
+        for (const t of visible) { t.target = baseTarget(t); total += costOf(t.target, t); }
+        s.demotedTrees = 0;
+        if (this.forced === undefined && total > this.opts.triangleBudget) {
+            const order = [...visible].sort((a, b) => (b.filteredD! + (b.inMain ? 0 : 1e6)) - (a.filteredD! + (a.inMain ? 0 : 1e6)));
+            for (let pass = 0; pass < 2 && total > this.opts.triangleBudget; pass++) {
+                for (const t of order) {
+                    const e = t.target;
+                    if (e.e0 <= 0 && e.e1 <= 0) continue;                       // already wholly the far level
+                    const coarser: LodEdges = { e0: 0, e1: e.e0 > 0 ? e.e1 : 0 };
+                    const gain = costOf(e, t) - costOf(coarser, t);
+                    if (gain <= 0) continue;
+                    t.target = coarser; total -= gain; s.demotedTrees++;
+                    if (total <= this.opts.triangleBudget) break;
+                }
             }
         }
         for (const t of visible) {
-            const target = targetOf(t);
+            const target = t.target;
             t.edges = t.snap ? target : stepEdges(t.edges, target, maxStep);
             t.snap = false;
             let changed = false;
@@ -321,7 +332,6 @@ export class TreeLodController {
             if (!done) s.deferredCommits++;
             s.commits++;
         }
-        s.bias = this.bias;
         s.updateMs = this.opts.now() - t0;
         return s;
     }
