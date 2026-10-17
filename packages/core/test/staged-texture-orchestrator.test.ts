@@ -171,6 +171,19 @@ describe('the texture stage of the staged location build', () => {
         expect(result.summary).toMatch(/generated PBR is not available/);
     });
 
+    it('textures several layers at once, so one layer\'s model wait does not hold back the next', async () => {
+        const s = setup();
+        await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
+        const msgs = s.events.filter(x => x.e.stage === 'textures' && x.e.status === 'running').map(x => ({ seq: x.e.seq, m: String((x.e as any).message ?? '') }));
+        const started = (layer: string) => msgs.find(x => x.m.startsWith(`${layer}: `))?.seq ?? Infinity;
+        const finished = (layer: string) => msgs.find(x => x.m === `${layer} textured`)?.seq ?? -1;
+        const layers = ['l2', 'l3a', 'l3b'].filter(l => Number.isFinite(started(l)));
+        expect(layers.length, JSON.stringify(msgs.map(x => x.m))).toBe(3);
+        // a second layer starts before the first one is finished
+        const first = layers.reduce((a, b) => (finished(a) < finished(b) ? a : b));
+        expect(layers.filter(l => l !== first).some(l => started(l) < finished(first)), JSON.stringify(msgs.map(x => x.m))).toBe(true);
+    });
+
     it('does not hold back the clay result: the clay stages stream exactly as they do with the pass turned off', async () => {
         const on = setup();
         const off = setup({ textures: { disabled: 'texture pass turned off for the comparison' } });

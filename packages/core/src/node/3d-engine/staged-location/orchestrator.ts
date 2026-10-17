@@ -166,6 +166,8 @@ export const STAGE_IDS = Object.keys(STAGES) as StageId[];
 /** The tool's budget is 40 minutes; the run stops starting stages 2 minutes before it. */
 export const RUN_BUDGET_MS = 38 * 60_000;
 export const RUN_DEADLINE_MARGIN_MS = 120_000;
+/** Layers the texture pass works on at once. */
+export const TEXTURE_LAYER_CONCURRENCY = 3;
 export const EXTRACTION_TTL_MS = 7 * 24 * 3600_000;
 export const GEOCODE_TTL_MS = 30 * 24 * 3600_000;
 /** Apron (4 m, tile_refine's) plus crown reach (8 m): where an isolated structure's trees can stand. */
@@ -1355,9 +1357,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         };
                     };
                     done(0);
-                    const textureAll = async (list: typeof targets) => { for (const target of list) {
+                    // layers in parallel (TEXTURE_LAYER_CONCURRENCY at once): one layer's projection runs while another waits on
+                    // its image model, so the stage's wall clock is not the sum of every layer's enhancement
+                    const textureOne = async (target: typeof targets[number]) => {
                         handled.add(target.layer.objectId);
-                        const k = outcomes.length;
                         const clay = fs.readFileSync(target.file);
                         const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048);
                         const entry = await cache.run<Omit<TextureLayerOutcome, 'glb'>>('textures', key, async dir => {
@@ -1388,9 +1391,16 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             }
                         };
                         run.commit(updated, run.layerMeta[current.objectId]);
-                        done(k + 1);
-                        run.emit('textures', 'running', { message: `${target.layer.layer} textured`, layers: [updated], progress: Math.min(1, (k + 1) / targets.length) }, true);
-                    } };
+                        const k = outcomes.length;
+                        done(k);
+                        run.emit('textures', 'running', { message: `${target.layer.layer} textured`, layers: [updated], progress: Math.min(1, k / targets.length) }, true);
+                    };
+                    const textureAll = async (list: typeof targets) => {
+                        let nextLayer = 0;
+                        await Promise.all(Array.from({ length: Math.min(TEXTURE_LAYER_CONCURRENCY, list.length) }, async () => {
+                            while (nextLayer < list.length) await textureOne(list[nextLayer++]);
+                        }));
+                    };
                     await textureAll(targets);
                     // layers the rebuild commits later (photo-read detail, a refit body, figures) get their twins once it settles
                     if (request.isolate) {
