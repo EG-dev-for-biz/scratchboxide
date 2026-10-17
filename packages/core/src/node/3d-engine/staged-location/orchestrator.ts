@@ -143,8 +143,12 @@ export const STAGES = {
     detail: { order: 4, title: 'Photo-inferred detail', budgetMs: 20_000 },
     figures: { order: 4, title: 'Figures', budgetMs: EVIDENCE_DISCOVERY_ALLOWANCE_MS + SURVEY_IMAGE_TIMEOUT_MS + 2 * FIGURE_VISION_TIMEOUT_MS + 4 * 120_000 + 30_000 },
     trees: { order: 5, title: 'Trees', budgetMs: 300_000 },
-    /** Background: the real-world texture pass (textured twins of the staged layers); clay stays the first result. */
-    textures: { order: -1, title: 'Real textures', budgetMs: 300_000 }
+    /**
+     * Background: the real-world texture pass (textured twins of the staged layers); clay stays the first result. The
+     * limit covers the first layers (about 2 to 3 min live) plus the wait for the photo-read detail the rebuild commits
+     * later (about 4 min after the Street View close-ups live), whose layers are textured once it settles.
+     */
+    textures: { order: -1, title: 'Real textures', budgetMs: 600_000 }
 } as const;
 export type StageId = keyof typeof STAGES;
 export const STAGE_IDS = Object.keys(STAGES) as StageId[];
@@ -715,6 +719,8 @@ function describeRegistration(r: Registration, pairs: number): string {
 /** The texture bake's observed-surface tolerance against the scan: 0.5 m + 3 cm per metre of view distance (the scan's
  *  leaf error is ~0.6 m median edge; fitted faces sit within centimetres of the scan where the scan has samples). */
 export const TEXTURE_OBSERVED_SURFACE = { baseM: 0.5, perMeter: 0.03 };
+/** Half the pose uncertainty (live: ~1.3 m residual, so ~0.65 m on the surface) is kept clear of every silhouette. */
+export const TEXTURE_POSE_EDGE_GUARD_SHARE = 0.5;
 
 /** What the texture stage hands the result and the summary. */
 export interface TextureStageValue {
@@ -1275,13 +1281,22 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const started = now();
                     const evidence = evidencePromise ? await evidencePromise.catch(() => undefined) : undefined;
                     const fitNow = rebuildOut.refit?.value ?? rebuildOut.fit?.value;
-                    const body = [...run.state.layers].reverse().find(l => !l.retired && (l.layer === 'l3br' || l.layer === 'l3b'));
-                    const bodyFile = body ? (body.layer === 'l3br' ? rebuildOut.refit?.value.outputs.fittedGlb : rebuildOut.fit?.value.outputs.fittedGlb) : undefined;
-                    const l2 = run.state.layers.find(l => !l.retired && l.layer === 'l2');
-                    const targets: Array<{ layer: StagedLayer; file: string; surfaces?: Array<{ id: string; chart: any }> }> = [];
-                    if (body && bodyFile && fs.existsSync(bodyFile)) targets.push({ layer: body, file: bodyFile, surfaces: (rebuildOut.refit ?? rebuildOut.fit)?.value.surfaces.filter(x => x.chart).map(x => ({ id: x.id, chart: x.chart })) });
-                    if (l2 && remeshed?.clayGlb && fs.existsSync(remeshed.clayGlb)) targets.push({ layer: l2, file: remeshed.clayGlb });
-                    if (!targets.length) return { status: 'skipped', source: '', reason: 'no remeshed or fitted layer to texture' };
+                    // what gets a textured twin: every committed mesh layer the scene shows, or stands on (the ground), except vegetation;
+                    // a layer another layer supersedes is hidden once that one reveals, so it is skipped unless it is the ground
+                    const fitSurfaces = () => (rebuildOut.refit ?? rebuildOut.fit)?.value.surfaces.filter(x => x.chart).map(x => ({ id: x.id, chart: x.chart })) ?? [];
+                    const handled = new Set<string>();
+                    const pick = (): Array<{ layer: StagedLayer; file: string; surfaces?: Array<{ id: string; chart: any }> }> => {
+                        const live = run.state.layers.filter(l => !l.retired);
+                        const superseded = new Set(live.flatMap(l => l.supersedes));
+                        return live.filter(l => {
+                            const meta = run.layerMeta[l.objectId];
+                            if (handled.has(l.objectId) || l.textured || meta?.vegetation || !(l.counts.triangles > 0)) return false;
+                            if (superseded.has(l.objectId) && !meta?.isGround) return false;
+                            return fs.existsSync(path.join(cache.modelsDir, path.basename(l.url)));
+                        }).map(l => ({ layer: l, file: path.join(cache.modelsDir, path.basename(l.url)), surfaces: fitSurfaces() }));
+                    };
+                    const targets = pick();
+                    if (!targets.length) return { status: 'skipped', source: '', reason: 'no committed mesh layer to texture' };
 
                     // the sources, once for every layer
                     const images = evidence?.images ?? [];
@@ -1320,12 +1335,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         };
                     };
                     done(0);
-                    for (const [k, target] of targets.entries()) {
+                    const textureAll = async (list: typeof targets) => { for (const target of list) {
+                        handled.add(target.layer.objectId);
+                        const k = outcomes.length;
                         const clay = fs.readFileSync(target.file);
                         const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048);
                         const entry = await cache.run<Omit<TextureLayerOutcome, 'glb'>>('textures', key, async dir => {
                             const out = await textureLayer({ layerKey: target.layer.layer, clayGlb: clay, ...(target.surfaces?.length ? { surfaces: target.surfaces } : {}) }, {
-                                views, ...(viewsUnavailable ? { viewsUnavailable } : {}), occluder, observedSurface: TEXTURE_OBSERVED_SURFACE,
+                                views, ...(viewsUnavailable ? { viewsUnavailable } : {}), occluder, observedSurface: TEXTURE_OBSERVED_SURFACE, poseEdgeGuardShare: TEXTURE_POSE_EDGE_GUARD_SHARE,
                                 delight: { latitude: run.geoAnchor.lat, longitude: run.geoAnchor.lng },
                                 ...(tile ? { tile } : {}), ...(tileUnavailable ? { tileUnavailable } : {}),
                                 ...(residual !== undefined ? { registrationResidualM: residual } : {}),
@@ -1352,7 +1369,16 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         };
                         run.commit(updated, run.layerMeta[current.objectId]);
                         done(k + 1);
-                        run.emit('textures', 'running', { message: `${target.layer.layer} textured`, layers: [updated], progress: (k + 1) / targets.length }, true);
+                        run.emit('textures', 'running', { message: `${target.layer.layer} textured`, layers: [updated], progress: Math.min(1, (k + 1) / targets.length) }, true);
+                    } };
+                    await textureAll(targets);
+                    // layers the rebuild commits later (photo-read detail, a refit body, figures) get their twins once it settles
+                    if (request.isolate) {
+                        await rebuildPromise.catch(() => undefined);
+                        if (figuresPromise) await (figuresPromise as Promise<unknown>).catch(() => undefined);
+                        const late = pick();
+                        targets.push(...late);
+                        await textureAll(late);
                     }
                     const layers: TextureLayerBundle[] = outcomes.map(o => ({ ...o.out.bundle, maps: { albedo: `${o.url}#albedo` }, confidence: `${o.url}#confidence` }));
                     const timingsMs: Record<string, number> = { total: now() - started, tileLoad: tileLoadMs };

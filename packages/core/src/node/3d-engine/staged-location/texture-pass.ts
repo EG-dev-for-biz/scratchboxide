@@ -70,6 +70,8 @@ export interface TexturePassSources {
     occluder?: RenderMesh3D;
     /** C's observed-surface check against the occluder (texture-projection.ts ProjectionBakeOptions.observedSurface). */
     observedSurface?: { baseM: number; perMeter: number };
+    /** C's pose-aware depth-edge guard (texture-projection.ts ProjectionBakeOptions.poseEdgeGuardShare). */
+    poseEdgeGuardShare?: number;
     /** De-light options for C (place; solar per view when its capture time is known). */
     delight?: ProjectionDelightOptions;
     /** The photo-textured tile surface (D); absent with the reason. */
@@ -249,7 +251,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
         try {
             const res = await bakeStreetViewProjection({
                 atlas, views: src.views, depthFor: depthForMesh(src.occluder), paletteLab: src.palette.length ? paletteLab(src.palette) : undefined,
-                signal: src.signal, options: { ...(src.delight ? { delight: src.delight } : {}), ...(src.observedSurface ? { observedSurface: src.observedSurface } : {}) }
+                signal: src.signal, options: { ...(src.delight ? { delight: src.delight } : {}), ...(src.observedSurface ? { observedSurface: src.observedSurface } : {}), ...(src.poseEdgeGuardShare ? { poseEdgeGuardShare: src.poseEdgeGuardShare } : {}) }
             });
             planes = res;
             degradations.push(...res.degradations);

@@ -83,6 +83,11 @@ export interface ProjectionBakeOptions {
      * fitted face over an opening is not painted with the sky or the background seen through it. Off by default.
      */
     observedSurface?: { baseM: number; perMeter: number };
+    /**
+     * Widen the depth-edge guard to this share of the view's pose uncertainty in pixels at the texel's depth
+     * (poseSigmaPx / z), capped at 64 px. Off by default (only edgeGuardPx).
+     */
+    poseEdgeGuardShare?: number;
     /** Huber threshold (CIE76 Delta E) and the view count it starts at. Default 10 and 3. */
     huberDeltaE?: number;
     huberMinViews?: number;
@@ -175,7 +180,7 @@ const smoothstep01 = (t: number): number => { const x = Math.min(1, Math.max(0, 
 
 /** Steps 1 to 3 for one view: its visible samples with weights. */
 function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: DepthMap, opts: Required<Pick<ProjectionBakeOptions,
-    'featherPx' | 'minCosIncidence' | 'depthToleranceBaseM' | 'depthTolerancePerMeter' | 'edgeGuardPx'>> & Pick<ProjectionBakeOptions, 'observedSurface'>): RawSamples {
+    'featherPx' | 'minCosIncidence' | 'depthToleranceBaseM' | 'depthTolerancePerMeter' | 'edgeGuardPx'>> & Pick<ProjectionBakeOptions, 'observedSurface' | 'poseEdgeGuardShare'>): RawSamples {
     const { atlas } = input;
     const cam = view.camera;
     const out: RawSamples = { texel: [], rgb: [], logW: [], wAbs: [] };
@@ -231,7 +236,11 @@ function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: De
         const cHas = dc < EMPTY_DEPTH;
         const nP = normal[o] * dx + normal[o + 1] * dy + normal[o + 2] * dz; // n . (P - eye)
         let edge = false;
-        for (const [ex, ey] of EDGE_PROBES) {
+        // with poseEdgeGuardShare the guard also covers a share of the pose uncertainty at this depth: a sample a
+        // misregistered pose could carry across a silhouette may hold the background (seen at the arch's inner walls)
+        const gp = opts.poseEdgeGuardShare ? Math.min(64, Math.round((opts.poseEdgeGuardShare * view.poseSigmaPx) / Math.max(1, z))) : 0;
+        const probes = gp > g ? [[gp, 0], [-gp, 0], [0, gp], [0, -gp], [gp, gp], [gp, -gp], [-gp, gp], [-gp, -gp], ...EDGE_PROBES] : EDGE_PROBES;
+        for (const [ex, ey] of probes) {
             const qx = px + ex, qy = py + ey;
             const dn = depthAt(qx, qy);
             const nHas = dn < EMPTY_DEPTH;
@@ -307,7 +316,8 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
         depthToleranceBaseM: o.depthToleranceBaseM ?? 0.20,
         depthTolerancePerMeter: o.depthTolerancePerMeter ?? 0.02,
         edgeGuardPx: o.edgeGuardPx ?? 3,
-        ...(o.observedSurface ? { observedSurface: o.observedSurface } : {})
+        ...(o.observedSurface ? { observedSurface: o.observedSurface } : {}),
+        ...(o.poseEdgeGuardShare ? { poseEdgeGuardShare: o.poseEdgeGuardShare } : {})
     };
     const huberK = o.huberDeltaE ?? 10, huberMin = o.huberMinViews ?? 3;
     const bandSigmas = o.bandSigmasTexels ?? [1, 2, 4];

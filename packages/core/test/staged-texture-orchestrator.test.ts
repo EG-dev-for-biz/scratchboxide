@@ -141,7 +141,8 @@ describe('the texture stage of the staged location build', () => {
         const sb = finalArt.data.stagedBuild;
         expect(validateContract('StagedBuildState', sb)).toEqual([]);
         const textured = sb.layers.filter((l: any) => l.textured);
-        expect(textured.map((l: any) => l.layer).sort()).toEqual(['l2', 'l3b']);
+        // every shown mesh layer (the raw tiles l1 are superseded by the remesh and skipped; the remesh is the ground)
+        expect(textured.map((l: any) => l.layer).sort()).toEqual(['l2', 'l3a', 'l3b']);
         for (const l of textured) {
             const file = path.join(s.root, 'public', 'models', path.basename(l.textured.url));
             const g = parseGlbBytes(fs.readFileSync(file));
@@ -153,20 +154,20 @@ describe('the texture stage of the staged location build', () => {
             expect(l.textured.rungShares[2]).toBeGreaterThan(0.5);
             expect(l.textured.rungShares[0] + l.textured.rungShares[1]).toBe(0);
         }
-        expect(sb.texturePass).toMatchObject({ status: 'committed', layersDone: 2, layersTotal: 2 });
+        expect(sb.texturePass).toMatchObject({ status: 'committed', layersDone: 3, layersTotal: 3 });
         // the record in the result, and the summary says the same numbers
         const rec = result.texturePass!;
         expect(rec.passVersion).toBe(TEXTURE_PASS_VERSION);
-        expect(rec.layers.map(l => l.layerKey).sort()).toEqual(['l2', 'l3b']);
+        expect(rec.layers.map(l => l.layerKey).sort()).toEqual(['l2', 'l3a', 'l3b']);
         expect(rec.degradations.some(d => d.reasonCode === 'no_street_view')).toBe(true);
         expect(rec.degradations.some(d => d.reasonCode === 'enhance_not_run')).toBe(true);
         expect(rec.timingsMs.total).toBeGreaterThan(0);
         expect(result.summary).toContain(SHOW_TEXTURES_PILL);
-        expect(result.summary).toMatch(/Real textures are ready for l3b and l2 \(shown in clay until the user picks textures\)/);
+        expect(result.summary).toMatch(/Real textures are ready for [l0-9a-z, ]+ and [l0-9a-z]+ \(shown in clay until the user picks textures\)/);
         const texels = textured.map((l: any) => ({ shares: l.textured.rungShares }));
         const pct = Math.round((sb.texturePass.rungShares[2]) * 1000) / 10;
         expect(result.summary).toContain(`${pct}% ${TEXTURE_LADDER_RUNGS[2]}`);
-        expect(texels.length).toBe(2);
+        expect(texels.length).toBe(3);
         expect(result.summary).toMatch(/generated PBR is not available/);
     });
 

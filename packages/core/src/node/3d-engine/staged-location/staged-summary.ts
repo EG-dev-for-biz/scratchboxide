@@ -330,7 +330,7 @@ export function texturesSentence(input: StagedSummaryInput): string {
     const pct = (x: number) => `${Math.round(x * 1000) / 10}%`;
     const rungs = t.shares.map((x, r) => (x > 0 ? `${pct(x)} ${TEXTURE_LADDER_RUNGS[r]}` : '')).filter(Boolean).join(', ');
     const sources = [t.views ? `${t.views} registered Street View view${t.views === 1 ? '' : 's'}` : `no Street View view (${t.viewsUnavailable ?? 'none'})`, t.tileUnavailable ? `no tile photo (${t.tileUnavailable})` : 'the Google tile photo'].join(' and ');
-    return `Real textures are ready for ${t.layers.join(' and ')} (shown in clay until the user picks textures), made from ${sources} in ${s1(t.totalMs)}: ${rungs} of the texels.`
+    return `Real textures are ready for ${t.layers.length > 1 ? `${t.layers.slice(0, -1).join(', ')} and ${t.layers[t.layers.length - 1]}` : t.layers[0]} (shown in clay until the user picks textures), made from ${sources} in ${s1(t.totalMs)}: ${rungs} of the texels.`
         + `${t.modelsUsed.length ? ` The tile transfer was sharpened by ${t.modelsUsed.join(', ')} where it passed the edge gate.` : ''}`
         + ` Photo-derived texture is photo-inferred (labelled per texel); generated PBR is not available, so texels no photo reaches keep the measured palette colour.`;
 }
