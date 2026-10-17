@@ -186,6 +186,12 @@ export interface ProjectionBakeReport {
     alignment?: AlignmentReport;
     /** The shadow lift as applied: how much of it the local-contrast cap kept. Present when de-lit. */
     delight?: DelightPlaneReport;
+    /**
+     * The full scan's visibility (present with contextDepthFor): samples the occluder alone would have kept that the scan
+     * shows hidden (a statue, a tree in front), seen past (the background through an opening) or at one of its depth edges,
+     * and the share of all such would-be samples they are (the leak share).
+     */
+    context?: { caughtOccluded: number; caughtSeenPast: number; caughtEdge: number; kept: number; leakShare: number };
     timingsMs: Record<string, number>;
 }
 
@@ -212,7 +218,10 @@ export function poseSigmaTerm(poseSigmaPx: number, z: number, gsdM: number): num
     return 1 / (1 + (sigmaM / POSE_SIGMA_SCALE_M) ** 2);
 }
 
-interface RawSamples { texel: number[]; rgb: number[]; logW: number[]; wAbs: number[]; x: number[]; y: number[] }
+interface RawSamples { texel: number[]; rgb: number[]; logW: number[]; wAbs: number[]; x: number[]; y: number[]; /** Samples the context geometry removed that the occluder alone kept: hidden, seen past, at an edge. */ caught?: [number, number, number] }
+
+/** Why a texel is not seen by a view (visibility codes). */
+const VIS_OK = 0, VIS_OCCLUDED = 1, VIS_SEEN_PAST = 2, VIS_EDGE = 3;
 
 function checkAbort(signal?: AbortSignal): void {
     if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('Street View projection bake aborted');
@@ -236,7 +245,7 @@ const smoothstep01 = (t: number): number => { const x = Math.min(1, Math.max(0, 
 
 /** Steps 1 to 3 for one view: its visible samples with weights. */
 function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: DepthMap, opts: Required<Pick<ProjectionBakeOptions,
-    'featherPx' | 'minCosIncidence' | 'depthToleranceBaseM' | 'depthTolerancePerMeter' | 'edgeGuardPx'>> & Pick<ProjectionBakeOptions, 'observedSurface' | 'poseEdgeGuardShare'>): RawSamples {
+    'featherPx' | 'minCosIncidence' | 'depthToleranceBaseM' | 'depthTolerancePerMeter' | 'edgeGuardPx'>> & Pick<ProjectionBakeOptions, 'observedSurface' | 'poseEdgeGuardShare'>, context?: DepthMap): RawSamples {
     const { atlas } = input;
     const cam = view.camera;
     const out: RawSamples = { texel: [], rgb: [], logW: [], wAbs: [], x: [], y: [] };
@@ -247,17 +256,67 @@ function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: De
     if (view.image.width !== cam.width || view.image.height !== cam.height) {
         throw new Error(`image of ${view.panoId} is ${view.image.width}x${view.image.height}, the camera is ${cam.width}x${cam.height}`);
     }
+    if (context && (context.width !== cam.width || context.height !== cam.height)) {
+        throw new Error(`contextDepthFor(${view.panoId}) returned ${context.width}x${context.height}, the camera is ${cam.width}x${cam.height}`);
+    }
     const n = atlas.width * atlas.height;
     const { covered, gutter, position, normal, sizeM } = atlas.texels;
-    const W = cam.width, H = cam.height, D = depth.depthM;
+    const W = cam.width, H = cam.height, P = depth.depthM;
+    // with the context (the full scan), a texel is hidden by the nearer of the two and must be seen on the context's surface
+    let D = P;
+    const C = context?.depthM;
+    if (C) {
+        D = new Float32Array(P.length);
+        for (let i = 0; i < P.length; i++) { const a = Number.isFinite(P[i]) ? P[i] : Infinity, b = Number.isFinite(C[i]) ? C[i] : Infinity; D[i] = Math.min(a, b); }
+        out.caught = [0, 0, 0];
+    }
     const rects = (view.redactionRects ?? []).map(([x0, y0, x1, y1]) => [x0 - 1, y0 - 1, x1 + 1, y1 + 1]);
     const col = new Float64Array(3);
     const g = opts.edgeGuardPx;
     /** Probe offsets of the depth-edge guard: the 4 axes and the 4 diagonals (a corner is diagonal from the pixel). */
     const EDGE_PROBES = [[g, 0], [-g, 0], [0, g], [0, -g], [g, g], [g, -g], [-g, g], [-g, -g]];
-    const depthAt = (px: number, py: number): number => {
-        const v = D[Math.min(H - 1, Math.max(0, py)) * W + Math.min(W - 1, Math.max(0, px))];
+    const depthIn = (A: Float32Array, px: number, py: number): number => {
+        const v = A[Math.min(H - 1, Math.max(0, py)) * W + Math.min(W - 1, Math.max(0, px))];
         return Number.isFinite(v) ? v : Infinity;
+    };
+    /**
+     * Visibility of a texel at camera depth z, pixel (px, py), against occluder depth A (and, for the seen-surface check, S):
+     * hidden by something nearer; seen past (the photo shows what lies beyond: an opening, the sky); or within the guard of a
+     * depth edge, judged against the texel's own tangent plane.
+     */
+    const visibility = (A: Float32Array, S: Float32Array, px: number, py: number, z: number, o: number, dx: number, dy: number, dz: number): number => {
+        const tol = opts.depthToleranceBaseM + opts.depthTolerancePerMeter * z;
+        const dc = depthIn(A, px, py);
+        if (dc < EMPTY_DEPTH && dc < z - tol) return VIS_OCCLUDED;
+        // observed surface: the photo must show a surface where the texel is. When the occluder (the scan) at this pixel is
+        // much farther than the texel, or there is nothing (sky), the camera sees PAST the texel: a face the fit placed
+        // where the scan has no surface (an arch opening, a gap), and the pixel holds the sky or what stands behind it.
+        if (opts.observedSurface || S !== A) {
+            const ds = depthIn(S, px, py);
+            const far = opts.observedSurface ? opts.observedSurface.baseM + opts.observedSurface.perMeter * z : tol;
+            if (!(ds < EMPTY_DEPTH) || ds > z + far) return VIS_SEEN_PAST;
+        }
+        // depth-edge guard: the occluder depth at +-g px must be where the texel's own tangent plane predicts it
+        // (so a steeply tilted wall is not an edge, and a thing standing proud of it is, whatever the angle)
+        const cHas = dc < EMPTY_DEPTH;
+        const nP = normal[o] * dx + normal[o + 1] * dy + normal[o + 2] * dz; // n . (P - eye)
+        // with poseEdgeGuardShare the guard also covers a share of the pose uncertainty at this depth: a sample a
+        // misregistered pose could carry across a silhouette may hold the background (seen at the arch's inner walls)
+        const gp = opts.poseEdgeGuardShare ? Math.min(64, Math.round((opts.poseEdgeGuardShare * view.poseSigmaPx) / Math.max(1, z))) : 0;
+        const probes = gp > g ? [[gp, 0], [-gp, 0], [0, gp], [0, -gp], [gp, gp], [gp, -gp], [-gp, gp], [-gp, -gp], ...EDGE_PROBES] : EDGE_PROBES;
+        for (const [ex, ey] of probes) {
+            const qx = px + ex, qy = py + ey;
+            const dn = depthIn(A, qx, qy);
+            const nHas = dn < EMPTY_DEPTH;
+            if (nHas !== cHas) return VIS_EDGE;
+            if (!nHas) continue;
+            const sx = (Math.min(W - 1, Math.max(0, qx)) + 0.5 - cam.cx) / cam.fx, sy = (Math.min(H - 1, Math.max(0, qy)) + 0.5 - cam.cy) / cam.fy;
+            const rd = [cam.fwd[0] + sx * cam.right[0] - sy * cam.up[0], cam.fwd[1] + sx * cam.right[1] - sy * cam.up[1], cam.fwd[2] + sx * cam.right[2] - sy * cam.up[2]];
+            const nd = normal[o] * rd[0] + normal[o + 1] * rd[1] + normal[o + 2] * rd[2];
+            const expected = nd < -1e-6 ? nP / nd : Infinity; // camera z of the tangent plane along that pixel's ray
+            if (!Number.isFinite(expected) || Math.abs(dn - expected) > opts.depthToleranceBaseM + opts.depthTolerancePerMeter * expected) return VIS_EDGE;
+        }
+        return VIS_OK;
     };
     for (let t = 0; t < n; t++) {
         if (!covered[t] || gutter[t]) continue;
@@ -277,38 +336,12 @@ function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: De
         if (redacted) continue;
         // visibility
         const px = Math.floor(x), py = Math.floor(y);
-        const tol = opts.depthToleranceBaseM + opts.depthTolerancePerMeter * z;
-        const dc = depthAt(px, py);
-        if (dc < EMPTY_DEPTH && dc < z - tol) continue;
-        // observed surface: the photo must show a surface where the texel is. When the occluder (the scan) at this pixel is
-        // much farther than the texel, or there is nothing (sky), the camera sees PAST the texel: a face the fit placed
-        // where the scan has no surface (an arch opening, a gap), and the pixel holds the sky or what stands behind it.
-        if (opts.observedSurface) {
-            const far = opts.observedSurface.baseM + opts.observedSurface.perMeter * z;
-            if (!(dc < EMPTY_DEPTH) || dc > z + far) continue;
+        const vis = visibility(D, C ?? D, px, py, z, o, dx, dy, dz);
+        if (vis !== VIS_OK) {
+            // a leak caught: the occluder alone would have let this sample through
+            if (C && out.caught && visibility(P, P, px, py, z, o, dx, dy, dz) === VIS_OK) out.caught[vis - 1]++;
+            continue;
         }
-        // depth-edge guard: the occluder depth at +-g px must be where the texel's own tangent plane predicts it
-        // (so a steeply tilted wall is not an edge, and a thing standing proud of it is, whatever the angle)
-        const cHas = dc < EMPTY_DEPTH;
-        const nP = normal[o] * dx + normal[o + 1] * dy + normal[o + 2] * dz; // n . (P - eye)
-        let edge = false;
-        // with poseEdgeGuardShare the guard also covers a share of the pose uncertainty at this depth: a sample a
-        // misregistered pose could carry across a silhouette may hold the background (seen at the arch's inner walls)
-        const gp = opts.poseEdgeGuardShare ? Math.min(64, Math.round((opts.poseEdgeGuardShare * view.poseSigmaPx) / Math.max(1, z))) : 0;
-        const probes = gp > g ? [[gp, 0], [-gp, 0], [0, gp], [0, -gp], [gp, gp], [gp, -gp], [-gp, gp], [-gp, -gp], ...EDGE_PROBES] : EDGE_PROBES;
-        for (const [ex, ey] of probes) {
-            const qx = px + ex, qy = py + ey;
-            const dn = depthAt(qx, qy);
-            const nHas = dn < EMPTY_DEPTH;
-            if (nHas !== cHas) { edge = true; break; }
-            if (!nHas) continue;
-            const sx = (Math.min(W - 1, Math.max(0, qx)) + 0.5 - cam.cx) / cam.fx, sy = (Math.min(H - 1, Math.max(0, qy)) + 0.5 - cam.cy) / cam.fy;
-            const rd = [cam.fwd[0] + sx * cam.right[0] - sy * cam.up[0], cam.fwd[1] + sx * cam.right[1] - sy * cam.up[1], cam.fwd[2] + sx * cam.right[2] - sy * cam.up[2]];
-            const nd = normal[o] * rd[0] + normal[o + 1] * rd[1] + normal[o + 2] * rd[2];
-            const expected = nd < -1e-6 ? nP / nd : Infinity; // camera z of the tangent plane along that pixel's ray
-            if (!Number.isFinite(expected) || Math.abs(dn - expected) > opts.depthToleranceBaseM + opts.depthTolerancePerMeter * expected) { edge = true; break; }
-        }
-        if (edge) continue;
         // weight
         const gsd = z / (cam.fx * cos);
         const res = Math.min(1, sizeM[t] / gsd);
@@ -377,7 +410,7 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
                 raw.push({ texel: [], rgb: [], logW: [], wAbs: [], x: [], y: [] });
                 continue;
             }
-            const s = projectView(input, view, input.depthFor(view), opts);
+            const s = projectView(input, view, input.depthFor(view), opts, input.contextDepthFor?.(view));
             if (!s.texel.length) {
                 passDegradations.push({ stage: 'bake-projection', reasonCode: 'pano_sees_nothing', layerKey: atlas.layerKey,
                     reason: `Pano ${view.panoId} sees none of this layer's texels unoccluded at a usable angle.` });
@@ -453,6 +486,15 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
     }
     degradations.push(...passDegradations);
     const wAbs = raw.map((r) => Float32Array.from(r.wAbs));
+    // the full scan's catch, counted before the raw samples are released (the projection pass the bake kept)
+    let contextReport: ProjectionBakeReport['context'];
+    if (input.contextDepthFor) {
+        const c = [0, 0, 0];
+        let kept = 0;
+        for (const r of raw) { if (r.caught) for (let k = 0; k < 3; k++) c[k] += r.caught[k]; kept += r.texel.length; }
+        const caught = c[0] + c[1] + c[2];
+        contextReport = { caughtOccluded: c[0], caughtSeenPast: c[1], caughtEdge: c[2], kept, leakShare: caught + kept ? Math.round((caught / (caught + kept)) * 10000) / 10000 : 0 };
+    }
     raw.length = 0;
 
     // ---- per-texel index (CSR) with weights normalised per texel ------------------------------------------------
@@ -908,6 +950,7 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
             targetTexels, coveredTexels, bakedTexels: baked, multiViewTexels, overlapPairs, maxSeamDeltaE: maxSeam, p95SeamDeltaE: p95Seam, seamSamples: seams.length, timingsMs,
             outputSeam: { p95DeltaE: pct(outA, 0.95), maxDeltaE: outA.length ? outA[outA.length - 1] : 0, samples: outA.length, interiorP95DeltaE: pct(outI, 0.95), lowFreqP95DeltaE: pct(lowA, 0.95), lowFreqMedianDeltaE: pct(lowA, 0.5), lowFreqInteriorP95DeltaE: pct(lowI, 0.95), lowFreqInteriorMedianDeltaE: pct(lowI, 0.5) },
             ...(delightReport ? { delight: delightReport } : {}),
+            ...(contextReport ? { context: contextReport } : {}),
             ...(alignment ? { alignment } : {}),
             ...(poseRefine ? { poseRefine } : {}),
             ...(regions ? { regions } : {}),

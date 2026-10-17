@@ -227,6 +227,12 @@ export interface ProjectionBakeInput {
     atlas: UvAtlas;
     views: ProjectionView[];
     depthFor: (view: ProjectionView) => DepthMap;
+    /**
+     * The full scene as scanned (the photogrammetric tile mesh: the real openings, statues, trees and the buildings behind),
+     * rendered from each view. When given, a texel is hidden by anything nearer in it as well, and the photo must show the
+     * scan's surface at the texel (not what stands behind an opening); the samples it removes are counted as leaks caught.
+     */
+    contextDepthFor?: (view: ProjectionView) => DepthMap;
     /** Measured palette (Lab) the exposure gate anchors to, when one exists. */
     paletteLab?: Array<{ lab: Vec3; share: number }>;
     signal?: AbortSignal;

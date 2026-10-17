@@ -1369,6 +1369,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     // the scan is the occluder and the judge of what the photos show: a fitted face where the scan has no surface
                     // (an arch opening) is not painted with the sky seen through it
                     const occluder = loadMesh([remeshed?.clayGlb]);
+                    // the full tile mesh: the real opening, the statues, the trees and the buildings behind decide what each photo shows
+                    const context = loadMesh([extraction.geometryGlb]);
                     const residual = evidence?.registration?.afterRmsM;
                     const poseHash = evidence?.registration ? [...evidence.registration.corrections.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)) : [];
                     const tileSha = tile ? sha256File(extraction.texturedGlb) : 'no-tile';
@@ -1391,7 +1393,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048);
                         const entry = await cache.run<Omit<TextureLayerOutcome, 'glb'>>('textures', key, async dir => {
                             const out = await textureLayer({ layerKey: target.layer.layer, clayGlb: clay, ...(target.surfaces?.length ? { surfaces: target.surfaces } : {}) }, {
-                                views, ...(viewsUnavailable ? { viewsUnavailable } : {}), occluder, observedSurface: TEXTURE_OBSERVED_SURFACE, poseEdgeGuardShare: TEXTURE_POSE_EDGE_GUARD_SHARE,
+                                views, ...(viewsUnavailable ? { viewsUnavailable } : {}), occluder, ...(context.indices.length ? { context } : {}), observedSurface: TEXTURE_OBSERVED_SURFACE, poseEdgeGuardShare: TEXTURE_POSE_EDGE_GUARD_SHARE,
                                 delight: { latitude: run.geoAnchor.lat, longitude: run.geoAnchor.lng },
                                 ...(tile ? { tile } : {}), ...(tileUnavailable ? { tileUnavailable } : {}),
                                 ...(residual !== undefined ? { registrationResidualM: residual } : {}),

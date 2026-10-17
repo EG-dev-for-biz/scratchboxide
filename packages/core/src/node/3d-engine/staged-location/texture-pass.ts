@@ -44,7 +44,7 @@ import { buildUvAtlas, type LaidOutUvAtlas } from './texture-uv';
 import { mergeBakedPlanes, transferTilePhoto, type TileTextureSurface } from './tile-texture-transfer';
 
 /** Part of every texture cache key: a change to the pass's maths is a new version. */
-export const TEXTURE_PASS_VERSION = 'texture-pass/4';
+export const TEXTURE_PASS_VERSION = 'texture-pass/5';
 export const RUNG_PALETTE = 3;
 export const RUNG_GENERATED_PBR = 4;
 /** The enhancement rung's own time budget per layer (layers run in parallel inside the stage's 600 s). */
@@ -68,6 +68,11 @@ export interface TexturePassSources {
     viewsUnavailable?: string;
     /** Occluder for C's depth test: the scan (the remeshed layer). */
     occluder?: RenderMesh3D;
+    /**
+     * The full photogrammetric tile mesh (real openings, statues, trees, the buildings behind): C's visibility also against
+     * it, so what stands in front of a wall or behind an opening is never painted on the wall (contextDepthFor).
+     */
+    context?: RenderMesh3D;
     /** C's observed-surface check against the occluder (texture-projection.ts ProjectionBakeOptions.observedSurface). */
     observedSurface?: { baseM: number; perMeter: number };
     /** C's pose-aware depth-edge guard (texture-projection.ts ProjectionBakeOptions.poseEdgeGuardShare). */
@@ -103,7 +108,7 @@ export interface TextureLayerOutcome {
     atlasTexels: number;
     atlas: { width: number; height: number; texelsPerMeter: number; charts: number; islands: number };
     degradations: TexturePassDegradation[];
-    projection?: Pick<ProjectionBakeReport, 'bakedTexels' | 'multiViewTexels' | 'maxSeamDeltaE' | 'p95SeamDeltaE' | 'delight' | 'outputSeam' | 'regions' | 'poisson' | 'timingsMs'> & {
+    projection?: Pick<ProjectionBakeReport, 'bakedTexels' | 'multiViewTexels' | 'maxSeamDeltaE' | 'p95SeamDeltaE' | 'delight' | 'outputSeam' | 'regions' | 'poisson' | 'context' | 'timingsMs'> & {
         views: number; paletteDeltaE?: number;
         /** The alignment's inter-view gradient NCC before and after, kept shifts and whether it ran out of time. */
         alignment?: { nccBefore: number; nccAfter: number; kept: Record<string, number>; timedOut?: boolean; ms: number };
@@ -256,7 +261,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
         progress(`projecting ${src.views.length} Street View views`);
         try {
             const res = await bakeStreetViewProjection({
-                atlas, views: src.views, depthFor: depthForMesh(src.occluder), paletteLab: src.palette.length ? paletteLab(src.palette) : undefined,
+                atlas, views: src.views, depthFor: depthForMesh(src.occluder), ...(src.context ? { contextDepthFor: depthForMesh(src.context) } : {}), paletteLab: src.palette.length ? paletteLab(src.palette) : undefined,
                 signal: src.signal, options: {
                     // the tile photo is registered to the geometry, so the per-chart alignment uses it as its reference
                     ...(src.tile ? { alignReference: (P: Vec3, N: Vec3) => {
@@ -270,7 +275,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
             projection = {
                 views: src.views.length, bakedTexels: res.report.bakedTexels, multiViewTexels: res.report.multiViewTexels,
                 maxSeamDeltaE: res.report.maxSeamDeltaE, p95SeamDeltaE: res.report.p95SeamDeltaE, outputSeam: res.report.outputSeam, timingsMs: res.report.timingsMs,
-                ...(res.report.regions ? { regions: res.report.regions } : {}), ...(res.report.poisson ? { poisson: res.report.poisson } : {}),
+                ...(res.report.regions ? { regions: res.report.regions } : {}), ...(res.report.poisson ? { poisson: res.report.poisson } : {}), ...(res.report.context ? { context: res.report.context } : {}),
                 ...(res.report.alignment ? { alignment: { nccBefore: res.report.alignment.interViewGradNccBefore, nccAfter: res.report.alignment.interViewGradNccAfter, kept: res.report.alignment.kept, ms: res.report.alignment.ms, ...(res.report.alignment.timedOut ? { timedOut: true } : {}) } } : {}),
                 ...(res.report.poseRefine ? { poseRefine: { rmsBeforeM: res.report.poseRefine.rmsBeforeM, rmsAfterM: res.report.poseRefine.rmsAfterM, applied: res.report.poseRefine.applied, ...(res.report.poseRefine.kept !== undefined ? { kept: res.report.poseRefine.kept } : {}), ...(res.report.poseRefine.reason ? { reason: res.report.poseRefine.reason } : {}) } } : {}),
                 ...(res.report.delight ? { delight: res.report.delight } : {}),
