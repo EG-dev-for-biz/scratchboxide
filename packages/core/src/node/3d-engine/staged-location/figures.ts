@@ -380,13 +380,22 @@ export async function readFigures(input: ReadFiguresInput): Promise<{ parsed: Pa
             try {
                 const r = await readFiguresOnce({ ...input, images: [{ ...im, index: 0 }], timeoutMs: left });
                 const reading = r.parsed.readings.get(0);
-                return { ...(reading ? { reading: { ...reading, index: im.index } } : {}), ...(r.parsed.problems.get(0) ? { problems: r.parsed.problems.get(0)! } : {}), model: r.model };
+                const problems = r.parsed.problems.get(0);
+                // a spec the builder's rules refuse is asked for afresh while attempts are left (live: a relief part attached to a parent)
+                if (!reading && problems && attempt + 1 < FIGURE_READ_ATTEMPTS) {
+                    last = { reading: undefined, problems, model: r.model };
+                    input.onProgress?.(`the spec for figure ${im.index + 1} breaks the builder's rules (${problems[0].slice(0, 80)}); asking again`);
+                    continue;
+                }
+                return { ...(reading ? { reading: { ...reading, index: im.index } } : {}), ...(problems ? { problems } : {}), model: r.model };
             } catch (err) {
                 last = err;
                 if (input.signal?.aborted || !UNREADABLE.test((err as Error).message)) break;
                 input.onProgress?.(`the reply for figure ${im.index + 1} could not be read (${(err as Error).message.slice(0, 80)}); asking again`);
             }
         }
+        // the attempts ended on a refused spec: its problems stand, as from the last reply
+        if (last && typeof last === 'object' && 'problems' in (last as object)) return last as { problems: string[]; model: VisionModelUse };
         return { error: last };
     };
     const results = await Promise.all(input.images.map(one));

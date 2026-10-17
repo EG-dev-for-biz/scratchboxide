@@ -69,4 +69,23 @@ describe('figure reading, one call per figure', () => {
         expect(r.parsed.problems.get(0)![0]).toMatch(/its reading failed \(the reply is not valid JSON/);
         expect(r.calls).toBe(FIGURE_READ_ATTEMPTS + 1);
     });
+
+    it('a spec the builder refuses is asked for again; the next valid one is read', async () => {
+        const a = bandJpeg([SKY, STONE, GREY]);
+        let n = 0;
+        const fake = {
+            models: {
+                generateContent: async () => { throw new Error('streaming expected'); },
+                generateContentStream: async (params: any) => {
+                    const reply = n++ === 0 ? { figures: [{ image: 0, confidence: 70, spec: { subject: 'x', parts: [] } }] } : figuresReply([0]);
+                    return (async function* () { yield { candidates: [{ content: { parts: [{ text: JSON.stringify(reply) }] }, finishReason: 'STOP' }], modelVersion: `${params.model}-001` } as any; })();
+                }
+            }
+        } as unknown as VisionGenAIClient;
+        const chain = new VisionModelChain<string>({ client: fake, candidates: ['gemini-4-argon'], sleep: async () => undefined });
+        const r = await readFigures({ images: [image(0, a)], chain });
+        expect([...r.parsed.readings.keys()]).toEqual([0]);
+        expect(r.parsed.problems.size).toBe(0);
+        expect(r.calls).toBe(2);
+    });
 });
