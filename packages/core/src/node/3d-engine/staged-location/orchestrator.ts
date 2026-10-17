@@ -91,10 +91,11 @@ import {
 import { selectViewsForFit } from './evidence-aim';
 import { describeSurvey, runFaceSurvey, surveyCandidates, surveyFaceTargets, surveyImageBytes, SURVEY_IMAGE_TIMEOUT_MS, SURVEY_VISION_TIMEOUT_MS, type SurveyResult } from './face-survey';
 import { describeLocated, locateSurveyElements, planDetailFromSurvey, type DetailPlan } from './survey-detail';
+import { DETAIL_REPROJECTION_MIN_IOU, reprojectDetail } from './detail-reprojection';
 import { EDGE_REGISTRATION_BUDGET_MS, edgeFramesFromImages, registerPanosByEdges, describeEdgeRegistration, type EdgeRegistrationResult } from './pano-edge-registration';
 import { registerPanos, type Registration } from './pano-registration';
 import { MATCH_TIMEOUT_MS, matchRingImages, runViewMatch, type MatchResult } from './view-match';
-import { fitFaces } from './survey-casting';
+import { castCamera, fitFaces } from './survey-casting';
 import type { AnchorNote } from './ornament-anchor';
 import { EVIDENCE_DISCOVERY_ALLOWANCE_MS } from './streetview-evidence';
 import {
@@ -151,7 +152,8 @@ export const STAGES = {
     // stage keeps so that its own limit never discards a reading that finished
     vision: { order: -1, title: 'Reading the photos', budgetMs: ORNAMENT_PASS_BUDGET_MS + VISION_RUNS_ALLOWANCE_MS + VISION_STAGE_MARGIN_MS },
     correct: { order: 3, title: 'Photo corrections', budgetMs: 30_000 },
-    detail: { order: 4, title: 'Photo-inferred detail', budgetMs: 20_000 },
+    // the build, the reprojection gate, and a second build without the elements it rejects
+    detail: { order: 4, title: 'Photo-inferred detail', budgetMs: 45_000 },
     figures: { order: 4, title: 'Figures', budgetMs: EVIDENCE_DISCOVERY_ALLOWANCE_MS + SURVEY_IMAGE_TIMEOUT_MS + 2 * FIGURE_VISION_TIMEOUT_MS + 4 * 120_000 + 30_000 },
     trees: { order: 5, title: 'Trees', budgetMs: 300_000 },
     /**
@@ -2089,8 +2091,37 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             const detailed = await runner.stage<ScanFitOrnamentResult>({
                 id: 'detail',
                 run: async io => {
-                    const spec: OrnamentSpec = { ...out.spec!, structureFitSha256: sha256File(currentFit.value.outputs.reportJson) };
-                    const r = await deps.scanFit!.ornament({ fitPath: currentFit.path, spec, texturedGlb: extraction.texturedGlb, signal: io.signal });
+                    let spec: OrnamentSpec = { ...out.spec!, structureFitSha256: sha256File(currentFit.value.outputs.reportJson) };
+                    let r = await deps.scanFit!.ornament({ fitPath: currentFit.path, spec, texturedGlb: extraction.texturedGlb, signal: io.signal });
+                    // reprojection gate: each built element rendered through the registered cameras of the images it was read from
+                    // must land on the box the model cited there; one that lands elsewhere was not where it was read (detail-reprojection.ts)
+                    const cams = new Map(evidence.images.map(img => [img.id, castCamera({
+                        eye: img.view.eye, headingDeg: img.view.headingDeg, pitchDeg: img.view.pitchDeg, fovDeg: img.view.fovDeg, widthPx: img.widthPx, heightPx: img.heightPx,
+                        ...(evidence.registration?.corrections.get(img.view.panoId) ? { correction: evidence.registration.corrections.get(img.view.panoId)! } : {})
+                    })]));
+                    const gated = spec.elements.some(e => e.evidence.some(v => cams.has(v.imageId)));
+                    let gateOccluder: ReturnType<typeof loadMesh> | undefined;
+                    if (gated) {
+                        // the fitted structure hides what stands behind it; without it (a body that cannot be read) the elements are rendered alone
+                        try { gateOccluder = loadMesh([currentFit.value.outputs.fittedGlb, currentFit.value.outputs.passThroughGlb]); } catch { gateOccluder = undefined; }
+                    }
+                    const gate = gated ? reprojectDetail(readGlbNodes(r.detailGlb), spec.elements, id => cams.get(id), gateOccluder ? { occluder: gateOccluder } : {}) : [];
+                    const rejectedByGate = gate.filter(g => !g.accepted);
+                    if (gated) cache.writeRunNote(runId, 'detail_reprojection', { minIoU: DETAIL_REPROJECTION_MIN_IOU, elements: gate });
+                    if (gated) io.progress(`reprojection gate: ${gate.length - rejectedByGate.length} of ${gate.length} elements land where they were read (IoU >= ${DETAIL_REPROJECTION_MIN_IOU})${rejectedByGate.length ? `; rejected ${rejectedByGate.map(g => `${g.elementId}${g.label ? ` (${g.label})` : ''} IoU ${g.iou?.toFixed(2) ?? 'n/a'}`).join(', ')}` : ''}`);
+                    if (rejectedByGate.length) {
+                        const ids = new Set(rejectedByGate.map(g => g.elementId));
+                        spec = { ...spec, elements: spec.elements.filter(e => !ids.has(e.id)), dropped: [...spec.dropped, ...rejectedByGate.map(g => ({ elementId: g.elementId, slotId: g.slotId, by: 'reprojection', problems: [g.reason] }))] };
+                        out.spec = spec;
+                        if (spec.elements.length) r = await deps.scanFit!.ornament({ fitPath: currentFit.path, spec, texturedGlb: extraction.texturedGlb, signal: io.signal });
+                    }
+                    const gateDegradations = rejectedByGate.map(g => run.degrade(record('detail', 'detail_rejected', {
+                        part: { description: `photo-read element ${g.elementId}${g.label ? ` (${g.label})` : ''} in slot ${g.slotId}`, slotId: g.slotId, elementId: g.elementId }, intended: 'photo-inferred detail', fellTo: 'the flat fitted face',
+                        provenanceAfter: PROVENANCE.fitted, reason: g.reason, transient: false, runId, now: now(), suffix: g.elementId
+                    })));
+                    if (!spec.elements.length) {
+                        return { status: 'degraded', source: 'no detail', reason: 'every photo-read element was rejected by the reprojection gate', degradations: gateDegradations };
+                    }
                     const pub = cache.publishFile(r.detailGlb, `${base}_detail_${r.key.slice(0, 8)}.glb`);
                     const bodyId = run.state.layers.filter(l => l.layer === 'l3br' || l.layer === 'l3b').pop()?.objectId;
                     const layer: StagedLayer = {
@@ -2107,7 +2138,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         part: { description: `photo-read element ${d.elementId} in slot ${d.slotId}`, slotId: d.slotId, elementId: d.elementId }, intended: 'photo-inferred detail', fellTo: 'the flat fitted face',
                         provenanceAfter: PROVENANCE.fitted, reason: d.checks.map(c => c.message).join('; '), transient: false, runId, now: now(), suffix: d.elementId
                     })));
-                    return { status: degradations.length ? 'degraded' : 'committed', value: r, source: `${r.value.built.length} photo-inferred elements built`, layers: built ? [layer] : [], degradations, cached: r.cached };
+                    degradations.push(...gateDegradations);
+                    return { status: degradations.length ? 'degraded' : 'committed', value: r, source: `${r.value.built.length} photo-inferred elements built; ${rejectedByGate.length} of ${gate.length} rejected by the reprojection gate`, layers: built ? [layer] : [], degradations, cached: r.cached };
                 },
                 degrade: async err => ({
                     status: 'degraded', source: 'no detail', reason: `the ornament build failed (${errorMessage(err)}); the fitted faces stay flat`,
