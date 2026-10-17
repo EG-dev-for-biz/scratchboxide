@@ -17,7 +17,7 @@ import { promisify } from 'util';
 import { Google3DTileCrawlerBaker } from './Google3DTileCrawlerBaker';
 import { DistrictTooLargeError, GoogleTileDistrictCrawler } from './GoogleTileDistrictCrawler';
 import { PhysicalCameraModel } from '../../common/optics/PhysicalCameraModel';
-import { GoogleMapsService, resolveMapsApiKey } from '../../browser/generative-canvas/services/google-maps-service';
+import { GoogleMapsService, resolveMapsApiKey, type GeocodeAlternative } from '../../browser/generative-canvas/services/google-maps-service';
 import type {
   PhysicalCameraConfig,
   SensorFormatPreset
@@ -49,6 +49,8 @@ export interface GeoAnchor {
   landmarkName?: string;
   /** Exactly what the location resolved to: Google's name and address for a place, or the coordinates. */
   formattedAddress?: string;
+  /** Other distinct places Google found for the same text, when it was ambiguous (see GeocodeResult.alternatives). */
+  alternatives?: GeocodeAlternative[];
 }
 
 export interface CameraPoseFrame {
@@ -464,7 +466,8 @@ export class Google3DTileBlockoutPipelineService {
       lat: Number(place.lat.toFixed(6)),
       lng: Number(place.lng.toFixed(6)),
       landmarkName: place.name || place.formattedAddress,
-      formattedAddress: describePlace(place.name, place.formattedAddress)
+      formattedAddress: describePlace(place.name, place.formattedAddress),
+      ...(place.alternatives?.length ? { alternatives: place.alternatives } : {})
     };
   }
 

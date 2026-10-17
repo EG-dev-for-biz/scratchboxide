@@ -124,6 +124,9 @@ export function mountedSentence(input: StagedSummaryInput): string {
     const paren: string[] = [];
     if (p.resolvedAddress && p.resolvedAddress !== p.query) paren.push(p.resolvedAddress);
     if (input.structure) paren.push(`${m1(input.structure.geocodeToStructureM)} from the geocoded point`);
+    // the text named several places: say which one was taken and which others Google found
+    const others = (p.alternatives ?? []).map(a => a.formattedAddress);
+    if (others.length) paren.push(`most prominent match; also found: ${others.join('; ')}`);
     const name = paren.length ? `${p.query} (${paren.join(', ')})` : p.query;
     // a district the leaf-tile cap cut short says how far it reached and how far was asked
     const asked = input.extraction.requestedRadiusM;

@@ -14,7 +14,17 @@ export type GoogleMapType = 'roadmap' | 'satellite' | 'terrain' | 'hybrid';
 
 /** Google Places API (New) Text Search: the one geocoder for place names and addresses. */
 export const PLACES_TEXT_SEARCH_URL = 'https://places.googleapis.com/v1/places:searchText';
-export const PLACES_TEXT_SEARCH_FIELD_MASK = 'places.displayName,places.formattedAddress,places.location,places.viewport,places.types';
+export const PLACES_TEXT_SEARCH_FIELD_MASK = 'places.id,places.displayName,places.formattedAddress,places.location,places.viewport,places.types,places.userRatingCount';
+
+/**
+ * How many candidates one Text Search asks for. A name shared by several places ("Central Park") is answered with the
+ * places nearest the caller first, so the globally prominent one can be anywhere in the list; with pageSize 1 it is
+ * never seen. Ten is Google's own default page size.
+ */
+export const PLACES_TEXT_SEARCH_PAGE_SIZE = 10;
+/** Candidates closer than this to the chosen place are the same place listed twice (entrances, annexes), not alternatives. */
+const SAME_PLACE_RADIUS_M = 1000;
+const MAX_ALTERNATIVES = 4;
 
 /**
  * The Maps Platform key for a call, from the same sources the rest of the app reads, in this order: a key
@@ -28,6 +38,41 @@ export function resolveMapsApiKey(explicit?: string): string {
         ? process.env.GOOGLE_MAPS_API_KEY || process.env.MAP_TILES_API_KEY || ''
         : '';
     return (explicit || GoogleMapsService.getInstance().getApiKey() || fromEnv || '').trim();
+}
+
+function ratingCount(place: any): number {
+    return typeof place?.userRatingCount === 'number' ? place.userRatingCount : 0;
+}
+
+function metresBetween(aLat: number, aLng: number, bLat: number, bLng: number): number {
+    const rad = Math.PI / 180;
+    const dLat = (bLat - aLat) * rad;
+    const dLng = (bLng - aLng) * rad;
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(aLat * rad) * Math.cos(bLat * rad) * Math.sin(dLng / 2) ** 2;
+    return 2 * 6371008.8 * Math.asin(Math.sqrt(h));
+}
+
+/** The other distinct places in a result list, most prominent first; a candidate within 1 km of one already kept is the same place. */
+function pickAlternatives(candidates: any[], chosen: any): GeocodeAlternative[] {
+    const kept: Array<{ lat: number; lng: number }> = [{ lat: chosen.location.latitude, lng: chosen.location.longitude }];
+    const out: GeocodeAlternative[] = [];
+    const ranked = candidates.filter(p => p !== chosen).map((p, i) => ({ p, i })).sort((a, b) => ratingCount(b.p) - ratingCount(a.p) || a.i - b.i);
+    for (const { p } of ranked) {
+        const { latitude, longitude } = p.location;
+        if (kept.some(k => metresBetween(k.lat, k.lng, latitude, longitude) < SAME_PLACE_RADIUS_M)) continue;
+        kept.push({ lat: latitude, lng: longitude });
+        const name: string | undefined = typeof p.displayName?.text === 'string' ? p.displayName.text : undefined;
+        out.push({
+            ...(name ? { name } : {}),
+            formattedAddress: typeof p.formattedAddress === 'string' && p.formattedAddress ? p.formattedAddress : (name || formatCoordinates(latitude, longitude)),
+            lat: latitude,
+            lng: longitude,
+            ...(typeof p.id === 'string' ? { placeId: p.id } : {}),
+            ...(typeof p.userRatingCount === 'number' ? { userRatingCount: p.userRatingCount } : {})
+        });
+        if (out.length >= MAX_ALTERNATIVES) break;
+    }
+    return out;
 }
 
 /**
@@ -62,6 +107,17 @@ export interface GeocodeOptions {
     fetchImpl?: typeof fetch;
 }
 
+/** Another place Google found for the same text, offered so the caller can say what else the text could have meant. */
+export interface GeocodeAlternative {
+    name?: string;
+    formattedAddress: string;
+    lat: number;
+    lng: number;
+    placeId?: string;
+    /** Google's own count of ratings for the place: its prominence signal. */
+    userRatingCount?: number;
+}
+
 export interface GeocodeResult {
     lat: number;
     lng: number;
@@ -77,6 +133,13 @@ export interface GeocodeResult {
     zoom?: number;
     /** Places types of the matched place (e.g. "tourist_attraction"). */
     types?: string[];
+    /** Google's count of ratings for the matched place; the signal the most prominent candidate was chosen by. */
+    userRatingCount?: number;
+    /**
+     * Other distinct places Google found for the same text (most prominent first), present only when there are any.
+     * Their presence means the text was ambiguous and the place above is the most prominent reading, not the only one.
+     */
+    alternatives?: GeocodeAlternative[];
     bounds?: {
         north: number;
         south: number;
@@ -440,7 +503,7 @@ export class GoogleMapsService {
                     'X-Goog-Api-Key': key,
                     'X-Goog-FieldMask': PLACES_TEXT_SEARCH_FIELD_MASK
                 },
-                body: JSON.stringify({ textQuery: cleanQuery, pageSize: 1 })
+                body: JSON.stringify({ textQuery: cleanQuery, pageSize: PLACES_TEXT_SEARCH_PAGE_SIZE })
             });
         } catch (err) {
             throw new LocationUnresolvedError(cleanQuery, `the Google Places request failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -450,12 +513,18 @@ export class GoogleMapsService {
         if (!response.ok) {
             throw new LocationUnresolvedError(cleanQuery, describePlacesRefusal('Google Places Text Search', response.status, body));
         }
-        const place = Array.isArray(body?.places) ? body.places[0] : undefined;
-        const lat = place?.location?.latitude;
-        const lng = place?.location?.longitude;
-        if (typeof lat !== 'number' || typeof lng !== 'number') {
+        const candidates: any[] = (Array.isArray(body?.places) ? body.places : []).filter(
+            (p: any) => typeof p?.location?.latitude === 'number' && typeof p?.location?.longitude === 'number'
+        );
+        // Text Search orders a shared name by proximity to the caller, so results[0] can be a minor place in the
+        // caller's own region. Google's userRatingCount is the prominence signal it returns; ties keep Google's order.
+        const place = candidates.reduce((best: any, p: any) => (best === undefined || ratingCount(p) > ratingCount(best) ? p : best), undefined);
+        if (!place) {
             throw new LocationUnresolvedError(cleanQuery, 'Google Places found no place for this text');
         }
+        const lat: number = place.location.latitude;
+        const lng: number = place.location.longitude;
+        const alternatives = pickAlternatives(candidates, place);
 
         const name: string | undefined = typeof place.displayName?.text === 'string' ? place.displayName.text : undefined;
         const viewport = place.viewport;
@@ -465,6 +534,9 @@ export class GoogleMapsService {
             formattedAddress: typeof place.formattedAddress === 'string' && place.formattedAddress ? place.formattedAddress : (name || formatCoordinates(lat, lng)),
             ...(name ? { name } : {}),
             ...(Array.isArray(place.types) ? { types: place.types } : {}),
+            ...(typeof place.id === 'string' ? { placeId: place.id } : {}),
+            ...(typeof place.userRatingCount === 'number' ? { userRatingCount: place.userRatingCount } : {}),
+            ...(alternatives.length ? { alternatives } : {}),
             locationType: 'PLACES_TEXT_SEARCH',
             ...(viewport?.low && viewport?.high ? {
                 bounds: {
