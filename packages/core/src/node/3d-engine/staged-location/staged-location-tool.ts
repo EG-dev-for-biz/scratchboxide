@@ -33,6 +33,7 @@ import { getTileRefineService } from '../tile-refine-service';
 import { getTileVegetationService } from '../tile-vegetation-service';
 import { loadScanFit } from '../scan-fit-loader';
 import { StageCache, stagedWorkspaceRoot } from './stage-cache';
+import { genAiEnhanceClient } from './texture-enhance';
 import {
     STAGE_IDS, runStagedLocation, type StageId, type StagedExtraction, type StagedLocationDeps, type StagedLocationRequest, type ResolvedPlace
 } from './orchestrator';
@@ -223,7 +224,10 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
                 : { groundingUnavailable: 'no Google Cloud service account is configured for the Maps Imagery Grounding API' }),
             metadataCachePath: path.join(cache.dir, 'streetview', 'metadata.json')
         },
-        vision
+        vision,
+        // the texture pass's optional enhancement rung: the image model edits the tile transfer, kept only past its edge
+        // gate (SCRATCHBOX_TEXTURE_ENHANCE=0 turns the rung off)
+        textures: 'client' in vision && process.env.SCRATCHBOX_TEXTURE_ENHANCE !== '0' ? { enhance: genAiEnhanceClient(vision.client) } : {}
     };
 }
 

@@ -23,6 +23,7 @@ import {
     type VisionModelUse
 } from '../../../common/spatial/staged-location-contracts';
 import { describeTrees } from '../location-clay-pipeline';
+import { TEXTURE_LADDER_RUNGS } from '../../../common/spatial/texture-pass-contracts';
 
 /** Everything the summary reads: the result fields, plus the facts only the run knows. */
 export interface StagedSummaryInput extends Omit<StagedLocationResult, 'digest' | 'summary' | 'artifact'> {
@@ -39,7 +40,12 @@ export interface StagedSummaryInput extends Omit<StagedLocationResult, 'digest' 
     exemptInferred?: string[];
     /** Pill markdown for the other places Google found (one list item each), empty when there are none. */
     switchLocation?: string;
+    /** The background texture pass, measured: share of texels per rung (TEXTURE_LADDER_RUNGS order), views, models. */
+    textures?: { shares: number[]; views: number; modelsUsed: string[]; layers: string[]; totalMs: number; tileUnavailable?: string; viewsUnavailable?: string };
 }
+
+/** The chat pill that switches the staged layers to their textured twins (the tool staged_location_material_mode). */
+export const SHOW_TEXTURES_PILL = '- [Show real textures](prompt:Show%20real%20textures%20on%20the%20staged%20build)';
 
 /** "1,234". */
 const n = (v: number) => Math.round(v).toLocaleString('en-US');
@@ -317,6 +323,18 @@ export function gateSentence(input: StagedSummaryInput): string {
 function upperFirst(s: string): string { return s ? s[0].toUpperCase() + s.slice(1) : s; }
 function lowerFirst(s: string): string { return s && /^[A-Z][a-z]/.test(s) ? s[0].toLowerCase() + s.slice(1) : s; }
 
+/** Rule "textures": what the texture pass made, rung by rung as measured; clay stays the default view. */
+export function texturesSentence(input: StagedSummaryInput): string {
+    const t = input.textures;
+    if (!t) return '';
+    const pct = (x: number) => `${Math.round(x * 1000) / 10}%`;
+    const rungs = t.shares.map((x, r) => (x > 0 ? `${pct(x)} ${TEXTURE_LADDER_RUNGS[r]}` : '')).filter(Boolean).join(', ');
+    const sources = [t.views ? `${t.views} registered Street View view${t.views === 1 ? '' : 's'}` : `no Street View view (${t.viewsUnavailable ?? 'none'})`, t.tileUnavailable ? `no tile photo (${t.tileUnavailable})` : 'the Google tile photo'].join(' and ');
+    return `Real textures are ready for ${t.layers.join(' and ')} (shown in clay until the user picks textures), made from ${sources} in ${s1(t.totalMs)}: ${rungs} of the texels.`
+        + `${t.modelsUsed.length ? ` The tile transfer was sharpened by ${t.modelsUsed.join(', ')} where it passed the edge gate.` : ''}`
+        + ` Photo-derived texture is photo-inferred (labelled per texel); generated PBR is not available, so texels no photo reaches keep the measured palette colour.`;
+}
+
 /** The digest and the summary, in rule order. */
 export function summarizeStagedBuild(input: StagedSummaryInput): { digest: string; summary: string } {
     const sentences = [
@@ -333,12 +351,16 @@ export function summarizeStagedBuild(input: StagedSummaryInput): { digest: strin
         resolutionSentence(input),
         remeshChangesSentence(input),
         gateSentence(input),
+        texturesSentence(input),
         timingsSentence(input)
     ].filter(Boolean);
     const switchBlock = input.switchLocation
         ? `\n\nSwitch location: other places Google found for this text. Put these lines in your reply unchanged, as they are pill buttons the user can click to redo the build at that place:\n${input.switchLocation}`
         : '';
-    return { digest: stagedDigest(input), summary: sentences.join(' ') + switchBlock };
+    const texturesBlock = input.textures
+        ? `\n\nTextures & Materials: put this line in your reply unchanged, it is a pill button the user can click to see the real textures (clay stays until then):\n${SHOW_TEXTURES_PILL}`
+        : '';
+    return { digest: stagedDigest(input), summary: sentences.join(' ') + texturesBlock + switchBlock };
 }
 
 // ----------------------------------------------------------------------------------------------------------------

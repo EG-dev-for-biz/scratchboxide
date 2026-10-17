@@ -314,6 +314,12 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
             raw.push({ texel: [], rgb: [], logW: [], wAbs: [] });
             continue;
         }
+        if (view.image.rgba.length !== view.image.width * view.image.height * 4 || view.image.width !== view.camera.width || view.image.height !== view.camera.height) {
+            degradations.push({ stage: 'bake-projection', reasonCode: 'pano_image_invalid', layerKey: atlas.layerKey,
+                reason: `Pano ${view.panoId}'s image is not the ${view.camera.width}x${view.camera.height} RGBA its camera expects, so it was not projected.` });
+            raw.push({ texel: [], rgb: [], logW: [], wAbs: [] });
+            continue;
+        }
         const s = projectView(input, view, input.depthFor(view), opts);
         if (!s.texel.length) {
             degradations.push({ stage: 'bake-projection', reasonCode: 'pano_sees_nothing', layerKey: atlas.layerKey,

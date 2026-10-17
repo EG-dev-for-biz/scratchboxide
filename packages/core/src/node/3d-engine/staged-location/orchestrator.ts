@@ -114,6 +114,11 @@ import {
 } from './ornament-vision';
 import { buildSwitchLocationPills, switchLocationMarkdown } from '../../../common/spatial/switch-location';
 import { summarizeStagedBuild, type StagedSummaryInput } from './staged-summary';
+import { palettesFromSurvey, projectionViewsFromEvidence, textureLayer, TEXTURE_PASS_VERSION, type TextureLayerOutcome } from './texture-pass';
+import { loadTileSurface, type TileTextureSurface } from './tile-texture-transfer';
+import type { EnhanceModelClient } from './texture-enhance';
+import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
+import { TEXTURE_LADDER_RUNGS, type TexturePassDegradation, type TexturePassRecord, type TextureLayerBundle } from '../../../common/spatial/texture-pass-contracts';
 
 /** What the evidence stage spent: free metadata queries, billed images and the seconds the images took. */
 export interface EvidenceCost { metadataCalls: number; cachedCalls: number; imagesRequested: number; imagesFetched: number; fetchMs: number }
@@ -137,7 +142,9 @@ export const STAGES = {
     correct: { order: 3, title: 'Photo corrections', budgetMs: 30_000 },
     detail: { order: 4, title: 'Photo-inferred detail', budgetMs: 20_000 },
     figures: { order: 4, title: 'Figures', budgetMs: EVIDENCE_DISCOVERY_ALLOWANCE_MS + SURVEY_IMAGE_TIMEOUT_MS + 2 * FIGURE_VISION_TIMEOUT_MS + 4 * 120_000 + 30_000 },
-    trees: { order: 5, title: 'Trees', budgetMs: 300_000 }
+    trees: { order: 5, title: 'Trees', budgetMs: 300_000 },
+    /** Background: the real-world texture pass (textured twins of the staged layers); clay stays the first result. */
+    textures: { order: -1, title: 'Real textures', budgetMs: 300_000 }
 } as const;
 export type StageId = keyof typeof STAGES;
 export const STAGE_IDS = Object.keys(STAGES) as StageId[];
@@ -226,6 +233,11 @@ export interface StagedLocationDeps {
     vision?: { client: VisionGenAIClient; candidates: string[] } | { unavailable: string };
     /** Builds a figure spec natively and returns its GLB (metres, +Y up, front +Z, origin at the centre of its base); the reference object builder's native build by default. */
     figureBuilder?: (spec: ObjectBuildSpec, signal?: AbortSignal) => Promise<{ glb: Buffer }>;
+    /**
+     * The texture pass's optional model enhancement of the tile transfer (an image model, edge-gated); absent = that
+     * rung is not attempted (tests, or no client). `densityTexelsPerMeter` caps the atlas density (default 20, 5 cm).
+     */
+    textures?: { enhance?: EnhanceModelClient; enhanceModels?: string[]; maxDensityTexelsPerMeter?: number; maxSide?: number; disabled?: string };
     now?: () => number;
     newRunId?: () => string;
     sleep?: (ms: number) => Promise<void>;
@@ -374,10 +386,11 @@ class StagedRun {
     emit(id: StageId, status: StageStatus, extra: { source?: string; reason?: string; layers?: StagedLayer[]; degradations?: DegradationRecord[]; model?: VisionModelUse; message?: string; progress?: number } = {}, withArtifact = false): void {
         if (this.closed) return;
         const s = this.summary(id);
+        const wasRunning = s.status === 'running';
         s.status = status;
         if (extra.source !== undefined) s.source = extra.source;
         if (extra.reason !== undefined) s.reason = extra.reason;
-        if (status === 'running') s.timings = { startedAtMs: this.now(), cached: false };
+        if (status === 'running' && !wasRunning) s.timings = { startedAtMs: this.now(), cached: false };
         if (status !== 'running' && status !== 'pending') {
             s.timings.endedAtMs = this.now();
             s.timings.ms = s.timings.endedAtMs - s.timings.startedAtMs;
@@ -697,6 +710,42 @@ function describeRegistration(r: Registration, pairs: number): string {
     const per = r.perPano.map(p => `${p.panoId.slice(0, 6)}: ${p.pairs} pairs, ${p.beforeRmsM.toFixed(2)} -> ${p.afterRmsM.toFixed(2)} m (shift ${Math.hypot(p.dxM, p.dzM).toFixed(2)} m, heading ${p.dyawDeg.toFixed(2)}°, pitch ${p.dpitchDeg.toFixed(2)}°)`).join('; ');
     const aside = r.setAside.length ? `; set aside as implausible and left at their stated poses: ${r.setAside.map(a => `${a.panoId.slice(0, 6)} (${a.reason})`).join('; ')}` : '';
     return `pano poses registered from ${r.used} of ${pairs} matched pairs: ${r.beforeRmsM.toFixed(2)} m RMS disagreement before, ${r.afterRmsM.toFixed(2)} m after. Per pano ${per}${aside}`;
+}
+
+/** What the texture stage hands the result and the summary. */
+export interface TextureStageValue {
+    record: TexturePassRecord;
+    /** Share of all textured atlas texels per rung (TEXTURE_LADDER_RUNGS order). */
+    shares: number[];
+    views: number;
+    modelsUsed: string[];
+    layers: Array<{
+        layer: string; objectId: string; url: string; rungShares: number[]; atlasTexels: number; atlas: TextureLayerOutcome['atlas'];
+        projection?: TextureLayerOutcome['projection']; enhance?: TextureLayerOutcome['enhance']; cached: boolean;
+    }>;
+    tileUnavailable?: string;
+    viewsUnavailable?: string;
+}
+
+function sha256Bytes(bytes: Uint8Array): string {
+    return crypto.createHash('sha256').update(bytes).digest('hex');
+}
+
+/** Rung shares over several layers, weighted by each layer's texel count. */
+export function weightedShares(parts: Array<{ shares: number[]; texels: number }>): number[] {
+    const total = parts.reduce((a, p) => a + p.texels, 0);
+    const out = new Array<number>(TEXTURE_LADDER_RUNGS.length).fill(0);
+    if (!total) return out;
+    for (const p of parts) p.shares.forEach((v, r) => { out[r] += (v * p.texels) / total; });
+    return out;
+}
+
+/** One line: the texture rungs as measured, the views and the models. */
+export function describeTextures(v: TextureStageValue): string {
+    const pct = (x: number) => `${Math.round(x * 1000) / 10}%`;
+    const rungs = v.shares.map((x, r) => (x > 0 ? `${TEXTURE_LADDER_RUNGS[r]} ${pct(x)}` : '')).filter(Boolean).join(', ');
+    return `textured ${v.layers.map(l => l.layer).join(', ')} from ${v.views} registered Street View view${v.views === 1 ? '' : 's'}${v.tileUnavailable ? '' : ' and the tile photo'}: ${rungs}`
+        + `${v.modelsUsed.length ? `; enhanced by ${v.modelsUsed.join(', ')}` : ''}; photo-derived texels are photo-inferred`;
 }
 
 function loadMesh(files: Array<string | undefined>): RenderMesh3D {
@@ -1209,6 +1258,129 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             siblings.push(figuresPromise as Promise<unknown>);
         };
 
+        // ---------------- textures (background: after the photo survey/registration and the fit commit; the clay layers never wait for it) ----------------
+        let texturesPromise: Promise<unknown> | undefined;
+        let textureValue: TextureStageValue | undefined;
+        const startTextures = (): void => {
+            if (texturesPromise) return;
+            if (deps.textures?.disabled) { runner.skip('textures', deps.textures.disabled); return; }
+            const waits = [surveyPromise, evidencePromise].filter((p): p is NonNullable<typeof p> => !!p).map(p => (p as Promise<unknown>).catch(() => undefined));
+            texturesPromise = Promise.all(waits).then(() => runner.stage<TextureStageValue>({
+                id: 'textures',
+                run: async io => {
+                    const started = now();
+                    const evidence = evidencePromise ? await evidencePromise.catch(() => undefined) : undefined;
+                    const fitNow = rebuildOut.refit?.value ?? rebuildOut.fit?.value;
+                    const body = [...run.state.layers].reverse().find(l => !l.retired && (l.layer === 'l3br' || l.layer === 'l3b'));
+                    const bodyFile = body ? (body.layer === 'l3br' ? rebuildOut.refit?.value.outputs.fittedGlb : rebuildOut.fit?.value.outputs.fittedGlb) : undefined;
+                    const l2 = run.state.layers.find(l => !l.retired && l.layer === 'l2');
+                    const targets: Array<{ layer: StagedLayer; file: string; surfaces?: Array<{ id: string; chart: any }> }> = [];
+                    if (body && bodyFile && fs.existsSync(bodyFile)) targets.push({ layer: body, file: bodyFile, surfaces: (rebuildOut.refit ?? rebuildOut.fit)?.value.surfaces.filter(x => x.chart).map(x => ({ id: x.id, chart: x.chart })) });
+                    if (l2 && remeshed?.clayGlb && fs.existsSync(remeshed.clayGlb)) targets.push({ layer: l2, file: remeshed.clayGlb });
+                    if (!targets.length) return { status: 'skipped', source: '', reason: 'no remeshed or fitted layer to texture' };
+
+                    // the sources, once for every layer
+                    const images = evidence?.images ?? [];
+                    const { views, failures } = projectionViewsFromEvidence(images, evidence?.registration);
+                    const viewsUnavailable = images.length ? (views.length ? undefined : `none of the ${images.length} grounding images decoded (${failures[0] ?? ''})`)
+                        : evidence ? `the Street View stage ${evidence.status === 'skipped' ? 'was skipped' : 'returned no image'}` : (visionAvailable ? 'the Street View stage did not run (no accepted fit to aim it at)' : 'no vision model is configured, so no Street View close-ups were fetched');
+                    let tile: TileTextureSurface | undefined;
+                    let tileUnavailable: string | undefined;
+                    const tLoad = now();
+                    try {
+                        if (!extraction.texturedGlb || !fs.existsSync(extraction.texturedGlb)) throw new Error('the photo-textured extraction is not on disk');
+                        tile = loadTileSurface(fs.readFileSync(extraction.texturedGlb));
+                        if (!tile.textureCount) { tileUnavailable = 'the extraction carries no photo texture'; tile = undefined; }
+                    } catch (err) {
+                        tileUnavailable = `the photo-textured tile could not be read (${errorMessage(err)})`;
+                    }
+                    const tileLoadMs = now() - tLoad;
+                    const palette = palettesFromSurvey(run.state.materialHints?.faces);
+                    const bestSample = Math.min(...images.map(i => i.nativeSampleM).filter(v => v > 0), ...(tile && Number.isFinite(tile.texelSizeM) && !views.length ? [tile.texelSizeM] : []));
+                    const cap = deps.textures?.maxDensityTexelsPerMeter ?? 20;
+                    const density = Number.isFinite(bestSample) && bestSample > 0 ? Math.min(cap, 1 / bestSample) : cap;
+                    const occluder = loadMesh([remeshed?.clayGlb, bodyFile]);
+                    const residual = evidence?.registration?.afterRmsM;
+                    const poseHash = evidence?.registration ? [...evidence.registration.corrections.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)) : [];
+                    const tileSha = tile ? sha256File(extraction.texturedGlb) : 'no-tile';
+                    const enhance = deps.textures?.enhance;
+                    const outcomes: Array<{ layer: StagedLayer; out: Omit<TextureLayerOutcome, 'glb'>; url: string; bytes: number; cached: boolean; builtAtMs: number }> = [];
+                    const passDegradations: TexturePassDegradation[] = [];
+                    const done = (k: number) => {
+                        run.state.texturePass = {
+                            status: 'running', layersDone: k, layersTotal: targets.length,
+                            ...(outcomes.length ? { rungShares: weightedShares(outcomes.map(o => ({ shares: o.out.rungShares, texels: o.out.atlasTexels }))) } : {}),
+                            message: k < targets.length ? `texturing ${targets[k].layer.layer}` : 'textures ready'
+                        };
+                    };
+                    done(0);
+                    for (const [k, target] of targets.entries()) {
+                        const clay = fs.readFileSync(target.file);
+                        const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048);
+                        const entry = await cache.run<Omit<TextureLayerOutcome, 'glb'>>('textures', key, async dir => {
+                            const out = await textureLayer({ layerKey: target.layer.layer, clayGlb: clay, ...(target.surfaces?.length ? { surfaces: target.surfaces } : {}) }, {
+                                views, ...(viewsUnavailable ? { viewsUnavailable } : {}), occluder,
+                                delight: { latitude: run.geoAnchor.lat, longitude: run.geoAnchor.lng },
+                                ...(tile ? { tile } : {}), ...(tileUnavailable ? { tileUnavailable } : {}),
+                                ...(residual !== undefined ? { registrationResidualM: residual } : {}),
+                                ...(enhance ? { enhance: { client: enhance, ...(deps.textures?.enhanceModels ? { models: deps.textures.enhanceModels } : {}) } } : { enhanceUnavailable: 'no image model client is configured for it' }),
+                                palette, densityTexelsPerMeter: density, maxSide: deps.textures?.maxSide ?? 2048, signal: io.signal,
+                                onProgress: m => { io.progress(`textures: ${m}`); run.emit('textures', 'running', { message: m }); }
+                            });
+                            fs.writeFileSync(path.join(dir, 'twin.glb'), out.glb);
+                            const { glb: _glb, ...value } = out;
+                            return { value };
+                        }, { publish: () => [{ from: 'twin.glb', as: `${base}_${target.layer.layer}_tex_${key.slice(0, 8)}.glb` }], bypass: bypass('textures') });
+                        const pub = entry.published[0];
+                        outcomes.push({ layer: target.layer, out: entry.value, url: pub.url, bytes: pub.bytes, cached: entry.cached, builtAtMs: entry.builtAtMs });
+                        passDegradations.push(...entry.value.degradations);
+                        // the layer gains its textured variant: same object, clay stays mounted; the viewport shows it in the textured material mode
+                        const current = run.state.layers.find(l => l.objectId === target.layer.objectId) ?? target.layer;
+                        const updated: StagedLayer = {
+                            ...current,
+                            textured: {
+                                url: pub.url, bytes: pub.bytes, ladderRung: entry.value.bundle.ladderRung, rungShares: entry.value.rungShares.map(x => round(x, 4)),
+                                provenance: entry.value.bundle.provenance.map(p => ({ ...p, coverage: round(p.coverage, 4) })), confidenceChannels: CONFIDENCE_CHANNELS,
+                                builtAtMs: entry.builtAtMs, cached: entry.cached
+                            }
+                        };
+                        run.commit(updated, run.layerMeta[current.objectId]);
+                        done(k + 1);
+                        run.emit('textures', 'running', { message: `${target.layer.layer} textured`, layers: [updated], progress: (k + 1) / targets.length }, true);
+                    }
+                    const layers: TextureLayerBundle[] = outcomes.map(o => ({ ...o.out.bundle, maps: { albedo: `${o.url}#albedo` }, confidence: `${o.url}#confidence` }));
+                    const timingsMs: Record<string, number> = { total: now() - started, tileLoad: tileLoadMs };
+                    for (const o of outcomes) for (const [kk, v] of Object.entries(o.out.timingsMs)) timingsMs[`${o.layer.layer}.${kk}`] = v;
+                    const record: TexturePassRecord = { passVersion: TEXTURE_PASS_VERSION, layers, degradations: passDegradations, timingsMs };
+                    const shares = weightedShares(outcomes.map(o => ({ shares: o.out.rungShares, texels: o.out.atlasTexels })));
+                    run.state.texturePass = { status: 'committed', layersDone: outcomes.length, layersTotal: targets.length, rungShares: shares.map(x => round(x, 4)), message: 'textures ready' };
+                    textureValue = {
+                        record, shares, views: views.length, modelsUsed: [...new Set(outcomes.flatMap(o => o.out.modelsUsed))],
+                        layers: outcomes.map(o => ({ layer: o.layer.layer, objectId: o.layer.objectId, url: o.url, rungShares: o.out.rungShares, atlasTexels: o.out.atlasTexels, atlas: o.out.atlas, projection: o.out.projection, enhance: o.out.enhance, cached: o.cached })),
+                        tileUnavailable, viewsUnavailable
+                    };
+                    return {
+                        status: 'committed', value: textureValue, layers: outcomes.map(o => run.state.layers.find(l => l.objectId === o.layer.objectId)!).filter(Boolean),
+                        source: describeTextures(textureValue), cached: outcomes.every(o => o.cached), builtAtMs: Math.max(...outcomes.map(o => o.builtAtMs)),
+                        breakdownMs: timingsMs
+                    };
+                },
+                degrade: async err => {
+                    run.state.texturePass = { status: 'degraded', layersDone: run.state.layers.filter(l => l.textured).length, layersTotal: run.state.layers.filter(l => l.textured).length, message: `the texture pass failed: ${errorMessage(err)}` };
+                    return {
+                        status: 'degraded', source: 'the layers stay studio grey clay', reason: `the texture pass failed (${errorMessage(err)}); the layers stay clay`,
+                        degradations: [run.degrade(record('textures', 'texture_pass_failed', {
+                            part: { description: 'the real-world textures of the staged layers' }, intended: 'photo textures (Street View, tile photo) on the staged layers', fellTo: 'studio grey clay',
+                            provenanceAfter: rebuildOut.fit ? PROVENANCE.fitted : PROVENANCE.remeshed, reason: `the texture pass failed (${errorMessage(err)}); the layers stay clay`,
+                            cause: err, transient: true, runId, now: now(), reuses: ['resolve', 'tiles', 'remesh', 'fit', 'evidence']
+                        }))]
+                    };
+                }
+            }));
+            texturesPromise.catch(() => undefined);
+            siblings.push(texturesPromise);
+        };
+
         // ---------------- trees-measure ----------------
         let strip: TileVegetationStripResult | undefined;
         if (request.trees) {
@@ -1575,6 +1747,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             });
             if (fitted.status !== 'committed' || !fitted.value) {
                 skipRest('there is no accepted fit to place detail on', ['evidence', 'project', 'vision', 'correct', 'detail', 'figures']);
+                // the remeshed scan still gets its textures (tile photo; no Street View was fetched for a rejected fit)
+                startTextures();
                 return out;
             }
             out.fit = fitted.value;
@@ -1582,6 +1756,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             persist();
             if (rebuildPossible && visionAvailable) startEvidence(fit);
             if (rebuildPossible) startFigures(fit, out);
+            startTextures();
 
             // evidence, projection, vision
             if (!visionAvailable) {
@@ -1855,6 +2030,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // the figures stage starts inside the rebuild, after the line above built its list, so it is awaited here: finishing before it would
         // stop it ("not started before the run ended") whenever every other stage came from cache
         const late = await Promise.allSettled(siblings);
+        // the texture pass starts inside the rebuild; a run that never reached it (no isolated structure, no fitter) says why
+        runner.skip('textures', request.isolate ? 'the rebuild did not reach the texture pass (no remeshed, fitted structure)' : 'the texture pass runs on an isolated structure');
         const failure = [...settled, ...late].find((r): r is PromiseRejectedResult => r.status === 'rejected');
         if (failure) throw failure.reason;
         const treesOut = (settled[0] as PromiseFulfilledResult<Awaited<typeof treesPromise>>).value;
@@ -1864,7 +2041,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // ---------------- finish ----------------
         return finishRun(run, {
             request, place: placeValue, extraction, structure, sizedTo: t.sizedTo, remeshed, groundFile: remesh.value?.groundFile, groundLayerId: remesh.value?.groundLayerId ?? run.state.layers.find(l => l.layer === 'l1')?.objectId,
-            trees: treesOut.trees, putBack: treesOut.putBack, rebuild, strip, now, persist
+            trees: treesOut.trees, putBack: treesOut.putBack, rebuild, strip, ...(textureValue ? { textures: textureValue } : {}), now, persist
         });
     } catch (err) {
         // the Street View fetch and the two branches are ended with the call: none is left running, or rejecting unseen, behind it
@@ -1954,6 +2131,7 @@ interface FinishInput {
     putBack?: { triangles: number; crowns: number; reason: string };
     rebuild: { figures?: FigureRecord[]; anchored?: AnchorNote[]; located?: DetailPlan; fit?: ScanFitFitResult; refit?: ScanFitFitResult; spec?: OrnamentSpec; rejected?: PrimitiveCorrection[]; detail?: ScanFitOrnamentResult; droppedNotResolvable: number; sourceLimits?: SourceLimits; evidenceCounts?: { tileOrthos: number; streetView: number }; runReadings?: RunReadingReport; registration?: NonNullable<NonNullable<StagedLocationResult['ornament']>['registration']>; slotsOffered?: { offered: number; total: number; hidden: number; unseen: number; exposureJudged: boolean } };
     strip?: TileVegetationStripResult;
+    textures?: TextureStageValue;
     now: () => number;
     persist: () => void;
 }
@@ -2064,6 +2242,7 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
             }
         } : {}),
         ...(run.state.materialHints ? { materialHints: run.state.materialHints } : {}),
+        ...(f.textures ? { texturePass: f.textures.record } : {}),
         ...(photoCost ? { photoCost } : {}),
         ...(f.rebuild.figures?.length ? { figures: f.rebuild.figures } : {}),
         ...(f.trees ? { trees: f.trees } : {}),
@@ -2082,7 +2261,8 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
         ...(f.putBack ? { treesPutBack: f.putBack } : {}),
         ...(exemptInferred.length ? { exemptInferred } : {}),
         ...(gate.exemptionsRefused.length || refusedHere.length ? { exemptionsRefused: [...refusedHere, ...gate.exemptionsRefused] } : {}),
-        droppedNotResolvable: f.rebuild.droppedNotResolvable
+        droppedNotResolvable: f.rebuild.droppedNotResolvable,
+        ...(f.textures ? { textures: { shares: f.textures.shares, views: f.textures.views, modelsUsed: f.textures.modelsUsed, layers: f.textures.layers.map(l => l.layer), totalMs: f.textures.record.timingsMs.total ?? 0, ...(f.textures.tileUnavailable ? { tileUnavailable: f.textures.tileUnavailable } : {}), ...(f.textures.viewsUnavailable ? { viewsUnavailable: f.textures.viewsUnavailable } : {}) } } : {})
     };
     const switchPills = buildSwitchLocationPills({ ...f.place, ...(f.place.alternatives?.length ? { alternatives: f.place.alternatives } : {}) }, { query: f.request.query, isolate: f.request.isolate, radiusM: f.request.radiusM, trees: f.request.trees, stageIntoActiveScene: f.request.stageIntoActiveScene });
     const { digest, summary } = summarizeStagedBuild({ ...summaryInput, switchLocation: switchLocationMarkdown(switchPills) });
