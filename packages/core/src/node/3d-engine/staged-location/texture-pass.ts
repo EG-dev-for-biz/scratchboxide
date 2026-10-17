@@ -103,7 +103,13 @@ export interface TextureLayerOutcome {
     atlasTexels: number;
     atlas: { width: number; height: number; texelsPerMeter: number; charts: number; islands: number };
     degradations: TexturePassDegradation[];
-    projection?: Pick<ProjectionBakeReport, 'bakedTexels' | 'multiViewTexels' | 'maxSeamDeltaE' | 'p95SeamDeltaE' | 'delight'> & { views: number; paletteDeltaE?: number };
+    projection?: Pick<ProjectionBakeReport, 'bakedTexels' | 'multiViewTexels' | 'maxSeamDeltaE' | 'p95SeamDeltaE' | 'delight' | 'outputSeam' | 'regions' | 'poisson' | 'timingsMs'> & {
+        views: number; paletteDeltaE?: number;
+        /** The alignment's inter-view gradient NCC before and after, kept shifts and whether it ran out of time. */
+        alignment?: { nccBefore: number; nccAfter: number; kept: Record<string, number>; timedOut?: boolean; ms: number };
+        /** The second pose registration: correspondence RMS before/after, panos applied, whether kept and why not. */
+        poseRefine?: { rmsBeforeM: number; rmsAfterM: number; applied: number; kept?: boolean; reason?: string };
+    };
     tileMethod?: string;
     enhance?: { charts: number; accepted: number; rejected: number; failed: number; timedOut?: number; modelsUsed: string[] };
     modelsUsed: string[];
@@ -263,7 +269,10 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
             degradations.push(...res.degradations);
             projection = {
                 views: src.views.length, bakedTexels: res.report.bakedTexels, multiViewTexels: res.report.multiViewTexels,
-                maxSeamDeltaE: res.report.maxSeamDeltaE, p95SeamDeltaE: res.report.p95SeamDeltaE,
+                maxSeamDeltaE: res.report.maxSeamDeltaE, p95SeamDeltaE: res.report.p95SeamDeltaE, outputSeam: res.report.outputSeam, timingsMs: res.report.timingsMs,
+                ...(res.report.regions ? { regions: res.report.regions } : {}), ...(res.report.poisson ? { poisson: res.report.poisson } : {}),
+                ...(res.report.alignment ? { alignment: { nccBefore: res.report.alignment.interViewGradNccBefore, nccAfter: res.report.alignment.interViewGradNccAfter, kept: res.report.alignment.kept, ms: res.report.alignment.ms, ...(res.report.alignment.timedOut ? { timedOut: true } : {}) } } : {}),
+                ...(res.report.poseRefine ? { poseRefine: { rmsBeforeM: res.report.poseRefine.rmsBeforeM, rmsAfterM: res.report.poseRefine.rmsAfterM, applied: res.report.poseRefine.applied, ...(res.report.poseRefine.kept !== undefined ? { kept: res.report.poseRefine.kept } : {}), ...(res.report.poseRefine.reason ? { reason: res.report.poseRefine.reason } : {}) } } : {}),
                 ...(res.report.delight ? { delight: res.report.delight } : {}),
                 ...(res.paletteDeltaE !== undefined ? { paletteDeltaE: res.paletteDeltaE } : {})
             };

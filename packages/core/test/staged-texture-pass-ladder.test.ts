@@ -84,6 +84,10 @@ describe('texture pass ladder (one layer)', () => {
         expect(out.degradations.find(d => d.reasonCode === 'no_view_sees_texel')).toBeDefined();
         expect(out.projection!.maxSeamDeltaE).toBeLessThan(3);
         expect(out.projection!.views).toBe(3);
+        // the cache record carries the bake report the live findings read: output seam, region blend, alignment, timings
+        expect(out.projection!.outputSeam.samples).toBeGreaterThanOrEqual(0);
+        expect(out.projection!.timingsMs.total).toBeGreaterThan(0);
+        expect(out.projection!.alignment?.nccAfter ?? 0).toBeGreaterThanOrEqual(-1);
         expect(out.degradations.some(d => d.reasonCode === 'generated_pbr_not_available')).toBe(false);
         expect(out.degradations.find(d => d.reasonCode === 'enhance_not_run')).toBeUndefined(); // not asked for here
     });
