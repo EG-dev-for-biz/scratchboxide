@@ -139,7 +139,7 @@ struct LodParams {
     double referenceLeafM{0.11};         // blade length the library clusters are built at (instances scale from it)
     // leaf clusters
     double clusterRadiusPerLeaf{7.0};    // reach of a cluster's sub-shoot spray, in blade lengths
-    double leavesPerCluster{90};         // at the densest class
+    double leavesPerCluster{160};        // at the densest class (a summer crown seen from the side is nearly closed: leaf area index 3-5)
     double cupping{1.0};
     int densityClasses{3};               // resolution of the density axis of the shared clusters
     double densityFalloff{0.6};          // leaves of class c = leavesPerCluster * falloff^c
@@ -147,9 +147,13 @@ struct LodParams {
     double shootletRadiusM{0.010};
     int bladeRowsLevel0{1};
     int bladeRowsLevel1{0};
-    double level1LeafCountShare{0.25};   // level 1 holds this share of a cluster's leaves, each larger so the covered area stays
+    double level1LeafCountShare{0.25};   // level 1 holds this share of a cluster's leaves, each larger
+    // The leaf area of level 1 per cluster, as a multiple of level 0's. Past a few tens of metres a viewer sees the crown as
+    // a mass whose opacity is the leaf cover, not single blades, and level 1 hands over to the solid far masses: a little more
+    // cover keeps that handover (dithered over a wide band) from changing the tree's weight.
+    double level1AreaGain{1.5};
     // stations
-    double spacingRatio{0.65};            // distance between clusters / cluster reach
+    double spacingRatio{0.5};            // distance between clusters / cluster reach
     double outwardBlend{0.45};           // cluster axis: the shoot's direction blended towards the crown's outward direction
     double upBias{0.25};
     double rollJitterRad{0.6};
@@ -192,6 +196,7 @@ struct LibraryMesh {
     std::vector<Sphere> leafSpheres;     // `first`, `count`: triangles of bladeTri
     Vec3 bladeCentre;
     float bladeRadius{0};
+    double bladeArea{0};                 // area of the blades' upper sides, m^2 (what a level's leaf cover is matched on)
     size_t triangles() const { return indices.size() / 3; }
 };
 
@@ -230,6 +235,10 @@ inline LibraryMesh fromCluster(const std::string& name, const sv::SbVeggieCluste
         m.bladeTri.push_back(it->second);
     }
     const size_t front = m.bladeTri.size() / 3;
+    for (size_t t = 0; t < front; ++t) {
+        const Vec3& a = m.bladePos[m.bladeTri[t * 3]]; const Vec3& b = m.bladePos[m.bladeTri[t * 3 + 1]]; const Vec3& d = m.bladePos[m.bladeTri[t * 3 + 2]];
+        m.bladeArea += 0.5 * (b - a).cross(d - a).length();
+    }
     if (front > 0 && c.leaves > 0) {
         const size_t perLeaf = std::max<size_t>(1, front / static_cast<size_t>(c.leaves));
         Vec3 all(0, 0, 0);
@@ -319,6 +328,14 @@ inline ClusterLibrary buildClusterLibrary(const LodParams& P) {
             c1.petioles = false;
             c1.shootletRadiusM = 0.0f;
             v.level1 = detail::fromCluster(v.name + "_mid", sv::SbVeggieFoliage::buildCluster(c1, P.supportDirections));
+            // the mid level covers the same leaf area as the near one: blade outlines differ (the near blade is a fine ovate
+            // outline, the mid one a coarse card), so rescale the mid blades until their summed area is level1AreaGain times the near level's
+            for (int pass = 0; pass < 3 && v.level1.bladeArea > 0 && v.level0.bladeArea > 0; ++pass) {
+                const double ratio = P.level1AreaGain * v.level0.bladeArea / v.level1.bladeArea;
+                if (std::abs(ratio - 1.0) < 0.02) break;
+                c1.leafLengthM = static_cast<float>(c1.leafLengthM * std::sqrt(ratio));
+                v.level1 = detail::fromCluster(v.name + "_mid", sv::SbVeggieFoliage::buildCluster(c1, P.supportDirections));
+            }
             lib.variants.push_back(std::move(v));
         }
     }

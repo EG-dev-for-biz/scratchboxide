@@ -130,14 +130,14 @@ export interface TileVegetationPlantParams {
     leafSizeRatio?: number;
     leafMin?: number;
     leafMax?: number;
-    /** Leaves in the densest cluster (90) and the cluster's reach in blade lengths (7). */
+    /** Leaves in the densest cluster (160) and the cluster's reach in blade lengths (7). */
     leavesPerCluster?: number;
     clusterRadiusPerLeaf?: number;
     /** Leaf density falls as exp(-d / (shellDepthPerHeight x crown height)) with d the depth below the measured canopy surface (0.10). */
     shellDepthPerHeight?: number;
-    /** Distance between leaf clusters / cluster reach (0.65). */
+    /** Distance between leaf clusters / cluster reach (0.5). */
     stationSpacing?: number;
-    /** Distances (m from the camera) at which a viewport changes a tree's level: level 0 up to lodNearPerHeight x its height (2, at most lodNearMax 60 m), level 1 up to lodFarPerHeight x its height (6, at most lodFarMax 200 m), dithered over lodFade (6 m). */
+    /** Distances (m from the camera) at which a viewport changes a tree's level: level 0 up to lodNearPerHeight x its height (1, at most lodNearMax 30 m), level 1 up to lodFarPerHeight x its height (4, at most lodFarMax 140 m), dithered over lodFade (6 m). */
     lodNearPerHeight?: number;
     lodFarPerHeight?: number;
     lodNearMax?: number;
@@ -155,7 +155,9 @@ export interface TileVegetationPlantParams {
  * tree's own budget grows with its crown (and is never less than its leaf masses on the measured surface need), and the
  * budgets are scaled down to fit under this cap, what the leaf masses need first (never below the per-tree minimum of
  * 120). 1.5 million triangles: the trees model is written as positions, normals and 32-bit indices, about 33 bytes a
- * triangle (Central Park at a 250 m radius: 1,043 trees, 1.43 million triangles, 47 MB), so at the cap it stays near
+ * triangle (Central Park at a 250 m radius: 1,043 trees, 1.43 million budgeted triangles, 47 MB for the budgeted blob
+ * trees; the written far level, which is that wood under the leaf masses of the blob trees, holds about 2.2 million, and
+ * the near levels instance their leaves, so the file is larger than that figure), so at the cap the budgeted trees stay near
  * 50 MB, about the size of the photo-textured extraction of a 250 m radius it was measured in (41 MB there); with the
  * remeshed tile (0.1-1 million triangles) the scene stays under about 2.5 million triangles, which a WebGL viewport draws
  * at interactive rates on integrated GPUs. At 120 triangles a tree the cap holds 12,500 trees, over ten times what a
@@ -164,8 +166,8 @@ export interface TileVegetationPlantParams {
 export const SCENE_TREE_TRIANGLE_CAP = 1_500_000;
 
 /**
- * What the trees may draw, as opposed to what they store (SCENE_TREE_TRIANGLE_CAP above, which bounds the far level's
- * blob masses and the wood every level shares). Trees are written at three levels, and a viewport draws one per tree
+ * What the trees may draw, as opposed to what they store (SCENE_TREE_TRIANGLE_CAP above, which bounds each tree's wood, shared
+ * by every level, and the blob tree the far masses are fitted to; the far level written is that wood under the masses, so a little over it). Trees are written at three levels, and a viewport draws one per tree
  * by its distance, so a frame draws far fewer triangles than the file holds: at most this many in a park view, in
  * total and per level. stats.lodFrames measures it on the written trees (camera poses on a grid over the location, an
  * 80 degree view, every tree within 8 m).

@@ -817,9 +817,10 @@ struct PlantParams {
     // The distances (m from the camera) at which a viewport changes level, per tree: level 0 up to lodNearPerHeight x its
     // height (within [lodNearMinM, lodNearMaxM]), level 1 up to lodFarPerHeight x its height (within [lodFarMinM, lodFarMaxM]),
     // level 2 beyond; fadeM is the width of the band over which two levels dither into each other.
-    double lodNearPerHeight{2.0}, lodNearMinM{20.0}, lodNearMaxM{60.0};
-    double lodFarPerHeight{6.0}, lodFarMinM{70.0}, lodFarMaxM{200.0};
+    double lodNearPerHeight{1.0}, lodNearMinM{12.0}, lodNearMaxM{30.0};
+    double lodFarPerHeight{4.0}, lodFarMinM{60.0}, lodFarMaxM{140.0};
     double lodFadeM{6.0};
+    double lodFarFadeShare{0.25};    // the level 1 to 2 handover dissolves over this share of its distance (at least lodFadeM)
 };
 
 /** The triangles a crown's size asks for (see PlantParams::trianglesPerCrownM2), never fewer than minTrianglesPerTree. */
@@ -3993,11 +3994,13 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
 }
 
 /** Where a viewport changes a tree's level (m from the camera): level 0 up to d0, level 1 up to d1, level 2 beyond, dithered over `fade`. */
-struct LodBands { double d0{0}, d1{0}, fade{0}; };
+struct LodBands { double d0{0}, d1{0}, fade{0}, fade1{0}; };
 
 inline LodBands lodBandsFor(double heightM, const PlantParams& P) {
     LodBands b;
     b.fade = P.lodFadeM;
+    // the far handover swaps leaves for solid masses and a viewer sees the whole crown change: it dissolves over a wider band, a share of the distance
+    b.fade1 = std::max(P.lodFadeM, P.lodFarFadeShare * std::clamp(P.lodFarPerHeight * heightM, P.lodFarMinM, P.lodFarMaxM));
     b.d0 = std::clamp(P.lodNearPerHeight * heightM, P.lodNearMinM, P.lodNearMaxM);
     b.d1 = std::max(b.d0 + P.lodFadeM, std::clamp(P.lodFarPerHeight * heightM, P.lodFarMinM, P.lodFarMaxM));
     return b;
@@ -4099,8 +4102,11 @@ inline std::string treeExtrasMembers(const PlantedTree& tr, const PlantParams& P
         ex << ",\"groundGapM\":";
         if (std::isfinite(tr.groundGapM)) ex << json::num(tr.groundGapM); else ex << "null";
     }
-    ex << ",\"triangles\":" << (tr.wood.indices.size() + tr.foliage.indices.size()) / 3 << ",\"triangleBudget\":" << tr.budget << ",\"ownBudget\":" << tr.ownBudget
-       << ",\"woodTriangles\":" << tr.report.woodTriangles << ",\"foliageTriangles\":" << tr.report.foliageTriangles
+    // `triangles` is the budgeted blob tree (what `triangleBudget` bounds); with levels the far level the file holds is the
+    // delivered wood (given the whole budget, by the near levels) under the same blob masses: `farLevelTriangles`
+    ex << ",\"triangles\":" << (tr.wood.indices.size() + tr.foliage.indices.size()) / 3 << ",\"triangleBudget\":" << tr.budget << ",\"ownBudget\":" << tr.ownBudget;
+    if (tr.hasLod) ex << ",\"farLevelTriangles\":" << tr.lod.woodTriangles + tr.foliage.indices.size() / 3 << ",\"deliveredWoodTriangles\":" << tr.lod.woodTriangles;
+    ex << ",\"woodTriangles\":" << tr.report.woodTriangles << ",\"foliageTriangles\":" << tr.report.foliageTriangles
        << ",\"foliageClumps\":" << tr.report.foliageClumps << ",\"surfaceMasses\":" << tr.report.surfaceMasses << ",\"surfaceMassesNeeded\":" << tr.report.surfaceMassesNeeded
        << ",\"seed\":" << tr.seed;
     return ex.str();
@@ -4193,10 +4199,10 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
             const std::string base = node.name;
             const double H = tr.heightAboveSupport;
             const LodBands bands = lodBandsFor(H, P);
-            const double d0 = bands.d0, d1 = bands.d1, fade = bands.fade;
+            const double d0 = bands.d0, d1 = bands.d1, fade = bands.fade, fade1 = bands.fade1;
             auto lodExtras = [&](int level, double lo, double hi, size_t tris, bool instanced) {
                 return "{\"sbLod\":{\"level\":" + std::to_string(level) + ",\"minDistM\":" + json::num(std::max(0.0, lo)) + ",\"maxDistM\":" + json::num(hi) +
-                       ",\"fadeM\":" + json::num(fade) + ",\"triangles\":" + std::to_string(tris) + ",\"instanced\":" + (instanced ? "true" : "false") + "}}";
+                       ",\"fadeM\":" + json::num(level == 0 ? fade : fade1) + ",\"triangles\":" + std::to_string(tris) + ",\"instanced\":" + (instanced ? "true" : "false") + "}}";
             };
             auto instancesOf = [&](const std::vector<tree_lod::Instance>& in, const std::string& mesh) {
                 staged_glb::StagedInstances si;
@@ -4246,7 +4252,7 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
             }
             const bool instanced0 = !l0.children.empty(), instanced1 = !l1.children.empty();
             l0.extrasJson = lodExtras(0, 0.0, d0 + 0.5 * fade, L.drawnLevel0(), instanced0);
-            l1.extrasJson = lodExtras(1, d0 - 0.5 * fade, d1 + 0.5 * fade, L.drawnLevel1(), instanced1);
+            l1.extrasJson = lodExtras(1, d0 - 0.5 * fade, d1 + 0.5 * fade1, L.drawnLevel1(), instanced1);
             // level 2: the same wood (written once, in the level-0 node), and the blob masses meshCrown builds on the same skeleton
             {
                 staged_glb::StagedPrimitive woodRef;
@@ -4256,7 +4262,7 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
                 if (!tr.foliage.indices.empty()) l2.primitives.push_back(primitiveOf(tr.foliage, tr.growth.foliage));
             }
             const size_t level2Triangles = L.woodTriangles + tr.foliage.indices.size() / 3;
-            l2.extrasJson = lodExtras(2, d1 - 0.5 * fade, 1.0e6, level2Triangles, false);
+            l2.extrasJson = lodExtras(2, d1 - 0.5 * fade1, 1.0e6, level2Triangles, false);
             node.children.push_back(std::move(l0));
             node.children.push_back(std::move(l1));
             node.children.push_back(std::move(l2));
@@ -4349,7 +4355,9 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
         frameName = frame["frame"].str;
     }
     if (crownsDoc.has("label") && crownsDoc["label"].type == io::GlbJsonValue::String) members += "\"label\":" + json::write(crownsDoc["label"]) + ",";
-    members += "\"sbVeggie\":{\"trees\":" + std::to_string(R.trees.size()) + ",\"triangles\":" + std::to_string(R.triangles) +
+    size_t farTotal = 0;
+    for (const auto& t : R.trees) farTotal += t.hasLod ? t.lod.woodTriangles + t.foliage.indices.size() / 3 : (t.wood.indices.size() + t.foliage.indices.size()) / 3;
+    members += "\"sbVeggie\":{\"trees\":" + std::to_string(R.trees.size()) + ",\"triangles\":" + std::to_string(R.triangles) + (R.library ? ",\"farLevelTriangles\":" + std::to_string(farTotal) : std::string()) +
                ",\"triangleBudget\":" + std::to_string(static_cast<size_t>(R.triangleBudget)) + ",\"shortOfCrown\":" + std::to_string(R.shortOfCrown) +
                (R.groundChecked ? ",\"offGround\":" + std::to_string(R.offGround) : std::string()) + ",\"keptAsScannedRings\":" + std::to_string(rings.size()) +
                ",\"generator\":\"space colonisation\"}";

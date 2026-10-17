@@ -25,6 +25,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { spawnSync } from 'child_process';
 import { TileVegetationService } from '../src/node/3d-engine/tile-vegetation-service';
 import { validateTreesGlbJson } from '../src/common/spatial/staged-location-contracts';
 import { parseGlb } from './helpers/clay-glb-render';
@@ -151,3 +152,27 @@ describe('trees at three levels', () => {
         for (const r of ratios) expect(Math.abs(r - 0.35)).toBeLessThanOrEqual(0.1 + 1e-9);
     }, 300_000);
 });
+
+    it('gives level 1 level1AreaGain times the leaf area of level 0 in every shared cluster', () => {
+        // the library is built by the header itself: compile a probe against it and read back the blade areas
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-lodarea-'));
+        const src = path.join(dir, 'probe.cpp'), bin = path.join(dir, 'probe');
+        fs.writeFileSync(src, `#include "scratchbox_tile_vegetation.hpp"
+#include <cstdio>
+int main(){ using namespace scratchbox; tree_lod::LodParams P; auto lib = tree_lod::buildClusterLibrary(P);
+  std::printf("%.4f", P.level1AreaGain);
+  for (auto& v : lib.variants) std::printf(" %.5f %.5f", v.level0.bladeArea, v.level1.bladeArea); }`);
+        const r = spawnSync(process.env.CXX || 'clang++', ['-std=c++20', '-O1', '-I' + path.join(REPO, 'packages/core/src/native/3d-engine/include'), src, '-o', bin], { encoding: 'utf8' });
+        expect(r.status, r.stderr).toBe(0);
+        const out = spawnSync(bin, [], { encoding: 'utf8' });
+        expect(out.status).toBe(0);
+        const [gain, ...areas] = out.stdout.trim().split(' ').map(Number);
+        expect(gain).toBeGreaterThan(1);
+        expect(areas.length).toBeGreaterThanOrEqual(6);
+        for (let k = 0; k < areas.length; k += 2) {
+            expect(areas[k]).toBeGreaterThan(0.05);
+            expect(areas[k + 1] / areas[k]).toBeGreaterThan(gain * 0.97);
+            expect(areas[k + 1] / areas[k]).toBeLessThan(gain * 1.03);
+        }
+    }, 120_000);
+
