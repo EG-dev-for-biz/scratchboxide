@@ -148,7 +148,7 @@ function fakeVision(log: Log): NonNullable<StagedLocationDeps['vision']> {
                     kind = 'figures';
                     const dims = [...text0.matchAll(/\[(\d+)\] Google Street View crop[^\n]*?\(width ([\d.]+) m, height ([\d.]+) m, depth ([\d.]+) m\)/g)].map(m => ({ i: Number(m[1]), w: Number(m[2]), h: Number(m[3]), d: Number(m[4]) }));
                     reply = { figures: dims.map(x => ({ image: x.i, confidence: 66, spec: { ...(figuresReply([0]) as any).figures[0].spec, boundingMeters: [x.w, x.h, x.d] } })) };
-                } else if (/reading architectural ornament/.test(text0)) {
+                } else if (/reading (architectural ornament|ONE repeating)/.test(text0)) {
                     kind = 'ornament';
                     const slotLen = new Map<string, number>();
                     const slotSize = new Map<string, [number, number]>();
@@ -157,7 +157,7 @@ function fakeVision(log: Log): NonNullable<StagedLocationDeps['vision']> {
                     const polys = new Map<string, number[]>();
                     for (const m of text0.matchAll(/\[(\d+)\] ([^\n]*)/g)) for (const p of m[2].matchAll(/(S\d+) → (\[[\d,]+\])/g)) if (!polys.has(`${m[1]}:${p[1]}`)) polys.set(`${m[1]}:${p[1]}`, JSON.parse(p[2]));
                     // the first image that shows the slot AND has its polygon (the tile orthos have none: the close-ups do)
-                    for (const m of text0.matchAll(/^(S\d+):.*in images \[([\d, ]*)\]/gm)) { const idx = m[2].split(',').map(x => x.trim()).filter(Boolean).map(Number).find(i => polys.has(`${i}:${m[1]}`)); if (idx !== undefined) inImages.set(m[1], idx); }
+                    for (const m of text0.matchAll(/^(S\d+):.*in images \[([^\]]*)\]/gm)) { const idx = [...m[2].matchAll(/(\d+) \(\d+% of the slot visible\)/g)].map(x => Number(x[1])).find(i => polys.has(`${i}:${m[1]}`)); if (idx !== undefined) inImages.set(m[1], idx); }
                     const elements: unknown[] = [];
                     log.hints.push(...text0.split('\n').filter(l => /the survey saw/.test(l)));
                     for (const h of text0.matchAll(/^(S\d+): the survey saw "([^"]+)".*?(?:running ([\d.]+)-([\d.]+) m along the edge|([\d.]+) × ([\d.]+) m on the face(?:, inside the slot over u ([\d.-]+)-([\d.-]+) m, v ([\d.-]+)-([\d.-]+) m, with most room at u ([\d.-]+) m, v ([\d.-]+) m \(about ([\d.]+) m clear)?)(?:, (\d+) repeats \((\w)\) about (\d+) mm per cell)?/gm)) {
@@ -346,7 +346,8 @@ describe.skipIf(!arch.requirement.ok || !stagedChrome.ok)('photo-read refinement
         expect(['committed', 'degraded']).toContain(stage('survey').status);
         // a ring of further wide views per surveyed face (matched across views), then close-ups: bounded by the image budget
         expect(run.log.grounding.filter(g => g.kind === 'wide').length).toBeLessThanOrEqual(4 * (1 + 3));
-        expect(run.log.grounding.filter(g => g.kind === 'close').length).toBeLessThanOrEqual(16);
+        // the wide reading's close-ups, and up to two narrow crops per repeating run or band (run-reading.ts)
+        expect(run.log.grounding.filter(g => g.kind === 'close').length).toBeLessThanOrEqual(16 + 12 * 2);
         expect(run.log.vision.filter(v => v.kind === 'survey').length).toBe(1);
     }, 1_800_000);
 
@@ -361,7 +362,8 @@ describe.skipIf(!arch.requirement.ok || !stagedChrome.ok)('photo-read refinement
         expect(stage('fit').status).toBe('committed');
         expect(stage('survey').cost.visionCalls).toBe(1);
         expect(run.log.vision.filter(v => v.kind === 'survey').length).toBe(1);
-        expect(run.log.vision.filter(v => v.kind === 'ornament').length).toBeLessThanOrEqual(2);
+        // the wide reading (and its one revision) and at most one small focused reading per repeating run or band (run-reading.ts)
+        expect(run.log.vision.filter(v => v.kind === 'ornament').length).toBeLessThanOrEqual(2 + 12 * 2);
         expect(run.log.vision.filter(v => v.kind === 'figures').length).toBeLessThanOrEqual(1);
         for (const l of (run.result.artifact.data.stagedBuild.layers as any[]).filter(x => x.layer === 'l4' || x.layer === 'l4f')) expect(l.counts.triangles).toBeGreaterThan(0);
     }, 1_800_000);

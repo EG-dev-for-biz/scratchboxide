@@ -78,7 +78,7 @@ export function routedVisionClient(replies: { survey?: object | Error; ornament?
             generateContent: async () => { throw new Error('streaming expected'); },
             generateContentStream: async (params: any) => {
                 const text0 = JSON.stringify(params.contents?.[0]?.parts?.filter((p: any) => p.text).map((p: any) => p.text) ?? []);
-                const kind: RoutedCall['kind'] = /surveying one real structure/.test(text0) ? 'survey' : /reading architectural ornament/.test(text0) ? 'ornament' : 'other';
+                const kind: RoutedCall['kind'] = /surveying one real structure/.test(text0) ? 'survey' : /reading (architectural ornament|ONE repeating)/.test(text0) ? 'ornament' : 'other';
                 record.push({ kind, params });
                 const reply = kind === 'survey' ? replies.survey : replies.ornament;
                 if (reply instanceof Error) throw reply;

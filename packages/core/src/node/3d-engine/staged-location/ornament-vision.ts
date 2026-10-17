@@ -143,9 +143,17 @@ export function streetViewCaption(ref: EvidenceImageRef): string {
 }
 
 /** The ornament/v2 prompt text around the images (the images go between the preamble and the tables). */
-export function ornamentPromptText(fit: StructureFit, evidence: EvidenceImageRef[], located: LocatedElement[] = [], offer?: SlotOffer): { preamble: string; tables: string } {
+/** A focused reading: one repeating or banded group, one crop, one slot. */
+export interface FocusedReading {
+    /** What the survey saw there, in words (its own wording; never matched on). */
+    task: string;
+}
+
+export function ornamentPromptText(fit: StructureFit, evidence: EvidenceImageRef[], located: LocatedElement[] = [], offer?: SlotOffer, focus?: FocusedReading): { preamble: string; tables: string } {
     const l = fit.sourceLimits;
-    const preamble = `You are reading architectural ornament on one real structure from photographs. It will be added as parametric detail to a clay model that was fitted to a 3D scan. The scan resolves shapes of about ${f2(l.meshResolvableM)} m and the tile photos about ${f2(l.photoResolvableM)} m. Everything you add is labelled "photo-inferred" with the confidence you give, and anything smaller than the image you cite can show is discarded.\n\nImages (cite them by index):`;
+    const preamble = focus
+        ? `You are reading ONE repeating or banded group of ornament on a real structure from one photograph. It will be added as parametric detail to a clay model fitted to a 3D scan, which resolves shapes of about ${f2(l.meshResolvableM)} m. Everything you add is labelled "photo-inferred" with the confidence you give. ${focus.task}\n\nImage (cite it by index):`
+        : `You are reading architectural ornament on one real structure from photographs. It will be added as parametric detail to a clay model that was fitted to a 3D scan. The scan resolves shapes of about ${f2(l.meshResolvableM)} m and the tile photos about ${f2(l.photoResolvableM)} m. Everything you add is labelled "photo-inferred" with the confidence you give, and anything smaller than the image you cite can show is discarded.\n\nImages (cite them by index):`;
     // only slots on an open, exterior face that some image shows (slot-exposure.ts) are offered, each with the images that show it and how much
     const offered = offer ? fit.slots.filter(s => offer.offeredIds.has(s.id)) : fit.slots;
     const inImages = (slotId: string) => offer
@@ -171,18 +179,18 @@ export function ornamentPromptText(fit: StructureFit, evidence: EvidenceImageRef
     ];
     const schema = JSON.stringify(schemaClosure('VisionOrnamentReply'));
     const tables = [
-        `Slots offered (${offered.length}${offer ? ` of ${fit.slots.length} fitted; the others are on hidden or interior faces or shown by no image, and are not offered` : ''}): ${slots.join('\n')}`,
+        `Slots offered (${offered.length}${offer ? ` of ${fit.slots.length} fitted; the others are on hidden or interior faces or shown by no image, and are not offered` : ''}):\n${slots.join('\n')}`,
         `Slot polygons in Street View images: ${polys.length ? polys.join('\n') : 'none'}`,
         ...(located.length ? [`Survey: a first look at the whole structure found these, each already placed in its slot by casting its place in the photo onto the fitted face, so you do not place anything: measure it. Its metres come from the scan; the repeat counts are the survey's rough count. Give counts and sizes you can read in the close-up; count × pitch will be held to the run below.\n${surveyHintLines(located, offered).join('\n')}`] : []),
-        `Correctable fit values: ${correctable.length ? correctable.join('\n') : 'none'}`,
+        ...(focus ? [] : [`Correctable fit values: ${correctable.length ? correctable.join('\n') : 'none'}`]),
         `Rules:\n${rules.join('\n')}`,
         `Reply with JSON only, matching this schema: ${schema}`
     ].join('\n\n');
     return { preamble, tables };
 }
 
-export function ornamentContents(fit: StructureFit, evidence: EvidenceInput[], located: LocatedElement[] = [], offer?: SlotOffer): Content[] {
-    const { preamble, tables } = ornamentPromptText(fit, evidence.map(e => e.ref), located, offer);
+export function ornamentContents(fit: StructureFit, evidence: EvidenceInput[], located: LocatedElement[] = [], offer?: SlotOffer, focus?: FocusedReading): Content[] {
+    const { preamble, tables } = ornamentPromptText(fit, evidence.map(e => e.ref), located, offer, focus);
     const parts: Part[] = [{ text: preamble }];
     for (const e of evidence) {
         parts.push({ inlineData: { mimeType: e.mimeType, data: e.bytes.toString('base64') } });
@@ -642,6 +650,8 @@ export interface ReadOrnamentInput {
     located?: LocatedElement[];
     /** The slots worth asking about (exterior, shown by an image); absent: every slot. */
     offer?: SlotOffer;
+    /** A small focused reading of one group (no corrections are asked for). */
+    focus?: FocusedReading;
 }
 
 /** One combined call, at most one revision; throws VisionStageError when no usable reply comes. */
@@ -650,7 +660,7 @@ export async function readOrnament(input: ReadOrnamentInput): Promise<OrnamentRe
     const refs = input.evidence.map(e => e.ref);
     const timeoutMs = input.timeoutMs ?? ORNAMENT_VISION_TIMEOUT_MS;
     const located = input.located ?? [];
-    const first = ornamentContents(fit, input.evidence, located, input.offer);
+    const first = ornamentContents(fit, input.evidence, located, input.offer, input.focus);
     const replies: string[] = [];
     let usage: { promptTokens?: number; outputTokens?: number; thinkingTokens?: number; finishReason?: string } = {};
     const call = async (contents: Content[]): Promise<{ text: string; finishReason?: string }> => {

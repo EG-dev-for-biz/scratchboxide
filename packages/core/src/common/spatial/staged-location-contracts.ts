@@ -951,6 +951,8 @@ export interface StagedLocationResult {
         surveyLocated?: { elements: number; unlocated: number; slots: number; crops: number };
         /** Which fitted slots the reading was asked about: only those on an open exterior face that an image shows. */
         slotsOffered?: { offered: number; total: number; hidden: number; unseen: number; exposureJudged: boolean };
+        /** The targeted second pass: repeating runs and bands read again alone from narrow crops. */
+        runReadings?: { targets: number; read: number; elements: number; replaced: number; skipped: Array<{ id: string; kind: string; slotId?: string; reason: string }> };
     };
     /** The draft survey's materials and measured colours. */
     materialHints?: MaterialHints;
@@ -1659,7 +1661,8 @@ const DEFINITIONS = {
             model: ref('visionModelUse'), revisionPass: BOOL, dropped: NONNEG_INT, specPath: STR,
             anchoring: arr(obj(['elementId', 'slotId', 'kind', 'errorM', 'toleranceM', 'note'], { elementId: STR, slotId: STR, kind: STR, errorM: ref('nonneg'), toleranceM: ref('nonneg'), note: STR })),
             surveyLocated: obj(['elements', 'unlocated', 'slots', 'crops'], { elements: NONNEG_INT, unlocated: NONNEG_INT, slots: NONNEG_INT, crops: NONNEG_INT }),
-            slotsOffered: obj(['offered', 'total', 'hidden', 'unseen', 'exposureJudged'], { offered: NONNEG_INT, total: NONNEG_INT, hidden: NONNEG_INT, unseen: NONNEG_INT, exposureJudged: BOOL })
+            slotsOffered: obj(['offered', 'total', 'hidden', 'unseen', 'exposureJudged'], { offered: NONNEG_INT, total: NONNEG_INT, hidden: NONNEG_INT, unseen: NONNEG_INT, exposureJudged: BOOL }),
+            runReadings: obj(['targets', 'read', 'elements', 'replaced', 'skipped'], { targets: NONNEG_INT, read: NONNEG_INT, elements: NONNEG_INT, replaced: NONNEG_INT, skipped: arr(obj(['id', 'kind', 'reason'], { id: STR, kind: STR, slotId: STR, reason: STR })) })
         }),
         materialHints: ref('materialHints'), figures: arr(ref('figureRecord')),
         photoCost: obj(['total', 'byStage'], { total: ref('stageCost'), byStage: { type: 'object', additionalProperties: ref('stageCost') } }),

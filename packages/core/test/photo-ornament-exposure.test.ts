@@ -98,7 +98,7 @@ describe('slot exposure', () => {
             } else expect(e.why).toBeTruthy();
         }
         const { tables } = ornamentPromptText(fit, refs, [], offer);
-        const lines = tables.split('\n').filter(l => /^(Slots offered[^:]*: )?S\d+: /.test(l));
+        const lines = tables.split('\n').filter(l => /^S\d+: /.test(l));
         expect(lines.length).toBe(offer.offeredIds.size);
         const dir = path.join(process.cwd(), 'test-results');
         fs.mkdirSync(dir, { recursive: true });
