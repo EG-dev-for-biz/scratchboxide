@@ -21,6 +21,7 @@
  */
 
 import {
+    ORNAMENT_REPLICATE_MAX_COUNT,
     PROVENANCE,
     type CompactBox,
     type CompactElement,
@@ -157,4 +158,48 @@ export function expandElements(elements: CompactElement[], fit: Pick<StructureFi
     const sorted = [...out].sort((a, b) => (slotOrder.get(a.element.slotId)! - slotOrder.get(b.element.slotId)!) || a.replyIndex - b.replyIndex);
     sorted.forEach((x, i) => { x.element.buildOrder = i; });
     return out;
+}
+
+/**
+ * A replicate the model read with more repeats than one domain takes (ORNAMENT_REPLICATE_MAX_COUNT per axis) is split
+ * into consecutive blocks that place exactly the same instances: a lattice into blocks of at most the limit per axis
+ * (each block's origin moved by whole pitches; blocks start on even rows, so the alternate-row offset keeps its phase),
+ * a run along an edge into runs whose start offsets continue the pitch. Nothing is dropped or re-measured; the first block
+ * keeps the element's id, the others get "-2", "-3"..., and every block's provenance note says it was split.
+ */
+export function splitOversizeReplicates(elements: OrnamentElement[], max = ORNAMENT_REPLICATE_MAX_COUNT): { elements: OrnamentElement[]; split: Array<{ elementId: string; parts: string[]; before: string }> } {
+    if (max % 2) throw new Error('the replicate limit must be even so split lattice blocks keep the row-offset phase');
+    const out: OrnamentElement[] = [];
+    const split: Array<{ elementId: string; parts: string[]; before: string }> = [];
+    for (const el of elements) {
+        const spec = el.spec;
+        if (spec.operator !== 'replicate') { out.push(el); continue; }
+        const d = spec.replicate.domain;
+        const blocks: Array<OperatorSpec> = [];
+        let before = '';
+        if ('lattice' in d && (d.lattice.counts[0] > max || d.lattice.counts[1] > max)) {
+            const g = d.lattice;
+            before = `${g.counts[0]} × ${g.counts[1]}`;
+            for (let j0 = 0; j0 < g.counts[1]; j0 += max) for (let i0 = 0; i0 < g.counts[0]; i0 += max) {
+                blocks.push({ operator: 'replicate', replicate: { ...spec.replicate, domain: { lattice: {
+                    originUv: [g.originUv[0] + i0 * g.pitchUv[0], g.originUv[1] + j0 * g.pitchUv[1]] as Vec2, pitchUv: [g.pitchUv[0], g.pitchUv[1]] as Vec2,
+                    counts: [Math.min(max, g.counts[0] - i0), Math.min(max, g.counts[1] - j0)], rowOffsetU: g.rowOffsetU
+                } } } });
+            }
+        } else if ('along' in d && d.along.count > max) {
+            const a = d.along;
+            before = `${a.count} along`;
+            for (let k0 = 0; k0 < a.count; k0 += max) {
+                blocks.push({ operator: 'replicate', replicate: { ...spec.replicate, domain: { along: { ...a, count: Math.min(max, a.count - k0), startOffsetM: a.startOffsetM + k0 * a.pitchM } } } });
+            }
+        }
+        if (!blocks.length) { out.push(el); continue; }
+        const parts = blocks.map((_, k) => (k ? `${el.id}-${k + 1}` : el.id));
+        const note = `read as one replicate of ${before}; split into ${blocks.length} blocks of at most ${max} per axis (the builder's limit), the same instances at the same places`;
+        blocks.forEach((b, k) => out.push({ ...el, id: parts[k], spec: b, provenance: { ...el.provenance, note: el.provenance.note ? `${el.provenance.note}; ${note}` : note } }));
+        split.push({ elementId: el.id, parts, before });
+    }
+    // with a split, build order is renumbered so the blocks of one element follow each other
+    if (split.length) [...out].map((e, i) => ({ e, i })).sort((x, y) => (x.e.buildOrder - y.e.buildOrder) || (x.i - y.i)).forEach((x, rank) => { x.e.buildOrder = rank; });
+    return { elements: out, split };
 }

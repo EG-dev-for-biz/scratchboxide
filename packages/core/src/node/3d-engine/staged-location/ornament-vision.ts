@@ -49,7 +49,7 @@ import {
 import { describeThinking, thinkingConfigFor } from '../../gemini/thinking-config';
 import type { VisionAttempt, VisionModelChain } from '../../gemini/vision-model-chain';
 import { anchorElements, type AnchorNote } from './ornament-anchor';
-import { expandElements, expandEvidence, type ExpandedElement } from './ornament-expand';
+import { expandElements, expandEvidence, splitOversizeReplicates, type ExpandedElement } from './ornament-expand';
 import { surveyHintLines, type LocatedElement } from './survey-detail';
 import type { SlotOffer } from './slot-exposure';
 import { describeCover, type SlotCover } from './slot-cover';
@@ -737,20 +737,23 @@ export async function readOrnament(input: ReadOrnamentInput): Promise<OrnamentRe
     }
     const thinking = chain.attempts.length ? chain.attempts[chain.attempts.length - 1].thinking : undefined;
     const model = visionUse(chain, 'answered', { ...usage, ...(thinking ? { thinking } : {}) });
+    // a replicate read past the builder's per-axis limit is split into blocks placing the same instances (never clamped)
+    const sized = splitOversizeReplicates(check.kept);
+    const supportTestRequired = check.supportTestRequired.flatMap(id => sized.split.find(x => x.elementId === id)?.parts ?? [id]);
     const spec: OrnamentSpec = {
         schema: 'scratchbox.ornament-spec/2',
         buildingId: fit.buildingId,
         structureFitSha256: input.fitSha256,
         promptVersion: ORNAMENT_PROMPT_VERSION,
         evidence: refs,
-        elements: check.kept,
+        elements: sized.elements,
         corrections: check.corrections,
         emptySlots: check.emptySlots,
         model,
         revision: { passes, problems },
         dropped: check.dropped.map(d => ({ elementId: d.elementId, slotId: d.slotId, by: d.by, problems: d.problems }))
     };
-    return { spec, replies, supportTestRequired: check.supportTestRequired, dropped: check.dropped, rejectedCorrections: check.rejectedCorrections, anchored: check.anchored ?? [] };
+    return { spec, replies, supportTestRequired, dropped: check.dropped, rejectedCorrections: check.rejectedCorrections, anchored: check.anchored ?? [] };
 }
 
 /** The thinking a VisionModelUse records for a model when no call was made (a failure before any attempt). */

@@ -564,6 +564,9 @@ export interface EvidenceImageRef {
 
 export interface ElementEvidence { imageId: string; box1000: Box1000 }
 
+/** The most repeats one replicate domain takes per axis (the OrnamentSpec schema's limit); longer readings are split (ornament-expand.ts splitOversizeReplicates). */
+export const ORNAMENT_REPLICATE_MAX_COUNT = 400;
+
 export interface OrnamentElement {
     /** "e014". */
     id: string;
@@ -1359,13 +1362,13 @@ const DEFINITIONS = {
             obj(['along'], {
                 along: obj(['carrier', 'pitchM', 'count', 'startOffsetM'], {
                     carrier: ref('carrierRef'), pitchM: { type: 'number', minimum: 0.01 },
-                    count: { type: 'integer', minimum: 1, maximum: 400 }, startOffsetM: NUM
+                    count: { type: 'integer', minimum: 1, maximum: ORNAMENT_REPLICATE_MAX_COUNT }, startOffsetM: NUM
                 })
             }),
             obj(['lattice'], {
                 lattice: obj(['originUv', 'pitchUv', 'counts', 'rowOffsetU'], {
                     originUv: ref('vec2'), pitchUv: ref('vec2'),
-                    counts: arr({ type: 'integer', minimum: 1, maximum: 400 }, { minItems: 2, maxItems: 2 }), rowOffsetU: NUM
+                    counts: arr({ type: 'integer', minimum: 1, maximum: ORNAMENT_REPLICATE_MAX_COUNT }, { minItems: 2, maxItems: 2 }), rowOffsetU: NUM
                 })
             })
         ]
