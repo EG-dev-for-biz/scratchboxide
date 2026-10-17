@@ -1808,7 +1808,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
 
         // both branches, and the Street View fetch, are settled before the call goes on: none runs, or rejects unseen, after it
         const settled = await Promise.allSettled([treesPromise, rebuildPromise, ...(evidencePromise ? [evidencePromise] : []), ...(surveyPromise ? [surveyPromise] : []), ...(figuresPromise ? [figuresPromise] : [])]);
-        const failure = settled.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+        // the figures stage starts inside the rebuild, after the line above built its list, so it is awaited here: finishing before it would
+        // stop it ("not started before the run ended") whenever every other stage came from cache
+        const late = await Promise.allSettled(siblings);
+        const failure = [...settled, ...late].find((r): r is PromiseRejectedResult => r.status === 'rejected');
         if (failure) throw failure.reason;
         const treesOut = (settled[0] as PromiseFulfilledResult<Awaited<typeof treesPromise>>).value;
         const rebuild = (settled[1] as PromiseFulfilledResult<Awaited<typeof rebuildPromise>>).value;
