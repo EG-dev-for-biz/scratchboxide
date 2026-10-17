@@ -1403,7 +1403,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     ] : [];
                     const tileSha = tile ? sha256File(extraction.texturedGlb) : 'no-tile';
                     const enhance = deps.textures?.enhance;
-                    const outcomes: Array<{ layer: StagedLayer; out: Omit<TextureLayerOutcome, 'glb'>; url: string; bytes: number; cached: boolean; builtAtMs: number }> = [];
+                    const outcomes: Array<{ layer: StagedLayer; out: Omit<TextureLayerOutcome, 'glb' | 'measureLoo'>; url: string; bytes: number; cached: boolean; builtAtMs: number }> = [];
+                    // leave-one-pano-out fits, run once every layer is textured (TextureLayerOutcome.measureLoo)
+                    const looJobs = new Map<string, NonNullable<TextureLayerOutcome['measureLoo']>>();
                     const passDegradations: TexturePassDegradation[] = [];
                     const done = (k: number) => {
                         run.state.texturePass = {
@@ -1430,7 +1432,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 onProgress: m => { io.progress(`textures: ${m}`); run.emit('textures', 'running', { message: m }); }
                             });
                             fs.writeFileSync(path.join(dir, 'twin.glb'), out.glb);
-                            const { glb: _glb, ...value } = out;
+                            const { glb: _glb, measureLoo, ...value } = out;
+                            if (measureLoo) looJobs.set(target.layer.objectId, measureLoo);
                             return { value };
                         }, { publish: () => [{ from: 'twin.glb', as: `${base}_${target.layer.layer}_tex_${key.slice(0, 8)}.glb` }], bypass: bypass('textures') });
                         const pub = entry.published[0];
@@ -1465,6 +1468,20 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const late = pick();
                         targets.push(...late);
                         await textureAll(late);
+                    }
+                    for (const o of outcomes) {
+                        const job = looJobs.get(o.layer.objectId);
+                        if (!job || !o.out.bundle.fit) continue;
+                        const tl = now();
+                        try {
+                            const loo = await job();
+                            o.out = { ...o.out, bundle: { ...o.out.bundle, fit: { ...o.out.bundle.fit, loo } }, timingsMs: { ...o.out.timingsMs, fitLoo: now() - tl } };
+                            io.progress(`textures: ${o.layer.layer}: leave-one-pano-out fit over ${loo.panos} panos: texture edge chamfer ${loo.chamferPx ?? 'n/a'} px, gradient NCC ${loo.gradNcc ?? 'n/a'}${loo.skipped ? ` (${loo.skipped} panos past the budget)` : ''}`);
+                        } catch (err) {
+                            if (isAbort(err) || io.signal.aborted) throw err;
+                            io.progress(`textures: ${o.layer.layer}: the leave-one-pano-out fit could not be measured (${errorMessage(err)})`);
+                        }
+                        await new Promise(r => setImmediate(r));
                     }
                     const layers: TextureLayerBundle[] = outcomes.map(o => ({ ...o.out.bundle, maps: { albedo: `${o.url}#albedo` }, confidence: `${o.url}#confidence` }));
                     const timingsMs: Record<string, number> = { total: now() - started, tileLoad: tileLoadMs };

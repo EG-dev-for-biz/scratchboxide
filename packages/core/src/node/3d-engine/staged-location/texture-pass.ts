@@ -42,7 +42,7 @@ import type { Registration } from './pano-registration';
 import type { EvidenceImage } from './streetview-evidence';
 import { buildUvAtlas, type LaidOutUvAtlas } from './texture-uv';
 import { mergeBakedPlanes, transferTilePhoto, type TileTextureSurface } from './tile-texture-transfer';
-import { describeLayerFit, leaveOnePanoOut, measureLayerFit, type LayerFit } from './texture-fit-metric';
+import { describeLayerFit, leaveOnePanoOut, measureLayerFit, type LayerFit, type LooFit } from './texture-fit-metric';
 import { measureScanDeviation, type ScanDeviation } from './scan-deviation';
 import { round5Enabled } from './round5-switch';
 
@@ -126,6 +126,8 @@ export interface TextureLayerOutcome {
     enhance?: { charts: number; accepted: number; rejected: number; failed: number; timedOut?: number; modelsUsed: string[] };
     /** Held-out fit of the final textured layer against the Street View photos (texture-fit-metric.ts). */
     fit?: LayerFit;
+    /** The leave-one-pano-out fit, to run once all layers are textured (texture-fit-metric.ts leaveOnePanoOut); not cached. */
+    measureLoo?: () => Promise<LooFit>;
     modelsUsed: string[];
     timingsMs: Record<string, number>;
 }
@@ -408,6 +410,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
     planes = { ...planes, provenance: m.provenance };
     // the held-out fit: the final layer rendered from every view's pose against that photo, on what the view's pano did not make
     let fit: LayerFit | undefined;
+    let measureLoo: (() => Promise<LooFit>) | undefined;
     const judge = src.context ?? src.occluder;
     if (src.views.length && judge) {
         t = Date.now();
@@ -419,18 +422,12 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
             progress(`the held-out fit could not be measured (${(err as Error)?.message ?? String(err)})`);
         }
         timingsMs.fit = Date.now() - t;
-        // leave one pano out, for real: the projection baked again without each pano's views, and that pano's photos judge it
+        // leave one pano out, for real: the projection baked again without each pano's views, and that pano's photos judge it.
+        // Handed back as a job the caller runs once every layer is textured (it is long, synchronous work: run beside the
+        // other layers' native unwrappers it starved them past their time limits)
         if (looBake && fit) {
-            t = Date.now();
-            try {
-                const loo = await leaveOnePanoOut(atlas, src.views.filter(v => v.poseQuality > 0), looBake, depthForMesh(judge), src.signal);
-                fit = { ...fit, loo };
-                progress(`leave-one-pano-out fit over ${loo.panos} panos: texture edge chamfer ${loo.chamferPx ?? 'n/a'} px, gradient NCC ${loo.gradNcc ?? 'n/a'}${loo.skipped ? ` (${loo.skipped} panos past the budget)` : ''}`);
-            } catch (err) {
-                if (src.signal?.aborted) throw err;
-                progress(`the leave-one-pano-out fit could not be measured (${(err as Error)?.message ?? String(err)})`);
-            }
-            timingsMs.fitLoo = Date.now() - t;
+            const bake = looBake, depth = depthForMesh(judge), views = src.views.filter(v => v.poseQuality > 0);
+            measureLoo = () => leaveOnePanoOut(atlas, views, bake, depth, src.signal);
         }
     }
     t = Date.now();
@@ -449,7 +446,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
         },
         rungShares: m.rungShares, rungTexels: m.rungTexels, atlasTexels: m.total,
         atlas: { width: atlas.width, height: atlas.height, texelsPerMeter: atlas.layout.stats.texelsPerMeter, charts: atlas.layout.stats.charts, islands: atlas.layout.stats.islands },
-        degradations: unique, ...(projection ? { projection } : {}), ...(tileMethod ? { tileMethod } : {}), ...(enhance ? { enhance } : {}), ...(fit ? { fit } : {}),
+        degradations: unique, ...(projection ? { projection } : {}), ...(tileMethod ? { tileMethod } : {}), ...(enhance ? { enhance } : {}), ...(fit ? { fit } : {}), ...(measureLoo ? { measureLoo } : {}),
         modelsUsed: [...new Set(modelsUsed)], timingsMs
     };
 }
