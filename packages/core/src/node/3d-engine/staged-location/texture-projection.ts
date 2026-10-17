@@ -42,7 +42,7 @@ import {
 } from '../../../common/spatial/texture-pass-contracts';
 import { delightLinearPlane, PHOTOGRAMMETRIC_DELIGHT, TEXTURE_LIFT_CAP, type DelightPlaneReport } from '../../../common/spatial/photogrammetric-delight';
 import { AlgorithmicUvEngine } from '../../spatial/AlgorithmicUvEngine';
-import { blurWithinMaps, chartLocalGains, selectViewsPerRegion, type RegionSelectOptions } from './texture-seams';
+import { blurWithinMaps, chartLocalGains, poissonBlendRegions, selectViewsPerRegion, type PoissonBlendOptions, type PoissonBlendReport, type RegionSelectOptions } from './texture-seams';
 import { alignViewsPerChart, type AlignmentOptions, type AlignmentReport } from './texture-alignment';
 import {
     SRGB_TO_LINEAR, deltaE00, linearToLab, linearToSrgb255, paletteGate, solveRelativeGains,
@@ -101,6 +101,11 @@ export interface ProjectionBakeOptions {
      * views at those boundaries only. Default on; false blends every view by weight (the old behaviour).
      */
     regionSelect?: boolean | RegionSelectOptions;
+    /**
+     * With one view per region: blend the regions in the gradient domain (texture-seams.ts poissonBlendRegions) instead of
+     * the band blend, so a step between views is spread smoothly instead of shown. Default on; false uses the band blend.
+     */
+    poisson?: boolean | PoissonBlendOptions;
     /** Relative per-view exposure gains. Default true. */
     exposure?: boolean;
     /** Palette gate distance (CIEDE2000). Default 6. */
@@ -151,9 +156,15 @@ export interface ProjectionBakeReport {
      * 5 x 5 means centred 2 texels back on either side (6 apart); `interiorP95DeltaE` is the same measure between neighbours inside one
      * view's region (the texture's own contrast), so a seam is invisible when its p95 is near that.
      */
-    outputSeam: { p95DeltaE: number; maxDeltaE: number; samples: number; interiorP95DeltaE: number };
+    outputSeam: {
+        p95DeltaE: number; maxDeltaE: number; samples: number; interiorP95DeltaE: number;
+        /** The same across boundaries and inside regions on 9 x 9 means 10 texels apart: the low-frequency step a patch shows. */
+        lowFreqP95DeltaE: number; lowFreqMedianDeltaE: number; lowFreqInteriorP95DeltaE: number; lowFreqInteriorMedianDeltaE: number;
+    };
     /** One view per region (present when it ran): per-chart gains applied, MRF blocks labelled, label changes between neighbouring texels. */
-    regions?: { chartGains: number; meanAbsLogGain: number; blocks: number; boundaryTexels: number };
+    regions?: { chartGains: number; meanAbsLogGain: number; blocks: number; boundaryTexels: number; refinedTexels: number; sunShadedViews: number; /** Blocks left on a view that is in shadow there while another view is not. */ shadowedBlocks: number };
+    /** The gradient-domain blend (present when it ran). */
+    poisson?: PoissonBlendReport;
     /** The per-chart image alignment (present when it ran): shifts kept and the inter-view gradient NCC before and after. */
     alignment?: AlignmentReport;
     /** The shadow lift as applied: how much of it the local-contrast cap kept. Present when de-lit. */
@@ -494,9 +505,26 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
                 mean[t * 3] = r; mean[t * 3 + 1] = gg; mean[t * 3 + 2] = bl;
             }
         }
-        const sel = selectViewsPerRegion(atlas, samples, index, typeof o.regionSelect === 'object' ? o.regionSelect : {});
+        // known solar shading: a view whose capture time is known saw the texels facing away from its sun in shadow
+        const sunOf: Array<Vec3 | undefined> = views.map(() => undefined);
+        if (o.delight) {
+            views.forEach((view, k) => {
+                const date = view.captureDate;
+                if (!date || !/T\d{2}:\d{2}/.test(date) || Number.isNaN(Date.parse(date))) return;
+                sunOf[k] = AlgorithmicUvEngine.resolveSolarSunVector({ latitude: o.delight!.latitude, longitude: o.delight!.longitude, timestampIso: date }) as Vec3;
+            });
+        }
+        const toEnu = o.delight?.layerToEnu ?? ((v: Vec3) => v);
+        const sunShadedViews = sunOf.filter(Boolean).length;
+        const sunShaded = sunShadedViews ? (k: number, t: number): boolean => {
+            const sv = sunOf[k];
+            if (!sv) return false;
+            const nn = toEnu([normal[t * 3], normal[t * 3 + 1], normal[t * 3 + 2]]);
+            return sv[1] <= 0 || nn[0] * sv[0] + nn[1] * sv[1] + nn[2] * sv[2] <= 0.05;
+        } : undefined;
+        const sel = selectViewsPerRegion(atlas, samples, index, { ...(sunShaded ? { sunShaded } : {}), ...(typeof o.regionSelect === 'object' ? o.regionSelect : {}) });
         label = sel.label;
-        regions = { chartGains: g.pairs, meanAbsLogGain: g.meanAbsLogGain, blocks: sel.blocks, boundaryTexels: sel.changes };
+        regions = { chartGains: g.pairs, meanAbsLogGain: g.meanAbsLogGain, blocks: sel.blocks, boundaryTexels: sel.changes, refinedTexels: sel.refined, sunShadedViews, shadowedBlocks: sel.shadowedBlocks };
         timingsMs.regions = Date.now() - tRegions;
     }
     const tBands = Date.now();
@@ -505,7 +533,11 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
     const final = Float64Array.from(mean);
     let multiViewTexels = 0;
     for (let t = 0; t < n; t++) if (index.start[t + 1] - index.start[t] >= 2) multiViewTexels++;
-    if (bandSigmas.length && multiViewTexels > 0) {
+    let poisson: PoissonBlendReport | undefined;
+    if (label && o.poisson !== false) {
+        poisson = poissonBlendRegions(atlas, samples, index, label, final, { ...(typeof o.poisson === 'object' ? o.poisson : {}), ...(input.signal ? { signal: input.signal } : {}) });
+        timingsMs.poisson = poisson.ms;
+    } else if (bandSigmas.length && multiViewTexels > 0) {
         const bands = bandSigmas.length + 1;
         const num = Array.from({ length: bands }, () => new Float64Array(n * 3));
         const den = Array.from({ length: bands }, () => new Float64Array(n));
@@ -736,12 +768,12 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
     seams.sort((a, b) => a - b);
     // the seam as the output shows it: across each boundary between chosen views, the final colour's low frequency (5 x 5
     // means centred 3 texels back) on each side, against the same measure between neighbours inside one view's region
-    const outA: number[] = [], outI: number[] = [];
+    const outA: number[] = [], outI: number[] = [], lowA: number[] = [], lowI: number[] = [];
     {
-        const mean3 = (c: number): Vec3 | undefined => {
+        const mean3 = (c: number, R = 2): Vec3 | undefined => {
             const cx = c % W, cy = (c - cx) / W;
             let r = 0, g = 0, b = 0, m = 0;
-            for (let yy = Math.max(0, cy - 2); yy <= Math.min(H - 1, cy + 2); yy++) for (let xx = Math.max(0, cx - 2); xx <= Math.min(W - 1, cx + 2); xx++) {
+            for (let yy = Math.max(0, cy - R); yy <= Math.min(H - 1, cy + R); yy++) for (let xx = Math.max(0, cx - R); xx <= Math.min(W - 1, cx + R); xx++) {
                 const u = yy * W + xx;
                 if (dominant[u] < 0 || mapIndex[u] !== mapIndex[c]) continue;
                 r += final[u * 3]; g += final[u * 3 + 1]; b += final[u * 3 + 2]; m++;
@@ -760,9 +792,14 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
                 if (mapIndex[t - 2 * d] !== mapIndex[t] || mapIndex[u + 2 * d] !== mapIndex[t]) continue;
                 const a = mean3(t - 2 * d), b = mean3(u + 2 * d);
                 if (a && b) (boundary ? outA : outI).push(deltaE00(a, b));
+                // the low-frequency step (9 x 9 means centred 4 texels back): an exposure patch, not detail
+                if (x >= 8 && y >= 8 && x < W - 8 && y < H - 8 && mapIndex[t - 4 * d] === mapIndex[t] && mapIndex[u + 4 * d] === mapIndex[t]) {
+                    const la = mean3(t - 4 * d, 4), lb = mean3(u + 4 * d, 4);
+                    if (la && lb) (boundary ? lowA : lowI).push(deltaE00(la, lb));
+                }
             }
         }
-        outA.sort((a, b) => a - b); outI.sort((a, b) => a - b);
+        outA.sort((a, b) => a - b); outI.sort((a, b) => a - b); lowA.sort((a, b) => a - b); lowI.sort((a, b) => a - b);
     }
     const pct = (v: number[], q: number) => (v.length ? v[Math.min(v.length - 1, Math.floor(v.length * q))] : 0);
     const maxSeam = seams.length ? seams[seams.length - 1] : 0;
@@ -800,10 +837,11 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
         layerKey: atlas.layerKey, width: W, height: H, albedo, confidence, provenance, degradations, paletteDeltaE,
         report: {
             targetTexels, coveredTexels, bakedTexels: baked, multiViewTexels, overlapPairs, maxSeamDeltaE: maxSeam, p95SeamDeltaE: p95Seam, seamSamples: seams.length, timingsMs,
-            outputSeam: { p95DeltaE: pct(outA, 0.95), maxDeltaE: outA.length ? outA[outA.length - 1] : 0, samples: outA.length, interiorP95DeltaE: pct(outI, 0.95) },
+            outputSeam: { p95DeltaE: pct(outA, 0.95), maxDeltaE: outA.length ? outA[outA.length - 1] : 0, samples: outA.length, interiorP95DeltaE: pct(outI, 0.95), lowFreqP95DeltaE: pct(lowA, 0.95), lowFreqMedianDeltaE: pct(lowA, 0.5), lowFreqInteriorP95DeltaE: pct(lowI, 0.95), lowFreqInteriorMedianDeltaE: pct(lowI, 0.5) },
             ...(delightReport ? { delight: delightReport } : {}),
             ...(alignment ? { alignment } : {}),
             ...(regions ? { regions } : {}),
+            ...(poisson ? { poisson } : {}),
             views: views.map((v, k) => ({ panoId: v.panoId, samples: samples[k].texel.length, gain: gains[k], anchor: anchors.has(k), paletteGate: gateReports[k], solarDelit: solarDelit[k] }))
         }
     };

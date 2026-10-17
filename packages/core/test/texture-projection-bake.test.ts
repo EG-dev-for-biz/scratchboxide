@@ -324,7 +324,7 @@ describe('Street View projection bake', () => {
         const views = rig([facadeRect(panelled)], { ids: ['pano-front', 'pano-left'] });
         const left = views[1].view;
         const offCam = { ...left.camera, eye: [left.camera.eye[0] + 0.6, left.camera.eye[1], left.camera.eye[2]] as Vec3 };
-        const withQuality = async (q: number) => bake([views[0], { view: { ...left, camera: offCam, poseQuality: q }, depth: views[1].depth }], atlas, { bandSigmasTexels: [] });
+        const withQuality = async (q: number) => bake([views[0], { view: { ...left, camera: offCam, poseQuality: q }, depth: views[1].depth }], atlas, { bandSigmasTexels: [], regionSelect: false });
         const good = albedoError(await withQuality(1), atlas, panelled);
         const low = albedoError(await withQuality(0.02), atlas, panelled);
         expect(low.mean).toBeLessThan(good.mean);
