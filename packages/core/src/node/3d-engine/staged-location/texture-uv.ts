@@ -66,6 +66,11 @@ export interface UvAtlasStats {
     chartsRejected: Array<{ nodeName: string; reason: string }>;
     /** Texels claimed in their interior by two different triangles (0 for a valid atlas). */
     overlapTexels: number;
+    /**
+     * Closed primitives wound inside out (negative signed volume): their texel normals are flipped to point outward, so the
+     * projection sees their faces (an inward normal fails every view's incidence test).
+     */
+    insideOutPrimitives: number;
     /** Share of the atlas covered by charts/islands (gutter excluded). */
     coverage: number;
     /** Share of the atlas that is gutter. */
@@ -294,6 +299,38 @@ interface Item {
 
 const worldPos = (p: Prim, v: number): Vec3 => transformPoint(p.world, p.positions[v * 3], p.positions[v * 3 + 1], p.positions[v * 3 + 2]);
 
+/**
+ * True when a primitive is a closed solid (every edge, after welding positions to 0.1 mm, shared by exactly two
+ * triangles) whose triangles wind inside out (negative signed volume). An open surface is never judged: which side of it
+ * faces out is not decidable from the mesh alone (an arch soffit faces its own centroid and is right).
+ */
+export function primitiveInsideOut(positions: Float32Array, indices: Uint32Array, toWorld: (v: number) => Vec3): boolean {
+    const nt = Math.floor(indices.length / 3);
+    if (nt < 4) return false;
+    const weld = new Map<string, number>();
+    const id = new Int32Array(positions.length / 3);
+    const pts: Vec3[] = [];
+    for (let v = 0; v < id.length; v++) {
+        const P = toWorld(v);
+        const k = `${Math.round(P[0] * 1e4)},${Math.round(P[1] * 1e4)},${Math.round(P[2] * 1e4)}`;
+        let w = weld.get(k);
+        if (w === undefined) { w = pts.length; weld.set(k, w); pts.push(P); }
+        id[v] = w;
+    }
+    const edges = new Map<string, number>();
+    let vol = 0;
+    const c = pts.reduce((a, p) => [a[0] + p[0] / pts.length, a[1] + p[1] / pts.length, a[2] + p[2] / pts.length] as Vec3, [0, 0, 0] as Vec3);
+    for (let t = 0; t < nt; t++) {
+        const a = id[indices[t * 3]], b = id[indices[t * 3 + 1]], d = id[indices[t * 3 + 2]];
+        if (a === b || b === d || a === d) continue;
+        for (const [x, y] of [[a, b], [b, d], [d, a]]) { const k = x < y ? `${x},${y}` : `${y},${x}`; edges.set(k, (edges.get(k) ?? 0) + 1); }
+        const A = sub(pts[a], c), B = sub(pts[b], c), D = sub(pts[d], c);
+        vol += dot(A, cross(B, D)) / 6;
+    }
+    for (const n of edges.values()) if (n !== 2) return false;
+    return vol < 0;
+}
+
 /** Builds the UV atlas of a clay GLB (contract BuildUvAtlas, plus fitted charts and the twin layout). */
 export async function buildUvAtlas(input: BuildUvAtlasOptions): Promise<LaidOutUvAtlas> {
     const t0 = Date.now();
@@ -474,6 +511,8 @@ export async function buildUvAtlas(input: BuildUvAtlasOptions): Promise<LaidOutU
         return { nodeIndex: p.nodeIndex, nodeName: p.nodeName, meshIndex: p.meshIndex, primitiveIndex: p.primitiveIndex, mapIndex: p.mapIndex, sourceVertex, uv, indices: L.tri, rectOfTriangle: L.rect };
     });
 
+    // primitives wound inside out get outward normals (a solid's inner face is never what a photo shows)
+    const insideOut = new Set<Prim>(prims.filter(p => primitiveInsideOut(p.positions, p.indices, v => worldPos(p, v))));
     // rasterise: texel centres inside each triangle; world position and normal per texel
     const N = W * H;
     const covered = new Uint8Array(N), gutter = new Uint8Array(N), mapIndex = new Uint16Array(N).fill(65535);
@@ -495,7 +534,8 @@ export async function buildUvAtlas(input: BuildUvAtlasOptions): Promise<LaidOutU
             const den = (B[1] - C[1]) * (A[0] - C[0]) + (C[0] - B[0]) * (A[1] - C[1]);
             if (Math.abs(den) < 1e-12) continue;
             const PA = worldPos(p, it.sourceVertex[ia]), PB = worldPos(p, it.sourceVertex[ib]), PC = worldPos(p, it.sourceVertex[ic]);
-            const fn = unit(cross(sub(PB, PA), sub(PC, PA)));
+            const fw = unit(cross(sub(PB, PA), sub(PC, PA)));
+            const fn: Vec3 = insideOut.has(p) ? [-fw[0], -fw[1], -fw[2]] : fw;
             let islandSize = 1 / d;
             if (!it.chart) {
                 // orthographic island: a texel covers 1/d^2 of the plane, 1/(d^2 cos) of the surface
@@ -576,7 +616,7 @@ export async function buildUvAtlas(input: BuildUvAtlasOptions): Promise<LaidOutU
             claySha256: crypto.createHash('sha256').update(input.clayGlb).digest('hex'), gutterTexels: G, primitives, untextured,
             rects: items.map(it => ({ x: it.pack.x, y: it.pack.y, width: it.pack.w, height: it.pack.h, kind: it.chart ? 'chart' as const : 'island' as const, mapIndex: it.prim.mapIndex })),
             stats: {
-                charts: items.filter(i => i.chart).length, islands: items.filter(i => !i.chart).length, chartsRejected, overlapTexels,
+                charts: items.filter(i => i.chart).length, islands: items.filter(i => !i.chart).length, chartsRejected, overlapTexels, insideOutPrimitives: insideOut.size,
                 coverage: content / N, gutterShare: gutterCount / N, requestedTexelsPerMeter: input.densityTexelsPerMeter, texelsPerMeter: d,
                 ...(native ? { native } : {}), ms: Date.now() - t0
             }

@@ -306,6 +306,39 @@ describe('texture pass B: UV atlas', () => {
     });
 });
 
+describe('texture pass B: inside-out solids', () => {
+    /** A closed 2 x 1 x 1 m box at (cx, 0.5, 0), its 12 triangles wound outward, or inside out when `flip`. */
+    function box(cx: number, flip: boolean): { name: string; positions: Float32Array; indices: Uint32Array } {
+        const v: number[] = [];
+        for (const x of [cx - 1, cx + 1]) for (const y of [0, 1]) for (const z of [-0.5, 0.5]) v.push(x, y, z);
+        const at = (x: number, y: number, z: number) => x * 4 + y * 2 + z;
+        // quads as (a, b, c, d) counter-clockwise seen from outside
+        const quads = [[at(0, 0, 0), at(0, 0, 1), at(0, 1, 1), at(0, 1, 0)], [at(1, 0, 0), at(1, 1, 0), at(1, 1, 1), at(1, 0, 1)],
+            [at(0, 0, 0), at(1, 0, 0), at(1, 0, 1), at(0, 0, 1)], [at(0, 1, 0), at(0, 1, 1), at(1, 1, 1), at(1, 1, 0)],
+            [at(0, 0, 0), at(0, 1, 0), at(1, 1, 0), at(1, 0, 0)], [at(0, 0, 1), at(1, 0, 1), at(1, 1, 1), at(0, 1, 1)]];
+        const idx: number[] = [];
+        for (const [a, b, c, d] of quads) idx.push(...(flip ? [a, c, b, a, d, c] : [a, b, c, a, c, d]));
+        return { name: flip ? 'inside-out' : 'outward', positions: Float32Array.from(v), indices: Uint32Array.from(idx) };
+    }
+
+    it('gives an inside-out closed solid outward texel normals, and leaves an outward one as it is', async () => {
+        const glb = writeStagedGlb([box(-3, false), box(3, true)]);
+        const atlas = await buildUvAtlas({ layerKey: 'detail', clayGlb: glb, densityTexelsPerMeter: 20, maxSide: 1024, islandNormalToleranceDeg: 30, surfaces: [] });
+        expect(atlas.layout.stats.insideOutPrimitives).toBe(1);
+        // every texel normal points away from its own box's centre
+        let outward = 0, inward = 0;
+        const { covered, gutter, position: P, normal: N } = atlas.texels;
+        for (let i = 0; i < covered.length; i++) {
+            if (!covered[i] || gutter[i]) continue;
+            const cx = P[i * 3] < 0 ? -3 : 3;
+            const d = (P[i * 3] - cx) * N[i * 3] + (P[i * 3 + 1] - 0.5) * N[i * 3 + 1] + P[i * 3 + 2] * N[i * 3 + 2];
+            if (d > 0) outward++; else inward++;
+        }
+        expect(outward).toBeGreaterThan(1000);
+        expect(inward).toBe(0);
+    });
+});
+
 describe('texture pass B: textured twin', () => {
     const scene = fixtureScene();
 

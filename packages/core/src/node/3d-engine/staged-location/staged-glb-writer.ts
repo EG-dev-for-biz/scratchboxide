@@ -289,6 +289,9 @@ export function writeTexturedTwinGlb(input: TexturedTwinOptions): { glb: Buffer;
     json.materials = json.materials ?? [];
     json.materials.push({
         name: 'StagedTexturedPhoto',
+        // drawn from both sides like the clay it swaps with (the clay pass renders double-sided): a primitive wound inside
+        // out (some native detail solids are) would otherwise show its far inner faces, the wall behind it, as if see-through
+        doubleSided: true,
         pbrMetallicRoughness: {
             baseColorTexture: { index: textureOf.albedo, texCoord: 0 },
             metallicFactor: 0,
