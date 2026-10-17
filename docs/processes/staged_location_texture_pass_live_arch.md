@@ -153,3 +153,120 @@ The texels added between 0.5 and 0.25 are "far" from the tile photo 13% of the t
 - **Enhancement accepted nothing** in this run: 0 of 194 charts. The edge gate rejected 82 and 107 timed out.
 - **The l4 see-through fix was verified only headless:** the detail stage timed out live (vision 250 s).
 - **The native ornament builder still emits inside-out shells.** The viewport no longer shows them, but the C++ winding should be fixed at the source.
+
+## Round 3 (branch `texture-quality-3`, 2026-10-17)
+
+Worktree `.claude/worktrees/texture-quality-3`. Ports: web 3062, API 3063, tools 3064. Two cold live runs of `Washington Square Arch` (the texture and vision caches were cleared before the second). Screenshots: `test-results/screenshots/texture_live_v3/` (`clay_*`, `tex_*`, `prov_*` for the same 9 view names as v2; gitignored). The poses were set from the facade heading (33° front, 213° back) through the viewport's own orbit refs, so they are close to v2's but not identical.
+
+The fit stage on this branch includes the newer tile-refine and relief commits from main. So the fitted geometry differs from v2's (the arch opening is taller), and a view-by-view comparison with v2 is confounded by that.
+
+### What changed
+
+1. **Seams** (`texture-seams.ts`, `texture-projection.ts`, pass `texture-pass/4`):
+   - **Gradient-domain blend.** One view per region is now blended with a screened Poisson solve per chart (conjugate gradients, Neumann at gutters and other rungs, λ = 0.01). Across a boundary the guidance is the smaller of the two views' own steps. It replaces the band blend, which took up to 40 s per layer; the solve takes under 1 s.
+   - **Shadow-aware data cost.** The block MRF penalises a view whose block luminance is more than 0.3 log below the median of the views there (the mean of the two when there are only two). When a view's capture time is known, it also penalises texels facing away from that view's sun.
+   - **Edge-following boundaries.** Block boundaries are refined texel by texel onto image edges.
+2. **Pose feedback** (`texture-pose-refine.ts`). Every aligned chart sample is a 2D-3D correspondence. Each view's pose (eye shift east/north, heading, pitch) is solved from these correspondences, using two or more charts, and the views are then projected and aligned again.
+   - The refined poses are kept only when the poses alone make the views agree better (+0.05 inter-view NCC before any shift) and the final agreement is no worse.
+   - The refinement is skipped when the alignment's own NCC is below 0.35.
+3. **Alignment on the lumps.** I tried a geometry reference built from the scan's own normals (sky exposure plus convexity) and a full, unbudgeted search. Neither changed the inter-view NCC on l3c much:
+
+   | l3c run | NCC (before → after) | Notes |
+   |---|---|---|
+   | 20 s budget | 0.036 → 0.067 | |
+   | Full search | 0.036 → 0.089 | 37 s |
+   | Geometry reference at share 1.0 | 0.036 → 0.075 | |
+   | Geometry reference at share 0.5 | 0.036 → 0.067 | |
+
+   The views of the as-scanned lumps barely agree, because the relief parallax is not modelled. So the geometry reference was not shipped and the budget stays at 20 s. Instead, the texture stage now runs **3 layers at once**, so one layer's model wait overlaps the next layer's projection.
+4. **Enhancement** (`texture-enhance.ts`). I measured 159 real `gemini-3.1-flash-image` answers on the live charts, with every gate metric recorded (scratch harness, billed):
+   - 142 answers failed three or more metrics. I looked at them: on flat, soft tile crops the model invents structure (a Greek key, a grid of blocks, wood grain on a plain pier) or regrades the colour.
+   - 6 answers passed the design gate. Near misses that only sharpened scored Sobel NCC 0.954 to 0.996, so the threshold is now 0.95.
+   - 26 answers could not be gated at all: they had no texel inside the 2 px border.
+   - Many crops were a few fragments scattered in a crop of flat fill.
+
+   What changed as a result:
+   - A chart is now sent only if it has at least 256 gateable texels that fill at least 30% of the crop.
+   - The crop is the bounding box of the transferred texels.
+   - The crop is padded to the model's nearest supported aspect ratio, and the answer is cropped back.
+   - Up to 12 charts are in flight at once.
+   - The budget is 150 s per layer.
+5. **Detail reading** (cherry-picked from the `detail-vision-timeout` subagent branch). The reading is now split into per-face batches of at most 6 images and 12 slots, run in parallel at thinking LOW. Each call has a stall watch: no first token within 60 s, or a silent stream for 30 s. The stage limit is 320 s.
+   - Root cause of the old timeout: one call carried 22 images (24 MP) and about 85k prompt tokens. Every revision resent all of them. The focused run readings then ran inside the same 250 s.
+   - A follow-up fix: the first live run showed that the reading let a repeat along an edge with `count 0` through, and the ornament build then failed its schema. Rule 7 now sends such a repeat back.
+6. **Winding at the source** (cherry-picked from the `ornament-winding` subagent branch, `scratchbox_ornament.hpp`):
+   - Partial revolves are made counter-clockwise, with their cut faces wound consistently.
+   - Closed sweeps (rings) are wound by frame handedness.
+   - Each proud panel is oriented on its own.
+   - Every shell is checked by its signed volume about its own centroid.
+   - Test: `photo-ornament-winding.test.ts` builds through the real native binary. It failed on main with 15 and 19 bad shells, and passes now.
+   - The double-sided twin is kept as a safety net.
+7. **The layer record** now keeps the output seam, the region-blend, alignment and pose-refine numbers, and the timings.
+
+### Replay on the v2 live inputs (old = region select with band blend, as in v2; new = this branch)
+
+| Layer | Source seam p95 (old → new) | Output step p95 (old → new) / interior | Low-frequency step p95 (old → new) / interior | Blocks left on a shadowed view (shadow cost off → on) |
+|---|---|---|---|---|
+| l2 | 24.4 → 30.9 | 17.3 → 11.8 / 14.8 | 16.4 → 12.0 / 14.1 | 369 → 263 |
+| l3b | 18.5 → 20.7 | 17.0 → 12.2 / 14.2 | 17.7 → 13.2 / 15.4 | 148 → 110 |
+| l3c | 26.5 → 29.1 | 16.8 → 15.4 / 15.4 | 14.5 → 15.0 / 14.0 | 359 → 235 |
+| l3cf | 26.8 → 28.9 | 16.5 → 15.3 / 15.5 | 14.9 → 15.4 / 14.1 | – |
+
+- **The seam the output shows went down.** The step across region boundaries is now at or below the texture's own contrast on every layer (it was 2 to 3 ΔE00 above it on l2 and l3b).
+- **The source disagreement went up.** The source seam measures how much the chosen views disagree where they meet. Shadow avoidance moves cuts to where a lit view meets a shadowed one. With shadow cost off and the texel refinement on, it dropped (l3b 18.5 → 17.1, l3c 26.5 → 24.5).
+- **The < 6 ΔE00 target is not met by either metric.** The views really differ by light and capture date.
+
+Pose feedback on the same inputs:
+
+| Layer | Correspondence RMS (m) | Inter-view NCC with the re-posed views | Result |
+|---|---|---|---|
+| l3b | 1.57 → 1.35 | 0.23 → 0.17 | Rejected |
+| l3c | 1.39 → 1.22 | – | Rejected |
+
+The per-chart shifts on the real arch are largely whole-course jumps on the repeated coursing. They agree in the image but are not consistent with any rigid pose, so the gate kept the registered poses. On a synthetic facade with non-periodic relief, the refinement recovers the true poses: RMS 0.15 → 0.007 m, and NCC from the poses alone 0.63 → 0.99.
+
+### Live (second run, cold texture and vision stages)
+
+- **Status: Verified, with open quality issues.** The run finished degraded in 5 min 49 s. The textures stage took 4 min 8 s, against 6 min 43 s in v2.
+- **Registration:** 1.86 m before, 1.32 m after (210 pairs, 2 panos set aside).
+- **Detail reading:** it ran: 24 vision calls in 3 min 2 s. Batch b7 returned an invalid reply with no time left to revise it, so its 10 slots stayed flat and the other batches stood.
+- **Detail build:** it produced an `l4` layer. Some elements were dropped for self-intersection, and the stage summary reads "degraded".
+- **Figures:** the figure reading degraded to the smoothed scan because the reply was invalid JSON. It had succeeded in the first run.
+- **Errors:** there were no new server errors. One `PUT /workspace/sessions/...` returned 500 once, and the next save succeeded; the session routes were not touched on this branch.
+
+| Layer | Street View share | Source seam p95 | Output step p95 / interior | Alignment NCC | Pose refine (RMS m) | Enhancement |
+|---|---|---|---|---|---|---|
+| l2 | 30.7% | 32.4 | 12.3 / 12.1 | 0.020 → 0.091 | – | 0 of 1 |
+| l3b | 26.5% | 26.2 | 12.5 / 12.3 | 0.014 → 0.178 | 1.53 → 1.43, rejected | **8 of 112 accepted**, 69 rejected, 0 timed out, 81 s |
+| l3c | 64.4% | 22.9 | 14.8 / 15.0 | 0.019 → 0.089 (budget) | 1.50 → 1.35, rejected | 0 of 39 (4 rejected, the rest not gateable or without a reference) |
+| l3cf | 65.0% | 20.8 | 14.9 / 15.3 | 0.018 → 0.082 (budget) | 1.54 → 1.43, rejected | 0 of 37 |
+| l4f | 53.6% | 11.1 | 5.1 / 12.7 | −0.005 → 0.254 | – | 0 of 2 |
+| l4 (new) | 20.7% | 23.1 | 12.1 / 11.2 | 0.003 → 0.312 | – | 0 of 36 |
+
+The first live run, with the textures cached cold the same way, accepted 10 of 115 charts on l3b, with 0 timed out. v2 had 0 of 194, with 107 timed out.
+
+### What I saw (`texture_live_v3` against v2)
+
+- **Better:**
+  - The pier faces (`tex_pier_back_left`, `tex_pier_front_right`) show no rectangular exposure patches. The Greek key band and the pier carving read cleanly, and the light changes smoothly across view boundaries.
+  - The detail layer is live: `l4` roundels and a triangular element on the attic (photo-inferred) render solid from both sides, with no see-through panels.
+- **Still wrong:**
+  - On the back spandrels (`tex_frieze_back`), adjacent regions show the carving offset from one another: angular patches along the fitted face's facets. These are misregistration, not exposure, and the Poisson blend cannot fix content that is in the wrong place.
+  - On the front left pier (`tex_front`), the statue of Washington from the photos is smeared onto the pier face behind the figure: a pale ghost. The figure stage had degraded to the smoothed scan, so the occluder is thinner than the statue.
+  - In `tex_opening`, the inner face of the right pier carries a tree and a building seen through the arch. It is labelled multi-view Street View. The depth-edge guard at 0.25 pose sigma lets it through on this geometry.
+  - The attic band under the inscription is still soft tile texture. The inscription reads only partly ("…DTH ANNIVERSARY … E WASHINGTON"), where v2 read it whole. The fitted attic differs between the runs, and part of it is now covered by the l4 triangle.
+  - Some detail elements read from photos, such as the attic triangle and the roundels on the back attic, do not look like features of the real arch. They are labelled `photo-inferred`.
+
+### Open issues (after round 3)
+
+- **Seam target not met** (source disagreement p95 20 to 32 ΔE00). The visible seams that remain are misregistration on the carved spandrels, not exposure.
+- **Pose feedback is in place but never applies on the arch.** The alignment's shifts on repeated coursing are not pose evidence. A per-chart consensus that rejects whole-course jumps (RANSAC over charts, or a pose prior applied in the search) would be needed before the poses can be refined from them.
+- **Alignment on the as-scanned lumps** stays at NCC ≈ 0.09. Neither more time nor the geometry's normals help; the relief parallax would have to be modelled (a depth-aware warp per view).
+- **Enhancement mostly invents** on flat, soft tile crops. 8 to 10 of about 112 l3b charts pass, and none on the lumps. The gate is doing its job.
+- **Leaks** remain on the arch's inner faces (background seen through the arch) and behind the statues when the figures degrade to the smoothed scan.
+- **Detail reading:** one batch can still end with an invalid reply and no time left to revise it. The figure reading can return truncated JSON.
+
+### Candidate tool/service ideas
+
+- A `staged_location_texture_report` tool. The numbers now in the layer record are what it would return.
+- An app hook to set the active 3D view's camera by target, heading, pitch and distance. I set it through the React refs of `Scene3DPrimitive` from the console.
