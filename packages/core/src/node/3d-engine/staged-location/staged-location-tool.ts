@@ -71,6 +71,10 @@ export const STAGED_RETRY_RUN_DESCRIPTION =
     'Retry one stage of an earlier run: the retryRunId the last result gave (8 hex digits). The recorded request is rebuilt from the run, so the other ' +
     'arguments are ignored (pass the same query). Use it only for a degraded part the result marks as retryable.';
 
+export const STAGED_PLACE_DESCRIPTION =
+    'A place already resolved, copied exactly from a "Switch location" choice the user clicked: {lat, lng, formattedAddress, placeId?, alternatives?}. ' +
+    'When given, the query is not looked up again and the build is made at these coordinates. Never invent it; leave it out otherwise.';
+
 export const STAGED_RETRY_STAGE_DESCRIPTION =
     `The stage to recompute on a retry, one of: ${STAGE_IDS.join(', ')}. Earlier stages come from cache; this one bypasses its cache.`;
 
@@ -84,6 +88,27 @@ export interface ParsedStagedArgs {
 
 function asString(v: unknown): string {
     return typeof v === 'string' ? v.trim() : '';
+}
+
+/** The `place` argument: finite coordinates and an address, else the call fails (it is never filled in). */
+function parsePlaceArg(toolName: string, raw: unknown): ResolvedPlace | undefined {
+    if (raw === undefined || raw === null) return undefined;
+    const p = raw as Record<string, unknown>;
+    const lat = Number(p?.lat), lng = Number(p?.lng);
+    const formattedAddress = asString(p?.formattedAddress);
+    if (typeof raw !== 'object' || !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180 || !formattedAddress) {
+        throw new MissingInputError(toolName, 'a place of {lat, lng, formattedAddress}', `got ${JSON.stringify(raw)}`);
+    }
+    const alternatives = Array.isArray(p.alternatives)
+        ? p.alternatives.flatMap((a: any) => Number.isFinite(Number(a?.lat)) && Number.isFinite(Number(a?.lng)) && asString(a?.formattedAddress)
+            ? [{ ...(asString(a.name) ? { name: asString(a.name) } : {}), formattedAddress: asString(a.formattedAddress), lat: Number(a.lat), lng: Number(a.lng), ...(asString(a.placeId) ? { placeId: asString(a.placeId) } : {}) }] : [])
+        : [];
+    return {
+        lat, lng, formattedAddress,
+        ...(asString(p.placeId) ? { placeId: asString(p.placeId) } : {}),
+        ...(Number.isFinite(Number(p.elevation)) && p.elevation !== null && p.elevation !== '' ? { elevation: Number(p.elevation) } : {}),
+        ...(alternatives.length ? { alternatives } : {})
+    };
 }
 
 /**
@@ -109,6 +134,7 @@ export function parseStagedLocationArgs(toolName: string, args: Record<string, u
             throw new MissingInputError(toolName, 'a treeTriangleBudget of at least 1 triangle', `got ${JSON.stringify(args.treeTriangleBudget)}`);
         }
     }
+    const place = parsePlaceArg(toolName, args.place);
     const radiusM = typeof args.radiusMeters === 'number' && args.radiusMeters > 0 ? args.radiusMeters : undefined;
     return {
         request: {
@@ -117,7 +143,8 @@ export function parseStagedLocationArgs(toolName: string, args: Record<string, u
             ...(radiusM !== undefined ? { radiusM } : {}),
             trees: args.trees !== false,
             ...(treeTriangleBudget !== undefined ? { treeTriangleBudget } : {}),
-            stageIntoActiveScene: args.stageIntoActiveScene === true
+            stageIntoActiveScene: args.stageIntoActiveScene === true,
+            ...(place ? { place } : {})
         },
         ...(retry ? { retry } : {})
     };

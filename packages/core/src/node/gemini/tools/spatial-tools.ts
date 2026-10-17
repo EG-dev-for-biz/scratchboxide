@@ -90,7 +90,7 @@ import { GeminiClient } from '../gemini-client';
 import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
 import { describeLocationClay, runLocationClayPipeline, type LocationClayResult } from '../../3d-engine/location-clay-pipeline';
 import {
-    runStagedLocationTool, STAGED_CLAY_TOOL_DESCRIPTION, STAGED_ISOLATE_DESCRIPTION, STAGED_RADIUS_DESCRIPTION, STAGED_RETRY_RUN_DESCRIPTION, STAGED_RETRY_STAGE_DESCRIPTION
+    runStagedLocationTool, STAGED_CLAY_TOOL_DESCRIPTION, STAGED_ISOLATE_DESCRIPTION, STAGED_PLACE_DESCRIPTION, STAGED_RADIUS_DESCRIPTION, STAGED_RETRY_RUN_DESCRIPTION, STAGED_RETRY_STAGE_DESCRIPTION
 } from '../../3d-engine/staged-location/staged-location-tool';
 import { findTileRefineRepoRoot } from '../../3d-engine/tile-refine-service';
 import type { ToolContext, ToolDeclaration, ToolHandler, ToolHandlerOutcome, ToolParameterSchema, ToolResultPayload } from './types';
@@ -215,7 +215,15 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'NUMBER',
                     description: 'Altitude in meters for zenith contextual sky camera (defaults to 1800m, min 1800m)'
                 }
-                ,retryRunId: {
+                ,place: {
+                    type: 'OBJECT',
+                    description: STAGED_PLACE_DESCRIPTION,
+                    properties: {
+                        lat: { type: 'NUMBER' }, lng: { type: 'NUMBER' }, formattedAddress: { type: 'STRING' }, placeId: { type: 'STRING' }, elevation: { type: 'NUMBER' },
+                        alternatives: { type: 'ARRAY', items: { type: 'OBJECT', properties: { name: { type: 'STRING' }, formattedAddress: { type: 'STRING' }, lat: { type: 'NUMBER' }, lng: { type: 'NUMBER' }, placeId: { type: 'STRING' } } } }
+                    }
+                },
+                retryRunId: {
                     type: 'STRING',
                     description: STAGED_RETRY_RUN_DESCRIPTION
                 },

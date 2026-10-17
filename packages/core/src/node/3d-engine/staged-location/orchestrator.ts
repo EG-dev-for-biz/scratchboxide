@@ -112,6 +112,7 @@ import {
     orthoCaption, orthoRef, plannedThinking, readOrnament, streetViewCaption, visionUse, VisionStageError, ORNAMENT_PROMPT_VERSION,
     ORNAMENT_THINKING_BUDGET, ORNAMENT_VISION_TIMEOUT_MS, type EvidenceInput
 } from './ornament-vision';
+import { buildSwitchLocationPills, switchLocationMarkdown } from '../../../common/spatial/switch-location';
 import { summarizeStagedBuild, type StagedSummaryInput } from './staged-summary';
 
 /** What the evidence stage spent: free metadata queries, billed images and the seconds the images took. */
@@ -170,6 +171,8 @@ export interface StagedLocationRequest {
     /** tile_refine's photometric relief (default on). */
     relief?: boolean;
     stageIntoActiveScene?: boolean;
+    /** The place already resolved (a 'Switch location' choice): used as given, the query is not geocoded. */
+    place?: ResolvedPlace;
 }
 
 export interface StagedExtraction {
@@ -322,7 +325,7 @@ class StagedRun {
         this.state = {
             schema: 'scratchbox.staged-build/2',
             runId,
-            requestKey: `${request.query.trim().toLowerCase()}|${request.isolate ? 'isolate' : `r${request.radiusM ?? 250}`}|${request.trees ? 'trees' : 'no-trees'}`,
+            requestKey: `${request.place ? `${request.query.trim().toLowerCase()}@${request.place.lat.toFixed(6)},${request.place.lng.toFixed(6)}` : request.query.trim().toLowerCase()}|${request.isolate ? 'isolate' : `r${request.radiusM ?? 250}`}|${request.trees ? 'trees' : 'no-trees'}`,
             artifactId,
             place: { query: request.query, resolvedAddress: '', lat: 0, lng: 0 },
             runState: 'running',
@@ -742,6 +745,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         const resolved = await runner.stage<ResolvedPlace>({
             id: 'resolve',
             run: async io => {
+                if (request.place) {
+                    // chosen from the alternatives Google already returned: the coordinates are used as given, nothing is looked up
+                    run.keys.resolve = stageKey('place/v1', request.place.lat.toFixed(6), request.place.lng.toFixed(6));
+                    run.cacheStatus.resolve = 'miss';
+                    return { status: 'committed', value: request.place, source: request.place.formattedAddress };
+                }
                 const key = stageKey('geocode/v1', request.query.trim().toLowerCase().replace(/\s+/g, ' '));
                 run.keys.resolve = key;
                 const hit = cache.get<ResolvedPlace>('resolve', key);
@@ -2075,7 +2084,8 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
         ...(gate.exemptionsRefused.length || refusedHere.length ? { exemptionsRefused: [...refusedHere, ...gate.exemptionsRefused] } : {}),
         droppedNotResolvable: f.rebuild.droppedNotResolvable
     };
-    const { digest, summary } = summarizeStagedBuild(summaryInput);
+    const switchPills = buildSwitchLocationPills({ ...f.place, ...(f.place.alternatives?.length ? { alternatives: f.place.alternatives } : {}) }, { query: f.request.query, isolate: f.request.isolate, radiusM: f.request.radiusM, trees: f.request.trees, stageIntoActiveScene: f.request.stageIntoActiveScene });
+    const { digest, summary } = summarizeStagedBuild({ ...summaryInput, switchLocation: switchLocationMarkdown(switchPills) });
     const artifact = run.artifact(digest);
     const result: StagedLocationResult = { ...base, artifact: artifact ?? null, digest, summary };
     // the finish event carries the final scene
