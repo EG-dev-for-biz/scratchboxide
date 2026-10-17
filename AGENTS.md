@@ -46,7 +46,7 @@ When a user attempts to accomplish something specific (especially VFX-related, 3
 - **Google Models**: Gemini 3.8 / 2.5 high-reasoning multimodal inspection, Imagen image generation (`generate_image`), and Vertex AI.
 - **Attached Skills & Tools**: Canvas primitives (`3d-scene`, `video-timeline`, `live-code-sandbox`, `node-graph`), Generative UI, modern web, Chrome DevTools, Google Maps Platform.
 
-There is no ComfyUI / Cloud Run GPU fallback tier. If a task needs a capability the app does not run (neural image-to-3D diffusion such as Trellis/TripoSR outside the Fal.ai turnaround path, neural video-to-video restyling such as AnimateDiff, monocular dense depth such as Marigold, or custom LoRA checkpoints), tell the user plainly that it is unsupported. Never approximate it, simulate a result, or emit placeholder geometry.
+There is no ComfyUI / Cloud Run GPU fallback tier. If a task needs a capability the app does not run (neural image-to-3D diffusion such as Trellis/TripoSR outside the Fal.ai turnaround path, neural video-to-video restyling such as AnimateDiff, monocular dense depth such as Marigold (except the off-by-default relief experiment below), or custom LoRA checkpoints), tell the user plainly that it is unsupported. Never approximate it, simulate a result, or emit placeholder geometry.
 
 `TaskCapabilityResolver` / `resolveTaskCapability` (`packages/core/src/node/agent/task-capability-resolver.ts`) runs automatically before each agent turn to classify the task domain, pick tool packs, and pre-load the suggested native tool. It reports `canSolveNatively: false` with a rationale for unsupported tasks.
 
@@ -149,7 +149,7 @@ When the user requests a 3D scene, model, vehicle, structure, or object:
          - **PBR (Physically Based Rendering)**: Deep metallic automotive clearcoat, carbon fiber weave, brushed aluminum, tinted dielectric glass, thin-wall subsurface scattering (SSS), procedural wear, and micro-roughness (`sb.PbrMaterial`).
          - **2DGS (2D Gaussian Splatting / Planar Surfels)**: High-performance 2D planar surfels (`SURFACE_2DGS_PLANAR_SURFEL` via `scratchbox_depth_to_gaussian.hpp` and `Calibrated3DGSReconstructionService`), squashing Gaussian ellipsoids to near-zero thickness along the surface normal for razor-sharp geometric boundary fidelity with zero floating splatter.
          - **3DGS (3D Gaussian Radiance Fields & Forward Splats)**: Volumetric radiance field synthesis, analytical fur/hair/groom forward splatting (`scratchbox_hair.hpp`, `scratchbox_spz.hpp`, `AnalyticalGroomSplatService`), or multi-angle photogrammetric Gaussian splats.
-         - **Algorithmic Micro-Texture Synthesis**: Geometric spatial lock (0.000 px drift), Sobel photographic joint deepening, procedural cavitation pores, calcite mineral grain, travertine strata, and archway soffit AO (`AlgorithmicUVRewrapService`).
+         - **Algorithmic Micro-Texture Synthesis**: Geometric spatial lock (0.000 px drift), Sobel photographic joint deepening, procedural cavitation pores, calcite mineral grain, travertine strata, and archway soffit AO (`AlgorithmicUvEngine`).
 
 ## 3D Tile & Mesh Ingestion Quality Directive
 
@@ -478,6 +478,7 @@ When synthesizing a 3D scene from an open-ended natural language prompt:
    - **Stage 4 (Bare-Metal C++20 Polygonization)**: The native C++20 engine polygonizes the schema with CAD-grade precision (sub-millimeter bevels, planar walls, authentic window reveals, 100,000+ vertices) in under 200 milliseconds and streams the `.glb` directly to the viewport.
 3. **Photo-Read Detail Is Inference, Labelled as Such**:
    - Ornament or detail that a vision model reads from photos (Google tile textures, or Street View close-ups fetched through the Maps Imagery Grounding API) is inference, not measurement. It must carry the provenance `photo-inferred` with a confidence in the GLB extras, the tool result and the viewport's provenance view. A correction a vision model makes to scan-fitted geometry is labelled `photo-corrected` and must stay within the range the scan's fit residuals allow.
+   - Texture synthesis for a location (`docs/processes/staged_location_texture_pass_design.md`) must carry per-texel provenance labels (`TexelProvenance`, a confidence plane covering 100 percent of texels). Photo-derived texels are `photo-inferred`; generated PBR (`generated`) is limited to texels with no real data, and a failing source degrades one rung to simpler real data, never to invention. Redacted Street View grounding imagery may be projected onto the geometry as texture. Marigold-class monocular depth/normal models are allowed ONLY as the off-by-default, neighbour-relative relief experiment on Street View crops: metric scale comes from the scan, relief is accepted per region only when re-projection improves edge agreement with the real crop, accepted relief is stored as a `photo-inferred` normal map and never as geometry, and rejected relief is dropped with a logged reason.
    - Only geometry fitted to a scan, or measured from calibrated multi-view photos, may be labelled measured.
 
 ## Video Pipeline & Multi-District Gallery Directives
