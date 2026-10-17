@@ -67,6 +67,10 @@ export interface ViewFit {
     chamferPx: number | null;
     clayChamferPx: number | null;
     gradNcc: number | null;
+    /** The same on the held-out texels a Street View projection made (photo tier only): pixels, chamfer, NCC. */
+    photoPixels: number;
+    photoChamferPx: number | null;
+    photoGradNcc: number | null;
 }
 
 export interface LayerFit {
@@ -76,6 +80,8 @@ export interface LayerFit {
     chamferPx: number | null;
     clayChamferPx: number | null;
     gradNcc: number | null;
+    /** The same over the photo-tier texels only (what the registration and the projection decide), pixel-weighted. */
+    photo: { chamferPx: number | null; gradNcc: number | null; pixels: number };
     /** Held-out pixels over all layer pixels the views see: how much of the layer is judged by a view that did not make it. */
     heldOutShare: number;
     widthPx: number;
@@ -83,6 +89,8 @@ export interface LayerFit {
 }
 
 const EMPTY = 1e8;
+/** Provenance source of a Street View projection (texture-projection.ts PROJECTION_SOURCE). */
+const PHOTO_SOURCE = 'street-view-projection';
 const r3 = (v: number) => Math.round(v * 1000) / 1000;
 
 /** The camera scaled to at most `maxW` wide (the same field of view). */
@@ -169,13 +177,15 @@ interface LayerRender {
     texel: Int32Array;
     /** 1 where the shown texel is held out (its provenance does not name the view's pano). */
     held: Uint8Array;
+    /** 1 where it is held out and a Street View projection made it. */
+    heldPhoto: Uint8Array;
     lum: Float32Array;
     own: number;
     scan: Float32Array;
 }
 
 /** Splats the layer's coloured texels into the scaled view (z-buffered, the full scan in front of them hides them). */
-function renderLayer(input: LayerFitInput, view: FitScoreView, cam: PinholeCamera, s: number, ownEntry: Uint8Array): LayerRender {
+function renderLayer(input: LayerFitInput, view: FitScoreView, cam: PinholeCamera, s: number, ownEntry: Uint8Array, photoEntry: Uint8Array): LayerRender {
     const { atlas, planes } = input;
     const W = cam.width, H = cam.height, n = atlas.width * atlas.height;
     const { covered, gutter, position, normal, sizeM } = atlas.texels;
@@ -222,7 +232,7 @@ function renderLayer(input: LayerFitInput, view: FitScoreView, cam: PinholeCamer
             if (zc < z[i] - tolZ) { z[i] = zc; texel[i] = t; best[i] = d2; } else if (zc <= z[i] + tolZ && d2 < best[i]) { z[i] = Math.min(z[i], zc); texel[i] = t; best[i] = d2; }
         }
     }
-    const held = new Uint8Array(W * H), lum = new Float32Array(W * H);
+    const held = new Uint8Array(W * H), heldPhoto = new Uint8Array(W * H), lum = new Float32Array(W * H);
     let own = 0;
     for (let i = 0; i < W * H; i++) {
         const t = texel[i];
@@ -231,9 +241,10 @@ function renderLayer(input: LayerFitInput, view: FitScoreView, cam: PinholeCamer
         const zs = scan[i];
         if (zs < z[i] - (0.25 + 0.02 * z[i])) { texel[i] = -1; z[i] = Infinity; continue; }
         lum[i] = SRGB_LUM(planes.albedo[t * 4], planes.albedo[t * 4 + 1], planes.albedo[t * 4 + 2]);
-        if (ownEntry[planes.confidence.data[t * 4]]) own++; else held[i] = 1;
+        const e = planes.confidence.data[t * 4];
+        if (ownEntry[e]) own++; else { held[i] = 1; if (photoEntry[e]) heldPhoto[i] = 1; }
     }
-    return { w: W, h: H, z, texel, held, lum, own, scan };
+    return { w: W, h: H, z, texel, held, heldPhoto, lum, own, scan };
 }
 
 /** Geometry edges of the layer render: depth steps, creases (normals), and the silhouette against what lies past it. */
@@ -270,8 +281,9 @@ export function measureLayerFit(input: LayerFitInput): LayerFit {
     for (const { v, cam, s } of tasks) {
         if (input.signal?.aborted) break;
         const own = new Uint8Array(256);
-        prov.forEach((p, i) => { if (i < 256 && p.panoIds?.includes(v.panoId)) own[i] = 1; });
-        const r = renderLayer(input, v, cam, s, own);
+        const photoE = new Uint8Array(256);
+        prov.forEach((p, i) => { if (i < 256 && p.panoIds?.includes(v.panoId)) own[i] = 1; if (i < 256 && p.source === PHOTO_SOURCE) photoE[i] = 1; });
+        const r = renderLayer(input, v, cam, s, own, photoE);
         let held = 0; for (let i = 0; i < r.held.length; i++) held += r.held[i];
         if (held + r.own > 0) renders.push({ v, cam, r });
     }
@@ -281,7 +293,8 @@ export function measureLayerFit(input: LayerFitInput): LayerFit {
         const W = cam.width, H = cam.height;
         const held = sumOf(r.held);
         heldAll += held; seenAll += held + r.own;
-        const base: ViewFit = { panoId: v.panoId, pixels: held, ownPixels: r.own, chamferPx: null, clayChamferPx: null, gradNcc: null };
+        const heldP = sumOf(r.heldPhoto);
+        const base: ViewFit = { panoId: v.panoId, pixels: held, ownPixels: r.own, chamferPx: null, clayChamferPx: null, gradNcc: null, photoPixels: heldP, photoChamferPx: null, photoGradNcc: null };
         if (held < FIT_MIN_PIXELS) { out.push(base); continue; }
         const photo = reducedLuminance(v.image, W, H);
         const region = erode(r.held, W, H, 2);
@@ -300,19 +313,29 @@ export function measureLayerFit(input: LayerFitInput): LayerFit {
         const gR = sobel(gaussianBlur(r.lum, W, H, 1.5), W, H).mag, gP = sobel(gaussianBlur(photo, W, H, 1.5), W, H).mag;
         const g = maskedNcc(gR, gP, erode(r.held, W, H, 4));
         // clay: the layer's geometry edges against the photo's structural edges (around the whole layer render)
+        // the photo tier alone: the same edges and gradients, scored on the held-out texels a projection made
+        let photoChamferPx: number | null = null, photoGradNcc: number | null = null;
+        if (heldP >= FIT_MIN_PIXELS) {
+            const regionP = erode(r.heldPhoto, W, H, 2);
+            const pa = chamferMean(eR, dtP, regionP), pb = chamferMean(eP, dtR, regionP);
+            photoChamferPx = pa !== null && pb !== null ? r3((pa + pb) / 2) : null;
+            const pg = maskedNcc(gR, gP, erode(r.heldPhoto, W, H, 4));
+            photoGradNcc = pg === null ? null : r3(pg);
+        }
         const gE = geometryEdges(r, input.atlas);
         const clay = chamferMean(gE, dtP);
         input.debug?.({ panoId: v.panoId, w: W, h: H, render: r.lum, held: r.held, photo, renderEdges: eR, photoEdges: eP, clayEdges: gE });
-        out.push({ ...base, chamferPx, clayChamferPx: clay === null ? null : r3(clay), gradNcc: g === null ? null : r3(g) });
+        out.push({ ...base, chamferPx, clayChamferPx: clay === null ? null : r3(clay), gradNcc: g === null ? null : r3(g), photoChamferPx, photoGradNcc });
     }
-    const wmean = (pick: (v: ViewFit) => number | null): number | null => {
+    const wmean = (pick: (v: ViewFit) => number | null, weight: (v: ViewFit) => number = v => v.pixels): number | null => {
         let s = 0, n = 0;
-        for (const v of out) { const x = pick(v); if (x === null) continue; s += x * v.pixels; n += v.pixels; }
+        for (const v of out) { const x = pick(v); if (x === null) continue; s += x * weight(v); n += weight(v); }
         return n ? r3(s / n) : null;
     };
     return {
         views: out, scoredViews: out.filter(v => v.chamferPx !== null || v.gradNcc !== null).length,
         chamferPx: wmean(v => v.chamferPx), clayChamferPx: wmean(v => v.clayChamferPx), gradNcc: wmean(v => v.gradNcc),
+        photo: { chamferPx: wmean(v => v.photoChamferPx, v => v.photoPixels), gradNcc: wmean(v => v.photoGradNcc, v => v.photoPixels), pixels: out.reduce((a, v) => a + (v.photoChamferPx !== null ? v.photoPixels : 0), 0) },
         heldOutShare: seenAll ? r3(heldAll / seenAll) : 0, widthPx: maxW, ms: Date.now() - t0
     };
 }
@@ -322,5 +345,5 @@ function sumOf(a: Uint8Array): number { let s = 0; for (let i = 0; i < a.length;
 /** The fit in words for the stage panel. */
 export function describeLayerFit(f: LayerFit): string {
     const v = (x: number | null, u = '') => (x === null ? 'n/a' : `${x.toFixed(2)}${u}`);
-    return `held-out fit over ${f.scoredViews} views: texture edge chamfer ${v(f.chamferPx, ' px')}, clay edge chamfer ${v(f.clayChamferPx, ' px')}, surface gradient NCC ${v(f.gradNcc)} (${Math.round(f.heldOutShare * 100)}% of the seen layer held out)`;
+    return `held-out fit over ${f.scoredViews} views: texture edge chamfer ${v(f.chamferPx, ' px')}, clay edge chamfer ${v(f.clayChamferPx, ' px')}, surface gradient NCC ${v(f.gradNcc)} (${Math.round(f.heldOutShare * 100)}% of the seen layer held out); on the photo tier alone chamfer ${v(f.photo.chamferPx, ' px')}, NCC ${v(f.photo.gradNcc)}`;
 }

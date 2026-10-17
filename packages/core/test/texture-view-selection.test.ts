@@ -111,26 +111,37 @@ describe('view selection (round 5)', () => {
         expect(by(strict, 'far')).toBe(0);
     }, 60_000);
 
-    it('measures where a fitted face stands off the scan and leaves those texels unprojected', async () => {
+    it('measures where a fitted face stands off the scan, finds the scan under it, and leaves texels with no scan near unprojected', async () => {
         const { atlas, views, depthFor } = setup();
-        // the scan: the wall plane with a 0.3 m deep niche over u 6..8, v 1..4 (the fitted face spans it flat)
+        // the scan: the wall plane with a 0.3 m deep niche over u 6..8, v 1..4 (the fitted face spans it flat), and no scan at all
+        // over u 0..1.5, v 4.5..6 (a part the scan lacks)
         const v: number[] = [], ix: number[] = [];
         const quad = (a: Vec3, b: Vec3, c: Vec3, d: Vec3) => { const k = v.length / 3; v.push(...a, ...b, ...c, ...d); ix.push(k, k + 1, k + 2, k, k + 2, k + 3); };
         const N = { u0: 6, u1: 8, v0: 1, v1: 4, depth: 0.3 };
-        quad([0, 0, 0], [N.u0, 0, 0], [N.u0, 6, 0], [0, 6, 0]);
+        quad([0, 0, 0], [N.u0, 0, 0], [N.u0, 4.5, 0], [0, 4.5, 0]);
+        quad([1.5, 4.5, 0], [N.u0, 4.5, 0], [N.u0, 6, 0], [1.5, 6, 0]);
         quad([N.u1, 0, 0], [10, 0, 0], [10, 6, 0], [N.u1, 6, 0]);
         quad([N.u0, 0, 0], [N.u1, 0, 0], [N.u1, N.v0, 0], [N.u0, N.v0, 0]);
         quad([N.u0, N.v1, 0], [N.u1, N.v1, 0], [N.u1, 6, 0], [N.u0, 6, 0]);
         quad([N.u0, N.v0, N.depth], [N.u1, N.v0, N.depth], [N.u1, N.v1, N.depth], [N.u0, N.v1, N.depth]);
         const scan = { vertices: new Float32Array(v), indices: new Uint32Array(ix) };
         const dev = measureScanDeviation(atlas, scan);
-        const area = ((N.u1 - N.u0) * (N.v1 - N.v0)) / (FACADE.widthM * FACADE.heightM);
-        expect(dev.offTexels / dev.checked).toBeGreaterThan(area * 0.7);
-        expect(dev.offTexels / dev.checked).toBeLessThan(area * 1.05);
-        expect(dev.offMedianM!).toBeGreaterThan(0.2);
-        const res = await bakeStreetViewProjection({ atlas, views, depthFor, options: { align: false, refinePose: false, excludeTexels: dev.off } });
-        let projectedOff = 0;
-        for (let t = 0; t < atlas.width * atlas.height; t++) if (dev.off[t] && res.albedo[t * 4 + 3]) projectedOff++;
-        expect(projectedOff).toBe(0);
+        const niche = ((N.u1 - N.u0) * (N.v1 - N.v0)) / (FACADE.widthM * FACADE.heightM), hole = (1.5 * 1.5) / (FACADE.widthM * FACADE.heightM);
+        expect(dev.offTexels / dev.checked).toBeGreaterThan((niche + hole) * 0.7);
+        expect(dev.offTexels / dev.checked).toBeLessThan((niche + hole) * 1.1);
+        // the niche's texels find the niche floor 0.3 m behind them; the texels over the missing part find no scan within the snap
+        let inNiche = 0, onFloor = 0, inHole = 0, noScan = 0;
+        for (let t = 0; t < atlas.width * atlas.height; t++) {
+            if (!dev.off[t]) continue;
+            const u = atlas.texels.position[t * 3], vv = atlas.texels.position[t * 3 + 1];
+            if (u > N.u0 + 0.5 && u < N.u1 - 0.5 && vv > N.v0 + 0.5 && vv < N.v1 - 0.5) { inNiche++; if (!dev.noScan[t] && Math.abs(dev.onScan[t * 3 + 2] - N.depth) < 0.02) onFloor++; }
+            if (u < 1 && vv > 5.1) { inHole++; if (dev.noScan[t]) noScan++; }
+        }
+        expect(onFloor).toBe(inNiche);
+        expect(noScan).toBe(inHole);
+        const res = await bakeStreetViewProjection({ atlas, views, depthFor, options: { align: false, refinePose: false, excludeTexels: dev.noScan } });
+        let projectedNoScan = 0;
+        for (let t = 0; t < atlas.width * atlas.height; t++) if (dev.noScan[t] && res.albedo[t * 4 + 3]) projectedNoScan++;
+        expect(projectedNoScan).toBe(0);
     }, 60_000);
 });

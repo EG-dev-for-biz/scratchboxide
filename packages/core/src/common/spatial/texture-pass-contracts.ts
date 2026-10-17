@@ -105,7 +105,9 @@ export interface TextureLayerFit {
     scoredViews: number;
     heldOutShare: number;
     widthPx: number;
-    views: Array<{ panoId: string; pixels: number; ownPixels: number; chamferPx: number | null; clayChamferPx: number | null; gradNcc: number | null }>;
+    /** The same on the photo-tier texels only. */
+    photo?: { chamferPx: number | null; gradNcc: number | null; pixels: number };
+    views: Array<{ panoId: string; pixels: number; ownPixels: number; chamferPx: number | null; clayChamferPx: number | null; gradNcc: number | null; photoPixels?: number; photoChamferPx?: number | null; photoGradNcc?: number | null }>;
 }
 
 export interface TexturePassDegradation {

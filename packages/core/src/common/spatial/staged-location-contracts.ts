@@ -1712,8 +1712,10 @@ const DEFINITIONS = {
         ladderRung: NONNEG_INT, rungReason: STR, confidence: { type: 'string', minLength: 1 },
         fit: obj(['chamferPx', 'clayChamferPx', 'gradNcc', 'scoredViews', 'heldOutShare', 'widthPx', 'views'], {
             chamferPx: NUM_OR_NULL, clayChamferPx: NUM_OR_NULL, gradNcc: NUM_OR_NULL, scoredViews: NONNEG_INT, heldOutShare: ref('unit'), widthPx: NONNEG_INT,
+            photo: obj(['chamferPx', 'gradNcc', 'pixels'], { chamferPx: NUM_OR_NULL, gradNcc: NUM_OR_NULL, pixels: NONNEG_INT }),
             views: arr(obj(['panoId', 'pixels', 'ownPixels', 'chamferPx', 'clayChamferPx', 'gradNcc'], {
-                panoId: STR, pixels: NONNEG_INT, ownPixels: NONNEG_INT, chamferPx: NUM_OR_NULL, clayChamferPx: NUM_OR_NULL, gradNcc: NUM_OR_NULL
+                panoId: STR, pixels: NONNEG_INT, ownPixels: NONNEG_INT, chamferPx: NUM_OR_NULL, clayChamferPx: NUM_OR_NULL, gradNcc: NUM_OR_NULL,
+                photoPixels: NONNEG_INT, photoChamferPx: NUM_OR_NULL, photoGradNcc: NUM_OR_NULL
             }))
         })
     }),

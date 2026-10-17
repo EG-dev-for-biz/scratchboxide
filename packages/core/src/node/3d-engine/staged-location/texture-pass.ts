@@ -272,9 +272,12 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
         timingsMs.scanDeviation = Date.now() - t;
         if (offScan.offTexels) {
             const share = offScan.offTexels / Math.max(1, countCovered(atlas));
-            degradations.push({ stage: 'bake-projection', reasonCode: 'fitted_off_scan', layerKey: layer.layerKey, fromRung: 0, toRung: 2, texelShare: share,
-                reason: `${(100 * share).toFixed(1)} percent of the fitted surface stands more than ${Math.round(offScan.tolM * 100)} cm from the scan (median ${offScan.offMedianM !== null ? (offScan.offMedianM * 100).toFixed(0) : 'n/a'} cm, 95th percentile ${offScan.offP95M !== null ? (offScan.offP95M * 100).toFixed(0) : 'n/a'} cm), where the photos show the scanned surface; they were not projected there (the views would disagree by parallax), so those texels keep the tile photo or clay, and the remeshed scan carries the photos.` });
-            progress(`${offScan.offTexels} of ${offScan.checked} fitted texels stand off the scan by more than ${Math.round(offScan.tolM * 100)} cm (median ${offScan.offMedianM} m); not projected`);
+            const noShare = offScan.noScanTexels / Math.max(1, countCovered(atlas));
+            degradations.push({ stage: 'bake-projection', reasonCode: 'fitted_off_scan', layerKey: layer.layerKey, texelShare: share,
+                reason: `${(100 * share).toFixed(1)} percent of the fitted surface stands more than ${Math.round(offScan.tolM * 100)} cm from the scan (median ${offScan.offMedianM !== null ? (offScan.offMedianM * 100).toFixed(0) : 'n/a'} cm, 95th percentile ${offScan.offP95M !== null ? (offScan.offP95M * 100).toFixed(0) : 'n/a'} cm). The photos show the scanned surface, so there they were sampled at the scan's surface under the texel (nearest scan point within ${Math.round(offScan.snapM * 100)} cm) and carried to the fitted surface, not projected onto it (the views would disagree by parallax).` });
+            if (offScan.noScanTexels) degradations.push({ stage: 'bake-projection', reasonCode: 'fitted_without_scan', layerKey: layer.layerKey, fromRung: 0, toRung: 2, texelShare: noShare,
+                reason: `${(100 * noShare).toFixed(1)} percent of the fitted surface has no scan within ${Math.round(offScan.snapM * 100)} cm (the fit closes or extends what the scan does not show), so no photo was projected there; those texels keep the tile photo or clay.` });
+            progress(`${offScan.offTexels} of ${offScan.checked} fitted texels stand off the scan by more than ${Math.round(offScan.tolM * 100)} cm (median ${offScan.offMedianM} m): photos sampled at the scan under them; ${offScan.noScanTexels} with no scan near are not projected`);
         }
     }
 
@@ -283,8 +286,10 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
     if (src.views.length && src.occluder) {
         progress(`projecting ${src.views.length} Street View views`);
         try {
+            // off-scan texels are projected from the scan's surface under them (same layout, positions moved)
+            const projAtlas = offScan?.offTexels ? { ...atlas, texels: { ...atlas.texels, position: (() => { const pos = Float32Array.from(atlas.texels.position); for (let i = 0; i < offScan!.off.length; i++) if (offScan!.off[i] && !offScan!.noScan[i]) { pos[i * 3] = offScan!.onScan[i * 3]; pos[i * 3 + 1] = offScan!.onScan[i * 3 + 1]; pos[i * 3 + 2] = offScan!.onScan[i * 3 + 2]; } return pos; })() } } : atlas;
             const res = await bakeStreetViewProjection({
-                atlas, views: src.views, depthFor: depthForMesh(src.occluder), ...(src.context ? { contextDepthFor: depthForMesh(src.context) } : {}), paletteLab: src.palette.length ? paletteLab(src.palette) : undefined,
+                atlas: projAtlas, views: src.views, depthFor: depthForMesh(src.occluder), ...(src.context ? { contextDepthFor: depthForMesh(src.context) } : {}), paletteLab: src.palette.length ? paletteLab(src.palette) : undefined,
                 signal: src.signal, options: {
                     // the tile photo is registered to the geometry, so the per-chart alignment uses it as its reference
                     ...(src.tile ? { alignReference: (P: Vec3, N: Vec3) => {
@@ -294,7 +299,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
                     ...(src.delight ? { delight: src.delight } : {}), ...(src.observedSurface ? { observedSurface: src.observedSurface } : {}), ...(src.poseEdgeGuardShare ? { poseEdgeGuardShare: src.poseEdgeGuardShare } : {}),
                     // view selection: no grazing or coarse views, photo-inconsistent views rejected per region (round 5)
                     ...(round4Baseline() ? {} : { minCosIncidence: VIEW_MIN_COS_INCIDENCE, minResolution: VIEW_MIN_RESOLUTION, regionSelect: { outlierDeltaE: VIEW_OUTLIER_DELTA_E } }),
-                    ...(offScan?.offTexels ? { excludeTexels: offScan.off } : {}) }
+                    ...(offScan?.noScanTexels ? { excludeTexels: offScan.noScan } : {}) }
             });
             planes = res;
             degradations.push(...res.degradations);
@@ -422,7 +427,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
         layerKey: layer.layerKey, glb: twin.glb,
         bundle: {
             layerKey: layer.layerKey, uv: twin.uv, provenance: m.provenance, ladderRung: worst,
-            ...(fit && fit.scoredViews ? { fit: { chamferPx: fit.chamferPx, clayChamferPx: fit.clayChamferPx, gradNcc: fit.gradNcc, scoredViews: fit.scoredViews, heldOutShare: fit.heldOutShare, widthPx: fit.widthPx, views: fit.views } } : {}),
+            ...(fit && fit.scoredViews ? { fit: { chamferPx: fit.chamferPx, clayChamferPx: fit.clayChamferPx, gradNcc: fit.gradNcc, scoredViews: fit.scoredViews, heldOutShare: fit.heldOutShare, widthPx: fit.widthPx, photo: fit.photo, views: fit.views } } : {}),
             rungReason: `${Math.round(m.rungShares[worst] * 100)} percent of the texels are at '${TEXTURE_LADDER_RUNGS[worst]}' (the worst rung above 10 percent)`
         },
         rungShares: m.rungShares, rungTexels: m.rungTexels, atlasTexels: m.total,
