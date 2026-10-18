@@ -35,7 +35,11 @@ async function run4DMultimodalDocumentTests() {
 
     // Test 2: Rich 4D Multi-Modal Synthesis for 1776 Document
     console.log('\nTest 2: Synthesizing 1776 document with rich 4D multi-modal capabilities...');
-    const doc1776: MarkdownDocumentData = synthesizeComprehensiveDocument('write an extensive document on the importance of 1776');
+    // Media sections are opt-in (b867569b, Multimedia Policy): a prompt that does not ask for media gets none.
+    const plain1776: MarkdownDocumentData = synthesizeComprehensiveDocument('write an extensive document on the importance of 1776');
+    assert.ok(!plain1776.sections.some(s => s.type === 'location-image' || s.type === 'video' || s.type === 'svg-diagram' || s.type === 'editorial-image'),
+        'A document whose prompt does not ask for media has no media sections');
+    const doc1776: MarkdownDocumentData = synthesizeComprehensiveDocument('write an extensive document on the importance of 1776 with images, video and diagrams');
     assert.ok(doc1776.title.includes('1776'), '1776 title set');
     assert.strictEqual(doc1776.author, DEFAULT_ACTIVE_USER_NAME, '1776 document author is attributed to the signed-in user');
     assert.ok(doc1776.sections && doc1776.sections.length > 5, 'Comprehensive document has rich section count');
@@ -71,7 +75,7 @@ async function run4DMultimodalDocumentTests() {
 
     // Test 3: Technical Architecture 4D Synthesis
     console.log('\nTest 3: Synthesizing Technical Specification with 4D Multi-Modal Blocks...');
-    const docAuth: MarkdownDocumentData = synthesizeComprehensiveDocument('create technical architecture spec for zero-trust identity system');
+    const docAuth: MarkdownDocumentData = synthesizeComprehensiveDocument('create technical architecture spec for zero-trust identity system with diagrams');
     assert.strictEqual(docAuth.author, DEFAULT_ACTIVE_USER_NAME, 'Technical architecture author is attributed to the signed-in user');
     const authSvg: MarkdownSection | undefined = docAuth.sections.find(s => s.type === 'svg-diagram');
     assert.ok(authSvg, 'Technical spec contains architecture SVG diagram');
@@ -126,7 +130,7 @@ async function run4DMultimodalDocumentTests() {
 
     // Test 7: Verify Clean Editorial Titles & Descriptions in Synthesized Documents
     console.log('\nTest 7: Verifying clean natural titles and descriptions in synthesized documents...');
-    const testDoc1776 = synthesizeComprehensiveDocument('write a document about 1776');
+    const testDoc1776 = synthesizeComprehensiveDocument('write a document about 1776 with media');
     const testVideo1776 = testDoc1776.sections.find(s => s.type === 'video');
     assert.ok(testVideo1776, '1776 video section present');
     assert.ok(!testVideo1776?.description?.includes('4D Temporal reconstruction'), 'Video description has no gimmicky "4D" phrasing');
@@ -177,7 +181,10 @@ async function run4DMultimodalDocumentTests() {
     assert.ok(histLoc.imageUrl && !histLoc.imageUrl.includes('photo-1569407228235-9a744831a150'), 'Motivated block generator uses authentic colonial image');
 
     const histVid = generateMotivatedVideoSection('1776-revolution');
-    assert.ok(histVid.videoTitle?.includes('Delaware') || histVid.videoTitle?.includes('1776'), 'Motivated video generator produces Delaware Crossing');
+    // The title names what the section's timeline shows (the Declaration debates and signing); it no longer comes from the
+    // deleted image catalog's entry (2486cb80).
+    assert.ok(histVid.videoTitle?.includes('Declaration of Independence'), 'Motivated video title names the Declaration of Independence its timeline covers');
+    assert.ok(histVid.timelineEvents?.some(e => /Hancock|Signing/.test(e.label)), 'Motivated video timeline covers the signing');
     assert.ok(histVid.timelineEvents && histVid.timelineEvents.length >= 3, 'Motivated video has timeline scrubber events');
 
     const histSvg = generateMotivatedSvgSection('1776-revolution');
@@ -190,7 +197,9 @@ async function run4DMultimodalDocumentTests() {
     const histEditorial = generateMotivatedEditorialImageSection('1776-revolution');
     assert.strictEqual(histEditorial.type, 'editorial-image', 'Editorial image section has type editorial-image');
     assert.ok(histEditorial.imageTitle?.includes('Delaware') || histEditorial.imageTitle?.includes('Washington'), 'Editorial image title reflects historical narrative');
-    assert.ok(histEditorial.attribution?.includes('Metropolitan Museum') || histEditorial.attribution?.includes('Historical'), 'Editorial image has authentic source attribution');
+    // Until its prompt is generated the section has no image and credits no source (2486cb80): the generation job sets both.
+    assert.strictEqual(histEditorial.imageUrl, undefined, 'Editorial image section carries no catalog image before generation');
+    assert.strictEqual(histEditorial.attribution, undefined, 'Editorial image section credits no source before generation');
     assert.ok(histEditorial.stylePreset?.includes('Oil Painting'), 'Editorial image has style preset');
     assert.ok(histEditorial.visualPrompt?.includes('oil painting') || histEditorial.visualPrompt?.includes('Washington'), 'Visual prompt uses Nano Banana synthesis pattern');
     assert.ok(primitiveSource.includes('handleNanoBananaRegenerate'), 'MarkdownDocumentPrimitive implements handleNanoBananaRegenerate');
