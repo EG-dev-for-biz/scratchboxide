@@ -93,8 +93,9 @@ import { selectViewsForFit } from './evidence-aim';
 import { describeSurvey, runFaceSurvey, surveyCandidates, surveyFaceTargets, surveyImageBytes, SURVEY_IMAGE_TIMEOUT_MS, SURVEY_VISION_TIMEOUT_MS, type SurveyResult } from './face-survey';
 import { describeLocated, locateSurveyElements, planDetailFromSurvey, type DetailPlan } from './survey-detail';
 import { DETAIL_REPROJECTION_MIN_IOU, reprojectDetailAsync } from './detail-reprojection';
-import { EDGE_MAX_RESIDUAL_PX, EDGE_REGISTRATION_BUDGET_MS, edgeFramesFromImages, registerPanosByEdges, describeEdgeRegistration, type EdgeRegistrationResult } from './pano-edge-registration';
-import { describeJointRegistration, JOINT_REGISTRATION_BUDGET_MS, registerPanosJointly } from './pano-joint-registration';
+import { EDGE_REGISTRATION_BUDGET_MS, describeEdgeRegistration, type EdgeRegistrationResult } from './pano-edge-registration';
+import { runPanoRegistrationOffThread } from './pano-registration-run';
+import { describeJointRegistration, JOINT_REGISTRATION_BUDGET_MS } from './pano-joint-registration';
 import { LOO_BUDGET_MS } from './texture-fit-metric';
 import { jointRegistrationEnabled } from './round5-switch';
 import { registerPanos, type Registration } from './pano-registration';
@@ -1132,39 +1133,30 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             const bytes = surveyImageBytes(surveyOut!.result!, r.imageIndex);
                             return bytes ? [{ id: `survey:${r.imageIndex}`, bytes, widthPx: r.widthPx, heightPx: r.heightPx, view: r.view }] : [];
                         });
-                        const frames = edgeFramesFromImages([...surveyFrames, ...(match ? matchRingImages(match) : []), ...got.images]);
-                        if (frames.length >= 2) {
-                            io.progress(`registering ${new Set(frames.map(f => f.view.panoId)).size} panos against the scan's silhouette and edges (${frames.length} images)`);
-                            const mesh = loadMesh([extraction.geometryGlb]);
-                            edgeReg = registerPanosByEdges({ frames, mesh, ...(registration ? { prior: registration } : {}), correspondences: match?.correspondences ?? [], faces: fitFaces(fit), budgetMs: EDGE_REGISTRATION_BUDGET_MS });
+                        // edges, then jointly, in a worker thread (pano-registration-run.ts): the main thread keeps serving the
+                        // vision calls in flight (figures, reading) instead of being held ~100 s
+                        const reg = await runPanoRegistrationOffThread({
+                            images: [...surveyFrames, ...(match ? matchRingImages(match) : []), ...got.images], meshFiles: [extraction.geometryGlb],
+                            ...(registration ? { prior: registration } : {}), correspondences: match?.correspondences ?? [], faces: fitFaces(fit)
+                        }, { signal: io.signal, log: m => io.progress(m) });
+                        if (reg.edge) {
+                            edgeReg = reg.edge;
                             io.progress(describeEdgeRegistration(edgeReg));
                             cache.writeRunNote(runId, 'edge_registration', { panos: edgeReg.panos, ncc: edgeReg.ncc, boxRmsM: edgeReg.boxRmsM, ms: edgeReg.ms, skipped: edgeReg.skipped });
-                            if (edgeReg.panos.some(p => p.chosen === 'edges')) {
-                                registration = edgeReg.registration;
-                                // pass 2 places the surveyed elements through the chosen poses (the close-ups stay as aimed)
-                                if (plan && surveyOut?.result) plan = { ...plan, ...locateSurveyElements(surveyOut.result, fit, registration) };
-                            }
-                            // joint registration: all panos together (edges against the scan, cross-view photo consistency through it,
-                            // priors), from the better of box and edge per pano; kept only when the held-out fit improves (pano-joint-registration.ts)
-                            if (jointRegistrationEnabled() && edgeReg.registration && edgeReg.panos.length >= 2) {
-                                io.progress(`registering ${edgeReg.panos.length} panos jointly (edges, cross-view consistency through the scan, priors)`);
-                                const candidates = new Map(edgeReg.panos.map(p => [p.panoId, {
-                                    box: p.prior, ...(p.edge ? { edge: p.edge } : {}),
-                                    edgeLocked: p.edgeResidualPx.edge !== null && p.edgeResidualPx.edge <= EDGE_MAX_RESIDUAL_PX && (p.edgeResidualPx.prior === null || p.edgeResidualPx.edge < p.edgeResidualPx.prior)
-                                }]));
-                                const joint = registerPanosJointly({ frames, mesh, current: registration ?? edgeReg.registration, candidates, faces: fitFaces(fit), budgetMs: JOINT_REGISTRATION_BUDGET_MS, log: m => io.progress(m) });
-                                io.progress(describeJointRegistration(joint));
-                                cache.writeRunNote(runId, 'joint_registration', {
-                                    chosen: joint.chosen, reason: joint.reason, matches: joint.matches, timingsMs: joint.timingsMs, panos: joint.panos, outlineTerm: joint.outlineTerm,
-                                    fit: Object.fromEntries(Object.entries(joint.fit).map(([k, v]) => [k, v && { chamferPx: v.chamferPx, clayChamferPx: v.clayChamferPx, gradNcc: v.gradNcc, outlinePx: v.outlinePx ?? null, views: v.views }])),
-                                    warps: joint.warps.map(w => ({ panoId: w.panoId, samples: w.samples, medianDeg: w.medianDeg }))
-                                });
-                                if (joint.chosen !== 'current') {
-                                    registration = joint.registration;
-                                    // the surveyed elements are placed again through the joint poses, so the built detail and the texture agree
-                                    if (plan && surveyOut?.result) plan = { ...plan, ...locateSurveyElements(surveyOut.result, fit, registration) };
-                                }
-                            }
+                        }
+                        const joint = reg.joint;
+                        if (joint) {
+                            io.progress(describeJointRegistration(joint));
+                            cache.writeRunNote(runId, 'joint_registration', {
+                                chosen: joint.chosen, reason: joint.reason, matches: joint.matches, timingsMs: joint.timingsMs, panos: joint.panos, outlineTerm: joint.outlineTerm,
+                                fit: Object.fromEntries(Object.entries(joint.fit).map(([k, v]) => [k, v && { chamferPx: v.chamferPx, clayChamferPx: v.clayChamferPx, gradNcc: v.gradNcc, outlinePx: v.outlinePx ?? null, views: v.views }])),
+                                warps: joint.warps.map(w => ({ panoId: w.panoId, samples: w.samples, medianDeg: w.medianDeg }))
+                            });
+                        }
+                        if (reg.registration) {
+                            registration = reg.registration;
+                            // the surveyed elements are placed again through the edge or joint poses, so the built detail and the texture agree
+                            if (plan && surveyOut?.result) plan = { ...plan, ...locateSurveyElements(surveyOut.result, fit, registration) };
                         }
                     } catch (err) {
                         if (isAbort(err) || io.signal.aborted) throw err;
