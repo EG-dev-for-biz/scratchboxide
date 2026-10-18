@@ -18,6 +18,7 @@
     "dev": "npm --prefix desktop-app run dev",
     "build": "npm --prefix packages/core run build && npm --prefix packages/cli run build && npm --prefix desktop-app run build",
     "build:core": "npm --prefix packages/core run build",
+    "build:serve-public": "tsc packages/core/src/node/spatial/GeoBoxPrecisionResectionService.ts packages/core/src/node/spatial/Google3DTileBlockoutPipelineService.ts --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck --noCheck --jsx react-jsx --rootDir packages/core/src --outDir build/serve-public-core",
     "build:cli": "npm --prefix packages/cli run build",
     "build:desktop": "npm --prefix desktop-app run build",
     "sbox": "node packages/cli/bin/sbox.js",

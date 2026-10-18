@@ -28,6 +28,7 @@ import {
     GeminiTtsResponse
 } from '../common/gemini-protocol';
 import { MediaModelUnavailableError, MissingInputError } from '../common/errors/pipeline-errors';
+import { resolveTtsModel } from '../common/media-generation-protocol';
 import { FimCompletionService } from './fim-completion-service';
 import { QuickEditService } from './quick-edit-service';
 import {
@@ -626,15 +627,12 @@ export class GeminiService {
     // ------------------------------------------------------------------
 
     /**
-     * Synthesizes speech with the Gemini TTS model named by SCRATCHBOX_TTS_MODEL (e.g. gemini-2.5-flash-preview-tts),
-     * through the same credentials as chat. Returns base64 WAV. Throws MediaModelUnavailableError when no TTS model is
-     * configured or the model returns no audio; there is no canned audio.
+     * Synthesizes speech with the Gemini TTS model named by SCRATCHBOX_TTS_MODEL, or DEFAULT_TTS_MODEL
+     * (gemini-2.5-flash-preview-tts) when that is unset, through the same credentials as chat. Returns base64 WAV.
+     * Throws MediaModelUnavailableError when the model returns no audio; there is no canned audio.
      */
     async synthesizeSpeech(req: GeminiTtsRequest): Promise<GeminiTtsResponse> {
-        const model = process.env.SCRATCHBOX_TTS_MODEL?.trim();
-        if (!model) {
-            throw new MediaModelUnavailableError('text-to-speech', 'no TTS model is configured (set SCRATCHBOX_TTS_MODEL, e.g. gemini-2.5-flash-preview-tts)');
-        }
+        const { model } = resolveTtsModel(process.env.SCRATCHBOX_TTS_MODEL);
         const text = String(req.text ?? '').trim();
         if (!text) throw new MissingInputError('text-to-speech', 'text');
         // Gemini TTS is steered in natural language: style and pace go in the prompt.

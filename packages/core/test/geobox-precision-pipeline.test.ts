@@ -28,13 +28,6 @@ import {
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { requireFile, withReason } from './helpers/requirements';
-
-// build/ is gitignored: the report only exists after the Python benchmark has been run on this machine.
-const precisionReport = requireFile(
-    'build/geobox_precision_report.html',
-    'build output of `python3 tools/geobox/eval/test_precision_pipeline.py` (downloads its landmark test images)'
-);
 
 describe('GeoBoxPrecisionPipeline', () => {
     it('computes Haversine distance with high fidelity across global landmarks', () => {
@@ -101,18 +94,6 @@ describe('GeoBoxPrecisionPipeline', () => {
         expect(offsetGeo.lat).toBeGreaterThan(anchor.lat);
         expect(offsetGeo.lng).toBeGreaterThan(anchor.lng);
         expect(offsetGeo.altitudeMeters).toBeCloseTo(45.0, 1);
-    });
-
-    it.skipIf(!precisionReport.ok)(withReason('validates GeoBox Precision Report artifact existence and structural integrity', precisionReport), () => {
-        const reportPath = path.resolve(__dirname, '../../../build/geobox_precision_report.html');
-        expect(fs.existsSync(reportPath)).toBe(true);
-
-        const htmlContent = fs.readFileSync(reportPath, 'utf-8');
-        expect(htmlContent).toContain('GeoBox Exact Camera Position & 6-DOF Pose Estimation');
-        expect(htmlContent).toContain('Camera 6-DOF Visualizer');
-        expect(htmlContent).toContain('100.0%');
-        expect(htmlContent).toContain('AdvancedMarkerElement');
-        expect(htmlContent).toContain('Polygon');
     });
 
     it('validates schema compliance for 7-Stage GeoBox Precision Results with Camera Resectioning', () => {

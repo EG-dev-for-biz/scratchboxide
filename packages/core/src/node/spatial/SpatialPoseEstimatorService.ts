@@ -59,8 +59,6 @@ export interface PnPOptions {
     maxIterations?: number;
     /** Convergence tolerance on error delta (default: 1e-6) */
     tolerance?: number;
-    /** Also estimate unknown focal length (default: false) */
-    estimateFocalLength?: boolean;
 }
 
 export interface PnPRansacOptions extends PnPOptions {

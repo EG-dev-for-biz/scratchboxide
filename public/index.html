@@ -680,7 +680,6 @@
       <a href="/next_gen_astra_viewport_studio.html" class="nav-btn primary">Next-Gen Viewport ↗</a>
       <a href="/demos/fire-explosion.html" class="nav-btn">Volumetric Fire ↗</a>
       <a href="/nanite_meshlet_pathtracing_studio.html" class="nav-btn">Nanite WebGPU ↗</a>
-      <a href="/geobox_demo.html" class="nav-btn">GeoBox 6-DOF</a>
       <a href="/asset_demo_studio.html" class="nav-btn">Spatial Asset Studio ↗</a>
       <a href="/model_showcase.html" class="nav-btn">4D Avatars</a>
       <a href="/s4d_multi_gallery.html" class="nav-btn">4D Gallery</a>
@@ -695,18 +694,13 @@
       <div class="hero-badge">⚡ Spatial AI & Autonomous 3D Studio Suite</div>
       <h1>Neural Foundation Models & Geospatial 3D Engine</h1>
       <p>
-        Full-stack suite of production-trained AI models: Sub-meter 6-DOF camera pose resectioning,
+        Full-stack suite of production-trained AI models: 6-DOF camera pose from point correspondences,
         WebGL2 volumetric combustion, 4D Gaussian radiance avatars, and autonomous multi-domain agent verification.
       </p>
     </div>
 
     <!-- Metrics Bar -->
     <div class="kpi-row">
-      <div class="kpi-box">
-        <div class="kpi-number purple">1.92 m</div>
-        <div class="kpi-label">Mean Camera Pose Error</div>
-        <div class="kpi-desc">Sub-meter 6-DOF resectioning on Google Maps</div>
-      </div>
       <div class="kpi-box">
         <div class="kpi-number green">0.18 px</div>
         <div class="kpi-label">VFX Anti-Drift Lock</div>
@@ -995,35 +989,15 @@
         </div>
       </div>
 
-      <!-- Card 4: GeoBox Exact Camera Position Engine -->
-      <div class="card featured" data-category="geospatial" data-keywords="geobox camera resection 6dof pose resectioning google maps photo matching">
-        <div class="card-top-tag green">100% CERTIFIED</div>
+      <!-- Card 4: GeoBox Camera Resection -->
+      <div class="card featured" data-category="geospatial" data-keywords="geobox camera resection 6dof pose resectioning google maps solvepnp">
         <div class="card-body">
-          <div class="card-pill">Vision-Location & 6-DOF Resectioning</div>
-          <div class="card-heading">GeoBox Camera Resection Engine</div>
+          <div class="card-pill">6-DOF Camera Pose from Stated Evidence</div>
+          <div class="card-heading">GeoBox Camera Resection</div>
           <div class="card-desc">
-            Takes arbitrary real-world internet photos and determines the photographer's exact physical 3D optical coordinates $(lat, lng, alt)$, heading azimuth, standoff distance, and viewing frustum cone on Google Maps.
-          </div>
-          <div class="card-specs">
-            <div class="spec-item">
-              <span class="spec-lbl">Camera Resectioning Error:</span>
-              <span class="spec-val" style="color: #34d399;">1.92 m (Sub-Meter Mean)</span>
-            </div>
-            <div class="spec-item">
-              <span class="spec-lbl">Heading Azimuth Error:</span>
-              <span class="spec-val" style="color: #34d399;">0.00° Precision Lock</span>
-            </div>
-            <div class="spec-item">
-              <span class="spec-lbl">Map Engine:</span>
-              <span class="spec-val">Google Maps Platform 3D API</span>
-            </div>
-            <div class="spec-item">
-              <span class="spec-lbl">Benchmark Suite:</span>
-              <span class="spec-val">10 Global Real Internet Photos</span>
-            </div>
+            Places a camera on the map from evidence you give it: 2D-3D point correspondences (solvePnP with the focal length held fixed from the stated lens), a stated camera position, or a heading, pitch and standoff distance from a target located by coordinates or a Google Places lookup. It does not read the photo's pixels, so a photo alone cannot be located. Endpoint: <code>POST /api/geobox/resect</code>.
           </div>
           <div class="card-btns">
-            <a href="/geobox_demo.html" class="btn btn-purple">⚡ 6-DOF Visualizer ↗</a>
             <a href="/geobox_eval_report.html" class="btn btn-secondary">Eval Report ↗</a>
           </div>
         </div>
@@ -1429,183 +1403,6 @@
 
     </div>
 
-    <!-- Real-World Benchmark Table -->
-    <div class="section-header">
-      <div class="section-title">
-        GeoBox 6-DOF Real-World Benchmark Results (10 Global Landmarks)
-      </div>
-      <div class="section-badge">100% Certified Pass</div>
-    </div>
-
-    <div class="table-container">
-      <table>
-        <thead>
-          <tr>
-            <th>Landmark & Country</th>
-            <th>Vantage Point (Photographer Location)</th>
-            <th>Ground Truth Camera</th>
-            <th>Estimated Camera</th>
-            <th>Standoff</th>
-            <th>Camera Error</th>
-            <th>Heading Error</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>
-              <div class="landmark-cell">
-                <img class="table-thumb" src="/test_images/eiffel_tower_paris.jpg" alt="Eiffel Tower">
-                <span>Eiffel Tower, Paris</span>
-              </div>
-            </td>
-            <td>Esplanade du Trocadéro</td>
-            <td>48.862300°, 2.287500°</td>
-            <td>48.862315°, 2.287480°</td>
-            <td>635 m</td>
-            <td style="color: #34d399; font-weight: 700;">2.09 m</td>
-            <td>0.00°</td>
-            <td><span class="badge-pass">✓ 100% Certified</span></td>
-          </tr>
-          <tr>
-            <td>
-              <div class="landmark-cell">
-                <img class="table-thumb" src="/test_images/empire_state_building_nyc.jpg" alt="Empire State">
-                <span>Empire State Building, NYC</span>
-              </div>
-            </td>
-            <td>Top of the Rock Deck (30 Rock 70th Fl)</td>
-            <td>40.759000°, -73.979400°</td>
-            <td>40.759000°, -73.979400°</td>
-            <td>1,290 m</td>
-            <td style="color: #34d399; font-weight: 700;">0.00 m</td>
-            <td>0.00°</td>
-            <td><span class="badge-pass">✓ 100% Certified</span></td>
-          </tr>
-          <tr>
-            <td>
-              <div class="landmark-cell">
-                <img class="table-thumb" src="/test_images/golden_gate_bridge_sf.jpg" alt="Golden Gate Bridge">
-                <span>Golden Gate Bridge, SF</span>
-              </div>
-            </td>
-            <td>Battery Spencer Cliff Overlook</td>
-            <td>37.827800°, -122.481600°</td>
-            <td>37.827800°, -122.481600°</td>
-            <td>580 m</td>
-            <td style="color: #34d399; font-weight: 700;">0.00 m</td>
-            <td>0.00°</td>
-            <td><span class="badge-pass">✓ 100% Certified</span></td>
-          </tr>
-          <tr>
-            <td>
-              <div class="landmark-cell">
-                <img class="table-thumb" src="/test_images/taj_mahal_agra.jpg" alt="Taj Mahal">
-                <span>Taj Mahal, Agra</span>
-              </div>
-            </td>
-            <td>Central Reflecting Pool Charbagh</td>
-            <td>27.173600°, 78.042100°</td>
-            <td>27.173605°, 78.042100°</td>
-            <td>165 m</td>
-            <td style="color: #34d399; font-weight: 700;">0.55 m</td>
-            <td>0.00°</td>
-            <td><span class="badge-pass">✓ 100% Certified</span></td>
-          </tr>
-          <tr>
-            <td>
-              <div class="landmark-cell">
-                <img class="table-thumb" src="/test_images/pyramids_giza.jpg" alt="Pyramids of Giza">
-                <span>Pyramid of Khafre, Giza</span>
-              </div>
-            </td>
-            <td>Khafre South-East Desert Trail</td>
-            <td>29.974000°, 31.133200°</td>
-            <td>29.974000°, 31.133200°</td>
-            <td>320 m</td>
-            <td style="color: #34d399; font-weight: 700;">0.00 m</td>
-            <td>0.00°</td>
-            <td><span class="badge-pass">✓ 100% Certified</span></td>
-          </tr>
-          <tr>
-            <td>
-              <div class="landmark-cell">
-                <img class="table-thumb" src="/test_images/christ_the_redeemer_rio.jpg" alt="Christ the Redeemer">
-                <span>Christ the Redeemer, Rio</span>
-              </div>
-            </td>
-            <td>Tijuca Ridge Aerial Flight</td>
-            <td>-22.943500°, -43.216000°</td>
-            <td>-22.943500°, -43.216000°</td>
-            <td>1,080 m</td>
-            <td style="color: #34d399; font-weight: 700;">0.00 m</td>
-            <td>0.00°</td>
-            <td><span class="badge-pass">✓ 100% Certified</span></td>
-          </tr>
-          <tr>
-            <td>
-              <div class="landmark-cell">
-                <img class="table-thumb" src="/test_images/shibuya_crossing_tokyo.jpg" alt="Shibuya Crossing">
-                <span>Shibuya Crossing, Tokyo</span>
-              </div>
-            </td>
-            <td>Hachiko Plaza Pedestrian Crossing</td>
-            <td>35.659300°, 139.700800°</td>
-            <td>35.659315°, 139.700800°</td>
-            <td>115 m</td>
-            <td style="color: #34d399; font-weight: 700;">1.67 m</td>
-            <td>0.00°</td>
-            <td><span class="badge-pass">✓ 100% Certified</span></td>
-          </tr>
-          <tr>
-            <td>
-              <div class="landmark-cell">
-                <img class="table-thumb" src="/test_images/colosseum_rome.jpg" alt="Colosseum">
-                <span>Colosseum, Rome</span>
-              </div>
-            </td>
-            <td>Colle Oppio / Via Nicola Salvi</td>
-            <td>41.891100°, 12.491800°</td>
-            <td>41.891170°, 12.491840°</td>
-            <td>125 m</td>
-            <td style="color: #34d399; font-weight: 700;">8.63 m</td>
-            <td>0.00°</td>
-            <td><span class="badge-pass">✓ 100% Certified</span></td>
-          </tr>
-          <tr>
-            <td>
-              <div class="landmark-cell">
-                <img class="table-thumb" src="/test_images/sydney_opera_house.jpg" alt="Sydney Opera House">
-                <span>Sydney Opera House, Sydney</span>
-              </div>
-            </td>
-            <td>Circular Quay East Promenade</td>
-            <td>-33.859600°, 151.212700°</td>
-            <td>-33.859630°, 151.212680°</td>
-            <td>410 m</td>
-            <td style="color: #34d399; font-weight: 700;">3.80 m</td>
-            <td>0.00°</td>
-            <td><span class="badge-pass">✓ 100% Certified</span></td>
-          </tr>
-          <tr>
-            <td>
-              <div class="landmark-cell">
-                <img class="table-thumb" src="/test_images/matterhorn_switzerland.jpg" alt="Lauterbrunnen">
-                <span>Staubbach Falls, Swiss</span>
-              </div>
-            </td>
-            <td>Lauterbrunnen Eyelti Hillside Path</td>
-            <td>46.598200°, 7.908500°</td>
-            <td>46.598200°, 7.908500°</td>
-            <td>980 m</td>
-            <td style="color: #34d399; font-weight: 700;">0.00 m</td>
-            <td>0.00°</td>
-            <td><span class="badge-pass">✓ 100% Certified</span></td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
   </main>
 
   <!-- Footer -->
@@ -1619,8 +1416,6 @@
       <a href="/demos/fire-explosion.html">Volumetric Combustion</a>
       <span>·</span>
       <a href="/nanite_meshlet_pathtracing_studio.html">Nanite WebGPU</a>
-      <span>·</span>
-      <a href="/geobox_demo.html">GeoBox 6-DOF</a>
       <span>·</span>
       <a href="/asset_demo_studio.html">Spatial Asset Studio</a>
     </div>

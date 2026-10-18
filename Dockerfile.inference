@@ -5,6 +5,15 @@
 # and native Clang C++20 toolchains.
 # ------------------------------------------------------------------------------
 
+# Compile the packages/core services serve_public.cjs calls (npm run build:serve-public). The output needs no
+# npm packages at runtime; only the compiler is installed here.
+FROM node:22-bookworm-slim AS serve-public-core
+WORKDIR /build
+RUN npm install --no-save --no-package-lock typescript@5.9.3
+COPY package.json ./
+COPY packages/core/src ./packages/core/src
+RUN npm run build:serve-public
+
 FROM node:22-bookworm-slim
 
 # Prevent interactive prompts
@@ -26,7 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install Python dependencies for GeoBox & DepthBox 6-DOF pipelines
+# Install Python dependencies for the GeoBox geolocation model & DepthBox pipelines
 RUN pip3 install --no-cache-dir --break-system-packages \
     torch torchvision --index-url https://download.pytorch.org/whl/cpu \
     && pip3 install --no-cache-dir --break-system-packages \
@@ -47,6 +56,10 @@ COPY public ./public
 COPY scripts ./scripts
 COPY tools ./tools
 COPY packages ./packages
+
+# serve_public.cjs runs the TypeScript GeoBox resection service (and the 3D Tiles service) from packages/core,
+# compiled to CommonJS for plain Node in the serve-public-core stage below.
+COPY --from=serve-public-core /build/build/serve-public-core ./build/serve-public-core
 
 # Expose Google Cloud Run standard port
 EXPOSE 8080

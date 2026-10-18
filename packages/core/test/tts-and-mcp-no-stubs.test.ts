@@ -1,19 +1,50 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { GeminiService } from '../src/node/gemini-service';
 import { MediaModelUnavailableError } from '../src/common/errors/pipeline-errors';
+import { DEFAULT_TTS_MODEL, resolveTtsModel } from '../src/common/media-generation-protocol';
 import { buildMcpToolContext } from '../src/node/mcp/ScratchboxMcpServer';
 
-describe('/gemini/tts synthesizes with the configured Gemini TTS model or refuses', () => {
+describe('/gemini/tts synthesizes with the configured (or default) Gemini TTS model', () => {
     afterEach(() => {
         vi.unstubAllEnvs();
         vi.unstubAllGlobals();
     });
 
-    it('refuses with a typed error when no TTS model is configured', async () => {
+    /** A stubbed generateContent that answers with 0.1 s of PCM and records the URL it was called with. */
+    function stubAudioReply(): { url: () => string } {
+        let url = '';
+        vi.stubGlobal('fetch', async (u: string) => {
+            url = String(u);
+            return {
+                ok: true,
+                status: 200,
+                json: async () => ({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'audio/L16;codec=pcm;rate=24000', data: Buffer.alloc(4800).toString('base64') } }] } }] }),
+                text: async () => ''
+            };
+        });
+        return { url: () => url };
+    }
+
+    it('defaults to the Gemini 2.5 Flash TTS model when SCRATCHBOX_TTS_MODEL is unset', async () => {
+        expect(DEFAULT_TTS_MODEL).toBe('gemini-2.5-flash-preview-tts');
+        expect(resolveTtsModel(undefined)).toEqual({ model: DEFAULT_TTS_MODEL, source: 'default' });
+        expect(resolveTtsModel('  ')).toEqual({ model: DEFAULT_TTS_MODEL, source: 'default' });
+        expect(resolveTtsModel(' gemini-2.5-pro-preview-tts ')).toEqual({ model: 'gemini-2.5-pro-preview-tts', source: 'SCRATCHBOX_TTS_MODEL' });
+
         vi.stubEnv('SCRATCHBOX_TTS_MODEL', '');
-        const err = await new GeminiService().synthesizeSpeech({ text: 'hello' }).catch(e => e);
-        expect(err).toBeInstanceOf(MediaModelUnavailableError);
-        expect(err.code).toBe('media_model_unavailable');
+        vi.stubEnv('GEMINI_API_KEY', 'test-key-fetch-is-stubbed');
+        const reply = stubAudioReply();
+        const res = await new GeminiService().synthesizeSpeech({ text: 'hello' });
+        expect(res.success).toBe(true);
+        expect(reply.url()).toContain('/models/gemini-2.5-flash-preview-tts:generateContent');
+    });
+
+    it('SCRATCHBOX_TTS_MODEL overrides the default', async () => {
+        vi.stubEnv('SCRATCHBOX_TTS_MODEL', 'gemini-2.5-pro-preview-tts');
+        vi.stubEnv('GEMINI_API_KEY', 'test-key-fetch-is-stubbed');
+        const reply = stubAudioReply();
+        await new GeminiService().synthesizeSpeech({ text: 'hello' });
+        expect(reply.url()).toContain('/models/gemini-2.5-pro-preview-tts:generateContent');
     });
 
     it('sends the request to the model and wraps its PCM as WAV', async () => {
