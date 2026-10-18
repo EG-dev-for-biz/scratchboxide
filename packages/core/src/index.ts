@@ -283,6 +283,8 @@ export type {
 export type {
     Universal3DObjectSeparationService,
     UniversalSpatialCategory,
+    SpatialEntityLabel,
+    SpatialShapeDescriptors,
     DownstreamGeneratorRouting,
     UniversalSeparatedObject,
     UniversalSeparatedScene,
