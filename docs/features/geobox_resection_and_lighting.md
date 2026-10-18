@@ -32,7 +32,7 @@ Both features have progressed from experimental visual scripts into **first-clas
 | **System Instruction Ingestion** | `prompt-builder.ts` | Active Workspace Tools & Tier-1 | Clean Typecheck | **Production Active** |
 | **Agent Directives** | `AGENTS.md` | Resection & De-Lighting Directives | Canonical Enforced | **Production Active** |
 | **Agent Skill Packages** | `.agents/skills/` | `image-location-resection`, `location-object-lighting` | Markdown Standards | **Production Active** |
-| **Public Interactive Visualizer** | `public/geobox_demo.html` | Multimodal Chat Bar & Live Controls | E2E Verified | **Production Active** |
+| **Public Resection Endpoint** | `scripts/serve_public.cjs` | `POST /api/geobox/resect` → `GeoBoxPrecisionResectionService` | Endpoint test (desktop-app/test) | **Active** |
 
 ---
 
@@ -62,6 +62,8 @@ timeline
 ```
 
 ### Phase 1: From Landmark Centroids to 6-DOF Camera Resectioning
+> **Removed 2026-10-17.** The Python "7-stage" pipeline described in Phases 1-2 (`tools/geobox/pipeline/geobox_precision_pipeline.py`, its eval `tools/geobox/eval/test_precision_pipeline.py`, `geobox_demo.html` and `geobox_precision_report.html`) returned values from a built-in landmark dictionary and synthetic `fallback_<hash>` panorama ids, so its millimetre and benchmark figures were not measurements. What runs now is `GeoBoxPrecisionResectionService`: it places the camera from evidence in the request (2D-3D correspondences via solvePnP with the focal length held fixed from the stated lens, a stated camera position, or a stated heading/pitch/standoff), resolves the target from coordinates or a Google Places lookup, and does not read the image pixels.
+
 * **User Directive**: *"I need this to be accurate down the exact position of the camera of the picture taken"*
 * **Challenge**: Standard vision models predict only the general coordinate centroid of a landmark (e.g. the center of the Colosseum arena). They provide no insight into where the human photographer stood or what lens they used.
 * **Engineering Action**:
@@ -295,6 +297,5 @@ LocationObjectLightingService.applyArchitecturalPortalLights(scene, harmonizatio
    * Result: **0 errors** across `packages/core`, `packages/cli`, `desktop-app`, and `desktop-app/tsconfig.electron.json`.
 
 3. **Live Public Surfaces**:
-   - `http://127.0.0.1:8080/geobox_demo.html` (Full-screen interactive visualizer & multimodal chat).
    - `http://127.0.0.1:8080/model_showcase.html?model=geobox` (Google Maps 3D Platform integration).
    - `http://127.0.0.1:8080/index.html` (Unified public showcase hub).

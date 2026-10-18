@@ -64,7 +64,6 @@ const POPULAR_DEMOS = [
     { title: 'VFX Plate Coordination Anti-Drift Engine', path: '/vfx_plate_anti_drift_demo.html', badge: 'ANTI-DRIFT' },
     { title: 'Botanical & Vegetation Pipeline Visualizer', path: '/botanical_visualizer.html', badge: 'BOTANICAL PBR' },
     { title: 'The Plaza Hotel 6-DoF Matchmove Studio', path: '/plaza_matchmove_demo.html', badge: 'STUDIO GRADE' },
-    { title: 'GeoBox Multimodal Resection Studio', path: '/geobox_demo.html', badge: 'ANALYTICAL' },
     { title: 'Multi-District Generative S4D Gallery', path: '/s4d_multi_gallery.html', badge: 'MULTI-SCENE' },
     { title: 'Red Rocks 4D Gaussian Splatting Performer', path: '/red_rocks_performer_demo.html', badge: 'REAL-TIME 3DGS' },
     { title: 'Universal Architecture & Terrain (UTDRA)', path: '/universal_architecture_terrain_demo.html', badge: 'UTDRA/ULDRA' },
