@@ -97,6 +97,7 @@ import {
 import { findTileRefineRepoRoot } from '../../3d-engine/tile-refine-service';
 import type { ToolContext, ToolDeclaration, ToolHandler, ToolHandlerOutcome, ToolParameterSchema, ToolResultPayload } from './types';
 import { STAGED_MATERIAL_MODE_DECLARATION, STAGED_MATERIAL_MODE_TOOL, runStagedMaterialModeTool } from './staged-material-mode-tool';
+import { anchorOffset, offsetObjects, partitionActiveScene } from '../../3d-engine/staged-location/kept-structure';
 
 /** Street View grounding service shared by calls, so its project-number lookup runs once per process. */
 let streetViewGroundingService: StreetViewGroundingImageService | undefined;
@@ -467,13 +468,6 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
 ];
 
 
-/** Previous environment layers of a scene the tiles are staged into: replaced, never stacked. */
-function isLocationLayer(o: any): boolean {
-    const s = (o.content?.metadata?.source || '').toLowerCase();
-    const role = (o.content?.metadata?.role || '').toLowerCase();
-    return s === 'google3dtilesclay' || s === 'google_3d_tiles_clay' || s === 'google3dtilesfulltexture' || s === 'google_3d_tiles_full_texture'
-        || s === 'googlevectortileservice' || s === 'google_vector_tile_service' || s === 'sb-veggie' || role === 'environment' || role === 'vegetation';
-}
 
 function modelUri(mountPath: string): string {
     return mountPath.includes('/public/models/')
@@ -604,11 +598,21 @@ async function extractLocation(toolName: string, args: Record<string, unknown>, 
     // The tiles join the active scene only when asked to; otherwise they open as a new studio scene, so an unrelated
     // scene's objects and sky never carry over.
     let mountedArtifact: any;
+    let activeSceneReport: Record<string, unknown> | undefined;
     if (args.stageIntoActiveScene === true && ctx.request?.activeArtifact?.type === '3d-scene') {
         const prevArtifact = ctx.request.activeArtifact;
         const prevData = (prevArtifact.data as any) || {};
-        const rawObjects = Array.isArray(prevData.objects) ? prevData.objects : [];
-        const keptObjects = rawObjects.filter((o: any) => !isLocationLayer(o));
+        // an earlier staged structure rebuild stays (moved into this extraction's frame); earlier location layers are replaced
+        const carried = partitionActiveScene(prevArtifact);
+        const keptStructure = offsetObjects(carried.structure, anchorOffset(carried.anchor, result.geoAnchor as { lat: number; lng: number; elevation?: number }));
+        const keptObjects = [...carried.other, ...keptStructure];
+        activeSceneReport = {
+            artifactId: prevArtifact.id,
+            kept: keptStructure.map((o: any) => ({ objectId: o.id, source: String(o.content?.metadata?.source ?? ''), textured: false })),
+            removed: carried.removed,
+            otherObjectsKept: carried.other.length,
+            ...(keptStructure.length ? { note: 'this tile layer is not cut around the kept structure: the scan of the structure and the rebuild stand in the same place' } : {})
+        };
         mountedArtifact = {
             ...prevArtifact,
             version: (prevArtifact.version || 1) + 1,
@@ -676,10 +680,21 @@ async function extractLocation(toolName: string, args: Record<string, unknown>, 
             },
             quality: result.quality,
             render: result.render,
+            ...(activeSceneReport ? { activeScene: activeSceneReport } : {}),
             artifact: mountedArtifact
         } as unknown as ToolResultPayload,
-        summaryResult: `Google 3D Tiles ingested ${flavour === 'clay' ? 'in studio grey clay' : 'in full texture'} for ${place}${describeTileExtent(result)}. Exported the extracted tiles to ${result.glbPath} (${result.mesh.vertexCount} vertices, ${result.mesh.triangleCount} triangles).${describeLocationClay(pipeline, flavour)} Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m${elevation}. Built objects share this coordinate frame and automatically snap to the tile ground surface by default.`
+        summaryResult: `Google 3D Tiles ingested ${flavour === 'clay' ? 'in studio grey clay' : 'in full texture'} for ${place}${describeTileExtent(result)}. Exported the extracted tiles to ${result.glbPath} (${result.mesh.vertexCount} vertices, ${result.mesh.triangleCount} triangles).${describeLocationClay(pipeline, flavour)} Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m${elevation}. Built objects share this coordinate frame and automatically snap to the tile ground surface by default.${describeActiveSceneReport(activeSceneReport)}`
     };
+}
+
+/** One sentence: what staging into the active scene kept and took out, by object id. */
+function describeActiveSceneReport(r: Record<string, unknown> | undefined): string {
+    if (!r) return '';
+    const kept = (r.kept as Array<{ objectId: string }>) ?? [];
+    const removed = (r.removed as Array<{ objectId: string }>) ?? [];
+    return ` Staged into the active scene: ${kept.length ? `KEPT the earlier structure rebuild (${kept.map(k => k.objectId).join(', ')})` : 'no earlier structure rebuild was kept'}`
+        + `${removed.length ? `; REMOVED ${removed.length} earlier location layer${removed.length === 1 ? '' : 's'} (${removed.map(x => x.objectId).join(', ')})` : ''}`
+        + `${r.otherObjectsKept ? `; kept ${r.otherObjectsKept} other object(s)` : ''}${r.note ? `; ${r.note}` : ''}.`;
 }
 
 export const google3DTilesHandlers: Record<string, ToolHandler> = {

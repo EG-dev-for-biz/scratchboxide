@@ -341,10 +341,40 @@ export function texturesSentence(input: StagedSummaryInput): string {
         + ` Photo-derived texture is photo-inferred (labelled per texel); generated PBR is not available, so texels no photo reaches keep the measured palette colour.`;
 }
 
+/**
+ * Rule "active scene": staged into the open scene, what of it was kept and what was taken out, by layer, so the reply
+ * never says something was kept that was not (or the other way round).
+ */
+export function activeSceneSentence(input: StagedSummaryInput): string {
+    const a = input.activeScene;
+    if (!a) return '';
+    const parts: string[] = [];
+    if (a.kept.length) {
+        const textured = a.kept.filter(k => k.textured).length;
+        const layers = a.kept.map(k => k.layer ?? k.objectId).join(', ');
+        const shown = textured ? `; ${textured} of them ${textured === 1 ? 'has' : 'have'} real textures${a.materialMode === 'textured' ? ', shown textured' : ', shown in clay'}` : '';
+        const moved = a.offsetM && a.offsetM.some(v => Math.abs(v) >= 0.005) ? `, moved ${a.offsetM.map(v => v.toFixed(2)).join(', ')} m (east, up, south) into this extraction's frame` : '';
+        parts.push(`Staged into the active scene: KEPT the earlier structure rebuild${a.keptFromRunId ? ` of run ${a.keptFromRunId}` : ''} (${a.kept.length} layer${a.kept.length === 1 ? '' : 's'}: ${layers}${shown})${moved}`);
+        const cut = a.footprintHidden?.layers.filter(l => l.removedTriangles > 0) ?? [];
+        if (cut.length) parts.push(`the district's own scan of the structure was taken out where the rebuild stands (${n(cut.reduce((t, l) => t + l.removedTriangles, 0))} triangles from ${cut.map(l => l.objectId).join(', ')})`);
+        else if (a.footprintHidden) parts.push('no district triangle stood inside the structure\'s footprint');
+    } else {
+        parts.push('Staged into the active scene: no earlier structure rebuild was kept');
+    }
+    const replacedStructure = a.removed.filter(r => r.source === 'scan_fit');
+    const replacedLocation = a.removed.filter(r => r.source !== 'scan_fit');
+    if (replacedStructure.length) parts.push(`REMOVED the earlier structure rebuild (${replacedStructure.map(r => r.objectId).join(', ')}): this build rebuilds the structure at the same place`);
+    if (replacedLocation.length) parts.push(`REMOVED the ${replacedLocation.length} earlier location layer${replacedLocation.length === 1 ? '' : 's'} (${replacedLocation.map(r => r.objectId).join(', ')}), replaced by this build's`);
+    if (a.otherObjectsKept) parts.push(`kept ${n(a.otherObjectsKept)} other object${a.otherObjectsKept === 1 ? '' : 's'} as they were`);
+    if (a.note) parts.push(a.note);
+    return `${parts.join('; ')}.`;
+}
+
 /** The digest and the summary, in rule order. */
 export function summarizeStagedBuild(input: StagedSummaryInput): { digest: string; summary: string } {
     const sentences = [
         stopSentence(input),
+        activeSceneSentence(input),
         mountedSentence(input),
         surveySentence(input),
         evidenceSentence(input),

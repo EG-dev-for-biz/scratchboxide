@@ -809,6 +809,11 @@ export interface StagedLayer {
      * viewport keeps the clay layer mounted and shows the twin only when the material mode is 'textured'.
      */
     textured?: StagedTexturedVariant;
+    /**
+     * A layer of an earlier staged build kept in the scene this build was staged into (a structure rebuild the new
+     * district goes around): the run and place it was built by. It is shown as it was, not rebuilt.
+     */
+    keptFrom?: { runId: string; place: string };
 }
 
 /** A cached textured variant of a staged layer (the texture pass's output for that layer). */
@@ -998,6 +1003,25 @@ export const STAGED_DEGRADE_LADDER: readonly DegradeRung[] = [
 // §3.8 (f) The final tool result, its digest and its summary sentence
 // =============================================================================
 
+/** What staging into the active scene kept and removed (StagedLocationResult.activeScene). */
+export interface StagedActiveSceneReport {
+    artifactId: string;
+    /** The earlier build's structure layers kept in the scene, and whether each has a textured twin. */
+    kept: Array<{ objectId: string; layer?: string; source: string; textured: boolean; provenance?: string }>;
+    /** The scene's objects this build took out (its earlier location layers), with why. */
+    removed: Array<{ objectId: string; source: string; why: string }>;
+    /** Objects of the scene that are neither location nor structure layers, kept as they were. */
+    otherObjectsKept: number;
+    keptFromRunId?: string;
+    /** The material mode the kept layers are shown in ('textured' keeps their textured twins on screen). */
+    materialMode?: string;
+    /** How far the kept structure was moved into this build's frame (x east, y up, z south), metres. */
+    offsetM?: Vec3;
+    /** The district's own scan of the structure, taken out of the district layers where the kept structure stands. */
+    footprintHidden?: { cellM: number; cells: number; layers: Array<{ objectId: string; removedTriangles: number; keptTriangles: number }> };
+    note?: string;
+}
+
 export interface StagedLocationResult {
     /** Real data was mounted; with none, the tool throws a hard failure instead. */
     success: true;
@@ -1049,6 +1073,12 @@ export interface StagedLocationResult {
     /** The draft survey's materials and measured colours. */
     /** The background texture pass (textured twins of the staged layers), when it ran. */
     texturePass?: TexturePassRecord;
+    /**
+     * When the build was staged into the active scene: what of that scene it kept and what it took out, by object id, so
+     * nothing is said to have been kept that was not. A structure rebuild an earlier build made is kept (the district goes
+     * around it) unless this build rebuilds the structure at the same place.
+     */
+    activeScene?: StagedActiveSceneReport;
     materialHints?: MaterialHints;
     figures?: FigureRecord[];
     /** Street View images, vision calls and seconds, in all and per stage. */
@@ -1707,7 +1737,8 @@ const DEFINITIONS = {
         textured: obj(['url', 'bytes', 'ladderRung', 'rungShares', 'provenance', 'confidenceChannels', 'builtAtMs', 'cached'], {
             url: STR, bytes: NONNEG_INT, ladderRung: NONNEG_INT, rungShares: arr(ref('unit')), provenance: arr(ref('texelProvenance')),
             confidenceChannels: STR, builtAtMs: NUM, cached: BOOL
-        })
+        }),
+        keptFrom: obj(['runId', 'place'], { runId: STR, place: STR })
     }),
     stageSummary: obj(['stage', 'order', 'title', 'source', 'status', 'layerIds', 'timings', 'degradationIds'], {
         stage: STR, order: INT, title: STR, source: STR, status: ref('stageStatus'), reason: STR,
@@ -1843,6 +1874,14 @@ const DEFINITIONS = {
             slotsOffered: obj(['offered', 'total', 'hidden', 'unseen', 'exposureJudged'], { offered: NONNEG_INT, total: NONNEG_INT, hidden: NONNEG_INT, unseen: NONNEG_INT, exposureJudged: BOOL }),
             registration: obj(['pairs', 'used', 'beforeRmsM', 'afterRmsM', 'perPano', 'setAside'], { pairs: NONNEG_INT, used: NONNEG_INT, beforeRmsM: ref('nonneg'), afterRmsM: ref('nonneg'), perPano: arr(obj(['panoId', 'pairs', 'beforeRmsM', 'afterRmsM', 'dxM', 'dzM', 'dyawDeg', 'dpitchDeg'], { panoId: STR, pairs: NONNEG_INT, beforeRmsM: ref('nonneg'), afterRmsM: ref('nonneg'), dxM: { type: 'number' }, dzM: { type: 'number' }, dyawDeg: { type: 'number' }, dpitchDeg: { type: 'number' } })), setAside: arr(obj(['panoId', 'reason'], { panoId: STR, reason: STR })) }),
             runReadings: obj(['targets', 'read', 'elements', 'replaced', 'skipped'], { targets: NONNEG_INT, read: NONNEG_INT, elements: NONNEG_INT, replaced: NONNEG_INT, skipped: arr(obj(['id', 'kind', 'reason'], { id: STR, kind: STR, slotId: STR, reason: STR })) })
+        }),
+        activeScene: obj(['artifactId', 'kept', 'removed', 'otherObjectsKept'], {
+            artifactId: STR,
+            kept: arr(obj(['objectId', 'source', 'textured'], { objectId: STR, layer: STR, source: STR, textured: BOOL, provenance: STR })),
+            removed: arr(obj(['objectId', 'source', 'why'], { objectId: STR, source: STR, why: STR })),
+            otherObjectsKept: NONNEG_INT, keptFromRunId: STR, materialMode: STR, offsetM: ref('vec3'),
+            footprintHidden: obj(['cellM', 'cells', 'layers'], { cellM: NUM, cells: NONNEG_INT, layers: arr(obj(['objectId', 'removedTriangles', 'keptTriangles'], { objectId: STR, removedTriangles: NONNEG_INT, keptTriangles: NONNEG_INT })) }),
+            note: STR
         }),
         materialHints: ref('materialHints'), texturePass: ref('TexturePassRecord'), figures: arr(ref('figureRecord')),
         photoCost: obj(['total', 'byStage'], { total: ref('stageCost'), byStage: { type: 'object', additionalProperties: ref('stageCost') } }),
