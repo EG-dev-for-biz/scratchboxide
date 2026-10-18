@@ -147,7 +147,17 @@ describe.skipIf(!hasFfmpeg)('batched ffmpeg operations on a real video', () => {
         expect(await getFfmpegCapabilities(FFMPEG)).toBe(caps);
         const out = path.join(DIR, 'out.mp4');
         const res = await editor.quickEdit({ inputPath: VIDEO, outputPath: out, trim: { startSec: 0, durationSec: 1 } });
-        expect(res.commandString).toContain(caps.h264VideoToolbox ? '-c:v h264_videotoolbox' : '-c:v libx264 -preset veryfast');
+        expect(res.commandString).toContain('-c:v libx264 -preset veryfast -crf 20');
+        // The hardware encoder only on request, and only when the capability check proved it works.
+        const saved = process.env.SCRATCHBOX_H264_ENCODER;
+        process.env.SCRATCHBOX_H264_ENCODER = 'videotoolbox';
+        try {
+            const hw = await editor.quickEdit({ inputPath: VIDEO, outputPath: path.join(DIR, 'hw.mp4'), trim: { startSec: 0, durationSec: 1 } });
+            expect(hw.commandString).toContain(caps.h264VideoToolbox ? '-c:v h264_videotoolbox -q:v 65' : '-c:v libx264 -preset veryfast');
+            expect((await editor.probeMedia(path.join(DIR, 'hw.mp4'))).width).toBe(320);
+        } finally {
+            if (saved === undefined) delete process.env.SCRATCHBOX_H264_ENCODER; else process.env.SCRATCHBOX_H264_ENCODER = saved;
+        }
         const pinned = await editor.quickEdit({ inputPath: VIDEO, outputPath: path.join(DIR, 'pinned.mp4'), preset: 'fast', trim: { startSec: 0, durationSec: 1 } });
         expect(pinned.commandString).toContain('-c:v libx264 -preset fast');
         for (const f of [out, path.join(DIR, 'pinned.mp4')]) {

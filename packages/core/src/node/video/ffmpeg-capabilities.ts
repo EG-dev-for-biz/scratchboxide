@@ -10,11 +10,12 @@
 /**
  * What the installed ffmpeg can do, measured once per binary and cached, and the encoder arguments built on it.
  *
- * H.264: libx264 at preset `veryfast` unless the caller names a preset. On macOS, when (and only when) the
- * capability check proves h264_videotoolbox works — it is listed in `ffmpeg -encoders` AND a one-frame test encode
- * with the same flags succeeds — an unpinned encode uses the hardware encoder instead. The choice is made before
- * the encode, never by retrying a failed one, and the encoder is named in the command the caller reports.
- * `SCRATCHBOX_H264_ENCODER=libx264` turns the hardware path off.
+ * H.264: libx264 at preset `veryfast` unless the caller names a preset. Measured on an M1 Ultra (10 s of 1080p30):
+ * x264 veryfast 522 ms, h264_videotoolbox 736 ms, x264 fast 832 ms, medium 970 ms, so the hardware encoder is not
+ * the default. `SCRATCHBOX_H264_ENCODER=videotoolbox` asks for it on macOS; it is used only when the capability check
+ * proves it works (listed in `ffmpeg -encoders` AND a test encode with the same flags succeeds). When it does not,
+ * the encode uses libx264 and a warning names the reason. The choice is made before the encode, never by retrying a
+ * failed one, and the encoder is named in the command the caller reports.
  *
  * VP9: libvpx-vp9 with row multithreading and the `good` deadline at cpu-used 4 (several times faster than the
  * single-threaded default at a small size cost).
@@ -75,9 +76,7 @@ async function measure(binary: string): Promise<FfmpegCapabilities> {
     }
     let h264VideoToolbox = false;
     let note: string;
-    if (process.env.SCRATCHBOX_H264_ENCODER === 'libx264') {
-        note = 'SCRATCHBOX_H264_ENCODER=libx264 disables h264_videotoolbox';
-    } else if (process.platform !== 'darwin') {
+    if (process.platform !== 'darwin') {
         note = `h264_videotoolbox is macOS only (platform ${process.platform})`;
     } else if (!encoders.has('h264_videotoolbox')) {
         note = `${binary} does not list h264_videotoolbox`;
@@ -113,17 +112,23 @@ export function clearFfmpegCapabilityCache(): void {
 }
 
 /**
- * The H.264 encoder for an encode. A caller-named x264 preset pins libx264; otherwise the hardware encoder is used
- * when the capability check proved it works. When ffmpeg cannot be measured, libx264 is chosen and the encode
- * itself reports ffmpeg's error.
+ * The H.264 encoder for an encode: libx264, unless SCRATCHBOX_H264_ENCODER=videotoolbox asks for the hardware
+ * encoder, no x264 preset is named, and the capability check proved it works.
  */
 export async function chooseH264Encoder(binary: string, explicitPreset?: string): Promise<H264Encoder> {
-    if (explicitPreset) return 'libx264';
+    if (explicitPreset || process.env.SCRATCHBOX_H264_ENCODER !== 'videotoolbox') return 'libx264';
+    let caps: FfmpegCapabilities | undefined;
     try {
-        return (await getFfmpegCapabilities(binary)).h264VideoToolbox ? 'h264_videotoolbox' : 'libx264';
-    } catch {
+        caps = await getFfmpegCapabilities(binary);
+    } catch (e: any) {
+        console.warn(`[ffmpeg] SCRATCHBOX_H264_ENCODER=videotoolbox, but ${binary} could not be measured (${e?.message || e}); encoding with libx264`);
         return 'libx264';
     }
+    if (!caps.h264VideoToolbox) {
+        console.warn(`[ffmpeg] SCRATCHBOX_H264_ENCODER=videotoolbox, but ${caps.h264VideoToolboxNote}; encoding with libx264`);
+        return 'libx264';
+    }
+    return 'h264_videotoolbox';
 }
 
 /** `-c:v ...` arguments for an H.264 encode (without -pix_fmt / -movflags). */

@@ -498,9 +498,8 @@ describe('HeadlessVideoEditorService', () => {
             expect(result.success).toBe(true);
             expect(result.commandString).toContain('-framerate 24');
             expect(result.commandString).toContain('-i /workspace/renders/frame_%04d.png');
-            // No preset named: the hardware encoder when the capability check proved it works, else libx264 veryfast.
-            const caps = await getFfmpegCapabilities(service.getFfmpegPath()).catch(() => undefined);
-            expect(result.commandString).toContain(caps?.h264VideoToolbox ? '-c:v h264_videotoolbox -q:v 69' : '-c:v libx264 -preset veryfast -crf 18');
+            // No preset named: libx264 veryfast (the hardware encoder only on request, see ffmpeg-batched-video-ops).
+            expect(result.commandString).toContain('-c:v libx264 -preset veryfast -crf 18');
             expect(result.commandString).toContain('-pix_fmt yuv420p');
             expect(result.commandString).toContain('-movflags +faststart');
 
