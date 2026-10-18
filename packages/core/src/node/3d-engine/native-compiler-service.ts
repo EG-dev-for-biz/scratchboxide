@@ -35,6 +35,8 @@ import {
 const execFileAsync = promisify(execFile);
 
 const pchBuilds = new Map<string, Promise<boolean>>();
+/** PCHs clang rejected (another target, or inputs changed under it): compiles in this process go without them. */
+const rejectedPchs = new Set<string>();
 
 /**
  * Environment for executing generated binaries: the sandbox allowlist (PATH, HOME, TMPDIR, ...)
@@ -103,8 +105,9 @@ export class NativeCppCompilerService {
     }
 
     /**
-     * Path of the Scratchbox C++20 precompiled header, keyed by the compiler identity and the content of
-     * scratchbox_engine.hpp and every header it includes (recursively), so any header edit yields a fresh PCH.
+     * Path of the Scratchbox C++20 precompiled header, keyed by the compiler identity and the content, size and mtime
+     * of scratchbox_engine.hpp and every header it includes (recursively): any header edit yields a fresh PCH, and so
+     * does a touch, because clang rejects a PCH whose inputs' mtimes changed.
      */
     getPchPath(): string {
         const hasher = crypto.createHash('sha256')
@@ -114,7 +117,12 @@ export class NativeCppCompilerService {
         const headerPath = path.join(this.sdkIncludePath, 'scratchbox_engine.hpp');
         try {
             hasher.update(compilerIdentity(this.compilerBinary));
-            hasher.update(hashIncludeClosure({ file: headerPath }, [this.sdkIncludePath]).hash);
+            const closure = hashIncludeClosure({ file: headerPath }, [this.sdkIncludePath]);
+            hasher.update(closure.hash);
+            for (const f of [headerPath, ...closure.files]) {
+                const st = fs.statSync(f);
+                hasher.update(`${f}:${st.size}:${st.mtimeMs}`);
+            }
         } catch {
             // Missing header or compiler: the PCH build fails and compiles go without it.
         }
@@ -247,7 +255,7 @@ export class NativeCppCompilerService {
         }
 
         // The PCH is built at -O3; -O0 would trip clang's __OPTIMIZE__ PCH mismatch check.
-        const usePch = optFlag !== '-O0' && await this.ensurePrecompiledHeader();
+        const usePch = optFlag !== '-O0' && !rejectedPchs.has(this.getPchPath()) && await this.ensurePrecompiledHeader();
         const spec: NativeCompileSpec = {
             sourceCode,
             sourceDir: outputDir,
@@ -287,6 +295,8 @@ export class NativeCppCompilerService {
             // A PCH from another target/architecture is rejected by clang: compile the same source without it.
             const output = err instanceof NativeBuildError ? err.compilerOutput : '';
             if (usePch && /precompiled|PCH/i.test(output)) {
+                // not offered again in this process, so later compiles do not each pay for a failed attempt
+                rejectedPchs.add(spec.pchPath!);
                 try {
                     return finish(await compileNativeCached({ ...spec, pchPath: undefined }));
                 } catch (retryErr) {

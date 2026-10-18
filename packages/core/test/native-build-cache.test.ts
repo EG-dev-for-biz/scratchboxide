@@ -198,18 +198,21 @@ describe('services compile once and pass parameters at run time', () => {
 });
 
 describe('build flags and fingerprints', () => {
-    it('the PCH path follows the content of the engine headers', () => {
+    it('the PCH path follows the engine headers (content, and mtime, which clang checks a PCH against)', () => {
         const inc = path.join(dir, 'pch_inc');
         fs.mkdirSync(inc, { recursive: true });
         fs.writeFileSync(path.join(inc, 'scratchbox_engine.hpp'), '#include "scratchbox_part.hpp"\n');
         fs.writeFileSync(path.join(inc, 'scratchbox_part.hpp'), 'inline int part() { return 1; }\n');
         const compiler = new NativeCppCompilerService(inc);
         const a = compiler.getPchPath();
+        expect(compiler.getPchPath()).toBe(a);
         const later = new Date(Date.now() + 60_000);
         fs.utimesSync(path.join(inc, 'scratchbox_part.hpp'), later, later);
-        expect(compiler.getPchPath()).toBe(a);
+        const b = compiler.getPchPath();
+        expect(b).not.toBe(a);
         fs.writeFileSync(path.join(inc, 'scratchbox_part.hpp'), 'inline int part() { return 2; }\n');
-        expect(compiler.getPchPath()).not.toBe(a);
+        fs.utimesSync(path.join(inc, 'scratchbox_part.hpp'), later, later);
+        expect(compiler.getPchPath()).not.toBe(b);
     });
 
     it('field remesh builds through the cache without -march=native unless SCRATCHBOX_NATIVE_ARCH=1', async () => {
