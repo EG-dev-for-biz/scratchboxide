@@ -105,16 +105,17 @@ function fakeChain(f: ReliefOrthoFacade, fullPng: Buffer, opts: { tierShiftM?: n
                 calls++;
                 const png = Buffer.from(params.contents[0].parts[0].inlineData.data, 'base64');
                 const img = decodeImageInMemory(png);
-                // the crop's column offset in the full ortho (same height, same pixels)
-                let x0 = -1;
-                for (let off = 0; off + img.width <= full.width && x0 < 0; off++) {
-                    let same = true;
-                    for (let y = 0; y < img.height && same; y += 7) for (let x = 0; x < img.width && same; x += 13)
-                        for (let c = 0; c < 3; c++) if (img.rgba[(y * img.width + x) * 4 + c] !== full.rgba[(y * full.width + x + off) * 4 + c]) same = false;
-                    if (same) x0 = off;
-                }
-                if (x0 < 0) throw new Error('the simulated reader could not place the image');
-                const sMin = f.orthoSMin + x0 * f.pixel, sMax = sMin + img.width * f.pixel, tMax = f.orthoTMax, H = img.height * f.pixel;
+                // the crop's place in the full ortho (a band of columns or of rows, same pixels)
+                let x0 = -1, y0 = -1;
+                const same = (ox: number, oy: number) => {
+                    for (let y = 0; y < img.height; y += 7) for (let x = 0; x < img.width; x += 13)
+                        for (let c = 0; c < 3; c++) if (img.rgba[(y * img.width + x) * 4 + c] !== full.rgba[((y + oy) * full.width + x + ox) * 4 + c]) return false;
+                    return true;
+                };
+                if (img.height === full.height) { for (let off = 0; off + img.width <= full.width && x0 < 0; off++) if (same(off, 0)) { x0 = off; y0 = 0; } }
+                else if (img.width === full.width) { for (let off = 0; off + img.height <= full.height && y0 < 0; off++) if (same(0, off)) { x0 = 0; y0 = off; } }
+                if (x0 < 0 || y0 < 0) throw new Error('the simulated reader could not place the image');
+                const sMin = f.orthoSMin + x0 * f.pixel, sMax = sMin + img.width * f.pixel, tMax = f.orthoTMax - y0 * f.pixel, H = img.height * f.pixel;
                 const tiers = new Map<number, Array<[number, number]>>();
                 const bands = new Map<number, [number, number]>();
                 let k = 0;
@@ -122,11 +123,11 @@ function fakeChain(f: ReliefOrthoFacade, fullPng: Buffer, opts: { tierShiftM?: n
                     const a = world(o.s0, o.t0), b = world(o.s1, o.t1);
                     const s0 = Math.min(toS(a), toS(b)), s1 = Math.max(toS(a), toS(b));
                     const t0 = Math.min(toT(a), toT(b)) + (opts.tierShiftM ?? 0), t1 = Math.max(toT(a), toT(b)) + (opts.tierShiftM ?? 0);
-                    const sc = 0.5 * (s0 + s1);
-                    if (sc < sMin || sc > sMax) continue;
+                    const sc = 0.5 * (s0 + s1), tc = 0.5 * (t0 + t1);
+                    if (sc < sMin || sc > sMax || tc > tMax || tc < tMax - H) continue;
                     const j = ((k++ * 5) % 7) - 3;  // -3..3 per-mille
                     const key = Math.round(t0 * 10);
-                    bands.set(key, [((tMax - t1) / H) * 1000 + j, ((tMax - t0) / H) * 1000 - j]);
+                    bands.set(key, [Math.max(0, ((tMax - t1) / H) * 1000 + j), Math.min(1000, ((tMax - t0) / H) * 1000 - j)]);
                     const cols = tiers.get(key) ?? [];
                     // an opening the image cuts is read to the image's edge
                     cols.push([Math.max(0, ((s0 - sMin) / (sMax - sMin)) * 1000 - j), Math.min(1000, ((s1 - sMin) / (sMax - sMin)) * 1000 + j)]);
@@ -220,7 +221,7 @@ describe('facade grammar: a noisy scanned facade with a known grammar', () => {
         expect(facade).toBeDefined();
         const reader = fakeChain(facade, png);
         const pass = await runFacadeGrammarPass({ orthosDir: orthos, chain: reader.chain, overlayDir: SHOTS });
-        expect(reader.calls()).toBe(3);   // the whole facade and each half alone
+        expect(reader.calls()).toBe(5);   // the whole facade and each half alone (left, right, top, bottom)
         const out = pass.facades.find(f => f.facadeId === facade.facadeId)!;
         expect(out.accepted, out.reason).toBe(true);
         expect(out.scan!.passed).toBe(true);

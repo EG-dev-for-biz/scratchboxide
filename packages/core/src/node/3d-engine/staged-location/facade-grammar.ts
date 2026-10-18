@@ -9,18 +9,21 @@
 
 /**
  * Facade grammar: an ordinary facade repeats, and a photo shows how. The vision model reads the facade's openings from a
- * fronto-parallel orthophoto of the tile texture (tile_refine --relief-orthos: every texel already has its metric place on
- * the facade plane, so no camera pose is involved), as tiers of openings, each tier a band along the facade's height with
- * its own opening columns. The reading is fitted to the facade's metric frame as continuous numbers (opening bands per
+ * fronto-parallel orthophoto of the tile texture (tile_refine --relief-orthos: the textured scan within a slab around the
+ * facade plane, projected onto it; every texel already has its metric place, so no camera pose is involved), as tiers of
+ * openings, each tier a band along the facade's height with its own opening columns. One wall plane often carries several
+ * buildings side by side: a tier spans only its own part of the width, and the tiers of neighbouring sections may share
+ * heights. The reading is fitted to the facade's metric frame as continuous numbers (opening bands per
  * storey, bay centres and widths, storey heights), regularised into one lattice per facade, and then measured:
  *
  *  (a) the scan: every opening lies on the measured facade within the fit's residual tolerance (PHOTO_CORRECTION_TOLERANCE_M),
  *      and at least half the windows the relief measured on the scan's own photo texture (tile_refine's observed cells)
  *      fall in the grammar's openings within that tolerance;
- *  (b) held-out evidence: the facade is read again from each half of the orthophoto alone, and the grammar read from one
- *      half predicts the openings of the other. Its edges there must agree with the photo better than the relief's own
- *      lattice does (symmetric edge chamfer lower by HELD_OUT_MIN_CHAMFER_GAIN_PX, structural gradient NCC not lower). The
- *      half it is scored on was not shown to it; the relief's lattice there was made from that very photo.
+ *  (b) held-out evidence: the facade is read again from each half of the orthophoto alone (left, right, top, bottom), and
+ *      the grammar read from one half predicts the openings of the other: bays continue on their rhythm, storeys on their
+ *      pitch. Its edges there must agree with the photo better than the relief's own lattice does (symmetric edge chamfer
+ *      lower by HELD_OUT_MIN_CHAMFER_GAIN_PX, structural gradient NCC not lower, over the four folds). The half it is scored
+ *      on was not shown to it; the relief's lattice there was made from that very photo.
  *
  * Only a grammar passing both is used: tile_refine then takes it as that facade's window lattice (the photo's own cells
  * snap onto it; its other openings are carved only where the photo is no brighter than their frame). Everything it
@@ -46,6 +49,8 @@ export const GRAMMAR_TOLERANCE_M = PHOTO_CORRECTION_TOLERANCE_M;
 /** Facades read per build (the nearest the anchor first). */
 export const MAX_GRAMMAR_FACADES = 12;
 export const MIN_GRAMMAR_FACADE_AREA_M2 = 120;
+/** A facade whose photo covers less of its frame than this is not read. */
+export const MIN_PHOTO_COVERAGE = 0.3;
 /** Below this covered width the facade cannot be split into two halves that each show a repeat. */
 export const MIN_HELD_OUT_WIDTH_M = 8;
 /** Held-out gate: the symmetric edge chamfer must fall by at least this much (ortho px) below the relief's own lattice's... */
@@ -147,12 +152,12 @@ const r3 = (v: number) => Math.round(v * 1000) / 1000;
 
 export function grammarPrompt(widthM: number, heightM: number, crop: boolean): string {
     return [
-        `This is a fronto-parallel orthophoto of ONE building facade, resampled from a photogrammetric 3D scan's photo texture. It is ${widthM.toFixed(1)} m wide and ${heightM.toFixed(1)} m tall; up is up. Uniform grey areas are not covered by the scan${crop ? '; the image is a part of the facade' : ''}.`,
-        'Read the facade\'s grammar: its openings (windows, doors, arches, shopfronts, any glazed or open bay) arranged as horizontal TIERS. A tier is one band of openings that share a top and a bottom edge (usually one storey). For each tier give:',
+        `This is a fronto-parallel orthophoto of a building facade (or of several facades side by side on one street wall), resampled from a photogrammetric 3D scan's photo texture. It is ${widthM.toFixed(1)} m wide and ${heightM.toFixed(1)} m tall; up is up. Uniform grey areas are not covered by the scan${crop ? '; the image is a part of the wall' : ''}.`,
+        'Read the facades\' grammar: their openings (windows, doors, arches, shopfronts, any glazed or open bay) arranged as horizontal TIERS. A tier is one band of openings of one facade that share a top and a bottom edge (usually one storey of one building). Where several buildings stand side by side, give each building its own tiers (a tier then spans only that building\'s part of the width, and tiers of different buildings may overlap in height). For each tier give:',
         '- "y": [top, bottom] of its openings, in per-mille of the image height (0 = top edge, 1000 = bottom edge);',
         '- "cols": every opening of the tier from left to right as [left, right] in per-mille of the image width (0 = left edge, 1000 = right edge). Give each opening its own interval, measured on the glass or the void, not on the surrounding frame or the piers.',
         '- "label": a few words, optional.',
-        'Rules: list only openings you can see in this image; never continue a pattern into grey areas or past the facade\'s edge. Tiers are listed top to bottom and do not overlap. If the facade shows no openings, return an empty "tiers" list.',
+        'Rules: list only openings you can see in this image; never continue a pattern into grey areas or past a facade\'s edge. Openings never overlap. If no openings show, return an empty "tiers" list.',
         'Also give "conf": 0..100, how sure you are of the tiers and openings, and "notes": one short sentence.',
         'Answer with JSON only: {"tiers":[{"y":[t,b],"cols":[[l,r],...],"label":"..."}],"conf":0,"notes":"..."}'
     ].join('\n');
@@ -183,13 +188,13 @@ export function parseGrammarReply(text: string): GrammarReply {
     return { tiers, conf, ...(typeof j.notes === 'string' ? { notes: j.notes.slice(0, 200) } : {}) };
 }
 
-/** The image a reading saw: which ortho pixel columns [x0, x1) it shows and how its per-mille maps to them. */
-export interface ReadWindow { x0: number; x1: number }
+/** The part of the ortho a reading saw, pixels: columns [x0, x1), rows [y0, y1). Its per-mille maps onto it. */
+export interface ReadWindow { x0: number; x1: number; y0: number; y1: number }
 
 /** A reply's tiers in the facade's metric frame. */
 export function replyToPlane(reply: GrammarReply, f: ReliefOrthoFacade, win: ReadWindow): GrammarTier[] {
     const sOf = (x: number) => f.orthoSMin + (win.x0 + (x / 1000) * (win.x1 - win.x0)) * f.pixel;
-    const tOf = (y: number) => f.orthoTMax - (y / 1000) * f.height * f.pixel;
+    const tOf = (y: number) => f.orthoTMax - (win.y0 + (y / 1000) * (win.y1 - win.y0)) * f.pixel;
     return reply.tiers.map(t => ({
         t0: tOf(t.y[1]), t1: tOf(t.y[0]),
         cols: t.cols.map(([a, b]) => [sOf(a), sOf(b)] as [number, number]).sort((p, q) => p[0] - q[0]),
@@ -276,6 +281,39 @@ export function fitGrammar(tiers: GrammarTier[], f: ReliefOrthoFacade, opts: { c
         });
         out.push({ t0, t1, cols, ...(raw.label ? { label: raw.label } : {}) });
     }
+    // per section (tiers over the same part of the width): columns shared, storeys regularised, overlaps settled
+    const tiersOut: GrammarTier[] = [];
+    for (const sec of sections(out)) tiersOut.push(...fitSection(sec));
+    // openings must not overlap across sections either: a later one overlapping a kept one is dropped
+    const kept: GrammarTier[] = [];
+    const cellsKept: Rect[] = [];
+    for (const t of tiersOut.sort((a, b) => b.cols.length - a.cols.length)) {
+        const cols = t.cols.filter(([a, b]) => !cellsKept.some(c => a < c.s1 && b > c.s0 && t.t0 < c.t1 && t.t1 > c.t0));
+        if (!cols.length) continue;
+        kept.push({ ...t, cols });
+        for (const [a, b] of cols) cellsKept.push({ s0: a, s1: b, t0: t.t0, t1: t.t1 });
+    }
+    kept.sort((a, b) => a.t0 - b.t0 || a.cols[0][0] - b.cols[0][0]);
+    return describeGrammar(kept, f, opts.confidence, opts.source, opts.label);
+}
+
+/** Tiers over the same part of the facade's width (their spans overlap by half the narrower one): one section each. */
+export function sections(tiers: GrammarTier[]): GrammarTier[][] {
+    const span = (t: GrammarTier): [number, number] => [Math.min(...t.cols.map(c => c[0])), Math.max(...t.cols.map(c => c[1]))];
+    const parent = tiers.map((_, i) => i);
+    const find = (x: number): number => (parent[x] === x ? x : (parent[x] = find(parent[x])));
+    for (let i = 0; i < tiers.length; i++)
+        for (let j = i + 1; j < tiers.length; j++) {
+            const [a0, a1] = span(tiers[i]), [b0, b1] = span(tiers[j]);
+            const ov = Math.min(a1, b1) - Math.max(a0, b0);
+            if (ov >= 0.5 * Math.min(a1 - a0, b1 - b0)) parent[find(i)] = find(j);
+        }
+    const by = new Map<number, GrammarTier[]>();
+    tiers.forEach((t, i) => { const r = find(i); by.set(r, [...(by.get(r) ?? []), t]); });
+    return [...by.values()];
+}
+
+function fitSection(out: GrammarTier[]): GrammarTier[] {
     // tiers whose openings line up (same count, centres within a third of the width) share one set of columns
     const groups: number[][] = [];
     for (let i = 0; i < out.length; i++) {
@@ -302,7 +340,7 @@ export function fitGrammar(tiers: GrammarTier[], f: ReliefOrthoFacade, opts: { c
     // storeys: tiers of about one opening height (within 20%) share that height, and a run of three or more of them whose
     // spacing is regular (within 10%) is put on one storey pitch (least squares), so the reading's noise per tier averages out
     regulariseStoreys(out);
-    // tiers must not overlap after the fit: an overlapping pair keeps the band of the one with more openings
+    // tiers of one section must not overlap: an overlapping pair keeps the band of the one with more openings
     out.sort((a, b) => a.t0 - b.t0);
     const tiersOut: GrammarTier[] = [];
     for (const t of out) {
@@ -315,7 +353,7 @@ export function fitGrammar(tiers: GrammarTier[], f: ReliefOrthoFacade, opts: { c
         t.cols.sort((a, b) => a[0] - b[0]);
         t.cols = t.cols.filter((c, i) => i === 0 || c[0] > t.cols[i - 1][1]);
     }
-    return describeGrammar(tiersOut, f, opts.confidence, opts.source, opts.label);
+    return tiersOut;
 }
 
 function regulariseStoreys(tiers: GrammarTier[]): void {
@@ -345,7 +383,10 @@ function regulariseStoreys(tiers: GrammarTier[]): void {
 }
 
 export function describeGrammar(tiers: GrammarTier[], f: Pick<ReliefOrthoFacade, 'facadeId' | 'normal' | 'centroid'> & { tMin?: number }, confidence: number, source: string, label?: string): FacadeGrammar {
-    const centres = tiers.map(t => 0.5 * (t.t0 + t.t1));
+    // storey heights: the spacing of the tiers of the widest section (side-by-side sections have their own)
+    const secs = tiers.length ? sections(tiers) : [];
+    const main = secs.sort((a, b) => b.reduce((n, t) => n + t.cols.length, 0) - a.reduce((n, t) => n + t.cols.length, 0))[0] ?? [];
+    const centres = main.map(t => 0.5 * (t.t0 + t.t1)).sort((a, b) => a - b);
     const storeyHeightsM = centres.slice(1).map((c, i) => r3(c - centres[i]));
     const base = f.tMin ?? (tiers[0]?.t0 ?? 0);
     const openings = tiers.map(t => {
@@ -365,24 +406,61 @@ export function grammarCells(g: Pick<FacadeGrammar, 'tiers'>): Rect[] {
 }
 
 /**
- * The grammar continued over [sFrom, sTo]: each tier's openings repeat on their rhythm past the ones read (the openings
- * read stay as read). This is how a reading of one part of a facade predicts the rest.
+ * The grammar continued over a part of the facade (metres): in each tier, the openings repeat on their bay rhythm past the
+ * ones read; in each section, the regular storeys (the most tiers of one opening height on one pitch) repeat on their pitch
+ * above and below, with the columns of their nearest tier, inside the section's own width. This is how a reading of one
+ * part of a facade predicts the rest. The openings read stay as read.
  */
-export function continueGrammar(g: Pick<FacadeGrammar, 'tiers'>, sFrom: number, sTo: number): GrammarTier[] {
-    return g.tiers.map(t => {
+export function continueGrammar(g: Pick<FacadeGrammar, 'tiers'>, area: { s0: number; s1: number; t0: number; t1: number }): GrammarTier[] {
+    const along = (t: GrammarTier): GrammarTier => {
         const rh = bayRhythm(t.cols);
         if (!rh || !(rh.period > 0)) return { ...t, cols: t.cols.map(c => [c[0], c[1]] as [number, number]) };
         const cols: Array<[number, number]> = [];
-        const jMin = Math.floor((sFrom - Math.max(...rh.offsets)) / rh.period) - 1, jMax = Math.ceil((sTo - Math.min(...rh.offsets)) / rh.period) + 1;
+        const jMin = Math.floor((area.s0 - Math.max(...rh.offsets)) / rh.period) - 1, jMax = Math.ceil((area.s1 - Math.min(...rh.offsets)) / rh.period) + 1;
         for (let j = jMin; j <= jMax; j++)
             for (let k = 0; k < rh.group; k++) {
                 const c = rh.offsets[k] + j * rh.period, w = rh.widths[k];
-                if (c + 0.5 * w < sFrom || c - 0.5 * w > sTo) continue;
+                if (c + 0.5 * w < area.s0 || c - 0.5 * w > area.s1) continue;
                 cols.push([c - 0.5 * w, c + 0.5 * w]);
             }
-        cols.sort((a, b) => a[0] - b[0]);
-        return { ...t, cols: cols.filter((c, i) => i === 0 || c[0] > cols[i - 1][1]) };
-    });
+        // the openings read stay as read; the continuation fills only where none was read
+        const read = t.cols.map(c => [c[0], c[1]] as [number, number]);
+        for (const c of cols) if (!read.some(r => c[0] < r[1] && c[1] > r[0])) read.push(c);
+        read.sort((a, b) => a[0] - b[0]);
+        return { ...t, cols: read.filter((c, i) => i === 0 || c[0] > read[i - 1][1]) };
+    };
+    const out: GrammarTier[] = [];
+    for (const sec of sections(g.tiers)) {
+        const tiers = sec.map(along);
+        out.push(...tiers);
+        // the section's regular storeys: the largest group of one opening height (within 20%) whose spacing is one pitch (10%)
+        const sorted = [...sec].sort((a, b) => a.t0 - b.t0);
+        let best: GrammarTier[] = [];
+        for (const t0 of sorted) {
+            const h = t0.t1 - t0.t0;
+            const grp = sorted.filter(t => Math.abs((t.t1 - t.t0) - h) <= 0.2 * h);
+            if (grp.length > best.length) best = grp;
+        }
+        if (best.length < 2) continue;
+        const c = best.map(t => 0.5 * (t.t0 + t.t1));
+        const d = c.slice(1).map((x, j) => x - c[j]);
+        const pitch = median(d);
+        if (!(pitch > 0) || !d.every(x => Math.abs(x - pitch) <= 0.1 * pitch || Math.abs(x / pitch - Math.round(x / pitch)) <= 0.1)) continue;
+        const h = median(best.map(t => t.t1 - t.t0));
+        const lo = best[0], hi = best[best.length - 1];
+        const span: [number, number] = [Math.min(...sec.flatMap(t => t.cols.map(x => x[0]))), Math.max(...sec.flatMap(t => t.cols.map(x => x[1])))];
+        const occupied = (tc: number) => sec.some(t => tc + 0.5 * h > t.t0 && tc - 0.5 * h < t.t1);
+        for (const [from, dir] of [[hi, 1], [lo, -1]] as Array<[GrammarTier, number]>) {
+            const cols = along(from).cols.filter(([a, b]) => b > span[0] && a < span[1]);
+            for (let k = 1; k < 200; k++) {
+                const tc = 0.5 * (from.t0 + from.t1) + dir * k * pitch;
+                if (tc - 0.5 * h > area.t1 || tc + 0.5 * h < area.t0) break;
+                if (occupied(tc)) break;
+                out.push({ t0: tc - 0.5 * h, t1: tc + 0.5 * h, cols: cols.map(x => [x[0], x[1]] as [number, number]) });
+            }
+        }
+    }
+    return out;
 }
 
 // ----------------------------------------------------------------------------------------------------------------
@@ -445,14 +523,24 @@ export function cellDistinctness(o: OrthoRaster, f: ReliefOrthoFacade, c: Rect, 
     return Math.max(dc, de) / Math.max(20, Math.hypot(w[0], w[1], w[2]));
 }
 
-/** The column that splits the covered pixels in two equal halves (the held-out split). */
-export function splitColumn(o: OrthoRaster): number {
-    const perCol = new Float64Array(o.width);
+/** The column (and the row) that splits the covered pixels in two equal halves (the held-out splits). */
+export function splitColumn(o: OrthoRaster): number { return covMedian(o, true); }
+export function splitRow(o: OrthoRaster): number { return covMedian(o, false); }
+function covMedian(o: OrthoRaster, cols: boolean): number {
+    const n = cols ? o.width : o.height;
+    const per = new Float64Array(n);
     let total = 0;
-    for (let y = 0; y < o.height; y++) for (let x = 0; x < o.width; x++) if (o.cov[y * o.width + x]) { perCol[x]++; total++; }
+    for (let y = 0; y < o.height; y++) for (let x = 0; x < o.width; x++) if (o.cov[y * o.width + x]) { per[cols ? x : y]++; total++; }
     let acc = 0;
-    for (let x = 0; x < o.width; x++) { acc += perCol[x]; if (acc >= 0.5 * total) return x + 1; }
-    return o.width >> 1;
+    for (let k = 0; k < n; k++) { acc += per[k]; if (acc >= 0.5 * total) return k + 1; }
+    return n >> 1;
+}
+
+/** Rows of the ortho that hold any covered pixel: [first, last + 1). */
+export function coveredRows(o: OrthoRaster): [number, number] {
+    let a = o.height, b = -1;
+    for (let y = 0; y < o.height; y++) for (let x = 0; x < o.width; x++) if (o.cov[y * o.width + x]) { a = Math.min(a, y); b = Math.max(b, y); break; }
+    return b < a ? [0, 0] : [a, b + 1];
 }
 
 /** Columns of the ortho that hold any covered pixel: [first, last + 1). */
@@ -477,14 +565,14 @@ export interface EdgeAgreement {
 }
 
 /**
- * How well a set of rectangles' outlines agrees with the photo's edges over the covered pixels of columns [xa, xb).
+ * How well a set of rectangles' outlines agrees with the photo's edges over the covered pixels of a window of the ortho.
  * Photo edges: the blurred luminance's gradient maxima across the edge, in the top 15% of the region's magnitudes.
  */
-export function edgeAgreement(o: OrthoRaster, f: ReliefOrthoFacade, cells: Rect[], xa: number, xb: number): EdgeAgreement {
+export function edgeAgreement(o: OrthoRaster, f: ReliefOrthoFacade, cells: Rect[], win: ReadWindow): EdgeAgreement {
     const W = o.width, H = o.height, n = W * H;
     const region = new Uint8Array(n);
     let pixels = 0;
-    for (let y = 0; y < H; y++) for (let x = Math.max(0, xa); x < Math.min(W, xb); x++) { const i = y * W + x; if (o.cov[i]) { region[i] = 1; pixels++; } }
+    for (let y = Math.max(0, win.y0); y < Math.min(H, win.y1); y++) for (let x = Math.max(0, win.x0); x < Math.min(W, win.x1); x++) { const i = y * W + x; if (o.cov[i]) { region[i] = 1; pixels++; } }
     const blurred = gaussianBlur(o.lum, W, H, 1.0);
     const { gx, gy, mag } = sobel(blurred, W, H);
     const mags: number[] = [];
@@ -572,11 +660,9 @@ export function checkAgainstScan(g: FacadeGrammar, f: ReliefOrthoFacade, o: Orth
     const rms = explained ? Math.sqrt(s2 / explained) : 0;
     // frame: half the smallest gap between openings, within 1 px .. 1 m (tile_refine's rule)
     let gap = Infinity;
-    const tiers = [...g.tiers].sort((a, b) => a.t0 - b.t0);
-    for (let i = 0; i < tiers.length; i++) {
-        if (i) gap = Math.min(gap, tiers[i].t0 - tiers[i - 1].t1);
-        for (let k = 1; k < tiers[i].cols.length; k++) gap = Math.min(gap, tiers[i].cols[k][0] - tiers[i].cols[k - 1][1]);
-    }
+    for (let a = 0; a < cells.length; a++)
+        for (let b = a + 1; b < cells.length; b++)
+            gap = Math.min(gap, Math.max(cells[b].s0 - cells[a].s1, cells[a].s0 - cells[b].s1, cells[b].t0 - cells[a].t1, cells[a].t0 - cells[b].t1));
     const frame = Math.max(f.pixel, Math.min(1, Number.isFinite(gap) ? 0.5 * gap : 1));
     let indistinct = 0, judged = 0;
     for (const c of cells) { const k = cellDistinctness(o, f, c, frame); if (k === null) continue; judged++; if (k < MIN_OPENING_DISTINCTNESS) indistinct++; }
@@ -592,8 +678,8 @@ export function checkAgainstScan(g: FacadeGrammar, f: ReliefOrthoFacade, o: Orth
 }
 
 export interface HeldOutFold {
-    /** The ortho columns the reading saw, and the ones it was scored on. */
-    shown: [number, number]; scored: [number, number];
+    /** The part of the ortho the reading saw, and the part it was scored on (pixels). */
+    shown: ReadWindow; scored: ReadWindow;
     /** The openings it predicted there (metres, facade plane). */
     cells: Rect[];
     before: EdgeAgreement;
@@ -613,25 +699,26 @@ export interface HeldOutCheck {
 }
 
 /** (b): each half's reading predicts the other half; scored against the relief's own cells there. */
-export function heldOutCheck(f: ReliefOrthoFacade, o: OrthoRaster, folds: Array<{ shown: [number, number]; scored: [number, number]; grammar: FacadeGrammar | undefined }>): HeldOutCheck {
+export function heldOutCheck(f: ReliefOrthoFacade, o: OrthoRaster, folds: Array<{ shown: ReadWindow; scored: ReadWindow; grammar: FacadeGrammar | undefined }>): HeldOutCheck {
     const before = reliefLatticeCells(f);
     const out: HeldOutFold[] = [];
     for (const fo of folds) {
-        const sA = f.orthoSMin + fo.scored[0] * f.pixel, sB = f.orthoSMin + fo.scored[1] * f.pixel;
-        const predicted = fo.grammar ? grammarCells({ tiers: continueGrammar(fo.grammar, sA, sB) }).filter(c => c.s1 > sA && c.s0 < sB) : [];
-        out.push({ shown: fo.shown, scored: fo.scored, cells: predicted, before: edgeAgreement(o, f, before, fo.scored[0], fo.scored[1]), after: edgeAgreement(o, f, predicted, fo.scored[0], fo.scored[1]), predicted: predicted.length });
+        const area = { s0: f.orthoSMin + fo.scored.x0 * f.pixel, s1: f.orthoSMin + fo.scored.x1 * f.pixel, t0: f.orthoTMax - fo.scored.y1 * f.pixel, t1: f.orthoTMax - fo.scored.y0 * f.pixel };
+        const predicted = fo.grammar ? grammarCells({ tiers: continueGrammar(fo.grammar, area) }).filter(c => c.s1 > area.s0 && c.s0 < area.s1 && c.t1 > area.t0 && c.t0 < area.t1) : [];
+        out.push({ shown: fo.shown, scored: fo.scored, cells: predicted, before: edgeAgreement(o, f, before, fo.scored), after: edgeAgreement(o, f, predicted, fo.scored), predicted: predicted.length });
     }
     const px = out.reduce((s, x) => s + x.before.pixels, 0);
     const avg = (pick: (x: HeldOutFold) => number) => px ? r3(out.reduce((s, x) => s + pick(x) * x.before.pixels, 0) / px) : 0;
     const b = { chamferPx: avg(x => x.before.chamferPx), gradNcc: avg(x => x.before.gradNcc) };
     const a = { chamferPx: avg(x => x.after.chamferPx), gradNcc: avg(x => x.after.gradNcc) };
     const fails: string[] = [];
-    if (!folds.every(x => x.grammar)) fails.push('a half of the facade gave no reading');
+    const missing = folds.filter(x => !x.grammar).length;
+    if (missing > 1) fails.push(`${missing} of the ${folds.length} halves of the facade gave no reading`);
     if (a.chamferPx > b.chamferPx - HELD_OUT_MIN_CHAMFER_GAIN_PX) fails.push(`held-out edge chamfer ${a.chamferPx.toFixed(2)} px against ${b.chamferPx.toFixed(2)} px for the relief's own lattice (needs ${HELD_OUT_MIN_CHAMFER_GAIN_PX} px less)`);
     if (a.gradNcc < b.gradNcc) fails.push(`held-out gradient NCC ${a.gradNcc.toFixed(3)} against ${b.gradNcc.toFixed(3)} for the relief's own lattice`);
     return {
         passed: fails.length === 0,
-        why: fails.length ? fails.join('; ') : `held out: gradient NCC ${b.gradNcc.toFixed(3)} -> ${a.gradNcc.toFixed(3)}, edge chamfer ${b.chamferPx.toFixed(2)} -> ${a.chamferPx.toFixed(2)} px`,
+        why: fails.length ? fails.join('; ') : `held out (${folds.length} halves): gradient NCC ${b.gradNcc.toFixed(3)} -> ${a.gradNcc.toFixed(3)}, edge chamfer ${b.chamferPx.toFixed(2)} -> ${a.chamferPx.toFixed(2)} px`,
         folds: out, before: b, after: a, pixels: px
     };
 }
@@ -640,17 +727,17 @@ export function heldOutCheck(f: ReliefOrthoFacade, o: OrthoRaster, folds: Array<
 // reading
 // ----------------------------------------------------------------------------------------------------------------
 
-/** The ortho columns [x0, x1) as a PNG the model reads (at most GRAMMAR_IMAGE_MAX_SIDE on its long side). */
+/** A window of the ortho as a PNG the model reads (at most GRAMMAR_IMAGE_MAX_SIDE on its long side). */
 export function windowPng(o: OrthoRaster, win: ReadWindow): Buffer {
-    const w0 = win.x1 - win.x0, h0 = o.height;
+    const w0 = win.x1 - win.x0, h0 = win.y1 - win.y0;
     const k = Math.min(1, GRAMMAR_IMAGE_MAX_SIDE / Math.max(w0, h0));
     const w = Math.max(1, Math.round(w0 * k)), h = Math.max(1, Math.round(h0 * k));
     const px = new Uint8Array(w * h * 3);
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
         // box filter over the source footprint
-        const sx0 = win.x0 + Math.floor(x / k), sx1 = Math.max(sx0 + 1, win.x0 + Math.floor((x + 1) / k)), sy0 = Math.floor(y / k), sy1 = Math.max(sy0 + 1, Math.floor((y + 1) / k));
+        const sx0 = win.x0 + Math.floor(x / k), sx1 = Math.max(sx0 + 1, win.x0 + Math.floor((x + 1) / k)), sy0 = win.y0 + Math.floor(y / k), sy1 = Math.max(sy0 + 1, win.y0 + Math.floor((y + 1) / k));
         let r = 0, g = 0, b = 0, n = 0;
-        for (let yy = sy0; yy < Math.min(h0, sy1); yy++) for (let xx = sx0; xx < Math.min(win.x1, sx1); xx++) { const i = (yy * o.width + xx) * 3; r += o.rgb[i]; g += o.rgb[i + 1]; b += o.rgb[i + 2]; n++; }
+        for (let yy = sy0; yy < Math.min(win.y1, sy1); yy++) for (let xx = sx0; xx < Math.min(win.x1, sx1); xx++) { const i = (yy * o.width + xx) * 3; r += o.rgb[i]; g += o.rgb[i + 1]; b += o.rgb[i + 2]; n++; }
         const j = (y * w + x) * 3;
         px[j] = n ? Math.round(r / n) : 128; px[j + 1] = n ? Math.round(g / n) : 128; px[j + 2] = n ? Math.round(b / n) : 128;
     }
@@ -662,15 +749,19 @@ export interface GrammarReading { reply: GrammarReply; tiers: GrammarTier[]; mod
 export async function readGrammar(chain: VisionModelChain<string>, f: ReliefOrthoFacade, o: OrthoRaster, win: ReadWindow): Promise<GrammarReading> {
     const png = windowPng(o, win);
     const r = await chain.generate({
-        contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: png.toString('base64') } }, { text: grammarPrompt((win.x1 - win.x0) * f.pixel, o.height * f.pixel, win.x0 > 0 || win.x1 < o.width) }] }],
+        contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: png.toString('base64') } }, { text: grammarPrompt((win.x1 - win.x0) * f.pixel, (win.y1 - win.y0) * f.pixel, win.x0 > 0 || win.x1 < o.width || win.y0 > 0 || win.y1 < o.height) }] }],
         config: { responseMimeType: 'application/json', temperature: 0 }
     }, { stage: 'grammar' });
     const text = r.response.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '';
     const reply = parseGrammarReply(text);
     r.remember();
     // an opening the image's cut edge runs through is only part of an opening: it is not read (the facade's own edges are kept)
-    const cutLeft = win.x0 > 0, cutRight = win.x1 < o.width;
-    const whole: GrammarReply = { ...reply, tiers: reply.tiers.map(t => ({ ...t, cols: t.cols.filter(([a, b]) => !(cutLeft && a <= 5) && !(cutRight && b >= 995)) })).filter(t => t.cols.length) };
+    const cutLeft = win.x0 > 0, cutRight = win.x1 < o.width, cutTop = win.y0 > 0, cutBottom = win.y1 < o.height;
+    const whole: GrammarReply = {
+        ...reply,
+        tiers: reply.tiers.filter(t => !(cutTop && t.y[0] <= 5) && !(cutBottom && t.y[1] >= 995))
+            .map(t => ({ ...t, cols: t.cols.filter(([a, b]) => !(cutLeft && a <= 5) && !(cutRight && b >= 995)) })).filter(t => t.cols.length)
+    };
     return { reply: whole, tiers: replyToPlane(whole, f, win), model: r.model, ms: r.ms, cached: !!r.cached };
 }
 
@@ -685,13 +776,13 @@ export interface GrammarFacadeOutcome {
     /** Why it was not used (the gate that failed), or what it passed. */
     reason: string;
     grammar?: FacadeGrammar;
-    /** The grammars read from each half alone (left, right): what the held-out check scored. */
+    /** The grammars read from each half alone (left, right, top, bottom): what the held-out check scored. */
     halves?: Array<FacadeGrammar | undefined>;
     scan?: ScanCheck;
     heldOut?: HeldOutCheck;
     /** Openings the relief's own lattice had on the facade. */
     reliefCells: number;
-    readings: Array<{ window: [number, number]; tiers: number; openings: number; conf: number; model: string; ms: number; cached: boolean; error?: string }>;
+    readings: Array<{ window: ReadWindow; tiers: number; openings: number; conf: number; model: string; ms: number; cached: boolean; error?: string }>;
     ms: number;
 }
 
@@ -702,10 +793,10 @@ export interface GrammarPassResult {
     ms: number;
 }
 
-/** The facades worth reading: large enough, covered, nearest the anchor first. */
+/** The facades worth reading: large enough, nearest the anchor first (how much of each the photo covers is judged on its photo). */
 export function selectGrammarFacades(facades: ReliefOrthoFacade[], anchor: { x: number; z: number } = { x: 0, z: 0 }, max = MAX_GRAMMAR_FACADES): ReliefOrthoFacade[] {
     return facades
-        .filter(f => f.area_m2 >= MIN_GRAMMAR_FACADE_AREA_M2 && f.coverage >= 0.3 && f.width >= 16 && f.height >= 16)
+        .filter(f => f.area_m2 >= MIN_GRAMMAR_FACADE_AREA_M2 && f.width >= 16 && f.height >= 16)
         .sort((a, b) => Math.hypot(a.centroid[0] - anchor.x, a.centroid[2] - anchor.z) - Math.hypot(b.centroid[0] - anchor.x, b.centroid[2] - anchor.z) || b.area_m2 - a.area_m2)
         .slice(0, max);
 }
@@ -720,8 +811,8 @@ async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Prom
 }
 
 /**
- * Reads, fits and gates the grammar of each selected facade of a relief ortho export. Three readings per facade: the
- * whole orthophoto (the grammar used) and each half alone (the held-out check). A facade whose reading fails, or whose
+ * Reads, fits and gates the grammar of each selected facade of a relief ortho export. Five readings per facade: the
+ * whole orthophoto (the grammar used) and each half alone, left, right, top and bottom (the held-out check). A facade whose reading fails, or whose
  * grammar fails a gate, keeps the relief's own lattice; the outcome says why.
  */
 export async function runFacadeGrammarPass(opts: {
@@ -734,35 +825,41 @@ export async function runFacadeGrammarPass(opts: {
     const chosen = selectGrammarFacades(all, opts.anchor, opts.maxFacades);
     let calls = 0, done = 0;
     const jobs = chosen.map(f => ({ f }));
-    const results = await pool(jobs, Math.max(1, Math.floor(GRAMMAR_CONCURRENCY / 3)), async ({ f }): Promise<GrammarFacadeOutcome> => {
+    const results = await pool(jobs, Math.max(1, Math.floor(GRAMMAR_CONCURRENCY / 2)), async ({ f }): Promise<GrammarFacadeOutcome> => {
         const tf = Date.now();
         const base: GrammarFacadeOutcome = { facadeId: f.facadeId, areaM2: r3(f.area_m2), accepted: false, reason: '', reliefCells: reliefLatticeCells(f).length, readings: [], ms: 0 };
         try {
             if (opts.signal?.aborted) throw opts.signal.reason ?? new Error('stopped');
             const o = decodeOrtho(fs.readFileSync(path.join(opts.orthosDir, f.image)));
+            let covered = 0;
+            for (let i = 0; i < o.cov.length; i++) covered += o.cov[i];
+            if (covered < MIN_PHOTO_COVERAGE * o.cov.length) return { ...base, reason: `the tile photo covers only ${Math.round((100 * covered) / o.cov.length)}% of the facade`, ms: Date.now() - tf };
             const [ca, cb] = coveredColumns(o);
             const coveredM = (cb - ca) * f.pixel;
             if (coveredM < MIN_HELD_OUT_WIDTH_M) return { ...base, reason: `the facade is ${coveredM.toFixed(1)} m wide where the scan covers it: too narrow to hold half of it out`, ms: Date.now() - tf };
-            const mid = splitColumn(o);
-            const windows: ReadWindow[] = [{ x0: 0, x1: o.width }, { x0: 0, x1: mid }, { x0: mid, x1: o.width }];
+            const mid = splitColumn(o), midRow = splitRow(o), W = o.width, H = o.height;
+            const full: ReadWindow = { x0: 0, x1: W, y0: 0, y1: H };
+            const left: ReadWindow = { x0: 0, x1: mid, y0: 0, y1: H }, right: ReadWindow = { x0: mid, x1: W, y0: 0, y1: H };
+            const top: ReadWindow = { x0: 0, x1: W, y0: 0, y1: midRow }, bottom: ReadWindow = { x0: 0, x1: W, y0: midRow, y1: H };
+            const windows: ReadWindow[] = [full, left, right, top, bottom];
             const reads = await Promise.all(windows.map(async w => {
                 calls++;
                 try { return await readGrammar(opts.chain, f, o, w); } catch (err) { return err instanceof Error ? err : new Error(String(err)); }
             }));
             reads.forEach((r, k) => base.readings.push(r instanceof Error
-                ? { window: [windows[k].x0, windows[k].x1], tiers: 0, openings: 0, conf: 0, model: '', ms: 0, cached: false, error: r.message.slice(0, 200) }
-                : { window: [windows[k].x0, windows[k].x1], tiers: r.tiers.length, openings: r.tiers.reduce((s, t) => s + t.cols.length, 0), conf: r.reply.conf, model: r.model, ms: r.ms, cached: r.cached }));
-            const full = reads[0];
-            if (full instanceof Error) return { ...base, reason: `the reading failed (${full.message.slice(0, 160)})`, ms: Date.now() - tf };
-            if (!full.tiers.length) return { ...base, reason: 'the model read no openings on the facade', ms: Date.now() - tf };
+                ? { window: windows[k], tiers: 0, openings: 0, conf: 0, model: '', ms: 0, cached: false, error: r.message.slice(0, 200) }
+                : { window: windows[k], tiers: r.tiers.length, openings: r.tiers.reduce((s, t) => s + t.cols.length, 0), conf: r.reply.conf, model: r.model, ms: r.ms, cached: r.cached }));
+            const whole = reads[0];
+            if (whole instanceof Error) return { ...base, reason: `the reading failed (${whole.message.slice(0, 160)})`, ms: Date.now() - tf };
+            if (!whole.tiers.length) return { ...base, reason: 'the model read no openings on the facade', ms: Date.now() - tf };
             const fit = (r: GrammarReading) => fitGrammar(r.tiers, f, { confidence: r.reply.conf / 100, source: 'tiles', ...(r.reply.notes ? { label: r.reply.notes } : {}) });
-            const grammar0 = fit(full);
+            const grammar0 = fit(whole);
             const scan = checkAgainstScan(grammar0, f, o);
             const grammar: FacadeGrammar = { ...grammar0, confidence: r3(grammar0.confidence * (scan.judged ? 1 - scan.indistinct / scan.judged : 1)) };
-            const halves = [reads[1], reads[2]].map(r => (r instanceof Error || !r.tiers.length ? undefined : fit(r)));
+            const halves = reads.slice(1).map(r => (r instanceof Error || !r.tiers.length ? undefined : fit(r)));
             const heldOut = heldOutCheck(f, o, [
-                { shown: [0, mid], scored: [mid, o.width], grammar: halves[0] },
-                { shown: [mid, o.width], scored: [0, mid], grammar: halves[1] }
+                { shown: left, scored: right, grammar: halves[0] }, { shown: right, scored: left, grammar: halves[1] },
+                { shown: top, scored: bottom, grammar: halves[2] }, { shown: bottom, scored: top, grammar: halves[3] }
             ]);
             if (opts.overlayDir) {
                 try {

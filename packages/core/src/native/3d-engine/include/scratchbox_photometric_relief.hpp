@@ -178,6 +178,9 @@ struct ReliefParams {
     // contrast) or, failing that, when its core's colour differs from the frame's by at least this share of the frame's
     // brightness (glazing lighter than red brick is still not wall); otherwise the photo shows wall there and it is not.
     double grammarMinDistinct{0.04};
+    // The facade photo (rasterizeSlab): the scene within this many metres behind and in front of the facade plane.
+    double grammarSlabBack{2.5};
+    double grammarSlabFront{0.75};
     // When set, every analysed facade's orthophoto (facade_<id>.png, plain RGB, uncovered pixels mid grey) and its metric
     // frame and cells (facades.json) are written here: the image a grammar is read from, in the frame it is fitted to.
     std::string orthoExportDir;
@@ -1030,25 +1033,28 @@ inline void applyFacadeGrammar(const Orthophoto& o, FacadeAnalysis& fa, const Fa
     fa.grammarConfidence = g.confidence;
     struct Cell { double s0, s1, t0, t1; };
     std::vector<Cell> cells;
-    double gapS = 1e300, gapT = 1e300;
     std::vector<FacadeGrammar::Tier> tiers = g.tiers;
     std::sort(tiers.begin(), tiers.end(), [](const auto& a, const auto& b) { return a.t0 < b.t0; });
-    for (size_t i = 0; i < tiers.size(); ++i) {
-        const auto& T = tiers[i];
+    for (const auto& T : tiers) {
         if (!(T.t1 > T.t0)) { fa.grammarNote = "a tier with no height"; return; }
-        if (i > 0) gapT = std::min(gapT, T.t0 - tiers[i - 1].t1);
-        auto cols = T.cols;
-        std::sort(cols.begin(), cols.end());
-        for (size_t k = 0; k < cols.size(); ++k) {
-            if (!(cols[k].second > cols[k].first)) { fa.grammarNote = "an opening with no width"; return; }
-            if (k > 0) gapS = std::min(gapS, cols[k].first - cols[k - 1].second);
-            cells.push_back({cols[k].first, cols[k].second, T.t0, T.t1});
+        for (const auto& c : T.cols) {
+            if (!(c.second > c.first)) { fa.grammarNote = "an opening with no width"; return; }
+            cells.push_back({c.first, c.second, T.t0, T.t1});
         }
     }
     if (cells.empty()) { fa.grammarNote = "the grammar has no openings"; return; }
-    if (gapS <= 0 || gapT <= 0) { fa.grammarNote = "grammar openings overlap"; return; }
+    // tiers of side-by-side sections may share heights; openings may not overlap. The frame an opening is judged against
+    // is half the smallest clearance to its nearest neighbour (along s or t), within 1 px .. 1 m.
+    double gap = 1e300;
+    for (size_t a = 0; a < cells.size(); ++a)
+        for (size_t b = a + 1; b < cells.size(); ++b) {
+            const double gs = std::max(cells[b].s0 - cells[a].s1, cells[a].s0 - cells[b].s1);
+            const double gt = std::max(cells[b].t0 - cells[a].t1, cells[a].t0 - cells[b].t1);
+            if (gs < 0 && gt < 0) { fa.grammarNote = "grammar openings overlap"; return; }
+            gap = std::min(gap, std::max(gs, gt));
+        }
     const double px = o.pixel;
-    const double frame = std::clamp(0.5 * std::min(gapS, gapT), px, 1.0);
+    const double frame = std::clamp(0.5 * gap, px, 1.0);
     const double sMaxImg = o.sMin + o.width * px, tMinImg = o.tMax - o.height * px;
     // each observed cell goes to the grammar cell holding its centre
     std::vector<std::vector<size_t>> members(cells.size());
@@ -1295,7 +1301,8 @@ inline void latticeRowsAndFill(const Orthophoto& o, FacadeAnalysis& fa, const Re
     fa.features.swap(kept);
 }
 
-inline FacadeAnalysis analyzeOrthophoto(const Orthophoto& o, double texel, const ReliefParams& p, unsigned threads = 1, const FacadeGrammar* grammar = nullptr) {
+inline FacadeAnalysis analyzeOrthophoto(const Orthophoto& o, double texel, const ReliefParams& p, unsigned threads = 1, const FacadeGrammar* grammar = nullptr,
+                                        const Orthophoto* grammarPhoto = nullptr) {
     FacadeAnalysis fa;
     const int W = o.width, H = o.height;
     const double px = o.pixel;
@@ -1705,7 +1712,7 @@ inline FacadeAnalysis analyzeOrthophoto(const Orthophoto& o, double texel, const
         for (const auto& f : rejectedLattice) if (f.lattice == 1 && f.height < 0) observed.push_back(f);
         std::vector<ReliefFeature> before = fa.features;
         fa.features.swap(rest);
-        applyFacadeGrammar(o, fa, *grammar, p, observed);
+        applyFacadeGrammar(grammarPhoto ? *grammarPhoto : o, fa, *grammar, p, observed);
         if (fa.grammarApplied) rejectedLattice.clear();
         else fa.features.swap(before);
     }
@@ -2416,7 +2423,36 @@ private:
         return std::sqrt(samples.back().first);
     }
 
-    Orthophoto rasterize(const Region& R, double px) const {
+    /**
+     * The facade as a photo (ReliefParams::orthoExportDir, and the grammar's photo checks): every scene triangle facing out
+     * of the facade within [-slabBack, slabFront] of its plane, projected along the normal onto the region's frame, the
+     * outermost one per pixel. The region's own orthophoto holds only the triangles on the plane, which on a facade in deep
+     * relief (piers, arches, reveals) is the piers alone; this shows the whole facade as the tile photo sees it.
+     */
+    Orthophoto rasterizeSlab(const Region& R, double px) const {
+        std::vector<uint32_t> tris;
+        std::vector<float> depth;
+        for (uint32_t t = 0; t < wtri_.size(); ++t) {
+            const auto& w = wtri_[t];
+            double s[3], tt[3], h[3];
+            bool in = true;
+            for (int k = 0; k < 3 && in; ++k) {
+                h[k] = R.project(wpos_[w[k]], s[k], tt[k]);
+                in = h[k] >= -p_.grammarSlabBack && h[k] <= p_.grammarSlabFront;
+            }
+            if (!in) continue;
+            if (std::max({s[0], s[1], s[2]}) < R.sMin || std::min({s[0], s[1], s[2]}) > R.sMax || std::max({tt[0], tt[1], tt[2]}) < R.tMin || std::min({tt[0], tt[1], tt[2]}) > R.tMax) continue;
+            const P3 n = (wpos_[w[1]] - wpos_[w[0]]).cross(wpos_[w[2]] - wpos_[w[0]]);
+            if (n.dot(R.n) < 0) continue;  // facing into the building
+            tris.push_back(t);
+            depth.push_back(static_cast<float>((h[0] + h[1] + h[2]) / 3.0));
+        }
+        return rasterizeTris(R, px, tris, &depth);
+    }
+
+    Orthophoto rasterize(const Region& R, double px) const { return rasterizeTris(R, px, R.tris, nullptr); }
+
+    Orthophoto rasterizeTris(const Region& R, double px, const std::vector<uint32_t>& tris, const std::vector<float>* depth) const {
         Orthophoto o;
         o.pixel = px;
         o.sMin = R.sMin;
@@ -2429,7 +2465,10 @@ private:
         o.cov.assign(N, 0);
         const auto& verts = scene_.mesh.vertices;
         const auto& idx = scene_.mesh.indices;
-        for (uint32_t t : R.tris) {
+        std::vector<float> zbuf(depth ? N : 0, -1e30f);
+        for (size_t ti = 0; ti < tris.size(); ++ti) {
+            const uint32_t t = tris[ti];
+            const float tz = depth ? (*depth)[ti] : 0.0f;
             double xs[3], ys[3], us[3], vs[3];
             for (int k = 0; k < 3; ++k) {
                 double s, tt;
@@ -2462,6 +2501,7 @@ private:
                     double w2 = (xs[0] - pxc) * (ys[1] - py) - (xs[1] - pxc) * (ys[0] - py);
                     if (area < 0) { w0 = -w0; w1 = -w1; w2 = -w2; }
                     if (w0 < tol || w1 < tol || w2 < tol) continue;
+                    if (depth) { float& z = zbuf[static_cast<size_t>(y) * o.width + x]; if (tz < z) continue; z = tz; }
                     double sum = w0 + w1 + w2;
                     w0 /= sum; w1 /= sum; w2 /= sum;
                     double rgb[3];
@@ -2668,9 +2708,12 @@ private:
                 if (cosA >= std::cos(p_.grammarMatchAngleDeg * 3.14159265358979323846 / 180.0) && off <= p_.grammarMatchOffset) grammar = &g;
                 else grammarMismatch = "the grammar names facade " + std::to_string(R.id) + " but its plane differs (normal " + detail::fmt(std::acos(std::clamp(cosA, -1.0, 1.0)) * 180.0 / 3.14159265358979323846) + " deg, centroid " + detail::fmt(off) + " m away)";
             }
-            if (!p_.orthoExportDir.empty()) writeOrthoExport(rep, o);
+            // the facade as a photo: what a grammar is read from and checked against (the region's orthophoto holds only the plane)
+            Orthophoto photo;
+            if (!p_.orthoExportDir.empty() || grammar) photo = rasterizeSlab(R, px);
+            if (!p_.orthoExportDir.empty()) writeOrthoExport(rep, photo);
             const auto a0 = Clock::now();
-            rep.analysis = analyzeOrthophoto(o, rep.texel, p_, innerThreads, grammar);
+            rep.analysis = analyzeOrthophoto(o, rep.texel, p_, innerThreads, grammar, grammar ? &photo : nullptr);
             if (grammar && !rep.analysis.grammarGiven) { rep.analysis.grammarGiven = true; rep.analysis.grammarNote = "the facade's photo could not be analysed"; }
             if (!grammar && !grammarMismatch.empty()) { rep.analysis.grammarGiven = true; rep.analysis.grammarNote = grammarMismatch; }
             rep.analysisMs = std::chrono::duration<double, std::milli>(Clock::now() - a0).count();
