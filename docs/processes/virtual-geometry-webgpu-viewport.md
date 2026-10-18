@@ -27,23 +27,46 @@
 ## 2. What Was Tested & What Worked (Verified)
 
 * **Native builder** (`scratchbox_virtual_geometry.hpp`, compiled by `VirtualGeometryBuildService` through `NativeCppCompilerService`).
-  - Colosseum (170,802 triangles) → 5,027 clusters, 5 levels, 5.4 MB, built in 2.2 s.
-  - Arch of Constantine (88,556 triangles) → 2,350 clusters, 9 levels; the coarsest block is 20 KB.
+  - Colosseum (170,802 triangles) → 5,037 clusters, 5 levels, 5,427,828 bytes, built in 1.9 s.
+  - Arch of Constantine (88,556 triangles) → 2,366 clusters, 9 levels, 2,699,676 bytes; the coarsest block is 21,164 bytes.
+  - These numbers are from the deterministic build (format version 2, `-ffp-contract=off`, totally ordered heap ties): the same bytes on arm64 and x86-64 (Arch sha256 `5b6c3045…54e5b0`, Colosseum `90d430cc…64edf9`).
   - Evidence: the `POST /3d/virtual-geometry/build` response (`stats`, `buildMs: 2215`) and the `packages/core/test/virtual-geometry.test.ts` output.
 * **Crack-free LOD.** The tests check every DAG level of a closed bumpy sphere, and every cut the GPU selection rule can pick for several cameras, thresholds and streaming stages. All were closed manifolds: 0 edges with a use count other than 2.
   - Mutation check: with border locking turned off, the same tests fail (2,834 open edges at level 1). The test therefore detects cracks rather than passing vacuously.
-* **Build route.** `POST /3d/virtual-geometry/build {sourceGlbPath, workspaceRoot}` → `200 {success, sbvgUrl: "/build/3d-virtual-geometry/b05b60cd….sbvg", stats}`. The file is served statically from `desktop-app/build/3d-virtual-geometry/`.
+* **Build route.** `POST /3d/virtual-geometry/build {sourceGlbPath, workspaceRoot}` → `200 {success, sbvgUrl: "/build/3d-virtual-geometry/<GLB sha256 prefix>-<builder hash>.sbvg", cached, summary, stats}`. Files are cached in `SCRATCHBOX_VIRTUAL_GEOMETRY_CACHE` (default `<tmpdir>/scratchbox-virtual-geometry`) and served from there.
 * **Streaming.** The `.sbvg` GET returned 200 with 5.2 MB. Levels arrived coarsest first (4 → 3 → 2 → 1 → 0), and the HUD read `Streamed 5/5 levels · 5.2 MB of 5.2 MB`.
 * **Rendering and stats.** Overview HUD: `Triangles drawn: 78,123 of 170,802 at full detail · Clusters drawn: 1,159 of 5,027 · 1 draw call · GPU cull 0.57 ms · draw 134.84 ms` (SwiftShader). Screenshot: the whole site in clay, centred and filling the panel.
 * **Interaction.**
   - Wheel zoom plus drag orbit: 51,399 triangles drawn, close-up of the arena walls. In "LOD levels" shading, the near geometry is level 0.
   - Error slider at 8 px: 26,808 triangles and 330 clusters, for the same view.
-* **Persistence.** Saved `virtualGeometry` = `{sourceGlbPath, sbvgUrl, buildStats{…}, shading}`. After a reload: 0 build POSTs and 1 `.sbvg` GET.
+* **Persistence.** Saved `virtualGeometry` = `{sourceGlbPath, workspaceRoot, sbvgUrl, buildStats{…}, shading}`. On every open the viewport POSTs the source to the build route, which answers from its cache when the GLB and builder are unchanged (one cached POST, one `.sbvg` GET) and rebuilds when either changed, so a saved URL is never trusted blindly.
 * **Missing file.** After deleting the built `.sbvg`, a fresh browser context got `GET … 404` → `POST /build 200` → `GET … 200`, and the scene rendered.
 * **Failure is visible.** With a GLB path outside the active workspace, the route returned `404 {"error":"GLB not found …"}` and the viewport showed a red "Virtual geometry viewport unavailable" panel with that message. No fallback renderer was used.
 * **Checks.** `tsc` passes on core, the desktop app and Electron. `lint:primitives` passes. eslint reports 0 errors. `docs:mcp:check` is up to date. The tool registry, permission and time-budget tests pass.
 
 ---
+
+### Review fixes (2026-10-18, branch `vg-fix`)
+
+| Finding | Fix | Test |
+|---|---|---|
+| `levelTriangles * 95 / 100` wrapped in 32 bits above ~45M triangles and stopped LOD building; level byte offsets were 32-bit | 64-bit size math (`levelReducesEnough`); `.sbvg` version 2 with 64-bit block offset/length (16-word level rows); 32-bit fields throw instead of wrapping; the reader still reads version 1 | `--level-math` harness; v1/v2 header parsing with a >4 GiB offset |
+| Cache key was the GLB hash only, served immutable | URL is `<GLB hash>-<builder hash>` (format version, driver, flags, header text); the viewport always asks the server before loading | changed GLB and edited header give new URLs; load plan |
+| GLB accessor ranges unchecked (negative/huge offsets, counts, strides) | every range checked against the bufferView and BIN chunk in overflow-safe 64-bit arithmetic; JSON literals bounds-checked, nesting capped; typed `GlbFormatError` | 23 malformed GLBs + 400 seeded mutations under UBSan + Guard Malloc (Apple clang 16's ASan runtime aborts at start-up on this macOS; ASan+UBSan is used where it runs). The old loader fails 4 cases with sanitizer reports (stack overflow, SEGV, UB) and accepts 6 invalid files |
+| Strips and fans skipped silently | modes 5 and 6 converted with glTF winding; skipped primitives stored in the header and shown in the HUD and tool summary | winding and counts on a strip + fan + lines GLB |
+| Node graph could expand exponentially | budget of 2^20 node instances plus vertex/triangle caps | 2^48-path node DAG fails in 0.3 s |
+| Stop did not kill the builder | abort signal passed to `execFile` (SIGKILL); tool uses the chat's signal, the route the client's disconnect | the builder process is gone (`pgrep`) after abort |
+| Builds written to `process.cwd()/build` | configurable cache dir with age/size eviction (`SCRATCHBOX_VIRTUAL_GEOMETRY_CACHE`, `…_MAX_MB` default 8192, `…_MAX_AGE_DAYS` default 30) | eviction test; tests use temp dirs |
+| Tool and viewport resolved the path against different roots | tool stores the path relative to its root plus `workspaceRoot`; the viewport sends that root | round trip resolves to the same file |
+| GPU selection never compared with the CPU rule; near rule differed | shared `cluster-selection.ts` (`d <= near`, as the WGSL); `readVisibleClusters()` | GPU set equals the CPU set for 4 cameras × 4 thresholds (Apple Metal) |
+| Output depended on heap tie order | total-order candidate comparison, index tie-break in nearest-point queries, `-ffp-contract=off` | pinned fixture hash; x86-64 (Rosetta) build compared byte for byte |
+| Fake demo pages (`next_gen_astra_viewport_studio.html`, `nanite_meshlet_pathtracing_studio.html`) and dead `scratchbox_meshlet.hpp` | removed with their links, catalog entries and pinning tests | admin and preloaded demo tests assert they are gone |
+
+**Live check (hardware GPU).** App on ports 3061/3062/3063, Browser pane with WebGPU on `apple metal-3`. The agent called `virtual_geometry_open_glb({glbPath: "build/vgeo-verify/colosseum_clay.glb"})`; the build took 1.9 s and the scene saved `workspaceRoot`. Network: one POST aborted by the StrictMode remount, one POST 200 (cached), one `.sbvg` GET 200. No console errors.
+- Overview, clay: 75,921 of 170,802 triangles, 1,149 of 5,037 clusters, 1 draw call, 60 fps, 5.2 MB streamed in 5/5 levels.
+- Zoomed onto the arena wall: 45,351 triangles, 443 clusters.
+- LOD-levels shading at an oblique view: 89,096 triangles, 896 clusters, finest level near the camera and coarser levels (purple) behind.
+- Screenshots: `test-results/screenshots/virtual_geometry/app_colosseum_{overview_clay,zoomed_clay,lod_levels}.jpg`.
 
 ## 3. What Broke / Didn't Work
 
@@ -96,7 +119,9 @@
 | Layer | File |
 |---|---|
 | Builder (C++20) | `packages/core/src/native/3d-engine/include/scratchbox_virtual_geometry.hpp` |
-| Build service, served files, builder driver | `packages/core/src/node/3d-engine/virtual-geometry-service.ts` |
+| Build service, served files, builder driver, cache pruning | `packages/core/src/node/3d-engine/virtual-geometry-service.ts` |
+| CPU copy of the GPU selection rule | `packages/core/src/browser/generative-canvas/services/virtual-geometry/cluster-selection.ts` |
+| What the viewport loads (build request / saved URL) | `packages/core/src/browser/generative-canvas/services/virtual-geometry/viewport-source.ts` |
 | HTTP route | `desktop-app/server/routes/virtualGeometryRoutes.ts` (mounted at `/3d/virtual-geometry`; static `/build/3d-virtual-geometry` in `app.ts`) |
 | Agent tool | `packages/core/src/node/gemini/tools/virtual-geometry-tools.ts` (`virtual_geometry_open_glb`) |
 | File format reader | `packages/core/src/browser/generative-canvas/services/virtual-geometry/sbvg-format.ts` |
