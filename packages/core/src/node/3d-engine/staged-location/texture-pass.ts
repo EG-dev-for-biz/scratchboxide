@@ -44,14 +44,14 @@ import type { Registration } from './pano-registration';
 import type { EvidenceImage } from './streetview-evidence';
 import { buildUvAtlas, type LaidOutUvAtlas } from './texture-uv';
 import { mergeBakedPlanes, transferTilePhoto, type TileTextureSurface } from './tile-texture-transfer';
-import { createPhotoTierCache, rectifyPhotoTier } from './photo-tier-rectify';
+import { createPhotoTierCache, mergePhotoTier, rectifyPhotoTier } from './photo-tier-rectify';
 import type { PhotoTierLayerRecord } from '../../../common/spatial/texture-pass-contracts';
 import { describeLayerFit, leaveOnePanoOut, measureLayerFit, type LayerFit, type LooFit } from './texture-fit-metric';
 import { measureScanDeviation, type ScanDeviation } from './scan-deviation';
 import { round5Enabled } from './round5-switch';
 
 /** Part of every texture cache key: a change to the pass's maths is a new version. */
-export const TEXTURE_PASS_VERSION = `texture-pass/8${process.env.SCRATCHBOX_PHOTO_TIER_OFF === '1' ? '+tier-off' : process.env.SCRATCHBOX_PHOTO_TIER_POSE_ONLY === '1' ? '+tier-pose-only' : ''}`;
+export const TEXTURE_PASS_VERSION = `texture-pass/9${process.env.SCRATCHBOX_PHOTO_TIER_OFF === '1' ? '+tier-off' : ''}`;
 export const RUNG_PALETTE = 3;
 export const RUNG_GENERATED_PBR = 4;
 /** The enhancement rung's own time budget per layer (layers run in parallel inside the stage's 600 s). */
@@ -400,11 +400,12 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
     aborted(src.signal);
 
     // rung 0 above the projection: photo tier A, real Street View pixels rectified onto the fitted planar faces. It runs after
-    // C and D so the held-out score can compare it with them; its texels replace theirs where it has them.
+    // C and D so the held-out score can compare it with them and its exposure can be matched to them. Where at least two panos
+    // agree its texels replace theirs; its single-pano texels only fill what the tile would colour (mergePhotoTier).
     t = Date.now();
     let photoTier: PhotoTierLayerRecord | undefined;
     /** Photo tier A again with a subset of the panos (the leave-one-pano-out fit). */
-    let photoTierLoo: ((views: ProjectionView[]) => Promise<BakedTexturePlanes | undefined>) | undefined;
+    let photoTierLoo: ((views: ProjectionView[], below: BakedTexturePlanes) => Promise<BakedTexturePlanes>) | undefined;
     let photoTierCacheDispose: (() => void) | undefined;
     if (src.photoTier === false) {
         if (src.photoTierUnavailable) degradations.push({ stage: 'photo-tier', reasonCode: 'photo_tier_not_run', layerKey: layer.layerKey, reason: `The rectified photo tier was not run: ${src.photoTierUnavailable}.` });
@@ -413,7 +414,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
         const tierCache = createPhotoTierCache();
         let keepCache = false;
         try {
-            const res = await rectifyPhotoTier({ cacheDir: tierCache.dir,
+            const res = await rectifyPhotoTier({ cache: tierCache,
                 atlas, surfaces: layer.surfaces, views: [...src.views, ...(src.photoTierViews ?? [])], context: src.context, previous: planes,
                 ...(src.tile ? { tile: src.tile, tileMaxDistanceM: Math.max(0.25, 2 * (src.registrationResidualM ?? 0)) } : {}),
                 densityTexelsPerMeter: atlas.layout.stats.texelsPerMeter || src.densityTexelsPerMeter, signal: src.signal, onProgress: progress,
@@ -424,18 +425,22 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
             degradations.push(...res.degradations);
             photoTier = res.record;
             if (countAlpha(res.planes)) {
-                planes = mergeBakedPlanes(planes, res.planes);
+                const merged = mergePhotoTier(planes, res.planes);
+                planes = merged.planes;
+                photoTier = { ...photoTier, merged: { rung0Texels: merged.rung0Texels, rung1Texels: merged.rung1Texels, rung1KeptBelowTexels: merged.rung1KeptBelowTexels, texelShare: (merged.rung0Texels + merged.rung1Texels) / Math.max(1, countCovered(atlas)) } };
                 const all = src.views, extra = src.photoTierViews ?? [], surfaces = layer.surfaces, context = src.context, python = src.photoTier ? src.photoTier.pythonExecutable : undefined;
+                const tile = src.tile, tileMaxDistanceM = Math.max(0.25, 2 * (src.registrationResidualM ?? 0));
                 keepCache = true;
-                photoTierLoo = async views => {
+                photoTierLoo = async (views, below) => {
                     const kept = new Set(views.map(v => v.panoId));
                     const left = new Set(all.map(v => v.panoId).filter(p => !kept.has(p)));
                     const r = await rectifyPhotoTier({
-                        atlas, surfaces, views: [...views, ...extra.filter(v => !left.has(v.panoId))], context, heldOut: false, cacheDir: tierCache.dir,
+                        atlas, surfaces, views: [...views, ...extra.filter(v => !left.has(v.panoId))], context, heldOut: false, cache: tierCache, previous: below,
+                        ...(tile ? { tile, tileMaxDistanceM } : {}),
                         densityTexelsPerMeter: atlas.layout.stats.texelsPerMeter || src.densityTexelsPerMeter, signal: src.signal,
                         ...(python ? { pythonExecutable: python } : {})
                     });
-                    return countAlpha(r.planes) ? r.planes : undefined;
+                    return countAlpha(r.planes) ? mergePhotoTier(below, r.planes).planes : below;
                 };
             }
         } catch (err) {
@@ -494,7 +499,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
             // with photo tier A on the layer, the judged texture is the projection with the tier's texels over it, both made
             // without the judging pano
             const projBake = looBake, tierBake = photoTierLoo;
-            const bake = tierBake ? async (vs: ProjectionView[]) => { const c = await projBake(vs); const a = await tierBake(vs); return a ? mergeBakedPlanes(c, a) : c; } : projBake;
+            const bake = tierBake ? async (vs: ProjectionView[]) => tierBake(vs, await projBake(vs)) : projBake;
             const depth = depthForMesh(judge), views = src.views.filter(v => v.poseQuality > 0);
             const dispose = photoTierCacheDispose;
             measureLoo = dispose ? async (budgetMs?: number) => { try { return await leaveOnePanoOut(atlas, views, bake, depth, src.signal, budgetMs); } finally { dispose(); } }

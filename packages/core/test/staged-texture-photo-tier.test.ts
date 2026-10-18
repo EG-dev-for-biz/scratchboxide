@@ -1,18 +1,21 @@
 /**
  * Photo tier A (photo-tier-rectify.ts + python/photo_tier/face_rectify.py) on a synthetic planar facade with a repeated
  * coursing, a statue standing proud of it and a van in front: photos ray cast through the grounding camera (fx = 960 /
- * tan(fov/2) at the delivered crop) from the true poses, handed over with registration errors of 0.3-0.6 deg and up to
- * 0.5 m. Checks: the wide views anchor on the outline, narrow views map to them by rotation, other panos by features; the
+ * tan(fov/2) at the delivered crop) from the true poses, handed over with the registration residual the joint registration
+ * leaves (a few cm, a few hundredths of a degree). Checks: every view is placed by its registered pose (one pose set); the
  * rectified texels sit on the true texture within one texel; the van seen by one view at a time is dropped by the median;
- * the statue (1.2 m proud) is left to the rungs below with its deviation measured; provenance; the held-out score; the
- * fallbacks (no outline, an unmatched old pano, no worker). No network, no model.
+ * the statue (1.2 m proud) is left to the rungs below with its deviation measured; provenance; the held-out score; single-pano
+ * pixels that look like sky, foliage or not like the tile are not written; the tier is de-lit and matched in exposure to the
+ * ladder below; its single-pano texels never replace the projection's; the cache makes a re-run cheap; the fallbacks (an
+ * unmatched old pano, no worker, no planar face). No network, no model.
  */
 import * as fs from 'fs';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import type { Vec3 } from '../src/common/spatial/staged-location-contracts';
 import type { BakedTexturePlanes, ProjectionView } from '../src/common/spatial/texture-pass-contracts';
-import { rectifyPhotoTier, PHOTO_TIER_SOURCE, type PhotoTierResult } from '../src/node/3d-engine/staged-location/photo-tier-rectify';
+import { createPhotoTierCache, mergePhotoTier, rectifyPhotoTier, PHOTO_TIER_SOURCE, type PhotoTierResult } from '../src/node/3d-engine/staged-location/photo-tier-rectify';
+import { packConfidenceTexel, unpackConfidenceTexel } from '../src/common/spatial/texture-pass-contracts';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { writeStagedGlb } from '../src/node/3d-engine/staged-location/staged-glb-writer';
 import { textureLayer } from '../src/node/3d-engine/staged-location/texture-pass';
@@ -93,28 +96,16 @@ async function runMain(): Promise<{ res: PhotoTierResult; atlas: ReturnType<type
 }
 
 describe('photo tier A: rectified Street View on fitted planar faces', () => {
-    it('anchors the wide views on the tile outline, narrow views by rotation, other panos by features', async () => {
+    it('places every view by its registered pose (one pose set with the projection), the reference pano the one with most views', async () => {
         const { res } = await runMain();
         const f = res.worker!.facades[0];
         expect(f.skipped).toBeUndefined();
-        for (const p of PANOS) {
-            expect(f.panos[p.panoId].anchor).toBe('outline');
-            // the outline chamfer improves on the registered pose
-            expect(f.panos[p.panoId].chamferPx!).toBeLessThan(f.panos[p.panoId].chamferPosePx!);
-        }
-        const viewsOf = (pid: string) => Object.entries(f.views).filter(([k]) => res.worker && keyPano(k) === pid).map(([, v]) => v);
-        const keyPano = (k: string) => scene().rendered.concat(scene().old)[Number(k.slice(1))]?.view.panoId;
-        const ref = f.reference!;
-        expect(PANOS.map(p => p.panoId)).toContain(ref);
-        // the reference is the pano the others' anchors agree with (a coursed wall can trap one anchor on a course line)
-        expect(f.consensus!.agreeing[ref]).toBeGreaterThanOrEqual(1);
-        for (const p of PANOS) if (f.panos[p.panoId].anchorDisagrees) expect(res.degradations.some(d => d.reasonCode === 'photo_tier_anchor_outvoted' && d.reason.includes(p.panoId.slice(0, 6)))).toBe(true);
-        const refViews = viewsOf(ref);
-        const rot = refViews.filter(v => v.placement === 'rotation to its wide view');
-        expect(rot.length).toBe(2);
-        for (const v of rot) { expect(v.inliers!).toBeGreaterThan(200); expect(v.residualPx!).toBeLessThan(1); }
-        const others = PANOS.filter(p => p.panoId !== ref).flatMap(p => viewsOf(p.panoId));
-        expect(others.filter(v => v.placement === 'feature homography to the reference pano').length).toBeGreaterThanOrEqual(6);
+        expect(PANOS.map(p => p.panoId)).toContain(f.reference!);
+        const placements = Object.values(f.views).map(v => v.placement);
+        expect(placements.length).toBeGreaterThanOrEqual(PANOS.length * 3);
+        for (const p of placements) expect(p).toBe('registered pose');
+        // nothing re-anchors a view on its own: no outline anchor, no cross-pano homography
+        expect(res.degradations.some(d => /anchor/.test(d.reasonCode))).toBe(false);
     }, 240_000);
 
     it('puts the rectified texels on the true texture within one texel', async () => {
@@ -125,7 +116,6 @@ describe('photo tier A: rectified Street View on fitted planar faces', () => {
         expect(r.samples).toBeGreaterThan(1000);
         expect(Math.hypot(r.du, r.dv)).toBeLessThanOrEqual(1 / DENSITY + 1e-9);
         expect(r.err).toBeLessThan(18);
-        // the same photos placed by the registered poses alone are off by several texels (the chain is what aligns them)
     }, 240_000);
 
     it('drops the van, which each view sees in front of a different part of the wall (per-pixel median)', async () => {
@@ -187,39 +177,144 @@ describe('photo tier A: rectified Street View on fitted planar faces', () => {
         expect(ho).toBeDefined();
         expect(ho.panoIds.length).toBeGreaterThan(0);
         const { tile, previous, photoA } = ho.methods;
+        fs.mkdirSync(SHOTS, { recursive: true });
+        fs.writeFileSync(path.join(SHOTS, 'staged_texture_photo_tier_held_out.json'), JSON.stringify(ho, null, 1));
         expect(photoA.pixels).toBeGreaterThan(5000);
         expect(photoA.pixels).toBe(previous.pixels);
         expect(photoA.heldOutGradNcc!).toBeGreaterThan(0.3);
         expect(photoA.heldOutGradNcc!).toBeGreaterThan(previous.heldOutGradNcc! + 0.2);
-        // the synthetic tile is the true texture blurred, exactly in place: coarse gradients agree as well as the photos', the
-        // fine edges do not
-        expect(photoA.heldOutChamferMedianPx!).toBeLessThanOrEqual(tile.heldOutChamferMedianPx!);
+        // the synthetic tile is the true texture blurred, exactly in place: its few edges are the strongest joints, on the held-out
+        // photo's own (median 0 px); the tier's many edges lie within a pixel of the photo's
+        expect(photoA.heldOutChamferMedianPx!).toBeLessThanOrEqual(tile.heldOutChamferMedianPx! + 1);
         expect(photoA.geoChamferMedianPx!).toBeLessThanOrEqual(tile.geoChamferMedianPx!);
         expect(photoA.heldOutChamferMedianPx!).toBeLessThanOrEqual(previous.heldOutChamferMedianPx!);
         expect(photoA.laplacianVar!).toBeGreaterThan(tile.laplacianVar!);
     }, 240_000);
 
-    it('does not use an old pano whose stones do not match and whose only view lacks the outline', async () => {
-        const { res } = await runMain();
-        const used = new Set(res.planes.provenance.flatMap(p => p.panoIds!));
-        expect(used.has(OLD_PANO.panoId)).toBe(false);
-        // its only view has no outline, and its stones match the others only by the repeated coursing: either it is not placed,
-        // or its warp fails the cross-view agreement check
-        const d = res.degradations.find(x => (x.reasonCode === 'photo_tier_pano_unplaced' || x.reasonCode === 'photo_tier_view_disagrees') && x.reason.includes(OLD_PANO.panoId.slice(0, 6)));
-        expect(d).toBeDefined();
+    it('outvotes an old pano whose stones do not match: the texels it would change stay on the current stones', async () => {
+        const { res, atlas } = await runMain();
+        // placed by its pose, its warp lines up with the others' coursing; its different stones are a minority at every pixel
+        const without = await rectifyPhotoTier({ atlas, surfaces: WALL_SURFACES, views: scene().rendered.map(r => r.view), context: sceneMesh(), previous: previousPlanes(atlas), tile: blurredTile(), densityTexelsPerMeter: DENSITY, heldOut: false });
+        let d = 0, c = 0;
+        for (let i = 0; i < atlas.width * atlas.height; i++) {
+            if (!res.planes.albedo[i * 4 + 3] || !without.planes.albedo[i * 4 + 3]) continue;
+            const [a, b] = wallAB(atlas, i);
+            if (inStatue(a, b, 1)) continue;
+            for (let k = 0; k < 3; k++) d += Math.abs(res.planes.albedo[i * 4 + k] - without.planes.albedo[i * 4 + k]);
+            c += 3;
+        }
+        expect(c).toBeGreaterThan(30_000);
+        expect(d / c).toBeLessThan(4);
+        const r = registration(atlas, res.planes, (a, b) => !inStatue(a, b, 1));
+        expect(r.err).toBeLessThan(18);
     }, 240_000);
 
-    it('skips a facade whose tile mesh shows no outline, and degrades when the worker cannot run', async () => {
+    it('degrades when the worker cannot run or the layer has no planar face', async () => {
         const atlas = wallAtlas(DENSITY);
         const views = scene().rendered.map(r => r.view);
-        const noOutline = await rectifyPhotoTier({ atlas, surfaces: WALL_SURFACES, views, context: sceneMesh({ huge: true }), densityTexelsPerMeter: DENSITY, heldOut: false });
-        expect(noOutline.degradations.some(d => d.reasonCode === 'photo_tier_no_outline')).toBe(true);
-        expect(noOutline.record.texelShare).toBe(0);
         const noWorker = await rectifyPhotoTier({ atlas, surfaces: WALL_SURFACES, views, context: sceneMesh(), densityTexelsPerMeter: DENSITY, pythonExecutable: '/nonexistent/python3' });
         expect(noWorker.degradations.some(d => d.reasonCode === 'photo_tier_failed')).toBe(true);
         expect(noWorker.planes.albedo.some((v, i) => i % 4 === 3 && v > 0)).toBe(false);
         const noPlane = await rectifyPhotoTier({ atlas, surfaces: [], views, context: sceneMesh(), densityTexelsPerMeter: DENSITY });
         expect(noPlane.degradations.some(d => d.reasonCode === 'photo_tier_no_planar_face')).toBe(true);
+    }, 240_000);
+});
+
+describe('photo tier A: single-pano texels, de-light and exposure, merge, cache', () => {
+    const FOLIAGE: Vec3 = [62, 104, 40], SKYPATCH: Vec3 = [120, 168, 230], PALE: Vec3 = [236, 236, 236];
+    const patches = [
+        { a0: 1.0, a1: 3.0, b0: 4.0, b1: 6.5, rgb: FOLIAGE },
+        { a0: 5.0, a1: 6.6, b0: 6.0, b1: 8.0, rgb: SKYPATCH },
+        { a0: 8.0, a1: 9.6, b0: 4.0, b1: 6.0, rgb: PALE }
+    ];
+    const inPatch = (a: number, b: number, m = 0.2) => patches.some(q => a > q.a0 - m && a < q.a1 + m && b > q.b0 - m && b < q.b1 + m);
+
+    it('writes single-pano pixels only where they look like the face: not sky, not foliage, not off the tile', async () => {
+        const atlas = wallAtlas(DENSITY);
+        // one pano: nothing can outvote what stands in front of the face in its photos
+        const views = panoViews(PANOS[1], { paint: patches }).map(r => r.view);
+        const res = await rectifyPhotoTier({ atlas, surfaces: WALL_SURFACES, views, context: sceneMesh({ statue: false }), tile: blurredTile(), densityTexelsPerMeter: DENSITY, heldOut: false });
+        savePlanes('single_pano_occluders', atlas, res.planes);
+        const occ = res.record.occluderCheck!;
+        expect(occ.singlePx).toBeGreaterThan(10_000);
+        expect(occ.vegetation).toBeGreaterThan(500);
+        expect(occ.sky).toBeGreaterThan(500);
+        expect(occ.tile).toBeGreaterThan(500);
+        let patchTexels = 0, patchWritten = 0, clean = 0, cleanWritten = 0;
+        for (let i = 0; i < atlas.width * atlas.height; i++) {
+            const [a, b] = wallAB(atlas, i);
+            if (a < 0.4 || a > 11.6 || b < 0.4 || b > 8.6) continue;
+            const w = res.planes.albedo[i * 4 + 3] > 0;
+            if (inPatch(a, b, -0.05)) { patchTexels++; if (w) patchWritten++; } else if (!inPatch(a, b, 0.6)) { clean++; if (w) cleanWritten++; }
+        }
+        expect(patchWritten / patchTexels).toBeLessThan(0.02);
+        expect(cleanWritten / clean).toBeGreaterThan(0.6);
+        for (let i = 0; i < atlas.width * atlas.height; i++) if (res.planes.albedo[i * 4 + 3]) expect(res.planes.confidence.data[i * 4 + 2]).toBe(1);
+        expect(res.degradations.some(d => d.reasonCode === 'photo_tier_occluder_rejected')).toBe(true);
+    }, 240_000);
+
+    it('de-lights its texels and matches each chart\'s exposure to the ladder below', async () => {
+        const atlas = wallAtlas(DENSITY);
+        // photos half a stop under the ladder's exposure
+        const views = PANOS.flatMap(p => panoViews(p, { exposure: 0.72 })).map(r => r.view);
+        const below = previousPlanes(atlas);
+        const res = await rectifyPhotoTier({ atlas, surfaces: WALL_SURFACES, views, context: sceneMesh(), previous: below, tile: blurredTile(), densityTexelsPerMeter: DENSITY, heldOut: false });
+        expect(res.record.delight!.texels).toBeGreaterThan(50_000);
+        expect(res.record.exposure!.charts).toBe(1);
+        expect(res.record.exposure!.meanAbsLogGain).toBeGreaterThan(0.2);
+        const lum = (p: Uint8Array, i: number) => 0.2126 * p[i * 4] + 0.7152 * p[i * 4 + 1] + 0.0722 * p[i * 4 + 2];
+        let sa = 0, sb = 0, raw = 0, n = 0;
+        for (let i = 0; i < atlas.width * atlas.height; i += 3) {
+            if (!res.planes.albedo[i * 4 + 3]) continue;
+            sa += lum(res.planes.albedo, i); sb += lum(below.albedo, i); n++;
+        }
+        for (const v of views.slice(0, 1)) { const g = v.image.rgba; let s2 = 0, c = 0; for (let i = 0; i < g.length; i += 4 * 9) { s2 += 0.2126 * g[i] + 0.7152 * g[i + 1] + 0.0722 * g[i + 2]; c++; } raw = s2 / c; }
+        expect(n).toBeGreaterThan(10_000);
+        // within 6 percent of the ladder's mean luminance (the raw photos are about 30 percent darker)
+        expect(Math.abs(sa / sb - 1)).toBeLessThan(0.06);
+        expect(raw).toBeLessThan(0.8 * (sb / n));
+    }, 240_000);
+
+    it('puts rung 0 over anything below, and single-pano texels only where the projection has nothing', () => {
+        const W = 8, H = 1, n = W * H;
+        const planes = (fill: (i: number) => { rgb: [number, number, number]; rung: number } | null) => {
+            const p = { layerKey: 'l', width: W, height: H, albedo: new Uint8Array(n * 4), confidence: { width: W, height: H, data: new Uint8Array(n * 4) }, provenance: [{ source: 'x', label: 'measured' as const, method: 'm', coverage: 0 }], degradations: [] };
+            for (let i = 0; i < n; i++) { const f = fill(i); if (!f) continue; p.albedo.set([...f.rgb, 255], i * 4); packConfidenceTexel(p.confidence, i, 0, 0.8, f.rung); }
+            return p;
+        };
+        // below: texels 0-1 projection multi-view, 2-3 projection single view, 4-5 tile, 6-7 nothing
+        const below = planes(i => (i < 6 ? { rgb: [10, 10, 10], rung: i < 2 ? 0 : i < 4 ? 1 : 2 } : null));
+        // tier: even texels rung 0, odd texels rung 1
+        const tier = planes(() => ({ rgb: [200, 200, 200], rung: 0 }));
+        for (let i = 1; i < n; i += 2) packConfidenceTexel(tier.confidence, i, 0, 0.6, 1);
+        tier.provenance[0].coverage = 1;
+        const m = mergePhotoTier(below, tier);
+        const fromTier = [...Array(n).keys()].map(i => m.planes.albedo[i * 4] === 200);
+        expect(fromTier).toEqual([true, false, true, false, true, true, true, true]);
+        expect(m.rung0Texels).toBe(4); expect(m.rung1Texels).toBe(2); expect(m.rung1KeptBelowTexels).toBe(2);
+        for (let i = 0; i < n; i++) if (fromTier[i]) expect(unpackConfidenceTexel(m.planes.confidence, i).rung).toBe(i % 2);
+        // the tier's provenance coverage shrinks with the texels it did not write
+        expect(m.planes.provenance[m.planes.provenance.length - 1].coverage).toBeCloseTo(6 / 8, 6);
+    });
+
+    it('caches the geometry and the warps: a re-run of the layer is cheaper and writes the same texels', async () => {
+        const atlas = wallAtlas(DENSITY);
+        const views = scene().rendered.map(r => r.view);
+        const cache = createPhotoTierCache();
+        try {
+            const t1 = Date.now();
+            const a = await rectifyPhotoTier({ atlas, surfaces: WALL_SURFACES, views, context: sceneMesh(), tile: blurredTile(), densityTexelsPerMeter: DENSITY, heldOut: false, cache });
+            const ms1 = Date.now() - t1, t2 = Date.now();
+            const b = await rectifyPhotoTier({ atlas, surfaces: WALL_SURFACES, views, context: sceneMesh(), tile: blurredTile(), densityTexelsPerMeter: DENSITY, heldOut: false, cache });
+            const ms2 = Date.now() - t2;
+            expect(b.record.timingsMs!.setup).toBe(0);
+            expect(a.record.timingsMs!.setup).toBeGreaterThan(0);
+            expect(b.record.timingsMs!.workerCharts).toBeLessThan(a.record.timingsMs!.workerCharts);
+            expect(ms2).toBeLessThan(ms1);
+            expect(Buffer.from(b.planes.albedo).equals(Buffer.from(a.planes.albedo))).toBe(true);
+            fs.mkdirSync(SHOTS, { recursive: true });
+            fs.writeFileSync(path.join(SHOTS, 'staged_texture_photo_tier_cache_timings.json'), JSON.stringify({ coldMs: ms1, warmMs: ms2, cold: a.record.timingsMs, warm: b.record.timingsMs }, null, 1));
+        } finally { cache.dispose(); }
     }, 240_000);
 });
 

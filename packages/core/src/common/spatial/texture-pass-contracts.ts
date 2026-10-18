@@ -84,6 +84,16 @@ export interface PhotoTierLayerRecord {
     nonPlanar?: { texelShare: number; p90DeviationM: number; maxDeviationM: number };
     /** Held-out score: 'tile' (tile photo), 'previous' (the ladder without this tier), 'photoA' (this tier without the held-out pano). */
     heldOut?: { panoIds: string[]; mppM: number; methods: Record<string, PhotoTierFitScores> };
+    /**
+     * Single-pano pixels (no second pano to outvote an occluder) checked before they may fill: rejected as sky or vegetation by
+     * colour, or off the tile's low-frequency colour; in the charts' frontal frames at the atlas density.
+     */
+    occluderCheck?: { singlePx: number; rejectedPx: number; sky: number; vegetation: number; tile: number };
+    /** The shared de-light (photogrammetric-delight.ts) over the tier's texels, then per chart an exposure gain to the ladder below. */
+    delight?: { texels: number; meanLiftKept: number; liftHalvedTexels: number };
+    exposure?: { charts: number; meanAbsLogGain: number; maxAbsLogGain: number };
+    /** Once merged into the layer: the tier's rung-0 texels written, its single-pano texels that filled what the tile would have, and those not written because the projection had the texel. */
+    merged?: { rung0Texels: number; rung1Texels: number; rung1KeptBelowTexels: number; texelShare: number };
     timingsMs?: Record<string, number>;
     ms: number;
 }

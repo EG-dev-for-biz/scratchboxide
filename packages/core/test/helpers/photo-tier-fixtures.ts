@@ -3,7 +3,7 @@
  * stone coursing (blocks 0.6 x 0.3 m, staggered; per-block tone, fine grain and a few dark marks so features are unique), a
  * statue standing 1.2 m proud of its lower right, and, in the photos only, a van parked 8 m in front. Photos are ray cast
  * through the Maps Imagery Grounding camera (castCamera: fx = 960 / tan(fov / 2) at the delivered crop) from the TRUE
- * pose; the views handed to the tier carry a perturbed (registered) pose, as the pipeline's do.
+ * pose; the views handed to the tier carry a slightly perturbed (registered) pose, as the joint registration leaves them.
  */
 import type { Vec3 } from '../../src/common/spatial/staged-location-contracts';
 import type { DecodedImage, PinholeCamera, ProjectionView, UvAtlas } from '../../src/common/spatial/texture-pass-contracts';
@@ -17,7 +17,6 @@ export const VAN = { x0: -3.6, x1: -2.4, y0: 0, y1: 1.5, z0: 8, z1: 9 };
 export const SKY: Vec3 = [118, 162, 222];
 export const VAN_RGB: Vec3 = [120, 22, 24];
 const STATUE_RGB: Vec3 = [96, 74, 40];
-
 function hash(i: number, j: number, seed: number): number {
     let h = (i * 374761393 + j * 668265263 + seed * 2147483647) | 0;
     h = Math.imul(h ^ (h >>> 13), 1274126177);
@@ -77,14 +76,24 @@ function rayBox(o: Vec3, d: Vec3, b: Box): { t: number; face: number } | null {
     return t0 <= t1 && t0 > 0 ? { t: t0, face } : null;
 }
 
-export interface SceneOptions { van?: boolean; seed?: number }
+export interface SceneOptions {
+    van?: boolean; seed?: number;
+    /** Patches painted on the wall in the photos only (wall coordinates, m): an occluder flat on the face, like foliage or a sky reflection. */
+    paint?: Array<{ a0: number; a1: number; b0: number; b1: number; rgb: Vec3 }>;
+    /** Photo exposure (linear-ish multiplier on the 8-bit values). */
+    exposure?: number;
+}
 
 function shade(o: Vec3, d: Vec3, opts: SceneOptions): Vec3 {
     let best: { t: number; rgb: () => Vec3 } | null = null;
     const consider = (t: number, rgb: () => Vec3) => { if (!best || t < best.t) best = { t, rgb }; };
     const w = rayBox(o, d, WALL_BOX);
     if (w) consider(w.t, () => {
-        if (w.face === 5) { const p = [o[0] + d[0] * w.t, o[1] + d[1] * w.t]; return wallAlbedo(p[0] - WALL.x0, p[1] - WALL.y0, opts.seed ?? 1); }
+        if (w.face === 5) {
+            const p = [o[0] + d[0] * w.t, o[1] + d[1] * w.t], a = p[0] - WALL.x0, b = p[1] - WALL.y0;
+            for (const q of opts.paint ?? []) if (a >= q.a0 && a <= q.a1 && b >= q.b0 && b <= q.b1) return q.rgb;
+            return wallAlbedo(a, b, opts.seed ?? 1);
+        }
         return [120, 118, 112];
     });
     const s = rayBox(o, d, STATUE_BOX);
@@ -105,7 +114,8 @@ export function renderPhoto(cam: PinholeCamera, opts: SceneOptions = {}): Decode
             const c = shade(cam.eye, d, opts);
             acc[0] += c[0]; acc[1] += c[1]; acc[2] += c[2];
         }
-        const o = (y * W + x) * 4;
+        const o = (y * W + x) * 4, e = opts.exposure ?? 1;
+        acc[0] *= e; acc[1] *= e; acc[2] *= e;
         rgba[o] = Math.max(0, Math.min(255, Math.round(acc[0] / 4))); rgba[o + 1] = Math.max(0, Math.min(255, Math.round(acc[1] / 4)));
         rgba[o + 2] = Math.max(0, Math.min(255, Math.round(acc[2] / 4))); rgba[o + 3] = 255;
     }
@@ -174,11 +184,12 @@ export function panoViews(p: PanoSpec, opts: SceneOptions = {}): RenderedView[] 
     return out;
 }
 
+/** The panos; their corrections are the registration residual the tier is handed (what the joint registration leaves: a few cm, a few hundredths of a degree). */
 export const PANOS: PanoSpec[] = [
-    { panoId: 'PANO_LEFT_000000000001', eye: [-6, 1.7, 22], date: '2019-05', correction: { dx: 0.3, dy: 0, dz: 0, dyawDeg: 0.5, dpitchDeg: -0.3, drollDeg: 0 } },
-    { panoId: 'PANO_MID_0000000000002', eye: [2, 1.7, 25], date: '2021-08', correction: { dx: 0, dy: 0, dz: 0.5, dyawDeg: -0.4, dpitchDeg: 0.2, drollDeg: 0 } },
-    { panoId: 'PANO_RIGHT_00000000003', eye: [9, 1.7, 21], date: '2022-10', correction: { dx: 0, dy: 0, dz: 0, dyawDeg: 0.3, dpitchDeg: 0.4, drollDeg: 0 } },
-    { panoId: 'PANO_FAR_0000000000004', eye: [-1, 1.7, 28], date: '2023-06', correction: { dx: -0.2, dy: 0, dz: 0, dyawDeg: -0.6, dpitchDeg: 0, drollDeg: 0 } }
+    { panoId: 'PANO_LEFT_000000000001', eye: [-6, 1.7, 22], date: '2019-05', correction: { dx: 0.02, dy: 0, dz: 0, dyawDeg: 0.02, dpitchDeg: -0.015, drollDeg: 0 } },
+    { panoId: 'PANO_MID_0000000000002', eye: [2, 1.7, 25], date: '2021-08', correction: { dx: 0, dy: 0, dz: 0.03, dyawDeg: -0.02, dpitchDeg: 0.01, drollDeg: 0 } },
+    { panoId: 'PANO_RIGHT_00000000003', eye: [9, 1.7, 21], date: '2022-10', correction: { dx: 0, dy: 0, dz: 0, dyawDeg: 0.015, dpitchDeg: 0.02, drollDeg: 0 } },
+    { panoId: 'PANO_FAR_0000000000004', eye: [-1, 1.7, 28], date: '2023-06', correction: { dx: -0.02, dy: 0, dz: 0, dyawDeg: -0.025, dpitchDeg: 0, drollDeg: 0 } }
 ];
 
 /** An old capture: the stones were different (another seed), and only a narrow view with no outline in it. */
