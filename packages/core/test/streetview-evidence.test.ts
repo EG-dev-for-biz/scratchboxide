@@ -14,6 +14,7 @@
  * into an image at its nominal pose, with occlusion. No network: a fake fetch and a fake grounding service.
  */
 
+import { imageContentSha256 } from '../src/node/image-codec-ffmpeg';
 import { describe, it, expect, vi, afterAll } from 'vitest';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
@@ -176,7 +177,8 @@ describe('Street View evidence', () => {
         for (const img of r.images) {
             // the bytes sent are the bytes received, and the size came from the header
             expect(img.bytes.equals(sent.get(img.view.panoId)!)).toBe(true);
-            expect(img.sha256).toBe(crypto.createHash('sha256').update(sent.get(img.view.panoId)!).digest('hex'));
+            // the content hash: the JPEG without its metadata segments (the grounding API re-signs each answer)
+            expect(img.sha256).toBe(imageContentSha256(sent.get(img.view.panoId)!));
             expect([img.widthPx, img.heightPx]).toEqual(img.view.aspectRatio === 'RATIO_3X4' ? [480, 640] : [640, 480]);
             expect(img.id).toBe(`sv:${img.view.panoId}:${img.view.headingDeg}:${img.view.pitchDeg}:${img.view.fovDeg}`);
             // the grounding camera: fx = 960 / tan(fov / 2) at the delivered crop (groundingFocalPx)

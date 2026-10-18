@@ -33,6 +33,7 @@
  */
 
 import { spawn, spawnSync } from 'child_process';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -59,6 +60,33 @@ export function sniffImageFormat(buf: Buffer | Uint8Array): EncodedImageFormat {
     if (buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'png';
     if (buf.length >= 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') return 'webp';
     return 'unknown';
+}
+
+/**
+ * sha256 of an image's content: for a JPEG, every byte but its APP0-APP15 and COM segments (metadata: the grounding API
+ * signs each answer with a fresh content-credentials APP11 segment, so the same view's file differs every time while its
+ * pixels do not); any other bytes whole. Two answers with the same digest decode to the same pixels.
+ */
+export function imageContentSha256(buf: Buffer | Uint8Array): string {
+    const b = Buffer.isBuffer(buf) ? buf : Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength);
+    const h = crypto.createHash('sha256');
+    if (sniffImageFormat(b) !== 'jpeg') return h.update(b).digest('hex');
+    h.update(b.subarray(0, 2));
+    let i = 2;
+    while (i + 4 <= b.length && b[i] === 0xff) {
+        const m = b[i + 1];
+        // start of scan: the entropy-coded data to the end is content
+        if (m === 0xda) { h.update(b.subarray(i)); return h.digest('hex'); }
+        // a marker with no length (RSTn, TEM, fill bytes) is kept as it is
+        if ((m >= 0xd0 && m <= 0xd7) || m === 0x01 || m === 0xff) { h.update(b.subarray(i, i + 2)); i += m === 0xff ? 1 : 2; continue; }
+        const end = i + 2 + b.readUInt16BE(i + 2);
+        if (end > b.length) break;
+        if (!((m >= 0xe0 && m <= 0xef) || m === 0xfe)) h.update(b.subarray(i, end));
+        i = end;
+    }
+    // not a well-formed header: the rest whole
+    h.update(b.subarray(i));
+    return h.digest('hex');
 }
 
 /**

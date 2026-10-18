@@ -24,7 +24,8 @@ import { capImageSide } from '../src/node/3d-engine/staged-location/ornament-bat
 import { memoizeGrounding, type PanoCandidate } from '../src/node/3d-engine/staged-location/streetview-evidence';
 import { readFigure, type FigureImage } from '../src/node/3d-engine/staged-location/figures';
 import { StageCache, stagedReplyCache } from '../src/node/3d-engine/staged-location/stage-cache';
-import { readImageDimensions } from '../src/node/image-codec-ffmpeg';
+import { imageContentSha256, readImageDimensions } from '../src/node/image-codec-ffmpeg';
+import * as crypto from 'crypto';
 import { bandJpeg, figuresReply, GREY, perFaceSurveyReply, SKY, STONE, surveyReply } from './helpers/photo-ornament-fixtures';
 
 const memoryCache = (): VisionReplyCache & { map: Map<string, VisionReplyRecord> } => {
@@ -160,6 +161,29 @@ describe('a call whose first token is late is sent once more', () => {
         await new Promise(r => setTimeout(r, 600));
         expect(c.calls()).toBe(1);
         expect(chain.attempts[0].hedged).toBeUndefined();
+    });
+});
+
+describe('an image is known by its content, not its metadata', () => {
+    /** The JPEG with an APP11 segment of `payload` after SOI, as the grounding API signs each answer afresh. */
+    const resigned = (jpeg: Buffer, payload: Buffer) => {
+        const len = Buffer.alloc(2); len.writeUInt16BE(payload.length + 2);
+        return Buffer.concat([jpeg.subarray(0, 2), Buffer.from([0xff, 0xeb]), len, payload, jpeg.subarray(2)]);
+    };
+    it('the same pixels with differently signed metadata have one digest (and one reply cache key); other pixels another', async () => {
+        const img = bandJpeg([SKY, STONE]);
+        const a = resigned(img, crypto.randomBytes(300)), b = resigned(img, crypto.randomBytes(300));
+        expect(crypto.createHash('sha256').update(a).digest('hex')).not.toBe(crypto.createHash('sha256').update(b).digest('hex'));
+        expect(imageContentSha256(a)).toBe(imageContentSha256(b));
+        expect(imageContentSha256(a)).toBe(imageContentSha256(img));
+        expect(imageContentSha256(bandJpeg([SKY, GREY]))).not.toBe(imageContentSha256(img));
+        const c = slowClient(1, () => '{}');
+        const cache = memoryCache();
+        const req = (bytes: Buffer) => ({ contents: [{ role: 'user', parts: [{ text: 'q' }, { inlineData: { mimeType: 'image/jpeg', data: bytes.toString('base64') } }] }] });
+        (await new VisionModelChain<string>({ client: c.client, candidates: ['m'], replyCache: cache }).generate(req(a), { stage: 's', stream: true })).remember();
+        const r = await new VisionModelChain<string>({ client: c.client, candidates: ['m'], replyCache: cache }).generate(req(b), { stage: 's', stream: true });
+        expect(r.cached).toBe(true);
+        expect(c.calls()).toBe(1);
     });
 });
 

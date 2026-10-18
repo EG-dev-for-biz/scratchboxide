@@ -35,6 +35,7 @@ import { fetchStreetViewPanoMetadata } from '../../spatial/StreetViewPanoramaPro
 import { groundingPitchForElevation, isGoogleCapture, type GroundingAspectRatio, type GroundingImage, type GroundingImageRequest } from '../../spatial/StreetViewGroundingImageService';
 import { geodeticToScan, scanToGeodetic, type GeodeticOrigin, type GroundModel } from '../../spatial/StreetViewSurveyPlanner';
 import { readJpegSize } from '../../spatial/StreetViewPoseRegistrar';
+import { imageContentSha256 } from '../../image-codec-ffmpeg';
 import type { StructurePickResult } from './extraction-sizing';
 
 const DEG = Math.PI / 180;
@@ -304,7 +305,9 @@ export async function fetchViews(views: SelectedView[], deps: StreetViewEvidence
             }, combined);
             const size = readJpegSize(img.image);
             if (!size) throw new Error('the grounding image is not a JPEG with a readable size');
-            const sha256 = crypto.createHash('sha256').update(img.image).digest('hex');
+            // the image's content hash (its pixels' JPEG without metadata): the grounding API re-signs every answer with a fresh
+            // metadata segment, so a hash of the whole file would differ for the same view on every fetch
+            const sha256 = imageContentSha256(img.image);
             return {
                 ok: true as const,
                 image: {

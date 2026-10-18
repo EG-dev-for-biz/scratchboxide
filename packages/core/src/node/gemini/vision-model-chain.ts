@@ -30,6 +30,7 @@
 import * as crypto from 'crypto';
 import type { GenerateContentParameters, GenerateContentResponse } from '@google/genai';
 import { classifyMediaGenerationError } from '../../common/media-generation-protocol';
+import { imageContentSha256 } from '../image-codec-ffmpeg';
 import { isModelNotFoundError } from './gemini-client';
 import { describeThinking, thinkingConfigFor, type GeminiThinkingConfig } from './thinking-config';
 
@@ -93,7 +94,8 @@ export function visionRequestKey(params: Omit<GenerateContentParameters, 'model'
         h.update('\0r').update(c.role ?? '');
         for (const p of c.parts ?? []) {
             const inline = p.inlineData as { mimeType?: string; data?: string } | undefined;
-            if (inline) h.update('\0i').update(inline.mimeType ?? '').update('\0').update(inline.data ?? '');
+            // an image by its content (a JPEG without its metadata segments): the same pixels re-sent with a freshly signed header are the same request
+            if (inline) h.update('\0i').update(inline.mimeType ?? '').update('\0').update(imageContentSha256(Buffer.from(inline.data ?? '', 'base64')));
             else h.update('\0p').update(JSON.stringify(p));
         }
     }

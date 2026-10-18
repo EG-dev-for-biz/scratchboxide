@@ -40,7 +40,7 @@ import { IMAGE_MODEL_ASPECT_RATIOS, IMAGE_MODEL_PRIORITY, nearestImageAspectRati
 import { generateImageWithModels } from '../../google-media-generation-service';
 import { MediaModelUnavailableError } from '../../../common/errors/pipeline-errors';
 import { encodePng } from '../../texture-processing';
-import { encodeRgbaToJpeg } from '../../image-codec-ffmpeg';
+import * as jpegJs from 'jpeg-js';
 import { blur1, ciede2000, edgeMap, exactDistanceTransform, laplacianVariance, linearRgbToLab, maskedNcc } from '../../spatial/StreetViewStage3Metrics';
 import { SRGB8_TO_LINEAR } from '../../../common/spatial/photogrammetric-delight';
 import { decodeImageInMemory, TILE_TRANSFER_RUNG, type RgbaImage8 } from './tile-texture-transfer';
@@ -467,10 +467,11 @@ export async function enhanceTransferredAtlas(input: EnhanceTransferInput): Prom
             image: { mimeType: 'image/png', bytes: png(sent), width: sent.width, height: sent.height },
             // the references only ground the model in what the surface looks like: JPEG at ENHANCE_REFERENCE_MAX_SIDE is plenty, and
             // much less to send than a lossless crop of up to maxSide (the crop being enhanced stays lossless at maxSide)
-            references: await Promise.all(refs.map(async r => {
+            // (encoded in this thread, so the requests go out in the jobs' order)
+            references: refs.map(r => {
                 const ref = boxDownsample(cropRgba(r.view.image, r.rect), Math.min(maxSide, input.maxReferenceSide ?? ENHANCE_REFERENCE_MAX_SIDE));
-                return { panoId: r.view.panoId, mimeType: 'image/jpeg' as const, bytes: await encodeRgbaToJpeg(Buffer.from(ref.rgba.buffer, ref.rgba.byteOffset, ref.rgba.byteLength), ref.width, ref.height, { quality: 90 }) };
-            })),
+                return { panoId: r.view.panoId, mimeType: 'image/jpeg' as const, bytes: new Uint8Array(jpegJs.encode({ data: Buffer.from(ref.rgba.buffer, ref.rgba.byteOffset, ref.rgba.byteLength), width: ref.width, height: ref.height }, 90).data) };
+            }),
             signal
         };
         let answer: EnhanceModelAnswer;
