@@ -19,6 +19,9 @@
  *  3. weight w = cos^2(incidence) * min(1, s / GSD) * poseQuality * edgeFeather * poseSigmaTerm, zero inside
  *     redaction rects and below cos 0.15; GSD = z / (fx cos) is the view's ground sample distance on the surface, so a
  *     view resolving finer than the texel gains nothing more; poseSigmaTerm = 1 / (1 + (sigma_m / 2 m)^2), sigma_m the pose error on the surface;
+ *  3a. sample the photo over the texel's footprint (the texel square through the projection's Jacobian; a grid of bilinear
+ *     taps about a pixel apart, from a pyramid level for large footprints), not at its centre: the close-up crops resolve
+ *     ~6 px per 5 cm texel, where a point sample aliases (moire); a footprint within a pixel is the bilinear point sample;
  *  4. de-light each view's samples (optional, needs a place and a capture time): divide by the solar irradiance E(n) of
  *     the view's own sun relative to its mean (AlgorithmicUvEngine's NOAA ephemeris + SH9 sky helpers), then after the blend
  *     lift shadows / compress highlights with the shared photogrammetric de-light function (delightLinearRgb);
@@ -98,6 +101,12 @@ export interface ProjectionBakeOptions {
     /** Huber threshold (CIE76 Delta E) and the view count it starts at. Default 10 and 3. */
     huberDeltaE?: number;
     huberMinViews?: number;
+    /**
+     * Footprint-filtered sampling: each texel's colour is the photo averaged over the texel's projected footprint (the
+     * square of side sizeM on the surface, through the projection's Jacobian) instead of a point sample at its centre, so a
+     * view resolving several pixels per texel does not alias (moire on coursing and mullions). Default true; false point-samples.
+     */
+    footprint?: boolean;
     /** Gaussian sigmas (texels) between the bands of the seam blend. Default [1, 2, 4, 12, 32]. Empty disables the band blend. */
     bandSigmasTexels?: number[];
     /**
@@ -222,7 +231,7 @@ export function poseSigmaTerm(poseSigmaPx: number, z: number, gsdM: number): num
     return 1 / (1 + (sigmaM / POSE_SIGMA_SCALE_M) ** 2);
 }
 
-interface RawSamples { texel: number[]; rgb: number[]; logW: number[]; wAbs: number[]; x: number[]; y: number[]; /** Samples the context geometry removed that the occluder alone kept: hidden, seen past, at an edge. */ caught?: [number, number, number] }
+interface RawSamples { texel: number[]; rgb: number[]; logW: number[]; wAbs: number[]; x: number[]; y: number[]; /** Per sample: the footprint's major axis (px vector) and minor width (px); absent when point-sampled. */ fp?: number[]; /** Samples the context geometry removed that the occluder alone kept: hidden, seen past, at an edge. */ caught?: [number, number, number] }
 
 /** Why a texel is not seen by a view (visibility codes). */
 const VIS_OK = 0, VIS_OCCLUDED = 1, VIS_SEEN_PAST = 2, VIS_EDGE = 3;
@@ -245,6 +254,106 @@ function sampleLinear(view: ProjectionView, x: number, y: number, out: Float64Ar
     }
 }
 
+/**
+ * Most bilinear taps per footprint sample. A footprint needing more (one tap per pixel along each of its axes) is read from
+ * the pyramid level where it does not.
+ */
+export const FOOTPRINT_MAX_TAPS = 32;
+
+/**
+ * A view photo's pyramid in linear RGB: entry k (k >= 1) is the 2^k x 2^k box mean of the photo; entry 0 is empty (level 0
+ * is read from the photo itself, so the pyramid costs a third of the photo's pixels).
+ */
+interface LinearLevel { w: number; h: number; rgb: Float32Array }
+const PYRAMIDS = new WeakMap<object, LinearLevel[]>();
+function pyramidOf(view: ProjectionView): LinearLevel[] {
+    const img = view.image;
+    let levels = PYRAMIDS.get(img);
+    if (levels) return levels;
+    levels = [{ w: img.width, h: img.height, rgb: new Float32Array(0) }];
+    let w = img.width, h = img.height;
+    const px = (src: LinearLevel | undefined, i: number, c: number): number => (src ? src.rgb[i * 3 + c] : SRGB_TO_LINEAR[img.rgba[i * 4 + c]]);
+    let src: LinearLevel | undefined;
+    while (w > 1 || h > 1) {
+        const nw = Math.max(1, w >> 1), nh = Math.max(1, h >> 1), dst = new Float32Array(nw * nh * 3);
+        for (let y = 0; y < nh; y++) for (let x = 0; x < nw; x++) {
+            const xa = Math.min(w - 1, 2 * x), xb = Math.min(w - 1, 2 * x + 1), ya = Math.min(h - 1, 2 * y), yb = Math.min(h - 1, 2 * y + 1);
+            for (let c = 0; c < 3; c++) dst[(y * nw + x) * 3 + c] = 0.25 * (px(src, ya * w + xa, c) + px(src, ya * w + xb, c) + px(src, yb * w + xa, c) + px(src, yb * w + xb, c));
+        }
+        src = { w: nw, h: nh, rgb: dst };
+        levels.push(src);
+        w = nw; h = nh;
+    }
+    PYRAMIDS.set(img, levels);
+    return levels;
+}
+
+/** Bilinear lookup at image coordinates (x, y) of the photo (pixel centres at +0.5) in pyramid level k. */
+function sampleLevel(view: ProjectionView, levels: LinearLevel[], k: number, x: number, y: number, out: Float64Array): void {
+    if (k <= 0) { sampleLinear(view, x, y, out); return; }
+    const kk = Math.min(levels.length - 1, k), L = levels[kk], s = 1 / (1 << kk);
+    const fx = Math.min(L.w - 1, Math.max(0, x * s - 0.5)), fy = Math.min(L.h - 1, Math.max(0, y * s - 0.5));
+    const x0 = Math.floor(fx), y0 = Math.floor(fy), x1 = Math.min(L.w - 1, x0 + 1), y1 = Math.min(L.h - 1, y0 + 1);
+    const ax = fx - x0, ay = fy - y0, a = L.rgb;
+    const i00 = (y0 * L.w + x0) * 3, i10 = (y0 * L.w + x1) * 3, i01 = (y1 * L.w + x0) * 3, i11 = (y1 * L.w + x1) * 3;
+    for (let c = 0; c < 3; c++) out[c] = (a[i00 + c] * (1 - ax) + a[i10 + c] * ax) * (1 - ay) + (a[i01 + c] * (1 - ax) + a[i11 + c] * ax) * ay;
+}
+
+/**
+ * The texel's footprint in the image: the square of side `sizeM` on the surface through the projection's Jacobian. Its
+ * covariance (box of side s: s^2 / 12 per tangent axis) is s^2 / 12 * (J1 J1^T + J2 J2^T), J1 and J2 the image motion per
+ * metre along two orthonormal surface tangents; the box widths along its principal axes are s * sqrt(eigenvalues).
+ * Returns [major x, major y] (the major axis as a pixel vector of its width) and the minor width, px.
+ */
+export function texelFootprintPx(cam: { fx: number; fy: number; right: Vec3; up: Vec3; fwd: Vec3 }, d: Vec3, z: number, n: Vec3, sizeM: number): [number, number, number] {
+    const a: Vec3 = Math.abs(n[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+    let t1: Vec3 = [a[1] * n[2] - a[2] * n[1], a[2] * n[0] - a[0] * n[2], a[0] * n[1] - a[1] * n[0]];
+    const l1 = Math.hypot(t1[0], t1[1], t1[2]) || 1; t1 = [t1[0] / l1, t1[1] / l1, t1[2] / l1];
+    const t2: Vec3 = [n[1] * t1[2] - n[2] * t1[1], n[2] * t1[0] - n[0] * t1[2], n[0] * t1[1] - n[1] * t1[0]];
+    const dr = d[0] * cam.right[0] + d[1] * cam.right[1] + d[2] * cam.right[2], du = d[0] * cam.up[0] + d[1] * cam.up[1] + d[2] * cam.up[2];
+    const jac = (t: Vec3): [number, number] => {
+        const tz = t[0] * cam.fwd[0] + t[1] * cam.fwd[1] + t[2] * cam.fwd[2];
+        const tr = t[0] * cam.right[0] + t[1] * cam.right[1] + t[2] * cam.right[2], tu = t[0] * cam.up[0] + t[1] * cam.up[1] + t[2] * cam.up[2];
+        return [(cam.fx * (tr * z - dr * tz)) / (z * z), (-cam.fy * (tu * z - du * tz)) / (z * z)];
+    };
+    const [ax, ay] = jac(t1), [bx, by] = jac(t2);
+    const p = ax * ax + bx * bx, q = ax * ay + bx * by, r = ay * ay + by * by;
+    const half = 0.5 * (p + r), disc = Math.sqrt(Math.max(0, half * half - (p * r - q * q)));
+    const l1v = half + disc, l2v = Math.max(0, half - disc);
+    let ex = q, ey = l1v - p;
+    if (Math.abs(ex) + Math.abs(ey) < 1e-12) { ex = l1v - r; ey = q; }
+    if (Math.abs(ex) + Math.abs(ey) < 1e-12) { ex = 1; ey = 0; }
+    const el = Math.hypot(ex, ey), major = sizeM * Math.sqrt(l1v), minor = sizeM * Math.sqrt(l2v);
+    return [(ex / el) * major, (ey / el) * major, minor];
+}
+
+/**
+ * The photo averaged over a texel footprint (major axis vector (mx, my), minor width mb, px): a box filter. A footprint within
+ * one pixel is the bilinear point sample; a larger one is a grid of bilinear taps about one pixel apart across the footprint
+ * (its major axis by its minor width), read from the finest pyramid level at which it needs at most FOOTPRINT_MAX_TAPS taps.
+ */
+function sampleFootprint(view: ProjectionView, x: number, y: number, mx: number, my: number, mb: number, out: Float64Array): void {
+    const a = Math.hypot(mx, my);
+    if (!(a > 1)) { sampleLinear(view, x, y, out); return; }
+    const b = Math.max(0, mb), ex = mx / a, ey = my / a;
+    let k = 0;
+    while (Math.ceil(a / (1 << k)) * Math.max(1, Math.ceil(b / (1 << k))) > FOOTPRINT_MAX_TAPS) k++;
+    const levels = k ? pyramidOf(view) : [];
+    const na = Math.max(1, Math.ceil(a / (1 << k))), nb = Math.max(1, Math.ceil(b / (1 << k)));
+    const tmp = new Float64Array(3);
+    out[0] = out[1] = out[2] = 0;
+    for (let i = 0; i < na; i++) {
+        const u = ((i + 0.5) / na - 0.5) * a;
+        for (let j = 0; j < nb; j++) {
+            const v = nb > 1 ? ((j + 0.5) / nb - 0.5) * b : 0;
+            const tx = x + u * ex - v * ey, ty = y + u * ey + v * ex;
+            if (k) sampleLevel(view, levels, k, tx, ty, tmp); else sampleLinear(view, tx, ty, tmp);
+            for (let c = 0; c < 3; c++) out[c] += tmp[c];
+        }
+    }
+    for (let c = 0; c < 3; c++) out[c] /= na * nb;
+}
+
 const smoothstep01 = (t: number): number => { const x = Math.min(1, Math.max(0, t)); return x * x * (3 - 2 * x); };
 
 /** Bilinear lookup of a view's warp lattice (nodes span [0, W] x [0, H]). */
@@ -257,10 +366,10 @@ function latticeAt(w: NonNullable<ProjectionView['warp']>, x: number, y: number,
 
 /** Steps 1 to 3 for one view: its visible samples with weights. */
 function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: DepthMap, opts: Required<Pick<ProjectionBakeOptions,
-    'featherPx' | 'minCosIncidence' | 'depthToleranceBaseM' | 'depthTolerancePerMeter' | 'edgeGuardPx'>> & Pick<ProjectionBakeOptions, 'observedSurface' | 'poseEdgeGuardShare' | 'minResolution' | 'excludeTexels'>, context?: DepthMap): RawSamples {
+    'featherPx' | 'minCosIncidence' | 'depthToleranceBaseM' | 'depthTolerancePerMeter' | 'edgeGuardPx' | 'footprint'>> & Pick<ProjectionBakeOptions, 'observedSurface' | 'poseEdgeGuardShare' | 'minResolution' | 'excludeTexels'>, context?: DepthMap): RawSamples {
     const { atlas } = input;
     const cam = view.camera;
-    const out: RawSamples = { texel: [], rgb: [], logW: [], wAbs: [], x: [], y: [] };
+    const out: RawSamples = { texel: [], rgb: [], logW: [], wAbs: [], x: [], y: [], ...(opts.footprint ? { fp: [] } : {}) };
     if (!(view.poseQuality > 0)) return out;
     if (depth.width !== cam.width || depth.height !== cam.height) {
         throw new Error(`depthFor(${view.panoId}) returned ${depth.width}x${depth.height}, the camera is ${cam.width}x${cam.height}`);
@@ -297,7 +406,7 @@ function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: De
      * hidden by something nearer; seen past (the photo shows what lies beyond: an opening, the sky); or within the guard of a
      * depth edge, judged against the texel's own tangent plane.
      */
-    const visibility = (A: Float32Array, S: Float32Array, px: number, py: number, z: number, o: number, dx: number, dy: number, dz: number): number => {
+    const visibility = (A: Float32Array, S: Float32Array, px: number, py: number, z: number, o: number, dx: number, dy: number, dz: number, footprintHalfPx = 0): number => {
         const tol = opts.depthToleranceBaseM + opts.depthTolerancePerMeter * z;
         const dc = depthIn(A, px, py);
         if (dc < EMPTY_DEPTH && dc < z - tol) return VIS_OCCLUDED;
@@ -315,7 +424,9 @@ function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: De
         const nP = normal[o] * dx + normal[o + 1] * dy + normal[o + 2] * dz; // n . (P - eye)
         // with poseEdgeGuardShare the guard also covers a share of the pose uncertainty at this depth: a sample a
         // misregistered pose could carry across a silhouette may hold the background (seen at the arch's inner walls)
-        const gp = opts.poseEdgeGuardShare ? Math.min(64, Math.round((opts.poseEdgeGuardShare * view.poseSigmaPx) / Math.max(1, z))) : 0;
+        // and it covers the texel's footprint: a footprint sample averages every pixel within it
+        const gp = Math.max(footprintHalfPx > g ? Math.min(64, footprintHalfPx) : 0,
+            opts.poseEdgeGuardShare ? Math.min(64, Math.round((opts.poseEdgeGuardShare * view.poseSigmaPx) / Math.max(1, z))) : 0);
         const probes = gp > g ? [[gp, 0], [-gp, 0], [0, gp], [0, -gp], [gp, gp], [gp, -gp], [-gp, gp], [-gp, -gp], ...EDGE_PROBES] : EDGE_PROBES;
         for (const [ex, ey] of probes) {
             const qx = px + ex, qy = py + ey;
@@ -345,15 +456,19 @@ function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: De
         const dist = Math.hypot(dx, dy, dz);
         const cos = -(normal[o] * dx + normal[o + 1] * dy + normal[o + 2] * dz) / dist;
         if (cos < opts.minCosIncidence) continue;
+        // the texel's footprint in the photo (footprint sampling): it must clear the redaction rects and depth edges whole
+        const f = out.fp ? texelFootprintPx(cam, [dx, dy, dz], z, [normal[o], normal[o + 1], normal[o + 2]], sizeM[t]) : undefined;
+        const hx = f && Math.hypot(f[0], f[1]) > 1 ? 0.5 * (Math.abs(f[0]) + f[2] * Math.abs(f[1]) / Math.hypot(f[0], f[1])) : 0;
+        const hy = f && Math.hypot(f[0], f[1]) > 1 ? 0.5 * (Math.abs(f[1]) + f[2] * Math.abs(f[0]) / Math.hypot(f[0], f[1])) : 0;
         let redacted = false;
-        for (const r of rects) if (x >= r[0] && x < r[2] && y >= r[1] && y < r[3]) { redacted = true; break; }
+        for (const r of rects) if (x + hx >= r[0] && x - hx < r[2] && y + hy >= r[1] && y - hy < r[3]) { redacted = true; break; }
         if (redacted) continue;
         // visibility
         const px = Math.floor(x), py = Math.floor(y);
-        const vis = visibility(D, C ?? D, px, py, z, o, dx, dy, dz);
+        const vis = visibility(D, C ?? D, px, py, z, o, dx, dy, dz, Math.ceil(Math.max(hx, hy)));
         if (vis !== VIS_OK) {
             // a leak caught: the occluder alone would have let this sample through
-            if (C && out.caught && visibility(P, P, px, py, z, o, dx, dy, dz) === VIS_OK) out.caught[vis - 1]++;
+            if (C && out.caught && visibility(P, P, px, py, z, o, dx, dy, dz, Math.ceil(Math.max(hx, hy))) === VIS_OK) out.caught[vis - 1]++;
             continue;
         }
         // weight
@@ -367,7 +482,10 @@ function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: De
         // the photo's content for this texel, through the pano's non-rigid warp when it has one
         let sx = x, sy = y;
         if (warp) { const d = latticeAt(warp, x, y, W, H); sx = Math.min(W - 0.01, Math.max(0, x + d[0])); sy = Math.min(H - 0.01, Math.max(0, y + d[1])); }
-        sampleLinear(view, sx, sy, col);
+        if (out.fp && f) {
+            sampleFootprint(view, sx, sy, f[0], f[1], f[2], col);
+            out.fp.push(f[0], f[1], f[2]);
+        } else sampleLinear(view, sx, sy, col);
         out.texel.push(t);
         out.rgb.push(col[0], col[1], col[2]);
         out.logW.push(logW);
@@ -388,6 +506,7 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
         depthToleranceBaseM: o.depthToleranceBaseM ?? 0.20,
         depthTolerancePerMeter: o.depthTolerancePerMeter ?? 0.02,
         edgeGuardPx: o.edgeGuardPx ?? 3,
+        footprint: o.footprint !== false,
         ...(o.observedSurface ? { observedSurface: o.observedSurface } : {}),
         ...(o.poseEdgeGuardShare ? { poseEdgeGuardShare: o.poseEdgeGuardShare } : {}),
         ...(o.minResolution ? { minResolution: o.minResolution } : {}), ...(o.excludeTexels ? { excludeTexels: o.excludeTexels } : {})
@@ -462,7 +581,8 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
                 const r = raw[k];
                 for (let i = 0; i < s.texel.length; i++) {
                     if (!res.dx[k][i] && !res.dy[k][i]) continue;
-                    sampleLinear(views[k], r.x[i] + res.dx[k][i], r.y[i] + res.dy[k][i], col);
+                    if (r.fp) sampleFootprint(views[k], r.x[i] + res.dx[k][i], r.y[i] + res.dy[k][i], r.fp[i * 3], r.fp[i * 3 + 1], r.fp[i * 3 + 2], col);
+                    else sampleLinear(views[k], r.x[i] + res.dx[k][i], r.y[i] + res.dy[k][i], col);
                     s.rgb[i * 3] = col[0]; s.rgb[i * 3 + 1] = col[1]; s.rgb[i * 3 + 2] = col[2];
                 }
             });
