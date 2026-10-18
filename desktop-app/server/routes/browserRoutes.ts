@@ -9,6 +9,7 @@
 
 import { Request, Response, Router } from 'express';
 import { BrowserProxyService } from '../../../packages/core/src/node';
+import { NoActiveBrowserPageError } from '../../../packages/core/src/node/browser-proxy-service';
 
 export function createBrowserRouter(browserProxy: BrowserProxyService): Router {
     const router = Router();
@@ -23,11 +24,25 @@ export function createBrowserRouter(browserProxy: BrowserProxyService): Router {
     });
 
     router.get('/state', (_req: Request, res: Response) => {
-        res.json(browserProxy.getActiveState());
+        const state = browserProxy.getActiveState();
+        if (!state) {
+            const err = new NoActiveBrowserPageError();
+            res.status(404).json({ success: false, code: err.code, error: err.message });
+            return;
+        }
+        res.json(state);
     });
 
     router.post('/state', (req: Request, res: Response) => {
-        browserProxy.updateState(req.body);
+        try {
+            browserProxy.updateState(req.body);
+        } catch (err) {
+            if (err instanceof NoActiveBrowserPageError) {
+                res.status(400).json({ success: false, code: err.code, error: err.message });
+                return;
+            }
+            throw err;
+        }
         res.json({ success: true });
     });
 

@@ -125,7 +125,7 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
                     if (action === 'evaluate') return { result: 42 };
                     return { status: 200, title: 'Mock Page', url: args?.url || 'http://localhost:3000' };
                 },
-                getActiveState: () => ({ url: 'http://localhost:3000', title: 'Mock Page', markdown: '# Mock Page Content', elements: [] })
+                getActiveState: () => ({ url: 'http://localhost:3000', title: 'Mock Page', markdown: '# Mock Page Content', accessibilityTree: '[1] heading "Mock Page"', elements: [] })
             } as any,
             lens: {
                 executeLensProject: async (filePath: string) => ({ success: true, artifactId: 'art-mock-1', filePath, code: 'class Mock {}' }),

@@ -9,6 +9,7 @@
 
 import type { LensContext, LensSourceContent, LensSyncMode } from '../lens-bridge';
 import type { ToolDeclaration, ToolHandler, ToolHandlerOutcome, ToolResultPayload } from './types';
+import { NoActiveBrowserPageError } from '../../browser-proxy-service';
 
 const asString = (value: unknown, fallback = ''): string => (typeof value === 'string' ? value : fallback);
 
@@ -200,15 +201,31 @@ export const browserOutcome = (data: unknown, name: string): ToolHandlerOutcome 
     summaryResult: `Successfully executed ${name}.`
 });
 
+const noActivePageOutcome = (err: NoActiveBrowserPageError): ToolHandlerOutcome => ({
+    resultPayload: { status: 'error', code: err.code, error: err.message },
+    status: 'failed',
+    summaryResult: `Failed (${err.code}): ${err.message}`
+});
+
 export const browserHandlers: Record<string, ToolHandler> = {
     async browser_navigate(args, ctx) {
         return browserOutcome(await ctx.browserProxy.queueAction('navigate', { url: asString(args.url) }), 'browser_navigate');
     },
     browser_snapshot(_args, ctx) {
-        return browserOutcome(ctx.browserProxy.getActiveState(), 'browser_snapshot');
+        const state = ctx.browserProxy.getActiveState();
+        if (!state) return noActivePageOutcome(new NoActiveBrowserPageError());
+        if (typeof state.accessibilityTree !== 'string' || !state.accessibilityTree) {
+            return noActivePageOutcome(new NoActiveBrowserPageError(`The browser at ${state.url} has not reported an accessibility snapshot yet; wait for the page to load or call browser_navigate again.`));
+        }
+        return browserOutcome(state, 'browser_snapshot');
     },
     browser_extract_content(_args, ctx) {
-        return browserOutcome({ markdown: ctx.browserProxy.getActiveState().markdown }, 'browser_extract_content');
+        const state = ctx.browserProxy.getActiveState();
+        if (!state) return noActivePageOutcome(new NoActiveBrowserPageError());
+        if (typeof state.markdown !== 'string' || !state.markdown) {
+            return noActivePageOutcome(new NoActiveBrowserPageError(`The browser at ${state.url} has not reported page content yet; wait for the page to load or call browser_navigate again.`));
+        }
+        return browserOutcome({ url: state.url, markdown: state.markdown }, 'browser_extract_content');
     },
     async browser_click(args, ctx) {
         return browserOutcome(await ctx.browserProxy.queueAction('click', { elementId: asString(args.elementId), selector: asString(args.selector) || undefined }), 'browser_click');

@@ -87,6 +87,24 @@ const METADATA_HOSTS = new Set([
     'metadata.oraclecloud.com'
 ]);
 
+/** Page state reported by the in-canvas browser primitive. */
+export interface BrowserActiveState {
+    url: string;
+    title?: string;
+    accessibilityTree?: string;
+    markdown?: string;
+    [key: string]: unknown;
+}
+
+/** Raised when a browser tool needs page state but no browser has reported any. */
+export class NoActiveBrowserPageError extends Error {
+    readonly code = 'BROWSER_NO_ACTIVE_PAGE';
+    constructor(message = 'No active browser page: open a browser on the canvas and load a page (browser_navigate) before reading it.') {
+        super(message);
+        this.name = 'NoActiveBrowserPageError';
+    }
+}
+
 export class BrowserProxyService {
     protected readonly DEFAULT_USER_AGENT =
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
@@ -102,23 +120,26 @@ export class BrowserProxyService {
         });
     }
 
-    // In-memory active browser session state
-    public activeState = {
-        url: 'https://example.com',
-        title: 'Web Browser',
-        accessibilityTree: 'No active snapshot.',
-        markdown: ''
-    };
+    /**
+     * Last page state reported by the canvas browser (`POST /api/browser/state`).
+     * Null until a browser primitive has posted a snapshot — no page is invented.
+     */
+    public activeState: BrowserActiveState | null = null;
 
     // Pending action queue & deferred promises
     private pendingActions: any[] = [];
     private actionPromises = new Map<string, { resolve: (val: any) => void, reject: (err: any) => void }>();
 
-    public updateState(state: any) {
-        this.activeState = { ...this.activeState, ...state };
+    public updateState(state: Partial<BrowserActiveState>) {
+        const merged = { ...(this.activeState ?? {}), ...state };
+        if (typeof merged.url !== 'string' || !merged.url) {
+            throw new NoActiveBrowserPageError('browser state update has no url; a page state must name the page it describes');
+        }
+        this.activeState = merged as BrowserActiveState;
     }
 
-    public getActiveState() {
+    /** The reported page state, or null when no browser has reported one. */
+    public getActiveState(): BrowserActiveState | null {
         return this.activeState;
     }
 
@@ -166,7 +187,7 @@ export class BrowserProxyService {
     normalizeUrl(raw: string): string {
         let trimmed = (raw || '').trim();
         if (!trimmed) {
-            return 'https://example.com';
+            throw new Error('normalizeUrl: empty URL');
         }
         if (trimmed.includes('/api/browser/proxy?url=')) {
             const match = trimmed.match(/[?&]url=([^&]+)/);
