@@ -440,37 +440,11 @@ export function createGitRouter(ctx: RouteContext): Router {
             const workspaceRoot = resolveWorkspaceRoot(req);
             const targetRoot = workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : allowedWorkspaceRoots[0];
 
-            let currentBranch = 'main';
-            try {
-                const { stdout: branchOut } = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], targetRoot);
-                currentBranch = branchOut.trim() || 'main';
-            } catch {
-                // Not a git repository or detached HEAD
-            }
-
-            const { stdout } = await runGit(['status', '--porcelain=v1', '-u'], targetRoot);
-            const lines = stdout.split('\n').filter(Boolean);
-
-            const staged: Array<{ path: string; status: string }> = [];
-            const unstaged: Array<{ path: string; status: string }> = [];
-            const untracked: string[] = [];
-
-            for (const line of lines) {
-                const x = line[0];
-                const y = line[1];
-                const filePath = line.substring(3).trim();
-
-                if (x === '?' && y === '?') {
-                    untracked.push(filePath);
-                } else {
-                    if (x !== ' ' && x !== '?') {
-                        staged.push({ path: filePath, status: x });
-                    }
-                    if (y !== ' ' && y !== '?') {
-                        unstaged.push({ path: filePath, status: y });
-                    }
-                }
-            }
+            // One git call: porcelain v2 with --branch carries the branch header and every entry.
+            const { stdout } = await runGit(['status', '--porcelain=v2', '--branch', '-u'], targetRoot);
+            const parsed = parsePorcelainV2Status(stdout);
+            const currentBranch = parsed.branch;
+            const { staged, unstaged, untracked } = parsed;
 
             res.json({
                 success: true,
@@ -705,4 +679,48 @@ export function createGitRouter(ctx: RouteContext): Router {
     });
 
     return router;
+}
+
+/**
+ * `git status --porcelain=v2 --branch -u` as the /status route reports it: the branch ('HEAD' when detached, as
+ * `rev-parse --abbrev-ref` says; 'main' when git names none), index (X) and work-tree (Y) changes with their v1
+ * status letters, renames as "orig -> path" (the v1 spelling), and untracked paths.
+ */
+export function parsePorcelainV2Status(stdout: string): {
+    branch: string;
+    staged: Array<{ path: string; status: string }>;
+    unstaged: Array<{ path: string; status: string }>;
+    untracked: string[];
+} {
+    let branch = 'main';
+    const staged: Array<{ path: string; status: string }> = [];
+    const unstaged: Array<{ path: string; status: string }> = [];
+    const untracked: string[] = [];
+    // Field counts before the path: ordinary "1 XY sub mH mI mW hH hI", rename "2 ... X<score>", unmerged "u ... h3".
+    const fieldsBeforePath: Record<string, number> = { '1': 8, '2': 9, u: 10 };
+    for (const line of stdout.split('\n')) {
+        if (!line) continue;
+        if (line.startsWith('# branch.head ')) {
+            const head = line.slice('# branch.head '.length).trim();
+            branch = head === '(detached)' ? 'HEAD' : head || 'main';
+            continue;
+        }
+        if (line.startsWith('#')) continue;
+        if (line.startsWith('? ')) { untracked.push(line.slice(2)); continue; }
+        const n = fieldsBeforePath[line[0]];
+        if (n === undefined) continue;
+        let at = 0;
+        for (let k = 0; k < n && at >= 0; k++) at = line.indexOf(' ', at) + 1 || -1;
+        if (at <= 0) continue;
+        let filePath = line.slice(at);
+        if (line[0] === '2') {
+            const [to, from] = filePath.split('\t');
+            filePath = from !== undefined ? `${from} -> ${to}` : to;
+        }
+        const x = line[2] === '.' ? ' ' : line[2];
+        const y = line[3] === '.' ? ' ' : line[3];
+        if (x !== ' ') staged.push({ path: filePath, status: x });
+        if (y !== ' ') unstaged.push({ path: filePath, status: y });
+    }
+    return { branch, staged, unstaged, untracked };
 }
