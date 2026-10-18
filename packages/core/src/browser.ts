@@ -69,7 +69,8 @@ export {
     computeSkyAtmosphereMetrics,
     LocationObjectLightingService,
     harmonizeLocationObjectAtmosphere,
-    generateCanonicalAmbulatoryFixtures,
+    buildPortalFixtures,
+    PORTAL_FIXTURE_DEFAULTS,
     STONE_ALBEDO_PROFILES,
     LOCATION_DELIGHT_FRAGMENT_CHUNK,
     LOCATION_DELIGHT_VERTEX_CHUNK,
@@ -97,6 +98,7 @@ export type {
     DelightUniformsConfig,
     AtmosphereSceneLightingConfig,
     ArchitecturalPortalFixtureConfig,
+    ArchitecturalPortalInput,
     LocationObjectAtmosphereRequest,
     LocationObjectAtmosphereResult
 } from './browser/generative-canvas/services/atmosphere';

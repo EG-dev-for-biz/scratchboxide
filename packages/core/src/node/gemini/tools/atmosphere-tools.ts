@@ -173,32 +173,47 @@ export const ATMOSPHERE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'atmosphere_harmonize_location_3d',
-        description: 'Calculates and synthesizes photogrammetric de-lighting shader uniforms (shadow lift, highlight compression, stone albedo, sky irradiance, ground bounce, terrain de-wash), atmospheric scene lighting, sky gradient, and interior architectural portal window backlighting for a 3D location mesh.',
+        description: 'Computes photogrammetric de-lighting shader uniforms (shadow lift, highlight compression, stone albedo, sky irradiance, ground bounce, terrain de-wash), scene lighting with the key light at the NOAA sun for the place and isoDate, and a sky gradient for a 3D location mesh. Window/portal backlighting is added only for portals the caller locates on the model.',
         parameters: {
             type: 'OBJECT',
             properties: {
-                imagePath: { type: 'STRING', description: 'Optional reference image or plate' },
-                landmarkName: { type: 'STRING', description: 'Optional landmark name (e.g. "Colosseum, Rome", "Eiffel Tower")' },
+                landmarkName: { type: 'STRING', description: 'Place name, resolved with Google Places when latitude/longitude are not given (e.g. "Colosseum, Rome")' },
                 preset: {
                     type: 'STRING',
-                    description: 'Lighting preset: "civil_twilight_dusk", "golden_hour", "midday_clear", "blue_hour", "night_monumental"'
+                    description: 'Look preset: "civil_twilight_dusk", "golden_hour", "midday_clear", "blue_hour", "night_monumental". Chosen from the computed sun elevation when omitted.'
                 },
                 latitude: { type: 'NUMBER', description: 'Geographic latitude' },
                 longitude: { type: 'NUMBER', description: 'Geographic longitude' },
-                isoDate: { type: 'STRING', description: 'ISO 8601 capture timestamp' },
+                isoDate: { type: 'STRING', description: 'ISO 8601 instant the sun is computed for (required; no date is assumed)' },
                 stoneType: {
                     type: 'STRING',
                     description: 'Stone albedo profile: "travertine", "limestone", "sandstone", "granite", "terracotta", "marble", "concrete"'
                 },
-                enableArchitecturalBacklighting: {
-                    type: 'BOOLEAN',
-                    description: 'Whether to synthesize interior architectural portal window fixtures (default: true)'
+                portals: {
+                    type: 'ARRAY',
+                    description: 'Window/portal openings located on the model, in scene metres (Y up, -Z north). A backlighting spot is placed behind each one; with none given, no backlighting is added. Unset kelvinTemperature/intensity/distance/decay/angle/penumbra use a 2850 K incandescent fixture and are reported in portalDefaultsApplied.',
+                    items: {
+                        type: 'OBJECT',
+                        properties: {
+                            position: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Light position [x, y, z] behind the opening' },
+                            targetPosition: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Point [x, y, z] outside the opening the light aims at' },
+                            name: { type: 'STRING' },
+                            kelvinTemperature: { type: 'NUMBER' },
+                            intensity: { type: 'NUMBER' },
+                            distance: { type: 'NUMBER' },
+                            decay: { type: 'NUMBER' },
+                            angle: { type: 'NUMBER' },
+                            penumbra: { type: 'NUMBER' }
+                        },
+                        required: ['position', 'targetPosition']
+                    }
                 },
                 customDelightParams: {
                     type: 'OBJECT',
                     description: 'Custom override parameters for de-lighting uniforms'
                 }
-            }
+            },
+            required: ['isoDate']
         }
     }
 ];

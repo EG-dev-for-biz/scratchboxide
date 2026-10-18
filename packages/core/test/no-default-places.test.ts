@@ -96,7 +96,7 @@ describe('location lighting: the sun is computed where the place is', () => {
         const ctx = (outcome.resultPayload as any).landmarkContext;
         expect(ctx.coordinates.lat).toBeCloseTo(40.7725, 4); // not -33.8568 (Sydney Opera House)
         expect(ctx.name).toBe('Metropolitan Opera House, 30 Lincoln Center Plaza, New York, NY 10023, USA');
-        expect(outcome.exec.summaryResult).toContain('(40.772500, -73.984000; sun at 2026-06-21T23:00:00Z)');
+        expect(outcome.exec.summaryResult).toContain('(40.772500, -73.984000; NOAA sun at 2026-06-21T23:00:00Z');
     });
 
     it('without coordinates or a resolvable name it fails: no (45, 0) and no regex over the name', async () => {
@@ -107,9 +107,10 @@ describe('location lighting: the sun is computed where the place is', () => {
         expect(String((outcome.resultPayload as any).error)).toMatch(/no Google Maps API key/);
     });
 
-    it('reports when the instant the sun was computed for was assumed', () => {
-        const result = LocationObjectLightingService.harmonizeLocationObjectAtmosphere({ latitude: 40.7411, longitude: -73.9897 });
-        expect(result.landmarkContext?.isoDateAssumed).toBe(true);
+    it('needs the instant the sun is computed for (no assumed 2026-06-21 dusk)', () => {
+        expect(() => LocationObjectLightingService.harmonizeLocationObjectAtmosphere({ latitude: 40.7411, longitude: -73.9897 })).toThrow(MissingInputError);
+        const result = LocationObjectLightingService.harmonizeLocationObjectAtmosphere({ latitude: 40.7411, longitude: -73.9897, isoDate: '2026-06-21T23:00:00Z' });
+        expect(result.landmarkContext?.isoDate).toBe('2026-06-21T23:00:00Z');
         expect(result.landmarkContext?.name).toBe('40.741100, -73.989700');
     });
 });

@@ -427,15 +427,16 @@ describe('Agent Lighting Intelligence - Unit 6: Acceptance Examples AE1 - AE4', 
             landmarkName: 'Colosseum, Rome',
             latitude: 41.8902,
             longitude: 12.4922,
+            isoDate: '2026-09-28T17:30:00Z',
             preset: 'civil_twilight_dusk',
             stoneType: 'travertine',
-            enableArchitecturalBacklighting: true
+            portals: [{ position: [0, 12, -40], targetPosition: [0, 11, -50] }]
         });
 
         expect(harmonization.delightUniforms.uShadowLift).toBeGreaterThanOrEqual(0.50);
         expect(harmonization.delightUniforms.uHighlightCompress).toBeGreaterThanOrEqual(0.40);
         expect(harmonization.delightUniforms.uStoneAlbedoTint[0]).toBeCloseTo(0.86, 1);
-        expect(harmonization.architecturalFixtures.length).toBeGreaterThan(0);
+        expect(harmonization.architecturalFixtures.map(f => f.position)).toEqual([[0, 12, -40]]);
     });
 });
 
