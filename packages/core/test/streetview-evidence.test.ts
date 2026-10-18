@@ -216,7 +216,8 @@ describe('Street View evidence', () => {
         const occluded = projectSlots(fit, view, wall).find(s => s.slotId === 'S01')!;
         expect(occluded.visibleFraction).toBe(0);
         // the pose uncertainty in pixels at 25 m in this image
-        expect(uncertaintyPx(25, 70, 640)).toBeCloseTo((640 / (2 * Math.tan(35 * Math.PI / 180))) * (2 / 25 + 2 * Math.PI / 180), 6);
+        // the grounding focal length: a 640 x 480 copy of the 4:3 crop (1707 px wide) of the 1920 px frame
+        expect(uncertaintyPx(25, 70, 640, 480)).toBeCloseTo((640 / 1706.6666666666667) * (960 / Math.tan(35 * Math.PI / 180)) * (2 / 25 + 2 * Math.PI / 180), 6);
 
         // screenshot: the depth render from that pose with the slot polygons drawn
         const depth = HeadlessMeshSilhouetteRenderer.renderMesh(wall as any, { x: -6, y: 2.5, z: -30, targetX: -6, targetY: 2.5 + Math.tan(15 * Math.PI / 180) * 100, targetZ: 70, fov: 2 * Math.atan(Math.tan(35 * Math.PI / 180) * 0.75) * 180 / Math.PI } as any, 640, 480, { clipNearPlane: true });
