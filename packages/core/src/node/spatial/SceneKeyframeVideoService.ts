@@ -11,7 +11,7 @@ import { HeadlessMeshSilhouetteRenderer, RenderMesh3D } from './HeadlessMeshSilh
 import { CameraPose6DOF } from './SubPixelEdgeAlignmentOptimizer';
 import { NativeAiRenderEngineService, RenderPasses } from './NativeAiRenderEngineService';
 import { createDefaultStationImageGenerator, StationImageGenerator } from './BeautifyStationService';
-import { buildMinimalOmniVideoPrompt } from '../../browser/generative-canvas/services/video/omniVideoPromptService';
+import { allAbortable } from '../../common/async/bounded-concurrency';
 import { GeminiClient } from '../gemini/gemini-client';
 
 export interface KeyframePairCapture {
@@ -59,15 +59,41 @@ export class SceneKeyframeVideoService {
         height: number = 480
     ): KeyframePairCapture {
         const renderService = new NativeAiRenderEngineService({ generator: this.generator, workspaceRoot: this.workspaceRoot });
-        const start = renderService.extractRenderPasses(mesh, startPose, width, height);
-        const end = renderService.extractRenderPasses(mesh, endPose, width, height);
+        const start = renderService.extractRenderPasses(mesh, startPose, width, height, { includeNormal: false });
+        const end = renderService.extractRenderPasses(mesh, endPose, width, height, { includeNormal: false });
 
         return { start, end };
     }
 
     /**
+     * The interpolation brief: the two restyled stills are the literal first and last frames (the only media sent),
+     * so the prompt names those two sources and no blockout video.
+     */
+    public static buildKeyframeInterpolationPrompt(subject: string): string {
+        return [
+            '[# Sources <FIRST_FRAME>@Image1 <LAST_FRAME>@Image2]',
+            'Use <FIRST_FRAME> as the literal opening frame and <LAST_FRAME> as the literal closing frame.',
+            `Subject: ${subject}`,
+            'Camera: move smoothly and continuously from the viewpoint of <FIRST_FRAME> to the viewpoint of <LAST_FRAME>, keeping the subject\'s geometry, materials and lighting consistent between the two frames without morphing, warping or style drift.',
+            'Shot Continuity & Timing: Single continuous shot, no scene cuts, no camera switching, no montage edits.'
+        ].join('\n\n');
+    }
+
+    /**
+     * The video aspect ratio for a keyframe frame size. The video model answers 16:9 or 9:16, so the keyframes are
+     * rendered at that ratio (the requested width is kept for landscape, the requested height for portrait) and the
+     * video's first and last frames line up with the stills.
+     */
+    public static keyframeVideoFrame(width: number, height: number): { aspectRatio: '16:9' | '9:16'; width: number; height: number } {
+        return width >= height
+            ? { aspectRatio: '16:9', width, height: Math.max(2, Math.round((width * 9) / 16)) }
+            : { aspectRatio: '9:16', width: Math.max(2, Math.round((height * 9) / 16)), height };
+    }
+
+    /**
      * Synthesizes a photorealistic continuous interpolated video sequence from two 3D keyframe poses.
-     * Restyles Frame 1 into a high-res image and uses Gemini Omni 1.1 Interactions API to interpolate.
+     * Restyles the start and end renders into photoreal stills (two independent image calls, run at once) and
+     * asks Gemini Omni 1.1 (Interactions API) for the motion between them.
      */
     public async synthesizeKeyframeInterpolationVideo(request: {
         mesh: RenderMesh3D;
@@ -77,37 +103,20 @@ export class SceneKeyframeVideoService {
         width?: number;
         height?: number;
         durationSeconds?: number;
-    }): Promise<{ video: Buffer; startImage: Buffer; endImage: Buffer; videoModel: string; imageSources: string[] }> {
-        const width = request.width || 640;
-        const height = request.height || 480;
+        signal?: AbortSignal;
+    }): Promise<{ video: Buffer; startImage: Buffer; endImage: Buffer; videoModel: string; imageSources: string[]; aspectRatio: string; width: number; height: number }> {
+        const frame = SceneKeyframeVideoService.keyframeVideoFrame(request.width || 1280, request.height || 720);
+        const { width, height } = frame;
         const durationSeconds = request.durationSeconds || 6;
 
-        // 1. Capture keyframe passes
-        const pair = this.captureKeyframePair(request.mesh, request.startPose, request.endPose, width, height);
-
-        // 2. Restyle keyframe images into photoreal start and end frames
+        // Restyle the start and end renders at once: they are independent image calls.
         const renderService = new NativeAiRenderEngineService({ generator: this.generator, workspaceRoot: this.workspaceRoot });
-        const startBeauty = await renderService.renderAiBeautyFrame({
-            mesh: request.mesh,
-            pose: request.startPose,
-            prompt: `Start frame: ${request.prompt}`,
-            width,
-            height
-        });
+        const [startBeauty, endBeauty] = await allAbortable([
+            signal => renderService.renderAiBeautyFrame({ mesh: request.mesh, pose: request.startPose, prompt: `Start frame: ${request.prompt}`, width, height, signal }),
+            signal => renderService.renderAiBeautyFrame({ mesh: request.mesh, pose: request.endPose, prompt: `End frame: ${request.prompt}`, width, height, signal })
+        ] as const, request.signal);
 
-        const endBeauty = await renderService.renderAiBeautyFrame({
-            mesh: request.mesh,
-            pose: request.endPose,
-            prompt: `End frame: ${request.prompt}`,
-            width,
-            height
-        });
-
-        // 3. Compile Omni 1.1 keyframe motion brief
-        const omniPromptText = buildMinimalOmniVideoPrompt({
-            blockoutVideoRef: '<VIDEO_REF_0>',
-            primarySubject: request.prompt
-        });
+        const omniPromptText = SceneKeyframeVideoService.buildKeyframeInterpolationPrompt(request.prompt);
 
         // 4. Dispatch video generation via Interactions API
         // Input must be a flat array: text first, then inline image parts
@@ -128,7 +137,7 @@ export class SceneKeyframeVideoService {
                 }
             },
             response_format: {
-                aspect_ratio: `${width}:${height}`,
+                aspect_ratio: frame.aspectRatio,
                 duration: `${durationSeconds}s`
             }
         });
@@ -170,7 +179,10 @@ export class SceneKeyframeVideoService {
             startImage: startBeauty.image,
             endImage: endBeauty.image,
             videoModel,
-            imageSources: Array.from(new Set([startBeauty.imageSource, endBeauty.imageSource]))
+            imageSources: Array.from(new Set([startBeauty.imageSource, endBeauty.imageSource])),
+            aspectRatio: frame.aspectRatio,
+            width,
+            height
         };
     }
 }

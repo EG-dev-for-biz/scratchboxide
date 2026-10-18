@@ -1710,8 +1710,8 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 startPose: { type: 'OBJECT', description: 'Start camera pose (6-DOF).' },
                 endPose: { type: 'OBJECT', description: 'End camera pose (6-DOF).' },
                 prompt: { type: 'STRING', description: 'Atmospheric scene prompt describing the video subject and kinematics.' },
-                width: { type: 'NUMBER', description: 'Render viewport width.' },
-                height: { type: 'NUMBER', description: 'Render viewport height.' },
+                width: { type: 'NUMBER', description: 'Keyframe render width (default 1280). The video model answers 16:9 or 9:16, so the keyframes are rendered at whichever is nearer: landscape keeps this width, portrait keeps the height.' },
+                height: { type: 'NUMBER', description: 'Keyframe render height (default 720).' },
                 durationSeconds: { type: 'NUMBER', description: 'Output video duration in seconds.' }
             },
             required: ['glbPath', 'startPose', 'endPose', 'prompt']
@@ -2095,8 +2095,8 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const startPose = args.startPose as CameraPose6DOF;
         const endPose = args.endPose as CameraPose6DOF;
         const prompt = asString(args.prompt);
-        const width = typeof args.width === 'number' ? args.width : 640;
-        const height = typeof args.height === 'number' ? args.height : 480;
+        const width = typeof args.width === 'number' ? args.width : 1280;
+        const height = typeof args.height === 'number' ? args.height : 720;
         const durationSeconds = typeof args.durationSeconds === 'number' ? args.durationSeconds : 6;
 
         if (!glbPath) throw new Error('spatial_keyframe_video_interpolation: "glbPath" argument is required.');
@@ -2122,7 +2122,8 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             prompt,
             width,
             height,
-            durationSeconds
+            durationSeconds,
+            signal: ctx.signal
         });
 
         const outVideoPath = `public/models/keyframe_interpolation_${Date.now()}.mp4`;
@@ -2135,9 +2136,12 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 videoPath: outVideoPath,
                 durationSeconds,
                 videoModel: result.videoModel,
-                keyframeImageSources: result.imageSources
+                keyframeImageSources: result.imageSources,
+                aspectRatio: result.aspectRatio,
+                keyframeWidth: result.width,
+                keyframeHeight: result.height
             },
-            summaryResult: `Keyframe video written to ${outVideoPath}: start and end renders restyled (${result.imageSources.join(' ')}), video interpolated by ${result.videoModel}.`
+            summaryResult: `Keyframe video written to ${outVideoPath}: start and end renders (${result.width}x${result.height}, ${result.aspectRatio}) restyled (${result.imageSources.join(' ')}), video interpolated by ${result.videoModel}.`
         };
     },
     mesh_bake_ai_textures: async (args, ctx) => {

@@ -296,7 +296,10 @@ export class BeautifyStationService {
             gray[y * qw + x] = (rgba[i] * 299 + rgba[i + 1] * 587 + rgba[i + 2] * 114) / 1000;
         }
         const queryField = computeSobelField(qw, qh, gray);
-        const mesh = (this.renderer as any).mesh as import('./HeadlessMeshSilhouetteRenderer').RenderMesh3D;
+        const fullMesh = (this.renderer as any).mesh as import('./HeadlessMeshSilhouetteRenderer').RenderMesh3D;
+        // The pose search re-renders the mesh dozens of times from poses near the station: cull it to what a camera
+        // near the station can see once, instead of transforming and clipping the whole mesh every render.
+        const mesh = HeadlessMeshSilhouetteRenderer.cullMeshToView(fullMesh, SurveyStationRenderService.stationToCameraPose6DOF(station, qw, qh).pose, qw, qh);
         const renderCache = new Map<string, SobelEdgeField>();
         const renderFunc = (pose: CameraPose6DOF): SobelEdgeField => {
             const key = `${pose.x.toFixed(4)},${pose.y.toFixed(4)},${pose.z.toFixed(4)},${pose.targetX.toFixed(4)},${pose.targetY.toFixed(4)},${pose.targetZ.toFixed(4)},${pose.fov.toFixed(5)}`;
@@ -376,15 +379,20 @@ export class BeautifyStationService {
         // Candidate A: fine-only from the station pose (wins when the model kept the framing).
         // Candidate B: coarse-to-fine on blurred fields (wins when the model recomposed by many pixels).
         // Both are scored on the unblurred structural edges; the better NCC decides.
+        // B is only chosen when it beats A by more than 1 point, which no score can do once A is above 99%
+        // (NCC tops out at 100%), so B is skipped then: same answer, about two thirds less search.
         const candA = runSchedule(initial, [{ blur: 0, target: 0.12, pos: 0.15, iters: thresholds.maxIterations ?? 6 }]);
-        const candB = runSchedule(initial, [
-            { blur: 14, target: 1.0, pos: 1.0, iters: 5 },
-            { blur: 5, target: 0.35, pos: 0.4, iters: 5 },
-            { blur: 0, target: 0.12, pos: 0.15, iters: thresholds.maxIterations ?? 6 }
-        ]);
         const scoreA = evaluateEdgeOverlap(queryField, renderFunc(candA.finalPose)).overlapScorePercent;
-        const scoreB = evaluateEdgeOverlap(queryField, renderFunc(candB.finalPose)).overlapScorePercent;
-        const metrics = scoreB > scoreA + 1.0 ? candB : candA;
+        let metrics = candA;
+        if (scoreA <= 99.0) {
+            const candB = runSchedule(initial, [
+                { blur: 14, target: 1.0, pos: 1.0, iters: 5 },
+                { blur: 5, target: 0.35, pos: 0.4, iters: 5 },
+                { blur: 0, target: 0.12, pos: 0.15, iters: thresholds.maxIterations ?? 6 }
+            ]);
+            const scoreB = evaluateEdgeOverlap(queryField, renderFunc(candB.finalPose)).overlapScorePercent;
+            if (scoreB > scoreA + 1.0) metrics = candB;
+        }
         const fp = metrics.finalPose;
         const f0 = [initial.targetX - initial.x, initial.targetY - initial.y, initial.targetZ - initial.z] as [number, number, number];
         const f1 = [fp.targetX - fp.x, fp.targetY - fp.y, fp.targetZ - fp.z] as [number, number, number];

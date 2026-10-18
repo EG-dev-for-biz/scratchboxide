@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { mapBounded } from '../../common/async/bounded-concurrency';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { encodePng, decodePng } from '../texture-processing';
@@ -442,12 +443,10 @@ export class MultiPerspectivePanoramaSynthesisService {
             }
         }
 
-        for (const p of targetPerspectives) {
-            if (p === 'front') continue;
-            if (options?.signal?.aborted) {
+        const synthesizeOne = async (p: PanoramaPerspective, signal?: AbortSignal): Promise<PerspectiveFrame> => {
+            if (signal?.aborted) {
                 throw Object.assign(new Error(`Stopped before the ${p} perspective`), { name: 'AbortError' });
             }
-
             const prompt = MultiPerspectivePanoramaSynthesisService.buildNanoBananaPerspectivePrompt(p, options);
             let targetRgba: Buffer;
             let generatedBy: string | undefined;
@@ -464,7 +463,7 @@ export class MultiPerspectivePanoramaSynthesisService {
                             { inlineData: { data: frontBase64, mimeType: 'image/png' } }
                         ],
                         imageConfig: { aspectRatio: '1:1' },
-                        signal: options?.signal
+                        signal
                     });
                 } catch (err) {
                     // Model failures gain the perspective name; any other error propagates as it is.
@@ -492,7 +491,7 @@ export class MultiPerspectivePanoramaSynthesisService {
             // Weld adjacent boundaries with front plate to guarantee zero seam tears
             MultiPerspectivePanoramaSynthesisService.weldPerspectiveBoundaries(p, targetRgba, frontRgba, res);
 
-            result[p] = {
+            return {
                 perspective: p,
                 width: res,
                 height: res,
@@ -503,7 +502,17 @@ export class MultiPerspectivePanoramaSynthesisService {
                 cameraConfig: MultiPerspectivePanoramaSynthesisService.CANONICAL_CAMERAS[p],
                 generatedBy
             };
+        };
+
+        // The first generated view decides the model (one call); the remaining views are independent calls to that
+        // model and run at once, so the rig costs ~two model calls of wall time instead of five.
+        const toGenerate = targetPerspectives.filter(p => p !== 'front');
+        const frames: PerspectiveFrame[] = [];
+        if (toGenerate.length > 0) {
+            frames.push(await synthesizeOne(toGenerate[0], options?.signal));
+            frames.push(...await mapBounded(toGenerate.slice(1), (p, _i, signal) => synthesizeOne(p, signal), { signal: options?.signal }));
         }
+        for (const frame of frames) result[frame.perspective] = frame;
 
         if (!client) {
             return {
