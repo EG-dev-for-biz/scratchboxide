@@ -671,3 +671,76 @@ Also: the cross-view match and edge render pools loaded their `.ts` workers thro
 - Commit the replay harness as a dev tool (`scripts/staged_replay.ts`: record/replay of Street View and vision replies, geometry swap) so later rounds are compared on identical evidence.
 - A per-layer exposure tie between overlapping layers (`l3cf` pieces over `l3b`), or drop pass-through pieces that lie within a few centimetres of a fitted face.
 - Find the server-side heap growth across staged builds (run two builds in one server with a heap snapshot after each).
+
+## Round 10: three research findings measured on replayed evidence (branch `texture-research`, 2026-10-18)
+
+Source: the repo research notes (group A: frequency-split compositing, after a ratio-image relight in an unlicensed repo; group C1: footprint-aware sampling and band-limited view weights after mip-NeRF/BungeeNeRF, soft visibility after NeuRay's mixture-of-logistics). Everything was written clean-room from the public maths; no code was copied.
+
+**Status: one of the three adopted (footprint sampling). The frequency split, the band-limited weights and soft visibility were implemented, measured and not kept.**
+
+### How it was measured
+
+- Evidence: `scripts/dev/staged-replay.ts` in strict mode (no billed calls) on the round-9 recordings (Washington Square Arch: 54 grounding images, 47 image-model answers for the enhancement). The tiles, remesh, fit, survey, vision and figure stages came from the stage cache, and only the texture stage was cleared before each arm. So every arm textured the same geometry from the same views. The baseline (`d89ed83a`) was replayed three times, with the texture stage both on and off the worker threads, and gave the same numbers to the digit each time: l2 5.164 / 0.237, l3b 5.033 / 0.228, l3cf 4.46 / 0.069, l4 5.555 / 0.065 (3 of 4 panos).
+- Held-out score: `fit.loo` per layer (leave-one-pano-out chamfer px / gradient NCC; lower chamfer and higher NCC are better). Offline A/Bs used dumps of each layer's bake inputs (atlas, views, depth maps) and ran projection-only leave-one-pano-out bakes on them. Those offline runs had no tile reference and no pose refinement, so the full replay is the verdict.
+- Aliasing metric: for each view, a single-view bake compared with a dense box reference that the harness computed itself (a 10 x 10 grid of exact pinhole projections over the texel square, bilinear in linear light). The value is the RMS difference in sRGB levels.
+- Enhancement accept rate: the 47 recorded model answers replayed through `enhanceTransferredAtlas` with the gate unchanged (`DEFAULT_ENHANCE_GATE`: Sobel NCC 0.95, new edges 5 % beyond 3 px, low-band SSIM 0.95, low-band dE 3, sharpness 1.05). With the split off, the replay reproduced the live decisions exactly (3 of 47 accepted).
+- Screenshots (gitignored): `test-results/screenshots/texture_research/`. Each arm's layer twins (l3b, l3cf, l4, l4f) were rendered unlit in three.js from five fixed cameras: front, back, back attic close, back frieze, and a front spandrel close-up (the spandrels come from the close-up crops). The prefixes are `base_`, `footprint_`, `soft_doubt_` and `soft_nodoubt_`; side-by-side sheets are `cmp_*.png`.
+
+### 1. Frequency-split compositing of the enhancement answers (not kept)
+
+`out = L(orig) + (cand - L(cand))`, a mask-normalised Gaussian low pass applied before the gate. Accept rate by low-band sigma, with the same 47 answers and the same thresholds:
+
+| Split sigma | Accepted | Rejected: edges moved / new structure / layout / no gain |
+|---|---|---|
+| off (live) | 3 | 41 / 3 / 0 / 0 |
+| 1 px | 16 | 26 / 3 / 2 / 0 |
+| 2 px | 7 | 35 / 4 / 1 / 0 |
+| max(2 px, 2 % of the crop's short side) | 7 | 35 / 4 / 1 / 0 |
+| 3 px, 4 px, 6 px | 4, 3, 3 | |
+| 2 % / 5 % of the short side | 16 / 10 | |
+
+- On this evidence the gate never rejected for colour or layout (0 of 44). Every gain therefore came from the edge checks: the composite carries the transfer's own coarse edges, so the edge-moved check passes by construction, and the smaller the sigma the more it does. That is a loosening of the edge check in effect, even though no threshold changed.
+- One of the 4 new accepts at 2 px, `l3b` chart s03, a pier face, carries a vertical meander fret running down the pier. The two reference panos show the meander only on the impost band (`enhance_split_s03_*.png`). The fret is invented structure, and it passed with 4.5 % new edges (limit 5 %). The other 3 new accepts add generic stone grain (`enhance_split_s23_s29_s31_*.png`).
+- Not kept: no layout or colour rejections to recover here, and the one structural gain was a hallucination.
+
+### 2a. Footprint-aware sampling (kept, `ad2248b0`)
+
+The close-up crops resolve about 6 px per 5 cm texel (measured footprint median 5.5-8.8 px on l3b's 16 views), so the centre point sample aliased. Each texel is now the photo's box mean over the texel square projected through the camera Jacobian. Bilinear taps are placed about a pixel apart, read from a linear-RGB pyramid level when more than 32 would be needed. A footprint within one pixel is the bilinear point sample, bit for bit. The footprint must clear the redaction rects and the depth-edge guard whole.
+
+| | Before | After |
+|---|---|---|
+| Aliasing error vs box reference, l3b, all 16 views (556,792 texel samples) | 5.10 levels RMS | 0.60 |
+| Worst chart (l3b s00, the front spandrels, view 7) | 7.88 | 0.69 |
+| Held-out, full replay l2 / l3b / l3cf / l4 (chamfer px) | 5.164 / 5.033 / 4.46 / 5.555 | 5.078 / 5.128 / 5.18 / 5.49 |
+| Held-out NCC | 0.237 / 0.228 / 0.069 / 0.065 | 0.234 / 0.223 / 0.020 / 0.056 |
+| Pixel-weighted mean chamfer over the four layers | 5.148 | 5.159 |
+| Offline projection-only l3b / l3cf | 4.733 / 4.392 | 4.750 / 4.259 |
+
+- The held-out score is neutral overall (+0.011 px weighted). l2 and l4 improve; l3b is a little worse (driven by pano `LlULdr`, 4.72 -> 4.87). l3cf is worse by 0.72 px, but it is a small layer (77k judged pixels, one pano) and the offline projection-only bake improves it, so the regression comes from the stages after the projection (witness, merge), not the sampling itself. The chamfer judges line segments at 640 px; a point-sampled bake's aliasing adds short spurious edges, which a symmetric chamfer partly rewards.
+- Visible gain: the blocky speckle on the spandrel figures and medallions is gone (`cmp_spandrel_medallion_zoom_base_vs_footprint.png`, `footprint_l3b_s00_close_view_point_vs_footprint_zoom.png`); the bake is softer and no longer sparkles. Kept as neutral with a visible gain.
+- Side effect: the enhancement crops change with the projection's coverage, so in the replay the enhancement missed its recordings and stood unenhanced (`enhance_failed`, strict replay). Enhanced texels do not enter the held-out bake.
+- Tests: a bar facade at 2 periods per texel (point mean/max error 10.8/33.3 levels, footprint 3.5/16.3); the alignment test now judges against the texel's box mean (footprint 0.962, point 0.899, limit 0.9); the seam-refinement case pins point sampling, as it was tuned (3.41 -> 3.90 point, 3.55 -> 4.16 footprint).
+
+### 2b. Band-limited view weights in the band blend (not kept)
+
+Each view's weight in band l is scaled by exp(-0.5 (2 pi sigma_gsd / lambda_l)^2), with sigma_gsd = GSD / sqrt(12) and lambda_l = 2 pi sqrt(sigma_lo sigma_hi) texels. In a synthetic rig (a 4x coarser view) it kept the joints, raising the neighbour step from 18.2 to 19.7 (fine view alone 22.5) and cutting the error from 4.07 to 2.90. On the real evidence it changed nothing: the default path selects one view per region and blends in the gradient domain (Poisson), so the band blend never runs there. With the band blend forced (`poisson: false`) l3b's held-out score was 4.739 both ways; with the weighted blend (`regionSelect: false`) it was 4.845 both ways. The close-up crops' GSD (8-30 mm) is far finer than the 5 cm texel, so every view passes every band. Not kept (patch in the session scratchpad).
+
+### 3. Soft visibility (not kept)
+
+The hard occlusion test and depth-edge guard became a probability: a two-component logistic along the ray (occluder depth, fitted-surface depth, scale tol / 4), the guard ring as a product of the probes' agreement with the texel's own state, and the pose / footprint ring as their mean. The hard drop applies only below 0.05. The occluder's mix weight was halved where the photo showed the tile photo's colour of the surface at the texel (CIE76 <= 20, the witness's limit).
+
+| Full replay, held-out chamfer / NCC | l2 | l3b | l3cf | l4 |
+|---|---|---|---|---|
+| Footprint (hard visibility) | 5.078 / 0.234 | 5.128 / 0.223 | 5.18 / 0.020 | 5.49 / 0.056 (3 of 4) |
+| Soft, with the colour doubt | 5.857 / 0.181 | 5.305 / 0.194 | not measured | 7.035 / 0.098 (2 of 4) |
+| Soft, without the doubt | 5.054 / 0.259 | 5.232 / 0.201 | 5.92 / -0.008 | 6.31 / 0.061 |
+
+- The colour doubt is useless on a monochrome monument. The arch's marble in front of the arch's marble agrees with the tile colour, so self-occluded texels were rescued and coloured from the occluder: l3b baked 253k -> 340k texels, and the back attic band got stretched streaks (`soft_doubt_attic_back_close.png`). It did reveal the back keystone ornament that the hard test leaves to the tile's dark square.
+- Without the doubt, l2 is slightly better and l3b, l3cf and l4 are worse. Offline (projection only, no witness) l3b improved (4.750 -> 4.628), so the loss appears only once the later stages run; the full replay is the verdict. A pose-sigma widening of the depth scale was dropped before measuring: it let a panel 1 m in front through at weight 0.1 in the synthetic rig.
+- Not kept (patch in the session scratchpad).
+
+### Candidate tool/service ideas
+
+- Commit a bake-input dump hook (atlas, views, depth maps per layer) to the replay harness, so offline A/Bs of the projection need no preload script.
+- Make the enhancement replay independent of the projection's coverage, e.g. key the recordings by the transfer crop under the texels the projection never covers, so projection changes can still be compared with the enhancement on.
+- A naturalness check in the enhancement gate (NIQE-style, research group A) would have caught the invented meander fret no better than the edge checks did. A reference-grounded structure check (the model's added edges must appear in a registered reference crop) is the missing gate.
