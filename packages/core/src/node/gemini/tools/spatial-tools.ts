@@ -3699,7 +3699,7 @@ export const GEOBOX_PRECISION_TOOL_DECLARATIONS: ToolDeclaration[] = [
     EDGE_ALIGNMENT_DECLARATION('geobox_optimize_edge_alignment'),
     {
         name: 'spatial_solve_pnp',
-        description: 'Analytically solves Perspective-n-Point (solvePnP / solvePnPRansac) using Direct Linear Transform (DLT) and Levenberg-Marquardt non-linear optimization to recover 6-DOF camera pose and focal length from 2D-to-3D point correspondences.',
+        description: 'Analytically solves Perspective-n-Point (solvePnP / solvePnPRansac: EPnP/P3P/DLT closed forms refined by Levenberg-Marquardt) to recover the 6-DOF camera pose from 2D-to-3D point correspondences at a known focal length. It does not estimate the focal length: give focalLengthPx, or 1.2 x imageWidth is assumed and reported as assumed.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -3730,7 +3730,7 @@ export const GEOBOX_PRECISION_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 imageWidth: { type: 'NUMBER', description: 'Image width in pixels (e.g. 1920)' },
                 imageHeight: { type: 'NUMBER', description: 'Image height in pixels (e.g. 1080)' },
-                focalLengthPx: { type: 'NUMBER', description: 'Optional initial focal length estimate in pixels' },
+                focalLengthPx: { type: 'NUMBER', description: 'Focal length in pixels, held fixed by the solver (default: 1.2 x imageWidth, reported as assumed)' },
                 useRansac: { type: 'BOOLEAN', description: 'Whether to use RANSAC outlier rejection (default: true)' },
                 ransacReprojThresholdPx: { type: 'NUMBER', description: 'RANSAC inlier threshold in pixels (default: 3.0)' }
             },
@@ -3985,7 +3985,10 @@ export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
 
         const imageWidth = typeof args.imageWidth === 'number' ? args.imageWidth : 1920;
         const imageHeight = typeof args.imageHeight === 'number' ? args.imageHeight : 1080;
-        const focalLengthPx = typeof args.focalLengthPx === 'number' ? args.focalLengthPx : (imageWidth * 1.2);
+        const focalGiven = typeof args.focalLengthPx === 'number';
+        const focalLengthPx = focalGiven ? (args.focalLengthPx as number) : (imageWidth * 1.2);
+        const focalNote = focalGiven ? `focal ${focalLengthPx.toFixed(1)} px (given)` : `focal ${focalLengthPx.toFixed(1)} px ASSUMED (1.2 x image width; give focalLengthPx)`;
+        const focal = { focalLengthPx, focalLengthSource: focalGiven ? 'given' : 'assumed: 1.2 x imageWidth' };
         const useRansac = args.useRansac !== false;
         const threshold = typeof args.ransacReprojThresholdPx === 'number' ? args.ransacReprojThresholdPx : 3.0;
 
@@ -4009,14 +4012,14 @@ export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
             });
             const p = ransacResult.pose;
             return {
-                resultPayload: ransacResult as unknown as ToolResultPayload,
-                summaryResult: `Analytically solved 6-DOF camera pose via solvePnPRansac (${ransacResult.inlierCount}/${points2D.length} inliers): camera pos [${p.cameraCenterWorld.map((v: number) => v.toFixed(2)).join(', ')}], attitude (heading: ${p.attitude.headingDeg.toFixed(1)}°, pitch: ${p.attitude.pitchDeg.toFixed(1)}°, roll: ${p.attitude.rollDeg.toFixed(1)}°), fov: ${p.fovYDeg.toFixed(1)}°, mean residual: ${p.meanReprojectionErrorPx.toFixed(3)}px.`
+                resultPayload: { ...ransacResult, ...focal } as unknown as ToolResultPayload,
+                summaryResult: `Analytically solved 6-DOF camera pose via solvePnPRansac (${ransacResult.inlierCount}/${points2D.length} inliers): camera pos [${p.cameraCenterWorld.map((v: number) => v.toFixed(2)).join(', ')}], attitude (heading: ${p.attitude.headingDeg.toFixed(1)}°, pitch: ${p.attitude.pitchDeg.toFixed(1)}°, roll: ${p.attitude.rollDeg.toFixed(1)}°), ${focalNote}, fov: ${p.fovYDeg.toFixed(1)}°, mean residual: ${p.meanReprojectionErrorPx.toFixed(3)}px.`
             };
         } else {
             const p = SpatialPoseEstimatorService.solvePnP(points3D, points2D, intrinsics);
             return {
-                resultPayload: p as unknown as ToolResultPayload,
-                summaryResult: `Analytically solved 6-DOF camera pose via solvePnP: camera pos [${p.cameraCenterWorld.map((v: number) => v.toFixed(2)).join(', ')}], attitude (heading: ${p.attitude.headingDeg.toFixed(1)}°, pitch: ${p.attitude.pitchDeg.toFixed(1)}°, roll: ${p.attitude.rollDeg.toFixed(1)}°), fov: ${p.fovYDeg.toFixed(1)}°, mean residual: ${p.meanReprojectionErrorPx.toFixed(3)}px.`
+                resultPayload: { ...p, ...focal } as unknown as ToolResultPayload,
+                summaryResult: `Analytically solved 6-DOF camera pose via solvePnP: camera pos [${p.cameraCenterWorld.map((v: number) => v.toFixed(2)).join(', ')}], attitude (heading: ${p.attitude.headingDeg.toFixed(1)}°, pitch: ${p.attitude.pitchDeg.toFixed(1)}°, roll: ${p.attitude.rollDeg.toFixed(1)}°), ${focalNote}, fov: ${p.fovYDeg.toFixed(1)}°, mean residual: ${p.meanReprojectionErrorPx.toFixed(3)}px.`
             };
         }
     },

@@ -7,7 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
     SpatialPoseEstimatorService,
     type Point3D,
@@ -155,5 +155,40 @@ describe('SpatialPoseEstimatorService (solvePnP & solvePnPRansac)', () => {
 
         // Translation recovered accurately
         expect(ransacResult.pose.translationCamera[2]).toBeCloseTo(t_gt[2], 2);
+    });
+
+    it('RANSAC draws are seeded (same input, same pose; no Math.random) and only the winning hypothesis is refined', () => {
+        let seed = 9;
+        const rnd = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 2 ** 32);
+        const intrinsics: CameraIntrinsics = { fx: 1400, fy: 1400, cx: 960, cy: 540, width: 1920, height: 1080 };
+        const R = rodriguesToRotationMatrix([0.12, -0.3, 0.05]);
+        const t: Point3D = [0.4, -0.2, 12];
+        const p3: Point3D[] = [], p2: Point2D[] = [];
+        for (let i = 0; i < 240; i++) {
+            const X: Point3D = [(rnd() - 0.5) * 8, (rnd() - 0.5) * 6, (rnd() - 0.5) * 4];
+            const xc = R[0][0] * X[0] + R[0][1] * X[1] + R[0][2] * X[2] + t[0];
+            const yc = R[1][0] * X[0] + R[1][1] * X[1] + R[1][2] * X[2] + t[1];
+            const zc = R[2][0] * X[0] + R[2][1] * X[1] + R[2][2] * X[2] + t[2];
+            const outlier = i % 5 < 2; // 40% outliers
+            p3.push(X);
+            p2.push(outlier ? [rnd() * 1920, rnd() * 1080] : [1400 * xc / zc + 960 + (rnd() - 0.5) * 0.5, 1400 * yc / zc + 540 + (rnd() - 0.5) * 0.5]);
+        }
+        const random = vi.spyOn(Math, 'random');
+        const refine = vi.spyOn(SpatialPoseEstimatorService as any, 'refineWithLevenbergMarquardt');
+        const a = SpatialPoseEstimatorService.solvePnPRansac(p3, p2, intrinsics, { inlierThresholdPx: 2 });
+        const refinesPerSolve = refine.mock.calls.length;
+        const b = SpatialPoseEstimatorService.solvePnPRansac(p3, p2, intrinsics, { inlierThresholdPx: 2 });
+        expect(random).not.toHaveBeenCalled();
+        expect(refinesPerSolve).toBeLessThanOrEqual(1);
+        random.mockRestore();
+        refine.mockRestore();
+        expect(b.pose.translationCamera).toEqual(a.pose.translationCamera);
+        expect(b.inlierIndices).toEqual(a.inlierIndices);
+        expect(a.consensus).toBe(true);
+        expect(a.inlierCount).toBeGreaterThanOrEqual(140);
+        for (let k = 0; k < 3; k++) expect(a.pose.translationCamera[k]).toBeCloseTo(t[k], 1);
+        for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) expect(a.pose.rotationMatrix[r][c]).toBeCloseTo(R[r][c], 2);
+        const other = SpatialPoseEstimatorService.solvePnPRansac(p3, p2, intrinsics, { inlierThresholdPx: 2, seed: 77 });
+        for (let k = 0; k < 3; k++) expect(other.pose.translationCamera[k]).toBeCloseTo(t[k], 1);
     });
 });
