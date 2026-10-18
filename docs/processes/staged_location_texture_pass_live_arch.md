@@ -546,7 +546,7 @@ Timings: tier 15.6-15.9 s per layer (setup 1.4 s, worker 14 s in 4 threads; phot
 ### What I saw (`texture_live_v6` against v5 and photo tier A)
 
 - **Better:** the front piers no longer carry a tree or sky (photo tier A's rung-1 texels; the occluder check and the merge rule keep them out). The back attic inscription reads ("...AND THE HONEST CAN REPAIR. THE EVENT IS IN THE HAND OF GOD ... WASHINGTON"); the front frieze, keystone eagle and medallions are sharp. The sky strip on the back attic top is gone.
-- **Still wrong:** the back frieze around the keystone eagle is a patchwork of offset blocks (tier rung-0 charts of different panos meeting the projection). The pigeon on the back frieze is still there: it is in the projection (v5 had it too), not the tier. The back piers are washed pale in all three rounds. The front reads darker and harsher than v5 in the frieze close-up. Close to the front piers the statues sit in blocky texel patches.
+- **Still wrong:** the back frieze around the keystone eagle is a patchwork of offset blocks (v5 had it continuous); which source each block comes from was not traced. The pigeon on the back frieze is still there; v5 had it too, so it is not the tier's. The back piers are washed pale in all three rounds. Close to the front piers the statues sit in blocky texel patches.
 
 ### Bugs found and fixed
 
