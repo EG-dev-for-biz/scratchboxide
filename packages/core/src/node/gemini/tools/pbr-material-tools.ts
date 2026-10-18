@@ -224,7 +224,7 @@ export const PBR_MATERIAL_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'pbr_probe_mesh_topology',
-        description: 'Analyzes a 3D mesh (.glb) to evaluate whether it is organic or non-organic, determines the optimal UV wrapping technique (Carrier Sheet, Elevation-Stratified Conformal, Height-Blended Triplanar, or Recipe Hybrid), and computes the exact seam placement and seam mitigation strategy (Hermite margin overlap, MikkTSpace handedness, dilated gutters, or boundary welding).',
+        description: 'Measures a .glb (mesh / primitive / triangle counts, world bounds, embedded images) and reports which uvStrategy pbr_synthesize_material would pick for it, the threshold rule that picked it with the measured values, the method that really runs for that strategy, and what it does about UV seams. The classification is a rule outcome, not a shape analysis.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -301,7 +301,7 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
         const probeResult = AdaptiveUvOrchestrator.probeTopology(meshPath, domain);
         return {
             resultPayload: probeResult as unknown as ToolResultPayload,
-            summaryResult: `Probed mesh topology for ${meshPath}: Classified as [${probeResult.domainClassification}] (Organicity: ${probeResult.organicityIndex.toFixed(2)}). Recommended UV strategy: [${probeResult.recommendedStrategy}]. Seam Strategy: ${probeResult.seamStrategy.seamPlacement} via ${probeResult.seamStrategy.seamMitigationMethod} (${probeResult.seamStrategy.recommendedGutterPaddingPx}px padding).`
+            summaryResult: `Probed ${meshPath}: ${probeResult.rationale} Seams: ${probeResult.seams}`
         };
     },
 
@@ -364,12 +364,10 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
             const elapsedMs = Math.round(performance.now() - startTime);
             const outputBytes = adaptiveResult.glbBuffer?.length ?? 0;
 
-            // The probe's seam story describes the recommended strategy; it is only the applied story when that strategy ran.
-            const seamKey = method.differsFromStrategy ? 'recommendedSeamStrategy' : 'seamStrategy';
-
+            const seams = AdaptiveUvOrchestrator.describeMethod(adaptiveResult.appliedStrategy).seams;
             const strategySentence = method.differsFromStrategy
-                ? `Method run: ${method.method}. Strategy ${adaptiveResult.appliedStrategy} (${args.uvStrategy && args.uvStrategy !== 'auto' ? 'requested' : 'recommended by the topology probe'}) was NOT run as such: ${method.note}`
-                : `Applied Adaptive PBR [${adaptiveResult.appliedStrategy}] (${adaptiveResult.domainClassification}) via ${method.method}: ${method.note} Seam placement: ${adaptiveResult.seamStrategy.seamPlacement} (${adaptiveResult.seamStrategy.seamMitigationMethod}, ${adaptiveResult.seamStrategy.recommendedGutterPaddingPx}px padding).`;
+                ? `Method run: ${method.method}. Strategy ${adaptiveResult.appliedStrategy} (${args.uvStrategy && args.uvStrategy !== 'auto' ? 'requested' : `picked by the routing rule: ${adaptiveResult.topology.routingRule}`}) was NOT run as such: ${method.note}`
+                : `Applied ${method.method} for strategy ${adaptiveResult.appliedStrategy}: ${method.note} Seams: ${seams}`;
             let detail = '';
             if (box) {
                 const r = box.report;
@@ -386,7 +384,7 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
                     ignoredOptions,
                     domainClassification: adaptiveResult.domainClassification,
                     topology: adaptiveResult.topology,
-                    [seamKey]: adaptiveResult.seamStrategy,
+                    seams,
                     boxProjection: box,
                     outputFiles: adaptiveResult.outputFiles,
                     outputBytes,

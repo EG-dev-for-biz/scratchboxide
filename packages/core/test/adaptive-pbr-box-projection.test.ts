@@ -584,7 +584,7 @@ describe('pbr_synthesize_material on a mesh (the tool, end to end)', () => {
         expect(res.summaryResult).not.toMatch(/Applied Adaptive PBR \[height_blended_triplanar\]/);
         expect(res.summaryResult).toMatch(/Not used by this method: uvTilingX/);
         expect(res.resultPayload.appliedMethod).toMatchObject({ method: 'box_projection_uv', differsFromStrategy: true });
-        expect(res.resultPayload.recommendedSeamStrategy).toBeDefined();
+        expect(res.resultPayload.seams).toMatch(/different axes/);
         expect(res.resultPayload.seamStrategy).toBeUndefined();
         expect(res.resultPayload.boxProjection.textureSets.length).toBe(2);
         expect(res.resultPayload.ignoredOptions).toContain('uvTilingX');

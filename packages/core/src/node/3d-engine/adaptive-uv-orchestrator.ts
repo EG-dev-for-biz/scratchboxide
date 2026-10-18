@@ -18,6 +18,7 @@ import type {
   PartMaterialAssignment
 } from './adaptive-box-projection-pbr';
 import type { BoxProjectionReport } from './glb-box-projection';
+import { enumerateSceneTriangles, parseGlb, readSceneGeometry, type GlbDocument, type SkippedScenePrimitive } from './glb-geometry-patcher';
 
 export type { PartMaterialAssignment } from './adaptive-box-projection-pbr';
 
@@ -30,44 +31,57 @@ export type AdaptiveUvStrategy =
 
 export type TextureDomain = 'organic' | 'nonorganic' | (string & {});
 
-export interface SeamAdjustmentStrategy {
-  seamPlacement:
-    | 'natural_occlusion_geodesics'
-    | 'architectural_reveals_and_mullions'
-    | 'zero_seams_continuous'
-    | 'photogrammetric_boundary_welded'
-    | 'longitudinal_least_visible_spine';
-  seamMitigationMethod:
-    | 'hermite_margin_overlap'
-    | 'gutter_dilation_clamping'
-    | 'mikktspace_orthonormal_handedness'
-    | 'triplanar_height_blended'
-    | 'affine_edge_altitude_bevel'
-    | 'kdtree_boundary_welding';
-  recommendedGutterPaddingPx: number;
-  tangentSpaceHandednessGuaranteed: boolean;
-  seamRationale: string;
-}
-
+/**
+ * What `probeTopology` measured, and which strategy its routing rule picks from those measurements. Every number is
+ * measured from the GLB; the classification and the recommendation are the outcome of the threshold rules named in
+ * `routingRule`, not of any shape analysis. There is no confidence score because nothing estimates one.
+ */
 export interface TopologyProbeResult {
+  /** 'organic' when the caller said so or the elongated-untextured rule fired; otherwise 'nonorganic'. */
   domainClassification: 'organic' | 'nonorganic';
-  organicityIndex: number; // [0.0 = Inorganic Mineral/Metal/Stone, 1.0 = Pure Living Organic Anatomy]
+  /** Whether `domainClassification` came from the caller's `domain` or from the routing rules. */
+  domainSource: 'caller' | 'routing_rule';
+  /** glTF meshes, their primitives, and the rendered triangle-primitive instances (a mesh used by two nodes counts twice). */
   submeshCount: number;
+  primitiveCount: number;
+  renderedInstances: number;
+  /** Vertices and triangles of the rendered triangle primitives (instanced meshes counted per instance). */
   vertexCount: number;
   triangleCount: number;
+  /** Primitives left out of the counts because they are not triangle lists (lines, points, strips, fans) or have no readable POSITION. */
+  skippedPrimitives: number;
+  imageCount: number;
   hasPrebakedTextures: boolean;
+  /** Primitives whose material samples a baseColorTexture. */
+  texturedPrimitives: number;
   bounds: {
     min: [number, number, number];
     max: [number, number, number];
     dimensions: [number, number, number];
   };
+  /**
+   * 'world': node transforms applied to every vertex. 'accessor_local': POSITION accessor min/max without node transforms
+   * (positions were not readable float32). 'mesh_local_unplaced': no node places any mesh, so each mesh was measured once
+   * at its own coordinates. 'none': no triangle geometry with positions was found (bounds are zero).
+   */
+  boundsSpace: 'world' | 'accessor_local' | 'mesh_local_unplaced' | 'none';
+  /** Dimensions divided by the larger horizontal (X / Z) extent. */
   aspectRatio: [number, number, number];
-  isHighRiseArchitecture: boolean;
-  isMassiveScan: boolean;
-  isArticulatedAnatomy: boolean;
+  /** Outcome of each routing rule on the measured values. */
+  rules: {
+    /** height >= 35 m and height / larger horizontal extent >= 1.5 */
+    tallSlender: boolean;
+    /** >= 10 meshes, embedded images, and not tallSlender */
+    manyTexturedMeshes: boolean;
+    /** height / smaller horizontal extent >= 3, no embedded images, and not tallSlender */
+    elongatedUntextured: boolean;
+  };
   recommendedStrategy: Exclude<AdaptiveUvStrategy, 'auto'>;
-  seamStrategy: SeamAdjustmentStrategy;
-  confidenceScore: number;
+  /** The rule that picked `recommendedStrategy`, with the measured values it compared. */
+  routingRule: string;
+  /** What `applyAdaptivePbr` runs for `recommendedStrategy`, and what that does about UV seams. */
+  methodThatRuns: string;
+  seams: string;
   rationale: string;
 }
 
@@ -141,7 +155,6 @@ export interface AdaptiveUvPbrResult {
   boxProjection?: AdaptiveBoxProjectionSummary;
   domainClassification: 'organic' | 'nonorganic';
   topology: TopologyProbeResult;
-  seamStrategy: SeamAdjustmentStrategy;
   glbBuffer?: Buffer;
   materialxXml?: string;
   usdzBuffer?: Buffer;
@@ -159,166 +172,139 @@ export class AdaptivePbrImageProcessingError extends Error {
   }
 }
 
-function parseGlbBasic(buffer: Buffer) {
-  const jsonLen = buffer.readUInt32LE(12);
-  const gltf = JSON.parse(buffer.toString('utf8', 20, 20 + jsonLen));
-  const binStart = 20 + jsonLen;
-  const binLen = buffer.readUInt32LE(binStart);
-  const bin = buffer.subarray(binStart + 8, binStart + 8 + binLen);
-  return { gltf, bin };
-}
-
-function readAccessorData(gltf: any, bin: Buffer, index: number): Float32Array {
-  const acc = gltf.accessors[index];
-  const bv = gltf.bufferViews[acc.bufferView];
-  const comps = ({ SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 } as Record<string, number>)[acc.type] || 1;
-  const start = (bv.byteOffset || 0) + (acc.byteOffset || 0);
-  const bytes = bin.subarray(start, start + acc.count * comps * 4);
-  return new Float32Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
-}
-
 export class AdaptiveUvOrchestrator {
   /**
-   * Analyzes mesh topology, bounding volumes, and semantic tags to determine the optimal
-   * UV wrapping technique, seam placement, and seam artifact mitigation strategy.
+   * Measures the mesh (counts, world bounds, embedded textures) and applies the routing rules to pick a strategy.
+   * Only measured quantities are reported; the classification is the rule outcome and says which rule fired.
    */
   public static probeTopology(input: string | Buffer, userDomain?: TextureDomain): TopologyProbeResult {
     const rawBuffer = typeof input === 'string' ? fs.readFileSync(input) : input;
-    const { gltf, bin } = parseGlbBasic(rawBuffer);
+    let doc: GlbDocument;
+    try {
+      doc = parseGlb(rawBuffer);
+    } catch (err) {
+      throw new AdaptivePbrInputError(`Cannot read the GLB to probe it: ${(err as Error).message}`);
+    }
+    const json = doc.json;
+    const meshes = json.meshes ?? [];
+    const materials = (json.materials ?? []) as Array<{ pbrMetallicRoughness?: { baseColorTexture?: unknown } }>;
+    const primitiveCount = meshes.reduce((n, m) => n + (m.primitives?.length ?? 0), 0);
+    const texturedPrimitives = meshes.reduce((n, m) => n + (m.primitives ?? []).filter(p => p.material !== undefined && !!materials[p.material]?.pbrMetallicRoughness?.baseColorTexture).length, 0);
+    const imageCount = (json.images ?? []).length;
+    let skipped: SkippedScenePrimitive[] = [];
+    let layout = enumerateSceneTriangles(doc, skipped);
+    let meshesPlacedByNodes = true;
+    if (layout.instances.length === 0 && meshes.length > 0 && !(json.nodes ?? []).some(n => n.mesh !== undefined)) {
+      // No node places any mesh, so the scene renders nothing; measure each mesh once at its own coordinates instead
+      meshesPlacedByNodes = false;
+      const placed: GlbDocument = { ...doc, json: { ...json, nodes: meshes.map((_, i) => ({ mesh: i })), scenes: [{ nodes: meshes.map((_, i) => i) }], scene: 0 } };
+      skipped = [];
+      layout = enumerateSceneTriangles(placed, skipped);
+      doc = placed;
+    }
 
-    let totalVertices = 0;
-    let totalTriangles = 0;
-    let minX = Infinity, minY = Infinity, minZ = Infinity;
-    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-
-    const submeshCount = gltf.meshes ? gltf.meshes.length : 0;
-    const hasPrebakedTextures = !!(gltf.images && gltf.images.length > 0);
-
-    for (const mesh of gltf.meshes || []) {
-      for (const prim of mesh.primitives || []) {
-        if (prim.attributes && prim.attributes.POSITION !== undefined) {
-          const pos = readAccessorData(gltf, bin, prim.attributes.POSITION);
-          const vCount = pos.length / 3;
-          totalVertices += vCount;
-
-          for (let i = 0; i < pos.length; i += 3) {
-            const x = pos[i], y = pos[i + 1], z = pos[i + 2];
-            if (x < minX) minX = x; if (x > maxX) maxX = x;
-            if (y < minY) minY = y; if (y > maxY) maxY = y;
-            if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
-          }
-
-          if (prim.indices !== undefined) {
-            const idxAcc = gltf.accessors[prim.indices];
-            totalTriangles += (idxAcc ? idxAcc.count / 3 : 0);
-          } else {
-            totalTriangles += vCount / 3;
-          }
+    let min: [number, number, number] = [Infinity, Infinity, Infinity];
+    let max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+    let boundsSpace: TopologyProbeResult['boundsSpace'] = 'world';
+    try {
+      const { positions } = readSceneGeometry(doc, layout);
+      for (let i = 0; i < positions.length; i += 3) {
+        for (let k = 0; k < 3; k++) {
+          const v = positions[i + k];
+          if (v < min[k]) min[k] = v;
+          if (v > max[k]) max[k] = v;
+        }
+      }
+    } catch {
+      boundsSpace = 'accessor_local';
+      const accessors = (json.accessors ?? []) as Array<{ min?: number[]; max?: number[] }>;
+      for (const inst of layout.instances) {
+        const acc = accessors[inst.positionAccessor];
+        if (!acc?.min || !acc?.max) continue;
+        for (let k = 0; k < 3; k++) {
+          min[k] = Math.min(min[k], acc.min[k]);
+          max[k] = Math.max(max[k], acc.max[k]);
         }
       }
     }
-
-    if (!isFinite(minX)) {
-      minX = 0; minY = 0; minZ = 0;
-      maxX = 1; maxY = 1; maxZ = 1;
+    if (!Number.isFinite(min[0])) {
+      // Nothing measurable; the method that runs reports what exactly is missing
+      boundsSpace = 'none';
+      min = [0, 0, 0];
+      max = [0, 0, 0];
+    } else if (!meshesPlacedByNodes && boundsSpace === 'world') {
+      boundsSpace = 'mesh_local_unplaced';
     }
 
-    const dimX = Math.max(1e-4, maxX - minX);
-    const dimY = Math.max(1e-4, maxY - minY);
-    const dimZ = Math.max(1e-4, maxZ - minZ);
-    const maxHoriz = Math.max(dimX, dimZ);
+    const dims: [number, number, number] = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+    const [dimX, dimY, dimZ] = dims;
+    const maxHoriz = Math.max(dimX, dimZ, 1e-9);
+    const minHoriz = Math.max(Math.min(dimX, dimZ), 1e-9);
+    const hasPrebakedTextures = imageCount > 0;
+    const heightOverMaxHoriz = dimY / maxHoriz;
+    const heightOverMinHoriz = dimY / minHoriz;
 
-    const isHighRiseArchitecture = dimY >= 35.0 && (dimY / maxHoriz) >= 1.5;
-    const isMassiveScan = submeshCount >= 10 && hasPrebakedTextures && !isHighRiseArchitecture;
-    const isArticulatedAnatomy = userDomain === 'organic' || ((dimY / Math.min(dimX, dimZ)) >= 3.0 && !isHighRiseArchitecture && !hasPrebakedTextures);
+    const tallSlender = dimY >= 35.0 && heightOverMaxHoriz >= 1.5;
+    const manyTexturedMeshes = meshes.length >= 10 && hasPrebakedTextures && !tallSlender;
+    const elongatedUntextured = heightOverMinHoriz >= 3.0 && !tallSlender && !hasPrebakedTextures;
 
-    // Determine domain classification & continuous organicity index
-    let domainClassification: 'organic' | 'nonorganic' = 'nonorganic';
-    let organicityIndex = 0.0;
+    const domainSource: TopologyProbeResult['domainSource'] = userDomain === 'organic' || userDomain === 'nonorganic' ? 'caller' : 'routing_rule';
+    const domainClassification: 'organic' | 'nonorganic' = userDomain === 'organic' || (userDomain !== 'nonorganic' && elongatedUntextured) ? 'organic' : 'nonorganic';
 
-    if (userDomain === 'organic' || isArticulatedAnatomy) {
-      domainClassification = 'organic';
-      organicityIndex = 1.0;
-    } else if (userDomain === 'nonorganic') {
-      domainClassification = 'nonorganic';
-      organicityIndex = 0.0;
-    } else {
-      domainClassification = isArticulatedAnatomy ? 'organic' : 'nonorganic';
-      organicityIndex = isArticulatedAnatomy ? 0.95 : 0.05;
-    }
-
+    const m = (v: number) => v.toPrecision(4);
     let recommendedStrategy: Exclude<AdaptiveUvStrategy, 'auto'>;
-    let confidenceScore = 0.95;
-    let rationale = '';
-    let seamStrategy: SeamAdjustmentStrategy;
-
+    let routingRule: string;
     if (domainClassification === 'organic') {
       recommendedStrategy = 'carrier_conformal_sheet';
-      confidenceScore = 0.96;
-      rationale = `Detected organic articulated anatomy or digit chain. Routed to SO(3) Frenet-Serret Carrier-Frame Conformal Sheets to eliminate texture swimming during kinematic flexion.`;
-      seamStrategy = {
-        seamPlacement: 'natural_occlusion_geodesics',
-        seamMitigationMethod: 'hermite_margin_overlap',
-        recommendedGutterPaddingPx: 8,
-        tangentSpaceHandednessGuaranteed: true,
-        seamRationale: `Placed seams strictly along lateral neutral lines (inter-digital dorsal/palmar boundary) where surface strain during joint flexion is minimal. Seams are adjusted with 8px Hermite margin overlap and MikkTSpace handedness to prevent normal inversion and seam tearing.`
-      };
-    } else if (isMassiveScan) {
+      routingRule = domainSource === 'caller'
+        ? `domain 'organic' given by the caller -> carrier_conformal_sheet`
+        : `height / smaller horizontal extent = ${m(heightOverMinHoriz)} >= 3, no embedded images, not tall-slender -> organic -> carrier_conformal_sheet`;
+    } else if (manyTexturedMeshes) {
       recommendedStrategy = 'recipe_hybrid';
-      confidenceScore = 0.98;
-      rationale = `Detected massive photogrammetric scan with ${submeshCount} submeshes and pre-baked textures. Routed to Recipe Hybrid PBR to maintain 0% VRAM expansion and affine edge altitudes.`;
-      seamStrategy = {
-        seamPlacement: 'photogrammetric_boundary_welded',
-        seamMitigationMethod: 'affine_edge_altitude_bevel',
-        recommendedGutterPaddingPx: 4,
-        tangentSpaceHandednessGuaranteed: true,
-        seamRationale: `Preserves drone capture atlas UVs to avoid re-baking 500MB+ textures. Seams across submesh boundaries are bridged via KD-tree coordinate welding and _SBEDGEH affine edge altitude encoding, enabling GPU shaders to compute virtual specular bevels without visible texture seams.`
-      };
-    } else if (isHighRiseArchitecture) {
+      routingRule = `${meshes.length} meshes >= 10 with ${imageCount} embedded image(s), not tall-slender -> recipe_hybrid`;
+    } else if (tallSlender) {
       recommendedStrategy = 'elevation_stratified_conformal';
-      confidenceScore = 0.96;
-      rationale = `Detected high-rise vertical edifice (Height=${dimY.toFixed(1)}m, AspectRatio=${(dimY / maxHoriz).toFixed(2)}). Routed to Elevation-Stratified Conformal with NOAA solar de-lighting and Toksvig anti-aliasing.`;
-      seamStrategy = {
-        seamPlacement: 'architectural_reveals_and_mullions',
-        seamMitigationMethod: 'gutter_dilation_clamping',
-        recommendedGutterPaddingPx: 16,
-        tangentSpaceHandednessGuaranteed: true,
-        seamRationale: `Seams are aligned strictly with geometric internal corners (re-entrant corners), window mullions, and chamfers. Adjusted via 16px dilated edge gutters to eliminate bilinear mip bleed, while crevice ambient occlusion naturally masks microscopic filtering boundaries.`
-      };
+      routingRule = `height ${m(dimY)} m >= 35 and height / larger horizontal extent = ${m(heightOverMaxHoriz)} >= 1.5 -> elevation_stratified_conformal`;
     } else {
       recommendedStrategy = 'height_blended_triplanar';
-      confidenceScore = 0.90;
-      rationale = `Detected rigid mechanical CAD, vehicle, or procedural manifold. Routed to Continuous Height-Blended Triplanar to guarantee seamless projection across non-manifold edges.`;
-      seamStrategy = {
-        seamPlacement: 'zero_seams_continuous',
-        seamMitigationMethod: 'triplanar_height_blended',
-        recommendedGutterPaddingPx: 0,
-        tangentSpaceHandednessGuaranteed: true,
-        seamRationale: `Zero seams: eliminates UV unwrapping entirely. Uses continuous normal-weighted triplanar projection modulated by micro-height transitions (k >= 4 exponent), ensuring zero texture tearing or distortion across sharp mechanical corners.`
-      };
+      routingRule = `no other rule fired (height ${m(dimY)} m, height / larger horizontal ${m(heightOverMaxHoriz)}, height / smaller horizontal ${m(heightOverMinHoriz)}, ${meshes.length} meshes, ${imageCount} images) -> height_blended_triplanar`;
     }
+    const { methodThatRuns, seams } = AdaptiveUvOrchestrator.describeMethod(recommendedStrategy);
 
     return {
       domainClassification,
-      organicityIndex,
-      submeshCount,
-      vertexCount: totalVertices,
-      triangleCount: Math.round(totalTriangles),
+      domainSource,
+      submeshCount: meshes.length,
+      primitiveCount,
+      renderedInstances: layout.instances.length,
+      vertexCount: layout.vertexCount,
+      triangleCount: layout.triangleCount,
+      skippedPrimitives: skipped.length,
+      imageCount,
       hasPrebakedTextures,
-      bounds: {
-        min: [minX, minY, minZ],
-        max: [maxX, maxY, maxZ],
-        dimensions: [dimX, dimY, dimZ]
-      },
+      texturedPrimitives,
+      bounds: { min, max, dimensions: dims },
+      boundsSpace,
       aspectRatio: [dimX / maxHoriz, dimY / maxHoriz, dimZ / maxHoriz],
-      isHighRiseArchitecture,
-      isMassiveScan,
-      isArticulatedAnatomy,
+      rules: { tallSlender, manyTexturedMeshes, elongatedUntextured },
       recommendedStrategy,
-      seamStrategy,
-      confidenceScore,
-      rationale
+      routingRule,
+      methodThatRuns,
+      seams,
+      rationale: `${boundsSpace === 'none' ? 'No triangle geometry with readable positions was found. ' : ''}Measured ${layout.triangleCount} triangles in ${layout.instances.length} rendered primitive instance(s), ${boundsSpace} extent ${dims.map(m).join(' x ')}. Rule: ${routingRule}. It runs ${methodThatRuns}.`
     };
+  }
+
+  /** What applyAdaptivePbr really runs for a strategy, and its effect on UV seams. */
+  public static describeMethod(strategy: Exclude<AdaptiveUvStrategy, 'auto'>): { methodThatRuns: string; seams: string } {
+    switch (strategy) {
+      case 'recipe_hybrid':
+        return { methodThatRuns: 'recipe_hybrid_vertex_attributes (per-vertex recipe attributes over the mesh\'s own UVs and textures)', seams: 'Unchanged: the mesh keeps its own UVs, so its seams are those of its existing atlas.' };
+      case 'elevation_stratified_conformal':
+        return { methodThatRuns: 'algorithmic_uv_engine_pbr_decomposition (the embedded baseColor images are decomposed into albedo / normal / ORM)', seams: 'Unchanged: the decomposed maps follow the mesh\'s existing UVs and atlas.' };
+      default:
+        return { methodThatRuns: 'box_projection_uv (per-triangle dominant-axis box projection onto synthesized, REPEAT-sampled textures; the named triplanar / conformal technique is not implemented)', seams: 'A UV seam wherever adjacent triangles project on different axes (vertices are split there); no gutter padding, since repeating textures have no islands.' };
+    }
   }
 
   /**
@@ -556,7 +542,6 @@ export class AdaptiveUvOrchestrator {
       boxProjection,
       domainClassification: topology.domainClassification,
       topology,
-      seamStrategy: topology.seamStrategy,
       glbBuffer: finalGlbBuffer,
       materialxXml,
       usdzBuffer,

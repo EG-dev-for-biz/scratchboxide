@@ -122,7 +122,7 @@ describe('AdaptiveUvOrchestrator elevation_stratified_conformal (AlgorithmicUvEn
             const outputPath = path.join(dir, 'facade_pbr.glb');
             const result = await AdaptiveUvOrchestrator.applyAdaptivePbr({ inputGlbBuffer: inputGlb, strategy: 'auto', outputPath });
 
-            expect(result.topology.isHighRiseArchitecture).toBe(true);
+            expect(result.topology.rules.tallSlender).toBe(true);
             expect(result.appliedStrategy).toBe('elevation_stratified_conformal');
 
             // processGlb's own report is surfaced, measured from the real JPEG.

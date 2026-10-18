@@ -1174,7 +1174,6 @@ export {
   AdaptivePbrImageProcessingError,
   type AdaptiveUvStrategy,
   type TextureDomain,
-  type SeamAdjustmentStrategy,
   type TopologyProbeResult,
   type AdaptiveSolarDelightingConfig,
   type AdaptivePbrRequest,
