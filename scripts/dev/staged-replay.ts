@@ -208,7 +208,7 @@ function installHeapSignal(): void {
         const dir = process.env.SCRATCHBOX_HEAP_SNAPSHOT_DIR;
         let file = '';
         if (dir) { fs.mkdirSync(dir, { recursive: true }); file = v8.writeHeapSnapshot(path.join(dir, `server-${Date.now()}.heapsnapshot`)); }
-        console.log(`[staged-replay] heap ${mb} MB after GC, ${memLine()}${file ? `, snapshot ${file}` : ''}`);
+        console.log(`[staged-replay] heap ${mb} MB after GC, ${memLine()}${file ? `, snapshot ${file}` : ''}, replay ${JSON.stringify(active?.stats)}`);
     });
     // SCRATCHBOX_HEAP_SAMPLE_MS: log the live heap whenever it moved by 100 MB since the last line
     const every = Number(process.env.SCRATCHBOX_HEAP_SAMPLE_MS ?? 0);
