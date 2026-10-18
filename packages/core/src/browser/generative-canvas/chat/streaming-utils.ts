@@ -120,6 +120,41 @@ export function streamTokensAsync(
  * capture function the mounted primitive registered. Null when none is mounted or it cannot read its canvas: no
  * other canvas on the page and no placeholder image stands in for it.
  */
+/**
+ * Real window pixels of an element (iframes and WebGL included) through the Electron capturePage IPC. Null outside
+ * the desktop app or when the element has no area.
+ */
+export async function captureElementPixels(el: Element | null | undefined): Promise<string | null> {
+    if (typeof window === 'undefined' || !el) return null;
+    const desktop = (window as any).scratchboxDesktop;
+    if (!desktop || typeof desktop.capturePage !== 'function') return null;
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) return null;
+    const url = await desktop.capturePage({ x: r.left, y: r.top, width: r.width, height: r.height });
+    return typeof url === 'string' && url.startsWith('data:image/') ? url : null;
+}
+
+/**
+ * The active canvas as pixels: in the desktop app, the window pixels of the mounted primitive's element (so a sandbox
+ * or browser iframe is captured as shown); otherwise the primitive's own canvas readback.
+ */
+export async function captureActiveCanvasPixels(targetLayoutMode?: StudioLayoutMode): Promise<string | null> {
+    if (typeof window !== 'undefined') {
+        const elements: Array<[boolean, string]> = [
+            [targetLayoutMode === '3d' || !targetLayoutMode, '__scratchbox_active_3d_scene_element'],
+            [targetLayoutMode === 'code' || !targetLayoutMode, '__scratchbox_active_sandbox_element'],
+            [targetLayoutMode === 'browser' || !targetLayoutMode, '__scratchbox_active_browser_element']
+        ];
+        for (const [applies, key] of elements) {
+            const getEl = (window as any)[key];
+            if (!applies || typeof getEl !== 'function') continue;
+            const px = await captureElementPixels(getEl()).catch(() => null);
+            if (px) return px;
+        }
+    }
+    return captureActiveCanvasScreenshot(targetLayoutMode);
+}
+
 export function captureActiveCanvasScreenshot(targetLayoutMode?: StudioLayoutMode): string | null {
     if (typeof window === 'undefined') return null;
     const registered: Array<[boolean, string]> = [

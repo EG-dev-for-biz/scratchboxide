@@ -527,7 +527,12 @@ export class GeminiClient {
             throw new Error(`Failed to create agent session (${res.status}): ${errText}`);
         }
 
-        return await res.json();
+        // The route answers { success, session }.
+        const body = await res.json();
+        if (!body?.session?.sessionId) {
+            throw new Error(`the agent backend returned no session${body?.error ? `: ${body.error}` : ''}`);
+        }
+        return body.session as AgentSessionState;
     }
 
     /**

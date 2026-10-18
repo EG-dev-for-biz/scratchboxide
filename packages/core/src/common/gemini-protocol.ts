@@ -94,6 +94,8 @@ export interface GeminiGenerateRequest {
     subagentModel?: string;
     enableSubagentPreprocess?: boolean;
     enableGoogleSearch?: boolean;
+    /** @web: this turn must carry Google Search grounding; the run fails when the model cannot take the search tool. */
+    requireGoogleSearch?: boolean;
     enableCodeExecution?: boolean;
     enableBrowserTools?: boolean;
     enableLensTools?: boolean;

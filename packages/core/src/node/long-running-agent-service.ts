@@ -520,9 +520,9 @@ Adhere strictly to the following JSON format:
 
             // Create step record from blueprint
             const actionType = blueprint?.actionType || 'patch_files';
-            const filesModified = blueprint?.filesModified || ['src/core.ts'];
-            const description = blueprint?.description || `Drafted baseline structures for milestone: ${milestone.description}`;
-            const commands = blueprint?.commands || ['npm run test'];
+            const filesModified = Array.isArray(blueprint?.filesModified) ? blueprint.filesModified : [];
+            const description = blueprint?.description || `Action for milestone: ${milestone.description}`;
+            const commands = Array.isArray(blueprint?.commands) ? blueprint.commands : [];
 
             // Apply disk patches if specified
             const env = this.sandboxService.getEnvironment(sessionId);
@@ -794,19 +794,37 @@ Adhere strictly to the following JSON format:
      * Generate an array of milestone objectives deconstructed from the goal.
      */
     private async generateMilestones(goal: string): Promise<AgentMilestone[]> {
-        // High quality static plan deconstruction based on goal keywords
-        if (goal.toLowerCase().includes('sandbox')) {
+        // Simulated sessions (tests, SCRATCHBOX_AGENT_SIMULATION=1) keep a fixed plan; real ones get the model's.
+        if (this.isBlueprintSimulationEnabled()) {
             return [
-                { id: 'm1', description: 'Configure memory and timeout bounds in sandbox', acceptanceCriteria: 'Sandbox runs with configured limits', status: 'pending' },
-                { id: 'm2', description: 'Enable file isolation and read-only overlay', acceptanceCriteria: 'Overlay reads map successfully', status: 'pending' }
+                { id: 'm1', description: 'Initialize workspace state', acceptanceCriteria: 'Files mapped properly', status: 'pending' },
+                { id: 'm2', description: 'Apply patch and compile build', acceptanceCriteria: 'Yarn build compiles with no errors', status: 'pending' },
+                { id: 'm3', description: 'Verify unit and verification tests', acceptanceCriteria: 'All unit tests return exit code 0', status: 'pending' }
             ];
         }
-
-        return [
-            { id: 'm1', description: 'Initialize workspace state', acceptanceCriteria: 'Files mapped properly', status: 'pending' },
-            { id: 'm2', description: 'Apply patch and compile build', acceptanceCriteria: 'Yarn build compiles with no errors', status: 'pending' },
-            { id: 'm3', description: 'Verify unit and verification tests', acceptanceCriteria: 'All unit tests return exit code 0', status: 'pending' }
-        ];
+        if (!this.geminiService) {
+            throw new Error('No Gemini service is attached to the long-running agent, so the goal cannot be planned');
+        }
+        const res = await this.geminiService.streamGenerate({
+            prompt: `Plan this goal for an autonomous coding agent working in the user's workspace.\nGoal: ${goal}\n\nReturn only a JSON array of 1 to 5 milestones, in order, each {"description": "...", "acceptanceCriteria": "a check the agent can run or observe"}. Keep them specific to the goal.`,
+            temperature: 0.2
+        }, () => { /* the plan is read from the final text */ });
+        const match = res.text.match(/```json\s*([\s\S]*?)\s*```/) || res.text.match(/(\[[\s\S]*\])/);
+        let parsed: unknown;
+        try {
+            parsed = match ? JSON.parse(match[1]) : undefined;
+        } catch (err: any) {
+            throw new Error(`The model's plan was not valid JSON: ${err?.message || err}`);
+        }
+        if (!Array.isArray(parsed) || parsed.length === 0) {
+            throw new Error(`The model returned no milestones for the goal: ${res.text.slice(0, 200)}`);
+        }
+        return parsed.slice(0, 5).map((m: any, i: number) => {
+            if (!m || typeof m.description !== 'string' || typeof m.acceptanceCriteria !== 'string') {
+                throw new Error(`Milestone ${i + 1} of the model's plan lacks a description or acceptance criteria`);
+            }
+            return { id: `m${i + 1}`, description: m.description, acceptanceCriteria: m.acceptanceCriteria, status: 'pending' as const };
+        });
     }
 
 

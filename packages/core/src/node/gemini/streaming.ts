@@ -632,6 +632,9 @@ export class StreamingEngine {
             const hasFunctionDeclarations = tools.some(t => 'functionDeclarations' in t && Array.isArray(t.functionDeclarations) && t.functionDeclarations.length > 0);
             const supportsMixedTools = Number(/^gemini-(\d+)/.exec(model)?.[1] ?? 0) >= 3;
             if (hasFunctionDeclarations && !supportsMixedTools) {
+                if (request.requireGoogleSearch) {
+                    throw new Error(`@web needs Google Search grounding, but ${model} cannot take the search tool together with function tools; choose a Gemini 3 model or remove @web`);
+                }
                 payload.tools = tools.filter(t => 'functionDeclarations' in t);
             } else {
                 payload.tools = tools;
@@ -897,6 +900,14 @@ export class StreamingEngine {
         // never wrote, so a prose reply leaves the canvas as it is.
         const artifact = streamMountedArtifact
             || await buildPendingPythonGenerator(this.synthesizeArtifact(request.prompt, accumulatedText, request, mcpExecutions, accumulatedGroundingMetadata), signal);
+
+        if (request.requireGoogleSearch) {
+            const g = accumulatedGroundingMetadata as { webSearchQueries?: string[]; groundingChunks?: unknown[] } | undefined;
+            const searched = (g?.webSearchQueries?.length ?? 0) > 0 || (g?.groundingChunks?.length ?? 0) > 0;
+            if (!searched) {
+                onEvent({ type: 'status', text: '@web: the model answered without running a Google Search (no search grounding came back), so this reply is not web-grounded.', modelUsed: model });
+            }
+        }
 
         const summary = {
             text: accumulatedText,

@@ -138,11 +138,20 @@ export const InteractiveBrowserPrimitive: React.FC<InteractiveBrowserPrimitivePr
         ];
     });
 
-    // Network requests a browser tool recorded for this page (data.networkRequests). The preview iframe's own requests
-    // are not visible here, so none are made up: no stand-in list and no entry with an invented status or timing.
-    const [networkRequests] = React.useState<Array<{ id: string; url: string; method: string; status: number; durationMs: number; type: string }>>(() => {
+    // Network requests: what a browser tool recorded for this page (data.networkRequests) plus the proxied page's own
+    // Resource Timing entries, which its bridge script posts. Status 0 means the browser did not expose the status.
+    const [networkRequests, setNetworkRequests] = React.useState<Array<{ id: string; url: string; method: string; status: number; durationMs: number; type: string; transferBytes?: number }>>(() => {
         return Array.isArray((data as any).networkRequests) ? (data as any).networkRequests : [];
     });
+    // The page's accessibility tree from the bridge's snapshot action (the DOM tab).
+    const [domSnapshot, setDomSnapshot] = React.useState<string | null>(null);
+    // A new page starts a new request list and a new snapshot.
+    const firstUrlRef = React.useRef(true);
+    React.useEffect(() => {
+        if (firstUrlRef.current) { firstUrlRef.current = false; return; }
+        setNetworkRequests([]);
+        setDomSnapshot(null);
+    }, [currentUrl]);
 
     // Copy notification
     const [copiedUrl, setCopiedUrl] = React.useState<boolean>(false);
@@ -192,12 +201,14 @@ export const InteractiveBrowserPrimitive: React.FC<InteractiveBrowserPrimitivePr
     React.useEffect(() => {
         if (typeof window !== 'undefined') {
             (window as any).__scratchbox_capture_active_browser = captureFrame;
+            (window as any).__scratchbox_active_browser_element = () => iframeRef.current;
         }
         onCaptureReady?.(captureFrame);
 
         return () => {
             if (typeof window !== 'undefined' && (window as any).__scratchbox_capture_active_browser === captureFrame) {
                 delete (window as any).__scratchbox_capture_active_browser;
+                delete (window as any).__scratchbox_active_browser_element;
             }
         };
     }, [captureFrame, onCaptureReady]);
@@ -453,6 +464,24 @@ export const InteractiveBrowserPrimitive: React.FC<InteractiveBrowserPrimitivePr
                 triggerSnapshotFetch();
             }
 
+            // Resource Timing entries from the proxied page
+            if (msg.type === 'scratchbox-browser-network' && Array.isArray(msg.entries)) {
+                const decode = (u: string) => {
+                    const m = /[?&]url=([^&]+)/.exec(u);
+                    try { return m && u.includes('/api/browser/proxy') ? decodeURIComponent(m[1]) : u; } catch { return u; }
+                };
+                const rows = msg.entries.map((e: any, i: number) => ({
+                    id: `res-${Date.now()}-${i}`,
+                    url: decode(String(e.name || '')),
+                    method: '',
+                    status: Number(e.responseStatus) || 0,
+                    durationMs: Math.round(Number(e.duration) || 0),
+                    type: String(e.initiatorType || ''),
+                    transferBytes: Number(e.transferSize) || 0
+                }));
+                setNetworkRequests(prev => [...prev, ...rows].slice(-300));
+            }
+
             // Response to scratchbox-browser-action
             if (msg.type === 'scratchbox-browser-action-response' && msg.requestId) {
                 const resolver = pendingActionsMapRef.current.get(msg.requestId);
@@ -460,6 +489,7 @@ export const InteractiveBrowserPrimitive: React.FC<InteractiveBrowserPrimitivePr
                     pendingActionsMapRef.current.delete(msg.requestId);
                     resolver(msg);
                 } else if (msg.requestId.startsWith('snap-') && msg.success && msg.result) {
+                    setDomSnapshot(typeof msg.result.accessibilityTree === 'string' ? msg.result.accessibilityTree : null);
                     fetch('/api/browser/state', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -1232,13 +1262,13 @@ export const InteractiveBrowserPrimitive: React.FC<InteractiveBrowserPrimitivePr
                                     <tbody>
                                         {networkRequests.length === 0 && (
                                             <tr>
-                                                <td colSpan={4}>No requests recorded. The preview frame's own network requests are not visible to the canvas.</td>
+                                                <td colSpan={4}>No requests recorded yet. Pages loaded through the proxy report their Resource Timing entries here.</td>
                                             </tr>
                                         )}
                                         {networkRequests.map(req => (
                                             <tr key={req.id}>
                                                 <td className="sb-req-url">{req.url}</td>
-                                                <td><span className={req.status >= 200 && req.status < 400 ? 'sb-status-200' : undefined}>{req.status}</span></td>
+                                                <td><span className={req.status >= 200 && req.status < 400 ? 'sb-status-200' : undefined} title={req.status ? undefined : 'The browser did not expose this response status'}>{req.status || '—'}</span></td>
                                                 <td><span className="sb-req-type">{req.type}</span></td>
                                                 <td>{req.durationMs}ms</td>
                                             </tr>
@@ -1251,14 +1281,10 @@ export const InteractiveBrowserPrimitive: React.FC<InteractiveBrowserPrimitivePr
                         {/* Tab 3: DOM Tree */}
                         {activeDrawerTab === 'dom' && (
                             <div className="sb-dom-panel">
-                                <div className="sb-dom-node">&lt;<span className="sb-tag">html</span> <span className="sb-attr">lang</span>=&quot;en&quot;&gt;</div>
-                                <div className="sb-dom-node" style={{ paddingLeft: '16px' }}>&lt;<span className="sb-tag">head</span>&gt; &lt;<span className="sb-tag">title</span>&gt;{pageTitle}&lt;/<span className="sb-tag">title</span>&gt; &lt;/<span className="sb-tag">head</span>&gt;</div>
-                                <div className="sb-dom-node" style={{ paddingLeft: '16px' }}>&lt;<span className="sb-tag">body</span> <span className="sb-attr">class</span>=&quot;theme-dark&quot;&gt;</div>
-                                <div className="sb-dom-node" style={{ paddingLeft: '32px' }}>&lt;<span className="sb-tag">div</span> <span className="sb-attr">id</span>=&quot;root&quot;&gt;</div>
-                                <div className="sb-dom-node" style={{ paddingLeft: '48px' }}>&lt;<span className="sb-tag">main</span> <span className="sb-attr">class</span>=&quot;viewport-container&quot;&gt; ... 12 child nodes &lt;/<span className="sb-tag">main</span>&gt;</div>
-                                <div className="sb-dom-node" style={{ paddingLeft: '32px' }}>&lt;/<span className="sb-tag">div</span>&gt;</div>
-                                <div className="sb-dom-node" style={{ paddingLeft: '16px' }}>&lt;/<span className="sb-tag">body</span>&gt;</div>
-                                <div className="sb-dom-node">&lt;/<span className="sb-tag">html</span>&gt;</div>
+                                <button className="sb-drawer-tab" onClick={() => triggerSnapshotFetch()}>Refresh from the page</button>
+                                {domSnapshot
+                                    ? <pre className="sb-dom-node" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{domSnapshot}</pre>
+                                    : <div className="sb-dom-node">No snapshot yet: the page's interactive elements appear here once the proxied page answers a snapshot.</div>}
                             </div>
                         )}
 

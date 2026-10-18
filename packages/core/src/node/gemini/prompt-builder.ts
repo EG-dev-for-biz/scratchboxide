@@ -209,7 +209,12 @@ export const CANVAS_PRIMITIVES_SPECIFICATION = `
      - The live sandbox provides access to the \`@scratchbox/core\` virtual SDK!
      - You can import clean, high-level primitives directly:
        \`import { Google3DViewport, AudioVisualizer, MetricCard, Notification, useAtmosphere, useScratchboxRpc, scratchbox } from '@scratchbox/core';\`
-     - Leverage these components to provide photorealistic 3D tile stages, audio visualizers, metrics cards, and RPC tools without cluttering the user's code with low-level WebGL or math boilerplate.
+     - Their contracts (each fails visibly without its inputs; none invents data):
+       - \`<Google3DViewport query="Flatiron Building, New York" height="360px" />\` (or lat/lng): extracts real Google 3D Tiles in studio clay through the host (one Map Tiles extraction) and renders the GLB.
+       - \`useAtmosphere({ latitude, longitude, isoDate })\`: the NOAA sun position for that place and time ({ elevationDeg, azimuthDeg, loading, error }).
+       - \`<AudioVisualizer src="..." />\` (or audioElement, stream, microphone): bars from a Web Audio AnalyserNode on that source.
+       - \`MetricCard\` and \`Notification\` only lay out the values you pass.
+     - scratchbox.operators.execute, scratchbox.media.exportBlockingPass and scratchbox.project.listAssets are not connected in the sandbox and reject; do not use them.
    - VIBE-CODING CUSTOM TOOLS & MICRO-STUDIOS (CRITICAL ARCHETYPE):
      - When the user asks to "vibe-code a tool", "build an editor", "make a 3D blocking tool", "shot pre-viz tool", "camera sequencer", "scene director", or custom spatial utility:
        - Output type: "live-code-sandbox" with template: "react" and include dependencies: { "three": "^0.160.0", "lucide-react": "^0.468.0" }.

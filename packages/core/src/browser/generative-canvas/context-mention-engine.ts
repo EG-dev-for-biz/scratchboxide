@@ -64,13 +64,13 @@ export const CONTEXT_MENTION_METADATA: Record<
     terminal: {
         label: 'Terminal (@terminal)',
         icon: '⚡',
-        description: 'Reference active terminal logs, exit codes, and output',
-        placeholder: 'Search terminal history...'
+        description: 'Run a command in the workspace sandbox and attach its output',
+        placeholder: 'Command to run (e.g. git status)...'
     },
     web: {
         label: 'Live Web (@web)',
         icon: '🌐',
-        description: 'Query live web sources & verified citations',
+        description: 'Ground this message in a Google Search',
         placeholder: 'Web search topic...'
     },
     docs: {
@@ -358,50 +358,31 @@ export function resolveContextMentionQuery(
         }
 
         case 'terminal': {
-            results.push(
-                {
-                    id: 'ctx-terminal-last-output',
+            // What is typed after @ is the command: it runs in the workspace sandbox when the message is sent
+            // (POST /workspace/run-command) and its real output goes into the message.
+            if (query.trim()) {
+                results.push({
+                    id: `ctx-terminal-run-${query.trim().replace(/[^a-zA-Z0-9]/g, '-').slice(0, 40)}`,
                     type: 'terminal',
-                    name: 'Last Command Output',
-                    description: 'Inject stdout/stderr from most recent terminal run',
-                    icon: '⚡'
-                },
-                {
-                    id: 'ctx-terminal-errors',
-                    type: 'terminal',
-                    name: 'Active Terminal Errors & Stack Traces',
-                    description: 'Inject compiler errors and failure diagnostics',
-                    icon: '🚨'
-                },
-                {
-                    id: 'ctx-terminal-env',
-                    type: 'terminal',
-                    name: 'Terminal Environment & Working Directory',
-                    description: 'Current working directory, node version, git branch',
-                    icon: '🖥️'
-                }
-            );
+                    name: `Run: ${query.trim()}`,
+                    description: 'Runs in the workspace sandbox when you send; its stdout, stderr and exit code are attached',
+                    icon: '⚡',
+                    payload: { command: query.trim() }
+                });
+            }
             break;
         }
 
         case 'web': {
-            results.push(
-                {
-                    id: 'ctx-web-live-search',
-                    type: 'web',
-                    name: q ? `Live Web Search: "${q}"` : 'Live Web Knowledge Query',
-                    description: 'Queries live web sources and returns verified citations',
-                    detail: q || 'Enter search query',
-                    icon: '🌐'
-                },
-                {
-                    id: 'ctx-web-news',
-                    type: 'web',
-                    name: 'Latest Tech & Release Updates',
-                    description: 'Fetches current news and developer release updates',
-                    icon: '📰'
-                }
-            );
+            // Forces Google Search grounding for the turn; the reply says so when the model ran no search.
+            results.push({
+                id: q ? `ctx-web-search-${q.replace(/[^a-z0-9]/g, '-').slice(0, 40)}` : 'ctx-web-search',
+                type: 'web',
+                name: q ? `Search the web: "${query.trim()}"` : 'Search the web for this message',
+                description: 'Google Search grounding is required for this turn',
+                icon: '🌐',
+                payload: q ? { query: query.trim() } : undefined
+            });
             break;
         }
 
