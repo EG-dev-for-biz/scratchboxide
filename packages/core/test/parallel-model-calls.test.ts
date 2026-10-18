@@ -377,3 +377,33 @@ describe('spatial_smart_point_inpaint: sends the region around the point', () =>
         expect(px(100, 100)).toEqual([40, 120, 200]);    // outside the crop: the input
     });
 });
+
+describe('vision calls get images no larger than they need', () => {
+    it('downscaleForVision area-averages a large image to a 1024 px long edge and leaves a small one as it is', async () => {
+        const { downscaleForVision } = await import('../src/node/vision-image-downscale');
+        const W = 3000, H = 2000;
+        const rgba = Buffer.alloc(W * H * 4);
+        // A 1 px checkerboard: an area average is mid grey; a point sample would alias to black or white.
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const v = (x + y) % 2 ? 255 : 0; const i = (y * W + x) * 4; rgba[i] = rgba[i + 1] = rgba[i + 2] = v; rgba[i + 3] = 255; }
+        const big = await downscaleForVision(encodePng(W, H, rgba), 'image/png');
+        expect([big.width, big.height, big.downscaled]).toEqual([1024, 683, true]);
+        const px = decodePng(big.data).rgba;
+        expect(Math.abs(px[(300 * 1024 + 500) * 4] - 128)).toBeLessThan(30);
+        const smallPng = solidPng(640, 480);
+        const small = await downscaleForVision(smallPng, 'image/png');
+        expect(small.downscaled).toBe(false);
+        expect(small.data).toBe(smallPng);
+    });
+
+    it('style deconstruction sends the downscaled image and asks for pixel measures at the original size', async () => {
+        const { AdaptiveStyleDeconstructionService } = await import('../src/node/spatial/AdaptiveStyleDeconstructionService');
+        let sent: any;
+        const client = { models: { generateContent: async (req: any) => { sent = req; throw new Error('stop after recording'); } } };
+        const svc = new AdaptiveStyleDeconstructionService({ client });
+        await svc.deconstructStyle(solidPng(2400, 1600), undefined, { client } as any).catch(() => undefined);
+        const parts = sent.contents;
+        const img = decodePng(Buffer.from(parts[0].inlineData.data, 'base64'));
+        expect([img.width, img.height]).toEqual([1024, 683]);
+        expect(String(parts[1])).toContain('downscaled from 2400x1600 to 1024x683');
+    });
+});

@@ -42,7 +42,7 @@ function redPixels(png: Buffer): number {
     return n;
 }
 
-test('the audit sends four real renders in the model\'s own colors to the vision check', async () => {
+test('the audit sends four real renders, tiled 2x2 into one image, in the model\'s own colors to the vision check', async () => {
     const soup = glbToTriangleSoup(redTriangleGlb())!;
     assert.deepStrictEqual(Array.from(soup.colors!.slice(0, 3)), [1, 0, 0]);
     let sent: Buffer[] = []; let prompt = '';
@@ -50,9 +50,14 @@ test('the audit sends four real renders in the model\'s own colors to the vision
         prompt = p; sent = images;
         return '{"verdict":"problems","checked":["one triangle"],"problems":[{"problem":"It is red, not white","confidence":"high"}]}';
     });
-    assert.strictEqual(sent.length, 4);
-    assert.ok(redPixels(sent[0]) > 100, 'the render shows the red material');
+    assert.strictEqual(sent.length, 1);
+    const { decodePng } = await import('../src/node/texture-processing');
+    const tiled = decodePng(sent[0]);
+    assert.deepStrictEqual([tiled.width, tiled.height], [1024, 1024]);
+    assert.ok(redPixels(sent[0]) > 100, 'the renders show the red material');
     assert.match(prompt, /a white triangle/);
+    assert.match(prompt, /2x2 grid/);
+    assert.match(prompt, /top-left .*top-right .*bottom-left .*bottom-right /);
     assert.deepStrictEqual(result.problems, [{ view: undefined, problem: 'It is red, not white' }]);
     assert.deepStrictEqual(result.checked, ['one triangle']);
 });

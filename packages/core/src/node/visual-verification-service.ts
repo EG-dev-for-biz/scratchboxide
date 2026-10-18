@@ -6,6 +6,7 @@
  * of this file, via any medium, is strictly prohibited without explicit written
  * permission from Scratchbox LLC.
  ********************************************************************************/
+import { downscaleForVision } from './vision-image-downscale';
 import type { GoogleGenAI } from '@google/genai';
 import {
     isVisualAuditUnavailable,
@@ -184,7 +185,15 @@ Inspect this rendered viewport screenshot and provide your rigorous visual audit
         }
         credential = this.client.genAIClientCredential?.();
 
-        const { systemInstruction, userPrompt, inlineData } = this.buildMultimodalPrompt(request);
+        const { systemInstruction, userPrompt, inlineData: fullFrame } = this.buildMultimodalPrompt(request);
+        // The audit reads the frame's content; a long edge of 1024 px is enough for that and uploads and answers faster.
+        let inlineData = fullFrame;
+        try {
+            const small = await downscaleForVision(Buffer.from(fullFrame.data, 'base64'), fullFrame.mimeType);
+            if (small.downscaled) inlineData = { mimeType: small.mimeType, data: small.data.toString('base64') };
+        } catch {
+            // A frame this process cannot decode is sent as captured; the model reads more formats than we do.
+        }
         let text: string;
         try {
             const response = await genai.models.generateContent({
