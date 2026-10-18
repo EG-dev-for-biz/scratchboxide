@@ -100,7 +100,10 @@ struct DepthToGaussianOptions {
     float minDepth{0.1f};
     float maxDepth{250.0f};
     uint32_t stride{1};            // Pixel sub-sampling step (1 = full res, 2 = 1/4 count)
-    float splatScaleMultiplier{2.10f}; // Radius multiplier to ensure gapless coverage
+    // Gaussian sigma as a fraction of the sample spacing. Measured with the EWA splat renderer against the source photo
+    // (render of the source camera): 1.0 is gapless on surfaces at the source view and +-12 deg orbits; the former 2.1
+    // halved SSIM (0.52 -> 0.24) and sharpness. Below ~0.9 the sample lattice shows.
+    float splatScaleMultiplier{1.0f};
     float splatThicknessRatio{0.22f};  // Thickness along normal vs tangent radius
     bool computeSH1Radiance{true};     // Compute degree-1 spherical harmonics coefficients
     SurfaceModel surfaceModel{SurfaceModel::SURFACE_3D_ELLIPSOID};
@@ -505,7 +508,9 @@ public:
                     Vec3 normal = -ray;
                     Quat qLocal = quatFromUnitVectors(Vec3(0.0f, 0.0f, 1.0f), normal);
 
-                    float pixelFootprint = (static_cast<float>(step) * avgBgDepth / cam.fx) * options.splatScaleMultiplier * 1.4f;
+                    // Disocclusion fill behind silhouettes: wider than surface splats, sized as ImageToSplatService's inpainting layer
+                    // (1.35 x 1.4 x spacing) rather than from the surface sigma.
+                    float pixelFootprint = (static_cast<float>(step) * avgBgDepth / cam.fx) * 1.35f * 1.4f;
                     float sx = pixelFootprint;
                     float sy = pixelFootprint;
                     float sz = pixelFootprint * options.splatThicknessRatio;
@@ -905,11 +910,10 @@ public:
         float eyeHeight = 1.70f,
         float maxRadius = 80.0f,
         float edgeSeveranceTau = 0.08f,
-        // Scale is the Gaussian sigma. Calibrated against an independent renderer (gaussian-splat-lite,
-        // 2.83 sigma kernel, no low-pass dilation): 0.65 leaves a visible row lattice on thin disc
-        // splats; 0.95 halves it while keeping edge detail. Our own viewer adds a small depth-scaled
-        // low-pass, so it is gapless at either value.
-        float splatScaleMultiplier = 0.95f,
+        // Scale is the Gaussian sigma as a fraction of the sample spacing. Measured with the EWA splat renderer against
+        // the source panorama (Pantheon, stride 4, views from the capture point and 0.5 m walks): 0.8 leaves no gaps
+        // (< 0.02% of pixels) and gives the best SSIM / error of the gapless settings; 0.95 is softer, 0.7 opens gaps.
+        float splatScaleMultiplier = 0.8f,
         float splatThicknessRatio = 0.22f,
         bool inpaintOcclusion = true
     ) {
@@ -986,10 +990,13 @@ public:
                     float dDown  = optionalMetricDepths[yNext * width + x];
                     float dUp    = optionalMetricDepths[yPrev * width + x];
 
-                    float maxDx = std::max(1e-4f, std::max(dRight, dLeft));
-                    float maxDy = std::max(1e-4f, std::max(dDown, dUp));
-                    float deltaX = std::abs(dRight - dLeft) / maxDx;
-                    float deltaY = std::abs(dDown - dUp) / maxDy;
+                    // A discontinuity is a depth step the neighbours do not predict. On a plane 1/depth is linear in the
+                    // ray direction, so its second difference stays near zero however oblique the surface is; a first
+                    // difference would flag every far floor or ceiling row (depth grows fast at grazing incidence) and
+                    // shrink those splats into scanline gaps.
+                    float invD = 1.0f / std::max(1e-4f, depth);
+                    float deltaX = std::abs(1.0f / std::max(1e-4f, dRight) + 1.0f / std::max(1e-4f, dLeft) - 2.0f * invD) / invD;
+                    float deltaY = std::abs(1.0f / std::max(1e-4f, dDown) + 1.0f / std::max(1e-4f, dUp) - 2.0f * invD) / invD;
 
                     isEdge = (deltaX > edgeSeveranceTau) || (deltaY > edgeSeveranceTau);
 
@@ -1010,8 +1017,8 @@ public:
                         }
                     }
 
-                    // Multilayer disocclusion inpainting synthesis
-                    if (inpaintOcclusion) {
+                    // Multilayer disocclusion inpainting synthesis (behind real discontinuities only)
+                    if (inpaintOcclusion && isEdge) {
                         float bgDepthSum = 0.0f;
                         int bgCount = 0;
                         float fgBgRatio = 1.0f + edgeSeveranceTau * 1.5f;
@@ -1083,19 +1090,20 @@ public:
 
                 // Foreshortening compensation: at grazing incidence the surface footprint of one
                 // pixel row is arc / |n.ray| along the ray's tangent-plane projection. Build an
-                // explicit (T_perp, T_fore, N) basis so the splat can be elongated only along the
+                // explicit (T_perp, T_fore, N) basis so the splat is elongated only along the
                 // foreshortened direction (prevents scanline gaps on floors/ceilings/walls).
                 float cosInc = std::abs(normal.dot(ray));
-                // Clamp to 2x: enough to close grazing-row gaps at 3 sigma, without smearing the
-                // floor into radial streaks when the viewer walks off the capture point.
-                float elongation = 1.0f / std::max(0.5f, cosInc);
+                // Up to 10x (incidence 84 deg): the elongated axis spans the sample's true footprint on the surface, so
+                // the far floor stays gapless. Measured on the Pantheon panorama (stride 4): a 2x cap left the floor
+                // beyond ~5 m in scanline gaps at every sigma below 1.3.
+                float elongation = 1.0f / std::max(0.1f, cosInc);
                 Vec3 tFore = ray - normal * normal.dot(ray);
                 float tForeLen = tFore.length();
                 Quat rot;
                 Vec3 scale;
                 if (tForeLen > 1e-4f && elongation > 1.05f) {
                     tFore = tFore * (1.0f / tForeLen);
-                    Vec3 tPerp = normal.cross(tFore).normalized();
+                    Vec3 tPerp = tFore.cross(normal).normalized(); // right-handed (tPerp, tFore, normal): quatFromBasis needs a proper rotation
                     rot = quatFromBasis(tPerp, tFore, normal);
                     scale = Vec3(arc, arc * elongation, arc * splatThicknessRatio);
                 } else {

@@ -148,7 +148,7 @@ int main(int argc, char** argv) {
     std::string profile = "adaptive";
     int stride = 4; // Stride 4 on 4096x2048 = 1024x512 = 524,288 splats
     float eyeHeight = 1.70f;
-    float sigmaScale = 0.95f; // Gaussian sigma as a fraction of the sample spacing (see convertEquirectangularToGaussianSplats)
+    float sigmaScale = 0.8f; // Gaussian sigma as a fraction of the sample spacing (see convertEquirectangularToGaussianSplats)
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
