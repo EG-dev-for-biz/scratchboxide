@@ -20,6 +20,8 @@ import {
 } from '../../../browser/generative-canvas/services/atmosphere';
 import { MissingInputError } from '../../../common/errors/pipeline-errors';
 import type { ToolDeclaration, ToolHandler } from './types';
+import type { CanvasArtifact, Scene3DData } from '../../../browser/generative-canvas/canvas-types';
+import { DirectDispatchOperatorEngine } from '../../../browser/generative-canvas/services/direct-dispatch-operator-engine';
 
 function asString(val: unknown): string {
     return typeof val === 'string' ? val : '';
@@ -32,6 +34,57 @@ function requireDate(tool: string, val: unknown): Date {
     const date = new Date(iso);
     if (isNaN(date.getTime())) throw new MissingInputError(tool, 'a valid isoDate', `'${iso}' is not an ISO 8601 date-time`);
     return date;
+}
+
+/** How far the sun's shadow camera reaches around the scene's centre when nothing else sizes it: the camera's distance to its target, halved. */
+function shadowRadiusFor(data: Scene3DData): number {
+    const cam = data.camera as { position?: number[]; target?: number[] } | undefined;
+    const p = cam?.position, t = cam?.target ?? [0, 0, 0];
+    const d = Array.isArray(p) && p.length === 3 ? Math.hypot(p[0] - t[0], p[1] - t[1], p[2] - t[2]) : 0;
+    return Math.max(20, Math.min(2000, d > 0 ? d * 0.5 : 60));
+}
+
+/**
+ * The sun written into a 3D scene through its atmosphere operators (sb_set_diurnal_time_of_day, then the optional layers),
+ * with what the viewport needs to draw it: the colour temperature and the shadow extent. The scene keeps its render mode;
+ * a clay scene draws the sun and sky because the sun is set explicitly (syncAtmosphere's explicit-sun opt-in).
+ */
+function applySunToScene(
+    active: CanvasArtifact,
+    s: { elevation: number; azimuth: number; lat?: number; lng?: number; isoDate?: string; sunSource: string; kelvin?: number; config: Record<string, unknown>; clouds: boolean; args: Record<string, unknown> }
+): { ok: true; artifact: CanvasArtifact; operators: string[]; shadowRadiusM: number } | { ok: false; error: string } {
+    const engine = new DirectDispatchOperatorEngine(JSON.parse(JSON.stringify(active.data)) as Scene3DData);
+    const commands: Array<{ operator: string; params: Record<string, unknown> }> = [
+        { operator: 'sb_set_diurnal_time_of_day', params: { sunElevation: s.elevation, sunAzimuth: s.azimuth, ...(s.lat !== undefined && s.lng !== undefined ? { latitude: s.lat, longitude: s.lng } : {}) } }
+    ];
+    const scattering: Record<string, unknown> = { enabled: true, volumetricClouds: s.clouds };
+    for (const k of ['turbidity', 'cloudCoverage', 'cloudDensity', 'cloudAltitude'] as const) if (s.config[k] !== undefined) scattering[k] = s.config[k];
+    commands.push({ operator: 'sb_configure_atmospheric_scattering', params: scattering });
+    if (s.config.aerialPerspectiveEnabled === true) commands.push({ operator: 'sb_configure_aerial_perspective', params: { enabled: true } });
+    if (s.config.cloudShadowsEnabled === true) commands.push({ operator: 'sb_configure_terrain_cloud_shadows', params: { enabled: true } });
+    if (s.config.godRays) commands.push({ operator: 'sb_add_volumetric_god_rays', params: { enabled: true, ...(typeof (s.config.godRays as { intensity?: number }).intensity === 'number' ? { intensity: (s.config.godRays as { intensity: number }).intensity } : {}) } });
+    const batch = engine.executeBatch(commands, { atomic: true });
+    if (!batch.success) return { ok: false, error: batch.results.filter(r => !r.success).map(r => r.error).filter(Boolean).join('; ') || 'the atmosphere operators failed' };
+    const data = engine.getSceneData();
+    const shadowRadiusM = shadowRadiusFor(data);
+    const atm = (typeof data.features?.atmosphericScattering === 'object' && data.features.atmosphericScattering) ? data.features.atmosphericScattering as Record<string, unknown> : {};
+    data.features = {
+        ...(data.features ?? {}),
+        atmosphericScattering: {
+            ...atm,
+            ...(s.kelvin !== undefined ? { kelvinTemperature: s.kelvin } : {}),
+            sunSource: s.sunSource,
+            ...(s.isoDate ? { isoDate: s.isoDate } : {}),
+            sunShadowRadiusMeters: shadowRadiusM
+        } as never
+    };
+    const artifact = {
+        ...active,
+        data,
+        summary: `Sun applied: elevation ${s.elevation.toFixed(1)}°, azimuth ${s.azimuth.toFixed(1)}° (${s.sunSource}).`,
+        version: ((active as { version?: number }).version || 1) + 1
+    } as CanvasArtifact;
+    return { ok: true, artifact, operators: commands.map(c => c.operator), shadowRadiusM };
 }
 
 export const ATMOSPHERE_TOOL_DECLARATIONS: ToolDeclaration[] = [
@@ -77,7 +130,7 @@ export const ATMOSPHERE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'atmosphere_configure_scene',
-        description: 'Builds an atmospheric scattering config for a 3D scene. The sun comes from sunElevationDeg/sunAzimuthDeg, a time-of-day preset, or NOAA ephemeris at latitude/longitude/isoDate. Clouds, cloud shadows, aerial perspective and god rays are included only when asked for; unspecified scattering parameters are left to the renderer.',
+        description: 'Lights the open 3D scene with a real sun: a directional sun at the computed position casting shadows, the physical sky dome and its hemisphere ambient, replacing the studio rig (the result says applied: true and returns the updated scene; with no 3D scene open it says NOT applied and changes nothing). The sun comes from sunElevationDeg/sunAzimuthDeg, a time-of-day preset, or NOAA ephemeris at latitude/longitude/isoDate. Clouds, cloud shadows, aerial perspective and god rays are included only when asked for; unspecified scattering parameters are left to the renderer.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -284,9 +337,10 @@ export const atmosphereHandlers: Record<string, ToolHandler> = {
         };
     },
 
-    atmosphere_configure_scene: (args, _ctx) => {
+    atmosphere_configure_scene: (args, ctx) => {
         const num = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : undefined;
         let elevation: number, azimuth: number, sunSource: string;
+        let isoDate: string | undefined;
         const preset = asString(args.preset);
         const lat = num(args.latitude), lng = num(args.longitude);
         if (num(args.sunElevationDeg) !== undefined && num(args.sunAzimuthDeg) !== undefined) {
@@ -298,7 +352,8 @@ export const atmosphereHandlers: Record<string, ToolHandler> = {
             const ephemeris = calculateNOAASolarPosition(date, lat, lng);
             elevation = ephemeris.elevationDeg;
             azimuth = ephemeris.azimuthDeg;
-            sunSource = `NOAA ephemeris at ${date.toISOString()}`;
+            isoDate = date.toISOString();
+            sunSource = `NOAA ephemeris at ${isoDate}`;
         } else if (preset) {
             const presetState = getPresetLightingState(preset);
             elevation = presetState.elevationDeg;
@@ -334,17 +389,46 @@ export const atmosphereHandlers: Record<string, ToolHandler> = {
         if (args.enableGodRays === true) {
             config.godRays = num(args.godRayIntensity) !== undefined ? { enabled: true, intensity: num(args.godRayIntensity) } : { enabled: true };
         }
-
         const layers = [clouds ? `clouds ${cloudCoverage}` : undefined, config.cloudShadowsEnabled ? 'cloud shadows' : undefined, config.aerialPerspectiveEnabled ? 'aerial perspective' : undefined, config.godRays ? 'god rays' : undefined].filter(Boolean);
+        const sunText = `sun elevation ${elevation.toFixed(1)}°, azimuth ${azimuth.toFixed(1)}° (${sunSource}), ${profile.phase}, ${profile.kelvinTemperature} K`;
+
+        // Applied to the open 3D scene through the scene's own atmosphere operators, so the viewport draws it: a directional
+        // sun at the computed position casting shadows, the sky dome and hemisphere ambient of the diurnal profile.
+        const active = ctx?.request?.activeArtifact;
+        if (!active || active.type !== '3d-scene' || !active.data) {
+            const why = 'no 3D scene is open, so nothing was lit';
+            return {
+                status: 'failed',
+                resultPayload: { success: false, applied: false, notApplied: why, config, sunSource, phase: profile.phase, kelvinTemperature: profile.kelvinTemperature },
+                summaryResult: `NOT applied: ${why}. Computed only: ${sunText}${layers.length ? `, with ${layers.join(', ')}` : ''}. Nothing in any viewport changed.`
+            };
+        }
+        const applied = applySunToScene(active, { elevation, azimuth, lat, lng, isoDate, sunSource, kelvin: profile.kelvinTemperature, config, clouds, args });
+        if (!applied.ok) {
+            return {
+                status: 'failed',
+                resultPayload: { success: false, applied: false, notApplied: applied.error, config, sunSource, phase: profile.phase, kelvinTemperature: profile.kelvinTemperature },
+                summaryResult: `NOT applied to "${active.title || active.id}": ${applied.error}. Computed only: ${sunText}.`
+            };
+        }
+        const shadows = profile.castShadows
+            ? `a directional sun casting shadows over ${Math.round(applied.shadowRadiusM)} m around the scene's centre`
+            : 'a directional sun without shadows (it is at or below the horizon)';
         return {
             resultPayload: {
                 success: true,
+                applied: true,
+                appliedTo: applied.artifact.id,
+                operators: applied.operators,
                 config,
                 sunSource,
                 phase: profile.phase,
-                kelvinTemperature: profile.kelvinTemperature
+                kelvinTemperature: profile.kelvinTemperature,
+                castShadows: profile.castShadows,
+                shadowRadiusMeters: applied.shadowRadiusM,
+                artifact: applied.artifact
             },
-            summaryResult: `Synthesized atmospheric scene configuration: Phase ${profile.phase}, ${profile.kelvinTemperature}K, Sun Elevation ${elevation.toFixed(1)}° (${sunSource})${layers.length ? `, with ${layers.join(', ')}` : ', no optional layers'}.`
+            summaryResult: `Applied to the active 3D scene "${active.title || active.id}": ${sunText}; ${shadows}, the physical sky dome and the hemisphere ambient of that sun${layers.length ? `, with ${layers.join(', ')}` : ', no optional layers'}. The studio light rig is replaced by this sun.`
         };
     },
 

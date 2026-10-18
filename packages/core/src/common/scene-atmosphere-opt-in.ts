@@ -53,11 +53,23 @@ export function sceneRendersClay(scene: Partial<Scene3DData> | undefined): boole
 }
 
 /**
- * True when the renderer draws a sky for this scene: it opts into one and does not render clay
- * (`classifyAtmosphere` suppresses the sky in clay, even when the scene keeps its atmosphere settings).
+ * An atmosphere config that places the sun explicitly (an enabled object with a finite sunElevation and sunAzimuth, as
+ * sb_set_diurnal_time_of_day and atmosphere_configure_scene write): the user asked for that sun, so a clay scene draws
+ * it, its shadows and its sky too.
+ */
+export function hasExplicitSun(atmosphere: unknown): boolean {
+    if (typeof atmosphere !== 'object' || atmosphere === null) return false;
+    const a = atmosphere as { enabled?: unknown; sunElevation?: unknown; sunAzimuth?: unknown };
+    return a.enabled !== false && typeof a.sunElevation === 'number' && Number.isFinite(a.sunElevation) && typeof a.sunAzimuth === 'number' && Number.isFinite(a.sunAzimuth);
+}
+
+/**
+ * True when the renderer draws a sky for this scene: it opts into one and either does not render clay or places the sun
+ * explicitly (`classifyAtmosphere` suppresses the sky in clay otherwise, even when the scene keeps atmosphere settings).
  */
 export function sceneShowsSky(scene: Partial<Scene3DData> | undefined): boolean {
-    return sceneOptsIntoAtmosphere(scene) && !sceneRendersClay(scene);
+    const loose = scene as { atmosphere?: unknown } | undefined;
+    return sceneOptsIntoAtmosphere(scene) && (!sceneRendersClay(scene) || hasExplicitSun(scene?.features?.atmosphericScattering) || hasExplicitSun(loose?.atmosphere));
 }
 
 function withoutKeys<T extends object>(block: T | undefined, keys: string[]): T | undefined {
