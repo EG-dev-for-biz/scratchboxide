@@ -19,6 +19,7 @@ import {
     MediaPipeLandmark
 } from '../../common/character-pose-protocol';
 import { MediaPipePoseService } from './MediaPipePoseService';
+import { GeneratorFailedError, MissingInputError } from '../../common/errors/pipeline-errors';
 import {
     AdaptiveKeyframeDensityOptimizer,
     MotionAdaptiveConfig,
@@ -41,16 +42,21 @@ export interface AdaptiveMatchmoveContext {
     fps: number;
     totalFrames: number;
     durationSec: number;
-    plateResolution: { width: number; height: number };
+    /** Required by calibrateSequence (anchor pixels are in this plate's pixel space); unused by spline synthesis. */
+    plateResolution?: { width: number; height: number };
+    /**
+     * Unit normal of the facade the camera tilts toward. When given, the spline up-vector is slerped toward it
+     * as the camera pitches down; when absent, the up-vector is interpolated from the keyframes' own up-vectors.
+     */
     facadeNormal?: [number, number, number];
 }
 
 export interface PoseAnchorExtractionOptions {
     plateWidth?: number;
     plateHeight?: number;
-    subjectHeightMeters?: number; // target height in meters, default: 1.80
+    /** Known subject height in meters. When absent the metric scale of MediaPipe's own world landmarks is kept. */
+    subjectHeightMeters?: number;
     groundAltitudeMeters?: number; // floor altitude, default: 0.0
-    facingCamera?: boolean;        // default: true
     minConfidence?: number;        // default: 0.3
     poseService?: MediaPipePoseService;
 }
@@ -90,7 +96,6 @@ export interface KeyframeCalibrationState {
     reprojectionRmsPx: number;
     maxResidualPx: number;
     spanErrorPx?: number;
-    edgeCorrelationPercent: number;
     converged: boolean;
 }
 
@@ -113,13 +118,35 @@ export interface SequenceMetrologyReport {
     sequenceId: string;
     keyframeCount: number;
     totalFrames: number;
+    /** Keyframes that were resected from anchor correspondences (the ones the means are taken over). */
+    solvedKeyframeCount: number;
     meanRmsResidualPx: number;
     maxResidualPx: number;
-    meanEdgeCorrelationPercent: number;
-    minEdgeCorrelationPercent: number;
     status: 'PASSED' | 'FAILED';
     keyframes: KeyframeCalibrationState[];
+    /** Input keyframes left out of the solve, the means and the trajectory, with the reason. */
+    skippedKeyframes: SkippedKeyframe[];
     trajectory: TrajectoryFrameState[];
+}
+
+export interface SkippedKeyframe {
+    index: number;
+    frameNumber: number;
+    timeSec: number;
+    phaseLabel?: string;
+    reason: string;
+}
+
+/** Thrown when no keyframe in a sequence carries anchor correspondences, so nothing can be resected. */
+export class MatchmoveNoAnchorsError extends MissingInputError {
+    constructor(readonly skipped: SkippedKeyframe[]) {
+        super(
+            'adaptive matchmove calibration',
+            'at least one keyframe with 3D-to-2D anchor correspondences',
+            `all ${skipped.length} keyframes have an empty "anchors" array`
+        );
+        this.name = 'MatchmoveNoAnchorsError';
+    }
 }
 
 export interface OptimizationOptions {
@@ -129,6 +156,10 @@ export interface OptimizationOptions {
     huberThresholdPx?: number;
     optimizeFov?: boolean;
     optimizeK1?: boolean;
+}
+
+function isVec3(v: unknown): v is [number, number, number] {
+    return Array.isArray(v) && v.length >= 3 && v.slice(0, 3).every(c => typeof c === 'number' && Number.isFinite(c));
 }
 
 export class AdaptiveMatchmoveCalibrationService {
@@ -314,8 +345,15 @@ export class AdaptiveMatchmoveCalibrationService {
         let camPos: [number, number, number] = [...initialCamPos];
         let targetPos: [number, number, number] = [...initialTargetPos];
         let upVec: [number, number, number] = [...initialUpVec];
-        const defaultLens: LensIntrinsicsProfile = { fovYDeg: 35.0, k1: 0.0, k2: 0.0, scale: 1.0 };
-        let lens: LensIntrinsicsProfile = { ...defaultLens, ...(initialLens || {}) };
+        if (!initialLens || !Number.isFinite(initialLens.fovYDeg) || initialLens.fovYDeg <= 0) {
+            throw new MissingInputError('keyframe resection', 'lens.fovYDeg', 'the vertical field of view of the plate camera (no lens is assumed)');
+        }
+        let lens: LensIntrinsicsProfile = {
+            ...initialLens,
+            k1: initialLens.k1 ?? 0.0,
+            k2: initialLens.k2 ?? 0.0,
+            scale: initialLens.scale ?? 1.0
+        };
 
         let prevRms = this.computeReprojectionResidual(anchors, camPos, targetPos, upVec, lens, width, height).rmsPx;
 
@@ -467,7 +505,6 @@ export class AdaptiveMatchmoveCalibrationService {
             anchors,
             reprojectionRmsPx: Number(metrics.rmsPx.toFixed(3)),
             maxResidualPx: Number(metrics.maxPx.toFixed(3)),
-            edgeCorrelationPercent: 99.98,
             converged: converged || metrics.rmsPx <= tolPx
         };
     }
@@ -609,7 +646,7 @@ export class AdaptiveMatchmoveCalibrationService {
      */
     public static evaluateGimbalFreeUpVector(
         tiltFraction: number,
-        facadeNormal: [number, number, number] = [-0.8746, 0.0, -0.4848]
+        facadeNormal: [number, number, number]
     ): [number, number, number] {
         const angle = Math.max(0, Math.min(1, tiltFraction)) * (Math.PI / 2.0);
         const rawUp: [number, number, number] = [
@@ -629,7 +666,7 @@ export class AdaptiveMatchmoveCalibrationService {
     ): TrajectoryFrameState[] {
         const totalFrames = context.totalFrames;
         const durationSec = context.durationSec;
-        const facadeNormal = context.facadeNormal ?? [-0.8746, 0.0, -0.4848];
+        const facadeNormal = context.facadeNormal;
         const frames: TrajectoryFrameState[] = [];
 
         if (milestones.length === 0) return frames;
@@ -692,8 +729,14 @@ export class AdaptiveMatchmoveCalibrationService {
             const standoff = this.norm(this.subtract(tgt, pos));
 
             // Smooth tilt fraction transition from 0 to 1 based on time
-            const tiltFraction = Math.max(0, Math.min(1, (t - 1.0) / 10.0));
-            const up = this.evaluateGimbalFreeUpVector(tiltFraction, facadeNormal);
+            let up: [number, number, number];
+            if (facadeNormal) {
+                const tiltFraction = Math.max(0, Math.min(1, (t - 1.0) / 10.0));
+                up = this.evaluateGimbalFreeUpVector(tiltFraction, facadeNormal);
+            } else {
+                // No facade to tilt toward: interpolate the keyframes' own up-vectors
+                up = this.normalize(this.hermiteNonUniform3D(k0.upVector, t0, k1.upVector, t1, k2.upVector, t2, k3.upVector, t3, t));
+            }
 
             frames.push({
                 frame: i + 1,
@@ -780,40 +823,49 @@ export class AdaptiveMatchmoveCalibrationService {
         options: OptimizationOptions = {}
     ): SequenceMetrologyReport {
         const calibratedKeyframes: KeyframeCalibrationState[] = [];
+        const skippedKeyframes: SkippedKeyframe[] = [];
         let totalRms = 0;
         let maxResidual = 0;
-        let totalCorr = 0;
-        let minCorr = 100.0;
 
-        const w = Array.isArray((context as any).plateResolution) ? (context as any).plateResolution[0] : (context.plateResolution?.width ?? 1920);
-        const h = Array.isArray((context as any).plateResolution) ? (context as any).plateResolution[1] : (context.plateResolution?.height ?? 1080);
+        const w = Array.isArray((context as any).plateResolution) ? (context as any).plateResolution[0] : context.plateResolution?.width;
+        const h = Array.isArray((context as any).plateResolution) ? (context as any).plateResolution[1] : context.plateResolution?.height;
+        if (!(w > 0) || !(h > 0)) {
+            throw new MissingInputError('adaptive matchmove calibration', 'context.plateResolution { width, height } in pixels');
+        }
 
         for (let i = 0; i < milestones.length; i++) {
             const kf = milestones[i];
-            let solved: KeyframeCalibrationState;
-            if (kf.anchors && kf.anchors.length > 0) {
-                solved = this.solveKeyframeResection(
-                    kf.anchors,
-                    kf.cameraPosition,
-                    kf.targetPosition,
-                    kf.upVector,
-                    kf.lens,
-                    w,
-                    h,
-                    options
-                );
-            } else {
-                // Without anchor correspondences nothing was measured for this keyframe
-                solved = {
-                    ...kf,
-                    lens: kf.lens || { fovYDeg: 35.0, k1: 0.0, k2: 0.0, scale: 1.0 },
-                    anchors: kf.anchors || [],
-                    reprojectionRmsPx: kf.reprojectionRmsPx ?? Number.NaN,
-                    maxResidualPx: kf.maxResidualPx ?? Number.NaN,
-                    edgeCorrelationPercent: kf.edgeCorrelationPercent ?? Number.NaN,
-                    converged: kf.converged ?? false
-                };
+            if (!kf.anchors || kf.anchors.length === 0) {
+                // Without anchor correspondences nothing can be measured for this keyframe
+                skippedKeyframes.push({
+                    index: i,
+                    frameNumber: kf.frameNumber,
+                    timeSec: kf.timeSec,
+                    phaseLabel: kf.phaseLabel,
+                    reason: 'no anchor correspondences'
+                });
+                continue;
             }
+            if (!Number.isFinite(kf.timeSec)) {
+                throw new MissingInputError('adaptive matchmove calibration', `milestones[${i}].timeSec`, 'the keyframe time in seconds');
+            }
+            if (!isVec3(kf.cameraPosition) || !isVec3(kf.targetPosition)) {
+                throw new MissingInputError(
+                    'adaptive matchmove calibration',
+                    `milestones[${i}].cameraPosition and targetPosition`,
+                    'an initial camera position and look-at target [x, y, z] for the resection'
+                );
+            }
+            const solved = this.solveKeyframeResection(
+                kf.anchors,
+                kf.cameraPosition,
+                kf.targetPosition,
+                isVec3(kf.upVector) ? kf.upVector : [0, 1, 0],
+                kf.lens,
+                w,
+                h,
+                options
+            );
 
             solved.index = i;
             solved.frameNumber = kf.frameNumber;
@@ -823,26 +875,27 @@ export class AdaptiveMatchmoveCalibrationService {
 
             totalRms += solved.reprojectionRmsPx;
             if (solved.maxResidualPx > maxResidual) maxResidual = solved.maxResidualPx;
-            totalCorr += solved.edgeCorrelationPercent;
-            if (solved.edgeCorrelationPercent < minCorr) minCorr = solved.edgeCorrelationPercent;
         }
 
-        const meanRms = Number((totalRms / milestones.length).toFixed(3));
-        const meanCorr = Number((totalCorr / milestones.length).toFixed(2));
+        if (calibratedKeyframes.length === 0) {
+            throw new MatchmoveNoAnchorsError(skippedKeyframes);
+        }
+
+        const meanRms = Number((totalRms / calibratedKeyframes.length).toFixed(3));
         const trajectory = this.synthesizeSplineTrajectory(calibratedKeyframes, context);
 
-        const status = (meanRms <= 0.05 && minCorr >= 98.0) ? 'PASSED' : 'FAILED';
+        const status = meanRms <= 0.05 ? 'PASSED' : 'FAILED';
 
         return {
             sequenceId: context.sequenceId,
             keyframeCount: milestones.length,
+            solvedKeyframeCount: calibratedKeyframes.length,
             totalFrames: context.totalFrames,
             meanRmsResidualPx: meanRms,
             maxResidualPx: maxResidual,
-            meanEdgeCorrelationPercent: meanCorr,
-            minEdgeCorrelationPercent: minCorr,
             status,
             keyframes: calibratedKeyframes,
+            skippedKeyframes,
             trajectory
         };
     }
@@ -879,7 +932,7 @@ export class AdaptiveMatchmoveCalibrationService {
     ): SpatialAnchorCorrespondence[] {
         const plateW = options?.plateWidth ?? 1920;
         const plateH = options?.plateHeight ?? 1080;
-        const targetHeight = options?.subjectHeightMeters ?? 1.80;
+        const targetHeight = options?.subjectHeightMeters;
         const groundAlt = options?.groundAltitudeMeters ?? 0.0;
         const minConf = options?.minConfidence ?? 0.3;
 
@@ -894,14 +947,21 @@ export class AdaptiveMatchmoveCalibrationService {
         const lAnkle = worldLms[MEDIAPIPE_LANDMARK_INDEX.LEFT_ANKLE];
         const rAnkle = worldLms[MEDIAPIPE_LANDMARK_INDEX.RIGHT_ANKLE];
 
-        let rawStature = 1.70; // fallback height
-        if (lHip && rHip && nose && (lAnkle || rAnkle)) {
-            const hipY = (lHip.y + rHip.y) * 0.5;
-            const ankleY = lAnkle && rAnkle ? (lAnkle.y + rAnkle.y) * 0.5 : (lAnkle?.y ?? rAnkle?.y ?? 0.85);
+        // MediaPipe world landmarks are already metric; rescale only to a height the caller knows
+        let scale = 1.0;
+        if (targetHeight !== undefined) {
+            if (!(lHip && rHip && nose && (lAnkle || rAnkle))) {
+                throw new MissingInputError(
+                    'pose anchor extraction',
+                    'visible nose, hip and ankle landmarks',
+                    'needed to rescale the pose to subjectHeightMeters'
+                );
+            }
+            const ankleY = lAnkle && rAnkle ? (lAnkle.y + rAnkle.y) * 0.5 : (lAnkle ?? rAnkle)!.y;
             const headY = nose.y - 0.12; // approximate top of cranium
-            rawStature = Math.max(0.5, Math.abs(ankleY - headY));
+            const rawStature = Math.max(0.5, Math.abs(ankleY - headY));
+            scale = targetHeight / rawStature;
         }
-        const scale = targetHeight / rawStature;
 
         // 2. Determine lowest foot landmark for ground plane pinning (Y = groundAlt)
         const footIndices = [
@@ -1027,127 +1087,39 @@ export class AdaptiveMatchmoveCalibrationService {
     }
 
     /**
-     * Intelligently extracts 33 3D-to-2D spatial anchor correspondences from an image buffer
-     * or file path using Google MediaPipe with graceful heuristic/multimodal prior fallback.
+     * Extracts the 33 MediaPipe pose landmarks of the person in an image buffer or file path as 3D-to-2D
+     * spatial anchor correspondences. There is no stand-in body: when MediaPipe cannot run this throws
+     * GeneratorFailedError, and when it runs and finds nobody it throws MissingInputError.
      */
     public static async extractPoseAnchorsFromImage(
         imageInput: string | Buffer,
         options?: PoseAnchorExtractionOptions
     ): Promise<SpatialAnchorCorrespondence[]> {
         const poseService = options?.poseService ?? new MediaPipePoseService();
-
-        try {
-            const buffer = await poseService.normalizeImageInput(imageInput);
-
-            // 1. Attempt detection via MediaPipe Pose Landmarker
-            const detection = await poseService.detectPoseLandmarks(buffer, {
-                minConfidence: options?.minConfidence ?? 0.4,
-                numPoses: 1
-            });
-
-            if (detection && detection.worldLandmarks.length > 0 && detection.worldLandmarks[0].length >= 33) {
-                return this.extractPoseAnchorsFromLandmarks(
-                    detection.worldLandmarks[0],
-                    detection.imageLandmarks && detection.imageLandmarks[0] ? detection.imageLandmarks[0] : undefined,
-                    options
-                );
-            }
-        } catch {
-            // Fall through to anthropometric prior synthesis
+        const buffer = await poseService.normalizeImageInput(imageInput);
+        const run = await poseService.runPoseLandmarker(buffer, {
+            minConfidence: options?.minConfidence ?? 0.4,
+            numPoses: 1
+        });
+        if ('unavailable' in run) {
+            throw new GeneratorFailedError('mediapipe', `pose detection could not run: ${run.unavailable}`);
         }
-
-        // 2. Fallback: Synthesize canonical anthropometric pose landmarks
-        const synthetic = this.synthesizeAnthropometricLandmarks(options?.facingCamera ?? true);
+        if ('noPerson' in run) {
+            throw new MissingInputError('pose anchor extraction', 'a visible person', run.noPerson);
+        }
+        const world = run.detection.worldLandmarks[0];
+        if (!world || world.length < 33) {
+            throw new MissingInputError(
+                'pose anchor extraction',
+                'a full 33-landmark pose',
+                `MediaPipe returned ${world?.length ?? 0} landmarks`
+            );
+        }
         return this.extractPoseAnchorsFromLandmarks(
-            synthetic.worldLandmarks,
-            synthetic.imageLandmarks,
+            world,
+            run.detection.imageLandmarks?.[0],
             options
         );
-    }
-
-    /**
-     * Synthesizes canonical anthropometric 3D and 2D landmarks for a human subject
-     * (1.80m neutral posture) for graceful zero-dependency fallback.
-     */
-    public static synthesizeAnthropometricLandmarks(facingCamera = true): {
-        worldLandmarks: MediaPipeLandmark[];
-        imageLandmarks: MediaPipeLandmark[];
-    } {
-        const world: MediaPipeLandmark[] = Array.from({ length: 33 }, () => ({ x: 0, y: 0, z: 0, visibility: 0.95 }));
-        const image: MediaPipeLandmark[] = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, z: 0, visibility: 0.95 }));
-
-        // Standard standing humanoid landmark definitions in MediaPipe space (Y down, hip at 0)
-        world[MEDIAPIPE_LANDMARK_INDEX.NOSE] = { x: 0.0, y: -0.74, z: facingCamera ? -0.10 : 0.10, visibility: 0.98 };
-        world[MEDIAPIPE_LANDMARK_INDEX.LEFT_EYE_INNER] = { x: 0.02, y: -0.78, z: -0.09, visibility: 0.96 };
-        world[MEDIAPIPE_LANDMARK_INDEX.LEFT_EYE] = { x: 0.04, y: -0.78, z: -0.09, visibility: 0.96 };
-        world[MEDIAPIPE_LANDMARK_INDEX.LEFT_EYE_OUTER] = { x: 0.06, y: -0.78, z: -0.08, visibility: 0.95 };
-        world[MEDIAPIPE_LANDMARK_INDEX.RIGHT_EYE_INNER] = { x: -0.02, y: -0.78, z: -0.09, visibility: 0.96 };
-        world[MEDIAPIPE_LANDMARK_INDEX.RIGHT_EYE] = { x: -0.04, y: -0.78, z: -0.09, visibility: 0.96 };
-        world[MEDIAPIPE_LANDMARK_INDEX.RIGHT_EYE_OUTER] = { x: -0.06, y: -0.78, z: -0.08, visibility: 0.95 };
-        world[MEDIAPIPE_LANDMARK_INDEX.LEFT_EAR] = { x: 0.09, y: -0.75, z: -0.02, visibility: 0.94 };
-        world[MEDIAPIPE_LANDMARK_INDEX.RIGHT_EAR] = { x: -0.09, y: -0.75, z: -0.02, visibility: 0.94 };
-        world[MEDIAPIPE_LANDMARK_INDEX.MOUTH_LEFT] = { x: 0.03, y: -0.70, z: -0.08, visibility: 0.95 };
-        world[MEDIAPIPE_LANDMARK_INDEX.MOUTH_RIGHT] = { x: -0.03, y: -0.70, z: -0.08, visibility: 0.95 };
-
-        world[MEDIAPIPE_LANDMARK_INDEX.LEFT_SHOULDER] = { x: 0.22, y: -0.52, z: 0.0, visibility: 0.98 };
-        world[MEDIAPIPE_LANDMARK_INDEX.RIGHT_SHOULDER] = { x: -0.22, y: -0.52, z: 0.0, visibility: 0.98 };
-        world[MEDIAPIPE_LANDMARK_INDEX.LEFT_ELBOW] = { x: 0.28, y: -0.24, z: 0.04, visibility: 0.95 };
-        world[MEDIAPIPE_LANDMARK_INDEX.RIGHT_ELBOW] = { x: -0.28, y: -0.24, z: 0.04, visibility: 0.95 };
-        world[MEDIAPIPE_LANDMARK_INDEX.LEFT_WRIST] = { x: 0.26, y: 0.06, z: 0.08, visibility: 0.94 };
-        world[MEDIAPIPE_LANDMARK_INDEX.RIGHT_WRIST] = { x: -0.26, y: 0.06, z: 0.08, visibility: 0.94 };
-        world[MEDIAPIPE_LANDMARK_INDEX.LEFT_PINKY] = { x: 0.28, y: 0.12, z: 0.09, visibility: 0.90 };
-        world[MEDIAPIPE_LANDMARK_INDEX.RIGHT_PINKY] = { x: -0.28, y: 0.12, z: 0.09, visibility: 0.90 };
-        world[MEDIAPIPE_LANDMARK_INDEX.LEFT_INDEX] = { x: 0.26, y: 0.14, z: 0.09, visibility: 0.90 };
-        world[MEDIAPIPE_LANDMARK_INDEX.RIGHT_INDEX] = { x: -0.26, y: 0.14, z: 0.09, visibility: 0.90 };
-        world[MEDIAPIPE_LANDMARK_INDEX.LEFT_THUMB] = { x: 0.24, y: 0.10, z: 0.08, visibility: 0.90 };
-        world[MEDIAPIPE_LANDMARK_INDEX.RIGHT_THUMB] = { x: -0.24, y: 0.10, z: 0.08, visibility: 0.90 };
-
-        world[MEDIAPIPE_LANDMARK_INDEX.LEFT_HIP] = { x: 0.13, y: 0.0, z: 0.0, visibility: 0.98 };
-        world[MEDIAPIPE_LANDMARK_INDEX.RIGHT_HIP] = { x: -0.13, y: 0.0, z: 0.0, visibility: 0.98 };
-        world[MEDIAPIPE_LANDMARK_INDEX.LEFT_KNEE] = { x: 0.14, y: 0.44, z: 0.02, visibility: 0.97 };
-        world[MEDIAPIPE_LANDMARK_INDEX.RIGHT_KNEE] = { x: -0.14, y: 0.44, z: 0.02, visibility: 0.97 };
-        world[MEDIAPIPE_LANDMARK_INDEX.LEFT_ANKLE] = { x: 0.14, y: 0.86, z: 0.0, visibility: 0.96 };
-        world[MEDIAPIPE_LANDMARK_INDEX.RIGHT_ANKLE] = { x: -0.14, y: 0.86, z: 0.0, visibility: 0.96 };
-        world[MEDIAPIPE_LANDMARK_INDEX.LEFT_HEEL] = { x: 0.14, y: 0.90, z: -0.05, visibility: 0.94 };
-        world[MEDIAPIPE_LANDMARK_INDEX.RIGHT_HEEL] = { x: -0.14, y: 0.90, z: -0.05, visibility: 0.94 };
-        world[MEDIAPIPE_LANDMARK_INDEX.LEFT_FOOT_INDEX] = { x: 0.14, y: 0.91, z: 0.12, visibility: 0.94 };
-        world[MEDIAPIPE_LANDMARK_INDEX.RIGHT_FOOT_INDEX] = { x: -0.14, y: 0.91, z: 0.12, visibility: 0.94 };
-
-        // Pin lowest foot landmark to ground Y = 0.0
-        const footIndices = [
-            MEDIAPIPE_LANDMARK_INDEX.LEFT_HEEL,
-            MEDIAPIPE_LANDMARK_INDEX.RIGHT_HEEL,
-            MEDIAPIPE_LANDMARK_INDEX.LEFT_FOOT_INDEX,
-            MEDIAPIPE_LANDMARK_INDEX.RIGHT_FOOT_INDEX
-        ];
-        let maxRawY = -Infinity;
-        for (const idx of footIndices) {
-            if (world[idx].y > maxRawY) maxRawY = world[idx].y;
-        }
-
-        // Project through canonical 35mm portrait lens (35° FOV) from eye-level camera
-        const nominalCamPos: [number, number, number] = [0.0, 1.20, 3.20];
-        const nominalTarget: [number, number, number] = [0.0, 0.95, 0.0];
-        const nominalUp: [number, number, number] = [0.0, 1.0, 0.0];
-        const nominalLens: LensIntrinsicsProfile = { fovYDeg: 35.0, aspectRatio: 16 / 9, k1: 0.0, k2: 0.0, scale: 1.0 };
-
-        for (let i = 0; i < 33; i++) {
-            const w = world[i];
-            const metricPt: [number, number, number] = [
-                w.x,
-                maxRawY - w.y,
-                -w.z
-            ];
-            const [uPx, vPx] = this.projectPoint(metricPt, nominalCamPos, nominalTarget, nominalUp, nominalLens, 1920, 1080);
-            image[i] = {
-                x: Number((uPx / 1920).toFixed(6)),
-                y: Number((vPx / 1080).toFixed(6)),
-                z: w.z,
-                visibility: w.visibility
-            };
-        }
-
-        return { worldLandmarks: world, imageLandmarks: image };
     }
 }
 

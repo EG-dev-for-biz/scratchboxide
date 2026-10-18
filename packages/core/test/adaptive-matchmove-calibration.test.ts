@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import {
     AdaptiveMatchmoveCalibrationService,
+    MatchmoveNoAnchorsError,
     AdaptiveMatchmoveContext,
     SpatialAnchorCorrespondence,
     LensIntrinsicsProfile,
@@ -218,7 +219,6 @@ describe('Adaptive Domain Architecture Matchmove & Keyframe Calibration Engine',
                     anchors: rooflineAnchors,
                     reprojectionRmsPx: 0.018,
                     maxResidualPx: 0.025,
-                    edgeCorrelationPercent: 99.98,
                     converged: true
                 },
                 {
@@ -234,7 +234,6 @@ describe('Adaptive Domain Architecture Matchmove & Keyframe Calibration Engine',
                     anchors: rooflineAnchors,
                     reprojectionRmsPx: 0.022,
                     maxResidualPx: 0.030,
-                    edgeCorrelationPercent: 99.95,
                     converged: true
                 },
                 {
@@ -250,7 +249,6 @@ describe('Adaptive Domain Architecture Matchmove & Keyframe Calibration Engine',
                     anchors: rooflineAnchors,
                     reprojectionRmsPx: 0.015,
                     maxResidualPx: 0.020,
-                    edgeCorrelationPercent: 100.0,
                     converged: true
                 }
             ];
@@ -266,6 +264,17 @@ describe('Adaptive Domain Architecture Matchmove & Keyframe Calibration Engine',
                 if (f.velocity !== undefined) {
                     expect(f.velocity).toBeLessThan(25.0);
                 }
+            }
+
+            // Without a facade normal the up-vector follows the keyframes' own up-vectors, not a preset facade
+            const { facadeNormal: _omit, ...noFacade } = testContext;
+            const free = AdaptiveMatchmoveCalibrationService.synthesizeSplineTrajectory(milestones, noFacade);
+            expect(free[0].up[0]).toBeCloseTo(0, 3);
+            expect(free[0].up[1]).toBeCloseTo(1, 3);
+            expect(free[360].up[0]).toBeCloseTo(-0.8746, 3);
+            expect(free[360].up[2]).toBeCloseTo(-0.4848, 3);
+            for (const f of free) {
+                expect(Math.hypot(...f.up)).toBeCloseTo(1, 3);
             }
         });
     });
@@ -315,7 +324,6 @@ describe('Adaptive Domain Architecture Matchmove & Keyframe Calibration Engine',
                     anchors: rooflineAnchors,
                     reprojectionRmsPx: 0.018,
                     maxResidualPx: 0.025,
-                    edgeCorrelationPercent: 99.98,
                     converged: true
                 }
             ];
@@ -325,8 +333,57 @@ describe('Adaptive Domain Architecture Matchmove & Keyframe Calibration Engine',
             expect(report.sequenceId).toBe('plaza_hotel_descent_01');
             expect(report.status).toBe('PASSED');
             expect(report.meanRmsResidualPx).toBeLessThan(0.05);
-            expect(report.meanEdgeCorrelationPercent).toBeGreaterThanOrEqual(99.0);
+            expect(report.solvedKeyframeCount).toBe(1);
+            expect(report.skippedKeyframes).toEqual([]);
             expect(report.trajectory.length).toBe(361);
+            // Edge correlation against the plate is not measured, so the report carries none
+            expect(report).not.toHaveProperty('meanEdgeCorrelationPercent');
+            expect(report.keyframes[0]).not.toHaveProperty('edgeCorrelationPercent');
+        });
+
+        const kf = (index: number, timeSec: number, anchors: SpatialAnchorCorrespondence[]): KeyframeCalibrationState => ({
+            index,
+            frameNumber: Math.round(timeSec * 24) + 1,
+            timeSec,
+            cameraPosition: [46.5, 67.0, 0.4],
+            targetPosition: [32.0, 72.8, 3.4],
+            upVector: [0, 1, 0],
+            pitchDeg: 0,
+            standoffDist: 0,
+            lens: calibratedLens,
+            anchors,
+            reprojectionRmsPx: Number.NaN,
+            maxResidualPx: Number.NaN,
+            converged: false
+        });
+
+        it('skips keyframes without anchors, reports them, and keeps the means finite', () => {
+            const report = AdaptiveMatchmoveCalibrationService.calibrateSequence(
+                [kf(0, 0, rooflineAnchors), kf(1, 7.5, []), kf(2, 15, rooflineAnchors)],
+                testContext
+            );
+            expect(report.keyframeCount).toBe(3);
+            expect(report.solvedKeyframeCount).toBe(2);
+            expect(report.keyframes.map(k => k.index)).toEqual([0, 2]);
+            expect(report.skippedKeyframes).toEqual([
+                { index: 1, frameNumber: 181, timeSec: 7.5, phaseLabel: undefined, reason: 'no anchor correspondences' }
+            ]);
+            expect(Number.isFinite(report.meanRmsResidualPx)).toBe(true);
+            expect(report.meanRmsResidualPx).toBeLessThan(0.05);
+        });
+
+        it('throws MatchmoveNoAnchorsError when no keyframe has anchors', () => {
+            expect(() => AdaptiveMatchmoveCalibrationService.calibrateSequence([kf(0, 0, []), kf(1, 1, [])], testContext))
+                .toThrow(MatchmoveNoAnchorsError);
+        });
+
+        it('requires the plate resolution and a lens field of view instead of assuming them', () => {
+            const { plateResolution: _omit, ...noPlate } = testContext;
+            expect(() => AdaptiveMatchmoveCalibrationService.calibrateSequence([kf(0, 0, rooflineAnchors)], noPlate))
+                .toThrow(/plateResolution/);
+            expect(() => AdaptiveMatchmoveCalibrationService.solveKeyframeResection(
+                rooflineAnchors, [46.5, 67.0, 0.4], [32.0, 72.8, 3.4], [0, 1, 0], undefined as any, 1920, 1080
+            )).toThrow(/fovYDeg/);
         });
     });
 });

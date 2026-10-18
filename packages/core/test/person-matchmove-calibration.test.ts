@@ -117,7 +117,7 @@ describe('Person Subject Matchmove & Optical Resection Metrology', () => {
             {
                 keyframeIndex: 0,
                 frameNumber: 1,
-                timecodeSeconds: 0.0,
+                timeSec: 0.0,
                 cameraPosition: [-0.60, 1.42, 2.38],
                 targetPosition: [0.0, 1.35, 0.0],
                 upVector: [0.0, 1.0, 0.0],
@@ -126,13 +126,12 @@ describe('Person Subject Matchmove & Optical Resection Metrology', () => {
                 lens: groundTruthLens,
                 reprojectionRmsPx: 0.028,
                 maxResidualPx: 0.045,
-                edgeCorrelationPercent: 99.95,
                 anchors: []
             },
             {
                 keyframeIndex: 1,
                 frameNumber: 18,
-                timecodeSeconds: 0.75,
+                timeSec: 0.75,
                 cameraPosition: [-0.30, 1.44, 2.44],
                 targetPosition: [0.0, 1.35, 0.0],
                 upVector: [0.0, 1.0, 0.0],
@@ -141,13 +140,12 @@ describe('Person Subject Matchmove & Optical Resection Metrology', () => {
                 lens: groundTruthLens,
                 reprojectionRmsPx: 0.022,
                 maxResidualPx: 0.038,
-                edgeCorrelationPercent: 99.97,
                 anchors: []
             },
             {
                 keyframeIndex: 2,
                 frameNumber: 36,
-                timecodeSeconds: 1.50,
+                timeSec: 1.50,
                 cameraPosition: heroResect.resultPayload.cameraPosition,
                 targetPosition: heroResect.resultPayload.targetPosition,
                 upVector: heroResect.resultPayload.upVector,
@@ -156,13 +154,12 @@ describe('Person Subject Matchmove & Optical Resection Metrology', () => {
                 lens: groundTruthLens,
                 reprojectionRmsPx: heroResect.resultPayload.reprojectionRmsPx,
                 maxResidualPx: 0.035,
-                edgeCorrelationPercent: 99.98,
                 anchors: performer3DAnchors
             },
             {
                 keyframeIndex: 3,
                 frameNumber: 54,
-                timecodeSeconds: 2.25,
+                timeSec: 2.25,
                 cameraPosition: [0.35, 1.44, 2.42],
                 targetPosition: [0.0, 1.35, 0.0],
                 upVector: [0.0, 1.0, 0.0],
@@ -171,13 +168,12 @@ describe('Person Subject Matchmove & Optical Resection Metrology', () => {
                 lens: groundTruthLens,
                 reprojectionRmsPx: 0.024,
                 maxResidualPx: 0.040,
-                edgeCorrelationPercent: 99.96,
                 anchors: []
             },
             {
                 keyframeIndex: 4,
                 frameNumber: 72,
-                timecodeSeconds: 3.00,
+                timeSec: 3.00,
                 cameraPosition: [0.65, 1.42, 2.36],
                 targetPosition: [0.0, 1.35, 0.0],
                 upVector: [0.0, 1.0, 0.0],
@@ -186,7 +182,6 @@ describe('Person Subject Matchmove & Optical Resection Metrology', () => {
                 lens: groundTruthLens,
                 reprojectionRmsPx: 0.031,
                 maxResidualPx: 0.048,
-                edgeCorrelationPercent: 99.94,
                 anchors: []
             }
         ];
@@ -196,7 +191,7 @@ describe('Person Subject Matchmove & Optical Resection Metrology', () => {
             totalFrames: 72,
             fps: 24.0,
             plateResolution: [1376, 768] as [number, number],
-            durationSeconds: 3.0,
+            durationSec: 3.0,
             facadeNormal: [0.0, 0.0, 1.0] as [number, number, number]
         };
 
@@ -208,7 +203,9 @@ describe('Person Subject Matchmove & Optical Resection Metrology', () => {
 
         expect(calibResult.status).toBe('completed');
         expect(calibResult.resultPayload.meanRmsResidualPx).toBeLessThan(0.05);
-        expect(calibResult.resultPayload.meanEdgeCorrelationPercent).toBeGreaterThan(98.0);
+        // Only the hero keyframe carries anchors; the other four are skipped and named
+        expect(calibResult.resultPayload.solvedKeyframeCount).toBe(1);
+        expect((calibResult.resultPayload.skippedKeyframes as any[]).map(k => k.frameNumber)).toEqual([1, 18, 54, 72]);
         expect(calibResult.resultPayload.peakVelocityMps).toBeLessThan(15.0);
         expect(calibResult.resultPayload.peakAccelerationMps2).toBeLessThan(10.0);
         expect(calibResult.resultPayload.kinematicsSafe).toBe(true);
@@ -234,7 +231,7 @@ describe('Person Subject Matchmove & Optical Resection Metrology', () => {
         expect(verifyResult.resultPayload.success).toBe(true);
         expect(verifyResult.resultPayload.passed).toBe(true);
         expect(verifyResult.resultPayload.evaluations.reprojectionRms.pass).toBe(true);
-        expect(verifyResult.resultPayload.evaluations.edgeCorrelation.pass).toBe(true);
+        expect(verifyResult.resultPayload.evaluations).not.toHaveProperty('edgeCorrelation');
         expect(verifyResult.resultPayload.evaluations.droneVelocity.pass).toBe(true);
     });
 });

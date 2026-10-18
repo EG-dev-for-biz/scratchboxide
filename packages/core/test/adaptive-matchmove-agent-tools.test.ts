@@ -155,7 +155,6 @@ describe('Adaptive Matchmove Agent Tools Suite', () => {
                 anchors: rooflineAnchors,
                 reprojectionRmsPx: 0.018,
                 maxResidualPx: 0.025,
-                edgeCorrelationPercent: 99.98,
                 converged: true
             },
             {
@@ -172,7 +171,6 @@ describe('Adaptive Matchmove Agent Tools Suite', () => {
                 anchors: [],
                 reprojectionRmsPx: 0.016,
                 maxResidualPx: 0.024,
-                edgeCorrelationPercent: 99.98,
                 converged: true
             },
             {
@@ -189,7 +187,6 @@ describe('Adaptive Matchmove Agent Tools Suite', () => {
                 anchors: [],
                 reprojectionRmsPx: 0.014,
                 maxResidualPx: 0.022,
-                edgeCorrelationPercent: 99.99,
                 converged: true
             }
         ];
@@ -213,7 +210,11 @@ describe('Adaptive Matchmove Agent Tools Suite', () => {
         expect(outcome.resultPayload.success).toBe(true);
         expect(outcome.resultPayload.status).toBe('PASSED');
         expect(Number(outcome.resultPayload.meanRmsResidualPx)).toBeLessThan(0.05);
-        expect(Number(outcome.resultPayload.meanEdgeCorrelationPercent)).toBeGreaterThanOrEqual(98.0);
+        // The two keyframes without anchors are skipped and named, not averaged in with invented residuals
+        expect(outcome.resultPayload.solvedKeyframeCount).toBe(1);
+        expect((outcome.resultPayload.skippedKeyframes as any[]).map(k => k.frameNumber)).toEqual([181, 361]);
+        expect(outcome.summaryResult).toContain('Skipped (no anchors)');
+        expect(outcome.resultPayload).not.toHaveProperty('meanEdgeCorrelationPercent');
         expect(Number(outcome.resultPayload.peakVelocityMps)).toBeLessThan(15.0);
         expect(outcome.resultPayload.kinematicsSafe).toBe(true);
     });
@@ -231,15 +232,52 @@ describe('Adaptive Matchmove Agent Tools Suite', () => {
         const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'adaptive-seq-'));
         const seqPath = path.join(dir, 'seq.json');
         fs.writeFileSync(seqPath, JSON.stringify({
-            sequenceId: 'bare', fps: 24, totalFrames: 49, durationSec: 2,
+            sequenceId: 'bare', fps: 24, totalFrames: 49, durationSec: 2, plateResolution: { width: 1920, height: 1080 },
             milestones: [
                 { frame: 1, time: 0, position: [0, 10, 50], target: [0, 10, 0] },
                 { frame: 49, time: 2, position: [10, 10, 50], target: [0, 10, 0] }
             ]
         }));
-        const outcome = await adaptiveMatchmoveHandlers.adaptive_matchmove_calibrate_sequence({ sequencePath: seqPath }, mockContext);
-        const reported = Number(outcome.resultPayload?.meanRmsResidualPx);
-        expect(Number.isFinite(reported) && reported < 0.05).toBe(false);
+        await expect(adaptiveMatchmoveHandlers.adaptive_matchmove_calibrate_sequence({ sequencePath: seqPath }, mockContext))
+            .rejects.toMatchObject({ name: 'MatchmoveNoAnchorsError', code: 'missing_input' });
+    });
+
+    it('requires a sequence context instead of inventing fps, length, plate size or a facade normal', async () => {
+        const milestones = [0, 2].map((timeSec, index) => ({
+            index, frameNumber: timeSec * 24 + 1, timeSec, cameraPosition: [46.5, 67.0, 0.4], targetPosition: [32.0, 72.8, 3.4],
+            upVector: [0, 1, 0], pitchDeg: 0, standoffDist: 0, lens: calibratedLens, anchors: rooflineAnchors,
+            reprojectionRmsPx: Number.NaN, maxResidualPx: Number.NaN, converged: false
+        }));
+        await expect(adaptiveMatchmoveHandlers.adaptive_matchmove_calibrate_sequence({ milestones }, mockContext))
+            .rejects.toMatchObject({ code: 'missing_input', message: expect.stringContaining('context') });
+        await expect(adaptiveMatchmoveHandlers.adaptive_matchmove_calibrate_sequence({
+            milestones, context: { sequenceId: 's', fps: 24, totalFrames: 49, durationSec: 2 }
+        }, mockContext)).rejects.toMatchObject({ message: expect.stringContaining('plateResolution') });
+
+        // facadeNormal is optional and is not filled in from a preset
+        const outcome = await adaptiveMatchmoveHandlers.adaptive_matchmove_calibrate_sequence({
+            milestones, context: { sequenceId: 's', fps: 24, totalFrames: 49, durationSec: 2, plateResolution: { width: 1920, height: 1080 } }
+        }, mockContext);
+        expect((outcome.resultPayload.metrologyReport as any).trajectory[48].up).toEqual([0, 1, 0]);
+    });
+
+    it('requires an initial pose, lens and plate size for single-keyframe resection', async () => {
+        const base = {
+            anchors: rooflineAnchors, cameraPosition: [46.8, 67.3, 0.6], targetPosition: [32.3, 72.5, 3.2],
+            lens: calibratedLens, plateWidth: 1920, plateHeight: 1080
+        };
+        for (const key of ['cameraPosition', 'targetPosition', 'plateWidth', 'plateHeight'] as const) {
+            const { [key]: _omit, ...partial } = base;
+            await expect(adaptiveMatchmoveHandlers.adaptive_matchmove_resect_keyframe(partial, mockContext))
+                .rejects.toMatchObject({ code: 'missing_input', message: expect.stringContaining(key) });
+        }
+        await expect(adaptiveMatchmoveHandlers.adaptive_matchmove_resect_keyframe({ ...base, lens: { k1: 0 } }, mockContext))
+            .rejects.toMatchObject({ code: 'missing_input', message: expect.stringContaining('fovYDeg') });
+    });
+
+    it('requires trajectory input for keyframe density optimisation instead of loading a saved camera path', async () => {
+        await expect(adaptiveMatchmoveHandlers.adaptive_matchmove_optimize_keyframe_density({}, mockContext))
+            .rejects.toMatchObject({ code: 'missing_input' });
     });
 
     it('synthesizes continuous C2 Hermite trajectory with valid kinematics telemetry', async () => {
@@ -258,7 +296,6 @@ describe('Adaptive Matchmove Agent Tools Suite', () => {
                 anchors: [],
                 reprojectionRmsPx: 0.01,
                 maxResidualPx: 0.02,
-                edgeCorrelationPercent: 99.9,
                 converged: true
             },
             {
@@ -275,10 +312,12 @@ describe('Adaptive Matchmove Agent Tools Suite', () => {
                 anchors: [],
                 reprojectionRmsPx: 0.01,
                 maxResidualPx: 0.02,
-                edgeCorrelationPercent: 99.9,
                 converged: true
             }
         ];
+
+        await expect(adaptiveMatchmoveHandlers.adaptive_matchmove_synthesize_trajectory({ milestones, fps: 24 }, mockContext))
+            .rejects.toMatchObject({ code: 'missing_input', message: expect.stringContaining('totalFrames') });
 
         const outcome = await adaptiveMatchmoveHandlers.adaptive_matchmove_synthesize_trajectory({
             milestones,
@@ -300,8 +339,6 @@ describe('Adaptive Matchmove Agent Tools Suite', () => {
             totalFrames: 361,
             meanRmsResidualPx: 0.0155,
             maxResidualPx: 0.041,
-            meanEdgeCorrelationPercent: 99.98,
-            minEdgeCorrelationPercent: 99.96,
             status: 'PASSED',
             keyframes: [],
             trajectory: [
@@ -314,7 +351,6 @@ describe('Adaptive Matchmove Agent Tools Suite', () => {
         const outcome = await adaptiveMatchmoveHandlers.adaptive_matchmove_verify_metrology({
             report: passingReport,
             maxAllowedRmsPx: 0.05,
-            minAllowedCorrelationPercent: 98.0,
             maxVelocityMps: 15.0,
             maxAccelerationMps2: 10.0
         }, mockContext);
@@ -322,6 +358,14 @@ describe('Adaptive Matchmove Agent Tools Suite', () => {
         expect(outcome.status).toBe('completed');
         expect(outcome.resultPayload.success).toBe(true);
         expect(outcome.resultPayload.passed).toBe(true);
+        expect(outcome.resultPayload.evaluations).not.toHaveProperty('edgeCorrelation');
+
+        // A stale edge-correlation figure in a report cannot carry a failing RMS through the gate
+        const stale = await adaptiveMatchmoveHandlers.adaptive_matchmove_verify_metrology({
+            report: { ...passingReport, meanRmsResidualPx: 0.9, meanEdgeCorrelationPercent: 99.98 }
+        }, mockContext);
+        expect(stale.resultPayload.passed).toBe(false);
+        expect(stale.summaryResult).not.toContain('NCC');
     });
 
     it('routes camera matchmove & tracking tasks natively to Tier 1 via TaskCapabilityResolver', () => {
