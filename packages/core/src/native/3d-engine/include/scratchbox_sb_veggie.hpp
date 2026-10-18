@@ -1564,6 +1564,68 @@ private:
         return m;
     }
 
+public:
+    // Where a foliage anchor's leaf cluster sits in posed space: its station on the shoot, the shoot axis and two
+    // perpendiculars for the phyllotaxis, and the cluster's reach.
+    struct FoliageFrame {
+        Vec3 origin;
+        Vec3 shootDir;
+        Vec3 perp1;
+        Vec3 perp2;
+        float clusterRadius{0.0f};
+        int attachedJointIndex{0};
+    };
+
+    static bool foliageFrame(const SbVeggieFoliageAnchor& anchor, const std::vector<Vec3>& posedJoints, float spreadScale, FoliageFrame& out) {
+        if (anchor.attachedJointIndex >= static_cast<int>(posedJoints.size())) return false;
+        Vec3 pChild = posedJoints[anchor.attachedJointIndex];
+        Vec3 pParent = (anchor.parentJointIndex >= 0 && anchor.parentJointIndex < static_cast<int>(posedJoints.size()))
+            ? posedJoints[anchor.parentJointIndex]
+            : pChild - anchor.outwardDirection * 0.8f;
+        Vec3 shootVec = pChild - pParent;
+        float shootLen = shootVec.length();
+        out.shootDir = shootLen > 1e-4f ? shootVec / shootLen : anchor.outwardDirection;
+        out.origin = pParent + out.shootDir * (shootLen * anchor.shootStation) + anchor.localOffset * spreadScale;
+        Vec3 perp1 = out.shootDir.cross(Vec3(0, 1, 0));
+        if (perp1.lengthSquared() < 0.01f) perp1 = out.shootDir.cross(Vec3(1, 0, 0));
+        out.perp1 = perp1.normalized();
+        out.perp2 = out.shootDir.cross(out.perp1).normalized();
+        out.clusterRadius = anchor.clusterRadius * spreadScale * (anchor.isTerminalTwig ? 1.15f : 0.92f);
+        out.attachedJointIndex = anchor.attachedJointIndex;
+        return true;
+    }
+
+    // One of the four shootlet axes that fan out of a cluster station.
+    static Vec3 subShootDirection(const FoliageFrame& f, int subShoot) {
+        float phase = subShoot * (PI * 0.5f) + f.attachedJointIndex * 1.3f;
+        return (f.shootDir * 0.48f + (f.perp1 * std::cos(phase) + f.perp2 * std::sin(phase)) * 0.72f + Vec3(0, 0.28f, 0)).normalized();
+    }
+
+    /**
+     * Fixed stations along every cluster's shootlets, where the leaf cards are placed. Unlike the leaf cards, whose
+     * number changes with the crown parameters, these move continuously with the parameters, so a fit can difference
+     * them.
+     */
+    static std::vector<Vec3> foliageStations(const SbVeggieTemplate& tmpl, const std::vector<Vec3>& posedJoints, const SbVeggieParams& params, int stationsPerShootlet) {
+        float spreadScale = std::max(0.2f, 1.0f + 0.40f * params.beta[2]);
+        std::vector<Vec3> out;
+        out.reserve(tmpl.foliageAnchors.size() * 4 * stationsPerShootlet);
+        for (const auto& anchor : tmpl.foliageAnchors) {
+            FoliageFrame frame;
+            if (!foliageFrame(anchor, posedJoints, spreadScale, frame)) continue;
+            for (int s = 0; s < 4; ++s) {
+                Vec3 dir = subShootDirection(frame, s);
+                for (int k = 0; k < stationsPerShootlet; ++k) {
+                    // same reach law as the cards: reach = ((k + 0.5) / n)^0.58 of the cluster radius
+                    float reach = std::pow((k + 0.5f) / stationsPerShootlet, 0.58f) * frame.clusterRadius;
+                    out.push_back(frame.origin + dir * reach);
+                }
+            }
+        }
+        return out;
+    }
+
+private:
     static void appendFoliageCards(
         ScratchboxMesh& mesh,
         const SbVeggieTemplate& tmpl,
@@ -1588,29 +1650,12 @@ private:
 
         for (size_t a = 0; a < tmpl.foliageAnchors.size(); ++a) {
             const auto& anchor = tmpl.foliageAnchors[a];
-            if (anchor.attachedJointIndex >= static_cast<int>(posedJoints.size())) continue;
-
-            // Twig / shoot segment start and end points in posed space
-            Vec3 pChild = posedJoints[anchor.attachedJointIndex];
-            Vec3 pParent = pChild;
-            if (anchor.parentJointIndex >= 0 && anchor.parentJointIndex < static_cast<int>(posedJoints.size())) {
-                pParent = posedJoints[anchor.parentJointIndex];
-            } else {
-                pParent = pChild - anchor.outwardDirection * 0.8f;
-            }
-
-            Vec3 shootVec = pChild - pParent;
-            float shootLen = shootVec.length();
-            Vec3 shootDir = shootLen > 1e-4f ? shootVec / shootLen : anchor.outwardDirection;
-
-            // Continuous station origin along branch shoot
-            Vec3 anchorPos = pParent + shootDir * (shootLen * anchor.shootStation) + anchor.localOffset * spreadScale;
-
-            // Reference frames for radial phyllotaxis around shoot axis
-            Vec3 perp1 = shootDir.cross(Vec3(0, 1, 0));
-            if (perp1.lengthSquared() < 0.01f) perp1 = shootDir.cross(Vec3(1, 0, 0));
-            perp1 = perp1.normalized();
-            Vec3 perp2 = shootDir.cross(perp1).normalized();
+            FoliageFrame frame;
+            if (!foliageFrame(anchor, posedJoints, spreadScale, frame)) continue;
+            const Vec3& anchorPos = frame.origin;
+            const Vec3& shootDir = frame.shootDir;
+            const Vec3& perp1 = frame.perp1;
+            const Vec3& perp2 = frame.perp2;
 
             int count = static_cast<int>(anchor.leafCount * params.psi_leafDensity * crownAreaMult);
             if (params.psi_season < 0.70f) {
@@ -1619,14 +1664,12 @@ private:
             }
             count = std::max(1, count);
 
-            float clusterRadius = anchor.clusterRadius * spreadScale * (anchor.isTerminalTwig ? 1.15f : 0.92f);
+            float clusterRadius = frame.clusterRadius;
 
             for (int i = 0; i < count; ++i) {
                 // 1. Volumetric botanical shootlet spray branching:
                 // From the branch node / anchor station, 4 fine shootlet axes fan outward in 3D
-                int subShoot = i % 4;
-                float subShootPhase = subShoot * (PI * 0.5f) + anchor.attachedJointIndex * 1.3f;
-                Vec3 subShootDir = (shootDir * 0.48f + (perp1 * std::cos(subShootPhase) + perp2 * std::sin(subShootPhase)) * 0.72f + Vec3(0, 0.28f, 0)).normalized();
+                Vec3 subShootDir = subShootDirection(frame, i % 4);
 
                 // Continuous radial reach along sub-shoot spray with cluster cloud envelope
                 float reachFraction = std::pow(static_cast<float>(i + 0.5f) / count, 0.58f);

@@ -21,6 +21,7 @@
 #include <limits>
 #include <iostream>
 
+
 namespace scratchbox {
 namespace sb_veggie {
 
@@ -107,7 +108,9 @@ public:
         float scanRadius = 0.5f * std::max(scanBounds.max.x - scanBounds.min.x, scanBounds.max.z - scanBounds.min.z);
 
         // 3. Analytical Heuristic Parameter Initialization (Cold Start)
-        // Canonical street tree baseline: height is 6.0m, crown spread radius is 2.7m (5.4m diameter)
+        // Canonical street tree baseline: height is 6.0m, crown spread radius is 2.7m (5.4m diameter).
+        // The template has no global scale: height only scales through beta[1] (x(1 + 0.35*beta1), clamped at +-3),
+        // so crowns taller than ~12.3 m cannot be represented and fit with residual height error.
         float canonicalHeight = 6.0f;
         float canonicalRadius = 2.7f;
 
@@ -286,80 +289,46 @@ public:
     }
 
 private:
+    // The fit compares the scan with where the tree's real surface is: the evaluated wood mesh (triangle centroids;
+    // its topology is fixed, so they move continuously with the parameters) and the stations along each leaf
+    // cluster's shootlets where the leaf cards are placed (SbVeggieEvaluator::foliageStations). Sampling the leaf
+    // cards themselves would not do: their number changes with the parameters, which makes finite differences jump.
+    static constexpr int kObjectiveWoodSamples = 160;
+    static constexpr int kObjectiveStationsPerShootlet = 1;
+
+    static std::vector<Vec3> surfacePoints(const SbVeggieParams& params, const SbVeggieTemplate& tmpl) {
+        auto decomposed = SbVeggieEvaluator::evaluateDecomposed(tmpl, params, false);
+        std::vector<Vec3> pts = SbVeggieEvaluator::foliageStations(tmpl, decomposed.posedJoints, params, kObjectiveStationsPerShootlet);
+        const auto& v = decomposed.woodMesh.vertices;
+        const auto& idx = decomposed.woodMesh.indices;
+        size_t tris = idx.size() / 3;
+        size_t stride = std::max<size_t>(1, tris / kObjectiveWoodSamples);
+        for (size_t t = 0; t < tris; t += stride) {
+            pts.push_back((v[idx[3 * t]].position + v[idx[3 * t + 1]].position + v[idx[3 * t + 2]].position) * (1.0f / 3.0f));
+        }
+        return pts;
+    }
+
+    static float meanNearestSq(const std::vector<Vec3>& from, const std::vector<Vec3>& to) {
+        double acc = 0.0;
+        for (const auto& p : from) {
+            float best = std::numeric_limits<float>::max();
+            for (const auto& q : to) best = std::min(best, (p - q).lengthSquared());
+            acc += best;
+        }
+        return static_cast<float>(acc / from.size());
+    }
+
+public:
+    // Symmetric Chamfer (mean squared nearest distance, both directions) between the scan and the real surface.
     static float evaluateChamferDistance(
         const SbVeggieParams& params,
         const SbVeggieTemplate& tmpl,
         const std::vector<Vec3>& scanPoints
     ) {
-        // Evaluate trunk and branch skeleton mesh with Asymmetric Bough IK
-        auto decomposed = SbVeggieEvaluator::evaluateDecomposed(tmpl, params, false);
-        const ScratchboxMesh& mesh = decomposed.woodMesh;
-
-        if (mesh.vertices.empty() || scanPoints.empty()) return 100.0f;
-
-        // Build composite evaluation point cloud: bare wood vertices + foliage cluster proxy points
-        std::vector<Vec3> treePoints;
-        treePoints.reserve(mesh.vertices.size() / 6 + tmpl.foliageAnchors.size() * 5);
-
-        // Subsample mesh vertices (trunk and scaffold branches)
-        size_t vCount = mesh.vertices.size();
-        size_t vStride = std::max<size_t>(1, vCount / 120);
-        for (size_t v = 0; v < vCount; v += vStride) {
-            treePoints.push_back(mesh.vertices[v].position);
-        }
-
-        // Add foliage cluster proxies posed by actual joint positions
-        float spreadScale = 1.0f + params.beta[2] * 0.40f;
-
-        for (size_t aIdx = 0; aIdx < tmpl.foliageAnchors.size(); ++aIdx) {
-            const auto& anchor = tmpl.foliageAnchors[aIdx];
-            if (anchor.attachedJointIndex >= static_cast<int>(decomposed.posedJoints.size())) continue;
-            Vec3 childPos = decomposed.posedJoints[anchor.attachedJointIndex];
-            Vec3 parentPos = childPos;
-            if (anchor.parentJointIndex >= 0 && anchor.parentJointIndex < static_cast<int>(decomposed.posedJoints.size())) {
-                parentPos = decomposed.posedJoints[anchor.parentJointIndex];
-            }
-            Vec3 worldCenter = parentPos + (childPos - parentPos) * anchor.shootStation + anchor.localOffset * (0.8f * spreadScale);
-            treePoints.push_back(worldCenter);
-
-            // For outer terminal twigs (crown mantle envelope), include cardinal boundary extent
-            if (anchor.isTerminalTwig) {
-                float cRad = anchor.clusterRadius * spreadScale * 0.85f;
-                treePoints.push_back(worldCenter + Vec3( cRad, 0.0f,  0.0f));
-                treePoints.push_back(worldCenter + Vec3(-cRad, 0.0f,  0.0f));
-                treePoints.push_back(worldCenter + Vec3( 0.0f, 0.0f,  cRad));
-                treePoints.push_back(worldCenter + Vec3( 0.0f, 0.0f, -cRad));
-            }
-        }
-
-        if (treePoints.empty()) return 100.0f;
-
-        // 1. Forward Chamfer: Scan Points -> Closest Tree Point
-        float forwardDistSq = 0.0f;
-        for (const auto& scanP : scanPoints) {
-            float minDistSq = std::numeric_limits<float>::max();
-            for (const auto& treeP : treePoints) {
-                float dSq = (scanP - treeP).lengthSquared();
-                if (dSq < minDistSq) minDistSq = dSq;
-            }
-            forwardDistSq += minDistSq;
-        }
-        forwardDistSq /= scanPoints.size();
-
-        // 2. Reverse Chamfer: Tree Points -> Closest Scan Point (prevents tree blowing up outside scan)
-        float reverseDistSq = 0.0f;
-        for (const auto& treeP : treePoints) {
-            float minDistSq = std::numeric_limits<float>::max();
-            for (const auto& scanP : scanPoints) {
-                float dSq = (treeP - scanP).lengthSquared();
-                if (dSq < minDistSq) minDistSq = dSq;
-            }
-            reverseDistSq += minDistSq;
-        }
-        reverseDistSq /= treePoints.size();
-
-        // Bidirectional loss ensures exact 1:1 volumetric conformance
-        return forwardDistSq + 0.35f * reverseDistSq;
+        std::vector<Vec3> treePoints = surfacePoints(params, tmpl);
+        if (treePoints.empty() || scanPoints.empty()) return 100.0f;
+        return 0.5f * (meanNearestSq(scanPoints, treePoints) + meanNearestSq(treePoints, scanPoints));
     }
 };
 
