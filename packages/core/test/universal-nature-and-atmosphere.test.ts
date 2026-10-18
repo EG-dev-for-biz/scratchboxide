@@ -22,108 +22,28 @@ import type { Scene3DData } from '../src/browser/generative-canvas/canvas-types'
 
 describe('Universal Nature, Atmosphere, SSS & Triplanar 3D Systems', () => {
 
-    it('1. should register and dispatch all 5 Category 11 operators in DirectDispatchOperatorEngine', () => {
+    it('1. no longer registers the record-only triplanar / SSS / fog / vegetation / terrain / foliage operators', () => {
         const initialScene: Scene3DData = {
             title: 'Nature Scene',
             renderMode: 'pbr',
-            customMeshes: [
-                {
-                    id: 'mesh-hero',
-                    name: 'Hero Boulder',
-                    type: 'custom',
-                    position: [0, 0, 0]
-                }
-            ]
+            customMeshes: [{ id: 'mesh-hero', name: 'Hero Boulder', type: 'custom', position: [0, 0, 0] }]
         };
         const engine = createOperatorEngine(initialScene);
-
-        // 1. sb_apply_triplanar_material
-        const triplanarRes = engine.dispatch('sb_apply_triplanar_material', {
-            targetMeshId: 'mesh-hero',
-            materialType: 'rock_strata',
-            sharpness: 6.0,
-            scale: 2.0
-        });
-        expect(triplanarRes.success).toBe(true);
-        expect(triplanarRes.data.triplanar.materialType).toBe('rock_strata');
-        expect(triplanarRes.data.triplanar.sharpness).toBe(6.0);
-
-        // 2. sb_set_subsurface_scattering
-        const sssRes = engine.dispatch('sb_set_subsurface_scattering', {
-            targetMeshId: 'mesh-hero',
-            profile: 'green_leaf',
-            scatteringWeight: 0.90,
-            thickness: 0.15
-        });
-        expect(sssRes.success).toBe(true);
-        expect(sssRes.data.subsurface.profile).toBe('green_leaf');
-        expect(sssRes.data.subsurface.thickness).toBe(0.15);
-
-        // 3. sb_add_volumetric_fog
-        const fogRes = engine.dispatch('sb_add_volumetric_fog', {
-            density: 0.045,
-            scatteringColor: '#f8d28a',
-            anisotropy: 0.78,
-            heightScale: 5.0,
-            godRaysEnabled: true
-        });
-        expect(fogRes.success).toBe(true);
-        expect(fogRes.data.volumetricFog.anisotropy).toBe(0.78);
-        expect(fogRes.data.volumetricFog.density).toBe(0.045);
-
-        // 4. sb_generate_l_system_vegetation
-        const treeRes = engine.dispatch('sb_generate_l_system_vegetation', {
-            treeType: 'oak',
-            position: [-3.0, 0, -2.0],
-            maxDepth: 4,
-            initialLength: 3.5,
-            initialRadius: 0.35,
-            seed: 123
-        });
-        expect(treeRes.success).toBe(true);
-        expect(treeRes.data.treeMesh.generator.algorithm).toBe('l_system');
-        expect(treeRes.data.treeMesh.generator.treeType).toBe('oak');
-
-        // 5. sb_generate_biome_terrain
-        const terrainRes = engine.dispatch('sb_generate_biome_terrain', {
-            width: 32.0,
-            depth: 32.0,
-            resolution: 48,
-            maxElevation: 5.0,
-            rockSlopeThreshold: 35.0,
-            seed: 777
-        });
-        expect(terrainRes.success).toBe(true);
-        expect(terrainRes.data.terrainMesh.terrainParams.maxElevation).toBe(5.0);
-        expect(terrainRes.data.terrainMesh.terrainParams.rockSlopeThreshold).toBe(35.0);
-
-        // 6. sb_generate_detailed_foliage
-        const foliageRes = engine.dispatch('sb_generate_detailed_foliage', {
-            parentTreeId: treeRes.data.treeId,
-            clumpCount: 8,
-            leafSize: 0.45,
-            thinWall: true,
-            subsurfaceWeight: 1.0
-        });
-        expect(foliageRes.success).toBe(true);
-        expect(foliageRes.data.foliageMesh.material.subsurface.thinWall).toBe(true);
-        expect(foliageRes.data.foliageMesh.foliageParams.clumpCount).toBe(8);
-
-        // 7. sb_transfer_foliage_normals
-        const transferRes = engine.dispatch('sb_transfer_foliage_normals', {
-            targetMeshId: foliageRes.data.foliageId,
-            mixFactor: 1.0,
-            upwardBias: 0.20,
-            helpers: [{ center: [0, 3, 0], radius: 1.8 }]
-        });
-        expect(transferRes.success).toBe(true);
-        expect(transferRes.data.normalTransfer.mixFactor).toBe(1.0);
-        expect(transferRes.data.normalTransfer.upwardBias).toBe(0.20);
-
-        // Verify scene data state
+        for (const name of [
+            'sb_apply_triplanar_material',
+            'sb_set_subsurface_scattering',
+            'sb_add_volumetric_fog',
+            'sb_generate_l_system_vegetation',
+            'sb_generate_biome_terrain',
+            'sb_generate_detailed_foliage',
+            'sb_transfer_foliage_normals'
+        ]) {
+            expect(engine.getOperator(name)).toBeUndefined();
+            expect(engine.dispatch(name, { targetMeshId: 'mesh-hero' }).success).toBe(false);
+        }
         const updatedScene = engine.getSceneData();
-        expect(updatedScene.customMeshes?.length).toBeGreaterThanOrEqual(4);
-        expect((updatedScene.environment as any)?.volumetricFog?.enabled).toBe(true);
+        expect(updatedScene.customMeshes?.length).toBe(1);
+        expect((updatedScene.environment as any)?.volumetricFog).toBeUndefined();
     });
 
     it('3. should generate nature_atmosphere C++20 source code utilizing all 4 new engine modules', () => {

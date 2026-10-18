@@ -245,10 +245,13 @@ int main() {
         expect(mat.extensions.KHR_materials_emissive_strength.emissiveStrength).toBe(2.5);
     });
 
-    it('dispatches all PBR Next direct operators (create, clearcoat, transmission, sheen, anisotropy, presets, baking)', () => {
-        const engine = createOperatorEngine();
+    it('dispatches the PBR material operators and writes the values onto the registered material and the object', () => {
+        const engine = createOperatorEngine({
+            title: 'PBR Stage',
+            customMeshes: [{ id: 'car-body', name: 'Car Body', type: 'box', position: [0, 0, 0] }]
+        });
 
-        // 1. Dispatch sb_create_material with PBR Next parameters
+        // 1. sb_create_material from a preset, with explicit clearcoat overrides
         const createResult = engine.dispatch('sb_create_material', {
             materialId: 'mat-candy-red',
             name: 'Candy Red Metallic',
@@ -258,74 +261,54 @@ int main() {
         });
         expect(createResult.success).toBe(true);
         expect(createResult.data.materialId).toBe('mat-candy-red');
-        expect(createResult.data.material.clearcoat).toBe(1.0);
-        expect(createResult.data.material.clearcoatRoughness).toBe(0.03);
+        expect(createResult.data.material.color).toBe('#d90f14'); // from the preset
+        expect(createResult.data.material.metalness).toBe(0.45);
+        expect(engine.getMaterial('mat-candy-red')).toBe(createResult.data.material);
 
-        // 2. Dispatch sb_set_pbr_clearcoat
-        const ccResult = engine.dispatch('sb_set_pbr_clearcoat', {
-            materialId: 'mat-candy-red',
-            clearcoat: 0.95,
-            clearcoatRoughness: 0.02
-        });
+        // 2. sb_set_pbr_clearcoat changes the registered material (clamped to 0..1)
+        const ccResult = engine.dispatch('sb_set_pbr_clearcoat', { materialId: 'mat-candy-red', clearcoat: 1.4, clearcoatRoughness: 0.02 });
         expect(ccResult.success).toBe(true);
-        expect(ccResult.data.clearcoat).toBe(0.95);
-        expect(ccResult.data.clearcoatRoughness).toBe(0.02);
+        expect(engine.getMaterial('mat-candy-red').clearcoat).toBe(1.0);
+        expect(engine.getMaterial('mat-candy-red').clearcoatRoughness).toBe(0.02);
 
-        // 3. Dispatch sb_set_pbr_transmission
-        const transResult = engine.dispatch('sb_set_pbr_transmission', {
-            materialId: 'mat-crystal',
-            transmission: 0.92,
-            ior: 1.58,
-            thickness: 1.5,
-            attenuationColor: '#1fe073',
-            attenuationDistance: 1.0
-        });
+        // 3. sb_assign_material copies it onto the object
+        expect(engine.dispatch('sb_assign_material', { objectId: 'car-body', materialId: 'mat-candy-red' }).success).toBe(true);
+        expect(engine.getObject('car-body').material.color).toBe('#d90f14');
+        expect(engine.getObject('car-body').material.clearcoat).toBe(1.0);
+
+        // 4. sb_set_pbr_transmission on the object's material
+        const transResult = engine.dispatch('sb_set_pbr_transmission', { targetId: 'car-body', transmission: 0.92, ior: 1.58, thickness: 1.5 });
         expect(transResult.success).toBe(true);
-        expect(transResult.data.transmission).toBe(0.92);
-        expect(transResult.data.ior).toBe(1.58);
-        expect(transResult.data.thickness).toBe(1.5);
+        const bodyMat = engine.getObject('car-body').material;
+        expect(bodyMat.transmission).toBe(0.92);
+        expect(bodyMat.ior).toBe(1.58);
+        expect(bodyMat.thickness).toBe(1.5);
+        expect(engine.dispatch('sb_set_pbr_transmission', { targetId: 'no-such-object', transmission: 0.5 }).success).toBe(false);
 
-        // 4. Dispatch sb_set_pbr_sheen
-        const sheenResult = engine.dispatch('sb_set_pbr_sheen', {
-            materialId: 'mat-velvet',
-            sheenColor: '#ff6688',
-            sheenRoughness: 0.5
-        });
-        expect(sheenResult.success).toBe(true);
-        expect(sheenResult.data.sheenColor).toBe('#ff6688');
-        expect(sheenResult.data.sheenRoughness).toBe(0.5);
+        // 5. sb_set_material_pbr updates objects that use the material
+        expect(engine.dispatch('sb_set_material_pbr', { materialId: 'mat-candy-red', roughness: 0.12 }).success).toBe(true);
+        expect(engine.getMaterial('mat-candy-red').roughness).toBe(0.12);
+        expect(engine.getObject('car-body').material.roughness).toBe(0.12);
+        expect(engine.dispatch('sb_set_material_pbr', { objectId: 'car-body', color: 'not-a-colour' }).success).toBe(false);
 
-        // 5. Dispatch sb_set_pbr_anisotropy
-        const anisoResult = engine.dispatch('sb_set_pbr_anisotropy', {
-            materialId: 'mat-brushed-metal',
-            anisotropy: 0.85,
-            rotation: 0.785
-        });
-        expect(anisoResult.success).toBe(true);
-        expect(anisoResult.data.anisotropy).toBe(0.85);
-        expect(anisoResult.data.anisotropyRotation).toBe(0.785);
-
-        // 6. Dispatch sb_assign_pbr_preset
-        const presetResult = engine.dispatch('sb_assign_pbr_preset', {
-            materialId: 'mat-gold',
-            preset: 'polished_gold_24k'
-        });
+        // 6. sb_assign_pbr_preset copies the calibrated preset values
+        const presetResult = engine.dispatch('sb_assign_pbr_preset', { materialId: 'mat-gold', preset: 'polished_gold_24k' });
         expect(presetResult.success).toBe(true);
-        expect(presetResult.data.preset).toBe('polished_gold_24k');
-        expect(presetResult.data.material.metalness).toBe(1.0);
-        expect(presetResult.data.material.color).toBe('#ffd700');
+        expect(engine.getMaterial('mat-gold').metalness).toBe(1.0);
+        expect(engine.getMaterial('mat-gold').color).toBe('#ffd700');
+        expect(engine.dispatch('sb_assign_pbr_preset', { materialId: 'mat-gold', preset: 'unobtainium' }).success).toBe(false);
+    });
 
-        // 7. Dispatch sb_bake_pbr_maps
-        const bakeResult = engine.dispatch('sb_bake_pbr_maps', {
-            materialId: 'mat-gold',
-            generateNormal: true,
-            generateRoughness: true,
-            generateAO: true,
-            bumpScale: 1.5
-        });
-        expect(bakeResult.success).toBe(true);
-        expect(bakeResult.data.proceduralMaps.normalMapGenerated).toBe(true);
-        expect(bakeResult.data.proceduralMaps.bumpScale).toBe(1.5);
+    it('does not register the removed PBR operators (sheen, anisotropy, map baking, texture sets)', () => {
+        const engine = createOperatorEngine();
+        const removed = [
+            'sb_set_pbr_sheen', 'sb_set_pbr_anisotropy', 'sb_bake_pbr_maps', 'sb_generate_pbr_texture_set', 'sb_pack_orm_map',
+            'sb_apply_pbr_texture_pack', 'sb_layer_pbr_material', 'sb_apply_triplanar_material', 'sb_set_subsurface_scattering'
+        ];
+        for (const name of removed) {
+            expect(engine.getOperator(name), name).toBeUndefined();
+            expect(engine.dispatch(name, { materialId: 'mat-x' }).success, name).toBe(false);
+        }
     });
 
     it('synthesizes procedural 3D scenes with "pbr" theme and compiles default C++ source', async () => {

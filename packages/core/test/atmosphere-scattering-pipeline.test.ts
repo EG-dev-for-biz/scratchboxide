@@ -226,7 +226,8 @@ async function runAtmosphericScatteringPipelineTests() {
     const updatedScene = engine.getSceneData();
     assert.strictEqual(updatedScene.environment?.lighting, 'golden_hour');
     assert.strictEqual(updatedScene.environment?.skybox, 'golden_hour');
-    assert.ok(updatedScene.environment?.sunElevation !== undefined);
+    // The sun lives in the atmosphere feature (from the preset's diurnal state), not in environment.sunElevation.
+    assert.strictEqual((updatedScene.environment as any)?.sunElevation, undefined);
     assert.ok(updatedScene.features?.atmosphericScattering, 'Must enable atmosphericScattering feature');
     assert.ok(updatedScene.features?.godRays, 'Must enable godRays feature');
 
@@ -235,6 +236,23 @@ async function runAtmosphericScatteringPipelineTests() {
     assert.strictEqual(atmoFeature.mie, 0.004);
     assert.strictEqual(atmoFeature.turbidity, 2.2);
     assert.strictEqual(atmoFeature.cloudCoverage, 0.45);
+    const goldenState = getPresetLightingState('golden_hour');
+    assert.strictEqual(atmoFeature.sunElevation, goldenState.elevationDeg);
+    assert.strictEqual(atmoFeature.sunAzimuth, goldenState.azimuthDeg);
+    const expectedSun = getSunVectorFromAngles(goldenState.elevationDeg, goldenState.azimuthDeg);
+    assert.ok(Math.abs(atmoFeature.sunPosition[1] - expectedSun.y * 60) < 1e-9, 'sunPosition follows the preset sun');
+
+    // A time of day without a place to put the sun fails.
+    const noPlace = engine.dispatch('sb_setup_lighting', { preset: 'midday', timeOfDay: 12 });
+    assert.strictEqual(noPlace.success, false);
+    assert.ok(/latitude\/longitude/.test(noPlace.error || ''), noPlace.error);
+
+    // With coordinates, the sun is placed from the NOAA ephemeris at that local solar time.
+    const placed = engine.dispatch('sb_setup_lighting', { timeOfDay: 12, latitude: 37.77, longitude: -122.41 });
+    assert.strictEqual(placed.success, true);
+    const placedAtmo = engine.getSceneData().features?.atmosphericScattering as any;
+    assert.ok(placedAtmo.sunElevation > 20 && placedAtmo.sunElevation < 80, `solar noon elevation at 37.8N, got ${placedAtmo.sunElevation}`);
+    assert.strictEqual(placedAtmo.latitude, 37.77);
 
     console.log('  ✓ Test 7 Passed: sb_setup_lighting operator configures physical atmosphere and diurnal profile.');
 
@@ -247,7 +265,10 @@ async function runAtmosphericScatteringPipelineTests() {
 
     assert.ok(detect3DSceneTheme(prompt) === 'nature_atmosphere' || detect3DSceneTheme(prompt) === 'worldbuilder' || detect3DSceneTheme(prompt) === 'alpine_valley', 'Theme must be atmospheric or terrain');
     assert.ok(synthesizedScene.features?.atmosphericScattering, 'Atmosphere must be activated for scattering prompt');
-    assert.ok(synthesizedScene.features?.godRays, 'God rays must be activated for sunset landscape');
+    // God rays are not an atmosphere opt-in: a sunset prompt that does not ask for them gets none.
+    assert.ok(!synthesizedScene.features?.godRays, 'God rays must not be added uninvited');
+    const godRaysPromptScene = synthesizeContextual3DScene(prompt + ' and god rays through the clouds');
+    assert.ok(godRaysPromptScene.features?.godRays, 'God rays must be activated when the prompt asks for them');
     assert.strictEqual(synthesizedScene.environment?.skybox, 'realistic-sky');
 
     console.log('  ✓ Test 8 Passed: Contextual 3D scene synthesizer configures atmospheric scattering features.');

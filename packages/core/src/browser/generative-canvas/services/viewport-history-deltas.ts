@@ -293,21 +293,46 @@ function writeVertices(d: VertexDelta, values: Float32Array): boolean {
 /** An object removed from its scene (rebuilt content) has no parent; an edit on it can no longer be shown. */
 const isDetached = (o: THREE.Object3D): boolean => !o.parent && !(o as THREE.Scene).isScene;
 
+/** A mesh whose geometry or material object was replaced by the edit (subdivision, recomputed normals, new material). */
+interface SwapDelta {
+    mesh: THREE.Mesh;
+    geometry?: { before: THREE.BufferGeometry; after: THREE.BufferGeometry };
+    material?: { before: THREE.Material | THREE.Material[]; after: THREE.Material | THREE.Material[] };
+}
+
+const geometryBytes = (g: THREE.BufferGeometry) => Object.values(g.attributes).reduce((n, a) => n + (a as THREE.BufferAttribute).array.byteLength, 0) + (g.index?.array.byteLength ?? 0);
+
 class ObjectLiveEdit implements LiveEdit {
     readonly bytes: number;
-    constructor(private readonly verts: VertexDelta[], private readonly transforms: TransformDelta[]) {
+    private showing: 'before' | 'after' = 'after';
+    constructor(private readonly verts: VertexDelta[], private readonly transforms: TransformDelta[], private readonly swaps: SwapDelta[] = []) {
         let b = 64;
         for (const v of verts) b += v.indices.byteLength + v.before.byteLength + v.after.byteLength;
-        this.bytes = b + transforms.length * 160;
+        for (const w of swaps) if (w.geometry) b += geometryBytes(w.geometry.before) + geometryBytes(w.geometry.after);
+        this.bytes = b + transforms.length * 160 + swaps.length * 64;
     }
     private run(which: 'before' | 'after'): boolean {
         let ok = false;
         for (const v of this.verts) if (!isDetached(v.mesh)) ok = writeVertices(v, v[which]) || ok;
         for (const t of this.transforms) if (!isDetached(t.obj)) { writeTransform(t.obj, t[which]); ok = true; }
+        for (const w of this.swaps) {
+            if (isDetached(w.mesh)) continue;
+            if (w.geometry) w.mesh.geometry = w.geometry[which];
+            if (w.material) w.mesh.material = w.material[which];
+            ok = true;
+        }
+        this.showing = which;
         return ok;
     }
     revert(): boolean { return this.run('before'); }
     apply(): boolean { return this.run('after'); }
+    /** Frees the replaced geometry that can no longer be shown. */
+    dispose(): void {
+        for (const w of this.swaps) {
+            const hidden = w.geometry?.[this.showing === 'after' ? 'before' : 'after'];
+            if (hidden && hidden !== w.mesh.geometry) hidden.dispose();
+        }
+    }
 }
 
 /**
@@ -318,6 +343,7 @@ class ObjectLiveEdit implements LiveEdit {
 export class ObjectEditCapture {
     private readonly vertexSnaps: Array<{ mesh: THREE.Mesh; positions: Float32Array }> = [];
     private readonly transformSnaps: Array<{ obj: THREE.Object3D; before: TransformSnap }> = [];
+    private readonly objectSnaps: Array<{ mesh: THREE.Mesh; geometry: THREE.BufferGeometry; material: THREE.Material | THREE.Material[] }> = [];
 
     constructor(objects: THREE.Object3D[], options: { geometry?: boolean; transform?: boolean } = {}) {
         const geometry = options.geometry !== false;
@@ -329,6 +355,7 @@ export class ObjectEditCapture {
             for (const mesh of meshesOf(root)) {
                 if (seenMesh.has(mesh)) continue;
                 seenMesh.add(mesh);
+                this.objectSnaps.push({ mesh, geometry: mesh.geometry, material: mesh.material });
                 this.vertexSnaps.push({ mesh, positions: (mesh.geometry.attributes.position.array as Float32Array).slice() });
             }
         }
@@ -337,7 +364,16 @@ export class ObjectEditCapture {
     /** The compact edit, or null when nothing changed. */
     finish(): LiveEdit | null {
         const verts: VertexDelta[] = [];
+        const swaps: SwapDelta[] = [];
+        for (const snap of this.objectSnaps) {
+            const swap: SwapDelta = { mesh: snap.mesh };
+            if (snap.mesh.geometry !== snap.geometry) swap.geometry = { before: snap.geometry, after: snap.mesh.geometry };
+            if (snap.mesh.material !== snap.material) swap.material = { before: snap.material, after: snap.mesh.material };
+            if (swap.geometry || swap.material) swaps.push(swap);
+        }
+        const swapped = new Set(swaps.filter(w => w.geometry).map(w => w.mesh));
         for (const { mesh, positions } of this.vertexSnaps) {
+            if (swapped.has(mesh)) continue;
             const pos = mesh.geometry?.attributes?.position as THREE.BufferAttribute | undefined;
             if (!pos || pos.array.length !== positions.length) continue;
             const now = pos.array as Float32Array;
@@ -360,7 +396,7 @@ export class ObjectEditCapture {
             const after = readTransform(obj);
             if (transformsDiffer(before, after)) transforms.push({ obj, before, after });
         }
-        return verts.length === 0 && transforms.length === 0 ? null : new ObjectLiveEdit(verts, transforms);
+        return verts.length === 0 && transforms.length === 0 && swaps.length === 0 ? null : new ObjectLiveEdit(verts, transforms, swaps);
     }
 }
 

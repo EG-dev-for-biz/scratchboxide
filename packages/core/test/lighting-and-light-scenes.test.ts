@@ -157,35 +157,21 @@ describe('Light 3D Scenes & Cinematic Lighting Mastery', () => {
             expect(engine.getSceneData().environment?.lightingKelvin).toBe(2400);
         });
 
-        it('should execute sb_add_light operator to add punctual lights with physical Kelvin and falloff', () => {
-            const initialScene: Scene3DData = {
-                id: 'test_scene_2',
-                title: 'Test Light Creation',
-                environment: {}
-            };
+        it('sb_setup_lighting_rig fails for an unknown rig and writes nothing', () => {
+            const engine = createOperatorEngine({ id: 'rig_unknown', title: 'Unknown rig', environment: {} } as Scene3DData);
+            const result = engine.dispatch('sb_setup_lighting_rig', { preset: 'no_such_rig' });
+            expect(result.success).toBe(false);
+            expect(result.error).toContain('no_such_rig');
+            expect(engine.getSceneData().environment?.cinematicRig).toBeUndefined();
+        });
 
+        it('no longer registers sb_add_light', () => {
+            const engine = createOperatorEngine({ id: 'test_scene_2', title: 'Test Light Creation', environment: {} } as Scene3DData);
+            expect(engine.getOperator('sb_add_light')).toBeUndefined();
             const threeScene = new THREE.Scene();
-            const engine = createOperatorEngine(initialScene);
             engine.attachThreeScene(threeScene);
-
-            const result = engine.dispatch('sb_add_light', {
-                type: 'spot',
-                kelvin: 3200,
-                intensity: 1500,
-                position: [0, 5, 2],
-                direction: [0, -1, 0],
-                castShadow: true,
-                innerConeAngle: 0.3,
-                outerConeAngle: 0.8
-            });
-
-            expect(result.success).toBe(true);
-            expect(result.data.totalCustomLights).toBe(1);
-
-            // Three.js scene should have the new light added
-            const addedLight = threeScene.children.find(c => c instanceof THREE.SpotLight) as THREE.SpotLight | undefined;
-            expect(addedLight).toBeDefined();
-            expect(addedLight?.castShadow).toBe(true);
+            expect(engine.dispatch('sb_add_light', { type: 'spot' }).success).toBe(false);
+            expect(threeScene.children.length).toBe(0);
         });
 
         it('should execute sb_optimize_light_budget operator to analyze and trim shadow casters', () => {
@@ -194,25 +180,45 @@ describe('Light 3D Scenes & Cinematic Lighting Mastery', () => {
                 title: 'Test Budget Optimization',
                 environment: {}
             };
+            const engine = createOperatorEngine(initialScene);
+
+            // Without a live viewport there is nothing to measure.
+            const unavailable = engine.dispatch('sb_optimize_light_budget', { autoApply: true });
+            expect(unavailable.success).toBe(false);
+            expect(unavailable.errorCode).toBe('not_available_here');
 
             const threeScene = new THREE.Scene();
+            const lights: THREE.DirectionalLight[] = [];
             for (let i = 0; i < 4; i++) {
                 const light = new THREE.DirectionalLight(0xffffff, 1.0);
                 light.castShadow = true;
                 threeScene.add(light);
+                lights.push(light);
             }
-
-            const engine = createOperatorEngine(initialScene);
+            const sphereGeo = new THREE.SphereGeometry(1, 32, 16);
+            const sphere = new THREE.Mesh(sphereGeo, new THREE.MeshStandardMaterial());
+            threeScene.add(sphere);
             engine.attachThreeScene(threeScene);
+
+            // Measure only.
+            const measured = engine.dispatch('sb_optimize_light_budget', {});
+            expect(measured.success).toBe(true);
+            expect(measured.data.shadowsDisabled).toBe(0);
+            expect(measured.data.telemetry.shadowCasters).toBe(4);
+            expect(lights.every(l => l.castShadow)).toBe(true);
 
             const result = engine.dispatch('sb_optimize_light_budget', {
                 maxShadowCasters: 2,
                 autoApply: true
             });
-
             expect(result.success).toBe(true);
-            expect(result.data.telemetry.shadowCasters).toBeLessThanOrEqual(2);
-            expect(result.data.autoApplied).toBe(true);
+            expect(result.data.shadowsDisabled).toBe(2);
+            expect(lights.filter(l => l.castShadow).length).toBe(2);
+            expect(result.data.telemetry.shadowCasters).toBe(2);
+            expect(result.data.telemetry.lightCount).toBe(4);
+            expect(result.data.telemetry.meshCount).toBe(1);
+            expect(result.data.telemetry.totalVertices).toBe(sphereGeo.getAttribute('position').count);
+            expect(result.data.telemetry.totalTriangles).toBe(sphereGeo.index!.count / 3);
         });
     });
 });

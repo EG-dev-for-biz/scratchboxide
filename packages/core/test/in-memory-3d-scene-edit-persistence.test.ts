@@ -135,16 +135,40 @@ async function runInMemory3DSceneEditPersistenceTests() {
     const newVertexY = posAttr.getY(0);
     assert.notStrictEqual(initialVertexY, newVertexY, 'Vertex Y position must be mutated in memory');
 
-    // Record sculpt operator in engine
+    // The engine edits vertices only on a live viewport mesh: with none attached the dispatch fails and records nothing.
     const sculptDispatch = engine.dispatch('sb_deform_vertices', {
         objectId: 'building-alpha',
-        deformMode: 'draw',
         strokePoint: [0, 4, 0],
-        verticesAffected: 24,
-        maxDisplacement: 0.8
+        radius: 2.5,
+        strength: 0.8
     });
-    assert.strictEqual(sculptDispatch.success, true);
-    assert.ok(engine.getSceneData().operatorStack?.some(op => op.operator === 'sb_deform_vertices'));
+    assert.strictEqual(sculptDispatch.success, false);
+    assert.strictEqual(sculptDispatch.errorCode, 'not_available_here');
+    assert.ok(!engine.getSceneData().operatorStack?.some(op => op.operator === 'sb_deform_vertices'), 'a failed edit must not be recorded as done');
+
+    // With a live mesh the same dispatch moves the real vertices.
+    const liveEngine = createOperatorEngine(initialScene);
+    const liveScene = new THREE.Scene();
+    const liveGeo = createSculptableGeometry('sphere', { radius: 4, segments: 32 });
+    const liveMesh = new THREE.Mesh(liveGeo, new THREE.MeshStandardMaterial());
+    liveMesh.name = 'building-alpha';
+    liveScene.add(liveMesh);
+    liveEngine.attachThreeScene(liveScene);
+    const livePos = liveGeo.getAttribute('position') as THREE.BufferAttribute;
+    let topIndex = 0;
+    for (let i = 1; i < livePos.count; i++) if (livePos.getY(i) > livePos.getY(topIndex)) topIndex = i;
+    const topYBefore = livePos.getY(topIndex);
+    const liveDeform = liveEngine.dispatch('sb_deform_vertices', {
+        objectId: 'building-alpha',
+        strokePoint: [livePos.getX(topIndex), topYBefore, livePos.getZ(topIndex)],
+        radius: 2.5,
+        strength: 0.8,
+        direction: [0, 1, 0]
+    });
+    assert.strictEqual(liveDeform.success, true);
+    assert.ok(liveDeform.data.affectedVertices > 0);
+    assert.ok(Math.abs(livePos.getY(topIndex) - (topYBefore + 0.8)) < 1e-6, 'the vertex at the stroke centre rises by the full strength');
+    assert.ok(liveEngine.getSceneData().operatorStack?.some(op => op.operator === 'sb_deform_vertices'));
     console.log('    ✓ Mesh sculpting vertex deformations verified.');
 
     // =========================================================================
@@ -172,31 +196,28 @@ async function runInMemory3DSceneEditPersistenceTests() {
     });
     assert.strictEqual(lightingResult.success, true);
     const sceneAfterLighting = engine.getSceneData();
-    assert.strictEqual(sceneAfterLighting.environment?.lightingPreset, 'golden_hour');
-    assert.strictEqual(sceneAfterLighting.environment?.sunElevation, 12);
+    assert.strictEqual(sceneAfterLighting.environment?.lighting, 'golden_hour');
+    assert.strictEqual((sceneAfterLighting.features?.atmosphericScattering as any)?.enabled, true);
+    assert.strictEqual((sceneAfterLighting.features?.atmosphericScattering as any)?.sunElevation, 12);
+    assert.strictEqual((sceneAfterLighting.features?.atmosphericScattering as any)?.sunAzimuth, 245);
     assert.strictEqual(sceneAfterLighting.features?.godRays, true);
+    assert.strictEqual(lightingResult.data.sunElevation, 12);
     console.log('    ✓ Materials, clay presets, and atmospheric lighting mutations verified.');
 
     // =========================================================================
-    // Test 4: Dynamic Object Spawning (Adding Buildings / Geometries Incrementally)
+    // Test 4: Setting a transform never spawns an object
     // =========================================================================
-    console.log('  4. Testing Incremental Object Spawning & Operators...');
+    console.log('  4. Testing that a transform on an unknown id creates nothing...');
     const addMeshResult = engine.dispatch('sb_set_transform', {
         objectId: 'building-gamma',
-        name: 'Gamma Observatory',
-        type: 'cylinder',
         position: [20, 8, 10],
-        rotation: [0, 0, 0],
         scale: [5, 16, 5]
     });
-    assert.strictEqual(addMeshResult.success, true);
+    assert.strictEqual(addMeshResult.success, false, 'sb_set_transform on an unknown id must fail');
     const sceneAfterAdd = engine.getSceneData();
-    assert.strictEqual(sceneAfterAdd.customMeshes?.length, 3);
-    const gammaMesh = sceneAfterAdd.customMeshes?.find(m => m.id === 'building-gamma');
-    assert.ok(gammaMesh);
-    assert.strictEqual(gammaMesh.name, 'Gamma Observatory');
-    assert.deepStrictEqual(gammaMesh.position, [20, 8, 10]);
-    console.log('    ✓ Incremental object addition operator verified.');
+    assert.strictEqual(sceneAfterAdd.customMeshes?.length, 2);
+    assert.strictEqual(sceneAfterAdd.customMeshes?.find(m => m.id === 'building-gamma'), undefined);
+    console.log('    ✓ Unknown-id transform failed without adding a mesh.');
 
     // =========================================================================
     // Test 5: Lens Unprojection & Reprojection State Retention
@@ -208,16 +229,16 @@ async function runInMemory3DSceneEditPersistenceTests() {
 
     assert.ok(unproj.files['campus.scene.json'], 'Unprojector must emit primary scene file');
     const parsedFile = JSON.parse(unproj.files['campus.scene.json']);
-    assert.strictEqual(parsedFile.customMeshes.length, 3, 'All 3 custom meshes must be serialized to disk JSON');
+    assert.strictEqual(parsedFile.customMeshes.length, 2, 'Both custom meshes must be serialized to disk JSON');
     assert.deepStrictEqual(parsedFile.customMeshes.find((m: any) => m.id === 'building-alpha').position, [5, 7, -3]);
-    assert.strictEqual(parsedFile.environment.lightingPreset, 'golden_hour');
+    assert.strictEqual(parsedFile.environment.lighting, 'golden_hour');
     assert.ok(parsedFile.operatorStack.length >= 4, 'Operator stack must persist in unprojected JSON');
 
     // Reproject back from JSON
     const reproj = lens.project(unproj.files);
-    assert.strictEqual(reproj.data.customMeshes?.length, 3);
+    assert.strictEqual(reproj.data.customMeshes?.length, 2);
     assert.deepStrictEqual(reproj.data.customMeshes?.find(m => m.id === 'building-alpha')?.position, [5, 7, -3]);
-    assert.strictEqual(reproj.data.environment?.lightingPreset, 'golden_hour');
+    assert.strictEqual(reproj.data.environment?.lighting, 'golden_hour');
     console.log('    ✓ Scene3DWorldLens bidirectional unproject/project verified.');
 
     // =========================================================================
@@ -256,17 +277,19 @@ async function runInMemory3DSceneEditPersistenceTests() {
     // Test 7: Lossless In-Memory Undo/Redo & Version History
     // =========================================================================
     console.log('  7. Testing Lossless Undo/Redo & Version Navigation...');
-    // Initial state -> Translate -> Scale -> Clay -> Lighting -> Add Mesh (index at top)
+    // Initial state -> Translate -> Scale -> Clay -> Lighting (failed dispatches add no history step)
     const canUndo1 = engine.undo();
     assert.strictEqual(canUndo1, true, 'Engine must undo last step');
     const sceneAfterUndo = engine.getSceneData();
-    // Building gamma should not be present after undoing sb_set_transform(building-gamma)
-    assert.strictEqual(sceneAfterUndo.customMeshes?.find(m => m.id === 'building-gamma'), undefined, 'Undone mesh must be removed from sceneData');
+    assert.strictEqual(sceneAfterUndo.environment?.lighting, 'daylight', 'Undo must restore the lighting before sb_setup_lighting');
+    assert.strictEqual(sceneAfterUndo.features?.atmosphericScattering, undefined);
+    assert.strictEqual(sceneAfterUndo.customMeshes![0].material?.shaderKey, 'terracotta', 'The earlier clay edit stays');
 
     const canRedo1 = engine.redo();
     assert.strictEqual(canRedo1, true, 'Engine must redo step');
     const sceneAfterRedo = engine.getSceneData();
-    assert.ok(sceneAfterRedo.customMeshes?.find(m => m.id === 'building-gamma'), 'Redone mesh must be restored in sceneData');
+    assert.strictEqual(sceneAfterRedo.environment?.lighting, 'golden_hour', 'Redo must reapply the lighting');
+    assert.strictEqual((sceneAfterRedo.features?.atmosphericScattering as any)?.sunElevation, 12);
     // =========================================================================
     // Test 8: Guarded Conversational Delta-Editing (Anti-Wipe Scene Protection)
     // =========================================================================

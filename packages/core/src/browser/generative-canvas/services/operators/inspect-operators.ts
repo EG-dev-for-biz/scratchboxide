@@ -7,11 +7,10 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import * as THREE from 'three';
 import {
     type OperatorDefinition,
-    createGeometryForType,
-    computeMeshStatsFromGeometry
+    computeMeshStatsFromGeometry,
+    requireLiveMesh
 } from './types';
 
 export const INSPECT_OPERATORS: OperatorDefinition[] = [
@@ -82,8 +81,7 @@ export const INSPECT_OPERATORS: OperatorDefinition[] = [
                 position: pos,
                 rotation: rot,
                 scale: scl,
-                material: obj.material || { color: 0xcccccc },
-                modifiers: (obj as any).modifiers || [],
+                material: obj.material,
                 physics: (obj as any).physics || undefined,
                 keyframes: (obj as any).keyframes || undefined,
                 geometry: obj.geometry || undefined
@@ -111,32 +109,17 @@ export const INSPECT_OPERATORS: OperatorDefinition[] = [
                 media4DCount,
                 camera: scene.camera || { position: [10, 10, 10], target: [0, 0, 0] },
                 environment: scene.environment,
-                features: scene.features,
-                particleSystems: (scene as any).particleSystems || [],
-                sceneData: scene
+                features: scene.features
             };
         }
     },
     {
         name: 'sb_get_mesh_stats',
         category: 'inspect',
-        description: 'Computes topological statistics (vertex count, faces, bounding box, volume, area) for a mesh.',
+        description: 'Measures the live viewport mesh: vertex, face and edge counts, boundary and non-manifold edges, bounding box, surface area, watertightness and (when closed) volume, in the object\'s scaled local units. Needs the live 3D viewport.',
         execute: (ctx, params: { objectId: string }) => {
-            if (!params.objectId) throw new Error("Parameter 'objectId' is required.");
-            const found = ctx.findObject(params.objectId);
-            if (!found) throw new Error(`Object with id '${params.objectId}' not found.`);
-
-            const obj = found.object;
-            const scale: [number, number, number] = obj.scale || [1, 1, 1];
-            let geo: THREE.BufferGeometry;
-
-            if (found.threeObject && (found.threeObject as THREE.Mesh).geometry) {
-                geo = (found.threeObject as THREE.Mesh).geometry;
-            } else {
-                geo = createGeometryForType(obj.type || 'box', scale, obj.geometry);
-            }
-
-            return computeMeshStatsFromGeometry(geo, scale);
+            const { mesh } = requireLiveMesh(ctx, params.objectId, 'sb_get_mesh_stats');
+            return computeMeshStatsFromGeometry(mesh.geometry, [mesh.scale.x, mesh.scale.y, mesh.scale.z]);
         }
     }
 ];

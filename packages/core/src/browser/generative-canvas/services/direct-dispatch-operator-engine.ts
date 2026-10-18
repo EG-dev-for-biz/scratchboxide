@@ -32,6 +32,31 @@ import type { SceneDelta } from './viewport-history-deltas';
 
 export * from './operators';
 
+/**
+ * Copy of the scene for undo and rollback. Objects and arrays are copied so in-place operator edits cannot reach
+ * the copy; strings (embedded GLB base64, source code) and typed arrays are shared, since operators replace them
+ * rather than writing into them. `omit` drops top-level keys (the action log is never restored).
+ */
+function snapshotScene(data: Scene3DData, omit: ReadonlyArray<string> = ['actionLog']): Scene3DData {
+    const copy = (value: unknown): unknown => {
+        if (value === null || typeof value !== 'object' || ArrayBuffer.isView(value)) return value;
+        if (Array.isArray(value)) return value.map(copy);
+        const out: Record<string, unknown> = {};
+        for (const key of Object.keys(value as Record<string, unknown>)) {
+            const v = (value as Record<string, unknown>)[key];
+            if (typeof v !== 'function') out[key] = copy(v);
+        }
+        return out;
+    };
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(data as unknown as Record<string, unknown>)) {
+        if (omit.includes(key)) continue;
+        const v = (data as unknown as Record<string, unknown>)[key];
+        if (typeof v !== 'function') out[key] = copy(v);
+    }
+    return out as unknown as Scene3DData;
+}
+
 function getNowMs(): number {
     if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
         return performance.now();
@@ -56,7 +81,7 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
     private recordingDepth = 0;
 
     constructor(initialScene?: Scene3DData) {
-        this.sceneData = initialScene ? JSON.parse(JSON.stringify(initialScene)) : {
+        this.sceneData = initialScene ? snapshotScene(initialScene, []) : {
             title: 'Untitled 3D Scene',
             renderMode: 'pbr',
             customMeshes: [],
@@ -100,7 +125,7 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
     }
 
     public loadScene(data: Scene3DData): void {
-        this.sceneData = JSON.parse(JSON.stringify(data));
+        this.sceneData = snapshotScene(data, []);
         this.historyStack = [];
         this.historyIndex = -1;
         this.sharedHistory?.clear();
@@ -165,25 +190,20 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
             }
         }
 
-        // 3. Check Three.js Scene
+        // 3. An object only in the live Three.js scene (a generated model's part, a tile mesh): operators get a
+        // transient record of its transform. It is not written into the scene data, where it would be drawn as a
+        // stand-in shape on the next load.
         const threeObj = this.getThreeObject(id);
         if (threeObj) {
-            // Synthesize representation in sceneData if needed
-            if (!this.sceneData.customMeshes) {
-                this.sceneData.customMeshes = [];
-            }
-            const meshRep = {
-                id: threeObj.name || id,
-                name: threeObj.name || id,
-                type: 'custom' as any,
-                position: [threeObj.position.x, threeObj.position.y, threeObj.position.z] as [number, number, number],
-                rotation: [threeObj.rotation.x, threeObj.rotation.y, threeObj.rotation.z] as [number, number, number],
-                scale: [threeObj.scale.x, threeObj.scale.y, threeObj.scale.z] as [number, number, number]
-            };
-            this.sceneData.customMeshes.push(meshRep);
             return {
-                type: 'customMesh',
-                object: meshRep,
+                type: 'threeObject',
+                object: {
+                    id: threeObj.name || id,
+                    name: threeObj.name || id,
+                    position: [threeObj.position.x, threeObj.position.y, threeObj.position.z] as [number, number, number],
+                    rotation: [threeObj.rotation.x, threeObj.rotation.y, threeObj.rotation.z] as [number, number, number],
+                    scale: [threeObj.scale.x, threeObj.scale.y, threeObj.scale.z] as [number, number, number]
+                },
                 threeObject: threeObj
             };
         }
@@ -210,8 +230,7 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
         if (this.historyIndex < this.historyStack.length - 1) {
             this.historyStack = this.historyStack.slice(0, this.historyIndex + 1);
         }
-        const snapshot = JSON.parse(JSON.stringify(this.sceneData));
-        this.historyStack.push(snapshot);
+        this.historyStack.push(snapshotScene(this.sceneData));
         if (this.historyStack.length > this.maxHistory) {
             this.historyStack.shift();
         } else {
@@ -223,7 +242,7 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
         if (this.sharedHistory) return this.sharedHistory.undo() !== null;
         if (this.historyIndex > 0) {
             this.historyIndex--;
-            this.sceneData = JSON.parse(JSON.stringify(this.historyStack[this.historyIndex]));
+            this.restoreSnapshot(this.historyStack[this.historyIndex]);
             this.syncToThreeScene();
             return true;
         }
@@ -234,11 +253,18 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
         if (this.sharedHistory) return this.sharedHistory.redo() !== null;
         if (this.historyIndex < this.historyStack.length - 1) {
             this.historyIndex++;
-            this.sceneData = JSON.parse(JSON.stringify(this.historyStack[this.historyIndex]));
+            this.restoreSnapshot(this.historyStack[this.historyIndex]);
             this.syncToThreeScene();
             return true;
         }
         return false;
+    }
+
+    /** Makes a copy of `snapshot` the live scene, keeping the running action log (undo is logged, not undone). */
+    private restoreSnapshot(snapshot: Scene3DData): void {
+        const actionLog = this.sceneData.actionLog;
+        this.sceneData = snapshotScene(snapshot);
+        if (actionLog) this.sceneData.actionLog = actionLog;
     }
 
     public resetScene(initialData?: Partial<Scene3DData>): void {
@@ -327,6 +353,7 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
             && options?.recordHistory !== false && (params as any)?.recordHistory !== false;
         const tracker = trackEdit ? this.beginTrackedEdit([{ operator: operatorName, params }]) : undefined;
 
+        const paramsRecord = params ? cloneJsonLike(params) : undefined;
         try {
             const data = op.execute(this, params);
             tracker?.commit();
@@ -343,7 +370,7 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
                 if (!this.sceneData.operatorStack) this.sceneData.operatorStack = [];
                 this.sceneData.operatorStack.push({
                     operator: operatorName,
-                    params: params ? JSON.parse(JSON.stringify(params)) : undefined,
+                    params: paramsRecord,
                     timestamp: Date.now(),
                     result: data
                 });
@@ -352,7 +379,7 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
             if (!this.sceneData.actionLog) this.sceneData.actionLog = [];
             this.sceneData.actionLog.push({
                 operator: operatorName,
-                params: params ? JSON.parse(JSON.stringify(params)) : undefined,
+                params: paramsRecord,
                 timestamp: Date.now(),
                 executionTimeMs,
                 success: true
@@ -374,7 +401,7 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
             if (!this.sceneData.actionLog) this.sceneData.actionLog = [];
             this.sceneData.actionLog.push({
                 operator: operatorName,
-                params: params ? JSON.parse(JSON.stringify(params)) : undefined,
+                params: paramsRecord,
                 timestamp: Date.now(),
                 executionTimeMs,
                 success: false,
@@ -385,6 +412,7 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
                 success: false,
                 operator: operatorName,
                 error: err?.message || String(err),
+                ...(typeof err?.code === 'string' ? { errorCode: err.code } : {}),
                 executionTimeMs,
                 timestamp: Date.now()
             };
@@ -401,10 +429,10 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
         const batchStartTime = getNowMs();
         const results: OperatorResult[] = [];
         const isAtomic = options?.atomic === true;
-        const snapshotBeforeBatch = isAtomic ? JSON.parse(JSON.stringify(this.sceneData)) : undefined;
+        const snapshotBeforeBatch = isAtomic ? snapshotScene(this.sceneData) : undefined;
         // A batch is one tool call: one shared-timeline entry, however many operators it runs.
         const tracker = this.sharedHistory && this.recordingDepth === 0 && options?.recordHistory !== false
-            ? this.beginTrackedEdit(commands)
+            ? this.beginTrackedEdit(commands, snapshotBeforeBatch)
             : undefined;
         if (tracker) this.recordingDepth++;
         const finishTracking = (commit: boolean) => {
@@ -420,7 +448,7 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
             if (!res.success) {
                 if (isAtomic && snapshotBeforeBatch) {
                     // Rollback to pre-batch snapshot
-                    this.sceneData = snapshotBeforeBatch;
+                    this.restoreSnapshot(snapshotBeforeBatch);
                     this.syncToThreeScene();
                 }
                 finishTracking(!isAtomic);
@@ -451,12 +479,12 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
     // Shared-timeline recording
     // ------------------------------------------------------------------------
 
-    /** Three.js objects the commands name through the objectId / objectIds convention. */
+    /** Three.js objects the commands name (objectId / objectIds / targetId / targetMeshId). */
     private targetsOf(commands: BatchCommand[]): THREE.Object3D[] {
         const found = new Set<THREE.Object3D>();
         for (const cmd of commands) {
-            const p = (cmd.params ?? {}) as { objectId?: unknown; objectIds?: unknown };
-            const ids = [p.objectId, ...(Array.isArray(p.objectIds) ? p.objectIds : [])];
+            const p = (cmd.params ?? {}) as { objectId?: unknown; objectIds?: unknown; targetId?: unknown; targetMeshId?: unknown };
+            const ids = [p.objectId, p.targetId, p.targetMeshId, ...(Array.isArray(p.objectIds) ? p.objectIds : [])];
             for (const id of ids) {
                 if (typeof id !== 'string') continue;
                 const obj = this.getThreeObject(id);
@@ -466,9 +494,10 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
         return Array.from(found);
     }
 
-    private beginTrackedEdit(commands: BatchCommand[]): { commit: () => void } {
+    private beginTrackedEdit(commands: BatchCommand[], snapshot?: Scene3DData): { commit: () => void } {
         const history = this.sharedHistory!;
-        const before = cloneJsonLike(this.sceneData);
+        // The delta ignores the bookkeeping keys, so the copy leaves them out; a batch's rollback copy is reused.
+        const before = snapshot ?? snapshotScene(this.sceneData, SCENE_BOOKKEEPING_KEYS);
         const capture = new ObjectEditCapture(this.targetsOf(commands));
         const name = (op: string) => op.replace(/^sb_/, '').replace(/[_-]+/g, ' ');
         const first = commands[0];

@@ -19,6 +19,7 @@ import type {
 import type {
     Scene3DData
 } from '../src/browser/generative-canvas/canvas-types';
+import { evaluateFalloff } from '../src/browser/generative-canvas/services/mesh-sculpting-engine';
 
 async function runDirectDispatchOperatorEngineTests() {
     console.log('🚀 Running Direct-Dispatch 3D Operator Engine Test Suite...\n');
@@ -37,6 +38,7 @@ async function runDirectDispatchOperatorEngineTests() {
         'materials_pbr',
         'lighting_camera',
         'physics_animation',
+        'nature_atmosphere',
         'state_history'
     ];
 
@@ -56,18 +58,11 @@ async function runDirectDispatchOperatorEngineTests() {
         'sb_translate',
         'sb_rotate',
         'sb_scale',
-        'sb_apply_transforms',
         'sb_set_origin',
         // Mesh Edit
         'sb_subdivide_mesh',
-        'sb_extrude_faces',
-        'sb_boolean_op',
         'sb_smooth_mesh',
         'sb_deform_vertices',
-        // Modifiers
-        'sb_add_modifier',
-        'sb_apply_modifier',
-        'sb_remove_modifier',
         // Materials / PBR
         'sb_create_material',
         'sb_set_material_pbr',
@@ -92,7 +87,20 @@ async function runDirectDispatchOperatorEngineTests() {
         assert.ok(op.description && op.description.length > 0, `Operator ${opName} must have description`);
     }
 
-    console.log('  ✓ Test 1 Passed: All 8 categories and 27 operators registered in catalog.');
+    // Operators that only reported work they never did were removed from the catalog.
+    const removedOperators = [
+        'sb_apply_transforms', 'sb_extrude_faces', 'sb_boolean_op', 'sb_loft_mesh', 'sb_lathe_mesh', 'sb_add_mesh',
+        'sb_add_modifier', 'sb_apply_modifier', 'sb_remove_modifier', 'sb_decimate_mesh_qem', 'sb_unwrap_mesh_uvs',
+        'sb_build_mesh_bvh', 'sb_simulate_rigidbody_physics', 'sb_add_light', 'sb_compose_scene_hierarchy'
+    ];
+    for (const opName of removedOperators) {
+        assert.strictEqual(engine.getOperator(opName), undefined, `Removed operator ${opName} must not be registered`);
+        const res = engine.dispatch(opName, {});
+        assert.strictEqual(res.success, false);
+        assert.ok(/Unknown operator/.test(res.error || ''), `${opName} dispatch must fail as unknown`);
+    }
+
+    console.log(`  ✓ Test 1 Passed: ${categories.length} categories and ${requiredOperators.length} operators registered; removed operators absent.`);
 
     // =========================================================================
     // Test 2: In-Memory Zero-String-Parsing Direct Dispatch & Throughput Benchmark
@@ -219,14 +227,50 @@ async function runDirectDispatchOperatorEngineTests() {
     assert.strictEqual(sceneInspectRes.data.renderMode, 'pbr');
     assert.deepStrictEqual(sceneInspectRes.data.camera.position, [10, 10, 10]);
 
-    // 4. sb_get_mesh_stats
-    const statsRes = engine.dispatch('sb_get_mesh_stats', { objectId: 'mesh-platform' });
+    // 4. sb_get_mesh_stats measures the live viewport mesh; with no viewport attached it cannot run here.
+    const noLiveStats = engine.dispatch('sb_get_mesh_stats', { objectId: 'mesh-platform' });
+    assert.strictEqual(noLiveStats.success, false);
+    assert.strictEqual(noLiveStats.errorCode, 'not_available_here');
+
+    const statsEngine = createOperatorEngine();
+    statsEngine.loadScene(sampleScene);
+    const statsScene = new THREE.Scene();
+    const platformMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial());
+    platformMesh.name = 'mesh-platform';
+    platformMesh.scale.set(20, 1, 20);
+    const sheetMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshStandardMaterial());
+    sheetMesh.name = 'mesh-sheet';
+    const ballMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshStandardMaterial());
+    ballMesh.name = 'mesh-ball';
+    statsScene.add(platformMesh, sheetMesh, ballMesh);
+    statsEngine.attachThreeScene(statsScene);
+
+    const statsRes = statsEngine.dispatch('sb_get_mesh_stats', { objectId: 'mesh-platform' });
     assert.strictEqual(statsRes.success, true);
-    assert.ok(statsRes.data.vertexCount >= 8, 'Box must have at least 8 vertices');
-    assert.ok(statsRes.data.faceCount >= 12, 'Box must have at least 12 triangular faces');
-    assert.ok(statsRes.data.boundingBox, 'Must provide bounding box');
-    assert.ok(statsRes.data.volume > 0, 'Volume must be > 0');
-    assert.ok(statsRes.data.surfaceArea > 0, 'Surface area must be > 0');
+    assert.strictEqual(statsRes.data.vertexCount, 24, 'BoxGeometry has 24 vertices (4 per face)');
+    assert.strictEqual(statsRes.data.faceCount, 12);
+    assert.strictEqual(statsRes.data.edgeCount, 18, 'welded closed box: 3F/2 = 18 edges');
+    assert.strictEqual(statsRes.data.boundaryEdgeCount, 0);
+    assert.strictEqual(statsRes.data.nonManifoldEdgeCount, 0);
+    assert.strictEqual(statsRes.data.isWatertight, true);
+    assert.deepStrictEqual(statsRes.data.boundingBox.size, [20, 1, 20]);
+    assert.ok(Math.abs(statsRes.data.volume - 400) < 1e-3, `20x1x20 box volume must be 400 (got ${statsRes.data.volume})`);
+    assert.ok(Math.abs(statsRes.data.surfaceArea - 880) < 1e-3, `20x1x20 box area must be 880 (got ${statsRes.data.surfaceArea})`);
+
+    const sheetStats = statsEngine.dispatch('sb_get_mesh_stats', { objectId: 'mesh-sheet' });
+    assert.strictEqual(sheetStats.success, true);
+    assert.strictEqual(sheetStats.data.faceCount, 2);
+    assert.strictEqual(sheetStats.data.edgeCount, 5);
+    assert.strictEqual(sheetStats.data.boundaryEdgeCount, 4);
+    assert.strictEqual(sheetStats.data.isWatertight, false, 'an open plane is not watertight');
+    assert.strictEqual(sheetStats.data.volume, null, 'an open surface encloses no volume');
+    assert.ok(Math.abs(sheetStats.data.surfaceArea - 4) < 1e-6);
+
+    const ballStats = statsEngine.dispatch('sb_get_mesh_stats', { objectId: 'mesh-ball' });
+    assert.strictEqual(ballStats.success, true);
+    assert.strictEqual(ballStats.data.isWatertight, true, 'an indexed sphere welds into a closed surface');
+    assert.strictEqual(ballStats.data.edgeCount, (3 * ballStats.data.faceCount) / 2);
+    assert.ok(ballStats.data.volume > 3.5 && ballStats.data.volume < (4 / 3) * Math.PI, 'inscribed sphere polyhedron volume is just under 4/3 pi');
 
     console.log('  ✓ Test 3 Passed: Inspect operators return comprehensive scene and mesh metrics.');
 
@@ -284,157 +328,145 @@ async function runDirectDispatchOperatorEngineTests() {
     hero = engine.getObject('mesh-hero');
     assert.deepStrictEqual(hero?.scale, [4, 1, 6]);
 
-    // 5. sb_apply_transforms (Freezes transform matrix into vertices and resets pos/rot/scale to identity)
-    const applyRes = engine.dispatch('sb_apply_transforms', { objectId: 'mesh-hero' });
-    assert.strictEqual(applyRes.success, true);
-    hero = engine.getObject('mesh-hero');
-    assert.deepStrictEqual(hero?.position, [0, 0, 0]);
-    assert.deepStrictEqual(hero?.rotation, [0, 0, 0]);
-    assert.deepStrictEqual(hero?.scale, [1, 1, 1]);
+    // 5. sb_set_origin moves the pivot of the live viewport mesh; without one it cannot run here.
+    const noLiveOrigin = engine.dispatch('sb_set_origin', { objectId: 'mesh-hero', originType: 'bottom' });
+    assert.strictEqual(noLiveOrigin.success, false);
+    assert.strictEqual(noLiveOrigin.errorCode, 'not_available_here');
 
-    // 6. sb_set_origin (Adjusts local pivot/origin e.g. to bottom or center)
-    const originRes = engine.dispatch('sb_set_origin', {
-        objectId: 'mesh-hero',
-        originType: 'bottom'
+    const originEngine = createOperatorEngine({
+        title: 'Origin Test',
+        customMeshes: [{ id: 'mesh-hero', name: 'Hero Asset', type: 'box', position: [6, 8, 2], rotation: [0, Math.PI / 2, 0], scale: [4, 1, 6] }]
     });
+    const originScene = new THREE.Scene();
+    const heroMesh = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), new THREE.MeshStandardMaterial());
+    heroMesh.name = 'mesh-hero';
+    heroMesh.position.set(6, 8, 2);
+    heroMesh.rotation.set(0, Math.PI / 2, 0);
+    heroMesh.scale.set(4, 1, 6);
+    originScene.add(heroMesh);
+    originEngine.attachThreeScene(originScene);
+
+    const worldVertices = (mesh: THREE.Mesh): THREE.Vector3[] => {
+        mesh.updateMatrixWorld(true);
+        const pos = mesh.geometry.getAttribute('position');
+        const out: THREE.Vector3[] = [];
+        for (let i = 0; i < pos.count; i++) out.push(new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld));
+        return out;
+    };
+    const assertSameWorld = (a: THREE.Vector3[], b: THREE.Vector3[]) => {
+        assert.strictEqual(a.length, b.length);
+        for (let i = 0; i < a.length; i++) assert.ok(a[i].distanceTo(b[i]) < 1e-5, `vertex ${i} moved in world space`);
+    };
+
+    const worldBefore = worldVertices(heroMesh);
+    const originRes = originEngine.dispatch('sb_set_origin', { objectId: 'mesh-hero', originType: 'bottom' });
     assert.strictEqual(originRes.success, true);
+    // Local pivot (0,-1,0), scaled by y=1 and rotated about Y: the object moves down by 1.
+    assert.deepStrictEqual(originRes.data.localPivot, [0, -1, 0]);
+    assert.ok(Math.abs(heroMesh.position.x - 6) < 1e-9 && Math.abs(heroMesh.position.y - 7) < 1e-9 && Math.abs(heroMesh.position.z - 2) < 1e-9);
+    assert.deepStrictEqual(originEngine.getObject('mesh-hero').position, [heroMesh.position.x, heroMesh.position.y, heroMesh.position.z]);
+    heroMesh.geometry.computeBoundingBox();
+    assert.ok(Math.abs(heroMesh.geometry.boundingBox!.min.y) < 1e-9, 'geometry bottom now sits at the local origin');
+    assertSameWorld(worldBefore, worldVertices(heroMesh));
+
+    // Custom pivot (1,0,0): scaled to (4,0,0), rotated +90 deg about Y to (0,0,-4).
+    const worldBefore2 = worldVertices(heroMesh);
+    const customRes = originEngine.dispatch('sb_set_origin', { objectId: 'mesh-hero', originType: 'custom', customOrigin: [1, 0, 0] });
+    assert.strictEqual(customRes.success, true);
+    assert.ok(Math.abs(heroMesh.position.x - 6) < 1e-9 && Math.abs(heroMesh.position.y - 7) < 1e-9 && Math.abs(heroMesh.position.z - (-2)) < 1e-9);
+    assertSameWorld(worldBefore2, worldVertices(heroMesh));
+
+    const badOrigin = originEngine.dispatch('sb_set_origin', { objectId: 'mesh-hero', originType: 'custom' });
+    assert.strictEqual(badOrigin.success, false, 'custom origin without customOrigin must fail');
 
     console.log('  ✓ Test 4 Passed: Transform operators mutate and bake geometry transforms flawlessly.');
 
     // =========================================================================
-    // Test 5: Mesh Edit Operators (subdivide, extrude, boolean, smooth, deform)
+    // Test 5: Mesh Edit Operators on a live viewport mesh (subdivide, smooth, deform)
     // =========================================================================
     console.log('  Testing Mesh Edit Operators...');
-    engine.loadScene({
+    const editSceneData: Scene3DData = {
         title: 'Mesh Edit Workspace',
-        customMeshes: [
-            {
-                id: 'mesh-sculpt-target',
-                name: 'Sculpt Cube',
-                type: 'box',
-                position: [0, 0, 0],
-                scale: [4, 4, 4]
-            },
-            {
-                id: 'mesh-cutter',
-                name: 'Cutter Sphere',
-                type: 'sphere',
-                position: [1, 0, 0],
-                scale: [3, 3, 3]
-            }
-        ]
-    });
+        customMeshes: [{ id: 'mesh-sculpt-target', name: 'Sculpt Cube', type: 'box', position: [0, 0, 0], scale: [4, 4, 4] }]
+    };
+    engine.loadScene(editSceneData);
+    for (const opName of ['sb_subdivide_mesh', 'sb_smooth_mesh', 'sb_deform_vertices']) {
+        const res = engine.dispatch(opName, { objectId: 'mesh-sculpt-target', center: [0, 0.5, 0], radius: 0.6 });
+        assert.strictEqual(res.success, false, `${opName} must fail without a live mesh`);
+        assert.strictEqual(res.errorCode, 'not_available_here');
+    }
 
-    // 1. sb_subdivide_mesh
-    const initialStats = engine.dispatch('sb_get_mesh_stats', { objectId: 'mesh-sculpt-target' });
-    const initialVerts = initialStats.data.vertexCount;
+    const editEngine = createOperatorEngine(editSceneData);
+    const editScene = new THREE.Scene();
+    const sculptMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial());
+    sculptMesh.name = 'mesh-sculpt-target';
+    sculptMesh.scale.set(4, 4, 4);
+    editScene.add(sculptMesh);
+    editEngine.attachThreeScene(editScene);
 
-    const subdivRes = engine.dispatch('sb_subdivide_mesh', {
-        objectId: 'mesh-sculpt-target',
-        iterations: 1
-    });
+    // 1. sb_subdivide_mesh (midpoint): 12 triangles -> 48, shape and volume unchanged
+    const subdivRes = editEngine.dispatch('sb_subdivide_mesh', { objectId: 'mesh-sculpt-target', iterations: 1 });
     assert.strictEqual(subdivRes.success, true);
-    const postSubdivStats = engine.dispatch('sb_get_mesh_stats', { objectId: 'mesh-sculpt-target' });
-    assert.ok(postSubdivStats.data.vertexCount > initialVerts, 'Subdivision must increase vertex count');
+    assert.strictEqual(subdivRes.data.faceCount, 48);
+    const postSubdivStats = editEngine.dispatch('sb_get_mesh_stats', { objectId: 'mesh-sculpt-target' });
+    assert.strictEqual(postSubdivStats.data.faceCount, 48);
+    assert.strictEqual(postSubdivStats.data.vertexCount, subdivRes.data.vertexCount);
+    assert.strictEqual(postSubdivStats.data.isWatertight, true);
+    assert.deepStrictEqual(postSubdivStats.data.boundingBox.size, [4, 4, 4]);
+    assert.ok(Math.abs(postSubdivStats.data.volume - 64) < 1e-3, 'midpoint subdivision keeps the 4x4x4 volume');
 
-    // 2. sb_extrude_faces
-    const extrudeRes = engine.dispatch('sb_extrude_faces', {
-        objectId: 'mesh-sculpt-target',
-        direction: [0, 1, 0],
-        distance: 2.0
-    });
-    assert.strictEqual(extrudeRes.success, true);
-    assert.ok(extrudeRes.data.newFacesCount > 0, 'Extrusion must create new boundary faces');
+    const badIterations = editEngine.dispatch('sb_subdivide_mesh', { objectId: 'mesh-sculpt-target', iterations: 9 });
+    assert.strictEqual(badIterations.success, false, 'iterations outside 1-4 must fail');
 
-    // 3. sb_smooth_mesh (Laplacian / Taubin smoothing)
-    const smoothRes = engine.dispatch('sb_smooth_mesh', {
-        objectId: 'mesh-sculpt-target',
-        factor: 0.5,
-        iterations: 2
-    });
+    // 2. sb_smooth_mesh (Laplacian): a closed cube has no fixed boundary, so it shrinks
+    const smoothRes = editEngine.dispatch('sb_smooth_mesh', { objectId: 'mesh-sculpt-target', factor: 0.5, iterations: 2 });
     assert.strictEqual(smoothRes.success, true);
+    assert.ok(smoothRes.data.movedVertices > 0);
+    assert.ok(smoothRes.data.maxDisplacement > 0);
+    const postSmoothStats = editEngine.dispatch('sb_get_mesh_stats', { objectId: 'mesh-sculpt-target' });
+    assert.ok(postSmoothStats.data.volume < 64, `smoothing a cube shrinks it (volume ${postSmoothStats.data.volume})`);
+    assert.strictEqual(editEngine.dispatch('sb_smooth_mesh', { objectId: 'mesh-sculpt-target', factor: 1.5 }).success, false);
 
-    // 4. sb_deform_vertices
-    const deformRes = engine.dispatch('sb_deform_vertices', {
+    // 3. sb_deform_vertices: each vertex within the radius moves along +Y by strength * gaussian falloff
+    const deformCenter = new THREE.Vector3(0, 0.5, 0);
+    const deformRadius = 0.6;
+    const deformStrength = 0.2;
+    const posAttr = sculptMesh.geometry.getAttribute('position');
+    const beforePositions: THREE.Vector3[] = [];
+    for (let i = 0; i < posAttr.count; i++) beforePositions.push(new THREE.Vector3().fromBufferAttribute(posAttr, i));
+    const expectedAffected = beforePositions.filter(p => p.distanceTo(deformCenter) <= deformRadius).length;
+    assert.ok(expectedAffected > 0, 'fixture must have vertices inside the brush');
+
+    const deformRes = editEngine.dispatch('sb_deform_vertices', {
         objectId: 'mesh-sculpt-target',
-        center: [0, 2, 0],
-        radius: 3.0,
+        center: [0, 0.5, 0],
+        radius: deformRadius,
         direction: [0, 1, 0],
-        strength: 1.5,
+        strength: deformStrength,
         falloff: 'gaussian'
     });
     assert.strictEqual(deformRes.success, true);
-    assert.ok(deformRes.data.affectedVertices > 0, 'Deformation must affect vertices in radius');
+    assert.strictEqual(deformRes.data.affectedVertices, expectedAffected);
+    const afterAttr = sculptMesh.geometry.getAttribute('position');
+    for (let i = 0; i < afterAttr.count; i++) {
+        const b = beforePositions[i];
+        const d = b.distanceTo(deformCenter);
+        const lift = d <= deformRadius ? deformStrength * evaluateFalloff(d, deformRadius, 'gaussian') : 0;
+        assert.ok(Math.abs(afterAttr.getX(i) - b.x) < 1e-6 && Math.abs(afterAttr.getZ(i) - b.z) < 1e-6, `vertex ${i} must move only along Y`);
+        assert.ok(Math.abs(afterAttr.getY(i) - (b.y + lift)) < 1e-6, `vertex ${i} Y must rise by ${lift}`);
+    }
 
-    // 5. sb_boolean_op (CSG operations: union, difference, intersect)
-    const boolRes = engine.dispatch('sb_boolean_op', {
-        targetId: 'mesh-sculpt-target',
-        operandId: 'mesh-cutter',
-        operation: 'difference'
-    });
-    assert.strictEqual(boolRes.success, true);
-    assert.ok(boolRes.data.resultVertexCount > 0);
-
-    console.log('  ✓ Test 5 Passed: Mesh Edit operators perform subdivision, extrusion, smoothing, deform, and booleans.');
+    console.log('  ✓ Test 5 Passed: Mesh Edit operators subdivide, smooth and deform real geometry.');
 
     // =========================================================================
-    // Test 6: Modifiers Operators (add, apply, remove)
+    // Test 6: Unknown objects fail instead of being created
     // =========================================================================
-    console.log('  Testing Modifiers Category Operators...');
-    engine.loadScene({
-        title: 'Modifier Stack Test',
-        customMeshes: [
-            {
-                id: 'mesh-car-chassis',
-                name: 'Car Chassis',
-                type: 'box',
-                position: [0, 0, 0]
-            }
-        ]
-    });
-
-    // 1. sb_add_modifier (mirror modifier along X axis)
-    const addMod1 = engine.dispatch('sb_add_modifier', {
-        objectId: 'mesh-car-chassis',
-        modifierType: 'mirror',
-        params: { axis: 'x', mergeThreshold: 0.01 }
-    });
-    assert.strictEqual(addMod1.success, true);
-    const modId1 = addMod1.data.modifierId;
-    assert.ok(modId1);
-
-    // Add subdivision modifier
-    const addMod2 = engine.dispatch('sb_add_modifier', {
-        objectId: 'mesh-car-chassis',
-        modifierType: 'subdivision',
-        params: { levels: 2 }
-    });
-    assert.strictEqual(addMod2.success, true);
-
-    const inspectWithMods = engine.dispatch('sb_inspect_object', { objectId: 'mesh-car-chassis' });
-    assert.strictEqual(inspectWithMods.data.modifiers.length, 2);
-
-    // 2. sb_apply_modifier (bakes modifier into mesh geometry)
-    const applyModRes = engine.dispatch('sb_apply_modifier', {
-        objectId: 'mesh-car-chassis',
-        modifierId: modId1
-    });
-    assert.strictEqual(applyModRes.success, true);
-
-    const postApplyInspect = engine.dispatch('sb_inspect_object', { objectId: 'mesh-car-chassis' });
-    assert.strictEqual(postApplyInspect.data.modifiers.length, 1);
-
-    // 3. sb_remove_modifier (discards without baking)
-    const removeModRes = engine.dispatch('sb_remove_modifier', {
-        objectId: 'mesh-car-chassis',
-        modifierId: addMod2.data.modifierId
-    });
-    assert.strictEqual(removeModRes.success, true);
-
-    const finalInspect = engine.dispatch('sb_inspect_object', { objectId: 'mesh-car-chassis' });
-    assert.strictEqual(finalInspect.data.modifiers.length, 0);
-
-    console.log('  ✓ Test 6 Passed: Modifier stack lifecycle (add, evaluate, apply, remove) functioning.');
+    console.log('  Testing unknown-object failures...');
+    engine.loadScene({ title: 'Empty', customMeshes: [] });
+    const setUnknown = engine.dispatch('sb_set_transform', { objectId: 'ghost-object', position: [1, 2, 3] });
+    assert.strictEqual(setUnknown.success, false, 'sb_set_transform must not create an object for an unknown id');
+    assert.strictEqual((engine.getSceneData().customMeshes || []).length, 0);
+    console.log('  ✓ Test 6 Passed: transforms on unknown ids fail and add nothing.');
 
     // =========================================================================
     // Test 7: Materials / PBR Operators (create, set, assign)
@@ -520,6 +552,7 @@ async function runDirectDispatchOperatorEngineTests() {
     assert.strictEqual(lightRes.success, true);
     const sceneDataLight = engine.getSceneData();
     assert.strictEqual(sceneDataLight.environment?.lighting, 'three-point');
+    assert.strictEqual(sceneDataLight.environment?.ambientIntensity, 0.4);
 
     // 2. sb_set_camera
     const camRes = engine.dispatch('sb_set_camera', {
@@ -534,14 +567,35 @@ async function runDirectDispatchOperatorEngineTests() {
     assert.deepStrictEqual(sceneDataCam.camera?.target, [10, 5, 20]);
     assert.strictEqual(sceneDataCam.camera?.fov, 45);
 
-    // 3. sb_frame_bounds (computes AABB and auto-positions camera with padding)
+    // 3. sb_frame_bounds from scene data: a unit box (half 0.5) scaled [4,10,4] at [10,5,20]
     const frameRes = engine.dispatch('sb_frame_bounds', {
         targetId: 'mesh-statue',
         paddingFactor: 1.5
     });
     assert.strictEqual(frameRes.success, true);
-    assert.ok(frameRes.data.cameraPosition);
     assert.deepStrictEqual(frameRes.data.cameraTarget, [10, 5, 20]);
+    assert.deepStrictEqual(frameRes.data.boundingBox.size, [4, 10, 4]);
+    // maxDim 10 * padding 1.5 = 15 -> offsets (13.5, 10.5, 13.5)
+    assert.deepStrictEqual(frameRes.data.cameraPosition, [23.5, 15.5, 33.5]);
+    assert.deepStrictEqual(engine.getSceneData().camera?.position, [23.5, 15.5, 33.5]);
+
+    // With a live viewport the real geometry bounds are used.
+    const frameEngine = createOperatorEngine({ title: 'Frame Live' });
+    const frameScene = new THREE.Scene();
+    const statueMesh = new THREE.Mesh(new THREE.BoxGeometry(4, 10, 4), new THREE.MeshStandardMaterial());
+    statueMesh.name = 'mesh-statue';
+    statueMesh.position.set(10, 5, 20);
+    frameScene.add(statueMesh);
+    frameEngine.attachThreeScene(frameScene);
+    const liveFrame = frameEngine.dispatch('sb_frame_bounds', { targetId: 'mesh-statue', paddingFactor: 1.5 });
+    assert.strictEqual(liveFrame.success, true);
+    assert.deepStrictEqual(liveFrame.data.cameraTarget, [10, 5, 20]);
+    assert.deepStrictEqual(liveFrame.data.cameraPosition, [23.5, 15.5, 33.5]);
+
+    // No customMeshes and no live viewport: nothing to measure here.
+    const emptyFrame = createOperatorEngine({ title: 'Nothing' }).dispatch('sb_frame_bounds', {});
+    assert.strictEqual(emptyFrame.success, false);
+    assert.strictEqual(emptyFrame.errorCode, 'not_available_here');
 
     console.log('  ✓ Test 8 Passed: Lighting rigs and camera framing compute correctly.');
 

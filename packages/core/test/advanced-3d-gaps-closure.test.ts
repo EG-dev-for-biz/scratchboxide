@@ -9,6 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
+import * as THREE from 'three';
 import { NativeCppCompilerService } from '../src/node/3d-engine/native-compiler-service';
 import { createOperatorEngine } from '../src/browser/generative-canvas/services/direct-dispatch-operator-engine';
 import { Scene3DData } from '../src/browser/generative-canvas/canvas-types';
@@ -239,82 +240,59 @@ int main() {
     // ========================================================================
     // TypeScript DirectDispatchOperatorEngine Operator Registry Verification
     // ========================================================================
-    it('should register and execute new operators in DirectDispatchOperatorEngine', () => {
+    it('no longer registers the flag-only decimation / tangent / UV / IBL / tonemapping operators', () => {
+        const engine = createOperatorEngine({ title: 'Advanced 3D Scene', customMeshes: [], environment: {} } as Scene3DData);
+        for (const name of [
+            'sb_decimate_mesh_qem',
+            'sb_generate_mikktspace_tangents',
+            'sb_unwrap_mesh_uvs',
+            'sb_setup_image_based_lighting',
+            'sb_apply_aces_tonemapping'
+        ]) {
+            expect(engine.getOperator(name)).toBeUndefined();
+            const res = engine.dispatch(name, {});
+            expect(res.success).toBe(false);
+        }
+    });
+
+    it('sb_compute_halfedge_curvature measures the curvature of a live sphere mesh, and fails without one', () => {
         const initialScene: Scene3DData = {
             title: 'Advanced 3D Scene',
-            customMeshes: [
-                {
-                    id: 'mesh_test_hero',
-                    name: 'Hero Mesh',
-                    type: 'custom',
-                    material: {
-                        color: 0x4488ff,
-                        roughness: 0.35,
-                        metalness: 0.8
-                    }
-                }
-            ],
+            customMeshes: [{ id: 'mesh_test_hero', name: 'Hero Mesh', type: 'custom' } as any],
             environment: {}
         };
-
         const engine = createOperatorEngine(initialScene);
 
-        // 1. QEM Decimation operator
-        const decimateRes = engine.dispatch('sb_decimate_mesh_qem', {
-            targetId: 'mesh_test_hero',
-            ratio: 0.40,
-            targetTriangles: 1200
-        });
-        expect(decimateRes.success).toBe(true);
-        const scene1 = engine.getSceneData();
-        expect(scene1.customMeshes![0].decimation?.enabled).toBe(true);
-        expect(scene1.customMeshes![0].decimation?.ratio).toBe(0.40);
+        // No live viewport: the operator cannot measure anything.
+        const unavailable = engine.dispatch('sb_compute_halfedge_curvature', { targetId: 'mesh_test_hero' });
+        expect(unavailable.success).toBe(false);
+        expect(unavailable.errorCode).toBe('not_available_here');
 
-        // 2. Laplace-Beltrami Curvature operator
-        const curvRes = engine.dispatch('sb_compute_halfedge_curvature', {
-            targetId: 'mesh_test_hero'
-        });
+        const radius = 2;
+        const scene = new THREE.Scene();
+        const sphere = new THREE.Mesh(new THREE.SphereGeometry(radius, 48, 32), new THREE.MeshStandardMaterial());
+        sphere.name = 'mesh_test_hero';
+        scene.add(sphere);
+        engine.attachThreeScene(scene);
+
+        const curvRes = engine.dispatch('sb_compute_halfedge_curvature', { targetId: 'mesh_test_hero' });
         expect(curvRes.success).toBe(true);
-        const scene2 = engine.getSceneData();
-        expect((scene2.customMeshes![0].material as any).laplaceBeltramiCurvature?.enabled).toBe(true);
+        const d = curvRes.data as any;
+        expect(d.vertexCount).toBe(sphere.geometry.getAttribute('position').count);
+        // A sphere of radius R has |H| = 1/R and K = 1/R^2 everywhere.
+        expect(Math.abs(d.meanCurvature.mean)).toBeGreaterThan(0.6 / radius);
+        expect(Math.abs(d.meanCurvature.mean)).toBeLessThan(1.4 / radius);
+        expect(d.gaussianCurvature.mean).toBeGreaterThan(0);
+        // Curvature results are measurements only: no flag is written into the scene record.
+        expect((engine.getSceneData().customMeshes![0] as any).material?.laplaceBeltramiCurvature).toBeUndefined();
 
-        // 3. MikkTSpace Tangents operator
-        const tanRes = engine.dispatch('sb_generate_mikktspace_tangents', {
-            targetId: 'mesh_test_hero'
-        });
-        expect(tanRes.success).toBe(true);
-        const scene3 = engine.getSceneData();
-        expect(scene3.customMeshes![0].tangents?.standard).toBe('mikktspace');
-
-        // 4. Harmonic UV Unwrap operator
-        const uvRes = engine.dispatch('sb_unwrap_mesh_uvs', {
-            targetId: 'mesh_test_hero',
-            method: 'harmonic',
-            maxIterations: 60
-        });
-        expect(uvRes.success).toBe(true);
-        const scene4 = engine.getSceneData();
-        expect(scene4.customMeshes![0].uvUnwrap?.method).toBe('harmonic');
-
-        // 5. IBL Setup operator
-        const iblRes = engine.dispatch('sb_setup_image_based_lighting', {
-            preset: 'golden_hour',
-            intensity: 1.25
-        });
-        expect(iblRes.success).toBe(true);
-        const scene5 = engine.getSceneData();
-        expect(scene5.environment?.ibl?.enabled).toBe(true);
-        expect(scene5.environment?.ibl?.preset).toBe('golden_hour');
-
-        // 6. ACES Tonemapping operator
-        const toneRes = engine.dispatch('sb_apply_aces_tonemapping', {
-            curve: 'aces',
-            exposure: 1.15,
-            vignette: 0.28
-        });
-        expect(toneRes.success).toBe(true);
-        const scene6 = engine.getSceneData();
-        expect(scene6.environment?.tonemapping?.curve).toBe('aces');
-        expect(scene6.environment?.tonemapping?.vignette).toBe(0.28);
+        // A flat plane has zero curvature.
+        const plane = new THREE.Mesh(new THREE.PlaneGeometry(4, 4, 8, 8), new THREE.MeshStandardMaterial());
+        plane.name = 'flat_plane';
+        scene.add(plane);
+        const flat = engine.dispatch('sb_compute_halfedge_curvature', { targetId: 'flat_plane' });
+        expect(flat.success).toBe(true);
+        expect(Math.abs((flat.data as any).meanCurvature.mean)).toBeLessThan(1e-6);
+        expect(Math.abs((flat.data as any).gaussianCurvature.mean)).toBeLessThan(1e-6);
     });
 });
