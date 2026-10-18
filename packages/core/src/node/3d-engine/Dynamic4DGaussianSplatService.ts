@@ -14,6 +14,7 @@ import { Decomposed4DSplatScene, DynamicGaussianTrajectory } from '../../common/
 import { SplatService } from './splat-service';
 import { decodeGaussianPly } from '../../common/gaussian-ply-codec';
 import { Vec3, computeBoneRotations, mat3ToQuat, quatMultiply, skinPoint } from '../../common/humanoid-skinning';
+import { FileStatCache } from '../file-stat-cache';
 
 export interface HumanoidMotionFrame {
     frame_index: number;
@@ -103,17 +104,36 @@ function findRepoRoot(startDir: string = process.cwd()): string {
     return process.cwd();
 }
 
+/** Loaded avatars (skinned Gaussians + motion), per avatar folder, until its files change. */
+const avatarLoadCache = new FileStatCache<{ gaussians: SkinWeightedGaussian[]; motion: HumanoidMotionData; details: Avatar4DGSDetails }>(8);
+const motionSummaryCache = new FileStatCache<{ frameCount: number; framesArrayLength: number; fps?: number; numJoints?: number } | undefined>(256);
+
+/**
+ * Frame count, fps and joint count of a motion.json, read once per file version. `frameCount` is the frames array's
+ * length or num_frames; `framesArrayLength` counts only an array (top-level or `frames`). Undefined when unreadable.
+ */
+export function motionSummary(motionPath: string): { frameCount: number; framesArrayLength: number; fps?: number; numJoints?: number } | undefined {
+    return motionSummaryCache.get(motionPath, [motionPath], () => {
+        try {
+            const m = JSON.parse(fs.readFileSync(motionPath, 'utf-8'));
+            return {
+                frameCount: Array.isArray(m.frames) ? m.frames.length : (m.num_frames || 0),
+                framesArrayLength: Array.isArray(m) ? m.length : (m.frames?.length ?? 0),
+                fps: m.fps || undefined,
+                numJoints: m.num_joints || undefined
+            };
+        } catch {
+            return undefined;
+        }
+    });
+}
+
 /**
  * Service for runtime loading, skinning, and deformation of Performer 4D Gaussian Splatting avatars.
  */
 export class Dynamic4DGaussianSplatService {
     private repoRoot: string;
     private demosDir: string;
-    private avatarCache = new Map<string, {
-        gaussians: SkinWeightedGaussian[];
-        motion: HumanoidMotionData;
-        details: Avatar4DGSDetails;
-    }>();
 
     constructor(customRepoRoot?: string) {
         this.repoRoot = customRepoRoot || findRepoRoot();
@@ -158,13 +178,11 @@ export class Dynamic4DGaussianSplatService {
             let geoAnchor: { latitude: number; longitude: number; altitude: number } | undefined;
 
             if (fs.existsSync(motionPath)) {
-                try {
-                    const m = JSON.parse(fs.readFileSync(motionPath, 'utf-8'));
-                    numFrames = Array.isArray(m.frames) ? m.frames.length : (m.num_frames || 0);
+                const m = motionSummary(motionPath);
+                if (m) {
+                    numFrames = m.frameCount;
                     fps = m.fps || fps;
-                    numJoints = m.num_joints || numJoints;
-                } catch {
-                    // Leave defaults for unreadable motion
+                    numJoints = m.numJoints || numJoints;
                 }
             }
 
@@ -213,10 +231,13 @@ export class Dynamic4DGaussianSplatService {
         motion: HumanoidMotionData;
         details: Avatar4DGSDetails;
     } {
-        const cached = this.avatarCache.get(avatarId);
-        if (cached) return cached;
-
         const avatarDir = path.join(this.demosDir, avatarId);
+        // Kept per process (tool calls each make a new service) until the PLY or motion file changes.
+        return avatarLoadCache.get(avatarDir, [path.join(avatarDir, 'human_4dgs.ply'), path.join(avatarDir, 'motion.json'), path.join(avatarDir, 'cameras.json'), path.join(avatarDir, 'geo_manifest.json'), path.join(this.demosDir, 'demos_catalog.json')],
+            () => this.readAvatar(avatarId, avatarDir));
+    }
+
+    private readAvatar(avatarId: string, avatarDir: string): { gaussians: SkinWeightedGaussian[]; motion: HumanoidMotionData; details: Avatar4DGSDetails } {
         if (!fs.existsSync(avatarDir)) {
             throw new Error(`Performer avatar not found: ${avatarId} at ${avatarDir}`);
         }
@@ -265,9 +286,7 @@ export class Dynamic4DGaussianSplatService {
             motionPath
         };
 
-        const entry = { gaussians: skinGaussians, motion, details };
-        this.avatarCache.set(avatarId, entry);
-        return entry;
+        return { gaussians: skinGaussians, motion, details };
     }
 
     /**
