@@ -90,6 +90,8 @@ function captureHeadless(chrome: string, url: string, outPng: string, timeoutMs 
         const tmpDir = fs.mkdtempSync(path.join(tmpBase, 'vis_'));
         const proc = spawn(chrome, [
             '--headless=new', '--hide-scrollbars', '--window-size=1920,1080',
+            // Keychain-free: under an empty HOME (credential-guarded runs) Chrome otherwise blocks on the keychain.
+            '--no-first-run', '--no-default-browser-check', '--use-mock-keychain', '--password-store=basic',
             `--user-data-dir=${tmpDir}`,
             ...timing, `--screenshot=${outPng}`, url
         ], { stdio: 'ignore' });

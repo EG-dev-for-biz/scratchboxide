@@ -153,9 +153,11 @@ describe('Geographical 3DGS Abilities Refinement & Survey System Tuning', () => 
             '.glb': 'model/gltf-binary'
         };
 
+        const served = new Set<string>();
         const server = http.createServer((req, res) => {
             const parsedUrl = new URL(req.url || '/', 'http://127.0.0.1');
             let pathname = parsedUrl.pathname;
+            served.add(pathname);
             if (pathname === '/') pathname = '/geographic_3dgs_studio.html';
             const filePath = path.join(PUBLIC_DIR, pathname);
             if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
@@ -185,6 +187,11 @@ describe('Geographical 3DGS Abilities Refinement & Survey System Tuning', () => 
                     '--headless=new',
                     '--hide-scrollbars',
                     '--no-first-run',
+                    '--no-default-browser-check',
+                    // Without these Chrome blocks on the macOS keychain when HOME has no login keychain (the
+                    // credential-guarded test runs use an empty temporary HOME) and never loads the page.
+                    '--use-mock-keychain',
+                    '--password-store=basic',
                     '--window-size=1920,1080',
                     `--user-data-dir=${profileDir}`,
                     `--screenshot=${shotPath}`,
@@ -207,6 +214,9 @@ describe('Geographical 3DGS Abilities Refinement & Survey System Tuning', () => 
                 proc.on('error', finish);
             });
 
+            // The screenshot is of the studio itself, not a Chrome error page: the page and its renderer were served.
+            expect(served.has('/geographic_3dgs_studio.html')).toBe(true);
+            expect(served.has('/libs/r128/three.min.js')).toBe(true);
             expect(fs.existsSync(shotPath)).toBe(true);
             const stat = await fs.stat(shotPath);
             expect(stat.size).toBeGreaterThan(10000);
