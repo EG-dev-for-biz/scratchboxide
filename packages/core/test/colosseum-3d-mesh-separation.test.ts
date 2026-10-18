@@ -133,7 +133,10 @@ describe('Colosseum3DMeshSeparatorService (Direct 3D Mesh Object Separation & OB
       expect(obj.orientedBoundingBox.dimensions[2]).toBeGreaterThan(0);
       expect(obj.orientedBoundingBox.volumeM3).toBeGreaterThan(0);
       expect(obj.orientedBoundingBox.quaternion).toHaveLength(4);
-      expect(obj.vertexCount).toBeGreaterThan(0);
+      // The mesh's own counts: an entity whose region matched no vertices reports 0 (its box is the nominal one),
+      // not the 8 corners of that box.
+      expect(obj.vertexCount).toBeGreaterThanOrEqual(0);
+      expect(obj.triangleCount).toBeLessThanOrEqual(Math.max(0, obj.vertexCount * 3));
     }
 
     // Check specific granular entities
@@ -268,3 +271,43 @@ describe('Colosseum3DMeshSeparatorService (Direct 3D Mesh Object Separation & OB
   });
 });
 
+
+/** GLB with `meshCount` meshes, each one indexed quad (4 vertices, 2 triangles) at its own spot. */
+function quadMeshesGlb(meshCount: number): Buffer {
+  const pos: number[] = [], idx: number[] = [];
+  const meshes: any[] = [], accessors: any[] = [], views: any[] = [];
+  for (let m = 0; m < meshCount; m++) {
+    const x = m * 3;
+    const p = [x, 0, 0, x + 1, 0, 0, x + 1, 1, 0, x, 1, 0];
+    views.push({ buffer: 0, byteOffset: pos.length * 4, byteLength: 48 });
+    accessors.push({ bufferView: views.length - 1, componentType: 5126, count: 4, type: 'VEC3', min: [x, 0, 0], max: [x + 1, 1, 0] });
+    pos.push(...p);
+    meshes.push({ primitives: [{ attributes: { POSITION: accessors.length - 1 }, indices: -1, mode: 4 }] });
+  }
+  const posBytes = Buffer.from(new Float32Array(pos).buffer);
+  for (let m = 0; m < meshCount; m++) {
+    views.push({ buffer: 0, byteOffset: posBytes.length + idx.length * 4, byteLength: 24 });
+    accessors.push({ bufferView: views.length - 1, componentType: 5125, count: 6, type: 'SCALAR' });
+    meshes[m].primitives[0].indices = accessors.length - 1;
+    idx.push(0, 1, 2, 0, 2, 3);
+  }
+  const bin = Buffer.concat([posBytes, Buffer.from(new Uint32Array(idx).buffer)]);
+  const json = { asset: { version: '2.0' }, meshes, accessors, bufferViews: views, buffers: [{ byteLength: bin.length }] };
+  let js = Buffer.from(JSON.stringify(json)); while (js.length % 4) js = Buffer.concat([js, Buffer.from(' ')]);
+  const h = Buffer.alloc(12); h.writeUInt32LE(0x46546c67, 0); h.writeUInt32LE(2, 4); h.writeUInt32LE(12 + 8 + js.length + 8 + bin.length, 8);
+  const jc = Buffer.alloc(8); jc.writeUInt32LE(js.length, 0); jc.writeUInt32LE(0x4e4f534a, 4);
+  const bc = Buffer.alloc(8); bc.writeUInt32LE(bin.length, 0); bc.writeUInt32LE(0x004e4942, 4);
+  return Buffer.concat([h, jc, js, bc, bin]);
+}
+
+describe('Colosseum3DMeshSeparatorService counts', () => {
+  it('reports the triangles and vertices the mesh has, not a vertex multiple', () => {
+    const scene = Colosseum3DMeshSeparatorService.separate3DMesh(quadMeshesGlb(61), { mode: 'macro' });
+    const facade = scene.objects.find(o => o.id === 'det-colosseum-facade')!;
+    // 13 clustered submeshes, each one quad
+    expect(facade.submeshIndices).toHaveLength(13);
+    expect(facade.vertexCount).toBe(13 * 4);
+    expect(facade.triangleCount).toBe(13 * 2);
+    for (const o of scene.objects) expect(o.triangleCount).toBeLessThanOrEqual(o.submeshIndices.length * 2);
+  });
+});
