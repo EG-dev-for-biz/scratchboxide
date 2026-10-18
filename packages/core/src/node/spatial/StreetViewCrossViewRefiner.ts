@@ -41,6 +41,7 @@ import {
     PLATE_EMPTY_DEPTH, type FrameCamera, type PoseCorrection, type RgbaImage, type TexturedPrimitive
 } from './StreetViewPoseRegistrar';
 import type { RenderMesh3D } from './HeadlessMeshSilhouetteRenderer';
+import { CrossViewMatchPool } from './CrossViewMatchPool';
 
 export interface CrossViewFrame {
     key: string;
@@ -301,7 +302,7 @@ function downsample2(src: Float32Array, w: number, h: number): Float32Array {
 }
 
 /** Summed-area tables of v and v^2 ((w + 1) x (h + 1)), for O(1) window sums. */
-interface Integral { s: Float64Array; s2: Float64Array; w: number }
+export interface Integral { s: Float64Array; s2: Float64Array; w: number }
 function integralImage(v: Float32Array, w: number, h: number): Integral {
     const W1 = w + 1, s = new Float64Array(W1 * (h + 1)), s2 = new Float64Array(W1 * (h + 1));
     for (let y = 0; y < h; y++) {
@@ -370,6 +371,88 @@ function searchPatch(
     return { dx: sx, dy: sy, peak: best, second, atBorder };
 }
 
+export interface PairMatchParams {
+    P: number; S: number; minPeak: number; minMargin: number; minStd: number; minOverlap: number; minDepth: number;
+    bandpassSigmas: [number, number]; searchPx: number; coarseToFine: boolean;
+}
+
+/** What matching one pair needs of a frame: its camera and depth at the current poses, its photo maps. */
+export interface PairFrameData {
+    cam: FrameCamera; depth: Float32Array; lum: Float32Array; valid: Uint8Array;
+    bp: Float32Array; bpHalf: Float32Array; bpI: Integral; bpHalfI: Integral;
+}
+
+function frameData(f: CrossViewFrame, st: FrameState): PairFrameData {
+    return { cam: st.cam, depth: st.depth, lum: st.lum, valid: f.valid, bp: st.bp, bpHalf: st.bpHalf, bpI: st.bpI, bpHalfI: st.bpHalfI };
+}
+
+/**
+ * The correspondences of one pair (frame indexes a, b), matched on B's grid; null when the pair does not overlap enough.
+ * Pure: a worker thread computes the same thing. The caller's point filter is applied after.
+ */
+export function matchFramePair(a: number, b: number, A: PairFrameData, B: PairFrameData, p: PairMatchParams): { overlapPx: number; patches: number; matches: CrossViewMatch[] } | null {
+    const { P, S, minPeak, minMargin: minMargin, minStd, minOverlap, minDepth, searchPx, coarseToFine } = p;
+    const [s1, s2] = p.bandpassSigmas;
+    const EMPTY = PLATE_EMPTY_DEPTH * 0.5;
+    const w = B.cam.width, h = B.cam.height;
+    // cheap overlap estimate on a 16 px lattice before the full warp + band-pass
+    if (estimateOverlap(A.cam, A.depth, A.valid, B.cam, B.depth, B.valid, minDepth, 16) * 256 < minOverlap * 0.5) return null;
+    const wp = warpLuminanceAtoB(A.cam, A.depth, A.lum, A.valid, B.cam, B.depth, B.valid, minDepth);
+    if (wp.count < minOverlap) return null;
+    const W = bandpassLuminance(wp.lum, w, h, s1, s2);
+    const Wh = coarseToFine ? downsample2(W, w, h) : null;
+    const pairMatches: CrossViewMatch[] = [];
+    let patches = 0;
+    for (let y0 = 0; y0 + P <= h; y0 += S) for (let x0 = 0; x0 + P <= w; x0 += S) {
+        // the patch must be warped (covered in both) everywhere but a few pixels, with no depth edge
+        let cnt = 0, dmin = Infinity, dmax = 0;
+        for (let y = 0; y < P; y += 2) for (let x = 0; x < P; x += 2) {
+            const i = (y0 + y) * w + x0 + x;
+            if (wp.mask[i]) { cnt++; const d = B.depth[i]; if (d < dmin) dmin = d; if (d > dmax) dmax = d; }
+        }
+        if (cnt < 0.95 * (P / 2) * (P / 2) || dmax > 1.15 * dmin + 0.5) continue;
+        patches++;
+        let m: ReturnType<typeof searchPatch>;
+        if (coarseToFine && Wh) {
+            const c = searchPatch(Wh, B.bpHalf, B.bpHalfI, w >> 1, h >> 1, x0 >> 1, y0 >> 1, P >> 1, 0, 0, Math.ceil(searchPx / 2), minStd * 0.7);
+            if (!c || c.atBorder || c.peak < minPeak * 0.8 || c.peak - c.second < minMargin) continue;
+            m = searchPatch(W, B.bp, B.bpI, w, h, x0, y0, P, Math.round(2 * c.dx), Math.round(2 * c.dy), 3, minStd);
+            if (m) { m.dx += Math.round(2 * c.dx); m.dy += Math.round(2 * c.dy); m.second = Math.max(m.second, c.second); }
+        } else {
+            m = searchPatch(W, B.bp, B.bpI, w, h, x0, y0, P, 0, 0, searchPx, minStd);
+        }
+        if (!m || m.atBorder || m.peak < minPeak || m.peak - m.second < minMargin) continue;
+        // mesh point and normal under the patch centre (from B's depth)
+        const qx = x0 + P / 2, qy = y0 + P / 2;
+        const ci = Math.floor(qy) * w + Math.floor(qx);
+        const d = B.depth[ci];
+        if (!(d < EMPTY)) continue;
+        const lift = (px: number, py: number, dd: number): V3 => {
+            const u = (px - B.cam.cx) / B.cam.fx, v = (py - B.cam.cy) / B.cam.fy;
+            return [0, 1, 2].map(k => B.cam.eye[k] + dd * (B.cam.fwd[k] + u * B.cam.right[k] - v * B.cam.up[k])) as V3;
+        };
+        const X = lift(qx, qy, d);
+        const r4 = 6;
+        const dx1 = B.depth[ci + r4], dx0 = B.depth[ci - r4], dy1 = B.depth[ci + r4 * w], dy0 = B.depth[ci - r4 * w];
+        if (!(dx1 < EMPTY && dx0 < EMPTY && dy1 < EMPTY && dy0 < EMPTY)) continue;
+        const Px1 = lift(qx + r4, qy, dx1), Px0 = lift(qx - r4, qy, dx0), Py1 = lift(qx, qy + r4, dy1), Py0 = lift(qx, qy - r4, dy0);
+        const ex = [Px1[0] - Px0[0], Px1[1] - Px0[1], Px1[2] - Px0[2]], ey = [Py1[0] - Py0[0], Py1[1] - Py0[1], Py1[2] - Py0[2]];
+        let n: V3 = [ex[1] * ey[2] - ex[2] * ey[1], ex[2] * ey[0] - ex[0] * ey[2], ex[0] * ey[1] - ex[1] * ey[0]];
+        const nl = Math.hypot(n[0], n[1], n[2]);
+        if (!(nl > 1e-9)) continue;
+        n = [n[0] / nl, n[1] / nl, n[2] / nl];
+        const toB = [B.cam.eye[0] - X[0], B.cam.eye[1] - X[1], B.cam.eye[2] - X[2]];
+        if (n[0] * toB[0] + n[1] * toB[1] + n[2] * toB[2] < 0) n = [-n[0], -n[1], -n[2]];
+        const pa = projectToFrame(A.cam, X);
+        if (!pa) continue;
+        pairMatches.push({
+            a, b, ax: pa[0], ay: pa[1], bx: qx + m.dx, by: qy + m.dy, X, n, qx, qy,
+            peak: m.peak, margin: m.peak - m.second, depthB: d, fxB: B.cam.fx
+        });
+    }
+    return { overlapPx: wp.count, patches, matches: pairMatches };
+}
+
 interface FrameState {
     cam: FrameCamera;
     depth: Float32Array;
@@ -391,6 +474,7 @@ export class StreetViewCrossViewRefiner {
     private readonly bpHalf: Float32Array[];
     private readonly bpI: Integral[];
     private readonly bpHalfI: Integral[];
+    private pool?: CrossViewMatchPool;
 
     constructor(mesh: RenderMesh3D, frames: CrossViewFrame[], opts: CrossViewOptions = {}) {
         this.mesh = mesh;
@@ -427,87 +511,58 @@ export class StreetViewCrossViewRefiner {
      */
     matchAll(st: FrameState[], searchPx: number, coarseToFine: boolean): { matches: CrossViewMatch[]; pairs: CrossViewPairStats[] } {
         const o = this.opts;
-        const P = o.patchPx ?? DEF.patchPx, S = o.stridePx ?? DEF.stridePx;
-        const minPeak = o.minPeak ?? DEF.minPeak, minMargin = o.minPeakMargin ?? DEF.minPeakMargin, minStd = o.minPatchStd ?? DEF.minPatchStd;
-        const minOverlap = o.minOverlapPx ?? DEF.minOverlapPx, minDepth = o.minDepthMeters ?? DEF.minDepthMeters;
-        const [s1, s2] = o.bandpassSigmas ?? DEF.bandpassSigmas;
-        const matches: CrossViewMatch[] = [];
-        const pairs: CrossViewPairStats[] = [];
-        const EMPTY = PLATE_EMPTY_DEPTH * 0.5;
+        const params: PairMatchParams = {
+            P: o.patchPx ?? DEF.patchPx, S: o.stridePx ?? DEF.stridePx, minPeak: o.minPeak ?? DEF.minPeak, minMargin: o.minPeakMargin ?? DEF.minPeakMargin,
+            minStd: o.minPatchStd ?? DEF.minPatchStd, minOverlap: o.minOverlapPx ?? DEF.minOverlapPx, minDepth: o.minDepthMeters ?? DEF.minDepthMeters,
+            bandpassSigmas: o.bandpassSigmas ?? DEF.bandpassSigmas, searchPx, coarseToFine
+        };
+        // each unordered pair once, in a fixed order: B (the longer focal length; ties: the higher index) outer, A inner
+        const order: Array<[number, number]> = [];
         for (let b = 0; b < this.frames.length; b++) {
-            const B = st[b], fb = this.frames[b], w = B.cam.width, h = B.cam.height;
             for (let a = 0; a < this.frames.length; a++) {
-                if (a === b || this.frames[a].panoId === fb.panoId) continue;
-                // one direction per unordered pair: B is the longer focal length (ties: the higher index)
-                const fxa = st[a].cam.fx, fxb = B.cam.fx;
+                if (a === b || this.frames[a].panoId === this.frames[b].panoId) continue;
+                const fxa = st[a].cam.fx, fxb = st[b].cam.fx;
                 if (fxa > fxb + 1e-9 || (Math.abs(fxa - fxb) <= 1e-9 && a > b)) continue;
-                const A = st[a], fa = this.frames[a];
-                // cheap overlap estimate on a 16 px lattice before the full warp + band-pass
-                if (estimateOverlap(A.cam, A.depth, fa.valid, B.cam, B.depth, fb.valid, minDepth, 16) * 256 < minOverlap * 0.5) continue;
-                const wp = warpLuminanceAtoB(A.cam, A.depth, A.lum, fa.valid, B.cam, B.depth, fb.valid, minDepth);
-                if (wp.count < minOverlap) continue;
-                const W = bandpassLuminance(wp.lum, w, h, s1, s2);
-                const Wh = coarseToFine ? downsample2(W, w, h) : null;
-                const pairMatches: CrossViewMatch[] = [];
-                let patches = 0;
-                for (let y0 = 0; y0 + P <= h; y0 += S) for (let x0 = 0; x0 + P <= w; x0 += S) {
-                    // the patch must be warped (covered in both) everywhere but a few pixels, with no depth edge
-                    let cnt = 0, dmin = Infinity, dmax = 0;
-                    for (let y = 0; y < P; y += 2) for (let x = 0; x < P; x += 2) {
-                        const i = (y0 + y) * w + x0 + x;
-                        if (wp.mask[i]) { cnt++; const d = B.depth[i]; if (d < dmin) dmin = d; if (d > dmax) dmax = d; }
-                    }
-                    if (cnt < 0.95 * (P / 2) * (P / 2) || dmax > 1.15 * dmin + 0.5) continue;
-                    patches++;
-                    let m: ReturnType<typeof searchPatch>;
-                    if (coarseToFine && Wh) {
-                        const c = searchPatch(Wh, B.bpHalf, B.bpHalfI, w >> 1, h >> 1, x0 >> 1, y0 >> 1, P >> 1, 0, 0, Math.ceil(searchPx / 2), minStd * 0.7);
-                        if (!c || c.atBorder || c.peak < minPeak * 0.8 || c.peak - c.second < minMargin) continue;
-                        m = searchPatch(W, B.bp, B.bpI, w, h, x0, y0, P, Math.round(2 * c.dx), Math.round(2 * c.dy), 3, minStd);
-                        if (m) { m.dx += Math.round(2 * c.dx); m.dy += Math.round(2 * c.dy); m.second = Math.max(m.second, c.second); }
-                    } else {
-                        m = searchPatch(W, B.bp, B.bpI, w, h, x0, y0, P, 0, 0, searchPx, minStd);
-                    }
-                    if (!m || m.atBorder || m.peak < minPeak || m.peak - m.second < minMargin) continue;
-                    // mesh point and normal under the patch centre (from B's depth)
-                    const qx = x0 + P / 2, qy = y0 + P / 2;
-                    const ci = Math.floor(qy) * w + Math.floor(qx);
-                    const d = B.depth[ci];
-                    if (!(d < EMPTY)) continue;
-                    const lift = (px: number, py: number, dd: number): V3 => {
-                        const u = (px - B.cam.cx) / B.cam.fx, v = (py - B.cam.cy) / B.cam.fy;
-                        return [0, 1, 2].map(k => B.cam.eye[k] + dd * (B.cam.fwd[k] + u * B.cam.right[k] - v * B.cam.up[k])) as V3;
-                    };
-                    const X = lift(qx, qy, d);
-                    const r4 = 6;
-                    const dx1 = B.depth[ci + r4], dx0 = B.depth[ci - r4], dy1 = B.depth[ci + r4 * w], dy0 = B.depth[ci - r4 * w];
-                    if (!(dx1 < EMPTY && dx0 < EMPTY && dy1 < EMPTY && dy0 < EMPTY)) continue;
-                    const Px1 = lift(qx + r4, qy, dx1), Px0 = lift(qx - r4, qy, dx0), Py1 = lift(qx, qy + r4, dy1), Py0 = lift(qx, qy - r4, dy0);
-                    const ex = [Px1[0] - Px0[0], Px1[1] - Px0[1], Px1[2] - Px0[2]], ey = [Py1[0] - Py0[0], Py1[1] - Py0[1], Py1[2] - Py0[2]];
-                    let n: V3 = [ex[1] * ey[2] - ex[2] * ey[1], ex[2] * ey[0] - ex[0] * ey[2], ex[0] * ey[1] - ex[1] * ey[0]];
-                    const nl = Math.hypot(n[0], n[1], n[2]);
-                    if (!(nl > 1e-9)) continue;
-                    n = [n[0] / nl, n[1] / nl, n[2] / nl];
-                    const toB = [B.cam.eye[0] - X[0], B.cam.eye[1] - X[1], B.cam.eye[2] - X[2]];
-                    if (n[0] * toB[0] + n[1] * toB[1] + n[2] * toB[2] < 0) n = [-n[0], -n[1], -n[2]];
-                    if (o.pointFilter && !o.pointFilter(X)) continue;
-                    const pa = projectToFrame(A.cam, X);
-                    if (!pa) continue;
-                    pairMatches.push({
-                        a, b, ax: pa[0], ay: pa[1], bx: qx + m.dx, by: qy + m.dy, X, n, qx, qy,
-                        peak: m.peak, margin: m.peak - m.second, depthB: d, fxB: B.cam.fx
-                    });
-                }
-                const mags = pairMatches.map(mm => Math.hypot(mm.bx - mm.qx, mm.by - mm.qy));
-                pairs.push({
-                    a: fa.key, b: fb.key, overlapPx: wp.count, patches, matches: pairMatches.length,
-                    medianPx: median(mags), fractionWithin3Px: mags.length ? mags.filter(v => v <= 3).length / mags.length : null,
-                    medianShift: pairMatches.length ? [median(pairMatches.map(mm => mm.bx - mm.qx))!, median(pairMatches.map(mm => mm.by - mm.qy))!] : null
-                });
-                for (const mm of pairMatches) matches.push(mm);
+                order.push([a, b]);
             }
         }
+        // the pairs are independent: across worker threads when there is a pool, in this thread otherwise; either way the
+        // results are taken in the order above, so the matches are the same
+        const raw = this.pool && order.length > 1
+            ? this.pool.match(st.map(x => ({ cam: x.cam, depth: x.depth })), order, params)
+            : order.map(([a, b]) => matchFramePair(a, b, frameData(this.frames[a], st[a]), frameData(this.frames[b], st[b]), params));
+        const matches: CrossViewMatch[] = [];
+        const pairs: CrossViewPairStats[] = [];
+        order.forEach(([a, b], k) => {
+            const r = raw[k];
+            if (!r) return;
+            const pairMatches = o.pointFilter ? r.matches.filter(mm => o.pointFilter!(mm.X)) : r.matches;
+            const mags = pairMatches.map(mm => Math.hypot(mm.bx - mm.qx, mm.by - mm.qy));
+            pairs.push({
+                a: this.frames[a].key, b: this.frames[b].key, overlapPx: r.overlapPx, patches: r.patches, matches: pairMatches.length,
+                medianPx: median(mags), fractionWithin3Px: mags.length ? mags.filter(v => v <= 3).length / mags.length : null,
+                medianShift: pairMatches.length ? [median(pairMatches.map(mm => mm.bx - mm.qx))!, median(pairMatches.map(mm => mm.by - mm.qy))!] : null
+            });
+            for (const mm of pairMatches) matches.push(mm);
+        });
         return { matches, pairs };
+    }
+
+    /** Matches the frame pairs across `threads` worker threads from here on (the results are the same as in one thread). */
+    useThreads(threads: number): void {
+        if (this.pool || threads <= 1 || this.frames.length < 3) return;
+        try {
+            this.pool = CrossViewMatchPool.create(this.frames.map((f, i) => ({ width: f.image.width, height: f.image.height, lum: this.lum[i], valid: f.valid, bp: this.bp[i], bpHalf: this.bpHalf[i], bpI: this.bpI[i], bpHalfI: this.bpHalfI[i] })), threads);
+            this.log(`[cross-view] matching across ${this.pool.size} worker threads`);
+        } catch (err) {
+            this.log(`[cross-view] worker threads unavailable (${(err as Error).message}); matching in this thread`);
+        }
+    }
+
+    /** Ends the worker threads, if any. */
+    close(): void {
+        this.pool?.close();
+        this.pool = undefined;
     }
 
     /** Ray of pixel (px, py) of a camera intersected with the plane (X, n); null when parallel / behind. */

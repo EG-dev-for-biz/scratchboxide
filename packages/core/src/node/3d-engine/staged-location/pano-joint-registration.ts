@@ -37,6 +37,7 @@
 
 import type { Vec3 } from '../../../common/spatial/staged-location-contracts';
 import type { RenderMesh3D } from '../../spatial/HeadlessMeshSilhouetteRenderer';
+import { HeadlessEdgeRenderPool } from '../../spatial/HeadlessEdgeRenderPool';
 import { colourContrastEdges, faceOutlineSamples, meshEdgeSamples, StreetViewCrossViewRefiner, type CrossViewFrame, type CrossViewMatch, type CrossViewOptions, type CrossViewResult } from '../../spatial/StreetViewCrossViewRefiner';
 import {
     buildValidMask, detectLineSegments, distanceTransform, frameCamera, gaussianBlur, groundingHorizontalFovDeg, luminance, projectToFrame, renderFrameDepth, segmentSky, sobel,
@@ -460,6 +461,8 @@ export interface JointRegistrationInput {
     budgetMs?: number;
     /** Overrides of the refiner's settings (both scales). */
     refiner?: Partial<CrossViewOptions>;
+    /** Worker threads the refiner's pair matching runs on (default: one per core but one, at most 8; 1: this thread). The matches are the same either way. */
+    threads?: number;
     /**
      * The fitted faces of the structure. With them the fit also holds each view's face outline (term (e)); without them, or with
      * SCRATCHBOX_JOINT_OUTLINE=0, it does not.
@@ -558,8 +561,13 @@ export function registerPanosJointly(input: JointRegistrationInput): JointRegist
             ...(useOutline ? { outlineMesh, outlineEquivalentMatches: OUTLINE_EQUIVALENT_MATCHES } : {}),
             ...(input.refiner ?? {})
         });
-        if (s === JOINT_WIDTHS_PX.length - 1) { before = refiner.measure(corrs); fineFrames = prepared; }
-        res = refiner.run(corrs, start);
+        refiner.useThreads(input.threads ?? HeadlessEdgeRenderPool.defaultThreads());
+        try {
+            if (s === JOINT_WIDTHS_PX.length - 1) { before = refiner.measure(corrs); fineFrames = prepared; }
+            res = refiner.run(corrs, start);
+        } finally {
+            refiner.close();
+        }
         corrs = new Map([...res.corrections].map(([id, c]) => [id, { ...c, referenceHeadingDeg: refHeading.get(id)! }]));
         timings[`scale${width}`] = Date.now() - t;
     }

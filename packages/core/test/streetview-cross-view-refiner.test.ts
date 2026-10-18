@@ -189,3 +189,49 @@ describe('StreetViewCrossViewRefiner (synthetic corner building)', () => {
         expect(solveSymmetric(Float64Array.from([1, 2, 2, 1]), Float64Array.from([1, 1]), 2)).toBeNull();
     });
 });
+
+describe('StreetViewCrossViewRefiner across worker threads', () => {
+    it('matches the frame pairs on worker threads with exactly the results of one thread, and refines to the same poses', () => {
+        const T = 512, W = 480, H = 480;
+        const prims = [wall([0, 0, 0], [1, 0, 0], 40, 30, facadeTexture(T, 7), T), wall([40, 0, 0], [0, 0, -1], 40, 30, facadeTexture(T, 99), T)];
+        const mesh = sceneToRenderMesh(prims);
+        const panos = [
+            { id: 'P1', eye: [12, 2.5, 26] as [number, number, number], frames: [25, 350, 10] },
+            { id: 'P2', eye: [56, 2.5, 16] as [number, number, number], frames: [305, 285, 320] },
+            { id: 'P3', eye: [64, 2.5, -24] as [number, number, number], frames: [270, 240, 255] },
+            { id: 'P4', eye: [30, 2.5, 30] as [number, number, number], frames: [0, 330, 345] }
+        ];
+        const frames: CrossViewFrame[] = [];
+        for (const p of panos) for (const [k, h] of p.frames.entries()) {
+            const cam = frameCamera(p.eye, h, 22, 60, W, H, ZERO_CORRECTION, p.frames[0]);
+            const photo = renderTexturedView(prims, cam, [120, 170, 235]);
+            frames.push({ key: `${p.id}_${k}`, panoId: p.id, nominalEye: [p.eye[0] + 0.6, p.eye[1], p.eye[2] - 0.4], headingDeg: h - 0.2, pitchDeg: 22, fovDeg: 60, referenceHeadingDeg: p.frames[0] - 0.2, image: { width: W, height: H, rgba: photo.rgba }, valid: new Uint8Array(W * H).fill(1) });
+        }
+        const opts = { patchPx: 32, stridePx: 16, initialSearchPx: 24, minDepthMeters: 2, outerIterations: 2, pointFilter: (X: [number, number, number]) => X[1] > 1 };
+        const start = new Map<string, PoseCorrection>(panos.map(p => [p.id, { ...ZERO_CORRECTION, dyawDeg: 0.2 }]));
+        const one = new StreetViewCrossViewRefiner(mesh, frames, opts);
+        const many = new StreetViewCrossViewRefiner(mesh, frames, opts);
+        many.useThreads(4);
+        try {
+            const t1 = Date.now();
+            const a = one.measure(start);
+            const r1 = one.run(start, start);
+            const oneMs = Date.now() - t1;
+            const t2 = Date.now();
+            const b = many.measure(start);
+            const r2 = many.run(start, start);
+            const manyMs = Date.now() - t2;
+            const line = `[cross-view threads] ${frames.length} frames, ${a.pairs.length} pairs: one thread ${oneMs} ms, 4 workers ${manyMs} ms (worker start excluded)`;
+            console.log(line);
+            fs.mkdirSync(SHOTS, { recursive: true });
+            fs.writeFileSync(path.join(SHOTS, '..', 'cross_view_threads.txt'), line + '\n');
+            expect(a.matches.length).toBeGreaterThan(100);
+            expect(b.matches).toEqual(a.matches);
+            expect(b.pairs).toEqual(a.pairs);
+            expect([...r2.corrections]).toEqual([...r1.corrections]);
+            expect(r2.matches).toEqual(r1.matches);
+        } finally {
+            many.close();
+        }
+    }, 300_000);
+});

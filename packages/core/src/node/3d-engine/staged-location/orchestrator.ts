@@ -2115,7 +2115,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         runsTimer = setTimeout(() => runsCut.abort(Object.assign(new Error(`the focused run readings ran past their ${Math.round(runsWindowMs / 1000)} s`), { name: 'TimeoutError' })), runsWindowMs + 5_000);
                         // started as a promise so that a failure to set it up (the fitted body cannot be read) is the runs' failure, not the reading's
                         runsPromise = Promise.resolve().then(() => readRunTargets({
-                            fit, fitSha256: fitSha, located: evidence.plan.located, panos: evidence.panos, groundAt: (x, z) => t.ground!.groundAt(x, z), fallbackGroundY: structure!.groundY,
+                            fit, fitSha256: fitSha, located: evidence.plan!.located, panos: evidence.panos, groundAt: (x, z) => t.ground!.groundAt(x, z), fallbackGroundY: structure!.groundY,
                             ...(evidence.registration ? { registration: evidence.registration } : {}), occluder: loadMesh([fit.outputs.fittedGlb, fit.outputs.passThroughGlb]), streetView: svDeps, chain,
                             signal: AbortSignal.any([io.signal, runsCut.signal]), budgetMs: runsWindowMs, onProgress: m => io.progress(m)
                         }));
