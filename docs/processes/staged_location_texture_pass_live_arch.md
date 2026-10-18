@@ -562,3 +562,35 @@ Timings: tier 15.6-15.9 s per layer (setup 1.4 s, worker 14 s in 4 threads; phot
 ### Candidate tool/service ideas
 
 - A replay endpoint for a run's registration and texture inputs, so the tier can be judged with and without on identical poses (this round needed three cold runs and still could not separate it).
+
+## Round 8: the texture stage off the main thread (2026-10-18)
+
+Worktree `.claude/worktrees/texture-worker` from `origin/main` `5595a53f`. Ports: web 3062, API 3063, tools 3064 (server started from the worktree root with `npm run dev`, `secrets.json` symlinked for the runs and removed after). Runs of `Washington Square Arch`, cold for the survey, evidence (Street View), vision/detail, figures and texture stages (their caches cleared before each run; tiles, remesh and fit cached): `3f779f28` (workers, the pushed code), `1a81d2b6` and `6d84931a` (workers, with a temporary block tracer and CPU profile), `f7bd860a` (`SCRATCHBOX_TEXTURE_WORKERS=0`, the main-thread path, on `6d84931a`'s cached evidence; the chat's model then called the tool again, `bf241176`), `1ac2b311` (workers, the pushed code). Screenshots of `1ac2b311`: `test-results/screenshots/texture_worker/` (`live_tex_front`, `live_tex_back`, `live_tex_frieze_back`, `live_tex_attic_back_close`; gitignored), views set with `__SB_SET_CAMERA_VIEW__` around `[-1.25, 10.8, -2.4]`.
+
+**Status: Verified.** The texture stage's CPU work runs in worker threads; the main thread's event-loop delay over the stage is p99 12 ms (the histogram's 10 ms resolution included) with workers against 76 ms with the main-thread path, and the longest block is 0.2-0.5 s (other stages, below) against 56.7 s. No vision call timed out in any worker run.
+
+- `TextureWorkerPool` (`texture-worker-pool.ts`, thread entry `texture-worker.ts`): at most N jobs computing (default min(4, cpus - 1), `SCRATCHBOX_TEXTURE_WORKERS=<n>`; `=0` keeps the main-thread path). The shared sources (views decoded, the tile surface with its BVH, scan and context meshes; `texture-sources.ts`) are prepared in a thread and kept in SharedArrayBuffers; a layer's clay and twin are transferred. The model enhancement calls and progress come back by message. The stage's AbortSignal asks the thread to stop (the native unwrapper is killed on the signal) and terminates it after 1 s; a dead thread rejects with `TextureWorkerCrashError`. A layer's leave-one-pano-out job stays on its thread until it runs or the stage closes the pool.
+- Vision call limits (`call-timer.ts`): a limit that fires late because the thread was blocked is extended by how late it fired (at most one limit in all), so a reply that already arrived is read before the call is cut; the face survey's limit starts when the request is sent.
+- The stage records `eventLoopMeanMs`/`P50`/`P99`/`MaxMs` and `textureWorkers` in its breakdown.
+
+| run | path | vision ended | textures ended | texture stage | event loop p99 / max (texture stage) | l2 fit.loo |
+|---|---|---|---|---|---|---|
+| last round (cold) | main thread | 357 s (2 reading batches timed out) | 713 s | | | 5.03-5.84 px (control range) |
+| `3f779f28` | workers | 211 s | 527 s | 353 s | 12.1 / 306 ms | 5.94 px |
+| `1a81d2b6` | workers | 255 s | 532 s | 346 s | 12.4 / 13 573 ms (see below) | 7.41 px |
+| `6d84931a` | workers | 213 s | 476 s | 320 s | 11.9 / 228 ms | 6.05 px |
+| `f7bd860a` | main thread | 270 s | 373 s | 277 s | 76.4 / 56 707 ms | 6.05 px |
+| `1ac2b311` | workers | 240 s | 516 s | 342 s | 12.1 / 529 ms | 6.07 px |
+
+- The main-thread run `f7bd860a` reused `6d84931a`'s evidence and gave the same l2 fit (6.609 px) and leave-one-pano-out fit (6.053 px, NCC 0.154) as the worker run; `l4f`'s twin is bit-identical between the two (GLB binary chunk, JSON without the clock fields). `l2`'s albedo differs in 1 540 of 4.2 M texels in one island (max 19 levels; confidence plane identical): that run committed a photo correction the worker run did not, so the inputs were not the same; the layers with an image-model enhancement differ by the model's answers. Bit-identity on the same inputs is proven by `staged-texture-worker.test.ts`.
+- l2's leave-one-pano-out fit is 5.94-6.07 px in four of the five runs (7.41 px in `1a81d2b6`), above the last round's 5.03-5.84 px. The main-thread path gives the same 6.05 px on the same evidence, so the shift comes from the evidence and registration of these runs, not from where the pass runs.
+- Main-thread blocks left during the texture stage (CPU profile of `6d84931a`): the vision stage's slot cover (`fitted-solid.ts` crossings via `computeSlotOffer`, ~0.5 s), `downscaleEvidence` (JS JPEG decode/encode and `downscaleRgba`, ~0.5 s), `detail-reprojection.ts` `renderedBox` (~0.2 s) and the project-artifact store's saves (`serializeProjectGraph`, 0.1-0.14 s each). In `1a81d2b6` one 13.6 s block fell inside the vision stage (the tracer's last mark was a texture progress message; nothing of the texture stage was on the main thread then). None of these is texture work.
+- Per layer, the UV step is 0.1-0.7 s in a thread (it read 34-53 s on the main-thread path, where a layer's wall clock included the other layers' CPU).
+- Visible in the screenshots (the pass itself is unchanged): the front is well covered; on the back a sky-blue wedge on the right spandrel, a dark object (branch or bird in a photo) on the right of the frieze, a pale square at the keystone, and the attic's right half smeared.
+
+Tests: `staged-texture-worker.test.ts` (bit-identical twin, planes, report and leave-one-pano-out job through the pool with the enhancement; sources prepared in a thread equal to inline; a 20 ms timer never more than 100 ms late while a 2048-texel layer bakes in a thread, 3.6 s late inline; a stop rejects with the signal's reason and the thread exits; a dying thread rejects with `TextureWorkerCrashError`), `staged-call-timer.test.ts`. `texture-uv-atlas.test.ts`'s real-arch case (skipped unless the gitignored scan caches exist, which the live runs created) finds 1 gutter hole on this data with `origin/main`'s `texture-uv.ts` too.
+
+### Candidate Tool/Service Ideas
+
+- Move the vision stage's slot cover and evidence downscaling (JS JPEG codec) to a worker thread too: they are the largest main-thread blocks left.
+- A run replay for the texture stage from a run's recorded inputs, so the main-thread and worker paths (or two rounds) can be compared on identical inputs live.
