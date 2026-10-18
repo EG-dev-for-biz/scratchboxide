@@ -36,7 +36,14 @@ export class HeadlessMeshSilhouetteRenderer {
         pose: CameraPose6DOF,
         width: number = 320,
         height: number = 240,
-        options?: { clipNearPlane?: boolean }
+        options?: {
+            clipNearPlane?: boolean;
+            /**
+             * Rasterize only triangles [start, end). Depth is a per-pixel minimum, so shards rendered apart and merged
+             * by minimum equal one full render exactly (see HeadlessEdgeRenderPool).
+             */
+            triangleRange?: [number, number];
+        }
     ): RenderTargetBuffer {
         const size = width * height;
         const depthBuffer = new Float32Array(size);
@@ -151,7 +158,7 @@ export class HeadlessMeshSilhouetteRenderer {
                     }
                 }
             }
-        }, options?.clipNearPlane ? 'clip' : 'cull');
+        }, options?.clipNearPlane ? 'clip' : 'cull', options?.triangleRange);
 
         return {
             width,
@@ -172,6 +179,11 @@ export class HeadlessMeshSilhouetteRenderer {
         height: number = 240
     ): SobelEdgeField {
         const { depthBuffer, silhouetteBuffer } = this.renderMesh(mesh, pose, width, height);
+        return this.edgeFieldFromBuffers(depthBuffer, silhouetteBuffer, width, height);
+    }
+
+    /** The Sobel edge field of a rendered depth + silhouette pair (what renderEdgeField computes after rasterizing). */
+    public static edgeFieldFromBuffers(depthBuffer: Float32Array, silhouetteBuffer: Uint8Array, width: number, height: number): SobelEdgeField {
         const size = width * height;
 
         // Create luminance map: high contrast silhouette edges + normalized depth relief
@@ -535,11 +547,23 @@ export class HeadlessMeshSilhouetteRenderer {
          * Legacy modes stay the default because mixed-LOD tile dumps contain kilometre-scale skirt
          * triangles that, rendered correctly, cover the frame; existing resection tests depend on that.
          */
-        mode: 'clip' | 'cull' | 'cull-ndc' = 'clip'
+        mode: 'clip' | 'cull' | 'cull-ndc' = 'clip',
+        triangleRange?: [number, number]
     ): void {
         const vertCount = Math.floor(mesh.vertices.length / 3);
         const vX = new Float32Array(vertCount), vY = new Float32Array(vertCount), vZ = new Float32Array(vertCount);
-        for (let i = 0; i < vertCount; i++) {
+        // A triangle shard transforms only the vertex span its triangles use.
+        let vFirst = 0, vLast = vertCount - 1;
+        if (triangleRange) {
+            vFirst = vertCount; vLast = -1;
+            const end = Math.min(mesh.indices.length, triangleRange[1] * 3);
+            for (let k = Math.max(0, triangleRange[0] * 3); k < end; k++) {
+                const vi = mesh.indices[k];
+                if (vi < vFirst) vFirst = vi;
+                if (vi > vLast) vLast = vi;
+            }
+        }
+        for (let i = vFirst; i <= vLast; i++) {
             const dx = mesh.vertices[i * 3] - eye[0], dy = mesh.vertices[i * 3 + 1] - eye[1], dz = mesh.vertices[i * 3 + 2] - eye[2];
             vX[i] = dx * right[0] + dy * right[1] + dz * right[2];
             vY[i] = dx * up[0] + dy * up[1] + dz * up[2];
@@ -549,8 +573,9 @@ export class HeadlessMeshSilhouetteRenderer {
         const sx = (x: number, z: number) => (P00 * x / z + 1) * halfW;
         const sy = (y: number, z: number) => (1 - P11 * y / z) * halfH;
         const triCount = Math.floor(mesh.indices.length / 3);
+        const triStart = Math.max(0, triangleRange?.[0] ?? 0), triEnd = Math.min(triCount, triangleRange?.[1] ?? triCount);
         const poly: number[][] = [];
-        for (let t = 0; t < triCount; t++) {
+        for (let t = triStart; t < triEnd; t++) {
             const i0 = mesh.indices[t * 3], i1 = mesh.indices[t * 3 + 1], i2 = mesh.indices[t * 3 + 2];
             const z0 = vZ[i0], z1 = vZ[i1], z2 = vZ[i2];
             if (z0 < near && z1 < near && z2 < near) continue;            // fully behind
@@ -560,7 +585,12 @@ export class HeadlessMeshSilhouetteRenderer {
                     const inNdc = (x: number, y: number, z: number) => { const nx = P00 * x / z, ny = P11 * y / z; return nx >= -1.2 && nx <= 1.2 && ny >= -1.2 && ny <= 1.2; };
                     if (!inNdc(vX[i0], vY[i0], z0) || !inNdc(vX[i1], vY[i1], z1) || !inNdc(vX[i2], vY[i2], z2)) continue;
                 }
-                emit(sx(vX[i0], z0), sy(vY[i0], z0), z0, sx(vX[i1], z1), sy(vY[i1], z1), z1, sx(vX[i2], z2), sy(vY[i2], z2), z2, i0, i1, i2);
+                const a0 = sx(vX[i0], z0), a1 = sx(vX[i1], z1), a2 = sx(vX[i2], z2);
+                const b0 = sy(vY[i0], z0), b1 = sy(vY[i1], z1), b2 = sy(vY[i2], z2);
+                // View culling: a triangle wholly beyond one screen edge covers no pixel centre.
+                if ((a0 < 0 && a1 < 0 && a2 < 0) || (a0 > width && a1 > width && a2 > width) ||
+                    (b0 < 0 && b1 < 0 && b2 < 0) || (b0 > height && b1 > height && b2 > height)) continue;
+                emit(a0, b0, z0, a1, b1, z1, a2, b2, z2, i0, i1, i2);
                 continue;
             }
             if (mode !== 'clip') continue; // legacy: a vertex is behind the near plane -> drop

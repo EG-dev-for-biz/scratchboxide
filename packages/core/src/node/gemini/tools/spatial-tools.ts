@@ -54,6 +54,7 @@ import {
 } from '../../spatial/SpatialPoseEstimatorService';
 import { VisualFeatureMatcherService } from '../../spatial/VisualFeatureMatcherService';
 import { HeadlessMeshSilhouetteRenderer } from '../../spatial/HeadlessMeshSilhouetteRenderer';
+import { HeadlessEdgeRenderPool } from '../../spatial/HeadlessEdgeRenderPool';
 import { LocationObjectLightingService } from '../../../browser/generative-canvas/services/atmosphere';
 import {
     LensDistortionEffect,
@@ -3808,6 +3809,9 @@ function boundedNumber(tool: string, arg: string, value: unknown, fallback: numb
     return value;
 }
 
+/** Models at least this large render on worker threads during edge alignment (smaller ones: messaging costs more). */
+const EDGE_POOL_MIN_TRIANGLES = 100_000;
+
 /**
  * Closed-loop edge alignment of a photograph against a given model (see EDGE_ALIGNMENT_DECLARATION). The search runs
  * cooperatively: it yields to the event loop between renders, stops with an AbortError when the chat stops the call,
@@ -3846,8 +3850,21 @@ async function alignModelEdgesToPhoto(tool: string, args: Record<string, unknown
     if (!(initialField.meanMagnitude > 0)) throw new MissingInputError(tool, 'initialPose', `the model in ${glbPath} is not in view from initialPose`);
     const initial = evaluateEdgeOverlap(queryField, initialField);
     const started = Date.now();
+    // Large models render split across worker threads (identical fields, both trial steps of a parameter at once).
+    // If the workers cannot start, the renders run on this thread and the result says so.
+    const triangles = mesh.indices.length / 3;
+    let pool: HeadlessEdgeRenderPool | undefined;
+    let renderThreadsNote: string | undefined;
+    if (triangles >= EDGE_POOL_MIN_TRIANGLES && HeadlessEdgeRenderPool.defaultThreads() > 1) {
+        try {
+            pool = await HeadlessEdgeRenderPool.create(mesh, width, height);
+        } catch (err) {
+            renderThreadsNote = `render workers did not start (${err instanceof Error ? err.message : String(err)}); rendered on one thread`;
+        }
+    }
     // Step sizes scale with the camera's distance to its target, so the search means the same at any model scale.
     const opt = await SubPixelEdgeAlignmentOptimizer.optimizePoseAsync(initialPose, queryField, render, {
+        renderBatch: pool ? poses => pool!.render(poses) : undefined,
         maxIterations,
         targetOverlapScore: target,
         subpixelTolerancePx: Number.POSITIVE_INFINITY,
@@ -3857,7 +3874,7 @@ async function alignModelEdgesToPhoto(tool: string, args: Record<string, unknown
         initialField,
         onRender: (renders, best) => ctx?.reportProgress?.(`Edge alignment: ${renders} renders, best correlation ${best.toFixed(1)}%`,
             Math.min(0.99, (Date.now() - started) / timeBudgetMs))
-    });
+    }).finally(() => pool?.close());
     const finalEval = evaluateEdgeOverlap(queryField, opt.finalField);
     const distance = measureMeanEdgeDistance(queryField, opt.finalField);
     const meanEdgeDistancePx = distance.meanPx * photo.scale;
@@ -3882,6 +3899,8 @@ async function alignModelEdgesToPhoto(tool: string, args: Record<string, unknown
             meanEdgeDistancePx,
             modelEdgePixels: distance.modelEdgePixels,
             modelTriangles: mesh.indices.length / 3,
+            renderThreads: pool?.size ?? 1,
+            ...(renderThreadsNote ? { renderThreadsNote } : {}),
             edgeDefinition: 'model edges: at least 25% of the render\'s largest gradient; photo edges: top 10% of the photo\'s gradient magnitudes'
         } as unknown as ToolResultPayload,
         summaryResult: `Aligned ${glbPath} to ${imagePath}: edge correlation ${initial.overlapScorePercent.toFixed(1)}% -> ${finalEval.overlapScorePercent.toFixed(1)}% in ${opt.iterations} pass(es), ${opt.renders} render(s) (target ${target}% ${reached ? 'reached' : 'not reached'}; stopped: ${opt.stoppedBy}). The model's edges lie ${Number.isFinite(meanEdgeDistancePx) ? meanEdgeDistancePx.toFixed(1) : 'n/a'} px on average from the nearest strong photo edge. Final camera: position [${[p.x, p.y, p.z].map(v => v.toFixed(2)).join(', ')}], target [${[p.targetX, p.targetY, p.targetZ].map(v => v.toFixed(2)).join(', ')}], fov ${p.fov.toFixed(1)} deg.`
