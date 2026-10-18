@@ -28,10 +28,13 @@ dist-electron/
 models/
 # Source code, not model files.
 !packages/core/src/node/models/
-# The MediaPipe pose model the pose tools load (Apache-2.0, 9.4 MB, from storage.googleapis.com/mediapipe-models).
+# The MediaPipe pose model the pose tools load (Apache-2.0, 9.4 MB, from storage.googleapis.com/mediapipe-models),
+# and the MediaPipe Interactive Segmenter (MagicTouch) model vfx_segment_subject loads for object masks
+# (Apache-2.0, 6.2 MB, interactive_segmenter/magic_touch/float32/1/magic_touch.tflite, sha256 e24338a7...cd25).
 !assets/models/
 assets/models/*
 !assets/models/pose_landmarker_full.task
+!assets/models/magic_touch.tflite
 build/
 *.ckpt
 *.safetensors
