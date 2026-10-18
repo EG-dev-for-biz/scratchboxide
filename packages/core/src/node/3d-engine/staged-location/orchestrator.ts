@@ -124,7 +124,7 @@ import { summarizeStagedBuild, type StagedSummaryInput } from './staged-summary'
 import { palettesFromSurvey, photoTierEnabled, textureLayer, TEXTURE_PASS_VERSION, type TextureLayerOutcome } from './texture-pass';
 import { prepareTextureSources, type TextureSourcesInput } from './texture-sources';
 import { TextureWorkerPool, textureWorkersEnabled } from './texture-worker-pool';
-import { eventLoopStats } from './event-loop-stats';
+import { eventLoopStats, runBlockTracer } from './event-loop-stats';
 import type { EnhanceModelClient } from './texture-enhance';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { TEXTURE_LADDER_RUNGS, type TexturePassDegradation, type TexturePassRecord, type TextureLayerBundle } from '../../../common/spatial/texture-pass-contracts';
@@ -834,10 +834,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     // call whose first token is late is sent once more (VisionModelChainOptions.hedgeAfterMs)
     const chainExtras = (id: StageId) => ({ hedgeAfterMs: VISION_HEDGE_AFTER_MS, ...(bypass(id) ? {} : { replyCache: stagedReplyCache(cache) }) });
     const runId = deps.newRunId?.() ?? crypto.randomBytes(4).toString('hex');
+    // main-thread blocks over the whole run, kept as a run note (event-loop-stats.ts)
+    let runningStages: () => string[] = () => [];
+    const blockTracer = runBlockTracer(() => runningStages());
     const active = ctx.activeArtifact?.type === '3d-scene' ? ctx.activeArtifact : undefined;
     const intoActive = active && (request.stageIntoActiveScene || (recordedArtifactId && active.id === recordedArtifactId)) ? active : undefined;
     const artifactId = stagedArtifactId(runId, intoActive?.id);
     const run = new StagedRun(runId, request, ctx, now, artifactId, intoActive);
+    runningStages = () => STAGE_IDS.filter(id => run.summary(id).status === 'running');
     const runner = new Runner(run, ctx, now);
     const base = `${slug(request.query)}${request.isolate ? '_iso' : ''}`;
     const persist = () => {
@@ -1611,6 +1615,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const layers: TextureLayerBundle[] = outcomes.map(o => ({ ...o.out.bundle, maps: { albedo: `${o.url}#albedo` }, confidence: `${o.url}#confidence` }));
                     loopDelay.disable();
                     const timingsMs: Record<string, number> = { total: now() - started, tileLoad: tileLoadMs, ...eventLoopStats(loopDelay), ...(texturePool ? { textureWorkers: texturePool.size } : {}) };
+                    cache.writeRunNote(runId, 'texture_timings', timingsMs);
                     io.progress(`textures: main-thread event-loop delay over the stage: p99 ${timingsMs.eventLoopP99Ms} ms, max ${timingsMs.eventLoopMaxMs} ms (${texturePool ? `${texturePool.size} texture worker threads` : 'texture work on the main thread'})`);
                     for (const o of outcomes) for (const [kk, v] of Object.entries(o.out.timingsMs)) timingsMs[`${o.layer.layer}.${kk}`] = v;
                     const record: TexturePassRecord = { passVersion: TEXTURE_PASS_VERSION, layers, degradations: passDegradations, timingsMs };
@@ -2374,6 +2379,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         persist();
 
         // ---------------- finish ----------------
+        cache.writeRunNote(runId, 'main_thread', blockTracer.stop());
         return finishRun(run, {
             request, place: placeValue, extraction, structure, sizedTo: t.sizedTo, remeshed, groundFile: remesh.value?.groundFile, groundLayerId: remesh.value?.groundLayerId ?? run.state.layers.find(l => l.layer === 'l1')?.objectId,
             trees: treesOut.trees, putBack: treesOut.putBack, rebuild, strip, ...(textureValue ? { textures: textureValue } : {}), now, persist
@@ -2393,6 +2399,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         }
         persist();
         run.close();
+        try { cache.writeRunNote(runId, 'main_thread', blockTracer.stop()); } catch { /* the note is diagnostics only */ }
         throw err;
     }
 }
