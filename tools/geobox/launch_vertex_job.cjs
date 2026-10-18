@@ -47,8 +47,9 @@ async function main() {
     console.log('🌍 [GeoBox Cloud Launcher] Preparing Vertex AI Training Submission...');
 
     const credentials = loadCredentials();
-    if (!credentials) {
-        console.warn('⚠️ No GCP service account found in secrets.json or service-account.json. Simulating submission.');
+    if (!credentials && !isDryRun) {
+        console.error('❌ No GCP service account found in secrets.json or service-account.json. Nothing was submitted. Use --dry-run to print the job spec only.');
+        process.exit(1);
     }
 
     const projectId = credentials?.project_id || 'scoutscan';
@@ -134,8 +135,8 @@ async function main() {
     console.log('\n📄 [Job Specification Payload]:');
     console.log(JSON.stringify(customJobPayload, null, 2));
 
-    if (isDryRun || !credentials) {
-        console.log('\n✅ [Dry Run] Payload verified. Job ready for submission with:');
+    if (isDryRun) {
+        console.log('\n[Dry Run] Job spec printed; nothing was submitted. Submit with:');
         console.log(`   node tools/geobox/launch_vertex_job.cjs`);
         return;
     }
