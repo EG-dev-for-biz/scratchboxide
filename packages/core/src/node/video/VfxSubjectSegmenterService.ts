@@ -201,7 +201,7 @@ export class VfxSubjectSegmenterService {
     // -------------------------------------------------------------------------
 
     /** Dimensions (throws when there are none) and length (the stream's duration, else the container's, else undefined). */
-    private async probeVideo(
+    async probeVideo(
         videoPath: string
     ): Promise<{ width: number; height: number; duration?: number }> {
         let stdout: string;
@@ -230,7 +230,7 @@ export class VfxSubjectSegmenterService {
         return { width, height, duration: Number.isFinite(duration) && duration > 0 ? duration : undefined };
     }
 
-    private extractFrames(
+    extractFrames(
         videoPath: string,
         outputPattern: string,
         fps: number

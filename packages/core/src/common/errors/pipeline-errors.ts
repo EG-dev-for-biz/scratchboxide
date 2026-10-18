@@ -95,3 +95,16 @@ export class InvalidInputError extends PipelineError {
         this.name = 'InvalidInputError';
     }
 }
+
+/**
+ * The object a segmentation was asked for is not in the image (the vision model said so, or none of the prompts gave a
+ * mask). Nothing else is cut out in its place.
+ */
+export class SegmentTargetNotFoundError extends PipelineError {
+    readonly code = 'segment_target_not_found';
+
+    constructor(readonly tool: string, readonly target: string, readonly reason: string, readonly frame?: number) {
+        super(`${tool}: ${target} was not found${frame !== undefined ? ` in frame ${frame}` : ''}: ${reason}`);
+        this.name = 'SegmentTargetNotFoundError';
+    }
+}
