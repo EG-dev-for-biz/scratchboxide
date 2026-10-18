@@ -88,7 +88,7 @@ export class TaskCapabilityResolver {
 
         // VFX & Video
         if (
-            /vfx|visual\s*effects|matchmove|camera\s*solve|keyframe\s*calibrat|camera\s*track|ephemeris|solar\s*position|holdout|occlusion\s*matte|nle|video\s*timeline|clip\s*split|ripple\s*delete|audio\s*track|b-roll/i.test(lower)
+            /vfx|visual\s*effects|matchmove|camera\s*solve|keyframe\s*calibrat|camera\s*track|ephemeris|solar\s*position|holdout|occlusion\s*matte|segment(?:ation)?\s*mask|\bsegment\b|rotoscop|cut\s*out|\bmatte\b|nle|video\s*timeline|clip\s*split|ripple\s*delete|audio\s*track|b-roll/i.test(lower)
         ) {
             return 'vfx';
         }
@@ -258,6 +258,8 @@ export class TaskCapabilityResolver {
             const isMatchmoveOrSolar = /matchmove|camera\s*solve|sub-frame|brown-conrady|lens\s*distortion|ephemeris|solar\s*position|sun\s*altitude|sun\s*heading|noaa/i.test(lower);
             const isNleEditing = /timeline|nle|clip\s*split|ripple\s*delete|multi-track|audio\s*track|trim\s*clip|playhead/i.test(lower);
             const isHoldoutMatte = /holdout|occlusion|matte|destination-out|actor\s*occlusion/i.test(lower);
+            // Masking an object out of an image or video (verbs of the operation; what is masked is never matched).
+            const isObjectSegmentation = /\bsegment|rotoscop|cut\s*out|\bmask\b|\bmatte\b|isolate/i.test(lower) && !/destination-out|holdout\s*composit/i.test(lower);
 
             if (isNeuralVideoRestyle) {
                 // Neural video restyling cannot be done by algorithmic NLE or matchmoving
@@ -307,6 +309,20 @@ export class TaskCapabilityResolver {
                     targetTool: 'universal_3d_structure_animate',
                     targetService: 'Universal3DStructureFoundation',
                     details: 'Invoke universal_3d_structure_animate with mountToVideoTimeline: true to compile keyframe diamonds and mount directly onto video-timeline.'
+                };
+            } else if (isObjectSegmentation && !isNleEditing) {
+                canSolveNatively = true;
+                primaryNativeEngine = 'vfx-matchmove-nle';
+                nativeCapabilities.push('vfx_segment_subject: open-vocabulary object masks (any object, by description, points or box)');
+                nativeCapabilities.push('MediaPipe Interactive Segmenter + OpenCV GrabCut edge refinement, soft mattes');
+                nativeCapabilities.push('Video mask tracking with vision-model re-checks (not person-only)');
+                rationale = 'vfx_segment_subject cuts out any object the user describes (the chat\'s vision model turns the description into box and point prompts for the MediaPipe Interactive Segmenter), in images or video, with GrabCut edges, soft mattes and per-frame provenance; the person selfie segmenter remains as an option.';
+                suggestedNativeAction = {
+                    primitiveType: 'video-timeline',
+                    serviceOrTool: 'vfx_segment_subject',
+                    targetTool: 'vfx_segment_subject',
+                    targetService: 'ObjectSegmenterService',
+                    details: 'Invoke vfx_segment_subject with imagePath or videoPath, outputDir, and target (the user\'s description) and/or positivePoints / negativePoints / box.'
                 };
             } else if (isNleEditing || isHoldoutMatte) {
                 canSolveNatively = true;
