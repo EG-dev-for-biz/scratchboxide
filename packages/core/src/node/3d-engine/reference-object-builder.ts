@@ -272,12 +272,22 @@ function referencePart(reference: ReferenceImage): Part {
  * so each call sends a file reference instead of the image. An upload that fails leaves the image inline; returns
  * the uploaded file's name for deletion.
  */
-async function prepareReferenceForReading(client: any, reference: ReferenceImage, signal?: AbortSignal): Promise<{ reference: ReferenceImage; uploadedName?: string }> {
+/** The parts of a Gen AI client the reference upload uses (the Gemini API Files service). */
+interface FilesCapableClient {
+    vertexai?: boolean;
+    files?: {
+        upload?: (args: { file: Blob; config?: Record<string, unknown> }) => Promise<{ name?: string; uri?: string; mimeType?: string }>;
+        delete?: (args: { name: string }) => Promise<unknown>;
+    };
+}
+
+async function prepareReferenceForReading(client: FilesCapableClient, reference: ReferenceImage, signal?: AbortSignal): Promise<{ reference: ReferenceImage; uploadedName?: string }> {
     const small = await downscaleForVision(reference.data, reference.mimeType).catch(() => undefined);
     const ready: ReferenceImage = small?.downscaled ? { data: small.data, mimeType: small.mimeType } : reference;
-    if (client?.vertexai !== false || typeof client?.files?.upload !== 'function') return { reference: ready };
+    const upload = client?.files?.upload;
+    if (client?.vertexai !== false || typeof upload !== 'function') return { reference: ready };
     try {
-        const file = await client.files.upload({
+        const file = await upload.call(client.files, {
             file: new Blob([new Uint8Array(ready.data)], { type: ready.mimeType }),
             config: { mimeType: ready.mimeType, ...(signal ? { abortSignal: signal } : {}) }
         });
@@ -1116,7 +1126,7 @@ export async function buildObjectFromReference(
     let generated: { image: ReferenceImage; answered: string } | undefined = await generateReferenceImage(client, input.request, deps, input.signal);
     let uploadedName: string | undefined;
     try {
-        const prepared = await prepareReferenceForReading(client, generated.image, input.signal);
+        const prepared = await prepareReferenceForReading(client as FilesCapableClient, generated.image, input.signal);
         uploadedName = prepared.uploadedName;
         const reference = prepared.reference;
         const imageModel: ModelUse = { requested: REFERENCE_IMAGE_MODEL, answered: generated.answered };
@@ -1207,6 +1217,7 @@ export async function buildObjectFromReference(
         // The reference lived in memory (and, on the Gemini API, as an uploaded file for this build's calls); drop
         // both so nothing outlives the call.
         generated = undefined;
-        if (uploadedName) await Promise.resolve((client as any).files?.delete?.({ name: uploadedName })).catch(() => undefined);
+        const files = (client as FilesCapableClient).files;
+        if (uploadedName && files?.delete) await files.delete({ name: uploadedName }).catch(() => undefined);
     }
 }
