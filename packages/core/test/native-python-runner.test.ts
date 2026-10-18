@@ -90,7 +90,7 @@ print("GLB export complete.")
     console.log(`[Test] Verified valid glTF 2.0 binary (${glbBuffer.length} bytes, version: ${version})`);
 });
 
-test('5. Synchronously executes Python script via runScriptSync and returns valid GLB', () => {
+test('5. Executes a Python script source via runScript and returns valid GLB', async () => {
     const runner = NativePythonRunnerService.getInstance();
     const script = `
 import scratchbox as sb
@@ -100,7 +100,7 @@ scene = sb.geometry.Mesh("PedestalScene")
 scene.append(pedestal)
 sb.io.write_glb(OUTPUT_GLB_PATH, scene)
 `;
-    const result = runner.runScriptSync(script);
+    const result = await runner.runScript(script);
     expect(result.success).toBe(true);
     expect(result.glbPath).toBeDefined();
     expect(fs.existsSync(result.glbPath!)).toBe(true);

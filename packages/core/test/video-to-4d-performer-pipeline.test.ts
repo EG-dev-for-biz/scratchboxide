@@ -121,7 +121,7 @@ describe('VideoTo4DPerformerPipelineService', () => {
 
         expect(canonical.heroPoseJoints).toBeDefined();
 
-        const textured = pipeline.backprojectVideoTextures(
+        const textured = await pipeline.backprojectVideoTextures(
             canonical.gaussians,
             dummyHeroPath,
             morphology.colorSamples,
@@ -143,12 +143,12 @@ describe('VideoTo4DPerformerPipelineService', () => {
         }
     });
 
-    it('4. should enforce foot-contact ground clamping across motion frames', () => {
+    it('4. should enforce foot-contact ground clamping across motion frames', async () => {
         const canonicalJoints = SBHUMAN_22_JOINTS.map(j => j.restOffset);
         const parents = SBHUMAN_22_JOINTS.map(j => j.parent);
         const heroJoints = pipeline.computeHeroRestingPoseJoints(canonicalJoints);
 
-        const motion = pipeline.recoverPerformerMotion(canonicalJoints, parents, 25, 2.0, 'test_motion', heroJoints);
+        const motion = await pipeline.recoverPerformerMotion(canonicalJoints, parents, 25, 2.0, 'test_motion', heroJoints);
 
         expect(motion.num_frames).toBe(50);
         expect(motion.num_joints).toBe(22);
@@ -472,7 +472,7 @@ describe('VideoTo4DPerformerPipelineService', () => {
             skinToneRgb: [0.7, 0.6, 0.5] as [number, number, number]
         };
 
-        const gatedBackprojection = pipeline.backprojectVideoTextures(
+        const gatedBackprojection = await pipeline.backprojectVideoTextures(
             canonicalHumanoid.gaussians.slice(0, 100),
             '',
             palette,
@@ -544,7 +544,7 @@ describe('VideoTo4DPerformerPipelineService', () => {
                 const kintreeParents = SBHUMAN_22_JOINTS.map(j => j.parent);
                 const heroPoseJoints = pipeline.computeHeroRestingPoseJoints(canonicalJoints);
 
-                const motion = pipeline.recoverPerformerMotion(
+                const motion = await pipeline.recoverPerformerMotion(
                     canonicalJoints,
                     kintreeParents,
                     15,
