@@ -784,12 +784,8 @@
                 </div>
 
                 <div class="control-row">
-                    <span class="control-label">Depth Estimation AI Engine</span>
-                    <select id="select-depth-engine" onchange="updateDepthEngine(this.value)" style="background: rgba(15, 23, 42, 0.9); border: 1px solid rgba(255, 255, 255, 0.15); color: #38bdf8; padding: 3px 8px; border-radius: 6px; font-size: 11px;">
-                        <option value="da3_metric">Depth Anything V3 (Metric Ray Spine)</option>
-                        <option value="da2_relative">Depth Anything V2 (Affinity Falloff)</option>
-                        <option value="marigold_diff">Marigold Diffusion (Micro-Relief)</option>
-                    </select>
+                    <span class="control-label">Depth Model</span>
+                    <span class="control-val" id="depth-model-label" title="Runs locally on the Scratchbox server">Depth Anything V2 Small (local)</span>
                 </div>
 
                 <div class="control-row">
@@ -805,10 +801,10 @@
                 <input type="range" id="slider-tau" min="0.02" max="0.25" step="0.005" value="0.080" oninput="updateTau(this.value)">
 
                 <div class="control-row">
-                    <span class="control-label">Depth Range (Near – Far)</span>
-                    <span class="control-val" id="val-depth">2.5m – 75.0m</span>
+                    <span class="control-label">Scene Median Distance (m, optional)</span>
+                    <span class="control-val" id="val-depth">relative units</span>
                 </div>
-                <input type="range" id="slider-far" min="20" max="150" step="5" value="75" oninput="updateDepthFar(this.value)">
+                <input type="number" id="input-median-depth" min="0.1" step="0.1" placeholder="unknown: depth stays relative" oninput="updateMedianDepth(this.value)" style="width: 100%; background: rgba(15, 23, 42, 0.9); border: 1px solid rgba(255, 255, 255, 0.15); color: #e2e8f0; padding: 4px 8px; border-radius: 6px; font-size: 11px;">
 
                 <div class="control-row">
                     <span class="control-label">Lens Aperture (Bokeh DoF)</span>
@@ -1005,8 +1001,10 @@
         let current2DView = 'rgb'; // 'rgb', 'depth', 'normals'
         let currentStride = 1;
         let currentEdgeTau = 0.080;
-        let currentNear = 2.5;
-        let currentFar = 75.0;
+        // Scene median distance in metres when the user knows it; null keeps the model's relative depth (median 1).
+        let currentMedianDepthM = null;
+        // Per-image model depth: { key, W, H, depths (ray depth per pixel), units, model }.
+        const modelDepthCache = new Map();
         let currentFov = 65.0;
         let currentAperture = 2.8;
         let currentFilmStock = 0;
@@ -1362,6 +1360,92 @@
         // 3. Client-Side DepthBox Depth-Ray & Surface Normal Synthesis
         // ====================================================================
 
+        function depthCacheKey(W, H) {
+            return `${W}x${H}@${currentFov}|${currentMedianDepthM ?? 'relative'}`;
+        }
+
+        /** The working size synthesizeSplatsFrom2DImage uses for an image (640 wide or 480 tall at most, even). */
+        function workingSize(img) {
+            const natW = img.naturalWidth || img.videoWidth || 640;
+            const natH = img.naturalHeight || img.videoHeight || 480;
+            const aspect = natW / Math.max(1, natH);
+            let W = 640;
+            let H = Math.round(W / aspect);
+            if (H > 480) { H = 480; W = Math.round(H * aspect); }
+            return { W: (W >> 1) << 1, H: (H >> 1) << 1 };
+        }
+
+        /**
+         * Measures the image's depth with the server's depth model (POST /api/3d-engine/splat-studio/depth) and caches
+         * it. Throws with the server's error when the model cannot run: no depth is derived from the colours.
+         */
+        async function ensureModelDepth(img) {
+            if (!img.complete || !img.naturalWidth) {
+                await new Promise((resolve, reject) => { img.addEventListener('load', resolve, { once: true }); img.addEventListener('error', () => reject(new Error(`the image ${img.src} did not load`)), { once: true }); });
+            }
+            const { W, H } = workingSize(img);
+            const key = depthCacheKey(W, H);
+            const cached = modelDepthCache.get(img);
+            if (cached && cached.key === key) return cached;
+            const c = document.createElement('canvas');
+            c.width = W; c.height = H;
+            const cctx = c.getContext('2d');
+            cctx.drawImage(img, 0, 0, W, H);
+            const rgba = cctx.getImageData(0, 0, W, H).data;
+            let bin = '';
+            for (let i = 0; i < rgba.length; i += 0x8000) bin += String.fromCharCode.apply(null, rgba.subarray(i, i + 0x8000));
+            const res = await fetch('/api/3d-engine/splat-studio/depth', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ rgbPixels: btoa(bin), width: W, height: H, channels: 4, fovDegrees: currentFov, medianDepthMeters: currentMedianDepthM ?? undefined })
+            });
+            const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+            if (!res.ok || !body.success) throw new Error(body.error || `depth request failed (HTTP ${res.status})`);
+            const raw = Uint8Array.from(atob(body.rayDepths), ch => ch.charCodeAt(0));
+            const depths = new Float32Array(raw.buffer);
+            const entry = { key, W, H, depths, units: body.depthUnits, model: body.depthModel, farPlanePixels: body.farPlanePixels };
+            modelDepthCache.set(img, entry);
+            const label = document.getElementById('depth-model-label');
+            if (label) label.textContent = `${body.depthModel} · ${body.depthUnits}`;
+            document.getElementById('hud-optics').textContent = `DEPTH: ${body.depthModel} · ${body.depthUnits === 'metres' ? 'metres' : 'relative units (median 1)'}`;
+            return entry;
+        }
+
+        /** Model depth, then splats. Shows the failure instead of drawing anything when the depth model cannot run. */
+        async function synthesizeWithModel(img, targetStride = 1) {
+            try {
+                await ensureModelDepth(img);
+            } catch (err) {
+                showDepthFailure(err);
+                throw err;
+            }
+            return synthesizeSplatsFrom2DImage(img, targetStride);
+        }
+
+        /**
+         * Group and video fusion place each view along a camera path in metres, so the views' depth must be in metres
+         * too: it needs the scene median distance. Measures every view's depth first; a failure is shown.
+         */
+        async function measureGroupDepth(imgs) {
+            try {
+                if (currentMedianDepthM == null) {
+                    throw new Error('fusing several views places them along a camera path in metres; enter the scene median distance (m) so their depth is in metres too');
+                }
+                for (const img of imgs) await ensureModelDepth(img);
+            } catch (err) {
+                showDepthFailure(err);
+                throw err;
+            }
+        }
+
+        function showDepthFailure(err) {
+            hideSpinner();
+            const msg = `DEPTH MODEL FAILED // ${err && err.message ? err.message : err}`;
+            const status = document.getElementById('hud-status');
+            if (status) { status.textContent = msg; status.style.color = '#fca5a5'; }
+            console.error(msg);
+        }
+
         function synthesizeSplatsFrom2DImage(img, targetStride = 1) {
             // High-Resolution 640x480 photographic canvas synthesis (preserving aspect ratio)
             const natW = img.naturalWidth || img.videoWidth || 640;
@@ -1392,36 +1476,13 @@
             const cx = W * 0.5;
             const cy = H * 0.5;
 
-            // Generate metric depths & ray vectors
-            metricDepths = new Float32Array(W * H);
-            surfaceNormals = new Float32Array(W * H * 3);
-
-            for (let y = 0; y < H; ++y) {
-                const ny = y / H;
-                for (let x = 0; x < W; ++x) {
-                    const idx = y * W + x;
-                    const cIdx = idx * 4;
-                    const r = imgData[cIdx + 0] / 255.0;
-                    const g = imgData[cIdx + 1] / 255.0;
-                    const b = imgData[cIdx + 2] / 255.0;
-                    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-
-                    let d;
-                    if (ny >= 0.70) {
-                        const t = (ny - 0.70) / 0.30;
-                        d = currentNear + (1.0 - t) * (currentNear * 3.5);
-                    } else if (ny >= 0.35) {
-                        const t = (0.70 - ny) / 0.35;
-                        d = currentNear * 3.5 + t * (currentFar * 0.45);
-                        if (lum < 0.25) d += 1.2;
-                    } else {
-                        const isSky = (b > r + 0.12 && b > 0.45) || lum > 0.82;
-                        if (isSky) d = currentFar * 1.5;
-                        else d = currentFar * 0.45 + ((0.35 - ny) / 0.35) * (currentFar * 0.55);
-                    }
-                    metricDepths[idx] = Math.max(0.2, d);
-                }
+            // Depth from the depth model (Depth Anything V2 Small on the server), fetched by ensureModelDepth.
+            const cached = modelDepthCache.get(img);
+            if (!cached || cached.key !== depthCacheKey(W, H)) {
+                throw new Error('the depth for this image has not been measured yet (call ensureModelDepth first)');
             }
+            metricDepths = cached.depths;
+            surfaceNormals = new Float32Array(W * H * 3);
 
             const step = Math.max(1, targetStride);
             const positions = [];
@@ -1624,6 +1685,10 @@
             }
 
             const imgData = ctx.createImageData(W, H);
+            // Depth preview range: the 2nd-98th percentile of the measured log depth.
+            const sortedLog = Array.from(metricDepths, v => Math.log(v)).sort((a, b) => a - b);
+            const depthPreviewLo = sortedLog[Math.floor(sortedLog.length * 0.02)];
+            const depthPreviewHi = sortedLog[Math.floor(sortedLog.length * 0.98)];
             const scaleX = currentWidth / W;
             const scaleY = currentHeight / H;
 
@@ -1641,7 +1706,7 @@
                         imgData.data[dIdx + 3] = 255;
                     } else if (current2DView === 'depth') {
                         const d = metricDepths[sIdx];
-                        const normD = Math.min(1.0, Math.max(0.0, (d - currentNear) / (currentFar - currentNear)));
+                        const normD = Math.min(1.0, Math.max(0.0, (Math.log(d) - depthPreviewLo) / Math.max(1e-6, depthPreviewHi - depthPreviewLo)));
                         // Inferno heatmap: cyan to magenta to yellow
                         imgData.data[dIdx + 0] = Math.round(normD * 255);
                         imgData.data[dIdx + 1] = Math.round(Math.sin(normD * Math.PI) * 220);
@@ -1923,31 +1988,6 @@
         // --------------------------------------------------------------------
         // Depth AI Engine Selection
         // --------------------------------------------------------------------
-        let activeDepthEngine = 'da3_metric';
-        function updateDepthEngine(engine) {
-            activeDepthEngine = engine;
-            if (engine === 'da3_metric') {
-                document.getElementById('val-tau').textContent = '0.080';
-                document.getElementById('slider-tau').value = 0.080;
-                edgeSeveranceTau = 0.080;
-                document.getElementById('hud-optics').textContent = 'ENGINE: DA3 METRIC RAY SPINE · 35mm f/2.8';
-            } else if (engine === 'da2_relative') {
-                document.getElementById('val-tau').textContent = '0.060';
-                document.getElementById('slider-tau').value = 0.060;
-                edgeSeveranceTau = 0.060;
-                document.getElementById('hud-optics').textContent = 'ENGINE: DA2 RELATIVE AFFINITY · 35mm f/2.8';
-            } else if (engine === 'marigold_diff') {
-                document.getElementById('val-tau').textContent = '0.120';
-                document.getElementById('slider-tau').value = 0.120;
-                edgeSeveranceTau = 0.120;
-                document.getElementById('hud-optics').textContent = 'ENGINE: MARIGOLD DIFFUSION · 35mm f/2.8';
-            }
-            if (sourceImg && currentMode === 'single') {
-                const splatData = synthesizeSplatsFrom2DImage(sourceImg, currentStride);
-                createInstancedSplatMesh(splatData);
-            }
-        }
-
         function toggleDualLayerInpaint() {
             enableDualLayerInpaint = !enableDualLayerInpaint;
             const btn = document.getElementById('btn-inpaint-toggle');
@@ -1960,8 +2000,7 @@
                 : 'STATUS // SINGLE-LAYER 3DGS';
 
             if (sourceImg) {
-                const splatData = synthesizeSplatsFrom2DImage(sourceImg, currentStride);
-                createInstancedSplatMesh(splatData);
+                synthesizeWithModel(sourceImg, currentStride).then(createInstancedSplatMesh, () => {});
             }
         }
 
@@ -2356,9 +2395,7 @@
                 img.onload = () => {
                     sourceImg = img;
                     document.querySelectorAll('.preset-card').forEach(c => c.classList.remove('active'));
-                    const splatData = synthesizeSplatsFrom2DImage(img, currentStride);
-                    createInstancedSplatMesh(splatData);
-                    hideSpinner();
+                    showSplatResult(img);
                 };
                 img.src = e.target.result;
             };
@@ -2377,62 +2414,38 @@
             const vidPanel = document.getElementById('video-group-panel');
             if (vidPanel) vidPanel.style.display = 'none';
 
-            showSpinner('SYNTHESIZING 3DGS SCENE...', title);
+            showSpinner('MEASURING DEPTH (Depth Anything V2 Small)...', title);
             currentFov = fov;
-            currentNear = near;
-            currentFar = far;
-            document.getElementById('slider-far').value = far;
-            document.getElementById('val-depth').textContent = `${near.toFixed(1)}m – ${far.toFixed(1)}m`;
 
             const img = new Image();
             img.crossOrigin = 'anonymous';
-            img.src = url;
             sourceImg = img;
-
-            // Check if direct .splat or pre-baked 250k-300k photographic splat model exists
-            const isDirectSplat = url.endsWith('.splat');
-            const splatKey = isDirectSplat ? '' :
-                             url.includes('manhattan') ? 'manhattan_skyline' :
-                             url.includes('shibuya') ? 'shibuya_cyber' :
-                             url.includes('alpine') ? 'alpine_glacier' :
-                             url.includes('dubai') ? 'dubai_marina' : '';
-
-            if (isDirectSplat || splatKey) {
-                const targetSplatPath = isDirectSplat ? url : `models/${splatKey}.splat`;
-                fetch(targetSplatPath)
-                    .then(r => {
-                        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-                        return r.arrayBuffer();
-                    })
-                    .then(buf => {
-                        const splatData = parseSplatArrayBuffer(buf);
-                        createInstancedSplatMesh(splatData);
-                        hideSpinner();
-                        document.getElementById('hud-status').textContent = `STATUS // 3DGS (${splatData.count.toLocaleString()} SPLATS)`;
-                        document.getElementById('stat-splat-count').textContent = splatData.count.toLocaleString();
-                        document.getElementById('stat-vram').textContent = `${(splatData.count * 32 / (1024 * 1024)).toFixed(1)} MB`;
-                    })
-                    .catch(() => {
-                        img.onload = () => {
-                            const splatData = synthesizeSplatsFrom2DImage(img, currentStride);
-                            createInstancedSplatMesh(splatData);
-                            hideSpinner();
-                            document.getElementById('hud-status').textContent = `STATUS // 3DGS (${splatData.count.toLocaleString()} SPLATS)`;
-                            document.getElementById('stat-splat-count').textContent = splatData.count.toLocaleString();
-                            document.getElementById('stat-vram').textContent = `${(splatData.count * 32 / (1024 * 1024)).toFixed(1)} MB`;
-                        };
-                    });
+            if (url.endsWith('.splat')) {
+                fetch(url)
+                    .then(r => { if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`); return r.arrayBuffer(); })
+                    .then(buf => { const splatData = parseSplatArrayBuffer(buf); createInstancedSplatMesh(splatData); reportSplatCount(splatData); })
+                    .catch(showDepthFailure);
                 return;
             }
+            img.src = url;
+            showSplatResult(img);
+        }
 
-            img.onload = () => {
-                const splatData = synthesizeSplatsFrom2DImage(img, currentStride);
+        /** Depth from the model, splats from that depth, and the counts; a failure is shown, nothing is drawn. */
+        function showSplatResult(img) {
+            synthesizeWithModel(img, currentStride).then(splatData => {
                 createInstancedSplatMesh(splatData);
-                hideSpinner();
-                document.getElementById('hud-status').textContent = `STATUS // 3DGS (${splatData.count.toLocaleString()} SPLATS)`;
-                document.getElementById('stat-splat-count').textContent = splatData.count.toLocaleString();
-                document.getElementById('stat-vram').textContent = `${(splatData.count * 32 / (1024 * 1024)).toFixed(1)} MB`;
-            };
+                reportSplatCount(splatData);
+            }, () => {});
+        }
+
+        function reportSplatCount(splatData) {
+            hideSpinner();
+            const status = document.getElementById('hud-status');
+            status.style.color = '';
+            status.textContent = `STATUS // 3DGS (${splatData.count.toLocaleString()} SPLATS)`;
+            document.getElementById('stat-splat-count').textContent = splatData.count.toLocaleString();
+            document.getElementById('stat-vram').textContent = `${(splatData.count * 32 / (1024 * 1024)).toFixed(1)} MB`;
         }
 
         function loadNativeMultiViewPreset() {
@@ -2652,33 +2665,12 @@
 
             showSpinner('INGESTING RELATED IMAGES GROUP...', group.title);
             currentFov = group.fov;
-            currentNear = group.near;
-            currentFar = group.far;
-            document.getElementById('slider-far').value = group.far;
-            document.getElementById('val-depth').textContent = `${group.near.toFixed(1)}m – ${group.far.toFixed(1)}m`;
 
             multiViewItems = [];
             let loaded = 0;
             const onAllThumbnailsLoaded = () => {
                 renderMultiViewList();
-                // Check if pre-baked 1M+ multi-view splat from ImageToSplatService exists
-                fetch(`models/${groupId}.splat`)
-                    .then(r => {
-                        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-                        return r.arrayBuffer();
-                    })
-                    .then(buf => {
-                        const splatData = parseSplatArrayBuffer(buf);
-                        createInstancedSplatMesh(splatData);
-                        hideSpinner();
-                        document.getElementById('hud-status').textContent = `STATUS // MULTI-VIEW 3DGS (${splatData.count.toLocaleString()} SPLATS)`;
-                        document.getElementById('stat-splat-count').textContent = splatData.count.toLocaleString();
-                        document.getElementById('stat-vram').textContent = `${(splatData.count * 32 / (1024 * 1024)).toFixed(1)} MB`;
-                    })
-                    .catch(() => {
-                        fuseMultiViewArray();
-                        hideSpinner();
-                    });
+                fuseMultiViewArray();
             };
 
             group.images.forEach((imgUrl, idx) => {
@@ -2854,7 +2846,7 @@
 
             showSpinner('SYNTHESIZING 3DGS ENVIRONMENT FROM VIDEO...', `${currentVideoKeyframes.length} Trajectory Views`);
 
-            setTimeout(() => {
+            measureGroupDepth(currentVideoKeyframes.map(kf => kf.img)).then(() => {
                 const count = currentVideoKeyframes.length;
                 let allPos = [];
                 let allScales = [];
@@ -2929,7 +2921,7 @@
                 document.getElementById('hud-status').textContent = `STATUS // VIDEO 3DGS FUSED (${(fusedData.count).toLocaleString()} SPLATS)`;
                 document.getElementById('stat-splat-count').textContent = fusedData.count.toLocaleString();
                 document.getElementById('stat-vram').textContent = `${(fusedData.count * 32 / (1024 * 1024)).toFixed(1)} MB`;
-            }, 100);
+            }, () => {});
         }
 
         function addMultiViewFile(file) {
@@ -2991,7 +2983,7 @@
 
             showSpinner('FUSING RELATED IMAGE GROUP INTO 3DGS...', `${multiViewItems.length} Perspective Cameras`);
 
-            setTimeout(() => {
+            measureGroupDepth(multiViewItems.filter(v => v && v.img).map(v => v.img)).then(() => {
                 let allPos = [];
                 let allScales = [];
                 let allCols = [];
@@ -3049,7 +3041,7 @@
                 document.getElementById('hud-status').textContent = `STATUS // IMAGE GROUP FUSED (${fusedData.count.toLocaleString()} SPLATS)`;
                 document.getElementById('stat-splat-count').textContent = fusedData.count.toLocaleString();
                 document.getElementById('stat-vram').textContent = `${(fusedData.count * 32 / (1024 * 1024)).toFixed(1)} MB`;
-            }, 100);
+            }, () => {});
         }
 
         // ====================================================================
@@ -3060,8 +3052,7 @@
             const labels = { 1: '1x (Full 320x320)', 2: '2x (160x160)', 3: '3x (106x106)', 4: '4x (80x80)' };
             document.getElementById('val-stride').textContent = labels[currentStride] || currentStride + 'x';
             if (sourceImg) {
-                const splatData = synthesizeSplatsFrom2DImage(sourceImg, currentStride);
-                createInstancedSplatMesh(splatData);
+                synthesizeWithModel(sourceImg, currentStride).then(createInstancedSplatMesh, () => {});
             }
         }
 
@@ -3069,17 +3060,16 @@
             currentEdgeTau = parseFloat(val);
             document.getElementById('val-tau').textContent = currentEdgeTau.toFixed(3);
             if (sourceImg) {
-                const splatData = synthesizeSplatsFrom2DImage(sourceImg, currentStride);
-                createInstancedSplatMesh(splatData);
+                synthesizeWithModel(sourceImg, currentStride).then(createInstancedSplatMesh, () => {});
             }
         }
 
-        function updateDepthFar(val) {
-            currentFar = parseFloat(val);
-            document.getElementById('val-depth').textContent = `${currentNear.toFixed(1)}m – ${currentFar.toFixed(1)}m`;
-            if (sourceImg) {
-                const splatData = synthesizeSplatsFrom2DImage(sourceImg, currentStride);
-                createInstancedSplatMesh(splatData);
+        function updateMedianDepth(val) {
+            const v = parseFloat(val);
+            currentMedianDepthM = Number.isFinite(v) && v > 0 ? v : null;
+            document.getElementById('val-depth').textContent = currentMedianDepthM == null ? 'relative units' : `${currentMedianDepthM.toFixed(1)} m (metres)`;
+            if (sourceImg && currentMode === 'single') {
+                synthesizeWithModel(sourceImg, currentStride).then(createInstancedSplatMesh, () => {});
             }
         }
 

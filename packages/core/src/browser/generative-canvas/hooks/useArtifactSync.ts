@@ -25,7 +25,7 @@ import {
 } from '../../../common/visual-verification-protocol';
 import { ProjectItem } from '../ProjectsModal';
 import { CanvasArtifact, ChatSession, LiveCodeSandboxData, Scene3DData } from '../canvas-types';
-import { captureActiveCanvasScreenshot } from '../chat/streaming-utils';
+import { captureActiveCanvasPixels } from '../chat/streaming-utils';
 import { PRELOADED_SHOWCASE_DEMOS } from '../demos/preloadedDemos';
 import { GeminiClient } from '../gemini-client';
 import { ChatState, ChatStore } from '../state/chatStore';
@@ -115,7 +115,7 @@ export function backgroundAuditRepair(artifact: CanvasArtifact, audit: VisualAud
  */
 export async function runBackgroundVisualCheck(
     artifact: CanvasArtifact,
-    capture: () => string | null,
+    capture: () => string | null | Promise<string | null>,
     verify: (request: VisualVerificationRequest) => Promise<VisualVerificationOutcome>,
     repairWritten: Set<string>
 ): Promise<{ outcome: VisualVerificationOutcome; repaired: CanvasArtifact | null }> {
@@ -125,7 +125,7 @@ export async function runBackgroundVisualCheck(
         targetArtifactId: artifact.id,
         timestamp: new Date().toLocaleTimeString()
     });
-    const frame = capture();
+    const frame = await capture();
     if (!frame) {
         return { outcome: unavailable('No frame of the canvas could be captured.'), repaired: null };
     }
@@ -314,7 +314,7 @@ export function useArtifactSync(deps: UseArtifactSyncDeps) {
                 const client = GeminiClient.getInstance();
                 const { outcome, repaired } = await runBackgroundVisualCheck(
                     activeArtifact,
-                    () => captureActiveCanvasScreenshot(layoutMode),
+                    () => captureActiveCanvasPixels(layoutMode),
                     request => client.verifyVisual(request),
                     repairWrittenKeysRef.current
                 );

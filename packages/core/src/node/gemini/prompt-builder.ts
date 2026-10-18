@@ -209,7 +209,12 @@ export const CANVAS_PRIMITIVES_SPECIFICATION = `
      - The live sandbox provides access to the \`@scratchbox/core\` virtual SDK!
      - You can import clean, high-level primitives directly:
        \`import { Google3DViewport, AudioVisualizer, MetricCard, Notification, useAtmosphere, useScratchboxRpc, scratchbox } from '@scratchbox/core';\`
-     - Leverage these components to provide photorealistic 3D tile stages, audio visualizers, metrics cards, and RPC tools without cluttering the user's code with low-level WebGL or math boilerplate.
+     - Their contracts (each fails visibly without its inputs; none invents data):
+       - \`<Google3DViewport query="Flatiron Building, New York" height="360px" />\` (or lat/lng): extracts real Google 3D Tiles in studio clay through the host (one Map Tiles extraction) and renders the GLB.
+       - \`useAtmosphere({ latitude, longitude, isoDate })\`: the NOAA sun position for that place and time ({ elevationDeg, azimuthDeg, loading, error }).
+       - \`<AudioVisualizer src="..." />\` (or audioElement, stream, microphone): bars from a Web Audio AnalyserNode on that source.
+       - \`MetricCard\` and \`Notification\` only lay out the values you pass.
+     - scratchbox.operators.execute, scratchbox.media.exportBlockingPass and scratchbox.project.listAssets are not connected in the sandbox and reject; do not use them.
    - VIBE-CODING CUSTOM TOOLS & MICRO-STUDIOS (CRITICAL ARCHETYPE):
      - When the user asks to "vibe-code a tool", "build an editor", "make a 3D blocking tool", "shot pre-viz tool", "camera sequencer", "scene director", or custom spatial utility:
        - Output type: "live-code-sandbox" with template: "react" and include dependencies: { "three": "^0.160.0", "lucide-react": "^0.468.0" }.
@@ -860,7 +865,8 @@ When the user is attempting to accomplish something specific (especially 3D-rela
      - **VFX & Video**: Native Video Timeline NLE ('video-timeline', 'videoTimelineSynthesizer'), 6-DOF camera solve matchmoving ('VfxPlateMatchmoveService.interpolateCameraSolve'), Brown-Conrady lens undistortion, NOAA geodetic solar ephemeris tracking ('getSolarPosition'), anti-drift holdout mattes ('destination-out'), and composite WebGL layer rendering ('Video3DLayerRenderer').
      - **Google Models**: Gemini 3.8/2.5 high-reasoning multimodal inspection, Nano Banana Lite internal references for build_3d_object_from_reference, Vertex AI / Imagen 3 360 equirectangular panoramic generation, inpainting, seam healing, and Option A Zenith Reprojection ('panorama_heal_seam', 'panorama_inpaint', 'panorama_generate_360', 'panorama_reproject_zenith', 'panorama_extract_zenith').
      - **Attached Skills & Tools**: Canvas primitives, Generative UI, modern web, Chrome DevTools, Google Maps Platform.
-If a task needs a capability that is not available natively (e.g. neural image-to-3D diffusion, neural video-to-video restyling, monocular dense depth estimation, or custom LoRA checkpoints), tell the user plainly that it is not supported instead of approximating it or simulating a result.`;
+Monocular depth is native: Depth Anything V2 Small (Apache-2.0) runs locally behind single_image_to_3dgs and panorama_to_3dgs (relative depth, made metric by a given scene median distance for photos or the camera eye height for panoramas); other depth models such as Marigold are not run.
+If a task needs a capability that is not available natively (e.g. neural image-to-3D diffusion, neural video-to-video restyling, or custom LoRA checkpoints), tell the user plainly that it is not supported instead of approximating it or simulating a result.`;
 
     const projectInstructionsSection = await buildProjectInstructionsSection(request.workspaceRoot, services.workspaceConfig);
     const workingMethodSection = isCodingMode ? WORKING_METHOD_SECTION : '';

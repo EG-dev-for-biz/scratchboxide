@@ -17,6 +17,7 @@ import { PanoramaDepthService } from './PanoramaDepthService';
 import { SplatService } from '../3d-engine/splat-service';
 import { BakedGaussian } from '../../common/geospatial-4d-protocol';
 import { GeneratorFailedError } from '../../common/errors/pipeline-errors';
+import { repoPath } from '../process/repo-python';
 
 const execAsync = promisify(exec);
 
@@ -29,7 +30,6 @@ export interface OffsetSynthesisOptions {
     mockExecution?: boolean;   // Mock mode for testing without real Imagen/GPU
     outDir?: string;
     skipOffsets?: boolean;     // Fast path skipping offset view synthesis
-    sceneType?: 'indoor' | 'outdoor';
     /** Image model for the disocclusion inpainting (default: IMAGE_MODEL_PRIORITY, in order). */
     model?: string;
     /** Largest enlargement of the inpainting answer to the view's size (see PanoramaSeamOptions.maxModelUpscale). */
@@ -70,9 +70,34 @@ export class OffsetViewSynthesisService {
     private depthService: PanoramaDepthService;
 
     constructor() {
-        this.offsetRendererBin = path.resolve(process.cwd(), 'build/render_offset_panorama');
-        this.splatCompilerBin = path.resolve(process.cwd(), 'build/panorama_to_3dgs_spz');
+        this.offsetRendererBin = repoPath('build', 'render_offset_panorama');
+        this.splatCompilerBin = repoPath('build', 'panorama_to_3dgs_spz');
         this.depthService = new PanoramaDepthService();
+    }
+
+    /**
+     * Builds the native tools (scripts/panorama_to_3dgs_spz.cpp, scripts/render_offset_panorama.cpp) into build/ when
+     * they are missing or older than their source, with the repo's C++20 toolchain. A compile failure fails the run
+     * with the compiler's error.
+     */
+    private async ensureNativeTools(needOffsetRenderer: boolean): Promise<void> {
+        const tools = [{ bin: this.splatCompilerBin, src: 'scripts/panorama_to_3dgs_spz.cpp' }];
+        if (needOffsetRenderer) tools.push({ bin: this.offsetRendererBin, src: 'scripts/render_offset_panorama.cpp' });
+        for (const t of tools) {
+            const src = repoPath(t.src);
+            if (!(await fs.pathExists(src))) throw new GeneratorFailedError('cpp', `the native tool source ${src} is missing`);
+            const fresh = (await fs.pathExists(t.bin)) && (await fs.stat(t.bin)).mtimeMs >= (await fs.stat(src)).mtimeMs;
+            if (fresh) continue;
+            await fs.ensureDir(path.dirname(t.bin));
+            const include = repoPath('packages', 'core', 'src', 'native', '3d-engine', 'include');
+            const cxx = process.env.CXX || 'clang++';
+            const arch = process.env.SCRATCHBOX_NATIVE_ARCH === '1' ? ' -march=native' : '';
+            try {
+                await execAsync(`"${cxx}" -std=c++20 -O3${arch} -I "${include}" "${src}" -lz -o "${t.bin}"`);
+            } catch (err: any) {
+                throw new GeneratorFailedError('cpp', `compiling ${t.src} failed: ${String(err?.stderr || err?.message || err).trim()}`);
+            }
+        }
     }
 
     /**
@@ -114,6 +139,8 @@ export class OffsetViewSynthesisService {
             if (!dims) throw new GeneratorFailedError('panorama', `cannot read the size of ${sourceRgbPath}`);
             Google360PanoramaPipelineService.editImageSize(dims.width, dims.height, options.maxModelUpscale);
         }
+
+        await this.ensureNativeTools(!skipOffsets);
 
         // 1. Generate primary source splats first
         const originalSplatPath = path.join(outDir, `${baseName}_original_${timestamp}.splat`);
@@ -210,7 +237,6 @@ export class OffsetViewSynthesisService {
 
             console.log(`[OffsetSynthesis] [Pose ${i}] Generating depth map for inpainted view...`);
             const inpaintedDepthRes = await this.depthService.generatePanoramaDepth(inpaintedRgb, {
-                sceneType: options.sceneType || 'outdoor',
                 eyeHeight,
                 mock: mockExecution
             });

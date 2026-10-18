@@ -176,6 +176,34 @@ interface BackendStreamResult {
 
 const cleanMessageText = (rawText: string, artifact?: CanvasArtifact): string => cleanMessageTextSmart(rawText, artifact);
 
+/**
+ * Runs an @terminal mention's command in the workspace sandbox (POST /workspace/run-command) and returns the mention
+ * with the real exit code, stdout and stderr as its payload; a refused or failed run is attached as that failure.
+ */
+async function runTerminalMention(item: ContextMentionItem, workspaceRoot?: string): Promise<ContextMentionItem> {
+    const command = (item.payload as { command?: string } | undefined)?.command;
+    if (!command) return item;
+    try {
+        const res = await fetch('/workspace/run-command', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ command, workspaceRoot })
+        });
+        const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        if (!res.ok || !body.success) {
+            return { ...item, detail: `The command did not run: ${body.error || `HTTP ${res.status}`}`, payload: undefined };
+        }
+        const clip = (t: string) => (t && t.length > 8000 ? `${t.slice(0, 8000)}\n[... ${t.length - 8000} more characters]` : t);
+        return {
+            ...item,
+            detail: `$ ${command}\n(exit code ${body.exitCode}${body.timedOut ? ', timed out' : ''}, ${body.durationMs} ms, cwd ${body.cwd})`,
+            payload: `stdout:\n${clip(body.stdout || '')}\n\nstderr:\n${clip(body.stderr || '')}`
+        };
+    } catch (err) {
+        return { ...item, detail: `The command did not run: ${err instanceof Error ? err.message : String(err)}`, payload: undefined };
+    }
+}
+
 /** Step 1 — `/plan`, `/agent`, `/settings`, `/3d`, `/code`, `/video`, etc. handle slash commands. Returns true if handled. */
 async function handleSlashCommands(d: SendMessageDeps, text: string): Promise<boolean> {
     const { setInputValue, executeDeepWritePipeline, handleStartAgent, setLayoutMode, showToast, openSettingsToTab } = d;
@@ -428,7 +456,10 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
         }
         if (d.attachedContextMentions && d.attachedContextMentions.length > 0) {
             const contextLines: string[] = ['\n\n--- INJECTED CONTEXT REFERENCES (@-Engine) ---'];
-            for (const ctxItem of d.attachedContextMentions) {
+            // @terminal items run now, in the workspace sandbox; the message carries their real output.
+            const resolvedMentions = await Promise.all(d.attachedContextMentions.map(item =>
+                item.type === 'terminal' ? runTerminalMention(item, d.activeWorkspace?.path) : Promise.resolve(item)));
+            for (const ctxItem of resolvedMentions) {
                 contextLines.push(`### @${ctxItem.type}: ${ctxItem.name}`);
                 if (ctxItem.description) contextLines.push(`> ${ctxItem.description}`);
                 if (ctxItem.detail) contextLines.push(ctxItem.detail);
@@ -444,6 +475,8 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
             effectivePrompt = `${effectivePrompt}\n${contextLines.join('\n')}`;
         }
 
+        const requiresWebSearch = !!d.attachedContextMentions?.some(m => m.type === 'web');
+
         // Model and thinking budget come from Settings > Models & AI; when nothing is saved the
         // backend's own defaults apply.
         const { settings: savedSettings } = await WorkspaceConfigClient.getInstance().fetchWorkspaceConfig(d.activeWorkspace?.path);
@@ -452,7 +485,9 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                 prompt: effectivePrompt,
                 model: savedSettings?.defaultModel || undefined,
                 thinkingBudget: savedSettings?.thinkingBudget,
-                enableGoogleSearch: googleSearchGrounding !== false,
+                // @web requires a Google Search for this turn, whatever the grounding setting.
+                enableGoogleSearch: requiresWebSearch || googleSearchGrounding !== false,
+                requireGoogleSearch: requiresWebSearch || undefined,
                 attachedSkills: attachedSkillsContext,
                 attachedMcpTools: attachedMcpContext,
                 activeArtifact,
@@ -486,7 +521,7 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                 if (event.modelProvenance) {
                     progress.modelProvenance = event.modelProvenance;
                 }
-                if (event.type === 'status' && event.modelProvenance && event.text) {
+                if (event.type === 'status' && event.text && (event.modelProvenance || event.text.startsWith('@web:'))) {
                     // The fallback list moved on mid-turn ("X is not available (…); trying Y"): shown as it happens,
                     // not only on the finished reply.
                     const text = event.text;

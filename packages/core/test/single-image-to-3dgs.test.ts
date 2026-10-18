@@ -22,7 +22,7 @@ const torchPython = requirePythonModules(PYTHON, ['torch', 'numpy']);
 const STUB_ENV: Record<string, string> = {
     SCRATCHBOX_DEPTH_PYTHON: PYTHON,
     PYTHONPATH: path.join(__dirname, 'helpers/depth-sidecar-stubs'),
-    STUB_DEPTH_METERS: '6'
+    STUB_DISPARITY: '0.5'
 };
 
 /**

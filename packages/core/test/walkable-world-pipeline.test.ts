@@ -37,7 +37,6 @@ describe('Competitive 3DGS Walkable World Pipeline Integration Tests', () => {
         // Step 1: Geometry Extraction (Mock mode produces high-fidelity circular room model)
         console.log('[Test] Generating fallback depth map...');
         const depthRes = await depthService.generatePanoramaDepth(inputImg, {
-            sceneType: 'outdoor',
             eyeHeight: 1.70,
             mock: true,
             outDir: testDir
@@ -58,8 +57,7 @@ describe('Competitive 3DGS Walkable World Pipeline Integration Tests', () => {
             voxelSize: 0.05,
             skipOffsets: false,
             mockExecution: true,
-            outDir: testDir,
-            sceneType: 'outdoor'
+            outDir: testDir
         });
 
         expect(synthesisRes.success).toBe(true);

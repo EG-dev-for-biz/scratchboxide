@@ -574,7 +574,7 @@ export function buildToolDeclarations(
     ).filter(d => !request.isSubagentRun || !PARENT_ONLY_TOOLS.has(d.name));
 
     const tools: GeminiToolConfig[] = [];
-    if (request.enableGoogleSearch !== false) {
+    if (request.enableGoogleSearch !== false || request.requireGoogleSearch) {
         tools.push({ googleSearch: {} });
     }
     const is3DSceneRequest = /build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|mesh\s*shaping|sculpt|flower|garden|plant|flora|botan|procedural|scratchbox|blender|building|plaza|architecture/i.test(request.prompt || '');

@@ -71,6 +71,7 @@ import { DirtyStateManager } from '../dirty-state-manager';
 import { GeminiClient, AudioPlayer } from '../gemini-client';
 import type { QuickEditRequest, QuickEditResponse } from '../../../common/gemini-protocol';
 import Editor from '@monaco-editor/react';
+import { calculateNOAASolarPosition } from '../services/atmosphere/solar-position';
 
 export const getMonacoLanguage = (lang?: string, fileName?: string): string => {
     const ext = fileName ? fileName.split('.').pop()?.toLowerCase() : '';
@@ -684,71 +685,131 @@ export function buildSandboxSrcDoc(data: LiveCodeSandboxData, cspNonce?: string)
         }, [method, JSON.stringify(params)]);
         return { data, loading, error, execute };
       },
+      // Measured: the host computes the NOAA solar position for the given place and time (atmosphere:solar-position).
+      // Without latitude and longitude there is no sun to compute, so the hook throws instead of inventing one.
       useAtmosphere: function(config) {
-        const [state, setState] = React.useState({ sunElevation: 45, turbidity: 2.0, diurnalPhase: 'midday', ...config });
-        return {
-          ...state,
-          setTimeOfDay: (phase) => setState(prev => ({ ...prev, diurnalPhase: phase })),
-          setSunElevation: (elevation) => setState(prev => ({ ...prev, sunElevation: elevation }))
-        };
+        const cfg = config || {};
+        if (typeof cfg.latitude !== 'number' || typeof cfg.longitude !== 'number') {
+          throw new Error('useAtmosphere needs { latitude, longitude } (and optionally isoDate): the sun position is computed for a real place and time');
+        }
+        const isoDate = cfg.isoDate || new Date().toISOString();
+        const [state, setState] = React.useState({ loading: true, error: null, solar: null });
+        React.useEffect(function() {
+          let live = true;
+          setState({ loading: true, error: null, solar: null });
+          window.scratchbox.rpcCall('atmosphere:solar-position', { latitude: cfg.latitude, longitude: cfg.longitude, isoDate: isoDate })
+            .then(function(solar) { if (live) setState({ loading: false, error: null, solar: solar }); })
+            .catch(function(err) { if (live) setState({ loading: false, error: err, solar: null }); });
+          return function() { live = false; };
+        }, [cfg.latitude, cfg.longitude, isoDate]);
+        return Object.assign({ latitude: cfg.latitude, longitude: cfg.longitude, isoDate: isoDate, loading: state.loading, error: state.error }, state.solar || {});
       },
+      // Real tiles: the host extracts Google 3D Tiles in studio clay for the place (tiles:get-clay, one Map Tiles
+      // extraction) and hands the GLB bytes back; the viewport renders them with three.js. Failures are shown.
       Google3DViewport: function(props) {
-        return React.createElement('div', {
-          style: {
-            width: '100%',
-            height: props.height || '360px',
-            background: 'linear-gradient(135deg, #090d16 0%, #172554 100%)',
-            borderRadius: '8px',
-            border: '1px solid #1e3a8a',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            position: 'relative',
-            overflow: 'hidden',
-            color: '#93c5fd',
-            fontFamily: 'monospace',
-            fontSize: '13px',
-            padding: '16px',
-            boxSizing: 'border-box',
-            ...props.style
-          }
-        }, [
-          React.createElement('div', { key: 'badge', style: { position: 'absolute', top: 12, left: 12, background: 'rgba(30, 58, 138, 0.8)', padding: '4px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600, color: '#bfdbfe' } }, '🌐 Google Photorealistic 3D Tiles (Streamed)'),
-          React.createElement('div', { key: 'coords', style: { marginTop: '20px', textAlign: 'center' } }, [
-            React.createElement('div', { key: 'loc', style: { fontSize: '14px', fontWeight: 700, color: '#f8fafc', marginBottom: '4px' } }, props.location || 'Real-World 3D Geodetic Stage'),
-            React.createElement('div', { key: 'sub', style: { fontSize: '11px', color: '#60a5fa' } }, 'Lat: ' + (props.lat ?? 37.7749) + ' | Lng: ' + (props.lng ?? -122.4194) + ' | Alt: ' + (props.alt ?? 120) + 'm')
-          ]),
+        const hostRef = React.useRef(null);
+        const [status, setStatus] = React.useState('Extracting Google 3D Tiles (clay)...');
+        const place = props.query || props.location || (typeof props.lat === 'number' && typeof props.lng === 'number' ? (props.lat + ',' + props.lng) : '');
+        React.useEffect(function() {
+          if (!place) { setStatus('Google3DViewport needs a query (place name or address) or lat and lng'); return; }
+          let disposed = false;
+          let renderer = null;
+          let frame = 0;
+          window.scratchbox.rpcCall('tiles:get-clay', { query: place })
+            .then(async function(res) {
+              if (disposed) return;
+              const loaderMod = await import('three/addons/loaders/GLTFLoader.js');
+              const controlsMod = await import('three/addons/controls/OrbitControls.js');
+              const el = hostRef.current;
+              if (!el || disposed) return;
+              const w = el.clientWidth || 640, h = el.clientHeight || 360;
+              renderer = new THREE.WebGLRenderer({ antialias: true });
+              renderer.setSize(w, h);
+              el.appendChild(renderer.domElement);
+              const scene = new THREE.Scene();
+              scene.background = new THREE.Color(0xd9dde3);
+              scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8f99, 1.2));
+              const key = new THREE.DirectionalLight(0xffffff, 1.4);
+              key.position.set(1, 2, 1.5);
+              scene.add(key);
+              const gltf = await new Promise(function(resolve, reject) { new loaderMod.GLTFLoader().parse(res.glb, '', resolve, reject); });
+              scene.add(gltf.scene);
+              const box = new THREE.Box3().setFromObject(gltf.scene);
+              const size = box.getSize(new THREE.Vector3()).length();
+              const center = box.getCenter(new THREE.Vector3());
+              const camera = new THREE.PerspectiveCamera(45, w / h, size / 1000, size * 10);
+              camera.position.copy(center).add(new THREE.Vector3(size * 0.6, size * 0.5, size * 0.6));
+              const controls = new controlsMod.OrbitControls(camera, renderer.domElement);
+              controls.target.copy(center);
+              setStatus((res.landmarkName || place) + ' | ' + res.vertexCount.toLocaleString() + ' vertices | ' + res.lat.toFixed(5) + ', ' + res.lng.toFixed(5));
+              const loop = function() { if (disposed) return; controls.update(); renderer.render(scene, camera); frame = requestAnimationFrame(loop); };
+              loop();
+            })
+            .catch(function(err) { if (!disposed) setStatus('Google 3D Tiles failed: ' + (err && err.message ? err.message : err)); });
+          return function() { disposed = true; cancelAnimationFrame(frame); if (renderer) { renderer.dispose(); renderer.domElement.remove(); } };
+        }, [place]);
+        return React.createElement('div', { style: Object.assign({ width: '100%', height: props.height || '360px', position: 'relative', borderRadius: '8px', overflow: 'hidden', background: '#0f172a' }, props.style) }, [
+          React.createElement('div', { key: 'gl', ref: hostRef, style: { position: 'absolute', inset: 0 } }),
+          React.createElement('div', { key: 'status', style: { position: 'absolute', top: 8, left: 8, background: 'rgba(15,23,42,0.8)', color: '#e2e8f0', padding: '4px 8px', borderRadius: '4px', fontSize: '11px', fontFamily: 'monospace' } }, status),
           props.children
         ]);
       },
+      // Web Audio: an AnalyserNode on the given source (props.src URL, props.audioElement, props.stream or
+      // props.microphone) drives the bars from real frequency data. With no source it throws.
       AudioVisualizer: function(props) {
-        return React.createElement('div', {
-          style: {
-            height: props.height || '64px',
-            width: '100%',
-            background: '#090d16',
-            borderRadius: '6px',
-            border: '1px solid #1e293b',
-            display: 'flex',
-            alignItems: 'flex-end',
-            gap: '3px',
-            padding: '6px',
-            boxSizing: 'border-box',
-            ...props.style
-          }
-        }, Array.from({ length: props.bars || 24 }).map((_, i) =>
-          React.createElement('div', {
-            key: i,
-            style: {
-              flex: 1,
-              height: Math.max(12, Math.sin((i + Date.now()/500) * 0.8) * 45 + 50) + '%',
-              background: 'linear-gradient(to top, #3b82f6, #06b6d4)',
-              borderRadius: '2px',
-              transition: 'height 0.15s ease'
+        if (!props.src && !props.audioElement && !props.stream && !props.microphone) {
+          throw new Error('AudioVisualizer needs an audio source: src (URL), audioElement, stream (MediaStream) or microphone: true');
+        }
+        const bars = props.bars || 24;
+        const canvasRef = React.useRef(null);
+        const [error, setError] = React.useState(null);
+        React.useEffect(function() {
+          const ctx = new (window.AudioContext || window.webkitAudioContext)();
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 256;
+          let frame = 0;
+          let ownedAudio = null;
+          let micStream = null;
+          const connect = async function() {
+            let node;
+            if (props.stream) node = ctx.createMediaStreamSource(props.stream);
+            else if (props.microphone) { micStream = await navigator.mediaDevices.getUserMedia({ audio: true }); node = ctx.createMediaStreamSource(micStream); }
+            else {
+              const el = props.audioElement || (ownedAudio = Object.assign(new Audio(props.src), { crossOrigin: 'anonymous', loop: !!props.loop }));
+              node = ctx.createMediaElementSource(el);
+              node.connect(ctx.destination);
+              if (ownedAudio && props.autoPlay !== false) await ownedAudio.play();
             }
-          })
-        ));
+            node.connect(analyser);
+            await ctx.resume();
+            const data = new Uint8Array(analyser.frequencyBinCount);
+            const draw = function() {
+              const c = canvasRef.current;
+              if (c) {
+                analyser.getByteFrequencyData(data);
+                const g = c.getContext('2d');
+                g.clearRect(0, 0, c.width, c.height);
+                const bw = c.width / bars;
+                for (let i = 0; i < bars; i++) {
+                  const v = data[Math.floor(i * data.length / bars)] / 255;
+                  g.fillStyle = '#38bdf8';
+                  g.fillRect(i * bw + 1, c.height * (1 - v), bw - 2, c.height * v);
+                }
+              }
+              frame = requestAnimationFrame(draw);
+            };
+            draw();
+          };
+          connect().catch(function(err) { setError(err && err.message ? err.message : String(err)); });
+          return function() {
+            cancelAnimationFrame(frame);
+            if (ownedAudio) ownedAudio.pause();
+            if (micStream) micStream.getTracks().forEach(function(t) { t.stop(); });
+            ctx.close();
+          };
+        }, [props.src, props.audioElement, props.stream, props.microphone]);
+        if (error) return React.createElement('div', { style: { color: '#fca5a5', fontSize: '12px' } }, 'AudioVisualizer: ' + error);
+        return React.createElement('canvas', { ref: canvasRef, width: props.width || 480, height: parseInt(props.height, 10) || 64, style: Object.assign({ width: '100%', height: props.height || '64px', background: '#090d16', borderRadius: '6px' }, props.style) });
       },
       MetricCard: function(props) {
         return React.createElement('div', {
@@ -1441,12 +1502,14 @@ const LiveCodeSandboxWorkspace: React.FC<LiveCodeSandboxPrimitiveProps> = ({
     React.useEffect(() => {
         if (typeof window !== 'undefined') {
             (window as any).__scratchbox_capture_active_sandbox = captureFrame;
+            (window as any).__scratchbox_active_sandbox_element = () => iframeRef.current;
         }
         onCaptureReady?.(captureFrame);
 
         return () => {
             if (typeof window !== 'undefined' && (window as any).__scratchbox_capture_active_sandbox === captureFrame) {
                 delete (window as any).__scratchbox_capture_active_sandbox;
+                delete (window as any).__scratchbox_active_sandbox_element;
             }
         };
     }, [captureFrame, onCaptureReady]);
@@ -1824,17 +1887,41 @@ export default defineConfig({
                     }, '*');
                 };
 
-                if (method === 'operators:execute') {
-                    console.info('[Scratchbox Tool Bridge] Executing operator:', params?.opName, params?.params);
-                    sendRpcResponse({ executed: true, opName: params?.opName });
-                } else if (method === 'media:export-blocking-pass') {
-                    console.info('[Scratchbox Tool Bridge] Exporting blocking pass to video pipeline:', params);
-                    sendRpcResponse({ success: true, jobId: `job-blocking-${Date.now()}` });
+                if (method === 'operators:execute' || method === 'media:export-blocking-pass' || method === 'project:list-assets') {
+                    // Not wired to a host service: the call fails rather than answering with made-up data.
+                    sendRpcResponse(undefined, `${method} is not available in the sandbox (it is not connected to a Scratchbox service)`);
+                } else if (method === 'atmosphere:solar-position') {
+                    // NOAA solar ephemeris for a real place and time.
+                    const lat = Number(params?.latitude);
+                    const lng = Number(params?.longitude);
+                    const when = new Date(params?.isoDate || Date.now());
+                    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || isNaN(when.getTime())) {
+                        sendRpcResponse(undefined, 'atmosphere:solar-position needs latitude, longitude and a valid isoDate');
+                    } else {
+                        const sun = calculateNOAASolarPosition(when, lat, lng);
+                        sendRpcResponse({ elevationDeg: sun.elevationDeg, azimuthDeg: sun.azimuthDeg, distanceAU: sun.distanceAU, julianDay: sun.julianDay, isoDate: when.toISOString(), source: 'NOAA solar position (computeSolarEphemeris)' });
+                    }
+                } else if (method === 'tiles:get-clay') {
+                    // Google Photorealistic 3D Tiles in studio clay, extracted by the server (google_3d_tiles_get_clay's
+                    // pipeline via /api/3d/tiles/query); the GLB bytes go back to the sandbox.
+                    const query = String(params?.query || '').trim();
+                    if (!query) {
+                        sendRpcResponse(undefined, 'tiles:get-clay needs a query (place name, address or "lat,lng")');
+                    } else {
+                        fetch('/api/3d/tiles/query', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }) })
+                            .then(async r => {
+                                const body = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
+                                if (!r.ok || !body.success) throw new Error(body.error || `HTTP ${r.status}`);
+                                const glbRes = await fetch(body.glbUrl);
+                                if (!glbRes.ok) throw new Error(`${body.glbUrl}: HTTP ${glbRes.status}`);
+                                const glb = await glbRes.arrayBuffer();
+                                sendRpcResponse({ glb, glbUrl: body.glbUrl, landmarkName: body.landmarkName, vertexCount: body.mesh?.vertexCount, triangleCount: body.mesh?.triangleCount, lat: body.geoAnchor?.lat, lng: body.geoAnchor?.lng });
+                            })
+                            .catch(err => sendRpcResponse(undefined, err?.message || String(err)));
+                    }
                 } else if (method === 'ui:notify') {
                     console.info(`[Scratchbox Tool Notification] [${params?.notifyType}] ${params?.message}`);
                     sendRpcResponse({ acknowledged: true });
-                } else if (method === 'project:list-assets') {
-                    sendRpcResponse({ assets: [] });
                 } else if (method === 'storage:save-asset') {
                     const filename = params?.filename || `asset-${Date.now()}.dat`;
                     const content = params?.content || '';

@@ -11,6 +11,17 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import { ImageToSplatService } from '../packages/core/src/node/3d-engine/image-to-splat-service';
+import { PanoramaDepthService } from '../packages/core/src/node/spatial/PanoramaDepthService';
+import { shutdownAllPythonWorkerPools } from '../packages/core/src/node/process/persistent-python-worker';
+
+/**
+ * Bakes the splat studio's catalog with depth from the local depth model (Depth Anything V2 Small, relative depth).
+ * Single images are baked in relative units (median depth 1). Image groups are fused along an orbit or pan in metres,
+ * so they need the scene's median distance: pass --median-depth-m <metres>, or the groups are not baked.
+ */
+const medianArg = process.argv.indexOf('--median-depth-m');
+const GROUP_MEDIAN_DEPTH_M = medianArg >= 0 ? Number(process.argv[medianArg + 1]) : undefined;
+const depthService = new PanoramaDepthService();
 
 function decodeImageToRgb(relativePath: string, width: number, height: number): Buffer {
     const fullPath = path.resolve(process.cwd(), 'public', relativePath);
@@ -35,22 +46,19 @@ async function main() {
     const catalog = ImageToSplatService.getPublicSourceCatalog();
 
     // 1. Bake Multi-View Image Groups
-    for (const group of catalog.imageGroups) {
+    for (const group of (GROUP_MEDIAN_DEPTH_M && GROUP_MEDIAN_DEPTH_M > 0) ? catalog.imageGroups : []) {
         console.log(`\n📸 Processing Image Group: [${group.id}] ${group.title}`);
         const width = 640;
         const height = 360;
 
-        const keyframes = group.paths.map((p, idx) => {
-            console.log(`   - Decoding [${idx + 1}/${group.paths.length}]: ${p}`);
+        const keyframes = [];
+        for (const [idx, p] of (group.paths ?? []).entries()) {
+            console.log(`   - Decoding and measuring depth [${idx + 1}/${group.paths!.length}]: ${p}`);
             const rgbPixels = decodeImageToRgb(p, width, height);
-            return {
-                rgbPixels,
-                width,
-                height,
-                channels: 3,
-                fovDegrees: group.suggestedFov ?? 65.0
-            };
-        });
+            const fovDegrees = group.suggestedFov ?? 65.0;
+            const depth = await depthService.generatePixelBufferDepth(rgbPixels, width, height, { channels: 3, fovDegrees, medianDepthMeters: GROUP_MEDIAN_DEPTH_M });
+            keyframes.push({ frameIndex: idx, rgbPixels, width, height, channels: 3, fovDegrees, metricDepths: depth.rayDepths });
+        }
 
         console.log(`   - Fusing ${keyframes.length} views with ImageToSplatService...`);
         const trajectory = group.suggestedTrajectory === 'orbit' ? 'orbit' : 'pan';
@@ -95,14 +103,10 @@ async function main() {
 
         try {
             const rgbPixels = decodeImageToRgb(single.path, width, height);
-            const metricDepths = ImageToSplatService.synthesizeMetricDepthsFromLuminance(
-                rgbPixels,
-                width,
-                height,
-                3,
-                single.nearDepth ?? 2.5,
-                single.farDepth ?? 80.0
-            );
+            const fovDegrees = single.suggestedFov ?? 65.0;
+            const depth = await depthService.generatePixelBufferDepth(rgbPixels, width, height, { channels: 3, fovDegrees });
+            const metricDepths = depth.rayDepths;
+            console.log(`   - Depth: ${depth.modelUsed}, ${depth.depthUnits} units, ${depth.farPlanePixels} far-plane pixels`);
 
             const splats = ImageToSplatService.convertSingleImageToSplat({
                 rgbPixels,
@@ -110,11 +114,11 @@ async function main() {
                 height,
                 channels: 3,
                 metricDepths,
-                fovDegrees: single.suggestedFov ?? 65.0,
+                fovDegrees,
                 stride: 1,
                 edgeTau: 0.08,
-                minDepth: single.nearDepth ?? 2.0,
-                maxDepth: single.farDepth ?? 100.0
+                minDepth: 0.05,
+                maxDepth: 1000
             });
 
             console.log(`   - Generated Splats Count: ${splats.length.toLocaleString()}`);
@@ -143,7 +147,8 @@ async function main() {
     console.log(`\n✨ All Photographic 3DGS Assets Baked Successfully in ${elapsed}s!`);
 }
 
-main().catch((err) => {
+main().then(() => shutdownAllPythonWorkerPools()).catch((err) => {
     console.error('❌ Error baking catalog splats:', err);
+    shutdownAllPythonWorkerPools();
     process.exit(1);
 });

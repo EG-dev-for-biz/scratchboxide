@@ -156,7 +156,8 @@ describe.skipIf(!haveTile)('tile vegetation on the Central Park photo extraction
         expect(t.measured).toBe(trees.length + kept.length);
         expect(t.count).toBe(trees.length);
         expect(t.notRegrowable).toBe(kept.length);
-        expect(t.measured).toBeGreaterThan(900);
+        // 815 on this tile: crowns whose tops have two bumps are measured as one crown (1,047 when each bump was a crown)
+        expect(t.measured).toBeGreaterThan(750);
         // nearly all regrow (with the perception radius spanning the kill reach, every one of these does, on any seed);
         // any that does not is named with its reason, and the summary says so
         expect(kept.length).toBeLessThanOrEqual(Math.ceil(0.01 * t.measured));
@@ -236,10 +237,20 @@ describe.skipIf(!haveTile)('tile vegetation on the Central Park photo extraction
             }
             return lowest;
         };
+        // found by where their stems were measured (crown ids are watershed labels and change with the segmentation)
+        const crownHolding = (x: number, z: number) => crownsDoc.crowns.find((k: any) => {
+            const f: number[][] = k.footprint ?? [];
+            let inside = false;
+            for (let i = 0, j = f.length - 1; i < f.length; j = i++) {
+                if ((f[i][1] > z) !== (f[j][1] > z) && x < f[i][0] + (z - f[i][1]) * (f[j][0] - f[i][0]) / (f[j][1] - f[i][1])) inside = !inside;
+            }
+            return inside;
+        });
         const formerlyFloating: Record<string, unknown> = {};
-        for (const id of [949, 964, 764, 813, 798]) {
-            const c = crownsDoc.crowns.find((k: any) => k.id === id);
-            expect(c.status).toBe('tree');
+        const formerStems: Record<number, [number, number]> = { 949: [92.12, 73.51], 964: [-243.95, 79.98], 764: [-268.01, 12.66], 813: [61.55, 25.1], 798: [-235.46, 23.26] };
+        for (const [id, [x, z]] of Object.entries(formerStems)) {
+            const c = crownHolding(x, z);
+            expect(c?.status).toBe('tree');
             const g = groundUnder(c.stem[0], c.stem[1]);
             expect(Math.abs(c.supportY - g)).toBeLessThanOrEqual(1.0);
             formerlyFloating[id] = { supportY: c.supportY, scanGroundUnderStemY: g, supportSource: c.supportSource };
@@ -429,7 +440,7 @@ describe.skipIf(!haveTile)('tile vegetation on the Central Park photo extraction
         const items = g.nodes.filter(n => n.sb);
         // one node per removed crown: the regrown ones and the ones cut by the extraction's edge (removed, not regrown); none is kept as scanned
         const removedCrowns = crownsDoc.crowns.filter((c: any) => c.status === 'tree' || c.status === 'cut_at_boundary_removed');
-        expect(removedCrowns.length).toBeGreaterThan(1000);
+        expect(removedCrowns.length).toBeGreaterThan(750);
         expect(removedCrowns.some((c: any) => c.status === 'cut_at_boundary_removed')).toBe(true);
         expect(items).toHaveLength(removedCrowns.length);
         expect(new Set(items.map(n => n.sb.ids.crownId))).toEqual(new Set(removedCrowns.map((c: any) => c.id)));

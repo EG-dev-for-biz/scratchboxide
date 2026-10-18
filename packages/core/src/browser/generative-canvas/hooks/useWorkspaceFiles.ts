@@ -364,10 +364,7 @@ export function useWorkspaceFileCreation(deps: UseWorkspaceFilesDeps) {
                     history: ['https://example.com'],
                     historyIndex: 0,
                     isLoading: false,
-                    consoleLogs: [
-                        { type: 'info', text: 'Browser canvas initialized at https://example.com', timestamp: new Date().toLocaleTimeString() },
-                        { type: 'log', text: 'DOM ready. Ready for user navigation and AI agent actions.', timestamp: new Date().toLocaleTimeString() }
-                    ],
+                    consoleLogs: [],
                     inspectMode: false,
                     deviceScale: 1
                 } as InteractiveBrowserData,

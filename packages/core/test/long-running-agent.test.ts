@@ -244,7 +244,12 @@ Compilation failed.
             process.env.SCRATCHBOX_TEST_USE_REAL_AI = 'true';
             geminiAny.getStatus = async () => ({ connected: true });
             geminiAny.streamGenerate = async () => { throw new Error('503 model overloaded'); };
+            // Planning a real session asks the model for its milestones: that failure surfaces at once.
+            await assert.rejects(agentService.createSession('gemini-error-surface', 10), /503 model overloaded/);
+            // The fixed plan of a simulated session, then the real loop: the blueprint failure surfaces too.
+            agentService.setBlueprintSimulation(true);
             const errSession = await agentService.createSession('gemini-error-surface', 10);
+            agentService.setBlueprintSimulation(false);
             await useTempWorkspace(errSession.sessionId);
             const errEvents: AgentStreamEvent[] = [];
             await agentService.runMilestoneLoop(errSession.sessionId, e => errEvents.push(e));
@@ -258,7 +263,9 @@ Compilation failed.
             // B: Gemini disconnected with simulation disabled -> failed run naming the cause
             delete process.env.SCRATCHBOX_TEST_USE_REAL_AI;
             geminiAny.getStatus = async () => ({ connected: false });
+            agentService.setBlueprintSimulation(true);
             const offlineSession = await agentService.createSession('gemini-offline-surface', 10);
+            agentService.setBlueprintSimulation(false);
             await useTempWorkspace(offlineSession.sessionId);
             const offlineEvents: AgentStreamEvent[] = [];
             await agentService.runMilestoneLoop(offlineSession.sessionId, e => offlineEvents.push(e));

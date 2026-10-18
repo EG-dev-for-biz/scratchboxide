@@ -128,7 +128,7 @@ export class TaskCapabilityResolver {
 
     /**
      * Resolves which native subsystem (C++20 3D engine, Python engine, VFX/NLE, Google models, workspace tools) handles a task,
-     * or reports that the task is not natively supported (e.g. neural image-to-3D, video restyling, monocular depth).
+     * or reports that the task is not natively supported (e.g. neural image-to-3D, video restyling).
      */
     static resolveTaskCapability(
         taskGoal: string | CapabilityOptions,
@@ -633,10 +633,26 @@ export class TaskCapabilityResolver {
                     targetService: 'Google360PanoramaPipelineService',
                     details: 'Invoke panorama_generate_4k, panorama_heal_seam, or panorama_reproject_zenith to seamlessly blend or restore the 360 equirectangular panorama.'
                 };
-            } else if (isNeuralImageTo3D || isNeuralVideoRestyle || isMonocularNeuralDepth || isLatentDiffusionInpaint) {
+            } else if (isMonocularNeuralDepth && !isNeuralImageTo3D && !isNeuralVideoRestyle && !isLatentDiffusionInpaint) {
+                // Monocular depth runs locally on Depth Anything V2 Small (Apache-2.0). Other depth models named in the
+                // request (Marigold, ZoeDepth) are not run; the depth comes from this one model.
+                canSolveNatively = true;
+                primaryNativeEngine = 'python-3d-engine';
+                nativeCapabilities.push('Local monocular depth: Depth Anything V2 Small (Apache-2.0) via PanoramaDepthService (tools/depth/panorama_depth.py, persistent worker)');
+                nativeCapabilities.push('Photos: relative planar depth (median 1), in metres when the scene median distance is given; panoramas: metric radial depth from a floor fit to the camera eye height');
+                nativeCapabilities.push('Agent tools: single_image_to_3dgs, panorama_to_3dgs');
+                rationale = 'Monocular depth runs locally on Depth Anything V2 Small (Apache-2.0); it predicts relative depth, made metric by a known scene median distance (photos) or the camera eye height (panoramas). Marigold-class models are not run.';
+                suggestedNativeAction = {
+                    primitiveType: '3d-scene',
+                    serviceOrTool: 'single_image_to_3dgs or panorama_to_3dgs (PanoramaDepthService)',
+                    targetTool: 'single_image_to_3dgs',
+                    targetService: 'PanoramaDepthService',
+                    details: 'Call single_image_to_3dgs for a photo (pass medianDepthMeters for metres) or panorama_to_3dgs for a 360 panorama (eyeHeight required).'
+                };
+            } else if (isNeuralImageTo3D || isNeuralVideoRestyle || isLatentDiffusionInpaint) {
                 canSolveNatively = false;
                 primaryNativeEngine = 'none';
-                rationale = 'Not natively supported: this task needs a self-hosted neural model (image-to-3D, video-to-video restyling, monocular depth, or latent diffusion inpainting) that this app does not run.';
+                rationale = 'Not natively supported: this task needs a self-hosted neural model (image-to-3D, video-to-video restyling, or latent diffusion inpainting) that this app does not run.';
             } else if (/(?:recolor|re-color|grade|re-?grade|texture\s*atlas|material\s*harmoniz|pbr)[\s\w-]{0,40}(?:3d\s*tile|glb|model|photometry|photogrammetr)|(?:3d\s*tile|glb|texture\s*atlas)[\s\w-]{0,40}(?:recolor|re-color|grade|re-?grade|palette|foliage\s*protect|pbr)/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'cpp-3d-engine';
