@@ -4942,7 +4942,8 @@ ns-train splatfacto \\
       switchStep(targetStep);
     }
 
-    // Sequential 6-Stage Execution Runner
+    // Runs the performer pipeline on the server (POST /api/performer/pipeline/run: MediaPipe pose tracking, rig,
+    // backprojection, splat and Nerfstudio export) and reports what it returned; a failure is shown, never hidden.
     function startPipelineExecution() {
       if (pipelineInterval) clearInterval(pipelineInterval);
       isPipelineRunning = true;
@@ -4951,115 +4952,10 @@ ns-train splatfacto \\
       const dotEl = document.getElementById('pipeline-status-dot');
       if (dotEl) dotEl.style.background = 'var(--cyan)';
 
-      appendPipelineLog(`[00:00:00] [Pipeline-Runner] Initializing 6-stage pipeline for subject #${selectedAvatarId} (${avatar.name})...`);
-      appendPipelineLog(`[00:00:00] [Hardware] Target height: ${avatar.height}m | Gaussian budget: 120,000 points | Format: 9:16`);
-      if (pipelineExecutionTier === 'tier2') {
-        appendPipelineLog('[Two-Tier Architecture] ★ Selected Tier 2: Cloud Run GPU Reconstruction (NVIDIA L4 24GB VRAM)', '#38bdf8');
-        appendPipelineLog('[Two-Tier Architecture] Dispatching Splatfacto perceptual optimization (λ_perc = 0.4) & Nerfstudio dataset...', '#93c5fd');
-      } else {
-        appendPipelineLog('[Two-Tier Architecture] ★ Selected Tier 1: Instant Client Calibration & Rigging (WebGL 60 FPS Engine)', '#38bdf8');
-        appendPipelineLog('[Two-Tier Architecture] Running local pinhole backprojection, 22-joint SB-Human skinning & PBR mesh binding...', '#93c5fd');
-      }
-
-      const stages = [
-        {
-          num: 1,
-          name: 'Video Ingestion & Hero Frame',
-          desc: 'Isolating Frame 0 canonical resting pose & pinhole K-matrix',
-          logs: [
-            '[Stage 1] Ingesting performance video plate...',
-            `[Stage 1] Extracted Frame 0: ${avatar.heroImg || 'canonical_frame.jpg'}`,
-            '[Stage 1] Pinhole intrinsics calibrated: fx=2484.0, fy=2484.0, cx=1080.0, cy=1920.0'
-          ]
-        },
-        {
-          num: 2,
-          name: '2D Silhouette & Morphology',
-          desc: '5-band scanline profiling & 8-mode PCA blendshapes',
-          logs: [
-            '[Stage 2] Profiling 5 horizontal scanline bands across vertical axis...',
-            `[Stage 2] Measured anthropometry: HeadsTall=${avatar.ratios.headsTall}, Leg/Torso=${avatar.ratios.legToTorso}`,
-            `[Stage 2] Solved 8-mode PCA betas: [${avatar.betas.slice(0, 4).join(', ')}...] (L2 norm error < 0.02)`
-          ]
-        },
-        {
-          num: 3,
-          name: '3D 22-Bone Skeleton Fit',
-          desc: 'Kinematic SB-Human hierarchy & partition-of-unity LBS weights',
-          logs: [
-            '[Stage 3] Calibrating 22-bone SB-Human humanoid skeletal rig...',
-            '[Stage 3] Solved coronal ray intersection for pelvis, spine, neck, shoulders, and limbs',
-            '[Stage 3] Bound 35,000 canonical Gaussians to 4 nearest bones with partition-of-unity (Σw = 1.0)'
-          ]
-        },
-        {
-          num: 4,
-          name: 'Optical Ray Backprojection',
-          desc: 'Frustum backprojection with hero stance forward skinning & RGB baking',
-          logs: [
-            '[Stage 4] Posing 3D Gaussians into Frame 0 resting stance (arms down 76°)...',
-            '[Stage 4] Backprojecting 35,000 camera rays: (u, v) = K [R|t] X_hero',
-            '[Stage 4] Authentic RGB diffuse albedos sampled and baked into Gaussian vertex buffers'
-          ]
-        },
-        {
-          num: 5,
-          name: '4D Stage Live Synthesis',
-          desc: 'WebGL anisotropic splat shaders & Red Rocks stage deck grounding',
-          logs: [
-            '[Stage 5] Synthesizing anisotropic 3DGS covariance matrices: Σ\' = J W V W^T J^T...',
-            '[Stage 5] Grounding performer to Red Rocks stage deck (1,932m MSL) with PCF soft shadows',
-            '[Stage 5] 4D live sequence stream initialized at 25 FPS'
-          ]
-        },
-        {
-          num: 6,
-          name: 'Nerfstudio Dataset Export',
-          desc: 'OpenGL transforms.json & sparse_pcd.ply visual-hull export',
-          logs: [
-            '[Stage 6] Packaging calibrated multi-view cameras into Nerfstudio standard layout...',
-            '[Stage 6] Exported transforms.json (+X Right, +Y Up, -Z Forward OpenGL contract)',
-            '[Stage 6] Generated sparse_pcd.ply point cloud (18,420 visual-hull voxels, mask threshold >= 128)'
-          ]
-        }
-      ];
-
-      let currentStageIdx = 0;
-      let stageLogIdx = 0;
-      const totalSteps = stages.length;
-
-      // Highlight first stage
+      appendPipelineLog(`[Pipeline-Runner] Running the performer pipeline on the server for #${selectedAvatarId} (${avatar.name})...`);
       setStageCardStatus(1, 'running');
-
-      pipelineInterval = setInterval(() => {
-        if (currentStageIdx >= totalSteps) {
-          // All stages complete!
-          clearInterval(pipelineInterval);
-          isPipelineRunning = false;
-          onPipelineCompleted(avatar);
-          return;
-        }
-
-        const currentStage = stages[currentStageIdx];
-
-        if (stageLogIdx < currentStage.logs.length) {
-          appendPipelineLog(currentStage.logs[stageLogIdx]);
-          stageLogIdx++;
-
-          // Update fractional progress
-          const progressPct = Math.round(((currentStageIdx + (stageLogIdx / currentStage.logs.length)) / totalSteps) * 100);
-          updateProgressUI(progressPct, `Stage ${currentStage.num}/6: ${currentStage.name}...`);
-        } else {
-          // Finish current stage
-          setStageCardStatus(currentStage.num, 'completed');
-          currentStageIdx++;
-          stageLogIdx = 0;
-
-          if (currentStageIdx < totalSteps) {
-            setStageCardStatus(stages[currentStageIdx].num, 'running');
-          }
-        }
-      }, 200);
+      updateProgressUI(5, 'Running on the server (pose tracking, rig, backprojection, export)...');
+      triggerBackendPipelineRun(avatar);
     }
 
     function setStageCardStatus(stageNum, status) {
@@ -5087,11 +4983,26 @@ ns-train splatfacto \\
       if (statusEl && statusText) statusEl.textContent = `Status: ${statusText}`;
     }
 
-    // Called when all 6 pipeline stages complete
-    function onPipelineCompleted(avatar) {
-      updateProgressUI(100, '✓ Pipeline Execution Succeeded (All 6 Stages Completed)');
-      appendPipelineLog('[Pipeline-Runner] ✓ End-to-end 4D performer synthesis successfully completed!', '#34d399');
-      appendPipelineLog('[Pipeline-Runner] 35,000 Gaussians dynamically rigged, backprojected & grounded.', '#38bdf8');
+    function onPipelineFailed(message) {
+      isPipelineRunning = false;
+      updateProgressUI(0, `Failed: ${message}`);
+      appendPipelineLog(`[Pipeline-Runner] Failed: ${message}`, '#fca5a5');
+      const dotEl = document.getElementById('pipeline-status-dot');
+      if (dotEl) dotEl.style.background = '#ef4444';
+      const btnAbort = document.getElementById('btn-pipeline-abort');
+      if (btnAbort) btnAbort.style.display = 'none';
+    }
+
+    // Called with the server pipeline's result
+    function onPipelineCompleted(avatar, result) {
+      isPipelineRunning = false;
+      for (let n = 1; n <= 6; n++) setStageCardStatus(n, 'completed');
+      const seconds = ((result.telemetry?.totalDurationMs || 0) / 1000).toFixed(1);
+      updateProgressUI(100, `Done on the server in ${seconds}s`);
+      appendPipelineLog(`[Pipeline-Runner] ${result.numFrames} frames at ${result.fps} fps, ${result.landmarksDetected} landmarks, ${Number(result.numGaussians).toLocaleString()} Gaussians, backprojection IoU ${result.backprojectionIoU}`, '#34d399');
+      if (result.plyPath) appendPipelineLog(`[Pipeline-Runner] Splats: ${result.plyPath}`, '#38bdf8');
+      if (result.motionPath) appendPipelineLog(`[Pipeline-Runner] Motion: ${result.motionPath}`, '#38bdf8');
+      if (result.nerfstudioTransformsPath) appendPipelineLog(`[Pipeline-Runner] Nerfstudio dataset: ${result.nerfstudioTransformsPath}`, '#38bdf8');
 
       const dotEl = document.getElementById('pipeline-status-dot');
       if (dotEl) dotEl.style.background = '#10b981';
@@ -5103,11 +5014,7 @@ ns-train splatfacto \\
       if (btnNerf) btnNerf.style.display = 'block';
       if (btnAbort) btnAbort.style.display = 'none';
 
-      // Update Three.js scene with freshly computed geometry & authentic colors
       rebuildThreeJsPerformer(avatar);
-
-      // Trigger backend server API run in background to keep server synchronized
-      triggerBackendPipelineRun(avatar);
     }
 
     // =========================================================================
@@ -5782,65 +5689,54 @@ ns-train splatfacto \\
       updateSidebarContent();
     }
 
-    // Server-Side Pipeline Execution Trigger
+    // Server-side pipeline run: a custom upload goes as data (video or image), a preset as its path under public/.
     function triggerBackendPipelineRun(avatar) {
-      try {
-        const payload = {
-          characterId: avatar.id || selectedAvatarId,
-          videoPath: avatar.videoMeta?.fileName || avatar.heroImg || 'public/models/performer_4dgs/demos/10331522/canonical_frame.jpg',
-          imageData: avatar.heroImg || null,
-          videoData: avatar.videoDataUrl || null,
-          landmarks2D: avatar.landmarks2D || null,
-          outputDir: `public/models/performer_4dgs/outputs/${selectedAvatarId}`,
-          targetHeightMeters: avatar.height || 1.78,
-          numGaussians: 35000,
-          exportNerfstudioDataset: true
-        };
-
-        fetch('/api/performer/pipeline/run', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
+      const hero = typeof avatar.heroImg === 'string' ? avatar.heroImg : '';
+      const payload = {
+        characterId: avatar.id || selectedAvatarId,
+        videoData: avatar.videoDataUrl || null,
+        imageData: !avatar.videoDataUrl && hero.startsWith('data:') ? hero : null,
+        videoPath: !avatar.videoDataUrl && hero && !hero.startsWith('data:') ? hero.replace(/^\//, '') : undefined,
+        landmarks2D: avatar.landmarks2D || null,
+        outputDir: `public/models/performer_4dgs/outputs/${selectedAvatarId}`,
+        targetHeightMeters: avatar.height || undefined,
+        numGaussians: 35000,
+        exportNerfstudioDataset: true
+      };
+      fetch('/api/performer/pipeline/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+        .then(async res => {
+          const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+          if (!res.ok || !data || !data.success || !data.result) {
+            throw new Error((data && (data.error || data.message)) || `HTTP ${res.status}`);
+          }
+          return data.result;
         })
-        .then(res => res.json())
-        .then(data => {
-          if (data && data.success && data.result) {
-            const res = data.result;
-            const duration = res.telemetry?.totalDurationMs || data.telemetry?.totalDurationMs || 0;
-            appendPipelineLog(`[Backend-API] ✓ Server service pipeline finished in ${duration}ms`, '#38bdf8');
-
-            if (res.morphology) {
-              if (res.morphology.solvedBetas) {
-                avatar.betas = res.morphology.solvedBetas;
-              }
-              if (res.morphology.ratios) {
-                avatar.ratios = res.morphology.ratios;
-              }
-            }
-            if (res.motion) {
-              avatar.motion = res.motion;
-              currentMotion = res.motion;
-            } else if (res.motionPath) {
-              fetch(res.motionPath)
-                .then(r => r.json())
-                .then(m => {
-                  avatar.motion = m;
-                  currentMotion = m;
-                  if (gaussianFidelityMode === 'procedural') rebuildThreeJsPerformer(avatar);
-                })
-                .catch(() => {});
-            }
-
-            if (gaussianFidelityMode === 'procedural') rebuildThreeJsPerformer(avatar);
-            updateSidebarContent();
+        .then(result => {
+          if (result.morphology) {
+            if (result.morphology.solvedBetas) avatar.betas = result.morphology.solvedBetas;
+            if (result.morphology.ratios) avatar.ratios = result.morphology.ratios;
+          }
+          const finish = () => { onPipelineCompleted(avatar, result); updateSidebarContent(); };
+          if (result.motion) {
+            avatar.motion = result.motion;
+            currentMotion = result.motion;
+            finish();
+          } else if (result.motionPath) {
+            const url = result.motionPath.includes('/public/') ? '/' + result.motionPath.split('/public/').pop() : null;
+            if (!url) { finish(); return; }
+            fetch(url)
+              .then(r => { if (!r.ok) throw new Error(`motion ${url}: HTTP ${r.status}`); return r.json(); })
+              .then(m => { avatar.motion = m; currentMotion = m; finish(); })
+              .catch(err => onPipelineFailed(err.message));
+          } else {
+            finish();
           }
         })
-        .catch(() => {
-          // Server offline or running client-only demo - non-blocking
-        });
-      } catch (e) {
-        // Ignore offline network errors
-      }
+        .catch(err => onPipelineFailed(err && err.message ? err.message : String(err)));
     }
 
     // =========================================================================
