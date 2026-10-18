@@ -497,3 +497,68 @@ On `l3b` the tier writes 34% of the texels (8% where two panos agree) from 14 pa
 - **Single-pano texels.** These have no occluder rejection. The tier should not write rung-1 texels over the projection's multi-view texels.
 - **Time.** 72 s per layer squeezes round 5's leave-one-pano-out out of the 600 s stage limit.
 - **De-lighting.** The tier does not de-light (the projection does), so its texels differ in exposure from their neighbours.
+
+## Round 6 (branch `photo-tier-a`, 2026-10-17): not pushed
+
+Worktree `.claude/worktrees/photo-tier-a` (photo tier A merged with round 5, `c4ec7b8c`). Ports: web 3072, API 3073, tools 3074 (`npm --prefix <worktree> run dev`, `secrets.json` symlinked for the runs and removed after). Three cold runs of `Washington Square Arch` (the vision/detail and texture caches cleared before each; the evidence and its registration always run again): `98e8d2f8` (tier on), `71cddb48` (tier off, `SCRATCHBOX_PHOTO_TIER_OFF=1`), `41d7bc30` (tier on). Screenshots (of `98e8d2f8`): `test-results/screenshots/texture_live_v6/` (`clay_*`, `tex_*`, `prov_*`, the 16 view names of photo tier A, 808 x 943; gitignored), set with `__SB_SET_CAMERA_VIEW__` around the l3b box centre `[-1.25, 10.8, -2.4]`, front heading 33°.
+
+**Status: Needs Fix.** Every change works live, no stage or server error, the stage stays inside its 600 s limit (549 s and 556 s) with the tier at 16 s per layer, but with the tier on the leave-one-pano-out fit of `l3b` is worse than round 5's (6.37 and 6.14 px against 5.51), so the branch was not pushed.
+
+### What changed
+
+1. **Face outline inside the joint registration** (`pano-joint-registration.ts`, `StreetViewCrossViewRefiner.ts`). The tile mesh within 1.5 m of the fitted faces (`faceSlabMesh`, so trees and statues in front of a face are left out) gives each wide view the outline of the structure's own faces (`faceOutlineSamples`: surface next to no surface or a far step, and only where the full mesh shows that surface). It is held to the photo's strong colour-contrast edges (`colourContrastEdges`: per-channel Sobel, non-maximum suppression, top 15 %) with the weight of the sky and edge terms (40 equivalent matches), against the cross-view photo consistency and the priors. The held-out fit reports it on the odd cells (`outlinePx`). The photo tier's separate anchor is gone: every view is placed by its registered pose, so the projection and the tier read the photos through one pose set (`SCRATCHBOX_JOINT_OUTLINE=0` turns the term off).
+2. **Single-pano texels** (`face_rectify.py`, `photo-tier-rectify.ts mergePhotoTier`). Texels at least two panos agree on (rung 0) replace whatever is below; single-pano texels (rung 1) only fill what the projection does not have (what would fall to the tile) and never replace its single- or multi-view texels. A single-pano pixel must look like the face: per-pixel median over its pano's views, not sky (b* < -8, chroma > 8) or vegetation (a* < -6) by colour, and within 15 ΔE76 of the tile's colour at 0.4 m after the chart's offset; rejected pixels go with a 15 cm margin.
+3. **De-light and exposure** (`photo-tier-rectify.ts delightAndMatch`). The tier's texels are de-lit with the shared `delightLinearPlane` (the projection's lift cap) and each chart's exposure is matched to the ladder below by `solveRelativeGains` (ladder as one view, each chart as another; tile texels weigh 0.3; capped at 0.4 in log).
+4. **Time.** The geometry (chart depths, regions, tile photos) is set up once per layer, the worker caches each view's warp per (photo, chart frame, homography) and each co-registration, and charts run in 4 threads. The leave-one-pano-out fit runs on the tier's layers first and says `sampled` (with `panosTotal`) when it judged fewer panos than have views.
+5. MediaPipe `assets/models/pose_landmarker_full.task` (float16, 9.4 MB, Apache-2.0, from `storage.googleapis.com/mediapipe-models`), loaded and run with mediapipe 1.1.1 in `.venv`; committed (the gitignore keeps the rest of `assets/models/` out).
+
+### Synthetic checks (all fail without the change)
+
+- `staged-location-joint-registration.test.ts`: the slab mesh keeps the facade and drops a tree 2.5 m in front and a building behind; outline samples never lie where the tree hides the face (> 95 % on the true outline). With a tree in the scan the photos do not show: true held-out reprojection error 11.4 px (start), 6.0 px (joint without the term), 1.3 px (with it).
+- `staged-texture-photo-tier.test.ts` (13 tests): placement by registered pose; texels on the true texture within one texel; the van dropped; the statue left; foliage, sky and pale patches seen by one pano are not written (< 2 %), the rest of the wall is (> 60 %); photos 0.72 x under the ladder come out within 6 % of its mean luminance; the merge rule texel by texel; a cached re-run 1.6 s against 3.2 s cold with identical texels; an old pano with other stones outvoted (mean change < 4 grey levels).
+
+### Live
+
+Joint registration, held-out cells (chamfer px / gradient NCC / face outline px), per-pano choice -> joint, kept every time:
+
+| Run | Per-pano choice | Joint | Total (s) |
+|---|---|---|---|
+| photo tier A `cb9a542f` (no outline term) | 7.93 / 0.111 / – | 7.66 / 0.150 / – | 99.7 |
+| `98e8d2f8` | 8.27 / 0.127 / 3.39 | 7.36 / 0.199 / 3.02 | 104.5 |
+| `71cddb48` | 8.18 / 0.107 / 3.42 | 7.36 / 0.166 / 2.90 | 104.4 |
+| `41d7bc30` | 8.21 / 0.112 / 3.48 | 7.30 / 0.187 / 2.94 | ~104 |
+
+Leave one pano out (chamfer px / gradient NCC; l2 is the control, untouched by the tier):
+
+| Run | l3b | l2 (control) | l3b − l2 | others |
+|---|---|---|---|---|
+| round 5 `decf63a4` | 5.51 / 0.229 | 5.95 / 0.243 | −0.44 | l3c 5.99 / 0.240 |
+| `98e8d2f8` tier on | 6.37 / 0.197 | 7.12 / 0.068 | −0.75 | l3cf 6.53 / 0.051 (3 of 4, sampled), l4 6.85 / 0.141 (2 of 4, sampled) |
+| `71cddb48` tier off | 5.10 / 0.233 | 5.51 / 0.271 | −0.41 | l3cf 6.10 / 0.164 (sampled), l4 5.75 / 0.297 (sampled) |
+| `41d7bc30` tier on | 6.14 / 0.277 | 5.96 / 0.169 | +0.18 | l3c 5.42 / 0.210 (3 of 4, sampled) |
+
+The l2 control moved 1.6 px between runs, so a single run cannot separate the tier from the registration. Relative to the control, the tier-on runs give −0.75 and +0.18 (mean −0.29), the tier-off run −0.41 and round 5 −0.44: no gain from the tier. In absolute terms the tier-on l3b (6.37, 6.14) is worse than round 5 (5.51); the tier-off run with the outline term is better (5.10 / 0.233) but so is its control (5.51 against 5.95), so that is within the noise too. Which layers exist also changes between runs (l3c in `41d7bc30` only).
+
+The tier on l3b (`41d7bc30`; `98e8d2f8` within 1 %): 26 % of texels written, 22.6 % after the merge (111,680 rung 0, 47,098 rung 1 filling tile texels, 21,530 rung 1 left to the projection); single-pano pixels 174,385, of which 100,873 rejected (52,034 sky, 3,520 vegetation, 13,985 off the tile, the rest margin); de-lit 180,308 texels (mean lift kept 0.74); exposure matched on 48 charts, mean |log gain| 0.30, several at the 0.4 cap; non-planar 22 % (p90 2.7 m). Its own held-out score (score.py, 248k common pixels): geometry-edge chamfer 2.0 px (previous ladder 7.4, tile 40), held-out gradient NCC 0.204 (0.080, 0.067), held-out chamfer 7.8 px (5.0, 5.6), invented-edge share 0.30 (0.23, 0), palette ΔE00 5.2 (6.7, 7.2).
+
+Timings: tier 15.6-15.9 s per layer (setup 1.4 s, worker 14 s in 4 threads; photo tier A was 72 s cold); a leave-one-pano-out re-bake of l3b with the tier 22-25 s per pano (all 4 judged, 89-93 s); texture stage 549 s and 556 s with the tier, l3cf and l4 sampled for lack of time left.
+
+### What I saw (`texture_live_v6` against v5 and photo tier A)
+
+- **Better:** the front piers no longer carry a tree or sky (photo tier A's rung-1 texels; the occluder check and the merge rule keep them out). The back attic inscription reads ("...AND THE HONEST CAN REPAIR. THE EVENT IS IN THE HAND OF GOD ... WASHINGTON"); the front frieze, keystone eagle and medallions are sharp. The sky strip on the back attic top is gone.
+- **Still wrong:** the back frieze around the keystone eagle is a patchwork of offset blocks (tier rung-0 charts of different panos meeting the projection). The pigeon on the back frieze is still there: it is in the projection (v5 had it too), not the tier. The back piers are washed pale in all three rounds. The front reads darker and harsher than v5 in the frieze close-up. Close to the front piers the statues sit in blocky texel patches.
+
+### Bugs found and fixed
+
+- The live result failed `validateContract('StagedLocationResult')` with the new record fields (orchestrator tests): schema added.
+- `staged-e2e-integration` "warm" fails on this branch only by the order of the layer labels (`l4:photo-inferred` committed before `l3cf` on the warm run); the set is the same. Not investigated further.
+
+### Open issues
+
+- The leave-one-pano-out fit is dominated by registration noise (the control moves 1.6 px); comparing the tier needs the same registration in both arms: the replay endpoint below, or the tier switched off and on inside one run's leave-one-pano-out.
+- The tier's own held-out chamfer (7.8 px) is worse than the ladder's (5.0) while its NCC and geometry-edge chamfer are better: its edges are sharper but some (30 %) are not in any photo. The rung-0 fusion of panos of different dates and exposures (gains at the 0.4 cap) is the likely cause.
+- 58 % of single-pano pixels are rejected, most as sky: the fitted charts extend past the arch's silhouette in the photos (the photo tier A finding), now rejected rather than painted.
+
+### Candidate tool/service ideas
+
+- A replay endpoint for a run's registration and texture inputs, so the tier can be judged with and without on identical poses (this round needed three cold runs and still could not separate it).
