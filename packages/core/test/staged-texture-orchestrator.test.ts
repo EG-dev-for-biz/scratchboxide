@@ -19,6 +19,9 @@ import { parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { encodePng } from '../src/node/texture-processing';
 import { building, fakeNative, readTris, writeTris, type Tri, type WorldSpec } from './helpers/staged-synthetic-world';
 import { structureFit } from './helpers/staged-location-fixtures';
+import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
+import { parseGlbNodes } from '../src/node/3d-engine/staged-location/glb-nodes';
+import { area, lump, noise, patch } from './helpers/redundant-scan-fixtures';
 
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-staged-tex-')));
 afterAll(() => fs.rmSync(TMP, { recursive: true, force: true }));
@@ -71,7 +74,7 @@ function photoTexture(file: string): void {
 }
 
 /** A scan fitter whose fitted body is the scanned box (so the tile photo lies on it); refit and ornament are not used here. */
-function fitter(dir: string, opts: { delayMs?: number } = {}): ScanFitDeps {
+function fitter(dir: string, opts: { delayMs?: number; redundantPassThrough?: boolean } = {}): ScanFitDeps {
     fs.mkdirSync(dir, { recursive: true });
     return {
         fit: async () => {
@@ -81,6 +84,14 @@ function fitter(dir: string, opts: { delayMs?: number } = {}): ScanFitDeps {
             f.outputs.outlinesGlb = writeTris(path.join(dir, 'fit_outlines.glb'), building(-13, 13, -6, 5, 0.1));
             f.outputs.passThroughGlb = undefined;
             f.passThrough.regions = [];
+            if (opts.redundantPassThrough) {
+                // a noisy scan copy of the north face 5 cm in front of it, a lump 1.3 m proud of it, a fragment past its edge
+                const pieces = REDUNDANT_PIECES();
+                f.outputs.passThroughGlb = path.join(dir, 'fit_pass.glb');
+                writeStagedGlbFile(f.outputs.passThroughGlb, pieces);
+                f.passThrough.regions = pieces.map(n => ({ id: n.name, triangles: n.indices!.length / 3, areaM2: area(n), aabbMin: [0, 0, 0], aabbMax: [1, 1, 1], reason: 'not box-like' }));
+                f.passThrough.areaM2 = pieces.reduce((a, n) => a + area(n), 0);
+            }
             f.outputs.reportJson = path.join(dir, 'fit_structure_fit.json');
             fs.writeFileSync(f.outputs.reportJson, JSON.stringify(f));
             return { value: f, path: f.outputs.reportJson, dir, key: '7c1e04aa'.padEnd(64, '0'), binarySha256: 'b', cached: false, builtAtMs: Date.now(), ms: 30, waitedForEngineMs: 0 } as any;
@@ -91,8 +102,15 @@ function fitter(dir: string, opts: { delayMs?: number } = {}): ScanFitDeps {
     };
 }
 
+/** Pass-through pieces against the fitted north face (z = -6, x -13..13, y 0..22). */
+const REDUNDANT_PIECES = () => [
+    patch('r0', -10, 10, 2, 18, 0.5, (x, y) => -6.05 + noise(x, y)),
+    lump('r1', [0, 8, -7.3], 0.6),
+    patch('r2', 14, 16, 4, 6, 0.5, (x, y) => -6.05 + noise(x, y))
+];
+
 let counter = 0;
-function setup(extra: Partial<StagedLocationDeps> = {}, opts: { photo?: boolean; fitDelayMs?: number } = {}) {
+function setup(extra: Partial<StagedLocationDeps> = {}, opts: { photo?: boolean; fitDelayMs?: number; redundantPassThrough?: boolean } = {}) {
     const root = path.join(TMP, `ws${++counter}`);
     fs.mkdirSync(root, { recursive: true });
     const native = fakeNative(path.join(root, 'native'), ARCH, {});
@@ -106,7 +124,7 @@ function setup(extra: Partial<StagedLocationDeps> = {}, opts: { photo?: boolean;
         cache: new StageCache({ workspaceRoot: root }),
         geocode: async q => ({ lat: 40.73122, lng: -73.99709, formattedAddress: `${q}, New York, NY`, placeId: 'p' }),
         extract, vegetation: native.deps.vegetation, refine: native.deps.refine,
-        scanFit: fitter(path.join(root, 'fit'), { delayMs: opts.fitDelayMs }),
+        scanFit: fitter(path.join(root, 'fit'), { delayMs: opts.fitDelayMs, redundantPassThrough: opts.redundantPassThrough }),
         newRunId: () => (0xb1b2c300 + ++runs).toString(16),
         sleep: async () => undefined,
         textures: { maxDensityTexelsPerMeter: 4, maxSide: 512 },
@@ -241,5 +259,44 @@ describe('the texture stage of the staged location build', () => {
         const s = setup();
         const { result } = await runStagedLocation({ query: 'Washington Square', isolate: false, radiusM: 30, trees: false }, s.deps, s.ctx);
         expect(result.stages.find(x => x.stage === 'textures')).toMatchObject({ status: 'skipped', reason: 'the texture pass runs on an isolated structure' });
+    });
+});
+
+describe('pass-through scan redundant with the fitted surface', () => {
+    it('is hidden from the drawn, textured and exported pass-through layer, kept viewable as a replaced layer, and recorded', async () => {
+        const s = setup({}, { redundantPassThrough: true });
+        const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
+        expect(validateContract('StagedLocationResult', result)).toEqual([]);
+        const layers = (result.artifact as any).data.stagedBuild.layers as any[];
+        const byName = (n: string) => layers.find(l => l.layer === n);
+        const l3b = byName('l3b'), l3c = byName('l3c'), l3ch = byName('l3ch');
+        const nodesOf = (url: string) => parseGlbNodes(fs.readFileSync(path.join(s.root, 'public', 'models', path.basename(url))));
+        const [copy, statue, fragment] = REDUNDANT_PIECES();
+        // the copy is in the replaced layer, which the fitted body supersedes; the lump and the fragment are drawn, whole
+        expect(l3ch).toBeDefined();
+        expect(l3b.supersedes).toContain(l3ch.objectId);
+        expect(nodesOf(l3ch.url).map(n => n.name)).toEqual(['r0']);
+        expect(nodesOf(l3ch.url)[0].positions.length / 9).toBe(copy.indices!.length / 3);
+        const drawn = nodesOf(l3c.url);
+        expect(drawn.map(n => n.name)).toEqual(['r1', 'r2']);
+        expect(l3c.counts.triangles).toBe((statue.indices!.length + fragment.indices!.length) / 3);
+        expect(area(drawn[0])).toBeCloseTo(area(statue), 4);
+        expect(area(drawn[1])).toBeCloseTo(area(fragment), 4);
+        expect(l3ch.provenance.note).toMatch(/hidden: redundant with the fitted surface/);
+        expect(l3c.provenance.note).toMatch(/hidden \(layer l3ch\)/);
+        // the textured twin is of the drawn layer only: no twin for the replaced layer, the twin holds the drawn triangles only
+        expect(l3ch.textured).toBeUndefined();
+        expect(l3c.textured).toBeDefined();
+        const twin = nodesOf(l3c.textured.url);
+        expect(twin.reduce((n, x) => n + (x.indices ? x.indices.length : x.positions.length / 3) / 3, 0)).toBe(l3c.counts.triangles);
+        // the record: the result, one degradation for the hidden region (the region it replaces is no longer "kept as scanned")
+        expect(result.structureFit!.passThroughHidden).toMatchObject({ triangles: copy.indices!.length / 3, trianglesSplit: 0, regions: 1, toleranceM: { min: 0.1, max: 0.1 } });
+        expect(result.structureFit!.passThroughHidden!.areaM2).toBeCloseTo(area(copy), 1);
+        expect(fs.existsSync(result.structureFit!.passThroughHidden!.reportPath)).toBe(true);
+        const hid = result.degradations.filter(d => d.reasonCode === 'pass_through_hidden');
+        expect(hid.map(d => d.part.objectId)).toEqual([l3ch.objectId]);
+        expect(hid[0].reason).toMatch(/^pass-through hidden: redundant with fitted surface, offset 0\.0\d\d m/);
+        expect(result.degradations.filter(d => d.reasonCode === 'pass_through').map(d => d.id)).toEqual(['d-fit-pass_through-r1', 'd-fit-pass_through-r2']);
+        expect(result.summary).toMatch(/m² of the scan kept as scanned \(1 region\) hidden where a fitted face lies within 0\.10 m behind them/);
     });
 });

@@ -107,6 +107,7 @@ import {
     type FigureBlob, type FigureImage, type FigureView
 } from './figures';
 import { parseGlbNodes, readGlbNodes } from './glb-nodes';
+import { splitPassThroughFile, type PassThroughSplit } from './redundant-scan';
 import { writeStagedGlbFile, type StagedGlbNode } from './staged-glb-writer';
 import { buildObjectFromSpec } from '../reference-object-builder';
 import type { ObjectBuildSpec } from '../../../common/spatial/object-build-spec';
@@ -1203,7 +1204,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
 
         // ---------------- figures (compact scanned blobs on a fitted pedestal: read from a close-up, built inside the blob's bounds) ----------------
         let figuresPromise: Promise<unknown> | undefined;
-        const startFigures = (fit: StructureFit, out: { figures?: FigureRecord[] }): void => {
+        const startFigures = (fit: StructureFit, out: { figures?: FigureRecord[]; passThroughHidden?: PassThroughSplit }): void => {
             const surveyDone = surveyPromise ? surveyPromise.catch(() => undefined) : Promise.resolve(undefined);
             // the figures are found and read without the survey (it only corroborates them), so they start with the fit
             figuresPromise = Promise.resolve().then(() => runner.stage<{ records: FigureRecord[] }>({
@@ -1349,7 +1350,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const figureNodes = [...built.values(), ...smoothed].sort((a, b) => a.node.name!.localeCompare(b.node.name!));
                     let restId: string | undefined;
                     if (replaced.size && l3c) {
-                        const rest = nodes.filter(n => !replaced.has(n.name));
+                        // the drawn pass-through (without the parts a fitted face already shows) without the figure regions
+                        const drawn = out.passThroughHidden ? (out.passThroughHidden.visibleFile ? readGlbNodes(out.passThroughHidden.visibleFile) : []) : nodes;
+                        const rest = drawn.filter(n => !replaced.has(n.name));
                         const file = path.join(dir, 'passthrough_without_figures.glb');
                         writeStagedGlbFile(file, rest.map(n => ({ name: n.name, positions: n.positions, ...(n.indices ? { indices: n.indices } : {}), extras: n.extras })), { rootExtras, copyright: 'Google' });
                         const pub = cache.publishFile(file, `${base}_l3cf_${key.slice(0, 8)}.glb`);
@@ -1942,7 +1945,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         siblings.push(treesPromise);
 
         // ---------------- the rebuild (isolated structure) ----------------
-        type Rebuild = { figures?: FigureRecord[]; anchored?: AnchorNote[]; located?: DetailPlan; fit?: ScanFitFitResult; refit?: ScanFitFitResult; spec?: OrnamentSpec; rejected?: PrimitiveCorrection[]; detail?: ScanFitOrnamentResult; droppedNotResolvable: number; sourceLimits?: SourceLimits; evidenceCounts?: { tileOrthos: number; streetView: number }; runReadings?: RunReadingReport; registration?: NonNullable<NonNullable<StagedLocationResult['ornament']>['registration']>; slotsOffered?: { offered: number; total: number; hidden: number; unseen: number; exposureJudged: boolean } };
+        type Rebuild = { figures?: FigureRecord[]; anchored?: AnchorNote[]; located?: DetailPlan; fit?: ScanFitFitResult; refit?: ScanFitFitResult; spec?: OrnamentSpec; rejected?: PrimitiveCorrection[]; detail?: ScanFitOrnamentResult; droppedNotResolvable: number; sourceLimits?: SourceLimits; evidenceCounts?: { tileOrthos: number; streetView: number }; runReadings?: RunReadingReport; registration?: NonNullable<NonNullable<StagedLocationResult['ornament']>['registration']>; slotsOffered?: { offered: number; total: number; hidden: number; unseen: number; exposureJudged: boolean }; passThroughHidden?: PassThroughSplit };
         const rebuildOut: Rebuild = { droppedNotResolvable: 0 };
         const rebuildRun = async (): Promise<Rebuild> => {
             const out = rebuildOut;
@@ -1991,11 +1994,30 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         };
                     }
                     run.state.structure = { ...run.state.structure!, buildingId: fit.buildingId };
-                    const layers = commitFitLayers(run, r, fitKey, base, cache, placeValue!.formattedAddress, undefined);
-                    const degradations = fit.passThrough.regions.map(region => run.degrade(record('fit', 'pass_through', {
+                    // the pass-through scan lying on a fitted face, within the tolerance of it, is hidden (redundant-scan.ts): the fitted
+                    // face shows there; what stands proud of it, or has no fitted face behind it, stays drawn
+                    // SCRATCHBOX_STAGED_HIDE_REDUNDANT=0 draws all of it (the behaviour before; for comparisons on replayed evidence)
+                    let split: PassThroughSplit | undefined;
+                    if (process.env.SCRATCHBOX_STAGED_HIDE_REDUNDANT !== '0') try {
+                        split = splitPassThroughFile(fit, path.join(cache.dir, 'passthrough-hide', fitKey.slice(0, 8)));
+                    } catch (err) {
+                        io.progress(`the pass-through scan was not checked against the fitted faces (${errorMessage(err)}); all of it stays drawn`);
+                    }
+                    if (split) out.passThroughHidden = split;
+                    const layers = commitFitLayers(run, r, fitKey, base, cache, placeValue!.formattedAddress, undefined, split);
+                    const hiddenLayerId = layers.find(l => l.layer === 'l3ch')?.objectId;
+                    const hiddenBy = new Map((split?.report.regions ?? []).filter(x => x.areaHiddenM2 > 0).map(x => [x.name, x]));
+                    const wholly = (id: string) => { const h = hiddenBy.get(id); return !!h && h.trianglesHidden === h.trianglesIn; };
+                    const hiddenDegradations = [...hiddenBy.values()].map(h => run.degrade(record('fit', 'pass_through_hidden', {
+                        part: { description: `region ${h.name}: ${h.areaHiddenM2.toFixed(1)} of ${h.areaInM2.toFixed(1)} m² lie on a fitted face`, buildingId: fit.buildingId, ...(hiddenLayerId ? { objectId: hiddenLayerId } : {}), ...(h.surfaceIds[0] ? { surfaceId: h.surfaceIds[0] } : {}) },
+                        intended: 'that region as scanned (pass-through)', fellTo: 'the fitted surface behind it', provenanceAfter: PROVENANCE.fitted,
+                        reason: `pass-through hidden: redundant with fitted surface, offset ${(h.offsetMedianM ?? 0).toFixed(3)} m (largest ${(h.offsetMaxM ?? 0).toFixed(3)} m, tolerance ${split!.report.toleranceM.min === split!.report.toleranceM.max ? split!.report.toleranceM.max.toFixed(2) : `${split!.report.toleranceM.min.toFixed(2)}-${split!.report.toleranceM.max.toFixed(2)}`} m); shown under replaced layers`,
+                        transient: false, runId, now: now(), suffix: h.name
+                    })));
+                    const degradations = fit.passThrough.regions.filter(region => !wholly(region.id)).map(region => run.degrade(record('fit', 'pass_through', {
                         part: { description: `region ${region.id} (${region.areaM2.toFixed(1)} m²)`, buildingId: fit.buildingId }, intended: 'a fitted shape', fellTo: 'that region as scanned (pass-through)',
                         provenanceAfter: PROVENANCE.asScanned, reason: `no fitted shape explains it (${region.reason})`, transient: false, runId, now: now(), suffix: region.id
-                    })));
+                    }))).concat(hiddenDegradations);
                     const unobserved = fit.surfaces.filter(x => x.supportFraction < 0.5).reduce((sum, x) => sum + x.areaM2, 0);
                     run.note(PROVENANCE.fitted, `fitted to the scan: ${(fit.metrics.scanToFit.rmsM * 100).toFixed(1)} cm rms over ${Math.round(fit.metrics.coverage * 100)}% of the visible surface`);
                     if (unobserved > 0) run.note(PROVENANCE.fittedUnobserved, `${unobserved.toFixed(1)} m² of faces the fit placed where the scan has no samples`);
@@ -2404,8 +2426,17 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     }
 }
 
+/** The result's record of the pass-through scan hidden as redundant with the fitted surface. */
+function passThroughHiddenSummary(split: PassThroughSplit): NonNullable<NonNullable<StagedLocationResult['structureFit']>['passThroughHidden']> {
+    const r = split.report;
+    return {
+        triangles: r.trianglesHidden, trianglesSplit: r.trianglesSplit, areaM2: r.areaHiddenM2, areaKeptM2: r.areaKeptM2,
+        regions: r.regions.filter(x => x.areaHiddenM2 > 0).length, toleranceM: { min: r.toleranceM.min, max: r.toleranceM.max }, reportPath: split.reportPath
+    };
+}
+
 /** Publishes a fit's (or refit's) layers: outlines, the fitted body (one node per surface) and the pass-through scan. */
-function commitFitLayers(run: StagedRun, r: ScanFitFitResult, key: string, base: string, cache: StageCache, address: string, corrected: { ids: string[]; confidence: number } | undefined): StagedLayer[] {
+function commitFitLayers(run: StagedRun, r: ScanFitFitResult, key: string, base: string, cache: StageCache, address: string, corrected: { ids: string[]; confidence: number } | undefined, split?: PassThroughSplit): StagedLayer[] {
     const fit = r.value;
     const refit = !!corrected;
     const correctedIds = corrected?.ids;
@@ -2436,12 +2467,13 @@ function commitFitLayers(run: StagedRun, r: ScanFitFitResult, key: string, base:
     };
     const unobserved = fit.surfaces.filter(s => s.supportFraction < 0.5);
     const labels: ProvenanceLabel[] = [PROVENANCE.fitted, ...(unobserved.length ? [PROVENANCE.fittedUnobserved] : []), ...(refit ? [PROVENANCE.photoCorrected] : [])];
-    const add = (layerName: string, file: string | undefined, label: ProvenanceLabel, labelsHere: ProvenanceLabel[], reveal: Partial<StagedLayer['reveal']>, supersedes: string[], revealAfter: string[]) => {
+    const add = (layerName: string, file: string | undefined, label: ProvenanceLabel, labelsHere: ProvenanceLabel[], reveal: Partial<StagedLayer['reveal']>, supersedes: string[], revealAfter: string[], note?: string) => {
         if (!file || !fs.existsSync(file)) return;
         const pub = cache.publishFile(file, `${base}_${layerName}_${key.slice(0, 8)}.glb`);
+        const provenance = fitRecord(label);
         const layer: StagedLayer = {
             objectId: layerObjectId(key, layerName), stage: refit ? 'correct' : 'fit', layer: layerName, order: STAGES.fit.order, url: pub.url, bytes: pub.bytes,
-            provenance: fitRecord(label), provenanceLabels: labelsHere, supersedes, revealAfter,
+            provenance: note ? { ...provenance, note: provenance.note ? `${provenance.note}; ${note}` : note } : provenance, provenanceLabels: labelsHere, supersedes, revealAfter,
             reveal: { durationMs: 900, stagger: 1, crossfadeFrom: [], ...reveal }, cached: r.cached, builtAtMs: r.builtAtMs, counts: glbMeshCounts(file)
         };
         run.commit(layer, { source: 'scan_fit', resolvedAddress: address });
@@ -2450,8 +2482,16 @@ function commitFitLayers(run: StagedRun, r: ScanFitFitResult, key: string, base:
     if (!refit) {
         add('l3a', fit.outputs.outlinesGlb, PROVENANCE.fitted, [PROVENANCE.fitted], {}, [], []);
         const outlines = out[0]?.objectId;
-        add('l3b', fit.outputs.fittedGlb, PROVENANCE.fitted, labels, { crossfadeFrom: remesh ? [remesh.objectId] : [] }, remesh ? [remesh.objectId] : [], [...(remesh ? [remesh.objectId] : []), ...(outlines ? [outlines] : [])]);
-        add('l3c', fit.outputs.passThroughGlb, PROVENANCE.asScanned, [PROVENANCE.asScanned], { crossfadeFrom: remesh ? [remesh.objectId] : [] }, [], remesh ? [remesh.objectId] : []);
+        // the pass-through scan a fitted face already shows: its own layer, which the fitted body supersedes (viewable under
+        // "Show replaced layers"); the rest is the pass-through layer that is drawn, textured and exported
+        const rep = split?.report;
+        const tol = rep ? (rep.toleranceM.min === rep.toleranceM.max ? `${rep.toleranceM.max.toFixed(2)} m` : `${rep.toleranceM.min.toFixed(2)}-${rep.toleranceM.max.toFixed(2)} m`) : '';
+        add('l3ch', split?.hiddenFile, PROVENANCE.asScanned, [PROVENANCE.asScanned], {}, [], [],
+            rep && `hidden: redundant with the fitted surface (${rep.trianglesHidden} triangles hidden whole, ${rep.trianglesSplit} clipped at a face edge, ${rep.areaHiddenM2.toFixed(1)} m² within ${tol} of a fitted face behind them)`);
+        const hiddenId = out.find(l => l.layer === 'l3ch')?.objectId;
+        add('l3b', fit.outputs.fittedGlb, PROVENANCE.fitted, labels, { crossfadeFrom: remesh ? [remesh.objectId] : [] }, [...(remesh ? [remesh.objectId] : []), ...(hiddenId ? [hiddenId] : [])], [...(remesh ? [remesh.objectId] : []), ...(outlines ? [outlines] : [])]);
+        add('l3c', split ? split.visibleFile : fit.outputs.passThroughGlb, PROVENANCE.asScanned, [PROVENANCE.asScanned], { crossfadeFrom: remesh ? [remesh.objectId] : [] }, [], remesh ? [remesh.objectId] : [],
+            rep && rep.areaHiddenM2 > 0 ? `${rep.areaKeptM2.toFixed(1)} of ${rep.areaInM2.toFixed(1)} m² drawn; ${rep.areaHiddenM2.toFixed(1)} m² lying within ${tol} of a fitted face are hidden (layer l3ch)` : undefined);
     } else {
         const a = prior('l3a'), b = prior('l3b');
         add('l3ar', fit.outputs.outlinesGlb, PROVENANCE.photoCorrected, [PROVENANCE.fitted, PROVENANCE.photoCorrected], { crossfadeFrom: a ? [a.objectId] : [], only: { primitiveIds: correctedIds! } }, a ? [a.objectId] : [], a ? [a.objectId] : []);
@@ -2471,7 +2511,7 @@ interface FinishInput {
     groundLayerId?: string;
     trees?: LocationClayTrees;
     putBack?: { triangles: number; crowns: number; reason: string };
-    rebuild: { figures?: FigureRecord[]; anchored?: AnchorNote[]; located?: DetailPlan; fit?: ScanFitFitResult; refit?: ScanFitFitResult; spec?: OrnamentSpec; rejected?: PrimitiveCorrection[]; detail?: ScanFitOrnamentResult; droppedNotResolvable: number; sourceLimits?: SourceLimits; evidenceCounts?: { tileOrthos: number; streetView: number }; runReadings?: RunReadingReport; registration?: NonNullable<NonNullable<StagedLocationResult['ornament']>['registration']>; slotsOffered?: { offered: number; total: number; hidden: number; unseen: number; exposureJudged: boolean } };
+    rebuild: { figures?: FigureRecord[]; anchored?: AnchorNote[]; located?: DetailPlan; fit?: ScanFitFitResult; refit?: ScanFitFitResult; spec?: OrnamentSpec; rejected?: PrimitiveCorrection[]; detail?: ScanFitOrnamentResult; droppedNotResolvable: number; sourceLimits?: SourceLimits; evidenceCounts?: { tileOrthos: number; streetView: number }; runReadings?: RunReadingReport; registration?: NonNullable<NonNullable<StagedLocationResult['ornament']>['registration']>; slotsOffered?: { offered: number; total: number; hidden: number; unseen: number; exposureJudged: boolean }; passThroughHidden?: PassThroughSplit };
     strip?: TileVegetationStripResult;
     textures?: TextureStageValue;
     now: () => number;
@@ -2567,7 +2607,8 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
                 buildingId: fit.buildingId, accepted: fit.accepted, primitives: fit.primitives.length,
                 scanToFitRmsM: fit.metrics.scanToFit.rmsM, fitToScanRmsM: fit.metrics.fitToScan.rmsM, coverage: fit.metrics.coverage,
                 passThroughAreaM2: fit.passThrough.areaM2, unobservedFaceAreaM2: round(fit.surfaces.filter(s => s.supportFraction < 0.5).reduce((s, x) => s + x.areaM2, 0), 2),
-                gates: fit.gates, corrections: [...(ornament?.corrections ?? []), ...(f.rebuild.rejected ?? [])], reportPath: fit.outputs.reportJson
+                gates: fit.gates, corrections: [...(ornament?.corrections ?? []), ...(f.rebuild.rejected ?? [])], reportPath: fit.outputs.reportJson,
+                ...(f.rebuild.passThroughHidden ? { passThroughHidden: passThroughHiddenSummary(f.rebuild.passThroughHidden) } : {})
             }
         } : {}),
         ...(ornament ? {
