@@ -376,11 +376,27 @@ describe('Street View projection bake', () => {
             expect(c.covered).toBe(a.albedo[t * 4 + 3] === 255);
             if (!c.covered) continue;
             counted[c.provenanceIndex]++;
-            expect(c.rung).toBe(a.provenance[c.provenanceIndex].panoIds!.length >= 2 ? 0 : 1);
+            expect(c.rung).toBe(new Set(a.provenance[c.provenanceIndex].panoIds!).size >= 2 ? 0 : 1);
         }
         a.provenance.forEach((p, i) => expect(p.coverage).toBeCloseTo(counted[i] / a.report.coveredTexels, 6));
         const covered = a.provenance.reduce((s, p) => s + p.coverage, 0);
         expect(covered).toBeCloseTo(a.report.bakedTexels / a.report.coveredTexels, 6);
+    });
+
+    it('several crops of one pano are not a multi-view blend: rung 1, labelled as one pano', async () => {
+        const atlas = facadeAtlas(48);
+        const views = rig([facadeRect()], { ids: ['pano-front', 'pano-left'] });
+        views[1].view = { ...views[1].view, panoId: 'pano-front' }; // a second crop of the same pano
+        const res = await bake(views, atlas);
+        let both = 0;
+        for (let t = 0; t < 48 * 48; t++) {
+            const c = unpackConfidenceTexel(res.confidence, t);
+            if (!c.covered) continue;
+            expect(c.rung).toBe(1);
+            if (res.provenance[c.provenanceIndex].panoIds!.length === 2) both++;
+        }
+        expect(both).toBeGreaterThan(100); // both crops did contribute to those texels
+        expect(res.provenance.filter(p => p.panoIds!.length === 2).every(p => /of one pano/.test(p.method))).toBe(true);
     });
 
     it('de-lights through the shared helpers: solar irradiance per view when its capture time is known, shadow lift after', async () => {

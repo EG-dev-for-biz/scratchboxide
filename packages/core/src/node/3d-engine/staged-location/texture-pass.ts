@@ -49,6 +49,7 @@ import type { PhotoTierLayerRecord } from '../../../common/spatial/texture-pass-
 import { describeLayerFit, leaveOnePanoOut, measureLayerFit, type LayerFit, type LooFit } from './texture-fit-metric';
 import { measureScanDeviation, type ScanDeviation } from './scan-deviation';
 import { round5Enabled } from './round5-switch';
+import { WITNESS_MAX_DELTA_E, witnessSinglePano } from './single-pano-witness';
 
 /** Part of every texture cache key: a change to the pass's maths is a new version. */
 /** Photo tier A is opt-in (round 6 on the arch: no leave-one-pano-out gain over the projection); SCRATCHBOX_PHOTO_TIER=1 turns it on for a server. */
@@ -310,7 +311,10 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
         try {
             // off-scan texels are projected from the scan's surface under them (same layout, positions moved)
             const projAtlas = offScan?.offTexels ? { ...atlas, texels: { ...atlas.texels, position: (() => { const pos = Float32Array.from(atlas.texels.position); for (let i = 0; i < offScan!.off.length; i++) if (offScan!.off[i] && !offScan!.noScan[i]) { pos[i * 3] = offScan!.onScan[i * 3]; pos[i * 3 + 1] = offScan!.onScan[i * 3 + 1]; pos[i * 3 + 2] = offScan!.onScan[i * 3 + 2]; } return pos; })() } } : atlas;
-            looBake = views => bakeStreetViewProjection({ ...request, views });
+            // the single-pano texels a second capture (the tile photo) contradicts are left to the next rung (single-pano-witness.ts),
+            // in the leave-one-pano-out re-bakes too, so the fit judges the texture the layer gets
+            const witnessed = (baked: BakedTexturePlanes) => (src.tile ? witnessSinglePano(baked, projAtlas, src.tile.sample.bind(src.tile)) : undefined);
+            looBake = async views => { const b = await bakeStreetViewProjection({ ...request, views }); return witnessed(b)?.planes ?? b; };
             const request = {
                 atlas: projAtlas, views: src.views, depthFor: depthForMesh(src.occluder), ...(src.context ? { contextDepthFor: depthForMesh(src.context) } : {}), paletteLab: src.palette.length ? paletteLab(src.palette) : undefined,
                 signal: src.signal, options: {
@@ -327,6 +331,14 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
             const res = await bakeStreetViewProjection(request);
             planes = res;
             degradations.push(...res.degradations);
+            const w = witnessed(res);
+            if (w && w.report.rejected) {
+                planes = w.planes;
+                const share = w.report.rejected / Math.max(1, countCovered(atlas));
+                degradations.push({ stage: 'bake-projection', reasonCode: 'single_pano_contradicted', layerKey: layer.layerKey, fromRung: 1, toRung: 2, texelShare: share,
+                    reason: `${w.report.rejected} of ${w.report.checked} texels only one pano saw differ from the tile photo by more than ${WITNESS_MAX_DELTA_E} CIE76 over ~0.2 m (exposure matched, gain ${w.report.gain.map(g => g.toFixed(2)).join('/')}): something stood in front in that pano, or the sky showed past a misplaced edge, so the tile photo colours them.` });
+                progress(`${w.report.rejected} single-pano texels contradicted by the tile photo left to it (${w.report.checked} checked, ${w.report.noWitness} with no tile near)`);
+            }
             projection = {
                 views: src.views.length, bakedTexels: res.report.bakedTexels, multiViewTexels: res.report.multiViewTexels,
                 maxSeamDeltaE: res.report.maxSeamDeltaE, p95SeamDeltaE: res.report.p95SeamDeltaE, outputSeam: res.report.outputSeam, timingsMs: res.report.timingsMs,

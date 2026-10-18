@@ -22,6 +22,7 @@ import {
 } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 import { emptyConfidencePlane, FACADE, facadeAlbedo, facadeAtlas } from './helpers/texture-pass-fixtures';
 import { analyticTexture, buildTileGlb, facadeTileSheet } from './helpers/tile-photo-glb';
+import { TILE_SAMPLE_MAX_TANGENT_M, TILE_SAMPLE_TANGENT_SLOPE } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 import { planePanel, saveStrip, scalarPanel } from './helpers/texture-tile-shots';
 
 const SIDE = 64;
@@ -186,5 +187,35 @@ describe('tile photo transfer (tier 2)', () => {
         const surface = loadTileSurface(buildTileGlb([facadeTileSheet(0.05)]));
         const ctl = new AbortController(); ctl.abort();
         await expect(transferTilePhoto({ atlas: facadeAtlas(SIDE), tileSample: surface.sample, maxDistanceM: 0.25, signal: ctl.signal })).rejects.toThrow();
+    });
+
+    it('samples the tile in front of or behind a texel, never beside it: a face standing off the tile past its edge is not smeared', () => {
+        // the tile's facade: the left 5 m of the fitted facade's 10 m, 0.8 m behind it (the fit stands off the scan, and runs on
+        // past the end of the scanned wall, as the arch's back attic does live)
+        const half = { ...facadeTileSheet(0), widthM: 5, origin: [0, 0, 0.8] as Vec3, texture: analyticTexture(5, FACADE.heightM, 0.154, facadeAlbedo) };
+        const glb = buildTileGlb([half]);
+        const surface = loadTileSurface(glb, { delight: false });
+        const nearest = loadTileSurface(glb, { delight: false, maxTangentM: Infinity });
+        const at = (u: number): Vec3 => [u, 3, 0];
+        let inFront = 0, beside = 0, smeared = 0, maxErr = 0;
+        for (let u = 0.25; u < 10; u += 0.25) {
+            const s0 = surface.sample(at(u), FACADE.normal, 2.08), s1 = nearest.sample(at(u), FACADE.normal, 2.08);
+            if (u < 5) {
+                // in front of the tile: sampled, the colour of the wall behind the texel
+                expect(s0).toBeDefined();
+                inFront++;
+                const t = facadeAlbedo(u, 3);
+                for (let k = 0; k < 3; k++) maxErr = Math.max(maxErr, Math.abs(s0!.rgb[k] - t[k]));
+            } else if (u > 5 + TILE_SAMPLE_MAX_TANGENT_M + TILE_SAMPLE_TANGENT_SLOPE * 0.8 + 0.01) {
+                // past the tile's edge: the nearest point is the edge, the same few texels for every u (the smear) - not sampled
+                expect(s0).toBeUndefined();
+                beside++;
+                if (s1) { smeared++; expect(Math.abs(s1.rgb[0] - facadeAlbedo(5, 3)[0])).toBeLessThan(3); }
+            }
+        }
+        expect(inFront).toBeGreaterThan(15);
+        expect(beside).toBeGreaterThan(15);
+        expect(smeared).toBeGreaterThan(4); // within its 2.08 m reach the nearest-point sampler stretched the edge's colour across them
+        expect(maxErr).toBeLessThan(4);
     });
 });

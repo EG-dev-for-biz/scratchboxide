@@ -832,8 +832,12 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
     const entryOfKey = new Int32Array(keys.length);
     const counts = new Map<number, number>();
     for (let t = 0; t < n; t++) if (setKey[t] >= 0) counts.set(setKey[t], (counts.get(setKey[t]) ?? 0) + 1);
-    const methodOf = (views: number): string => views >= 2
-        ? `weighted linear-RGB mean of ${views} registered Street View views (cos^2 incidence x resolution x pose quality x edge feather), ${views >= huberMin ? 'Huber-reweighted, ' : ''}4-band seam blend, per-view exposure log-gain${input.paletteLab?.length ? ' with palette gate' : ''}${o.delight ? ', de-lit' : ''}`
+    // rung 0 needs two panos: several crops of one pano share its viewpoint, its pose error and whatever stood in front of
+    // it that day, so they cannot outvote each other (live: a pigeon and the sky through the arch, each from one pano)
+    const panoCount = (vs: number[]): number => new Set(vs.map(v => views[v].panoId)).size;
+    const keyPanos = keys.map(key => panoCount(key.split(',').map(Number)));
+    const methodOf = (views: number, panos: number): string => views >= 2
+        ? `weighted linear-RGB mean of ${views} registered Street View views${panos < 2 ? ' of one pano' : ` from ${panos} panos`} (cos^2 incidence x resolution x pose quality x edge feather), ${views >= huberMin ? 'Huber-reweighted, ' : ''}4-band seam blend, per-view exposure log-gain${input.paletteLab?.length ? ' with palette gate' : ''}${o.delight ? ', de-lit' : ''}`
         : `one registered Street View view, depth-tested projection, exposure log-gain${input.paletteLab?.length ? ' with palette gate' : ''}${o.delight ? ', de-lit' : ''}`;
     // coverage is a share of the atlas's covered texels (gutters included), the convention all rungs share so entries add to 1
     const denomTexels = Math.max(1, coveredTexels);
@@ -841,7 +845,7 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
         keys.forEach((key, id) => {
             const vs = key.split(',').map(Number);
             entryOfKey[id] = provenance.length;
-            provenance.push({ source: PROJECTION_SOURCE, label: PROJECTION_LABEL, method: methodOf(vs.length),
+            provenance.push({ source: PROJECTION_SOURCE, label: PROJECTION_LABEL, method: methodOf(vs.length, keyPanos[id]),
                 panoIds: vs.map((v) => views[v].panoId), coverage: (counts.get(id) ?? 0) / denomTexels });
         });
     } else {
@@ -849,20 +853,19 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
         const cover = [0, 0];
         keys.forEach((key, id) => {
             const vs = key.split(',').map(Number);
-            const r = vs.length >= 2 ? 0 : 1;
+            const r = keyPanos[id] >= 2 ? 0 : 1;
             vs.forEach((v) => byRung[r].add(v));
             cover[r] += counts.get(id) ?? 0;
             entryOfKey[id] = r;
         });
         for (let r = 0; r < 2; r++) {
-            provenance.push({ source: PROJECTION_SOURCE, label: PROJECTION_LABEL, method: r === 0 ? methodOf(2) : methodOf(1),
+            provenance.push({ source: PROJECTION_SOURCE, label: PROJECTION_LABEL, method: r === 0 ? methodOf(2, 2) : 'registered Street View views of one pano each (one view, or several crops of the same pano), depth-tested projection, exposure log-gain',
                 panoIds: [...byRung[r]].sort((x, y) => x - y).map((v) => views[v].panoId), coverage: cover[r] / denomTexels });
         }
     }
     for (let t = 0; t < n; t++) {
         if (setKey[t] < 0) continue;
-        const nv = index.start[t + 1] - index.start[t];
-        packConfidenceTexel(confidence, t, entryOfKey[setKey[t]], 1 - conf[t], nv >= 2 ? 0 : 1);
+        packConfidenceTexel(confidence, t, entryOfKey[setKey[t]], 1 - conf[t], keyPanos[setKey[t]] >= 2 ? 0 : 1);
     }
 
     // ---- measurements: seams, palette distance, degradations -------------------------------------------------------

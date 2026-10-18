@@ -322,7 +322,23 @@ export interface TileSurfaceOptions {
     delight?: PhotogrammetricDelightParams | false;
     /** Largest angle between the query normal and a tile triangle's normal. Default 60 degrees. */
     maxNormalAngleDeg?: number;
+    /**
+     * Largest sideways (tangential) offset of the sampled point from the query, in metres, beyond `tangentSlope` times the
+     * offset along the query normal. Default TILE_SAMPLE_MAX_TANGENT_M / TILE_SAMPLE_TANGENT_SLOPE; Infinity = nearest point.
+     */
+    maxTangentM?: number;
+    tangentSlope?: number;
 }
+
+/**
+ * A texel samples the tile surface in front of or behind it, not beside it. A fitted face that stands off the tile and
+ * runs past the tile's edge has its nearest tile point on that edge for a whole band of texels: the edge's few texels are
+ * stretched across the band (live, Washington Square Arch: the back attic's right half, 0.3-1.5 m off the tile, smeared
+ * into horizontal streaks). Allowed sideways: one tile texel, plus a 0.3 slope of the normal offset (a tile face up to ~17
+ * degrees from the texel's own plane at that offset).
+ */
+export const TILE_SAMPLE_MAX_TANGENT_M = 0.15;
+export const TILE_SAMPLE_TANGENT_SLOPE = 0.3;
 
 export interface TileSample {
     rgb: Vec3; distanceM: number; cosNormal: number;
@@ -375,6 +391,7 @@ export function buildTileSurface(tris: TileTriangles, options: TileSurfaceOption
     const bvh = prebuilt ?? buildBvh(tris.positions, n);
     const maxAngle = options.maxNormalAngleDeg ?? 60;
     const minCos = Math.cos((maxAngle * Math.PI) / 180);
+    const maxTangent = options.maxTangentM ?? TILE_SAMPLE_MAX_TANGENT_M, tangentSlope = options.tangentSlope ?? TILE_SAMPLE_TANGENT_SLOPE;
     const delight = options.delight === undefined ? PHOTOGRAMMETRIC_DELIGHT.defaults : options.delight;
     const cp = new Float64Array(5), best = new Float64Array(5), col = new Float64Array(3);
     const stack = new Int32Array(128);
@@ -411,7 +428,13 @@ export function buildTileSurface(tris: TileTriangles, options: TileSurfaceOption
                         const c = tris.normals[t * 3] * nq[0] + tris.normals[t * 3 + 1] * nq[1] + tris.normals[t * 3 + 2] * nq[2];
                         if (c < minCos) continue; // back face or far skin of a thin wall
                         closestOnTriangle(p, tris.positions, t, cp);
-                        const d2 = (cp[0] - p[0]) ** 2 + (cp[1] - p[1]) ** 2 + (cp[2] - p[2]) ** 2;
+                        const ox = cp[0] - p[0], oy = cp[1] - p[1], oz = cp[2] - p[2];
+                        const d2 = ox * ox + oy * oy + oz * oz;
+                        if (maxTangent !== Infinity) {
+                            const along = ox * nq[0] + oy * nq[1] + oz * nq[2];
+                            const side = maxTangent + tangentSlope * Math.abs(along);
+                            if (d2 - along * along > side * side) continue; // beside the texel, not in front of or behind it
+                        }
                         if (d2 < bestD2 || (d2 === bestD2 && bestT >= 0 && t < bestT)) { bestD2 = d2; bestT = t; bestCos = c; best.set(cp); }
                     }
                 } else {
