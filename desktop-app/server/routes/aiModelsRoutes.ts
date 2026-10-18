@@ -16,6 +16,27 @@ import {
     VideoTo4DPerformerPipelineService,
     resolveTaskCapability
 } from '../../../packages/core/src/node';
+import {
+    PerformerInputUnreadableError,
+    HeroFrameExtractionError,
+    PerformerMotionUnavailableError
+} from '../../../packages/core/src/node/spatial/VideoTo4DPerformerPipelineService';
+import { InvalidInputError, MissingInputError, PipelineError } from '../../../packages/core/src/common/errors/pipeline-errors';
+
+/**
+ * HTTP status for a typed input error: 400 when the request is missing or carries an unusable input, 422 when the
+ * input arrived but holds nothing the pipeline can use (no decodable frame, no trackable motion). Undefined otherwise.
+ */
+export function inputErrorStatus(err: unknown): 400 | 422 | undefined {
+    if (err instanceof MissingInputError || err instanceof InvalidInputError || err instanceof PerformerInputUnreadableError) return 400;
+    if (err instanceof HeroFrameExtractionError || err instanceof PerformerMotionUnavailableError) return 422;
+    return undefined;
+}
+
+function sendRouteError(res: Response, err: any): void {
+    const status = inputErrorStatus(err) ?? 500;
+    res.status(status).json({ success: false, error: err?.message || String(err), ...(err instanceof PipelineError ? { code: err.code } : {}) });
+}
 
 export interface ExportedToolRecord {
     id: string;
@@ -62,7 +83,7 @@ export function createModelsRouter(): Router {
                 models
             });
         } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || String(err) });
+            sendRouteError(res, err);
         }
     });
 
@@ -75,7 +96,7 @@ export function createModelsRouter(): Router {
                 summary
             });
         } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || String(err) });
+            sendRouteError(res, err);
         }
     });
 
@@ -88,7 +109,7 @@ export function createModelsRouter(): Router {
                 demos
             });
         } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || String(err) });
+            sendRouteError(res, err);
         }
     });
 
@@ -104,7 +125,7 @@ export function createModelsRouter(): Router {
                 avatar
             });
         } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || String(err) });
+            sendRouteError(res, err);
         }
     });
 
@@ -116,7 +137,7 @@ export function createModelsRouter(): Router {
                 models
             });
         } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || String(err) });
+            sendRouteError(res, err);
         }
     });
 
@@ -128,7 +149,7 @@ export function createModelsRouter(): Router {
                 models
             });
         } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || String(err) });
+            sendRouteError(res, err);
         }
     });
 
@@ -217,7 +238,7 @@ export function createPerformerRouter(allowedWorkspaceRoots: string[]): Router {
                 result
             });
         } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || String(err) });
+            sendRouteError(res, err);
         }
     });
 
@@ -239,6 +260,6 @@ export async function handleCapabilitiesResolve(req: Request, res: Response): Pr
         });
         res.json({ success: true, ...result });
     } catch (err: any) {
-        res.status(500).json({ success: false, error: err?.message || String(err) });
+        sendRouteError(res, err);
     }
 }

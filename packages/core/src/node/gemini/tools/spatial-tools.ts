@@ -3695,7 +3695,7 @@ export const GEOBOX_PRECISION_TOOL_DECLARATIONS: ToolDeclaration[] = [
     EDGE_ALIGNMENT_DECLARATION('geobox_optimize_edge_alignment'),
     {
         name: 'spatial_solve_pnp',
-        description: 'Analytically solves Perspective-n-Point (solvePnP / solvePnPRansac) using Direct Linear Transform (DLT) and Levenberg-Marquardt non-linear optimization to recover 6-DOF camera pose and focal length from 2D-to-3D point correspondences.',
+        description: 'Analytically solves Perspective-n-Point (solvePnP / solvePnPRansac) using Direct Linear Transform (DLT) and Levenberg-Marquardt non-linear optimization to recover the 6-DOF camera pose from 2D-to-3D point correspondences. The focal length is held fixed (focalLengthPx, or 1.2 x the image width when omitted, said so in the result); it is not recovered.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -3726,7 +3726,7 @@ export const GEOBOX_PRECISION_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 imageWidth: { type: 'NUMBER', description: 'Image width in pixels (e.g. 1920)' },
                 imageHeight: { type: 'NUMBER', description: 'Image height in pixels (e.g. 1080)' },
-                focalLengthPx: { type: 'NUMBER', description: 'Optional initial focal length estimate in pixels' },
+                focalLengthPx: { type: 'NUMBER', description: 'Focal length in pixels, held fixed during the solve. When omitted, 1.2 x imageWidth is assumed and the result says so.' },
                 useRansac: { type: 'BOOLEAN', description: 'Whether to use RANSAC outlier rejection (default: true)' },
                 ransacReprojThresholdPx: { type: 'NUMBER', description: 'RANSAC inlier threshold in pixels (default: 3.0)' }
             },
@@ -3963,7 +3963,16 @@ export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
 
         const imageWidth = typeof args.imageWidth === 'number' ? args.imageWidth : 1920;
         const imageHeight = typeof args.imageHeight === 'number' ? args.imageHeight : 1080;
-        const focalLengthPx = typeof args.focalLengthPx === 'number' ? args.focalLengthPx : (imageWidth * 1.2);
+        const focalGiven = typeof args.focalLengthPx === 'number' && args.focalLengthPx > 0;
+        const focalLengthPx: number = focalGiven ? (args.focalLengthPx as number) : (imageWidth * 1.2);
+        // The solver holds the intrinsics fixed, so the focal length (and the fov derived from it) is an input, not
+        // a measurement.
+        const focal = {
+            focalLengthPx,
+            focalLengthSource: focalGiven ? 'given (focalLengthPx), held fixed' : 'assumed 1.2 x image width (focalLengthPx not given), held fixed',
+            focalLengthRecovered: false as const
+        };
+        const focalNote = ` Focal length ${focalLengthPx.toFixed(1)} px ${focalGiven ? 'as given' : '(assumed 1.2 x image width)'}, held fixed, not recovered.`;
         const useRansac = args.useRansac !== false;
         const threshold = typeof args.ransacReprojThresholdPx === 'number' ? args.ransacReprojThresholdPx : 3.0;
 
@@ -3987,14 +3996,14 @@ export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
             });
             const p = ransacResult.pose;
             return {
-                resultPayload: ransacResult as unknown as ToolResultPayload,
-                summaryResult: `Analytically solved 6-DOF camera pose via solvePnPRansac (${ransacResult.inlierCount}/${points2D.length} inliers): camera pos [${p.cameraCenterWorld.map((v: number) => v.toFixed(2)).join(', ')}], attitude (heading: ${p.attitude.headingDeg.toFixed(1)}°, pitch: ${p.attitude.pitchDeg.toFixed(1)}°, roll: ${p.attitude.rollDeg.toFixed(1)}°), fov: ${p.fovYDeg.toFixed(1)}°, mean residual: ${p.meanReprojectionErrorPx.toFixed(3)}px.`
+                resultPayload: { ...ransacResult, ...focal } as unknown as ToolResultPayload,
+                summaryResult: `Analytically solved 6-DOF camera pose via solvePnPRansac (${ransacResult.inlierCount}/${points2D.length} inliers): camera pos [${p.cameraCenterWorld.map((v: number) => v.toFixed(2)).join(', ')}], attitude (heading: ${p.attitude.headingDeg.toFixed(1)}°, pitch: ${p.attitude.pitchDeg.toFixed(1)}°, roll: ${p.attitude.rollDeg.toFixed(1)}°), fov: ${p.fovYDeg.toFixed(1)}°, mean residual: ${p.meanReprojectionErrorPx.toFixed(3)}px.${focalNote}`
             };
         } else {
             const p = SpatialPoseEstimatorService.solvePnP(points3D, points2D, intrinsics);
             return {
-                resultPayload: p as unknown as ToolResultPayload,
-                summaryResult: `Analytically solved 6-DOF camera pose via solvePnP: camera pos [${p.cameraCenterWorld.map((v: number) => v.toFixed(2)).join(', ')}], attitude (heading: ${p.attitude.headingDeg.toFixed(1)}°, pitch: ${p.attitude.pitchDeg.toFixed(1)}°, roll: ${p.attitude.rollDeg.toFixed(1)}°), fov: ${p.fovYDeg.toFixed(1)}°, mean residual: ${p.meanReprojectionErrorPx.toFixed(3)}px.`
+                resultPayload: { ...p, ...focal } as unknown as ToolResultPayload,
+                summaryResult: `Analytically solved 6-DOF camera pose via solvePnP: camera pos [${p.cameraCenterWorld.map((v: number) => v.toFixed(2)).join(', ')}], attitude (heading: ${p.attitude.headingDeg.toFixed(1)}°, pitch: ${p.attitude.pitchDeg.toFixed(1)}°, roll: ${p.attitude.rollDeg.toFixed(1)}°), fov: ${p.fovYDeg.toFixed(1)}°, mean residual: ${p.meanReprojectionErrorPx.toFixed(3)}px.${focalNote}`
             };
         }
     },
@@ -4771,7 +4780,7 @@ export const AVATAR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'performer_4d_create_from_video',
-        description: 'Builds a dynamic 4D Gaussian Splatting performer avatar from a monocular video (or a hero image) with tracked motion (GVHMR or MediaPipe), 4-bone LBS skinning, video texture backprojection and foot-contact ground clamping. Geographic venue anchoring happens only when venueId is given. Fails with a typed error when the input is missing/unreadable, no hero frame can be decoded, or no motion can be tracked (unless allowSyntheticIdleMotion is set, in which case the motion is a labelled synthetic idle sway).',
+        description: 'Builds a dynamic 4D Gaussian Splatting performer avatar from a monocular video (or a hero image) with tracked motion (GVHMR or MediaPipe), 4-bone LBS skinning, video texture backprojection and foot-contact ground clamping. Geographic venue anchoring happens only when a venue (name, lat, lng, altMeters, stageHeadingDeg) is given. Fails with a typed error when the input is missing/unreadable, no hero frame can be decoded, or no motion can be tracked (unless allowSyntheticIdleMotion is set, in which case the motion is a labelled synthetic idle sway).',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -4791,9 +4800,17 @@ export const AVATAR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'NUMBER',
                     description: 'Number of surface Gaussians to sample (default: 35000)'
                 },
-                venueId: {
-                    type: 'STRING',
-                    description: 'Optional venue id for geodetic stage anchoring (e.g. "red_rocks", "hollywood_bowl", "the_gorge"). Omit for no venue; an unknown id is an error.'
+                venue: {
+                    type: 'OBJECT',
+                    description: 'Optional geodetic stage anchor. Give all of name, lat, lng (WGS-84 degrees), altMeters (ground altitude above mean sea level) and stageHeadingDeg (clockwise from true north). Omit for no venue; nothing is looked up or assumed.',
+                    properties: {
+                        name: { type: 'STRING' },
+                        lat: { type: 'NUMBER' },
+                        lng: { type: 'NUMBER' },
+                        altMeters: { type: 'NUMBER' },
+                        stageHeadingDeg: { type: 'NUMBER' }
+                    },
+                    required: ['name', 'lat', 'lng', 'altMeters', 'stageHeadingDeg']
                 },
                 allowSyntheticIdleMotion: {
                     type: 'BOOLEAN',
@@ -5046,7 +5063,7 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
         const characterId = args.characterId ? asString(args.characterId) : undefined;
         const targetHeightMeters = args.targetHeightMeters ? Number(args.targetHeightMeters) : undefined;
         const numGaussians = args.numGaussians ? Number(args.numGaussians) : undefined;
-        const venueId = args.venueId ? asString(args.venueId) : undefined;
+        const venue = args.venue && typeof args.venue === 'object' ? args.venue as any : undefined;
         const fps = args.fps ? Number(args.fps) : undefined;
         const allowSyntheticIdleMotion = args.allowSyntheticIdleMotion === true;
         VideoTo4DPerformerPipelineService.assertReadableInput(videoPath);
@@ -5057,7 +5074,7 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
             characterId,
             targetHeightMeters,
             numGaussians,
-            venueId,
+            venue,
             fps,
             allowSyntheticIdleMotion
         });

@@ -10,7 +10,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { spawn } from 'child_process';
+import { getPythonWorkerPool, PythonWorkerError } from '../process/persistent-python-worker';
 import { GeneratorFailedError } from '../../common/errors/pipeline-errors';
 import type {
     IPointTracker
@@ -249,57 +249,34 @@ export class TapirTrackingService implements IPointTracker {
         }
     }
 
-    private spawnBridge(payload: string): Promise<any> {
-        return new Promise((resolve, reject) => {
-            const child = spawn(this.pythonBinary, [this.scriptPath], {
-                stdio: ['pipe', 'pipe', 'pipe']
-            });
-
-            let stdout = '';
-            let stderr = '';
-            let timedOut = false;
-
-            const timer = setTimeout(() => {
-                timedOut = true;
-                child.kill('SIGKILL');
-                reject(new Error(`TAPIR python process timed out after ${this.timeoutMs}ms`));
-            }, this.timeoutMs);
-
-            child.stdout.on('data', (data) => {
-                stdout += data.toString('utf-8');
-            });
-
-            child.stderr.on('data', (data) => {
-                stderr += data.toString('utf-8');
-            });
-
-            child.on('close', (code) => {
-                clearTimeout(timer);
-                if (timedOut) return;
-                let parsed: any;
-                try {
-                    parsed = JSON.parse(stdout.trim());
-                } catch {
-                    parsed = undefined;
-                }
-                if (code !== 0) {
-                    reject(new Error(`TAPIR process exited with code ${code}: ${parsed?.error || stderr.trim() || stdout.trim().slice(0, 300)}`));
-                    return;
-                }
-                if (parsed === undefined) {
-                    reject(new Error(`Failed to parse TAPIR stdout JSON: ${stdout.slice(0, 200)}...`));
-                    return;
-                }
-                resolve(parsed);
-            });
-
-            child.on('error', (err) => {
-                clearTimeout(timer);
-                reject(err);
-            });
-
-            child.stdin.write(payload);
-            child.stdin.end();
-        });
+    /**
+     * Sends one request to the TAPIR bridge running in a persistent worker (the checkpoint stays loaded between
+     * calls). The request JSON is the script's stdin; frames travel in the raw file named in it.
+     */
+    private async spawnBridge(payload: string): Promise<any> {
+        const pool = getPythonWorkerPool({ pythonBinary: this.pythonBinary, scriptPath: this.scriptPath, label: 'the TAPIR bridge' });
+        let res;
+        try {
+            res = await pool.run({ stdin: payload, timeoutMs: this.timeoutMs });
+        } catch (err: any) {
+            if (err instanceof PythonWorkerError && err.kind === 'timeout') {
+                throw new Error(`TAPIR python process timed out after ${this.timeoutMs}ms`);
+            }
+            throw err;
+        }
+        const { exitCode: code, stdout, stderr } = res;
+        let parsed: any;
+        try {
+            parsed = JSON.parse(stdout.trim());
+        } catch {
+            parsed = undefined;
+        }
+        if (code !== 0) {
+            throw new Error(`TAPIR process exited with code ${code}: ${parsed?.error || stderr.trim() || stdout.trim().slice(0, 300)}`);
+        }
+        if (parsed === undefined) {
+            throw new Error(`Failed to parse TAPIR stdout JSON: ${stdout.slice(0, 200)}...`);
+        }
+        return parsed;
     }
 }

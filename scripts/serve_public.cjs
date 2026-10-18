@@ -72,75 +72,78 @@ function downloadImage(url, destPath) {
     });
 }
 
-function executePythonResection(imagePath, hint) {
-    return new Promise((resolve, reject) => {
-        const scriptPath = path.join(REPO_ROOT, 'tools', 'geobox', 'pipeline', 'geobox_precision_pipeline.py');
-        const args = [scriptPath, '--json'];
-        if (imagePath) {
-            args.push('--image', imagePath);
-        }
-        if (hint && typeof hint === 'string' && hint.trim().length > 0) {
-            args.push('--hint', hint.trim());
-        }
+// TypeScript services from packages/core, loaded as CommonJS. Docker (Dockerfile.inference) compiles them into
+// build/serve-public-core with `npm run build:serve-public`; a dev checkout without that build loads the TypeScript
+// source through ts-node (as desktop-app's server:dev does). When neither is available the endpoint says so.
+const CORE_CJS_DIR = path.join(REPO_ROOT, 'build', 'serve-public-core');
+const CORE_SRC_DIR = path.join(REPO_ROOT, 'packages', 'core', 'src');
+const coreModules = new Map();
+let tsNodeRegistered = false;
 
-        console.log(`[Resection API] Spawning GeoBox pipeline for: ${imagePath || 'text-only query'} (hint: "${hint || ''}")`);
-        const pythonBin = process.env.PYTHON_BIN || (fs.existsSync('/Library/Developer/CommandLineTools/usr/bin/python3') ? '/Library/Developer/CommandLineTools/usr/bin/python3' : 'python3');
-        const defaultPaths = [
-            process.env.PYTHONPATH,
-            '/Users/eligreen/Library/Python/3.9/lib/python/site-packages'
-        ].filter(Boolean).join(':');
-
-        const pythonEnv = {
-            ...process.env,
-            PYTHONPATH: defaultPaths,
-            PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin'
-        };
-        const proc = execFile(pythonBin, args, {
-            cwd: REPO_ROOT,
-            env: pythonEnv,
-            maxBuffer: 20 * 1024 * 1024,
-            timeout: 60000
-        }, (error, stdout, stderr) => {
-            if (error) {
-                console.error('[Resection API] Execution error:', error.message);
-                if (stderr) console.error('[Resection API] Stderr:', stderr);
-                return reject(new Error(`GeoBox pipeline failed: ${error.message}`));
+/** A packages/core module by its path under src/ without extension, e.g. 'node/spatial/GeoBoxPrecisionResectionService'. */
+function loadCoreModule(modulePath) {
+    if (coreModules.has(modulePath)) return coreModules.get(modulePath);
+    const built = path.join(CORE_CJS_DIR, modulePath + '.js');
+    let mod;
+    if (fs.existsSync(built)) {
+        mod = require(built);
+    } else {
+        const source = path.join(CORE_SRC_DIR, modulePath + '.ts');
+        if (!tsNodeRegistered) {
+            let tsNode;
+            try {
+                tsNode = require('ts-node');
+            } catch {
+                throw new CoreModuleUnavailableError(modulePath, `${path.relative(REPO_ROOT, built)} is not built and ts-node is not installed to load ${path.relative(REPO_ROOT, source)}; run \`npm run build:serve-public\``);
             }
-
-            const startIdx = stdout.indexOf('---GEOBOX_JSON_START---');
-            const endIdx = stdout.indexOf('---GEOBOX_JSON_END---');
-            if (startIdx !== -1 && endIdx !== -1) {
-                const jsonStr = stdout.slice(startIdx + '---GEOBOX_JSON_START---'.length, endIdx).trim();
-                try {
-                    const parsed = JSON.parse(jsonStr);
-                    resolve(parsed);
-                } catch (parseErr) {
-                    reject(new Error(`Failed to parse GeoBox JSON output: ${parseErr.message}`));
-                }
-            } else {
-                reject(new Error('GeoBox JSON markers not found in output'));
-            }
-        });
-    });
+            tsNode.register({
+                transpileOnly: true,
+                skipProject: true,
+                compilerOptions: { module: 'commonjs', moduleResolution: 'node', target: 'ES2022', esModuleInterop: true, jsx: 'react-jsx' }
+            });
+            tsNodeRegistered = true;
+        }
+        mod = require(source);
+    }
+    coreModules.set(modulePath, mod);
+    return mod;
 }
 
-let google3DTilesModule = null;
-async function getGoogle3DTilesModule() {
-    if (!google3DTilesModule) {
-        try {
-            google3DTilesModule = await import('../packages/core/dist/node/spatial/Google3DTileBlockoutPipelineService.js');
-        } catch (err) {
-            console.error('[Google 3D Tiles Service] Failed to load module:', err.message);
-        }
+class CoreModuleUnavailableError extends Error {
+    constructor(modulePath, reason) {
+        super(`${modulePath} is unavailable: ${reason}`);
+        this.code = 'service_unavailable';
     }
-    return google3DTilesModule;
+}
+
+/** HTTP status for an error thrown by a core service: typed input errors are the caller's, the rest are ours. */
+function statusForError(err) {
+    switch (err && err.code) {
+        case 'missing_input': return 400;
+        case 'location_unresolved': return 422;
+        case 'service_unavailable': return 503;
+        default: return 500;
+    }
+}
+
+/** The request fields GeoBoxPrecisionResectionService reads, taken from the JSON body as given. */
+const RESECTION_FIELDS = ['targetCoords', 'targetLandmarkName', 'cameraOpticalCenter', 'knownCoords', 'headingDeg', 'pitchDeg',
+    'rollDeg', 'standoffDistanceMeters', 'points2D', 'points3D', 'verticalLines', 'imageWidthPx', 'imageHeightPx',
+    'sensorFocalMm', 'sensorWidthMm', 'frustumReachMeters'];
+
+function resectionRequestFrom(payload, mediaPath, isVideo) {
+    const request = {};
+    for (const field of RESECTION_FIELDS) {
+        if (payload[field] !== undefined && payload[field] !== null) request[field] = payload[field];
+    }
+    const hint = payload.hint || payload.query || payload.text;
+    if (typeof hint === 'string' && hint.trim()) request.promptHint = hint.trim();
+    if (mediaPath) request[isVideo ? 'videoPath' : 'imagePath'] = mediaPath;
+    return request;
 }
 
 async function fetchGoogle3DTilesObject(queryOrCoords, options = {}) {
-    const mod = await getGoogle3DTilesModule();
-    if (!mod || !mod.getGoogle3DTilesFullTexture) {
-        throw new Error('getGoogle3DTilesFullTexture service is not available in @scratchbox/core');
-    }
+    const mod = loadCoreModule('node/spatial/Google3DTileBlockoutPipelineService');
     if (!options.outputGlbPath) {
         throw new Error('fetchGoogle3DTilesObject needs an outputGlbPath for this extraction');
     }
@@ -446,14 +449,25 @@ const server = http.createServer(async (req, res) => {
     // Health check endpoint
     if (reqPath === '/api/geobox/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', service: 'GeoBox 6-DOF Resection Server', timestamp: new Date().toISOString() }));
+        res.end(JSON.stringify({ status: 'ok', service: 'GeoBox camera resection server', timestamp: new Date().toISOString() }));
         return;
     }
 
-    // Photograph & Video Ingestion & 6-DOF Millimeter Resectioning API Endpoint
+    // Camera resection: GeoBoxPrecisionResectionService places the camera from the pose evidence in the request
+    // (2D-3D correspondences, a stated camera position, or a stated heading/pitch/standoff) relative to a target
+    // given as coordinates or resolved with Google Places. An attached photo or video is stored and returned as
+    // uploadUrl but its pixels are not analysed (result.imageAnalysed is false). Missing input is a 400, a place that
+    // cannot be resolved a 422; no pose, place or metrology is made up.
     if (req.method === 'POST' && reqPath === '/api/geobox/resect') {
         try {
-            const payload = await parseBody(req);
+            let payload;
+            try {
+                payload = await parseBody(req);
+            } catch (parseErr) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, code: 'invalid_request', error: parseErr.message }));
+                return;
+            }
             let savedImagePath = null;
             let relativeUploadUrl = null;
             const timestamp = Date.now();
@@ -493,6 +507,7 @@ const server = http.createServer(async (req, res) => {
                 const outFilename = `media_${timestamp}_${cleanName}${ext}`;
                 savedImagePath = path.join(UPLOADS_DIR, outFilename);
                 fs.writeFileSync(savedImagePath, Buffer.from(base64Data, 'base64'));
+                relativeUploadUrl = `/uploads/${outFilename}`;
             } else if (rawUrl && (rawUrl.startsWith('http://') || rawUrl.startsWith('https://'))) {
                 const urlObj = new URL(rawUrl);
                 const baseName = path.basename(urlObj.pathname) || 'downloaded_media.jpg';
@@ -511,84 +526,75 @@ const server = http.createServer(async (req, res) => {
                 }
                 savedImagePath = resolved;
                 relativeUploadUrl = publicUrlFor(resolved);
-            } else if (payload.hint || payload.query || payload.text) {
-                // Text-only search mode: No input image/video provided
-                savedImagePath = null;
-                relativeUploadUrl = null;
-            } else {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: 'Must provide a search query (text), a photograph (image), or both.' }));
+            }
+
+            const isVideo = Boolean(savedImagePath && /\.(mp4|mov|webm|mkv|avi)$/i.test(savedImagePath));
+            let resectionModule;
+            try {
+                resectionModule = loadCoreModule('node/spatial/GeoBoxPrecisionResectionService');
+            } catch (loadErr) {
+                res.writeHead(statusForError(loadErr), { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, code: loadErr.code || 'service_unavailable', error: loadErr.message }));
+                return;
+            }
+            let result;
+            try {
+                const service = new resectionModule.GeoBoxPrecisionResectionService();
+                result = await service.resectImageLocation(resectionRequestFrom(payload, savedImagePath, isVideo));
+            } catch (resectErr) {
+                const status = statusForError(resectErr);
+                if (status === 500) console.error('[Resection API] Resection failed:', resectErr);
+                res.writeHead(status, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: false,
+                    code: resectErr.code || 'resection_failed',
+                    error: resectErr.message || String(resectErr),
+                    uploadUrl: relativeUploadUrl
+                }));
                 return;
             }
 
-            // Execute Python 7-Stage Precision Pipeline (handles text-only, photo-only, or both)
-            const queryHint = payload.hint || payload.query || payload.text || '';
-            const result = await executePythonResection(savedImagePath, queryHint);
-
-            // The resected place's own 3D model: the one the resection named, or Google 3D Tiles extracted fresh at its
-            // centre. Without a centre, or when the extraction fails, there is none and the response says why; no
-            // default landmark, model looked up by proximity or keyword, or synthetic tile stands in.
+            // The resected target's own 3D model: Google 3D Tiles extracted fresh at its coordinates, unless the
+            // request sets extract3DTiles: false. When the extraction fails there is none and the response says why;
+            // no default landmark, nearby model or synthetic tile stands in.
             let threeDObject = null;
             let threeDObjectError = null;
-            const center = result.google_map_tiles_3d?.center;
-            if (typeof center?.lat !== 'number' || typeof center?.lng !== 'number') {
+            const center = result.googleMapTiles3DConfig && result.googleMapTiles3DConfig.center;
+            if (payload.extract3DTiles === false) {
+                threeDObjectError = 'Not requested (extract3DTiles: false).';
+            } else if (typeof center?.lat !== 'number' || typeof center?.lng !== 'number') {
                 threeDObjectError = 'The resection reported no map centre, so no 3D tiles were fetched.';
             } else {
                 const targetAnchor = { lat: center.lat, lng: center.lng, ...(typeof center.altitude === 'number' ? { elevation: center.altitude } : {}) };
-                const namedModel = result.google_map_tiles_3d?.three_d_object_model_url
-                    ? path.basename(result.google_map_tiles_3d.three_d_object_model_url)
-                    : null;
-                if (namedModel && fs.existsSync(path.join(PUBLIC_DIR, 'models', namedModel))) {
+                try {
+                    const outputGlbName = extractionGlbName(targetAnchor, 'textured');
+                    const outputGlbPath = path.join(PUBLIC_DIR, 'models', outputGlbName);
+                    const tileObj = await fetchGoogle3DTilesObject(targetAnchor, { outputGlbPath });
                     threeDObject = {
-                        service: 'geobox_resection',
-                        glbUrl: '/models/' + namedModel,
-                        glbPath: path.join(PUBLIC_DIR, 'models', namedModel),
+                        service: 'getGoogle3DTilesFullTexture',
+                        mode: tileObj.mode,
+                        glbUrl: '/models/' + path.basename(tileObj.glbPath),
+                        glbPath: tileObj.glbPath,
                         hasLocalGlb: true,
-                        geoAnchor: targetAnchor
+                        geoAnchor: tileObj.geoAnchor,
+                        mesh: tileObj.mesh,
+                        quality: tileObj.quality,
+                        manifest: tileObj.manifest
                     };
-                } else {
-                    try {
-                        const outputGlbName = extractionGlbName(targetAnchor, 'textured');
-                        const outputGlbPath = path.join(PUBLIC_DIR, 'models', outputGlbName);
-                        const tileObj = await fetchGoogle3DTilesObject(targetAnchor, { outputGlbPath });
-                        threeDObject = {
-                            service: 'getGoogle3DTilesFullTexture',
-                            mode: tileObj.mode,
-                            glbUrl: '/models/' + path.basename(tileObj.glbPath),
-                            glbPath: tileObj.glbPath,
-                            hasLocalGlb: true,
-                            geoAnchor: tileObj.geoAnchor,
-                            mesh: tileObj.mesh,
-                            quality: tileObj.quality,
-                            manifest: tileObj.manifest
-                        };
-                    } catch (tileErr) {
-                        threeDObjectError = `Google 3D Tiles extraction failed: ${tileErr.message}`;
-                    }
+                } catch (tileErr) {
+                    threeDObjectError = `Google 3D Tiles extraction failed: ${tileErr.message}`;
                 }
-            }
-            if (!threeDObject && result.google_map_tiles_3d) {
-                result.google_map_tiles_3d.three_d_object_model_url = null;
-                result.google_map_tiles_3d.has_local_glb = false;
-            }
-
-            result.three_d_object = threeDObject;
-
-            // Ensure relative web URL for image is populated for text searches (Street View capture)
-            if (!relativeUploadUrl && result.image_path && fs.existsSync(result.image_path)) {
-                relativeUploadUrl = '/' + path.relative(PUBLIC_DIR, result.image_path).replace(/\\/g, '/');
             }
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
                 success: true,
                 uploadUrl: relativeUploadUrl,
-                is_video: result.is_video || false,
-                video_metadata: result.video_metadata || null,
-                google_map_tiles_3d: result.google_map_tiles_3d || null,
+                is_video: isVideo,
+                google_map_tiles_3d: result.googleMapTiles3DConfig || null,
                 three_d_object: threeDObject,
                 three_d_object_error: threeDObjectError,
-                result: result
+                result
             }));
             return;
         } catch (err) {
@@ -1053,6 +1059,5 @@ server.listen(PORT, '127.0.0.1', () => {
     console.log(`[Scratchbox Hub & GeoBox Resection Server] Running at http://127.0.0.1:${port}/`);
     console.log(`  - Hub: http://127.0.0.1:${port}/index.html`);
     console.log(`  - Showcase: http://127.0.0.1:${port}/model_showcase.html?model=geobox`);
-    console.log(`  - GeoBox Demo: http://127.0.0.1:${port}/geobox_demo.html`);
     console.log(`  - API Resection: POST http://127.0.0.1:${port}/api/geobox/resect`);
 });

@@ -30,6 +30,18 @@ export function nearestImageAspectRatio(width: number, height: number): string {
     return best[0];
 }
 
+/**
+ * Gemini text-to-speech model used when SCRATCHBOX_TTS_MODEL is unset: the Gemini API id of Gemini 2.5 Flash TTS
+ * (generateContent with responseModalities AUDIO).
+ */
+export const DEFAULT_TTS_MODEL = 'gemini-2.5-flash-preview-tts';
+
+/** The TTS model to call: the configured value (SCRATCHBOX_TTS_MODEL) when it is set, else DEFAULT_TTS_MODEL. */
+export function resolveTtsModel(configured?: string): { model: string; source: 'SCRATCHBOX_TTS_MODEL' | 'default' } {
+    const value = configured?.trim();
+    return value ? { model: value, source: 'SCRATCHBOX_TTS_MODEL' } : { model: DEFAULT_TTS_MODEL, source: 'default' };
+}
+
 export const IMAGE_MODEL_PRIORITY_DRAFT = [
     'gemini-2.5-flash-image',
     'gemini-3.1-flash-image'

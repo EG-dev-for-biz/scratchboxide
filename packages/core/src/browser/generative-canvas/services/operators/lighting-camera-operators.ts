@@ -11,6 +11,7 @@ import * as THREE from 'three';
 import { type OperatorDefinition, OperatorUnavailableError } from './types';
 import {
     getPresetLightingState,
+    isTimeOfDayPreset,
     computeDiurnalLightingProfile,
     getSunVectorFromAngles
 } from '../atmosphere';
@@ -88,8 +89,8 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
             scene.environment.lighting = preset;
 
             let diurnalState: any = null;
-            let sunElevation: number;
-            let sunAzimuth: number;
+            let sunElevation: number | undefined;
+            let sunAzimuth: number | undefined;
             if (params.timeOfDay !== undefined && latitude !== undefined && longitude !== undefined) {
                 const sun = sunAtLocalSolarTime(latitude, longitude, params.timeOfDay);
                 sunElevation = sun.elevationDeg;
@@ -99,7 +100,7 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
                 sunElevation = params.sunElevation ?? 45.0;
                 sunAzimuth = params.sunAzimuth ?? 180.0;
                 diurnalState = { ...computeDiurnalLightingProfile(sunElevation), sunElevation, sunAzimuth };
-            } else {
+            } else if (isTimeOfDayPreset(preset)) {
                 diurnalState = getPresetLightingState(preset);
                 sunElevation = diurnalState.elevationDeg;
                 sunAzimuth = diurnalState.azimuthDeg;
@@ -108,6 +109,7 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
                     scene.environment.skybox = diurnalState.skyboxName;
                 }
             }
+            // Any other lighting name (a renderer rig such as 'neon') places no sun.
 
             if (params.skybox) {
                 scene.environment.skybox = params.skybox;
@@ -126,6 +128,9 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
             // Atmosphere is an explicit part of the headless build and is NOT enabled by preset heuristics.
             const isAtmosphereExplicit = params.enableAtmosphere === true || params.atmosphericScattering === true || params.rayleigh !== undefined || (typeof scene.features.atmosphericScattering === 'object' && scene.features.atmosphericScattering !== null && (scene.features.atmosphericScattering as any).enabled !== false);
             if (isAtmosphereExplicit) {
+                if (sunElevation === undefined || sunAzimuth === undefined) {
+                    throw new Error(`sb_setup_lighting: atmospheric scattering needs a sun, and lighting '${preset}' is not a time-of-day preset; give a time-of-day preset, timeOfDay with a location, or sunElevation/sunAzimuth.`);
+                }
                 const existingAtmo = (typeof scene.features.atmosphericScattering === 'object' && scene.features.atmosphericScattering !== null) ? scene.features.atmosphericScattering : {};
                 const sunVec = getSunVectorFromAngles(sunElevation, sunAzimuth);
 

@@ -8,8 +8,9 @@
  ********************************************************************************/
 
 import * as fs from 'fs-extra';
+import * as os from 'os';
 import * as path from 'path';
-import { spawn } from 'child_process';
+import { getPythonWorkerPool, PythonWorkerError } from '../process/persistent-python-worker';
 import {
     MEDIAPIPE_LANDMARK_INDEX,
     MediaPipeLandmark,
@@ -37,6 +38,13 @@ export interface MediaPipePoseServiceOptions {
     scriptPath?: string;
     modelAssetPath?: string;
     timeoutMs?: number;
+    /** Parallel detector processes (default: half the CPU cores, at most 4). Each loads the model once. */
+    maxWorkers?: number;
+}
+
+/** Default parallel MediaPipe workers: half the cores, 1..4. */
+export function defaultMediaPipeWorkers(): number {
+    return Math.max(1, Math.min(4, Math.floor(os.cpus().length / 2)));
 }
 
 export class MediaPipePoseService {
@@ -44,6 +52,8 @@ export class MediaPipePoseService {
     private scriptPath: string;
     private modelAssetPath: string;
     private timeoutMs: number;
+    /** How many frames can be detected at once (the worker pool size). */
+    public readonly maxWorkers: number;
     private static unavailable = false;
 
     constructor(options?: MediaPipePoseServiceOptions) {
@@ -51,6 +61,7 @@ export class MediaPipePoseService {
         this.scriptPath = options?.scriptPath ?? path.resolve(process.cwd(), 'scripts/detect_pose.py');
         this.modelAssetPath = options?.modelAssetPath ?? path.resolve(process.cwd(), 'assets/models/pose_landmarker_full.task');
         this.timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+        this.maxWorkers = Math.max(1, Math.floor(options?.maxWorkers ?? defaultMediaPipeWorkers()));
     }
 
     /**
@@ -78,6 +89,28 @@ export class MediaPipePoseService {
         if (options?.signal?.aborted) {
             throw Object.assign(new Error('MediaPipe pose detection was stopped'), { name: 'AbortError', cause: options.signal.reason });
         }
+        // The worker reads images by path (no image bytes in the protocol).
+        const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sbx-pose-in-'));
+        const imagePath = path.join(dir, 'frame.img');
+        try {
+            await fs.writeFile(imagePath, imageBuffer);
+            return await this.runPoseLandmarkerOnFile(imagePath, options);
+        } finally {
+            await fs.remove(dir).catch(() => {});
+        }
+    }
+
+    /**
+     * runPoseLandmarker on an image already on disk (video frames): no copy is made. Detection runs in a persistent
+     * worker that keeps the landmarker loaded; up to `maxWorkers` calls run in parallel.
+     */
+    public async runPoseLandmarkerOnFile(
+        imagePath: string,
+        options?: { modelPath?: string; numPoses?: number; minConfidence?: number; signal?: AbortSignal }
+    ): Promise<{ detection: PoseDetectionResult } | { unavailable: string } | { noPerson: string }> {
+        if (options?.signal?.aborted) {
+            throw Object.assign(new Error('MediaPipe pose detection was stopped'), { name: 'AbortError', cause: options.signal.reason });
+        }
         if (MediaPipePoseService.unavailable) {
             return { unavailable: 'MediaPipe pose detection was marked unavailable in this process' };
         }
@@ -89,12 +122,7 @@ export class MediaPipePoseService {
         const numPoses = options?.numPoses ?? 5;
         const minConf = options?.minConfidence ?? 0.5;
 
-        const run = await this.spawnPythonWorker(imageBuffer, [
-            this.scriptPath,
-            modelPath,
-            String(numPoses),
-            String(minConf)
-        ], options?.signal);
+        const run = await this.runBridge([modelPath, String(numPoses), String(minConf), path.resolve(imagePath)], options?.signal);
         if ('error' in run) return { unavailable: run.error };
         let parsed: any;
         try {
@@ -380,12 +408,11 @@ export class MediaPipePoseService {
      * `options.signal` (the caller's Stop) kills the detector and rejects with an AbortError.
      */
     public async estimatePoseFromImage(request: PoseDetectionRequest, options?: { signal?: AbortSignal }): Promise<RiggedPoseOutput> {
-        const buffer = await this.normalizeImageInput(request.image);
-        const run = await this.runPoseLandmarker(buffer, {
-            minConfidence: request.minConfidence,
-            numPoses: request.maxPoses ?? 1,
-            signal: options?.signal
-        });
+        const detectOptions = { minConfidence: request.minConfidence, numPoses: request.maxPoses ?? 1, signal: options?.signal };
+        const input = request.image;
+        const run = typeof input === 'string' && !input.startsWith('data:') && await fs.pathExists(input)
+            ? await this.runPoseLandmarkerOnFile(input, detectOptions)
+            : await this.runPoseLandmarker(await this.normalizeImageInput(input), detectOptions);
         if ('unavailable' in run) {
             throw new GeneratorFailedError('mediapipe', `pose detection could not run: ${run.unavailable}`);
         }
@@ -474,65 +501,35 @@ export class MediaPipePoseService {
         return { x: l.x, y: l.y, z: l.z };
     }
 
-    /** Runs the bridge on one image. A Stop on `signal` kills it and rejects with an AbortError; nothing starts once stopped. */
-    private spawnPythonWorker(imageBuffer: Buffer, args: string[], signal?: AbortSignal): Promise<{ stdout: string } | { error: string }> {
-        const stoppedError = () => Object.assign(new Error('MediaPipe pose detection was stopped'), { name: 'AbortError', cause: signal?.reason });
-        if (signal?.aborted) return Promise.reject(stoppedError());
-        return new Promise((resolve, reject) => {
-            const child = spawn(this.pythonBinary, args, { stdio: ['pipe', 'pipe', 'pipe'] });
-            let stdout = '';
-            let stderr = '';
-            let timedOut = false;
-            let aborted = false;
-
-            const timer = setTimeout(() => {
-                timedOut = true;
-                child.kill('SIGTERM');
-                resolve({ error: `the MediaPipe bridge timed out after ${this.timeoutMs} ms` });
-            }, this.timeoutMs);
-            const onAbort = () => {
-                aborted = true;
-                clearTimeout(timer);
-                child.kill('SIGTERM');
-                reject(stoppedError());
-            };
-            signal?.addEventListener('abort', onAbort, { once: true });
-
-            child.stdout.on('data', (data) => {
-                stdout += data.toString();
-            });
-            child.stderr.on('data', (data) => {
-                stderr += data.toString();
-            });
-
-            child.on('close', (code) => {
-                clearTimeout(timer);
-                signal?.removeEventListener('abort', onAbort);
-                if (timedOut || aborted) return;
-                if (code !== 0) {
-                    resolve({ error: `the MediaPipe bridge exited with code ${code}${stderr.trim() ? `: ${stderr.trim().slice(-500)}` : ''}` });
-                } else {
-                    resolve({ stdout: stdout.trim() });
-                }
-            });
-
-            child.on('error', (err) => {
-                clearTimeout(timer);
-                signal?.removeEventListener('abort', onAbort);
-                if (aborted) return;
-                resolve({ error: `${this.pythonBinary} could not be started (${err.message})` });
-            });
-
-            child.stdin.on('error', () => {});
-
-            try {
-                child.stdin.write(imageBuffer);
-                child.stdin.end();
-            } catch (err: any) {
-                clearTimeout(timer);
-                signal?.removeEventListener('abort', onAbort);
-                resolve({ error: `the image could not be sent to the MediaPipe bridge (${err?.message || err})` });
-            }
+    /**
+     * Runs the bridge in a persistent worker. A Stop on `signal` kills the worker serving it and rejects with an
+     * AbortError; nothing starts once stopped.
+     */
+    private async runBridge(args: string[], signal?: AbortSignal): Promise<{ stdout: string } | { error: string }> {
+        const pool = getPythonWorkerPool({
+            pythonBinary: this.pythonBinary,
+            scriptPath: this.scriptPath,
+            label: 'the MediaPipe bridge',
+            maxWorkers: this.maxWorkers
         });
+        try {
+            const res = await pool.run({ argv: args, timeoutMs: this.timeoutMs, signal });
+            if (res.exitCode !== 0) {
+                // The bridge prints its own JSON error before exiting non-zero; keep it when it did.
+                const out = res.stdout.trim();
+                if (out.startsWith('{')) return { stdout: out };
+                const err = res.stderr.trim();
+                return { error: `the MediaPipe bridge exited with code ${res.exitCode}${err ? `: ${err.slice(-500)}` : ''}` };
+            }
+            return { stdout: res.stdout.trim() };
+        } catch (err: any) {
+            if (err?.name === 'AbortError') {
+                throw Object.assign(new Error('MediaPipe pose detection was stopped'), { name: 'AbortError', cause: signal?.reason });
+            }
+            if (err instanceof PythonWorkerError) {
+                return { error: err.kind === 'timeout' ? `the MediaPipe bridge timed out after ${this.timeoutMs} ms` : err.message };
+            }
+            throw err;
+        }
     }
 }

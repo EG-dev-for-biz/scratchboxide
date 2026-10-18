@@ -16,6 +16,7 @@ import { promisify } from 'util';
 import { NativeCppCompilerService } from './native-compiler-service';
 import { BakedGaussian } from '../../common/geospatial-4d-protocol';
 import { buildNativeIfStale } from './native-build';
+import { InvalidInputError, MissingInputError } from '../../common/errors/pipeline-errors';
 
 const execFileAsync = promisify(execFile);
 
@@ -710,14 +711,22 @@ export class SplatService {
     }
 
     /**
-     * Unprojects an equirectangular panoramic image (2:1 aspect ratio) into 360-degree Gaussian splats
+     * Unprojects an equirectangular panoramic image (2:1 aspect ratio) into 360-degree Gaussian splats.
+     * `depthMap` (width*height metres from the camera, which sits at the origin) is required: a pixel's distance is
+     * not guessed. Pixels whose depth is not a positive finite number give no splat.
      */
     static unprojectEquirectangularPanorama(
         imageRgb: Uint8Array | Buffer,
         width: number,
         height: number,
-        depthMap?: Float32Array
+        depthMap: Float32Array
     ): SplatPoint[] {
+        if (!depthMap) {
+            throw new MissingInputError('unprojectEquirectangularPanorama', 'a depth map', 'each pixel needs its distance from the camera; none is assumed');
+        }
+        if (depthMap.length !== width * height) {
+            throw new InvalidInputError('unprojectEquirectangularPanorama', 'depthMap', `it has ${depthMap.length} values for a ${width}x${height} panorama (${width * height} needed)`);
+        }
         const splats: SplatPoint[] = [];
         const step = Math.max(1, Math.floor(width / 360)); // Downsample to avoid excessive density
 
@@ -742,13 +751,11 @@ export class SplatService {
                 const g = (imageRgb[idx + 1] || 0) / 255.0;
                 const b = (imageRgb[idx + 2] || 0) / 255.0;
 
-                const depthIdx = y * width + x;
-                const depth = (depthMap && depthMap[depthIdx] > 0)
-                    ? depthMap[depthIdx]
-                    : (ry < -0.05 ? Math.min(30.0, 1.7 / -ry) : 35.0);
+                const depth = depthMap[y * width + x];
+                if (!(depth > 0) || !Number.isFinite(depth)) continue;
 
                 const px = rx * depth;
-                const py = 1.7 + ry * depth;
+                const py = ry * depth;
                 const pz = rz * depth;
 
                 const baseScale = depth * 0.015 * step;

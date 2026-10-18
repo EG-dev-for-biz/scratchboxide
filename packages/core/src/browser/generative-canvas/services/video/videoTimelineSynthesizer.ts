@@ -15,6 +15,14 @@ import {
     type VideoAspectRatio
 } from './videoTypes';
 import { splitElementAtTime, rippleDeleteElement } from './timelineMath';
+import { VfxPlateMatchmoveService } from './VfxPlateMatchmoveService';
+import type { GeodeticEphemerisAnchor } from '../../../../common/vfx-plate-protocol';
+
+/** Sun for the anchor's instant and place (NOAA ephemeris via computeSolarEphemeris), heading-rotated like the light rig. */
+function withComputedSun(anchor: GeodeticEphemerisAnchor): GeodeticEphemerisAnchor {
+    const lighting = VfxPlateMatchmoveService.computeSolarLighting(anchor);
+    return { ...anchor, calculatedSolar: lighting.solarPosition, solarDirectionVector: lighting.directionVector };
+}
 import {
     classifyDomain,
     synthesizeAdaptiveVideoTimeline
@@ -121,16 +129,14 @@ export function synthesizeContextualVideoTimeline(
                                     { frameNumber: 360, timeSeconds: 15.0, position: [4.80, 2.10, 2.65], rotationQuaternion: [0.0, 0.320, 0.0, 0.947], fovDegrees: 45.0, focalLengthMm: 35.0, reprojectionErrorPx: 0.22 }
                                 ]
                             },
-                            ephemerisAnchor: {
+                            ephemerisAnchor: withComputedSun({
                                 lat: 40.7648,
                                 lng: -73.9744,
                                 alt: 32.5,
                                 headingDegrees: 210.0,
                                 utcTimestampIso: '2026-06-21T17:30:00Z',
-                                sunLockActive: true,
-                                calculatedSolar: { altitude: 38.2, azimuth: 245.8, altitudeDegrees: 38.2, azimuthDegrees: 245.8 },
-                                solarDirectionVector: [-0.68, 0.62, 0.38]
-                            },
+                                sunLockActive: true
+                            }),
                             lensDistortion: {
                                 k1: -0.042,
                                 k2: 0.008,

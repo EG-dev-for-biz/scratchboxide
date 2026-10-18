@@ -55,7 +55,7 @@ describe('Studio lighting rig scales continuously with loaded content size', () 
             const lit = lights.filter(l => (l as THREE.Light).isLight) as THREE.Light[];
             expect(lit.every(l => (l as any).isDirectionalLight || (l as any).isAmbientLight)).toBe(true);
             expect(lit.every(l => l.color.r === l.color.g && l.color.g === l.color.b)).toBe(true);
-            expect(lit.map(l => l.intensity)).toEqual([0.3, 1.5, 0.45, 0.35]);
+            expect(lit.map(l => l.intensity)).toEqual([1.0, 2.25, 0.7, 0.5]); // levels set in 5b27e054 (mid-grey averages ~sRGB 128)
         }
     });
 });

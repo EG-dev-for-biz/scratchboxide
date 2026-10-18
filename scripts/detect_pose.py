@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 """Google MediaPipe Pose Landmark Detection Script (Python Tasks API).
 
-Reads raw image bytes from stdin and writes JSON to stdout:
+Reads the image from <image_path> (or raw image bytes from stdin when no path is given) and writes JSON to stdout:
   {"poses": [{"world": [{x, y, z, visibility} x33], "image": [{x, y, z, visibility} x33]}]}
 
 Usage:
-  python3 scripts/detect_pose.py <model_path> [num_poses] [min_confidence]
+  python3 scripts/detect_pose.py <model_path> [num_poses] [min_confidence] [image_path]
+
+Run under packages/core/src/python/scratchbox/worker_host.py the landmarker is created once per
+(model, num_poses, min_confidence) and reused for every later image.
 """
 
 import json
 import os
 import sys
+
+# (model_path, num_poses, min_conf) -> PoseLandmarker; survives between calls in a persistent worker.
+_LANDMARKERS = {}
+
 
 def main() -> None:
     try:
@@ -26,6 +33,7 @@ def main() -> None:
     model_path = sys.argv[1] if len(sys.argv) > 1 else None
     num_poses = int(sys.argv[2]) if len(sys.argv) > 2 else 5
     min_conf = float(sys.argv[3]) if len(sys.argv) > 3 else 0.5
+    image_path = sys.argv[4] if len(sys.argv) > 4 else None
 
     # If no model path provided, search common model locations
     if not model_path or not os.path.exists(model_path):
@@ -46,9 +54,17 @@ def main() -> None:
             print(json.dumps({"error": f"MediaPipe model asset not found at {model_path or 'default paths'}"}))
             sys.exit(2)
 
-    data = sys.stdin.buffer.read()
+    if image_path:
+        try:
+            with open(image_path, "rb") as f:
+                data = f.read()
+        except OSError as e:
+            print(json.dumps({"error": f"Could not read the image {image_path}: {e}"}))
+            sys.exit(2)
+    else:
+        data = sys.stdin.buffer.read()
     if not data:
-        print(json.dumps({"error": "No image data received on stdin"}))
+        print(json.dumps({"error": "No image data received" + (f" in {image_path}" if image_path else " on stdin")}))
         sys.exit(2)
 
     arr = np.frombuffer(data, dtype=np.uint8)
@@ -60,7 +76,8 @@ def main() -> None:
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
 
-    options = vision.PoseLandmarkerOptions(
+    key = (model_path, num_poses, min_conf)
+    options = None if key in _LANDMARKERS else vision.PoseLandmarkerOptions(
         base_options=mp_python.BaseOptions(model_asset_path=model_path),
         running_mode=vision.RunningMode.IMAGE,
         num_poses=num_poses,
@@ -70,8 +87,9 @@ def main() -> None:
     )
 
     try:
-        landmarker = vision.PoseLandmarker.create_from_options(options)
-        result = landmarker.detect(mp_image)
+        if options is not None:
+            _LANDMARKERS[key] = vision.PoseLandmarker.create_from_options(options)
+        result = _LANDMARKERS[key].detect(mp_image)
     except Exception as e:
         print(json.dumps({"error": f"Inference error: {e}"}))
         sys.exit(3)

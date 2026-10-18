@@ -1257,7 +1257,7 @@ export class GeoCameraMatchmovePipelineService {
         });
         fs.writeFileSync(omniVideoPath, omniResult.video);
         omniInteractionId = omniResult.interactionId;
-        await runProcess(this.ffmpegPath, ['-y', '-i', omniVideoPath, '-c:v', 'libvpx-vp9', '-threads', '8', '-cpu-used', '4', '-b:v', '15M', omniWebmPath], 'inherit');
+        await runProcess(this.ffmpegPath, ['-y', '-i', omniVideoPath, '-c:v', 'libvpx-vp9', '-row-mt', '1', '-deadline', 'good', '-threads', '8', '-cpu-used', '4', '-b:v', '15M', omniWebmPath], 'inherit');
 
         // Compile Synchronized Split Comparison Video
         console.log(`⚡ Compiling Synchronized 4K Side-by-Side Comparison: ${comparisonVideoPath}`);
@@ -1272,7 +1272,7 @@ export class GeoCameraMatchmovePipelineService {
           '-t', String(metadata.durationSec), '-r', String(metadata.fps)
         ];
         await runProcess(this.ffmpegPath, [...splitArgs, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-b:v', '25M', comparisonVideoPath], 'inherit');
-        await runProcess(this.ffmpegPath, [...splitArgs, '-c:v', 'libvpx-vp9', '-threads', '8', '-cpu-used', '4', '-b:v', '15M', comparisonWebmPath], 'inherit');
+        await runProcess(this.ffmpegPath, [...splitArgs, '-c:v', 'libvpx-vp9', '-row-mt', '1', '-deadline', 'good', '-threads', '8', '-cpu-used', '4', '-b:v', '15M', comparisonWebmPath], 'inherit');
 
         // Extract 6 QA Keyframes
         console.log(`📸 Extracting 6 Milestone QA Keyframes...`);

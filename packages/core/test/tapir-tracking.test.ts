@@ -172,13 +172,15 @@ describe('SyntheticTracker & TapirTrackingService', () => {
             const bridge = path.join(dir, 'echo_bridge.py');
             fs.writeFileSync(bridge, [
                 'import json, sys',
-                'req = json.loads(sys.stdin.read())',
-                'raw = open(req["framesPath"], "rb").read()',
-                'T, H, W = req["numFrames"], req["height"], req["width"]',
-                'assert len(raw) == T * H * W * 3, len(raw)',
-                'first = raw[0:3]',
-                'coords = [[[p[0], p[1]] for p in req["queryPoints"]] for _ in range(T)]',
-                'print(json.dumps({"success": True, "coords": coords, "visibilities": [[1.0] * len(req["queryPoints"]) for _ in range(T)], "firstPixel": list(first)}))'
+                '# Runs in a persistent worker: main() per request, the request JSON on stdin.',
+                'def main():',
+                '    req = json.loads(sys.stdin.read())',
+                '    raw = open(req["framesPath"], "rb").read()',
+                '    T, H, W = req["numFrames"], req["height"], req["width"]',
+                '    assert len(raw) == T * H * W * 3, len(raw)',
+                '    first = raw[0:3]',
+                '    coords = [[[p[0], p[1]] for p in req["queryPoints"]] for _ in range(T)]',
+                '    print(json.dumps({"success": True, "coords": coords, "visibilities": [[1.0] * len(req["queryPoints"]) for _ in range(T)], "firstPixel": list(first)}))'
             ].join('\n'));
             const frames = createSyntheticVideo(4, 30, 20);
             const service = new TapirTrackingService({ scriptPath: bridge, pythonBinary: process.env.PYTHON_BIN || 'python3' });

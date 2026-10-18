@@ -8,11 +8,13 @@
  ********************************************************************************/
 
 import * as fs from 'fs-extra';
+import * as os from 'os';
 import * as path from 'path';
 import { spawn, execFile } from 'child_process';
 import { promisify } from 'util';
 import { resolveBinary } from './HeadlessVideoEditorService';
 import { GeneratorFailedError, MissingInputError } from '../../common/errors/pipeline-errors';
+import { getPythonWorkerPool, mapWithConcurrency, PythonWorkerError } from '../process/persistent-python-worker';
 
 const execFileAsync = promisify(execFile);
 const TOOL = 'vfx_segment_subject';
@@ -71,11 +73,20 @@ type FrameOutcome = { ok: true; model?: string; modelNote?: string } | { ok: fal
 export class VfxSubjectSegmenterService {
     private pythonBinary: string;
     private scriptPath: string;
+    private maxWorkers: number;
+    private frameTimeoutMs: number;
 
-    constructor(options?: { pythonBinary?: string; scriptPath?: string }) {
+    /**
+     * @param options.maxWorkers frames segmented at once, each worker keeping the model loaded (default: half the
+     *   CPU cores, 1..4).
+     * @param options.frameTimeoutMs time limit for one frame (default 120 s; the first frame includes the model load).
+     */
+    constructor(options?: { pythonBinary?: string; scriptPath?: string; maxWorkers?: number; frameTimeoutMs?: number }) {
         this.pythonBinary = options?.pythonBinary ?? process.env.PYTHON_BIN ?? 'python3';
         this.scriptPath = options?.scriptPath
             ?? path.resolve(process.cwd(), 'scripts/segment_subject.py');
+        this.maxWorkers = Math.max(1, Math.floor(options?.maxWorkers ?? Math.min(4, Math.max(1, Math.floor(os.cpus().length / 2)))));
+        this.frameTimeoutMs = options?.frameTimeoutMs ?? 120_000;
     }
 
     /**
@@ -140,10 +151,21 @@ export class VfxSubjectSegmenterService {
             }
 
             // Step 2: Segment every frame; the first frame that cannot be segmented fails the call.
+            // Frames are segmented in parallel on persistent workers (the model loads once per worker); the outcomes
+            // are checked in frame order, so the failure reported is the earliest frame's.
+            const framePaths = rawFrames.map((_, i) => path.join(outputDir, `mask_${String(i).padStart(4, '0')}.png`));
+            let anyFailed = false;
+            const outcomes = await mapWithConcurrency(rawFrames, this.maxWorkers, async (name, i): Promise<FrameOutcome> => {
+                if (anyFailed) return { ok: false, error: 'not run: an earlier frame failed' };
+                const outcome = await this.runSegmenterOnFrame(path.join(rawFrameDir, name), framePaths[i]);
+                if (!outcome.ok) anyFailed = true;
+                return outcome;
+            });
             for (let i = 0; i < rawFrames.length; i++) {
-                const maskPath = path.join(outputDir, `mask_${String(i).padStart(4, '0')}.png`);
-                const outcome = await this.runSegmenterOnFrame(path.join(rawFrameDir, rawFrames[i]), maskPath);
+                const maskPath = framePaths[i];
+                const outcome = outcomes[i];
                 if (!outcome.ok) {
+                    await Promise.all(framePaths.slice(i).map(p => fs.remove(p)));
                     await fs.remove(maskPath);
                     throw new GeneratorFailedError('python', `${TOOL}: frame ${i + 1} of ${rawFrames.length} (${(i / safeFps).toFixed(2)} s into ${path.basename(videoPath)}) could not be segmented, so no matte sequence was written: ${outcome.error}`);
                 }
@@ -235,34 +257,34 @@ export class VfxSubjectSegmenterService {
     }
 
     /** Runs the segmentation script on one frame; the outcome carries the script's error, or the model that made the mask. */
-    private runSegmenterOnFrame(inputPath: string, outputPath: string): Promise<FrameOutcome> {
-        return new Promise(resolve => {
-            const child = spawn(this.pythonBinary, [this.scriptPath, inputPath, outputPath], {
-                stdio: ['ignore', 'pipe', 'pipe']
-            });
-            let stdout = '';
-            let stderr = '';
-            child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
-            child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
-            child.on('close', code => {
-                // The script answers with one JSON line (the last one; libraries may log before it).
-                const line = stdout.trim().split('\n').reverse().find(l => l.trim().startsWith('{'));
-                let answer: any;
-                try {
-                    answer = line ? JSON.parse(line) : undefined;
-                } catch {
-                    answer = undefined;
-                }
-                const stderrTail = stderr.trim() ? `: ${stderr.trim().slice(-400)}` : '';
-                if (answer?.success === true) {
-                    if (code !== 0) resolve({ ok: false, error: `the segmenter answered success but exited ${code}${stderrTail}` });
-                    else if (!fs.existsSync(outputPath)) resolve({ ok: false, error: `the segmenter answered success but wrote no mask at ${outputPath}` });
-                    else resolve({ ok: true, model: typeof answer.model === 'string' ? answer.model : undefined, modelNote: typeof answer.modelNote === 'string' ? answer.modelNote : undefined });
-                    return;
-                }
-                resolve({ ok: false, error: typeof answer?.error === 'string' ? answer.error : `the segmenter exited ${code} without an answer${stderrTail}` });
-            });
-            child.on('error', err => resolve({ ok: false, error: `${this.pythonBinary} could not be started: ${err.message}` }));
+    private async runSegmenterOnFrame(inputPath: string, outputPath: string): Promise<FrameOutcome> {
+        const pool = getPythonWorkerPool({
+            pythonBinary: this.pythonBinary,
+            scriptPath: this.scriptPath,
+            label: 'the segmenter',
+            maxWorkers: this.maxWorkers
         });
+        let res;
+        try {
+            res = await pool.run({ argv: [inputPath, outputPath], timeoutMs: this.frameTimeoutMs });
+        } catch (err: any) {
+            return { ok: false, error: err instanceof PythonWorkerError ? err.message : `${this.pythonBinary} could not run the segmenter: ${err?.message || err}` };
+        }
+        const { exitCode: code, stdout, stderr } = res;
+        // The script answers with one JSON line (the last one; libraries may log before it).
+        const line = stdout.trim().split('\n').reverse().find(l => l.trim().startsWith('{'));
+        let answer: any;
+        try {
+            answer = line ? JSON.parse(line) : undefined;
+        } catch {
+            answer = undefined;
+        }
+        const stderrTail = stderr.trim() ? `: ${stderr.trim().slice(-400)}` : '';
+        if (answer?.success === true) {
+            if (code !== 0) return { ok: false, error: `the segmenter answered success but exited ${code}${stderrTail}` };
+            if (!fs.existsSync(outputPath)) return { ok: false, error: `the segmenter answered success but wrote no mask at ${outputPath}` };
+            return { ok: true, model: typeof answer.model === 'string' ? answer.model : undefined, modelNote: typeof answer.modelNote === 'string' ? answer.modelNote : undefined };
+        }
+        return { ok: false, error: typeof answer?.error === 'string' ? answer.error : `the segmenter exited ${code} without an answer${stderrTail}` };
     }
 }

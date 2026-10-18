@@ -35,7 +35,7 @@ import {
     GeoAnchor
 } from './Google3DTileBlockoutPipelineService';
 import { GoogleMapsService } from '../../browser/generative-canvas/services/google-maps-service';
-import { MissingInputError } from '../../common/errors/pipeline-errors';
+import { LocationUnresolvedError, MissingInputError } from '../../common/errors/pipeline-errors';
 import { assertUsableCoordinates } from '../../common/coordinate/parse-coordinates';
 import { VfxLensInterchangeService } from '../../common/optics/VfxLensInterchangeService';
 import {
@@ -239,16 +239,15 @@ export class GeoBoxPrecisionResectionService {
         };
     }
 
-    /** The stated ground altitude, else the Elevation API's; throws when neither exists. */
+    /** The stated ground altitude, else the Elevation API's; throws LocationUnresolvedError when neither exists. */
     private async groundElevation(lat: number, lng: number, stated?: number): Promise<number> {
         if (typeof stated === 'number' && Number.isFinite(stated)) return stated;
         try {
             return await GoogleMapsService.getInstance().getElevation(lat, lng);
         } catch (err) {
-            throw new MissingInputError(
-                'geobox_resect_camera_pose',
-                'ground elevation',
-                `no altitude was given for ${lat.toFixed(6)}, ${lng.toFixed(6)} and the Elevation API gave none (${err instanceof Error ? err.message : String(err)})`
+            throw new LocationUnresolvedError(
+                `${lat.toFixed(6)}, ${lng.toFixed(6)}`,
+                `no ground elevation: no altitude was given (targetCoords.alt) and the Elevation API gave none (${err instanceof Error ? err.message : String(err)})`
             );
         }
     }
@@ -312,7 +311,9 @@ export class GeoBoxPrecisionResectionService {
             const dX = -center[0], dY = -center[1], dZ = -center[2];
             headingDeg = (Math.atan2(dX, dY) * 180 / Math.PI + 360) % 360;
             pitchDeg = Math.atan2(dZ, Math.hypot(dX, dY)) * 180 / Math.PI;
-            poseSource = `solvePnP from ${pnp.totalCount} point correspondences (${pnp.inlierCount} inliers, mean reprojection error ${pnp.pose.meanReprojectionErrorPx.toFixed(3)} px${pnp.consensus ? '' : ', no RANSAC consensus'})`;
+            // solvePnP holds the intrinsics fixed: the focal length comes from the stated (or assumed) lens and
+            // sensor, it is not recovered from the correspondences.
+            poseSource = `solvePnP from ${pnp.totalCount} point correspondences (${pnp.inlierCount} inliers, mean reprojection error ${pnp.pose.meanReprojectionErrorPx.toFixed(3)} px${pnp.consensus ? '' : ', no RANSAC consensus'}); focal length held fixed at ${focalLengthPx.toFixed(1)} px from a ${focalMm} mm lens on a ${sensorWidthMm} mm sensor${request.sensorFocalMm === undefined ? ' (26 mm assumed)' : ''}, not recovered`;
         } else if (request.cameraOpticalCenter || request.knownCoords) {
             // 2b. A stated camera position; heading and pitch default to looking at the target.
             const stated = (request.cameraOpticalCenter || request.knownCoords)!;
@@ -334,9 +335,10 @@ export class GeoBoxPrecisionResectionService {
         } else {
             // 2c. A stated heading, pitch and standoff distance relative to the target.
             if (typeof request.headingDeg !== 'number') {
-                throw new Error(
-                    `Cannot resect camera pose for "${geo.name}": only the target location is known. ` +
-                    `Provide point correspondences (points2D/points3D with the image size), a camera position (cameraOpticalCenter/knownCoords), or headingDeg with pitchDeg and standoffDistanceMeters.`
+                throw new MissingInputError(
+                    tool,
+                    'point correspondences (points2D/points3D with imageWidthPx/imageHeightPx), a camera position (cameraOpticalCenter/knownCoords), or headingDeg with pitchDeg and standoffDistanceMeters',
+                    `only the target location is known for "${geo.name}"; no camera pose is invented`
                 );
             }
             const statedPitch = request.pitchDeg ?? pitchFromLines();
