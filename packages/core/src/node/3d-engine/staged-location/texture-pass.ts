@@ -44,7 +44,7 @@ import type { Registration } from './pano-registration';
 import type { EvidenceImage } from './streetview-evidence';
 import { buildUvAtlas, type LaidOutUvAtlas } from './texture-uv';
 import { mergeBakedPlanes, transferTilePhoto, type TileTextureSurface } from './tile-texture-transfer';
-import { rectifyPhotoTier } from './photo-tier-rectify';
+import { createPhotoTierCache, rectifyPhotoTier } from './photo-tier-rectify';
 import type { PhotoTierLayerRecord } from '../../../common/spatial/texture-pass-contracts';
 import { describeLayerFit, leaveOnePanoOut, measureLayerFit, type LayerFit, type LooFit } from './texture-fit-metric';
 import { measureScanDeviation, type ScanDeviation } from './scan-deviation';
@@ -405,12 +405,15 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
     let photoTier: PhotoTierLayerRecord | undefined;
     /** Photo tier A again with a subset of the panos (the leave-one-pano-out fit). */
     let photoTierLoo: ((views: ProjectionView[]) => Promise<BakedTexturePlanes | undefined>) | undefined;
+    let photoTierCacheDispose: (() => void) | undefined;
     if (src.photoTier === false) {
         if (src.photoTierUnavailable) degradations.push({ stage: 'photo-tier', reasonCode: 'photo_tier_not_run', layerKey: layer.layerKey, reason: `The rectified photo tier was not run: ${src.photoTierUnavailable}.` });
     } else if (src.views.length && src.context && layer.surfaces?.length) {
         progress('rectifying Street View photos onto the fitted faces');
+        const tierCache = createPhotoTierCache();
+        let keepCache = false;
         try {
-            const res = await rectifyPhotoTier({
+            const res = await rectifyPhotoTier({ cacheDir: tierCache.dir,
                 atlas, surfaces: layer.surfaces, views: [...src.views, ...(src.photoTierViews ?? [])], context: src.context, previous: planes,
                 ...(src.tile ? { tile: src.tile, tileMaxDistanceM: Math.max(0.25, 2 * (src.registrationResidualM ?? 0)) } : {}),
                 densityTexelsPerMeter: atlas.layout.stats.texelsPerMeter || src.densityTexelsPerMeter, signal: src.signal, onProgress: progress,
@@ -423,11 +426,12 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
             if (countAlpha(res.planes)) {
                 planes = mergeBakedPlanes(planes, res.planes);
                 const all = src.views, extra = src.photoTierViews ?? [], surfaces = layer.surfaces, context = src.context, python = src.photoTier ? src.photoTier.pythonExecutable : undefined;
+                keepCache = true;
                 photoTierLoo = async views => {
                     const kept = new Set(views.map(v => v.panoId));
                     const left = new Set(all.map(v => v.panoId).filter(p => !kept.has(p)));
                     const r = await rectifyPhotoTier({
-                        atlas, surfaces, views: [...views, ...extra.filter(v => !left.has(v.panoId))], context, heldOut: false,
+                        atlas, surfaces, views: [...views, ...extra.filter(v => !left.has(v.panoId))], context, heldOut: false, cacheDir: tierCache.dir,
                         densityTexelsPerMeter: atlas.layout.stats.texelsPerMeter || src.densityTexelsPerMeter, signal: src.signal,
                         ...(python ? { pythonExecutable: python } : {})
                     });
@@ -438,6 +442,9 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
             if ((err as Error)?.name === 'AbortError' || src.signal?.aborted) throw err;
             degradations.push({ stage: 'photo-tier', reasonCode: 'photo_tier_failed', layerKey: layer.layerKey,
                 reason: `The rectified photo tier failed (${(err as Error)?.message ?? String(err)}); the projection and the rungs below colour the layer.` });
+        } finally {
+            if (!keepCache) tierCache.dispose();
+            else photoTierCacheDispose = tierCache.dispose;
         }
     }
     timingsMs.photoTier = Date.now() - t;
@@ -489,9 +496,14 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
             const projBake = looBake, tierBake = photoTierLoo;
             const bake = tierBake ? async (vs: ProjectionView[]) => { const c = await projBake(vs); const a = await tierBake(vs); return a ? mergeBakedPlanes(c, a) : c; } : projBake;
             const depth = depthForMesh(judge), views = src.views.filter(v => v.poseQuality > 0);
-            measureLoo = (budgetMs?: number) => leaveOnePanoOut(atlas, views, bake, depth, src.signal, budgetMs);
+            const dispose = photoTierCacheDispose;
+            measureLoo = dispose ? async (budgetMs?: number) => { try { return await leaveOnePanoOut(atlas, views, bake, depth, src.signal, budgetMs); } finally { dispose(); } }
+                : (budgetMs?: number) => leaveOnePanoOut(atlas, views, bake, depth, src.signal, budgetMs);
+            photoTierCacheDispose = undefined;
         }
     }
+    // no leave-one-pano-out job holds the photo tier's worker cache: remove it now
+    photoTierCacheDispose?.();
     t = Date.now();
     const twin = writeTexturedTwinGlb({ clayGlb: layer.clayGlb, atlas, planes });
     timingsMs.write = Date.now() - t;

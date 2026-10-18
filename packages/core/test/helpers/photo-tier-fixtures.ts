@@ -14,7 +14,7 @@ import { groundingRequestFovDeg, type PoseCorrection } from '../../src/node/spat
 export const WALL = { x0: -6, x1: 6, y0: 0, y1: 9, z: 0, depthM: 1 };
 export const STATUE = { x0: 2, x1: 3.5, y0: 0, y1: 2.5, z0: 0, z1: 1.2 };
 export const VAN = { x0: -3.6, x1: -2.4, y0: 0, y1: 1.5, z0: 8, z1: 9 };
-export const SKY: Vec3 = [175, 205, 235];
+export const SKY: Vec3 = [118, 162, 222];
 export const VAN_RGB: Vec3 = [120, 22, 24];
 const STATUE_RGB: Vec3 = [96, 74, 40];
 

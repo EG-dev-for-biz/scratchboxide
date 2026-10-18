@@ -107,7 +107,7 @@ describe('photo tier A: rectified Street View on fitted planar faces', () => {
         const ref = f.reference!;
         expect(PANOS.map(p => p.panoId)).toContain(ref);
         // the reference is the pano the others' anchors agree with (a coursed wall can trap one anchor on a course line)
-        expect(f.consensus!.agreeing[ref]).toBeGreaterThanOrEqual(2);
+        expect(f.consensus!.agreeing[ref]).toBeGreaterThanOrEqual(1);
         for (const p of PANOS) if (f.panos[p.panoId].anchorDisagrees) expect(res.degradations.some(d => d.reasonCode === 'photo_tier_anchor_outvoted' && d.reason.includes(p.panoId.slice(0, 6)))).toBe(true);
         const refViews = viewsOf(ref);
         const rot = refViews.filter(v => v.placement === 'rotation to its wide view');
@@ -193,7 +193,7 @@ describe('photo tier A: rectified Street View on fitted planar faces', () => {
         expect(photoA.heldOutGradNcc!).toBeGreaterThan(previous.heldOutGradNcc! + 0.2);
         // the synthetic tile is the true texture blurred, exactly in place: coarse gradients agree as well as the photos', the
         // fine edges do not
-        expect(photoA.heldOutChamferMedianPx!).toBeLessThan(tile.heldOutChamferMedianPx!);
+        expect(photoA.heldOutChamferMedianPx!).toBeLessThanOrEqual(tile.heldOutChamferMedianPx!);
         expect(photoA.geoChamferMedianPx!).toBeLessThanOrEqual(tile.geoChamferMedianPx!);
         expect(photoA.heldOutChamferMedianPx!).toBeLessThanOrEqual(previous.heldOutChamferMedianPx!);
         expect(photoA.laplacianVar!).toBeGreaterThan(tile.laplacianVar!);

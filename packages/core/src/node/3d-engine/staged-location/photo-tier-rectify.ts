@@ -25,7 +25,7 @@
  *     result at the atlas density; this module reads it back into the chart's texels (bilinear, inside the fused mask).
  *
  * Every written texel is a real photo pixel moved by a homography: provenance 'street-view-rectified', label
- * 'photo-inferred', with the pano ids and capture dates; rung 0 where at least two views agree, rung 1 where one view
+ * 'photo-inferred', with the pano ids and capture dates; rung 0 where at least two panos agree, rung 1 where one pano
  * covers it. Texels this tier leaves (non-planar relief, no placed view, cylinders, the scan's islands) stay for the rungs
  * below, each with a degradation that carries the measured reason.
  *
@@ -75,6 +75,8 @@ export interface PhotoTierInput {
     tile?: Pick<TileTextureSurface, 'sample'>;
     tileMaxDistanceM?: number;
     densityTexelsPerMeter: number;
+    /** A directory the worker keeps per-pano results in (outline anchors, SIFT features) across runs of the same layer. */
+    cacheDir?: string;
     /** Score against a held-out pano (default true). */
     heldOut?: boolean;
     pythonExecutable?: string;
@@ -279,6 +281,12 @@ export function photoTierWorkerScript(): string | undefined {
     return findUp(here, 'packages/core/src/python/photo_tier/face_rectify.py') ?? findUp(process.cwd(), 'packages/core/src/python/photo_tier/face_rectify.py');
 }
 
+/** A worker cache directory for one layer's runs (the main one and its leave-one-pano-out re-runs); `dispose` removes it. */
+export function createPhotoTierCache(): { dir: string; dispose: () => void } {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb_photo_tier_cache_'));
+    return { dir, dispose: () => fs.rmSync(dir, { recursive: true, force: true }) };
+}
+
 export function photoTierPython(): string {
     if (process.env.SCRATCHBOX_PYTHON && fs.existsSync(process.env.SCRATCHBOX_PYTHON)) return process.env.SCRATCHBOX_PYTHON;
     const here = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
@@ -429,7 +437,7 @@ export async function rectifyPhotoTier(input: PhotoTierInput): Promise<PhotoTier
             return { key: `v${vi}`, panoId: v.panoId, date: v.captureDate ?? null, file: `v${vi}.rgba`, width: v.image.width, height: v.image.height, cam: camJson(v.camera as FrameCamera) };
         });
         if (!jobViews.length) return skip('photo_tier_no_views', 'No registered Street View view looks at a fitted wall face of this layer.');
-        fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify({ facades: jobFacades, views: jobViews, heldOut: input.heldOut !== false, ...(process.env.SCRATCHBOX_PHOTO_TIER_KEEP ? { debug: true } : {}) }));
+        fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify({ facades: jobFacades, views: jobViews, heldOut: input.heldOut !== false, ...(input.cacheDir ? { cacheDir: input.cacheDir } : {}), ...(process.env.SCRATCHBOX_PHOTO_TIER_KEEP ? { debug: true } : {}) }));
         progress(`rectifying ${jobViews.length} Street View views onto ${units1.size} fitted faces (${facadeGroups.length} facades)`);
         const tW = Date.now();
         try {
@@ -522,7 +530,7 @@ export async function rectifyPhotoTier(input: PhotoTierInput): Promise<PhotoTier
             const ref = f?.reference ? `${f.reference.slice(0, 6)} (outline chamfer ${f.panos[f.reference]?.chamferPx ?? '?'} px)` : '?';
             return {
                 source: PHOTO_TIER_SOURCE, label: 'photo-inferred',
-                method: `rectified Street View (facade ${e.facade}): wide views aligned to the tile outline, narrow views by rotation homography, other panos by feature homography to reference pano ${ref}; per-face plane homography into a frontal camera; Lab-normalised per-pixel median of up to ${e.views} views${e.rung === 0 ? ', at least two agreeing' : ', one view (no cross-check)'}`,
+                method: `rectified Street View (facade ${e.facade}): wide views aligned to the tile outline, narrow views by rotation homography, other panos by feature homography to reference pano ${ref}; per-face plane homography into a frontal camera; Lab-normalised per-pixel median of up to ${e.views} views${e.rung === 0 ? ', at least two panos agreeing' : ', one pano (no cross-check)'}`,
                 panoIds: [...e.panoIds].sort(), captureDates: [...e.dates].sort(), coverage: 0
             };
         });

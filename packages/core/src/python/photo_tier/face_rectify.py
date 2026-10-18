@@ -23,16 +23,19 @@ Direct matching of the photos to the blurry tile render is never used (it failed
 The held-out score (the offline experiment's score.py): one pano per facade is left out of a second fusion and placed by
 the same chain; tile render, the previous ladder and photo tier A are scored against it on the same pixels.
 """
-import json, os, sys, time
+import hashlib, json, os, sys, time
 import numpy as np
 import cv2
 
 RELIEF_TOL_M = 0.30          # tile surface farther than this from the fitted plane: non-planar, not rectified
+OUTLINE_DEV_M = 1.0         # outline samples lie on the face itself (within this of the depth most of its surface has)
 SURFACE_SLAB_M = 3.0         # tile surface within this of the facade plane belongs to the facade (outline extraction)
 ALIGN_MAX_PX = 10.0          # outline chamfer (facade frame px) above which a wide view is not an anchor
 ROT_MIN_INLIERS = 60         # narrow -> wide (same pano) homography
 XPANO_MIN_INLIERS = 40       # view -> reference view (other pano) homography
 COREG_MIN_INLIERS = 30
+SIDE_WEIGHT_PX = 4.0         # the outline's two-sided contrast is worth up to this much chamfer (facade frame px)
+AGREE_ANCHOR_PX = 10.0       # two panos' outline anchors agree within this (facade frame px, 20 cm at 50 px/m)
 AGREE_NCC = 0.25             # gradient NCC of a view against the reference warp to be fused
 DEV_LAB = 20.0               # per-pixel Lab deviation from the median beyond which a view's pixel is an outlier
 MIN_OVERLAP_PX = 2000
@@ -131,6 +134,21 @@ def match_h(fa, fb, thr, gate=None, ratio=0.8):
     return Hm, n, res
 
 
+def on_facade(feat, Hm, mask):
+    """The features of a photo whose pixels the placement `Hm` (photo -> facade frame) puts on the facade mask: a wide view
+    also shows trees, the park and buildings far behind, whose matches would fit a homography that is not the facade's."""
+    k, d = feat
+    if d is None or not len(k): return feat
+    pts = np.float32([p.pt for p in k])[None]
+    q = cv2.perspectiveTransform(pts, Hm)[0]
+    H, W = mask.shape
+    x = np.round(q[:, 0]).astype(int); y = np.round(q[:, 1]).astype(int)
+    ok = (x >= 0) & (y >= 0) & (x < W) & (y < H)
+    ok[ok] = mask[y[ok], x[ok]]
+    idx = np.nonzero(ok)[0]
+    return [k[i] for i in idx], d[idx]
+
+
 def nelder_mead(f, x0, step, iters=250):
     n_ = len(x0); pts = [x0] + [x0 + np.eye(n_)[i] * step for i in range(n_)]; vals = [f(q) for q in pts]
     for _ in range(iters):
@@ -151,21 +169,27 @@ def nelder_mead(f, x0, step, iters=250):
 def outline_points(fr):
     """Facade-frame pixels of the tile outline: surface pixels next to non-surface, on the largest surface component."""
     surf = np.abs(np.nan_to_num(fr['dev'], nan=1e9)) <= SURFACE_SLAB_M
-    if surf.sum() < 500: return None
+    if surf.sum() < 500: return None, None
     n, lab = cv2.connectedComponents(surf.astype(np.uint8))
-    if n < 2: return None
+    if n < 2: return None, None
     big = 1 + int(np.argmax(np.bincount(lab.ravel())[1:]))
     sil = surf & (cv2.dilate((~surf).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0) & (lab == big)
+    # only the face's own outline: the edge of ground or of a deep return in the slab is not an edge the photos show
+    # (the face's front lies where most of its surface does, which need not be the mean plane of its charts; samples at the
+    # slab's own cut are not edges either)
+    dv = np.nan_to_num(fr['dev'], nan=1e9); front = float(np.median(dv[surf]))
+    sil &= (np.abs(dv - front) <= OUTLINE_DEV_M) & (np.abs(dv) < SURFACE_SLAB_M - 0.3)
     sil[:2] = sil[-2:] = False; sil[:, :2] = sil[:, -2:] = False
     sy, sx = np.nonzero(sil)
-    if sy.size < 80: return None
+    if sy.size < 80: return None, None
     if sy.size > 4000:
         k = np.random.default_rng(0).choice(sy.size, 4000, replace=False); sy, sx = sy[k], sx[k]
     # the outline lies between a surface pixel and its empty neighbour: move each sample half a pixel outward
     m = cv2.GaussianBlur(surf.astype(np.float32), (0, 0), 1.0)
     gx = cv2.Sobel(m, cv2.CV_32F, 1, 0)[sy, sx]; gy = cv2.Sobel(m, cv2.CV_32F, 0, 1)[sy, sx]
     gl = np.hypot(gx, gy) + 1e-9
-    return np.stack([sx - 0.5 * gx / gl, sy - 0.5 * gy / gl, np.ones(sx.size)], 0).astype(np.float64)
+    nout = np.stack([-gx / gl, -gy / gl], 0).astype(np.float64)   # outward unit normal (toward what is not the face)
+    return np.stack([sx - 0.5 * gx / gl, sy - 0.5 * gy / gl, np.ones(sx.size)], 0).astype(np.float64), nout
 
 
 def outline_fraction(H0, spts, w, h):
@@ -174,23 +198,52 @@ def outline_fraction(H0, spts, w, h):
     return float(((z > 0) & (u >= 0) & (v >= 0) & (u < w - 1) & (v < h - 1)).mean())
 
 
-def align_outline(img, H0, spts, W, H):
+def align_outline(img, H0, spts, W, H, nout=None):
     pe = cv2.Canny(cv2.GaussianBlur(gray(img), (0, 0), 1.5), 40, 120)
+    # two-sided term: across the true outline the photo changes from the face to what is not the face (sky, trees, the
+    # buildings behind); across a course joint or a moulding parallel to it, stone meets stone. Samples 3 facade-frame px out
+    # and in along the outline's normal; the Lab difference (capped) is a bonus of up to SIDE_WEIGHT_PX.
+    lab = cv2.cvtColor(cv2.GaussianBlur(img, (0, 0), 2.0), cv2.COLOR_BGR2LAB).astype(np.float32)
+    if nout is not None:
+        pout = spts.copy(); pin = spts.copy()
+        pout[:2] += 3 * nout; pin[:2] -= 3 * nout
     dtp = cv2.distanceTransform((pe == 0).astype(np.uint8), cv2.DIST_L2, 3)
     h, w = dtp.shape
 
-    def chamfer(Hm, cap=30.0):
+    def inside(Hm):
         q = np.linalg.inv(Hm) @ spts; z = q[2]
-        if (z <= 0).any(): return 99.0
-        u = q[0] / z; v = q[1] / z
-        ok = (u >= 0) & (v >= 0) & (u < w - 1) & (v < h - 1)
-        if ok.mean() < 0.5: return 99.0
-        sc = np.sqrt(abs(np.linalg.det(Hm[:2, :2] / Hm[2, 2])))
-        u, v = u[ok], v[ok]; x0 = u.astype(int); y0 = v.astype(int); tx = u - x0; ty = v - y0
-        d = (dtp[y0, x0] * (1 - tx) * (1 - ty) + dtp[y0, x0 + 1] * tx * (1 - ty) + dtp[y0 + 1, x0] * (1 - tx) * ty + dtp[y0 + 1, x0 + 1] * tx * ty)
-        return float(np.mean(np.minimum(d * sc, cap)))
+        u = q[0] / np.where(z > 0, z, 1); v = q[1] / np.where(z > 0, z, 1)
+        return (z > 0) & (u >= 0) & (v >= 0) & (u < w - 1) & (v < h - 1), u, v
+    # the outline samples the pose puts in the photo are scored throughout: one pushed out of the frame costs the cap (a
+    # placement must not win by dropping the outline it cannot explain)
+    base, _, _ = inside(H0)
+    if base.mean() < 0.5: base = np.ones_like(base)
 
-    c0 = chamfer(H0); best = (c0, H0)
+    def side(Hm):
+        if nout is None: return 0.0
+        hi = np.linalg.inv(Hm)
+        def samp(P):
+            q = hi @ P; z = q[2]; u = q[0] / np.where(z > 0, z, 1); v = q[1] / np.where(z > 0, z, 1)
+            okk = (z > 0) & (u >= 0) & (v >= 0) & (u < w - 1) & (v < h - 1)
+            return okk, lab[np.clip(v, 0, h - 1).astype(int), np.clip(u, 0, w - 1).astype(int)]
+        oa, la = samp(pout); ob, lb = samp(pin); m = oa & ob & base
+        if m.sum() < 20: return 0.0
+        return float(np.mean(np.minimum(np.linalg.norm(la[m] - lb[m], axis=1), 40.0)) / 40.0)
+
+    def cost(Hm):
+        c = chamfer(Hm)
+        return c if c >= 99 else c + SIDE_WEIGHT_PX * (1.0 - side(Hm))
+
+    def chamfer(Hm, cap=30.0):
+        ok, u, v = inside(Hm)
+        if ok[base].mean() < 0.5: return 99.0
+        sc = np.sqrt(abs(np.linalg.det(Hm[:2, :2] / Hm[2, 2])))
+        m = ok & base
+        u, v = u[m], v[m]; x0 = u.astype(int); y0 = v.astype(int); tx = u - x0; ty = v - y0
+        d = (dtp[y0, x0] * (1 - tx) * (1 - ty) + dtp[y0, x0 + 1] * tx * (1 - ty) + dtp[y0 + 1, x0] * (1 - tx) * ty + dtp[y0 + 1, x0 + 1] * tx * ty)
+        return float((np.minimum(d * sc, cap).sum() + cap * (base & ~ok).sum()) / base.sum())
+
+    c0 = chamfer(H0); best = (cost(H0), H0)
     C = np.array([[1, 0, W / 2], [0, 1, H / 2], [0, 0, 1.0]]); Ci = np.linalg.inv(C)
     span = int(max(40, min(140, 0.08 * max(W, H))))
     stp = max(6, span // 8)
@@ -200,14 +253,15 @@ def align_outline(img, H0, spts, W, H):
             for ty in range(-span, span + 1, stp):
                 for tx in range(-span, span + 1, stp):
                     S = np.array([[s * np.cos(a), -s * np.sin(a), tx], [s * np.sin(a), s * np.cos(a), ty], [0, 0, 1]])
-                    Hm = C @ S @ Ci @ H0; c = chamfer(Hm)
+                    Hm = C @ S @ Ci @ H0; c = cost(Hm)
                     if c < best[0]: best = (c, Hm)
     Nrm = np.diag([1 / W, 1 / H, 1.0])
     G = best[1] / best[1][2, 2]
     x0 = Nrm @ G @ np.linalg.inv(Nrm); x0 = (x0 / x0[2, 2]).ravel()[:8]
-    xb, fb = nelder_mead(lambda v: chamfer(np.linalg.inv(Nrm) @ np.append(v, 1).reshape(3, 3) @ Nrm), x0, 0.004)
+    xb, fb = nelder_mead(lambda v: cost(np.linalg.inv(Nrm) @ np.append(v, 1).reshape(3, 3) @ Nrm), x0, 0.004)
     Gf = np.linalg.inv(Nrm) @ np.append(xb, 1).reshape(3, 3) @ Nrm
-    return Gf, {'chamferPosePx': round(c0, 2), 'chamferGridPx': round(best[0], 2), 'chamferPx': round(fb, 2)}
+    return Gf, {'chamferPosePx': round(c0, 2), 'chamferGridPx': round(chamfer(best[1]), 2), 'chamferPx': round(chamfer(Gf), 2),
+                'sideContrastPose': round(side(H0), 3), 'sideContrast': round(side(Gf), 3)}
 
 
 def homography_disagreement(Ga, Gb, spts):
@@ -218,7 +272,7 @@ def homography_disagreement(Ga, Gb, spts):
     return float(np.median(np.linalg.norm(a - b, axis=0)))
 
 
-def consensus_reference(G, wide, rep, spts, F, H0, agree_px=3.0):
+def consensus_reference(G, wide, rep, spts, F, H0, fmask, agree_px=AGREE_ANCHOR_PX):
     pids = list(G)
     out = {'pairs': [], 'agreeing': {}}
     if len(pids) == 1:
@@ -227,14 +281,16 @@ def consensus_reference(G, wide, rep, spts, F, H0, agree_px=3.0):
     S = {}
     for i, p in enumerate(pids):
         for q in pids[i + 1:]:
-            Hs, n, res = match_h(F(wide[q]), F(wide[p]), 4.0)   # photo q -> photo p
+            Hs, n, res = match_h(on_facade(F(wide[q]), G[q], fmask), on_facade(F(wide[p]), G[p], fmask), 4.0)   # photo q -> photo p
             if Hs is None or n < XPANO_MIN_INLIERS: continue
             S[(q, p)] = Hs; S[(p, q)] = np.linalg.inv(Hs)
             d = homography_disagreement(G[q], G[p] @ Hs, spts)
             out['pairs'].append([p, q, n, round(d, 2)])
     agree = {p: [q for q in pids if q != p and (q, p) in S and homography_disagreement(G[q], G[p] @ S[(q, p)], spts) <= agree_px] for p in pids}
+    checked = {p: [q for q in pids if q != p and (q, p) in S] for p in pids}
     out['agreeing'] = {p: len(v) for p, v in agree.items()}
-    ref = max(pids, key=lambda p: (len(agree[p]), -rep['panos'][p]['chamferPx']))
+    # most agreeing panos first; between equal groups, the lower mean outline chamfer of the group
+    ref = max(pids, key=lambda p: (len(agree[p]), -np.mean([rep['panos'][q]['chamferPx'] for q in [p] + agree[p]])))
     if agree[ref]:
         # the reference placement: per outline point, the median of its own anchor and the agreeing panos' anchors carried over
         cands = [G[ref]] + [G[q] @ S[(ref, q)] for q in agree[ref]]
@@ -249,7 +305,7 @@ def consensus_reference(G, wide, rep, spts, F, H0, agree_px=3.0):
     else:
         out['note'] = 'no two outline anchors agree; the best outline chamfer is the reference'
     for p in pids:
-        if p != ref and p not in agree[ref]:
+        if p != ref and p in checked[ref] and p not in agree[ref]:
             rep['panos'][p]['anchorDisagrees'] = True
     return ref, out
 
@@ -260,8 +316,39 @@ def load_job(d):
     views = {}
     for v in job['views']:
         raw = np.fromfile(os.path.join(d, v['file']), np.uint8).reshape(v['height'], v['width'], 4)
-        views[v['key']] = {**v, 'img': cv2.cvtColor(raw, cv2.COLOR_RGBA2BGR)}
+        views[v['key']] = {**v, 'img': cv2.cvtColor(raw, cv2.COLOR_RGBA2BGR), 'sha': hashlib.sha1(raw.tobytes()).hexdigest()}
     return job, views
+
+
+class DiskCache:
+    """Per-run cache of what does not depend on the other panos (a wide view's outline anchor, a photo's SIFT features), so
+    the leave-one-pano-out re-runs of the same layer do not redo it. Off when the job names no directory."""
+    def __init__(self, d):
+        self.d = d
+        if d: os.makedirs(d, exist_ok=True)
+
+    def anchor(self, key, compute):
+        if not self.d: return compute()
+        p = os.path.join(self.d, f'anchor_{key}.json')
+        if os.path.exists(p):
+            j = json.load(open(p)); return np.array(j['G']), j['info']
+        G, info = compute()
+        json.dump({'G': G.tolist(), 'info': info}, open(p, 'w'))
+        return G, info
+
+    def feats(self, sha, img):
+        if not self.d: return feats(img)
+        p = os.path.join(self.d, f'sift_{sha}.npz')
+        if os.path.exists(p):
+            z = np.load(p)
+            k = [cv2.KeyPoint(float(a[0]), float(a[1]), float(a[2]), float(a[3]), float(a[4]), int(a[5]), int(a[6])) for a in z['k']]
+            return k, (z['d'] if len(k) else None)
+        k, dsc = feats(img)
+        np.savez(p, k=np.array([[q.pt[0], q.pt[1], q.size, q.angle, q.response, q.octave, q.class_id] for q in k], np.float64).reshape(-1, 7), d=dsc if dsc is not None else np.zeros((0, 128), np.float32))
+        return k, dsc
+
+
+CACHE = DiskCache(None)
 
 
 def load_frame(d, fr):
@@ -277,7 +364,7 @@ def place_facade(fac, views, d, feat_cache):
     keys = [k for k in fac['views'] if k in views]
     H0 = {k: plane_homography(views[k]['cam'], fr['cam'], W, H, fr['plane']) for k in keys}
     keys = [k for k in keys if H0[k] is not None]
-    spts = outline_points(fr)
+    spts, nout = outline_points(fr)
     rep = {'id': fac['id'], 'panos': {}, 'views': {}, 'outlinePixels': 0 if spts is None else int(spts.shape[1])}
     if spts is None:
         rep['skipped'] = 'the tile mesh shows no outline of this facade in the facade frame'
@@ -291,7 +378,8 @@ def place_facade(fac, views, d, feat_cache):
         kw = max(ks, key=lambda k: fracs[k])
         pr = {'views': len(ks), 'wideOutlineFraction': round(fracs[kw], 3)}
         if fracs[kw] >= 0.5:
-            Gw, info = align_outline(views[kw]['img'], H0[kw], spts, W, H); pr.update(info)
+            akey = hashlib.sha1(b'anchor-v2' + views[kw]['sha'].encode() + np.round(H0[kw], 6).tobytes() + np.round(spts, 3).tobytes()).hexdigest()
+            Gw, info = CACHE.anchor(akey, lambda: align_outline(views[kw]['img'], H0[kw], spts, W, H, nout)); pr.update(info)
             if info['chamferPx'] <= ALIGN_MAX_PX and info['chamferPx'] <= info['chamferPosePx'] + 0.5:
                 G[pid] = Gw; wide[pid] = kw; pr['anchor'] = 'outline'
             else:
@@ -302,11 +390,13 @@ def place_facade(fac, views, d, feat_cache):
     if not G:
         rep['skipped'] = 'no pano has a wide view aligned to the tile outline'
         return None, rep
-    F = lambda k: feat_cache.setdefault(k, feats(views[k]['img']))
+    F = lambda k: feat_cache[k] if k in feat_cache else feat_cache.setdefault(k, CACHE.feats(views[k]['sha'], views[k]['img']))
     # consensus of the outline anchors: a wide view can lock onto a repeated course instead of the outline (a coursed wall
     # is full of edges parallel to it), each pano at a different offset; panos whose anchors agree through feature
     # homographies between their wide views are right together. The reference is the pano most others agree with.
-    ref, consensus = consensus_reference(G, wide, rep, spts, F, H0)
+    surf = np.abs(np.nan_to_num(fr['dev'], nan=1e9)) <= SURFACE_SLAB_M
+    fmask = cv2.dilate(surf.astype(np.uint8), np.ones((41, 41), np.uint8)) > 0
+    ref, consensus = consensus_reference(G, wide, rep, spts, F, H0, fmask)
     rep['reference'] = ref; rep['consensus'] = consensus
     # 2. own chains: wide view and the narrow views by pure rotation
     own = {}
@@ -340,7 +430,7 @@ def place_facade(fac, views, d, feat_cache):
             best = (None, 0, None, None)
             for r in cands[:3]:
                 if overlap(H0[k], views[k], A[r][0], views[r]) < 0.1: continue
-                Hs, n, res = match_h(F(k), F(r), 4.0)
+                Hs, n, res = match_h(on_facade(F(k), H0[k], cv2.dilate(fmask.astype(np.uint8), np.ones((61, 61), np.uint8)) > 0), on_facade(F(r), A[r][0], fmask), 4.0)
                 if Hs is not None and n > best[1]: best = (Hs, n, res, r)
             if best[0] is not None and best[1] >= XPANO_MIN_INLIERS:
                 A[k] = (A[best[3]][0] @ best[0], {'placement': 'feature homography to the reference pano', 'inliers': best[1], 'residualPx': None if best[2] is None else round(best[2], 2), 'to': best[3]})
@@ -411,12 +501,19 @@ def fuse(ch, warped, views, ref_pano, info):
                 a_, b_ = lab[k][..., c][m], lab[ref][..., c][m]
                 lab[k][..., c] = (lab[k][..., c] - a_.mean()) * (b_.std() / (a_.std() + 1e-6)) + b_.mean()
     Ls = np.stack([lab[k] for k in use]); Vs = np.stack([warped[k][1] for k in use])
+    # the median votes per PANO: a pano's views share its eye, so a van in front of it is in all of them
+    pids = [views[k]['panoId'] for k in use]
     with np.errstate(all='ignore'):
-        med = np.nanmedian(np.where(Vs[..., None], Ls, np.nan), axis=0)
-    dev = np.stack([cv2.GaussianBlur(np.linalg.norm(np.nan_to_num(L - med), axis=2), (0, 0), 4) for L in Ls])
-    nvalid = Vs.sum(0)
-    ok = Vs & ((dev < DEV_LAB) | (nvalid[None] < 3))
-    agree = (Vs & (dev < DEV_LAB)).sum(0)
+        per = np.stack([np.nanmean(np.where(Vs[[i for i, p in enumerate(pids) if p == q]][..., None], Ls[[i for i, p in enumerate(pids) if p == q]], np.nan), axis=0) for q in dict.fromkeys(pids)])
+        med = np.nanmedian(per, axis=0)
+    npano = np.isfinite(per[..., 0]).sum(0)
+    # a view's pixel is an outlier where it leaves the median by DEV_LAB, and so is a margin around it (an occluder's soft
+    # edge must not survive into the blend)
+    dev = np.stack([cv2.GaussianBlur(np.linalg.norm(np.nan_to_num(L - med), axis=2), (0, 0), 1.5) for L in Ls])
+    bad = np.stack([cv2.dilate((d_ >= DEV_LAB).astype(np.uint8), np.ones((9, 9), np.uint8)) > 0 for d_ in dev])
+    ok = Vs & (~bad | (npano[None] < 3))
+    good = Vs & ~bad
+    agree = np.stack([good[[i for i, p in enumerate(pids) if p == q]].any(0) for q in dict.fromkeys(pids)]).sum(0)   # agreeing panos
     wts = np.stack([cv2.GaussianBlur(ok[i].astype(np.float32), (0, 0), 6) * ok[i] * (0.4 ** i) for i in range(len(use))]) ** 2
     sw = wts.sum(0) + 1e-12
     fused = cv2.cvtColor((np.einsum('khwc,khw->hwc', Ls, wts) / sw[..., None]).clip(0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
@@ -549,6 +646,8 @@ class Scorer:
 def main(d):
     t0 = time.time()
     job, views = load_job(d)
+    global CACHE
+    CACHE = DiskCache(job.get('cacheDir'))
     feat_cache = {}
     result = {'facades': [], 'charts': {}, 'heldOut': None}
     scorer = Scorer(); held = []
