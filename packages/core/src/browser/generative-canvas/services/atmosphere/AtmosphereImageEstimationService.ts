@@ -259,7 +259,8 @@ export class AtmosphereImageEstimationService {
                 confidence = 0.99;
             } else {
                 // Cross-reference with latitude diurnal curve to refine azimuth
-                const noonEphem = calculateNOAASolarPosition(new Date('2026-06-21T12:00:00Z'), coords.lat, coords.lng);
+                // Local solar noon on the June solstice at these coordinates
+                const noonEphem = calculateNOAASolarPosition(new Date(Date.UTC(2026, 5, 21, 12) - (coords.lng / 15) * 3600000), coords.lat, coords.lng);
                 if (Math.abs(sunElevation - noonEphem.elevationDeg) > 30) {
                     // Afternoon/morning angle
                     if (coords.lat > 0) {
