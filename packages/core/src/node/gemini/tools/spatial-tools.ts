@@ -4322,7 +4322,7 @@ export const POSE_DEPTH_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'gemini_estimate_scene_depth',
-        description: 'Estimates semantic metric Z depth for scene layers and synthesizes a continuous depth buffer using multimodal depth analysis and monocular photogrammetric cues.',
+        description: 'Asks Gemini to place the main scene parts of an image in depth (an estimate from monocular cues, not a measurement) and can interpolate a coarse depth buffer from those parts. Images are downscaled to 1024 px on the long edge before sending. Fails with a coded error if the image cannot be read or the model answer is unusable.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -4391,18 +4391,27 @@ export const poseDepthHandlers: Record<string, ToolHandler> = {
         const depthMapWidth = typeof args.depthMapWidth === 'number' ? args.depthMapWidth : 128;
         const depthMapHeight = typeof args.depthMapHeight === 'number' ? args.depthMapHeight : 72;
 
-        const result = await depthService.analyzeSceneDepth({
-            image: imagePath,
-            fovDegrees: typeof args.fovDegrees === 'number' ? args.fovDegrees : 50,
-            generateDepthMap,
-            depthMapResolution: { width: depthMapWidth, height: depthMapHeight }
-        });
+        let result;
+        try {
+            result = await depthService.analyzeSceneDepth({
+                image: imagePath,
+                fovDegrees: typeof args.fovDegrees === 'number' ? args.fovDegrees : 50,
+                generateDepthMap,
+                depthMapResolution: { width: depthMapWidth, height: depthMapHeight }
+            });
+        } catch (err: any) {
+            const message = err?.message ?? String(err);
+            return {
+                status: 'failed',
+                resultPayload: { success: false, error: message, ...(typeof err?.code === 'string' ? { code: err.code } : {}) } as unknown as ToolResultPayload,
+                summaryResult: `Scene depth estimation failed: ${message}`
+            };
+        }
 
         const partCount = result.annotation ? Object.keys(result.annotation.parts).length : 0;
         return {
             resultPayload: {
                 success: result.success,
-                confidence: result.confidence,
                 sceneType: result.annotation?.sceneType,
                 partCount,
                 parts: result.enriched?.parts,
@@ -4415,7 +4424,7 @@ export const poseDepthHandlers: Record<string, ToolHandler> = {
                 } : undefined,
                 explanation: result.explanation
             } as unknown as ToolResultPayload,
-            summaryResult: `Estimated scene depth across ${partCount} semantic layers (confidence ${(result.confidence * 100).toFixed(0)}%).`
+            summaryResult: `Estimated scene depth across ${partCount} semantic layers (Gemini estimate; the depth map is interpolated from those layers, not measured).`
         };
     }
 };

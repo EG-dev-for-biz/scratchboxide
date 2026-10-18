@@ -9,6 +9,8 @@
 
 import * as fs from 'fs-extra';
 import { GeminiClient } from '../gemini/gemini-client';
+import { decodeImageToRgba, encodeRgbaToJpeg, readImageDimensions, sniffImageFormat } from '../image-codec-ffmpeg';
+import { resampleRgba } from '../texture-processing';
 import {
     SceneDepthAnnotation,
     SceneDepthPart,
@@ -64,7 +66,7 @@ Your task is to analyze the input image and output a strict JSON depth map annot
 
 ### Output JSON Format (Output raw JSON only, no markdown wrapping, no prose):
 {
-  "sceneType": "landscape" | "interior" | "street" | "vehicle" | "desktop" | "macro" | "general",
+  "sceneType": "a short free-form description of the kind of scene",
   "parts": {
     "unique_part_id": {
       "label": "descriptive label",
@@ -225,133 +227,137 @@ Note: imageX and imageY are normalized coordinates [0.0 = left/top, 1.0 = right/
 
     /**
      * Executes scene depth analysis on an input image.
+     * Throws SceneDepthError when the image cannot be read, the model call fails, or the model's answer is not a
+     * usable depth annotation. Never substitutes a canned annotation.
      */
     public async analyzeSceneDepth(request: SceneDepthRequest): Promise<SceneDepthResponse> {
-        let base64Image: string;
+        const encoded = await this.readImageInput(request.image);
+        const { data, mimeType } = await this.prepareImageForModel(encoded);
 
+        let text: string;
         try {
-            if (Buffer.isBuffer(request.image)) {
-                base64Image = request.image.toString('base64');
-            } else if (typeof request.image === 'string') {
-                if (request.image.startsWith('data:')) {
-                    base64Image = request.image.split(',')[1] ?? request.image;
-                } else if (await fs.pathExists(request.image)) {
-                    const fileBuf = await fs.readFile(request.image);
-                    base64Image = fileBuf.toString('base64');
-                } else {
-                    base64Image = request.image;
-                }
-            } else {
-                throw new Error('Unsupported image input');
-            }
-
-            const prompt = this.buildDepthSystemPrompt();
             const response = await this.geminiClient.generateContent({
-                systemInstruction: prompt,
+                systemInstruction: this.buildDepthSystemPrompt(),
                 prompt: 'Analyze this image and generate the precision metric depth annotation JSON.',
-                inlineData: [
-                    {
-                        mimeType: 'image/jpeg',
-                        data: base64Image
-                    }
-                ],
+                inlineData: [{ mimeType, data: data.toString('base64') }],
                 temperature: 0.2
             });
-
-            const text = response.text?.trim() ?? '';
-            const cleaned = text.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
-            const annotation: SceneDepthAnnotation = JSON.parse(cleaned);
-
-            const enriched = this.enrichDepthAnnotation(annotation, {
-                aspectRatio: request.aspectRatio ?? this.defaultAspectRatio,
-                fovDegrees: request.fovDegrees ?? this.defaultFovDegrees
-            });
-
-            let depthMap: DenseDepthMapResult | undefined;
-            if (request.generateDepthMap) {
-                const res = request.depthMapResolution ?? { width: 128, height: 72 };
-                depthMap = this.synthesizeMetricDepthBuffer(annotation, {
-                    width: res.width,
-                    height: res.height
-                });
-            }
-
-            return {
-                success: true,
-                annotation,
-                enriched,
-                depthMap,
-                confidence: 0.92,
-                explanation: `Detected ${Object.keys(annotation.parts).length} semantic depth elements.`
-            };
+            text = response.text?.trim() ?? '';
         } catch (err: any) {
-            // Graceful fallback when Gemini API key or network is not available
-            const fallback = this.synthesizeFallbackAnnotation();
-            const enriched = this.enrichDepthAnnotation(fallback, {
-                aspectRatio: request.aspectRatio ?? this.defaultAspectRatio,
-                fovDegrees: request.fovDegrees ?? this.defaultFovDegrees
-            });
-
-            let depthMap: DenseDepthMapResult | undefined;
-            if (request.generateDepthMap) {
-                const res = request.depthMapResolution ?? { width: 128, height: 72 };
-                depthMap = this.synthesizeMetricDepthBuffer(fallback, {
-                    width: res.width,
-                    height: res.height
-                });
-            }
-
-            return {
-                success: true,
-                annotation: fallback,
-                enriched,
-                depthMap,
-                confidence: 0.75,
-                explanation: `Fallback analytical depth estimation applied (${err?.message ?? 'offline'}).`
-            };
+            throw new SceneDepthError('MODEL_CALL_FAILED', `Gemini depth analysis call failed: ${err?.message ?? String(err)}`);
         }
+
+        const annotation = parseDepthAnnotation(text);
+        const enriched = this.enrichDepthAnnotation(annotation, {
+            aspectRatio: request.aspectRatio ?? this.defaultAspectRatio,
+            fovDegrees: request.fovDegrees ?? this.defaultFovDegrees
+        });
+
+        let depthMap: DenseDepthMapResult | undefined;
+        if (request.generateDepthMap) {
+            const res = request.depthMapResolution ?? { width: 128, height: 72 };
+            depthMap = this.synthesizeMetricDepthBuffer(annotation, { width: res.width, height: res.height });
+        }
+
+        return {
+            success: true,
+            annotation,
+            enriched,
+            depthMap,
+            explanation: `Gemini placed ${Object.keys(annotation.parts).length} scene parts in depth (model estimate, not a measured depth).`
+        };
+    }
+
+    /** Resolves a path, data URL, base64 string or Buffer to the encoded image bytes. */
+    private async readImageInput(image: SceneDepthRequest['image']): Promise<Buffer> {
+        if (Buffer.isBuffer(image)) return image;
+        if (typeof image !== 'string' || image.length === 0) {
+            throw new SceneDepthError('IMAGE_UNREADABLE', 'image must be a file path, data URL, base64 string or Buffer.');
+        }
+        if (image.startsWith('data:')) {
+            const comma = image.indexOf(',');
+            if (comma === -1) throw new SceneDepthError('IMAGE_UNREADABLE', 'data URL has no payload.');
+            return Buffer.from(image.slice(comma + 1), 'base64');
+        }
+        if (await fs.pathExists(image)) return fs.readFile(image);
+        if (/^[A-Za-z0-9+/=\s]+$/.test(image) && image.length > 64) return Buffer.from(image, 'base64');
+        throw new SceneDepthError('IMAGE_UNREADABLE', `Image file not found: ${image}`);
     }
 
     /**
-     * Synthesizes a valid heuristic depth annotation for offline or fallback environments.
+     * Sniffs the real MIME type and downscales so the long edge is at most SCENE_DEPTH_MAX_EDGE_PX (re-encoded as JPEG).
+     * Images already within the limit are sent unchanged with their own MIME type.
      */
-    public synthesizeFallbackAnnotation(): SceneDepthAnnotation {
-        return {
-            sceneType: 'general',
-            parts: {
-                foreground_subject: {
-                    label: 'Primary Subject',
-                    z: 1.2,
-                    imageX: 0.5,
-                    imageY: 0.55,
-                    width: 0.35,
-                    height: 0.5,
-                    reason: 'Central high-frequency visual salience in lower-mid frame.'
-                },
-                ground_plane: {
-                    label: 'Ground Surface',
-                    z: 0.0,
-                    imageX: 0.5,
-                    imageY: 0.85,
-                    width: 0.9,
-                    height: 0.3,
-                    reason: 'Horizontal ground plane supporting subject contact.'
-                },
-                background_scenery: {
-                    label: 'Background Horizon',
-                    z: -4.5,
-                    imageX: 0.5,
-                    imageY: 0.3,
-                    width: 0.95,
-                    height: 0.4,
-                    reason: 'Distant environment occluded by primary subject.'
-                }
-            },
-            z_ranges: {
-                near: [0.8, 2.5],
-                mid: [-0.5, 0.5],
-                far: [-8.0, -1.0]
-            }
-        };
+    public async prepareImageForModel(encoded: Buffer): Promise<{ data: Buffer; mimeType: string; width: number; height: number }> {
+        const format = sniffImageFormat(encoded);
+        if (format === 'unknown') {
+            throw new SceneDepthError('UNSUPPORTED_IMAGE_FORMAT', 'Image is not a JPEG, PNG or WebP (unrecognised header).');
+        }
+        const dims = readImageDimensions(encoded);
+        if (!dims) throw new SceneDepthError('IMAGE_UNREADABLE', `Could not read the ${format} image dimensions from its header.`);
+        const longEdge = Math.max(dims.width, dims.height);
+        if (longEdge <= SCENE_DEPTH_MAX_EDGE_PX) {
+            return { data: encoded, mimeType: `image/${format}`, width: dims.width, height: dims.height };
+        }
+        let img;
+        try {
+            img = await decodeImageToRgba(encoded);
+        } catch (err: any) {
+            throw new SceneDepthError('IMAGE_UNREADABLE', `Could not decode the ${format} image to downscale it: ${err?.message ?? err}`);
+        }
+        const scale = SCENE_DEPTH_MAX_EDGE_PX / longEdge;
+        const dstW = Math.max(1, Math.round(img.width * scale));
+        const dstH = Math.max(1, Math.round(img.height * scale));
+        // Halve with 2x2 averaging (bilinear at exactly 0.5) while still over 2x the target, then one bilinear pass.
+        let rgba: Buffer = img.rgba;
+        let w = img.width;
+        let h = img.height;
+        while (w >= dstW * 2 && h >= dstH * 2) {
+            const nw = Math.floor(w / 2);
+            const nh = Math.floor(h / 2);
+            rgba = resampleRgba(rgba, w, h, nw, nh);
+            w = nw;
+            h = nh;
+        }
+        rgba = resampleRgba(rgba, w, h, dstW, dstH);
+        const data = await encodeRgbaToJpeg(rgba, dstW, dstH, { quality: 90 });
+        return { data, mimeType: 'image/jpeg', width: dstW, height: dstH };
     }
+}
+
+/** Longest image edge sent to the model. */
+export const SCENE_DEPTH_MAX_EDGE_PX = 1024;
+
+/** Typed failure from GeminiSceneDepthService. `code`: IMAGE_UNREADABLE, UNSUPPORTED_IMAGE_FORMAT, MODEL_CALL_FAILED, MODEL_RESPONSE_INVALID. */
+export class SceneDepthError extends Error {
+    public override readonly name = 'SceneDepthError';
+    constructor(public readonly code: string, message: string) {
+        super(`[GeminiSceneDepthService] ${code}: ${message}`);
+    }
+}
+
+function isFiniteNumber(v: unknown): v is number {
+    return typeof v === 'number' && Number.isFinite(v);
+}
+
+/** Parses and validates the model's JSON answer; throws MODEL_RESPONSE_INVALID rather than guessing. */
+export function parseDepthAnnotation(text: string): SceneDepthAnnotation {
+    const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+    if (!cleaned) throw new SceneDepthError('MODEL_RESPONSE_INVALID', 'Gemini returned an empty response.');
+    let parsed: any;
+    try {
+        parsed = JSON.parse(cleaned);
+    } catch (err: any) {
+        throw new SceneDepthError('MODEL_RESPONSE_INVALID', `Gemini response is not JSON (${err?.message}): ${cleaned.slice(0, 200)}`);
+    }
+    const parts = parsed?.parts;
+    if (!parts || typeof parts !== 'object' || Array.isArray(parts) || Object.keys(parts).length === 0) {
+        throw new SceneDepthError('MODEL_RESPONSE_INVALID', 'Gemini response has no "parts" object.');
+    }
+    for (const [key, part] of Object.entries<any>(parts)) {
+        if (!part || !isFiniteNumber(part.z) || !isFiniteNumber(part.imageX) || !isFiniteNumber(part.imageY)) {
+            throw new SceneDepthError('MODEL_RESPONSE_INVALID', `Part "${key}" lacks numeric z / imageX / imageY.`);
+        }
+    }
+    return parsed as SceneDepthAnnotation;
 }
