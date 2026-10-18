@@ -865,14 +865,14 @@ function keptStructureCarver(run: StagedRun, cache: StageCache, base: string): (
         const out = hideFootprintInGlb(fs.readFileSync(source), fp);
         report.layers = [...report.layers.filter(r => r.objectId !== layer.objectId), { objectId: layer.objectId, removedTriangles: out.removedTriangles, keptTriangles: out.keptTriangles }];
         if (!out.removedTriangles) return layer;
-        const key8 = crypto.createHash('sha256').update([...fp.cells].sort().join(';')).update(String(fp.baseY)).digest('hex').slice(0, 8);
+        const key8 = crypto.createHash('sha256').update('kept-structure/v2').update([...fp.cells].sort().join(';')).update(String(fp.baseY)).digest('hex').slice(0, 8);
         const dir = path.join(cache.dir, 'kept-structure');
         fs.mkdirSync(dir, { recursive: true });
         const name = `${path.basename(layer.url, '.glb')}_around_${key8}.glb`;
         const tmp = path.join(dir, name);
         fs.writeFileSync(tmp, out.glb);
         const pub = cache.publishFile(tmp, name);
-        const note = `${out.removedTriangles.toLocaleString('en-US')} triangles inside the kept structure's footprint (${fp.cells.size} cells of ${fp.cellM} m) taken out, where the kept rebuild stands`;
+        const note = `${out.removedTriangles.toLocaleString('en-US')} triangles inside the kept structure's footprint (${fp.cells.size} cells of ${fp.cellM} m) and more than 0.3 m above the ground around it (${out.groundY.toFixed(2)} m) taken out, where the kept rebuild stands`;
         return {
             ...layer, url: pub.url, bytes: pub.bytes,
             counts: { vertices: layer.counts.vertices, triangles: out.keptTriangles },

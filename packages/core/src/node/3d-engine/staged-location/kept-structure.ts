@@ -34,8 +34,10 @@ export type Vec3 = [number, number, number];
 export const SAME_PLACE_M = 30;
 /** The footprint grid: cells this wide, dilated by one cell around every cell the structure covers. */
 export const FOOTPRINT_CELL_M = 0.5;
-/** District triangles whose centroid is less than this above the structure's base stay (the ground under it). */
+/** District triangles whose centroid is less than this above the district's ground around the structure stay (the ground under it). */
 export const FOOTPRINT_GROUND_CLEARANCE_M = 0.3;
+/** The district's ground at the structure: the 10th percentile of triangle heights in this ring outside the footprint. */
+export const FOOTPRINT_GROUND_RING_M = 3;
 
 function sourceOf(o: any): string {
     return String(o?.content?.metadata?.source || '').toLowerCase();
@@ -97,6 +99,8 @@ export function partitionActiveScene(scene: { data?: unknown } | undefined, rebu
     if (state?.runId) out.runId = state.runId;
     if (state?.place) out.place = state.place.resolvedAddress || state.place.query;
     for (const o of objects) {
+        // a textured twin the viewport added (metadata.texturedTwinOf) is not a layer: it is derived again from the kept layer record
+        if ((o.content as { metadata?: { texturedTwinOf?: unknown } } | undefined)?.metadata?.texturedTwinOf !== undefined) continue;
         if (isStructureLayerObject(o)) {
             if (replaceStructure) out.removed.push({ objectId: o.id, source: sourceOf(o), why: 'a new rebuild of the structure at the same place replaces it' });
             else out.structure.push(o);
@@ -225,15 +229,31 @@ export function structureFootprint(glbs: Uint8Array[], offset: Vec3, cellM = FOO
 }
 
 /**
- * The district GLB without its triangles inside the structure's footprint and above its base (the district's own scan
+ * The district GLB without its triangles inside the structure's footprint and more than FOOTPRINT_GROUND_CLEARANCE_M above
+ * the district's ground around it (the district's own scan
  * of the structure, which the kept rebuild stands in for). Positions and every other attribute are untouched: only the
  * index lists change (each trimmed primitive gets a new uint32 index accessor at the end of the binary chunk).
  */
-export function hideFootprintInGlb(bytes: Uint8Array, footprint: StructureFootprint): { glb: Buffer; removedTriangles: number; keptTriangles: number } {
+export function hideFootprintInGlb(bytes: Uint8Array, footprint: StructureFootprint): { glb: Buffer; removedTriangles: number; keptTriangles: number; groundY: number } {
     const glb = parseGlbBytes(bytes);
     const json = glb.json;
     const world = nodeWorldMatrices(json);
-    const minY = footprint.baseY + FOOTPRINT_GROUND_CLEARANCE_M;
+    // the district's own ground around the structure (a rebuild's base can sit below the ground, foundations included):
+    // the low tail of the triangle heights in a ring just outside the footprint; the structure's base when the ring is empty
+    const ring = Math.ceil(FOOTPRINT_GROUND_RING_M / footprint.cellM);
+    const ringHeights: number[] = [];
+    const inRing = (i: number, k: number) => {
+        if (footprint.cells.has(`${i},${k}`)) return false;
+        for (let dk = -ring; dk <= ring; dk++) for (let di = -ring; di <= ring; di++) if (footprint.cells.has(`${i + di},${k + dk}`)) return true;
+        return false;
+    };
+    forEachTriangle(bytes, (a, b, c) => {
+        const x = (a[0] + b[0] + c[0]) / 3, y = (a[1] + b[1] + c[1]) / 3, z = (a[2] + b[2] + c[2]) / 3;
+        if (inRing(Math.floor(x / footprint.cellM), Math.floor(z / footprint.cellM))) ringHeights.push(y);
+    });
+    ringHeights.sort((p, q) => p - q);
+    const groundY = ringHeights.length >= 8 ? ringHeights[Math.floor(ringHeights.length * 0.1)] : footprint.baseY;
+    const minY = groundY + FOOTPRINT_GROUND_CLEARANCE_M;
     const extra: Uint8Array[] = [];
     let binLength = glb.bin.byteLength + ((4 - (glb.bin.byteLength % 4)) % 4);
     let removed = 0, kept = 0;
@@ -270,11 +290,11 @@ export function hideFootprintInGlb(bytes: Uint8Array, footprint: StructureFootpr
             binLength += data.byteLength;
         }
     });
-    if (!removed) return { glb: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength), removedTriangles: 0, keptTriangles: kept };
+    if (!removed) return { glb: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength), removedTriangles: 0, keptTriangles: kept, groundY };
     const bin = new Uint8Array(binLength);
     bin.set(glb.bin, 0);
     let o = glb.bin.byteLength + ((4 - (glb.bin.byteLength % 4)) % 4);
     for (const e of extra) { bin.set(e, o); o += e.byteLength; }
     if (json.buffers?.[0]) json.buffers[0].byteLength = binLength;
-    return { glb: assembleGlb(json, bin), removedTriangles: removed, keptTriangles: kept };
+    return { glb: assembleGlb(json, bin), removedTriangles: removed, keptTriangles: kept, groundY };
 }

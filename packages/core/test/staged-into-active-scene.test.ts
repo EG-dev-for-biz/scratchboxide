@@ -124,6 +124,12 @@ describe('staging into a scene that holds a structure rebuild', () => {
         }
         expect(groundInside).toBeGreaterThan(0);
         expect(raisedInside).toBe(0);
+        // a rebuild whose fitted base reaches 2 m below the ground (a foundation) still leaves the ground under it:
+        // the cut is measured from the district's ground around the structure, not from the rebuild's lowest point
+        const deep = writeTris(path.join(dir, 'hero_deep.glb'), building(-13, 13, -6, 5, 24).map(t => t.map((v, i) => (i % 3 === 1 ? v - 2 : v))) as never);
+        const deepOut = hideFootprintInGlb(fs.readFileSync(district), structureFootprint([fs.readFileSync(deep)], [0, 0, 0]));
+        expect(deepOut.groundY).toBeCloseTo(0, 6);
+        expect(deepOut.removedTriangles).toBe(out.removedTriangles);
     });
 
     it('a district staged into the arch scene keeps the arch, cuts its scan, and the result and summary say what was kept and removed', async () => {
