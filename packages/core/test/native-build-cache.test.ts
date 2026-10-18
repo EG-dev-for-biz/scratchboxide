@@ -16,7 +16,11 @@
  * - another process reuses a build (a child process compiles nothing);
  * - the sky, de-lighting and groom services compile once and then run their one binary with new parameters;
  * - the PCH path follows header content; field remesh gets no -march=native unless SCRATCHBOX_NATIVE_ARCH=1;
- * - the Python module fingerprint is memoised (no source read when nothing changed) and still follows edits.
+ * - the Python module fingerprint is memoised (no source read when nothing changed) and still follows edits;
+ * - the cache is bounded: a lookup stamps its entry's last use; pruning removes entries past the age bound, then the
+ *   least recently used until within the size bound, and never one used within the idle grace, locked for a build or
+ *   being built in this process, and puts back one used between its look and its removal; a pruned build is rebuilt on
+ *   its next use; automatic pruning runs once an hour.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -25,7 +29,7 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { compileNativeCached, defaultNativeFlags } from '../src/node/3d-engine/native-build-cache';
+import { compileNativeCached, defaultNativeFlags, maybePruneNativeBuildCache, pruneNativeBuildCache } from '../src/node/3d-engine/native-build-cache';
 import { NativeCppCompilerService } from '../src/node/3d-engine/native-compiler-service';
 import { NativeSkyService } from '../src/node/3d-engine/native-sky-service';
 import { NativeTileLightingService } from '../src/node/3d-engine/native-tile-lighting-service';
@@ -256,5 +260,125 @@ describe('build flags and fingerprints', () => {
         expect(reads.filter(f => f.startsWith(engine))).toEqual([]);
         fs.writeFileSync(path.join(engine, 'include', 'a.hpp'), 'int b();\n');
         expect(runner.computeNativeSourceFingerprint(engine)).not.toBe(first);
+    });
+});
+
+describe('native build cache bounds', () => {
+    const MIN = 60_000;
+    const DAY = 24 * 3600_000;
+    /** A fake entry: a binary of `bytes` bytes last used `ageMs` ago (by its stamp, or the binary's mtime when unstamped). */
+    function entry(root: string, key: string, bytes: number, ageMs: number, opts: { stamp?: boolean; binary?: boolean; lock?: boolean } = {}) {
+        const d = path.join(root, key);
+        fs.mkdirSync(d, { recursive: true });
+        const at = new Date(Date.now() - ageMs);
+        if (opts.binary !== false) { fs.writeFileSync(path.join(d, 'bin'), Buffer.alloc(bytes, 1)); fs.utimesSync(path.join(d, 'bin'), at, at); }
+        if (opts.stamp !== false) { fs.writeFileSync(path.join(d, 'last-used'), ''); fs.utimesSync(path.join(d, 'last-used'), at, at); }
+        if (opts.lock) fs.writeFileSync(path.join(d, 'bin.lock'), JSON.stringify({ pid: process.pid, at: Date.now(), token: 't' }));
+        if (opts.binary === false) fs.utimesSync(d, at, at);
+        return d;
+    }
+
+    it('removes by age, then least recently used to the size bound, and keeps what is in use or locked', () => {
+        const root = path.join(dir, 'bounds1');
+        entry(root, 'old', 1000, 40 * DAY);                              // past the age bound
+        entry(root, 'old_unstamped', 1000, 40 * DAY, { stamp: false });  // last use from the binary's mtime
+        entry(root, 'lru1', 1000, 5 * DAY);
+        entry(root, 'lru2', 1000, 4 * DAY);
+        entry(root, 'recent', 1000, 1 * DAY);
+        entry(root, 'locked', 1000, 6 * DAY, { lock: true });             // a build holds it
+        entry(root, 'idle', 1000, 5 * MIN);                               // used within the grace
+        entry(root, 'building', 0, 2 * DAY, { binary: false, stamp: false });  // no binary yet: only age removes it
+        // a prune's leftover from a process that is gone
+        fs.mkdirSync(path.join(root, '.prune-gone-999999-abcd1234'), { recursive: true });
+        fs.writeFileSync(path.join(root, '.prune-gone-999999-abcd1234', 'bin'), 'x');
+
+        const r = pruneNativeBuildCache({ cacheRoot: root, maxBytes: 3500, maxAgeMs: 30 * DAY, minIdleMs: 15 * MIN });
+        const removed = r.removed.map(e => `${e.key}:${e.reason}`);
+        // oldest first: the two past the age bound, then lru1 and lru2 (locked is older but held); recent and idle fit
+        expect(removed).toEqual(['old:age', 'old_unstamped:age', 'lru1:size', 'lru2:size']);
+        expect(r.kept).toEqual(expect.arrayContaining([{ key: 'locked', reason: 'locked' }]));
+        for (const k of ['recent', 'locked', 'idle', 'building']) expect(fs.existsSync(path.join(root, k)), k).toBe(true);
+        for (const k of ['old', 'old_unstamped', 'lru1', 'lru2']) expect(fs.existsSync(path.join(root, k)), k).toBe(false);
+        expect(r.bytesBefore).toBeGreaterThanOrEqual(7000);
+        expect(r.bytesAfter).toBe(r.bytesBefore - 4000);
+        expect(fs.readdirSync(root).filter(n => n.startsWith('.prune-'))).toEqual([]);
+
+        // past every bound, the idle-grace entry is still kept as in use; the bare build directory goes by age
+        const r2 = pruneNativeBuildCache({ cacheRoot: root, maxBytes: 0, maxAgeMs: 1 * DAY, minIdleMs: 15 * MIN });
+        expect(r2.removed.map(e => e.key).sort()).toEqual(['building', 'recent']);
+        expect(r2.kept).toEqual(expect.arrayContaining([{ key: 'idle', reason: 'in_use' }, { key: 'locked', reason: 'locked' }]));
+        expect(fs.existsSync(path.join(root, 'idle', 'bin'))).toBe(true);
+    });
+
+    it('a lookup stamps the entry; a pruned build is rebuilt on its next use; one being built is never removed', async () => {
+        const root = path.join(dir, 'bounds2');
+        const spec = (n: number) => ({ sourceCode: `#include <cstdio>\nint main() { std::printf("b${n}\\n"); return 0; }\n`, includeDirs: [], flags: defaultNativeFlags(), name: `bounds_${n}`, cacheRoot: root });
+        const first = await compileNativeCached(spec(1));
+        const stamp = path.join(path.dirname(first.binaryPath), 'last-used');
+        const long = new Date(Date.now() - 3 * DAY);
+        fs.utimesSync(stamp, long, long);
+        const hit = await compileNativeCached(spec(1));
+        expect(hit.cacheHit).toBe(true);
+        expect(Date.now() - fs.statSync(stamp).mtimeMs).toBeLessThan(MIN);
+
+        // while bounds_2 compiles in this process, a prune past every bound (no grace) leaves it alone
+        const pending = compileNativeCached(spec(2));
+        await new Promise(r => setTimeout(r, 50));
+        const during = pruneNativeBuildCache({ cacheRoot: root, maxBytes: 0, maxAgeMs: 0, minIdleMs: 0 });
+        expect(during.removed.map(e => e.key)).toEqual([first.key]);
+        const second = await pending;
+        expect(during.kept.map(e => e.key)).toContain(second.key);
+        expect(execFileSync(second.binaryPath, { encoding: 'utf8' }).trim()).toBe('b2');
+        expect(fs.existsSync(first.binaryPath)).toBe(false);
+
+        const again = await compileNativeCached(spec(1));
+        expect(again.cacheHit).toBe(false);
+        expect(again.binaryPath).toBe(first.binaryPath);
+        expect(execFileSync(again.binaryPath, { encoding: 'utf8' }).trim()).toBe('b1');
+    }, 120_000);
+
+    it('puts an entry back when it was used between the look and the rename', () => {
+        const root = path.join(dir, 'bounds4');
+        const d = entry(root, 'raced', 1000, 40 * DAY);
+        const cjsFs = createRequire(__filename)('fs') as typeof fs;
+        const real = cjsFs.renameSync;
+        // a lookup in another process stamps the entry just before the prune renames it aside
+        (cjsFs as any).renameSync = (from: fs.PathLike, to: fs.PathLike) => {
+            if (String(to).includes('.prune-')) { const now = new Date(); fs.utimesSync(path.join(d, 'last-used'), now, now); }
+            return real(from, to);
+        };
+        syncBuiltinESMExports();
+        let r;
+        try {
+            r = pruneNativeBuildCache({ cacheRoot: root, maxAgeMs: 30 * DAY });
+        } finally {
+            (cjsFs as any).renameSync = real;
+            syncBuiltinESMExports();
+        }
+        expect(r.removed).toEqual([]);
+        expect(r.kept).toEqual([{ key: 'raced', reason: 'in_use' }]);
+        expect(fs.readFileSync(path.join(d, 'bin')).length).toBe(1000);
+        expect(fs.readdirSync(root).filter(n => n.startsWith('.prune-'))).toEqual([]);
+    });
+
+    it('prunes automatically at most once an hour, with the bounds from the environment', () => {
+        const root = path.join(dir, 'bounds3');
+        entry(root, 'a', 1000, 3 * DAY);
+        entry(root, 'b', 1000, 2 * DAY);
+        const saved = process.env.SCRATCHBOX_NATIVE_BUILD_CACHE_MAX_AGE_DAYS;
+        process.env.SCRATCHBOX_NATIVE_BUILD_CACHE_MAX_AGE_DAYS = '2.5';
+        try {
+            const r = maybePruneNativeBuildCache(root);
+            expect(r?.removed.map(e => e.key)).toEqual(['a']);
+            process.env.SCRATCHBOX_NATIVE_BUILD_CACHE_MAX_AGE_DAYS = '1';
+            expect(maybePruneNativeBuildCache(root)).toBeUndefined();   // pruned less than an hour ago
+            expect(fs.existsSync(path.join(root, 'b'))).toBe(true);
+            const hourAgo = new Date(Date.now() - 2 * 3600_000);
+            fs.utimesSync(path.join(root, '.last-prune'), hourAgo, hourAgo);
+            expect(maybePruneNativeBuildCache(root)?.removed.map(e => e.key)).toEqual(['b']);
+        } finally {
+            if (saved === undefined) delete process.env.SCRATCHBOX_NATIVE_BUILD_CACHE_MAX_AGE_DAYS;
+            else process.env.SCRATCHBOX_NATIVE_BUILD_CACHE_MAX_AGE_DAYS = saved;
+        }
     });
 });

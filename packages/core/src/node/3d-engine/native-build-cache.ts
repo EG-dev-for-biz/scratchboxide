@@ -22,6 +22,12 @@
  *   process concurrent requests for one key share one build.
  * - Header hashes are memoised by (inode, size, mtime, ctime), so a warm key costs one stat per header.
  * - A failed compile throws (NativeBuildError) with the compiler's output; nothing older is used instead.
+ * - Every lookup stamps its entry's last use (`<key>/last-used`). The cache is bounded (pruneNativeBuildCache): entries
+ *   unused for longer than the age bound go, then the least recently used until the cache is within the size bound.
+ *   An entry used within the idle grace, being built (its lock is present) or held in this process is never removed;
+ *   removal renames the entry aside first and puts it back if it was used meanwhile. A process prunes after it
+ *   compiles something, at most once an hour across processes (SCRATCHBOX_NATIVE_BUILD_CACHE_MAX_MB, default 4096,
+ *   and SCRATCHBOX_NATIVE_BUILD_CACHE_MAX_AGE_DAYS, default 30).
  */
 
 import { execFile, execFileSync } from 'child_process';
@@ -32,6 +38,7 @@ import * as path from 'path';
 
 const KEY_FORMAT = 'scratchbox-native-build-v1';
 const ENTRY_BINARY = 'bin';
+const ENTRY_LAST_USED = 'last-used';
 
 /** The binary of a cache entry. */
 export function nativeBuildEntryBinary(cacheRoot: string, key: string): string {
@@ -354,7 +361,9 @@ export async function compileNativeCached(spec: NativeCompileSpec): Promise<Nati
     const entryDir = path.join(spec.cacheRoot ?? nativeBuildCacheRoot(), key);
     // The entry's binary is named by the key alone: builds that differ only in the name they ask for share it.
     const binaryPath = nativeBuildEntryBinary(path.dirname(entryDir), key);
-    if (statFile(binaryPath)) {
+    // stamped before it is looked at again: a prune that renamed the entry aside meanwhile sees the stamp and puts it back,
+    // or the binary is gone and is built anew
+    if (statFile(binaryPath) && markUsed(entryDir) && statFile(binaryPath)) {
         return { binaryPath, key, cacheHit: true, compileMs: Date.now() - started, compilerOutput: '' };
     }
     const pending = inFlight.get(binaryPath);
@@ -366,6 +375,7 @@ export async function compileNativeCached(spec: NativeCompileSpec): Promise<Nati
         try {
             // another process may have built it while this one waited
             if (statFile(binaryPath)) {
+                markUsed(entryDir);
                 return { binaryPath, key, cacheHit: true, compileMs: Date.now() - started, compilerOutput: '' };
             }
             removeOrphanedTemps(binaryPath);
@@ -386,6 +396,7 @@ export async function compileNativeCached(spec: NativeCompileSpec): Promise<Nati
             try {
                 const output = await runCompiler(compilerArgv(spec.compiler), args, timeoutMs);
                 fs.renameSync(tmpBin, binaryPath);
+                markUsed(entryDir);
                 return { binaryPath, key, cacheHit: false, compileMs: Date.now() - compileStart, compilerOutput: output };
             } catch (err) {
                 fs.rmSync(tmpBin, { force: true });
@@ -401,11 +412,14 @@ export async function compileNativeCached(spec: NativeCompileSpec): Promise<Nati
         }
     })();
     inFlight.set(binaryPath, build);
+    let result: NativeCompileResult;
     try {
-        return await build;
+        result = await build;
     } finally {
         inFlight.delete(binaryPath);
     }
+    if (!result.cacheHit) maybePruneNativeBuildCache(path.dirname(entryDir));
+    return result;
 }
 
 /**
@@ -445,4 +459,170 @@ export async function buildNativeBinary(spec: Omit<NativeCompileSpec, 'name'> & 
     const result = await compileNativeCached({ ...rest, name: path.basename(binary) });
     placeCachedBinary(result.binaryPath, binary);
     return binary;
+}
+
+// ============================================================================================
+// Bounds: last use, age, size
+
+/** Stamps an entry's last use; false when the entry directory is gone. */
+function markUsed(entryDir: string): boolean {
+    const stamp = path.join(entryDir, ENTRY_LAST_USED);
+    const now = new Date();
+    try {
+        fs.utimesSync(stamp, now, now);
+        return true;
+    } catch {
+        try {
+            fs.writeFileSync(stamp, '');
+            return true;
+        } catch {
+            return false;
+        }
+    }
+}
+
+function lastUsedMs(entryDir: string): number {
+    for (const f of [ENTRY_LAST_USED, ENTRY_BINARY]) {
+        try {
+            return fs.statSync(path.join(entryDir, f)).mtimeMs;
+        } catch {
+            // next
+        }
+    }
+    return 0;
+}
+
+function dirBytes(dir: string): number {
+    let total = 0;
+    for (const name of fs.readdirSync(dir)) {
+        try {
+            const st = fs.lstatSync(path.join(dir, name));
+            total += st.isDirectory() ? dirBytes(path.join(dir, name)) : st.size;
+        } catch {
+            // gone meanwhile
+        }
+    }
+    return total;
+}
+
+export interface NativeBuildCachePruneOptions {
+    /** Cache root (default nativeBuildCacheRoot()). */
+    cacheRoot?: string;
+    /** Size bound: least recently used entries go until the cache is within it (default 4 GiB). */
+    maxBytes?: number;
+    /** Entries unused for longer go (default 30 days). */
+    maxAgeMs?: number;
+    /** Entries used more recently than this are kept whatever the bounds (default 15 min). */
+    minIdleMs?: number;
+    /** The time to judge ages by (default now). */
+    nowMs?: number;
+}
+
+export interface NativeBuildCachePruneResult {
+    removed: { key: string; bytes: number; lastUsedMs: number; reason: 'age' | 'size' }[];
+    /** Entries over a bound that were kept: in use (used within the idle grace, or held in this process) or locked. */
+    kept: { key: string; reason: 'in_use' | 'locked' }[];
+    bytesBefore: number;
+    bytesAfter: number;
+}
+
+const DEFAULT_MAX_BYTES = 4096 * 1024 * 1024;
+const DEFAULT_MAX_AGE_MS = 30 * 24 * 3600_000;
+const DEFAULT_MIN_IDLE_MS = 15 * 60_000;
+const PRUNE_INTERVAL_MS = 3600_000;
+const PRUNE_STAMP = '.last-prune';
+const ASIDE_PREFIX = '.prune-';
+
+/**
+ * Removes entries unused for longer than maxAgeMs, then the least recently used until the cache is within maxBytes.
+ * Never removes an entry used within minIdleMs, one whose build lock is present, or one this process is building.
+ * An entry is renamed aside before it is deleted, and put back when its last-use stamp moved meanwhile.
+ */
+export function pruneNativeBuildCache(options: NativeBuildCachePruneOptions = {}): NativeBuildCachePruneResult {
+    const root = options.cacheRoot ?? nativeBuildCacheRoot();
+    const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+    const maxAgeMs = options.maxAgeMs ?? DEFAULT_MAX_AGE_MS;
+    const minIdleMs = options.minIdleMs ?? DEFAULT_MIN_IDLE_MS;
+    const now = options.nowMs ?? Date.now();
+    const result: NativeBuildCachePruneResult = { removed: [], kept: [], bytesBefore: 0, bytesAfter: 0 };
+    if (!fs.existsSync(root)) return result;
+    const held = new Set([...inFlight.keys()].map(b => path.basename(path.dirname(b))));
+    // used: the last use (the stamp, else the binary's mtime, else the directory's); stamped: the first two alone (0: neither)
+    const entries: { key: string; dir: string; bytes: number; used: number; stamped: number }[] = [];
+    for (const name of fs.readdirSync(root)) {
+        const dir = path.join(root, name);
+        if (name.startsWith(ASIDE_PREFIX)) {
+            // left by a prune whose process is gone
+            const m = /^\.prune-.+-(\d+)-[0-9a-f]+$/.exec(name);
+            if (m && !processAlive(Number(m[1]))) fs.rmSync(dir, { recursive: true, force: true });
+            continue;
+        }
+        let st: fs.Stats;
+        try {
+            st = fs.statSync(dir);
+        } catch {
+            continue;
+        }
+        if (!st.isDirectory()) continue;
+        const bytes = dirBytes(dir);
+        result.bytesBefore += bytes;
+        // an entry without its binary is being built, or a failed build: removed only by age, when nothing holds it
+        const stamped = lastUsedMs(dir);
+        entries.push({ key: name, dir, bytes, used: stamped || st.mtimeMs, stamped });
+    }
+    entries.sort((a, b) => a.used - b.used || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    let total = result.bytesBefore;
+    for (const e of entries) {
+        const reason = now - e.used > maxAgeMs ? 'age' : total > maxBytes ? 'size' : undefined;
+        if (!reason) continue;
+        if (!statFile(path.join(e.dir, ENTRY_BINARY)) && reason !== 'age') continue;
+        if (held.has(e.key) || now - e.used < minIdleMs) { result.kept.push({ key: e.key, reason: 'in_use' }); continue; }
+        if (fs.existsSync(path.join(e.dir, `${ENTRY_BINARY}.lock`))) { result.kept.push({ key: e.key, reason: 'locked' }); continue; }
+        const aside = path.join(root, `${ASIDE_PREFIX}${e.key}-${process.pid}-${crypto.randomBytes(4).toString('hex')}`);
+        try {
+            fs.renameSync(e.dir, aside);
+        } catch {
+            continue; // gone, or taken meanwhile
+        }
+        // used (or locked for a build) between the look and the rename: put it back, unless the key was built anew meanwhile
+        if (lastUsedMs(aside) !== e.stamped || fs.existsSync(path.join(aside, `${ENTRY_BINARY}.lock`))) {
+            try {
+                fs.renameSync(aside, e.dir);
+            } catch {
+                fs.rmSync(aside, { recursive: true, force: true });
+            }
+            result.kept.push({ key: e.key, reason: 'in_use' });
+            continue;
+        }
+        fs.rmSync(aside, { recursive: true, force: true });
+        total -= e.bytes;
+        result.removed.push({ key: e.key, bytes: e.bytes, lastUsedMs: e.used, reason });
+    }
+    result.bytesAfter = total;
+    return result;
+}
+
+function envNumber(name: string): number | undefined {
+    const v = Number(process.env[name]);
+    return process.env[name] !== undefined && Number.isFinite(v) && v >= 0 ? v : undefined;
+}
+
+/** Prunes the cache with the environment's bounds, at most once per PRUNE_INTERVAL_MS across processes; never throws. */
+export function maybePruneNativeBuildCache(cacheRoot: string = nativeBuildCacheRoot()): NativeBuildCachePruneResult | undefined {
+    try {
+        const stamp = path.join(cacheRoot, PRUNE_STAMP);
+        const last = fs.existsSync(stamp) ? fs.statSync(stamp).mtimeMs : 0;
+        if (Date.now() - last < PRUNE_INTERVAL_MS) return undefined;
+        fs.mkdirSync(cacheRoot, { recursive: true });
+        fs.writeFileSync(stamp, String(process.pid));
+        const mb = envNumber('SCRATCHBOX_NATIVE_BUILD_CACHE_MAX_MB');
+        const days = envNumber('SCRATCHBOX_NATIVE_BUILD_CACHE_MAX_AGE_DAYS');
+        return pruneNativeBuildCache({
+            cacheRoot,
+            maxBytes: mb === undefined ? undefined : mb * 1024 * 1024,
+            maxAgeMs: days === undefined ? undefined : days * 24 * 3600_000
+        });
+    } catch {
+        return undefined;
+    }
 }
