@@ -218,12 +218,16 @@ export interface ImageAtmospherePixelOptions {
     pixels: Uint8Array | Uint8ClampedArray | Float32Array;
     width: number;
     height: number;
+    /** With timestampIso, the sun comes from NOAA ephemeris at these coordinates. */
     knownCoords?: { lat: number; lng: number };
     timestampIso?: string;
-    promptHint?: string;
+    /** Optical-axis heading, degrees clockwise from north. Without it image-derived azimuths are camera-relative. */
     cameraHeadingDeg?: number;
+    /** Optical-axis pitch above the horizon. Without it a level camera is assumed (reported in `assumptions`). */
     cameraPitchDeg?: number;
+    /** Horizontal field of view. Without it 60 deg is assumed (reported in `assumptions`). */
     hfovDeg?: number;
+    /** Vertical field of view; derived from hfov and the aspect ratio when omitted. */
     vfovDeg?: number;
 }
 
@@ -235,7 +239,6 @@ export interface ImageAtmosphereRequest {
     height?: number;
     knownCoords?: { lat: number; lng: number };
     timestampIso?: string;
-    promptHint?: string;
     cameraHeadingDeg?: number;
     cameraPitchDeg?: number;
     hfovDeg?: number;
@@ -247,29 +250,45 @@ export interface AtmosphericEstimationResult {
     success: boolean;
     landmarkHint?: string;
     sunElevation: number; // degrees
-    sunAzimuth: number; // degrees from North (0-360)
-    solarVector: [number, number, number]; // [x, y, z] in ENU convention
+    sunAzimuth: number; // degrees, clockwise from north or from the camera forward axis (see azimuthReference)
+    azimuthReference: 'true-north' | 'camera-forward';
+    /** How the sun was located: 'noaa-ephemeris', 'sun-disc' or 'preetham-sky-fit' (diagnostic label). */
+    sunSource: string;
+    solarVector: [number, number, number]; // [x, y, z] in ENU convention, toward the sun
     diurnalPhase: DiurnalPhase;
-    kelvinTemperature: number;
-    sunColorRgb: [number, number, number]; // normalized [0, 1]
-    ambientColorRgb: [number, number, number]; // normalized [0, 1]
-    turbidity: number;
-    rayleigh: number;
+    /** CCT of the direct sun from the Preetham transmittance at the fitted turbidity and sun elevation. */
+    kelvinTemperature?: number;
+    sunColorRgb?: [number, number, number]; // normalized [0, 1]
+    /** Mean linear colour of the segmented sky pixels. */
+    ambientColorRgb?: [number, number, number];
+    /** Preetham turbidity fitted to the sky pixels. */
+    turbidity?: number;
+    /** Angstrom turbidity coefficient beta derived from the fitted turbidity (Preetham 1999). */
+    angstromBeta?: number;
+    rayleigh?: number;
     rayleighScattering?: number;
-    mie: number;
-    cloudCoverage: number; // 0.0 - 1.0
-    cloudDensity: number; // 0.0 - 2.0
-    aerialPerspectiveRange: number; // meters
+    mie?: number;
+    /** Fraction of the segmented sky that is bright and achromatic (cloud or haze). */
+    cloudCoverage?: number;
+    cloudDensity?: number;
+    /** Koschmieder visibility (m) from the fitted turbidity, assuming a 1.2 km aerosol scale height. */
+    aerialPerspectiveRange?: number;
     aerialPerspectiveExtinctionRange?: number;
-    inscatteringIntensity: number; // 0.0 - 1.0
-    confidenceScore: number; // 0.0 - 1.0
+    inscatteringIntensity?: number;
+    /** Confidence of an image-derived sun (fit R^2 x identifiability, or disc circularity); absent for ephemeris. */
+    confidenceScore?: number;
     confidence?: number;
+    /** Preetham fit quality where a fit was made. */
+    skyFit?: { luminanceR2: number; chromaRms: number; samples: number };
+    assumptions: string[];
+    unmeasured: Record<string, string>;
     photometricMetrics: {
-        skyMeanLuminance: number;
-        skyChromaticity: [number, number, number];
-        skyGradientRatio: number;
-        groundMeanLuminance: number;
-        contrastRatio: number;
+        skyPixelFraction: number;
+        skyMeanLuminance?: number;
+        skyChromaticity?: [number, number, number];
+        skyGradientRatio?: number;
+        groundMeanLuminance?: number;
+        contrastRatio?: number;
         estimatedGlareLocus?: [number, number];
     };
     suggestedAtmosphereConfig: AtmosphericScatteringConfig;

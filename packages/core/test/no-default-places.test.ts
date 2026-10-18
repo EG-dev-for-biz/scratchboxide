@@ -329,8 +329,10 @@ describe('image lighting reads the photograph and invents no place or pose', () 
             fs.writeFileSync(notImage, 'these are not pixels');
             await expect(InverseLightingEstimatorService.estimateFromImage({ imagePath: notImage })).rejects.toThrow(/unrecognised image format/);
             const photo = writePng(dir, 'plaza.png');
-            const est = await InverseLightingEstimatorService.estimateFromImage({ imagePath: photo });
-            expect(est.keyLight.cctKelvin).toBeGreaterThan(0);
+            const est = await InverseLightingEstimatorService.estimateFromImage({ imagePath: photo, knownCoords: { lat: 45.4345, lng: 12.3371 }, timestampIso: '2026-06-21T10:00:00Z' });
+            // The sky fraction is measured from the decoded pixels: 13 of 32 rows, less the skyline band.
+            expect(est.skyPixelFraction).toBeGreaterThan(0.3);
+            expect(est.skyPixelFraction).toBeLessThan(13 / 32 + 1e-9);
         } finally {
             fs.rmSync(dir, { recursive: true, force: true });
         }

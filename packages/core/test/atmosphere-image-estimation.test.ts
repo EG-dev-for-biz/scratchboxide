@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { encodePng } from '../src/node/texture-processing';
 import { MissingInputError } from '../src/common/errors/pipeline-errors';
+import { SunNotFoundError } from '../src/browser/generative-canvas/services/atmosphere/sky-photometry';
 import {
     fitPlanckianKelvinTemperature,
     computeSkyAtmosphereMetrics,
@@ -72,11 +73,13 @@ describe('Atmosphere Image Estimation Service & Pipeline', () => {
 
             const metrics = computeSkyAtmosphereMetrics(pixels, width, height);
 
-            expect(metrics.skyPixels).toBeGreaterThan(0);
-            expect(metrics.zenithRgb.b).toBeGreaterThan(metrics.zenithRgb.r);
+            // The sky is the 35 rows grown from the top edge (minus the sun disc and its rim), not a fixed band.
+            expect(metrics.skyPixels).toBeGreaterThan(3200);
+            expect(metrics.skyPixels).toBeLessThan(3500);
+            expect(metrics.zenithRgb!.b).toBeGreaterThan(metrics.zenithRgb!.r);
             expect(metrics.skyGradientRatio).toBeGreaterThan(0.5);
-            expect(metrics.glareLocusX).toBeGreaterThan(0.5); // centered around x=60/100 -> 0.6
-            expect(metrics.glareLocusY).toBeLessThan(0.3); // centered around y=10/100 -> 0.1
+            expect(metrics.glareLocusX).toBeCloseTo(0.6, 2); // the disc centre, x=60/100
+            expect(metrics.glareLocusY).toBeCloseTo(0.1, 2); // y=10/100
         });
     });
 
@@ -120,24 +123,35 @@ describe('Atmosphere Image Estimation Service & Pipeline', () => {
                 cameraPitchDeg: 6.0
             });
 
-            expect(result.kelvinTemperature).toBeGreaterThanOrEqual(4000);
-            expect(result.kelvinTemperature).toBeLessThanOrEqual(7500);
-            expect(result.turbidity).toBeGreaterThanOrEqual(1.8);
-            expect(result.turbidity).toBeLessThanOrEqual(7.5);
-            expect(result.rayleighScattering).toBeGreaterThanOrEqual(1.6);
-            expect(result.rayleighScattering).toBeLessThanOrEqual(4.2);
-            expect(result.sunElevation).toBeGreaterThan(20);
-            expect(result.sunElevation).toBeLessThan(75);
-            expect(result.aerialPerspectiveRange).toBeGreaterThan(5000);
-            expect(result.aerialPerspectiveRange).toBeLessThanOrEqual(30000);
+            // The sun is the disc at (55, 8): through a 60 deg (assumed, reported) square pinhole pitched up 6 deg
+            // that ray is ~30 deg above the horizon and ~12 deg right of the 108 deg heading.
+            expect(result.sunSource).toBe('sun-disc');
+            expect(result.azimuthReference).toBe('true-north');
+            expect(result.sunElevation).toBeGreaterThan(28);
+            expect(result.sunElevation).toBeLessThan(32);
+            expect(result.sunAzimuth).toBeGreaterThan(118);
+            expect(result.sunAzimuth).toBeLessThan(124);
+            expect(result.confidenceScore!).toBeGreaterThan(0.6);
+            expect(result.assumptions).toContain('hfovDeg=60 (not given)');
 
-            // Verify suggestedAtmosphereConfig matches AtmosphereService contracts
+            // A flat sky carries no turbidity information: nothing derived from it is invented.
+            expect(result.turbidity).toBeUndefined();
+            expect(result.kelvinTemperature).toBeUndefined();
+            expect(result.aerialPerspectiveRange).toBeUndefined();
+            expect(result.unmeasured.turbidity).toMatch(/does not constrain/);
             const cfg = result.suggestedAtmosphereConfig;
-            expect(cfg.turbidity).toBe(result.turbidity);
-            expect(cfg.rayleigh).toBe(result.rayleighScattering);
-            expect(cfg.sunPosition.length).toBe(3);
-            expect(cfg.aerialPerspectiveEnabled).toBe(true);
-            expect(cfg.aerialPerspectiveExtinctionRange).toBe(result.aerialPerspectiveRange);
+            expect(cfg.turbidity).toBeUndefined();
+            expect(cfg.rayleigh).toBeUndefined();
+            expect(cfg.cloudAltitude).toBeUndefined();
+            expect(cfg.aerialPerspectiveEnabled).toBe(false);
+            expect(cfg.sunPosition!.length).toBe(3);
+        });
+
+        it('a flat sky without a sun disc or coordinates is SunNotFoundError (no 45/180 default sun)', () => {
+            const w = 60, h = 40;
+            const pixels = new Uint8Array(w * h * 4);
+            for (let i = 0; i < w * h; i++) pixels.set(i < w * 15 ? [120, 180, 240, 255] : [160, 140, 100, 255], i * 4);
+            expect(() => AtmosphereImageEstimationService.estimateFromPixels({ pixels, width: w, height: h })).toThrow(SunNotFoundError);
         });
     });
 
@@ -163,11 +177,17 @@ describe('Atmosphere Image Estimation Service & Pipeline', () => {
 
         it('never synthesizes an estimate without pixels, and never maps a hint to a landmark', async () => {
             // It used to place any photo at the Colosseum (or a regex-matched landmark) with constant "measured" metrics.
-            await expect(AtmosphereImageEstimationService.estimateFromImage({ promptHint: 'Colosseum Rome sunny afternoon', imagePath: 'unread.jpg' }))
+            await expect(AtmosphereImageEstimationService.estimateFromImage({ imagePath: 'unread.jpg' }))
                 .rejects.toThrow(MissingInputError);
             const sky = skyImage(80, 80);
-            const hinted = AtmosphereImageEstimationService.estimateFromPixels({ pixels: sky.pixels, width: sky.width, height: sky.height, promptHint: 'Eiffel Tower, Paris', timestampIso: '2026-09-28T15:30:00Z' });
-            expect((hinted.suggestedAtmosphereConfig as any).latitude).toBeUndefined();
+            // A time without coordinates is no location: the sun comes from the disc, no latitude is set.
+            const timed = AtmosphereImageEstimationService.estimateFromPixels({ pixels: sky.pixels, width: sky.width, height: sky.height, timestampIso: '2026-09-28T15:30:00Z' });
+            expect((timed.suggestedAtmosphereConfig as any).latitude).toBeUndefined();
+            expect(timed.sunSource).toBe('sun-disc');
+            // Coordinates without a time do not get a made-up date: the image locates the sun and the reason is reported.
+            const untimed = AtmosphereImageEstimationService.estimateFromPixels({ pixels: sky.pixels, width: sky.width, height: sky.height, knownCoords: { lat: 41.89, lng: 12.49 } });
+            expect(untimed.sunSource).toBe('sun-disc');
+            expect(untimed.unmeasured.ephemeris).toMatch(/without timestampIso/);
         });
     });
 
@@ -189,7 +209,9 @@ describe('Atmosphere Image Estimation Service & Pipeline', () => {
                 const payload = execution.resultPayload as any;
                 expect(payload.diurnalPhase.toLowerCase()).toBe('afternoon');
                 expect(execution.summaryResult).toContain('Estimated physical atmosphere matching image');
-                expect(execution.summaryResult).toContain(`${payload.kelvinTemperature}K`);
+                expect(payload.sunSource).toBe('noaa-ephemeris');
+                expect(execution.summaryResult).toContain(`Sun Elevation ${payload.sunElevation}°`);
+                expect(execution.summaryResult).toContain('Not measured: turbidity');
 
                 await expect(handler({ promptHint: 'Piazza del Colosseo Rome afternoon', latitude: 41.8902, longitude: 12.4922 }, {} as any)).rejects.toThrow(MissingInputError);
                 await expect(handler({ imagePath: path.join(dir, 'missing.png') }, {} as any)).rejects.toThrow(/does not exist/);
@@ -207,15 +229,19 @@ describe('Atmosphere Image Estimation Service & Pipeline', () => {
                 pixels: sky.pixels,
                 width: sky.width,
                 height: sky.height,
-                knownCoords: { lat: 41.8902, lng: 12.4922 }
+                knownCoords: { lat: 41.8902, lng: 12.4922 },
+                timestampIso: '2026-09-28T15:30:00Z'
             });
 
+            const before = atmosphereService.getConfig();
             atmosphereService.applyEstimationResult(estimation);
             const currentConfig = atmosphereService.getConfig();
 
-            expect(currentConfig.turbidity).toBe(estimation.turbidity);
-            expect(currentConfig.rayleigh).toBe(estimation.rayleighScattering);
-            expect(currentConfig.aerialPerspectiveExtinctionRange).toBe(estimation.aerialPerspectiveRange);
+            expect(currentConfig.sunElevation).toBe(estimation.sunElevation);
+            expect(currentConfig.sunAzimuth).toBe(estimation.sunAzimuth);
+            // Unmeasured fields are left out of the suggestion, so they do not overwrite the renderer's own settings.
+            expect(currentConfig.turbidity).toBe(before.turbidity);
+            expect(currentConfig.rayleigh).toBe(before.rayleigh);
         });
     });
 });

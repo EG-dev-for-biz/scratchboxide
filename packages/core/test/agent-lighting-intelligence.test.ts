@@ -180,7 +180,7 @@ describe('Agent Lighting Intelligence - Unit 2: Photographic Gaffer Engine & Mod
 });
 
 describe('Agent Lighting Intelligence - Unit 3: Inverse Photometric Image Decomposer', () => {
-    it('should inversely estimate key light direction from ground cast shadows', async () => {
+    it('measures colour temperatures and key-to-fill from the photo, and takes the sun from ephemeris or not at all', async () => {
         const { InverseLightingEstimatorService } = await import('../src/node/spatial/InverseLightingEstimatorService');
 
         const width = 100;
@@ -217,27 +217,44 @@ describe('Agent Lighting Intelligence - Unit 3: Inverse Photometric Image Decomp
             }
         }
 
+        // A flat sky and a shadow patch do not reveal where the sun is (the old code read a direction off the
+        // patch's position in the frame); without ephemeris inputs that is a typed error, not a default sun.
+        const { SunNotFoundError } = await import('../src/browser/generative-canvas/services/atmosphere/sky-photometry');
+        await expect(InverseLightingEstimatorService.decomposePixels(pixels, width, height, { hfovDeg: 60, vfovDeg: 45 }))
+            .rejects.toThrow(SunNotFoundError);
+
         const result = await InverseLightingEstimatorService.decomposePixels(pixels, width, height, {
             hfovDeg: 60,
-            vfovDeg: 45
+            vfovDeg: 45,
+            knownCoords: { lat: 41.8902, lng: 12.4922 },
+            timestampIso: '2026-09-28T15:30:00Z'
         });
 
         expect(result.success).toBe(true);
-        expect(result.keyLight).toBeDefined();
-        // Since the shadow is on the left (x=15..45), the light source must be on the right (azimuth > 180° or positive X)
-        expect(result.keyLight.direction[0]).toBeLessThan(0); // light travels right-to-left
-        expect(result.keyLight.cctKelvin).toBeGreaterThan(3000);
-        expect(result.keyLight.cctKelvin).toBeLessThan(6500);
+        expect(result.keyLight.source).toBe('noaa-ephemeris');
+        // The ephemeris helper's sun is used as is; the light travels away from it (+X east, -Z north).
+        const { calculateNOAASolarPosition } = await import('../src/browser/generative-canvas/services/atmosphere/solar-position');
+        const ephem = calculateNOAASolarPosition(new Date('2026-09-28T15:30:00Z'), 41.8902, 12.4922);
+        expect(result.keyLight.azimuthDeg).toBeCloseTo(ephem.azimuthDeg, 1);
+        const az = ephem.azimuthDeg * Math.PI / 180, el = ephem.elevationDeg * Math.PI / 180;
+        expect(result.keyLight.direction[0]).toBeCloseTo(-Math.cos(el) * Math.sin(az), 4);
+        expect(result.keyLight.direction[2]).toBeCloseTo(Math.cos(el) * Math.cos(az), 4);
+        expect(result.keyLight.cctKelvin!).toBeGreaterThan(3000);
+        expect(result.keyLight.cctKelvin!).toBeLessThan(6500);
+        // The shadow is bluer than the lit stone.
+        expect(result.fillLight.cctKelvin!).toBeGreaterThan(result.keyLight.cctKelvin!);
 
-        // Spherical harmonics ambient should have 9 coefficients for each RGB channel
-        expect(result.sphericalHarmonics).toBeDefined();
+        // Key-to-fill from the measured lit/shadow luminance ratio (equal albedo): lit (230,210,175) vs (45,55,80).
+        const lin = (v: number) => { const n = v / 255; return n <= 0.04045 ? n / 12.92 : Math.pow((n + 0.055) / 1.055, 2.4); };
+        const L = (c: number[]) => 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);
+        expect(result.litToShadowLuminanceRatio!).toBeCloseTo(L([230, 210, 175]) / L([45, 55, 80]), 1);
+
         expect(result.sphericalHarmonics.length).toBe(9);
         expect(result.sphericalHarmonics[0].length).toBe(3);
-
-        // Shadow penumbra analysis
-        expect(result.shadowSharpness).toBeDefined();
-        expect(result.rig).toBeDefined();
-        expect(result.rig.lights.length).toBeGreaterThanOrEqual(2); // At least key and fill
+        expect(result.shFit.rmsResidual).toBeGreaterThan(0);
+        expect(result.shadowSharpness).toBeGreaterThan(0.8); // the patch has hard edges
+        expect(result.rig!.lights.length).toBe(2);
+        expect(result.rig!.keyToFillRatio).toBe(result.keyToFillRatio);
     });
 });
 

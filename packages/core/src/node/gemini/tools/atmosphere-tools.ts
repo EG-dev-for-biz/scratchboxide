@@ -102,17 +102,13 @@ export const ATMOSPHERE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'atmosphere_estimate_from_image',
-        description: 'Inverse photometric and ephemeris analysis that extracts matching physical lighting and atmosphere (solar elevation/azimuth vector, Planckian Kelvin color temperature, Rayleigh/Mie scattering, turbidity, cloud layers, and aerial perspective haze) from an input photograph or plate.',
+        description: 'Measures the atmosphere in a photograph: the sun (NOAA ephemeris when latitude, longitude and isoDate are given; otherwise a visible sun disc, otherwise a Preetham analytic sky fitted to the segmented sky pixels, else a sun_not_found error), Preetham turbidity with the derived Angstrom beta, direct-sun colour temperature and Koschmieder visibility, and the cloud fraction of the visible sky. Quantities the pixels do not determine are listed in unmeasured.',
         parameters: {
             type: 'OBJECT',
             properties: {
                 imagePath: {
                     type: 'STRING',
                     description: 'Path or filename of the reference image.'
-                },
-                promptHint: {
-                    type: 'STRING',
-                    description: 'Optional descriptive prompt or landmark hint (e.g. "Colosseum Rome afternoon", "Eiffel tower sunset").'
                 },
                 latitude: {
                     type: 'NUMBER',
@@ -132,7 +128,11 @@ export const ATMOSPHERE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 cameraPitchDeg: {
                     type: 'NUMBER',
-                    description: 'Optional camera pitch angle in degrees.'
+                    description: 'Camera pitch above the horizon in degrees. If omitted, a level camera is assumed and reported.'
+                },
+                hfovDeg: {
+                    type: 'NUMBER',
+                    description: 'Horizontal field of view in degrees. If omitted, 60 is assumed and reported.'
                 }
             }
         }
@@ -274,12 +274,12 @@ export const atmosphereHandlers: Record<string, ToolHandler> = {
 
     atmosphere_estimate_from_image: async (args, _ctx) => {
         const imagePath = asString(args.imagePath);
-        const promptHint = asString(args.promptHint);
         const lat = typeof args.latitude === 'number' ? args.latitude : (args.latitude ? parseFloat(String(args.latitude)) : undefined);
         const lng = typeof args.longitude === 'number' ? args.longitude : (args.longitude ? parseFloat(String(args.longitude)) : undefined);
         const isoDate = asString(args.isoDate);
         const cameraHeadingDeg = typeof args.cameraHeadingDeg === 'number' ? args.cameraHeadingDeg : undefined;
         const cameraPitchDeg = typeof args.cameraPitchDeg === 'number' ? args.cameraPitchDeg : undefined;
+        const hfovDeg = typeof args.hfovDeg === 'number' ? args.hfovDeg : undefined;
 
         // The photo's own pixels: decoded here (a missing or undecodable file is an error, never a guessed sky).
         if (!imagePath) throw new MissingInputError('atmosphere_estimate_from_image', 'imagePath', 'give the photograph to estimate the atmosphere from');
@@ -294,16 +294,24 @@ export const atmosphereHandlers: Record<string, ToolHandler> = {
             pixels: sampled.pixels,
             width: sampled.width,
             height: sampled.height,
-            promptHint,
             knownCoords: (lat !== undefined && lng !== undefined) ? { lat, lng } : undefined,
-            timestampIso: isoDate,
+            timestampIso: isoDate || undefined,
             cameraHeadingDeg,
-            cameraPitchDeg
+            cameraPitchDeg,
+            hfovDeg
         });
 
+        const parts = [
+            `Sun Elevation ${result.sunElevation}°, Azimuth ${result.sunAzimuth}° (${result.azimuthReference}, from ${result.sunSource}${result.confidence !== undefined ? `, confidence ${result.confidence}` : ''}), ${result.diurnalPhase}`,
+            result.kelvinTemperature !== undefined ? `direct sun ${result.kelvinTemperature}K` : undefined,
+            result.turbidity !== undefined ? `Turbidity ${result.turbidity}` : undefined,
+            result.aerialPerspectiveRange !== undefined ? `visibility ${result.aerialPerspectiveRange}m` : undefined,
+            result.cloudCoverage !== undefined ? `cloud fraction ${result.cloudCoverage}` : undefined
+        ].filter(Boolean);
+        const notMeasured = Object.keys(result.unmeasured);
         return {
             resultPayload: result as unknown as Record<string, unknown>,
-            summaryResult: `Estimated physical atmosphere matching image: Sun Elevation ${result.sunElevation}°, Azimuth ${result.sunAzimuth}°, ${result.kelvinTemperature}K (${result.diurnalPhase}), Turbidity ${result.turbidity}, Aerial Perspective Range ${result.aerialPerspectiveRange}m.`
+            summaryResult: `Estimated physical atmosphere matching image: ${parts.join(', ')}.${notMeasured.length ? ` Not measured: ${notMeasured.join(', ')}.` : ''}${result.assumptions.length ? ` Assumed: ${result.assumptions.join('; ')}.` : ''}`
         };
     },
 

@@ -43,7 +43,7 @@ function asGeodetic(val: unknown): { lat: number; lng: number; altitudeMeters?: 
 export const LIGHTING_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'lighting_estimate_from_photo',
-        description: 'Inverse photometric decomposition that extracts primary light vectors, shadow penumbra softness, correlated color temperature (Kelvin), and order-3 (9x3) Spherical Harmonics ambient fill from an input photograph.',
+        description: 'Measures the lighting in a photograph: the sun direction (NOAA ephemeris when latitude, longitude and isoDate are given; otherwise a visible sun disc, otherwise a Preetham analytic sky fitted to the sky pixels, else a sun_not_found error), Preetham turbidity, lit/shadow colour temperatures and key-to-fill ratio (Otsu split, equal-albedo assumption), shadow edge sharpness, and a least-squares 9x3 spherical-harmonic fit of the visible radiance. Quantities the pixels cannot give (absolute lux) are listed as unmeasured.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -53,20 +53,23 @@ export const LIGHTING_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 hfovDeg: {
                     type: 'NUMBER',
-                    description: 'Horizontal field of view of the camera in degrees (default: 60).'
+                    description: 'Horizontal field of view in degrees. If omitted, 60 is assumed and reported in assumptions.'
                 },
                 vfovDeg: {
                     type: 'NUMBER',
-                    description: 'Vertical field of view of the camera in degrees (default: 45).'
+                    description: 'Vertical field of view in degrees. Derived from hfovDeg and the aspect ratio when omitted.'
                 },
                 cameraHeadingDeg: {
                     type: 'NUMBER',
-                    description: 'Optional known camera heading in degrees clockwise from North.'
+                    description: 'Camera heading in degrees clockwise from North. Without it image-derived azimuths are relative to the camera forward axis.'
                 },
                 cameraPitchDeg: {
                     type: 'NUMBER',
-                    description: 'Optional known camera pitch in degrees.'
-                }
+                    description: 'Camera pitch above the horizon in degrees. If omitted, a level camera is assumed and reported.'
+                },
+                latitude: { type: 'NUMBER', description: 'Latitude of the photo (with longitude and isoDate, the sun comes from NOAA ephemeris).' },
+                longitude: { type: 'NUMBER', description: 'Longitude of the photo.' },
+                isoDate: { type: 'STRING', description: 'ISO 8601 capture time of the photo.' }
             },
             required: ['imagePath']
         }
@@ -147,7 +150,7 @@ export const LIGHTING_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'lighting_match_reference',
-        description: 'One-shot photometric lighting solver that extracts sun angle, sky ambient, Kelvin temperature, and shadow penumbra from a reference image, builds a matched physical lighting rig, applies Three.js shader uniforms, and optionally exports OpenUSD (.usda).',
+        description: 'Builds a lighting rig measured from a reference image (sun from NOAA ephemeris when geodeticCoords and isoDate are given, else from the photo\'s sun disc or sky; key-to-fill ratio and colour temperatures from the lit/shadow split), with relative Three.js uniforms and optional OpenUSD (.usda) export. Fails with sun_not_found or lighting_unmeasured when the photo does not determine them.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -157,7 +160,16 @@ export const LIGHTING_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 landmarkName: {
                     type: 'STRING',
-                    description: 'Optional landmark or scene name.'
+                    description: 'Optional landmark or scene name (a label only; it is not geocoded here).'
+                },
+                geodeticCoords: {
+                    type: 'OBJECT',
+                    properties: { lat: { type: 'NUMBER' }, lng: { type: 'NUMBER' } },
+                    description: 'Where the photo was taken; with isoDate the sun comes from NOAA ephemeris.'
+                },
+                isoDate: {
+                    type: 'STRING',
+                    description: 'ISO 8601 capture time of the photo.'
                 },
                 cameraHeadingDeg: {
                     type: 'NUMBER',
@@ -239,25 +251,30 @@ export const lightingHandlers: Record<string, ToolHandler> = {
         const imagePath = asString(args.imagePath);
         if (!imagePath) throw new Error('lighting_estimate_from_photo: imagePath is required.');
 
+        const num = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+        const lat = num(args.latitude), lng = num(args.longitude);
         const result = await InverseLightingEstimatorService.estimateFromImage({
             imagePath,
-            hfovDeg: asNumber(args.hfovDeg, 60),
-            vfovDeg: asNumber(args.vfovDeg, 45),
-            cameraHeadingDeg: asNumber(args.cameraHeadingDeg, 0),
-            cameraPitchDeg: asNumber(args.cameraPitchDeg, 0)
+            hfovDeg: num(args.hfovDeg),
+            vfovDeg: num(args.vfovDeg),
+            cameraHeadingDeg: num(args.cameraHeadingDeg),
+            cameraPitchDeg: num(args.cameraPitchDeg),
+            knownCoords: lat !== undefined && lng !== undefined ? { lat, lng } : undefined,
+            timestampIso: asString(args.isoDate) || undefined
         });
 
+        const key = result.keyLight;
+        const parts = [
+            `sun elevation ${key.elevationDeg}°, azimuth ${key.azimuthDeg}° (${key.azimuthReference}, from ${key.source}${result.confidence !== undefined ? `, confidence ${result.confidence}` : ''})`,
+            key.cctKelvin !== undefined ? `lit surfaces ${key.cctKelvin}K` : undefined,
+            result.keyToFillRatio !== undefined ? `key:fill ${result.keyToFillRatio.toFixed(2)}:1` : undefined,
+            result.turbidity !== undefined ? `turbidity ${result.turbidity}` : undefined,
+            result.shadowSharpness !== undefined ? `shadow edge sharpness ${(result.shadowSharpness * 100).toFixed(0)}%` : undefined
+        ].filter(Boolean);
+        const notMeasured = Object.keys(result.unmeasured);
         return {
-            resultPayload: {
-                success: true,
-                keyLight: result.keyLight,
-                fillLight: result.fillLight,
-                sphericalHarmonics: result.sphericalHarmonics,
-                shadowSharpness: result.shadowSharpness,
-                confidence: result.confidence,
-                rig: result.rig
-            },
-            summaryResult: `Inverse photometric estimation complete: Key Light elevation ${result.keyLight.elevationDeg}°, azimuth ${result.keyLight.azimuthDeg}°, ${result.keyLight.cctKelvin}K, shadow sharpness ${(result.shadowSharpness * 100).toFixed(0)}%.`
+            resultPayload: { ...result },
+            summaryResult: `Inverse photometric estimation: ${parts.join(', ')}.${notMeasured.length ? ` Not measured: ${notMeasured.join(', ')}.` : ''}${result.assumptions.length ? ` Assumed: ${result.assumptions.join('; ')}.` : ''}`
         };
     },
 
@@ -317,9 +334,12 @@ export const lightingHandlers: Record<string, ToolHandler> = {
         const imagePath = asString(args.imagePath);
         if (!imagePath) throw new Error('lighting_match_reference: imagePath is required.');
 
+        const coords = asGeodetic(args.geodeticCoords);
         const result = await matchLightingToReference({
             imagePath,
             landmarkName: asString(args.landmarkName) || undefined,
+            geodeticCoords: coords ? { lat: coords.lat, lng: coords.lng } : undefined,
+            timestampIso: asString(args.isoDate) || undefined,
             cameraHeadingDeg: typeof args.cameraHeadingDeg === 'number' ? args.cameraHeadingDeg : undefined,
             cameraPitchDeg: typeof args.cameraPitchDeg === 'number' ? args.cameraPitchDeg : undefined,
             stoneType: asString(args.stoneType) || 'travertine',
