@@ -9,7 +9,8 @@
 
 import * as path from 'path';
 import * as fs from 'fs-extra';
-import { exec, spawn } from 'child_process';
+import { spawn } from 'child_process';
+import { chooseH264Encoder, getFfmpegCapabilities, h264EncodeArgs, vp9EncodeArgs, H264Encoder } from './ffmpeg-capabilities';
 import { resolveWithinRoot } from '../security/path-guard';
 import { MissingInputError } from '../../common/errors/pipeline-errors';
 import type {
@@ -153,11 +154,13 @@ export class HeadlessVideoCompositorService {
      * Checks whether ffmpeg is available in the environment path or configured location.
      */
     async isFfmpegAvailable(): Promise<boolean> {
-        return new Promise<boolean>(resolve => {
-            exec(`${this.ffmpegPath} -version`, (err) => {
-                resolve(!err);
-            });
-        });
+        // Measured once per binary and cached (ffmpeg-capabilities); a missing ffmpeg is re-checked next time.
+        try {
+            await getFfmpegCapabilities(this.ffmpegPath);
+            return true;
+        } catch {
+            return false;
+        }
     }
 
     /**
@@ -395,7 +398,7 @@ export class HeadlessVideoCompositorService {
     /**
      * Builds full CLI invocation arguments for FFmpeg.
      */
-    buildFFmpegArgs(request: CompositeJobRequest): {
+    buildFFmpegArgs(request: CompositeJobRequest, h264Encoder: H264Encoder = 'libx264'): {
         executable: string;
         args: string[];
         commandString: string;
@@ -432,12 +435,12 @@ export class HeadlessVideoCompositorService {
         // Codec & Quality
         const format = request.format || 'mp4';
         const crf = Math.round(finiteNumber(request.crf, 20));
-        const preset = typeof request.preset === 'string' && /^[a-z]+$/.test(request.preset) ? request.preset : 'medium';
+        const preset = typeof request.preset === 'string' && /^[a-z]+$/.test(request.preset) ? request.preset : undefined;
 
         if (format === 'mp4' || format === 'mov') {
-            args.push('-c:v', 'libx264', '-crf', crf.toString(), '-preset', preset, '-pix_fmt', 'yuv420p');
+            args.push(...h264EncodeArgs(preset ? 'libx264' : h264Encoder, crf, preset), '-pix_fmt', 'yuv420p');
         } else if (format === 'webm') {
-            args.push('-c:v', 'libvpx-vp9', '-crf', crf.toString(), '-b:v', '0', '-pix_fmt', 'yuv420p');
+            args.push(...vp9EncodeArgs(crf), '-pix_fmt', 'yuv420p');
         } else if (format === 'gif') {
             args.push('-f', 'gif');
         }
@@ -461,7 +464,9 @@ export class HeadlessVideoCompositorService {
      * visible clip (or generative patch) that has no media file, rejects with MissingInputError before FFmpeg runs.
      */
     async execute(request: CompositeJobRequest): Promise<CompositeJobResult> {
-        const { executable, args, commandString, filterComplex, durationSec } = this.buildFFmpegArgs(request);
+        const format = request.format || 'mp4';
+        const h264Encoder = format === 'mp4' || format === 'mov' ? await chooseH264Encoder(this.ffmpegPath, request.preset) : 'libx264';
+        const { executable, args, commandString, filterComplex, durationSec } = this.buildFFmpegArgs(request, h264Encoder);
 
         if (request.dryRun) {
             return {

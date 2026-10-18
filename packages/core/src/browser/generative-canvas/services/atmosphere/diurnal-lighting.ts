@@ -13,7 +13,9 @@ import {
     TimeOfDayPreset
 } from './atmosphere-types';
 import { calculateNOAASolarPosition } from './solar-position';
+import { instantAtLocalMeanSolarTime } from '../../../../common/coordinate/solarPosition';
 import { blackbodyKelvinToLinearRgb } from './kelvin';
+import { InvalidInputError } from '../../../../common/errors/pipeline-errors';
 
 function clamp(x: number, min: number, max: number): number {
     return Math.min(Math.max(x, min), max);
@@ -235,13 +237,13 @@ export function computeDiurnalLightingProfile(altitudeDeg: number): DiurnalLight
 }
 
 /**
- * Calculates diurnal lighting state from geographic latitude, longitude and time of day in hours [0.0, 24.0].
+ * Calculates diurnal lighting state from geographic latitude, longitude and time of day in hours [0.0, 24.0]
+ * (local mean solar time at that longitude, so 12.0 is solar noon there).
  */
 export function getDiurnalLightingState(latitude: number, longitude: number, timeOfDay: number): DiurnalLightingProfile & { sunElevation: number; sunAzimuth: number } {
-    const date = new Date();
-    const hours = Math.floor(timeOfDay);
-    const minutes = Math.floor((timeOfDay - hours) * 60);
-    date.setHours(hours, minutes, 0, 0);
+    // timeOfDay is local mean solar time at the destination, on today's UTC date; the host time zone plays no part.
+    const now = new Date();
+    const date = instantAtLocalMeanSolarTime(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), timeOfDay, longitude);
 
     const sol = calculateNOAASolarPosition(date, latitude, longitude);
     const profile = computeDiurnalLightingProfile(sol.elevationDeg);
@@ -256,6 +258,33 @@ export function getDiurnalLightingState(latitude: number, longitude: number, tim
 /**
  * Convenience presets mapping semantic time-of-day names to sun angles and color temperatures.
  */
+/** Sun and sky for each named time-of-day preset. */
+const PRESET_LIGHTING: Record<string, { elevationDeg: number; azimuthDeg: number; colorHex: string; kelvin: number; skyboxName: string }> = {
+    dawn: { elevationDeg: 1.5, azimuthDeg: 82.0, colorHex: '#ff8f4d', kelvin: 2800, skyboxName: 'golden_hour' },
+    golden_hour: { elevationDeg: 5.2, azimuthDeg: 265.0, colorHex: '#ffaa44', kelvin: 3200, skyboxName: 'golden_hour' },
+    golden: { elevationDeg: 5.2, azimuthDeg: 265.0, colorHex: '#ffaa44', kelvin: 3200, skyboxName: 'golden_hour' },
+    sunset: { elevationDeg: 5.2, azimuthDeg: 265.0, colorHex: '#ffaa44', kelvin: 3200, skyboxName: 'golden_hour' },
+    morning: { elevationDeg: 24.0, azimuthDeg: 115.0, colorHex: '#fff4e0', kelvin: 5200, skyboxName: 'realistic-sky' },
+    afternoon: { elevationDeg: 48.0, azimuthDeg: 215.0, colorHex: '#fffdf5', kelvin: 6000, skyboxName: 'realistic-sky' },
+    dusk: { elevationDeg: -2.5, azimuthDeg: 280.0, colorHex: '#5c7ab3', kelvin: 8500, skyboxName: 'twilight' },
+    twilight: { elevationDeg: -2.5, azimuthDeg: 280.0, colorHex: '#5c7ab3', kelvin: 8500, skyboxName: 'twilight' },
+    blue_hour: { elevationDeg: -2.5, azimuthDeg: 280.0, colorHex: '#5c7ab3', kelvin: 8500, skyboxName: 'twilight' },
+    night: { elevationDeg: -18.0, azimuthDeg: 0.0, colorHex: '#1a243d', kelvin: 12000, skyboxName: 'night' },
+    deep_night: { elevationDeg: -45.0, azimuthDeg: 0.0, colorHex: '#080d1a', kelvin: 15000, skyboxName: 'space' },
+    'deep-space': { elevationDeg: -90.0, azimuthDeg: 0.0, colorHex: '#0a0f1e', kelvin: 15000, skyboxName: 'space-stars' },
+    deep_space: { elevationDeg: -90.0, azimuthDeg: 0.0, colorHex: '#0a0f1e', kelvin: 15000, skyboxName: 'space-stars' },
+    space: { elevationDeg: -90.0, azimuthDeg: 0.0, colorHex: '#0a0f1e', kelvin: 15000, skyboxName: 'space-stars' },
+    overcast: { elevationDeg: 35.0, azimuthDeg: 180.0, colorHex: '#d0d7de', kelvin: 7000, skyboxName: 'overcast' },
+    cinematic: { elevationDeg: 12.0, azimuthDeg: 230.0, colorHex: '#ffc078', kelvin: 3800, skyboxName: 'golden_hour' },
+    studio: { elevationDeg: 65.0, azimuthDeg: 180.0, colorHex: '#ffffff', kelvin: 6500, skyboxName: 'studio' },
+    midday: { elevationDeg: 65.0, azimuthDeg: 180.0, colorHex: '#fffdf0', kelvin: 6500, skyboxName: 'realistic-sky' },
+};
+
+/** True when `name` (case-insensitive) is a preset getPresetLightingState defines. */
+export function isTimeOfDayPreset(name: unknown): boolean {
+    return typeof name === 'string' && Object.prototype.hasOwnProperty.call(PRESET_LIGHTING, name.toLowerCase());
+}
+
 export function getPresetLightingState(preset: TimeOfDayPreset | string): DiurnalLightingProfile & {
     elevationDeg: number;
     azimuthDeg: number;
@@ -263,122 +292,10 @@ export function getPresetLightingState(preset: TimeOfDayPreset | string): Diurna
     kelvin: number;
     skyboxName: string;
 } {
-    const p = (preset || 'midday').toLowerCase();
-
-    let elevationDeg = 62.0;
-    let azimuthDeg = 180.0;
-    let colorHex = '#fffdf0';
-    let kelvin = 6500;
-    let skyboxName = 'realistic-sky';
-
-    switch (p) {
-        case 'dawn':
-            elevationDeg = 1.5;
-            azimuthDeg = 82.0;
-            colorHex = '#ff8f4d';
-            kelvin = 2800;
-            skyboxName = 'golden_hour';
-            break;
-        case 'golden_hour':
-        case 'golden':
-        case 'sunset':
-            elevationDeg = 5.2;
-            azimuthDeg = 265.0;
-            colorHex = '#ffaa44';
-            kelvin = 3200;
-            skyboxName = 'golden_hour';
-            break;
-        case 'morning':
-            elevationDeg = 24.0;
-            azimuthDeg = 115.0;
-            colorHex = '#fff4e0';
-            kelvin = 5200;
-            skyboxName = 'realistic-sky';
-            break;
-        case 'afternoon':
-            elevationDeg = 48.0;
-            azimuthDeg = 215.0;
-            colorHex = '#fffdf5';
-            kelvin = 6000;
-            skyboxName = 'realistic-sky';
-            break;
-        case 'dusk':
-        case 'twilight':
-        case 'blue_hour':
-            elevationDeg = -2.5;
-            azimuthDeg = 280.0;
-            colorHex = '#5c7ab3';
-            kelvin = 8500;
-            skyboxName = 'twilight';
-            break;
-        case 'night':
-            elevationDeg = -18.0;
-            azimuthDeg = 0.0;
-            colorHex = '#1a243d';
-            kelvin = 12000;
-            skyboxName = 'night';
-            break;
-        case 'deep_night':
-            elevationDeg = -45.0;
-            azimuthDeg = 0.0;
-            colorHex = '#080d1a';
-            kelvin = 15000;
-            skyboxName = 'space';
-            break;
-        case 'deep-space':
-        case 'deep_space':
-        case 'space':
-            // Off-world presets: no sun-lit sky, keep the starfield skybox (solar systems, orreries).
-            elevationDeg = -90.0;
-            azimuthDeg = 0.0;
-            colorHex = '#0a0f1e';
-            kelvin = 15000;
-            skyboxName = 'space-stars';
-            break;
-        case 'overcast':
-            elevationDeg = 35.0;
-            azimuthDeg = 180.0;
-            colorHex = '#d0d7de';
-            kelvin = 7000;
-            skyboxName = 'overcast';
-            break;
-        case 'cinematic':
-            elevationDeg = 12.0;
-            azimuthDeg = 230.0;
-            colorHex = '#ffc078';
-            kelvin = 3800;
-            skyboxName = 'golden_hour';
-            break;
-        case 'studio':
-            elevationDeg = 65.0;
-            azimuthDeg = 180.0;
-            colorHex = '#ffffff';
-            kelvin = 6500;
-            skyboxName = 'studio';
-            break;
-        case 'midday':
-            elevationDeg = 65.0;
-            azimuthDeg = 180.0;
-            colorHex = '#fffdf0';
-            kelvin = 6500;
-            skyboxName = 'realistic-sky';
-            break;
-        default:
-            elevationDeg = 65.0;
-            azimuthDeg = 180.0;
-            colorHex = '#ffffff';
-            kelvin = 6500;
-            skyboxName = 'studio';
-            break;
+    const key = typeof preset === 'string' ? preset.toLowerCase() : '';
+    if (!isTimeOfDayPreset(key)) {
+        throw new InvalidInputError('getPresetLightingState', `preset '${preset}'`, `known presets: ${Object.keys(PRESET_LIGHTING).join(', ')}`);
     }
-
-    const profile = computeDiurnalLightingProfile(elevationDeg);
-    return {
-        ...profile,
-        elevationDeg,
-        azimuthDeg,
-        colorHex,
-        kelvin,
-        skyboxName
-    };
+    const state = PRESET_LIGHTING[key];
+    return { ...computeDiurnalLightingProfile(state.elevationDeg), ...state };
 }

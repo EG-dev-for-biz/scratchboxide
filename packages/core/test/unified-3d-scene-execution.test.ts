@@ -85,7 +85,7 @@ describe('Unified 3D Scene Execution & Shape Extraction', () => {
                 },
                 {
                     operator: 'sb_setup_lighting',
-                    params: { sunAzimuth: 215, sunElevation: 35 }
+                    params: { sunAzimuth: 215, sunElevation: 35, enableAtmosphere: true }
                 }
             ]
         }, {
@@ -102,7 +102,16 @@ describe('Unified 3D Scene Execution & Shape Extraction', () => {
         expect(outcome.resultPayload.success).toBe(true);
         expect(outcome.resultPayload.executedCount).toBe(2);
         expect(outcome.resultPayload.executionTimeMs).toBeGreaterThan(0);
-        expect(outcome.resultPayload.artifact.data.environment.sunAzimuth).toBe(215);
+        // The sun angles go to the atmosphere the viewport renders, not to loose environment fields.
+        const lightingResult = outcome.resultPayload.operatorResults[1];
+        expect(lightingResult.success).toBe(true);
+        expect(lightingResult.data.sunAzimuth).toBe(215);
+        expect(lightingResult.data.sunElevation).toBe(35);
+        const atmosphere = outcome.resultPayload.artifact.data.features.atmosphericScattering;
+        expect(atmosphere.enabled).toBe(true);
+        expect(atmosphere.sunAzimuth).toBe(215);
+        expect(atmosphere.sunElevation).toBe(35);
+        expect(outcome.resultPayload.artifact.data.environment.sunAzimuth).toBeUndefined();
         expect(outcome.resultPayload.artifact.data.customMeshes[0].position).toEqual([0, 5, -10]);
     });
 

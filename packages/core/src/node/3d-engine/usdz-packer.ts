@@ -69,6 +69,31 @@ export class UsdzPacker {
         const conduction = options.descriptor?.conduction ?? 0.0;
         const roughness = options.descriptor?.roughnessBaseline ?? 0.5;
 
+        // Roughness / metallic / occlusion read their own maps when given, else the glTF-packed ORM (R = AO, G = roughness, B = metallic)
+        type ChannelSource = { shader: string; output: 'r' | 'g' | 'b' };
+        const useOrm = !(options.roughnessPng && options.metallicPng && options.aoPng);
+        if (useOrm && !options.ormPng) {
+            throw new Error('UsdzPacker: give roughnessPng, metallicPng and aoPng, or ormPng; the material would otherwise reference textures the archive does not contain');
+        }
+        const channel: Record<'roughness' | 'metallic' | 'occlusion', ChannelSource> = useOrm
+            ? { roughness: { shader: 'OrmTexture', output: 'g' }, metallic: { shader: 'OrmTexture', output: 'b' }, occlusion: { shader: 'OrmTexture', output: 'r' } }
+            : { roughness: { shader: 'RoughnessTexture', output: 'r' }, metallic: { shader: 'MetallicTexture', output: 'r' }, occlusion: { shader: 'AoTexture', output: 'r' } };
+        const textureShader = (name: string, file: string, outputs: string[]) => `
+            def Shader "${name}"
+            {
+                uniform token info:id = "UsdUVTexture"
+                asset inputs:file = @${file}@
+                token inputs:sourceColorSpace = "raw"
+                float2 inputs:st.connect = </MaterialStage/Materials/${matName}/Transform2D.outputs:result>
+                token inputs:wrapS = "repeat"
+                token inputs:wrapT = "repeat"
+${outputs.map(o => `                float outputs:${o}`).join('\n')}
+            }
+`;
+        const channelShaders = useOrm
+            ? textureShader('OrmTexture', 'textures/orm.png', ['r', 'g', 'b'])
+            : textureShader('RoughnessTexture', 'textures/roughness.png', ['r']) + textureShader('MetallicTexture', 'textures/metallic.png', ['r']) + textureShader('AoTexture', 'textures/ao.png', ['r']);
+
         return `#usda 1.0
 (
     defaultPrim = "MaterialStage"
@@ -90,10 +115,10 @@ def Xform "MaterialStage" (
             {
                 uniform token info:id = "UsdPreviewSurface"
                 color3f inputs:diffuseColor.connect = </MaterialStage/Materials/${matName}/AlbedoTexture.outputs:rgb>
-                float inputs:metallic.connect = </MaterialStage/Materials/${matName}/MetallicTexture.outputs:r>
-                float inputs:roughness.connect = </MaterialStage/Materials/${matName}/RoughnessTexture.outputs:r>
+                float inputs:metallic.connect = </MaterialStage/Materials/${matName}/${channel.metallic.shader}.outputs:${channel.metallic.output}>
+                float inputs:roughness.connect = </MaterialStage/Materials/${matName}/${channel.roughness.shader}.outputs:${channel.roughness.output}>
                 normal3f inputs:normal.connect = </MaterialStage/Materials/${matName}/NormalTexture.outputs:rgb>
-                float inputs:occlusion.connect = </MaterialStage/Materials/${matName}/AoTexture.outputs:r>
+                float inputs:occlusion.connect = </MaterialStage/Materials/${matName}/${channel.occlusion.shader}.outputs:${channel.occlusion.output}>
                 float inputs:ior = 1.5
                 token outputs:surface
             }
@@ -127,41 +152,16 @@ def Xform "MaterialStage" (
             {
                 uniform token info:id = "UsdUVTexture"
                 asset inputs:file = @textures/normal.png@
+                token inputs:sourceColorSpace = "raw"
+                float4 inputs:scale = (2, 2, 2, 1)
+                float4 inputs:bias = (-1, -1, -1, 0)
                 float2 inputs:st.connect = </MaterialStage/Materials/${matName}/Transform2D.outputs:result>
                 token inputs:wrapS = "repeat"
                 token inputs:wrapT = "repeat"
                 float3 outputs:rgb
             }
 
-            def Shader "RoughnessTexture"
-            {
-                uniform token info:id = "UsdUVTexture"
-                asset inputs:file = @textures/roughness.png@
-                float2 inputs:st.connect = </MaterialStage/Materials/${matName}/Transform2D.outputs:result>
-                token inputs:wrapS = "repeat"
-                token inputs:wrapT = "repeat"
-                float outputs:r
-            }
-
-            def Shader "MetallicTexture"
-            {
-                uniform token info:id = "UsdUVTexture"
-                asset inputs:file = @textures/metallic.png@
-                float2 inputs:st.connect = </MaterialStage/Materials/${matName}/Transform2D.outputs:result>
-                token inputs:wrapS = "repeat"
-                token inputs:wrapT = "repeat"
-                float outputs:r
-            }
-
-            def Shader "AoTexture"
-            {
-                uniform token info:id = "UsdUVTexture"
-                asset inputs:file = @textures/ao.png@
-                float2 inputs:st.connect = </MaterialStage/Materials/${matName}/Transform2D.outputs:result>
-                token inputs:wrapS = "repeat"
-                token inputs:wrapT = "repeat"
-                float outputs:r
-            }
+${channelShaders}
         }
     }
 

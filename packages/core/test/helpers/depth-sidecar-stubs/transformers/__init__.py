@@ -16,8 +16,10 @@ class _Inputs(dict):
 
 class _Processor:
     def __call__(self, images, return_tensors):
-        h, w = images.shape[:2]
-        return _Inputs(pixel_values=torch.zeros(1, 3, h, w))
+        # One image, or a batch (list) of same-size images, like the real processor.
+        batch = images if isinstance(images, list) else [images]
+        h, w = batch[0].shape[:2]
+        return _Inputs(pixel_values=torch.zeros(len(batch), 3, h, w))
 
 
 class _Output:
@@ -33,8 +35,8 @@ class _Model:
         return self
 
     def __call__(self, pixel_values):
-        _, _, h, w = pixel_values.shape
-        return _Output(torch.full((1, h, w), _DEPTH))
+        n, _, h, w = pixel_values.shape
+        return _Output(torch.full((n, h, w), _DEPTH))
 
 
 class AutoImageProcessor:

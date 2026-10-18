@@ -12,8 +12,48 @@ import {
     validateExtractedPalette,
     type ExtractedColorPalette
 } from '../../../browser/generative-canvas/services/nano-banana-color-service';
-import { MissingInputError } from '../../../common/errors/pipeline-errors';
+import * as fs from 'fs-extra';
+import * as path from 'path';
+import { MediaModelUnavailableError, MissingInputError } from '../../../common/errors/pipeline-errors';
+import { IMAGE_MODEL_PRIORITY, resolveRequestedModels } from '../../../common/media-generation-protocol';
+import { GoogleMediaCredentialsService } from '../../google-media-credentials-service';
+import { generateImageWithModels } from '../../google-media-generation-service';
+import { readImageDimensions, sniffImageFormat } from '../../image-codec-ffmpeg';
 import type { ToolDeclaration, ToolHandler } from './types';
+
+const TOOL = 'nano_banana_apply_color_palette';
+
+/** Reads the target image: a data URI, an http(s) URL, or a file path (relative paths resolve against the workspace). */
+async function loadTargetImage(ref: string, workspaceRoot: string | undefined, signal?: AbortSignal): Promise<{ data: Buffer; mimeType: string; localPath?: string }> {
+    const dataUri = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(ref);
+    let data: Buffer;
+    let localPath: string | undefined;
+    if (dataUri) {
+        data = dataUri[2] ? Buffer.from(dataUri[3], 'base64') : Buffer.from(decodeURIComponent(dataUri[3]), 'binary');
+    } else if (/^https?:\/\//i.test(ref)) {
+        let res: Response;
+        try {
+            res = await fetch(ref, { signal });
+        } catch (err) {
+            throw new MissingInputError(TOOL, 'targetImageUrl', `could not download ${ref} (${(err as Error).message})`);
+        }
+        if (!res.ok) throw new MissingInputError(TOOL, 'targetImageUrl', `downloading ${ref} answered HTTP ${res.status}`);
+        data = Buffer.from(await res.arrayBuffer());
+    } else {
+        localPath = path.isAbsolute(ref) ? ref : path.resolve(workspaceRoot || process.cwd(), ref);
+        if (!(await fs.pathExists(localPath))) throw new MissingInputError(TOOL, 'targetImageUrl', `no file at ${localPath}`);
+        data = await fs.readFile(localPath);
+    }
+    const format = sniffImageFormat(data);
+    if (format === 'unknown') throw new MissingInputError(TOOL, 'targetImageUrl', `${ref.slice(0, 80)} is not a JPEG, PNG or WebP image`);
+    return { data, mimeType: `image/${format}`, localPath };
+}
+
+function extensionFor(mimeType: string): string {
+    if (mimeType === 'image/jpeg') return '.jpg';
+    if (mimeType === 'image/webp') return '.webp';
+    return '.png';
+}
 
 function asString(val: unknown): string {
     return typeof val === 'string' ? val : '';
@@ -45,7 +85,7 @@ function requireCompletePalette(raw: unknown): ExtractedColorPalette {
 export const NANO_BANANA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'nano_banana_apply_color_palette',
-        description: 'Construct the precision global color override prompt that applies a given color palette to a target image with strict non-negotiable geometry locking (Method 2 Step 2). It returns the prompt text for an image model; it does not edit the image. The palette must be complete (read it from the reference image yourself): it is used as given, never filled in.',
+        description: 'Recolors a target image to a given color palette with an image model (Nano Banana), using a global color override prompt that asks the model to keep the geometry and composition unchanged (Method 2 Step 2). Writes the edited image to disk and returns its path, the model that answered and the prompt sent. The palette must be complete (read it from the reference image yourself): it is used as given, never filled in. Fails with an error when no image model is available.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -76,6 +116,14 @@ export const NANO_BANANA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 customInstructions: {
                     type: 'STRING',
                     description: 'Optional additional artistic styling directives or mood modifiers.'
+                },
+                model: {
+                    type: 'STRING',
+                    description: 'Optional image model id. When given, only that model is used; otherwise the default image models are tried in order. The result names the model that answered.'
+                },
+                outputPath: {
+                    type: 'STRING',
+                    description: 'Optional output file path (relative paths resolve against the workspace). Default: next to a local target as <name>_palette.<ext>, else palette_applied_<timestamp>.<ext> in the workspace.'
                 }
             },
             required: ['targetImageUrl', 'palette']
@@ -84,11 +132,11 @@ export const NANO_BANANA_TOOL_DECLARATIONS: ToolDeclaration[] = [
 ];
 
 export const nanoBananaHandlers: Record<string, ToolHandler> = {
-    nano_banana_apply_color_palette: (args, _ctx) => {
+    nano_banana_apply_color_palette: async (args, ctx) => {
         const targetImageUrl = asString(args.targetImageUrl);
-        if (!targetImageUrl) throw new Error('nano_banana_apply_color_palette: "targetImageUrl" argument is required.');
+        if (!targetImageUrl) throw new MissingInputError(TOOL, 'targetImageUrl', 'give the image to recolor');
         if (args.palette === undefined || args.palette === null || args.palette === '') {
-            throw new MissingInputError('nano_banana_apply_color_palette', 'palette', 'give the complete palette to apply');
+            throw new MissingInputError(TOOL, 'palette', 'give the complete palette to apply');
         }
         const palette = requireCompletePalette(args.palette);
 
@@ -108,18 +156,51 @@ export const nanoBananaHandlers: Record<string, ToolHandler> = {
             customInstructions
         });
 
+        const target = await loadTargetImage(targetImageUrl, ctx?.workspaceRoot, ctx?.signal);
+        const models = resolveRequestedModels(asString(args.model) || undefined, IMAGE_MODEL_PRIORITY);
+        let client: any;
+        try {
+            client = await new GoogleMediaCredentialsService().createClient();
+        } catch (err) {
+            throw new MediaModelUnavailableError(models[0], `Google media credentials are not available (${(err as Error)?.message || err})`);
+        }
+        const answer = await generateImageWithModels(client, {
+            models,
+            contents: [
+                { text: applicationPrompt },
+                { inlineData: { data: target.data.toString('base64'), mimeType: target.mimeType } }
+            ],
+            ...(aspectRatio ? { imageConfig: { aspectRatio } } : {}),
+            signal: ctx?.signal
+        });
+
+        const ext = extensionFor(answer.mimeType);
+        const requestedOut = asString(args.outputPath);
+        const outputPath = requestedOut
+            ? (path.isAbsolute(requestedOut) ? requestedOut : path.resolve(ctx?.workspaceRoot || process.cwd(), requestedOut))
+            : target.localPath
+                ? path.join(path.dirname(target.localPath), `${path.basename(target.localPath, path.extname(target.localPath))}_palette${ext}`)
+                : path.join(ctx?.workspaceRoot || process.cwd(), `palette_applied_${Date.now()}${ext}`);
+        await fs.ensureDir(path.dirname(outputPath));
+        await fs.writeFile(outputPath, answer.data);
+        const dims = readImageDimensions(answer.data);
+
         return {
             resultPayload: {
                 success: true,
                 targetImageUrl,
+                outputPath,
+                mimeType: answer.mimeType,
+                ...(dims ? { width: dims.width, height: dims.height } : {}),
+                modelUsed: answer.modelUsed,
+                skippedModels: answer.skippedModels,
+                modelNote: answer.modelNote,
                 applicationPrompt,
                 preserveSkinTones,
                 contrastCurve,
-                aspectRatio,
-                geometryLocked: true,
-                globalColorOverride: true
+                aspectRatio
             },
-            summaryResult: `Constructed the Nano Banana global color override prompt for ${targetImageUrl} (${palette.primaryTones.length} base and ${palette.accentTones.length} accent tones, geometry locked). The image itself is not edited yet.`
+            summaryResult: `Recolored ${targetImageUrl} to the palette (${palette.primaryTones.length} base and ${palette.accentTones.length} accent tones) with ${answer.modelUsed} -> ${outputPath}. ${answer.modelNote}`
         };
     }
 };

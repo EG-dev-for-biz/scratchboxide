@@ -18,19 +18,9 @@ import { getSolarPosition } from '../../common/coordinate/solarPosition';
 import { NativeTilePathTracerService, type TileSunSpec } from '../3d-engine/native-tile-path-tracer-service';
 import { calibrateStoneAlbedoRgba, type StoneAlbedoPreset, decodePng } from '../texture-processing';
 
-/**
- * getSolarPosition() treats the Date's machine-local wall clock as the destination's local solar
- * time (a time-of-day slider convention). This wrapper takes a true UTC instant instead: it
- * constructs the Date whose wall clock the algorithm will map back onto that instant.
- */
+/** Sun azimuth/elevation (degrees) at a UTC instant. */
 export function solarAtUtcInstant(utc: Date, lat: number, lng: number): { azimuthDegrees: number; elevationDegrees: number } {
-    const lngMs = (lng / 15) * 3600000;
-    let t = utc.getTime() + lngMs;
-    for (let i = 0; i < 2; i++) { // converge on the DST offset at t
-        const d = new Date(t);
-        t = utc.getTime() + lngMs + d.getTimezoneOffset() * 60000;
-    }
-    const s = getSolarPosition(new Date(t), lat, lng);
+    const s = getSolarPosition(utc, lat, lng);
     return { azimuthDegrees: (s.azimuth * 180) / Math.PI, elevationDegrees: (s.altitude * 180) / Math.PI };
 }
 

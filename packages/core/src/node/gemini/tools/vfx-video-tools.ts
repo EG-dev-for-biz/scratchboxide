@@ -17,7 +17,7 @@ import { HeadlessVideoEditorService } from '../../video/HeadlessVideoEditorServi
 import { HeadlessVideoCompositorService } from '../../video/HeadlessVideoCompositorService';
 import { MediaPipeVideoDirectorService } from '../../video/MediaPipeVideoDirectorService';
 import { buildContactSheet, normalizePlates } from '../../video/ConditioningPlateService';
-import { checkVideo } from '../../video/GenerativeVideoQAService';
+import { checkVideo, VideoQAError } from '../../video/GenerativeVideoQAService';
 import { VfxSubjectSegmenterService } from '../../video/VfxSubjectSegmenterService';
 import { GeneratorFailedError } from '../../../common/errors/pipeline-errors';
 import type { VideoTimelineData } from '../../../browser/generative-canvas/services/video/videoTypes';
@@ -527,6 +527,10 @@ export const FFMPEG_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'NUMBER',
                     description: 'Total frames to sample across the video duration (default columns * rows)'
                 },
+                durationSec: {
+                    type: 'NUMBER',
+                    description: 'Length of the input in seconds; only needed for a dry run of an input that is not on disk (otherwise measured with ffprobe)'
+                },
                 cellWidth: {
                     type: 'NUMBER',
                     description: 'Width of each individual cell in pixels (default 640)'
@@ -587,7 +591,7 @@ export const FFMPEG_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'pro_color_match_imagery',
-        description: 'Autonomous Hollywood-grade color grading and matching between source and reference imagery. Analytically solves 3-way Primary Color Wheels (Lift, Gamma, Gain, Offset), Bradford chromatic white balance, vectorscope skin tone protection (~130 deg), standard 3D LUT (.cube) generation, and optical scopes telemetry (Waveform, RGB Parade, Vectorscope, and CIEDE2000 Delta E).',
+        description: 'Color-matches a source image to a reference image. Solves per-channel 3-way primary wheels (Lift, Gamma, Gain) from the 5th/50th/95th percentile tones of each image (the images may differ in size), applies them with optional vectorscope skin-tone protection, can export a 3D LUT (.cube), and reports scopes (waveform, RGB parade, vectorscope incl. measured dominant hue) and the mean per-pixel CIEDE2000 to the reference before and after (the reference is resampled to the source size when they differ; the result states the basis and sample count).',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -618,10 +622,6 @@ export const FFMPEG_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 preserveSkinTones: {
                     type: 'BOOLEAN',
                     description: 'Whether to protect natural human skin tones along the vectorscope I-axis (default true)'
-                },
-                contrastCurve: {
-                    type: 'STRING',
-                    description: 'Contrast curve profile: "natural", "cinematic", "high-contrast", "muted"'
                 }
             },
             required: ['sourceImagePath', 'referenceImagePath']
@@ -993,6 +993,7 @@ export const ffmpegHandlers: Record<string, ToolHandler> = {
             cellWidth,
             cellHeight,
             labelTimecode,
+            durationSec: asNumber(args.durationSec),
             dryRun
         });
 
@@ -1047,7 +1048,6 @@ export const ffmpegHandlers: Record<string, ToolHandler> = {
         const generate3DLut = args.generate3DLut !== undefined ? asBoolean(args.generate3DLut) : true;
         const lutSize = asNumber(args.lutSize) || 17;
         const preserveSkinTones = args.preserveSkinTones !== undefined ? asBoolean(args.preserveSkinTones) : true;
-        const contrastCurve = (args.contrastCurve as 'natural' | 'cinematic' | 'high-contrast' | 'muted') || undefined;
 
         const { ProColorGradeMatchingService } = await import('../../image/ProColorGradeMatchingService');
         const result = await ProColorGradeMatchingService.matchImages(
@@ -1058,13 +1058,14 @@ export const ffmpegHandlers: Record<string, ToolHandler> = {
                 outputLutPath,
                 generate3DLut,
                 lutSize,
-                preserveSkinTones,
-                contrastCurve
+                preserveSkinTones
             }
         );
+        // The graded pixels go to outputPath; the raw RGBA buffer is not sent back to the model.
+        const { gradedBuffer: _graded, ...payload } = result;
 
         return {
-            resultPayload: result as unknown as import('./types').ToolResultPayload,
+            resultPayload: payload as unknown as import('./types').ToolResultPayload,
             summaryResult: `Hollywood-grade color match complete in ${result.telemetry.executionTimeMs}ms. Perceptual Delta E reduced by ${result.telemetry.deltaEReductionPercent}% (initial: ${result.telemetry.initialDeltaE00} -> final: ${result.telemetry.finalDeltaE00}). Lift=[${result.wheels.lift.r.toFixed(3)}, ${result.wheels.lift.g.toFixed(3)}, ${result.wheels.lift.b.toFixed(3)}], Gain=[${result.wheels.gain.r.toFixed(3)}, ${result.wheels.gain.g.toFixed(3)}, ${result.wheels.gain.b.toFixed(3)}].${result.lutPath ? ` Generated 3D LUT: ${result.lutPath}` : ''}`
         };
     },
@@ -1793,16 +1794,16 @@ export const conditioningHandlers: Record<string, ToolHandler> = {
 export const VIDEO_QA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'video_qa_check',
-        description: 'Runs multi-metric QA on a generated video: delta spike detection (morph-cut artefacts < 4.1 clean, 4.1–15.0 acceptable, > 15.0 = morph-cut), global PSNR (> 38 dB), worst-block PSNR (> 28 dB), temporal stability, and color bias (< 2 DN/channel). Returns a structured QA report.',
+        description: 'Decodes every frame of a video and runs multi-metric QA from the decoded pixels: delta spike detection (RMS DN between consecutive frames; < 4.1 clean, 4.1–15.0 acceptable, > 15.0 = morph-cut; gated by default), consecutive-frame PSNR (min/mean), worst aligned 8×8 block PSNR over all consecutive pairs, blockiness (8×8 grid-boundary vs interior luma discontinuity ratio, ≈1 when free of block artefacts), temporal stability, and colour drift (max per-channel mean drift from frame 0). PSNR, blockiness and colour drift are reported, and gated only when a threshold is supplied. Returns a structured QA report.',
         parameters: {
             type: 'OBJECT',
             properties: {
                 videoPath: { type: 'STRING', description: 'Absolute path to the video file to analyze.' },
-                deltaSpikeThreshold: { type: 'NUMBER', description: 'Max acceptable per-frame delta (default: 15.0).' },
-                psnrGlobalMin: { type: 'NUMBER', description: 'Min global PSNR in dB (default: 38).' },
-                psnrWorstBlockMin: { type: 'NUMBER', description: 'Min worst-block PSNR in dB (default: 28).' },
-                colorBiasMax: { type: 'NUMBER', description: 'Max color bias per channel in DN (default: 2.0).' },
-                workDir: { type: 'STRING', description: 'Working directory for extracted frames (optional).' }
+                deltaSpikeThreshold: { type: 'NUMBER', description: 'Max acceptable per-frame RMS delta in DN (default: 15.0).' },
+                temporalPsnrMin: { type: 'NUMBER', description: 'Optional gate: min consecutive-frame PSNR in dB.' },
+                worstBlockPsnrMin: { type: 'NUMBER', description: 'Optional gate: min worst 8×8 block PSNR in dB.' },
+                blockinessMax: { type: 'NUMBER', description: 'Optional gate: max per-frame blockiness ratio.' },
+                colorDriftMax: { type: 'NUMBER', description: 'Optional gate: max colour drift per channel in DN.' }
             },
             required: ['videoPath']
         }
@@ -1815,17 +1816,25 @@ export const videoQAHandlers: Record<string, ToolHandler> = {
         if (!videoPath) {
             return { resultPayload: { error: 'videoPath is required' }, summaryResult: 'Failed: videoPath is required.' };
         }
-        const report = await checkVideo(videoPath, {
-            deltaSpikeThreshold: asNumber(args.deltaSpikeThreshold),
-            psnrGlobalMin: asNumber(args.psnrGlobalMin),
-            psnrWorstBlockMin: asNumber(args.psnrWorstBlockMin),
-            colorBiasMax: asNumber(args.colorBiasMax),
-            workDir: asString(args.workDir) || undefined
-        });
+        let report;
+        try {
+            report = await checkVideo(videoPath, {
+                deltaSpikeThreshold: asNumber(args.deltaSpikeThreshold),
+                temporalPsnrMin: asNumber(args.temporalPsnrMin),
+                worstBlockPsnrMin: asNumber(args.worstBlockPsnrMin),
+                blockinessMax: asNumber(args.blockinessMax),
+                colorDriftMax: asNumber(args.colorDriftMax)
+            });
+        } catch (err) {
+            if (err instanceof VideoQAError) {
+                return { resultPayload: { error: err.message, code: err.code }, summaryResult: `Failed (${err.code}): ${err.message}` };
+            }
+            throw err;
+        }
         const icon = report.passed ? '✅' : '❌';
         return {
             resultPayload: report as unknown as Record<string, unknown>,
-            summaryResult: `${icon} Video QA: ${report.summary} (${report.frameCount} frames, max delta ${report.deltaSpike.maxDelta.toFixed(1)}, PSNR ${report.psnrGlobal.toFixed(1)} dB)`
+            summaryResult: `${icon} Video QA: ${report.summary} (${report.frameCount} frames, max delta ${report.deltaSpike.maxDelta.toFixed(1)}, min temporal PSNR ${report.temporalPsnr.minDb.toFixed(1)} dB)`
         };
     }
 };

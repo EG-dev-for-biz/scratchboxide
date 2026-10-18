@@ -7,7 +7,12 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as os from 'os';
+import * as path from 'path';
+import * as fs from 'fs-extra';
+import { GoogleMediaCredentialsService } from '../src/node/google-media-credentials-service';
+import { encodePng } from '../src/node/texture-processing';
 import {
     buildExtractPalettePrompt,
     parseExtractedPalette,
@@ -263,6 +268,30 @@ describe('Nano Banana Method 2: Two-Step Color Transfer Service', () => {
     });
 
     describe('Gemini Agent Tools & Registry Integration', () => {
+        // No test reaches a real model: the media client is a fake that answers a fixed recolored PNG.
+        const modelPng = encodePng(8, 6, Buffer.alloc(8 * 6 * 4, 77));
+        let tmpDir: string;
+        let targetPath: string;
+        let requests: any[];
+        beforeEach(async () => {
+            tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'nb_palette_'));
+            targetPath = path.join(tmpDir, 'target.png');
+            await fs.writeFile(targetPath, encodePng(4, 4, Buffer.alloc(4 * 4 * 4, 200)));
+            requests = [];
+            vi.spyOn(GoogleMediaCredentialsService.prototype, 'createClient').mockResolvedValue({
+                models: {
+                    generateContent: async (req: any) => {
+                        requests.push(req);
+                        return { candidates: [{ finishReason: 'STOP', content: { parts: [{ inlineData: { data: modelPng.toString('base64'), mimeType: 'image/png' } }] } }] };
+                    }
+                }
+            } as any);
+        });
+        afterEach(async () => {
+            vi.restoreAllMocks();
+            await fs.remove(tmpDir);
+        });
+
         const completePalette: ExtractedColorPalette = {
             primaryTones: [{ name: 'Fjord Slate', hex: '#3A4A5C', role: 'Ambient' }],
             accentTones: [{ name: 'Lichen Ochre', hex: '#B8952E', role: 'Specular' }],
@@ -277,7 +306,7 @@ describe('Nano Banana Method 2: Two-Step Color Transfer Service', () => {
             const applyTool = NANO_BANANA_TOOL_DECLARATIONS[0];
             expect(applyTool.parameters.required).toContain('targetImageUrl');
             expect(applyTool.parameters.required).toContain('palette');
-            expect(applyTool.description).toContain('does not edit the image');
+            expect(applyTool.description).toContain('Writes the edited image to disk');
             expect(inferToolGroup('nano_banana_apply_color_palette')).toBe('workspace');
 
             const registry = createDefaultToolRegistry();
@@ -285,10 +314,10 @@ describe('Nano Banana Method 2: Two-Step Color Transfer Service', () => {
             expect(registry.get('nano_banana_transfer_color')).toBeUndefined();
         });
 
-        it('builds the override prompt from exactly the palette given', async () => {
+        it('recolors the target with the image model, sending the prompt built from exactly the palette given', async () => {
             const registry = createDefaultToolRegistry();
             const applyOutcome = await registry.dispatch('nano_banana_apply_color_palette', {
-                targetImageUrl: 'https://example.com/target.jpg',
+                targetImageUrl: targetPath,
                 palette: completePalette,
                 preserveSkinTones: true,
                 contrastCurve: 'cinematic',
@@ -303,13 +332,45 @@ describe('Nano Banana Method 2: Two-Step Color Transfer Service', () => {
             // None of the builder's stock colors are filled in.
             expect(prompt).not.toContain('#0F172A');
             expect(prompt).not.toContain('#06B6D4');
-            expect(applyOutcome.exec.summaryResult).toContain('The image itself is not edited yet.');
+            // The edit ran: the model got the prompt and the target's own pixels, and its image is on disk.
+            expect(requests).toHaveLength(1);
+            expect(requests[0].contents[0].text).toBe(prompt);
+            expect(requests[0].contents[1].inlineData.data).toBe((await fs.readFile(targetPath)).toString('base64'));
+            expect(requests[0].config.imageConfig).toEqual({ aspectRatio: '16:9' });
+            const payload = applyOutcome.resultPayload as any;
+            expect(payload.outputPath).toBe(path.join(tmpDir, 'target_palette.png'));
+            expect((await fs.readFile(payload.outputPath)).equals(modelPng)).toBe(true);
+            expect(payload.width).toBe(8);
+            expect(payload.modelUsed).toBe('gemini-3.1-flash-image');
+            expect(payload).not.toHaveProperty('geometryLocked');
+            expect(payload).not.toHaveProperty('globalColorOverride');
 
             const fromJson = await registry.dispatch('nano_banana_apply_color_palette', {
-                targetImageUrl: 'https://example.com/target.jpg',
+                targetImageUrl: targetPath,
+                outputPath: path.join(tmpDir, 'out', 'json.png'),
                 palette: JSON.stringify(completePalette)
             }, {} as any);
             expect(fromJson.exec.status).toBe('completed');
+            expect(await fs.pathExists(path.join(tmpDir, 'out', 'json.png'))).toBe(true);
+        });
+
+        it('fails with a typed error, writing nothing, when the target is missing or no model is available', async () => {
+            const registry = createDefaultToolRegistry();
+            const noFile = await registry.dispatch('nano_banana_apply_color_palette', {
+                targetImageUrl: path.join(tmpDir, 'absent.png'),
+                palette: completePalette
+            }, {} as any);
+            expect(noFile.exec.status).toBe('failed');
+            expect(noFile.resultPayload.error).toContain('no file at');
+
+            vi.mocked(GoogleMediaCredentialsService.prototype.createClient).mockRejectedValue(new Error('no credentials configured'));
+            const noModel = await registry.dispatch('nano_banana_apply_color_palette', {
+                targetImageUrl: targetPath,
+                palette: completePalette
+            }, {} as any);
+            expect(noModel.exec.status).toBe('failed');
+            expect(noModel.resultPayload.error).toContain('no credentials configured');
+            expect(await fs.pathExists(path.join(tmpDir, 'target_palette.png'))).toBe(false);
         });
 
         it('fails with MissingInputError for a missing or incomplete palette instead of filling in stock colors', async () => {
@@ -334,7 +395,7 @@ describe('Nano Banana Method 2: Two-Step Color Transfer Service', () => {
         it('accepts a temperature outside warm/cool/neutral, and adds no ratio or contrast the caller did not give', async () => {
             const registry = createDefaultToolRegistry();
             const outcome = await registry.dispatch('nano_banana_apply_color_palette', {
-                targetImageUrl: 'https://example.com/target.jpg',
+                targetImageUrl: targetPath,
                 palette: { ...completePalette, shadowProfile: { tone: 'Blue-grey shadow', temperature: '5600K' } }
             }, {} as any);
             expect(outcome.exec.status).toBe('completed');

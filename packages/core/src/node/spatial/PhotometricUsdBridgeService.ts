@@ -12,15 +12,23 @@ import * as path from 'path';
 import {
     PhotometricLightingRigData,
     PhotometricLightConfig,
-    planckianKelvinToRgb,
-    stopsToRatio
+    planckianKelvinToRgb
 } from '../../common/spatial/photometric-units';
-import { InverseLightingEstimatorService } from './InverseLightingEstimatorService';
-import { LightingGafferService } from '../../browser/generative-canvas/services/atmosphere/LightingGafferService';
-import { calculateNOAASolarPosition } from '../../browser/generative-canvas/services/atmosphere/solar-position';
+import { InverseLightingEstimatorService, SunNotFoundError } from './InverseLightingEstimatorService';
 import { StoneType } from '../../browser/generative-canvas/services/atmosphere/LocationObjectLightingService';
 import { geocode3DTilesAddress } from './Google3DTileBlockoutPipelineService';
-import { MissingInputError } from '../../common/errors/pipeline-errors';
+import { MissingInputError, PipelineError } from '../../common/errors/pipeline-errors';
+import { shBasis } from '../../browser/generative-canvas/services/atmosphere/sky-photometry';
+
+/** The photograph did not yield a measurable lighting rig (no bimodal lit/shadow split, so no key-to-fill ratio). */
+export class LightingUnmeasuredError extends PipelineError {
+    readonly code = 'lighting_unmeasured';
+
+    constructor(readonly image: string, readonly unmeasured: Record<string, string>) {
+        super(`No lighting rig could be measured from ${image}: ${Object.entries(unmeasured).map(([k, v]) => `${k}: ${v}`).join('; ')}`);
+        this.name = 'LightingUnmeasuredError';
+    }
+}
 import { assertUsableCoordinates } from '../../common/coordinate/parse-coordinates';
 
 export interface CameraUsdParameters {
@@ -322,78 +330,46 @@ export async function matchLightingToReference(
         throw new Error(`matchLightingToReference: Image file not found at '${options.imagePath}'.`);
     }
 
-    // 1. Inverse photometric analysis on reference photograph
+    // 1. Inverse photometric analysis of the reference photograph. With coordinates and a capture time the sun comes
+    // from NOAA ephemeris; otherwise from the photo's sky (or SunNotFoundError).
     const est = await InverseLightingEstimatorService.estimateFromImage({
         imagePath: options.imagePath,
-        hfovDeg: options.fovDeg || 60,
-        vfovDeg: (options.fovDeg || 60) * 0.75,
-        cameraHeadingDeg: options.cameraHeadingDeg || 0,
-        cameraPitchDeg: options.cameraPitchDeg || 0
+        hfovDeg: options.fovDeg,
+        cameraHeadingDeg: options.cameraHeadingDeg,
+        cameraPitchDeg: options.cameraPitchDeg,
+        knownCoords: options.geodeticCoords,
+        timestampIso: options.timestampIso
     });
 
-    // 2. Solar Ephemeris fallback / refinement if coordinates & date supplied
-    let keyAzimuth = est.keyLight.azimuthDeg;
-    let keyElevation = est.keyLight.elevationDeg;
-    let keyKelvin = est.keyLight.cctKelvin;
-
-    if (options.geodeticCoords && options.timestampIso) {
-        try {
-            const date = new Date(options.timestampIso);
-            const solar = calculateNOAASolarPosition(
-                date,
-                options.geodeticCoords.lat,
-                options.geodeticCoords.lng
-            );
-            if (solar && solar.elevationDeg > 0) {
-                keyAzimuth = solar.azimuthDeg;
-                keyElevation = solar.elevationDeg;
-            }
-        } catch (e) {}
+    // 2. The rig is the one measured from the photo; there is no style preset to fall back on.
+    if (!est.rig) {
+        throw new LightingUnmeasuredError(path.basename(options.imagePath), est.unmeasured);
     }
+    const rig = est.rig;
+    const key = rig.lights.find(l => l.role === 'key')!;
+    const fill = rig.lights.find(l => l.role === 'fill')!;
+    const keyAzimuth = est.keyLight.azimuthDeg;
+    const keyElevation = est.keyLight.elevationDeg;
+    const keyKelvin = key.cctKelvin;
 
-    // 3. Assemble balanced photographic lighting rig via Gaffer Service
-    const rig = LightingGafferService.buildGafferRig('three_point', {
-        keyToFillRatio: stopsToRatio(Math.abs(est.fillLight.exposureStopsDelta || 2.0)),
-        keyKelvin: keyKelvin,
-        fillKelvin: est.fillLight.cctKelvin,
-        penumbraSoftness: 1.0 - est.shadowSharpness
-    });
-
-    // Update rig key light position from solved spherical angles
-    const key = rig.lights.find(l => l.role === 'key');
-    if (key) {
-        const azRad = keyAzimuth * Math.PI / 180.0;
-        const elRad = keyElevation * Math.PI / 180.0;
-        const dist = 100.0;
-        key.position = [
-            Math.sin(azRad) * Math.cos(elRad) * dist,
-            Math.sin(elRad) * dist,
-            Math.cos(azRad) * Math.cos(elRad) * dist
-        ];
-        key.direction = [
-            -Math.sin(azRad) * Math.cos(elRad),
-            -Math.sin(elRad),
-            -Math.cos(azRad) * Math.cos(elRad)
-        ];
-        key.cctKelvin = keyKelvin;
-        const rgb = planckianKelvinToRgb(keyKelvin);
-        key.colorLinearRgb = [rgb.r, rgb.g, rgb.b];
-        key.intensityLux = est.keyLight.intensityLux || 80000.0;
-        key.penumbraSoftness = Math.max(0.1, 1.0 - est.shadowSharpness);
-    }
-
-    // 4. Synthesize Three.js uniforms for instant in-viewport illumination
+    // 3. Three.js uniforms. Intensities are relative (fill = 1, sun = the measured key-to-fill ratio): absolute
+    // illuminance is not observable from the pixels. Sky and ground colours are the fitted SH radiance straight
+    // up and straight down, normalised to their brightest channel.
     const sunRgb = planckianKelvinToRgb(keyKelvin);
-    const skyRgb = planckianKelvinToRgb(est.fillLight.cctKelvin || 7500);
-    const groundRgb = planckianKelvinToRgb(3200);
+    const shColor = (d: [number, number, number]): [number, number, number] => {
+        const basis = shBasis(d);
+        const c = [0, 1, 2].map(ch => Math.max(0, est.sphericalHarmonics.reduce((acc, coeff, i) => acc + coeff[ch] * basis[i], 0)));
+        const m = Math.max(1e-6, c[0], c[1], c[2]);
+        return [c[0] / m, c[1] / m, c[2] / m];
+    };
 
     const threeJsUniforms = {
-        uSunDirection: (key?.direction ? [key.direction[0], key.direction[1], key.direction[2]] : [-0.3, -0.7, -0.6]) as [number, number, number],
+        uSunDirection: [key.direction![0], key.direction![1], key.direction![2]] as [number, number, number],
         uSunColor: [sunRgb.r, sunRgb.g, sunRgb.b] as [number, number, number],
-        uSkyColor: [skyRgb.r, skyRgb.g, skyRgb.b] as [number, number, number],
-        uGroundColor: [groundRgb.r * 0.4, groundRgb.g * 0.35, groundRgb.b * 0.3] as [number, number, number],
-        uSunIntensity: (key?.intensityLux || 80000) / 50000.0,
-        uAmbientIntensity: 0.85,
+        uSkyColor: shColor([0, 1, 0]),
+        uGroundColor: shColor([0, -1, 0]),
+        uSunIntensity: rig.keyToFillRatio,
+        uAmbientIntensity: 1.0,
         uShadowLift: 0.60,
         uHighlightCompress: 0.45
     };
@@ -419,7 +395,7 @@ export async function matchLightingToReference(
         mtlxExportPath = exportRes.mtlxFilePath;
     }
 
-    const summary = `Matched physical scene lighting to reference photograph '${path.basename(options.imagePath)}': Key Sun at Azimuth ${keyAzimuth.toFixed(1)}°, Elevation ${keyElevation.toFixed(1)}° (${keyKelvin}K), Fill Ambient at ${est.fillLight.cctKelvin}K (${(1.0 - est.shadowSharpness).toFixed(2)} penumbra diffusion). OpenUSD export: ${usdExportPath ? path.basename(usdExportPath) : 'Disabled'}.`;
+    const summary = `Matched physical scene lighting to reference photograph '${path.basename(options.imagePath)}': Key Sun at Azimuth ${keyAzimuth.toFixed(1)}° (${est.keyLight.azimuthReference}), Elevation ${keyElevation.toFixed(1)}° from ${est.keyLight.source} (${keyKelvin}K), sky fill ${fill.cctKelvin}K at ${rig.keyToFillRatio.toFixed(2)}:1 key-to-fill${est.shadowSharpness !== undefined ? `, shadow edge sharpness ${est.shadowSharpness.toFixed(2)}` : ''}. OpenUSD export: ${usdExportPath ? path.basename(usdExportPath) : 'Disabled'}.`;
 
     return {
         success: true,
@@ -435,6 +411,8 @@ export interface MatchImageAndLightingToLocationOptions {
     imagePath: string;
     locationName?: string;
     geodeticCoords?: { lat: number; lng: number; altitudeMeters?: number };
+    /** Capture time (ISO 8601). With the location it fixes the sun by NOAA ephemeris; required unless the photo shows the sun or a fittable sky. */
+    timestampIso?: string;
     glbPath?: string;
     cameraPosition?: [number, number, number];
     cameraTarget?: [number, number, number];
@@ -523,25 +501,35 @@ export async function matchImageAndLightingToLocation(
     const cameraHeading = cameraPose?.headingDeg;
     const cameraPitch = cameraPose?.pitchDeg;
 
-    // 2. Solve inverse physical lighting from the reference image
-    const lightResult = await matchLightingToReference({
-        imagePath: options.imagePath,
-        landmarkName: locationName,
-        geodeticCoords: { lat: locationCoords.lat, lng: locationCoords.lng },
-        cameraHeadingDeg: cameraHeading,
-        cameraPitchDeg: cameraPitch,
-        cameraPosition: cameraPose ? cameraPose.position : undefined,
-        cameraTarget: cameraPose ? cameraPose.target : undefined,
-        fovDeg: cameraPose ? cameraPose.fovDeg : options.fovDeg,
-        stoneType: options.stoneType || 'travertine',
-        autoExportUsd: options.autoExportUsd !== false,
-        outputUsdPath: options.outputUsdPath
-    });
+    // 3. Solve inverse physical lighting from the reference image. The location is known, so the capture time is
+    // what the ephemeris needs; without it the sun must come from the photo itself.
+    let lightResult: MatchLightingReferenceResult;
+    try {
+        lightResult = await matchLightingToReference({
+            imagePath: options.imagePath,
+            landmarkName: locationName,
+            geodeticCoords: { lat: locationCoords.lat, lng: locationCoords.lng },
+            timestampIso: options.timestampIso,
+            cameraHeadingDeg: cameraHeading,
+            cameraPitchDeg: cameraPitch,
+            cameraPosition: cameraPose ? cameraPose.position : undefined,
+            cameraTarget: cameraPose ? cameraPose.target : undefined,
+            fovDeg: cameraPose ? cameraPose.fovDeg : options.fovDeg,
+            stoneType: options.stoneType || 'travertine',
+            autoExportUsd: options.autoExportUsd !== false,
+            outputUsdPath: options.outputUsdPath
+        });
+    } catch (err) {
+        if (err instanceof SunNotFoundError && !options.timestampIso) {
+            throw new MissingInputError('lighting_match_image_to_location', 'timestampIso', `${err.reason}; give the capture time so the sun is computed by NOAA ephemeris at ${locationName}`);
+        }
+        throw err;
+    }
 
     const cameraText = cameraPose
         ? `Camera (as given): standoff ${cameraPose.standoffMeters.toFixed(1)}m at heading ${cameraPose.headingDeg.toFixed(1)}°, pitch ${cameraPose.pitchDeg.toFixed(1)}°.`
         : 'Camera pose: not estimated (the photo is not resected here; give cameraPosition and cameraTarget to place it), so the lighting is in the camera\'s own frame.';
-    const summary = `Matched physical lighting to reference '${path.basename(options.imagePath)}' for ${locationName} (${locationCoords.lat.toFixed(6)}, ${locationCoords.lng.toFixed(6)}). ${cameraText} Lighting: Sun at ${lightResult.threeJsUniforms.uSunIntensity.toFixed(2)}x intensity with Planckian sky ambient. OpenUSD scene export: ${lightResult.usdExportPath ? path.basename(lightResult.usdExportPath) : 'None'}.`;
+    const summary = `Matched physical lighting to reference '${path.basename(options.imagePath)}' for ${locationName} (${locationCoords.lat.toFixed(6)}, ${locationCoords.lng.toFixed(6)}). ${cameraText} ${lightResult.summary}`;
 
     return {
         success: true,

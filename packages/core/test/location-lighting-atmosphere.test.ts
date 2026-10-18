@@ -3,7 +3,6 @@ import * as THREE from 'three';
 import {
     LocationObjectLightingService,
     harmonizeLocationObjectAtmosphere,
-    generateCanonicalAmbulatoryFixtures,
     STONE_ALBEDO_PROFILES
 } from '../src/index';
 import {
@@ -66,11 +65,14 @@ describe('Image Location Resection & 3D Object Lighting/Atmosphere APIs', () => 
     describe('2. Location 3D Object Lighting & Atmosphere API', () => {
         it('should calculate calibrated civil twilight dusk baseline matching ground-truth settings', () => {
             const result = harmonizeLocationObjectAtmosphere({
-                latitude: 41.8902, longitude: 12.4922,
+                latitude: 41.8902, longitude: 12.4922, isoDate: '2026-09-28T17:30:00Z',
                 landmarkName: 'Colosseum, Rome',
                 preset: 'civil_twilight_dusk',
                 stoneType: 'travertine',
-                enableArchitecturalBacklighting: true
+                portals: [
+                    { position: [10, 13.5, -40], targetPosition: [12, 12.5, -50] },
+                    { position: [-5, 22.5, -42], targetPosition: [-6, 21.5, -52], kelvinTemperature: 3200, intensity: 4 }
+                ]
             });
 
             expect(result.success).toBe(true);
@@ -96,14 +98,25 @@ describe('Image Location Resection & 3D Object Lighting/Atmosphere APIs', () => 
             expect(result.sceneLighting.fillLight.color).toBe('#2d688c');
             expect(result.sceneLighting.fillLight.intensity).toBe(0.25);
 
-            // Architectural portal backlighting
-            expect(result.architecturalFixtures.length).toBe(12);
-            const firstFixture = result.architecturalFixtures[0];
-            expect(firstFixture.kelvinTemperature).toBe(2850);
-            expect(firstFixture.color).toBe('#ff8515');
-            expect(firstFixture.type).toBe('spot');
-            expect(firstFixture.position[0]).toBeDefined();
-            expect(firstFixture.targetPosition).toBeDefined();
+            // Portal backlighting: one fixture per given opening, at the given positions (no canned 12-portal ring).
+            expect(result.architecturalFixtures.length).toBe(2);
+            const [first, second] = result.architecturalFixtures;
+            expect(first.position).toEqual([10, 13.5, -40]);
+            expect(first.targetPosition).toEqual([12, 12.5, -50]);
+            expect(first.kelvinTemperature).toBe(2850);
+            expect(first.type).toBe('spot');
+            expect(second.kelvinTemperature).toBe(3200);
+            expect(second.intensity).toBe(4);
+            expect(second.color).not.toBe(first.color); // colour follows the fixture's Kelvin
+            expect(result.portalDefaultsApplied).toEqual(expect.arrayContaining(['kelvinTemperature', 'intensity', 'distance']));
+
+            // The key light sits at the computed sun.
+            const sunDir = result.solarEphemeris.sunVector;
+            const p = result.sceneLighting.sunLight.position;
+            const len = Math.hypot(...p);
+            expect(p[0] / len).toBeCloseTo(sunDir[0], 6);
+            expect(p[1] / len).toBeCloseTo(sunDir[1], 6);
+            expect(p[2] / len).toBeCloseTo(sunDir[2], 6);
 
             // GLSL shaders
             expect(result.shaderGLSL.fragmentShaderChunk).toContain('uShadowLift');
@@ -111,16 +124,26 @@ describe('Image Location Resection & 3D Object Lighting/Atmosphere APIs', () => 
             expect(result.shaderGLSL.fragmentShaderChunk).toContain('uGroundDeWash');
         });
 
+        it('needs isoDate (no assumed date), picks a daylight look for a high sun, and rejects a portal without positions', () => {
+            expect(() => harmonizeLocationObjectAtmosphere({ latitude: 41.8902, longitude: 12.4922 })).toThrow(/isoDate/);
+            // 11:00 UTC on 21 June in Rome: the sun is high, so the auto look is daylight, not civil twilight.
+            const noon = harmonizeLocationObjectAtmosphere({ latitude: 41.8902, longitude: 12.4922, isoDate: '2026-06-21T11:00:00Z' });
+            if (noon.solarElevationDeg >= 12) expect(noon.preset).toBe('midday_clear');
+            expect(noon.architecturalFixtures).toEqual([]);
+            expect(() => harmonizeLocationObjectAtmosphere({ latitude: 41.8902, longitude: 12.4922, isoDate: '2026-06-21T11:00:00Z', portals: [{ position: [0, 1, 2] } as any] })).toThrow(/targetPosition/);
+            expect(() => harmonizeLocationObjectAtmosphere({ latitude: 41.8902, longitude: 12.4922, isoDate: '2026-06-21T11:00:00Z', preset: 'moonlit_fog' as any })).toThrow(/known preset/);
+        });
+
         it('should support alternative stone albedo profiles', () => {
             const marbleResult = LocationObjectLightingService.harmonizeLocationObjectAtmosphere({
-                latitude: 41.8902, longitude: 12.4922,
+                latitude: 41.8902, longitude: 12.4922, isoDate: '2026-09-28T17:30:00Z',
                 preset: 'civil_twilight_dusk',
                 stoneType: 'marble'
             });
             expect(marbleResult.delightUniforms.uStoneAlbedoTint).toEqual(STONE_ALBEDO_PROFILES.marble);
 
             const sandstoneResult = LocationObjectLightingService.harmonizeLocationObjectAtmosphere({
-                latitude: 41.8902, longitude: 12.4922,
+                latitude: 41.8902, longitude: 12.4922, isoDate: '2026-09-28T17:30:00Z',
                 preset: 'civil_twilight_dusk',
                 stoneType: 'sandstone'
             });
@@ -129,14 +152,14 @@ describe('Image Location Resection & 3D Object Lighting/Atmosphere APIs', () => 
 
         it('should support alternative lighting presets like golden_hour and blue_hour', () => {
             const golden = LocationObjectLightingService.harmonizeLocationObjectAtmosphere({
-                latitude: 41.8902, longitude: 12.4922,
+                latitude: 41.8902, longitude: 12.4922, isoDate: '2026-09-28T17:30:00Z',
                 preset: 'golden_hour'
             });
             expect(golden.sceneLighting.sunLight.intensity).toBe(1.20);
             expect(golden.delightUniforms.uShadowLift).toBe(0.40);
 
             const blueHour = LocationObjectLightingService.harmonizeLocationObjectAtmosphere({
-                latitude: 41.8902, longitude: 12.4922,
+                latitude: 41.8902, longitude: 12.4922, isoDate: '2026-09-28T17:30:00Z',
                 preset: 'blue_hour'
             });
             expect(blueHour.sceneLighting.ambientLight.color).toBe('#224477');
@@ -171,7 +194,7 @@ describe('Image Location Resection & 3D Object Lighting/Atmosphere APIs', () => 
 
         it('should create and attach atmospheric scene lights and portal fixtures to Three.js scene', () => {
             const scene = new THREE.Scene();
-            const config = harmonizeLocationObjectAtmosphere({ latitude: 41.8902, longitude: 12.4922 });
+            const config = harmonizeLocationObjectAtmosphere({ latitude: 41.8902, longitude: 12.4922, isoDate: '2026-09-28T17:30:00Z', portals: [{ position: [0, 10, -30], targetPosition: [0, 9, -40] }] });
 
             const lights = LocationObjectLightingService.applyLocationAtmosphereLighting(scene, config.sceneLighting);
             expect(lights.ambient).toBeDefined();
@@ -211,19 +234,21 @@ describe('Image Location Resection & 3D Object Lighting/Atmosphere APIs', () => 
                 landmarkName: 'Colosseum, Rome',
                 latitude: 41.8902,
                 longitude: 12.4922,
+                isoDate: '2026-09-28T17:30:00Z',
                 preset: 'civil_twilight_dusk',
                 stoneType: 'travertine'
             }, {} as any);
 
             expect(response.exec.status).toBe('completed');
             expect(response.exec.summaryResult).toContain('Harmonized location 3D lighting for Colosseum, Rome');
-            expect(response.exec.summaryResult).toContain('12 architectural portal window fixtures');
+            // No openings were given, so no backlighting is invented (it used to add a 12-portal Colosseum ring everywhere).
+            expect(response.exec.summaryResult).toContain('No portal backlighting');
 
             const payload: any = response.resultPayload;
             expect(payload.preset).toBe('civil_twilight_dusk');
             expect(payload.delightUniforms.uShadowLift).toBe(0.60);
             expect(payload.delightUniforms.uStoneAlbedoTint).toEqual([0.86, 0.82, 0.78]);
-            expect(payload.architecturalFixtures.length).toBe(12);
+            expect(payload.architecturalFixtures).toEqual([]);
         });
 
         it('should execute atmosphere_harmonize_location_3d alias tool', async () => {
@@ -231,7 +256,8 @@ describe('Image Location Resection & 3D Object Lighting/Atmosphere APIs', () => 
             const response = await registry.dispatch('atmosphere_harmonize_location_3d', {
                 preset: 'golden_hour',
                 latitude: 41.8902,
-                longitude: 12.4922
+                longitude: 12.4922,
+                isoDate: '2026-09-28T17:30:00Z'
             }, {} as any);
 
             expect(response.exec.status).toBe('completed');

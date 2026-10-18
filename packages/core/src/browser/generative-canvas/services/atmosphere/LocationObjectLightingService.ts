@@ -9,7 +9,8 @@
 
 import * as THREE from 'three';
 import { kelvinToRGB } from './kelvin';
-import { calculateNOAASolarPosition, getSunVectorFromAngles } from './solar-position';
+import { calculateNOAASolarPosition } from './solar-position';
+import { anglesToDirection } from './sky-photometry';
 import { classifyDiurnalPhase } from './diurnal-lighting';
 import { MissingInputError } from '../../../../common/errors/pipeline-errors';
 import { assertUsableCoordinates } from '../../../../common/coordinate/parse-coordinates';
@@ -65,15 +66,37 @@ export interface LocationShaderGLSLChunk {
     uniformsDefinition: Record<string, { value: any }>;
 }
 
+/**
+ * A window or portal opening the caller has located on the model (scene metres, Y up, -Z north): the light sits at
+ * `position` behind the opening and aims at `targetPosition` outside it. Unset fixture properties take the
+ * incandescent-practical values listed in PORTAL_FIXTURE_DEFAULTS, and the result says which were applied.
+ */
+export interface ArchitecturalPortalInput {
+    id?: string;
+    name?: string;
+    position: [number, number, number];
+    targetPosition: [number, number, number];
+    kelvinTemperature?: number;
+    intensity?: number;
+    distance?: number;
+    decay?: number;
+    angle?: number;
+    penumbra?: number;
+}
+
+/** Fixture values used for any property a portal does not set (a 2850 K incandescent spot). */
+export const PORTAL_FIXTURE_DEFAULTS = { kelvinTemperature: 2850, intensity: 8.5, distance: 28.0, decay: 1.8, angle: 0.58, penumbra: 0.75 } as const;
+
 export interface LocationObjectAtmosphereRequest {
     landmarkName?: string;
     latitude?: number;
     longitude?: number;
-    isoDate?: string; // ISO 8601 timestamp
-    preset?: 'civil_twilight_dusk' | 'golden_hour' | 'blue_hour' | 'midday_neutral' | 'midday_clear' | 'night_monumental';
+    /** ISO 8601 instant the sun is computed for. Required: no date is assumed. */
+    isoDate?: string;
+    preset?: 'civil_twilight_dusk' | 'golden_hour' | 'blue_hour' | 'midday_clear' | 'night_monumental';
     stoneType?: StoneType;
-    imagePath?: string;
-    enableArchitecturalBacklighting?: boolean;
+    /** Window/portal openings on the model. Backlighting fixtures are created only for these; none are invented. */
+    portals?: ArchitecturalPortalInput[];
     customDelightParams?: Partial<DelightUniformsConfig>;
 }
 
@@ -84,7 +107,7 @@ export interface LocationObjectAtmosphereResult {
     solarEphemeris: {
         elevationDeg: number;
         azimuthDeg: number;
-        distanceAu: number;
+        distanceAu?: number;
         sunVector: [number, number, number];
     };
     solarElevationDeg: number;
@@ -100,10 +123,11 @@ export interface LocationObjectAtmosphereResult {
     landmarkContext?: {
         name: string;
         coordinates?: { lat: number; lng: number };
-        /** The instant the sun was computed for; isoDateAssumed when the request gave none. */
+        /** The instant the sun was computed for. */
         isoDate?: string;
-        isoDateAssumed?: boolean;
     };
+    /** Portal fixture properties filled from PORTAL_FIXTURE_DEFAULTS because the caller did not set them. */
+    portalDefaultsApplied?: string[];
 }
 
 /**
@@ -123,46 +147,37 @@ export const STONE_ALBEDO_PROFILES: Record<StoneType, [number, number, number]> 
     marble: [0.92, 0.92, 0.94]       // Carrara white marble
 };
 
-/**
- * Generates canonical 12-portal ambulatory fixtures behind facade openings.
- */
-export function generateCanonicalAmbulatoryFixtures(baseRadius = 52.0, count = 12): ArchitecturalPortalFixtureConfig[] {
-    const fixtures: ArchitecturalPortalFixtureConfig[] = [];
-    // Arc spanning western ambulatory corridor (-65° to +25°)
-    const startAngleRad = -65.0 * (Math.PI / 180.0);
-    const endAngleRad = 25.0 * (Math.PI / 180.0);
-    const angleStep = (endAngleRad - startAngleRad) / (count - 1);
-
-    for (let i = 0; i < count; i++) {
-        const theta = startAngleRad + i * angleStep;
-        // Inner corridor position (behind facade)
-        const innerRadius = baseRadius - 8.5;
-        const posX = innerRadius * Math.sin(theta);
-        const posZ = -innerRadius * Math.cos(theta);
-        const posY = 13.5 + (i % 2) * 9.0; // Tiered 1st and 2nd floor ambulatory vaults
-
-        // Outer window opening target (transmitting outward through arches)
-        const outerX = (baseRadius + 5.0) * Math.sin(theta);
-        const outerZ = -(baseRadius + 5.0) * Math.cos(theta);
-        const outerY = posY - 1.0;
-
-        fixtures.push({
-            id: `fixture_arch_${i + 1}`,
-            name: `Ambulatory Window Portal ${i + 1} (${i % 2 === 0 ? 'Tier 1' : 'Tier 2'})`,
-            position: [Number(posX.toFixed(2)), Number(posY.toFixed(2)), Number(posZ.toFixed(2))],
-            targetPosition: [Number(outerX.toFixed(2)), Number(outerY.toFixed(2)), Number(outerZ.toFixed(2))],
-            color: '#ff8515', // 2850K incandescent
-            kelvinTemperature: 2850,
-            intensity: 8.5,
-            distance: 28.0,
-            decay: 1.8,
+/** Builds spot fixtures for the portals the caller located; nothing is placed where no portal was given. */
+export function buildPortalFixtures(portals: ArchitecturalPortalInput[]): { fixtures: ArchitecturalPortalFixtureConfig[]; defaultsApplied: string[] } {
+    const defaultsApplied = new Set<string>();
+    const fixtures = portals.map((p, i): ArchitecturalPortalFixtureConfig => {
+        const valid = (v: unknown): v is [number, number, number] => Array.isArray(v) && v.length === 3 && v.every(n => typeof n === 'number' && Number.isFinite(n));
+        if (!valid(p.position) || !valid(p.targetPosition)) {
+            throw new MissingInputError('geobox_harmonize_location_lighting', `portals[${i}].position and targetPosition`, 'each portal needs [x, y, z] for the light and the opening it shines through');
+        }
+        const pick = <K extends keyof typeof PORTAL_FIXTURE_DEFAULTS>(key: K): number => {
+            const v = p[key];
+            if (typeof v === 'number' && Number.isFinite(v)) return v;
+            defaultsApplied.add(key);
+            return PORTAL_FIXTURE_DEFAULTS[key];
+        };
+        const kelvin = pick('kelvinTemperature');
+        return {
+            id: p.id || `portal_${i + 1}`,
+            name: p.name || `Portal ${i + 1}`,
+            position: [...p.position],
+            targetPosition: [...p.targetPosition],
+            color: '#' + kelvinToRGB(kelvin).getHexString(),
+            kelvinTemperature: kelvin,
+            intensity: pick('intensity'),
+            distance: pick('distance'),
+            decay: pick('decay'),
             type: 'spot',
-            angle: 0.58,
-            penumbra: 0.75
-        });
-    }
-
-    return fixtures;
+            angle: pick('angle'),
+            penumbra: pick('penumbra')
+        };
+    });
+    return { fixtures, defaultsApplied: [...defaultsApplied] };
 }
 
 /**
@@ -240,13 +255,15 @@ export class LocationObjectLightingService {
             throw new MissingInputError('geobox_harmonize_location_lighting', 'latitude and longitude', `the sun position needs the place's coordinates${request.landmarkName ? ` (resolve "${request.landmarkName}" first)` : ''}; no default location is used`);
         }
         assertUsableCoordinates(lat, lng, `${lat}, ${lng}`);
-        const isoDateGiven = !!request.isoDate;
-        const isoDate = request.isoDate || '2026-06-21T18:45:00Z'; // Civil twilight dusk default (reported as assumed)
-
+        if (!request.isoDate) {
+            throw new MissingInputError('geobox_harmonize_location_lighting', 'isoDate', 'the sun position depends on the date and time, and none is assumed');
+        }
+        const isoDate = request.isoDate;
         const dateObj = new Date(isoDate);
+        if (isNaN(dateObj.getTime())) throw new MissingInputError('geobox_harmonize_location_lighting', 'a valid isoDate', `'${isoDate}' is not an ISO 8601 date-time`);
         const ephemeris = calculateNOAASolarPosition(dateObj, lat, lng);
         const diurnalPhase = classifyDiurnalPhase(ephemeris.elevationDeg);
-        const sunVec = getSunVectorFromAngles(ephemeris.elevationDeg, ephemeris.azimuthDeg);
+        const sunVec = anglesToDirection(ephemeris.elevationDeg, ephemeris.azimuthDeg);
 
         // Determine preset
         let preset = request.preset;
@@ -259,7 +276,7 @@ export class LocationObjectLightingService {
             } else if (ephemeris.elevationDeg < 12.0) {
                 preset = 'golden_hour';
             } else {
-                preset = 'civil_twilight_dusk'; // Default to our verified civil twilight dusk benchmark
+                preset = 'midday_clear'; // a sun 12 deg or more above the horizon is daylight, not dusk
             }
         }
 
@@ -345,9 +362,7 @@ export class LocationObjectLightingService {
                 break;
 
             case 'civil_twilight_dusk':
-            default:
                 // Our exact calibrated and verified ground truth settings
-                preset = 'civil_twilight_dusk';
                 delightUniforms = {
                     uDelightEnabled: true,
                     uShadowLift: 0.60,
@@ -365,7 +380,14 @@ export class LocationObjectLightingService {
                     skyGradient: { zenithColor: '#48a3d6', midColor: '#56b5e6', horizonColor: '#8ec7df' }
                 };
                 break;
+
+            default:
+                throw new MissingInputError('geobox_harmonize_location_lighting', 'a known preset', `'${preset}' is not one of civil_twilight_dusk, golden_hour, midday_clear, blue_hour, night_monumental`);
         }
+
+        // The key light comes from the computed sun, at the preset rig's distance.
+        const sunDistance = Math.hypot(...sceneLighting.sunLight.position);
+        sceneLighting.sunLight.position = [sunVec[0] * sunDistance, sunVec[1] * sunDistance, sunVec[2] * sunDistance];
 
         // Apply custom overrides if supplied
         if (request.customDelightParams) {
@@ -375,9 +397,9 @@ export class LocationObjectLightingService {
             };
         }
 
-        // Build architectural portal fixtures
-        const enableFixtures = request.enableArchitecturalBacklighting !== false;
-        const architecturalFixtures = enableFixtures ? generateCanonicalAmbulatoryFixtures() : [];
+        // Portal backlighting only where the caller located openings on the model.
+        const portals = request.portals ?? [];
+        const { fixtures: architecturalFixtures, defaultsApplied } = buildPortalFixtures(portals);
 
         return {
             success: true,
@@ -386,8 +408,8 @@ export class LocationObjectLightingService {
             solarEphemeris: {
                 elevationDeg: ephemeris.elevationDeg,
                 azimuthDeg: ephemeris.azimuthDeg,
-                distanceAu: 1.0,
-                sunVector: [sunVec.x, sunVec.y, sunVec.z]
+                distanceAu: ephemeris.distanceAU,
+                sunVector: sunVec
             },
             solarElevationDeg: Number(ephemeris.elevationDeg.toFixed(2)),
             solarAzimuthDeg: Number(ephemeris.azimuthDeg.toFixed(2)),
@@ -401,9 +423,9 @@ export class LocationObjectLightingService {
             landmarkContext: {
                 name: request.landmarkName || `${lat.toFixed(6)}, ${lng.toFixed(6)}`,
                 coordinates: { lat, lng },
-                isoDate,
-                isoDateAssumed: !isoDateGiven
-            }
+                isoDate
+            },
+            ...(defaultsApplied.length ? { portalDefaultsApplied: defaultsApplied } : {})
         };
     }
 

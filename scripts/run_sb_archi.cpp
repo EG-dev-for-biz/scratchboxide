@@ -124,17 +124,19 @@ int main(int argc, char* argv[]) {
     // 3. Run Analysis-by-Synthesis Inversion
     SbArchiParams optimizedParams = params;
     SbArchiInversionMetrics metrics;
+    bool inversionRan = false;
+    std::string inversionSkipReason;
 
     if (runInversion && !scanVertices.empty()) {
         std::cout << "[SB-Archi] Running C++20 Coordinate Descent Chamfer Inversion Solver...\n";
         metrics = SbArchiOptimizer::invertScanToArchi(scanVertices, params, optimizedParams, 20);
+        inversionRan = true;
+    } else if (!runInversion) {
+        inversionSkipReason = "disabled (--no-invert)";
+    } else if (inputGlbPath.empty() || !fs::exists(inputGlbPath)) {
+        inversionSkipReason = "no input scan (--input-glb)";
     } else {
-        metrics.initialChamferMeters = 2.84f;
-        metrics.fittedChamferMeters = 0.91f;
-        metrics.chamferReductionPct = 68.0f;
-        metrics.voidRestorationRatioPct = 41.5f;
-        metrics.optimizerRuntimeMs = 12.4f;
-        metrics.converged = true;
+        inversionSkipReason = "no scan points inside the facade search band";
     }
 
     // 4. Synthesize Watertight Architectural Mesh
@@ -170,17 +172,22 @@ int main(int argc, char* argv[]) {
               << "  - Target Structure: Roman Colosseum (Flavian Amphitheater)\n"
               << "  - Section Mode: " << section << "\n"
               << "  - PBR Material: " << pbrMode << " (Rusticated Roman Ashlar)\n"
-              << "  - Initial Scan Chamfer Distance: " << metrics.initialChamferMeters << " m\n"
-              << "  - Fitted Manifold Chamfer Distance: " << metrics.fittedChamferMeters << " m\n"
-              << "  - Chamfer Error Reduction: " << metrics.chamferReductionPct << " %\n"
-              << "  - Restored Void Ratio: " << metrics.voidRestorationRatioPct << " % (Hollow Open Arches)\n"
-              << "  - Inversion Solver Runtime: " << metrics.optimizerRuntimeMs << " ms\n"
+              << "  - Inversion: " << (inversionRan ? "ran" : ("not run: " + inversionSkipReason)) << "\n";
+    if (inversionRan) {
+        std::cout << "  - Scan Points Fitted: " << metrics.scanPointsEvaluated << "\n"
+                  << "  - Initial Scan Chamfer Distance: " << metrics.initialChamferMeters << " m\n"
+                  << "  - Fitted Manifold Chamfer Distance: " << metrics.fittedChamferMeters << " m\n"
+                  << "  - Chamfer Error Reduction: " << metrics.chamferReductionPct << " %\n"
+                  << "  - Inversion Converged: " << (metrics.converged ? "yes" : "no") << " (" << metrics.iterationsRun << " iterations)\n"
+                  << "  - Inversion Solver Runtime: " << metrics.optimizerRuntimeMs << " ms\n";
+    }
+    std::cout
               << "  - Model Synthesis Runtime: " << synthTimeMs << " ms\n"
               << "  - Manifold Vertices: " << metrics.synthesizedVertices << "\n"
               << "  - Manifold Triangles: " << metrics.synthesizedTriangles << "\n"
               << "  - Serialized GLB Size: " << (glbData.size() / 1024.0f) << " KB\n"
               << "  - Output glTF File: " << outputGlbPath << "\n"
-              << "  - Status: 100% WATERTIGHT MANIFOLD SUCCESS\n"
+              << "  - Status: GLB written\n"
               << "======================================================================\n\n";
 
     return 0;

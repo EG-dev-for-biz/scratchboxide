@@ -110,36 +110,33 @@ function toMcpTool(decl: ToolDeclaration): Tool {
 }
 
 // ============================================================================
-// MCP Tool context stub
+// MCP Tool context
 // ============================================================================
 
 /**
- * Builds a minimal ToolContext for MCP-dispatched tools.
- * Tools called via MCP do not have Gemini session context (request, sandbox, lsp, etc.);
- * we provide safe stubs so handlers that inspect these don't throw.
+ * Builds the ToolContext for MCP-dispatched tools. MCP calls have no Gemini session, so the IDE services (sandbox,
+ * LSP, context graph, browser proxy, lenses) are absent: calling any of them throws a clear error instead of
+ * answering with a fake success (an exit-0 command, no diagnostics, an empty page).
  */
-function buildMcpToolContext(workspaceRoot: string): ToolContext {
-    const noop = () => { /* intentional no-op stub */ };
+export function buildMcpToolContext(workspaceRoot: string): ToolContext {
+    const noop = () => { /* progress has no listener over MCP */ };
+    const unavailable = (service: string) => new Proxy({}, {
+        get: (_t, prop) => {
+            if (prop === 'then') return undefined; // not a Promise
+            if (prop === 'workspaceRoot') return workspaceRoot;
+            return (..._args: unknown[]) => {
+                throw new Error(`Scratchbox MCP: ${service}.${String(prop)} is not available over MCP; it requires the IDE to be running`);
+            };
+        }
+    });
     return {
         workspaceRoot,
         request: {} as ToolContext['request'],
-        sandbox: {
-            executeCommand: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
-            workspaceRoot
-        } as unknown as ToolContext['sandbox'],
-        lsp: {
-            getDiagnostics: async () => []
-        } as unknown as ToolContext['lsp'],
-        contextGraph: {
-            query: async () => null
-        } as unknown as ToolContext['contextGraph'],
-        browserProxy: {
-            navigate: async () => ({})
-        } as unknown as ToolContext['browserProxy'],
-        lens: {
-            registry: { resolveByPath: () => null, resolveByType: () => null },
-            controller: { getBinding: () => null, getAllBindings: () => [] }
-        } as unknown as ToolContext['lens'],
+        sandbox: unavailable('sandbox') as ToolContext['sandbox'],
+        lsp: unavailable('lsp') as ToolContext['lsp'],
+        contextGraph: unavailable('contextGraph') as ToolContext['contextGraph'],
+        browserProxy: unavailable('browserProxy') as ToolContext['browserProxy'],
+        lens: unavailable('lens') as ToolContext['lens'],
         reportProgress: noop,
     };
 }

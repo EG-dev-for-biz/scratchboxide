@@ -22,6 +22,14 @@ function asNumber(val: unknown, fallback?: number): number | undefined {
     return typeof val === 'number' && !isNaN(val) ? val : fallback;
 }
 
+function asRange(val: unknown): [number, number] | undefined {
+    if (val === undefined || val === null) return undefined;
+    if (!Array.isArray(val) || val.length !== 2 || !val.every(v => typeof v === 'number' && Number.isFinite(v))) {
+        throw new Error('image_to_adaptive_pbr_plane: roughnessRange must be a [min, max] pair of numbers');
+    }
+    return [val[0], val[1]];
+}
+
 export const IMAGE_TO_PBR_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'image_to_adaptive_pbr_plane',
@@ -59,11 +67,20 @@ export const IMAGE_TO_PBR_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 conductionBias: {
                     type: 'NUMBER',
-                    description: 'Conduction / metallicity scale factor [0..1] (default: 1.0, auto-detects conductive metals from photometric signals).'
+                    description: 'Conduction / metallicity scale factor (default: 1.0; conduction is measured from the image\'s photometric signals and scaled by this). Raise it for a material you know is a conductor.'
                 },
-                prompt: {
-                    type: 'STRING',
-                    description: 'Optional open-domain material prompt or physical hint (e.g. "classical travertine marble with deep cavitation", "weathered oak timber", "oxidized bronze").'
+                roughnessRange: {
+                    type: 'ARRAY',
+                    items: { type: 'NUMBER' },
+                    description: 'Optional [min, max] base roughness (0.04 <= min < max <= 1) the measured roughness is mapped into (default [0.08, 0.94]). Set it from your own reading of the material, e.g. low for polished or wet surfaces, high for matte or porous ones.'
+                },
+                aoRadiusTexels: {
+                    type: 'NUMBER',
+                    description: 'Ambient occlusion horizon search radius in texels (default: 10).'
+                },
+                cavityOcclusionStrength: {
+                    type: 'NUMBER',
+                    description: 'Cavity ambient occlusion intensity 0..1.5 (default: 1.0).'
                 },
                 saveDiagnosticMaps: {
                     type: 'BOOLEAN',
@@ -94,7 +111,9 @@ export const imageToPbrHandlers: Record<string, ToolHandler> = {
             reliefMultiplier: asNumber(args.reliefMultiplier, 1.20),
             edgeDampingFactor: asNumber(args.edgeDampingFactor, 0.45),
             conductionBias: asNumber(args.conductionBias, 1.0),
-            prompt: asString(args.prompt),
+            roughnessRange: asRange(args.roughnessRange),
+            aoRadiusTexels: asNumber(args.aoRadiusTexels),
+            cavityOcclusionStrength: asNumber(args.cavityOcclusionStrength),
             saveDiagnosticMaps: asBoolean(args.saveDiagnosticMaps, false)
         };
 
@@ -102,7 +121,7 @@ export const imageToPbrHandlers: Record<string, ToolHandler> = {
 
         return {
             resultPayload: result as unknown as ToolResultPayload,
-            summaryResult: `Adaptive Image-to-PBR Plane generated successfully in ${result.executionTimeMs}ms! Aspect ratio: ${result.aspectRatio.toFixed(3)} (${result.planeDimensionsMeters.width.toFixed(2)}m x ${result.planeDimensionsMeters.height.toFixed(2)}m, max displacement: ${(result.planeDimensionsMeters.displacementMax * 100).toFixed(1)}cm). Mesh: ${result.meshStats.vertexCount.toLocaleString()} vertices, ${result.meshStats.triangleCount.toLocaleString()} triangles (${result.meshStats.subdivisionsX}x${result.meshStats.subdivisionsY} grid). Intrinsic Metrics: Porosity ${result.metrics.microPorosityEnergy.toFixed(3)}, Conduction ${result.metrics.conductionIndex.toFixed(3)}, Cavity Depth ${result.metrics.averageCavityDepth.toFixed(3)}. Output: ${result.outputGlbPath || 'in-memory buffer'}.`
+            summaryResult: `Adaptive Image-to-PBR Plane generated successfully in ${result.executionTimeMs}ms! Aspect ratio: ${result.aspectRatio.toFixed(3)} (${result.planeDimensionsMeters.width.toFixed(2)}m x ${result.planeDimensionsMeters.height.toFixed(2)}m, max displacement: ${(result.planeDimensionsMeters.displacementMax * 100).toFixed(1)}cm). Mesh: ${result.meshStats.vertexCount.toLocaleString()} vertices, ${result.meshStats.triangleCount.toLocaleString()} triangles (${result.meshStats.subdivisionsX}x${result.meshStats.subdivisionsY} grid). Intrinsic Metrics: Porosity ${result.metrics.microPorosityEnergy.toFixed(3)}, Conduction ${result.metrics.conductionIndex.toFixed(3)}, Cavity Depth ${result.metrics.averageCavityDepth.toFixed(3)}. Estimator: ${result.accelerationUsed}${result.accelerationNote ? ` (${result.accelerationNote})` : ''}. Output: ${result.outputGlbPath || 'in-memory buffer'}.`
         };
     }
 };

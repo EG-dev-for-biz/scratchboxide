@@ -12,6 +12,7 @@ import * as path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { NativeCppCompilerService } from './native-compiler-service';
+import { buildNativeIfStale } from './native-build';
 
 const execAsync = promisify(exec);
 
@@ -29,11 +30,20 @@ export type ColmapCameraModel =
     | 'THIN_PRISM_FISHEYE';
 
 export interface ColmapGlbOptions {
-    sparseDir?: string;
+    /** COLMAP / GLOMAP sparse model directory (cameras, images, points3D as .txt or .bin). Required. */
+    sparseDir: string;
     outGlbPath?: string;
     frustumScale?: number;
     pointRadius?: number;
-    synthetic?: boolean;
+}
+
+/** Raised when no COLMAP sparse model is supplied; there is no built-in sample reconstruction. */
+export class ColmapSparseModelRequiredError extends Error {
+    readonly code = 'COLMAP_SPARSE_MODEL_REQUIRED';
+    constructor(message: string) {
+        super(message);
+        this.name = 'ColmapSparseModelRequiredError';
+    }
 }
 
 export interface ColmapReconstructionSummary {
@@ -51,98 +61,40 @@ export interface ColmapReconstructionSummary {
     error?: string;
 }
 
-export interface GlomapOptions {
-    imageDir: string;
-    outputDir?: string;
-    cameraModel?: ColmapCameraModel;
-    maxImageSize?: number;
-    fov?: number;
-    exportGlb?: boolean;
-}
-
-export interface GlomapResult {
-    success: boolean;
-    sparseDir?: string;
-    glbPath?: string;
-    numImagesRegistered?: number;
-    error?: string;
-}
-
 export class ColmapReconstructionService {
     private binaryPath: string;
-    private glomapBinaryPath: string;
     private compilerService: NativeCppCompilerService;
 
-    constructor(customBinaryPath?: string, customGlomapBinaryPath?: string) {
+    constructor(customBinaryPath?: string) {
         this.compilerService = new NativeCppCompilerService();
-        if (customBinaryPath) {
-            this.binaryPath = customBinaryPath;
-        } else {
-            this.binaryPath = path.resolve(process.cwd(), 'build/run_colmap_glb_pipeline');
-        }
-
-        if (customGlomapBinaryPath) {
-            this.glomapBinaryPath = customGlomapBinaryPath;
-        } else {
-            this.glomapBinaryPath = path.resolve(process.cwd(), 'build/run_glomap_engine');
-        }
+        this.binaryPath = customBinaryPath || path.resolve(process.cwd(), 'build/run_colmap_glb_pipeline');
     }
 
     /**
-     * Ensures native C++20 COLMAP CLI binary is compiled and up-to-date.
+     * Ensures the native C++20 COLMAP -> GLB converter is built from the current source and every header it
+     * includes (native build cache; a stale binary would run old behaviour).
      */
     async ensureBinary(): Promise<string> {
-        if (fs.existsSync(this.binaryPath)) {
-            return this.binaryPath;
-        }
-
-        const binDir = path.dirname(this.binaryPath);
-        if (!fs.existsSync(binDir)) {
-            fs.mkdirSync(binDir, { recursive: true });
-        }
-
-        const includePath = this.compilerService.getSdkIncludePath();
         const sourcePath = path.resolve(process.cwd(), 'scripts/run_colmap_glb_pipeline.cpp');
-
         if (!fs.existsSync(sourcePath)) {
             throw new Error(`COLMAP CLI pipeline source not found at: ${sourcePath}`);
         }
-
-        const compileCmd = `clang++ -std=c++20 -O3 -I "${includePath}" "${sourcePath}" -o "${this.binaryPath}"`;
-        await execAsync(compileCmd);
-        return this.binaryPath;
-    }
-
-    /**
-     * Ensures native C++20 GLOMAP relative pose solver binary is compiled and up-to-date.
-     */
-    async ensureGlomapBinary(): Promise<string> {
-        if (fs.existsSync(this.glomapBinaryPath)) {
-            return this.glomapBinaryPath;
-        }
-
-        const binDir = path.dirname(this.glomapBinaryPath);
-        if (!fs.existsSync(binDir)) {
-            fs.mkdirSync(binDir, { recursive: true });
-        }
-
-        const includePath = this.compilerService.getSdkIncludePath();
-        const sourcePath = path.resolve(process.cwd(), 'scripts/run_glomap_engine.cpp');
-
-        if (!fs.existsSync(sourcePath)) {
-            throw new Error(`GLOMAP pipeline source not found at: ${sourcePath}`);
-        }
-
-        const compileCmd = `clang++ -std=c++20 -O3 -I "${includePath}" "${sourcePath}" -o "${this.glomapBinaryPath}"`;
-        await execAsync(compileCmd);
-        return this.glomapBinaryPath;
+        return buildNativeIfStale({ source: sourcePath, binary: this.binaryPath, includeDir: this.compilerService.getSdkIncludePath() });
     }
 
     /**
      * Convert COLMAP / GLOMAP sparse model directory into a standard binary glTF 2.0 (.glb) file.
      * Contains camera frustum pyramids and 3D point cloud colored by RGB observations.
      */
-    async convertColmapToGlb(options: ColmapGlbOptions = {}): Promise<ColmapReconstructionSummary> {
+    async convertColmapToGlb(options: ColmapGlbOptions): Promise<ColmapReconstructionSummary> {
+        if (!options?.sparseDir) {
+            throw new ColmapSparseModelRequiredError(
+                'convertColmapToGlb needs sparseDir: a COLMAP / GLOMAP sparse model directory (cameras, images, points3D). Run COLMAP or GLOMAP outside the app to produce one.'
+            );
+        }
+        if (!fs.existsSync(options.sparseDir)) {
+            throw new ColmapSparseModelRequiredError(`sparseDir does not exist: ${options.sparseDir}`);
+        }
         const bin = await this.ensureBinary();
         const outGlb = options.outGlbPath || path.resolve(process.cwd(), `build/colmap_${Date.now()}.glb`);
 
@@ -155,16 +107,9 @@ export class ColmapReconstructionService {
             `--out-glb "${outGlb}"`,
             `--frustum-scale ${options.frustumScale ?? 0.35}`,
             `--point-radius ${options.pointRadius ?? 0.015}`,
-            `--json`
+            `--json`,
+            `--sparse-dir "${options.sparseDir}"`
         ];
-
-        if (options.synthetic) {
-            args.push(`--synthetic`);
-        } else if (options.sparseDir) {
-            args.push(`--sparse-dir "${options.sparseDir}"`);
-        } else {
-            args.push(`--synthetic`);
-        }
 
         const cmd = `"${bin}" ${args.join(' ')}`;
 
@@ -178,6 +123,10 @@ export class ColmapReconstructionService {
             const parsed = JSON.parse(stdout.trim()) as ColmapReconstructionSummary;
             return parsed;
         } catch (err: any) {
+            // The converter prints a JSON error and exits 1 when the model cannot be read.
+            const stdout = typeof err?.stdout === 'string' ? err.stdout.trim() : '';
+            let reported: string | undefined;
+            try { reported = stdout ? (JSON.parse(stdout) as { error?: string }).error : undefined; } catch { /* not JSON */ }
             return {
                 success: false,
                 numCameras: 0,
@@ -185,7 +134,7 @@ export class ColmapReconstructionService {
                 numPoints3D: 0,
                 glbBytes: 0,
                 glbPath: '',
-                error: err.message || String(err)
+                error: reported || err.message || String(err)
             };
         }
     }
@@ -198,68 +147,5 @@ export class ColmapReconstructionService {
             sparseDir,
             outGlbPath: path.resolve(process.cwd(), `build/temp_inspect_${Date.now()}.glb`)
         });
-    }
-
-    /**
-     * Interface to invoke GLOMAP Global Structure-from-Motion.
-     * Automatically uses native C++20 GLOMAP engine fallback when external CLI is absent.
-     */
-    async runGlomapReconstruction(options: GlomapOptions): Promise<GlomapResult> {
-        const outputDir = options.outputDir || path.resolve(process.cwd(), `build/glomap_${Date.now()}`);
-        if (!fs.existsSync(outputDir)) {
-            fs.mkdirSync(outputDir, { recursive: true });
-        }
-
-        // 1. Try external glomap CLI if available on system PATH
-        let hasSystemGlomap = false;
-        try {
-            await execAsync('glomap --help');
-            hasSystemGlomap = true;
-        } catch {
-            hasSystemGlomap = false;
-        }
-
-        if (hasSystemGlomap) {
-            const cmd = `glomap mapper --image_path "${options.imageDir}" --output_path "${outputDir}"`;
-            try {
-                await execAsync(cmd, { timeout: 120000 });
-                const sparseDir = path.join(outputDir, 'sparse/0');
-                return {
-                    success: true,
-                    sparseDir
-                };
-            } catch (err: any) {
-                // Fall back to native engine if system CLI encounters runtime error
-            }
-        }
-
-        // 2. Native C++20 GLOMAP engine fallback
-        try {
-            const glomapBin = await this.ensureGlomapBinary();
-            const outGlbPath = path.join(outputDir, 'sparse/0/reconstruction.glb');
-            const fovArg = options.fov ? `--fov ${options.fov}` : '';
-            const glbArg = `--export-glb "${outGlbPath}"`;
-            const cmd = `"${glomapBin}" --image-dir "${options.imageDir}" --out-dir "${outputDir}" ${fovArg} ${glbArg}`;
-
-            const { stdout } = await execAsync(cmd, {
-                cwd: process.cwd(),
-                timeout: 60000
-            });
-
-            const sparseDir = path.join(outputDir, 'sparse/0');
-            const registeredMatches = stdout.match(/Registered Camera Station/g) || [];
-
-            return {
-                success: true,
-                sparseDir,
-                glbPath: fs.existsSync(outGlbPath) ? outGlbPath : undefined,
-                numImagesRegistered: registeredMatches.length
-            };
-        } catch (err: any) {
-            return {
-                success: false,
-                error: `GLOMAP native C++20 engine failed: ${err.message || String(err)}`
-            };
-        }
     }
 }

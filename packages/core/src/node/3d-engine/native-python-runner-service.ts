@@ -13,7 +13,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import { resolveWithinRoot } from '../security/path-guard';
 import { buildScrubbedEnv } from '../security/sandbox-policy';
-import { execFile, execFileSync } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 
 const execFileAsync = promisify(execFile);
@@ -125,6 +125,9 @@ export function findWrittenGlb(expected: string, before: GlbFileStamp | undefine
  * to construct complex 3D scenes using high-level Python abstractions (mirroring Blender bpy)
  * while executing at native C++20 speed and streaming glTF 2.0 (.glb) into the canvas viewport.
  */
+/** Last native-source fingerprint per engine directory, with the file signature it was computed for. */
+const fingerprintMemo = new Map<string, { signature: string; fingerprint: string }>();
+
 export class NativePythonRunnerService {
     private static instance?: NativePythonRunnerService;
     private pythonExecutable: string;
@@ -207,9 +210,11 @@ export class NativePythonRunnerService {
 
     /**
      * Hash of everything that goes into the native module, so any engine edit (or interpreter switch) triggers a rebuild.
+     * The files are only stat'ed on each call: the hash (several MB of sources) is recomputed only when one of them
+     * changed (inode, size, mtime or ctime), was added or was removed.
      */
     private computeNativeSourceFingerprint(engineDir: string): string {
-        const hasher = crypto.createHash('sha256').update(this.pythonExecutable).update(process.platform).update(process.arch);
+        const files: string[] = [path.join(engineDir, 'CMakeLists.txt')];
         const walk = (dir: string) => {
             if (!fs.existsSync(dir)) return;
             for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((x, y) => x.name.localeCompare(y.name))) {
@@ -217,13 +222,24 @@ export class NativePythonRunnerService {
                 if (entry.isDirectory()) {
                     walk(full);
                 } else if (/\.(hpp|h|cpp|cc|cxx|inl)$/.test(entry.name)) {
-                    hasher.update(path.relative(engineDir, full)).update(fs.readFileSync(full));
+                    files.push(full);
                 }
             }
         };
-        hasher.update(fs.readFileSync(path.join(engineDir, 'CMakeLists.txt')));
         for (const sub of ['include', 'bindings', 'src']) walk(path.join(engineDir, sub));
-        return hasher.digest('hex');
+        const signature = [this.pythonExecutable, ...files.map(f => {
+            const st = fs.statSync(f);
+            return `${f}:${st.dev}:${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
+        })].join('\n');
+        const memo = fingerprintMemo.get(engineDir);
+        if (memo && memo.signature === signature) return memo.fingerprint;
+
+        const hasher = crypto.createHash('sha256').update(this.pythonExecutable).update(process.platform).update(process.arch);
+        hasher.update(fs.readFileSync(files[0]));
+        for (const full of files.slice(1)) hasher.update(path.relative(engineDir, full)).update(fs.readFileSync(full));
+        const fingerprint = hasher.digest('hex');
+        fingerprintMemo.set(engineDir, { signature, fingerprint });
+        return fingerprint;
     }
 
     private hasBuiltModule(dir: string): boolean {
@@ -432,115 +448,6 @@ export class NativePythonRunnerService {
                 stderr: err.stderr || err.message || '',
                 executionTimeMs: Date.now() - startTime,
                 errorDetails: err.stderr || err.message
-            };
-        }
-    }
-
-    /**
-     * Execute a Python script string synchronously and return the generated GLB and output.
-     */
-    public runScriptSync(
-        scriptSource: string,
-        options: PythonExecutionOptions = {}
-    ): PythonExecutionResult {
-        const startTime = Date.now();
-        const outputDir = options.outputDir || path.resolve(process.cwd(), 'build/3d-python');
-        if (!fs.existsSync(outputDir)) {
-            fs.mkdirSync(outputDir, { recursive: true });
-        }
-
-        const randSuffix = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        const scriptFile = path.join(outputDir, `scene_${randSuffix}.py`);
-        const expectedGlbPath = options.outputGlbPath || path.join(outputDir, `scene_${randSuffix}.glb`);
-
-        let preparedScript = scriptSource;
-        if (!preparedScript.match(/^\s*OUTPUT_GLB_PATH\s*=/m)) {
-            preparedScript = `OUTPUT_GLB_PATH = r"${expectedGlbPath}"\n` + preparedScript;
-        }
-
-        fs.writeFileSync(scriptFile, preparedScript, 'utf8');
-
-        return this.runScriptFileSync(scriptFile, {
-            ...options,
-            outputGlbPath: expectedGlbPath,
-            cwd: options.cwd || outputDir
-        }, startTime);
-    }
-
-    /**
-     * Execute a Python script from file synchronously.
-     */
-    public runScriptFileSync(
-        scriptPath: string,
-        options: PythonExecutionOptions = {},
-        startTime: number = Date.now()
-    ): PythonExecutionResult {
-        const cwd = options.cwd || path.dirname(scriptPath);
-        const timeout = options.timeoutMs || 60000;
-        const repoRoot = this.resolveRepoRoot();
-
-        // A multi-minute build can't block a synchronous caller: start it in the background and report why this run can't proceed.
-        if (!this.isNativeModuleFresh()) {
-            void this.ensureNativeModule();
-            const msg = 'scratchbox_native is missing or out of date with the engine sources; a rebuild has started. Retry once it finishes, or call ensureNativeModule() first.';
-            return { success: false, exitCode: -1, stdout: '', stderr: msg, executionTimeMs: Date.now() - startTime, errorDetails: msg };
-        }
-
-        // Build PYTHONPATH
-        const pythonPaths = [
-            options.env?.PYTHONPATH,
-            path.resolve(repoRoot, 'packages/core/src/python'),
-            this.moduleDirectory,
-            process.env.PYTHONPATH
-        ].filter(Boolean).join(path.delimiter);
-
-        const glbFile = expectedGlbFile(options.outputGlbPath, scriptPath);
-        const env = buildPythonChildEnv(options.env, {
-            PYTHONPATH: pythonPaths,
-            PYTHONUNBUFFERED: '1',
-            OUTPUT_GLB_PATH: glbFile
-        });
-
-        // Argument array, no shell: args may carry model- or user-supplied text.
-        const argv = [scriptPath, ...(options.args || []).map(String)];
-        const glbBefore = stampGlbFile(glbFile);
-
-        try {
-            const stdout = execFileSync(this.pythonExecutable, argv, {
-                cwd,
-                timeout,
-                maxBuffer: 64 * 1024 * 1024,
-                env,
-                encoding: 'utf8'
-            });
-
-            // Inspect output for generated GLB
-            let glbPath: string | undefined;
-            let glbBase64: string | undefined;
-
-            const written = findWrittenGlb(glbFile, glbBefore);
-            if (written) {
-                glbPath = written;
-                glbBase64 = fs.readFileSync(written).toString('base64');
-            }
-
-            return {
-                success: true,
-                exitCode: 0,
-                stdout: String(stdout || ''),
-                stderr: '',
-                executionTimeMs: Date.now() - startTime,
-                glbPath,
-                glbBase64
-            };
-        } catch (err: any) {
-            return {
-                success: false,
-                exitCode: err.status || err.code || 1,
-                stdout: err.stdout ? String(err.stdout) : '',
-                stderr: err.stderr ? String(err.stderr) : (err.message || ''),
-                executionTimeMs: Date.now() - startTime,
-                errorDetails: err.stderr ? String(err.stderr) : err.message
             };
         }
     }

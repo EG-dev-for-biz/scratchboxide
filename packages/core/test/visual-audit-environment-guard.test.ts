@@ -310,7 +310,7 @@ describe('item 2: a scene that opted into a sky keeps it, in both directions', (
         expect(chosenEnvironment(repaired)).toEqual(chosenEnvironment(scene));
         expect(rendersSkyDome(repaired)).toBe(true);
         // The lighting operator still relights the scene.
-        expect(repaired.environment?.lightingPreset).toBe('studio');
+        expect(repaired.environment?.lighting).toBe('studio');
     });
 
     it('against sb_configure_atmospheric_scattering { enabled: false } alone', () => {
@@ -480,17 +480,14 @@ describe('item 4: no skybox is proposed for an audit', () => {
 });
 
 describe('item 5: the lighting operator relights without touching the environment', () => {
-    it('keeps preset, rig and sun angles of sb_setup_lighting on a scene that names no skybox', () => {
+    it('keeps the preset and ambient level of sb_setup_lighting on a scene that names no skybox', () => {
         const scene: Scene3DData = { ...pbrStudioScene(), environment: { lighting: 'none', ground: false } };
         const repaired = serverRepair(scene, {
             pass: false, fidelityScore: 50, critique: 'Unlit.', issues: [], strengths: [],
             operatorDispatches: [{ operator: 'sb_setup_lighting', params: { preset: 'three-point', ambientIntensity: 0.5 } }]
         });
         expect(repaired.environment?.lighting).toBe('three-point');
-        expect(repaired.environment?.lightingPreset).toBe('three-point');
-        expect(repaired.environment?.lightingRig).toMatchObject({ preset: 'three-point', ambientIntensity: 0.5 });
-        expect(typeof repaired.environment?.sunElevation).toBe('number');
-        expect(typeof repaired.environment?.sunAzimuth).toBe('number');
+        expect(repaired.environment?.ambientIntensity).toBe(0.5);
         expect(repaired.environment?.skybox).toBeUndefined();
         expect(repaired.environment?.ground).toBe(false);
         expect((repaired.operatorStack || []).map(op => op.operator)).toEqual(['sb_setup_lighting']);
@@ -499,7 +496,7 @@ describe('item 5: the lighting operator relights without touching the environmen
     it('an unlit audit\'s lighting repair of a clay void relights it and stays a clay void', () => {
         const scene: Scene3DData = { ...framedClayScene(), environment: { lighting: 'none', ground: false } };
         const repaired = serverRepair(scene, unlitAudit());
-        expect(repaired.environment?.lightingPreset).toBe('three-point');
+        expect(repaired.environment?.lighting).toBe('three-point');
         expect(repaired.environment?.skybox).toBeUndefined();
         expect(chosenEnvironment(repaired)).toEqual(chosenEnvironment(scene));
         expect(rendersSkyDome(repaired)).toBe(false);

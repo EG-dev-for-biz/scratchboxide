@@ -107,7 +107,10 @@ describe('Stop ends the 3DGS station pipeline all the way down', () => {
             renderWidth: 320, mode: 'fanout', bakeStride: 2, maxRerolls: 2, forceRebake: true, signal: stop.signal
         }).catch(e => e);
         expect(err?.name).toBe('AbortError');
-        expect(seen).toEqual([stop.signal]);
+        // Fanout stations run at once under one signal derived from the caller's: the Stop fired it, and no other
+        // station reached the model.
+        expect(seen).toHaveLength(1);
+        expect(seen[0]?.aborted).toBe(true);
         expect(writtenOutputs(outDir)).toEqual([]);
     }, 300000);
 
@@ -126,8 +129,9 @@ describe('Stop ends the 3DGS station pipeline all the way down', () => {
             { workspaceRoot: dir, signal: stop.signal } as any
         ).then(() => undefined, e => e);
         expect(err?.name).toBe('AbortError');
-        // One image-model call, made with the tool's own signal (so the SDK cancels it), and nothing after it.
-        expect(signals).toEqual([stop.signal]);
+        // One image-model call, made with a signal the tool's Stop fires (so the SDK cancels it), and nothing after it.
+        expect(signals).toHaveLength(1);
+        expect(signals[0]?.aborted).toBe(true);
         expect(writtenOutputs(outDir)).toEqual([]);
     }, 300000);
 

@@ -8,10 +8,17 @@
  ********************************************************************************/
 
 import { describe, it, expect } from 'vitest';
+import { spawnSync } from 'child_process';
 import {
     NativeMaterialPbrService,
+    NativePbrSynthesisError,
+    PbrUnknownArchetypeError,
     PBR_50_ARCHETYPE_CATALOG
 } from '../src/node/3d-engine/native-material-pbr-service';
+import { AdaptivePbrMaterialSpecError } from '../src/node/3d-engine/adaptive-pbr-errors';
+
+/** The kernel is compiled with clang++ (or $CXX); without a compiler the native tests cannot run and say so. */
+const HAS_CXX = spawnSync(process.env.CXX || 'clang++', ['--version'], { encoding: 'utf8' }).status === 0;
 import type { ContinuousMaterialDescriptor } from '../src/common/adaptive-material-types';
 
 describe('NativeMaterialPbrService', () => {
@@ -49,6 +56,20 @@ describe('NativeMaterialPbrService', () => {
 
             const byFuzzy = service.resolveArchetype('titanium');
             expect(byFuzzy.key).toBe('brushed_titanium');
+        });
+
+        it('an unknown archetype is a typed error listing every valid key, never a default material', async () => {
+            const err: any = (() => { try { service.resolveArchetype('unobtainium_foam'); } catch (e) { return e; } })();
+            expect(err).toBeInstanceOf(PbrUnknownArchetypeError);
+            expect(err).toBeInstanceOf(AdaptivePbrMaterialSpecError);
+            expect(err.validArchetypes).toHaveLength(50);
+            expect(err.message).toContain('indiana_limestone');
+            expect(err.message).toContain('mossy_rock');
+            expect(err.message).toMatch(/continuous descriptor/);
+            // a fragment of several keys names them instead of picking one
+            expect(() => service.resolveArchetype('glass')).toThrow(/part of \d+ keys: .*low_iron_glass/);
+            expect(() => service.resolveArchetype(999)).toThrow(PbrUnknownArchetypeError);
+            await expect(service.synthesizePbrTextureSet({ archetype: 'cor_ten_steel', width: 8, height: 8 })).rejects.toBeInstanceOf(PbrUnknownArchetypeError);
         });
     });
 
@@ -98,7 +119,11 @@ describe('NativeMaterialPbrService', () => {
                 expect(res.ormRgba[i * 4 + 3]).toBe(255);
             }
 
-            expect(res.executionTimeMs).toBeGreaterThan(0);
+            // Measured, not a constant: the kernel's own process time is part of the total
+            expect(res.synthesizer).toBe('native-cpp20');
+            expect(res.timings.kernelMs).toBeGreaterThan(0);
+            expect(res.executionTimeMs).toBeGreaterThanOrEqual(res.timings.kernelMs + res.timings.compileMs);
+            expect(res.executionTimeMs).not.toBe(15);
         }, 60000);
 
         it('should synthesize a metal archetype with high metallicity in ORM blue channel', async () => {
@@ -118,6 +143,40 @@ describe('NativeMaterialPbrService', () => {
             }
             expect(highMetallicCount / totalPixels).toBeGreaterThan(0.80);
         }, 60000);
+    });
+
+    describe('the native kernel is the only synthesizer', () => {
+        it.skipIf(!HAS_CXX)('runs under NODE_ENV=test too, and every descriptor field it is given changes the maps', async () => {
+            expect(process.env.NODE_ENV).toBe('test');
+            const base: ContinuousMaterialDescriptor = { albedoLinear: [0.6, 0.5, 0.4], conduction: 0, roughnessBaseline: 0.6, cellularWeight: 0, fissureDepth: 0.1, graininess: 0 };
+            const a = await service.synthesizeContinuousManifoldPbr(base, { width: 64, height: 64, seed: 7 });
+            expect(a.synthesizer).toBe('native-cpp20');
+            const differs = (x: Buffer, y: Buffer) => !x.equals(y);
+            for (const [field, value] of [['cellularWeight', 1], ['fissureDepth', 0.9], ['graininess', 1]] as const) {
+                const b = await service.synthesizeContinuousManifoldPbr({ ...base, [field]: value }, { width: 64, height: 64, seed: 7 });
+                expect(differs(a.heightRgb, b.heightRgb) || differs(a.albedoRgb, b.albedoRgb), `${field} has no effect on the maps`).toBe(true);
+            }
+            // same input, same seed: same maps
+            const again = await service.synthesizeContinuousManifoldPbr(base, { width: 64, height: 64, seed: 7 });
+            expect(again.albedoRgb.equals(a.albedoRgb)).toBe(true);
+        }, 120000);
+
+        it('a compile failure is a typed error carrying the compiler output; nothing is synthesized in its place', async () => {
+            const failing = new NativeMaterialPbrService({ compileSource: async () => ({ success: false, compilerOutput: 'error: no member named foo', diagnostics: [] }) } as any);
+            const err: any = await failing.synthesizeContinuousManifoldPbr({ albedoLinear: [0.5, 0.5, 0.5], conduction: 0, roughnessBaseline: 0.5 }, { width: 16, height: 16 }).catch(e => e);
+            expect(err).toBeInstanceOf(NativePbrSynthesisError);
+            expect(err.stage).toBe('compile');
+            expect(err.message).toContain('no member named foo');
+            const missing = new NativeMaterialPbrService({ compileSource: async () => { throw new Error('spawn clang++ ENOENT'); } } as any);
+            await expect(missing.synthesizePbrTextureSet({ archetype: 'carrara_marble', width: 16, height: 16 })).rejects.toThrow(/could not be compiled.*ENOENT/);
+        });
+
+        it('a kernel that fails at run time is a typed error too', async () => {
+            const broken = new NativeMaterialPbrService({ compileSource: async () => ({ success: true, binaryPath: '/usr/bin/false', compilerOutput: '', diagnostics: [] }) } as any);
+            const err: any = await broken.synthesizeContinuousManifoldPbr({ albedoLinear: [0.5, 0.5, 0.5], conduction: 0, roughnessBaseline: 0.5 }, { width: 16, height: 16 }).catch(e => e);
+            expect(err).toBeInstanceOf(NativePbrSynthesisError);
+            expect(err.stage).toBe('run');
+        });
     });
 
     describe('C++20 Spatial Autocorrelation & Frequency Induction', () => {

@@ -345,4 +345,58 @@ describe('ProColorGradeMatchingService (Hollywood-Grade Color Matching & Grading
             expect(sumR).toBeGreaterThan(sumB);
         });
     });
+
+    describe('Measured, size-safe metrics', () => {
+        const gradient = (w: number, h: number, f: (n: number) => [number, number, number]) => {
+            const buf = Buffer.alloc(w * h * 4);
+            for (let i = 0; i < w * h; i++) {
+                const [r, g, b] = f(i / (w * h));
+                buf[i * 4] = r; buf[i * 4 + 1] = g; buf[i * 4 + 2] = b; buf[i * 4 + 3] = 255;
+            }
+            return buf;
+        };
+        /** Nearest-neighbour 2x upscale: the same tonal distribution at four times the pixels. */
+        const upscale2x = (src: Buffer, w: number, h: number) => {
+            const out = Buffer.alloc(w * h * 16);
+            for (let y = 0; y < h * 2; y++) for (let x = 0; x < w * 2; x++) {
+                src.copy(out, (y * w * 2 + x) * 4, ((y >> 1) * w + (x >> 1)) * 4, ((y >> 1) * w + (x >> 1)) * 4 + 4);
+            }
+            return out;
+        };
+        const source = gradient(16, 16, n => [Math.round(30 + n * 140), Math.round(40 + n * 160), Math.round(60 + n * 190)]);
+        const reference = gradient(16, 16, n => [Math.round(50 + n * 200), Math.round(30 + n * 150), Math.round(10 + n * 90)]);
+
+        it('solves the wheels from each image over its own pixels, so a differently sized reference gives the same grade', () => {
+            const same = ProColorGradeMatchingService.solvePrimaryWheels(source, reference, 16, 16);
+            const bigger = ProColorGradeMatchingService.solvePrimaryWheels(source, upscale2x(reference, 16, 16), 16, 16, 32, 32);
+            expect(bigger).toEqual(same);
+            expect(() => ProColorGradeMatchingService.solvePrimaryWheels(source, upscale2x(reference, 16, 16), 16, 16)).toThrow(/reference buffer/);
+        });
+
+        it('averages CIEDE2000 over every pixel and states the basis, resampling a differently sized reference', async () => {
+            const same = await ProColorGradeMatchingService.matchImageBuffers(source, reference, 16, 16, { preserveSkinTones: false });
+            expect(same.telemetry.deltaESampleCount).toBe(256);
+            expect(same.telemetry.deltaESampleStride).toBe(1);
+            expect(same.telemetry.deltaEBasis).toBe('same-size per-pixel');
+
+            const bigRef = upscale2x(reference, 16, 16);
+            const resized = await ProColorGradeMatchingService.matchImageBuffers(source, bigRef, 16, 16, { preserveSkinTones: false }, { width: 32, height: 32 });
+            expect(resized.telemetry.deltaEBasis).toBe('per-pixel vs reference resampled to source size');
+            expect(resized.telemetry.referenceDimensions).toEqual({ width: 32, height: 32 });
+            expect(resized.scopes.reference.waveform.meanIre).toBeCloseTo(same.scopes.reference.waveform.meanIre, 1);
+            expect(resized.telemetry.finalDeltaE00).toBeLessThan(resized.telemetry.initialDeltaE00);
+        });
+
+        it('measures the dominant vectorscope hue instead of reporting a fixed 130 degrees', () => {
+            const blue = gradient(8, 8, () => [20, 40, 220]);
+            const hue = ProColorGradeMatchingService.computeScopes(blue, 8, 8).vectorscope.dominantHueDeg!;
+            const cb = -0.168736 * 20 - 0.331264 * 40 + 0.5 * 220;
+            const cr = 0.5 * 20 - 0.418688 * 40 - 0.081312 * 220;
+            let expected = Math.atan2(cr, cb) * 180 / Math.PI;
+            if (expected < 0) expected += 360;
+            expect(Math.abs(hue - expected)).toBeLessThanOrEqual(2.5);
+            expect(hue).not.toBe(130);
+            expect(ProColorGradeMatchingService.computeScopes(gradient(8, 8, () => [128, 128, 128]), 8, 8).vectorscope.dominantHueDeg).toBeNull();
+        });
+    });
 });

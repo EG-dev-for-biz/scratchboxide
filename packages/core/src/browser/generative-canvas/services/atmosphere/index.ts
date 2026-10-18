@@ -19,3 +19,4 @@ export * from './volumetric-participating-media';
 export * from './AtmosphereService';
 export * from './AtmosphereImageEstimationService';
 export * from './LocationObjectLightingService';
+export * from './sky-photometry';

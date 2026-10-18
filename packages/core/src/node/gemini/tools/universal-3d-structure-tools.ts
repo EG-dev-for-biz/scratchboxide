@@ -18,8 +18,55 @@ import {
 import type {
     Target3DFormat
 } from '../../../common/spatial/universal-3d-structure-types';
-type ProceduralGeometryType = 'box' | 'sphere' | 'cylinder' | 'torus';
+import type { CollisionEnvelopeOptions } from '../../../common/spatial/universal-3d-structure-types';
 import type { ToolDeclaration, ToolHandler } from './types';
+
+/** Analytic primitives the foundation can mesh and sample; anything else comes in through inputGlbPath. */
+const PROCEDURAL_SHAPES = ['box', 'sphere', 'cylinder', 'torus'] as const;
+type ProceduralShape = typeof PROCEDURAL_SHAPES[number];
+const PROCEDURAL_TYPE_VALUES = [...PROCEDURAL_SHAPES, 'alpine_matterhorn'];
+const COLLISION_MODES: NonNullable<CollisionEnvelopeOptions['mode']>[] = ['aabb', 'obb', 'convex_hull', 'inflated_bumper'];
+
+/** No cached structure by that name and no source (proceduralType or inputGlbPath) to build one from. */
+export class UnknownUniversalStructureError extends Error {
+    readonly code = 'UNIVERSAL_STRUCTURE_NOT_FOUND';
+    constructor(name: string, cached: string[]) {
+        super(
+            `No Universal 3D Structure named "${name}" exists in this session` +
+            (cached.length ? ` (cached: ${cached.join(', ')})` : ' (none cached yet)') +
+            '. Create it first with universal_3d_structure_create, or pass proceduralType or inputGlbPath to build it.'
+        );
+        this.name = 'UnknownUniversalStructureError';
+    }
+}
+
+/** A tool argument outside what the foundation actually implements. */
+export class UniversalStructureArgumentError extends Error {
+    readonly code = 'UNIVERSAL_STRUCTURE_BAD_ARGUMENT';
+    constructor(message: string) {
+        super(message);
+        this.name = 'UniversalStructureArgumentError';
+    }
+}
+
+interface StructureSource {
+    proceduralType?: string;
+    inputGlbPath?: string;
+    scale?: number;
+    center?: [number, number, number];
+    numViews?: number;
+    pointDensity?: number;
+    seed?: number;
+    anchor?: { lat: number; lng: number; elevationMeters: number };
+}
+
+interface GlbScope {
+    path: string;
+    meshesInFile: number;
+    primitivesInFile: number;
+    ingested: string;
+}
+const glbScopeCache = new Map<string, GlbScope>();
 
 function asString(val: unknown, fallback = ''): string {
     return typeof val === 'string' ? val : fallback;
@@ -36,7 +83,7 @@ export const UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'universal_3d_structure_create',
         description:
-            'Synthesizes or initializes a canonical Universal 3D Structure Foundation (Universal3DStructureFoundation) maintaining synchronized solid mesh geometry, surface point clouds for 3DGS, calibrated 6-DoF camera rigs, physics collision envelope (AABB, sphere, convex bumper hull), and WGS-84 real-world anchors.',
+            'Synthesizes or initializes a canonical Universal 3D Structure Foundation (Universal3DStructureFoundation) maintaining synchronized solid mesh geometry, surface point clouds for 3DGS, calibrated 6-DoF camera rigs, physics collision envelope (AABB, bounding sphere, PCA-oriented OBB; exact convex hull via universal_3d_structure_get_collision_hull), and WGS-84 real-world anchors. Build from an analytic primitive (proceduralType) or ingest an existing .glb (inputGlbPath).',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -46,8 +93,8 @@ export const UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 proceduralType: {
                     type: 'STRING',
-                    enum: ['box', 'sphere', 'cylinder', 'plane', 'alpine_matterhorn'],
-                    description: 'Procedural geometric type to synthesize. Default is "box".'
+                    enum: PROCEDURAL_TYPE_VALUES,
+                    description: 'Analytic primitive to synthesize (box, sphere, cylinder, torus) or the alpine_matterhorn complex. Default is "box" when inputGlbPath is not given.'
                 },
                 scale: {
                     type: 'NUMBER',
@@ -65,6 +112,14 @@ export const UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 pointDensity: {
                     type: 'NUMBER',
                     description: 'Number of surface points to sample into the point cloud constellation for 3DGS seeds. Default is 2000.'
+                },
+                seed: {
+                    type: 'NUMBER',
+                    description: 'Seed for surface point sampling. Equal seeds give identical point sets. Default 1.'
+                },
+                inputGlbPath: {
+                    type: 'STRING',
+                    description: 'Path to a binary glTF 2.0 (.glb) to ingest as the structure (workspace-relative or absolute). Reads the first primitive of the first mesh; the result reports how much of the file that covers.'
                 },
                 anchor: {
                     type: 'OBJECT',
@@ -91,8 +146,12 @@ export const UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 proceduralType: {
                     type: 'STRING',
-                    enum: ['box', 'sphere', 'cylinder', 'plane', 'alpine_matterhorn'],
-                    description: 'Procedural geometric type to synthesize if not already in cache. Default is "box".'
+                    enum: PROCEDURAL_TYPE_VALUES,
+                    description: 'Primitive to synthesize if no structure with this name is cached. Without it (or inputGlbPath) an unknown name is an error.'
+                },
+                inputGlbPath: {
+                    type: 'STRING',
+                    description: 'Path to a binary glTF 2.0 (.glb) to ingest as the structure (workspace-relative or absolute). Reads the first primitive of the first mesh; the result reports how much of the file that covers.'
                 },
                 format: {
                     type: 'STRING',
@@ -120,7 +179,7 @@ export const UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS: ToolDeclaration[] = [
             properties: {
                 name: {
                     type: 'STRING',
-                    description: 'Name of the structure to animate.'
+                    description: 'Name of a structure created earlier with universal_3d_structure_create. The clip follows that structure\'s calibrated camera rig in order.'
                 },
                 clipName: {
                     type: 'STRING',
@@ -133,11 +192,6 @@ export const UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 fps: {
                     type: 'NUMBER',
                     description: 'Target frame rate for discrete display rendering. Default is 24.'
-                },
-                cameraTrajectory: {
-                    type: 'STRING',
-                    enum: ['arc', 'orbit', 'push_in'],
-                    description: 'Standard camera motion trajectory to synthesize. Default is "arc".'
                 },
                 mountToVideoTimeline: {
                     type: 'BOOLEAN',
@@ -153,7 +207,7 @@ export const UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'universal_3d_structure_get_collision_hull',
         description:
-            'Extracts the metric collision envelope from a Universal 3D Structure, including axis-aligned bounding box (AABB), bounding sphere, and simplified convex bumper hull vertices and triangular faces for physics simulation or drone obstacle avoidance.',
+            'Extracts the metric collision envelope from a Universal 3D Structure: axis-aligned bounding box (AABB), bounding sphere, and the chosen envelope polyhedron (PCA-oriented OBB by default, exact Quickhull convex hull, or margin-inflated bumper) as vertices and triangular faces for physics simulation or drone obstacle avoidance.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -163,67 +217,137 @@ export const UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 proceduralType: {
                     type: 'STRING',
-                    enum: ['box', 'sphere', 'cylinder', 'plane', 'alpine_matterhorn'],
-                    description: 'Procedural type to synthesize if not cached. Default is "box".'
+                    enum: PROCEDURAL_TYPE_VALUES,
+                    description: 'Primitive to synthesize if no structure with this name is cached. Without it (or inputGlbPath) an unknown name is an error.'
+                },
+                inputGlbPath: {
+                    type: 'STRING',
+                    description: 'Path to a .glb to ingest if no structure with this name is cached.'
                 },
                 scale: {
                     type: 'NUMBER',
                     description: 'Metric scale factor. Default is 10.0.'
+                },
+                mode: {
+                    type: 'STRING',
+                    enum: COLLISION_MODES,
+                    description: 'Envelope to compute: "aabb", "obb" (PCA-oriented box, default), "convex_hull" (exact Quickhull of the mesh vertices), or "inflated_bumper" (OBB grown by safetyMarginMeters).'
+                },
+                safetyMarginMeters: {
+                    type: 'NUMBER',
+                    description: 'Margin added to aabb / inflated_bumper envelopes. Not supported for convex_hull.'
                 }
             }
         }
     }
 ];
 
-function getOrCreateStructure(
-    name: string,
-    proceduralType: string = 'box',
-    scale: number = 10.0,
-    center: [number, number, number] = [0, 0, 0],
-    numViews: number = 24,
-    pointDensity: number = 2000,
-    anchor?: { lat: number; lng: number; elevationMeters: number }
-): Universal3DStructureFoundation {
-    const key = name || 'default_structure';
-    let structure = activeStructureCache.get(key);
-    if (!structure) {
-        if (proceduralType === 'alpine_matterhorn') {
-            structure = Universal3DStructureFoundation.createAlpineMatterhornComplex();
-        } else {
-            structure = Universal3DStructureFoundation.createFromProcedural(
-                (proceduralType as ProceduralGeometryType) || 'box',
-                {
-                    name: key,
-                    scale,
-                    center,
-                    numViews,
-                    pointDensity,
-                    anchor
-                }
-            );
-        }
-        activeStructureCache.set(key, structure);
+function readStructureSource(args: Record<string, unknown>): StructureSource {
+    const center = (Array.isArray(args.center) && args.center.length === 3 && args.center.every(c => typeof c === 'number'))
+        ? (args.center as [number, number, number])
+        : undefined;
+    const anchor = (typeof args.anchor === 'object' && args.anchor !== null)
+        ? (args.anchor as { lat: number; lng: number; elevationMeters: number })
+        : undefined;
+    return {
+        proceduralType: asString(args.proceduralType) || undefined,
+        inputGlbPath: asString(args.inputGlbPath) || undefined,
+        scale: typeof args.scale === 'number' ? args.scale : undefined,
+        center,
+        numViews: typeof args.numViews === 'number' ? args.numViews : undefined,
+        pointDensity: typeof args.pointDensity === 'number' ? args.pointDensity : undefined,
+        seed: typeof args.seed === 'number' ? args.seed : undefined,
+        anchor
+    };
+}
+
+function countGlbPrimitives(glb: Buffer): { meshes: number; primitives: number } {
+    if (glb.length < 20 || glb.readUInt32LE(0) !== 0x46546C67) {
+        return { meshes: 0, primitives: 0 };
     }
+    const jsonLength = glb.readUInt32LE(12);
+    const gltf = JSON.parse(glb.subarray(20, 20 + jsonLength).toString('utf8'));
+    const meshes: Array<{ primitives?: unknown[] }> = Array.isArray(gltf.meshes) ? gltf.meshes : [];
+    return { meshes: meshes.length, primitives: meshes.reduce((n, m) => n + (m.primitives?.length ?? 0), 0) };
+}
+
+function buildStructure(key: string, source: StructureSource, workspaceRoot: string): Universal3DStructureFoundation {
+    if (source.inputGlbPath && source.proceduralType) {
+        throw new UniversalStructureArgumentError('Pass either inputGlbPath or proceduralType, not both.');
+    }
+    if (source.inputGlbPath) {
+        const resolved = path.isAbsolute(source.inputGlbPath) ? source.inputGlbPath : path.join(workspaceRoot, source.inputGlbPath);
+        if (!fs.existsSync(resolved)) {
+            throw new UniversalStructureArgumentError(`inputGlbPath does not exist: ${resolved}`);
+        }
+        const glb = fs.readFileSync(resolved);
+        const structure = Universal3DStructureFoundation.createFromGlb(glb, {
+            name: key,
+            anchor: source.anchor,
+            numViews: source.numViews,
+            pointDensity: source.pointDensity,
+            seed: source.seed
+        });
+        const counts = countGlbPrimitives(glb);
+        glbScopeCache.set(key, {
+            path: resolved,
+            meshesInFile: counts.meshes,
+            primitivesInFile: counts.primitives,
+            ingested: counts.primitives > 1
+                ? `first primitive of the first mesh only (1 of ${counts.primitives} primitives); node transforms are not applied`
+                : 'whole file (single primitive); node transforms are not applied'
+        });
+        return structure;
+    }
+    const proceduralType = source.proceduralType ?? 'box';
+    if (proceduralType === 'alpine_matterhorn') {
+        return Universal3DStructureFoundation.createAlpineMatterhornComplex();
+    }
+    if (!(PROCEDURAL_SHAPES as readonly string[]).includes(proceduralType)) {
+        throw new UniversalStructureArgumentError(
+            `proceduralType "${proceduralType}" is not implemented. Supported: ${PROCEDURAL_TYPE_VALUES.join(', ')}. For any other shape, build it as a .glb and pass inputGlbPath.`
+        );
+    }
+    return Universal3DStructureFoundation.createFromProcedural(proceduralType as ProceduralShape, {
+        name: key,
+        scale: source.scale ?? 10.0,
+        center: source.center ?? [0, 0, 0],
+        numViews: source.numViews ?? 24,
+        pointDensity: source.pointDensity ?? 2000,
+        seed: source.seed,
+        anchor: source.anchor
+    });
+}
+
+/**
+ * Returns the cached structure, or builds it when the caller names a source.
+ * An unknown name with no source is an error: there is no default shape.
+ */
+function resolveStructure(name: string, source: StructureSource, workspaceRoot: string): Universal3DStructureFoundation {
+    const cached = activeStructureCache.get(name);
+    if (cached) return cached;
+    if (!source.proceduralType && !source.inputGlbPath) {
+        throw new UnknownUniversalStructureError(name, [...activeStructureCache.keys()]);
+    }
+    const structure = buildStructure(name, source, workspaceRoot);
+    activeStructureCache.set(name, structure);
     return structure;
 }
 
 export const universal3DStructureHandlers: Record<string, ToolHandler> = {
-    universal_3d_structure_create: async (args, _ctx) => {
+    universal_3d_structure_create: async (args, ctx) => {
         const name = asString(args.name) || 'structure_' + Date.now();
-        const proceduralType = asString(args.proceduralType) || 'box';
-        const scale = asNumber(args.scale, 10.0);
-        const center = (Array.isArray(args.center) && args.center.length === 3)
-            ? (args.center as [number, number, number])
-            : [0, 0, 0] as [number, number, number];
-        const numViews = asNumber(args.numViews, 24);
-        const pointDensity = asNumber(args.pointDensity, 2000);
-        const anchor = (typeof args.anchor === 'object' && args.anchor !== null)
-            ? (args.anchor as { lat: number; lng: number; elevationMeters: number })
-            : undefined;
+        const source = readStructureSource(args);
+        if (!source.inputGlbPath && !source.proceduralType) {
+            source.proceduralType = 'box';
+        }
+        const sourceLabel = source.inputGlbPath ? `glb ${source.inputGlbPath}` : source.proceduralType!;
 
-        // Force recreation if explicitly requested
+        // create always rebuilds
         activeStructureCache.delete(name);
-        const structure = getOrCreateStructure(name, proceduralType, scale, center, numViews, pointDensity, anchor);
+        glbScopeCache.delete(name);
+        const structure = resolveStructure(name, source, ctx.workspaceRoot || process.cwd());
+        const glbScope = glbScopeCache.get(name);
 
         const summary = {
             name: structure.name,
@@ -239,7 +363,8 @@ export const universal3DStructureHandlers: Record<string, ToolHandler> = {
                 vertexCount: structure.collisionHull.convexVertices ? structure.collisionHull.convexVertices.length : 0,
                 faceCount: structure.collisionHull.indices ? structure.collisionHull.indices.length / 3 : 0
             },
-            anchor: structure.anchor
+            anchor: structure.anchor,
+            ...(glbScope ? { glbSource: glbScope } : {})
         };
 
         return {
@@ -247,18 +372,17 @@ export const universal3DStructureHandlers: Record<string, ToolHandler> = {
                 success: true,
                 structure: summary
             },
-            summaryResult: `Created Universal 3D Structure Foundation "${structure.name}" (${proceduralType}): ${summary.vertexCount} vertices, ${summary.triangleCount} triangles, ${summary.pointCount} 3DGS point seeds, ${summary.cameraCount} calibrated cameras, collision hull (${summary.collisionHull.type}).`
+            summaryResult: `Created Universal 3D Structure Foundation "${structure.name}" (${sourceLabel}${glbScope ? `; ingested ${glbScope.ingested}` : ''}): ${summary.vertexCount} vertices, ${summary.triangleCount} triangles, ${summary.pointCount} 3DGS point seeds, ${summary.cameraCount} calibrated cameras, collision hull (${summary.collisionHull.type}).`
         };
     },
 
     universal_3d_structure_export: async (args, ctx) => {
         const name = asString(args.name) || 'default_structure';
-        const proceduralType = asString(args.proceduralType) || 'box';
         const format = asString(args.format) as Target3DFormat | 'all';
         const outputDir = asString(args.outputDir) || undefined;
         const includeAnimations = args.includeAnimations !== false;
 
-        const structure = getOrCreateStructure(name, proceduralType);
+        const structure = resolveStructure(name, readStructureSource(args), ctx.workspaceRoot || process.cwd());
 
         if (outputDir) {
             const resolvedDir = path.isAbsolute(outputDir) ? outputDir : path.join(ctx.workspaceRoot || process.cwd(), outputDir);
@@ -372,16 +496,15 @@ export const universal3DStructureHandlers: Record<string, ToolHandler> = {
         };
     },
 
-    universal_3d_structure_animate: async (args, _ctx) => {
+    universal_3d_structure_animate: async (args, ctx) => {
         const name = asString(args.name) || 'default_structure';
         const clipName = asString(args.clipName) || 'Hero Camera Arc';
         const durationSeconds = asNumber(args.durationSeconds, 4.0);
         const fps = asNumber(args.fps, 24);
-        const cameraTrajectory = asString(args.cameraTrajectory) || 'arc';
         const mountToVideoTimeline = !!args.mountToVideoTimeline;
         const timelineStartTime = asNumber(args.timelineStartTime, 0.0);
 
-        const structure = getOrCreateStructure(name);
+        const structure = resolveStructure(name, readStructureSource(args), ctx.workspaceRoot || process.cwd());
 
         // Synthesize camera animation track
         const blockout = structure.toVideoCameraBlockout(fps);
@@ -410,13 +533,19 @@ export const universal3DStructureHandlers: Record<string, ToolHandler> = {
         };
     },
 
-    universal_3d_structure_get_collision_hull: async (args, _ctx) => {
+    universal_3d_structure_get_collision_hull: async (args, ctx) => {
         const name = asString(args.name) || 'default_structure';
-        const proceduralType = asString(args.proceduralType) || 'box';
-        const scale = asNumber(args.scale, 10.0);
-
-        const structure = getOrCreateStructure(name, proceduralType, scale);
-        const hull = structure.toCollisionHull();
+        const modeArg = asString(args.mode) || undefined;
+        if (modeArg !== undefined && !(COLLISION_MODES as string[]).includes(modeArg)) {
+            throw new UniversalStructureArgumentError(`mode "${modeArg}" is not implemented. Supported: ${COLLISION_MODES.join(', ')}.`);
+        }
+        const structure = resolveStructure(name, readStructureSource(args), ctx.workspaceRoot || process.cwd());
+        const hull = modeArg || typeof args.safetyMarginMeters === 'number'
+            ? structure.toCollisionHull({
+                mode: (modeArg as CollisionEnvelopeOptions['mode']) ?? 'obb',
+                safetyMarginMeters: typeof args.safetyMarginMeters === 'number' ? args.safetyMarginMeters : undefined
+            })
+            : structure.toCollisionHull();
 
         const payloadHull = {
             ...hull,

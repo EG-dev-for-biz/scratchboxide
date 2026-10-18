@@ -8,15 +8,34 @@
  ********************************************************************************/
 
 import * as THREE from 'three';
-import type { OperatorDefinition } from './types';
+import { type OperatorDefinition, OperatorUnavailableError } from './types';
 import {
     getPresetLightingState,
-    getDiurnalLightingState,
+    isTimeOfDayPreset,
     computeDiurnalLightingProfile,
     getSunVectorFromAngles
 } from '../atmosphere';
-import { LightingGafferService } from '../atmosphere/LightingGafferService';
+import { sunAtLocalSolarTime } from './nature-atmosphere-operators';
 
+
+/** Local bounds of the unit shape the viewport draws for a customMesh of `type` (syncCustomMeshes createGeometry). */
+function customMeshUnitBounds(type: string | undefined): THREE.Box3 {
+    if (type === 'sphere' || type === 'cylinder' || type === 'cone') return new THREE.Box3(new THREE.Vector3(-1, -1, -1), new THREE.Vector3(1, 1, 1));
+    if (type === 'plane') return new THREE.Box3(new THREE.Vector3(-1, -1, 0), new THREE.Vector3(1, 1, 0));
+    if (type === 'torus') return new THREE.Box3(new THREE.Vector3(-1.4, -1.4, -0.4), new THREE.Vector3(1.4, 1.4, 0.4));
+    return new THREE.Box3(new THREE.Vector3(-0.5, -0.5, -0.5), new THREE.Vector3(0.5, 0.5, 0.5));
+}
+
+/** World matrix of a customMesh from its own transform and its parentId chain. */
+function customMeshWorldMatrix(def: any, byId: Map<string, any>, depth = 0): THREE.Matrix4 {
+    const local = new THREE.Matrix4().compose(
+        new THREE.Vector3(...((def.position || [0, 0, 0]) as [number, number, number])),
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(...((def.rotation || [0, 0, 0]) as [number, number, number]))),
+        new THREE.Vector3(...((def.scale || [1, 1, 1]) as [number, number, number]))
+    );
+    const parent = def.parentId && def.parentId !== def.id ? byId.get(def.parentId) : undefined;
+    return parent && depth < 64 ? customMeshWorldMatrix(parent, byId, depth + 1).multiply(local) : local;
+}
 
 export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
     {
@@ -30,8 +49,8 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
             longitude?: number;
             sunElevation?: number;
             sunAzimuth?: number;
-            ambientIntensity?: number;
             skybox?: string;
+            ambientIntensity?: number;
             rayleigh?: number;
             mie?: number;
             turbidity?: number;
@@ -47,8 +66,6 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
             aerialPerspectiveRange?: number;
             albedoScale?: number;
             fogDensity?: number;
-            fogBaseAltitude?: number;
-            fogHeight?: number;
             cloudShadowsEnabled?: boolean;
             cloudShadowIntensity?: number;
             cloudShadowScale?: number;
@@ -57,43 +74,42 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
             godRays?: boolean;
             enableGodRays?: boolean;
             godRaysIntensity?: number;
-            keyLight?: any;
-            fillLight?: any;
-            rimLight?: any;
         }) => {
             const scene = ctx.getSceneData();
+            // Validate before writing anything: a time of day only fixes the sun at a place.
+            const latitude: number | undefined = params.timeOfDay !== undefined ? (params.latitude ?? scene.geoAnchor?.lat) : undefined;
+            const longitude: number | undefined = params.timeOfDay !== undefined ? (params.longitude ?? scene.geoAnchor?.lng) : undefined;
+            if (params.timeOfDay !== undefined && (latitude === undefined || longitude === undefined)) {
+                throw new Error('sb_setup_lighting: timeOfDay needs latitude/longitude (or a scene geoAnchor) to place the sun; or give sunElevation/sunAzimuth. Nothing was changed.');
+            }
             if (!scene.environment) scene.environment = {};
             if (!scene.features) scene.features = {};
 
             const preset = params.preset || scene.environment.lighting || 'studio';
             scene.environment.lighting = preset;
-            scene.environment.lightingPreset = preset;
 
             let diurnalState: any = null;
-            if (params.timeOfDay !== undefined) {
-                const lat = params.latitude !== undefined ? params.latitude : (scene.environment.latitude || 37.77);
-                const lng = params.longitude !== undefined ? params.longitude : (scene.environment.longitude || -122.41);
-                diurnalState = getDiurnalLightingState(lat, lng, params.timeOfDay);
-                scene.environment.timeOfDay = params.timeOfDay;
-                scene.environment.latitude = lat;
-                scene.environment.longitude = lng;
-                scene.environment.sunElevation = diurnalState.sunElevation;
-                scene.environment.sunAzimuth = diurnalState.sunAzimuth;
+            let sunElevation: number | undefined;
+            let sunAzimuth: number | undefined;
+            if (params.timeOfDay !== undefined && latitude !== undefined && longitude !== undefined) {
+                const sun = sunAtLocalSolarTime(latitude, longitude, params.timeOfDay);
+                sunElevation = sun.elevationDeg;
+                sunAzimuth = sun.azimuthDeg;
+                diurnalState = { ...computeDiurnalLightingProfile(sunElevation), sunElevation, sunAzimuth };
             } else if (params.sunElevation !== undefined || params.sunAzimuth !== undefined) {
-                const elev = params.sunElevation !== undefined ? params.sunElevation : 45.0;
-                const azim = params.sunAzimuth !== undefined ? params.sunAzimuth : 180.0;
-                diurnalState = { ...computeDiurnalLightingProfile(elev), sunElevation: elev, sunAzimuth: azim };
-                scene.environment.sunElevation = elev;
-                scene.environment.sunAzimuth = azim;
-            } else {
+                sunElevation = params.sunElevation ?? 45.0;
+                sunAzimuth = params.sunAzimuth ?? 180.0;
+                diurnalState = { ...computeDiurnalLightingProfile(sunElevation), sunElevation, sunAzimuth };
+            } else if (isTimeOfDayPreset(preset)) {
                 diurnalState = getPresetLightingState(preset);
-                scene.environment.sunElevation = diurnalState.elevationDeg;
-                scene.environment.sunAzimuth = diurnalState.azimuthDeg;
+                sunElevation = diurnalState.elevationDeg;
+                sunAzimuth = diurnalState.azimuthDeg;
                 const isDiurnalPreset = ['dawn', 'golden_hour', 'golden', 'morning', 'midday', 'afternoon', 'sunset', 'dusk', 'twilight', 'blue_hour', 'night', 'deep_night', 'overcast'].includes(preset.toLowerCase());
                 if (isDiurnalPreset && !params.skybox) {
                     scene.environment.skybox = diurnalState.skyboxName;
                 }
             }
+            // Any other lighting name (a renderer rig such as 'neon') places no sun.
 
             if (params.skybox) {
                 scene.environment.skybox = params.skybox;
@@ -101,20 +117,22 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
                 scene.environment.skybox = params.preset || 'studio';
             }
 
-            if (scene.environment.ground === undefined) {
-                scene.environment.ground = true;
-            }
-
             if (params.kelvinTemperature) {
-                scene.environment.kelvinTemperature = params.kelvinTemperature;
+                scene.environment.lightingKelvin = params.kelvinTemperature;
+            }
+            if (params.ambientIntensity !== undefined) {
+                scene.environment.ambientIntensity = params.ambientIntensity;
             }
 
             // Connect to atmospheric scattering features.
             // Atmosphere is an explicit part of the headless build and is NOT enabled by preset heuristics.
             const isAtmosphereExplicit = params.enableAtmosphere === true || params.atmosphericScattering === true || params.rayleigh !== undefined || (typeof scene.features.atmosphericScattering === 'object' && scene.features.atmosphericScattering !== null && (scene.features.atmosphericScattering as any).enabled !== false);
             if (isAtmosphereExplicit) {
+                if (sunElevation === undefined || sunAzimuth === undefined) {
+                    throw new Error(`sb_setup_lighting: atmospheric scattering needs a sun, and lighting '${preset}' is not a time-of-day preset; give a time-of-day preset, timeOfDay with a location, or sunElevation/sunAzimuth.`);
+                }
                 const existingAtmo = (typeof scene.features.atmosphericScattering === 'object' && scene.features.atmosphericScattering !== null) ? scene.features.atmosphericScattering : {};
-                const sunVec = getSunVectorFromAngles(scene.environment.sunElevation || 45.0, scene.environment.sunAzimuth || 180.0);
+                const sunVec = getSunVectorFromAngles(sunElevation, sunAzimuth);
 
                 scene.features.atmosphericScattering = {
                     enabled: true,
@@ -123,12 +141,12 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
                     turbidity: params.turbidity ?? existingAtmo.turbidity ?? 1.5,
                     mieDirectionalG: params.mieDirectionalG ?? existingAtmo.mieDirectionalG ?? 0.82,
                     sunPosition: [sunVec.x * 60, sunVec.y * 60, sunVec.z * 60],
-                    sunElevation: scene.environment.sunElevation,
-                    sunAzimuth: scene.environment.sunAzimuth,
-                    timeOfDay: scene.environment.timeOfDay,
-                    latitude: scene.environment.latitude,
-                    longitude: scene.environment.longitude,
-                    cloudCoverage: params.cloudCoverage ?? existingAtmo.cloudCoverage ?? (preset.toLowerCase() === 'overcast' ? 0.85 : 0.0),
+                    sunElevation,
+                    sunAzimuth,
+                    timeOfDay: params.timeOfDay ?? existingAtmo.timeOfDay,
+                    latitude: latitude ?? existingAtmo.latitude,
+                    longitude: longitude ?? existingAtmo.longitude,
+                    cloudCoverage: params.cloudCoverage ?? existingAtmo.cloudCoverage ?? 0.0,
                     cloudDensity: params.cloudDensity ?? existingAtmo.cloudDensity ?? 0.0,
                     cloudAltitude: params.cloudAltitude ?? existingAtmo.cloudAltitude ?? 1200.0,
                     volumetricClouds: params.volumetricClouds ?? existingAtmo.volumetricClouds ?? false,
@@ -140,8 +158,6 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
                     aerialPerspectiveRange: params.aerialPerspectiveRange ?? existingAtmo.aerialPerspectiveRange ?? 220.0,
                     albedoScale: params.albedoScale ?? existingAtmo.albedoScale ?? (diurnalState?.aerialAlbedoBoost || 1.1),
                     fogDensity: params.fogDensity ?? existingAtmo.fogDensity,
-                    fogBaseAltitude: params.fogBaseAltitude ?? existingAtmo.fogBaseAltitude ?? 0.0,
-                    fogHeight: params.fogHeight ?? existingAtmo.fogHeight ?? 120.0,
 
                     // Terrain cloud shadows parameters (Strictly opt-in with volumetric clouds)
                     cloudShadowsEnabled: params.cloudShadowsEnabled ?? existingAtmo.cloudShadowsEnabled ?? false,
@@ -160,23 +176,12 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
                 };
             }
 
-            (scene.environment as any).lightingRig = {
-                preset: params.preset,
-                ambientIntensity: params.ambientIntensity ?? diurnalState?.skyLightIntensity,
-                diurnalPhase: diurnalState?.phase,
-                sunIntensity: diurnalState?.sunIntensity,
-                castShadows: diurnalState?.castShadows,
-                keyLight: params.keyLight,
-                fillLight: params.fillLight,
-                rimLight: params.rimLight
-            };
-
             return {
                 success: true,
                 preset: scene.environment.lighting,
                 skybox: scene.environment.skybox,
-                sunElevation: scene.environment.sunElevation,
-                sunAzimuth: scene.environment.sunAzimuth,
+                sunElevation,
+                sunAzimuth,
                 diurnalPhase: diurnalState?.phase,
                 atmosphericScattering: scene.features.atmosphericScattering
             };
@@ -206,31 +211,31 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
             const scene = ctx.getSceneData();
             const padding = params.paddingFactor || 1.5;
 
-            const min = new THREE.Vector3(Infinity, Infinity, Infinity);
-            const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
-
-            if (params.targetId) {
-                const found = ctx.findObject(params.targetId);
-                if (!found) throw new Error(`Target object '${params.targetId}' not found.`);
-                const pos = found.object.position || [0, 0, 0];
-                const scl = found.object.scale || [1, 1, 1];
-                min.set(pos[0] - scl[0] / 2, pos[1] - scl[1] / 2, pos[2] - scl[2] / 2);
-                max.set(pos[0] + scl[0] / 2, pos[1] + scl[1] / 2, pos[2] + scl[2] / 2);
-            } else if (scene.customMeshes && scene.customMeshes.length > 0) {
-                for (const m of scene.customMeshes) {
-                    const pos = m.position || [0, 0, 0];
-                    const scl = m.scale || [1, 1, 1];
-                    min.x = Math.min(min.x, pos[0] - scl[0] / 2);
-                    min.y = Math.min(min.y, pos[1] - scl[1] / 2);
-                    min.z = Math.min(min.z, pos[2] - scl[2] / 2);
-                    max.x = Math.max(max.x, pos[0] + scl[0] / 2);
-                    max.y = Math.max(max.y, pos[1] + scl[1] / 2);
-                    max.z = Math.max(max.z, pos[2] + scl[2] / 2);
-                }
+            const box = new THREE.Box3();
+            const threeScene = ctx.getThreeScene();
+            if (threeScene) {
+                // The live viewport: the bounds of the real geometry.
+                const root = params.targetId ? ctx.getThreeObject(params.targetId) : threeScene;
+                if (!root) throw new Error(`Target object '${params.targetId}' not found.`);
+                root.updateWorldMatrix(true, true);
+                box.setFromObject(root, true);
             } else {
-                min.set(-5, -5, -5);
-                max.set(5, 5, 5);
+                // Scene data only: customMeshes are drawn as unit shapes (customMeshUnitBounds) under their transforms.
+                const meshes = scene.customMeshes || [];
+                const byId = new Map(meshes.map(m => [m.id, m]));
+                const targets = params.targetId ? meshes.filter(m => m.id === params.targetId || m.name === params.targetId) : meshes;
+                if (params.targetId && targets.length === 0) {
+                    if (ctx.findObject(params.targetId)) throw new OperatorUnavailableError(`sb_frame_bounds: '${params.targetId}' has no customMesh shape to measure here; its bounds are only known in the live 3D viewport.`);
+                    throw new Error(`Target object '${params.targetId}' not found.`);
+                }
+                if (targets.length === 0) {
+                    throw new OperatorUnavailableError('sb_frame_bounds: the scene has no customMeshes to measure, and other content (generated models, tiles, media) is only measurable in the live 3D viewport.');
+                }
+                for (const m of targets) box.union(customMeshUnitBounds(m.type).applyMatrix4(customMeshWorldMatrix(m, byId)));
             }
+            if (box.isEmpty()) throw new Error('sb_frame_bounds: the target has no geometry to frame.');
+            const min = box.min;
+            const max = box.max;
 
             const center = new THREE.Vector3().addVectors(min, max).multiplyScalar(0.5);
             const size = new THREE.Vector3().subVectors(max, min);
@@ -253,68 +258,6 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
                     center: [center.x, center.y, center.z],
                     size: [size.x, size.y, size.z]
                 }
-            };
-        }
-    },
-    {
-        name: 'sb_configure_gaffer_rig',
-        category: 'lighting_camera',
-        description: 'Configures a photographic/cinematic lighting rig (Rembrandt, Butterfly, Split, Loop, Noir, etc.) using stop ratios, CCT Kelvin, and beam modifiers.',
-        execute: (ctx, params: {
-            style?: 'rembrandt' | 'butterfly' | 'split' | 'loop' | 'three_point' | 'high_key' | 'noir';
-            keyToFillRatio?: number;
-            keyKelvin?: number;
-            fillKelvin?: number;
-            rimKelvin?: number;
-            goboCookie?: 'venetian_blinds' | 'window_mullions' | 'tree_canopy';
-            penumbraSoftness?: number;
-            targetObjectId?: string;
-            subjectPosition?: [number, number, number];
-            distanceScale?: number;
-        }) => {
-            const scene = ctx.getSceneData();
-            if (!scene.environment) scene.environment = {};
-
-            let subPos: [number, number, number] = params.subjectPosition || [0, 1.0, 0];
-            if (params.targetObjectId) {
-                const found = ctx.findObject(params.targetObjectId);
-                if (found && found.object.position) {
-                    subPos = [found.object.position[0], found.object.position[1], found.object.position[2]];
-                }
-            }
-
-            const style = params.style || 'rembrandt';
-            const rig = LightingGafferService.buildGafferRig(style, {
-                keyToFillRatio: params.keyToFillRatio,
-                keyKelvin: params.keyKelvin,
-                fillKelvin: params.fillKelvin,
-                rimKelvin: params.rimKelvin,
-                subjectPosition: subPos,
-                goboCookie: params.goboCookie,
-                penumbraSoftness: params.penumbraSoftness,
-                distanceScale: params.distanceScale
-            });
-
-            (scene.environment as any).photometricRig = rig;
-            (scene.environment as any).lightingPreset = `gaffer_${style}`;
-
-            return {
-                success: true,
-                rigId: rig.rigId,
-                style: rig.style,
-                keyToFillRatio: rig.keyToFillRatio,
-                keyToFillStops: rig.keyToFillStops,
-                lightCount: rig.lights.length,
-                lights: rig.lights.map(l => ({
-                    id: l.id,
-                    role: l.role,
-                    type: l.type,
-                    cctKelvin: l.cctKelvin,
-                    position: l.position,
-                    stopsDelta: l.exposureStopsDelta,
-                    castShadow: l.castShadow,
-                    goboCookie: l.goboCookieTexture
-                }))
             };
         }
     }

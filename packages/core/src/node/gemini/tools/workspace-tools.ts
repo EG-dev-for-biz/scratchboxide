@@ -31,6 +31,41 @@ export const IGNORED_DIRS = [
     '.system_generated'
 ];
 
+/** workspace_search skips files larger than this (generated bundles, data dumps) and binary files. */
+export const SEARCH_MAX_FILE_BYTES = 1024 * 1024;
+const SEARCH_MAX_MATCHES = 50;
+
+/**
+ * Fixed-string search with ripgrep (`rg --json`, no shell), keeping matches whose workspace-relative path passes
+ * `accept`, up to SEARCH_MAX_MATCHES (rg is stopped once they are in). Undefined when rg is not installed.
+ */
+async function ripgrepFixedString(root: string, query: string, accept: (rel: string) => boolean): Promise<Array<{ file: string; line: number; content: string }> | undefined> {
+    const { spawn } = await import('child_process');
+    return new Promise(resolve => {
+        const rg = spawn('rg', ['--json', '--fixed-strings', '--hidden', '--no-config', '--max-filesize', String(SEARCH_MAX_FILE_BYTES), '--glob', '!.git', '--', query, '.'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+        const matches: Array<{ file: string; line: number; content: string }> = [];
+        let missing = false, buffered = '';
+        rg.on('error', (err: NodeJS.ErrnoException) => { missing = err.code === 'ENOENT'; resolve(missing ? undefined : matches); });
+        rg.stdout.setEncoding('utf8');
+        rg.stdout.on('data', (chunk: string) => {
+            buffered += chunk;
+            let nl: number;
+            while ((nl = buffered.indexOf('\n')) >= 0 && matches.length < SEARCH_MAX_MATCHES) {
+                const line = buffered.slice(0, nl);
+                buffered = buffered.slice(nl + 1);
+                let event: any;
+                try { event = JSON.parse(line); } catch { continue; }
+                if (event?.type !== 'match') continue;
+                const file = String(event.data?.path?.text ?? '').replace(/^\.\//, '').replace(/\\/g, '/');
+                if (!file || !accept(file)) continue;
+                matches.push({ file, line: Number(event.data.line_number), content: String(event.data.lines?.text ?? '').trim() });
+            }
+            if (matches.length >= SEARCH_MAX_MATCHES) rg.kill();
+        });
+        rg.on('close', () => resolve(missing ? undefined : matches));
+    });
+}
+
 /**
  * Scratchbox Studio Physical Path Guard:
  * Strictly prevents the agent from inspecting, searching, or mutating internal IDE runtime
@@ -516,43 +551,54 @@ export const workspaceHandlers: Record<string, ToolHandler> = {
         if (!query) throw new Error('Search query is required.');
         const filePattern = asString(args.filePattern);
         const fileFilter = filePattern ? new RegExp(filePattern.replace(/\*/g, '.*')) : null;
-        const matches: Array<{ file: string; line: number; content: string }> = [];
+        const accept = (rel: string) => !isProtectedInternalPath(rel) && !rel.split('/').some(seg => IGNORED_DIRS.includes(seg) || isProtectedInternalPath(seg)) && (!fileFilter || fileFilter.test(rel));
 
-        const walkSearch = async (dir: string): Promise<void> => {
-            if (matches.length >= 50) return;
-            const entries = await fs.readdir(dir);
-            for (const entry of entries) {
-                if (matches.length >= 50) break;
-                if (IGNORED_DIRS.includes(entry) || isProtectedInternalPath(entry)) continue;
-                const full = path.join(dir, entry);
-                const rel = path.relative(root, full).replace(/\\/g, '/');
-                if (isProtectedInternalPath(rel)) continue;
-                const stat = await fs.stat(full);
-                if (stat.isDirectory()) {
-                    await walkSearch(full);
-                } else if (stat.isFile()) {
-                    if (fileFilter && !fileFilter.test(rel)) continue;
-                    try {
-                        const text = await fs.readFile(full, 'utf-8');
-                        if (text.includes(query)) {
-                            const lines = text.split('\n');
-                            for (let i = 0; i < lines.length; i++) {
-                                if (lines[i].includes(query)) {
-                                    matches.push({ file: rel, line: i + 1, content: lines[i].trim() });
-                                    if (matches.length >= 50) break;
+        // ripgrep when it is installed (it honours .gitignore); otherwise the same search in Node. Both skip files
+        // over SEARCH_MAX_FILE_BYTES and binary files, and stop at SEARCH_MAX_MATCHES.
+        let engine: 'ripgrep' | 'node' = 'ripgrep';
+        let matches = await ripgrepFixedString(root, query, accept);
+        if (!matches) {
+            engine = 'node';
+            matches = [];
+            const found = matches;
+            const walkSearch = async (dir: string): Promise<void> => {
+                if (found.length >= SEARCH_MAX_MATCHES) return;
+                const entries = await fs.readdir(dir);
+                for (const entry of entries) {
+                    if (found.length >= SEARCH_MAX_MATCHES) break;
+                    if (IGNORED_DIRS.includes(entry) || isProtectedInternalPath(entry)) continue;
+                    const full = path.join(dir, entry);
+                    const rel = path.relative(root, full).replace(/\\/g, '/');
+                    if (isProtectedInternalPath(rel)) continue;
+                    const stat = await fs.stat(full);
+                    if (stat.isDirectory()) {
+                        await walkSearch(full);
+                    } else if (stat.isFile()) {
+                        if (fileFilter && !fileFilter.test(rel)) continue;
+                        if (stat.size > SEARCH_MAX_FILE_BYTES) continue;
+                        try {
+                            const buf = await fs.readFile(full);
+                            if (buf.subarray(0, 8000).includes(0)) continue; // binary
+                            const text = buf.toString('utf-8');
+                            if (text.includes(query)) {
+                                const lines = text.split('\n');
+                                for (let i = 0; i < lines.length; i++) {
+                                    if (lines[i].includes(query)) {
+                                        found.push({ file: rel, line: i + 1, content: lines[i].trim() });
+                                        if (found.length >= SEARCH_MAX_MATCHES) break;
+                                    }
                                 }
                             }
+                        } catch {
+                            // Skip unreadable files
                         }
-                    } catch {
-                        // Skip unreadable/binary files
                     }
                 }
-            }
-        };
-
-        await walkSearch(root);
+            };
+            await walkSearch(root);
+        }
         return {
-            resultPayload: { status: 'success', query, matchesCount: matches.length, matches },
+            resultPayload: { status: 'success', query, engine, matchesCount: matches.length, matches },
             summaryResult: `Found ${matches.length} matches for "${query}".`
         };
     },

@@ -12,11 +12,15 @@ import * as THREE from 'three';
 import {
   ConcertStagePerformerService,
   PerformerSkinningMode,
-  MUSIC_VENUE_PRESETS,
+  type StageVenueAnchor,
   DEFAULT_CANONICAL_JOINTS,
   PerformerKinematicsFrame
 } from '../src/browser/generative-canvas/services/ConcertStagePerformerService';
 import { BakedGaussian } from '../src/common/geospatial-4d-protocol';
+import { InvalidInputError, MissingInputError } from '../src/common/errors/pipeline-errors';
+
+/** Test anchor: the caller gives the place; the service has no venue list. */
+const RED_ROCKS: StageVenueAnchor = { id: 'red_rocks', name: 'Red Rocks Amphitheatre', lat: 39.66555, lng: -105.20525, altMeters: 1932.0, stageHeadingDeg: 285.0 };
 
 describe('ConcertStagePerformerService (Red Rocks Amphitheatre & 4D Performer)', () => {
   let service: ConcertStagePerformerService;
@@ -78,13 +82,21 @@ describe('ConcertStagePerformerService (Red Rocks Amphitheatre & 4D Performer)',
 
   beforeEach(() => {
     service = new ConcertStagePerformerService({
-      venue: MUSIC_VENUE_PRESETS.red_rocks,
+      venue: RED_ROCKS,
       stageHeight: 1.20,
       stageWidth: 18.0,
       stageDepth: 12.0,
       trussHeight: 8.50,
       skinningMode: PerformerSkinningMode.SCRATCHBOX_LBS_4BONE,
     });
+  });
+
+  it('0. has no default venue: no venue, or an unusable one, is a typed error', () => {
+    expect(() => new ConcertStagePerformerService({} as any)).toThrow(MissingInputError);
+    expect(() => new ConcertStagePerformerService({ venue: { ...RED_ROCKS, lat: Number.NaN } })).toThrow(InvalidInputError);
+    expect(() => new ConcertStagePerformerService({ venue: { ...RED_ROCKS, name: '' } })).toThrow(InvalidInputError);
+    const unnamedId = new ConcertStagePerformerService({ venue: { name: 'Somewhere', lat: 1, lng: 2, altMeters: 3, stageHeadingDeg: 4 } });
+    expect(unnamedId.getTelemetry().venueId).toBe('Somewhere');
   });
 
   it('1. Initializes Red Rocks Amphitheatre geodetic stage setup', () => {

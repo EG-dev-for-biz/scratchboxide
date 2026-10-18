@@ -8,6 +8,10 @@
  ********************************************************************************/
 
 import { describe, it, expect } from 'vitest';
+import { InvalidInputError, MissingInputError } from '../src/common/errors/pipeline-errors';
+import { calculateNOAASolarPosition } from '../src/browser/generative-canvas/services/atmosphere/solar-position';
+import { instantAtLocalMeanSolarTime } from '../src/common/coordinate/solarPosition';
+import { createAtmosphericSkyDome } from '../src/browser/generative-canvas/services/atmosphere/AtmosphericSkyDome';
 import * as THREE from 'three';
 import {
     AtmosphereService,
@@ -173,7 +177,7 @@ describe('Atmospheric Capabilities First-Class APIs', () => {
             expect(handle.godRays).toBeDefined();
             expect(handle.cloudShadows).toBeDefined();
 
-            atmosphere.setDiurnalTimeOfDay(17.5);
+            atmosphere.setDiurnalTimeOfDay(17.5, 37.77, -122.41);
             expect(atmosphere.config.timeOfDay).toBe(17.5);
 
             atmosphere.setClouds(0.7, 0.9, 150.0);
@@ -227,6 +231,57 @@ describe('Atmospheric Capabilities First-Class APIs', () => {
             });
             expect(resGeo.success).toBe(true);
             expect(resGeo.data.elevation).toBeGreaterThan(45);
+        });
+
+        it('sb_set_diurnal_time_of_day: timeOfDay places the sun at local mean solar time at the location', () => {
+            const engine = createOperatorEngine({ features: {} } as any);
+            const res = engine.executeOperator('sb_set_diurnal_time_of_day', { latitude: 40.73, longitude: -73.99, timeOfDay: 9, isoDate: '2026-03-20T00:00:00Z' });
+            expect(res.success).toBe(true);
+            const expected = calculateNOAASolarPosition(instantAtLocalMeanSolarTime(2026, 2, 20, 9, -73.99), 40.73, -73.99);
+            expect(res.data.elevation).toBeCloseTo(expected.elevationDeg, 6);
+            expect(res.data.azimuth).toBeCloseTo(expected.azimuthDeg, 6);
+            expect((engine.getSceneData().features as any).atmosphericScattering.timeOfDay).toBe(9);
+        });
+
+        it('sb_set_diurnal_time_of_day: timeOfDay is kept only while it is what placed the sun', () => {
+            const engine = createOperatorEngine({ features: {} } as any);
+            expect(engine.executeOperator('sb_set_diurnal_time_of_day', { latitude: 40.73, longitude: -73.99, timeOfDay: 9 }).success).toBe(true);
+            expect(engine.executeOperator('sb_set_diurnal_time_of_day', { preset: 'night' }).success).toBe(true);
+            expect((engine.getSceneData().features as any).atmosphericScattering.timeOfDay).toBeUndefined();
+            // A time alongside another sun source is a contradiction, not something to drop silently
+            const both = engine.executeOperator('sb_set_diurnal_time_of_day', { preset: 'night', timeOfDay: 12, latitude: 40.73, longitude: -73.99 });
+            expect(both.success).toBe(false);
+            expect(both.error).toMatch(/timeOfDay/);
+        });
+
+        it('getPresetLightingState: an unknown or empty preset is a typed error, not midday', () => {
+            expect(() => getPresetLightingState('neon')).toThrow(InvalidInputError);
+            expect(() => getPresetLightingState('')).toThrow(InvalidInputError);
+            expect(() => getPresetLightingState('neon')).toThrow(/golden_hour/);
+            expect(getPresetLightingState('Golden_Hour').elevationDeg).toBeCloseTo(5.2, 6);
+            const engine = createOperatorEngine({ features: {} } as any);
+            const res = engine.executeOperator('sb_set_diurnal_time_of_day', { preset: 'neon' });
+            expect(res.success).toBe(false);
+            expect(res.errorCode).toBe('invalid_input');
+        });
+
+        it('sb_setup_lighting: a lighting name that is not a time-of-day preset sets no sun', () => {
+            const engine = createOperatorEngine({ features: {}, environment: {} } as any);
+            const res = engine.executeOperator('sb_setup_lighting', { preset: 'neon' });
+            expect(res.success).toBe(true);
+            expect(res.data.sunElevation).toBeUndefined();
+            expect((engine.getSceneData() as any).environment.lighting).toBe('neon');
+            // ...and atmosphere, which needs a sun, says so
+            const atm = engine.executeOperator('sb_setup_lighting', { preset: 'neon', enableAtmosphere: true });
+            expect(atm.success).toBe(false);
+        });
+
+        it('AtmosphereService.setDiurnalTimeOfDay needs a location; it does not assume one', () => {
+            const atmosphere = new AtmosphereService({});
+            atmosphere.attach(new THREE.Scene(), {}, { enableSkyDome: true });
+            expect(() => atmosphere.setDiurnalTimeOfDay(17.5)).toThrow(MissingInputError);
+            expect(atmosphere.config.timeOfDay).toBeUndefined();
+            expect(() => createAtmosphericSkyDome(new THREE.Scene(), false, { timeOfDay: 8 })).toThrow(MissingInputError);
         });
 
         it('registers and executes sb_configure_aerial_perspective, cloud shadows, and god rays', () => {
@@ -301,7 +356,58 @@ describe('Atmospheric Capabilities First-Class APIs', () => {
             );
             expect(outcome.resultPayload.success).toBe(true);
             expect(outcome.resultPayload.phase).toBe('Golden Hour');
-            expect((outcome.resultPayload.config as any).godRays).toBeDefined();
+            const cfg = outcome.resultPayload.config as any;
+            expect(cfg.godRays).toEqual({ enabled: true });
+            // Clouds and cloud shadows were not asked for, so none are added (they used to be always on at 45%).
+            expect(cfg.volumetricClouds).toBe(false);
+            expect(cfg.cloudShadowsEnabled).toBe(false);
+            expect(cfg.cloudCoverage).toBeUndefined();
+            expect(cfg.aerialPerspectiveEnabled).toBe(true);
+            // No canned scattering constants.
+            expect(cfg.rayleigh).toBeUndefined();
+            expect(cfg.mie).toBeUndefined();
+            expect(cfg.inscatteringIntensity).toBeUndefined();
+        });
+
+        it('atmosphere_configure_scene adds clouds only when a coverage is given, and aerial perspective only when asked', () => {
+            const plain = atmosphereHandlers.atmosphere_configure_scene({ sunElevationDeg: 30, sunAzimuthDeg: 200 }, {} as any);
+            const plainCfg = plain.resultPayload.config as any;
+            expect(plainCfg.volumetricClouds).toBe(false);
+            expect(plainCfg.aerialPerspectiveEnabled).toBe(false);
+            expect(plainCfg.godRays).toBeUndefined();
+            expect(plainCfg.sunElevation).toBe(30);
+
+            const cloudy = atmosphereHandlers.atmosphere_configure_scene({ sunElevationDeg: 30, sunAzimuthDeg: 200, cloudCoverage: 0.3, enableCloudShadows: true }, {} as any);
+            const cloudyCfg = cloudy.resultPayload.config as any;
+            expect(cloudyCfg.volumetricClouds).toBe(true);
+            expect(cloudyCfg.cloudCoverage).toBe(0.3);
+            expect(cloudyCfg.cloudShadowsEnabled).toBe(true);
+            expect(cloudyCfg.cloudAltitude).toBeUndefined();
+        });
+
+        it('atmosphere_configure_scene needs a time for coordinates and a sun from somewhere (no "now", no 45/180 default)', () => {
+            expect(() => atmosphereHandlers.atmosphere_configure_scene({ latitude: 41.89, longitude: 12.49 }, {} as any)).toThrow(MissingInputError);
+            expect(() => atmosphereHandlers.atmosphere_configure_scene({}, {} as any)).toThrow(MissingInputError);
+            const iso = '2026-06-21T09:00:00Z';
+            const res = atmosphereHandlers.atmosphere_configure_scene({ latitude: 41.89, longitude: 12.49, isoDate: iso }, {} as any);
+            const ephem = calculateNOAASolarPosition(new Date(iso), 41.89, 12.49);
+            expect((res.resultPayload.config as any).sunElevation).toBeCloseTo(ephem.elevationDeg, 9);
+            expect((res.resultPayload.config as any).sunAzimuth).toBeCloseTo(ephem.azimuthDeg, 9);
+            expect(() => atmosphereHandlers.atmosphere_calculate_solar_position({ latitude: 41.89, longitude: 12.49 }, {} as any)).toThrow(MissingInputError);
+        });
+
+        it('atmosphere_get_diurnal_profile uses the turbidity it is given', () => {
+            const clear = atmosphereHandlers.atmosphere_get_diurnal_profile({ elevationDeg: 10, turbidity: 2 }, {} as any).resultPayload as any;
+            const hazy = atmosphereHandlers.atmosphere_get_diurnal_profile({ elevationDeg: 10, turbidity: 8 }, {} as any).resultPayload as any;
+            expect(clear.turbidity).toBe(2);
+            expect(hazy.turbidity).toBe(8);
+            expect(clear.kelvinSource).toBe('preetham-transmittance');
+            // More aerosol scatters more blue out of the beam: a warmer (lower CCT), redder sun.
+            expect(hazy.kelvinTemperature).toBeLessThan(clear.kelvinTemperature);
+            expect(hazy.directSunTransmittance[2]).toBeLessThan(clear.directSunTransmittance[2]);
+            const none = atmosphereHandlers.atmosphere_get_diurnal_profile({ elevationDeg: 10 }, {} as any).resultPayload as any;
+            expect(none.turbidity).toBeUndefined();
+            expect(none.kelvinSource).toBe('diurnal-profile');
         });
     });
 });

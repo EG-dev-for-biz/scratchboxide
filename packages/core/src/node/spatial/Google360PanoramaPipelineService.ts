@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { allAbortable } from '../../common/async/bounded-concurrency';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { execSync } from 'child_process';
@@ -14,7 +15,7 @@ import { encodePng, decodePng } from '../texture-processing';
 import { decodeImageToRgba } from '../image-codec-ffmpeg';
 import { GoogleMediaCredentialsService } from '../google-media-credentials-service';
 import { generateImageWithModels, ImageModelAnswer } from '../google-media-generation-service';
-import { IMAGE_MODEL_ASPECT_RATIOS, IMAGE_MODEL_PRIORITY, SkippedMediaModel, resolveRequestedModels } from '../../common/media-generation-protocol';
+import { IMAGE_MODEL_ASPECT_RATIOS, IMAGE_MODEL_PRIORITY, SkippedMediaModel, resolveRequestedModels, chooseEditCrop, maskBoundingBox } from '../../common/media-generation-protocol';
 import { MediaModelUnavailableError, MissingInputError, PipelineError } from '../../common/errors/pipeline-errors';
 
 /** Image size tiers the Gemini image models accept, with the pixel area each answers with (about 1, 4 and 16 MP). */
@@ -94,7 +95,13 @@ export interface PanoramaModelReport {
      * The aspect ratio asked of the model, the size it answered at, and the canvas size its answer was resampled to
      * (absent for mock and procedural runs).
      */
-    modelImage?: { requestedAspectRatio?: string; requestedImageSize?: string; width: number; height: number; resampledWidth: number; resampledHeight: number };
+    modelImage?: {
+        requestedAspectRatio?: string; requestedImageSize?: string; width: number; height: number; resampledWidth: number; resampledHeight: number;
+        /** When the answer was wider than the canvas: it was scaled evenly to the canvas height, and these centre columns kept. */
+        croppedWidth?: number;
+        /** For a local edit: the region of the image that was sent and answered (the rest was not sent). */
+        region?: { x: number; y: number; width: number; height: number };
+    };
 }
 
 /**
@@ -105,15 +112,19 @@ export function describeModelImage(report: PanoramaModelReport): string {
     const image = report.modelImage;
     if (!image) return '';
     const asked = [image.requestedAspectRatio, image.requestedImageSize && `imageSize ${image.requestedImageSize}`].filter(Boolean).join(', ');
-    const answered = ` The model answered at ${image.width}x${image.height}${asked ? ` for a ${asked} request` : ''}`;
-    if (image.resampledWidth === image.width && image.resampledHeight === image.height) return `${answered}; it was used at that size.`;
+    const sent = image.region ? ` (the ${image.region.width}x${image.region.height} region at ${image.region.x},${image.region.y} was sent, not the whole image)` : '';
+    const answered = ` The model answered at ${image.width}x${image.height}${asked ? ` for a ${asked} request` : ''}${sent}`;
+    const crop = image.croppedWidth !== undefined && image.croppedWidth < image.resampledWidth
+        ? `, and its centre ${image.croppedWidth} columns were kept (the answer is wider than the canvas; nothing was squeezed)`
+        : '';
+    if (image.resampledWidth === image.width && image.resampledHeight === image.height) return `${answered}; it was used at that size${crop}.`;
     const scale = Math.max(image.resampledWidth / image.width, image.resampledHeight / image.height);
     const change: string[] = [scale >= 1 ? `${scale.toFixed(2)}x larger` : `${(1 / scale).toFixed(2)}x smaller`];
     const horizontal = (image.resampledWidth / image.resampledHeight) / (image.width / image.height);
     if (Math.abs(horizontal - 1) > 0.01) {
         change.push(`${horizontal < 1 ? 'squeezed' : 'stretched'} ${Math.round(Math.abs(horizontal - 1) * 100)}% horizontally`);
     }
-    return `${answered}; it was resampled to ${image.resampledWidth}x${image.resampledHeight} (${change.join(', ')}).`;
+    return `${answered}; it was resampled to ${image.resampledWidth}x${image.resampledHeight} (${change.join(', ')})${crop}.`;
 }
 
 /**
@@ -447,7 +458,15 @@ export class Google360PanoramaPipelineService {
         width: number,
         height: number,
         imageConfig: { aspectRatio: string; imageSize?: '1K' | '2K' | '4K' },
-        limits: { maxUpscale?: number } = {},
+        limits: {
+            maxUpscale?: number;
+            /**
+             * 'center-crop': an answer wider than width:height is scaled evenly to the canvas height and its centre
+             * columns kept, so a 21:9 answer fills a 2:1 canvas without being squeezed. Default: resample to the
+             * canvas (the answer's aspect is checked against the requested one first).
+             */
+            fit?: 'resample' | 'center-crop';
+        } = {},
         signal?: AbortSignal
     ): Promise<{ rgba: Buffer; answer: ImageModelAnswer; modelImage: NonNullable<PanoramaModelReport['modelImage']> }> {
         if (signal?.aborted) throw Object.assign(new Error('Stopped before the panorama model call'), { name: 'AbortError' });
@@ -475,6 +494,20 @@ export class Google360PanoramaPipelineService {
         }
         // An answer far smaller than the canvas would be blended in as a soft, enlarged band: refused when the caller
         // set a limit (edits of an existing panorama), and always reported in modelImage.
+        if (limits.fit === 'center-crop' && decoded.width / decoded.height > width / height + 1e-6) {
+            const scaledWidth = Math.max(width, Math.round(decoded.width * (height / decoded.height)));
+            const scaled = decoded.width === scaledWidth && decoded.height === height
+                ? decoded.rgba
+                : Google360PanoramaPipelineService.resampleRgba(decoded.rgba, decoded.width, decoded.height, scaledWidth, height);
+            const x0 = Math.floor((scaledWidth - width) / 2);
+            const rgba = Buffer.alloc(width * height * 4);
+            for (let y = 0; y < height; y++) scaled.copy(rgba, y * width * 4, (y * scaledWidth + x0) * 4, (y * scaledWidth + x0 + width) * 4);
+            return {
+                rgba,
+                answer,
+                modelImage: { requestedAspectRatio: imageConfig.aspectRatio, requestedImageSize: imageConfig.imageSize, width: decoded.width, height: decoded.height, resampledWidth: scaledWidth, resampledHeight: height, croppedWidth: width }
+            };
+        }
         const upscale = Math.max(width / decoded.width, height / decoded.height);
         if (limits.maxUpscale !== undefined && upscale > limits.maxUpscale * (1 + 1e-6)) {
             throw new ModelAnswerResolutionError(false,
@@ -561,6 +594,39 @@ export class Google360PanoramaPipelineService {
     ): Promise<{ rgba: Buffer; report: PanoramaModelReport }> {
         if (!(typeof maxUpscale === 'number' && Number.isFinite(maxUpscale) && maxUpscale >= 1)) {
             throw new MissingInputError('panorama edit', 'maxModelUpscale', `must be a number >= 1 (got ${maxUpscale})`);
+        }
+        // A local edit (a mask that does not reach the panorama's left or right edge, so it needs no wrap) is sent as
+        // the region around it at an accepted aspect ratio, not as the whole frame: fewer pixels to answer, a smaller
+        // size tier, and more answer pixels on the edit. Only that region of the answer comes back; the rest is the input.
+        const box = maskBoundingBox(maskRgba, width, height);
+        const region = box && box.x0 > 0 && box.x1 < width ? chooseEditCrop(box, width, height) : undefined;
+        if (region) {
+            const size = imageSizeForCanvas(region.width, region.height, region.aspectRatio, maxUpscale);
+            if (!size) {
+                throw new ModelAnswerResolutionError(true,
+                    `the ${region.width}x${region.height} edit region would need more than the allowed ${maxUpscale}x enlargement of the model's largest answer. No model was called. Pass a larger maxModelUpscale.`);
+            }
+            const cropOf = (src: Buffer) => {
+                const out = Buffer.alloc(region.width * region.height * 4);
+                for (let y = 0; y < region.height; y++) src.copy(out, y * region.width * 4, ((region.y + y) * width + region.x) * 4, ((region.y + y) * width + region.x + region.width) * 4);
+                return out;
+            };
+            const generated = await this.generatePanoramaImage(requestedModel, [
+                { text: `${instruction} The images are a ${region.width}x${region.height} crop of the panorama around the region to edit. Answer with the whole crop at exactly the same framing and ${region.aspectRatio} aspect ratio.` },
+                { inlineData: { data: encodePng(region.width, region.height, cropOf(rgba)).toString('base64'), mimeType: 'image/png' } },
+                { inlineData: { data: encodePng(region.width, region.height, cropOf(maskRgba)).toString('base64'), mimeType: 'image/png' } }
+            ], region.width, region.height, { aspectRatio: region.aspectRatio, imageSize: size.imageSize }, { maxUpscale }, signal);
+            const out = Buffer.from(rgba);
+            for (let y = 0; y < region.height; y++) generated.rgba.copy(out, ((region.y + y) * width + region.x) * 4, y * region.width * 4, (y + 1) * region.width * 4);
+            return {
+                rgba: out,
+                report: {
+                    modelUsed: generated.answer.modelUsed,
+                    skippedModels: generated.answer.skippedModels,
+                    modelNote: generated.answer.modelNote,
+                    modelImage: { ...generated.modelImage, region: { x: region.x, y: region.y, width: region.width, height: region.height } }
+                }
+            };
         }
         const canvas = Google360PanoramaPipelineService.panoramaEditCanvas(width, height);
         const size = Google360PanoramaPipelineService.editImageSize(width, height, maxUpscale);
@@ -2481,7 +2547,8 @@ export class Google360PanoramaPipelineService {
     /**
      * Inpaints an arbitrary region or nadir camera rig.
      */
-    async inpaintPanorama(options: PanoramaInpaintOptions): Promise<PanoramaInpaintResult> {
+    /** The model's (or mock's) infill and the alpha it is blended in with; inpaintPanorama blends it over the input. */
+    private async inpaintPanoramaLayers(options: PanoramaInpaintOptions): Promise<{ decoded: { rgba: Buffer; width: number; height: number }; inpaintedRgba: Buffer; alphaMap: Float32Array; isColumnAlpha: boolean; report: PanoramaModelReport }> {
         let inputBuffer: Buffer;
         if (options.inputImageBuffer) {
             inputBuffer = options.inputImageBuffer;
@@ -2608,6 +2675,12 @@ export class Google360PanoramaPipelineService {
             report = edited.report;
         }
 
+        return { decoded, inpaintedRgba, alphaMap, isColumnAlpha, report };
+    }
+
+    async inpaintPanorama(options: PanoramaInpaintOptions): Promise<PanoramaInpaintResult> {
+        const { decoded, inpaintedRgba, alphaMap, isColumnAlpha, report } = await this.inpaintPanoramaLayers(options);
+        const { width, height } = decoded;
         const finalRgba = Google360PanoramaPipelineService.blendImageAlpha(
             decoded.rgba,
             inpaintedRgba,
@@ -2749,22 +2822,41 @@ export class Google360PanoramaPipelineService {
                 height: options.height || 2048,
                 seamEqualization: options.seamEqualization || 'laplacian_2band',
                 enablePolarCaps: options.enablePolarCaps ?? false,
-                outputImagePath: options.outputImagePath,
+                // The nadir infill (below) writes the file once it is done.
+                outputImagePath: options.inpaintNadir ? undefined : options.outputImagePath,
                 mockExecution: options.mockExecution,
-                model: options.model
+                model: options.model,
+                signal: options.signal
             });
+            let outputBuffer = monumental.outputBuffer;
+            let nadirNote = '';
+            if (options.inpaintNadir) {
+                // The 4K path heals its seam without a model; a nadir infill asked for is still made, within the
+                // caller's maxModelUpscale (the edit is sent as a region, so it seldom needs much).
+                const nadir = await this.inpaintPanorama({
+                    inputImageBuffer: outputBuffer,
+                    nadirOnly: true,
+                    mockExecution: options.mockExecution,
+                    model: options.model,
+                    maxModelUpscale: options.maxModelUpscale,
+                    outputImagePath: options.outputImagePath,
+                    signal: options.signal
+                });
+                outputBuffer = nadir.outputBuffer;
+                nadirNote = ` Nadir infill: ${nadir.modelNote}${describeModelImage(nadir)}`;
+            }
             return {
                 success: monumental.success,
                 width: monumental.width,
                 height: monumental.height,
                 outputImagePath: monumental.outputImagePath,
-                outputBuffer: monumental.outputBuffer,
+                outputBuffer,
                 seamHealed: monumental.seamEqualized,
                 modelUsed: monumental.modelUsed,
                 skippedModels: monumental.skippedModels,
                 modelNote: monumental.modelNote,
                 structuredPrompt: monumental.structuredPrompt,
-                summary: monumental.summary
+                summary: `${monumental.summary}${nadirNote}`
             };
         }
 
@@ -2824,10 +2916,11 @@ export class Google360PanoramaPipelineService {
             const fullPrompt = options.useStructuredPrompt === false
                 ? `${typeof options.prompt === 'string' ? options.prompt : structuredPrompt.scene_context.description}, 360 equirectangular panoramic spherical projection, level camera on a tripod at eye level with the horizon on the exact vertical center line, full 180-degree vertical coverage from zenith to nadir, 8k resolution, seamless horizontal environment${options.style ? `, ${options.style}` : ''}`
                 : JSON.stringify(structuredPrompt, null, 2);
-            // The model answers at its own size (21:9) at the smallest image size tier that covers the 2:1 canvas
-            // (4K when none does); the answer is resampled to the canvas and the summary says by how much.
+            // The model answers at 21:9 (its widest ratio) at the smallest image size tier whose answer covers the canvas
+            // height at that ratio (4K when none does); the answer is scaled evenly to the canvas height and its centre
+            // 2:1 kept (never squeezed horizontally), and the summary says so. The seam heal below joins the new edges.
             const generated = await this.generatePanoramaImage(options.model, [{ text: fullPrompt }], width, height,
-                { aspectRatio: '21:9', imageSize: imageSizeForCanvas(width, height, '21:9', 1)?.imageSize ?? '4K' }, {}, options.signal);
+                { aspectRatio: '21:9', imageSize: imageSizeForCanvas(Math.round(height * 21 / 9), height, '21:9', 1)?.imageSize ?? '4K' }, { fit: 'center-crop' }, options.signal);
             generatedRgba = generated.rgba;
             report = { modelUsed: generated.answer.modelUsed, skippedModels: generated.answer.skippedModels, modelNote: generated.answer.modelNote, modelImage: generated.modelImage };
         }
@@ -2842,30 +2935,29 @@ export class Google360PanoramaPipelineService {
         const editUpscale = options.maxModelUpscale ?? Math.max(DEFAULT_MAX_MODEL_UPSCALE,
             baseImage ? 1.1 * Math.max(baseImage.resampledWidth / baseImage.width, baseImage.resampledHeight / baseImage.height) : 0);
 
-        if (options.healSeam !== false) {
-            const seamRes = await this.healPanoramaSeam({
-                inputImageBuffer: outputBuffer,
-                mockExecution: options.mockExecution,
-                model: options.model,
-                maxModelUpscale: editUpscale,
-                signal: options.signal
-            });
+        // The seam heal and the nadir infill edit different parts of the same base image, so both model calls run
+        // at once on the base; the nadir infill is then blended over the healed image with its own mask, as it would
+        // have been in sequence. (Its model saw the unhealed seam above the nadir band; the band it repaints is its own.)
+        const healSeam = options.healSeam !== false;
+        const base = outputBuffer;
+        const [seamRes, nadirLayers] = await allAbortable([
+            (signal: AbortSignal) => healSeam
+                ? this.healPanoramaSeam({ inputImageBuffer: base, mockExecution: options.mockExecution, model: options.model, maxModelUpscale: editUpscale, signal })
+                : Promise.resolve(undefined),
+            (signal: AbortSignal) => options.inpaintNadir
+                ? this.inpaintPanoramaLayers({ inputImageBuffer: base, nadirOnly: true, mockExecution: options.mockExecution, model: options.model, maxModelUpscale: editUpscale, signal })
+                : Promise.resolve(undefined)
+        ] as const, options.signal);
+        if (seamRes) {
             outputBuffer = seamRes.outputBuffer;
             seamHealed = true;
             stepNotes.push(`Seam heal: ${seamRes.modelNote}${describeModelImage(seamRes)}`);
         }
-
-        if (options.inpaintNadir) {
-            const nadirRes = await this.inpaintPanorama({
-                inputImageBuffer: outputBuffer,
-                nadirOnly: true,
-                mockExecution: options.mockExecution,
-                model: options.model,
-                maxModelUpscale: editUpscale,
-                signal: options.signal
-            });
-            outputBuffer = nadirRes.outputBuffer;
-            stepNotes.push(`Nadir infill: ${nadirRes.modelNote}`);
+        if (nadirLayers) {
+            const healed = seamRes ? decodePng(seamRes.outputBuffer).rgba : nadirLayers.decoded.rgba;
+            outputBuffer = encodePng(width, height, Google360PanoramaPipelineService.blendImageAlpha(
+                healed, nadirLayers.inpaintedRgba, nadirLayers.alphaMap, width, height, nadirLayers.isColumnAlpha));
+            stepNotes.push(`Nadir infill: ${nadirLayers.report.modelNote}`);
         }
 
         if (options.invertSphericalCurvature) {
@@ -2972,10 +3064,10 @@ export class Google360PanoramaPipelineService {
             report = { modelUsed: 'procedural-synthesizer (4k mock)', modelNote: 'Mock run: procedural panorama, no model call.' };
         } else {
             const fullPrompt = `${typeof options.prompt === 'string' ? options.prompt : structuredPrompt.scene_context.description}, 360-degree equirectangular panoramic spherical projection, level camera on a tripod at eye level with the horizon on the exact vertical center line, full 180-degree vertical coverage from zenith to nadir, monumental architecture, 8k resolution, seamless horizontal environment, crisp ceiling dome, reflection floor${options.style ? `, ${options.style}` : ''}`;
-            // Asked at the image size tier that covers the 4K canvas (4096x2048) and resampled to it from the model's
-            // own 21:9 answer; the summary reports the size the model answered at.
+            // Asked at the image size tier that covers the canvas height at 21:9; the answer is scaled evenly to the canvas
+            // height and its centre columns kept (not squeezed to 2:1); the summary reports the size the model answered at.
             const generated = await this.generatePanoramaImage(options.model, [{ text: fullPrompt }], width, height,
-                { aspectRatio: '21:9', imageSize: imageSizeForCanvas(width, height, '21:9', 1)?.imageSize ?? '4K' }, {}, options.signal);
+                { aspectRatio: '21:9', imageSize: imageSizeForCanvas(Math.round(height * 21 / 9), height, '21:9', 1)?.imageSize ?? '4K' }, { fit: 'center-crop' }, options.signal);
             rawRgba = generated.rgba;
             report = { modelUsed: generated.answer.modelUsed, skippedModels: generated.answer.skippedModels, modelNote: generated.answer.modelNote, modelImage: generated.modelImage };
         }

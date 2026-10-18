@@ -76,7 +76,8 @@ function writePng(dir: string, name: string): string {
     const rgba = Buffer.alloc(w * h * 4);
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
         const i = (y * w + x) * 4;
-        const c = y < h * 0.4 ? [120, 180, 240] : [170, 150, 110];
+        // Sky over sunlit ground with a cast shadow on its right half.
+        const c = y < h * 0.4 ? [120, 180, 240] : x < w / 2 ? [170, 150, 110] : [70, 66, 62];
         rgba[i] = c[0]; rgba[i + 1] = c[1]; rgba[i + 2] = c[2]; rgba[i + 3] = 255;
     }
     const p = path.join(dir, name);
@@ -95,7 +96,7 @@ describe('location lighting: the sun is computed where the place is', () => {
         const ctx = (outcome.resultPayload as any).landmarkContext;
         expect(ctx.coordinates.lat).toBeCloseTo(40.7725, 4); // not -33.8568 (Sydney Opera House)
         expect(ctx.name).toBe('Metropolitan Opera House, 30 Lincoln Center Plaza, New York, NY 10023, USA');
-        expect(outcome.exec.summaryResult).toContain('(40.772500, -73.984000; sun at 2026-06-21T23:00:00Z)');
+        expect(outcome.exec.summaryResult).toContain('(40.772500, -73.984000; NOAA sun at 2026-06-21T23:00:00Z');
     });
 
     it('without coordinates or a resolvable name it fails: no (45, 0) and no regex over the name', async () => {
@@ -106,9 +107,10 @@ describe('location lighting: the sun is computed where the place is', () => {
         expect(String((outcome.resultPayload as any).error)).toMatch(/no Google Maps API key/);
     });
 
-    it('reports when the instant the sun was computed for was assumed', () => {
-        const result = LocationObjectLightingService.harmonizeLocationObjectAtmosphere({ latitude: 40.7411, longitude: -73.9897 });
-        expect(result.landmarkContext?.isoDateAssumed).toBe(true);
+    it('needs the instant the sun is computed for (no assumed 2026-06-21 dusk)', () => {
+        expect(() => LocationObjectLightingService.harmonizeLocationObjectAtmosphere({ latitude: 40.7411, longitude: -73.9897 })).toThrow(MissingInputError);
+        const result = LocationObjectLightingService.harmonizeLocationObjectAtmosphere({ latitude: 40.7411, longitude: -73.9897, isoDate: '2026-06-21T23:00:00Z' });
+        expect(result.landmarkContext?.isoDate).toBe('2026-06-21T23:00:00Z');
         expect(result.landmarkContext?.name).toBe('40.741100, -73.989700');
     });
 });
@@ -329,8 +331,10 @@ describe('image lighting reads the photograph and invents no place or pose', () 
             fs.writeFileSync(notImage, 'these are not pixels');
             await expect(InverseLightingEstimatorService.estimateFromImage({ imagePath: notImage })).rejects.toThrow(/unrecognised image format/);
             const photo = writePng(dir, 'plaza.png');
-            const est = await InverseLightingEstimatorService.estimateFromImage({ imagePath: photo });
-            expect(est.keyLight.cctKelvin).toBeGreaterThan(0);
+            const est = await InverseLightingEstimatorService.estimateFromImage({ imagePath: photo, knownCoords: { lat: 45.4345, lng: 12.3371 }, timestampIso: '2026-06-21T10:00:00Z' });
+            // The sky fraction is measured from the decoded pixels: 13 of 32 rows, less the skyline band.
+            expect(est.skyPixelFraction).toBeGreaterThan(0.3);
+            expect(est.skyPixelFraction).toBeLessThan(13 / 32 + 1e-9);
         } finally {
             fs.rmSync(dir, { recursive: true, force: true });
         }
@@ -341,11 +345,14 @@ describe('image lighting reads the photograph and invents no place or pose', () 
         try {
             const photo = writePng(dir, 'plaza.png');
             await expect(matchImageAndLightingToLocation({ imagePath: photo, autoExportUsd: false })).rejects.toThrow(MissingInputError);
-            const result = await matchImageAndLightingToLocation({ imagePath: photo, geodeticCoords: { lat: 45.4345, lng: 12.3371 }, autoExportUsd: false });
+            // The photo shows neither the sun nor a sky gradient, so the capture time is required (no default date).
+            await expect(matchImageAndLightingToLocation({ imagePath: photo, geodeticCoords: { lat: 45.4345, lng: 12.3371 }, autoExportUsd: false }))
+                .rejects.toThrow(/needs timestampIso/);
+            const result = await matchImageAndLightingToLocation({ imagePath: photo, geodeticCoords: { lat: 45.4345, lng: 12.3371 }, timestampIso: '2026-06-21T10:00:00Z', autoExportUsd: false });
             expect(result.location.coords.lat).toBe(45.4345);
             expect(result.cameraPose).toBeUndefined();
             expect(result.summary).toMatch(/Camera pose: not estimated/);
-            const posed = await matchImageAndLightingToLocation({ imagePath: photo, geodeticCoords: { lat: 45.4345, lng: 12.3371 }, cameraPosition: [0, 2, 10], cameraTarget: [0, 2, 0], autoExportUsd: false });
+            const posed = await matchImageAndLightingToLocation({ imagePath: photo, geodeticCoords: { lat: 45.4345, lng: 12.3371 }, timestampIso: '2026-06-21T10:00:00Z', cameraPosition: [0, 2, 10], cameraTarget: [0, 2, 0], autoExportUsd: false });
             expect(posed.cameraPose!.headingDeg).toBeCloseTo(0, 6); // looking toward -Z (north)
             expect(posed.cameraPose!.standoffMeters).toBeCloseTo(10, 6);
         } finally {

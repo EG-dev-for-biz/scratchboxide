@@ -8,7 +8,9 @@
  ********************************************************************************/
 
 import { describe, it, expect } from 'vitest';
-import { GeminiSceneDepthService } from '../src/node/spatial/GeminiSceneDepthService';
+import { GeminiSceneDepthService, SceneDepthError, SCENE_DEPTH_MAX_EDGE_PX } from '../src/node/spatial/GeminiSceneDepthService';
+import { encodePng } from '../src/node/texture-processing';
+import { readImageDimensions } from '../src/node/image-codec-ffmpeg';
 import { ImageToSplatService } from '../src/node/3d-engine/image-to-splat-service';
 import { SceneDepthAnnotation } from '../src/common/scene-depth-protocol';
 
@@ -147,23 +149,75 @@ describe('GeminiSceneDepthService (Multimodal Metric Depth Analyst & 3DGS)', () 
         }
     });
 
-    it('should provide offline fallback analysis producing valid scene depth response and depth map', async () => {
-        const dummyBuffer = Buffer.from('mock-camera-frame-data');
-        const response = await service.analyzeSceneDepth({
-            image: dummyBuffer,
-            generateDepthMap: true,
-            depthMapResolution: { width: 32, height: 18 }
-        });
+    /** Stand-in for the Gemini network boundary: records what was sent and returns a canned model reply. */
+    function fakeClient(reply: string | Error) {
+        const calls: any[] = [];
+        const client = {
+            generateContent: async (opts: any) => {
+                calls.push(opts);
+                if (reply instanceof Error) throw reply;
+                return { text: reply };
+            }
+        };
+        return { calls, service: new GeminiSceneDepthService({ geminiClient: client as any }) };
+    }
 
-        expect(response.success).toBe(true);
-        expect(response.confidence).toBeGreaterThan(0.7);
-        expect(response.annotation).toBeDefined();
-        expect(response.enriched).toBeDefined();
-        expect(response.depthMap).toBeDefined();
-        if (response.depthMap) {
-            expect(response.depthMap.width).toBe(32);
-            expect(response.depthMap.height).toBe(18);
-            expect(response.depthMap.metricDepths.length).toBe(32 * 18);
+    function png(width: number, height: number): Buffer {
+        const rgba = Buffer.alloc(width * height * 4);
+        for (let i = 0; i < width * height; i++) {
+            rgba[i * 4] = (i % width) & 255;
+            rgba[i * 4 + 1] = 128;
+            rgba[i * 4 + 2] = 64;
+            rgba[i * 4 + 3] = 255;
         }
+        return encodePng(width, height, rgba);
+    }
+
+    const modelReply = JSON.stringify({
+        sceneType: 'tidal flat at low water',
+        parts: { rock: { label: 'Rock', z: 1.5, imageX: 0.4, imageY: 0.7, width: 0.2, height: 0.2, reason: 'occludes the sand' } },
+        z_ranges: { near: [1, 4], mid: [-0.5, 0.5], far: [-10, -1] }
+    });
+
+    it('throws MODEL_CALL_FAILED instead of returning a canned annotation when the model call fails', async () => {
+        const { service: svc } = fakeClient(new Error('API key not valid'));
+        const err = await svc.analyzeSceneDepth({ image: png(32, 16), generateDepthMap: true }).catch(e => e);
+        expect(err).toBeInstanceOf(SceneDepthError);
+        expect(err.code).toBe('MODEL_CALL_FAILED');
+        expect(err.message).toContain('API key not valid');
+    });
+
+    it('rejects bytes that are not an image with UNSUPPORTED_IMAGE_FORMAT, without calling the model', async () => {
+        const { calls, service: svc } = fakeClient(modelReply);
+        const err = await svc.analyzeSceneDepth({ image: Buffer.from('mock-camera-frame-data') }).catch(e => e);
+        expect(err).toBeInstanceOf(SceneDepthError);
+        expect(err.code).toBe('UNSUPPORTED_IMAGE_FORMAT');
+        expect(calls.length).toBe(0);
+    });
+
+    it('throws MODEL_RESPONSE_INVALID when the model answer has no usable parts', async () => {
+        const { service: svc } = fakeClient('{"parts": {"a": {"label": "x", "z": "near"}}}');
+        const err = await svc.analyzeSceneDepth({ image: png(16, 16) }).catch(e => e);
+        expect(err.code).toBe('MODEL_RESPONSE_INVALID');
+    });
+
+    it('sends a small PNG unchanged as image/png and reports no confidence it did not derive', async () => {
+        const { calls, service: svc } = fakeClient(modelReply);
+        const image = png(40, 20);
+        const res = await svc.analyzeSceneDepth({ image, generateDepthMap: true, depthMapResolution: { width: 32, height: 18 } });
+        expect(calls[0].inlineData[0].mimeType).toBe('image/png');
+        expect(Buffer.from(calls[0].inlineData[0].data, 'base64').equals(image)).toBe(true);
+        expect(res.confidence).toBeUndefined();
+        expect(res.annotation?.sceneType).toBe('tidal flat at low water');
+        expect(res.enriched?.parts.rock.worldZ).toBeCloseTo(1.5, 3);
+        expect(res.depthMap?.metricDepths.length).toBe(32 * 18);
+    });
+
+    it('downscales a large image to 1024 px on the long edge before sending', async () => {
+        const { calls, service: svc } = fakeClient(modelReply);
+        await svc.analyzeSceneDepth({ image: png(2600, 1300) });
+        const sent = Buffer.from(calls[0].inlineData[0].data, 'base64');
+        expect(calls[0].inlineData[0].mimeType).toBe('image/jpeg');
+        expect(readImageDimensions(sent)).toEqual({ width: SCENE_DEPTH_MAX_EDGE_PX, height: 512 });
     });
 });

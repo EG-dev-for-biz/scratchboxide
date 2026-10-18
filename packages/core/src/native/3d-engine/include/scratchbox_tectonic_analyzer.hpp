@@ -50,9 +50,8 @@ using geometry::ScratchboxMesh;
 
 struct ElevationDatum {
     float y = 0.0f;
-    std::string label;
-    float confidence = 0.0f;
-    float area = 0.0f;
+    std::string label;   // which histogram event found it (geometric, not a building-part name)
+    float density = 0.0f; // smoothed normalized vertex density at y
 };
 
 struct TectonicElevationProfile {
@@ -143,7 +142,7 @@ public:
         for (int i = 0; i < numBins; ++i) {
             if (smoothed[i] > 0.15f) {
                 profile.groundElevation = binY[i];
-                profile.detectedDatums.push_back({ binY[i], "Stylobate Ground Datum", smoothed[i], smoothed[i] });
+                profile.detectedDatums.push_back({ binY[i], "ground: first bin above density 0.15", smoothed[i] });
                 break;
             }
         }
@@ -157,7 +156,7 @@ public:
                 float relY = y - profile.groundElevation;
                 if (relY > 1.5f && relY < profile.totalHeight - 1.0f) {
                     profile.storyElevations.push_back(y);
-                    profile.detectedDatums.push_back({ y, "Storey / Cornice Datum", smoothed[i], smoothed[i] });
+                    profile.detectedDatums.push_back({ y, "ledge: local density peak", smoothed[i] });
                 }
             }
 
@@ -165,12 +164,12 @@ public:
             if (d2[i - 1] > 0.0f && d2[i + 1] < 0.0f && smoothed[i] > 0.25f) {
                 float y = binY[i];
                 profile.springlines.push_back(y);
-                profile.detectedDatums.push_back({ y, "Arch Springline", 0.75f, smoothed[i] });
+                profile.detectedDatums.push_back({ y, "inflection: density curvature + to -", smoothed[i] });
             }
         }
 
         // Attic crown detection
-        profile.detectedDatums.push_back({ maxY, "Attic Crown / Roofline", 1.0f, smoothed.back() });
+        profile.detectedDatums.push_back({ maxY, "top: highest vertex", smoothed.back() });
 
         return profile;
     }
@@ -279,7 +278,7 @@ struct TectonicFootprint {
     float majorDimension = 0.0f;     // Primary length or major axis diameter 2*a (meters)
     float minorDimension = 0.0f;     // Secondary width or minor axis diameter 2*b (meters)
     float orientationYawRad = 0.0f;  // Heading rotation angle about Y axis (radians)
-    bool isElliptical = false;       // True if structure fits elliptical amphitheater geometry
+    bool isElliptical = false;       // True if the plan points fit an ellipse (mean residual < 0.18)
     float eccentricity = 0.0f;       // Ellipse eccentricity e = sqrt(1 - (b/a)^2)
     float perimeter = 0.0f;          // Estimated perimeter (meters)
     float groundFootprintArea = 0.0f;// Area in m^2
@@ -401,31 +400,24 @@ public:
 };
 
 // ============================================================================
-// 4. HIGH-LEVEL TECTONIC STRUCTURAL CLASSIFIER & INVERSION
+// 4. TECTONIC MEASUREMENT REPORT
 // ============================================================================
-
-enum class TectonicStructureType {
-    Amphitheater,       // Elliptical tiered multi-story arcade (Colosseum)
-    TriumphalArch,      // Tri-fornix or mono-fornix monument (Arch of Constantine)
-    PeripteralTemple,   // Rectangular peristyle colonnade with pediment
-    BasilicaHall,       // Nave with side aisles and clerestory
-    AqueductArcade,     // Linear repeated tall arches on high piers
-    Rotunda,            // Cylindrical domed or conical monument (Meta Sudans / Pantheon)
-    Colonnade           // Linear portico / stoa of continuous columns
-};
+//
+// Measurements only: plan footprint, elevation datums and bay rhythm, all
+// computed from the mesh. There is deliberately no structure-type label or
+// confidence score here: naming what a building "is" belongs to the caller
+// (or the LLM), not to a fixed list of Roman monument types with constant
+// confidences.
 
 struct TectonicAnalysisReport {
-    TectonicStructureType structureType = TectonicStructureType::TriumphalArch;
-    std::string classificationName;
     TectonicFootprint footprint;
     TectonicElevationProfile elevationProfile;
     BayRhythmAnalysis bayRhythm;
-    float confidence = 0.0f;
 };
 
-class TectonicStructureClassifier {
+class TectonicMeasurementAnalyzer {
 public:
-    static TectonicAnalysisReport classify(const ScratchboxMesh& mesh) {
+    static TectonicAnalysisReport analyze(const ScratchboxMesh& mesh) {
         TectonicAnalysisReport report;
         std::vector<Vec3> points;
         points.reserve(mesh.vertices.size());
@@ -436,7 +428,7 @@ public:
         report.footprint = PlanFootprintFitter::fit(points);
         report.elevationProfile = ElevationHistogram::analyzePoints(points);
 
-        // Analyze bay rhythm across middle height
+        // Bay rhythm across a 3 m band at 45% of the measured height
         float midY = report.elevationProfile.groundElevation + report.elevationProfile.totalHeight * 0.45f;
         report.bayRhythm = BayRhythmAutocorrelation::analyze(
             points,
@@ -444,38 +436,6 @@ public:
             report.footprint.center.x + report.footprint.majorDimension * 0.5f,
             midY - 1.5f, midY + 1.5f
         );
-
-        // Classification heuristics
-        if (report.footprint.isElliptical && report.footprint.majorDimension > 80.0f) {
-            report.structureType = TectonicStructureType::Amphitheater;
-            report.classificationName = "Roman Amphitheater (Flavian Elliptical Arcade)";
-            report.confidence = 0.95f;
-        } else if (report.footprint.isElliptical && report.footprint.majorDimension <= 50.0f &&
-                   (report.footprint.minorDimension / std::max(1e-4f, report.footprint.majorDimension)) > 0.80f) {
-            report.structureType = TectonicStructureType::Rotunda;
-            report.classificationName = "Monumental Rotunda / Conical Fountain (Meta Sudans Class)";
-            report.confidence = 0.91f;
-        } else if (report.footprint.majorDimension < 40.0f && report.footprint.minorDimension < 15.0f &&
-                   report.elevationProfile.totalHeight > 15.0f && report.elevationProfile.totalHeight < 30.0f) {
-            report.structureType = TectonicStructureType::TriumphalArch;
-            report.classificationName = "Triple-Fornix Triumphal Arch (Arch of Constantine Class)";
-            report.confidence = 0.92f;
-        } else if (report.footprint.majorDimension > report.footprint.minorDimension * 3.5f) {
-            if (report.elevationProfile.totalHeight <= 18.0f) {
-                report.structureType = TectonicStructureType::Colonnade;
-                report.classificationName = "Linear Roman Colonnade / Portico";
-                report.confidence = 0.88f;
-            } else {
-                report.structureType = TectonicStructureType::AqueductArcade;
-                report.classificationName = "Linear Roman Arcade / Aqueduct";
-                report.confidence = 0.85f;
-            }
-        } else {
-            report.structureType = TectonicStructureType::PeripteralTemple;
-            report.classificationName = "Classical Colonnaded Structure";
-            report.confidence = 0.78f;
-        }
-
         return report;
     }
 };

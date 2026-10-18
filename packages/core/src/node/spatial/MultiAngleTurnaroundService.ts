@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { mapBounded } from '../../common/async/bounded-concurrency';
 import * as fs from 'fs';
 import * as path from 'path';
 import { IMAGE_MODEL_PRIORITY, SkippedMediaModel, describeModelUsed, resolveImageModelId, resolveRequestedModels } from '../../common/media-generation-protocol';
@@ -78,6 +79,15 @@ export interface MultiAngleCaptureOptions {
     signal?: AbortSignal;
     /** Progress after each captured station (fraction 0..1). */
     onProgress?: (fraction: number, message: string) => void;
+    /**
+     * How later stations are conditioned. 'hero-parallel' (default): station 0 first, then every other station at
+     * once, each conditioned on the hero view only; wall time ~ two image calls whatever the rig size. 'chained':
+     * one station at a time, each conditioned on the hero view and the previous view; slower (one call per
+     * station, in order) but neighbouring views share more detail, as each sees the view next to it. The trade-off
+     * is consistency between adjacent non-hero views (chained is tighter) against wall time (parallel is ~N/2x
+     * faster for an N-station rig).
+     */
+    conditioning?: 'hero-parallel' | 'chained';
 }
 
 /** Injected collaborators (tests pass fakes; production uses Google Gen AI credentials and Fal.ai). */
@@ -107,6 +117,8 @@ export interface MultiAngleCaptureResult {
     subject: string;
     rigPreset: string;
     stylePreset: string;
+    /** How the views after the hero were conditioned (see MultiAngleCaptureOptions.conditioning). */
+    conditioning: 'hero-parallel' | 'chained';
     views: CapturedView[];
     /** The image model that produced every view. */
     modelUsed: string;
@@ -296,8 +308,9 @@ export class MultiAngleTurnaroundService {
     }
 
     /**
-     * Captures every station with an image model: station 0 from the prompt alone, later stations conditioned on
-     * the hero view and the previous view. The first model that answers produces every view (one model per rig
+     * Captures every station with an image model: station 0 from the prompt alone, then (default 'hero-parallel')
+     * every later station at once conditioned on the hero view, or ('chained') one at a time conditioned on the hero
+     * view and the previous view. The first model that answers produces every view (one model per rig
      * keeps the subject consistent). With downstreamTarget 'trellis-fal' the views then go to Trellis on Fal.ai.
      * Any step that cannot do its job throws (MissingInputError, MediaModelUnavailableError,
      * GeneratorFailedError); no placeholder image or mesh is written in its place.
@@ -334,22 +347,22 @@ export class MultiAngleTurnaroundService {
         const stopIfAborted = () => {
             if (options.signal?.aborted) throw mediaRequestAborted();
         };
-        for (const station of stations) {
-            stopIfAborted();
+        const conditioning = options.conditioning ?? 'hero-parallel';
+        const captureStation = async (station: typeof stations[number], references: CapturedView[], signal?: AbortSignal): Promise<CapturedView> => {
+            if (signal?.aborted) throw mediaRequestAborted();
             const { positive, negative } = MultiAngleTurnaroundService.buildPrompt(
                 options.subject,
                 station,
                 stylePreset,
                 isolation
             );
-            const references = station.referenceStationIndices.map(i => capturedViews[i]);
             const contents = [
                 { text: `${positive} Avoid: ${negative}.` },
                 ...references.map(view => ({ inlineData: { data: view.buffer.toString('base64'), mimeType: view.mimeType } }))
             ];
             let answer;
             try {
-                answer = await generateImageWithModels(client, { models, contents, imageConfig: { aspectRatio: '1:1' }, signal: options.signal });
+                answer = await generateImageWithModels(client, { models, contents, imageConfig: { aspectRatio: '1:1' }, signal });
             } catch (err) {
                 // Model failures gain the station name; any other error (a bug, a local failure) propagates as it is.
                 throw withMediaFailureContext(err, `station ${station.label}`);
@@ -363,8 +376,9 @@ export class MultiAngleTurnaroundService {
             const filename = `turnaround_${station.stationIndex.toString().padStart(2, '0')}_${station.label}.${extensionFor(answer.mimeType)}`;
             const filePath = path.join(outputDir, filename);
             await fs.promises.writeFile(filePath, answer.data);
-
-            capturedViews.push({
+            done++;
+            options.onProgress?.(done / stations.length, `Captured station ${station.label} (${done}/${stations.length}) with ${answer.modelUsed}`);
+            return {
                 stationIndex: station.stationIndex,
                 label: station.label,
                 azimuthDeg: station.azimuthDeg,
@@ -375,8 +389,20 @@ export class MultiAngleTurnaroundService {
                 mimeType: answer.mimeType,
                 generatedBy: answer.modelUsed,
                 buffer: answer.data
-            });
-            options.onProgress?.(capturedViews.length / stations.length, `Captured station ${station.label} (${capturedViews.length}/${stations.length}) with ${answer.modelUsed}`);
+            };
+        };
+        let done = 0;
+        if (conditioning === 'chained') {
+            for (const station of stations) {
+                stopIfAborted();
+                capturedViews.push(await captureStation(station, station.referenceStationIndices.map(i => capturedViews[i]), options.signal));
+            }
+        } else if (stations.length > 0) {
+            // The hero view fixes the model and is the one reference every other station is drawn from.
+            stopIfAborted();
+            const hero = await captureStation(stations[0], [], options.signal);
+            capturedViews.push(hero);
+            capturedViews.push(...await mapBounded(stations.slice(1), (station, _i, signal) => captureStation(station, [hero], signal), { signal: options.signal }));
         }
 
         let downstreamGlb: MultiAngleCaptureResult['downstreamGlb'] = undefined;
@@ -417,6 +443,7 @@ export class MultiAngleTurnaroundService {
             subject: options.subject,
             rigPreset,
             stylePreset,
+            conditioning,
             views: capturedViews,
             modelUsed: used,
             skippedModels,

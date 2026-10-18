@@ -107,7 +107,6 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - **`gaussian-ply-codec`** (`packages/core/src/common/gaussian-ply-codec.ts`): High-speed binary PLY encoder/decoder supporting Spherical Harmonics degree 0-3, scale, rotation quaternions, and opacity.
 - **`NerfstudioDatasetService`** (`packages/core/src/node/spatial/NerfstudioDatasetService.ts`): Universal interchange serializer (`transforms.json`, `sparse_pcd.ply`, `images/`, `masks/`) with OpenGL $\leftrightarrow$ OpenCV coordinate transform matrices and visual-hull voxel carving.
 - **`SplatService`** & **`ImageToSplatService`** (`packages/core/src/node/3d-engine/splat-service.ts`): 3D Gaussian Splatting conversion, PLY optimization, and viewing utilities.
-- **`Depthbox360UniverseService`** (`packages/core/src/node/3d-engine/depthbox-360-universe-service.ts`): Multi-layer 360° spherical depth splatting for immersive backgrounds.
 
 ### Universal Tile Decomposition & Mesh Engineering (UTDRA / ULDRA)
 - **`UniversalTileDecompositionService`** (`packages/core/src/node/3d-engine/universal-tile-decomposition-service.ts`):
@@ -324,113 +323,55 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 
 ## 3. Direct-Dispatch Canvas Operators (Three.js Stage Engine)
 
-Over 60 real-time operators executed via `DirectDispatchOperatorEngine` in `packages/core/src/browser/generative-canvas/services/operators/`:
+Operators dispatched through `DirectDispatchOperatorEngine` (packages/core/src/browser/generative-canvas/services/direct-dispatch-operator-engine.ts; packs in `services/operators/`). An operator either does its work or fails: geometry operators marked **(live)** edit the mesh in the attached Three.js viewport and fail with `errorCode: 'not_available_here'` when none is attached (the server-side `scene_3d_dispatch_operators` tool runs on scene data only). Features without a backend were removed from the registry rather than kept as flags.
 
 ### Inspect Operators
-- `sb_list_objects`: Enumerates all scene meshes and media objects.
-- `sb_inspect_object`: Detailed inspection of transforms, materials, and geometry.
-- `sb_inspect_scene`: Overall scene graph and memory audit.
-- `sb_get_mesh_stats`: Vertex count, triangle count, and bounding box dimensions.
+- `sb_list_objects`, `sb_inspect_object`, `sb_inspect_scene`: Scene data readout (meshes, media objects, transforms, materials, physics, keyframes).
+- `sb_get_mesh_stats` **(live)**: Measured vertex/face/edge counts, boundary and non-manifold edges, bounds, surface area, watertight check, and volume when closed.
+- `sb_raycast_mesh` **(live)**: Nearest ray-triangle hit (point, distance, world face normal, face, mesh) via `THREE.Raycaster`.
+- `sb_compute_halfedge_curvature` **(live)**: Per-vertex principal-curvature estimate summarised as min/max/mean.
 
 ### Transform Operators
-- `sb_set_transform`, `sb_translate`, `sb_rotate`, `sb_scale`: Direct spatial manipulation.
-- `sb_apply_transforms`: Bakes matrix transformations into vertex buffers.
-- `sb_set_origin`: Centers or repositions mesh origin pivots.
-- `sb_set_tile_anchor`: Anchors geometry to real-world geodetic coordinates.
-- `sb_snap_to_terrain`: Raycasts and snaps objects to underlying ground meshes.
+- `sb_set_transform`, `sb_translate`, `sb_rotate`, `sb_scale`: Spatial manipulation of an existing object (an unknown id fails).
+- `sb_set_origin` **(live)**: Moves the pivot to the bounds center, bottom, top, or a custom local point; the mesh stays in place.
+- `sb_set_tile_anchor`: Sets the scene's geodetic anchor.
+- `sb_snap_to_terrain` **(live)**: Raycasts objects onto the ground (one TerrainManager per viewport scene).
 
-### Mesh Edit & Procedural Geometry Operators
-- `sb_subdivide_mesh`: Catmull-Clark / planar subdivision.
-- `sb_extrude_faces`: Extrudes polygons along normals.
-- `sb_boolean_op`: CSG union, intersection, and subtraction.
-- `sb_smooth_mesh`: Laplacian surface smoothing.
-- `sb_deform_vertices`: Analytical noise deformation.
-- `sb_taper_mesh`, `sb_twist_mesh`, `sb_bend_mesh`: Non-linear geometric deformers.
-- `sb_lattice_deform`: Free-form deformation via 3D bounding lattices.
-- `sb_sculpt_stroke`: Real-time digital sculpting brushes (clay, smooth, inflate, flatten).
-- `sb_loop_subdivide`: Loop subdivision for triangle surfaces.
-- `sb_loft_mesh`, `sb_lathe_mesh`: Generates geometry from 2D splines.
-- `sb_repair_mesh`: Manifold healing and duplicate vertex welding.
-- `sb_reshape_mesh`: Native C++ Astro engine deformation hook.
-- `sb_add_mesh`: Injects standard primitives (box, cylinder, sphere, torus).
+### Mesh Edit Operators (live)
+- `sb_subdivide_mesh`: Midpoint subdivision (shape and uvs kept), `sb_loop_subdivide`: Loop subdivision.
+- `sb_smooth_mesh`: Laplacian smoothing with fixed boundaries.
+- `sb_deform_vertices`, `sb_taper_mesh`, `sb_twist_mesh`, `sb_bend_mesh`, `sb_lattice_deform`, `sb_reshape_mesh`: Deformers.
+- `sb_sculpt_stroke`: Sculpt brushes (grab, clay, inflate, flatten, pinch, crease, smooth).
+- `sb_repair_mesh`: Removes collapsed and repeated faces, makes winding consistent, recomputes normals.
+- `sb_refine_building_structure`: Archie facade-normal and plinth refinement of a named scanned building.
 
-### Particle & Physical Simulation Operators
-- `sb_spawn_particle_emitter`: Spawns GPU particle systems.
-- `sb_simulate_particles`: Advances particle velocity, drag, and curl noise.
-- `sb_add_force_field`: Injects wind, vortex, and gravity fields.
-- `sb_add_particle_collider`: Bounding box and mesh surface particle colliders.
-- `sb_bake_particle_cache`: Bakes particle trajectories to disk.
-- `sb_add_physics`: Rigid body collision hulls and mass properties.
-- `sb_insert_keyframe`: Timeline track keyframing.
+### Physics & Animation Operators
+- `sb_add_physics`: Rigid body config read by the viewport animation runtime (gravity and ground contact).
+- `sb_insert_keyframe`: Property keyframes interpolated by the viewport each frame.
 
-### Material & PBR Shading Operators
-- `sb_create_material`, `sb_assign_material`: Material creation and assignment.
-- `sb_set_material_pbr`: Albedo, roughness, metalness, normal scales.
-- `sb_set_pbr_clearcoat`, `sb_set_pbr_transmission`, `sb_set_pbr_sheen`, `sb_set_pbr_anisotropy`: Advanced optical extensions.
-- `sb_assign_pbr_preset`: High-fidelity presets (metals, glass, stone, skin, fabric).
-- `sb_bake_pbr_maps`: Bakes procedural textures to texture maps.
-- `sb_set_clay_mode`: Toggles studio clay rendering.
-- `sb_generate_pbr_texture_set`: Generates complete PBR map packages.
-- `sb_pack_orm_map`: Packs Occlusion, Roughness, and Metallic channels.
-- `sb_apply_pbr_texture_pack`: Binds complete texture packs.
-- `sb_layer_pbr_material`: Multi-material blending via curvature or vertex masks.
+### Material & PBR Operators
+- `sb_create_material`, `sb_assign_material`, `sb_assign_pbr_preset`: Material registry, assignment, presets.
+- `sb_set_material_pbr`, `sb_set_pbr_clearcoat`, `sb_set_pbr_transmission`: Rendered PBR properties.
+- `sb_set_clay_mode`: Studio clay rendering. `sb_set_staged_material_mode`: Staged-build material mode and provenance view.
+- `sb_apply_slope_materials` **(live)**: Slope-ramped PBR on named terrain meshes.
+- `sb_synthesize_differential_wear`, `sb_apply_thin_film_interference`, `sb_apply_subsurface_scattering` **(live)**: Vertex-color edge wear, physical iridescence, transmission plus directional back-scatter.
 
 ### Lighting & Camera Operators
-- `sb_setup_lighting`: Key, fill, rim, and ambient lighting rigs.
-- `sb_set_camera`: Camera position, look-at target, FOV, and clip planes.
-- `sb_frame_bounds`: Fits camera framing to selected bounding box.
-- `sb_setup_cinematic_lighting`: Multi-light cinematic studio configuration.
-- `sb_setup_lighting_rig`: Parametric studio lighting rigs.
-- `sb_add_light`: Adds directional, point, or spot lights.
-- `sb_optimize_light_budget`: Culls non-contributing lights for 60 FPS performance.
-- `sb_configure_photometric_light`: Configures lights in physical lumens and candelas.
+- `sb_setup_lighting`: Lighting preset, skybox, kelvin, ambient level, opt-in atmosphere and god rays.
+- `sb_setup_lighting_rig`: Named cinematic rig (`environment.cinematicRig`).
+- `sb_set_camera`, `sb_frame_bounds`: Camera pose; framing from live bounds or customMesh shapes.
+- `sb_optimize_light_budget` **(live)**: Render budget telemetry; optional shadow-caster trimming.
 
 ### Nature & Atmosphere Operators
-- `sb_apply_triplanar_material`: Seamless triplanar mapping for cliffs and rock faces.
-- `sb_set_subsurface_scattering`: Translucency for leaves and skin.
-- `sb_add_volumetric_fog`: Exponential height fog.
-- `sb_generate_l_system_vegetation`: Algorithmic branching plants.
-- `sb_generate_biome_terrain`: Procedural multi-biome terrain generation.
-- `sb_transfer_foliage_normals`: Normal sphericalization for fluffy tree canopies.
-- `sb_generate_detailed_foliage`: Instanced grass and foliage scatter.
-- `sb_configure_atmospheric_scattering`: Physical Rayleigh and Mie scattering parameters.
-- `sb_set_diurnal_time_of_day`: Solar time adjustments via presets or NOAA geodetic coordinates.
-- `sb_configure_aerial_perspective`: Distance haze extinction curves.
-- `sb_configure_terrain_cloud_shadows`: Cloud shadow advection and softness.
-- `sb_add_volumetric_god_rays`: Crepuscular light rays.
-- `sb_set_cpp_generator`: Links C++ procedural generators to the live scene.
+- `sb_configure_atmospheric_scattering`, `sb_set_diurnal_time_of_day`, `sb_configure_aerial_perspective`, `sb_configure_terrain_cloud_shadows`, `sb_add_volumetric_god_rays`: Atmosphere settings read by the viewport sky dome (sun position from a preset, an elevation, or NOAA ephemeris at a location).
+- `sb_set_cpp_generator`: Links a C++ generator to the scene.
 
-### Advanced Realism Operators
-- `sb_decimate_mesh_qem`: Quadric Error Metric mesh simplification.
-- `sb_compute_halfedge_curvature`: Mean and Gaussian surface curvature fields.
-- `sb_generate_mikktspace_tangents`: Standard MikkTSpace tangent calculation for normal mapping.
-- `sb_unwrap_mesh_uvs`: UV unwrapping with area distortion minimization.
-- `sb_setup_image_based_lighting`: HDRI / EXR image-based environment lighting.
-- `sb_apply_aces_tonemapping` & `sb_apply_agx_tonemapping`: Production color grading transforms.
-- `sb_build_mesh_bvh`: Linear BVH trees for accelerated raycasting.
-- `sb_raycast_mesh`: High-speed ray-triangle intersection.
-- `sb_simulate_rigidbody_physics`: Real-time rigid body dynamics.
-- `sb_simulate_xpbd_cloth`: Extended Position Based Dynamics cloth simulation.
-- `sb_generate_lod_pyramid`: Automatic geometric LOD generation.
-- `sb_generate_hair_strands` & `sb_simulate_hair_dynamics`: Physical hair curves and aerodynamics.
-- `sb_simulate_fabric_aerodynamics`: Wind-responsive cloth and banners.
-- `sb_create_ragdoll_simulation`: Articulated ragdoll physics.
-- `sb_apply_weighted_normals`: Area-weighted vertex normal computation.
-- `sb_synthesize_differential_wear`: Edge cavity wear and dust accumulation.
-- `sb_simulate_geomorphological_erosion`: Thermal and hydraulic hydraulic terrain erosion.
-- `sb_transfer_canopy_normals`: Canopy normal smoothing.
-- `sb_apply_thin_film_interference`: Soap bubble and iridescent oil sheen shaders.
-- `sb_synthesize_moisture_runoff`: Vertical rain drip and moisture streaking.
-- `sb_apply_normal_bevel`: Normal-map edge rounding.
-- `sb_apply_subsurface_scattering`: Dipole and random walk subsurface scattering.
+### Mesh Modifiers (live)
+- `sb_apply_weighted_normals`, `sb_apply_normal_bevel`, `sb_transfer_canopy_normals`: Shading-normal edits.
+- `sb_simulate_geomorphological_erosion`: Height erosion over welded neighbourhoods. `sb_synthesize_moisture_runoff`: Moisture darkening in vertex colors.
 
-### State & Modifiers
-- `sb_add_modifier`, `sb_apply_modifier`, `sb_remove_modifier`: Stackable non-destructive modifier pipeline.
-- `sb_undo`, `sb_redo`, `sb_reset_scene`: Transactional state history navigation.
-- `sb_compose_scene_hierarchy`: Hierarchical parenting and grouping.
-- `sb_scatter_props`: Poisson-disk asset distribution across surfaces.
-- `sb_bake_curvature_ao`: Ambient occlusion baking.
-- `sb_apply_multi_layer_weathering`: Grime, soot, and patina accumulation.
+### State
+- `sb_undo`, `sb_redo`, `sb_reset_scene`: History navigation (one dispatch is one step; the shared viewport timeline when attached).
 
 ---
 
@@ -452,7 +393,6 @@ Hosted by the desktop application server in `desktop-app/server/app.ts`:
 | `/api/3d/pbr` | `pbrRouter` | Universal PBR texture baking, Toksvig coupling, material synthesis |
 | `/api/3d/survey` | `createSurveyRouter` | Survey camera station synthesis, ranking, and beautification |
 | `/api/3d/ar` | `arRouter` | WebXR geospatial anchor alignment, WGS-84 coordinate transforms |
-| `/api/3d-engine/depthbox-360` | `depthbox360Router` | 360° spherical depth splatting and camera projection |
 | `/api/panorama` | `panoramaRouter` | Seam healing, ground inpainting, 4K synthesis, zenith reprojection |
 | `/api/3d-engine/splat-studio` | `splatStudioRouter` | Gaussian splatting editing, bounding crops, PLY exporting |
 | `/api/tools` | `toolsRouter` | Dynamic tools registry, tool execution, schema reflection |
@@ -519,7 +459,7 @@ Hosted by the desktop application server in `desktop-app/server/app.ts`:
 51. **`scratchbox_geospatial.hpp`**: WGS-84 reference ellipsoid geodetic conversions to ECEF and ENU.
 52. **`scratchbox_footprints.hpp`**: 2D building footprint polygon extrusion into volumetric massing.
 53. **`scratchbox_tectonics.hpp`**: Structural tectonic load-path analysis for architectural shells.
-54. **`scratchbox_tectonic_analyzer.hpp`**: Classifies entablatures, columns, and vaults.
+54. **`scratchbox_tectonic_analyzer.hpp`**: Measures plan footprint, elevation datums and bay rhythm of a mesh (no structure-type labels).
 55. **`scratchbox_architecture.hpp`**: Procedural classical architectural orders (Doric, Ionic, Corinthian).
 56. **`scratchbox_sb_archi.hpp`**: Monumental arch and column generation.
 57. **`scratchbox_sb_archi_optimizer.hpp`**: Inverse architectural parameter fitting.

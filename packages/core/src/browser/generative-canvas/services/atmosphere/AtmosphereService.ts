@@ -25,7 +25,7 @@ import {
     AtmosphericEstimationResult
 } from './atmosphere-types';
 import { AtmosphereImageEstimationService } from './AtmosphereImageEstimationService';
-import { createAtmosphericSkyDome } from './AtmosphericSkyDome';
+import { createAtmosphericSkyDome, requireLocation } from './AtmosphericSkyDome';
 import {
     createAerialPerspectiveEffect,
     AerialPerspectiveEffect,
@@ -198,12 +198,14 @@ export class AtmosphereService {
      * Updates solar diurnal time of day (0.0 - 24.0 hours) with optional NOAA geographic coordinates.
      */
     public setDiurnalTimeOfDay(timeHours: number, lat?: number, lng?: number): void {
+        // The location is the one given, else the one configured; a time alone cannot place the sun.
+        const [latitude, longitude] = requireLocation('setDiurnalTimeOfDay', lat ?? this.config.latitude, lng ?? this.config.longitude);
         this.config.timeOfDay = timeHours;
-        if (lat !== undefined) this.config.latitude = lat;
-        if (lng !== undefined) this.config.longitude = lng;
+        this.config.latitude = latitude;
+        this.config.longitude = longitude;
 
         if (this.skyDomeModule) {
-            this.skyDomeModule.setTimeOfDay(timeHours, lat, lng);
+            this.skyDomeModule.setTimeOfDay(timeHours, latitude, longitude);
         }
     }
 

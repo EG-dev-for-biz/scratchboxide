@@ -155,7 +155,9 @@ export class TaskCapabilityResolver {
         // Trellis can be used to create discrete objects/props in a scene, but scenes themselves are created in codebase.
         const isSceneOrEnvironment = /scene|urban|city|district|world|environment|street|layout|architecture|building|floorplan|landscape|terrain/i.test(lower);
 
-        const isAnalyticalGroomSplat = /groom|hair\s*strand|fur(?:ry)?(?:\s+(?:creature|star|sphere|monster|animal|surface))?|biophysical\s*(?:hair|groom)|volumetric\s*fur|analytical\s*splat|splat[\s\w-]{0,30}groom|harmonic\s*(?:star|creature)|marschner/i.test(lower);
+        // Only naming the groom tool/service or the analytical forward-splat technique pre-loads it (ADA: no subject nouns
+        // such as hair, fur, star or creature route a task; the model picks the tool from its declaration).
+        const isAnalyticalGroomSplat = /\bsplat_synthesize_analytical_groom\b|\banalyticalgroomsplatservice\b|\banalytical\s+(?:forward\s+)?splat/i.test(lower);
 
         // Neural image-to-3D runs only when the user names it (AGENTS.md); object requests go to the model's own choice.
         const isLocalSf3DOrganicProp = /\b(?:sf3d|stable[\s-]fast[\s-]3d)\b/i.test(lower);
@@ -544,7 +546,7 @@ export class TaskCapabilityResolver {
             } else if (/atmosphere|lighting|rayleigh|mie|scattering|turbidity|sky\s*dome|aerial\s*perspective|god\s*rays|diurnal|kelvin|cloud\s*shadow|match\s*lighting|de-?light|delighting|harmonize\s*lighting|lighting[\s\w-]{0,30}3d\s*object|portal\s*fixture|window\s*(?:illumination|backlight)|gaffer|rembrandt|butterfly|film\s*noir|cinematic\s*light|photographic\s*light|key-?to-?fill|inverse\s*light/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'threejs-webgl';
-                nativeCapabilities.push('Photographic Gaffer Engine (LightingGafferService & sb_configure_gaffer_rig)');
+                nativeCapabilities.push('Photographic Gaffer Engine (LightingGafferService & lighting_configure_gaffer_rig)');
                 nativeCapabilities.push('Inverse Photometric Image Estimator (InverseLightingEstimatorService)');
                 nativeCapabilities.push('Closed-Loop Photometric Matchmove Optimizer (ClosedLoopLightingOptimizerService)');
                 nativeCapabilities.push('Atmosphere Service (AtmosphereService & AtmosphereImageEstimationService)');
@@ -673,14 +675,14 @@ export class TaskCapabilityResolver {
                 primaryNativeEngine = 'google-models';
                 nativeCapabilities.push('Nano Banana Color Transfer Pipeline (Method 2: Extract-then-Apply)');
                 nativeCapabilities.push('NanoBananaColorService (buildExtractPalettePrompt, parseExtractedPalette, buildApplyPalettePrompt)');
-                nativeCapabilities.push('nano_banana_apply_color_palette Agent Tool (geometry-locked color override prompt from a complete palette)');
-                rationale = 'Read the palette and lighting atmosphere from the reference image, then nano_banana_apply_color_palette builds the global color override prompt that applies it to the target image with strict non-negotiable geometry locking.';
+                nativeCapabilities.push('nano_banana_apply_color_palette Agent Tool (recolors the target image to a complete palette with an image model)');
+                rationale = 'Read the palette and lighting atmosphere from the reference image, then nano_banana_apply_color_palette recolors the target image to it with an image model, prompting it to keep the geometry unchanged.';
                 suggestedNativeAction = {
                     primitiveType: 'markdown-document',
                     serviceOrTool: 'NanoBananaColorService & nano_banana_apply_color_palette tool',
                     targetTool: 'nano_banana_apply_color_palette',
                     targetService: 'NanoBananaColorService',
-                    details: 'Read the reference palette, then invoke nano_banana_apply_color_palette with the complete palette to build the geometry-locked color override prompt.'
+                    details: 'Read the reference palette, then invoke nano_banana_apply_color_palette with the complete palette to recolor the target image.'
                 };
             } else if (/beautif|nano\s*banana[\s\w-]{0,30}(?:prompt|location)|buildbeautifyprompt/i.test(lower)) {
                 canSolveNatively = true;

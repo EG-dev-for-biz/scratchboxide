@@ -43,7 +43,7 @@ import {
 import type { McpBridge } from './mcp-bridge';
 import type { LensBridge } from './lens-bridge';
 import { buildContents, buildSystemInstruction, type PromptContextServices } from './prompt-builder';
-import { parseOrSynthesizeArtifact, withOpenArtifactRule } from './artifact-synthesis';
+import { buildPendingPythonGenerator, parseOrSynthesizeArtifact, withOpenArtifactRule } from './artifact-synthesis';
 import { AgentVerificationService } from './agent-verification-service';
 
 export type StreamEventSink = (event: GeminiStreamEvent) => void;
@@ -474,7 +474,7 @@ export class StreamingEngine {
             }
         });
 
-        const artifact = this.synthesizeArtifact(request.prompt, state.accumulatedText, request, []);
+        const artifact = await buildPendingPythonGenerator(this.synthesizeArtifact(request.prompt, state.accumulatedText, request, []), signal);
 
         const summary = {
             text: state.accumulatedText,
@@ -896,7 +896,7 @@ export class StreamingEngine {
         // mode. Synthesizing from prompt keywords (e.g. "World Cup" -> "world") invented documents and scenes the model
         // never wrote, so a prose reply leaves the canvas as it is.
         const artifact = streamMountedArtifact
-            || this.synthesizeArtifact(request.prompt, accumulatedText, request, mcpExecutions, accumulatedGroundingMetadata);
+            || await buildPendingPythonGenerator(this.synthesizeArtifact(request.prompt, accumulatedText, request, mcpExecutions, accumulatedGroundingMetadata), signal);
 
         const summary = {
             text: accumulatedText,

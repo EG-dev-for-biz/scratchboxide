@@ -3,15 +3,16 @@ name: local-sf3d-organic-director
 description: >-
   Generate, extract, and ground small organic 3D objects, props, and biomorphic forms (coral, rocks, fruit,
   mushrooms, seashells, bones, figurines, ornaments) using local Stable Fast 3D (SF3D) in no_pbr mode. Executes locally
-  on Apple Silicon (MPS) or desktop GPU in < 500ms with metric scale grounding, 18% Studio Grey Clay baseline,
-  and flat ground contact planes.
+  on Apple Silicon (MPS), CUDA or CPU with metric scale grounding, 18% Studio Grey Clay baseline,
+  and flat ground contact planes. Requires the stable-fast-3d package; if it is missing or fails, the tool
+  fails with a coded LocalSf3DError (no substitute mesh).
 ---
 
 # Local SF3D Organic Prop Director Skill
 
 The **Local SF3D Organic Prop Director Skill** equips AI agents to synthesize small organic objects, biomorphic props, and sculpted assets directly from single 2D photos or concept images using local Stable Fast 3D (SF3D). 
 
-By enforcing a dedicated **`no_pbr` mode**, the pipeline bypasses slow UV island parameterization and neural texture rasterization, dropping execution latency from over 1.2s to **under 450ms**, generating clean **18% Studio Grey Clay** geometry that integrates seamlessly into Scratchbox procedural scenes.
+In the default **`no_pbr` mode** the runner keeps SF3D's geometry and repacks it in **18% Studio Grey Clay** (SF3D's baked texture is dropped). SF3D must be installed in the Python environment (https://github.com/Stability-AI/stable-fast-3d); when it is not, or the model fails, the runner exits non-zero and `LocalSf3DService` throws `LocalSf3DError` with a code such as `SF3D_NOT_INSTALLED` or `SF3D_RUN_FAILED`. Vertex/triangle counts and bounds are read from the written GLB.
 
 ---
 
@@ -42,7 +43,7 @@ By enforcing a dedicated **`no_pbr` mode**, the pipeline bypasses slow UV island
                         │
       ┌─────────────────┴─────────────────┐
       │  no_pbr Mode (Default Baseline)   │
-      │  BYPASS UVs & Texture Baking!     │
+      │  Keep geometry, repack as clay    │
       └─────────────────┬─────────────────┘
                         ▼
      [Metric Rescaler & Contact Plane Snap]
@@ -55,7 +56,6 @@ By enforcing a dedicated **`no_pbr` mode**, the pipeline bypasses slow UV island
     - Magic header: 0x46546C67 ("glTF")
     - 18% Studio Grey Clay PBR Material
       (baseColor: [0.55, 0.57, 0.60], roughness: 0.85)
-    - Execution time: < 450ms
                         │
                         ▼
           [Mount into 3d-scene Stage]
@@ -66,9 +66,8 @@ By enforcing a dedicated **`no_pbr` mode**, the pipeline bypasses slow UV island
 ## 2. Why `no_pbr` is the Architectural Baseline
 
 When generating props for procedural scenes:
-1. **60% Latency Reduction**: In neural reconstruction, computing UV layouts (via `xatlas`) and differentiable texture rasterization account for the majority of execution time. Skipping them drops inference latency to **~350–450ms**.
-2. **Scratchbox Clay Invariant**: Untextured grey clay matches Scratchbox's mandatory **18% Studio Grey Clay Baseline**, preventing baked lighting artifacts, noisy photogrammetry seams, and blurry neural projections.
-3. **Decoupled PBR Materials**: After geometry extraction, Scratchbox's native C++ PBR engine ([`adaptive-material-pbr-service.ts`](file:///Users/eligreen/dev/scratchbox-ide-master/packages/core/src/node/3d-engine/adaptive-material-pbr-service.ts), [`scratchbox_pbr.hpp`](file:///Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_pbr.hpp)) can compute analytical curvature, cavity ambient occlusion, and sun-ephemeris lighting on top of the clean mesh.
+1. **Scratchbox Clay Invariant**: Untextured grey clay matches Scratchbox's mandatory **18% Studio Grey Clay Baseline**, preventing baked lighting artifacts, noisy photogrammetry seams, and blurry neural projections.
+2. **Decoupled PBR Materials**: After geometry extraction, Scratchbox's native C++ PBR engine ([`adaptive-material-pbr-service.ts`](file:///Users/eligreen/dev/scratchbox-ide-master/packages/core/src/node/3d-engine/adaptive-material-pbr-service.ts), [`scratchbox_pbr.hpp`](file:///Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_pbr.hpp)) can compute analytical curvature, cavity ambient occlusion, and sun-ephemeris lighting on top of the clean mesh.
 
 ---
 
@@ -99,7 +98,7 @@ Agents can invoke local SF3D directly via Gemini Function Calling:
 | :--- | :--- | :--- | :--- |
 | `imagePath` | `string` | **Required** | Local filesystem path to the input photograph or 2D image. |
 | `outputGlbPath` | `string` | *Auto* | Optional destination file path for the binary `.glb`. |
-| `noPbr` | `boolean` | `true` | Bypasses UV unwrapping and neural texture baking for 18% Studio Grey Clay in $< 500\text{ms}$. |
+| `noPbr` | `boolean` | `true` | Keeps SF3D's geometry only, repacked in 18% Studio Grey Clay; `false` exports SF3D's textured mesh. |
 | `targetScaleMeters` | `number` | `0.35` | Major bounding axis scale in meters (e.g. 0.15m for a seashell, 0.40m for a coral head). |
 | `groundCut` | `boolean` | `true` | Snaps base vertices to $Y=0$, creating a perfectly flat contact plane for physical staging. |
 | `remeshOption` | `string` | `'none'` | `'none'` (fastest raw geometry), `'triangle'` (Botsch isotropic), or `'quad'` (4-RoSy Instant Field-Aligned quads). |

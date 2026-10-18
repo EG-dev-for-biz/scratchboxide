@@ -13,11 +13,57 @@ import {
     AdaptiveMatchmoveCalibrationService,
     SpatialAnchorCorrespondence
 } from '../src/node/spatial/AdaptiveMatchmoveCalibrationService';
-import { MEDIAPIPE_LANDMARK_INDEX } from '../src/common/character-pose-protocol';
+import { MEDIAPIPE_LANDMARK_INDEX, MediaPipeLandmark } from '../src/common/character-pose-protocol';
+import { GeneratorFailedError, MissingInputError } from '../src/common/errors/pipeline-errors';
+import type { MediaPipePoseService } from '../src/node/spatial/MediaPipePoseService';
 import {
     adaptiveMatchmoveHandlers,
     ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS
 } from '../src/node/gemini/tools/adaptive-matchmove-tools';
+
+/**
+ * Test fixture: a standing body in MediaPipe world space (Y down, hip at 0, about 1.8 m tall) and its
+ * projection through a 35 degree lens from [0, 1.2, 3.2] onto a 1920x1080 plate. Test data only; the
+ * service never substitutes a body when detection fails.
+ */
+function fixtureBodyLandmarks(): { worldLandmarks: MediaPipeLandmark[]; imageLandmarks: MediaPipeLandmark[] } {
+    const I = MEDIAPIPE_LANDMARK_INDEX;
+    const world: MediaPipeLandmark[] = Array.from({ length: 33 }, () => ({ x: 0, y: 0, z: 0, visibility: 0.95 }));
+    const set = (idx: number, x: number, y: number, z: number) => { world[idx] = { x, y, z, visibility: 0.95 }; };
+    set(I.NOSE, 0.0, -0.74, -0.10);
+    set(I.LEFT_EYE_INNER, 0.02, -0.78, -0.09); set(I.LEFT_EYE, 0.04, -0.78, -0.09); set(I.LEFT_EYE_OUTER, 0.06, -0.78, -0.08);
+    set(I.RIGHT_EYE_INNER, -0.02, -0.78, -0.09); set(I.RIGHT_EYE, -0.04, -0.78, -0.09); set(I.RIGHT_EYE_OUTER, -0.06, -0.78, -0.08);
+    set(I.LEFT_EAR, 0.09, -0.75, -0.02); set(I.RIGHT_EAR, -0.09, -0.75, -0.02);
+    set(I.MOUTH_LEFT, 0.03, -0.70, -0.08); set(I.MOUTH_RIGHT, -0.03, -0.70, -0.08);
+    set(I.LEFT_SHOULDER, 0.22, -0.52, 0.0); set(I.RIGHT_SHOULDER, -0.22, -0.52, 0.0);
+    set(I.LEFT_ELBOW, 0.28, -0.24, 0.04); set(I.RIGHT_ELBOW, -0.28, -0.24, 0.04);
+    set(I.LEFT_WRIST, 0.26, 0.06, 0.08); set(I.RIGHT_WRIST, -0.26, 0.06, 0.08);
+    set(I.LEFT_PINKY, 0.28, 0.12, 0.09); set(I.RIGHT_PINKY, -0.28, 0.12, 0.09);
+    set(I.LEFT_INDEX, 0.26, 0.14, 0.09); set(I.RIGHT_INDEX, -0.26, 0.14, 0.09);
+    set(I.LEFT_THUMB, 0.24, 0.10, 0.08); set(I.RIGHT_THUMB, -0.24, 0.10, 0.08);
+    set(I.LEFT_HIP, 0.13, 0.0, 0.0); set(I.RIGHT_HIP, -0.13, 0.0, 0.0);
+    set(I.LEFT_KNEE, 0.14, 0.44, 0.02); set(I.RIGHT_KNEE, -0.14, 0.44, 0.02);
+    set(I.LEFT_ANKLE, 0.14, 0.86, 0.0); set(I.RIGHT_ANKLE, -0.14, 0.86, 0.0);
+    set(I.LEFT_HEEL, 0.14, 0.90, -0.05); set(I.RIGHT_HEEL, -0.14, 0.90, -0.05);
+    set(I.LEFT_FOOT_INDEX, 0.14, 0.91, 0.12); set(I.RIGHT_FOOT_INDEX, -0.14, 0.91, 0.12);
+
+    const lowest = Math.max(...world.map(w => w.y));
+    const lens = { fovYDeg: 35.0, aspectRatio: 16 / 9, k1: 0.0, k2: 0.0, scale: 1.0 };
+    const image = world.map(w => {
+        const [u, v] = AdaptiveMatchmoveCalibrationService.projectPoint(
+            [w.x, lowest - w.y, -w.z], [0.0, 1.20, 3.20], [0.0, 0.95, 0.0], [0, 1, 0], lens, 1920, 1080
+        );
+        return { x: u / 1920, y: v / 1080, z: w.z, visibility: w.visibility };
+    });
+    return { worldLandmarks: world, imageLandmarks: image };
+}
+
+function stubPoseService(run: Awaited<ReturnType<MediaPipePoseService['runPoseLandmarker']>>): MediaPipePoseService {
+    return {
+        normalizeImageInput: async () => Buffer.from([0xff, 0xd8]),
+        runPoseLandmarker: async () => run
+    } as unknown as MediaPipePoseService;
+}
 
 describe('Intelligent Automated Pose Extraction & Matchmove Calibration', () => {
 
@@ -33,7 +79,7 @@ describe('Intelligent Automated Pose Extraction & Matchmove Calibration', () => 
     });
 
     it('should convert MediaPipe 33 landmarks into schema-compliant SpatialAnchorCorrespondence[]', () => {
-        const synthetic = AdaptiveMatchmoveCalibrationService.synthesizeAnthropometricLandmarks(true);
+        const synthetic = fixtureBodyLandmarks();
         expect(synthetic.worldLandmarks).toHaveLength(33);
         expect(synthetic.imageLandmarks).toHaveLength(33);
 
@@ -97,27 +143,30 @@ describe('Intelligent Automated Pose Extraction & Matchmove Calibration', () => 
         });
     });
 
-    it('should extract pose anchors from image buffer or path with zero crash risk', async () => {
-        // Use frame0 from the plaza or person demo
-        const testImage = path.resolve(__dirname, '../../../public/models/person_dance_kf01_plate.jpg');
-
-        const anchors = await AdaptiveMatchmoveCalibrationService.extractPoseAnchorsFromImage(
-            testImage,
-            {
-                plateWidth: 1920,
-                plateHeight: 1080,
-                subjectHeightMeters: 1.75
-            }
-        );
-
+    it('extracts anchors from a real MediaPipe detection and keeps its metric scale when no height is given', async () => {
+        const body = fixtureBodyLandmarks();
+        const anchors = await AdaptiveMatchmoveCalibrationService.extractPoseAnchorsFromImage(Buffer.from([0]), {
+            plateWidth: 1920,
+            plateHeight: 1080,
+            poseService: stubPoseService({ detection: { worldLandmarks: [body.worldLandmarks], imageLandmarks: [body.imageLandmarks] } })
+        });
         expect(anchors).toHaveLength(33);
-        const lShoulder = anchors.find(a => a.id === 'LEFT_SHOULDER')!;
-        expect(lShoulder).toBeDefined();
-        expect(lShoulder.point3D[1]).toBeGreaterThan(1.0); // Shoulder above 1 meter
+        // Unscaled: the nose sits (0.91 - -0.74) = 1.65 m above the lowest foot point, as MediaPipe measured it
+        const nose = anchors.find(a => a.id === 'NOSE')!;
+        expect(nose.point3D[1]).toBeCloseTo(1.65, 3);
+    });
+
+    it('throws instead of synthesizing a body when MediaPipe cannot run or finds nobody', async () => {
+        await expect(AdaptiveMatchmoveCalibrationService.extractPoseAnchorsFromImage(Buffer.from([0]), {
+            poseService: stubPoseService({ unavailable: 'python3 not found' })
+        })).rejects.toBeInstanceOf(GeneratorFailedError);
+        await expect(AdaptiveMatchmoveCalibrationService.extractPoseAnchorsFromImage(Buffer.from([0]), {
+            poseService: stubPoseService({ noPerson: 'MediaPipe found no person in the image' })
+        })).rejects.toBeInstanceOf(MissingInputError);
     });
 
     it('should accurately resect camera pose using 33 automated pose landmarks', () => {
-        const synthetic = AdaptiveMatchmoveCalibrationService.synthesizeAnthropometricLandmarks(true);
+        const synthetic = fixtureBodyLandmarks();
         const anchors = AdaptiveMatchmoveCalibrationService.extractPoseAnchorsFromLandmarks(
             synthetic.worldLandmarks,
             synthetic.imageLandmarks,
@@ -155,43 +204,18 @@ describe('Intelligent Automated Pose Extraction & Matchmove Calibration', () => 
         expect(resected.standoffDist).toBeLessThan(5.0);
     });
 
-    it('should execute adaptive_matchmove_extract_pose_anchors agent tool', async () => {
+    it('adaptive_matchmove_extract_pose_anchors requires the plate size and fails typed without a detectable person', async () => {
         const handler = adaptiveMatchmoveHandlers.adaptive_matchmove_extract_pose_anchors;
-        expect(handler).toBeDefined();
-
-        const result = await handler(
-            {
-                imagePath: 'public/models/person_dance_kf01_plate.jpg',
-                plateWidth: 1920,
-                plateHeight: 1080,
-                subjectHeightMeters: 1.78
-            },
-            { workspaceRoot: path.resolve(__dirname, '../../..') } as any
-        );
-
-        expect(result.status).toBe('completed');
-        expect(result.resultPayload.success).toBe(true);
-        expect(result.resultPayload.anchorCount).toBe(33);
-        expect(result.summaryResult).toContain('33');
+        const ctx = { workspaceRoot: path.resolve(__dirname, '../../..') } as any;
+        await expect(handler({ imagePath: 'missing_plate.jpg' }, ctx))
+            .rejects.toMatchObject({ code: 'missing_input', message: expect.stringContaining('plateWidth') });
     });
 
-    it('should execute adaptive_matchmove_resect_keyframe with autoExtractPose', async () => {
+    it('adaptive_matchmove_resect_keyframe with autoExtractPose fails typed instead of resecting a stand-in body', async () => {
         const handler = adaptiveMatchmoveHandlers.adaptive_matchmove_resect_keyframe;
-        expect(handler).toBeDefined();
-
-        const result = await handler(
-            {
-                imagePath: 'public/models/person_dance_kf01_plate.jpg',
-                autoExtractPose: true,
-                subjectHeightMeters: 1.80,
-                plateWidth: 1920,
-                plateHeight: 1080
-            },
-            { workspaceRoot: path.resolve(__dirname, '../../..') } as any
-        );
-
-        expect(result.status).toBe('completed');
-        expect(result.resultPayload.success).toBe(true);
-        expect(result.resultPayload.reprojectionRmsPx).toBeLessThan(0.05);
+        const ctx = { workspaceRoot: path.resolve(__dirname, '../../..') } as any;
+        // No camera prior is assumed for a human pose
+        await expect(handler({ imagePath: 'missing_plate.jpg', autoExtractPose: true, plateWidth: 1920, plateHeight: 1080, lens: { fovYDeg: 35 } }, ctx))
+            .rejects.toMatchObject({ code: 'missing_input', message: expect.stringContaining('cameraPosition') });
     });
 });

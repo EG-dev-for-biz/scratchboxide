@@ -52,7 +52,8 @@ export interface ExtractedLocationManifest {
     routingRecommendation?: string;
     centroid: [number, number, number];
     dimensions: [number, number, number];
-    vertexCount: number;
+    vertexCount?: number;
+    sampledVertexCount?: number;
   }>;
 }
 
@@ -179,7 +180,8 @@ export class GeospatialTileExtractionBridge {
         routingRecommendation: o.routingRecommendation,
         centroid: o.boundingBox.centroid,
         dimensions: o.boundingBox.dimensions,
-        vertexCount: o.vertexCount
+        vertexCount: o.vertexCount,
+        sampledVertexCount: o.sampledVertexCount
       }))
     };
 

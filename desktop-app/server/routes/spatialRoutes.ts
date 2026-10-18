@@ -15,18 +15,52 @@ import {
     Google360PanoramaPipelineService,
     GoogleMediaCredentialsService,
     DeploymentManifestCompiler,
-    Depthbox360UniverseService,
     ImageToSplatService
 } from '../../../packages/core/src/node';
 import { GeoFrame } from '../../../packages/core/src/common/coordinate/GeoFrame';
 import { getGoogle3DTilesClay } from '../../../packages/core/src/node/spatial/Google3DTileBlockoutPipelineService';
 import { LocationUnresolvedError, MediaModelUnavailableError, MissingInputError } from '../../../packages/core/src/common/errors/pipeline-errors';
+import { resolveWithinRoot } from '../../../packages/core/src/node/security/path-guard';
+import { RouteContext } from './types';
+import * as os from 'os';
 import { mapsKeyStatus, saveMapsKeySetting } from '../../../packages/core/src/node/spatial/maps-key-settings';
 import { geoidUndulation } from '../../../packages/core/src/node/spatial/egm96-geoid';
 import { ModelAnswerResolutionError } from '../../../packages/core/src/node/spatial/Google360PanoramaPipelineService';
 
-export function createTileCleanupRouter(tileCleanupService: PhotorealTileCleanupService): Router {
+export function createTileCleanupRouter(tileCleanupService: PhotorealTileCleanupService, ctx: RouteContext): Router {
     const router = Router();
+
+    // The tile to clean comes from the request: an uploaded GLB (glbBase64) or a path inside an allowed workspace root
+    // (inputGlbPath, relative to workspaceRoot). There is no built-in model.
+    const withInputTile = async <T>(body: any, run: (inputGlbPath: string) => Promise<T>): Promise<T> => {
+        if (typeof body?.glbBase64 === 'string' && body.glbBase64.length > 0) {
+            const buf = Buffer.from(body.glbBase64, 'base64');
+            if (buf.length < 12 || buf.toString('utf8', 0, 4) !== 'glTF') {
+                throw new MissingInputError('tile cleanup', 'glbBase64', 'the upload is not a binary glTF (.glb)');
+            }
+            const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sbx-tile-cleanup-'));
+            const file = path.join(dir, 'input.glb');
+            try {
+                await fs.writeFile(file, buf);
+                return await run(file);
+            } finally {
+                await fs.remove(dir);
+            }
+        }
+        if (typeof body?.inputGlbPath === 'string' && body.inputGlbPath.trim()) {
+            const root = ctx.requireWorkspaceRoot(body.workspaceRoot);
+            return run(resolveWithinRoot(root, body.inputGlbPath.trim()));
+        }
+        throw new MissingInputError('tile cleanup', 'glbBase64 or inputGlbPath', 'send the photogrammetric tile (.glb) to clean');
+    };
+
+    const sendCleanupError = (res: Response, err: any): void => {
+        if (err instanceof MissingInputError) {
+            res.status(400).json({ success: false, error: err.code, message: err.message });
+            return;
+        }
+        ctx.sendError(res, err);
+    };
 
     router.get('/status', (_req: Request, res: Response) => {
         res.json({
@@ -53,11 +87,12 @@ export function createTileCleanupRouter(tileCleanupService: PhotorealTileCleanup
                 roadWidthMeters
             } = req.body || {};
 
-            const result = await tileCleanupService.cleanPhotogrammetryTile({
+            const result = await withInputTile(req.body, inputGlbPath => tileCleanupService.cleanPhotogrammetryTile({
+                inputGlbPath,
                 angleThresholdDegrees: typeof angleThresholdDegrees === 'number' ? angleThresholdDegrees : 4.0,
                 snapToleranceMeters: typeof snapToleranceMeters === 'number' ? snapToleranceMeters : 0.85,
                 roadWidthMeters: typeof roadWidthMeters === 'number' ? roadWidthMeters : 8.0
-            });
+            }));
 
             res.json({
                 success: true,
@@ -66,10 +101,7 @@ export function createTileCleanupRouter(tileCleanupService: PhotorealTileCleanup
                 byteLength: result.glbBuffer ? result.glbBuffer.length : 0
             });
         } catch (err: any) {
-            res.status(500).json({
-                success: false,
-                error: err?.message || 'Tile cleanup pipeline execution failed'
-            });
+            sendCleanupError(res, err);
         }
     });
 
@@ -81,11 +113,12 @@ export function createTileCleanupRouter(tileCleanupService: PhotorealTileCleanup
                 roadWidthMeters
             } = req.body || {};
 
-            const result = await tileCleanupService.cleanPhotogrammetryTile({
+            const result = await withInputTile(req.body, inputGlbPath => tileCleanupService.cleanPhotogrammetryTile({
+                inputGlbPath,
                 angleThresholdDegrees: typeof angleThresholdDegrees === 'number' ? angleThresholdDegrees : 4.0,
                 snapToleranceMeters: typeof snapToleranceMeters === 'number' ? snapToleranceMeters : 0.85,
                 roadWidthMeters: typeof roadWidthMeters === 'number' ? roadWidthMeters : 8.0
-            });
+            }));
 
             if (!result.glbBuffer) {
                 res.status(500).json({ success: false, error: 'Failed to generate GLB buffer' });
@@ -96,10 +129,7 @@ export function createTileCleanupRouter(tileCleanupService: PhotorealTileCleanup
             res.setHeader('Content-Disposition', 'attachment; filename="cleaned_tile.glb"');
             res.send(result.glbBuffer);
         } catch (err: any) {
-            res.status(500).json({
-                success: false,
-                error: err?.message || 'Tile cleanup pipeline execution failed'
-            });
+            sendCleanupError(res, err);
         }
     });
 
@@ -218,54 +248,6 @@ export function createArRouter(): Router {
                 success: false,
                 error: err?.message || 'Geospatial manifest compilation failed'
             });
-        }
-    });
-
-    return router;
-}
-
-export function createDepthbox360Router(): Router {
-    const router = Router();
-
-    router.get('/presets', (_req: Request, res: Response) => {
-        res.json({
-            success: true,
-            presets: [
-                { id: 'san_marco', name: 'Piazza San Marco, Venice', description: 'Historic Venetian square with marble colonnades, St. Mark Basilica, and Campanile belfry.' },
-                { id: 'alpine_summit', name: 'Alpine Glacial Sanctuary', description: 'Crystalline turquoise lake surrounded by soaring snow-capped granite ridges and pine trees.' },
-                { id: 'cyber_shibuya', name: 'Cyber Shibuya Crossing', description: 'Wet reflective asphalt, towering holographic billboards, neon rain, and cybernetic infrastructure.' },
-                { id: 'roman_forum', name: 'Ancient Roman Forum', description: 'Corinthian travertine columns, triumphal arches, and golden hour Mediterranean illumination.' },
-                { id: 'martian_biodome', name: 'Martian Bio-Dome Colony', description: 'Pressurized geodesic glass domes, red iron oxide regolith, rover docks, and terraforming atmosphere.' }
-            ]
-        });
-    });
-
-    router.post('/generate', (req: Request, res: Response) => {
-        try {
-            const config = req.body || {};
-            const universe = Depthbox360UniverseService.generate360Universe(config);
-            res.json({
-                success: true,
-                splats: universe.splats,
-                colliders: universe.colliders,
-                atmosphere: universe.atmosphere,
-                statistics: universe.statistics
-            });
-        } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || '360 universe synthesis failed' });
-        }
-    });
-
-    router.post('/export-glb', (req: Request, res: Response) => {
-        try {
-            const { preset = 'san_marco', eyeHeight = 1.7 } = req.body || {};
-            const colliders = Depthbox360UniverseService.extractUniverseColliders(preset, eyeHeight);
-            const glbBuffer = ImageToSplatService.generatePhysicsColliderGlb(colliders);
-            res.setHeader('Content-Type', 'model/gltf-binary');
-            res.setHeader('Content-Disposition', `attachment; filename="depthbox_${preset}_colliders.glb"`);
-            res.send(Buffer.from(glbBuffer));
-        } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || 'GLB physics collider export failed' });
         }
     });
 

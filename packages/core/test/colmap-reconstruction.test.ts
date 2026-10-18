@@ -12,10 +12,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
     ColmapReconstructionService,
+    ColmapSparseModelRequiredError,
     NativeCppCompilerService
 } from '../src/node';
 
-describe('COLMAP & GLOMAP Photogrammetry Pipeline (Native C++20 & TS Service)', () => {
+describe('COLMAP / GLOMAP sparse model -> GLB converter (Native C++20 & TS Service)', () => {
     const service = new ColmapReconstructionService();
     const testDir = path.resolve(process.cwd(), 'build/test_colmap_data');
 
@@ -59,35 +60,19 @@ describe('COLMAP & GLOMAP Photogrammetry Pipeline (Native C++20 & TS Service)', 
         expect(content).toContain('namespace clm = scratchbox::colmap;');
     });
 
-    it('3. should verify native CLI binary compiles and executes successfully', async () => {
-        const binPath = await service.ensureBinary();
-        expect(fs.existsSync(binPath)).toBe(true);
+    it('3. requires a real sparse model: no sparseDir or an unreadable one is an error, not a sample scene', async () => {
+        await expect(service.convertColmapToGlb({} as any)).rejects.toBeInstanceOf(ColmapSparseModelRequiredError);
+        await expect(service.convertColmapToGlb({ sparseDir: path.join(testDir, 'does_not_exist') }))
+            .rejects.toBeInstanceOf(ColmapSparseModelRequiredError);
 
-        const outGlb = path.join(testDir, 'synthetic_test.glb');
-        const result = await service.convertColmapToGlb({
-            synthetic: true,
-            outGlbPath: outGlb,
-            frustumScale: 0.4,
-            pointRadius: 0.02
-        });
-
-        expect(result.success).toBe(true);
-        expect(result.numCameras).toBe(1);
-        expect(result.numImages).toBe(8);
-        expect(result.numPoints3D).toBeGreaterThan(50);
-        expect(result.glbBytes).toBeGreaterThan(1000);
-        expect(fs.existsSync(outGlb)).toBe(true);
-
-        // Verify standard glTF 2.0 binary header: 'glTF' (0x46546C67 in LE = 0x67 0x6C 0x54 0x46)
-        const glbBuffer = fs.readFileSync(outGlb);
-        const magic = glbBuffer.toString('utf8', 0, 4);
-        expect(magic).toBe('glTF');
-
-        const version = glbBuffer.readUInt32LE(4);
-        expect(version).toBe(2);
-
-        expect(result.bounds).toBeDefined();
-        expect(result.centroid).toBeDefined();
+        const emptyDir = path.join(testDir, 'empty_sparse');
+        fs.mkdirSync(emptyDir, { recursive: true });
+        const outGlb = path.join(testDir, 'empty.glb');
+        const result = await service.convertColmapToGlb({ sparseDir: emptyDir, outGlbPath: outGlb });
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('could not load a COLMAP sparse model');
+        expect(result.numImages).toBe(0);
+        expect(fs.existsSync(outGlb)).toBe(false);
     });
 
     it('4. should parse custom COLMAP sparse text files accurately', async () => {
@@ -139,35 +124,5 @@ describe('COLMAP & GLOMAP Photogrammetry Pipeline (Native C++20 & TS Service)', 
 
         const glbBuffer = fs.readFileSync(outGlb);
         expect(glbBuffer.toString('utf8', 0, 4)).toBe('glTF');
-    });
-
-    it('5. should execute native C++20 GLOMAP reconstruction on multi-view street view images', async () => {
-        const glomapOutDir = path.join(testDir, 'glomap_test_run');
-        const framesDir = path.join(testDir, 'multiview_frames');
-        fs.mkdirSync(framesDir, { recursive: true });
-
-        // Copy test multi-view frames
-        const testBmp1 = path.resolve(process.cwd(), 'build/test_esb_facade.bmp');
-        const testBmp2 = path.resolve(process.cwd(), 'build/esb_west_5thave.bmp');
-        if (fs.existsSync(testBmp1)) fs.copyFileSync(testBmp1, path.join(framesDir, 'frame_01.bmp'));
-        if (fs.existsSync(testBmp2)) fs.copyFileSync(testBmp2, path.join(framesDir, 'frame_02.bmp'));
-
-        const result = await service.runGlomapReconstruction({
-            imageDir: framesDir,
-            outputDir: glomapOutDir,
-            fov: 55.0
-        });
-
-        expect(result.success).toBe(true);
-        expect(result.sparseDir).toBeDefined();
-        expect(fs.existsSync(path.join(result.sparseDir!, 'cameras.txt'))).toBe(true);
-        expect(fs.existsSync(path.join(result.sparseDir!, 'images.txt'))).toBe(true);
-        expect(fs.existsSync(path.join(result.sparseDir!, 'points3D.txt'))).toBe(true);
-
-        if (result.glbPath) {
-            expect(fs.existsSync(result.glbPath)).toBe(true);
-            const glbBuffer = fs.readFileSync(result.glbPath);
-            expect(glbBuffer.toString('utf8', 0, 4)).toBe('glTF');
-        }
     });
 });

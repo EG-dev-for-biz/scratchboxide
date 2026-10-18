@@ -33,6 +33,24 @@ import {
  * - Standard glTF 2.0 Compliance: Emits standard binary glTF (.glb) with full
  *   pbrMetallicRoughness materials, packed ORM textures, and bandwidth-adaptive tangent normals.
  */
+let crcTable: Uint32Array | undefined;
+/** CRC-32 as PNG chunks use it; zlib.crc32 where this Node has it (>= 20.15 / 22.2), else the table form. */
+function pngCrc32(data: Buffer, prev = 0): number {
+    const native = (zlib as unknown as { crc32?: (d: Buffer, v?: number) => number }).crc32;
+    if (typeof native === 'function') return native(data, prev) >>> 0;
+    if (!crcTable) {
+        crcTable = new Uint32Array(256);
+        for (let n = 0; n < 256; n++) {
+            let c = n;
+            for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+            crcTable[n] = c >>> 0;
+        }
+    }
+    let c = (prev ^ 0xffffffff) >>> 0;
+    for (let i = 0; i < data.length; i++) c = crcTable[(c ^ data[i]) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+}
+
 export class AdaptiveMaterialPbrService {
 
     /**
@@ -770,6 +788,43 @@ export class AdaptiveMaterialPbrService {
     }
 
     /**
+     * The same PNG as `encodePngSync`, with the deflate (the expensive part) run on libuv's thread pool instead of the
+     * main thread, so several maps compress in parallel and the server's event loop keeps serving while they do.
+     */
+    public static async encodePngAsync(rgbaBuf: Buffer, width: number, height: number): Promise<Buffer> {
+        const rowLen = width * 4;
+        if (rgbaBuf.length < rowLen * height) {
+            throw new Error(`encodePngAsync: ${rgbaBuf.length} bytes is less than ${width}x${height} RGBA (${rowLen * height})`);
+        }
+        const filtered = Buffer.alloc(height * (rowLen + 1));
+        for (let y = 0; y < height; y++) {
+            filtered[y * (rowLen + 1)] = 0; // filter 0: none
+            rgbaBuf.copy(filtered, y * (rowLen + 1) + 1, y * rowLen, (y + 1) * rowLen);
+        }
+        const compressed = await new Promise<Buffer>((resolve, reject) =>
+            zlib.deflate(filtered, { level: 1 }, (err, out) => (err ? reject(err) : resolve(out))));
+        const chunk = (type: string, data: Buffer): Buffer => {
+            const head = Buffer.alloc(8);
+            head.writeUInt32BE(data.length, 0);
+            head.write(type, 4, 'ascii');
+            const crc = Buffer.alloc(4);
+            crc.writeUInt32BE(pngCrc32(data, pngCrc32(head.subarray(4, 8))), 0);
+            return Buffer.concat([head, data, crc]);
+        };
+        const ihdr = Buffer.alloc(13);
+        ihdr.writeUInt32BE(width, 0);
+        ihdr.writeUInt32BE(height, 4);
+        ihdr[8] = 8; // 8-bit depth
+        ihdr[9] = 6; // RGBA
+        return Buffer.concat([
+            Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+            chunk('IHDR', ihdr),
+            chunk('IDAT', compressed),
+            chunk('IEND', Buffer.alloc(0))
+        ]);
+    }
+
+    /**
      * Encodes raw RGBA buffer into JPEG or PNG.
      * Uses fast in-process zlib for PNG, ffmpeg for JPEG.
      */
@@ -781,12 +836,7 @@ export class AdaptiveMaterialPbrService {
         quality = 2
     ): Promise<Buffer> {
         if (isPng) {
-            try {
-                const pngBuf = AdaptiveMaterialPbrService.encodePngSync(rgbaBuf, width, height);
-                return Promise.resolve(pngBuf);
-            } catch (err) {
-                return Promise.reject(err);
-            }
+            return AdaptiveMaterialPbrService.encodePngAsync(rgbaBuf, width, height);
         }
 
         return new Promise((resolve, reject) => {

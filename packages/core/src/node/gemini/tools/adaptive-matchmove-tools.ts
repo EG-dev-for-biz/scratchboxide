@@ -31,6 +31,7 @@ import {
     type SplineAnchorConstraint,
     type ContinuousSplineSolveOptions
 } from '../../spatial/ContinuousSplineMatchmoveService';
+import { MissingInputError } from '../../../common/errors/pipeline-errors';
 
 function asString(val: unknown): string | undefined {
     return typeof val === 'string' && val.trim().length > 0 ? val.trim() : undefined;
@@ -51,11 +52,54 @@ function asBoolean(val: unknown, fallback = false): boolean {
     return fallback;
 }
 
-function asVec3(val: unknown, fallback: [number, number, number]): [number, number, number] {
-    if (Array.isArray(val) && val.length >= 3) {
-        return [Number(val[0]) || 0, Number(val[1]) || 0, Number(val[2]) || 0];
+function optionalVec3(val: unknown): [number, number, number] | undefined {
+    if (Array.isArray(val) && val.length >= 3 && val.slice(0, 3).every(c => Number.isFinite(Number(c)))) {
+        return [Number(val[0]), Number(val[1]), Number(val[2])];
     }
-    return fallback;
+    return undefined;
+}
+
+function requireVec3(tool: string, arg: string, val: unknown, detail: string): [number, number, number] {
+    const v = optionalVec3(val);
+    if (!v) throw new MissingInputError(tool, arg, detail);
+    return v;
+}
+
+function requirePositive(tool: string, arg: string, val: unknown, detail: string): number {
+    const n = asNumber(val);
+    if (n === undefined || !(n > 0)) throw new MissingInputError(tool, arg, detail);
+    return n;
+}
+
+/**
+ * Reads a sequence context ({ sequenceId, fps, totalFrames, durationSec, plateResolution, facadeNormal? }).
+ * Nothing is defaulted: a sequence's length, rate and plate size are properties of the footage.
+ */
+function requireSequenceContext(tool: string, raw: Record<string, any>, needPlate: boolean): AdaptiveMatchmoveContext {
+    const sequenceId = asString(raw.sequenceId);
+    if (!sequenceId) throw new MissingInputError(tool, 'context.sequenceId');
+    const fps = requirePositive(tool, 'context.fps', raw.fps, 'the footage frame rate');
+    const totalFrames = requirePositive(tool, 'context.totalFrames', raw.totalFrames, 'the sequence frame count');
+    const durationSec = requirePositive(tool, 'context.durationSec', raw.durationSec, 'the sequence duration in seconds');
+    const rawPlate = raw.plateResolution;
+    const plate = Array.isArray(rawPlate)
+        ? { width: Number(rawPlate[0]), height: Number(rawPlate[1]) }
+        : (rawPlate && typeof rawPlate === 'object' ? { width: Number(rawPlate.width), height: Number(rawPlate.height) } : undefined);
+    const plateOk = !!plate && plate.width > 0 && plate.height > 0;
+    if (needPlate && !plateOk) {
+        throw new MissingInputError(tool, 'context.plateResolution { width, height }', 'the plate size in pixels the anchor pixels refer to');
+    }
+    const facadeNormal = raw.facadeNormal === undefined ? undefined
+        : requireVec3(tool, 'context.facadeNormal', raw.facadeNormal, 'a unit normal [nx, ny, nz] when given');
+    return {
+        sequenceId,
+        description: asString(raw.description),
+        fps,
+        totalFrames: Math.round(totalFrames),
+        durationSec,
+        ...(plateOk ? { plateResolution: plate } : {}),
+        ...(facadeNormal ? { facadeNormal } : {})
+    };
 }
 
 // ============================================================================
@@ -65,7 +109,7 @@ function asVec3(val: unknown, fallback: [number, number, number]): [number, numb
 export const ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'adaptive_matchmove_calibrate_sequence',
-        description: 'Calibrate and resect an entire multi-keyframe sequence adhering to Adaptive Domain Architecture. Solves camera 6-DOF poses, Brown-Conrady radial lens breathing (k1), and gimbal-free facade-normal slerp across milestones with sub-pixel precision (< 0.05 px RMS) using Levenberg-Marquardt bundle adjustment, synthesizes a C2 continuous Hermite trajectory spline, verifies drone kinematic safety (velocity < 15 m/s, accel < 10 m/s^2), and generates a SequenceMetrologyReport.',
+        description: 'Calibrate and resect a multi-keyframe sequence. Solves camera 6-DOF poses (and optionally FOV and Brown-Conrady k1) for every keyframe that has 3D-to-2D anchor correspondences using Levenberg-Marquardt with Huber weighting, synthesizes a C2 Hermite trajectory spline through the solved keyframes, checks drone kinematics (velocity < 15 m/s, accel < 10 m/s^2), and returns a SequenceMetrologyReport whose status gates on the measured reprojection RMS (< 0.05 px). Keyframes without anchors are skipped and reported.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -73,17 +117,13 @@ export const ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'STRING',
                     description: 'Optional path on disk to a sequence JSON file containing context and milestones.'
                 },
-                landmark: {
-                    type: 'STRING',
-                    description: 'Optional landmark name (e.g. "The Plaza Hotel") to automatically resolve context and spatial anchors.'
-                },
                 context: {
                     type: 'OBJECT',
-                    description: 'AdaptiveMatchmoveContext object ({ sequenceId, fps, totalFrames, durationSec, plateResolution: { width, height }, facadeNormal }).'
+                    description: 'Required unless the sequence file carries it: AdaptiveMatchmoveContext ({ sequenceId, fps, totalFrames, durationSec, plateResolution: { width, height }, facadeNormal? }). Nothing is defaulted. facadeNormal is optional: when given the up-vector tilts toward it as the camera pitches down, otherwise the keyframe up-vectors are interpolated.'
                 },
                 milestones: {
                     type: 'ARRAY',
-                    description: 'Array of KeyframeCalibrationState milestone objects containing spatial anchor correspondences and initial poses.',
+                    description: 'Array of KeyframeCalibrationState milestones, each with timeSec, initial cameraPosition/targetPosition, lens.fovYDeg and spatial anchor correspondences. Keyframes with no anchors are skipped and listed in skippedKeyframes.',
                     items: { type: 'OBJECT' }
                 },
                 outputCameraPath: {
@@ -134,12 +174,12 @@ export const ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 cameraPosition: {
                     type: 'ARRAY',
-                    description: 'Initial camera position [x, y, z] in metric local space.',
+                    description: 'Required. Initial camera position [x, y, z] in metric local space.',
                     items: { type: 'NUMBER' }
                 },
                 targetPosition: {
                     type: 'ARRAY',
-                    description: 'Initial camera look-at target position [x, y, z] in metric local space.',
+                    description: 'Required. Initial camera look-at target position [x, y, z] in metric local space.',
                     items: { type: 'NUMBER' }
                 },
                 upVector: {
@@ -149,15 +189,15 @@ export const ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 lens: {
                     type: 'OBJECT',
-                    description: 'Initial lens intrinsics profile ({ fovYDeg, k1, k2, scale }).'
+                    description: 'Required. Lens intrinsics ({ fovYDeg, k1?, k2?, scale? }); fovYDeg must be given (k1/k2 default to 0, scale to 1).'
                 },
                 plateWidth: {
                     type: 'NUMBER',
-                    description: 'Plate image width in pixels (default: 1920).'
+                    description: 'Required. Plate image width in pixels.'
                 },
                 plateHeight: {
                     type: 'NUMBER',
-                    description: 'Plate image height in pixels (default: 1080).'
+                    description: 'Required. Plate image height in pixels.'
                 },
                 maxIterations: {
                     type: 'NUMBER',
@@ -193,9 +233,10 @@ export const ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 subjectHeightMeters: {
                     type: 'NUMBER',
-                    description: 'Estimated subject height in meters when autoExtractPose is enabled (default: 1.80).'
+                    description: 'Known subject height in meters when autoExtractPose is enabled. When omitted, MediaPipe\'s own metric world scale is kept.'
                 }
-            }
+            },
+            required: ['cameraPosition', 'targetPosition', 'lens', 'plateWidth', 'plateHeight']
         }
     },
     {
@@ -211,31 +252,23 @@ export const ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 sequenceId: {
                     type: 'STRING',
-                    description: 'Sequence identifier (default: "trajectory_sequence").'
+                    description: 'Sequence identifier (default: "synthesized_trajectory").'
                 },
                 fps: {
                     type: 'NUMBER',
-                    description: 'Playback frame rate (default: 24).'
+                    description: 'Required. Playback frame rate.'
                 },
                 totalFrames: {
                     type: 'NUMBER',
-                    description: 'Total sequence frame count (default: 361).'
+                    description: 'Required. Total sequence frame count.'
                 },
                 durationSec: {
                     type: 'NUMBER',
-                    description: 'Total sequence duration in seconds (default: 15.0).'
-                },
-                plateWidth: {
-                    type: 'NUMBER',
-                    description: 'Plate width in pixels (default: 1920).'
-                },
-                plateHeight: {
-                    type: 'NUMBER',
-                    description: 'Plate height in pixels (default: 1080).'
+                    description: 'Required. Total sequence duration in seconds.'
                 },
                 facadeNormal: {
                     type: 'ARRAY',
-                    description: 'Facade normal unit vector [nx, ny, nz] (default: [-0.8746, 0.0, -0.4848]).',
+                    description: 'Optional facade normal unit vector [nx, ny, nz]. When given the up-vector tilts toward it as the camera pitches down; otherwise the milestone up-vectors are interpolated.',
                     items: { type: 'NUMBER' }
                 },
                 outputPath: {
@@ -243,12 +276,12 @@ export const ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     description: 'Optional path on disk to write the synthesized trajectory JSON.'
                 }
             },
-            required: ['milestones']
+            required: ['milestones', 'fps', 'totalFrames', 'durationSec']
         }
     },
     {
         name: 'adaptive_matchmove_verify_metrology',
-        description: 'Audit and verify camera trajectory and keyframe matchmove metrology against VFX photorealistic criteria: RMS reprojection residual < 0.05 px, Sobel edge correlation >= 98.0%, and physical drone kinematic thresholds.',
+        description: 'Audit a SequenceMetrologyReport against matchmove criteria: mean RMS reprojection residual (default < 0.05 px) and physical drone kinematic thresholds. Edge correlation against the plate is not measured by the calibration and is not part of this gate.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -264,10 +297,6 @@ export const ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'NUMBER',
                     description: 'Maximum allowable mean reprojection RMS residual in pixels (default: 0.05).'
                 },
-                minAllowedCorrelationPercent: {
-                    type: 'NUMBER',
-                    description: 'Minimum allowable Sobel edge normalized cross correlation percentage (default: 98.0).'
-                },
                 maxVelocityMps: {
                     type: 'NUMBER',
                     description: 'Maximum physical drone velocity limit in m/s (default: 15.0).'
@@ -281,7 +310,7 @@ export const ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'adaptive_matchmove_extract_pose_anchors',
-        description: 'Intelligently extracts 3D-to-2D spatial anchor correspondences for a human or articulated subject from a plate image or video frame using MediaPipe / Gemini Multimodal vision and anatomical skeletal priors. Maps the 33 canonical MediaPipe/SB-Human landmarks into metric 3D coordinates and sub-pixel 2D image coordinates, ready for 6-DOF optical camera resection.',
+        description: 'Extracts 3D-to-2D spatial anchor correspondences for a person in a plate image or video frame using MediaPipe Pose Landmarker. Maps the 33 MediaPipe landmarks into metric 3D coordinates and 2D pixel coordinates, ready for 6-DOF camera resection. Fails with a typed error when MediaPipe cannot run or finds no person; no stand-in body is produced.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -295,29 +324,26 @@ export const ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 plateWidth: {
                     type: 'NUMBER',
-                    description: 'Plate image width in pixels (default: 1920).'
+                    description: 'Required. Plate image width in pixels.'
                 },
                 plateHeight: {
                     type: 'NUMBER',
-                    description: 'Plate image height in pixels (default: 1080).'
+                    description: 'Required. Plate image height in pixels.'
                 },
                 subjectHeightMeters: {
                     type: 'NUMBER',
-                    description: 'Estimated subject physical height in meters (default: 1.80).'
+                    description: 'Known subject height in meters. When omitted, MediaPipe\'s own metric world scale is kept.'
                 },
                 groundAltitudeMeters: {
                     type: 'NUMBER',
                     description: 'Floor / ground plane Y altitude in meters (default: 0.0).'
                 },
-                facingCamera: {
-                    type: 'BOOLEAN',
-                    description: 'Whether subject is facing towards the camera (default: true).'
-                },
                 minConfidence: {
                     type: 'NUMBER',
                     description: 'Minimum landmark detection confidence threshold (default: 0.3).'
                 }
-            }
+            },
+            required: ['plateWidth', 'plateHeight']
         }
     },
     {
@@ -333,7 +359,7 @@ export const ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 trajectoryPath: {
                     type: 'STRING',
-                    description: 'Path to camera trajectory JSON file (e.g. public/models/plaza_hotel_camera_path.json).'
+                    description: 'Path to a camera trajectory JSON file (an array of frames, or { frames } / { trajectory }), e.g. one written by adaptive_matchmove_calibrate_sequence outputCameraPath. Required when "trajectory" is not given.'
                 },
                 mode: {
                     type: 'STRING',
@@ -482,13 +508,15 @@ export const ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS: ToolDeclaration[] = [
 
 export const adaptiveMatchmoveHandlers: Record<string, ToolHandler> = {
     adaptive_matchmove_calibrate_sequence: async (args, ctx) => {
-        let context: AdaptiveMatchmoveContext | undefined = args.context as AdaptiveMatchmoveContext | undefined;
+        const TOOL = 'adaptive_matchmove_calibrate_sequence';
+        let rawContext: Record<string, any> | undefined = (args.context && typeof args.context === 'object')
+            ? (args.context as Record<string, any>)
+            : undefined;
         let milestones: KeyframeCalibrationState[] | undefined = Array.isArray(args.milestones)
             ? (args.milestones as KeyframeCalibrationState[])
             : undefined;
 
         const sequencePath = asString(args.sequencePath);
-        const landmark = asString(args.landmark);
 
         // Load milestones from the caller's sequence file when they are not passed inline
         if (!milestones || milestones.length === 0) {
@@ -506,39 +534,28 @@ export const adaptiveMatchmoveHandlers: Record<string, ToolHandler> = {
                                 : undefined;
 
                         if (rawList) {
+                            // Only what the file says; times, poses and lenses are not invented
                             milestones = rawList.map((m: any, idx: number) => ({
                                 index: m.index ?? idx,
-                                frameNumber: m.frameNumber ?? m.frame ?? (idx * 15 + 1),
-                                timeSec: m.timeSec ?? m.time ?? (idx * 0.6),
-                                phaseLabel: m.phaseLabel ?? m.phase ?? m.label ?? `Milestone ${idx}`,
-                                cameraPosition: m.cameraPosition ?? m.position ?? [0, 0, 0],
-                                targetPosition: m.targetPosition ?? m.target ?? [0, 0, 0],
-                                upVector: m.upVector ?? [0, 1, 0],
-                                pitchDeg: m.pitchDeg ?? 0,
-                                standoffDist: m.standoffDist ?? 50,
-                                lens: m.lens ?? {
-                                    fovYDeg: m.fovYDeg ?? 50,
-                                    aspectRatio: 16 / 9,
-                                    k1: m.k1 ?? 0,
-                                    k2: 0,
-                                    scale: 1.0
-                                },
+                                frameNumber: m.frameNumber ?? m.frame,
+                                timeSec: m.timeSec ?? m.time,
+                                phaseLabel: m.phaseLabel ?? m.phase ?? m.label,
+                                cameraPosition: m.cameraPosition ?? m.position,
+                                targetPosition: m.targetPosition ?? m.target,
+                                upVector: m.upVector ?? m.up,
+                                pitchDeg: m.pitchDeg,
+                                standoffDist: m.standoffDist,
+                                lens: m.lens ?? (Number.isFinite(m.fovYDeg)
+                                    ? { fovYDeg: m.fovYDeg, k1: m.k1 ?? 0, k2: m.k2 ?? 0, scale: 1.0 }
+                                    : undefined),
                                 anchors: m.anchors ?? [],
-                                reprojectionRmsPx: m.reprojectionRmsPx ?? m.rmsPx ?? Number.NaN,
-                                maxResidualPx: m.maxResidualPx ?? Number.NaN,
-                                edgeCorrelationPercent: m.edgeCorrelationPercent ?? m.sobelNcc ?? Number.NaN,
-                                converged: m.converged ?? false
+                                reprojectionRmsPx: Number.NaN,
+                                maxResidualPx: Number.NaN,
+                                converged: false
                             }));
                         }
-                        if (!context && parsed.sequenceId) {
-                            context = {
-                                sequenceId: parsed.sequenceId,
-                                fps: parsed.fps ?? 24,
-                                totalFrames: parsed.totalFrames ?? 361,
-                                durationSec: parsed.durationSec ?? 15.0,
-                                plateResolution: parsed.plateResolution ?? { width: 1920, height: 1080 },
-                                facadeNormal: parsed.facadeNormal ?? [-0.8746, 0.0, -0.4848]
-                            };
+                        if (!rawContext && parsed.sequenceId) {
+                            rawContext = parsed;
                         }
                     } catch (e: any) {
                         return {
@@ -555,30 +572,17 @@ export const adaptiveMatchmoveHandlers: Record<string, ToolHandler> = {
             return {
                 resultPayload: {
                     success: false,
-                    error: 'adaptive_matchmove_calibrate_sequence: "milestones" array or a valid "sequencePath" is required.'
+                    error: `${TOOL}: "milestones" array or a valid "sequencePath" is required.`
                 },
                 status: 'failed',
                 summaryResult: 'Calibration failed: no milestones provided.'
             };
         }
 
-        const rawCtx = context ?? {
-            sequenceId: landmark ? `${landmark.replace(/\s+/g, '_').toLowerCase()}_seq` : 'adaptive_sequence',
-            fps: 24,
-            totalFrames: 361,
-            durationSec: 15.0,
-            plateResolution: { width: 1920, height: 1080 },
-            facadeNormal: [-0.8746, 0.0, -0.4848]
-        };
-
-        const plateRes = Array.isArray((rawCtx as any).plateResolution)
-            ? { width: (rawCtx as any).plateResolution[0], height: (rawCtx as any).plateResolution[1] }
-            : (rawCtx.plateResolution ?? { width: 1920, height: 1080 });
-
-        const effectiveContext: AdaptiveMatchmoveContext = {
-            ...rawCtx,
-            plateResolution: plateRes
-        };
+        if (!rawContext) {
+            throw new MissingInputError(TOOL, 'context', 'pass { sequenceId, fps, totalFrames, durationSec, plateResolution } or a sequence file that carries them');
+        }
+        const effectiveContext = requireSequenceContext(TOOL, rawContext, true);
 
         const options: OptimizationOptions = {
             maxIterations: asNumber(args.maxIterations, 40),
@@ -628,8 +632,8 @@ export const adaptiveMatchmoveHandlers: Record<string, ToolHandler> = {
                 totalFrames: report.totalFrames,
                 meanRmsResidualPx: report.meanRmsResidualPx,
                 maxResidualPx: report.maxResidualPx,
-                meanEdgeCorrelationPercent: report.meanEdgeCorrelationPercent,
-                minEdgeCorrelationPercent: report.minEdgeCorrelationPercent,
+                solvedKeyframeCount: report.solvedKeyframeCount,
+                skippedKeyframes: report.skippedKeyframes,
                 peakVelocityMps: peakVelocity,
                 peakAccelerationMps2: peakAcceleration,
                 kinematicsSafe,
@@ -645,16 +649,34 @@ export const adaptiveMatchmoveHandlers: Record<string, ToolHandler> = {
                     pitchDeg: k.pitchDeg,
                     standoffDist: k.standoffDist,
                     reprojectionRmsPx: k.reprojectionRmsPx,
-                    edgeCorrelationPercent: k.edgeCorrelationPercent,
                     converged: k.converged
                 }))
             } as ToolResultPayload,
             status: report.status === 'PASSED' ? 'completed' : 'failed',
-            summaryResult: `Adaptive Matchmove Calibration ${report.status}: ${report.keyframeCount} keyframes, Mean RMS = ${report.meanRmsResidualPx} px (Target < 0.05 px), Edge NCC = ${report.meanEdgeCorrelationPercent}%, Peak Vel = ${peakVelocity.toFixed(2)} m/s.`
+            summaryResult: `Adaptive Matchmove Calibration ${report.status}: ${report.solvedKeyframeCount} of ${report.keyframeCount} keyframes resected, Mean RMS = ${report.meanRmsResidualPx} px (Target < 0.05 px), Peak Vel = ${peakVelocity.toFixed(2)} m/s.` +
+                (report.skippedKeyframes.length > 0
+                    ? ` Skipped (no anchors): ${report.skippedKeyframes.map(k => `#${k.index}${k.frameNumber !== undefined ? ` (frame ${k.frameNumber})` : ''}`).join(', ')}.`
+                    : '')
         };
     },
 
     adaptive_matchmove_resect_keyframe: async (args, _ctx) => {
+        const TOOL = 'adaptive_matchmove_resect_keyframe';
+        const width = requirePositive(TOOL, 'plateWidth', args.plateWidth, 'the plate width in pixels');
+        const height = requirePositive(TOOL, 'plateHeight', args.plateHeight, 'the plate height in pixels');
+        const cameraPosition = requireVec3(TOOL, 'cameraPosition', args.cameraPosition, 'an initial camera position [x, y, z]; no pose prior is assumed');
+        const targetPosition = requireVec3(TOOL, 'targetPosition', args.targetPosition, 'an initial look-at target [x, y, z]; no pose prior is assumed');
+        const upVector = optionalVec3(args.upVector) ?? [0, 1, 0];
+
+        const lensInput = (args.lens && typeof args.lens === 'object') ? (args.lens as Record<string, unknown>) : {};
+        const lens: LensIntrinsicsProfile = {
+            fovYDeg: requirePositive(TOOL, 'lens.fovYDeg', lensInput.fovYDeg, 'the plate camera vertical field of view in degrees; no lens is assumed'),
+            aspectRatio: asNumber(lensInput.aspectRatio, width / height),
+            k1: asNumber(lensInput.k1, 0.0)!,
+            k2: asNumber(lensInput.k2, 0.0)!,
+            scale: asNumber(lensInput.scale, 1.0)!
+        };
+
         let anchors = args.anchors as SpatialAnchorCorrespondence[] | undefined;
         if (!anchors || !Array.isArray(anchors) || anchors.length === 0) {
             const imagePath = asString(args.imagePath);
@@ -663,45 +685,21 @@ export const adaptiveMatchmoveHandlers: Record<string, ToolHandler> = {
                 const input = imagePath
                     ? (path.isAbsolute(imagePath) ? imagePath : path.resolve(_ctx.workspaceRoot || process.cwd(), imagePath))
                     : (imageBase64 ?? '');
-                const plateW = asNumber(args.plateWidth, 1920)!;
-                const plateH = asNumber(args.plateHeight, 1080)!;
-                const subHeight = asNumber(args.subjectHeightMeters, 1.80)!;
                 anchors = await AdaptiveMatchmoveCalibrationService.extractPoseAnchorsFromImage(input, {
-                    plateWidth: plateW,
-                    plateHeight: plateH,
-                    subjectHeightMeters: subHeight
+                    plateWidth: width,
+                    plateHeight: height,
+                    subjectHeightMeters: asNumber(args.subjectHeightMeters)
                 });
             }
         }
 
         if (!Array.isArray(anchors) || anchors.length === 0) {
             return {
-                resultPayload: { success: false, error: 'adaptive_matchmove_resect_keyframe: "anchors" must be a non-empty array or "imagePath" provided with autoExtractPose.' },
+                resultPayload: { success: false, error: `${TOOL}: "anchors" must be a non-empty array or "imagePath" provided with autoExtractPose.` },
                 status: 'failed',
                 summaryResult: 'Resection failed: anchors array is empty or missing.'
             };
         }
-
-        const isHumanPose = anchors.length === 33 && anchors.some(a => a.id === 'NOSE' || a.category === 'head');
-        const defaultCamPos: [number, number, number] = isHumanPose ? [0.0, 1.20, 3.20] : [0, 10, 20];
-        const defaultTargetPos: [number, number, number] = isHumanPose ? [0.0, 0.95, 0.0] : [0, 0, 0];
-        const defaultFov = isHumanPose ? 35.0 : 45.0;
-
-        const cameraPosition = asVec3(args.cameraPosition, defaultCamPos);
-        const targetPosition = asVec3(args.targetPosition, defaultTargetPos);
-        const upVector = asVec3(args.upVector, [0, 1, 0]);
-
-        const lensInput = (args.lens && typeof args.lens === 'object') ? (args.lens as Record<string, unknown>) : {};
-        const lens: LensIntrinsicsProfile = {
-            fovYDeg: asNumber(lensInput.fovYDeg, defaultFov)!,
-            aspectRatio: asNumber(lensInput.aspectRatio, 16 / 9),
-            k1: asNumber(lensInput.k1, 0.0)!,
-            k2: asNumber(lensInput.k2, 0.0)!,
-            scale: asNumber(lensInput.scale, 1.0)!
-        };
-
-        const width = asNumber(args.plateWidth, 1920)!;
-        const height = asNumber(args.plateHeight, 1080)!;
 
         const options: OptimizationOptions = {
             maxIterations: asNumber(args.maxIterations, 40),
@@ -734,7 +732,6 @@ export const adaptiveMatchmoveHandlers: Record<string, ToolHandler> = {
                 lens: calibrated.lens,
                 reprojectionRmsPx: calibrated.reprojectionRmsPx,
                 maxResidualPx: calibrated.maxResidualPx,
-                edgeCorrelationPercent: calibrated.edgeCorrelationPercent,
                 converged: calibrated.converged
             } as ToolResultPayload,
             status: 'completed',
@@ -752,17 +749,13 @@ export const adaptiveMatchmoveHandlers: Record<string, ToolHandler> = {
             };
         }
 
-        const context: AdaptiveMatchmoveContext = {
+        const context = requireSequenceContext('adaptive_matchmove_synthesize_trajectory', {
             sequenceId: asString(args.sequenceId) ?? 'synthesized_trajectory',
-            fps: asNumber(args.fps, 24)!,
-            totalFrames: asNumber(args.totalFrames, 361)!,
-            durationSec: asNumber(args.durationSec, 15.0)!,
-            plateResolution: {
-                width: asNumber(args.plateWidth, 1920)!,
-                height: asNumber(args.plateHeight, 1080)!
-            },
-            facadeNormal: asVec3(args.facadeNormal, [-0.8746, 0.0, -0.4848])
-        };
+            fps: args.fps,
+            totalFrames: args.totalFrames,
+            durationSec: args.durationSec,
+            facadeNormal: args.facadeNormal
+        }, false);
 
         const trajectory = AdaptiveMatchmoveCalibrationService.synthesizeSplineTrajectory(milestones, context);
 
@@ -833,12 +826,10 @@ export const adaptiveMatchmoveHandlers: Record<string, ToolHandler> = {
         }
 
         const maxAllowedRmsPx = asNumber(args.maxAllowedRmsPx, 0.05)!;
-        const minAllowedCorrelationPercent = asNumber(args.minAllowedCorrelationPercent, 98.0)!;
         const maxVelocityMps = asNumber(args.maxVelocityMps, 15.0)!;
         const maxAccelerationMps2 = asNumber(args.maxAccelerationMps2, 10.0)!;
 
         const rmsPass = report.meanRmsResidualPx <= maxAllowedRmsPx;
-        const corrPass = report.meanEdgeCorrelationPercent >= minAllowedCorrelationPercent;
 
         let peakVel = 0.0;
         let peakAcc = 0.0;
@@ -852,7 +843,7 @@ export const adaptiveMatchmoveHandlers: Record<string, ToolHandler> = {
         const velPass = peakVel <= maxVelocityMps;
         const accPass = peakAcc <= maxAccelerationMps2;
 
-        const overallPass = rmsPass && corrPass && velPass && accPass;
+        const overallPass = rmsPass && velPass && accPass;
 
         return {
             resultPayload: {
@@ -863,11 +854,6 @@ export const adaptiveMatchmoveHandlers: Record<string, ToolHandler> = {
                         measuredPx: report.meanRmsResidualPx,
                         thresholdPx: maxAllowedRmsPx,
                         pass: rmsPass
-                    },
-                    edgeCorrelation: {
-                        measuredPercent: report.meanEdgeCorrelationPercent,
-                        minPercent: minAllowedCorrelationPercent,
-                        pass: corrPass
                     },
                     droneVelocity: {
                         measuredMps: Number(peakVel.toFixed(2)),
@@ -885,8 +871,8 @@ export const adaptiveMatchmoveHandlers: Record<string, ToolHandler> = {
             } as ToolResultPayload,
             status: overallPass ? 'completed' : 'failed',
             summaryResult: overallPass
-                ? `Metrology Verified (PASS): Mean RMS = ${report.meanRmsResidualPx} px <= ${maxAllowedRmsPx} px, NCC = ${report.meanEdgeCorrelationPercent}% >= ${minAllowedCorrelationPercent}%, Peak Vel = ${peakVel.toFixed(2)} m/s.`
-                : `Metrology Audit FAILED: RMS Pass = ${rmsPass}, NCC Pass = ${corrPass}, Velocity Pass = ${velPass}, Accel Pass = ${accPass}.`
+                ? `Metrology Verified (PASS): Mean RMS = ${report.meanRmsResidualPx} px <= ${maxAllowedRmsPx} px, Peak Vel = ${peakVel.toFixed(2)} m/s.`
+                : `Metrology Audit FAILED: RMS Pass = ${rmsPass}, Velocity Pass = ${velPass}, Accel Pass = ${accPass}.`
         };
     },
 
@@ -897,11 +883,10 @@ export const adaptiveMatchmoveHandlers: Record<string, ToolHandler> = {
             ? (path.isAbsolute(imagePath) ? imagePath : path.resolve(ctx.workspaceRoot || process.cwd(), imagePath))
             : (imageBase64 ?? '');
 
-        const plateWidth = asNumber(args.plateWidth, 1920)!;
-        const plateHeight = asNumber(args.plateHeight, 1080)!;
-        const subjectHeightMeters = asNumber(args.subjectHeightMeters, 1.80)!;
+        const plateWidth = requirePositive('adaptive_matchmove_extract_pose_anchors', 'plateWidth', args.plateWidth, 'the plate width in pixels');
+        const plateHeight = requirePositive('adaptive_matchmove_extract_pose_anchors', 'plateHeight', args.plateHeight, 'the plate height in pixels');
+        const subjectHeightMeters = asNumber(args.subjectHeightMeters);
         const groundAltitudeMeters = asNumber(args.groundAltitudeMeters, 0.0)!;
-        const facingCamera = asBoolean(args.facingCamera, true)!;
         const minConfidence = asNumber(args.minConfidence, 0.3)!;
 
         const anchors = await AdaptiveMatchmoveCalibrationService.extractPoseAnchorsFromImage(input, {
@@ -909,7 +894,6 @@ export const adaptiveMatchmoveHandlers: Record<string, ToolHandler> = {
             plateHeight,
             subjectHeightMeters,
             groundAltitudeMeters,
-            facingCamera,
             minConfidence
         });
 
@@ -923,7 +907,7 @@ export const adaptiveMatchmoveHandlers: Record<string, ToolHandler> = {
                 groundAltitudeMeters
             } as ToolResultPayload,
             status: 'completed',
-            summaryResult: `Extracted ${anchors.length} spatial pose correspondences (MediaPipe 33 rig, height = ${subjectHeightMeters}m, resolution = ${plateWidth}x${plateHeight}).`
+            summaryResult: `Extracted ${anchors.length} spatial pose correspondences (MediaPipe 33 rig, ${subjectHeightMeters !== undefined ? `rescaled to height = ${subjectHeightMeters}m` : 'MediaPipe metric scale'}, resolution = ${plateWidth}x${plateHeight}).`
         };
     },
 
@@ -934,28 +918,34 @@ export const adaptiveMatchmoveHandlers: Record<string, ToolHandler> = {
 
         const trajectoryPath = asString(args.trajectoryPath);
         if (!frames || frames.length === 0) {
-            let candidatePath = trajectoryPath;
+            const candidatePath = trajectoryPath;
             if (!candidatePath) {
-                const defaultPath = path.resolve(ctx.workspaceRoot || process.cwd(), 'public/models/plaza_hotel_camera_path.json');
-                if (fs.existsSync(defaultPath)) {
-                    candidatePath = defaultPath;
-                }
+                throw new MissingInputError('adaptive_matchmove_optimize_keyframe_density', '"trajectory" frames or a "trajectoryPath"');
             }
-            if (candidatePath) {
+            {
                 const absPath = path.isAbsolute(candidatePath) ? candidatePath : path.resolve(ctx.workspaceRoot || process.cwd(), candidatePath);
-                if (fs.existsSync(absPath)) {
+                if (!fs.existsSync(absPath)) {
+                    throw new MissingInputError('adaptive_matchmove_optimize_keyframe_density', 'trajectoryPath', `${absPath} does not exist`);
+                }
+                {
                     try {
                         const content = fs.readFileSync(absPath, 'utf8');
                         const parsed = JSON.parse(content);
                         const rawFrames = Array.isArray(parsed) ? parsed : (parsed.frames || parsed.trajectory);
                         if (Array.isArray(rawFrames)) {
-                            frames = rawFrames.map((f: any, idx: number) => ({
-                                timeSec: typeof f.timeSec === 'number' ? f.timeSec : (typeof f.time === 'number' ? f.time : idx / 24.0),
-                                position: asVec3(f.position, [0, 0, 0]),
-                                target: asVec3(f.target, [0, 0, 0]),
-                                up: f.up ? asVec3(f.up, [0, 1, 0]) : undefined,
-                                fov: asNumber(f.fov, 40)
-                            }));
+                            frames = rawFrames.map((f: any, idx: number) => {
+                                const timeSec = typeof f.timeSec === 'number' ? f.timeSec : f.time;
+                                if (typeof timeSec !== 'number' || !Number.isFinite(timeSec)) {
+                                    throw new MissingInputError('adaptive_matchmove_optimize_keyframe_density', `trajectory frame ${idx} timeSec`);
+                                }
+                                return {
+                                    timeSec,
+                                    position: requireVec3('adaptive_matchmove_optimize_keyframe_density', `trajectory frame ${idx} position`, f.position, '[x, y, z]'),
+                                    target: requireVec3('adaptive_matchmove_optimize_keyframe_density', `trajectory frame ${idx} target`, f.target, '[x, y, z]'),
+                                    up: optionalVec3(f.up),
+                                    fov: asNumber(f.fov)
+                                };
+                            });
                         }
                     } catch (e: any) {
                         return {

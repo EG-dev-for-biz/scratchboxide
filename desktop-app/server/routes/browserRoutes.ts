@@ -9,6 +9,7 @@
 
 import { Request, Response, Router } from 'express';
 import { BrowserProxyService } from '../../../packages/core/src/node';
+import { NoActiveBrowserPageError } from '../../../packages/core/src/node/browser-proxy-service';
 
 export function createBrowserRouter(browserProxy: BrowserProxyService): Router {
     const router = Router();
@@ -23,16 +24,40 @@ export function createBrowserRouter(browserProxy: BrowserProxyService): Router {
     });
 
     router.get('/state', (_req: Request, res: Response) => {
-        res.json(browserProxy.getActiveState());
+        const state = browserProxy.getActiveState();
+        if (!state) {
+            const err = new NoActiveBrowserPageError();
+            res.status(404).json({ success: false, code: err.code, error: err.message });
+            return;
+        }
+        res.json(state);
     });
 
     router.post('/state', (req: Request, res: Response) => {
-        browserProxy.updateState(req.body);
+        try {
+            browserProxy.updateState(req.body);
+        } catch (err) {
+            if (err instanceof NoActiveBrowserPageError) {
+                res.status(400).json({ success: false, code: err.code, error: err.message });
+                return;
+            }
+            throw err;
+        }
         res.json({ success: true });
     });
 
-    router.get('/pending-actions', (_req: Request, res: Response) => {
-        res.json(browserProxy.getPendingActions());
+    // ?waitMs=N (at most 30 s) holds the request until an action is queued: a long-poll, so the canvas browser
+    // gets actions as they are queued instead of polling every second.
+    router.get('/pending-actions', async (req: Request, res: Response) => {
+        const waitMs = Math.min(30_000, Math.max(0, Number(req.query.waitMs) || 0));
+        if (!waitMs) {
+            res.json(browserProxy.getPendingActions());
+            return;
+        }
+        const gone = new AbortController();
+        res.on('close', () => { if (!res.writableFinished) gone.abort(); });
+        const actions = await browserProxy.waitForPendingActions(waitMs, gone.signal);
+        if (!gone.signal.aborted) res.json(actions);
     });
 
     router.post('/action-result', (req: Request, res: Response) => {

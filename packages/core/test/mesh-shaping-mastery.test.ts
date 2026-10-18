@@ -11,6 +11,7 @@ import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import { NativeCppCompilerService } from '../src/node/3d-engine/native-compiler-service';
 import { createOperatorEngine } from '../src/browser/generative-canvas/services/direct-dispatch-operator-engine';
+import { evaluateFalloff } from '../src/browser/generative-canvas/services/mesh-sculpting-engine';
 import { detect3DSceneTheme, generateDefaultCpp3DSource } from '../src/browser/generative-canvas/procedural-3d-synthesizer';
 
 describe('3D Mesh Shaping Mastery (C++20 Engine, Operators, & Autonomous DAG)', () => {
@@ -156,116 +157,211 @@ int main() {
         expect(chunk.indexCount).toBeGreaterThan(100);
     });
 
-    it('executes direct-dispatch mesh shaping operators (taper, twist, bend, sculpt, lattice, subdivision)', () => {
-        const engine = createOperatorEngine();
-        const threeScene = new THREE.Scene();
-        engine.attachThreeScene(threeScene);
+    describe('direct-dispatch mesh shaping operators on a live viewport mesh', () => {
+        /** Engine with an attached Three.js scene holding one mesh named `name` built on `geometry`. */
+        const liveEngine = (name: string, geometry: THREE.BufferGeometry) => {
+            const engine = createOperatorEngine();
+            const scene = new THREE.Scene();
+            const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial());
+            mesh.name = name;
+            scene.add(mesh);
+            engine.attachThreeScene(scene);
+            return { engine, mesh };
+        };
+        const positionsOf = (geometry: THREE.BufferGeometry) => {
+            const pos = geometry.getAttribute('position');
+            const out: THREE.Vector3[] = [];
+            for (let i = 0; i < pos.count; i++) out.push(new THREE.Vector3().fromBufferAttribute(pos, i));
+            return out;
+        };
 
-        // 1. Spawn a box mesh
-        const spawnRes = engine.dispatch('sb_add_mesh', {
-            objectId: 'hero-mesh',
-            name: 'Hero Mesh',
-            type: 'box',
-            scale: [2, 4, 2]
+        it('fails with not_available_here when no live mesh is attached', () => {
+            const engine = createOperatorEngine({
+                title: 'Data only',
+                customMeshes: [{ id: 'hero-mesh', name: 'Hero Mesh', type: 'box', position: [0, 0, 0], scale: [2, 4, 2] }]
+            });
+            const calls: Array<[string, any]> = [
+                ['sb_taper_mesh', { objectId: 'hero-mesh', factor: 0.4 }],
+                ['sb_twist_mesh', { objectId: 'hero-mesh', angle: 1 }],
+                ['sb_bend_mesh', { objectId: 'hero-mesh', angle: 1, radius: 5 }],
+                ['sb_lattice_deform', { objectId: 'hero-mesh', controlOffsets: [{ index: [2, 2, 2], delta: [1, 0, 0] }] }],
+                ['sb_sculpt_stroke', { objectId: 'hero-mesh', brush: 'grab', center: [0, 0, 0], radius: 1, strength: 1 }],
+                ['sb_loop_subdivide', { objectId: 'hero-mesh', iterations: 1 }],
+                ['sb_repair_mesh', { objectId: 'hero-mesh' }],
+                ['sb_reshape_mesh', { objectId: 'hero-mesh', operations: [{ type: 'taper', factor: 0.5 }] }]
+            ];
+            for (const [op, params] of calls) {
+                const res = engine.dispatch(op, params);
+                expect(res.success, op).toBe(false);
+                expect(res.errorCode, op).toBe('not_available_here');
+            }
         });
-        expect(spawnRes.success).toBe(true);
 
-        // Attach a Three.js BufferGeometry to simulate live viewport
-        const threeMesh = new THREE.Mesh(
-            new THREE.BoxGeometry(2, 4, 2, 4, 4, 4),
-            new THREE.MeshStandardMaterial()
-        );
-        threeMesh.name = 'hero-mesh';
-        threeScene.add(threeMesh);
-
-        // 2. Taper
-        const taperRes = engine.dispatch('sb_taper_mesh', {
-            objectId: 'hero-mesh',
-            axis: 'y',
-            factor: 0.4,
-            power: 1.5
+        it('sb_taper_mesh scales cross-sections linearly along the axis', () => {
+            const { engine, mesh } = liveEngine('hero-mesh', new THREE.BoxGeometry(2, 4, 2, 4, 4, 4));
+            const before = positionsOf(mesh.geometry);
+            const res = engine.dispatch('sb_taper_mesh', { objectId: 'hero-mesh', axis: 'y', factor: 0.4, power: 1 });
+            expect(res.success).toBe(true);
+            expect(res.data.affectedVertices).toBe(before.length);
+            const after = positionsOf(mesh.geometry);
+            for (let i = 0; i < before.length; i++) {
+                const s = 1 + (0.4 - 1) * ((before[i].y + 2) / 4);
+                expect(after[i].x).toBeCloseTo(before[i].x * s, 6);
+                expect(after[i].y).toBeCloseTo(before[i].y, 6);
+                expect(after[i].z).toBeCloseTo(before[i].z * s, 6);
+            }
+            mesh.geometry.computeBoundingBox();
+            expect(mesh.geometry.boundingBox!.max.x).toBeCloseTo(1, 6); // bottom ring keeps full width
         });
-        expect(taperRes.success).toBe(true);
-        expect((taperRes.data as any).affectedVertices).toBeGreaterThan(0);
 
-        // 3. Twist
-        const twistRes = engine.dispatch('sb_twist_mesh', {
-            objectId: 'hero-mesh',
-            axis: 'y',
-            angle: Math.PI * 0.5
+        it('sb_twist_mesh rotates each slice by angle * t about the axis', () => {
+            const { engine, mesh } = liveEngine('hero-mesh', new THREE.BoxGeometry(2, 4, 2, 2, 4, 2));
+            const before = positionsOf(mesh.geometry);
+            const res = engine.dispatch('sb_twist_mesh', { objectId: 'hero-mesh', axis: 'y', angle: Math.PI / 2 });
+            expect(res.success).toBe(true);
+            const after = positionsOf(mesh.geometry);
+            for (let i = 0; i < before.length; i++) {
+                const theta = (Math.PI / 2) * ((before[i].y + 2) / 4);
+                expect(after[i].x).toBeCloseTo(Math.cos(theta) * before[i].x + Math.sin(theta) * before[i].z, 6);
+                expect(after[i].z).toBeCloseTo(-Math.sin(theta) * before[i].x + Math.cos(theta) * before[i].z, 6);
+                expect(after[i].y).toBeCloseTo(before[i].y, 6);
+                // a rotation keeps the distance from the axis
+                expect(Math.hypot(after[i].x, after[i].z)).toBeCloseTo(Math.hypot(before[i].x, before[i].z), 6);
+            }
         });
-        expect(twistRes.success).toBe(true);
-        expect((twistRes.data as any).affectedVertices).toBeGreaterThan(0);
 
-        // 4. Bend
-        const bendRes = engine.dispatch('sb_bend_mesh', {
-            objectId: 'hero-mesh',
-            mainAxis: 'y',
-            bendAxis: 'x',
-            angle: Math.PI * 0.25,
-            radius: 5.0
+        it('sb_bend_mesh maps vertices onto the bend arc', () => {
+            const { engine, mesh } = liveEngine('hero-mesh', new THREE.BoxGeometry(4, 1, 1, 8, 1, 1));
+            const before = positionsOf(mesh.geometry);
+            const angle = Math.PI / 4;
+            const radius = 5;
+            const res = engine.dispatch('sb_bend_mesh', { objectId: 'hero-mesh', mainAxis: 'x', bendAxis: 'y', angle, radius });
+            expect(res.success).toBe(true);
+            const after = positionsOf(mesh.geometry);
+            for (let i = 0; i < before.length; i++) {
+                const theta = (before[i].x / radius) * (angle / Math.PI);
+                const r = radius + before[i].y;
+                expect(after[i].x).toBeCloseTo(r * Math.sin(theta), 6);
+                expect(after[i].y).toBeCloseTo(r * Math.cos(theta) - radius, 6);
+                expect(after[i].z).toBeCloseTo(before[i].z, 6);
+            }
         });
-        expect(bendRes.success).toBe(true);
-        expect((bendRes.data as any).affectedVertices).toBeGreaterThan(0);
 
-        // 5. FFD Lattice Deform
-        const latticeRes = engine.dispatch('sb_lattice_deform', {
-            objectId: 'hero-mesh',
-            dimensions: [3, 3, 3],
-            controlOffsets: [
-                { index: [0, 1, 1], delta: [0.5, 0, 0] },
-                { index: [2, 1, 1], delta: [-0.5, 0, 0] }
-            ]
+        it('sb_lattice_deform moves vertices by Bernstein-weighted control offsets', () => {
+            const { engine, mesh } = liveEngine('hero-mesh', new THREE.BoxGeometry(2, 2, 2));
+            const before = positionsOf(mesh.geometry);
+            const res = engine.dispatch('sb_lattice_deform', {
+                objectId: 'hero-mesh',
+                dimensions: [3, 3, 3],
+                controlOffsets: [{ index: [2, 2, 2], delta: [1, 0, 0] }]
+            });
+            expect(res.success).toBe(true);
+            expect(res.data.affectedVertices).toBe(before.length);
+            const after = positionsOf(mesh.geometry);
+            for (let i = 0; i < before.length; i++) {
+                // corner control point (2,2,2) of a 3x3x3 lattice has weight u^2 v^2 w^2
+                const u = (before[i].x + 1) / 2, v = (before[i].y + 1) / 2, w = (before[i].z + 1) / 2;
+                expect(after[i].x).toBeCloseTo(before[i].x + u * u * v * v * w * w, 6);
+                expect(after[i].y).toBeCloseTo(before[i].y, 6);
+            }
+            // the max corner moves a full unit, the min corner not at all
+            const maxCorner = before.findIndex(p => p.x === 1 && p.y === 1 && p.z === 1);
+            const minCorner = before.findIndex(p => p.x === -1 && p.y === -1 && p.z === -1);
+            expect(after[maxCorner].x).toBeCloseTo(2, 6);
+            expect(after[minCorner].x).toBeCloseTo(-1, 6);
         });
-        expect(latticeRes.success).toBe(true);
-        expect((latticeRes.data as any).affectedVertices).toBeGreaterThan(0);
 
-        // 6. Sculpt Stroke
-        const sculptRes = engine.dispatch('sb_sculpt_stroke', {
-            objectId: 'hero-mesh',
-            brush: 'clay',
-            center: [0, 2, 0],
-            radius: 2.0,
-            strength: 0.5
+        it('sb_sculpt_stroke grab moves only vertices inside the brush, by strength * falloff', () => {
+            const { engine, mesh } = liveEngine('hero-mesh', new THREE.BoxGeometry(2, 4, 2, 4, 4, 4));
+            const before = positionsOf(mesh.geometry);
+            const center = new THREE.Vector3(0, 2, 0);
+            const radius = 1.0;
+            const strength = 0.5;
+            const inside = before.filter(p => p.distanceTo(center) <= radius).length;
+            const res = engine.dispatch('sb_sculpt_stroke', {
+                objectId: 'hero-mesh', brush: 'grab', center: [0, 2, 0], radius, strength, direction: [0, 1, 0], falloff: 'smoothstep'
+            });
+            expect(res.success).toBe(true);
+            expect(res.data.affectedVertices).toBe(inside);
+            expect(inside).toBeGreaterThan(0);
+            const after = positionsOf(mesh.geometry);
+            for (let i = 0; i < before.length; i++) {
+                const d = before[i].distanceTo(center);
+                const lift = d <= radius ? strength * evaluateFalloff(d, radius, 'smoothstep') : 0;
+                expect(after[i].y).toBeCloseTo(before[i].y + lift, 6);
+                expect(after[i].x).toBeCloseTo(before[i].x, 6);
+            }
+            // the top-centre vertex sits at the brush centre and rises the full strength
+            const top = before.findIndex(p => p.distanceTo(center) < 1e-9);
+            expect(after[top].y).toBeCloseTo(2.5, 6);
         });
-        expect(sculptRes.success).toBe(true);
-        expect((sculptRes.data as any).affectedVertices).toBeGreaterThan(0);
 
-        // 7. Loop Subdivide
-        const subRes = engine.dispatch('sb_loop_subdivide', {
-            objectId: 'hero-mesh',
-            iterations: 1
+        it('sb_loop_subdivide quadruples the faces and keeps the surface closed', () => {
+            const { engine, mesh } = liveEngine('hero-mesh', new THREE.BoxGeometry(2, 4, 2));
+            const oldGeometry = mesh.geometry;
+            const res = engine.dispatch('sb_loop_subdivide', { objectId: 'hero-mesh', iterations: 1 });
+            expect(res.success).toBe(true);
+            expect(res.data.faceCount).toBe(48);
+            expect(res.data.vertexCountBefore).toBe(24);
+            expect(mesh.geometry).not.toBe(oldGeometry);
+            const stats = engine.dispatch('sb_get_mesh_stats', { objectId: 'hero-mesh' });
+            expect(stats.data.faceCount).toBe(48);
+            expect(stats.data.isWatertight).toBe(true);
+            expect(stats.data.edgeCount).toBe(72);
+            // Loop smoothing pulls the corners in (unlike midpoint subdivision): volume drops below 2*4*2
+            expect(stats.data.volume).toBeLessThan(16);
+            const maxRadius = Math.max(...positionsOf(mesh.geometry).map(p => p.length()));
+            expect(maxRadius).toBeLessThan(Math.sqrt(6) - 1e-3);
         });
-        expect(subRes.success).toBe(true);
-        expect((subRes.data as any).vertexCount).toBeGreaterThan(24);
 
-        // 8. Repair Mesh
-        const repairRes = engine.dispatch('sb_repair_mesh', {
-            objectId: 'hero-mesh',
-            weldEpsilon: 1e-4,
-            removeDegenerates: true
-        });
-        expect(repairRes.success).toBe(true);
-        expect((repairRes.data as any).repaired).toBe(true);
+        it('sb_repair_mesh removes degenerate and duplicate faces and fixes a flipped face', () => {
+            const geometry = new THREE.BoxGeometry(2, 2, 2);
+            const index = Array.from(geometry.index!.array);
+            // flip the winding of face 1, append a copy of face 5 and a degenerate face
+            [index[4], index[5]] = [index[5], index[4]];
+            index.push(index[15], index[16], index[17]);
+            index.push(index[0], index[0], index[1]);
+            geometry.setIndex(index);
+            const { engine } = liveEngine('broken-mesh', geometry);
 
-        // 9. Loft Mesh Operator
-        const loftRes = engine.dispatch('sb_loft_mesh', {
-            slices: [
-                [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]],
-                [[0, 2, 0], [1.5, 2, 0], [1.5, 2, 1.5], [0, 2, 1.5]],
-                [[0, 4, 0], [0.5, 4, 0], [0.5, 4, 0.5], [0, 4, 0.5]]
-            ]
-        });
-        expect(loftRes.success).toBe(true);
-        expect((loftRes.data as any).totalVertices).toBeGreaterThan(0);
+            const before = engine.dispatch('sb_get_mesh_stats', { objectId: 'broken-mesh' });
+            expect(before.data.faceCount).toBe(14);
+            expect(before.data.isWatertight).toBe(false);
 
-        // 10. Lathe Mesh Operator
-        const latheRes = engine.dispatch('sb_lathe_mesh', {
-            profilePoints: [[0.5, 0], [1.2, 1], [0.8, 2], [1.5, 3]],
-            segments: 16
+            const res = engine.dispatch('sb_repair_mesh', { objectId: 'broken-mesh', weldEpsilon: 1e-4, removeDegenerates: true });
+            expect(res.success).toBe(true);
+            expect(res.data.degenerateFacesRemoved).toBe(1);
+            expect(res.data.duplicateFacesRemoved).toBe(1);
+            expect(res.data.facesFlipped).toBe(1);
+            expect(res.data.before.isWatertight).toBe(false);
+            expect(res.data.after.faceCount).toBe(12);
+            expect(res.data.after.isWatertight).toBe(true);
+
+            const after = engine.dispatch('sb_get_mesh_stats', { objectId: 'broken-mesh' });
+            expect(after.data.volume).toBeCloseTo(8, 3);
         });
-        expect(latheRes.success).toBe(true);
-        expect((latheRes.data as any).totalFaces).toBeGreaterThan(0);
+
+        it('sb_reshape_mesh applies the given taper and rejects operations without values', () => {
+            const { engine, mesh } = liveEngine('hero-mesh', new THREE.BoxGeometry(2, 4, 2));
+            const before = positionsOf(mesh.geometry);
+            const res = engine.dispatch('sb_reshape_mesh', { objectId: 'hero-mesh', operations: [{ type: 'taper', factor: 0.5 }] });
+            expect(res.success).toBe(true);
+            expect(res.data.vertexCount).toBe(before.length);
+            const after = positionsOf(mesh.geometry);
+            for (let i = 0; i < before.length; i++) {
+                const s = 1 + (0.5 - 1) * ((before[i].y + 2) / 4);
+                expect(after[i].x).toBeCloseTo(before[i].x * s, 6);
+            }
+            expect(engine.dispatch('sb_reshape_mesh', { objectId: 'hero-mesh', operations: [{ type: 'taper' }] }).success).toBe(false);
+            expect(engine.dispatch('sb_reshape_mesh', { objectId: 'hero-mesh', prompt: 'make it thinner' }).success).toBe(false);
+        });
+
+        it('removed generator operators are not registered', () => {
+            const engine = createOperatorEngine();
+            for (const name of ['sb_loft_mesh', 'sb_lathe_mesh', 'sb_add_mesh', 'sb_extrude_faces', 'sb_boolean_op']) {
+                expect(engine.getOperator(name), name).toBeUndefined();
+            }
+        });
     });
 
     it('detects mesh-shaping theme and synthesizes complete procedural C++ generator with shaper algorithms', () => {

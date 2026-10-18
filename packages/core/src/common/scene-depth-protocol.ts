@@ -50,7 +50,8 @@ export interface SceneDepthAnnotation {
         mid: [number, number];
         far: [number, number];
     };
-    sceneType?: 'desktop' | 'vehicle' | 'street' | 'interior' | 'landscape' | 'macro' | 'general';
+    /** Free-form scene descriptor from the model (diagnostic only; nothing branches on it). */
+    sceneType?: 'desktop' | 'vehicle' | 'street' | 'interior' | 'landscape' | 'macro' | 'general' | (string & {});
 }
 
 /**
@@ -113,7 +114,8 @@ export interface SceneDepthResponse {
     annotation?: SceneDepthAnnotation;
     enriched?: EnrichedDepthAnnotation;
     depthMap?: DenseDepthMapResult;
-    confidence: number;
+    /** Only set when derived from the model output; the service does not report one today. */
+    confidence?: number;
     explanation?: string;
     error?: string;
 }

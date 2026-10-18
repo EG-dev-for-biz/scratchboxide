@@ -10,11 +10,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { NativeCppCompilerService } from './native-compiler-service';
+import { compileNativeCached, defaultNativeFlags } from './native-build-cache';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export interface AtmosphereParameters {
     observerAltitudeMeters?: number;
@@ -48,52 +49,9 @@ export interface PhysicalSkyResult {
     error?: string;
 }
 
-/**
- * Service orchestrating native C++20 physical atmospheric single-scattering
- * (Rayleigh/Mie/Ozone) sky generation from scratchbox_sky.hpp.
- *
- * Replaces client-side Three.js GLSL heuristic sky shaders with physically-grounded
- * precomputed equirectangular radiance environments.
- */
-export class NativeSkyService {
-    private compiler: NativeCppCompilerService;
-
-    constructor(customIncludePath?: string) {
-        this.compiler = new NativeCppCompilerService(customIncludePath);
-    }
-
-    /**
-     * Generates a physical equirectangular sky map (Float32Array RGB) and radiometric
-     * atmospheric values using the native C++20 scratchbox_sky.hpp PhysicalSky engine.
-     */
-    public async generatePhysicalSkyEquirectangular(
-        options: PhysicalSkyOptions
-    ): Promise<PhysicalSkyResult> {
-        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbox_sky_'));
-        const sourceFile = path.join(tmpDir, 'sky_runner.cpp');
-        const binaryPath = path.join(tmpDir, 'sky_runner');
-        const outBinPath = path.join(tmpDir, 'sky_output.bin');
-
-        const width = options.width || 256;
-        const height = options.height || 128;
-        const azimRes = options.azimuthResolution || Math.min(width, 128);
-        const elevRes = options.elevationResolution || Math.min(height, 64);
-
-        const sunX = options.sunDirection[0];
-        const sunY = options.sunDirection[1];
-        const sunZ = options.sunDirection[2];
-
-        const toCppFloat = (n: number) => Number.isInteger(n) ? n.toFixed(1) + 'f' : n + 'f';
-
-        const obsAlt = options.params?.observerAltitudeMeters ?? 0.0;
-        const airDen = options.params?.airDensity ?? 1.0;
-        const dustDen = options.params?.dustDensity ?? 1.0;
-        const ozoneDen = options.params?.ozoneDensity ?? 1.0;
-        const sunAng = options.params?.sunAngularDiameterDeg ?? 0.545;
-        const sunInt = options.params?.sunIntensity ?? 1.0;
-
-        try {
-            const cppSource = `
+/** The sky runner: one binary for every sky (parameters come on the command line), built once through the native build cache. */
+const SKY_RUNNER_SOURCE = `
+#include <cstdlib>
 #include <iostream>
 #include <fstream>
 #include <vector>
@@ -103,23 +61,27 @@ export class NativeSkyService {
 
 using namespace scratchbox;
 
+// argv: out sunX sunY sunZ observerAltitude airDensity dustDensity ozoneDensity sunAngularDiameterDeg sunIntensity
+//       azimuthResolution elevationResolution width height (floats are decimal text, parsed like a C++ literal)
 int main(int argc, char** argv) {
-    if (argc < 2) return 1;
+    if (argc < 15) return 1;
     const char* outPath = argv[1];
+    auto f = [&](int i) { return std::strtof(argv[i], nullptr); };
+    auto n = [&](int i) { return std::atoi(argv[i]); };
 
-    math::Vec3 sunDir(${toCppFloat(sunX)}, ${toCppFloat(sunY)}, ${toCppFloat(sunZ)});
+    math::Vec3 sunDir(f(2), f(3), f(4));
     sky::AtmosphereParams params;
-    params.observerAltitudeMeters = ${toCppFloat(obsAlt)};
-    params.airDensity = ${toCppFloat(airDen)};
-    params.dustDensity = ${toCppFloat(dustDen)};
-    params.ozoneDensity = ${toCppFloat(ozoneDen)};
-    params.sunAngularDiameterDeg = ${toCppFloat(sunAng)};
-    params.sunIntensity = ${toCppFloat(sunInt)};
+    params.observerAltitudeMeters = f(5);
+    params.airDensity = f(6);
+    params.dustDensity = f(7);
+    params.ozoneDensity = f(8);
+    params.sunAngularDiameterDeg = f(9);
+    params.sunIntensity = f(10);
 
-    sky::PhysicalSky sky(sunDir, params, ${azimRes}, ${elevRes});
+    sky::PhysicalSky sky(sunDir, params, n(11), n(12));
 
-    int width = ${width};
-    int height = ${height};
+    int width = n(13);
+    int height = n(14);
     std::vector<float> rgbData(static_cast<size_t>(width) * height * 3, 0.0f);
 
     const float kPi = 3.14159265358979323846f;
@@ -191,15 +153,62 @@ int main(int argc, char** argv) {
     return 0;
 }
 `;
-            fs.writeFileSync(sourceFile, cppSource, 'utf8');
 
-            const compileStart = Date.now();
-            const compileCmd = `${process.env.CXX || 'clang++'} -std=c++20 -O3 -I "${this.compiler.getSdkIncludePath()}" "${sourceFile}" -o "${binaryPath}"`;
-            await execAsync(compileCmd, { cwd: tmpDir });
-            const compilationTimeMs = Date.now() - compileStart;
+/**
+ * Service orchestrating native C++20 physical atmospheric single-scattering
+ * (Rayleigh/Mie/Ozone) sky generation from scratchbox_sky.hpp.
+ *
+ * Replaces client-side Three.js GLSL heuristic sky shaders with physically-grounded
+ * precomputed equirectangular radiance environments.
+ */
+export class NativeSkyService {
+    private compiler: NativeCppCompilerService;
 
+    constructor(customIncludePath?: string) {
+        this.compiler = new NativeCppCompilerService(customIncludePath);
+    }
+
+    /**
+     * Generates a physical equirectangular sky map (Float32Array RGB) and radiometric
+     * atmospheric values using the native C++20 scratchbox_sky.hpp PhysicalSky engine.
+     */
+    public async generatePhysicalSkyEquirectangular(
+        options: PhysicalSkyOptions
+    ): Promise<PhysicalSkyResult> {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbox_sky_'));
+        const outBinPath = path.join(tmpDir, 'sky_output.bin');
+
+        const width = options.width || 256;
+        const height = options.height || 128;
+        const azimRes = options.azimuthResolution || Math.min(width, 128);
+        const elevRes = options.elevationResolution || Math.min(height, 64);
+
+        const sunX = options.sunDirection[0];
+        const sunY = options.sunDirection[1];
+        const sunZ = options.sunDirection[2];
+
+        const obsAlt = options.params?.observerAltitudeMeters ?? 0.0;
+        const airDen = options.params?.airDensity ?? 1.0;
+        const dustDen = options.params?.dustDensity ?? 1.0;
+        const ozoneDen = options.params?.ozoneDensity ?? 1.0;
+        const sunAng = options.params?.sunAngularDiameterDeg ?? 0.545;
+        const sunInt = options.params?.sunIntensity ?? 1.0;
+
+        try {
+            const compiled = await compileNativeCached({
+                sourceCode: SKY_RUNNER_SOURCE,
+                includeDirs: [this.compiler.getSdkIncludePath()],
+                flags: defaultNativeFlags(),
+                name: 'sky_runner'
+            });
+            const compilationTimeMs = compiled.cacheHit ? 0 : compiled.compileMs;
+
+            // Plain decimal text, parsed with strtof: the same float a C++ literal of that text would be.
+            const num = (v: number) => String(v);
+            const args = [outBinPath, num(sunX), num(sunY), num(sunZ), num(obsAlt), num(airDen), num(dustDen), num(ozoneDen),
+                num(sunAng), num(sunInt), String(Math.trunc(azimRes)), String(Math.trunc(elevRes)), String(Math.trunc(width)), String(Math.trunc(height))];
             const execStart = Date.now();
-            await execAsync(`"${binaryPath}" "${outBinPath}"`, { cwd: tmpDir });
+            await execFileAsync(compiled.binaryPath, args, { cwd: tmpDir });
             const executionTimeMs = Date.now() - execStart;
 
             if (!fs.existsSync(outBinPath)) {

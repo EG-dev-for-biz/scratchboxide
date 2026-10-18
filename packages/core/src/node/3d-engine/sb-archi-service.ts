@@ -12,6 +12,7 @@ import * as path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { NativeCppCompilerService } from './native-compiler-service';
+import { buildNativeIfStale } from './native-build';
 import {
     SbArchiInversionOptions,
     SbArchiInversionResult,
@@ -31,6 +32,24 @@ export {
 };
 
 const execAsync = promisify(exec);
+
+/** The native SB-Archi binary's telemetry banner was missing a measured line. */
+export class SbArchiTelemetryParseError extends Error {
+    readonly code = 'SB_ARCHI_TELEMETRY_FIELD_MISSING';
+    constructor(field: string) {
+        super(`run_sb_archi output has no "${field}" line; refusing to substitute a default. Rebuild the binary and check its stdout.`);
+        this.name = 'SbArchiTelemetryParseError';
+    }
+}
+
+/** The native arch binary's report was missing a measured field (the binary changed or failed part-way). */
+export class TectonicReportParseError extends Error {
+    readonly code = 'TECTONIC_REPORT_FIELD_MISSING';
+    constructor(field: string) {
+        super(`run_arch_constantine output has no "${field}" line; refusing to substitute a default. Rebuild the binary and check its stdout.`);
+        this.name = 'TectonicReportParseError';
+    }
+}
 
 export class SbArchiService {
     private compiler: NativeCppCompilerService;
@@ -60,28 +79,12 @@ export class SbArchiService {
      * Ensures the native C++20 SB-Archi synthesis & inversion binary is compiled.
      */
     async ensureBinary(): Promise<string> {
-        if (fs.existsSync(this.binaryPath)) {
-            return this.binaryPath;
-        }
-
         const candidateSources = [
             path.resolve(process.cwd(), 'scripts/run_sb_archi.cpp'),
             path.resolve(__dirname, '../../../../scripts/run_sb_archi.cpp')
         ];
         const sourcePath = candidateSources.find(p => fs.existsSync(p)) || candidateSources[0];
-
-        const includePath = this.compiler.getSdkIncludePath();
-        const outputDir = path.dirname(this.binaryPath);
-
-        if (!fs.existsSync(outputDir)) {
-            fs.mkdirSync(outputDir, { recursive: true });
-        }
-
-        const cxx = process.env.CXX || 'clang++';
-        const archFlag = process.env.SCRATCHBOX_NATIVE_ARCH === '1' ? '-march=native' : '';
-        const compileCmd = `${cxx} -std=c++20 -O3 ${archFlag} -I "${includePath}" "${sourcePath}" -o "${this.binaryPath}"`;
-        await execAsync(compileCmd);
-        return this.binaryPath;
+        return buildNativeIfStale({ source: sourcePath, binary: this.binaryPath, includeDir: this.compiler.getSdkIncludePath() });
     }
 
     /**
@@ -136,34 +139,40 @@ export class SbArchiService {
     }
 
     private parseTelemetry(stdout: string): SbArchiTelemetry {
-        const parseNum = (pattern: RegExp, defaultVal = 0): number => {
+        // Every number comes from the binary's banner; a missing line is an error, never a default.
+        const need = (label: string, pattern: RegExp): RegExpMatchArray => {
             const match = stdout.match(pattern);
-            return match ? parseFloat(match[1]) : defaultVal;
+            if (!match) {
+                throw new SbArchiTelemetryParseError(label);
+            }
+            return match;
         };
+        const num = (label: string, pattern: RegExp) => parseFloat(need(label, pattern)[1]);
+        const int = (label: string, pattern: RegExp) => parseInt(need(label, pattern)[1], 10);
+        const str = (pattern: RegExp) => stdout.match(pattern)?.[1].trim();
 
-        const parseIntNum = (pattern: RegExp, defaultVal = 0): number => {
-            const match = stdout.match(pattern);
-            return match ? parseInt(match[1], 10) : defaultVal;
+        const inversion = need('Inversion', /Inversion:\s*(ran|not run: .+)/)[1].trim();
+        const inversionRan = inversion === 'ran';
+        const telemetry: SbArchiTelemetry = {
+            targetStructure: str(/Target Structure:\s*(.+)/),
+            sectionMode: str(/Section Mode:\s*(.+)/),
+            pbrMode: str(/PBR Material:\s*(.+)/),
+            inversionRan,
+            synthesizedVertices: int('Manifold Vertices', /Manifold Vertices:\s*(\d+)/),
+            synthesizedTriangles: int('Manifold Triangles', /Manifold Triangles:\s*(\d+)/),
+            modelSynthesisRuntimeMs: num('Model Synthesis Runtime', /Model Synthesis Runtime:\s*([-\d.e]+)/)
         };
-
-        const parseStr = (pattern: RegExp, defaultVal = ''): string => {
-            const match = stdout.match(pattern);
-            return match ? match[1].trim() : defaultVal;
-        };
-
-        return {
-            targetStructure: parseStr(/Target Structure:\s*(.+)/, 'Roman Colosseum'),
-            sectionMode: parseStr(/Section Mode:\s*(.+)/, 'north_facade'),
-            pbrMode: parseStr(/PBR Material:\s*(.+)/, 'travertine'),
-            initialChamferMeters: parseNum(/Initial Scan Chamfer Distance:\s*([\d.]+)/, 14.75),
-            fittedChamferMeters: parseNum(/Fitted Manifold Chamfer Distance:\s*([\d.]+)/, 13.40),
-            chamferReductionPct: parseNum(/Chamfer Error Reduction:\s*([\d.]+)/, 9.1),
-            voidRestorationRatioPct: parseNum(/Restored Void Ratio:\s*([\d.]+)/, 41.5),
-            synthesizedVertices: parseIntNum(/Manifold Vertices:\s*(\d+)/, 30788),
-            synthesizedTriangles: parseIntNum(/Manifold Triangles:\s*(\d+)/, 15394),
-            optimizerRuntimeMs: parseNum(/Inversion Solver Runtime:\s*([\d.]+)/, 1.99),
-            modelSynthesisRuntimeMs: parseNum(/Model Synthesis Runtime:\s*([\d.]+)/, 0.71)
-        };
+        if (inversionRan) {
+            telemetry.scanPointsFitted = int('Scan Points Fitted', /Scan Points Fitted:\s*(\d+)/);
+            telemetry.initialChamferMeters = num('Initial Scan Chamfer Distance', /Initial Scan Chamfer Distance:\s*([-\d.e]+)/);
+            telemetry.fittedChamferMeters = num('Fitted Manifold Chamfer Distance', /Fitted Manifold Chamfer Distance:\s*([-\d.e]+)/);
+            telemetry.chamferReductionPct = num('Chamfer Error Reduction', /Chamfer Error Reduction:\s*([-\d.e]+)/);
+            telemetry.inversionConverged = need('Inversion Converged', /Inversion Converged:\s*(yes|no)/)[1] === 'yes';
+            telemetry.optimizerRuntimeMs = num('Inversion Solver Runtime', /Inversion Solver Runtime:\s*([-\d.e]+)/);
+        } else {
+            telemetry.inversionSkipReason = inversion.replace(/^not run:\s*/, '');
+        }
+        return telemetry;
     }
 
     /**
@@ -175,27 +184,7 @@ export class SbArchiService {
             path.resolve(__dirname, '../../../../scripts/run_arch_constantine.cpp')
         ];
         const sourcePath = candidateSources.find(p => fs.existsSync(p)) || candidateSources[0];
-
-        if (fs.existsSync(this.archConstantineBinaryPath)) {
-            const binStat = fs.statSync(this.archConstantineBinaryPath);
-            const srcStat = fs.existsSync(sourcePath) ? fs.statSync(sourcePath) : null;
-            if (srcStat && binStat.mtimeMs >= srcStat.mtimeMs) {
-                return this.archConstantineBinaryPath;
-            }
-        }
-
-        const includePath = this.compiler.getSdkIncludePath();
-        const outputDir = path.dirname(this.archConstantineBinaryPath);
-
-        if (!fs.existsSync(outputDir)) {
-            fs.mkdirSync(outputDir, { recursive: true });
-        }
-
-        const cxx = process.env.CXX || 'clang++';
-        const archFlag = process.env.SCRATCHBOX_NATIVE_ARCH === '1' ? '-march=native' : '';
-        const compileCmd = `${cxx} -std=c++20 -O3 ${archFlag} -I "${includePath}" "${sourcePath}" -o "${this.archConstantineBinaryPath}"`;
-        await execAsync(compileCmd);
-        return this.archConstantineBinaryPath;
+        return buildNativeIfStale({ source: sourcePath, binary: this.archConstantineBinaryPath, includeDir: this.compiler.getSdkIncludePath() });
     }
 
     /**
@@ -224,44 +213,31 @@ export class SbArchiService {
     }
 
     private parseTectonicReport(stdout: string): TectonicAnalysisReport {
-        const parseNum = (pattern: RegExp, defaultVal = 0): number => {
+        // Every field comes from the binary's report; a missing one is an error, never a default.
+        const need = (label: string, pattern: RegExp): RegExpMatchArray => {
             const match = stdout.match(pattern);
-            return match ? parseFloat(match[1]) : defaultVal;
+            if (!match) {
+                throw new TectonicReportParseError(label);
+            }
+            return match;
         };
+        const num = (label: string, pattern: RegExp) => parseFloat(need(label, pattern)[1]);
+        const int = (label: string, pattern: RegExp) => parseInt(need(label, pattern)[1], 10);
 
-        const parseIntNum = (pattern: RegExp, defaultVal = 0): number => {
-            const match = stdout.match(pattern);
-            return match ? parseInt(match[1], 10) : defaultVal;
-        };
-
-        const parseStr = (pattern: RegExp, defaultVal = ''): string => {
-            const match = stdout.match(pattern);
-            return match ? match[1].trim() : defaultVal;
-        };
-
-        const classificationMatch = stdout.match(/Classification:\s*(.+?)\s*\(Confidence:\s*(\d+)%\)/);
-        const classification = classificationMatch ? classificationMatch[1].trim() : 'Triple-Fornix Triumphal Arch';
-        const confidencePct = classificationMatch ? parseInt(classificationMatch[2], 10) : 92;
-
-        const centerMatch = stdout.match(/Footprint Center:\s*\(([-\d.]+),\s*([-\d.]+),\s*([-\d.]+)\)/);
-        const footprintCenter: [number, number, number] = centerMatch
-            ? [parseFloat(centerMatch[1]), parseFloat(centerMatch[2]), parseFloat(centerMatch[3])]
-            : [-139.62, 40.58, -45.28];
-
-        const majorDim = parseNum(/Footprint Major Dimension:\s*([\d.]+)/, 27.14);
-        const minorDim = parseNum(/Footprint Minor Dimension:\s*([\d.]+)/, 10.17);
-        const totalHeight = parseNum(/Structure Total Height:\s*([\d.]+)/, 21.55);
+        const center = need('Footprint Center', /Footprint Center:\s*\(([-\d.e]+),\s*([-\d.e]+),\s*([-\d.e]+)\)/);
+        const footprintCenter: [number, number, number] = [parseFloat(center[1]), parseFloat(center[2]), parseFloat(center[3])];
+        const majorDim = num('Footprint Major Dimension', /Footprint Major Dimension:\s*([\d.e]+)/);
+        const minorDim = num('Footprint Minor Dimension', /Footprint Minor Dimension:\s*([\d.e]+)/);
+        const totalHeight = num('Structure Total Height', /Structure Total Height:\s*([\d.e]+)/);
 
         return {
-            classification,
-            confidencePct,
             footprintCenter,
             footprintDimensions: [majorDim, totalHeight, minorDim],
             totalHeight,
-            detectedDatumsCount: parseIntNum(/Detected Datums:\s*(\d+)/, 24),
-            synthesizedVertices: parseIntNum(/Synthesized Vertices:\s*(\d+)/, 177176),
-            synthesizedTriangles: parseIntNum(/Synthesized Triangles:\s*(\d+)/, 88556),
-            runtimeMs: parseNum(/Synthesis Runtime:\s*([\d.]+)/, 10.42)
+            detectedDatumsCount: int('Detected Datums', /Detected Datums:\s*(\d+)/),
+            synthesizedVertices: int('Synthesized Vertices', /Synthesized Vertices:\s*(\d+)/),
+            synthesizedTriangles: int('Synthesized Triangles', /Synthesized Triangles:\s*(\d+)/),
+            runtimeMs: num('Synthesis Runtime', /Synthesis Runtime:\s*([\d.e]+)/)
         };
     }
 }

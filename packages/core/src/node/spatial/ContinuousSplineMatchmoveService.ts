@@ -190,7 +190,27 @@ export class ContinuousSplineMatchmoveService {
             throw new Error('ContinuousSplineMatchmoveService: knots array is empty.');
         }
 
-        const sorted = [...knots].sort((a, b) => a.timeSec - b.timeSec);
+        return this.evaluateSorted([...knots].sort((a, b) => a.timeSec - b.timeSec), timeSec);
+    }
+
+    /** Knot segment holding `timeSec` in time-sorted knots (the one `evaluateSorted` interpolates). */
+    private static segmentIndex(sorted: SplineKnot[], timeSec: number): number {
+        let segIdx = 0;
+        while (segIdx < sorted.length - 2 && sorted[segIdx + 1].timeSec < timeSec) segIdx++;
+        return segIdx;
+    }
+
+    /** Knots whose positions move the pose at `timeSec` (Catmull-Rom: the segment's two knots and one either side). */
+    private static positionSupport(sorted: SplineKnot[], timeSec: number): number[] {
+        const M = sorted.length;
+        if (M === 1 || timeSec <= sorted[0].timeSec) return [0];
+        if (timeSec >= sorted[M - 1].timeSec) return [M - 1];
+        const seg = ContinuousSplineMatchmoveService.segmentIndex(sorted, timeSec);
+        return [...new Set([seg > 0 ? seg - 1 : seg, seg, seg + 1, seg < M - 2 ? seg + 2 : seg + 1])];
+    }
+
+    /** `evaluateAt` on knots already sorted by time; `segIdx` skips the segment search when the caller knows it. */
+    private evaluateSorted(sorted: SplineKnot[], timeSec: number, segIdxHint?: number): EvaluatedPose {
         const M = sorted.length;
 
         if (M === 1 || timeSec <= sorted[0].timeSec) {
@@ -208,7 +228,7 @@ export class ContinuousSplineMatchmoveService {
                 target: [...k0.target],
                 up: this.normalize(k0.up),
                 fovYDeg: k0.fovYDeg,
-                k1: k0.k1 ?? -0.015,
+                k1: k0.k1 ?? 0,
                 pitchDeg,
                 headingDeg,
                 rotationQuaternion
@@ -230,7 +250,7 @@ export class ContinuousSplineMatchmoveService {
                 target: [...kLast.target],
                 up: this.normalize(kLast.up),
                 fovYDeg: kLast.fovYDeg,
-                k1: kLast.k1 ?? -0.015,
+                k1: kLast.k1 ?? 0,
                 pitchDeg,
                 headingDeg,
                 rotationQuaternion
@@ -238,10 +258,7 @@ export class ContinuousSplineMatchmoveService {
         }
 
         // Find enclosing knot segment
-        let segIdx = 0;
-        while (segIdx < M - 2 && sorted[segIdx + 1].timeSec < timeSec) {
-            segIdx++;
-        }
+        const segIdx = segIdxHint ?? ContinuousSplineMatchmoveService.segmentIndex(sorted, timeSec);
 
         const k1 = sorted[segIdx];
         const k2 = sorted[segIdx + 1];
@@ -266,7 +283,8 @@ export class ContinuousSplineMatchmoveService {
         const up = this.normalize(rawUp);
 
         const fovYDeg = k1.fovYDeg * (1.0 - clampedU) + k2.fovYDeg * clampedU;
-        const k1Val = (k1.k1 ?? -0.015) * (1.0 - clampedU) + (k2.k1 ?? -0.015) * clampedU;
+        // No k1 on a knot means no distortion measured: a pinhole, not an invented barrel term.
+        const k1Val = (k1.k1 ?? 0) * (1.0 - clampedU) + (k2.k1 ?? 0) * clampedU;
 
         const dx = target[0] - position[0];
         const dy = target[1] - position[1];
@@ -375,10 +393,12 @@ export class ContinuousSplineMatchmoveService {
         let totalAbs = 0.0;
         let maxErr = 0.0;
         let count = 0;
+        if (!knots || knots.length === 0) throw new Error('ContinuousSplineMatchmoveService: knots array is empty.');
+        const sorted = [...knots].sort((a, b) => a.timeSec - b.timeSec);
 
         for (const track of tracks) {
             for (const obs of track.observations) {
-                const pose = this.evaluateAt(knots, obs.timeSec);
+                const pose = this.evaluateSorted(sorted, obs.timeSec);
                 const proj = this.projectPoint(
                     track.worldPoint3D,
                     pose.position,
@@ -414,60 +434,34 @@ export class ContinuousSplineMatchmoveService {
     }
 
     /**
-     * Solves linear system A * x = b via Gaussian elimination with partial pivoting.
+     * Solves (A) x = b for a symmetric positive-definite A whose nonzeros lie within `bw` of the diagonal (banded
+     * Cholesky, O(n bw^2)). Returns null when A is not positive definite.
      */
-    private solveLinearSystem(A: Float64Array, b: Float64Array, n: number): Float64Array | null {
-        const M = new Float64Array(n * (n + 1));
-        for (let i = 0; i < n; i++) {
-            for (let j = 0; j < n; j++) {
-                M[i * (n + 1) + j] = A[i * n + j];
-            }
-            M[i * (n + 1) + n] = b[i];
-        }
-
-        for (let i = 0; i < n; i++) {
-            let maxRow = i;
-            let maxVal = Math.abs(M[i * (n + 1) + i]);
-            for (let k = i + 1; k < n; k++) {
-                const val = Math.abs(M[k * (n + 1) + i]);
-                if (val > maxVal) {
-                    maxVal = val;
-                    maxRow = k;
-                }
-            }
-
-            if (maxVal < 1e-12) {
-                return null;
-            }
-
-            // Swap rows
-            if (maxRow !== i) {
-                for (let j = i; j <= n; j++) {
-                    const tmp = M[i * (n + 1) + j];
-                    M[i * (n + 1) + j] = M[maxRow * (n + 1) + j];
-                    M[maxRow * (n + 1) + j] = tmp;
-                }
-            }
-
-            // Pivot
-            const pivot = M[i * (n + 1) + i];
-            for (let j = i; j <= n; j++) {
-                M[i * (n + 1) + j] /= pivot;
-            }
-
-            // Eliminate
-            for (let k = 0; k < n; k++) {
-                if (k === i) continue;
-                const factor = M[k * (n + 1) + i];
-                for (let j = i; j <= n; j++) {
-                    M[k * (n + 1) + j] -= factor * M[i * (n + 1) + j];
-                }
+    private solveBandedSpd(A: Float64Array, b: Float64Array, n: number, bw: number): Float64Array | null {
+        const L = new Float64Array(n * n);
+        for (let j = 0; j < n; j++) {
+            let sum = A[j * n + j];
+            for (let k = Math.max(0, j - bw); k < j; k++) sum -= L[j * n + k] * L[j * n + k];
+            if (!(sum > 1e-12)) return null;
+            const d = Math.sqrt(sum);
+            L[j * n + j] = d;
+            for (let i = j + 1; i <= Math.min(n - 1, j + bw); i++) {
+                let v = A[i * n + j];
+                for (let k = Math.max(0, i - bw); k < j; k++) v -= L[i * n + k] * L[j * n + k];
+                L[i * n + j] = v / d;
             }
         }
-
+        const y = new Float64Array(n);
+        for (let i = 0; i < n; i++) {
+            let v = b[i];
+            for (let k = Math.max(0, i - bw); k < i; k++) v -= L[i * n + k] * y[k];
+            y[i] = v / L[i * n + i];
+        }
         const x = new Float64Array(n);
-        for (let i = 0; i < n; i++) {
-            x[i] = M[i * (n + 1) + n];
+        for (let i = n - 1; i >= 0; i--) {
+            let v = y[i];
+            for (let k = i + 1; k <= Math.min(n - 1, i + bw); k++) v -= L[k * n + i] * x[k];
+            x[i] = v / L[i * n + i];
         }
         return x;
     }
@@ -475,6 +469,10 @@ export class ContinuousSplineMatchmoveService {
     /**
      * Optimizes spline knots using Levenberg-Marquardt with multi-frame track reprojection,
      * anchor lock constraints, and kinematic smoothness regularization.
+     *
+     * Knot times never change during the solve, so the knots are sorted once (and returned in time order). A
+     * Catmull-Rom pose reads four knots, so each residual depends on at most four knots: the Jacobian is built
+     * from those alone and the normal equations are banded (solved by banded Cholesky).
      */
     public optimizeSplineTrajectory(
         initialKnots: SplineKnot[],
@@ -493,85 +491,87 @@ export class ContinuousSplineMatchmoveService {
         const stepLimit = options.stepSizeLimitMeters ?? 2.0;
         const defaultAnchorWeight = options.anchorWeight ?? 50.0;
         const defaultMonoWeight = options.monotonicDescentWeight ?? 500.0;
+        const S = ContinuousSplineMatchmoveService;
 
-        let knots: SplineKnot[] = JSON.parse(JSON.stringify(initialKnots));
+        let knots: SplineKnot[] = (JSON.parse(JSON.stringify(initialKnots)) as SplineKnot[]).sort((a, b) => a.timeSec - b.timeSec);
         const numKnots = knots.length;
         const numParams = numKnots * 3; // 3 spatial parameters (x, y, z) per knot
+        if (numKnots === 0) throw new Error('ContinuousSplineMatchmoveService: knots array is empty.');
 
-        // Vectorized residual evaluator
+        // Residual blocks, in a fixed order and of fixed length: 2 per observation, 3 per anchor, 3 per interior
+        // knot (acceleration), and with descent on 1 per knot gap (zero when the gap does not climb, so the vector
+        // keeps its length and the Jacobian rows line up). `support` lists the knots a block reads.
+        type Block = { kind: 0 | 1 | 2 | 3; timeSec: number; seg: number; support: number[]; offset: number; size: number; point?: [number, number, number]; obs?: PersistentTrack3D2D['observations'][number]; anchor?: SplineAnchorConstraint; knot?: number };
+        const blocks: Block[] = [];
+        let numResiduals = 0;
+        const push = (b: Omit<Block, 'offset'>) => { blocks.push({ ...b, offset: numResiduals }); numResiduals += b.size; };
+        for (const track of tracks) {
+            for (const obs of track.observations) {
+                push({ kind: 0, timeSec: obs.timeSec, seg: S.segmentIndex(knots, obs.timeSec), support: S.positionSupport(knots, obs.timeSec), size: 2, point: track.worldPoint3D, obs });
+            }
+        }
+        for (const anchor of anchors) {
+            push({ kind: 1, timeSec: anchor.timeSec, seg: S.segmentIndex(knots, anchor.timeSec), support: S.positionSupport(knots, anchor.timeSec), size: 3, anchor });
+        }
+        for (let i = 1; i < numKnots - 1; i++) push({ kind: 2, timeSec: 0, seg: 0, support: [i - 1, i, i + 1], size: 3, knot: i });
+        if (enforceMono) for (let i = 0; i < numKnots - 1; i++) push({ kind: 3, timeSec: 0, seg: 0, support: [i, i + 1], size: 1, knot: i });
+
+        const wSmooth = Math.sqrt(smoothWeight);
+        const wMono = Math.sqrt(defaultMonoWeight);
+        /** Writes block `b`'s residuals at out[at..]; returns its squared pixel error (observations) or -1. */
+        const evalBlock = (b: Block, ks: SplineKnot[], out: Float64Array, at: number): number => {
+            if (b.kind === 0) {
+                const obs = b.obs!;
+                const pose = this.evaluateSorted(ks, b.timeSec, b.seg);
+                const proj = this.projectPoint(b.point!, pose.position, pose.target, pose.up, pose.fovYDeg, pose.k1, width, height);
+                if (!proj) { out[at] = 100.0; out[at + 1] = 100.0; return 10000.0; }
+                const du = (proj[0] - obs.pixel2D[0]) * obs.confidence;
+                const dv = (proj[1] - obs.pixel2D[1]) * obs.confidence;
+                const err = Math.hypot(du, dv);
+                const w = err <= huberThresh ? 1.0 : Math.sqrt(huberThresh / err);
+                out[at] = w * du;
+                out[at + 1] = w * dv;
+                return err * err;
+            }
+            if (b.kind === 1) {
+                const anchor = b.anchor!;
+                const pose = this.evaluateSorted(ks, b.timeSec, b.seg);
+                const w = Math.sqrt(anchor.weight ?? defaultAnchorWeight);
+                out[at] = w * (pose.position[0] - anchor.position[0]);
+                out[at + 1] = w * (pose.position[1] - anchor.position[1]);
+                out[at + 2] = w * (pose.position[2] - anchor.position[2]);
+                return -1;
+            }
+            const i = b.knot!;
+            if (b.kind === 2) {
+                for (let c = 0; c < 3; c++) out[at + c] = wSmooth * (ks[i - 1].position[c] - 2.0 * ks[i].position[c] + ks[i + 1].position[c]);
+                return -1;
+            }
+            const dy = ks[i + 1].position[1] - ks[i].position[1];
+            out[at] = dy > 0.0 ? wMono * dy : 0.0;
+            return -1;
+        };
+
         const computeResiduals = (currentKnots: SplineKnot[]): { residuals: Float64Array; rmsPx: number } => {
-            const resList: number[] = [];
+            const residuals = new Float64Array(numResiduals);
             let totalSq = 0.0;
             let trackObsCount = 0;
-
-            // 1. Reprojection residuals with Huber weighting
-            for (const track of tracks) {
-                for (const obs of track.observations) {
-                    const pose = this.evaluateAt(currentKnots, obs.timeSec);
-                    const proj = this.projectPoint(
-                        track.worldPoint3D,
-                        pose.position,
-                        pose.target,
-                        pose.up,
-                        pose.fovYDeg,
-                        pose.k1,
-                        width,
-                        height
-                    );
-
-                    if (proj) {
-                        const du = (proj[0] - obs.pixel2D[0]) * obs.confidence;
-                        const dv = (proj[1] - obs.pixel2D[1]) * obs.confidence;
-                        const err = Math.hypot(du, dv);
-                        totalSq += err * err;
-                        trackObsCount++;
-
-                        const w = err <= huberThresh ? 1.0 : Math.sqrt(huberThresh / err);
-                        resList.push(w * du);
-                        resList.push(w * dv);
-                    } else {
-                        totalSq += 10000.0;
-                        trackObsCount++;
-                        resList.push(100.0);
-                        resList.push(100.0);
-                    }
-                }
+            for (const b of blocks) {
+                const sq = evalBlock(b, currentKnots, residuals, b.offset);
+                if (b.kind === 0) { totalSq += sq; trackObsCount++; }
             }
-
-            // 2. Anchor constraint residuals
-            for (const anchor of anchors) {
-                const pose = this.evaluateAt(currentKnots, anchor.timeSec);
-                const w = Math.sqrt(anchor.weight ?? defaultAnchorWeight);
-                resList.push(w * (pose.position[0] - anchor.position[0]));
-                resList.push(w * (pose.position[1] - anchor.position[1]));
-                resList.push(w * (pose.position[2] - anchor.position[2]));
-            }
-
-            // 3. Kinematic smoothness acceleration residuals
-            const wSmooth = Math.sqrt(smoothWeight);
-            for (let i = 1; i < numKnots - 1; i++) {
-                const d2x = currentKnots[i - 1].position[0] - 2.0 * currentKnots[i].position[0] + currentKnots[i + 1].position[0];
-                const d2y = currentKnots[i - 1].position[1] - 2.0 * currentKnots[i].position[1] + currentKnots[i + 1].position[1];
-                const d2z = currentKnots[i - 1].position[2] - 2.0 * currentKnots[i].position[2] + currentKnots[i + 1].position[2];
-                resList.push(wSmooth * d2x);
-                resList.push(wSmooth * d2y);
-                resList.push(wSmooth * d2z);
-            }
-
-            // 4. Monotonic descent penalty
-            if (enforceMono) {
-                const wMono = Math.sqrt(defaultMonoWeight);
-                for (let i = 0; i < numKnots - 1; i++) {
-                    const dy = currentKnots[i + 1].position[1] - currentKnots[i].position[1];
-                    if (dy > 0.0) {
-                        resList.push(wMono * dy);
-                    }
-                }
-            }
-
-            const rmsPx = trackObsCount > 0 ? Math.sqrt(totalSq / trackObsCount) : 0.0;
-            return { residuals: new Float64Array(resList), rmsPx };
+            return { residuals, rmsPx: trackObsCount > 0 ? Math.sqrt(totalSq / trackObsCount) : 0.0 };
         };
+
+        // Blocks each knot moves, and the half-bandwidth of J^T J in parameters.
+        const affects: number[][] = Array.from({ length: numKnots }, () => []);
+        let bandwidth = 2;
+        blocks.forEach((b, bi) => {
+            for (const k of b.support) affects[k].push(bi);
+            bandwidth = Math.max(bandwidth, (Math.max(...b.support) - Math.min(...b.support)) * 3 + 2);
+        });
+        const blockJ = blocks.map(b => new Float64Array(b.size * b.support.length * 3));
+        const scratch = new Float64Array(3);
 
         const initialEval = computeResiduals(knots);
         let currentEval = initialEval;
@@ -586,42 +586,43 @@ export class ContinuousSplineMatchmoveService {
             }
 
             const r0 = currentEval.residuals;
-            const numResiduals = r0.length;
-
             if (numResiduals === 0) {
                 break;
             }
 
-            // Compute Jacobian J (numResiduals x numParams) via numerical differentiation
-            const J = new Float64Array(numResiduals * numParams);
-
-            for (let p = 0; p < numParams; p++) {
-                const k = Math.floor(p / 3);
-                const coord = p % 3;
-
-                knots[k].position[coord] += eps;
-                const rPlus = computeResiduals(knots).residuals;
-                knots[k].position[coord] -= eps; // Restore
-
-                for (let i = 0; i < numResiduals; i++) {
-                    J[i * numParams + p] = (rPlus[i] - r0[i]) / eps;
+            // Jacobian by forward differences, re-evaluating only the blocks each knot moves.
+            for (let k = 0; k < numKnots; k++) {
+                for (let coord = 0; coord < 3; coord++) {
+                    knots[k].position[coord] += eps;
+                    for (const bi of affects[k]) {
+                        const b = blocks[bi];
+                        evalBlock(b, knots, scratch, 0);
+                        const cols = b.support.length * 3;
+                        const col = b.support.indexOf(k) * 3 + coord;
+                        for (let r = 0; r < b.size; r++) blockJ[bi][r * cols + col] = (scratch[r] - r0[b.offset + r]) / eps;
+                    }
+                    knots[k].position[coord] -= eps; // Restore
                 }
             }
 
-            // Form Normal Equations: H = J^T * J, g = J^T * r
+            // Normal equations H = J^T J, g = J^T r, accumulated block by block (H is banded).
             const H = new Float64Array(numParams * numParams);
             const g = new Float64Array(numParams);
-
-            for (let i = 0; i < numResiduals; i++) {
-                const ri = r0[i];
-                for (let p = 0; p < numParams; p++) {
-                    const Jip = J[i * numParams + p];
-                    g[p] += Jip * ri;
-                    for (let q = 0; q < numParams; q++) {
-                        H[p * numParams + q] += Jip * J[i * numParams + q];
+            blocks.forEach((b, bi) => {
+                const Jb = blockJ[bi];
+                const cols = b.support.length * 3;
+                const gc = (j: number) => b.support[Math.floor(j / 3)] * 3 + (j % 3);
+                for (let r = 0; r < b.size; r++) {
+                    const ri = r0[b.offset + r];
+                    for (let j = 0; j < cols; j++) {
+                        const Jj = Jb[r * cols + j];
+                        if (Jj === 0) continue;
+                        const p = gc(j);
+                        g[p] += Jj * ri;
+                        for (let l = 0; l < cols; l++) H[p * numParams + gc(l)] += Jj * Jb[r * cols + l];
                     }
                 }
-            }
+            });
 
             // Add Levenberg-Marquardt damping: (H + lambda * diag(H))
             for (let p = 0; p < numParams; p++) {
@@ -632,7 +633,7 @@ export class ContinuousSplineMatchmoveService {
             // Solve H * delta = -g
             const negG = new Float64Array(numParams);
             for (let p = 0; p < numParams; p++) negG[p] = -g[p];
-            const delta = this.solveLinearSystem(H, negG, numParams);
+            const delta = this.solveBandedSpd(H, negG, numParams, bandwidth);
 
             if (!delta) {
                 lambda *= 4.0;

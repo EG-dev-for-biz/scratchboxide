@@ -9,6 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import * as path from 'path';
 import * as fs from 'fs';
+import { measureGlbEdgeManifold } from '../src/node/3d-engine/glb-edge-manifold';
 import {
     UniversalArchiBridgeService,
     ARCHI_TYPOLOGY_ADAPTERS,
@@ -193,7 +194,11 @@ describe('UniversalArchiBridgeService (Spatial Separator to SB-Archi)', () => {
         // Verify high-fidelity C++20 stereotomy synthesis
         expect(result.telemetry.outputVertices).toBeGreaterThan(100000);
         expect(result.telemetry.outputTriangles).toBeGreaterThan(50000);
-        expect(result.telemetry.isManifold).toBe(true);
+        // isManifold is the welded-edge audit of the written GLB (each edge used by exactly two triangles), not "has vertices".
+        const archAudit = measureGlbEdgeManifold(result.glbBuffer!);
+        console.log(`[archi arch] edge audit: ${JSON.stringify(archAudit)}`);
+        expect(result.telemetry.isManifold).toBe(archAudit.isManifold);
+        expect(archAudit.triangles).toBe(result.telemetry.outputTriangles);
         expect(result.telemetry.detectedDatumsCount).toBeGreaterThanOrEqual(20);
 
         // Ground datum check: worldPosition Y should align with base of bounding volume
@@ -237,8 +242,12 @@ describe('UniversalArchiBridgeService (Spatial Separator to SB-Archi)', () => {
 
         expect(result.telemetry.outputVertices).toBeGreaterThan(50000);
         expect(result.telemetry.outputTriangles).toBeGreaterThan(25000);
-        expect(result.telemetry.inversionRan).toBe(true);
-        expect(result.telemetry.isManifold).toBe(true);
+        // The Chamfer inversion only runs when a Colosseum scan is on disk; otherwise it must say so.
+        const scanOnDisk = fs.existsSync(path.resolve(process.cwd(), 'public/models/colosseum_clay.glb'));
+        expect(result.telemetry.inversionRan).toBe(scanOnDisk);
+        const arcadeAudit = measureGlbEdgeManifold(result.glbBuffer!);
+        console.log(`[archi arcade] edge audit: ${JSON.stringify(arcadeAudit)}`);
+        expect(result.telemetry.isManifold).toBe(arcadeAudit.isManifold);
     }, 45000);
 
     it('synthesizes watertight procedural glTF 2.0 models for Meta Sudans (rotunda) and Temple of Venus and Roma', async () => {

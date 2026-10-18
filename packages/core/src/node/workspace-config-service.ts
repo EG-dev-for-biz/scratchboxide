@@ -77,6 +77,9 @@ export interface ArtifactSyncResult {
     error?: string;
 }
 
+/** discoverAgentSkills results per workspace root, with the signature of the files they were read from. */
+const skillDiscoveryCache = new Map<string, { signature: string; skills: SkillItem[] }>();
+
 export class WorkspaceConfigService {
     /**
      * Discovers all project-level rules (SCRATCHBOX.md, AGENTS.md, .scratchbox/rules/*.md).
@@ -511,11 +514,43 @@ export class WorkspaceConfigService {
      */
     async discoverAgentSkills(workspaceRoot: string): Promise<SkillItem[]> {
         const root = path.resolve(workspaceRoot || process.cwd());
+        const ancestors = await this.ancestorDirs(root);
+        // Skills are re-read only when a skill file or folder changed (path, mtime and size of each), so the
+        // per-turn prompt and load_skill do not re-read and re-parse every SKILL.md each time.
+        const signature = await this.skillFilesSignature(ancestors);
+        const cached = skillDiscoveryCache.get(root);
+        if (cached && cached.signature === signature) return cached.skills.map(sk => ({ ...sk }));
         const byName = new Map<string, SkillItem>();
-        for (const dir of await this.ancestorDirs(root)) {
+        for (const dir of ancestors) {
             for (const skill of await this.discoverProjectSkills(dir)) byName.set(skill.name, skill);
         }
-        return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+        const skills = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+        skillDiscoveryCache.set(root, { signature, skills: skills.map(sk => ({ ...sk })) });
+        return skills;
+    }
+
+    /** Path, mtime and size of every file and folder discoverProjectSkills reads under `dirs`. */
+    private async skillFilesSignature(dirs: string[]): Promise<string> {
+        const parts: string[] = [];
+        const note = async (p: string): Promise<fs.Stats | undefined> => {
+            try {
+                const st = await fs.stat(p);
+                parts.push(`${p}|${st.mtimeMs}|${st.size}`);
+                return st;
+            } catch {
+                return undefined;
+            }
+        };
+        for (const dir of dirs) {
+            for (const skillsDir of [path.join(dir, '.scratchbox', 'skills'), path.join(dir, '.agents', 'skills')]) {
+                if (!(await note(skillsDir))) continue;
+                for (const entry of (await fs.readdir(skillsDir)).sort()) {
+                    const st = await note(path.join(skillsDir, entry));
+                    if (st?.isDirectory()) await note(path.join(skillsDir, entry, 'SKILL.md'));
+                }
+            }
+        }
+        return parts.join('\n');
     }
 
     /** Files the user put in `<workspace>/.scratchbox/knowledge/` (recursively), text content included. */

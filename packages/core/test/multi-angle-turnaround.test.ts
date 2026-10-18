@@ -138,12 +138,13 @@ describe('Multi-Angle Turnaround Service & Rig Engine', () => {
     });
 
     describe('End-to-End Execution', () => {
-        it('generates every view with the image model, conditioning each on the hero and previous views', async () => {
+        it('chained: generates every view with the image model, conditioning each on the hero and previous views', async () => {
             const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-turnaround-'));
             const fake = fakeTurnaroundClient();
             const service = new MultiAngleTurnaroundService({ createClient: async () => fake.client });
 
             const result = await service.execute({
+                conditioning: 'chained',
                 subject: 'weathered post-apocalyptic buggy',
                 rigPreset: 'dcc-ortho-4',
                 stylePreset: '18-percent-studio-clay',
@@ -153,6 +154,7 @@ describe('Multi-Angle Turnaround Service & Rig Engine', () => {
             });
 
             expect(result.success).toBe(true);
+            expect(result.conditioning).toBe('chained');
             expect(result.views).toHaveLength(4);
             expect(result.downstreamGlb).toBeUndefined();
             expect(result.modelUsed).toBe('gemini-3.1-flash-lite-image');
@@ -167,6 +169,52 @@ describe('Multi-Angle Turnaround Service & Rig Engine', () => {
                 expect(view.generatedBy).toBe('gemini-3.1-flash-lite-image');
             }
 
+            await fs.promises.rm(tmpDir, { recursive: true, force: true });
+        });
+
+        it('hero-parallel (default): the hero first, then every other view at once conditioned on the hero only; a Stop ends them all', async () => {
+            const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-turnaround-par-'));
+            let inFlight = 0, maxInFlight = 0, aborted = 0;
+            const order: string[] = [];
+            const refs: number[] = [];
+            const png = encodePng(8, 8, Buffer.alloc(8 * 8 * 4, 90));
+            const delayMs = 150;
+            const client: any = {
+                models: {
+                    generateContent: ({ contents, config }: any) => new Promise((resolve, reject) => {
+                        const label = String(contents[0].text).match(/Viewed from ([^.]+)/)?.[1] ?? '?';
+                        refs.push(contents.filter((c: any) => c.inlineData).length);
+                        order.push(`start ${label}`);
+                        inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+                        const ms = (config?.abortSignal as AbortSignal | undefined) && stopAfterHero ? (refs.length === 1 ? 10 : 10_000) : delayMs;
+                        let settled = false;
+                        const timer = setTimeout(() => { settled = true; inFlight--; order.push(`end ${label}`); resolve({ candidates: [{ content: { parts: [{ inlineData: { data: png.toString('base64'), mimeType: 'image/png' } }] } }] }); }, ms);
+                        config?.abortSignal?.addEventListener('abort', () => { if (settled) return; settled = true; clearTimeout(timer); inFlight--; aborted++; reject(Object.assign(new Error('aborted'), { name: 'AbortError' })); }, { once: true });
+                    })
+                }
+            };
+            let stopAfterHero = false;
+            const service = new MultiAngleTurnaroundService({ createClient: async () => client });
+            const t0 = Date.now();
+            const result = await service.execute({ subject: 'brass orrery', rigPreset: 'turntable-8', outputDir: tmpDir, signal: new AbortController().signal });
+            const wall = Date.now() - t0;
+            expect(result.conditioning).toBe('hero-parallel');
+            expect(result.views.map(v => v.stationIndex)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+            expect(refs).toEqual([0, 1, 1, 1, 1, 1, 1, 1]);
+            expect(order[0]).toMatch(/^start/);
+            expect(order[1]).toMatch(/^end/);       // the hero finished before any other view started
+            expect(maxInFlight).toBe(7);
+            expect(wall).toBeLessThan(4 * delayMs); // chained: 8 x delayMs
+
+            // Stop while the seven views are in flight: every one is cancelled.
+            stopAfterHero = true; refs.length = 0; aborted = 0;
+            const ctl = new AbortController();
+            const p = service.execute({ subject: 'brass orrery', rigPreset: 'turntable-8', outputDir: tmpDir, signal: ctl.signal });
+            setTimeout(() => ctl.abort(), 150);
+            await expect(p).rejects.toThrow();
+            expect(refs).toHaveLength(8);
+            expect(aborted).toBe(7);
+            expect(inFlight).toBe(0);
             await fs.promises.rm(tmpDir, { recursive: true, force: true });
         });
 

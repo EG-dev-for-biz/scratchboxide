@@ -251,8 +251,7 @@ export {
     ColmapCameraModel,
     ColmapGlbOptions,
     ColmapReconstructionSummary,
-    GlomapOptions,
-    GlomapResult
+    ColmapSparseModelRequiredError
 } from './node/3d-engine/colmap-reconstruction-service';
 export {
     NativeTileLightingService,
@@ -288,13 +287,7 @@ export {
     VideoKeyframeInput,
     VideoKeyframeConversionOptions,
     PublicSourceItem,
-    PublicSourceCatalog,
-    Depthbox360UniverseService,
-    DepthboxUniversePreset,
-    DepthboxSplatLayer,
-    Depthbox360SplatPoint,
-    Depthbox360UniverseConfig,
-    Depthbox360UniverseResult
+    PublicSourceCatalog
 } from './node/3d-engine/splat-service';
 
 // 4D Spatial & World Branching Substrates
@@ -628,7 +621,8 @@ export {
     AtmosphereService,
     LocationObjectLightingService,
     harmonizeLocationObjectAtmosphere,
-    generateCanonicalAmbulatoryFixtures,
+    buildPortalFixtures,
+    PORTAL_FIXTURE_DEFAULTS,
     STONE_ALBEDO_PROFILES,
     LOCATION_DELIGHT_FRAGMENT_CHUNK,
     LOCATION_DELIGHT_VERTEX_CHUNK,
@@ -643,6 +637,7 @@ export type {
     DelightUniformsConfig,
     AtmosphereSceneLightingConfig,
     ArchitecturalPortalFixtureConfig,
+    ArchitecturalPortalInput,
     LocationObjectAtmosphereRequest,
     LocationObjectAtmosphereResult
 } from './browser/generative-canvas/services/atmosphere';
@@ -1174,12 +1169,24 @@ export {
   AdaptivePbrImageProcessingError,
   type AdaptiveUvStrategy,
   type TextureDomain,
-  type SeamAdjustmentStrategy,
   type TopologyProbeResult,
   type AdaptiveSolarDelightingConfig,
   type AdaptivePbrRequest,
-  type AdaptiveUvPbrResult
+  type AdaptiveUvPbrResult,
+  type AdaptivePbrAppliedMethod,
+  type AdaptiveBoxProjectionSummary,
+  type PartMaterialAssignment
 } from './node/3d-engine/adaptive-uv-orchestrator';
+
+export {
+  AdaptivePbrError,
+  AdaptivePbrInputError,
+  AdaptivePbrPartSelectionError,
+  AdaptivePbrMaterialSpecError,
+  AdaptivePbrBudgetError,
+  AdaptivePbrTextureSynthesisError,
+  AdaptivePbrOutputError
+} from './node/3d-engine/adaptive-pbr-errors';
 
 export {
   HybridRecipePbrService,

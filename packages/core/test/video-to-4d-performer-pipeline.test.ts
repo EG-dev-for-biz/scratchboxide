@@ -13,8 +13,14 @@ import * as fs from 'fs-extra';
 import * as os from 'os';
 import {
     VideoTo4DPerformerPipelineService,
-    SBHUMAN_22_JOINTS
+    SBHUMAN_22_JOINTS,
+    HeroFrameExtractionError,
+    PerformerInputUnreadableError,
+    PerformerMotionUnavailableError
 } from '../src/node/spatial/VideoTo4DPerformerPipelineService';
+import { InvalidInputError } from '../src/common/errors/pipeline-errors';
+import { execSync } from 'child_process';
+import * as jpeg from 'jpeg-js';
 import { SbHumanLoader } from '../src/common/spatial/SbHumanLoader';
 import { Dynamic4DGaussianSplatService } from '../src/node/3d-engine/Dynamic4DGaussianSplatService';
 import { HOW_TO, requireAssets, requireBinary, withReason } from './helpers/requirements';
@@ -121,7 +127,7 @@ describe('VideoTo4DPerformerPipelineService', () => {
 
         expect(canonical.heroPoseJoints).toBeDefined();
 
-        const textured = pipeline.backprojectVideoTextures(
+        const textured = await pipeline.backprojectVideoTextures(
             canonical.gaussians,
             dummyHeroPath,
             morphology.colorSamples,
@@ -143,14 +149,16 @@ describe('VideoTo4DPerformerPipelineService', () => {
         }
     });
 
-    it('4. should enforce foot-contact ground clamping across motion frames', () => {
+    it('4. should enforce foot-contact ground clamping across motion frames', async () => {
         const canonicalJoints = SBHUMAN_22_JOINTS.map(j => j.restOffset);
         const parents = SBHUMAN_22_JOINTS.map(j => j.parent);
         const heroJoints = pipeline.computeHeroRestingPoseJoints(canonicalJoints);
 
-        const motion = pipeline.recoverPerformerMotion(canonicalJoints, parents, 25, 2.0, 'test_motion', heroJoints);
+        const motion = await pipeline.recoverPerformerMotion(canonicalJoints, parents, 25, 2.0, 'test_motion', heroJoints,
+            undefined, undefined, { allowSyntheticIdleMotion: true });
 
         expect(motion.num_frames).toBe(50);
+        expect(motion.motion_source).toBe('synthetic_idle');
         expect(motion.num_joints).toBe(22);
 
         // Frame 0 starts at the natural hero resting pose
@@ -165,18 +173,78 @@ describe('VideoTo4DPerformerPipelineService', () => {
         }
     });
 
-    it('5. should execute full pipeline and produce standard PLY, motion.json, and 32-byte .splat dataset', async () => {
+    it('4b. refuses the procedural idle sway unless the caller opts in', async () => {
+        const canonicalJoints = SBHUMAN_22_JOINTS.map(j => j.restOffset);
+        const parents = SBHUMAN_22_JOINTS.map(j => j.parent);
+        await expect(pipeline.recoverPerformerMotion(canonicalJoints, parents, 25, 1.0, 'no_motion'))
+            .rejects.toThrow(PerformerMotionUnavailableError);
+    });
+
+    it('4c. rejects unusable inputs and unknown venues with typed errors (no placeholder hero frame)', async () => {
+        const out = path.join(testOutputDir, 'bad_inputs');
+        await expect(pipeline.executePipeline({ videoPath: path.join(testOutputDir, 'nope.mp4'), outputDir: out }))
+            .rejects.toBeInstanceOf(PerformerInputUnreadableError);
+        const empty = path.join(testOutputDir, 'empty.mp4');
+        await fs.writeFile(empty, Buffer.alloc(0));
+        await expect(pipeline.executePipeline({ videoPath: empty, outputDir: out })).rejects.toBeInstanceOf(PerformerInputUnreadableError);
+
+        // Bytes that are not a decodable video used to yield a 1 KB zero-filled "hero frame".
+        const garbage = path.join(testOutputDir, 'garbage.mp4');
+        await fs.writeFile(garbage, Buffer.alloc(1024));
+        await expect(pipeline.extractHeroFrame(garbage, out, 0)).rejects.toBeInstanceOf(HeroFrameExtractionError);
+        const garbageImg = path.join(testOutputDir, 'garbage.jpg');
+        await fs.writeFile(garbageImg, Buffer.alloc(1024));
+        await expect(pipeline.extractHeroFrame(garbageImg, out, 0)).rejects.toBeInstanceOf(HeroFrameExtractionError);
+
+        // A venue is the caller's coordinates; an unusable one fails before any work, and none is looked up.
+        await expect(pipeline.executePipeline({ videoPath: garbageImg, outputDir: out, venue: { name: 'x', lat: 91, lng: 0, altMeters: 0, stageHeadingDeg: 0 } }))
+            .rejects.toBeInstanceOf(InvalidInputError);
+    });
+
+    it('4d. emits no venue anchor unless one is requested, and labels synthetic motion', async () => {
+        // A real 64x128 JPEG still: grey field with a tall bright figure-like block.
+        const W = 64, H = 128;
+        const rgba = Buffer.alloc(W * H * 4);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            const v = x >= 20 && x < 44 && y >= 10 && y < 120 ? 240 : 128;
+            rgba.set([v, v, v, 255], (y * W + x) * 4);
+        }
+        const hero = path.join(testOutputDir, 'still_hero.jpg');
+        await fs.writeFile(hero, jpeg.encode({ data: rgba, width: W, height: H }, 90).data);
+        const result = await pipeline.executePipeline({
+            videoPath: hero,
+            outputDir: path.join(testOutputDir, 'no_venue'),
+            characterId: 'no_venue_test',
+            numGaussians: 500,
+            motionSequenceLengthSec: 0.4,
+            allowSyntheticIdleMotion: true,
+            exportNerfstudioDataset: false
+        });
+        expect(result.venueAnchor).toBeUndefined();
+        expect(result.stagePlacementPath).toBeUndefined();
+        expect(result.telemetry.motionSource).toBe('synthetic_idle');
+        expect(result.telemetry.syntheticMotion).toBe(true);
+        expect(result.cameraIntrinsics.width).toBe(64);
+        expect(result.cameraIntrinsics.height).toBe(128);
+        const manifest = await fs.readJson(result.geoManifestPath);
+        expect(manifest.geographic_anchor).toBeUndefined();
+        expect(manifest.motion_source).toBe('synthetic_idle');
+        expect(fs.existsSync(path.join(testOutputDir, 'no_venue', 'stage_placement.json'))).toBe(false);
+    });
+
+    it.skipIf(!ffmpeg.ok)(withReason('5. should execute full pipeline and produce standard PLY, motion.json, and 32-byte .splat dataset', ffmpeg), async () => {
         const charOutputDir = path.join(testOutputDir, 'demo_character');
-        const dummyVideoPath = path.join(testOutputDir, 'performer_input.mp4');
-        await fs.writeFile(dummyVideoPath, Buffer.alloc(1024));
+        const videoPath = path.join(testOutputDir, 'performer_input.mp4');
+        execSync(`ffmpeg -v error -y -f lavfi -i "color=c=gray:s=64x128:d=1,drawbox=x=20:y=10:w=24:h=110:color=white:t=fill" -c:v libx264 -pix_fmt yuv420p "${videoPath}"`);
 
         const result = await pipeline.executePipeline({
-            videoPath: dummyVideoPath,
+            videoPath,
+            motionEstimator: 'mediapipe',
             outputDir: charOutputDir,
             characterId: 'performer_red_rocks_test',
             numGaussians: 1000,
             targetHeightMeters: 1.80,
-            venueId: 'red_rocks',
+            venue: { id: 'red_rocks', name: 'Red Rocks Amphitheatre', lat: 39.66555, lng: -105.20525, altMeters: 1932.0, stageHeadingDeg: 285.0 },
             fps: 25,
             motionSequenceLengthSec: 1.0,
             allowSyntheticIdleMotion: true
@@ -186,15 +254,15 @@ describe('VideoTo4DPerformerPipelineService', () => {
         expect(result.characterId).toBe('performer_red_rocks_test');
         expect(result.numGaussians).toBeGreaterThan(800);
         expect(result.numFrames).toBe(25);
-        expect(result.venueAnchor.venueId).toBe('red_rocks');
-        expect(result.venueAnchor.latitude).toBeCloseTo(39.66555, 4);
+        expect(result.venueAnchor!.venueId).toBe('red_rocks');
+        expect(result.venueAnchor!.latitude).toBeCloseTo(39.66555, 4);
 
         // Verify all artifact files exist on disk
         expect(fs.existsSync(result.plyPath)).toBe(true);
         expect(fs.existsSync(result.motionPath)).toBe(true);
         expect(fs.existsSync(result.splatPath)).toBe(true);
         expect(fs.existsSync(result.geoManifestPath)).toBe(true);
-        expect(fs.existsSync(result.stagePlacementPath)).toBe(true);
+        expect(fs.existsSync(result.stagePlacementPath!)).toBe(true);
 
         // Verify standard PLY header
         const plyContent = await fs.readFile(result.plyPath, 'utf-8');
@@ -211,7 +279,7 @@ describe('VideoTo4DPerformerPipelineService', () => {
         expect(splatBuffer.length).toBe(result.numGaussians * 32);
     });
 
-    it('6. should evaluate runtime deformation cleanly via Dynamic4DGaussianSplatService', () => {
+    it.skipIf(!ffmpeg.ok)(withReason('6. should evaluate runtime deformation cleanly via Dynamic4DGaussianSplatService', ffmpeg), () => {
         const charOutputDir = path.join(testOutputDir, 'demo_character');
         const customRepoRoot = testOutputDir; // Point to custom test root
         const mockDemosDir = path.join(customRepoRoot, 'models', 'performer_4dgs', 'demos', 'performer_red_rocks_test');
@@ -472,7 +540,7 @@ describe('VideoTo4DPerformerPipelineService', () => {
             skinToneRgb: [0.7, 0.6, 0.5] as [number, number, number]
         };
 
-        const gatedBackprojection = pipeline.backprojectVideoTextures(
+        const gatedBackprojection = await pipeline.backprojectVideoTextures(
             canonicalHumanoid.gaussians.slice(0, 100),
             '',
             palette,
@@ -544,7 +612,7 @@ describe('VideoTo4DPerformerPipelineService', () => {
                 const kintreeParents = SBHUMAN_22_JOINTS.map(j => j.parent);
                 const heroPoseJoints = pipeline.computeHeroRestingPoseJoints(canonicalJoints);
 
-                const motion = pipeline.recoverPerformerMotion(
+                const motion = await pipeline.recoverPerformerMotion(
                     canonicalJoints,
                     kintreeParents,
                     15,

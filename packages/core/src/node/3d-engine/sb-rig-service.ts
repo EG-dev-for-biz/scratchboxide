@@ -169,22 +169,19 @@ export function buildSbRigArgs(inputPath: string, outputPath: string, reportPath
 }
 
 export class SbRigService {
-    private binaryPath: string | null = null;
-
     constructor(private readonly compiler: NativeCppCompilerService = new NativeCppCompilerService()) {}
 
-    /** Compiles the runner once (content-addressed cache inside NativeCppCompilerService). */
+    /** The runner, built from the current source through the native build cache (a warm check costs a few stats). */
     async ensureBinary(): Promise<string> {
-        if (this.binaryPath && fs.existsSync(this.binaryPath)) return this.binaryPath;
         const sourcePath = path.join(findRepoRoot(), 'scripts/run_sb_rig_pipeline.cpp');
         if (!fs.existsSync(sourcePath)) throw new SbRigError(`SB-Rig runner source not found at ${sourcePath}`, 'compile');
-        const extraFlags = process.env.SCRATCHBOX_NATIVE_ARCH === '1' ? ['-march=native'] : [];
+        // -pthread: the average-geodesic-distance fields are computed on several threads.
+        const extraFlags = ['-pthread', ...(process.env.SCRATCHBOX_NATIVE_ARCH === '1' ? ['-march=native'] : [])];
         const compiled = await this.compiler.compileSource(fs.readFileSync(sourcePath, 'utf8'), { outputBinaryName: 'run_sb_rig_pipeline', extraFlags });
         if (!compiled.success || !compiled.binaryPath) {
             throw new SbRigError('SB-Rig runner failed to compile', 'compile', compiled.compilerOutput);
         }
-        this.binaryPath = compiled.binaryPath;
-        return this.binaryPath;
+        return compiled.binaryPath;
     }
 
     async rig(options: SbRigOptions): Promise<SbRigResult> {

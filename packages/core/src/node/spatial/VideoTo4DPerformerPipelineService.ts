@@ -9,7 +9,7 @@
 
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import { execSync } from 'child_process';
+import { execFileBuffer } from '../process/exec-file-async';
 import { BakedGaussian } from '../../common/geospatial-4d-protocol';
 import {
     HumanoidMotionData,
@@ -22,8 +22,8 @@ import { SbHumanLoader } from '../../common/spatial/SbHumanLoader';
 import { CharacterSilhouetteSolver } from './CharacterSilhouetteSolver';
 import { CharacterAnatomicalRatios } from '../../common/character-morph-protocol';
 import {
-    MUSIC_VENUE_PRESETS,
-    MusicVenuePreset
+    requireStageVenueAnchor,
+    type StageVenueAnchor
 } from '../../browser/generative-canvas/services/ConcertStagePerformerService';
 import { HeadlessVideoEditorService, resolveBinary } from '../video/HeadlessVideoEditorService';
 import { NerfstudioDatasetService } from './NerfstudioDatasetService';
@@ -32,6 +32,7 @@ import { PerformerPoseTrack, PerformerPoseTrackService } from './PerformerPoseTr
 import { HumanoidMotionBridgeService } from './HumanoidMotionBridgeService';
 import { GvhmrBody, GvhmrBodyService } from './GvhmrBodyService';
 import { encodeGaussianPly } from '../../common/gaussian-ply-codec';
+import { MissingInputError, PipelineError } from '../../common/errors/pipeline-errors';
 import {
     CANONICAL_22_JOINT_NAMES,
     DEFAULT_CANONICAL_JOINTS,
@@ -47,6 +48,58 @@ import { HumanoidSkinModality } from '../../common/humanoid-avatar-protocol';
 import { PerformerSurfaceMeshService, SurfaceMesh } from './PerformerSurfaceMeshService';
 
 const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.webm', '.avi', '.mkv', '.m4v'];
+
+/** The performer input (video or hero image) does not exist or cannot be read. */
+export class PerformerInputUnreadableError extends PipelineError {
+    readonly code = 'performer_input_unreadable';
+
+    constructor(readonly inputPath: string, readonly reason: string) {
+        super(`Performer input "${inputPath}" cannot be used: ${reason}`);
+        this.name = 'PerformerInputUnreadableError';
+    }
+}
+
+/** The hero frame could not be extracted from the input as a real decoded image. */
+export class HeroFrameExtractionError extends PipelineError {
+    readonly code = 'hero_frame_extraction_failed';
+
+    constructor(readonly inputPath: string, readonly reason: string) {
+        super(`Could not extract a hero frame from "${inputPath}": ${reason}`);
+        this.name = 'HeroFrameExtractionError';
+    }
+}
+
+/** No motion could be recovered and the caller did not accept procedural idle motion. */
+export class PerformerMotionUnavailableError extends PipelineError {
+    readonly code = 'performer_motion_unavailable';
+
+    constructor(readonly inputPath: string | undefined, readonly reason: string) {
+        super(`No performer motion could be recovered${inputPath ? ` from "${inputPath}"` : ''}: ${reason}. ` +
+            'Provide a performer video or a poseTrackPath, or pass allowSyntheticIdleMotion to accept a procedural (synthetic) idle sway.');
+        this.name = 'PerformerMotionUnavailableError';
+    }
+}
+
+
+/** Width/height from a JPEG or PNG header; null when the bytes are neither. */
+function readImageDimensions(buf: Buffer): { width: number; height: number } | null {
+    // PNG: 8-byte signature, then IHDR with big-endian width/height at bytes 16..24.
+    if (buf.length >= 24 && buf.readUInt32BE(0) === 0x89504e47 && buf.toString('ascii', 12, 16) === 'IHDR') {
+        return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+    }
+    if (buf.length < 4 || buf[0] !== 0xFF || buf[1] !== 0xD8) return null;
+    let i = 2;
+    while (i < buf.length - 8) {
+        if (buf[i] !== 0xFF) { i++; continue; }
+        const marker = buf[i + 1];
+        // SOF0..SOF15 except DHT (C4), JPG (C8) and DAC (CC) carry the frame size.
+        if (marker >= 0xC0 && marker <= 0xCF && marker !== 0xC4 && marker !== 0xC8 && marker !== 0xCC) {
+            return { height: buf.readUInt16BE(i + 5), width: buf.readUInt16BE(i + 7) };
+        }
+        i += 2 + buf.readUInt16BE(i + 2);
+    }
+    return null;
+}
 
 function normalize3(v: Vec3): Vec3 {
     const l = Math.hypot(v[0], v[1], v[2]) || 1;
@@ -102,11 +155,14 @@ export const MEDIAPIPE_33_KEYPOINTS = {
 
 export interface VideoTo4DPerformerOptions {
     videoPath: string;
+    /** Aborting it kills any running child (ffmpeg, GVHMR, MediaPipe) and rejects the pipeline. */
+    signal?: AbortSignal;
     outputDir?: string;
     heroTimestampSec?: number;
     numGaussians?: number;
     targetHeightMeters?: number;
-    venueId?: string;
+    /** Where the stage stands (caller-given lat/lng/altitude/heading). Omit for no geographic anchor. */
+    venue?: StageVenueAnchor;
     fps?: number;
     motionSequenceLengthSec?: number;
     characterId?: string;
@@ -174,7 +230,8 @@ export interface VideoTo4DPerformerResult {
     /** Pluggable skinning modalities emitted by this execution. */
     modalitiesEmitted?: HumanoidSkinModality[];
     geoManifestPath: string;
-    stagePlacementPath: string;
+    /** Written only when a venue anchor was given (venue). */
+    stagePlacementPath?: string;
     nerfstudioTransformsPath?: string;
     nerfstudioSparsePcdPath?: string;
     backprojectionIoU?: number;
@@ -234,10 +291,13 @@ export interface VideoTo4DPerformerResult {
         backprojectionGated: boolean;
         backprojectionReason?: string;
         motionSource?: string;
+        /** True when the motion is the procedural idle sway (allowSyntheticIdleMotion), not tracked from the input. */
+        syntheticMotion?: boolean;
         trackedFrames?: number;
         cameraSolve?: 'gvhmr' | 'landmarks' | 'silhouette';
     };
-    venueAnchor: {
+    /** Present only when the caller gave a venue; no venue is assumed otherwise. */
+    venueAnchor?: {
         venueId: string;
         venueName: string;
         latitude: number;
@@ -326,6 +386,7 @@ export class VideoTo4DPerformerPipelineService {
      */
     public async executePipeline(options: VideoTo4DPerformerOptions): Promise<VideoTo4DPerformerResult> {
         const startTime = Date.now();
+        VideoTo4DPerformerPipelineService.assertReadableInput(options.videoPath);
         const characterId = options.characterId || `performer_${path.basename(options.videoPath, path.extname(options.videoPath))}_${Date.now()}`;
         const outputDir = options.outputDir || path.resolve(process.cwd(), 'models/performer_4dgs/demos', characterId);
         await fs.ensureDir(outputDir);
@@ -333,13 +394,14 @@ export class VideoTo4DPerformerPipelineService {
         const targetHeight = options.targetHeightMeters ?? 1.78;
         const numGaussians = options.numGaussians ?? 120000;
         const fps = options.fps ?? 25;
-        const venuePreset = MUSIC_VENUE_PRESETS[options.venueId || 'red_rocks'] || MUSIC_VENUE_PRESETS.red_rocks;
+        const venuePreset: StageVenueAnchor | undefined = options.venue ? requireStageVenueAnchor('VideoTo4DPerformerPipelineService', options.venue) : undefined;
 
         // --------------------------------------------------------------------
         // Stage 1: Video Ingestion & Hero Frame Extraction
         // --------------------------------------------------------------------
         const t1 = Date.now();
-        const heroResult = await this.extractHeroFrame(options.videoPath, outputDir, options.heroTimestampSec ?? 0.0);
+        const signal = options.signal;
+        const heroResult = await this.extractHeroFrame(options.videoPath, outputDir, options.heroTimestampSec ?? 0.0, signal);
         const motionDurationSec = options.motionSequenceLengthSec ?? 4.8;
 
         const isVideoInput = VIDEO_EXTENSIONS.includes(path.extname(options.videoPath).toLowerCase());
@@ -352,8 +414,9 @@ export class VideoTo4DPerformerPipelineService {
             gvhmrBody = gvhmrService.load(options.gvhmrBodyPath);
         } else if (isVideoInput && fs.existsSync(options.videoPath) && options.motionEstimator !== 'mediapipe' && !options.poseTrackPath) {
             try {
-                gvhmrBody = gvhmrService.run(options.videoPath, outputDir, { maxFrames: Math.round(motionDurationSec * fps) + 1 });
+                gvhmrBody = await gvhmrService.run(options.videoPath, outputDir, { maxFrames: Math.round(motionDurationSec * fps) + 1, signal });
             } catch (err: any) {
+                if (signal?.aborted) throw err;
                 gvhmrError = err?.message || String(err);
             }
         }
@@ -368,12 +431,14 @@ export class VideoTo4DPerformerPipelineService {
             poseTrack = poseTrackService.loadTrack(options.poseTrackPath);
         } else if (isVideoInput && fs.existsSync(options.videoPath)) {
             try {
-                poseTrack = poseTrackService.trackVideo(options.videoPath, {
+                poseTrack = await poseTrackService.trackVideo(options.videoPath, {
                     outputPath: path.join(outputDir, 'pose_track.json'),
                     maxSeconds: motionDurationSec,
-                    maskOutputPath: path.join(outputDir, 'hero_mask.png')
+                    maskOutputPath: path.join(outputDir, 'hero_mask.png'),
+                    signal
                 });
             } catch (err: any) {
+                if (signal?.aborted) throw err;
                 poseTrackError = err?.message || String(err);
             }
         }
@@ -403,11 +468,12 @@ export class VideoTo4DPerformerPipelineService {
         const silhouetteResult = await this.solvePerformerMorphology(
             heroResult.heroFramePath,
             targetHeight,
-            heroLandmarks2D
+            heroLandmarks2D,
+            signal
         );
         const heroMaskPath = poseTrack?.hero_mask && fs.existsSync(poseTrack.hero_mask) ? poseTrack.hero_mask : null;
         if (heroMaskPath) {
-            const coarse = this.readGrayMask(heroMaskPath, 64, 128);
+            const coarse = await this.readGrayMask(heroMaskPath, 64, 128, signal);
             if (coarse) {
                 silhouetteResult.foregroundMask = coarse;
                 silhouetteResult.maskWidth = 64;
@@ -531,7 +597,7 @@ export class VideoTo4DPerformerPipelineService {
             gvhmrSampledFraction = gvhmrService.bakeHeroTexture(
                 gvhmrBody,
                 gvhmrAvatar,
-                gvhmrService.readRgb(heroResult.heroFramePath, heroResult.width, heroResult.height),
+                await gvhmrService.readRgb(heroResult.heroFramePath, heroResult.width, heroResult.height, signal),
                 heroResult.width,
                 heroResult.height
             ).sampledFraction;
@@ -543,7 +609,7 @@ export class VideoTo4DPerformerPipelineService {
                 gated: false,
                 reason: `GVHMR hero mesh projection sampled ${(gvhmrSampledFraction * 100).toFixed(1)}% of Gaussians directly`
             })
-            : this.backprojectVideoTextures(
+            : await this.backprojectVideoTextures(
             canonicalResult.gaussians,
             heroResult.heroFramePath,
             silhouetteResult.colorSamples,
@@ -553,7 +619,8 @@ export class VideoTo4DPerformerPipelineService {
             silhouetteResult.foregroundMask,
             silhouetteResult.maskWidth,
             silhouetteResult.maskHeight,
-            heroMaskPath ? this.readGrayMask(heroMaskPath, cameraIntrinsics.width, cameraIntrinsics.height) : null
+            heroMaskPath ? await this.readGrayMask(heroMaskPath, cameraIntrinsics.width, cameraIntrinsics.height, signal) : null,
+            signal
         );
         const stage4DurationMs = Date.now() - t4;
 
@@ -562,7 +629,7 @@ export class VideoTo4DPerformerPipelineService {
         // --------------------------------------------------------------------
         if (!motionData) {
             const t5b = Date.now();
-            motionData = this.recoverPerformerMotion(
+            motionData = await this.recoverPerformerMotion(
                 canonicalResult.canonicalJoints,
                 canonicalResult.kintreeParents,
                 fps,
@@ -570,7 +637,8 @@ export class VideoTo4DPerformerPipelineService {
                 characterId,
                 heroPoseJoints,
                 options.videoPath,
-                heroResult.heroFramePath
+                heroResult.heroFramePath,
+                { allowSyntheticIdleMotion: options.allowSyntheticIdleMotion, signal }
             );
             stage5DurationMs += Date.now() - t5b;
         }
@@ -636,7 +704,7 @@ export class VideoTo4DPerformerPipelineService {
                         vertexCount: surfaceMesh.positions.length / 3,
                         triangleCount: surfaceMesh.indices.length / 3
                     };
-                    modalitiesEmitted.push('pbr-standard', 'pbr-melanin', 'hybrid-pbr-hair-groom');
+                    modalitiesEmitted.push('pbr-standard', 'pbr-melanin');
 
                     // If public/models (or the requested viewport directory) exists, save a copy there for client-side viewport loading
                     const publicModelsGlb = path.join(options.viewportModelsDir ?? path.join(process.cwd(), 'public', 'models'), `humanoid_${characterId}.glb`);
@@ -657,32 +725,38 @@ export class VideoTo4DPerformerPipelineService {
             dataset_name: `Performer 4DGS - ${characterId}`,
             created_at: new Date().toISOString(),
             generator: 'Scratchbox IDE VideoTo4DPerformerPipelineService',
-            geographic_anchor: {
-                venue_id: venuePreset.id,
-                venue_name: venuePreset.name,
-                latitude: venuePreset.lat,
-                longitude: venuePreset.lng,
-                altitude: venuePreset.altMeters,
-                stage_heading_deg: venuePreset.stageHeadingDeg
-            },
+            // Only a venue the caller named anchors the performer geographically.
+            ...(venuePreset ? {
+                geographic_anchor: {
+                    venue_id: venuePreset.id ?? venuePreset.name,
+                    venue_name: venuePreset.name,
+                    latitude: venuePreset.lat,
+                    longitude: venuePreset.lng,
+                    altitude: venuePreset.altMeters,
+                    stage_heading_deg: venuePreset.stageHeadingDeg
+                },
+                foot_contact_altitude_msl: venuePreset.altMeters
+            } : {}),
             num_gaussians: texturedGaussians.length,
             num_frames: motionData.num_frames,
             fps: motionData.fps,
-            foot_contact_altitude_msl: venuePreset.altMeters
+            motion_source: motionData.motion_source
         };
         await fs.writeJson(geoManifestPath, geoManifest, { spaces: 2 });
 
-        // Write stage_placement.json
-        const stagePlacement = {
-            venue: venuePreset,
-            characterId,
-            spawnPositionMsl: [0, 0, 0], // Local stage origin
-            orientationEulerDeg: [0, venuePreset.stageHeadingDeg, 0],
-            footContactElevationMeters: 0.0,
-            spotlightFollow: true,
-            pbrAlbedoGain: 1.12
-        };
-        await fs.writeJson(stagePlacementPath, stagePlacement, { spaces: 2 });
+        // Write stage_placement.json (venue docking) only for a requested venue
+        if (venuePreset) {
+            const stagePlacement = {
+                venue: venuePreset,
+                characterId,
+                spawnPositionMsl: [0, 0, 0], // Local stage origin
+                orientationEulerDeg: [0, venuePreset.stageHeadingDeg, 0],
+                footContactElevationMeters: 0.0,
+                spotlightFollow: true,
+                pbrAlbedoGain: 1.12
+            };
+            await fs.writeJson(stagePlacementPath, stagePlacement, { spaces: 2 });
+        }
 
         // Write cameras.json & Nerfstudio-compliant transforms.json & sparse_pcd.ply
         const camerasData = {
@@ -791,7 +865,7 @@ export class VideoTo4DPerformerPipelineService {
             pbrMeshStats,
             modalitiesEmitted,
             geoManifestPath,
-            stagePlacementPath,
+            stagePlacementPath: venuePreset ? stagePlacementPath : undefined,
             nerfstudioTransformsPath: transformsPath,
             nerfstudioSparsePcdPath: sparsePcdPath,
             backprojectionIoU: (texturedGaussians as any).iou ?? 0.88,
@@ -833,18 +907,37 @@ export class VideoTo4DPerformerPipelineService {
                 backprojectionGated: (texturedGaussians as any).gated ?? true,
                 backprojectionReason: (texturedGaussians as any).reason ?? 'Unspecified',
                 motionSource: motionData.motion_source,
+                syntheticMotion: motionData.motion_source === 'synthetic_idle',
                 trackedFrames: gvhmrBody ? gvhmrBody.frames.length : poseTrack ? PerformerPoseTrackService.countTrackedFrames(poseTrack) : 0,
                 cameraSolve: gvhmrBody ? 'gvhmr' : landmarkCamera ? 'landmarks' : 'silhouette'
             },
-            venueAnchor: {
-                venueId: venuePreset.id,
+            venueAnchor: venuePreset ? {
+                venueId: venuePreset.id ?? venuePreset.name,
                 venueName: venuePreset.name,
                 latitude: venuePreset.lat,
                 longitude: venuePreset.lng,
                 altitudeMsl: venuePreset.altMeters,
                 stageHeadingDeg: venuePreset.stageHeadingDeg
-            }
+            } : undefined
         };
+    }
+
+    /** Throws unless `inputPath` names an existing, readable, non-empty file. */
+    public static assertReadableInput(inputPath: string | undefined): void {
+        if (!inputPath) throw new MissingInputError('performer_4d_create_from_video', 'videoPath', 'a performer video or hero image');
+        let stat: fs.Stats;
+        try {
+            stat = fs.statSync(inputPath);
+        } catch {
+            throw new PerformerInputUnreadableError(inputPath, 'file does not exist');
+        }
+        if (!stat.isFile()) throw new PerformerInputUnreadableError(inputPath, 'not a regular file');
+        if (stat.size === 0) throw new PerformerInputUnreadableError(inputPath, 'file is empty');
+        try {
+            fs.accessSync(inputPath, fs.constants.R_OK);
+        } catch {
+            throw new PerformerInputUnreadableError(inputPath, 'file is not readable');
+        }
     }
 
     /**
@@ -873,102 +966,44 @@ export class VideoTo4DPerformerPipelineService {
     }
 
     /**
-     * Stage 1: Extracts the canonical hero frame from video or leverages pre-existing frame.
+     * Stage 1: Extracts the hero frame. Video inputs are decoded with ffmpeg at `timestampSec`; image
+     * inputs are used as-is. Dimensions come from the decoded image header. Throws
+     * HeroFrameExtractionError when no real frame can be produced.
      */
     public async extractHeroFrame(
         videoPath: string,
         outputDir: string,
-        timestampSec: number
+        timestampSec: number,
+        signal?: AbortSignal
     ): Promise<{ heroFramePath: string; width: number; height: number }> {
         const canonicalOut = path.join(outputDir, 'canonical_frame.jpg');
-        const videoDir = path.dirname(videoPath);
-
-        const resolveDims = (imgPath: string): { width: number; height: number } => {
-            const camPath = path.join(videoDir, 'cameras.json');
-            if (fs.existsSync(camPath)) {
-                try {
-                    const c = fs.readJsonSync(camPath);
-                    if (c.w && c.h) return { width: c.w, height: c.h };
-                } catch {
-                    // Fallback
-                }
-            }
-            if (fs.existsSync(imgPath)) {
-                try {
-                    const buf = fs.readFileSync(imgPath);
-                    const size = this.getJpegDimensions(buf);
-                    if (size) return size;
-                } catch {
-                    // Fallback
-                }
-            }
-            return { width: 2160, height: 3840 };
-        };
-
-        // Video input: the hero frame must be the exact frame the pose track starts from.
-        const ffmpegForHero = resolveBinary('ffmpeg');
-        if (VIDEO_EXTENSIONS.includes(path.extname(videoPath).toLowerCase()) && fs.existsSync(videoPath) && ffmpegForHero) {
-            try {
-                execSync(`"${ffmpegForHero}" -v error -y -ss ${timestampSec} -i "${videoPath}" -frames:v 1 -q:v 2 "${canonicalOut}"`);
-                const size = this.getJpegDimensions(fs.readFileSync(canonicalOut));
-                if (size) return { heroFramePath: canonicalOut, width: size.width, height: size.height };
-            } catch {
-                // Fall through to the legacy discovery paths below
-            }
-        }
-
-        // Check if an existing canonical_frame.jpg exists next to the video
-        const adjacentHero = path.join(videoDir, 'canonical_frame.jpg');
-        if (adjacentHero === canonicalOut && fs.existsSync(canonicalOut)) {
-            const dims = resolveDims(canonicalOut);
-            return { heroFramePath: canonicalOut, width: dims.width, height: dims.height };
-        }
-        if (fs.existsSync(adjacentHero)) {
-            if (adjacentHero !== canonicalOut) {
-                await fs.copy(adjacentHero, canonicalOut);
-            }
-            const dims = resolveDims(canonicalOut);
-            return { heroFramePath: canonicalOut, width: dims.width, height: dims.height };
-        }
-
-        // Check if input is already an image
         const ext = path.extname(videoPath).toLowerCase();
-        if (['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) {
-            if (videoPath !== canonicalOut) {
-                await fs.copy(videoPath, canonicalOut);
-            }
-            const dims = resolveDims(canonicalOut);
-            return { heroFramePath: canonicalOut, width: dims.width, height: dims.height };
-        }
 
-        // Attempt ffmpeg extraction
-        try {
+        if (VIDEO_EXTENSIONS.includes(ext)) {
             const ffmpegBin = resolveBinary('ffmpeg');
-            if (fs.existsSync(videoPath) && fs.existsSync(ffmpegBin)) {
-                await this.videoEditor.extractKeyframes({
-                    inputPath: videoPath,
-                    outputDir,
-                    timestampsSec: [timestampSec],
-                    heroFrameOnly: true,
-                    format: 'jpg'
-                });
-                if (fs.existsSync(canonicalOut)) {
-                    const dims = resolveDims(canonicalOut);
-                    return { heroFramePath: canonicalOut, width: dims.width, height: dims.height };
-                }
+            if (!ffmpegBin || !fs.existsSync(ffmpegBin)) {
+                throw new HeroFrameExtractionError(videoPath, 'ffmpeg is not installed (needed to decode the video)');
             }
-        } catch {
-            // Fall back to synthetic frame creation
+            try {
+                await execFileBuffer(ffmpegBin, ['-v', 'error', '-y', '-ss', String(timestampSec), '-i', videoPath, '-frames:v', '1', '-q:v', '2', canonicalOut], { signal });
+            } catch (err: any) {
+                if (signal?.aborted) throw err;
+                const stderr = err?.stderr ? String(err.stderr).trim() : (err?.message || String(err));
+                throw new HeroFrameExtractionError(videoPath, `ffmpeg could not decode a frame at ${timestampSec}s: ${stderr.slice(0, 500)}`);
+            }
+            const size = fs.existsSync(canonicalOut) ? readImageDimensions(fs.readFileSync(canonicalOut)) : null;
+            if (!size) throw new HeroFrameExtractionError(videoPath, `ffmpeg produced no decodable frame at ${timestampSec}s`);
+            return { heroFramePath: canonicalOut, width: size.width, height: size.height };
         }
 
-        // Fallback: Create placeholder canonical frame
-        await fs.writeFile(canonicalOut, Buffer.alloc(1024));
-        const dims = resolveDims(canonicalOut);
-        return {
-            heroFramePath: canonicalOut,
-            width: dims.width,
-            height: dims.height
-        };
+        const size = readImageDimensions(fs.readFileSync(videoPath));
+        if (!size) {
+            throw new HeroFrameExtractionError(videoPath, `not a decodable video (${VIDEO_EXTENSIONS.join(', ')}) or JPEG/PNG image`);
+        }
+        if (path.resolve(videoPath) !== path.resolve(canonicalOut)) {
+            await fs.copy(videoPath, canonicalOut);
+        }
+        return { heroFramePath: canonicalOut, width: size.width, height: size.height };
     }
 
     /**
@@ -979,7 +1014,8 @@ export class VideoTo4DPerformerPipelineService {
     public async solvePerformerMorphology(
         heroFramePath: string,
         targetHeight: number = 1.78,
-        landmarks2D?: MediaPipeNormalizedLandmark33[]
+        landmarks2D?: MediaPipeNormalizedLandmark33[],
+        signal?: AbortSignal
     ): Promise<SilhouetteExtractionResult> {
         // High-fidelity human anatomical prior (default baseline)
         let ratios: CharacterAnatomicalRatios = {
@@ -1186,9 +1222,10 @@ export class VideoTo4DPerformerPipelineService {
                     if (ffmpegBin && fs.existsSync(ffmpegBin)) {
                         const W = 64;
                         const H = 128;
-                        const thumb = execSync(
-                            `"${ffmpegBin}" -v error -i "${heroFramePath}" -vf scale=${W}:${H} -f rawvideo -pix_fmt rgb24 pipe:1`,
-                            { maxBuffer: 10 * 1024 * 1024 }
+                        const thumb = await execFileBuffer(
+                            ffmpegBin,
+                            ['-v', 'error', '-i', heroFramePath, '-vf', `scale=${W}:${H}`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'],
+                            { maxBuffer: 10 * 1024 * 1024, signal }
                         );
                         if (thumb.length === W * H * 3) {
                             foregroundMask = new Uint8Array(W * H);
@@ -1493,7 +1530,8 @@ export class VideoTo4DPerformerPipelineService {
                         }
                     }
                 }
-            } catch {
+            } catch (err) {
+                if (signal?.aborted) throw err;
                 // Keep neutral fallback colors
             }
         }
@@ -2114,16 +2152,17 @@ export class VideoTo4DPerformerPipelineService {
     }
 
     /** Loads a grayscale mask image resized to W x H as a binary (>= 128) buffer. */
-    public readGrayMask(maskPath: string, W: number, H: number): Uint8Array | null {
+    public async readGrayMask(maskPath: string, W: number, H: number, signal?: AbortSignal): Promise<Uint8Array | null> {
         const ffmpegBin = resolveBinary('ffmpeg');
         if (!ffmpegBin) return null;
         try {
-            const raw = execSync(`"${ffmpegBin}" -v error -i "${maskPath}" -vf scale=${W}:${H} -f rawvideo -pix_fmt gray pipe:1`, { maxBuffer: W * H + 1024 });
+            const raw = await execFileBuffer(ffmpegBin, ['-v', 'error', '-i', maskPath, '-vf', `scale=${W}:${H}`, '-f', 'rawvideo', '-pix_fmt', 'gray', 'pipe:1'], { maxBuffer: W * H + 1024, signal });
             if (raw.length !== W * H) return null;
             const out = new Uint8Array(W * H);
             for (let i = 0; i < out.length; i++) out[i] = raw[i] >= 128 ? 1 : 0;
             return out;
-        } catch {
+        } catch (err) {
+                if (signal?.aborted) throw err;
             return null;
         }
     }
@@ -2240,7 +2279,7 @@ export class VideoTo4DPerformerPipelineService {
      * Uses forward LBS skinning to Frame 0 hero pose so 3D limbs align 1:1 with 2D video limbs.
      * Gated by Mask-IoU: if IoU < 0.70, falls back to palette proxy to prevent misaligned video sampling.
      */
-    public backprojectVideoTextures(
+    public async backprojectVideoTextures(
         gaussians: SkinWeightedGaussian[],
         heroFramePath: string,
         colorPalette: SilhouetteExtractionResult['colorSamples'],
@@ -2251,8 +2290,9 @@ export class VideoTo4DPerformerPipelineService {
         maskW: number = 64,
         maskH: number = 128,
         /** Full-resolution person mask; pixels outside it are never sampled as performer texture. */
-        sampleMask: Uint8Array | null = null
-    ): SkinWeightedGaussian[] & { iou: number; gated: boolean; reason?: string } {
+        sampleMask: Uint8Array | null = null,
+        signal?: AbortSignal
+    ): Promise<SkinWeightedGaussian[] & { iou: number; gated: boolean; reason?: string }> {
         // Camera positioned at solved optical center [camX, camY, standoff] looking towards [camX, camY, 0]
         const standoff = (camera as any).standoff ?? (camera.height > camera.width ? 1.375 : 2.8);
         const camX = (camera as any).camX ?? 0.0;
@@ -2280,13 +2320,15 @@ export class VideoTo4DPerformerPipelineService {
                 if (stat.size > 512) {
                     const ffmpegBin = resolveBinary('ffmpeg');
                     if (ffmpegBin && fs.existsSync(ffmpegBin)) {
-                        rgbBuffer = execSync(
-                            `"${ffmpegBin}" -v error -i "${heroFramePath}" -vf scale=${camera.width}:${camera.height} -f rawvideo -pix_fmt rgb24 pipe:1`,
-                            { maxBuffer: 50 * 1024 * 1024 }
+                        rgbBuffer = await execFileBuffer(
+                            ffmpegBin,
+                            ['-v', 'error', '-i', heroFramePath, '-vf', `scale=${camera.width}:${camera.height}`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'],
+                            { maxBuffer: 50 * 1024 * 1024, signal }
                         );
                     }
                 }
-            } catch {
+            } catch (err) {
+                if (signal?.aborted) throw err;
                 rgbBuffer = null;
             }
         }
@@ -2539,7 +2581,7 @@ export class VideoTo4DPerformerPipelineService {
      * ground clamping so the performer's feet remain anchored to Y = 0.00m.
      * Motion choreographs smoothly from Frame 0 hero resting pose rather than horizontal T-pose.
      */
-    public recoverPerformerMotion(
+    public async recoverPerformerMotion(
         canonicalJoints: Array<[number, number, number]>,
         parents: number[],
         fps: number = 30,
@@ -2547,13 +2589,16 @@ export class VideoTo4DPerformerPipelineService {
         clipId: string = 'performer_4d',
         heroPoseJoints?: Array<[number, number, number]>,
         videoPath?: string,
-        heroFramePath?: string
-    ): HumanoidMotionData {
+        heroFramePath?: string,
+        opts: { allowSyntheticIdleMotion?: boolean; signal?: AbortSignal } = {}
+    ): Promise<HumanoidMotionData> {
+        const signal = opts.signal;
         const totalFrames = Math.max(10, Math.round(durationSec * fps));
         const frames: HumanoidMotionFrame[] = [];
         const baseJoints = heroPoseJoints || canonicalJoints;
 
         let videoFrameLandmarks: MediaPipeNormalizedLandmark33[][] | null = null;
+        let trackingFailure = videoPath ? 'the input is not a decodable video' : 'no video was given';
 
         // Attempt genuine video frame extraction and landmark tracking
         if (videoPath && fs.existsSync(videoPath)) {
@@ -2567,12 +2612,14 @@ export class VideoTo4DPerformerPipelineService {
                     const H = 128;
                     const frameBytes = W * H * 3;
                     // Extract sequential frames at the specified sample fps
-                    const rawBuffer = execSync(
-                        `"${ffmpegBin}" -v error -i "${videoPath}" -t ${durationSec} -vf "fps=${fps},scale=${W}:${H}" -f rawvideo -pix_fmt rgb24 pipe:1`,
-                        { maxBuffer: 40 * 1024 * 1024 }
+                    const rawBuffer = await execFileBuffer(
+                        ffmpegBin,
+                        ['-v', 'error', '-i', videoPath, '-t', String(durationSec), '-vf', `fps=${fps},scale=${W}:${H}`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'],
+                        { maxBuffer: 40 * 1024 * 1024, signal }
                     );
 
                     const extractedCount = Math.floor(rawBuffer.length / frameBytes);
+                    if (extractedCount === 0) trackingFailure = 'ffmpeg decoded no frames';
                     if (extractedCount > 0) {
                         videoFrameLandmarks = [];
                         for (let f = 0; f < extractedCount; f++) {
@@ -2581,10 +2628,17 @@ export class VideoTo4DPerformerPipelineService {
                             videoFrameLandmarks.push(lm);
                         }
                     }
-                } catch {
-                    // Fall back to hero posture tracking
+                } catch (err: any) {
+                    if (signal?.aborted) throw err;
+                    trackingFailure = `ffmpeg frame decode failed: ${(err?.message || String(err)).slice(0, 300)}`;
                 }
+            } else if (isVideo) {
+                trackingFailure = 'ffmpeg is not installed';
             }
+        }
+        const synthetic = !(videoFrameLandmarks && videoFrameLandmarks.length > 0);
+        if (synthetic && !opts.allowSyntheticIdleMotion) {
+            throw new PerformerMotionUnavailableError(videoPath, trackingFailure);
         }
 
         for (let f = 0; f < totalFrames; f++) {
@@ -2597,7 +2651,7 @@ export class VideoTo4DPerformerPipelineService {
                 const lm = videoFrameLandmarks[lmIndex];
                 jointPositions = this.computeDynamicPoseJointsFromLandmarks(canonicalJoints, lm);
             } else {
-                // Posture anchored strictly to genuine heroPoseJoints with subtle natural sway
+                // SYNTHETIC (caller opted in via allowSyntheticIdleMotion): procedural sway around the hero pose
                 const phase = time * Math.PI * 2 * 0.8;
                 jointPositions = baseJoints.map((rest, j) => {
                     let [x, y, z] = rest;
@@ -2622,8 +2676,8 @@ export class VideoTo4DPerformerPipelineService {
                 timestamp: time,
                 root_translation: [0, 0, 0],
                 root_rotation_quat: [0, 0, 0, 1],
-                joint_positions_3d: jointPositions,
-                confidence: 0.94
+                // No per-frame confidence: none is measured here.
+                joint_positions_3d: jointPositions
             });
         }
 
@@ -2678,7 +2732,7 @@ export class VideoTo4DPerformerPipelineService {
             kintree_parents: parents,
             canonical_joints: canonicalJoints,
             frames,
-            motion_source: videoFrameLandmarks && videoFrameLandmarks.length > 0 ? 'silhouette_video' : 'synthetic_idle'
+            motion_source: synthetic ? 'synthetic_idle' : 'silhouette_video'
         };
     }
 

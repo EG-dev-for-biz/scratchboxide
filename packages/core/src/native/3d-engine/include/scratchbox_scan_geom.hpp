@@ -37,6 +37,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace scratchbox {
@@ -63,17 +64,20 @@ struct P2 {
     P2 unit() const { const double l = len(); return l > 1e-15 ? P2(x / l, y / l) : P2(1, 0); }
 };
 
-inline void parallelFor(size_t n, const std::function<void(size_t)>& f) {
+/** Runs f(0..n-1) on up to 16 threads, `grain` indices at a time (sequentially when n < grain or on one core). */
+inline void parallelFor(size_t n, const std::function<void(size_t)>& f, size_t grain = 64) {
+    grain = std::max<size_t>(1, grain);
     const unsigned T = std::max(1u, std::min(16u, std::thread::hardware_concurrency()));
-    if (n < 64 || T == 1) { for (size_t i = 0; i < n; ++i) f(i); return; }
+    if (n < grain || T == 1) { for (size_t i = 0; i < n; ++i) f(i); return; }
     std::atomic<size_t> next{0};
     std::vector<std::thread> pool;
-    for (unsigned t = 0; t < T; ++t) {
+    const unsigned workers = static_cast<unsigned>(std::min<size_t>(T, (n + grain - 1) / grain));
+    for (unsigned t = 0; t < workers; ++t) {
         pool.emplace_back([&] {
             for (;;) {
-                const size_t i = next.fetch_add(64);
+                const size_t i = next.fetch_add(grain);
                 if (i >= n) break;
-                for (size_t k = i; k < std::min(n, i + 64); ++k) f(k);
+                for (size_t k = i; k < std::min(n, i + grain); ++k) f(k);
             }
         });
     }
@@ -417,6 +421,150 @@ inline Plane lsPlane(const std::vector<Vec3>& pts, const std::vector<double>& w,
     if (n.dot(hint) < 0) n = n * -1.0f;
     n = n.normalized();
     return {n, n.x * c[0] + n.y * c[1] + n.z * c[2]};
+}
+
+/**
+ * Candidate index over (normal, point) pairs for plane-to-point tests: which items have a normal within a given chord
+ * of a query direction and a point within a given distance of a query plane. It never misses one: a query returns a
+ * superset, and the caller applies its own exact test. Queries do not change it (they may run in parallel).
+ *
+ * Items are kept per cell of their normal, in the normal's own 3-space (a dense grid of cells at least `chord` wide,
+ * so the normals within the chord of a direction lie in the 27 cells around it); a query scans those cells' points
+ * against the plane's slab, widened by the float rounding of the caller's dot product. Items whose normal or point is
+ * not usable (a normal more than `normSlack` off unit length, a non-finite point) are returned by every query, and a
+ * query whose direction is not unit length or whose plane is not finite returns everything.
+ */
+class PlanePointIndex {
+public:
+    explicit PlanePointIndex(double chord, double normSlack = 1e-4) : slack_(normSlack), chord_(chord) {
+        // cells no narrower than the chord, and no more than 150 to an axis
+        q_ = std::max(chord, 2.0 * (1 + normSlack) / 150);
+        off_ = static_cast<int>(std::ceil((1 + normSlack) / q_)) + 1;
+        dim_ = 2 * off_ + 1;
+        cells_.resize(static_cast<size_t>(dim_) * dim_ * dim_);
+    }
+
+    /** The chord between two normals of unit length (within normSlack) whose float dot product is at least cosMin. */
+    static double chordForDot(double cosMin, double normSlack = 1e-4) {
+        const double n2 = (1 + normSlack) * (1 + normSlack);
+        return std::sqrt(std::max(0.0, 2 * n2 - 2 * (cosMin - 1e-6))) * 1.0001 + 1e-9;
+    }
+
+    void insert(uint32_t id, const Vec3& n, const Vec3& p) {
+        if (!unit(n) || !std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) { always_.push_back(id); return; }
+        Cell& C = cells_[index(cell(n.x), cell(n.y), cell(n.z))];
+        C.x.push_back(p.x); C.y.push_back(p.y); C.z.push_back(p.z);
+        C.id.push_back(id);
+        maxAbs_ = std::max(maxAbs_, static_cast<double>(std::fabs(p.x)) + std::fabs(p.y) + std::fabs(p.z));
+    }
+
+    /**
+     * Visits the id of every item that may have a normal within the chord of `dir` and a point within `tol` of the plane
+     * m . x = d, measured as the float dot product m . x minus d (as Plane::dist computes it).
+     */
+    template <class F> void query(const Vec3& dir, const Vec3& m, double d, double tol, F&& visit) const {
+        for (uint32_t id : always_) visit(id);
+        // a test against a non-finite plane accepts what it cannot measure (NaN > tol is false): everything
+        if (!unit(dir) || !std::isfinite(m.x) || !std::isfinite(m.y) || !std::isfinite(m.z) || !std::isfinite(d) || !std::isfinite(tol)) {
+            for (const Cell& C : cells_) for (uint32_t id : C.id) visit(id);
+            return;
+        }
+        const double m0 = m.x, m1 = m.y, m2 = m.z;
+        // a float dot product of three terms errs by at most 3 ulp of the sum of the terms' magnitudes
+        const double w = tol + 1e-6 * (1 + (std::fabs(m0) + std::fabs(m1) + std::fabs(m2)) * maxAbs_);
+        const int r = static_cast<int>(std::ceil(chord_ / q_ - 1e-12));
+        const int cx = cell(dir.x), cy = cell(dir.y), cz = cell(dir.z);
+        for (int i = std::max(cx - r, -off_); i <= std::min(cx + r, off_); ++i)
+            for (int j = std::max(cy - r, -off_); j <= std::min(cy + r, off_); ++j)
+                for (int k = std::max(cz - r, -off_); k <= std::min(cz + r, off_); ++k) {
+                    const Cell& C = cells_[index(i, j, k)];
+                    const size_t N = C.id.size();
+                    for (size_t t = 0; t < N; ++t) {
+                        const double e = m0 * C.x[t] + m1 * C.y[t] + m2 * C.z[t] - d;
+                        if (std::fabs(e) <= w) visit(C.id[t]);
+                    }
+                }
+    }
+
+private:
+    struct Cell { std::vector<float> x, y, z; std::vector<uint32_t> id; };
+    bool unit(const Vec3& n) const {
+        const double l = std::sqrt(static_cast<double>(n.x) * n.x + static_cast<double>(n.y) * n.y + static_cast<double>(n.z) * n.z);
+        return std::fabs(l - 1) <= slack_;
+    }
+    int cell(float v) const { return std::clamp(static_cast<int>(std::floor(v / q_)), -off_, off_); }
+    size_t index(int i, int j, int k) const { return (static_cast<size_t>(i + off_) * dim_ + (j + off_)) * dim_ + (k + off_); }
+    double slack_, chord_, q_{1}, maxAbs_{0};
+    int off_{1}, dim_{3};
+    std::vector<Cell> cells_;
+    std::vector<uint32_t> always_;
+};
+
+/**
+ * Merges coplanar items in index order, the way comparing every pair does: passes over the live items until one merges
+ * nothing; on `a`'s turn it tries each live `b` after it, in index order, whose normal is within the angle (float dot
+ * product at least `cosM`) of `a`'s and whose centroid lies within `offM` of `a`'s plane and `a`'s centroid within `offM`
+ * of `b`'s, with `a` as it stands after its merges so far. tryMerge(a, b) either replaces `a` with the merge and returns
+ * true (then `b` is dead), or returns false; a pair that failed is not tried again until one of the two has changed.
+ * Returns which items are alive.
+ *
+ * Item i is planeOf(i) (an sg::Plane) with centroid centroidOf(i). An item changes only on its own turn, so on `a`'s turn
+ * the items after it are as they were when the pass began: each pass first finds, in parallel, every item's pairs with
+ * the items after it, from a PlanePointIndex over the pass's items; on its turn `a` tries those still alive in order, and
+ * after a merge its pairs after `b` are found again from the same index with `a`'s new plane. The pairs tried, and their
+ * order, are the ones comparing every pair tries.
+ */
+template <class PlaneOf, class CentroidOf, class TryMerge>
+std::vector<uint8_t> mergeCoplanarInOrder(size_t R0, float cosM, double offM, PlaneOf&& planeOf, CentroidOf&& centroidOf, TryMerge&& tryMerge) {
+    std::vector<uint8_t> alive(R0, 1);
+    std::vector<uint64_t> stamp(R0);
+    for (size_t i = 0; i < R0; ++i) stamp[i] = i;
+    uint64_t nextStamp = R0;
+    std::unordered_set<uint64_t> failed;
+    const double chord = PlanePointIndex::chordForDot(cosM);
+    auto coplanar = [&](size_t a, size_t b) {
+        const Plane& A = planeOf(a);
+        const Plane& B = planeOf(b);
+        if (A.n.dot(B.n) < cosM) return false;
+        return !(std::fabs(A.dist(centroidOf(b))) > offM || std::fabs(B.dist(centroidOf(a))) > offM);
+    };
+    // the live items after `after` that pass the tests with `a`, in index order
+    auto pairsAfter = [&](const PlanePointIndex& index, size_t a, size_t after, std::vector<uint32_t>& out) {
+        out.clear();
+        const Plane& A = planeOf(a);
+        index.query(A.n, A.n, A.d, offM, [&](uint32_t b) { if (b > after && alive[b]) out.push_back(b); });
+        std::sort(out.begin(), out.end());
+        out.erase(std::remove_if(out.begin(), out.end(), [&](uint32_t b) { return !coplanar(a, b); }), out.end());
+    };
+    std::vector<std::vector<uint32_t>> pairs(R0);
+    std::vector<uint32_t> again;
+    bool merged = true;
+    while (merged) {
+        merged = false;
+        PlanePointIndex index(chord);
+        std::vector<uint32_t> live;
+        for (size_t i = 0; i < R0; ++i) if (alive[i]) { index.insert(static_cast<uint32_t>(i), planeOf(i).n, centroidOf(i)); live.push_back(static_cast<uint32_t>(i)); }
+        parallelFor(live.size(), [&](size_t k) { pairsAfter(index, live[k], live[k], pairs[live[k]]); }, 64);
+        for (const uint32_t a : live) {
+            if (!alive[a]) continue;
+            const std::vector<uint32_t>* list = &pairs[a];
+            for (size_t at = 0; at < list->size();) {
+                const uint32_t b = (*list)[at++];
+                if (!alive[b]) continue;
+                const uint64_t key = (stamp[a] << 32) ^ stamp[b];
+                if (failed.count(key)) continue;
+                if (!tryMerge(static_cast<size_t>(a), static_cast<size_t>(b))) { failed.insert(key); continue; }
+                stamp[a] = nextStamp++;
+                alive[b] = 0;
+                merged = true;
+                pairsAfter(index, a, b, again);
+                list = &again;
+                at = 0;
+            }
+            std::vector<uint32_t>().swap(pairs[a]);
+        }
+    }
+    return alive;
 }
 
 struct Circle { double cx{0}, cy{0}, r{0}; };

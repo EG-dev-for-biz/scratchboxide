@@ -81,8 +81,7 @@ describe('ImageToAdaptivePbrService & Gemini Agent Tool (Zero-Preset Adaptive PB
             planeWidthMeters: 4.0,
             subdivisions: 16,
             displacementScaleMeters: 0.06,
-            reliefMultiplier: 1.40,
-            prompt: 'weathered granite cobblestone'
+            reliefMultiplier: 1.40
         };
 
         const result = await ImageToAdaptivePbrService.processImageToPbrPlane(options);
@@ -218,7 +217,7 @@ describe('ImageToAdaptivePbrService & Gemini Agent Tool (Zero-Preset Adaptive PB
             planeWidthMeters: 3.0,
             displacementScaleMeters: 0.05,
             saveDiagnosticMaps: true,
-            prompt: 'chiseled limestone facade'
+            roughnessRange: [0.6, 0.95]
         }, {} as any);
 
         expect(response.summaryResult).toContain('Adaptive Image-to-PBR Plane generated successfully');

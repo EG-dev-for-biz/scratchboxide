@@ -394,17 +394,16 @@ int main(int argc, char* argv[]) {
     // ------------------------------------------------------------------------
     // I. RUN AUTOMATED TECTONIC CLASSIFICATION & ELEVATION ANALYSIS
     // ------------------------------------------------------------------------
-    std::cout << "[SB-Archi] Running Automated Tectonic Scan & Structural Classifier...\n";
-    TectonicAnalysisReport report = TectonicStructureClassifier::classify(masterMesh);
+    std::cout << "[SB-Archi] Measuring footprint, elevation datums and bay rhythm of the synthesized mesh...\n";
+    TectonicAnalysisReport report = TectonicMeasurementAnalyzer::analyze(masterMesh);
 
     std::cout << "\n======================================================================\n"
               << "[SB-Archi] Arch of Constantine Tectonic Inversion Report:\n"
-              << "  - Classification: " << report.classificationName << " (Confidence: " << (report.confidence * 100.0f) << "%)\n"
               << "  - Footprint Center: (" << report.footprint.center.x << ", " << report.footprint.center.y << ", " << report.footprint.center.z << ")\n"
               << "  - Footprint Major Dimension: " << report.footprint.majorDimension << " m (Target: 25.7 m)\n"
               << "  - Footprint Minor Dimension: " << report.footprint.minorDimension << " m (Target: 7.4 m)\n"
               << "  - Structure Total Height: " << report.elevationProfile.totalHeight << " m (Target: 21.0 m)\n"
-              << "  - Detected Datums: " << report.elevationProfile.detectedDatums.size() << " architectural levels\n"
+              << "  - Detected Datums: " << report.elevationProfile.detectedDatums.size() << " histogram datums\n"
               << "  - Synthesized Vertices: " << masterMesh.vertices.size() << "\n"
               << "  - Synthesized Triangles: " << (masterMesh.indices.size() / 3) << "\n"
               << "  - Synthesis Runtime: " << synthTimeMs << " ms\n"

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 Scratchbox Local SF3D (Stable Fast 3D) Organic Prop Generator
-Executes local fast 3D reconstruction from a single 2D image.
-Supports high-speed no_pbr mode (pure 18% Studio Grey Clay geometry, < 500ms)
-with metric scale grounding, flat contact plane snapping, and optional field remeshing.
+Runs Stable Fast 3D on a single image. no_pbr mode keeps SF3D's geometry and repacks it in
+18% Studio Grey Clay; PBR mode exports SF3D's textured mesh. Both get metric rescaling and an
+optional ground snap. If SF3D is missing or fails, the script exits non-zero with a coded error
+(no substitute geometry).
 """
 
 import sys
@@ -236,55 +237,91 @@ def compute_smooth_normals(
     return smooth
 
 
-def generate_biomorphic_organic_mesh(
-    lat_res: int = 48,
-    lon_res: int = 64
-) -> Tuple[List[Tuple[float, float, float]], List[Tuple[int, int, int]]]:
+class Sf3dFailure(Exception):
+    """A specific, reportable reason the SF3D run produced no mesh."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+# Exit codes the TypeScript service maps to typed errors.
+EXIT_NOT_INSTALLED = 3
+EXIT_RUN_FAILED = 4
+
+
+# Loaded models kept between calls when this script runs under packages/core/src/python/scratchbox/worker_host.py.
+_MODELS = {}
+
+
+def emit_failure(code: str, message: str) -> None:
+    print("__LOCAL_SF3D_ERROR_START__")
+    print(json.dumps({"success": False, "code": code, "error": message}))
+    print("__LOCAL_SF3D_ERROR_END__")
+    sys.stderr.write(f"[LocalSF3D] {code}: {message}\n")
+
+
+def run_sf3d_model(image_path: str, remesh_option: str, device: str):
     """
-    Synthesizes a high-fidelity biomorphic organic surface (e.g. coral/mushroom/conch geometry)
-    using harmonic deformation fields over a 2-manifold with continuous curvature.
+    Runs Stable Fast 3D (github.com/Stability-AI/stable-fast-3d) on one image and returns the trimesh it produced.
+    Raises Sf3dFailure when the package or its weights are missing or the model fails; never substitutes geometry.
     """
-    vertices = []
-    indices = []
+    try:
+        import torch
+        from PIL import Image
+        from sf3d.system import SF3D
+        from sf3d.utils import remove_background, resize_foreground
+    except ImportError as e:
+        raise Sf3dFailure(
+            "SF3D_NOT_INSTALLED",
+            f"Stable Fast 3D is not installed in this Python environment ({e}). Install it from "
+            "https://github.com/Stability-AI/stable-fast-3d (pip install -r requirements.txt && pip install -e .) "
+            "and accept the stabilityai/stable-fast-3d licence on Hugging Face.",
+        )
 
-    for i in range(lat_res + 1):
-        u = float(i) / float(lat_res)
-        theta = u * math.pi  # [0..pi]
+    if not os.path.isfile(image_path):
+        raise Sf3dFailure("SF3D_INPUT_MISSING", f"Input image not found: {image_path}")
 
-        for j in range(lon_res):
-            v = float(j) / float(lon_res)
-            phi = v * 2.0 * math.pi  # [0..2pi]
+    try:
+        image = Image.open(image_path).convert("RGBA")
+    except Exception as e:
+        raise Sf3dFailure("SF3D_INPUT_UNREADABLE", f"Could not read input image {image_path}: {e}")
 
-            # Biomorphic spherical harmonic radial modulation
-            r_base = 1.0
-            lobe1 = 0.28 * math.sin(3.0 * phi) * math.sin(theta)
-            lobe2 = 0.15 * math.cos(5.0 * phi + 1.2) * math.sin(2.0 * theta)
-            stem_pinch = (1.0 - 0.45 * math.exp(-((theta - math.pi * 0.85) ** 2) / 0.15))
-            cap_flange = 1.0 + 0.35 * math.sin(theta) ** 2 * math.cos(4.0 * phi)
+    # SF3D expects the subject cut out on a transparent background. Use the image's own alpha when it has one.
+    alpha_min, _alpha_max = image.getchannel("A").getextrema()
+    if alpha_min == 255:
+        try:
+            import rembg
+        except ImportError as e:
+            raise Sf3dFailure(
+                "SF3D_NOT_INSTALLED",
+                f"The input image has no transparent background and rembg is not installed to remove it ({e}). "
+                "Install rembg or pass an RGBA image with the subject cut out.",
+            )
+        if "rembg" not in _MODELS:
+            _MODELS["rembg"] = rembg.new_session()
+        image = remove_background(image, _MODELS["rembg"])
+    image = resize_foreground(image, 0.85)
 
-            # Micro organic perturbation
-            micro_fold = 0.06 * math.sin(11.0 * phi) * (math.sin(theta) ** 1.5)
+    try:
+        # Loaded once per device; a persistent worker (worker_host.py) reuses it for every later image.
+        model = _MODELS.get(("sf3d", str(device)))
+        if model is None:
+            model = SF3D.from_pretrained(
+                "stabilityai/stable-fast-3d", config_name="config.yaml", weight_name="model.safetensors"
+            )
+            model.to(device)
+            model.eval()
+            _MODELS[("sf3d", str(device))] = model
+        with torch.no_grad():
+            mesh, _glob = model.run_image(image, bake_resolution=1024, remesh=remesh_option, vertex_count=-1)
+    except Exception as e:
+        raise Sf3dFailure("SF3D_RUN_FAILED", f"Stable Fast 3D failed on {image_path} (device {device}): {e}")
 
-            r = (r_base + lobe1 + lobe2 + micro_fold) * stem_pinch * cap_flange
-
-            x = r * math.sin(theta) * math.cos(phi)
-            y = r * math.cos(theta) * 1.25  # Slight vertical elongation
-            z = r * math.sin(theta) * math.sin(phi)
-
-            vertices.append((x, y, z))
-
-    for i in range(lat_res):
-        for j in range(lon_res):
-            next_j = (j + 1) % lon_res
-            v0 = i * lon_res + j
-            v1 = (i + 1) * lon_res + j
-            v2 = (i + 1) * lon_res + next_j
-            v3 = i * lon_res + next_j
-
-            indices.append((v0, v1, v2))
-            indices.append((v0, v2, v3))
-
-    return vertices, indices
+    if mesh is None or len(getattr(mesh, "vertices", [])) == 0 or len(getattr(mesh, "faces", [])) == 0:
+        raise Sf3dFailure("SF3D_EMPTY_MESH", f"Stable Fast 3D returned an empty mesh for {image_path}.")
+    return mesh
 
 
 def run_sf3d_pipeline(
@@ -320,41 +357,9 @@ def run_sf3d_pipeline(
     except ImportError:
         actual_device = "cpu"
 
-    vertices: List[Tuple[float, float, float]] = []
-    indices: List[Tuple[int, int, int]] = []
-    used_neural_model = False
-
-    # Check for installed SF3D package
-    has_sf3d = False
-    try:
-        import sf3d
-        has_sf3d = True
-    except ImportError:
-        pass
-
-    if has_sf3d:
-        try:
-            from sf3d import SF3D
-            # Load SF3D pipeline onto detected device
-            model = SF3D.from_pretrained("stabilityai/stable-fast-3d").to(actual_device)
-            # In no_pbr mode, run image encoding -> triplane -> mesh extraction without baking UVs
-            if no_pbr:
-                mesh_obj = model.extract_mesh_no_pbr(image_path, remesh_option=remesh_option)
-            else:
-                mesh_obj = model.run(image_path, remesh_option=remesh_option)
-
-            raw_verts = mesh_obj.vertices.tolist()
-            raw_faces = mesh_obj.faces.tolist()
-            vertices = [tuple(v) for v in raw_verts]
-            indices = [tuple(f) for f in raw_faces]
-            used_neural_model = True
-        except Exception as e:
-            sys.stderr.write(f"[LocalSF3D] Warning: Neural SF3D execution encountered: {e}. Falling back to biomorphic organic synthesis.\n")
-            used_neural_model = False
-
-    if not used_neural_model or len(vertices) == 0:
-        # High-definition biomorphic organic geometry
-        vertices, indices = generate_biomorphic_organic_mesh(lat_res=48, lon_res=64)
+    mesh = run_sf3d_model(image_path, remesh_option, actual_device)
+    vertices: List[Tuple[float, float, float]] = [tuple(float(c) for c in v) for v in mesh.vertices.tolist()]
+    indices: List[Tuple[int, int, int]] = [tuple(int(i) for i in f) for f in mesh.faces.tolist()]
 
     # 1. Metric Rescaling
     min_x = min(v[0] for v in vertices)
@@ -390,25 +395,28 @@ def run_sf3d_pipeline(
 
         transformed_verts.append((tx, ty, tz))
 
-    # Recalculate smooth normals after metric deformation and grounding
-    normals = compute_smooth_normals(transformed_verts, indices)
-
-    # Pack binary glTF 2.0 (.glb)
-    glb_bytes = pack_glb(
-        vertices=transformed_verts,
-        normals=normals,
-        indices=indices,
-        clay_color=clay_color,
-        metallic=0.0,
-        roughness=0.85
-    )
-
     out_dir = os.path.dirname(os.path.abspath(output_glb_path))
     if out_dir and not os.path.exists(out_dir):
         os.makedirs(out_dir, exist_ok=True)
 
-    with open(output_glb_path, "wb") as f:
-        f.write(glb_bytes)
+    if no_pbr:
+        # Clay: SF3D's geometry only, repacked with the studio clay material (its baked texture is dropped).
+        normals = compute_smooth_normals(transformed_verts, indices)
+        glb_bytes = pack_glb(
+            vertices=transformed_verts,
+            normals=normals,
+            indices=indices,
+            clay_color=clay_color,
+            metallic=0.0,
+            roughness=0.85
+        )
+        with open(output_glb_path, "wb") as f:
+            f.write(glb_bytes)
+    else:
+        # PBR: keep SF3D's UVs and baked material, with the metric rescale and ground snap applied.
+        import numpy as np
+        mesh.vertices = np.asarray(transformed_verts, dtype=np.float64)
+        mesh.export(output_glb_path, file_type="glb", include_normals=True)
 
     elapsed_ms = int((time.time() - start_time) * 1000)
 
@@ -422,7 +430,7 @@ def run_sf3d_pipeline(
         "success": True,
         "glb_path": output_glb_path,
         "mode": "no_pbr_clay" if no_pbr else "pbr",
-        "neural_execution": used_neural_model,
+        "neural_execution": True,
         "device": actual_device,
         "vertex_count": len(transformed_verts),
         "triangle_count": len(indices),
@@ -458,15 +466,19 @@ def main():
 
     args = parser.parse_args()
 
-    run_sf3d_pipeline(
-        image_path=args.image_path,
-        output_glb_path=args.output_glb_path,
-        no_pbr=args.no_pbr,
-        target_scale_meters=args.target_scale_meters,
-        ground_cut=args.ground_cut,
-        remesh_option=args.remesh_option,
-        device=args.device
-    )
+    try:
+        run_sf3d_pipeline(
+            image_path=args.image_path,
+            output_glb_path=args.output_glb_path,
+            no_pbr=args.no_pbr,
+            target_scale_meters=args.target_scale_meters,
+            ground_cut=args.ground_cut,
+            remesh_option=args.remesh_option,
+            device=args.device
+        )
+    except Sf3dFailure as e:
+        emit_failure(e.code, e.message)
+        sys.exit(EXIT_NOT_INSTALLED if e.code == "SF3D_NOT_INSTALLED" else EXIT_RUN_FAILED)
 
 
 if __name__ == "__main__":

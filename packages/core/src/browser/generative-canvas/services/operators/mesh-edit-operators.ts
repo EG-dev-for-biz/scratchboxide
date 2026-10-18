@@ -9,9 +9,12 @@
 
 import * as THREE from 'three';
 import {
+    type IOperatorContext,
     type OperatorDefinition,
-    createGeometryForType
+    computeMeshStatsFromGeometry,
+    requireLiveMesh
 } from './types';
+import { laplacianSmoothGeometry, repairGeometry, subdivideGeometry } from './mesh-topology';
 import type { SculptFalloffType } from '../../canvas-types';
 import {
     evaluateFalloff,
@@ -50,115 +53,53 @@ export function findViewportMeshes(threeScene: THREE.Scene | undefined, targetMe
     return matches;
 }
 
+
+/** Shared body of the two subdivision operators: subdivides a copy and swaps it in (undo swaps back). */
+function subdivideOperator(ctx: IOperatorContext, params: { objectId: string; iterations?: number }, operator: string, scheme: 'loop' | 'midpoint') {
+    const { mesh } = requireLiveMesh(ctx, params.objectId, operator);
+    const iterations = Math.floor(params.iterations ?? 1);
+    if (!(iterations >= 1 && iterations <= 4)) throw new Error(`${operator}: iterations must be 1 to 4 (each multiplies the triangles by 4).`);
+    const before = mesh.geometry.getAttribute('position').count;
+    const result = subdivideGeometry(mesh.geometry, iterations, scheme);
+    mesh.geometry = result.geometry;
+    return {
+        objectId: params.objectId,
+        iterations,
+        scheme,
+        vertexCountBefore: before,
+        vertexCount: result.vertexCount,
+        faceCount: result.faceCount,
+        droppedAttributes: result.droppedAttributes
+    };
+}
+
 export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_subdivide_mesh',
         category: 'mesh_edit',
-        description: 'Subdivides mesh geometry to increase polygon density and refine resolution.',
-        execute: (ctx, params: { objectId: string; iterations?: number }) => {
-            const found = ctx.findObject(params.objectId);
-            if (!found) throw new Error(`Object with id '${params.objectId}' not found.`);
-
-            const iterations = params.iterations || 1;
-            const obj = found.object;
-            const scale: [number, number, number] = obj.scale || [1, 1, 1];
-
-            // Create subdivided geometry
-            const subGeo = createGeometryForType(obj.type || 'box', scale, { iterations });
-            const posAttr = subGeo.attributes.position as THREE.BufferAttribute;
-            const newVertexCount = posAttr.count;
-            const newFaceCount = subGeo.index ? subGeo.index.count / 3 : newVertexCount / 3;
-
-            obj.geometry = {
-                type: 'subdivided',
-                iterations,
-                vertexCount: newVertexCount,
-                faceCount: newFaceCount
-            };
-
-            if (found.threeObject && (found.threeObject as THREE.Mesh).geometry) {
-                (found.threeObject as THREE.Mesh).geometry.dispose();
-                (found.threeObject as THREE.Mesh).geometry = subGeo;
-            }
-
-            return { objectId: params.objectId, iterations, vertexCount: newVertexCount, faceCount: newFaceCount };
-        }
-    },
-    {
-        name: 'sb_extrude_faces',
-        category: 'mesh_edit',
-        description: 'Extrudes faces along normal or direction vector creating boundary sides.',
-        execute: (ctx, params: { objectId: string; direction?: [number, number, number]; distance?: number }) => {
-            const found = ctx.findObject(params.objectId);
-            if (!found) throw new Error(`Object with id '${params.objectId}' not found.`);
-
-            const distance = params.distance || 1.0;
-            const direction = params.direction || [0, 1, 0];
-
-            (found.object as any).extrusion = { direction, distance, extrudedAt: Date.now() };
-
-            return {
-                objectId: params.objectId,
-                distance,
-                direction,
-                newFacesCount: 8,
-                totalVertices: 32
-            };
-        }
-    },
-    {
-        name: 'sb_boolean_op',
-        category: 'mesh_edit',
-        description: 'Performs constructive solid geometry (CSG) operations: union, difference, intersect.',
-        execute: (ctx, params: { targetId: string; operandId: string; operation: 'union' | 'difference' | 'intersect' }) => {
-            const target = ctx.findObject(params.targetId);
-            if (!target) throw new Error(`Target object '${params.targetId}' not found.`);
-            const operand = ctx.findObject(params.operandId);
-            if (!operand) throw new Error(`Operand object '${params.operandId}' not found.`);
-
-            const operation = params.operation || 'union';
-            (target.object as any).csgOperation = {
-                operation,
-                operandId: params.operandId,
-                timestamp: Date.now()
-            };
-
-            return {
-                targetId: params.targetId,
-                operandId: params.operandId,
-                operation,
-                resultVertexCount: 48,
-                resultFaceCount: 24
-            };
-        }
+        description: 'Midpoint-subdivides the live viewport mesh: each triangle splits into four at its edge midpoints, `iterations` times (1-4). The shape is unchanged and uv, color and other attributes are interpolated. Needs the live 3D viewport.',
+        execute: (ctx, params: { objectId: string; iterations?: number }) => subdivideOperator(ctx, params, 'sb_subdivide_mesh', 'midpoint')
     },
     {
         name: 'sb_smooth_mesh',
         category: 'mesh_edit',
-        description: 'Applies Laplacian mesh smoothing and normal recalculation.',
+        description: 'Laplacian-smooths the live viewport mesh: each interior vertex moves `factor` (0..1) of the way to the mean of its neighbours, `iterations` times; open boundary vertices stay put. Needs the live 3D viewport.',
         execute: (ctx, params: { objectId: string; factor?: number; iterations?: number }) => {
-            const found = ctx.findObject(params.objectId);
-            if (!found) throw new Error(`Object with id '${params.objectId}' not found.`);
-
-            const factor = params.factor || 0.5;
-            const iterations = params.iterations || 1;
-
-            if (found.threeObject && (found.threeObject as THREE.Mesh).geometry) {
-                recomputeGeometryNormals((found.threeObject as THREE.Mesh).geometry);
-            }
-
-            (found.object as any).smoothing = { factor, iterations };
-
-            return { objectId: params.objectId, factor, iterations, smoothed: true };
+            const { mesh } = requireLiveMesh(ctx, params.objectId, 'sb_smooth_mesh');
+            const factor = params.factor ?? 0.5;
+            const iterations = Math.max(1, Math.floor(params.iterations ?? 1));
+            if (!(factor > 0 && factor <= 1)) throw new Error('sb_smooth_mesh: factor must be in (0, 1].');
+            const result = laplacianSmoothGeometry(mesh.geometry, factor, iterations);
+            recomputeGeometryNormals(mesh.geometry);
+            return { objectId: params.objectId, factor, iterations, ...result };
         }
     },
     {
         name: 'sb_deform_vertices',
         category: 'mesh_edit',
         description: 'Deforms vertices within radial sphere along vector using mathematical falloff curve.',
-        execute: (ctx, params: { objectId: string; center?: [number, number, number]; strokePoint?: [number, number, number]; radius?: number; direction?: [number, number, number]; strength?: number; falloff?: SculptFalloffType; deformMode?: string; verticesAffected?: number; maxDisplacement?: number }) => {
-            const found = ctx.findObject(params.objectId);
-            if (!found) throw new Error(`Object with id '${params.objectId}' not found.`);
+        execute: (ctx, params: { objectId: string; center?: [number, number, number]; strokePoint?: [number, number, number]; radius?: number; direction?: [number, number, number]; strength?: number; falloff?: SculptFalloffType }) => {
+            const { mesh } = requireLiveMesh(ctx, params.objectId, 'sb_deform_vertices');
 
             const centerCoord = params.center || params.strokePoint || [0, 0, 0];
             const center = new THREE.Vector3(centerCoord[0], centerCoord[1], centerCoord[2]);
@@ -167,10 +108,10 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
             const strength = params.strength || 1.0;
             const falloffType = params.falloff || 'gaussian';
 
-            let affectedVertices = params.verticesAffected ?? 0;
+            let affectedVertices = 0;
 
-            if (found.threeObject && (found.threeObject as THREE.Mesh).geometry) {
-                const geo = (found.threeObject as THREE.Mesh).geometry;
+            {
+                const geo = mesh.geometry;
                 const posAttr = geo.attributes.position as THREE.BufferAttribute;
                 if (posAttr) {
                     const temp = new THREE.Vector3();
@@ -187,8 +128,6 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
                     posAttr.needsUpdate = true;
                     recomputeGeometryNormals(geo);
                 }
-            } else if (!affectedVertices) {
-                affectedVertices = 12;
             }
 
             return { objectId: params.objectId, affectedVertices, radius, strength };
@@ -199,16 +138,15 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
         category: 'mesh_edit',
         description: 'Tapers mesh cross-sections along an axis with linear or power scaling profile.',
         execute: (ctx, params: { objectId: string; axis?: 'x' | 'y' | 'z'; factor: number; minBound?: number; maxBound?: number; power?: number }) => {
-            const found = ctx.findObject(params.objectId);
-            if (!found) throw new Error(`Object with id '${params.objectId}' not found.`);
+            const { mesh } = requireLiveMesh(ctx, params.objectId, 'sb_taper_mesh');
 
             const axis = params.axis || 'y';
             const factor = params.factor ?? 0.5;
             const power = params.power ?? 1.0;
             let affectedVertices = 0;
 
-            if (found.threeObject && (found.threeObject as THREE.Mesh).geometry) {
-                const geo = (found.threeObject as THREE.Mesh).geometry;
+            {
+                const geo = mesh.geometry;
                 geo.computeBoundingBox();
                 const bb = geo.boundingBox || new THREE.Box3();
                 const minB = params.minBound ?? (axis === 'x' ? bb.min.x : axis === 'y' ? bb.min.y : bb.min.z);
@@ -239,10 +177,7 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
                 }
             }
 
-            if (!found.object.deformations) (found.object as any).deformations = [];
-            (found.object as any).deformations.push({ type: 'taper', axis, factor, power, timestamp: Date.now() });
-
-            return { objectId: params.objectId, axis, factor, power, affectedVertices: affectedVertices || 24 };
+            return { objectId: params.objectId, axis, factor, power, affectedVertices: affectedVertices };
         }
     },
     {
@@ -250,15 +185,14 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
         category: 'mesh_edit',
         description: 'Twists mesh vertices around an axis with a specified total angle in radians.',
         execute: (ctx, params: { objectId: string; axis?: 'x' | 'y' | 'z'; angle: number; minBound?: number; maxBound?: number }) => {
-            const found = ctx.findObject(params.objectId);
-            if (!found) throw new Error(`Object with id '${params.objectId}' not found.`);
+            const { mesh } = requireLiveMesh(ctx, params.objectId, 'sb_twist_mesh');
 
             const axis = params.axis || 'y';
             const totalAngle = params.angle ?? Math.PI * 0.5;
             let affectedVertices = 0;
 
-            if (found.threeObject && (found.threeObject as THREE.Mesh).geometry) {
-                const geo = (found.threeObject as THREE.Mesh).geometry;
+            {
+                const geo = mesh.geometry;
                 geo.computeBoundingBox();
                 const bb = geo.boundingBox || new THREE.Box3();
                 const minB = params.minBound ?? (axis === 'x' ? bb.min.x : axis === 'y' ? bb.min.y : bb.min.z);
@@ -297,10 +231,7 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
                 }
             }
 
-            if (!found.object.deformations) (found.object as any).deformations = [];
-            (found.object as any).deformations.push({ type: 'twist', axis, angle: totalAngle, timestamp: Date.now() });
-
-            return { objectId: params.objectId, axis, angle: totalAngle, affectedVertices: affectedVertices || 24 };
+            return { objectId: params.objectId, axis, angle: totalAngle, affectedVertices: affectedVertices };
         }
     },
     {
@@ -308,8 +239,7 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
         category: 'mesh_edit',
         description: 'Conformal cylindrical bend of mesh around an axis preserving arc length.',
         execute: (ctx, params: { objectId: string; mainAxis?: 'x' | 'y' | 'z'; bendAxis?: 'x' | 'y' | 'z'; angle: number; radius: number }) => {
-            const found = ctx.findObject(params.objectId);
-            if (!found) throw new Error(`Object with id '${params.objectId}' not found.`);
+            const { mesh } = requireLiveMesh(ctx, params.objectId, 'sb_bend_mesh');
 
             const mainAxis = params.mainAxis || 'x';
             const bendAxis = params.bendAxis || 'y';
@@ -317,8 +247,8 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
             const radius = Math.max(1e-4, params.radius ?? 5.0);
             let affectedVertices = 0;
 
-            if (found.threeObject && (found.threeObject as THREE.Mesh).geometry) {
-                const geo = (found.threeObject as THREE.Mesh).geometry;
+            {
+                const geo = mesh.geometry;
                 const posAttr = geo.attributes.position as THREE.BufferAttribute;
                 if (posAttr) {
                     for (let i = 0; i < posAttr.count; i++) {
@@ -345,10 +275,7 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
                 }
             }
 
-            if (!found.object.deformations) (found.object as any).deformations = [];
-            (found.object as any).deformations.push({ type: 'bend', mainAxis, bendAxis, angle, radius, timestamp: Date.now() });
-
-            return { objectId: params.objectId, mainAxis, bendAxis, angle, radius, affectedVertices: affectedVertices || 24 };
+            return { objectId: params.objectId, mainAxis, bendAxis, angle, radius, affectedVertices: affectedVertices };
         }
     },
     {
@@ -356,15 +283,14 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
         category: 'mesh_edit',
         description: 'Free-Form Deformation (FFD) using 3D trivariate Bernstein control lattice grid.',
         execute: (ctx, params: { objectId: string; dimensions?: [number, number, number]; controlOffsets?: Array<{ index: [number, number, number]; delta: [number, number, number] }> }) => {
-            const found = ctx.findObject(params.objectId);
-            if (!found) throw new Error(`Object with id '${params.objectId}' not found.`);
+            const { mesh } = requireLiveMesh(ctx, params.objectId, 'sb_lattice_deform');
 
             const dims = params.dimensions || [3, 3, 3];
             const offsets = params.controlOffsets || [];
             let affectedVertices = 0;
 
-            if (found.threeObject && (found.threeObject as THREE.Mesh).geometry && offsets.length > 0) {
-                const geo = (found.threeObject as THREE.Mesh).geometry;
+            if (offsets.length > 0) {
+                const geo = mesh.geometry;
                 geo.computeBoundingBox();
                 const bb = geo.boundingBox || new THREE.Box3();
                 const size = new THREE.Vector3().subVectors(bb.max, bb.min);
@@ -404,10 +330,7 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
                 }
             }
 
-            if (!found.object.deformations) (found.object as any).deformations = [];
-            (found.object as any).deformations.push({ type: 'lattice', dimensions: dims, controlOffsetsCount: offsets.length, timestamp: Date.now() });
-
-            return { objectId: params.objectId, dimensions: dims, controlOffsetsCount: offsets.length, affectedVertices: affectedVertices || 24 };
+            return { objectId: params.objectId, dimensions: dims, controlOffsetsCount: offsets.length, affectedVertices: affectedVertices };
         }
     },
     {
@@ -415,8 +338,7 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
         category: 'mesh_edit',
         description: 'Executes digital sculpting stroke: grab, clay, inflate, flatten, pinch, crease, smooth.',
         execute: (ctx, params: { objectId: string; brush: 'grab' | 'clay' | 'inflate' | 'flatten' | 'pinch' | 'crease' | 'smooth'; center: [number, number, number]; radius: number; strength: number; direction?: [number, number, number]; falloff?: string }) => {
-            const found = ctx.findObject(params.objectId);
-            if (!found) throw new Error(`Object with id '${params.objectId}' not found.`);
+            const { mesh } = requireLiveMesh(ctx, params.objectId, 'sb_sculpt_stroke');
 
             const brush = params.brush || 'clay';
             const center = new THREE.Vector3(params.center[0], params.center[1], params.center[2]);
@@ -426,8 +348,8 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
             const falloffType = (params.falloff || 'smoothstep') as SculptFalloffType;
             let affectedVertices = 0;
 
-            if (found.threeObject && (found.threeObject as THREE.Mesh).geometry) {
-                const geo = (found.threeObject as THREE.Mesh).geometry;
+            {
+                const geo = mesh.geometry;
                 const posAttr = geo.attributes.position as THREE.BufferAttribute;
                 const normAttr = geo.attributes.normal as THREE.BufferAttribute;
 
@@ -473,142 +395,34 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
                 }
             }
 
-            if (!found.object.sculptStrokes) (found.object as any).sculptStrokes = [];
-            (found.object as any).sculptStrokes.push({ brush, center: params.center, radius, strength, timestamp: Date.now() });
-
-            return { objectId: params.objectId, brush, radius, strength, affectedVertices: affectedVertices || 18 };
+            return { objectId: params.objectId, brush, radius, strength, affectedVertices: affectedVertices };
         }
     },
     {
         name: 'sb_loop_subdivide',
         category: 'mesh_edit',
-        description: 'Refines triangular mesh via Loop subdivision increasing polygon density by 4x.',
-        execute: (ctx, params: { objectId: string; iterations?: number }) => {
-            const found = ctx.findObject(params.objectId);
-            if (!found) throw new Error(`Object with id '${params.objectId}' not found.`);
-
-            const iters = Math.min(3, Math.max(1, params.iterations ?? 1));
-            const obj = found.object;
-            const scale: [number, number, number] = obj.scale || [1, 1, 1];
-            const subGeo = createGeometryForType(obj.type || 'box', scale, { iterations: iters });
-            const posAttr = subGeo.attributes.position as THREE.BufferAttribute;
-            const newVertexCount = posAttr.count;
-            const newFaceCount = subGeo.index ? subGeo.index.count / 3 : newVertexCount / 3;
-
-            obj.geometry = {
-                type: 'loop_subdivided',
-                iterations: iters,
-                vertexCount: newVertexCount,
-                faceCount: newFaceCount
-            };
-
-            if (found.threeObject && (found.threeObject as THREE.Mesh).geometry) {
-                (found.threeObject as THREE.Mesh).geometry.dispose();
-                (found.threeObject as THREE.Mesh).geometry = subGeo;
-            }
-
-            return { objectId: params.objectId, iterations: iters, vertexCount: newVertexCount, faceCount: newFaceCount };
-        }
-    },
-    {
-        name: 'sb_loft_mesh',
-        category: 'mesh_edit',
-        description: 'Lofts smooth skin across cross-sectional profile slice loops.',
-        execute: (ctx, params: { objectId?: string; name?: string; slices: Array<Array<[number, number, number]>>; closeEnds?: boolean; color?: number }) => {
-            const scene = ctx.getSceneData();
-            if (!scene.customMeshes) scene.customMeshes = [];
-
-            const objectId = params.objectId || `lofted-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-            const slices = params.slices || [];
-            const ptsPerSlice = slices.length > 0 ? slices[0].length : 8;
-            const totalVertices = slices.length * ptsPerSlice + (params.closeEnds !== false ? 2 : 0);
-            const totalFaces = (slices.length - 1) * ptsPerSlice * 2 + (params.closeEnds !== false ? ptsPerSlice * 2 : 0);
-
-            const newMesh = {
-                id: objectId,
-                name: params.name || 'Lofted Mesh',
-                type: 'custom' as any,
-                position: [0, 0, 0] as [number, number, number],
-                rotation: [0, 0, 0] as [number, number, number],
-                scale: [1, 1, 1] as [number, number, number],
-                material: {
-                    color: params.color ?? 0x64b5f6,
-                    metalness: 0.3,
-                    roughness: 0.4
-                },
-                geometry: {
-                    type: 'lofted',
-                    sliceCount: slices.length,
-                    pointsPerSlice: ptsPerSlice,
-                    vertexCount: totalVertices,
-                    faceCount: totalFaces
-                }
-            };
-
-            scene.customMeshes.push(newMesh);
-            return { objectId, totalVertices, totalFaces, sliceCount: slices.length };
-        }
-    },
-    {
-        name: 'sb_lathe_mesh',
-        category: 'mesh_edit',
-        description: 'Revolves a 2D profile curve around an axis to produce a watertight manifold.',
-        execute: (ctx, params: { objectId?: string; name?: string; profilePoints: Array<[number, number]>; segments?: number; angle?: number; color?: number }) => {
-            const scene = ctx.getSceneData();
-            if (!scene.customMeshes) scene.customMeshes = [];
-
-            const objectId = params.objectId || `lathed-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-            const segs = params.segments ?? 32;
-            const pts = params.profilePoints?.length || 8;
-            const totalVertices = (segs + 1) * pts;
-            const totalFaces = segs * (pts - 1) * 2;
-
-            const newMesh = {
-                id: objectId,
-                name: params.name || 'Lathed Mesh',
-                type: 'custom' as any,
-                position: [0, 0, 0] as [number, number, number],
-                rotation: [0, 0, 0] as [number, number, number],
-                scale: [1, 1, 1] as [number, number, number],
-                material: {
-                    color: params.color ?? 0xffb74d,
-                    metalness: 0.2,
-                    roughness: 0.5
-                },
-                geometry: {
-                    type: 'lathed',
-                    segments: segs,
-                    profilePointsCount: pts,
-                    vertexCount: totalVertices,
-                    faceCount: totalFaces
-                }
-            };
-
-            scene.customMeshes.push(newMesh);
-            return { objectId, totalVertices, totalFaces, segments: segs };
-        }
+        description: 'Loop-subdivides the live viewport mesh (4x triangles per iteration, 1-4 iterations), smoothing the welded surface; uv and color attributes are not carried and are listed in droppedAttributes. Needs the live 3D viewport.',
+        execute: (ctx, params: { objectId: string; iterations?: number }) => subdivideOperator(ctx, params, 'sb_loop_subdivide', 'loop')
     },
     {
         name: 'sb_repair_mesh',
         category: 'mesh_edit',
-        description: 'Cleans mesh topology, removes degenerate zero-area faces, and repairs normal orientation.',
+        description: 'Repairs the live viewport mesh: removes faces that collapse when positions within weldEpsilon are welded, removes repeated faces, makes winding consistent (closed surfaces face outward) and recomputes normals. Returns what it changed and the watertight check before and after. Needs the live 3D viewport.',
         execute: (ctx, params: { objectId: string; weldEpsilon?: number; removeDegenerates?: boolean }) => {
-            const found = ctx.findObject(params.objectId);
-            if (!found) throw new Error(`Object with id '${params.objectId}' not found.`);
-
-            if (found.threeObject && (found.threeObject as THREE.Mesh).geometry) {
-                const geo = (found.threeObject as THREE.Mesh).geometry;
-                recomputeGeometryNormals(geo);
-            }
-
-            (found.object as any).topologyCleaned = true;
-            (found.object as any).lastRepairedAt = Date.now();
-
+            const { mesh } = requireLiveMesh(ctx, params.objectId, 'sb_repair_mesh');
+            const weldEpsilon = params.weldEpsilon ?? 1e-4;
+            const before = computeMeshStatsFromGeometry(mesh.geometry);
+            const geometry = mesh.geometry.clone();
+            const result = repairGeometry(geometry, weldEpsilon, params.removeDegenerates !== false);
+            recomputeGeometryNormals(geometry);
+            mesh.geometry = geometry;
+            const after = computeMeshStatsFromGeometry(geometry);
             return {
                 objectId: params.objectId,
-                weldEpsilon: params.weldEpsilon ?? 1e-4,
-                removeDegenerates: params.removeDegenerates !== false,
-                repaired: true
+                weldEpsilon,
+                ...result,
+                before: { faceCount: before.faceCount, boundaryEdgeCount: before.boundaryEdgeCount, nonManifoldEdgeCount: before.nonManifoldEdgeCount, isWatertight: before.isWatertight },
+                after: { faceCount: after.faceCount, boundaryEdgeCount: after.boundaryEdgeCount, nonManifoldEdgeCount: after.nonManifoldEdgeCount, isWatertight: after.isWatertight }
             };
         }
     },
@@ -626,9 +440,6 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
                 [key: string]: any;
             }>;
         }) => {
-            const found = ctx.findObject(params.objectId);
-            if (!found) throw new Error(`Object with id '${params.objectId}' not found.`);
-
             // The operations are the caller's: a prompt is kept as a note but never turned into stock magnitudes.
             const ops = Array.isArray(params.operations) ? [...params.operations] : [];
             if (ops.length === 0) {
@@ -640,14 +451,11 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
                 if (!key) throw new Error(`sb_reshape_mesh cannot apply "${op.type}" in the viewport (taper, twist, bend, bulge); use the native mesh_apply_deformers tool for others.`);
                 if (typeof op[key] !== 'number' || !Number.isFinite(op[key])) throw new Error(`sb_reshape_mesh: ${op.type} needs a number ${key}.`);
             }
-            const geometry = found.threeObject && (found.threeObject as THREE.Mesh).geometry;
-            if (!geometry || !(geometry.attributes.position as THREE.BufferAttribute | undefined)) {
-                throw new Error(`sb_reshape_mesh: object '${params.objectId}' has no mesh geometry in the viewport to deform.`);
-            }
+            const { mesh } = requireLiveMesh(ctx, params.objectId, 'sb_reshape_mesh');
 
             let vertexCount = 0;
-            if (found.threeObject && (found.threeObject as THREE.Mesh).geometry) {
-                const geo = (found.threeObject as THREE.Mesh).geometry;
+            {
+                const geo = mesh.geometry;
                 const pos = geo.attributes.position as THREE.BufferAttribute;
                 if (pos) {
                     vertexCount = pos.count;
@@ -705,12 +513,6 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
                 }
             }
 
-            (found.object as any).reshaping = {
-                prompt: params.prompt,
-                operations: ops,
-                timestamp: Date.now()
-            };
-
             return {
                 objectId: params.objectId,
                 appliedOperations: ops,
@@ -718,215 +520,6 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
                 prompt: params.prompt,
                 success: true
             };
-        }
-    },
-    {
-        name: 'sb_spawn_particle_emitter',
-        category: 'particle_simulation',
-        description: 'Spawns and configures a high-performance 3D particle emitter system (point, cone, sphere, box, fountain, vortex).',
-        execute: (ctx, params: {
-            emitterId?: string;
-            name?: string;
-            shape?: 'point' | 'cone' | 'sphere' | 'box';
-            position?: [number, number, number];
-            direction?: [number, number, number];
-            spreadAngle?: number;
-            rate?: number;
-            speedMin?: number;
-            speedMax?: number;
-            lifetimeMin?: number;
-            lifetimeMax?: number;
-            sizeStart?: number;
-            sizeEnd?: number;
-            colorStart?: [number, number, number, number];
-            colorEnd?: [number, number, number, number];
-            temperatureKelvin?: number;
-            maxParticles?: number;
-        }) => {
-            const emitterId = params.emitterId || `emitter-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-            const scene = ctx.getSceneData();
-            if (!(scene as any).particleSystems) (scene as any).particleSystems = [];
-
-            const emitter = {
-                id: emitterId,
-                name: params.name || emitterId,
-                shape: params.shape || 'cone',
-                position: params.position || [0, 0, 0],
-                direction: params.direction || [0, 1, 0],
-                spreadAngle: params.spreadAngle ?? 0.45,
-                rate: params.rate ?? 150,
-                speedMin: params.speedMin ?? 2.0,
-                speedMax: params.speedMax ?? 6.0,
-                lifetimeMin: params.lifetimeMin ?? 1.5,
-                lifetimeMax: params.lifetimeMax ?? 3.0,
-                sizeStart: params.sizeStart ?? 0.15,
-                sizeEnd: params.sizeEnd ?? 0.02,
-                colorStart: params.colorStart || [1.0, 0.65, 0.15, 1.0],
-                colorEnd: params.colorEnd || [0.3, 0.05, 0.0, 0.0],
-                temperatureKelvin: params.temperatureKelvin ?? 4500,
-                maxParticles: params.maxParticles ?? 2000,
-                forceFields: [] as any[],
-                colliders: [] as any[],
-                particleCount: 0,
-                simulationTime: 0
-            };
-
-            (scene as any).particleSystems.push(emitter);
-
-            if (!scene.customMeshes) scene.customMeshes = [];
-            scene.customMeshes.push({
-                id: emitterId,
-                name: emitter.name,
-                type: 'points' as any,
-                position: [...emitter.position] as [number, number, number],
-                rotation: [0, 0, 0] as [number, number, number],
-                scale: [1, 1, 1] as [number, number, number],
-                material: {
-                    color: 0xffaa33,
-                    roughness: 0.1,
-                    metalness: 0.8
-                }
-            });
-
-            return { emitterId, emitter };
-        }
-    },
-    {
-        name: 'sb_simulate_particles',
-        category: 'particle_simulation',
-        description: 'Steps a particle system forward through time using Symplectic Euler, Velocity Verlet, or RK4 numerical integration.',
-        execute: (ctx, params: {
-            emitterId?: string;
-            dt?: number;
-            steps?: number;
-            integrator?: 'euler' | 'verlet' | 'rk4';
-        }) => {
-            const scene = ctx.getSceneData();
-            const systems: any[] = (scene as any).particleSystems || [];
-            const target = params.emitterId ? systems.find(s => s.id === params.emitterId) : systems[0];
-            if (!target) throw new Error(`Particle system '${params.emitterId ?? 'default'}' not found.`);
-
-            const dt = params.dt ?? 0.016;
-            const steps = params.steps ?? 10;
-            const integrator = params.integrator || 'rk4';
-
-            target.simulationTime = (target.simulationTime || 0) + dt * steps;
-            target.particleCount = Math.min(target.maxParticles, Math.floor(target.rate * Math.min(target.simulationTime, target.lifetimeMax)));
-
-            return {
-                emitterId: target.id,
-                simulatedSteps: steps,
-                totalSimulationTime: target.simulationTime,
-                activeParticles: target.particleCount,
-                integrator
-            };
-        }
-    },
-    {
-        name: 'sb_add_force_field',
-        category: 'particle_simulation',
-        description: 'Attaches a physical force field (gravity, point attractor, vortex, fluid drag, or curl noise) to particle simulation.',
-        execute: (ctx, params: {
-            emitterId?: string;
-            type: 'gravity' | 'attractor' | 'vortex' | 'drag' | 'curl_noise';
-            strength?: number;
-            center?: [number, number, number];
-            axis?: [number, number, number];
-        }) => {
-            const scene = ctx.getSceneData();
-            const systems: any[] = (scene as any).particleSystems || [];
-            const target = params.emitterId ? systems.find(s => s.id === params.emitterId) : systems[0];
-            if (!target) throw new Error(`Particle system '${params.emitterId ?? 'default'}' not found.`);
-
-            const field = {
-                type: params.type,
-                strength: params.strength ?? 1.0,
-                center: params.center || [0, 0, 0],
-                axis: params.axis || [0, 1, 0]
-            };
-            target.forceFields.push(field);
-
-            return { emitterId: target.id, addedField: field, totalFields: target.forceFields.length };
-        }
-    },
-    {
-        name: 'sb_add_particle_collider',
-        category: 'particle_simulation',
-        description: 'Attaches ground plane, sphere, or signed distance field (SDF) colliders with restitution and friction response.',
-        execute: (ctx, params: {
-            emitterId?: string;
-            type: 'plane' | 'sphere' | 'box' | 'sdf';
-            position?: [number, number, number];
-            normal?: [number, number, number];
-            radius?: number;
-            restitution?: number;
-            friction?: number;
-        }) => {
-            const scene = ctx.getSceneData();
-            const systems: any[] = (scene as any).particleSystems || [];
-            const target = params.emitterId ? systems.find(s => s.id === params.emitterId) : systems[0];
-            if (!target) throw new Error(`Particle system '${params.emitterId ?? 'default'}' not found.`);
-
-            const collider = {
-                type: params.type || 'plane',
-                position: params.position || [0, 0, 0],
-                normal: params.normal || [0, 1, 0],
-                radius: params.radius ?? 1.0,
-                restitution: params.restitution ?? 0.6,
-                friction: params.friction ?? 0.2
-            };
-            target.colliders.push(collider);
-
-            return { emitterId: target.id, addedCollider: collider, totalColliders: target.colliders.length };
-        }
-    },
-    {
-        name: 'sb_bake_particle_cache',
-        category: 'particle_simulation',
-        description: 'Bakes simulated particle positions, velocities, and color ramps into an in-memory keyframe animation cache.',
-        execute: (ctx, params: {
-            emitterId?: string;
-            duration?: number;
-            fps?: number;
-        }) => {
-            const scene = ctx.getSceneData();
-            const systems: any[] = (scene as any).particleSystems || [];
-            const target = params.emitterId ? systems.find(s => s.id === params.emitterId) : systems[0];
-            if (!target) throw new Error(`Particle system '${params.emitterId ?? 'default'}' not found.`);
-
-            const duration = params.duration ?? 2.0;
-            const fps = params.fps ?? 30;
-            const frameCount = Math.floor(duration * fps);
-
-            target.bakedCache = {
-                duration,
-                fps,
-                frameCount,
-                bakedAt: Date.now()
-            };
-
-            return { emitterId: target.id, frameCount, duration, baked: true };
-        }
-    },
-    {
-        name: 'sb_add_mesh',
-        category: 'mesh_edit',
-        description: 'Spawns and registers a new 3D mesh (box, sphere, cylinder, plane, custom) into in-memory Scene3DData.',
-        execute: (ctx, params: { objectId?: string; name?: string; type?: string; position?: [number, number, number]; rotation?: [number, number, number]; scale?: [number, number, number]; material?: any }) => {
-            const objectId = params.objectId || `mesh-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-            const scene = ctx.getSceneData();
-            if (!scene.customMeshes) scene.customMeshes = [];
-            const newMesh = {
-                id: objectId,
-                name: params.name || objectId,
-                type: (params.type || 'box') as any,
-                position: params.position ? [...params.position] as [number, number, number] : [0, 0, 0] as [number, number, number],
-                rotation: params.rotation ? [...params.rotation] as [number, number, number] : [0, 0, 0] as [number, number, number],
-                scale: params.scale ? [...params.scale] as [number, number, number] : [1, 1, 1] as [number, number, number],
-                material: params.material || { color: 0x38bdf8, roughness: 0.5, metalness: 0.2 }
-            };
-            scene.customMeshes.push(newMesh);
-            return { objectId, mesh: newMesh };
         }
     },
     {
@@ -965,8 +558,6 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
                 parent.add(result.group);
                 parent.remove(target);
             }
-
-            ctx.recordState(`Archie: Refine Building Structure (${refined.length} mesh${refined.length === 1 ? '' : 'es'} named ${params.targetMeshId})`);
 
             return {
                 success: true,

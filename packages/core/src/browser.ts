@@ -69,7 +69,8 @@ export {
     computeSkyAtmosphereMetrics,
     LocationObjectLightingService,
     harmonizeLocationObjectAtmosphere,
-    generateCanonicalAmbulatoryFixtures,
+    buildPortalFixtures,
+    PORTAL_FIXTURE_DEFAULTS,
     STONE_ALBEDO_PROFILES,
     LOCATION_DELIGHT_FRAGMENT_CHUNK,
     LOCATION_DELIGHT_VERTEX_CHUNK,
@@ -97,6 +98,7 @@ export type {
     DelightUniformsConfig,
     AtmosphereSceneLightingConfig,
     ArchitecturalPortalFixtureConfig,
+    ArchitecturalPortalInput,
     LocationObjectAtmosphereRequest,
     LocationObjectAtmosphereResult
 } from './browser/generative-canvas/services/atmosphere';
@@ -203,11 +205,11 @@ export type {
 export {
     ConcertStagePerformerService,
     PerformerSkinningMode,
-    MUSIC_VENUE_PRESETS,
+    requireStageVenueAnchor,
     SBHUMAN_22_JOINT_NAMES,
     SBHUMAN_22_PARENTS,
     DEFAULT_CANONICAL_JOINTS,
-    type MusicVenuePreset,
+    type StageVenueAnchor,
     type ConcertStageOptions,
     type PerformerKinematicsFrame,
     type PerformerTelemetry

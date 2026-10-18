@@ -46,7 +46,7 @@ export const LOCAL_SF3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 noPbr: {
                     type: 'BOOLEAN',
-                    description: 'Whether to bypass UV unwrapping and neural texture baking, generating pure 18% Studio Grey Clay geometry in ~400ms (default: true).'
+                    description: 'Keep only SF3D\'s geometry and repack it in 18% Studio Grey Clay, dropping its baked texture (default: true). false exports SF3D\'s textured mesh.'
                 },
                 targetScaleMeters: {
                     type: 'NUMBER',
@@ -172,6 +172,7 @@ export const localSf3DHandlers: Record<string, ToolHandler> = {
                 summaryResult: `Failed to generate local SF3D organic prop: ${err.message}`,
                 resultPayload: {
                     status: 'error',
+                    ...(typeof err?.code === 'string' ? { code: err.code } : {}),
                     summary: `Failed to generate local SF3D organic prop: ${err.message}`,
                     output: err.stack || err.message
                 }

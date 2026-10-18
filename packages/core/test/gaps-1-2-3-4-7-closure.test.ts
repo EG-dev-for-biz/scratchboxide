@@ -241,70 +241,74 @@ int main() {
     // ========================================================================
     // 6. Direct Dispatch Operator Engine Verification
     // ========================================================================
-    it('should verify operator engine dispatches for Gaps 1, 2, 3, 4, 7', () => {
-        const initialScene: Scene3DData = {
-            customMeshes: [
-                {
-                    id: 'hero_cube',
-                    name: 'HeroCube',
-                    type: 'box',
-                    position: [0, 5, 0],
-                    scale: [1, 1, 1]
-                }
-            ]
-        };
+    it('no longer registers the scatter / BVH / rigid-body / cloth / LOD operators that only echoed configs', () => {
+        const engine = createOperatorEngine({ customMeshes: [] } as Scene3DData);
+        for (const name of [
+            'sb_scatter_props',
+            'sb_build_mesh_bvh',
+            'sb_simulate_rigidbody_physics',
+            'sb_simulate_xpbd_cloth',
+            'sb_generate_lod_pyramid'
+        ]) {
+            expect(engine.getOperator(name)).toBeUndefined();
+            expect(engine.dispatch(name, { targetMeshId: 'hero_sphere' }).success).toBe(false);
+        }
+    });
 
+    it('sb_raycast_mesh intersects the real triangles of a live mesh', () => {
+        const initialScene: Scene3DData = {
+            customMeshes: [{ id: 'hero_sphere', name: 'HeroSphere', type: 'sphere', position: [0, 5, 0] } as any]
+        };
         const engine = createOperatorEngine(initialScene);
 
-        // 1. Test sb_scatter_props with GPU Instancing (Gap 2)
-        const scatterRes = engine.dispatch('sb_scatter_props', {
-            count: 350,
-            propType: 'box',
-            useGpuInstancing: true
-        });
-        expect(scatterRes.success).toBe(true);
-        expect(scatterRes.data.useGpuInstancing).toBe(true);
-        expect(scatterRes.data.scatterCount).toBe(350);
+        // Without the live viewport there are no triangles to cast against.
+        const noScene = engine.dispatch('sb_raycast_mesh', { targetMeshId: 'hero_sphere', origin: [0, 10, 0], direction: [0, -1, 0] });
+        expect(noScene.success).toBe(false);
+        expect(noScene.errorCode).toBe('not_available_here');
+        const noSceneAll = engine.dispatch('sb_raycast_mesh', { origin: [0, 10, 0], direction: [0, -1, 0] });
+        expect(noSceneAll.success).toBe(false);
+        expect(noSceneAll.errorCode).toBe('not_available_here');
 
-        // 2. Test sb_build_mesh_bvh (Gap 1)
-        const bvhRes = engine.dispatch('sb_build_mesh_bvh', {
-            targetMeshId: 'hero_cube'
-        });
-        expect(bvhRes.success).toBe(true);
-        expect(bvhRes.data.bvhAccelerated).toBe(true);
+        const scene = new THREE.Scene();
+        const sphere = new THREE.Mesh(new THREE.SphereGeometry(1, 64, 32), new THREE.MeshStandardMaterial());
+        sphere.name = 'hero_sphere';
+        sphere.position.set(0, 5, 0);
+        scene.add(sphere);
+        engine.attachThreeScene(scene);
 
-        // 3. Test sb_raycast_mesh (Gap 1)
+        // Straight down onto the sphere: hits its top (y = 6) with an upward face normal.
         const rayRes = engine.dispatch('sb_raycast_mesh', {
-            targetMeshId: 'hero_cube',
-            origin: [0, 10, 0],
+            targetMeshId: 'hero_sphere',
+            origin: [0.01, 10, 0.02],
             direction: [0, -1, 0]
         });
         expect(rayRes.success).toBe(true);
         expect(rayRes.data.hit).toBe(true);
-        expect(rayRes.data.distance).toBeGreaterThan(0);
+        expect(rayRes.data.meshName).toBe('hero_sphere');
+        expect(rayRes.data.position[1]).toBeCloseTo(6, 2);
+        expect(rayRes.data.distance).toBeCloseTo(4, 2);
+        expect(rayRes.data.normal[1]).toBeGreaterThan(0.99);
+        expect(typeof rayRes.data.faceIndex).toBe('number');
 
-        // 4. Test sb_simulate_rigidbody_physics (Gap 3)
-        const rbRes = engine.dispatch('sb_simulate_rigidbody_physics', {
-            targetMeshId: 'hero_cube',
-            steps: 60
+        // A ray through the corner of the bounding box misses the sphere itself.
+        const corner = engine.dispatch('sb_raycast_mesh', {
+            targetMeshId: 'hero_sphere',
+            origin: [0.95, 10, 0.95],
+            direction: [0, -1, 0]
         });
-        expect(rbRes.success).toBe(true);
-        expect(rbRes.data.stepsExecuted).toBe(60);
+        expect(corner.success).toBe(true);
+        expect(corner.data.hit).toBe(false);
 
-        // 5. Test sb_simulate_xpbd_cloth (Gap 4)
-        const clothRes = engine.dispatch('sb_simulate_xpbd_cloth', {
-            targetMeshId: 'hero_cube',
-            steps: 30
-        });
-        expect(clothRes.success).toBe(true);
-        expect(clothRes.data.xpbdConfig).toBeDefined();
+        // Scene-wide cast from the side hits the sphere's flank with an outward (-X) normal.
+        const side = engine.dispatch('sb_raycast_mesh', { origin: [-10, 5, 0], direction: [1, 0, 0] });
+        expect(side.success).toBe(true);
+        expect(side.data.hit).toBe(true);
+        expect(side.data.position[0]).toBeCloseTo(-1, 2);
+        expect(side.data.normal[0]).toBeLessThan(-0.99);
 
-        // 6. Test sb_generate_lod_pyramid (Gap 7)
-        const lodRes = engine.dispatch('sb_generate_lod_pyramid', {
-            targetMeshId: 'hero_cube'
-        });
-        expect(lodRes.success).toBe(true);
-        expect(lodRes.data.levelCount).toBe(4);
+        // maxDistance shorter than the gap to the surface: no hit.
+        const short = engine.dispatch('sb_raycast_mesh', { targetMeshId: 'hero_sphere', origin: [0.01, 10, 0.02], direction: [0, -1, 0], maxDistance: 3 });
+        expect(short.data.hit).toBe(false);
     });
 
     // ========================================================================

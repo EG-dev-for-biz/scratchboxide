@@ -19,7 +19,8 @@ export interface RenderPasses {
     clay: Buffer;
     depth: Float32Array;
     mist: Buffer; // PNG encoded depth
-    normal: Buffer; // PNG encoded camera-space or world-space normals
+    /** PNG of the three-light normal-shading pass; only rendered when asked for (includeNormal), as no restyle call uses it. */
+    normal?: Buffer;
 }
 
 export interface NativeAiRenderEngineServiceOptions {
@@ -65,6 +66,8 @@ export class NativeAiRenderEngineService {
             clayColor?: [number, number, number];
             bgColor?: [number, number, number, number];
             lightDir?: [number, number, number];
+            /** Render the normal-shading pass (three extra rasterisations). Default true. */
+            includeNormal?: boolean;
         }
     ): RenderPasses {
         // 1. Extract clay pass and depth from software rasterizer
@@ -113,49 +116,52 @@ export class NativeAiRenderEngineService {
 
         const mistPng = encodePng(width, height, mistRgba);
 
-        // 3. Generate Normal pass
-        // Map vertex/face orientation to RGB. Since renderShadedMesh already does Lambertian dot product
-        // based on normal and light, we can synthesize a high-contrast normal-colored shading pass by
-        // rendering the same geometry with three orthogonal lighting directions as R, G, B channels!
-        // This is a standard photometric normal mapping/shading technique.
-        const normalRgba = Buffer.alloc(size * 4);
+        let normalPng: Buffer | undefined;
+        if (options?.includeNormal !== false) {
+            // 3. Generate Normal pass
+            // Map vertex/face orientation to RGB. Since renderShadedMesh already does Lambertian dot product
+            // based on normal and light, we can synthesize a high-contrast normal-colored shading pass by
+            // rendering the same geometry with three orthogonal lighting directions as R, G, B channels!
+            // This is a standard photometric normal mapping/shading technique.
+            const normalRgba = Buffer.alloc(size * 4);
         
-        // Render 3 passes with cardinal lighting to capture x, y, z normals in R, G, B
-        const passX = HeadlessMeshSilhouetteRenderer.renderShadedMesh(mesh, pose, width, height, {
-            clayColor: [255, 0, 0],
-            bgColor: [0, 0, 0, 255],
-            lightDir: [1, 0, 0],
-            clipNearPlane: true
-        });
-        const passY = HeadlessMeshSilhouetteRenderer.renderShadedMesh(mesh, pose, width, height, {
-            clayColor: [0, 255, 0],
-            bgColor: [0, 0, 0, 255],
-            lightDir: [0, 1, 0],
-            clipNearPlane: true
-        });
-        const passZ = HeadlessMeshSilhouetteRenderer.renderShadedMesh(mesh, pose, width, height, {
-            clayColor: [0, 0, 255],
-            bgColor: [0, 0, 0, 255],
-            lightDir: [0, 0, 1],
-            clipNearPlane: true
-        });
+            // Render 3 passes with cardinal lighting to capture x, y, z normals in R, G, B
+            const passX = HeadlessMeshSilhouetteRenderer.renderShadedMesh(mesh, pose, width, height, {
+                clayColor: [255, 0, 0],
+                bgColor: [0, 0, 0, 255],
+                lightDir: [1, 0, 0],
+                clipNearPlane: true
+            });
+            const passY = HeadlessMeshSilhouetteRenderer.renderShadedMesh(mesh, pose, width, height, {
+                clayColor: [0, 255, 0],
+                bgColor: [0, 0, 0, 255],
+                lightDir: [0, 1, 0],
+                clipNearPlane: true
+            });
+            const passZ = HeadlessMeshSilhouetteRenderer.renderShadedMesh(mesh, pose, width, height, {
+                clayColor: [0, 0, 255],
+                bgColor: [0, 0, 0, 255],
+                lightDir: [0, 0, 1],
+                clipNearPlane: true
+            });
 
-        // Composite the normal channels
-        for (let i = 0; i < size; i++) {
-            if (shadedResult.silhouetteBuffer[i] > 0) {
-                normalRgba[i * 4] = passX.rgba[i * 4];
-                normalRgba[i * 4 + 1] = passY.rgba[i * 4 + 1];
-                normalRgba[i * 4 + 2] = passZ.rgba[i * 4 + 2];
-                normalRgba[i * 4 + 3] = 255;
-            } else {
-                normalRgba[i * 4] = options?.bgColor?.[0] ?? 18;
-                normalRgba[i * 4 + 1] = options?.bgColor?.[1] ?? 22;
-                normalRgba[i * 4 + 2] = options?.bgColor?.[2] ?? 28;
-                normalRgba[i * 4 + 3] = options?.bgColor?.[3] ?? 255;
+            // Composite the normal channels
+            for (let i = 0; i < size; i++) {
+                if (shadedResult.silhouetteBuffer[i] > 0) {
+                    normalRgba[i * 4] = passX.rgba[i * 4];
+                    normalRgba[i * 4 + 1] = passY.rgba[i * 4 + 1];
+                    normalRgba[i * 4 + 2] = passZ.rgba[i * 4 + 2];
+                    normalRgba[i * 4 + 3] = 255;
+                } else {
+                    normalRgba[i * 4] = options?.bgColor?.[0] ?? 18;
+                    normalRgba[i * 4 + 1] = options?.bgColor?.[1] ?? 22;
+                    normalRgba[i * 4 + 2] = options?.bgColor?.[2] ?? 28;
+                    normalRgba[i * 4 + 3] = options?.bgColor?.[3] ?? 255;
+                }
             }
-        }
 
-        const normalPng = encodePng(width, height, normalRgba);
+            normalPng = encodePng(width, height, normalRgba);
+        }
 
         return {
             width,
@@ -180,6 +186,8 @@ export class NativeAiRenderEngineService {
         height?: number;
         clayColor?: [number, number, number];
         bgColor?: [number, number, number, number];
+        /** The caller's Stop, handed to the image model call. */
+        signal?: AbortSignal;
     }): Promise<{ image: Buffer; width: number; height: number; passes: RenderPasses; modelUsed?: string; imageSource: string }> {
         const width = request.width || 640;
         const height = request.height || 480;
@@ -187,7 +195,9 @@ export class NativeAiRenderEngineService {
         // 1. Extract geometry passes
         const passes = this.extractRenderPasses(request.mesh, request.pose, width, height, {
             clayColor: request.clayColor,
-            bgColor: request.bgColor
+            bgColor: request.bgColor,
+            // No restyle call reads the normal pass; skip its three extra rasterisations.
+            includeNormal: false
         });
 
         // 2. The restyle prompt: the caller's subject and the frame, with no invented place, coordinates or heading
@@ -200,7 +210,8 @@ export class NativeAiRenderEngineService {
             blockoutPng: passes.clay,
             aspectRatio,
             width,
-            height
+            height,
+            signal: request.signal
         }));
 
         return {

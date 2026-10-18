@@ -5,6 +5,10 @@ const path = require('path');
 const { execFile } = require('child_process');
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 8080;
+// Loopback only unless SERVE_PUBLIC_HOST says otherwise; Dockerfile.inference sets 0.0.0.0 so the container port is
+// reachable. Binding wider does not widen what is accepted: the Host and Origin allowlists below still admit only
+// loopback names on this port plus SERVE_PUBLIC_ALLOWED_HOSTS / SERVE_PUBLIC_ALLOWED_ORIGINS.
+const HOST = String(process.env.SERVE_PUBLIC_HOST || '').trim() || '127.0.0.1';
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const UPLOADS_DIR = path.join(PUBLIC_DIR, 'uploads');
 const REPO_ROOT = path.join(__dirname, '..');
@@ -72,75 +76,81 @@ function downloadImage(url, destPath) {
     });
 }
 
-function executePythonResection(imagePath, hint) {
-    return new Promise((resolve, reject) => {
-        const scriptPath = path.join(REPO_ROOT, 'tools', 'geobox', 'pipeline', 'geobox_precision_pipeline.py');
-        const args = [scriptPath, '--json'];
-        if (imagePath) {
-            args.push('--image', imagePath);
-        }
-        if (hint && typeof hint === 'string' && hint.trim().length > 0) {
-            args.push('--hint', hint.trim());
-        }
+// TypeScript services from packages/core, loaded as CommonJS. Docker (Dockerfile.inference) compiles them into
+// build/serve-public-core with `npm run build:serve-public`; a dev checkout without that build loads the TypeScript
+// source through ts-node (as desktop-app's server:dev does). When neither is available the endpoint says so.
+const CORE_CJS_DIR = path.join(REPO_ROOT, 'build', 'serve-public-core');
+const CORE_SRC_DIR = path.join(REPO_ROOT, 'packages', 'core', 'src');
+const coreModules = new Map();
+let tsNodeRegistered = false;
 
-        console.log(`[Resection API] Spawning GeoBox pipeline for: ${imagePath || 'text-only query'} (hint: "${hint || ''}")`);
-        const pythonBin = process.env.PYTHON_BIN || (fs.existsSync('/Library/Developer/CommandLineTools/usr/bin/python3') ? '/Library/Developer/CommandLineTools/usr/bin/python3' : 'python3');
-        const defaultPaths = [
-            process.env.PYTHONPATH,
-            '/Users/eligreen/Library/Python/3.9/lib/python/site-packages'
-        ].filter(Boolean).join(':');
-
-        const pythonEnv = {
-            ...process.env,
-            PYTHONPATH: defaultPaths,
-            PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin'
-        };
-        const proc = execFile(pythonBin, args, {
-            cwd: REPO_ROOT,
-            env: pythonEnv,
-            maxBuffer: 20 * 1024 * 1024,
-            timeout: 60000
-        }, (error, stdout, stderr) => {
-            if (error) {
-                console.error('[Resection API] Execution error:', error.message);
-                if (stderr) console.error('[Resection API] Stderr:', stderr);
-                return reject(new Error(`GeoBox pipeline failed: ${error.message}`));
+/** A packages/core module by its path under src/ without extension, e.g. 'node/spatial/GeoBoxPrecisionResectionService'. */
+function loadCoreModule(modulePath) {
+    if (coreModules.has(modulePath)) return coreModules.get(modulePath);
+    const built = path.join(CORE_CJS_DIR, modulePath + '.js');
+    let mod;
+    if (fs.existsSync(built)) {
+        mod = require(built);
+    } else {
+        const source = path.join(CORE_SRC_DIR, modulePath + '.ts');
+        if (!tsNodeRegistered) {
+            let tsNode;
+            try {
+                tsNode = require('ts-node');
+            } catch {
+                throw new CoreModuleUnavailableError(modulePath, `${path.relative(REPO_ROOT, built)} is not built and ts-node is not installed to load ${path.relative(REPO_ROOT, source)}; run \`npm run build:serve-public\``);
             }
-
-            const startIdx = stdout.indexOf('---GEOBOX_JSON_START---');
-            const endIdx = stdout.indexOf('---GEOBOX_JSON_END---');
-            if (startIdx !== -1 && endIdx !== -1) {
-                const jsonStr = stdout.slice(startIdx + '---GEOBOX_JSON_START---'.length, endIdx).trim();
-                try {
-                    const parsed = JSON.parse(jsonStr);
-                    resolve(parsed);
-                } catch (parseErr) {
-                    reject(new Error(`Failed to parse GeoBox JSON output: ${parseErr.message}`));
-                }
-            } else {
-                reject(new Error('GeoBox JSON markers not found in output'));
-            }
-        });
-    });
+            tsNode.register({
+                transpileOnly: true,
+                skipProject: true,
+                compilerOptions: { module: 'commonjs', moduleResolution: 'node', target: 'ES2022', esModuleInterop: true, jsx: 'react-jsx' }
+            });
+            tsNodeRegistered = true;
+        }
+        mod = require(source);
+    }
+    coreModules.set(modulePath, mod);
+    return mod;
 }
 
-let google3DTilesModule = null;
-async function getGoogle3DTilesModule() {
-    if (!google3DTilesModule) {
-        try {
-            google3DTilesModule = await import('../packages/core/dist/node/spatial/Google3DTileBlockoutPipelineService.js');
-        } catch (err) {
-            console.error('[Google 3D Tiles Service] Failed to load module:', err.message);
-        }
+class CoreModuleUnavailableError extends Error {
+    constructor(modulePath, reason) {
+        super(`${modulePath} is unavailable: ${reason}`);
+        this.code = 'service_unavailable';
     }
-    return google3DTilesModule;
+}
+
+/** HTTP status for an error thrown by a core service: typed input errors are the caller's, the rest are ours. */
+function statusForError(err) {
+    switch (err && err.code) {
+        case 'missing_input':
+        case 'invalid_input': return 400;
+        case 'location_unresolved':
+        case 'sun_not_found':
+        case 'lighting_unmeasured': return 422;
+        case 'service_unavailable': return 503;
+        default: return 500;
+    }
+}
+
+/** The request fields GeoBoxPrecisionResectionService reads, taken from the JSON body as given. */
+const RESECTION_FIELDS = ['targetCoords', 'targetLandmarkName', 'cameraOpticalCenter', 'knownCoords', 'headingDeg', 'pitchDeg',
+    'rollDeg', 'standoffDistanceMeters', 'points2D', 'points3D', 'verticalLines', 'imageWidthPx', 'imageHeightPx',
+    'sensorFocalMm', 'sensorWidthMm', 'frustumReachMeters'];
+
+function resectionRequestFrom(payload, mediaPath, isVideo) {
+    const request = {};
+    for (const field of RESECTION_FIELDS) {
+        if (payload[field] !== undefined && payload[field] !== null) request[field] = payload[field];
+    }
+    const hint = payload.hint || payload.query || payload.text;
+    if (typeof hint === 'string' && hint.trim()) request.promptHint = hint.trim();
+    if (mediaPath) request[isVideo ? 'videoPath' : 'imagePath'] = mediaPath;
+    return request;
 }
 
 async function fetchGoogle3DTilesObject(queryOrCoords, options = {}) {
-    const mod = await getGoogle3DTilesModule();
-    if (!mod || !mod.getGoogle3DTilesFullTexture) {
-        throw new Error('getGoogle3DTilesFullTexture service is not available in @scratchbox/core');
-    }
+    const mod = loadCoreModule('node/spatial/Google3DTileBlockoutPipelineService');
     if (!options.outputGlbPath) {
         throw new Error('fetchGoogle3DTilesObject needs an outputGlbPath for this extraction');
     }
@@ -446,14 +456,25 @@ const server = http.createServer(async (req, res) => {
     // Health check endpoint
     if (reqPath === '/api/geobox/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', service: 'GeoBox 6-DOF Resection Server', timestamp: new Date().toISOString() }));
+        res.end(JSON.stringify({ status: 'ok', service: 'GeoBox camera resection server', timestamp: new Date().toISOString() }));
         return;
     }
 
-    // Photograph & Video Ingestion & 6-DOF Millimeter Resectioning API Endpoint
+    // Camera resection: GeoBoxPrecisionResectionService places the camera from the pose evidence in the request
+    // (2D-3D correspondences, a stated camera position, or a stated heading/pitch/standoff) relative to a target
+    // given as coordinates or resolved with Google Places. An attached photo or video is stored and returned as
+    // uploadUrl but its pixels are not analysed (result.imageAnalysed is false). Missing input is a 400, a place that
+    // cannot be resolved a 422; no pose, place or metrology is made up.
     if (req.method === 'POST' && reqPath === '/api/geobox/resect') {
         try {
-            const payload = await parseBody(req);
+            let payload;
+            try {
+                payload = await parseBody(req);
+            } catch (parseErr) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, code: 'invalid_request', error: parseErr.message }));
+                return;
+            }
             let savedImagePath = null;
             let relativeUploadUrl = null;
             const timestamp = Date.now();
@@ -493,6 +514,7 @@ const server = http.createServer(async (req, res) => {
                 const outFilename = `media_${timestamp}_${cleanName}${ext}`;
                 savedImagePath = path.join(UPLOADS_DIR, outFilename);
                 fs.writeFileSync(savedImagePath, Buffer.from(base64Data, 'base64'));
+                relativeUploadUrl = `/uploads/${outFilename}`;
             } else if (rawUrl && (rawUrl.startsWith('http://') || rawUrl.startsWith('https://'))) {
                 const urlObj = new URL(rawUrl);
                 const baseName = path.basename(urlObj.pathname) || 'downloaded_media.jpg';
@@ -511,84 +533,75 @@ const server = http.createServer(async (req, res) => {
                 }
                 savedImagePath = resolved;
                 relativeUploadUrl = publicUrlFor(resolved);
-            } else if (payload.hint || payload.query || payload.text) {
-                // Text-only search mode: No input image/video provided
-                savedImagePath = null;
-                relativeUploadUrl = null;
-            } else {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: 'Must provide a search query (text), a photograph (image), or both.' }));
+            }
+
+            const isVideo = Boolean(savedImagePath && /\.(mp4|mov|webm|mkv|avi)$/i.test(savedImagePath));
+            let resectionModule;
+            try {
+                resectionModule = loadCoreModule('node/spatial/GeoBoxPrecisionResectionService');
+            } catch (loadErr) {
+                res.writeHead(statusForError(loadErr), { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, code: loadErr.code || 'service_unavailable', error: loadErr.message }));
+                return;
+            }
+            let result;
+            try {
+                const service = new resectionModule.GeoBoxPrecisionResectionService();
+                result = await service.resectImageLocation(resectionRequestFrom(payload, savedImagePath, isVideo));
+            } catch (resectErr) {
+                const status = statusForError(resectErr);
+                if (status === 500) console.error('[Resection API] Resection failed:', resectErr);
+                res.writeHead(status, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: false,
+                    code: resectErr.code || 'resection_failed',
+                    error: resectErr.message || String(resectErr),
+                    uploadUrl: relativeUploadUrl
+                }));
                 return;
             }
 
-            // Execute Python 7-Stage Precision Pipeline (handles text-only, photo-only, or both)
-            const queryHint = payload.hint || payload.query || payload.text || '';
-            const result = await executePythonResection(savedImagePath, queryHint);
-
-            // The resected place's own 3D model: the one the resection named, or Google 3D Tiles extracted fresh at its
-            // centre. Without a centre, or when the extraction fails, there is none and the response says why; no
-            // default landmark, model looked up by proximity or keyword, or synthetic tile stands in.
+            // The resected target's own 3D model: Google 3D Tiles extracted fresh at its coordinates, unless the
+            // request sets extract3DTiles: false. When the extraction fails there is none and the response says why;
+            // no default landmark, nearby model or synthetic tile stands in.
             let threeDObject = null;
             let threeDObjectError = null;
-            const center = result.google_map_tiles_3d?.center;
-            if (typeof center?.lat !== 'number' || typeof center?.lng !== 'number') {
+            const center = result.googleMapTiles3DConfig && result.googleMapTiles3DConfig.center;
+            if (payload.extract3DTiles === false) {
+                threeDObjectError = 'Not requested (extract3DTiles: false).';
+            } else if (typeof center?.lat !== 'number' || typeof center?.lng !== 'number') {
                 threeDObjectError = 'The resection reported no map centre, so no 3D tiles were fetched.';
             } else {
                 const targetAnchor = { lat: center.lat, lng: center.lng, ...(typeof center.altitude === 'number' ? { elevation: center.altitude } : {}) };
-                const namedModel = result.google_map_tiles_3d?.three_d_object_model_url
-                    ? path.basename(result.google_map_tiles_3d.three_d_object_model_url)
-                    : null;
-                if (namedModel && fs.existsSync(path.join(PUBLIC_DIR, 'models', namedModel))) {
+                try {
+                    const outputGlbName = extractionGlbName(targetAnchor, 'textured');
+                    const outputGlbPath = path.join(PUBLIC_DIR, 'models', outputGlbName);
+                    const tileObj = await fetchGoogle3DTilesObject(targetAnchor, { outputGlbPath });
                     threeDObject = {
-                        service: 'geobox_resection',
-                        glbUrl: '/models/' + namedModel,
-                        glbPath: path.join(PUBLIC_DIR, 'models', namedModel),
+                        service: 'getGoogle3DTilesFullTexture',
+                        mode: tileObj.mode,
+                        glbUrl: '/models/' + path.basename(tileObj.glbPath),
+                        glbPath: tileObj.glbPath,
                         hasLocalGlb: true,
-                        geoAnchor: targetAnchor
+                        geoAnchor: tileObj.geoAnchor,
+                        mesh: tileObj.mesh,
+                        quality: tileObj.quality,
+                        manifest: tileObj.manifest
                     };
-                } else {
-                    try {
-                        const outputGlbName = extractionGlbName(targetAnchor, 'textured');
-                        const outputGlbPath = path.join(PUBLIC_DIR, 'models', outputGlbName);
-                        const tileObj = await fetchGoogle3DTilesObject(targetAnchor, { outputGlbPath });
-                        threeDObject = {
-                            service: 'getGoogle3DTilesFullTexture',
-                            mode: tileObj.mode,
-                            glbUrl: '/models/' + path.basename(tileObj.glbPath),
-                            glbPath: tileObj.glbPath,
-                            hasLocalGlb: true,
-                            geoAnchor: tileObj.geoAnchor,
-                            mesh: tileObj.mesh,
-                            quality: tileObj.quality,
-                            manifest: tileObj.manifest
-                        };
-                    } catch (tileErr) {
-                        threeDObjectError = `Google 3D Tiles extraction failed: ${tileErr.message}`;
-                    }
+                } catch (tileErr) {
+                    threeDObjectError = `Google 3D Tiles extraction failed: ${tileErr.message}`;
                 }
-            }
-            if (!threeDObject && result.google_map_tiles_3d) {
-                result.google_map_tiles_3d.three_d_object_model_url = null;
-                result.google_map_tiles_3d.has_local_glb = false;
-            }
-
-            result.three_d_object = threeDObject;
-
-            // Ensure relative web URL for image is populated for text searches (Street View capture)
-            if (!relativeUploadUrl && result.image_path && fs.existsSync(result.image_path)) {
-                relativeUploadUrl = '/' + path.relative(PUBLIC_DIR, result.image_path).replace(/\\/g, '/');
             }
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
                 success: true,
                 uploadUrl: relativeUploadUrl,
-                is_video: result.is_video || false,
-                video_metadata: result.video_metadata || null,
-                google_map_tiles_3d: result.google_map_tiles_3d || null,
+                is_video: isVideo,
+                google_map_tiles_3d: result.googleMapTiles3DConfig || null,
                 three_d_object: threeDObject,
                 three_d_object_error: threeDObjectError,
-                result: result
+                result
             }));
             return;
         } catch (err) {
@@ -602,100 +615,75 @@ const server = http.createServer(async (req, res) => {
         }
     }
 
-    // Endpoint: Learn & Persist Refined Camera Calibration
-    if (req.method === 'POST' && reqPath === '/api/geobox/calibrate') {
+    // Endpoint: Inversely solve and match lighting to a reference photograph (PhotometricUsdBridgeService). The
+    // image is required; location, capture time and camera are the request's own, with no default place or pose.
+    if (req.method === 'POST' && reqPath === '/api/lighting/match-reference') {
+        let body;
         try {
-            const body = await parseBody(req);
-            const calibrationsFile = path.join(PUBLIC_DIR, 'data', 'learned_resections.json');
-            fs.mkdirpSync(path.dirname(calibrationsFile));
-
-            let existing = {};
-            if (fs.existsSync(calibrationsFile)) {
-                try { existing = JSON.parse(fs.readFileSync(calibrationsFile, 'utf8')); } catch (e) {}
-            }
-
-            const key = (body.landmark || body.landmarkName || 'default').toLowerCase().replace(/[^a-z0-9]/g, '_');
-            existing[key] = {
-                ...body,
-                updatedAt: new Date().toISOString()
-            };
-
-            fs.writeFileSync(calibrationsFile, JSON.stringify(existing, null, 2));
-            console.log(`[GeoBox Learning] Persisted learned camera calibration for "${key}":`, body.geodetic || body.cameraPosition);
-
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                success: true,
-                message: `Learned calibration saved for ${body.landmark || key}`,
-                calibration: existing[key]
-            }));
-            return;
+            body = (await parseBody(req)) || {};
         } catch (err) {
-            console.error('[GeoBox Learning] Error:', err);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: false, error: err.message }));
+            rejectRequest(res, 400, err.message || 'Invalid JSON body');
             return;
         }
-    }
-
-    // Endpoint: Inversely solve and match lighting to reference photograph
-    if (req.method === 'POST' && reqPath === '/api/lighting/match-reference') {
-        try {
-            const body = await parseBody(req);
-            let imgPath = body.imagePath;
-            let relativeImgUrl = null;
-
-            if (body.imageBase64) {
-                const timestamp = Date.now();
-                let b64 = body.imageBase64;
-                let ext = '.jpg';
-                const match = b64.match(/^data:image\/([a-zA-Z0-9+]+);base64,/);
-                if (match) {
-                    ext = match[1] === 'png' ? '.png' : '.jpg';
-                    b64 = b64.slice(match[0].length);
-                }
-                const filename = `matched_light_ref_${timestamp}${ext}`;
-                imgPath = path.join(UPLOADS_DIR, filename);
-                fs.writeFileSync(imgPath, Buffer.from(b64, 'base64'));
-                relativeImgUrl = `/uploads/${filename}`;
-            } else {
-                imgPath = resolvePublicInputFile(body.imagePath || 'test_images/the_plaza_hotel_user_photo.jpg');
-                if (!imgPath) {
-                    rejectRequest(res, 400, `Image not found under public/: ${body.imagePath}`);
-                    return;
-                }
-                relativeImgUrl = publicUrlFor(imgPath);
+        let imgPath;
+        let relativeImgUrl;
+        if (typeof body.imageBase64 === 'string' && body.imageBase64) {
+            let b64 = body.imageBase64;
+            let ext = '.jpg';
+            const match = b64.match(/^data:image\/([a-zA-Z0-9+]+);base64,/);
+            if (match) {
+                ext = match[1] === 'png' ? '.png' : '.jpg';
+                b64 = b64.slice(match[0].length);
             }
+            const filename = `matched_light_ref_${Date.now()}${ext}`;
+            fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+            imgPath = path.join(UPLOADS_DIR, filename);
+            fs.writeFileSync(imgPath, Buffer.from(b64, 'base64'));
+            relativeImgUrl = `/uploads/${filename}`;
+        } else if (body.imagePath) {
+            imgPath = resolvePublicInputFile(body.imagePath);
+            if (!imgPath) {
+                rejectRequest(res, 400, `Image not found under public/: ${body.imagePath}`);
+                return;
+            }
+            relativeImgUrl = publicUrlFor(imgPath);
+        } else {
+            rejectRequest(res, 400, 'imagePath (under public/) or imageBase64 is required');
+            return;
+        }
 
-            const { matchImageAndLightingToLocation, matchLightingToReference } = require('../packages/core/dist/node/spatial/PhotometricUsdBridgeService.js');
+        try {
+            const lighting = loadCoreModule('node/spatial/PhotometricUsdBridgeService');
+            const outputUsdPath = path.join(PUBLIC_DIR, 'data', 'matched_lighting_rig.usda');
+            const locationName = body.landmarkName || body.locationName;
             let result;
-
-            if (body.autoAlignCamera !== false && (body.locationName || body.landmarkName || body.geodeticCoords)) {
-                result = await matchImageAndLightingToLocation({
+            if (locationName && !body.geodeticCoords) {
+                // A place name alone: resolved with Google Places by the service.
+                result = await lighting.matchImageAndLightingToLocation({
                     imagePath: imgPath,
-                    locationName: body.landmarkName || body.locationName,
-                    geodeticCoords: body.geodeticCoords,
+                    locationName,
+                    timestampIso: body.timestampIso,
                     cameraPosition: body.cameraPosition,
                     cameraTarget: body.cameraTarget,
-                    fovDeg: body.fovDeg || 54,
-                    stoneType: body.stoneType || 'travertine',
-                    autoAlignCamera: true,
+                    fovDeg: body.fovDeg,
+                    stoneType: body.stoneType,
                     autoExportUsd: true,
-                    outputUsdPath: path.join(PUBLIC_DIR, 'data', 'matched_lighting_rig.usda')
+                    outputUsdPath
                 });
             } else {
-                result = await matchLightingToReference({
+                result = await lighting.matchLightingToReference({
                     imagePath: imgPath,
-                    landmarkName: body.landmarkName || 'The Plaza Hotel',
-                    geodeticCoords: body.geodeticCoords || { lat: 40.7646, lng: -73.9743 },
-                    cameraHeadingDeg: body.cameraHeadingDeg || 215.3,
-                    cameraPitchDeg: body.cameraPitchDeg || 5.2,
+                    landmarkName: locationName,
+                    geodeticCoords: body.geodeticCoords,
+                    timestampIso: body.timestampIso,
+                    cameraHeadingDeg: body.cameraHeadingDeg,
+                    cameraPitchDeg: body.cameraPitchDeg,
                     cameraPosition: body.cameraPosition,
                     cameraTarget: body.cameraTarget,
-                    fovDeg: body.fovDeg || 54,
-                    stoneType: body.stoneType || 'travertine',
+                    fovDeg: body.fovDeg,
+                    stoneType: body.stoneType,
                     autoExportUsd: true,
-                    outputUsdPath: path.join(PUBLIC_DIR, 'data', 'matched_lighting_rig.usda')
+                    outputUsdPath
                 });
             }
 
@@ -706,27 +694,37 @@ const server = http.createServer(async (req, res) => {
                 usdDownloadUrl: result.usdExportPath ? '/data/' + path.basename(result.usdExportPath) : null,
                 mtlxDownloadUrl: result.mtlxExportPath ? '/data/' + path.basename(result.mtlxExportPath) : null
             }));
-            return;
         } catch (err) {
-            console.error('[Lighting Match API] Error:', err);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: false, error: err.message }));
-            return;
+            const status = statusForError(err);
+            if (status === 500) console.error('[Lighting Match API] Error:', err);
+            res.writeHead(status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, code: err.code || 'lighting_match_failed', error: err.message, imageRelUrl: relativeImgUrl }));
         }
+        return;
     }
 
-    // Endpoint: Export scene lighting to OpenUSD (.usda) and MaterialX (.mtlx)
+    // Endpoint: Export a lighting rig to OpenUSD (.usda) and MaterialX (.mtlx) (PhotometricUsdBridgeService)
     if (req.method === 'POST' && reqPath === '/api/lighting/export-usd') {
+        let body;
         try {
-            const body = await parseBody(req);
-            const outPath = body.outputPath
-                ? resolveWriteTarget(body.outputPath, USD_WRITE_DIRS, '.usda')
-                : path.join(PUBLIC_DIR, 'data', 'scene_lighting_export.usda');
-            if (!outPath) {
-                rejectRequest(res, 400, 'outputPath must be a .usda path under public/data/');
-                return;
-            }
-            const { PhotometricUsdBridgeService } = require('../packages/core/dist/node/spatial/PhotometricUsdBridgeService.js');
+            body = (await parseBody(req)) || {};
+        } catch (err) {
+            rejectRequest(res, 400, err.message || 'Invalid JSON body');
+            return;
+        }
+        const outPath = body.outputPath
+            ? resolveWriteTarget(body.outputPath, USD_WRITE_DIRS, '.usda')
+            : path.join(PUBLIC_DIR, 'data', 'scene_lighting_export.usda');
+        if (!outPath) {
+            rejectRequest(res, 400, 'outputPath must be a .usda path under public/data/');
+            return;
+        }
+        if (!body.rig || typeof body.rig !== 'object' || !Array.isArray(body.rig.lights)) {
+            rejectRequest(res, 400, 'rig with a lights array is required');
+            return;
+        }
+        try {
+            const { PhotometricUsdBridgeService } = loadCoreModule('node/spatial/PhotometricUsdBridgeService');
             const result = PhotometricUsdBridgeService.exportToUsd(body.rig, {
                 outputPath: outPath,
                 assetName: body.assetName || 'PhotometricScene',
@@ -744,13 +742,13 @@ const server = http.createServer(async (req, res) => {
                 mtlxUrl: result.mtlxFilePath ? '/data/' + path.basename(result.mtlxFilePath) : undefined,
                 usdaContent: result.usdaContent
             }));
-            return;
         } catch (err) {
-            console.error('[USD Export API] Error:', err);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: false, error: err.message }));
-            return;
+            const status = statusForError(err);
+            if (status === 500) console.error('[USD Export API] Error:', err);
+            res.writeHead(status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, code: err.code || 'usd_export_failed', error: err.message }));
         }
+        return;
     }
 
     // Endpoint: Ingest & Retrieve 3D Object Mesh via getGoogle3DTilesFullTexture
@@ -1047,12 +1045,12 @@ const server = http.createServer(async (req, res) => {
     });
 });
 
-server.listen(PORT, '127.0.0.1', () => {
-    // PORT=0 binds an ephemeral port; report the one actually bound.
-    const port = server.address().port;
-    console.log(`[Scratchbox Hub & GeoBox Resection Server] Running at http://127.0.0.1:${port}/`);
-    console.log(`  - Hub: http://127.0.0.1:${port}/index.html`);
-    console.log(`  - Showcase: http://127.0.0.1:${port}/model_showcase.html?model=geobox`);
-    console.log(`  - GeoBox Demo: http://127.0.0.1:${port}/geobox_demo.html`);
-    console.log(`  - API Resection: POST http://127.0.0.1:${port}/api/geobox/resect`);
+server.listen(PORT, HOST, () => {
+    // PORT=0 binds an ephemeral port; report the address and port actually bound.
+    const { address, port } = server.address();
+    const shown = address.includes(':') ? `[${address}]` : address;
+    console.log(`[Scratchbox Hub & GeoBox Resection Server] Running at http://${shown}:${port}/`);
+    console.log(`  - Hub: http://${shown}:${port}/index.html`);
+    console.log(`  - Showcase: http://${shown}:${port}/model_showcase.html?model=geobox`);
+    console.log(`  - API Resection: POST http://${shown}:${port}/api/geobox/resect`);
 });

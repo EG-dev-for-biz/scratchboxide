@@ -30,6 +30,18 @@ export function nearestImageAspectRatio(width: number, height: number): string {
     return best[0];
 }
 
+/**
+ * Gemini text-to-speech model used when SCRATCHBOX_TTS_MODEL is unset: the Gemini API id of Gemini 2.5 Flash TTS
+ * (generateContent with responseModalities AUDIO).
+ */
+export const DEFAULT_TTS_MODEL = 'gemini-2.5-flash-preview-tts';
+
+/** The TTS model to call: the configured value (SCRATCHBOX_TTS_MODEL) when it is set, else DEFAULT_TTS_MODEL. */
+export function resolveTtsModel(configured?: string): { model: string; source: 'SCRATCHBOX_TTS_MODEL' | 'default' } {
+    const value = configured?.trim();
+    return value ? { model: value, source: 'SCRATCHBOX_TTS_MODEL' } : { model: DEFAULT_TTS_MODEL, source: 'default' };
+}
+
 export const IMAGE_MODEL_PRIORITY_DRAFT = [
     'gemini-2.5-flash-image',
     'gemini-3.1-flash-image'
@@ -389,4 +401,62 @@ function redactSensitiveMessage(message: string): string {
     return message
         .replace(/(AIza[0-9A-Za-z_-]{20,}|AQ\.[0-9A-Za-z_-]{20,})/g, '[REDACTED_API_KEY]')
         .replace(/-----BEGIN PRIVATE KEY-----[\s\S]*?-----END PRIVATE KEY-----/g, '[REDACTED_PRIVATE_KEY]');
+}
+
+/** A crop of an image, in pixels, at one of the image models' aspect ratios. */
+export interface EditCropRegion {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    aspectRatio: string;
+}
+
+/**
+ * The region to send to an image model for a local edit: the edited box plus context on every side, grown to the
+ * nearest accepted aspect ratio (whichever needs the least extra area) and kept inside the image. Returns
+ * undefined when that region would cover more than maxAreaFraction of the image, so a near-full-frame edit is sent
+ * whole as before. Sending the region instead of the frame asks the model for fewer pixels at a smaller size tier
+ * (faster) and gives the edit more answer pixels per image pixel.
+ */
+export function chooseEditCrop(
+    box: { x0: number; y0: number; x1: number; y1: number },
+    width: number,
+    height: number,
+    options: { contextFraction?: number; minContextPx?: number; maxAreaFraction?: number } = {}
+): EditCropRegion | undefined {
+    if (!(box.x1 > box.x0 && box.y1 > box.y0)) return undefined;
+    // Context scales with the box's smaller side: a tall seam band gets a band-width of context either side, not
+    // a frame-height of it.
+    const margin = Math.max(options.minContextPx ?? 64, Math.round((options.contextFraction ?? 0.5) * Math.min(box.x1 - box.x0, box.y1 - box.y0)));
+    const cx0 = Math.max(0, box.x0 - margin), cy0 = Math.max(0, box.y0 - margin);
+    const cx1 = Math.min(width, box.x1 + margin), cy1 = Math.min(height, box.y1 + margin);
+    const cw = cx1 - cx0, ch = cy1 - cy0;
+    let best: EditCropRegion | undefined;
+    for (const [label, r] of IMAGE_MODEL_ASPECT_RATIOS) {
+        let w = cw, h = ch;
+        if (cw / ch < r) w = Math.round(ch * r); else h = Math.round(cw / r);
+        if (w > width || h > height) continue;
+        if (!best || w * h < best.width * best.height) {
+            const x = Math.min(width - w, Math.max(0, Math.round((cx0 + cx1 - w) / 2)));
+            const y = Math.min(height - h, Math.max(0, Math.round((cy0 + cy1 - h) / 2)));
+            best = { x, y, width: w, height: h, aspectRatio: label };
+        }
+    }
+    if (!best || best.width * best.height > (options.maxAreaFraction ?? 0.6) * width * height) return undefined;
+    return best;
+}
+
+/** The bounding box of the pixels whose first channel is above `threshold` in an RGBA mask; undefined when none are. */
+export function maskBoundingBox(maskRgba: Uint8Array, width: number, height: number, threshold = 0): { x0: number; y0: number; x1: number; y1: number } | undefined {
+    let x0 = width, y0 = height, x1 = -1, y1 = -1;
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            if (maskRgba[(y * width + x) * 4] > threshold) {
+                if (x < x0) x0 = x; if (x > x1) x1 = x;
+                if (y < y0) y0 = y; if (y > y1) y1 = y;
+            }
+        }
+    }
+    return x1 < 0 ? undefined : { x0, y0, x1: x1 + 1, y1: y1 + 1 };
 }

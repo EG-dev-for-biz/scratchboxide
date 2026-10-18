@@ -31,188 +31,6 @@ using namespace scratchbox::cleanup;
 using namespace scratchbox::io;
 using namespace scratchbox::gltf;
 
-// Generates the Empire State Building raw photogrammetric scan with realistic aerial sensor noise and melted corners
-ScratchboxMesh createEmpireStateBuildingRawScan() {
-    ScratchboxMesh mesh("empire_state_building_raw_photogrammetric_tile");
-    mesh.material = PbrMaterial::stoneLimestone();
-
-    // Helper to generate a noisy grid face simulating aerial photogrammetric scan artifacts
-    auto addNoisyFace = [&](
-        const Vec3& origin, const Vec3& uDir, const Vec3& vDir,
-        float uSize, float vSize, int uSteps, int vSteps,
-        const Vec3& normal, bool isRoofFace = false, bool isMooringMast = false, bool isSpire = false
-    ) {
-        uint32_t baseIdx = static_cast<uint32_t>(mesh.vertices.size());
-
-        for (int j = 0; j <= vSteps; ++j) {
-            float v = static_cast<float>(j) / vSteps;
-            for (int i = 0; i <= uSteps; ++i) {
-                float u = static_cast<float>(i) / uSteps;
-                Vec3 pos = origin + uDir * (u * uSize) + vDir * (v * vSize);
-
-                // Add aerial photogrammetry sensor waviness (±0.045m on flat walls, wavy corners ±0.14m)
-                float jitter = std::sin(pos.x * 0.45f) * std::cos(pos.y * 0.35f + pos.z * 0.45f) * 0.045f;
-                bool isCorner = (u < 0.07f || u > 0.93f);
-                if (isCorner && !isRoofFace) {
-                    jitter += std::sin(pos.y * 0.25f) * 0.14f; // Melted corner rounding
-                }
-                if (isRoofFace) {
-                    jitter += std::sin(u * 3.14159f) * std::sin(v * 3.14159f) * 0.08f; // Rooftop terrace sag
-                }
-                pos += normal * jitter;
-
-                // Baked directional afternoon sunlight simulation (sun from South-West)
-                Vec3 sunDir = Vec3(0.55f, 0.70f, 0.45f).normalized();
-                float sunShadow = std::clamp(normal.dot(sunDir), 0.26f, 1.0f);
-                Vec4 col(0.84f * sunShadow, 0.81f * sunShadow, 0.76f * sunShadow, 1.0f); // Indiana Limestone
-
-                // Authentic fenestration: periodic dark window bays (floor height 3.6m, bay width 2.5m)
-                if (!isRoofFace && !isMooringMast && !isSpire && std::abs(normal.y) < 0.35f && pos.y > 2.5f) {
-                    float floorPhase = std::fmod(pos.y, 3.6f);
-                    float bayPhase = std::fmod(u * uSize, 2.5f);
-                    bool isWindow = (floorPhase > 0.95f && floorPhase < 2.85f) && (bayPhase > 0.50f && bayPhase < 2.00f);
-                    if (isWindow) {
-                        col = Vec4(0.12f * sunShadow + 0.02f, 0.16f * sunShadow + 0.03f, 0.22f * sunShadow + 0.04f, 1.0f);
-                    }
-                }
-
-                // Mooring Mast tone (cast aluminum / stainless steel)
-                if (isMooringMast) {
-                    col = Vec4(0.70f * sunShadow + 0.05f, 0.72f * sunShadow + 0.05f, 0.75f * sunShadow + 0.06f, 1.0f);
-                }
-
-                // Spire tone (stainless steel) & red beacon at tip
-                if (isSpire) {
-                    col = Vec4(0.88f * sunShadow + 0.08f, 0.90f * sunShadow + 0.08f, 0.92f * sunShadow + 0.08f, 1.0f);
-                    if (pos.y > 218.0f) {
-                        col = Vec4(1.0f, 0.15f, 0.05f, 1.0f); // Red aircraft warning beacon
-                    }
-                }
-
-                // Setback rooftop gravel ballast / tar
-                if (isRoofFace && pos.y > 2.0f) {
-                    col = Vec4(0.34f, 0.33f, 0.32f, 1.0f);
-                }
-
-                // Ground / asphalt & concrete sidewalk
-                if (pos.y <= 0.5f) {
-                    float distFromCenter = std::max(std::abs(pos.x), std::abs(pos.z));
-                    if (distFromCenter > 32.0f) {
-                        col = Vec4(0.22f, 0.22f, 0.24f, 1.0f); // Asphalt street
-                    } else {
-                        col = Vec4(0.68f, 0.67f, 0.65f, 1.0f); // Scored concrete sidewalk
-                    }
-                }
-
-                // Street perimeter vegetation blob
-                if (pos.y < 3.0f && std::abs(normal.y) < 0.35f && (static_cast<int>(pos.x + pos.z) % 8 == 0)) {
-                    col = Vec4(0.18f, 0.58f, 0.22f, 1.0f);
-                }
-
-                mesh.addVertex({pos, normal, {u, v}, col});
-            }
-        }
-
-        int rowStride = uSteps + 1;
-        for (int j = 0; j < vSteps; ++j) {
-            for (int i = 0; i < uSteps; ++i) {
-                uint32_t i0 = baseIdx + j * rowStride + i;
-                uint32_t i1 = baseIdx + j * rowStride + (i + 1);
-                uint32_t i2 = baseIdx + (j + 1) * rowStride + (i + 1);
-                uint32_t i3 = baseIdx + (j + 1) * rowStride + i;
-
-                mesh.addTriangle(i0, i1, i2);
-                mesh.addTriangle(i0, i2, i3);
-            }
-        }
-    };
-
-    auto addTierBox = [&](const Vec3& center, const Vec3& size, int stepsU, int stepsV, int stepsW, bool hasRoof, bool isMooringMast = false, bool isSpire = false) {
-        Vec3 h = size * 0.5f;
-        float w = size.x;
-        float hgt = size.y;
-        float d = size.z;
-        // Front (+Z)
-        addNoisyFace(center + Vec3(-h.x, -h.y, h.z), Vec3(1, 0, 0), Vec3(0, 1, 0), w, hgt, stepsU, stepsV, Vec3(0, 0, 1), false, isMooringMast, isSpire);
-        // Back (-Z)
-        addNoisyFace(center + Vec3(h.x, -h.y, -h.z), Vec3(-1, 0, 0), Vec3(0, 1, 0), w, hgt, stepsU, stepsV, Vec3(0, 0, -1), false, isMooringMast, isSpire);
-        // Right (+X)
-        addNoisyFace(center + Vec3(h.x, -h.y, h.z), Vec3(0, 0, -1), Vec3(0, 1, 0), d, hgt, stepsW, stepsV, Vec3(1, 0, 0), false, isMooringMast, isSpire);
-        // Left (-X)
-        addNoisyFace(center + Vec3(-h.x, -h.y, -h.z), Vec3(0, 0, 1), Vec3(0, 1, 0), d, hgt, stepsW, stepsV, Vec3(-1, 0, 0), false, isMooringMast, isSpire);
-        if (hasRoof) {
-            addNoisyFace(center + Vec3(-h.x, h.y, -h.z), Vec3(1, 0, 0), Vec3(0, 0, 1), w, d, stepsU, stepsW, Vec3(0, 1, 0), true, isMooringMast, isSpire);
-        }
-    };
-
-    auto addSetbackRoof = [&](float wOuter, float dOuter, float wInner, float dInner, float yElev, int steps) {
-        float hwo = wOuter * 0.5f, hdo = dOuter * 0.5f;
-        float hwi = wInner * 0.5f, hdi = dInner * 0.5f;
-        // North / South strips
-        addNoisyFace(Vec3(-hwo, yElev, hdi), Vec3(1, 0, 0), Vec3(0, 0, 1), wOuter, hdo - hdi, steps, 3, Vec3(0, 1, 0), true);
-        addNoisyFace(Vec3(-hwo, yElev, -hdo), Vec3(1, 0, 0), Vec3(0, 0, 1), wOuter, hdo - hdi, steps, 3, Vec3(0, 1, 0), true);
-        // East / West strips
-        addNoisyFace(Vec3(-hwo, yElev, -hdi), Vec3(1, 0, 0), Vec3(0, 0, 1), hwo - hwi, dInner, 3, steps, Vec3(0, 1, 0), true);
-        addNoisyFace(Vec3(hwi, yElev, -hdi), Vec3(1, 0, 0), Vec3(0, 0, 1), hwo - hwi, dInner, 3, steps, Vec3(0, 1, 0), true);
-    };
-
-    // Tier 1: Base Podium (0m - 24m)
-    addTierBox(Vec3(0, 12, 0), Vec3(54, 24, 36), 24, 12, 16, false);
-    addSetbackRoof(54, 36, 42, 28, 24.0f, 16);
-
-    // Tier 2: Lower Transition Shaft (24m - 52m)
-    addTierBox(Vec3(0, 38, 0), Vec3(42, 28, 28), 18, 14, 14, false);
-    addSetbackRoof(42, 28, 30, 20, 52.0f, 14);
-
-    // Tier 3: Main Tower Shaft (52m - 140m)
-    addTierBox(Vec3(0, 96, 0), Vec3(30, 88, 20), 14, 36, 10, false);
-    addSetbackRoof(30, 20, 18, 13, 140.0f, 10); // 86th Floor Observation Deck!
-
-    // Tier 4: Upper Tower & Observation Deck (140m - 168m)
-    addTierBox(Vec3(0, 154, 0), Vec3(18, 28, 13), 10, 14, 8, false);
-    addSetbackRoof(18, 13, 9, 9, 168.0f, 8); // 102nd Floor Observation Deck!
-
-    // Tier 5: Mooring Mast (168m - 196m)
-    addTierBox(Vec3(0, 182, 0), Vec3(9, 28, 9), 8, 14, 8, false, true, false);
-    addSetbackRoof(9, 9, 1.6f, 1.6f, 196.0f, 4);
-
-    // Tier 6: Spire & Lightning Mast (196m - 220m)
-    addTierBox(Vec3(0, 208, 0), Vec3(1.6f, 24, 1.6f), 4, 12, 4, true, false, true);
-
-    // Surrounding Ground & Streetscape (140m x 140m)
-    addNoisyFace(Vec3(-70.0f, 0.0f, -70.0f), Vec3(1, 0, 0), Vec3(0, 0, 1), 140.0f, 140.0f, 28, 28, Vec3(0, 1, 0), true);
-
-    // Street trees / vegetation photogrammetry blobs along sidewalk (5th Ave & 34th St)
-    auto addTreeBlob = [&](const Vec3& center, float radius) {
-        int segs = 6;
-        Vec4 vegColor(0.16f, 0.54f, 0.18f, 1.0f);
-        uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
-        mesh.addVertex({center + Vec3(0, radius * 1.2f, 0), Vec3(0, 1, 0), {0.5f, 0.5f}, vegColor});
-        for (int i = 0; i < segs; ++i) {
-            float th = (float)i / segs * 6.28318f;
-            float px = center.x + std::cos(th) * radius;
-            float pz = center.z + std::sin(th) * radius;
-            float py = center.y + 0.2f;
-            Vec3 pos(px, py, pz);
-            Vec3 n = (pos - center).normalized();
-            mesh.addVertex({pos, n, {0.5f + 0.5f * std::cos(th), 0.5f + 0.5f * std::sin(th)}, vegColor});
-            uint32_t cur = base + 1 + i;
-            uint32_t next = base + 1 + ((i + 1) % segs);
-            mesh.addTriangle(base, cur, next);
-        }
-    };
-
-    addTreeBlob(Vec3(-38.0f, 0.0f, -22.0f), 2.2f);
-    addTreeBlob(Vec3(-38.0f, 0.0f, 0.0f), 2.2f);
-    addTreeBlob(Vec3(-38.0f, 0.0f, 22.0f), 2.2f);
-    addTreeBlob(Vec3(38.0f, 0.0f, -22.0f), 2.2f);
-    addTreeBlob(Vec3(38.0f, 0.0f, 0.0f), 2.2f);
-    addTreeBlob(Vec3(38.0f, 0.0f, 22.0f), 2.2f);
-
-    mesh.recomputeNormals();
-    return mesh;
-}
-
 int main(int argc, char* argv[]) {
     std::string outputPath = "cleaned_tile_output.glb";
     std::string rawOutputPath = "";
@@ -265,18 +83,21 @@ int main(int argc, char* argv[]) {
     auto startTime = std::chrono::high_resolution_clock::now();
 
     // 1. Ingest Scanned Raw Mesh
-    ScratchboxMesh rawMesh;
-    std::string assetTitle = "Empire State Building Procedural Scan";
-    if (!inputPath.empty()) {
-        GltfScene scene = GlbSceneReader::readFile(inputPath);
-        if (!scene.ok) {
-            std::cerr << "Failed to read input GLB: " << scene.error << std::endl;
-            return 1;
-        }
-        rawMesh = scene.mesh;
-        assetTitle = inputPath;
-    } else {
-        rawMesh = createEmpireStateBuildingRawScan();
+    // There is no built-in model: the tile to clean must be given.
+    if (inputPath.empty()) {
+        std::cerr << "run_tile_cleanup_pipeline needs --input <tile.glb>" << std::endl;
+        return 2;
+    }
+    GltfScene scene = GlbSceneReader::readFile(inputPath);
+    if (!scene.ok) {
+        std::cerr << "Failed to read input GLB: " << scene.error << std::endl;
+        return 1;
+    }
+    ScratchboxMesh rawMesh = scene.mesh;
+    std::string assetTitle = inputPath;
+    if (rawMesh.indices.empty()) {
+        std::cerr << "Input GLB has no triangles: " << inputPath << std::endl;
+        return 1;
     }
     size_t rawTriangles = rawMesh.indices.size() / 3;
     size_t rawVertices = rawMesh.vertices.size();

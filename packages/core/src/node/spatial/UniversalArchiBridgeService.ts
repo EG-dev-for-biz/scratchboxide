@@ -31,6 +31,7 @@ import {
     createSpatialNode,
     createIdentityMatrix
 } from '../../common/spatial/universal-spatial-node';
+import { measureGlbEdgeManifold } from '../3d-engine/glb-edge-manifold';
 
 export type SupportedArchiTypology =
     // Classical Stereotomic Heritage (Preserved 1:1)
@@ -430,7 +431,6 @@ export interface ArchiSynthesisBridgeResult {
         isManifold: boolean;
         inversionRan: boolean;
         detectedDatumsCount?: number;
-        classificationConfidencePct?: number;
         floorCount?: number;
         roofPlaneCount?: number;
         hasSolarGrounding?: boolean;
@@ -2147,7 +2147,6 @@ export class UniversalArchiBridgeService {
         let outputTriangles = 0;
         let inversionRan = false;
         let detectedDatumsCount = 0;
-        let classificationConfidencePct = 90;
 
         // 4. Dispatch based on typology
         if (adapter.typology === 'triumphal_arch') {
@@ -2157,7 +2156,6 @@ export class UniversalArchiBridgeService {
             outputVertices = archRes.report.synthesizedVertices;
             outputTriangles = archRes.report.synthesizedTriangles;
             detectedDatumsCount = archRes.report.detectedDatumsCount;
-            classificationConfidencePct = archRes.report.confidencePct;
             if (fs.existsSync(outputGlb)) {
                 glbBuffer = fs.readFileSync(outputGlb);
             }
@@ -2170,7 +2168,7 @@ export class UniversalArchiBridgeService {
             });
             outputVertices = amphRes.telemetry.synthesizedVertices;
             outputTriangles = amphRes.telemetry.synthesizedTriangles;
-            inversionRan = true;
+            inversionRan = amphRes.telemetry.inversionRan;
             if (fs.existsSync(outputGlb)) {
                 glbBuffer = fs.readFileSync(outputGlb);
             }
@@ -2253,10 +2251,10 @@ export class UniversalArchiBridgeService {
                 buildTimeMs,
                 outputVertices,
                 outputTriangles,
-                isManifold: outputVertices > 0,
+                // Welded edges of the written GLB each used by exactly two triangles; false without a GLB to check.
+                isManifold: glbBuffer ? measureGlbEdgeManifold(glbBuffer).isManifold : false,
                 inversionRan,
                 detectedDatumsCount,
-                classificationConfidencePct,
                 floorCount,
                 roofPlaneCount: entity.solarRoofSegments?.length ?? 0,
                 hasSolarGrounding: Boolean(entity.solarRoofSegments?.length),

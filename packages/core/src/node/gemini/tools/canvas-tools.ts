@@ -15,6 +15,7 @@ import { DirectDispatchOperatorEngine, type BatchCommand } from '../../../browse
 import * as fs from 'fs';
 import * as path from 'path';
 import { glbToTriangleSoup } from '../../3d-engine/part-connectivity';
+import { measureGlbBase64MeshCounts } from '../../../common/glb-mesh-counts';
 import { auditModelAgainstRequest, callVisionModel } from '../../3d-engine/visual-review';
 import type { ToolDeclaration, ToolHandler } from './types';
 import { applyClayFirstPassBaseline, keepOpenSceneRenderMode } from '../scene3d-clay-baseline';
@@ -179,7 +180,7 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'scene_3d_dispatch_operators',
-        description: 'Dispatches high-performance in-memory 3D scene operators against the active 3D canvas stage via DirectDispatchOperatorEngine. Executes transformations (sb_transform_object), PBR material properties (sb_set_material_pbr), lighting & sun angles (sb_set_sun_position, sb_setup_lighting), physics, and dynamic camera auto-framing in <1ms without re-compiling geometry or re-uploading GLB files.',
+        description: 'Dispatches high-performance in-memory 3D scene operators against the active 3D canvas stage via DirectDispatchOperatorEngine. Runs on the scene data: transforms (sb_set_transform, sb_translate, sb_rotate, sb_scale), PBR material properties (sb_set_material_pbr), lighting and sun (sb_setup_lighting, sb_set_diurnal_time_of_day), physics and keyframes (sb_add_physics, sb_insert_keyframe), and camera framing (sb_set_camera, sb_frame_bounds), without re-compiling geometry. Operators that edit mesh geometry need the live 3D viewport and fail here with errorCode not_available_here.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -191,7 +192,7 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
                         properties: {
                             operator: {
                                 type: 'STRING',
-                                description: 'Operator name (e.g. "sb_transform_object", "sb_set_material_pbr", "sb_set_sun_position", "sb_setup_lighting", "sb_frame_bounds")'
+                                description: 'Operator name (e.g. "sb_set_transform", "sb_set_material_pbr", "sb_setup_lighting", "sb_set_diurnal_time_of_day", "sb_frame_bounds")'
                             },
                             params: {
                                 type: 'OBJECT',
@@ -346,9 +347,8 @@ export const canvasHandlers: Record<string, ToolHandler> = {
                 sourceCode: cppSource || p.cppGenerator?.sourceCode || '',
                 glbBase64: cppGlbBase64,
                 glbPath: cppGlbPath,
-                // Counts only when the payload states them; none are made up for a GLB nobody measured.
-                vertexCount: p.cppGenerator?.vertexCount,
-                triangleCount: p.cppGenerator?.triangleCount
+                // Counts are measured from the GLB bytes; the payload's own numbers are not stored, and without bytes there are none.
+                ...(cppGlbBase64 ? measureGlbBase64MeshCounts(cppGlbBase64) : undefined)
             } : p.cppGenerator;
 
             // The title is the model's too; the synthesizer's would name the tab after prompt keywords.

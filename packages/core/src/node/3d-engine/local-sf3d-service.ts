@@ -10,6 +10,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { NativePythonRunnerService } from './native-python-runner-service';
+import { getPythonWorkerPool } from '../process/persistent-python-worker';
 
 export interface LocalSf3DOptions {
     /** Path to input photograph or 2D image file */
@@ -17,8 +18,7 @@ export interface LocalSf3DOptions {
     /** Optional destination file path for generated .glb */
     outputGlbPath?: string;
     /**
-     * Bypasses UV unwrapping and neural texture rasterization,
-     * emitting pure 18% Studio Grey Clay geometry in < 500ms.
+     * Keeps SF3D's geometry only and repacks it in 18% Studio Grey Clay (SF3D's baked texture is dropped).
      * Default: true
      */
     noPbr?: boolean;
@@ -64,8 +64,8 @@ export interface LocalSf3DResult {
  *
  * Manages local, high-speed 3D organic prop and small object reconstruction
  * via Stable Fast 3D (SF3D) running directly on local hardware (Apple Silicon MPS, CUDA, or CPU).
- * Features a dedicated no_pbr mode that outputs 18% Studio Grey Clay geometry in < 500ms,
- * bypassing heavy UV unwrapping and texture rasterization for instant procedural staging.
+ * no_pbr mode keeps SF3D's geometry in 18% Studio Grey Clay. If SF3D is not installed or fails,
+ * generateOrganicProp throws LocalSf3DError; it never substitutes geometry.
  */
 export class LocalSf3DService {
     private static instance?: LocalSf3DService;
@@ -131,8 +131,7 @@ export class LocalSf3DService {
         const remeshOption = options.remeshOption || 'none';
         const device = options.device || 'auto';
 
-        const args = [
-            scriptPath,
+        const argv = [
             options.imagePath,
             targetGlbPath,
             noPbr ? '--no_pbr' : '--with_pbr',
@@ -145,83 +144,52 @@ export class LocalSf3DService {
         // The scratchbox package degrades gracefully without the native module, so a failed build isn't fatal here.
         await this.pythonRunner.ensureNativeModule();
         const pythonExec = this.pythonRunner.getPythonExecutable();
-        const { execFile } = await import('child_process');
-        const { promisify } = await import('util');
-        const execFileAsync = promisify(execFile);
 
-        let stdout = '';
-        let stderr = '';
-
-        try {
-            const res = await execFileAsync(pythonExec, args, {
-                cwd: outputDir,
-                timeout: 60000,
-                env: {
-                    ...process.env,
-                    PYTHONPATH: [
-                        path.resolve(repoRoot, 'packages/core/src/python'),
-                        this.pythonRunner.getModuleDirectory(),
-                        process.env.PYTHONPATH || ''
-                    ].filter(Boolean).join(':')
-                }
-            });
-            stdout = res.stdout;
-            stderr = res.stderr;
-        } catch (err: any) {
-            // If python fails or error happens, inspect stderr/stdout
-            stdout = err.stdout || '';
-            stderr = err.stderr || err.message;
-            if (!fs.existsSync(targetGlbPath)) {
-                throw new Error(`[LocalSf3DService] Python runner execution failed: ${stderr}`);
+        // A persistent worker keeps the SF3D weights loaded between props; each call runs in its output folder.
+        const pool = getPythonWorkerPool({
+            pythonBinary: pythonExec,
+            scriptPath,
+            label: 'the SF3D runner',
+            env: {
+                ...process.env,
+                PYTHONPATH: [
+                    path.resolve(repoRoot, 'packages/core/src/python'),
+                    this.pythonRunner.getModuleDirectory(),
+                    process.env.PYTHONPATH || ''
+                ].filter(Boolean).join(':')
             }
+        });
+        let run;
+        try {
+            run = await pool.run({ argv, cwd: outputDir, timeoutMs: 600000 });
+        } catch (err: any) {
+            throw new LocalSf3DError('SF3D_RUN_FAILED', `SF3D runner failed: ${err?.message || String(err)}`);
+        }
+        const stdout = run.stdout;
+        const stderr = run.stderr;
+        if (run.exitCode !== 0) {
+            // A non-zero exit is always a failure, even if a GLB from an earlier run sits at the target path.
+            const scriptError = parseMarkedJson(stdout, '__LOCAL_SF3D_ERROR_START__', '__LOCAL_SF3D_ERROR_END__');
+            if (scriptError && typeof scriptError.code === 'string') {
+                throw new LocalSf3DError(scriptError.code, String(scriptError.error || `exit ${run.exitCode}`));
+            }
+            throw new LocalSf3DError('SF3D_RUN_FAILED', `SF3D runner exited with ${run.exitCode}: ${stderr.trim()}`);
         }
 
+        const parsedResult = parseMarkedJson(stdout, '__LOCAL_SF3D_RESULT_START__', '__LOCAL_SF3D_RESULT_END__');
+        if (!parsedResult || parsedResult.success !== true) {
+            throw new LocalSf3DError('SF3D_OUTPUT_INVALID', `SF3D runner exited 0 without a result record. Stderr: ${stderr.trim()}`);
+        }
         if (!fs.existsSync(targetGlbPath)) {
-            throw new Error(`[LocalSf3DService] Output GLB file was not created at: ${targetGlbPath}. Stderr: ${stderr}`);
+            throw new LocalSf3DError('SF3D_OUTPUT_INVALID', `Output GLB file was not created at: ${targetGlbPath}. Stderr: ${stderr.trim()}`);
         }
 
         const glbBuffer = fs.readFileSync(targetGlbPath);
-        // Verify GLB magic header
-        if (glbBuffer.length < 12 || glbBuffer.toString('utf8', 0, 4) !== 'glTF') {
-            throw new Error(`[LocalSf3DService] Output file at ${targetGlbPath} is not a valid binary glTF 2.0 (magic header missing).`);
-        }
-
-        // Parse structured output JSON if present
-        let parsedResult: any = null;
-        const jsonStart = stdout.indexOf('__LOCAL_SF3D_RESULT_START__');
-        const jsonEnd = stdout.indexOf('__LOCAL_SF3D_RESULT_END__');
-        if (jsonStart !== -1 && jsonEnd !== -1) {
-            const jsonStr = stdout.substring(jsonStart + '__LOCAL_SF3D_RESULT_START__'.length, jsonEnd).trim();
-            try {
-                parsedResult = JSON.parse(jsonStr);
-            } catch (e) {
-                // fall through
-            }
-        }
-
-        const elapsed = Date.now() - startTime;
-
-        let bounds: LocalSf3DBounds;
-        if (parsedResult && parsedResult.bounds) {
-            const b = parsedResult.bounds;
-            const dims = b.dimensions as [number, number, number];
-            const radius = Math.sqrt(dims[0] * dims[0] + dims[1] * dims[1] + dims[2] * dims[2]) * 0.5;
-            bounds = {
-                min: b.min,
-                max: b.max,
-                center: b.center,
-                dimensions: dims,
-                radius
-            };
-        } else {
-            const half = targetScale * 0.5;
-            bounds = {
-                min: [-half, 0, -half],
-                max: [half, targetScale, half],
-                center: [0, half, 0],
-                dimensions: [targetScale, targetScale, targetScale],
-                radius: targetScale * 0.5
-            };
+        // Counts and bounds come from the GLB that was written, not from defaults.
+        const stats = readGlbMeshStats(glbBuffer, targetGlbPath);
+        const bounds = stats.bounds ?? boundsFromScript(parsedResult.bounds);
+        if (!bounds) {
+            throw new LocalSf3DError('SF3D_OUTPUT_INVALID', `Output GLB at ${targetGlbPath} has no POSITION min/max and the runner reported no bounds.`);
         }
 
         return {
@@ -229,18 +197,105 @@ export class LocalSf3DService {
             glbPath: targetGlbPath,
             glbBuffer,
             mode: noPbr ? 'no_pbr_clay' : 'pbr',
-            device: parsedResult?.device || device,
-            vertexCount: parsedResult?.vertex_count || 3136,
-            triangleCount: parsedResult?.triangle_count || 6144,
-            executionTimeMs: parsedResult?.execution_time_ms || elapsed,
+            device: typeof parsedResult.device === 'string' ? parsedResult.device : device,
+            vertexCount: stats.vertexCount,
+            triangleCount: stats.triangleCount,
+            executionTimeMs: Date.now() - startTime,
             targetScaleMeters: targetScale,
             overallBoundingBox: bounds,
             telemetry: {
-                neuralExecution: parsedResult?.neural_execution ?? false,
+                modelExecutionMs: typeof parsedResult.execution_time_ms === 'number' ? parsedResult.execution_time_ms : undefined,
                 remeshOption,
                 groundCut,
                 promptHint: options.promptHint
             }
         };
     }
+}
+
+/** Typed failure from the SF3D runner. `code` is the runner's reason (e.g. SF3D_NOT_INSTALLED, SF3D_RUN_FAILED). */
+export class LocalSf3DError extends Error {
+    public override readonly name = 'LocalSf3DError';
+    constructor(public readonly code: string, message: string) {
+        super(`[LocalSf3DService] ${code}: ${message}`);
+    }
+}
+
+function parseMarkedJson(text: string, startMarker: string, endMarker: string): any | null {
+    const start = text.indexOf(startMarker);
+    const end = text.indexOf(endMarker);
+    if (start === -1 || end === -1 || end < start) return null;
+    try {
+        return JSON.parse(text.substring(start + startMarker.length, end).trim());
+    } catch {
+        return null;
+    }
+}
+
+function makeBounds(min: [number, number, number], max: [number, number, number]): LocalSf3DBounds {
+    const dimensions: [number, number, number] = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+    return {
+        min,
+        max,
+        center: [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2],
+        dimensions,
+        radius: Math.hypot(dimensions[0], dimensions[1], dimensions[2]) / 2
+    };
+}
+
+function isVec3(v: unknown): v is [number, number, number] {
+    return Array.isArray(v) && v.length === 3 && v.every(n => typeof n === 'number' && Number.isFinite(n));
+}
+
+function boundsFromScript(b: any): LocalSf3DBounds | undefined {
+    return b && isVec3(b.min) && isVec3(b.max) ? makeBounds(b.min, b.max) : undefined;
+}
+
+/**
+ * Reads vertex/triangle counts and the POSITION bounds out of a binary glTF 2.0 file.
+ * Bounds are the union of the POSITION accessors' min/max (node transforms are not applied); undefined if any is missing.
+ */
+export function readGlbMeshStats(glb: Buffer, label = 'GLB'): { vertexCount: number; triangleCount: number; bounds?: LocalSf3DBounds } {
+    if (glb.length < 20 || glb.toString('utf8', 0, 4) !== 'glTF') {
+        throw new LocalSf3DError('SF3D_OUTPUT_INVALID', `${label} is not a valid binary glTF 2.0 (magic header missing).`);
+    }
+    const jsonLength = glb.readUInt32LE(12);
+    if (glb.readUInt32LE(16) !== 0x4e4f534a || 20 + jsonLength > glb.length) {
+        throw new LocalSf3DError('SF3D_OUTPUT_INVALID', `${label} has no JSON chunk.`);
+    }
+    let gltf: any;
+    try {
+        gltf = JSON.parse(glb.toString('utf8', 20, 20 + jsonLength));
+    } catch (e: any) {
+        throw new LocalSf3DError('SF3D_OUTPUT_INVALID', `${label} JSON chunk does not parse: ${e.message}`);
+    }
+    const accessors: any[] = gltf.accessors || [];
+    let vertexCount = 0;
+    let triangleCount = 0;
+    let min: [number, number, number] | undefined = [Infinity, Infinity, Infinity];
+    let max: [number, number, number] | undefined = [-Infinity, -Infinity, -Infinity];
+    for (const mesh of gltf.meshes || []) {
+        for (const prim of mesh.primitives || []) {
+            const pos = accessors[prim.attributes?.POSITION];
+            if (!pos) continue;
+            vertexCount += pos.count;
+            const mode = prim.mode ?? 4;
+            if (mode === 4) {
+                triangleCount += Math.floor((prim.indices !== undefined ? accessors[prim.indices]?.count ?? 0 : pos.count) / 3);
+            }
+            if (min && max && isVec3(pos.min) && isVec3(pos.max)) {
+                for (let i = 0; i < 3; i++) {
+                    min[i] = Math.min(min[i], pos.min[i]);
+                    max[i] = Math.max(max[i], pos.max[i]);
+                }
+            } else {
+                min = undefined;
+                max = undefined;
+            }
+        }
+    }
+    if (vertexCount === 0) {
+        throw new LocalSf3DError('SF3D_EMPTY_MESH', `${label} contains no POSITION data.`);
+    }
+    return { vertexCount, triangleCount, bounds: min && max ? makeBounds(min, max) : undefined };
 }

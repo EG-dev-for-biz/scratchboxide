@@ -17,15 +17,18 @@ import {
 import { AdaptiveSurveyRigService } from '../src/node/spatial/AdaptiveSurveyRigService';
 import { HeadlessMeshSilhouetteRenderer } from '../src/node/spatial/HeadlessMeshSilhouetteRenderer';
 import type { ColmapCameraPose } from '../src/common/spatial/colmap-vector-reference-types';
+import { writeBoxGroundGlb } from './helpers/box-ground-glb';
 
-const GLB_PATH = path.resolve(process.cwd(), 'build/test_survey_render/box_ground.glb');
 const OUT_DIR = path.resolve(process.cwd(), 'build/test_calibrated_3dgs_recon');
+// This suite's own fixture (the box-and-ground scene survey-station-render.test.ts uses), so it runs on its own.
+const GLB_PATH = path.join(OUT_DIR, 'fixtures', 'box_ground.glb');
 
 describe('Calibrated3DGSReconstructionService: 1:1 Metric Matrix Lock 3DGS Reconstruction', () => {
     const service = new Calibrated3DGSReconstructionService();
 
     beforeAll(async () => {
         await fs.emptyDir(OUT_DIR);
+        writeBoxGroundGlb(GLB_PATH, [-5, 0, -5], [5, 20, 5], 100);
     });
 
     it('resolves correct voxel grid sizes across density presets and explicit overrides', () => {

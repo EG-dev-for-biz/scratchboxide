@@ -26,6 +26,8 @@ const WGS84_F = 1.0 / 298.257223563;
 const WGS84_E2 = WGS84_F * (2.0 - WGS84_F);
 const TILES_ORIGIN = 'https://tile.googleapis.com';
 const ROOT_PATH = '/v1/3dtiles/root.json';
+/** Requests in flight per crawl (tileset JSON and leaf GLBs); 429/5xx answers back off and retry. */
+const DEFAULT_CRAWL_CONCURRENCY = 16;
 
 /** 3D Tiles runtime turn from glTF Y-up into the tileset's Z-up frame: (x, y, z) -> (x, -z, y). Column-major. */
 const Y_UP_TO_Z_UP = [1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1];
@@ -114,7 +116,35 @@ export interface GoogleTileDistrictCrawlerOptions {
     /** Safety cap on the number of leaves one crawl may select. */
     maxLeafTiles?: number;
     onProgress?: (phase: 'traverse' | 'download', done: number, total: number) => void;
+    /**
+     * How long a tileset traversal (leaf list + session) is reused for the same anchor, radius and key, in memory and
+     * beside the leaf cache. A root request opens a session for about three hours, so the default is two hours;
+     * 0 always walks the tileset.
+     */
+    traversalCacheTtlMs?: number;
 }
+
+export interface CollectedLeafTiles {
+    leaves: LeafTileRef[];
+    session: string | null;
+    /** Tileset requests this call made (0 when the traversal came from the cache). */
+    requests: number;
+    excludedCoarseLeaves: number;
+    /** Where the traversal came from when it was reused. */
+    traversalCache?: 'memory' | 'disk';
+}
+
+interface CachedTraversal {
+    key: string;
+    savedAt: number;
+    leaves: LeafTileRef[];
+    session: string | null;
+    excludedCoarseLeaves: number;
+}
+
+/** Traversals per transport (each fetch implementation has its own), then per traversal key. */
+const traversalMemory = new WeakMap<typeof fetch, Map<string, CachedTraversal>>();
+const DEFAULT_TRAVERSAL_TTL_MS = 2 * 60 * 60 * 1000;
 
 function geodeticToEcef(latDeg: number, lngDeg: number, h: number): Vec3 {
     const lat = (latDeg * Math.PI) / 180;
@@ -197,6 +227,7 @@ export class GoogleTileDistrictCrawler {
     private readonly maxLeafGeometricErrorM: number;
     private readonly maxLeafTiles: number;
     private readonly onProgress?: GoogleTileDistrictCrawlerOptions['onProgress'];
+    private readonly traversalTtlMs: number;
     private active = 0;
     private readonly waiters: Array<() => void> = [];
 
@@ -206,11 +237,12 @@ export class GoogleTileDistrictCrawler {
         }
         this.apiKey = options.apiKey;
         this.fetchImpl = options.fetchImpl ?? fetch;
-        this.concurrency = Math.max(1, options.concurrency ?? 8);
+        this.concurrency = Math.max(1, options.concurrency ?? DEFAULT_CRAWL_CONCURRENCY);
         this.cacheDir = options.cacheDir;
         this.maxLeafGeometricErrorM = options.maxLeafGeometricErrorM ?? 64;
         this.maxLeafTiles = options.maxLeafTiles ?? 6000;
         this.onProgress = options.onProgress;
+        this.traversalTtlMs = Math.max(0, options.traversalCacheTtlMs ?? DEFAULT_TRAVERSAL_TTL_MS);
     }
 
     /** East/north/up axes at a geodetic point, in ECEF. */
@@ -298,8 +330,43 @@ export class GoogleTileDistrictCrawler {
         throw new Error(`Google 3D Tiles request failed (${lastError}) for ${stripCredentials(url.toString())}`);
     }
 
+    /**
+     * Every fine leaf whose footprint touches the circle. The traversal is reused for `traversalCacheTtlMs` (memory,
+     * then the file beside the leaf cache), so a repeat crawl of the same district makes no tileset requests.
+     */
+    async collectLeafTiles(anchor: DistrictAnchor, radiusM: number): Promise<CollectedLeafTiles> {
+        if (this.traversalTtlMs <= 0) return this.walkTileset(anchor, radiusM);
+        const key = [anchor.lat.toFixed(7), anchor.lng.toFixed(7), (anchor.heightGuessM ?? 0).toFixed(2), radiusM, this.maxLeafGeometricErrorM, this.maxLeafTiles,
+            // Sessions belong to the key's project, so another key never reuses them.
+            crypto.createHash('sha1').update(this.apiKey).digest('hex').slice(0, 16)].join('|');
+        const fresh = (c: CachedTraversal | undefined) => c && c.key === key && Date.now() - c.savedAt < this.traversalTtlMs ? c : undefined;
+        let memory = traversalMemory.get(this.fetchImpl);
+        if (!memory) traversalMemory.set(this.fetchImpl, (memory = new Map()));
+        const fromMemory = fresh(memory.get(key));
+        if (fromMemory) return { leaves: fromMemory.leaves.map(l => ({ ...l })), session: fromMemory.session, requests: 0, excludedCoarseLeaves: fromMemory.excludedCoarseLeaves, traversalCache: 'memory' };
+        const diskPath = this.cacheDir ? path.join(this.cacheDir, 'traversals', `${crypto.createHash('sha1').update(key).digest('hex')}.json`) : null;
+        if (diskPath && fs.existsSync(diskPath)) {
+            let fromDisk: CachedTraversal | undefined;
+            try { fromDisk = fresh(JSON.parse(fs.readFileSync(diskPath, 'utf8'))); } catch { fromDisk = undefined; /* unreadable entry: walk again and overwrite it */ }
+            if (fromDisk) {
+                memory.set(key, fromDisk);
+                return { leaves: fromDisk.leaves.map(l => ({ ...l })), session: fromDisk.session, requests: 0, excludedCoarseLeaves: fromDisk.excludedCoarseLeaves, traversalCache: 'disk' };
+            }
+        }
+        const walked = await this.walkTileset(anchor, radiusM);
+        const entry: CachedTraversal = { key, savedAt: Date.now(), leaves: walked.leaves.map(l => ({ ...l })), session: walked.session, excludedCoarseLeaves: walked.excludedCoarseLeaves };
+        memory.set(key, entry);
+        if (diskPath) {
+            fs.mkdirSync(path.dirname(diskPath), { recursive: true });
+            const tmp = `${diskPath}.${process.pid}.tmp`;
+            fs.writeFileSync(tmp, JSON.stringify(entry));
+            fs.renameSync(tmp, diskPath);
+        }
+        return walked;
+    }
+
     /** Walks the tileset and returns every fine leaf whose footprint touches the circle. */
-    async collectLeafTiles(anchor: DistrictAnchor, radiusM: number): Promise<{ leaves: LeafTileRef[]; session: string | null; requests: number; excludedCoarseLeaves: number }> {
+    private async walkTileset(anchor: DistrictAnchor, radiusM: number): Promise<CollectedLeafTiles> {
         const frame = GoogleTileDistrictCrawler.localFrame(anchor.lat, anchor.lng, anchor.heightGuessM ?? 0);
         const leaves: LeafTileRef[] = [];
         let session: string | null = null;

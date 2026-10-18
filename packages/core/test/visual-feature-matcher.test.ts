@@ -7,7 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
     VisualFeatureMatcherService,
     type DepthBuffer3D
@@ -149,5 +149,33 @@ describe('VisualFeatureMatcherService', () => {
         // x_cam = (100 / 500) * 50 = 10m
         // In world: [100 + 10, 200, 350] = [110, 200, 350]
         expect(matches3D[1].point3D[0]).toBeCloseTo(110, 1);
+    });
+
+    it('cross-checked matching compares each descriptor pair once and matches the two-pass result', () => {
+        let seed = 3;
+        const rnd = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 2 ** 32);
+        const desc = () => { const d = new Float32Array(128); let n = 0; for (let k = 0; k < 128; k++) { d[k] = rnd(); n += d[k] * d[k]; } n = Math.sqrt(n); for (let k = 0; k < 128; k++) d[k] /= n; return d; };
+        const kp = (d: Float32Array, i: number) => ({ x: i, y: i * 2, response: 1, scale: 1, angleRad: 0, descriptor: d });
+        const k1 = Array.from({ length: 300 }, (_, i) => kp(desc(), i));
+        // k2: noisy copies of the first 200 plus 150 unrelated descriptors
+        const k2 = [...k1.slice(0, 200).map((k, i) => { const d = Float32Array.from(k.descriptor, v => v + (rnd() - 0.5) * 0.02); return kp(d, i + 1000); }), ...Array.from({ length: 150 }, (_, i) => kp(desc(), i + 5000))];
+        // The two-pass reference (forward, then a fresh reverse pass), as matching was computed before.
+        const dist = (a: Float32Array, b: Float32Array) => { let s2 = 0; for (let k = 0; k < a.length; k++) { const d = a[k] - b[k]; s2 += d * d; } return Math.sqrt(s2); };
+        const nearest = (q: Float32Array, set: typeof k1) => { let b = Infinity, s2 = Infinity, bi = -1; set.forEach((k, j) => { const d = dist(q, k.descriptor); if (d < b) { s2 = b; b = d; bi = j; } else if (d < s2) s2 = d; }); return { b, s2, bi }; };
+        const expected: Array<[number, number]> = [];
+        k1.forEach((k, i) => {
+            const f = nearest(k.descriptor, k2);
+            if (!(f.bi >= 0 && f.b / (f.s2 + 1e-7) <= 0.75 && f.b <= 0.65)) return;
+            const r = nearest(k2[f.bi].descriptor, k1);
+            if (r.bi >= 0 && r.b / (r.s2 + 1e-7) <= 0.75 && r.bi === i) expected.push([i, f.bi]);
+        });
+        const spy = vi.spyOn(VisualFeatureMatcherService as any, 'euclideanDistance');
+        const matches = VisualFeatureMatcherService.matchKeypoints(k1, k2, { crossCheck: true });
+        const calls = spy.mock.calls.length;
+        spy.mockRestore();
+        expect(calls).toBe(k1.length * k2.length);
+        expect(matches.length).toBe(expected.length);
+        expect(expected.length).toBeGreaterThan(150);
+        expect(matches.map(m => [m.index1, m.index2])).toEqual(expected);
     });
 });

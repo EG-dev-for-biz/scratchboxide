@@ -588,19 +588,9 @@ function modelAuthoredScene(prompt: string, request: GeminiGenerateRequest, titl
 
     // A generator the model sends replaces the open scene's generators, of either engine.
     const sentGenerator = sent('pythonGenerator') || sent('cppGenerator');
-    let pythonGenerator = sentGenerator ? data.pythonGenerator ?? undefined : open?.pythonGenerator;
+    const pythonGenerator = sentGenerator ? data.pythonGenerator ?? undefined : open?.pythonGenerator;
     const cppGenerator = sentGenerator ? data.cppGenerator ?? undefined : open?.cppGenerator;
-    if (pythonGenerator?.sourceCode && !pythonGenerator.glbBase64) {
-        // Built now when the engine can; otherwise the viewport builds it and shows any error.
-        try {
-            const res = NativePythonRunnerService.getInstance().runScriptSync(pythonGenerator.sourceCode);
-            if (res.success && res.glbBase64) {
-                pythonGenerator = { ...pythonGenerator, enabled: true, glbBase64: res.glbBase64, glbPath: res.glbPath, lastCompiledTimeMs: Date.now() };
-            }
-        } catch (e) {
-            console.warn('[ArtifactSynthesis] Error running pythonGenerator synchronously:', e);
-        }
-    }
+    // An unbuilt pythonGenerator is built afterwards, off the event loop, by buildPendingPythonGenerator.
 
     // Custom meshes the model sends are merged by id over the open scene's (keeping the user's gizmo transforms).
     const customMeshes = (() => {
@@ -800,6 +790,33 @@ function modelAuthoredDocument(
  * envelope that names a canvas primitive. Nothing is built from the prompt's words, in any mode: a reply in prose,
  * an empty tag or JSON that is not an envelope yields undefined (the canvas stays as it is).
  */
+/**
+ * Builds a 3d-scene artifact's pythonGenerator that has source but no GLB yet, asynchronously (the Python child never
+ * blocks the event loop) and abortably. When the build fails the artifact is returned unbuilt and the viewport builds
+ * it and shows the error.
+ */
+export async function buildPendingPythonGenerator(
+    artifact: CanvasArtifact | undefined,
+    signal?: AbortSignal
+): Promise<CanvasArtifact | undefined> {
+    if (!artifact || artifact.type !== '3d-scene') return artifact;
+    const scene = artifact.data as Scene3DData;
+    const gen = scene?.pythonGenerator;
+    if (!gen?.sourceCode || gen.glbBase64) return artifact;
+    try {
+        const res = await NativePythonRunnerService.getInstance().runScript(gen.sourceCode, { signal });
+        if (!res.success || !res.glbBase64) return artifact;
+        return {
+            ...artifact,
+            data: { ...scene, pythonGenerator: { ...gen, enabled: true, glbBase64: res.glbBase64, glbPath: res.glbPath, lastCompiledTimeMs: Date.now() } }
+        };
+    } catch (e) {
+        if (signal?.aborted) throw e;
+        console.warn('[ArtifactSynthesis] Error building pythonGenerator:', e);
+        return artifact;
+    }
+}
+
 export function parseOrSynthesizeArtifact(
     prompt: string,
     modelText: string,

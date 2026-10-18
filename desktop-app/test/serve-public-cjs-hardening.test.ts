@@ -104,8 +104,8 @@ function assertRejected(res: RawResponse, status: number, label: string): void {
 }
 
 // Runs a copy of scripts/serve_public.cjs inside a temp repo layout whose secrets are fakes,
-// so the real secrets.json / .env are never read. ffmpeg, the GeoBox Python pipeline and the
-// compiled PhotometricUsdBridgeService are stand-ins that log which file they were handed.
+// so the real secrets.json / .env are never read. ffmpeg, the compiled GeoBoxPrecisionResectionService and
+// PhotometricUsdBridgeService are stand-ins that log which file they were handed.
 describe('serve_public.cjs path containment and CORS', () => {
     let root: string;
     let toolsDir: string;
@@ -113,7 +113,7 @@ describe('serve_public.cjs path containment and CORS', () => {
     let port = 0;
     let baseline: Map<string, string>;
     let ffmpegLog: string;
-    let pythonLog: string;
+    let resectLog: string;
     let usdLog: string;
 
     const realPublic = (rel: string): string => fs.realpathSync(path.join(root, rel));
@@ -156,7 +156,7 @@ describe('serve_public.cjs path containment and CORS', () => {
         fs.symlinkSync(path.join(root, 'outside_dir'), path.join(root, 'public/tiles/linked_dir'));
 
         ffmpegLog = path.join(toolsDir, 'ffmpeg.log');
-        pythonLog = path.join(toolsDir, 'python.log');
+        resectLog = path.join(toolsDir, 'resect.log');
         usdLog = path.join(toolsDir, 'usd.log');
         writeExecutable(path.join(toolsDir, 'ffmpeg'), [
             `const fs = require('fs');`,
@@ -164,13 +164,17 @@ describe('serve_public.cjs path containment and CORS', () => {
             `fs.appendFileSync(${JSON.stringify(ffmpegLog)}, JSON.stringify(args) + '\\n');`,
             `fs.writeFileSync(args[args.length - 1], 'fake-ffmpeg-output');`
         ].join('\n'));
-        writeExecutable(path.join(toolsDir, 'python'), [
+        write(root, 'build/serve-public-core/node/spatial/GeoBoxPrecisionResectionService.js', [
             `const fs = require('fs');`,
-            `const args = process.argv.slice(2);`,
-            `fs.appendFileSync(${JSON.stringify(pythonLog)}, JSON.stringify(args) + '\\n');`,
-            `process.stdout.write('---GEOBOX_JSON_START---' + JSON.stringify({ stage: 'fake' }) + '---GEOBOX_JSON_END---');`
+            `class GeoBoxPrecisionResectionService {`,
+            `    async resectImageLocation(request) {`,
+            `        fs.appendFileSync(${JSON.stringify(resectLog)}, JSON.stringify(request.imagePath || request.videoPath || null) + '\\n');`,
+            `        return { success: true, imageAnalysed: false };`,
+            `    }`,
+            `}`,
+            `exports.GeoBoxPrecisionResectionService = GeoBoxPrecisionResectionService;`
         ].join('\n'));
-        write(root, 'packages/core/dist/node/spatial/PhotometricUsdBridgeService.js', [
+        write(root, 'build/serve-public-core/node/spatial/PhotometricUsdBridgeService.js', [
             `const fs = require('fs');`,
             `const path = require('path');`,
             `const log = ${JSON.stringify(usdLog)};`,
@@ -192,7 +196,7 @@ describe('serve_public.cjs path containment and CORS', () => {
 
         child = spawn(process.execPath, [path.join(root, 'scripts', 'serve_public.cjs')], {
             cwd: root,
-            env: { PATH: process.env.PATH || '', PORT: '0', FFMPEG_PATH: path.join(toolsDir, 'ffmpeg'), PYTHON_BIN: path.join(toolsDir, 'python') },
+            env: { PATH: process.env.PATH || '', PORT: '0', FFMPEG_PATH: path.join(toolsDir, 'ffmpeg') },
             stdio: ['ignore', 'pipe', 'pipe']
         });
         port = await new Promise<number>((resolve, reject) => {
@@ -360,17 +364,17 @@ describe('serve_public.cjs path containment and CORS', () => {
         for (const outputPath of [`../${ESCAPE_NAME}.usda`, `${ESCAPE_NAME}.usda`, path.join(root, 'public/data/absolute.usda'),
             'public/outside.usda', 'public/models/rig.usda', 'public/data/../../outside.usda', 'public/data/evil.html',
             'public/data/.hidden.usda', 'scripts/serve_public.cjs']) {
-            assertRejected(await postJson(port, '/api/lighting/export-usd', { rig: {}, outputPath }), 400, `export-usd ${outputPath}`);
+            assertRejected(await postJson(port, '/api/lighting/export-usd', { rig: { lights: [] }, outputPath }), 400, `export-usd ${outputPath}`);
         }
         assert.deepStrictEqual(readLog(usdLog), [], 'an escaping outputPath reached the exporter');
         assertNothingWrittenOutsidePublic('export-usd');
 
-        // geobox_demo.html sends no outputPath; the default lands in public/data.
-        const demo = await postJson(port, '/api/lighting/export-usd', { rig: {}, assetName: 'ThePlazaHotel' }, { Origin: `http://127.0.0.1:${port}` });
+        // No outputPath: the default lands in public/data.
+        const demo = await postJson(port, '/api/lighting/export-usd', { rig: { lights: [] }, assetName: 'ThePlazaHotel' }, { Origin: `http://127.0.0.1:${port}` });
         assert.strictEqual(demo.status, 200, demo.body);
         assert.strictEqual(JSON.parse(demo.body).usdaUrl, '/data/scene_lighting_export.usda');
         assert.ok(fs.existsSync(path.join(root, 'public/data/scene_lighting_export.usda')));
-        const custom = await postJson(port, '/api/lighting/export-usd', { rig: {}, outputPath: 'public/data/custom_rig.usda' });
+        const custom = await postJson(port, '/api/lighting/export-usd', { rig: { lights: [] }, outputPath: 'public/data/custom_rig.usda' });
         assert.strictEqual(custom.status, 200, custom.body);
         assert.ok(fs.existsSync(path.join(root, 'public/data/custom_rig.usda')));
     });
@@ -409,10 +413,10 @@ describe('serve_public.cjs path containment and CORS', () => {
                 assertRejected(await postJson(port, '/api/geobox/resect', { [field]: target }), 400, `resect ${field}=${target}`);
             }
         }
-        assert.deepStrictEqual(readLog(pythonLog), [], 'an escaping media path reached the pipeline');
+        assert.deepStrictEqual(readLog(resectLog), [], 'an escaping media path reached the resection');
         assertNothingWrittenOutsidePublic('resect');
 
-        // geobox_demo.html sample photo / sample video, and an absolute path the pipeline returned under public/uploads.
+        // A public sample photo / sample video, and an absolute path under public/uploads.
         const cases: Array<[Record<string, string>, string, string]> = [
             [{ imagePath: '/test_images/the_plaza_hotel_user_photo.jpg', hint: 'The Plaza Hotel' }, PLAZA_PHOTO, '/test_images/the_plaza_hotel_user_photo.jpg'],
             [{ videoPath: '/videos/plaza_hotel_omni_15s_720p.mp4' }, PLAZA_VIDEO, '/videos/plaza_hotel_omni_15s_720p.mp4'],
@@ -422,8 +426,7 @@ describe('serve_public.cjs path containment and CORS', () => {
             const res = await postJson(port, '/api/geobox/resect', payload);
             assert.strictEqual(res.status, 200, res.body);
             assert.strictEqual(JSON.parse(res.body).uploadUrl, url);
-            const args = readLog(pythonLog).pop()!;
-            assert.strictEqual(args[args.indexOf('--image') + 1], realPublic(rel));
+            assert.strictEqual(readLog(resectLog).pop(), realPublic(rel));
         }
     }, 30000);
 
@@ -435,12 +438,14 @@ describe('serve_public.cjs path containment and CORS', () => {
         assert.deepStrictEqual(readLog(usdLog).filter(([kind]) => kind === 'match'), [], 'an escaping imagePath reached the matcher');
         assertNothingWrittenOutsidePublic('match-reference');
 
-        // geobox_demo.html's default image, the pipeline's absolute image_path, and no imagePath at all.
+        // No image is a 400: there is no default photo.
+        assertRejected(await postJson(port, '/api/lighting/match-reference', {}), 400, 'match-reference without an image');
+
+        // A repo-relative public path and the pipeline's absolute image_path.
         for (const [imagePath, rel, url] of [
             [PLAZA_PHOTO, PLAZA_PHOTO, '/test_images/the_plaza_hotel_user_photo.jpg'],
-            [path.join(root, 'public/uploads/pipeline_frame.jpg'), 'public/uploads/pipeline_frame.jpg', '/uploads/pipeline_frame.jpg'],
-            [undefined, PLAZA_PHOTO, '/test_images/the_plaza_hotel_user_photo.jpg']
-        ] as Array<[string | undefined, string, string]>) {
+            [path.join(root, 'public/uploads/pipeline_frame.jpg'), 'public/uploads/pipeline_frame.jpg', '/uploads/pipeline_frame.jpg']
+        ] as Array<[string, string, string]>) {
             const res = await postJson(port, '/api/lighting/match-reference', { imagePath });
             assert.strictEqual(res.status, 200, res.body);
             assert.strictEqual(JSON.parse(res.body).imageRelUrl, url);

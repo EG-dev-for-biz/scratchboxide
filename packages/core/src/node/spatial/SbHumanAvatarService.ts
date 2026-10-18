@@ -20,8 +20,13 @@ import {
 import {
     CANONICAL_22_JOINT_NAMES,
     DEFAULT_CANONICAL_JOINTS,
-    SBHUMAN22_PARENTS
+    SBHUMAN22_PARENTS,
+    Vec3,
+    applyMat3,
+    computeBoneRotations,
+    skinPoint
 } from '../../common/humanoid-skinning';
+import { PipelineError } from '../../common/errors/pipeline-errors';
 import { decodeGaussianPly } from '../../common/gaussian-ply-codec';
 import {
     PerformerSurfaceMeshService,
@@ -30,7 +35,53 @@ import {
     decodeSurfaceGlb
 } from './PerformerSurfaceMeshService';
 import { GvhmrBody, GvhmrBodyService } from './GvhmrBodyService';
-import { Dynamic4DGaussianSplatService } from '../3d-engine/Dynamic4DGaussianSplatService';
+import { Dynamic4DGaussianSplatService, motionSummary, HumanoidMotionData } from '../3d-engine/Dynamic4DGaussianSplatService';
+
+/** The actor lacks the data needed to pose it (skin weights, a motion track, or canonical joints). */
+export class AvatarSkinningDataMissingError extends PipelineError {
+    readonly code = 'avatar_skinning_data_missing';
+
+    constructor(readonly actorId: string, readonly missing: string, detail?: string) {
+        super(`Cannot pose actor "${actorId}": ${missing} is missing${detail ? ` (${detail})` : ''}`);
+        this.name = 'AvatarSkinningDataMissingError';
+    }
+}
+
+/** The requested frame is outside the actor's motion track. */
+export class AvatarFrameOutOfRangeError extends PipelineError {
+    readonly code = 'avatar_frame_out_of_range';
+
+    constructor(readonly actorId: string, readonly frameIndex: number, readonly frameCount: number) {
+        super(`Actor "${actorId}" has ${frameCount} motion frames; frame ${frameIndex} does not exist (valid: 0..${frameCount - 1})`);
+        this.name = 'AvatarFrameOutOfRangeError';
+    }
+}
+
+/** No skin adapter implements the requested modality. */
+export class UnsupportedSkinModalityError extends PipelineError {
+    readonly code = 'unsupported_skin_modality';
+
+    constructor(readonly modality: string, readonly supported: readonly string[]) {
+        super(`Skin modality "${modality}" is not implemented; supported modalities: ${supported.join(', ')}`);
+        this.name = 'UnsupportedSkinModalityError';
+    }
+}
+
+/** Modalities with a real adapter. Others are rejected rather than routed to a different one. */
+export const SUPPORTED_SKIN_MODALITIES: readonly HumanoidSkinModality[] = [
+    'pbr-standard',
+    'pbr-melanin',
+    'pbr-video-projected',
+    '4dgs-radiance',
+    '2dgs-planar-surfel'
+];
+
+/** Result of posing a frame, with the provenance of the motion that drove it. */
+export interface PosedSkinFrameResult extends SkinFrameResult {
+    /** `motion_source` from motion.json (e.g. 'mediapipe_pose_track', or 'synthetic_idle' for procedural motion). */
+    motionSource?: string;
+    timestamp?: number;
+}
 
 function findRepoRoot(): string {
     let cur = __dirname;
@@ -69,42 +120,101 @@ export class PbrMeshSkinAdapter implements ISbHumanSkinAdapter {
             || !!(this.metadata.paths.glbPath && fs.existsSync(this.metadata.paths.glbPath));
     }
 
-    public async evaluateFrame(frameIndex: number, _jointTransforms?: any[]): Promise<SkinFrameResult> {
+    /**
+     * Poses the rest mesh at `frameIndex` with 4-bone linear blend skinning driven by the actor's
+     * motion track (motion.json): per-joint rotations canonical -> posed, then
+     * v' = sum_k w_k (J_posed[j_k] + R_jk (v - J_canon[j_k])), normals rotated the same way.
+     * Throws when the mesh has no skin weights, the actor has no motion track, or the frame is out of range.
+     */
+    public async evaluateFrame(frameIndex: number, _jointTransforms?: any[]): Promise<PosedSkinFrameResult> {
         const mesh = await this.loadRestMesh();
+        const vCount = mesh.positions.length / 3;
+        const skinIdx = mesh.skinIndices;
+        const skinW = mesh.skinWeights;
+        if (!skinIdx || !skinW || skinIdx.length !== vCount * 4 || skinW.length !== vCount * 4) {
+            throw new AvatarSkinningDataMissingError(this.actorId, 'per-vertex JOINTS_0/WEIGHTS_0 skin data',
+                `mesh has ${vCount} vertices, ${skinIdx?.length ?? 0} joint indices, ${skinW?.length ?? 0} weights`);
+        }
+
+        const motionPath = this.metadata.paths.motionPath;
+        if (!motionPath || !fs.existsSync(motionPath)) {
+            throw new AvatarSkinningDataMissingError(this.actorId, 'motion track (motion.json)',
+                'run the performer pipeline on a video to track motion for this actor');
+        }
+        const motion: HumanoidMotionData = JSON.parse(fs.readFileSync(motionPath, 'utf-8'));
+        const frames = Array.isArray(motion.frames) ? motion.frames : [];
+        if (!Number.isInteger(frameIndex) || frameIndex < 0 || frameIndex >= frames.length) {
+            throw new AvatarFrameOutOfRangeError(this.actorId, frameIndex, frames.length);
+        }
+        const canonical = motion.canonical_joints as Vec3[] | undefined;
+        const posed = frames[frameIndex].joint_positions_3d as Vec3[] | undefined;
+        if (!canonical || canonical.length < SBHUMAN22_PARENTS.length) {
+            throw new AvatarSkinningDataMissingError(this.actorId, 'canonical_joints in motion.json',
+                `need ${SBHUMAN22_PARENTS.length}, found ${canonical?.length ?? 0}`);
+        }
+        if (!posed || posed.length < SBHUMAN22_PARENTS.length) {
+            throw new AvatarSkinningDataMissingError(this.actorId, `joint_positions_3d for frame ${frameIndex}`,
+                `need ${SBHUMAN22_PARENTS.length}, found ${posed?.length ?? 0}`);
+        }
+
+        const rotations = computeBoneRotations(canonical, posed);
+        const positions = new Float32Array(mesh.positions.length);
+        const normals = mesh.normals ? new Float32Array(mesh.normals.length) : undefined;
         let minX = Infinity, minY = Infinity, minZ = Infinity;
         let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
         let sumX = 0, sumY = 0, sumZ = 0;
-        const vCount = mesh.positions.length / 3;
-        for (let i = 0; i < mesh.positions.length; i += 3) {
-            const x = mesh.positions[i];
-            const y = mesh.positions[i + 1];
-            const z = mesh.positions[i + 2];
-            minX = Math.min(minX, x);
-            minY = Math.min(minY, y);
-            minZ = Math.min(minZ, z);
-            maxX = Math.max(maxX, x);
-            maxY = Math.max(maxY, y);
-            maxZ = Math.max(maxZ, z);
-            sumX += x;
-            sumY += y;
-            sumZ += z;
+        for (let v = 0; v < vCount; v++) {
+            const o = v * 3;
+            const bi = skinIdx.subarray(v * 4, v * 4 + 4);
+            const bw = skinW.subarray(v * 4, v * 4 + 4);
+            const [x, y, z] = skinPoint(
+                [mesh.positions[o], mesh.positions[o + 1], mesh.positions[o + 2]],
+                bi, bw, canonical, posed, rotations
+            );
+            positions[o] = x;
+            positions[o + 1] = y;
+            positions[o + 2] = z;
+            minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+            minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+            minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
+            sumX += x; sumY += y; sumZ += z;
+
+            if (normals && mesh.normals) {
+                const n: Vec3 = [mesh.normals[o], mesh.normals[o + 1], mesh.normals[o + 2]];
+                let nx = 0, ny = 0, nz = 0;
+                for (let k = 0; k < 4; k++) {
+                    const w = bw[k];
+                    const j = bi[k];
+                    if (!(w > 1e-6) || j >= rotations.length) continue;
+                    const r = applyMat3(rotations[j], n);
+                    nx += w * r[0]; ny += w * r[1]; nz += w * r[2];
+                }
+                const len = Math.hypot(nx, ny, nz);
+                if (len > 1e-9) {
+                    normals[o] = nx / len; normals[o + 1] = ny / len; normals[o + 2] = nz / len;
+                } else {
+                    normals[o] = n[0]; normals[o + 1] = n[1]; normals[o + 2] = n[2];
+                }
+            }
         }
 
         return {
             frameIndex,
             modality: this.modality,
             vertexCount: vCount,
-            positions: mesh.positions,
-            normals: mesh.normals,
+            positions,
+            normals,
             colors: mesh.colors,
-            joints: (mesh as any).joints || mesh.skinIndices,
-            weights: (mesh as any).weights || mesh.skinWeights,
+            joints: skinIdx,
+            weights: skinW,
             uvs: mesh.uvs,
             bounds: {
                 min: [minX, minY, minZ],
                 max: [maxX, maxY, maxZ]
             },
-            centroid: vCount > 0 ? [sumX / vCount, sumY / vCount, sumZ / vCount] : [0, 0, 0]
+            centroid: vCount > 0 ? [sumX / vCount, sumY / vCount, sumZ / vCount] : [0, 0, 0],
+            motionSource: motion.motion_source,
+            timestamp: frames[frameIndex].timestamp
         };
     }
 
@@ -190,11 +300,18 @@ export class Gaussian4DGSSkinAdapter implements ISbHumanSkinAdapter {
         return !!(this.metadata.paths.plyPath && fs.existsSync(this.metadata.paths.plyPath));
     }
 
-    public async evaluateFrame(frameIndex: number): Promise<SkinFrameResult> {
+    public async evaluateFrame(frameIndex: number): Promise<PosedSkinFrameResult> {
+        const { motion } = this.splatService.loadAvatar(this.actorId);
+        const frameCount = motion.frames?.length ?? 0;
+        if (!Number.isInteger(frameIndex) || frameIndex < 0 || frameIndex >= frameCount) {
+            throw new AvatarFrameOutOfRangeError(this.actorId, frameIndex, frameCount);
+        }
         const anim = this.splatService.animateFrame(this.actorId, frameIndex);
         return {
-            frameIndex,
+            frameIndex: anim.frameIndex,
             modality: this.modality,
+            motionSource: motion.motion_source,
+            timestamp: anim.timestamp,
             gaussianCount: anim.splats.length,
             positions: new Float32Array(anim.splats.flatMap(g => g.position)),
             colors: new Float32Array(anim.splats.flatMap(g => g.colorRgb)),
@@ -211,7 +328,9 @@ export class Gaussian4DGSSkinAdapter implements ISbHumanSkinAdapter {
 
 /**
  * 2DGS Planar Surfel Adapter.
- * Constructs oriented planar surfels pinned to mesh triangle centroids with normal alignment.
+ * Constructs oriented planar surfels pinned to the posed mesh's triangle centroids, oriented by the
+ * face normals: one surfel per triangle (positions = centroids, normals = unit face normals,
+ * colors = mean of the three vertex colors).
  */
 export class Surfel2DGSSkinAdapter implements ISbHumanSkinAdapter {
     public readonly modality: HumanoidSkinModality = '2dgs-planar-surfel';
@@ -225,14 +344,52 @@ export class Surfel2DGSSkinAdapter implements ISbHumanSkinAdapter {
         return this.pbrAdapter.isAvailable();
     }
 
-    public async evaluateFrame(frameIndex: number, jointTransforms?: any[]): Promise<SkinFrameResult> {
-        const res = await this.pbrAdapter.evaluateFrame(frameIndex, jointTransforms);
+    public async evaluateFrame(frameIndex: number, jointTransforms?: any[]): Promise<PosedSkinFrameResult> {
+        const posed = await this.pbrAdapter.evaluateFrame(frameIndex, jointTransforms);
+        const { indices } = await this.pbrAdapter.loadRestMesh();
+        const p = posed.positions!;
+        const c = posed.colors;
+        const triCount = indices.length / 3;
+        const positions = new Float32Array(triCount * 3);
+        const normals = new Float32Array(triCount * 3);
+        const colors = c ? new Float32Array(triCount * 3) : undefined;
+        let minX = Infinity, minY = Infinity, minZ = Infinity;
+        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+        let sumX = 0, sumY = 0, sumZ = 0;
+        for (let t = 0; t < triCount; t++) {
+            const a = indices[t * 3] * 3, b = indices[t * 3 + 1] * 3, d = indices[t * 3 + 2] * 3;
+            const cx = (p[a] + p[b] + p[d]) / 3;
+            const cy = (p[a + 1] + p[b + 1] + p[d + 1]) / 3;
+            const cz = (p[a + 2] + p[b + 2] + p[d + 2]) / 3;
+            positions[t * 3] = cx; positions[t * 3 + 1] = cy; positions[t * 3 + 2] = cz;
+            const e1x = p[b] - p[a], e1y = p[b + 1] - p[a + 1], e1z = p[b + 2] - p[a + 2];
+            const e2x = p[d] - p[a], e2y = p[d + 1] - p[a + 1], e2z = p[d + 2] - p[a + 2];
+            const nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
+            const len = Math.hypot(nx, ny, nz) || 1;
+            normals[t * 3] = nx / len; normals[t * 3 + 1] = ny / len; normals[t * 3 + 2] = nz / len;
+            if (colors && c) {
+                for (let k = 0; k < 3; k++) colors[t * 3 + k] = (c[a + k] + c[b + k] + c[d + k]) / 3;
+            }
+            minX = Math.min(minX, cx); maxX = Math.max(maxX, cx);
+            minY = Math.min(minY, cy); maxY = Math.max(maxY, cy);
+            minZ = Math.min(minZ, cz); maxZ = Math.max(maxZ, cz);
+            sumX += cx; sumY += cy; sumZ += cz;
+        }
         return {
-            ...res,
-            modality: this.modality
+            frameIndex: posed.frameIndex,
+            modality: this.modality,
+            gaussianCount: triCount,
+            positions,
+            normals,
+            colors,
+            bounds: { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] },
+            centroid: triCount > 0 ? [sumX / triCount, sumY / triCount, sumZ / triCount] : [0, 0, 0],
+            motionSource: posed.motionSource,
+            timestamp: posed.timestamp
         };
     }
 
+    /** Exports the rigged PBR source mesh the surfels are derived from (no surfel-specific file format yet). */
     public async exportArtifact(options: SkinExportOptions = {}): Promise<Buffer> {
         return this.pbrAdapter.exportArtifact(options);
     }
@@ -287,19 +444,15 @@ export class SbHumanAvatarService {
                 if (fs.existsSync(plyPath)) {
                     availableModalities.push('4dgs-radiance', '2dgs-planar-surfel');
                 }
-                if (availableModalities.includes('pbr-standard') && availableModalities.includes('4dgs-radiance')) {
-                    availableModalities.push('hybrid-pbr-hair-groom');
-                }
 
                 let frameCount = 0;
                 let fps = 25.0;
                 if (fs.existsSync(motionPath)) {
-                    try {
-                        const m = JSON.parse(fs.readFileSync(motionPath, 'utf-8'));
-                        frameCount = Array.isArray(m) ? m.length : (m.frames?.length ?? 0);
+                    // Read once per motion.json version (listActors runs on every actor lookup).
+                    const m = motionSummary(motionPath);
+                    if (m) {
+                        frameCount = m.framesArrayLength;
                         if (m.fps) fps = m.fps;
-                    } catch {
-                        // Ignore
                     }
                 }
 
@@ -379,17 +532,15 @@ export class SbHumanAvatarService {
         const pbr = new PbrMeshSkinAdapter(actorId, actor, this.repoRoot);
         const g4d = new Gaussian4DGSSkinAdapter(actorId, actor, this.splatService);
 
-        switch (modality) {
-            case '4dgs-radiance':
-                return g4d;
-            case '2dgs-planar-surfel':
-                return new Surfel2DGSSkinAdapter(actorId, pbr);
-            case 'pbr-standard':
-            case 'pbr-melanin':
-            case 'pbr-video-projected':
-            default:
-                return pbr;
+        // The modality is a requested adapter id, not a domain taxonomy: anything without an adapter is
+        // rejected instead of being served by a different one.
+        if (!SUPPORTED_SKIN_MODALITIES.includes(modality)) {
+            throw new UnsupportedSkinModalityError(modality, SUPPORTED_SKIN_MODALITIES);
         }
+        if (modality === '4dgs-radiance') return g4d;
+        if (modality === '2dgs-planar-surfel') return new Surfel2DGSSkinAdapter(actorId, pbr);
+        // pbr-standard / pbr-melanin / pbr-video-projected share the skinned PBR surface mesh.
+        return pbr;
     }
 
     /**
@@ -399,9 +550,9 @@ export class SbHumanAvatarService {
         actorId: string,
         frameIndex: number,
         modality: HumanoidSkinModality = 'pbr-standard'
-    ): Promise<SkinFrameResult> {
+    ): Promise<PosedSkinFrameResult> {
         const adapter = await this.getSkinAdapter(actorId, modality);
-        return adapter.evaluateFrame(frameIndex);
+        return adapter.evaluateFrame(frameIndex) as Promise<PosedSkinFrameResult>;
     }
 
     /**

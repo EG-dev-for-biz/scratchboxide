@@ -117,7 +117,7 @@ export interface FusionOptions {
      * Road centerline vertices (from vector tiles). In a dense block the band around a footprint is neighbouring
      * roofs, not ground; street level is measured on the roads instead. Densify long segments before passing them.
      */
-    roadPoints?: LngLat[];
+    roadPoints?: LngLat[] | RoadPointIndex;
     /** Roads within this distance of the building centre count for its ground (default 60 m). */
     roadRadiusMeters?: number;
 }
@@ -161,7 +161,7 @@ export function fuseBuilding(
     const roadGround: number[] = [];
     if (dsm) {
         const r = options.roadRadiusMeters ?? 60;
-        for (const [lng, lat] of options.roadPoints || []) {
+        for (const [lng, lat] of roadCandidates(options.roadPoints, lng0, lat0, r)) {
             const x = (lng - lng0) * k, y = (lat - lat0) * M_PER_DEG_LAT;
             if (Math.hypot(x, y) > r) continue;
             const h = sampleDsm(dsm, lat, lng);
@@ -236,13 +236,56 @@ export function convexHull(points: LngLat[]): LngLat[] {
 }
 
 /** Street level (m above sea level) near a point: the 20th percentile of the DSM on roads within `radius` m. */
-export function streetLevelNear(dsm: DsmRaster, latDeg: number, lngDeg: number, roadPoints: LngLat[], radius = 60): number | undefined {
+export function streetLevelNear(dsm: DsmRaster, latDeg: number, lngDeg: number, roadPoints: LngLat[] | RoadPointIndex, radius = 60): number | undefined {
     const k = M_PER_DEG_LAT * Math.cos((latDeg * Math.PI) / 180);
     const hs: number[] = [];
-    for (const [lng, lat] of roadPoints) {
+    for (const [lng, lat] of roadCandidates(roadPoints, lngDeg, latDeg, radius)) {
         if (Math.hypot((lng - lngDeg) * k, (lat - latDeg) * M_PER_DEG_LAT) > radius) continue;
         const h = sampleDsm(dsm, lat, lng);
         if (Number.isFinite(h)) hs.push(h);
     }
     return hs.length >= 5 ? percentile(hs, 20) : undefined;
+}
+
+/**
+ * Uniform grid over [lng, lat] road points, so "roads within r metres of this building" reads a few cells instead of
+ * every point in the district. `near` returns a superset (every point within the radius, in input order, plus some
+ * just outside it); callers keep their own exact distance test, so results match a scan of the full list.
+ */
+export class RoadPointIndex {
+    private readonly cells = new Map<string, number[]>();
+    private readonly cellLat: number;
+    private readonly cellLng: number;
+
+    constructor(readonly points: LngLat[], cellMeters = 32) {
+        const lat0 = points.length ? points.reduce((a, p) => a + p[1], 0) / points.length : 0;
+        this.cellLat = cellMeters / M_PER_DEG_LAT;
+        this.cellLng = cellMeters / (M_PER_DEG_LAT * Math.max(1e-6, Math.cos((lat0 * Math.PI) / 180)));
+        points.forEach(([lng, lat], i) => {
+            const key = `${Math.floor(lng / this.cellLng)},${Math.floor(lat / this.cellLat)}`;
+            const cell = this.cells.get(key);
+            if (cell) cell.push(i); else this.cells.set(key, [i]);
+        });
+    }
+
+    /** Points that may lie within `radiusMeters` of (lng, lat), in input order. */
+    near(lng: number, lat: number, radiusMeters: number): LngLat[] {
+        // 1 % margin covers the metre-per-degree constants the callers use (111 320 at their own latitude).
+        const dLat = (radiusMeters * 1.01) / M_PER_DEG_LAT;
+        const dLng = (radiusMeters * 1.01) / (M_PER_DEG_LAT * Math.max(1e-6, Math.cos((Math.min(89.9, Math.abs(lat) + dLat) * Math.PI) / 180)));
+        const ids: number[] = [];
+        for (let cx = Math.floor((lng - dLng) / this.cellLng); cx <= Math.floor((lng + dLng) / this.cellLng); cx++) {
+            for (let cy = Math.floor((lat - dLat) / this.cellLat); cy <= Math.floor((lat + dLat) / this.cellLat); cy++) {
+                const cell = this.cells.get(`${cx},${cy}`);
+                if (cell) for (const i of cell) ids.push(i);
+            }
+        }
+        ids.sort((a, b) => a - b);
+        return ids.map(i => this.points[i]);
+    }
+}
+
+function roadCandidates(points: LngLat[] | RoadPointIndex | undefined, lng: number, lat: number, radiusMeters: number): LngLat[] {
+    if (!points) return [];
+    return points instanceof RoadPointIndex ? points.near(lng, lat, radiusMeters) : points;
 }

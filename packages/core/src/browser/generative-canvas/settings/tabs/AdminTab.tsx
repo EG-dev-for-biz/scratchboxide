@@ -158,17 +158,6 @@ export const STANDALONE_STUDIOS_CATALOG: StandaloneStudioItem[] = [
         tags: ['Anti-Drift Engine', '4-Quadrant Cockpit', 'Brown-Conrady', 'NOAA Sun Lock', 'Depth Holdout'],
         badge: 'ANTI-DRIFT'
     },
-    // 7. COLMAP / GLOMAP 3D Reconstruction Viewer
-    {
-        id: 'colmap-visualizer',
-        title: 'COLMAP / GLOMAP 3D Reconstruction Viewer',
-        subtitle: 'Structure-from-Motion Sparse Rig & OpenCV-to-OpenGL Frame Bridge',
-        category: 'Geospatial & 3D Tiles',
-        path: '/colmap_visualizer.html',
-        description: 'Interactive 3D inspection of sparse SfM point cloud reconstructions with multi-camera orbital frustums and C++20 SIMD telemetry.',
-        tags: ['COLMAP / GLOMAP', 'C++20 Native', 'SfM Sparse Rig', 'Optical Poses', 'Frustum Viz'],
-        badge: 'C++20 NATIVE'
-    },
     // 8. Botanical & Vegetation Pipeline Visualizer
     {
         id: 'botanical-visualizer',
@@ -190,17 +179,6 @@ export const STANDALONE_STUDIOS_CATALOG: StandaloneStudioItem[] = [
         description: 'Production-grade VFX plate matchmoving with physical optical camera frustum, interactive 50/50 wipe split, and AI restyling comparison.',
         tags: ['6-DoF Matchmove', 'Central Park South', '361 Frames', '50/50 Wipe', 'Model Arena'],
         badge: 'STUDIO GRADE'
-    },
-    // 10. GeoBox Multimodal Resection Studio
-    {
-        id: 'geobox-resection',
-        title: 'GeoBox Multimodal Resection Studio',
-        subtitle: 'Zero-GPS Image Localization & Roman Travertine Dusk Relighting',
-        category: 'Geospatial & 3D Tiles',
-        path: '/geobox_demo.html',
-        description: 'Analytical solvePnP camera resection, stone albedo de-lighting, 2850K window portal fixtures, and 50/50 wipe splits.',
-        tags: ['solvePnP', 'Colosseum Rome', 'Dusk Atmosphere', 'Window Lights', 'USD Export'],
-        badge: 'ANALYTICAL'
     },
     // 11. Multi-District Generative S4D Gallery
     {
@@ -366,17 +344,6 @@ export const STANDALONE_STUDIOS_CATALOG: StandaloneStudioItem[] = [
         description: 'Interactive branching narrative studio for connecting conditional video nodes, choice points, and seamless video cross-fades.',
         tags: ['Video Branching', 'Interactive Narrative', 'Decision Tree', 'Storyboards', 'Cross-Fade'],
         badge: 'BRANCHING NLE'
-    },
-    // 26. GeoBox Precision 6-DOF Camera Resection Report
-    {
-        id: 'geobox-precision-report',
-        title: 'GeoBox Precision 6-DOF Camera Resection Report',
-        subtitle: 'Sub-Pixel Optical Alignment & Ground-Truth Metrology Audit',
-        category: 'Geospatial & 3D Tiles',
-        path: '/geobox_precision_report.html',
-        description: 'Analytical metrology report auditing 6-DOF resection residuals (<0.05px RMS) and closed-loop edge cross-correlation.',
-        tags: ['Precision Report', 'solvePnP Metrology', 'Sub-Pixel Residuals', 'Edge Alignment', 'Audit'],
-        badge: 'PRECISION AUDIT'
     },
     // 27. Visual Proof Alignment & Multimodal Certification
     {

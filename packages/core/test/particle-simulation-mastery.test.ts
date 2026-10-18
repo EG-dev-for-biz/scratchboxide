@@ -114,85 +114,20 @@ int main() {
         expect(magic).toBe(0x46546c67);
     }, 30000);
 
-    it('dispatches particle simulation operators and updates Scene3DData (sb_spawn_particle_emitter, sb_simulate_particles, sb_add_force_field, sb_add_particle_collider, sb_bake_particle_cache)', () => {
-        const engine = createOperatorEngine({
-            title: 'Particle Physics Test Stage',
-            sceneType: 'physics',
-            objects: []
-        });
-
-        // 1. Spawn Emitter
-        const spawnRes = engine.dispatch('sb_spawn_particle_emitter', {
-            emitterId: 'emitter_fire_core',
-            name: 'Central Fire Vortex',
-            shape: 'cone',
-            position: [0, 0, 0],
-            direction: [0, 1, 0],
-            rate: 200,
-            temperatureKelvin: 5200,
-            maxParticles: 2500
-        });
-        expect(spawnRes.success).toBe(true);
-        expect(spawnRes.data.emitterId).toBe('emitter_fire_core');
-        expect(spawnRes.data.emitter.rate).toBe(200);
-
-        // 2. Add Centripetal Swirl Force Field
-        const vortexFieldRes = engine.dispatch('sb_add_force_field', {
-            emitterId: 'emitter_fire_core',
-            type: 'vortex',
-            strength: 4.0,
-            axis: [0, 1, 0]
-        });
-        expect(vortexFieldRes.success).toBe(true);
-        expect(vortexFieldRes.data.totalFields).toBe(1);
-
-        // 3. Add Divergence-Free Curl Noise Force Field
-        const curlFieldRes = engine.dispatch('sb_add_force_field', {
-            emitterId: 'emitter_fire_core',
-            type: 'curl_noise',
-            strength: 2.8
-        });
-        expect(curlFieldRes.success).toBe(true);
-        expect(curlFieldRes.data.totalFields).toBe(2);
-
-        // 4. Add Ground Collision Plane
-        const colliderRes = engine.dispatch('sb_add_particle_collider', {
-            emitterId: 'emitter_fire_core',
-            type: 'plane',
-            position: [0, 0, 0],
-            normal: [0, 1, 0],
-            restitution: 0.6,
-            friction: 0.2
-        });
-        expect(colliderRes.success).toBe(true);
-        expect(colliderRes.data.totalColliders).toBe(1);
-
-        // 5. Simulate Particles with RK4 Integrator
-        const simRes = engine.dispatch('sb_simulate_particles', {
-            emitterId: 'emitter_fire_core',
-            dt: 0.016,
-            steps: 45,
-            integrator: 'rk4'
-        });
-        expect(simRes.success).toBe(true);
-        expect(simRes.data.simulatedSteps).toBe(45);
-        expect(simRes.data.activeParticles).toBeGreaterThan(0);
-
-        // 6. Bake Particle Cache
-        const bakeRes = engine.dispatch('sb_bake_particle_cache', {
-            emitterId: 'emitter_fire_core',
-            duration: 3.0,
-            fps: 30
-        });
-        expect(bakeRes.success).toBe(true);
-        expect(bakeRes.data.frameCount).toBe(90);
-        expect(bakeRes.data.baked).toBe(true);
-
-        // Validate scene state inspection
+    it('does not register the removed scene-data particle operators (they simulated nothing)', () => {
+        const engine = createOperatorEngine({ title: 'Particle Physics Test Stage', objects: [] });
+        const removed = ['sb_spawn_particle_emitter', 'sb_simulate_particles', 'sb_add_force_field', 'sb_add_particle_collider', 'sb_bake_particle_cache'];
+        for (const name of removed) {
+            expect(engine.getOperator(name), name).toBeUndefined();
+            const res = engine.dispatch(name, { emitterId: 'emitter_fire_core' });
+            expect(res.success, name).toBe(false);
+            expect(res.error).toMatch(/Unknown operator/);
+        }
+        // Nothing was written into the scene by the failed dispatches.
+        expect((engine.getSceneData() as any).particleSystems).toBeUndefined();
         const inspectRes = engine.dispatch('sb_inspect_scene', {});
         expect(inspectRes.success).toBe(true);
-        expect(inspectRes.data.sceneData.particleSystems).toBeDefined();
-        expect(inspectRes.data.sceneData.particleSystems.length).toBe(1);
+        expect(inspectRes.data).not.toHaveProperty('particleSystems');
     });
 
     it('detects particle simulation semantic theme and generates C++ generator source code', () => {

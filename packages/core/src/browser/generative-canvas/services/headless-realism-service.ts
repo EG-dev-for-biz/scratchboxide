@@ -165,7 +165,9 @@ export function estimateDifferentialCurvature(geometry: THREE.BufferGeometry): C
             const distSq = edge.lengthSq();
             if (distSq < 1e-10) continue;
 
-            const kappa = (2.0 * edge.dot(nI)) / distSq;
+            // Normal curvature along the edge, positive where the surface bends away from its normal (convex with
+            // outward normals: a sphere of radius R gives +1/R), negative in crevices.
+            const kappa = (-2.0 * edge.dot(nI)) / distSq;
             minKappa = Math.min(minKappa, kappa);
             maxKappa = Math.max(maxKappa, kappa);
             count++;
@@ -177,9 +179,12 @@ export function estimateDifferentialCurvature(geometry: THREE.BufferGeometry): C
             const H = 0.5 * (k1 + k2);
             const K = k1 * k2;
             const diff = k1 - k2;
+            // Shape index: +1 cap (convex), -1 cup (concave), 0 saddle; an umbilic point (k1 = k2) is a pure cap or cup.
             let S = 0;
             if (Math.abs(diff) > 1e-6) {
                 S = (2.0 / Math.PI) * Math.atan((k1 + k2) / diff);
+            } else if (Math.abs(k1 + k2) > 1e-9) {
+                S = Math.sign(k1 + k2);
             }
             const C = Math.sqrt(0.5 * (k1 * k1 + k2 * k2));
 
@@ -284,7 +289,8 @@ export function applyWeightedNormals(
     if (!posAttr) return;
     const vertexCount = posAttr.count;
 
-    const indices = geometry.index ? Array.from(geometry.index.array) : [];
+    // A non-indexed mesh is a triangle soup: every three vertices are one face.
+    const indices = geometry.index ? Array.from(geometry.index.array) : Array.from({ length: vertexCount - (vertexCount % 3) }, (_, i) => i);
     if (indices.length < 3) return;
 
     const areaPower = options.areaWeightPower ?? 1.0;
@@ -337,10 +343,15 @@ export function applyWeightedNormals(
 
     for (let v = 0; v < vertexCount; v++) {
         const faces = vertFaces[v];
-        if (faces.length === 0) continue;
-
         if (normAttr) origNorm.fromBufferAttribute(normAttr, v);
         else origNorm.set(0, 1, 0);
+        if (faces.length === 0) {
+            // No face uses this vertex: it keeps the normal it had.
+            newNormals[v * 3] = origNorm.x;
+            newNormals[v * 3 + 1] = origNorm.y;
+            newNormals[v * 3 + 2] = origNorm.z;
+            continue;
+        }
 
         accum.set(0, 0, 0);
         pV.fromBufferAttribute(posAttr, v);
@@ -386,72 +397,86 @@ export function applyWeightedNormals(
 // 4. Headless Geomorphological PDE Solver
 // ============================================================================
 
+/**
+ * Erodes the Y heights of a mesh: stream-power incision proportional to the steepest downhill slope, Laplacian
+ * diffusion, and talus relaxation where the slope exceeds the repose angle. Neighbourhoods are taken over the
+ * welded surface (seam copies of a vertex share heights) and every edge links both of its ends.
+ */
 export function simulateGeomorphologyOnGeometry(
     geometry: THREE.BufferGeometry,
     options: GeomorphologyErosionOptions = {}
-): void {
+): { iterations: number; vertexCount: number; maxHeightChange: number; meanHeightChange: number } {
     const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
-    if (!posAttr) return;
-
     const iterations = options.iterations ?? 10;
+    if (!posAttr) return { iterations, vertexCount: 0, maxHeightChange: 0, meanHeightChange: 0 };
+
     const erodibility = options.erodibility ?? 0.08;
     const diffRate = options.diffusionRate ?? 0.015;
     const reposeAngle = options.talusReposeAngleDeg ?? 35.0;
     const tanRepose = Math.tan((reposeAngle * Math.PI) / 180.0);
     const talusRate = options.talusDiffusionRate ?? 0.05;
 
-    const vertexCount = posAttr.count;
-    const heights = new Float32Array(vertexCount);
-    for (let i = 0; i < vertexCount; i++) heights[i] = posAttr.getY(i);
-
-    const indices = geometry.index ? Array.from(geometry.index.array) : [];
-    const adj: Set<number>[] = Array.from({ length: vertexCount }, () => new Set<number>());
-    for (let i = 0; i + 2 < indices.length; i += 3) {
-        adj[indices[i]].add(indices[i + 1]);
-        adj[indices[i + 1]].add(indices[i + 2]);
-        adj[indices[i + 2]].add(indices[i]);
+    // Weld coincident positions so seam copies erode as one point.
+    const weld = new Map<string, number>();
+    const ids = new Uint32Array(posAttr.count);
+    for (let i = 0; i < posAttr.count; i++) {
+        const key = `${Math.round(posAttr.getX(i) * 1e5)},${Math.round(posAttr.getY(i) * 1e5)},${Math.round(posAttr.getZ(i) * 1e5)}`;
+        let id = weld.get(key);
+        if (id === undefined) { id = weld.size; weld.set(key, id); }
+        ids[i] = id;
     }
+    const n = weld.size;
+    const xs = new Float64Array(n);
+    const zs = new Float64Array(n);
+    const heights = new Float64Array(n);
+    for (let i = 0; i < posAttr.count; i++) {
+        xs[ids[i]] = posAttr.getX(i);
+        zs[ids[i]] = posAttr.getZ(i);
+        heights[ids[i]] = posAttr.getY(i);
+    }
+    const start = heights.slice();
 
-    const pI = new THREE.Vector3();
-    const pNbr = new THREE.Vector3();
+    const corner = (k: number) => ids[geometry.index ? geometry.index.getX(k) : k];
+    const cornerCount = geometry.index ? geometry.index.count : posAttr.count - (posAttr.count % 3);
+    const adj: Set<number>[] = Array.from({ length: n }, () => new Set<number>());
+    const link = (u: number, v: number) => { if (u !== v) { adj[u].add(v); adj[v].add(u); } };
+    for (let k = 0; k + 2 < cornerCount; k += 3) {
+        const a = corner(k), b = corner(k + 1), c = corner(k + 2);
+        link(a, b); link(b, c); link(c, a);
+    }
 
     for (let iter = 0; iter < iterations; iter++) {
-        for (let i = 0; i < vertexCount; i++) {
+        const next = heights.slice();
+        for (let i = 0; i < n; i++) {
             const neighbors = adj[i];
             if (neighbors.size === 0) continue;
-
-            pI.fromBufferAttribute(posAttr, i);
             let avgNbrHeight = 0;
             let maxSlope = 0;
-
             for (const nbr of neighbors) {
-                pNbr.fromBufferAttribute(posAttr, nbr);
                 avgNbrHeight += heights[nbr];
-                const dx = Math.hypot(pNbr.x - pI.x, pNbr.z - pI.z);
-                if (dx > 1e-4) {
-                    const slope = (heights[i] - heights[nbr]) / dx;
-                    maxSlope = Math.max(maxSlope, slope);
-                }
+                const dx = Math.hypot(xs[nbr] - xs[i], zs[nbr] - zs[i]);
+                if (dx > 1e-4) maxSlope = Math.max(maxSlope, (heights[i] - heights[nbr]) / dx);
             }
-
             avgNbrHeight /= neighbors.size;
-            const laplacian = avgNbrHeight - heights[i];
-
-            // Stream power erosion
             const erosion = erodibility * Math.max(0, maxSlope);
-            // Laplacian diffusion
-            const diffusion = diffRate * laplacian;
-            // Talus scree relaxation
-            const screeExcess = Math.max(0, maxSlope - tanRepose);
-            const scree = -talusRate * screeExcess;
-
-            heights[i] += (-erosion + diffusion + scree);
+            const diffusion = diffRate * (avgNbrHeight - heights[i]);
+            const scree = -talusRate * Math.max(0, maxSlope - tanRepose);
+            next[i] = heights[i] - erosion + diffusion + scree;
         }
+        heights.set(next);
     }
 
-    for (let i = 0; i < vertexCount; i++) posAttr.setY(i, heights[i]);
+    let maxChange = 0;
+    let sumChange = 0;
+    for (let i = 0; i < n; i++) {
+        const d = Math.abs(heights[i] - start[i]);
+        maxChange = Math.max(maxChange, d);
+        sumChange += d;
+    }
+    for (let i = 0; i < posAttr.count; i++) posAttr.setY(i, heights[ids[i]]);
     posAttr.needsUpdate = true;
     geometry.computeVertexNormals();
+    return { iterations, vertexCount: n, maxHeightChange: maxChange, meanHeightChange: n ? sumChange / n : 0 };
 }
 
 // ============================================================================
@@ -857,10 +882,14 @@ export function applyBurleySubsurfaceScattering(
             '#include <lights_fragment_end>',
             `
             #include <lights_fragment_end>
-            // Burley SSS back-scatter diffusion dipole approximation
-            float sssBackDot = max(0.0, dot(-geometryNormal, directionalLights[0].direction));
-            vec3 sssInscatter = uSssScatterColor * sssBackDot * uSssScatterDistance;
-            outgoingLight += sssInscatter;
+            // Back-scatter through the surface from each directional light, added to the direct diffuse term
+            // (outgoingLight is only declared after the lights chunks, so the term goes into reflectedLight).
+            #if NUM_DIR_LIGHTS > 0
+                for (int sssI = 0; sssI < NUM_DIR_LIGHTS; ++sssI) {
+                    float sssBackDot = max(0.0, dot(-geometryNormal, directionalLights[sssI].direction));
+                    reflectedLight.directDiffuse += uSssScatterColor * sssBackDot * uSssScatterDistance * directionalLights[sssI].color;
+                }
+            #endif
             `
         );
     };
@@ -1053,7 +1082,8 @@ export function applyFilamentClothSheen(
                     float cloth_wrapL = max(0.0, cloth_NoL + uClothWrap) / ((1.0 + uClothWrap) * (1.0 + uClothWrap));
                     vec3 cloth_sub = uClothSubsurfaceColor * cloth_wrapL;
 
-                    outgoingLight += (cloth_sheen + cloth_sub) * directionalLights[i].color;
+                    reflectedLight.directSpecular += cloth_sheen * directionalLights[i].color;
+                    reflectedLight.directDiffuse += cloth_sub * directionalLights[i].color;
                 }
             #endif
             `

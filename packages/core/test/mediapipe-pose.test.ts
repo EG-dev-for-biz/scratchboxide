@@ -160,7 +160,8 @@ describe('MediaPipePoseService (3D Metric Pose Landmarker & Kinematics)', () => 
 
         // A bridge that runs and finds no person.
         const nobody = path.join(dir, 'nobody.py');
-        fs.writeFileSync(nobody, 'import sys, json\nsys.stdin.buffer.read()\nprint(json.dumps({"poses": []}))\n');
+        // Bridges run in a persistent worker, which calls their main() once per image.
+        fs.writeFileSync(nobody, 'import sys, json\ndef main():\n    print(json.dumps({"poses": []}))\n');
         const noPerson = await new MediaPipePoseService({ scriptPath: nobody }).estimatePoseFromImage({ image: Buffer.from('x') }).catch(e => e);
         expect(noPerson).toBeInstanceOf(MissingInputError);
         expect(noPerson.message).toContain('MediaPipe found no person');
@@ -168,7 +169,7 @@ describe('MediaPipePoseService (3D Metric Pose Landmarker & Kinematics)', () => 
         // A bridge that detects a person: the angles are solved from its landmarks, which come back with the pose.
         const lms = createMockHumanLandmarks(true);
         const found = path.join(dir, 'found.py');
-        fs.writeFileSync(found, `import sys, json\nsys.stdin.buffer.read()\nprint(json.dumps({"poses": [{"world": ${JSON.stringify(lms)}, "image": ${JSON.stringify(lms)}}]}))\n`);
+        fs.writeFileSync(found, `import sys, json\ndef main():\n    open(sys.argv[4], 'rb').read()\n    print(json.dumps({"poses": [{"world": ${JSON.stringify(lms)}, "image": ${JSON.stringify(lms)}}]}))\n`);
         const pose = await new MediaPipePoseService({ scriptPath: found }).estimatePoseFromImage({ image: Buffer.from('x') });
         expect(pose.success).toBe(true);
         expect(pose.worldLandmarks).toHaveLength(33);

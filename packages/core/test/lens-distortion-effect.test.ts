@@ -267,6 +267,33 @@ describe('Brown-Conrady Optical Lens Distortion Shader Engine & API', () => {
             expect(payload.config.k1).toBeCloseTo(-0.220, 3);
             expect(payload.availablePresets).toContain('action_cam_fisheye');
         });
+
+        it('fails instead of assuming a smartphone lens when no lens is given', async () => {
+            const registry = createDefaultToolRegistry();
+            for (const tool of ['optics_configure_lens_distortion', 'optics_export_lens_distortion']) {
+                const missing = await registry.dispatch(tool, { format: 'nuke', sampleUvs: [[0.1, 0.1]] }, {} as any);
+                expect(missing.exec.status).toBe('failed');
+                expect(missing.exec.summaryResult).toContain('no default lens is assumed');
+
+                const unknown = await registry.dispatch(tool, { format: 'nuke', presetId: 'not_a_lens' }, {} as any);
+                expect(unknown.exec.status).toBe('failed');
+                expect(unknown.exec.summaryResult).toContain('not_a_lens');
+            }
+        });
+
+        it('accepts explicit coefficients alone as the lens', async () => {
+            const registry = createDefaultToolRegistry();
+            const outcome = await registry.dispatch(
+                'optics_configure_lens_distortion',
+                { customParams: { k1: -0.05 }, sampleUvs: [[0.9, 0.5]] },
+                {} as any
+            );
+            expect(outcome.exec.status).toBe('completed');
+            const payload = outcome.resultPayload as any;
+            expect(payload.config).toEqual({ k1: -0.05 });
+            // Barrel distortion pulls an off-centre sample toward the optical centre
+            expect(payload.distortedSamples[0].distortedUv[0]).toBeLessThan(0.9);
+        });
     });
 
     describe('TaskCapabilityResolver Integration', () => {

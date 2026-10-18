@@ -187,6 +187,19 @@ export function evaluateEdgeOverlap(
     renderField: SobelEdgeField,
     thresholdRatio: number = 0.25
 ): { overlapScorePercent: number; residualPx: number; edgeCount: number } {
+    const c = edgeCorrelation(queryField, renderField, thresholdRatio);
+    return c.edgeCount === 0
+        ? { overlapScorePercent: 0.0, residualPx: NaN, edgeCount: 0 }
+        : { overlapScorePercent: c.overlapScorePercent, residualPx: meanEdgeDistancePx(queryField, renderField).meanPx, edgeCount: c.edgeCount };
+}
+
+/** The correlation half of evaluateEdgeOverlap (edgeCount 0: nothing to compare). The pose search reads the edge
+ * distance only for poses it keeps or that reach the target. */
+function edgeCorrelation(
+    queryField: SobelEdgeField,
+    renderField: SobelEdgeField,
+    thresholdRatio: number = 0.25
+): { overlapScorePercent: number; edgeCount: number } {
     if (queryField.width !== renderField.width || queryField.height !== renderField.height) {
         throw new Error(`Dimension mismatch: Query ${queryField.width}x${queryField.height} vs Render ${renderField.width}x${renderField.height}`);
     }
@@ -214,15 +227,11 @@ export function evaluateEdgeOverlap(
     }
 
     if (normQ === 0 || normR === 0 || edgeCount === 0) {
-        return { overlapScorePercent: 0.0, residualPx: NaN, edgeCount: 0 };
+        return { overlapScorePercent: 0.0, edgeCount: 0 };
     }
 
     const ncc = Math.max(0.0, Math.min(1.0, dotProduct / (Math.sqrt(normQ) * Math.sqrt(normR))));
-    return {
-        overlapScorePercent: ncc * 100.0,
-        residualPx: meanEdgeDistancePx(queryField, renderField).meanPx,
-        edgeCount
-    };
+    return { overlapScorePercent: ncc * 100.0, edgeCount };
 }
 
 /** Running state of one pose search: the best pose so far and how it scored. */
@@ -244,8 +253,13 @@ export interface AsyncOptimizationOptions extends OptimizationOptions {
     signal?: AbortSignal;
     /** Wall-clock budget in ms. When it runs out the search stops and returns the best pose so far (stoppedBy). */
     timeBudgetMs?: number;
-    /** Called after every render with the number of renders so far and the best correlation. */
+    /** Called after every render batch with the number of renders so far and the best correlation. */
     onRender?: (renders: number, bestScorePercent: number) => void;
+    /**
+     * Renders several poses at once (e.g. HeadlessEdgeRenderPool.render). The search then renders both trial steps
+     * of a parameter together; the poses it picks are the same as one render at a time.
+     */
+    renderBatch?: (poses: CameraPose6DOF[]) => Promise<SobelEdgeField[]>;
     /** The caller's own render of initialPose, used instead of rendering it again (it counts as a render). */
     initialField?: SobelEdgeField;
 }
@@ -267,15 +281,19 @@ function* searchPoses(
     initialPose: CameraPose6DOF,
     queryField: SobelEdgeField,
     options: OptimizationOptions,
-    state: PoseSearchState
-): Generator<CameraPose6DOF, void, SobelEdgeField> {
+    state: PoseSearchState,
+    /** Ask for both trial steps of a parameter in one batch (the second is rendered even when the first hits the target). */
+    pairTrials = false
+): Generator<CameraPose6DOF[], void, SobelEdgeField[]> {
     const maxIter = options.maxIterations ?? 30;
     const targetScore = options.targetOverlapScore ?? 99.9;
     const targetResPx = options.subpixelTolerancePx ?? 0.10;
 
     let currentPose: CameraPose6DOF = { ...initialPose };
-    const initialField = yield currentPose;
+    const [initialField] = yield [currentPose];
     const evalResult = evaluateEdgeOverlap(queryField, initialField);
+    // The edge distance of a trial pose, read only when the pose is kept or reaches the target correlation.
+    const residualOf = (field: SobelEdgeField, edgeCount: number) => (edgeCount === 0 ? NaN : meanEdgeDistancePx(queryField, field).meanPx);
     state.bestPose = { ...initialPose };
     state.bestScore = evalResult.overlapScorePercent;
     state.bestResPx = evalResult.residualPx;
@@ -328,17 +346,23 @@ function* searchPoses(
             let bestParamVal: number | null = null;
             let bestParamField: SobelEdgeField | undefined;
 
-            for (const delta of [-step, step]) {
+            const trialPoses = [-step, step].map(delta => {
                 const testPose: CameraPose6DOF = { ...currentPose };
                 testPose[param.key] = (testPose[param.key] ?? 0) + delta;
+                return testPose;
+            });
+            const pairFields = pairTrials ? yield trialPoses : undefined;
 
-                const testField = yield testPose;
-                const testEval = evaluateEdgeOverlap(queryField, testField);
+            for (let t = 0; t < trialPoses.length; t++) {
+                const testPose = trialPoses[t];
+                const testField = pairFields ? pairFields[t] : (yield [testPose])[0];
+                const testEval = edgeCorrelation(queryField, testField);
+                const testResPx = testEval.overlapScorePercent >= targetScore ? residualOf(testField, testEval.edgeCount) : undefined;
 
                 // Check if target is satisfied
-                if (testEval.overlapScorePercent >= targetScore && testEval.residualPx <= targetResPx) {
+                if (testResPx !== undefined && testResPx <= targetResPx) {
                     state.bestScore = testEval.overlapScorePercent;
-                    state.bestResPx = testEval.residualPx;
+                    state.bestResPx = testResPx;
                     state.bestPose = { ...testPose };
                     state.bestField = testField;
                     currentPose = { ...testPose };
@@ -348,7 +372,7 @@ function* searchPoses(
 
                 if (testEval.overlapScorePercent > bestParamScore + 0.01) {
                     bestParamScore = testEval.overlapScorePercent;
-                    bestParamResPx = testEval.residualPx;
+                    bestParamResPx = testResPx ?? residualOf(testField, testEval.edgeCount);
                     bestParamVal = testPose[param.key]!;
                     bestParamField = testField;
                 }
@@ -431,7 +455,7 @@ export class SubPixelEdgeAlignmentOptimizer {
         const search = searchPoses(initialPose, queryField, options, state);
         let step = search.next();
         while (!step.done) {
-            step = search.next(renderFunc(step.value));
+            step = search.next(step.value.map(renderFunc));
         }
         return searchMetrics(state, queryField, options);
     }
@@ -449,13 +473,14 @@ export class SubPixelEdgeAlignmentOptimizer {
     ): Promise<AsyncEdgeAlignmentMetrics> {
         const started = Date.now();
         const state = newSearchState(initialPose);
-        const search = searchPoses(initialPose, queryField, options, state);
+        const renderBatch = options.renderBatch;
+        const search = searchPoses(initialPose, queryField, options, state, !!renderBatch);
         let renders = 0;
         let outOfTime = false;
         let step = search.next();
         if (options.initialField && !step.done) {
             renders++;
-            step = search.next(options.initialField);
+            step = search.next([options.initialField]);
             options.onRender?.(renders, state.bestScore);
         }
         while (!step.done) {
@@ -468,9 +493,9 @@ export class SubPixelEdgeAlignmentOptimizer {
                 outOfTime = true;
                 break;
             }
-            const field = await renderFunc(step.value);
-            renders++;
-            step = search.next(field);
+            const fields = renderBatch ? await renderBatch(step.value) : await Promise.all(step.value.map(p => renderFunc(p)));
+            renders += fields.length;
+            step = search.next(fields);
             options.onRender?.(renders, state.bestScore);
         }
         const metrics = searchMetrics(state, queryField, options);

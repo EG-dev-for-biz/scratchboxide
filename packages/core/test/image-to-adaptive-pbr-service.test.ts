@@ -7,7 +7,10 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import * as fs from 'fs';
+import * as path from 'path';
+import { encodePng } from '../src/node/texture-processing';
 import { ImageToAdaptivePbrService } from '../src/node/3d-engine/image-to-adaptive-pbr-service';
 import { AdaptiveMaterialPbrService } from '../src/node/3d-engine/adaptive-material-pbr-service';
 import { GltfBinaryPacker } from '../src/node/3d-engine/gltf-binary-packer';
@@ -110,14 +113,56 @@ describe('ImageToAdaptivePbrService (Unified Architecture & C++20 Acceleration)'
         const result = await ImageToAdaptivePbrService.generatePbrDisplacedPlane({
             imageBuffer,
             subdivisions: 16,
-            useNativeCpp: true,
-            prompt: 'weathered granite slab with deep cracks'
+            useNativeCpp: true
         });
 
         expect(result.success).toBe(true);
         expect(['native-cpp20', 'node-v8']).toContain(result.accelerationUsed);
         expect(result.meshStats.vertexCount).toBeGreaterThan(0);
         expect(result.metrics).toBeDefined();
+    });
+
+    describe('continuous descriptors reach the field estimator (codec boundary stubbed, real estimator)', () => {
+        afterEach(() => vi.restoreAllMocks());
+        /** Runs the Node.js estimator path and returns the packed ORM RGBA handed to the encoder. */
+        const runOrm = async (opts: Record<string, unknown>) => {
+            vi.spyOn(AdaptiveMaterialPbrService, 'decodeToRgba').mockResolvedValue(Buffer.from(rawRgba));
+            const encoded: Buffer[] = [];
+            vi.spyOn(AdaptiveMaterialPbrService, 'encodeFromRgba').mockImplementation(async (rgba: Buffer, w: number, h: number) => {
+                encoded.push(Buffer.from(rgba));
+                return encodePng(w, h, rgba);
+            });
+            const result = await ImageToAdaptivePbrService.processImageToPbrPlane({
+                imageBuffer: encodePng(width, height, rawRgba), subdivisions: 8, useNativeCpp: false, ...opts
+            });
+            expect(result.accelerationUsed).toBe('node-v8');
+            return encoded[2]; // albedo, normal, ORM
+        };
+        const channelMean = (rgba: Buffer, c: number) => {
+            let sum = 0;
+            for (let i = c; i < rgba.length; i += 4) sum += rgba[i];
+            return sum / (rgba.length / 4);
+        };
+
+        it('roughnessRange sets the roughness the ORM carries', async () => {
+            const rough = await runOrm({ roughnessRange: [0.9, 0.95] });
+            const glossy = await runOrm({ roughnessRange: [0.05, 0.1] });
+            expect(channelMean(rough, 1) - channelMean(glossy, 1)).toBeGreaterThan(150);
+            await expect(runOrm({ roughnessRange: [0.8, 0.2] })).rejects.toThrow(/roughnessRange/);
+        });
+
+        it('cavityOcclusionStrength 0 leaves the AO channel unoccluded', async () => {
+            const none = await runOrm({ cavityOcclusionStrength: 0 });
+            const full = await runOrm({ cavityOcclusionStrength: 1.5 });
+            expect(channelMean(none, 0)).toBeGreaterThan(254);
+            expect(channelMean(full, 0)).toBeLessThan(channelMean(none, 0));
+        });
+
+        it('has no word-to-number material dictionary', () => {
+            const src = fs.readFileSync(path.join(__dirname, '../src/node/3d-engine/image-to-adaptive-pbr-service.ts'), 'utf8');
+            expect(src).not.toMatch(/includes\('(metal|glass|stone|polished|matte)'\)/);
+            expect(src).not.toMatch(/prompt\?:/);
+        });
     });
 
     it('GltfBinaryPacker maintains 4-byte alignment across arbitrary chunk payloads', () => {

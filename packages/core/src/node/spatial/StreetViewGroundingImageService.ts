@@ -152,13 +152,17 @@ export class StreetViewGroundingImageService {
         const mPerDegLat = 111_320, mPerDegLng = 111_320 * Math.cos((lat * Math.PI) / 180);
         for (const r of ringMeters) {
             const points = r === 0 ? [[0, 0]] : Array.from({ length: 8 }, (_, i) => [Math.cos((i * Math.PI) / 4) * r, Math.sin((i * Math.PI) / 4) * r]);
-            for (const [east, north] of points) {
+            // A ring's metadata requests go out together; answers are read in ring order, so the pano picked is the
+            // one a point-by-point walk would pick.
+            const metas: any[] = await Promise.all(points.map(async ([east, north]) => {
                 const params = new URLSearchParams({
                     location: `${lat + north / mPerDegLat},${lng + east / mPerDegLng}`,
                     radius: '20', source: 'outdoor', key: apiKey
                 });
                 const res = await fetchImpl(`https://maps.googleapis.com/maps/api/streetview/metadata?${params}`);
-                const meta: any = await res.json().catch(() => ({}));
+                return res.json().catch(() => ({}));
+            }));
+            for (const meta of metas) {
                 if (meta.status !== 'OK' || !meta.pano_id || seen.has(meta.pano_id)) continue;
                 seen.add(meta.pano_id);
                 if (isGoogleCapture(meta.copyright)) {

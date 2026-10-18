@@ -12,6 +12,7 @@
 
 #include "scratchbox_math.hpp"
 #include "scratchbox_spz.hpp"
+#include <array>
 #include <vector>
 #include <string>
 #include <fstream>
@@ -82,10 +83,34 @@ public:
     /**
      * Carves a 3D bounding volume against multi-camera silhouette masks and
      * averages foreground RGB observations across valid lines of sight.
+     *
+     * The whole volume is always carved: when the hull at voxelSize holds more than maxPoints voxels, it is carved
+     * again on a coarser grid (never cut off part way through the scan, which used to drop the top of the subject).
      */
     static std::vector<GaussianSplat> carve(
         const std::vector<VisualHullCamera>& cameras,
         const VisualHullOptions& options = VisualHullOptions()
+    ) {
+        if (cameras.empty() || options.maxPoints == 0) return {};
+        float step = std::max(0.005f, options.voxelSize);
+        std::vector<GaussianSplat> results = carveAtStep(cameras, options, step);
+        while (results.size() > options.maxPoints) {
+            step *= static_cast<float>(std::cbrt(static_cast<double>(results.size()) / static_cast<double>(options.maxPoints)) * 1.02);
+            results = carveAtStep(cameras, options, step);
+        }
+        return results;
+    }
+
+    /**
+     * Every voxel of the grid at `step` inside the hull, in z, y, x scan order. Blocks of 8x8x8 voxels whose
+     * projection holds no foreground pixel in enough cameras are skipped without testing their voxels (a voxel's
+     * projection lies within the projection of its block's corners), so the result equals testing every voxel.
+     */
+    static std::vector<GaussianSplat> carveAtStep(
+        const std::vector<VisualHullCamera>& cameras,
+        const VisualHullOptions& options,
+        float step,
+        bool blockCulling = true
     ) {
         std::vector<GaussianSplat> results;
         if (cameras.empty()) return results;
@@ -97,18 +122,78 @@ public:
         const float minZ = options.center.z - options.halfExtent;
         const float maxZ = options.center.z + options.halfExtent;
 
-        const float step = std::max(0.005f, options.voxelSize);
-
         // Precompute camera count
         const size_t numCams = cameras.size();
         const uint32_t requiredViews = std::min(static_cast<uint32_t>(numCams), std::max(1u, options.minForegroundViews));
 
-        for (float z = minZ; z <= maxZ; z += step) {
-            for (float y = minY; y <= maxY; y += step) {
-                for (float x = minX; x <= maxX; x += step) {
-                    if (results.size() >= options.maxPoints) {
-                        return results;
+        // The sample coordinates, accumulated exactly as a z/y/x stepping loop does.
+        auto axis = [&](float lo, float hi) { std::vector<float> v; for (float t = lo; t <= hi; t += step) v.push_back(t); return v; };
+        const std::vector<float> xs = axis(minX, maxX), ys = axis(minY, maxY), zs = axis(minZ, maxZ);
+        if (xs.empty() || ys.empty() || zs.empty()) return results;
+
+        constexpr size_t B = 8;
+        const size_t bx = (xs.size() + B - 1) / B, by = (ys.size() + B - 1) / B, bz = (zs.size() + B - 1) / B;
+        std::vector<uint8_t> blockLive(bx * by * bz, 1);
+        if (blockCulling) {
+            // Summed-area table of foreground pixels per camera (cameras whose mask is short are never ruled out).
+            std::vector<std::vector<uint32_t>> sat(numCams);
+            for (size_t c = 0; c < numCams; ++c) {
+                const auto& cam = cameras[c];
+                if (cam.width == 0 || cam.height == 0 || cam.mask.empty()) continue;
+                if (cam.mask.size() < static_cast<size_t>(cam.width) * cam.height) continue;
+                auto& S = sat[c];
+                S.assign(static_cast<size_t>(cam.width + 1) * (cam.height + 1), 0);
+                for (uint32_t y = 0; y < cam.height; ++y) {
+                    uint32_t row = 0;
+                    for (uint32_t x = 0; x < cam.width; ++x) {
+                        row += cam.mask[static_cast<size_t>(y) * cam.width + x] >= options.maskThreshold ? 1u : 0u;
+                        S[static_cast<size_t>(y + 1) * (cam.width + 1) + x + 1] = S[static_cast<size_t>(y) * (cam.width + 1) + x + 1] + row;
                     }
+                }
+            }
+            for (size_t kz = 0; kz < bz; ++kz)
+                for (size_t ky = 0; ky < by; ++ky)
+                    for (size_t kx = 0; kx < bx; ++kx) {
+                        const float x0 = xs[kx * B], x1 = xs[std::min(xs.size(), kx * B + B) - 1];
+                        const float y0 = ys[ky * B], y1 = ys[std::min(ys.size(), ky * B + B) - 1];
+                        const float z0 = zs[kz * B], z1 = zs[std::min(zs.size(), kz * B + B) - 1];
+                        uint32_t possible = 0;
+                        for (size_t c = 0; c < numCams && possible < requiredViews; ++c) {
+                            const auto& cam = cameras[c];
+                            if (cam.width == 0 || cam.height == 0 || cam.mask.empty()) continue;
+                            if (sat[c].empty()) { ++possible; continue; }
+                            float uLo = 1e30f, uHi = -1e30f, vLo = 1e30f, vHi = -1e30f;
+                            bool behind = false;
+                            for (int corner = 0; corner < 8 && !behind; ++corner) {
+                                const float x = (corner & 1) ? x1 : x0, y = (corner & 2) ? y1 : y0, z = (corner & 4) ? z1 : z0;
+                                const float xc = cam.w2c[0]*x + cam.w2c[1]*y + cam.w2c[2]*z + cam.w2c[3];
+                                const float yc = cam.w2c[4]*x + cam.w2c[5]*y + cam.w2c[6]*z + cam.w2c[7];
+                                const float zc = cam.w2c[8]*x + cam.w2c[9]*y + cam.w2c[10]*z + cam.w2c[11];
+                                if (zc <= 0.05f) { behind = true; break; }
+                                const float u = cam.fx * (xc / zc) + cam.cx, v = cam.fy * (yc / zc) + cam.cy;
+                                uLo = std::min(uLo, u); uHi = std::max(uHi, u); vLo = std::min(vLo, v); vHi = std::max(vHi, v);
+                            }
+                            if (behind) { ++possible; continue; } // part of the block is behind the camera: not ruled out
+                            // one pixel of margin either side covers rounding differences between corners and voxels
+                            const long iu0 = std::max(0L, std::lround(std::floor(uLo)) - 1), iu1 = std::min(static_cast<long>(cam.width) - 1, std::lround(std::ceil(uHi)) + 1);
+                            const long iv0 = std::max(0L, std::lround(std::floor(vLo)) - 1), iv1 = std::min(static_cast<long>(cam.height) - 1, std::lround(std::ceil(vHi)) + 1);
+                            if (iu0 > iu1 || iv0 > iv1) continue;
+                            const auto& S = sat[c];
+                            const size_t W1 = cam.width + 1;
+                            const uint32_t fg = S[(iv1 + 1) * W1 + iu1 + 1] - S[iv0 * W1 + iu1 + 1] - S[(iv1 + 1) * W1 + iu0] + S[iv0 * W1 + iu0];
+                            if (fg > 0) ++possible;
+                        }
+                        if (possible < requiredViews) blockLive[(kz * by + ky) * bx + kx] = 0;
+                    }
+        }
+
+        for (size_t iz = 0; iz < zs.size(); ++iz) {
+            const float z = zs[iz];
+            for (size_t iy = 0; iy < ys.size(); ++iy) {
+                const float y = ys[iy];
+                for (size_t ix = 0; ix < xs.size(); ++ix) {
+                    if (!blockLive[((iz / B) * by + iy / B) * bx + ix / B]) continue;
+                    const float x = xs[ix];
 
                     uint32_t fgCount = 0;
                     uint32_t testedViews = 0;
@@ -121,9 +206,6 @@ public:
                         if (cam.width == 0 || cam.height == 0 || cam.mask.empty()) continue;
 
                         // World to camera transform
-                        // X_cam = w2c[0]*x + w2c[1]*y + w2c[2]*z + w2c[3]
-                        // Y_cam = w2c[4]*x + w2c[5]*y + w2c[6]*z + w2c[7]
-                        // Z_cam = w2c[8]*x + w2c[9]*y + w2c[10]*z + w2c[11]
                         const float xc = cam.w2c[0]*x + cam.w2c[1]*y + cam.w2c[2]*z + cam.w2c[3];
                         const float yc = cam.w2c[4]*x + cam.w2c[5]*y + cam.w2c[6]*z + cam.w2c[7];
                         const float zc = cam.w2c[8]*x + cam.w2c[9]*y + cam.w2c[10]*z + cam.w2c[11];

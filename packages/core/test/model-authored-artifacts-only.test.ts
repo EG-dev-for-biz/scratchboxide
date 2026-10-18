@@ -21,7 +21,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { parseOrSynthesizeArtifact, extractCodeSandboxArtifact, extractDocumentTitle, openArtifactUpdateRule, withOpenArtifactRule } from '../src/node/gemini/artifact-synthesis';
+import { buildPendingPythonGenerator, parseOrSynthesizeArtifact, extractCodeSandboxArtifact, extractDocumentTitle, openArtifactUpdateRule, withOpenArtifactRule } from '../src/node/gemini/artifact-synthesis';
 import { MarkdownDocumentPrimitive } from '../src/browser/generative-canvas/primitives/MarkdownDocumentPrimitive';
 import { DocumentCodeSurfaces } from '../src/browser/generative-canvas/studio/CanvasCardBody';
 import { canvasHandlers } from '../src/node/gemini/tools/canvas-tools';
@@ -34,6 +34,10 @@ import type { ProjectArtifactController } from '../src/browser/generative-canvas
 import type { ProjectItem } from '../src/browser/generative-canvas/ProjectsModal';
 import type { CanvasArtifact, ChatSession, MarkdownDocumentData, Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 import type { VideoTimelineData } from '../src/browser/generative-canvas/services/video/videoTypes';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { writeBoxGroundGlb } from './helpers/box-ground-glb';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -352,10 +356,10 @@ describe('a <scratchboxPrimitive> tag is read exactly like a {type, data} envelo
         sameData(art, parseOrSynthesizeArtifact(prompt, json({ type: '3d-scene', title: 'Bus', data: { camera } }), { prompt, activeArtifact: openBus() } as any, []));
     });
 
-    it('a Python script the model filed under cppGenerator in the tag is run as Python', () => {
-        vi.spyOn(NativePythonRunnerService.getInstance(), 'runScriptSync').mockReturnValue({ success: true, exitCode: 0, stdout: '', stderr: '', executionTimeMs: 1, glbBase64: 'AAAA', glbPath: '/tmp/bus.glb' } as any);
+    it('a Python script the model filed under cppGenerator in the tag is run as Python', async () => {
+        vi.spyOn(NativePythonRunnerService.getInstance(), 'runScript').mockResolvedValue({ success: true, exitCode: 0, stdout: '', stderr: '', executionTimeMs: 1, glbBase64: 'AAAA', glbPath: '/tmp/bus.glb' } as any);
         const prompt = 'build a bus';
-        const art = parseOrSynthesizeArtifact(prompt, tag('3d-scene', { cppGenerator: { sourceCode: 'import scratchbox as sb\n# bus' } }), { prompt } as any, [])!;
+        const art = (await buildPendingPythonGenerator(parseOrSynthesizeArtifact(prompt, tag('3d-scene', { cppGenerator: { sourceCode: 'import scratchbox as sb\n# bus' } }), { prompt } as any, [])))!;
         const scene = art.data as Scene3DData;
         expect(scene.cppGenerator).toBeUndefined();
         expect(scene.pythonGenerator).toMatchObject({ sourceCode: 'import scratchbox as sb\n# bus', glbBase64: 'AAAA' });
@@ -413,6 +417,17 @@ describe('mount_canvas_primitive mounts what the model sent or fails', () => {
         const res: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: '3d-scene', title: 'Telescope', payload: { script: 'print(1)' } }, ctx);
         expect(res.status).toBe('failed');
         expect(res.resultPayload.error).toContain('wrote no model (GLB)');
+    });
+
+    it('stated counts are not stored; counts are measured from the GLB bytes', async () => {
+        const glbFile = path.join(os.tmpdir(), `sb_mount_counts_${process.pid}.glb`);
+        writeBoxGroundGlb(glbFile, [-5, 0, -5], [5, 20, 5], 100);
+        const glbBase64 = fs.readFileSync(glbFile).toString('base64');
+        fs.unlinkSync(glbFile);
+        const res: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: '3d-scene', title: 'Box', payload: { cppGenerator: { glbBase64, vertexCount: 99, triangleCount: 99 } } }, ctx);
+        const scene = res.resultPayload.artifact.data as Scene3DData;
+        expect(scene.cppGenerator?.vertexCount).toBe(1620);
+        expect(scene.cppGenerator?.triangleCount).toBe(810);
     });
 
     it('a GLB without stated counts gets none made up', async () => {

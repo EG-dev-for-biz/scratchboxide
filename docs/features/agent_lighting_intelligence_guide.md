@@ -22,7 +22,6 @@ The **Agent Lighting Intelligence Subsystem** equips Scratchbox IDE AI agents wi
 ┌────────────────────────────────────────────────────────┐
 │  Direct Dispatch Operators & Gemini Function Tools     │
 ├────────────────────────────────────────────────────────┤
-│  • sb_configure_gaffer_rig                             │
 │  • lighting_estimate_from_photo                        │
 │  • lighting_configure_gaffer_rig                       │
 └────────────────────────────────────────────────────────┘

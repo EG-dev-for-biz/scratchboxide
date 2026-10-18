@@ -51,6 +51,7 @@ describe('MapsImageryGroundingService (MIG via PanoID & 360 abilities)', () => {
         };
 
         const result = await MapsImageryGroundingService.queryVertexMapsImagery('Shibuya Crossing scramble', {
+            projectId: 'test-project',
             fetchImpl: mockFetch
         });
 

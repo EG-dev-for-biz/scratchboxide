@@ -17,6 +17,7 @@ import {
 } from './OrientedBoundingBoxSolver';
 import {
   UniversalVertexSpatialClusteringEngine,
+  vertexSampleStride,
   type SubmeshGeometryInput,
   type DecomposedCluster
 } from './UniversalVertexSpatialClusteringEngine';
@@ -78,8 +79,12 @@ export interface UniversalSeparatedObject {
   boundingBox: BoundingBox3DMetric;
   orientedBoundingBox: OrientedBoundingBox3D;
   tightnessGainPercent: number;
-  vertexCount: number;
-  triangleCount: number;
+  /** Vertices the object owns. Omitted when its vertices were only sampled (see sampledVertexCount). */
+  vertexCount?: number;
+  /** Triangles the object owns (for vertex clusters: triangles whose three vertices are all in it). Omitted when sampled. */
+  triangleCount?: number;
+  /** Set instead of vertexCount/triangleCount when the clustering sampled the source vertices: how many it kept. */
+  sampledVertexCount?: number;
   submeshIndices: number[];
   vertexIndices?: number[];
   extractedVertices?: [number, number, number][];
@@ -396,8 +401,7 @@ export class Universal3DObjectSeparationService {
       const dualResult: DualBoundingBoxResult = OrientedBoundingBoxSolver.compute(cluster.extractedVertices);
       const aabb = dualResult.aabb;
       const obb = dualResult.obb;
-      const vCount = dualResult.vertexCount;
-      const triCount = Math.floor(vCount * 1.8);
+      const counts = this.countClusterGeometry(cluster, submeshData);
 
       const routingRecommendation = cluster.routingRecommendation || this.determineRoutingRecommendation(cluster.category);
 
@@ -414,8 +418,7 @@ export class Universal3DObjectSeparationService {
         },
         orientedBoundingBox: obb,
         tightnessGainPercent: obb.tightnessGainPercent,
-        vertexCount: vCount,
-        triangleCount: triCount,
+        ...counts,
         submeshIndices: cluster.submeshIndices,
         vertexIndices: cluster.vertexIndices,
         ...(options.includeExtractedVertices ? { extractedVertices: cluster.extractedVertices } : {}),
@@ -609,6 +612,57 @@ export class Universal3DObjectSeparationService {
         metalness: cfg.metalness
       };
     });
+  }
+
+  /**
+   * Real vertex/triangle counts for a cluster. A submesh cluster owns whole submeshes; a vertex cluster owns the
+   * listed vertices and the triangles whose three vertices it owns. When the vertex clustering sampled any of the
+   * submeshes involved, only the sample size is reported.
+   */
+  private countClusterGeometry(
+    cluster: { submeshIndices: number[]; extractedVertices: [number, number, number][]; vertexIndices?: number[]; vertexSubmeshIndices?: number[] },
+    submeshes: SubmeshGeometryInput[]
+  ): { vertexCount?: number; triangleCount?: number; sampledVertexCount?: number } {
+    const bySubmesh = new Map(submeshes.map(sm => [sm.submeshIndex, sm]));
+    const trianglesOf = (sm: SubmeshGeometryInput) => Math.floor((sm.indices ? sm.indices.length : sm.count) / 3);
+
+    if (!cluster.vertexIndices || !cluster.vertexSubmeshIndices || cluster.vertexSubmeshIndices.length !== cluster.vertexIndices.length) {
+      let vertexCount = 0;
+      let triangleCount = 0;
+      for (const idx of cluster.submeshIndices) {
+        const sm = bySubmesh.get(idx);
+        if (!sm) continue;
+        vertexCount += sm.count;
+        triangleCount += trianglesOf(sm);
+      }
+      return { vertexCount, triangleCount };
+    }
+
+    const owned = new Map<number, Set<number>>();
+    for (let i = 0; i < cluster.vertexIndices.length; i++) {
+      const smIdx = cluster.vertexSubmeshIndices[i]!;
+      let set = owned.get(smIdx);
+      if (!set) owned.set(smIdx, (set = new Set()));
+      set.add(cluster.vertexIndices[i]!);
+    }
+    for (const smIdx of owned.keys()) {
+      const sm = bySubmesh.get(smIdx);
+      if (!sm || vertexSampleStride(sm.count) > 1) {
+        return { sampledVertexCount: cluster.vertexIndices.length };
+      }
+    }
+    let triangleCount = 0;
+    for (const [smIdx, set] of owned) {
+      const sm = bySubmesh.get(smIdx)!;
+      const tris = trianglesOf(sm);
+      for (let t = 0; t < tris; t++) {
+        const i0 = sm.indices ? sm.indices[t * 3]! : t * 3;
+        const i1 = sm.indices ? sm.indices[t * 3 + 1]! : t * 3 + 1;
+        const i2 = sm.indices ? sm.indices[t * 3 + 2]! : t * 3 + 2;
+        if (set.has(i0) && set.has(i1) && set.has(i2)) triangleCount++;
+      }
+    }
+    return { vertexCount: cluster.vertexIndices.length, triangleCount };
   }
 
   private determineRoutingRecommendation(category: UniversalSpatialCategory): DownstreamGeneratorRouting {

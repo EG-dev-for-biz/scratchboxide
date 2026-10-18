@@ -21,6 +21,7 @@ import {
 import { resolveModeForArtifact, sanitizeLayoutMode } from '../src/browser/generative-canvas/guardrails-service';
 import { morphArtifact } from '../src/browser/generative-canvas/primitive-transformer-engine';
 import { BrowserProxyService } from '../src/node/browser-proxy-service';
+import { browserHandlers } from '../src/node/gemini/tools/lens-browser-tools';
 import { readStudioSources } from './source-helpers';
 
 async function runInteractiveBrowserTests() {
@@ -243,10 +244,26 @@ async function runInteractiveBrowserTests() {
     assert.strictEqual(sanitized['content-type'], 'text/html; charset=utf-8', 'Must retain content-type');
 
     // Verify BrowserOS state management and action queuing logic
-    assert.strictEqual(proxyService.getActiveState().url, 'https://example.com');
+    // No page is invented before a browser reports one.
+    assert.strictEqual(proxyService.getActiveState(), null);
+    assert.throws(() => proxyService.updateState({ title: 'No url' }), (e: any) => e.code === 'BROWSER_NO_ACTIVE_PAGE');
+    assert.throws(() => proxyService.normalizeUrl('  '), /empty URL/);
     proxyService.updateState({ url: 'https://scratchbox.ai', title: 'Scratchbox Studio' });
-    assert.strictEqual(proxyService.getActiveState().url, 'https://scratchbox.ai');
-    assert.strictEqual(proxyService.getActiveState().title, 'Scratchbox Studio');
+    assert.strictEqual(proxyService.getActiveState()!.url, 'https://scratchbox.ai');
+    assert.strictEqual(proxyService.getActiveState()!.title, 'Scratchbox Studio');
+
+    // browser_snapshot / browser_extract_content fail with a typed error until real state arrives.
+    const ctx = { browserProxy: new BrowserProxyService() } as any;
+    const snapNone: any = await browserHandlers.browser_snapshot({}, ctx);
+    assert.strictEqual(snapNone.status, 'failed');
+    assert.strictEqual(snapNone.resultPayload.code, 'BROWSER_NO_ACTIVE_PAGE');
+    const extractNone: any = await browserHandlers.browser_extract_content({}, ctx);
+    assert.strictEqual(extractNone.resultPayload.code, 'BROWSER_NO_ACTIVE_PAGE');
+    ctx.browserProxy.updateState({ url: 'https://scratchbox.ai', accessibilityTree: '[1] button "Go"', markdown: '# Hello' });
+    const snap: any = await browserHandlers.browser_snapshot({}, ctx);
+    assert.strictEqual(snap.resultPayload.data.accessibilityTree, '[1] button "Go"');
+    const extract: any = await browserHandlers.browser_extract_content({}, ctx);
+    assert.strictEqual(extract.resultPayload.data.markdown, '# Hello');
 
     const actionPromise = proxyService.queueAction('click', { elementId: '5' });
     const pending = proxyService.getPendingActions();
