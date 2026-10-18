@@ -97,7 +97,6 @@ import { EDGE_REGISTRATION_BUDGET_MS, describeEdgeRegistration, type EdgeRegistr
 import { runPanoRegistrationOffThread } from './pano-registration-run';
 import { describeJointRegistration, JOINT_REGISTRATION_BUDGET_MS } from './pano-joint-registration';
 import { LOO_BUDGET_MS } from './texture-fit-metric';
-import { jointRegistrationEnabled } from './round5-switch';
 import { registerPanos, type Registration } from './pano-registration';
 import { MATCH_TIMEOUT_MS, matchRingImages, planRingViews, runViewMatch, type MatchResult } from './view-match';
 import { castCamera, fitFaces } from './survey-casting';
