@@ -399,7 +399,7 @@ describe('Street View projection bake', () => {
         expect(res.provenance.filter(p => p.panoIds!.length === 2).every(p => /of one pano/.test(p.method))).toBe(true);
     });
 
-    it('de-lights through the shared helpers: solar irradiance per view when its capture time is known, shadow lift after', async () => {
+    it('de-lights through the shared helpers: solar only with a capture instant and a measurable ambient, shadow lift after', async () => {
         const atlas = facadeAtlas(32);
         const views = rig([facadeRect()], { ids: ['pano-front'] });
         views[0].view.captureDate = '2024-06';
@@ -408,8 +408,11 @@ describe('Street View projection bake', () => {
         expect(noTime.report.views[0].solarDelit).toBe(false);
         views[0].view.captureDate = '2024-06-12T15:30:00Z';
         const res = await bake(views, atlas, { delight: { latitude: 41.9, longitude: 12.48, liftCap: false } });
-        expect(res.report.views[0].solarDelit).toBe(true);
-        // one plane: E(n) is the same for every texel, so the solar step is neutral and the result is the shared lift of the truth
+        // one plane has one N.L, so the ambient-to-sun ratio cannot be measured from it: no solar step, and the reason is recorded
+        expect(res.report.views[0].solarDelit).toBe(false);
+        expect(res.report.views[0].solarFit).toMatchObject({ status: 'skipped' });
+        expect(res.degradations.some((d) => d.reasonCode === 'solar_fit_not_measurable' && /too few texels/.test(d.reason))).toBe(true);
+        // the result is the shared lift of the truth
         const lifted = (u: number, v: number): Vec3 => {
             const g = facadeAlbedo(u, v).map((c) => SRGB_TO_LINEAR[Math.round(c)]) as Vec3;
             return delightLinearRgb(g[0], g[1], g[2]).map((c) => linearToSrgb255(c)) as Vec3;

@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import type { FloaterPruningOptions, FloaterPruningReport } from '../../common/spatial/splat-floater-pruning';
 import { SplatService, SplatPoint } from './splat-service';
 import type { SceneDepthAnnotation } from '../../common/scene-depth-protocol';
 import { InvalidInputError, MissingInputError } from '../../common/errors/pipeline-errors';
@@ -42,6 +43,9 @@ export interface SingleImageConversionOptions {
     splatScaleMultiplier?: number;
     splatThicknessRatio?: number;
     pose?: CameraPose3D;
+    /** kNN floater pruning after the bake (default on; false disables). */
+    floaterPruning?: FloaterPruningOptions | false;
+    onFloaterReport?: (report: FloaterPruningReport) => void;
 }
 
 export interface BoxCollider3D {
@@ -89,6 +93,9 @@ export interface MultiViewConversionOptions {
     edgeTau?: number;
     minDepth?: number;
     maxDepth?: number;
+    /** kNN floater pruning after fusion (default on; false disables). */
+    floaterPruning?: FloaterPruningOptions | false;
+    onFloaterReport?: (report: FloaterPruningReport) => void;
 }
 
 export type VideoTrajectoryType = 'orbit' | 'dolly' | 'pan' | 'solve';
@@ -118,6 +125,9 @@ export interface VideoKeyframeConversionOptions {
     edgeTau?: number;
     minDepth?: number;
     maxDepth?: number;
+    /** kNN floater pruning after fusion (default on; false disables). */
+    floaterPruning?: FloaterPruningOptions | false;
+    onFloaterReport?: (report: FloaterPruningReport) => void;
 }
 
 export interface PublicSourceItem {
@@ -435,7 +445,7 @@ export class ImageToSplatService {
             }
         }
 
-        return splats;
+        return SplatService.applyFloaterPruning(splats, options.floaterPruning, options.onFloaterReport);
     }
 
     /**
@@ -468,12 +478,15 @@ export class ImageToSplatService {
                 edgeTau,
                 minDepth,
                 maxDepth,
-                pose: view.pose
+                pose: view.pose,
+                floaterPruning: false
             });
             allViewSplats.push(splats);
         }
 
-        return SplatService.fuseMultiViewSplats(allViewSplats, { voxelSize, densifyMaxScale });
+        return SplatService.fuseMultiViewSplats(allViewSplats, {
+            voxelSize, densifyMaxScale, floaterPruning: options.floaterPruning, onFloaterReport: options.onFloaterReport
+        });
     }
 
     /**
@@ -554,13 +567,16 @@ export class ImageToSplatService {
                 edgeTau,
                 minDepth,
                 maxDepth,
-                pose
+                pose,
+                floaterPruning: false
             });
 
             allKeyframeSplats.push(splats);
         }
 
-        return SplatService.fuseMultiViewSplats(allKeyframeSplats, { voxelSize, densifyMaxScale });
+        return SplatService.fuseMultiViewSplats(allKeyframeSplats, {
+            voxelSize, densifyMaxScale, floaterPruning: options.floaterPruning, onFloaterReport: options.onFloaterReport
+        });
     }
 
     /**
@@ -852,7 +868,7 @@ export class ImageToSplatService {
      */
     static convertSingleImageWithInpainting(options: SingleImageConversionOptions): SplatPoint[] {
         // 1. Primary foreground and visible surface splats
-        const splats = ImageToSplatService.convertSingleImageToSplat(options);
+        const splats = ImageToSplatService.convertSingleImageToSplat({ ...options, floaterPruning: false });
 
         const {
             rgbPixels,
@@ -959,7 +975,7 @@ export class ImageToSplatService {
             }
         }
 
-        return splats.concat(inpaintSplats);
+        return SplatService.applyFloaterPruning(splats.concat(inpaintSplats), options.floaterPruning, options.onFloaterReport);
     }
 
     /**

@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import type { FloaterPruningReport } from '../../../common/spatial/splat-floater-pruning';
 import * as path from 'path';
 import * as THREE from 'three';
 import { getGoogle3DTilesFullTexture, getGoogle3DTilesClay, runTileClayBlockoutRunner, geocode3DTilesAddress, type Google3DTile3DObjectResult } from '../../spatial/Google3DTileBlockoutPipelineService';
@@ -2533,6 +2534,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 success: synthesisRes.success,
                 fusedSplatPath: synthesisRes.fusedSplatPath,
                 fusedSpzPath: synthesisRes.fusedSpzPath,
+                floatersPruned: synthesisRes.floatersPruned,
                 originalSplatPath: synthesisRes.originalSplatPath,
                 numOriginalSplats: synthesisRes.numOriginalSplats,
                 numFusedSplats: synthesisRes.numFusedSplats,
@@ -2545,7 +2547,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 farPlanePixels: depthRes.farPlanePixels,
                 metaPath: synthesisRes.metaPath
             } as unknown as ToolResultPayload,
-            summaryResult: `Built walkable 3DGS world: ${synthesisRes.numFusedSplats} fused Gaussians across ${synthesisRes.activePoses.length + 1} perspectives (original: ${synthesisRes.numOriginalSplats}). Depth: ${depthRes.modelUsed}, made metric by fitting the floor to the given ${eyeHeight.toFixed(2)} m eye height (${depthRes.scaleCorrection.toFixed(3)} m per model unit); ${depthRes.farPlanePixels.toLocaleString()} pixels at the far plane. Wrote .splat, NGSP v2 .spz and .meta.json sidecar.`
+            summaryResult: `Built walkable 3DGS world: ${synthesisRes.numFusedSplats} fused Gaussians across ${synthesisRes.activePoses.length + 1} perspectives (original: ${synthesisRes.numOriginalSplats}; ${synthesisRes.floatersPruned} floaters pruned). Depth: ${depthRes.modelUsed}, made metric by fitting the floor to the given ${eyeHeight.toFixed(2)} m eye height (${depthRes.scaleCorrection.toFixed(3)} m per model unit); ${depthRes.farPlanePixels.toLocaleString()} pixels at the far plane. Wrote .splat, NGSP v2 .spz and .meta.json sidecar.`
         };
     },
 
@@ -2602,6 +2604,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             throw new GeneratorFailedError('python', `the depth map is ${depth.width}x${depth.height}, but ${inputImagePath} decodes to ${decoded.width}x${decoded.height}`);
         }
         const metricDepths = ImageToSplatService.planarToRayDepths(depth.depths, decoded.width, decoded.height, fovDegrees);
+        let floaterReport: FloaterPruningReport | undefined;
         const splats = ImageToSplatService.convertSingleImageToSplat({
             rgbPixels: new Uint8Array(decoded.rgba),
             width: decoded.width,
@@ -2611,7 +2614,8 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             fovDegrees,
             stride,
             minDepth,
-            maxDepth
+            maxDepth,
+            onFloaterReport: r => { floaterReport = r; }
         });
         if (splats.length === 0) {
             throw new GeneratorFailedError('python', `no pixel of ${inputImagePath} has a depth between ${minDepth} and ${maxDepth} (${depth.depthUnits}; the model's depths run ${depth.minDepth.toFixed(2)}-${depth.maxDepth.toFixed(2)})`);
@@ -2639,6 +2643,8 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 spzPath,
                 splatUrl,
                 spzUrl,
+                floatersPruned: floaterReport?.pruned ?? 0,
+                floaterPruning: floaterReport,
                 splatCount: splats.length,
                 width: decoded.width,
                 height: decoded.height,
@@ -2659,7 +2665,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                     }
                 }
             } as unknown as ToolResultPayload,
-            summaryResult: `Built ${splats.length.toLocaleString()} 3D Gaussian splats from ${inputImagePath} with depth from ${depth.modelUsed} (${depth.minDepth.toFixed(2)}-${depth.maxDepth.toFixed(2)} ${depth.depthUnits === 'metres' ? 'm' : 'relative units, median 1 (pass medianDepthMeters for metres)'}), ${fovGiven ? `vertical FOV ${fovDegrees} deg` : 'an assumed vertical FOV of 65 deg (pass fovDegrees for the real lens)'}. Saved .splat (${(splatBuffer.length / 1024 / 1024).toFixed(2)} MB) and .spz (${(spzBuffer.length / 1024 / 1024).toFixed(2)} MB) to ${splatPath}.`
+            summaryResult: `Built ${splats.length.toLocaleString()} 3D Gaussian splats from ${inputImagePath} with depth from ${depth.modelUsed} (${depth.minDepth.toFixed(2)}-${depth.maxDepth.toFixed(2)} ${depth.depthUnits === 'metres' ? 'm' : 'relative units, median 1 (pass medianDepthMeters for metres)'}), ${fovGiven ? `vertical FOV ${fovDegrees} deg` : 'an assumed vertical FOV of 65 deg (pass fovDegrees for the real lens)'}. ${floaterReport?.pruned ? `Pruned ${floaterReport.pruned.toLocaleString()} floaters (kNN isolation > ${floaterReport.threshold.toFixed(2)}). ` : ''}Saved .splat (${(splatBuffer.length / 1024 / 1024).toFixed(2)} MB) and .spz (${(spzBuffer.length / 1024 / 1024).toFixed(2)} MB) to ${splatPath}.`
         };
     },
 
@@ -2888,7 +2894,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const delit = (result.submeshes || []).some(sub => sub.solarDelightingApplied === true);
         const delightNote = delit
             ? `with NOAA solar de-lighting for ${isoDate} at ${lat}, ${lng}`
-            : `without solar de-lighting (${delightRequested ? 'the PBR decomposition did not apply it' : `it needs ${isoDate === undefined ? 'the isoDate the images depict' : 'anchor coordinates in the stations file'}`})`;
+            : `without solar de-lighting (${delightRequested ? `not applied: ${[...new Set((result.submeshes || []).map(sub => sub.pbrResult?.solarDelighting?.skippedReason).filter(Boolean))].join('; ') || 'the PBR decomposition did not run it'}` : `it needs ${isoDate === undefined ? 'the isoDate the images depict' : 'anchor coordinates in the stations file'}`})`;
 
         return {
             resultPayload: {

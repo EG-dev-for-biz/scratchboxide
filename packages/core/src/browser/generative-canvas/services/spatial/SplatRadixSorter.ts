@@ -8,9 +8,34 @@
  ********************************************************************************/
 
 /**
- * High-performance 16-bit counting/radix sorter for 3D Gaussian Splats.
- * Supports synchronous O(N) sorting and asynchronous Web Worker sorting
- * off the main thread to sustain 60 FPS under >1M splat counts.
+ * Back-to-front sort of splat indices by view-axis depth: an LSD radix sort over the full 32-bit float key in two
+ * 16-bit passes, so ordering keeps float32 precision at any depth range (a single 16-bit bucket pass over min..max
+ * depth loses it at geo-tile scale: 1e4 m / 65536 = 15 cm buckets). Self-contained so the worker runs the same code.
+ * `dists`' buffer is reused as the key array.
+ */
+export function radixSortBackToFront(dists: Float32Array, count: number, out: Uint32Array, scratch: Uint32Array, counts: Uint32Array): void {
+  const keys = new Uint32Array(dists.buffer, dists.byteOffset, count);
+  // Order-preserving float -> uint map, inverted so ascending key = descending depth (furthest first).
+  for (let i = 0; i < count; i++) {
+    const f = keys[i];
+    keys[i] = ~((f & 0x80000000) !== 0 ? ~f : (f | 0x80000000)) >>> 0;
+  }
+  // Pass 1: low 16 bits, identity -> scratch.
+  counts.fill(0);
+  for (let i = 0; i < count; i++) counts[keys[i] & 0xffff]++;
+  let sum = 0;
+  for (let k = 0; k < 65536; k++) { const c = counts[k]; counts[k] = sum; sum += c; }
+  for (let i = 0; i < count; i++) scratch[counts[keys[i] & 0xffff]++] = i;
+  // Pass 2: high 16 bits, stable, scratch -> out.
+  counts.fill(0);
+  for (let i = 0; i < count; i++) counts[keys[i] >>> 16]++;
+  sum = 0;
+  for (let k = 0; k < 65536; k++) { const c = counts[k]; counts[k] = sum; sum += c; }
+  for (let i = 0; i < count; i++) { const idx = scratch[i]; out[counts[keys[idx] >>> 16]++] = idx; }
+}
+
+/**
+ * Splat depth sorter: synchronous O(N) two-pass radix sort, with optional Web Worker dispatch off the main thread.
  */
 export class SplatRadixSorter {
   private worker?: Worker;
@@ -20,7 +45,8 @@ export class SplatRadixSorter {
 
   // Reusable buffers for synchronous radix sorting
   private syncCounts = new Uint32Array(65536);
-  private syncOffsets = new Uint32Array(65536);
+  private syncDists?: Float32Array;
+  private syncScratch?: Uint32Array;
 
   constructor(enableWorker = false) {
     if (enableWorker && typeof window !== 'undefined' && typeof Worker !== 'undefined') {
@@ -28,59 +54,31 @@ export class SplatRadixSorter {
     }
   }
 
-  private initWorker(): void {
-    const workerCode = `
+  /** Source of the sort worker (the same radixSortBackToFront as the synchronous path). */
+  public static workerSource(): string {
+    return `
       self.onmessage = function(e) {
         const { taskId, positions, cx, cy, cz, dx, dy, dz, count } = e.data;
         const posView = new Float32Array(positions);
         const dists = new Float32Array(count);
-        let minDist = Infinity;
-        let maxDist = -Infinity;
-
         for (let i = 0; i < count; i++) {
           const px = posView[i * 3 + 0] - cx;
           const py = posView[i * 3 + 1] - cy;
           const pz = posView[i * 3 + 2] - cz;
-          const d = px * dx + py * dy + pz * dz;
-          dists[i] = d;
-          if (d < minDist) minDist = d;
-          if (d > maxDist) maxDist = d;
+          dists[i] = px * dx + py * dy + pz * dz;
         }
 
         const outIndices = new Uint32Array(count);
-        const range = maxDist - minDist;
-
-        if (range > 1e-6) {
-          const BUCKETS = 65536;
-          const counts = new Uint32Array(BUCKETS);
-          const keys = new Uint16Array(count);
-          const norm = 65535.0 / range;
-
-          for (let i = 0; i < count; i++) {
-            const k = Math.min(65535, Math.max(0, ((dists[i] - minDist) * norm) | 0));
-            keys[i] = k;
-            counts[k]++;
-          }
-
-          // Back-to-front cumulative prefix sum (descending order)
-          const offsets = new Uint32Array(BUCKETS);
-          let sum = 0;
-          for (let k = BUCKETS - 1; k >= 0; k--) {
-            offsets[k] = sum;
-            sum += counts[k];
-          }
-
-          for (let i = 0; i < count; i++) {
-            const k = keys[i];
-            outIndices[offsets[k]++] = i;
-          }
-        } else {
-          for (let i = 0; i < count; i++) outIndices[i] = i;
-        }
+        radixSortBackToFront(dists, count, outIndices, new Uint32Array(count), new Uint32Array(65536));
 
         self.postMessage({ taskId, indices: outIndices.buffer }, [outIndices.buffer]);
       };
+      const radixSortBackToFront = (${radixSortBackToFront.toString()});
     `;
+  }
+
+  private initWorker(): void {
+    const workerCode = SplatRadixSorter.workerSource();
 
     try {
       const blob = new Blob([workerCode], { type: 'application/javascript' });
@@ -103,8 +101,7 @@ export class SplatRadixSorter {
   }
 
   /**
-   * Fast synchronous 16-bit counting sort: O(N) runtime.
-   * Sorts back-to-front (furthest splats first) along the camera direction.
+   * Synchronous two-pass 32-bit radix sort, O(N). Sorts back-to-front (furthest splats first) along the camera direction.
    */
   public sortSync(
     positions: Float32Array,
@@ -114,56 +111,20 @@ export class SplatRadixSorter {
     outIndices?: Uint32Array
   ): Uint32Array {
     const indices = outIndices && outIndices.length >= count ? outIndices : new Uint32Array(count);
-    const dists = new Float32Array(count);
-
-    let minDist = Infinity;
-    let maxDist = -Infinity;
-
+    if (!this.syncDists || this.syncDists.length < count) {
+      this.syncDists = new Float32Array(count);
+      this.syncScratch = new Uint32Array(count);
+    }
+    const dists = this.syncDists;
     const cx = camPos.x, cy = camPos.y, cz = camPos.z;
     const dx = camDir.x, dy = camDir.y, dz = camDir.z;
-
     for (let i = 0; i < count; i++) {
       const px = positions[i * 3 + 0] - cx;
       const py = positions[i * 3 + 1] - cy;
       const pz = positions[i * 3 + 2] - cz;
-      const d = px * dx + py * dy + pz * dz;
-      dists[i] = d;
-      if (d < minDist) minDist = d;
-      if (d > maxDist) maxDist = d;
+      dists[i] = px * dx + py * dy + pz * dz;
     }
-
-    const range = maxDist - minDist;
-    if (range <= 1e-6) {
-      for (let i = 0; i < count; i++) indices[i] = i;
-      return indices;
-    }
-
-    const BUCKETS = 65536;
-    const counts = this.syncCounts;
-    counts.fill(0);
-
-    const keys = new Uint16Array(count);
-    const norm = 65535.0 / range;
-
-    for (let i = 0; i < count; i++) {
-      const k = Math.min(65535, Math.max(0, ((dists[i] - minDist) * norm) | 0));
-      keys[i] = k;
-      counts[k]++;
-    }
-
-    // Cumulative sum in reverse order: bucket 65535 (furthest) gets first offset
-    const offsets = this.syncOffsets;
-    let sum = 0;
-    for (let k = BUCKETS - 1; k >= 0; k--) {
-      offsets[k] = sum;
-      sum += counts[k];
-    }
-
-    for (let i = 0; i < count; i++) {
-      const k = keys[i];
-      indices[offsets[k]++] = i;
-    }
-
+    radixSortBackToFront(dists, count, indices, this.syncScratch!, this.syncCounts);
     return indices;
   }
 

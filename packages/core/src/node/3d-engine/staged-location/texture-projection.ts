@@ -43,6 +43,7 @@ import {
     type BakedTexturePlanes, type ConfidencePlane, type DepthMap, type ProjectionBakeInput, type ProjectionView,
     type TexelProvenance, type TexturePassDegradation
 } from '../../../common/spatial/texture-pass-contracts';
+import { fitSolarShading, type SolarShadingFitResult } from '../../spatial/solar-shading-fit';
 import { delightLinearPlane, PHOTOGRAMMETRIC_DELIGHT, TEXTURE_LIFT_CAP, type DelightPlaneReport } from '../../../common/spatial/photogrammetric-delight';
 import { AlgorithmicUvEngine } from '../../spatial/AlgorithmicUvEngine';
 import { refinePosesFromAlignment, type PanoRefinement, type PoseRefineOptions } from './texture-pose-refine';
@@ -152,6 +153,8 @@ export interface ProjectionViewReport {
     paletteGate?: PaletteGateReport;
     /** True when this view's samples were divided by its solar irradiance. */
     solarDelit: boolean;
+    /** The ambient-to-sun ratio measured from this view's samples, or why it could not be. */
+    solarFit?: SolarShadingFitResult;
 }
 
 export interface ProjectionBakeReport {
@@ -655,29 +658,42 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
     }
 
     // ---- 4a: solar de-light per view (needs a place and a capture time of day) -------------------------------------
+    // a capture instant: a date, a time of day and a UTC offset (Street View metadata gives only the month)
+    const isCaptureInstant = (d?: string): d is string => !!d && /T\d{2}:\d{2}/.test(d) && /(Z|[+-]\d{2}:?\d{2})$/.test(d) && !Number.isNaN(Date.parse(d));
     const solarDelit = views.map(() => false);
+    const solarFits: Array<SolarShadingFitResult | undefined> = views.map(() => undefined);
     if (o.delight) {
         const toEnu = o.delight.layerToEnu ?? ((v: Vec3) => v);
         views.forEach((view, k) => {
             const s = samples[k];
             if (!s.texel.length) return;
             const date = view.captureDate;
-            if (!date || !/T\d{2}:\d{2}/.test(date) || Number.isNaN(Date.parse(date))) {
+            if (!isCaptureInstant(date)) {
                 degradations.push({ stage: 'bake-projection', reasonCode: 'capture_time_unknown', layerKey: atlas.layerKey,
-                    reason: `Pano ${view.panoId} has no capture time of day (${date ?? 'no date'}), so its sun is unknown and its texels were not solar de-lit.` });
+                    reason: `Pano ${view.panoId} has no capture instant (${date ?? 'no date'}; a time of day and UTC offset are needed), so its sun is unknown and its texels were not solar de-lit.` });
                 return;
             }
             const sun = AlgorithmicUvEngine.resolveSolarSunVector({ latitude: o.delight!.latitude, longitude: o.delight!.longitude, timestampIso: date });
-            const E = new Float64Array(s.texel.length);
-            let mean = 0;
-            for (let i = 0; i < s.texel.length; i++) {
+            // E = max(0, N.L) + k with the ambient-to-sun ratio k measured from this view's own samples (charts = atlas maps)
+            const m = s.texel.length;
+            const cosSun = new Float64Array(m), lum = new Float64Array(m), group = new Int32Array(m);
+            for (let i = 0; i < m; i++) {
                 const q = s.texel[i] * 3;
-                const nn = toEnu([normal[q], normal[q + 1], normal[q + 2]]);
-                E[i] = AlgorithmicUvEngine.computeSolarIrradiance(nn, sun);
-                mean += E[i];
+                cosSun[i] = AlgorithmicUvEngine.solarCosine(toEnu([normal[q], normal[q + 1], normal[q + 2]]), sun);
+                lum[i] = 0.2126 * s.rgb[i * 3] + 0.7152 * s.rgb[i * 3 + 1] + 0.0722 * s.rgb[i * 3 + 2];
+                group[i] = mapIndex[s.texel[i]];
             }
-            mean /= s.texel.length;
-            for (let i = 0; i < s.texel.length; i++) { const g = mean / E[i]; for (let c = 0; c < 3; c++) s.rgb[i * 3 + c] *= g; }
+            const fit = sun[1] > 0 ? fitSolarShading({ luminance: lum, cosSun, group }) : undefined;
+            solarFits[k] = fit;
+            if (!fit || fit.status === 'skipped') {
+                degradations.push({ stage: 'bake-projection', reasonCode: 'solar_fit_not_measurable', layerKey: atlas.layerKey,
+                    reason: `Pano ${view.panoId} (${date}): ${fit ? fit.reason : 'the sun was below the horizon'}; its texels were not solar de-lit.` });
+                return;
+            }
+            for (let i = 0; i < m; i++) {
+                const g = Math.min(fit.gainCap, fit.meanIrradiance / (cosSun[i] + fit.ambientToSun));
+                for (let c = 0; c < 3; c++) s.rgb[i * 3 + c] *= g;
+            }
             solarDelit[k] = true;
         });
     }
@@ -760,7 +776,7 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
         if (o.delight) {
             views.forEach((view, k) => {
                 const date = view.captureDate;
-                if (!date || !/T\d{2}:\d{2}/.test(date) || Number.isNaN(Date.parse(date))) return;
+                if (!isCaptureInstant(date)) return;
                 sunOf[k] = AlgorithmicUvEngine.resolveSolarSunVector({ latitude: o.delight!.latitude, longitude: o.delight!.longitude, timestampIso: date }) as Vec3;
             });
         }
@@ -1105,7 +1121,7 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
             ...(poseRefine ? { poseRefine } : {}),
             ...(regions ? { regions } : {}),
             ...(poisson ? { poisson } : {}),
-            views: views.map((v, k) => ({ panoId: v.panoId, samples: samples[k].texel.length, gain: gains[k], anchor: anchors.has(k), paletteGate: gateReports[k], solarDelit: solarDelit[k] }))
+            views: views.map((v, k) => ({ panoId: v.panoId, samples: samples[k].texel.length, gain: gains[k], anchor: anchors.has(k), paletteGate: gateReports[k], solarDelit: solarDelit[k], ...(solarFits[k] ? { solarFit: solarFits[k] } : {}) }))
         }
     };
 }

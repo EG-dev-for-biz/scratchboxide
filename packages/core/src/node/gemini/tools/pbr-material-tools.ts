@@ -225,7 +225,7 @@ export const PBR_MATERIAL_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 solarCoordinates: {
                     type: 'OBJECT',
-                    description: 'For solar inverse de-lighting, used only by "elevation_stratified_conformal" (others list it under ignoredOptions): { latitude: number, longitude: number, timestampIso: string }, the place and UTC time whose sun lit the source imagery (all three are required; the current time is not assumed).'
+                    description: 'For solar inverse de-lighting, used only by "elevation_stratified_conformal" (others list it under ignoredOptions): { latitude: number, longitude: number, timestampIso: string }, the place and capture instant (date, time of day and UTC offset) whose sun lit the source imagery (all three are required; no date or time is assumed). The sky-to-sun light ratio is measured from the texture itself; when the texture cannot pin it down the pass changes nothing and reports why.'
                 },
                 carrierSpinePoints: {
                     type: 'ARRAY',

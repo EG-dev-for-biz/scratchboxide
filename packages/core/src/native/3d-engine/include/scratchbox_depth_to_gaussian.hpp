@@ -12,6 +12,7 @@
 
 #include "scratchbox_math.hpp"
 #include "scratchbox_spz.hpp"
+#include "scratchbox_splat_floater_prune.hpp"
 #include <vector>
 #include <cmath>
 #include <cstdint>
@@ -310,10 +311,12 @@ public:
      */
     static std::vector<GaussianSplat> fuseMultiViewSplats(
         const std::vector<std::vector<GaussianSplat>>& viewSplats,
-        float voxelSize = 0.04f
+        float voxelSize = 0.04f,
+        const splatprune::FloaterPruneOptions& floaterPruning = {},
+        splatprune::FloaterPruneReport* floaterReport = nullptr
     ) {
         if (viewSplats.empty()) return {};
-        if (viewSplats.size() == 1) return viewSplats[0];
+        if (viewSplats.size() == 1) return splatprune::pruneFloaters(viewSplats[0], floaterPruning, floaterReport);
 
         struct VoxelKey {
             int64_t x, y, z;
@@ -359,13 +362,20 @@ public:
             }
         }
 
+        // Emit in voxel-key order (hash-map iteration order is not part of the result), then drop kNN floaters.
+        std::vector<std::pair<VoxelKey, GaussianSplat>> cells(grid.begin(), grid.end());
+        std::sort(cells.begin(), cells.end(), [](const auto& a, const auto& b) {
+            if (a.first.x != b.first.x) return a.first.x < b.first.x;
+            if (a.first.y != b.first.y) return a.first.y < b.first.y;
+            return a.first.z < b.first.z;
+        });
         std::vector<GaussianSplat> result;
-        result.reserve(grid.size());
-        for (const auto& pair : grid) {
-            result.push_back(pair.second);
+        result.reserve(cells.size());
+        for (const auto& cell : cells) {
+            result.push_back(cell.second);
         }
 
-        return result;
+        return splatprune::pruneFloaters(result, floaterPruning, floaterReport);
     }
 
     /**

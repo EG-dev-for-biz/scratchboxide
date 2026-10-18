@@ -500,8 +500,9 @@ export function createSplatStudioRouter(): Router {
             const { view, stride = 1, edgeTau = 0.08, minDepth = 0.2, maxDepth = 200.0 } = req.body || {};
             if (!view?.rgbPixels || !view.width || !view.height) throw new MissingInputError('single-to-splat', 'view', 'rgbPixels, width and height are required');
             const { views, depthUnits, depthModel } = await withModelDepth([{ ...view, rgbPixels: toPixels(view.rgbPixels) }], medianOf(req.body));
-            const splats = ImageToSplatService.convertSingleImageToSplat({ ...views[0], channels: views[0].channels ?? 3, stride, edgeTau, minDepth, maxDepth });
-            res.json({ success: true, splatCount: splats.length, splats, depthModel, depthUnits: depthUnits[0] });
+            let floatersPruned = 0;
+            const splats = ImageToSplatService.convertSingleImageToSplat({ ...views[0], channels: views[0].channels ?? 3, stride, edgeTau, minDepth, maxDepth, onFloaterReport: r => { floatersPruned = r.pruned; } });
+            res.json({ success: true, splatCount: splats.length, floatersPruned, splats, depthModel, depthUnits: depthUnits[0] });
         } catch (err: any) {
             sendSplatFailure(res, err, 'Single image splat conversion failed');
         }

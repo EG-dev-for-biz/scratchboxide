@@ -35,12 +35,15 @@ int main(int argc, char** argv) {
 
     std::string mode = "preserve-100-lock";
     bool enableSolar = false;
+    Vec3 sun(0.0f, 0.0f, 0.0f); // --sun=x,y,z: the capture's sun (none is assumed; without it solar de-lighting is skipped)
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--mode=conformal" || arg == "--conformal") {
             mode = "conformal-reparameterize";
         } else if (arg == "--solar-delighting" || arg == "--solar") {
             enableSolar = true;
+        } else if (arg.rfind("--sun=", 0) == 0) {
+            std::sscanf(arg.c_str() + 6, "%f,%f,%f", &sun.x, &sun.y, &sun.z);
         }
     }
 
@@ -79,12 +82,13 @@ int main(int argc, char** argv) {
     options.synthesizePbrSuite = true;
     options.decomposeAlbedo = true;
     options.enableSolarDelighting = enableSolar;
+    options.solarEphemeris.sunVector = sun;
 
     auto result = processMeshUvEngine(mesh, albedo, options);
 
     std::cout << "[Scratchbox UV Engine] Result: " << (result.success ? "SUCCESS" : "FAILED") << "\n";
     std::cout << "  Mode: " << mode << "\n";
-    std::cout << "  Solar De-Lighting: " << (enableSolar ? "ENABLED (NOAA Ephemeris + SH9)" : "DISABLED") << "\n";
+    std::cout << "  Solar De-Lighting: " << (enableSolar ? "ENABLED (given sun, measured ambient-to-sun ratio)" : "DISABLED") << "\n";
     std::cout << "  Processed Vertices: " << result.processedVertices << "\n";
     std::cout << "  Processed Triangles: " << result.processedTriangles << "\n";
     std::cout << "  Processed Texels: " << result.processedTexels << "\n";

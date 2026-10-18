@@ -5,23 +5,27 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { AlgorithmicUvEngine } from '../src/node/spatial/AlgorithmicUvEngine';
+import { AlgorithmicUvEngine, SolarDelightingSunUnknownError } from '../src/node/spatial/AlgorithmicUvEngine';
 import { decodePng, encodePng } from '../src/node/texture-processing';
-import { decodeImageToRgba } from '../src/node/image-codec-ffmpeg';
 import { REPO_ROOT } from './helpers/requirements';
 
-const SHOTS = path.join(REPO_ROOT, 'test-results/screenshots/delight_ada');
 const SUN: [number, number, number] = [0.3, 0.8, 0.52];
-const SKY: [number, number, number][] = [[0.6, 0.7, 0.8], [0.2, 0.25, 0.4], [0.1, 0.1, 0.2], [0.05, 0.05, 0.1], [0, 0, 0], [0, 0, 0], [0.05, 0.05, 0.1], [0, 0, 0], [0, 0, 0]];
+const K = 0.3; // ambient-to-sun ratio the bake uses; the engine measures it
 const UP: [number, number, number] = [0, 1, 0];
 const SOUTH: [number, number, number] = [0, 0, 1];
-const E = (n: [number, number, number]) => AlgorithmicUvEngine.computeSolarIrradiance(n, SUN, SKY);
+const NORTH: [number, number, number] = [0, 0, -1];
+const E = (n: [number, number, number]) => AlgorithmicUvEngine.computeSolarIrradiance(n, SUN, K);
+const toSrgb = (c: number) => Math.round(255 * (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055));
 
-/** A roof quad (+Y) sampling the left half of one 32x16 texture and a wall quad (+Z) sampling the right half; no NORMAL. */
+/**
+ * A roof quad (+Y), a south wall (+Z, oblique to the sun) and a north wall (-Z, turned away from it) sampling the left,
+ * middle and right thirds of one 48x16 texture; no NORMAL.
+ */
 function roofAndWallGlb(texture: Buffer, instanced = true): Buffer {
-    const positions = new Float32Array([0, 0, 0, 0, 0, 1, 1, 0, 1, 1, 0, 0, /* wall */ 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]);
-    const uvs = new Float32Array([0, 0, 0, 1, 0.5, 1, 0.5, 0, /* wall */ 0.5, 0, 1, 0, 1, 1, 0.5, 1]);
-    const indices = new Uint16Array([0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]);
+    const positions = new Float32Array([0, 0, 0, 0, 0, 1, 1, 0, 1, 1, 0, 0, /* south */ 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, /* north */ 1, 0, 1, 0, 0, 1, 0, 1, 1, 1, 1, 1]);
+    const t = 1 / 3, u = 2 / 3;
+    const uvs = new Float32Array([0, 0, 0, 1, t, 1, t, 0, /* south */ t, 0, u, 0, u, 1, t, 1, /* north */ u, 0, 1, 0, 1, 1, u, 1]);
+    const indices = new Uint16Array([0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7, 8, 9, 10, 8, 10, 11]);
     const parts: Buffer[] = [];
     const bufferViews: any[] = [];
     let length = 0;
@@ -44,9 +48,9 @@ function roofAndWallGlb(texture: Buffer, instanced = true): Buffer {
         nodes: instanced ? [{ mesh: 0 }] : [],
         meshes: [{ primitives: [{ attributes: { POSITION: 0, TEXCOORD_0: 1 }, indices: 2, material: 0 }] }],
         accessors: [
-            { bufferView: 0, componentType: 5126, count: 8, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 1] },
-            { bufferView: 1, componentType: 5126, count: 8, type: 'VEC2' },
-            { bufferView: 2, componentType: 5123, count: 12, type: 'SCALAR' }
+            { bufferView: 0, componentType: 5126, count: 12, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 1] },
+            { bufferView: 1, componentType: 5126, count: 12, type: 'VEC2' },
+            { bufferView: 2, componentType: 5123, count: 18, type: 'SCALAR' }
         ],
         bufferViews,
         buffers: [{ byteLength: bin.length }],
@@ -57,12 +61,12 @@ function roofAndWallGlb(texture: Buffer, instanced = true): Buffer {
     return AlgorithmicUvEngine.serializeGlb(json, bin);
 }
 
-/** One stone albedo (170) lit by SUN: the roof half is brighter than the wall half by E(up) / E(south). */
+/** One stone albedo lit by SUN in linear light: each third is lit by E of its face. */
 function bakedTexture(): Buffer {
-    const w = 32, h = 16, eMax = Math.max(E(UP), E(SOUTH));
+    const w = 48, h = 16, eMax = E(UP);
     const rgba = Buffer.alloc(w * h * 4);
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-        const v = Math.round(170 * E(x < 16 ? UP : SOUTH) / eMax);
+        const v = toSrgb(0.4 * E(x < 16 ? UP : x < 32 ? SOUTH : NORTH) / eMax);
         const i = (y * w + x) * 4;
         rgba[i] = v; rgba[i + 1] = Math.round(v * 0.95); rgba[i + 2] = Math.round(v * 0.9); rgba[i + 3] = 255;
     }
@@ -77,7 +81,7 @@ function outputImage(glbBuffer: Buffer, imageIndex: number): Buffer {
 
 const solarOnly = {
     enableSolarInverseDelighting: true,
-    solarDelighting: { sunVector: SUN, skyShCoeffs: SKY },
+    solarDelighting: { sunVector: SUN },
     generateNormalMaps: false, generateRoughnessMaps: false, generateAoMaps: false
 };
 
@@ -85,7 +89,7 @@ describe('AlgorithmicUvEngine.processGlb solar de-lighting uses the mesh normals
     it('a roof and a wall sharing one texture come out at the same albedo, with the normals rasterized from the mesh', async () => {
         const input = bakedTexture();
         const before = decodePng(input);
-        expect(before.data[4 * 4] - before.data[(8 * 32 + 24) * 4]).toBeGreaterThan(30);
+        expect(before.data[4 * 4] - before.data[(8 * 48 + 40) * 4]).toBeGreaterThan(30);
 
         const res = await AlgorithmicUvEngine.processGlb({ inputGlbBuffer: roofAndWallGlb(input), pbrDecomposition: solarOnly });
         expect(res.success).toBe(true);
@@ -93,13 +97,15 @@ describe('AlgorithmicUvEngine.processGlb solar de-lighting uses the mesh normals
         const report = res.images[0];
         expect(report.albedoRewritten).toBe(true);
         expect(report.solarDelighting).toMatchObject({
-            applied: true, normalSource: 'face-normals-from-positions', texelsWithGeometryNormal: 32 * 16,
-            texelsWithConflictingNormals: 0, delitTexels: 32 * 16, paintedTexelsWithoutNormal: 0
+            applied: true, normalSource: 'face-normals-from-positions', texelsWithGeometryNormal: 48 * 16,
+            texelsWithConflictingNormals: 0, delitTexels: 48 * 16, paintedTexelsWithoutNormal: 0, clippedTexels: 0
         });
+        expect(report.solarDelighting!.fit).toMatchObject({ status: 'fitted', charts: 1 });
 
         const after = decodePng(outputImage(res.outputGlbBuffer!, 0));
         for (let y = 1; y < 15; y++) {
-            expect(Math.abs(after.data[(y * 32 + 4) * 4] - after.data[(y * 32 + 27) * 4])).toBeLessThanOrEqual(2);
+            expect(Math.abs(after.data[(y * 48 + 4) * 4] - after.data[(y * 48 + 24) * 4])).toBeLessThanOrEqual(2);
+            expect(Math.abs(after.data[(y * 48 + 4) * 4] - after.data[(y * 48 + 43) * 4])).toBeLessThanOrEqual(2);
         }
     });
 
@@ -112,48 +118,14 @@ describe('AlgorithmicUvEngine.processGlb solar de-lighting uses the mesh normals
         expect(outputImage(res.outputGlbBuffer!, 0).equals(input)).toBe(true);
     });
 
-    it('de-lights a real Google tile texture (Colosseum) with the tile mesh normals; before/after written for inspection', async () => {
+    it('refuses to de-light a Google tile (Colosseum): the tiles carry no capture instant, and none is invented', async () => {
         const glbPath = path.join(REPO_ROOT, 'deploy/cloud-run/spatial-separator/assets/colosseum_rome_textured.glb');
         const glb = AlgorithmicUvEngine.parseGlb(fs.readFileSync(glbPath));
-        const json = glb.json;
-        // Only the material of the largest texture keeps its baseColor, so only that image is processed (fast test).
-        const sizes = json.images.map((im: any) => json.bufferViews[im.bufferView].byteLength);
-        const imageIndex = sizes.indexOf(Math.max(...sizes));
-        const trimmed = JSON.parse(JSON.stringify(json));
-        for (const m of trimmed.materials) {
-            if (trimmed.textures[m.pbrMetallicRoughness?.baseColorTexture?.index]?.source !== imageIndex) delete m.pbrMetallicRoughness.baseColorTexture;
-        }
-        const res = await AlgorithmicUvEngine.processGlb({
-            inputGlbBuffer: AlgorithmicUvEngine.serializeGlb(trimmed, glb.bin),
-            pbrDecomposition: {
-                ...solarOnly,
-                // Rome, a summer afternoon (the capture date of the tiles is not known; this is a test sun)
-                solarDelighting: { latitude: 41.8902, longitude: 12.4922, timestampIso: '2024-07-15T14:00:00Z' }
-            }
+        expect(JSON.stringify(glb.json.asset ?? {})).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+        const run = AlgorithmicUvEngine.processGlb({
+            inputGlbBuffer: fs.readFileSync(glbPath),
+            pbrDecomposition: { ...solarOnly, solarDelighting: { latitude: 41.8902, longitude: 12.4922 } }
         });
-        const report = res.images.find(r => r.imageIndex === imageIndex)!;
-        expect(report.status).toBe('processed');
-        expect(report.solarDelighting?.applied).toBe(true);
-        expect(report.solarDelighting?.normalSource).toBe('face-normals-from-positions');
-        expect(report.solarDelighting!.texelsWithGeometryNormal!).toBeGreaterThan(0.3 * report.texels!);
-
-        const bv = glb.json.bufferViews[glb.json.images[imageIndex].bufferView];
-        const beforeImg = await decodeImageToRgba(glb.bin.subarray(bv.byteOffset || 0, (bv.byteOffset || 0) + bv.byteLength));
-        const afterImg = await decodeImageToRgba(outputImage(res.outputGlbBuffer!, imageIndex));
-        expect(afterImg.width).toBe(beforeImg.width);
-        // De-lighting changed texels, and only by a bounded gain
-        let changed = 0;
-        for (let i = 0; i < beforeImg.rgba.length; i += 4) if (Math.abs(afterImg.rgba[i] - beforeImg.rgba[i]) > 6) changed++;
-        expect(changed).toBeGreaterThan(0);
-
-        const { width: w, height: h } = beforeImg;
-        const sheet = Buffer.alloc(w * 2 * h * 4);
-        for (let y = 0; y < h; y++) {
-            Buffer.from(beforeImg.rgba.buffer, beforeImg.rgba.byteOffset + y * w * 4, w * 4).copy(sheet, y * w * 8);
-            Buffer.from(afterImg.rgba.buffer, afterImg.rgba.byteOffset + y * w * 4, w * 4).copy(sheet, y * w * 8 + w * 4);
-        }
-        for (let i = 3; i < sheet.length; i += 4) sheet[i] = 255;
-        fs.mkdirSync(SHOTS, { recursive: true });
-        fs.writeFileSync(path.join(SHOTS, 'colosseum_tile_before_after_geometry_normals.png'), encodePng(w * 2, h, sheet));
+        await expect(run).rejects.toBeInstanceOf(SolarDelightingSunUnknownError);
     }, 120_000);
 });
