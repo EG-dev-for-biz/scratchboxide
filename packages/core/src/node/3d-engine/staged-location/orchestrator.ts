@@ -1128,7 +1128,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             onFetched: read => {
                                 if (!visionAvailable || !rebuildPossible) return;
                                 try {
-                                    const ring = planRingViews(faces, surveyCandidates(found.panos, faces, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top), { faces: faces.map(f => ({ faceId: f.faceId, headingDeg: f.headingDeg, source: f.source, elements: [], materials: [] })), read }, undefined, false);
+                                    const ring = planRingViews(faces, surveyCandidates(found.panos.filter(p => !sv.refusedPanos?.has(p.panoId)), faces, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top), { faces: faces.map(f => ({ faceId: f.faceId, headingDeg: f.headingDeg, source: f.source, elements: [], materials: [] })), read }, undefined, false);
                                     if (ring.length) void fetchViews(ring, sv, discoveryStop.signal, 30_000).catch(() => undefined);
                                 } catch { /* the matching fetches its own views */ }
                             }
@@ -1192,7 +1192,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (surveyOut?.result && visionAvailable) {
                         try {
                             const surveyFaces = surveyFaceTargets(structure!);
-                            const candidates = surveyCandidates(found.panos, surveyFaces, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top);
+                            const candidates = surveyCandidates(found.panos.filter(p => !sv.refusedPanos?.has(p.panoId)), surveyFaces, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top);
                             const matchChain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...chainExtras('evidence'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
                             match = await runViewMatch({ faces: surveyFaces, survey: surveyOut.result, candidates, deps: sv, chain: matchChain, signal: io.signal, onProgress: m => io.progress(m) });
                             if (match.correspondences.length) {
