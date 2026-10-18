@@ -209,6 +209,10 @@ export const LIGHTING_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'STRING',
                     description: 'Name of the matched location or landmark.'
                 },
+                isoDate: {
+                    type: 'STRING',
+                    description: 'ISO 8601 capture time of the photograph. The sun is computed from it by NOAA ephemeris at the location; required unless the photo itself shows the sun or a fittable sky.'
+                },
                 geodeticCoords: {
                     type: 'OBJECT',
                     properties: {
@@ -368,6 +372,7 @@ export const lightingHandlers: Record<string, ToolHandler> = {
             imagePath,
             locationName: asString(args.locationName) || undefined,
             geodeticCoords: asGeodetic(args.geodeticCoords),
+            timestampIso: asString(args.isoDate) || undefined,
             cameraPosition: asVec3(args.cameraPosition),
             cameraTarget: asVec3(args.cameraTarget),
             fovDeg: typeof args.fovDeg === 'number' ? args.fovDeg : undefined,

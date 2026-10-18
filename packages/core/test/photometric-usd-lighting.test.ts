@@ -264,6 +264,7 @@ describe('Photometric OpenUSD Bridge & Reference Lighting Matching Suite', () =>
                 imagePath: testImgPath,
                 locationName: 'The Plaza Hotel',
                 geodeticCoords: { lat: 40.7646, lng: -73.9743, altitudeMeters: 18.0 },
+                timestampIso: '2026-03-10T17:00:00Z',
                 autoAlignCamera: true,
                 autoExportUsd: true,
                 outputUsdPath: path.join(OUT_DIR, 'matched_lighting_rig_location.usda')
@@ -292,6 +293,7 @@ describe('Photometric OpenUSD Bridge & Reference Lighting Matching Suite', () =>
                 imagePath: testImgPath,
                 locationName: 'The Plaza Hotel',
                 geodeticCoords: { lat: 40.7646, lng: -73.9743 },
+                isoDate: '2026-03-10T17:00:00Z',
                 outputUsdPath: path.join(OUT_DIR, 'matched_lighting_rig_location_handler.usda')
             }, {} as any);
 
@@ -301,6 +303,18 @@ describe('Photometric OpenUSD Bridge & Reference Lighting Matching Suite', () =>
             // The photo is not resected here: the summary says the camera pose was not estimated.
             expect(res.summaryResult).toContain('Matched physical lighting to reference');
             expect(res.summaryResult).toContain('Camera pose: not estimated');
+            expect(res.summaryResult).toContain('noaa-ephemeris');
+            // The capture time reaches the ephemeris: a different time moves the sun.
+            const later = await handler({
+                imagePath: testImgPath,
+                geodeticCoords: { lat: 40.7646, lng: -73.9743 },
+                isoDate: '2026-03-10T21:00:00Z',
+                autoExportUsd: false
+            }, {} as any);
+            expect(later.resultPayload.threeJsUniforms.uSunDirection).not.toEqual(res.resultPayload.threeJsUniforms.uSunDirection);
+            // Without it, and with no sun in the photo, the time is asked for instead of assumed.
+            await expect(handler({ imagePath: testImgPath, geodeticCoords: { lat: 40.7646, lng: -73.9743 }, autoExportUsd: false }, {} as any))
+                .rejects.toThrow(/needs timestampIso/);
         });
     });
 });

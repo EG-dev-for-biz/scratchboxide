@@ -14,7 +14,7 @@ import {
     PhotometricLightConfig,
     planckianKelvinToRgb
 } from '../../common/spatial/photometric-units';
-import { InverseLightingEstimatorService } from './InverseLightingEstimatorService';
+import { InverseLightingEstimatorService, SunNotFoundError } from './InverseLightingEstimatorService';
 import { StoneType } from '../../browser/generative-canvas/services/atmosphere/LocationObjectLightingService';
 import { geocode3DTilesAddress } from './Google3DTileBlockoutPipelineService';
 import { MissingInputError, PipelineError } from '../../common/errors/pipeline-errors';
@@ -411,6 +411,8 @@ export interface MatchImageAndLightingToLocationOptions {
     imagePath: string;
     locationName?: string;
     geodeticCoords?: { lat: number; lng: number; altitudeMeters?: number };
+    /** Capture time (ISO 8601). With the location it fixes the sun by NOAA ephemeris; required unless the photo shows the sun or a fittable sky. */
+    timestampIso?: string;
     glbPath?: string;
     cameraPosition?: [number, number, number];
     cameraTarget?: [number, number, number];
@@ -499,25 +501,35 @@ export async function matchImageAndLightingToLocation(
     const cameraHeading = cameraPose?.headingDeg;
     const cameraPitch = cameraPose?.pitchDeg;
 
-    // 2. Solve inverse physical lighting from the reference image
-    const lightResult = await matchLightingToReference({
-        imagePath: options.imagePath,
-        landmarkName: locationName,
-        geodeticCoords: { lat: locationCoords.lat, lng: locationCoords.lng },
-        cameraHeadingDeg: cameraHeading,
-        cameraPitchDeg: cameraPitch,
-        cameraPosition: cameraPose ? cameraPose.position : undefined,
-        cameraTarget: cameraPose ? cameraPose.target : undefined,
-        fovDeg: cameraPose ? cameraPose.fovDeg : options.fovDeg,
-        stoneType: options.stoneType || 'travertine',
-        autoExportUsd: options.autoExportUsd !== false,
-        outputUsdPath: options.outputUsdPath
-    });
+    // 3. Solve inverse physical lighting from the reference image. The location is known, so the capture time is
+    // what the ephemeris needs; without it the sun must come from the photo itself.
+    let lightResult: MatchLightingReferenceResult;
+    try {
+        lightResult = await matchLightingToReference({
+            imagePath: options.imagePath,
+            landmarkName: locationName,
+            geodeticCoords: { lat: locationCoords.lat, lng: locationCoords.lng },
+            timestampIso: options.timestampIso,
+            cameraHeadingDeg: cameraHeading,
+            cameraPitchDeg: cameraPitch,
+            cameraPosition: cameraPose ? cameraPose.position : undefined,
+            cameraTarget: cameraPose ? cameraPose.target : undefined,
+            fovDeg: cameraPose ? cameraPose.fovDeg : options.fovDeg,
+            stoneType: options.stoneType || 'travertine',
+            autoExportUsd: options.autoExportUsd !== false,
+            outputUsdPath: options.outputUsdPath
+        });
+    } catch (err) {
+        if (err instanceof SunNotFoundError && !options.timestampIso) {
+            throw new MissingInputError('lighting_match_image_to_location', 'timestampIso', `${err.reason}; give the capture time so the sun is computed by NOAA ephemeris at ${locationName}`);
+        }
+        throw err;
+    }
 
     const cameraText = cameraPose
         ? `Camera (as given): standoff ${cameraPose.standoffMeters.toFixed(1)}m at heading ${cameraPose.headingDeg.toFixed(1)}°, pitch ${cameraPose.pitchDeg.toFixed(1)}°.`
         : 'Camera pose: not estimated (the photo is not resected here; give cameraPosition and cameraTarget to place it), so the lighting is in the camera\'s own frame.';
-    const summary = `Matched physical lighting to reference '${path.basename(options.imagePath)}' for ${locationName} (${locationCoords.lat.toFixed(6)}, ${locationCoords.lng.toFixed(6)}). ${cameraText} Lighting: Sun at ${lightResult.threeJsUniforms.uSunIntensity.toFixed(2)}x intensity with Planckian sky ambient. OpenUSD scene export: ${lightResult.usdExportPath ? path.basename(lightResult.usdExportPath) : 'None'}.`;
+    const summary = `Matched physical lighting to reference '${path.basename(options.imagePath)}' for ${locationName} (${locationCoords.lat.toFixed(6)}, ${locationCoords.lng.toFixed(6)}). ${cameraText} ${lightResult.summary}`;
 
     return {
         success: true,

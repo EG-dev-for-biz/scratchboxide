@@ -76,7 +76,8 @@ function writePng(dir: string, name: string): string {
     const rgba = Buffer.alloc(w * h * 4);
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
         const i = (y * w + x) * 4;
-        const c = y < h * 0.4 ? [120, 180, 240] : [170, 150, 110];
+        // Sky over sunlit ground with a cast shadow on its right half.
+        const c = y < h * 0.4 ? [120, 180, 240] : x < w / 2 ? [170, 150, 110] : [70, 66, 62];
         rgba[i] = c[0]; rgba[i + 1] = c[1]; rgba[i + 2] = c[2]; rgba[i + 3] = 255;
     }
     const p = path.join(dir, name);
@@ -343,11 +344,14 @@ describe('image lighting reads the photograph and invents no place or pose', () 
         try {
             const photo = writePng(dir, 'plaza.png');
             await expect(matchImageAndLightingToLocation({ imagePath: photo, autoExportUsd: false })).rejects.toThrow(MissingInputError);
-            const result = await matchImageAndLightingToLocation({ imagePath: photo, geodeticCoords: { lat: 45.4345, lng: 12.3371 }, autoExportUsd: false });
+            // The photo shows neither the sun nor a sky gradient, so the capture time is required (no default date).
+            await expect(matchImageAndLightingToLocation({ imagePath: photo, geodeticCoords: { lat: 45.4345, lng: 12.3371 }, autoExportUsd: false }))
+                .rejects.toThrow(/needs timestampIso/);
+            const result = await matchImageAndLightingToLocation({ imagePath: photo, geodeticCoords: { lat: 45.4345, lng: 12.3371 }, timestampIso: '2026-06-21T10:00:00Z', autoExportUsd: false });
             expect(result.location.coords.lat).toBe(45.4345);
             expect(result.cameraPose).toBeUndefined();
             expect(result.summary).toMatch(/Camera pose: not estimated/);
-            const posed = await matchImageAndLightingToLocation({ imagePath: photo, geodeticCoords: { lat: 45.4345, lng: 12.3371 }, cameraPosition: [0, 2, 10], cameraTarget: [0, 2, 0], autoExportUsd: false });
+            const posed = await matchImageAndLightingToLocation({ imagePath: photo, geodeticCoords: { lat: 45.4345, lng: 12.3371 }, timestampIso: '2026-06-21T10:00:00Z', cameraPosition: [0, 2, 10], cameraTarget: [0, 2, 0], autoExportUsd: false });
             expect(posed.cameraPose!.headingDeg).toBeCloseTo(0, 6); // looking toward -Z (north)
             expect(posed.cameraPose!.standoffMeters).toBeCloseTo(10, 6);
         } finally {
