@@ -671,3 +671,49 @@ Also: the cross-view match and edge render pools loaded their `.ts` workers thro
 - Commit the replay harness as a dev tool (`scripts/staged_replay.ts`: record/replay of Street View and vision replies, geometry swap) so later rounds are compared on identical evidence.
 - A per-layer exposure tie between overlapping layers (`l3cf` pieces over `l3b`), or drop pass-through pieces that lie within a few centimetres of a fitted face.
 - Find the server-side heap growth across staged builds (run two builds in one server with a heap snapshot after each).
+
+## Round 10: pass-through scan that lies on a fitted face is hidden (2026-10-18)
+
+Worktree `.claude/worktrees/hide-redundant-scan` from `origin/main` `d89ed83a`. Ports: web 3092, API 3093, tools 3094, screenshot receiver 3099 (API server started from `desktop-app/` with `node -r ts-node/register [-r scripts/dev/staged-replay.ts] server/index.ts`, vite beside it; `secrets.json` symlinked for the runs and removed after). Replays: `scripts/dev/staged-replay.ts` on a copy of round 9's recording (`scratchpad/mem/rec`; 75-77 vision hits, 54 grounding hits per build, 3 misses for the new `l3cf` content's enhancement call, recorded live). Screenshots: `test-results/screenshots/hide_redundant_scan/` (`before_*` and `after_*`: the same replayed evidence in the app, `SCRATCHBOX_STAGED_HIDE_REDUNDANT=0` and on; `live_after_*`: the live run; `synthetic_wall_copy_statue_fragments.png`: the unit test; gitignored). Views set with `__SB_SET_CAMERA_VIEW__` around `[-1.25, 10.8, -2.4]` (front theta 147°, back -33°).
+
+**Status: Verified.** Round 9's back-side wedge (`l3cf` region `x21`, a 19.4 m² pass-through piece lying on the right spandrel) is gone from the drawn and textured layers; the textured fitted wall shows there. The keystone square (`x18`) stays: it stands 0.10-0.20 m off the fitted frieze (measured below), so the rule keeps it as proud.
+
+### What changed
+
+- `redundant-scan.ts`: a point of a pass-through triangle is redundant when a fitted face lies directly behind it: its projection along that face's normal lands inside the face, and |offset| <= the face's tolerance. The redundant set of one fitted face is a prism (two slab planes at ±tol, one plane through each edge along the normal, 1 mm slack at the edges); coplanar, edge-connected fitted triangles that fill their convex hull are one face. Each pass-through triangle is clipped exactly against the prisms near it (Sutherland-Hodgman): the parts inside go to the hidden side, the rest is kept as convex pieces with straight edges; a piece no prism actually reaches stays whole. Nothing without a fitted face behind it is hidden, so no hole opens. Tolerance per fitted surface: 3 x its scan rms, clamped to 0.10-0.15 m.
+- Fit stage: the split runs on the fit's pass-through GLB (22 ms on the arch). `l3ch` (the hidden parts, as-scanned, note "hidden: redundant with the fitted surface ...") is committed first and the fitted body `l3b` supersedes it, so it is out of the drawn scene, gets no textured twin, is not in the visible-layer gate, and shows under "Show replaced layers". `l3c` is the rest; the figures stage cuts `l3cf` from that rest (figure detection still reads the full pass-through). Per region with anything hidden: a `pass_through_hidden` degradation ("pass-through hidden: redundant with fitted surface, offset X m (largest Y m, tolerance ...); shown under replaced layers", `part.objectId` = `l3ch`, so the provenance view highlights it); a region hidden whole loses its "kept as scanned" `pass_through` record. `structureFit.passThroughHidden` in the result (triangles hidden whole / clipped, areas, tolerance, report path); the summary aggregates them in one sentence. `SCRATCHBOX_STAGED_HIDE_REDUNDANT=0` turns it off.
+
+### Synthetic checks (fail without the change)
+
+`staged-redundant-scan.test.ts`: a fitted wall with a noisy scan copy 5 cm in front (hidden whole, 48.2 m²), a lump 1.3 m proud and a fragment past the wall's edge (kept whole), a fragment straddling the edge (clipped at x = 10 m, area conserved), a 6 m² triangle leaning out of the wall (clipped exactly where it leaves the 0.10 m slab), every hidden point within the tolerance of the wall directly behind it. `staged-texture-orchestrator.test.ts`: through the orchestrator, the copy lands in `l3ch` (superseded by `l3b`, no twin), `l3c` and its twin hold exactly the lump's and the fragment's triangles, the degradation, result record and summary.
+
+### On the arch (fit `0a38cbdd`, the same in every run)
+
+379 pass-through triangles, 238.5 m² in 28 regions; hidden 70.4 m² in 26 regions (1 triangle whole, 224 clipped); the drawn `l3c` has 1,315 triangles. The first version cut every piece along every fitted triangle it passed (24,100 drawn triangles; the `l3cf` texture pass took 2x as long and its leave-one-pano-out fit was 4.93 px over 3 of 4 panos); merging coplanar fitted faces and keeping unreached pieces whole fixed that.
+
+Tolerance sweep (hidden area): 0.10-0.15 m (default) 70.4 m²; 0.20 m 109.1; 0.30 m 156.8; 0.50 m 186.5. The keystone square `x18`: 0.85 of 2.73 m² hidden at the default, all of it at 0.20 m, so it stands 0.10-0.20 m proud of the fitted frieze. The wedge `x21`: 9.95 of 19.35 m² at the default (the part over the spandrel; the rest lies past the arch's edge or proud), 17.7 at 0.20 m.
+
+### Held-out fit on identical replayed evidence (leave one pano out, px / gradient NCC)
+
+| Arm | l2 | l3b | l3cf | l4 |
+|---|---|---|---|---|
+| off (`SCRATCHBOX_STAGED_HIDE_REDUNDANT=0`) | 5.164 / 0.237 | 5.033 / 0.228 | 4.460 / 0.069 (80,255 px, 4 panos) | 5.555 / 0.065 |
+| off, `l3cf` scored only on the pixels of the pieces that stay drawn (scratch scoring mask, not committed) | | | 4.200 / 0.106 (51,436 px) | |
+| on | 5.164 / 0.237 | 5.033 / 0.228 | **3.851 / 0.289** (54,598 px, 4 panos) | 5.555 / 0.065 |
+
+The registration (joint 7.12 / 0.196) and every other layer are the same to the digit. The two in-app replays (`b30415d7` off, `6a236b83` on) reproduced the headless numbers exactly. On the same kept pixels the new `l3cf` texture fits better (3.85 against 4.20 px): with the copy of the wall gone the layer's own statistics (single-pano witness level, exposure match) are those of the pieces it draws.
+
+### Live (cold for the survey, evidence, vision/detail, figures and texture stages; tiles, remesh, fit cached)
+
+Run `08391af1` (about 8 min): joint registration 6.86 / 0.183 (warp 6.78 / 0.192); leave-one-pano-out l2 6.63 / 0.171, l3b 5.46 / 0.235, l3cf 6.42 / 0.031 (29,258 px), l4 no pixels (the detail stage degraded: built away from where it was read). The same 70.3 m² in 26 regions hidden; 26 `pass_through_hidden` entries in the overlay's degraded parts, each highlighting `l3ch`. Main thread p99 14.4 ms, max 1.46 s (evidence). As round 9 found, a live run's evidence differs from run to run, so these numbers are not comparable with the replays.
+
+### What I saw (`after_*` against `before_*`, same evidence)
+
+- **Better:** the back's sky-blue/grey wedge on the right spandrel is gone; the spandrel shows the fitted wall's texture (`*_tex_back`, `*_tex_back_spandrels`). In the provenance view the orange as-scanned wedge is gone from the spandrel (`after_prov_back`) and comes back hatched with "Show replaced layers" (`after_prov_replaced_back`).
+- **Unchanged, by the rule:** the keystone square (0.10-0.20 m proud), the dark mark right of the frieze (tile photo), the statues and pedestals (figures layer), the front.
+- **Still wrong:** the keystone square remains a differently exposed patch; at 0.20 m it would go too, but 0.20 m also reaches relief that stands that far out, so the default stays 0.10-0.15 m.
+
+### Candidate tool/service ideas
+
+- A union held-out fit: score what is drawn (all visible layers together) per pano, so a layer that loses pixels to another is judged on the composite rather than on its own remainder.
+- Save the overlay panel (DOM) beside the 3D capture, so the provenance list shows in screenshot evidence too.
