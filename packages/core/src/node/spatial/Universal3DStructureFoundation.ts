@@ -35,12 +35,14 @@ import {
 import type { CameraSolveTrack } from '../../common/vfx-plate-protocol';
 import {
   ProceduralSfMDatasetService,
+  createSeededRng,
   ProceduralCameraPose,
   ProceduralPoint3D,
   Vector3Tuple
 } from './ProceduralSfMDatasetService';
 import { GeodeticAnchor } from '../../common/spatial/colmap-vector-reference-types';
 import { LocalTangentPlane } from '../../common/coordinate/LocalTangentPlane';
+import { computeConvexHull3D } from '../../common/spatial/quickhull3d';
 import { decodePng, encodePng, synthesizeProceduralPbr } from '../texture-processing';
 import { ContinuousBiophysicalFields } from '../../common/adaptive-material-types';
 import {
@@ -68,6 +70,24 @@ import type { Scene3DData } from '../../browser/generative-canvas/canvas-types';
  * - Collision & Navigation Hulls (Physics engines, obstacle avoidance)
  * - WGS-84 RFC 7946 GeoJSON (GIS, Google Maps Platform)
  */
+/** Raised when a convex hull is requested with options it cannot honour (margin, vertex cap, too few vertices). */
+export class ConvexHullOptionError extends Error {
+  readonly code = 'CONVEX_HULL_OPTION_UNSUPPORTED';
+  constructor(message: string) {
+    super(message);
+    this.name = 'ConvexHullOptionError';
+  }
+}
+
+/** Raised when a GLB uses an accessor layout this ingester does not read (it would otherwise read garbage). */
+export class UnsupportedGlbLayoutError extends Error {
+  readonly code = 'GLB_LAYOUT_UNSUPPORTED';
+  constructor(message: string) {
+    super(message);
+    this.name = 'UnsupportedGlbLayoutError';
+  }
+}
+
 export class Universal3DStructureFoundation {
   public readonly id: string;
   public readonly name: string;
@@ -384,8 +404,9 @@ export class Universal3DStructureFoundation {
   /**
    * Resynchronizes surface points with the mesh geometry and PBR texture maps.
    * Points receive exact sampled RGB albedo colors, physical roughness, and metallicity.
+   * `seed` drives a deterministic PRNG, so equal inputs give an identical point set.
    */
-  public resynchronizePoints(density?: number): ProceduralPoint3D[] {
+  public resynchronizePoints(density?: number, seed: number = 1): ProceduralPoint3D[] {
     const mesh = this.mesh;
     if (!mesh.vertices || mesh.vertices.length < 9) {
       return this.points;
@@ -427,8 +448,9 @@ export class Universal3DStructureFoundation {
       totalArea = 1.0;
     }
 
+    const random = createSeededRng(seed);
     for (let i = 0; i < count; i++) {
-      const targetArea = Math.random() * totalArea;
+      const targetArea = random() * totalArea;
       let triIdx = 0;
       let low = 0, high = numTriangles - 1;
       while (low <= high) {
@@ -446,8 +468,8 @@ export class Universal3DStructureFoundation {
       const i2 = indices ? indices[triIdx * 3 + 2] : triIdx * 3 + 2;
 
       // Uniform barycentric coordinates
-      const r1 = Math.random();
-      const r2 = Math.random();
+      const r1 = random();
+      const r2 = random();
       const sqrtR1 = Math.sqrt(r1);
       const w0 = 1.0 - sqrtR1;
       const w1 = sqrtR1 * (1.0 - r2);
@@ -667,10 +689,16 @@ export class Universal3DStructureFoundation {
   }
 
   /**
-   * Computes a tailored collision envelope (AABB, OBB, or Inflated Bumper) for the structure.
+   * Computes a tailored collision envelope for the structure: AABB, PCA-oriented OBB,
+   * inflated bumper (OBB grown by a safety margin), or the exact convex hull of the
+   * mesh vertices (Quickhull). For 'convex_hull' the center/dimensions/axes describe
+   * the OBB of the same vertices; `convexVertices`/`indices` are the true hull.
    */
   public computeCollisionEnvelope(options?: CollisionEnvelopeOptions): UniversalCollisionHull {
     const mode = options?.mode || 'obb';
+    if (mode === 'convex_hull') {
+      return this.computeConvexHullEnvelope(options);
+    }
     const margin = Math.max(0, options?.safetyMarginMeters ?? (mode === 'inflated_bumper' ? 1.5 : 0));
     const v = this.mesh.vertices;
 
@@ -808,7 +836,7 @@ export class Universal3DStructureFoundation {
     ];
 
     return {
-      type: mode === 'inflated_bumper' ? 'inflated_bumper' : (mode === 'convex_hull' ? 'convex_hull' : 'obb'),
+      type: mode === 'inflated_bumper' ? 'inflated_bumper' : 'obb',
       center,
       dimensions: [h0 * 2, h1 * 2, h2 * 2],
       radius: Math.hypot(h0, h1, h2),
@@ -824,6 +852,47 @@ export class Universal3DStructureFoundation {
         0, 4, 7, 0, 7, 3,
         1, 2, 6, 1, 6, 5
       ]
+    };
+  }
+
+  /**
+   * Exact convex hull of the mesh vertices. A safety margin is not supported here:
+   * offsetting a polyhedron is a Minkowski sum, which this does not compute, so a
+   * margin request throws instead of returning a hull that only looks inflated.
+   */
+  private computeConvexHullEnvelope(options?: CollisionEnvelopeOptions): UniversalCollisionHull {
+    const margin = options?.safetyMarginMeters ?? 0;
+    if (margin > 0) {
+      throw new ConvexHullOptionError(
+        `convex_hull does not apply a safety margin (asked for ${margin} m). Use mode 'inflated_bumper' for a margin-grown OBB, or request the hull with no margin.`
+      );
+    }
+    const v = this.mesh.vertices;
+    if (!v || v.length < 12) {
+      throw new ConvexHullOptionError(`convex_hull needs a mesh with at least 4 vertices; "${this.name}" has ${v ? v.length / 3 : 0}.`);
+    }
+    const hull = computeConvexHull3D(v);
+    const maxVerts = options?.maxHullVertices;
+    if (maxVerts !== undefined && hull.vertices.length > maxVerts) {
+      throw new ConvexHullOptionError(
+        `The exact convex hull of "${this.name}" has ${hull.vertices.length} vertices, above maxHullVertices=${maxVerts}. Hull simplification is not implemented; raise the limit or use mode 'obb'.`
+      );
+    }
+    const obb = this.computeCollisionEnvelope({ mode: 'obb' });
+    let radius = 0;
+    for (const p of hull.vertices) {
+      radius = Math.max(radius, Math.hypot(p[0] - obb.center[0], p[1] - obb.center[1], p[2] - obb.center[2]));
+    }
+    return {
+      type: 'convex_hull',
+      center: obb.center,
+      dimensions: obb.dimensions,
+      radius,
+      safetyMarginMeters: 0,
+      axes: obb.axes,
+      rotationMatrix: obb.rotationMatrix,
+      convexVertices: hull.vertices,
+      indices: hull.indices
     };
   }
 
@@ -863,6 +932,8 @@ export class Universal3DStructureFoundation {
       center?: Vector3Tuple;
       numViews?: number;
       pointDensity?: number;
+      /** Seed for surface point sampling; equal seeds give identical point sets. Default 1. */
+      seed?: number;
       anchor?: GeodeticAnchor;
       materialPreset?: MaterialPresetName;
       material?: UniversalPbrMaterial;
@@ -876,7 +947,8 @@ export class Universal3DStructureFoundation {
     const numViews = options?.numViews ?? 24;
 
     // 1. Procedural Surface Points
-    const points = ProceduralSfMDatasetService.sampleProceduralGeometry(shape, pointDensity, scale, center);
+    const seed = options?.seed ?? 1;
+    const points = ProceduralSfMDatasetService.sampleProceduralGeometry(shape, pointDensity, scale, center, seed);
 
     // 2. Procedural Mesh Generation
     const mesh = this.generateProceduralMesh(shape, scale, center);
@@ -943,7 +1015,7 @@ export class Universal3DStructureFoundation {
 
     // If custom material or textures present, synchronize surface points
     if (options?.materialPreset || options?.material || options?.synthesizePbrTextures) {
-      foundation.resynchronizePoints(pointDensity);
+      foundation.resynchronizePoints(pointDensity, seed);
     }
 
     return foundation;
@@ -1037,8 +1109,38 @@ export class Universal3DStructureFoundation {
           indices.push(second, second + 1, first + 1);
         }
       }
+    } else if (shape === 'torus') {
+      // Same radii as ProceduralSfMDatasetService.sampleProceduralGeometry('torus'): R = scale, r = 0.35 * scale.
+      const R = scale;
+      const r = scale * 0.35;
+      for (let j = 0; j <= vSegs; j++) {
+        const v = j / vSegs;
+        const tube = v * 2 * Math.PI;
+        for (let i = 0; i <= uSegs; i++) {
+          const u = i / uSegs;
+          const ring = u * 2 * Math.PI;
+          const nx = Math.cos(tube) * Math.cos(ring);
+          const ny = Math.sin(tube);
+          const nz = Math.cos(tube) * Math.sin(ring);
+          normals.push(nx, ny, nz);
+          uvs.push(u, v);
+          vertices.push(
+            center[0] + (R + r * Math.cos(tube)) * Math.cos(ring),
+            center[1] + r * Math.sin(tube),
+            center[2] + (R + r * Math.cos(tube)) * Math.sin(ring)
+          );
+        }
+      }
+      for (let j = 0; j < vSegs; j++) {
+        for (let i = 0; i < uSegs; i++) {
+          const first = j * (uSegs + 1) + i;
+          const second = first + uSegs + 1;
+          indices.push(first, first + 1, second);
+          indices.push(second, first + 1, second + 1);
+        }
+      }
     } else {
-      // Cylinder default
+      // Cylinder
       const height = scale * 2;
       for (let j = 0; j <= vSegs; j++) {
         const v = j / vSegs;
@@ -1716,6 +1818,8 @@ export class Universal3DStructureFoundation {
       numViews?: number;
       resyncPoints?: boolean;
       pointDensity?: number;
+      /** Seed for surface point sampling; equal seeds give identical point sets. Default 1. */
+      seed?: number;
     }
   ): Universal3DStructureFoundation {
     if (glbBuffer.length < 20 || glbBuffer.readUInt32LE(0) !== 0x46546C67) {
@@ -1754,6 +1858,22 @@ export class Universal3DStructureFoundation {
       if (accIdx === undefined || !gltf.accessors || !gltf.accessors[accIdx]) return null;
       const acc = gltf.accessors[accIdx];
       const bv = gltf.bufferViews[acc.bufferView];
+      if (!bv) {
+        throw new UnsupportedGlbLayoutError(`Accessor ${accIdx} has no bufferView (sparse or empty accessors are not read).`);
+      }
+      const componentSize = acc.componentType === 5126 || acc.componentType === 5125 ? 4
+        : acc.componentType === 5123 ? 2 : acc.componentType === 5121 ? 1 : 0;
+      const components = acc.type === 'VEC3' ? 3 : acc.type === 'VEC2' ? 2 : acc.type === 'VEC4' ? 4 : 1;
+      if (bv.byteStride && bv.byteStride !== componentSize * components) {
+        throw new UnsupportedGlbLayoutError(
+          `Accessor ${accIdx} is interleaved (byteStride ${bv.byteStride}); this ingester reads tightly packed accessors only. Re-export the GLB without interleaving.`
+        );
+      }
+      if (acc.type !== 'SCALAR' && acc.componentType !== 5126) {
+        throw new UnsupportedGlbLayoutError(
+          `Accessor ${accIdx} (${acc.type}) uses componentType ${acc.componentType}; only FLOAT vertex attributes are read (quantized/normalized attributes are not decoded).`
+        );
+      }
       const start = (bv.byteOffset || 0) + (acc.byteOffset || 0);
       return { acc, bv, start };
     };
@@ -1928,7 +2048,7 @@ export class Universal3DStructureFoundation {
     });
 
     if (options?.resyncPoints !== false) {
-      struct.resynchronizePoints(options?.pointDensity ?? 1500);
+      struct.resynchronizePoints(options?.pointDensity ?? 1500, options?.seed ?? 1);
     }
 
     return struct;

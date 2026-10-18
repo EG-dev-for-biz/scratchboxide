@@ -311,15 +311,19 @@ export class ProceduralSfMDatasetService {
 
   /**
    * Generates procedural 3D surface points (e.g., for testing or seeding).
-   * Supports standard primitives: box, sphere, cylinder, torus, or custom procedural generator.
+   * Supports standard primitives: box, sphere, cylinder, torus. `seed` drives a
+   * deterministic PRNG (mulberry32), so equal inputs give an identical point set.
    */
   public static sampleProceduralGeometry(
     shape: 'box' | 'sphere' | 'cylinder' | 'torus',
     count: number = 5000,
     scale: number = 1.0,
-    center: Vector3Tuple = [0, 0, 0]
+    center: Vector3Tuple = [0, 0, 0],
+    seed: number = 1
   ): ProceduralPoint3D[] {
     const points: ProceduralPoint3D[] = [];
+    // Seeded so the same inputs always give the same point set (reproducible exports).
+    const random = createSeededRng(seed);
 
     for (let i = 0; i < count; i++) {
       let pos: Vector3Tuple = [0, 0, 0];
@@ -327,8 +331,8 @@ export class ProceduralSfMDatasetService {
       let color: [number, number, number] = [200, 200, 200];
 
       if (shape === 'sphere') {
-        const u = Math.random();
-        const v = Math.random();
+        const u = random();
+        const v = random();
         const theta = 2 * Math.PI * u;
         const phi = Math.acos(2 * v - 1);
         const nx = Math.sin(phi) * Math.cos(theta);
@@ -344,8 +348,8 @@ export class ProceduralSfMDatasetService {
       } else if (shape === 'torus') {
         const R = scale;
         const r = scale * 0.35;
-        const u = Math.random() * 2 * Math.PI;
-        const v = Math.random() * 2 * Math.PI;
+        const u = random() * 2 * Math.PI;
+        const v = random() * 2 * Math.PI;
         const x = (R + r * Math.cos(v)) * Math.cos(u);
         const y = r * Math.sin(v);
         const z = (R + r * Math.cos(v)) * Math.sin(u);
@@ -357,8 +361,8 @@ export class ProceduralSfMDatasetService {
           Math.floor((v / (2 * Math.PI)) * 255)
         ];
       } else if (shape === 'cylinder') {
-        const u = Math.random() * 2 * Math.PI;
-        const h = (Math.random() - 0.5) * 2 * scale;
+        const u = random() * 2 * Math.PI;
+        const h = (random() - 0.5) * 2 * scale;
         const nx = Math.cos(u);
         const nz = Math.sin(u);
         pos = [center[0] + nx * scale, center[1] + h, center[2] + nz * scale];
@@ -366,9 +370,9 @@ export class ProceduralSfMDatasetService {
         color = [210, 170, 130];
       } else {
         // Box
-        const face = Math.floor(Math.random() * 6);
-        const u = (Math.random() - 0.5) * 2 * scale;
-        const v = (Math.random() - 0.5) * 2 * scale;
+        const face = Math.floor(random() * 6);
+        const u = (random() - 0.5) * 2 * scale;
+        const v = (random() - 0.5) * 2 * scale;
         switch (face) {
           case 0: pos = [scale, u, v]; norm = [1, 0, 0]; color = [220, 80, 80]; break;
           case 1: pos = [-scale, u, v]; norm = [-1, 0, 0]; color = [80, 220, 80]; break;
@@ -558,4 +562,19 @@ export class ProceduralSfMDatasetService {
       imagesDir
     };
   }
+}
+
+/**
+ * Deterministic 32-bit PRNG (mulberry32). Returns values in [0, 1).
+ * Equal seeds give equal sequences, so procedural samples are reproducible.
+ */
+export function createSeededRng(seed: number): () => number {
+  let state = (Math.floor(seed) >>> 0) || 0x9e3779b9;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
