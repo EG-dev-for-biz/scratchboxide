@@ -17,6 +17,7 @@ import { PanoramaDepthService } from './PanoramaDepthService';
 import { SplatService } from '../3d-engine/splat-service';
 import { BakedGaussian } from '../../common/geospatial-4d-protocol';
 import { GeneratorFailedError } from '../../common/errors/pipeline-errors';
+import { repoPath } from '../process/repo-python';
 
 const execAsync = promisify(exec);
 
@@ -69,8 +70,8 @@ export class OffsetViewSynthesisService {
     private depthService: PanoramaDepthService;
 
     constructor() {
-        this.offsetRendererBin = path.resolve(process.cwd(), 'build/render_offset_panorama');
-        this.splatCompilerBin = path.resolve(process.cwd(), 'build/panorama_to_3dgs_spz');
+        this.offsetRendererBin = repoPath('build', 'render_offset_panorama');
+        this.splatCompilerBin = repoPath('build', 'panorama_to_3dgs_spz');
         this.depthService = new PanoramaDepthService();
     }
 
@@ -83,12 +84,12 @@ export class OffsetViewSynthesisService {
         const tools = [{ bin: this.splatCompilerBin, src: 'scripts/panorama_to_3dgs_spz.cpp' }];
         if (needOffsetRenderer) tools.push({ bin: this.offsetRendererBin, src: 'scripts/render_offset_panorama.cpp' });
         for (const t of tools) {
-            const src = path.resolve(process.cwd(), t.src);
+            const src = repoPath(t.src);
             if (!(await fs.pathExists(src))) throw new GeneratorFailedError('cpp', `the native tool source ${src} is missing`);
             const fresh = (await fs.pathExists(t.bin)) && (await fs.stat(t.bin)).mtimeMs >= (await fs.stat(src)).mtimeMs;
             if (fresh) continue;
             await fs.ensureDir(path.dirname(t.bin));
-            const include = path.resolve(process.cwd(), 'packages/core/src/native/3d-engine/include');
+            const include = repoPath('packages', 'core', 'src', 'native', '3d-engine', 'include');
             const cxx = process.env.CXX || 'clang++';
             const arch = process.env.SCRATCHBOX_NATIVE_ARCH === '1' ? ' -march=native' : '';
             try {

@@ -13,7 +13,7 @@ import { getPythonWorkerPool } from '../process/persistent-python-worker';
 import * as os from 'os';
 import { GeneratorFailedError, InvalidInputError } from '../../common/errors/pipeline-errors';
 import { encodePng } from '../texture-processing';
-import { resolveRepoPython } from '../process/repo-python';
+import { repoPath, resolveRepoPython } from '../process/repo-python';
 
 
 export interface PanoramaDepthOptions {
@@ -98,7 +98,7 @@ export class PanoramaDepthService {
     private timeoutMs: number;
 
     constructor(customSidecarPath?: string, options: PanoramaDepthServiceOptions = {}) {
-        this.sidecarPath = customSidecarPath || path.resolve(process.cwd(), 'tools/depth/panorama_depth.py');
+        this.sidecarPath = customSidecarPath || repoPath('tools', 'depth', 'panorama_depth.py');
         this.pythonExecutable = options.pythonExecutable || resolveRepoPython('SCRATCHBOX_DEPTH_PYTHON');
         this.env = options.env;
         this.timeoutMs = options.timeoutMs ?? 120_000;
