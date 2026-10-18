@@ -26,7 +26,7 @@
  * mean over the views that scored. Generic: no threshold names a place.
  */
 
-import type { BakedTexturePlanes, DecodedImage, DepthMap, PinholeCamera, UvAtlas } from '../../../common/spatial/texture-pass-contracts';
+import type { BakedTexturePlanes, DecodedImage, DepthMap, FacadeMaterialRecord, PinholeCamera, UvAtlas } from '../../../common/spatial/texture-pass-contracts';
 import { detectLineSegments, distanceTransform, gaussianBlur, sobel } from '../../spatial/StreetViewPoseRegistrar';
 
 /** Scoring width (px): structural edges survive, course joints blur out (the registration's scale, 900 px, halved for speed). */
@@ -98,6 +98,8 @@ export interface LooFit {
     /** Panos with views on the layer; when the judged ones are fewer (the cap, or the time budget) the fit is a sample of them. */
     panosTotal?: number; sampled?: boolean;
     perPano: Array<{ panoId: string; pixels: number; chamferPx: number | null; gradNcc: number | null; ms?: number }>;
+    /** The facade material reading's walls/glass fit before and after it, on the same bakes (texture-pass.ts materialLoo). */
+    materials?: FacadeMaterialRecord['loo'];
 }
 
 /** Budget of the leave-one-pano-out re-bakes per layer, and the most panos it judges by (the ones with most views first). */

@@ -1594,8 +1594,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             if (left < 10_000) { io.progress(`textures: ${o.layer.layer}: no time left in the stage for the leave-one-pano-out fit`); continue; }
                             const tl = now();
                             try {
-                                const loo = await job(Math.min(LOO_BUDGET_MS, left));
-                                o.out = { ...o.out, bundle: { ...o.out.bundle, fit: { ...o.out.bundle.fit!, loo } }, timingsMs: { ...o.out.timingsMs, fitLoo: now() - tl } };
+                                const { materials: materialsLoo, ...loo } = await job(Math.min(LOO_BUDGET_MS, left));
+                                const materials = o.out.bundle.materials && materialsLoo ? { ...o.out.bundle.materials, loo: materialsLoo } : o.out.bundle.materials;
+                                o.out = { ...o.out, bundle: { ...o.out.bundle, fit: { ...o.out.bundle.fit!, loo }, ...(materials ? { materials } : {}) }, ...(materials ? { materials } : {}), timingsMs: { ...o.out.timingsMs, fitLoo: now() - tl } };
+                                if (materialsLoo) io.progress(`textures: ${o.layer.layer}: facade materials, walls' held-out fit before ${materialsLoo.wallBefore.chamferPx ?? 'n/a'} px / NCC ${materialsLoo.wallBefore.gradNcc ?? 'n/a'}, after ${materialsLoo.wallAfter.chamferPx ?? 'n/a'} px / NCC ${materialsLoo.wallAfter.gradNcc ?? 'n/a'} (${materialsLoo.reason})`);
                                 io.progress(`textures: ${o.layer.layer}: leave-one-pano-out fit over ${loo.panos} panos${loo.sampled ? ` (sampled: ${loo.panos} of ${loo.panosTotal})` : ''}: texture edge chamfer ${loo.chamferPx ?? 'n/a'} px, gradient NCC ${loo.gradNcc ?? 'n/a'}${loo.skipped ? ` (${loo.skipped} panos past the budget)` : ''}`);
                             } catch (err) {
                                 if (isAbort(err) || io.signal.aborted) throw err;
@@ -1655,7 +1657,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     for (const o of outcomes) for (const [kk, v] of Object.entries(o.out.timingsMs)) timingsMs[`${o.layer.layer}.${kk}`] = v;
                     const record: TexturePassRecord = { passVersion: TEXTURE_PASS_VERSION, layers, degradations: passDegradations, timingsMs };
                     // the held-out fit per layer, kept with the run so rounds can be compared on the same measure
-                    cache.writeRunNote(runId, 'texture_fit', outcomes.map(o => ({ layer: o.layer.layer, fit: o.out.bundle.fit ?? null, projection: o.out.projection ? { outputSeam: o.out.projection.outputSeam, context: o.out.projection.context, alignment: o.out.projection.alignment && { nccBefore: o.out.projection.alignment.nccBefore, nccAfter: o.out.projection.alignment.nccAfter }, poseRefine: o.out.projection.poseRefine } : null, rungShares: o.out.rungShares, timingsMs: o.out.timingsMs })));
+                    cache.writeRunNote(runId, 'texture_fit', outcomes.map(o => ({ layer: o.layer.layer, fit: o.out.bundle.fit ?? null, ...(o.out.bundle.materials ? { materials: o.out.bundle.materials } : {}), projection: o.out.projection ? { outputSeam: o.out.projection.outputSeam, context: o.out.projection.context, alignment: o.out.projection.alignment && { nccBefore: o.out.projection.alignment.nccBefore, nccAfter: o.out.projection.alignment.nccAfter }, poseRefine: o.out.projection.poseRefine } : null, rungShares: o.out.rungShares, timingsMs: o.out.timingsMs })));
                     const shares = weightedShares(outcomes.map(o => ({ shares: o.out.rungShares, texels: o.out.atlasTexels })));
                     run.state.texturePass = { status: 'committed', layersDone: outcomes.length, layersTotal: targets.length, rungShares: shares.map(x => round(x, 4)), message: 'textures ready' };
                     textureValue = {

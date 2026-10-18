@@ -269,6 +269,15 @@ describe('facade material reading: masonry coursing', () => {
         expect(r1.record.courses.length).toBe(0);
     });
 
+    it('a dark band too wide to be a joint (a moulding, a shadow line) is not drawn as coursing', () => {
+        const atlas = wallAtlas(4, 0.05);
+        const bands = (x: number, y: number) => { const f = ((y / 0.3) % 1 + 1) % 1; return f < 0.4 ? 70 : 160; };
+        const views = [view('p1', [1.6, 2, 7], 1700, 1000, 1000, bands), view('p2', [2.4, 2, 7.5], 1700, 1000, 1000, bands)];
+        const r = readFacadeMaterials({ atlas, planes: photoPlanes(atlas, () => false), views, evidence: evidence([viewMask(views[0], 0, () => false), viewMask(views[1], 1, () => false)]), delit: false });
+        expect(r.record.courses.length).toBe(0);
+        expect(r.record.coursesRejected[0].reason).toMatch(/wider than a joint/);
+    });
+
     it('readCourses finds the period of a striped profile and nothing in noise', () => {
         const bin = 0.005, n = 800;
         const sum = new Float64Array(n), cnt = new Uint32Array(n).fill(1);

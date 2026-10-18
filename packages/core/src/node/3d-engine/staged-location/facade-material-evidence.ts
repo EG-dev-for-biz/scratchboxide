@@ -51,6 +51,8 @@ export const TILE_RASTER_MAX_SIDE = 1600;
 /** Street View crops: the grid (cells per side) and tile-raster cells at most this many metres on a side. */
 export const VIEW_CROP_GRID = 3;
 export const TILE_CROP_METRES = 12;
+/** Python workers the segmenter may use at once while the evidence is gathered. */
+export const SEGMENT_PYTHON_WORKERS = 4;
 
 /** One registered view's mask, at the view's camera resolution. */
 export interface ViewMaterialMask { viewIndex: number; panoId: string; width: number; height: number; mask: Uint8Array; crops: number; cropsFailed: number }
@@ -88,6 +90,11 @@ export type SegmentImage = (png: Buffer, width: number, height: number, target: 
 /** The segmenter tool (ObjectSegmenterService) as a SegmentImage: the image is written to a temp dir for the call. */
 export function segmenterTool(): SegmentImage {
     const { ObjectSegmenterService } = require('../../video/ObjectSegmenterService') as typeof import('../../video/ObjectSegmenterService');
+    const { getPythonWorkerPool } = require('../../process/persistent-python-worker') as typeof import('../../process/persistent-python-worker');
+    const { repoPath, resolveRepoPython } = require('../../process/repo-python') as typeof import('../../process/repo-python');
+    // the segmenter's Python worker pool (shared with vfx_segment_subject) may run SEGMENT_PYTHON_WORKERS masks at once
+    // here: a facade is read in many crops, and one worker made the masks the stage's critical path
+    getPythonWorkerPool({ pythonBinary: resolveRepoPython('PYTHON_BIN'), scriptPath: repoPath('scripts', 'segment_object.py'), label: 'the object segmenter', maxWorkers: SEGMENT_PYTHON_WORKERS });
     const svc = new ObjectSegmenterService();
     return async (png, width, height, target, signal) => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-facade-mask-'));
@@ -195,8 +202,8 @@ export function faceFrame(normal: Vec3, chartU: Vec3): { h: Vec3; w: Vec3 } {
  * Renders one fitted planar face frontally from the tile (see SurfaceMaterialMask); alpha 0 where the tile has no surface
  * within `maxDistanceM` of the face. Returns undefined for a cylinder chart or a face too small to read.
  */
-export function tileFaceRaster(surface: Pick<FittedSurface, 'id' | 'chart'>, tile: Pick<TileTextureSurface, 'sample'>, opts: { mppM?: number; maxSide?: number; maxDistanceM?: number } = {}):
-    { frame: Omit<SurfaceMaterialMask, 'mask' | 'crops' | 'cropsFailed'>; image: DecodedImage } | undefined {
+export async function tileFaceRaster(surface: Pick<FittedSurface, 'id' | 'chart'>, tile: Pick<TileTextureSurface, 'sample'>, opts: { mppM?: number; maxSide?: number; maxDistanceM?: number } = {}):
+    Promise<{ frame: Omit<SurfaceMaterialMask, 'mask' | 'crops' | 'cropsFailed'>; image: DecodedImage } | undefined> {
     if (!('plane' in surface.chart)) return undefined;
     const p = surface.chart.plane;
     const n = norm(p.normal);
@@ -214,7 +221,10 @@ export function tileFaceRaster(surface: Pick<FittedSurface, 'id' | 'chart'>, til
     const rgba = new Uint8Array(W * H * 4);
     const lum = new Float32Array(W * H).fill(NaN);
     const maxD = opts.maxDistanceM ?? 0.5;
+    // the tile lookups run on the main thread: it is handed back every ~30 ms so the stage's other work keeps going
+    let slice = Date.now();
     for (let r = 0; r < H; r++) for (let c = 0; c < W; c++) {
+        if (c === 0 && Date.now() - slice > 30) { await new Promise(res => setImmediate(res)); slice = Date.now(); }
         const a = a0 + (c + 0.5) * mpp, b = b1 - (r + 0.5) * mpp;
         const P: Vec3 = [p.origin[0] + h[0] * a + w[0] * b, p.origin[1] + h[1] * a + w[1] * b, p.origin[2] + h[2] * a + w[2] * b];
         const s = tile.sample(P, n, maxD);
@@ -304,10 +314,11 @@ export async function gatherMaterialEvidence(input: GatherEvidenceInput): Promis
     });
     if (!input.views.length) unavailable.push('no registered Street View view to segment');
     if (input.tile) {
+        const tile = input.tile;
         for (const s of input.surfaces) {
-            const r = tileFaceRaster(s, input.tile);
-            if (!r) continue;
             jobs.push(async () => {
+                const r = await tileFaceRaster(s, tile);
+                if (!r) return;
                 const mask = new Uint8Array(r.image.width * r.image.height);
                 const cols = Math.max(1, Math.round((r.image.width * r.frame.mppM) / TILE_CROP_METRES)), rows = Math.max(1, Math.round((r.image.height * r.frame.mppM) / TILE_CROP_METRES));
                 const crops = grid(r.image.width, r.image.height, cols, rows);
@@ -317,12 +328,10 @@ export async function gatherMaterialEvidence(input: GatherEvidenceInput): Promis
                 surfaces.push({ ...r.frame, mask, crops: crops.length, cropsFailed: failed });
                 debugOverlay(`tile_${s.id}`, r.image, mask);
             });
-            // keep the main thread responsive between faces
-            await new Promise(res => setImmediate(res));
         }
     } else unavailable.push('no photo-textured tile to read the faces from');
     input.onProgress?.(`reading ${target} in ${views.length + jobs.length} images (Street View views and tile faces)`);
-    await pool(jobs, 3, async j => j());
+    await pool(jobs, 4, async j => j());
     views.sort((a, b) => a.viewIndex - b.viewIndex);
     surfaces.sort((a, b) => (a.surfaceId < b.surfaceId ? -1 : 1));
     if (stats.calls && stats.failed === stats.calls) unavailable.push(`every segmentation call failed (${stats.errors[0] ?? 'no message'})`);

@@ -591,7 +591,8 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
             const dispose = photoTierCacheDispose;
             const run = async (budgetMs?: number) => {
                 const loo = await leaveOnePanoOut(atlas, views, bake, depth, src.signal, budgetMs);
-                if (material && materialRecord && materialPairs.length) materialRecord.loo = materialLoo(atlas, views, depth, materialPairs, src.signal);
+                // the record went back with the outcome already: the walls' fit travels with the leave-one-pano-out result
+                if (material && materialRecord && materialPairs.length) loo.materials = materialLoo(atlas, views, depth, materialPairs, src.signal);
                 return loo;
             };
             measureLoo = dispose ? async (budgetMs?: number) => { try { return await run(budgetMs); } finally { dispose(); } } : run;

@@ -21,8 +21,8 @@
  *    mask is the held-out check of the others');
  *  - one pano and the tile agree (two independent captures);
  *  - the tile alone (a face no pano sees): the tile marks it AND the measured tile raster agrees with what glass looks like
- *    there: the region sits in a regular lattice of like regions on its face and is darker or more uniform than the wall
- *    around it. Lower confidence.
+ *    there: the region sits in a regular lattice of like regions on its face and is darker than the wall around it (its
+ *    interior; more uniform alone is not enough: marble panels are). Lower confidence.
  * Anything else is rejected with the reason. Where the sources contradict each other the region is rejected unless three
  * or more panos mark it.
  *
@@ -67,6 +67,9 @@ export const COURSE_AGREEMENT = 0.06;
 export const COURSE_MIN_PERIOD_PX = 4;
 export const COURSE_BIN_M = 0.005;
 export const COURSE_PERIOD_RANGE_M: [number, number] = [0.04, 1.2];
+/** A joint is at most this share of its pitch and this wide (mortar and ashlar joints are millimetres to a few centimetres). */
+export const MAX_JOINT_SHARE = 0.25;
+export const MAX_JOINT_WIDTH_M = 0.04;
 /** Visibility tolerances for carrying a mask (as the projection's occluder test). */
 const DEPTH_TOL_BASE_M = 0.2, DEPTH_TOL_PER_M = 0.02, MIN_COS = 0.375;
 
@@ -444,9 +447,11 @@ export function readFacadeMaterials(input: FacadeMaterialInput): FacadeMaterialR
             const ws = face >= 0 ? statsOfFace(face) : { wallMean: 0, wallCv: 0 };
             const darker = mean < 0.8 * ws.wallMean, uniform = cv < 0.8 * ws.wallCv;
             lattice = { neighbours, darker, uniform };
-            if (neighbours >= 2 && (darker || uniform)) {
-                accepted = true; decidedBy = 'tiles'; confidence = 0.5 * (tileMarked ?? 0);
-                reason = `no pano sees it; the tile marks it, it sits in a row or column with ${neighbours} like regions and is ${darker ? 'darker' : 'more uniform'} than the face's wall`;
+            // darker is required: on Washington Square Arch the masks proposed uniform marble panels in rows as glass (not
+            // darker than the stone); glass in the tile's blended photos shows its dark interior
+            if (neighbours >= 2 && darker) {
+                accepted = true; decidedBy = 'tiles'; confidence = 0.5 * (tileMarked ?? 0) * (uniform ? 1 : 0.8);
+                reason = `no pano sees it; the tile marks it, it sits in a row or column with ${neighbours} like regions and is darker${uniform ? ' and more uniform' : ''} than the face's wall`;
             } else reason = `no pano sees it; the tile marks it but the raster does not agree (${neighbours} like regions in line, ${darker ? 'darker' : 'not darker'}, ${uniform ? 'uniform' : 'not more uniform'} than the wall)`;
         } else {
             reason = see ? `${mark} of ${see} panos mark it${read ? `, the tile ${tileSupports ? 'does' : 'does not'}` : ''}: fewer than ${MIN_MARKING_PANOS} agreeing views` : read ? 'no pano sees it and the tile does not mark it' : 'no source read it';
@@ -639,6 +644,16 @@ export function readFacadeMaterials(input: FacadeMaterialInput): FacadeMaterialR
             const why = !perPano.length && !tileCourse ? 'no pano or tile view resolves a repeat along the height above the floor' : `the readings do not agree (${perPano.map(p => `${p.pitchM} m`).join(', ') || 'no pano'}${tileCourse ? `, tile ${tileCourse.pitchM} m` : ''})`;
             coursesRejected.push({ mapIndex: m, reason: why });
             wallReg.reason = `no coursing: ${why}`;
+            wallRegions.push(wallReg);
+            continue;
+        }
+        // a joint is thin against its unit: a dark band wider than that is a moulding, a string course or a shadow line
+        const jwMean = agree.reduce((s2, a) => s2 + a.jointWidthM, 0) / agree.length;
+        const pitchMean = agree.reduce((s2, a) => s2 + a.pitchM, 0) / agree.length;
+        if (jwMean > Math.min(MAX_JOINT_SHARE * pitchMean, MAX_JOINT_WIDTH_M)) {
+            const why = `the repeat every ${r3(pitchMean)} m has a dark band ${Math.round(jwMean * 1000)} mm wide: wider than a joint (at most ${Math.round(MAX_JOINT_SHARE * 100)}% of the pitch and ${Math.round(MAX_JOINT_WIDTH_M * 1000)} mm), so it is not drawn as coursing`;
+            coursesRejected.push({ mapIndex: m, reason: why });
+            wallReg.decidedBy = 'none'; wallReg.accepted = false; wallReg.reason = `no coursing: ${why}`;
             wallRegions.push(wallReg);
             continue;
         }
