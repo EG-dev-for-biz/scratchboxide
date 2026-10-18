@@ -110,90 +110,15 @@ describe('Multi-Perspective 360° & Zenith/Nadir Synthesis Service', () => {
         expect(bottomPlate.cameraConfig.pitchDeg).toBe(-90.0);
     });
 
-    it('synthesizes all 5 missing perspective plates (Right, Left, Back, Top, Bottom) from a single 2D image', () => {
-        const res = 64;
-        const frontRgba = Buffer.alloc(res * res * 4);
-
-        // Synthesize an architectural facade with sky on top, ground on bottom
-        for (let y = 0; y < res; y++) {
-            for (let x = 0; x < res; x++) {
-                const idx = (y * res + x) * 4;
-                if (y < res * 0.35) {
-                    // Sky
-                    frontRgba[idx] = 135;
-                    frontRgba[idx + 1] = 190;
-                    frontRgba[idx + 2] = 245;
-                } else if (y > res * 0.75) {
-                    // Pavement
-                    frontRgba[idx] = 50;
-                    frontRgba[idx + 1] = 55;
-                    frontRgba[idx + 2] = 60;
-                } else {
-                    // Facade
-                    frontRgba[idx] = 180;
-                    frontRgba[idx + 1] = 150;
-                    frontRgba[idx + 2] = 120;
-                }
-                frontRgba[idx + 3] = 255;
-            }
-        }
-
-        const perspectives = MultiPerspectivePanoramaSynthesisService.synthesizeMissingPerspectivesFromFront(
-            frontRgba,
-            res,
-            { styleHint: 'urban sunset street' }
-        );
-
-        expect(perspectives.front).toBeDefined();
-        expect(perspectives.right).toBeDefined();
-        expect(perspectives.back).toBeDefined();
-        expect(perspectives.left).toBeDefined();
-        expect(perspectives.top).toBeDefined();
-        expect(perspectives.bottom).toBeDefined();
-
-        expect(perspectives.front.isSynthesized).toBe(false);
-        expect(perspectives.right.isSynthesized).toBe(true);
-        expect(perspectives.back.isSynthesized).toBe(true);
-        expect(perspectives.left.isSynthesized).toBe(true);
-        expect(perspectives.top.isSynthesized).toBe(true);
-        expect(perspectives.bottom.isSynthesized).toBe(true);
-
-        // Verify boundary edge continuity:
-        // 1. Right flank left edge (x=0) must match front right edge (x=res-1)
-        for (let y = 0; y < res; y++) {
-            const frontRightIdx = (y * res + (res - 1)) * 4;
-            const rightLeftIdx = (y * res + 0) * 4;
-
-            expect(perspectives.right.rgba[rightLeftIdx]).toBeCloseTo(perspectives.front.rgba[frontRightIdx], -1);
-            expect(perspectives.right.rgba[rightLeftIdx + 1]).toBeCloseTo(perspectives.front.rgba[frontRightIdx + 1], -1);
-            expect(perspectives.right.rgba[rightLeftIdx + 2]).toBeCloseTo(perspectives.front.rgba[frontRightIdx + 2], -1);
-        }
-
-        // 2. Left flank right edge (x=res-1) must match front left edge (x=0)
-        for (let y = 0; y < res; y++) {
-            const frontLeftIdx = (y * res + 0) * 4;
-            const leftRightIdx = (y * res + (res - 1)) * 4;
-
-            expect(perspectives.left.rgba[leftRightIdx]).toBeCloseTo(perspectives.front.rgba[frontLeftIdx], -1);
-            expect(perspectives.left.rgba[leftRightIdx + 1]).toBeCloseTo(perspectives.front.rgba[frontLeftIdx + 1], -1);
-            expect(perspectives.left.rgba[leftRightIdx + 2]).toBeCloseTo(perspectives.front.rgba[frontLeftIdx + 2], -1);
-        }
-
-        // 3. Zenith (top) apex center must be smooth and valid RGB
-        const halfRes = res / 2;
-        const zenithApexIdx = (halfRes * res + halfRes) * 4;
-        expect(perspectives.top.rgba[zenithApexIdx + 3]).toBe(255);
-
-        // 4. Nadir (bottom) center must be smooth and valid RGB
-        const nadirCenterIdx = (halfRes * res + halfRes) * 4;
-        expect(perspectives.bottom.rgba[nadirCenterIdx + 3]).toBe(255);
-    });
-
     it('stitches the 6 perspectives into a 360 equirectangular panorama and verifies coverage', () => {
         const res = 32;
         const frontRgba = Buffer.alloc(res * res * 4, 180);
 
-        const perspectives = MultiPerspectivePanoramaSynthesisService.synthesizeMissingPerspectivesFromFront(frontRgba, res);
+        const faces: PanoramaPerspective[] = ['front', 'right', 'back', 'left', 'top', 'bottom'];
+        const perspectives = Object.fromEntries(faces.map(f => [f, {
+            perspective: f, width: res, height: res, rgba: Buffer.from(frontRgba), isSynthesized: f !== 'front',
+            cameraConfig: MultiPerspectivePanoramaSynthesisService.CANONICAL_CAMERAS[f]
+        }])) as any;
         const stitched = MultiPerspectivePanoramaSynthesisService.stitchPerspectivesToEquirectangular(
             perspectives,
             128,
@@ -285,22 +210,9 @@ describe('Multi-Perspective 360° & Zenith/Nadir Synthesis Service', () => {
             expect(tool?.name).toBe('panorama_generate_perspectives');
             expect(Object.keys(tool?.declaration.parameters.properties || {})).not.toContain('mockExecution');
 
-            // The user asked for procedural perspectives: no model call, and the summary says so.
-            const procedural = await registry.dispatch('panorama_generate_perspectives', {
-                inputImagePath: inputPath,
-                faceResolution: 32,
-                equirectangularWidth: 128,
-                equirectangularHeight: 64,
-                useNanoBanana: false,
-                outputDir: tmpDir
-            }, {} as any);
-
-            expect(procedural.exec.summaryResult).toContain('360°x180°');
-            expect(procedural.exec.summaryResult).toContain('useNanoBanana: false');
-            expect(procedural.exec.summaryResult).toContain('no model call');
-            expect(procedural.exec.summaryResult).toContain('TOP');
-            expect(procedural.exec.summaryResult).toContain('BOTTOM');
-            expect(calls).toEqual([]);
+            // Procedural (invented sky/crosswalk) perspectives were removed: there is no switch for them.
+            expect(Object.keys(tool?.declaration.parameters.properties || {})).not.toContain('useNanoBanana');
+            expect(MultiPerspectivePanoramaSynthesisService as any).not.toHaveProperty('synthesizeMissingPerspectivesFromFront');
 
             // A model-supplied mockExecution is no longer honoured: the image model makes the views and is named.
             const generated = await registry.dispatch('panorama_generate_perspectives', {
@@ -313,6 +225,9 @@ describe('Multi-Perspective 360° & Zenith/Nadir Synthesis Service', () => {
             expect(generated.exec.status).toBe('completed');
             expect(calls).toEqual(Array(5).fill('gemini-3.1-flash-image'));
             expect(generated.exec.summaryResult).toContain('Generated with gemini-3.1-flash-image.');
+            expect(generated.exec.summaryResult).toContain('360°x180°');
+            expect(generated.exec.summaryResult).toContain('TOP');
+            expect(generated.exec.summaryResult).toContain('BOTTOM');
         } finally {
             vi.restoreAllMocks();
             await fs.remove(tmpDir);
@@ -376,7 +291,7 @@ describe('Multi-Perspective 360° & Zenith/Nadir Synthesis Service', () => {
             }
         );
 
-        expect(modelUsed).toBe('gemini-3.1-flash-image mock: procedural copies, no model call');
+        expect(modelUsed).toBe('gemini-3.1-flash-image mock: copies of the input view, no model call');
         expect(perspectives.front.isSynthesized).toBe(false);
         expect(perspectives.right.isSynthesized).toBe(true);
         expect(perspectives.back.isSynthesized).toBe(true);
@@ -442,8 +357,8 @@ describe('Multi-Perspective 360° & Zenith/Nadir Synthesis Service', () => {
         });
 
         expect(result.success).toBe(true);
-        expect(result.modelUsed).toBe('gemini-3.1-flash-image mock: procedural copies, no model call');
-        expect(result.summary).toContain('gemini-3.1-flash-image mock: procedural copies, no model call');
+        expect(result.modelUsed).toBe('gemini-3.1-flash-image mock: copies of the input view, no model call');
+        expect(result.summary).toContain('gemini-3.1-flash-image mock: copies of the input view, no model call');
         expect(result.perspectivesSynthesized).toHaveLength(5);
 
         await fs.remove(tmpDir);

@@ -1351,7 +1351,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 styleHint: {
                     type: 'STRING',
-                    description: 'Optional style or scene hint to guide procedural or generative perspective synthesis.'
+                    description: 'Optional style or scene hint to guide the image model generating the perspectives.'
                 },
                 prompt: {
                     type: 'STRING',
@@ -1360,10 +1360,6 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 model: {
                     type: 'STRING',
                     description: 'Image model id for the 5 surrounding perspectives. When given, only that model is used; omit it to try the default list in order (gemini-3.1-flash-image, i.e. Nano Banana 2, first). The result names the model that answered and why any earlier one was skipped.'
-                },
-                useNanoBanana: {
-                    type: 'BOOLEAN',
-                    description: 'Default true: an image model generates the 5 perspectives from the initial image. Set false only when the user asks for procedural perspectives (edge continuations of the input, no model call); the result says so.'
                 },
                 outputDir: {
                     type: 'STRING',
@@ -2959,7 +2955,6 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const styleHint = asString(args.styleHint) || undefined;
         const prompt = asString(args.prompt) || undefined;
         const model = asString(args.model) || undefined;
-        const useNanoBanana = typeof args.useNanoBanana === 'boolean' ? args.useNanoBanana : undefined;
         const outputDir = asString(args.outputDir) || undefined;
 
         const result = await generate360Perspectives({
@@ -2970,7 +2965,6 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             styleHint,
             prompt,
             model,
-            useNanoBanana,
             outputDir,
             signal: ctx?.signal
         });

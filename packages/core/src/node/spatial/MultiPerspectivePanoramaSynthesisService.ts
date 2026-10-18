@@ -45,15 +45,13 @@ export interface PerspectiveFrame {
     isSynthesized: boolean; // false for original input perspective, true for generated perspectives
     prompt?: string;
     cameraConfig: PerspectiveCameraConfig;
-    /** The image model that produced this view (absent for the input view and procedural/mock views). */
+    /** The image model that produced this view (absent for the input view, extracted views and mock views). */
     generatedBy?: string;
 }
 
 export interface MultiPerspectiveSynthesisOptions {
     inputImagePath?: string;
     inputImageBuffer?: Buffer;
-    inputPerspective?: PanoramaPerspective; // default 'front'
-    inputFovDeg?: number;                   // default 90.0 - 140.0
     faceResolution?: number;                // default 512
     equirectangularWidth?: number;          // default 2048
     equirectangularHeight?: number;         // default 1024
@@ -63,9 +61,7 @@ export interface MultiPerspectiveSynthesisOptions {
     prompt?: string;                        // optional prompt context describing the environment
     locationName?: string;                  // optional landmark or location name
     model?: string;                         // when given, only this model is used; else IMAGE_MODEL_PRIORITY in order
-    useNanoBanana?: boolean;                // default true; false (user-requested) runs the procedural synthesizer, labelled as such
-    useAiInpainting?: boolean;
-    mockExecution?: boolean;                // tests only: procedural copies, no model call (labelled as such)
+    mockExecution?: boolean;                // tests only: copies of the input view, no model call (labelled as such)
     outputDir?: string;                     // directory to write individual perspective frames and stitched pano
     /** Stops the rig between views and during a view's model call: a stopped request bills no further views. */
     signal?: AbortSignal;
@@ -203,302 +199,6 @@ export class MultiPerspectivePanoramaSynthesisService {
             pngBuffer: encodePng(outWidth, outHeight, outRgba),
             isSynthesized: false,
             cameraConfig: camera
-        };
-    }
-
-    /**
-     * Synthesizes all 5 missing perspective camera plates (Right, Left, Back, Top, Bottom)
-     * from a given front perspective plate.
-     */
-    static synthesizeMissingPerspectivesFromFront(
-        frontRgba: Buffer,
-        res = 512,
-        options?: {
-            styleHint?: string;
-            inputFovDeg?: number;
-        }
-    ): Record<PanoramaPerspective, PerspectiveFrame> {
-        const rightRgba = Buffer.alloc(res * res * 4);
-        const leftRgba = Buffer.alloc(res * res * 4);
-        const backRgba = Buffer.alloc(res * res * 4);
-        const topRgba = Buffer.alloc(res * res * 4);
-        const bottomRgba = Buffer.alloc(res * res * 4);
-
-        // 1. Compute border profiles from front plate
-        const leftEdge: [number, number, number][] = [];
-        const rightEdge: [number, number, number][] = [];
-        const topEdge: [number, number, number][] = [];
-        const botEdge: [number, number, number][] = [];
-
-        let skyR = 0, skyG = 0, skyB = 0;
-        let gndR = 0, gndG = 0, gndB = 0;
-
-        for (let y = 0; y < res; y++) {
-            const lIdx = y * res * 4;
-            const rIdx = (y * res + (res - 1)) * 4;
-            leftEdge.push([frontRgba[lIdx], frontRgba[lIdx + 1], frontRgba[lIdx + 2]]);
-            rightEdge.push([frontRgba[rIdx], frontRgba[rIdx + 1], frontRgba[rIdx + 2]]);
-        }
-
-        for (let x = 0; x < res; x++) {
-            const tIdx = x * 4;
-            const bIdx = ((res - 1) * res + x) * 4;
-            topEdge.push([frontRgba[tIdx], frontRgba[tIdx + 1], frontRgba[tIdx + 2]]);
-            botEdge.push([frontRgba[bIdx], frontRgba[bIdx + 1], frontRgba[bIdx + 2]]);
-
-            skyR += frontRgba[tIdx];
-            skyG += frontRgba[tIdx + 1];
-            skyB += frontRgba[tIdx + 2];
-
-            gndR += frontRgba[bIdx];
-            gndG += frontRgba[bIdx + 1];
-            gndB += frontRgba[bIdx + 2];
-        }
-
-        skyR = Math.round(skyR / res);
-        skyG = Math.round(skyG / res);
-        skyB = Math.round(skyB / res);
-
-        gndR = Math.round(gndR / res);
-        gndG = Math.round(gndG / res);
-        gndB = Math.round(gndB / res);
-
-        // --- 2. SYNTHESIZE RIGHT FLANK (+90 deg yaw) ---
-        // Left border (x=0) welds to front right border (x=res-1)
-        for (let y = 0; y < res; y++) {
-            const rowOffset = y * res * 4;
-            const seed = rightEdge[y];
-
-            for (let x = 0; x < res; x++) {
-                const xFrac = x / res;
-                const idx = rowOffset + x * 4;
-
-                const perspectiveScale = 1.0 / (1.0 + xFrac * 1.5);
-                const wallPattern = Math.sin((x * 0.08) * perspectiveScale) > 0.15 ? 1.08 : 0.92;
-                const storeyGrid = Math.sin((y * 0.06) * perspectiveScale) > 0.2 ? 1.05 : 0.95;
-                const depthHaze = Math.pow(xFrac, 1.4);
-
-                // Blend from edge seed to horizon ambient
-                const baseR = seed[0] * (1.0 - depthHaze * 0.4) + skyR * (depthHaze * 0.3);
-                const baseG = seed[1] * (1.0 - depthHaze * 0.4) + skyG * (depthHaze * 0.3);
-                const baseB = seed[2] * (1.0 - depthHaze * 0.4) + skyB * (depthHaze * 0.35);
-
-                const edgeBlend = Math.min(1.0, x / 4.0);
-                const pattern = 1.0 + (wallPattern * storeyGrid - 1.0) * edgeBlend;
-
-                const r = Math.max(0, Math.min(255, Math.round(baseR * pattern)));
-                const g = Math.max(0, Math.min(255, Math.round(baseG * pattern)));
-                const b = Math.max(0, Math.min(255, Math.round(baseB * pattern)));
-
-                rightRgba[idx] = r;
-                rightRgba[idx + 1] = g;
-                rightRgba[idx + 2] = b;
-                rightRgba[idx + 3] = 255;
-            }
-        }
-
-        // --- 3. SYNTHESIZE LEFT FLANK (-90 deg yaw) ---
-        // Right border (x=res-1) welds to front left border (x=0)
-        for (let y = 0; y < res; y++) {
-            const rowOffset = y * res * 4;
-            const seed = leftEdge[y];
-
-            for (let x = 0; x < res; x++) {
-                const invX = (res - 1 - x) / res;
-                const idx = rowOffset + x * 4;
-
-                const perspectiveScale = 1.0 / (1.0 + invX * 1.5);
-                const wallPattern = Math.sin((x * 0.08) * perspectiveScale) > 0.15 ? 1.08 : 0.92;
-                const storeyGrid = Math.sin((y * 0.06) * perspectiveScale) > 0.2 ? 1.05 : 0.95;
-                const depthHaze = Math.pow(invX, 1.4);
-
-                const baseR = seed[0] * (1.0 - depthHaze * 0.4) + skyR * (depthHaze * 0.3);
-                const baseG = seed[1] * (1.0 - depthHaze * 0.4) + skyG * (depthHaze * 0.3);
-                const baseB = seed[2] * (1.0 - depthHaze * 0.4) + skyB * (depthHaze * 0.35);
-
-                const edgeBlend = Math.min(1.0, (res - 1 - x) / 4.0);
-                const pattern = 1.0 + (wallPattern * storeyGrid - 1.0) * edgeBlend;
-
-                const r = Math.max(0, Math.min(255, Math.round(baseR * pattern)));
-                const g = Math.max(0, Math.min(255, Math.round(baseG * pattern)));
-                const b = Math.max(0, Math.min(255, Math.round(baseB * pattern)));
-
-                leftRgba[idx] = r;
-                leftRgba[idx + 1] = g;
-                leftRgba[idx + 2] = b;
-                leftRgba[idx + 3] = 255;
-            }
-        }
-
-        // --- 4. SYNTHESIZE BACK VISTA (180 deg yaw) ---
-        // Left border (x=0) welds to right plate right border; right border (x=res-1) welds to left plate left border
-        for (let y = 0; y < res; y++) {
-            const rowOffset = y * res * 4;
-            const rRightIdx = (y * res + (res - 1)) * 4;
-            const lLeftIdx = y * res * 4;
-
-            const rR = rightRgba[rRightIdx], rG = rightRgba[rRightIdx + 1], rB = rightRgba[rRightIdx + 2];
-            const lR = leftRgba[lLeftIdx],   lG = leftRgba[lLeftIdx + 1],   lB = leftRgba[lLeftIdx + 2];
-
-            for (let x = 0; x < res; x++) {
-                const t = x / (res - 1);
-                const smoothT = t * t * (3.0 - 2.0 * t);
-                const idx = rowOffset + x * 4;
-
-                const centerDip = Math.sin(t * Math.PI);
-                const rearArch = centerDip > 0.6 ? 1.12 : 0.94;
-                const grain = ((x * 13 + y * 29) % 7) - 3;
-
-                const baseR = (1.0 - smoothT) * rR + smoothT * lR;
-                const baseG = (1.0 - smoothT) * rG + smoothT * lG;
-                const baseB = (1.0 - smoothT) * rB + smoothT * lB;
-
-                const edgeBlend = Math.min(1.0, Math.min(x, res - 1 - x) / 4.0);
-                const pattern = 1.0 + (rearArch - 1.0) * edgeBlend;
-                const grainVal = grain * edgeBlend;
-
-                const r = Math.max(0, Math.min(255, Math.round(baseR * pattern + grainVal)));
-                const g = Math.max(0, Math.min(255, Math.round(baseG * pattern + grainVal)));
-                const b = Math.max(0, Math.min(255, Math.round(baseB * pattern + grainVal)));
-
-                backRgba[idx] = r;
-                backRgba[idx + 1] = g;
-                backRgba[idx + 2] = b;
-                backRgba[idx + 3] = 255;
-            }
-        }
-
-        // --- 5. SYNTHESIZE TOP / ZENITH (+90 deg pitch) ---
-        // Bottom border (y=res-1) welds to front top border (y=0)
-        // Center (res/2, res/2) is the zenith apex looking straight up
-        const halfRes = res * 0.5;
-        for (let y = 0; y < res; y++) {
-            const rowOffset = y * res * 4;
-            const ny = (y - halfRes) / halfRes; // -1 top (rear), +1 bottom (front)
-
-            for (let x = 0; x < res; x++) {
-                const nx = (x - halfRes) / halfRes; // -1 left, +1 right
-                const distCenter = Math.hypot(nx, ny);
-                const idx = rowOffset + x * 4;
-
-                const apexT = Math.max(0.0, 1.0 - Math.min(1.0, distCenter));
-                const smoothApex = apexT * apexT * (3.0 - 2.0 * apexT);
-
-                const apexR = Math.max(8, Math.min(50, Math.round(skyR * 0.35)));
-                const apexG = Math.max(12, Math.min(60, Math.round(skyG * 0.4)));
-                const apexB = Math.max(26, Math.min(90, Math.round(skyB * 0.6)));
-
-                const cloudNoise = Math.sin(x * 0.03 + y * 0.04) * Math.cos(x * 0.02 - y * 0.03) * 6;
-                const sunGlow = Math.max(0, 1.0 - Math.hypot(nx, ny + 0.3)) * 25;
-
-                const r = Math.max(0, Math.min(255, Math.round((1.0 - smoothApex) * skyR + smoothApex * apexR + cloudNoise + sunGlow)));
-                const g = Math.max(0, Math.min(255, Math.round((1.0 - smoothApex) * skyG + smoothApex * apexG + cloudNoise + sunGlow)));
-                const b = Math.max(0, Math.min(255, Math.round((1.0 - smoothApex) * skyB + smoothApex * apexB + cloudNoise + sunGlow * 0.8)));
-
-                topRgba[idx] = r;
-                topRgba[idx + 1] = g;
-                topRgba[idx + 2] = b;
-                topRgba[idx + 3] = 255;
-            }
-        }
-
-        // --- 6. SYNTHESIZE BOTTOM / NADIR (-90 deg pitch) ---
-        // Top border (y=0) welds to front bottom border (y=res-1)
-        // Center (res/2, res/2) is the nadir looking straight down
-        for (let y = 0; y < res; y++) {
-            const rowOffset = y * res * 4;
-            const ny = (y - halfRes) / halfRes; // -1 top (front), +1 bottom (rear)
-
-            for (let x = 0; x < res; x++) {
-                const nx = (x - halfRes) / halfRes;
-                const distCenter = Math.hypot(nx, ny);
-                const idx = rowOffset + x * 4;
-
-                const nadirT = Math.max(0.0, 1.0 - Math.min(1.0, distCenter));
-                const smoothNadir = nadirT * nadirT * (3.0 - 2.0 * nadirT);
-
-                const asphaltR = Math.max(12, Math.min(42, Math.round(gndR * 0.6)));
-                const asphaltG = Math.max(14, Math.min(46, Math.round(gndG * 0.65)));
-                const asphaltB = Math.max(18, Math.min(52, Math.round(gndB * 0.7)));
-
-                const stripePeriodX = ((Math.abs(nx) * 14.0) % 2.0);
-                const isCrosswalk = stripePeriodX < 0.6 && Math.abs(ny) > 0.25;
-                const stripeWhite = isCrosswalk ? (32 + Math.sin(ny * 24.0) * 12) : 0;
-
-                const puddleGrain = ((x * 19 + y * 37) % 11) - 5;
-                const wetReflection = (Math.sin(nx * 10.0 + ny * 12.0) > 0.4) ? 0.25 : 0.0;
-
-                const r = Math.max(0, Math.min(255, Math.round((1.0 - smoothNadir) * gndR + smoothNadir * asphaltR + stripeWhite + skyR * wetReflection + puddleGrain)));
-                const g = Math.max(0, Math.min(255, Math.round((1.0 - smoothNadir) * gndG + smoothNadir * asphaltG + stripeWhite + skyG * wetReflection + puddleGrain)));
-                const b = Math.max(0, Math.min(255, Math.round((1.0 - smoothNadir) * gndB + smoothNadir * asphaltB + stripeWhite * 1.1 + skyB * wetReflection + puddleGrain)));
-
-                bottomRgba[idx] = r;
-                bottomRgba[idx + 1] = g;
-                bottomRgba[idx + 2] = b;
-                bottomRgba[idx + 3] = 255;
-            }
-        }
-
-        return {
-            front: {
-                perspective: 'front',
-                width: res,
-                height: res,
-                rgba: frontRgba,
-                pngBuffer: encodePng(res, res, frontRgba),
-                isSynthesized: false,
-                cameraConfig: MultiPerspectivePanoramaSynthesisService.CANONICAL_CAMERAS.front
-            },
-            right: {
-                perspective: 'right',
-                width: res,
-                height: res,
-                rgba: rightRgba,
-                pngBuffer: encodePng(res, res, rightRgba),
-                isSynthesized: true,
-                prompt: 'Photorealistic architectural right flank perspective, extending source scene lighting and facade rhythm (+90° yaw)',
-                cameraConfig: MultiPerspectivePanoramaSynthesisService.CANONICAL_CAMERAS.right
-            },
-            back: {
-                perspective: 'back',
-                width: res,
-                height: res,
-                rgba: backRgba,
-                pngBuffer: encodePng(res, res, backRgba),
-                isSynthesized: true,
-                prompt: 'Photorealistic rear vista perspective, seamless closure between left and right flanks (180° yaw)',
-                cameraConfig: MultiPerspectivePanoramaSynthesisService.CANONICAL_CAMERAS.back
-            },
-            left: {
-                perspective: 'left',
-                width: res,
-                height: res,
-                rgba: leftRgba,
-                pngBuffer: encodePng(res, res, leftRgba),
-                isSynthesized: true,
-                prompt: 'Photorealistic architectural left flank perspective, extending source scene lighting and facade rhythm (-90° yaw)',
-                cameraConfig: MultiPerspectivePanoramaSynthesisService.CANONICAL_CAMERAS.left
-            },
-            top: {
-                perspective: 'top',
-                width: res,
-                height: res,
-                rgba: topRgba,
-                pngBuffer: encodePng(res, res, topRgba),
-                isSynthesized: true,
-                prompt: 'Photorealistic celestial sky/ceiling dome, smooth radial twilight gradient (+90° pitch zenith)',
-                cameraConfig: MultiPerspectivePanoramaSynthesisService.CANONICAL_CAMERAS.top
-            },
-            bottom: {
-                perspective: 'bottom',
-                width: res,
-                height: res,
-                rgba: bottomRgba,
-                pngBuffer: encodePng(res, res, bottomRgba),
-                isSynthesized: true,
-                prompt: 'Photorealistic pavement and ground floor with wet asphalt reflections and converging crosswalk stripes (-90° pitch nadir)',
-                cameraConfig: MultiPerspectivePanoramaSynthesisService.CANONICAL_CAMERAS.bottom
-            }
         };
     }
 
@@ -696,7 +396,7 @@ export class MultiPerspectivePanoramaSynthesisService {
      * The models tried are exactly `options.model` when given, else IMAGE_MODEL_PRIORITY; the first model that
      * answers produces every view (one model per rig keeps the views consistent), and the outcome says which model
      * that was and why any earlier one was skipped. Throws MediaModelUnavailableError when there are no
-     * credentials or no model produces a view; only mockExecution (tests) returns procedural copies.
+     * credentials or no model produces a view; only mockExecution (tests) returns copies of the input view.
      */
     async synthesizePerspectivesWithNanoBanana(
         frontRgba: Buffer,
@@ -715,11 +415,6 @@ export class MultiPerspectivePanoramaSynthesisService {
         let skippedModels: SkippedMediaModel[] = [];
         let modelUsed: string | undefined;
         const targetPerspectives: PanoramaPerspective[] = options?.perspectivesToGenerate || [...SURROUNDING_PERSPECTIVES];
-
-        // Tests only (mockExecution): procedural copies of the input stand in for the model, labelled as such.
-        const proceduralBase = options?.mockExecution
-            ? MultiPerspectivePanoramaSynthesisService.synthesizeMissingPerspectivesFromFront(frontRgba, res, { styleHint: options?.styleHint || options?.prompt })
-            : undefined;
 
         const frontPng = encodePng(res, res, frontRgba);
         const frontFrame: PerspectiveFrame = {
@@ -790,15 +485,8 @@ export class MultiPerspectivePanoramaSynthesisService {
                 targetRgba = MultiPerspectivePanoramaSynthesisService.resampleRgba(dec.rgba, dec.width, dec.height, res, res);
                 generatedBy = answer.modelUsed;
             } else {
-                // mockExecution: a procedural copy of the base view, not model output
-                targetRgba = Buffer.from(proceduralBase![p].rgba);
-                const rotOffset = (MultiPerspectivePanoramaSynthesisService.CANONICAL_CAMERAS[p].yawDeg / 90.0) * 0.15;
-                for (let i = 0; i < targetRgba.length; i += 4) {
-                    const subtleMod = 1.0 + Math.sin((i / 4) * 0.005 + rotOffset) * 0.03;
-                    targetRgba[i] = Math.max(0, Math.min(255, Math.round(targetRgba[i] * subtleMod)));
-                    targetRgba[i + 1] = Math.max(0, Math.min(255, Math.round(targetRgba[i + 1] * subtleMod)));
-                    targetRgba[i + 2] = Math.max(0, Math.min(255, Math.round(targetRgba[i + 2] * subtleMod)));
-                }
+                // mockExecution (tests only): a plain copy of the input view, not model output
+                targetRgba = Buffer.from(frontRgba);
             }
 
             // Weld adjacent boundaries with front plate to guarantee zero seam tears
@@ -820,9 +508,9 @@ export class MultiPerspectivePanoramaSynthesisService {
         if (!client) {
             return {
                 perspectives: result,
-                modelUsed: `${models[0]} mock: procedural copies, no model call`,
+                modelUsed: `${models[0]} mock: copies of the input view, no model call`,
                 skippedModels: [],
-                modelNote: 'Mock run: procedural copies of the input, no model call.'
+                modelNote: 'Mock run: copies of the input view, no model call.'
             };
         }
         const used = modelUsed || models[0];
@@ -918,43 +606,28 @@ export class MultiPerspectivePanoramaSynthesisService {
                 }
             }
 
-            if (options.useNanoBanana !== false && options.model !== 'procedural') {
-                const outcome = await this.synthesizePerspectivesWithNanoBanana(
-                    frontRgba,
-                    faceRes,
-                    {
-                        model: options.model,
-                        prompt: options.prompt,
-                        styleHint: options.styleHint,
-                        locationName: options.locationName,
-                        mockExecution: options.mockExecution,
-                        perspectivesToGenerate: options.synthesizePerspectives,
-                        signal: options.signal
-                    }
-                );
-                const missing = SURROUNDING_PERSPECTIVES.filter(p => !outcome.perspectives[p]);
-                if (missing.length) {
-                    throw new MediaModelUnavailableError(outcome.modelUsed, `no ${missing.join(', ')} view was generated, so there is nothing to stitch there`);
+            const outcome = await this.synthesizePerspectivesWithNanoBanana(
+                frontRgba,
+                faceRes,
+                {
+                    model: options.model,
+                    prompt: options.prompt,
+                    styleHint: options.styleHint,
+                    locationName: options.locationName,
+                    mockExecution: options.mockExecution,
+                    perspectivesToGenerate: options.synthesizePerspectives,
+                    signal: options.signal
                 }
-                perspectives = outcome.perspectives as Record<PanoramaPerspective, PerspectiveFrame>;
-                perspectivesSynthesized = [...SURROUNDING_PERSPECTIVES];
-                modelUsed = outcome.modelUsed;
-                skippedModels = outcome.skippedModels;
-                modelNote = outcome.modelNote;
-            } else {
-                // Explicitly requested procedural mode (useNanoBanana: false): edge continuations of the input, no model.
-                perspectives = MultiPerspectivePanoramaSynthesisService.synthesizeMissingPerspectivesFromFront(
-                    frontRgba,
-                    faceRes,
-                    {
-                        styleHint: options.styleHint,
-                        inputFovDeg: options.inputFovDeg || 90.0
-                    }
-                );
-                perspectivesSynthesized = [...SURROUNDING_PERSPECTIVES];
-                modelUsed = 'procedural perspective synthesizer (requested: useNanoBanana false; no model call)';
-                modelNote = 'Procedural perspectives as requested (useNanoBanana: false): edge continuations of the input image, no model call.';
+            );
+            const missing = SURROUNDING_PERSPECTIVES.filter(p => !outcome.perspectives[p]);
+            if (missing.length) {
+                throw new MediaModelUnavailableError(outcome.modelUsed, `no ${missing.join(', ')} view was generated, so there is nothing to stitch there`);
             }
+            perspectives = outcome.perspectives as Record<PanoramaPerspective, PerspectiveFrame>;
+            perspectivesSynthesized = [...SURROUNDING_PERSPECTIVES];
+            modelUsed = outcome.modelUsed;
+            skippedModels = outcome.skippedModels;
+            modelNote = outcome.modelNote;
         }
 
         const stitched = MultiPerspectivePanoramaSynthesisService.stitchPerspectivesToEquirectangular(
