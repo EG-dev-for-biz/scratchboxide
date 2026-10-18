@@ -90,7 +90,10 @@ int main(int argc, char** argv) {
     std::cout << "  Processed Texels: " << result.processedTexels << "\n";
     std::cout << "  Execution Time: " << result.executionTimeMs << " ms\n";
     std::cout << "  Normal Map Generated: " << (!result.pbrSet.normal.empty() ? "YES" : "NO") << "\n";
-    std::cout << "  Roughness Map Generated: " << (!result.pbrSet.roughness.empty() ? "YES" : "NO") << "\n";
+    std::cout << "  Solar De-Lit Texels: " << result.solarDelitTexels << "\n";
+    if (!result.solarDelightingSkippedReason.empty()) std::cout << "  Solar De-Lighting Skipped: " << result.solarDelightingSkippedReason << "\n";
+    std::cout << "  Roughness Map Generated: " << (!result.pbrSet.roughness.empty() ? "YES" : "NO") << " (" << result.roughnessUnmeasuredReason << ")\n";
+    for (const auto& h : result.heuristicMaps) std::cout << "  Heuristic map: " << h << "\n";
     std::cout << "  AO Map Generated: " << (!result.pbrSet.ao.empty() ? "YES" : "NO") << "\n";
     std::cout << "  ORM Map Generated: " << (!result.pbrSet.orm.empty() ? "YES" : "NO") << "\n";
 
