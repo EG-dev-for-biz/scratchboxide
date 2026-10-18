@@ -20,6 +20,7 @@ import {
 } from '../spatial/SbTerrainGroundEngine';
 import { findViewportMeshes } from './mesh-edit-operators';
 import { instantAtLocalMeanSolarTime } from '../../../../common/coordinate/solarPosition';
+import { measureGlbBase64MeshCounts } from '../../../../common/glb-mesh-counts';
 
 /**
  * NOAA sun position at `timeOfDay` hours of local mean solar time (UTC + longitude / 15) on the UTC day of
@@ -286,16 +287,19 @@ export const NATURE_ATMOSPHERE_OPERATORS: OperatorDefinition[] = [
         name: 'sb_set_cpp_generator',
         category: 'state_history',
         description: 'Sets or updates the native C++20 procedural generator module for the 3D scene (C/C++ first directive).',
-        execute: (ctx, params: { sourceCode: string; filename?: string; enabled?: boolean; vertexCount?: number; triangleCount?: number; glbBase64?: string }) => {
+        execute: (ctx, params: { sourceCode: string; filename?: string; enabled?: boolean; glbBase64?: string; glbPath?: string }) => {
             if (!params.sourceCode) throw new Error("Parameter 'sourceCode' is required.");
             const scene = ctx.getSceneData();
+            // Vertex/triangle counts are measured from the GLB bytes when they are here; caller-supplied counts are
+            // not stored, and with no GLB (or bytes that are not one) there are none.
+            const counts = params.glbBase64 ? measureGlbBase64MeshCounts(params.glbBase64) : undefined;
             scene.cppGenerator = {
                 enabled: params.enabled !== false,
                 sourceCode: params.sourceCode,
                 filename: params.filename || 'world_generator.cpp',
-                vertexCount: params.vertexCount,
-                triangleCount: params.triangleCount,
+                ...(counts ? { vertexCount: counts.vertexCount, triangleCount: counts.triangleCount } : {}),
                 glbBase64: params.glbBase64,
+                ...(params.glbPath ? { glbPath: params.glbPath } : {}),
                 lastCompiledTimeMs: Date.now()
             };
             return { success: true, cppGenerator: scene.cppGenerator };
