@@ -370,14 +370,27 @@ describe('an isolated structure', () => {
         expect(String(s.native.plantCalls[0].supportMeshPath)).toMatch(/clay\.glb$/);
     });
 
-    it('tile_refine isolating another structure skips the rebuild (isolate_mismatch)', async () => {
+    it('tile_refine isolating another structure: the district is remeshed whole and shown instead, never the partial isolate (isolate_mismatch)', async () => {
         // a second, taller building 7 m east of the arch, inside the probe: tile_refine is made to isolate it
         const spec: WorldSpec = { ground: 80, buildings: [[-13, 13, -6, 5, 22], [20, 30, -5, 5, 30]], trees: [] };
         const s = setup(spec, { isolateAt: { x: 25, z: 0 } }, { scanFit: fakeScanFit(path.join(TMP, 'sf-mismatch')).deps });
         const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
         const rec = result.degradations.find(d => d.reasonCode === 'isolate_mismatch')!;
-        expect(rec.reason).toMatch(/^tile_refine isolated a different structure than the one picked \(footprint IoU 0/);
+        expect(rec.reason).toMatch(/^tile_refine isolated a different structure than the one picked: it does not hold the structure at the seed/);
+        expect(rec.reason).toMatch(/so the district around it is shown whole instead of a partial isolate/);
+        expect(rec.fellTo).toBe('the remeshed district around it, whole, without a rebuild');
+        // tile_refine was handed the shared pick, then run again on the district without isolate
+        expect(s.native.refineCalls[0]).toMatchObject({ isolate: true, isolatePick: expect.stringMatching(/structure_pick_[0-9a-f]{16}\.sbip$/) });
+        expect(s.native.refineCalls[1].isolate).toBeUndefined();
+        expect(s.native.refineCalls[1].tilePath).toBe(s.native.refineCalls[0].tilePath);
+        // the remesh layer shown is the district: both buildings are in it
+        const l2 = (result.artifact as any).data.stagedBuild.layers.find((l: any) => l.layer === 'l2');
+        const xs = readGlbTriangles(fs.readFileSync(path.join(s.root, 'public', 'models', path.basename(l2.url)))).positions.filter((_, i) => i % 3 === 0);
+        expect(Math.min(...xs)).toBeLessThan(-12);
+        expect(Math.max(...xs)).toBeGreaterThan(29);
         expect(result.stages.find(x => x.stage === 'fit')!).toMatchObject({ status: 'skipped', reason: 'tile_refine isolated a different structure than the one picked' });
+        expect(validateContract('StagedLocationResult', result)).toEqual([]);
+        expect(saveSceneShot(s.root, result, 'isolate_mismatch_district_fallback').trianglesDrawn).toBeGreaterThan(100);
     });
 
     it('fits, reads the photos at LOW thinking, photo-corrects within the tolerance, builds detail, and records it all', async () => {

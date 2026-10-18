@@ -85,7 +85,7 @@ import {
 import { describeRemeshProvenance, readRemeshProvenance } from './remesh-provenance';
 import { putBackScannedTrees } from './scanned-trees';
 import {
-    footprintIoU, grownOutline, isolatedStructureCells, sizeExtraction, ISOLATE_IOU_MIN, NO_STRUCTURE_DISTRICT_RADIUS_M, type StructurePickResult
+    checkIsolate, grownOutline, pickOnScan, sizeExtraction, writeIsolationPick, ISOLATE_PRECISION_MIN, NO_STRUCTURE_DISTRICT_RADIUS_M, type StructurePickResult
 } from './extraction-sizing';
 import {
     discoverPanos, facadeGeometry, fetchViews, missingCredentials, EVIDENCE_STAGE_BUDGET_MS, type EvidenceImage, type PanoCandidate, type StreetViewEvidenceDeps
@@ -258,7 +258,7 @@ export interface StagedLocationDeps {
     refine: {
         refine(req: TileRefineRequest): Promise<TileRefineResult>;
         /** Registered views of the tile around the structure the geometric isolate finds, for the multi-view mask vote. */
-        renderOwnershipViews?(req: Pick<TileRefineRequest, 'tilePath' | 'anchor' | 'isolate'>): Promise<{ dir: string; views: string[]; cached: boolean; ms: number }>;
+        renderOwnershipViews?(req: Pick<TileRefineRequest, 'tilePath' | 'anchor' | 'isolate' | 'isolatePick'>): Promise<{ dir: string; views: string[]; cached: boolean; ms: number }>;
     };
     /** The scan fitter; absent until the engine has it (then the rebuild stages degrade and say so). */
     scanFit?: ScanFitDeps;
@@ -891,7 +891,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         persist();
 
         // ---------------- tiles ----------------
-        type TilesValue = { extraction: StagedExtraction; key: string; sizedTo: 'structure' | 'request' | 'district-fallback'; structure?: StructurePickResult; ground?: GroundModel; scan?: ScanMesh; unmaskedTop?: Float32Array; rounds: number; cached: boolean; builtAtMs: number };
+        type TilesValue = { extraction: StagedExtraction; key: string; sizedTo: 'structure' | 'request' | 'district-fallback'; structure?: StructurePickResult; ground?: GroundModel; scan?: ScanMesh; unmaskedTop?: Float32Array; canopy?: CanopyMask; rounds: number; cached: boolean; builtAtMs: number };
         /** One extraction, cached for 7 days by place and radius; the entry holds its files, named relative to it. */
         const extractCached = async (radiusM: number, io: StageIO): Promise<{ extraction: StagedExtraction; key: string; cached: boolean; builtAtMs: number }> => {
             const key = stageKey('extract/v2', placeValue!.lat.toFixed(6), placeValue!.lng.toFixed(6), Math.round(radiusM));
@@ -918,7 +918,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         ...(deps.vegetation.canopy ? { canopy: async (tile: string) => (await deps.vegetation.canopy!({ tilePath: tile, signal: io.signal })).mask } : {}),
                         onProgress: m => io.progress(m), signal: io.signal
                     });
-                    value = { extraction: sizing.extraction, key: last!.key, sizedTo: sizing.sizedTo, structure: sizing.structure, ground: sizing.ground, scan: sizing.scan, unmaskedTop: sizing.unmaskedTop, rounds: sizing.rounds, cached: last!.cached, builtAtMs: last!.builtAtMs };
+                    value = { extraction: sizing.extraction, key: last!.key, sizedTo: sizing.sizedTo, structure: sizing.structure, ground: sizing.ground, scan: sizing.scan, unmaskedTop: sizing.unmaskedTop, ...(sizing.canopy ? { canopy: sizing.canopy } : {}), rounds: sizing.rounds, cached: last!.cached, builtAtMs: last!.builtAtMs };
                     for (const n of sizing.notes) {
                         const masked = n.reasonCode === 'canopy_not_masked';
                         const districtLost = n.reasonCode === 'district_extract_failed';
@@ -1698,6 +1698,16 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 io.progress(isolateMode ? 'remeshing the structure' : 'remeshing the district');
                 const tilePath = strip ? strip.devegetatedGlb : extraction.texturedGlb;
                 // object ownership: outlines of the requested structure in registered views of the tile, voted onto its triangles
+                // the shared structure pick: tile_refine isolates exactly this footprint on this terrain
+                // (picked again, by the same rule at the same seed, on the scan tile_refine is given: with the measured trees
+                // taken out it holds no crown the canopy classifier left in)
+                let isolatePick: string | undefined;
+                let remeshPick: { pick: StructurePickResult; ground: GroundModel } | undefined = isolateMode && t.ground ? { pick: structure!, ground: t.ground } : undefined;
+                if (remeshPick && tilePath !== extraction.texturedGlb) remeshPick = pickOnScan(tilePath, structure!.seed, t.canopy) ?? remeshPick;
+                if (remeshPick) {
+                    const bytesKey = crypto.createHash('sha256').update(remeshPick.pick.footprintMask).update(Buffer.from(Float32Array.from(remeshPick.ground.ground).buffer)).update(Buffer.from(Float32Array.from(remeshPick.ground.top).buffer)).digest('hex').slice(0, 16);
+                    isolatePick = writeIsolationPick(path.join(path.dirname(tilePath), `structure_pick_${bytesKey}.sbip`), remeshPick.pick, remeshPick.ground);
+                }
                 let ownership: { masksDir: string } | undefined;
                 let ownershipRec: DegradationRecord | undefined;
                 if (isolateMode && deps.refine.renderOwnershipViews) {
@@ -1706,7 +1716,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     } else {
                         try {
                             io.progress('rendering views of the structure for the ownership vote');
-                            const views = await deps.refine.renderOwnershipViews({ tilePath, isolate: true, anchor: { x: structure!.seed.x, z: structure!.seed.z } });
+                            const views = await deps.refine.renderOwnershipViews({ tilePath, isolate: true, anchor: { x: structure!.seed.x, z: structure!.seed.z }, ...(isolatePick ? { isolatePick } : {}) });
                             const masksDir = path.join(views.dir, `masks_${crypto.createHash('sha256').update(request.query.trim()).digest('hex').slice(0, 16)}`);
                             const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...chainExtras('remesh'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
                             const seg = await segmentOwnershipViews({ viewsDir: views.dir, masksDir, target: request.query.trim(), chain, concurrency: 6, onProgress: m => io.progress(m) });
@@ -1721,12 +1731,49 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         }
                     }
                 }
-                const r = await deps.refine.refine({
+                const reliefOpt = (request.relief ?? TILE_REFINE_RELIEF_DEFAULT) === false ? { relief: false } : {};
+                let r = await deps.refine.refine({
                     tilePath,
-                    ...(isolateMode ? { isolate: true, anchor: { x: structure!.seed.x, z: structure!.seed.z } } : {}),
+                    ...(isolateMode ? { isolate: true, anchor: { x: structure!.seed.x, z: structure!.seed.z }, ...(isolatePick ? { isolatePick } : {}) } : {}),
                     ...(ownership ? { ownership } : {}),
-                    ...((request.relief ?? TILE_REFINE_RELIEF_DEFAULT) === false ? { relief: false } : {})
+                    ...reliefOpt
                 });
+                // the isolated structure must be the one picked; when it is not (or tile_refine wrote no isolated scan to
+                // check), the district around it is remeshed whole and shown instead, labelled: never isolated fragments
+                const isolateDegradations: DegradationRecord[] = [];
+                if (isolateMode) {
+                    let mismatch: string | undefined;
+                    if (!r.rawClayGlb) mismatch = 'tile_refine wrote no isolated raw scan to compare with the structure picked';
+                    else {
+                        const picked = remeshPick?.pick ?? structure!;
+                        const terrain = remeshPick?.ground ?? t.ground;
+                        if (!terrain) mismatch = 'the structure was picked without a terrain to check the isolated scan against';
+                        else {
+                            const chk = checkIsolate(r.rawClayGlb, picked, terrain);
+                            run.state.structure = { ...run.state.structure!, isolateIoU: round(chk.iou, 3), isolateAgreement: round(chk.agreement, 3) };
+                            if (!chk.ok) {
+                                const why = !chk.holdsSeed ? 'it does not hold the structure at the seed'
+                                    : chk.precision < ISOLATE_PRECISION_MIN ? `only ${Math.round(chk.precision * 100)}% of it lies on the footprint picked`
+                                    : `only ${Math.round(chk.roofed * 100)}% of it is roofed (a shell of facades)`;
+                                mismatch = `tile_refine isolated a different structure than the one picked: ${why} (${Math.round(chk.areaM2)} m² isolated against ${Math.round(picked.areaM2)} m² picked, ${Math.round(chk.recall * 100)}% of the pick covered, seed ${structure!.seed.x}, ${structure!.seed.z})`;
+                            }
+                        }
+                    }
+                    if (mismatch) {
+                        io.progress('remeshing the district around the structure');
+                        let district: TileRefineResult | undefined, districtErr: unknown;
+                        try { district = await deps.refine.refine({ tilePath, ...reliefOpt }); } catch (err) { districtErr = err; }
+                        isolateDegradations.push(run.degrade(record('remesh', 'isolate_mismatch', {
+                            part: { description: 'the isolated structure' }, intended: 'a scan-fitted rebuild of the structure picked',
+                            fellTo: district ? 'the remeshed district around it, whole, without a rebuild' : 'the isolated remesh, without a rebuild',
+                            provenanceAfter: PROVENANCE.remeshed,
+                            reason: district ? `${mismatch}, so the district around it is shown whole instead of a partial isolate, and nothing is rebuilt`
+                                : `${mismatch}; remeshing the district failed too (${errorMessage(districtErr)}), so the isolated remesh stands, without a rebuild`,
+                            ...(districtErr ? { cause: districtErr } : {}), transient: false, runId, now: now()
+                        })));
+                        if (district) r = district;
+                    }
+                }
                 run.keys.remesh = r.cacheKey;
                 run.cacheStatus.remesh = r.cached ? 'hit' : 'miss';
                 const key8 = r.cacheKey.slice(0, 8);
@@ -1762,28 +1809,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     extra: { rawGlbPath: extraction.rawGlbPath ?? extraction.texturedGlb, treesRemoved: Number(strip?.stats?.triangles?.removed ?? 0) > 0 }
                 });
                 run.setGround(layer.objectId);
-                const degradations: DegradationRecord[] = ownershipRec ? [ownershipRec] : [];
-                let status: 'committed' | 'degraded' = ownershipRec ? 'degraded' : 'committed';
-                if (isolateMode) {
-                    if (!r.rawClayGlb) {
-                        degradations.push(run.degrade(record('remesh', 'isolate_mismatch', {
-                            part: { description: 'the isolated structure' }, intended: 'a scan-fitted rebuild of the structure', fellTo: 'the remeshed scan, without a rebuild',
-                            provenanceAfter: PROVENANCE.remeshed, reason: 'tile_refine wrote no isolated raw scan to compare with the structure picked', transient: false, runId, now: now()
-                        })));
-                    } else {
-                        const iso = isolatedStructureCells(r.rawClayGlb, structure!.seed);
-                        const iou = round(footprintIoU(structure!.cells, iso.cells), 3);
-                        run.state.structure = { ...run.state.structure!, isolateIoU: iou };
-                        if (iou < ISOLATE_IOU_MIN) {
-                            degradations.push(run.degrade(record('remesh', 'isolate_mismatch', {
-                                part: { description: 'the isolated structure' }, intended: 'a scan-fitted rebuild of the structure picked', fellTo: 'the remeshed scan, without a rebuild',
-                                provenanceAfter: PROVENANCE.remeshed,
-                                reason: `tile_refine isolated a different structure than the one picked (footprint IoU ${iou}, ${Math.round(iso.areaM2)} m² against ${Math.round(structure!.areaM2)} m², seed ${structure!.seed.x}, ${structure!.seed.z}), so it is not rebuilt`,
-                                transient: false, runId, now: now()
-                            })));
-                        }
-                    }
-                }
+                const degradations: DegradationRecord[] = [...(ownershipRec ? [ownershipRec] : []), ...isolateDegradations];
+                let status: 'committed' | 'degraded' = 'committed';
                 if (degradations.length) status = 'degraded';
                 return {
                     status, value: { refined: r, groundLayerId: layer.objectId, groundFile: r.clayGlb, committed: true },

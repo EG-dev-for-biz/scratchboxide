@@ -65,6 +65,11 @@ export interface TileRefineRequest {
      * The entry then also holds ownership.sbov (the vote of every kept triangle, for scan_fit) and ownership_debug/.
      */
     ownership?: { masksDir: string };
+    /**
+     * Isolate only: the shared structure pick (an SBIP file inside the workspace, extraction-sizing.ts writeIsolationPick).
+     * tile_refine then isolates exactly that footprint on that terrain instead of applying a footprint rule of its own.
+     */
+    isolatePick?: string;
     /** Also write raw-vs-output thumbnails into the cache entry (adds ~1-2 s). */
     thumbnails?: boolean;
     /** Worker threads (default: all cores). Not part of the cache key. */
@@ -314,6 +319,13 @@ export class TileRefineService {
             for (const f of fs.readdirSync(masksDir).filter(f => f === 'views.txt' || f.endsWith('.mask.png')).sort()) h.update(f).update('\0').update(fs.readFileSync(path.join(masksDir, f)));
             keyParams.ownership = h.digest('hex');
         }
+        if (req.isolatePick !== undefined) {
+            if (!keyParams.isolate) throw new TileRefineError('bad_request', 'isolatePick needs isolate');
+            const pickFile = typeof req.isolatePick === 'string' ? resolveWithinRoot(this.workspaceRoot, req.isolatePick) : '';
+            if (!pickFile || !fs.existsSync(pickFile)) throw new TileRefineError('bad_request', 'isolatePick must be an existing SBIP file');
+            cliArgs.push('--isolate-pick', pickFile);
+            keyParams.isolatePick = crypto.createHash('sha256').update(fs.readFileSync(pickFile)).digest('hex');
+        }
         if (req.thumbnails) keyParams.thumbnails = true;
         if (req.threads !== undefined) {
             if (!Number.isInteger(req.threads) || req.threads < 1 || req.threads > 256) throw new TileRefineError('bad_request', 'threads must be an integer in 1..256');
@@ -351,7 +363,7 @@ export class TileRefineService {
      * Writes registered views around the structure the geometric isolate finds (views.txt and <name>.png, the scan's own
      * texture, unlit) for segmentation, cached by the tile, the anchor and the binary. Returns the directory and the view names.
      */
-    async renderOwnershipViews(req: Pick<TileRefineRequest, 'tilePath' | 'glbPath' | 'anchor' | 'isolate' | 'timeoutMs'>): Promise<{ dir: string; views: string[]; cached: boolean; ms: number }> {
+    async renderOwnershipViews(req: Pick<TileRefineRequest, 'tilePath' | 'glbPath' | 'anchor' | 'isolate' | 'isolatePick' | 'timeoutMs'>): Promise<{ dir: string; views: string[]; cached: boolean; ms: number }> {
         const t0 = Date.now();
         const { input, cliArgs, keyParams } = this.resolveRequest({ ...req, isolate: req.isolate ?? true });
         const binary = await this.ensureBinary();

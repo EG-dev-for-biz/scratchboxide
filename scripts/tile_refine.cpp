@@ -41,6 +41,8 @@ static void usage() {
         "  --apron M               isolate: ground kept around the footprint (default 4)\n"
         "  --isolate-min-height M  isolate: footprint cells stand at least M above the terrain (default 3)\n"
         "  --isolate-reach M       isolate: connected raised surfaces within M of the footprint join it (default 12)\n"
+        "  --isolate-pick PATH     isolate exactly the structure of a shared pick (SBIP: footprint cells and walkable terrain,\n"
+        "                          written by the staged-location picker); implies --isolate\n"
         "  --low-attachment-max-height M  isolate: raised areas joined to the footprint that stay below min(M, half the\n"
         "                          structure's height) and lie outside its core are dropped (default 8; <= min height: off)\n"
         "  --keep-scan-apron       isolate: keep the scan's own ground triangles instead of rebuilding the apron\n"
@@ -113,6 +115,7 @@ int main(int argc, char** argv) {
         else if (a == "--apron") p.isolateApron = num();
         else if (a == "--isolate-min-height") p.isolateMinHeight = num();
         else if (a == "--isolate-reach") p.isolateReach = num();
+        else if (a == "--isolate-pick") { p.isolatePickPath = next(); p.isolate = true; }
         else if (a == "--low-attachment-max-height") p.isolateLowAttachmentMaxHeight = num();
         else if (a == "--keep-scan-apron") p.isolateRebuildGround = false;
         else if (a == "--ground-opening-radius") p.isolateGroundOpeningRadius = num();

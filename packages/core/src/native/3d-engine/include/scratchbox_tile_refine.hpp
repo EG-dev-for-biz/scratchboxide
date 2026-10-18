@@ -184,6 +184,11 @@ struct TileRefineParams {
     double isolateInteriorInset{2.5};
     double isolateInteriorBelowTop{2.0};
     double isolateInteriorMinAbove{1.0};
+    // The shared structure pick (extraction-sizing.ts writeIsolationPick, SBIP): the footprint cells and the walkable terrain
+    // the staged-location picker measured. With it the isolate takes exactly that footprint (no footprint rule of its own,
+    // so the two can never disagree), blocks the cells the pick left out as low attachments or as other structures, and
+    // every stage measures heights above the same terrain.
+    std::string isolatePickPath;
     std::string rawClayPath;           // non-empty: also write the (isolated) raw scan, unmodified, as studio clay
     // Ownership by multi-view mask voting (isolate only; scratchbox_mask_vote.hpp). Render mode writes the views to segment
     // (views.txt: one registered pinhole view per line; <name>.png: the scan's unlit texture from it) around the structure the
@@ -964,6 +969,11 @@ private:
     bool isolateStructure(Result& res) {
         const auto t0 = Clock::now();
         const size_t inputTris = F, inputVerts = V, inputMats = scene.materials.size(), inputImages = scene.images.size();
+        if (!P.isolatePickPath.empty() && !hasPick) {
+            std::string err;
+            if (!readSharedPick(P.isolatePickPath, pick, err)) { res.error = "isolate: " + err; return false; }
+            hasPick = true;
+        }
         buildTerrain();  // DSM / DTM of the whole tile
         const int nx = dsm.nx, nz = dsm.nz;
         const size_t N = static_cast<size_t>(nx) * nz;
@@ -976,7 +986,7 @@ private:
                 const float h = dsm.at(i, k);
                 raised[static_cast<size_t>(k) * nx + i] = !std::isnan(h) && h - dtm.sample(dsm.cx(i), dsm.cz(k)) > P.isolateMinHeight;
             }
-        const int ai = dsm.ix(P.anchorX), ak = dsm.iz(P.anchorZ);
+        const int ai = dsm.ix(hasPick ? pick.seedX : P.anchorX), ak = dsm.iz(hasPick ? pick.seedZ : P.anchorZ);
         const int sr = std::max(0, static_cast<int>(std::ceil(P.isolateSearchRadius / dsm.cell)));
         long seed = -1;
         long bestD2 = std::numeric_limits<long>::max();
@@ -988,10 +998,27 @@ private:
                 bestD2 = d2;
                 seed = static_cast<long>(k) * nx + i;
             }
-        if (seed < 0) {
+        if (seed < 0 && !hasPick) {
             res.error = "isolate: no structure raised more than " + num(P.isolateMinHeight) + " m above the terrain within " + num(P.isolateSearchRadius) +
                         " m of the anchor (" + num(P.anchorX) + ", " + num(P.anchorZ) + ")";
             return false;
+        }
+        // the shared pick: its structure cells are the footprint (raised or not here: the pick decided), the seed one of them
+        std::vector<uint8_t> otherCell(N, 0);
+        if (hasPick) {
+            long best = -1;
+            long bestD2 = std::numeric_limits<long>::max();
+            for (int k = 0; k < nz; ++k)
+                for (int i = 0; i < nx; ++i) {
+                    const int st = pick.state(dsm.cx(i), dsm.cz(k));
+                    const size_t n = static_cast<size_t>(k) * nx + i;
+                    raised[n] = st == 1;
+                    otherCell[n] = st == 2 ? 1 : st == 4 ? 2 : 0;  // 1 another structure, 2 canopy (blocks the closure only)
+                    const long d2 = static_cast<long>(i - ai) * (i - ai) + static_cast<long>(k - ak) * (k - ak);
+                    if (st == 1 && d2 < bestD2) { bestD2 = d2; best = static_cast<long>(n); }
+                }
+            if (best < 0) { res.error = "isolate: the structure pick has no structure cell on this tile"; return false; }
+            seed = best;
         }
         std::vector<uint8_t> comp(N, 0);  // 1 = footprint, 2 = enclosed by it
         auto flood = [&](std::vector<long>& stack, std::vector<uint8_t>& mark, uint8_t value, const std::function<bool(size_t)>& pass) {
@@ -1012,13 +1039,24 @@ private:
         };
         std::vector<long> stack{seed};
         comp[static_cast<size_t>(seed)] = 1;
-        flood(stack, comp, 1, [&](size_t n) { return raised[n] != 0; });
+        if (hasPick) {
+            for (size_t n = 0; n < N; ++n) comp[n] = raised[n];  // every cell the pick took, connected on its own grid
+            stack.clear();
+        } else {
+            flood(stack, comp, 1, [&](size_t n) { return raised[n] != 0; });
+        }
         // 1b. low attached structures: the core is the footprint standing at least coreHeight above the terrain, taken as the
         //     connected component nearest the seed; the rest of the footprint is a low attachment unless the core encloses it
         std::vector<uint8_t> lowCell(N, 0);
         double coreHeight = 0;  // 0: not applied
         size_t lowCells = 0;
-        {
+        if (hasPick) {
+            // the pick already separated its low attachments (and other masses): its decision, not a second one
+            for (int k = 0; k < nz; ++k)
+                for (int i = 0; i < nx; ++i)
+                    if (pick.state(dsm.cx(i), dsm.cz(k)) == 3) lowCell[static_cast<size_t>(k) * nx + i] = 1;
+            coreHeight = pick.coreHeight;
+        } else {
             std::vector<float> above(N, 0.0f);
             double maxAbove = 0;
             for (int k = 0; k < nz; ++k)
@@ -1148,7 +1186,10 @@ private:
             // (a wall within the core's reach stays only if it rises above the attachment's top: the structure's own facade
             //  continues upward, the attachment's sides and posts end at its roof)
             const double topY = std::max({a.y, b.y, cc.y});
-            const bool belowAttachmentTop = in && !std::isnan(dsm.at(i, k)) && topY <= dsm.at(i, k) + 0.3;
+            // (the attachment's top as the pick measured it, when there is one: its surface model samples every surface)
+            double attachTop = in ? static_cast<double>(dsm.at(i, k)) : std::numeric_limits<double>::quiet_NaN();
+            if (hasPick) { const float pt = pick.topAt(c.x, c.z); if (!std::isnan(pt) && !(pt <= attachTop)) attachTop = pt; }
+            const bool belowAttachmentTop = in && !std::isnan(attachTop) && topY <= attachTop + 0.3;
             if (in && coreHeight > 0 && lowCell[n] && triAbove[t] > groundTol && triAbove[t] < coreHeight + 0.5 &&
                 (std::abs(ny) >= 0.7 || triDist[t] > P.isolateCoreGrow || belowAttachmentTop)) {
                 blocked[t] = 1;
@@ -1159,6 +1200,8 @@ private:
                 !std::isnan(dsm.at(i, k)) && dsm.at(i, k) - c.y >= P.isolateInteriorBelowTop) {
                 interiorCandidates.push_back(static_cast<uint32_t>(t));  // confirmed below by rays straight up
             }
+            // the roof of a mass the pick left out is not ours, even within the core's grow of the footprint
+            if (in && otherCell[n] == 1 && std::abs(ny) >= 0.7 && triDist[t] > 0) continue;
             if (triDist[t] <= P.isolateCoreGrow) keep[t] = 1;
             else if (!P.isolateRebuildGround && triDist[t] <= P.isolateApron && triAbove[t] <= P.isolateApronMaxHeight) keep[t] = 3;
         }
@@ -1227,6 +1270,14 @@ private:
             std::vector<uint32_t> fill(off.begin(), off.end() - 1);
             for (size_t t = 0; t < F; ++t) for (int k = 0; k < 3; ++k) inc[fill[wid[rawIdx[3 * t + k]]]++] = static_cast<uint32_t>(t);
         }
+        // (a mass the pick left out as another structure, or tree canopy, is never reached through: it stops the closure)
+        auto onOther = [&](uint32_t u) {
+            if (!hasPick) return false;
+            const V3 a = m.P(m.idx[3 * u]), b = m.P(m.idx[3 * u + 1]), cc = m.P(m.idx[3 * u + 2]);
+            const V3 c = (a + b + cc) * (1.0 / 3.0);
+            const int i = dsm.ix(c.x), k = dsm.iz(c.z);
+            return dsm.inside(i, k) && otherCell[static_cast<size_t>(k) * nx + i] != 0;
+        };
         std::vector<uint32_t> queue;
         for (size_t t = 0; t < F; ++t) if (keep[t] == 1 && triAbove[t] > groundTol) queue.push_back(static_cast<uint32_t>(t));
         std::vector<uint8_t> cut(F, 0);
@@ -1238,7 +1289,7 @@ private:
                 for (uint32_t j = off[w]; j < off[w + 1]; ++j) {
                     const uint32_t u = inc[j];
                     if (keep[u] == 1 || keep[u] == 2 || cut[u] || blocked[u] || !(triAbove[u] > groundTol)) continue;
-                    if (triDist[u] <= P.isolateReach) {
+                    if (triDist[u] <= P.isolateReach && !onOther(u)) {
                         if (keep[u] == 0) ++closure;
                         keep[u] = 2;  // (an apron triangle that is raised joins the structure)
                         queue.push_back(u);
@@ -1511,7 +1562,7 @@ private:
         scene.bounds = scene.mesh.bounds;
 
         isoGround = dtm.sample(0.5 * (fMinX + fMaxX), 0.5 * (fMinZ + fMaxZ));
-        js << "  \"isolate\": {\"enabled\": true, \"anchor\": [" << num(P.anchorX) << "," << num(P.anchorZ) << "], \"minHeight_m\": " << num(P.isolateMinHeight)
+        js << "  \"isolate\": {\"enabled\": true, \"sharedPick\": " << (hasPick ? "true" : "false") << ", \"anchor\": [" << num(P.anchorX) << "," << num(P.anchorZ) << "], \"minHeight_m\": " << num(P.isolateMinHeight)
            << ", \"apron_m\": " << num(P.isolateApron) << ", \"reach_m\": " << num(P.isolateReach) << ", \"footprintCells\": " << footprintCells
            << ", \"enclosedCells\": " << enclosedCells << ", \"footprintArea_m2\": " << num(static_cast<double>(footprintCells) * dsm.cell * dsm.cell)
            << ", \"footprintBounds\": [" << num(fMinX) << "," << num(fMinZ) << "," << num(fMaxX) << "," << num(fMaxZ) << "], \"groundY\": " << num(isoGround)
@@ -1530,6 +1581,53 @@ private:
     }
     double isoGround{0};
     bool ownershipRenderedOnly{false};
+
+    /** The shared structure pick: mask states 0 open, 1 structure, 2 another raised mass, 3 a low attachment left out, 4 tree canopy. */
+    struct SharedPick {
+        double x0{0}, z0{0}, cell{1}, coreHeight{0}, seedX{0}, seedZ{0};
+        int nx{0}, nz{0};
+        std::vector<uint8_t> mask;
+        std::vector<float> ground, top;
+        float topAt(double x, double z) const {
+            const int i = static_cast<int>(std::floor((x - x0) / cell)), k = static_cast<int>(std::floor((z - z0) / cell));
+            return i < 0 || k < 0 || i >= nx || k >= nz ? std::numeric_limits<float>::quiet_NaN() : top[static_cast<size_t>(k) * nx + i];
+        }
+        int state(double x, double z) const {
+            const int i = static_cast<int>(std::floor((x - x0) / cell)), k = static_cast<int>(std::floor((z - z0) / cell));
+            return i < 0 || k < 0 || i >= nx || k >= nz ? 0 : mask[static_cast<size_t>(k) * nx + i];
+        }
+    };
+    bool hasPick{false};
+    SharedPick pick;
+
+    /**
+     * Reads an SBIP file: "SBIP", u32 version 1, f64 x0 z0 cell, i32 nx nz, f64 coreHeight seedX seedZ, u8 mask[nx nz],
+     * f32 ground[nx nz] (the terrain), f32 top[nx nz] (the surface model the pick was made on; NaN = no data).
+     */
+    static bool readSharedPick(const std::string& path, SharedPick& out, std::string& err) {
+        std::ifstream f(path, std::ios::binary);
+        if (!f) { err = "cannot open the structure pick " + path; return false; }
+        char magic[4];
+        uint32_t version = 0;
+        f.read(magic, 4);
+        f.read(reinterpret_cast<char*>(&version), 4);
+        if (!f || std::memcmp(magic, "SBIP", 4) != 0 || version != 1) { err = "not an SBIP v1 structure pick: " + path; return false; }
+        f.read(reinterpret_cast<char*>(&out.x0), 8); f.read(reinterpret_cast<char*>(&out.z0), 8); f.read(reinterpret_cast<char*>(&out.cell), 8);
+        int32_t nx = 0, nz = 0;
+        f.read(reinterpret_cast<char*>(&nx), 4); f.read(reinterpret_cast<char*>(&nz), 4);
+        f.read(reinterpret_cast<char*>(&out.coreHeight), 8); f.read(reinterpret_cast<char*>(&out.seedX), 8); f.read(reinterpret_cast<char*>(&out.seedZ), 8);
+        if (!f || nx <= 0 || nz <= 0 || static_cast<int64_t>(nx) * nz > (1LL << 28) || !(out.cell > 0)) { err = "bad structure pick header: " + path; return false; }
+        out.nx = nx; out.nz = nz;
+        const size_t n = static_cast<size_t>(nx) * nz;
+        out.mask.resize(n);
+        out.ground.resize(n);
+        out.top.resize(n);
+        f.read(reinterpret_cast<char*>(out.mask.data()), static_cast<std::streamsize>(n));
+        f.read(reinterpret_cast<char*>(out.ground.data()), static_cast<std::streamsize>(n * 4));
+        f.read(reinterpret_cast<char*>(out.top.data()), static_cast<std::streamsize>(n * 4));
+        if (!f) { err = "truncated structure pick: " + path; return false; }
+        return true;
+    }
 
     // ----------------------------------------------------------------------------------------
     // Ownership by multi-view mask voting (scratchbox_mask_vote.hpp)
@@ -1992,6 +2090,18 @@ private:
         for (float v : opened) if (std::isfinite(v)) fallback = std::min(fallback, v);
         if (!std::isfinite(fallback)) fallback = static_cast<float>(bbMin.y);
         for (size_t i = 0; i < opened.size(); ++i) dtm.h[i] = std::isfinite(opened[i]) ? opened[i] : fallback;
+        if (hasPick) {
+            // the shared pick's terrain (the walkable street surface) replaces the low envelope; cells it has no value for
+            // take the lowest it has
+            float lo = inf;
+            for (float v : pick.ground) if (std::isfinite(v)) lo = std::min(lo, v);
+            if (std::isfinite(lo)) {
+                dtm.x0 = pick.x0; dtm.z0 = pick.z0; dtm.cell = pick.cell; dtm.nx = pick.nx; dtm.nz = pick.nz;
+                dtm.h.resize(pick.ground.size());
+                dtm.ny.assign(pick.ground.size(), 1.0f);
+                for (size_t i = 0; i < pick.ground.size(); ++i) dtm.h[i] = std::isfinite(pick.ground[i]) ? pick.ground[i] : lo;
+            }
+        }
     }
 
     void placeSites() {

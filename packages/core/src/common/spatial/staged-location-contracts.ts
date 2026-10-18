@@ -856,6 +856,11 @@ export interface StructurePick {
     extractionRadiusM: number;
     containmentRounds: number;
     isolateIoU?: number;
+    /**
+     * Agreement between the footprint picked and the one tile_refine isolated, each cell counted as agreeing when the other
+     * holds a cell within tile_refine's core grow (2 m) of it; below 0.7 the district is shown instead (isolate_mismatch).
+     */
+    isolateAgreement?: number;
 }
 
 /** Scene3DData.stagedBuild: what the viewport reads to reveal, label and shade. */
@@ -977,7 +982,7 @@ export const STAGED_DEGRADE_LADDER: readonly DegradeRung[] = [
     { stage: 'remesh', failure: 'tile_refine fails or times out', fellTo: 'the raw scan with its facades flattened, its scanned trees kept in it', provenanceAfter: PROVENANCE.scanFlattened, reasonCode: 'remesh_failed' },
     { stage: 'remesh', failure: 'flattening the raw scan fails too', fellTo: 'the raw scan as downloaded', provenanceAfter: PROVENANCE.asScanned, reasonCode: 'flatten_failed' },
     { stage: 'remesh', failure: 'the multi-view mask vote on object ownership cannot be made (no vision model, the views cannot be rendered, or no view gets a usable outline)', fellTo: 'the structure as the geometric rules isolate it (footprint and connectivity)', provenanceAfter: PROVENANCE.remeshed, reasonCode: 'ownership_vote_unavailable' },
-    { stage: 'remesh', failure: "tile_refine's isolated structure is not the one picked (IoU < 0.7)", fellTo: 'the remeshed scan, without a rebuild', provenanceAfter: PROVENANCE.remeshed, reasonCode: 'isolate_mismatch' },
+    { stage: 'remesh', failure: "tile_refine's isolated structure is not the one picked (footprint agreement < 0.7)", fellTo: 'the remeshed district around it, whole, without a rebuild', provenanceAfter: PROVENANCE.remeshed, reasonCode: 'isolate_mismatch' },
     { stage: 'fit', failure: 'scan_fit fails or its global gate fails', fellTo: 'the remeshed scan', provenanceAfter: PROVENANCE.remeshed, reasonCode: 'fit_rejected' },
     { stage: 'fit', failure: 'a primitive gate fails, or a residual slab is not box-like', fellTo: 'that region as scanned (pass-through)', provenanceAfter: PROVENANCE.asScanned, reasonCode: 'pass_through' },
     { stage: 'survey', failure: 'Street View is not configured, or no Google pano looks at any face, or every survey image fails', fellTo: 'no survey: the detail passes aim at the scan-only slots', provenanceAfter: PROVENANCE.photoInferred, reasonCode: 'no_street_view' },
@@ -1715,7 +1720,7 @@ const DEFINITIONS = {
     }),
     structurePick: obj(['seed', 'geocodeToStructureM', 'footprintAreaM2', 'extractionRadiusM', 'containmentRounds'], {
         buildingId: STR, seed: ref('vec2'), geocodeToStructureM: ref('nonneg'), footprintAreaM2: ref('nonneg'), extractionRadiusM: ref('nonneg'),
-        containmentRounds: NONNEG_INT, isolateIoU: ref('unit')
+        containmentRounds: NONNEG_INT, isolateIoU: ref('unit'), isolateAgreement: ref('unit')
     }),
     // texture pass (texture-pass-contracts.ts): labels and sources are open strings, nothing branches on them
     texelProvenance: obj(['source', 'label', 'method', 'coverage'], {
