@@ -6,7 +6,7 @@
 
 ## Platform note
 
-In Scratchbox IDE, use the native **`video_qa_check`** Gemini tool to run the delta spike check, temporal stability, and color bias metrics automatically. This skill covers the interpretation of results and manual implementation for custom pipelines.
+In Scratchbox IDE, use the native **`video_qa_check`** Gemini tool to run the delta spike check, consecutive-frame and worst-block PSNR, 8×8 blockiness, temporal stability, and colour drift metrics automatically (all computed from decoded frames). This skill covers the interpretation of results and manual implementation for custom pipelines.
 
 ---
 
