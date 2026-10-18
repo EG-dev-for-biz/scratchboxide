@@ -20,6 +20,8 @@ import {
     EarClippingTriangulator,
     getCachedLocalTangentPlane
 } from './GoogleVectorTileService';
+import { fetchSolarDsm, type DsmRaster } from './solar-dsm';
+import { densifyRoads, fuseBuilding, streetLevelNear, type LngLat } from './building-shape-fusion';
 
 export interface EnuPoint {
     x: number;
@@ -40,12 +42,24 @@ export interface EnuRoadCorridor {
     surface: string;
 }
 
+/**
+ * Where a building's height came from (diagnostic label; nothing branches on it except 'none' = no height):
+ * 'dsm' measured roof (Solar DSM), 'vector' Google/tagged height, 'levels' tagged floor count x 3.5 m,
+ * 'none' no height data (drawn as a flat footprint, never extruded to an invented height).
+ */
+export type BuildingHeightSource = 'dsm' | 'vector' | 'levels' | 'none' | (string & {});
+
 export interface EnuBuildingParcel {
     id: string;
     ring: EnuPoint[];
     areaM2: number;
-    heightMeters: number;
-    levels: number;
+    /** Height above its ground; undefined when there is no height data (heightSource 'none'). */
+    heightMeters?: number;
+    heightSource: BuildingHeightSource;
+    /** Floor count from the data (building:levels); undefined when not tagged. */
+    levels?: number;
+    /** Measured street level beside the building, m above sea level (Solar DSM). */
+    groundMsl?: number;
     centroid: EnuPoint;
     type: string;
 }
@@ -135,14 +149,37 @@ export interface VectorWorldPopulationOptions {
     // World Population Props
     includeStreetlamps?: boolean;
     streetlampPitchMeters?: number;
+    /**
+     * Place SYNTHETIC background vehicles in the lanes (default false). Positions are not observed traffic: they
+     * are drawn from a seeded PRNG (trafficSeed) and reported as synthetic.
+     */
     includeTraffic?: boolean;
     trafficDensity?: number; // vehicles per 100m of lane
+    /** PRNG seed for synthetic traffic (default: derived from latitude/longitude, so a location is reproducible). */
+    trafficSeed?: number;
+    /**
+     * Seat and size buildings from the Google Solar API DSM fused with the vector data (as stage_3d_vector_world
+     * does). Default true; pass a raster to use it directly, or false to use vector heights only.
+     */
+    solarDsm?: DsmRaster | boolean;
+    /** DSM radius when fetched (default 175 m). */
+    solarDsmRadiusMeters?: number;
     // Hero Staging
     heroStaging?: HeroStagingPlacementQuery;
 }
 
 export interface VectorWorldPopulationStats {
+    /** Buildings extruded to a height from the data (DSM, vector or tagged levels). */
     buildingCount: number;
+    /** Footprints with no height data, drawn flat at ground level rather than given an invented height. */
+    flatFootprintCount: number;
+    /** Per-source counts of building heights. */
+    heightSources: Record<string, number>;
+    /** DSM fusion: why it was skipped, or how many buildings it seated/sized. */
+    fusion: { skipped?: string; dsmImageryDate?: string; buildingsFused: number; anchorElevationMsl?: number };
+    /** True when trafficVehicleCount > 0: the vehicles are seeded synthetic placements, not observed traffic. */
+    trafficSynthetic: boolean;
+    trafficSeed?: number;
     roadSegmentCount: number;
     waterPolygonCount: number;
     streetlampCount: number;
@@ -170,11 +207,30 @@ export interface VectorWorldPopulationResult {
  * World Population Staging Service leveraging 3D Vector Tiles.
  * Ingests 2D roadmap vector tiles, extracts topologically consistent road networks,
  * building parcels, and landuse areas into SI metric space, sweeps 5-tier road cross-sections,
- * articluates architectural edifices, and procedurally populates street furniture and traffic streams.
+ * articulates buildings at their measured (Solar DSM) or vector height, and populates street furniture.
+ * Buildings without height data are drawn as flat footprints and counted, never given a guessed height.
+ * Traffic is opt-in and synthetic (seeded PRNG), labelled as such in the stats.
  * It places no trees: tree positions are never invented (every 18 m along roads, random points in parks);
  * a location's trees are measured from its photo tiles and rebuilt by google_3d_tiles_get_clay.
  */
 export class VectorWorldPopulatorService {
+    /**
+     * Height from the vector data only, as stage_3d_vector_world reads it: Google's maxZ (heightMeters minus
+     * minHeightMeters), else a tagged height, else tagged levels x 3.5 m. Nothing is guessed from the footprint.
+     */
+    public static vectorHeightOf(props: Record<string, any> | undefined): { heightMeters?: number; heightSource: BuildingHeightSource; levels?: number } {
+        const lv = parseInt(props?.['building:levels'] ?? props?.levels, 10);
+        const levels = Number.isFinite(lv) && lv > 0 ? lv : undefined;
+        if (typeof props?.heightMeters === 'number' && props.heightMeters > 0) {
+            const h = props.heightMeters - (props.minHeightMeters || 0);
+            if (h > 0) return { heightMeters: h, heightSource: 'vector', levels };
+        }
+        const tagged = parseFloat(props?.height);
+        if (Number.isFinite(tagged) && tagged > 0) return { heightMeters: tagged, heightSource: 'vector', levels };
+        if (levels !== undefined) return { heightMeters: levels * 3.5, heightSource: 'levels', levels };
+        return { heightSource: 'none' };
+    }
+
     /**
      * Extracts a continuous, topologically unified VectorFeatureGraph in local ENU metric coordinates.
      */
@@ -276,20 +332,7 @@ export class VectorWorldPopulatorService {
             const area = Math.abs(EarClippingTriangulator.signedArea(enuRing));
             if (area < 5.0) continue; // Skip degenerates
 
-            let height = 15.0;
-            let levels = 4;
-            if (b.properties?.['building:levels'] || b.properties?.levels) {
-                levels = parseInt(b.properties['building:levels'] || b.properties.levels, 10);
-                height = b.properties?.height ? parseFloat(b.properties.height) : levels * 3.5;
-            } else if (b.properties?.height) {
-                height = parseFloat(b.properties.height);
-                levels = Math.max(1, Math.round(height / 3.5));
-            } else {
-                if (area > 2000) { height = 50.0; levels = 14; }
-                else if (area > 800) { height = 30.0; levels = 8; }
-                else if (area > 300) { height = 18.0; levels = 5; }
-                else { height = 10.0; levels = 3; }
-            }
+            const { heightMeters: height, heightSource, levels } = VectorWorldPopulatorService.vectorHeightOf(b.properties);
 
             const uniquePoints = (enuRing.length > 3 && Math.abs(enuRing[0].x - enuRing[enuRing.length - 1].x) < 1e-4 && Math.abs(enuRing[0].z - enuRing[enuRing.length - 1].z) < 1e-4)
                 ? enuRing.slice(0, -1)
@@ -303,13 +346,14 @@ export class VectorWorldPopulatorService {
             cx /= uniquePoints.length;
             cz /= uniquePoints.length;
 
-            updateBounds(cx, height, cz);
+            updateBounds(cx, height ?? 0, cz);
 
             buildings.push({
                 id: b.id,
                 ring: enuRing,
                 areaM2: area,
                 heightMeters: height,
+                heightSource,
                 levels,
                 centroid: { x: cx, z: cz },
                 type: b.properties?.type || b.properties?.building || 'building'
@@ -551,9 +595,42 @@ export class VectorWorldPopulatorService {
             }
         }
 
-        const anchorElevation = options.elevation ?? 0.0;
+        // Measured surface (Solar DSM) fused with the vector data, exactly as stage_3d_vector_world does: street
+        // level per building from the DSM on nearby roads, roof height from the DSM inside the footprint, vector
+        // height where the DSM has no cover. Without a DSM, vector heights are used and the reason is reported.
+        let dsm: (DsmRaster & { imageryDate?: string }) | undefined;
+        let fusionSkipped: string | undefined;
+        if (options.solarDsm && typeof options.solarDsm === 'object') dsm = options.solarDsm;
+        else if (options.solarDsm !== false) {
+            try {
+                dsm = await fetchSolarDsm(options.latitude, options.longitude, options.solarDsmRadiusMeters ?? 175, apiKey, { fetchImpl });
+            } catch (err: any) {
+                fusionSkipped = err?.message || String(err);
+            }
+        } else fusionSkipped = 'disabled';
+        const roadPoints: LngLat[] = dsm ? densifyRoads(mergedDecoded.roads.map(r => r.points as LngLat[])) : [];
+        const measuredAnchor = dsm ? streetLevelNear(dsm, options.latitude, options.longitude, roadPoints, 80) : undefined;
+        const anchorElevation = options.elevation ?? measuredAnchor ?? 0.0;
+
         // Extract topological graph in ENU metric meters
         const graph = this.extractFeatureGraph(options.latitude, options.longitude, mergedDecoded, anchorElevation);
+
+        let buildingsFused = 0;
+        if (dsm) {
+            const rings = new Map(mergedDecoded.buildings.map(b => [b.id, b.ring as LngLat[]]));
+            for (const b of graph.buildings) {
+                const ring = rings.get(b.id);
+                if (!ring || ring.length < 3) continue;
+                const f = fuseBuilding({ id: b.id, ring, vectorHeightMeters: b.heightMeters, source: 'extruded' }, dsm, [], { roadPoints, sampleSpacingMeters: 1 });
+                if (f.groundMsl === undefined) continue;
+                buildingsFused++;
+                b.groundMsl = f.groundMsl;
+                if (f.heightMeters !== undefined && f.heightSource === 'dsm') {
+                    b.heightMeters = f.heightMeters;
+                    b.heightSource = 'dsm';
+                }
+            }
+        }
 
         const sampleElevation = (x: number, z: number): number => {
             if (typeof options.terrainElevationGrid === 'function') {
@@ -642,8 +719,20 @@ export class VectorWorldPopulatorService {
         const includeLaneMarkings = options.includeLaneMarkings !== false;
         const includeStreetlamps = options.includeStreetlamps !== false;
         const lampPitch = options.streetlampPitchMeters ?? 25.0;
-        const includeTraffic = options.includeTraffic !== false;
+        const includeTraffic = options.includeTraffic === true;
         const trafficDensity = options.trafficDensity ?? 0.25;
+        // Synthetic traffic is reproducible: a seeded mulberry32 stream, never Math.random.
+        const trafficSeed = includeTraffic
+            ? (options.trafficSeed ?? (Math.round(options.latitude * 1e5) * 73856093) ^ (Math.round(options.longitude * 1e5) * 19349663)) >>> 0
+            : undefined;
+        let prngState = trafficSeed ?? 0;
+        const nextRandom = (): number => {
+            prngState = (prngState + 0x6D2B79F5) >>> 0;
+            let t = prngState;
+            t = Math.imul(t ^ (t >>> 15), t | 1);
+            t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
         const buildingArticulation = options.buildingArticulation !== false;
         const heightScale = options.buildingHeightScale ?? 1.0;
 
@@ -873,8 +962,8 @@ export class VectorWorldPopulatorService {
                     }
 
                     // Traffic vehicles in lanes
-                    if (includeTraffic && Math.random() < (trafficDensity * segLen * 0.02)) {
-                        const laneIdx = Math.floor(Math.random() * r.laneCount);
+                    if (includeTraffic && nextRandom() < (trafficDensity * segLen * 0.02)) {
+                        const laneIdx = Math.floor(nextRandom() * r.laneCount);
                         const laneW = r.widthMeters / r.laneCount;
                         const laneOffset = -halfW + (laneIdx + 0.5) * laneW;
                         const carX = p0.x + perpX * laneOffset + forwardX * (segLen * 0.5);
@@ -893,12 +982,32 @@ export class VectorWorldPopulatorService {
         // 3. ARTICULATED BUILDINGS (Floors, Cornices, Roof Parapets)
         // ------------------------------------------------------------------------
         let buildingCount = 0;
+        let flatFootprintCount = 0;
+        const heightSources: Record<string, number> = {};
         if (options.includeBuildings !== false) {
             for (const b of graph.buildings) {
                 if (b.ring.length < 3) continue;
+                heightSources[b.heightSource] = (heightSources[b.heightSource] ?? 0) + 1;
+
+                const groundElevations = b.groundMsl !== undefined
+                    ? b.ring.map(() => b.groundMsl! - anchorElevation)
+                    : b.ring.map(p => sampleElevation(p.x, p.z));
+
+                if (b.heightMeters === undefined) {
+                    // No height data: the footprint is drawn flat on the ground, not extruded to a guessed height.
+                    const tris = EarClippingTriangulator.triangulate(b.ring);
+                    const start = currentVertexCount;
+                    b.ring.forEach((p, i) => {
+                        const y = groundElevations[i] + 0.05;
+                        addVertex(p.x, y, p.z, 0, 1, 0, p.x * 0.1, p.z * 0.1);
+                        expandBounds(p.x, y, p.z);
+                    });
+                    for (const t of tris) indices.push(start + t);
+                    flatFootprintCount++;
+                    continue;
+                }
 
                 const height = b.heightMeters * heightScale;
-                const groundElevations = b.ring.map(p => sampleElevation(p.x, p.z));
                 const minGroundY = Math.min(...groundElevations);
                 const maxGroundY = Math.max(...groundElevations);
                 const baseY = minGroundY - 0.5; // Foundation skirt embeds into terrain
@@ -928,8 +1037,8 @@ export class VectorWorldPopulatorService {
                         [nx, 0, nz]
                     );
 
-                    // Floor Cornices / Beltcourses every 3.5m
-                    if (buildingArticulation && b.levels > 1) {
+                    // Floor cornices only where the data gives the floor count
+                    if (buildingArticulation && b.levels !== undefined && b.levels > 1) {
                         const floorH = height / b.levels;
                         const corniceOut = 0.18; // 18cm ledge protrusion
 
@@ -1140,6 +1249,16 @@ export class VectorWorldPopulatorService {
             glbUrl,
             stats: {
                 buildingCount,
+                flatFootprintCount,
+                heightSources,
+                fusion: {
+                    skipped: fusionSkipped,
+                    dsmImageryDate: dsm?.imageryDate,
+                    buildingsFused,
+                    anchorElevationMsl: measuredAnchor !== undefined || options.elevation !== undefined ? anchorElevation : undefined
+                },
+                trafficSynthetic: trafficVehicleCount > 0,
+                trafficSeed,
                 roadSegmentCount,
                 waterPolygonCount,
                 streetlampCount,

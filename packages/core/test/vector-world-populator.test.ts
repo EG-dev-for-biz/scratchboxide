@@ -16,6 +16,7 @@ import {
     VectorFeatureGraph
 } from '../src/node/spatial/VectorWorldPopulatorService';
 import { GoogleVectorTileService, DecodedVectorTileData } from '../src/node/spatial/GoogleVectorTileService';
+import { latLngToUtm, type DsmRaster } from '../src/node/spatial/solar-dsm';
 
 describe('VectorWorldPopulatorService (3D Vector World Population Staging)', () => {
     const mockDecodedData: DecodedVectorTileData = {
@@ -124,7 +125,14 @@ describe('VectorWorldPopulatorService (3D Vector World Population Staging)', () 
         const empire = graph.buildings.find(b => b.id === 'bld-empire')!;
         expect(empire).toBeDefined();
         expect(empire.heightMeters).toBe(120.0);
+        expect(empire.heightSource).toBe('vector');
         expect(empire.levels).toBe(35);
+
+        // No height data: no height is guessed from the footprint area.
+        const residential = graph.buildings.find(b => b.id === 'bld-residential')!;
+        expect(residential.heightMeters).toBeUndefined();
+        expect(residential.heightSource).toBe('none');
+        expect(residential.levels).toBeUndefined();
         expect(empire.centroid.x).toBeCloseTo(29.5, 0);
 
         // Landuse
@@ -179,19 +187,20 @@ describe('VectorWorldPopulatorService (3D Vector World Population Staging)', () 
         expect(plazaPlacement!.position[1]).toBe(0.05);
     });
 
-    it('synthesizes a fully populated 3D world with 5-tier cross sections, streetlamps, trees, and traffic', async () => {
+    it('synthesizes a populated 3D world: real heights extruded, heightless footprints flat, labelled seeded traffic', async () => {
         // Mock GoogleVectorTileService.fetchVectorTile to return mockDecodedData
         const fetchSpy = vi.spyOn(GoogleVectorTileService, 'fetchVectorTile').mockResolvedValue(mockDecodedData);
 
         const outDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sbx-vector-world-'));
         const outGlb = path.join(outDir, 'test_vector_populated_world.glb');
 
-        const result = await VectorWorldPopulatorService.generatePopulatedWorld({
+        const opts = {
             latitude: 40.7484,
             longitude: -73.9857,
             zoom: 16,
             radiusTiles: 0, // 1 tile for speedy test
             outputGlbPath: outGlb,
+            solarDsm: false as const,
             includeTraffic: true,
             trafficDensity: 1.0, // High density to ensure vehicle instances spawn
             includeStreetlamps: true,
@@ -206,12 +215,25 @@ describe('VectorWorldPopulatorService (3D Vector World Population Staging)', () 
                 laneIndex: 2,
                 distanceAlongM: 80.0
             }
-        });
+        };
+        const result = await VectorWorldPopulatorService.generatePopulatedWorld(opts);
+        const again = await VectorWorldPopulatorService.generatePopulatedWorld(opts);
+        const noTraffic = await VectorWorldPopulatorService.generatePopulatedWorld({ ...opts, includeTraffic: undefined });
 
         fetchSpy.mockRestore();
 
         expect(result.success).toBe(true);
-        expect(result.stats.buildingCount).toBe(2);
+        expect(result.stats.buildingCount).toBe(1);
+        expect(result.stats.flatFootprintCount).toBe(1);
+        expect(result.stats.heightSources).toEqual({ vector: 1, none: 1 });
+        expect(result.stats.fusion.skipped).toBe('disabled');
+        // Traffic is synthetic, labelled, and reproducible from its seed; absent unless asked for.
+        expect(result.stats.trafficSynthetic).toBe(true);
+        expect(typeof result.stats.trafficSeed).toBe('number');
+        expect(again.stats.trafficVehicleCount).toBe(result.stats.trafficVehicleCount);
+        expect(again.stats.vertexCount).toBe(result.stats.vertexCount);
+        expect(noTraffic.stats.trafficVehicleCount).toBe(0);
+        expect(noTraffic.stats.trafficSynthetic).toBe(false);
         expect(result.stats.roadSegmentCount).toBeGreaterThan(0);
         expect(result.stats.streetlampCount).toBeGreaterThan(0);
         // no invented trees: the populator places none (a location's trees are measured from its photo tiles)
@@ -234,5 +256,45 @@ describe('VectorWorldPopulatorService (3D Vector World Population Staging)', () 
 
         // Cleanup test artifact
         await fs.remove(outDir);
+    });
+
+    it('sizes a building with no vector height from the Solar DSM and seats it on the measured street', async () => {
+        const lat = 40.7484, lng = -73.9857;
+        const decoded: DecodedVectorTileData = {
+            buildings: [{ id: 'bld-dsm', ring: [[lng, lat], [lng + 0.0004, lat], [lng + 0.0004, lat + 0.0003], [lng, lat + 0.0003], [lng, lat]], properties: {} }],
+            roads: [{ id: 'road-s', points: [[lng - 0.0013, lat - 0.0002], [lng + 0.0017, lat - 0.0002]], properties: { class: 'secondary' } }],
+            landuse: [],
+            water: []
+        };
+        // DSM: street 12 m above sea level, the building's roof 52 m (40 m tall), 0.5 m pixels around the anchor.
+        const { easting, northing } = latLngToUtm(lat, lng, 18, false);
+        const dsm: DsmRaster = { width: 600, height: 600, data: new Float32Array(600 * 600).fill(12), affine: { a0: easting - 150, a1: 0.5, a2: 0, b0: northing + 150, b1: 0, b2: -0.5 }, epsg: 32618 };
+        const kx = 111_320 * Math.cos((lat * Math.PI) / 180);
+        const bw = 0.0004 * kx, bh = 0.0003 * 111_320;
+        for (let r = 0; r < 600; r++) for (let c = 0; c < 600; c++) {
+            const x = (c + 0.5) * 0.5 - 150, y = 150 - (r + 0.5) * 0.5;
+            if (x > 1 && x < bw - 1 && y > 1 && y < bh - 1) dsm.data[r * 600 + c] = 52;
+        }
+        const fetchSpy = vi.spyOn(GoogleVectorTileService, 'fetchVectorTile').mockResolvedValue(decoded);
+        const outDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sbx-vector-world-dsm-'));
+        try {
+            const result = await VectorWorldPopulatorService.generatePopulatedWorld({
+                latitude: lat, longitude: lng, zoom: 16, radiusTiles: 0, includePlinth: false,
+                outputGlbPath: path.join(outDir, 'w.glb'), solarDsm: dsm, includeStreetlamps: false
+            });
+            const b = result.featureGraph.buildings[0];
+            expect(b.heightSource).toBe('dsm');
+            expect(b.heightMeters!).toBeCloseTo(40, 0);
+            expect(b.groundMsl!).toBeCloseTo(12, 0);
+            expect(result.stats.fusion.buildingsFused).toBe(1);
+            expect(result.stats.fusion.anchorElevationMsl!).toBeCloseTo(12, 0);
+            expect(result.stats.buildingCount).toBe(1);
+            expect(result.stats.flatFootprintCount).toBe(0);
+            // Roof top sits at street + 40 m in the anchor's frame (street = 0): parapet-free, no levels tagged.
+            expect(result.stats.maxBounds[1]).toBeCloseTo(40, 0);
+        } finally {
+            fetchSpy.mockRestore();
+            await fs.remove(outDir);
+        }
     });
 });
