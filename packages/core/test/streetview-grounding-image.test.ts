@@ -44,3 +44,24 @@ test('findGooglePano skips user photospheres for a Google capture nearby', async
     assert.deepStrictEqual(pano, { panoId: 'googlePano', lat: 3, lng: 4, date: '2026-04', copyright: '© Google' });
     assert.ok(isGoogleCapture('© 2026 Google') === false && isGoogleCapture('© Google'));
 });
+
+test('findGooglePano sends a ring\'s metadata requests together and still picks the first Google capture in ring order', async () => {
+    let inFlight = 0, peak = 0, calls = 0;
+    // Ring 0 and ring 25 m: user photospheres, except points 3 and 6 of the 25 m ring (Google). Point 6 answers first.
+    const fetchImpl = (async (url: string) => {
+        const n = calls++;
+        inFlight++; peak = Math.max(peak, inFlight);
+        const point = n === 0 ? -1 : n - 1;
+        await new Promise(r => setTimeout(r, point === 6 ? 1 : 20));
+        inFlight--;
+        if (point === 3 || point === 6) return ok({ status: 'OK', pano_id: `g${point}`, copyright: '© Google', location: { lat: point, lng: 0 } });
+        return ok({ status: 'OK', pano_id: `u${point}`, copyright: '© Someone', location: { lat: 0, lng: 0 } });
+    }) as any;
+    const t0 = performance.now();
+    const pano = await StreetViewGroundingImageService.findGooglePano(40.75, -73.98, 'key', fetchImpl);
+    const ms = performance.now() - t0;
+    assert.strictEqual(pano.panoId, 'g3', 'ring order, not answer order');
+    assert.strictEqual(calls, 9, 'the centre, then one ring of 8');
+    assert.strictEqual(peak, 8, 'the ring went out at once');
+    assert.ok(ms < 9 * 20, `9 x 20 ms lookups took ${ms.toFixed(0)} ms`);
+});

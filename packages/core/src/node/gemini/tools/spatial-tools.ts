@@ -96,6 +96,9 @@ import { findTileRefineRepoRoot } from '../../3d-engine/tile-refine-service';
 import type { ToolContext, ToolDeclaration, ToolHandler, ToolHandlerOutcome, ToolParameterSchema, ToolResultPayload } from './types';
 import { STAGED_MATERIAL_MODE_DECLARATION, STAGED_MATERIAL_MODE_TOOL, runStagedMaterialModeTool } from './staged-material-mode-tool';
 
+/** Street View grounding service shared by calls, so its project-number lookup runs once per process. */
+let streetViewGroundingService: StreetViewGroundingImageService | undefined;
+
 function asString(val: unknown, fallback = ''): string {
     return typeof val === 'string' ? val : fallback;
 }
@@ -5335,7 +5338,7 @@ export const analyticalGroomHandlers: Record<string, ToolHandler> = {
             pano = await StreetViewGroundingImageService.findGooglePano(lat, lng, MapsImageryGroundingService.resolveApiKey());
             panoId = pano.panoId;
         }
-        const service = createStreetViewGroundingImageService(new GeminiClient());
+        const service = (streetViewGroundingService ??= createStreetViewGroundingImageService(new GeminiClient()));
         const shot = await service.retrieveGroundingImage({
             panoId,
             headingDegree: typeof args.headingDegree === 'number' ? args.headingDegree : undefined,
