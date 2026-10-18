@@ -774,6 +774,8 @@ Tolerance sweep (hidden area): 0.10-0.15 m (default) 70.4 m²; 0.20 m 109.1; 0.3
 | off, `l3cf` scored only on the pixels of the pieces that stay drawn (scratch scoring mask, not committed) | | | 4.200 / 0.106 (51,436 px) | |
 | on | 5.164 / 0.237 | 5.033 / 0.228 | **3.851 / 0.289** (54,598 px, 4 panos) | 5.555 / 0.065 |
 
+After merging `origin/main` (`38dbc1fa`, round 10's texture-projection change; its vision prompts changed, so the off arm recorded 47 new replies live and the on arm replayed them): off l2 5.078, l3b 5.128 / 0.223, l3cf 5.180 / 0.020 (73,021 px), l4 5.490; on the same, except l3cf **3.704 / 0.241** (49,075 px).
+
 The registration (joint 7.12 / 0.196) and every other layer are the same to the digit. The two in-app replays (`b30415d7` off, `6a236b83` on) reproduced the headless numbers exactly. On the same kept pixels the new `l3cf` texture fits better (3.85 against 4.20 px): with the copy of the wall gone the layer's own statistics (single-pano witness level, exposure match) are those of the pieces it draws.
 
 ### Live (cold for the survey, evidence, vision/detail, figures and texture stages; tiles, remesh, fit cached)
