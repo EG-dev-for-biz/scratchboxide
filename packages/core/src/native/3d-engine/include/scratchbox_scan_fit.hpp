@@ -911,57 +911,54 @@ private:
         // merge coplanar planes
         const float cosM = static_cast<float>(std::cos(rad(P.mergeAngleDeg)));
         const double offM = std::max(P.mergeOffsetM, mergeOffsetM), maxRmsM = std::max(P.planeMaxRmsM, mergeMaxRmsM);
-        // Passes over the live regions in index order, each merge replacing `a` in place and killing `b` (no restart from 0, no
-        // erase): a pair that failed the thickness test is remembered by the two regions' stamps, so it is refitted only when
-        // one of them has changed. The cost is the merges themselves, not the number of regions cubed.
+        // in index order, as comparing every pair does (see mergeCoplanarInOrder: the same merges, found from an index)
         {
             const size_t R0 = regions.size();
-            std::vector<uint8_t> alive(R0, 1);
-            std::vector<uint64_t> stamp(R0);
-            for (size_t i = 0; i < R0; ++i) stamp[i] = i;
-            uint64_t nextStamp = R0;
-            std::unordered_set<uint64_t> failed;
-            bool merged = true;
-            while (merged) {
-                merged = false;
-                for (size_t a = 0; a < R0; ++a) {
-                    if (!alive[a]) continue;
-                    for (size_t b = a + 1; b < R0; ++b) {
-                        if (!alive[b]) continue;
-                        if (regions[a].pl.n.dot(regions[b].pl.n) < cosM) continue;
-                        if (std::fabs(regions[a].pl.dist(regions[b].c)) > offM || std::fabs(regions[b].pl.dist(regions[a].c)) > offM) continue;
-                        const uint64_t key = (stamp[a] << 32) ^ stamp[b];
-                        if (failed.count(key)) continue;
-                        Region m;
-                        m.tris = regions[a].tris;
-                        m.tris.insert(m.tris.end(), regions[b].tris.begin(), regions[b].tris.end());
-                        std::sort(m.tris.begin(), m.tris.end());
-                        m.pl = fitRegion(m.tris, regions[a].pl.n);
-                        stats(m);
-                        if (m.rms > maxRmsM) { failed.insert(key); continue; }
-                        regions[a] = std::move(m);
-                        stamp[a] = nextStamp++;
-                        regions[b].tris.clear(); regions[b].tris.shrink_to_fit();
-                        alive[b] = 0;
-                        merged = true;
-                    }
-                }
-            }
+            const std::vector<uint8_t> alive = sg::mergeCoplanarInOrder(R0, cosM, offM,
+                [&](size_t i) -> const sg::Plane& { return regions[i].pl; },
+                [&](size_t i) -> const Vec3& { return regions[i].c; },
+                [&](size_t a, size_t b) {
+                    Region m;
+                    m.tris = regions[a].tris;
+                    m.tris.insert(m.tris.end(), regions[b].tris.begin(), regions[b].tris.end());
+                    std::sort(m.tris.begin(), m.tris.end());
+                    m.pl = fitRegion(m.tris, regions[a].pl.n);
+                    stats(m);
+                    if (m.rms > maxRmsM) return false;
+                    regions[a] = std::move(m);
+                    regions[b].tris.clear(); regions[b].tris.shrink_to_fit();
+                    return true;
+                });
             std::vector<Region> kept;
             kept.reserve(R0);
             for (size_t i = 0; i < R0; ++i) if (alive[i]) kept.push_back(std::move(regions[i]));
             regions.swap(kept);
         }
-        // opposed sheets under sheetGapM apart that overlap: internal plates, not solids
-        for (size_t a = 0; a < regions.size(); ++a) {
-            for (size_t b = a + 1; b < regions.size(); ++b) {
-                auto& A = regions[a]; auto& Bq = regions[b];
-                if (A.pl.n.dot(Bq.pl.n) > -0.97f) continue;
-                if (std::fabs(A.pl.dist(Bq.c)) > P.sheetGapM) continue;
-                const double ox = std::min(A.hi.x, Bq.hi.x) - std::max(A.lo.x, Bq.lo.x), oy = std::min(A.hi.y, Bq.hi.y) - std::max(A.lo.y, Bq.lo.y), oz = std::min(A.hi.z, Bq.hi.z) - std::max(A.lo.z, Bq.lo.z);
-                if (ox < -0.05 || oy < -0.05 || oz < -0.05) continue;
-                A.sheet = Bq.sheet = true;
-            }
+        // opposed sheets under sheetGapM apart that overlap: internal plates, not solids. Each pair's test only marks both, so
+        // the pairs are found in parallel, from a candidate index (normal opposed within the angle, centroid within the gap of
+        // the plane), and marked afterwards.
+        {
+            const float cosS = 0.97f;
+            const double chordS = sg::PlanePointIndex::chordForDot(cosS);
+            sg::PlanePointIndex sheetIndex(chordS);
+            for (size_t i = 0; i < regions.size(); ++i) sheetIndex.insert(static_cast<uint32_t>(i), regions[i].pl.n, regions[i].c);
+            std::vector<std::vector<uint32_t>> partners(regions.size());
+            sg::parallelFor(regions.size(), [&](size_t a) {
+                const auto& A = regions[a];
+                const Vec3 back = A.pl.n * -1.0f;
+                std::vector<uint32_t> cand;
+                sheetIndex.query(back, back, -A.pl.d, P.sheetGapM, [&](uint32_t id) { if (id > a) cand.push_back(id); });
+                std::sort(cand.begin(), cand.end());
+                for (const uint32_t b : cand) {
+                    const auto& Bq = regions[b];
+                    if (A.pl.n.dot(Bq.pl.n) > -cosS) continue;
+                    if (std::fabs(A.pl.dist(Bq.c)) > P.sheetGapM) continue;
+                    const double ox = std::min(A.hi.x, Bq.hi.x) - std::max(A.lo.x, Bq.lo.x), oy = std::min(A.hi.y, Bq.hi.y) - std::max(A.lo.y, Bq.lo.y), oz = std::min(A.hi.z, Bq.hi.z) - std::max(A.lo.z, Bq.lo.z);
+                    if (ox < -0.05 || oy < -0.05 || oz < -0.05) continue;
+                    partners[a].push_back(b);
+                }
+            }, 256);
+            for (size_t a = 0; a < regions.size(); ++a) for (const uint32_t b : partners[a]) regions[a].sheet = regions[b].sheet = true;
         }
         std::sort(regions.begin(), regions.end(), [](const Region& a, const Region& b) { return a.area > b.area || (a.area == b.area && a.c.y < b.c.y); });
         for (size_t i = 0; i < regions.size(); ++i) for (uint32_t t : regions[i].tris) triPlane[t] = static_cast<int>(i);
