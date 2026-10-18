@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { describe, it, expect } from 'vitest';
-import { MissingInputError } from '../src/common/errors/pipeline-errors';
+import { InvalidInputError, MissingInputError } from '../src/common/errors/pipeline-errors';
 import { calculateNOAASolarPosition } from '../src/browser/generative-canvas/services/atmosphere/solar-position';
 import { instantAtLocalMeanSolarTime } from '../src/common/coordinate/solarPosition';
 import { createAtmosphericSkyDome } from '../src/browser/generative-canvas/services/atmosphere/AtmosphericSkyDome';
@@ -252,6 +252,28 @@ describe('Atmospheric Capabilities First-Class APIs', () => {
             const both = engine.executeOperator('sb_set_diurnal_time_of_day', { preset: 'night', timeOfDay: 12, latitude: 40.73, longitude: -73.99 });
             expect(both.success).toBe(false);
             expect(both.error).toMatch(/timeOfDay/);
+        });
+
+        it('getPresetLightingState: an unknown or empty preset is a typed error, not midday', () => {
+            expect(() => getPresetLightingState('neon')).toThrow(InvalidInputError);
+            expect(() => getPresetLightingState('')).toThrow(InvalidInputError);
+            expect(() => getPresetLightingState('neon')).toThrow(/golden_hour/);
+            expect(getPresetLightingState('Golden_Hour').elevationDeg).toBeCloseTo(5.2, 6);
+            const engine = createOperatorEngine({ features: {} } as any);
+            const res = engine.executeOperator('sb_set_diurnal_time_of_day', { preset: 'neon' });
+            expect(res.success).toBe(false);
+            expect(res.errorCode).toBe('invalid_input');
+        });
+
+        it('sb_setup_lighting: a lighting name that is not a time-of-day preset sets no sun', () => {
+            const engine = createOperatorEngine({ features: {}, environment: {} } as any);
+            const res = engine.executeOperator('sb_setup_lighting', { preset: 'neon' });
+            expect(res.success).toBe(true);
+            expect(res.data.sunElevation).toBeUndefined();
+            expect((engine.getSceneData() as any).environment.lighting).toBe('neon');
+            // ...and atmosphere, which needs a sun, says so
+            const atm = engine.executeOperator('sb_setup_lighting', { preset: 'neon', enableAtmosphere: true });
+            expect(atm.success).toBe(false);
         });
 
         it('AtmosphereService.setDiurnalTimeOfDay needs a location; it does not assume one', () => {

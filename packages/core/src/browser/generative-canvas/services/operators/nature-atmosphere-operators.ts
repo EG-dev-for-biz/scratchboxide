@@ -108,8 +108,7 @@ export const NATURE_ATMOSPHERE_OPERATORS: OperatorDefinition[] = [
             }
 
             if (params.preset) {
-                const presetState = getPresetLightingState(params.preset as any);
-                if (!presetState) throw new Error(`sb_set_diurnal_time_of_day: unknown preset '${params.preset}'.`);
+                const presetState = getPresetLightingState(params.preset); // InvalidInputError for an unknown preset
                 elevation = presetState.elevationDeg;
                 azimuth = presetState.azimuthDeg;
             } else if (elevation === undefined && latitude !== undefined && longitude !== undefined && (params.isoDate || timeOfDay !== undefined)) {
