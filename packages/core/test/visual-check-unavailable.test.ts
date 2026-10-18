@@ -67,6 +67,37 @@ describe('VisualVerificationService.verifyVisual', () => {
         expect(describeVisualCheck(down).text).toBe('Visual check unavailable (gemini-3.8-flash · Vertex AI): gemini-3.8-flash could not inspect the frame: 403 PERMISSION_DENIED');
     });
 
+    it('caps thinking, asks once more after an empty reply, and says why when the second answer is empty too', async () => {
+        // the survey's run: every build showed "did not return the audit JSON (empty reply)"
+        const calls: any[] = [];
+        let n = 0;
+        const flaky = new VisualVerificationService(visionClient(async () => (++n === 1
+            ? { text: '', candidates: [{ finishReason: 'MAX_TOKENS' }], usageMetadata: { promptTokenCount: 70000, thoughtsTokenCount: 8192, candidatesTokenCount: 0 } }
+            : { text: JSON.stringify({ fidelityScore: 81, critique: 'Lit district', issues: [], strengths: [] }) }) as any, calls));
+        const ok = await flaky.verifyVisual(REQUEST);
+        expect(ok).toMatchObject({ status: 'verified', fidelityScore: 81 });
+        expect(calls).toHaveLength(2);
+        expect(calls[0].config.thinkingConfig).toEqual({ thinkingBudget: 1024 });
+        expect(calls[0].config.maxOutputTokens).toBe(8192);
+        const empty = new VisualVerificationService(visionClient(async () => ({ text: '', candidates: [{ finishReason: 'MAX_TOKENS' }], usageMetadata: { promptTokenCount: 70000, thoughtsTokenCount: 7000, candidatesTokenCount: 0 } }) as any));
+        const down = await empty.verifyVisual(REQUEST);
+        expect(down).toMatchObject({ status: 'unavailable' });
+        expect(describeVisualCheck(down).text).toBe('Visual check unavailable: gemini-3.8-flash did not return the audit JSON after 2 asks (empty reply: finish MAX_TOKENS, 70000 prompt / 7000 thinking / 0 reply tokens).');
+    });
+
+    it('sends a summary of the scene, not the whole staged state', async () => {
+        const calls: any[] = [];
+        const service = new VisualVerificationService(visionClient(async () => ({ text: JSON.stringify({ fidelityScore: 80, critique: 'ok', issues: [], strengths: [] }) }), calls));
+        const layers = Array.from({ length: 400 }, (_, i) => ({ objectId: `stg-0000000${i % 10}-l${i}`, provenance: { note: 'x'.repeat(500) } }));
+        const big = { ...SCENE, renderMode: 'clay', objects: layers.map(l => ({ id: l.objectId, content: { metadata: { role: 'environment', source: 'Google3DTilesClay' } } })), stagedBuild: { runState: 'finished', materialMode: 'textured', layers } } as any;
+        expect(JSON.stringify(big).length).toBeGreaterThan(200_000);
+        await service.verifyVisual({ ...REQUEST, context: { artifactId: 'a', title: 't', sceneData: big } });
+        const text: string = calls[0].contents[0].parts[1].text;
+        expect(text.length).toBeLessThan(14_000);
+        expect(text).toContain('"objectCount":400');
+        expect(text).toContain('"stagedBuild":{"runState":"finished","materialMode":"textured","layers":400');
+    });
+
     it('a failed call (404 from the endpoint) is unavailable: no score, no critique, no fixes', async () => {
         const service = new VisualVerificationService(visionClient(async () => {
             throw new Error('[404 Not Found] Publisher Model `projects/p/locations/us-central1/publishers/google/models/gemini-3.8-flash` was not found');

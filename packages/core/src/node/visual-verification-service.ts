@@ -35,8 +35,40 @@ import {
     createOperatorEngine
 } from '../browser/generative-canvas/services/direct-dispatch-operator-engine';
 import { GeminiClient } from './gemini/gemini-client';
+import { thinkingConfigFor } from './gemini/thinking-config';
 
 export const DEFAULT_GEMINI_VISION_MODEL = 'gemini-3.8-flash';
+/** Thinking tokens the audit may spend before its JSON (a level on Gemini 4, a budget on 3.x): the rest of maxOutputTokens is the reply. */
+export const VISUAL_AUDIT_THINKING_BUDGET = 1024;
+/** The scene context the audit reads is kept under this many characters of JSON (a staged build's full state runs to megabytes). */
+export const VISUAL_AUDIT_CONTEXT_MAX_CHARS = 12_000;
+
+/**
+ * What the audit needs to know about the scene, not the scene: its look (render mode, environment, atmosphere, camera),
+ * its objects by id, role and source, and a staged build's run state and layer count. The whole scene used to be sent
+ * pretty-printed: a staged district's state is hundreds of kilobytes of text in front of one frame.
+ */
+export function auditContext(context: VisualVerificationRequest['context']): Record<string, unknown> | undefined {
+    if (!context) return undefined;
+    const { sceneData, ...rest } = context as Record<string, unknown> & { sceneData?: Record<string, any> };
+    if (!sceneData || typeof sceneData !== 'object') return rest;
+    const objects: any[] = Array.isArray(sceneData.objects) ? sceneData.objects : [];
+    const features = sceneData.features && typeof sceneData.features === 'object' ? sceneData.features : undefined;
+    const sb = sceneData.stagedBuild && typeof sceneData.stagedBuild === 'object' ? sceneData.stagedBuild : undefined;
+    const summary: Record<string, unknown> = {
+        title: sceneData.title, renderMode: sceneData.renderMode, environment: sceneData.environment, camera: sceneData.camera,
+        ...(features ? { features: { atmosphericScattering: features.atmosphericScattering, godRays: features.godRays } } : {}),
+        ...(sceneData.atmosphere ? { atmosphere: sceneData.atmosphere } : {}),
+        ...(sceneData.geoAnchor ? { geoAnchor: sceneData.geoAnchor } : {}),
+        objectCount: objects.length,
+        objects: objects.slice(0, 40).map(o => ({ id: o?.id, role: o?.content?.metadata?.role, source: o?.content?.metadata?.source })),
+        ...(Array.isArray(sceneData.customMeshes) ? { customMeshCount: sceneData.customMeshes.length } : {}),
+        ...(sb ? { stagedBuild: { runState: sb.runState, materialMode: sb.materialMode, layers: Array.isArray(sb.layers) ? sb.layers.length : 0, place: sb.place?.resolvedAddress } } : {})
+    };
+    let out: Record<string, unknown> = { ...rest, sceneData: summary };
+    if (JSON.stringify(out).length > VISUAL_AUDIT_CONTEXT_MAX_CHARS) out = { ...rest, sceneData: { ...summary, objects: (summary.objects as unknown[]).slice(0, 10) } };
+    return out;
+}
 
 /** A scene's content as key-order-independent JSON, without the bookkeeping every dispatch appends. */
 function sceneContentKey(scene: Scene3DData): string {
@@ -133,7 +165,7 @@ You MUST respond strictly with valid, unescaped JSON matching this schema:
   }
 }`;
 
-        const contextSummary = request.context ? JSON.stringify(request.context, null, 2) : 'None';
+        const contextSummary = request.context ? JSON.stringify(auditContext(request.context)) : 'None';
         const userPrompt = `Target Prompt: "${request.prompt}"
 Artifact Type: ${request.artifactType || '3d-scene'}
 Viewport Angle: ${request.context?.angle || 'perspective'}
@@ -194,27 +226,41 @@ Inspect this rendered viewport screenshot and provide your rigorous visual audit
         } catch {
             // A frame this process cannot decode is sent as captured; the model reads more formats than we do.
         }
-        let text: string;
-        try {
-            const response = await genai.models.generateContent({
-                model,
-                contents: [{ role: 'user', parts: [{ inlineData }, { text: userPrompt }] }],
-                config: {
-                    systemInstruction,
-                    temperature: 0.2,
-                    // Thinking models spend part of this budget before the JSON; 2048 cut audits off mid-object.
-                    maxOutputTokens: 8192,
-                    responseMimeType: 'application/json'
-                }
-            });
-            text = response.text ?? '';
-        } catch (err) {
-            return unavailable(`${model} could not inspect the frame: ${errorText(err)}`);
+        let text = '';
+        let replyFacts = '';
+        let parsed: Partial<VisualAuditResult> | null = null;
+        // one more ask when the reply carries no JSON (an empty reply, or one cut off): the second answer stands either way
+        for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
+            try {
+                const response = await genai.models.generateContent({
+                    model,
+                    contents: [{ role: 'user', parts: [{ inlineData }, { text: userPrompt }] }],
+                    config: {
+                        systemInstruction,
+                        temperature: 0.2,
+                        // Thinking models spend part of this budget before the JSON; 2048 cut audits off mid-object, and an
+                        // unbounded think could spend all of it (an empty reply): thinking is capped, the rest is the reply.
+                        maxOutputTokens: 8192,
+                        thinkingConfig: thinkingConfigFor(model, VISUAL_AUDIT_THINKING_BUDGET),
+                        responseMimeType: 'application/json'
+                    }
+                } as never);
+                text = response.text ?? '';
+                // why a reply carries no JSON: the finish reason, a prompt block, and where the tokens went
+                const r = response as { candidates?: Array<{ finishReason?: string }>; promptFeedback?: { blockReason?: string }; usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number } };
+                const facts = [
+                    r.candidates?.[0]?.finishReason ? `finish ${r.candidates[0].finishReason}` : (r.candidates?.length ? '' : 'no candidate'),
+                    r.promptFeedback?.blockReason ? `prompt blocked: ${r.promptFeedback.blockReason}` : '',
+                    r.usageMetadata ? `${r.usageMetadata.promptTokenCount ?? '?'} prompt / ${r.usageMetadata.thoughtsTokenCount ?? 0} thinking / ${r.usageMetadata.candidatesTokenCount ?? 0} reply tokens` : ''
+                ].filter(Boolean);
+                replyFacts = facts.length ? `: ${facts.join(', ')}` : '';
+            } catch (err) {
+                return unavailable(`${model} could not inspect the frame: ${errorText(err)}`);
+            }
+            parsed = this.parseVisionResponseJson(text);
         }
-
-        const parsed = this.parseVisionResponseJson(text);
         if (!parsed) {
-            return unavailable(`${model} did not return the audit JSON${text.trim() ? '' : ' (empty reply)'}.`);
+            return unavailable(`${model} did not return the audit JSON after 2 asks (${text.trim() ? 'the reply is not JSON' : 'empty reply'}${replyFacts}).`);
         }
         if (typeof parsed.fidelityScore !== 'number' || !Number.isFinite(parsed.fidelityScore)) {
             return unavailable(`${model}'s audit has no fidelityScore, so the frame was not scored.`);
