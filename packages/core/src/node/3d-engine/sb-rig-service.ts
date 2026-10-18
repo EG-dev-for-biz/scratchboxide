@@ -175,7 +175,8 @@ export class SbRigService {
     async ensureBinary(): Promise<string> {
         const sourcePath = path.join(findRepoRoot(), 'scripts/run_sb_rig_pipeline.cpp');
         if (!fs.existsSync(sourcePath)) throw new SbRigError(`SB-Rig runner source not found at ${sourcePath}`, 'compile');
-        const extraFlags = process.env.SCRATCHBOX_NATIVE_ARCH === '1' ? ['-march=native'] : [];
+        // -pthread: the average-geodesic-distance fields are computed on several threads.
+        const extraFlags = ['-pthread', ...(process.env.SCRATCHBOX_NATIVE_ARCH === '1' ? ['-march=native'] : [])];
         const compiled = await this.compiler.compileSource(fs.readFileSync(sourcePath, 'utf8'), { outputBinaryName: 'run_sb_rig_pipeline', extraFlags });
         if (!compiled.success || !compiled.binaryPath) {
             throw new SbRigError('SB-Rig runner failed to compile', 'compile', compiled.compilerOutput);

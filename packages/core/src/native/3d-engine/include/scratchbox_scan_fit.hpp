@@ -51,6 +51,7 @@
 #include "scratchbox_scan_ortho.hpp"
 #include "scratchbox_staged_glb.hpp"
 
+#include <array>
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
@@ -869,17 +870,28 @@ private:
         std::vector<uint32_t> left;
         for (uint32_t t = 0; t < T; ++t) if (pool[t]) left.push_back(t);
         std::mt19937_64 rng(23);
+        constexpr int kHypotheses = 300;
         for (int round = 0; round < 40 && left.size() >= 3; ++round) {
             std::uniform_int_distribution<size_t> U(0, left.size() - 1);
-            double bestW = -1;
-            sg::Plane best;
-            for (int h = 0; h < 300; ++h) {
+            // The hypotheses are drawn in order from the one seeded stream, scored in parallel (each score summed in
+            // `left` order), and the first with the highest score wins: the same planes as scoring them one by one.
+            std::array<sg::Plane, kHypotheses> hyp;
+            std::array<double, kHypotheses> score;
+            for (int h = 0; h < kHypotheses; ++h) {
                 const uint32_t t = left[U(rng)];
-                const sg::Plane pl{ln[t], ln[t].dot(lc[t])};
+                hyp[h] = sg::Plane{ln[t], ln[t].dot(lc[t])};
+            }
+            auto scoreOne = [&](size_t h) {
+                const sg::Plane& pl = hyp[h];
                 double w = 0;
                 for (uint32_t u : left) if (ln[u].dot(pl.n) >= cosA && std::fabs(pl.dist(lc[u])) < P.planeDistM) w += s.area[u];
-                if (w > bestW) { bestW = w; best = pl; }
-            }
+                score[h] = w;
+            };
+            if (left.size() >= 2048) sg::parallelFor(kHypotheses, scoreOne, 4);
+            else for (size_t h = 0; h < kHypotheses; ++h) scoreOne(h);
+            double bestW = -1;
+            sg::Plane best;
+            for (int h = 0; h < kHypotheses; ++h) if (score[h] > bestW) { bestW = score[h]; best = hyp[h]; }
             if (bestW < P.planeMinAreaM2) break;
             Region r;
             r.pl = best;

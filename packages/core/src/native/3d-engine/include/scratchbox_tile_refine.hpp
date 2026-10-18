@@ -2103,7 +2103,7 @@ private:
                 faceCell[t] = key;
             }
             std::sort(wall.begin(), wall.end(), [](const WallFace& a, const WallFace& b) { return a.key < b.key || (a.key == b.key && a.t < b.t); });
-            struct Cell { uint32_t begin, end, live; double area, score; };
+            struct Cell { uint32_t begin, end, live; double area, score; bool dirty{false}; };
             std::unordered_map<uint64_t, Cell> cells;
             for (size_t i = 0; i < wall.size();) {
                 size_t e = i;
@@ -2122,6 +2122,16 @@ private:
                     }
             };
             for (auto& kv : cells) forNeighbours(kv.first, [&](const Cell& nb) { kv.second.score += nb.area; });
+            // The best live cell (highest score, then lowest key) comes off a max-heap of (score, key) entries; an entry
+            // whose cell has since lost faces (score changed) or has no live face left is stale and skipped, and every
+            // cell whose score changed in an iteration gets a fresh entry. Same choice as scanning every cell.
+            struct HeapEntry { double score; uint64_t key; };
+            auto lower = [](const HeapEntry& a, const HeapEntry& b) { return a.score < b.score || (a.score == b.score && a.key > b.key); };
+            std::vector<HeapEntry> heap;
+            heap.reserve(cells.size());
+            for (const auto& kv : cells) if (kv.second.live) heap.push_back({kv.second.score, kv.first});
+            std::make_heap(heap.begin(), heap.end(), lower);
+            std::vector<uint64_t> dirty;
             std::vector<uint8_t> used(F, 0);
             auto retire = [&](uint32_t t) {
                 if (used[t]) return;
@@ -2130,24 +2140,52 @@ private:
                 Cell& c = cells.find(faceCell[t])->second;
                 c.area -= a;
                 --c.live;
-                forNeighbours(faceCell[t], [&](Cell& nb) { nb.score -= a; });
+                forNeighbours(faceCell[t], [&](Cell& nb) {
+                    nb.score -= a;
+                    if (!nb.dirty) { nb.dirty = true; dirty.push_back(wall[nb.begin].key); }
+                });
             };
+            // The faces a seed can reach: its normal is horizontal, so a face within acos(cosSeedReach) of it is within
+            // that many degrees of azimuth. Wall faces are sorted by cell key (azimuth bin first), so each bin is one
+            // range of `wall`, and visiting the reachable bins in ascending order lists the faces in `wall` order.
+            std::vector<uint32_t> binStart(361, static_cast<uint32_t>(wall.size()));
+            for (size_t i = wall.size(); i-- > 0;) binStart[cellAz(wall[i].key)] = static_cast<uint32_t>(i);
+            for (int b = 359; b >= 0; --b) binStart[b] = std::min(binStart[b], binStart[b + 1]);
+            const int reachDeg = static_cast<int>(std::ceil(std::acos(cosSeedReach) * 180.0 / kPi)) + 2;
             for (int iter = 0; iter < FP.detectMaxIterations; ++iter) {
                 ++detectIterations;
+                for (uint64_t k : dirty) {
+                    Cell& c = cells.find(k)->second;
+                    c.dirty = false;
+                    if (c.live) { heap.push_back({c.score, k}); std::push_heap(heap.begin(), heap.end(), lower); }
+                }
+                dirty.clear();
                 double best = 0;
                 uint64_t bk = 0;
                 bool found = false;
-                for (const auto& kv : cells) {
-                    if (!kv.second.live) continue;
-                    const double sc = kv.second.score;
-                    if (!found || sc > best || (sc == best && kv.first < bk)) { best = sc; bk = kv.first; found = true; }
+                while (!heap.empty()) {
+                    const HeapEntry top = heap.front();
+                    const Cell& c = cells.find(top.key)->second;
+                    if (c.live && c.score == top.score) { best = top.score; bk = top.key; found = true; break; }
+                    std::pop_heap(heap.begin(), heap.end(), lower);
+                    heap.pop_back();
                 }
                 if (!found || best < FP.minPlaneArea) break;
                 WallPlane pl;
                 pl.n = cellNormal(cellAz(bk));
                 pl.d = static_cast<double>(cellOff(bk)) * sb;
-                for (const WallFace& w : wall)
-                    if (!used[w.t] && nQ[w.t].dot(pl.n) >= cosSeedReach * nQ[w.t].norm()) pl.tris.push_back(w.t);
+                std::vector<int> bins;
+                if (reachDeg >= 180) {
+                    for (int b = 0; b < 360; ++b) bins.push_back(b);
+                } else {
+                    for (int da = -reachDeg; da <= reachDeg; ++da) bins.push_back(((cellAz(bk) + da) % 360 + 360) % 360);
+                    std::sort(bins.begin(), bins.end());
+                }
+                for (int b : bins)
+                    for (uint32_t i = binStart[b]; i < binStart[b + 1]; ++i) {
+                        const WallFace& w = wall[i];
+                        if (!used[w.t] && nQ[w.t].dot(pl.n) >= cosSeedReach * nQ[w.t].norm()) pl.tris.push_back(w.t);
+                    }
                 refine(pl);
                 if (pl.area < FP.minPlaneArea) {
                     forNeighbours(bk, [&](Cell& nb) { for (uint32_t i = nb.begin; i < nb.end; ++i) retire(wall[i].t); });
