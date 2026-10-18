@@ -429,3 +429,95 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
   });
 });
 
+
+describe('Universal3DObjectSeparationService vertex and triangle counts', () => {
+  /** A rows x cols vertex grid spanning `extent` on two axes (axis pair chosen by `plane`), indexed as triangles. */
+  function grid(rows: number, cols: number, plane: 'xz' | 'xy', extent: [number, number]) {
+    const positions: number[] = [];
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const a = (c / (cols - 1)) * extent[0];
+        const b = (r / (rows - 1)) * extent[1];
+        positions.push(...(plane === 'xz' ? [a, 0, b] : [a, b, 0]));
+      }
+    }
+    const indices: number[] = [];
+    for (let r = 0; r < rows - 1; r++) {
+      for (let c = 0; c < cols - 1; c++) {
+        const i = r * cols + c;
+        indices.push(i, i + 1, i + cols, i + 1, i + cols + 1, i + cols);
+      }
+    }
+    return { positions: new Float32Array(positions), indices: new Uint32Array(indices) };
+  }
+
+  function buildGlb(meshes: Array<{ positions: Float32Array; indices: Uint32Array }>): Buffer {
+    const chunks: Buffer[] = [];
+    const bufferViews: any[] = [];
+    const accessors: any[] = [];
+    let offset = 0;
+    const push = (b: Buffer) => {
+      bufferViews.push({ buffer: 0, byteOffset: offset, byteLength: b.length });
+      chunks.push(b);
+      offset += b.length;
+      return bufferViews.length - 1;
+    };
+    const gltfMeshes = meshes.map(m => {
+      const min = [0, 1, 2].map(k => Math.min(...Array.from(m.positions).filter((_, i) => i % 3 === k)));
+      const max = [0, 1, 2].map(k => Math.max(...Array.from(m.positions).filter((_, i) => i % 3 === k)));
+      const pv = push(Buffer.from(m.positions.buffer));
+      accessors.push({ bufferView: pv, componentType: 5126, count: m.positions.length / 3, type: 'VEC3', min, max });
+      const posAcc = accessors.length - 1;
+      const iv = push(Buffer.from(m.indices.buffer));
+      accessors.push({ bufferView: iv, componentType: 5125, count: m.indices.length, type: 'SCALAR' });
+      return { primitives: [{ attributes: { POSITION: posAcc }, indices: accessors.length - 1 }] };
+    });
+    const bin = Buffer.concat(chunks);
+    let json = Buffer.from(JSON.stringify({ asset: { version: '2.0' }, meshes: gltfMeshes, accessors, bufferViews, buffers: [{ byteLength: bin.length }] }));
+    json = Buffer.concat([json, Buffer.alloc((4 - (json.length % 4)) % 4, 0x20)]);
+    const header = Buffer.alloc(12);
+    header.write('glTF', 0, 'utf8'); header.writeUInt32LE(2, 4); header.writeUInt32LE(12 + 8 + json.length + 8 + bin.length, 8);
+    const jh = Buffer.alloc(8); jh.writeUInt32LE(json.length, 0); jh.writeUInt32LE(0x4e4f534a, 4);
+    const bh = Buffer.alloc(8); bh.writeUInt32LE(bin.length, 0); bh.writeUInt32LE(0x004e4942, 4);
+    return Buffer.concat([header, jh, json, bh, bin]);
+  }
+
+  it('macro mode reports each group\'s real vertex and triangle counts (no sampling, no 1.8x estimate)', () => {
+    const ground = grid(41, 41, 'xz', [100, 100]);      // 1681 vertices, 3200 triangles
+    const wall = grid(31, 26, 'xy', [25, 30]);          // 806 vertices, 1500 triangles; 30 m high, 25 m wide
+    const scene = Universal3DObjectSeparationService.separate3DMesh(buildGlb([ground, wall]), { granularity: 'macro' });
+    const terrain = scene.objects.find(o => o.submeshIndices.includes(0))!;
+    const tall = scene.objects.find(o => o.submeshIndices.includes(1))!;
+    expect(terrain.vertexCount).toBe(1681);
+    expect(terrain.triangleCount).toBe(3200);
+    expect(tall.vertexCount).toBe(806);
+    expect(tall.triangleCount).toBe(1500);
+    expect(terrain.sampledVertexCount).toBeUndefined();
+  });
+
+  it('vertex clustering reports exact counts when nothing was sampled, and only the sample size when it was', () => {
+    const ground = grid(41, 41, 'xz', [100, 100]);
+    const wall = grid(31, 26, 'xy', [25, 30]);
+    const exact = Universal3DObjectSeparationService.separate3DMesh(buildGlb([ground, wall]), { granularity: 'detailed' });
+    expect(exact.objects.length).toBeGreaterThan(0);
+    let tris = 0;
+    for (const o of exact.objects) {
+      expect(o.sampledVertexCount).toBeUndefined();
+      expect(o.vertexCount).toBe(o.vertexIndices!.length);
+      tris += o.triangleCount!;
+    }
+    expect(exact.objects.reduce((n, o) => n + o.vertexCount!, 0)).toBeLessThanOrEqual(1681 + 806);
+    expect(tris).toBeLessThanOrEqual(3200 + 1500);
+
+    const bigGround = grid(201, 201, 'xz', [100, 100]); // 40401 vertices: the clustering samples it
+    const sampled = Universal3DObjectSeparationService.separate3DMesh(buildGlb([bigGround, wall]), { granularity: 'detailed' });
+    const fromBig = sampled.objects.filter(o => o.submeshIndices.includes(0));
+    expect(fromBig.length).toBeGreaterThan(0);
+    for (const o of fromBig) {
+      expect(o.vertexCount).toBeUndefined();
+      expect(o.triangleCount).toBeUndefined();
+      expect(o.sampledVertexCount).toBeGreaterThan(0);
+      expect(o.sampledVertexCount!).toBeLessThan(40401);
+    }
+  });
+});

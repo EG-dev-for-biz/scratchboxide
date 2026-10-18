@@ -105,6 +105,14 @@ interface VertexRecord {
   tag: 'unassigned' | 'terrain' | 'landmark' | 'building' | 'prop';
 }
 
+/**
+ * Stride at which decompose() samples a submesh's vertices (1 = every vertex). Clusters from a submesh with a
+ * stride above 1 hold only a sample of its vertices, so their vertex lists are not full counts.
+ */
+export function vertexSampleStride(vertexCount: number): number {
+  return Math.max(1, Math.floor(vertexCount / 12000));
+}
+
 export class UniversalVertexSpatialClusteringEngine {
   /**
    * Decomposes arbitrary 3D submesh geometry at vertex resolution into the ground, the structure at the anchor,
@@ -184,7 +192,7 @@ export class UniversalVertexSpatialClusteringEngine {
       }
 
       // Sampling step to keep runtime sub-50ms on huge point sets
-      const step = Math.max(1, Math.floor(numV / 12000));
+      const step = vertexSampleStride(numV);
       for (let i = 0; i < numV; i += step) {
         const x = pos[i * 3]!;
         const y = pos[i * 3 + 1]!;
