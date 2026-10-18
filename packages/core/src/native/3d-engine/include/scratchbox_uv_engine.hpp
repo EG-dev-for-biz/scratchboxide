@@ -22,6 +22,8 @@
 #include <string>
 #include <memory>
 #include <chrono>
+#include <set>
+#include <unordered_map>
 
 namespace scratchbox {
 namespace uv_engine {
@@ -226,97 +228,223 @@ inline void decomposeIntrinsicAlbedo(
 }
 
 // ============================================================================
-// 4b. Solar Inverse De-Lighting via NOAA Ephemeris & Ramamoorthi SH9
+// 4b. Solar Inverse De-Lighting with a measured ambient-to-sun ratio
 // ============================================================================
+//
+// Shading model: I = rho * s * (max(0, N.L) + k), N the geometry normal, L the sun the caller gives, k the
+// ambient-to-sun irradiance ratio. k is measured from the image (fitSolarShading, same algorithm as
+// packages/core/src/node/spatial/solar-shading-fit.ts): texels are grouped by chart (4-connected texels with a normal;
+// albedo assumed piecewise constant per chart) and N.L bin, and k is the value that makes each chart's de-lit albedo the
+// same in every bin it covers. A poorly conditioned fit is refused with the reason; no sun, ambient or date is assumed.
 
 struct SolarEphemerisConfig {
-    Vec3 sunVector{0.45f, 0.75f, -0.48f};
-    std::array<Vec3, 9> skyShCoeffs{
-        Vec3{0.65f, 0.72f, 0.85f},
-        Vec3{0.20f, 0.28f, 0.40f},
-        Vec3{0.15f, 0.20f, 0.30f},
-        Vec3{0.10f, 0.15f, 0.25f},
-        Vec3{0.05f, 0.08f, 0.12f},
-        Vec3{0.04f, 0.06f, 0.10f},
-        Vec3{0.08f, 0.12f, 0.18f},
-        Vec3{0.03f, 0.05f, 0.08f},
-        Vec3{0.02f, 0.04f, 0.06f}
-    };
-    float directWeight{0.65f};
-    float ambientWeight{0.35f};
-    float regularizationEpsilon{0.18f};
+    /** Sun direction (+X East, +Y Up, -Z North) of the capture. Must be set: a zero vector means no sun is known. */
+    Vec3 sunVector{0.0f, 0.0f, 0.0f};
+    int minCellSamples{16};
+    int minSamplesPerSide{64};
+    float maxLogSigma{0.3f};
 };
 
-inline Vec3 evaluateSh9Irradiance(const Vec3& n, const std::array<Vec3, 9>& sh) {
-    constexpr float c1 = 0.429043f;
-    constexpr float c2 = 0.511664f;
-    constexpr float c3 = 0.743125f;
-    constexpr float c4 = 0.886227f;
-    constexpr float c5 = 0.247708f;
+struct SolarShadingFit {
+    bool fitted{false};
+    std::string reason;
+    double ambientToSun{0.0};
+    double logSigma{0.0};
+    double rmsLogResidual{0.0};
+    double meanIrradiance{1.0};
+    double gainCap{1.0};
+    int cells{0};
+    int charts{0};
+    int shadedSamples{0};
+    int litSamples{0};
+};
 
-    Vec3 out{0.0f, 0.0f, 0.0f};
-    float x = n.x, y = n.y, z = n.z;
+/** E(N) = max(0, N.L) + k of the shading model. */
+inline float computeSolarIrradiance(const Vec3& normal, const Vec3& sunVector, float ambientToSun) {
+    return std::max(0.0f, normal.normalized().dot(sunVector.normalized())) + ambientToSun;
+}
 
-    for (int ch = 0; ch < 3; ++ch) {
-        auto c = [&](int i) { return sh[i][ch]; };
-        float val =
-            c(0) * c4 -
-            c(6) * c5 +
-            c(6) * (c3 * y * y) +
-            (c(8) * (x * x - z * z) +
-             c(4) * (2.0f * x * z) +
-             c(7) * (2.0f * x * y) +
-             c(5) * (2.0f * z * y)) * c1 +
-            (c(3) * x + c(1) * y + c(2) * z) * (2.0f * c2);
-        out[ch] = std::max(0.0f, val);
+inline SolarShadingFit fitSolarShading(
+    const std::vector<float>& luminance,
+    const std::vector<float>& cosSun,
+    const std::vector<int>& group,
+    const SolarEphemerisConfig& cfg = {}
+) {
+    constexpr int LIT_BINS = 8;
+    constexpr double SHADED_COS = 0.02, LIT_COS = 0.3;
+    auto binOf = [&](double c) {
+        if (!(c > SHADED_COS)) return 0;
+        return 1 + std::min(LIT_BINS - 1, static_cast<int>(std::floor((c - SHADED_COS) / (1.0 - SHADED_COS) * LIT_BINS)));
+    };
+    SolarShadingFit fit;
+    const size_t n = luminance.size();
+    std::unordered_map<long long, int> keyToCell;
+    std::vector<int> cellChart, cellBin;
+    std::vector<std::vector<double>> cellLog;
+    std::vector<double> cosSum;
+    for (size_t i = 0; i < n; ++i) {
+        if (group[i] < 0) continue;
+        int b = binOf(cosSun[i]);
+        long long key = static_cast<long long>(group[i]) * (LIT_BINS + 1) + b;
+        auto it = keyToCell.find(key);
+        int c;
+        if (it == keyToCell.end()) {
+            c = static_cast<int>(cellChart.size());
+            keyToCell.emplace(key, c);
+            cellChart.push_back(group[i]); cellBin.push_back(b); cellLog.emplace_back(); cosSum.push_back(0.0);
+        } else c = it->second;
+        cellLog[c].push_back(std::log(std::max(1e-4, static_cast<double>(luminance[i]))));
+        cosSum[c] += std::max(0.0f, cosSun[i]);
     }
-    return out;
-}
-
-inline float computeSolarIrradiance(
-    const Vec3& normal,
-    const SolarEphemerisConfig& config = {}
-) {
-    Vec3 n = normal.normalized();
-    Vec3 s = config.sunVector.normalized();
-
-    float nDotL = std::max(0.0f, n.dot(s));
-    Vec3 skyRgb = evaluateSh9Irradiance(n, config.skyShCoeffs);
-    float ambient = 0.2126f * skyRgb.x + 0.7152f * skyRgb.y + 0.0722f * skyRgb.z;
-
-    float total = nDotL * config.directWeight + ambient * config.ambientWeight;
-    return std::clamp(total, config.regularizationEpsilon, 1.8f);
-}
-
-inline void applySolarInverseDelighting(
-    ImageBuffer& albedo,
-    const SolarEphemerisConfig& config = {}
-) {
-    int w = albedo.width;
-    int h = albedo.height;
-
-    for (int y = 0; y < h; ++y) {
-        for (int x = 0; x < w; ++x) {
-            Vec3 col = albedo.getPixelRGB(x, y);
-
-            float lumL = albedo.getLuminance(std::max(0, x - 1), y);
-            float lumR = albedo.getLuminance(std::min(w - 1, x + 1), y);
-            float lumB = albedo.getLuminance(x, std::max(0, y - 1));
-            float lumT = albedo.getLuminance(x, std::min(h - 1, y + 1));
-
-            float dx = (lumR - lumL) * 1.5f;
-            float dy = (lumT - lumB) * 1.5f;
-            Vec3 normal(-dx, -dy, 1.0f);
-
-            float irradiance = computeSolarIrradiance(normal, config);
-            col = col * (1.0f / irradiance);
-            col.x = std::clamp(col.x, 0.0f, 1.0f);
-            col.y = std::clamp(col.y, 0.0f, 1.0f);
-            col.z = std::clamp(col.z, 0.0f, 1.0f);
-
-            albedo.setPixelRGB(x, y, col);
+    const int nCells = static_cast<int>(cellChart.size());
+    auto big = [&](int c) { return static_cast<int>(cellLog[c].size()) >= cfg.minCellSamples; };
+    auto lit = [&](int c) { return cellBin[c] > 0 && cosSum[c] / cellLog[c].size() >= LIT_COS; };
+    std::unordered_map<int, std::set<int>> binsOfChart;
+    std::set<int> hasShaded, hasLit;
+    for (int c = 0; c < nCells; ++c) {
+        if (!big(c)) continue;
+        binsOfChart[cellChart[c]].insert(cellBin[c]);
+        if (cellBin[c] == 0) hasShaded.insert(cellChart[c]);
+        else if (lit(c)) hasLit.insert(cellChart[c]);
+    }
+    std::vector<int> used;
+    std::vector<double> median(nCells, 0.0);
+    std::set<int> chartSet;
+    for (int c = 0; c < nCells; ++c) {
+        if (!big(c) || binsOfChart[cellChart[c]].size() < 2) continue;
+        used.push_back(c);
+        chartSet.insert(cellChart[c]);
+        auto& v = cellLog[c];
+        std::sort(v.begin(), v.end());
+        size_t m = v.size() / 2;
+        median[c] = v.size() % 2 ? v[m] : 0.5 * (v[m - 1] + v[m]);
+        bool both = hasShaded.count(cellChart[c]) && hasLit.count(cellChart[c]);
+        if (both) {
+            if (cellBin[c] == 0) fit.shadedSamples += static_cast<int>(v.size());
+            else if (lit(c)) fit.litSamples += static_cast<int>(v.size());
         }
     }
+    fit.cells = static_cast<int>(used.size());
+    fit.charts = static_cast<int>(chartSet.size());
+    if (fit.shadedSamples < cfg.minSamplesPerSide || fit.litSamples < cfg.minSamplesPerSide) {
+        fit.reason = "too few texels on charts seen both facing the sun and turned away from it (" + std::to_string(fit.shadedSamples) +
+            " shaded, " + std::to_string(fit.litSamples) + " lit; " + std::to_string(cfg.minSamplesPerSide) + " of each needed)";
+        return fit;
+    }
+    std::unordered_map<int, int> chartIdx;
+    for (int c : used) chartIdx.emplace(cellChart[c], static_cast<int>(chartIdx.size()));
+    const int G = static_cast<int>(chartIdx.size());
+    std::vector<int> cg; std::vector<double> cbar, l;
+    for (int c : used) { cg.push_back(chartIdx[cellChart[c]]); cbar.push_back(cosSum[c] / cellLog[c].size()); l.push_back(median[c]); }
+    std::vector<double> rho(G), cnt(G);
+    auto ss = [&](double logK) {
+        double k = std::exp(logK);
+        std::fill(rho.begin(), rho.end(), 0.0); std::fill(cnt.begin(), cnt.end(), 0.0);
+        for (size_t j = 0; j < used.size(); ++j) { rho[cg[j]] += l[j] - std::log(cbar[j] + k); cnt[cg[j]] += 1.0; }
+        for (int g = 0; g < G; ++g) rho[g] /= cnt[g];
+        double s = 0.0;
+        for (size_t j = 0; j < used.size(); ++j) { double r = l[j] - std::log(cbar[j] + k) - rho[cg[j]]; s += r * r; }
+        return s;
+    };
+    const double LO = std::log(0.005), HI = std::log(20.0);
+    const int STEPS = 240;
+    int best = 0; double bestSs = 1e300;
+    for (int s = 0; s <= STEPS; ++s) { double v = ss(LO + (HI - LO) * s / STEPS); if (v < bestSs) { bestSs = v; best = s; } }
+    if (best == 0 || best == STEPS) { fit.reason = "the shading fit is best at the search limit of the ambient-to-sun ratio, so the data do not bound it"; return fit; }
+    double a = LO + (HI - LO) * (best - 1) / STEPS, b = LO + (HI - LO) * (best + 1) / STEPS;
+    const double phi = (std::sqrt(5.0) - 1.0) / 2.0;
+    double x1 = b - phi * (b - a), x2 = a + phi * (b - a), f1 = ss(x1), f2 = ss(x2);
+    for (int it = 0; it < 60; ++it) {
+        if (f1 < f2) { b = x2; x2 = x1; f2 = f1; x1 = b - phi * (b - a); f1 = ss(x1); }
+        else { a = x1; x1 = x2; f1 = f2; x2 = a + phi * (b - a); f2 = ss(x2); }
+    }
+    double logK = 0.5 * (a + b), ssMin = ss(logK);
+    int dof = static_cast<int>(used.size()) - G - 1;
+    if (dof < 1) { fit.reason = "no degree of freedom left to measure the ambient-to-sun ratio"; return fit; }
+    double h = 0.05, curv = (ss(logK + h) - 2.0 * ssMin + ss(logK - h)) / (h * h);
+    double logSigma = curv > 0.0 ? std::sqrt(2.0 * (ssMin / dof) / curv) : 1e300;
+    if (!(logSigma <= cfg.maxLogSigma)) { fit.reason = "the ambient-to-sun ratio is poorly determined (standard error of ln k " + std::to_string(logSigma) + ")"; return fit; }
+    double k = std::exp(logK);
+    ss(logK);
+    double rms = std::sqrt(ssMin / used.size());
+    double eSum = 0.0; size_t eN = 0;
+    for (size_t i = 0; i < n; ++i) if (group[i] >= 0) { eSum += std::max(0.0f, cosSun[i]) + k; ++eN; }
+    double meanE = eN ? eSum / eN : 1.0, maxCellGain = 0.0;
+    for (size_t j = 0; j < used.size(); ++j) maxCellGain = std::max(maxCellGain, std::exp(rho[cg[j]] - l[j]) * meanE);
+    fit.fitted = true;
+    fit.ambientToSun = k; fit.logSigma = logSigma; fit.rmsLogResidual = rms; fit.meanIrradiance = meanE;
+    fit.gainCap = maxCellGain * std::exp(2.0 * rms);
+    return fit;
+}
+
+struct SolarDelightResult {
+    int delitTexels{0};
+    int cappedTexels{0};
+    int clippedTexels{0};
+    std::string skippedReason;
+    SolarShadingFit fit;
+};
+
+inline float srgbToLinear(float c) { return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f); }
+inline float linearToSrgb(float c) { c = std::clamp(c, 0.0f, 1.0f); return c <= 0.0031308f ? 12.92f * c : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f; }
+
+/**
+ * Divides each texel with a geometry normal (`texelNormals`, rasterized from the mesh; zero = none) by E(N) / mean E in
+ * linear light, k measured by fitSolarShading, the gain capped at the fit's measured bound. Nothing changes, and the
+ * reason is set, when no sun is given, the sun is below the horizon, or the fit is refused.
+ */
+inline SolarDelightResult applySolarInverseDelighting(
+    ImageBuffer& albedo,
+    const std::vector<Vec3>& texelNormals,
+    const SolarEphemerisConfig& config
+) {
+    SolarDelightResult out;
+    const int w = albedo.width, h = albedo.height;
+    if (config.sunVector.dot(config.sunVector) < 1e-12f) { out.skippedReason = "no sun vector was given (the capture's sun is never assumed)"; return out; }
+    if (static_cast<int>(texelNormals.size()) != w * h) { out.skippedReason = "texel normals do not match the image size"; return out; }
+    Vec3 sun = config.sunVector.normalized();
+    if (!(sun.y > 0.0f)) { out.skippedReason = "the sun is at or below the horizon"; return out; }
+
+    std::vector<int> has(static_cast<size_t>(w) * h, 0), chart(static_cast<size_t>(w) * h, -1);
+    for (int i = 0; i < w * h; ++i) has[i] = texelNormals[i].dot(texelNormals[i]) > 1e-12f;
+    int next = 0;
+    std::vector<int> stack;
+    for (int s = 0; s < w * h; ++s) {
+        if (!has[s] || chart[s] >= 0) continue;
+        chart[s] = next; stack.push_back(s);
+        while (!stack.empty()) {
+            int t = stack.back(); stack.pop_back();
+            int x = t % w, y = t / w;
+            auto visit = [&](int u) { if (has[u] && chart[u] < 0) { chart[u] = next; stack.push_back(u); } };
+            if (x > 0) visit(t - 1);
+            if (x < w - 1) visit(t + 1);
+            if (y > 0) visit(t - w);
+            if (y < h - 1) visit(t + w);
+        }
+        ++next;
+    }
+    std::vector<float> lum(static_cast<size_t>(w) * h, 0.0f), cosS(static_cast<size_t>(w) * h, 0.0f);
+    for (int y = 0; y < h; ++y) for (int x = 0; x < w; ++x) {
+        int i = y * w + x;
+        if (!has[i]) continue;
+        cosS[i] = std::max(0.0f, texelNormals[i].normalized().dot(sun));
+        Vec3 c = albedo.getPixelRGB(x, y);
+        lum[i] = 0.2126f * srgbToLinear(c.x) + 0.7152f * srgbToLinear(c.y) + 0.0722f * srgbToLinear(c.z);
+    }
+    out.fit = fitSolarShading(lum, cosS, chart, config);
+    if (!out.fit.fitted) { out.skippedReason = out.fit.reason; return out; }
+    for (int y = 0; y < h; ++y) for (int x = 0; x < w; ++x) {
+        int i = y * w + x;
+        if (!has[i]) continue;
+        double gain = out.fit.meanIrradiance / (cosS[i] + out.fit.ambientToSun);
+        if (gain > out.fit.gainCap) { gain = out.fit.gainCap; ++out.cappedTexels; }
+        Vec3 c = albedo.getPixelRGB(x, y);
+        float lr = srgbToLinear(c.x) * static_cast<float>(gain), lg = srgbToLinear(c.y) * static_cast<float>(gain), lb = srgbToLinear(c.z) * static_cast<float>(gain);
+        if (lr > 1.0f || lg > 1.0f || lb > 1.0f) ++out.clippedTexels;
+        albedo.setPixelRGB(x, y, Vec3(linearToSrgb(lr), linearToSrgb(lg), linearToSrgb(lb)));
+        ++out.delitTexels;
+    }
+    return out;
 }
 
 // ============================================================================
@@ -430,6 +558,18 @@ struct UvEngineResult {
     int processedTexels{0};
     double executionTimeMs{0.0};
     PbrTextureSet pbrSet;
+    /** Texels divided by E(N) of their interpolated mesh normal (0 when solar de-lighting was off or skipped). */
+    int solarDelitTexels{0};
+    /** Set when solar de-lighting was requested but did not run (no sun, sun below the horizon, or the fit was refused). */
+    std::string solarDelightingSkippedReason;
+    /** The measured ambient-to-sun fit, and texels capped at its gain bound or saturated. */
+    SolarShadingFit solarFit;
+    int solarCappedTexels{0};
+    int solarClippedTexels{0};
+    /** Maps estimated from the image itself rather than measured, with how. */
+    std::vector<std::string> heuristicMaps;
+    /** Roughness is not produced: nothing here measures it (a luminance guess is not roughness). */
+    std::string roughnessUnmeasuredReason;
 };
 
 inline UvEngineResult processMeshUvEngine(
@@ -451,6 +591,8 @@ inline UvEngineResult processMeshUvEngine(
     int h = sourceTexture.height;
     ImageBuffer enhancedAlbedo = sourceTexture;
     std::vector<bool> coverageMask(w * h, false);
+    // Interpolated mesh normal of every covered texel (zero where no triangle covers it), for solar de-lighting
+    std::vector<Vec3> texelNormals(static_cast<size_t>(w) * h, Vec3{0.0f, 0.0f, 0.0f});
 
     // 1. Process mode: conformal reparameterization if requested
     if (options.mode == "conformal-reparameterize") {
@@ -496,6 +638,8 @@ inline UvEngineResult processMeshUvEngine(
                 int idx = py * w + px;
                 coverageMask[idx] = true;
                 result.processedTexels++;
+                Vec3 nInterp = v0.normal * bc.u + v1.normal * bc.v + v2.normal * bc.w;
+                if (nInterp.dot(nInterp) > 1e-12f) texelNormals[idx] = nInterp.normalized();
 
                 // Interpolate continuous 3D world position
                 Vec3 p3d = v0.position * bc.u + v1.position * bc.v + v2.position * bc.w;
@@ -542,15 +686,25 @@ inline UvEngineResult processMeshUvEngine(
         }
 
         if (options.enableSolarDelighting) {
-            applySolarInverseDelighting(result.pbrSet.albedo, options.solarEphemeris);
+            bool anyNormal = std::any_of(texelNormals.begin(), texelNormals.end(), [](const Vec3& v) { return v.dot(v) > 1e-12f; });
+            if (!anyNormal) {
+                result.solarDelightingSkippedReason = "no texel is covered by a mesh triangle with a non-zero normal";
+            } else {
+                auto sd = applySolarInverseDelighting(result.pbrSet.albedo, texelNormals, options.solarEphemeris);
+                result.solarDelitTexels = sd.delitTexels;
+                result.solarDelightingSkippedReason = sd.skippedReason;
+                result.solarFit = sd.fit;
+                result.solarCappedTexels = sd.cappedTexels;
+                result.solarClippedTexels = sd.clippedTexels;
+            }
         }
 
         result.pbrSet.normal = texture::computeSobelNormalMap(result.pbrSet.albedo, options.bumpStrength);
-        result.pbrSet.roughness = texture::extractRoughnessMap(result.pbrSet.albedo, 0.85f);
         result.pbrSet.ao = computeSkyDomeAO(result.pbrSet.albedo, mesh);
-
-        // Standard glTF ORM texture packing
-        result.pbrSet.orm = texture::packOrmTexture(result.pbrSet.ao, result.pbrSet.roughness, result.pbrSet.metallic);
+        result.heuristicMaps.push_back("normal: Sobel of albedo luminance (image-derived, not geometry)");
+        result.heuristicMaps.push_back("ao: albedo luminance cavity (image-derived, not ray-traced)");
+        // No roughness map and no ORM: the only source here would be a luminance guess, which is not a measurement.
+        result.roughnessUnmeasuredReason = "roughness is not measured by the UV engine; no roughness or ORM map is written";
     } else {
         result.pbrSet.albedo = enhancedAlbedo;
     }

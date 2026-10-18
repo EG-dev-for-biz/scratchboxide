@@ -399,7 +399,7 @@ describe('Street View projection bake', () => {
         expect(res.provenance.filter(p => p.panoIds!.length === 2).every(p => /of one pano/.test(p.method))).toBe(true);
     });
 
-    it('de-lights through the shared helpers: solar irradiance per view when its capture time is known, shadow lift after', async () => {
+    it('de-lights through the shared helpers: solar only with a capture instant and a measurable ambient, shadow lift after', async () => {
         const atlas = facadeAtlas(32);
         const views = rig([facadeRect()], { ids: ['pano-front'] });
         views[0].view.captureDate = '2024-06';
@@ -408,8 +408,11 @@ describe('Street View projection bake', () => {
         expect(noTime.report.views[0].solarDelit).toBe(false);
         views[0].view.captureDate = '2024-06-12T15:30:00Z';
         const res = await bake(views, atlas, { delight: { latitude: 41.9, longitude: 12.48, liftCap: false } });
-        expect(res.report.views[0].solarDelit).toBe(true);
-        // one plane: E(n) is the same for every texel, so the solar step is neutral and the result is the shared lift of the truth
+        // one plane has one N.L, so the ambient-to-sun ratio cannot be measured from it: no solar step, and the reason is recorded
+        expect(res.report.views[0].solarDelit).toBe(false);
+        expect(res.report.views[0].solarFit).toMatchObject({ status: 'skipped' });
+        expect(res.degradations.some((d) => d.reasonCode === 'solar_fit_not_measurable' && /too few texels/.test(d.reason))).toBe(true);
+        // the result is the shared lift of the truth
         const lifted = (u: number, v: number): Vec3 => {
             const g = facadeAlbedo(u, v).map((c) => SRGB_TO_LINEAR[Math.round(c)]) as Vec3;
             return delightLinearRgb(g[0], g[1], g[2]).map((c) => linearToSrgb255(c)) as Vec3;
@@ -512,5 +515,48 @@ describe('registered grounding views -> bake inputs', () => {
             expect(res.albedo[t * 4 + 3]).toBe(0);
         }
         expect(hidden).toBeGreaterThan(20);
+    });
+
+    it('footprint sampling: a view several pixels per texel averages the photo over the texel instead of aliasing (moire)', async () => {
+        // vertical bars of 0.3125 m period: 2 periods per 0.625 m texel, ~2.5 px per period in the photos
+        const bars = (u: number): Vec3 => ((((u / 0.3125) % 1) + 1) % 1 < 0.5 ? [200, 180, 150] : [60, 55, 50]);
+        const side = 16, atlas = facadeAtlas(side);
+        // the truth: each texel's box mean of the albedo in linear light
+        const truth = (t: number): Vec3 => {
+            const [u] = texelUv(atlas, t), s = atlas.texels.sizeM[t], acc = [0, 0, 0], N = 64;
+            for (let i = 0; i < N; i++) { const c = bars(u + ((i + 0.5) / N - 0.5) * s); for (let k = 0; k < 3; k++) acc[k] += SRGB_TO_LINEAR[c[k]]; }
+            return acc.map(a => linearToSrgb255(a / N)) as Vec3;
+        };
+        const opts: ProjectionBakeOptions = { align: false, regionSelect: false, exposure: false };
+        const views = rig([facadeRect((u) => bars(u))], { ids: ['pano-left'] });
+        const point = await bake(views, atlas, { ...opts, footprint: false });
+        const foot = await bake(views, atlas, opts);
+        // over the texels both bakes cover (the footprint's wider edge guard leaves a few at the facade's silhouette)
+        const err = (r: ProjectionBakeResult) => {
+            let e = 0, n = 0, mx = 0;
+            for (let t = 0; t < side * side; t++) {
+                if (point.albedo[t * 4 + 3] !== 255 || foot.albedo[t * 4 + 3] !== 255) continue;
+                const g = truth(t), d = Math.abs(r.albedo[t * 4 + 1] - g[1]);
+                e += d; n++; mx = Math.max(mx, d);
+            }
+            return { mean: e / Math.max(1, n), max: mx, n };
+        };
+        const ep = err(point), ef = err(foot);
+        expect(ef.n).toBeGreaterThan(100);
+        // point samples land on bars or gaps by the beat of the two periods; the footprint mean sits near the texel's own mean
+        // (measured: point mean 10.8 / max 33.3 sRGB levels, footprint 3.5 / 16.3)
+        expect(ep.mean).toBeGreaterThan(8);
+        expect(ef.mean).toBeLessThan(ep.mean / 2.5);
+        expect(ef.max).toBeLessThan(ep.max / 1.8);
+        // a footprint inside one pixel is the bilinear point sample, bit for bit
+        const fine = facadeAtlas(128);
+        const a = await bake(rig([facadeRect()], { ids: ['pano-front'] }), fine, { ...opts, footprint: false });
+        const b = await bake(rig([facadeRect()], { ids: ['pano-front'] }), fine, opts);
+        expect(Buffer.from(b.albedo).equals(Buffer.from(a.albedo))).toBe(true);
+        const up = (r: ProjectionBakeResult) => { const o = new Uint8Array(side * side * 4); for (let t = 0; t < side * side; t++) { o.set(r.albedo.subarray(t * 4, t * 4 + 3), t * 4); o[t * 4 + 3] = 255; } return o; };
+        const tr = new Uint8Array(side * side * 4); for (let t = 0; t < side * side; t++) { tr.set(truth(t), t * 4); tr[t * 4 + 3] = 255; }
+        const strip = new Uint8Array(side * 3 * side * 4);
+        [up(point), up(foot), tr].forEach((img, k) => { for (let y = 0; y < side; y++) strip.set(img.subarray(y * side * 4, (y + 1) * side * 4), (y * side * 3 + k * side) * 4); });
+        savePng('footprint_point_vs_footprint_vs_truth.png', side * 3, side, strip);
     });
 });

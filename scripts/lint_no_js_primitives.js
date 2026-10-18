@@ -24,7 +24,7 @@ const TARGET_SCAN_PATHS = [
     path.join(ROOT_DIR, 'packages/core/src/browser/generative-canvas/primitives'),
     path.join(ROOT_DIR, 'packages/core/src/browser/generative-canvas/services/operators'),
     path.join(ROOT_DIR, 'packages/core/src/browser/generative-canvas/services/direct-dispatch-operator-engine.ts'),
-    path.join(ROOT_DIR, 'packages/core/src/browser/generative-canvas/services/NextGenAstraViewportEngine.ts'),
+    path.join(ROOT_DIR, 'packages/core/src/browser/generative-canvas/services/virtual-geometry'),
     path.join(ROOT_DIR, 'packages/core/src/browser/generative-canvas/procedural-3d-synthesizer.ts')
 ];
 

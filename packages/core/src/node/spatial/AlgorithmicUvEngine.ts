@@ -14,6 +14,17 @@ import { calculateNOAASolarPosition, calculateENUSunVector } from '../../browser
 import { SphericalHarmonics9 } from '../../browser/generative-canvas/services/atmosphere/volumetric-participating-media';
 import { decodeImageToRgba, encodeRgbaToJpeg, readImageDimensions, sniffImageFormat, type RgbaImage } from '../image-codec-ffmpeg';
 import { encodePng } from '../texture-processing';
+import { fitSolarShading, labelTexelCharts, type SolarShadingFitOptions, type SolarShadingFitResult } from './solar-shading-fit';
+import { readAccessor, nodeWorldMatrices, type Mat4 } from '../3d-engine/staged-location/glb-bytes';
+
+const SRGB8_TO_LINEAR = Float64Array.from({ length: 256 }, (_, i) => {
+  const c = i / 255;
+  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+});
+function linearToSrgb8(v: number): number {
+  const c = Math.max(0, Math.min(1, v));
+  return Math.round(255 * (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055));
+}
 
 // ============================================================================
 // Public Interfaces & Options Contracts
@@ -101,15 +112,48 @@ export interface DetailSynthesisOptions {
   partCategory?: string;         // Part-aware category override (e.g. 'foliage', 'road', 'architecture')
 }
 
+/**
+ * The sun that lit the imagery, given by the caller: `sunVector`, or `latitude`, `longitude` and the capture instant
+ * `timestampIso` for the NOAA ephemeris. Nothing is assumed when they are missing. The ambient-to-sun ratio is not an
+ * input: it is measured from the image (fitSolarShading).
+ */
 export interface SolarDelightingConfig {
-  latitude?: number;              // e.g. 40.74844 (ESB, NYC)
-  longitude?: number;             // e.g. -73.98566
-  timestampIso?: string;          // acquisition timestamp, e.g. '2024-06-21T14:30:00Z'
+  latitude?: number;
+  longitude?: number;
+  /** Capture instant with a time of day and a UTC offset or Z, e.g. '2024-06-21T14:30:00Z'. */
+  timestampIso?: string;
   sunVector?: [number, number, number]; // direct sun vector (+X East, +Y Up, -Z North)
-  skyShCoeffs?: [number, number, number][]; // 9 RGB Ramamoorthi order-3 SH coefficients
-  regularizationEpsilon?: number; // default 0.18 (prevents noise explosion in deep shadow)
-  ambientWeight?: number;         // default 0.35
-  directWeight?: number;          // default 0.65
+  /** Measured sky irradiance as 9 RGB order-2 SH coefficients; only its angular shape A(N) is used. */
+  skyShCoeffs?: [number, number, number][];
+  /** Conditioning thresholds of the ambient-to-sun fit. */
+  fit?: SolarShadingFitOptions;
+}
+
+/** Where the de-lighting sun came from. */
+export type SolarSunSource =
+  | { kind: 'sun-vector' }
+  | { kind: 'noaa-ephemeris'; latitude: number; longitude: number; timestampIso: string; elevationDeg: number; azimuthDeg: number };
+
+export interface ResolvedSolarSun {
+  vector: [number, number, number];
+  source: SolarSunSource;
+}
+
+/** Report of one solar de-lighting pass over one image. */
+export interface SolarDelightingReport {
+  /** False when the shading fit was refused or the sun was below the horizon (`skippedReason`); the pixels are unchanged then. */
+  applied: boolean;
+  skippedReason?: string;
+  sunVector: [number, number, number];
+  sunSource: SolarSunSource;
+  /** The measured ambient-to-sun ratio and its conditioning (or the diagnostics of a refused fit). */
+  fit?: SolarShadingFitResult;
+  delitTexels: number;
+  paintedTexelsWithoutNormal: number;
+  /** Texels whose model gain exceeded the fit's measured gain cap and were held at it. */
+  cappedTexels: number;
+  /** Texels with a channel that saturated (linear value above 1) after the gain. */
+  clippedTexels: number;
 }
 
 export interface KhrMaterialsConfig {
@@ -201,6 +245,55 @@ export interface PbrDecompositionResult {
   width: number;
   height: number;
   toksvigMipPyramid?: ToksvigMipLevel[];
+  /** Present when solar inverse de-lighting was asked for: what it measured and did, or why it changed nothing. */
+  solarDelighting?: SolarDelightingReport;
+  /** Where each output map comes from. The normal, roughness and AO maps are estimated from the image itself, not measured. */
+  mapProvenance: PbrMapProvenance;
+}
+
+/** Source of each map decomposePbr writes. */
+export interface PbrMapProvenance {
+  normal: string;
+  roughness: string;
+  ao: string;
+  metalness: string;
+}
+
+/**
+ * The normal, roughness and AO maps are image heuristics: they read luminance gradients, Laplacian curvature and colour
+ * thresholds of the albedo, so they guess surface relief and gloss from brightness. None of them is a measurement.
+ */
+export const IMAGE_DERIVED_MAP_PROVENANCE: PbrMapProvenance = Object.freeze({
+  normal: 'heuristic: luminance gradient of the albedo (image-derived, not geometry)',
+  roughness: 'heuristic: base roughness from the contract, varied by albedo luminance curvature and colour thresholds (not measured)',
+  ao: 'heuristic: horizon/cavity estimate from the image-derived normal or luminance (not ray-traced against geometry)',
+  metalness: 'constant from the material contract (not measured)'
+});
+
+/** Thrown when solar inverse de-lighting is asked for without a sun: no vector, or no place and capture instant. */
+export class SolarDelightingSunUnknownError extends Error {
+  readonly code = 'SOLAR_DELIGHT_NEEDS_SUN';
+  constructor(message: string) {
+    super(message);
+    this.name = 'SolarDelightingSunUnknownError';
+  }
+}
+
+/** Thrown when solar inverse de-lighting is asked for without a geometry normal per texel. */
+export class SolarDelightingNormalsError extends Error {
+  readonly code = 'SOLAR_DELIGHT_NEEDS_GEOMETRY_NORMALS';
+  constructor(message: string) {
+    super(message);
+    this.name = 'SolarDelightingNormalsError';
+  }
+}
+
+/** One triangle primitive that samples a baseColor image, and which UV set it samples it with. */
+export interface UvPrimitiveRef {
+  meshIndex: number;
+  primitive: any;
+  texCoord: number;
+  textureTransformed: boolean;
 }
 
 /** Texture periodicity measured by 1D autocorrelation of one decoded baseColor image (pixel units only). */
@@ -224,6 +317,26 @@ export interface TextureImageReport {
   normalMapGenerated?: boolean;
   metallicRoughnessGenerated?: boolean;
   occlusionGenerated?: boolean;
+  /** Solar de-lighting of this image: texels divided by E(N) from the mesh normals rasterized into its UV space. */
+  solarDelighting?: {
+    applied: boolean;
+    /** Why it did not run (no rasterizable geometry normals for this image). */
+    skippedReason?: string;
+    normalSource?: 'vertex-normals' | 'face-normals-from-positions' | 'mixed';
+    texelsWithGeometryNormal?: number;
+    /** Texels that several triangles map to with disagreeing normals (tiled or shared UVs); left unlit-corrected. */
+    texelsWithConflictingNormals?: number;
+    delitTexels?: number;
+    paintedTexelsWithoutNormal?: number;
+    /** Sun used, where it came from, the measured ambient-to-sun fit, and capped / clipped texel counts. */
+    sunVector?: [number, number, number];
+    sunSource?: SolarSunSource;
+    fit?: SolarShadingFitResult;
+    cappedTexels?: number;
+    clippedTexels?: number;
+  };
+  /** Where the generated maps come from (the normal, roughness and AO maps are image heuristics). */
+  mapProvenance?: PbrMapProvenance;
   error?: string;
 }
 
@@ -275,6 +388,8 @@ export interface AlgorithmicUvResult {
   solarDelightingApplied?: boolean;
   /** Sun vector (+X East, +Y Up, -Z North) the solar de-lighting divided by. */
   solarSunVector?: [number, number, number];
+  /** Where that sun came from (the caller's vector, or the NOAA ephemeris at the caller's place and capture instant). */
+  solarSunSource?: SolarSunSource;
   khrExtensionsInjected?: string[];
   boundaryWeldingResult?: BoundarySeamWeldResult;
 }
@@ -615,7 +730,7 @@ export class AlgorithmicUvEngine {
     let verticesProcessed = 0;
 
     // Each baseColor image, the materials that sample it, and the contract of the first primitive that uses it.
-    const imageJobs = new Map<number, { textureIndex: number; materials: Set<number>; contract: Required<BiophysicalMaterialContract> }>();
+    const imageJobs = new Map<number, { textureIndex: number; materials: Set<number>; contract: Required<BiophysicalMaterialContract>; prims: UvPrimitiveRef[] }>();
     const images: TextureImageReport[] = [];
     const sourcelessTextures = new Set<number>();
 
@@ -649,10 +764,12 @@ export class AlgorithmicUvEngine {
           // (e.g. Google tiles 'Material_0') must not override the lithology contract.
           const partCat = options.submeshCategoryMap?.[meshIdx] || mat?.extras?.category;
           const contract = options.enablePartAwarePbr && partCat ? resolveBiophysicalContract(String(partCat)) : imageContract;
-          job = { textureIndex, materials: new Set<number>(), contract };
+          job = { textureIndex, materials: new Set<number>(), contract, prims: [] };
           imageJobs.set(imageIndex, job);
         }
         job.materials.add(prim.material);
+        const btex = mat.pbrMetallicRoughness.baseColorTexture;
+        job.prims.push({ meshIndex: meshIdx, primitive: prim, texCoord: btex.texCoord ?? 0, textureTransformed: !!btex.extensions?.KHR_texture_transform });
       }
     }
 
@@ -685,23 +802,77 @@ export class AlgorithmicUvEngine {
     let inducedSpatialProfile: MeasuredSpatialProfile | undefined;
     let solarDelightingApplied = false;
 
+    const meshNodes = new Map<number, Mat4[]>();
+    const solarSun = pbr.enableSolarInverseDelighting
+      // Throws SolarDelightingSunUnknownError before any image work when no sun vector, or place and capture instant, was given.
+      ? this.resolveSolarSun(pbr.solarDelighting)
+      : undefined;
+    if (pbr.enableSolarInverseDelighting) {
+      const worlds = nodeWorldMatrices(json);
+      (json.nodes ?? []).forEach((n: any, i: number) => {
+        if (n.mesh === undefined) return;
+        if (!meshNodes.has(n.mesh)) meshNodes.set(n.mesh, []);
+        meshNodes.get(n.mesh)!.push(worlds[i]);
+      });
+    }
+
     for (const [imageIndex, job] of imageJobs) {
       const users = [...job.materials].map(m => materials[m]);
+      // Solar de-lighting divides by E(N) with N from the mesh: the primitives that sample this image are
+      // rasterized into its UV space. Without geometry normals for the image it does not run, and the report says why.
+      let imageOpts: PbrDecompositionOptions = { ...pbrOpts, biophysicalContract: job.contract };
+      let solarReport: TextureImageReport['solarDelighting'];
+      if (pbr.enableSolarInverseDelighting) {
+        try {
+          const dims = readImageDimensions(imageBytes(imageIndex));
+          if (!dims) throw new Error('image dimensions could not be read');
+          const raster = this.rasterizeGeometryNormalsToUv(glb, job.prims, meshNodes, dims.width, dims.height);
+          if (raster.texelsWithNormal === 0) {
+            solarReport = { applied: false, skippedReason: raster.reason ?? 'no triangle of the primitives using this image covers a texel' };
+            imageOpts = { ...imageOpts, enableSolarInverseDelighting: false };
+          } else {
+            solarReport = {
+              applied: true,
+              normalSource: raster.normalSource,
+              texelsWithGeometryNormal: raster.texelsWithNormal,
+              texelsWithConflictingNormals: raster.texelsConflicting
+            };
+            imageOpts = { ...imageOpts, worldNormalsMap: raster.normals };
+          }
+        } catch (err) {
+          solarReport = { applied: false, skippedReason: `geometry normals could not be rasterized: ${err instanceof Error ? err.message : String(err)}` };
+          imageOpts = { ...imageOpts, enableSolarInverseDelighting: false };
+        }
+      }
       const want = {
-        delight: passes.delight,
+        delight: !!(pbr.enableAlbedoDeLighting || imageOpts.enableSolarInverseDelighting),
         normal: passes.normal && users.some(m => !m.normalTexture),
         roughness: passes.roughness && users.some(m => !m.pbrMetallicRoughness?.metallicRoughnessTexture),
         ao: passes.ao && users.some(m => !m.occlusionTexture),
         profile: imageIndex === profileImageIndex
       };
-      if (!want.delight && !want.normal && !want.roughness && !want.ao && !want.profile) continue;
+      if (!want.delight && !want.normal && !want.roughness && !want.ao && !want.profile) {
+        if (solarReport) images.push({ textureIndex: job.textureIndex, imageIndex, status: 'processed', albedoRewritten: false, solarDelighting: solarReport });
+        continue;
+      }
 
-      const report: TextureImageReport = { textureIndex: job.textureIndex, imageIndex, status: 'processed' };
+      const report: TextureImageReport = { textureIndex: job.textureIndex, imageIndex, status: 'processed', solarDelighting: solarReport };
       images.push(report);
       try {
         const bytes = imageBytes(imageIndex);
         report.sourceMimeType = json.images[imageIndex].mimeType;
-        const out = await this.processTextureBuffer(bytes, { ...pbrOpts, biophysicalContract: job.contract }, want, passes.packOrm);
+        const out = await this.processTextureBuffer(bytes, imageOpts, want, passes.packOrm);
+        if (out.solarDelighting && report.solarDelighting) {
+          const sd = out.solarDelighting;
+          Object.assign(report.solarDelighting, {
+            applied: sd.applied,
+            ...(sd.skippedReason ? { skippedReason: sd.skippedReason } : {}),
+            sunVector: sd.sunVector, sunSource: sd.sunSource, fit: sd.fit,
+            delitTexels: sd.delitTexels, paintedTexelsWithoutNormal: sd.paintedTexelsWithoutNormal,
+            cappedTexels: sd.cappedTexels, clippedTexels: sd.clippedTexels
+          });
+        }
+        if (out.mapProvenance && (out.normalPng || out.metallicRoughnessPng || out.occlusionPng)) report.mapProvenance = out.mapProvenance;
 
         report.width = out.width;
         report.height = out.height;
@@ -713,7 +884,7 @@ export class AlgorithmicUvEngine {
         texelsProcessed += report.texels;
 
         if (out.profile) inducedSpatialProfile = { sourceImageIndex: imageIndex, ...out.profile };
-        if (out.albedo && pbr.enableSolarInverseDelighting) solarDelightingApplied = true;
+        if (out.albedo && out.solarDelighting?.applied && out.solarDelighting.delitTexels > 0) solarDelightingApplied = true;
         if (out.albedo || out.normalPng || out.metallicRoughnessPng || out.occlusionPng) {
           rewrites.set(imageIndex, {
             replacement: out.albedo,
@@ -805,7 +976,8 @@ export class AlgorithmicUvEngine {
       microDetailTilingInjected,
       khrExtensionsInjected: rebuildResult.injectedExtensions,
       solarDelightingApplied,
-      solarSunVector: solarDelightingApplied ? this.resolveSolarSunVector(pbr.solarDelighting) : undefined,
+      solarSunVector: solarDelightingApplied ? solarSun?.vector : undefined,
+      solarSunSource: solarDelightingApplied ? solarSun?.source : undefined,
       boundaryWeldingResult: boundaryResult,
       backend: 'node-pure'
     };
@@ -1074,49 +1246,137 @@ export class AlgorithmicUvEngine {
   }
 
   /**
-   * Computes analytical solar irradiance E(N) = direct + ambient:
-   *   E(N) = max(0, N dot L_sun) * directWeight + SH_9(N) * ambientWeight
+   * Relative irradiance of the de-lighting shading model, E(N) = max(0, N . L) + k * A(N): the sun's cosine term plus
+   * the ambient-to-sun ratio k (measured by fitSolarShading) times the angular shape A(N) of the sky light, which is
+   * the luminance of the given order-2 sky SH irradiance relative to straight up (1 everywhere without SH).
    */
   public static computeSolarIrradiance(
     normal: [number, number, number],
     sunVector: [number, number, number],
-    shCoeffs?: [number, number, number][],
-    directWeight: number = 0.65,
-    ambientWeight: number = 0.35,
-    epsilon: number = 0.18
+    ambientToSun: number,
+    shCoeffs?: [number, number, number][]
   ): number {
-    const nx = normal[0], ny = normal[1], nz = normal[2];
-    const nLen = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1.0;
-    const n: [number, number, number] = [nx / nLen, ny / nLen, nz / nLen];
+    return this.solarCosine(normal, sunVector) + ambientToSun * this.ambientShape(normal, shCoeffs);
+  }
 
-    const sx = sunVector[0], sy = sunVector[1], sz = sunVector[2];
-    const sLen = Math.sqrt(sx * sx + sy * sy + sz * sz) || 1.0;
-    const s: [number, number, number] = [sx / sLen, sy / sLen, sz / sLen];
+  /** max(0, N . L) for unnormalised N and L. */
+  public static solarCosine(normal: [number, number, number], sunVector: [number, number, number]): number {
+    const nl = Math.hypot(normal[0], normal[1], normal[2]) || 1;
+    const sl = Math.hypot(sunVector[0], sunVector[1], sunVector[2]) || 1;
+    return Math.max(0, (normal[0] * sunVector[0] + normal[1] * sunVector[1] + normal[2] * sunVector[2]) / (nl * sl));
+  }
 
-    const nDotL = Math.max(0.0, n[0] * s[0] + n[1] * s[1] + n[2] * s[2]);
-
-    let ambient = 0.45;
-    if (shCoeffs && shCoeffs.length === 9) {
-      const rgb = this.evaluateSphericalHarmonicsIrradiance(n[0], n[1], n[2], shCoeffs);
-      ambient = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
-    }
-
-    const total = nDotL * directWeight + ambient * ambientWeight;
-    return Math.max(epsilon, Math.min(1.8, total));
+  /** Sky irradiance at N relative to straight up, from order-2 SH coefficients; 1 when none are given. */
+  public static ambientShape(normal: [number, number, number], shCoeffs?: [number, number, number][]): number {
+    if (!shCoeffs || shCoeffs.length !== 9) return 1;
+    const nl = Math.hypot(normal[0], normal[1], normal[2]) || 1;
+    const lum = (rgb: [number, number, number]) => 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+    const up = lum(this.evaluateSphericalHarmonicsIrradiance(0, 1, 0, shCoeffs));
+    if (!(up > 0)) return 1;
+    return Math.max(1e-3, lum(this.evaluateSphericalHarmonicsIrradiance(normal[0] / nl, normal[1] / nl, normal[2] / nl, shCoeffs)) / up);
   }
 
   /**
-   * Sun vector used by solar inverse de-lighting: `sunVector` when given, else the NOAA ephemeris at the caller's
-   * latitude, longitude and UTC timestampIso. No place or date is assumed: without them this throws.
+   * The sun solar de-lighting divides by, and where it came from: `sunVector` as given, or the NOAA ephemeris at the
+   * caller's latitude, longitude and capture instant (`timestampIso` with a time of day and a UTC offset or Z). No
+   * place, date or time is assumed: without them this throws SolarDelightingSunUnknownError.
    */
-  public static resolveSolarSunVector(cfg: SolarDelightingConfig = {}): [number, number, number] {
-    if (cfg.sunVector) return cfg.sunVector;
-    if (!Number.isFinite(cfg.latitude) || !Number.isFinite(cfg.longitude) || !cfg.timestampIso || Number.isNaN(Date.parse(cfg.timestampIso))) {
-      throw new Error(`Solar de-lighting needs solarDelighting.sunVector, or latitude, longitude and a UTC timestampIso (got ${cfg.latitude}, ${cfg.longitude}, ${JSON.stringify(cfg.timestampIso)})`);
+  public static resolveSolarSun(cfg: SolarDelightingConfig = {}): ResolvedSolarSun {
+    if (cfg.sunVector) {
+      const v = cfg.sunVector;
+      if (!(v.length === 3 && v.every(Number.isFinite) && Math.hypot(v[0], v[1], v[2]) > 1e-9)) {
+        throw new SolarDelightingSunUnknownError(`solarDelighting.sunVector must be a non-zero finite 3-vector (got ${JSON.stringify(v)})`);
+      }
+      return { vector: v, source: { kind: 'sun-vector' } };
     }
-    const pos = calculateNOAASolarPosition(new Date(cfg.timestampIso), cfg.latitude!, cfg.longitude!);
+    const t = cfg.timestampIso;
+    if (!Number.isFinite(cfg.latitude) || !Number.isFinite(cfg.longitude) || !t) {
+      throw new SolarDelightingSunUnknownError(`Solar de-lighting needs solarDelighting.sunVector, or latitude, longitude and the capture instant timestampIso (got ${cfg.latitude}, ${cfg.longitude}, ${JSON.stringify(t)}); no sun, place or date is assumed`);
+    }
+    if (!/T\d{2}:\d{2}/.test(t) || !/(Z|[+-]\d{2}:?\d{2})$/.test(t) || Number.isNaN(Date.parse(t))) {
+      throw new SolarDelightingSunUnknownError(`timestampIso ${JSON.stringify(t)} is not a capture instant: it needs a date, a time of day and a UTC offset or Z (e.g. 2024-06-21T14:30:00Z)`);
+    }
+    const pos = calculateNOAASolarPosition(new Date(t), cfg.latitude!, cfg.longitude!);
     const sun = calculateENUSunVector(pos.altitudeRad, pos.azimuthRad);
-    return [sun.x, sun.y, sun.z];
+    return {
+      vector: [sun.x, sun.y, sun.z],
+      source: { kind: 'noaa-ephemeris', latitude: cfg.latitude!, longitude: cfg.longitude!, timestampIso: t, elevationDeg: (pos.altitudeRad * 180) / Math.PI, azimuthDeg: (pos.azimuthRad * 180) / Math.PI }
+    };
+  }
+
+  /** Sun vector of resolveSolarSun (+X East, +Y Up, -Z North). */
+  public static resolveSolarSunVector(cfg: SolarDelightingConfig = {}): [number, number, number] {
+    return this.resolveSolarSun(cfg).vector;
+  }
+
+  /**
+   * Divides each texel that has a geometry normal by E(N) / mean E in linear light, with the ambient-to-sun ratio k
+   * fitted to this image (fitSolarShading: charts are the 4-connected components of texels with a normal). The gain is
+   * capped at the fit's measured bound and capped / clipped texels are counted. When the fit is poorly conditioned
+   * nothing is changed and the reason is returned.
+   */
+  private static applyMeasuredSolarDelighting(
+    albedoRgba: Uint8Array,
+    albedoOut: Uint8Array,
+    width: number,
+    height: number,
+    normals: Float32Array | undefined,
+    sun: ResolvedSolarSun,
+    cfg: SolarDelightingConfig
+  ): NonNullable<PbrDecompositionResult['solarDelighting']> {
+    const totalPixels = width * height;
+    // E(N) needs the surface normal of each texel. It comes from the geometry (worldNormalsMap, one world-space
+    // unit normal per texel in the sun vector's frame), never from the image: a normal estimated from the
+    // gradient of the same pixels makes the divisor a function of the texture it divides.
+    if (!normals || normals.length !== totalPixels * 3) {
+      throw new SolarDelightingNormalsError(
+        `solar de-lighting needs worldNormalsMap with one geometry normal per texel (${totalPixels * 3} floats for ${width}x${height}); got ${normals ? normals.length : 'none'}`
+      );
+    }
+    const base = { applied: false, sunVector: sun.vector, sunSource: sun.source, delitTexels: 0, paintedTexelsWithoutNormal: 0, cappedTexels: 0, clippedTexels: 0 };
+    const has = new Uint8Array(totalPixels);
+    for (let i = 0; i < totalPixels; i++) {
+      if (albedoRgba[i * 4 + 3] === 0) continue;
+      if (Math.hypot(normals[i * 3], normals[i * 3 + 1], normals[i * 3 + 2]) > 1e-6) has[i] = 1;
+      else base.paintedTexelsWithoutNormal++;
+    }
+    const sv = sun.vector, sl = Math.hypot(sv[0], sv[1], sv[2]);
+    if (!(sv[1] / sl > 0)) {
+      return { ...base, skippedReason: `the sun is at or below the horizon (elevation ${((Math.asin(Math.max(-1, Math.min(1, sv[1] / sl))) * 180) / Math.PI).toFixed(1)} deg), so the image holds no direct sunlight to remove` };
+    }
+
+    const lin = SRGB8_TO_LINEAR;
+    const cosSun = new Float32Array(totalPixels);
+    const amb = new Float32Array(totalPixels);
+    const lum = new Float32Array(totalPixels);
+    const charts = labelTexelCharts(has, width, height);
+    for (let i = 0; i < totalPixels; i++) {
+      if (!has[i]) continue;
+      const n: [number, number, number] = [normals[i * 3], normals[i * 3 + 1], normals[i * 3 + 2]];
+      cosSun[i] = this.solarCosine(n, sv);
+      amb[i] = this.ambientShape(n, cfg.skyShCoeffs);
+      const o = i * 4;
+      lum[i] = 0.2126 * lin[albedoOut[o]] + 0.7152 * lin[albedoOut[o + 1]] + 0.0722 * lin[albedoOut[o + 2]];
+    }
+    const fit = fitSolarShading({ luminance: lum, cosSun, ambientShape: amb, group: charts }, cfg.fit);
+    if (fit.status === 'skipped') return { ...base, skippedReason: fit.reason, fit };
+
+    let delit = 0, capped = 0, clipped = 0;
+    for (let i = 0; i < totalPixels; i++) {
+      if (!has[i]) continue;
+      let gain = fit.meanIrradiance / (cosSun[i] + fit.ambientToSun * amb[i]);
+      if (gain > fit.gainCap) { gain = fit.gainCap; capped++; }
+      const o = i * 4;
+      let clip = false;
+      for (let c = 0; c < 3; c++) {
+        const v = lin[albedoOut[o + c]] * gain;
+        if (v > 1) clip = true;
+        albedoOut[o + c] = linearToSrgb8(v);
+      }
+      if (clip) clipped++;
+      delit++;
+    }
+    return { ...base, applied: true, fit, delitTexels: delit, cappedTexels: capped, clippedTexels: clipped };
   }
 
   /**
@@ -1758,61 +2018,14 @@ export class AlgorithmicUvEngine {
       }
     }
 
-    // 1b. Solar Inverse De-Lighting via NOAA Ephemeris & Ramamoorthi SH9 Irradiance
+    // 1b. Solar inverse de-lighting: divide by E(N) = max(0, N.L) + k A(N), the sun the caller gives (a vector, or a place
+    // and capture instant for the NOAA ephemeris) and the ambient-to-sun ratio k measured from this image's own texels.
+    let solarDelighting: PbrDecompositionResult['solarDelighting'];
     if (options.enableSolarInverseDelighting) {
       const cfg = options.solarDelighting || {};
-      // The sun is the one given (a vector, or a place and time for the NOAA ephemeris); no place or date is assumed.
-      const sunVec = this.resolveSolarSunVector(cfg);
-
-      const skyShCoeffs: [number, number, number][] = cfg.skyShCoeffs ?? [
-        [0.65, 0.72, 0.85],
-        [0.20, 0.28, 0.40],
-        [0.15, 0.20, 0.30],
-        [0.10, 0.15, 0.25],
-        [0.05, 0.08, 0.12],
-        [0.04, 0.06, 0.10],
-        [0.08, 0.12, 0.18],
-        [0.03, 0.05, 0.08],
-        [0.02, 0.04, 0.06]
-      ];
-
-      const directWeight = cfg.directWeight ?? 0.65;
-      const ambientWeight = cfg.ambientWeight ?? 0.35;
-      const eps = cfg.regularizationEpsilon ?? 0.18;
-
-      // Estimate local tangent-space normal from luminance gradient
-      const getL = (px: number, py: number) => {
-        const cx = Math.max(0, Math.min(width - 1, px));
-        const cy = Math.max(0, Math.min(height - 1, py));
-        const cidx = (cy * width + cx) * 4;
-        return (0.299 * albedoRgba[cidx] + 0.587 * albedoRgba[cidx + 1] + 0.114 * albedoRgba[cidx + 2]) / 255.0;
-      };
-      const irradianceMap = new Float32Array(totalPixels);
-      let irradianceSum = 0.0;
-      let painted = 0;
-      for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-          if (albedoRgba[(y * width + x) * 4 + 3] === 0) continue;
-          const dx = (getL(x + 1, y) - getL(x - 1, y)) * 1.5;
-          const dy = (getL(x, y + 1) - getL(x, y - 1)) * 1.5;
-          const normal: [number, number, number] = [-dx, -dy, 1.0];
-          const irradiance = this.computeSolarIrradiance(normal, sunVec, skyShCoeffs, directWeight, ambientWeight, eps);
-          irradianceMap[y * width + x] = irradiance;
-          irradianceSum += irradiance;
-          painted++;
-        }
-      }
-
-      // E(N) inverse division relative to the mean irradiance: removes the directional light, keeps the brightness
-      const meanIrradiance = painted > 0 ? irradianceSum / painted : 1.0;
-      for (let i = 0; i < totalPixels; i++) {
-        const idx = i * 4;
-        if (albedoRgba[idx + 3] === 0) continue;
-        const gain = meanIrradiance / irradianceMap[i];
-        albedoOut[idx]     = Math.min(255, Math.max(0, Math.round(albedoOut[idx] * gain)));
-        albedoOut[idx + 1] = Math.min(255, Math.max(0, Math.round(albedoOut[idx + 1] * gain)));
-        albedoOut[idx + 2] = Math.min(255, Math.max(0, Math.round(albedoOut[idx + 2] * gain)));
-      }
+      // No sun is assumed: without a vector or a place and capture instant this throws SolarDelightingSunUnknownError.
+      const sun = this.resolveSolarSun(cfg);
+      solarDelighting = this.applyMeasuredSolarDelighting(albedoRgba, albedoOut, width, height, options.worldNormalsMap, sun, cfg);
     }
 
     // Build luminance float buffer for differential operators
@@ -1987,7 +2200,9 @@ export class AlgorithmicUvEngine {
       orm: ormMap,
       width,
       height,
-      toksvigMipPyramid
+      toksvigMipPyramid,
+      solarDelighting,
+      mapProvenance: IMAGE_DERIVED_MAP_PROVENANCE
     };
   }
 
@@ -2025,6 +2240,116 @@ export class AlgorithmicUvEngine {
    * decoded. Returns only what was computed: `albedo` when de-lighting ran (JPEG sources stay JPEG, others
    * become PNG), and PNG normal / metallicRoughness / occlusion maps at the image's own resolution.
    */
+  /**
+   * World-space geometry normal of every texel of a width x height image, from the triangle primitives that sample it.
+   * Each primitive is rasterized in its texCoord UV space (glTF v down) under every node that instances its mesh.
+   * Normals are NORMAL interpolated by barycentrics, or the face normal of the world positions when NORMAL is absent,
+   * and are transformed by the node's inverse-transpose. A texel several triangles map to keeps the mean only when the
+   * normals agree (mean length >= 0.9); otherwise it gets none. Primitives whose texture has KHR_texture_transform,
+   * or that are not triangle lists, are not rasterized, since their texels cannot be placed without guessing.
+   */
+  public static rasterizeGeometryNormalsToUv(
+    glb: { json: any; bin: Uint8Array },
+    prims: UvPrimitiveRef[],
+    meshNodes: Map<number, Mat4[]>,
+    width: number,
+    height: number
+  ): { normals: Float32Array; texelsWithNormal: number; texelsConflicting: number; normalSource?: 'vertex-normals' | 'face-normals-from-positions' | 'mixed'; reason?: string } {
+    const total = width * height;
+    const sum = new Float32Array(total * 3);
+    const hits = new Uint32Array(total);
+    const skipped: string[] = [];
+    let usedVertex = false, usedFace = false;
+    for (const ref of prims) {
+      const prim = ref.primitive;
+      if ((prim.mode ?? 4) !== 4) { skipped.push(`mesh ${ref.meshIndex}: primitive mode ${prim.mode} is not a triangle list`); continue; }
+      if (ref.textureTransformed) { skipped.push(`mesh ${ref.meshIndex}: baseColorTexture uses KHR_texture_transform`); continue; }
+      const uvAcc = prim.attributes?.[`TEXCOORD_${ref.texCoord}`];
+      if (uvAcc === undefined) { skipped.push(`mesh ${ref.meshIndex}: no TEXCOORD_${ref.texCoord}`); continue; }
+      if (prim.attributes?.POSITION === undefined) { skipped.push(`mesh ${ref.meshIndex}: no POSITION`); continue; }
+      const nodes = meshNodes.get(ref.meshIndex);
+      if (!nodes || nodes.length === 0) { skipped.push(`mesh ${ref.meshIndex}: no scene node instances it`); continue; }
+
+      const uv = readAccessor(glb, uvAcc);
+      const uvDef = glb.json.accessors[uvAcc];
+      const uvScale = uvDef.normalized ? (uvDef.componentType === 5121 ? 1 / 255 : uvDef.componentType === 5123 ? 1 / 65535 : 1) : 1;
+      const pos = readAccessor(glb, prim.attributes.POSITION);
+      const nrm = prim.attributes.NORMAL !== undefined ? readAccessor(glb, prim.attributes.NORMAL) : undefined;
+      if (nrm) usedVertex = true; else usedFace = true;
+      const idx = prim.indices !== undefined ? readAccessor(glb, prim.indices).data : undefined;
+      const triCount = Math.floor((idx ? idx.length : pos.count) / 3);
+
+      for (const m of nodes) {
+        // Inverse-transpose of the upper 3x3 (column-major m) via the cofactor matrix, signed by the determinant.
+        const a = m[0], b = m[4], c = m[8], d = m[1], e = m[5], f = m[9], g = m[2], h = m[6], k = m[10];
+        const C = [e * k - f * h, -(d * k - f * g), d * h - e * g, -(b * k - c * h), a * k - c * g, -(a * h - b * g), b * f - c * e, -(a * f - c * d), a * e - b * d];
+        const det = a * C[0] + b * C[1] + c * C[2];
+        const sgn = det < 0 ? -1 : 1;
+        const xfN = (x: number, y: number, z: number): [number, number, number] => [
+          sgn * (C[0] * x + C[1] * y + C[2] * z), sgn * (C[3] * x + C[4] * y + C[5] * z), sgn * (C[6] * x + C[7] * y + C[8] * z)
+        ];
+        const xfP = (i: number): [number, number, number] => {
+          const x = pos.data[i * 3], y = pos.data[i * 3 + 1], z = pos.data[i * 3 + 2];
+          return [m[0] * x + m[4] * y + m[8] * z + m[12], m[1] * x + m[5] * y + m[9] * z + m[13], m[2] * x + m[6] * y + m[10] * z + m[14]];
+        };
+        for (let t = 0; t < triCount; t++) {
+          const vi = [0, 1, 2].map(j => (idx ? idx[t * 3 + j] : t * 3 + j));
+          const px = vi.map(v => uv.data[v * 2] * uvScale * width);
+          const py = vi.map(v => uv.data[v * 2 + 1] * uvScale * height);
+          const area = (px[1] - px[0]) * (py[2] - py[0]) - (px[2] - px[0]) * (py[1] - py[0]);
+          if (!(Math.abs(area) > 1e-12)) continue;
+          let vn: [number, number, number][];
+          if (nrm) {
+            vn = vi.map(v => xfN(nrm.data[v * 3], nrm.data[v * 3 + 1], nrm.data[v * 3 + 2]));
+          } else {
+            const [p0, p1, p2] = vi.map(xfP);
+            const ux = p1[0] - p0[0], uy = p1[1] - p0[1], uz = p1[2] - p0[2];
+            const wx = p2[0] - p0[0], wy = p2[1] - p0[1], wz = p2[2] - p0[2];
+            const fn: [number, number, number] = [uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx];
+            vn = [fn, fn, fn];
+          }
+          const x0 = Math.max(0, Math.floor(Math.min(px[0], px[1], px[2])));
+          const x1 = Math.min(width - 1, Math.ceil(Math.max(px[0], px[1], px[2])));
+          const y0 = Math.max(0, Math.floor(Math.min(py[0], py[1], py[2])));
+          const y1 = Math.min(height - 1, Math.ceil(Math.max(py[0], py[1], py[2])));
+          for (let y = y0; y <= y1; y++) {
+            const cy = y + 0.5;
+            for (let x = x0; x <= x1; x++) {
+              const cx = x + 0.5;
+              const w0 = ((px[1] - cx) * (py[2] - cy) - (px[2] - cx) * (py[1] - cy)) / area;
+              const w1 = ((px[2] - cx) * (py[0] - cy) - (px[0] - cx) * (py[2] - cy)) / area;
+              const w2 = 1 - w0 - w1;
+              if (w0 < -1e-6 || w1 < -1e-6 || w2 < -1e-6) continue;
+              let nx = w0 * vn[0][0] + w1 * vn[1][0] + w2 * vn[2][0];
+              let ny = w0 * vn[0][1] + w1 * vn[1][1] + w2 * vn[2][1];
+              let nz = w0 * vn[0][2] + w1 * vn[1][2] + w2 * vn[2][2];
+              const len = Math.hypot(nx, ny, nz);
+              if (!(len > 1e-12)) continue;
+              nx /= len; ny /= len; nz /= len;
+              const ti = y * width + x;
+              sum[ti * 3] += nx; sum[ti * 3 + 1] += ny; sum[ti * 3 + 2] += nz;
+              hits[ti]++;
+            }
+          }
+        }
+      }
+    }
+    const normals = new Float32Array(total * 3);
+    let texelsWithNormal = 0, texelsConflicting = 0;
+    for (let i = 0; i < total; i++) {
+      if (hits[i] === 0) continue;
+      const len = Math.hypot(sum[i * 3], sum[i * 3 + 1], sum[i * 3 + 2]);
+      if (len / hits[i] < 0.9) { texelsConflicting++; continue; }
+      normals[i * 3] = sum[i * 3] / len; normals[i * 3 + 1] = sum[i * 3 + 1] / len; normals[i * 3 + 2] = sum[i * 3 + 2] / len;
+      texelsWithNormal++;
+    }
+    const normalSource = usedVertex && usedFace ? 'mixed' : usedVertex ? 'vertex-normals' : usedFace ? 'face-normals-from-positions' : undefined;
+    const reason = texelsWithNormal === 0
+      ? (skipped.length ? skipped.join('; ') : texelsConflicting > 0 ? `all ${texelsConflicting} covered texels have conflicting normals (shared or tiled UVs)` : undefined)
+      : undefined;
+    return { normals, texelsWithNormal, texelsConflicting, normalSource, reason };
+  }
+
   private static async processTextureBuffer(
     imgBuffer: Buffer,
     pbrOpts: PbrDecompositionOptions,
@@ -2038,6 +2363,8 @@ export class AlgorithmicUvEngine {
     metallicRoughnessPng?: Buffer;
     occlusionPng?: Buffer;
     profile?: Omit<MeasuredSpatialProfile, 'sourceImageIndex'>;
+    solarDelighting?: PbrDecompositionResult['solarDelighting'];
+    mapProvenance?: PbrMapProvenance;
   }> {
     const format = sniffImageFormat(imgBuffer);
     if (format === 'png') this.assertDecodablePng(imgBuffer);
@@ -2061,9 +2388,12 @@ export class AlgorithmicUvEngine {
     if (!want.delight && !want.normal && !want.roughness && !want.ao) return out;
 
     const pbr = await this.decomposePbr(rgba, pbrOpts, width, height);
+    out.solarDelighting = pbr.solarDelighting;
+    out.mapProvenance = pbr.mapProvenance;
     const asBuffer = (u: Uint8Array) => Buffer.from(u.buffer, u.byteOffset, u.byteLength);
 
-    if (want.delight) {
+    // The albedo is rewritten when it was de-lit: by the bilateral pass, or by a solar pass whose fit was accepted.
+    if (want.delight && (pbrOpts.enableAlbedoDeLighting || pbr.solarDelighting?.applied)) {
       out.albedo = format === 'jpeg'
         ? { data: await encodeRgbaToJpeg(pbr.albedo, width, height, { quality: 92 }), mimeType: 'image/jpeg' }
         : { data: encodePng(width, height, asBuffer(pbr.albedo)), mimeType: 'image/png' };

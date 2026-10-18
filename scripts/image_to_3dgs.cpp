@@ -107,7 +107,10 @@ int main(int argc, char** argv) {
         }
 
         // Fuse multi-view splats with voxel decimation
-        finalSplats = DepthToGaussianEngine::fuseMultiViewSplats(views, 0.05f);
+        splatprune::FloaterPruneReport floaters;
+        finalSplats = DepthToGaussianEngine::fuseMultiViewSplats(views, 0.05f, {}, &floaters);
+        std::cout << "Floater pruning: removed " << floaters.pruned << " of " << floaters.input
+                  << " fused splats (kNN isolation > " << floaters.threshold << ", k=" << floaters.k << ")" << std::endl;
     } else if (sceneType == "equirectangular_360") {
         // Full 360-degree equirectangular panorama synthesis (e.g., San Marco Piazza 360)
         std::vector<uint8_t> rgb(width * height * 3);

@@ -46,6 +46,8 @@ export interface OffsetSynthesisResult {
     metaPath: string;           // Sidecar JSON (eyeHeight, walkRadius, counts) next to the .spz
     numOriginalSplats: number;
     numFusedSplats: number;
+    /** Splats removed by kNN floater pruning before the final .splat/.spz were written. */
+    floatersPruned: number;
     activePoses: Array<{ x: number, y: number, z: number, disocclusionPercent: number }>;
 }
 
@@ -151,11 +153,18 @@ export class OffsetViewSynthesisService {
         const originalBuf = await fs.readFile(originalSplatPath);
         const originalSplats = SplatService.parseSplatBuffer(originalBuf);
         
+        let floatersPruned = 0;
+        const pruneFloaters = (splats: BakedGaussian[]) => SplatService.applyFloaterPruning(splats, undefined, report => {
+            floatersPruned = report.pruned;
+            console.log(`[OffsetSynthesis] Floater pruning: removed ${report.pruned} of ${report.input} splats (kNN isolation > ${report.threshold.toFixed(2)}, ${report.ms} ms).`);
+        });
+
         if (skipOffsets) {
             console.log(`[OffsetSynthesis] Fast path requested. Skipping disocclusion fill.`);
-            await fs.copy(originalSplatPath, finalSplatPath);
-            await fs.copy(originalSpzPath, finalSpzPath);
-            await writeMeta(originalSplats.length, originalSplats.length, []);
+            const kept = pruneFloaters(originalSplats);
+            await fs.outputFile(finalSplatPath, SplatService.serializeSplatBuffer(kept));
+            await fs.outputFile(finalSpzPath, SplatService.serializeSpzBuffer(kept));
+            await writeMeta(kept.length, originalSplats.length, []);
             return {
                 success: true,
                 fusedSplatPath: finalSplatPath,
@@ -163,7 +172,8 @@ export class OffsetViewSynthesisService {
                 originalSplatPath,
                 metaPath,
                 numOriginalSplats: originalSplats.length,
-                numFusedSplats: originalSplats.length,
+                numFusedSplats: kept.length,
+                floatersPruned,
                 activePoses: []
             };
         }
@@ -273,7 +283,7 @@ export class OffsetViewSynthesisService {
 
         // 3. Volumetric Voxel-Hash Decimation and Fusion Merge of all splat sets
         console.log(`[OffsetSynthesis] Fusing ${allSplatSets.length} splat sets into watertight world coordinate space...`);
-        const fusedSplats = this.fuseMultiViewSplats(allSplatSets, voxelSize);
+        const fusedSplats = pruneFloaters(this.fuseMultiViewSplats(allSplatSets, voxelSize));
 
         // 4. Save fused standard binary .splat and compressed .spz
         const fusedBuf = SplatService.serializeSplatBuffer(fusedSplats);
@@ -293,6 +303,7 @@ export class OffsetViewSynthesisService {
             metaPath,
             numOriginalSplats: originalSplats.length,
             numFusedSplats: fusedSplats.length,
+            floatersPruned,
             activePoses: activePosesReport
         };
     }

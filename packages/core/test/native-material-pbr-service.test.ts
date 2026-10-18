@@ -13,8 +13,13 @@ import {
     NativeMaterialPbrService,
     NativePbrSynthesisError,
     PbrUnknownArchetypeError,
-    PBR_50_ARCHETYPE_CATALOG
+    PBR_50_ARCHETYPE_CATALOG,
+    PBR_EXAMPLE_DESCRIPTORS,
+    completeMaterialDescriptor
 } from '../src/node/3d-engine/native-material-pbr-service';
+
+/** The conduction an example's descriptor gets: its row's metallic unless the example sets conduction itself. */
+const PBR_DESCRIPTOR_FIELDS_OF = (e: { key: string; baseMetallic: number }) => ({ conduction: e.key === 'brushed_titanium' ? 0.98 : e.baseMetallic });
 import { AdaptivePbrMaterialSpecError } from '../src/node/3d-engine/adaptive-pbr-errors';
 
 /** The kernel is compiled with clang++ (or $CXX); without a compiler the native tests cannot run and say so. */
@@ -70,6 +75,30 @@ describe('NativeMaterialPbrService', () => {
             expect(() => service.resolveArchetype('glass')).toThrow(/part of \d+ keys: .*low_iron_glass/);
             expect(() => service.resolveArchetype(999)).toThrow(PbrUnknownArchetypeError);
             await expect(service.synthesizePbrTextureSet({ archetype: 'cor_ten_steel', width: 8, height: 8 })).rejects.toBeInstanceOf(PbrUnknownArchetypeError);
+        });
+
+        it('named examples are data: each carries its full descriptor, lookups return copies, and ids do not wrap', () => {
+            for (const e of PBR_EXAMPLE_DESCRIPTORS) {
+                expect(service.getAnchorDescriptor(e.archetypeId)).toEqual(e.descriptor);
+                expect(e.descriptor.albedoLinear).toEqual(e.baseAlbedo);
+                expect(e.descriptor.conduction).toBe(PBR_DESCRIPTOR_FIELDS_OF(e).conduction);
+            }
+            const travertine = service.getAnchorDescriptor(2);
+            expect(travertine).toMatchObject({ anisotropyStrength: 0.65, fissureScale: 6, fissureDepth: 0.45, cellularWeight: 0.4 });
+            travertine.fissureScale = 99;
+            expect(service.getAnchorDescriptor(2).fissureScale).toBe(6);
+            // 52 used to wrap to 2 (travertine) and an id past the table to indiana_limestone
+            expect(() => service.getAnchorDescriptor(52)).toThrow(PbrUnknownArchetypeError);
+            expect(() => service.getAnchorDescriptor(-1)).toThrow(PbrUnknownArchetypeError);
+        });
+
+        it('assumes no material: synthesis without a descriptor or a named example fails instead of making limestone', async () => {
+            await expect(service.synthesizePbrTextureSet({ width: 8, height: 8 })).rejects.toThrow(/give albedoLinear, conduction, roughnessBaseline/);
+            expect(() => completeMaterialDescriptor({ albedoLinear: [0.5, 0.5, 0.5] })).toThrow(/missing conduction, roughnessBaseline/);
+            const d = completeMaterialDescriptor({ albedoLinear: [0.1, 0.2, 0.3], conduction: 0.4, roughnessBaseline: 0.6 });
+            expect(d.secondaryAlbedo![0]).toBeCloseTo(0.072, 9);
+            expect(d.microPorosity).toBeCloseTo(0.27, 9);
+            expect(d.fissureScale).toBe(8);
         });
     });
 

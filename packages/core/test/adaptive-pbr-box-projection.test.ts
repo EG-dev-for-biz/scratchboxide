@@ -58,8 +58,9 @@ function twoPartScene(opts: { groupNode?: boolean; extras?: boolean } = {}): Buf
     return buildSceneGlb(meshes, nodes, opts.extras ? { rootExtras: { project: 'kept' } } : {});
 }
 
+// A material is always named: no material is assumed when a request gives none.
 const run = (glb: Buffer, extra: Record<string, unknown> = {}) => AdaptiveUvOrchestrator.applyAdaptivePbr({
-    inputGlbBuffer: glb, strategy: 'height_blended_triplanar', resolutionPx: PX, tileSizeMeters: TILE, ...extra
+    inputGlbBuffer: glb, strategy: 'height_blended_triplanar', resolutionPx: PX, tileSizeMeters: TILE, materialArchetype: 'indiana_limestone', ...extra
 } as any);
 
 /** Triangles of a primitive as canonical "x,y,z|x,y,z|x,y,z" strings (rotated to start at their smallest vertex, winding kept). */
@@ -131,7 +132,7 @@ describe('box projection replaces the pass-through', () => {
     });
 
     it('honours a resolution tier', async () => {
-        const res = await AdaptiveUvOrchestrator.applyAdaptivePbr({ inputGlbBuffer: input, strategy: 'height_blended_triplanar', resolution: '1K', tileSizeMeters: TILE });
+        const res = await AdaptiveUvOrchestrator.applyAdaptivePbr({ inputGlbBuffer: input, strategy: 'height_blended_triplanar', resolution: '1K', tileSizeMeters: TILE, materialArchetype: 'indiana_limestone' });
         const scene = readTexturedScene(res.glbBuffer!);
         expect(pngSize(scene.material(scene.primitives[0].materialIndex)!.baseColor!.image)).toEqual([1024, 1024]);
     });
@@ -262,15 +263,23 @@ describe('box projection replaces the pass-through', () => {
         expect(g.tileSize.texelsPerMeter).toBeCloseTo(PX / TILE, 6);
     });
 
-    it('labels a derived default tile size and the default material instead of passing them off as asked for', async () => {
+    it('labels a derived default tile size instead of passing it off as asked for', async () => {
         const res = await run(input, { tileSizeMeters: undefined });
         const g = res.boxProjection!.groups[0];
         expect(g.tileSize.source).toBe('derived');
         expect(g.tileSize.derivation!.formula).toMatch(/fissureScale/);
         expect(g.tileSize.meters).toBeGreaterThan(0);
         expect(res.boxProjection!.inferred.join('\n')).toMatch(/tile size .* is derived, not asked for/);
-        expect(res.boxProjection!.inferred.join('\n')).toMatch(/no material was given, so the tool default indiana_limestone/);
-        expect(res.boxProjection!.textureSets[0].materialSource).toBe('tool_default_indiana_limestone');
+        expect(res.boxProjection!.textureSets[0].materialSource).toBe('archetype');
+    });
+
+    it('assumes no material: a request with neither archetype nor descriptor fails and names the descriptor fields', async () => {
+        const err: any = await run(input, { materialArchetype: undefined }).catch(e => e);
+        expect(err).toBeInstanceOf(AdaptivePbrMaterialSpecError);
+        expect(err.message).toMatch(/no material given\. Pass a descriptor with albedoLinear, conduction, roughnessBaseline/);
+        // A descriptor read from the words "a pale matte ceramic" is enough on its own
+        const res = await run(input, { materialArchetype: undefined, continuousDescriptor: { albedoLinear: [0.9, 0.88, 0.84], conduction: 0, roughnessBaseline: 0.7 } });
+        expect(res.boxProjection!.textureSets[0].materialSource).toBe('descriptor');
     });
 
     it('saves a software render of the textured result and of the input for comparison', async () => {

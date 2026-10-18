@@ -87,11 +87,15 @@ function views(errors: Array<[number, number]>): ProjectionView[] {
     });
 }
 
-/** Normalised correlation of the bake's luminance gradients with the analytic albedo's, over the atlas. */
-function gradAgreement(atlas: UvAtlas, albedo: Uint8Array): number {
+/** Normalised correlation of the bake's luminance gradients with the analytic albedo's (at texel centres, or with `box` its mean over each texel), over the atlas. */
+function gradAgreement(atlas: UvAtlas, albedo: Uint8Array, box = false): number {
     const S = atlas.width, P = atlas.texels.position;
     const truth = new Float64Array(S * S), bake = new Float64Array(S * S);
-    for (let i = 0; i < S * S; i++) { truth[i] = carved(P[i * 3], P[i * 3 + 1]); bake[i] = albedo[i * 4 + 3] ? albedo[i * 4] : NaN; }
+    for (let i = 0; i < S * S; i++) {
+        if (box) { const s = atlas.texels.sizeM[i]; let a = 0; for (let p = 0; p < 8; p++) for (let q = 0; q < 8; q++) a += carved(P[i * 3] + ((p + 0.5) / 8 - 0.5) * s, P[i * 3 + 1] + ((q + 0.5) / 8 - 0.5) * s); truth[i] = a / 64; }
+        else truth[i] = carved(P[i * 3], P[i * 3 + 1]);
+        bake[i] = albedo[i * 4 + 3] ? albedo[i * 4] : NaN;
+    }
     let ab = 0, aa = 0, bb = 0;
     for (let y = 0; y + 1 < S; y++) for (let x = 0; x + 1 < S; x++) {
         const i = y * S + x;
@@ -151,7 +155,9 @@ describe('Street View projection: per-chart image alignment', () => {
             expect(Math.abs(s.medianDx)).toBeLessThan(1);
             expect(Math.abs(s.medianDy)).toBeLessThan(1);
         }
-        expect(gradAgreement(atlas, res.albedo)).toBeGreaterThan(0.9);
+        // a texel holds its footprint's mean (footprint sampling), so the truth is the albedo's mean over the texel
+        // (measured: 0.962; point-sampled 0.899, against the albedo at texel centres 0.929 and 0.886)
+        expect(gradAgreement(atlas, res.albedo, true)).toBeGreaterThan(0.9);
     }, 120_000);
 });
 

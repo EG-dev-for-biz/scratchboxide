@@ -59,28 +59,6 @@ export const STANDALONE_STUDIOS_CATALOG: StandaloneStudioItem[] = [
         tags: ['Orthogonal Triad', 'Render-Pass Plates', 'Google 3D Tiles', 'Vector Cadastre', 'Street View 360'],
         badge: 'PLATE VIEWER'
     },
-    // 1. Next-Gen Astro 3D Viewport Studio (Universal 3D Benchmark)
-    {
-        id: 'next-gen-astra-viewport-studio',
-        title: 'Next-Gen Astro 3D Viewport Studio',
-        subtitle: '100M-Polygon GPU Meshlets · Hybrid 3DGS · Clustered Forward PBR',
-        category: 'Geospatial & 3D Tiles',
-        path: '/next_gen_astra_viewport_studio.html',
-        description: 'Interactive high-throughput viewport evaluated against marketplace platforms: GPU meshlet cluster DAGs, sub-pixel LOD cuts, shared-depth 3D Gaussian Splatting, and AgX tone mapping.',
-        tags: ['Next-Gen Viewport', 'Meshlets', '3DGS Engine', 'Clustered Lighting', 'AgX PBR', 'Industry Benchmark'],
-        badge: 'INDUSTRY BENCHMARK'
-    },
-    // 1. Nanite Meshlets & Progressive Path Tracing Studio
-    {
-        id: 'nanite-meshlet-pathtracing-studio',
-        title: 'Nanite Meshlets & Progressive Path Tracing Studio',
-        subtitle: 'Virtualized Geometry DAG · ~1px Continuous LOD & WebGPU Indirect GI',
-        category: 'Geospatial & 3D Tiles',
-        path: '/nanite_meshlet_pathtracing_studio.html',
-        description: 'Interactive real-time cluster DAG inspector with ~1px screen-space error cuts, GPU compute frustum & Hi-Z culling, and progressive Monte Carlo GI.',
-        tags: ['Nanite', 'Meshlets', 'Cluster DAG', 'WebGPU Indirect', 'Path Tracing', 'SVGF'],
-        badge: 'NANITE WEBGPU'
-    },
     // 1. Architecture 2: Offline Texture Atlas Re-grade Proof
     {
         id: 'colosseum-recolor-proof',

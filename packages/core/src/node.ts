@@ -81,14 +81,16 @@ export {
     type TileRefineServiceOptions
 } from './node/3d-engine/tile-refine-service';
 export {
-    MeshletPipelineService,
-    type MeshletBuildOptions,
-    type MeshletData,
-    type GpuClusterDescriptor,
-    type MeshletDAGResult,
-    type WebGpuIndirectDrawArgs,
-    type LODCutResult
-} from './node/3d-engine/native-meshlet-service';
+    VirtualGeometryBuildService,
+    VirtualGeometryBuildError,
+    getVirtualGeometryBuildService,
+    virtualGeometryServeDir,
+    VIRTUAL_GEOMETRY_URL_PREFIX,
+    type ServedVirtualGeometry,
+    type VirtualGeometryBuildResult,
+    type VirtualGeometryBuildStats,
+    type VirtualGeometryLevelStats
+} from './node/3d-engine/virtual-geometry-service';
 export {
     FieldAlignedQuadRemeshService,
     QuadRemeshServiceOptions,
@@ -1013,7 +1015,12 @@ export {
 // Universal 3D Object Separation & Visual Alignment Verification Services
 export {
     Universal3DObjectSeparationService,
+    measureShapeDescriptors,
+    routeFromDescriptors,
+    isBroadLowSurface,
     type UniversalSpatialCategory,
+    type SpatialEntityLabel,
+    type SpatialShapeDescriptors,
     type DownstreamGeneratorRouting,
     type UniversalSeparatedObject,
     type UniversalSeparatedScene,

@@ -162,16 +162,11 @@ describe('Showcase Preloaded Demos Catalog', () => {
         expect(JSON.stringify(data)).not.toMatch(/comfy|cloud run/i);
     });
 
-    it('Next-Gen Astro 3D Viewport demo must feature standalone studio artifact and meshlet tags', () => {
-        const demo = PRELOADED_SHOWCASE_DEMOS.find(d => d.id === 'demo-nextgen-astra-viewport');
-        expect(demo).toBeDefined();
-        expect(demo?.category).toBe('3d');
-        expect(demo?.highlightBadge).toBe('INDUSTRY BENCHMARK');
-        expect(demo?.artifact.type).toBe('interactive-browser');
-        const data = demo?.artifact.data as any;
-        expect(data.url).toBe('/next_gen_astra_viewport_studio.html');
-        expect(demo?.tags).toContain('Meshlet Virtualization');
-        expect(demo?.tags).toContain('3D Gaussian Splatting');
+    it('does not list the removed fake viewport studios (hardcoded telemetry, no real GPU pipeline)', () => {
+        const ids = PRELOADED_SHOWCASE_DEMOS.map(d => d.id);
+        expect(ids).not.toContain('demo-nextgen-astra-viewport');
+        expect(ids).not.toContain('demo-nanite-meshlets-pathtracing');
+        expect(JSON.stringify(PRELOADED_SHOWCASE_DEMOS)).not.toMatch(/next_gen_astra_viewport_studio|nanite_meshlet_pathtracing_studio/);
     });
 
     it('Adaptive Image-to-PBR studio demo must feature interactive-browser artifact and biophysical tags', () => {

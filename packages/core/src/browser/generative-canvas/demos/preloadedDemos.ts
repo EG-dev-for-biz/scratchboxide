@@ -1042,54 +1042,6 @@ export const PRELOADED_SHOWCASE_DEMOS: ShowcaseDemoItem[] = [
         introMessage: 'Welcome to the Omnispatial Multi-Sensor 3D Synthesis Pipeline demo! This scene loads the real pipeline models, not render plates: Stage 1 is the raw Google 3D Tile scan in clay, Stage 2 is the same scan refined by tile_refine (hidden shells culled, facades and corners rectified, relief lifted from the tile photos) in clay, and Stage 3 is the refined scan with its original photo textures. Drag to orbit, Shift-drag or right-drag to pan, and use the mouse wheel to zoom. Click any part of the model to pick it individually, and use the stage switcher in the top-right corner of the viewport to swap between Stage 1, 2 and 3.'
     },
     {
-        id: 'demo-nextgen-astra-viewport',
-        title: 'Next-Gen Astro 3D Viewport: 100M-Polygon Meshlet & Hybrid 3DGS',
-        subtitle: 'Universal 3D Benchmark · GPU Meshlets, SPZ Gaussian Splats & Clustered AgX PBR',
-        category: '3d',
-        categoryLabel: '3D & Next-Gen Viewport',
-        description: 'Universal high-throughput 3D viewport evaluated against the marketplace: renders 100M+ virtualized triangles via GPU meshlet cluster DAGs, blends 3D Gaussian Splats with PBR meshes in a shared depth buffer, and features clustered forward lighting with AgX tone mapping.',
-        tags: ['Next-Gen Viewport', 'Meshlet Virtualization', '3D Gaussian Splatting', 'AgX PBR', 'Industry Benchmark', 'C++20 Engine'],
-        highlightBadge: 'INDUSTRY BENCHMARK',
-        artifact: {
-            id: 'art-demo-nextgen-viewport',
-            type: 'interactive-browser',
-            title: 'Next-Gen Astro 3D Viewport Studio',
-            summary: 'Flagship 3D viewport engine running GPU Meshlet Virtualization (100M triangles), SPZ Gaussian Splats, and Clustered Forward PBR.',
-            data: {
-                url: '/next_gen_astra_viewport_studio.html',
-                title: 'Next-Gen Astro Viewport Studio',
-                viewportMode: 'desktop'
-            },
-            createdAt: new Date().toISOString(),
-            version: 1
-        },
-        introMessage: 'Welcome to the **Next-Gen Astro 3D Viewport Studio**. This studio demonstrates our universal 3D architecture evaluated against all major marketplace platforms: 100M virtualized triangles via GPU meshlet clusters, sub-pixel continuous LOD cuts, 3D Gaussian Splatting with shared depth occlusion, and clustered forward lighting with photographic AgX color grading.'
-    },
-    {
-        id: 'demo-nanite-meshlets-pathtracing',
-        title: 'Nanite Meshlets & Path-Traced GI Studio',
-        subtitle: '1-Trillion Virtual Triangles · Cluster DAGs & WebGPU Indirect Dispatch',
-        category: '3d',
-        categoryLabel: '3D & WebGPU',
-        description: 'Interactive cluster DAG viewport demonstrating sub-pixel continuous LOD cuts (1px error target), zero draw-call CPU overhead, and progressive path-traced global illumination.',
-        tags: ['Nanite', 'Meshlets', 'Cluster DAG', 'Path Tracing', 'WebGPU', '1px Error'],
-        highlightBadge: 'NANITE + GI',
-        artifact: {
-            id: 'art-demo-nanite-meshlets',
-            type: 'interactive-browser',
-            title: 'Nanite Meshlets & Progressive Path Tracing Studio',
-            summary: 'Virtualized geometry cluster DAGs with ~1px continuous LOD cuts and progressive Monte Carlo GI.',
-            data: {
-                url: '/nanite_meshlet_pathtracing_studio.html',
-                title: 'Nanite Meshlets & Path Tracing Studio',
-                viewportMode: 'desktop'
-            },
-            createdAt: new Date().toISOString(),
-            version: 1
-        },
-        introMessage: 'Welcome to the **Nanite Meshlets & Progressive Path Tracing Studio**. Explore 1-trillion virtual triangle cluster DAGs, continuous 1-pixel screen-space error cuts, GPU compute frustum & Hi-Z culling, and progressive path-traced global illumination.'
-    },
-    {
         id: 'demo-image-to-adaptive-pbr',
         title: 'Adaptive Image-to-PBR Relief Studio',
         subtitle: '2D Surface to Displaced Metric 3D Plane',

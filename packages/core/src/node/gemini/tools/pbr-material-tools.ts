@@ -14,6 +14,8 @@ import type { ToolDeclaration, ToolHandler, ToolResultPayload } from './types';
 import {
     NativeMaterialPbrService,
     PBR_50_ARCHETYPE_CATALOG,
+    PBR_DESCRIPTOR_REQUIRED_FIELDS,
+    completeMaterialDescriptor,
     type NativePbrTextureSet
 } from '../../3d-engine/native-material-pbr-service';
 import { AdaptiveMaterialPbrService } from '../../3d-engine/adaptive-material-pbr-service';
@@ -62,6 +64,20 @@ function parseResolution(res: unknown, defaultDim = 2048): { width: number; heig
     return { width: defaultDim, height: defaultDim };
 }
 
+/**
+ * The base for a descriptor given without a named example: its own required fields, the rest neutral texture
+ * parameters (`completeMaterialDescriptor`). Throws AdaptivePbrMaterialSpecError naming what is missing.
+ */
+function descriptorWithoutExample(raw: any, where: string): ContinuousMaterialDescriptor {
+    const r = raw && typeof raw === 'object' ? raw : {};
+    const albedo = Array.isArray(r.albedoLinear) && r.albedoLinear.length >= 3 ? [Number(r.albedoLinear[0]), Number(r.albedoLinear[1]), Number(r.albedoLinear[2])] as [number, number, number] : undefined;
+    return completeMaterialDescriptor({
+        albedoLinear: albedo,
+        conduction: typeof r.conduction === 'number' ? r.conduction : undefined,
+        roughnessBaseline: typeof r.roughnessBaseline === 'number' ? r.roughnessBaseline : undefined
+    }, where);
+}
+
 function sanitizeDescriptor(raw: any, fallback: ContinuousMaterialDescriptor): ContinuousMaterialDescriptor {
     if (!raw || typeof raw !== 'object') return fallback;
 
@@ -96,7 +112,7 @@ function sanitizeDescriptor(raw: any, fallback: ContinuousMaterialDescriptor): C
 export const PBR_MATERIAL_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'pbr_synthesize_material',
-        description: 'Synthesizes procedural PBR texture maps (albedo, tangent normal, packed ORM, height; plus separate roughness / metallic / AO for MaterialX and USDZ) from a 50-entry archetype catalog or a continuous descriptor, in the native C++20 kernel (scratchbox_pbr_manifold.hpp) compiled with clang++. There is no fallback synthesizer: if the kernel cannot compile or run, the call fails with that error. Timings in the result are measured. With targetMeshPath the maps are applied to the mesh by per-triangle box projection and the textured GLB is written.',
+        description: 'Synthesizes procedural PBR texture maps (albedo, tangent normal, packed ORM, height; plus separate roughness / metallic / AO for MaterialX and USDZ) from a continuous 20-float material descriptor, in the native C++20 kernel (scratchbox_pbr_manifold.hpp) compiled with clang++. There is no fallback synthesizer: if the kernel cannot compile or run, the call fails with that error. Timings in the result are measured. With targetMeshPath the maps are applied to the mesh by per-triangle box projection and the textured GLB is written.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -115,11 +131,11 @@ export const PBR_MATERIAL_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 archetype: {
                     type: 'STRING',
-                    description: 'Optional baseline biophysical archetype: a catalog key or display name, exactly (e.g. "carrara_marble", "weathered_concrete", "brushed_titanium", "corten_steel", "solar_low_e_glass", "indiana_limestone", "polished_brass", "quartersawn_walnut", "wrought_iron"; pbr_get_material_catalog lists all 50). An unknown name fails with the key list (a fragment of exactly one key, e.g. "titanium", resolves to it); no other material is substituted. With neither archetype nor descriptor the tool default indiana_limestone is used and the result says so.'
+                    description: 'Optional baseline biophysical archetype: a catalog key or display name, exactly (e.g. "carrara_marble", "weathered_concrete", "brushed_titanium", "corten_steel", "solar_low_e_glass", "indiana_limestone", "polished_brass", "quartersawn_walnut", "wrought_iron"; pbr_get_material_catalog lists all 50). An unknown name fails with the key list (a fragment of exactly one key, e.g. "titanium", resolves to it); no other material is substituted. It is only a shortcut to the descriptor of that example; with neither archetype nor descriptor the call fails (no material is assumed).'
                 },
                 descriptor: {
                     type: 'OBJECT',
-                    description: 'Continuous biophysical parameter overrides in R^20. Includes albedoLinear ([r,g,b] 0..1), conduction (0.0 dielectric vs 1.0 metallic), roughnessBaseline (0.02..0.98), microPorosity, normalStrength, fissureScale, fissureDepth, fbmOctaves, fbmGain, cellularWeight, graininess, anisotropyStrength, anisotropyAngleRad, aoStrength.'
+                    description: 'The material, as continuous parameters in R^20: fill them from the user\'s description of the surface (any material, including ones no example covers). Without an archetype it must give albedoLinear, conduction and roughnessBaseline; over an archetype it overrides that example\'s fields. Includes albedoLinear ([r,g,b] 0..1), conduction (0.0 dielectric vs 1.0 metallic), roughnessBaseline (0.02..0.98), microPorosity, normalStrength, fissureScale, fissureDepth, fbmOctaves, fbmGain, cellularWeight, graininess, anisotropyStrength, anisotropyAngleRad, aoStrength.'
                 },
                 format: {
                     type: 'STRING',
@@ -209,7 +225,7 @@ export const PBR_MATERIAL_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 solarCoordinates: {
                     type: 'OBJECT',
-                    description: 'For solar inverse de-lighting, used only by "elevation_stratified_conformal" (others list it under ignoredOptions): { latitude: number, longitude: number, timestampIso: string }, the place and UTC time whose sun lit the source imagery (all three are required; the current time is not assumed).'
+                    description: 'For solar inverse de-lighting, used only by "elevation_stratified_conformal" (others list it under ignoredOptions): { latitude: number, longitude: number, timestampIso: string }, the place and capture instant (date, time of day and UTC offset) whose sun lit the source imagery (all three are required; no date or time is assumed). The sky-to-sun light ratio is measured from the texture itself; when the texture cannot pin it down the pass changes nothing and reports why.'
                 },
                 carrierSpinePoints: {
                     type: 'ARRAY',
@@ -243,13 +259,17 @@ export const PBR_MATERIAL_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'pbr_get_material_catalog',
-        description: 'Returns the full biophysical catalog of 50 calibrated material archetypes across 7 architectural/industrial categories (Stones, Concrete & Paving, Metals, Glazing, Roofing, Timbers, Relief & Weathering). Each entry includes calibrated linear albedo, roughness, metallicity, and continuous parameter baselines for continuous interpolation.',
+        description: 'Lists 50 named example material descriptors (reference points in the continuous 20-float material space, with their full descriptor). They are examples, not a closed list: any surface is described by filling a descriptor from the user\'s words, optionally starting from the nearest example.',
         parameters: {
             type: 'OBJECT',
             properties: {
+                query: {
+                    type: 'STRING',
+                    description: 'Optional free text that narrows the list to examples whose key, name, description or display group contains it (e.g. "marble", "rust").'
+                },
                 category: {
                     type: 'STRING',
-                    description: 'Optional category filter ("Stones", "Metals", "Concrete & Paving", "Glazing", "Roofing", "Timbers", "Relief & Weathering").'
+                    description: 'Older name for query.'
                 }
             }
         }
@@ -400,18 +420,19 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
             : undefined;
         let baseDesc: ContinuousMaterialDescriptor;
         let archetypeKey = 'custom_manifold';
-        let materialSource: 'archetype' | 'archetype_with_descriptor_overrides' | 'descriptor_over_tool_default' | 'tool_default_indiana_limestone';
+        let materialSource: 'archetype' | 'archetype_with_descriptor_overrides' | 'descriptor';
 
         if (archetypeInput !== undefined) {
-            // Unknown names throw PbrUnknownArchetypeError listing the valid keys; nothing is substituted
+            // A named example is a convenience lookup for a descriptor. Unknown names throw PbrUnknownArchetypeError
+            // listing the valid keys; nothing is substituted.
             const resolved = service.resolveArchetype(archetypeInput);
             baseDesc = service.getAnchorDescriptor(resolved.archetypeId);
             archetypeKey = resolved.key;
             materialSource = args.descriptor ? 'archetype_with_descriptor_overrides' : 'archetype';
         } else {
-            baseDesc = service.getAnchorDescriptor(0);
-            materialSource = args.descriptor ? 'descriptor_over_tool_default' : 'tool_default_indiana_limestone';
-            if (!args.descriptor) archetypeKey = 'indiana_limestone';
+            // No material is assumed: the descriptor's required fields come from the caller (read from the user's words).
+            baseDesc = descriptorWithoutExample(args.descriptor, 'pbr_synthesize_material');
+            materialSource = 'descriptor';
         }
 
         const descriptor = sanitizeDescriptor(args.descriptor, baseDesc);
@@ -700,7 +721,7 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
 
         const tierName = args.resolution || `${width}x${height}`;
         const t = pbrResult.timings;
-        const materialNote = materialSource === 'tool_default_indiana_limestone' ? ' (no archetype or descriptor given: the tool default)' : '';
+        const materialNote = materialSource === 'descriptor' ? ' (from the given descriptor)' : '';
         const summary = `Synthesized ${tierName} (${width}x${height}) PBR material [${archetypeKey}]${materialNote} in ${elapsedMs}ms: native C++20 kernel ${Math.round(t.kernelMs)}ms, compile ${t.compileCacheHit ? 'cached' : `${Math.round(t.compileMs)}ms`}, PNG encode ${encodeMs}ms. Format: ${format}. Conduction: ${descriptor.conduction.toFixed(2)}, Roughness: ${descriptor.roughnessBaseline.toFixed(2)}, Fissure: ${descriptor.fissureScale?.toFixed(1) ?? '8.0'}. Files: ${Object.values(writtenFiles).map(f => path.basename(f)).join(', ')} in ${outDir}.`;
 
         return {
@@ -712,19 +733,21 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
     pbr_get_material_catalog: async (args, _ctx) => {
         const service = new NativeMaterialPbrService();
         let catalog = service.get50Catalog();
-        const catFilter = asString(args.category);
-        if (catFilter) {
-            const norm = catFilter.toLowerCase();
-            catalog = catalog.filter(c => c.category.toLowerCase().includes(norm));
+        // Free-text search over the examples' text (key, name, description, display group); it only narrows the list.
+        const query = asString(args.query) ?? asString(args.category);
+        if (query) {
+            const norm = query.toLowerCase();
+            catalog = catalog.filter(c => [c.key, c.displayName, c.description, c.category].some(t => t.toLowerCase().includes(norm)));
         }
 
         return {
             resultPayload: {
                 totalCount: catalog.length,
-                categories: Array.from(new Set(catalog.map(c => c.category))),
-                archetypes: catalog
+                groups: Array.from(new Set(catalog.map(c => c.category))),
+                examples: catalog.map(c => ({ archetypeId: c.archetypeId, key: c.key, displayName: c.displayName, group: c.category, description: c.description, descriptor: c.descriptor })),
+                requiredDescriptorFields: [...PBR_DESCRIPTOR_REQUIRED_FIELDS]
             } as unknown as ToolResultPayload,
-            summaryResult: `Retrieved ${catalog.length} biophysical PBR material archetypes across ${Array.from(new Set(catalog.map(c => c.category))).length} categories.`
+            summaryResult: `Listed ${catalog.length} example material descriptors${query ? ` matching "${query}"` : ''}. They are reference points in the continuous 20-float space, not a closed list: for any surface, fill a descriptor (${PBR_DESCRIPTOR_REQUIRED_FIELDS.join(', ')} required) from the user's description, optionally starting from the nearest example.`
         };
     },
 
@@ -732,26 +755,25 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
         const service = new NativeMaterialPbrService();
         const alpha = Math.max(0.0, Math.min(1.0, asNumber(args.alpha, 0.5)!));
 
-        const resolveDescriptor = (input: unknown): ContinuousMaterialDescriptor => {
+        // Each side is a named example (a key or name) or a descriptor; a descriptor gives its required fields itself.
+        const resolveDescriptor = (input: unknown, which: string): ContinuousMaterialDescriptor => {
+            let parsed: unknown = input;
             if (typeof input === 'string') {
                 try {
-                    const parsed = JSON.parse(input);
-                    if (typeof parsed === 'object' && parsed !== null) {
-                        return sanitizeDescriptor(parsed, service.getAnchorDescriptor(0));
-                    }
+                    parsed = JSON.parse(input);
                 } catch {
-                    // Not JSON, treat as archetype string
                     const entry = service.resolveArchetype(input);
                     return service.getAnchorDescriptor(entry.archetypeId);
                 }
-            } else if (typeof input === 'object' && input !== null) {
-                return sanitizeDescriptor(input, service.getAnchorDescriptor(0));
             }
-            return service.getAnchorDescriptor(0);
+            if (typeof parsed === 'object' && parsed !== null) {
+                return sanitizeDescriptor(parsed, descriptorWithoutExample(parsed, `pbr_interpolate_materials.${which}`));
+            }
+            return descriptorWithoutExample(undefined, `pbr_interpolate_materials.${which}`);
         };
 
-        const descA = resolveDescriptor(args.materialA);
-        const descB = resolveDescriptor(args.materialB);
+        const descA = resolveDescriptor(args.materialA, 'materialA');
+        const descB = resolveDescriptor(args.materialB, 'materialB');
 
         const lerpVal = (a: number, b: number, t: number) => a + (b - a) * t;
         const lerpVec3 = (a: [number, number, number], b: [number, number, number], t: number): [number, number, number] => [

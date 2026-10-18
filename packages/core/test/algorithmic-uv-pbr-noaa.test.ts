@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import { encodePng } from '../src/node/texture-processing';
-import { AlgorithmicUvEngine } from '../src/node/spatial/AlgorithmicUvEngine';
+import { AlgorithmicUvEngine, SolarDelightingNormalsError, SolarDelightingSunUnknownError, IMAGE_DERIVED_MAP_PROVENANCE } from '../src/node/spatial/AlgorithmicUvEngine';
 import { calculateNOAASolarPosition, calculateENUSunVector } from '../src/browser/generative-canvas/services/atmosphere/solar-position';
 import { IMAGE_MODEL_PRIORITY_DRAFT } from '../src/common/media-generation-protocol';
 
@@ -32,84 +32,88 @@ describe('Algorithmic UV PBR Pipeline: NOAA Solar De-Lighting, Toksvig AA & Mate
   // --------------------------------------------------------------------------
   // 2. Analytical Solar Irradiance E(N) & Inverse De-Lighting
   // --------------------------------------------------------------------------
-  it('computes analytical diffuse solar irradiance E(N) with Ramamoorthi SH9 ambient', () => {
-    const sunVector: [number, number, number] = [0.0, 0.92, -0.38];
-    const shCoeffs: [number, number, number][] = [
-      [0.65, 0.72, 0.85],
-      [0.20, 0.28, 0.40],
-      [0.15, 0.20, 0.30],
-      [0.10, 0.15, 0.25],
-      [0.05, 0.08, 0.12],
-      [0.04, 0.06, 0.10],
-      [0.08, 0.12, 0.18],
-      [0.03, 0.05, 0.08],
-      [0.02, 0.04, 0.06]
-    ];
-
-    // Upward-facing roof normal receives direct sunlight + peak sky dome irradiance
-    const roofNormal: [number, number, number] = [0.0, 1.0, 0.0];
-    const roofIrradiance = AlgorithmicUvEngine.computeSolarIrradiance(
-      roofNormal,
-      sunVector,
-      shCoeffs,
-      0.65,
-      0.35,
-      0.18
-    );
-
-    // North-facing facade in deep shadow receives no direct sunlight, only ambient
-    const shadowNormal: [number, number, number] = [0.0, 0.0, 1.0];
-    const shadowIrradiance = AlgorithmicUvEngine.computeSolarIrradiance(
-      shadowNormal,
-      sunVector,
-      shCoeffs,
-      0.65,
-      0.35,
-      0.18
-    );
-
-    expect(roofIrradiance).toBeGreaterThan(shadowIrradiance);
-    expect(shadowIrradiance).toBeGreaterThanOrEqual(0.18); // Enforces regularization epsilon floor
-    expect(roofIrradiance).toBeLessThanOrEqual(1.8);
+  it('E(N) of the de-lighting model is the sun cosine plus the measured ambient-to-sun ratio times the sky shape', () => {
+    const sun: [number, number, number] = [0.0, 0.92, -0.38];
+    const roof = AlgorithmicUvEngine.computeSolarIrradiance([0, 1, 0], sun, 0.3);
+    const shaded = AlgorithmicUvEngine.computeSolarIrradiance([0, 0, 1], sun, 0.3);
+    expect(roof).toBeCloseTo(0.92 / Math.hypot(0.92, 0.38) + 0.3, 6);
+    expect(shaded).toBeCloseTo(0.3, 6); // faces turned away get the ambient term only, no floor or clamp
+    // with measured sky SH, the ambient term is shaped relative to straight up
+    const sky: [number, number, number][] = [[0.6, 0.7, 0.8], [0.2, 0.25, 0.4], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    expect(AlgorithmicUvEngine.ambientShape([0, 1, 0], sky)).toBeCloseTo(1, 6);
+    expect(AlgorithmicUvEngine.ambientShape([0, -1, 0], sky)).toBeLessThan(1);
   });
 
-  it('performs intrinsic solar inverse de-lighting in decomposePbr', async () => {
-    // Synthetic 16x16 test patch with baked directional shading
-    const w = 16;
-    const h = 16;
-    const testAlbedo = new Uint8Array(w * h * 4);
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const idx = (y * w + x) * 4;
-        // Half in bright light (val 220), half in shadow (val 80)
-        const val = x < 8 ? 80 : 220;
-        testAlbedo[idx]     = val;
-        testAlbedo[idx + 1] = val;
-        testAlbedo[idx + 2] = val;
-        testAlbedo[idx + 3] = 255;
-      }
+  it('solar de-lighting divides each texel by E(N) of its geometry normal with the ambient measured from the image: three faces come out equal', async () => {
+    // One stone albedo on three faces of one chart: facing the sun, oblique to it, and turned away from it, baked in
+    // linear light with an ambient-to-sun ratio of 0.3 that the pass is not told.
+    const w = 48, h = 16, K = 0.3, rho = 0.45;
+    const sun: [number, number, number] = [0.3, 0.8, 0.52];
+    const sl = Math.hypot(...sun);
+    const faces: [number, number, number][] = [[sun[0] / sl, sun[1] / sl, sun[2] / sl], [0, 1, 0], [-0.52, 0.0, 0.3]];
+    const toSrgb = (c: number) => Math.round(255 * (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055));
+    const baked = new Uint8Array(w * h * 4);
+    const normals = new Float32Array(w * h * 3);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      const n = faces[Math.floor(x / 16)];
+      const v = toSrgb(rho * 0.7 * AlgorithmicUvEngine.computeSolarIrradiance(n, sun, K));
+      baked[i * 4] = baked[i * 4 + 1] = baked[i * 4 + 2] = v;
+      baked[i * 4 + 3] = 255;
+      normals.set(n, i * 3);
     }
+    expect(baked[0] - baked[(w - 1) * 4]).toBeGreaterThan(40); // the input really is lit differently
 
-    const res = await AlgorithmicUvEngine.decomposePbr(
-      testAlbedo,
-      {
-        enableAlbedoDeLighting: true,
-        enableSolarInverseDelighting: true,
-        solarDelighting: {
-          latitude: 40.74844,
-          longitude: -73.98566,
-          timestampIso: '2024-06-21T17:00:00Z',
-          regularizationEpsilon: 0.18
-        }
-      },
-      w,
-      h
-    );
+    const res = await AlgorithmicUvEngine.decomposePbr(baked, {
+      enableSolarInverseDelighting: true, solarDelighting: { sunVector: sun, fit: { minSamplesPerSide: 32 } }, worldNormalsMap: normals
+    }, w, h);
+    expect(res.solarDelighting).toMatchObject({ applied: true, sunVector: sun, sunSource: { kind: 'sun-vector' }, delitTexels: w * h, paintedTexelsWithoutNormal: 0, clippedTexels: 0 });
+    const fit = res.solarDelighting!.fit!;
+    expect(fit.status).toBe('fitted');
+    if (fit.status === 'fitted') expect(fit.ambientToSun).toBeCloseTo(K, 1);
+    for (let y = 0; y < h; y++) {
+      expect(Math.abs(res.albedo[(y * w + 2) * 4] - res.albedo[(y * w + 45) * 4])).toBeLessThanOrEqual(2);
+      expect(Math.abs(res.albedo[(y * w + 2) * 4] - res.albedo[(y * w + 24) * 4])).toBeLessThanOrEqual(2);
+    }
+  });
 
-    expect(res.albedo).toBeDefined();
-    // Verify shadow region has been de-lighted / lifted
-    const shadowPixelLum = res.albedo[0];
-    expect(shadowPixelLum).toBeGreaterThan(80); // Shadow was lifted
+  it('solar de-lighting never reads normals from the image: a patterned flat face gets one uniform gain', async () => {
+    // Strong luminance edges (a checker of 60 / 200) on one flat face. A normal taken from the image gradient would
+    // tilt at every edge and change the gain there; the geometry normal is the same everywhere, so the gain is too.
+    const w = 32, h = 32;
+    const sun: [number, number, number] = [0.45, 0.75, -0.48];
+    const rgba = new Uint8Array(w * h * 4);
+    const normals = new Float32Array(w * h * 3);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      const v = ((x >> 2) + (y >> 2)) % 2 ? 200 : 60;
+      rgba[i * 4] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = v; rgba[i * 4 + 3] = 255;
+      normals.set([0, 0, 1], i * 3);
+    }
+    const res = await AlgorithmicUvEngine.decomposePbr(rgba, {
+      enableSolarInverseDelighting: true, solarDelighting: { sunVector: sun }, worldNormalsMap: normals
+    }, w, h);
+    for (let i = 0; i < w * h; i++) expect(res.albedo[i * 4]).toBe(rgba[i * 4]);
+    // one flat face has one N.L, so the ambient-to-sun ratio cannot be measured: nothing is changed, and it says why
+    expect(res.solarDelighting).toMatchObject({ applied: false, delitTexels: 0 });
+    expect(res.solarDelighting!.skippedReason).toMatch(/too few texels on charts that are seen both facing the sun and turned away/);
+  });
+
+  it('refuses solar de-lighting without a geometry normal per texel (no normal is estimated from the pixels)', async () => {
+    const albedo = new Uint8Array(8 * 8 * 4).fill(180);
+    const run = (worldNormalsMap?: Float32Array) => AlgorithmicUvEngine.decomposePbr(albedo, {
+      enableSolarInverseDelighting: true, solarDelighting: { sunVector: [0, 1, 0] }, worldNormalsMap
+    }, 8, 8);
+    await expect(run()).rejects.toBeInstanceOf(SolarDelightingNormalsError);
+    await expect(run(new Float32Array(10))).rejects.toThrow(/needs worldNormalsMap with one geometry normal per texel \(192 floats for 8x8\); got 10/);
+  });
+
+  it('labels the normal, roughness and AO maps as image heuristics', async () => {
+    const res = await AlgorithmicUvEngine.decomposePbr(new Uint8Array(8 * 8 * 4).fill(128), {}, 8, 8);
+    expect(res.mapProvenance).toBe(IMAGE_DERIVED_MAP_PROVENANCE);
+    expect(res.mapProvenance.roughness).toMatch(/^heuristic: .*not measured/);
+    expect(res.mapProvenance.normal).toMatch(/^heuristic: .*not geometry/);
+    expect(res.mapProvenance.ao).toMatch(/^heuristic: /);
   });
 
   // --------------------------------------------------------------------------
@@ -118,8 +122,15 @@ describe('Algorithmic UV PBR Pipeline: NOAA Solar De-Lighting, Toksvig AA & Mate
   it('refuses solar de-lighting without a sun: no default place or date stands in for it', async () => {
     const albedo = new Uint8Array(8 * 8 * 4).fill(180);
     for (const solarDelighting of [{}, { latitude: 40.7, longitude: -74.0 }, { latitude: 40.7, timestampIso: '2026-06-21T17:00:00Z' }]) {
+      const run = AlgorithmicUvEngine.decomposePbr(albedo, { enableSolarInverseDelighting: true, solarDelighting }, 8, 8);
+      await expect(run).rejects.toBeInstanceOf(SolarDelightingSunUnknownError);
       await expect(AlgorithmicUvEngine.decomposePbr(albedo, { enableSolarInverseDelighting: true, solarDelighting }, 8, 8))
-        .rejects.toThrow(/Solar de-lighting needs solarDelighting\.sunVector, or latitude, longitude and a UTC timestampIso/);
+        .rejects.toThrow(/Solar de-lighting needs solarDelighting\.sunVector, or latitude, longitude and the capture instant timestampIso/);
+    }
+    // a date without a time of day, or a time without a UTC offset, is not a capture instant
+    for (const timestampIso of ['2024-06', '2024-06-21', '2024-06-21T14:30:00']) {
+      await expect(AlgorithmicUvEngine.decomposePbr(albedo, { enableSolarInverseDelighting: true, solarDelighting: { latitude: 40.7, longitude: -74.0, timestampIso } }, 8, 8))
+        .rejects.toThrow(/is not a capture instant/);
     }
   });
 
@@ -337,7 +348,9 @@ describe('decomposePbr de-lighting: brightness kept, shadows lifted, detail and 
     ['albedo', { enableAlbedoDeLighting: true }],
     ['albedo_and_noaa_solar', {
       enableAlbedoDeLighting: true, enableSolarInverseDelighting: true,
-      solarDelighting: { latitude: 40.7411, longitude: -73.9897, timestampIso: '2026-10-14T17:17:00Z' }
+      solarDelighting: { latitude: 40.7411, longitude: -73.9897, timestampIso: '2026-10-14T17:17:00Z' },
+      // One flat south-facing facade: the geometry normal of every texel
+      worldNormalsMap: new Float32Array(256 * 256 * 3).map((_, i) => (i % 3 === 2 ? 1 : 0))
     }]
   ] as const) {
     it(`${label}: same mean brightness, shadow band lifted to the lit stone, window contrast kept, gutter untouched`, async () => {

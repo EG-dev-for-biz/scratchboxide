@@ -276,6 +276,9 @@ export const algorithmicUvHandlers: Record<string, ToolHandler> = {
         if (result.imagesProcessed > 0) {
             parts.push(`Attached ${a.normalTextures} normal, ${a.metallicRoughnessTextures} metallicRoughness and ${a.occlusionTextures} occlusion textures; baseColor rewritten (de-lit) on ${result.images.filter(r => r.albedoRewritten).length} images${a.unlitRemoved > 0 ? `; KHR_materials_unlit removed from ${a.unlitRemoved} materials` : ''}.`);
         }
+        if (a.normalTextures + a.metallicRoughnessTextures + a.occlusionTextures > 0) {
+            parts.push('The attached normal, roughness and AO maps are heuristics estimated from the texture\'s own brightness, not measurements.');
+        }
         parts.push(`Geometry unchanged: ${result.submeshesProcessed} meshes, ${result.trianglesProcessed} triangles.`);
         if (result.texelDensityMetrics && result.texelDensityMetrics.meanTexelsPerMeter > 0) {
             parts.push(`Texel density: mean ${result.texelDensityMetrics.meanTexelsPerMeter} texels/m (range ${result.texelDensityMetrics.minTexelsPerMeter}-${result.texelDensityMetrics.maxTexelsPerMeter}).`);
@@ -414,10 +417,11 @@ export const algorithmicUvHandlers: Record<string, ToolHandler> = {
                 albedoPath,
                 normalPath,
                 ormPath,
+                mapProvenance: pbr.mapProvenance,
                 executionTimeMs
             },
             status: 'completed',
-            summaryResult: `Decomposed ${path.basename(inputImagePath)} (${width}x${height} ${format.toUpperCase()}) in ${executionTimeMs} ms. Wrote albedo ${enableAlbedoDeLighting ? '(de-lit)' : '(decoded pixels, de-lighting off)'} to ${albedoPath}, normal map (glTF, +Y up) to ${normalPath}, ORM (R = AO, G = roughness, B = metalness) to ${ormPath}.`
+            summaryResult: `Decomposed ${path.basename(inputImagePath)} (${width}x${height} ${format.toUpperCase()}) in ${executionTimeMs} ms. Wrote albedo ${enableAlbedoDeLighting ? '(de-lit)' : '(decoded pixels, de-lighting off)'} to ${albedoPath}, normal map (glTF, +Y up) to ${normalPath}, ORM (R = AO, G = roughness, B = metalness) to ${ormPath}. The normal, roughness and AO maps are heuristics estimated from the image's own brightness (gradients, curvature, colour thresholds), not measurements; metalness is the contract constant.`
         };
     },
 
