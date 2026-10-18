@@ -284,4 +284,66 @@ describe('ContinuousSplineMatchmoveService', () => {
         expect(reconstructedKnots[0].position[0]).toBeCloseTo(knots[0].position[0], 1);
         expect(reconstructedKnots[0].position[1]).toBeCloseTo(knots[0].position[1], 1);
     });
+
+    it('descent: a gap that stops climbing under the finite-difference step keeps the residual vector aligned', () => {
+        const service = new ContinuousSplineMatchmoveService();
+        const knots = createLinearKnots(4, 6.0);
+        // Knot 1 sits 0.05 mm above knot 0: one Jacobian step (0.1 mm) flips that gap from climbing to not.
+        knots[1].position[1] = knots[0].position[1] + 0.00005;
+        knots[2].position[1] = knots[1].position[1] + 3.0; // a real climb the penalty must remove
+        const climb = (ks: SplineKnot[]) => ks.slice(1).reduce((sum, k, i) => sum + Math.max(0, k.position[1] - ks[i].position[1]), 0);
+        const before = climb(knots);
+        const result = service.optimizeSplineTrajectory(knots, [], [], width, height, { maxIterations: 15, enforceMonotonicDescent: true, kinematicSmoothnessWeight: 1.0 });
+        expect(result.optimizedKnots.every(k => k.position.every(Number.isFinite))).toBe(true);
+        expect(climb(result.optimizedKnots)).toBeLessThan(before * 0.2);
+    });
+
+    it('a knot without k1 projects as a pinhole (no invented distortion)', () => {
+        const service = new ContinuousSplineMatchmoveService();
+        const knots = createLinearKnots(3, 4.0).map(({ k1: _k1, ...k }) => k as SplineKnot);
+        expect(service.evaluateAt(knots, 0).k1).toBe(0);
+        expect(service.evaluateAt(knots, 1.3).k1).toBe(0);
+        expect(service.evaluateAt(knots, 99).k1).toBe(0);
+    });
+
+    it('solves out-of-order knots along time and returns them in time order', () => {
+        const service = new ContinuousSplineMatchmoveService();
+        const knots = createLinearKnots(5, 8.0);
+        const shuffled = [knots[3], knots[0], knots[4], knots[1], knots[2]];
+        const a = service.optimizeSplineTrajectory(knots, [], [], width, height, { maxIterations: 3, kinematicSmoothnessWeight: 2.0 });
+        const b = service.optimizeSplineTrajectory(shuffled, [], [], width, height, { maxIterations: 3, kinematicSmoothnessWeight: 2.0 });
+        expect(b.optimizedKnots.map(k => k.timeSec)).toEqual(knots.map(k => k.timeSec));
+        for (let i = 0; i < 5; i++) for (let c = 0; c < 3; c++) expect(b.optimizedKnots[i].position[c]).toBeCloseTo(a.optimizedKnots[i].position[c], 9);
+    });
+
+    it('solves 60 knots against 5,000 observations in under 3 s (banded Jacobian; the dense one took 9 s)', () => {
+        let seed = 42;
+        const rnd = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 2 ** 32);
+        const service = new ContinuousSplineMatchmoveService();
+        const K = 60, dur = 10, W = 1920, H = 1080;
+        const truth: SplineKnot[] = Array.from({ length: K }, (_, i) => {
+            const t = (i / (K - 1)) * dur;
+            return { timeSec: t, position: [Math.sin(t * 0.3) * 30, 60 - t * 3, 80 - t * 6], target: [0, 0, 0], up: [0, 1, 0], fovYDeg: 50, k1: -0.01 };
+        });
+        const tracks: PersistentTrack3D2D[] = [];
+        for (let ti = 0; ti < 100; ti++) {
+            const P: [number, number, number] = [(rnd() - 0.5) * 40, (rnd() - 0.5) * 10, (rnd() - 0.5) * 40];
+            const observations: PersistentTrack3D2D['observations'] = [];
+            for (let j = 0; j < 50; j++) {
+                const t = rnd() * dur, pose = service.evaluateAt(truth, t);
+                const px = service.projectPoint(P, pose.position, pose.target, pose.up, pose.fovYDeg, pose.k1, W, H)!;
+                observations.push({ frameNumber: Math.round(t * 24), timeSec: t, pixel2D: [px[0] + (rnd() - 0.5) * 0.6, px[1] + (rnd() - 0.5) * 0.6], confidence: 1 });
+            }
+            tracks.push({ trackId: `t${ti}`, worldPoint3D: P, observations });
+        }
+        const init = truth.map(k => ({ ...k, position: k.position.map(v => v + (rnd() - 0.5) * 1.2) as [number, number, number] }));
+        const anchors: SplineAnchorConstraint[] = [{ timeSec: 0, position: truth[0].position }, { timeSec: dur, position: truth[K - 1].position }];
+        const t0 = performance.now();
+        const res = service.optimizeSplineTrajectory(init, tracks, anchors, W, H, { maxIterations: 6 });
+        const ms = performance.now() - t0;
+        // Dense solver before this change: 8.8 s for these 6 iterations, same knots to 2e-10 m.
+        expect(ms).toBeLessThan(3000);
+        expect(res.initialRmsPx).toBeCloseTo(3.345, 2);
+        expect(res.finalRmsPx).toBeCloseTo(0.2515, 3);
+    });
 });
