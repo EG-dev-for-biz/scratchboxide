@@ -12,7 +12,8 @@ import {
     IMAGE_MODEL_PRIORITY,
     VIDEO_MODEL_PRIORITY,
     classifyMediaGenerationError,
-    MediaGenerationRequest
+    MediaGenerationRequest,
+    resolveTtsModel
 } from '../../../packages/core/src/common';
 import {
     GoogleMediaGenerationService,
@@ -28,14 +29,6 @@ export interface MediaRouterServices {
     mediaGenerator: GoogleMediaGenerationService;
     mediaJobs: MediaGenerationJobService;
     mediaAssets: MediaAssetStore;
-}
-
-/** Text-to-speech availability as configured: GeminiService.synthesizeSpeech uses SCRATCHBOX_TTS_MODEL and refuses without it. */
-function ttsCapability(): { supported: boolean; models: string[]; primaryModel?: string; reason?: string } {
-    const model = process.env.SCRATCHBOX_TTS_MODEL?.trim();
-    return model
-        ? { supported: true, models: [model], primaryModel: model }
-        : { supported: false, models: [], reason: 'no TTS model is configured (set SCRATCHBOX_TTS_MODEL)' };
 }
 
 export function createMediaRouter(services: MediaRouterServices, ctx: RouteContext): Router {
@@ -79,6 +72,8 @@ export function createMediaRouter(services: MediaRouterServices, ctx: RouteConte
     router.get('/capabilities', async (_req: Request, res: Response) => {
         try {
             const caps = await mediaGenerator.detectCapabilities();
+            // The model /gemini/tts calls: SCRATCHBOX_TTS_MODEL when set, else the default Gemini TTS model.
+            const tts = resolveTtsModel(process.env.SCRATCHBOX_TTS_MODEL);
             res.json({
                 ...caps,
                 image: {
@@ -91,7 +86,12 @@ export function createMediaRouter(services: MediaRouterServices, ctx: RouteConte
                     models: VIDEO_MODEL_PRIORITY,
                     primaryModel: 'google/omni-1.1'
                 },
-                audio: ttsCapability()
+                audio: {
+                    supported: true,
+                    models: [tts.model],
+                    primaryModel: tts.model,
+                    modelSource: tts.source
+                }
             });
         } catch (err: any) {
             res.status(503).json({

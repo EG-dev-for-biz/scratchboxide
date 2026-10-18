@@ -104,8 +104,8 @@ function assertRejected(res: RawResponse, status: number, label: string): void {
 }
 
 // Runs a copy of scripts/serve_public.cjs inside a temp repo layout whose secrets are fakes,
-// so the real secrets.json / .env are never read. ffmpeg, the GeoBox Python pipeline and the
-// compiled PhotometricUsdBridgeService are stand-ins that log which file they were handed.
+// so the real secrets.json / .env are never read. ffmpeg, the compiled GeoBoxPrecisionResectionService and
+// PhotometricUsdBridgeService are stand-ins that log which file they were handed.
 describe('serve_public.cjs path containment and CORS', () => {
     let root: string;
     let toolsDir: string;
@@ -113,7 +113,7 @@ describe('serve_public.cjs path containment and CORS', () => {
     let port = 0;
     let baseline: Map<string, string>;
     let ffmpegLog: string;
-    let pythonLog: string;
+    let resectLog: string;
     let usdLog: string;
 
     const realPublic = (rel: string): string => fs.realpathSync(path.join(root, rel));
@@ -156,7 +156,7 @@ describe('serve_public.cjs path containment and CORS', () => {
         fs.symlinkSync(path.join(root, 'outside_dir'), path.join(root, 'public/tiles/linked_dir'));
 
         ffmpegLog = path.join(toolsDir, 'ffmpeg.log');
-        pythonLog = path.join(toolsDir, 'python.log');
+        resectLog = path.join(toolsDir, 'resect.log');
         usdLog = path.join(toolsDir, 'usd.log');
         writeExecutable(path.join(toolsDir, 'ffmpeg'), [
             `const fs = require('fs');`,
@@ -164,11 +164,15 @@ describe('serve_public.cjs path containment and CORS', () => {
             `fs.appendFileSync(${JSON.stringify(ffmpegLog)}, JSON.stringify(args) + '\\n');`,
             `fs.writeFileSync(args[args.length - 1], 'fake-ffmpeg-output');`
         ].join('\n'));
-        writeExecutable(path.join(toolsDir, 'python'), [
+        write(root, 'build/serve-public-core/node/spatial/GeoBoxPrecisionResectionService.js', [
             `const fs = require('fs');`,
-            `const args = process.argv.slice(2);`,
-            `fs.appendFileSync(${JSON.stringify(pythonLog)}, JSON.stringify(args) + '\\n');`,
-            `process.stdout.write('---GEOBOX_JSON_START---' + JSON.stringify({ stage: 'fake' }) + '---GEOBOX_JSON_END---');`
+            `class GeoBoxPrecisionResectionService {`,
+            `    async resectImageLocation(request) {`,
+            `        fs.appendFileSync(${JSON.stringify(resectLog)}, JSON.stringify(request.imagePath || request.videoPath || null) + '\\n');`,
+            `        return { success: true, imageAnalysed: false };`,
+            `    }`,
+            `}`,
+            `exports.GeoBoxPrecisionResectionService = GeoBoxPrecisionResectionService;`
         ].join('\n'));
         write(root, 'packages/core/dist/node/spatial/PhotometricUsdBridgeService.js', [
             `const fs = require('fs');`,
@@ -192,7 +196,7 @@ describe('serve_public.cjs path containment and CORS', () => {
 
         child = spawn(process.execPath, [path.join(root, 'scripts', 'serve_public.cjs')], {
             cwd: root,
-            env: { PATH: process.env.PATH || '', PORT: '0', FFMPEG_PATH: path.join(toolsDir, 'ffmpeg'), PYTHON_BIN: path.join(toolsDir, 'python') },
+            env: { PATH: process.env.PATH || '', PORT: '0', FFMPEG_PATH: path.join(toolsDir, 'ffmpeg') },
             stdio: ['ignore', 'pipe', 'pipe']
         });
         port = await new Promise<number>((resolve, reject) => {
@@ -409,10 +413,10 @@ describe('serve_public.cjs path containment and CORS', () => {
                 assertRejected(await postJson(port, '/api/geobox/resect', { [field]: target }), 400, `resect ${field}=${target}`);
             }
         }
-        assert.deepStrictEqual(readLog(pythonLog), [], 'an escaping media path reached the pipeline');
+        assert.deepStrictEqual(readLog(resectLog), [], 'an escaping media path reached the resection');
         assertNothingWrittenOutsidePublic('resect');
 
-        // geobox_demo.html sample photo / sample video, and an absolute path the pipeline returned under public/uploads.
+        // A public sample photo / sample video, and an absolute path under public/uploads.
         const cases: Array<[Record<string, string>, string, string]> = [
             [{ imagePath: '/test_images/the_plaza_hotel_user_photo.jpg', hint: 'The Plaza Hotel' }, PLAZA_PHOTO, '/test_images/the_plaza_hotel_user_photo.jpg'],
             [{ videoPath: '/videos/plaza_hotel_omni_15s_720p.mp4' }, PLAZA_VIDEO, '/videos/plaza_hotel_omni_15s_720p.mp4'],
@@ -422,8 +426,7 @@ describe('serve_public.cjs path containment and CORS', () => {
             const res = await postJson(port, '/api/geobox/resect', payload);
             assert.strictEqual(res.status, 200, res.body);
             assert.strictEqual(JSON.parse(res.body).uploadUrl, url);
-            const args = readLog(pythonLog).pop()!;
-            assert.strictEqual(args[args.indexOf('--image') + 1], realPublic(rel));
+            assert.strictEqual(readLog(resectLog).pop(), realPublic(rel));
         }
     }, 30000);
 

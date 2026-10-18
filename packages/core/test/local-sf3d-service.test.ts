@@ -55,15 +55,20 @@ describe('Local SF3D Organic Prop Engine (no_pbr)', () => {
         return Buffer.concat([header, jh, jsonPadded, bh, bin]);
     }
 
-    /** Service whose "python" is a shell script standing in for the SF3D runner subprocess. */
-    function serviceWithRunner(shellBody: string): LocalSf3DService {
-        const exe = path.join(testOutputDir, `fake_python_${Math.random().toString(36).slice(2)}.sh`);
-        fs.writeFileSync(exe, `#!/bin/sh\n${shellBody}\n`, { mode: 0o755 });
-        return new LocalSf3DService({
+    /**
+     * Service whose runner script is a stand-in for run_local_sf3d.py. It runs the way the real one does, in a
+     * persistent worker that calls its main() per prop (argv: image path, output GLB path, flags).
+     */
+    function serviceWithRunner(mainBody: string): LocalSf3DService {
+        const script = path.join(testOutputDir, `fake_sf3d_runner_${Math.random().toString(36).slice(2)}.py`);
+        fs.writeFileSync(script, `import json, shutil, sys\ndef main():\n${mainBody.split('\n').map(l => `    ${l}`).join('\n')}\n`);
+        const service = new LocalSf3DService({
             ensureNativeModule: async () => null,
-            getPythonExecutable: () => exe,
+            getPythonExecutable: () => process.env.SCRATCHBOX_PYTHON || 'python3',
             getModuleDirectory: () => ''
         } as any);
+        service.resolveScriptPath = () => script;
+        return service;
     }
 
     it('1. Reports vertex/triangle counts and bounds read from the GLB the runner wrote', async () => {
@@ -71,7 +76,7 @@ describe('Local SF3D Organic Prop Engine (no_pbr)', () => {
         fs.writeFileSync(glbSource, buildGlb(5123, 3 * 9871, [-0.1, 0, -0.12], [0.1, 0.4, 0.12]));
         // The runner's JSON carries no counts or bounds: they must come from the GLB itself.
         const service = serviceWithRunner(
-            `cp "${glbSource}" "$3"\necho __LOCAL_SF3D_RESULT_START__\necho '{"success": true, "device": "cpu"}'\necho __LOCAL_SF3D_RESULT_END__`
+            `shutil.copyfile(${JSON.stringify(glbSource)}, sys.argv[2])\nprint("__LOCAL_SF3D_RESULT_START__")\nprint('{"success": true, "device": "cpu"}')\nprint("__LOCAL_SF3D_RESULT_END__")`
         );
         const out = path.join(testOutputDir, 'counted.glb');
         const result = await service.generateOrganicProp({ imagePath: dummyImagePath, outputGlbPath: out, targetScaleMeters: 0.4 });
@@ -88,7 +93,7 @@ describe('Local SF3D Organic Prop Engine (no_pbr)', () => {
         const out = path.join(testOutputDir, 'stale.glb');
         fs.writeFileSync(out, buildGlb(10, 3, [0, 0, 0], [1, 1, 1]));
         const service = serviceWithRunner(
-            `echo __LOCAL_SF3D_ERROR_START__\necho '{"success": false, "code": "SF3D_RUN_FAILED", "error": "CUDA out of memory"}'\necho __LOCAL_SF3D_ERROR_END__\nexit 4`
+            `print("__LOCAL_SF3D_ERROR_START__")\nprint('{"success": false, "code": "SF3D_RUN_FAILED", "error": "CUDA out of memory"}')\nprint("__LOCAL_SF3D_ERROR_END__")\nsys.exit(4)`
         );
         const err = await service.generateOrganicProp({ imagePath: dummyImagePath, outputGlbPath: out }).catch(e => e);
         expect(err).toBeInstanceOf(LocalSf3DError);
@@ -118,7 +123,7 @@ describe('Local SF3D Organic Prop Engine (no_pbr)', () => {
 
     it('2c. The tool handler fails with the error code when SF3D cannot run', async () => {
         const failing = serviceWithRunner(
-            `echo __LOCAL_SF3D_ERROR_START__\necho '{"success": false, "code": "SF3D_NOT_INSTALLED", "error": "No module named sf3d"}'\necho __LOCAL_SF3D_ERROR_END__\nexit 3`
+            `print("__LOCAL_SF3D_ERROR_START__")\nprint('{"success": false, "code": "SF3D_NOT_INSTALLED", "error": "No module named sf3d"}')\nprint("__LOCAL_SF3D_ERROR_END__")\nsys.exit(3)`
         );
         const prev = (LocalSf3DService as any).instance;
         (LocalSf3DService as any).instance = failing;

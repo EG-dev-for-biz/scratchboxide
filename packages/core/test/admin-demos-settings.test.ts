@@ -83,7 +83,6 @@ describe('Admin Access & Comprehensive Showcase Demos Catalog in Settings', () =
             'vfx_plate_anti_drift_demo.html',
             'botanical_visualizer.html',
             'plaza_matchmove_demo.html',
-            'geobox_demo.html',
             's4d_multi_gallery.html',
             'red_rocks_performer_demo.html',
             'universal_architecture_terrain_demo.html',
@@ -99,7 +98,6 @@ describe('Admin Access & Comprehensive Showcase Demos Catalog in Settings', () =
             'adaptive_world_styling_visualizer.html',
             'plaza_matchmove_eloise.html',
             'video_branching_studio.html',
-            'geobox_precision_report.html',
             'visual_proof_alignment.html'
         ];
 

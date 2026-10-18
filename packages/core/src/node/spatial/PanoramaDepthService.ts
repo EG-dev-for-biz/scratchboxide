@@ -9,11 +9,9 @@
 
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
+import { getPythonWorkerPool } from '../process/persistent-python-worker';
 import { GeneratorFailedError } from '../../common/errors/pipeline-errors';
 
-const execFileAsync = promisify(execFile);
 
 export interface PanoramaDepthOptions {
     sceneType?: 'indoor' | 'outdoor';
@@ -68,6 +66,8 @@ export interface PanoramaDepthServiceOptions {
     pythonExecutable?: string;
     /** Environment for the sidecar (default: this process's environment). */
     env?: NodeJS.ProcessEnv;
+    /** Time limit for one depth call, including the first call's model load (default 120 s). */
+    timeoutMs?: number;
 }
 
 /**
@@ -79,11 +79,13 @@ export class PanoramaDepthService {
     private sidecarPath: string;
     private pythonExecutable: string;
     private env?: NodeJS.ProcessEnv;
+    private timeoutMs: number;
 
     constructor(customSidecarPath?: string, options: PanoramaDepthServiceOptions = {}) {
         this.sidecarPath = customSidecarPath || path.resolve(process.cwd(), 'tools/depth/panorama_depth.py');
         this.pythonExecutable = options.pythonExecutable || process.env.SCRATCHBOX_DEPTH_PYTHON || 'python3';
         this.env = options.env;
+        this.timeoutMs = options.timeoutMs ?? 120_000;
     }
 
     /** Runs the sidecar and returns its metadata JSON, checking that it reports every key in `required`. */
@@ -96,27 +98,33 @@ export class PanoramaDepthService {
         const depthPath = path.join(outDir, `${baseName}_${stamp}.depth.f32`);
         const previewPath = path.join(outDir, `${baseName}_${stamp}_preview.png`);
         const metadataPath = path.join(outDir, `${baseName}_${stamp}_meta.json`);
-        const args = [
-            this.sidecarPath,
+        const argv = [
             '--input', inputImagePath,
             '--output-depth', depthPath,
             '--output-preview', previewPath,
             '--output-json', metadataPath,
             ...extraArgs
         ];
+        // A persistent worker keeps the depth model loaded between calls (the first call pays the load).
+        const pool = getPythonWorkerPool({
+            pythonBinary: this.pythonExecutable,
+            scriptPath: this.sidecarPath,
+            label: 'the depth sidecar',
+            cwd: process.cwd(),
+            env: this.env
+        });
+        let res;
         try {
-            const { stdout, stderr } = await execFileAsync(this.pythonExecutable, args, {
-                cwd: process.cwd(),
-                env: this.env,
-                timeout: 120000,
-                maxBuffer: 10 * 1024 * 1024
-            });
-            console.log(`[PanoramaDepthService] Sidecar stdout:\n${stdout}`);
-            if (stderr) console.warn(`[PanoramaDepthService] Sidecar stderr:\n${stderr}`);
+            res = await pool.run({ argv, timeoutMs: this.timeoutMs });
         } catch (err: any) {
-            const detail = String(err?.stderr || '').trim() || err?.message || String(err);
+            throw new GeneratorFailedError('python', `Depth model failed for ${inputImagePath}: ${err?.message || String(err)}`);
+        }
+        if (res.stdout.trim()) console.log(`[PanoramaDepthService] Sidecar stdout:\n${res.stdout}`);
+        if (res.exitCode !== 0) {
+            const detail = res.stderr.trim() || `the sidecar exited with code ${res.exitCode}`;
             throw new GeneratorFailedError('python', `Depth model failed for ${inputImagePath}: ${detail}`);
         }
+        if (res.stderr.trim()) console.warn(`[PanoramaDepthService] Sidecar stderr:\n${res.stderr}`);
         if (!(await fs.pathExists(metadataPath))) {
             throw new GeneratorFailedError('python', `Depth model failed for ${inputImagePath}: the sidecar wrote no metadata (${metadataPath})`);
         }

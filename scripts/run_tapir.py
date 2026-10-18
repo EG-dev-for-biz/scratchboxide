@@ -28,6 +28,10 @@ import json
 import os
 import sys
 
+# checkpoint path -> loaded model; survives between calls under packages/core/src/python/scratchbox/worker_host.py.
+_MODELS = {}
+
+
 def main() -> None:
     try:
         import cv2
@@ -94,8 +98,9 @@ def main() -> None:
         import torch
 
         model = None
+        resolved_ckpt = None
         if checkpoint_path and os.path.exists(checkpoint_path):
-            model = torch.load(checkpoint_path, map_location="cpu")
+            resolved_ckpt = checkpoint_path
         else:
             # Common checkpoint paths
             candidates = [
@@ -105,8 +110,13 @@ def main() -> None:
             ]
             for cand in candidates:
                 if os.path.exists(cand):
-                    model = torch.load(cand, map_location="cpu")
+                    resolved_ckpt = cand
                     break
+        if resolved_ckpt is not None:
+            # Loaded once per checkpoint and kept (on its device) for later calls in a persistent worker.
+            model = _MODELS.get(resolved_ckpt)
+            if model is None:
+                model = torch.load(resolved_ckpt, map_location="cpu")
 
         if model is None:
             print(json.dumps({"error": "TAPIR checkpoint not found (pass checkpointPath, or place it at ~/.cache/tapir/tapir_checkpoint_panning.pt)"}))
@@ -127,6 +137,7 @@ def main() -> None:
         device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
         model = model.to(device)
         model.eval()
+        _MODELS[resolved_ckpt] = model
         video_tensor = video_tensor.to(device)
         queries_tensor = queries_tensor.to(device)
 

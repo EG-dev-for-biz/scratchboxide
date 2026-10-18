@@ -262,10 +262,19 @@ def mock_room_depth(W, H, eye_height):
     return np.clip(depth, 0.1, 80.0)
 
 
+# (model name, device) -> (processor, model); kept between calls when this script runs in a persistent worker
+# (packages/core/src/python/scratchbox/worker_host.py), so the weights load once.
+_MODEL_CACHE = {}
+
+
 def load_depth_model(scene_type, device):
-    """Loads Depth Anything V2 Metric (indoor or outdoor). Any failure is a DepthFailure."""
+    """Loads Depth Anything V2 Metric (indoor or outdoor), once per device. Any failure is a DepthFailure."""
     model_name = ("depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf" if scene_type == "indoor"
                   else "depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf")
+    cached = _MODEL_CACHE.get((model_name, str(device)))
+    if cached is not None:
+        print(f"[DepthService] Reusing loaded model {model_name} on {device}")
+        return cached[0], cached[1], model_name
     try:
         from transformers import AutoImageProcessor, AutoModelForDepthEstimation
         print(f"[DepthService] Loading model weights from Hugging Face: {model_name}")
@@ -274,6 +283,7 @@ def load_depth_model(scene_type, device):
         model.eval()
     except Exception as e:
         raise DepthFailure(f"the depth model {model_name} could not be loaded: {e}")
+    _MODEL_CACHE[(model_name, str(device))] = (processor, model)
     return processor, model, model_name
 
 
@@ -283,6 +293,14 @@ def predict_depth(processor, model, image_np, size, device):
     with torch.no_grad():
         predicted = model(**inputs).predicted_depth
     return F.interpolate(predicted.unsqueeze(1), size=size, mode="bilinear", align_corners=False).squeeze()
+
+
+def predict_depth_batch(processor, model, images_np, size, device):
+    """Metric depth for a list of same-size HxWx3 uint8 images in one forward pass, each resampled to size=(H, W)."""
+    inputs = processor(images=list(images_np), return_tensors="pt").to(device)
+    with torch.no_grad():
+        predicted = model(**inputs).predicted_depth  # (N, h, w)
+    return F.interpolate(predicted.unsqueeze(1), size=size, mode="bilinear", align_corners=False).squeeze(1)
 
 
 def equirect_depth_from_model(img_pil, scene_type, device):
@@ -303,11 +321,9 @@ def equirect_depth_from_model(img_pil, scene_type, device):
         img_tensor = torch.from_numpy(np.array(img_pil).transpose(2, 0, 1)).float() / 255.0
         print(f"[DepthService] Extracting {len(rot_params)} perspective face plates at {face_size}x{face_size}...")
         faces_batch = extract_perspective_faces(img_tensor, face_fovs, face_size, rot_params, device)
-        face_depths = []
-        for i in range(len(rot_params)):
-            face_np = (faces_batch[i].cpu().numpy().transpose(1, 2, 0) * 255.0).astype(np.uint8)
-            face_depths.append(predict_depth(processor, model, face_np, (face_size, face_size), device))
-        face_depths_tensor = torch.stack(face_depths, dim=0)
+        # All faces are face_size x face_size, so they go through the model as one batch.
+        faces_np = [(faces_batch[i].cpu().numpy().transpose(1, 2, 0) * 255.0).astype(np.uint8) for i in range(len(rot_params))]
+        face_depths_tensor = predict_depth_batch(processor, model, faces_np, (face_size, face_size), device)
     except DepthFailure:
         raise
     except Exception as e:

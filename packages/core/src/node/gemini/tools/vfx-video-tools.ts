@@ -527,6 +527,10 @@ export const FFMPEG_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'NUMBER',
                     description: 'Total frames to sample across the video duration (default columns * rows)'
                 },
+                durationSec: {
+                    type: 'NUMBER',
+                    description: 'Length of the input in seconds; only needed for a dry run of an input that is not on disk (otherwise measured with ffprobe)'
+                },
                 cellWidth: {
                     type: 'NUMBER',
                     description: 'Width of each individual cell in pixels (default 640)'
@@ -989,6 +993,7 @@ export const ffmpegHandlers: Record<string, ToolHandler> = {
             cellWidth,
             cellHeight,
             labelTimecode,
+            durationSec: asNumber(args.durationSec),
             dryRun
         });
 
