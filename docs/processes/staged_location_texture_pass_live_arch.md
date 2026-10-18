@@ -419,3 +419,81 @@ Detail reprojection gate (median IoU of the built elements against the boxes the
 ### Candidate tool/service ideas
 
 - A replay endpoint for a run's registration and texture inputs (frames, views, meshes), so changes are compared on identical inputs; this round used local dumps and scratch replays for that.
+
+## Photo tier A (branch `photo-tier-a`, 2026-10-17): not pushed
+
+Worktree `.claude/worktrees/photo-tier-a`, from `origin/main` `0be7689d`, merged with round 5 (`c4ec7b8c`). Ports: web 3072, API 3073, tools 3074 (3062-3064 were taken). Screenshots: `test-results/screenshots/texture_live_photoA/` (`clay_*`, `tex_*`, `prov_*`; front, back, four obliques, top, opening, both friezes, and close-ups `close_attic_*`, `close_spandrels_*`, `close_pier_front_a/b`; gitignored). Views set with `__SB_SET_CAMERA_VIEW__` around `[0, 10, 0]` (front at theta pi - 0.7); not the same framing as v5.
+
+**Status: Needs Fix.** Photo tier A runs end to end and wins on its own held-out score, but it makes round 5's leave-one-pano-out fit worse on `l3b`, so it was not pushed to main.
+
+### What was built
+
+- **Camera model.** The first commit is round 5's `793c066f`, cherry-picked (fx = fy = 960 / tan(fov/2) at every crop, principal point at the crop centre). A second commit also changed the run-reading, detail and figure aims. It changed which crops the pipeline requests, which failed `staged-location-orchestrator` and `photo-ornament-real-arch`, so I dropped it. `slot-projection uncertaintyPx` now uses `groundingFocalPx`.
+- **`photo-tier-rectify.ts`** sets up the geometry and **`python/photo_tier/face_rectify.py`** does the image work (OpenCV in the project `.venv`, one subprocess per layer):
+  - **Grouping and frames.** Planar wall charts are grouped into facades by heading. Each facade gets a frontal camera at 50 px/m, plus the tile mesh's depth culled to a slab of ±3 m around the plane.
+  - **Wide-view anchors.** Each pano's wide view is anchored on the tile outline:
+    - The outline is the face's own edge: within 1 m of the depth most of the surface has, and not on the slab cut.
+    - A sample pushed out of the photo costs the chamfer cap.
+    - A two-sided Lab term separates the outline from course joints that run parallel to it.
+    - The panos' anchors vote through SIFT homographies between their wide views (agreement within 10 px).
+  - **View chains.** Narrow views map to their pano's wide view by a rotation homography. Other panos map to the reference pano by SIFT, using features on the facade only. Every placement becomes a pose correction, so each chart gets its own plane homography.
+  - **Rectification plane.** The plane is moved to the tile's median depth over the chart.
+  - **Fusion.** Gated co-registration, a gradient agreement check, Lab normalisation, and a per-pixel median that votes per pano. A pano's views share its eye, so an occluder appears in all of them.
+  - **Relief.** More than 0.3 m of relief is left to the rungs below with the degradation `non-planar region: photo tier needs better geometry`.
+  - **Labels.** Texels are labelled `street-view-rectified` / `photo-inferred` with pano ids and capture dates. Rung 0 means at least two panos agree; rung 1 means one pano.
+- **Wiring.** The survey and ring whole-face views feed the tier, which is how it gets its wide views. The tier also runs inside round 5's leave-one-pano-out bake: the judged texture is the projection with the tier's texels over it, both made without the judging pano.
+- **Score and switches.**
+  - The offline experiment's held-out score is in `TextureLayerBundle.photoTier.heldOut`, for three methods: tile, previous ladder, and photo tier A without one pano.
+  - Diagnostic switches: `SCRATCHBOX_PHOTO_TIER_OFF=1`, `SCRATCHBOX_PHOTO_TIER_POSE_ONLY=1` and `SCRATCHBOX_PHOTO_TIER_KEEP=<dir>`.
+
+### Synthetic checks (`staged-texture-photo-tier.test.ts`, all new)
+
+The test scene is a 12 x 9 m coursed wall, ray cast through the 960/tan camera, with registered poses 0.3-0.6° and up to 0.5 m off. It has a statue 1.2 m proud of the wall, a van 8 m in front, and an old pano whose stones differ.
+
+- The anchors improve on the pose, and a course-locked anchor is outvoted.
+- Narrow views map to the wide view at 0.15 px.
+- The rectified texels sit on the true texture with zero shift at a quarter-texel search, mean error about 9-12 grey levels.
+- Van texels are under 1%.
+- The statue is left alone, with a measured deviation of 1.2 m.
+- Provenance and the fallbacks behave as designed: no outline, no worker, no planar face, an unplaced old pano.
+- The ladder integration has its own test.
+
+### Live (Washington Square Arch)
+
+Only `l3b` (the scan-fitted rebuild) has planar wall charts. `l2`, `l3c`, `l3cf`, `l4` and `l4f` report `photo_tier_no_planar_face`. Each retry re-runs registration, and the untouched `l2` moved from 5.4 to 8.4 px between runs, so `l2` is used as the control.
+
+| Run (tier) | l3b LOO chamfer / NCC | l2 LOO (control) | l3b − l2 chamfer |
+|---|---|---|---|
+| round 5 `decf63a4` (no tier) | 5.51 / 0.229 | 5.95 / 0.243 | −0.44 |
+| `f12c3a22`, tier off | 5.47 / 0.192 | 6.48 / 0.118 | −1.01 |
+| `a9a57257`, outline-anchored | 8.79 / 0.048 | 5.63 / 0.179 | +3.16 |
+| `78f4a57e`, pose-only | 8.35 / 0.099 | 8.41 / 0.098 | −0.06 |
+| `cb9a542f`, outline-anchored + tile-surface plane | no time left for LOO | 5.41 / 0.309 | – |
+
+On its own held-out score (the offline `score.py` on the faces' frontal frames, one pano held out), the final run `cb9a542f` scores as follows on 239k common pixels:
+
+| Method | Geometry-edge chamfer (px) | Held-out gradient NCC | Held-out chamfer (px) | Invented-edge share | Laplacian variance | ΔE00 to palette |
+|---|---|---|---|---|---|---|
+| Photo tier A | 2.0 | 0.187 | 9.2 | 0.34 | 2157 | 7.1 |
+| Previous ladder | 8.4 | 0.028 | 8.0 | 0.37 | 1807 | 7.9 |
+| Tile | 40 | 0.005 | 8.0 | 0 | 54 | 8.5 |
+
+On `l3b` the tier writes 34% of the texels (8% where two panos agree) from 14 panos across 43 charts. 16% of the fitted-face texels are left as non-planar (p90 2.5 m). It takes 72 s per layer, or 18 s with a warm worker cache. The tier's own time pushed `l3b`'s leave-one-pano-out out of the stage limit in the last run.
+
+### What I saw (`texture_live_photoA`)
+
+- **Better:**
+  - Both attic inscriptions read in the close-ups. On the front: "TO COMMEMORATE THE ONE HUNDREDTH ANNIVERSARY ... WASHINGTON". On the back: "LET US RAISE A STANDARD TO WHICH THE WISE AND THE HONEST CAN REPAIR ... WASHINGTON".
+  - The front frieze, keystone eagle and spandrel Victories are sharp and continuous.
+- **Worse:**
+  - The front piers carry a tree and sky (`close_pier_front_a`), and the back piers are washed pale. These are single-pano texels (rung 1), with no second pano to vote the occluder out.
+  - A pigeon is painted on the back frieze, and sky patches sit on the back attic.
+  - The fused chart images show sky inside the pier and attic regions. Either the anchors disagree with the registered poses by 10-30 cm, or the fitted charts extend past the arch. The tier cannot tell which.
+
+### Open issues
+
+- **Anchor against poses.** The outline anchor and round 5's registered poses disagree by 10-30 cm. The leave-one-pano-out fit judges from the registered poses, so a texture moved toward the tile outline scores worse even if the outline is right. Pose-only placement is neutral against the control. Before the tier can help, it needs a joint decision of what is true: an outline term inside the joint registration rather than a separate anchor.
+- **Few wide views.** Most panos have no usable wide view, so consensus rarely forms (0 agreeing pairs on 3 of 5 facades). Many narrow views stay unplaced.
+- **Single-pano texels.** These have no occluder rejection. The tier should not write rung-1 texels over the projection's multi-view texels.
+- **Time.** 72 s per layer squeezes round 5's leave-one-pano-out out of the 600 s stage limit.
+- **De-lighting.** The tier does not de-light (the projection does), so its texels differ in exposure from their neighbours.
