@@ -556,8 +556,8 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     app.use('/media/video', videoRouter);
 
     // 6. 3D Photogrammetry, Tiles, PBR, Survey & Matchmove
-    app.use('/api/3d/tiles', createTileCleanupRouter(tileCleanupService));
-    app.use('/api/3d/cleanup-tiles', createTileCleanupRouter(tileCleanupService));
+    app.use('/api/3d/tiles', createTileCleanupRouter(tileCleanupService, routeContext));
+    app.use('/api/3d/cleanup-tiles', createTileCleanupRouter(tileCleanupService, routeContext));
     app.use('/api/3d/pbr', createPbrRouter());
 
     // Survey Synthesis API
