@@ -16,8 +16,9 @@
  * The rule is measured, never a category: a point of a pass-through triangle is REDUNDANT when some fitted triangle lies
  * directly behind it, that is the point's projection along that triangle's normal lands inside the triangle, and the
  * offset along the normal is within the tolerance (|offset| <= tol, on either side). The redundant set of one fitted
- * triangle is a prism (two slab planes at +-tol, three planes through its edges along its normal), so each pass-through
- * triangle is clipped exactly (Sutherland-Hodgman) against the prisms of the fitted triangles near it: the parts inside a
+ * face is a prism (two slab planes at +-tol, one plane through each edge along its normal; coplanar fitted triangles that
+ * fill their convex hull are one face), so each pass-through triangle is clipped exactly (Sutherland-Hodgman) against the
+ * prisms of the fitted faces near it: the parts inside a
  * prism are hidden, the rest is kept as convex pieces with straight edges. A triangle no prism reaches stays as it is.
  * Anything with no fitted face behind it is kept, so hiding never opens a hole: every hidden point has a fitted face
  * within the tolerance directly behind it.
@@ -127,12 +128,13 @@ function subtract(poly: Poly, planes: Plane[]): { inside: Poly | undefined; outs
     for (const h of planes) {
         let allIn = true, allOut = true;
         for (const p of cur) { const f = evalPlane(h, p); if (f < 0) allIn = false; else allOut = false; }
-        if (allOut) { outside.push(cur); return { inside: undefined, outside }; }
+        if (allOut) return { inside: undefined, outside: [poly] };
         if (allIn) continue;
         const o = clip(cur, h, -1);
         if (o.length >= 3) outside.push(o);
         cur = clip(cur, h, 1);
-        if (cur.length < 3) return { inside: undefined, outside };
+        // no part inside: the polygon stays whole (cutting it on the way would only fragment it)
+        if (cur.length < 3) return { inside: undefined, outside: [poly] };
     }
     return { inside: cur, outside };
 }
@@ -173,25 +175,95 @@ export function surfaceToleranceM(surface: Pick<FittedSurface, 'fit'> | undefine
     return Math.min(o.maxToleranceM, Math.max(o.minToleranceM, t));
 }
 
-/** The prism of one fitted triangle: the slab |offset| <= tol, and the three planes through its edges along its normal. */
-function prism(id: number, a: V3, b: V3, c: V3, tol: number, surface: string): FittedTri | undefined {
-    const nn = cross(sub(b, a), sub(c, a)), len = Math.hypot(nn[0], nn[1], nn[2]);
-    if (len < 1e-9) return undefined;
-    const n: V3 = [nn[0] / len, nn[1] / len, nn[2] / len];
-    // 1 mm of slack at the edges, so the prisms of neighbouring triangles of one face leave no seam between them
+/**
+ * The prism of one convex fitted face (counter-clockwise about its normal n): the slab |offset| <= tol, and one plane
+ * through each edge along n.
+ */
+function prism(id: number, poly: V3[], n: V3, tol: number, surface: string): FittedTri | undefined {
+    const a = poly[0];
+    // 1 mm of slack at the edges, so the prisms of neighbouring faces leave no seam between them
     const slack = 1e-3;
     const planes: Plane[] = [
         [-n[0], -n[1], -n[2], dot(n, a) + tol],
         [n[0], n[1], n[2], -dot(n, a) + tol]
     ];
-    for (const [p, q] of [[a, b], [b, c], [c, a]] as Array<[V3, V3]>) {
+    for (let i = 0; i < poly.length; i++) {
+        const p = poly[i], q = poly[(i + 1) % poly.length];
         const m = cross(n, sub(q, p)), ml = Math.hypot(m[0], m[1], m[2]);
-        if (ml < 1e-12) return undefined;
-        const u: V3 = [m[0] / ml, m[1] / ml, m[2] / ml]; // points into the triangle (counter-clockwise about n)
+        if (ml < 1e-12) continue;
+        const u: V3 = [m[0] / ml, m[1] / ml, m[2] / ml]; // points into the face
         planes.push([u[0], u[1], u[2], -dot(u, p) + slack]);
     }
-    const lo: V3 = [0, 1, 2].map(k => Math.min(a[k], b[k], c[k]) - tol) as V3, hi: V3 = [0, 1, 2].map(k => Math.max(a[k], b[k], c[k]) + tol) as V3;
+    if (planes.length < 5) return undefined;
+    const lo: V3 = [0, 1, 2].map(k => Math.min(...poly.map(p => p[k])) - tol) as V3, hi: V3 = [0, 1, 2].map(k => Math.max(...poly.map(p => p[k])) + tol) as V3;
     return { id, a, n, planes, lo, hi, tol, surface };
+}
+
+/** Counter-clockwise convex hull of 2D points (monotone chain), as indices. */
+function hull2d(pts: Array<[number, number]>): number[] {
+    const idx = pts.map((_, i) => i).sort((i, j) => pts[i][0] - pts[j][0] || pts[i][1] - pts[j][1]);
+    const crossZ = (o: number, a: number, b: number) => (pts[a][0] - pts[o][0]) * (pts[b][1] - pts[o][1]) - (pts[a][1] - pts[o][1]) * (pts[b][0] - pts[o][0]);
+    const lower: number[] = [], upper: number[] = [];
+    for (const i of idx) { while (lower.length >= 2 && crossZ(lower[lower.length - 2], lower[lower.length - 1], i) <= 1e-12) lower.pop(); lower.push(i); }
+    for (let k = idx.length - 1; k >= 0; k--) { const i = idx[k]; while (upper.length >= 2 && crossZ(upper[upper.length - 2], upper[upper.length - 1], i) <= 1e-12) upper.pop(); upper.push(i); }
+    return lower.slice(0, -1).concat(upper.slice(0, -1));
+}
+
+/**
+ * The prisms of a fitted node: its triangles grouped into coplanar, edge-connected faces; a face whose triangles fill their
+ * convex hull is one prism (a flat wall is one piece, so the scan over it is not cut along every fitted triangle's edge),
+ * any other face one prism per triangle.
+ */
+function nodePrisms(P: Float32Array, I: Uint32Array, tol: number, surface: string, firstId: number): FittedTri[] {
+    const at = (i: number): V3 => [P[i * 3], P[i * 3 + 1], P[i * 3 + 2]];
+    const T: Array<{ v: V3[]; n: V3; d: number; area: number }> = [];
+    for (let t = 0; t + 2 < I.length; t += 3) {
+        const v = [at(I[t]), at(I[t + 1]), at(I[t + 2])];
+        const nn = cross(sub(v[1], v[0]), sub(v[2], v[0])), len = Math.hypot(nn[0], nn[1], nn[2]);
+        if (len < 1e-9) continue;
+        const n: V3 = [nn[0] / len, nn[1] / len, nn[2] / len];
+        T.push({ v, n, d: dot(n, v[0]), area: len / 2 });
+    }
+    // union-find over triangles sharing an edge (by position, 0.1 mm) and lying in one plane
+    const parent = T.map((_, i) => i);
+    const find = (i: number): number => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+    const q = (p: V3) => `${Math.round(p[0] * 1e4)},${Math.round(p[1] * 1e4)},${Math.round(p[2] * 1e4)}`;
+    const edges = new Map<string, number>();
+    T.forEach((t, i) => {
+        for (let k = 0; k < 3; k++) {
+            const ka = q(t.v[k]), kb = q(t.v[(k + 1) % 3]);
+            const key = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+            const j = edges.get(key);
+            if (j === undefined) { edges.set(key, i); continue; }
+            const u = T[j];
+            if (dot(u.n, t.n) > 0.99999 && Math.abs(u.d - t.d) < 1e-3) parent[find(i)] = find(j);
+        }
+    });
+    const groups = new Map<number, number[]>();
+    T.forEach((_, i) => { const r = find(i); let g = groups.get(r); if (!g) groups.set(r, g = []); g.push(i); });
+    const out: FittedTri[] = [];
+    for (const g of groups.values()) {
+        const t0 = T[g[0]], n = t0.n;
+        if (g.length > 1) {
+            // the face in its plane: u, v axes with u x v = n
+            const ax: V3 = Math.abs(n[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+            const u0 = cross(ax, n), ul = Math.hypot(u0[0], u0[1], u0[2]);
+            const u: V3 = [u0[0] / ul, u0[1] / ul, u0[2] / ul], v = cross(n, u);
+            const pts3 = g.flatMap(i => T[i].v);
+            const pts = pts3.map(p => [dot(p, u), dot(p, v)] as [number, number]);
+            const h = hull2d(pts);
+            let hullArea = 0;
+            for (let k = 0; k < h.length; k++) { const a = pts[h[k]], b = pts[h[(k + 1) % h.length]]; hullArea += a[0] * b[1] - a[1] * b[0]; }
+            hullArea /= 2;
+            const area = g.reduce((s, i) => s + T[i].area, 0);
+            if (h.length >= 3 && hullArea <= area * (1 + 1e-4) + 1e-6) {
+                const pr = prism(firstId + out.length, h.map(k => pts3[k]), n, tol, surface);
+                if (pr) { out.push(pr); continue; }
+            }
+        }
+        for (const i of g) { const pr = prism(firstId + out.length, T[i].v, T[i].n, tol, surface); if (pr) out.push(pr); }
+    }
+    return out;
 }
 
 /**
@@ -209,10 +281,7 @@ export function hideRedundantScan(passNodes: GlbNode[], fittedNodes: GlbNode[], 
         const tol = surfaceToleranceM(surfaceOf.get(node.name), o);
         bySurface[node.name] = tol;
         const P = node.positions, I = node.indices ?? Uint32Array.from({ length: P.length / 3 }, (_, i) => i);
-        for (let t = 0; t + 2 < I.length; t += 3) {
-            const pr = prism(tris.length, at(P, I[t]), at(P, I[t + 1]), at(P, I[t + 2]), tol, node.name);
-            if (pr) tris.push(pr);
-        }
+        tris.push(...nodePrisms(P, I, tol, node.name, tris.length));
     }
     const tols = Object.values(bySurface);
     const maxTol = tols.length ? Math.max(...tols) : o.maxToleranceM;
