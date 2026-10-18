@@ -16,6 +16,6 @@ const service = new PerformerSurfaceMeshService();
 for (const id of ids) {
     const t0 = Date.now();
     const out = path.resolve(process.cwd(), 'public/models', `humanoid_${id}.glb`);
-    const stats = service.buildForDemo(path.join(demosDir, id), out);
+    const stats = await service.buildForDemo(path.join(demosDir, id), out);
     console.log(`${id}: ${stats.vertices} vertices, ${stats.triangles} triangles -> ${out} (${((Date.now() - t0) / 1000).toFixed(1)} s)`);
 }

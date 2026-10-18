@@ -38,7 +38,7 @@ describe('High-Detail Procedural Geometric Generation Pipeline', () => {
         expect(scene.cppGenerator?.sourceCode).toContain('sdBox');
     });
 
-    it('4. Executes city pythonGenerator synchronously to produce binary glTF 2.0', async () => {
+    it('4. Executes city pythonGenerator to produce binary glTF 2.0', async () => {
         const scene = synthesizeContextual3DScene('Procedural downtown financial district city skyline with high-rise towers');
         expect(scene.sceneType).toBe('city');
         const runner = NativePythonRunnerService.getInstance();
@@ -46,7 +46,7 @@ describe('High-Detail Procedural Geometric Generation Pipeline', () => {
         expect(pySource).toBeDefined();
 
         if (pySource) {
-            const res = runner.runScriptSync(pySource);
+            const res = await runner.runScript(pySource);
             if (!res.success) {
                 console.error('[TEST 4 ERROR]', res.error, res.stderr, res.stdout);
             }

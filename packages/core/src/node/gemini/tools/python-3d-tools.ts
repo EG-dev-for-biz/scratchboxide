@@ -14,7 +14,7 @@ import type { ToolDeclaration, ToolHandlerOutcome } from './types';
 import { NativePythonRunnerService } from '../../3d-engine/native-python-runner-service';
 import { PipelineError } from '../../../common/errors/pipeline-errors';
 import { GeometricComplexityGate, GeometricSceneMetrics, GeometricMeshSummary, ComplexityGateReport } from '../../../common/spatial/GeometricComplexityGate';
-import { analyzePartConnectivity, describeFloatingParts, glbToTriangleSoup, type PartConnectivityReport, type TriangleSoup } from '../../3d-engine/part-connectivity';
+import { analyzePartConnectivityAsync, ConnectivityAnalysisAbortedError, describeFloatingParts, glbToTriangleSoup, type PartConnectivityReport, type TriangleSoup } from '../../3d-engine/part-connectivity';
 import { callVisionModel, describeVisualProblems, reviewModelVisually, type VisualReviewResult } from '../../3d-engine/visual-review';
 
 export interface GlbAabbBounds {
@@ -326,8 +326,10 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
             let soup: TriangleSoup | null = null;
             try {
                 soup = glbToTriangleSoup(glbBuf);
-                if (soup) structureReport = analyzePartConnectivity(soup);
+                // Sliced so a large model never blocks the event loop; the turn's signal stops it.
+                if (soup) structureReport = await analyzePartConnectivityAsync(soup, { signal: _ctx?.signal });
             } catch (err: any) {
+                if (err instanceof ConnectivityAnalysisAbortedError) throw err;
                 console.warn('[execute_3d_python_script] Structural check skipped:', err?.message || err);
             }
             // Only inside a chat, where the user's request is known; renders three clay views and asks a

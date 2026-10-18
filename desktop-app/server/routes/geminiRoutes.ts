@@ -26,6 +26,7 @@ import {
     MediaGenerationRequest
 } from '../../../packages/core/src/common';
 import { RouteContext } from './types';
+import { MediaModelUnavailableError } from '../../../packages/core/src/common/errors/pipeline-errors';
 import { createMemoriesRouter } from './memoriesRoutes';
 
 export interface GeminiRouterServices {
@@ -254,6 +255,11 @@ export function createGeminiRouter(services: GeminiRouterServices, ctx: RouteCon
             }
             res.json(await geminiService.synthesizeSpeech(req.body));
         } catch (err: any) {
+            // No TTS model configured, or the model returned no audio: a typed 503, never canned audio.
+            if (err instanceof MediaModelUnavailableError) {
+                res.status(503).json({ success: false, error: err.code, message: err.message });
+                return;
+            }
             res.status(500).json({ success: false, error: err.message });
         }
     });

@@ -10,7 +10,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { execFileSync, execSync } from 'child_process';
+import { execFileBuffer } from '../process/exec-file-async';
 import { HumanoidMotionData, SkinWeightedGaussian } from '../3d-engine/Dynamic4DGaussianSplatService';
 import { SBHUMAN22_PARENTS, Vec3 } from '../../common/humanoid-skinning';
 import { resolveBinary } from '../video/HeadlessVideoEditorService';
@@ -51,6 +51,8 @@ export interface RunGvhmrOptions {
     device?: string;
     pythonBinary?: string;
     gvhmrRoot?: string;
+    /** Aborting it kills the GVHMR child process. */
+    signal?: AbortSignal;
 }
 
 const JOINT_NAMES = [
@@ -128,7 +130,7 @@ export class GvhmrBodyService {
     }
 
     /** Runs scripts/run_gvhmr.py and returns its gvhmr_body.json (also written into outputDir). */
-    public run(videoPath: string, outputDir: string, options: RunGvhmrOptions = {}): GvhmrBody {
+    public async run(videoPath: string, outputDir: string, options: RunGvhmrOptions = {}): Promise<GvhmrBody> {
         const script = findRepoFile('scripts/run_gvhmr.py');
         if (!script) throw new Error('scripts/run_gvhmr.py not found');
         const root = GvhmrBodyService.resolveGvhmrRoot(options.gvhmrRoot);
@@ -140,8 +142,9 @@ export class GvhmrBodyService {
         const args = [script, '--video', path.resolve(videoPath), '--out-dir', path.resolve(outputDir), '--device', device, '--gvhmr-root', root];
         if (options.maxFrames) args.push('--max-frames', String(options.maxFrames));
         try {
-            execFileSync(python, args, { stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 256 * 1024 * 1024, timeout: 30 * 60 * 1000 });
+            await execFileBuffer(python, args, { maxBuffer: 256 * 1024 * 1024, timeoutMs: 30 * 60 * 1000, signal: options.signal });
         } catch (err: any) {
+            if (options.signal?.aborted) throw err;
             const tail = String(err?.stderr || err?.message || '').split('\n').filter(Boolean).slice(-4).join('\n');
             throw new Error(
                 `GVHMR failed (${python}, device ${device}). Create the environment with ` +
@@ -301,10 +304,11 @@ export class GvhmrBodyService {
     }
 
     /** Reads an image as packed RGB24 at its native resolution. */
-    public readRgb(imagePath: string, width: number, height: number): Buffer {
+    public readRgb(imagePath: string, width: number, height: number, signal?: AbortSignal): Promise<Buffer> {
         const ffmpeg = resolveBinary('ffmpeg');
-        return execSync(`"${ffmpeg}" -v error -i "${imagePath}" -vf scale=${width}:${height} -f rawvideo -pix_fmt rgb24 pipe:1`, {
-            maxBuffer: width * height * 3 + 1024
+        return execFileBuffer(ffmpeg, ['-v', 'error', '-i', imagePath, '-vf', `scale=${width}:${height}`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], {
+            maxBuffer: width * height * 3 + 1024,
+            signal
         });
     }
 

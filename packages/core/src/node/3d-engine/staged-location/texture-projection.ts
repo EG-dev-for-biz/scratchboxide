@@ -75,6 +75,10 @@ export interface ProjectionBakeOptions {
     featherPx?: number;
     /** Incidence floor: views with cos below it are dropped. Default 0.15. */
     minCosIncidence?: number;
+    /** Resolution floor: a view whose ground sample distance at the texel exceeds texel size / this is dropped. Default 0 (none). */
+    minResolution?: number;
+    /** Texels not projected at all (1 = skip): e.g. where the fitted surface stands off the scan the photos show. */
+    excludeTexels?: Uint8Array;
     /** Occlusion tolerance tol = baseM + perMeter * z. Default 0.20 m + 0.02 z. */
     depthToleranceBaseM?: number;
     depthTolerancePerMeter?: number;
@@ -168,7 +172,7 @@ export interface ProjectionBakeReport {
         lowFreqP95DeltaE: number; lowFreqMedianDeltaE: number; lowFreqInteriorP95DeltaE: number; lowFreqInteriorMedianDeltaE: number;
     };
     /** One view per region (present when it ran): per-chart gains applied, MRF blocks labelled, label changes between neighbouring texels. */
-    regions?: { chartGains: number; meanAbsLogGain: number; blocks: number; boundaryTexels: number; refinedTexels: number; sunShadedViews: number; /** Blocks left on a view that is in shadow there while another view is not. */ shadowedBlocks: number };
+    regions?: { chartGains: number; meanAbsLogGain: number; blocks: number; boundaryTexels: number; refinedTexels: number; sunShadedViews: number; /** Blocks left on a view that is in shadow there while another view is not. */ shadowedBlocks: number; /** (block, view) candidates rejected as photo-inconsistent outliers. */ outlierViews?: number };
     /** The gradient-domain blend (present when it ran). */
     poisson?: PoissonBlendReport;
     /**
@@ -243,9 +247,17 @@ function sampleLinear(view: ProjectionView, x: number, y: number, out: Float64Ar
 
 const smoothstep01 = (t: number): number => { const x = Math.min(1, Math.max(0, t)); return x * x * (3 - 2 * x); };
 
+/** Bilinear lookup of a view's warp lattice (nodes span [0, W] x [0, H]). */
+function latticeAt(w: NonNullable<ProjectionView['warp']>, x: number, y: number, W: number, H: number): [number, number] {
+    const fx = Math.min(w.gw - 1, Math.max(0, (x / W) * (w.gw - 1))), fy = Math.min(w.gh - 1, Math.max(0, (y / H) * (w.gh - 1)));
+    const x0 = Math.min(w.gw - 2, Math.floor(fx)), y0 = Math.min(w.gh - 2, Math.floor(fy)), ax = fx - x0, ay = fy - y0, k = y0 * w.gw + x0;
+    const bl = (a: Float32Array) => (a[k] * (1 - ax) + a[k + 1] * ax) * (1 - ay) + (a[k + w.gw] * (1 - ax) + a[k + w.gw + 1] * ax) * ay;
+    return [bl(w.dx), bl(w.dy)];
+}
+
 /** Steps 1 to 3 for one view: its visible samples with weights. */
 function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: DepthMap, opts: Required<Pick<ProjectionBakeOptions,
-    'featherPx' | 'minCosIncidence' | 'depthToleranceBaseM' | 'depthTolerancePerMeter' | 'edgeGuardPx'>> & Pick<ProjectionBakeOptions, 'observedSurface' | 'poseEdgeGuardShare'>, context?: DepthMap): RawSamples {
+    'featherPx' | 'minCosIncidence' | 'depthToleranceBaseM' | 'depthTolerancePerMeter' | 'edgeGuardPx'>> & Pick<ProjectionBakeOptions, 'observedSurface' | 'poseEdgeGuardShare' | 'minResolution' | 'excludeTexels'>, context?: DepthMap): RawSamples {
     const { atlas } = input;
     const cam = view.camera;
     const out: RawSamples = { texel: [], rgb: [], logW: [], wAbs: [], x: [], y: [] };
@@ -271,6 +283,7 @@ function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: De
         out.caught = [0, 0, 0];
     }
     const rects = (view.redactionRects ?? []).map(([x0, y0, x1, y1]) => [x0 - 1, y0 - 1, x1 + 1, y1 + 1]);
+    const warp = view.warp;
     const col = new Float64Array(3);
     const g = opts.edgeGuardPx;
     /** Probe offsets of the depth-edge guard: the 4 axes and the 4 diagonals (a corner is diagonal from the pixel). */
@@ -318,8 +331,9 @@ function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: De
         }
         return VIS_OK;
     };
+    const exclude = opts.excludeTexels, minRes = opts.minResolution ?? 0;
     for (let t = 0; t < n; t++) {
-        if (!covered[t] || gutter[t]) continue;
+        if (!covered[t] || gutter[t] || (exclude && exclude[t])) continue;
         const o = t * 3;
         const dx = position[o] - cam.eye[0], dy = position[o + 1] - cam.eye[1], dz = position[o + 2] - cam.eye[2];
         const z = dx * cam.fwd[0] + dy * cam.fwd[1] + dz * cam.fwd[2];
@@ -344,17 +358,21 @@ function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: De
         }
         // weight
         const gsd = z / (cam.fx * cos);
+        if (minRes > 0 && sizeM[t] / gsd < minRes) continue;
         const res = Math.min(1, sizeM[t] / gsd);
         const feather = smoothstep01(edgeDist / opts.featherPx);
         if (!(feather > 0)) continue;
         const logW = Math.log(cos * cos * res * view.poseQuality * feather * poseSigmaTerm(view.poseSigmaPx, z, gsd));
         if (!Number.isFinite(logW)) continue;
-        sampleLinear(view, x, y, col);
+        // the photo's content for this texel, through the pano's non-rigid warp when it has one
+        let sx = x, sy = y;
+        if (warp) { const d = latticeAt(warp, x, y, W, H); sx = Math.min(W - 0.01, Math.max(0, x + d[0])); sy = Math.min(H - 0.01, Math.max(0, y + d[1])); }
+        sampleLinear(view, sx, sy, col);
         out.texel.push(t);
         out.rgb.push(col[0], col[1], col[2]);
         out.logW.push(logW);
         out.wAbs.push(Math.min(1, Math.exp(logW)));
-        out.x.push(x); out.y.push(y);
+        out.x.push(sx); out.y.push(sy);
     }
     return out;
 }
@@ -371,7 +389,8 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
         depthTolerancePerMeter: o.depthTolerancePerMeter ?? 0.02,
         edgeGuardPx: o.edgeGuardPx ?? 3,
         ...(o.observedSurface ? { observedSurface: o.observedSurface } : {}),
-        ...(o.poseEdgeGuardShare ? { poseEdgeGuardShare: o.poseEdgeGuardShare } : {})
+        ...(o.poseEdgeGuardShare ? { poseEdgeGuardShare: o.poseEdgeGuardShare } : {}),
+        ...(o.minResolution ? { minResolution: o.minResolution } : {}), ...(o.excludeTexels ? { excludeTexels: o.excludeTexels } : {})
     };
     const huberK = o.huberDeltaE ?? 10, huberMin = o.huberMinViews ?? 3;
     const bandSigmas = o.bandSigmasTexels ?? [1, 2, 4, 12, 32];
@@ -635,7 +654,15 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
         } : undefined;
         const sel = selectViewsPerRegion(atlas, samples, index, { ...(sunShaded ? { sunShaded } : {}), ...(typeof o.regionSelect === 'object' ? o.regionSelect : {}) });
         label = sel.label;
-        regions = { chartGains: g.pairs, meanAbsLogGain: g.meanAbsLogGain, blocks: sel.blocks, boundaryTexels: sel.changes, refinedTexels: sel.refined, sunShadedViews, shadowedBlocks: sel.shadowedBlocks };
+        // views rejected as photo-inconsistent left the weights: the mean again without them
+        if (sel.outliers) for (let t = 0; t < n; t++) {
+            const a = index.start[t], b = index.start[t + 1];
+            if (a === b) continue;
+            let r = 0, gg = 0, bl = 0;
+            for (let p = a; p < b; p++) { const w = index.weight[p], q = index.sample[p] * 3, rgb = samples[index.view[p]].rgb; r += w * rgb[q]; gg += w * rgb[q + 1]; bl += w * rgb[q + 2]; }
+            mean[t * 3] = r; mean[t * 3 + 1] = gg; mean[t * 3 + 2] = bl;
+        }
+        regions = { chartGains: g.pairs, meanAbsLogGain: g.meanAbsLogGain, blocks: sel.blocks, boundaryTexels: sel.changes, refinedTexels: sel.refined, sunShadedViews, shadowedBlocks: sel.shadowedBlocks, outlierViews: sel.outliers };
         timingsMs.regions = Date.now() - tRegions;
     }
     const tBands = Date.now();

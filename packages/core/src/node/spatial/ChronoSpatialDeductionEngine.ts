@@ -7,8 +7,13 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { getSolarPosition } from '../../common/coordinate/solarPosition';
+import { getSolarPosition, instantAtLocalMeanSolarTime, localMeanSolarHours } from '../../common/coordinate/solarPosition';
 import { MissingInputError } from '../../common/errors/pipeline-errors';
+
+function formatSolarHours(h: number): string {
+  const total = Math.round(h * 60) % (24 * 60);
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+}
 
 export interface ShadowDeductionInput {
   candidateLat: number;
@@ -49,11 +54,8 @@ export class ChronoSpatialDeductionEngine {
 
     for (let day = 1; day <= 365; day += dayStep) {
       for (let hour = 6.0; hour <= 18.0; hour += hourStep) {
-        // Construct target Date object matching this Julian Day & local hour
-        const testDate = new Date(year, 0, day);
-        const hoursFraction = Math.floor(hour);
-        const minsFraction = Math.round((hour - hoursFraction) * 60);
-        testDate.setHours(hoursFraction, minsFraction, 0, 0);
+        // The instant at which local mean solar time at the candidate reads `hour` on this day of the year
+        const testDate = instantAtLocalMeanSolarTime(year, 0, day, hour, input.candidateLng);
 
         const solar = getSolarPosition(testDate, input.candidateLat, input.candidateLng);
 
@@ -155,7 +157,7 @@ export class ChronoSpatialDeductionEngine {
 
     report += `2. TEMPORAL & SOLAR INVERSION ANALYSIS (WHEN)\n`;
     if (deduction) {
-      report += `   - Solved Date/Time  : ${deduction.estimatedDate.toDateString()} at ~${deduction.estimatedDate.toLocaleTimeString()}\n`;
+      report += `   - Solved Date/Time  : ${deduction.estimatedDate.toISOString()} (~${formatSolarHours(localMeanSolarHours(deduction.estimatedDate, lng))} local solar time)\n`;
       report += `   - Sun Altitude      : ${deduction.solarAltitudeDeg.toFixed(1)}°\n`;
       report += `   - Sun Azimuth       : ${deduction.solarAzimuthDeg.toFixed(1)}° (${deduction.solarAzimuthDeg < 180 ? 'Morning' : 'Afternoon'})\n`;
       report += `   - Shadow Ratio      : ${ratio.toFixed(2)}x Object Height\n`;
@@ -163,7 +165,7 @@ export class ChronoSpatialDeductionEngine {
       if (deduction.alternativeDates.length > 0) {
         report += `   - Alternative Solves:\n`;
         deduction.alternativeDates.forEach(alt => {
-          report += `     * ${alt.date.toDateString()} at ${alt.date.toLocaleTimeString()} (Confidence: ${(alt.confidenceScore * 100).toFixed(0)}%)\n`;
+          report += `     * ${alt.date.toISOString()} (~${formatSolarHours(localMeanSolarHours(alt.date, lng))} local solar time, Confidence: ${(alt.confidenceScore * 100).toFixed(0)}%)\n`;
         });
       }
     } else {

@@ -21,12 +21,47 @@ import {
 import { GeoFrame } from '../../../packages/core/src/common/coordinate/GeoFrame';
 import { getGoogle3DTilesClay } from '../../../packages/core/src/node/spatial/Google3DTileBlockoutPipelineService';
 import { LocationUnresolvedError, MediaModelUnavailableError, MissingInputError } from '../../../packages/core/src/common/errors/pipeline-errors';
+import { resolveWithinRoot } from '../../../packages/core/src/node/security/path-guard';
+import { RouteContext } from './types';
+import * as os from 'os';
 import { mapsKeyStatus, saveMapsKeySetting } from '../../../packages/core/src/node/spatial/maps-key-settings';
 import { geoidUndulation } from '../../../packages/core/src/node/spatial/egm96-geoid';
 import { ModelAnswerResolutionError } from '../../../packages/core/src/node/spatial/Google360PanoramaPipelineService';
 
-export function createTileCleanupRouter(tileCleanupService: PhotorealTileCleanupService): Router {
+export function createTileCleanupRouter(tileCleanupService: PhotorealTileCleanupService, ctx: RouteContext): Router {
     const router = Router();
+
+    // The tile to clean comes from the request: an uploaded GLB (glbBase64) or a path inside an allowed workspace root
+    // (inputGlbPath, relative to workspaceRoot). There is no built-in model.
+    const withInputTile = async <T>(body: any, run: (inputGlbPath: string) => Promise<T>): Promise<T> => {
+        if (typeof body?.glbBase64 === 'string' && body.glbBase64.length > 0) {
+            const buf = Buffer.from(body.glbBase64, 'base64');
+            if (buf.length < 12 || buf.toString('utf8', 0, 4) !== 'glTF') {
+                throw new MissingInputError('tile cleanup', 'glbBase64', 'the upload is not a binary glTF (.glb)');
+            }
+            const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sbx-tile-cleanup-'));
+            const file = path.join(dir, 'input.glb');
+            try {
+                await fs.writeFile(file, buf);
+                return await run(file);
+            } finally {
+                await fs.remove(dir);
+            }
+        }
+        if (typeof body?.inputGlbPath === 'string' && body.inputGlbPath.trim()) {
+            const root = ctx.requireWorkspaceRoot(body.workspaceRoot);
+            return run(resolveWithinRoot(root, body.inputGlbPath.trim()));
+        }
+        throw new MissingInputError('tile cleanup', 'glbBase64 or inputGlbPath', 'send the photogrammetric tile (.glb) to clean');
+    };
+
+    const sendCleanupError = (res: Response, err: any): void => {
+        if (err instanceof MissingInputError) {
+            res.status(400).json({ success: false, error: err.code, message: err.message });
+            return;
+        }
+        ctx.sendError(res, err);
+    };
 
     router.get('/status', (_req: Request, res: Response) => {
         res.json({
@@ -53,11 +88,12 @@ export function createTileCleanupRouter(tileCleanupService: PhotorealTileCleanup
                 roadWidthMeters
             } = req.body || {};
 
-            const result = await tileCleanupService.cleanPhotogrammetryTile({
+            const result = await withInputTile(req.body, inputGlbPath => tileCleanupService.cleanPhotogrammetryTile({
+                inputGlbPath,
                 angleThresholdDegrees: typeof angleThresholdDegrees === 'number' ? angleThresholdDegrees : 4.0,
                 snapToleranceMeters: typeof snapToleranceMeters === 'number' ? snapToleranceMeters : 0.85,
                 roadWidthMeters: typeof roadWidthMeters === 'number' ? roadWidthMeters : 8.0
-            });
+            }));
 
             res.json({
                 success: true,
@@ -66,10 +102,7 @@ export function createTileCleanupRouter(tileCleanupService: PhotorealTileCleanup
                 byteLength: result.glbBuffer ? result.glbBuffer.length : 0
             });
         } catch (err: any) {
-            res.status(500).json({
-                success: false,
-                error: err?.message || 'Tile cleanup pipeline execution failed'
-            });
+            sendCleanupError(res, err);
         }
     });
 
@@ -81,11 +114,12 @@ export function createTileCleanupRouter(tileCleanupService: PhotorealTileCleanup
                 roadWidthMeters
             } = req.body || {};
 
-            const result = await tileCleanupService.cleanPhotogrammetryTile({
+            const result = await withInputTile(req.body, inputGlbPath => tileCleanupService.cleanPhotogrammetryTile({
+                inputGlbPath,
                 angleThresholdDegrees: typeof angleThresholdDegrees === 'number' ? angleThresholdDegrees : 4.0,
                 snapToleranceMeters: typeof snapToleranceMeters === 'number' ? snapToleranceMeters : 0.85,
                 roadWidthMeters: typeof roadWidthMeters === 'number' ? roadWidthMeters : 8.0
-            });
+            }));
 
             if (!result.glbBuffer) {
                 res.status(500).json({ success: false, error: 'Failed to generate GLB buffer' });
@@ -96,10 +130,7 @@ export function createTileCleanupRouter(tileCleanupService: PhotorealTileCleanup
             res.setHeader('Content-Disposition', 'attachment; filename="cleaned_tile.glb"');
             res.send(result.glbBuffer);
         } catch (err: any) {
-            res.status(500).json({
-                success: false,
-                error: err?.message || 'Tile cleanup pipeline execution failed'
-            });
+            sendCleanupError(res, err);
         }
     });
 

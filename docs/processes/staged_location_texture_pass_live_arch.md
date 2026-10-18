@@ -344,3 +344,78 @@ Live:
 
 - A `staged_location_set_view` tool (target, heading, elevation, distance) and a capture endpoint that writes the active view to a file: I used `__SB_SET_CAMERA_VIEW__`, `__scratchbox_capture_active_3d_scene` and a localhost receiver.
 - A registration overlay endpoint: the mesh edges at the box and the edge pose on each grounding image (what the scratch harness drew), so a reviewer can see each pano's registration.
+
+## Round 5 (branch `joint-registration`, 2026-10-17)
+
+Worktree `.claude/worktrees/joint-registration`, from `origin/main` `0be7689d`. Ports: web 3062, API 3063, tools 3064 (server started from the worktree root with `npm run dev`). Live runs of `Washington Square Arch`, cold for the evidence (registration), vision/detail and texture stages (their caches cleared before each run; the tiles, remesh and fit stages cached): two with the round-4 behaviour (`SCRATCHBOX_STAGED_ROUND4_BASELINE=1`: runs `b1c2e1bb`, `24886740`), five with this round's changes as they were built (`091b3cd6`, `51e4a1d7`, `1a748aa5`, `01296671`, `e6cd6e49`), and four after the camera fix below (`863e1906` and its texture retry `3ae567f6`, `d408f5e9`, and the final run `decf63a4` on the pushed code). Screenshots (of `decf63a4`): `test-results/screenshots/texture_live_v5/` (`clay_*`, `tex_*`, `prov_*`, the same 9 view names as v4, 808 x 943 like v4; gitignored). The views were set with `__SB_SET_CAMERA_VIEW__` around the l3b box (front heading 33°, back 213°); front, back and the friezes match v4's framing, the pier and opening views are close but not identical.
+
+### What changed
+
+1. **Fit metric** (`texture-fit-metric.ts`, in the `TexturePassRecord` as `layers[].fit`, run note `texture_fit.json`). Per layer and per Street View view: the final textured layer is rendered from the view's pose (texel splat, z-buffered, the full tile mesh hides what stands in front), and compared with the photo on texels the view's own pano did not make: structural-edge chamfer both ways (long, strong segments at 640 px; px, lower is better), gradient NCC of the surface, and the layer's own geometry edges against the photo's (clay chamfer). Also on the photo-tier texels alone (`fit.photo`). Live this provenance-masked hold-out turned out to move with the bake (which texels a view's pano made changes with the selection), so a second, true hold-out was added: **leave one pano out** (`fit.loo`): the photo tier is baked again without each pano's views and that pano's views score it. It runs after every layer is textured, within what is left of the stage's 600 s limit.
+2. **Joint registration** (`pano-joint-registration.ts`, run note `joint_registration.json`). All panos of the structure are posed together by `StreetViewCrossViewRefiner` (robust Levenberg-Marquardt, two scales 360 / 640 px): the full mesh's sky silhouette, occluding contours and creases against the photo's sky boundary and structural segments (new edge term in the refiner), cross-view photo consistency of patches carried through the scan between every pair of views, priors about the start pose (the edge pose where its search locked onto the scan, else the box pose). Then a per-pano angular warp lattice (16 x 12, membrane + ridge regularised, capped 0.6°). The scan is split into a 3D checkerboard (1.5 m cells): the fit uses the even cells; every candidate (the round-4 per-pano choice, the joint poses, the joint poses with warps) is scored on the odd cells only, by the other panos' photos carried into each view against its own photo (chamfer and gradient NCC, as the texture metric). A candidate replaces the per-pano choice only if it is better there. The detail elements are placed again through the kept poses; the projection reads a photo through its pano's warp when one is kept. The refiner settings (minimum peak 0.4, margin 0.06, priors 0.8 m / 0.3 m / 0.6°) were chosen offline on a recorded live run's held-out cells (scratch replay; chamfer 9.16 -> 8.32 px, NCC 0.082 -> 0.097 against 8.75 / 0.093 with the refiner's defaults and 8.78 / 0.070 without the edge term).
+3. **View selection** (`texture-projection.ts`, `texture-seams.ts`): incidence floor cos 0.375 (68°), resolution floor (view GSD at most ~7 texels), and per region the photo-consistency outlier rejection of Waechter et al. 2014 (mean shift of the views' block colours; a view more than 14 ΔE from the mode leaves the region's choice and its weight leaves the blend), then the existing per-chart gains and Poisson blend.
+4. **Fitted surface off the scan** (`scan-deviation.ts`): per fitted texel, the point-to-triangle distance to the remeshed scan. More than 8 cm off (live: 40% of l3b, median 31 cm, p95 1 m; 14-19% of l3c / l4) the photos are sampled at the scan's surface under the texel (nearest scan point within 0.6 m) and carried to the fitted texel; texels with no scan within 0.6 m are not projected (tile/clay tier, `fitted_without_scan`). The first version left all off-scan texels to the tile tier: live that removed the spandrel Victories from the front (the viewport shows the fitted layer there, never the scan: a superseded layer is hidden as a whole, `texturedTwins.ts twinEligible`) and lowered the fit, so it was replaced the same day.
+5. **Camera model** (coordinator's finding from a parallel experiment, `StreetViewPoseRegistrar.ts groundingFocalPx`): the grounding API's requested fov is the horizontal fov of a 1920 x 1280 frame and every aspect is a centred crop at the same focal length, fx = 960 / tan(fov/2). The grounding cameras took the requested fov as the crop's own: fx 11% short for the 4:3 frames (1707 x 1280), 50% for square ones. Fixed in `castCamera`, `viewCamera`, the edge and joint registrations, the aim and survey fov requests and the native sample size (`frameCamera` stays a plain pinhole: rendered cube faces use it).
+
+### Synthetic checks (all fail without the change)
+
+- `texture-fit-metric.test.ts`: windows facade, three panos; the right texture scores chamfer < 1 px, NCC > 0.9, one shifted 0.4 m > 2 px worse and NCC 0.3 lower; a texture right only on a view's own texels scores badly from that view; leave-one-pano-out with one pano's stated pose 0.4 m off scores > 1 px worse.
+- `staged-location-joint-registration.test.ts`: coursing facade, five panos with up to 1 m / 0.8° pose error, scan 0.2 m off at the parapet and 0.15 m at the opening. Held-out chamfer 4.07 -> 2.72 px; true reprojection error of held-out points 4.38 px (per-pano choice) -> 0.96 px (joint).
+- `texture-view-selection.test.ts` (outlier view out of the choice and the weights; grazing and coarse views dropped; off-scan texels find the scan under them, texels with no scan near are not projected). `streetview-grounding-intrinsics.test.ts` pins fx = fy = 960 / tan(fov/2) and the principal point at the crop centre for 16:9, 4:3, 1:1, 9:16 and downscaled copies.
+
+### Held-out fit, before and after
+
+Registration, paired on each run's own held-out cells (round-4 per-pano choice -> joint; chamfer px / gradient NCC):
+
+| Run | Per-pano choice | Joint | Kept | Cross-view matches (median residual) |
+|---|---|---|---|---|
+| `091b3cd6` (first version) | 9.62 / 0.087 | 8.47 / 0.091 | joint | 76 -> 70 (3.2 -> 2.1 px) |
+| `1a748aa5` (tuned) | 9.27 / 0.082 | 7.88 / 0.094 | joint | 118 -> 125 (3.7 -> 3.3 px) |
+| `01296671` | 9.37 / 0.096 | 8.72 / 0.082 | per-pano (old rule: NCC loss > 0.01) | |
+| `e6cd6e49` | 8.91 / 0.093 | 7.95 / 0.115 | joint | 168 -> 179 (3.5 -> 3.1 px) |
+| `3ae567f6` (camera fix) | 8.19 / 0.149 | 7.09 / 0.210 | joint | 489 -> 527 (2.2 -> 1.8 px) |
+| `d408f5e9` (camera fix) | 8.02 / 0.141 | 7.31 / 0.190 | joint | 478 -> 496 (1.9 -> 1.6 px) |
+| `decf63a4` (final) | 8.48 / 0.116 | 7.38 / 0.157 | joint | 385 -> 382 (2.1 -> 1.7 px) |
+
+The warps never improved the held-out score by the margin (0.1 px at best), so none was kept. With the camera fix the cross-view matches quadrupled and their residual fell to 1.6-1.8 px.
+
+Texture, leave one pano out (the four panos with close-ups judge; the close-ups are never used by the registration). Paired on identical inputs (a recorded run's views, offline, before the camera fix), round-4 behaviour -> each change:
+
+| Layer | Round 4 | Joint poses | View selection + off-scan | All three |
+|---|---|---|---|---|
+| l3b | 8.19 / 0.001 | 8.13 / 0.012 | 8.04 / 0.015 | 7.93 / 0.020 |
+| l2 | 8.31 / 0.007 | 8.28 / 0.007 | 8.20 / 0.011 | 7.89 / 0.024 |
+
+Live, leave one pano out after the camera fix (`3ae567f6`): l2 5.49 / 0.267, l3b 4.82 / 0.267, l3c 5.92 / 0.132, l3cf 5.94 / 0.132, l4 5.06 / 0.264; final run `decf63a4`: l2 5.95 / 0.243, l3b 5.51 / 0.229, l3c 5.99 / 0.240 (l3cf, l4, l4f had no time left in the stage's limit). Before the fix, run `e6cd6e49`: l2 7.78 / 0.030, l3b 7.28 / 0.036, l3cf 8.04 / 0.016, l4 6.38 / -0.031. The provenance-masked fit varied as much between two round-4 runs (l3b 7.47 / 0.256 and 7.08 / 0.017) as between rounds; after the fix l3b 6.87 / 0.189, l2 7.88 / 0.143, l4 6.62 / 0.123.
+
+The final run `decf63a4` committed every stage but the photo reading and detail (degraded as in every round: elements outside their slots or rejected by the gate), with no server error; seam p95 l2 19.3 (interior 17.2), l3b 17.9 (16.6), l3c 13.3 (17.4), l4 13.0 (14.4); leak share 0.3% (l2), 0.7% (l3b), 0.7% (l4). Other numbers (`3ae567f6`): output seam p95 l2 15.9 (interior 17.4), l3b 17.2 (13.7), l3c 18.7 (17.5), l4 8.3 (14.2); leak share caught by the scan 0.6% (l2), 1.3% (l3b), 0% (l3c), 1.8% (l4); Street View share l2 29%, l3b 25%, l3c 75%, l4 45%. Timings: joint registration 90-107 s (scoring 15 s of it), scan deviation 1-13 s per layer, fit 1-5 s, leave-one-pano-out 27-134 s per layer.
+
+Detail reprojection gate (median IoU of the built elements against the boxes they were read from): v4 0.19; round-4 behaviour 0.27 and 0.22; joint poses before the camera fix 0.04, 0.09, 0.17 (the run whose joint poses were not kept); after the fix 0.35 (`3ae567f6`), 0.26 (`d408f5e9`) and 0.34 (`decf63a4`, 29 of 36 accepted). The reading itself changes from run to run (25-43 elements), so this is a weak measure of the poses; it was worse with the joint poses before the camera fix and better after it.
+
+### What I saw (`texture_live_v5` against v4)
+
+- **Better:**
+  - Back (`tex_frieze_back`): the patchwork of offset blocks is gone; the frieze, the keystone eagle and the spandrel reliefs run continuously, and the attic inscription is readable in part. Front (`tex_frieze_front`): the attic inscription reads ("TO COMMEMORATE THE ONE HUNDREDTH ANNIVERSARY ... WASHINGTON"), the keystone eagle, dentils and frieze wreaths line up across the views.
+  - Inner pier (`tex_opening`): the coffers are now on the vault above the impost, not on the pier; no fence or background cornice on the pier. In the replay before the camera fix the coffers stayed on the pier with the joint poses, the full-mesh depth test and the scan sampling all on (that region of the pier is on the scan, 0% off-scan), so the contamination was the camera model, not occlusion.
+  - Back pier (`tex_pier_back_left`): coursing and the Greek key band are sharp where v4 was blurred tile texture.
+- **Still wrong:**
+  - Front-right pier (`3ae567f6`): a bright built ring (l4) sat slightly off the texture's medallion; in the final run the pier medallions read as one ring each.
+  - The front spandrel Victories read less clearly than in v4 (darker, some streaks along the courses).
+  - A blue sky patch sits on the top of the back attic (a leak onto a texel no view sees well).
+  - The statue pedestals still carry some of the park fence.
+
+### Bugs found live and fixed
+
+- Leaving off-scan fitted texels to the tile tier hid carved relief (above, item 4).
+- The leave-one-pano-out re-bakes inside each layer's pass starved the other layers' native unwrappers (`island unwrapper timed out after 120000 ms`, run `863e1906`), then, moved to the end of the stage, pushed it past its 600 s limit (`d408f5e9`): it now runs after the layers and only in what is left of the limit.
+
+### Open issues (after round 5)
+
+- The viewport shows a layer as a whole: where the fitted solid departs from the scan the scan's own texture is never shown; per-region layer choice would need the viewport to cut the fitted layer.
+- The per-pano warps never helped; with the camera fix the rigid poses already agree to 1.6-1.8 px on the training matches.
+- The coordinator's experiment suggests a stronger chain: anchor each pano by a wide view aligned to the tile's sky outline, map the narrow views of the same pano by pure rotation (feature matches between the views of one pano), and other panos by feature matches to a reference pano. The joint registration already shares one rigid pose per pano across its frames; the feature-matched same-pano rotation is not used.
+- The provenance-masked fit is a weak comparison across runs; the leave-one-pano-out fit is the one to compare, and it was added late, so round 4 has it only from the offline replay.
+
+### Candidate tool/service ideas
+
+- A replay endpoint for a run's registration and texture inputs (frames, views, meshes), so changes are compared on identical inputs; this round used local dumps and scratch replays for that.

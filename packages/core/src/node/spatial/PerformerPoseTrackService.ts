@@ -10,7 +10,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { execFileSync } from 'child_process';
+import { execFileBuffer } from '../process/exec-file-async';
 
 /** [x, y, z, visibility]; image landmarks are normalized, world landmarks are metric hip-centred Y-down. */
 export type PoseLandmarkTuple = [number, number, number, number];
@@ -40,6 +40,8 @@ export interface TrackVideoOptions {
     maxWidth?: number;
     maskOutputPath?: string;
     pythonBinary?: string;
+    /** Aborting it kills the tracking child process. */
+    signal?: AbortSignal;
 }
 
 function findRepoFile(relative: string): string | null {
@@ -84,7 +86,7 @@ export class PerformerPoseTrackService {
         return track;
     }
 
-    public trackVideo(inputPath: string, options: TrackVideoOptions = {}): PerformerPoseTrack {
+    public async trackVideo(inputPath: string, options: TrackVideoOptions = {}): Promise<PerformerPoseTrack> {
         if (!fs.existsSync(inputPath)) {
             throw new Error(`Pose tracking input not found: ${inputPath}`);
         }
@@ -100,8 +102,9 @@ export class PerformerPoseTrackService {
         if (options.maskOutputPath) args.push('--mask-output', options.maskOutputPath);
 
         try {
-            execFileSync(python, args, { stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024, timeout: 15 * 60 * 1000 });
+            await execFileBuffer(python, args, { maxBuffer: 64 * 1024 * 1024, timeoutMs: 15 * 60 * 1000, signal: options.signal });
         } catch (err: any) {
+            if (options.signal?.aborted) throw err;
             const stderr = String(err?.stderr || '').split('\n').filter(l => l && !/^[IW]0000/.test(l)).slice(-6).join('\n');
             throw new Error(
                 `MediaPipe pose tracking failed (${python}). Install with ` +

@@ -75,9 +75,19 @@ export interface MapsImageryGroundingResult {
     erpWidth?: number;
     erpHeight?: number;
     status: string;
-    embedUrl?: string;
+    /** Keyless Google Maps URLs link that opens this panorama (never carries an API key). */
+    viewerUrl?: string;
     groundingChunks?: MapsImageryChunk[];
     error?: string;
+}
+
+export type MapsImageryGroundingErrorCode = 'NO_VERTEX_PROJECT' | 'NO_PANORAMA' | (string & {});
+
+export class MapsImageryGroundingError extends Error {
+    constructor(public readonly code: MapsImageryGroundingErrorCode, message: string) {
+        super(message);
+        this.name = 'MapsImageryGroundingError';
+    }
 }
 
 /**
@@ -118,16 +128,20 @@ export class MapsImageryGroundingService {
         const model = options.model || 'gemini-3.1-flash-image';
         let projectId = options.projectId || process.env.GOOGLE_CLOUD_PROJECT;
         if (!projectId) {
+            let reason = 'no project id was returned';
             try {
                 const credService = new GoogleMediaCredentialsService();
                 const authInfo = await credService.getVertexAuth();
                 projectId = authInfo.project;
-            } catch {
-                projectId = 'scratchbox-ai';
+            } catch (err: any) {
+                reason = err?.message || String(err);
             }
-        }
-        if (!projectId) {
-            projectId = 'scratchbox-ai';
+            if (!projectId) {
+                throw new MapsImageryGroundingError(
+                    'NO_VERTEX_PROJECT',
+                    `Maps Imagery Grounding needs a Google Cloud project for Vertex AI. Pass projectId, set GOOGLE_CLOUD_PROJECT, or configure Vertex credentials (${reason}).`
+                );
+            }
         }
 
         const payload = {
@@ -221,6 +235,7 @@ export class MapsImageryGroundingService {
         const fetchImpl = query.fetchImpl || fetch;
         let panoId = query.panoId?.trim();
         let groundingChunks: MapsImageryChunk[] = [];
+        let migFailure: string | undefined;
 
         // 1. If no panoId, resolve via Maps Imagery Grounding or Street View metadata
         if (!panoId) {
@@ -233,6 +248,7 @@ export class MapsImageryGroundingService {
                         panoId = firstChunk.panoId;
                     }
                 } catch (err: any) {
+                    migFailure = err?.message || String(err);
                     console.warn(`[MapsImageryGroundingService] MIG Vertex AI query failed, falling back to geocoding / metadata: ${err?.message}`);
                 }
             }
@@ -263,9 +279,13 @@ export class MapsImageryGroundingService {
             }
         }
 
-        // If still no panoId, default to iconic Shibuya Crossing
         if (!panoId) {
-            panoId = 'CAoSF0NJSE0wb2dLRUlDQWdJRHE4NkMtbXdF'; // Shibuya Crossing default
+            throw new MapsImageryGroundingError(
+                'NO_PANORAMA',
+                migFailure
+                    ? `No Street View panorama could be resolved: Maps Imagery Grounding failed (${migFailure}) and no lat/lng was given. Pass panoId or lat/lng.`
+                    : 'No Street View panorama could be resolved for this request. Pass panoId, lat/lng, or a prompt that Maps Imagery Grounding can resolve to a panorama.'
+            );
         }
 
         // 2. Fetch Street View metadata and 4/6 cubic perspective faces
@@ -297,7 +317,8 @@ export class MapsImageryGroundingService {
         await fs.writeFile(outPath, erpResult.png);
 
         const relativeUrl = `/panoramas/sv_${cleanPanoId}.png`;
-        const embedUrl = `https://www.google.com/maps/embed/v1/streetview?key=${apiKey}&pano=${encodeURIComponent(
+        // Keyless Maps URLs link: the API key must never be returned in a tool result.
+        const viewerUrl = `https://www.google.com/maps/@?api=1&map_action=pano&pano=${encodeURIComponent(
             metadata.panoId
         )}&heading=0&pitch=0&fov=90`;
 
@@ -316,7 +337,7 @@ export class MapsImageryGroundingService {
             erpWidth: erpResult.width,
             erpHeight: erpResult.height,
             status: metadata.status || 'OK',
-            embedUrl,
+            viewerUrl,
             groundingChunks: groundingChunks.length > 0 ? groundingChunks : undefined
         };
     }

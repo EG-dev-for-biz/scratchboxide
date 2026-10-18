@@ -120,8 +120,8 @@ const TARGET_ELEMENT_ARRAY_BUFFER = 34963;
 const FLOAT = 5126;
 const UNSIGNED_INT = 5125;
 
-const COMPONENT_SIZE: Record<number, number> = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 };
-const TYPE_COMPONENTS: Record<string, number> = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT2: 4, MAT3: 9, MAT4: 16 };
+export const COMPONENT_SIZE: Record<number, number> = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 };
+export const TYPE_COMPONENTS: Record<string, number> = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT2: 4, MAT3: 9, MAT4: 16 };
 
 /** Sidecar flag values written by the native rectifier. */
 export const SBRX_FLAG_HIDDEN = 0;
@@ -187,7 +187,7 @@ export function serializeGlb(doc: GlbDocument): Buffer {
 // Accessor access (validity rules mirror GlbSceneReader::accessor)
 // ---------------------------------------------------------------------------
 
-interface ResolvedAccessor {
+export interface ResolvedAccessor {
     /** Absolute byte offset of element 0 inside the BIN chunk. */
     offset: number;
     stride: number;
@@ -197,7 +197,8 @@ interface ResolvedAccessor {
     elementSize: number;
 }
 
-function resolveAccessor(doc: GlbDocument, index: number | undefined): ResolvedAccessor | null {
+/** Locates an accessor's elements inside the BIN chunk; null when it has no readable data (no bufferView, sparse-only, out of range). */
+export function resolveAccessor(doc: GlbDocument, index: number | undefined): ResolvedAccessor | null {
     const accessors = doc.json.accessors ?? [];
     if (index === undefined || index < 0 || index >= accessors.length || doc.bin.length === 0) return null;
     const acc = accessors[index];
@@ -312,8 +313,21 @@ export interface SceneTriangleLayout {
     triangleCount: number;
 }
 
-/** Enumerates every triangle primitive instance exactly as GlbSceneReader merges them. */
-export function enumerateSceneTriangles(doc: GlbDocument): SceneTriangleLayout {
+/** A primitive of a rendered mesh that `enumerateSceneTriangles` leaves out, and why. */
+export interface SkippedScenePrimitive {
+    nodeIndex: number;
+    meshIndex: number;
+    primitiveIndex: number;
+    /** 'non_triangle_mode' (lines, points, strips, fans), 'missing_position' or 'unreadable_position' (not a readable VEC3 accessor). */
+    kind: 'non_triangle_mode' | 'missing_position' | 'unreadable_position';
+    mode: number;
+}
+
+/**
+ * Enumerates every triangle primitive instance exactly as GlbSceneReader merges them.
+ * When `skipped` is given, every primitive of a rendered mesh that is left out is appended to it with the reason.
+ */
+export function enumerateSceneTriangles(doc: GlbDocument, skipped?: SkippedScenePrimitive[]): SceneTriangleLayout {
     const json = doc.json;
     const nodes = json.nodes ?? [];
     const meshes = json.meshes ?? [];
@@ -338,10 +352,17 @@ export function enumerateSceneTriangles(doc: GlbDocument): SceneTriangleLayout {
         const meshIndex = node.mesh;
         if (meshIndex !== undefined && meshIndex >= 0 && meshIndex < meshes.length) {
             meshes[meshIndex].primitives.forEach((prim, primitiveIndex) => {
-                if ((prim.mode ?? 4) !== 4) return;
+                const mode = prim.mode ?? 4;
+                if (mode !== 4) {
+                    skipped?.push({ nodeIndex, meshIndex, primitiveIndex, kind: 'non_triangle_mode', mode });
+                    return;
+                }
                 const posIndex = prim.attributes?.POSITION;
                 const pos = resolveAccessor(doc, posIndex);
-                if (!pos || pos.components !== 3) return;
+                if (!pos || pos.components !== 3) {
+                    skipped?.push({ nodeIndex, meshIndex, primitiveIndex, kind: posIndex === undefined ? 'missing_position' : 'unreadable_position', mode });
+                    return;
+                }
                 const idx = resolveAccessor(doc, prim.indices);
                 const indexCount = idx ? idx.count : pos.count;
                 const tris: number[] = [];

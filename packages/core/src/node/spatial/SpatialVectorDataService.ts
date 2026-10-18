@@ -22,8 +22,7 @@ import {
     mvtPointToLatLng,
     DecodedVectorTileData,
     VectorFeaturePolygon,
-    VectorFeatureLine,
-    DEFAULT_GOOGLE_MAPS_API_KEY
+    VectorFeatureLine
 } from './GoogleVectorTileService';
 import { LocalTangentPlane, Vec3 } from '../../common/coordinate/LocalTangentPlane';
 import { SpatialAssetVaultService } from './SpatialAssetVaultService';
@@ -726,9 +725,9 @@ export class SpatialVectorDataService {
         const tileLatNorth = (Math.atan(Math.sinh(Math.PI * (1 - 2 * tileY / nTiles))) * 180) / Math.PI;
         const tileLatSouth = (Math.atan(Math.sinh(Math.PI * (1 - 2 * (tileY + 1) / nTiles))) * 180) / Math.PI;
 
-        const mapsKey = options.apiKey || (typeof process !== 'undefined' ? process.env?.GOOGLE_MAPS_API_KEY || process.env?.MAP_TILES_API_KEY || '' : '') || DEFAULT_GOOGLE_MAPS_API_KEY;
+        // Keyless: callers that fetch it append their own key; the key must never travel in a returned dataset.
         const mapType = options.layer ?? 'satellite';
-        const staticMapUrl = `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=${z}&size=1024x1024&scale=2&maptype=${mapType}&key=${mapsKey}`;
+        const staticMapUrl = `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=${z}&size=1024x1024&scale=2&maptype=${mapType}`;
 
         return {
             source: mapType === 'hybrid' ? 'google_hybrid' : 'google_satellite',
