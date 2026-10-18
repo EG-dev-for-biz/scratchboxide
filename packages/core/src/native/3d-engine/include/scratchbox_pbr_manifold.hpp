@@ -21,6 +21,7 @@
 #include <thread>
 #include <future>
 #include <functional>
+#include <stdexcept>
 
 namespace scratchbox {
 namespace pbr_manifold {
@@ -169,136 +170,77 @@ inline ContinuousMaterialDescriptor blend(
     return res;
 }
 
+/** A named example point in the continuous material space: data that synthesis never branches on. */
+struct ManifoldExample {
+    uint32_t id;
+    const char* name;
+    ContinuousMaterialDescriptor descriptor;
+};
+
 /**
- * Returns pre-calibrated landmark anchor points in the continuous manifold.
- * These represent standardized reference points (e.g. Indiana Limestone, Carrara Marble,
- * Brushed Titanium), but remain continuous points that can be morphed or perturbed.
+ * The named example descriptors. Eight are written out in full; the other ids of the 50-entry
+ * pbr_texture catalogue take that entry's albedo, metallic, roughness and normal strength (secondary colour
+ * 0.75 x albedo, micro-porosity 0.45 x roughness, the rest the descriptor defaults). Synthesis reads only the
+ * descriptor; the ids and names are a lookup convenience.
+ */
+inline const std::vector<ManifoldExample>& manifoldExamples() {
+    static const std::vector<ManifoldExample> table = [] {
+        using D = ContinuousMaterialDescriptor;
+        std::vector<ManifoldExample> t = {
+            {0, "Indiana Limestone", D{.albedoLinear = Vec3(0.78f, 0.74f, 0.67f), .secondaryAlbedo = Vec3(0.68f, 0.64f, 0.58f), .secondaryWeight = 0.20f,
+                .conduction = 0.0f, .roughnessBaseline = 0.86f, .microPorosity = 0.42f, .normalStrength = 1.6f, .fissureScale = 12.0f, .fissureDepth = 0.18f,
+                .cellularWeight = 0.15f, .graininess = 0.35f}},
+            {2, "Roman Travertine", D{.albedoLinear = Vec3(0.85f, 0.81f, 0.72f), .secondaryAlbedo = Vec3(0.55f, 0.48f, 0.38f), .secondaryWeight = 0.35f,
+                .conduction = 0.0f, .roughnessBaseline = 0.48f, .microPorosity = 0.55f, .normalStrength = 2.4f, .fissureScale = 6.0f, .fissureDepth = 0.45f,
+                .cellularWeight = 0.40f, .anisotropyStrength = 0.65f, .anisotropyAngleRad = 0.0f}},
+            {4, "Carrara Statuario Marble", D{.albedoLinear = Vec3(0.92f, 0.92f, 0.93f), .secondaryAlbedo = Vec3(0.38f, 0.40f, 0.44f), .secondaryWeight = 0.18f,
+                .conduction = 0.0f, .roughnessBaseline = 0.12f, .microPorosity = 0.08f, .normalStrength = 0.65f, .fissureScale = 4.0f, .fissureDepth = 0.12f,
+                .cellularWeight = 0.20f, .graininess = 0.05f}},
+            {10, "Weathered Concrete", D{.albedoLinear = Vec3(0.52f, 0.51f, 0.50f), .secondaryAlbedo = Vec3(0.38f, 0.36f, 0.34f), .secondaryWeight = 0.30f,
+                .conduction = 0.0f, .roughnessBaseline = 0.88f, .microPorosity = 0.60f, .normalStrength = 2.2f, .fissureScale = 14.0f, .fissureDepth = 0.35f,
+                .cellularWeight = 0.50f, .graininess = 0.45f}},
+            {18, "Statuary Bronze", D{.albedoLinear = Vec3(0.70f, 0.52f, 0.33f), .secondaryAlbedo = Vec3(0.35f, 0.25f, 0.15f), .secondaryWeight = 0.20f,
+                .conduction = 0.95f, .roughnessBaseline = 0.32f, .microPorosity = 0.22f, .normalStrength = 1.4f, .fissureScale = 8.0f, .fissureDepth = 0.20f,
+                .cellularWeight = 0.10f, .graininess = 0.15f}},
+            {20, "Brushed Titanium", D{.albedoLinear = Vec3(0.72f, 0.74f, 0.76f), .secondaryAlbedo = Vec3(0.55f, 0.58f, 0.62f), .secondaryWeight = 0.15f,
+                .conduction = 0.98f, .roughnessBaseline = 0.30f, .microPorosity = 0.15f, .normalStrength = 1.2f, .fissureScale = 32.0f, .fissureDepth = 0.10f,
+                .cellularWeight = 0.05f, .graininess = 0.08f, .anisotropyStrength = 0.90f, .anisotropyAngleRad = 0.0f}},
+            {23, "Cor-Ten Weathering Steel", D{.albedoLinear = Vec3(0.58f, 0.28f, 0.15f), .secondaryAlbedo = Vec3(0.35f, 0.16f, 0.08f), .secondaryWeight = 0.40f,
+                .conduction = 0.70f, .roughnessBaseline = 0.85f, .microPorosity = 0.65f, .normalStrength = 2.5f, .fissureScale = 16.0f, .fissureDepth = 0.38f,
+                .cellularWeight = 0.45f, .graininess = 0.50f}},
+            {30, "Low-E Glazing", D{.albedoLinear = Vec3(0.88f, 0.92f, 0.95f), .secondaryAlbedo = Vec3(0.70f, 0.82f, 0.88f), .secondaryWeight = 0.05f,
+                .conduction = 0.10f, .roughnessBaseline = 0.04f, .microPorosity = 0.02f, .normalStrength = 0.3f, .fissureScale = 2.0f, .fissureDepth = 0.02f,
+                .cellularWeight = 0.02f, .graininess = 0.01f}}
+        };
+        const auto& cat = pbr_texture::get50PbrMaterialCatalog();
+        for (uint32_t id = 0; id < cat.size(); ++id) {
+            bool written = false;
+            for (const auto& e : t) written = written || e.id == id;
+            if (written) continue;
+            const auto& entry = cat[id];
+            D d;
+            d.albedoLinear = entry.baseAlbedo;
+            d.conduction = entry.baseMetallic;
+            d.roughnessBaseline = entry.baseRoughness;
+            d.normalStrength = entry.defaultNormalStrength;
+            d.secondaryAlbedo = entry.baseAlbedo * 0.75f;
+            d.microPorosity = entry.baseRoughness * 0.45f;
+            t.push_back({id, entry.displayName.c_str(), d});
+        }
+        return t;
+    }();
+    return table;
+}
+
+/**
+ * The example descriptor with this id. An id that is not in the table throws std::out_of_range: no other
+ * example is substituted (ids do not wrap).
  */
 inline ContinuousMaterialDescriptor getAnchorManifoldPoint(uint32_t anchorId) {
-    ContinuousMaterialDescriptor d;
-    switch (anchorId % 50) {
-        case 0: // Indiana Limestone
-            d.albedoLinear = Vec3(0.78f, 0.74f, 0.67f);
-            d.secondaryAlbedo = Vec3(0.68f, 0.64f, 0.58f);
-            d.secondaryWeight = 0.20f;
-            d.conduction = 0.0f;
-            d.roughnessBaseline = 0.86f;
-            d.microPorosity = 0.42f;
-            d.normalStrength = 1.6f;
-            d.fissureScale = 12.0f;
-            d.fissureDepth = 0.18f;
-            d.cellularWeight = 0.15f;
-            d.graininess = 0.35f;
-            break;
-        case 2: // Roman Travertine
-            d.albedoLinear = Vec3(0.85f, 0.81f, 0.72f);
-            d.secondaryAlbedo = Vec3(0.55f, 0.48f, 0.38f);
-            d.secondaryWeight = 0.35f;
-            d.conduction = 0.0f;
-            d.roughnessBaseline = 0.48f;
-            d.microPorosity = 0.55f;
-            d.normalStrength = 2.4f;
-            d.fissureScale = 6.0f;
-            d.fissureDepth = 0.45f;
-            d.anisotropyStrength = 0.65f; // Horizontal bedding elongation
-            d.anisotropyAngleRad = 0.0f;
-            d.cellularWeight = 0.40f;
-            break;
-        case 4: // Carrara Statuario Marble
-            d.albedoLinear = Vec3(0.92f, 0.92f, 0.93f);
-            d.secondaryAlbedo = Vec3(0.38f, 0.40f, 0.44f);
-            d.secondaryWeight = 0.18f;
-            d.conduction = 0.0f;
-            d.roughnessBaseline = 0.12f;
-            d.microPorosity = 0.08f;
-            d.normalStrength = 0.65f;
-            d.fissureScale = 4.0f;
-            d.fissureDepth = 0.12f;
-            d.cellularWeight = 0.20f;
-            d.graininess = 0.05f;
-            break;
-        case 10: // Weathered Concrete
-            d.albedoLinear = Vec3(0.52f, 0.51f, 0.50f);
-            d.secondaryAlbedo = Vec3(0.38f, 0.36f, 0.34f);
-            d.secondaryWeight = 0.30f;
-            d.conduction = 0.0f;
-            d.roughnessBaseline = 0.88f;
-            d.microPorosity = 0.60f;
-            d.normalStrength = 2.2f;
-            d.fissureScale = 14.0f;
-            d.fissureDepth = 0.35f;
-            d.cellularWeight = 0.50f;
-            d.graininess = 0.45f;
-            break;
-        case 18: // Statuary Bronze
-            d.albedoLinear = Vec3(0.70f, 0.52f, 0.33f);
-            d.secondaryAlbedo = Vec3(0.35f, 0.25f, 0.15f);
-            d.secondaryWeight = 0.20f;
-            d.conduction = 0.95f;
-            d.roughnessBaseline = 0.32f;
-            d.microPorosity = 0.22f;
-            d.normalStrength = 1.4f;
-            d.fissureScale = 8.0f;
-            d.fissureDepth = 0.20f;
-            d.cellularWeight = 0.10f;
-            d.graininess = 0.15f;
-            break;
-        case 20: // Brushed Titanium
-            d.albedoLinear = Vec3(0.72f, 0.74f, 0.76f);
-            d.secondaryAlbedo = Vec3(0.55f, 0.58f, 0.62f);
-            d.secondaryWeight = 0.15f;
-            d.conduction = 0.98f;
-            d.roughnessBaseline = 0.30f;
-            d.microPorosity = 0.15f;
-            d.normalStrength = 1.2f;
-            d.fissureScale = 32.0f;
-            d.fissureDepth = 0.10f;
-            d.anisotropyStrength = 0.90f; // Fine directional brush lines
-            d.anisotropyAngleRad = 0.0f;
-            d.cellularWeight = 0.05f;
-            d.graininess = 0.08f;
-            break;
-        case 23: // Cor-Ten Weathering Steel
-            d.albedoLinear = Vec3(0.58f, 0.28f, 0.15f);
-            d.secondaryAlbedo = Vec3(0.35f, 0.16f, 0.08f);
-            d.secondaryWeight = 0.40f;
-            d.conduction = 0.70f;
-            d.roughnessBaseline = 0.85f;
-            d.microPorosity = 0.65f;
-            d.normalStrength = 2.5f;
-            d.fissureScale = 16.0f;
-            d.fissureDepth = 0.38f;
-            d.cellularWeight = 0.45f;
-            d.graininess = 0.50f;
-            break;
-        case 30: // Low-E Glazing
-            d.albedoLinear = Vec3(0.88f, 0.92f, 0.95f);
-            d.secondaryAlbedo = Vec3(0.70f, 0.82f, 0.88f);
-            d.secondaryWeight = 0.05f;
-            d.conduction = 0.10f;
-            d.roughnessBaseline = 0.04f;
-            d.microPorosity = 0.02f;
-            d.normalStrength = 0.3f;
-            d.fissureScale = 2.0f;
-            d.fissureDepth = 0.02f;
-            d.cellularWeight = 0.02f;
-            d.graininess = 0.01f;
-            break;
-        default:
-            // Continuous fallback anchor populated from pbr_texture::get50PbrMaterialCatalog
-            auto cat = pbr_texture::get50PbrMaterialCatalog();
-            if (anchorId < cat.size()) {
-                const auto& entry = cat[anchorId];
-                d.albedoLinear = entry.baseAlbedo;
-                d.conduction = entry.baseMetallic;
-                d.roughnessBaseline = entry.baseRoughness;
-                d.normalStrength = entry.defaultNormalStrength;
-                d.secondaryAlbedo = entry.baseAlbedo * 0.75f;
-                d.microPorosity = entry.baseRoughness * 0.45f;
-            }
-            break;
+    for (const auto& e : manifoldExamples()) {
+        if (e.id == anchorId) return e.descriptor;
     }
-    return d;
+    throw std::out_of_range("getAnchorManifoldPoint: no example descriptor with id " + std::to_string(anchorId));
 }
 
 /**

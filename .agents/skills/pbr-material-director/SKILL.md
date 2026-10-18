@@ -109,8 +109,8 @@ const result = await call_tool('pbr_synthesize_material', {
 
 **Parameters:**
 - `resolution`: Multi-res tier (`'1K'`, `'2K'`, `'4K'`, `'8K'`, `'12K'`) or integer pixel dimension (e.g. `4096`).
-- `archetype`: Optional base anchor from the 50-material biophysical library (e.g. `'carrara_marble'`, `'cor_ten_steel'`, `'roman_travertine'`, `'aerospace_carbon_fiber'`).
-- `descriptor`: Partial or full `ContinuousMaterialDescriptor` in $\mathbb{R}^{20}$.
+- `descriptor`: The material, as a `ContinuousMaterialDescriptor` in $\mathbb{R}^{20}$, filled from the user's description of the surface. Without an archetype it must give `albedoLinear`, `conduction` and `roughnessBaseline` (the rest default to neutral noise settings).
+- `archetype`: Optional shortcut to a named example descriptor (e.g. `'carrara_marble'`, `'corten_steel'`, `'roman_travertine'`); `descriptor` fields override it. An unknown name fails with the key list. With neither archetype nor descriptor the call fails: no material is assumed.
 - `format`: Output format:
   - `'png_pack'` (default): Writes individual Albedo, Normal, ORM, and Height PNG files.
   - `'glb'`: Generates a fully textured, normal-mapped 3D test plinth in standard binary glTF 2.0 format.
@@ -122,11 +122,7 @@ const result = await call_tool('pbr_synthesize_material', {
 - `outputFileName`: Base filename prefix.
 
 ### 2. `pbr_get_material_catalog`
-Returns the calibrated 50-archetype biophysical library and parameter spaces:
-- Architectural stones (Limestone, Travertine, Marble, Basalt, Granite)
-- Structural metals (Cor-Ten steel, Brushed Titanium, Cast Iron, Copper patina)
-- High-tech composites (Aerospace carbon fiber, PTFE, Anodized aerospace alloy)
-- Organic & biomorphic surfaces (Rhytidome bark, Chitin exoskeleton, Travertine calcite)
+Lists 50 named example descriptors (stones, concrete and paving, metals, glazing, roofing, timbers, weathering), each with its full descriptor. They are reference points, not a closed list: any surface (including ones no example covers) is a descriptor filled from the user's words. `query` narrows the list by free text.
 
 ### 3. `pbr_interpolate_materials`
 Blends two materials along the continuous $\mathbb{R}^{20}$ biophysical manifold.

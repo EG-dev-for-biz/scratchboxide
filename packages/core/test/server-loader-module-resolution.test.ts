@@ -93,11 +93,11 @@ import { pbrMaterialHandlers } from ${JSON.stringify(path.join(REPO, 'packages/c
     }, {} as any);
     console.log('RESULT ' + JSON.stringify({ status: (r as any).status, summary: String((r as any).summaryResult).slice(0, 3000) }));
     const x = await pbrMaterialHandlers.pbr_synthesize_material({
-        targetMeshPath: ${JSON.stringify(mesh)}, outputDir: ${JSON.stringify(path.join(work, 'mtlx'))}, resolution: '1K', format: 'materialx'
+        targetMeshPath: ${JSON.stringify(mesh)}, outputDir: ${JSON.stringify(path.join(work, 'mtlx'))}, resolution: '1K', format: 'materialx', archetype: 'corten_steel'
     }, {} as any);
     console.log('MTLX ' + JSON.stringify((x as any).resultPayload.outputFiles));
     const u = await pbrMaterialHandlers.pbr_synthesize_material({
-        targetMeshPath: ${JSON.stringify(mesh)}, outputDir: ${JSON.stringify(path.join(work, 'usdz'))}, resolution: '1K', format: 'usdz'
+        targetMeshPath: ${JSON.stringify(mesh)}, outputDir: ${JSON.stringify(path.join(work, 'usdz'))}, resolution: '1K', format: 'usdz', archetype: 'corten_steel'
     }, {} as any);
     console.log('USDZ ' + JSON.stringify((u as any).resultPayload.outputFiles));
     const bad = await pbrMaterialHandlers.pbr_synthesize_material({

@@ -20,16 +20,68 @@ export { NativePbrSynthesisError, PbrUnknownArchetypeError } from './adaptive-pb
 
 const execFileAsync = promisify(execFile);
 
-export interface Pbr50CatalogEntry {
+/** One catalog row as written: the named material's base values (inputs to its descriptor). */
+interface PbrExampleRow {
     archetypeId: number;
     key: string;
     displayName: string;
+    /** Display grouping for people browsing the list; nothing branches on it. */
     category: string;
     baseAlbedo: [number, number, number];
     baseRoughness: number;
     baseMetallic: number;
     defaultNormalStrength: number;
     description: string;
+}
+
+/**
+ * A named example point in the continuous material space: data, not a synthesis branch. Synthesis reads only the
+ * 20-float `descriptor`; the key and names are a convenience lookup for it.
+ */
+export interface PbrExampleDescriptor extends PbrExampleRow {
+    descriptor: ContinuousMaterialDescriptor;
+}
+
+/** @deprecated Name kept for existing imports; every entry is a `PbrExampleDescriptor`. */
+export type Pbr50CatalogEntry = PbrExampleDescriptor;
+
+/** Fields a descriptor must give when it is not built on a named example. */
+export const PBR_DESCRIPTOR_REQUIRED_FIELDS = ['albedoLinear', 'conduction', 'roughnessBaseline'] as const;
+
+/**
+ * Completes a descriptor from its three required fields. The other 17 floats, when absent, take the kernel's
+ * neutral texture parameters (secondary colour 0.72 x albedo, micro-porosity 0.45 x roughness, fissure scale 8,
+ * depth 0.25, 4 fBm octaves at gain 0.5, cellular 0.3, grain 0.15, no anisotropy, AO 1): generic noise settings,
+ * not another material's values. Missing required fields throw AdaptivePbrMaterialSpecError.
+ */
+export function completeMaterialDescriptor(partial: Partial<ContinuousMaterialDescriptor>, where = 'descriptor'): ContinuousMaterialDescriptor {
+    const missing = PBR_DESCRIPTOR_REQUIRED_FIELDS.filter(k => partial[k] === undefined || partial[k] === null);
+    if (missing.length) {
+        throw new AdaptivePbrMaterialSpecError(
+            `${where}: give ${PBR_DESCRIPTOR_REQUIRED_FIELDS.join(', ')} (read them from the user's description of the surface), or name a catalog example to start from; missing ${missing.join(', ')}.`,
+            { missing }
+        );
+    }
+    const a = partial.albedoLinear!;
+    const r = partial.roughnessBaseline!;
+    return {
+        albedoLinear: [a[0], a[1], a[2]],
+        secondaryAlbedo: partial.secondaryAlbedo ? [partial.secondaryAlbedo[0], partial.secondaryAlbedo[1], partial.secondaryAlbedo[2]] : [a[0] * 0.72, a[1] * 0.72, a[2] * 0.72],
+        secondaryWeight: partial.secondaryWeight ?? 0.25,
+        conduction: partial.conduction!,
+        roughnessBaseline: r,
+        microPorosity: partial.microPorosity ?? r * 0.45,
+        normalStrength: partial.normalStrength ?? 1.5,
+        fissureScale: partial.fissureScale ?? 8.0,
+        fissureDepth: partial.fissureDepth ?? 0.25,
+        fbmOctaves: partial.fbmOctaves ?? 4.0,
+        fbmGain: partial.fbmGain ?? 0.5,
+        cellularWeight: partial.cellularWeight ?? 0.3,
+        graininess: partial.graininess ?? 0.15,
+        anisotropyStrength: partial.anisotropyStrength ?? 0.0,
+        anisotropyAngleRad: partial.anisotropyAngleRad ?? 0.0,
+        aoStrength: partial.aoStrength ?? 1.0
+    };
 }
 
 export interface NativeSynthesizePbrOptions {
@@ -127,7 +179,7 @@ export interface NativeMeshSemanticPartitionResult {
     executionTimeMs: number;
 }
 
-export const PBR_50_ARCHETYPE_CATALOG: Pbr50CatalogEntry[] = [
+const PBR_EXAMPLE_ROWS: PbrExampleRow[] = [
     // Category 1: Stones (0..9)
     { archetypeId: 0, key: 'indiana_limestone', displayName: 'Indiana Limestone (Honed)', category: 'Stones', baseAlbedo: [0.86, 0.83, 0.77], baseRoughness: 0.76, baseMetallic: 0.02, defaultNormalStrength: 1.8, description: 'Porous warm-grey oolitic calcarenite limestone with subtle quarry grain' },
     { archetypeId: 1, key: 'portland_stone', displayName: 'Portland Stone (Weathered)', category: 'Stones', baseAlbedo: [0.82, 0.81, 0.79], baseRoughness: 0.82, baseMetallic: 0.01, defaultNormalStrength: 2.2, description: 'Fossiliferous British limestone with micro-shell fragments and weathered pitting' },
@@ -193,6 +245,33 @@ export const PBR_50_ARCHETYPE_CATALOG: Pbr50CatalogEntry[] = [
     { archetypeId: 49, key: 'mossy_rock', displayName: 'Mossy Rock Crevice Weathering', category: 'Relief & Weathering', baseAlbedo: [0.38, 0.48, 0.28], baseRoughness: 0.95, baseMetallic: 0.00, defaultNormalStrength: 3.6, description: 'Porous granite bedrock with velvety bryophyte moss colonies clinging to damp crevices' }
 ];
 
+/** Descriptor fields some examples set beyond their row's base values (data; keyed by example key). */
+const PBR_EXAMPLE_DESCRIPTOR_FIELDS: Record<string, Partial<ContinuousMaterialDescriptor>> = {
+    roman_travertine: { anisotropyStrength: 0.65, fissureScale: 6.0, fissureDepth: 0.45, cellularWeight: 0.40 },
+    carrara_marble: { roughnessBaseline: 0.10, fissureScale: 4.0, fissureDepth: 0.12, cellularWeight: 0.20 },
+    brushed_titanium: { anisotropyStrength: 0.90, fissureScale: 32.0, conduction: 0.98 }
+};
+
+/**
+ * The 50 named example descriptors. Each is its row's base values (albedo, conduction = baseMetallic, roughness,
+ * normal strength) plus any extra fields above, completed by `completeMaterialDescriptor`.
+ */
+export const PBR_EXAMPLE_DESCRIPTORS: readonly PbrExampleDescriptor[] = PBR_EXAMPLE_ROWS.map(row => ({
+    ...row,
+    descriptor: completeMaterialDescriptor({
+        albedoLinear: row.baseAlbedo,
+        conduction: row.baseMetallic,
+        roughnessBaseline: row.baseRoughness,
+        normalStrength: row.defaultNormalStrength,
+        ...PBR_EXAMPLE_DESCRIPTOR_FIELDS[row.key]
+    }, `example ${row.key}`)
+}));
+
+/** @deprecated Name kept for existing imports; the same array as `PBR_EXAMPLE_DESCRIPTORS`. */
+export const PBR_50_ARCHETYPE_CATALOG = PBR_EXAMPLE_DESCRIPTORS as PbrExampleDescriptor[];
+
+const cloneDescriptor = (d: ContinuousMaterialDescriptor): ContinuousMaterialDescriptor => JSON.parse(JSON.stringify(d));
+
 function rgbToRgba(rgb: Buffer, pixels: number): Buffer {
     const out = Buffer.alloc(pixels * 4);
     for (let i = 0; i < pixels; i++) {
@@ -217,7 +296,7 @@ export class NativeMaterialPbrService {
     }
 
     /**
-     * Returns the complete biophysically calibrated 50-material archetype catalog.
+     * The 50 named example descriptors (data: each entry's `descriptor` is what synthesis reads).
      */
     public get50Catalog(): Pbr50CatalogEntry[] {
         return PBR_50_ARCHETYPE_CATALOG;
@@ -253,46 +332,13 @@ export class NativeMaterialPbrService {
     }
 
     /**
-     * Calibrated continuous biophysical descriptor for any of the landmark archetypes.
-     * Complies with ADA Pillar 8 (Continuous Dimensional Parameter Manifold).
+     * The descriptor of the named example with this id (a copy). An id that is not in the table throws
+     * PbrUnknownArchetypeError; no other example is substituted.
      */
     public getAnchorDescriptor(anchorId: number): ContinuousMaterialDescriptor {
-        const id = ((anchorId % 50) + 50) % 50;
-        const entry = PBR_50_ARCHETYPE_CATALOG.find(e => e.archetypeId === id) ?? PBR_50_ARCHETYPE_CATALOG[0];
-        const base: ContinuousMaterialDescriptor = {
-            albedoLinear: [entry.baseAlbedo[0], entry.baseAlbedo[1], entry.baseAlbedo[2]],
-            secondaryAlbedo: [entry.baseAlbedo[0] * 0.72, entry.baseAlbedo[1] * 0.72, entry.baseAlbedo[2] * 0.72],
-            secondaryWeight: 0.25,
-            conduction: entry.baseMetallic,
-            roughnessBaseline: entry.baseRoughness,
-            microPorosity: entry.baseRoughness * 0.45,
-            normalStrength: entry.defaultNormalStrength,
-            fissureScale: 8.0,
-            fissureDepth: 0.25,
-            fbmOctaves: 4.0,
-            fbmGain: 0.5,
-            cellularWeight: 0.3,
-            graininess: 0.15,
-            anisotropyStrength: 0.0,
-            anisotropyAngleRad: 0.0,
-            aoStrength: 1.0
-        };
-        if (id === 2) { // Roman Travertine
-            base.anisotropyStrength = 0.65;
-            base.fissureScale = 6.0;
-            base.fissureDepth = 0.45;
-            base.cellularWeight = 0.40;
-        } else if (id === 4) { // Carrara Marble
-            base.roughnessBaseline = 0.10;
-            base.fissureScale = 4.0;
-            base.fissureDepth = 0.12;
-            base.cellularWeight = 0.20;
-        } else if (id === 20) { // Brushed Titanium
-            base.anisotropyStrength = 0.90;
-            base.fissureScale = 32.0;
-            base.conduction = 0.98;
-        }
-        return base;
+        const entry = PBR_EXAMPLE_DESCRIPTORS.find(e => e.archetypeId === anchorId);
+        if (!entry) throw new PbrUnknownArchetypeError(anchorId, PBR_EXAMPLE_DESCRIPTORS.map(e => e.key));
+        return cloneDescriptor(entry.descriptor);
     }
 
     /**
@@ -557,8 +603,12 @@ int main(int argc, char** argv) {
         if (options.descriptor) {
             return this.synthesizeContinuousManifoldPbr(options.descriptor, options);
         }
-        const entry = this.resolveArchetype(options.archetype ?? 0);
-        const desc = this.getAnchorDescriptor(entry.archetypeId);
+        if (options.archetype === undefined || options.archetype === null || options.archetype === '') {
+            // No material is assumed: the descriptor (or a named example of one) has to come from the caller.
+            completeMaterialDescriptor({}, 'synthesizePbrTextureSet');
+        }
+        const entry = this.resolveArchetype(options.archetype!);
+        const desc = cloneDescriptor(entry.descriptor);
         const res = await this.synthesizeContinuousManifoldPbr(desc, options);
         res.archetypeId = entry.archetypeId;
         res.archetypeKey = entry.key;
