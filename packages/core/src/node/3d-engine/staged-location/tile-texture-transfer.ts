@@ -265,9 +265,10 @@ function closestOnTriangle(p: Float32Array | number[], tri: Float32Array, t: num
     out[3] = v; out[4] = w;
 }
 
-interface Bvh { nodeMin: Float32Array; nodeMax: Float32Array; left: Int32Array; start: Int32Array; count: Int32Array; order: Int32Array; nodes: number }
+/** The tile's nearest-surface hierarchy (typed arrays only, so it can be shared with a worker thread). */
+export interface TileBvh { nodeMin: Float32Array; nodeMax: Float32Array; left: Int32Array; start: Int32Array; count: Int32Array; order: Int32Array; nodes: number }
 
-function buildBvh(tri: Float32Array, n: number, leafSize = 8): Bvh {
+function buildBvh(tri: Float32Array, n: number, leafSize = 8): TileBvh {
     const cent = new Float32Array(n * 3), tmin = new Float32Array(n * 3), tmax = new Float32Array(n * 3);
     for (let t = 0; t < n; t++) for (let k = 0; k < 3; k++) {
         const a = tri[t * 9 + k], b = tri[t * 9 + 3 + k], c = tri[t * 9 + 6 + k];
@@ -306,7 +307,7 @@ function buildBvh(tri: Float32Array, n: number, leafSize = 8): Bvh {
     return { nodeMin, nodeMax, left, start, count, order, nodes };
 }
 
-function boxDistSq(b: Bvh, id: number, p: Vec3): number {
+function boxDistSq(b: TileBvh, id: number, p: Vec3): number {
     let d = 0;
     for (let k = 0; k < 3; k++) {
         const lo = b.nodeMin[id * 3 + k], hi = b.nodeMax[id * 3 + k];
@@ -353,10 +354,25 @@ function sampleTexture(tex: TileTexture, u: number, v: number, out: Float64Array
     }
 }
 
-/** Builds the BVH-backed surface of a parsed tile. */
-export function buildTileSurface(tris: TileTriangles, options: TileSurfaceOptions = {}): TileTextureSurface {
+/** What a tile surface is made of (typed arrays and plain values): enough to make the same surface in another thread. */
+export interface TileSurfaceState { tris: TileTriangles; bvh: TileBvh; options: TileSurfaceOptions }
+
+const SURFACE_STATE = new WeakMap<TileTextureSurface, TileSurfaceState>();
+
+/** The state a surface was built from (absent for a surface not made by buildTileSurface, e.g. a test double). */
+export function tileSurfaceState(surface: TileTextureSurface): TileSurfaceState | undefined {
+    return SURFACE_STATE.get(surface);
+}
+
+/** The surface of a state (tileSurfaceState), without building its hierarchy again: samples bit-identical to the original's. */
+export function tileSurfaceFromState(state: TileSurfaceState): TileTextureSurface {
+    return buildTileSurface(state.tris, state.options, state.bvh);
+}
+
+/** Builds the BVH-backed surface of a parsed tile (`bvh`: one already built over these triangles). */
+export function buildTileSurface(tris: TileTriangles, options: TileSurfaceOptions = {}, prebuilt?: TileBvh): TileTextureSurface {
     const n = tris.texture.length;
-    const bvh = buildBvh(tris.positions, n);
+    const bvh = prebuilt ?? buildBvh(tris.positions, n);
     const maxAngle = options.maxNormalAngleDeg ?? 60;
     const minCos = Math.cos((maxAngle * Math.PI) / 180);
     const delight = options.delight === undefined ? PHOTOGRAMMETRIC_DELIGHT.defaults : options.delight;
@@ -375,7 +391,7 @@ export function buildTileSurface(tris: TileTriangles, options: TileSurfaceOption
     }
     sizes.sort((a, b) => a - b);
 
-    return {
+    const surface: TileTextureSurface = {
         triangleCount: n,
         textureCount: tris.textures.length,
         texelSizeM: sizes.length ? sizes[sizes.length >> 1] : NaN,
@@ -422,6 +438,8 @@ export function buildTileSurface(tris: TileTriangles, options: TileSurfaceOption
             };
         }
     };
+    SURFACE_STATE.set(surface, { tris, bvh, options });
+    return surface;
 }
 
 /** Reads a tile GLB (bytes in memory) and builds its sampling surface. */

@@ -107,6 +107,8 @@ export interface BuildUvAtlasOptions extends UvAtlasInput {
     chartToleranceM?: number;
     /** Native unwrapper binary override and repo root (defaults: discovered). */
     native?: { binaryPath?: string; repoRoot?: string; timeoutMs?: number };
+    /** Stops the native unwrapper (its child is killed). */
+    signal?: AbortSignal;
     /** Primitives ("nodeIndex:primitiveIndex") laid out as islands even with a chart (set internally when a chart's triangles overlap). */
     forceIslands?: string[];
 }
@@ -174,7 +176,7 @@ export interface NativeIslands {
 
 /** Runs the native unwrapper over one concatenated mesh; `groups` (per triangle) keeps islands inside a primitive. */
 export async function runNativeIslands(binary: string, positions: Float32Array, indices: Uint32Array, groups: Uint32Array,
-    params: { normalToleranceDeg: number; minIslandAreaM2: number }, timeoutMs = 120_000): Promise<NativeIslands> {
+    params: { normalToleranceDeg: number; minIslandAreaM2: number }, timeoutMs = 120_000, signal?: AbortSignal): Promise<NativeIslands> {
     const V = positions.length / 3, T = indices.length / 3;
     const head = Buffer.alloc(16);
     head.write('SBUV', 0, 'latin1');
@@ -187,6 +189,10 @@ export async function runNativeIslands(binary: string, positions: Float32Array, 
         const chunks: Buffer[] = [];
         let err = '';
         const timer = setTimeout(() => { proc.kill('SIGKILL'); reject(new Error(`island unwrapper timed out after ${timeoutMs} ms`)); }, timeoutMs);
+        // a stop kills the child (a texture worker is asked to stop before it is terminated, so no unwrapper outlives it)
+        const onAbort = () => { clearTimeout(timer); proc.kill('SIGKILL'); reject(signal!.reason instanceof Error ? signal!.reason : Object.assign(new Error('the island unwrapper was stopped'), { name: 'AbortError' })); };
+        if (signal?.aborted) onAbort(); else signal?.addEventListener('abort', onAbort, { once: true });
+        proc.on('close', () => signal?.removeEventListener('abort', onAbort));
         proc.stdout.on('data', (c: Buffer) => chunks.push(c));
         proc.stderr.on('data', (c: Buffer) => { err += c.toString(); });
         proc.on('error', e => { clearTimeout(timer); reject(e); });
@@ -437,7 +443,7 @@ export async function buildUvAtlas(input: BuildUvAtlasOptions): Promise<LaidOutU
         });
         const nt0 = Date.now();
         const bin = input.native?.binaryPath ? { path: input.native.binaryPath, built: false } : await ensureUvAtlasBinary(input.native?.repoRoot);
-        const r = await runNativeIslands(bin.path, positions, indices, groups, { normalToleranceDeg: input.islandNormalToleranceDeg, minIslandAreaM2: input.minIslandAreaM2 ?? 0.05 }, input.native?.timeoutMs);
+        const r = await runNativeIslands(bin.path, positions, indices, groups, { normalToleranceDeg: input.islandNormalToleranceDeg, minIslandAreaM2: input.minIslandAreaM2 ?? 0.05 }, input.native?.timeoutMs, input.signal);
         native = { evictionRounds: r.evictionRounds, evictedTriangles: r.evictedTriangles, forcedSingletons: r.forcedSingletons, mergedIslands: r.mergedIslands, ms: Date.now() - nt0, binary: bin.path, built: bin.built };
         // split the output per island: each island is an item; its vertices index the primitive's own clay vertices
         const islandVerts: number[][] = r.islands.map(() => []);

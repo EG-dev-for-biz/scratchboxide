@@ -277,7 +277,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
     progress('laying out the UV atlas');
     const atlas = await buildUvAtlas({
         layerKey: layer.layerKey, clayGlb: layer.clayGlb, densityTexelsPerMeter: src.densityTexelsPerMeter, maxSide: src.maxSide,
-        islandNormalToleranceDeg: src.islandNormalToleranceDeg ?? 30, ...(layer.surfaces ? { surfaces: layer.surfaces } : {})
+        islandNormalToleranceDeg: src.islandNormalToleranceDeg ?? 30, ...(layer.surfaces ? { surfaces: layer.surfaces } : {}), ...(src.signal ? { signal: src.signal } : {})
     });
     timingsMs.uv = Date.now() - t;
     aborted(src.signal);

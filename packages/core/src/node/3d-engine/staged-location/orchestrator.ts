@@ -31,6 +31,7 @@
 
 import * as crypto from 'crypto';
 import * as fs from 'fs';
+import { monitorEventLoopDelay } from 'perf_hooks';
 import * as path from 'path';
 import type { CanvasArtifact } from '../../../browser/generative-canvas/canvas-types';
 import { GeometricComplexityGate, type ComplexityExemption, type GeometricMeshSummary } from '../../../common/spatial/GeometricComplexityGate';
@@ -120,8 +121,10 @@ import {
 } from './ornament-vision';
 import { buildSwitchLocationPills, switchLocationMarkdown } from '../../../common/spatial/switch-location';
 import { summarizeStagedBuild, type StagedSummaryInput } from './staged-summary';
-import { palettesFromSurvey, projectionViewsFromEvidence, photoTierEnabled, textureLayer, TEXTURE_PASS_VERSION, type TextureLayerOutcome } from './texture-pass';
-import { loadTileSurface, type TileTextureSurface } from './tile-texture-transfer';
+import { palettesFromSurvey, photoTierEnabled, textureLayer, TEXTURE_PASS_VERSION, type TextureLayerOutcome } from './texture-pass';
+import { prepareTextureSources, type TextureSourcesInput } from './texture-sources';
+import { TextureWorkerPool, textureWorkersEnabled } from './texture-worker-pool';
+import { eventLoopStats } from './event-loop-stats';
 import type { EnhanceModelClient } from './texture-enhance';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { TEXTURE_LADDER_RUNGS, type TexturePassDegradation, type TexturePassRecord, type TextureLayerBundle } from '../../../common/spatial/texture-pass-contracts';
@@ -1409,6 +1412,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             texturesPromise = Promise.all(waits).then(() => runner.stage<TextureStageValue>({
                 id: 'textures',
                 run: async io => {
+                    // the stage's CPU work runs in worker threads; the main thread's event-loop delay over the stage is recorded
+                    let texturePool: TextureWorkerPool | undefined;
+                    const loopDelay = monitorEventLoopDelay({ resolution: 10 });
+                    loopDelay.enable();
+                    try {
                     const started = now();
                     const evidence = evidencePromise ? await evidencePromise.catch(() => undefined) : undefined;
                     const fitNow = rebuildOut.refit?.value ?? rebuildOut.fit?.value;
@@ -1429,9 +1437,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const targets = pick();
                     if (!targets.length) return { status: 'skipped', source: '', reason: 'no committed mesh layer to texture' };
 
-                    // the sources, once for every layer
+                    // the sources, once for every layer: decoded, parsed and indexed in a texture worker thread (texture-worker-pool.ts),
+                    // the layers' CPU work after them too, so the main thread keeps serving the vision calls running beside the stage
                     const images = evidence?.images ?? [];
-                    const { views, failures } = projectionViewsFromEvidence(images, evidence?.registration);
                     // photo tier A anchors each pano on the tile outline through a WIDE view of it: the survey's and the ring's
                     // whole-face views (registered by the same joint poses), used by that tier only
                     const surveyRes = surveyPromise ? (await surveyPromise.catch(() => undefined))?.result : undefined;
@@ -1439,35 +1447,31 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         ...(surveyRes?.read ?? []).flatMap(r => { const bytes = surveyImageBytes(surveyRes!, r.imageIndex); return bytes ? [{ view: r.view, bytes, widthPx: r.widthPx, heightPx: r.heightPx, sha256: r.sha256 }] : []; }),
                         ...(evidence?.match ? matchRingImages(evidence.match) : [])
                     ];
-                    const wideViews = projectionViewsFromEvidence(wideHeld as EvidenceImage[], evidence?.registration).views;
+                    const sourcesInput: TextureSourcesInput = {
+                        images, wide: wideHeld as EvidenceImage[], ...(evidence?.registration ? { registration: evidence.registration } : {}),
+                        ...(extraction.texturedGlb ? { texturedGlb: extraction.texturedGlb } : {}),
+                        // the scan is the occluder and the judge of what the photos show: a fitted face where the scan has no surface
+                        // (an arch opening) is not painted with the sky seen through it; the full tile mesh: the real opening, the
+                        // statues, the trees and the buildings behind decide what each photo shows
+                        occluderFiles: [remeshed?.clayGlb], contextFiles: [extraction.geometryGlb]
+                    };
+                    texturePool = textureWorkersEnabled() ? new TextureWorkerPool() : undefined;
+                    // the threads load while the first prepares the sources; the layers start once they all can
+                    const warming = texturePool?.warm();
+                    const sources = texturePool ? await texturePool.prepare(sourcesInput, io.signal) : prepareTextureSources(sourcesInput, now);
+                    await warming;
+                    const { views, failures, wideViews, tile, tileUnavailable, tileLoadMs, tileSha, occluder, context } = sources;
                     const viewsUnavailable = images.length ? (views.length ? undefined : `none of the ${images.length} grounding images decoded (${failures[0] ?? ''})`)
                         : evidence ? `the Street View stage ${evidence.status === 'skipped' ? 'was skipped' : 'returned no image'}` : (visionAvailable ? 'the Street View stage did not run (no accepted fit to aim it at)' : 'no vision model is configured, so no Street View close-ups were fetched');
-                    let tile: TileTextureSurface | undefined;
-                    let tileUnavailable: string | undefined;
-                    const tLoad = now();
-                    try {
-                        if (!extraction.texturedGlb || !fs.existsSync(extraction.texturedGlb)) throw new Error('the photo-textured extraction is not on disk');
-                        tile = loadTileSurface(fs.readFileSync(extraction.texturedGlb));
-                        if (!tile.textureCount) { tileUnavailable = 'the extraction carries no photo texture'; tile = undefined; }
-                    } catch (err) {
-                        tileUnavailable = `the photo-textured tile could not be read (${errorMessage(err)})`;
-                    }
-                    const tileLoadMs = now() - tLoad;
                     const palette = palettesFromSurvey(run.state.materialHints?.faces);
                     const bestSample = Math.min(...images.map(i => i.nativeSampleM).filter(v => v > 0), ...(tile && Number.isFinite(tile.texelSizeM) && !views.length ? [tile.texelSizeM] : []));
                     const cap = deps.textures?.maxDensityTexelsPerMeter ?? 20;
                     const density = Number.isFinite(bestSample) && bestSample > 0 ? Math.min(cap, 1 / bestSample) : cap;
-                    // the scan is the occluder and the judge of what the photos show: a fitted face where the scan has no surface
-                    // (an arch opening) is not painted with the sky seen through it
-                    const occluder = loadMesh([remeshed?.clayGlb]);
-                    // the full tile mesh: the real opening, the statues, the trees and the buildings behind decide what each photo shows
-                    const context = loadMesh([extraction.geometryGlb]);
                     const residual = evidence?.registration?.afterRmsM;
                     const poseHash = evidence?.registration ? [
                         ...[...evidence.registration.corrections.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)),
                         ...[...(evidence.registration.warps?.entries() ?? [])].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([id, w]) => [id, Array.from(w.dh), Array.from(w.dp)])
                     ] : [];
-                    const tileSha = tile ? sha256File(extraction.texturedGlb) : 'no-tile';
                     const enhance = deps.textures?.enhance;
                     const outcomes: Array<{ layer: StagedLayer; out: Omit<TextureLayerOutcome, 'glb' | 'measureLoo'>; url: string; bytes: number; cached: boolean; builtAtMs: number; surfaces: string; late: boolean }> = [];
                     // leave-one-pano-out fits, run once every layer is textured (TextureLayerOutcome.measureLoo)
@@ -1487,7 +1491,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const clay = fs.readFileSync(target.file);
                         const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), wideHeld.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048, surfacesKey(target.surfaces));
                         const entry = await cache.run<Omit<TextureLayerOutcome, 'glb'>>('textures', key, async dir => {
-                            const out = await textureLayer({ layerKey: target.layer.layer, clayGlb: clay, ...(target.surfaces?.length ? { surfaces: target.surfaces } : {}) }, {
+                            const out = await (texturePool ? texturePool.textureLayer.bind(texturePool) : textureLayer)({ layerKey: target.layer.layer, clayGlb: clay, ...(target.surfaces?.length ? { surfaces: target.surfaces } : {}) }, {
                                 views, ...(wideViews.length ? { photoTierViews: wideViews } : {}), ...(photoTierEnabled() ? { photoTier: true } : {}), ...(viewsUnavailable ? { viewsUnavailable } : {}), occluder, ...(context.indices.length ? { context } : {}), observedSurface: TEXTURE_OBSERVED_SURFACE, poseEdgeGuardShare: TEXTURE_POSE_EDGE_GUARD_SHARE,
                                 delight: { latitude: run.geoAnchor.lat, longitude: run.geoAnchor.lng },
                                 ...(tile ? { tile } : {}), ...(tileUnavailable ? { tileUnavailable } : {}),
@@ -1497,7 +1501,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 onProgress: m => { io.progress(`textures: ${m}`); run.emit('textures', 'running', { message: m }); }
                             });
                             fs.writeFileSync(path.join(dir, 'twin.glb'), out.glb);
-                            const { glb: _glb, measureLoo, ...value } = out;
+                            // a worker's layer keeps its thread for the leave-one-pano-out job; the pool's close ends it if it never runs
+                            const { glb: _glb, measureLoo, release: _release, ...value } = out as TextureLayerOutcome & { release?: () => void };
                             if (measureLoo) looJobs.set(target.layer.objectId, measureLoo);
                             return { value };
                         }, { publish: () => [{ from: 'twin.glb', as: `${base}_${target.layer.layer}_tex_${key.slice(0, 8)}.glb` }], bypass: bypass('textures') });
@@ -1613,7 +1618,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const passDegradations: TexturePassDegradation[] = outcomes.flatMap(o => o.out.degradations);
                     await looLane();
                     const layers: TextureLayerBundle[] = outcomes.map(o => ({ ...o.out.bundle, maps: { albedo: `${o.url}#albedo` }, confidence: `${o.url}#confidence` }));
-                    const timingsMs: Record<string, number> = { total: now() - started, tileLoad: tileLoadMs };
+                    loopDelay.disable();
+                    const timingsMs: Record<string, number> = { total: now() - started, tileLoad: tileLoadMs, ...eventLoopStats(loopDelay), ...(texturePool ? { textureWorkers: texturePool.size } : {}) };
+                    io.progress(`textures: main-thread event-loop delay over the stage: p99 ${timingsMs.eventLoopP99Ms} ms, max ${timingsMs.eventLoopMaxMs} ms (${texturePool ? `${texturePool.size} texture worker threads` : 'texture work on the main thread'})`);
                     for (const o of outcomes) for (const [kk, v] of Object.entries(o.out.timingsMs)) timingsMs[`${o.layer.layer}.${kk}`] = v;
                     const record: TexturePassRecord = { passVersion: TEXTURE_PASS_VERSION, layers, degradations: passDegradations, timingsMs };
                     // the held-out fit per layer, kept with the run so rounds can be compared on the same measure
@@ -1630,6 +1637,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         source: describeTextures(textureValue), cached: outcomes.every(o => o.cached), builtAtMs: Math.max(...outcomes.map(o => o.builtAtMs)),
                         breakdownMs: timingsMs
                     };
+                    } finally {
+                        loopDelay.disable();
+                        texturePool?.close();
+                    }
                 },
                 degrade: async err => {
                     run.state.texturePass = { status: 'degraded', layersDone: run.state.layers.filter(l => l.textured).length, layersTotal: run.state.layers.filter(l => l.textured).length, message: `the texture pass failed: ${errorMessage(err)}` };
