@@ -33,13 +33,10 @@ async function main() {
     const tempGlbPath = path.resolve('public/models/sbhuman_hand_hyperreal.glb');
     if (fs.existsSync(tempGlbPath)) {
         const probeResult = AdaptiveUvOrchestrator.probeTopology(tempGlbPath, 'organic');
-        console.log('  -> Continuous Organicity Index (Ω):', probeResult.organicityIndex, '(1.0 = Living Anatomy)');
-        console.log('  -> Domain Classification:', probeResult.domainClassification);
-        console.log('  -> Optimal UV Strategy:', probeResult.recommendedStrategy);
-        console.log('  -> Seam Placement:', probeResult.seamStrategy.seamPlacement);
-        console.log('  -> Seam Mitigation Method:', probeResult.seamStrategy.seamMitigationMethod);
-        console.log('  -> Gutter Padding:', probeResult.seamStrategy.recommendedGutterPaddingPx + 'px');
-        console.log('  -> Tangent Space Handedness Guaranteed:', probeResult.seamStrategy.tangentSpaceHandednessGuaranteed);
+        console.log('  -> Domain Classification:', probeResult.domainClassification, `(${probeResult.domainSource})`);
+        console.log('  -> Recommended UV Strategy:', probeResult.recommendedStrategy, '-', probeResult.routingRule);
+        console.log('  -> Method That Runs:', probeResult.methodThatRuns);
+        console.log('  -> Seams:', probeResult.seams);
     }
 
     // Bake Delighted Photographic PBR Texture Atlas (2048 x 2048) from User Reference Photos

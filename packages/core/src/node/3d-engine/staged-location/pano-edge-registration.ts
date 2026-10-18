@@ -28,7 +28,7 @@
 import type { Vec3 } from '../../../common/spatial/staged-location-contracts';
 import type { RenderMesh3D } from '../../spatial/HeadlessMeshSilhouetteRenderer';
 import {
-    gaussianBlur, luminance, projectToFrame, renderFrameDepth, sobel, StreetViewPoseRegistrar, TEXTURING_GATES, ZERO_CORRECTION,
+    gaussianBlur, groundingHorizontalFovDeg, luminance, projectToFrame, renderFrameDepth, sobel, StreetViewPoseRegistrar, TEXTURING_GATES, ZERO_CORRECTION,
     type CreaseSampleSet, type FrameCamera, type PanoRegistrationResult, type PoseCorrection, type RgbaImage
 } from '../../spatial/StreetViewPoseRegistrar';
 import { pairResidualM, type Correspondence, type Registration, type RegView } from './pano-registration';
@@ -273,7 +273,8 @@ export function registerPanosByEdges(input: EdgeRegistrationInput): EdgeRegistra
         const start = priorCorr(id);
         const res = registrar.registerPano({
             panoId: id, nominalEye: [mine[0].view.eye[0], mine[0].view.eye[1], mine[0].view.eye[2]],
-            frames: mine.map(f => ({ key: f.key, image: f.image, headingDeg: f.view.headingDeg, pitchDeg: f.view.pitchDeg, fovDeg: f.view.fovDeg })),
+            // the crop's true horizontal fov (the requested fov is that of the 1920 px grounding frame)
+            frames: mine.map(f => ({ key: f.key, image: f.image, headingDeg: f.view.headingDeg, pitchDeg: f.view.pitchDeg, fovDeg: groundingHorizontalFovDeg(f.view.fovDeg, f.image.width, f.image.height) })),
             // the box pose seeds a local search (1 m, 1°); a pano the box solve set aside (or never saw) is searched from its stated pose
             ...(prior?.corrections.has(id) && !prior.setAside.some(s => s.panoId === id) ? { initialCorrection: { ...start } } : {})
         });

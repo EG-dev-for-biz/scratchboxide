@@ -13,6 +13,7 @@ import {
     TimeOfDayPreset
 } from './atmosphere-types';
 import { calculateNOAASolarPosition } from './solar-position';
+import { instantAtLocalMeanSolarTime } from '../../../../common/coordinate/solarPosition';
 import { blackbodyKelvinToLinearRgb } from './kelvin';
 
 function clamp(x: number, min: number, max: number): number {
@@ -235,13 +236,13 @@ export function computeDiurnalLightingProfile(altitudeDeg: number): DiurnalLight
 }
 
 /**
- * Calculates diurnal lighting state from geographic latitude, longitude and time of day in hours [0.0, 24.0].
+ * Calculates diurnal lighting state from geographic latitude, longitude and time of day in hours [0.0, 24.0]
+ * (local mean solar time at that longitude, so 12.0 is solar noon there).
  */
 export function getDiurnalLightingState(latitude: number, longitude: number, timeOfDay: number): DiurnalLightingProfile & { sunElevation: number; sunAzimuth: number } {
-    const date = new Date();
-    const hours = Math.floor(timeOfDay);
-    const minutes = Math.floor((timeOfDay - hours) * 60);
-    date.setHours(hours, minutes, 0, 0);
+    // timeOfDay is local mean solar time at the destination, on today's UTC date; the host time zone plays no part.
+    const now = new Date();
+    const date = instantAtLocalMeanSolarTime(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), timeOfDay, longitude);
 
     const sol = calculateNOAASolarPosition(date, latitude, longitude);
     const profile = computeDiurnalLightingProfile(sol.elevationDeg);

@@ -7,8 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import * as THREE from 'three';
-import type { OperatorDefinition } from './types';
+import type { IOperatorContext, OperatorDefinition } from './types';
 import type { Scene3DData } from '../../canvas-types';
 import { readStagedBuild, type StagedSceneData } from '../../primitives/scene3d/stagedBuild/stagedBuildState';
 import { resolveOverrideColor } from '../../primitives/scene3d/overrideColor';
@@ -16,11 +15,6 @@ import {
     TileClayProcessor,
     type ClayPresetId
 } from '../TileClayProcessor';
-import {
-    PbrTextureExpertService,
-    type PbrArchetypeId,
-    packOrmData
-} from '../pbr-texture-expert-service';
 
 export const PBR_PRESETS: Record<string, any> = {
     titanium_grade_5: { name: 'Titanium Grade 5', color: '#c2c4d1', metalness: 0.95, roughness: 0.22, anisotropy: 0.35, ior: 2.16 },
@@ -77,6 +71,26 @@ export function applyStagedMaterialMode(data: Scene3DData, params: { mode?: unkn
     };
 }
 
+/**
+ * The material an operator edits: the named object's material (created empty on the object if it has none), or a
+ * material registered with sb_create_material. An unknown object or material id fails; nothing is invented.
+ */
+function resolveMaterialTarget(ctx: IOperatorContext, operator: string, materialId: string | undefined, objectId: string | undefined): any {
+    let registered: any;
+    if (materialId) {
+        registered = ctx.getMaterial(materialId);
+        if (!registered) throw new Error(`${operator}: no material '${materialId}' is registered; define it with sb_create_material first. Nothing was changed.`);
+    }
+    if (objectId) {
+        const found = ctx.findObject(objectId);
+        if (!found) throw new Error(`${operator}: no object with id "${objectId}" in the scene, so no material was changed.`);
+        if (!found.object.material) found.object.material = {};
+        return found.object.material;
+    }
+    if (!registered) throw new Error(`${operator} needs a materialId (from sb_create_material) or the id of an object whose material to change.`);
+    return registered;
+}
+
 export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_set_staged_material_mode',
@@ -85,14 +99,13 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
         parametersSchema: { mode: { type: 'string', enum: ['clay', 'textured'] }, provenance: { type: 'boolean' } },
         execute: (ctx, params: { mode: 'clay' | 'textured'; provenance?: boolean }) => {
             const result = applyStagedMaterialMode(ctx.getSceneData(), params);
-            ctx.recordState(`Staged build: ${result.mode}`);
             return result;
         }
     },
     {
         name: 'sb_create_material',
         category: 'materials_pbr',
-        description: 'Defines and registers a PBR material configuration with microfacet Cook-Torrance and PBR Next extensions.',
+        description: 'Defines and registers a PBR material (color, roughness, metalness, transmission, ior, thickness, clearcoat, emissive, wireframe), optionally starting from a preset, for sb_assign_material and the PBR setters.',
         execute: (ctx, params: {
             materialId?: string;
             name?: string;
@@ -107,16 +120,6 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
             clearcoat?: number;
             clearcoatRoughness?: number;
             thickness?: number;
-            attenuationColor?: number | string;
-            attenuationDistance?: number;
-            sheenColor?: number | string;
-            sheenRoughness?: number;
-            anisotropy?: number;
-            anisotropyRotation?: number;
-            iridescence?: number;
-            iridescenceIor?: number;
-            iridescenceThicknessMin?: number;
-            iridescenceThicknessMax?: number;
             wireframe?: boolean;
             id?: string;
         }) => {
@@ -139,16 +142,6 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
                 clearcoat: params.clearcoat !== undefined ? params.clearcoat : baseMat.clearcoat,
                 clearcoatRoughness: params.clearcoatRoughness !== undefined ? params.clearcoatRoughness : (baseMat.clearcoatRoughness ?? 0.03),
                 thickness: params.thickness !== undefined ? params.thickness : baseMat.thickness,
-                attenuationColor: params.attenuationColor !== undefined ? params.attenuationColor : baseMat.attenuationColor,
-                attenuationDistance: params.attenuationDistance !== undefined ? params.attenuationDistance : baseMat.attenuationDistance,
-                sheenColor: params.sheenColor !== undefined ? params.sheenColor : baseMat.sheenColor,
-                sheenRoughness: params.sheenRoughness !== undefined ? params.sheenRoughness : baseMat.sheenRoughness,
-                anisotropy: params.anisotropy !== undefined ? params.anisotropy : baseMat.anisotropy,
-                anisotropyRotation: params.anisotropyRotation !== undefined ? params.anisotropyRotation : baseMat.anisotropyRotation,
-                iridescence: params.iridescence !== undefined ? params.iridescence : baseMat.iridescence,
-                iridescenceIor: params.iridescenceIor !== undefined ? params.iridescenceIor : baseMat.iridescenceIor,
-                iridescenceThicknessMin: params.iridescenceThicknessMin !== undefined ? params.iridescenceThicknessMin : baseMat.iridescenceThicknessMin,
-                iridescenceThicknessMax: params.iridescenceThicknessMax !== undefined ? params.iridescenceThicknessMax : baseMat.iridescenceThicknessMax,
                 wireframe: params.wireframe || false
             };
 
@@ -160,7 +153,7 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_set_material_pbr',
         category: 'materials_pbr',
-        description: 'Updates PBR properties on a material or mesh material directly.',
+        description: 'Updates the PBR properties the viewport renders (color, roughness, metalness, clearcoat, transmission, ior, thickness, emissive, wireframe) on a registered material or an object\'s material.',
         execute: (ctx, params: {
             materialId?: string;
             objectId?: string;
@@ -172,14 +165,6 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
             transmission?: number;
             ior?: number;
             thickness?: number;
-            attenuationColor?: number | string;
-            attenuationDistance?: number;
-            sheenColor?: number | string;
-            sheenRoughness?: number;
-            anisotropy?: number;
-            anisotropyRotation?: number;
-            iridescence?: number;
-            iridescenceIor?: number;
             emissive?: number | string;
             emissiveIntensity?: number;
             wireframe?: boolean;
@@ -189,29 +174,13 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
             if (!params.materialId && !params.objectId) {
                 throw new Error('sb_set_material_pbr needs a materialId or an objectId naming what to change. Nothing was changed.');
             }
-            for (const key of ['color', 'attenuationColor', 'sheenColor', 'emissive'] as const) {
+            for (const key of ['color', 'emissive'] as const) {
                 if (params[key] !== undefined && !resolveOverrideColor(params[key])) {
                     throw new Error(`sb_set_material_pbr: ${key} ${JSON.stringify(params[key])} is not a colour (use #rrggbb, a CSS colour name, rgb(...) or a 0xRRGGBB number). Nothing was changed.`);
                 }
             }
 
-            if (params.materialId) {
-                targetMat = ctx.getMaterial(params.materialId);
-            }
-
-            if (params.objectId) {
-                const found = ctx.findObject(params.objectId);
-                if (!found) {
-                    throw new Error(`sb_set_material_pbr: no object with id "${params.objectId}" in the scene, so no material was changed.`);
-                }
-                if (!found.object.material) found.object.material = {};
-                targetMat = found.object.material;
-            }
-
-            if (!targetMat && params.materialId) {
-                targetMat = { id: params.materialId };
-                ctx.registerMaterial(targetMat);
-            }
+            targetMat = resolveMaterialTarget(ctx, 'sb_set_material_pbr', params.materialId, params.objectId);
 
             if (targetMat) {
                 if (params.color !== undefined) targetMat.color = params.color;
@@ -222,14 +191,6 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
                 if (params.transmission !== undefined) targetMat.transmission = params.transmission;
                 if (params.ior !== undefined) targetMat.ior = params.ior;
                 if (params.thickness !== undefined) targetMat.thickness = params.thickness;
-                if (params.attenuationColor !== undefined) targetMat.attenuationColor = params.attenuationColor;
-                if (params.attenuationDistance !== undefined) targetMat.attenuationDistance = params.attenuationDistance;
-                if (params.sheenColor !== undefined) targetMat.sheenColor = params.sheenColor;
-                if (params.sheenRoughness !== undefined) targetMat.sheenRoughness = params.sheenRoughness;
-                if (params.anisotropy !== undefined) targetMat.anisotropy = params.anisotropy;
-                if (params.anisotropyRotation !== undefined) targetMat.anisotropyRotation = params.anisotropyRotation;
-                if (params.iridescence !== undefined) targetMat.iridescence = params.iridescence;
-                if (params.iridescenceIor !== undefined) targetMat.iridescenceIor = params.iridescenceIor;
                 if (params.emissive !== undefined) targetMat.emissive = params.emissive;
                 if (params.emissiveIntensity !== undefined) targetMat.emissiveIntensity = params.emissiveIntensity;
                 if (params.wireframe !== undefined) targetMat.wireframe = params.wireframe;
@@ -253,20 +214,7 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
         category: 'materials_pbr',
         description: 'Configures dual-layer specular clearcoat lacquer on target material or mesh.',
         execute: (ctx, params: { targetId?: string; materialId?: string; clearcoat: number; clearcoatRoughness?: number }) => {
-            let targetMat: any;
-            if (params.materialId) targetMat = ctx.getMaterial(params.materialId);
-            if (params.targetId) {
-                const found = ctx.findObject(params.targetId);
-                if (found) {
-                    if (!found.object.material) found.object.material = {};
-                    targetMat = found.object.material;
-                }
-            }
-            if (!targetMat && params.materialId) {
-                targetMat = { id: params.materialId };
-                ctx.registerMaterial(targetMat);
-            }
-            if (!targetMat) throw new Error('Target material or object not specified.');
+            const targetMat = resolveMaterialTarget(ctx, 'sb_set_pbr_clearcoat', params.materialId, params.targetId);
 
             targetMat.clearcoat = Math.max(0.0, Math.min(1.0, params.clearcoat));
             if (params.clearcoatRoughness !== undefined) {
@@ -279,90 +227,21 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_set_pbr_transmission',
         category: 'materials_pbr',
-        description: 'Configures optical transmission, refraction IOR, and volumetric Beer-Lambert absorption on target material.',
+        description: 'Sets transmission (0..1), refraction IOR and thickness on a registered material or an object\'s material.',
         execute: (ctx, params: {
             targetId?: string;
             materialId?: string;
             transmission: number;
             ior?: number;
             thickness?: number;
-            attenuationColor?: number | string;
-            attenuationDistance?: number;
         }) => {
-            let targetMat: any;
-            if (params.materialId) targetMat = ctx.getMaterial(params.materialId);
-            if (params.targetId) {
-                const found = ctx.findObject(params.targetId);
-                if (found) {
-                    if (!found.object.material) found.object.material = {};
-                    targetMat = found.object.material;
-                }
-            }
-            if (!targetMat && params.materialId) {
-                targetMat = { id: params.materialId };
-                ctx.registerMaterial(targetMat);
-            }
-            if (!targetMat) throw new Error('Target material or object not specified.');
+            const targetMat = resolveMaterialTarget(ctx, 'sb_set_pbr_transmission', params.materialId, params.targetId);
 
             targetMat.transmission = Math.max(0.0, Math.min(1.0, params.transmission));
             if (params.ior !== undefined) targetMat.ior = params.ior;
             if (params.thickness !== undefined) targetMat.thickness = params.thickness;
-            if (params.attenuationColor !== undefined) targetMat.attenuationColor = params.attenuationColor;
-            if (params.attenuationDistance !== undefined) targetMat.attenuationDistance = params.attenuationDistance;
 
             return { success: true, transmission: targetMat.transmission, ior: targetMat.ior, thickness: targetMat.thickness };
-        }
-    },
-    {
-        name: 'sb_set_pbr_sheen',
-        category: 'materials_pbr',
-        description: 'Configures Charlie microfacet sheen reflectance for cloth, peach fuzz, and velvet materials.',
-        execute: (ctx, params: { targetId?: string; materialId?: string; sheenColor: number | string; sheenRoughness?: number }) => {
-            let targetMat: any;
-            if (params.materialId) targetMat = ctx.getMaterial(params.materialId);
-            if (params.targetId) {
-                const found = ctx.findObject(params.targetId);
-                if (found) {
-                    if (!found.object.material) found.object.material = {};
-                    targetMat = found.object.material;
-                }
-            }
-            if (!targetMat && params.materialId) {
-                targetMat = { id: params.materialId };
-                ctx.registerMaterial(targetMat);
-            }
-            if (!targetMat) throw new Error('Target material or object not specified.');
-
-            targetMat.sheenColor = params.sheenColor;
-            targetMat.sheenRoughness = params.sheenRoughness !== undefined ? Math.max(0.04, Math.min(1.0, params.sheenRoughness)) : 0.45;
-
-            return { success: true, sheenColor: targetMat.sheenColor, sheenRoughness: targetMat.sheenRoughness };
-        }
-    },
-    {
-        name: 'sb_set_pbr_anisotropy',
-        category: 'materials_pbr',
-        description: 'Configures directional specular anisotropy for brushed metal, turned aluminum, and carbon fiber.',
-        execute: (ctx, params: { targetId?: string; materialId?: string; anisotropy: number; rotation?: number }) => {
-            let targetMat: any;
-            if (params.materialId) targetMat = ctx.getMaterial(params.materialId);
-            if (params.targetId) {
-                const found = ctx.findObject(params.targetId);
-                if (found) {
-                    if (!found.object.material) found.object.material = {};
-                    targetMat = found.object.material;
-                }
-            }
-            if (!targetMat && params.materialId) {
-                targetMat = { id: params.materialId };
-                ctx.registerMaterial(targetMat);
-            }
-            if (!targetMat) throw new Error('Target material or object not specified.');
-
-            targetMat.anisotropy = Math.max(-1.0, Math.min(1.0, params.anisotropy));
-            targetMat.anisotropyRotation = params.rotation ?? 0.0;
-
-            return { success: true, anisotropy: targetMat.anisotropy, anisotropyRotation: targetMat.anisotropyRotation };
         }
     },
     {
@@ -375,72 +254,11 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
                 throw new Error(`Unknown PBR preset '${params.preset}'. Available presets: ${Object.keys(PBR_PRESETS).join(', ')}`);
             }
 
-            let targetMat: any;
-            if (params.materialId) {
-                targetMat = ctx.getMaterial(params.materialId);
-                if (!targetMat) {
-                    targetMat = { id: params.materialId };
-                    ctx.registerMaterial(targetMat);
-                }
-            }
-
-            if (params.targetId) {
-                const found = ctx.findObject(params.targetId);
-                if (found) {
-                    if (!found.object.material) found.object.material = {};
-                    targetMat = found.object.material;
-                }
-            }
-
-            if (!targetMat) {
-                const matId = `mat-${params.preset}-${Date.now()}`;
-                targetMat = { id: matId };
-                ctx.registerMaterial(targetMat);
-            }
+            const targetMat = resolveMaterialTarget(ctx, 'sb_assign_pbr_preset', params.materialId, params.targetId);
 
             Object.assign(targetMat, JSON.parse(JSON.stringify(presetData)));
-            ctx.recordState(`Assigned PBR preset '${params.preset}'`);
 
             return { success: true, preset: params.preset, material: targetMat };
-        }
-    },
-    {
-        name: 'sb_bake_pbr_maps',
-        category: 'materials_pbr',
-        description: 'Synthesizes procedural normal, roughness, metallic, and cavity ambient occlusion maps from mesh geometry.',
-        execute: (ctx, params: {
-            targetId?: string;
-            materialId?: string;
-            generateNormal?: boolean;
-            generateRoughness?: boolean;
-            generateAO?: boolean;
-            bumpScale?: number;
-            cavityGain?: number;
-        }) => {
-            let targetMat: any;
-            if (params.materialId) targetMat = ctx.getMaterial(params.materialId);
-            if (params.targetId) {
-                const found = ctx.findObject(params.targetId);
-                if (found) {
-                    if (!found.object.material) found.object.material = {};
-                    targetMat = found.object.material;
-                }
-            }
-            if (!targetMat && params.materialId) {
-                targetMat = { id: params.materialId };
-                ctx.registerMaterial(targetMat);
-            }
-            if (!targetMat) throw new Error('Target material or object not specified.');
-
-            targetMat.proceduralMaps = {
-                normalMapGenerated: params.generateNormal ?? true,
-                roughnessMapGenerated: params.generateRoughness ?? true,
-                aoMapGenerated: params.generateAO ?? true,
-                bumpScale: params.bumpScale ?? 1.0,
-                cavityGain: params.cavityGain ?? 1.2
-            };
-
-            return { success: true, proceduralMaps: targetMat.proceduralMaps };
         }
     },
     {
@@ -454,11 +272,9 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
             let mat = params.material;
             if (!mat && params.materialId) {
                 mat = ctx.getMaterial(params.materialId);
+                if (!mat) throw new Error(`sb_assign_material: no material '${params.materialId}' is registered; define it with sb_create_material first. Nothing was changed.`);
             }
-
-            if (!mat) {
-                mat = { id: params.materialId, color: 0xcccccc, roughness: 0.5, metalness: 0.0 };
-            }
+            if (!mat) throw new Error('sb_assign_material needs a materialId (from sb_create_material) or a material object.');
 
             found.object.material = JSON.parse(JSON.stringify(mat));
 
@@ -529,7 +345,6 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
                 TileClayProcessor.applyClayMaterial(threeScene, resolved);
             }
 
-            ctx.recordState(`Set Clay Mode (${resolved.presetId})`);
 
             return {
                 appliedPreset: resolved.presetId,
@@ -538,174 +353,6 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
                 metalness: resolved.metalness,
                 cavityStrength: resolved.cavityStrength,
                 targetCount
-            };
-        }
-    },
-    {
-        name: 'sb_generate_pbr_texture_set',
-        category: 'materials_pbr',
-        description: 'Synthesizes biophysically accurate PBR texture maps (Albedo, Scharr Normals, Curvature Roughness, Cavity AO, and packed glTF ORM) from procedural mathematical kernels.',
-        execute: (ctx, params: {
-            archetype?: PbrArchetypeId | string;
-            targetId?: string;
-            width?: number;
-            height?: number;
-            seed?: number;
-            wear?: number;
-            roughnessBias?: number;
-            color?: [number, number, number];
-            anisotropyAngleDeg?: number;
-            repeat?: [number, number];
-        }) => {
-            const archetype = (params.archetype || 'weathered_concrete') as PbrArchetypeId;
-            const width = params.width || 256;
-            const height = params.height || 256;
-            const repeat = params.repeat || [2, 2];
-
-            let applied = false;
-            if (params.targetId) {
-                const found = ctx.findObject(params.targetId);
-                if (found && found.object instanceof THREE.Mesh) {
-                    PbrTextureExpertService.applyExpertPbrToMesh(found.object, {}, {
-                        repeatOverride: repeat,
-                        enableToksvig: true
-                    });
-                    applied = true;
-                }
-            }
-
-            ctx.recordState(`Generate PBR Textures (${archetype})`);
-
-            return {
-                success: true,
-                archetype,
-                width,
-                height,
-                engine: 'native_pbr_manifold',
-                appliedToTarget: applied ? params.targetId : null
-            };
-        }
-    },
-    {
-        name: 'sb_pack_orm_map',
-        category: 'materials_pbr',
-        description: 'Packs Ambient Occlusion (R), Roughness (G), and Metalness (B) into a single 4-channel glTF 2.0 / Three.js standard ORM texture.',
-        execute: (ctx, params: {
-            aoRgba?: number[] | Uint8Array;
-            roughnessRgba?: number[] | Uint8Array;
-            metallicRgba?: number[] | Uint8Array;
-            width?: number;
-            height?: number;
-        }) => {
-            const width = params.width || 256;
-            const height = params.height || 256;
-            const size = width * height * 4;
-
-            const toUint8 = (data?: number[] | Uint8Array, fallbackVal = 255): Uint8Array => {
-                if (data instanceof Uint8Array) return data;
-                if (Array.isArray(data)) return new Uint8Array(data);
-                const arr = new Uint8Array(size);
-                arr.fill(fallbackVal);
-                return arr;
-            };
-
-            const ao = toUint8(params.aoRgba, 255);
-            const roughness = toUint8(params.roughnessRgba, 128);
-            const metallic = toUint8(params.metallicRgba, 0);
-
-            const orm = packOrmData(ao, roughness, metallic, width, height);
-
-            return {
-                success: true,
-                width,
-                height,
-                byteLength: orm.byteLength,
-                channelMapping: 'R=AO (Occlusion), G=Roughness, B=Metalness, A=255'
-            };
-        }
-    },
-    {
-        name: 'sb_apply_pbr_texture_pack',
-        category: 'materials_pbr',
-        description: 'Applies calibrated physical PBR material and shader enhancements directly to a scene mesh using MeshPhysicalMaterial and packed ORM.',
-        execute: (ctx, params: {
-            targetId: string;
-            archetype?: PbrArchetypeId | string;
-            wear?: number;
-            seed?: number;
-            color?: [number, number, number];
-            roughnessBias?: number;
-            repeat?: [number, number];
-        }) => {
-            const found = ctx.findObject(params.targetId);
-            if (!found) throw new Error(`Target object '${params.targetId}' not found.`);
-
-            const archetype = (params.archetype || 'weathered_concrete') as PbrArchetypeId;
-            const repeat = params.repeat || [2, 2];
-
-            const mesh = found.object instanceof THREE.Mesh ? found.object : found.object.children.find((c: THREE.Object3D) => c instanceof THREE.Mesh) as THREE.Mesh | undefined;
-            if (!mesh) throw new Error(`Target object '${params.targetId}' has no Three.js Mesh.`);
-
-            PbrTextureExpertService.applyExpertPbrToMesh(mesh, {}, {
-                repeatOverride: repeat,
-                enableToksvig: true
-            });
-            ctx.recordState(`Apply PBR Texture Pack (${archetype})`);
-
-            return {
-                success: true,
-                targetId: params.targetId,
-                archetype,
-                repeat
-            };
-        }
-    },
-    {
-        name: 'sb_layer_pbr_material',
-        category: 'materials_pbr',
-        description: 'Layers a topcoat PBR material over a substrate material using physical material parameters and shader weathering.',
-        execute: (ctx, params: {
-            targetId?: string;
-            substrateArchetype?: PbrArchetypeId | string;
-            topcoatArchetype?: PbrArchetypeId | string;
-            chipAmount?: number;
-            transitionSharpness?: number;
-            seed?: number;
-            width?: number;
-            height?: number;
-            repeat?: [number, number];
-        }) => {
-            const repeat = params.repeat || [2, 2];
-            const subArchetype = (params.substrateArchetype || 'hammered_copper') as PbrArchetypeId;
-            const topArchetype = (params.topcoatArchetype || 'chipped_paint_rust') as PbrArchetypeId;
-
-            let applied = false;
-            if (params.targetId) {
-                const found = ctx.findObject(params.targetId);
-                if (found) {
-                    const mesh = found.object instanceof THREE.Mesh ? found.object : found.object.children.find((c: THREE.Object3D) => c instanceof THREE.Mesh) as THREE.Mesh | undefined;
-                    if (mesh) {
-                        PbrTextureExpertService.applyExpertPbrToMesh(mesh, {}, {
-                            repeatOverride: repeat,
-                            enableToksvig: true,
-                            enableWeathering: true,
-                            weathering: {
-                                dirtIntensity: params.chipAmount ?? 0.45
-                            }
-                        });
-                        applied = true;
-                    }
-                }
-            }
-
-            ctx.recordState(`Layer PBR Material (${topArchetype} over ${subArchetype})`);
-
-            return {
-                success: true,
-                substrateArchetype: subArchetype,
-                topcoatArchetype: topArchetype,
-                layered: true,
-                appliedToTarget: applied ? params.targetId : null
             };
         }
     }

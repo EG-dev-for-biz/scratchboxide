@@ -11,6 +11,7 @@ import { test } from 'vitest';
 import * as assert from 'assert';
 import * as path from 'path';
 import * as os from 'os';
+import * as fs from 'fs';
 import http from 'http';
 import { createStandaloneServer, createToolsServer } from '../server/app';
 
@@ -236,10 +237,23 @@ async function runStandaloneServerTests() {
         assert.ok(tileStatusData.pipeline.includes('CornerStraightener'));
 
         console.log('  Testing POST /api/3d/tiles/cleanup ...');
+        // No tile in the request: a typed 400, not a cleaned built-in model.
+        const noInputRes = await fetch(`${baseUrl}/api/3d/cleanup-tiles/cleanup`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ angleThresholdDegrees: 4.0 })
+        });
+        assert.strictEqual(noInputRes.status, 400, '/api/3d/tiles/cleanup without a tile should return 400');
+        assert.strictEqual((await noInputRes.json()).error, 'missing_input');
+
+        const inputGlb = fs.readFileSync(
+            path.resolve(__dirname, '../../deploy/cloud-run/spatial-separator/assets/temple_venus_roma_sb_archi.glb')
+        );
         const cleanupRes = await fetch(`${baseUrl}/api/3d/cleanup-tiles/cleanup`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
+                glbBase64: inputGlb.toString('base64'),
                 angleThresholdDegrees: 4.0,
                 snapToleranceMeters: 0.85,
                 roadWidthMeters: 8.0
@@ -249,9 +263,8 @@ async function runStandaloneServerTests() {
         const cleanupData = await cleanupRes.json();
         assert.strictEqual(cleanupData.success, true);
         assert.ok(cleanupData.metrics);
-        assert.ok(cleanupData.metrics.polygonReductionPercent > 60.0);
-        assert.ok(cleanupData.metrics.treeAnchorsCount >= 1);
-        assert.ok(cleanupData.metrics.rooftopGreeblesCount >= 1);
+        // The temple GLB has 9180 triangles; the counts come from the uploaded tile.
+        assert.strictEqual(cleanupData.metrics.rawTriangles, 9180);
         assert.ok(cleanupData.glbBase64 && cleanupData.glbBase64.length > 1000);
         console.log('  ✓ Test 14 Passed: 3D tile cleanup pipeline endpoints respond with validated GLB & metrics');
 

@@ -99,7 +99,6 @@ INSPECTION TASKS:
    - unlit / missing_lighting: sb_setup_lighting
    - off_center_camera / framing_offset: sb_frame_bounds or sb_set_camera
    - missing_pbr / missing_material: sb_set_material_pbr or sb_create_material
-   - unsubdivided_mesh / low_poly_artifact: sb_subdivide_mesh or sb_add_modifier
 4. List positive strengths of the visual frame.
 5. Output structured visual correction directives ('visualFixes') and concrete direct-dispatch operators ('operatorDispatches').
 
@@ -408,7 +407,7 @@ Inspect this rendered viewport screenshot and provide your rigorous visual audit
     /**
      * Dispatches one operator an audit proposed, then puts back the scene's chosen environment (and its
      * camera, unless the audit may move it), keeping the operator's other effects: `sb_setup_lighting`
-     * keeps its preset, rig and sun angles but not the skybox it writes when the scene names none.
+     * keeps its preset, kelvin and ambient level but not the skybox it writes when the scene names none.
      * An operator left with no effect is rolled back, so the operator stack does not record it.
      */
     private dispatchAuditOperator(

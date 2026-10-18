@@ -31,6 +31,16 @@ import urllib.request
 import urllib.parse
 import ssl
 
+
+def _verified_ssl_context() -> ssl.SSLContext:
+    """A TLS context that verifies certificates and host names (certifi's CA bundle when installed)."""
+    try:
+        import certifi  # type: ignore
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
 try:
     import requests
 except ImportError:
@@ -49,10 +59,7 @@ except ImportError:
         utils = _SimpleRequestsUtils
         @staticmethod
         def get(url, timeout=10):
-            import ssl
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
+            ctx = _verified_ssl_context()
             req = urllib.request.Request(url, headers={'User-Agent': 'GeoBox/1.0'})
             with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
                 data = resp.read().decode('utf-8')
@@ -1550,10 +1557,7 @@ class GeoBoxPrecisionPipeline:
         # If text-only query without input photo, download real Street View reference image if available
         if (not effective_query_image or not os.path.exists(effective_query_image)) and self.api_key and s2.get("lat") and s2.get("lng"):
             try:
-                import ssl
-                ctx = ssl.create_default_context()
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
+                ctx = _verified_ssl_context()
                 uploads_dir = os.path.join(REPO_ROOT, "public/uploads")
                 os.makedirs(uploads_dir, exist_ok=True)
                 ts = int(time.time() * 1000)

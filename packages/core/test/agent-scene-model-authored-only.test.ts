@@ -83,12 +83,10 @@ function sceneSoup(data: Scene3DData): TriangleSoup {
 // The Python runner is replaced by one that returns a real model at the origin, standing in for what the
 // template script built there; tests then show whether anything ran it and whether its model reached the scene.
 let runScript: ReturnType<typeof vi.spyOn>;
-let runScriptSync: ReturnType<typeof vi.spyOn>;
 const originalFetch = globalThis.fetch;
 beforeEach(() => {
     const generated = { success: true, exitCode: 0, stdout: '', stderr: '', executionTimeMs: 1, glbBase64: boxGlb(8, 40, 8).toString('base64'), glbPath: '/repo/build/3d-python/scene_template.glb' };
     runScript = vi.spyOn(NativePythonRunnerService.prototype, 'runScript').mockImplementation(async () => generated as any);
-    runScriptSync = vi.spyOn(NativePythonRunnerService.prototype, 'runScriptSync').mockImplementation(() => generated as any);
 });
 afterEach(() => {
     vi.restoreAllMocks();
@@ -195,7 +193,7 @@ describe('parseOrSynthesizeArtifact builds only what the model wrote (every mode
         expect(data.customMeshes ?? []).toHaveLength(0);
         expect(data.customScript).toBeUndefined();
         expect(data.geoAnchor).toBeUndefined();
-        expect(runScriptSync).not.toHaveBeenCalled();
+        expect(runScript).not.toHaveBeenCalled();
     });
 
     it('ignores a JSON block that is not an artifact envelope', () => {
@@ -269,7 +267,7 @@ describe('agent-mode streaming', () => {
         expect(response.artifact).toBeUndefined();
         expect(events.some(e => e.type === 'artifact_complete')).toBe(false);
         expect(JSON.stringify(active)).toBe(before);
-        expect(runScriptSync).not.toHaveBeenCalled();
+        expect(runScript).not.toHaveBeenCalled();
     });
 });
 
@@ -527,7 +525,7 @@ describe('agent turns that end in prose', () => {
         expect(response.text).toContain('side by side');
         expect(JSON.stringify(response.artifact)).toBe(before);
         expect(JSON.stringify(ACTIVE)).toBe(before);
-        expect(runScriptSync).not.toHaveBeenCalled();
+        expect(runScript).not.toHaveBeenCalled();
     });
 
     it('generateArtifact still fails for a prose reply in agent mode with nothing open', async () => {

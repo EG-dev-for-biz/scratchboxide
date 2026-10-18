@@ -9,11 +9,29 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { NativeCppCompilerService } from './native-compiler-service';
+import { buildNativeIfStale } from './native-build';
+import { MissingInputError } from '../../common/errors/pipeline-errors';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+function findTileCleanupRepoRoot(): string {
+    for (const start of [__dirname, process.cwd()]) {
+        let dir = path.resolve(start);
+        while (true) {
+            if (fs.existsSync(path.join(dir, 'scripts', 'run_tile_cleanup_pipeline.cpp'))) return dir;
+            const parent = path.dirname(dir);
+            if (parent === dir) break;
+            dir = parent;
+        }
+    }
+    return process.cwd();
+}
+
+/** One build per binary path within this process; native-build serializes across processes. */
+const building = new Map<string, Promise<string>>();
 
 export interface PatinaOptions {
     buildingAgeYears?: number;
@@ -37,6 +55,8 @@ export interface BiophysicalPatinaMetrics {
 }
 
 export interface TileCleanupOptions {
+    /** The photogrammetric tile to clean (binary glTF 2.0). Required: there is no built-in model. */
+    inputGlbPath?: string;
     angleThresholdDegrees?: number;
     snapToleranceMeters?: number;
     roadWidthMeters?: number;
@@ -90,48 +110,33 @@ export interface TileCleanupResult {
 
 export class PhotorealTileCleanupService {
     private compiler: NativeCppCompilerService;
-    private binaryPath: string;
+    private readonly sourcePath: string;
+    private readonly binaryPath: string;
 
     constructor(compiler?: NativeCppCompilerService) {
         this.compiler = compiler || new NativeCppCompilerService();
-        // Look for compiled binary in scripts or build directory
-        const candidateBinaries = [
-            path.resolve(process.cwd(), 'scripts/run_tile_cleanup_pipeline'),
-            path.resolve(process.cwd(), '../scripts/run_tile_cleanup_pipeline'),
-            path.resolve(__dirname, '../../../../../scripts/run_tile_cleanup_pipeline'),
-            path.resolve(__dirname, '../../../../scripts/run_tile_cleanup_pipeline'),
-            path.resolve(process.cwd(), 'build/3d-native/run_tile_cleanup_pipeline'),
-            path.resolve(process.cwd(), '../build/3d-native/run_tile_cleanup_pipeline')
-        ];
-        this.binaryPath = candidateBinaries.find(p => fs.existsSync(p)) || candidateBinaries[0];
+        const root = findTileCleanupRepoRoot();
+        this.sourcePath = path.join(root, 'scripts', 'run_tile_cleanup_pipeline.cpp');
+        this.binaryPath = path.join(root, 'build', '3d-native', 'run_tile_cleanup_pipeline');
     }
 
     /**
-     * Ensures the native C++20 tile cleanup binary is compiled and up-to-date.
+     * Builds the tile cleanup binary when it is missing or older than any file it was compiled from
+     * (native-build: clang's dependency list), so a binary built from older sources is never run.
      */
-    async ensureBinary(): Promise<string> {
-        if (fs.existsSync(this.binaryPath)) {
-            return this.binaryPath;
+    ensureBinary(): Promise<string> {
+        let pending = building.get(this.binaryPath);
+        if (!pending) {
+            // -lz: scratchbox_png.hpp (pulled in via the glTF scene writer) decodes PNG with zlib's uncompress().
+            pending = buildNativeIfStale({
+                source: this.sourcePath,
+                binary: this.binaryPath,
+                includeDir: this.compiler.getSdkIncludePath(),
+                libs: ['-lz']
+            }).finally(() => building.delete(this.binaryPath));
+            building.set(this.binaryPath, pending);
         }
-
-        const candidateSources = [
-            path.resolve(process.cwd(), 'scripts/run_tile_cleanup_pipeline.cpp'),
-            path.resolve(process.cwd(), '../scripts/run_tile_cleanup_pipeline.cpp'),
-            path.resolve(__dirname, '../../../../../scripts/run_tile_cleanup_pipeline.cpp'),
-            path.resolve(__dirname, '../../../../scripts/run_tile_cleanup_pipeline.cpp')
-        ];
-        const sourcePath = candidateSources.find(p => fs.existsSync(p)) || candidateSources[0];
-        const includePath = this.compiler.getSdkIncludePath();
-        const outputDir = path.dirname(this.binaryPath);
-
-        if (!fs.existsSync(outputDir)) {
-            fs.mkdirSync(outputDir, { recursive: true });
-        }
-
-        // -lz: scratchbox_png.hpp (pulled in via the glTF scene writer) decodes PNG with zlib's uncompress().
-        const compileCmd = `clang++ -std=c++20 -O3 -I "${includePath}" "${sourcePath}" -o "${this.binaryPath}" -lz`;
-        await execAsync(compileCmd);
-        return this.binaryPath;
+        return pending;
     }
 
     /**
@@ -139,6 +144,13 @@ export class PhotorealTileCleanupService {
      * Can run in-app or inside Google Cloud Run instances.
      */
     async cleanPhotogrammetryTile(options: TileCleanupOptions = {}): Promise<TileCleanupResult> {
+        const inputGlbPath = options.inputGlbPath?.trim();
+        if (!inputGlbPath) {
+            throw new MissingInputError('tile cleanup', 'inputGlbPath', 'pass the photogrammetric tile (.glb) to clean');
+        }
+        if (!fs.existsSync(inputGlbPath)) {
+            throw new MissingInputError('tile cleanup', 'inputGlbPath', `no file at ${inputGlbPath}`);
+        }
         const bin = await this.ensureBinary();
         const artifactsDir = path.resolve(process.cwd(), '.scratchbox', 'artifacts');
         if (!fs.existsSync(artifactsDir)) {
@@ -148,34 +160,29 @@ export class PhotorealTileCleanupService {
         const angle = options.angleThresholdDegrees ?? 4.0;
         const snap = options.snapToleranceMeters ?? 0.85;
 
-        const args = [
-            `--output "${tmpOutput}"`,
-            `--angle ${angle}`,
-            `--snap ${snap}`
-        ];
+        const args = ['--input', inputGlbPath, '--output', tmpOutput, '--angle', String(angle), '--snap', String(snap)];
 
         if (options.textureResolution !== undefined) {
-            args.push(`--res ${options.textureResolution}`);
+            args.push('--res', String(options.textureResolution));
         }
         if (options.patina?.buildingAgeYears !== undefined) {
-            args.push(`--age ${options.patina.buildingAgeYears}`);
+            args.push('--age', String(options.patina.buildingAgeYears));
         }
         if (options.patina?.sootCavityIntensity !== undefined) {
-            args.push(`--soot ${options.patina.sootCavityIntensity}`);
+            args.push('--soot', String(options.patina.sootCavityIntensity));
         }
         if (options.patina?.rainStreakIntensity !== undefined) {
-            args.push(`--streaks ${options.patina.rainStreakIntensity}`);
+            args.push('--streaks', String(options.patina.rainStreakIntensity));
         }
         if (options.patina?.copperVerdigrisIntensity !== undefined) {
-            args.push(`--verdigris ${options.patina.copperVerdigrisIntensity}`);
+            args.push('--verdigris', String(options.patina.copperVerdigrisIntensity));
         }
         if (options.patina?.edgeAbrasionFactor !== undefined) {
-            args.push(`--abrasion ${options.patina.edgeAbrasionFactor}`);
+            args.push('--abrasion', String(options.patina.edgeAbrasionFactor));
         }
 
-        const cmd = `"${bin}" ${args.join(' ')}`;
         const startTime = Date.now();
-        const { stdout, stderr } = await execAsync(cmd, {
+        const { stdout, stderr } = await execFileAsync(bin, args, {
             maxBuffer: 50 * 1024 * 1024
         });
 
@@ -257,16 +264,14 @@ export class PhotorealTileCleanupService {
             biophysicalPatina
         };
 
-        let glbBuffer: Buffer | undefined;
-        let glbBase64: string | undefined;
-
-        if (fs.existsSync(tmpOutput)) {
-            glbBuffer = fs.readFileSync(tmpOutput);
-            glbBase64 = glbBuffer.toString('base64');
-            // Clean up temporary file if caller did not request a custom output path
-            if (!options.outputGlbPath) {
-                try { fs.unlinkSync(tmpOutput); } catch {}
-            }
+        if (!fs.existsSync(tmpOutput)) {
+            throw new Error(`tile cleanup wrote no GLB to ${tmpOutput}${stderr ? `: ${stderr.slice(-2000)}` : ''}`);
+        }
+        const glbBuffer = fs.readFileSync(tmpOutput);
+        const glbBase64 = glbBuffer.toString('base64');
+        // Clean up temporary file if caller did not request a custom output path
+        if (!options.outputGlbPath) {
+            try { fs.unlinkSync(tmpOutput); } catch {}
         }
 
         return {

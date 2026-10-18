@@ -500,6 +500,9 @@ export class GeminiClient {
             temperature?: number;
             maxOutputTokens?: number;
             stopSequences?: string[];
+            /** e.g. ['AUDIO'] for a speech model. */
+            responseModalities?: string[];
+            speechConfig?: Record<string, unknown>;
         }
     ): Promise<{ json: VertexGenerateContentJson } & CredentialAnswer> {
         const fetchFn = resolveFetch();
@@ -508,7 +511,9 @@ export class GeminiClient {
             generationConfig: {
                 temperature: generationConfig?.temperature ?? 0.2,
                 maxOutputTokens: generationConfig?.maxOutputTokens ?? 2048,
-                ...(generationConfig?.stopSequences ? { stopSequences: generationConfig.stopSequences } : {})
+                ...(generationConfig?.stopSequences ? { stopSequences: generationConfig.stopSequences } : {}),
+                ...(generationConfig?.responseModalities ? { responseModalities: generationConfig.responseModalities } : {}),
+                ...(generationConfig?.speechConfig ? { speechConfig: generationConfig.speechConfig } : {})
             }
         };
 

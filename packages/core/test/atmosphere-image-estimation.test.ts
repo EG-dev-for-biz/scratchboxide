@@ -163,7 +163,7 @@ describe('Atmosphere Image Estimation Service & Pipeline', () => {
                 width: sky.width,
                 height: sky.height,
                 knownCoords: { lat: 41.8902, lng: 12.4922 },
-                timestampIso: '2026-09-28T15:30:00Z',
+                timestampIso: '2026-09-28T12:30:00Z', // 14:30 CEST: the sun is ~38 deg up in the south-south-west
                 cameraHeadingDeg: 108.0,
                 cameraPitchDeg: 6.0
             });
@@ -203,7 +203,7 @@ describe('Atmosphere Image Estimation Service & Pipeline', () => {
                     imagePath,
                     latitude: 41.8902,
                     longitude: 12.4922,
-                    isoDate: '2026-09-28T15:30:00Z',
+                    isoDate: '2026-09-28T12:30:00Z',
                     cameraHeadingDeg: 108.0
                 }, {} as any);
                 const payload = execution.resultPayload as any;

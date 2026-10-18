@@ -57,6 +57,14 @@ export interface RegionSelectOptions {
      */
     refineBandTexels?: number;
     refineSweeps?: number;
+    /**
+     * Photo-consistency outlier rejection (Waechter, Moehrle and Goesele 2014, "Let There Be Color!"): in a block three or more
+     * views see, the views' mean colours are clustered by a mean shift (Gaussian kernel of this CIE76 width) and a view farther
+     * than `outlierDeltaE` from the mode is not a candidate there: the one view that sees a fence, a tree or the background
+     * through a mis-posed opening where the others see the wall. The outlier's weight in the block's texels is set to 0 (in place,
+     * renormalised), so it leaves the blend too; the caller recomputes the weighted mean. Default 0 (off).
+     */
+    outlierDeltaE?: number;
 }
 
 /** Per (map, view) gains, applied to the samples in place; returns how many (map, view) pairs got one and the mean |log gain|. */
@@ -97,7 +105,7 @@ export function chartLocalGains(atlas: UvAtlas, samples: ViewSamples[], index: T
 }
 
 /** One view per texel (-1 where none): see the file comment. */
-export function selectViewsPerRegion(atlas: UvAtlas, samples: ViewSamples[], index: TexelSampleIndex, opts: RegionSelectOptions = {}): { label: Int32Array; blocks: number; changes: number; refined: number; shadowedBlocks: number } {
+export function selectViewsPerRegion(atlas: UvAtlas, samples: ViewSamples[], index: TexelSampleIndex, opts: RegionSelectOptions = {}): { label: Int32Array; blocks: number; changes: number; refined: number; shadowedBlocks: number; outliers: number } {
     const B = opts.blockTexels ?? 8, lam0 = opts.changeCost ?? 0.4, lam1 = opts.disagreementCost ?? 0.08, covPen = opts.coveragePenalty ?? 3, sweeps = opts.sweeps ?? 6;
     const W = atlas.width, H = atlas.height, n = W * H;
     const { mapIndex } = atlas.texels;
@@ -112,6 +120,7 @@ export function selectViewsPerRegion(atlas: UvAtlas, samples: ViewSamples[], ind
     const BW = Math.ceil(W / B), BH = Math.ceil(H / B);
     interface Cand { k: number; cov: number; w: number; lab: [number, number, number]; shadow: number; dark?: boolean }
     const shadowCost = opts.shadowCost ?? 1.5, shadowTau = opts.shadowThreshold ?? 0.3;
+    let outliers = 0;
     const cands: Array<Cand[] | undefined> = new Array(BW * BH);
     const blockMap = new Int32Array(BW * BH).fill(-1);
     for (let by = 0; by < BH; by++) for (let bx = 0; bx < BW; bx++) {
@@ -143,6 +152,36 @@ export function selectViewsPerRegion(atlas: UvAtlas, samples: ViewSamples[], ind
             list.push({ k, cov, w: a.w / a.c, lab: linearToLab(a.rgb[0] / a.c, a.rgb[1] / a.c, a.rgb[2] / a.c) as [number, number, number], shadow: shadowCost * (a.sun / a.c) });
         }
         if (!list.length) continue;
+        const outDE = opts.outlierDeltaE ?? 0;
+        if (outDE > 0 && list.length >= 3) {
+            // mean shift from the median colour; views far from the mode are outliers in this block
+            const med = [0, 1, 2].map(c => { const v = list.map(x => x.lab[c]).sort((a, b) => a - b); return v[v.length >> 1]; });
+            let mode = med;
+            for (let it = 0; it < 8; it++) {
+                let ws = 0; const acc = [0, 0, 0];
+                for (const x of list) {
+                    const d2 = (x.lab[0] - mode[0]) ** 2 + (x.lab[1] - mode[1]) ** 2 + (x.lab[2] - mode[2]) ** 2;
+                    const w = Math.exp(-d2 / (2 * outDE * outDE)) * x.cov;
+                    ws += w; for (let c = 0; c < 3; c++) acc[c] += w * x.lab[c];
+                }
+                if (!(ws > 0)) break;
+                mode = acc.map(v => v / ws);
+            }
+            const keep = list.filter(x => Math.hypot(x.lab[0] - mode[0], x.lab[1] - mode[1], x.lab[2] - mode[2]) <= outDE);
+            if (keep.length >= 2 && keep.length < list.length) {
+                outliers += list.length - keep.length;
+                // the outlier views leave the block altogether: their weight in its texels goes to the views that agree
+                const gone = new Set(list.filter(x => !keep.includes(x)).map(x => x.k));
+                for (let y = by * B; y < Math.min(H, by * B + B); y++) for (let x = bx * B; x < Math.min(W, bx * B + B); x++) {
+                    const t = y * W + x;
+                    if (mapIndex[t] !== m) continue;
+                    let sum = 0;
+                    for (let p = index.start[t]; p < index.start[t + 1]; p++) { if (gone.has(index.view[p])) index.weight[p] = 0; sum += index.weight[p]; }
+                    if (sum > 0) for (let p = index.start[t]; p < index.start[t + 1]; p++) index.weight[p] /= sum;
+                }
+                list.length = 0; list.push(...keep);
+            }
+        }
         if (list.length >= 2) {
             // cast shadow: well below the block's median luminance across the views that see it (L* -> log luminance)
             const logY = list.map(c => Math.log(Math.max(1e-4, ((c.lab[0] + 16) / 116) ** 3)));
@@ -230,7 +269,7 @@ export function selectViewsPerRegion(atlas: UvAtlas, samples: ViewSamples[], ind
         const t = y * W + x;
         if (label[t] >= 0 && label[t + 1] >= 0 && label[t] !== label[t + 1] && mapIndex[t] === mapIndex[t + 1]) changes++;
     }
-    return { label, blocks, changes, refined, shadowedBlocks };
+    return { label, blocks, changes, refined, shadowedBlocks, outliers };
 }
 
 /**

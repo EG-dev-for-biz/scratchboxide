@@ -30,112 +30,28 @@ test('Universal Scene Synthesis & Photorealistic Mastery Integration Suite', asy
     const engine = new DirectDispatchOperatorEngine();
 
     // =========================================================================
-    // Test 1: Direct Dispatch Engine Scene Assembly Operators
+    // Test 1: the record-only scene assembly operators are gone
     // =========================================================================
-    console.log('  Testing Direct Dispatch Operators: Scene Assembly, Curvature AO, Weathering, Props...');
-    
-    // Scaffolding scene
-    const initialScene: Scene3DData = {
+    // sb_compose_scene_hierarchy, sb_scatter_props, sb_bake_curvature_ao, sb_apply_multi_layer_weathering and
+    // sb_setup_cinematic_lighting only wrote flag records into the scene; they are no longer registered.
+    engine.setSceneData({
         title: 'Universal Photorealistic Scene Test',
         renderMode: 'pbr',
-        environment: {
-            lighting: 'studio'
-        },
-        customMeshes: [
-            {
-                id: 'mesh-quantum-reactor',
-                name: 'Quantum Reactor Hero',
-                type: 'cylinder',
-                position: [0, 1.2, 0],
-                scale: [1, 2.5, 1],
-                material: {
-                    color: 0x90a4ae,
-                    metalness: 0.9,
-                    roughness: 0.3
-                }
-            }
-        ]
-    };
-    engine.setSceneData(initialScene);
-
-    // 1a. sb_compose_scene_hierarchy
-    const composeRes = engine.dispatch('sb_compose_scene_hierarchy', {
-        rootName: 'QuantumCoreAssembly',
-        nodes: [
-            {
-                id: 'containment-ring-top',
-                name: 'Magnetic Torus Ring Upper',
-                type: 'torus',
-                tier: 'secondary',
-                position: [0, 1.6, 0],
-                scale: [1.4, 0.22, 1.4]
-            }
-        ],
-        includeStudioPedestal: true,
-        pedestalRadius: 3.5
-    });
-    assert.strictEqual(composeRes.success, true);
-    assert.strictEqual(composeRes.data.nodeCount, 2);
-    assert.strictEqual(composeRes.data.nodes[0].tier, 'secondary');
-    assert.strictEqual(composeRes.data.nodes[1].name, 'Studio_Pedestal');
-
-    // 1b. sb_bake_curvature_ao
-    const bakeRes = engine.dispatch('sb_bake_curvature_ao', {
-        targetMeshId: 'mesh-quantum-reactor',
-        pointinessContrast: 3.5,
-        cavityContrast: 4.0,
-        ambientOcclusionStrength: 0.8
-    });
-    assert.strictEqual(bakeRes.success, true);
-    const bakedMesh = engine.getObject('mesh-quantum-reactor') as any;
-    assert.strictEqual(bakedMesh.vertexColorMasks.pointinessBaked, true);
-    assert.strictEqual(bakedMesh.vertexColorMasks.cavityAoBaked, true);
-
-    // 1c. sb_apply_multi_layer_weathering
-    const weatherRes = engine.dispatch('sb_apply_multi_layer_weathering', {
-        targetMeshId: 'mesh-quantum-reactor',
-        baseColor: '#263238',
-        baseMetallic: 0.1,
-        baseRoughness: 0.5,
-        wornEdgeColor: '#ffd700',
-        wornEdgeMetallic: 0.98,
-        wornEdgeRoughness: 0.12,
-        creviceDirtColor: '#0a0806',
-        creviceDirtRoughness: 0.95
-    });
-    assert.strictEqual(weatherRes.success, true);
-    assert.ok(weatherRes.data.weathering);
-    const weatheredMesh = engine.getObject('mesh-quantum-reactor') as any;
-    assert.ok(weatheredMesh.weathering);
-    assert.strictEqual(weatheredMesh.weathering.base.color, '#263238');
-    assert.strictEqual(weatheredMesh.weathering.wornEdge.color, '#ffd700');
-
-    // 1d. sb_scatter_props
-    const scatterRes = engine.dispatch('sb_scatter_props', {
-        targetMeshId: 'containment-ring-top',
-        count: 16,
-        propType: 'box',
-        minScale: 0.05,
-        maxScale: 0.15,
-        spreadRadius: 3.0
-    });
-    assert.strictEqual(scatterRes.success, true);
-    assert.strictEqual(scatterRes.data.scatterCount, 16);
-    const scatteredObj = engine.getSceneData().customMeshes?.find(m => m.name?.startsWith('Prop_box_'));
-    assert.ok(scatteredObj);
-
-    // 1e. sb_setup_cinematic_lighting
-    const lightRes = engine.dispatch('sb_setup_cinematic_lighting', {
-        rigScale: 5.5,
-        targetCenter: [0, 1.2, 0],
-        keyKelvin: 5600,
-        fillRatio: 0.35,
-        rimIntensity: 2.4
-    });
-    assert.strictEqual(lightRes.success, true);
-    const currentScene = engine.getSceneData();
-    assert.strictEqual(currentScene.environment?.lighting, 'cinematic_3point_studio');
-    assert.strictEqual(currentScene.environment?.cinematicRig?.keyLight?.kelvin, 5600);
+        environment: { lighting: 'studio' },
+        customMeshes: [{ id: 'mesh-quantum-reactor', name: 'Quantum Reactor Hero', type: 'cylinder', position: [0, 1.2, 0] }]
+    } as Scene3DData);
+    for (const name of [
+        'sb_compose_scene_hierarchy',
+        'sb_scatter_props',
+        'sb_bake_curvature_ao',
+        'sb_apply_multi_layer_weathering',
+        'sb_setup_cinematic_lighting'
+    ]) {
+        assert.strictEqual(engine.getOperator(name), undefined, name);
+        assert.strictEqual(engine.dispatch(name, { targetMeshId: 'mesh-quantum-reactor' }).success, false, name);
+    }
+    assert.strictEqual(engine.getSceneData().customMeshes?.length, 1);
+    assert.strictEqual(engine.getSceneData().environment?.lighting, 'studio');
 
     // =========================================================================
     // Test 3: Procedural 3D Theme Detection & Synthesizer

@@ -8,36 +8,23 @@
  ********************************************************************************/
 
 import * as THREE from 'three';
-import type { OperatorDefinition } from './types';
-import { recomputeGeometryNormals } from '../mesh-sculpting-engine';
+import { type OperatorDefinition, OperatorUnavailableError, requireLiveMesh } from './types';
 import { TerrainManager } from '../TerrainManager';
+
+/** One ground sampler per viewport scene, reused across snaps instead of being rebuilt per call. */
+const terrainManagers = new WeakMap<THREE.Scene, TerrainManager>();
 
 export const TRANSFORM_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_set_transform',
         category: 'transform',
         description: 'Directly sets absolute position, rotation (Euler), and scale for a target object.',
-        execute: (ctx, params: { objectId: string; name?: string; type?: string; position?: [number, number, number]; rotation?: [number, number, number]; scale?: [number, number, number] }) => {
-            let found = ctx.findObject(params.objectId);
-            if (!found) {
-                const scene = ctx.getSceneData();
-                if (!scene.customMeshes) scene.customMeshes = [];
-                const newMesh = {
-                    id: params.objectId,
-                    name: params.name || params.objectId,
-                    type: (params.type || 'box') as any,
-                    position: params.position ? [...params.position] as [number, number, number] : [0, 0, 0] as [number, number, number],
-                    rotation: params.rotation ? [...params.rotation] as [number, number, number] : [0, 0, 0] as [number, number, number],
-                    scale: params.scale ? [...params.scale] as [number, number, number] : [1, 1, 1] as [number, number, number]
-                };
-                scene.customMeshes.push(newMesh);
-                found = ctx.findObject(params.objectId);
-            }
-            if (!found) throw new Error(`Object with id '${params.objectId}' not found.`);
+        execute: (ctx, params: { objectId: string; position?: [number, number, number]; rotation?: [number, number, number]; scale?: [number, number, number] }) => {
+            // An unknown id fails: setting a transform never creates an object to put it on.
+            const found = ctx.findObject(params.objectId);
+            if (!found) throw new Error(`sb_set_transform: object '${params.objectId}' not found.`);
 
             const obj = found.object;
-            if (params.name && !obj.name) obj.name = params.name;
-            if (params.type && !obj.type) obj.type = params.type;
             if (params.position) {
                 obj.position = [...params.position];
                 if (obj.space?.spatial3d) {
@@ -161,76 +148,36 @@ export const TRANSFORM_OPERATORS: OperatorDefinition[] = [
         }
     },
     {
-        name: 'sb_apply_transforms',
-        category: 'transform',
-        description: 'Bakes/freezes object position, rotation, and scale transformations directly into vertex geometry.',
-        execute: (ctx, params: { objectId: string }) => {
-            const found = ctx.findObject(params.objectId);
-            if (!found) throw new Error(`Object with id '${params.objectId}' not found.`);
-
-            const obj = found.object;
-            const pos = obj.position || [0, 0, 0];
-            const rot = obj.rotation || [0, 0, 0];
-            const scl = obj.scale || [1, 1, 1];
-
-            // Build transformation matrix
-            const matrix = new THREE.Matrix4();
-            const position = new THREE.Vector3(pos[0], pos[1], pos[2]);
-            const euler = new THREE.Euler(rot[0], rot[1], rot[2]);
-            const quaternion = new THREE.Quaternion().setFromEuler(euler);
-            const scale = new THREE.Vector3(scl[0], scl[1], scl[2]);
-            matrix.compose(position, quaternion, scale);
-
-            if (found.threeObject && (found.threeObject as THREE.Mesh).geometry) {
-                const geo = (found.threeObject as THREE.Mesh).geometry;
-                geo.applyMatrix4(matrix);
-                recomputeGeometryNormals(geo);
-            }
-
-            // Reset object transform properties to identity
-            obj.position = [0, 0, 0];
-            obj.rotation = [0, 0, 0];
-            obj.scale = [1, 1, 1];
-
-            if (found.threeObject) {
-                found.threeObject.position.set(0, 0, 0);
-                found.threeObject.rotation.set(0, 0, 0);
-                found.threeObject.scale.set(1, 1, 1);
-            }
-
-            return { objectId: params.objectId, applied: true, position: obj.position, scale: obj.scale };
-        }
-    },
-    {
         name: 'sb_set_origin',
         category: 'transform',
-        description: 'Shifts object local origin/pivot point (center, bottom, top) while keeping world-space visual position unchanged.',
-        execute: (ctx, params: { objectId: string; originType?: 'center' | 'bottom' | 'top' | 'geometry_center' | 'custom'; customOrigin?: [number, number, number] }) => {
-            const found = ctx.findObject(params.objectId);
-            if (!found) throw new Error(`Object with id '${params.objectId}' not found.`);
-
-            const obj = found.object;
+        description: 'Moves the pivot of the live viewport mesh to its bounding-box center, bottom or top center, or a custom point in its local coordinates, shifting the geometry and the object position together so the mesh stays where it is in the world. Needs the live 3D viewport.',
+        execute: (ctx, params: { objectId: string; originType?: 'center' | 'bottom' | 'top' | 'custom' | (string & {}); customOrigin?: [number, number, number] }) => {
+            const { mesh, record } = requireLiveMesh(ctx, params.objectId, 'sb_set_origin');
             const originType = params.originType || 'center';
-            const scale = obj.scale || [1, 1, 1];
-            const offset = new THREE.Vector3(0, 0, 0);
-
-            if (originType === 'bottom') {
-                offset.set(0, scale[1] / 2, 0);
-            } else if (originType === 'top') {
-                offset.set(0, -scale[1] / 2, 0);
-            } else if (originType === 'custom' && params.customOrigin) {
-                offset.set(params.customOrigin[0], params.customOrigin[1], params.customOrigin[2]);
+            const geo = mesh.geometry;
+            geo.computeBoundingBox();
+            const bb = geo.boundingBox!;
+            const pivot = bb.getCenter(new THREE.Vector3());
+            if (originType === 'bottom') pivot.y = bb.min.y;
+            else if (originType === 'top') pivot.y = bb.max.y;
+            else if (originType === 'custom') {
+                if (!Array.isArray(params.customOrigin)) throw new Error("sb_set_origin: originType 'custom' needs customOrigin [x, y, z] in the mesh's local coordinates.");
+                pivot.set(params.customOrigin[0], params.customOrigin[1], params.customOrigin[2]);
+            } else if (originType !== 'center') {
+                throw new Error(`sb_set_origin: originType must be center, bottom, top or custom (got '${originType}').`);
             }
-
-            if (found.threeObject && (found.threeObject as THREE.Mesh).geometry) {
-                const geo = (found.threeObject as THREE.Mesh).geometry;
-                geo.translate(-offset.x, -offset.y, -offset.z);
-                recomputeGeometryNormals(geo);
+            // The geometry moves by -pivot in local space; the object moves by the same vector in its parent's space.
+            geo.translate(-pivot.x, -pivot.y, -pivot.z);
+            const shift = pivot.clone().multiply(mesh.scale).applyQuaternion(mesh.quaternion);
+            mesh.position.add(shift);
+            mesh.updateMatrixWorld(true);
+            record.position = [mesh.position.x, mesh.position.y, mesh.position.z];
+            if (record.space?.spatial3d) {
+                record.space.spatial3d.x = mesh.position.x;
+                record.space.spatial3d.y = mesh.position.y;
+                record.space.spatial3d.z = mesh.position.z;
             }
-
-            (obj as any).originType = originType;
-
-            return { objectId: params.objectId, originType, offset: [offset.x, offset.y, offset.z] };
+            return { objectId: params.objectId, originType, localPivot: pivot.toArray(), position: record.position };
         }
     },
     {
@@ -258,7 +205,6 @@ export const TRANSFORM_OPERATORS: OperatorDefinition[] = [
                 scene.environment.longitude = params.lng;
             }
 
-            ctx.recordState(`Set Tile Anchor (${params.landmarkName || `${params.lat.toFixed(3)}, ${params.lng.toFixed(3)}`})`);
 
             return { geoAnchor: scene.geoAnchor };
         }
@@ -269,10 +215,15 @@ export const TRANSFORM_OPERATORS: OperatorDefinition[] = [
         description: 'Accurately calculates ground elevation and snaps 3D object(s) onto terrain surface.',
         execute: (ctx, params?: { objectId?: string; offset?: number; spreadM?: number }) => {
             const threeScene = ctx.getThreeScene();
-            const terrainManager = new TerrainManager({ scene: threeScene });
+            if (!threeScene) throw new OperatorUnavailableError('sb_snap_to_terrain raycasts the ground in the live 3D viewport, and no viewport is attached here.');
+            let terrainManager = terrainManagers.get(threeScene);
+            if (!terrainManager) {
+                terrainManager = new TerrainManager({ scene: threeScene });
+                terrainManagers.set(threeScene, terrainManager);
+            }
             const offset = params?.offset ?? 0;
             const spreadM = params?.spreadM ?? 4;
-            const snappedObjects: Array<{ id: string; previousY: number; newY: number; groundElevation: number }> = [];
+            const snappedObjects: Array<{ id: string; previousY: number; newY: number }> = [];
 
             const snapTarget = (targetId: string) => {
                 const found = ctx.findObject(targetId);
@@ -306,8 +257,7 @@ export const TRANSFORM_OPERATORS: OperatorDefinition[] = [
                     snappedObjects.push({
                         id: targetId,
                         previousY: prevY,
-                        newY,
-                        groundElevation: newY - offset
+                        newY
                     });
                 }
             };
@@ -328,7 +278,6 @@ export const TRANSFORM_OPERATORS: OperatorDefinition[] = [
                 }
             }
 
-            ctx.recordState(`Snap ${snappedObjects.length} object(s) to terrain`);
 
             return {
                 snappedCount: snappedObjects.length,

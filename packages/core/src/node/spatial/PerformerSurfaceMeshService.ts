@@ -580,7 +580,7 @@ export class PerformerSurfaceMeshService {
     }
 
     /** Rebuilds public/models/humanoid_<id>.glb from models/performer_4dgs/demos/<id>/{gvhmr_body.json,human_4dgs.ply}. */
-    buildForDemo(demoDir: string, outGlbPath: string, options: SurfaceBuildOptions = {}): { vertices: number; triangles: number } {
+    async buildForDemo(demoDir: string, outGlbPath: string, options: SurfaceBuildOptions = {}): Promise<{ vertices: number; triangles: number }> {
         const body: GvhmrBody = JSON.parse(fs.readFileSync(path.join(demoDir, 'gvhmr_body.json'), 'utf-8'));
         const { gaussians } = decodeGaussianPly(fs.readFileSync(path.join(demoDir, 'human_4dgs.ply'), 'utf-8'));
 
@@ -595,7 +595,7 @@ export class PerformerSurfaceMeshService {
             const gvhmr = new GvhmrBodyService();
             const w = body.width || 1080, h = body.height || 1920;
             try {
-                const heroBuf = gvhmr.readRgb(heroImgPath, w, h);
+                const heroBuf = await gvhmr.readRgb(heroImgPath, w, h);
                 buildOptions = {
                     ...buildOptions,
                     heroImageRgb: heroBuf,

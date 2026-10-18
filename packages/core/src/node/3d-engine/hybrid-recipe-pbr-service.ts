@@ -21,6 +21,7 @@ import {
   generateTileableDetailMap
 } from './recipe-pbr-geometry-kernel';
 import { GltfBinaryPacker } from './gltf-binary-packer';
+import { AdaptivePbrInputError } from './adaptive-pbr-errors';
 
 export interface HybridRecipeOptions {
   outputMode?: 'webgl-recipe' | 'standard-khronos' | 'both';
@@ -112,6 +113,23 @@ export class HybridRecipePbrService {
     const detailSize = options.detailSize ?? 512;
     const detailKinds: DetailMapKind[] = options.detailKinds ?? ['stone', 'asphalt', 'foliage'];
     const outputMode = options.outputMode ?? 'webgl-recipe';
+
+    // The rebuild below re-emits primitives[0] of every mesh from POSITION and TEXCOORD_0 and replaces the file's accessor
+    // list, so anything else would leave dangling accessor indices or a bare TypeError: refuse it by name instead.
+    const meshes: any[] = gltf.meshes ?? [];
+    if (meshes.length === 0) throw new AdaptivePbrInputError('recipe_hybrid needs at least one mesh; this GLB has none.');
+    meshes.forEach((mesh, mi) => {
+      const label = `mesh #${mi}${mesh.name ? ` ${JSON.stringify(mesh.name)}` : ''}`;
+      if ((mesh.primitives ?? []).length !== 1) {
+        throw new AdaptivePbrInputError(`recipe_hybrid rebuilds exactly one primitive per mesh; ${label} has ${(mesh.primitives ?? []).length}. Its other primitives would be left pointing at accessors that no longer exist.`, { meshIndex: mi });
+      }
+      const attrs = mesh.primitives[0].attributes ?? {};
+      for (const needed of ['POSITION', 'TEXCOORD_0']) {
+        if (attrs[needed] === undefined) {
+          throw new AdaptivePbrInputError(`recipe_hybrid derives its per-vertex recipe from POSITION and TEXCOORD_0; ${label} has no ${needed}. An untextured mesh has no TEXCOORD_0: texture it with 'height_blended_triplanar' / 'carrier_conformal_sheet' instead.`, { meshIndex: mi, missing: needed });
+        }
+      }
+    });
 
     // 1. Extract and compute geometry layer per submesh
     let totalVertices = 0;

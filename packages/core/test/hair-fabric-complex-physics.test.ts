@@ -216,73 +216,18 @@ int main() {
     // ========================================================================
     // 4. TypeScript Operator Engine Dispatch Verification
     // ========================================================================
-    it('should register and execute hair, fabric, and ragdoll direct operators', () => {
-        const scene: Scene3DData = {
-            customMeshes: [
-                {
-                    id: 'human_scalp',
-                    name: 'Scalp Mesh',
-                    type: 'sphere',
-                    position: [0, 1.6, 0],
-                    scale: [0.2, 0.2, 0.2]
-                },
-                {
-                    id: 'flag_cloth',
-                    name: 'Woven Cloth',
-                    type: 'plane',
-                    position: [0, 2.0, 0],
-                    scale: [1.5, 1.0, 1.0]
-                }
-            ]
-        };
-
-        const engine = createOperatorEngine(scene);
-
-        // Operator 1: sb_generate_hair_strands
-        const hairRes = engine.dispatch('sb_generate_hair_strands', {
-            targetMeshId: 'human_scalp',
-            guideCount: 32,
-            strandCount: 2048,
-            length: 0.22,
-            clumping: 0.85,
-            eumelanin: 0.7,
-            pheomelanin: 0.15
-        });
-        expect(hairRes.success).toBe(true);
-        expect(hairRes.data.hairGroom.strandCount).toBe(2048);
-
-        // Operator 2: sb_simulate_hair_dynamics
-        const hairDynRes = engine.dispatch('sb_simulate_hair_dynamics', {
-            targetMeshId: 'human_scalp',
-            steps: 40,
-            wind: [2.0, 0, 0]
-        });
-        expect(hairDynRes.success).toBe(true);
-        expect(hairDynRes.data.stepsExecuted).toBe(40);
-
-        // Operator 3: sb_simulate_fabric_aerodynamics
-        const fabricRes = engine.dispatch('sb_simulate_fabric_aerodynamics', {
-            targetMeshId: 'flag_cloth',
-            pattern: 'twill',
-            warpCompliance: 1e-7,
-            weftCompliance: 2e-7,
-            shearCompliance: 4e-5,
-            airDragCoeff: 1.25,
-            wind: [0, 0, 5]
-        });
-        expect(fabricRes.success).toBe(true);
-        expect(fabricRes.data.fabricProperties.pattern).toBe('twill');
-
-        // Operator 4: sb_create_ragdoll_simulation
-        const ragdollRes = engine.dispatch('sb_create_ragdoll_simulation', {
-            rootPosition: [0, 1.5, 0],
-            scale: 1.0,
-            meshPrefix: 'hero_ragdoll'
-        });
-        expect(ragdollRes.success).toBe(true);
-        expect(ragdollRes.data.bonesCreated).toBe(7);
-        expect(engine.getSceneData().customMeshes?.some(m => m.id === 'hero_ragdoll_pelvis')).toBe(true);
-        expect(engine.getSceneData().customMeshes?.some(m => m.id === 'hero_ragdoll_head')).toBe(true);
+    it('no longer registers the hair, fabric and ragdoll operators that only echoed configs', () => {
+        const engine = createOperatorEngine({ customMeshes: [] } as Scene3DData);
+        for (const name of [
+            'sb_generate_hair_strands',
+            'sb_simulate_hair_dynamics',
+            'sb_simulate_fabric_aerodynamics',
+            'sb_create_ragdoll_simulation'
+        ]) {
+            expect(engine.getOperator(name)).toBeUndefined();
+            expect(engine.dispatch(name, {}).success).toBe(false);
+        }
+        expect(engine.getSceneData().customMeshes).toEqual([]);
     });
 
     // ========================================================================

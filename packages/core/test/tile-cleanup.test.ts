@@ -9,11 +9,34 @@
 
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import {
     PhotorealTileCleanupService,
     NativeCppCompilerService
 } from '../src/node';
+import { MissingInputError } from '../src/common/errors/pipeline-errors';
+
+// A real building GLB from the repo (an SB-Archi temple), used as the tile to clean.
+const INPUT_GLB = path.resolve(__dirname, '../../../deploy/cloud-run/spatial-separator/assets/temple_venus_roma_sb_archi.glb');
+
+/** Triangle count of a GLB, read from its own accessors (indexed or not). */
+function glbTriangleCount(file: string): number {
+    const buf = fs.readFileSync(file);
+    const jsonLen = buf.readUInt32LE(12);
+    const gltf = JSON.parse(buf.toString('utf8', 20, 20 + jsonLen));
+    let tris = 0;
+    for (const mesh of gltf.meshes ?? []) {
+        for (const prim of mesh.primitives ?? []) {
+            if (prim.mode !== undefined && prim.mode !== 4) continue;
+            const acc = prim.indices !== undefined ? gltf.accessors[prim.indices] : gltf.accessors[prim.attributes.POSITION];
+            tris += acc.count / 3;
+        }
+    }
+    return tris;
+}
 
 describe('3D Photogrammetry & Tile Cleanup Pipeline (In-App / Cloud Run)', () => {
     const service = new PhotorealTileCleanupService();
@@ -35,130 +58,62 @@ describe('3D Photogrammetry & Tile Cleanup Pipeline (In-App / Cloud Run)', () =>
         expect(headerContent).toContain('class ElevationConformer');
     });
 
-    it('2. should verify standalone C++ CLI pipeline compiles and runs with high performance', async () => {
+    it('2. cleans the tile it is given (triangle counts come from the input GLB)', async () => {
         const binPath = await service.ensureBinary();
         expect(fs.existsSync(binPath)).toBe(true);
+        // Built through native-build, which records the dependency list it uses to rebuild a stale binary.
+        expect(fs.existsSync(`${binPath}.d`)).toBe(true);
 
         const result = await service.cleanPhotogrammetryTile({
+            inputGlbPath: INPUT_GLB,
             angleThresholdDegrees: 4.0,
             snapToleranceMeters: 0.85,
             roadWidthMeters: 8.0
         });
 
         expect(result.success).toBe(true);
-        expect(result.metrics.rawTriangles).toBeGreaterThan(5000);
-        expect(result.metrics.decimatedTriangles).toBeLessThan(result.metrics.rawTriangles);
-        // Verify >60% polygon reduction via planar limited dissolve
-        expect(result.metrics.polygonReductionPercent).toBeGreaterThan(60.0);
-        
-        // Verify semantic separation
-        expect(result.metrics.facadeTriangles).toBeGreaterThan(0);
-        expect(result.metrics.rooftopTriangles).toBeGreaterThan(0);
-        expect(result.metrics.groundTriangles).toBeGreaterThan(0);
-        expect(result.metrics.roadTriangles).toBeGreaterThan(0);
+        expect(result.stdout).toContain(INPUT_GLB);
+        expect(result.metrics.rawTriangles).toBe(glbTriangleCount(INPUT_GLB));
+        expect(result.metrics.decimatedTriangles).toBeLessThanOrEqual(result.metrics.rawTriangles);
+        expect(result.metrics.facadeTriangles + result.metrics.rooftopTriangles).toBeGreaterThan(0);
 
-        // Verify greebles and vegetation blob detection
-        expect(result.metrics.treeAnchorsCount).toBeGreaterThanOrEqual(1);
-        expect(result.metrics.rooftopGreeblesCount).toBeGreaterThanOrEqual(1);
-
-        // Verify performance (under 3000ms for full multi-material PBR synthesis)
-        expect(result.metrics.processingTimeMs).toBeLessThan(3000);
-
-        // Verify valid glTF 2.0 binary output
         expect(result.glbBuffer).toBeDefined();
-        expect(result.glbBuffer!.length).toBeGreaterThan(1000);
-        const magic = result.glbBuffer!.toString('utf8', 0, 4);
-        expect(magic).toBe('glTF');
-
-        expect(result.glbBase64).toBeDefined();
+        expect(result.glbBuffer!.toString('utf8', 0, 4)).toBe('glTF');
         expect(result.glbBase64!.length).toBeGreaterThan(1000);
-    });
-
-    it('3. should support custom threshold parameters for architectural decimation', async () => {
-        const resultStrict = await service.cleanPhotogrammetryTile({
-            angleThresholdDegrees: 2.0,
-            snapToleranceMeters: 0.40
-        });
-
-        expect(resultStrict.success).toBe(true);
-        expect(resultStrict.metrics.polygonReductionPercent).toBeGreaterThan(25.0);
-    });
-
-    it('4. should extract texture-informed cues (albedo, glazing, fenestration) and embed PBR texture maps', async () => {
-        const result = await service.cleanPhotogrammetryTile({
-            angleThresholdDegrees: 4.0,
-            snapToleranceMeters: 0.85
-        });
-
-        expect(result.success).toBe(true);
-        expect(result.metrics.textureInformedCues).toBeDefined();
 
         const cues = result.metrics.textureInformedCues!;
-        // Verify extracted facade albedo and glazing tone
-        expect(cues.facadeAlbedoRgb).toBeDefined();
-        expect(cues.facadeAlbedoRgb!.length).toBe(3);
-        expect(cues.facadeAlbedoRgb![0]).toBeGreaterThan(0.0);
-        expect(cues.facadeAlbedoRgb![0]).toBeLessThanOrEqual(1.0);
-
-        expect(cues.glazingToneRgb).toBeDefined();
-        expect(cues.glazingToneRgb!.length).toBe(3);
-        expect(cues.windowToWallRatioPercent).toBeGreaterThan(15.0);
-        expect(cues.detectedFloorHeightMeters).toBeCloseTo(3.6, 1);
-        expect(cues.detectedBayWidthMeters).toBeCloseTo(2.5, 1);
-
-        // Verify 24 PBR texture maps (6 materials x 4 maps) are embedded
-        expect(cues.embeddedPbrTextureCount).toBe(24);
-        expect(result.glbBuffer).toBeDefined();
-        // Since GLB embeds 24 PNGs (each 1024x1024), buffer size should exceed 10 MB
-        expect(result.glbBuffer!.length).toBeGreaterThan(10 * 1024 * 1024);
+        expect(cues.partitionedSubmeshCount).toBe(cues.submeshDetails!.length);
+        expect(cues.submeshDetails!.reduce((a, s) => a + s.triangles, 0)).toBeGreaterThan(0);
     });
 
-    it('5. should synthesize multi-layer biophysical patina (cavity soot, rain streaks, verdigris, RNM, Toksvig AA)', async () => {
-        const result = await service.cleanPhotogrammetryTile({
-            angleThresholdDegrees: 4.0,
-            snapToleranceMeters: 0.85,
-            patina: {
-                buildingAgeYears: 90,
-                sootCavityIntensity: 0.85,
-                rainStreakIntensity: 0.78,
-                copperVerdigrisIntensity: 0.65,
-                edgeAbrasionFactor: 0.55
-            }
-        });
-
-        expect(result.success).toBe(true);
-        expect(result.metrics.biophysicalPatina).toBeDefined();
-        expect(result.glbBuffer).toBeDefined();
-        expect(result.glbBuffer!.length).toBeGreaterThan(10 * 1024 * 1024);
+    it('3. passes paths as arguments, never through a shell', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-tile-cleanup-'));
+        // A shell would expand $(...) and split on the quote and semicolon; as an argument the name is used literally.
+        const tricky = path.join(dir, 'tile "$(id)" ; x.glb');
+        fs.copyFileSync(INPUT_GLB, tricky);
+        try {
+            const result = await service.cleanPhotogrammetryTile({
+                inputGlbPath: tricky,
+                outputGlbPath: path.join(dir, 'out $(id).glb'),
+                patina: { buildingAgeYears: 90, sootCavityIntensity: 0.85 }
+            });
+            expect(result.metrics.rawTriangles).toBe(glbTriangleCount(INPUT_GLB));
+            expect(result.metrics.biophysicalPatina).toBeDefined();
+            expect(fs.existsSync(path.join(dir, 'out $(id).glb'))).toBe(true);
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
     });
 
-    it('6. should synthesize multi-material architectural submeshes and rich micro-textures', async () => {
-        const result = await service.cleanPhotogrammetryTile({
-            angleThresholdDegrees: 4.0,
-            snapToleranceMeters: 0.85,
-            textureResolution: 1024
-        });
+    it('4. refuses without an input tile instead of cleaning a built-in model', async () => {
+        await expect(service.cleanPhotogrammetryTile({})).rejects.toBeInstanceOf(MissingInputError);
+        await expect(
+            service.cleanPhotogrammetryTile({ inputGlbPath: path.join(os.tmpdir(), 'no_such_tile_8c1f.glb') })
+        ).rejects.toBeInstanceOf(MissingInputError);
 
-        expect(result.success).toBe(true);
-        const cues = result.metrics.textureInformedCues;
-        expect(cues).toBeDefined();
-
-        // Verify 6 semantic architectural submeshes partitioned
-        expect(cues!.partitionedSubmeshCount).toBe(6);
-        expect(cues!.submeshDetails).toBeDefined();
-        expect(cues!.submeshDetails!.length).toBe(6);
-
-        const submeshNames = cues!.submeshDetails!.map(s => s.name);
-        expect(submeshNames).toContain('submesh_limestone_facade');
-        expect(submeshNames).toContain('submesh_bronze_spandrels');
-        expect(submeshNames).toContain('submesh_stainless_steel');
-        expect(submeshNames).toContain('submesh_granite_plinth');
-        expect(submeshNames).toContain('submesh_terrace_bitumen');
-        expect(submeshNames).toContain('submesh_streetscape');
-
-        // Verify all 24 PBR texture maps (6 materials x 4 maps)
-        expect(cues!.totalEmbeddedMapsCount).toBe(24);
-        expect(result.glbBuffer).toBeDefined();
-        expect(result.glbBuffer!.length).toBeGreaterThan(10 * 1024 * 1024);
+        const binPath = await service.ensureBinary();
+        const err: any = await promisify(execFile)(binPath, ['--output', path.join(os.tmpdir(), 'unused.glb')]).catch(e => e);
+        expect(err.code).toBe(2);
+        expect(String(err.stderr)).toContain('--input');
     });
 });

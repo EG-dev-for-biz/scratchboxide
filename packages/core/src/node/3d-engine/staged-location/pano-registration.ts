@@ -21,6 +21,7 @@
  * pair triangulates to.
  */
 
+import type { PanoWarp } from './pano-joint-registration';
 import type { Vec3 } from '../../../common/spatial/staged-location-contracts';
 import { ZERO_CORRECTION, type PoseCorrection } from '../../spatial/StreetViewPoseRegistrar';
 import { boxPixels, castCamera, castRay, pixelRay, type CastFace, type CastView } from './survey-casting';
@@ -132,11 +133,16 @@ export interface Registration {
     corrections: Corrections;
     perPano: Array<{
         panoId: string; dxM: number; dzM: number; dyawDeg: number; dpitchDeg: number; pairs: number; beforeRmsM: number; afterRmsM: number;
-        /** 'edges' when the pose is the geometric (edge) registration's (pano-edge-registration.ts); absent for the box solve. */
-        method?: 'edges';
-        /** The edge registration's residual at the frames' distance, metres (set with method 'edges'). */
+        /**
+         * 'edges' when the pose is the geometric (edge) registration's (pano-edge-registration.ts), 'joint' when it is the joint
+         * registration's (pano-joint-registration.ts); absent for the box solve.
+         */
+        method?: 'edges' | 'joint';
+        /** The residual of the pose against the scan at the frames' distance, metres (set with method 'edges' or 'joint'). */
         edgeResidualM?: number;
     }>;
+    /** Per-pano non-rigid warps of the joint registration, when the held-out fit kept them (pano-joint-registration.ts). */
+    warps?: Map<string, PanoWarp>;
     /** Panos whose solved shift was implausible (a bad match, not a pose): their pairs were left out and the rest solved again; their poses stay nominal. */
     setAside: Array<{ panoId: string; reason: string; dxM: number; dzM: number; dyawDeg: number; dpitchDeg: number }>;
     pairs: PairReport[];

@@ -27,6 +27,7 @@ import {
     GeminiTtsRequest,
     GeminiTtsResponse
 } from '../common/gemini-protocol';
+import { MediaModelUnavailableError, MissingInputError } from '../common/errors/pipeline-errors';
 import { FimCompletionService } from './fim-completion-service';
 import { QuickEditService } from './quick-edit-service';
 import {
@@ -101,6 +102,32 @@ import {
 } from './gemini/artifact-synthesis';
 
 export { DEFAULT_GEMINI_MODEL, FALLBACK_GEMINI_MODELS, DEFAULT_SUBAGENT_MODEL, FALLBACK_SUBAGENT_MODELS };
+
+/**
+ * Gemini TTS returns raw 16-bit little-endian PCM (audio/L16;codec=pcm;rate=24000); browsers decode WAV, so the PCM is
+ * wrapped in a RIFF header. Audio that already has a container is returned as is.
+ */
+export function pcmToWavBase64(base64: string, mimeType: string): string {
+    if (!/l16|pcm/i.test(mimeType)) return base64;
+    const pcm = Buffer.from(base64, 'base64');
+    const rate = Number(/rate=(\d+)/i.exec(mimeType)?.[1] ?? 24000);
+    const channels = Number(/channels=(\d+)/i.exec(mimeType)?.[1] ?? 1);
+    const header = Buffer.alloc(44);
+    header.write('RIFF', 0, 'ascii');
+    header.writeUInt32LE(36 + pcm.length, 4);
+    header.write('WAVE', 8, 'ascii');
+    header.write('fmt ', 12, 'ascii');
+    header.writeUInt32LE(16, 16);
+    header.writeUInt16LE(1, 20);
+    header.writeUInt16LE(channels, 22);
+    header.writeUInt32LE(rate, 24);
+    header.writeUInt32LE(rate * channels * 2, 28);
+    header.writeUInt16LE(channels * 2, 32);
+    header.writeUInt16LE(16, 34);
+    header.write('data', 36, 'ascii');
+    header.writeUInt32LE(pcm.length, 40);
+    return Buffer.concat([header, pcm]).toString('base64');
+}
 
 /**
  * Facade over the Gemini stack. Owns the collaborating modules under `./gemini/` and the
@@ -598,22 +625,36 @@ export class GeminiService {
     // Media & research (structured placeholders pending live API wiring)
     // ------------------------------------------------------------------
 
-    /** Synthesize speech using Google's expressive TTS model. */
+    /**
+     * Synthesizes speech with the Gemini TTS model named by SCRATCHBOX_TTS_MODEL (e.g. gemini-2.5-flash-preview-tts),
+     * through the same credentials as chat. Returns base64 WAV. Throws MediaModelUnavailableError when no TTS model is
+     * configured or the model returns no audio; there is no canned audio.
+     */
     async synthesizeSpeech(req: GeminiTtsRequest): Promise<GeminiTtsResponse> {
-        try {
-            // Under normal production, we call the @google/genai Interactions speech API.
-            // For live server execution, we return a structured Base64 audio payload representing expressive speech.
-            void req;
-            return {
-                success: true,
-                audioContent: 'UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAAA' // Valid small RIFF WAV mock
-            };
-        } catch (err: unknown) {
-            return {
-                success: false,
-                error: errorMessage(err) || 'TTS Synthesis failed'
-            };
+        const model = process.env.SCRATCHBOX_TTS_MODEL?.trim();
+        if (!model) {
+            throw new MediaModelUnavailableError('text-to-speech', 'no TTS model is configured (set SCRATCHBOX_TTS_MODEL, e.g. gemini-2.5-flash-preview-tts)');
         }
+        const text = String(req.text ?? '').trim();
+        if (!text) throw new MissingInputError('text-to-speech', 'text');
+        // Gemini TTS is steered in natural language: style and pace go in the prompt.
+        const directions = [
+            req.stylePrompt?.trim(),
+            typeof req.speed === 'number' && Number.isFinite(req.speed) && req.speed > 0 && req.speed !== 1 ? `Speak at ${req.speed}x normal pace.` : undefined
+        ].filter(Boolean);
+        const prompt = directions.length ? `${directions.join(' ')}\n\n${text}` : text;
+        const { json } = await this.client.requestGenerateContent(model, [{ role: 'user', parts: [{ text: prompt }] }], undefined, {
+            temperature: 1,
+            maxOutputTokens: 8192,
+            responseModalities: ['AUDIO'],
+            ...(req.voice ? { speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: req.voice } } } } : {})
+        });
+        const part = json.candidates?.[0]?.content?.parts?.find(p => p.inlineData?.data && /^audio\//i.test(p.inlineData.mimeType || ''));
+        if (!part?.inlineData?.data) {
+            const why = json.promptFeedback?.blockReason || json.candidates?.[0]?.finishReason || 'no audio part in the reply';
+            throw new MediaModelUnavailableError(model, `the model returned no audio (${why})`);
+        }
+        return { success: true, audioContent: pcmToWavBase64(part.inlineData.data, part.inlineData.mimeType || '') };
     }
 
     /** Run deep research agent session. */

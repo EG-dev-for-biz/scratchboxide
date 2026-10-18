@@ -24,6 +24,7 @@
  * Images are decoded in memory and dropped; only pano ids, boxes, text and palettes are kept.
  */
 
+import { groundingRequestFovDeg } from '../../spatial/StreetViewPoseRegistrar';
 import type { Content, Part } from '@google/genai';
 import {
     MAX_STREET_VIEW_IMAGES_PER_BUILDING, MAX_SURVEY_FACES, schemaClosure, STAGED_VISION_MODEL_DEFAULT, validateContract,
@@ -145,7 +146,8 @@ export function surveyAim(eye: Vec3, face: SurveyFaceTarget): { headingDeg: numb
     const d = Math.hypot(face.centre[0] - eye[0], face.centre[2] - eye[2]);
     const headingDeg = bearingDeg(eye[0], eye[2], face.centre[0], face.centre[2]);
     const elevationDeg = Math.max(-20, Math.min(55, Math.atan2(face.centre[1] - eye[1], Math.max(0.1, d)) / DEG));
-    const need = 2 * Math.atan((face.widthM / 2) * 1.12 / Math.max(1, d)) / DEG;
+    // the survey asks for 4:3 crops of the 1920 px grounding frame: the fov to request so that the crop itself spans the face
+    const need = groundingRequestFovDeg(2 * Math.atan((face.widthM / 2) * 1.12 / Math.max(1, d)) / DEG, 4 / 3);
     return {
         headingDeg: Math.round(headingDeg * 10) / 10, elevationDeg: Math.round(elevationDeg * 10) / 10,
         fovDeg: Math.round(Math.max(SURVEY_FOV_MIN_DEG, Math.min(SURVEY_FOV_MAX_DEG, need)) * 10) / 10,

@@ -61,6 +61,11 @@ export interface CrossViewFrame {
      * alone lets a group of panos that only see each other rotate together).
      */
     sky?: { mask: Uint8Array; dt: Float32Array };
+    /**
+     * Optional photo structural edges: distance (px) to the photo's long, strong line segments. With it the refinement also
+     * keeps the mesh's occluding contours and creases on them (an absolute anchor on the scan's own geometry, like the sky).
+     */
+    edges?: { dt: Float32Array };
 }
 
 export interface CrossViewPriors { horizontalSigmaMeters: number; verticalSigmaMeters: number; angleSigmaDeg: number }
@@ -111,12 +116,23 @@ export interface CrossViewOptions {
     silhouetteTruncationPx?: number;
     /** Huber threshold (px) of the silhouette distance. Default 2. */
     silhouetteHuberPx?: number;
+    /** Total weight of a frame's mesh-edge samples against its photo edges (frames with `edges`), in equivalent matches. Default 0 (off). */
+    edgeEquivalentMatches?: number;
+    /** Mesh-edge samples per frame. Default 400. */
+    maxEdgeSamples?: number;
+    /**
+     * Only scan points this accepts take part (matches by their mesh point, silhouette and edge samples by theirs): a spatial
+     * hold-out, so a measure on the points it rejects is not one the refinement fitted.
+     */
+    pointFilter?: (X: [number, number, number]) => boolean;
+    /** Wall-clock budget (ms) of run(): no new alternation starts past it. */
+    budgetMs?: number;
     log?: (msg: string) => void;
 }
 
 /** A sky-silhouette sample of a frame (mesh point on the sky boundary) with its residual weight. */
-export interface SilhouetteSample { frame: number; X: [number, number, number]; w: number }
-type Entry = { kind: 0; m: CrossViewMatch } | { kind: 1; frame: number; X: [number, number, number]; w: number };
+export interface SilhouetteSample { frame: number; X: [number, number, number]; w: number; /** Which photo map it is held to: the sky boundary (default) or the structural edges. */ on?: 'sky' | 'edges' }
+type Entry = { kind: 0; m: CrossViewMatch } | { kind: 1; frame: number; X: [number, number, number]; w: number; dt: Float32Array };
 
 /** One photo-to-photo correspondence found through the mesh. */
 export interface CrossViewMatch {
@@ -461,6 +477,7 @@ export class StreetViewCrossViewRefiner {
                     n = [n[0] / nl, n[1] / nl, n[2] / nl];
                     const toB = [B.cam.eye[0] - X[0], B.cam.eye[1] - X[1], B.cam.eye[2] - X[2]];
                     if (n[0] * toB[0] + n[1] * toB[1] + n[2] * toB[2] < 0) n = [-n[0], -n[1], -n[2]];
+                    if (o.pointFilter && !o.pointFilter(X)) continue;
                     const pa = projectToFrame(A.cam, X);
                     if (!pa) continue;
                     pairMatches.push({
@@ -502,9 +519,9 @@ export class StreetViewCrossViewRefiner {
         for (let k = 0; k < entries.length; k++) {
             const e = entries[k];
             if (e.kind === 1) {
-                const cam = cams[e.frame], sky = this.frames[e.frame].sky!;
+                const cam = cams[e.frame];
                 const p = projectToFrame(cam, e.X);
-                const d = p ? Math.min(T, sampleDistanceMap(sky.dt, cam.width, cam.height, p[0], p[1], T)) : T;
+                const d = p ? Math.min(T, sampleDistanceMap(e.dt, cam.width, cam.height, p[0], p[1], T)) : T;
                 r[k * 4] = e.w * d;
                 continue;
             }
@@ -536,7 +553,11 @@ export class StreetViewCrossViewRefiner {
         const np = panos.length * 6;
         const pIndex = new Map(panos.map((p, i) => [p, i]));
         const entries: Entry[] = matches.map(m => ({ kind: 0 as const, m }));
-        for (const sl of silhouettes) if (pIndex.has(this.frames[sl.frame].panoId)) entries.push({ kind: 1, frame: sl.frame, X: sl.X, w: sl.w });
+        for (const sl of silhouettes) {
+            if (!pIndex.has(this.frames[sl.frame].panoId)) continue;
+            const dt = sl.on === 'edges' ? this.frames[sl.frame].edges?.dt : this.frames[sl.frame].sky?.dt;
+            if (dt) entries.push({ kind: 1, frame: sl.frame, X: sl.X, w: sl.w, dt });
+        }
         const x = new Float64Array(np);
         panos.forEach((p, i) => correctionToArray(corrs.get(p)!).forEach((v, j) => { x[i * 6 + j] = v; }));
         const pr = this.priors, bd = this.bounds;
@@ -656,15 +677,26 @@ export class StreetViewCrossViewRefiner {
     private silhouetteSamples(st: FrameState[]): SilhouetteSample[] {
         const out: SilhouetteSample[] = [];
         const maxN = this.opts.maxSilhouetteSamples ?? DEF.maxSilhouetteSamples, eq = this.opts.silhouetteEquivalentMatches ?? DEF.silhouetteEquivalentMatches;
-        if (eq <= 0) return out;
-        this.frames.forEach((f, i) => {
+        if (eq > 0) this.frames.forEach((f, i) => {
             if (!f.sky) return;
             const P = skySilhouetteSamples(st[i].depth, st[i].cam, { valid: f.valid, sky: f.sky.mask });
             const n = P.length / 3;
             if (n < 30) return;
-            const take = Math.min(n, maxN), stepK = n / take;
+            const pts: Array<[number, number, number]> = [];
+            for (let q = 0; q < P.length; q += 3) { const X: [number, number, number] = [P[q], P[q + 1], P[q + 2]]; if (!this.opts.pointFilter || this.opts.pointFilter(X)) pts.push(X); }
+            if (pts.length < 30) return;
+            const take = Math.min(pts.length, maxN), stepK = pts.length / take;
             const w = Math.sqrt(eq / take);
-            for (let k = 0; k < take; k++) { const q = Math.floor(k * stepK) * 3; out.push({ frame: i, X: [P[q], P[q + 1], P[q + 2]], w }); }
+            for (let k = 0; k < take; k++) out.push({ frame: i, X: pts[Math.floor(k * stepK)], w });
+        });
+        const eqE = this.opts.edgeEquivalentMatches ?? 0, maxE = this.opts.maxEdgeSamples ?? 400;
+        if (eqE > 0) this.frames.forEach((f, i) => {
+            if (!f.edges) return;
+            const pts = meshEdgeSamples(st[i].depth, st[i].cam, f.valid).filter(X => !this.opts.pointFilter || this.opts.pointFilter(X));
+            if (pts.length < 30) return;
+            const take = Math.min(pts.length, maxE), stepK = pts.length / take;
+            const w = Math.sqrt(eqE / take);
+            for (let k = 0; k < take; k++) out.push({ frame: i, X: pts[Math.floor(k * stepK)], w, on: 'edges' });
         });
         return out;
     }
@@ -686,6 +718,7 @@ export class StreetViewCrossViewRefiner {
         const history: CrossViewResult['history'] = [];
         const iters = runOpts.outerIterations ?? o.outerIterations ?? DEF.outerIterations;
         for (let it = 0; it < iters; it++) {
+            if (o.budgetMs !== undefined && it > 0 && Date.now() - t0 > o.budgetMs) { this.log(`[cross-view] budget of ${o.budgetMs} ms reached after ${it} alternations`); break; }
             const ts = Date.now();
             const st = this.states(corrs);
             const first = it === 0;
@@ -806,6 +839,49 @@ export class StreetViewCrossViewRefiner {
             return mask;
         });
     }
+}
+
+/**
+ * The mesh's own structural edges as seen by a frame, lifted to 3D: the near side of occluding contours (a depth step of more
+ * than 4 % + 0.3 m to a neighbour) and creases (normals from the depth differing by more than 40 degrees across 3 px), every
+ * other pixel. The silhouette against empty space is left to the sky term.
+ */
+export function meshEdgeSamples(depth: Float32Array, cam: FrameCamera, valid: Uint8Array): Array<[number, number, number]> {
+    const w = cam.width, h = cam.height, EMPTY = PLATE_EMPTY_DEPTH * 0.5, R = 3;
+    const lift = (x: number, y: number, d: number): V3 => {
+        const u = (x + 0.5 - cam.cx) / cam.fx, v = (y + 0.5 - cam.cy) / cam.fy;
+        return [cam.eye[0] + d * (cam.fwd[0] + u * cam.right[0] - v * cam.up[0]), cam.eye[1] + d * (cam.fwd[1] + u * cam.right[1] - v * cam.up[1]), cam.eye[2] + d * (cam.fwd[2] + u * cam.right[2] - v * cam.up[2])];
+    };
+    const normalAt = (x: number, y: number): V3 | null => {
+        const i = y * w + x;
+        const a = depth[i - R], b = depth[i + R], c = depth[i - R * w], d = depth[i + R * w], m = depth[i];
+        if (!(a < EMPTY && b < EMPTY && c < EMPTY && d < EMPTY)) return null;
+        if (Math.abs(a - m) > 0.04 * m + 0.3 || Math.abs(b - m) > 0.04 * m + 0.3 || Math.abs(c - m) > 0.04 * m + 0.3 || Math.abs(d - m) > 0.04 * m + 0.3) return null;
+        const pa = lift(x - R, y, a), pb = lift(x + R, y, b), pc = lift(x, y - R, c), pd = lift(x, y + R, d);
+        const ex = [pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]], ey = [pd[0] - pc[0], pd[1] - pc[1], pd[2] - pc[2]];
+        const n: V3 = [ex[1] * ey[2] - ex[2] * ey[1], ex[2] * ey[0] - ex[0] * ey[2], ex[0] * ey[1] - ex[1] * ey[0]];
+        const l = Math.hypot(n[0], n[1], n[2]);
+        return l > 1e-9 ? [n[0] / l, n[1] / l, n[2] / l] : null;
+    };
+    const out: V3[] = [];
+    const cosCrease = Math.cos(40 * Math.PI / 180);
+    for (let y = 2 * R; y < h - 2 * R; y++) for (let x = 2 * R; x < w - 2 * R; x++) {
+        if (((x + y) & 1) !== 0) continue;
+        const i = y * w + x, d = depth[i];
+        if (!(d < EMPTY) || !valid[i]) continue;
+        let edge = false;
+        for (const j of [i - 1, i + 1, i - w, i + w]) {
+            const dj = depth[j];
+            if (dj < EMPTY && dj > d + 0.04 * d + 0.3) { edge = true; break; } // this pixel is the near side of a step
+        }
+        if (!edge) {
+            const n0 = normalAt(x - R, y), n1 = normalAt(x + R, y), m0 = normalAt(x, y - R), m1 = normalAt(x, y + R);
+            if (n0 && n1 && n0[0] * n1[0] + n0[1] * n1[1] + n0[2] * n1[2] < cosCrease) edge = true;
+            else if (m0 && m1 && m0[0] * m1[0] + m0[1] * m1[1] + m0[2] * m1[2] < cosCrease) edge = true;
+        }
+        if (edge) out.push(lift(x, y, d));
+    }
+    return out;
 }
 
 /** Solves a symmetric positive (semi-)definite system by Cholesky; null when not positive definite. */
