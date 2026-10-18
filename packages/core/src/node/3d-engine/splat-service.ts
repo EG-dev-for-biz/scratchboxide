@@ -15,6 +15,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { NativeCppCompilerService } from './native-compiler-service';
 import { BakedGaussian } from '../../common/geospatial-4d-protocol';
+import { pruneSplatFloaters, type FloaterPruningOptions, type FloaterPruningReport } from '../../common/spatial/splat-floater-pruning';
 import { buildNativeIfStale } from './native-build';
 import { InvalidInputError, MissingInputError } from '../../common/errors/pipeline-errors';
 
@@ -345,6 +346,9 @@ export class SplatService {
         edgeSeveranceTau?: number;
         minDepth?: number;
         maxDepth?: number;
+        /** kNN floater pruning after the bake (default on; false disables). */
+        floaterPruning?: FloaterPruningOptions | false;
+        onFloaterReport?: (report: FloaterPruningReport) => void;
     }): BakedGaussian[] {
         const {
             width: W,
@@ -477,7 +481,22 @@ export class SplatService {
             }
         }
 
-        return splats;
+        return SplatService.applyFloaterPruning(splats, params.floaterPruning, params.onFloaterReport);
+    }
+
+    /**
+     * kNN statistical floater pruning (see common/spatial/splat-floater-pruning). `false` skips it; the report gives the
+     * count pruned.
+     */
+    static applyFloaterPruning<T extends { position: ArrayLike<number> }>(
+        splats: T[],
+        options: FloaterPruningOptions | false | undefined,
+        onReport?: (report: FloaterPruningReport) => void
+    ): T[] {
+        if (options === false) return splats;
+        const { splats: kept, report } = pruneSplatFloaters(splats, options ?? {});
+        onReport?.(report);
+        return kept;
     }
 
     /**
@@ -626,7 +645,13 @@ export class SplatService {
      */
     static fuseMultiViewSplats(
         splatViews: SplatPoint[][],
-        options: { voxelSize?: number; densifyMaxScale?: number } = {}
+        options: {
+            voxelSize?: number;
+            densifyMaxScale?: number;
+            /** kNN floater pruning after fusion (default on; false disables). */
+            floaterPruning?: FloaterPruningOptions | false;
+            onFloaterReport?: (report: FloaterPruningReport) => void;
+        } = {}
     ): SplatPoint[] {
         if (!splatViews || splatViews.length === 0) return [];
         const flat: SplatPoint[] = [];
@@ -643,7 +668,7 @@ export class SplatService {
             fused = SplatService.densifySplats(fused, options.densifyMaxScale);
         }
 
-        return fused;
+        return SplatService.applyFloaterPruning(fused, options.floaterPruning, options.onFloaterReport);
     }
 
     /**
