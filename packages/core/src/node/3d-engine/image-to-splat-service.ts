@@ -9,6 +9,7 @@
 
 import { SplatService, SplatPoint } from './splat-service';
 import type { SceneDepthAnnotation } from '../../common/scene-depth-protocol';
+import { InvalidInputError, MissingInputError } from '../../common/errors/pipeline-errors';
 
 export interface CameraIntrinsics {
     width: number;
@@ -162,6 +163,25 @@ export interface SpatialMeasurementResult {
 
 export class ImageToSplatService {
     /**
+     * The per-pixel ray depths for a view: the caller's depth map (from the depth model, see
+     * PanoramaDepthService.generatePixelBufferDepth), or a Gemini scene-depth annotation. Nothing is derived from the
+     * colours: with neither, the conversion fails.
+     */
+    private static requireDepths(options: SingleImageConversionOptions, op: string): Float32Array | number[] {
+        const { width: W, height: H } = options;
+        if (options.metricDepths) {
+            if (options.metricDepths.length !== W * H) {
+                throw new InvalidInputError(op, 'metricDepths', `has ${options.metricDepths.length} values for a ${W}x${H} image (${W * H} expected)`);
+            }
+            return options.metricDepths;
+        }
+        if (options.sceneDepthAnnotation) {
+            return ImageToSplatService.synthesizeMetricDepthsFromSceneDepth(options.sceneDepthAnnotation, W, H, options.minDepth ?? 0.2, options.maxDepth ?? 200.0);
+        }
+        throw new MissingInputError(op, 'metricDepths', 'a depth map from the depth model is required (run PanoramaDepthService.generatePixelBufferDepth on the image first); no depth is derived from the colours');
+    }
+
+    /**
      * Computes unit pinhole ray field for an image given resolution and field of view.
      */
     static computePinholeRayField(width: number, height: number, fovDegrees = 65.0): Float32Array {
@@ -207,59 +227,6 @@ export class ImageToSplatService {
             }
         }
         return out;
-    }
-
-    /**
-     * Synthesizes a plausible metric depth map from RGB luminance and vertical perspective priors
-     * when a pre-inferred DepthBox depth map is not directly supplied.
-     */
-    static synthesizeMetricDepthsFromLuminance(
-        rgbPixels: Uint8Array | Buffer,
-        width: number,
-        height: number,
-        channels = 3,
-        nearDepth = 1.5,
-        farDepth = 60.0
-    ): Float32Array {
-        const depths = new Float32Array(width * height);
-
-        for (let y = 0; y < height; ++y) {
-            const ny = y / height;
-            for (let x = 0; x < width; ++x) {
-                const idx = y * width + x;
-                const cIdx = idx * channels;
-                const r = rgbPixels[cIdx + 0] / 255.0;
-                const g = rgbPixels[cIdx + 1] / 255.0;
-                const b = rgbPixels[cIdx + 2] / 255.0;
-                const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-
-                let d: number;
-                if (ny >= 0.70) {
-                    // Ground plane receding towards horizon
-                    const t = (ny - 0.70) / 0.30;
-                    d = nearDepth + (1.0 - t) * (nearDepth * 4.0);
-                } else if (ny >= 0.35) {
-                    // Midground architectural/terrain structures
-                    const t = (0.70 - ny) / 0.35;
-                    d = nearDepth * 4.0 + t * (farDepth * 0.45);
-                    // Dark recesses indicate deeper depth
-                    if (lum < 0.25) d += 1.5;
-                } else {
-                    // Sky or distant mountains
-                    const isSky = (b > r + 0.12 && b > 0.45) || lum > 0.82;
-                    if (isSky) {
-                        d = farDepth * 1.5;
-                    } else {
-                        const t = (0.35 - ny) / 0.35;
-                        d = farDepth * 0.45 + t * (farDepth * 0.55);
-                    }
-                }
-
-                depths[idx] = Math.max(0.1, d);
-            }
-        }
-
-        return depths;
     }
 
     /**
@@ -350,9 +317,7 @@ export class ImageToSplatService {
             pose
         } = options;
 
-        const metricDepths = options.metricDepths || (options.sceneDepthAnnotation
-            ? ImageToSplatService.synthesizeMetricDepthsFromSceneDepth(options.sceneDepthAnnotation, W, H, minDepth, maxDepth)
-            : ImageToSplatService.synthesizeMetricDepthsFromLuminance(rgbPixels, W, H, channels, minDepth, maxDepth));
+        const metricDepths = ImageToSplatService.requireDepths(options, 'convertSingleImageToSplat');
         const rayMap = ImageToSplatService.computePinholeRayField(W, H, fovDegrees);
         const fovRad = (fovDegrees * Math.PI) / 180.0;
         const f = 0.5 * H / Math.tan(0.5 * fovRad);
@@ -904,7 +869,7 @@ export class ImageToSplatService {
             pose
         } = options;
 
-        const metricDepths = options.metricDepths || ImageToSplatService.synthesizeMetricDepthsFromLuminance(rgbPixels, W, H, channels);
+        const metricDepths = ImageToSplatService.requireDepths(options, 'convertSingleImageWithInpainting');
         const rayMap = ImageToSplatService.computePinholeRayField(W, H, fovDegrees);
         const fovRad = (fovDegrees * Math.PI) / 180.0;
         const f = 0.5 * H / Math.tan(0.5 * fovRad);
@@ -1374,6 +1339,9 @@ export class ImageToSplatService {
     static convertEquirectangularToSplats(options: EquirectangularConversionOptions): SplatPoint[] {
         const { rgbPixels, width, height, channels = 3, stride = 2, eyeHeight = 1.70, maxRadius = 80.0 } = options;
         const depths = options.metricDepths;
+        if (!depths || depths.length !== width * height) {
+            throw new MissingInputError('convertEquirectangularToSplats', 'metricDepths', `a ${width}x${height} radial depth map from the depth model is required (PanoramaDepthService.generatePanoramaDepth); no depth is derived from the colours`);
+        }
         const splats: SplatPoint[] = [];
 
         const step = Math.max(1, stride);
@@ -1403,22 +1371,8 @@ export class ImageToSplatService {
                 const r = rgbPixels[cIdx];
                 const g = rgbPixels[cIdx + 1];
                 const b = rgbPixels[cIdx + 2];
-                const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0;
 
-                let depth = 0;
-                if (depths && depths[pIdx] !== undefined) {
-                    depth = depths[pIdx];
-                } else {
-                    if (ry < -0.04) {
-                        const tFloor = -eyeHeight / ry;
-                        depth = Math.min(tFloor, maxRadius);
-                    } else {
-                        const baseD = maxRadius * 0.65;
-                        const relief = (1.0 - lum) * (maxRadius * 0.25);
-                        depth = Math.min(maxRadius, baseD + relief);
-                    }
-                }
-
+                let depth = Math.min(depths[pIdx], maxRadius);
                 if (depth < 0.2) depth = 0.2;
 
                 const posX = rx * depth;

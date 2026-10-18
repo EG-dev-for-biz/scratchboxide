@@ -19,7 +19,11 @@
  *       boundary and structural line segments (the absolute anchor on the scan's geometry);
  *   (b) cross-view photo consistency: patches of one photo carried through the scan into another must match there (block
  *       matching of band-passed luminance between every pair of views that see the same scan surface);
- *   (c) Gaussian priors about the start poses.
+ *   (c) Gaussian priors about the start poses;
+ *   (e) when the fitted faces are given, per view, the outline of the structure's own faces (the tile mesh within a slab of the
+ *       fitted faces, so trees and statues in front of a face do not hide it) against the photo's strong colour-contrast edges:
+ *       the anchor photo tier A used to place each pano's wide view on its own, now one term of this fit, so the texture's
+ *       projection and its rectified tier read the photos through one set of poses.
  * Then (d) a non-rigid warp per pano, a coarse lattice (16 x 12) over the pano's view directions, strongly regularised, moves
  * each photo's content onto the consensus of the matches: what geometry error no rigid pose can explain.
  *
@@ -33,13 +37,14 @@
 
 import type { Vec3 } from '../../../common/spatial/staged-location-contracts';
 import type { RenderMesh3D } from '../../spatial/HeadlessMeshSilhouetteRenderer';
-import { meshEdgeSamples, StreetViewCrossViewRefiner, type CrossViewFrame, type CrossViewMatch, type CrossViewOptions, type CrossViewResult } from '../../spatial/StreetViewCrossViewRefiner';
+import { colourContrastEdges, faceOutlineSamples, meshEdgeSamples, StreetViewCrossViewRefiner, type CrossViewFrame, type CrossViewMatch, type CrossViewOptions, type CrossViewResult } from '../../spatial/StreetViewCrossViewRefiner';
 import {
     buildValidMask, detectLineSegments, distanceTransform, frameCamera, gaussianBlur, groundingHorizontalFovDeg, luminance, projectToFrame, renderFrameDepth, segmentSky, sobel,
     ZERO_CORRECTION, type FrameCamera, type PoseCorrection, type RgbaImage
 } from '../../spatial/StreetViewPoseRegistrar';
 import { downscaleRgba, EDGE_REG_MIN_FOV_DEG, EDGE_RESIDUAL_FLOOR_M, type EdgeRegFrame } from './pano-edge-registration';
 import type { Registration } from './pano-registration';
+import type { SurfaceChart } from '../../../common/spatial/staged-location-contracts';
 import { chamferMean, erode, FIT_CHAMFER_TRUNCATION_PX, maskedNcc, structuralEdges } from './texture-fit-metric';
 
 /** Image widths of the two scales of the joint fit (coarse, fine). */
@@ -63,6 +68,12 @@ export const ACCEPT_CHAMFER_GAIN_PX = 0.15;
 export const ACCEPT_NCC_GAIN = 0.01;
 export const ACCEPT_NCC_LOSS_WITH_CHAMFER_GAIN = 0.02;
 
+/** Tile mesh within this of a fitted face (m) is the structure's own surface (the face-outline term), and the margin past its extent. */
+export const OUTLINE_SLAB_M = 1.5;
+export const OUTLINE_MARGIN_M = 1;
+/** Weight of a view's face-outline samples, in equivalent cross-view matches (like the sky and edge terms). */
+export const OUTLINE_EQUIVALENT_MATCHES = 40;
+
 const EMPTY = 1e8;
 const DEG = Math.PI / 180;
 const r3 = (v: number) => Math.round(v * 1000) / 1000;
@@ -71,6 +82,44 @@ type V3 = [number, number, number];
 /** True on the scan points the fit may use (even cells of the 3D checkerboard); the odd cells are held out for the score. */
 export function trainCell(X: ArrayLike<number>, cellM = HOLDOUT_CELL_M): boolean {
     return ((Math.floor(X[0] / cellM) + Math.floor(X[1] / cellM) + Math.floor(X[2] / cellM)) & 1) === 0;
+}
+
+/**
+ * The tile mesh near the fitted faces: triangles with a vertex within `slabM` of a face (a plane: inside its extent plus
+ * `marginM`; a cylinder: within `slabM` of its radius over its height plus the margin). What stands in front of the faces
+ * (trees, lamp posts, statues off the faces) and what stands behind them is left out, so the outline of this mesh is the
+ * outline of the structure's own faces.
+ */
+export function faceSlabMesh(mesh: RenderMesh3D, charts: SurfaceChart[], slabM = OUTLINE_SLAB_M, marginM = OUTLINE_MARGIN_M): RenderMesh3D {
+    const V = mesh.vertices, nv = V.length / 3;
+    const near = new Uint8Array(nv);
+    const tests = charts.map(c => {
+        if ('plane' in c) {
+            const { origin: o, u, v, normal: n, extentUv } = c.plane;
+            let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+            for (const [a, b] of extentUv) { u0 = Math.min(u0, a); u1 = Math.max(u1, a); v0 = Math.min(v0, b); v1 = Math.max(v1, b); }
+            const nl = Math.hypot(n[0], n[1], n[2]) || 1;
+            return (x: number, y: number, z: number) => {
+                const d0 = x - o[0], d1 = y - o[1], d2 = z - o[2];
+                if (Math.abs((d0 * n[0] + d1 * n[1] + d2 * n[2]) / nl) > slabM) return false;
+                const a = d0 * u[0] + d1 * u[1] + d2 * u[2], b = d0 * v[0] + d1 * v[1] + d2 * v[2];
+                return a >= u0 - marginM && a <= u1 + marginM && b >= v0 - marginM && b <= v1 + marginM;
+            };
+        }
+        const { axisOrigin: o, axisDir: ad, radiusM, zM } = c.cylinder;
+        const al = Math.hypot(ad[0], ad[1], ad[2]) || 1, A = [ad[0] / al, ad[1] / al, ad[2] / al];
+        return (x: number, y: number, z: number) => {
+            const d0 = x - o[0], d1 = y - o[1], d2 = z - o[2];
+            const t = d0 * A[0] + d1 * A[1] + d2 * A[2];
+            if (t < Math.min(zM[0], zM[1]) - marginM || t > Math.max(zM[0], zM[1]) + marginM) return false;
+            const r = Math.hypot(d0 - t * A[0], d1 - t * A[1], d2 - t * A[2]);
+            return Math.abs(r - radiusM) <= slabM;
+        };
+    });
+    for (let i = 0; i < nv; i++) { const x = V[i * 3], y = V[i * 3 + 1], z = V[i * 3 + 2]; for (const t of tests) if (t(x, y, z)) { near[i] = 1; break; } }
+    const I = mesh.indices, keep: number[] = [];
+    for (let t = 0; t < I.length; t += 3) if (near[I[t]] || near[I[t + 1]] || near[I[t + 2]]) keep.push(I[t], I[t + 1], I[t + 2]);
+    return { vertices: V, indices: Uint32Array.from(keep) };
 }
 
 /**
@@ -158,7 +207,11 @@ function photoEdgesDT(p: Prepared): Float32Array {
     return distanceTransform(map, w, h, 16);
 }
 
-function crossViewFrame(p: Prepared): CrossViewFrame {
+function outlineDT(p: Prepared): Float32Array {
+    return distanceTransform(colourContrastEdges(p.image, p.valid), p.image.width, p.image.height, 16);
+}
+
+function crossViewFrame(p: Prepared, withOutline = false): CrossViewFrame {
     const w = p.image.width, h = p.image.height;
     const sky = segmentSky(p.image.rgba, w, h, p.valid);
     const boundary = new Uint8Array(w * h);
@@ -169,7 +222,8 @@ function crossViewFrame(p: Prepared): CrossViewFrame {
     }
     return {
         key: p.key, panoId: p.panoId, nominalEye: p.nominalEye, headingDeg: p.headingDeg, pitchDeg: p.pitchDeg, fovDeg: p.fovDeg, referenceHeadingDeg: p.refHeadingDeg,
-        image: p.image, valid: p.valid, sky: { mask: sky, dt: distanceTransform(boundary, w, h, 40) }, edges: { dt: photoEdgesDT(p) }
+        image: p.image, valid: p.valid, sky: { mask: sky, dt: distanceTransform(boundary, w, h, 40) }, edges: { dt: photoEdgesDT(p) },
+        ...(withOutline ? { outline: { dt: outlineDT(p) } } : {})
     };
 }
 
@@ -179,8 +233,13 @@ const camOf = (p: Prepared, c: PoseCorrection): FrameCamera => frameCamera(p.nom
 // the held-out fit of a set of poses (and warps)
 // ---------------------------------------------------------------------------------------------------------------------
 
-export interface PoseFitView { key: string; panoId: string; pixels: number; chamferPx: number | null; clayChamferPx: number | null; gradNcc: number | null }
-export interface PoseFit { chamferPx: number | null; clayChamferPx: number | null; gradNcc: number | null; views: PoseFitView[]; ms: number }
+export interface PoseFitView { key: string; panoId: string; pixels: number; chamferPx: number | null; clayChamferPx: number | null; gradNcc: number | null; outlinePx?: number | null; outlineSamples?: number }
+export interface PoseFit {
+    chamferPx: number | null; clayChamferPx: number | null; gradNcc: number | null;
+    /** Held-out face-outline samples against the photo's colour-contrast edges (px, truncated; when the faces were given). */
+    outlinePx?: number | null;
+    views: PoseFitView[]; ms: number;
+}
 
 function bilinear(a: Float32Array, w: number, h: number, x: number, y: number): number {
     const fx = x - 0.5, fy = y - 0.5;
@@ -195,7 +254,8 @@ function bilinear(a: Float32Array, w: number, h: number, x: number, y: number): 
  * same scan point), scored against the view's own photo on the held-out scan points (`score`), as texture-fit-metric scores a
  * texture: structural-edge chamfer both ways and gradient NCC; and the scan's own edges against the photo's (clay).
  */
-export function heldOutPoseFit(frames: Prepared[], mesh: RenderMesh3D, corrs: Map<string, PoseCorrection>, warps: Map<string, PanoWarp> | undefined, score: (X: V3) => boolean): PoseFit {
+export function heldOutPoseFit(frames: Prepared[], mesh: RenderMesh3D, corrs: Map<string, PoseCorrection>, warps: Map<string, PanoWarp> | undefined, score: (X: V3) => boolean,
+    outline?: { mesh: RenderMesh3D; dts: Float32Array[] }): PoseFit {
     const t0 = Date.now();
     const cams = frames.map(f => camOf(f, corrs.get(f.panoId) ?? ZERO_CORRECTION));
     const depths = cams.map(c => renderFrameDepth(mesh, c));
@@ -238,6 +298,20 @@ export function heldOutPoseFit(frames: Prepared[], mesh: RenderMesh3D, corrs: Ma
         let n = 0;
         for (let i = 0; i < W * H; i++) if (cnt[i]) { others[i] = 1; R[i] = sum[i] / cnt[i]; if (held[i]) n++; }
         const base: PoseFitView = { key: fv.key, panoId: fv.panoId, pixels: n, chamferPx: null, clayChamferPx: null, gradNcc: null };
+        if (outline) {
+            // the structure's face outline on the held-out cells against the photo's colour-contrast edges
+            let s = 0, c = 0;
+            for (const X of faceOutlineSamples(renderFrameDepth(outline.mesh, cam), D, cam, fv.valid)) {
+                if (!score(X)) continue;
+                const q = projectToFrame(cam, X);
+                if (!q) continue;
+                const ix = Math.floor(q[0]), iy = Math.floor(q[1]);
+                if (ix < 0 || iy < 0 || ix >= W || iy >= H) continue;
+                s += Math.min(FIT_CHAMFER_TRUNCATION_PX, outline.dts[v][iy * W + ix]); c++;
+            }
+            base.outlineSamples = c;
+            base.outlinePx = c >= 30 ? r3(s / c) : null;
+        }
         if (n < 1500) { views.push(base); continue; }
         const region = new Uint8Array(W * H);
         const er = erode(others, W, H, 2);
@@ -263,7 +337,9 @@ export function heldOutPoseFit(frames: Prepared[], mesh: RenderMesh3D, corrs: Ma
         for (const v of views) { const x = pick(v); if (x === null) continue; s += x * v.pixels; n += v.pixels; }
         return n ? r3(s / n) : null;
     };
-    return { chamferPx: wmean(v => v.chamferPx), clayChamferPx: wmean(v => v.clayChamferPx), gradNcc: wmean(v => v.gradNcc), views, ms: Date.now() - t0 };
+    let os = 0, on = 0;
+    for (const v of views) if (v.outlinePx !== null && v.outlinePx !== undefined && v.outlineSamples) { os += v.outlinePx * v.outlineSamples; on += v.outlineSamples; }
+    return { chamferPx: wmean(v => v.chamferPx), clayChamferPx: wmean(v => v.clayChamferPx), gradNcc: wmean(v => v.gradNcc), ...(outline ? { outlinePx: on ? r3(os / on) : null } : {}), views, ms: Date.now() - t0 };
 }
 
 /** Whether held-out fit `c` is better than `b` (see ACCEPT_*): better on one measure, not worse past the tolerance on the other. */
@@ -384,6 +460,11 @@ export interface JointRegistrationInput {
     budgetMs?: number;
     /** Overrides of the refiner's settings (both scales). */
     refiner?: Partial<CrossViewOptions>;
+    /**
+     * The fitted faces of the structure. With them the fit also holds each view's face outline (term (e)); without them, or with
+     * SCRATCHBOX_JOINT_OUTLINE=0, it does not.
+     */
+    faces?: Array<{ chart: SurfaceChart }>;
     log?: (m: string) => void;
 }
 
@@ -408,6 +489,8 @@ export interface JointRegistrationResult {
     panos: JointPanoOutcome[];
     matches: { before: number; after: number; medianPxBefore: number | null; medianPxAfter: number | null };
     warps: PanoWarp[];
+    /** Whether the face-outline term (e) took part, and the structure mesh's triangles. */
+    outlineTerm: { used: boolean; triangles: number };
     timingsMs: Record<string, number>;
 }
 
@@ -437,14 +520,20 @@ export function registerPanosJointly(input: JointRegistrationInput): JointRegist
         const c = input.current.corrections.get(id) ?? ZERO_CORRECTION;
         current.set(id, { ...c, referenceHeadingDeg: c.referenceHeadingDeg ?? refHeading.get(id)! });
     }
-    // the score frames (held-out cells only)
+    // the structure's own faces (term (e))
     let t = Date.now();
+    const outlineMesh = input.faces?.length && process.env.SCRATCHBOX_JOINT_OUTLINE !== '0' ? faceSlabMesh(input.mesh, input.faces.map(f => f.chart)) : undefined;
+    const useOutline = !!outlineMesh && outlineMesh.indices.length >= 3 * 12;
+    if (outlineMesh) timings.outlineMesh = Date.now() - t;
+    // the score frames (held-out cells only)
+    t = Date.now();
     const metricFrames = wide.map(f => prepare(f, JOINT_METRIC_WIDTH_PX, refHeading.get(f.view.panoId)!));
     const held = (X: V3) => !trainCell(X);
-    const fitCurrent = heldOutPoseFit(metricFrames, input.mesh, current, undefined, held);
-    const fitStart = heldOutPoseFit(metricFrames, input.mesh, start, undefined, held);
+    const metricOutline = useOutline ? { mesh: outlineMesh!, dts: metricFrames.map(outlineDT) } : undefined;
+    const fitCurrent = heldOutPoseFit(metricFrames, input.mesh, current, undefined, held, metricOutline);
+    const fitStart = heldOutPoseFit(metricFrames, input.mesh, start, undefined, held, metricOutline);
     timings.scoreStart = Date.now() - t;
-    log(`[joint] held-out fit: current chamfer ${fitCurrent.chamferPx} px NCC ${fitCurrent.gradNcc}; start chamfer ${fitStart.chamferPx} px NCC ${fitStart.gradNcc}`);
+    log(`[joint] held-out fit: current chamfer ${fitCurrent.chamferPx} px NCC ${fitCurrent.gradNcc}${useOutline ? ` outline ${fitCurrent.outlinePx} px` : ''}; start chamfer ${fitStart.chamferPx} px NCC ${fitStart.gradNcc}${useOutline ? ` outline ${fitStart.outlinePx} px` : ''}`);
 
     // (a)-(c): coarse to fine, on the training cells only
     const budget = input.budgetMs ?? JOINT_REGISTRATION_BUDGET_MS;
@@ -457,7 +546,7 @@ export function registerPanosJointly(input: JointRegistrationInput): JointRegist
         if (left < 5000) { log(`[joint] budget spent before the ${width} px scale`); break; }
         t = Date.now();
         const prepared = wide.map(f => prepare(f, width, refHeading.get(f.view.panoId)!));
-        const refiner = new StreetViewCrossViewRefiner(input.mesh, prepared.map(crossViewFrame), {
+        const refiner = new StreetViewCrossViewRefiner(input.mesh, prepared.map(p => crossViewFrame(p, useOutline)), {
             outerIterations: 2, initialSearchPx: s === 0 ? 16 : 6, searchPx: s === 0 ? 4 : 3, finalSearchPx: 6,
             patchPx: Math.round(40 * width / 640), stridePx: Math.round(24 * width / 640), minOverlapPx: Math.round(6000 * (width / 900) ** 2),
             // street photos of different days match less sharply than the refiner's defaults assume; these, and the priors,
@@ -466,6 +555,7 @@ export function registerPanosJointly(input: JointRegistrationInput): JointRegist
             priors: { horizontalSigmaMeters: 0.8, verticalSigmaMeters: 0.3, angleSigmaDeg: 0.6 },
             bounds: { horizontalMeters: 9, verticalMeters: 2.5, yawDeg: 8, pitchDeg: 5, rollDeg: 3 },
             silhouetteEquivalentMatches: 40, edgeEquivalentMatches: 40, pointFilter: X => trainCell(X), budgetMs: Math.max(5000, left - 8000), log,
+            ...(useOutline ? { outlineMesh, outlineEquivalentMatches: OUTLINE_EQUIVALENT_MATCHES } : {}),
             ...(input.refiner ?? {})
         });
         if (s === JOINT_WIDTHS_PX.length - 1) { before = refiner.measure(corrs); fineFrames = prepared; }
@@ -474,7 +564,7 @@ export function registerPanosJointly(input: JointRegistrationInput): JointRegist
         timings[`scale${width}`] = Date.now() - t;
     }
     if (!res || !before) {
-        return { registration: input.current, chosen: 'current', reason: 'the joint fit did not run in its budget', fit: { current: fitCurrent, start: fitStart, joint: null, warped: null }, panos: [], matches: { before: 0, after: 0, medianPxBefore: null, medianPxAfter: null }, warps: [], timingsMs: { ...timings, total: Date.now() - t0 } };
+        return { registration: input.current, chosen: 'current', reason: 'the joint fit did not run in its budget', fit: { current: fitCurrent, start: fitStart, joint: null, warped: null }, panos: [], matches: { before: 0, after: 0, medianPxBefore: null, medianPxAfter: null }, warps: [], outlineTerm: { used: useOutline, triangles: outlineMesh ? outlineMesh.indices.length / 3 : 0 }, timingsMs: { ...timings, total: Date.now() - t0 } };
     }
     const mags = (r: CrossViewResult) => median(r.matches.map(m => Math.hypot(m.bx - m.qx, m.by - m.qy)));
     // (d) the warps, fitted to the final training matches
@@ -483,10 +573,10 @@ export function registerPanosJointly(input: JointRegistrationInput): JointRegist
     const warps = fitPanoWarps(fineFrames, fineCams, res.matches);
     timings.warps = Date.now() - t;
     t = Date.now();
-    const fitJoint = heldOutPoseFit(metricFrames, input.mesh, corrs, undefined, held);
-    const fitWarped = warps.size ? heldOutPoseFit(metricFrames, input.mesh, corrs, warps, held) : null;
+    const fitJoint = heldOutPoseFit(metricFrames, input.mesh, corrs, undefined, held, metricOutline);
+    const fitWarped = warps.size ? heldOutPoseFit(metricFrames, input.mesh, corrs, warps, held, metricOutline) : null;
     timings.scoreJoint = Date.now() - t;
-    log(`[joint] held-out fit: joint chamfer ${fitJoint.chamferPx} px NCC ${fitJoint.gradNcc}${fitWarped ? `; with warps chamfer ${fitWarped.chamferPx} px NCC ${fitWarped.gradNcc}` : ''}`);
+    log(`[joint] held-out fit: joint chamfer ${fitJoint.chamferPx} px NCC ${fitJoint.gradNcc}${useOutline ? ` outline ${fitJoint.outlinePx} px` : ''}${fitWarped ? `; with warps chamfer ${fitWarped.chamferPx} px NCC ${fitWarped.gradNcc}` : ''}`);
 
     let chosen: JointRegistrationResult['chosen'] = 'current';
     let reason: string;
@@ -515,7 +605,7 @@ export function registerPanosJointly(input: JointRegistrationInput): JointRegist
     return {
         registration, chosen, reason, fit: { current: fitCurrent, start: fitStart, joint: fitJoint, warped: fitWarped }, panos,
         matches: { before: before.matches.length, after: res.matches.length, medianPxBefore: mags(before) === null ? null : r3(mags(before)!), medianPxAfter: mags(res) === null ? null : r3(mags(res)!) },
-        warps: [...warps.values()], timingsMs: timings
+        warps: [...warps.values()], outlineTerm: { used: useOutline, triangles: outlineMesh ? outlineMesh.indices.length / 3 : 0 }, timingsMs: timings
     };
 }
 
@@ -539,8 +629,8 @@ function jointRegistration(current: Registration, corrs: Map<string, PoseCorrect
 
 /** The joint registration in words for the stage panel. */
 export function describeJointRegistration(r: JointRegistrationResult): string {
-    const f = (x: PoseFit | null) => (x ? `chamfer ${x.chamferPx ?? 'n/a'} px / NCC ${x.gradNcc ?? 'n/a'}` : 'n/a');
-    return `joint registration of ${r.panos.length} panos (${r.matches.before} -> ${r.matches.after} cross-view matches, median ${r.matches.medianPxBefore ?? 'n/a'} -> ${r.matches.medianPxAfter ?? 'n/a'} px) in ${((r.timingsMs.total ?? 0) / 1000).toFixed(1)} s; held-out fit: per-pano choice ${f(r.fit.current)}, joint ${f(r.fit.joint)}, with warps ${f(r.fit.warped)}; kept: ${r.chosen} (${r.reason})`;
+    const f = (x: PoseFit | null) => (x ? `chamfer ${x.chamferPx ?? 'n/a'} px / NCC ${x.gradNcc ?? 'n/a'}${x.outlinePx !== undefined ? ` / face outline ${x.outlinePx ?? 'n/a'} px` : ''}` : 'n/a');
+    return `joint registration of ${r.panos.length} panos${r.outlineTerm.used ? ' (with the face-outline term)' : ''} (${r.matches.before} -> ${r.matches.after} cross-view matches, median ${r.matches.medianPxBefore ?? 'n/a'} -> ${r.matches.medianPxAfter ?? 'n/a'} px) in ${((r.timingsMs.total ?? 0) / 1000).toFixed(1)} s; held-out fit: per-pano choice ${f(r.fit.current)}, joint ${f(r.fit.joint)}, with warps ${f(r.fit.warped)}; kept: ${r.chosen} (${r.reason})`;
 }
 
 export type { Vec3 };

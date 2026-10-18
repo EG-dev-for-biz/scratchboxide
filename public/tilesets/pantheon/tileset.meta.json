@@ -1,10 +1,26 @@
 {
-  "eyeHeight": 3.895,
-  "walkRadius": 1.25,
-  "source": "pantheon_atrium_360.splat",
-  "origin": {
-    "lat": 41.8986,
-    "lng": 12.4768,
-    "alt": 20
-  }
+  "eyeHeight": 1.7,
+  "walkRadius": 0,
+  "source": "public/images/pantheon_atrium_360_4k.png",
+  "sourceKind": "AI-generated 360 panorama (structured 360 prompt, level camera at 1.7 m)",
+  "steps": [
+    {
+      "tool": "panorama_to_3dgs",
+      "skipOffsets": true,
+      "depthModel": "depth-anything/Depth-Anything-V2-Small-hf@5426e4f0 (Apache-2.0)",
+      "eyeHeight": 1.7,
+      "depthScaleMetresPerUnit": 3.6240371123666635,
+      "farPlanePixels": 0,
+      "splats": 347085
+    },
+    {
+      "tool": "splat_to_3dtiles",
+      "tiles": 29,
+      "levels": 5,
+      "splats": 347085,
+      "geodeticallyPlaced": false
+    }
+  ],
+  "builtAt": "2026-10-18T04:00:40.018Z",
+  "durationMs": 12842
 }

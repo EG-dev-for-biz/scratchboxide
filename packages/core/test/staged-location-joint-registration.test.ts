@@ -22,7 +22,9 @@ import { renderFrameDepth, ZERO_CORRECTION, type FrameCamera, type PoseCorrectio
 import type { RenderMesh3D } from '../src/node/spatial/HeadlessMeshSilhouetteRenderer';
 import { castCamera } from '../src/node/3d-engine/staged-location/survey-casting';
 import { registerPanosByEdges, type EdgeRegFrame } from '../src/node/3d-engine/staged-location/pano-edge-registration';
-import { registerPanosJointly, trainCell } from '../src/node/3d-engine/staged-location/pano-joint-registration';
+import { faceSlabMesh, registerPanosJointly, trainCell } from '../src/node/3d-engine/staged-location/pano-joint-registration';
+import { faceOutlineSamples } from '../src/node/spatial/StreetViewCrossViewRefiner';
+import type { SurfaceChart } from '../src/common/spatial/staged-location-contracts';
 import type { Registration, RegView } from '../src/node/3d-engine/staged-location/pano-registration';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 
@@ -37,7 +39,7 @@ function addBox(v: number[], ix: number[], lo: [number, number, number], hi: [nu
 }
 
 /** A 14 m wall with an opening and a parapet; `err` moves the parapet up and narrows the opening (the scan's own error). */
-function facade(err: { parapetUp: number; openingIn: number }): RenderMesh3D {
+function facade(err: { parapetUp: number; openingIn: number }, tree = false): RenderMesh3D {
     const v: number[] = [], ix: number[] = [];
     const o = 2 - err.openingIn;
     addBox(v, ix, [-60, -0.3, -60], [60, 0, 60]);
@@ -47,6 +49,7 @@ function facade(err: { parapetUp: number; openingIn: number }): RenderMesh3D {
     addBox(v, ix, [-3.5, 10 + err.parapetUp, -0.8], [3.5, 11.5 + err.parapetUp, -0.2]);
     addBox(v, ix, [-7.5, 10, -1.3], [7.5, 10.4, 0.3]); // cornice
     addBox(v, ix, [-30, 0, -25], [30, 18, -20]); // a building behind
+    if (tree) addBox(v, ix, [-6.5, 0, 2.5], [-4.5, 7, 4.5]); // a tree in front of the left pier (the scan has it; the photos do not)
     return { vertices: new Float32Array(v), indices: new Uint32Array(ix) };
 }
 
@@ -153,5 +156,92 @@ describe('joint pano registration (pano-joint-registration)', () => {
         }
         fs.writeFileSync(path.join(out, 'staged_location_joint_registration_p2.png'), encodePng(W, H, px, 4));
         fs.writeFileSync(path.join(out, 'staged_location_joint_registration_report.json'), JSON.stringify({ perPanoErrPx: perPano, jointErrPx: together, chosen: joint.chosen, reason: joint.reason, fit: { current: { c: joint.fit.current.chamferPx, n: joint.fit.current.gradNcc }, joint: { c: joint.fit.joint?.chamferPx, n: joint.fit.joint?.gradNcc }, warped: { c: joint.fit.warped?.chamferPx, n: joint.fit.warped?.gradNcc } }, panos: joint.panos, edge: edge.panos.map(p => ({ id: p.panoId, chosen: p.chosen, res: p.edgeResidualPx })) }, null, 1));
+    }, 600_000);
+
+    it('holds the outline of the structure\'s own faces: the tile near the fitted faces, a tree in front and a building behind left out', () => {
+        const scan = facade({ parapetUp: 0, openingIn: 0 }, true);
+        const front: SurfaceChart = { plane: { origin: [-7, 0, 0], u: [1, 0, 0], v: [0, 1, 0], normal: [0, 0, 1], extentUv: [[0, 0], [14, 0], [14, 11.5], [0, 11.5]] } };
+        const faces = faceSlabMesh(scan, [front]);
+        // the structure's triangles stay (the facade, cornice and parapet), the tree 2.5 m in front, the building 20 m behind and the
+        // ground's far corners go
+        const kept = new Set<number>();
+        for (let t = 0; t < faces.indices.length; t++) kept.add(faces.indices[t]);
+        const box = (k: number) => [...Array(8).keys()].map(j => k * 8 + j);
+        expect(box(1).every(i => kept.has(i))).toBe(true);
+        expect(box(4).every(i => kept.has(i))).toBe(true);
+        expect(box(6).some(i => kept.has(i))).toBe(false); // building behind
+        expect(box(7).some(i => kept.has(i))).toBe(false); // tree in front
+        // seen from a pano, the face outline samples lie on the outline of the structure and never where the tree hides it
+        const v = view('p2', [-1, 1.7, 21], 2);
+        const cam = castCamera(v);
+        const pts = faceOutlineSamples(renderFrameDepth(faces, cam), renderFrameDepth(scan, cam), cam, new Uint8Array(cam.width * cam.height).fill(1));
+        expect(pts.length).toBeGreaterThan(200);
+        let hidden = 0, onOutline = 0;
+        for (const X of pts) {
+            // the ray from the eye to the sample does not pass through the tree (slab test against its box)
+            let t0 = 0, t1 = 0.999;
+            for (let k = 0; k < 3; k++) {
+                const lo = [-6.5, 0, 2.5][k], hi = [-4.5, 7, 4.5][k], o = cam.eye[k], d = X[k] - o;
+                if (Math.abs(d) < 1e-9) { if (o < lo || o > hi) { t0 = 1; break; } continue; }
+                const ta = (lo - o) / d, tb = (hi - o) / d;
+                t0 = Math.max(t0, Math.min(ta, tb)); t1 = Math.min(t1, Math.max(ta, tb));
+            }
+            if (t0 < t1) hidden++;
+            // on the structure's outer outline, the opening's outline, the cornice or the parapet
+            const outer = Math.abs(Math.abs(X[0]) - 7) < 0.15 || Math.abs(Math.abs(X[0]) - 2) < 0.15 || Math.abs(Math.abs(X[0]) - 3.5) < 0.15 || Math.abs(Math.abs(X[0]) - 7.5) < 0.15
+                || Math.abs(X[1] - 6) < 0.15 || Math.abs(X[1] - 10) < 0.15 || Math.abs(X[1] - 10.4) < 0.15 || Math.abs(X[1] - 11.5) < 0.15 || X[1] < 0.15;
+            if (outer) onOutline++;
+        }
+        expect(hidden).toBe(0);
+        expect(onOutline / pts.length).toBeGreaterThan(0.95);
+    });
+
+    it('with the fitted faces, the joint fit holds each view\'s face outline, and poses better than without where a tree in the scan is not in the photos', () => {
+        const truthMesh = facade({ parapetUp: 0, openingIn: 0 });
+        const scan = facade({ parapetUp: 0.2, openingIn: 0.15 }, true);
+        const truths: Record<string, PoseCorrection> = {
+            p1: { ...ZERO_CORRECTION, dx: 0.6, dy: 0.2, dz: -0.4, dyawDeg: 0.6 },
+            p2: { ...ZERO_CORRECTION, dx: -0.7, dz: 0.5, dpitchDeg: -0.5 },
+            p3: { ...ZERO_CORRECTION, dx: 0.4, dy: -0.15, dyawDeg: -0.8 },
+            p4: { ...ZERO_CORRECTION, dx: -0.5, dz: -0.6, dyawDeg: 0.5, dpitchDeg: 0.4 }
+        };
+        const views = [view('p1', [-6, 1.7, 18], 12), view('p2', [-1, 1.7, 21], 2), view('p3', [4, 1.7, 19], -10), view('p4', [8, 1.7, 15], -26)];
+        const frames: EdgeRegFrame[] = views.map(v => ({ key: v.panoId, view: v, image: photo(truthMesh, v, truths[v.panoId]) }));
+        const current: Registration = {
+            corrections: new Map(views.map(v => [v.panoId, ZERO_CORRECTION])),
+            perPano: views.map(v => ({ panoId: v.panoId, dxM: 0, dzM: 0, dyawDeg: 0, dpitchDeg: 0, pairs: 1, beforeRmsM: 1.3, afterRmsM: 1.3 })),
+            setAside: [], pairs: [], beforeRmsM: 1.3, afterRmsM: 1.3, used: 1, rejected: 0
+        };
+        const candidates = new Map(views.map(v => [v.panoId, { box: ZERO_CORRECTION, edgeLocked: false }]));
+        const front: SurfaceChart = { plane: { origin: [-7, 0, 0], u: [1, 0, 0], v: [0, 1, 0], normal: [0, 0, 1], extentUv: [[0, 0], [14, 0], [14, 11.5], [0, 11.5]] } };
+        const without = registerPanosJointly({ frames, mesh: scan, current, candidates, budgetMs: 240_000 });
+        const withOutline = registerPanosJointly({ frames, mesh: scan, current, candidates, faces: [{ chart: front }], budgetMs: 240_000 });
+        expect(without.outlineTerm.used).toBe(false);
+        expect(withOutline.outlineTerm.used).toBe(true);
+        // the held-out face outline (scan points the fit never used) sits closer to the photo's colour edges after the joint fit
+        expect(withOutline.fit.joint!.outlinePx!).toBeLessThan(withOutline.fit.start.outlinePx!);
+        const errOf = (reg: Registration) => {
+            const e = views.map(v => trueError(truthMesh, castCamera({ ...v, correction: reg.corrections.get(v.panoId) }), castCamera({ ...v, correction: truths[v.panoId] })));
+            return e.reduce((s, x) => s + x, 0) / e.length;
+        };
+        const a = errOf(without.chosen === 'current' ? current : without.registration), b = errOf(withOutline.chosen === 'current' ? current : withOutline.registration);
+        const out = path.resolve(__dirname, '../../../test-results/screenshots');
+        fs.mkdirSync(out, { recursive: true });
+        fs.writeFileSync(path.join(out, 'staged_location_joint_registration_outline_report.json'), JSON.stringify({ withoutErrPx: a, withOutlineErrPx: b, startErrPx: errOf(current), without: without.fit, withOutline: withOutline.fit, chosen: [without.chosen, withOutline.chosen] }, (k, x) => (k === 'views' ? undefined : x), 1));
+        // red: the face outline at the start, green: after the joint fit with the outline term, over the photo of pano p2
+        const f = frames[1], slab = faceSlabMesh(scan, [front]);
+        const px = Buffer.from(f.image.rgba);
+        for (const [corr, col] of [[ZERO_CORRECTION, [255, 0, 0]], [withOutline.registration.corrections.get('p2')!, [0, 255, 0]]] as const) {
+            const c = castCamera({ ...f.view, correction: corr });
+            for (const X of faceOutlineSamples(renderFrameDepth(slab, c), renderFrameDepth(scan, c), c, new Uint8Array(W * H).fill(1))) {
+                const q = [X[0] - c.eye[0], X[1] - c.eye[1], X[2] - c.eye[2]];
+                const z = q[0] * c.fwd[0] + q[1] * c.fwd[1] + q[2] * c.fwd[2];
+                const x = Math.floor(c.cx + c.fx * (q[0] * c.right[0] + q[1] * c.right[1] + q[2] * c.right[2]) / z), y = Math.floor(c.cy - c.fy * (q[0] * c.up[0] + q[1] * c.up[1] + q[2] * c.up[2]) / z);
+                if (x >= 0 && y >= 0 && x < W && y < H) px.set(col, (y * W + x) * 4);
+            }
+        }
+        fs.writeFileSync(path.join(out, 'staged_location_joint_registration_outline_p2.png'), encodePng(W, H, px, 4));
+        expect(b).toBeLessThan(a);
+        expect(b).toBeLessThan(errOf(current));
     }, 600_000);
 });

@@ -1279,6 +1279,7 @@ const arr = (items: JsonSchema, extra: Partial<JsonSchema> = {}): JsonSchema => 
 const obj = (required: readonly string[], properties: Record<string, JsonSchema>, extra: Partial<JsonSchema> = {}): JsonSchema =>
     ({ type: 'object', required, additionalProperties: false, properties, ...extra });
 const numberMap: JsonSchema = { type: 'object', additionalProperties: NUM };
+const PHOTO_TIER_NUM: JsonSchema = { oneOf: [{ type: 'number' }, { type: 'null' }] };
 const counts = obj(['vertices', 'triangles'], { vertices: INT, triangles: INT });
 
 const DEFINITIONS = {
@@ -1695,7 +1696,21 @@ const DEFINITIONS = {
     // texture pass (texture-pass-contracts.ts): labels and sources are open strings, nothing branches on them
     texelProvenance: obj(['source', 'label', 'method', 'coverage'], {
         source: { type: 'string', minLength: 1 }, label: { type: 'string', minLength: 1 }, method: STR,
-        panoIds: arr(STR), coverage: ref('unit')
+        panoIds: arr(STR), captureDates: arr(STR), coverage: ref('unit')
+    }),
+    photoTierFitScores: obj(['pixels'], {
+        pixels: NONNEG_INT, geoChamferMedianPx: PHOTO_TIER_NUM, geoChamferMeanPx: PHOTO_TIER_NUM, heldOutGradNcc: PHOTO_TIER_NUM, heldOutChamferMedianPx: PHOTO_TIER_NUM,
+        inventedEdgeShare: PHOTO_TIER_NUM, laplacianVar: PHOTO_TIER_NUM, dE00toPalette: PHOTO_TIER_NUM
+    }),
+    photoTierLayerRecord: obj(['texelShare', 'multiViewShare', 'facades', 'charts', 'panos', 'ms'], {
+        texelShare: ref('unit'), multiViewShare: ref('unit'), facades: NONNEG_INT, charts: NONNEG_INT, panos: NONNEG_INT, ms: ref('nonneg'),
+        nonPlanar: obj(['texelShare', 'p90DeviationM', 'maxDeviationM'], { texelShare: ref('unit'), p90DeviationM: ref('nonneg'), maxDeviationM: ref('nonneg') }),
+        heldOut: obj(['panoIds', 'mppM', 'methods'], { panoIds: arr(STR), mppM: ref('nonneg'), methods: { type: 'object', additionalProperties: ref('photoTierFitScores') } }),
+        occluderCheck: obj(['singlePx', 'rejectedPx', 'sky', 'vegetation', 'tile'], { singlePx: NONNEG_INT, rejectedPx: NONNEG_INT, sky: NONNEG_INT, vegetation: NONNEG_INT, tile: NONNEG_INT }),
+        delight: obj(['texels', 'meanLiftKept', 'liftHalvedTexels'], { texels: NONNEG_INT, meanLiftKept: ref('unit'), liftHalvedTexels: NONNEG_INT }),
+        exposure: obj(['charts', 'meanAbsLogGain', 'maxAbsLogGain'], { charts: NONNEG_INT, meanAbsLogGain: ref('nonneg'), maxAbsLogGain: ref('nonneg') }),
+        merged: obj(['rung0Texels', 'rung1Texels', 'rung1KeptBelowTexels', 'texelShare'], { rung0Texels: NONNEG_INT, rung1Texels: NONNEG_INT, rung1KeptBelowTexels: NONNEG_INT, texelShare: ref('unit') }),
+        timingsMs: numberMap
     }),
     surfaceUvMap: obj(['nodeName', 'kind', 'texelsPerMeter', 'atlasRect'], {
         nodeName: { type: 'string', minLength: 1 }, kind: STR, texelsPerMeter: { type: 'number', exclusiveMinimum: 0 },
@@ -1708,14 +1723,15 @@ const DEFINITIONS = {
     TextureLayerBundle: obj(['layerKey', 'maps', 'uv', 'provenance', 'ladderRung', 'confidence'], {
         layerKey: { type: 'string', minLength: 1 },
         maps: obj(['albedo'], { albedo: STR, normal: STR, roughness: STR }),
+        photoTier: ref('photoTierLayerRecord'),
         uv: arr(ref('surfaceUvMap')), provenance: arr(ref('texelProvenance'), { minItems: 1 }),
         ladderRung: NONNEG_INT, rungReason: STR, confidence: { type: 'string', minLength: 1 },
         fit: obj(['chamferPx', 'clayChamferPx', 'gradNcc', 'scoredViews', 'heldOutShare', 'widthPx', 'views'], {
             chamferPx: NUM_OR_NULL, clayChamferPx: NUM_OR_NULL, gradNcc: NUM_OR_NULL, scoredViews: NONNEG_INT, heldOutShare: ref('unit'), widthPx: NONNEG_INT,
             photo: obj(['chamferPx', 'gradNcc', 'pixels'], { chamferPx: NUM_OR_NULL, gradNcc: NUM_OR_NULL, pixels: NONNEG_INT }),
             loo: obj(['chamferPx', 'gradNcc', 'pixels', 'panos', 'skipped', 'perPano'], {
-                chamferPx: NUM_OR_NULL, gradNcc: NUM_OR_NULL, pixels: NONNEG_INT, panos: NONNEG_INT, skipped: NONNEG_INT,
-                perPano: arr(obj(['panoId', 'pixels', 'chamferPx', 'gradNcc'], { panoId: STR, pixels: NONNEG_INT, chamferPx: NUM_OR_NULL, gradNcc: NUM_OR_NULL }))
+                chamferPx: NUM_OR_NULL, gradNcc: NUM_OR_NULL, pixels: NONNEG_INT, panos: NONNEG_INT, skipped: NONNEG_INT, panosTotal: NONNEG_INT, sampled: { type: 'boolean' },
+                perPano: arr(obj(['panoId', 'pixels', 'chamferPx', 'gradNcc'], { panoId: STR, pixels: NONNEG_INT, chamferPx: NUM_OR_NULL, gradNcc: NUM_OR_NULL, ms: ref('nonneg') }))
             }),
             views: arr(obj(['panoId', 'pixels', 'ownPixels', 'chamferPx', 'clayChamferPx', 'gradNcc'], {
                 panoId: STR, pixels: NONNEG_INT, ownPixels: NONNEG_INT, chamferPx: NUM_OR_NULL, clayChamferPx: NUM_OR_NULL, gradNcc: NUM_OR_NULL,

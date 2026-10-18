@@ -15,6 +15,7 @@ import { promisify } from 'util';
 import { resolveBinary } from './HeadlessVideoEditorService';
 import { GeneratorFailedError, MissingInputError } from '../../common/errors/pipeline-errors';
 import { getPythonWorkerPool, mapWithConcurrency, PythonWorkerError } from '../process/persistent-python-worker';
+import { repoPath, resolveRepoPython } from '../process/repo-python';
 
 const execFileAsync = promisify(execFile);
 const TOOL = 'vfx_segment_subject';
@@ -82,9 +83,9 @@ export class VfxSubjectSegmenterService {
      * @param options.frameTimeoutMs time limit for one frame (default 120 s; the first frame includes the model load).
      */
     constructor(options?: { pythonBinary?: string; scriptPath?: string; maxWorkers?: number; frameTimeoutMs?: number }) {
-        this.pythonBinary = options?.pythonBinary ?? process.env.PYTHON_BIN ?? 'python3';
+        this.pythonBinary = options?.pythonBinary ?? resolveRepoPython('PYTHON_BIN');
         this.scriptPath = options?.scriptPath
-            ?? path.resolve(process.cwd(), 'scripts/segment_subject.py');
+            ?? repoPath('scripts', 'segment_subject.py');
         this.maxWorkers = Math.max(1, Math.floor(options?.maxWorkers ?? Math.min(4, Math.max(1, Math.floor(os.cpus().length / 2)))));
         this.frameTimeoutMs = options?.frameTimeoutMs ?? 120_000;
     }

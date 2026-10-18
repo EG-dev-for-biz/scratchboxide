@@ -28,6 +28,10 @@ dist-electron/
 models/
 # Source code, not model files.
 !packages/core/src/node/models/
+# The MediaPipe pose model the pose tools load (Apache-2.0, 9.4 MB, from storage.googleapis.com/mediapipe-models).
+!assets/models/
+assets/models/*
+!assets/models/pose_landmarker_full.task
 build/
 *.ckpt
 *.safetensors
@@ -138,3 +142,5 @@ scripts/station_to_splats
 scripts/scratchbox_uv_pipeline
 scripts/run_sb_veggie
 scripts/run_tile_cleanup_pipeline
+# Downloaded model weights (tools/depth/fetch_depth_model.py); never committed
+/.model-cache/

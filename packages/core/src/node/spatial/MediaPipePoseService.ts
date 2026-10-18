@@ -22,6 +22,7 @@ import {
     PoseDetectionRequest
 } from '../../common/character-pose-protocol';
 import { GeneratorFailedError, MissingInputError } from '../../common/errors/pipeline-errors';
+import { repoPath, resolveRepoPython } from '../process/repo-python';
 
 interface Vec3 {
     x: number;
@@ -57,9 +58,9 @@ export class MediaPipePoseService {
     private static unavailable = false;
 
     constructor(options?: MediaPipePoseServiceOptions) {
-        this.pythonBinary = options?.pythonBinary ?? process.env.PYTHON_BIN ?? 'python3';
-        this.scriptPath = options?.scriptPath ?? path.resolve(process.cwd(), 'scripts/detect_pose.py');
-        this.modelAssetPath = options?.modelAssetPath ?? path.resolve(process.cwd(), 'assets/models/pose_landmarker_full.task');
+        this.pythonBinary = options?.pythonBinary ?? resolveRepoPython('SCRATCHBOX_POSE_PYTHON', 'PYTHON_BIN');
+        this.scriptPath = options?.scriptPath ?? repoPath('scripts', 'detect_pose.py');
+        this.modelAssetPath = options?.modelAssetPath ?? repoPath('assets', 'models', 'pose_landmarker_full.task');
         this.timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
         this.maxWorkers = Math.max(1, Math.floor(options?.maxWorkers ?? defaultMediaPipeWorkers()));
     }

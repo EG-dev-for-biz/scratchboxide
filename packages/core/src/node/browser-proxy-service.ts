@@ -340,7 +340,7 @@ export class BrowserProxyService {
             var boundsStr = '(x:' + Math.round(item.bounds.x) + ', y:' + Math.round(item.bounds.y) + ', w:' + Math.round(item.bounds.width) + ', h:' + Math.round(item.bounds.height) + ')';
             lines.push('[' + item.id + '] <' + item.role + '> "' + item.text + '" ' + boundsStr + stateStr);
         });
-        return lines.join('\n');
+        return lines.join('\\n');
     }
 
     function convertHtmlToMarkdown(root) {
@@ -528,6 +528,38 @@ export class BrowserProxyService {
             } catch(err) {}
         };
     });
+
+    // 4b. Uncaught errors and promise rejections reach the DevTools console too.
+    window.addEventListener('error', function(e) {
+        postToParent({ type: 'scratchbox-browser-console', level: 'error', text: 'Uncaught ' + (e.message || 'error') + (e.filename ? ' (' + e.filename + ':' + e.lineno + ':' + e.colno + ')' : '') });
+    });
+    window.addEventListener('unhandledrejection', function(e) {
+        var reason = e.reason;
+        postToParent({ type: 'scratchbox-browser-console', level: 'error', text: 'Unhandled rejection: ' + (reason && reason.stack ? reason.stack : String(reason)) });
+    });
+
+    // 4c. Network: the page's own Resource Timing entries (and its navigation entry), as they arrive.
+    try {
+        var sentResources = 0;
+        var sentNavigation = false;
+        var flushResources = function() {
+            var batch = [];
+            var nav = performance.getEntriesByType('navigation')[0];
+            if (nav && !sentNavigation && nav.responseEnd > 0) {
+                sentNavigation = true;
+                batch.push({ name: window.location.href, initiatorType: 'document', duration: nav.duration || (nav.responseEnd - nav.startTime), transferSize: nav.transferSize || 0, responseStatus: nav.responseStatus || 0, startTime: 0 });
+            }
+            var entries = performance.getEntriesByType('resource');
+            for (var i = sentResources; i < entries.length; i++) {
+                var en = entries[i];
+                batch.push({ name: en.name, initiatorType: en.initiatorType, duration: en.duration, transferSize: en.transferSize || 0, responseStatus: en.responseStatus || 0, startTime: en.startTime });
+            }
+            sentResources = entries.length;
+            if (batch.length) postToParent({ type: 'scratchbox-browser-network', entries: batch });
+        };
+        new PerformanceObserver(function() { flushResources(); }).observe({ type: 'resource', buffered: true });
+        window.addEventListener('load', function() { setTimeout(flushResources, 0); });
+    } catch(e) {}
 
     // 5. Handle postMessage actions from parent
     window.addEventListener('message', function(event) {

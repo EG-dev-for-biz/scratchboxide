@@ -19,7 +19,8 @@ const INVOKE_CHANNELS = new Set<string>([
     'scratchbox:window-is-maximized',
     'scratchbox:show-open-dialog',
     'scratchbox:show-save-dialog',
-    'scratchbox:execute-command'
+    'scratchbox:execute-command',
+    'scratchbox:capture-page'
 ]);
 
 function readArg(prefix: string): string {
@@ -59,5 +60,7 @@ contextBridge.exposeInMainWorld('scratchboxDesktop', {
     showOpenDialog: (options?: unknown) => invoke('scratchbox:show-open-dialog', options),
     showSaveDialog: (options?: unknown) => invoke('scratchbox:show-save-dialog', options),
     executeCommand: (command: string, cwd?: string) => invoke('scratchbox:execute-command', command, cwd),
+    /** PNG data URL of the window's pixels in rect (CSS pixels of the page), iframes included. */
+    capturePage: (rect: { x: number; y: number; width: number; height: number }) => invoke('scratchbox:capture-page', rect),
     invoke
 });

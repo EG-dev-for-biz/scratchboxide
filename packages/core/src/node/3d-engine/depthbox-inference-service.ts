@@ -7,11 +7,9 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import * as fs from 'fs';
-import * as path from 'path';
+import { PanoramaDepthService, type DepthUnits } from '../spatial/PanoramaDepthService';
 
 export interface DepthBoxInferenceConfig {
-    modelPath?: string;
     fovDegrees?: number;
     minDepth?: number;
     maxDepth?: number;
@@ -37,21 +35,24 @@ export interface DepthBoxPredictionResult {
     minDepth: number;
     maxDepth: number;
     averageDepth: number;
+    /** 'relative' (median planar depth 1) unless a median depth in metres was given. */
+    depthUnits: DepthUnits;
+    modelUsed: string;
+    farPlanePixels: number;
 }
 
 /**
- * DepthBox Inference & Unprojection Service (Depth Anything 3 Logic).
- * Provides depth-ray field prediction, pinhole ray computation, and
- * direct P = d * r unprojection without relying on camera matrix calibration.
+ * DepthBox inference and unprojection: per-pixel depth from the local depth model (Depth Anything V2 Small), the
+ * pinhole ray field, and direct P = d * r unprojection.
  */
 export class DepthBoxInferenceService {
-    private modelPath: string;
+    private depthService: PanoramaDepthService;
     private defaultFov: number;
     private minDepth: number;
     private maxDepth: number;
 
-    constructor(config: DepthBoxInferenceConfig = {}) {
-        this.modelPath = config.modelPath || path.resolve(process.cwd(), 'public/models/depthbox_vitb14.onnx');
+    constructor(config: DepthBoxInferenceConfig = {}, depthService: PanoramaDepthService = new PanoramaDepthService()) {
+        this.depthService = depthService;
         this.defaultFov = config.fovDegrees ?? 60.0;
         this.minDepth = config.minDepth ?? 0.1;
         this.maxDepth = config.maxDepth ?? 500.0;
@@ -144,54 +145,49 @@ export class DepthBoxInferenceService {
     }
 
     /**
-     * Performs depth-ray prediction on input image.
-     * In offline/simulated mode or when ONNX runtime is unavailable,
-     * uses high-fidelity luminance-relative depth estimation with exact ray field.
+     * Depth-ray prediction for an RGB or RGBA pixel buffer: the depth comes from the local depth model (Depth Anything
+     * V2 Small via PanoramaDepthService), converted to depth along each pixel's pinhole ray and unprojected as
+     * P = d * r. Relative units (median planar depth 1) unless `medianDepthMeters` gives the scene's median distance.
+     * Throws GeneratorFailedError when the depth model cannot run; nothing is derived from the colours.
      */
     public async predictDepthAndRays(
         imageBuffer: Buffer | Uint8Array,
         width: number,
         height: number,
-        options: { fov?: number; stride?: number } = {}
+        options: { fov?: number; stride?: number; channels?: 3 | 4; medianDepthMeters?: number } = {}
     ): Promise<DepthBoxPredictionResult> {
         const fov = options.fov ?? this.defaultFov;
         const stride = options.stride ?? 1;
+        const channels = options.channels ?? (imageBuffer.length >= width * height * 4 ? 4 : 3);
 
-        const rayMap = this.computePinholeRayField(width, height, fov);
-        const metricDepths = new Float32Array(width * height);
-
+        const depth = await this.depthService.generatePixelBufferDepth(imageBuffer, width, height, {
+            channels, fovDegrees: fov, medianDepthMeters: options.medianDepthMeters
+        });
+        const metricDepths = depth.rayDepths;
         let minD = Infinity;
         let maxD = -Infinity;
         let sumD = 0;
-
-        // Offline high-fidelity geometric synthesis from image luminance gradients
-        for (let y = 0; y < height; ++y) {
-            for (let x = 0; x < width; ++x) {
-                const idx = y * width + x;
-                let lum = 0.5;
-
-                if (imageBuffer.length >= width * height * 3) {
-                    const cIdx = idx * 4 < imageBuffer.length ? idx * 4 : idx * 3;
-                    const r = imageBuffer[cIdx];
-                    const g = imageBuffer[cIdx + 1];
-                    const b = imageBuffer[cIdx + 2];
-                    lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0;
-                }
-
-                // Geometric depth gradient: vertical horizon falloff + luminance relief
-                const normY = y / height;
-                const baseDepth = 2.0 + normY * 18.0;
-                const relief = (1.0 - lum) * 3.5;
-                const d = Math.max(this.minDepth, Math.min(this.maxDepth, baseDepth + relief));
-
-                metricDepths[idx] = d;
-                if (d < minD) minD = d;
-                if (d > maxD) maxD = d;
-                sumD += d;
-            }
+        for (let i = 0; i < metricDepths.length; i++) {
+            const d = Math.max(this.minDepth, Math.min(this.maxDepth, metricDepths[i]));
+            metricDepths[i] = d;
+            if (d < minD) minD = d;
+            if (d > maxD) maxD = d;
+            sumD += d;
         }
 
-        const rgba = imageBuffer.length >= width * height * 4 ? (imageBuffer as Uint8Array) : undefined;
+        const rayMap = this.computePinholeRayField(width, height, fov);
+        let rgba: Uint8Array | undefined;
+        if (channels === 4) {
+            rgba = imageBuffer as Uint8Array;
+        } else {
+            rgba = new Uint8Array(width * height * 4);
+            for (let i = 0; i < width * height; i++) {
+                rgba[i * 4] = imageBuffer[i * 3];
+                rgba[i * 4 + 1] = imageBuffer[i * 3 + 1];
+                rgba[i * 4 + 2] = imageBuffer[i * 3 + 2];
+                rgba[i * 4 + 3] = 255;
+            }
+        }
         const pointCloud = this.unprojectToPoints(metricDepths, rayMap, width, height, rgba, stride);
 
         return {
@@ -200,9 +196,12 @@ export class DepthBoxInferenceService {
             metricDepths,
             rayMap,
             pointCloud,
-            minDepth: minD === Infinity ? 0 : minD,
-            maxDepth: maxD === -Infinity ? 0 : maxD,
-            averageDepth: sumD / (width * height)
+            minDepth: minD,
+            maxDepth: maxD,
+            averageDepth: sumD / (width * height),
+            depthUnits: depth.depthUnits,
+            modelUsed: depth.modelUsed,
+            farPlanePixels: depth.farPlanePixels
         };
     }
 }

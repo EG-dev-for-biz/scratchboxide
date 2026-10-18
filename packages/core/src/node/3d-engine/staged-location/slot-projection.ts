@@ -19,7 +19,7 @@
  */
 
 import type { RenderMesh3D } from '../../spatial/HeadlessMeshSilhouetteRenderer';
-import { frameCamera, groundingHorizontalFovDeg, projectToFrame, renderFrameDepth, ZERO_CORRECTION, type FrameCamera, type PoseCorrection } from '../../spatial/StreetViewPoseRegistrar';
+import { frameCamera, groundingFocalPx, groundingHorizontalFovDeg, projectToFrame, renderFrameDepth, ZERO_CORRECTION, type FrameCamera, type PoseCorrection } from '../../spatial/StreetViewPoseRegistrar';
 import type { EvidenceImageRef, FittedSurface, OrnamentSlot, StructureFit, SurfaceChart, Vec2, Vec3 } from '../../../common/spatial/staged-location-contracts';
 import { NOMINAL_POSE_UNCERTAINTY } from './streetview-evidence';
 
@@ -186,8 +186,11 @@ export function nominalPose(eye: Vec3): NonNullable<EvidenceImageRef['pose']> {
     return { eye, registered: false, uncertaintyM: NOMINAL_POSE_UNCERTAINTY.meters, uncertaintyDeg: NOMINAL_POSE_UNCERTAINTY.degrees };
 }
 
-/** Pixels the pose uncertainty can move a point at `distanceM` in an image `widthPx` wide with horizontal fov `fovDeg`. */
-export function uncertaintyPx(distanceM: number, fovDeg: number, widthPx: number): number {
-    const f = widthPx / (2 * Math.tan((fovDeg * DEG) / 2));
+/**
+ * Pixels the pose uncertainty can move a point at `distanceM` in a grounding image `widthPx` x `heightPx` requested with fov
+ * `fovDeg` (focal length groundingFocalPx: 960 / tan(fov / 2) at the delivered crop).
+ */
+export function uncertaintyPx(distanceM: number, fovDeg: number, widthPx: number, heightPx: number): number {
+    const f = groundingFocalPx(fovDeg, widthPx, heightPx);
     return f * (NOMINAL_POSE_UNCERTAINTY.meters / Math.max(1, distanceM) + NOMINAL_POSE_UNCERTAINTY.degrees * DEG);
 }

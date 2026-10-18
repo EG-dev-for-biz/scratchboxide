@@ -21,6 +21,7 @@ import {
     resolveWithinRoot
 } from '../../../packages/core/src/node/security/path-guard';
 import { createEmptyProjectGraph } from '../../../packages/core/src/common';
+import { ContainerSandboxService } from '../../../packages/core/src/node/container-sandbox-service';
 import { DEFAULT_GEMINI_MODEL } from '../../../packages/core/src/node/gemini/gemini-client';
 import {
     WorkspaceConfigService,
@@ -301,6 +302,34 @@ export function createWorkspaceRouter(services: WorkspaceRouterServices, ctx: Ro
             clearInterval(keepAlive);
             fileWatcher.removeSSEClient(res);
         });
+    });
+
+    /**
+     * @terminal: runs one command in the workspace sandbox (the same process jail, command policy and scrubbed
+     * environment as the agent's workspace_run_command) and returns its real stdout, stderr and exit code. A command
+     * the policy refuses comes back as an error, not as empty output.
+     */
+    const commandSandbox = new ContainerSandboxService();
+    router.post('/run-command', async (req: Request, res: Response) => {
+        const command = typeof req.body?.command === 'string' ? req.body.command.trim() : '';
+        if (!command) {
+            res.status(400).json({ success: false, error: 'command is required' });
+            return;
+        }
+        const envId = `terminal-mention-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        try {
+            const workspaceRoot = resolveWorkspaceRoot(req);
+            const targetRoot = workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : allowedWorkspaceRoots[0];
+            const timeoutMs = Math.min(Math.max(Number(req.body?.timeoutMs) || 30000, 1000), 120000);
+            await commandSandbox.createEnvironment({ environmentId: envId, isolationLevel: 'process-jail', workspaceRoot: targetRoot, timeoutMs });
+            const result = await commandSandbox.executeCommand(envId, { command, cwd: targetRoot, timeoutMs });
+            res.json({ success: true, command, cwd: targetRoot, exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr, timedOut: result.timedOut, durationMs: result.durationMs });
+        } catch (err: any) {
+            res.status(err?.code === 'command_not_allowed' || err?.code === 'path_traversal' ? 403 : 500)
+                .json({ success: false, command, error: err?.message || String(err), code: err?.code });
+        } finally {
+            await commandSandbox.destroyEnvironment(envId).catch(() => false);
+        }
     });
 
     router.get(['/files', '/tree'], async (req: Request, res: Response) => {

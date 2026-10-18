@@ -33,13 +33,15 @@ IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.bmp'}
 def default_model_path() -> str:
     candidates = [
         os.environ.get('SCRATCHBOX_POSE_MODEL', ''),
+        # The repo's model (Google's MediaPipe storage, Apache-2.0), the one MediaPipePoseService uses.
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'assets', 'models', 'pose_landmarker_full.task'),
         os.path.expanduser('~/.cache/scratchbox/pose_landmarker_heavy.task'),
         os.path.expanduser('~/.cache/depthbox/mediapipe/pose_landmarker_lite.task'),
     ]
     for c in candidates:
         if c and os.path.exists(c):
             return c
-    raise FileNotFoundError('No MediaPipe pose_landmarker .task model found; set SCRATCHBOX_POSE_MODEL')
+    raise FileNotFoundError('No MediaPipe pose_landmarker .task model found: assets/models/pose_landmarker_full.task (committed) is missing; restore it or set SCRATCHBOX_POSE_MODEL')
 
 
 def landmarks_to_list(landmarks):

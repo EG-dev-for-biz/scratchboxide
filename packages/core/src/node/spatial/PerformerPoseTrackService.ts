@@ -11,6 +11,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { execFileBuffer } from '../process/exec-file-async';
+import { resolveRepoPython } from '../process/repo-python';
 
 /** [x, y, z, visibility]; image landmarks are normalized, world landmarks are metric hip-centred Y-down. */
 export type PoseLandmarkTuple = [number, number, number, number];
@@ -71,7 +72,7 @@ export class PerformerPoseTrackService {
         for (const c of candidates) {
             if (c && (c.includes(path.sep) ? fs.existsSync(c) : true)) return c;
         }
-        return 'python3';
+        return resolveRepoPython();
     }
 
     public static countTrackedFrames(track: PerformerPoseTrack): number {

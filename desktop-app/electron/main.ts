@@ -158,6 +158,19 @@ async function startBackendServer(): Promise<void> {
 
 function registerIpcHandlers(): void {
     ipcMain.handle('scratchbox:get-launch-token', () => launchToken);
+    // Real pixels of a region of the calling window (the sandbox or browser iframe included), for visual checks.
+    ipcMain.handle('scratchbox:capture-page', async (event, rect: unknown) => {
+        const r = rect as { x?: unknown; y?: unknown; width?: unknown; height?: unknown } | null;
+        const nums = r ? [r.x, r.y, r.width, r.height] : [];
+        if (nums.length !== 4 || !nums.every(n => typeof n === 'number' && Number.isFinite(n))) {
+            throw new Error('capture-page needs { x, y, width, height } in page pixels');
+        }
+        const [x, y, width, height] = (nums as number[]).map(n => Math.round(n));
+        if (width < 1 || height < 1) throw new Error('capture-page rect is empty');
+        const image = await event.sender.capturePage({ x: Math.max(0, x), y: Math.max(0, y), width, height });
+        if (image.isEmpty()) throw new Error('capture-page returned an empty image');
+        return image.toDataURL();
+    });
     ipcMain.handle('scratchbox:open-external', async (_event, url: unknown) => {
         if (typeof url !== 'string') {
             return false;
