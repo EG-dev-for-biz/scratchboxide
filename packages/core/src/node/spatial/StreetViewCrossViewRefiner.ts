@@ -66,6 +66,13 @@ export interface CrossViewFrame {
      * keeps the mesh's occluding contours and creases on them (an absolute anchor on the scan's own geometry, like the sky).
      */
     edges?: { dt: Float32Array };
+    /**
+     * Optional photo outline edges: distance (px) to the photo's strong colour-contrast edges (Canny-like, both sides of the
+     * edge differ). With it and `outlineMesh`, the outline of the structure's own faces (the tile mesh near the fitted faces,
+     * so a tree or a statue in front does not hide it) is held to them: the face outline the photo tier used to anchor
+     * each wide view, as one term of the joint fit.
+     */
+    outline?: { dt: Float32Array };
 }
 
 export interface CrossViewPriors { horizontalSigmaMeters: number; verticalSigmaMeters: number; angleSigmaDeg: number }
@@ -120,6 +127,12 @@ export interface CrossViewOptions {
     edgeEquivalentMatches?: number;
     /** Mesh-edge samples per frame. Default 400. */
     maxEdgeSamples?: number;
+    /** The structure's own mesh (the tile near its fitted faces) whose outline the frames' `outline` maps hold. */
+    outlineMesh?: RenderMesh3D;
+    /** Total weight of a frame's face-outline samples (frames with `outline`), in equivalent matches. Default 0 (off). */
+    outlineEquivalentMatches?: number;
+    /** Face-outline samples per frame. Default 400. */
+    maxOutlineSamples?: number;
     /**
      * Only scan points this accepts take part (matches by their mesh point, silhouette and edge samples by theirs): a spatial
      * hold-out, so a measure on the points it rejects is not one the refinement fitted.
@@ -131,7 +144,7 @@ export interface CrossViewOptions {
 }
 
 /** A sky-silhouette sample of a frame (mesh point on the sky boundary) with its residual weight. */
-export interface SilhouetteSample { frame: number; X: [number, number, number]; w: number; /** Which photo map it is held to: the sky boundary (default) or the structural edges. */ on?: 'sky' | 'edges' }
+export interface SilhouetteSample { frame: number; X: [number, number, number]; w: number; /** Which photo map it is held to: the sky boundary (default), the structural edges or the outline edges. */ on?: 'sky' | 'edges' | 'outline' }
 type Entry = { kind: 0; m: CrossViewMatch } | { kind: 1; frame: number; X: [number, number, number]; w: number; dt: Float32Array };
 
 /** One photo-to-photo correspondence found through the mesh. */
@@ -555,7 +568,7 @@ export class StreetViewCrossViewRefiner {
         const entries: Entry[] = matches.map(m => ({ kind: 0 as const, m }));
         for (const sl of silhouettes) {
             if (!pIndex.has(this.frames[sl.frame].panoId)) continue;
-            const dt = sl.on === 'edges' ? this.frames[sl.frame].edges?.dt : this.frames[sl.frame].sky?.dt;
+            const dt = sl.on === 'edges' ? this.frames[sl.frame].edges?.dt : sl.on === 'outline' ? this.frames[sl.frame].outline?.dt : this.frames[sl.frame].sky?.dt;
             if (dt) entries.push({ kind: 1, frame: sl.frame, X: sl.X, w: sl.w, dt });
         }
         const x = new Float64Array(np);
@@ -697,6 +710,15 @@ export class StreetViewCrossViewRefiner {
             const take = Math.min(pts.length, maxE), stepK = pts.length / take;
             const w = Math.sqrt(eqE / take);
             for (let k = 0; k < take; k++) out.push({ frame: i, X: pts[Math.floor(k * stepK)], w, on: 'edges' });
+        });
+        const eqO = this.opts.outlineEquivalentMatches ?? 0, maxO = this.opts.maxOutlineSamples ?? 400, om = this.opts.outlineMesh;
+        if (eqO > 0 && om) this.frames.forEach((f, i) => {
+            if (!f.outline) return;
+            const pts = faceOutlineSamples(renderFrameDepth(om, st[i].cam), st[i].depth, st[i].cam, f.valid).filter(X => !this.opts.pointFilter || this.opts.pointFilter(X));
+            if (pts.length < 30) return;
+            const take = Math.min(pts.length, maxO), stepK = pts.length / take;
+            const w = Math.sqrt(eqO / take);
+            for (let k = 0; k < take; k++) out.push({ frame: i, X: pts[Math.floor(k * stepK)], w, on: 'outline' });
         });
         return out;
     }
@@ -880,6 +902,65 @@ export function meshEdgeSamples(depth: Float32Array, cam: FrameCamera, valid: Ui
             else if (m0 && m1 && m0[0] * m1[0] + m0[1] * m1[1] + m0[2] * m1[2] < cosCrease) edge = true;
         }
         if (edge) out.push(lift(x, y, d));
+    }
+    return out;
+}
+
+/**
+ * The outline of the structure's own faces as seen by a frame, lifted to 3D: pixels where the structure mesh (`faceDepth`, the
+ * tile near the fitted faces only) has surface and a 4-neighbour has none or lies far behind (a depth step of more than
+ * 4 % + 0.3 m), and where the full mesh (`fullDepth`) shows that same surface (nothing nearer stands in front), every other pixel.
+ */
+export function faceOutlineSamples(faceDepth: Float32Array, fullDepth: Float32Array, cam: FrameCamera, valid: Uint8Array): Array<[number, number, number]> {
+    const w = cam.width, h = cam.height, EMPTY = PLATE_EMPTY_DEPTH * 0.5;
+    const out: V3[] = [];
+    for (let y = 2; y < h - 2; y++) for (let x = 2; x < w - 2; x++) {
+        if (((x + y) & 1) !== 0) continue;
+        const i = y * w + x, d = faceDepth[i];
+        if (!(d < EMPTY) || !valid[i]) continue;
+        if (!(Math.abs(fullDepth[i] - d) < 0.03 * d + 0.2)) continue;
+        let edge = false;
+        for (const j of [i - 1, i + 1, i - w, i + w]) { const dj = faceDepth[j]; if (!(dj < EMPTY) || dj > d + 0.04 * d + 0.3) { edge = true; break; } }
+        if (!edge) continue;
+        const u = (x + 0.5 - cam.cx) / cam.fx, v = (y + 0.5 - cam.cy) / cam.fy;
+        out.push([cam.eye[0] + d * (cam.fwd[0] + u * cam.right[0] - v * cam.up[0]), cam.eye[1] + d * (cam.fwd[1] + u * cam.right[1] - v * cam.up[1]), cam.eye[2] + d * (cam.fwd[2] + u * cam.right[2] - v * cam.up[2])]);
+    }
+    return out;
+}
+
+/**
+ * Strong colour-contrast edges of a photo (Canny-like): the largest per-channel Sobel magnitude of the blurred RGB, thinned by
+ * non-maximum suppression along the gradient, kept above the `quantile` of the valid pixels' magnitude. A face's outline
+ * separates the face from what is not the face (sky, trees, buildings behind), so both sides differ in colour; a course joint
+ * or a moulding parallel to it is stone against stone and mostly falls below the threshold.
+ */
+export function colourContrastEdges(img: RgbaImage, valid: Uint8Array, sigma = 1.5, quantileKept = 0.85): Uint8Array {
+    const w = img.width, h = img.height, n = w * h;
+    const mag = new Float32Array(n), gx = new Float32Array(n), gy = new Float32Array(n);
+    for (let c = 0; c < 3; c++) {
+        const ch = new Float32Array(n);
+        for (let i = 0; i < n; i++) ch[i] = img.rgba[i * 4 + c];
+        const b = gaussianBlur(ch, w, h, sigma);
+        for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+            const i = y * w + x;
+            const sx = (b[i - w + 1] + 2 * b[i + 1] + b[i + w + 1]) - (b[i - w - 1] + 2 * b[i - 1] + b[i + w - 1]);
+            const sy = (b[i + w - 1] + 2 * b[i + w] + b[i + w + 1]) - (b[i - w - 1] + 2 * b[i - w] + b[i - w + 1]);
+            const m = Math.hypot(sx, sy);
+            if (m > mag[i]) { mag[i] = m; gx[i] = sx; gy[i] = sy; }
+        }
+    }
+    const vals: number[] = [];
+    for (let i = 0; i < n; i += 7) if (valid[i] && mag[i] > 0) vals.push(mag[i]);
+    vals.sort((a, b) => a - b);
+    const thr = vals.length ? vals[Math.min(vals.length - 1, Math.floor(quantileKept * vals.length))] : Infinity;
+    const out = new Uint8Array(n);
+    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+        const i = y * w + x, m = mag[i];
+        if (!(m >= thr) || !valid[i]) continue;
+        const ax = Math.abs(gx[i]), ay = Math.abs(gy[i]);
+        let j: number;
+        if (ax > 2.414 * ay) j = 1; else if (ay > 2.414 * ax) j = w; else j = (gx[i] > 0) === (gy[i] > 0) ? w + 1 : w - 1;
+        if (m >= mag[i - j] && m >= mag[i + j]) out[i] = 1;
     }
     return out;
 }

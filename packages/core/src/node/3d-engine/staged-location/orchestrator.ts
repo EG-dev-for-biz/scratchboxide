@@ -1122,11 +1122,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                     box: p.prior, ...(p.edge ? { edge: p.edge } : {}),
                                     edgeLocked: p.edgeResidualPx.edge !== null && p.edgeResidualPx.edge <= EDGE_MAX_RESIDUAL_PX && (p.edgeResidualPx.prior === null || p.edgeResidualPx.edge < p.edgeResidualPx.prior)
                                 }]));
-                                const joint = registerPanosJointly({ frames, mesh, current: registration ?? edgeReg.registration, candidates, budgetMs: JOINT_REGISTRATION_BUDGET_MS, log: m => io.progress(m) });
+                                const joint = registerPanosJointly({ frames, mesh, current: registration ?? edgeReg.registration, candidates, faces: fitFaces(fit), budgetMs: JOINT_REGISTRATION_BUDGET_MS, log: m => io.progress(m) });
                                 io.progress(describeJointRegistration(joint));
                                 cache.writeRunNote(runId, 'joint_registration', {
-                                    chosen: joint.chosen, reason: joint.reason, matches: joint.matches, timingsMs: joint.timingsMs, panos: joint.panos,
-                                    fit: Object.fromEntries(Object.entries(joint.fit).map(([k, v]) => [k, v && { chamferPx: v.chamferPx, clayChamferPx: v.clayChamferPx, gradNcc: v.gradNcc, views: v.views }])),
+                                    chosen: joint.chosen, reason: joint.reason, matches: joint.matches, timingsMs: joint.timingsMs, panos: joint.panos, outlineTerm: joint.outlineTerm,
+                                    fit: Object.fromEntries(Object.entries(joint.fit).map(([k, v]) => [k, v && { chamferPx: v.chamferPx, clayChamferPx: v.clayChamferPx, gradNcc: v.gradNcc, outlinePx: v.outlinePx ?? null, views: v.views }])),
                                     warps: joint.warps.map(w => ({ panoId: w.panoId, samples: w.samples, medianDeg: w.medianDeg }))
                                 });
                                 if (joint.chosen !== 'current') {
