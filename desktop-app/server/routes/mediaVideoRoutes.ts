@@ -30,6 +30,14 @@ export interface MediaRouterServices {
     mediaAssets: MediaAssetStore;
 }
 
+/** Text-to-speech availability as configured: GeminiService.synthesizeSpeech uses SCRATCHBOX_TTS_MODEL and refuses without it. */
+function ttsCapability(): { supported: boolean; models: string[]; primaryModel?: string; reason?: string } {
+    const model = process.env.SCRATCHBOX_TTS_MODEL?.trim();
+    return model
+        ? { supported: true, models: [model], primaryModel: model }
+        : { supported: false, models: [], reason: 'no TTS model is configured (set SCRATCHBOX_TTS_MODEL)' };
+}
+
 export function createMediaRouter(services: MediaRouterServices, ctx: RouteContext): Router {
     const { mediaGenerator, mediaJobs, mediaAssets } = services;
     const { requireWorkspaceRoot, sendError, isPathError } = ctx;
@@ -83,10 +91,7 @@ export function createMediaRouter(services: MediaRouterServices, ctx: RouteConte
                     models: VIDEO_MODEL_PRIORITY,
                     primaryModel: 'google/omni-1.1'
                 },
-                audio: {
-                    supported: true,
-                    models: ['gemini-2.5-flash-tts']
-                }
+                audio: ttsCapability()
             });
         } catch (err: any) {
             res.status(503).json({
