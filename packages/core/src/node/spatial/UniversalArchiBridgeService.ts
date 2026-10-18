@@ -430,7 +430,6 @@ export interface ArchiSynthesisBridgeResult {
         isManifold: boolean;
         inversionRan: boolean;
         detectedDatumsCount?: number;
-        classificationConfidencePct?: number;
         floorCount?: number;
         roofPlaneCount?: number;
         hasSolarGrounding?: boolean;
@@ -2147,7 +2146,6 @@ export class UniversalArchiBridgeService {
         let outputTriangles = 0;
         let inversionRan = false;
         let detectedDatumsCount = 0;
-        let classificationConfidencePct = 90;
 
         // 4. Dispatch based on typology
         if (adapter.typology === 'triumphal_arch') {
@@ -2157,7 +2155,6 @@ export class UniversalArchiBridgeService {
             outputVertices = archRes.report.synthesizedVertices;
             outputTriangles = archRes.report.synthesizedTriangles;
             detectedDatumsCount = archRes.report.detectedDatumsCount;
-            classificationConfidencePct = archRes.report.confidencePct;
             if (fs.existsSync(outputGlb)) {
                 glbBuffer = fs.readFileSync(outputGlb);
             }
@@ -2256,7 +2253,6 @@ export class UniversalArchiBridgeService {
                 isManifold: outputVertices > 0,
                 inversionRan,
                 detectedDatumsCount,
-                classificationConfidencePct,
                 floorCount,
                 roofPlaneCount: entity.solarRoofSegments?.length ?? 0,
                 hasSolarGrounding: Boolean(entity.solarRoofSegments?.length),

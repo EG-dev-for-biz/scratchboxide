@@ -141,9 +141,8 @@ export type TectonicStructureClass =
     | 'Unknown'
     | (string & {});
 
+/** Measurements of the synthesized mesh. There is no type label or confidence: nothing classifies it. */
 export interface TectonicAnalysisReport {
-    classification: string;
-    confidencePct: number;
     footprintCenter: [number, number, number];
     footprintDimensions: [number, number, number];
     totalHeight: number;

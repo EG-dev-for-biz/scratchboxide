@@ -14,6 +14,7 @@ import {
     SbArchiService,
     NativeCppCompilerService
 } from '../src/node';
+import { TectonicReportParseError } from '../src/node/3d-engine/sb-archi-service';
 
 describe('SB-Archi Tectonic Synthesis & Analysis Engine (C++20)', () => {
     const service = new SbArchiService();
@@ -63,11 +64,10 @@ describe('SB-Archi Tectonic Synthesis & Analysis Engine (C++20)', () => {
         expect(analyzerContent).toContain('class ElevationHistogram');
         expect(analyzerContent).toContain('class BayRhythmAutocorrelation');
         expect(analyzerContent).toContain('class PlanFootprintFitter');
-        expect(analyzerContent).toContain('class TectonicStructureClassifier');
-
-        // Verify expanded tectonic structure types
-        expect(analyzerContent).toContain('Rotunda');
-        expect(analyzerContent).toContain('Colonnade');
+        expect(analyzerContent).toContain('class TectonicMeasurementAnalyzer');
+        // No fixed monument taxonomy with constant confidences
+        expect(analyzerContent).not.toContain('TectonicStructureType');
+        expect(analyzerContent).not.toContain('confidence = 0.9');
     });
 
     it('2. should compile or ensure the C++20 run_arch_constantine binary exists', async () => {
@@ -92,8 +92,8 @@ describe('SB-Archi Tectonic Synthesis & Analysis Engine (C++20)', () => {
 
         // Check telemetry report
         expect(result.report).toBeDefined();
-        expect(result.report.classification).toContain('Triple-Fornix Triumphal Arch');
-        expect(result.report.confidencePct).toBeGreaterThanOrEqual(90);
+        expect(result.report).not.toHaveProperty('classification');
+        expect(result.report).not.toHaveProperty('confidencePct');
         expect(result.report.detectedDatumsCount).toBeGreaterThanOrEqual(20);
         expect(result.report.synthesizedVertices).toBeGreaterThan(150000);
         expect(result.report.synthesizedTriangles).toBeGreaterThan(75000);
@@ -101,4 +101,29 @@ describe('SB-Archi Tectonic Synthesis & Analysis Engine (C++20)', () => {
         expect(result.nominalDimensions[0]).toBeCloseTo(25.7, 1);
         expect(result.nominalDimensions[1]).toBeCloseTo(21.0, 1);
     }, 45000);
+
+    it('4. a report missing a measured field is an error, not a canned Arch of Constantine default', () => {
+        const parse = (out: string) => (service as any).parseTectonicReport(out);
+        expect(() => parse('')).toThrow(TectonicReportParseError);
+        const full = [
+            '  - Footprint Center: (-1.5, 2.25, 3)',
+            '  - Footprint Major Dimension: 12.5 m',
+            '  - Footprint Minor Dimension: 4.25 m',
+            '  - Structure Total Height: 9.75 m',
+            '  - Detected Datums: 7 histogram datums',
+            '  - Synthesized Vertices: 1234',
+            '  - Synthesized Triangles: 456',
+            '  - Synthesis Runtime: 3.5 ms'
+        ].join('\n');
+        expect(parse(full)).toEqual({
+            footprintCenter: [-1.5, 2.25, 3],
+            footprintDimensions: [12.5, 9.75, 4.25],
+            totalHeight: 9.75,
+            detectedDatumsCount: 7,
+            synthesizedVertices: 1234,
+            synthesizedTriangles: 456,
+            runtimeMs: 3.5
+        });
+        expect(() => parse(full.replace(/.*Total Height.*\n/, ''))).toThrow(/Structure Total Height/);
+    });
 });

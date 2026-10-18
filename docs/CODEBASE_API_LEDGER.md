@@ -519,7 +519,7 @@ Hosted by the desktop application server in `desktop-app/server/app.ts`:
 51. **`scratchbox_geospatial.hpp`**: WGS-84 reference ellipsoid geodetic conversions to ECEF and ENU.
 52. **`scratchbox_footprints.hpp`**: 2D building footprint polygon extrusion into volumetric massing.
 53. **`scratchbox_tectonics.hpp`**: Structural tectonic load-path analysis for architectural shells.
-54. **`scratchbox_tectonic_analyzer.hpp`**: Classifies entablatures, columns, and vaults.
+54. **`scratchbox_tectonic_analyzer.hpp`**: Measures plan footprint, elevation datums and bay rhythm of a mesh (no structure-type labels).
 55. **`scratchbox_architecture.hpp`**: Procedural classical architectural orders (Doric, Ionic, Corinthian).
 56. **`scratchbox_sb_archi.hpp`**: Monumental arch and column generation.
 57. **`scratchbox_sb_archi_optimizer.hpp`**: Inverse architectural parameter fitting.

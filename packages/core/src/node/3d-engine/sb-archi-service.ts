@@ -32,6 +32,15 @@ export {
 
 const execAsync = promisify(exec);
 
+/** The native arch binary's report was missing a measured field (the binary changed or failed part-way). */
+export class TectonicReportParseError extends Error {
+    readonly code = 'TECTONIC_REPORT_FIELD_MISSING';
+    constructor(field: string) {
+        super(`run_arch_constantine output has no "${field}" line; refusing to substitute a default. Rebuild the binary and check its stdout.`);
+        this.name = 'TectonicReportParseError';
+    }
+}
+
 export class SbArchiService {
     private compiler: NativeCppCompilerService;
     private binaryPath: string;
@@ -179,7 +188,9 @@ export class SbArchiService {
         if (fs.existsSync(this.archConstantineBinaryPath)) {
             const binStat = fs.statSync(this.archConstantineBinaryPath);
             const srcStat = fs.existsSync(sourcePath) ? fs.statSync(sourcePath) : null;
-            if (srcStat && binStat.mtimeMs >= srcStat.mtimeMs) {
+            const analyzerHeader = path.join(this.compiler.getSdkIncludePath(), 'scratchbox_tectonic_analyzer.hpp');
+            const headerMtime = fs.existsSync(analyzerHeader) ? fs.statSync(analyzerHeader).mtimeMs : 0;
+            if (srcStat && binStat.mtimeMs >= srcStat.mtimeMs && binStat.mtimeMs >= headerMtime) {
                 return this.archConstantineBinaryPath;
             }
         }
@@ -224,44 +235,31 @@ export class SbArchiService {
     }
 
     private parseTectonicReport(stdout: string): TectonicAnalysisReport {
-        const parseNum = (pattern: RegExp, defaultVal = 0): number => {
+        // Every field comes from the binary's report; a missing one is an error, never a default.
+        const need = (label: string, pattern: RegExp): RegExpMatchArray => {
             const match = stdout.match(pattern);
-            return match ? parseFloat(match[1]) : defaultVal;
+            if (!match) {
+                throw new TectonicReportParseError(label);
+            }
+            return match;
         };
+        const num = (label: string, pattern: RegExp) => parseFloat(need(label, pattern)[1]);
+        const int = (label: string, pattern: RegExp) => parseInt(need(label, pattern)[1], 10);
 
-        const parseIntNum = (pattern: RegExp, defaultVal = 0): number => {
-            const match = stdout.match(pattern);
-            return match ? parseInt(match[1], 10) : defaultVal;
-        };
-
-        const parseStr = (pattern: RegExp, defaultVal = ''): string => {
-            const match = stdout.match(pattern);
-            return match ? match[1].trim() : defaultVal;
-        };
-
-        const classificationMatch = stdout.match(/Classification:\s*(.+?)\s*\(Confidence:\s*(\d+)%\)/);
-        const classification = classificationMatch ? classificationMatch[1].trim() : 'Triple-Fornix Triumphal Arch';
-        const confidencePct = classificationMatch ? parseInt(classificationMatch[2], 10) : 92;
-
-        const centerMatch = stdout.match(/Footprint Center:\s*\(([-\d.]+),\s*([-\d.]+),\s*([-\d.]+)\)/);
-        const footprintCenter: [number, number, number] = centerMatch
-            ? [parseFloat(centerMatch[1]), parseFloat(centerMatch[2]), parseFloat(centerMatch[3])]
-            : [-139.62, 40.58, -45.28];
-
-        const majorDim = parseNum(/Footprint Major Dimension:\s*([\d.]+)/, 27.14);
-        const minorDim = parseNum(/Footprint Minor Dimension:\s*([\d.]+)/, 10.17);
-        const totalHeight = parseNum(/Structure Total Height:\s*([\d.]+)/, 21.55);
+        const center = need('Footprint Center', /Footprint Center:\s*\(([-\d.e]+),\s*([-\d.e]+),\s*([-\d.e]+)\)/);
+        const footprintCenter: [number, number, number] = [parseFloat(center[1]), parseFloat(center[2]), parseFloat(center[3])];
+        const majorDim = num('Footprint Major Dimension', /Footprint Major Dimension:\s*([\d.e]+)/);
+        const minorDim = num('Footprint Minor Dimension', /Footprint Minor Dimension:\s*([\d.e]+)/);
+        const totalHeight = num('Structure Total Height', /Structure Total Height:\s*([\d.e]+)/);
 
         return {
-            classification,
-            confidencePct,
             footprintCenter,
             footprintDimensions: [majorDim, totalHeight, minorDim],
             totalHeight,
-            detectedDatumsCount: parseIntNum(/Detected Datums:\s*(\d+)/, 24),
-            synthesizedVertices: parseIntNum(/Synthesized Vertices:\s*(\d+)/, 177176),
-            synthesizedTriangles: parseIntNum(/Synthesized Triangles:\s*(\d+)/, 88556),
-            runtimeMs: parseNum(/Synthesis Runtime:\s*([\d.]+)/, 10.42)
+            detectedDatumsCount: int('Detected Datums', /Detected Datums:\s*(\d+)/),
+            synthesizedVertices: int('Synthesized Vertices', /Synthesized Vertices:\s*(\d+)/),
+            synthesizedTriangles: int('Synthesized Triangles', /Synthesized Triangles:\s*(\d+)/),
+            runtimeMs: num('Synthesis Runtime', /Synthesis Runtime:\s*([\d.e]+)/)
         };
     }
 }
