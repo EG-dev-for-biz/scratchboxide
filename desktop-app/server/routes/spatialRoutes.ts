@@ -15,7 +15,6 @@ import {
     Google360PanoramaPipelineService,
     GoogleMediaCredentialsService,
     DeploymentManifestCompiler,
-    Depthbox360UniverseService,
     ImageToSplatService
 } from '../../../packages/core/src/node';
 import { GeoFrame } from '../../../packages/core/src/common/coordinate/GeoFrame';
@@ -218,54 +217,6 @@ export function createArRouter(): Router {
                 success: false,
                 error: err?.message || 'Geospatial manifest compilation failed'
             });
-        }
-    });
-
-    return router;
-}
-
-export function createDepthbox360Router(): Router {
-    const router = Router();
-
-    router.get('/presets', (_req: Request, res: Response) => {
-        res.json({
-            success: true,
-            presets: [
-                { id: 'san_marco', name: 'Piazza San Marco, Venice', description: 'Historic Venetian square with marble colonnades, St. Mark Basilica, and Campanile belfry.' },
-                { id: 'alpine_summit', name: 'Alpine Glacial Sanctuary', description: 'Crystalline turquoise lake surrounded by soaring snow-capped granite ridges and pine trees.' },
-                { id: 'cyber_shibuya', name: 'Cyber Shibuya Crossing', description: 'Wet reflective asphalt, towering holographic billboards, neon rain, and cybernetic infrastructure.' },
-                { id: 'roman_forum', name: 'Ancient Roman Forum', description: 'Corinthian travertine columns, triumphal arches, and golden hour Mediterranean illumination.' },
-                { id: 'martian_biodome', name: 'Martian Bio-Dome Colony', description: 'Pressurized geodesic glass domes, red iron oxide regolith, rover docks, and terraforming atmosphere.' }
-            ]
-        });
-    });
-
-    router.post('/generate', (req: Request, res: Response) => {
-        try {
-            const config = req.body || {};
-            const universe = Depthbox360UniverseService.generate360Universe(config);
-            res.json({
-                success: true,
-                splats: universe.splats,
-                colliders: universe.colliders,
-                atmosphere: universe.atmosphere,
-                statistics: universe.statistics
-            });
-        } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || '360 universe synthesis failed' });
-        }
-    });
-
-    router.post('/export-glb', (req: Request, res: Response) => {
-        try {
-            const { preset = 'san_marco', eyeHeight = 1.7 } = req.body || {};
-            const colliders = Depthbox360UniverseService.extractUniverseColliders(preset, eyeHeight);
-            const glbBuffer = ImageToSplatService.generatePhysicsColliderGlb(colliders);
-            res.setHeader('Content-Type', 'model/gltf-binary');
-            res.setHeader('Content-Disposition', `attachment; filename="depthbox_${preset}_colliders.glb"`);
-            res.send(Buffer.from(glbBuffer));
-        } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || 'GLB physics collider export failed' });
         }
     });
 

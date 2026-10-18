@@ -107,7 +107,6 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - **`gaussian-ply-codec`** (`packages/core/src/common/gaussian-ply-codec.ts`): High-speed binary PLY encoder/decoder supporting Spherical Harmonics degree 0-3, scale, rotation quaternions, and opacity.
 - **`NerfstudioDatasetService`** (`packages/core/src/node/spatial/NerfstudioDatasetService.ts`): Universal interchange serializer (`transforms.json`, `sparse_pcd.ply`, `images/`, `masks/`) with OpenGL $\leftrightarrow$ OpenCV coordinate transform matrices and visual-hull voxel carving.
 - **`SplatService`** & **`ImageToSplatService`** (`packages/core/src/node/3d-engine/splat-service.ts`): 3D Gaussian Splatting conversion, PLY optimization, and viewing utilities.
-- **`Depthbox360UniverseService`** (`packages/core/src/node/3d-engine/depthbox-360-universe-service.ts`): Multi-layer 360° spherical depth splatting for immersive backgrounds.
 
 ### Universal Tile Decomposition & Mesh Engineering (UTDRA / ULDRA)
 - **`UniversalTileDecompositionService`** (`packages/core/src/node/3d-engine/universal-tile-decomposition-service.ts`):
@@ -452,7 +451,6 @@ Hosted by the desktop application server in `desktop-app/server/app.ts`:
 | `/api/3d/pbr` | `pbrRouter` | Universal PBR texture baking, Toksvig coupling, material synthesis |
 | `/api/3d/survey` | `createSurveyRouter` | Survey camera station synthesis, ranking, and beautification |
 | `/api/3d/ar` | `arRouter` | WebXR geospatial anchor alignment, WGS-84 coordinate transforms |
-| `/api/3d-engine/depthbox-360` | `depthbox360Router` | 360° spherical depth splatting and camera projection |
 | `/api/panorama` | `panoramaRouter` | Seam healing, ground inpainting, 4K synthesis, zenith reprojection |
 | `/api/3d-engine/splat-studio` | `splatStudioRouter` | Gaussian splatting editing, bounding crops, PLY exporting |
 | `/api/tools` | `toolsRouter` | Dynamic tools registry, tool execution, schema reflection |

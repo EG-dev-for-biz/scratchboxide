@@ -632,9 +632,6 @@
             <button class="btn-tab" id="tab-video" onclick="setConversionMode('video')">
                 <span>🎬 Video (Keyframe Group)</span>
             </button>
-            <button class="btn-tab" id="tab-pano360" onclick="setConversionMode('pano360')">
-                <span>🌐 360° Omnidirectional World</span>
-            </button>
         </div>
 
         <div class="nav-right">
@@ -676,7 +673,6 @@
                     <button class="preset-cat-btn active" id="pcat-single" onclick="filterPresetCategory('single')">📷 Single</button>
                     <button class="preset-cat-btn" id="pcat-group" onclick="filterPresetCategory('group')">📸 Groups</button>
                     <button class="preset-cat-btn" id="pcat-video" onclick="filterPresetCategory('video')">🎬 Videos</button>
-                    <button class="preset-cat-btn" id="pcat-pano" onclick="filterPresetCategory('pano')">🌐 360°</button>
                 </div>
                 <div class="preset-grid" id="preset-grid-container">
                     <!-- Single Photographs -->
@@ -765,22 +761,6 @@
                         <div class="preset-card-sub">Colonnade Orbit</div>
                     </div>
 
-                    <!-- 360° Omnidirectional Worlds -->
-                    <div class="preset-card" data-category="pano" style="display:none;" id="card-pano-sanmarco" onclick="load360Preset('san_marco')">
-                        <div style="font-size: 18px;">🏛️</div>
-                        <div class="preset-card-title">San Marco 360°</div>
-                        <div class="preset-card-sub">Venetian Plaza</div>
-                    </div>
-                    <div class="preset-card" data-category="pano" style="display:none;" id="card-pano-shibuya" onclick="load360Preset('cyber_shibuya')">
-                        <div style="font-size: 18px;">🌆</div>
-                        <div class="preset-card-title">Shibuya 360°</div>
-                        <div class="preset-card-sub">Cyber Crossing</div>
-                    </div>
-                    <div class="preset-card" data-category="pano" style="display:none;" id="card-pano-alpine" onclick="load360Preset('alpine_basin')">
-                        <div style="font-size: 18px;">🏔️</div>
-                        <div class="preset-card-title">Alpine 360°</div>
-                        <div class="preset-card-sub">Glacier Basin</div>
-                    </div>
                 </div>
             </div>
 
@@ -2318,7 +2298,6 @@
             if (cat === 'single' && currentMode !== 'single') setConversionMode('single');
             else if (cat === 'group' && currentMode !== 'multi') setConversionMode('multi');
             else if (cat === 'video' && currentMode !== 'video') setConversionMode('video');
-            else if (cat === 'pano' && currentMode !== 'pano360') setConversionMode('pano360');
         }
 
         function handleFileSelect(event) {
@@ -2647,13 +2626,6 @@
                 filterPresetCategory('group');
                 document.getElementById('hud-status').textContent = 'STATUS // RELATED IMAGES GROUP 3DGS';
                 loadRelatedImageGroupPreset('alpine_orbit_group');
-            } else if (mode === 'pano360') {
-                if (dropIcon) dropIcon.textContent = '🌐';
-                if (dropText) dropText.textContent = 'Drop 360° Equirectangular Image Here';
-                if (dropSub) dropSub.textContent = 'Spherical projection with ground collider extraction';
-                filterPresetCategory('pano');
-                document.getElementById('hud-status').textContent = 'STATUS // 360° OMNIDIRECTIONAL RADIANCE FIELD';
-                load360Preset('san_marco');
             } else {
                 if (dropIcon) dropIcon.textContent = '📷';
                 if (dropText) dropText.textContent = 'Drop 2D Photo Here to Convert';
@@ -2958,320 +2930,6 @@
                 document.getElementById('stat-splat-count').textContent = fusedData.count.toLocaleString();
                 document.getElementById('stat-vram').textContent = `${(fusedData.count * 32 / (1024 * 1024)).toFixed(1)} MB`;
             }, 100);
-        }
-
-        async function load360Preset(sceneName) {
-            const titles = {
-                'san_marco': 'San Marco Piazza 360° (Venice)',
-                'cyber_shibuya': 'Cyber Shibuya 360° (Tokyo)',
-                'alpine_basin': 'Alpine Mountain Basin 360° (Swiss Alps)'
-            };
-            const title = titles[sceneName] || sceneName;
-            showSpinner('SYNTHESIZING 360° DEPTHBOX RADIANCE FIELD...', title);
-
-            document.querySelectorAll('.preset-card').forEach(c => c.classList.remove('active'));
-            const cardId = sceneName === 'san_marco' ? 'card-pano-sanmarco' :
-                           sceneName === 'cyber_shibuya' ? 'card-pano-shibuya' : 'card-pano-alpine';
-            const activeCard = document.getElementById(cardId);
-            if (activeCard) activeCard.classList.add('active');
-
-            const presetKey = sceneName === 'alpine_basin' ? 'alpine_summit' : sceneName;
-
-            try {
-                const res = await fetch('/api/3d-engine/depthbox-360/generate', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        preset: presetKey,
-                        samplesYaw: 240,
-                        samplesPitch: 120,
-                        enableDualLayerInpainting: true,
-                        atmospherePreset: typeof currentTimeOfDay !== 'undefined' && currentTimeOfDay === 'midnight' ? 'cyber' : ((typeof currentTimeOfDay !== 'undefined' && currentTimeOfDay) || 'golden')
-                    })
-                });
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                const data = await res.json();
-                if (!data.success || !data.splats) throw new Error('Depthbox 360 synthesis error');
-
-                const count = data.splats.length;
-                const positions = new Float32Array(count * 3);
-                const scales = new Float32Array(count * 3);
-                const colors = new Float32Array(count * 3);
-                const opacities = new Float32Array(count);
-                const quats = new Float32Array(count * 4);
-
-                for (let i = 0; i < count; i++) {
-                    const s = data.splats[i];
-                    positions[i * 3 + 0] = s.position[0];
-                    positions[i * 3 + 1] = s.position[1];
-                    positions[i * 3 + 2] = s.position[2];
-
-                    scales[i * 3 + 0] = s.scale[0];
-                    scales[i * 3 + 1] = s.scale[1];
-                    scales[i * 3 + 2] = s.scale[2];
-
-                    colors[i * 3 + 0] = s.colorRgb[0];
-                    colors[i * 3 + 1] = s.colorRgb[1];
-                    colors[i * 3 + 2] = s.colorRgb[2];
-
-                    opacities[i] = s.opacity;
-
-                    if (s.quaternion) {
-                        quats[i * 4 + 0] = s.quaternion[0];
-                        quats[i * 4 + 1] = s.quaternion[1];
-                        quats[i * 4 + 2] = s.quaternion[2];
-                        quats[i * 4 + 3] = s.quaternion[3];
-                    } else {
-                        quats[i * 4 + 0] = 0;
-                        quats[i * 4 + 1] = 0;
-                        quats[i * 4 + 2] = 0;
-                        quats[i * 4 + 3] = 1;
-                    }
-                }
-
-                createInstancedSplatMesh({ count, positions, scales, colors, opacities, quats });
-
-                // Build physics colliders from Depthbox result
-                while (colliderGroup.children.length > 0) {
-                    const child = colliderGroup.children[0];
-                    colliderGroup.remove(child);
-                    if (child.geometry) child.geometry.dispose();
-                    if (child.material) child.material.dispose();
-                }
-
-                const grid360 = new THREE.GridHelper(100, 50, 0x00f5d4, 0x1e293b);
-                grid360.position.set(0, 0, 0);
-                colliderGroup.add(grid360);
-                groundElevation = 0;
-
-                if (data.colliders && Array.isArray(data.colliders)) {
-                    const obstacleMat = new THREE.MeshBasicMaterial({ color: 0x00f5d4, wireframe: true, transparent: true, opacity: 0.65 });
-                    const obstacleFill = new THREE.MeshBasicMaterial({ color: 0x0ea5e9, transparent: true, opacity: 0.12, depthWrite: false });
-                    data.colliders.forEach(c => {
-                        const geom = new THREE.BoxGeometry(c.extents[0] * 2, c.extents[1] * 2, c.extents[2] * 2);
-                        const mWire = new THREE.Mesh(geom, obstacleMat);
-                        mWire.position.set(c.center[0], c.center[1], c.center[2]);
-                        colliderGroup.add(mWire);
-                        const mFill = new THREE.Mesh(geom, obstacleFill);
-                        mFill.position.set(c.center[0], c.center[1], c.center[2]);
-                        colliderGroup.add(mFill);
-                    });
-                }
-
-                camera.position.set(data.cameraInitial.position[0], data.cameraInitial.position[1], data.cameraInitial.position[2]);
-                camera.lookAt(data.cameraInitial.lookAt[0], data.cameraInitial.lookAt[1], data.cameraInitial.lookAt[2]);
-
-                hideSpinner();
-                document.getElementById('hud-status').textContent = `STATUS // DEPTHBOX 360° ${sceneName.toUpperCase()}`;
-                document.getElementById('stat-splat-count').textContent = count.toLocaleString();
-                document.getElementById('stat-vram').textContent = `${(count * 32 / (1024 * 1024)).toFixed(1)} MB`;
-            } catch (err) {
-                console.warn('[DepthBox] API synthesis failed, falling back to client 5-strata synthesis:', err);
-                synthesizeDepthbox5StrataUniverse(presetKey);
-                hideSpinner();
-            }
-        }
-
-        function synthesizeDepthbox5StrataUniverse(presetKey) {
-            const positions = [];
-            const scales = [];
-            const colors = [];
-            const opacities = [];
-            const quats = [];
-
-            const eyeHeight = 1.70;
-            const samplesYaw = 240;
-            const samplesPitch = 120;
-
-            for (let pj = 0; pj < samplesPitch; pj++) {
-                const pitchNorm = (pj + 0.5) / samplesPitch;
-                const pitch = (pitchNorm - 0.5) * Math.PI; // [-pi/2, pi/2]
-                const cosPitch = Math.cos(pitch);
-                const sinPitch = Math.sin(pitch);
-
-                for (let yi = 0; yi < samplesYaw; yi++) {
-                    const yawNorm = (yi + 0.5) / samplesYaw;
-                    const yaw = (yawNorm - 0.5) * 2.0 * Math.PI; // [-pi, pi]
-                    const cosYaw = Math.cos(yaw);
-                    const sinYaw = Math.sin(yaw);
-
-                    const rx = sinYaw * cosPitch;
-                    const ry = sinPitch;
-                    const rz = -cosYaw * cosPitch;
-
-                    let hitDepth = 80.0;
-                    let baseScale = 0.5;
-                    let r = 0.5, g = 0.5, b = 0.5;
-                    let normal = [-rx, -ry, -rz];
-                    let isGround = false;
-                    let isStructure = false;
-
-                    // Ground Plane ray intersection
-                    if (ry < -0.035) {
-                        const groundDist = -eyeHeight / ry;
-                        if (groundDist < 120.0) {
-                            hitDepth = groundDist;
-                            baseScale = Math.max(0.04, groundDist * 0.016);
-                            normal = [0, 1, 0];
-                            isGround = true;
-
-                            if (presetKey === 'san_marco') {
-                                const gx = rx * groundDist;
-                                const gz = rz * groundDist;
-                                const checker = (Math.floor(gx * 0.3) + Math.floor(gz * 0.3)) % 2 === 0;
-                                r = checker ? 0.74 : 0.58;
-                                g = checker ? 0.70 : 0.54;
-                                b = checker ? 0.64 : 0.48;
-                            } else if (presetKey === 'cyber_shibuya') {
-                                const gx = rx * groundDist;
-                                const gz = rz * groundDist;
-                                const isCrosswalk = Math.abs(gz - 8.0) < 4.0 && (Math.floor(gx * 1.5) % 2 === 0);
-                                if (isCrosswalk) {
-                                    r = 0.95; g = 0.95; b = 0.95;
-                                } else {
-                                    r = 0.08; g = 0.10; b = 0.14; // wet asphalt
-                                }
-                            } else {
-                                r = 0.88; g = 0.92; b = 0.96; // snow
-                            }
-                        }
-                    } else if (ry < 0.45) {
-                        // Structures & Landmarks
-                        if (presetKey === 'san_marco') {
-                            const isBasilica = Math.abs(yaw) < 0.42;
-                            const isCampanile = Math.abs(yaw - 0.72) < 0.12 && ry < 0.65;
-                            const isProcuratie = Math.abs(yaw) > 1.15 && Math.abs(yaw) < 2.35;
-                            const isLionColumn = Math.abs(yaw + 0.58) < 0.07 && ry < 0.30;
-
-                            if (isLionColumn) {
-                                hitDepth = 8.5;
-                                baseScale = 0.12;
-                                normal = [-rx, 0, -rz];
-                                r = 0.88; g = 0.82; b = 0.72; // marble
-                                isStructure = true;
-                            } else if (isCampanile) {
-                                hitDepth = 26.0;
-                                baseScale = 0.28;
-                                normal = [-rx, 0, -rz];
-                                r = 0.72; g = 0.38; b = 0.28; // venetian red terracotta
-                                isStructure = true;
-                            } else if (isBasilica) {
-                                hitDepth = 38.0 + Math.sin(yaw * 12.0) * 3.5;
-                                baseScale = 0.42;
-                                normal = [0, 0, 1];
-                                r = 0.82; g = 0.74; b = 0.58; // golden mosaics & marble
-                                isStructure = true;
-                            } else if (isProcuratie) {
-                                hitDepth = 24.0 / Math.max(0.15, Math.abs(sinYaw));
-                                baseScale = Math.max(0.08, hitDepth * 0.014);
-                                normal = [sinYaw > 0 ? -1 : 1, 0, 0];
-                                r = 0.80; g = 0.76; b = 0.70; // arcade limestone
-                                isStructure = true;
-                            }
-                        } else if (presetKey === 'cyber_shibuya') {
-                            const isScrambleCrosswalk = Math.abs(yaw) < 0.35 && ry < 0.18;
-                            const isShibuya109 = Math.abs(yaw - 0.60) < 0.25;
-                            const isTowerBuildings = Math.abs(yaw) > 0.8;
-
-                            if (isScrambleCrosswalk) {
-                                hitDepth = 9.0;
-                                baseScale = 0.12;
-                                normal = [-rx, 0, -rz];
-                                r = 0.00; g = 0.96; b = 0.83; // cyan neon
-                                isStructure = true;
-                            } else if (isShibuya109) {
-                                hitDepth = 28.0;
-                                baseScale = 0.30;
-                                normal = [-rx, 0, -rz];
-                                r = 1.00; g = 0.00; b = 0.50; // magenta billboard
-                                isStructure = true;
-                            } else if (isTowerBuildings) {
-                                hitDepth = 32.0;
-                                baseScale = 0.35;
-                                normal = [-rx, 0, -rz];
-                                r = 0.12; g = 0.22; b = 0.38; // glass & steel
-                                isStructure = true;
-                            }
-                        } else {
-                            // Alpine Summit
-                            const ridge = 45.0 + Math.sin(yaw * 5.0) * 18.0 + Math.cos(yaw * 2.0) * 12.0;
-                            hitDepth = ridge;
-                            baseScale = Math.max(0.1, ridge * 0.015);
-                            normal = [-rx, 0.4, -rz];
-                            r = 0.42; g = 0.45; b = 0.52; // granite rock
-                            isStructure = true;
-                        }
-                    }
-
-                    if (!isGround && !isStructure) {
-                        hitDepth = 120.0;
-                        baseScale = 1.8;
-                        normal = [-rx, -ry, -rz];
-                        const skyGrad = Math.max(0.0, Math.min(1.0, (ry + 0.1) * 1.5));
-                        r = 0.15 + 0.15 * (1.0 - skyGrad);
-                        g = 0.35 + 0.35 * (1.0 - skyGrad);
-                        b = 0.85 + 0.15 * skyGrad;
-                    }
-
-                    const px = rx * hitDepth;
-                    const py = eyeHeight + ry * hitDepth;
-                    const pz = rz * hitDepth;
-
-                    positions.push(px, py, pz);
-                    scales.push(baseScale, baseScale, baseScale * 0.28);
-                    colors.push(r, g, b);
-                    opacities.push(isStructure ? 0.96 : (isGround ? 0.92 : 0.85));
-
-                    const q = quaternionFromNormal(normal[0], normal[1], normal[2]);
-                    quats.push(q[0], q[1], q[2], q[3]);
-
-                    // Occlusion Inpainting Layer for structures
-                    if (isStructure && hitDepth < 35.0) {
-                        const inpaintDepth = hitDepth * 1.55;
-                        const ipx = rx * inpaintDepth;
-                        const ipy = eyeHeight + ry * inpaintDepth;
-                        const ipz = rz * inpaintDepth;
-                        const ipScale = baseScale * 1.35;
-
-                        positions.push(ipx, ipy, ipz);
-                        scales.push(ipScale, ipScale, ipScale * 0.25);
-                        colors.push(r * 0.72, g * 0.72, b * 0.72);
-                        opacities.push(0.85);
-                        quats.push(q[0], q[1], q[2], q[3]);
-                    }
-                }
-            }
-
-            const count = positions.length / 3;
-            const splatData = {
-                count,
-                positions: new Float32Array(positions),
-                scales: new Float32Array(scales),
-                colors: new Float32Array(colors),
-                opacities: new Float32Array(opacities),
-                quats: new Float32Array(quats)
-            };
-
-            createInstancedSplatMesh(splatData);
-
-            // Colliders
-            while (colliderGroup.children.length > 0) {
-                const child = colliderGroup.children[0];
-                colliderGroup.remove(child);
-                if (child.geometry) child.geometry.dispose();
-                if (child.material) child.material.dispose();
-            }
-            const grid360 = new THREE.GridHelper(100, 50, 0x00f5d4, 0x1e293b);
-            grid360.position.set(0, 0, 0);
-            colliderGroup.add(grid360);
-            groundElevation = 0;
-
-            camera.position.set(0, eyeHeight, 0);
-            camera.lookAt(0, eyeHeight, -10);
-
-            document.getElementById('hud-status').textContent = `STATUS // DEPTHBOX 360° ${presetKey.toUpperCase()}`;
-            document.getElementById('stat-splat-count').textContent = count.toLocaleString();
-            document.getElementById('stat-vram').textContent = `${(count * 32 / (1024 * 1024)).toFixed(1)} MB`;
         }
 
         function addMultiViewFile(file) {

@@ -11,96 +11,6 @@ import { describe, it, expect } from 'vitest';
 import { SplatService, ImageToSplatService } from '../src/node/3d-engine/splat-service';
 
 describe('360-Degree Omnidirectional Gaussian Splatting World', () => {
-    it('generates full 360-degree spherical coverage in all 4 cardinal sectors', () => {
-        const splats = SplatService.generate360EquirectangularSplats({
-            worldType: 'san_marco',
-            yawSteps: 72,
-            pitchSteps: 36,
-            eyeHeight: 1.7
-        });
-
-        expect(splats.length).toBeGreaterThan(1000);
-
-        let hasNorth = false;
-        let hasEast = false;
-        let hasSouth = false;
-        let hasWest = false;
-        let hasNadir = false;
-        let hasZenith = false;
-
-        for (const s of splats) {
-            const [x, y, z] = s.position;
-
-            // Cardinal direction tests
-            if (z < -15.0 && Math.abs(x) < 20.0) hasNorth = true;
-            if (x > 15.0 && Math.abs(z) < 20.0) hasEast = true;
-            if (z > 15.0 && Math.abs(x) < 20.0) hasSouth = true;
-            if (x < -15.0 && Math.abs(z) < 20.0) hasWest = true;
-
-            // Elevation tests
-            if (y <= 0.05) hasNadir = true;
-            if (y > 30.0) hasZenith = true;
-        }
-
-        expect(hasNorth).toBe(true);
-        expect(hasEast).toBe(true);
-        expect(hasSouth).toBe(true);
-        expect(hasWest).toBe(true);
-        expect(hasNadir).toBe(true);
-        expect(hasZenith).toBe(true);
-    });
-
-    it('maintains clear observer space around human eye position (0, 1.7, 0)', () => {
-        const eye = [0, 1.7, 0];
-        const splats = SplatService.generate360EquirectangularSplats({
-            worldType: 'san_marco',
-            yawSteps: 60,
-            pitchSteps: 30,
-            eyeHeight: 1.7
-        });
-
-        let minRadialDist = Infinity;
-        for (const s of splats) {
-            const dx = s.position[0] - eye[0];
-            const dy = s.position[1] - eye[1];
-            const dz = s.position[2] - eye[2];
-            const dist = Math.hypot(dx, dy, dz);
-            if (dist < minRadialDist) {
-                minRadialDist = dist;
-            }
-        }
-
-        // Observer must have at least 1.4m clearance to avoid immediate eye clipping
-        expect(minRadialDist).toBeGreaterThan(1.4);
-    });
-
-    it('generates Cyber Shibuya 360 with soaring vertical towers and cyber neon colors', () => {
-        const splats = SplatService.generate360EquirectangularSplats({
-            worldType: 'cyber_shibuya',
-            yawSteps: 72,
-            pitchSteps: 36,
-            eyeHeight: 1.7
-        });
-
-        let maxY = -Infinity;
-        let hasCyanNeon = false;
-        let hasMagentaNeon = false;
-
-        for (const s of splats) {
-            if (s.position[1] > maxY) maxY = s.position[1];
-
-            const [r, g, b] = s.colorRgb;
-            // Cyan: high green & blue, low red
-            if (b > 0.8 && g > 0.7 && r < 0.3) hasCyanNeon = true;
-            // Magenta: high red & blue, low green
-            if (r > 0.8 && b > 0.5 && g < 0.3) hasMagentaNeon = true;
-        }
-
-        expect(maxY).toBeGreaterThan(50.0);
-        expect(hasCyanNeon).toBe(true);
-        expect(hasMagentaNeon).toBe(true);
-    });
-
     it('unprojects custom 2:1 equirectangular panorama image into 3D Gaussian splats', () => {
         const width = 120;
         const height = 60;
@@ -133,11 +43,11 @@ describe('360-Degree Omnidirectional Gaussian Splatting World', () => {
     });
 
     it('serializes and deserializes 360-degree Gaussian splats with strict 32-byte stride', () => {
-        const splats = SplatService.generate360EquirectangularSplats({
-            worldType: 'san_marco',
-            yawSteps: 30,
-            pitchSteps: 15
-        });
+        const width = 60, height = 30;
+        const rgb = new Uint8Array(width * height * 3).map((_, i) => (i * 37) % 256);
+        const depth = new Float32Array(width * height).map((_, i) => 2 + (i % 17));
+        const splats = SplatService.unprojectEquirectangularPanorama(rgb, width, height, depth);
+        expect(splats.length).toBeGreaterThan(0);
 
         // Convert SplatPoint[] to BakedGaussian[]
         const baked = splats.map(s => ({

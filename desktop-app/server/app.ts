@@ -62,7 +62,6 @@ import {
     createPbrRouter,
     createArRouter,
     createGeoRouter,
-    createDepthbox360Router,
     createPanoramaRouter,
     createSplatStudioRouter
 } from './routes/spatialRoutes';
@@ -593,7 +592,6 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
 
     app.use('/api/3d/ar', createArRouter());
     app.use('/api/geo', createGeoRouter());
-    app.use('/api/3d-engine/depthbox-360', createDepthbox360Router());
     app.use('/api/panorama', createPanoramaRouter(mediaCredentials));
     app.use('/api/3d-engine/splat-studio', createSplatStudioRouter());
 

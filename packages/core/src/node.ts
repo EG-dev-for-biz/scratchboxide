@@ -287,13 +287,7 @@ export {
     VideoKeyframeInput,
     VideoKeyframeConversionOptions,
     PublicSourceItem,
-    PublicSourceCatalog,
-    Depthbox360UniverseService,
-    DepthboxUniversePreset,
-    DepthboxSplatLayer,
-    Depthbox360SplatPoint,
-    Depthbox360UniverseConfig,
-    Depthbox360UniverseResult
+    PublicSourceCatalog
 } from './node/3d-engine/splat-service';
 
 // 4D Spatial & World Branching Substrates
