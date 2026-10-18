@@ -58,7 +58,7 @@ import type { DepthMap } from '../../../common/spatial/texture-pass-contracts';
 /** Part of every texture cache key: a change to the pass's maths is a new version. */
 /** Photo tier A is opt-in (round 6 on the arch: no leave-one-pano-out gain over the projection); SCRATCHBOX_PHOTO_TIER=1 turns it on for a server. */
 export const photoTierEnabled = (): boolean => process.env.SCRATCHBOX_PHOTO_TIER === '1';
-export const TEXTURE_PASS_VERSION = `texture-pass/11${photoTierEnabled() ? '+tier' : ''}${facadeMaterialsEnabled() ? '+mat1' : ''}`;
+export const TEXTURE_PASS_VERSION = `texture-pass/11${photoTierEnabled() ? '+tier' : ''}${facadeMaterialsEnabled() ? '+mat2' : ''}`;
 export const RUNG_PALETTE = 3;
 export const RUNG_GENERATED_PBR = 4;
 /** The enhancement rung's own time budget per layer (layers run in parallel inside the stage's 600 s). */

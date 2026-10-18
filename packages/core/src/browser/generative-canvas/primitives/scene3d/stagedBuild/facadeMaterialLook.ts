@@ -195,6 +195,21 @@ export function updateFacadeReflections(renderer: THREE.WebGLRenderer, scene: TH
         cam.update(renderer, scene);
         const env = pmrem.fromCubemap(target.texture).texture;
         for (const m of mats) { m.envMap = env; m.envMapIntensity = 1; m.needsUpdate = true; }
+        // the viewport swaps a mesh's material for its reveal and render-mode looks (clones made before this probe existed)
+        // and restores it after: whichever material carrying the reading is drawn gets the probe
+        model.traverse(o => {
+            const mesh = o as THREE.Mesh;
+            if (!mesh.isMesh || mesh.userData.sbFacadeEnvHook) return;
+            mesh.userData.sbFacadeEnvHook = true;
+            const prior = mesh.onBeforeRender;
+            mesh.onBeforeRender = function (...args) {
+                const probe = model.userData[ENV_KEY] as THREE.Texture | undefined;
+                for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+                    if (probe && hasFacadeMaterial(m) && (m as THREE.MeshStandardMaterial).envMap !== probe) { (m as THREE.MeshStandardMaterial).envMap = probe; m.needsUpdate = true; }
+                }
+                return prior.apply(this, args);
+            };
+        });
         previous?.dispose();
         return env;
     } finally {
