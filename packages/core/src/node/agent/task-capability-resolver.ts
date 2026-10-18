@@ -673,14 +673,14 @@ export class TaskCapabilityResolver {
                 primaryNativeEngine = 'google-models';
                 nativeCapabilities.push('Nano Banana Color Transfer Pipeline (Method 2: Extract-then-Apply)');
                 nativeCapabilities.push('NanoBananaColorService (buildExtractPalettePrompt, parseExtractedPalette, buildApplyPalettePrompt)');
-                nativeCapabilities.push('nano_banana_apply_color_palette Agent Tool (geometry-locked color override prompt from a complete palette)');
-                rationale = 'Read the palette and lighting atmosphere from the reference image, then nano_banana_apply_color_palette builds the global color override prompt that applies it to the target image with strict non-negotiable geometry locking.';
+                nativeCapabilities.push('nano_banana_apply_color_palette Agent Tool (recolors the target image to a complete palette with an image model)');
+                rationale = 'Read the palette and lighting atmosphere from the reference image, then nano_banana_apply_color_palette recolors the target image to it with an image model, prompting it to keep the geometry unchanged.';
                 suggestedNativeAction = {
                     primitiveType: 'markdown-document',
                     serviceOrTool: 'NanoBananaColorService & nano_banana_apply_color_palette tool',
                     targetTool: 'nano_banana_apply_color_palette',
                     targetService: 'NanoBananaColorService',
-                    details: 'Read the reference palette, then invoke nano_banana_apply_color_palette with the complete palette to build the geometry-locked color override prompt.'
+                    details: 'Read the reference palette, then invoke nano_banana_apply_color_palette with the complete palette to recolor the target image.'
                 };
             } else if (/beautif|nano\s*banana[\s\w-]{0,30}(?:prompt|location)|buildbeautifyprompt/i.test(lower)) {
                 canSolveNatively = true;

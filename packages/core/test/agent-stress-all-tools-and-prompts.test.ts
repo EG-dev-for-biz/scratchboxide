@@ -552,12 +552,13 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
                 lightingAtmosphere: 'Low warm sun'
             };
 
+            // The tool edits the real image: a target that does not exist is a typed failure, not a success flag.
             const applyRes = await registry.dispatch('nano_banana_apply_color_palette', {
                 palette,
                 targetImageUrl: '/workspace/target.png'
             }, mockContext);
-            expect(applyRes.exec.status).toBe('completed');
-            expect((applyRes.resultPayload as any).success).toBe(true);
+            expect(applyRes.exec.status).toBe('failed');
+            expect((applyRes.resultPayload as any).error).toContain('no file at /workspace/target.png');
         });
     });
 
