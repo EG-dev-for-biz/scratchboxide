@@ -29,7 +29,7 @@ const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-segment-subject-'));
 const BIN = path.join(WORK, 'bin');
 const FRAME_PNG = path.join(WORK, 'frame.png');
 const VIDEO = path.join(WORK, 'clip.mp4');
-const FAKE_SEGMENTER = path.join(WORK, 'fake_segmenter.js');
+const FAKE_SEGMENTER = path.join(WORK, 'fake_segmenter.py');
 const ENV_KEYS = ['PATH', 'FFMPEG_PATH', 'FFPROBE_PATH', 'FAKE_FRAME_PNG', 'FAKE_FAIL_FRAME', 'FAKE_MODEL_NOTE'];
 let savedEnv: Record<string, string | undefined>;
 
@@ -58,18 +58,20 @@ const fs = require('fs');
 const pattern = process.argv[process.argv.length - 1];
 for (let i = 1; i <= 5; i++) fs.copyFileSync(process.env.FAKE_FRAME_PNG, pattern.replace('%04d', String(i).padStart(4, '0')));`);
     // Segmenter: copies the frame as its mask, or fails on the frame named in FAKE_FAIL_FRAME.
+    // It runs in a persistent worker (worker_host.py calls its main() once per frame), so it is Python.
     fs.writeFileSync(FAKE_SEGMENTER, `
-const fs = require('fs');
-const path = require('path');
-const [input, output] = process.argv.slice(2);
-if (process.env.FAKE_FAIL_FRAME && path.basename(input) === process.env.FAKE_FAIL_FRAME) {
-    console.log(JSON.stringify({ success: false, error: 'segmenter crashed on this frame' }));
-    process.exit(4);
-}
-fs.copyFileSync(input, output);
-const answer = { success: true, inputPath: input, outputPath: output, width: 16, height: 12, model: 'fake-selfie-segmenter' };
-if (process.env.FAKE_MODEL_NOTE) answer.modelNote = process.env.FAKE_MODEL_NOTE;
-console.log(JSON.stringify(answer));`);
+import json, os, shutil, sys
+def main():
+    inp, out = sys.argv[1], sys.argv[2]
+    if os.environ.get("FAKE_FAIL_FRAME") and os.path.basename(inp) == os.environ["FAKE_FAIL_FRAME"]:
+        print(json.dumps({"success": False, "error": "segmenter crashed on this frame"}))
+        sys.exit(4)
+    shutil.copyfile(inp, out)
+    answer = {"success": True, "inputPath": inp, "outputPath": out, "width": 16, "height": 12, "model": "fake-selfie-segmenter"}
+    if os.environ.get("FAKE_MODEL_NOTE"):
+        answer["modelNote"] = os.environ["FAKE_MODEL_NOTE"]
+    print(json.dumps(answer))
+`);
     process.env.PATH = `${BIN}${path.delimiter}${process.env.PATH ?? ''}`;
     process.env.FFMPEG_PATH = path.join(BIN, 'ffmpeg');
     process.env.FFPROBE_PATH = path.join(BIN, 'ffprobe');
@@ -84,7 +86,7 @@ afterAll(() => {
     fs.removeSync(WORK);
 });
 
-const service = () => new VfxSubjectSegmenterService({ pythonBinary: process.execPath, scriptPath: FAKE_SEGMENTER });
+const service = () => new VfxSubjectSegmenterService({ pythonBinary: process.env.SCRATCHBOX_PYTHON || 'python3', scriptPath: FAKE_SEGMENTER, maxWorkers: 3 });
 const masksIn = (dir: string) => fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => /^mask_\d{4}\.png$/.test(f)).sort() : [];
 
 describe('vfx_segment_subject: a complete matte sequence, or a failure that says which frame', () => {

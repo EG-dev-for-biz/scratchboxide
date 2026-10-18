@@ -90,7 +90,7 @@ function fakePose(onCall: (n: number) => void = () => undefined) {
             onCall(calls.estimate);
             return { success: true, personIndex: 0, angles, hipPositionMeters: [0, 0.9, 0], confidence: 0.8, worldLandmarks: landmarks(), imageLandmarks: landmarks() };
         },
-        runPoseLandmarker: async (_img: Buffer, options?: { signal?: AbortSignal }) => {
+        runPoseLandmarkerOnFile: async (_file: string, options?: { signal?: AbortSignal }) => {
             calls.run++;
             calls.signals.push(options?.signal);
             onCall(calls.run);

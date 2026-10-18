@@ -132,6 +132,7 @@ describe('VFX & FFmpeg Gemini Agent Tools', () => {
                 cellWidth: 640,
                 cellHeight: 360,
                 labelTimecode: true,
+                durationSec: 9,
                 dryRun: true
             }, {} as any);
 

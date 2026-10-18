@@ -58,8 +58,9 @@ function fakeEditor(opts: { sheet?: 'ok' | 'throws' | 'empty'; frames?: number; 
 /** Landmarks of a person whose arms and legs keep (or, with `stretch`, change) their length frame to frame. */
 function personPose(stretch = 0) {
     return {
-        estimatePoseFromImage: async ({ image }: { image: Buffer }) => {
-            const i = Number(image.toString().replace('frame ', ''));
+        estimatePoseFromImage: async ({ image }: { image: string }) => {
+            // The director passes each extracted frame by path.
+            const i = Number(fs.readFileSync(image, 'utf8').replace('frame ', ''));
             const s = 1 + stretch * i;
             const lms = Array.from({ length: 33 }, () => ({ x: 0, y: 0, z: 0, visibility: 0.9 }));
             for (const [a, b, c] of [[11, 13, 15], [12, 14, 16], [23, 25, 27], [24, 26, 28]]) {
