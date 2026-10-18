@@ -11,6 +11,7 @@ import * as THREE from 'three';
 import { decodeSpz, isGzip } from '../../../../common/splat-spz-codec';
 import { CameraRelativeRTC } from '../../../../common/coordinate/CameraRelativeRTC';
 import { SplatRadixSorter } from './SplatRadixSorter';
+import { EWA_CUTOFF_SIGMA, EWA_SPLAT_GLSL } from '../../../../common/spatial/splat-ewa-projection';
 
 export interface SplatData {
   count: number;
@@ -156,19 +157,9 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
     const dummyDepth = new THREE.DataTexture(new Float32Array([1.0]), 1, 1, THREE.RedFormat, THREE.FloatType);
     dummyDepth.needsUpdate = true;
 
-    // Adaptive splat scale calibration to prevent cotton-ball bloat
-    let calibratedScale = options.splatScale ?? 1.0;
-    if (splatData.scales.length > 0) {
-      let sampleSum = 0;
-      const sampleCount = Math.min(100, splatData.count);
-      for (let i = 0; i < sampleCount; i++) {
-        sampleSum += splatData.scales[i * 3];
-      }
-      const avgScale = sampleSum / Math.max(1, sampleCount);
-      if (avgScale > 0.02 && options.splatScale === undefined) {
-        calibratedScale = 0.22;
-      }
-    }
+    // Scales are per-axis standard deviations (the .splat / .spz / 3DGS PLY convention) and are drawn as they are;
+    // splatScale is an explicit user multiplier only.
+    const splatScale = options.splatScale ?? 1.0;
 
     const interleaveMode = options.depthInterleaveMode ?? (options.enableSoftZ ? 'soft-z' : 'hardware');
     const isHardware = interleaveMode === 'hardware';
@@ -183,7 +174,7 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
       blending: THREE.NormalBlending,
       uniforms: {
         uClipZ: { value: 10000.0 },
-        uSplatScale: { value: calibratedScale },
+        uSplatScale: { value: splatScale },
         uFocalLength: { value: options.focalLengthMm ?? 50.0 },
         uAperture: { value: options.apertureFStop ?? 2.8 },
         uFocusDist: { value: options.focusDistMeters ?? 5.0 },
@@ -218,6 +209,7 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
       vertexShader: `
         ${CameraRelativeRTC.getVertexShaderRTCChunk()}
         ${options.useLogarithmicDepth ? '#include <logdepthbuf_pars_vertex>' : ''}
+        ${EWA_SPLAT_GLSL}
 
         attribute vec3 instanceCenter;
         attribute vec3 instanceScale;
@@ -234,8 +226,10 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
         uniform vec3 uClipBoxMin;
         uniform vec3 uClipBoxMax;
         uniform float uClipBoxEnabled;
+        uniform vec2 viewport;
 
         varying vec2 vUv;
+        varying vec2 vSigmaCoord;
         varying vec3 vColor;
         varying float vOpacity;
         varying float vDepth;
@@ -269,7 +263,7 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
             }
           }
 
-          // Decode normal from quaternion
+          // Normal = the splat's local +Z axis (the flattened axis of a surfel), used by the lighting terms.
           vec4 q = instanceQuat;
           vec3 localNorm = vec3(
             2.0 * (q.x * q.z + q.w * q.y),
@@ -280,46 +274,41 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
             localNorm = vec3(0.0, 0.0, 1.0);
           }
           vNormal = normalize(localNorm);
+          vViewPos = viewCenter.xyz;
 
-          // 2D EWA Screen-Space Covariance & Anisotropic Principal Axes
-          vec3 viewNorm = normalize((modelViewMatrix * vec4(localNorm, 0.0)).xyz);
-          float cosIncidence = clamp(abs(dot(viewNorm, vec3(0.0, 0.0, 1.0))), 0.18, 1.0);
-
-          vec3 S = instanceScale * uSplatScale;
-          S = clamp(S, vec3(0.0015), vec3(1.5));
-          float rMajor = max(S.x, S.y) * 3.6;
-          float rMinor = max(0.0015, min(S.x, S.y) * 3.2 * cosIncidence);
-
-          // Physical Thin-Lens Depth of Field
+          // Physical thin-lens depth of field: sensor-plane CoC diameter (36 mm full-frame width) in pixels, added to
+          // the projected covariance as a blur variance (the EWA opacity compensation keeps the energy constant).
           float fMeters = uFocalLength * 0.001;
           float dFocus = max(1.0, uFocusDist);
           float N_ap = max(1.4, uAperture);
-          float coc = abs((fMeters * fMeters / (N_ap * max(0.001, dFocus - fMeters))) * ((vDepth - dFocus) / max(0.1, vDepth)));
-          coc = clamp(coc * 35.0 * uDofStrength, 0.0, 10.0);
-          vCircleOfConfusion = coc;
+          float cocSensor = abs((fMeters * fMeters / (N_ap * max(0.001, dFocus - fMeters))) * ((vDepth - dFocus) / max(0.1, vDepth)));
+          float cocPx = clamp(cocSensor / 0.036 * viewport.x * uDofStrength, 0.0, 64.0);
+          vCircleOfConfusion = cocPx;
+          float blurSigmaPx = 0.25 * cocPx;
 
-          // Subtle physical blur spread (avoiding multi-meter ballooning)
-          float bokehSpread = coc * 0.035;
-          rMajor += bokehSpread;
-          rMinor += bokehSpread;
-          vEllipseAxes = vec2(rMajor, rMinor);
-
-          vec2 screenTangent = normalize(viewNorm.xy + vec2(0.0001));
-          float theta = atan(screenTangent.y, screenTangent.x);
-          vEllipseAngle = theta;
-
-          vec2 localPos = position.xy;
-          vec2 rotatedCorner = vec2(
-            localPos.x * cos(theta) - localPos.y * sin(theta),
-            localPos.x * sin(theta) + localPos.y * cos(theta)
+          // 2D EWA Screen-Space Covariance: Σ' = J W R S Sᵀ Rᵀ Wᵀ Jᵀ + 0.3 px² low-pass, opacity-compensated.
+          vec4 clipCenter;
+          vec2 axisMajorPx;
+          vec2 axisMinorPx;
+          float ewaOpacity;
+          bool visible = sbEwaProject(
+            viewCenter, instanceScale * uSplatScale, instanceQuat, mat3(modelViewMatrix), projectionMatrix, viewport,
+            blurSigmaPx * blurSigmaPx, instanceOpacity, clipCenter, axisMajorPx, axisMinorPx, ewaOpacity
           );
+          if (!visible) {
+            gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+            return;
+          }
+          vEllipseAxes = vec2(length(axisMajorPx), length(axisMinorPx));
+          vEllipseAngle = atan(axisMajorPx.y, axisMajorPx.x);
 
-          vec2 screenOffset = vec2(rotatedCorner.x * rMajor, rotatedCorner.y * rMinor);
-          vec4 viewPos = viewCenter + vec4(screenOffset, 0.0, 0.0);
-          vViewPos = viewPos.xyz;
-          gl_Position = projectionMatrix * viewPos;
+          // Quad corner in [-1, 1]² spans ±3 sigma along the eigenvectors.
+          vec2 corner = position.xy * 2.0;
+          vSigmaCoord = corner * ${EWA_CUTOFF_SIGMA.toFixed(1)};
+          vec2 offsetPx = corner.x * axisMajorPx + corner.y * axisMinorPx;
+          gl_Position = clipCenter + vec4(offsetPx * 2.0 / viewport * clipCenter.w, 0.0, 0.0);
 
-          vOpacity = instanceOpacity / (1.0 + coc * 0.75);
+          vOpacity = ewaOpacity;
           ${options.useLogarithmicDepth ? '#include <logdepthbuf_vertex>' : ''}
         }
       `,
@@ -344,6 +333,7 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
         uniform float uSoftZEnabled;
 
         varying vec2 vUv;
+        varying vec2 vSigmaCoord;
         varying vec3 vColor;
         varying float vOpacity;
         varying float vDepth;
@@ -361,13 +351,12 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
         }
 
         void main() {
-          vec2 d = (vUv - vec2(0.5)) * 2.0;
-          float r2 = dot(d, d);
-          if (r2 > 1.0) discard;
-
-          // Anisotropic EWA Gaussian Alpha Decay with smooth boundary falloff (zero disc edge artifacts)
-          float alpha = clamp((1.0 - smoothstep(0.65, 1.0, r2)) * exp(-0.8 * r2) * 1.5 * vOpacity, 0.0, 1.0);
-          if (alpha < 0.015) discard;
+          // vSigmaCoord is the fragment's offset in standard deviations along the screen-space eigenvectors, so the
+          // squared Mahalanobis distance is its squared length.
+          float r2 = dot(vSigmaCoord, vSigmaCoord);
+          if (r2 > ${(EWA_CUTOFF_SIGMA * EWA_CUTOFF_SIGMA).toFixed(1)}) discard;
+          float alpha = min(0.99, vOpacity * exp(-0.5 * r2));
+          if (alpha < 1.0 / 255.0) discard;
 
           // Continuous Volumetric Soft-Z Depth Interleaving against Tile Mesh
           if (uSoftZEnabled > 0.5) {
@@ -435,6 +424,14 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
 
     this.splatMesh = new THREE.Mesh(this.splatGeometry, this.splatMaterial);
     this.splatMesh.frustumCulled = false;
+    // The EWA projection works in pixels, so keep the viewport uniform equal to the drawing buffer being rendered.
+    const drawingBuffer = new THREE.Vector2();
+    this.splatMesh.onBeforeRender = (renderer: THREE.WebGLRenderer) => {
+      const target = renderer.getRenderTarget();
+      if (target) drawingBuffer.set(target.width, target.height);
+      else renderer.getDrawingBufferSize(drawingBuffer);
+      if (drawingBuffer.x > 0 && drawingBuffer.y > 0) this.splatMaterial.uniforms.viewport.value.copy(drawingBuffer);
+    };
     this.add(this.splatMesh);
 
     // 3. Soft Contact Ground Shadow (disabled by default to honor zero artificial ground plane invariant)
@@ -528,9 +525,14 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
     this.frameCounter++;
     if (!force && this.frameCounter % this.sortFrequencyFrames !== 0) return;
 
-    const camPos = camera.position;
+    // Splat positions are in this object's local frame: sort against the camera expressed in that frame.
+    this.updateWorldMatrix(true, false);
+    camera.updateWorldMatrix(true, false);
+    const toLocal = new THREE.Matrix4().copy(this.matrixWorld).invert();
+    const camPos = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld).applyMatrix4(toLocal);
     const camDir = new THREE.Vector3();
     camera.getWorldDirection(camDir);
+    camDir.transformDirection(toLocal);
 
     // Skip sort if camera hasn't moved significantly
     if (!force) {
