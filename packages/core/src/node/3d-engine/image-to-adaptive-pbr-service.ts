@@ -44,14 +44,15 @@ export interface ImageToPbrPlaneOptions {
     edgeDampingFactor?: number;
     /** Radial ambient occlusion search radius in texels (default: 10). */
     aoRadiusTexels?: number;
-    /** Whether to apply continuous AO-inverse shadow lifting (default: true). */
-    enableAlbedoDeLighting?: boolean;
-    /** Conduction / metallicity scale factor [0..1] (default: 1.0, auto-detects metals). */
+    /** Image-space cavity ambient occlusion intensity [0..1.5] (default: 1.0). */
+    cavityOcclusionStrength?: number;
+    /** Conduction / metallicity scale factor (default: 1.0; the estimator measures conduction from the image). */
     conductionBias?: number;
-    /** Target base roughness range [min, max] (optional continuous override). */
+    /**
+     * Base roughness range [min, max] in [0.04, 1] the measured roughness is mapped into (default [0.08, 0.94]).
+     * The caller (or the model, from its own reading of the material) sets it; nothing is inferred from words.
+     */
     roughnessRange?: [number, number];
-    /** Optional open descriptive prompt / material hint (e.g. "medieval weathered granite", "glazed ceramic"). */
-    prompt?: string;
     /** Save standalone diagnostic maps (Albedo, Normal, ORM, Height) next to output. */
     saveDiagnosticMaps?: boolean;
     /** Whether to enforce toroidal seamless boundary wrapping for infinite plane tiling (default: false). */
@@ -86,16 +87,18 @@ export interface ImageToPbrPlaneResult {
     metrics: IntrinsicSignalMetrics;
     /** Runtime acceleration tier utilized for biophysical synthesis. */
     accelerationUsed: 'native-cpp20' | 'node-v8';
+    /** Why the Node.js estimator ran when the native engine was requested (absent otherwise). */
+    accelerationNote?: string;
     /** Whether the resulting texture set and mesh are seamlessly toroidal tileable. */
     isSeamlessTileable: boolean;
     executionTimeMs: number;
 }
 
 /**
- * Probes image dimensions via ffprobe if header parsing yields null.
+ * Probes image dimensions via ffprobe if header parsing yields null; throws when ffprobe cannot read them.
  */
 async function probeImageDimensions(buf: Buffer): Promise<{ width: number; height: number }> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
         const proc = spawn('ffprobe', [
             '-v', 'error',
             '-select_streams', 'v:0',
@@ -108,13 +111,13 @@ async function probeImageDimensions(buf: Buffer): Promise<{ width: number; heigh
         proc.on('close', code => {
             if (code === 0 && out.trim()) {
                 const parts = out.trim().split('x').map(Number);
-                if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+                if (parts.length === 2 && parts[0] > 0 && parts[1] > 0) {
                     return resolve({ width: parts[0], height: parts[1] });
                 }
             }
-            resolve({ width: 512, height: 512 });
+            reject(new Error(`ImageToAdaptivePbrService: could not read the image dimensions (ffprobe exited ${code})`));
         });
-        proc.on('error', () => resolve({ width: 512, height: 512 }));
+        proc.on('error', err => reject(new Error(`ImageToAdaptivePbrService: could not read the image dimensions (ffprobe: ${err.message})`)));
         proc.stdin.write(buf);
         proc.stdin.end();
     });
@@ -167,26 +170,22 @@ export class ImageToAdaptivePbrService {
             throw new Error(`ImageToAdaptivePbrService: Decoded image buffer size mismatch. Expected ${width * height * 4} bytes, got ${rawRgba.length}.`);
         }
 
-        // 4. Project prompt hints into continuous biophysical schema overrides (ADA compliant)
+        // 4. Continuous schema overrides, exactly as given (no words are mapped to numbers here)
+        if (options.roughnessRange) {
+            const [lo, hi] = options.roughnessRange;
+            if (!(Number.isFinite(lo) && Number.isFinite(hi) && lo >= 0.04 && hi <= 1 && lo < hi)) {
+                throw new Error(`ImageToAdaptivePbrService: roughnessRange must be [min, max] with 0.04 <= min < max <= 1, got [${lo}, ${hi}]`);
+            }
+        }
         const schemaOverride: AdaptiveMaterialSchema = {
             reliefScale: options.reliefMultiplier ?? 1.20,
             edgeDampingFactor: options.edgeDampingFactor ?? 0.45,
-            cavityOcclusionStrength: 1.0,
+            cavityOcclusionStrength: options.cavityOcclusionStrength ?? 1.0,
             conductionBias: options.conductionBias ?? 1.0,
             roughnessRange: options.roughnessRange
         };
-
-        if (options.prompt && typeof options.prompt === 'string') {
-            const p = options.prompt.toLowerCase();
-            if (p.includes('metal') || p.includes('gold') || p.includes('bronze') || p.includes('copper') || p.includes('steel') || p.includes('iron')) {
-                schemaOverride.conductionBias = Math.max(schemaOverride.conductionBias ?? 1.0, 1.4);
-            }
-            if (p.includes('glass') || p.includes('glossy') || p.includes('polished') || p.includes('varnish') || p.includes('wet')) {
-                schemaOverride.roughnessRange = [0.05, 0.35];
-            } else if (p.includes('rough') || p.includes('matte') || p.includes('stone') || p.includes('concrete') || p.includes('bark')) {
-                schemaOverride.roughnessRange = [0.65, 0.98];
-            }
-        }
+        // The estimators read the schema from `schemaOverride` and the AO radius from the options themselves.
+        const estimatorOptions = { schemaOverride, aoRadiusTexels: options.aoRadiusTexels };
 
         // 5. Toroidal seamless boundary wrapping (optional continuous periodic manifold)
         const isSeamless = Boolean(options.makeSeamlessTileable);
@@ -197,6 +196,7 @@ export class ImageToAdaptivePbrService {
         // 6. Estimate continuous biophysical fields & intrinsic metrics (Two-Tier Architecture: C++20 Engine -> Node.js Fallback)
         let fields: ContinuousBiophysicalFields;
         let accelerationUsed: 'native-cpp20' | 'node-v8' = 'node-v8';
+        let accelerationNote: string | undefined;
 
         if (options.useNativeCpp !== false) {
             try {
@@ -205,25 +205,26 @@ export class ImageToAdaptivePbrService {
                     effectiveRgba,
                     width,
                     height,
-                    schemaOverride
+                    estimatorOptions
                 );
                 accelerationUsed = 'native-cpp20';
-            } catch {
-                // Transparent failover to pure Node.js V8 execution
+            } catch (err) {
+                // Same estimator in Node.js (same fields and options); the reason is reported, not hidden.
                 fields = AdaptiveMaterialPbrService.estimateContinuousBiophysicalFields(
                     effectiveRgba,
                     width,
                     height,
-                    schemaOverride
+                    estimatorOptions
                 );
                 accelerationUsed = 'node-v8';
+                accelerationNote = `native C++20 estimator failed, Node.js estimator used: ${(err as Error)?.message || err}`;
             }
         } else {
             fields = AdaptiveMaterialPbrService.estimateContinuousBiophysicalFields(
                 effectiveRgba,
                 width,
                 height,
-                schemaOverride
+                estimatorOptions
             );
         }
 
@@ -585,6 +586,7 @@ export class ImageToAdaptivePbrService {
             },
             metrics,
             accelerationUsed,
+            ...(accelerationNote ? { accelerationNote } : {}),
             isSeamlessTileable: isSeamless,
             executionTimeMs: Math.round(durationMs)
         };
