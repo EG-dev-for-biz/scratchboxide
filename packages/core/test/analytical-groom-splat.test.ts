@@ -15,53 +15,54 @@ import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolv
 import type { AnalyticalGroomContract } from '../src/common/spatial/analytical-groom-types';
 
 describe('Analytical Groom & 3D Gaussian Splatting Engine', () => {
-    describe('Adaptive Domain Architecture (ADA) Contract Synthesis', () => {
-        it('synthesizes continuous spherical harmonic parameters for a 5-pointed star creature', () => {
-            const service = AnalyticalGroomSplatService.getInstance();
-            const contract = service.synthesizeContractFromPrompt('create a 5-pointed star creature with dense golden fur');
+    describe('Adaptive Domain Architecture (ADA) contract from explicit continuous descriptors', () => {
+        const required = {
+            surface: { baseRadius: 1.2, harmonicFrequency: 5, harmonicAmplitude: 0.45 },
+            groom: { length: 0.2, eumelanin: 0.1, pheomelanin: 0.35 }
+        };
 
-            expect(contract.surface.harmonicFrequency).toBe(5);
-            expect(contract.surface.harmonicAmplitude).toBeGreaterThan(0.3);
-            expect(contract.surface.baseRadius).toBe(1.0);
-            expect(contract.groom.strandCount).toBeGreaterThanOrEqual(4096);
-            expect(contract.groom.clumping).toBeGreaterThan(0.5);
-            // Golden fur should modulate melanin
-            expect(contract.groom.eumelanin).toBeLessThan(0.3);
-            expect(contract.groom.pheomelanin).toBeGreaterThan(0.2);
+        it('uses the descriptors as given and leaves unstated morphology neutral', () => {
+            const contract = AnalyticalGroomSplatService.getInstance().buildContract(required);
+            expect(contract.surface).toMatchObject({ baseRadius: 1.2, harmonicFrequency: 5, harmonicAmplitude: 0.45, axialTaper: 0 });
+            expect(contract.groom).toMatchObject({ length: 0.2, eumelanin: 0.1, pheomelanin: 0.35, clumping: 0, curlRadius: 0, waveAmplitude: 0 });
+            expect(contract.groom.baseColorRgb).toBeUndefined();
         });
 
-        it('synthesizes open continuous parameters without closed shape enums for a 3-lobed puffball', () => {
+        it('fails with MissingInputError naming every absent required descriptor, never inferring them from words', () => {
             const service = AnalyticalGroomSplatService.getInstance();
-            const contract = service.synthesizeContractFromPrompt('a 3-lobed fuzzy creature with curly auburn fur');
-
-            expect(contract.surface.harmonicFrequency).toBe(3);
-            expect(contract.surface.harmonicAmplitude).toBeGreaterThan(0.2);
-            expect(contract.groom.curlRadius).toBeGreaterThan(0.015);
-            expect(contract.groom.pheomelanin).toBeGreaterThan(0.5);
+            expect((service as any).synthesizeContractFromPrompt).toBeUndefined();
+            let err: any;
+            try { service.buildContract({ groom: { strandCount: 512 } }, 'splat_synthesize_analytical_groom'); } catch (e) { err = e; }
+            expect(err?.name).toBe('MissingInputError');
+            expect(err.code).toBe('missing_input');
+            for (const name of ['baseRadius', 'harmonicFrequency', 'harmonicAmplitude', 'length', 'eumelanin and pheomelanin, or baseColorRgb']) {
+                expect(err.message).toContain(name);
+            }
+            expect(() => service.buildContract({ ...required, surface: { ...required.surface, harmonicFrequency: 2.5 } })).toThrow(/harmonicFrequency=2.5/);
         });
 
-        it('supports arbitrary programmatic overrides for continuous variables', () => {
-            const service = AnalyticalGroomSplatService.getInstance();
-            const contract = service.synthesizeContractFromPrompt('custom creature', {
-                surface: {
-                    baseRadius: 2.5,
-                    harmonicFrequency: 7,
-                    harmonicAmplitude: 0.55,
-                    axialTaper: 0.3
-                },
-                groom: {
-                    strandCount: 512,
-                    length: 0.15,
-                    baseColorRgb: [0.2, 0.8, 0.4]
-                }
+        it('undefined fields do not mask defaults, and a root colour alone is uniform root to tip', () => {
+            const contract = AnalyticalGroomSplatService.getInstance().buildContract({
+                surface: { ...required.surface, axialTaper: undefined },
+                groom: { length: 0.15, baseColorRgb: [0.2, 0.8, 0.4], clumping: undefined, strandCount: 512 }
             });
-
-            expect(contract.surface.baseRadius).toBe(2.5);
-            expect(contract.surface.harmonicFrequency).toBe(7);
-            expect(contract.surface.harmonicAmplitude).toBe(0.55);
-            expect(contract.surface.axialTaper).toBe(0.3);
+            expect(contract.surface.axialTaper).toBe(0);
+            expect(contract.groom.clumping).toBe(0);
             expect(contract.groom.strandCount).toBe(512);
-            expect(contract.groom.baseColorRgb).toEqual([0.2, 0.8, 0.4]);
+            expect(contract.groom.tipColorRgb).toEqual([0.2, 0.8, 0.4]);
+            expect(contract.groom.eumelanin).toBe(0);
+            const src = AnalyticalGroomSplatService.getInstance().generateCppSource(contract, '/tmp/a.spz', '/tmp/a.ply');
+            expect(src).toContain('config.clumping = 0.0f;');
+            expect(src).toContain('math::Vec3 customTipColor = math::Vec3(0.2f, 0.8f, 0.4f);');
+        });
+
+        it('the tool requires the shape and length descriptors and has no prompt input', async () => {
+            const { ANALYTICAL_GROOM_TOOL_DECLARATIONS, analyticalGroomHandlers } = await import('../src/node/gemini/tools/spatial-tools');
+            const decl = ANALYTICAL_GROOM_TOOL_DECLARATIONS.find(d => d.name === 'splat_synthesize_analytical_groom')!;
+            expect(Object.keys(decl.parameters.properties)).not.toContain('prompt');
+            expect(decl.parameters.required).toEqual(['baseRadius', 'harmonicFrequency', 'harmonicAmplitude', 'length']);
+            await expect(analyticalGroomHandlers.splat_synthesize_analytical_groom({ prompt: 'a 5-pointed star creature with golden fur' }, {} as any))
+                .rejects.toMatchObject({ name: 'MissingInputError' });
         });
     });
 

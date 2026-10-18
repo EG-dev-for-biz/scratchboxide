@@ -10,6 +10,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { NativeCppCompilerService } from './native-compiler-service';
+import { MissingInputError } from '../../common/errors/pipeline-errors';
 import type {
     AnalyticalGroomContract,
     AnalyticalGroomExecutionResult,
@@ -17,6 +18,14 @@ import type {
     ContinuousGroomDescriptor,
     ContinuousSplatOptions
 } from '../../common/spatial/analytical-groom-types';
+
+/** The descriptors {@link AnalyticalGroomSplatService.buildContract} turns into a contract. */
+export interface AnalyticalGroomDescriptors {
+    id?: string;
+    surface?: ContinuousSurfaceDescriptor;
+    groom?: ContinuousGroomDescriptor;
+    splat?: ContinuousSplatOptions;
+}
 
 /**
  * Analytical Groom & 3D Gaussian Splatting Service.
@@ -45,161 +54,83 @@ export class AnalyticalGroomSplatService {
     }
 
     /**
-     * Synthesize an open AnalyticalGroomContract from natural language or parametric context.
-     * Uses continuous dimensional inference rather than closed switch-case taxonomies.
+     * Builds an AnalyticalGroomContract from explicit continuous descriptors (the caller, or the model reading the
+     * user's request, fills them). Nothing is inferred from words: shape (baseRadius, harmonicFrequency,
+     * harmonicAmplitude), strand length and pigment (eumelanin + pheomelanin, or baseColorRgb) are required and a
+     * MissingInputError names whichever are absent. Strand morphology the caller leaves out is neutral (no curl,
+     * wave, clumping or taper); density defaults to 64 guides / 4096 strands / 12 segments, and root/tip width to
+     * 3 mm / 0.6 mm.
      */
-    public synthesizeContractFromPrompt(
-        prompt: string,
-        overrides?: Partial<AnalyticalGroomContract>
-    ): AnalyticalGroomContract {
-        const lower = prompt.toLowerCase();
-        const id = `groom_splat_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-
-        // Continuous Surface Harmonic Analysis
-        let harmonicFrequency = 0;
-        let harmonicAmplitude = 0.0;
-        let baseRadius = 1.0;
-        let axialTaper = 0.0;
-
-        // Extract explicit frequency if mentioned (e.g. "5-pointed", "8-point", "3-lobed")
-        const freqMatch = lower.match(/(\d+)\s*[-_ ]*(?:point|pointed|lobe|lobed|arm|armed|branch|star)/i);
-        if (freqMatch) {
-            harmonicFrequency = parseInt(freqMatch[1], 10);
-            harmonicAmplitude = 0.42;
-        } else if (/star|stellate|pentagram/i.test(lower)) {
-            harmonicFrequency = 5;
-            harmonicAmplitude = 0.45;
-        } else if (/sphere|ball|fuzzy|orb|puffball/i.test(lower)) {
-            harmonicFrequency = 0;
-            harmonicAmplitude = 0.0;
-        } else if (/clover|trilobed|triplet/i.test(lower)) {
-            harmonicFrequency = 3;
-            harmonicAmplitude = 0.35;
-        } else if (/spiky|sea urchin|hedgehog|starburst/i.test(lower)) {
-            harmonicFrequency = 8;
-            harmonicAmplitude = 0.50;
+    public buildContract(descriptors: AnalyticalGroomDescriptors, tool = 'AnalyticalGroomSplatService.buildContract'): AnalyticalGroomContract {
+        // Undefined fields are dropped so they never mask a default below.
+        const defined = <T extends object>(o: T | undefined): Partial<T> =>
+            Object.fromEntries(Object.entries(o ?? {}).filter(([, v]) => v !== undefined)) as Partial<T>;
+        const surface = defined(descriptors.surface);
+        const groom = defined(descriptors.groom);
+        const missing: string[] = [];
+        if (surface.baseRadius === undefined) missing.push('baseRadius');
+        if (surface.harmonicFrequency === undefined) missing.push('harmonicFrequency');
+        if (surface.harmonicAmplitude === undefined) missing.push('harmonicAmplitude');
+        if (groom.length === undefined) missing.push('length');
+        const hasMelanin = groom.eumelanin !== undefined && groom.pheomelanin !== undefined;
+        if (!hasMelanin && groom.baseColorRgb === undefined) missing.push('eumelanin and pheomelanin, or baseColorRgb');
+        if (missing.length) {
+            throw new MissingInputError(tool, missing.join(', '),
+                'give the groom as continuous descriptors (shape harmonics, strand length, pigment); they are not inferred from a description');
         }
 
-        // Extract radius if specified (e.g. "radius 1.5", "0.8m")
-        const radMatch = lower.match(/(?:radius|size|scale)\s*(?:of|is|:)?\s*(\d+(?:\.\d+)?)/i);
-        if (radMatch) {
-            baseRadius = parseFloat(radMatch[1]);
+        const bad: string[] = [];
+        const inRange = (name: string, v: number | undefined, lo: number, hi: number) => {
+            if (v !== undefined && !(Number.isFinite(v) && v >= lo && v <= hi)) bad.push(`${name}=${v} (expected ${lo}..${hi})`);
+        };
+        if (!(surface.baseRadius! > 0)) bad.push(`baseRadius=${surface.baseRadius} (expected > 0)`);
+        if (!Number.isInteger(surface.harmonicFrequency) || surface.harmonicFrequency! < 0) bad.push(`harmonicFrequency=${surface.harmonicFrequency} (expected an integer >= 0)`);
+        inRange('harmonicAmplitude', surface.harmonicAmplitude, 0, 1);
+        inRange('axialTaper', surface.axialTaper, -1, 1);
+        if (!(groom.length! > 0)) bad.push(`length=${groom.length} (expected > 0)`);
+        inRange('clumping', groom.clumping, 0, 1);
+        inRange('eumelanin', groom.eumelanin, 0, 1);
+        inRange('pheomelanin', groom.pheomelanin, 0, 1);
+        for (const key of ['baseColorRgb', 'tipColorRgb'] as const) {
+            const rgb = groom[key];
+            if (rgb !== undefined && !(Array.isArray(rgb) && rgb.length === 3 && rgb.every(c => Number.isFinite(c) && c >= 0 && c <= 1))) {
+                bad.push(`${key} (expected [r, g, b] in 0..1)`);
+            }
         }
+        if (groom.tipColorRgb !== undefined && groom.baseColorRgb === undefined) bad.push('tipColorRgb needs baseColorRgb');
+        if (bad.length) throw new MissingInputError(tool, 'valid groom descriptors', bad.join('; '));
 
-        if (/teardrop|egg|cone|taper/i.test(lower)) {
-            axialTaper = 0.25;
-        }
-
-        // Continuous Groom Morphology Analysis
-        let strandCount = 4096;
-        let guideCount = 64;
-        let length = 0.22;
-        let clumping = 0.70;
-        let curlRadius = 0.010;
-        let curlFrequency = 3.0;
-        let waveAmplitude = 0.006;
-        let waveFrequency = 2.0;
-
-        if (/dense|thick|heavy fur|shaggy/i.test(lower)) {
-            strandCount = 8192;
-            guideCount = 96;
-            clumping = 0.82;
-        } else if (/sparse|wispy|thin/i.test(lower)) {
-            strandCount = 2048;
-            guideCount = 48;
-            clumping = 0.40;
-        }
-
-        if (/long|flowing|trailing/i.test(lower)) {
-            length = 0.40;
-        } else if (/short|peach fuzz|velvet|stubble/i.test(lower)) {
-            length = 0.08;
-            curlRadius = 0.003;
-            curlFrequency = 6.0;
-        }
-
-        if (/curly|kinky|afro|wool/i.test(lower)) {
-            curlRadius = 0.022;
-            curlFrequency = 6.5;
-            clumping = 0.88;
-        } else if (/straight|spiky|bristly|quill/i.test(lower)) {
-            curlRadius = 0.0;
-            curlFrequency = 0.0;
-            waveAmplitude = 0.0;
-            clumping = 0.15;
-        }
-
-        // Marschner Melanin or Custom Color Inference
-        let eumelanin = 0.6;
-        let pheomelanin = 0.2;
-        let baseColorRgb: [number, number, number] | undefined;
-        let tipColorRgb: [number, number, number] | undefined;
-
-        if (/blonde|golden|yellow/i.test(lower)) {
-            eumelanin = 0.1;
-            pheomelanin = 0.35;
-        } else if (/red|auburn|ginger|copper/i.test(lower)) {
-            eumelanin = 0.25;
-            pheomelanin = 0.85;
-        } else if (/black|dark/i.test(lower)) {
-            eumelanin = 0.95;
-            pheomelanin = 0.05;
-        } else if (/white|grey|gray|silver/i.test(lower)) {
-            eumelanin = 0.02;
-            pheomelanin = 0.02;
-            baseColorRgb = [0.88, 0.88, 0.90];
-            tipColorRgb = [0.95, 0.95, 0.98];
-        } else if (/pink|neon|magenta/i.test(lower)) {
-            baseColorRgb = [0.95, 0.20, 0.60];
-            tipColorRgb = [1.0, 0.60, 0.85];
-        } else if (/blue|cyan|azure/i.test(lower)) {
-            baseColorRgb = [0.10, 0.40, 0.95];
-            tipColorRgb = [0.40, 0.80, 1.0];
-        } else if (/green|emerald|lime/i.test(lower)) {
-            baseColorRgb = [0.10, 0.70, 0.25];
-            tipColorRgb = [0.40, 0.95, 0.50];
-        } else if (/purple|violet/i.test(lower)) {
-            baseColorRgb = [0.50, 0.15, 0.80];
-            tipColorRgb = [0.75, 0.45, 0.95];
-        }
-
-        const contract: AnalyticalGroomContract = {
-            id,
+        return {
+            id: descriptors.id ?? `groom_splat_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
             surface: {
                 center: [0, 0, 0],
-                baseRadius,
-                harmonicFrequency,
-                harmonicAmplitude,
-                axialTaper,
-                ...overrides?.surface
+                axialTaper: 0,
+                ...surface
             },
             groom: {
-                guideCount,
-                strandCount,
+                guideCount: 64,
+                strandCount: 4096,
                 segmentsPerStrand: 12,
-                length,
                 rootWidth: 0.003,
                 tipWidth: 0.0006,
-                clumping,
-                curlRadius,
-                curlFrequency,
-                waveFrequency,
-                waveAmplitude,
-                eumelanin,
-                pheomelanin,
-                baseColorRgb,
-                tipColorRgb,
-                ...overrides?.groom
+                clumping: 0,
+                curlRadius: 0,
+                curlFrequency: 0,
+                waveFrequency: 0,
+                waveAmplitude: 0,
+                // Explicit colours override melanin; the generator still reads the melanin fields, so they are zeroed.
+                ...(hasMelanin ? {} : { eumelanin: 0, pheomelanin: 0 }),
+                ...groom,
+                // The generator uses custom colour only with both ends: a root colour alone is uniform root to tip.
+                ...(groom.baseColorRgb && !groom.tipColorRgb ? { tipColorRgb: groom.baseColorRgb } : {})
             },
             splat: {
                 scaleMultiplier: 1.0,
                 opacity: 0.92,
                 exportFormat: 'spz',
-                ...overrides?.splat
+                ...defined(descriptors.splat)
             }
         };
-
-        return contract;
     }
 
     private toCppFloat(val: number | undefined, defaultVal: number): string {

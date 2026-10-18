@@ -5185,29 +5185,25 @@ Object.assign(avatar4dgsHandlers, humanoidAvatarHandlers);
 export const ANALYTICAL_GROOM_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'splat_synthesize_analytical_groom',
-        description: 'Synthesize biophysical hair grooming and forward-project into anisotropic 3D Gaussian Splats (.spz, .ply, .glb) using native C++20 Astro hair and SPZ engines. Strictly conforms to Adaptive Domain Architecture (ADA) with continuous dimensional parameters: spherical harmonics (radial frequencies m, amplitudes A, axial taper) or arbitrary surface mesh attachment, Marschner melanin pigmentation, and Voronoi clumping.',
+        description: 'Synthesize biophysical hair grooming and forward-project into anisotropic 3D Gaussian Splats (.spz, .ply, .glb) using native C++20 Astro hair and SPZ engines. Takes continuous descriptors only (fill them from your reading of the request; nothing is inferred from words): the harmonic surface r(theta, phi) (baseRadius, harmonicFrequency, harmonicAmplitude, axialTaper), strand length, and pigment as Marschner melanin (eumelanin + pheomelanin) or an explicit baseColorRgb are required. Curl, wave, clumping and taper left out are neutral (none). Missing required descriptors fail with an error naming them.',
         parameters: {
             type: 'OBJECT',
             properties: {
-                prompt: {
-                    type: 'STRING',
-                    description: 'Natural language description of creature, groom, fur, hair or star shape (e.g., "5-pointed star creature with dense golden fur")'
-                },
                 baseRadius: {
                     type: 'NUMBER',
-                    description: 'Metric base radius in meters (default: 1.0)'
+                    description: 'Metric base radius in meters (> 0).'
                 },
                 harmonicFrequency: {
                     type: 'NUMBER',
-                    description: 'Azimuthal harmonic frequency (e.g. 5 for 5-pointed star, 0 for sphere, 3 for clover, 8 for starburst)'
+                    description: 'Integer azimuthal harmonic frequency m >= 0: the number of radial lobes (0 = rotationally smooth).'
                 },
                 harmonicAmplitude: {
                     type: 'NUMBER',
-                    description: 'Modulation amplitude in [0, 1] (e.g. 0.45 for distinct lobes/points)'
+                    description: 'Lobe modulation amplitude A in [0, 1] (0 = no lobes).'
                 },
                 axialTaper: {
                     type: 'NUMBER',
-                    description: 'Vertical axial taper in [-1, 1] (e.g. 0.25 for teardrop/egg shape)'
+                    description: 'Vertical axial taper in [-1, 1] (default 0, none; positive narrows the top pole).'
                 },
                 strandCount: {
                     type: 'NUMBER',
@@ -5219,36 +5215,44 @@ export const ANALYTICAL_GROOM_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 length: {
                     type: 'NUMBER',
-                    description: 'Physical strand length in meters (default: 0.22)'
+                    description: 'Physical strand length in meters (> 0).'
                 },
                 clumping: {
                     type: 'NUMBER',
-                    description: 'Voronoi cluster tip clumping factor in [0, 1] (default: 0.70)'
+                    description: 'Voronoi cluster tip clumping factor in [0, 1] (default 0, none).'
                 },
                 curlRadius: {
                     type: 'NUMBER',
-                    description: 'Helical curl radius in meters (default: 0.010)'
+                    description: 'Helical curl radius in meters (default 0, straight).'
                 },
                 curlFrequency: {
                     type: 'NUMBER',
-                    description: 'Curl frequency along strand length (default: 3.0)'
+                    description: 'Curl frequency along strand length (default 0).'
+                },
+                waveAmplitude: {
+                    type: 'NUMBER',
+                    description: 'Planar wave amplitude in meters (default 0, none).'
+                },
+                waveFrequency: {
+                    type: 'NUMBER',
+                    description: 'Planar wave frequency along strand length (default 0).'
                 },
                 eumelanin: {
                     type: 'NUMBER',
-                    description: 'Marschner dark brown/black pigment in [0, 1] (default: 0.6)'
+                    description: 'Marschner dark brown/black pigment in [0, 1]. Give with pheomelanin, or give baseColorRgb instead.'
                 },
                 pheomelanin: {
                     type: 'NUMBER',
-                    description: 'Marschner red/auburn pigment in [0, 1] (default: 0.2)'
+                    description: 'Marschner red/auburn pigment in [0, 1]. Give with eumelanin, or give baseColorRgb instead.'
                 },
                 baseColorRgb: {
                     type: 'ARRAY',
-                    description: 'Optional custom follicle root RGB [r, g, b] in [0, 1]',
+                    description: 'Custom follicle root RGB [r, g, b] in [0, 1] (overrides melanin; uniform root to tip unless tipColorRgb is given)',
                     items: { type: 'NUMBER' }
                 },
                 tipColorRgb: {
                     type: 'ARRAY',
-                    description: 'Optional custom strand tip RGB [r, g, b] in [0, 1]',
+                    description: 'Optional custom strand tip RGB [r, g, b] in [0, 1] (needs baseColorRgb)',
                     items: { type: 'NUMBER' }
                 },
                 splatScaleMultiplier: {
@@ -5260,16 +5264,16 @@ export const ANALYTICAL_GROOM_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     description: 'Export format: "spz", "ply", "glb", or "all" (default: "spz")',
                     enum: ['spz', 'ply', 'glb', 'all']
                 }
-            }
+            },
+            required: ['baseRadius', 'harmonicFrequency', 'harmonicAmplitude', 'length']
         }
     }
 ];
 
 export const analyticalGroomHandlers: Record<string, ToolHandler> = {
     async splat_synthesize_analytical_groom(args) {
-        const prompt = String(args.prompt || 'star creature with dense golden fur');
         const service = AnalyticalGroomSplatService.getInstance();
-        const contract = service.synthesizeContractFromPrompt(prompt, {
+        const contract = service.buildContract({
             surface: {
                 baseRadius: typeof args.baseRadius === 'number' ? args.baseRadius : undefined,
                 harmonicFrequency: typeof args.harmonicFrequency === 'number' ? args.harmonicFrequency : undefined,
@@ -5283,6 +5287,8 @@ export const analyticalGroomHandlers: Record<string, ToolHandler> = {
                 clumping: typeof args.clumping === 'number' ? args.clumping : undefined,
                 curlRadius: typeof args.curlRadius === 'number' ? args.curlRadius : undefined,
                 curlFrequency: typeof args.curlFrequency === 'number' ? args.curlFrequency : undefined,
+                waveAmplitude: typeof args.waveAmplitude === 'number' ? args.waveAmplitude : undefined,
+                waveFrequency: typeof args.waveFrequency === 'number' ? args.waveFrequency : undefined,
                 eumelanin: typeof args.eumelanin === 'number' ? args.eumelanin : undefined,
                 pheomelanin: typeof args.pheomelanin === 'number' ? args.pheomelanin : undefined,
                 baseColorRgb: Array.isArray(args.baseColorRgb) ? args.baseColorRgb as [number, number, number] : undefined,
@@ -5292,7 +5298,7 @@ export const analyticalGroomHandlers: Record<string, ToolHandler> = {
                 scaleMultiplier: typeof args.splatScaleMultiplier === 'number' ? args.splatScaleMultiplier : undefined,
                 exportFormat: (args.exportFormat as any) || 'spz'
             }
-        });
+        }, 'splat_synthesize_analytical_groom');
 
         const result = await service.executeGroomSplat(contract);
         if (!result.success) {
