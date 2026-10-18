@@ -4740,13 +4740,13 @@ export const AVATAR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'performer_4d_create_from_video',
-        description: 'Synthesizes a dynamic 4D Gaussian Splatting performer avatar from monocular video with optical silhouette resection, 4-bone partition-of-unity LBS skinning, video texture ray backprojection, dynamic foot contact ground clamping, and concert stage geodetic anchoring at Red Rocks Amphitheater.',
+        description: 'Builds a dynamic 4D Gaussian Splatting performer avatar from a monocular video (or a hero image) with tracked motion (GVHMR or MediaPipe), 4-bone LBS skinning, video texture backprojection and foot-contact ground clamping. Geographic venue anchoring happens only when venueId is given. Fails with a typed error when the input is missing/unreadable, no hero frame can be decoded, or no motion can be tracked (unless allowSyntheticIdleMotion is set, in which case the motion is a labelled synthetic idle sway).',
         parameters: {
             type: 'OBJECT',
             properties: {
                 videoPath: {
                     type: 'STRING',
-                    description: 'Path to input monocular performer video (e.g., MP4 or hero frame image)'
+                    description: 'Path to an existing, readable performer video (MP4/MOV/WebM/...) or JPEG/PNG hero frame image'
                 },
                 characterId: {
                     type: 'STRING',
@@ -4762,7 +4762,11 @@ export const AVATAR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 venueId: {
                     type: 'STRING',
-                    description: 'Music venue preset for geodetic anchoring (e.g. "red_rocks", "hollywood_bowl", "the_gorge"; default: "red_rocks")'
+                    description: 'Optional venue id for geodetic stage anchoring (e.g. "red_rocks", "hollywood_bowl", "the_gorge"). Omit for no venue; an unknown id is an error.'
+                },
+                allowSyntheticIdleMotion: {
+                    type: 'BOOLEAN',
+                    description: 'Accept a procedural idle sway (labelled synthetic_idle) when no motion can be tracked, e.g. for a still image. Default false: the tool fails instead.'
                 },
                 fps: {
                     type: 'NUMBER',
@@ -5013,6 +5017,8 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
         const numGaussians = args.numGaussians ? Number(args.numGaussians) : undefined;
         const venueId = args.venueId ? asString(args.venueId) : undefined;
         const fps = args.fps ? Number(args.fps) : undefined;
+        const allowSyntheticIdleMotion = args.allowSyntheticIdleMotion === true;
+        VideoTo4DPerformerPipelineService.assertReadableInput(videoPath);
 
         const pipeline = new VideoTo4DPerformerPipelineService();
         const result = await pipeline.executePipeline({
@@ -5021,12 +5027,20 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
             targetHeightMeters,
             numGaussians,
             venueId,
-            fps
+            fps,
+            allowSyntheticIdleMotion
         });
 
+        const motionSource = result.telemetry.motionSource ?? 'unlabelled';
+        const motionText = result.telemetry.syntheticMotion
+            ? `${result.numFrames} motion frames of SYNTHETIC procedural idle sway (not tracked from the input)`
+            : `${result.numFrames} motion frames (source: ${motionSource})`;
+        const venueText = result.venueAnchor
+            ? `, anchored at ${result.venueAnchor.venueName} (alt: ${result.venueAnchor.altitudeMsl}m MSL)`
+            : ', no venue anchor';
         return {
             resultPayload: result as unknown as ToolResultPayload,
-            summaryResult: `Synthesized 4D performer "${result.characterId}": ${result.numGaussians} Gaussians rigged with 4-bone LBS, ${result.numFrames} motion frames tracked, anchored at ${result.venueAnchor.venueName} (alt: ${result.venueAnchor.altitudeMsl}m MSL). PLY: ${result.plyPath}, SPLAT: ${result.splatPath}${result.glbPath ? `, Rigged PBR GLB: ${result.glbPath}` : ''}`
+            summaryResult: `Built 4D performer "${result.characterId}": ${result.numGaussians} Gaussians rigged with 4-bone LBS, ${motionText}${venueText}. PLY: ${result.plyPath}, SPLAT: ${result.splatPath}${result.glbPath ? `, Rigged PBR GLB: ${result.glbPath}` : ''}`
         };
     }
 };
