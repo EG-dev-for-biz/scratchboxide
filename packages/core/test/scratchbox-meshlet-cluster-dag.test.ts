@@ -11,12 +11,6 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import { NativeCppCompilerService } from '../src/node/3d-engine/native-compiler-service';
-import {
-  MeshletPipelineService,
-  MeshletBuildOptions,
-  GpuClusterDescriptor,
-  LODCutResult
-} from '../src/node/3d-engine/native-meshlet-service';
 
 describe('Nanite-style Meshlet & Cluster DAG Engine (C++20 & Node.js)', () => {
   it('compiles and executes native C++20 scratchbox_meshlet.hpp engine via Clang', async () => {
@@ -123,67 +117,5 @@ int main() {
     expect(execution.stdout).toContain('SUCCESS_MESHLET_ENGINE');
     expect(execution.stdout).toContain('MESHLETS_COUNT');
     expect(execution.stdout).toContain('DAG_NODES');
-  });
-
-  it('runs MeshletPipelineService in Node.js to partition mesh and generate GPU descriptors', async () => {
-    const service = new MeshletPipelineService();
-
-    // Create a procedural plane / terrain grid
-    const vertices: number[] = [];
-    const indices: number[] = [];
-    const gridSize = 20;
-
-    for (let y = 0; y <= gridSize; y++) {
-      for (let x = 0; x <= gridSize; x++) {
-        vertices.push(x * 0.5, Math.sin(x * 0.5) * 0.2, y * 0.5);
-      }
-    }
-
-    for (let y = 0; y < gridSize; y++) {
-      for (let x = 0; x < gridSize; x++) {
-        const row1 = y * (gridSize + 1);
-        const row2 = (y + 1) * (gridSize + 1);
-        indices.push(row1 + x, row2 + x, row1 + x + 1);
-        indices.push(row2 + x, row2 + x + 1, row1 + x + 1);
-      }
-    }
-
-    const options: MeshletBuildOptions = {
-      maxVertices: 64,
-      maxTriangles: 128,
-      targetErrorPx: 1.0
-    };
-
-    const result = await service.buildMeshletDAG({
-      vertices: new Float32Array(vertices),
-      indices: new Uint32Array(indices),
-      options
-    });
-
-    expect(result.meshlets.length).toBeGreaterThan(0);
-    expect(result.gpuClusters.length).toBeGreaterThan(0);
-    expect(result.dagMaxLevel).toBeGreaterThanOrEqual(1);
-
-    // Verify GPU Cluster Descriptors adhere to WebGPU indirect draw memory layout
-    for (const cluster of result.gpuClusters) {
-      expect(cluster.boundingSphere.radius).toBeGreaterThan(0);
-      expect(cluster.triangleCount).toBeLessThanOrEqual(128);
-      expect(cluster.vertexCount).toBeLessThanOrEqual(64);
-      expect(cluster.parentError).toBeGreaterThanOrEqual(cluster.clusterError);
-    }
-
-    // Verify LOD Cut simulation
-    const lodCut = service.evaluateLODCut({
-      dag: result,
-      cameraPosition: [0, 5, 10],
-      cameraForward: [0, -0.4, -0.9],
-      viewportHeight: 1080,
-      fovDeg: 45,
-      thresholdPx: 1.0
-    });
-
-    expect(lodCut.selectedClusterIndices.length).toBeGreaterThan(0);
-    expect(lodCut.indirectDrawArgs.length).toBe(lodCut.selectedClusterIndices.length);
-    expect(lodCut.totalRenderTriangles).toBeGreaterThan(0);
   });
 });

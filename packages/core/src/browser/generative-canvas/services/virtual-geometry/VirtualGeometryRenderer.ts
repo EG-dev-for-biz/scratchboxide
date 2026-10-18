@@ -250,6 +250,12 @@ fn fs(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
 }
 `;
 
+export class VirtualGeometryFetchError extends Error {
+    constructor(readonly status: number, readonly url: string) {
+        super(`Virtual geometry fetch failed: HTTP ${status} (${url})`);
+    }
+}
+
 interface OrbitCamera {
     target: [number, number, number];
     yaw: number;
@@ -386,7 +392,7 @@ export class VirtualGeometryRenderer {
         this.abort?.abort();
         this.abort = new AbortController();
         const response = await fetch(url, { signal: this.abort.signal });
-        if (!response.ok || !response.body) throw new Error(`Virtual geometry fetch failed: ${response.status} ${response.statusText} (${url})`);
+        if (!response.ok || !response.body) throw new VirtualGeometryFetchError(response.status, url);
 
         const reader = response.body.getReader();
         // Until the header is known the bytes accumulate in a growing buffer; after that they land

@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import { execFile } from 'child_process';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { promisify } from 'util';
@@ -89,6 +90,24 @@ export interface VirtualGeometryBuildResult {
     buildMs: number;
 }
 
+export interface ServedVirtualGeometry {
+    /** URL the app serves the file at (VIRTUAL_GEOMETRY_URL_PREFIX/<content hash>.sbvg). */
+    sbvgUrl: string;
+    sbvgPath: string;
+    /** True when a file for the same GLB bytes already existed; stats are only known for a fresh build. */
+    cached: boolean;
+    stats?: VirtualGeometryBuildStats;
+    buildMs?: number;
+}
+
+/** URL prefix the desktop server serves virtualGeometryServeDir() at. */
+export const VIRTUAL_GEOMETRY_URL_PREFIX = '/build/3d-virtual-geometry';
+
+/** Directory built .sbvg files are written to and served from (relative to the server's working directory). */
+export function virtualGeometryServeDir(): string {
+    return path.resolve(process.cwd(), 'build', '3d-virtual-geometry');
+}
+
 export class VirtualGeometryBuildError extends Error {
     constructor(message: string, readonly output?: string) {
         super(message);
@@ -102,6 +121,7 @@ export class VirtualGeometryBuildError extends Error {
 export class VirtualGeometryBuildService {
     private binary: Promise<string> | null = null;
     private compileMs = 0;
+    private served = new Map<string, Promise<ServedVirtualGeometry>>();
 
     constructor(private readonly compiler: NativeCppCompilerService = NativeCppCompilerService.getInstance()) {}
 
@@ -143,4 +163,30 @@ export class VirtualGeometryBuildService {
             throw new VirtualGeometryBuildError(`Virtual geometry build failed: ${detail}`, err?.stderr);
         }
     }
+
+    /**
+     * Builds `inputGlbPath` into the served directory, keyed by the GLB's content hash so a model is
+     * built once and keeps a stable URL. Concurrent calls for the same bytes share one build.
+     */
+    async buildServed(inputGlbPath: string): Promise<ServedVirtualGeometry> {
+        if (!fs.existsSync(inputGlbPath)) throw new VirtualGeometryBuildError(`Input GLB not found: ${inputGlbPath}`);
+        const hash = crypto.createHash('sha256').update(fs.readFileSync(inputGlbPath)).digest('hex').slice(0, 32);
+        const sbvgPath = path.join(virtualGeometryServeDir(), `${hash}.sbvg`);
+        const sbvgUrl = `${VIRTUAL_GEOMETRY_URL_PREFIX}/${hash}.sbvg`;
+        if (fs.existsSync(sbvgPath)) return { sbvgUrl, sbvgPath, cached: true };
+        let job = this.served.get(hash);
+        if (!job) {
+            job = this.build(inputGlbPath, sbvgPath).then(r => ({ sbvgUrl, sbvgPath, cached: false, stats: r.stats, buildMs: r.buildMs }));
+            this.served.set(hash, job);
+            job.finally(() => this.served.delete(hash)).catch(() => undefined);
+        }
+        return job;
+    }
+}
+
+let shared: VirtualGeometryBuildService | null = null;
+/** Process-wide service, so the HTTP route and the agent tool share one compiled builder and one build queue. */
+export function getVirtualGeometryBuildService(): VirtualGeometryBuildService {
+    shared ??= new VirtualGeometryBuildService();
+    return shared;
 }

@@ -19,6 +19,7 @@ import { MetricCardsPrimitive } from '../primitives/MetricCardsPrimitive';
 import { NodeGraphPrimitive } from '../primitives/NodeGraphPrimitive';
 import { Scene3DPrimitive } from '../primitives/Scene3DPrimitive';
 import { VideoTimelinePrimitive } from '../primitives/VideoTimelinePrimitive';
+import { VirtualGeometryViewport } from '../primitives/VirtualGeometryViewport';
 import { morphArtifact } from '../primitive-transformer-engine';
 import { ArtifactStageProps } from './artifact-stage-props';
 
@@ -284,6 +285,14 @@ export const BoardGraphSpatialSurfaces: React.FC<ArtifactStageProps> = props => 
         {layoutMode === '3d' && (
             <div className="sb-3d-stage-wrapper w-full h-full flex flex-col items-center justify-start overflow-hidden flex-1 min-h-0">
                 <CanvasErrorBoundary fallbackTitle="3D Scene Viewport">
+                    {activeArtifact?.type === '3d-scene' && (activeArtifact.data as Scene3DData)?.virtualGeometry ? (
+                    <VirtualGeometryViewport
+                        key={`${activeArtifact.id}-virtual-geometry`}
+                        data={activeArtifact.data as Scene3DData}
+                        workspacePath={activeWorkspace?.path}
+                        onUpdate={updatedData => handleUpdateArtifact({ ...activeArtifact, data: updatedData })}
+                    />
+                    ) : (
                     <Scene3DPrimitive
                         key={activeArtifact?.id || 'scene-3d-primitive'}
                         data={(() => {
@@ -323,6 +332,7 @@ export const BoardGraphSpatialSurfaces: React.FC<ArtifactStageProps> = props => 
                         onPromptAction={promptText => handleSurfaceAiPrompt(promptText)}
                         onMorphArtifact={handleMorphArtifact}
                     />
+                    )}
                 </CanvasErrorBoundary>
             </div>
         )}

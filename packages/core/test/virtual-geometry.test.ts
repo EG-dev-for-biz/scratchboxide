@@ -22,7 +22,8 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { VirtualGeometryBuildService, VirtualGeometryBuildError } from '../src/node/3d-engine/virtual-geometry-service';
+import { VirtualGeometryBuildService, VirtualGeometryBuildError, virtualGeometryServeDir } from '../src/node/3d-engine/virtual-geometry-service';
+import { virtualGeometryHandlers } from '../src/node/gemini/tools/virtual-geometry-tools';
 import { parseSbvgHeader, splitSbvgLevelBlock, SBVG_CLUSTER_WORDS, type SbvgHeader } from '../src/browser/generative-canvas/services/virtual-geometry/sbvg-format';
 import { requireAll, requireBinary, requireFile, withReason, REPO_ROOT } from './helpers/requirements';
 import { webgpuChrome, withWebGpuPage } from './helpers/webgpu-chrome';
@@ -263,6 +264,30 @@ describe.skipIf(!clang.ok)(withReason('Virtual geometry builder (C++20 cluster L
         await expect(service.build(bad, path.join(tmp, 'bad.sbvg'))).rejects.toThrow(/not a GLB file/);
         await expect(service.build(bad, path.join(tmp, 'bad.sbvg'))).rejects.toBeInstanceOf(VirtualGeometryBuildError);
         expect(fs.existsSync(path.join(tmp, 'bad.sbvg'))).toBe(false);
+    });
+
+    it('virtual_geometry_open_glb builds a served file and mounts a scene for it; refuses paths outside the workspace', async () => {
+        const ctx = { workspaceRoot: tmp } as any;
+        const ok: any = await virtualGeometryHandlers.virtual_geometry_open_glb({ glbPath: 'sphere.glb', errorThresholdPx: 2 }, ctx);
+        const vg = ok.resultPayload.artifact.data.virtualGeometry;
+        expect(ok.resultPayload.artifact.type).toBe('3d-scene');
+        expect(vg).toMatchObject({ sourceGlbPath: 'sphere.glb', errorThresholdPx: 2 });
+        expect(vg.sbvgUrl).toMatch(/^\/build\/3d-virtual-geometry\/[0-9a-f]{32}\.sbvg$/);
+        const served = path.join(virtualGeometryServeDir(), path.basename(vg.sbvgUrl));
+        expect(parseSbvgHeader(new Uint8Array(fs.readFileSync(served))).leafTriangleCount).toBe(sphere.header.leafTriangleCount);
+        // Same bytes, same URL, no second build.
+        const again: any = await virtualGeometryHandlers.virtual_geometry_open_glb({ glbPath: 'sphere.glb' }, ctx);
+        expect(again.resultPayload.sbvgUrl).toBe(vg.sbvgUrl);
+        expect(again.resultPayload.cached).toBe(true);
+
+        const outside: any = await virtualGeometryHandlers.virtual_geometry_open_glb({ glbPath: '../../etc/passwd' }, ctx);
+        expect(outside.status).toBe('failed');
+        expect(outside.resultPayload.error).toMatch(/outside the workspace/);
+        const missing: any = await virtualGeometryHandlers.virtual_geometry_open_glb({ glbPath: 'nope.glb' }, ctx);
+        expect(missing.resultPayload.error).toMatch(/does not exist/);
+        const notGlb: any = await virtualGeometryHandlers.virtual_geometry_open_glb({ glbPath: 'bad.glb' }, ctx);
+        expect(notGlb.status).toBe('failed');
+        expect(notGlb.resultPayload.error).toMatch(/not a GLB file/);
     });
 
     const arch = requireFile(ARCH_GLB, 'checked-in asset');
