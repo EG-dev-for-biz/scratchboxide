@@ -2167,7 +2167,7 @@ export class UniversalArchiBridgeService {
             });
             outputVertices = amphRes.telemetry.synthesizedVertices;
             outputTriangles = amphRes.telemetry.synthesizedTriangles;
-            inversionRan = true;
+            inversionRan = amphRes.telemetry.inversionRan;
             if (fs.existsSync(outputGlb)) {
                 glbBuffer = fs.readFileSync(outputGlb);
             }

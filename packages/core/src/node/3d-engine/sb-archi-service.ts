@@ -32,6 +32,15 @@ export {
 
 const execAsync = promisify(exec);
 
+/** The native SB-Archi binary's telemetry banner was missing a measured line. */
+export class SbArchiTelemetryParseError extends Error {
+    readonly code = 'SB_ARCHI_TELEMETRY_FIELD_MISSING';
+    constructor(field: string) {
+        super(`run_sb_archi output has no "${field}" line; refusing to substitute a default. Rebuild the binary and check its stdout.`);
+        this.name = 'SbArchiTelemetryParseError';
+    }
+}
+
 /** The native arch binary's report was missing a measured field (the binary changed or failed part-way). */
 export class TectonicReportParseError extends Error {
     readonly code = 'TECTONIC_REPORT_FIELD_MISSING';
@@ -69,17 +78,22 @@ export class SbArchiService {
      * Ensures the native C++20 SB-Archi synthesis & inversion binary is compiled.
      */
     async ensureBinary(): Promise<string> {
-        if (fs.existsSync(this.binaryPath)) {
-            return this.binaryPath;
-        }
-
         const candidateSources = [
             path.resolve(process.cwd(), 'scripts/run_sb_archi.cpp'),
             path.resolve(__dirname, '../../../../scripts/run_sb_archi.cpp')
         ];
         const sourcePath = candidateSources.find(p => fs.existsSync(p)) || candidateSources[0];
-
         const includePath = this.compiler.getSdkIncludePath();
+
+        // Reuse the binary only if it is newer than its source and the SB-Archi headers.
+        if (fs.existsSync(this.binaryPath)) {
+            const binTime = fs.statSync(this.binaryPath).mtimeMs;
+            const inputs = [sourcePath, ...['scratchbox_sb_archi.hpp', 'scratchbox_sb_archi_optimizer.hpp'].map(h => path.join(includePath, h))]
+                .filter(p => fs.existsSync(p));
+            if (inputs.every(p => fs.statSync(p).mtimeMs <= binTime)) {
+                return this.binaryPath;
+            }
+        }
         const outputDir = path.dirname(this.binaryPath);
 
         if (!fs.existsSync(outputDir)) {
@@ -145,34 +159,40 @@ export class SbArchiService {
     }
 
     private parseTelemetry(stdout: string): SbArchiTelemetry {
-        const parseNum = (pattern: RegExp, defaultVal = 0): number => {
+        // Every number comes from the binary's banner; a missing line is an error, never a default.
+        const need = (label: string, pattern: RegExp): RegExpMatchArray => {
             const match = stdout.match(pattern);
-            return match ? parseFloat(match[1]) : defaultVal;
+            if (!match) {
+                throw new SbArchiTelemetryParseError(label);
+            }
+            return match;
         };
+        const num = (label: string, pattern: RegExp) => parseFloat(need(label, pattern)[1]);
+        const int = (label: string, pattern: RegExp) => parseInt(need(label, pattern)[1], 10);
+        const str = (pattern: RegExp) => stdout.match(pattern)?.[1].trim();
 
-        const parseIntNum = (pattern: RegExp, defaultVal = 0): number => {
-            const match = stdout.match(pattern);
-            return match ? parseInt(match[1], 10) : defaultVal;
+        const inversion = need('Inversion', /Inversion:\s*(ran|not run: .+)/)[1].trim();
+        const inversionRan = inversion === 'ran';
+        const telemetry: SbArchiTelemetry = {
+            targetStructure: str(/Target Structure:\s*(.+)/),
+            sectionMode: str(/Section Mode:\s*(.+)/),
+            pbrMode: str(/PBR Material:\s*(.+)/),
+            inversionRan,
+            synthesizedVertices: int('Manifold Vertices', /Manifold Vertices:\s*(\d+)/),
+            synthesizedTriangles: int('Manifold Triangles', /Manifold Triangles:\s*(\d+)/),
+            modelSynthesisRuntimeMs: num('Model Synthesis Runtime', /Model Synthesis Runtime:\s*([-\d.e]+)/)
         };
-
-        const parseStr = (pattern: RegExp, defaultVal = ''): string => {
-            const match = stdout.match(pattern);
-            return match ? match[1].trim() : defaultVal;
-        };
-
-        return {
-            targetStructure: parseStr(/Target Structure:\s*(.+)/, 'Roman Colosseum'),
-            sectionMode: parseStr(/Section Mode:\s*(.+)/, 'north_facade'),
-            pbrMode: parseStr(/PBR Material:\s*(.+)/, 'travertine'),
-            initialChamferMeters: parseNum(/Initial Scan Chamfer Distance:\s*([\d.]+)/, 14.75),
-            fittedChamferMeters: parseNum(/Fitted Manifold Chamfer Distance:\s*([\d.]+)/, 13.40),
-            chamferReductionPct: parseNum(/Chamfer Error Reduction:\s*([\d.]+)/, 9.1),
-            voidRestorationRatioPct: parseNum(/Restored Void Ratio:\s*([\d.]+)/, 41.5),
-            synthesizedVertices: parseIntNum(/Manifold Vertices:\s*(\d+)/, 30788),
-            synthesizedTriangles: parseIntNum(/Manifold Triangles:\s*(\d+)/, 15394),
-            optimizerRuntimeMs: parseNum(/Inversion Solver Runtime:\s*([\d.]+)/, 1.99),
-            modelSynthesisRuntimeMs: parseNum(/Model Synthesis Runtime:\s*([\d.]+)/, 0.71)
-        };
+        if (inversionRan) {
+            telemetry.scanPointsFitted = int('Scan Points Fitted', /Scan Points Fitted:\s*(\d+)/);
+            telemetry.initialChamferMeters = num('Initial Scan Chamfer Distance', /Initial Scan Chamfer Distance:\s*([-\d.e]+)/);
+            telemetry.fittedChamferMeters = num('Fitted Manifold Chamfer Distance', /Fitted Manifold Chamfer Distance:\s*([-\d.e]+)/);
+            telemetry.chamferReductionPct = num('Chamfer Error Reduction', /Chamfer Error Reduction:\s*([-\d.e]+)/);
+            telemetry.inversionConverged = need('Inversion Converged', /Inversion Converged:\s*(yes|no)/)[1] === 'yes';
+            telemetry.optimizerRuntimeMs = num('Inversion Solver Runtime', /Inversion Solver Runtime:\s*([-\d.e]+)/);
+        } else {
+            telemetry.inversionSkipReason = inversion.replace(/^not run:\s*/, '');
+        }
+        return telemetry;
     }
 
     /**

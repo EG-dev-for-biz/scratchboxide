@@ -8,7 +8,6 @@
  * scans (Google Maps 3D Tiles, aerial meshes):
  * - Fits elliptical semi-major/minor axes (a, b), height, and yaw orientation
  * - Chamfer distance residual minimization
- * - Void opening ratio computation (restoring hollow see-through arches)
  * - Telemetry reporting for pipeline auditing and visual criticism
  ********************************************************************************/
 
@@ -38,19 +37,19 @@ struct SbArchiInversionMetrics {
     float initialChamferMeters = 0.0f;
     float fittedChamferMeters = 0.0f;
     float chamferReductionPct = 0.0f;
-    float voidRestorationRatioPct = 0.0f; // Percentage of hollow open space carved from solid scan
     int scanPointsEvaluated = 0;
     int synthesizedVertices = 0;
     int synthesizedTriangles = 0;
     float optimizerRuntimeMs = 0.0f;
-    bool converged = false;
+    bool converged = false;      // true only when a full descent pass found no further improvement
+    int iterationsRun = 0;
 
-    // Optimized parameters
-    float fittedSemiMajorAxisA = 94.0f;
-    float fittedSemiMinorAxisB = 78.0f;
-    float fittedTotalHeight = 48.5f;
-    Vec3 fittedCenter{ -43.42f, 42.5f, 62.54f };
-    float fittedYawRad = 0.6273f;
+    // Optimized parameters (meaningful only when scanPointsEvaluated > 0)
+    float fittedSemiMajorAxisA = 0.0f;
+    float fittedSemiMinorAxisB = 0.0f;
+    float fittedTotalHeight = 0.0f;
+    Vec3 fittedCenter{ 0.0f, 0.0f, 0.0f };
+    float fittedYawRad = 0.0f;
 };
 
 class SbArchiOptimizer {
@@ -68,7 +67,7 @@ public:
         outOptimizedParams = nominalParams;
 
         if (scanPoints.empty()) {
-            metrics.converged = true;
+            // Nothing to fit against: not converged, parameters left at nominal.
             return metrics;
         }
 
@@ -116,7 +115,9 @@ public:
         float stepB = 0.5f;
         float stepYaw = 0.005f;
 
+        bool settled = false;
         for (int iter = 0; iter < maxIterations; ++iter) {
+            metrics.iterationsRun = iter + 1;
             bool improved = false;
 
             // Perturb semi-major axis A
@@ -165,7 +166,7 @@ public:
             stepB *= 0.85f;
             stepYaw *= 0.85f;
 
-            if (!improved && iter > 5) break;
+            if (!improved && iter > 5) { settled = true; break; }
         }
 
         // 4. Compute final fitted Chamfer distance
@@ -173,19 +174,12 @@ public:
         metrics.chamferReductionPct = ((metrics.initialChamferMeters - metrics.fittedChamferMeters) /
                                        std::max(0.001f, metrics.initialChamferMeters)) * 100.0f;
 
-        // 5. Calculate Void Restoration Ratio:
-        // In the raw photogrammetric scan, arches are solid filled blocks.
-        // In the classical Roman arcade, ~41.5% of the outer envelope volume is hollow open space (archways + vomitoria).
-        // Restoring open geometry gives a canonical void ratio.
-        float archVolumeFraction = 0.415f;
-        metrics.voidRestorationRatioPct = archVolumeFraction * 100.0f;
-
         metrics.fittedSemiMajorAxisA = bestA;
         metrics.fittedSemiMinorAxisB = bestB;
         metrics.fittedTotalHeight = bestH;
         metrics.fittedCenter = bestCenter;
         metrics.fittedYawRad = bestYaw;
-        metrics.converged = true;
+        metrics.converged = settled;
 
         auto tEnd = std::chrono::high_resolution_clock::now();
         metrics.optimizerRuntimeMs = std::chrono::duration<float, std::milli>(tEnd - tStart).count();

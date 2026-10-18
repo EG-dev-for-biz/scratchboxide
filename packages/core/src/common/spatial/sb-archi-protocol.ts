@@ -49,13 +49,19 @@ export interface SbArchiTelemetry {
     targetStructure?: string;
     sectionMode?: string;
     pbrMode?: string;
-    initialChamferMeters: number;
-    fittedChamferMeters: number;
-    chamferReductionPct: number;
-    voidRestorationRatioPct: number;
+    /** True only when the Chamfer inversion actually ran against scan points. */
+    inversionRan: boolean;
+    /** Why the inversion did not run (no scan, disabled, no points in band). */
+    inversionSkipReason?: string;
+    /** Present only when inversionRan. */
+    scanPointsFitted?: number;
+    initialChamferMeters?: number;
+    fittedChamferMeters?: number;
+    chamferReductionPct?: number;
+    inversionConverged?: boolean;
+    optimizerRuntimeMs?: number;
     synthesizedVertices: number;
     synthesizedTriangles: number;
-    optimizerRuntimeMs: number;
     modelSynthesisRuntimeMs: number;
 }
 

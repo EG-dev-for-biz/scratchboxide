@@ -10,6 +10,8 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
+import { SbArchiTelemetryParseError } from '../src/node/3d-engine/sb-archi-service';
 import {
     SbArchiService,
     NativeCppCompilerService
@@ -65,7 +67,10 @@ describe('SB-Archi Monumental Architecture Inversion Service (C++20)', () => {
         expect(result.telemetry).toBeDefined();
         expect(result.telemetry.targetStructure).toContain('Colosseum');
         expect(result.telemetry.sectionMode).toBe('north_facade');
-        expect(result.telemetry.voidRestorationRatioPct).toBeGreaterThanOrEqual(40.0);
+        expect(result.telemetry).not.toHaveProperty('voidRestorationRatioPct');
+        expect(result.telemetry.inversionRan).toBe(true);
+        expect(result.telemetry.scanPointsFitted).toBeGreaterThan(0);
+        expect(Number.isFinite(result.telemetry.fittedChamferMeters)).toBe(true);
         expect(result.telemetry.synthesizedTriangles).toBeGreaterThan(10000);
         expect(result.telemetry.modelSynthesisRuntimeMs).toBeLessThan(100.0);
         expect(fs.existsSync(result.glbPath)).toBe(true);
@@ -76,4 +81,35 @@ describe('SB-Archi Monumental Architecture Inversion Service (C++20)', () => {
         const magic = glbBuffer.toString('utf8', 0, 4);
         expect(magic).toBe('glTF');
     }, 30000);
+
+    it('4. without a scan the inversion is reported as not run, with no Chamfer numbers', async () => {
+        const out = path.join(os.tmpdir(), `sb_archi_noscan_${Date.now()}.glb`);
+        const result = await service.invertColosseumFacade({
+            inputGlbPath: path.join(os.tmpdir(), 'definitely_missing_scan.glb'),
+            outputGlbPath: out,
+            runInversion: false
+        });
+        expect(result.telemetry.inversionRan).toBe(false);
+        expect(result.telemetry.inversionSkipReason).toContain('--no-invert');
+        expect(result.telemetry.initialChamferMeters).toBeUndefined();
+        expect(result.telemetry.fittedChamferMeters).toBeUndefined();
+        expect(result.telemetry.chamferReductionPct).toBeUndefined();
+        expect(result.telemetry.synthesizedTriangles).toBeGreaterThan(10000);
+        expect(fs.readFileSync(out).toString('utf8', 0, 4)).toBe('glTF');
+
+        // Feeding that arcade back in as the scan makes the solver actually run.
+        const out2 = path.join(os.tmpdir(), `sb_archi_selfscan_${Date.now()}.glb`);
+        const fitted = await service.invertColosseumFacade({ inputGlbPath: out, outputGlbPath: out2 });
+        expect(fitted.telemetry.inversionRan).toBe(true);
+        expect(fitted.telemetry.scanPointsFitted).toBeGreaterThan(1000);
+        expect(fitted.telemetry.initialChamferMeters).toBeGreaterThan(0);
+        expect(fitted.telemetry.fittedChamferMeters).toBeLessThanOrEqual(fitted.telemetry.initialChamferMeters!);
+        expect(typeof fitted.telemetry.inversionConverged).toBe('boolean');
+        fs.rmSync(out, { force: true });
+        fs.rmSync(out2, { force: true });
+    }, 60000);
+
+    it('5. a banner missing a measured line is an error, not a canned default', () => {
+        expect(() => (service as any).parseTelemetry('')).toThrow(SbArchiTelemetryParseError);
+    });
 });

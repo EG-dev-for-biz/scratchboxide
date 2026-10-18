@@ -237,7 +237,9 @@ describe('UniversalArchiBridgeService (Spatial Separator to SB-Archi)', () => {
 
         expect(result.telemetry.outputVertices).toBeGreaterThan(50000);
         expect(result.telemetry.outputTriangles).toBeGreaterThan(25000);
-        expect(result.telemetry.inversionRan).toBe(true);
+        // The Chamfer inversion only runs when a Colosseum scan is on disk; otherwise it must say so.
+        const scanOnDisk = fs.existsSync(path.resolve(process.cwd(), 'public/models/colosseum_clay.glb'));
+        expect(result.telemetry.inversionRan).toBe(scanOnDisk);
         expect(result.telemetry.isManifold).toBe(true);
     }, 45000);
 
