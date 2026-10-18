@@ -310,3 +310,25 @@ async function runGoogleMapsServiceTests() {
 test('google-maps-service.test', async () => {
     await runGoogleMapsServiceTests();
 }, 180_000);
+
+test('geocode answers a repeated query from its cache (one Places call), per transport and key, and never caches a failure', async () => {
+    const service = GoogleMapsService.getInstance();
+    let calls = 0;
+    const placesFetch = (async () => {
+        calls++;
+        return new Response(JSON.stringify({ places: [{ displayName: { text: 'Flatiron Building' }, formattedAddress: '175 5th Ave, New York, NY 10010, USA', location: { latitude: 40.7411, longitude: -73.9897 } }] }), { status: 200 });
+    }) as typeof fetch;
+    const a = await service.geocode('Flatiron Building NYC', { fetchImpl: placesFetch, apiKey: 'k1' });
+    const b = await service.geocode('  flatiron   building nyc ', { fetchImpl: placesFetch, apiKey: 'k1' });
+    assert.strictEqual(calls, 1, 'second lookup served from the cache');
+    assert.deepStrictEqual(b, a);
+    b.lat = 0;
+    assert.strictEqual((await service.geocode('Flatiron Building NYC', { fetchImpl: placesFetch, apiKey: 'k1' })).lat, 40.7411, 'callers get copies');
+    await service.geocode('Flatiron Building NYC', { fetchImpl: placesFetch, apiKey: 'k2' });
+    assert.strictEqual(calls, 2, 'another key asks Places');
+    let failing = 0;
+    const empty = (async () => { failing++; return new Response('{}', { status: 200 }); }) as typeof fetch;
+    await assert.rejects(service.geocode('zzqx nowhere', { fetchImpl: empty, apiKey: 'k1' }), LocationUnresolvedError);
+    await assert.rejects(service.geocode('zzqx nowhere', { fetchImpl: empty, apiKey: 'k1' }), LocationUnresolvedError);
+    assert.strictEqual(failing, 2, 'failures are not cached');
+});

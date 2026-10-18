@@ -68,6 +68,8 @@ export interface PnPRansacOptions extends PnPOptions {
     maxRansacIterations?: number;
     /** Desired probability of finding an all-inlier sample (default: 0.99) */
     confidence?: number;
+    /** Seed of the sample draws, so the same correspondences give the same pose (default: 1). */
+    seed?: number;
 }
 
 export interface PnPRansacResult {
@@ -1208,12 +1210,21 @@ export class SpatialPoseEstimatorService {
         // With exactly the minimal sample size every draw is the full set: evaluate it once.
         let iterations = n === PNP_RANSAC_SAMPLE_SIZE ? 1 : maxRansacIterations;
         const confidence = Math.min(0.999999, Math.max(0.5, options.confidence ?? 0.99));
+        // Seeded draws (mulberry32): the same input gives the same hypotheses and the same pose.
+        let rngState = (options.seed ?? 1) >>> 0;
+        const random = () => {
+            rngState = (rngState + 0x6d2b79f5) >>> 0;
+            let z = rngState;
+            z = Math.imul(z ^ (z >>> 15), z | 1);
+            z ^= z + Math.imul(z ^ (z >>> 7), z | 61);
+            return ((z ^ (z >>> 14)) >>> 0) / 4294967296;
+        };
 
         for (let iter = 0; iter < iterations; iter++) {
             // Sample distinct random points
             const sampleIndices: number[] = [];
             while (sampleIndices.length < PNP_RANSAC_SAMPLE_SIZE) {
-                const idx = Math.floor(Math.random() * n);
+                const idx = Math.floor(random() * n);
                 if (!sampleIndices.includes(idx)) {
                     sampleIndices.push(idx);
                 }
@@ -1223,10 +1234,10 @@ export class SpatialPoseEstimatorService {
             const sample2D = sampleIndices.map(i => points2D[i]);
 
             try {
-                // Refine candidate hypothesis with small number of LM iterations
+                // A minimal sample's closed-form pose (EPnP + P3P) fits it exactly; refining it is wasted work
+                // before its inliers are counted. Only the winner is refined, on all of its inliers, below.
                 const candidatePose = this.solvePnP(sample3D, sample2D, intrinsics, {
-                    refineLevenbergMarquardt: true,
-                    maxIterations: 8
+                    refineLevenbergMarquardt: false
                 });
 
                 const currentInliers = measureInliers(candidatePose);

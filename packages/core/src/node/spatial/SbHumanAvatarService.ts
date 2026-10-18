@@ -35,7 +35,7 @@ import {
     decodeSurfaceGlb
 } from './PerformerSurfaceMeshService';
 import { GvhmrBody, GvhmrBodyService } from './GvhmrBodyService';
-import { Dynamic4DGaussianSplatService, HumanoidMotionData } from '../3d-engine/Dynamic4DGaussianSplatService';
+import { Dynamic4DGaussianSplatService, motionSummary, HumanoidMotionData } from '../3d-engine/Dynamic4DGaussianSplatService';
 
 /** The actor lacks the data needed to pose it (skin weights, a motion track, or canonical joints). */
 export class AvatarSkinningDataMissingError extends PipelineError {
@@ -448,12 +448,11 @@ export class SbHumanAvatarService {
                 let frameCount = 0;
                 let fps = 25.0;
                 if (fs.existsSync(motionPath)) {
-                    try {
-                        const m = JSON.parse(fs.readFileSync(motionPath, 'utf-8'));
-                        frameCount = Array.isArray(m) ? m.length : (m.frames?.length ?? 0);
+                    // Read once per motion.json version (listActors runs on every actor lookup).
+                    const m = motionSummary(motionPath);
+                    if (m) {
+                        frameCount = m.framesArrayLength;
                         if (m.fps) fps = m.fps;
-                    } catch {
-                        // Ignore
                     }
                 }
 

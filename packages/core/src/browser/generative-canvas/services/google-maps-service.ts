@@ -281,6 +281,12 @@ export class GoogleMapsService {
     private static instance: GoogleMapsService;
 
     private elevationCache: Map<string, number> = new Map();
+    /**
+     * Places Text Search answers by query, most recently used last (Map insertion order), per transport so an
+     * injected fetch never sees another's answers. Only resolved places are kept; failures are asked again.
+     */
+    private geocodeCache = new WeakMap<typeof fetch, Map<string, GeocodeResult>>();
+    private static readonly GEOCODE_CACHE_SIZE = 256;
 
     private state: GoogleMapsState = {
         apiKey: '',
@@ -494,6 +500,17 @@ export class GoogleMapsService {
             throw new LocationUnresolvedError(cleanQuery, 'this runtime has no fetch, so Google Places cannot be called');
         }
 
+        // Same text and key, same answer: Places is not asked again for a query this process already resolved.
+        const cacheKey = `${key}\u0000${cleanQuery.toLowerCase().replace(/\s+/g, ' ')}`;
+        let lru = this.geocodeCache.get(fetchImpl);
+        if (!lru) this.geocodeCache.set(fetchImpl, (lru = new Map()));
+        const hit = lru.get(cacheKey);
+        if (hit) {
+            lru.delete(cacheKey);
+            lru.set(cacheKey, hit);
+            return this.remember(cleanQuery, structuredClone(hit));
+        }
+
         let response: Response;
         try {
             response = await fetchImpl(PLACES_TEXT_SEARCH_URL, {
@@ -547,6 +564,8 @@ export class GoogleMapsService {
                 }
             } : {})
         };
+        lru.set(cacheKey, structuredClone(result));
+        if (lru.size > GoogleMapsService.GEOCODE_CACHE_SIZE) lru.delete(lru.keys().next().value as string);
         return this.remember(cleanQuery, result);
     }
 

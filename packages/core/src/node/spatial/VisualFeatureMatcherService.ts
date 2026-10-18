@@ -207,8 +207,11 @@ export class VisualFeatureMatcherService {
             return [];
         }
 
-        // Forward match: for each k1, find closest and 2nd closest in k2
+        // Forward match: for each k1, find closest and 2nd closest in k2. The distances are kept for the reverse
+        // pass (the distance is symmetric), so each descriptor pair is compared once.
         const forwardMatches: { index2: number; dist: number }[] = [];
+        const n2 = keypoints2.length;
+        const distances = crossCheck ? new Float64Array(keypoints1.length * n2) : undefined;
 
         for (let i = 0; i < keypoints1.length; i++) {
             const desc1 = keypoints1[i].descriptor;
@@ -216,8 +219,9 @@ export class VisualFeatureMatcherService {
             let secondBestDist = Infinity;
             let bestIdx = -1;
 
-            for (let j = 0; j < keypoints2.length; j++) {
+            for (let j = 0; j < n2; j++) {
                 const dist = this.euclideanDistance(desc1, keypoints2[j].descriptor);
+                if (distances) distances[i * n2 + j] = dist;
                 if (dist < bestDist) {
                     secondBestDist = bestDist;
                     bestDist = dist;
@@ -240,13 +244,12 @@ export class VisualFeatureMatcherService {
         if (crossCheck) {
             backwardMatches = new Array(keypoints2.length).fill(-1);
             for (let j = 0; j < keypoints2.length; j++) {
-                const desc2 = keypoints2[j].descriptor;
                 let bestDist = Infinity;
                 let secondBestDist = Infinity;
                 let bestIdx = -1;
 
                 for (let i = 0; i < keypoints1.length; i++) {
-                    const dist = this.euclideanDistance(desc2, keypoints1[i].descriptor);
+                    const dist = distances![i * n2 + j];
                     if (dist < bestDist) {
                         secondBestDist = bestDist;
                         bestDist = dist;

@@ -251,7 +251,8 @@ describe('GoogleTileDistrictCrawler: real leaf-tile district extraction', () => 
             return new Response(glb, { status: 200 });
         }) as typeof fetch;
         const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'leaf-cache-'));
-        const crawler = new GoogleTileDistrictCrawler({ apiKey: 'K', fetchImpl: fakeFetch, cacheDir });
+        // Walk the tileset every time here: the point is the leaf cache across sessions.
+        const crawler = new GoogleTileDistrictCrawler({ apiKey: 'K', fetchImpl: fakeFetch, cacheDir, traversalCacheTtlMs: 0 });
         const anchor = { lat: ANCHOR.lat, lng: ANCHOR.lng, heightGuessM: GROUND_H };
         const first = await crawler.collectLeafTiles(anchor, 50);
         await crawler.downloadLeaves(first.leaves, first.session);
@@ -261,6 +262,67 @@ describe('GoogleTileDistrictCrawler: real leaf-tile district extraction', () => 
         expect(second.leaves[0].id).toBe(first.leaves[0].id);
         await crawler.downloadLeaves(second.leaves, second.session);
         expect(glbFetches).toBe(1);
+    });
+
+    it('reuses a traversal for the same district (memory, then disk) and walks again once it expires', async () => {
+        const box = enuBox([2, 2, 0], [8, 8, 8]);
+        let jsonFetches = 0;
+        const tileset = () => ({ root: { boundingVolume: { box }, geometricError: 1e100, children: [{ boundingVolume: { box }, geometricError: 2.01, content: { uri: `/v1/3dtiles/datasets/X/files/t${jsonFetches}.glb?session=S${jsonFetches}` } }] } });
+        const fakeFetch = (async (input: any) => {
+            const url = new URL(String(input));
+            if (url.pathname.endsWith('.json')) { jsonFetches++; return new Response(JSON.stringify(tileset()), { status: 200 }); }
+            throw new Error('no leaf downloads in this test');
+        }) as typeof fetch;
+        const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'traversal-cache-'));
+        const anchor = { lat: ANCHOR.lat, lng: ANCHOR.lng, heightGuessM: GROUND_H };
+        const a = await new GoogleTileDistrictCrawler({ apiKey: 'K', fetchImpl: fakeFetch, cacheDir }).collectLeafTiles(anchor, 50);
+        expect(jsonFetches).toBe(1);
+        expect(a.traversalCache).toBeUndefined();
+        const b = await new GoogleTileDistrictCrawler({ apiKey: 'K', fetchImpl: fakeFetch, cacheDir }).collectLeafTiles(anchor, 50);
+        expect(jsonFetches).toBe(1);
+        expect(b.traversalCache).toBe('memory');
+        expect(b.leaves).toEqual(a.leaves);
+        expect(b.session).toBe(a.session);
+        // A new process (another transport) reads the file beside the leaf cache.
+        const otherFetch = ((input: any) => fakeFetch(input)) as typeof fetch;
+        const c = await new GoogleTileDistrictCrawler({ apiKey: 'K', fetchImpl: otherFetch, cacheDir }).collectLeafTiles(anchor, 50);
+        expect(jsonFetches).toBe(1);
+        expect(c.traversalCache).toBe('disk');
+        expect(c.leaves).toEqual(a.leaves);
+        // Another radius, another key, or an expired entry walks the tileset.
+        await new GoogleTileDistrictCrawler({ apiKey: 'K', fetchImpl: fakeFetch, cacheDir }).collectLeafTiles(anchor, 60);
+        expect(jsonFetches).toBe(2);
+        await new GoogleTileDistrictCrawler({ apiKey: 'K2', fetchImpl: fakeFetch, cacheDir }).collectLeafTiles(anchor, 50);
+        expect(jsonFetches).toBe(3);
+        await new Promise(r => setTimeout(r, 5));
+        const d = await new GoogleTileDistrictCrawler({ apiKey: 'K', fetchImpl: fakeFetch, cacheDir, traversalCacheTtlMs: 1 }).collectLeafTiles(anchor, 50);
+        expect(jsonFetches).toBe(4);
+        expect(d.traversalCache).toBeUndefined();
+        expect(d.session).not.toBe(a.session);
+        // The cache file holds no API key.
+        const files = fs.readdirSync(path.join(cacheDir, 'traversals'));
+        expect(files.length).toBeGreaterThan(0);
+        for (const f of files) expect(fs.readFileSync(path.join(cacheDir, 'traversals', f), 'utf8')).not.toContain('key=');
+    });
+
+    it('downloads up to 16 leaves at once by default and backs off on 429', async () => {
+        const glb = makeLeafGlb([[0, 0, 0], [5, 0, 0], [0, 5, 0]], [0, 1, 2]);
+        let inFlight = 0, peak = 0, throttled = 0;
+        const fakeFetch = (async (input: any) => {
+            const url = new URL(String(input));
+            if (url.pathname.endsWith('t3.glb') && throttled === 0) { throttled++; return new Response('', { status: 429 }); }
+            inFlight++; peak = Math.max(peak, inFlight);
+            await new Promise(r => setTimeout(r, 15));
+            inFlight--;
+            return new Response(glb, { status: 200 });
+        }) as typeof fetch;
+        const leaves = Array.from({ length: 40 }, (_, i) => ({ id: `id${i}`, path: `/v1/3dtiles/datasets/X/files/t${i}.glb`, geometricError: 2, depth: 3, box: [] }));
+        const bytes = await new GoogleTileDistrictCrawler({ apiKey: 'K', fetchImpl: fakeFetch }).downloadLeaves(leaves, 'S');
+        expect(bytes).toHaveLength(40);
+        // One slot sits out the 429 backoff, so 15-16 requests are on the wire at the peak (8 before).
+        expect(peak).toBeGreaterThanOrEqual(15);
+        expect(peak).toBeLessThanOrEqual(16);
+        expect(throttled).toBe(1);
     });
 
     it('writes a commit: GLB plus a manifest with anchor, frame, attribution, fetch time and a verified hash', async () => {

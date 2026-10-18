@@ -7,13 +7,14 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { mapLimit } from '../../common/map-limit';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import Pbf from 'pbf';
 import { VectorTile } from '@mapbox/vector-tile';
 import { decodeFeatureTile, type DecodedModeledVolume } from './google-feature-tile-decoder';
 import { fetchSolarDsm, type DsmRaster } from './solar-dsm';
-import { convexHull, densifyRoads, fuseBuilding, streetLevelNear, type FusedBuilding, type LngLat } from './building-shape-fusion';
+import { convexHull, densifyRoads, fuseBuilding, RoadPointIndex, streetLevelNear, type FusedBuilding, type LngLat } from './building-shape-fusion';
 import { geoidUndulation } from './egm96-geoid';
 import type { TileMeshRaycaster } from './tile-mesh-raycast';
 import { GltfBinaryPacker } from '../3d-engine/gltf-binary-packer';
@@ -345,10 +346,15 @@ export class EarClippingTriangulator {
 /**
  * Service for ingesting Google 2D roadmap vector tiles and staging 3D world populations.
  */
+/** Vector tiles fetched at once by the district builders (3x3 to 7x7 grids). */
+export const VECTOR_TILE_FETCH_CONCURRENCY = 6;
+
 export class GoogleVectorTileService {
     private static sessionToken: string | null = null;
     private static sessionPromise: Promise<string | null> | null = null;
     private static tileCache = new Map<string, DecodedVectorTileData>();
+    /** One credential request shared by the tiles fetched together (see VECTOR_TILE_FETCH_CONCURRENCY). */
+    private static pendingAuth?: { provider: () => Promise<{ token: string; project: string }>; promise: Promise<{ token: string; project: string }>; at: number };
 
     public static resolveApiKey(key?: string): string {
         tryLoadLocalEnv();
@@ -412,7 +418,7 @@ export class GoogleVectorTileService {
 
         // Google Vector Tiles (vectortiles.featuretiles): JSON, OAuth through an allowlisted project (API keys get
         // "Method not found"); languageCode and regionCode are required.
-        const auth = await this.authProvider();
+        const auth = await this.sharedAuth();
         const params = new URLSearchParams({
             enableModeledVolumes: 'true',
             alwaysIncludeBuildingFootprints: 'false',
@@ -441,6 +447,21 @@ export class GoogleVectorTileService {
         };
         this.tileCache.set(cacheKey, result);
         return result;
+    }
+
+    /**
+     * `authProvider`, shared: callers in flight together share one request, and the credential is reused for a few
+     * minutes (service-account tokens last an hour), so a district's tiles cost one token request, not one each.
+     */
+    private static sharedAuth(): Promise<{ token: string; project: string }> {
+        const provider = this.authProvider;
+        const held = this.pendingAuth;
+        if (held?.provider === provider && Date.now() - held.at < 5 * 60_000) return held.promise;
+        const promise = provider();
+        const entry = { provider, promise, at: Date.now() };
+        this.pendingAuth = entry;
+        promise.catch(() => { if (this.pendingAuth === entry) this.pendingAuth = undefined; });
+        return promise;
     }
 
     /**
@@ -584,21 +605,19 @@ export class GoogleVectorTileService {
         const allWater: VectorFeaturePolygon[] = [];
         const allModeled = new Map<string, DecodedModeledVolume>();
 
-        let tilesCount = 0;
-        for (let dx = -radius; dx <= radius; dx++) {
-            for (let dy = -radius; dy <= radius; dy++) {
-                const tx = centerTile.x + dx;
-                const ty = centerTile.y + dy;
-                tilesCount++;
-                const tileData = await this.fetchVectorTile(tx, ty, zoom, apiKey, fetchImpl);
-                allBuildings.push(...tileData.buildings);
-                for (const mv of tileData.modeledVolumes || []) allModeled.set(mv.id, mv);
-                if (options.includeRoads !== false) {
-                    allRoads.push(...tileData.roads);
-                }
-                if (options.includeWater !== false) {
-                    allWater.push(...tileData.water);
-                }
+        const tileXY: Array<[number, number]> = [];
+        for (let dx = -radius; dx <= radius; dx++) for (let dy = -radius; dy <= radius; dy++) tileXY.push([centerTile.x + dx, centerTile.y + dy]);
+        const tilesCount = tileXY.length;
+        // Tiles are fetched in parallel (bounded) and merged in grid order, so the output matches a sequential loop.
+        const fetched = await mapLimit(tileXY, VECTOR_TILE_FETCH_CONCURRENCY, ([tx, ty]) => this.fetchVectorTile(tx, ty, zoom, apiKey, fetchImpl));
+        for (const tileData of fetched) {
+            allBuildings.push(...tileData.buildings);
+            for (const mv of tileData.modeledVolumes || []) allModeled.set(mv.id, mv);
+            if (options.includeRoads !== false) {
+                allRoads.push(...tileData.roads);
+            }
+            if (options.includeWater !== false) {
+                allWater.push(...tileData.water);
             }
         }
 
@@ -652,7 +671,7 @@ export class GoogleVectorTileService {
                 fusionSkipped = err?.message || String(err);
             }
         } else fusionSkipped = 'disabled';
-        const roadPoints: LngLat[] = dsm ? densifyRoads(allRoads.map(r => r.points as LngLat[])) : [];
+        const roadPoints = new RoadPointIndex(dsm ? densifyRoads(allRoads.map(r => r.points as LngLat[])) : []);
         const measuredAnchor = dsm ? streetLevelNear(dsm, options.latitude, options.longitude, roadPoints, 80) : undefined;
         const anchorElevation = options.elevation ?? measuredAnchor ?? 0.0;
         const fusedStats = { fused: 0, dsm: 0, vector: 0, high: 0, medium: 0, low: 0 };
@@ -668,7 +687,7 @@ export class GoogleVectorTileService {
 
         // Prompt 5 of the alignment guide: seat each building on the 3D tile surface. A ray straight down at the
         // building centre hits its own roof in the photoreal mesh, so the street level is read on nearby roads.
-        const tileRoadPoints: LngLat[] = options.tileMesh ? (roadPoints.length ? roadPoints : densifyRoads(allRoads.map(r => r.points as LngLat[]))) : [];
+        const tileRoadPoints = options.tileMesh ? (roadPoints.points.length ? roadPoints : new RoadPointIndex(densifyRoads(allRoads.map(r => r.points as LngLat[])))) : new RoadPointIndex([]);
         const groundDiffs: number[] = [], roofDiffs: number[] = [];
         let snapped = 0;
         const tileGroundMsl = (ring: LngLat[]): number | undefined => {
@@ -676,7 +695,7 @@ export class GoogleVectorTileService {
             const c = ring.reduce((a, p) => [a[0] + p[0] / ring.length, a[1] + p[1] / ring.length], [0, 0]);
             const kx = 111_320 * Math.cos((c[1] * Math.PI) / 180);
             const hits: number[] = [];
-            for (const [lng, lat] of tileRoadPoints) {
+            for (const [lng, lat] of tileRoadPoints.near(c[0], c[1], 60)) {
                 if (Math.hypot((lng - c[0]) * kx, (lat - c[1]) * 111_320) > 60) continue;
                 const h = options.tileMesh.topHitMsl(lat, lng);
                 if (h !== undefined) hits.push(h);
