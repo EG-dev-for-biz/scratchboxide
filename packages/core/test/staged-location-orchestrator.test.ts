@@ -649,6 +649,38 @@ describe('a rerun reads the vision replies back', () => {
     });
 });
 
+describe('the passes overlap', () => {
+    it('the focused run readings run beside the wide reading (their calls overlap: wall time about the longer, not the sum)', async () => {
+        const sv = streetViewStandIn();
+        const calls: any[] = [], surveyCalls: any[] = [];
+        const base = visionClient(REPLY, calls, surveyCalls);
+        const spans: Array<{ kind: string; t0: number; t1: number }> = [];
+        const DELAY = 400;
+        const timed: VisionGenAIClient = { models: { generateContent: base.models.generateContent, generateContentStream: async (p: any) => {
+            const text = JSON.stringify(p.contents?.[0]?.parts?.filter((x: any) => x.text).map((x: any) => x.text) ?? []);
+            const kind = /reading ONE repeating/.test(text) ? 'run' : /reading architectural ornament/.test(text) ? 'wide' : 'other';
+            const t0 = Date.now();
+            if (kind !== 'other') await new Promise(r => setTimeout(r, DELAY));
+            spans.push({ kind, t0, t1: Date.now() });
+            return base.models.generateContentStream!(p);
+        } } };
+        const s = setup(ARCH, {}, { scanFit: fakeScanFit(path.join(TMP, 'sf-overlap')).deps, vision: { client: timed, candidates: ['gemini-4-argon'] }, streetView: sv.deps });
+        const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
+        const runs = spans.filter(x => x.kind === 'run'), wide = spans.filter(x => x.kind === 'wide');
+        expect(wide.length).toBeGreaterThan(0);
+        expect(runs.length).toBeGreaterThan(0);
+        expect(result.ornament!.runReadings!.read).toBeGreaterThan(0);
+        // a focused reading started before the wide reading's first call ended
+        expect(Math.min(...runs.map(r => r.t0))).toBeLessThan(Math.min(...wide.map(w => w.t1)));
+        // the model calls of the two passes overlap: their union is well under their sum
+        const all = [...wide, ...runs].sort((a, b) => a.t0 - b.t0);
+        let union = 0, end = -Infinity;
+        for (const x of all) { union += Math.max(0, x.t1 - Math.max(x.t0, end)); end = Math.max(end, x.t1); }
+        const sum = all.reduce((n, x) => n + (x.t1 - x.t0), 0);
+        expect(union).toBeLessThan(0.75 * sum);
+    });
+});
+
 describe('figures: scanned blobs on a fitted pedestal', () => {
     const run = async (name: string, deps: Record<string, unknown> = {}) => {
         figureBehaviour.calls.length = 0;

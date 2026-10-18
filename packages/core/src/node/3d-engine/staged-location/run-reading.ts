@@ -231,23 +231,24 @@ export async function readRuns(input: RunReadingInput): Promise<RunReadingResult
     return mergeRunReadings(input, await readRunTargets(input));
 }
 
-/** Steps 1-3: the views, the crops and one focused reading per target. Needs no wide reading. */
-export async function readRunTargets(input: Omit<RunReadingInput, 'base'>): Promise<RunTargetReadings> {
+/** Steps 1-2: the targets, their views and the crops, fetched. Needs no wide reading and no model. */
+export interface RunCrops {
+    report: RunReadingReport;
+    planned: Array<{ t: RunTarget; views: PlannedRunView[] }>;
+    wanted: Array<{ t: RunTarget; view: SelectedView }>;
+    imageFor: Map<SelectedView, EvidenceImage>;
+}
+
+export async function fetchRunCrops(input: Pick<RunReadingInput, 'fit' | 'located' | 'panos' | 'groundAt' | 'fallbackGroundY' | 'registration' | 'occluder' | 'streetView' | 'signal' | 'onProgress'>): Promise<RunCrops> {
     const { fit } = input;
-    // the pass's budget counts from here, so fetching the crops comes out of it too (the caller sizes it to the time it has left)
-    const budgetStarted = Date.now();
     const targets = selectRunTargets(input.located);
     const report: RunReadingReport = { targets: targets.length, read: 0, elements: 0, replaced: 0, skipped: [], perTarget: [] };
-    if (!targets.length) return { report, results: [] };
-    const solid: FittedShells | undefined = readFittedShells(fit);
-    const slotById = new Map(fit.slots.map(s => [s.id, s]));
-    const coverCache = new Map<string, import('./slot-cover').SlotCover | undefined>();
+    const imageFor = new Map<SelectedView, EvidenceImage>();
+    if (!targets.length) return { report, planned: [], wanted: [], imageFor };
     const candidates = input.panos.map(p => {
         const g = input.groundAt(p.x, p.z);
         return { panoId: p.panoId, date: p.date, copyright: p.copyright, eye: [p.x, (g === g ? g : input.fallbackGroundY) + STREET_VIEW_EYE_HEIGHT_M, p.z] as Vec3 };
     });
-    input.onProgress?.(`reading ${targets.length} repeating run${targets.length === 1 ? '' : 's'} and band${targets.length === 1 ? '' : 's'} one at a time from narrow crops`);
-
     // 1. the views, from geometry alone (no network): the best one or two panos per target
     const planned = targets.map(t => ({ t, views: planRunViews(t, candidates, fit, input.occluder, input.registration) }));
     const wanted: Array<{ t: RunTarget; view: SelectedView }> = [];
@@ -255,16 +256,29 @@ export async function readRunTargets(input: Omit<RunReadingInput, 'base'>): Prom
         if (!views.length) report.skipped.push({ id: t.id, kind: t.located.kind, slotId: t.slotId, reason: 'no pano shows its slot squarely from 6-70 m, unoccluded' });
         for (const v of views) wanted.push({ t, view: v.view });
     }
-    if (!wanted.length) return { report, results: [] };
-
+    if (!wanted.length) return { report, planned, wanted, imageFor };
     // 2. fetch every crop at once
+    input.onProgress?.(`fetching ${wanted.length} narrow crop${wanted.length === 1 ? '' : 's'} of ${targets.length} repeating run${targets.length === 1 ? '' : 's'} and band${targets.length === 1 ? '' : 's'}`);
     const got = await fetchViews(wanted.map(w => w.view), input.streetView, input.signal);
-    const imageFor = new Map<SelectedView, EvidenceImage>();
     for (const im of got.images) imageFor.set(im.view, im);
     for (const f of got.failures) {
         const w = wanted.find(x => x.view === f.view);
         if (w) report.skipped.push({ id: w.t.id, kind: w.t.located.kind, slotId: w.t.slotId, reason: `a crop did not arrive (${f.error})` });
     }
+    return { report, planned, wanted, imageFor };
+}
+
+/** Steps 1-3: the views, the crops (fetched here unless `crops` brings them) and one focused reading per target. Needs no wide reading. */
+export async function readRunTargets(input: Omit<RunReadingInput, 'base'>, crops?: RunCrops): Promise<RunTargetReadings> {
+    const { fit } = input;
+    // the pass's budget counts from here, so fetching the crops (when done here) comes out of it too (the caller sizes it to the time it has left)
+    const budgetStarted = Date.now();
+    const { report, planned, wanted, imageFor } = crops ?? await fetchRunCrops(input);
+    if (!planned.length || !wanted.length) return { report, results: [] };
+    const solid: FittedShells | undefined = readFittedShells(fit);
+    const slotById = new Map(fit.slots.map(s => [s.id, s]));
+    const coverCache = new Map<string, import('./slot-cover').SlotCover | undefined>();
+    input.onProgress?.(`reading ${planned.length} repeating run${planned.length === 1 ? '' : 's'} and band${planned.length === 1 ? '' : 's'} one at a time from narrow crops`);
 
     // 3. one small focused reading per target, several at a time
     const budget = new AbortController();

@@ -58,6 +58,9 @@ export interface VisionAttempt {
     code?: string;
     /** The answer was the recorded reply of an identical earlier request (no model call was made). */
     cached?: boolean;
+    /** The request was sent once more after a slow first token (hedgeAfterMs); `hedgeWon` says the second one answered. */
+    hedged?: boolean;
+    hedgeWon?: boolean;
 }
 
 /** A usable reply, recorded so an identical request gets it back without a model call. */
@@ -118,6 +121,12 @@ export interface VisionModelChainOptions<Stage extends string> {
     now?: () => number;
     /** Usable replies of identical earlier requests (see the header). */
     replyCache?: VisionReplyCache;
+    /**
+     * A streamed call whose first token has not come this long after it started is sent once more, the same request,
+     * and the first of the two to answer is taken (the other is aborted): the model's time to first token has a long
+     * tail (live: 7-9 s typical, 65-110 s at times). Off when undefined.
+     */
+    hedgeAfterMs?: number;
 }
 
 export class VisionChainError extends Error {
@@ -255,15 +264,17 @@ export class VisionModelChain<Stage extends string = string> {
             try {
                 const stream = opts.stream ? this.options.client.models.generateContentStream : undefined;
                 const callSignal = (params.config as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+                const hedge = { sent: false, won: false };
                 const work = stream
-                    ? (async () => joinStream(await stream.call(this.options.client.models, full), () => {
+                    ? this.streamHedged(stream, full, callSignal, () => {
+                        if (ttftMs !== undefined) return;
                         ttftMs = this.now() - started;
                         opts.onFirstToken?.(ttftMs);
-                    }, opts.onChunk))()
+                    }, opts.onChunk, hedge)
                     : this.options.client.models.generateContent(full);
                 const response = await raceAbort(work, [callSignal, signal]);
                 const ms = this.now() - started;
-                const attempt: VisionAttempt = { model, ...(thinking ? { thinking: describeThinking(thinking) } : {}), ms, ...(ttftMs !== undefined ? { ttftMs } : {}), outcome: 'answered' };
+                const attempt: VisionAttempt = { model, ...(thinking ? { thinking: describeThinking(thinking) } : {}), ms, ...(ttftMs !== undefined ? { ttftMs } : {}), outcome: 'answered', ...(hedge.sent ? { hedged: true, hedgeWon: hedge.won } : {}) };
                 this.attempts.push(attempt);
                 return { response, model, ms, ...(ttftMs !== undefined ? { ttftMs } : {}), ...(thinking ? { thinking } : {}), remember: () => this.record(params, opts, model, response, attempt) };
             } catch (err) {
@@ -299,6 +310,52 @@ export class VisionModelChain<Stage extends string = string> {
      * One call. The first call walks the candidates (only "not found" moves on); later calls use the model that
      * answered. Throws the factory's error: the last model's failure, or "none is served" when every one was not found.
      */
+    /**
+     * One streamed request; with hedgeAfterMs, the same request again when no token came in that time, the first full
+     * answer taken and the other aborted. Rejects only when every request sent failed (with the first one's error).
+     */
+    private streamHedged(
+        stream: NonNullable<VisionGenAIClient['models']['generateContentStream']>, full: GenerateContentParameters, callSignal: AbortSignal | undefined,
+        onFirst: () => void, onChunk: (() => void) | undefined, hedge: { sent: boolean; won: boolean }
+    ): Promise<GenerateContentResponse> {
+        const send = (ctl: AbortController, flag: { first: boolean }) => {
+            const sig = callSignal ? AbortSignal.any([callSignal, ctl.signal]) : ctl.signal;
+            const req = { ...full, config: { ...(full.config ?? {}), abortSignal: sig } } as GenerateContentParameters;
+            return (async () => joinStream(await stream.call(this.options.client.models, req), () => { flag.first = true; onFirst(); }, onChunk))();
+        };
+        const after = this.options.hedgeAfterMs;
+        const a = { ctl: new AbortController(), flag: { first: false } };
+        const first = send(a.ctl, a.flag);
+        if (after === undefined || after <= 0) return first;
+        return new Promise<GenerateContentResponse>((resolve, reject) => {
+            let settled = false, failures = 0, firstError: unknown;
+            const b = { ctl: new AbortController(), flag: { first: false } };
+            const done = (err: unknown) => {
+                failures++;
+                if (firstError === undefined) firstError = err;
+                if (!settled && failures >= (hedge.sent ? 2 : 1)) { settled = true; clearTimeout(timer); reject(firstError); }
+            };
+            const win = (r: GenerateContentResponse, second: boolean) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                hedge.won = second;
+                (second ? a : b).ctl.abort(Object.assign(new Error('the other request answered first'), { name: 'AbortError' }));
+                resolve(r);
+            };
+            const timer = setTimeout(() => {
+                if (settled || a.flag.first || callSignal?.aborted) return;
+                hedge.sent = true;
+                send(b.ctl, b.flag).then(r => win(r, true), err => done(err));
+            }, after);
+            first.then(r => win(r, false), err => {
+                // the first request failed before the hedge went out: no second chance here (the chain's retries decide)
+                if (!hedge.sent) { clearTimeout(timer); if (!settled) { settled = true; reject(err); } return; }
+                done(err);
+            });
+        });
+    }
+
     /** The recorded reply for this request, replayed (the chain takes the model it came from when none has answered yet). */
     private replay(params: Omit<GenerateContentParameters, 'model'>, opts: VisionCallOptions<Stage>): VisionCallResult | undefined {
         const cache = this.options.replyCache;

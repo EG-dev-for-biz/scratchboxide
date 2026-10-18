@@ -123,6 +123,46 @@ describe('the vision reply cache', () => {
     });
 });
 
+describe('a call whose first token is late is sent once more', () => {
+    /** A client whose first request never gets its first token (until aborted); later ones answer after `ms`. */
+    function stuckFirst(ms: number) {
+        let n = 0, aborted = 0;
+        const client: VisionGenAIClient = { models: { generateContent: async () => { throw new Error('streaming expected'); }, generateContentStream: async (params: any) => {
+            const k = n++;
+            const signal: AbortSignal | undefined = params.config?.abortSignal;
+            return (async function* () {
+                if (k === 0) {
+                    await new Promise((_, reject) => signal?.addEventListener('abort', () => { aborted++; reject(signal.reason); }, { once: true }));
+                }
+                await new Promise(r => setTimeout(r, ms));
+                yield { candidates: [{ content: { parts: [{ text: `{"from":${k}}` }] }, finishReason: 'STOP' }] } as any;
+            })();
+        } } };
+        return { client, calls: () => n, aborted: () => aborted };
+    }
+
+    it('takes the second request\'s answer and aborts the first; the attempt says it was hedged', async () => {
+        const c = stuckFirst(20);
+        const chain = new VisionModelChain<string>({ client: c.client, candidates: ['m'], hedgeAfterMs: 100 });
+        const t0 = Date.now();
+        const r = await chain.generate({ contents: [{ role: 'user', parts: [{ text: 'q' }] }] }, { stage: 's', stream: true });
+        expect(Date.now() - t0).toBeLessThan(2000);
+        expect(r.response.candidates![0].content!.parts![0].text).toBe('{"from":1}');
+        expect(c.calls()).toBe(2);
+        expect(c.aborted()).toBe(1);
+        expect(chain.attempts[0]).toMatchObject({ outcome: 'answered', hedged: true, hedgeWon: true });
+    });
+
+    it('sends nothing more when the first token comes in time', async () => {
+        const c = slowClient(10, () => '{}');
+        const chain = new VisionModelChain<string>({ client: c.client, candidates: ['m'], hedgeAfterMs: 500 });
+        await chain.generate({ contents: [{ role: 'user', parts: [{ text: 'q' }] }] }, { stage: 's', stream: true });
+        await new Promise(r => setTimeout(r, 600));
+        expect(c.calls()).toBe(1);
+        expect(chain.attempts[0].hedged).toBeUndefined();
+    });
+});
+
 describe('the survey: one call per face, all at once', () => {
     const STRUCTURE = { outline: [[-13.15, -5.5], [13.15, -5.5], [13.15, 5.5], [-13.15, 5.5]] as Array<[number, number]>, centroid: { x: 0, z: 0 }, facadeHeadingsDeg: [0, 90, 180, 270], cells: new Set<string>(), groundY: 0, heightM: 24.4 };
     const GROUND = { cellIndex: () => -1, groundAt: () => 0 };

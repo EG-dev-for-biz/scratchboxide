@@ -57,7 +57,7 @@ import { surveyHintLines, type LocatedElement } from './survey-detail';
 import type { SlotOffer } from './slot-exposure';
 import { describeCover, type SlotCover } from './slot-cover';
 
-export const ORNAMENT_PROMPT_VERSION = 'ornament/v6';
+export const ORNAMENT_PROMPT_VERSION = 'ornament/v7';
 /** Thinking tokens asked for: LOW on Gemini 4 (thinkingConfigFor), a 512-token budget on 3.x. */
 export const ORNAMENT_THINKING_BUDGET = 512;
 export const ORNAMENT_MAX_OUTPUT_TOKENS = 16_384;
@@ -192,7 +192,7 @@ export function ornamentPromptText(fit: StructureFit, evidence: EvidenceImageRef
     const rules = [
         '1. Report only elements you can see in an image that shows their slot. Cite each with [image index, y0, x0, y1, x1] in 0–1000.',
         '2. Build each element with one operator: sweep (a profile along the slot\'s edge, or along a path in the slot; a block or a run of blocks on an edge, such as a row of small repeated blocks, is a sweep of its section over a short t span, repeated with replicate), revolve (a profile around an axis, with K lobes), replicate (one seed repeated along the edge or over a grid), or relief (a raised or recessed region). Use integer millimetres in the slot\'s own axes: u along the surface to the right, v up, n out of the surface. Along an edge, t is per-mille of its length.',
-        '3. Nothing but a relief may go below the surface: a sweep along a path or a revolve about the normal stays at n >= 0 (z >= 0); a recess is a relief with negative depth. In an edge section [out, up], the quarter with out < 0 and up < 0 is inside the wall: a swept profile stays at out >= 0 or up >= 0. Do not give a size smaller than the image you cite can show. Depths are estimates from shading, shadows or silhouettes. Keep them within the slot bounds, keep edge profiles inside the edge envelope, and say how you judged them (depthBasis).',
+        '3. Nothing but a relief may go below the surface: a sweep along a path or a revolve about the normal stays at n >= 0 (z >= 0); a recess is a relief with negative depth. In an edge section [out, up], the quarter with out < 0 and up < 0 is inside the wall: a swept profile stays at out >= 0 or up >= 0. Do not give a size smaller than the image you cite can show. Depths are estimates from shading, shadows or silhouettes. Keep them within the slot bounds, keep edge profiles inside the edge envelope, and say how you judged them (depthBasis). A relief\'s edgeProfile is per-mille pairs [across its edge, share of its depth], every value 0–1000: a recess is a negative depth, never negative profile values.',
         '4. For repeats, count what you see. If a row runs out of view, give the visible count and set beyondView.',
         '5. Figures and lettering are a low relief outline only, at most 50 mm deep.',
         '6. Shadows, stains, trees, people, vehicles and statues standing in front of a wall are not ornament on that wall. Do not add anything you know about this building but cannot see in these images.',
