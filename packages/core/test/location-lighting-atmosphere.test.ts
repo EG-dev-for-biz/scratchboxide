@@ -240,7 +240,9 @@ describe('Image Location Resection & 3D Object Lighting/Atmosphere APIs', () => 
             }, {} as any);
 
             expect(response.exec.status).toBe('completed');
-            expect(response.exec.summaryResult).toContain('Harmonized location 3D lighting for Colosseum, Rome');
+            // no 3D scene is open in this call: the values are computed, and the summary says nothing was applied
+            expect(response.exec.summaryResult).toMatch(/^NOT applied: no 3D scene is open; nothing in any viewport changed\. Computed only: Location lighting for Colosseum, Rome/);
+            expect((response.resultPayload as any).applied).toBe(false);
             // No openings were given, so no backlighting is invented (it used to add a 12-portal Colosseum ring everywhere).
             expect(response.exec.summaryResult).toContain('No portal backlighting');
 

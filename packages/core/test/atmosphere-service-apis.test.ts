@@ -354,7 +354,10 @@ describe('Atmospheric Capabilities First-Class APIs', () => {
                 { preset: 'sunset', enableAerialPerspective: true, enableGodRays: true },
                 {} as any
             );
-            expect(outcome.resultPayload.success).toBe(true);
+            // no 3D scene is open: the sun is computed but nothing is lit, and the result says so
+            expect(outcome.resultPayload.success).toBe(false);
+            expect(outcome.resultPayload.applied).toBe(false);
+            expect(outcome.summaryResult).toMatch(/^NOT applied: no 3D scene is open/);
             expect(outcome.resultPayload.phase).toBe('Golden Hour');
             const cfg = outcome.resultPayload.config as any;
             expect(cfg.godRays).toEqual({ enabled: true });

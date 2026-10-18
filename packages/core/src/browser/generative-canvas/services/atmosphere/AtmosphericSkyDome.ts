@@ -406,6 +406,21 @@ export function requireLocation(tool: string, latitude: number | undefined, long
     return [latitude, longitude];
 }
 
+/**
+ * The hemisphere light's ground colour by day: light bounced off the ground, the profile's ground albedo times the
+ * irradiance reaching the ground (the sun on a level surface plus the sky) relative to the sky light the hemisphere is
+ * scaled by. A navy ground colour (the old daytime value) lit every wall from below in blue and left clay scenes dark.
+ * Golden hour and night keep their own tints.
+ */
+export function groundBounceColor(profile: { isGoldenHour: boolean; isNight: boolean; sunIntensity: number; skyLightIntensity: number; groundAlbedoLinear?: number[] }, elevationDeg: number): THREE.Color {
+    if (profile.isGoldenHour) return new THREE.Color(0x431407);
+    if (profile.isNight) return new THREE.Color(0x050811);
+    const albedo = profile.groundAlbedoLinear ?? [0.18, 0.18, 0.18];
+    const level = Math.max(0, Math.sin((elevationDeg * Math.PI) / 180));
+    const gain = (profile.sunIntensity * level + profile.skyLightIntensity) / Math.max(1e-3, profile.skyLightIntensity);
+    return new THREE.Color().setRGB(Math.min(1, albedo[0] * gain), Math.min(1, albedo[1] * gain), Math.min(1, albedo[2] * gain), THREE.LinearSRGBColorSpace);
+}
+
 export function createAtmosphericSkyDome(
     scene: THREE.Scene,
     isSunset: boolean = false,
@@ -499,7 +514,7 @@ export function createAtmosphericSkyDome(
     // Dynamic Hemisphere Sky & Ground Ambient Bounce Light
     const hemiLight = new THREE.HemisphereLight(
         diurnalProfile.isGoldenHour ? 0xfdba74 : (diurnalProfile.isNight ? 0x1a243d : 0xe0f2fe),
-        diurnalProfile.isGoldenHour ? 0x431407 : (diurnalProfile.isNight ? 0x050811 : 0x1e3a8a),
+        groundBounceColor(diurnalProfile, initialElev),
         diurnalProfile.skyLightIntensity
     );
     hemiLight.name = 'AtmosphericHemisphereLight';
@@ -558,7 +573,7 @@ export function createAtmosphericSkyDome(
 
         hemiLight.intensity = diurnalProfile.skyLightIntensity;
         hemiLight.color.set(diurnalProfile.isGoldenHour ? 0xfdba74 : (diurnalProfile.isNight ? 0x1a243d : 0xe0f2fe));
-        hemiLight.groundColor.set(diurnalProfile.isGoldenHour ? 0x431407 : (diurnalProfile.isNight ? 0x050811 : 0x1e3a8a));
+        hemiLight.groundColor.copy(groundBounceColor(diurnalProfile, elevDeg));
     };
 
     return {

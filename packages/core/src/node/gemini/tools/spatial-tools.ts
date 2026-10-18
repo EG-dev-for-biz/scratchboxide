@@ -97,6 +97,8 @@ import {
 import { findTileRefineRepoRoot } from '../../3d-engine/tile-refine-service';
 import type { ToolContext, ToolDeclaration, ToolHandler, ToolHandlerOutcome, ToolParameterSchema, ToolResultPayload } from './types';
 import { STAGED_MATERIAL_MODE_DECLARATION, STAGED_MATERIAL_MODE_TOOL, runStagedMaterialModeTool } from './staged-material-mode-tool';
+import { anchorOffset, offsetObjects, partitionActiveScene } from '../../3d-engine/staged-location/kept-structure';
+import { applySunToScene } from './atmosphere-tools';
 
 /** Street View grounding service shared by calls, so its project-number lookup runs once per process. */
 let streetViewGroundingService: StreetViewGroundingImageService | undefined;
@@ -467,13 +469,6 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
 ];
 
 
-/** Previous environment layers of a scene the tiles are staged into: replaced, never stacked. */
-function isLocationLayer(o: any): boolean {
-    const s = (o.content?.metadata?.source || '').toLowerCase();
-    const role = (o.content?.metadata?.role || '').toLowerCase();
-    return s === 'google3dtilesclay' || s === 'google_3d_tiles_clay' || s === 'google3dtilesfulltexture' || s === 'google_3d_tiles_full_texture'
-        || s === 'googlevectortileservice' || s === 'google_vector_tile_service' || s === 'sb-veggie' || role === 'environment' || role === 'vegetation';
-}
 
 function modelUri(mountPath: string): string {
     return mountPath.includes('/public/models/')
@@ -604,11 +599,21 @@ async function extractLocation(toolName: string, args: Record<string, unknown>, 
     // The tiles join the active scene only when asked to; otherwise they open as a new studio scene, so an unrelated
     // scene's objects and sky never carry over.
     let mountedArtifact: any;
+    let activeSceneReport: Record<string, unknown> | undefined;
     if (args.stageIntoActiveScene === true && ctx.request?.activeArtifact?.type === '3d-scene') {
         const prevArtifact = ctx.request.activeArtifact;
         const prevData = (prevArtifact.data as any) || {};
-        const rawObjects = Array.isArray(prevData.objects) ? prevData.objects : [];
-        const keptObjects = rawObjects.filter((o: any) => !isLocationLayer(o));
+        // an earlier staged structure rebuild stays (moved into this extraction's frame); earlier location layers are replaced
+        const carried = partitionActiveScene(prevArtifact);
+        const keptStructure = offsetObjects(carried.structure, anchorOffset(carried.anchor, result.geoAnchor as { lat: number; lng: number; elevation?: number }));
+        const keptObjects = [...carried.other, ...keptStructure];
+        activeSceneReport = {
+            artifactId: prevArtifact.id,
+            kept: keptStructure.map((o: any) => ({ objectId: o.id, source: String(o.content?.metadata?.source ?? ''), textured: false })),
+            removed: carried.removed,
+            otherObjectsKept: carried.other.length,
+            ...(keptStructure.length ? { note: 'this tile layer is not cut around the kept structure: the scan of the structure and the rebuild stand in the same place' } : {})
+        };
         mountedArtifact = {
             ...prevArtifact,
             version: (prevArtifact.version || 1) + 1,
@@ -676,10 +681,21 @@ async function extractLocation(toolName: string, args: Record<string, unknown>, 
             },
             quality: result.quality,
             render: result.render,
+            ...(activeSceneReport ? { activeScene: activeSceneReport } : {}),
             artifact: mountedArtifact
         } as unknown as ToolResultPayload,
-        summaryResult: `Google 3D Tiles ingested ${flavour === 'clay' ? 'in studio grey clay' : 'in full texture'} for ${place}${describeTileExtent(result)}. Exported the extracted tiles to ${result.glbPath} (${result.mesh.vertexCount} vertices, ${result.mesh.triangleCount} triangles).${describeLocationClay(pipeline, flavour)} Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m${elevation}. Built objects share this coordinate frame and automatically snap to the tile ground surface by default.`
+        summaryResult: `Google 3D Tiles ingested ${flavour === 'clay' ? 'in studio grey clay' : 'in full texture'} for ${place}${describeTileExtent(result)}. Exported the extracted tiles to ${result.glbPath} (${result.mesh.vertexCount} vertices, ${result.mesh.triangleCount} triangles).${describeLocationClay(pipeline, flavour)} Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m${elevation}. Built objects share this coordinate frame and automatically snap to the tile ground surface by default.${describeActiveSceneReport(activeSceneReport)}`
     };
+}
+
+/** One sentence: what staging into the active scene kept and took out, by object id. */
+function describeActiveSceneReport(r: Record<string, unknown> | undefined): string {
+    if (!r) return '';
+    const kept = (r.kept as Array<{ objectId: string }>) ?? [];
+    const removed = (r.removed as Array<{ objectId: string }>) ?? [];
+    return ` Staged into the active scene: ${kept.length ? `KEPT the earlier structure rebuild (${kept.map(k => k.objectId).join(', ')})` : 'no earlier structure rebuild was kept'}`
+        + `${removed.length ? `; REMOVED ${removed.length} earlier location layer${removed.length === 1 ? '' : 's'} (${removed.map(x => x.objectId).join(', ')})` : ''}`
+        + `${r.otherObjectsKept ? `; kept ${r.otherObjectsKept} other object(s)` : ''}${r.note ? `; ${r.note}` : ''}.`;
 }
 
 export const google3DTilesHandlers: Record<string, ToolHandler> = {
@@ -3956,7 +3972,7 @@ export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
     geobox_resect_camera_pose: async (args, ctx) => {
         return geoboxPrecisionHandlers.geobox_resect_image_location(args, ctx);
     },
-    geobox_harmonize_location_lighting: async (args, _ctx) => {
+    geobox_harmonize_location_lighting: async (args, ctx) => {
         // The sun needs coordinates: the given ones, else the landmark name resolved with Google Places.
         const landmarkName = typeof args.landmarkName === 'string' && args.landmarkName.trim() ? args.landmarkName.trim() : undefined;
         let latitude = typeof args.latitude === 'number' ? args.latitude : undefined;
@@ -3979,9 +3995,19 @@ export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
             customDelightParams: typeof args.customDelightParams === 'object' && args.customDelightParams !== null ? (args.customDelightParams as any) : undefined
         });
 
+        // the sun is applied to the open 3D scene (the same path as atmosphere_configure_scene); the de-lighting uniforms
+        // and portal fixtures are values only: no viewport reads them, and the summary says so
+        const active = ctx?.request?.activeArtifact;
+        const elevation = Number(result.solarElevationDeg), azimuth = Number(result.solarAzimuthDeg);
+        const applied = active?.type === '3d-scene' && active.data && Number.isFinite(elevation) && Number.isFinite(azimuth)
+            ? applySunToScene(active, { elevation, azimuth, lat: latitude, lng: longitude, isoDate: result.landmarkContext?.isoDate, sunSource: `NOAA ephemeris at ${result.landmarkContext?.isoDate}`, config: { enabled: true }, clouds: false, args })
+            : undefined;
+        const appliedText = applied?.ok
+            ? `APPLIED the sun to the active 3D scene "${active!.title || active!.id}" (directional sun with shadows over ${Math.round(applied.shadowRadiusM)} m, sky dome and hemisphere ambient). The de-lighting values, scene light intensities and portal fixtures below are computed only, NOT applied: the viewport does not read them.`
+            : `NOT applied: ${applied && !applied.ok ? applied.error : 'no 3D scene is open'}; nothing in any viewport changed. Computed only:`;
         return {
-            resultPayload: result as unknown as ToolResultPayload,
-            summaryResult: `Harmonized location 3D lighting for ${result.landmarkContext?.name} (${latitude!.toFixed(6)}, ${longitude!.toFixed(6)}; NOAA sun at ${result.landmarkContext?.isoDate}: elevation ${result.solarElevationDeg}°, azimuth ${result.solarAzimuthDeg}°) with the ${result.preset} look preset (diurnal: ${result.diurnalPhase}). De-lighting preset values (shadow lift: ${result.delightUniforms.uShadowLift}, highlight compress: ${result.delightUniforms.uHighlightCompress}, ground de-wash: ${result.delightUniforms.uGroundDeWash}), scene lights (ambient: ${result.sceneLighting.ambientLight.intensity}, hemi: ${result.sceneLighting.hemiLight.intensity}, sun: ${result.sceneLighting.sunLight.intensity}, placed at the computed sun). ${result.architecturalFixtures.length ? `${result.architecturalFixtures.length} portal backlighting fixtures at the given openings${result.portalDefaultsApplied?.length ? ` (fixture defaults used for ${result.portalDefaultsApplied.join(', ')})` : ''}.` : 'No portal backlighting (no window/portal openings were given).'}`
+            resultPayload: { ...(result as unknown as Record<string, unknown>), applied: !!applied?.ok, ...(applied?.ok ? { appliedTo: applied.artifact.id, operators: applied.operators, artifact: applied.artifact } : { notApplied: applied && !applied.ok ? applied.error : 'no 3D scene is open' }), notAppliedParts: ['delightUniforms', 'sceneLighting intensities', 'architecturalFixtures'] } as unknown as ToolResultPayload,
+            summaryResult: `${appliedText} Location lighting for ${result.landmarkContext?.name} (${latitude!.toFixed(6)}, ${longitude!.toFixed(6)}; NOAA sun at ${result.landmarkContext?.isoDate}: elevation ${result.solarElevationDeg}°, azimuth ${result.solarAzimuthDeg}°) with the ${result.preset} look preset (diurnal: ${result.diurnalPhase}). De-lighting preset values (shadow lift: ${result.delightUniforms.uShadowLift}, highlight compress: ${result.delightUniforms.uHighlightCompress}, ground de-wash: ${result.delightUniforms.uGroundDeWash}), scene lights (ambient: ${result.sceneLighting.ambientLight.intensity}, hemi: ${result.sceneLighting.hemiLight.intensity}, sun: ${result.sceneLighting.sunLight.intensity}, placed at the computed sun). ${result.architecturalFixtures.length ? `${result.architecturalFixtures.length} portal backlighting fixtures at the given openings${result.portalDefaultsApplied?.length ? ` (fixture defaults used for ${result.portalDefaultsApplied.join(', ')})` : ''}.` : 'No portal backlighting (no window/portal openings were given).'}`
         };
     },
     geobox_optimize_edge_alignment: async (args, ctx) => alignModelEdgesToPhoto('geobox_optimize_edge_alignment', args, ctx),

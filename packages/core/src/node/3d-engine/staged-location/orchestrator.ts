@@ -64,6 +64,7 @@ import {
     type StageStatus,
     type StageSummary,
     type StagedBuildState,
+    type StagedActiveSceneReport,
     type StagedLayer,
     type StagedLocationResult,
     type StripRoi,
@@ -108,6 +109,7 @@ import {
     type FigureBlob, type FigureImage, type FigureView
 } from './figures';
 import { parseGlbNodes, readGlbNodes } from './glb-nodes';
+import { anchorOffset, hideFootprintInGlb, partitionActiveScene, structureFootprint, type ActiveScenePartition, type StructureFootprint } from './kept-structure';
 import { splitPassThroughFile, type PassThroughSplit } from './redundant-scan';
 import { writeStagedGlbFile, type StagedGlbNode } from './staged-glb-writer';
 import { buildObjectFromSpec } from '../reference-object-builder';
@@ -360,6 +362,10 @@ class StagedRun {
     private legendNotes: Partial<Record<string, string>> = {};
     /** Set once the call has returned or thrown: work a stage abandoned (a Stop, a time limit) can no longer change or stream anything. */
     private closed = false;
+    /** The active scene this run is staged into, split (kept-structure.ts); set once the place is resolved. */
+    carried?: ActiveScenePartition;
+    /** Applied to every layer as it commits (the district without the kept structure's own scan); it may return the layer unchanged. */
+    layerTransform?: (layer: StagedLayer, meta: StagedLayerObjectMeta) => StagedLayer;
 
     constructor(
         readonly runId: string,
@@ -404,7 +410,7 @@ class StagedRun {
     }
 
     private legend(): StagedBuildState['provenanceLegend'] {
-        const used = new Set<ProvenanceLabel>([...this.state.layers.filter(l => !l.retired).flatMap(l => l.provenanceLabels), ...this.state.degradations.map(d => d.provenanceAfter)]);
+        const used = new Set<ProvenanceLabel>([...this.state.layers.filter(l => !l.retired).flatMap(l => l.provenanceLabels), ...(this.carried?.structureLayers ?? []).flatMap(l => l.provenanceLabels), ...this.state.degradations.map(d => d.provenanceAfter)]);
         return DEFAULT_PROVENANCE_LEGEND.filter(e => used.has(e.label)).map(e => ({ ...e, description: this.legendNotes[e.label] ?? defaultLegendText(e.label) }));
     }
 
@@ -414,7 +420,7 @@ class StagedRun {
         this.state.updatedAtMs = this.now();
         return composeStagedArtifact({
             state: JSON.parse(JSON.stringify(this.state)), camera: this.camera, layerMeta: this.layerMeta, geoAnchor: this.geoAnchor,
-            activeScene: this.activeScene, summary, version: this.version++
+            activeScene: this.activeScene, ...(this.carried ? { carried: this.carried } : {}), summary, version: this.version++
         });
     }
 
@@ -468,6 +474,8 @@ class StagedRun {
 
     commit(layer: StagedLayer, meta: StagedLayerObjectMeta): void {
         if (this.closed) return;
+        // in place, so the stage's own record of the layer (its event and result) says what was committed
+        if (this.layerTransform) { const t = this.layerTransform(layer, meta); if (t !== layer) Object.assign(layer, t); }
         const i = this.state.layers.findIndex(l => l.objectId === layer.objectId);
         if (i >= 0) this.state.layers[i] = layer; else this.state.layers.push(layer);
         this.layerMeta[layer.objectId] = meta;
@@ -820,11 +828,89 @@ function loadMesh(files: Array<string | undefined>): RenderMesh3D {
 // the run
 // ----------------------------------------------------------------------------------------------------------------
 
+/** What the district layers lost to the kept structure, per layer (the result's activeScene.footprintHidden). */
+const FOOTPRINT_REPORTS = new WeakMap<StagedRun, { footprint?: StructureFootprint; error?: string; layers: Array<{ objectId: string; removedTriangles: number; keptTriangles: number }> }>();
+
+/**
+ * The layer transform of a run staged around a kept structure: each district scan layer (source Google3DTilesClay, not
+ * vegetation) is republished without its triangles inside the structure's footprint and above its base. The footprint
+ * is measured once, from the kept structure's shown layers moved into this run's frame (so it needs the extraction's
+ * anchor, which is set before the first layer commits).
+ */
+function keptStructureCarver(run: StagedRun, cache: StageCache, base: string): (layer: StagedLayer, meta: StagedLayerObjectMeta) => StagedLayer {
+    const report: { footprint?: StructureFootprint; error?: string; layers: Array<{ objectId: string; removedTriangles: number; keptTriangles: number }> } = { layers: [] };
+    FOOTPRINT_REPORTS.set(run, report);
+    let measured = false;
+    return (layer, meta) => {
+        if (meta.source !== 'Google3DTilesClay' || meta.vegetation) return layer;
+        const carried = run.carried!;
+        if (!measured) {
+            measured = true;
+            try {
+                const ids = new Set(carried.structure.map(o => o.id));
+                const hidden = new Set(carried.structureLayers.flatMap(l => l.supersedes));
+                const shown = carried.structure.filter(o => ids.has(o.id) && !hidden.has(o.id));
+                const files = shown.map(o => String((o.content as { durableUri?: string }).durableUri ?? ''))
+                    .filter(u => u.startsWith('/models/')).map(u => path.join(cache.modelsDir, path.basename(u))).filter(f => fs.existsSync(f));
+                if (!files.length) throw new Error('none of the kept structure\'s model files is on disk');
+                report.footprint = structureFootprint(files.map(f => fs.readFileSync(f)), anchorOffset(carried.anchor, run.geoAnchor));
+            } catch (err) {
+                report.error = errorMessage(err);
+            }
+        }
+        const fp = report.footprint;
+        if (!fp) return layer;
+        const source = path.join(cache.modelsDir, path.basename(layer.url));
+        if (!fs.existsSync(source)) return layer;
+        const out = hideFootprintInGlb(fs.readFileSync(source), fp);
+        report.layers = [...report.layers.filter(r => r.objectId !== layer.objectId), { objectId: layer.objectId, removedTriangles: out.removedTriangles, keptTriangles: out.keptTriangles }];
+        if (!out.removedTriangles) return layer;
+        const key8 = crypto.createHash('sha256').update('kept-structure/v2').update([...fp.cells].sort().join(';')).update(String(fp.baseY)).digest('hex').slice(0, 8);
+        const dir = path.join(cache.dir, 'kept-structure');
+        fs.mkdirSync(dir, { recursive: true });
+        const name = `${path.basename(layer.url, '.glb')}_around_${key8}.glb`;
+        const tmp = path.join(dir, name);
+        fs.writeFileSync(tmp, out.glb);
+        const pub = cache.publishFile(tmp, name);
+        const note = `${out.removedTriangles.toLocaleString('en-US')} triangles inside the kept structure's footprint (${fp.cells.size} cells of ${fp.cellM} m) and more than 0.3 m above the ground around it (${out.groundY.toFixed(2)} m) taken out, where the kept rebuild stands`;
+        return {
+            ...layer, url: pub.url, bytes: pub.bytes,
+            counts: { vertices: layer.counts.vertices, triangles: out.keptTriangles },
+            provenance: { ...layer.provenance, note: layer.provenance.note ? `${layer.provenance.note}; ${note}` : note }
+        };
+    };
+}
+
+/** The result's account of the active scene: what was kept and what was taken out, by object id. */
+function activeSceneReport(run: StagedRun): StagedActiveSceneReport | undefined {
+    const c = run.carried;
+    if (!c) return undefined;
+    const fp = FOOTPRINT_REPORTS.get(run);
+    const layerOf = new Map(c.structureLayers.map(l => [l.objectId, l]));
+    const kept = c.structure.map(o => {
+        const l = layerOf.get(o.id);
+        return { objectId: o.id, ...(l ? { layer: l.layer, provenance: String(l.provenance.label) } : {}), source: String((o.content as { metadata?: { source?: string } }).metadata?.source ?? ''), textured: !!l?.textured };
+    });
+    const offset = anchorOffset(c.anchor, run.geoAnchor);
+    const notes: string[] = [];
+    if (kept.length && c.anchor?.elevation === undefined) notes.push('the earlier scene had no anchor height, so the kept structure is not moved vertically');
+    if (fp?.error) notes.push(`the district's own scan of the structure could not be taken out (${fp.error}), so both stand in the same place`);
+    return {
+        artifactId: run.state.artifactId, kept, removed: c.removed, otherObjectsKept: c.other.length,
+        ...(c.runId ? { keptFromRunId: c.runId } : {}),
+        ...(kept.length && c.materialMode ? { materialMode: c.materialMode } : {}),
+        ...(kept.length ? { offsetM: offset } : {}),
+        ...(fp?.footprint ? { footprintHidden: { cellM: fp.footprint.cellM, cells: fp.footprint.cells.size, layers: fp.layers } } : {}),
+        ...(notes.length ? { note: notes.join('; ') } : {})
+    };
+}
+
 export async function runStagedLocation(requestIn: StagedLocationRequest, deps: StagedLocationDeps, ctx: StagedLocationContext = {}): Promise<StagedLocationOutcome> {
     const now = deps.now ?? Date.now;
     const cache = deps.cache;
     // one grounding request per view per run: a view fetched ahead (the ring, while the survey reads) is reused, never refetched
-    const streetView = deps.streetView?.grounding ? { ...deps.streetView, grounding: memoizeGrounding(deps.streetView.grounding) } : deps.streetView;
+    // the grounding API's refusals this run: a refused pano is never asked for again, and the next eligible one is
+    const streetView = deps.streetView?.grounding ? { ...deps.streetView, grounding: memoizeGrounding(deps.streetView.grounding), refusedPanos: deps.streetView.refusedPanos ?? new Map<string, string>() } : deps.streetView;
     // a retry rebuilds the recorded request exactly; the model never re-words it
     let request = requestIn;
     let recordedArtifactId: string | undefined;
@@ -889,6 +975,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         placeValue = resolved.value;
         run.state.place = { query: request.query, resolvedAddress: placeValue.formattedAddress, lat: placeValue.lat, lng: placeValue.lng, ...(placeValue.alternatives?.length ? { alternatives: placeValue.alternatives } : {}) };
         persist();
+        // staged into the active scene: an earlier build's structure rebuild stays (unless this run rebuilds it at the same
+        // place), and the district layers lose their own scan of it where it stands
+        if (intoActive) {
+            run.carried = partitionActiveScene(intoActive, request.isolate ? placeValue : undefined);
+            if (run.carried.structure.length) run.layerTransform = keptStructureCarver(run, cache, base);
+        }
 
         // ---------------- tiles ----------------
         type TilesValue = { extraction: StagedExtraction; key: string; sizedTo: 'structure' | 'request' | 'district-fallback'; structure?: StructurePickResult; ground?: GroundModel; scan?: ScanMesh; unmaskedTop?: Float32Array; canopy?: CanopyMask; rounds: number; cached: boolean; builtAtMs: number };
@@ -1036,7 +1128,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             onFetched: read => {
                                 if (!visionAvailable || !rebuildPossible) return;
                                 try {
-                                    const ring = planRingViews(faces, surveyCandidates(found.panos, faces, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top), { faces: faces.map(f => ({ faceId: f.faceId, headingDeg: f.headingDeg, source: f.source, elements: [], materials: [] })), read }, undefined, false);
+                                    const ring = planRingViews(faces, surveyCandidates(found.panos.filter(p => !sv.refusedPanos?.has(p.panoId)), faces, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top), { faces: faces.map(f => ({ faceId: f.faceId, headingDeg: f.headingDeg, source: f.source, elements: [], materials: [] })), read }, undefined, false);
                                     if (ring.length) void fetchViews(ring, sv, discoveryStop.signal, 30_000).catch(() => undefined);
                                 } catch { /* the matching fetches its own views */ }
                             }
@@ -1050,6 +1142,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     }
                     run.state.materialHints = result.hints;
                     run.summary('survey').cost = result.cost;
+                    if (result.refusals.length) cache.writeRunNote(runId, 'grounding_refusals', { stage: 'survey', refusals: result.refusals });
                     if (result.faces.some(f => f.panoId)) run.state.attribution = [...new Set([...run.state.attribution, 'Street View ©Google'])];
                     const degradations = result.faces.filter(f => f.skipped).map(f => run.degrade(record('survey', 'face_not_surveyed', {
                         part: { description: `the ${Math.round(f.headingDeg)}° face of the structure` }, intended: 'a wide Street View view of this face in the survey',
@@ -1099,7 +1192,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (surveyOut?.result && visionAvailable) {
                         try {
                             const surveyFaces = surveyFaceTargets(structure!);
-                            const candidates = surveyCandidates(found.panos, surveyFaces, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top);
+                            const candidates = surveyCandidates(found.panos.filter(p => !sv.refusedPanos?.has(p.panoId)), surveyFaces, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top);
                             const matchChain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...chainExtras('evidence'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
                             match = await runViewMatch({ faces: surveyFaces, survey: surveyOut.result, candidates, deps: sv, chain: matchChain, signal: io.signal, onProgress: m => io.progress(m) });
                             if (match.correspondences.length) {
@@ -1113,7 +1206,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         }
                     }
                     let plan = surveyOut?.result ? planDetailFromSurvey(surveyOut.result, fit, undefined, registration) : undefined;
-                    const views = plan?.views.length ? plan.views : selectViewsForFit(found.panos, fit, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top);
+                    const views = plan?.views.length ? plan.views : selectViewsForFit(found.panos.filter(p => !sv.refusedPanos?.has(p.panoId)), fit, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top);
                     if (plan) io.progress(describeLocated(surveyOut!.result!.faces, plan));
                     const discovery = { metadataCalls: found.metadataCalls, cachedCalls: found.cachedCalls };
                     if (!views.length) {
@@ -2645,6 +2738,7 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
         total: { images: costed.reduce((n, x) => n + x.cost!.images, 0), visionCalls: costed.reduce((n, x) => n + x.cost!.visionCalls, 0), seconds: round(costed.reduce((n, x) => n + x.cost!.seconds, 0), 1) },
         byStage: Object.fromEntries(costed.map(x => [x.stage, x.cost!]))
     } : undefined;
+    const activeScene = activeSceneReport(run);
     const base: Omit<StagedLocationResult, 'digest' | 'summary' | 'artifact'> = {
         success: true,
         status,
@@ -2684,6 +2778,7 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
                 dropped: ornament.dropped.length, specPath: run.keys.vision ? path.join('.scratchbox', 'cache', 'staged_location', 'vision', run.keys.vision, 'done.json') : ''
             }
         } : {}),
+        ...(activeScene ? { activeScene } : {}),
         ...(run.state.materialHints ? { materialHints: run.state.materialHints } : {}),
         ...(f.textures ? { texturePass: f.textures.record } : {}),
         ...(photoCost ? { photoCost } : {}),
