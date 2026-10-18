@@ -96,7 +96,7 @@ function sanitizeDescriptor(raw: any, fallback: ContinuousMaterialDescriptor): C
 export const PBR_MATERIAL_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'pbr_synthesize_material',
-        description: 'Synthesizes physically grounded, 100% offline procedural PBR materials across 1K, 2K, 4K, 8K, up to 12K (12288x12288) resolution in native multithreaded C++20. Emits diffuse Albedo, Scharr tangent normal, glTF 2.0 packed ORM (AO, Roughness, Metallic), and virtual Height maps. Fully compliant with Adaptive Domain Architecture (ADA): parameters are continuous physical coordinates in R^20 (zero closed enums), passing the Alien Planet Test with sub-second execution.',
+        description: 'Synthesizes procedural PBR texture maps (albedo, tangent normal, packed ORM, height; plus separate roughness / metallic / AO for MaterialX and USDZ) from a 50-entry archetype catalog or a continuous descriptor, in the native C++20 kernel (scratchbox_pbr_manifold.hpp) compiled with clang++. There is no fallback synthesizer: if the kernel cannot compile or run, the call fails with that error. Timings in the result are measured. With targetMeshPath the maps are applied to the mesh by per-triangle box projection and the textured GLB is written.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -115,7 +115,7 @@ export const PBR_MATERIAL_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 archetype: {
                     type: 'STRING',
-                    description: 'Optional baseline biophysical archetype: a catalog key or display name, exactly (e.g. "carrara_marble", "weathered_concrete", "brushed_titanium", "corten_steel", "solar_low_e_glass", "indiana_limestone", "polished_brass", "quartersawn_walnut", "wrought_iron"; pbr_get_material_catalog lists all 50). With targetMeshPath an unknown name fails with the key list instead of being replaced by another material.'
+                    description: 'Optional baseline biophysical archetype: a catalog key or display name, exactly (e.g. "carrara_marble", "weathered_concrete", "brushed_titanium", "corten_steel", "solar_low_e_glass", "indiana_limestone", "polished_brass", "quartersawn_walnut", "wrought_iron"; pbr_get_material_catalog lists all 50). An unknown name fails with the key list (a fragment of exactly one key, e.g. "titanium", resolves to it); no other material is substituted. With neither archetype nor descriptor the tool default indiana_limestone is used and the result says so.'
                 },
                 descriptor: {
                     type: 'OBJECT',
@@ -397,16 +397,23 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
         }
 
         // 2. Resolve continuous descriptor
-        const archetypeInput = args.archetype ? (typeof args.archetype === 'number' ? args.archetype : asString(args.archetype)) : undefined;
+        const archetypeInput = args.archetype !== undefined && args.archetype !== null && args.archetype !== ''
+            ? (typeof args.archetype === 'number' ? args.archetype : asString(args.archetype))
+            : undefined;
         let baseDesc: ContinuousMaterialDescriptor;
         let archetypeKey = 'custom_manifold';
+        let materialSource: 'archetype' | 'archetype_with_descriptor_overrides' | 'descriptor_over_tool_default' | 'tool_default_indiana_limestone';
 
         if (archetypeInput !== undefined) {
+            // Unknown names throw PbrUnknownArchetypeError listing the valid keys; nothing is substituted
             const resolved = service.resolveArchetype(archetypeInput);
             baseDesc = service.getAnchorDescriptor(resolved.archetypeId);
             archetypeKey = resolved.key;
+            materialSource = args.descriptor ? 'archetype_with_descriptor_overrides' : 'archetype';
         } else {
             baseDesc = service.getAnchorDescriptor(0);
+            materialSource = args.descriptor ? 'descriptor_over_tool_default' : 'tool_default_indiana_limestone';
+            if (!args.descriptor) archetypeKey = 'indiana_limestone';
         }
 
         const descriptor = sanitizeDescriptor(args.descriptor, baseDesc);
@@ -416,7 +423,7 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
         fs.mkdirSync(outDir, { recursive: true });
         const filePrefix = asString(args.outputFileName) || `${archetypeKey}_${width}x${height}`;
 
-        // 4. Multithreaded C++20 synthesis
+        // 4. Native C++20 synthesis (a compile or run failure throws NativePbrSynthesisError; there is no substitute)
         const pbrResult: NativePbrTextureSet = await service.synthesizeContinuousManifoldPbr(descriptor, {
             width,
             height,
@@ -426,50 +433,29 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
         });
 
         const writtenFiles: Record<string, string> = {};
+        let encodeMs = 0;
 
         // 5. Handle output formats
         if (format === 'png_pack' || format === 'glb' || format === 'materialx' || format === 'usdz') {
-            // Virtual height into RGBA PNG
-            const heightRgba = Buffer.alloc(width * height * 4);
-            const roughnessRgba = Buffer.alloc(width * height * 4);
-            const metallicRgba = Buffer.alloc(width * height * 4);
-            const aoRgba = Buffer.alloc(width * height * 4);
-
-            for (let i = 0; i < width * height; i++) {
-                const hVal = pbrResult.heightRgb[i * 3];
-                heightRgba[i * 4 + 0] = hVal;
-                heightRgba[i * 4 + 1] = hVal;
-                heightRgba[i * 4 + 2] = hVal;
-                heightRgba[i * 4 + 3] = 255;
-
-                const rVal = pbrResult.roughnessRgb[i * 3];
-                roughnessRgba[i * 4 + 0] = rVal;
-                roughnessRgba[i * 4 + 1] = rVal;
-                roughnessRgba[i * 4 + 2] = rVal;
-                roughnessRgba[i * 4 + 3] = 255;
-
-                const mVal = pbrResult.metallicRgb[i * 3];
-                metallicRgba[i * 4 + 0] = mVal;
-                metallicRgba[i * 4 + 1] = mVal;
-                metallicRgba[i * 4 + 2] = mVal;
-                metallicRgba[i * 4 + 3] = 255;
-
-                const aVal = pbrResult.aoRgb[i * 3];
-                aoRgba[i * 4 + 0] = aVal;
-                aoRgba[i * 4 + 1] = aVal;
-                aoRgba[i * 4 + 2] = aVal;
-                aoRgba[i * 4 + 3] = 255;
-            }
-
-            const [albedoPng, normalPng, ormPng, heightPng, roughnessPng, metallicPng, aoPng] = await Promise.all([
-                AdaptiveMaterialPbrService.encodeFromRgba(pbrResult.albedoRgba, width, height, true),
-                AdaptiveMaterialPbrService.encodeFromRgba(pbrResult.normalRgba, width, height, true),
-                AdaptiveMaterialPbrService.encodeFromRgba(pbrResult.ormRgba, width, height, true),
-                AdaptiveMaterialPbrService.encodeFromRgba(heightRgba, width, height, true),
-                AdaptiveMaterialPbrService.encodeFromRgba(roughnessRgba, width, height, true),
-                AdaptiveMaterialPbrService.encodeFromRgba(metallicRgba, width, height, true),
-                AdaptiveMaterialPbrService.encodeFromRgba(aoRgba, width, height, true)
+            // Only the maps that are written are encoded; the deflate runs off the main thread (encodePngAsync)
+            const separateChannels = format === 'materialx' || format === 'usdz';
+            const greyToRgba = (rgb: Buffer): Buffer => {
+                const out = Buffer.alloc(width * height * 4);
+                for (let i = 0; i < width * height; i++) {
+                    const v = rgb[i * 3];
+                    out[i * 4] = v; out[i * 4 + 1] = v; out[i * 4 + 2] = v; out[i * 4 + 3] = 255;
+                }
+                return out;
+            };
+            const encodeStart = performance.now();
+            const png = (rgba: Buffer) => AdaptiveMaterialPbrService.encodePngAsync(rgba, width, height);
+            const [albedoPng, normalPng, ormPng, heightPng] = await Promise.all([
+                png(pbrResult.albedoRgba), png(pbrResult.normalRgba), png(pbrResult.ormRgba), png(greyToRgba(pbrResult.heightRgb))
             ]);
+            const [roughnessPng, metallicPng, aoPng] = separateChannels
+                ? await Promise.all([png(greyToRgba(pbrResult.roughnessRgb)), png(greyToRgba(pbrResult.metallicRgb)), png(greyToRgba(pbrResult.aoRgb))])
+                : [undefined, undefined, undefined];
+            encodeMs = Math.round(performance.now() - encodeStart);
 
             const albedoPath = path.join(outDir, `${filePrefix}_albedo.png`);
             const normalPath = path.join(outDir, `${filePrefix}_normal.png`);
@@ -486,7 +472,7 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
             writtenFiles.orm = ormPath;
             writtenFiles.height = heightPath;
 
-            if (format === 'materialx' || format === 'usdz') {
+            if (roughnessPng && metallicPng && aoPng) {
                 const roughnessPath = path.join(outDir, `${filePrefix}_roughness.png`);
                 const metallicPath = path.join(outDir, `${filePrefix}_metallic.png`);
                 const aoPath = path.join(outDir, `${filePrefix}_ao.png`);
@@ -526,9 +512,9 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
                     descriptor,
                     albedoPng,
                     normalPng,
-                    roughnessPng,
-                    metallicPng,
-                    aoPng,
+                    roughnessPng: roughnessPng!,
+                    metallicPng: metallicPng!,
+                    aoPng: aoPng!,
                     ormPng,
                     heightPng,
                     outputPath: usdzPath,
@@ -700,15 +686,24 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
             descriptor,
             format,
             executionTimeMs: elapsedMs,
-            cCompilerTimeMs: pbrResult.executionTimeMs,
+            materialSource,
             synthesizer: pbrResult.synthesizer,
-            ...(pbrResult.reason ? { synthesizerReason: pbrResult.reason } : {}),
+            nativeTimingsMs: {
+                total: Math.round(pbrResult.executionTimeMs),
+                compile: Math.round(pbrResult.timings.compileMs),
+                compileCacheHit: pbrResult.timings.compileCacheHit,
+                kernel: Math.round(pbrResult.timings.kernelMs),
+                readback: Math.round(pbrResult.timings.readbackMs)
+            },
+            pngEncodeMs: encodeMs,
             outputDirectory: outDir,
             files: writtenFiles
         };
 
         const tierName = args.resolution || `${width}x${height}`;
-        const summary = `Synthesized ${tierName} (${width}x${height}) PBR material [${archetypeKey}] in ${elapsedMs}ms (${pbrResult.synthesizer === 'native-cpp20' ? 'C++20 kernel' : `in-process TypeScript synthesizer, NOT the C++20 kernel: ${pbrResult.reason ?? 'no reason given'}`}: ${pbrResult.executionTimeMs}ms). Format: ${format}. Conduction: ${descriptor.conduction.toFixed(2)}, Roughness: ${descriptor.roughnessBaseline.toFixed(2)}, Fissure: ${descriptor.fissureScale?.toFixed(1) ?? '8.0'}. Files written to: ${outDir}.`;
+        const t = pbrResult.timings;
+        const materialNote = materialSource === 'tool_default_indiana_limestone' ? ' (no archetype or descriptor given: the tool default)' : '';
+        const summary = `Synthesized ${tierName} (${width}x${height}) PBR material [${archetypeKey}]${materialNote} in ${elapsedMs}ms: native C++20 kernel ${Math.round(t.kernelMs)}ms, compile ${t.compileCacheHit ? 'cached' : `${Math.round(t.compileMs)}ms`}, PNG encode ${encodeMs}ms. Format: ${format}. Conduction: ${descriptor.conduction.toFixed(2)}, Roughness: ${descriptor.roughnessBaseline.toFixed(2)}, Fissure: ${descriptor.fissureScale?.toFixed(1) ?? '8.0'}. Files: ${Object.values(writtenFiles).map(f => path.basename(f)).join(', ')} in ${outDir}.`;
 
         return {
             resultPayload: payload,

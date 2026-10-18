@@ -21,6 +21,7 @@ import {
     AdaptivePbrBudgetError,
     AdaptivePbrInputError,
     AdaptivePbrMaterialSpecError,
+    PbrUnknownArchetypeError,
     AdaptivePbrTextureSynthesisError
 } from './adaptive-pbr-errors';
 import {
@@ -95,9 +96,11 @@ export interface BoxProjectionTextureSetReport {
     /** Descriptor fields nobody set; the synthesizer applies its own defaults to them. */
     unspecifiedDescriptorFields: string[];
     materialSource: 'archetype' | 'archetype_with_descriptor_overrides' | 'descriptor' | 'tool_default_indiana_limestone';
-    synthesizer: 'native-cpp20' | 'typescript-analytical';
-    synthesizerReason?: string;
+    synthesizer: 'native-cpp20';
+    /** Measured wall time of synthesizing this set, and its phases as the native service measured them. */
     synthesisMs: number;
+    synthesisTimings: { compileMs: number; compileCacheHit: boolean; kernelMs: number; readbackMs: number };
+    encodeMs: number;
     pngBytes: { albedo: number; normal: number; orm: number };
     usedByGroups: string[];
 }
@@ -176,11 +179,7 @@ function resolveMaterialSpec(service: NativeService, where: string, archetype: u
         }
         const entry = service.findArchetype(archetype);
         if (!entry) {
-            const keys = service.get50Catalog().map(e => e.key);
-            throw new AdaptivePbrMaterialSpecError(
-                `${where}: ${JSON.stringify(archetype)} is not a catalog archetype (no nearby material is substituted). The ${keys.length} keys: ${keys.join(', ')}`,
-                { archetype, catalogKeys: keys }
-            );
+            throw new PbrUnknownArchetypeError(archetype, service.get50Catalog().map(e => e.key), ` at ${where} (no nearby material is substituted)`);
         }
         base = service.getAnchorDescriptor(entry.archetypeId);
         archetypeKey = entry.key;
@@ -351,8 +350,11 @@ export async function runBoxProjectionPbr(req: BoxProjectionPbrRequest): Promise
         try {
             synthesized = await service.synthesizeContinuousManifoldPbr(spec.descriptor as ContinuousMaterialDescriptor, { width: px, height: px, seed });
         } catch (err) {
+            if (err instanceof AdaptivePbrTextureSynthesisError) throw err; // already typed (compile / run / output stage)
             throw new AdaptivePbrTextureSynthesisError(`Texture set "${label}" (${spec.archetypeKey ?? 'custom descriptor'}, ${px}px) could not be synthesized: ${(err as Error)?.message ?? err}`, { label, px, cause: String(err) });
         }
+        const synthesisMs = Date.now() - started;
+        const encodeStarted = Date.now();
         const texels = px * px;
         const sizes: Array<[string, number, number]> = [['albedoRgba', synthesized.albedoRgba?.length, texels * 4], ['normalRgba', synthesized.normalRgba?.length, texels * 4], ['ormRgba', synthesized.ormRgba?.length, texels * 4]];
         for (const [name, got, want] of sizes) {
@@ -374,13 +376,10 @@ export async function runBoxProjectionPbr(req: BoxProjectionPbrRequest): Promise
         textureSets.push({
             label, resolutionPx: px, seed, archetypeKey: spec.archetypeKey, archetypeId: spec.archetypeId,
             descriptor: spec.descriptor, unspecifiedDescriptorFields: unspecified, materialSource: spec.source,
-            synthesizer: synthesized.synthesizer, synthesizerReason: synthesized.reason, synthesisMs: Date.now() - started,
+            synthesizer: synthesized.synthesizer, synthesisMs, synthesisTimings: synthesized.timings, encodeMs: Date.now() - encodeStarted,
             pngBytes: { albedo: albedo.length, normal: normal.length, orm: orm.length },
             usedByGroups: users.map(u => u.name)
         });
-        if (synthesized.synthesizer !== 'native-cpp20') {
-            inferred.push(`texture set ${label} came from the in-process TypeScript synthesizer, not the native C++20 kernel (${synthesized.reason ?? 'no reason given'})`);
-        }
         texturePngs.push({ label, archetypeKey: spec.archetypeKey, descriptor: spec.descriptor, albedo, normal, orm });
         sets.push({
             label, width: px, height: px, albedoPng: albedo, normalPng: normal, ormPng: orm,

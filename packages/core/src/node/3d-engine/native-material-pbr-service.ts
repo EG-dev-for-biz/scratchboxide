@@ -14,7 +14,9 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { NativeCppCompilerService } from './native-compiler-service';
 import type { ContinuousBiophysicalFields, ContinuousMaterialDescriptor, DifferentialGeometryPartition } from '../../common/adaptive-material-types';
-import { fbm2D, perlin2D } from '../texture-processing';
+import { AdaptivePbrMaterialSpecError, NativePbrSynthesisError, PbrUnknownArchetypeError } from './adaptive-pbr-errors';
+
+export { NativePbrSynthesisError, PbrUnknownArchetypeError } from './adaptive-pbr-errors';
 
 const execFileAsync = promisify(execFile);
 
@@ -56,14 +58,20 @@ export interface NativePbrTextureSet {
     albedoRgba: Buffer;
     normalRgba: Buffer;
     ormRgba: Buffer;
+    /** Wall time of the whole call, measured (compile or cache lookup + kernel run + readback). */
     executionTimeMs: number;
-    /**
-     * Which synthesizer produced these maps. 'native-cpp20' is the compiled scratchbox_pbr_manifold.hpp kernel;
-     * 'typescript-analytical' is the in-process equivalent, used when the test environment or SCRATCHBOX_PREFER_FALLBACK
-     * asks for it or when the native compile/run failed (the failure is in `reason`).
-     */
-    synthesizer: 'native-cpp20' | 'typescript-analytical';
-    reason?: string;
+    /** Measured phases of `executionTimeMs`. */
+    timings: {
+        /** Compile, or the compilation-cache lookup when `compileCacheHit`. */
+        compileMs: number;
+        compileCacheHit: boolean;
+        /** The compiled kernel's own process, from spawn to exit. */
+        kernelMs: number;
+        /** Reading the raw maps back and repacking albedo / normal / ORM as RGBA. */
+        readbackMs: number;
+    };
+    /** Always the compiled scratchbox_pbr_manifold.hpp kernel: a failed compile or run throws NativePbrSynthesisError. */
+    synthesizer: 'native-cpp20';
 }
 
 export interface NativeTexturePeriodicityOptions {
@@ -185,6 +193,17 @@ export const PBR_50_ARCHETYPE_CATALOG: Pbr50CatalogEntry[] = [
     { archetypeId: 49, key: 'mossy_rock', displayName: 'Mossy Rock Crevice Weathering', category: 'Relief & Weathering', baseAlbedo: [0.38, 0.48, 0.28], baseRoughness: 0.95, baseMetallic: 0.00, defaultNormalStrength: 3.6, description: 'Porous granite bedrock with velvety bryophyte moss colonies clinging to damp crevices' }
 ];
 
+function rgbToRgba(rgb: Buffer, pixels: number): Buffer {
+    const out = Buffer.alloc(pixels * 4);
+    for (let i = 0; i < pixels; i++) {
+        out[i * 4] = rgb[i * 3];
+        out[i * 4 + 1] = rgb[i * 3 + 1];
+        out[i * 4 + 2] = rgb[i * 3 + 2];
+        out[i * 4 + 3] = 255;
+    }
+    return out;
+}
+
 export class NativeMaterialPbrService {
     private readonly compiler: NativeCppCompilerService;
     private readonly cacheDir: string;
@@ -205,24 +224,21 @@ export class NativeMaterialPbrService {
     }
 
     /**
-     * Resolves an archetype key, display name, or numeric ID to its catalog entry.
+     * Resolves an archetype key, display name or numeric id to its catalog entry. Key matching ignores case, spaces and
+     * dashes; a fragment that is part of exactly one key ("titanium") resolves to that key. Anything else, including a
+     * fragment shared by several keys, throws PbrUnknownArchetypeError listing the valid keys: no default is substituted.
      */
     public resolveArchetype(input: string | number): Pbr50CatalogEntry {
-        if (typeof input === 'number') {
-            const entry = PBR_50_ARCHETYPE_CATALOG.find(e => e.archetypeId === input);
-            if (entry) return entry;
-        } else if (typeof input === 'string') {
+        const exact = this.findArchetype(input);
+        if (exact) return exact;
+        const keys = PBR_50_ARCHETYPE_CATALOG.map(e => e.key);
+        if (typeof input === 'string' && input.trim()) {
             const keyNorm = input.toLowerCase().trim().replace(/[-\s]+/g, '_');
-            const entry = PBR_50_ARCHETYPE_CATALOG.find(e =>
-                e.key === keyNorm ||
-                e.displayName.toLowerCase() === input.toLowerCase().trim()
-            );
-            if (entry) return entry;
-            // Fuzzy match on key substring
-            const fuzzy = PBR_50_ARCHETYPE_CATALOG.find(e => e.key.includes(keyNorm) || keyNorm.includes(e.key));
-            if (fuzzy) return fuzzy;
+            const partial = PBR_50_ARCHETYPE_CATALOG.filter(e => e.key.includes(keyNorm));
+            if (partial.length === 1) return partial[0];
+            if (partial.length > 1) throw new PbrUnknownArchetypeError(input, keys, ` (it is part of ${partial.length} keys: ${partial.map(e => e.key).join(', ')}; name one)`);
         }
-        return PBR_50_ARCHETYPE_CATALOG[0]; // Fallback to Indiana Limestone
+        throw new PbrUnknownArchetypeError(input, keys);
     }
 
     /**
@@ -340,11 +356,8 @@ export class NativeMaterialPbrService {
         const width = options.width ?? 512;
         const height = options.height ?? 512;
         const seed = options.seed ?? 1337;
-
-        if (process.env.SCRATCHBOX_PREFER_FALLBACK === '1' || process.env.NODE_ENV === 'test') {
-            const fallback = this.synthesizeContinuousManifoldFallback(descriptor, width, height, seed, options.outputDir);
-            fallback.reason = process.env.SCRATCHBOX_PREFER_FALLBACK === '1' ? 'SCRATCHBOX_PREFER_FALLBACK=1' : 'NODE_ENV=test';
-            return fallback;
+        if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) {
+            throw new AdaptivePbrMaterialSpecError(`Texture size must be positive whole pixels; got ${width}x${height}.`, { width, height });
         }
 
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbox_manifold_'));
@@ -442,61 +455,63 @@ int main(int argc, char** argv) {
 `;
 
         try {
-            const compileRes = await this.compiler.compileSource(cppSource, {
-                outputDir: this.cacheDir,
-                outputBinaryName: 'pbr_manifold_synth_runner',
-                optimization: '-O3'
-            });
-
+            const compileStart = performance.now();
+            let compileRes: Awaited<ReturnType<NativeCppCompilerService['compileSource']>>;
+            try {
+                compileRes = await this.compiler.compileSource(cppSource, {
+                    outputDir: this.cacheDir,
+                    outputBinaryName: 'pbr_manifold_synth_runner',
+                    optimization: '-O3'
+                });
+            } catch (err) {
+                throw new NativePbrSynthesisError(`The native C++20 PBR kernel could not be compiled (is a C++20 compiler installed? CXX=${process.env.CXX ?? 'clang++'}): ${(err as Error)?.message ?? err}`, 'compile');
+            }
+            const compileMs = performance.now() - compileStart;
             if (!compileRes.success || !compileRes.binaryPath) {
-                throw new Error(`Failed to compile native PBR manifold synthesizer: ${compileRes.compilerOutput}`);
+                throw new NativePbrSynthesisError(
+                    `The native C++20 PBR kernel (scratchbox_pbr_manifold.hpp) did not compile, so no texture set was made: ${String(compileRes.compilerOutput ?? '').slice(0, 1500)}`,
+                    'compile', { compilerOutput: compileRes.compilerOutput, diagnostics: compileRes.diagnostics }
+                );
             }
 
-            const { stdout } = await execFileAsync(compileRes.binaryPath, [
-                descBinPath,
-                width.toString(),
-                height.toString(),
-                seed.toString(),
-                outPrefix
-            ], {
-                timeout: Math.max(60000, Math.round(((width * height) / (1024 * 1024)) * 30000)),
-                maxBuffer: 256 * 1024 * 1024
-            });
-
-            const parsed = JSON.parse(stdout.trim());
-            if (!parsed.success) {
-                throw new Error('Native C++20 manifold synthesis returned non-success.');
+            const kernelStart = performance.now();
+            let stdout: string;
+            try {
+                ({ stdout } = await execFileAsync(compileRes.binaryPath, [descBinPath, width.toString(), height.toString(), seed.toString(), outPrefix], {
+                    timeout: Math.max(60000, Math.round(((width * height) / (1024 * 1024)) * 30000)),
+                    maxBuffer: 256 * 1024 * 1024
+                }));
+            } catch (err) {
+                throw new NativePbrSynthesisError(`The native C++20 PBR kernel failed while running (${width}x${height}): ${(err as Error)?.message ?? err}`, 'run', { width, height });
+            }
+            const kernelMs = performance.now() - kernelStart;
+            let parsed: { success?: boolean } | undefined;
+            try { parsed = JSON.parse(stdout.trim()); } catch { /* reported below */ }
+            if (!parsed?.success) {
+                throw new NativePbrSynthesisError(`The native C++20 PBR kernel did not report success: ${stdout.trim().slice(0, 300) || '(no output)'}`, 'run', { width, height });
             }
 
-            const albedoRgb = fs.readFileSync(outPrefix + '_albedo.raw');
-            const normalRgb = fs.readFileSync(outPrefix + '_normal.raw');
-            const roughnessRgb = fs.readFileSync(outPrefix + '_roughness.raw');
-            const metallicRgb = fs.readFileSync(outPrefix + '_metallic.raw');
-            const aoRgb = fs.readFileSync(outPrefix + '_ao.raw');
-            const ormRgb = fs.readFileSync(outPrefix + '_orm.raw');
-            const heightRgb = fs.readFileSync(outPrefix + '_height.raw');
-
+            const readStart = performance.now();
             const totalPixels = width * height;
-            const albedoRgba = Buffer.alloc(totalPixels * 4);
-            const normalRgba = Buffer.alloc(totalPixels * 4);
-            const ormRgba = Buffer.alloc(totalPixels * 4);
+            const read = (name: string): Buffer => {
+                const file = `${outPrefix}_${name}.raw`;
+                const buf = fs.existsSync(file) ? fs.readFileSync(file) : Buffer.alloc(0);
+                if (buf.length !== totalPixels * 3) {
+                    throw new NativePbrSynthesisError(`The native C++20 PBR kernel wrote ${buf.length} bytes of ${name} for ${width}x${height} (expected ${totalPixels * 3}).`, 'output', { name, got: buf.length, want: totalPixels * 3 });
+                }
+                return buf;
+            };
+            const albedoRgb = read('albedo');
+            const normalRgb = read('normal');
+            const roughnessRgb = read('roughness');
+            const metallicRgb = read('metallic');
+            const aoRgb = read('ao');
+            const ormRgb = read('orm');
+            const heightRgb = read('height');
 
-            for (let i = 0; i < totalPixels; i++) {
-                albedoRgba[i * 4 + 0] = albedoRgb[i * 3 + 0];
-                albedoRgba[i * 4 + 1] = albedoRgb[i * 3 + 1];
-                albedoRgba[i * 4 + 2] = albedoRgb[i * 3 + 2];
-                albedoRgba[i * 4 + 3] = 255;
-
-                normalRgba[i * 4 + 0] = normalRgb[i * 3 + 0];
-                normalRgba[i * 4 + 1] = normalRgb[i * 3 + 1];
-                normalRgba[i * 4 + 2] = normalRgb[i * 3 + 2];
-                normalRgba[i * 4 + 3] = 255;
-
-                ormRgba[i * 4 + 0] = ormRgb[i * 3 + 0];
-                ormRgba[i * 4 + 1] = ormRgb[i * 3 + 1];
-                ormRgba[i * 4 + 2] = ormRgb[i * 3 + 2];
-                ormRgba[i * 4 + 3] = 255;
-            }
+            const albedoRgba = rgbToRgba(albedoRgb, totalPixels);
+            const normalRgba = rgbToRgba(normalRgb, totalPixels);
+            const ormRgba = rgbToRgba(ormRgb, totalPixels);
 
             if (options.outputDir) {
                 fs.mkdirSync(options.outputDir, { recursive: true });
@@ -504,8 +519,7 @@ int main(int argc, char** argv) {
                 fs.copyFileSync(outPrefix + '_normal.raw', path.join(options.outputDir, 'manifold_normal.raw'));
                 fs.copyFileSync(outPrefix + '_orm.raw', path.join(options.outputDir, 'manifold_orm.raw'));
             }
-
-            const durationMs = performance.now() - startTime;
+            const readbackMs = performance.now() - readStart;
 
             return {
                 width,
@@ -521,14 +535,10 @@ int main(int argc, char** argv) {
                 albedoRgba,
                 normalRgba,
                 ormRgba,
-                executionTimeMs: durationMs,
+                executionTimeMs: performance.now() - startTime,
+                timings: { compileMs, compileCacheHit: /cache/i.test(String(compileRes.compilerOutput ?? '')), kernelMs, readbackMs },
                 synthesizer: 'native-cpp20'
             };
-        } catch (err) {
-            // High-speed analytical procedural synthesis fallback (Two-Tier resiliency); the result names it and why.
-            const fallback = this.synthesizeContinuousManifoldFallback(descriptor, width, height, seed, options.outputDir);
-            fallback.reason = `native C++20 synthesis failed: ${(err as Error)?.message ?? String(err)}`.slice(0, 500);
-            return fallback;
         } finally {
             try {
                 fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -536,195 +546,6 @@ int main(int argc, char** argv) {
                 // Ignore cleanup error
             }
         }
-    }
-
-    /**
-     * High-speed analytical procedural synthesis fallback for ContinuousMaterialDescriptor in pure TypeScript.
-     * Guarantees 100% ADA compliance and zero downtime when C++ compiler is sandboxed or unavailable.
-     */
-    public synthesizeContinuousManifoldFallback(
-        descriptor: ContinuousMaterialDescriptor,
-        width: number,
-        height: number,
-        seed: number,
-        outputDir?: string
-    ): NativePbrTextureSet {
-        const totalPixels = width * height;
-        const albedoRgb = Buffer.alloc(totalPixels * 3);
-        const normalRgb = Buffer.alloc(totalPixels * 3);
-        const roughnessRgb = Buffer.alloc(totalPixels * 3);
-        const metallicRgb = Buffer.alloc(totalPixels * 3);
-        const aoRgb = Buffer.alloc(totalPixels * 3);
-        const ormRgb = Buffer.alloc(totalPixels * 3);
-        const heightRgb = Buffer.alloc(totalPixels * 3);
-
-        const albedoRgba = Buffer.alloc(totalPixels * 4);
-        const normalRgba = Buffer.alloc(totalPixels * 4);
-        const ormRgba = Buffer.alloc(totalPixels * 4);
-
-        const cosA = Math.cos(descriptor.anisotropyAngleRad ?? 0);
-        const sinA = Math.sin(descriptor.anisotropyAngleRad ?? 0);
-        const anisoStretch = 1.0 + (descriptor.anisotropyStrength ?? 0) * 8.0;
-        const fissureScale = descriptor.fissureScale ?? 8.0;
-        const fbmGain = descriptor.fbmGain ?? 0.5;
-        const fbmOctaves = Math.min(6, Math.max(1, Math.round(descriptor.fbmOctaves ?? 4)));
-        const secWeight = descriptor.secondaryWeight ?? 0.25;
-        const microPorosity = descriptor.microPorosity ?? 0.2;
-        const normalStrength = descriptor.normalStrength ?? 1.5;
-        const aoStrength = descriptor.aoStrength ?? 1.0;
-
-        const albLinear = descriptor.albedoLinear;
-        const secAlb = descriptor.secondaryAlbedo ?? [0.3, 0.3, 0.3];
-        const conduction = Math.max(0, Math.min(1, descriptor.conduction));
-        const baseRoughness = Math.max(0.04, Math.min(0.98, descriptor.roughnessBaseline));
-
-        const heightVals = new Float32Array(totalPixels);
-
-        // 1. Generate height field
-        for (let y = 0; y < height; y++) {
-            const v = y / height;
-            for (let x = 0; x < width; x++) {
-                const u = x / width;
-                const uRot = u * cosA - v * sinA;
-                const vRot = (u * sinA + v * cosA) * anisoStretch;
-
-                const fbm = fbm2D(uRot * fissureScale, vRot * fissureScale, fbmOctaves, 2.0, fbmGain, seed);
-                const grain = perlin2D(u * 64.0, v * 64.0, seed + 202);
-                const hVal = Math.max(0, Math.min(1, fbm * 0.75 + (grain * 0.5 + 0.5) * 0.25));
-                heightVals[y * width + x] = hVal;
-            }
-        }
-
-        // 2. Generate PBR channels
-        for (let y = 0; y < height; y++) {
-            for (let x = 0; x < width; x++) {
-                const idx = y * width + x;
-                const hVal = heightVals[idx];
-
-                // Normal via Scharr
-                const xm1 = (x - 1 + width) % width;
-                const xp1 = (x + 1) % width;
-                const ym1 = (y - 1 + height) % height;
-                const yp1 = (y + 1) % height;
-
-                const tl = heightVals[ym1 * width + xm1];
-                const tr = heightVals[ym1 * width + xp1];
-                const bl = heightVals[yp1 * width + xm1];
-                const br = heightVals[yp1 * width + xp1];
-                const l  = heightVals[y * width + xm1];
-                const r  = heightVals[y * width + xp1];
-                const t  = heightVals[ym1 * width + x];
-                const b  = heightVals[yp1 * width + x];
-
-                const dx = (tr * 3 + r * 10 + br * 3) - (tl * 3 + l * 10 + bl * 3);
-                const dy = (bl * 3 + b * 10 + br * 3) - (tl * 3 + t * 10 + tr * 3);
-                const nx = -dx * normalStrength * 0.05;
-                const ny = -dy * normalStrength * 0.05;
-                const nz = 1.0;
-                const nLen = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1.0;
-                const nNormX = nx / nLen;
-                const nNormY = ny / nLen;
-                const nNormZ = nz / nLen;
-
-                // Roughness with biophysical curvature
-                const curvature = 4.0 * hVal - (l + r + t + b);
-                const burnish = Math.max(0, curvature) * 0.35;
-                const dirt = Math.max(0, -curvature) * 0.40;
-                const localRough = Math.max(0.04, Math.min(0.98, baseRoughness - burnish + dirt + (1.0 - hVal) * microPorosity));
-
-                // Albedo blending
-                const blendFac = Math.max(0, Math.min(1, hVal * secWeight));
-                const colR = Math.max(0, Math.min(1, albLinear[0] * (1 - blendFac) + secAlb[0] * blendFac));
-                const colG = Math.max(0, Math.min(1, albLinear[1] * (1 - blendFac) + secAlb[1] * blendFac));
-                const colB = Math.max(0, Math.min(1, albLinear[2] * (1 - blendFac) + secAlb[2] * blendFac));
-
-                // AO
-                const aoVal = Math.max(0, Math.min(1, 1.0 - (1.0 - hVal) * aoStrength * 0.5));
-
-                const u8ColR = Math.round(colR * 255);
-                const u8ColG = Math.round(colG * 255);
-                const u8ColB = Math.round(colB * 255);
-
-                const u8NormR = Math.round((nNormX * 0.5 + 0.5) * 255);
-                const u8NormG = Math.round((nNormY * 0.5 + 0.5) * 255);
-                const u8NormB = Math.round((nNormZ * 0.5 + 0.5) * 255);
-
-                const u8Rough = Math.round(localRough * 255);
-                const u8Metal = Math.round(conduction * 255);
-                const u8Ao = Math.round(aoVal * 255);
-                const u8H = Math.round(hVal * 255);
-
-                // RGB
-                albedoRgb[idx * 3 + 0] = u8ColR;
-                albedoRgb[idx * 3 + 1] = u8ColG;
-                albedoRgb[idx * 3 + 2] = u8ColB;
-
-                normalRgb[idx * 3 + 0] = u8NormR;
-                normalRgb[idx * 3 + 1] = u8NormG;
-                normalRgb[idx * 3 + 2] = u8NormB;
-
-                roughnessRgb[idx * 3 + 0] = u8Rough;
-                roughnessRgb[idx * 3 + 1] = u8Rough;
-                roughnessRgb[idx * 3 + 2] = u8Rough;
-
-                metallicRgb[idx * 3 + 0] = u8Metal;
-                metallicRgb[idx * 3 + 1] = u8Metal;
-                metallicRgb[idx * 3 + 2] = u8Metal;
-
-                aoRgb[idx * 3 + 0] = u8Ao;
-                aoRgb[idx * 3 + 1] = u8Ao;
-                aoRgb[idx * 3 + 2] = u8Ao;
-
-                ormRgb[idx * 3 + 0] = u8Ao;
-                ormRgb[idx * 3 + 1] = u8Rough;
-                ormRgb[idx * 3 + 2] = u8Metal;
-
-                heightRgb[idx * 3 + 0] = u8H;
-                heightRgb[idx * 3 + 1] = u8H;
-                heightRgb[idx * 3 + 2] = u8H;
-
-                // RGBA
-                albedoRgba[idx * 4 + 0] = u8ColR;
-                albedoRgba[idx * 4 + 1] = u8ColG;
-                albedoRgba[idx * 4 + 2] = u8ColB;
-                albedoRgba[idx * 4 + 3] = 255;
-
-                normalRgba[idx * 4 + 0] = u8NormR;
-                normalRgba[idx * 4 + 1] = u8NormG;
-                normalRgba[idx * 4 + 2] = u8NormB;
-                normalRgba[idx * 4 + 3] = 255;
-
-                ormRgba[idx * 4 + 0] = u8Ao;
-                ormRgba[idx * 4 + 1] = u8Rough;
-                ormRgba[idx * 4 + 2] = u8Metal;
-                ormRgba[idx * 4 + 3] = 255;
-            }
-        }
-
-        if (outputDir) {
-            fs.mkdirSync(outputDir, { recursive: true });
-            fs.writeFileSync(path.join(outputDir, 'manifold_albedo.raw'), albedoRgb);
-            fs.writeFileSync(path.join(outputDir, 'manifold_normal.raw'), normalRgb);
-            fs.writeFileSync(path.join(outputDir, 'manifold_orm.raw'), ormRgb);
-        }
-
-        return {
-            width,
-            height,
-            descriptor,
-            albedoRgb,
-            normalRgb,
-            roughnessRgb,
-            metallicRgb,
-            aoRgb,
-            ormRgb,
-            heightRgb,
-            albedoRgba,
-            normalRgba,
-            ormRgba,
-            executionTimeMs: 15,
-            synthesizer: 'typescript-analytical'
-        };
     }
 
     /**

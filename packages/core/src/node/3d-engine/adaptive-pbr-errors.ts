@@ -35,8 +35,25 @@ export class AdaptivePbrMaterialSpecError extends AdaptivePbrError {}
 /** The request exceeds a cap on distinct texture sets, per-set resolution or total texels. */
 export class AdaptivePbrBudgetError extends AdaptivePbrError {}
 
-/** The texture synthesizer (native C++20 or its test-environment equivalent) did not deliver a texture set. */
+/** The native C++20 texture synthesizer did not deliver a texture set. */
 export class AdaptivePbrTextureSynthesisError extends AdaptivePbrError {}
 
 /** The result could not be written or exported, or the produced GLB failed its own consistency check. */
 export class AdaptivePbrOutputError extends AdaptivePbrError {}
+
+/**
+ * The native C++20 PBR kernel could not deliver a texture set. There is no in-process substitute: the failure is the
+ * result. `stage` says where it failed; `compilerOutput` carries clang's diagnostics for a compile failure.
+ */
+export class NativePbrSynthesisError extends AdaptivePbrTextureSynthesisError {
+    constructor(message: string, public readonly stage: 'compile' | 'run' | 'output', details: Record<string, unknown> = {}) {
+        super(message, { ...details, stage });
+    }
+}
+
+/** An archetype name or id that is not in the catalog. Lists the valid keys so the caller can pick one or pass a descriptor. */
+export class PbrUnknownArchetypeError extends AdaptivePbrMaterialSpecError {
+    constructor(public readonly requested: string | number, public readonly validArchetypes: string[], hint = '') {
+        super(`Unknown material archetype ${JSON.stringify(requested)}${hint}. Valid archetypes: ${validArchetypes.join(', ')}. Or pass a continuous descriptor (albedoLinear, conduction, roughnessBaseline, ...) instead of an archetype.`, { requested, validArchetypes });
+    }
+}
