@@ -119,4 +119,14 @@ describe('atmosphere_configure_scene applies the sun to the open scene', () => {
         fs.writeFileSync(path.join(SHOTS, 'unit_sun_shadow_topdown_wsq_1600edt.png'), encodePng(W, H, px, 3));
         handle.dispose();
     });
+
+    it('geobox_harmonize_location_lighting applies its NOAA sun to the open scene and says the de-lighting values are not applied', async () => {
+        const { geoboxPrecisionHandlers } = await import('../src/node/gemini/tools/spatial-tools');
+        const active = stagedClayScene();
+        const out = await geoboxPrecisionHandlers.geobox_harmonize_location_lighting({ ...PLACE, isoDate: ISO }, { request: { activeArtifact: active } } as any) as any;
+        const sun = calculateNOAASolarPosition(new Date(ISO), PLACE.latitude, PLACE.longitude);
+        expect(out.resultPayload.applied).toBe(true);
+        expect(out.resultPayload.artifact.data.features.atmosphericScattering.sunElevation).toBeCloseTo(sun.elevationDeg, 1);
+        expect(out.summaryResult).toMatch(/^APPLIED the sun to the active 3D scene "Washington Square Arch".*computed only, NOT applied: the viewport does not read them/);
+    });
 });

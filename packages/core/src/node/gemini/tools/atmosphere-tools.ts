@@ -49,7 +49,7 @@ function shadowRadiusFor(data: Scene3DData): number {
  * with what the viewport needs to draw it: the colour temperature and the shadow extent. The scene keeps its render mode;
  * a clay scene draws the sun and sky because the sun is set explicitly (syncAtmosphere's explicit-sun opt-in).
  */
-function applySunToScene(
+export function applySunToScene(
     active: CanvasArtifact,
     s: { elevation: number; azimuth: number; lat?: number; lng?: number; isoDate?: string; sunSource: string; kelvin?: number; config: Record<string, unknown>; clouds: boolean; args: Record<string, unknown> }
 ): { ok: true; artifact: CanvasArtifact; operators: string[]; shadowRadiusM: number } | { ok: false; error: string } {
