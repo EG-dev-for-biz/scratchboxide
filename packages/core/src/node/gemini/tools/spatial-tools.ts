@@ -75,7 +75,7 @@ import type {
 import { Dynamic4DGaussianSplatService } from '../../3d-engine/Dynamic4DGaussianSplatService';
 import { HumanoidMotionBridgeService } from '../../spatial/HumanoidMotionBridgeService';
 import { VideoTo4DPerformerPipelineService } from '../../spatial/VideoTo4DPerformerPipelineService';
-import { SbHumanAvatarService } from '../../spatial/SbHumanAvatarService';
+import { SbHumanAvatarService, PbrMeshSkinAdapter } from '../../spatial/SbHumanAvatarService';
 import { OffsetViewSynthesisService } from '../../spatial/OffsetViewSynthesisService';
 import { PanoramaDepthService } from '../../spatial/PanoramaDepthService';
 import { Splat3DTilesService } from '../../spatial/Splat3DTilesService';
@@ -4824,7 +4824,7 @@ export const HUMANOID_AVATAR_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'humanoid_avatar_animate',
-        description: 'Animates and deforms a humanoid avatar at a specific motion frame index via 22-joint SB-Human Linear Blend Skinning (LBS) across PBR mesh or 4DGS splats.',
+        description: 'Poses a humanoid avatar at one frame of its motion track (motion.json) with 22-joint SB-Human 4-bone Linear Blend Skinning, on the PBR mesh, 4DGS splats or 2DGS triangle surfels. Reports the posed bounds/centroid and where the motion came from (motionSource; "synthetic_idle" means procedural motion, not tracked). Fails if the actor has no motion track or skin weights, the frame is out of range, or the modality has no adapter.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -4838,12 +4838,8 @@ export const HUMANOID_AVATAR_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 modality: {
                     type: 'STRING',
-                    description: 'Skinning modality ("pbr-standard", "4dgs-radiance", "2dgs-planar-surfel"; default: "pbr-standard")'
+                    description: 'Skinning modality ("pbr-standard", "pbr-melanin", "pbr-video-projected", "4dgs-radiance", "2dgs-planar-surfel"; default: "pbr-standard")'
                 },
-                exportArtifact: {
-                    type: 'BOOLEAN',
-                    description: 'Whether to serialize and return the deformed artifact buffer (default: false)'
-                }
             },
             required: ['actorId', 'frameIndex']
         }
@@ -5083,18 +5079,29 @@ export const humanoidAvatarHandlers: Record<string, ToolHandler> = {
             });
         }
 
-        const frameResult = await adapter.evaluateFrame(frameIndex);
+        // Without a frameIndex a PBR actor reports its rest mesh; a posed frame needs its motion track.
+        let frameResult: { vertexCount?: number; gaussianCount?: number };
+        let evaluated: string;
+        if (args.frameIndex === undefined && adapter instanceof PbrMeshSkinAdapter) {
+            const rest = await adapter.loadRestMesh();
+            frameResult = { vertexCount: rest.positions.length / 3 };
+            evaluated = 'rest pose';
+        } else {
+            frameResult = await adapter.evaluateFrame(frameIndex);
+            evaluated = `motion frame ${frameIndex}`;
+        }
         return {
             resultPayload: {
                 actorId,
                 modality,
-                frameIndex,
+                frameIndex: evaluated === 'rest pose' ? undefined : frameIndex,
+                pose: evaluated,
                 vertexCount: frameResult.vertexCount,
                 gaussianCount: frameResult.gaussianCount,
                 artifactBytes: artifactBuffer ? artifactBuffer.byteLength : undefined,
                 artifactBase64Preview: artifactBuffer ? Buffer.from(artifactBuffer).subarray(0, 64).toString('hex') : undefined
             } as unknown as ToolResultPayload,
-            summaryResult: `Evaluated actor "${actorId}" with skin modality "${modality}": ${frameResult.vertexCount ?? frameResult.gaussianCount ?? 0} geometric elements${artifactBuffer ? `, exported ${artifactBuffer.byteLength} bytes (${format || 'artifact'})` : ''}.`
+            summaryResult: `Evaluated actor "${actorId}" (${evaluated}) with skin modality "${modality}": ${frameResult.vertexCount ?? frameResult.gaussianCount ?? 0} geometric elements${artifactBuffer ? `, exported ${artifactBuffer.byteLength} bytes (${format || 'artifact'})` : ''}.`
         };
     },
 
@@ -5107,18 +5114,23 @@ export const humanoidAvatarHandlers: Record<string, ToolHandler> = {
         const modality = asString(args.modality, 'pbr-standard') as any;
         const service = new SbHumanAvatarService();
         const frame = await service.evaluateActorFrame(actorId, frameIndex, modality);
+        const synthetic = frame.motionSource === 'synthetic_idle';
+        const fmt = (v: number[] | undefined) => (v ? v.map(x => x.toFixed(3)).join(',') : '?');
 
         return {
             resultPayload: {
                 actorId,
-                frameIndex,
+                frameIndex: frame.frameIndex,
+                timestamp: frame.timestamp,
                 modality,
+                motionSource: frame.motionSource,
+                syntheticMotion: synthetic,
                 vertexCount: frame.vertexCount,
                 gaussianCount: frame.gaussianCount,
                 bounds: frame.bounds,
                 centroid: frame.centroid
             } as unknown as ToolResultPayload,
-            summaryResult: `Animated actor "${actorId}" at frame ${frameIndex} using modality "${modality}".`
+            summaryResult: `LBS-posed actor "${actorId}" at motion frame ${frame.frameIndex}${frame.timestamp !== undefined ? ` (t=${frame.timestamp.toFixed(2)}s)` : ''} with modality "${modality}": ${frame.vertexCount ?? frame.gaussianCount ?? 0} elements, bounds=[${fmt(frame.bounds?.min)} to ${fmt(frame.bounds?.max)}]; motion source: ${frame.motionSource ?? 'unlabelled'}${synthetic ? ' (SYNTHETIC procedural motion, not tracked from video)' : ''}.`
         };
     }
 };
