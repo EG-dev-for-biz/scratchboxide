@@ -56,6 +56,7 @@ static void usage() {
         "    --roughness-radius M (1) --roughness-min V (0.015) --planar-angle DEG (10) --planar-offset M (0.12) --planar-area M2 (6)\n"
         "    --canopy-min-height M (2) --min-tree-height M (3) --min-crown-area M2 (4)\n"
         "    --window-base M (0.6) --window-slope V (0.11) --window-min M (1.5) --window-max M (4.5) --climb-limit M (1)\n"
+        "    --min-top-prominence M (0.5)\n"
         "    --support-step M (1) --support-search M (25) --max-crown-below-support V (0.1) --ground-terrain-band M (2)\n"
         "    --min-support-evidence V (0.2: share of the footprint's vertical lines that must show a surface for a trunk to stand on it)\n"
         "    --ground-tolerance M (0.5: a trunk base further than this from the ground rebuilt under its stem is re-stood or kept)\n"
@@ -204,6 +205,7 @@ static StripParams readStripParams(const Args& a) {
     P.windowMin = a.num("window-min", P.windowMin);
     P.windowMax = a.num("window-max", P.windowMax);
     P.climbLimit = a.num("climb-limit", P.climbLimit);
+    P.minTopProminence = a.num("min-top-prominence", P.minTopProminence);
     P.supportStep = a.num("support-step", P.supportStep);
     P.supportSearch = a.num("support-search", P.supportSearch);
     P.maxCrownBelowSupport = a.num("max-crown-below-support", P.maxCrownBelowSupport);

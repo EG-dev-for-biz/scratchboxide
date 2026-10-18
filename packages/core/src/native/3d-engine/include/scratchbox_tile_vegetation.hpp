@@ -1002,6 +1002,9 @@ struct StripParams {
     double windowMin{1.5};
     double windowMax{4.5};
     double climbLimit{1.0};          // a crown never grows more than this far up into a neighbour (m)
+    // Two touching crowns are one when the lower one's top rises less than this above the highest saddle between them
+    // (one crown's surface with two bumps, not two trees) (m).
+    double minTopProminence{0.5};
     double supportStep{1.0};         // height gap separating candidate support surfaces (m)
     double supportSearch{25.0};      // how far to look through canopy for a surface to stand on (m)
     // A crown more of whose measured surface than this share lies over supportStep below the surface measured around it
@@ -1739,6 +1742,44 @@ private:
                 label[j] = label[c];
                 pq.push({smoothChm[j], j});
             }
+        }
+        // A fixed local-maximum window gives one crown two markers when its top has two bumps further apart than the
+        // window: touching crowns whose lower top rises less than minTopProminence above their highest saddle are one
+        // crown whose lower top rises less than minTopProminence above their highest saddle are one crown
+        {
+            const size_t M = tops.size();
+            std::vector<int> root(M);
+            std::iota(root.begin(), root.end(), 0);
+            std::function<int(int)> find = [&](int x) { while (root[x] != x) x = root[x] = root[root[x]]; return x; };
+            std::vector<float> top(M);
+            for (size_t m = 0; m < M; ++m) top[m] = smoothChm[tops[m]];
+            std::map<std::pair<int, int>, float> saddle;  // highest min(height) over cells of the two crowns that touch
+            for (int k = 0; k < g.nz; ++k) {
+                for (int i = 0; i < g.nx; ++i) {
+                    const size_t c = g.id(i, k);
+                    if (label[c] < 0) continue;
+                    for (int s = 0; s < 2; ++s) {  // right and down neighbours cover every touching pair once
+                        const int a = i + (s == 0), b = k + (s == 1);
+                        if (!g.in(a, b)) continue;
+                        const size_t j = g.id(a, b);
+                        if (label[j] < 0 || label[j] == label[c]) continue;
+                        const std::pair<int, int> key = std::minmax(label[c], label[j]);
+                        const float h = std::min(smoothChm[c], smoothChm[j]);
+                        auto it = saddle.find(key);
+                        if (it == saddle.end() || h > it->second) saddle[key] = h;
+                    }
+                }
+            }
+            std::vector<std::pair<float, std::pair<int, int>>> edges;
+            for (const auto& [key, h] : saddle) edges.push_back({h, key});
+            std::sort(edges.begin(), edges.end(), [](const auto& x, const auto& y) { return x.first > y.first || (x.first == y.first && x.second < y.second); });
+            for (const auto& [h, key] : edges) {
+                int ra = find(key.first), rb = find(key.second);
+                if (ra == rb) continue;
+                if (top[ra] < top[rb] || (top[ra] == top[rb] && ra > rb)) std::swap(ra, rb);  // ra holds the higher top
+                if (top[rb] - h < P.minTopProminence) root[rb] = ra;
+            }
+            for (size_t c = 0; c < N; ++c) if (label[c] >= 0) label[c] = find(label[c]);
         }
         work.assign(tops.size(), {});
         for (size_t c = 0; c < N; ++c) if (label[c] >= 0) work[static_cast<size_t>(label[c])].cells.push_back(c);

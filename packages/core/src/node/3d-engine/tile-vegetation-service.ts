@@ -67,6 +67,7 @@ export interface TileVegetationStripParams {
     windowMin?: number;
     windowMax?: number;
     climbLimit?: number;
+    minTopProminence?: number;
     supportStep?: number;
     supportSearch?: number;
     footprintDilation?: number;
