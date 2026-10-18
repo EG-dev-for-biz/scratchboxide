@@ -12,8 +12,11 @@ import {
     classifyDiurnalPhase,
     computeDiurnalLightingProfile,
     getPresetLightingState,
-    getSunVectorFromAngles,
-    AtmosphereImageEstimationService
+    anglesToDirection,
+    AtmosphereImageEstimationService,
+    angstromBeta,
+    directSunTransmittance,
+    fitPlanckianKelvinTemperature
 } from '../../../browser/generative-canvas/services/atmosphere';
 import { MissingInputError } from '../../../common/errors/pipeline-errors';
 import type { ToolDeclaration, ToolHandler } from './types';
@@ -22,10 +25,19 @@ function asString(val: unknown): string {
     return typeof val === 'string' ? val : '';
 }
 
+/** The date a tool was given; no current time is assumed for an ephemeris. */
+function requireDate(tool: string, val: unknown): Date {
+    const iso = asString(val);
+    if (!iso) throw new MissingInputError(tool, 'isoDate', 'the sun position depends on the date and time, and none is assumed');
+    const date = new Date(iso);
+    if (isNaN(date.getTime())) throw new MissingInputError(tool, 'a valid isoDate', `'${iso}' is not an ISO 8601 date-time`);
+    return date;
+}
+
 export const ATMOSPHERE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'atmosphere_calculate_solar_position',
-        description: 'Calculate NOAA solar ephemeris (solar elevation, azimuth, distance AU, Julian day, and diurnal phase) for any geographic coordinates and date/time.',
+        description: 'Calculate NOAA solar ephemeris (solar elevation, azimuth, distance AU, Julian day, and diurnal phase) for geographic coordinates at a given date/time.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -39,15 +51,15 @@ export const ATMOSPHERE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 isoDate: {
                     type: 'STRING',
-                    description: 'Optional ISO 8601 date-time string (e.g. "2026-06-21T18:30:00Z"). Defaults to now.'
+                    description: 'ISO 8601 date-time (e.g. "2026-06-21T18:30:00Z"). Required: the sun position depends on it, and no time is assumed.'
                 }
             },
-            required: ['latitude', 'longitude']
+            required: ['latitude', 'longitude', 'isoDate']
         }
     },
     {
         name: 'atmosphere_get_diurnal_profile',
-        description: 'Compute physical diurnal lighting profile (Kelvin color temperature, direct/ambient/sky/ground irradiance, and diurnal phase) from sun elevation angle.',
+        description: 'Compute the diurnal lighting profile (phase, sun/ambient intensity, colour temperature) for a sun elevation. With turbidity, the direct-sun colour and its CCT come from the Preetham transmittance (Rayleigh + Angstrom aerosol) at that turbidity and air mass.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -57,7 +69,7 @@ export const ATMOSPHERE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 turbidity: {
                     type: 'NUMBER',
-                    description: 'Optional atmospheric turbidity factor (default: 2.5).'
+                    description: 'Optional Preetham turbidity (about 1.7 clear to 12 hazy). Without it no turbidity is reported.'
                 }
             },
             required: ['elevationDeg']
@@ -65,37 +77,59 @@ export const ATMOSPHERE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'atmosphere_configure_scene',
-        description: 'Synthesizes complete physical atmospheric configuration for a 3D scene (Rayleigh, Mie, cloud layers, aerial perspective, and god rays) given a time of day preset or coordinates.',
+        description: 'Builds an atmospheric scattering config for a 3D scene. The sun comes from sunElevationDeg/sunAzimuthDeg, a time-of-day preset, or NOAA ephemeris at latitude/longitude/isoDate. Clouds, cloud shadows, aerial perspective and god rays are included only when asked for; unspecified scattering parameters are left to the renderer.',
         parameters: {
             type: 'OBJECT',
             properties: {
+                sunElevationDeg: { type: 'NUMBER', description: 'Sun elevation above the horizon in degrees (with sunAzimuthDeg).' },
+                sunAzimuthDeg: { type: 'NUMBER', description: 'Sun azimuth in degrees clockwise from north (with sunElevationDeg).' },
                 preset: {
                     type: 'STRING',
                     description: 'Diurnal preset: "dawn", "golden_hour", "midday", "afternoon", "sunset", "twilight", "blue_hour", "night", or "overcast".'
                 },
                 latitude: {
                     type: 'NUMBER',
-                    description: 'Optional geographic latitude.'
+                    description: 'Geographic latitude (with longitude and isoDate, the sun comes from NOAA ephemeris).'
                 },
                 longitude: {
                     type: 'NUMBER',
-                    description: 'Optional geographic longitude.'
+                    description: 'Geographic longitude.'
                 },
-                timeOfDay: {
+                isoDate: {
+                    type: 'STRING',
+                    description: 'ISO 8601 date-time for the ephemeris. Required with latitude/longitude.'
+                },
+                turbidity: {
                     type: 'NUMBER',
-                    description: 'Optional time of day in decimal hours (0.0 - 24.0).'
+                    description: 'Optional Preetham turbidity. Omitted means the renderer keeps its own.'
                 },
                 enableAerialPerspective: {
                     type: 'BOOLEAN',
-                    description: 'Whether to enable full-screen depth inscattering aerial perspective.'
+                    description: 'Enable depth inscattering aerial perspective (off unless true).'
                 },
                 enableGodRays: {
                     type: 'BOOLEAN',
-                    description: 'Whether to enable volumetric sunbeams/god rays.'
+                    description: 'Enable volumetric sunbeams/god rays (off unless true).'
+                },
+                godRayIntensity: {
+                    type: 'NUMBER',
+                    description: 'Optional god-ray intensity when enableGodRays is true.'
                 },
                 cloudCoverage: {
                     type: 'NUMBER',
-                    description: 'Cloud coverage fraction (0.0 to 1.0).'
+                    description: 'Cloud coverage fraction (0.0 to 1.0). Clouds are added only when this is given.'
+                },
+                cloudDensity: {
+                    type: 'NUMBER',
+                    description: 'Optional cloud density when cloudCoverage is given.'
+                },
+                cloudAltitudeMeters: {
+                    type: 'NUMBER',
+                    description: 'Optional cloud layer altitude in metres when cloudCoverage is given.'
+                },
+                enableCloudShadows: {
+                    type: 'BOOLEAN',
+                    description: 'Cast terrain cloud shadows (only with cloudCoverage, and only when true).'
                 }
             }
         }
@@ -175,7 +209,7 @@ export const atmosphereHandlers: Record<string, ToolHandler> = {
         const lng = typeof args.longitude === 'number' ? args.longitude : parseFloat(String(args.longitude));
         if (isNaN(lat) || isNaN(lng)) throw new Error('atmosphere_calculate_solar_position: valid latitude and longitude are required.');
 
-        const date = args.isoDate ? new Date(asString(args.isoDate)) : new Date();
+        const date = requireDate('atmosphere_calculate_solar_position', args.isoDate);
         const ephemeris = calculateNOAASolarPosition(date, lat, lng);
         const phase = classifyDiurnalPhase(ephemeris.elevationDeg);
 
@@ -184,6 +218,7 @@ export const atmosphereHandlers: Record<string, ToolHandler> = {
                 success: true,
                 latitude: lat,
                 longitude: lng,
+                isoDate: date.toISOString(),
                 elevationDeg: ephemeris.elevationDeg,
                 azimuthDeg: ephemeris.azimuthDeg,
                 distanceAU: ephemeris.distanceAU,
@@ -198,77 +233,103 @@ export const atmosphereHandlers: Record<string, ToolHandler> = {
         const elevation = typeof args.elevationDeg === 'number' ? args.elevationDeg : parseFloat(String(args.elevationDeg));
         if (isNaN(elevation)) throw new Error('atmosphere_get_diurnal_profile: valid elevationDeg is required.');
 
-        const turbidity = typeof args.turbidity === 'number' ? args.turbidity : 2.5;
         const profile = computeDiurnalLightingProfile(elevation);
+        const turbidity = typeof args.turbidity === 'number' && Number.isFinite(args.turbidity) ? args.turbidity : undefined;
+        if (turbidity !== undefined && (turbidity < 1 || turbidity > 64)) throw new Error(`atmosphere_get_diurnal_profile: turbidity ${turbidity} is outside the physical range (1 = pure Rayleigh).`);
+
+        // With a turbidity, the direct sun is attenuated through that atmosphere (Preetham 1999 transmittance).
+        let sunLinearRgb = profile.sunLinearRgb;
+        let kelvinTemperature = profile.kelvinTemperature;
+        let transmittance: [number, number, number] | undefined;
+        if (turbidity !== undefined && elevation > 0) {
+            transmittance = directSunTransmittance(turbidity, elevation);
+            const m = Math.max(...transmittance);
+            sunLinearRgb = [transmittance[0] / m, transmittance[1] / m, transmittance[2] / m];
+            kelvinTemperature = fitPlanckianKelvinTemperature(transmittance[0], transmittance[1], transmittance[2]);
+        }
 
         return {
             resultPayload: {
                 success: true,
                 elevationDeg: elevation,
                 phase: profile.phase,
-                kelvinTemperature: profile.kelvinTemperature,
+                kelvinTemperature,
+                kelvinSource: transmittance ? 'preetham-transmittance' : 'diurnal-profile',
                 sunIntensity: profile.sunIntensity,
                 ambientIntensity: profile.ambientIntensity,
                 shadowSoftness: profile.shadowSoftness,
-                turbidity: profile.turbidity ?? turbidity,
-                sunLinearRgb: profile.sunLinearRgb,
+                ...(turbidity !== undefined ? { turbidity, angstromBeta: angstromBeta(turbidity) } : {}),
+                ...(transmittance ? { directSunTransmittance: transmittance } : {}),
+                sunLinearRgb,
                 ambientLinearRgb: profile.ambientLinearRgb,
                 skyColorLinear: profile.skyColorLinear,
                 groundAlbedoLinear: profile.groundAlbedoLinear
             },
-            summaryResult: `Computed diurnal lighting profile for elevation ${elevation.toFixed(1)}° (${profile.phase}, ${profile.kelvinTemperature}K, sun intensity ${profile.sunIntensity.toFixed(2)}).`
+            summaryResult: `Computed diurnal lighting profile for elevation ${elevation.toFixed(1)}° (${profile.phase}, ${kelvinTemperature}K${transmittance ? ` direct sun through turbidity ${turbidity}` : ''}, sun intensity ${profile.sunIntensity.toFixed(2)}).`
         };
     },
 
     atmosphere_configure_scene: (args, _ctx) => {
-        let elevation = 45.0;
-        let azimuth = 180.0;
-        let timeOfDay = typeof args.timeOfDay === 'number' ? args.timeOfDay : 12.0;
-
+        const num = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+        let elevation: number, azimuth: number, sunSource: string;
         const preset = asString(args.preset);
-        if (preset) {
-            const presetState = getPresetLightingState(preset as any);
-            if (presetState) {
-                elevation = presetState.elevationDeg;
-                azimuth = presetState.azimuthDeg;
-            }
-        } else if (typeof args.latitude === 'number' && typeof args.longitude === 'number') {
-            const ephemeris = calculateNOAASolarPosition(new Date(), args.latitude, args.longitude);
+        const lat = num(args.latitude), lng = num(args.longitude);
+        if (num(args.sunElevationDeg) !== undefined && num(args.sunAzimuthDeg) !== undefined) {
+            elevation = num(args.sunElevationDeg)!;
+            azimuth = num(args.sunAzimuthDeg)!;
+            sunSource = 'given';
+        } else if (lat !== undefined && lng !== undefined) {
+            const date = requireDate('atmosphere_configure_scene', args.isoDate);
+            const ephemeris = calculateNOAASolarPosition(date, lat, lng);
             elevation = ephemeris.elevationDeg;
             azimuth = ephemeris.azimuthDeg;
+            sunSource = `NOAA ephemeris at ${date.toISOString()}`;
+        } else if (preset) {
+            const presetState = getPresetLightingState(preset);
+            elevation = presetState.elevationDeg;
+            azimuth = presetState.azimuthDeg;
+            sunSource = `preset ${preset}`;
+        } else {
+            throw new MissingInputError('atmosphere_configure_scene', 'the sun', 'give sunElevationDeg and sunAzimuthDeg, a preset, or latitude, longitude and isoDate');
         }
 
         const profile = computeDiurnalLightingProfile(elevation);
-        const sunDir = getSunVectorFromAngles(elevation, azimuth);
+        const sunDir = anglesToDirection(elevation, azimuth);
 
-        const config = {
+        // Opt-in layers only: clouds when a coverage is given, shadows/aerial perspective/god rays when asked for.
+        const cloudCoverage = num(args.cloudCoverage);
+        const clouds = cloudCoverage !== undefined && cloudCoverage > 0;
+        const config: Record<string, unknown> = {
             enabled: true,
-            rayleigh: 2.0,
-            mie: 0.005,
-            turbidity: profile.turbidity,
-            timeOfDay,
             sunElevation: elevation,
             sunAzimuth: azimuth,
-            sunPosition: [sunDir.x * 100, sunDir.y * 100, sunDir.z * 100],
+            sunPosition: [sunDir[0] * 100, sunDir[1] * 100, sunDir[2] * 100],
             kelvinTemperature: profile.kelvinTemperature,
-            cloudCoverage: typeof args.cloudCoverage === 'number' ? args.cloudCoverage : 0.45,
-            cloudDensity: 0.8,
-            cloudAltitude: 120.0,
-            volumetricClouds: true,
-            aerialPerspectiveEnabled: args.enableAerialPerspective ?? true,
-            inscatteringIntensity: 0.65,
-            cloudShadowsEnabled: true,
-            godRays: args.enableGodRays ? { enabled: true, intensity: 0.28 } : undefined
+            volumetricClouds: clouds,
+            cloudShadowsEnabled: clouds && args.enableCloudShadows === true,
+            aerialPerspectiveEnabled: args.enableAerialPerspective === true
         };
+        if (num(args.turbidity) !== undefined) config.turbidity = num(args.turbidity);
+        if (lat !== undefined && lng !== undefined) { config.latitude = lat; config.longitude = lng; }
+        if (clouds) {
+            config.cloudCoverage = cloudCoverage;
+            if (num(args.cloudDensity) !== undefined) config.cloudDensity = num(args.cloudDensity);
+            if (num(args.cloudAltitudeMeters) !== undefined) config.cloudAltitude = num(args.cloudAltitudeMeters);
+        }
+        if (args.enableGodRays === true) {
+            config.godRays = num(args.godRayIntensity) !== undefined ? { enabled: true, intensity: num(args.godRayIntensity) } : { enabled: true };
+        }
 
+        const layers = [clouds ? `clouds ${cloudCoverage}` : undefined, config.cloudShadowsEnabled ? 'cloud shadows' : undefined, config.aerialPerspectiveEnabled ? 'aerial perspective' : undefined, config.godRays ? 'god rays' : undefined].filter(Boolean);
         return {
             resultPayload: {
                 success: true,
                 config,
+                sunSource,
                 phase: profile.phase,
                 kelvinTemperature: profile.kelvinTemperature
             },
-            summaryResult: `Synthesized atmospheric scene configuration: Phase ${profile.phase}, ${profile.kelvinTemperature}K, Sun Elevation ${elevation.toFixed(1)}°.`
+            summaryResult: `Synthesized atmospheric scene configuration: Phase ${profile.phase}, ${profile.kelvinTemperature}K, Sun Elevation ${elevation.toFixed(1)}° (${sunSource})${layers.length ? `, with ${layers.join(', ')}` : ', no optional layers'}.`
         };
     },
 

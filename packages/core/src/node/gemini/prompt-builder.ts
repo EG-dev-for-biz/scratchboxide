@@ -830,7 +830,7 @@ Available workspace tools:
 - webxr_geospatial_project_vectors: Project Google Maps Platform road centerlines or parcel boundaries into WebXR 3D metric lines and extruded volume massing coordinates.
 - atmosphere_calculate_solar_position: Calculate sub-arcminute NOAA solar elevation, azimuth, distance in AU, and diurnal phase for any latitude, longitude, and date.
 - atmosphere_get_diurnal_profile: Compute photometric sun intensity, ambient bounce, Planckian kelvin temperature, and linear RGB spectra for a given solar elevation.
-- atmosphere_configure_scene: High-level atmospheric scene configuration synthesizing Rayleigh/Mie scattering, volumetric clouds, god rays, and aerial perspective.
+- atmosphere_configure_scene: Atmospheric scene configuration from a given sun, a preset, or NOAA ephemeris (latitude, longitude and isoDate); clouds, cloud shadows, aerial perspective and god rays only when requested.
 - panorama_heal_seam: Heal the vertical boundary seam of a 360 equirectangular panorama by Gemini image-model inpainting over a 50% rolled canvas with soft quadratic gradient masking. Fails when no image model answers; the result names the model that did.
 - panorama_inpaint: Inpaint or remove objects (nadir camera rigs, tripods, floaters) on a 360 panorama with a Gemini image model. Fails when no image model answers; the result names the model that did.
 - panorama_generate_360: Synthesize 360 equirectangular panoramic environments from prompt with a Gemini image model and automatic boundary seam healing. Fails when no image model answers; the result names the model that did.

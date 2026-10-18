@@ -8,6 +8,8 @@
  ********************************************************************************/
 
 import { describe, it, expect } from 'vitest';
+import { MissingInputError } from '../src/common/errors/pipeline-errors';
+import { calculateNOAASolarPosition } from '../src/browser/generative-canvas/services/atmosphere/solar-position';
 import * as THREE from 'three';
 import {
     AtmosphereService,
@@ -301,7 +303,58 @@ describe('Atmospheric Capabilities First-Class APIs', () => {
             );
             expect(outcome.resultPayload.success).toBe(true);
             expect(outcome.resultPayload.phase).toBe('Golden Hour');
-            expect((outcome.resultPayload.config as any).godRays).toBeDefined();
+            const cfg = outcome.resultPayload.config as any;
+            expect(cfg.godRays).toEqual({ enabled: true });
+            // Clouds and cloud shadows were not asked for, so none are added (they used to be always on at 45%).
+            expect(cfg.volumetricClouds).toBe(false);
+            expect(cfg.cloudShadowsEnabled).toBe(false);
+            expect(cfg.cloudCoverage).toBeUndefined();
+            expect(cfg.aerialPerspectiveEnabled).toBe(true);
+            // No canned scattering constants.
+            expect(cfg.rayleigh).toBeUndefined();
+            expect(cfg.mie).toBeUndefined();
+            expect(cfg.inscatteringIntensity).toBeUndefined();
+        });
+
+        it('atmosphere_configure_scene adds clouds only when a coverage is given, and aerial perspective only when asked', () => {
+            const plain = atmosphereHandlers.atmosphere_configure_scene({ sunElevationDeg: 30, sunAzimuthDeg: 200 }, {} as any);
+            const plainCfg = plain.resultPayload.config as any;
+            expect(plainCfg.volumetricClouds).toBe(false);
+            expect(plainCfg.aerialPerspectiveEnabled).toBe(false);
+            expect(plainCfg.godRays).toBeUndefined();
+            expect(plainCfg.sunElevation).toBe(30);
+
+            const cloudy = atmosphereHandlers.atmosphere_configure_scene({ sunElevationDeg: 30, sunAzimuthDeg: 200, cloudCoverage: 0.3, enableCloudShadows: true }, {} as any);
+            const cloudyCfg = cloudy.resultPayload.config as any;
+            expect(cloudyCfg.volumetricClouds).toBe(true);
+            expect(cloudyCfg.cloudCoverage).toBe(0.3);
+            expect(cloudyCfg.cloudShadowsEnabled).toBe(true);
+            expect(cloudyCfg.cloudAltitude).toBeUndefined();
+        });
+
+        it('atmosphere_configure_scene needs a time for coordinates and a sun from somewhere (no "now", no 45/180 default)', () => {
+            expect(() => atmosphereHandlers.atmosphere_configure_scene({ latitude: 41.89, longitude: 12.49 }, {} as any)).toThrow(MissingInputError);
+            expect(() => atmosphereHandlers.atmosphere_configure_scene({}, {} as any)).toThrow(MissingInputError);
+            const iso = '2026-06-21T09:00:00Z';
+            const res = atmosphereHandlers.atmosphere_configure_scene({ latitude: 41.89, longitude: 12.49, isoDate: iso }, {} as any);
+            const ephem = calculateNOAASolarPosition(new Date(iso), 41.89, 12.49);
+            expect((res.resultPayload.config as any).sunElevation).toBeCloseTo(ephem.elevationDeg, 9);
+            expect((res.resultPayload.config as any).sunAzimuth).toBeCloseTo(ephem.azimuthDeg, 9);
+            expect(() => atmosphereHandlers.atmosphere_calculate_solar_position({ latitude: 41.89, longitude: 12.49 }, {} as any)).toThrow(MissingInputError);
+        });
+
+        it('atmosphere_get_diurnal_profile uses the turbidity it is given', () => {
+            const clear = atmosphereHandlers.atmosphere_get_diurnal_profile({ elevationDeg: 10, turbidity: 2 }, {} as any).resultPayload as any;
+            const hazy = atmosphereHandlers.atmosphere_get_diurnal_profile({ elevationDeg: 10, turbidity: 8 }, {} as any).resultPayload as any;
+            expect(clear.turbidity).toBe(2);
+            expect(hazy.turbidity).toBe(8);
+            expect(clear.kelvinSource).toBe('preetham-transmittance');
+            // More aerosol scatters more blue out of the beam: a warmer (lower CCT), redder sun.
+            expect(hazy.kelvinTemperature).toBeLessThan(clear.kelvinTemperature);
+            expect(hazy.directSunTransmittance[2]).toBeLessThan(clear.directSunTransmittance[2]);
+            const none = atmosphereHandlers.atmosphere_get_diurnal_profile({ elevationDeg: 10 }, {} as any).resultPayload as any;
+            expect(none.turbidity).toBeUndefined();
+            expect(none.kelvinSource).toBe('diurnal-profile');
         });
     });
 });
