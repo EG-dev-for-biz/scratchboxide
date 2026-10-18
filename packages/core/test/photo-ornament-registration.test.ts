@@ -12,6 +12,7 @@ import { describe, it, expect } from 'vitest';
 import { projectToFrame, ZERO_CORRECTION } from '../src/node/spatial/StreetViewPoseRegistrar';
 import { castCamera, castRay, pixelRay, type CastFace } from '../src/node/3d-engine/staged-location/survey-casting';
 import { registerPanos, triangulate, type Correspondence, type RegView } from '../src/node/3d-engine/staged-location/pano-registration';
+import { registerPanosOffThread } from '../src/node/3d-engine/staged-location/pano-registration-run';
 
 const NORTH: CastFace = { id: 'north', source: 'fit', chart: { plane: { origin: [-13, 0, -5.5], u: [1, 0, 0], v: [0, 1, 0], normal: [0, 0, -1], extentUv: [[0, 0], [26, 24]] } } };
 const W = 1440, H = 1080;
@@ -155,5 +156,14 @@ describe('registering many panos at once (the live scale: twenty panos, hundreds
         expect(r.perPano.length).toBeGreaterThan(10);
         expect(r.afterRmsM).toBeLessThan(r.beforeRmsM);
         expect(secs).toBeLessThan(25);
+    }, 60_000);
+
+    it('solves the same in a worker thread (the orchestrator runs it there, off the main thread)', async () => {
+        const cs = corrs(NOM_A, NOM_B);
+        const here = registerPanos(cs, [NORTH]);
+        const there = await registerPanosOffThread(cs, [NORTH]);
+        expect([...there.corrections.entries()]).toEqual([...here.corrections.entries()]);
+        expect(there.afterRmsM).toBe(here.afterRmsM);
+        expect(there.perPano).toEqual(here.perPano);
     }, 60_000);
 });

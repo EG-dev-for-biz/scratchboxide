@@ -24,7 +24,7 @@ import { readGlbScene, sceneToRenderMesh } from '../../spatial/StreetViewPoseReg
 import type { RenderMesh3D } from '../../spatial/HeadlessMeshSilhouetteRenderer';
 import { workerTsRegisterSource } from '../../worker-ts-register';
 import type { CastFace } from './survey-casting';
-import type { Correspondence, Registration } from './pano-registration';
+import { registerPanos, type Correspondence, type Registration } from './pano-registration';
 import { EDGE_MAX_RESIDUAL_PX, EDGE_REGISTRATION_BUDGET_MS, edgeFramesFromImages, registerPanosByEdges, type EdgeRegistrationResult, type HeldImage } from './pano-edge-registration';
 import { JOINT_REGISTRATION_BUDGET_MS, registerPanosJointly, type JointRegistrationResult } from './pano-joint-registration';
 import { jointRegistrationEnabled } from './round5-switch';
@@ -80,12 +80,20 @@ export function runPanoRegistration(job: PanoRegistrationJob, log: (m: string) =
 /** SCRATCHBOX_REGISTRATION_WORKER=0 runs the job on the main thread (as before). */
 export const registrationWorkerEnabled = (): boolean => process.env.SCRATCHBOX_REGISTRATION_WORKER !== '0';
 
+/** What a registration thread is asked: the box solve from the matched elements, or the edge and joint registration. */
+export type RegistrationThreadJob = { kind: 'box'; correspondences: Correspondence[]; faces: CastFace[] } | ({ kind: 'edges' } & PanoRegistrationJob);
+
+/** Runs a thread job in this thread (the worker's entry calls it too). */
+export function runRegistrationThreadJob(job: RegistrationThreadJob, log: (m: string) => void = () => undefined): Registration | PanoRegistrationOutcome {
+    return job.kind === 'box' ? registerPanos(job.correspondences, job.faces) : runPanoRegistration(job, log);
+}
+
 const BOOTSTRAP = `
 const { workerData, parentPort } = require('worker_threads');
 ${workerTsRegisterSource()}
-const { runPanoRegistration } = require(workerData.entry);
+const { runRegistrationThreadJob } = require(workerData.entry);
 try {
-    const out = runPanoRegistration(workerData.job, m => parentPort.postMessage({ log: m }));
+    const out = runRegistrationThreadJob(workerData.job, m => parentPort.postMessage({ log: m }));
     parentPort.postMessage({ done: out });
 } catch (err) {
     parentPort.postMessage({ error: { message: err && err.message || String(err), stack: err && err.stack } });
@@ -102,11 +110,20 @@ function selfEntry(): string {
 }
 
 /**
- * The job in a worker thread (or inline with SCRATCHBOX_REGISTRATION_WORKER=0). A stop terminates the thread and rejects
- * with the signal's reason; a thread that dies rejects with why.
+ * The edge and joint registration in a worker thread (or inline with SCRATCHBOX_REGISTRATION_WORKER=0). A stop terminates
+ * the thread and rejects with the signal's reason; a thread that dies rejects with why.
  */
 export function runPanoRegistrationOffThread(job: PanoRegistrationJob, opts: { signal?: AbortSignal; log?: (m: string) => void } = {}): Promise<PanoRegistrationOutcome> {
-    if (!registrationWorkerEnabled()) return Promise.resolve().then(() => runPanoRegistration(job, opts.log));
+    return inThread({ kind: 'edges', ...job }, opts) as Promise<PanoRegistrationOutcome>;
+}
+
+/** The box solve of the matched element pairs (registerPanos) in a worker thread: live it held the main thread ~7 s (ray casts). */
+export function registerPanosOffThread(correspondences: Correspondence[], faces: CastFace[], opts: { signal?: AbortSignal } = {}): Promise<Registration> {
+    return inThread({ kind: 'box', correspondences, faces }, opts) as Promise<Registration>;
+}
+
+function inThread(job: RegistrationThreadJob, opts: { signal?: AbortSignal; log?: (m: string) => void }): Promise<Registration | PanoRegistrationOutcome> {
+    if (!registrationWorkerEnabled()) return Promise.resolve().then(() => runRegistrationThreadJob(job, opts.log));
     if (opts.signal?.aborted) return Promise.reject(opts.signal.reason);
     return new Promise((resolve, reject) => {
         const worker = new Worker(BOOTSTRAP, { eval: true, workerData: { entry: selfEntry(), job } });
@@ -114,7 +131,7 @@ export function runPanoRegistrationOffThread(job: PanoRegistrationJob, opts: { s
         const finish = (fn: () => void) => { if (settled) return; settled = true; opts.signal?.removeEventListener('abort', onAbort); fn(); void worker.terminate(); };
         const onAbort = () => finish(() => reject(opts.signal!.reason));
         opts.signal?.addEventListener('abort', onAbort, { once: true });
-        worker.on('message', (m: { log?: string; done?: PanoRegistrationOutcome; error?: { message: string; stack?: string } }) => {
+        worker.on('message', (m: { log?: string; done?: Registration | PanoRegistrationOutcome; error?: { message: string; stack?: string } }) => {
             if (m.log !== undefined) opts.log?.(m.log);
             else if (m.done) finish(() => resolve(m.done!));
             else if (m.error) finish(() => reject(Object.assign(new Error(m.error!.message), { stack: m.error!.stack })));

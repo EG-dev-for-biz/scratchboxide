@@ -94,10 +94,10 @@ import { describeSurvey, runFaceSurvey, surveyCandidates, surveyFaceTargets, sur
 import { describeLocated, locateSurveyElements, planDetailFromSurvey, type DetailPlan } from './survey-detail';
 import { DETAIL_REPROJECTION_MIN_IOU, reprojectDetailAsync } from './detail-reprojection';
 import { EDGE_REGISTRATION_BUDGET_MS, describeEdgeRegistration, type EdgeRegistrationResult } from './pano-edge-registration';
-import { runPanoRegistrationOffThread } from './pano-registration-run';
+import { registerPanosOffThread, runPanoRegistrationOffThread } from './pano-registration-run';
 import { describeJointRegistration, JOINT_REGISTRATION_BUDGET_MS } from './pano-joint-registration';
 import { LOO_BUDGET_MS } from './texture-fit-metric';
-import { registerPanos, type Registration } from './pano-registration';
+import type { Registration } from './pano-registration';
 import { MATCH_TIMEOUT_MS, matchRingImages, planRingViews, runViewMatch, type MatchResult } from './view-match';
 import { castCamera, fitFaces } from './survey-casting';
 import type { AnchorNote } from './ornament-anchor';
@@ -1093,7 +1093,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             const matchChain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...chainExtras('evidence'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
                             match = await runViewMatch({ faces: surveyFaces, survey: surveyOut.result, candidates, deps: sv, chain: matchChain, signal: io.signal, onProgress: m => io.progress(m) });
                             if (match.correspondences.length) {
-                                registration = registerPanos(match.correspondences, fitFaces(fit));
+                                registration = await registerPanosOffThread(match.correspondences, fitFaces(fit), { signal: io.signal });
                                 io.progress(describeRegistration(registration, match.correspondences.length));
                                 cache.writeRunNote(runId, 'registration', { correspondences: match.correspondences, registration: { ...registration, corrections: [...registration.corrections.entries()] } });
                             } else io.progress(`no element could be matched across views (${match.failures.length} failed call${match.failures.length === 1 ? '' : 's'}); the nominal pano poses stand, good to ±2 m`);
