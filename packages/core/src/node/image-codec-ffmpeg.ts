@@ -383,6 +383,26 @@ export interface JpegEncodeOptions {
 }
 
 /**
+ * A JPEG made smaller in one ffmpeg process: decoded, area-averaged to `width` x `height` and re-encoded, all in the
+ * Y'CbCr planes (full range, so no colour conversion at all), with no pixel loop in this thread. Deterministic: the same
+ * bytes in give the same bytes out. Throws when ffmpeg is unavailable or fails (callers fall back to the in-process path).
+ */
+export async function downscaleJpegFfmpeg(jpeg: Buffer, width: number, height: number, options: JpegEncodeOptions = {}): Promise<Buffer> {
+    if (sniffImageFormat(jpeg) !== 'jpeg') throw new Error('downscaleJpegFfmpeg: the input is not a JPEG');
+    const qscale = jpegQualityToQscale(options.quality ?? 90);
+    const pixFmt = options.chroma === '444' ? 'yuvj444p' : 'yuvj420p';
+    const out = await withTempFileAsync(jpeg, '.jpg', file => runFfmpeg([
+        '-v', 'error', '-i', file, '-frames:v', '1',
+        '-vf', `scale=${width}:${height}:flags=area:in_range=full:out_range=full,format=${pixFmt}`,
+        '-q:v', String(qscale), '-qmin', String(qscale), '-qmax', String(qscale), '-f', 'mjpeg', 'pipe:1'
+    ], 'downscaleJpegFfmpeg'));
+    if (sniffImageFormat(out) !== 'jpeg') throw new Error('downscaleJpegFfmpeg: encoder did not produce a JPEG');
+    const dims = readImageDimensions(out);
+    if (!dims || dims.width !== width || dims.height !== height) throw new Error(`downscaleJpegFfmpeg: got ${dims?.width}x${dims?.height}, wanted ${width}x${height}`);
+    return out;
+}
+
+/**
  * Encodes RGBA8 (alpha ignored) to a baseline JPEG: exact JFIF RGB -> Y'CbCr here, ffmpeg's mjpeg encoder
  * only compresses the planes (and subsamples chroma for '420'), so the round trip carries no colour bias.
  * Without ffmpeg, jpeg-js encodes at the same quality (always 4:4:4).

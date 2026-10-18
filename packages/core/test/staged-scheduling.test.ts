@@ -20,11 +20,12 @@ import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { VisionModelChain, type VisionGenAIClient, type VisionReplyCache, type VisionReplyRecord } from '../src/node/gemini/vision-model-chain';
 import { runFaceSurvey, footprintSurveyFaces } from '../src/node/3d-engine/staged-location/face-survey';
-import { capImageSide } from '../src/node/3d-engine/staged-location/ornament-batches';
+import { capImageSide, shrinkImage } from '../src/node/3d-engine/staged-location/ornament-batches';
 import { memoizeGrounding, type PanoCandidate } from '../src/node/3d-engine/staged-location/streetview-evidence';
 import { readFigure, type FigureImage } from '../src/node/3d-engine/staged-location/figures';
 import { StageCache, stagedReplyCache } from '../src/node/3d-engine/staged-location/stage-cache';
-import { imageContentSha256, readImageDimensions } from '../src/node/image-codec-ffmpeg';
+import { decodeImageToRgba, imageContentSha256, readImageDimensions } from '../src/node/image-codec-ffmpeg';
+import { performance } from 'perf_hooks';
 import * as crypto from 'crypto';
 import { bandJpeg, figuresReply, GREY, perFaceSurveyReply, SKY, STONE, surveyReply } from './helpers/photo-ornament-fixtures';
 
@@ -251,6 +252,30 @@ describe('image caps and the per-run grounding memo', () => {
         expect((await capImageSide(big, 'image/jpeg', 1920, 1440, 1024)).bytes.equals(capped.bytes)).toBe(true);
         const small = bandJpeg([SKY], 320, 240);
         expect((await capImageSide(small, 'image/jpeg', 320, 240, 1024)).bytes).toBe(small);
+    });
+
+    it('shrinks a JPEG in ffmpeg: colours kept, and the thread runs no pixel loop (live: ~0.5 s blocked per reading)', async () => {
+        const big = bandJpeg([SKY, STONE, GREY], 1920, 1440);
+        const small = await shrinkImage(big, 1024);
+        expect(small).toMatchObject({ widthPx: 1024, heightPx: 768, fromPx: [1920, 1440] });
+        // the bands keep their colour (area average in the Y'CbCr planes, full range: no shift)
+        const a = await decodeImageToRgba(big), b = await decodeImageToRgba(small!.bytes);
+        const meanAt = (img: { rgba: Uint8Array | Buffer; width: number; height: number }, fy: number) => {
+            const y = Math.floor(img.height * fy), s = [0, 0, 0];
+            for (let x = 0; x < img.width; x++) for (let c = 0; c < 3; c++) s[c] += img.rgba[(y * img.width + x) * 4 + c];
+            return s.map(v => v / img.width);
+        };
+        for (const fy of [1 / 6, 0.5, 5 / 6]) {
+            const [p, q] = [meanAt(a, fy), meanAt(b, fy)];
+            for (let c = 0; c < 3; c++) expect(Math.abs(p[c] - q[c])).toBeLessThan(4);
+        }
+        // eight close-ups at once: the event loop's active time stays small (the in-thread decode/average/encode used ~60 ms each)
+        const imgs = Array.from({ length: 8 }, (_, k) => bandJpeg([SKY, k % 2 ? STONE : GREY, STONE], 1920, 1440));
+        const before = performance.eventLoopUtilization();
+        const out = await Promise.all(imgs.map(im => shrinkImage(im, 1024)));
+        const elu = performance.eventLoopUtilization(before);
+        expect(out.every(o => o && readImageDimensions(o.bytes)?.width === 1024)).toBe(true);
+        expect(elu.active).toBeLessThan(120);
     });
 
     it('one grounding request per view: a prefetched view is handed over, a failed one is asked again', async () => {

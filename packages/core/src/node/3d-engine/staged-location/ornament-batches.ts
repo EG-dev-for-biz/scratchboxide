@@ -31,7 +31,7 @@
 
 import * as crypto from 'crypto';
 import type { EvidenceImageRef, OrnamentSlot, OrnamentSpec, PrimitiveCorrection, StructureFit, VisionModelUse } from '../../../common/spatial/staged-location-contracts';
-import { decodeImageToRgba, encodeRgbaToJpeg } from '../../image-codec-ffmpeg';
+import { decodeImageToRgba, downscaleJpegFfmpeg, encodeRgbaToJpeg, readImageDimensions, sniffImageFormat } from '../../image-codec-ffmpeg';
 import type { AnchorNote } from './ornament-anchor';
 import {
     readOrnament, streetViewCaption, visionUse, VisionStageError, MIN_SLOT_VISIBLE_FRACTION,
@@ -201,16 +201,35 @@ function downscaleRgba(src: Buffer, sw: number, sh: number, w: number, h: number
 }
 
 /**
- * A JPEG whose longest side passes `maxSidePx`, re-encoded smaller (area average, quality 92); anything else as it came.
+ * An image made at most `maxSidePx` on its longest side, as a JPEG (quality 92): a JPEG goes through one ffmpeg process
+ * (decode, area average and encode in the Y'CbCr planes, so this thread runs no pixel loop: live, the in-thread decode,
+ * average and encode of the close-ups blocked the event loop ~0.5 s); anything ffmpeg cannot take is averaged here.
  * The same bytes in give the same bytes out, so a request built from them keys the reply cache the same way every run.
  */
-export async function capImageSide(bytes: Buffer, mimeType: string, widthPx: number, heightPx: number, maxSidePx: number): Promise<{ bytes: Buffer; mimeType: string; widthPx: number; heightPx: number; downscaled: boolean }> {
-    if (Math.max(widthPx, heightPx) <= maxSidePx) return { bytes, mimeType, widthPx, heightPx, downscaled: false };
+export async function shrinkImage(bytes: Buffer, maxSidePx: number): Promise<{ bytes: Buffer; widthPx: number; heightPx: number; fromPx: [number, number] } | undefined> {
+    const dims = readImageDimensions(bytes);
+    if (dims && Math.max(dims.width, dims.height) <= maxSidePx) return undefined;
+    if (dims && sniffImageFormat(bytes) === 'jpeg') {
+        const s = maxSidePx / Math.max(dims.width, dims.height);
+        const w = Math.max(1, Math.round(dims.width * s)), h = Math.max(1, Math.round(dims.height * s));
+        try {
+            return { bytes: await downscaleJpegFfmpeg(bytes, w, h, { quality: 92 }), widthPx: w, heightPx: h, fromPx: [dims.width, dims.height] };
+        } catch {
+            // no ffmpeg (or it failed on this file): the in-process path below
+        }
+    }
     const img = await decodeImageToRgba(bytes);
+    if (Math.max(img.width, img.height) <= maxSidePx) return undefined;
     const s = maxSidePx / Math.max(img.width, img.height);
     const w = Math.max(1, Math.round(img.width * s)), h = Math.max(1, Math.round(img.height * s));
-    const out = await encodeRgbaToJpeg(downscaleRgba(img.rgba, img.width, img.height, w, h), w, h, { quality: 92 });
-    return { bytes: out, mimeType: 'image/jpeg', widthPx: w, heightPx: h, downscaled: true };
+    return { bytes: await encodeRgbaToJpeg(downscaleRgba(img.rgba, img.width, img.height, w, h), w, h, { quality: 92 }), widthPx: w, heightPx: h, fromPx: [img.width, img.height] };
+}
+
+/** A JPEG whose longest side passes `maxSidePx`, re-encoded smaller (shrinkImage); anything else as it came. */
+export async function capImageSide(bytes: Buffer, mimeType: string, widthPx: number, heightPx: number, maxSidePx: number): Promise<{ bytes: Buffer; mimeType: string; widthPx: number; heightPx: number; downscaled: boolean }> {
+    if (Math.max(widthPx, heightPx) <= maxSidePx) return { bytes, mimeType, widthPx, heightPx, downscaled: false };
+    const small = await shrinkImage(bytes, maxSidePx);
+    return small ? { bytes: small.bytes, mimeType: 'image/jpeg', widthPx: small.widthPx, heightPx: small.heightPx, downscaled: true } : { bytes, mimeType, widthPx, heightPx, downscaled: false };
 }
 
 /**
@@ -225,12 +244,11 @@ export async function downscaleEvidence(evidence: EvidenceInput[], maxSidePx = O
         const long = Math.max(r.widthPx, r.heightPx);
         if (r.kind !== 'streetview-grounding' || long <= maxSidePx) return e;
         try {
-            const img = await decodeImageToRgba(e.bytes);
-            const s = maxSidePx / Math.max(img.width, img.height);
-            const w = Math.max(1, Math.round(img.width * s)), h = Math.max(1, Math.round(img.height * s));
-            const bytes = await encodeRgbaToJpeg(downscaleRgba(img.rgba, img.width, img.height, w, h), w, h, { quality: 92 });
-            const ref: EvidenceImageRef = { ...r, widthPx: w, heightPx: h, sha256: crypto.createHash('sha256').update(bytes).digest('hex'), nativeSampleM: r.nativeSampleM * (img.width / w) };
-            downscaled.push({ imageId: r.id, fromPx: [img.width, img.height], toPx: [w, h] });
+            const small = await shrinkImage(e.bytes, maxSidePx);
+            if (!small) return e;
+            const { bytes, widthPx: w, heightPx: h } = small;
+            const ref: EvidenceImageRef = { ...r, widthPx: w, heightPx: h, sha256: crypto.createHash('sha256').update(bytes).digest('hex'), nativeSampleM: r.nativeSampleM * (small.fromPx[0] / w) };
+            downscaled.push({ imageId: r.id, fromPx: small.fromPx, toPx: [w, h] });
             return { ref, bytes, mimeType: 'image/jpeg', caption: streetViewCaption(ref) };
         } catch {
             return e;
