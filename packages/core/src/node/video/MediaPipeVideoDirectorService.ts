@@ -765,11 +765,12 @@ export class MediaPipeVideoDirectorService {
         const parsedVideo = path.parse(options.videoPath);
         const sheetPath = path.join(parsedVideo.dir, `${parsedVideo.name}_audit_sheet_${Date.now()}.jpg`);
         let finished = false;
+        let timecodesOnSheet = true;
         try {
             // 1. The 3x3 contact sheet the vision model scores. Without it there is nothing to look at: the audit fails.
             onProgress?.('Making the 3x3 contact sheet', 0);
             try {
-                await this.editorService.generateStoryboardSheet({
+                const sheetRes = await this.editorService.generateStoryboardSheet({
                     inputPath: options.videoPath,
                     outputPath: sheetPath,
                     columns: 3,
@@ -777,6 +778,8 @@ export class MediaPipeVideoDirectorService {
                     labelTimecode: true,
                     signal
                 });
+                // An ffmpeg without drawtext makes the sheet without timecodes; the prompt then does not claim them.
+                timecodesOnSheet = sheetRes?.timecodeBurnedIn !== false;
             } catch (err: any) {
                 throwIfStopped(signal, what);
                 throw new GeneratorFailedError('ffmpeg', `the visual critic could not make the contact sheet of ${options.videoPath}: ${err?.stderr || err?.message || String(err)}`);
@@ -816,7 +819,7 @@ export class MediaPipeVideoDirectorService {
             onProgress?.(`Scoring the rubric with the vision model (${VISUAL_CRITIC_MODEL})`, 0.9);
             const sheet = await fs.readFile(sheetPath);
             const reference = options.referencePlatePath ? await fs.readFile(options.referencePlatePath) : undefined;
-            const scored = await this.scoreRubric(sheet, reference, options, anatomicalConsistency, minPassing, what);
+            const scored = await this.scoreRubric(sheet, reference, options, anatomicalConsistency, minPassing, what, timecodesOnSheet);
             // An answer that arrives after a Stop is dropped.
             throwIfStopped(signal, what);
 
@@ -897,7 +900,8 @@ export class MediaPipeVideoDirectorService {
         options: VisualCriticAuditOptions,
         anatomy: AnatomicalConsistencyAudit,
         minPassing: number,
-        what: string
+        what: string,
+        timecodesOnSheet = true
     ): Promise<{ dimensions: Record<VisualCriticDimension, { score: number; notes: string }>; actionDirectives: string[]; suggestedFfmpegFilters: string[] }> {
         const model = VISUAL_CRITIC_MODEL;
         const signal = options.signal;
@@ -910,7 +914,9 @@ export class MediaPipeVideoDirectorService {
             { inlineData: { mimeType: 'image/jpeg', data: sheet.toString('base64') } },
             ...(reference ? [{ inlineData: { mimeType: this.imageMimeType(reference), data: reference.toString('base64') } }] : []),
             [
-                'The first image is a 3x3 contact sheet of nine frames sampled evenly across a video, each labelled with its timecode.',
+                timecodesOnSheet
+                    ? 'The first image is a 3x3 contact sheet of nine frames sampled evenly across a video, each labelled with its timecode.'
+                    : 'The first image is a 3x3 contact sheet of nine frames sampled evenly across a video, in time order left to right and top to bottom (the cells carry no timecodes).',
                 reference ? 'The second image is the original reference plate the video was made from.' : '',
                 options.promptContext ? `The shot is meant to be: ${options.promptContext}` : '',
                 anatomyLine,

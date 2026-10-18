@@ -9,6 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 import * as path from 'path';
+import { getFfmpegCapabilities } from '../src/node/video/ffmpeg-capabilities';
 import { HeadlessVideoEditorService, resolveBinary } from '../src/node/video/HeadlessVideoEditorService';
 import { findBinary, HOW_TO, requireAll, requireAsset, withReason, type Requirement } from './helpers/requirements';
 
@@ -222,8 +223,11 @@ describe('HeadlessVideoEditorService', () => {
             expect(result.success).toBe(true);
             expect(result.outputPaths.length).toBe(3);
             expect(result.outputPaths[1]).toContain('_keyframe_1_');
-            expect(result.commands?.[1]).toContain('-ss 1.5');
-            expect(result.commands?.[2]).toContain('-ss 3.25');
+            // One ffmpeg for all three: each timestamp is its own fast-seeked input mapped to its own output.
+            expect(result.commands).toHaveLength(1);
+            expect(result.commands?.[0]).toContain('-ss 1.5 -i /workspace/input.mp4');
+            expect(result.commands?.[0]).toContain('-ss 3.25 -i /workspace/input.mp4');
+            expect(result.commands?.[0]).toContain(`-map 2:v:0 -frames:v 1 -q:v 2 ${result.outputPaths[2]}`);
         });
     });
 
@@ -295,12 +299,20 @@ describe('HeadlessVideoEditorService', () => {
                 cellWidth: 640,
                 cellHeight: 360,
                 labelTimecode: true,
+                durationSec: 18,
                 dryRun: true
             });
 
             expect(result.success).toBe(true);
+            // Nine seeks (every 2 s of the 18 s input), not a decode of the whole video.
+            expect(result.commandString).toContain('-ss 0 -i /workspace/input.mp4');
+            expect(result.commandString).toContain('-ss 16 -i /workspace/input.mp4');
+            expect(result.commandString).toContain('concat=n=9:v=1:a=0');
             expect(result.commandString).toContain('tile=3x3:nb_frames=9');
-            expect(result.commandString).toContain('drawtext=text=');
+            // Burnt-in timecodes need drawtext; an ffmpeg without it gets a sheet that says it has none.
+            const caps = await getFfmpegCapabilities(service.getFfmpegPath()).catch(() => undefined);
+            if (!caps || caps.filters.has('drawtext')) expect(result.commandString).toContain('drawtext=text=');
+            else expect(result.timecodeBurnedIn).toBe(false);
             expect(result.commandString).toContain('scale=640:360');
             expect(result.commandString).toContain('-frames:v 1');
         });
@@ -486,9 +498,14 @@ describe('HeadlessVideoEditorService', () => {
             expect(result.success).toBe(true);
             expect(result.commandString).toContain('-framerate 24');
             expect(result.commandString).toContain('-i /workspace/renders/frame_%04d.png');
-            expect(result.commandString).toContain('-c:v libx264');
+            // No preset named: the hardware encoder when the capability check proved it works, else libx264 veryfast.
+            const caps = await getFfmpegCapabilities(service.getFfmpegPath()).catch(() => undefined);
+            expect(result.commandString).toContain(caps?.h264VideoToolbox ? '-c:v h264_videotoolbox -q:v 69' : '-c:v libx264 -preset veryfast -crf 18');
             expect(result.commandString).toContain('-pix_fmt yuv420p');
             expect(result.commandString).toContain('-movflags +faststart');
+
+            const pinned = await service.encodeFrameSequence({ framePattern: '/workspace/renders/frame_%04d.png', outputPath: '/workspace/pinned.mp4', crf: 18, preset: 'slow', dryRun: true });
+            expect(pinned.commandString).toContain('-c:v libx264 -preset slow -crf 18');
         });
     });
 });
