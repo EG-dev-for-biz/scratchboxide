@@ -323,7 +323,9 @@ describe.skipIf(!arch.requirement.ok || !stagedChrome.ok)('staged build end to e
         const built = warm.result.stages.filter((s: any) => s.status === 'committed' && !s.timings?.cached && !fetchedAgain.has(s.stage)).map((s: any) => s.stage);
         expect(built, 'stages that were rebuilt on the warm run').toEqual([]);
         expect(warm.wallMs).toBeLessThan(cold.wallMs);
-        expect(layerLabels(warm)).toEqual(layerLabels(cold));
+        // Same layers with the same provenance. Commit order is not compared: the detail and figures stages (both order 4)
+        // run concurrently, so on a cold run figures (l3cf, l4f) can commit before detail (l4) and on a warm run after.
+        expect([...layerLabels(warm)].sort()).toEqual([...layerLabels(cold)].sort());
     }, 900_000);
 
     it('forced failures: remesh -> as scanned; fit -> remesh only; detail -> flat fitted face; each is listed with its reason', async () => {
