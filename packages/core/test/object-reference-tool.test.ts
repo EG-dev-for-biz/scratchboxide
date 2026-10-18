@@ -571,6 +571,29 @@ describe('build_3d_object_from_reference', () => {
         expect(noCreds.resultPayload.error).toBe('No Google API key or service account configured');
     });
 
+    it('on the Gemini API, uploads the reference once and every later call sends the file, not the image; the file is deleted after', async () => {
+        const base = fakeClient({ specs: [JSON.stringify(VASE)], differences: ['{"differences": []}'] });
+        const uploads: any[] = [];
+        const deleted: string[] = [];
+        const client: any = Object.assign(base, {
+            vertexai: false,
+            files: {
+                upload: async (args: any) => { uploads.push(args); return { name: 'files/ref-1', uri: 'https://generativelanguage.googleapis.com/v1beta/files/ref-1', mimeType: 'image/png' }; },
+                delete: async ({ name }: { name: string }) => { deleted.push(name); }
+            }
+        });
+        const out = await handlerWith(client).run({ request: 'a fluted vase with a knob on top', dimensionsHintMeters: [0.36, 0.66, 0.36] });
+        expect(out.status, String(out.resultPayload.error)).toBe('completed');
+        expect(uploads).toHaveLength(1);
+        const later = base.calls.filter((c: Call) => !c.config?.responseModalities);
+        expect(later.length).toBeGreaterThanOrEqual(2); // the spec and at least one comparison
+        for (const call of later) {
+            const parts = (call.contents as any[]).flatMap(c => c.parts || []);
+            expect(parts[0].fileData?.fileUri).toBe('https://generativelanguage.googleapis.com/v1beta/files/ref-1');
+        }
+        expect(deleted).toEqual(['files/ref-1']);
+    }, 180_000);
+
     it('builds a clay 3d-scene from the spec without any image in the payload or on disk', async () => {
         const watched = [path.join(REPO_ROOT, 'build'), path.join(REPO_ROOT, 'public'), path.join(REPO_ROOT, '.scratchbox'), TMP];
         const before = filesIn(watched);
@@ -857,7 +880,9 @@ describe('build_3d_object_from_reference', () => {
         expect(out.resultPayload.stage).toBe('staging');
         expect(String(out.resultPayload.error)).toContain('No place matched "Atlantis Plaza"');
         expect(stageArgs).toEqual([{ query: 'Atlantis Plaza' }]);
-        expect(client.calls).toHaveLength(0);
+        // The build starts alongside staging and is stopped when staging or placement fails: it never gets as far as
+        // comparing a build with the reference, and nothing is published.
+        expect(client.calls.filter(isComparisonCall)).toHaveLength(0);
 
         const unremeshed = await handlerWith(client, {
             stageAtLocation: async () => ({ status: 'completed', resultPayload: { success: true, remesh: { ok: false, error: 'tile_refine crashed' }, artifact: { type: '3d-scene', data: { objects: [] } } } })
@@ -993,7 +1018,7 @@ describe('build_3d_object_from_reference', () => {
         expect(out.summaryResult).toContain('likely a roof or raised structure');
     }, 180_000);
 
-    it('fails before any model call when the placement is off the staged tiles, lifts the object, or has no location', async () => {
+    it('fails, stopping the build started alongside staging, when the placement is off the staged tiles, lifts the object, or has no location', async () => {
         const client = fakeClient({ specs: [JSON.stringify(VASE)] });
         const off = await handlerWith(client, { stageAtLocation: stagedScene(writeStagedTiles()) })
             .run({ request: 'a fluted vase', location: 'Union Square, San Francisco', placement: { eastMeters: 400, northMeters: 0, headingDeg: 0 } });
@@ -1008,7 +1033,9 @@ describe('build_3d_object_from_reference', () => {
         const noPlace = await handlerWith(client).run({ request: 'a fluted vase', placement: { eastMeters: 1, northMeters: 1, headingDeg: 0 } });
         expect(noPlace.status).toBe('failed');
         expect(String(noPlace.resultPayload.error)).toContain('placement is relative to a place');
-        expect(client.calls).toHaveLength(0);
+        // The build starts alongside staging and is stopped when staging or placement fails: it never gets as far as
+        // comparing a build with the reference, and nothing is published.
+        expect(client.calls.filter(isComparisonCall)).toHaveLength(0);
     });
 
     it('rebuilds a given spec exactly, with no model call, and keeps the object at its place', async () => {
@@ -1113,14 +1140,16 @@ describe('build_3d_object_from_reference', () => {
         expect(askedText(specCalls[1])).toContain('The build did not finish within 1 s, so it was stopped');
     }, 60_000);
 
-    it('fails before any model call when the spot is under a staged tree crown, and names clear spots the viewport seats it on the ground at', async () => {
+    it('fails, stopping the build started alongside staging, when the spot is under a staged tree crown, and names clear spots the viewport seats it on the ground at', async () => {
         const client = fakeClient({ specs: [JSON.stringify(VASE)] });
         const handler = handlerWith(client, { stageAtLocation: stagedScene(writeStagedTiles(), writeStagedTrees()) });
         const location = 'Union Square, San Francisco';
         const under = await handler.run({ request: 'a fluted vase under the tree', location, placement: { eastMeters: 6, northMeters: 4, headingDeg: 0 } });
         expect(under.status).toBe('failed');
         expect(under.resultPayload.stage).toBe('placement');
-        expect(client.calls).toHaveLength(0);
+        // The build starts alongside staging and is stopped when staging or placement fails: it never gets as far as
+        // comparing a build with the reference, and nothing is published.
+        expect(client.calls.filter(isComparisonCall)).toHaveLength(0);
         const error = String(under.resultPayload.error);
         expect(error).toContain('the highest surface is the vegetation layer tile-trees-1 (SB-Veggie), 9 m up, above the ground there at 1.5 m');
         expect(error).toContain('so the object would be drawn on top of that, not on the ground');
@@ -1503,7 +1532,9 @@ describe('build_3d_object_from_reference', () => {
         const stopped = await stop.run({ request: 'a vase', location, placement: { eastMeters: 12, northMeters: 8, headingDeg: 90 } }, { ...ctx(), signal: controller.signal });
         expect(stopped.resultPayload).toMatchObject({ stage: 'placement', aborted: true, error: 'Stopped by the user.' });
         expect(Date.now() - stopStarted).toBeLessThan(syncMs);
-        expect(client.calls).toHaveLength(0);
+        // The build starts alongside staging and is stopped when staging or placement fails: it never gets as far as
+        // comparing a build with the reference, and nothing is published.
+        expect(client.calls.filter(isComparisonCall)).toHaveLength(0);
     }, 300_000);
 
     it('the Python runner kills the script when its signal aborts', async () => {

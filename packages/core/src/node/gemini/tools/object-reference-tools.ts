@@ -939,7 +939,7 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
             }
 
             /** Stages at the location (or reuses the active scene's staging there) and places the object. */
-            const stageAndPlace = async (): Promise<{ site?: Site; failure?: ToolHandlerOutcome }> => {
+            const stageAndPlace = async (beforeStaging?: () => void): Promise<{ site?: Site; failure?: ToolHandlerOutcome }> => {
                 if (!location || !placementArgs || !reuse) return {};
                 let replaced: any;
                 if (replaceObjectId) {
@@ -954,6 +954,9 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                         };
                     }
                 }
+                // The request is valid to here: anything slow from now on (staging, reading the staged models) can run
+                // alongside the build.
+                beforeStaging?.();
                 let staged = reuse.staging;
                 if (staged) {
                     ctx.reportProgress?.(`Reusing the tiles already staged in the active scene for ${location}`);
@@ -1047,18 +1050,41 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                     if (staging.failure) return staging.failure;
                     site = staging.site;
                 } else {
-                    // A new build stages and checks its spot first, so an unknown place or a covered spot fails before
-                    // any model is called.
-                    const staging = await stageAndPlace();
-                    if (staging.failure) return staging.failure;
+                    // The build (reference draw, spec, native build, checks) and the staging of its spot are
+                    // independent, so once the request has passed its checks they run at once. A staging or placement
+                    // failure (an unknown place, a covered spot) stops the build through its own signal and is the
+                    // result; the user's Stop ends both.
+                    const buildStop = new AbortController();
+                    const buildSignal = ctx.signal ? AbortSignal.any([ctx.signal, buildStop.signal]) : buildStop.signal;
+                    let building: Promise<ReferenceObjectBuildResult> | undefined;
+                    let buildSettled: Promise<void> | undefined;
+                    const startBuild = () => {
+                        if (building) return building;
+                        building = (deps.build ?? buildObjectFromReference)({
+                            request,
+                            requestedModel: ctx.request?.model || undefined,
+                            dimensionsHintMeters: dimensions,
+                            signal: buildSignal,
+                            reportProgress: ctx.reportProgress
+                        }, deps.builder);
+                        // Observed at once, so a build that fails while staging runs is not an unhandled rejection.
+                        buildSettled = building.then(() => undefined, () => undefined);
+                        return building;
+                    };
+                    const stopBuild = async () => { buildStop.abort(); await buildSettled; };
+                    let staging: Awaited<ReturnType<typeof stageAndPlace>>;
+                    try {
+                        staging = await stageAndPlace(startBuild);
+                    } catch (err) {
+                        await stopBuild();
+                        throw err;
+                    }
+                    if (staging.failure) {
+                        await stopBuild();
+                        return staging.failure;
+                    }
                     site = staging.site;
-                    built = fromReference(await (deps.build ?? buildObjectFromReference)({
-                        request,
-                        requestedModel: ctx.request?.model || undefined,
-                        dimensionsHintMeters: dimensions,
-                        signal: ctx.signal,
-                        reportProgress: ctx.reportProgress
-                    }, deps.builder));
+                    built = fromReference(await startBuild());
                 }
             } catch (err) {
                 if (err instanceof ReferenceObjectBuildError) {

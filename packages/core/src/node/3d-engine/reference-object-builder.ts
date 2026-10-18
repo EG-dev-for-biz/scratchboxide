@@ -58,6 +58,7 @@ import {
     type TriangleSoup
 } from './part-connectivity';
 import { renderReviewViews } from './visual-review';
+import { downscaleForVision } from '../vision-image-downscale';
 
 /** Nano Banana Lite. The only model the reference image is ever requested from. */
 export const REFERENCE_IMAGE_MODEL = 'gemini-3.1-flash-lite-image';
@@ -256,6 +257,36 @@ export interface ReferenceObjectBuildResult {
 interface ReferenceImage {
     data: Buffer;
     mimeType: string;
+    /** The image as an uploaded file (Gemini API Files), sent by reference instead of inline on every later call. */
+    part?: Part;
+}
+
+/** The reference as a content part: its uploaded file when it has one, else inline. */
+function referencePart(reference: ReferenceImage): Part {
+    return reference.part ?? imagePart(reference.data, reference.mimeType);
+}
+
+/**
+ * Prepares the reference for the calls that read it (the spec, every comparison and revision): downscaled to a
+ * 1024 px long edge when larger, and, on the Gemini API (which has a Files service; Vertex does not), uploaded once
+ * so each call sends a file reference instead of the image. An upload that fails leaves the image inline; returns
+ * the uploaded file's name for deletion.
+ */
+async function prepareReferenceForReading(client: any, reference: ReferenceImage, signal?: AbortSignal): Promise<{ reference: ReferenceImage; uploadedName?: string }> {
+    const small = await downscaleForVision(reference.data, reference.mimeType).catch(() => undefined);
+    const ready: ReferenceImage = small?.downscaled ? { data: small.data, mimeType: small.mimeType } : reference;
+    if (client?.vertexai !== false || typeof client?.files?.upload !== 'function') return { reference: ready };
+    try {
+        const file = await client.files.upload({
+            file: new Blob([new Uint8Array(ready.data)], { type: ready.mimeType }),
+            config: { mimeType: ready.mimeType, ...(signal ? { abortSignal: signal } : {}) }
+        });
+        if (!file?.uri) return { reference: ready };
+        return { reference: { ...ready, part: { fileData: { fileUri: file.uri, mimeType: file.mimeType || ready.mimeType } } }, uploadedName: file.name };
+    } catch {
+        if (signal?.aborted) throw new ReferenceObjectBuildError('build-spec', 'Stopped by the user.', { aborted: true });
+        return { reference: ready };
+    }
 }
 
 const THREE_QUARTER_VIEW = [{ label: 'three-quarter view', azimuthDeg: 35, elevationDeg: 22 }];
@@ -578,7 +609,7 @@ async function compareToReference(
 ): Promise<ReferenceDifference[]> {
     const contents: Content[] = [{
         role: 'user',
-        parts: [imagePart(reference.data, reference.mimeType), imagePart(render, 'image/png'), { text: buildComparisonPrompt(request, spec) }]
+        parts: [referencePart(reference), imagePart(render, 'image/png'), { text: buildComparisonPrompt(request, spec) }]
     }];
     const first = await callJson(vision, contents, DIFFERENCES_JSON_SCHEMA, 'checks', signal);
     const parsed = parseDifferences(first);
@@ -794,7 +825,7 @@ const yieldToEventLoop = () => new Promise<void>(resolve => setImmediate(resolve
 export async function measureBuild(
     spec: ObjectBuildSpec,
     glb: Buffer,
-    options: { signal?: AbortSignal } = {}
+    options: { signal?: AbortSignal; /** Called with the merged soup before the connectivity analysis starts. */ onSoup?: (soup: TriangleSoup) => void } = {}
 ): Promise<Omit<ObjectBuildChecks, 'differences'> & { soup: TriangleSoup; partBounds: PartBounds }> {
     throwIfAborted(options.signal, 'checks');
     let named: Map<string, TriangleSoup> | null;
@@ -816,6 +847,7 @@ export async function measureBuild(
         triangleRange.set(id, [first, first + s.indices.length / 3]);
         first += s.indices.length / 3;
     }
+    options.onSoup?.(soup);
     await yieldToEventLoop();
     let whole: PartConnectivityReport;
     try {
@@ -904,22 +936,41 @@ async function checkBuild(
     vision: VisionModel,
     reference: ReferenceImage
 ): Promise<CheckedPass> {
-    input.reportProgress?.(`Checking pass ${pass}: every part built and attached`);
-    const { soup, partBounds, ...measured } = await measureBuild(spec, build.glb, { signal: input.signal });
-    throwIfAborted(input.signal, 'checks');
-    const render = renderReviewViews(soup, 512, { views: THREE_QUARTER_VIEW })[0].png;
-    input.reportProgress?.(`Comparing the clay build (pass ${pass}) with the reference`);
-    let differences: ReferenceDifference[] = [];
-    let comparisonError: string | undefined;
+    input.reportProgress?.(`Checking pass ${pass}: every part built and attached, and comparing it with the reference`);
+    // The comparison needs only the clay render, which needs only the merged soup: it starts as soon as the soup is
+    // read back and runs while the connectivity analysis does. A measuring failure stops the comparison.
+    const compareStop = new AbortController();
+    const compareSignal = input.signal ? AbortSignal.any([input.signal, compareStop.signal]) : compareStop.signal;
+    let render: Buffer | undefined;
+    let comparing: Promise<{ differences: ReferenceDifference[]; error?: unknown }> | undefined;
+    const startComparison = (soup: TriangleSoup) => {
+        render = renderReviewViews(soup, 512, { views: THREE_QUARTER_VIEW })[0].png;
+        comparing = compareToReference(vision, input.request, reference, render, spec, compareSignal)
+            .then(differences => ({ differences }), error => ({ differences: [], error }));
+    };
+    let measuredBuild: Awaited<ReturnType<typeof measureBuild>>;
     try {
-        differences = await compareToReference(vision, input.request, reference, render, spec, input.signal);
+        measuredBuild = await measureBuild(spec, build.glb, { signal: input.signal, onSoup: startComparison });
     } catch (err) {
+        compareStop.abort();
+        await comparing;
+        throw err;
+    }
+    const { soup, partBounds, ...measured } = measuredBuild;
+    throwIfAborted(input.signal, 'checks');
+    if (!comparing) startComparison(soup);
+    const compared = await comparing!;
+    let differences: ReferenceDifference[] = compared.differences;
+    let comparisonError: string | undefined;
+    if (compared.error !== undefined) {
+        const err = compared.error;
         if (!(err instanceof ReferenceObjectBuildError) || err.details.aborted || input.signal?.aborted) throw err;
         comparisonError = err.message;
+        differences = [];
     }
     const checks: ObjectBuildChecks = { ...measured, differences };
     return {
-        pass, spec, build, render, checks, partBounds,
+        pass, spec, build, render: render!, checks, partBounds,
         problems: describeProblems(checks, spec, partBounds),
         ...(comparisonError ? { comparisonError } : {})
     };
@@ -1063,14 +1114,17 @@ export async function buildObjectFromReference(
 
     progress(`Drawing an internal reference with ${REFERENCE_IMAGE_MODEL}`, 0.05);
     let generated: { image: ReferenceImage; answered: string } | undefined = await generateReferenceImage(client, input.request, deps, input.signal);
+    let uploadedName: string | undefined;
     try {
-        const reference = generated.image;
+        const prepared = await prepareReferenceForReading(client, generated.image, input.signal);
+        uploadedName = prepared.uploadedName;
+        const reference = prepared.reference;
         const imageModel: ModelUse = { requested: REFERENCE_IMAGE_MODEL, answered: generated.answered };
 
         progress(`Reading the reference into a build spec with ${vision.current}`, 0.2);
         const firstSpec = await requestBuildableSpec(vision, [{
             role: 'user',
-            parts: [imagePart(reference.data, reference.mimeType), { text: buildSpecPrompt(input.request, input.dimensionsHintMeters) }]
+            parts: [referencePart(reference), { text: buildSpecPrompt(input.request, input.dimensionsHintMeters) }]
         }], deps, input.signal, progress);
         let current = await checkBuild(1, firstSpec.spec, firstSpec.build, input, vision, reference);
         const passes: ObjectBuildPass[] = [passRecord(current, 'reference', firstSpec)];
@@ -1087,7 +1141,7 @@ export async function buildObjectFromReference(
                 const revised = await requestBuildableSpec(vision, [{
                     role: 'user',
                     parts: [
-                        imagePart(reference.data, reference.mimeType),
+                        referencePart(reference),
                         imagePart(current.render, 'image/png'),
                         { text: buildRevisionPrompt(input.request, current.spec, current.problems, input.dimensionsHintMeters) }
                     ]
@@ -1150,7 +1204,9 @@ export async function buildObjectFromReference(
     } catch (err) {
         throw vision.annotate(err);
     } finally {
-        // The reference only ever lived in memory; drop it so nothing outlives the call.
+        // The reference lived in memory (and, on the Gemini API, as an uploaded file for this build's calls); drop
+        // both so nothing outlives the call.
         generated = undefined;
+        if (uploadedName) await Promise.resolve((client as any).files?.delete?.({ name: uploadedName })).catch(() => undefined);
     }
 }
