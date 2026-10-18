@@ -373,12 +373,12 @@ describe('Panorama edits ask for an image size that covers the panorama, and ref
         const original = PanoramaDepthService.prototype.generatePanoramaDepth;
         PanoramaDepthService.prototype.generatePanoramaDepth = async function () { depthRuns++; throw new Error('not reached'); } as any;
         try {
-            const refused = await panoramaHandlers.panorama_to_3dgs({ inputImagePath: big }, { workspaceRoot: WORK } as any).catch(e => e);
+            const refused = await panoramaHandlers.panorama_to_3dgs({ inputImagePath: big, eyeHeight: 1.7 }, { workspaceRoot: WORK } as any).catch(e => e);
             expect(refused).toBeInstanceOf(ModelAnswerResolutionError);
             expect(refused.beforeCall).toBe(true);
             expect(depthRuns).toBe(0);
             // With a larger allowed enlargement the check passes and the depth run starts.
-            const next = await panoramaHandlers.panorama_to_3dgs({ inputImagePath: big, maxModelUpscale: 4 }, { workspaceRoot: WORK } as any).catch(e => e);
+            const next = await panoramaHandlers.panorama_to_3dgs({ inputImagePath: big, eyeHeight: 1.7, maxModelUpscale: 4 }, { workspaceRoot: WORK } as any).catch(e => e);
             expect(next.message).toBe('not reached');
             expect(depthRuns).toBe(1);
         } finally {

@@ -17,6 +17,8 @@ import {
     DeploymentManifestCompiler,
     ImageToSplatService
 } from '../../../packages/core/src/node';
+import { PanoramaDepthService } from '../../../packages/core/src/node/spatial/PanoramaDepthService';
+import type { VideoKeyframeInput } from '../../../packages/core/src/node/3d-engine/image-to-splat-service';
 import { GeoFrame } from '../../../packages/core/src/common/coordinate/GeoFrame';
 import { getGoogle3DTilesClay } from '../../../packages/core/src/node/spatial/Google3DTileBlockoutPipelineService';
 import { LocationUnresolvedError, MediaModelUnavailableError, MissingInputError } from '../../../packages/core/src/common/errors/pipeline-errors';
@@ -429,15 +431,88 @@ export function createSplatStudioRouter(): Router {
         }
     });
 
-    router.post('/multiview-to-splat', (req: Request, res: Response) => {
+    /** Pixels sent as base64 (or a byte array) become a Uint8Array. */
+    const toPixels = (v: any): Uint8Array => Buffer.isBuffer(v) ? v : (typeof v === 'string' ? Buffer.from(v, 'base64') : new Uint8Array(v || []));
+    const depthService = new PanoramaDepthService();
+    /**
+     * Each view without a depth map gets one from the depth model (Depth Anything V2 Small). The depth is relative
+     * (median 1 per view) unless the request gives the scene's median depth in metres (per view or for all views).
+     */
+    async function withModelDepth<T extends { rgbPixels: Uint8Array; width: number; height: number; channels?: number; fovDegrees?: number; metricDepths?: any; medianDepthMeters?: number }>(
+        views: T[], medianDepthMeters: number | undefined
+    ): Promise<{ views: T[]; depthUnits: string[]; depthModel: string }> {
+        const units: string[] = [];
+        let depthModel = '';
+        const out: T[] = [];
+        for (const v of views) {
+            if (v.metricDepths) { out.push(v); units.push('caller'); continue; }
+            const depth = await depthService.generatePixelBufferDepth(v.rgbPixels, v.width, v.height, {
+                channels: v.channels ?? 3,
+                fovDegrees: v.fovDegrees ?? 65.0,
+                medianDepthMeters: typeof v.medianDepthMeters === 'number' ? v.medianDepthMeters : medianDepthMeters
+            });
+            depthModel = depth.modelUsed;
+            units.push(depth.depthUnits);
+            out.push({ ...v, metricDepths: depth.rayDepths });
+        }
+        return { views: out, depthUnits: units, depthModel };
+    }
+    const sendSplatFailure = (res: Response, err: any, fallback: string) => {
+        const status = err instanceof MissingInputError || err?.name === 'InvalidInputError' ? 400 : 500;
+        res.status(status).json({ success: false, error: err?.message || fallback, errorType: err?.name });
+    };
+    const medianOf = (body: any): number | undefined => {
+        const m = body?.medianDepthMeters;
+        if (m === undefined || m === null) return undefined;
+        if (!(typeof m === 'number' && m > 0)) throw new MissingInputError('splat-studio', 'medianDepthMeters', `must be a positive distance in metres (got ${JSON.stringify(m)})`);
+        return m;
+    };
+
+    /**
+     * Depth for one image's pixels from the depth model: { rgbPixels (base64), width, height, channels, fovDegrees,
+     * medianDepthMeters? } -> { rayDepths (base64 float32, depth along each pixel's pinhole ray), depthUnits, depthModel }.
+     */
+    router.post('/depth', async (req: Request, res: Response) => {
+        try {
+            const { rgbPixels, width, height, channels = 4, fovDegrees } = req.body || {};
+            if (!rgbPixels || !(width > 0) || !(height > 0)) throw new MissingInputError('depth', 'rgbPixels', 'rgbPixels, width and height are required');
+            if (!(typeof fovDegrees === 'number' && fovDegrees > 1 && fovDegrees < 179)) throw new MissingInputError('depth', 'fovDegrees', 'the vertical field of view in degrees is required');
+            const depth = await depthService.generatePixelBufferDepth(toPixels(rgbPixels), width, height, {
+                channels, fovDegrees, medianDepthMeters: medianOf(req.body)
+            });
+            res.json({
+                success: true,
+                width, height,
+                rayDepths: Buffer.from(depth.rayDepths.buffer, depth.rayDepths.byteOffset, depth.rayDepths.byteLength).toString('base64'),
+                depthUnits: depth.depthUnits,
+                depthModel: depth.modelUsed,
+                farPlanePixels: depth.farPlanePixels,
+                minDepth: depth.minDepth,
+                maxDepth: depth.maxDepth
+            });
+        } catch (err: any) {
+            sendSplatFailure(res, err, 'Depth measurement failed');
+        }
+    });
+
+    router.post('/single-to-splat', async (req: Request, res: Response) => {
+        try {
+            const { view, stride = 1, edgeTau = 0.08, minDepth = 0.2, maxDepth = 200.0 } = req.body || {};
+            if (!view?.rgbPixels || !view.width || !view.height) throw new MissingInputError('single-to-splat', 'view', 'rgbPixels, width and height are required');
+            const { views, depthUnits, depthModel } = await withModelDepth([{ ...view, rgbPixels: toPixels(view.rgbPixels) }], medianOf(req.body));
+            const splats = ImageToSplatService.convertSingleImageToSplat({ ...views[0], channels: views[0].channels ?? 3, stride, edgeTau, minDepth, maxDepth });
+            res.json({ success: true, splatCount: splats.length, splats, depthModel, depthUnits: depthUnits[0] });
+        } catch (err: any) {
+            sendSplatFailure(res, err, 'Single image splat conversion failed');
+        }
+    });
+
+    router.post('/multiview-to-splat', async (req: Request, res: Response) => {
         try {
             const { views = [], voxelSize = 0.05, densifyMaxScale = 0, stride = 1, edgeTau = 0.08, minDepth = 0.2, maxDepth = 200.0 } = req.body || {};
-            const convertedViews = views.map((v: any) => ({
-                ...v,
-                rgbPixels: Buffer.isBuffer(v.rgbPixels) ? v.rgbPixels : (typeof v.rgbPixels === 'string' ? Buffer.from(v.rgbPixels, 'base64') : new Uint8Array(v.rgbPixels || []))
-            }));
+            const withDepth = await withModelDepth(views.map((v: any) => ({ ...v, rgbPixels: toPixels(v.rgbPixels) })), medianOf(req.body));
             const splats = ImageToSplatService.convertMultiViewImagesToSplat({
-                views: convertedViews,
+                views: withDepth.views,
                 voxelSize,
                 densifyMaxScale,
                 stride,
@@ -445,13 +520,13 @@ export function createSplatStudioRouter(): Router {
                 minDepth,
                 maxDepth
             });
-            res.json({ success: true, splatCount: splats.length, splats });
+            res.json({ success: true, splatCount: splats.length, splats, depthModel: withDepth.depthModel, depthUnits: withDepth.depthUnits });
         } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || 'Multi-view splat conversion failed' });
+            sendSplatFailure(res, err, 'Multi-view splat conversion failed');
         }
     });
 
-    router.post('/video-to-splat', (req: Request, res: Response) => {
+    router.post('/video-to-splat', async (req: Request, res: Response) => {
         try {
             const {
                 keyframes = [],
@@ -468,13 +543,9 @@ export function createSplatStudioRouter(): Router {
                 maxDepth = 200.0
             } = req.body || {};
 
-            const convertedKeyframes = keyframes.map((kf: any) => ({
-                ...kf,
-                rgbPixels: Buffer.isBuffer(kf.rgbPixels) ? kf.rgbPixels : (typeof kf.rgbPixels === 'string' ? Buffer.from(kf.rgbPixels, 'base64') : new Uint8Array(kf.rgbPixels || []))
-            }));
-
+            const withDepth = await withModelDepth<VideoKeyframeInput>(keyframes.map((kf: any, i: number) => ({ ...kf, frameIndex: typeof kf.frameIndex === 'number' ? kf.frameIndex : i, rgbPixels: toPixels(kf.rgbPixels) })), medianOf(req.body));
             const splats = ImageToSplatService.convertVideoKeyframesToSplat({
-                keyframes: convertedKeyframes,
+                keyframes: withDepth.views,
                 trajectoryType,
                 orbitRadius,
                 orbitSweepDegrees,
@@ -488,9 +559,9 @@ export function createSplatStudioRouter(): Router {
                 maxDepth
             });
 
-            res.json({ success: true, splatCount: splats.length, splats });
+            res.json({ success: true, splatCount: splats.length, splats, depthModel: withDepth.depthModel, depthUnits: withDepth.depthUnits });
         } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || 'Video keyframe splat conversion failed' });
+            sendSplatFailure(res, err, 'Video keyframe splat conversion failed');
         }
     });
 

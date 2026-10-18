@@ -138,3 +138,5 @@ scripts/station_to_splats
 scripts/scratchbox_uv_pipeline
 scripts/run_sb_veggie
 scripts/run_tile_cleanup_pipeline
+# Downloaded model weights (tools/depth/fetch_depth_model.py, scripts/fetch_pose_model.sh); never committed
+/.model-cache/

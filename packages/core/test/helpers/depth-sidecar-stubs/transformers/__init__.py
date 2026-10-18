@@ -1,12 +1,12 @@
-# Test stand-in for transformers (see ../README.md): a constant planar depth of STUB_DEPTH_METERS metres.
+# Test stand-in for transformers (see ../README.md): a constant disparity of STUB_DISPARITY (relative depth 1 / STUB_DISPARITY).
 import os
 
-if not os.environ.get("STUB_DEPTH_METERS"):
-    raise ImportError("No module named 'transformers' (stub disabled: STUB_DEPTH_METERS is not set)")
+if not os.environ.get("STUB_DISPARITY"):
+    raise ImportError("No module named 'transformers' (stub disabled: STUB_DISPARITY is not set)")
 
 import torch
 
-_DEPTH = float(os.environ["STUB_DEPTH_METERS"])
+_DISPARITY = float(os.environ["STUB_DISPARITY"])
 
 
 class _Inputs(dict):
@@ -36,16 +36,16 @@ class _Model:
 
     def __call__(self, pixel_values):
         n, _, h, w = pixel_values.shape
-        return _Output(torch.full((n, h, w), _DEPTH))
+        return _Output(torch.full((n, h, w), _DISPARITY))
 
 
 class AutoImageProcessor:
     @staticmethod
-    def from_pretrained(name):
+    def from_pretrained(name, **kwargs):
         return _Processor()
 
 
 class AutoModelForDepthEstimation:
     @staticmethod
-    def from_pretrained(name):
+    def from_pretrained(name, **kwargs):
         return _Model()

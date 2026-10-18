@@ -169,13 +169,15 @@ describe('TaskCapabilityResolver', () => {
             expect(res.rationale).toMatch(/not natively supported/i);
         });
 
-        it('reports monocular dense depth estimation (Marigold) as not natively solvable', () => {
+        it('routes monocular depth to the local Depth Anything V2 Small model (Marigold itself is not run)', () => {
             const res = TaskCapabilityResolver.resolveTaskCapability(
                 'Extract high-resolution monocular depth map using Marigold depth estimation'
             );
 
-            expect(res.canSolveNatively).toBe(false);
-            expect(res.rationale).toMatch(/not natively supported/i);
+            expect(res.canSolveNatively).toBe(true);
+            expect(res.rationale).toMatch(/Depth Anything V2 Small/);
+            expect(res.rationale).toMatch(/Marigold-class models are not run/);
+            expect(res.suggestedNativeAction?.targetTool).toBe('single_image_to_3dgs');
         });
     });
 

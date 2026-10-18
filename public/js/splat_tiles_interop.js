@@ -5,7 +5,7 @@
       __defProp(target, name, { get: all3[name], enumerable: true });
   };
 
-  // node_modules/three/build/three.core.js
+  // ../../../node_modules/three/build/three.core.js
   var REVISION = "186";
   var CullFaceNone = 0;
   var CullFaceBack = 1;
@@ -19096,7 +19096,7 @@
     }
   }
 
-  // node_modules/three/build/three.module.js
+  // ../../../node_modules/three/build/three.module.js
   function WebGLAnimation() {
     let context3 = null;
     let isAnimating = false;
@@ -30540,7 +30540,7 @@ void main() {
     }
   };
 
-  // node_modules/3d-tiles-renderer/build/renderer-tyqPdeD-.js
+  // ../../../node_modules/3d-tiles-renderer/build/renderer-tyqPdeD-.js
   function n(e) {
     try {
       let t2 = typeof location < "u" ? location.href : void 0;
@@ -31601,7 +31601,7 @@ void main() {
     }
   };
 
-  // node_modules/three/examples/jsm/utils/BufferGeometryUtils.js
+  // ../../../node_modules/three/examples/jsm/utils/BufferGeometryUtils.js
   function estimateBytesUsed(geometry) {
     let mem = 0;
     for (const name in geometry.attributes) {
@@ -31666,7 +31666,7 @@ void main() {
     }
   }
 
-  // node_modules/three/examples/jsm/utils/SkeletonUtils.js
+  // ../../../node_modules/three/examples/jsm/utils/SkeletonUtils.js
   function clone(source) {
     const sourceLookup = /* @__PURE__ */ new Map();
     const cloneLookup = /* @__PURE__ */ new Map();
@@ -31696,7 +31696,7 @@ void main() {
     }
   }
 
-  // node_modules/three/examples/jsm/loaders/GLTFLoader.js
+  // ../../../node_modules/three/examples/jsm/loaders/GLTFLoader.js
   var GLTFLoader = class extends Loader {
     /**
      * Constructs a new glTF loader.
@@ -34269,7 +34269,7 @@ void main() {
     });
   }
 
-  // node_modules/3d-tiles-renderer/build/renderer-3xKvdklX.js
+  // ../../../node_modules/3d-tiles-renderer/build/renderer-3xKvdklX.js
   var ve = class extends ce {
     constructor(e = DefaultLoadingManager) {
       super(), this.manager = e, this.adjustmentTransform = new Matrix4();
@@ -35178,7 +35178,7 @@ void main() {
     }
   };
 
-  // node_modules/three/build/three.webgpu.js
+  // ../../../node_modules/three/build/three.webgpu.js
   var refreshUniforms = [
     "alphaMap",
     "alphaTest",
@@ -55747,7 +55747,7 @@ fn tsl_biquadraticTexture_array( map : texture_2d_array<f32>, coord : vec2f, iRe
     }
   };
 
-  // node_modules/three/build/three.tsl.js
+  // ../../../node_modules/three/build/three.tsl.js
   var three_tsl_exports = {};
   __export(three_tsl_exports, {
     BRDF_GGX: () => BRDF_GGX2,
@@ -57116,7 +57116,7 @@ fn tsl_biquadraticTexture_array( map : texture_2d_array<f32>, coord : vec2f, iRe
   var workingToColorSpace2 = TSL.workingToColorSpace;
   var xor2 = TSL.xor;
 
-  // node_modules/three/examples/jsm/postprocessing/Pass.js
+  // ../../../node_modules/three/examples/jsm/postprocessing/Pass.js
   var _camera2 = new OrthographicCamera(-1, 1, 1, -1, 0, 1);
   var FullscreenTriangleGeometry = class extends BufferGeometry {
     constructor() {
@@ -57163,7 +57163,7 @@ fn tsl_biquadraticTexture_array( map : texture_2d_array<f32>, coord : vec2f, iRe
     }
   };
 
-  // node_modules/gaussian-splat-lite/dist/gaussian-splat-lite.module.js
+  // ../../../node_modules/gaussian-splat-lite/dist/gaussian-splat-lite.module.js
   function getTransferable(ctx) {
     const buffers = /* @__PURE__ */ new Set();
     const seen = /* @__PURE__ */ new Set();
@@ -64763,7 +64763,7 @@ void main() {
   var blob = typeof self !== "undefined" && self.Blob && new Blob([jsContent], { type: "text/javascript;charset=utf-8" });
   var EMPTY_SELECTION = new Uint32Array(0);
 
-  // node_modules/3d-tiles-rendererjs-3dgs-plugin/dist/index.js
+  // ../../../node_modules/3d-tiles-rendererjs-3dgs-plugin/dist/index.js
   var SPLAT_OPACITY_EXTENSION_NAME = "EXT_splat_opacity";
   var SPLAT_OPACITY_VERSION_2 = 2;
   var SPLAT_OPACITY_SOURCE_ENCODING = "float16";
@@ -65685,15 +65685,32 @@ void main() {
     const tilesetUrl = params.get("tileset") || "/tilesets/pantheon/tileset.json";
     window.__interop = { tilesLoaded: 0, tilesVisible: 0, splats: 0, ready: false, errors: [] };
     window.addEventListener("error", (e) => window.__interop.errors.push(String(e.message)));
-    let eye = params.has("eye") ? Number(params.get("eye")) : NaN;
-    if (!Number.isFinite(eye)) {
-      try {
-        const meta = await (await fetch(tilesetUrl.replace(/tileset\.json$/, "tileset.meta.json"))).json();
-        eye = Number(meta.eyeHeight) || 1.7;
-      } catch {
-        eye = 1.7;
+    const hudEl = document.getElementById("hud");
+    const fail = (msg) => {
+      window.__interop.errors.push(msg);
+      if (hudEl) {
+        hudEl.textContent = msg;
+        hudEl.style.color = "#fca5a5";
       }
+    };
+    const rebuildHint = "rebuild it with `npx tsx scripts/interop/rebuild_splat_tiles_interop.ts`";
+    const tilesetRes = await fetch(tilesetUrl, { method: "GET" }).catch(() => null);
+    if (!tilesetRes || !tilesetRes.ok) {
+      fail(`asset missing: ${tilesetUrl} (${tilesetRes ? `HTTP ${tilesetRes.status}` : "unreachable"}); ${rebuildHint}`);
+      return;
     }
+    let meta = null;
+    try {
+      const metaRes = await fetch(tilesetUrl.replace(/tileset\.json$/, "tileset.meta.json"));
+      if (metaRes.ok) meta = await metaRes.json();
+    } catch {
+    }
+    let eye = params.has("eye") ? Number(params.get("eye")) : Number(meta?.eyeHeight);
+    if (!Number.isFinite(eye)) {
+      fail(`asset missing: ${tilesetUrl.replace(/tileset\.json$/, "tileset.meta.json")} gives no eyeHeight; pass ?eye=<metres> or ${rebuildHint}`);
+      return;
+    }
+    const provenance = meta?.steps?.[0]?.depthModel ? ` | depth ${meta.steps[0].depthModel} | ${meta.sourceKind ?? meta.source}` : "";
     const walk = (params.get("walk") || "0,0.1").split(",").map(Number);
     const renderer = new WebGLRenderer({ antialias: false });
     renderer.setPixelRatio(1);
@@ -65720,7 +65737,7 @@ void main() {
       window.__interop.tilesLoaded++;
     });
     tiles.addEventListener("load-error", (e) => {
-      window.__interop.errors.push(String(e?.error?.message || e?.error || "load-error"));
+      window.__interop.errors.push(`tile failed to load: ${String(e?.url || "")} ${String(e?.error?.message || e?.error || "")}`.trim());
     });
     const hud = document.getElementById("hud");
     let anchored = false;
@@ -65742,7 +65759,11 @@ void main() {
       renderer.render(scene, camera);
       const stats = tiles.stats;
       window.__interop.tilesVisible = tiles.visibleTiles?.size ?? 0;
-      if (hud) hud.textContent = `3d-tiles-renderer + 3dgs-plugin | loaded ${window.__interop.tilesLoaded} | visible ${window.__interop.tilesVisible} | downloading ${stats?.downloading ?? 0} parsing ${stats?.parsing ?? 0}`;
+      const errs = window.__interop.errors;
+      if (hud) {
+        hud.textContent = errs.length ? `${errs.length} error(s): ${errs[errs.length - 1]}; ${rebuildHint}` : `3d-tiles-renderer + 3dgs-plugin | loaded ${window.__interop.tilesLoaded} | visible ${window.__interop.tilesVisible} | downloading ${stats?.downloading ?? 0} parsing ${stats?.parsing ?? 0}${provenance}`;
+        hud.style.color = errs.length ? "#fca5a5" : "";
+      }
     });
     window.addEventListener("resize", () => {
       camera.aspect = window.innerWidth / window.innerHeight;

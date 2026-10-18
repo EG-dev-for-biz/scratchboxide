@@ -91,16 +91,23 @@ describe('360-Degree Omnidirectional Gaussian Splatting World', () => {
             rgb[i + 2] = 220;
         }
 
+        // A 10 m radial depth everywhere (as the depth model's panorama depth would supply): every splat sits 10 m out.
+        expect(() => ImageToSplatService.convertEquirectangularToSplats({ rgbPixels: rgb, width, height, stride: 2, eyeHeight: 1.70 }))
+            .toThrow(/radial depth map from the depth model is required/);
         const splats = ImageToSplatService.convertEquirectangularToSplats({
             rgbPixels: rgb,
             width,
             height,
+            metricDepths: new Float32Array(width * height).fill(10),
             stride: 2,
             eyeHeight: 1.70,
             maxRadius: 50.0
         });
 
         expect(splats.length).toBe((width / 2) * (height / 2));
+        for (const sp of splats) {
+            expect(Math.hypot(sp.position[0], sp.position[1] - 1.70, sp.position[2])).toBeCloseTo(10, 3);
+        }
         expect(splats[0].position.length).toBe(3);
         expect(splats[0].quaternion?.length).toBe(4);
         expect(splats[0].opacity).toBe(1.0);

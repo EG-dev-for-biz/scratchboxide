@@ -1399,7 +1399,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'panorama_to_3dgs',
-        description: 'Generate a walkable 3DGS world from a single 360 equirectangular panorama. Measures per-pixel metric depth with the local Depth Anything V2 Metric model (the call fails when it cannot run), synthesizes offset viewpoints whose disocclusions are inpainted by a Gemini image model (the run fails rather than splatting un-inpainted holes; a panorama too large for the image model is refused before the depth run), and compiles a merged .SPLAT and Niantic NGSP v2 .SPZ. The result reports the capture height and how it was obtained.',
+        description: 'Generate a walkable 3DGS world from a single 360 equirectangular panorama. Measures per-pixel depth with the local Depth Anything V2 Small model (Apache-2.0) and makes it metric by fitting the floor to the given eye height (the call fails when the model cannot run or the floor cannot be measured), synthesizes offset viewpoints whose disocclusions are inpainted by a Gemini image model (the run fails rather than splatting un-inpainted holes; a panorama too large for the image model is refused before the depth run), and compiles a merged .SPLAT and Niantic NGSP v2 .SPZ. The result reports the depth model, the floor-fit scale and how many pixels sit at the far plane.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1407,13 +1407,9 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'STRING',
                     description: 'Absolute path to the input 360 equirectangular panorama.'
                 },
-                sceneType: {
-                    type: 'STRING',
-                    description: 'Scene type to guide the metric depth model (indoor or outdoor, default: outdoor).'
-                },
                 eyeHeight: {
                     type: 'NUMBER',
-                    description: 'Camera height above the floor in meters, when known. Omitted, it is measured from the metric floor in the depth map, and the call fails when there is too little floor to measure it.'
+                    description: 'Required. Camera height above the floor in meters (for a panorama made by generate_360_panorama, the eye height its prompt asked for, 1.7 by default). The depth model predicts relative depth; fitting the floor to this height makes it metric.'
                 },
                 radius: {
                     type: 'NUMBER',
@@ -1438,12 +1434,12 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 model: PANORAMA_IMAGE_MODEL_PARAMETER,
                 maxModelUpscale: PANORAMA_MAX_UPSCALE_PARAMETER
             },
-            required: ['inputImagePath']
+            required: ['inputImagePath', 'eyeHeight']
         }
     },
     {
         name: 'single_image_to_3dgs',
-        description: 'Convert a single 2D photo or render into 3D Gaussian Splats (.splat and Niantic .spz). Per-pixel metric depth comes from the Depth Anything V2 Metric model (local sidecar); each pixel is lifted along its pinhole ray at that depth, with normals from neighbouring depths. Fails when the depth model cannot run (nothing is guessed from colour or image rows). Directly loadable into Scene3DPrimitive via splatUrl.',
+        description: 'Convert a single 2D photo or render into 3D Gaussian Splats (.splat and Niantic .spz). Per-pixel depth comes from the local Depth Anything V2 Small model (Apache-2.0), which predicts relative depth: the splats are in relative units (median depth 1) unless medianDepthMeters gives the median distance to the scene in metres. Each pixel is lifted along its pinhole ray at that depth, with normals from neighbouring depths. Fails when the depth model cannot run (nothing is guessed from colour or image rows). Directly loadable into Scene3DPrimitive via splatUrl.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1455,9 +1451,9 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'NUMBER',
                     description: 'Vertical field of view of the photo in degrees. Give the real lens when known; when omitted 65 is assumed and the result says so.'
                 },
-                sceneType: {
-                    type: 'STRING',
-                    description: '"indoor" or "outdoor" (default): which Depth Anything V2 Metric model reads the depth.'
+                medianDepthMeters: {
+                    type: 'NUMBER',
+                    description: 'The median distance from the camera to the scene in metres, when known; it scales the relative depth to metres. Omitted, the splats are in relative units with median depth 1.'
                 },
                 stride: {
                     type: 'NUMBER',
@@ -1465,11 +1461,11 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 minDepth: {
                     type: 'NUMBER',
-                    description: 'Minimum metric distance in meters (default: 0.2).'
+                    description: 'Minimum distance kept, in the depth units (metres with medianDepthMeters, else relative; default 0.2).'
                 },
                 maxDepth: {
                     type: 'NUMBER',
-                    description: 'Maximum metric distance in meters (default: 150.0).'
+                    description: 'Maximum distance kept, in the depth units (default 150; the far plane sits at 100x the nearest depth).'
                 },
                 outDir: {
                     type: 'STRING',
@@ -2477,9 +2473,11 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const inputImagePath = asString(args.inputImagePath);
         if (!inputImagePath) throw new Error('panorama_to_3dgs: "inputImagePath" argument is required.');
 
-        const sceneType = (args.sceneType === 'indoor' || args.sceneType === 'outdoor') ? args.sceneType : 'outdoor';
-        // Unknown for AI panoramas: infer from the metric floor unless the caller knows the rig height
-        const eyeHeightArg: number | 'auto' = typeof args.eyeHeight === 'number' ? args.eyeHeight : 'auto';
+        // The depth model is relative: the floor fit to the camera's height is what makes the world metric.
+        if (!(typeof args.eyeHeight === 'number' && args.eyeHeight > 0)) {
+            throw new MissingInputError('panorama_to_3dgs', 'eyeHeight', 'the camera height above the floor in metres is required (the depth model predicts relative depth; the floor fit to this height makes it metric)');
+        }
+        const eyeHeightArg = args.eyeHeight;
         const radius = typeof args.radius === 'number' ? args.radius : 1.25;
         const numPoses = typeof args.numPoses === 'number' ? args.numPoses : 6;
         const voxelSize = typeof args.voxelSize === 'number' ? args.voxelSize : 0.04;
@@ -2505,7 +2503,6 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         // Step 1: Extract real per-pixel geometry
         const depthService = new PanoramaDepthService();
         const depthRes = await depthService.generatePanoramaDepth(inputImagePath, {
-            sceneType,
             eyeHeight: eyeHeightArg,
             mock: mockExecution
         });
@@ -2525,7 +2522,6 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             voxelSize,
             skipOffsets,
             mockExecution,
-            sceneType,
             model,
             maxModelUpscale,
             signal: ctx?.signal
@@ -2545,9 +2541,10 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 floorFitApplied: depthRes.floorFitApplied,
                 depthScaleCorrection: depthRes.scaleCorrection,
                 depthModel: depthRes.modelUsed,
+                farPlanePixels: depthRes.farPlanePixels,
                 metaPath: synthesisRes.metaPath
             } as unknown as ToolResultPayload,
-            summaryResult: `Built walkable 3DGS world: ${synthesisRes.numFusedSplats} fused Gaussians across ${synthesisRes.activePoses.length + 1} perspectives (original: ${synthesisRes.numOriginalSplats}). Capture height ${eyeHeight.toFixed(2)} m (${depthRes.eyeHeightInferred ? 'measured from the metric floor' : 'supplied'}), depth: ${depthRes.modelUsed}${depthRes.floorFitApplied ? (depthRes.scaleCorrection !== 1 ? `, rescaled ${depthRes.scaleCorrection.toFixed(3)}x to the floor` : '') : ' at the model\'s own scale (too few floor pixels to fit)'}. Wrote .splat, NGSP v2 .spz and .meta.json sidecar.`
+            summaryResult: `Built walkable 3DGS world: ${synthesisRes.numFusedSplats} fused Gaussians across ${synthesisRes.activePoses.length + 1} perspectives (original: ${synthesisRes.numOriginalSplats}). Depth: ${depthRes.modelUsed}, made metric by fitting the floor to the given ${eyeHeight.toFixed(2)} m eye height (${depthRes.scaleCorrection.toFixed(3)} m per model unit); ${depthRes.farPlanePixels.toLocaleString()} pixels at the far plane. Wrote .splat, NGSP v2 .spz and .meta.json sidecar.`
         };
     },
 
@@ -2565,7 +2562,10 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             throw new MissingInputError('single_image_to_3dgs', 'fovDegrees', `must be a vertical field of view between 1 and 179 degrees (got ${JSON.stringify(args.fovDegrees)})`);
         }
         const fovDegrees = fovGiven ? (args.fovDegrees as number) : 65.0;
-        const sceneType = args.sceneType === 'indoor' ? 'indoor' : 'outdoor';
+        const medianGiven = args.medianDepthMeters !== undefined && args.medianDepthMeters !== null;
+        if (medianGiven && !(typeof args.medianDepthMeters === 'number' && args.medianDepthMeters > 0)) {
+            throw new MissingInputError('single_image_to_3dgs', 'medianDepthMeters', `must be a positive distance in metres (got ${JSON.stringify(args.medianDepthMeters)})`);
+        }
         const stride = typeof args.stride === 'number' ? Math.max(1, Math.round(args.stride)) : 2;
         const minDepth = typeof args.minDepth === 'number' ? args.minDepth : 0.2;
         const maxDepth = typeof args.maxDepth === 'number' ? args.maxDepth : 150.0;
@@ -2594,7 +2594,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const decoded = decodePng(pngBuf);
         // Depth from the depth model, or the call fails (GeneratorFailedError); no depth is guessed from the pixels.
         const depth = await new PanoramaDepthService().generateImageDepth(inputImagePath, {
-            sceneType,
+            medianDepthMeters: medianGiven ? (args.medianDepthMeters as number) : undefined,
             outDir: pathMod.join(osMod.tmpdir(), 'sbx-image-depth')
         });
         if (depth.width !== decoded.width || depth.height !== decoded.height) {
@@ -2613,7 +2613,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             maxDepth
         });
         if (splats.length === 0) {
-            throw new GeneratorFailedError('python', `no pixel of ${inputImagePath} has a depth between ${minDepth} and ${maxDepth} m (the model measured ${depth.minDepth.toFixed(2)}-${depth.maxDepth.toFixed(2)} m)`);
+            throw new GeneratorFailedError('python', `no pixel of ${inputImagePath} has a depth between ${minDepth} and ${maxDepth} (${depth.depthUnits}; the model's depths run ${depth.minDepth.toFixed(2)}-${depth.maxDepth.toFixed(2)})`);
         }
 
         const splatBuffer = SplatService.serializeSplatBuffer(splats);
@@ -2644,17 +2644,21 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 fovDegrees,
                 fovAssumed: !fovGiven,
                 depthModel: depth.modelUsed,
-                depthRangeMeters: [depth.minDepth, depth.maxDepth],
+                depthRange: [depth.minDepth, depth.maxDepth],
+                depthUnits: depth.depthUnits,
+                depthScaleSource: depth.scaleSource,
+                farPlanePixels: depth.farPlanePixels,
                 depthPath: depth.depthPath,
                 suggestedScene3DData: {
                     splatUrl,
+                    // The splats are lifted from a camera at the origin looking down -z; view from there.
                     camera: {
-                        position: [0, 1.6, 0],
-                        target: [0, 1.6, -5]
+                        position: [0, 0, 0],
+                        target: [0, 0, -(medianGiven ? (args.medianDepthMeters as number) : 1)]
                     }
                 }
             } as unknown as ToolResultPayload,
-            summaryResult: `Built ${splats.length.toLocaleString()} 3D Gaussian splats from ${inputImagePath} with depth from ${depth.modelUsed} (${depth.minDepth.toFixed(2)}-${depth.maxDepth.toFixed(2)} m), ${fovGiven ? `vertical FOV ${fovDegrees} deg` : 'an assumed vertical FOV of 65 deg (pass fovDegrees for the real lens)'}. Saved .splat (${(splatBuffer.length / 1024 / 1024).toFixed(2)} MB) and .spz (${(spzBuffer.length / 1024 / 1024).toFixed(2)} MB) to ${splatPath}.`
+            summaryResult: `Built ${splats.length.toLocaleString()} 3D Gaussian splats from ${inputImagePath} with depth from ${depth.modelUsed} (${depth.minDepth.toFixed(2)}-${depth.maxDepth.toFixed(2)} ${depth.depthUnits === 'metres' ? 'm' : 'relative units, median 1 (pass medianDepthMeters for metres)'}), ${fovGiven ? `vertical FOV ${fovDegrees} deg` : 'an assumed vertical FOV of 65 deg (pass fovDegrees for the real lens)'}. Saved .splat (${(splatBuffer.length / 1024 / 1024).toFixed(2)} MB) and .spz (${(spzBuffer.length / 1024 / 1024).toFixed(2)} MB) to ${splatPath}.`
         };
     },
 

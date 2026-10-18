@@ -18,7 +18,10 @@
  * Bundled by scripts/interop/build.sh into public/js/splat_tiles_interop.js and loaded by
  * public/splat_tiles_interop.html. Query params:
  *   tileset=<url>        default /tilesets/pantheon/tileset.json
- *   eye=<m>              camera height (default from tileset.meta.json, else 1.7)
+ *   eye=<m>              camera height (default: tileset.meta.json's eyeHeight; the page refuses to guess one)
+ *
+ * The tile GLBs are gitignored: when the tileset or its meta is missing, the HUD says so and names the rebuild
+ * script (scripts/interop/rebuild_splat_tiles_interop.ts) instead of rendering an empty viewport silently.
  *   walk=x,z             camera offset in metres
  */
 
@@ -37,13 +40,28 @@ async function main(): Promise<void> {
     window.__interop = { tilesLoaded: 0, tilesVisible: 0, splats: 0, ready: false, errors: [] };
     window.addEventListener('error', (e) => window.__interop.errors.push(String(e.message)));
 
-    let eye = params.has('eye') ? Number(params.get('eye')) : NaN;
-    if (!Number.isFinite(eye)) {
-        try {
-            const meta = await (await fetch(tilesetUrl.replace(/tileset\.json$/, 'tileset.meta.json'))).json();
-            eye = Number(meta.eyeHeight) || 1.7;
-        } catch { eye = 1.7; }
+    const hudEl = document.getElementById('hud');
+    const fail = (msg: string) => {
+        window.__interop.errors.push(msg);
+        if (hudEl) { hudEl.textContent = msg; hudEl.style.color = '#fca5a5'; }
+    };
+    const rebuildHint = 'rebuild it with `npx tsx scripts/interop/rebuild_splat_tiles_interop.ts`';
+    const tilesetRes = await fetch(tilesetUrl, { method: 'GET' }).catch(() => null);
+    if (!tilesetRes || !tilesetRes.ok) {
+        fail(`asset missing: ${tilesetUrl} (${tilesetRes ? `HTTP ${tilesetRes.status}` : 'unreachable'}); ${rebuildHint}`);
+        return;
     }
+    let meta: any = null;
+    try {
+        const metaRes = await fetch(tilesetUrl.replace(/tileset\.json$/, 'tileset.meta.json'));
+        if (metaRes.ok) meta = await metaRes.json();
+    } catch { /* reported below when the eye height is needed */ }
+    let eye = params.has('eye') ? Number(params.get('eye')) : Number(meta?.eyeHeight);
+    if (!Number.isFinite(eye)) {
+        fail(`asset missing: ${tilesetUrl.replace(/tileset\.json$/, 'tileset.meta.json')} gives no eyeHeight; pass ?eye=<metres> or ${rebuildHint}`);
+        return;
+    }
+    const provenance = meta?.steps?.[0]?.depthModel ? ` | depth ${meta.steps[0].depthModel} | ${meta.sourceKind ?? meta.source}` : '';
     const walk = (params.get('walk') || '0,0.1').split(',').map(Number);
 
     const renderer = new WebGLRenderer({ antialias: false });
@@ -70,7 +88,7 @@ async function main(): Promise<void> {
 
     tiles.addEventListener('load-tile-set', () => { window.__interop.ready = true; });
     tiles.addEventListener('load-model', () => { window.__interop.tilesLoaded++; });
-    tiles.addEventListener('load-error', (e: any) => { window.__interop.errors.push(String(e?.error?.message || e?.error || 'load-error')); });
+    tiles.addEventListener('load-error', (e: any) => { window.__interop.errors.push(`tile failed to load: ${String(e?.url || '')} ${String(e?.error?.message || e?.error || '')}`.trim()); });
 
     const hud = document.getElementById('hud');
     // The tileset's root.transform places the splats on WGS-84 (ECEF). Re-anchor the tileset group
@@ -99,7 +117,13 @@ async function main(): Promise<void> {
         renderer.render(scene, camera);
         const stats = (tiles as any).stats;
         window.__interop.tilesVisible = (tiles as any).visibleTiles?.size ?? 0;
-        if (hud) hud.textContent = `3d-tiles-renderer + 3dgs-plugin | loaded ${window.__interop.tilesLoaded} | visible ${window.__interop.tilesVisible} | downloading ${stats?.downloading ?? 0} parsing ${stats?.parsing ?? 0}`;
+        const errs = window.__interop.errors;
+        if (hud) {
+            hud.textContent = errs.length
+                ? `${errs.length} error(s): ${errs[errs.length - 1]}; ${rebuildHint}`
+                : `3d-tiles-renderer + 3dgs-plugin | loaded ${window.__interop.tilesLoaded} | visible ${window.__interop.tilesVisible} | downloading ${stats?.downloading ?? 0} parsing ${stats?.parsing ?? 0}${provenance}`;
+            hud.style.color = errs.length ? '#fca5a5' : '';
+        }
     });
 
     window.addEventListener('resize', () => {
