@@ -45,8 +45,47 @@ export interface TexelProvenance {
     /** How it was made, one line ("weighted linear-RGB mean, 3 views"). */
     method: string;
     panoIds?: string[];
+    /** ISO capture dates of the photos behind it (rectified photo tier). */
+    captureDates?: string[];
     /** Share of the layer's texels this entry accounts for, 0..1. Entries of a layer sum to 1 (every texel is labelled). */
     coverage: number;
+}
+
+/**
+ * The held-out fit of one method on a layer's fitted faces (photo-tier-rectify.ts, the offline experiment's score.py), on the
+ * same pixels for every method, in the faces' frontal frames at the atlas density: pixels in px of that frame.
+ */
+export interface PhotoTierFitScores {
+    pixels: number;
+    /** Chamfer from the tile geometry's depth jumps and creases to the method's edges (lower is better). */
+    geoChamferMedianPx: number | null;
+    geoChamferMeanPx: number | null;
+    /** Gradient NCC with the held-out pano's photo (higher is better). */
+    heldOutGradNcc: number | null;
+    /** Median chamfer from the method's edges to the held-out photo's edges (lower is better). */
+    heldOutChamferMedianPx: number | null;
+    /** Share of the method's edges farther than 4 px from every real edge (sources, held-out photo, tile): invented edges. */
+    inventedEdgeShare: number | null;
+    /** Laplacian variance (sharpness). */
+    laplacianVar: number | null;
+    /** Mean CIEDE2000 to the nearest of the sources' four Lab k-means colours. */
+    dE00toPalette: number | null;
+}
+
+/** What photo tier A (rectified Street View on fitted planar faces) did on a layer. */
+export interface PhotoTierLayerRecord {
+    /** Share of the layer's texels it wrote, and those at least two views agree on. */
+    texelShare: number;
+    multiViewShare: number;
+    facades: number;
+    charts: number;
+    panos: number;
+    /** Fitted-face texels left to the rungs below because the tile surface leaves the face (relief the face does not carry). */
+    nonPlanar?: { texelShare: number; p90DeviationM: number; maxDeviationM: number };
+    /** Held-out score: 'tile' (tile photo), 'previous' (the ladder without this tier), 'photoA' (this tier without the held-out pano). */
+    heldOut?: { panoIds: string[]; mppM: number; methods: Record<string, PhotoTierFitScores> };
+    timingsMs?: Record<string, number>;
+    ms: number;
 }
 
 /** Degrade ladder of the texture pass (design section 8). Index = rung; lower is better. */
@@ -83,6 +122,8 @@ export interface TextureLayerBundle {
     /** Published file refs; bytes are never on disk before publish. */
     maps: { albedo: string; normal?: string; roughness?: string };
     uv: SurfaceUvMap[];
+    /** Photo tier A on this layer (rectified Street View), with its held-out fit; absent when it did not run. */
+    photoTier?: PhotoTierLayerRecord;
     provenance: TexelProvenance[];
     /** Layer-level rung: the worst rung that holds more than 10 percent of the layer's texels. */
     ladderRung: number;

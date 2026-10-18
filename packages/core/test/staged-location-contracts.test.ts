@@ -64,7 +64,7 @@ describe('STAGED_LOCATION_SCHEMA', () => {
     it('is a draft-07 document whose $refs all resolve', () => {
         expect(STAGED_LOCATION_SCHEMA.$schema).toBe('http://json-schema.org/draft-07/schema#');
         // the design's 51 definitions, plus structurePick (shared by the build state and the result) and vertexProvenance
-        expect(Object.keys(defs)).toHaveLength(71); // 62 plus the four tree LOD definitions plus the five texture pass definitions
+        expect(Object.keys(defs)).toHaveLength(73); // 62 plus the four tree LOD definitions plus the five texture pass definitions plus the two photo tier records
         const targets = new Set(refsIn(STAGED_LOCATION_SCHEMA));
         const missing = [...targets].filter(r => !(r.replace('#/definitions/', '') in defs) || !r.startsWith('#/definitions/'));
         expect(missing).toEqual([]);

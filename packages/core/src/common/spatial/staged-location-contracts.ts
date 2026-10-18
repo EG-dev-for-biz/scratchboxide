@@ -1278,6 +1278,7 @@ const arr = (items: JsonSchema, extra: Partial<JsonSchema> = {}): JsonSchema => 
 const obj = (required: readonly string[], properties: Record<string, JsonSchema>, extra: Partial<JsonSchema> = {}): JsonSchema =>
     ({ type: 'object', required, additionalProperties: false, properties, ...extra });
 const numberMap: JsonSchema = { type: 'object', additionalProperties: NUM };
+const PHOTO_TIER_NUM: JsonSchema = { oneOf: [{ type: 'number' }, { type: 'null' }] };
 const counts = obj(['vertices', 'triangles'], { vertices: INT, triangles: INT });
 
 const DEFINITIONS = {
@@ -1694,7 +1695,17 @@ const DEFINITIONS = {
     // texture pass (texture-pass-contracts.ts): labels and sources are open strings, nothing branches on them
     texelProvenance: obj(['source', 'label', 'method', 'coverage'], {
         source: { type: 'string', minLength: 1 }, label: { type: 'string', minLength: 1 }, method: STR,
-        panoIds: arr(STR), coverage: ref('unit')
+        panoIds: arr(STR), captureDates: arr(STR), coverage: ref('unit')
+    }),
+    photoTierFitScores: obj(['pixels'], {
+        pixels: NONNEG_INT, geoChamferMedianPx: PHOTO_TIER_NUM, geoChamferMeanPx: PHOTO_TIER_NUM, heldOutGradNcc: PHOTO_TIER_NUM, heldOutChamferMedianPx: PHOTO_TIER_NUM,
+        inventedEdgeShare: PHOTO_TIER_NUM, laplacianVar: PHOTO_TIER_NUM, dE00toPalette: PHOTO_TIER_NUM
+    }),
+    photoTierLayerRecord: obj(['texelShare', 'multiViewShare', 'facades', 'charts', 'panos', 'ms'], {
+        texelShare: ref('unit'), multiViewShare: ref('unit'), facades: NONNEG_INT, charts: NONNEG_INT, panos: NONNEG_INT, ms: ref('nonneg'),
+        nonPlanar: obj(['texelShare', 'p90DeviationM', 'maxDeviationM'], { texelShare: ref('unit'), p90DeviationM: ref('nonneg'), maxDeviationM: ref('nonneg') }),
+        heldOut: obj(['panoIds', 'mppM', 'methods'], { panoIds: arr(STR), mppM: ref('nonneg'), methods: { type: 'object', additionalProperties: ref('photoTierFitScores') } }),
+        timingsMs: numberMap
     }),
     surfaceUvMap: obj(['nodeName', 'kind', 'texelsPerMeter', 'atlasRect'], {
         nodeName: { type: 'string', minLength: 1 }, kind: STR, texelsPerMeter: { type: 'number', exclusiveMinimum: 0 },
@@ -1707,6 +1718,7 @@ const DEFINITIONS = {
     TextureLayerBundle: obj(['layerKey', 'maps', 'uv', 'provenance', 'ladderRung', 'confidence'], {
         layerKey: { type: 'string', minLength: 1 },
         maps: obj(['albedo'], { albedo: STR, normal: STR, roughness: STR }),
+        photoTier: ref('photoTierLayerRecord'),
         uv: arr(ref('surfaceUvMap')), provenance: arr(ref('texelProvenance'), { minItems: 1 }),
         ladderRung: NONNEG_INT, rungReason: STR, confidence: { type: 'string', minLength: 1 }
     }),

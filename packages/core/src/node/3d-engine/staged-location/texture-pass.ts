@@ -15,6 +15,8 @@
  *   C  bakeStreetViewProjection from the registered grounding views (rungs 0 and 1)
  *   D  transferTilePhoto from the photo-textured tile, fused under C's texels (rung 2), then the optional model
  *      enhancement of the transferred texels behind its edge gate (still rung 2, source 'tile-photo-enhanced')
+ *   A  photo tier A (photo-tier-rectify.ts): real Street View pixels rectified onto the fitted planar faces (rung 0, or 1
+ *      where one view covers a texel), over C and D's texels where it has them; relief the faces do not carry is left
  *   -  flat measured-palette colour for texels nothing real covers (rung 3)
  *   -  generated tileable PBR (rung 4) is NOT available: recorded as a degradation, those texels stay at the palette
  *      rung; pbr_synthesize_material is never called
@@ -42,9 +44,11 @@ import type { Registration } from './pano-registration';
 import type { EvidenceImage } from './streetview-evidence';
 import { buildUvAtlas, type LaidOutUvAtlas } from './texture-uv';
 import { mergeBakedPlanes, transferTilePhoto, type TileTextureSurface } from './tile-texture-transfer';
+import { rectifyPhotoTier } from './photo-tier-rectify';
+import type { PhotoTierLayerRecord } from '../../../common/spatial/texture-pass-contracts';
 
 /** Part of every texture cache key: a change to the pass's maths is a new version. */
-export const TEXTURE_PASS_VERSION = 'texture-pass/5';
+export const TEXTURE_PASS_VERSION = 'texture-pass/6';
 export const RUNG_PALETTE = 3;
 export const RUNG_GENERATED_PBR = 4;
 /** The enhancement rung's own time budget per layer (layers run in parallel inside the stage's 600 s). */
@@ -87,6 +91,12 @@ export interface TexturePassSources {
     /** Optional model enhancement of D's texels; absent = the rung is not attempted, with the reason. */
     enhance?: { client: EnhanceModelClient; models?: string[]; budgetMs?: number };
     enhanceUnavailable?: string;
+    /**
+     * Photo tier A (photo-tier-rectify.ts): rectified Street View pixels on the fitted planar faces, above the projection.
+     * Runs when there are views, fitted surfaces and the tile mesh (`context`); `false` turns it off (with the reason).
+     */
+    photoTier?: false | { pythonExecutable?: string; timeoutMs?: number; heldOut?: boolean };
+    photoTierUnavailable?: string;
     /** The survey's measured palettes. */
     palette: PaletteFace[];
     /** Texel density and atlas size. */
@@ -116,6 +126,8 @@ export interface TextureLayerOutcome {
         poseRefine?: { rmsBeforeM: number; rmsAfterM: number; applied: number; kept?: boolean; reason?: string };
     };
     tileMethod?: string;
+    /** Photo tier A on this layer (also in bundle.photoTier). */
+    photoTier?: PhotoTierLayerRecord;
     enhance?: { charts: number; accepted: number; rejected: number; failed: number; timedOut?: number; modelsUsed: string[] };
     modelsUsed: string[];
     timingsMs: Record<string, number>;
@@ -348,6 +360,35 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
     timingsMs.tile = Date.now() - t;
     aborted(src.signal);
 
+    // rung 0 above the projection: photo tier A, real Street View pixels rectified onto the fitted planar faces. It runs after
+    // C and D so the held-out score can compare it with them; its texels replace theirs where it has them.
+    t = Date.now();
+    let photoTier: PhotoTierLayerRecord | undefined;
+    if (src.photoTier === false) {
+        if (src.photoTierUnavailable) degradations.push({ stage: 'photo-tier', reasonCode: 'photo_tier_not_run', layerKey: layer.layerKey, reason: `The rectified photo tier was not run: ${src.photoTierUnavailable}.` });
+    } else if (src.views.length && src.context && layer.surfaces?.length) {
+        progress('rectifying Street View photos onto the fitted faces');
+        try {
+            const res = await rectifyPhotoTier({
+                atlas, surfaces: layer.surfaces, views: src.views, context: src.context, previous: planes,
+                ...(src.tile ? { tile: src.tile, tileMaxDistanceM: Math.max(0.25, 2 * (src.registrationResidualM ?? 0)) } : {}),
+                densityTexelsPerMeter: atlas.layout.stats.texelsPerMeter || src.densityTexelsPerMeter, signal: src.signal, onProgress: progress,
+                ...(src.photoTier?.pythonExecutable ? { pythonExecutable: src.photoTier.pythonExecutable } : {}),
+                ...(src.photoTier?.timeoutMs ? { timeoutMs: src.photoTier.timeoutMs } : {}),
+                ...(src.photoTier?.heldOut === false ? { heldOut: false } : {})
+            });
+            degradations.push(...res.degradations);
+            photoTier = res.record;
+            if (countAlpha(res.planes)) planes = mergeBakedPlanes(planes, res.planes);
+        } catch (err) {
+            if ((err as Error)?.name === 'AbortError' || src.signal?.aborted) throw err;
+            degradations.push({ stage: 'photo-tier', reasonCode: 'photo_tier_failed', layerKey: layer.layerKey,
+                reason: `The rectified photo tier failed (${(err as Error)?.message ?? String(err)}); the projection and the rungs below colour the layer.` });
+        }
+    }
+    timingsMs.photoTier = Date.now() - t;
+    aborted(src.signal);
+
     // rung 3: measured palette; rung 4 (generated PBR) is not available; rung 5: clay
     t = Date.now();
     const pal = paletteFill(atlas, planes, src.palette);
@@ -381,12 +422,12 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
     return {
         layerKey: layer.layerKey, glb: twin.glb,
         bundle: {
-            layerKey: layer.layerKey, uv: twin.uv, provenance: m.provenance, ladderRung: worst,
+            layerKey: layer.layerKey, uv: twin.uv, ...(photoTier ? { photoTier } : {}), provenance: m.provenance, ladderRung: worst,
             rungReason: `${Math.round(m.rungShares[worst] * 100)} percent of the texels are at '${TEXTURE_LADDER_RUNGS[worst]}' (the worst rung above 10 percent)`
         },
         rungShares: m.rungShares, rungTexels: m.rungTexels, atlasTexels: m.total,
         atlas: { width: atlas.width, height: atlas.height, texelsPerMeter: atlas.layout.stats.texelsPerMeter, charts: atlas.layout.stats.charts, islands: atlas.layout.stats.islands },
-        degradations: unique, ...(projection ? { projection } : {}), ...(tileMethod ? { tileMethod } : {}), ...(enhance ? { enhance } : {}),
+        degradations: unique, ...(projection ? { projection } : {}), ...(tileMethod ? { tileMethod } : {}), ...(photoTier ? { photoTier } : {}), ...(enhance ? { enhance } : {}),
         modelsUsed: [...new Set(modelsUsed)], timingsMs
     };
 }
