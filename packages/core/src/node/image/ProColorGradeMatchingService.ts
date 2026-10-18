@@ -10,6 +10,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
+import { decodeImageToRgba } from '../image-codec-ffmpeg';
 
 /**
  * Three-way primary color balance wheel channel.
@@ -40,18 +41,12 @@ export interface PrimaryColorWheels {
 export interface SecondaryIsolationOptions {
     preserveSkinTones?: boolean;
     skinProtectionStrength?: number; // 0.0 to 1.0, default 0.85
-    protectFoliage?: boolean;
-    foliageProtectionStrength?: number;
 }
 
 export interface ColorGradeMatchOptions extends SecondaryIsolationOptions {
     generate3DLut?: boolean;
     lutSize?: number; // 17, 33, or 65, default 17
     lutTitle?: string;
-    contrastCurve?: 'natural' | 'cinematic' | 'high-contrast' | 'muted';
-    matchLuminance?: boolean;
-    matchWhitePoint?: boolean;
-    blendStrength?: number; // 0.0 to 1.0, default 1.0
     outputFormat?: 'png' | 'jpg' | 'webp';
     outputPath?: string;
     outputLutPath?: string;
@@ -76,7 +71,11 @@ export interface ColoristScopesData {
     vectorscope: {
         skinToneAlignmentPercent: number;
         overallSaturationPercent: number;
-        dominantHueDeg: number;
+        /**
+         * Chroma-weighted modal hue, in degrees of atan2(Cr, Cb) (BT.601, the skin-tone-line convention), from a
+         * 5° histogram of the pixels with chroma >= 4% of full scale. Null when no pixel is that chromatic.
+         */
+        dominantHueDeg: number | null;
     };
 }
 
@@ -98,6 +97,15 @@ export interface ColorGradeMatchResult {
         deltaEReductionPercent: number;
         executionTimeMs: number;
         sourceDimensions?: { width: number; height: number };
+        referenceDimensions?: { width: number; height: number };
+        /**
+         * How the per-pixel CIEDE2000 means were taken: against the reference pixel at the same position, or (when
+         * the reference is a different size) against the reference bilinearly resampled to the source size.
+         */
+        deltaEBasis: 'same-size per-pixel' | 'per-pixel vs reference resampled to source size';
+        /** Pixels the ΔE means average over, and the stride between them (1 = every pixel). */
+        deltaESampleCount: number;
+        deltaESampleStride: number;
     };
     error?: string;
 }
@@ -108,7 +116,7 @@ export interface ColorGradeMatchResult {
  * An industry-grade autonomous color grading and image-to-image matching engine.
  * Emulates the depth, precision, and toolset of a master colorist:
  * 1. Three-way Primary Wheels balancing (Lift, Gamma, Gain, Offset) via closed-form 3-zone inversion
- * 2. Bradford Chromatic Adaptation Transform (CAT02) for illuminant matching
+ * 2. Bradford Chromatic Adaptation Transform helper (applyBradfordCat; matchImages does not apply it)
  * 3. Secondary Isolation & Vectorscope Skin Tone Line (~130 deg) preservation
  * 4. Standard 3D LUT (.cube) export for zero-latency NLE / FFmpeg integration
  * 5. Optical colorist scopes telemetry (Waveform, RGB Parade, Vectorscope) and CIEDE2000 metrology.
@@ -402,37 +410,34 @@ export class ProColorGradeMatchingService {
         sourceRgba: Buffer,
         referenceRgba: Buffer,
         width: number,
-        height: number
+        height: number,
+        referenceWidth: number = width,
+        referenceHeight: number = height
     ): PrimaryColorWheels {
-        const total = width * height;
+        this.assertRgbaSize(sourceRgba, width, height, 'source');
+        this.assertRgbaSize(referenceRgba, referenceWidth, referenceHeight, 'reference');
 
-        // Collect samples across sorted luma or regular grid
-        const srcR: number[] = new Array(total);
-        const srcG: number[] = new Array(total);
-        const srcB: number[] = new Array(total);
-
-        const refR: number[] = new Array(total);
-        const refG: number[] = new Array(total);
-        const refB: number[] = new Array(total);
-
-        for (let i = 0; i < total; i++) {
-            srcR[i] = sourceRgba[i * 4] / 255.0;
-            srcG[i] = sourceRgba[i * 4 + 1] / 255.0;
-            srcB[i] = sourceRgba[i * 4 + 2] / 255.0;
-
-            refR[i] = referenceRgba[i * 4] / 255.0;
-            refG[i] = referenceRgba[i * 4 + 1] / 255.0;
-            refB[i] = referenceRgba[i * 4 + 2] / 255.0;
-        }
-
-        // Quantile helper: 10th percentile (shadows), 50th percentile (midtones), 90th percentile (highlights)
-        const getQuantile = (arr: number[], q: number) => {
-            const sorted = [...arr].sort((a, b) => a - b);
-            const idx = Math.min(sorted.length - 1, Math.max(0, Math.floor(q * (sorted.length - 1))));
-            return sorted[idx];
+        // Per-channel value histograms (256 levels) of each image over its own pixels: the solve matches
+        // tonal quantiles, so the two images need not share a size.
+        const histogram = (rgba: Buffer, pixels: number, channel: number) => {
+            const h = new Float64Array(256);
+            for (let i = 0; i < pixels; i++) h[rgba[i * 4 + channel]]++;
+            return { h, pixels };
         };
+        // Same index rule as sorting all values and taking sorted[floor(q * (n - 1))].
+        const getQuantile = ({ h, pixels }: { h: Float64Array; pixels: number }, q: number) => {
+            const target = Math.min(pixels - 1, Math.max(0, Math.floor(q * (pixels - 1))));
+            let seen = 0;
+            for (let v = 0; v < 256; v++) {
+                seen += h[v];
+                if (seen > target) return v / 255.0;
+            }
+            return 1.0;
+        };
+        const srcPixels = width * height;
+        const refPixels = referenceWidth * referenceHeight;
 
-        const solveChannel = (srcArr: number[], refArr: number[]) => {
+        const solveChannel = (srcArr: { h: Float64Array; pixels: number }, refArr: { h: Float64Array; pixels: number }) => {
             const x1 = Math.max(0.01, getQuantile(srcArr, 0.05));
             const y1 = Math.max(0.01, getQuantile(refArr, 0.05));
 
@@ -458,9 +463,9 @@ export class ProColorGradeMatchingService {
             };
         };
 
-        const chR = solveChannel(srcR, refR);
-        const chG = solveChannel(srcG, refG);
-        const chB = solveChannel(srcB, refB);
+        const chR = solveChannel(histogram(sourceRgba, srcPixels, 0), histogram(referenceRgba, refPixels, 0));
+        const chG = solveChannel(histogram(sourceRgba, srcPixels, 1), histogram(referenceRgba, refPixels, 1));
+        const chB = solveChannel(histogram(sourceRgba, srcPixels, 2), histogram(referenceRgba, refPixels, 2));
 
         return {
             lift: { r: chR.lift, g: chG.lift, b: chB.lift, master: 0.0 },
@@ -702,6 +707,9 @@ export class ProColorGradeMatchingService {
         let skinToneCount = 0;
         let skinToneAligned = 0;
         let sumSat = 0;
+        const HUE_BIN_DEG = 5;
+        const hueBins = new Float64Array(360 / HUE_BIN_DEG);
+        let chromaticWeight = 0;
 
         for (let i = 0; i < total; i++) {
             const r = rgba[i * 4];
@@ -731,6 +739,12 @@ export class ProColorGradeMatchingService {
             const cr =  0.5 * r - 0.418688 * g - 0.081312 * b;
             const sat = (Math.hypot(cb, cr) / 128.0) * 100.0;
             sumSat += sat;
+            if (sat >= 4.0) {
+                let hue = Math.atan2(cr, cb) * (180.0 / Math.PI);
+                if (hue < 0) hue += 360.0;
+                hueBins[Math.min(hueBins.length - 1, Math.floor(hue / HUE_BIN_DEG))] += sat;
+                chromaticWeight += sat;
+            }
 
             const skin = this.isSkinTonePixel(r, g, b);
             if (skin.isSkinTone) {
@@ -741,6 +755,12 @@ export class ProColorGradeMatchingService {
 
         const count = Math.max(1, total);
         const skinTotal = Math.max(1, skinToneCount);
+        let dominantHueDeg: number | null = null;
+        if (chromaticWeight > 0) {
+            let best = 0;
+            for (let k = 1; k < hueBins.length; k++) if (hueBins[k] > hueBins[best]) best = k;
+            dominantHueDeg = best * HUE_BIN_DEG + HUE_BIN_DEG / 2;
+        }
 
         return {
             waveform: {
@@ -761,7 +781,7 @@ export class ProColorGradeMatchingService {
             vectorscope: {
                 skinToneAlignmentPercent: Math.round((skinToneAligned / skinTotal) * 1000) / 10,
                 overallSaturationPercent: Math.round((sumSat / count) * 10) / 10,
-                dominantHueDeg: 130.0
+                dominantHueDeg
             }
         };
     }
@@ -778,12 +798,15 @@ export class ProColorGradeMatchingService {
         referenceRgba: Buffer,
         width: number,
         height: number,
-        options: ColorGradeMatchOptions = {}
+        options: ColorGradeMatchOptions = {},
+        reference: { width: number; height: number } = { width, height }
     ): Promise<ColorGradeMatchResult> {
         const startTime = Date.now();
+        this.assertRgbaSize(sourceRgba, width, height, 'source');
+        this.assertRgbaSize(referenceRgba, reference.width, reference.height, 'reference');
 
         // 1. Solve three-way primary color wheels
-        const wheels = this.solvePrimaryWheels(sourceRgba, referenceRgba, width, height);
+        const wheels = this.solvePrimaryWheels(sourceRgba, referenceRgba, width, height, reference.width, reference.height);
 
         // 2. Apply grade with secondary isolation (skin tone protection)
         const gradedBuffer = this.applyGradingWithSecondaries(sourceRgba, width, height, wheels, {
@@ -794,20 +817,24 @@ export class ProColorGradeMatchingService {
         // 3. Compute optical scopes
         const scopes = {
             source: this.computeScopes(sourceRgba, width, height),
-            reference: this.computeScopes(referenceRgba, width, height),
+            reference: this.computeScopes(referenceRgba, reference.width, reference.height),
             graded: this.computeScopes(gradedBuffer, width, height)
         };
 
-        // 4. Compute CIEDE2000 Delta E reduction across random/subsampled pixels
+        // 4. Mean CIEDE2000 before and after the grade, per pixel against the reference at the same position
+        //    (the reference is resampled to the source size first when the sizes differ). Every pixel is used up to
+        //    MAX_DELTA_E_SAMPLES; larger images use an even stride that keeps the count at or under that.
+        const sameSize = reference.width === width && reference.height === height;
+        const refAligned = sameSize ? referenceRgba : this.resampleRgbaBilinear(referenceRgba, reference.width, reference.height, width, height);
         const total = width * height;
-        const step = Math.max(1, Math.floor(total / 256));
+        const step = Math.max(1, Math.ceil(total / ProColorGradeMatchingService.MAX_DELTA_E_SAMPLES));
         let sumDeltaBefore = 0;
         let sumDeltaAfter = 0;
         let sampleCount = 0;
 
         for (let i = 0; i < total; i += step) {
             const sLab = this.srgbToLab(sourceRgba[i * 4], sourceRgba[i * 4 + 1], sourceRgba[i * 4 + 2]);
-            const rLab = this.srgbToLab(referenceRgba[i * 4], referenceRgba[i * 4 + 1], referenceRgba[i * 4 + 2]);
+            const rLab = this.srgbToLab(refAligned[i * 4], refAligned[i * 4 + 1], refAligned[i * 4 + 2]);
             const gLab = this.srgbToLab(gradedBuffer[i * 4], gradedBuffer[i * 4 + 1], gradedBuffer[i * 4 + 2]);
 
             sumDeltaBefore += this.calculateDeltaE00(sLab, rLab);
@@ -849,7 +876,11 @@ export class ProColorGradeMatchingService {
                 finalDeltaE00,
                 deltaEReductionPercent,
                 executionTimeMs: Date.now() - startTime,
-                sourceDimensions: { width, height }
+                sourceDimensions: { width, height },
+                referenceDimensions: { width: reference.width, height: reference.height },
+                deltaEBasis: sameSize ? 'same-size per-pixel' : 'per-pixel vs reference resampled to source size',
+                deltaESampleCount: sampleCount,
+                deltaESampleStride: step
             }
         };
     }
@@ -865,15 +896,16 @@ export class ProColorGradeMatchingService {
         const srcBuf = await this.resolveImageBuffer(sourceImage);
         const refBuf = await this.resolveImageBuffer(referenceImage);
 
-        const srcDecoded = await this.decodeImageToRgba(srcBuf);
-        const refDecoded = await this.decodeImageToRgba(refBuf);
+        const srcDecoded = await decodeImageToRgba(srcBuf);
+        const refDecoded = await decodeImageToRgba(refBuf);
 
         const matchResult = await this.matchImageBuffers(
-            srcDecoded.data,
-            refDecoded.data,
+            srcDecoded.rgba,
+            refDecoded.rgba,
             srcDecoded.width,
             srcDecoded.height,
-            options
+            options,
+            { width: refDecoded.width, height: refDecoded.height }
         );
 
         if (options.outputPath) {
@@ -909,30 +941,6 @@ export class ProColorGradeMatchingService {
         throw new Error(`Unable to resolve image source: ${typeof img}`);
     }
 
-    private static decodeImageToRgba(buf: Buffer): Promise<{ data: Buffer; width: number; height: number }> {
-        return new Promise((resolve, reject) => {
-            const dims = this.parseImageDimensions(buf);
-            const ffmpeg = spawn('ffmpeg', [
-                '-hide_banner', '-loglevel', 'error',
-                '-i', 'pipe:0',
-                '-f', 'rawvideo',
-                '-pix_fmt', 'rgba',
-                'pipe:1'
-            ]);
-
-            const chunks: Buffer[] = [];
-            ffmpeg.stdout.on('data', chunk => chunks.push(chunk));
-            ffmpeg.stderr.on('data', () => {});
-            ffmpeg.on('close', code => {
-                if (code !== 0) return reject(new Error(`ffmpeg decode failed with code ${code}`));
-                const data = Buffer.concat(chunks);
-                resolve({ data, width: dims.width, height: dims.height });
-            });
-            ffmpeg.on('error', reject);
-            ffmpeg.stdin.end(buf);
-        });
-    }
-
     private static encodeRgbaToImage(rgba: Buffer, width: number, height: number, format: string): Promise<Buffer> {
         return new Promise((resolve, reject) => {
             const codec = format === 'png' ? 'png' : (format === 'webp' ? 'libwebp' : 'mjpeg');
@@ -960,25 +968,32 @@ export class ProColorGradeMatchingService {
         });
     }
 
-    private static parseImageDimensions(buf: Buffer): { width: number; height: number } {
-        // PNG magic number
-        if (buf.length >= 24 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) {
-            return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+    /** Pixels the per-pixel ΔE means average over at most (an even stride above that). */
+    public static readonly MAX_DELTA_E_SAMPLES = 1 << 20;
+
+    private static assertRgbaSize(rgba: Buffer, width: number, height: number, label: string): void {
+        if (!(width > 0 && height > 0) || rgba.length !== width * height * 4) {
+            throw new Error(`ProColorGradeMatchingService: ${label} buffer is ${rgba.length} bytes, not ${width}x${height} RGBA (${width * height * 4} bytes)`);
         }
-        // JPEG SOF0 / SOF2 marker scan
-        if (buf.length >= 4 && buf[0] === 0xFF && buf[1] === 0xD8) {
-            let offset = 2;
-            while (offset < buf.length - 8) {
-                if (buf[offset] !== 0xFF) { offset++; continue; }
-                const marker = buf[offset + 1];
-                if ((marker >= 0xC0 && marker <= 0xC3) || (marker >= 0xC5 && marker <= 0xC7) || (marker >= 0xC9 && marker <= 0xCB)) {
-                    return { width: buf.readUInt16BE(offset + 7), height: buf.readUInt16BE(offset + 5) };
+    }
+
+    /** Bilinear RGBA resample (pixel-centre aligned). */
+    private static resampleRgbaBilinear(src: Buffer, sw: number, sh: number, dw: number, dh: number): Buffer {
+        const out = Buffer.alloc(dw * dh * 4);
+        for (let y = 0; y < dh; y++) {
+            const fy = Math.min(sh - 1, Math.max(0, (y + 0.5) * sh / dh - 0.5));
+            const y0 = Math.floor(fy), y1 = Math.min(sh - 1, y0 + 1), ty = fy - y0;
+            for (let x = 0; x < dw; x++) {
+                const fx = Math.min(sw - 1, Math.max(0, (x + 0.5) * sw / dw - 0.5));
+                const x0 = Math.floor(fx), x1 = Math.min(sw - 1, x0 + 1), tx = fx - x0;
+                const o = (y * dw + x) * 4;
+                for (let c = 0; c < 4; c++) {
+                    const a = src[(y0 * sw + x0) * 4 + c] * (1 - tx) + src[(y0 * sw + x1) * 4 + c] * tx;
+                    const b = src[(y1 * sw + x0) * 4 + c] * (1 - tx) + src[(y1 * sw + x1) * 4 + c] * tx;
+                    out[o + c] = Math.round(a * (1 - ty) + b * ty);
                 }
-                const len = buf.readUInt16BE(offset + 2);
-                offset += 2 + len;
             }
         }
-        // Default fallback dimension
-        return { width: 512, height: 512 };
+        return out;
     }
 }

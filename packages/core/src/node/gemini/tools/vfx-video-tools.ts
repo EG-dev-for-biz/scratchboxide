@@ -587,7 +587,7 @@ export const FFMPEG_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'pro_color_match_imagery',
-        description: 'Autonomous Hollywood-grade color grading and matching between source and reference imagery. Analytically solves 3-way Primary Color Wheels (Lift, Gamma, Gain, Offset), Bradford chromatic white balance, vectorscope skin tone protection (~130 deg), standard 3D LUT (.cube) generation, and optical scopes telemetry (Waveform, RGB Parade, Vectorscope, and CIEDE2000 Delta E).',
+        description: 'Color-matches a source image to a reference image. Solves per-channel 3-way primary wheels (Lift, Gamma, Gain) from the 5th/50th/95th percentile tones of each image (the images may differ in size), applies them with optional vectorscope skin-tone protection, can export a 3D LUT (.cube), and reports scopes (waveform, RGB parade, vectorscope incl. measured dominant hue) and the mean per-pixel CIEDE2000 to the reference before and after (the reference is resampled to the source size when they differ; the result states the basis and sample count).',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -618,10 +618,6 @@ export const FFMPEG_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 preserveSkinTones: {
                     type: 'BOOLEAN',
                     description: 'Whether to protect natural human skin tones along the vectorscope I-axis (default true)'
-                },
-                contrastCurve: {
-                    type: 'STRING',
-                    description: 'Contrast curve profile: "natural", "cinematic", "high-contrast", "muted"'
                 }
             },
             required: ['sourceImagePath', 'referenceImagePath']
@@ -1047,7 +1043,6 @@ export const ffmpegHandlers: Record<string, ToolHandler> = {
         const generate3DLut = args.generate3DLut !== undefined ? asBoolean(args.generate3DLut) : true;
         const lutSize = asNumber(args.lutSize) || 17;
         const preserveSkinTones = args.preserveSkinTones !== undefined ? asBoolean(args.preserveSkinTones) : true;
-        const contrastCurve = (args.contrastCurve as 'natural' | 'cinematic' | 'high-contrast' | 'muted') || undefined;
 
         const { ProColorGradeMatchingService } = await import('../../image/ProColorGradeMatchingService');
         const result = await ProColorGradeMatchingService.matchImages(
@@ -1058,13 +1053,14 @@ export const ffmpegHandlers: Record<string, ToolHandler> = {
                 outputLutPath,
                 generate3DLut,
                 lutSize,
-                preserveSkinTones,
-                contrastCurve
+                preserveSkinTones
             }
         );
+        // The graded pixels go to outputPath; the raw RGBA buffer is not sent back to the model.
+        const { gradedBuffer: _graded, ...payload } = result;
 
         return {
-            resultPayload: result as unknown as import('./types').ToolResultPayload,
+            resultPayload: payload as unknown as import('./types').ToolResultPayload,
             summaryResult: `Hollywood-grade color match complete in ${result.telemetry.executionTimeMs}ms. Perceptual Delta E reduced by ${result.telemetry.deltaEReductionPercent}% (initial: ${result.telemetry.initialDeltaE00} -> final: ${result.telemetry.finalDeltaE00}). Lift=[${result.wheels.lift.r.toFixed(3)}, ${result.wheels.lift.g.toFixed(3)}, ${result.wheels.lift.b.toFixed(3)}], Gain=[${result.wheels.gain.r.toFixed(3)}, ${result.wheels.gain.g.toFixed(3)}, ${result.wheels.gain.b.toFixed(3)}].${result.lutPath ? ` Generated 3D LUT: ${result.lutPath}` : ''}`
         };
     },
