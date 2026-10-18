@@ -654,7 +654,7 @@ When integrating real-world photogrammetric 3D tiles (e.g. Google Photorealistic
    - **Standalone Function**: `harmonizeLocationObjectAtmosphere(request)` in `@scratchbox/core`, `@scratchbox/core/browser`, `@scratchbox/core/node`.
    - **Core Service**: `LocationObjectLightingService` in `packages/core/src/browser/generative-canvas/services/atmosphere/LocationObjectLightingService.ts`.
    - **In-App Gemini Agent Tools**:
-     - `geobox_harmonize_location_lighting({ landmarkName, preset, stoneType, shadowLift, highlightCompress, enableArchitecturalBacklighting })`: Full photogrammetric de-lighting and atmospheric harmonization.
+     - `geobox_harmonize_location_lighting({ landmarkName | latitude+longitude, isoDate, preset, stoneType, portals, customDelightParams })`: Full photogrammetric de-lighting and atmospheric harmonization. `isoDate` is required (no date is assumed); window/portal backlighting is added only at caller-supplied `portals` openings (no canned fixture ring).
      - `atmosphere_harmonize_location_3d(...)`: High-level atmospheric alias.
 
 ## Native Prompt-Driven Mesh Reshaping Directive
@@ -682,7 +682,7 @@ When executing prompt-driven mesh deformation, organic sculpting, or parametric 
 When solving camera matchmoves, optical resection, and live-action plate alignment with 3D geospatial tiles or geometry:
 1. **Adaptive Domain Calibration Engine**:
    - Resect camera poses via `AdaptiveMatchmoveCalibrationService` using Levenberg-Marquardt bundle adjustment and robust Huber loss outlier rejection against 3D-to-2D spatial anchor correspondences.
-   - Enforce rigorous metrology thresholds: Sequence Mean Reprojection RMS $< 0.05\text{ px}$, Sobel Edge Normalized Cross Correlation (NCC) $\ge 98.0\%$, and physical drone flight safety limits (velocity $< 15\text{ m/s}$, acceleration $< 10\text{ m/s}^2$).
+   - Enforce rigorous metrology thresholds: Sequence Mean Reprojection RMS $< 0.05\text{ px}$ and physical drone flight safety limits (velocity $< 15\text{ m/s}$, acceleration $< 10\text{ m/s}^2$).
    - Dynamically model Brown-Conrady radial lens distortion and optical focal breathing ($k_1, k_2$).
    - Synthesize smooth, non-uniform $C^2$ Hermite cubic spline trajectories with gimbal-free facade-normal slerp to eliminate roll jitter.
 2. **Canonical Codebase APIs & In-App Gemini Agent Tools**:
@@ -691,7 +691,7 @@ When solving camera matchmoves, optical resection, and live-action plate alignme
      - `adaptive_matchmove_calibrate_sequence({ sequencePath, landmark, context, milestones, outputCameraPath, outputReportPath, ... })`: End-to-end multi-milestone bundle adjustment, spline synthesis, and metrology certification.
      - `adaptive_matchmove_resect_keyframe({ anchors, cameraPosition, targetPosition, lens, ... })`: Single keyframe 6-DOF pose and lens breathing solver.
      - `adaptive_matchmove_synthesize_trajectory({ milestones, fps, totalFrames, durationSec, facadeNormal, ... })`: Continuous $C^2$ spline generator with full velocity/acceleration telemetry.
-     - `adaptive_matchmove_verify_metrology({ report, reportPath, maxAllowedRmsPx, minAllowedCorrelationPercent, ... })`: Automated metrology audit and pass/fail gate.
+     - `adaptive_matchmove_verify_metrology({ report, reportPath, maxAllowedRmsPx, maxVelocityMps, maxAccelerationMps2 })`: Automated metrology audit and pass/fail gate (edge correlation against the plate is not measured by the calibration and is not gated).
 
 ## Code-First Live Preview & In-Situ Commenting Directive
 
