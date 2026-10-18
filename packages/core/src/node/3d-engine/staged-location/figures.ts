@@ -46,6 +46,7 @@ import type { SurveyResult } from './face-survey';
 import { castCamera } from './survey-casting';
 import { bearingDeg, STREET_VIEW_EYE_HEIGHT_M, type PanoCandidate, type SelectedView } from './streetview-evidence';
 import { vertexNormals, type StagedGlbNode } from './staged-glb-writer';
+import { callTimeout } from './call-timer';
 
 const DEG = Math.PI / 180;
 /** The measured criterion, in one place. */
@@ -463,7 +464,7 @@ export async function readFigures(input: ReadFiguresInput): Promise<{ parsed: Pa
 async function readFiguresOnce(input: ReadFiguresInput & { followUp?: { previousText: string; ask: string } }): Promise<{ parsed: ParsedFigures; model: VisionModelUse; text: string }> {
     const timeoutMs = input.timeoutMs ?? FIGURE_VISION_TIMEOUT_MS;
     const own = new AbortController();
-    const timer = setTimeout(() => own.abort(Object.assign(new Error(`the vision call took longer than ${Math.round(timeoutMs / 1000)} s`), { name: 'TimeoutError' })), timeoutMs);
+    const timer = callTimeout(() => own.abort(Object.assign(new Error(`the vision call took longer than ${Math.round(timeoutMs / 1000)} s`), { name: 'TimeoutError' })), timeoutMs);
     const signal = input.signal ? AbortSignal.any([input.signal, own.signal]) : own.signal;
     let usage: Partial<VisionModelUse> = {};
     try {
@@ -488,7 +489,7 @@ async function readFiguresOnce(input: ReadFiguresInput & { followUp?: { previous
         const message = timedOut ? `the vision call took longer than ${Math.round(timeoutMs / 1000)} s` : (err as Error).message;
         throw new VisionStageError(message, visionUse(input.chain, 'failed', { ...usage, error: message }), timedOut || /transient|quota|429|5\d\d|network|fetch failed/.test(message), 'figures_unreadable');
     } finally {
-        clearTimeout(timer);
+        timer.clear();
     }
 }
 

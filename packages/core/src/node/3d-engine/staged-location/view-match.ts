@@ -24,6 +24,7 @@ import { ORNAMENT_MAX_OUTPUT_TOKENS, ORNAMENT_THINKING_BUDGET } from './ornament
 import { surveyAim, surveyImageBytes, type SurveyCandidate, type SurveyFaceTarget, type SurveyResult, type SurveyView } from './face-survey';
 import { fetchViews, type EvidenceImage, type StreetViewEvidenceDeps } from './streetview-evidence';
 import type { Box1000, Correspondence, RegView } from './pano-registration';
+import { callTimeout } from './call-timer';
 
 export const RING_VIEWS_PER_FACE = 5;
 /** A ring view stands at least this far from the survey's own pano (otherwise it adds nothing to triangulate with). */
@@ -188,7 +189,7 @@ export async function runViewMatch(input: MatchInput): Promise<MatchResult> {
         parts.push({ text: closing });
         const contents: Content[] = [{ role: 'user', parts }];
         const own = new AbortController();
-        const timer = setTimeout(() => own.abort(Object.assign(new Error(`the matching call took longer than ${Math.round(MATCH_TIMEOUT_MS / 1000)} s`), { name: 'TimeoutError' })), MATCH_TIMEOUT_MS);
+        const timer = callTimeout(() => own.abort(Object.assign(new Error(`the matching call took longer than ${Math.round(MATCH_TIMEOUT_MS / 1000)} s`), { name: 'TimeoutError' })), MATCH_TIMEOUT_MS);
         const signal = input.signal ? AbortSignal.any([input.signal, own.signal]) : own.signal;
         try {
             result.visionCalls++;
@@ -219,7 +220,7 @@ export async function runViewMatch(input: MatchInput): Promise<MatchResult> {
             if (input.signal?.aborted) throw err;
             result.failures.push(`${faceId}: ${(err as Error).message}`);
         } finally {
-            clearTimeout(timer);
+            timer.clear();
         }
     }));
     result.seconds = Math.round(((Date.now() - started) / 1000) * 10) / 10;

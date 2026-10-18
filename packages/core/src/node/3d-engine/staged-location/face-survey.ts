@@ -42,6 +42,7 @@ import { chartNormal, chartPoint } from './slot-projection';
 import {
     bearingDeg, facadeGeometry, fetchViews, STREET_VIEW_EYE_HEIGHT_M, type EvidenceImage, type PanoCandidate, type SelectedView, type StreetViewEvidenceDeps
 } from './streetview-evidence';
+import { callTimeout, type CallTimer } from './call-timer';
 
 const DEG = Math.PI / 180;
 export const SURVEY_PROMPT_VERSION = 'survey/v2';
@@ -377,10 +378,12 @@ export async function runFaceSurvey(input: RunSurveyInput): Promise<SurveyResult
     const parsed: ParsedSurvey = { faces: new Map(), problems: [] };
     const readFace = async (im: SurveyImage): Promise<{ error?: Error; transient?: boolean; invalid?: boolean }> => {
         const own = new AbortController();
-        const timer = setTimeout(() => own.abort(Object.assign(new Error(`the vision call took longer than ${Math.round(timeoutMs / 1000)} s`), { name: 'TimeoutError' })), timeoutMs);
+        let timer: CallTimer | undefined;
         const signal = input.signal ? AbortSignal.any([input.signal, own.signal]) : own.signal;
         try {
             const sent = await capImageSide(im.bytes, im.mimeType, im.widthPx, im.heightPx, SURVEY_SEND_MAX_SIDE_PX);
+            // the limit starts as the request is sent (not while the image is prepared), in time this thread can read the reply
+            timer = callTimeout(() => own.abort(Object.assign(new Error(`the vision call took longer than ${Math.round(timeoutMs / 1000)} s`), { name: 'TimeoutError' })), timeoutMs);
             const r = await input.chain.generate({
                 contents: surveyContents([{ ...im, index: 0, bytes: sent.bytes, mimeType: sent.mimeType, widthPx: sent.widthPx, heightPx: sent.heightPx }]),
                 config: { responseMimeType: 'application/json', temperature: 0.2, maxOutputTokens: ORNAMENT_MAX_OUTPUT_TOKENS, abortSignal: signal }
@@ -406,7 +409,7 @@ export async function runFaceSurvey(input: RunSurveyInput): Promise<SurveyResult
             const message = timedOut ? `the vision call took longer than ${Math.round(timeoutMs / 1000)} s` : (err as Error).message;
             return { error: new Error(message), transient: timedOut || /transient|quota|429|5\d\d|network|fetch failed|None of the chat's models is served/.test(message), invalid: /valid JSON|no "faces"|cut off|ended with/.test(message) };
         } finally {
-            clearTimeout(timer);
+            timer?.clear();
         }
     };
     const outcomes = await Promise.all(images.map(readFace));

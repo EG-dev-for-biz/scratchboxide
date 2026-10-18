@@ -37,6 +37,7 @@ import { geodeticToScan, scanToGeodetic, type GeodeticOrigin, type GroundModel }
 import { readJpegSize } from '../../spatial/StreetViewPoseRegistrar';
 import { imageContentSha256 } from '../../image-codec-ffmpeg';
 import type { StructurePickResult } from './extraction-sizing';
+import { callTimeout } from './call-timer';
 
 const DEG = Math.PI / 180;
 /**
@@ -296,7 +297,7 @@ export async function fetchViews(views: SelectedView[], deps: StreetViewEvidence
     const results = await Promise.all(views.map(async view => {
         const t0 = (deps.now ?? Date.now)();
         const own = new AbortController();
-        const timer = setTimeout(() => own.abort(Object.assign(new Error(`timed out after ${timeoutMs / 1000} s`), { name: 'TimeoutError' })), timeoutMs);
+        const timer = callTimeout(() => own.abort(Object.assign(new Error(`timed out after ${timeoutMs / 1000} s`), { name: 'TimeoutError' })), timeoutMs);
         const combined = signal ? AbortSignal.any([signal, own.signal]) : own.signal;
         try {
             // pitchDeg is elevation (up positive); the grounding API counts down as positive
@@ -321,7 +322,7 @@ export async function fetchViews(views: SelectedView[], deps: StreetViewEvidence
             const message = own.signal.aborted && !signal?.aborted ? `timed out after ${timeoutMs / 1000} s` : (err as Error).message;
             return { ok: false as const, view, error: message, transient: !/not published or eligible|400|403/.test(message) };
         } finally {
-            clearTimeout(timer);
+            timer.clear();
         }
     }));
     return {

@@ -56,6 +56,7 @@ import { expandElements, expandEvidence, splitOversizeReplicates, type ExpandedE
 import { surveyHintLines, type LocatedElement } from './survey-detail';
 import type { SlotOffer } from './slot-exposure';
 import { describeCover, type SlotCover } from './slot-cover';
+import { callTimeout } from './call-timer';
 
 export const ORNAMENT_PROMPT_VERSION = 'ornament/v7';
 /** Thinking tokens asked for: LOW on Gemini 4 (thinkingConfigFor), a 512-token budget on 3.x. */
@@ -764,9 +765,11 @@ export async function readOrnament(input: ReadOrnamentInput): Promise<OrnamentRe
         const ctl = new AbortController();
         let cut: CallCut | undefined;
         const stop = (why: CallCut, message: string) => { if (ctl.signal.aborted) return; cut = why; ctl.abort(Object.assign(new Error(message), { name: 'TimeoutError' })); };
-        const hard = setTimeout(() => stop('timeout', `the vision call took longer than ${Math.round(limit / 1000)} s`), limit);
-        let watch = setTimeout(() => stop('stall', `the vision call stalled: no token within ${Math.round(firstTokenStallMs / 1000)} s`), firstTokenStallMs);
-        const onChunk = () => { clearTimeout(watch); watch = setTimeout(() => stop('stall', `the vision stream stalled: no token for ${Math.round(stallMs / 1000)} s`), stallMs); };
+        // measured from the request's start in time this thread could read its reply (call-timer.ts): a block of the thread
+        // past the limit does not cut a call whose answer is waiting
+        const hard = callTimeout(() => stop('timeout', `the vision call took longer than ${Math.round(limit / 1000)} s`), limit);
+        let watch = callTimeout(() => stop('stall', `the vision call stalled: no token within ${Math.round(firstTokenStallMs / 1000)} s`), firstTokenStallMs);
+        const onChunk = () => { watch.clear(); watch = callTimeout(() => stop('stall', `the vision stream stalled: no token for ${Math.round(stallMs / 1000)} s`), stallMs); };
         const signal = input.signal ? AbortSignal.any([input.signal, ctl.signal]) : ctl.signal;
         calls++;
         input.onCall?.();
@@ -796,8 +799,8 @@ export async function readOrnament(input: ReadOrnamentInput): Promise<OrnamentRe
             const transient = !!cut || /transient|quota|429|5\d\d|network|fetch failed|None of the chat's models is served/.test(message);
             throw Object.assign(new VisionStageError(message, visionUse(chain, 'failed', own({ error: message })), transient, cut === 'stall' ? 'vision_stalled' : cut === 'timeout' ? 'vision_timeout' : 'vision_unavailable'), { cut });
         } finally {
-            clearTimeout(hard);
-            clearTimeout(watch);
+            hard.clear();
+            watch.clear();
         }
     };
     /** A call, asked again after a stall while the deadline leaves at least a first-token window for it. */
