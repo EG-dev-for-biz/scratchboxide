@@ -11,6 +11,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 import { Worker } from 'worker_threads';
+import { workerTsRegisterSource } from '../worker-ts-register';
 import { HeadlessMeshSilhouetteRenderer, type RenderMesh3D } from './HeadlessMeshSilhouetteRenderer';
 import type { CameraPose6DOF, SobelEdgeField } from './SubPixelEdgeAlignmentOptimizer';
 import type { EdgeRenderWorkerInit } from './edge-render-worker';
@@ -18,10 +19,7 @@ import type { EdgeRenderWorkerInit } from './edge-render-worker';
 /** Loads the worker entry: compiled .js as is, the .ts source through ts-node (development and tests). */
 const BOOTSTRAP = `
 const { workerData } = require('worker_threads');
-if (/\\.ts$/.test(workerData.entry)) {
-    require(require.resolve('ts-node', { paths: [require('path').dirname(workerData.entry)] }))
-        .register({ transpileOnly: true, compilerOptions: { module: 'commonjs', moduleResolution: 'node' } });
-}
+${workerTsRegisterSource()}
 require(workerData.entry);
 `;
 

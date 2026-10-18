@@ -21,6 +21,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { MessageChannel, receiveMessageOnPort, Worker, type MessagePort } from 'worker_threads';
+import { workerTsRegisterSource } from '../worker-ts-register';
 import type { FrameCamera } from './StreetViewPoseRegistrar';
 import type { CrossViewMatch, Integral, PairMatchParams } from './StreetViewCrossViewRefiner';
 import type { CrossViewMatchWorkerInit } from './cross-view-match-worker';
@@ -30,10 +31,7 @@ const BOOTSTRAP = `
 const { workerData } = require('worker_threads');
 const ctrl = new Int32Array(workerData.ctrl);
 try {
-    if (/\\.ts$/.test(workerData.entry)) {
-        require(require.resolve('ts-node', { paths: [require('path').dirname(workerData.entry)] }))
-            .register({ transpileOnly: true, compilerOptions: { module: 'commonjs', moduleResolution: 'node' } });
-    }
+    ${workerTsRegisterSource()}
     require(workerData.entry);
 } catch (err) {
     Atomics.store(ctrl, 3, 1);

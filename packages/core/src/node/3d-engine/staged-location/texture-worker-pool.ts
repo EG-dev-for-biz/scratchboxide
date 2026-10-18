@@ -27,6 +27,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { Worker } from 'worker_threads';
+import { workerTsRegisterSource } from '../../worker-ts-register';
 import type { EnhanceModelClient } from './texture-enhance';
 import type { LooFit } from './texture-fit-metric';
 import type { TextureLayerInput, TextureLayerOutcome, TexturePassSources } from './texture-pass';
@@ -49,10 +50,7 @@ export class TextureWorkerCrashError extends Error {
  */
 const BOOTSTRAP = `
 const { workerData } = require('worker_threads');
-if (/\\.ts$/.test(workerData.entry)) {
-    require(require.resolve('ts-node', { paths: [require('path').dirname(workerData.entry)] }))
-        .register({ transpileOnly: true, skipProject: true, compilerOptions: { target: 'ES2022', module: 'commonjs', moduleResolution: 'node', esModuleInterop: true, allowSyntheticDefaultImports: true } });
-}
+${workerTsRegisterSource()}
 require(workerData.entry);
 `;
 
