@@ -511,7 +511,11 @@ export interface StructureFit {
     schema: 'scratchbox.structure-fit/2';
     /** 16 hex: sha256(footprint quantised to 0.25 m + seed to 1 cm). */
     buildingId: string;
-    input: { scanSha256: string; scanTriangles: number; scanSource: string; texturedSha256?: string; anchor: Vec2; refitOf?: string };
+    input: {
+        scanSha256: string; scanTriangles: number; scanSource: string; texturedSha256?: string; anchor: Vec2; refitOf?: string;
+        /** The multi-view mask vote given to the fit (ScanFitFitRequest.ownershipVotes): scan voted not the structure was left out as clutter. */
+        ownership?: { votedTriangles: number; structureTriangles: number; otherTriangles: number; otherAreaM2: number };
+    };
     frame: Frame3;
     ground: { normal: Vec3; offsetM: number; tiltDeg: number; rmsM: number; baseY: number };
     footprint: { outer: Vec2[]; holes?: Vec2[][]; areaM2: number };
@@ -972,6 +976,7 @@ export const STAGED_DEGRADE_LADDER: readonly DegradeRung[] = [
     { stage: 'trees-measure', failure: 'strip fails', fellTo: "the scan's own trees, left in the remeshed scan", provenanceAfter: PROVENANCE.remeshed, reasonCode: 'trees_not_measured' },
     { stage: 'remesh', failure: 'tile_refine fails or times out', fellTo: 'the raw scan with its facades flattened, its scanned trees kept in it', provenanceAfter: PROVENANCE.scanFlattened, reasonCode: 'remesh_failed' },
     { stage: 'remesh', failure: 'flattening the raw scan fails too', fellTo: 'the raw scan as downloaded', provenanceAfter: PROVENANCE.asScanned, reasonCode: 'flatten_failed' },
+    { stage: 'remesh', failure: 'the multi-view mask vote on object ownership cannot be made (no vision model, the views cannot be rendered, or no view gets a usable outline)', fellTo: 'the structure as the geometric rules isolate it (footprint and connectivity)', provenanceAfter: PROVENANCE.remeshed, reasonCode: 'ownership_vote_unavailable' },
     { stage: 'remesh', failure: "tile_refine's isolated structure is not the one picked (IoU < 0.7)", fellTo: 'the remeshed scan, without a rebuild', provenanceAfter: PROVENANCE.remeshed, reasonCode: 'isolate_mismatch' },
     { stage: 'fit', failure: 'scan_fit fails or its global gate fails', fellTo: 'the remeshed scan', provenanceAfter: PROVENANCE.remeshed, reasonCode: 'fit_rejected' },
     { stage: 'fit', failure: 'a primitive gate fails, or a residual slab is not box-like', fellTo: 'that region as scanned (pass-through)', provenanceAfter: PROVENANCE.asScanned, reasonCode: 'pass_through' },
@@ -1181,6 +1186,11 @@ export interface ScanFitFitRequest extends ScanFitCall {
     texturedGlb?: string;
     /** For metrics.remeshToScan. */
     remeshGlb?: string;
+    /**
+     * tile_refine's multi-view mask vote of the scan's triangles (ownership.sbov): scan voted not the structure is clutter, and
+     * each pass-through region says what the vote makes of it.
+     */
+    ownershipVotes?: string;
     /** The probe seed (tile frame). */
     anchor: { x: number; z: number };
     sourceLimits: SourceLimits;
@@ -1436,7 +1446,8 @@ const DEFINITIONS = {
     StructureFit: obj(['schema', 'buildingId', 'input', 'frame', 'ground', 'footprint', 'sourceLimits', 'primitives', 'surfaces', 'slots', 'passThrough', 'metrics', 'gates', 'accepted', 'counts', 'outputs', 'timingsMs'], {
         schema: { const: 'scratchbox.structure-fit/2' }, buildingId: { type: 'string', pattern: '^[0-9a-f]{16}$' },
         input: obj(['scanSha256', 'scanTriangles', 'scanSource', 'anchor'], {
-            scanSha256: STR, scanTriangles: INT, scanSource: STR, texturedSha256: STR, anchor: ref('vec2'), refitOf: STR
+            scanSha256: STR, scanTriangles: INT, scanSource: STR, texturedSha256: STR, anchor: ref('vec2'), refitOf: STR,
+            ownership: obj(['votedTriangles', 'structureTriangles', 'otherTriangles', 'otherAreaM2'], { votedTriangles: INT, structureTriangles: INT, otherTriangles: INT, otherAreaM2: NUM })
         }),
         frame: ref('frame3'),
         ground: obj(['normal', 'offsetM', 'tiltDeg', 'rmsM', 'baseY'], { normal: ref('vec3'), offsetM: NUM, tiltDeg: NUM, rmsM: NUM, baseY: NUM }),

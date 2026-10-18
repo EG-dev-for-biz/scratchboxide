@@ -58,6 +58,13 @@ export interface TileRefineRequest {
      * when isolating); or explicit file names (`rawClay` needs `isolate`).
      */
     publishAs?: string | { textured?: string; clay?: string; rawClay?: string };
+    /**
+     * Isolate only: multi-view mask voting. `masksDir` (inside the workspace) holds views.txt and <name>.mask.png for
+     * registered views of the tile (renderOwnershipViews writes such views; 255 = the requested structure, 0 = everything
+     * else). A raised triangle whose vote is decisive joins or leaves the structure; undecided ones keep the geometric rules.
+     * The entry then also holds ownership.sbov (the vote of every kept triangle, for scan_fit) and ownership_debug/.
+     */
+    ownership?: { masksDir: string };
     /** Also write raw-vs-output thumbnails into the cache entry (adds ~1-2 s). */
     thumbnails?: boolean;
     /** Worker threads (default: all cores). Not part of the cache key. */
@@ -94,6 +101,9 @@ export interface TileRefineResult {
     clayGlb: string;
     /** The isolated raw scan as studio clay (isolate requests only). */
     rawClayGlb?: string;
+    /** Ownership requests: the vote of every kept triangle by centroid (SBOV) and the owner-coloured diagnostics. */
+    ownershipVotes?: string;
+    ownershipDebugDir?: string;
     stats: Record<string, any>;
     cached: boolean;
     ms: number;
@@ -294,6 +304,16 @@ export class TileRefineService {
                 keyParams.apron = apron;
             }
         }
+        if (req.ownership !== undefined) {
+            if (!keyParams.isolate) throw new TileRefineError('bad_request', 'ownership needs isolate');
+            const masksDir = typeof req.ownership?.masksDir === 'string' ? resolveWithinRoot(this.workspaceRoot, req.ownership.masksDir) : '';
+            if (!masksDir || !fs.existsSync(path.join(masksDir, 'views.txt'))) throw new TileRefineError('bad_request', 'ownership.masksDir must hold views.txt');
+            cliArgs.push('--ownership-masks', masksDir);
+            // the key is the evidence itself: the views and every mask
+            const h = crypto.createHash('sha256');
+            for (const f of fs.readdirSync(masksDir).filter(f => f === 'views.txt' || f.endsWith('.mask.png')).sort()) h.update(f).update('\0').update(fs.readFileSync(path.join(masksDir, f)));
+            keyParams.ownership = h.digest('hex');
+        }
         if (req.thumbnails) keyParams.thumbnails = true;
         if (req.threads !== undefined) {
             if (!Number.isInteger(req.threads) || req.threads < 1 || req.threads > 256) throw new TileRefineError('bad_request', 'threads must be an integer in 1..256');
@@ -317,7 +337,7 @@ export class TileRefineService {
 
         let pending = this.inFlight.get(key);
         if (!pending) {
-            pending = this.runCached(key, input, cliArgs, !!keyParams.thumbnails, !!keyParams.isolate, binary, timeoutMs)
+            pending = this.runCached(key, input, cliArgs, !!keyParams.thumbnails, !!keyParams.isolate, binary, timeoutMs, !!keyParams.ownership)
                 .finally(() => this.inFlight.delete(key));
             this.inFlight.set(key, pending);
         }
@@ -327,10 +347,42 @@ export class TileRefineService {
         return result;
     }
 
+    /**
+     * Writes registered views around the structure the geometric isolate finds (views.txt and <name>.png, the scan's own
+     * texture, unlit) for segmentation, cached by the tile, the anchor and the binary. Returns the directory and the view names.
+     */
+    async renderOwnershipViews(req: Pick<TileRefineRequest, 'tilePath' | 'glbPath' | 'anchor' | 'isolate' | 'timeoutMs'>): Promise<{ dir: string; views: string[]; cached: boolean; ms: number }> {
+        const t0 = Date.now();
+        const { input, cliArgs, keyParams } = this.resolveRequest({ ...req, isolate: req.isolate ?? true });
+        const binary = await this.ensureBinary();
+        const hash = crypto.createHash('sha256').update(CACHE_VERSION).update('\0ownership-render\0').update(this.hashBinary(binary.path)).update('\0');
+        sha256File(input, hash);
+        hash.update('\0').update(JSON.stringify(keyParams));
+        const dir = path.join(this.cacheDir, `views_${hash.digest('hex')}`);
+        const list = () => fs.readFileSync(path.join(dir, 'views.txt'), 'utf8').split('\n').filter(l => l && !l.startsWith('#')).map(l => l.split(' ')[0]);
+        if (fs.existsSync(path.join(dir, 'done.json'))) return { dir, views: list(), cached: true, ms: Date.now() - t0 };
+        const tmp = `${dir}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+        fs.mkdirSync(tmp, { recursive: true });
+        try {
+            await runFile(binary.path, ['--input', input, '--ownership-render', tmp, '--stats', path.join(tmp, 'render_stats.json'), ...cliArgs], req.timeoutMs ?? this.defaultTimeoutMs);
+            if (!fs.existsSync(path.join(tmp, 'views.txt'))) throw new TileRefineError('failed', 'tile_refine wrote no views.txt');
+            fs.writeFileSync(path.join(tmp, 'done.json'), JSON.stringify({ input, cliArgs, at: new Date().toISOString() }));
+            fs.rmSync(dir, { recursive: true, force: true });
+            fs.renameSync(tmp, dir);
+        } catch (err) {
+            fs.rmSync(tmp, { recursive: true, force: true });
+            if (!fs.existsSync(path.join(dir, 'done.json'))) throw err;
+        }
+        return { dir, views: list(), cached: false, ms: Date.now() - t0 };
+    }
+
     private entryResult(dir: string, key: string, cached: boolean, binary: TileRefineResult['binary']): TileRefineResult {
         const thumbs = path.join(dir, 'thumbs');
         const rawClay = path.join(dir, 'raw_clay.glb');
+        const votes = path.join(dir, 'ownership.sbov'), debug = path.join(dir, 'ownership_debug');
         return {
+            ...(fs.existsSync(votes) ? { ownershipVotes: votes } : {}),
+            ...(fs.existsSync(debug) ? { ownershipDebugDir: debug } : {}),
             texturedGlb: path.join(dir, 'textured.glb'),
             clayGlb: path.join(dir, 'clay.glb'),
             rawClayGlb: fs.existsSync(rawClay) ? rawClay : undefined,
@@ -344,7 +396,7 @@ export class TileRefineService {
     }
 
     private async runCached(key: string, input: string, cliArgs: string[], thumbnails: boolean, isolate: boolean,
-        binary: TileRefineResult['binary'], timeoutMs: number): Promise<TileRefineResult> {
+        binary: TileRefineResult['binary'], timeoutMs: number, ownership = false): Promise<TileRefineResult> {
         const dir = path.join(this.cacheDir, key);
         const done = path.join(dir, 'done.json');
         if (fs.existsSync(done)) return this.entryResult(dir, key, true, binary);
@@ -360,6 +412,7 @@ export class TileRefineService {
                 ...cliArgs];
             if (thumbnails) args.push('--thumbs', path.join(tmp, 'thumbs'));
             if (isolate) args.push('--out-raw-clay', path.join(tmp, 'raw_clay.glb'));
+            if (ownership) args.push('--ownership-out', path.join(tmp, 'ownership.sbov'), '--ownership-debug', path.join(tmp, 'ownership_debug'));
             const t0 = Date.now();
             await runFile(binary.path, args, timeoutMs);
             for (const f of ['textured.glb', 'clay.glb', 'stats.json', ...(isolate ? ['raw_clay.glb'] : [])]) {

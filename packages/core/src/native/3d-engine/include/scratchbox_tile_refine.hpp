@@ -40,7 +40,9 @@
  * runtime; the anchor and the radius are parameters. No closed taxonomies, no string branching.
  */
 
+#include "scratchbox_mask_vote.hpp"
 #include "scratchbox_photometric_relief.hpp"
+#include "scratchbox_png.hpp"
 #include "scratchbox_scan_rectifier.hpp"
 #include "scratchbox_texture.hpp"
 
@@ -183,6 +185,19 @@ struct TileRefineParams {
     double isolateInteriorBelowTop{2.0};
     double isolateInteriorMinAbove{1.0};
     std::string rawClayPath;           // non-empty: also write the (isolated) raw scan, unmodified, as studio clay
+    // Ownership by multi-view mask voting (isolate only; scratchbox_mask_vote.hpp). Render mode writes the views to segment
+    // (views.txt: one registered pinhole view per line; <name>.png: the scan's unlit texture from it) around the structure the
+    // geometric rules found, and stops. Vote mode reads views.txt and <name>.mask.png (8-bit: 255 = the requested structure,
+    // 0 = everything else; any registered views, e.g. Street View crops, not only rendered ones), renders each view's
+    // triangle IDs, and votes: a raised triangle within isolateReach of the footprint whose vote is decisive joins or leaves
+    // the structure whatever the geometric rules said; an undecided one keeps the geometric decision, with the reason counted.
+    std::string ownershipRenderDir;
+    std::string ownershipMasksDir;
+    std::string ownershipOutPath;      // vote mode: centroid + vote of every kept triangle (SBOV, for scan_fit)
+    std::string ownershipDebugDir;     // vote mode: owner-coloured renders before / after and a vote heat map
+    mask_vote::VoteParams vote;
+    int ownershipViewWidth{1024}, ownershipViewHeight{768};
+    int ownershipHoldout{0};           // > 1: every k-th view casts no vote and scores both decisions instead (diagnostic)
     std::string thumbsDir;             // non-empty: write thumbnails there
     int thumbWidth{640}, thumbHeight{360};
     V3 aerialEye{150, 650, 250};       // aerial thumbnail eye / target; x and z are relative to the anchor
@@ -753,6 +768,14 @@ private:
         if (P.isolate) {
             if (!isolateStructure(res)) return res;
             lap("isolate");
+            if (ownershipRenderedOnly) {
+                // render mode: the views to segment are written; nothing else runs
+                res.totalMs = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+                res.statsJson = "{\n  \"ok\": true,\n  \"mode\": \"ownership-render\",\n" + js.str() + "  \"totalMs\": " + num(res.totalMs) + "\n}\n";
+                if (!statsPath.empty() && !writeFile(statsPath, std::vector<uint8_t>(res.statsJson.begin(), res.statsJson.end()))) { res.error = "cannot write " + statsPath; return res; }
+                res.ok = true;
+                return res;
+            }
         } else {
             js << "  \"isolate\": {\"enabled\": false},\n";
         }
@@ -1227,6 +1250,17 @@ private:
             }
         }
 
+        // 4b. ownership by multi-view mask voting: render the views to segment (and stop), or let decisive votes decide
+        if (!P.ownershipRenderDir.empty()) {
+            if (!renderOwnershipViews(keep, triAbove, res)) return false;
+            ownershipRenderedOnly = true;
+            return true;
+        }
+        std::string ownershipJson;
+        if (!P.ownershipMasksDir.empty()) {
+            if (!applyOwnership(keep, triAbove, triDist, wid, off, inc, ownershipJson, res)) return false;
+        }
+
         // 5. compact the scene to the kept triangles: vertices, materials and the images those materials use
         size_t nCore = 0, nApron = 0;
         std::vector<uint32_t> vmap(V, UINT32_MAX);
@@ -1236,7 +1270,7 @@ private:
         std::vector<gltf::SceneMaterial> mats;
         for (size_t t = 0; t < F; ++t) {
             if (!keep[t]) continue;
-            nCore += keep[t] == 1;
+            nCore += keep[t] == 1 || keep[t] == 4;
             nApron += keep[t] == 3;
             for (int k = 0; k < 3; ++k) {
                 const uint32_t v = rawIdx[3 * t + k];
@@ -1490,10 +1524,397 @@ private:
            << ", \"groundPatch\": {\"triangles\": " << groundTris << ", \"area_m2\": " << num(groundArea) << "}"
            << ", \"vertices\": {\"input\": " << inputVerts << ", \"kept\": " << V << "}, \"materials\": {\"input\": " << inputMats << ", \"kept\": " << scene.materials.size()
            << "}, \"images\": {\"input\": " << inputImages << ", \"kept\": " << scene.images.size() << "}, \"boundsMin\": " << vec(bbMin) << ", \"boundsMax\": " << vec(bbMax)
+           << (ownershipJson.empty() ? std::string() : ", \"ownership\": " + ownershipJson)
            << ", \"ms\": " << num(std::chrono::duration<double, std::milli>(Clock::now() - t0).count()) << "},\n";
         return true;
     }
     double isoGround{0};
+    bool ownershipRenderedOnly{false};
+
+    // ----------------------------------------------------------------------------------------
+    // Ownership by multi-view mask voting (scratchbox_mask_vote.hpp)
+    // ----------------------------------------------------------------------------------------
+    struct OwnershipView { std::string name; Camera cam; double poseQuality{1}; };
+
+    template <class Job>
+    void runJobs(size_t n, Job job) const {
+        std::atomic<size_t> next{0};
+        std::vector<std::thread> pool;
+        const unsigned nt = static_cast<unsigned>(std::max<size_t>(1, std::min<size_t>(threads, n)));
+        for (unsigned t = 0; t < nt; ++t) pool.emplace_back([&]() { for (size_t i; (i = next.fetch_add(1)) < n;) job(i); });
+        for (auto& th : pool) th.join();
+    }
+
+    /**
+     * Pinhole views around what the geometric rules kept (its raised triangles), with room for what touches it: a low ring
+     * (12 degrees up, every 45 degrees) and a high one (40 degrees up, four views between them). An eye that would stand
+     * inside the scan (under the DSM) is lifted above it; it still looks at the structure.
+     */
+    std::vector<OwnershipView> ownershipCameras(const std::vector<uint8_t>& keep, const std::vector<float>& triAbove) const {
+        const MeshView m = rawView();
+        const double tol = P.vis.openGroundTolerance;
+        double minX = 1e300, maxX = -1e300, minZ = 1e300, maxZ = -1e300, top = -1e300;
+        for (size_t t = 0; t < F; ++t) {
+            if (!(keep[t] == 1 || keep[t] == 2) || !(triAbove[t] > tol)) continue;
+            for (int k = 0; k < 3; ++k) {
+                const V3 p = m.P(m.idx[3 * t + k]);
+                minX = std::min(minX, p.x); maxX = std::max(maxX, p.x);
+                minZ = std::min(minZ, p.z); maxZ = std::max(maxZ, p.z);
+                top = std::max(top, p.y);
+            }
+        }
+        std::vector<OwnershipView> out;
+        if (!(maxX >= minX)) return out;
+        const double ground = dtm.sample(0.5 * (minX + maxX), 0.5 * (minZ + maxZ));
+        const double height = std::max(1.0, top - ground);
+        const V3 c{0.5 * (minX + maxX), ground + 0.45 * height, 0.5 * (minZ + maxZ)};
+        const double radius = 0.5 * std::sqrt((maxX - minX) * (maxX - minX) + (maxZ - minZ) * (maxZ - minZ) + height * height);
+        const double vfov = 50.0, pi = 3.14159265358979323846;
+        const double dist = 1.35 * radius / std::sin(0.5 * vfov * pi / 180.0);
+        const int W = P.ownershipViewWidth, H = P.ownershipViewHeight;
+        const struct { double el; int n; double off; } rings[2] = {{12.0, 8, 0.0}, {40.0, 4, 45.0}};
+        for (const auto& r : rings)
+            for (int a = 0; a < r.n; ++a) {
+                const double az = (r.off + 360.0 * a / r.n) * pi / 180.0, el = r.el * pi / 180.0;
+                const V3 dir{std::sin(az) * std::cos(el), std::sin(el), -std::cos(az) * std::cos(el)};  // compass azimuth: 0 = north = -z
+                V3 eye = c + dir * dist;
+                const int i = dsm.ix(eye.x), k = dsm.iz(eye.z);
+                if (dsm.inside(i, k) && !std::isnan(dsm.at(i, k)) && eye.y < dsm.at(i, k) + 2.0) eye.y = dsm.at(i, k) + 3.0;
+                char name[32];
+                std::snprintf(name, sizeof name, "view_e%02d_a%03d", static_cast<int>(r.el), static_cast<int>(std::lround(r.off + 360.0 * a / r.n)) % 360);
+                out.push_back({name, Camera::lookAt(eye, c, V3{0, 1, 0}, W, H, vfov, 0.5), 1.0});
+            }
+        return out;
+    }
+
+    static std::string viewLine(const OwnershipView& v) {
+        const Camera& c = v.cam;
+        std::ostringstream o;
+        o.precision(10);
+        o << v.name << ' ' << c.W << ' ' << c.H << ' ' << c.focal << ' ' << c.eye.x << ' ' << c.eye.y << ' ' << c.eye.z << ' ' << c.fwd.x << ' ' << c.fwd.y << ' '
+          << c.fwd.z << ' ' << c.right.x << ' ' << c.right.y << ' ' << c.right.z << ' ' << c.up.x << ' ' << c.up.y << ' ' << c.up.z << ' ' << v.poseQuality << '\n';
+        return o.str();
+    }
+
+    /** views.txt: '#' comments, then one view per line: name W H focal eye(3) forward(3) right(3) up(3) poseQuality. */
+    static bool readOwnershipViews(const std::string& dir, std::vector<OwnershipView>& out, std::string& err) {
+        std::ifstream f((std::filesystem::path(dir) / "views.txt").string());
+        if (!f) { err = "ownership: cannot read " + (std::filesystem::path(dir) / "views.txt").string(); return false; }
+        std::string line;
+        while (std::getline(f, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            std::istringstream is(line);
+            OwnershipView v;
+            Camera& c = v.cam;
+            if (!(is >> v.name >> c.W >> c.H >> c.focal >> c.eye.x >> c.eye.y >> c.eye.z >> c.fwd.x >> c.fwd.y >> c.fwd.z >> c.right.x >> c.right.y >> c.right.z >> c.up.x >>
+                  c.up.y >> c.up.z >> v.poseQuality) || c.W <= 0 || c.H <= 0 || !(c.focal > 0)) {
+                err = "ownership: bad view line: " + line.substr(0, 120);
+                return false;
+            }
+            c.nearPlane = 0.5;
+            out.push_back(std::move(v));
+        }
+        if (out.empty()) { err = "ownership: views.txt lists no view"; return false; }
+        return true;
+    }
+
+    bool renderOwnershipViews(const std::vector<uint8_t>& keep, const std::vector<float>& triAbove, Result& res) {
+        const auto t0 = Clock::now();
+        const std::vector<OwnershipView> views = ownershipCameras(keep, triAbove);
+        if (views.empty()) { res.error = "ownership: the geometric rules kept nothing raised to frame the views on"; return false; }
+        std::filesystem::create_directories(P.ownershipRenderDir);
+        const RenderMesh rm = rawRenderMesh();
+        std::atomic<bool> ok{true};
+        runJobs(views.size(), [&](size_t i) {
+            texture::ImageBuffer img(views[i].cam.W, views[i].cam.H, 3);
+            renderInto(rm, views[i].cam, false, img, 0, 0, nullptr, 1);
+            if (!writeFile((std::filesystem::path(P.ownershipRenderDir) / (views[i].name + ".png")).string(), texture::encodePng(img))) ok = false;
+        });
+        std::string txt = "# name W H focal eye.x eye.y eye.z fwd.x fwd.y fwd.z right.x right.y right.z up.x up.y up.z poseQuality (tile frame, metres)\n";
+        for (const auto& v : views) txt += viewLine(v);
+        if (!ok || !writeFile((std::filesystem::path(P.ownershipRenderDir) / "views.txt").string(), std::vector<uint8_t>(txt.begin(), txt.end()))) {
+            res.error = "ownership: cannot write the views into " + P.ownershipRenderDir;
+            return false;
+        }
+        js << "  \"ownershipRender\": {\"dir\": \"" << jsonEscape(P.ownershipRenderDir) << "\", \"views\": " << views.size() << ", \"width\": " << P.ownershipViewWidth
+           << ", \"height\": " << P.ownershipViewHeight << ", \"ms\": " << num(std::chrono::duration<double, std::milli>(Clock::now() - t0).count()) << "},\n";
+        return true;
+    }
+
+    /**
+     * Vote mode. keep (1 core, 2 closure, 3 apron, 0 dropped) is the geometric decision; a decisive vote overrides it for a
+     * raised triangle within isolateReach of the footprint (4 = joined by the vote, 0 = left by it). Undecided triangles
+     * keep the geometric decision. A raised piece still connected to the structure that has no target vote of its own and
+     * touches what the vote removed goes with it (the hidden inner faces of a tree crown against a wall see no view).
+     */
+    bool applyOwnership(std::vector<uint8_t>& keep, const std::vector<float>& triAbove, const std::vector<float>& triDist, const std::vector<uint32_t>& wid,
+                        const std::vector<uint32_t>& off, const std::vector<uint32_t>& inc, std::string& json, Result& res) {
+        const auto t0 = Clock::now();
+        std::vector<OwnershipView> views;
+        std::string err;
+        if (!readOwnershipViews(P.ownershipMasksDir, views, err)) { res.error = err; return false; }
+        const MeshView m = rawView();
+        std::vector<std::vector<int32_t>> ids(views.size());
+        std::vector<std::vector<float>> masks(views.size());
+        std::vector<std::string> maskProblem(views.size());
+        runJobs(views.size(), [&](size_t i) {
+            const OwnershipView& v = views[i];
+            const std::string file = (std::filesystem::path(P.ownershipMasksDir) / (v.name + ".mask.png")).string();
+            std::ifstream f(file, std::ios::binary);
+            if (!f) { maskProblem[i] = "no mask"; return; }
+            const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            const auto d = scratchbox::png::decode(bytes.data(), bytes.size(), scratchbox::png::OutputFormat::Luma);
+            if (!d.ok) { maskProblem[i] = "undecodable mask: " + d.error; return; }
+            if (d.image.width != v.cam.W || d.image.height != v.cam.H) { maskProblem[i] = "mask size differs from the view"; return; }
+            masks[i].resize(static_cast<size_t>(v.cam.W) * v.cam.H);
+            for (size_t p = 0; p < masks[i].size(); ++p) masks[i][p] = d.image.data[p * d.image.channels] / 255.0f;
+            Raster R;
+            R.prepare(v.cam, m, 1);
+            R.draw(v.cam, m, [](size_t) { return 1; });
+            ids[i] = std::move(R.id[0]);
+        });
+        std::vector<mask_vote::ViewInput> in;
+        size_t usedViews = 0;
+        auto heldOut = [&](size_t i) { return P.ownershipHoldout > 1 && i % static_cast<size_t>(P.ownershipHoldout) == 0; };
+        for (size_t i = 0; i < views.size(); ++i) {
+            if (masks[i].empty() || heldOut(i)) continue;
+            mask_vote::ViewInput vi;
+            vi.ids = ids[i].data();
+            vi.mask = masks[i].data();
+            vi.W = views[i].cam.W;
+            vi.H = views[i].cam.H;
+            vi.eye[0] = views[i].cam.eye.x; vi.eye[1] = views[i].cam.eye.y; vi.eye[2] = views[i].cam.eye.z;
+            vi.poseQuality = views[i].poseQuality;
+            in.push_back(vi);
+            ++usedViews;
+        }
+        if (in.empty()) { res.error = "ownership: none of the " + std::to_string(views.size()) + " views has a usable mask (" + maskProblem[0] + ")"; return false; }
+        const double renderMs = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+        const auto votes = mask_vote::accumulate(in, rawPos.data(), rawIdx.data(), F, P.vote);
+        const double voteMs = std::chrono::duration<double, std::milli>(Clock::now() - t0).count() - renderMs;
+
+        // decide: only raised triangles within reach of the footprint; the rest keeps the geometric rules (counted by why)
+        const double tol = P.vis.openGroundTolerance;
+        const std::vector<uint8_t> before = keep;
+        std::vector<int8_t> owner(F, 0), reason(F, -1);  // reason -1: not eligible
+        std::vector<uint8_t> changed(F, 0);               // 1 joined, 2 left (vote), 3 left (orphaned by the vote)
+        size_t byReason[5] = {0, 0, 0, 0, 0}, groundLevel = 0, beyondReach = 0, added = 0, removed = 0;
+        size_t agreeKeep = 0, agreeDrop = 0;
+        for (size_t t = 0; t < F; ++t) {
+            if (!(triAbove[t] > tol)) { ++groundLevel; continue; }
+            if (!(triDist[t] <= P.isolateReach)) { ++beyondReach; continue; }
+            int r;
+            const mask_vote::Owner o = mask_vote::decide(votes[t], P.vote, &r);
+            reason[t] = static_cast<int8_t>(r);
+            owner[t] = static_cast<int8_t>(o);
+            ++byReason[r];
+            const bool kept = keep[t] == 1 || keep[t] == 2;
+            if (o == mask_vote::Owner::Target) { if (!keep[t]) { keep[t] = 4; changed[t] = 1; ++added; } else if (kept) ++agreeKeep; }
+            else if (o == mask_vote::Owner::Other) { if (kept) { keep[t] = 0; changed[t] = 2; ++removed; } else if (!keep[t]) ++agreeDrop; }
+        }
+        // orphans: kept raised components without a target vote that touch a triangle the vote removed
+        auto raisedKept = [&](uint32_t t) { return (keep[t] == 1 || keep[t] == 2 || keep[t] == 4) && triAbove[t] > tol; };
+        std::vector<int32_t> comp(F, -1);
+        size_t orphanRemoved = 0, orphanPieces = 0;
+        {
+            std::vector<uint32_t> stack, members;
+            int32_t nc = 0;
+            for (size_t s = 0; s < F; ++s) {
+                if (comp[s] >= 0 || !raisedKept(static_cast<uint32_t>(s))) continue;
+                members.clear();
+                stack.assign(1, static_cast<uint32_t>(s));
+                comp[s] = nc;
+                bool hasTarget = false, touchesRemoved = false;
+                while (!stack.empty()) {
+                    const uint32_t t = stack.back();
+                    stack.pop_back();
+                    members.push_back(t);
+                    hasTarget = hasTarget || owner[t] == 1;
+                    for (int k = 0; k < 3; ++k) {
+                        const uint32_t w = wid[rawIdx[3 * t + k]];
+                        for (uint32_t j = off[w]; j < off[w + 1]; ++j) {
+                            const uint32_t u = inc[j];
+                            if (changed[u] == 2) touchesRemoved = true;
+                            if (comp[u] >= 0 || !raisedKept(u)) continue;
+                            comp[u] = nc;
+                            stack.push_back(u);
+                        }
+                    }
+                }
+                ++nc;
+                if (hasTarget || !touchesRemoved) continue;
+                ++orphanPieces;
+                for (uint32_t t : members) { keep[t] = 0; changed[t] = 3; ++orphanRemoved; }
+            }
+        }
+
+        // held-out views: how often each decision agrees with masks that cast no vote (raised, in reach, off the mask edges)
+        std::string holdoutJson;
+        if (P.ownershipHoldout > 1) {
+            size_t px = 0, okG = 0, okV = 0, tpG = 0, fpG = 0, fnG = 0, tpV = 0, fpV = 0, fnV = 0, nViews = 0;
+            for (size_t i = 0; i < views.size(); ++i) {
+                if (!heldOut(i) || masks[i].empty()) continue;
+                ++nViews;
+                const std::vector<float> sm = mask_vote::smoothMask(masks[i].data(), views[i].cam.W, views[i].cam.H, P.vote.edgeBlurPx);
+                for (size_t p = 0; p < sm.size(); ++p) {
+                    const int32_t t = ids[i][p];
+                    if (t < 0 || reason[static_cast<size_t>(t)] < 0 || std::abs(2.0 * sm[p] - 1.0) < 0.5) continue;
+                    const bool truth = sm[p] > 0.5;
+                    const bool g = before[t] == 1 || before[t] == 2, v = keep[t] == 1 || keep[t] == 2 || keep[t] == 4;
+                    ++px; okG += g == truth; okV += v == truth;
+                    tpG += g && truth; fpG += g && !truth; fnG += !g && truth;
+                    tpV += v && truth; fpV += v && !truth; fnV += !v && truth;
+                }
+            }
+            std::ostringstream h;
+            h << "{\"every\": " << P.ownershipHoldout << ", \"views\": " << nViews << ", \"pixels\": " << px << ", \"geometryAccuracy\": " << num(px ? double(okG) / px : 0)
+              << ", \"voteAccuracy\": " << num(px ? double(okV) / px : 0) << ", \"geometry\": {\"tp\": " << tpG << ", \"fp\": " << fpG << ", \"fn\": " << fnG
+              << "}, \"vote\": {\"tp\": " << tpV << ", \"fp\": " << fpV << ", \"fn\": " << fnV << "}}";
+            holdoutJson = h.str();
+        }
+
+        // where the decision changed: connected clusters of changed triangles (joined / left), largest first
+        struct Cluster { int kind{0}; size_t tris{0}; double area{0}; V3 lo{1e300, 1e300, 1e300}, hi{-1e300, -1e300, -1e300}, c; double aboveLo{1e300}, aboveHi{-1e300}, distLo{1e300}, distHi{-1e300}; };
+        std::vector<Cluster> clusters;
+        {
+            std::vector<uint8_t> seen(F, 0);
+            std::vector<uint32_t> stack;
+            for (size_t s = 0; s < F; ++s) {
+                if (!changed[s] || seen[s]) continue;
+                Cluster cl;
+                cl.kind = changed[s] == 1 ? 1 : 2;
+                stack.assign(1, static_cast<uint32_t>(s));
+                seen[s] = 1;
+                V3 wsum{0, 0, 0};
+                while (!stack.empty()) {
+                    const uint32_t t = stack.back();
+                    stack.pop_back();
+                    const V3 a = m.P(m.idx[3 * t]), b = m.P(m.idx[3 * t + 1]), cc = m.P(m.idx[3 * t + 2]);
+                    const double ar = 0.5 * (b - a).cross(cc - a).norm();
+                    ++cl.tris;
+                    cl.area += ar;
+                    wsum = wsum + (a + b + cc) * (ar / 3.0);
+                    for (const V3* p : {&a, &b, &cc}) {
+                        cl.lo = V3{std::min(cl.lo.x, p->x), std::min(cl.lo.y, p->y), std::min(cl.lo.z, p->z)};
+                        cl.hi = V3{std::max(cl.hi.x, p->x), std::max(cl.hi.y, p->y), std::max(cl.hi.z, p->z)};
+                    }
+                    cl.aboveLo = std::min(cl.aboveLo, static_cast<double>(triAbove[t])); cl.aboveHi = std::max(cl.aboveHi, static_cast<double>(triAbove[t]));
+                    cl.distLo = std::min(cl.distLo, static_cast<double>(triDist[t])); cl.distHi = std::max(cl.distHi, static_cast<double>(triDist[t]));
+                    for (int k = 0; k < 3; ++k) {
+                        const uint32_t w = wid[rawIdx[3 * t + k]];
+                        for (uint32_t j = off[w]; j < off[w + 1]; ++j) {
+                            const uint32_t u = inc[j];
+                            if (seen[u] || !changed[u] || (changed[u] == 1) != (cl.kind == 1)) continue;
+                            seen[u] = 1;
+                            stack.push_back(u);
+                        }
+                    }
+                }
+                cl.c = cl.area > 0 ? wsum * (1.0 / cl.area) : (cl.lo + cl.hi) * 0.5;
+                clusters.push_back(cl);
+            }
+            std::sort(clusters.begin(), clusters.end(), [](const Cluster& a, const Cluster& b) { return a.area > b.area; });
+        }
+
+        // the vote of every triangle any view saw, by centroid, for scan_fit (SBOV v1: magic, version, count, then per triangle
+        // float centroid[3], float score, float weight, int8 owner, 3 pad bytes)
+        if (!P.ownershipOutPath.empty()) {
+            std::vector<uint8_t> buf;
+            auto put = [&](const void* p, size_t n) { const uint8_t* b = static_cast<const uint8_t*>(p); buf.insert(buf.end(), b, b + n); };
+            const char magic[4] = {'S', 'B', 'O', 'V'};
+            const uint32_t version = 1;
+            uint32_t count = 0;
+            for (size_t t = 0; t < F; ++t) count += votes[t].views > 0;
+            put(magic, 4); put(&version, 4); put(&count, 4);
+            for (size_t t = 0; t < F; ++t) {
+                if (votes[t].views == 0) continue;
+                const V3 a = m.P(m.idx[3 * t]), b = m.P(m.idx[3 * t + 1]), cc = m.P(m.idx[3 * t + 2]);
+                const float rec[5] = {static_cast<float>((a.x + b.x + cc.x) / 3.0), static_cast<float>((a.y + b.y + cc.y) / 3.0), static_cast<float>((a.z + b.z + cc.z) / 3.0),
+                                      votes[t].score, votes[t].weight};
+                put(rec, sizeof rec);
+                const int8_t o = static_cast<int8_t>(mask_vote::decide(votes[t], P.vote));
+                const uint8_t pad[3] = {0, 0, 0};
+                put(&o, 1); put(pad, 3);
+            }
+            if (!writeFile(P.ownershipOutPath, buf)) { res.error = "ownership: cannot write " + P.ownershipOutPath; return false; }
+        }
+        if (!P.ownershipDebugDir.empty()) writeOwnershipDebug(views, ids, masks, before, keep, changed, votes);
+
+        std::ostringstream o;
+        o << "{\"views\": " << views.size() << ", \"votingViews\": " << usedViews << ", \"maskProblems\": [";
+        bool first = true;
+        for (size_t i = 0; i < views.size(); ++i)
+            if (!maskProblem[i].empty()) { o << (first ? "" : ",") << "{\"view\": \"" << jsonEscape(views[i].name) << "\", \"problem\": \"" << jsonEscape(maskProblem[i]) << "\"}"; first = false; }
+        o << "], \"params\": {\"decisiveScore\": " << num(P.vote.decisiveScore) << ", \"minWeight\": " << num(P.vote.minWeight) << ", \"minViews\": " << P.vote.minViews
+          << ", \"edgeBlurPx\": " << P.vote.edgeBlurPx << ", \"footprintRefPx\": " << num(P.vote.footprintRefPx) << "}"
+          << ", \"eligible\": {";
+        for (int r = 0; r < 5; ++r) o << (r ? ", " : "") << "\"" << mask_vote::reasonName(r) << "\": " << byReason[r];
+        o << "}, \"notVoted\": {\"groundLevel\": " << groundLevel << ", \"beyondReach\": " << beyondReach << "}"
+          << ", \"agreesWithGeometry\": {\"kept\": " << agreeKeep << ", \"dropped\": " << agreeDrop << "}"
+          << ", \"joined\": " << added << ", \"left\": " << removed << ", \"leftAsOrphans\": " << orphanRemoved << ", \"orphanPieces\": " << orphanPieces
+          << (holdoutJson.empty() ? std::string() : ", \"holdout\": " + holdoutJson) << ", \"clusters\": [";
+        for (size_t i = 0; i < clusters.size() && i < 16; ++i) {
+            const Cluster& c = clusters[i];
+            const double bearing = std::fmod(std::atan2(c.c.x - P.anchorX, -(c.c.z - P.anchorZ)) * 180.0 / 3.14159265358979323846 + 360.0, 360.0);
+            o << (i ? "," : "") << "{\"change\": \"" << (c.kind == 1 ? "joined" : "left") << "\", \"triangles\": " << c.tris << ", \"area_m2\": " << num(c.area)
+              << ", \"centroid\": " << vec(c.c) << ", \"boundsMin\": " << vec(c.lo) << ", \"boundsMax\": " << vec(c.hi) << ", \"aboveTerrain_m\": [" << num(c.aboveLo) << "," << num(c.aboveHi)
+              << "], \"fromFootprint_m\": [" << num(c.distLo) << "," << num(c.distHi) << "], \"bearingFromAnchorDeg\": " << num(std::round(bearing))
+              << ", \"distanceFromAnchor_m\": " << num(std::hypot(c.c.x - P.anchorX, c.c.z - P.anchorZ)) << "}";
+        }
+        o << "], \"clusterCount\": " << clusters.size() << ", \"renderMs\": " << num(renderMs) << ", \"voteMs\": " << num(voteMs)
+          << ", \"ms\": " << num(std::chrono::duration<double, std::milli>(Clock::now() - t0).count()) << "}";
+        json = o.str();
+        return true;
+    }
+
+    /**
+     * Diagnostics: for up to three views (those showing the most changed triangles), one 2x2 panel: the view with its mask
+     * (red) | the vote (red = the structure, blue = something else, grey = unseen, paler = less weight) / owner by the
+     * geometric rules | owner after the vote (orange = the structure, green = joined by the vote, magenta = left by it).
+     */
+    void writeOwnershipDebug(const std::vector<OwnershipView>& views, const std::vector<std::vector<int32_t>>& ids, const std::vector<std::vector<float>>& masks,
+                             const std::vector<uint8_t>& before, const std::vector<uint8_t>& after, const std::vector<uint8_t>& changed,
+                             const std::vector<mask_vote::TriangleVote>& votes) {
+        std::filesystem::create_directories(P.ownershipDebugDir);
+        std::vector<std::pair<size_t, size_t>> rank;  // (changed pixels, view)
+        for (size_t i = 0; i < views.size(); ++i) {
+            if (masks[i].empty()) continue;
+            size_t n = 0;
+            for (int32_t t : ids[i]) n += t >= 0 && changed[static_cast<size_t>(t)];
+            rank.push_back({n, i});
+        }
+        std::stable_sort(rank.begin(), rank.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+        if (rank.size() > 3) rank.resize(3);
+        const RenderMesh rm = rawRenderMesh();
+        const math::Vec3 grey(0.62f, 0.63f, 0.66f), orange(0.98f, 0.62f, 0.22f), green(0.25f, 0.85f, 0.35f), magenta(0.95f, 0.15f, 0.75f);
+        std::vector<math::Vec3> tBefore(F), tAfter(F), tHeat(F);
+        for (size_t t = 0; t < F; ++t) {
+            tBefore[t] = (before[t] == 1 || before[t] == 2) ? orange : grey;
+            tAfter[t] = changed[t] == 1 ? green : changed[t] >= 2 ? magenta : (after[t] == 1 || after[t] == 2 || after[t] == 4) ? orange : grey;
+            const auto& v = votes[t];
+            if (v.views == 0) { tHeat[t] = math::Vec3(0.35f, 0.35f, 0.37f); continue; }
+            const float s = std::clamp(v.score, -1.0f, 1.0f), conf = static_cast<float>(std::min(1.0, v.weight / std::max(1e-9, P.vote.minWeight)));
+            const math::Vec3 hue = s >= 0 ? math::Vec3(1.0f, 1.0f - 0.85f * s, 1.0f - 0.85f * s) : math::Vec3(1.0f + 0.85f * s, 1.0f + 0.6f * s, 1.0f);
+            tHeat[t] = math::Vec3(0.8f + (hue.x - 0.8f) * conf, 0.8f + (hue.y - 0.8f) * conf, 0.8f + (hue.z - 0.8f) * conf);
+        }
+        for (const auto& [n, i] : rank) {
+            const Camera& cam = views[i].cam;
+            const int W = cam.W, H = cam.H;
+            texture::ImageBuffer img(2 * W, 2 * H, 3);
+            renderInto(rm, cam, false, img, 0, 0, nullptr, threads);
+            for (int y = 0; y < H; ++y)
+                for (int x = 0; x < W; ++x) {
+                    const float mk = masks[i][static_cast<size_t>(y) * W + x];
+                    const math::Vec3 c = img.getPixelRGB(x, y);
+                    img.setPixelRGB(x, y, mk >= 0.5f ? math::Vec3(0.55f * c.x + 0.45f, 0.55f * c.y, 0.55f * c.z) : math::Vec3(0.8f * c.x, 0.8f * c.y, 0.8f * c.z));
+                }
+            tint = &tHeat;   renderInto(rm, cam, true, img, W, 0, nullptr, threads);
+            tint = &tBefore; renderInto(rm, cam, true, img, 0, H, nullptr, threads);
+            tint = &tAfter;  renderInto(rm, cam, true, img, W, H, nullptr, threads);
+            tint = nullptr;
+            writeFile((std::filesystem::path(P.ownershipDebugDir) / (views[i].name + "_ownership.png")).string(), texture::encodePng(img));
+        }
+    }
 
     // ----------------------------------------------------------------------------------------
     // Visibility

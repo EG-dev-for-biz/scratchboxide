@@ -44,7 +44,7 @@ namespace sj = staged_glb::json;
 static void usage() {
     std::cerr <<
         "scan_fit <fit|refit|ornament|flatten> [flags]\n"
-        "  fit      --scan raw_clay.glb [--textured raw.glb] [--remesh clay.glb] --anchor x,z [--source-limits-json f.json]\n"
+        "  fit      --scan raw_clay.glb [--textured raw.glb] [--remesh clay.glb] [--ownership votes.sbov] --anchor x,z [--source-limits-json f.json]\n"
         "           [--scan-sha256 H] [--textured-sha256 H] [--scan-source TEXT] [--stage-key K] --out-dir DIR\n"
         "  refit    --fit structure_fit.json --scan raw_clay.glb --set p07:2=0.50 [--set ...] [--textured raw.glb]\n"
         "           [--remesh clay.glb] [--scan-sha256 H] [--stage-key K] --out-dir DIR\n"
@@ -145,6 +145,7 @@ struct FitRun {
     scan_fit::FitRequest request;
     scan_fit::Params params;
     std::vector<uint8_t> remesh;
+    std::vector<uint8_t> ownership;
     gltf::GltfScene textured;
 };
 
@@ -169,6 +170,10 @@ static void runFitCore(const Args& a, FitRun& run, double anchorX, double anchor
     if (a.has("remesh")) {
         run.remesh = readBytes(a.str("remesh"));
         Q.remeshGlb = &run.remesh;
+    }
+    if (a.has("ownership")) {
+        run.ownership = readBytes(a.str("ownership"));
+        Q.ownership = &run.ownership;
     }
     Q.progress = [](double f, const std::string& m) { progress(0.05 + 0.75 * f, m); };
     scan_fit::Fitter fitter(run.params, Q);

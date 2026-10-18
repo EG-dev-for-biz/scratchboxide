@@ -57,6 +57,8 @@
 #include <fstream>
 #include <cstdio>
 #include <set>
+#include <cstring>
+#include <unordered_map>
 #include <unordered_set>
 #include <sstream>
 
@@ -259,6 +261,9 @@ struct FitRequest {
     size_t inputTriangles{0};
     const std::vector<uint8_t>* remeshGlb{nullptr};
     const gltf::GltfScene* textured{nullptr};  // for the photo texel (orthos are scan_ortho's)
+    // optional multi-view mask vote of the scan's triangles (tile_refine --ownership-out, SBOV v1: per triangle its centroid in
+    // the tile frame, score, weight and owner -1 / 0 / 1): a sample on a triangle decisively voted not the structure is clutter
+    const std::vector<uint8_t>* ownership{nullptr};
     std::function<void(double, const std::string&)> progress;  // 0..1 and a message, after each step
 };
 
@@ -288,6 +293,9 @@ struct FitResult {
     size_t verticesOut{0}, trianglesOut{0};
     double unobservedArea{0};
     std::vector<std::string> notes;
+    // the multi-view mask vote, when one was given: scan triangles matched, voted the structure / not it, and the area of
+    // samples left out as not the structure
+    struct Ownership { bool used{false}; size_t voted{0}, structure{0}, other{0}; double otherAreaM2{0}; } ownership;
 };
 
 // ============================================================================================
@@ -987,7 +995,61 @@ private:
             const double out = std::max(ox, oz);
             if (!sGround[i] && ((out > 2.5 && hgt < 4.0) || (out > 0.3 && hgt < 0.5))) sGround[i] = 2;  // apron clutter
         }
+        applyOwnershipVote();
     }
+
+    // per scan triangle: the multi-view mask vote (-1 not the structure, 0 undecided or none, 1 the structure)
+    std::vector<int8_t> triOwner;
+    /**
+     * The vote is matched to the scan's triangles by centroid (1 mm lattice: the scan is tile_refine's isolated raw scan, the
+     * same triangles). A sample on a triangle voted not the structure becomes clutter (sGround 3): it is not fitted, not a
+     * leftover and not measured, like the apron clutter. Undecided triangles keep the geometric rules.
+     */
+    void applyOwnershipVote() {
+        const auto& s = R.scan;
+        triOwner.assign(s.triangles(), 0);
+        if (!Q.ownership || Q.ownership->size() < 12 || std::memcmp(Q.ownership->data(), "SBOV", 4) != 0) return;
+        uint32_t count = 0;
+        std::memcpy(&count, Q.ownership->data() + 8, 4);
+        if (Q.ownership->size() < 12 + static_cast<size_t>(count) * 24) { R.notes.push_back("the multi-view mask vote file is truncated: not used"); return; }
+        auto key = [](double x, double y, double z) {
+            auto q = [](double v) { return static_cast<uint64_t>(std::llround(v * 1000.0) + (1LL << 20)) & 0x1FFFFFull; };
+            return q(x) | (q(y) << 21) | (q(z) << 42);
+        };
+        std::unordered_map<uint64_t, int8_t> byCentroid;
+        byCentroid.reserve(count);
+        for (uint32_t k = 0; k < count; ++k) {
+            const uint8_t* r = Q.ownership->data() + 12 + static_cast<size_t>(k) * 24;
+            float c[3];
+            std::memcpy(c, r, 12);
+            byCentroid[key(c[0], c[1], c[2])] = static_cast<int8_t>(r[20]);
+        }
+        size_t matched = 0, target = 0, other = 0;
+        for (size_t t = 0; t < s.triangles(); ++t) {
+            const Vec3& a = s.pos[s.tri[3 * t]], & b = s.pos[s.tri[3 * t + 1]], & c = s.pos[s.tri[3 * t + 2]];
+            // the same float arithmetic as the writer: double sums of the float coordinates, divided by 3, rounded to float
+            const float cx = static_cast<float>((double(a.x) + b.x + c.x) / 3.0), cy = static_cast<float>((double(a.y) + b.y + c.y) / 3.0), cz = static_cast<float>((double(a.z) + b.z + c.z) / 3.0);
+            const auto it = byCentroid.find(key(cx, cy, cz));
+            if (it == byCentroid.end()) continue;
+            ++matched;
+            triOwner[t] = it->second;
+            target += it->second > 0;
+            other += it->second < 0;
+        }
+        double otherArea = 0;
+        size_t samples = 0;
+        for (size_t i = 0; i < S.size(); ++i) {
+            if (triOwner[S[i].tri] >= 0 || sGround[i]) continue;
+            sGround[i] = 3;
+            otherArea += S[i].w;
+            ++samples;
+        }
+        ownershipOtherArea = otherArea;
+        R.ownership = {true, matched, target, other, otherArea};
+        R.notes.push_back("multi-view mask vote: " + std::to_string(matched) + " of " + std::to_string(s.triangles()) + " scan triangles carry a vote (" + std::to_string(target) +
+                          " the structure, " + std::to_string(other) + " not it); " + sj::num(std::round(otherArea * 100) / 100) + " m2 voted not the structure is left out of the fit as clutter");
+    }
+    double ownershipOtherArea{0};
 
     // ---------------------------------------------------------------- 4-6. bands, footprints, passages, columns
     sg::Raster gridProto;       // cell layout
@@ -2801,6 +2863,15 @@ private:
             }
             pr.reason = passWhy[i];
             pr.test = passTest[i];
+            if (!triOwner.empty() && Q.ownership) {
+                // what the multi-view mask vote says about the region (area shares of its samples' triangles)
+                double tgt = 0, und = 0, all = 0;
+                for (uint32_t k : passSlabs[i]) { all += S[k].w; (triOwner[S[k].tri] > 0 ? tgt : und) += S[k].w; }
+                if (all > 0) {
+                    pr.test["voteStructureShare"] = tgt / all;
+                    pr.reason += tgt / all >= 0.5 ? " (the multi-view mask vote puts it on the structure)" : " (the multi-view mask vote does not decide it: the geometric rule keeps it)";
+                }
+            }
             R.pass.push_back(std::move(pr));
         }
     }
@@ -3349,6 +3420,12 @@ inline std::string structureFitJson(const FitResult& R, const FitRequest& Q, con
         if (!Q.texturedSha256.empty()) in.s("texturedSha256", Q.texturedSha256);
         in.raw("anchor", "[" + sj::num(Q.anchorX) + "," + sj::num(Q.anchorZ) + "]");
         if (!Q.refitOf.empty()) in.s("refitOf", Q.refitOf);
+        if (R.ownership.used) {
+            sj::Object ow;
+            ow.i("votedTriangles", static_cast<long long>(R.ownership.voted)).i("structureTriangles", static_cast<long long>(R.ownership.structure))
+                .i("otherTriangles", static_cast<long long>(R.ownership.other)).n("otherAreaM2", R.ownership.otherAreaM2);
+            in.raw("ownership", ow.text());
+        }
         o.raw("input", in.text());
     }
     o.raw("frame", frameJson(R.frame));

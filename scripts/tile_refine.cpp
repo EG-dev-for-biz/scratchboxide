@@ -21,6 +21,7 @@
 #include "scratchbox_tile_refine.hpp"
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -48,6 +49,16 @@ static void usage() {
         "  --below-ground-margin M isolate: clip surfaces more than M below the terrain (default 0.3; < 0: off)\n"
         "  --interior-inset M      isolate: drop upward-facing floors at least M inside the footprint under the top (default 2.5; < 0: off)\n"
         "  --out-raw-clay PATH     also write the (isolated) raw scan, unmodified, as studio clay\n"
+        "  --ownership-render DIR  isolate: write registered views around the structure the geometric rules found (views.txt,\n"
+        "                          <name>.png: the scan's texture) for segmentation into DIR, and stop\n"
+        "  --ownership-masks DIR   isolate: multi-view mask voting from DIR (views.txt + <name>.mask.png, 255 = the requested\n"
+        "                          structure): a decisive vote decides a raised triangle's membership; undecided ones keep the\n"
+        "                          geometric rules\n"
+        "  --ownership-out PATH    with --ownership-masks: the vote of every kept triangle by centroid (SBOV) for scan_fit\n"
+        "  --ownership-debug DIR   with --ownership-masks: owner-coloured renders before / after and a vote heat map\n"
+        "  --vote-score S          decisive |score| (default 0.5)   --vote-min-weight W (default 0.75)   --vote-min-views N (default 2)\n"
+        "  --ownership-holdout K   with --ownership-masks: every K-th view casts no vote and scores both decisions (diagnostic)\n"
+        "  --ownership-size WxH    render mode: view size (default 1024x768)\n"
         "  --roi-radius M          relief region of interest: the anchor's footprint grown by M (default 60; <0 = whole tile)\n"
         "  --no-relief             skip the photometric relief (rectified scan only)\n"
         "  --relief-own-regions    relief: grow its own facade regions instead of using the detected wall planes\n"
@@ -108,6 +119,21 @@ int main(int argc, char** argv) {
         else if (a == "--below-ground-margin") p.isolateBelowGroundMargin = num();
         else if (a == "--interior-inset") p.isolateInteriorInset = num();
         else if (a == "--out-raw-clay") p.rawClayPath = next();
+        else if (a == "--ownership-render") p.ownershipRenderDir = next();
+        else if (a == "--ownership-masks") p.ownershipMasksDir = next();
+        else if (a == "--ownership-out") p.ownershipOutPath = next();
+        else if (a == "--ownership-debug") p.ownershipDebugDir = next();
+        else if (a == "--vote-score") p.vote.decisiveScore = num();
+        else if (a == "--vote-min-weight") p.vote.minWeight = num();
+        else if (a == "--vote-min-views") p.vote.minViews = static_cast<int>(num());
+        else if (a == "--ownership-holdout") p.ownershipHoldout = static_cast<int>(num());
+        else if (a == "--ownership-size") {
+            const std::string v = next();
+            if (std::sscanf(v.c_str(), "%dx%d", &p.ownershipViewWidth, &p.ownershipViewHeight) != 2 || p.ownershipViewWidth < 16 || p.ownershipViewHeight < 16) {
+                std::cerr << "--ownership-size expects WxH\n";
+                return 2;
+            }
+        }
         else if (a == "--no-relief") p.relief = false;
         else if (a == "--relief-own-regions") p.reliefOnWallPlanes = false;
         else if (a == "--flatten-band") p.flatten.band = num();
@@ -134,7 +160,8 @@ int main(int argc, char** argv) {
         else if (a == "--help" || a == "-h") { usage(); return 0; }
         else { std::cerr << "unknown argument " << a << "\n"; usage(); return 2; }
     }
-    if (input.empty() || (outTextured.empty() && outClay.empty())) { usage(); return 2; }
+    if (input.empty() || (outTextured.empty() && outClay.empty() && p.ownershipRenderDir.empty())) { usage(); return 2; }
+    if ((!p.ownershipRenderDir.empty() || !p.ownershipMasksDir.empty()) && !p.isolate) { std::cerr << "--ownership-render / --ownership-masks need --isolate\n"; return 2; }
     if (!(p.reliefParams.maxDepth >= 0)) { std::cerr << "--relief-max-depth must be >= 0\n"; return 2; }
     if (!(p.isolateApron >= 0) || !(p.isolateReach >= 0) || !std::isfinite(p.isolateMinHeight)) {
         std::cerr << "--apron and --isolate-reach must be >= 0, --isolate-min-height finite\n";

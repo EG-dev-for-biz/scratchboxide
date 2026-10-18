@@ -295,6 +295,7 @@ export class ScanFitService {
         const scan = this.input(req.scanGlb, 'scanGlb', '.glb');
         const textured = req.texturedGlb ? this.input(req.texturedGlb, 'texturedGlb', '.glb') : undefined;
         const remesh = req.remeshGlb ? this.input(req.remeshGlb, 'remeshGlb', '.glb') : undefined;
+        const votes = req.ownershipVotes ? this.input(req.ownershipVotes, 'ownershipVotes', '.sbov') : undefined;
         const a = req.anchor;
         if (!a || !Number.isFinite(a.x) || !Number.isFinite(a.z)) throw new ScanFitError('input_unreadable', 'anchor must be finite metres { x, z } in the tile frame');
         const limits = req.sourceLimits;
@@ -304,16 +305,17 @@ export class ScanFitService {
         const texturedSha = textured ? fileSha256(textured) : '';
         const remeshSha = remesh ? fileSha256(remesh) : '';
         const key = crypto.createHash('sha256').update(CACHE_VERSION).update('\0fit\0').update(engine.sha)
-            .update(JSON.stringify([scanSha, texturedSha, remeshSha, [a.x, a.z], limits.leafGeometricErrorM, limits.texelM])).digest('hex');
+            .update(JSON.stringify([scanSha, texturedSha, remeshSha, [a.x, a.z], limits.leafGeometricErrorM, limits.texelM, ...(votes ? [fileSha256(votes)] : [])])).digest('hex');
         const res = await this.cached(key, ['structure_fit.json', 'fitted.glb', 'outlines.glb'], req, async (dir, signal) => {
             fs.writeFileSync(path.join(dir, 'source_limits.json'), JSON.stringify({ leafGeometricErrorM: limits.leafGeometricErrorM, ...(limits.texelM ? { texelM: limits.texelM } : {}) }));
             const args = ['fit', '--scan', scan, '--anchor', `${a.x},${a.z}`, '--source-limits-json', path.join(dir, 'source_limits.json'), '--scan-sha256', scanSha,
                 '--scan-source', path.basename(scan), '--stage-key', key, '--out-dir', dir];
             if (textured) args.push('--textured', textured, '--textured-sha256', texturedSha);
             if (remesh) args.push('--remesh', remesh);
+            if (votes) args.push('--ownership', votes);
             await runCli(engine.bin, args, req.timeoutMs ?? this.defaultTimeoutMs, req.onProgress, signal);
             // what a refit needs again (the inputs it re-reads)
-            fs.writeFileSync(path.join(dir, 'inputs.json'), JSON.stringify({ scan, textured, remesh, anchor: [a.x, a.z], leafGeometricErrorM: limits.leafGeometricErrorM, texelM: limits.texelM ?? null, scanSha256: scanSha }));
+            fs.writeFileSync(path.join(dir, 'inputs.json'), JSON.stringify({ scan, textured, remesh, ...(votes ? { ownership: votes } : {}), anchor: [a.x, a.z], leafGeometricErrorM: limits.leafGeometricErrorM, texelM: limits.texelM ?? null, scanSha256: scanSha }));
             this.readContract<StructureFit>(path.join(dir, 'structure_fit.json'), 'StructureFit');
         }, dir => this.absoluteOutputs(this.readContract<StructureFit>(path.join(dir, 'structure_fit.json'), 'StructureFit'), dir));
         return this.envelope(res.value, res.dir, 'structure_fit.json', key, engine, res.cached, t0);
@@ -341,6 +343,7 @@ export class ScanFitService {
             for (const s of set) args.push('--set', s);
             if (typeof inputs.textured === 'string' && fs.existsSync(inputs.textured)) args.push('--textured', inputs.textured, '--textured-sha256', fileSha256(inputs.textured));
             if (typeof inputs.remesh === 'string' && fs.existsSync(inputs.remesh)) args.push('--remesh', inputs.remesh);
+            if (typeof inputs.ownership === 'string' && fs.existsSync(inputs.ownership)) args.push('--ownership', inputs.ownership);
             await runCli(engine.bin, args, req.timeoutMs ?? this.defaultTimeoutMs, req.onProgress, signal);
             fs.writeFileSync(path.join(dir, 'inputs.json'), JSON.stringify(inputs));
             this.readContract<StructureFit>(path.join(dir, 'structure_fit.json'), 'StructureFit');

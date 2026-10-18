@@ -73,6 +73,7 @@ import { glbMeshCounts, plantTrees, summarizeTrees, type LocationClayTrees } fro
 import { TileVegetationError, type TileVegetationPlantRequest, type TileVegetationPlantResult, type TileVegetationStripRequest, type TileVegetationStripResult } from '../tile-vegetation-service';
 import type { TileRefineRequest, TileRefineResult } from '../tile-refine-service';
 import { VisionModelChain, type VisionGenAIClient } from '../../gemini/vision-model-chain';
+import { segmentOwnershipViews } from './ownership-masks';
 import { loadScanMesh, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
 import { readGlbScene, sceneToRenderMesh } from '../../spatial/StreetViewPoseRegistrar';
 import type { RenderMesh3D } from '../../spatial/HeadlessMeshSilhouetteRenderer';
@@ -253,7 +254,11 @@ export interface StagedLocationDeps {
         /** tile_vegetation's canopy classifier; absent until the engine has it. */
         canopy?(req: { tilePath: string; cellM?: number; signal?: AbortSignal }): Promise<{ mask: CanopyMask; cached: boolean; ms: number }>;
     };
-    refine: { refine(req: TileRefineRequest): Promise<TileRefineResult> };
+    refine: {
+        refine(req: TileRefineRequest): Promise<TileRefineResult>;
+        /** Registered views of the tile around the structure the geometric isolate finds, for the multi-view mask vote. */
+        renderOwnershipViews?(req: Pick<TileRefineRequest, 'tilePath' | 'anchor' | 'isolate'>): Promise<{ dir: string; views: string[]; cached: boolean; ms: number }>;
+    };
     /** The scan fitter; absent until the engine has it (then the rebuild stages degrade and say so). */
     scanFit?: ScanFitDeps;
     /** Why scanFit is absent (shown to the user). */
@@ -1688,9 +1693,35 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             id: 'remesh',
             run: async io => {
                 io.progress(isolateMode ? 'remeshing the structure' : 'remeshing the district');
+                const tilePath = strip ? strip.devegetatedGlb : extraction.texturedGlb;
+                // object ownership: outlines of the requested structure in registered views of the tile, voted onto its triangles
+                let ownership: { masksDir: string } | undefined;
+                let ownershipRec: DegradationRecord | undefined;
+                if (isolateMode && deps.refine.renderOwnershipViews) {
+                    if (!visionAvailable) {
+                        run.note(PROVENANCE.remeshed, 'object ownership: the geometric rules alone (footprint and connectivity) decide what belongs to the structure: no vision model is configured for the multi-view mask vote');
+                    } else {
+                        try {
+                            io.progress('rendering views of the structure for the ownership vote');
+                            const views = await deps.refine.renderOwnershipViews({ tilePath, isolate: true, anchor: { x: structure!.seed.x, z: structure!.seed.z } });
+                            const masksDir = path.join(views.dir, `masks_${crypto.createHash('sha256').update(request.query.trim()).digest('hex').slice(0, 16)}`);
+                            const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...chainExtras('remesh'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
+                            const seg = await segmentOwnershipViews({ viewsDir: views.dir, masksDir, target: request.query.trim(), chain, concurrency: 6, onProgress: m => io.progress(m) });
+                            if (seg.masks < 2) throw new Error(`only ${seg.masks} of ${seg.views} views got a usable outline (${seg.skipped.slice(0, 3).map(x => `${x.view}: ${x.reason}`).join('; ')})`);
+                            ownership = { masksDir };
+                            run.note(PROVENANCE.remeshed, `object ownership: ${seg.model ?? 'the vision model'} outlined the structure in ${seg.masks} of ${seg.views} views of the tile; the multi-view vote decides the raised triangles near it, the geometric rules the rest`);
+                        } catch (err) {
+                            ownershipRec = run.degrade(record('remesh', 'ownership_vote_unavailable', {
+                                part: { description: 'what belongs to the structure' }, intended: 'object ownership by multi-view mask voting', fellTo: 'the structure as the geometric rules isolate it (footprint and connectivity)',
+                                provenanceAfter: PROVENANCE.remeshed, reason: `the multi-view mask vote could not be made (${errorMessage(err)})`, cause: err, transient: false, runId, now: now()
+                            }));
+                        }
+                    }
+                }
                 const r = await deps.refine.refine({
-                    tilePath: strip ? strip.devegetatedGlb : extraction.texturedGlb,
+                    tilePath,
                     ...(isolateMode ? { isolate: true, anchor: { x: structure!.seed.x, z: structure!.seed.z } } : {}),
+                    ...(ownership ? { ownership } : {}),
                     ...((request.relief ?? TILE_REFINE_RELIEF_DEFAULT) === false ? { relief: false } : {})
                 });
                 run.keys.remesh = r.cacheKey;
@@ -1728,8 +1759,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     extra: { rawGlbPath: extraction.rawGlbPath ?? extraction.texturedGlb, treesRemoved: Number(strip?.stats?.triangles?.removed ?? 0) > 0 }
                 });
                 run.setGround(layer.objectId);
-                const degradations: DegradationRecord[] = [];
-                let status: 'committed' | 'degraded' = 'committed';
+                const degradations: DegradationRecord[] = ownershipRec ? [ownershipRec] : [];
+                let status: 'committed' | 'degraded' = ownershipRec ? 'degraded' : 'committed';
                 if (isolateMode) {
                     if (!r.rawClayGlb) {
                         degradations.push(run.degrade(record('remesh', 'isolate_mismatch', {
@@ -1976,6 +2007,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (negative) throw Object.assign(new Error(negative.message), { code: negative.code, cachedNegative: true });
                     const r = await deps.scanFit!.fit({
                         scanGlb: remeshed.rawClayGlb!, texturedGlb: extraction.texturedGlb, remeshGlb: remeshed.clayGlb, anchor: structure!.seed,
+                        ...(remeshed.ownershipVotes ? { ownershipVotes: remeshed.ownershipVotes } : {}),
                         sourceLimits: out.sourceLimits!, signal: io.signal, onProgress: (f, m) => io.progress(`scan_fit: ${m}`, f), timeoutMs: STAGES.fit.budgetMs
                     });
                     run.cacheStatus.fit = r.cached ? 'hit' : 'miss';
