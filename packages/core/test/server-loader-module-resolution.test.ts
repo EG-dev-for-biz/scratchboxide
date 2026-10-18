@@ -22,6 +22,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
 import { cylinderMesh, readGlbJson, writeFixtureGlb } from './helpers/mesh-glb-fixtures';
+import { decodePng } from './helpers/png-decode';
 
 const REPO = path.resolve(__dirname, '../../..');
 /**
@@ -88,9 +89,21 @@ describe('code the API server loads through ts-node (CommonJS)', () => {
 import { pbrMaterialHandlers } from ${JSON.stringify(path.join(REPO, 'packages/core/src/node/gemini/tools/pbr-material-tools'))};
 (async () => {
     const r = await pbrMaterialHandlers.pbr_synthesize_material({
-        targetMeshPath: ${JSON.stringify(mesh)}, outputDir: ${JSON.stringify(work)}, resolution: '1K'
+        targetMeshPath: ${JSON.stringify(mesh)}, outputDir: ${JSON.stringify(work)}, resolution: '1K', archetype: 'corten_steel'
     }, {} as any);
-    console.log('RESULT ' + JSON.stringify({ status: (r as any).status, summary: String((r as any).summaryResult).slice(0, 300) }));
+    console.log('RESULT ' + JSON.stringify({ status: (r as any).status, summary: String((r as any).summaryResult).slice(0, 3000) }));
+    const x = await pbrMaterialHandlers.pbr_synthesize_material({
+        targetMeshPath: ${JSON.stringify(mesh)}, outputDir: ${JSON.stringify(path.join(work, 'mtlx'))}, resolution: '1K', format: 'materialx'
+    }, {} as any);
+    console.log('MTLX ' + JSON.stringify((x as any).resultPayload.outputFiles));
+    const u = await pbrMaterialHandlers.pbr_synthesize_material({
+        targetMeshPath: ${JSON.stringify(mesh)}, outputDir: ${JSON.stringify(path.join(work, 'usdz'))}, resolution: '1K', format: 'usdz'
+    }, {} as any);
+    console.log('USDZ ' + JSON.stringify((u as any).resultPayload.outputFiles));
+    const bad = await pbrMaterialHandlers.pbr_synthesize_material({
+        targetMeshPath: ${JSON.stringify(mesh)}, outputDir: ${JSON.stringify(path.join(work, 'bad'))}, resolution: '1K', archetype: 'cor_ten_steel'
+    }, {} as any).then(() => 'no error', e => e.name + ': ' + e.message.slice(0, 200));
+    console.log('BAD ' + JSON.stringify(bad));
 })().catch(e => { console.log('THREW ' + (e && e.message)); process.exit(1); });
 `);
         const tsNode = path.join(REPO, 'node_modules/.bin/ts-node');
@@ -110,5 +123,76 @@ import { pbrMaterialHandlers } from ${JSON.stringify(path.join(REPO, 'packages/c
         expect(json.images.every((i: any) => i.mimeType === 'image/png')).toBe(true);
         expect(fs.readFileSync(path.join(work, outGlb!)).equals(fs.readFileSync(mesh)), 'the output is not the input').toBe(false);
         expect(out).toMatch(/RESULT \{[^\n]*box_projection_uv/);
+        expect(out, 'the texture set came from the native kernel').toMatch(/RESULT \{[^\n]*corten_steel 1024px via native-cpp20/);
+
+        // The primitive samples a real baseColor image through real UVs: decode it from the GLB's BIN chunk
+        const glb = fs.readFileSync(path.join(work, outGlb!));
+        const jsonLen = glb.readUInt32LE(12);
+        const bin = glb.subarray(20 + jsonLen + 8);
+        const prim = json.meshes[0].primitives[0];
+        expect(prim.attributes.TEXCOORD_0, 'the textured primitive has UVs').toBeDefined();
+        const uvAcc = json.accessors[prim.attributes.TEXCOORD_0];
+        expect(uvAcc.count).toBe(json.accessors[prim.attributes.POSITION].count);
+        const decodeImage = (imageIndex: number) => {
+            const bv = json.bufferViews[json.images[imageIndex].bufferView];
+            return decodePng(bin.subarray(bv.byteOffset ?? 0, (bv.byteOffset ?? 0) + bv.byteLength));
+        };
+        const albedo = decodeImage(json.textures[material.pbrMetallicRoughness.baseColorTexture.index].source);
+        expect([albedo.width, albedo.height]).toEqual([1024, 1024]);
+        const distinct = (png: { pixels: Uint8Array; channels: number }) => {
+            const seen = new Set<number>();
+            for (let i = 0; i < png.pixels.length; i += png.channels) seen.add(png.pixels[i] << 16 | png.pixels[i + 1] << 8 | png.pixels[i + 2]);
+            return seen.size;
+        };
+        // The kernel's albedo varies only a few levels for this archetype (its character is in the normal / height); still not a flat fill
+        expect(distinct(albedo), 'the albedo is not a flat fill').toBeGreaterThan(4);
+        const normal = decodeImage(json.textures[material.normalTexture.index].source);
+        expect(distinct(normal), 'the normal map carries relief').toBeGreaterThan(200);
+
+        // MaterialX and USDZ companions exist and their PNGs decode
+        const line = (tag: string) => JSON.parse(out.split('\n').find(l => l.startsWith(tag + ' '))!.slice(tag.length + 1));
+        const mtlxFiles = line('MTLX');
+        const mtlx = fs.readFileSync(mtlxFiles.materialx, 'utf8');
+        for (const k of ['albedo', 'normal', 'orm']) {
+            expect(mtlx).toContain(path.basename(mtlxFiles[k]));
+            const png = decodePng(fs.readFileSync(mtlxFiles[k]));
+            expect([png.width, png.height], k).toEqual([1024, 1024]);
+        }
+        const usdz = fs.readFileSync(line('USDZ').usdz);
+        const entries = readStoredZip(usdz);
+        expect(Object.keys(entries)).toEqual(expect.arrayContaining(['material.usda', 'textures/albedo.png', 'textures/normal.png', 'textures/orm.png']));
+        for (const name of ['textures/albedo.png', 'textures/normal.png', 'textures/orm.png']) {
+            expect(decodePng(entries[name]).width, name).toBe(1024);
+            expect(entries['material.usda'].toString('utf8')).toContain(name);
+        }
+        const referenced = [...entries['material.usda'].toString('utf8').matchAll(/@([^@]+)@/g)].map(m => m[1]);
+        expect(referenced.length).toBeGreaterThanOrEqual(3);
+        for (const ref of referenced) expect(entries[ref], `the usda references ${ref}, which the archive must contain`).toBeDefined();
+
+        // An unknown archetype is a typed error listing the valid keys, also through this loader
+        expect(line('BAD')).toMatch(/^PbrUnknownArchetypeError: .*cor_ten_steel.*Valid archetypes: indiana_limestone/);
+        expect(fs.existsSync(path.join(work, 'bad', 'cylinder_adaptive_pbr.glb'))).toBe(false);
     }, 300_000);
 });
+
+/** Entries of a ZIP whose members are STORED (method 0), as USDZ requires; read from the central directory. */
+function readStoredZip(zip: Buffer): Record<string, Buffer> {
+    const eocd = zip.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+    expect(eocd, 'zip end-of-central-directory').toBeGreaterThanOrEqual(0);
+    const count = zip.readUInt16LE(eocd + 10);
+    let p = zip.readUInt32LE(eocd + 16);
+    const out: Record<string, Buffer> = {};
+    for (let i = 0; i < count; i++) {
+        expect(zip.readUInt32LE(p)).toBe(0x02014b50);
+        const method = zip.readUInt16LE(p + 10);
+        const size = zip.readUInt32LE(p + 20);
+        const nameLen = zip.readUInt16LE(p + 28), extraLen = zip.readUInt16LE(p + 30), commentLen = zip.readUInt16LE(p + 32);
+        const local = zip.readUInt32LE(p + 42);
+        const name = zip.toString('utf8', p + 46, p + 46 + nameLen);
+        expect(method, `${name} is stored uncompressed`).toBe(0);
+        const dataStart = local + 30 + zip.readUInt16LE(local + 26) + zip.readUInt16LE(local + 28);
+        out[name] = zip.subarray(dataStart, dataStart + size);
+        p += 46 + nameLen + extraLen + commentLen;
+    }
+    return out;
+}
