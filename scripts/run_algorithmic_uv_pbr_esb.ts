@@ -6,7 +6,7 @@ async function main() {
   const inputGlbPath = path.resolve(__dirname, '../public/models/spce_scan_studio_raw_tile.glb');
   const outputGlbPath = path.resolve(__dirname, '../public/models/nyc_empire_state_building_pbr_enhanced.glb');
 
-  console.log('[Algorithmic UV Engine] Processing ESB model with NOAA solar inverse delighting, Toksvig AA & KHR extensions...');
+  console.log('[Algorithmic UV Engine] Processing ESB model with Toksvig AA & KHR extensions...');
   const t0 = Date.now();
   const result = await AlgorithmicUvEngine.processGlb({
     inputGlbPath,
@@ -14,15 +14,7 @@ async function main() {
     mode: 'preserve-100-lock',
     pbrDecomposition: {
       enableAlbedoDeLighting: true,
-      enableSolarInverseDelighting: true,
-      solarDelighting: {
-        latitude: 40.74844,
-        longitude: -73.98566,
-        timestampIso: '2024-06-21T17:00:00Z',
-        regularizationEpsilon: 0.18,
-        directWeight: 0.65,
-        ambientWeight: 0.35
-      },
+      // No solar de-lighting: the capture instant of the tile imagery is not known, and no date is assumed.
       enableHeightStratifiedDeLighting: true,
       enableMultiFrequencyNormals: true,
       enableBiophysicalRoughness: true,
