@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { mapLimit } from '../../common/map-limit';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { GltfBinaryPacker } from '../3d-engine/gltf-binary-packer';
@@ -18,10 +19,11 @@ import {
     wgs84ToLocalEnu,
     latLngToTile,
     EarClippingTriangulator,
-    getCachedLocalTangentPlane
+    getCachedLocalTangentPlane,
+    VECTOR_TILE_FETCH_CONCURRENCY
 } from './GoogleVectorTileService';
 import { fetchSolarDsm, type DsmRaster } from './solar-dsm';
-import { densifyRoads, fuseBuilding, streetLevelNear, type LngLat } from './building-shape-fusion';
+import { densifyRoads, fuseBuilding, RoadPointIndex, streetLevelNear, type LngLat } from './building-shape-fusion';
 
 export interface EnuPoint {
     x: number;
@@ -581,18 +583,16 @@ export class VectorWorldPopulatorService {
             roads: []
         };
 
-        let tilesCount = 0;
-        for (let dx = -radius; dx <= radius; dx++) {
-            for (let dy = -radius; dy <= radius; dy++) {
-                const tx = centerTile.x + dx;
-                const ty = centerTile.y + dy;
-                tilesCount++;
-                const tileData = await GoogleVectorTileService.fetchVectorTile(tx, ty, zoom, apiKey, fetchImpl);
-                mergedDecoded.buildings.push(...tileData.buildings);
-                mergedDecoded.roads.push(...tileData.roads);
-                mergedDecoded.water.push(...tileData.water);
-                mergedDecoded.landuse.push(...tileData.landuse);
-            }
+        const tileXY: Array<[number, number]> = [];
+        for (let dx = -radius; dx <= radius; dx++) for (let dy = -radius; dy <= radius; dy++) tileXY.push([centerTile.x + dx, centerTile.y + dy]);
+        const tilesCount = tileXY.length;
+        // Tiles are fetched in parallel (bounded) and merged in grid order, so the output matches a sequential loop.
+        const fetched = await mapLimit(tileXY, VECTOR_TILE_FETCH_CONCURRENCY, ([tx, ty]) => GoogleVectorTileService.fetchVectorTile(tx, ty, zoom, apiKey, fetchImpl));
+        for (const tileData of fetched) {
+            mergedDecoded.buildings.push(...tileData.buildings);
+            mergedDecoded.roads.push(...tileData.roads);
+            mergedDecoded.water.push(...tileData.water);
+            mergedDecoded.landuse.push(...tileData.landuse);
         }
 
         // Measured surface (Solar DSM) fused with the vector data, exactly as stage_3d_vector_world does: street
@@ -608,7 +608,7 @@ export class VectorWorldPopulatorService {
                 fusionSkipped = err?.message || String(err);
             }
         } else fusionSkipped = 'disabled';
-        const roadPoints: LngLat[] = dsm ? densifyRoads(mergedDecoded.roads.map(r => r.points as LngLat[])) : [];
+        const roadPoints = new RoadPointIndex(dsm ? densifyRoads(mergedDecoded.roads.map(r => r.points as LngLat[])) : []);
         const measuredAnchor = dsm ? streetLevelNear(dsm, options.latitude, options.longitude, roadPoints, 80) : undefined;
         const anchorElevation = options.elevation ?? measuredAnchor ?? 0.0;
 

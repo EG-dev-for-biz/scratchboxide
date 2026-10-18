@@ -22,8 +22,10 @@ import {
     mvtPointToLatLng,
     DecodedVectorTileData,
     VectorFeaturePolygon,
-    VectorFeatureLine
+    VectorFeatureLine,
+    VECTOR_TILE_FETCH_CONCURRENCY
 } from './GoogleVectorTileService';
+import { mapLimit } from '../../common/map-limit';
 import { LocalTangentPlane, Vec3 } from '../../common/coordinate/LocalTangentPlane';
 import { SpatialAssetVaultService } from './SpatialAssetVaultService';
 
@@ -284,18 +286,17 @@ export class SpatialVectorDataService {
             pois: []
         };
 
-        for (let dx = -radiusTiles; dx <= radiusTiles; dx++) {
-            for (let dy = -radiusTiles; dy <= radiusTiles; dy++) {
-                const tx = centerTile.x + dx;
-                const ty = centerTile.y + dy;
-                const tile = await GoogleVectorTileService.fetchVectorTile(tx, ty, zoom, apiKey, fetchImpl);
-                rawData.buildings.push(...tile.buildings);
-                rawData.roads.push(...tile.roads);
-                rawData.landuse.push(...tile.landuse);
-                rawData.water.push(...tile.water);
-                if (tile.pois) {
-                    rawData.pois?.push(...tile.pois);
-                }
+        const tileXY: Array<[number, number]> = [];
+        for (let dx = -radiusTiles; dx <= radiusTiles; dx++) for (let dy = -radiusTiles; dy <= radiusTiles; dy++) tileXY.push([centerTile.x + dx, centerTile.y + dy]);
+        // Tiles are fetched in parallel (bounded) and merged in grid order, so the output matches a sequential loop.
+        const fetchedTiles = await mapLimit(tileXY, VECTOR_TILE_FETCH_CONCURRENCY, ([tx, ty]) => GoogleVectorTileService.fetchVectorTile(tx, ty, zoom, apiKey, fetchImpl));
+        for (const tile of fetchedTiles) {
+            rawData.buildings.push(...tile.buildings);
+            rawData.roads.push(...tile.roads);
+            rawData.landuse.push(...tile.landuse);
+            rawData.water.push(...tile.water);
+            if (tile.pois) {
+                rawData.pois?.push(...tile.pois);
             }
         }
 

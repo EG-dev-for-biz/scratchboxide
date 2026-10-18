@@ -36,6 +36,7 @@ import { LocalTangentPlane } from '../../common/coordinate/LocalTangentPlane';
 import { fetchStreetViewPanoMetadata } from './StreetViewPanoramaProjectionService';
 import { StreetViewRestyleService } from './StreetViewRestyleService';
 import { frameCamera, renderFrameDepth, streetViewForward, ZERO_CORRECTION, readGlbScene, sceneToRenderMesh, readJpegSize, type FrameCamera } from './StreetViewPoseRegistrar';
+import { mapLimit } from '../../common/map-limit';
 
 const DEG = Math.PI / 180;
 
@@ -552,16 +553,6 @@ export function streetSamplePoints(scan: ScanMesh, ground: GroundModel, hero: He
         }
     }
     return pts;
-}
-
-async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, i: number) => Promise<R>): Promise<R[]> {
-    const out: R[] = new Array(items.length);
-    let next = 0;
-    const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
-        while (next < items.length) { const i = next++; out[i] = await fn(items[i], i); }
-    });
-    await Promise.all(workers);
-    return out;
 }
 
 export async function discoverPanos(scan: ScanMesh, ground: GroundModel, hero: HeroModel, opts: DiscoveryOptions): Promise<{ panos: PanoRecord[]; samplePoints: number; metadataCalls: number; cachedCalls: number; rejectedCopyright: number; rejectedOld: number }> {
