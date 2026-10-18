@@ -1482,7 +1482,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     }
                     // within the stage's own limit (the layers come first): what is left of it, less a margin, is the measurement's
                     const looDeadline = started + STAGES.textures.budgetMs - TEXTURE_LOO_MARGIN_MS;
-                    for (const o of outcomes) {
+                    // layers the rectified photo tier wrote come first (their fit is the one in question), then the others in order
+                    for (const o of [...outcomes.filter(x => (x.out.photoTier?.texelShare ?? 0) > 0), ...outcomes.filter(x => !((x.out.photoTier?.texelShare ?? 0) > 0))]) {
                         const job = looJobs.get(o.layer.objectId);
                         if (!job || !o.out.bundle.fit) continue;
                         const left = looDeadline - now();
@@ -1491,7 +1492,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         try {
                             const loo = await job(Math.min(LOO_BUDGET_MS, left));
                             o.out = { ...o.out, bundle: { ...o.out.bundle, fit: { ...o.out.bundle.fit, loo } }, timingsMs: { ...o.out.timingsMs, fitLoo: now() - tl } };
-                            io.progress(`textures: ${o.layer.layer}: leave-one-pano-out fit over ${loo.panos} panos: texture edge chamfer ${loo.chamferPx ?? 'n/a'} px, gradient NCC ${loo.gradNcc ?? 'n/a'}${loo.skipped ? ` (${loo.skipped} panos past the budget)` : ''}`);
+                            io.progress(`textures: ${o.layer.layer}: leave-one-pano-out fit over ${loo.panos} panos${loo.sampled ? ` (sampled: ${loo.panos} of ${loo.panosTotal})` : ''}: texture edge chamfer ${loo.chamferPx ?? 'n/a'} px, gradient NCC ${loo.gradNcc ?? 'n/a'}${loo.skipped ? ` (${loo.skipped} panos past the budget)` : ''}`);
                         } catch (err) {
                             if (isAbort(err) || io.signal.aborted) throw err;
                             io.progress(`textures: ${o.layer.layer}: the leave-one-pano-out fit could not be measured (${errorMessage(err)})`);
