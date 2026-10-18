@@ -10,6 +10,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { NativePythonRunnerService } from './native-python-runner-service';
+import { getPythonWorkerPool } from '../process/persistent-python-worker';
 
 export interface LocalSf3DOptions {
     /** Path to input photograph or 2D image file */
@@ -130,8 +131,7 @@ export class LocalSf3DService {
         const remeshOption = options.remeshOption || 'none';
         const device = options.device || 'auto';
 
-        const args = [
-            scriptPath,
+        const argv = [
             options.imagePath,
             targetGlbPath,
             noPbr ? '--no_pbr' : '--with_pbr',
@@ -144,37 +144,36 @@ export class LocalSf3DService {
         // The scratchbox package degrades gracefully without the native module, so a failed build isn't fatal here.
         await this.pythonRunner.ensureNativeModule();
         const pythonExec = this.pythonRunner.getPythonExecutable();
-        const { execFile } = await import('child_process');
-        const { promisify } = await import('util');
-        const execFileAsync = promisify(execFile);
 
-        let stdout = '';
-        let stderr = '';
-
-        try {
-            const res = await execFileAsync(pythonExec, args, {
-                cwd: outputDir,
-                timeout: 600000,
-                maxBuffer: 64 * 1024 * 1024,
-                env: {
-                    ...process.env,
-                    PYTHONPATH: [
-                        path.resolve(repoRoot, 'packages/core/src/python'),
-                        this.pythonRunner.getModuleDirectory(),
-                        process.env.PYTHONPATH || ''
-                    ].filter(Boolean).join(':')
-                }
-            });
-            stdout = res.stdout;
-            stderr = res.stderr;
-        } catch (err: any) {
-            // A non-zero exit is always a failure, even if a GLB from an earlier run sits at the target path.
-            const scriptError = parseMarkedJson(err.stdout || '', '__LOCAL_SF3D_ERROR_START__', '__LOCAL_SF3D_ERROR_END__');
-            if (scriptError && typeof scriptError.code === 'string') {
-                throw new LocalSf3DError(scriptError.code, String(scriptError.error || err.message));
+        // A persistent worker keeps the SF3D weights loaded between props; each call runs in its output folder.
+        const pool = getPythonWorkerPool({
+            pythonBinary: pythonExec,
+            scriptPath,
+            label: 'the SF3D runner',
+            env: {
+                ...process.env,
+                PYTHONPATH: [
+                    path.resolve(repoRoot, 'packages/core/src/python'),
+                    this.pythonRunner.getModuleDirectory(),
+                    process.env.PYTHONPATH || ''
+                ].filter(Boolean).join(':')
             }
-            const detail = (err.stderr || err.message || '').toString().trim();
-            throw new LocalSf3DError('SF3D_RUN_FAILED', `SF3D runner exited with ${err.code ?? err.signal ?? 'an error'}: ${detail}`);
+        });
+        let run;
+        try {
+            run = await pool.run({ argv, cwd: outputDir, timeoutMs: 600000 });
+        } catch (err: any) {
+            throw new LocalSf3DError('SF3D_RUN_FAILED', `SF3D runner failed: ${err?.message || String(err)}`);
+        }
+        const stdout = run.stdout;
+        const stderr = run.stderr;
+        if (run.exitCode !== 0) {
+            // A non-zero exit is always a failure, even if a GLB from an earlier run sits at the target path.
+            const scriptError = parseMarkedJson(stdout, '__LOCAL_SF3D_ERROR_START__', '__LOCAL_SF3D_ERROR_END__');
+            if (scriptError && typeof scriptError.code === 'string') {
+                throw new LocalSf3DError(scriptError.code, String(scriptError.error || `exit ${run.exitCode}`));
+            }
+            throw new LocalSf3DError('SF3D_RUN_FAILED', `SF3D runner exited with ${run.exitCode}: ${stderr.trim()}`);
         }
 
         const parsedResult = parseMarkedJson(stdout, '__LOCAL_SF3D_RESULT_START__', '__LOCAL_SF3D_RESULT_END__');

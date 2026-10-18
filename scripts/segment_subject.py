@@ -22,6 +22,11 @@ import json
 import os
 import sys
 
+# Models created once and reused for every later frame when this script runs in a persistent worker
+# (packages/core/src/python/scratchbox/worker_host.py).
+_TASKS_SEGMENTERS = {}
+_LEGACY_SEGMENTER = []
+
 
 def main() -> None:
     try:
@@ -93,11 +98,11 @@ def _run_mediapipe_segmenter(img_bgr):  # type: ignore
                 base_options=mp_python.BaseOptions(model_asset_path=model_path),
                 output_category_mask=True
             )
-            segmenter = vision.ImageSegmenter.create_from_options(opts)
-            try:
-                result = segmenter.segment(mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb))
-            finally:
-                segmenter.close()
+            segmenter = _TASKS_SEGMENTERS.get(model_path)
+            if segmenter is None:
+                segmenter = vision.ImageSegmenter.create_from_options(opts)
+                _TASKS_SEGMENTERS[model_path] = segmenter
+            result = segmenter.segment(mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb))
             if result.category_mask is not None:
                 cat = result.category_mask.numpy_view().astype(np.uint8)
                 # Category 1 = person/foreground
@@ -108,8 +113,9 @@ def _run_mediapipe_segmenter(img_bgr):  # type: ignore
 
     # Legacy SelfieSegmentation solution (bundled with the mediapipe package).
     try:
-        with mp.solutions.selfie_segmentation.SelfieSegmentation(model_selection=1) as seg:  # type: ignore
-            result = seg.process(img_rgb)
+        if not _LEGACY_SEGMENTER:
+            _LEGACY_SEGMENTER.append(mp.solutions.selfie_segmentation.SelfieSegmentation(model_selection=1))  # type: ignore
+        result = _LEGACY_SEGMENTER[0].process(img_rgb)
         if result.segmentation_mask is not None:
             # Binarize: > 0.5 confidence → foreground
             return (result.segmentation_mask > 0.5).astype("uint8") * 255, "mediapipe-legacy-selfie-segmentation (model_selection=1)", reasons

@@ -13,6 +13,7 @@ import * as os from 'os';
 import { Type, type Schema } from '@google/genai';
 import { HeadlessVideoEditorService, toEven } from './HeadlessVideoEditorService';
 import { MediaPipePoseService } from '../spatial/MediaPipePoseService';
+import { mapWithConcurrency } from '../process/persistent-python-worker';
 import { GeneratorFailedError, MissingInputError, VisionUnavailableError } from '../../common/errors/pipeline-errors';
 import {
     HumanoidPoseAngles,
@@ -351,29 +352,36 @@ export class MediaPipeVideoDirectorService {
             }
 
             const extractedFiles = extractRes.outputPaths || [];
-            for (let i = 0; i < extractedFiles.length; i++) {
+            // Frames are detected in parallel on the pose service's persistent workers (each keeps the model
+            // loaded); results are assembled in frame order.
+            let done = 0;
+            const outputs = await mapWithConcurrency(extractedFiles, this.poseService.maxWorkers ?? 1, async (filePath, i) => {
                 throwIfStopped(signal, what);
-                const filePath = extractedFiles[i];
                 const ts = timestamps[i] ?? (startSec + i / sampleFps);
-
                 // A frame with nobody detected is left out and listed; a detector that cannot run fails the track
                 // (GeneratorFailedError propagates). No frame is ever filled with a stand-in pose.
                 let poseOutput: RiggedPoseOutput | undefined;
+                let undetected: UndetectedMotionFrame | undefined;
                 try {
-                    const imgBuffer = await fs.readFile(filePath);
                     poseOutput = await this.poseService.estimatePoseFromImage({
-                        image: imgBuffer,
+                        image: filePath,
                         minConfidence: minConf
                     }, { signal });
                 } catch (err) {
                     throwIfStopped(signal, what);
                     if (err instanceof MissingInputError) {
-                        undetectedFrames.push({ frameIndex: i, timestampSec: ts, reason: err.message });
+                        undetected = { frameIndex: i, timestampSec: ts, reason: err.message };
                     } else {
                         throw err;
                     }
                 }
-                onProgress?.(`Tracking motion: frame ${i + 1}/${extractedFiles.length}`, (i + 1) / extractedFiles.length);
+                done++;
+                onProgress?.(`Tracking motion: frame ${done}/${extractedFiles.length}`, done / extractedFiles.length);
+                return { ts, poseOutput, undetected };
+            });
+            for (let i = 0; i < outputs.length; i++) {
+                const { ts, poseOutput, undetected } = outputs[i];
+                if (undetected) undetectedFrames.push(undetected);
                 if (!poseOutput) continue;
 
                 rawFrames.push({
@@ -601,10 +609,26 @@ export class MediaPipeVideoDirectorService {
             if (extractedFiles.length === 0) {
                 throw new GeneratorFailedError('ffmpeg', `no frames could be extracted from ${options.inputVideoPath} to track the subject in`);
             }
+            // Detection runs in parallel on the pose service's persistent workers; waypoints are built in order.
+            let detectedCount = 0;
+            const runs = focusMode === 'center' ? [] : await mapWithConcurrency(extractedFiles, this.poseService.maxWorkers ?? 1, async filePath => {
+                throwIfStopped(signal, what);
+                let run: Awaited<ReturnType<MediaPipePoseService['runPoseLandmarker']>>;
+                try {
+                    run = await this.poseService.runPoseLandmarkerOnFile(filePath, { numPoses: 1, signal });
+                } catch (err) {
+                    throwIfStopped(signal, what);
+                    throw err;
+                }
+                if ('unavailable' in run) {
+                    throw new GeneratorFailedError('mediapipe', `pose detection could not run, so the subject cannot be tracked for reframing: ${run.unavailable}`);
+                }
+                detectedCount++;
+                onProgress?.(`Finding the subject: frame ${detectedCount}/${extractedFiles.length}`, 0.8 * detectedCount / extractedFiles.length);
+                return run;
+            });
             for (let i = 0; i < extractedFiles.length; i++) {
                 throwIfStopped(signal, what);
-                onProgress?.(`Finding the subject: frame ${i + 1}/${extractedFiles.length}`, 0.8 * (i + 1) / extractedFiles.length);
-                const filePath = extractedFiles[i];
                 const ts = sampleTimestamps[i];
 
                 let normCenterX: number;
@@ -615,16 +639,7 @@ export class MediaPipeVideoDirectorService {
                     normCenterX = 0.5;
                     normCenterY = 0.5;
                 } else {
-                    let run: Awaited<ReturnType<MediaPipePoseService['runPoseLandmarker']>>;
-                    try {
-                        run = await this.poseService.runPoseLandmarker(await fs.readFile(filePath), { numPoses: 1, signal });
-                    } catch (err) {
-                        throwIfStopped(signal, what);
-                        throw err;
-                    }
-                    if ('unavailable' in run) {
-                        throw new GeneratorFailedError('mediapipe', `pose detection could not run, so the subject cannot be tracked for reframing: ${run.unavailable}`);
-                    }
+                    const run = runs[i];
                     const lms = 'detection' in run ? run.detection.imageLandmarks[0] : undefined;
                     if (!lms || lms.length < 33) {
                         undetectedSamples.push({ timestampSec: Math.round(ts * 100) / 100, reason: 'noPerson' in run ? run.noPerson : 'MediaPipe returned no full set of body landmarks' });

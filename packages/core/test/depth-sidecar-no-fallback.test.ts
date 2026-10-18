@@ -180,10 +180,12 @@ describe('PanoramaDepthService refuses incomplete sidecar output', () => {
             const fake = path.join(work, 'fake_sidecar.py');
             fs.writeFileSync(fake, [
                 'import json, sys',
-                'a = dict(zip(sys.argv[1::2], sys.argv[2::2]))',
-                'open(a["--output-depth"], "wb").write(bytes(4 * 4 * 2))',
-                'open(a["--output-preview"], "wb").write(b"png")',
-                'json.dump({"width": 4, "height": 2, "modelUsed": "m", "eyeHeight": 2.4}, open(a["--output-json"], "w"))'
+                '# The sidecar runs in a persistent worker, which calls main() per request.',
+                'def main():',
+                '    a = dict(zip(sys.argv[1::2], sys.argv[2::2]))',
+                '    open(a["--output-depth"], "wb").write(bytes(4 * 4 * 2))',
+                '    open(a["--output-preview"], "wb").write(b"png")',
+                '    json.dump({"width": 4, "height": 2, "modelUsed": "m", "eyeHeight": 2.4}, open(a["--output-json"], "w"))'
             ].join('\n'));
             const img = path.join(work, 'pano.png');
             fs.writeFileSync(img, 'x');
