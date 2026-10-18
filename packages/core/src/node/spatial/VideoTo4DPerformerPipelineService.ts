@@ -22,8 +22,8 @@ import { SbHumanLoader } from '../../common/spatial/SbHumanLoader';
 import { CharacterSilhouetteSolver } from './CharacterSilhouetteSolver';
 import { CharacterAnatomicalRatios } from '../../common/character-morph-protocol';
 import {
-    MUSIC_VENUE_PRESETS,
-    MusicVenuePreset
+    requireStageVenueAnchor,
+    type StageVenueAnchor
 } from '../../browser/generative-canvas/services/ConcertStagePerformerService';
 import { HeadlessVideoEditorService, resolveBinary } from '../video/HeadlessVideoEditorService';
 import { NerfstudioDatasetService } from './NerfstudioDatasetService';
@@ -80,15 +80,6 @@ export class PerformerMotionUnavailableError extends PipelineError {
     }
 }
 
-/** A venueId was given that names no known venue anchor. */
-export class UnknownVenueError extends PipelineError {
-    readonly code = 'unknown_venue';
-
-    constructor(readonly venueId: string, readonly known: readonly string[]) {
-        super(`Unknown venueId "${venueId}"; known venue anchors: ${known.join(', ')}. Omit venueId to emit the performer without a geographic anchor.`);
-        this.name = 'UnknownVenueError';
-    }
-}
 
 /** Width/height from a JPEG or PNG header; null when the bytes are neither. */
 function readImageDimensions(buf: Buffer): { width: number; height: number } | null {
@@ -170,7 +161,8 @@ export interface VideoTo4DPerformerOptions {
     heroTimestampSec?: number;
     numGaussians?: number;
     targetHeightMeters?: number;
-    venueId?: string;
+    /** Where the stage stands (caller-given lat/lng/altitude/heading). Omit for no geographic anchor. */
+    venue?: StageVenueAnchor;
     fps?: number;
     motionSequenceLengthSec?: number;
     characterId?: string;
@@ -238,7 +230,7 @@ export interface VideoTo4DPerformerResult {
     /** Pluggable skinning modalities emitted by this execution. */
     modalitiesEmitted?: HumanoidSkinModality[];
     geoManifestPath: string;
-    /** Written only when a venue anchor was requested (venueId). */
+    /** Written only when a venue anchor was given (venue). */
     stagePlacementPath?: string;
     nerfstudioTransformsPath?: string;
     nerfstudioSparsePcdPath?: string;
@@ -304,7 +296,7 @@ export interface VideoTo4DPerformerResult {
         trackedFrames?: number;
         cameraSolve?: 'gvhmr' | 'landmarks' | 'silhouette';
     };
-    /** Present only when the caller named a venue (venueId); no venue is assumed otherwise. */
+    /** Present only when the caller gave a venue; no venue is assumed otherwise. */
     venueAnchor?: {
         venueId: string;
         venueName: string;
@@ -402,11 +394,7 @@ export class VideoTo4DPerformerPipelineService {
         const targetHeight = options.targetHeightMeters ?? 1.78;
         const numGaussians = options.numGaussians ?? 120000;
         const fps = options.fps ?? 25;
-        let venuePreset: MusicVenuePreset | undefined;
-        if (options.venueId) {
-            venuePreset = MUSIC_VENUE_PRESETS[options.venueId];
-            if (!venuePreset) throw new UnknownVenueError(options.venueId, Object.keys(MUSIC_VENUE_PRESETS));
-        }
+        const venuePreset: StageVenueAnchor | undefined = options.venue ? requireStageVenueAnchor('VideoTo4DPerformerPipelineService', options.venue) : undefined;
 
         // --------------------------------------------------------------------
         // Stage 1: Video Ingestion & Hero Frame Extraction
@@ -740,7 +728,7 @@ export class VideoTo4DPerformerPipelineService {
             // Only a venue the caller named anchors the performer geographically.
             ...(venuePreset ? {
                 geographic_anchor: {
-                    venue_id: venuePreset.id,
+                    venue_id: venuePreset.id ?? venuePreset.name,
                     venue_name: venuePreset.name,
                     latitude: venuePreset.lat,
                     longitude: venuePreset.lng,
@@ -924,7 +912,7 @@ export class VideoTo4DPerformerPipelineService {
                 cameraSolve: gvhmrBody ? 'gvhmr' : landmarkCamera ? 'landmarks' : 'silhouette'
             },
             venueAnchor: venuePreset ? {
-                venueId: venuePreset.id,
+                venueId: venuePreset.id ?? venuePreset.name,
                 venueName: venuePreset.name,
                 latitude: venuePreset.lat,
                 longitude: venuePreset.lng,

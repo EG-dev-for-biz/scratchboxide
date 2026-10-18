@@ -20,6 +20,7 @@ import {
     getPresetLightingState
 } from './diurnal-lighting';
 import { getSunVectorFromAngles } from './solar-position';
+import { MissingInputError } from '../../../../common/errors/pipeline-errors';
 
 export const ATMOSPHERE_VERTEX_SHADER = /* glsl */ `
 varying vec3 vWorldPosition;
@@ -397,6 +398,14 @@ void main() {
  * Instantiates the complete physical Atmospheric Scattering Sky Dome,
  * solar directional lighting, hemisphere bounce light, and dynamic time-of-day solver.
  */
+/** latitude/longitude for a time-of-day sun; a typed error when either is missing (no assumed location). */
+export function requireLocation(tool: string, latitude: number | undefined, longitude: number | undefined): [number, number] {
+    if (typeof latitude !== 'number' || !Number.isFinite(latitude) || typeof longitude !== 'number' || !Number.isFinite(longitude)) {
+        throw new MissingInputError(tool, 'latitude and longitude', 'a time of day only places the sun at a location; give one, or give sunElevation/sunAzimuth');
+    }
+    return [latitude, longitude];
+}
+
 export function createAtmosphericSkyDome(
     scene: THREE.Scene,
     isSunset: boolean = false,
@@ -406,12 +415,16 @@ export function createAtmosphericSkyDome(
     const radius = options.sphereRadius || 280;
 
     // Resolve initial solar elevation / azimuth
+    // A time of day only fixes the sun at a place: it is used with the config's latitude/longitude, never an assumed one.
+    const timedSun = config.timeOfDay !== undefined && (config.sunElevation === undefined || config.sunAzimuth === undefined) && !isSunset
+        ? getDiurnalLightingState(...requireLocation('createAtmosphericSkyDome', config.latitude, config.longitude), config.timeOfDay)
+        : undefined;
     let initialElev = config.sunElevation !== undefined
         ? config.sunElevation
-        : (isSunset ? 4.5 : (config.timeOfDay !== undefined ? (getDiurnalLightingState(config.latitude || 37.77, config.longitude || -122.41, config.timeOfDay).sunElevation) : 52.0));
+        : (isSunset ? 4.5 : (timedSun ? timedSun.sunElevation : 52.0));
     let initialAzim = config.sunAzimuth !== undefined
         ? config.sunAzimuth
-        : (isSunset ? 260.0 : (config.timeOfDay !== undefined ? (getDiurnalLightingState(config.latitude || 37.77, config.longitude || -122.41, config.timeOfDay).sunAzimuth) : 180.0));
+        : (isSunset ? 260.0 : (timedSun ? timedSun.sunAzimuth : 180.0));
 
     let diurnalProfile = computeDiurnalLightingProfile(initialElev);
     let sunDirection = getSunVectorFromAngles(initialElev, initialAzim);
@@ -565,8 +578,8 @@ export function createAtmosphericSkyDome(
         setSunCoordinates: (elevDeg: number, azimDeg: number) => {
             applySolarState(elevDeg, azimDeg);
         },
-        setTimeOfDay: (timeHours: number, lat: number = 37.77, lng: number = -122.41) => {
-            const diurnalState = getDiurnalLightingState(lat, lng, timeHours);
+        setTimeOfDay: (timeHours: number, lat: number, lng: number) => {
+            const diurnalState = getDiurnalLightingState(...requireLocation('setTimeOfDay', lat, lng), timeHours);
             applySolarState(diurnalState.sunElevation, diurnalState.sunAzimuth, diurnalState);
         },
         setPreset: (preset: TimeOfDayPreset) => {

@@ -19,16 +19,17 @@ import {
     type SlopeMaterialStop
 } from '../spatial/SbTerrainGroundEngine';
 import { findViewportMeshes } from './mesh-edit-operators';
+import { instantAtLocalMeanSolarTime } from '../../../../common/coordinate/solarPosition';
+import { measureGlbBase64MeshCounts } from '../../../../common/glb-mesh-counts';
 
 /**
  * NOAA sun position at `timeOfDay` hours of local mean solar time (UTC + longitude / 15) on the UTC day of
  * `isoDate` (today when omitted) at the given location.
  */
 export function sunAtLocalSolarTime(latitude: number, longitude: number, timeOfDay: number, isoDate?: string): { elevationDeg: number; azimuthDeg: number } {
-    const date = isoDate ? new Date(isoDate) : new Date();
-    date.setUTCHours(0, 0, 0, 0);
-    date.setTime(date.getTime() + (timeOfDay - longitude / 15) * 3600_000);
-    const sol = calculateNOAASolarPosition(date, latitude, longitude);
+    const day = isoDate ? new Date(isoDate) : new Date();
+    const instant = instantAtLocalMeanSolarTime(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), timeOfDay, longitude);
+    const sol = calculateNOAASolarPosition(instant, latitude, longitude);
     return { elevationDeg: sol.elevationDeg, azimuthDeg: sol.azimuthDeg };
 }
 
@@ -102,11 +103,13 @@ export const NATURE_ATMOSPHERE_OPERATORS: OperatorDefinition[] = [
             let azimuth: number | undefined = params.sunAzimuth;
             const latitude = params.latitude ?? currentAtm.latitude ?? scene.geoAnchor?.lat;
             const longitude = params.longitude ?? currentAtm.longitude ?? scene.geoAnchor?.lng;
-            let timeOfDay: number | undefined = params.timeOfDay;
+            const timeOfDay: number | undefined = params.timeOfDay;
+            if (timeOfDay !== undefined && (params.preset || params.sunElevation !== undefined)) {
+                throw new Error(`sb_set_diurnal_time_of_day: timeOfDay ${timeOfDay} and ${params.preset ? `preset '${params.preset}'` : 'sunElevation'} are two different suns; give one.`);
+            }
 
             if (params.preset) {
-                const presetState = getPresetLightingState(params.preset as any);
-                if (!presetState) throw new Error(`sb_set_diurnal_time_of_day: unknown preset '${params.preset}'.`);
+                const presetState = getPresetLightingState(params.preset); // InvalidInputError for an unknown preset
                 elevation = presetState.elevationDeg;
                 azimuth = presetState.azimuthDeg;
             } else if (elevation === undefined && latitude !== undefined && longitude !== undefined && (params.isoDate || timeOfDay !== undefined)) {
@@ -121,7 +124,6 @@ export const NATURE_ATMOSPHERE_OPERATORS: OperatorDefinition[] = [
                 throw new Error('sb_set_diurnal_time_of_day needs sunElevation, a preset, or a location (latitude/longitude, or the scene geoAnchor) with isoDate or timeOfDay: the sun position cannot be derived from a time alone.');
             }
             if (azimuth === undefined) azimuth = currentAtm.sunAzimuth ?? 180.0;
-            if (timeOfDay === undefined) timeOfDay = currentAtm.timeOfDay;
 
             const diurnalProfile = computeDiurnalLightingProfile(elevation);
             const sunDir = getSunVectorFromAngles(elevation, azimuth);
@@ -129,6 +131,7 @@ export const NATURE_ATMOSPHERE_OPERATORS: OperatorDefinition[] = [
             const updatedAtm: any = {
                 ...currentAtm,
                 enabled: currentAtm.enabled ?? true,
+                // Only a time that placed this sun is recorded; an earlier one would now be stale.
                 timeOfDay,
                 sunElevation: elevation,
                 sunAzimuth: azimuth,
@@ -284,16 +287,19 @@ export const NATURE_ATMOSPHERE_OPERATORS: OperatorDefinition[] = [
         name: 'sb_set_cpp_generator',
         category: 'state_history',
         description: 'Sets or updates the native C++20 procedural generator module for the 3D scene (C/C++ first directive).',
-        execute: (ctx, params: { sourceCode: string; filename?: string; enabled?: boolean; vertexCount?: number; triangleCount?: number; glbBase64?: string }) => {
+        execute: (ctx, params: { sourceCode: string; filename?: string; enabled?: boolean; glbBase64?: string; glbPath?: string }) => {
             if (!params.sourceCode) throw new Error("Parameter 'sourceCode' is required.");
             const scene = ctx.getSceneData();
+            // Vertex/triangle counts are measured from the GLB bytes when they are here; caller-supplied counts are
+            // not stored, and with no GLB (or bytes that are not one) there are none.
+            const counts = params.glbBase64 ? measureGlbBase64MeshCounts(params.glbBase64) : undefined;
             scene.cppGenerator = {
                 enabled: params.enabled !== false,
                 sourceCode: params.sourceCode,
                 filename: params.filename || 'world_generator.cpp',
-                vertexCount: params.vertexCount,
-                triangleCount: params.triangleCount,
+                ...(counts ? { vertexCount: counts.vertexCount, triangleCount: counts.triangleCount } : {}),
                 glbBase64: params.glbBase64,
+                ...(params.glbPath ? { glbPath: params.glbPath } : {}),
                 lastCompiledTimeMs: Date.now()
             };
             return { success: true, cppGenerator: scene.cppGenerator };

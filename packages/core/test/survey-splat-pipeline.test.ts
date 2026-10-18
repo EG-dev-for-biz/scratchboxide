@@ -17,10 +17,11 @@ import { SplatService } from '../src/node/3d-engine/splat-service';
 import { decodePng, encodePng } from '../src/node/texture-processing';
 import type { StationImageGenerator } from '../src/node/spatial/BeautifyStationService';
 import type { GeodeticAnchor } from '../src/common/spatial/colmap-vector-reference-types';
+import { writeBoxGroundGlb } from './helpers/box-ground-glb';
 
 const ANCHOR: GeodeticAnchor = { lat: -33.8568, lng: 151.2153, elevationMeters: 12, headingDeg: 0, formattedAddress: 'test' };
-const GLB = path.resolve(process.cwd(), 'build/test_survey_render/box_ground.glb'); // written by survey-station-render.test.ts
 const OUT = path.resolve(process.cwd(), 'build/test_survey_splats');
+const GLB = path.resolve(process.cwd(), 'build/test_survey_splats_fixture/box_ground.glb'); // own fixture, same scene as survey-station-render.test.ts
 
 /** Mock beautifier: blockout recoloured (box brick-red, ground sand, sky left as is). Geometry untouched. */
 const recolour: StationImageGenerator = {
@@ -79,6 +80,8 @@ describe('SurveySplatPipelineService: stations -> beautify -> bake -> fuse -> 3D
 
     beforeAll(async () => {
         await fs.emptyDir(OUT);
+        // 10 m cube centred at origin, 20 m tall, on a 200 m ground plane
+        writeBoxGroundGlb(GLB, [-5, 0, -5], [5, 20, 5], 100);
         const engine = new SurveySynthesisEngine();
         const stations = engine.synthesize(ANCHOR, { type: 'orbital-multi-tier', targetRadiusMeters: 45, cameraCount: 6, focalLengthMm: 28, lookAtOffsetLocalENU: [0, 10, 0], altitudeTiersMeters: [ANCHOR.elevationMeters + 8, ANCHOR.elevationMeters + 20] });
         const svc = new SurveySplatPipelineService({ generator: recolour });

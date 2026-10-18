@@ -1745,9 +1745,8 @@ export function initializeSceneOperatorStack(scene: Scene3DData): Scene3DData {
             sourceCode: scene.cppGenerator.sourceCode,
             filename: scene.cppGenerator.filename,
             enabled: scene.cppGenerator.enabled,
-            vertexCount: scene.cppGenerator.vertexCount,
-            triangleCount: scene.cppGenerator.triangleCount,
-            glbBase64: scene.cppGenerator.glbBase64
+            glbBase64: scene.cppGenerator.glbBase64,
+            glbPath: scene.cppGenerator.glbPath
         });
     }
 

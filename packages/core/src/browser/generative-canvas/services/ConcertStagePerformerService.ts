@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { InvalidInputError, MissingInputError } from '../../../common/errors/pipeline-errors';
 import * as THREE from 'three';
 import { GeoFrame } from '../../../common/coordinate/GeoFrame';
 import { GeoAnchor4D } from '../../../common/geospatial-4d-protocol';
@@ -44,83 +45,39 @@ export enum PerformerSkinningMode {
 }
 
 /**
- * Real-world iconic music venue coordinates and headings.
+ * The geodetic anchor of a stage: the caller gives the place (WGS-84 lat/lng, ground altitude above mean sea
+ * level, stage heading clockwise from true north). There is no built-in venue list and no default venue.
  */
-export interface MusicVenuePreset {
-  id: string;
+export interface StageVenueAnchor {
+  /** Optional stable id for telemetry; the name is used when it is absent. */
+  id?: string;
   name: string;
-  city: string;
-  stateCountry: string;
   lat: number;
   lng: number;
   altMeters: number;
   stageHeadingDeg: number;
-  description: string;
 }
 
-export const MUSIC_VENUE_PRESETS: Record<string, MusicVenuePreset> = {
-  red_rocks: {
-    id: 'red_rocks',
-    name: 'Red Rocks Amphitheatre',
-    city: 'Morrison',
-    stateCountry: 'Colorado, USA',
-    lat: 39.66555,
-    lng: -105.20525,
-    altMeters: 1932.0,
-    stageHeadingDeg: 285.0,
-    description: 'Iconic open-air amphitheatre built into red sandstone rock formations.',
-  },
-  hollywood_bowl: {
-    id: 'hollywood_bowl',
-    name: 'Hollywood Bowl',
-    city: 'Los Angeles',
-    stateCountry: 'California, USA',
-    lat: 34.1122,
-    lng: -118.3391,
-    altMeters: 225.0,
-    stageHeadingDeg: 200.0,
-    description: 'Historic natural amphitheater featuring the distinctive concentric band shell.',
-  },
-  the_gorge: {
-    id: 'the_gorge',
-    name: 'The Gorge Amphitheatre',
-    city: 'George',
-    stateCountry: 'Washington, USA',
-    lat: 47.1011,
-    lng: -119.9953,
-    altMeters: 360.0,
-    stageHeadingDeg: 260.0,
-    description: 'Breathtaking canyon backdrop overlooking the Columbia River.',
-  },
-  greek_theatre: {
-    id: 'greek_theatre',
-    name: 'Greek Theatre UC Berkeley',
-    city: 'Berkeley',
-    stateCountry: 'California, USA',
-    lat: 37.8737,
-    lng: -122.2543,
-    altMeters: 140.0,
-    stageHeadingDeg: 245.0,
-    description: 'Classical Roman-style outdoor amphitheater nestled in the Berkeley Hills.',
-  },
-  arena_di_verona: {
-    id: 'arena_di_verona',
-    name: 'Arena di Verona',
-    city: 'Verona',
-    stateCountry: 'Italy',
-    lat: 45.4390,
-    lng: 10.9944,
-    altMeters: 59.0,
-    stageHeadingDeg: 170.0,
-    description: 'Ancient Roman amphitheater renowned for monumental opera and live concerts.',
-  },
-};
+/** Returns the anchor when every field is usable; a typed error naming the bad field otherwise. */
+export function requireStageVenueAnchor(tool: string, venue: StageVenueAnchor | undefined): StageVenueAnchor {
+  if (!venue) {
+    throw new MissingInputError(tool, 'venue', 'give the stage\'s name, lat, lng, altMeters and stageHeadingDeg; no venue is assumed');
+  }
+  if (typeof venue.name !== 'string' || !venue.name.trim()) throw new InvalidInputError(tool, 'venue.name', 'a non-empty name is required');
+  const ranges: Array<[keyof StageVenueAnchor, number, number]> = [['lat', -90, 90], ['lng', -180, 180], ['altMeters', -500, 9000], ['stageHeadingDeg', -360, 360]];
+  for (const [k, lo, hi] of ranges) {
+    const v = venue[k];
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < lo || v > hi) throw new InvalidInputError(tool, `venue.${k}`, `${String(v)} is not a number in [${lo}, ${hi}]`);
+  }
+  return venue;
+}
 
 /**
  * Configuration options for the Concert Stage Performer Service.
  */
 export interface ConcertStageOptions {
-  venue?: MusicVenuePreset;
+  /** Required: where the stage stands. */
+  venue: StageVenueAnchor;
   stageWidth?: number;      // default: 18.0m
   stageDepth?: number;      // default: 12.0m
   stageHeight?: number;     // default: 1.20m elevation deck
@@ -226,7 +183,7 @@ export const DEFAULT_CANONICAL_JOINTS: Array<[number, number, number]> = [
 /**
  * ConcertStagePerformerService
  *
- * Bridges Google Photorealistic 3D Tiles geodetic venues (Red Rocks Amphitheatre)
+ * Bridges Google Photorealistic 3D Tiles geodetic venues (a caller-given StageVenueAnchor)
  * with Performer 4D Gaussian Splatting avatars, featuring VFX-grade 4-bone Linear
  * Blend Skinning, true forward kinematics rotations, and strict ground clamping.
  */
@@ -238,7 +195,7 @@ export class ConcertStagePerformerService {
   public readonly lightingGroup: THREE.Group;
   public readonly performerGroup: THREE.Group;
 
-  public venue: MusicVenuePreset;
+  public venue: StageVenueAnchor;
   public geoFrame: GeoFrame;
   public stageWidth: number;
   public stageDepth: number;
@@ -265,8 +222,8 @@ export class ConcertStagePerformerService {
   private performerColorsBuffer?: Float32Array;
   private performerSkinnedMesh?: THREE.SkinnedMesh;
 
-  constructor(options: ConcertStageOptions = {}) {
-    this.venue = options.venue || MUSIC_VENUE_PRESETS.red_rocks;
+  constructor(options: ConcertStageOptions) {
+    this.venue = requireStageVenueAnchor('ConcertStagePerformerService', options?.venue);
     this.stageWidth = options.stageWidth ?? 18.0;
     this.stageDepth = options.stageDepth ?? 12.0;
     this.stageHeight = options.stageHeight ?? 1.20;
@@ -887,7 +844,7 @@ export class ConcertStagePerformerService {
     const footDelta = minY !== Infinity ? minY - this.stageHeight : 0;
 
     return {
-      venueId: this.venue.id,
+      venueId: this.venue.id ?? this.venue.name,
       venueName: this.venue.name,
       coordinates: {
         lat: this.venue.lat,

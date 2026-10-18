@@ -9,6 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { SplatService, ImageToSplatService } from '../src/node/3d-engine/splat-service';
+import { InvalidInputError, MissingInputError } from '../src/common/errors/pipeline-errors';
 
 describe('360-Degree Omnidirectional Gaussian Splatting World', () => {
     it('unprojects custom 2:1 equirectangular panorama image into 3D Gaussian splats', () => {
@@ -32,8 +33,18 @@ describe('360-Degree Omnidirectional Gaussian Splatting World', () => {
             }
         }
 
-        const splats = SplatService.unprojectEquirectangularPanorama(rgbBuffer, width, height);
+        // Depth is required: without it the method used to invent a ground plane and a 35 m sky shell.
+        expect(() => (SplatService.unprojectEquirectangularPanorama as any)(rgbBuffer, width, height)).toThrow(MissingInputError);
+        expect(() => SplatService.unprojectEquirectangularPanorama(rgbBuffer, width, height, new Float32Array(10))).toThrow(InvalidInputError);
+
+        // Each splat sits at its pixel's measured distance from the camera (at the origin); pixels without depth give none.
+        const depth = new Float32Array(width * height).fill(4);
+        for (let x = 0; x < width; x++) depth[x] = 0; // top row unmeasured
+        const splats = SplatService.unprojectEquirectangularPanorama(rgbBuffer, width, height, depth);
         expect(splats.length).toBeGreaterThan(500);
+        for (const sp of splats) expect(Math.hypot(...sp.position)).toBeCloseTo(4, 4);
+        const step = Math.max(1, Math.floor(width / 360));
+        expect(splats.length).toBe(Math.ceil(width / step) * (Math.ceil(height / step) - 1));
 
         // Verify bounds
         const [first] = splats;

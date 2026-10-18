@@ -155,7 +155,9 @@ export class TaskCapabilityResolver {
         // Trellis can be used to create discrete objects/props in a scene, but scenes themselves are created in codebase.
         const isSceneOrEnvironment = /scene|urban|city|district|world|environment|street|layout|architecture|building|floorplan|landscape|terrain/i.test(lower);
 
-        const isAnalyticalGroomSplat = /groom|hair\s*strand|fur(?:ry)?(?:\s+(?:creature|star|sphere|monster|animal|surface))?|biophysical\s*(?:hair|groom)|volumetric\s*fur|analytical\s*splat|splat[\s\w-]{0,30}groom|harmonic\s*(?:star|creature)|marschner/i.test(lower);
+        // Only naming the groom tool/service or the analytical forward-splat technique pre-loads it (ADA: no subject nouns
+        // such as hair, fur, star or creature route a task; the model picks the tool from its declaration).
+        const isAnalyticalGroomSplat = /\bsplat_synthesize_analytical_groom\b|\banalyticalgroomsplatservice\b|\banalytical\s+(?:forward\s+)?splat/i.test(lower);
 
         // Neural image-to-3D runs only when the user names it (AGENTS.md); object requests go to the model's own choice.
         const isLocalSf3DOrganicProp = /\b(?:sf3d|stable[\s-]fast[\s-]3d)\b/i.test(lower);
