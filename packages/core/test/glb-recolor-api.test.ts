@@ -19,6 +19,7 @@ import {
   hexToLab
 } from '../src/node/spatial/GlbTextureRecolorService';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
+import { encodePng } from '../src/node/texture-processing';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
 
 describe('Sophisticated 3D Tile Recoloring Engine v2 - API & Tool Suite', () => {
@@ -51,84 +52,117 @@ describe('Sophisticated 3D Tile Recoloring Engine v2 - API & Tool Suite', () => 
     });
   });
 
+  /** Real GLB: one triangle (positions bufferView) plus the given embedded images, the first bound as baseColorTexture. */
+  function buildTexturedGlb(images: Buffer[]): Buffer {
+    const positions = Buffer.alloc(36);
+    [0, 0, 0, 1, 0, 0, 0, 1, 0].forEach((v, i) => positions.writeFloatLE(v, i * 4));
+    const views: Buffer[] = [positions, ...images];
+    const bufferViews: any[] = [];
+    let offset = 0;
+    for (const v of views) {
+      bufferViews.push({ buffer: 0, byteOffset: offset, byteLength: v.length });
+      offset += (v.length + 3) & ~3;
+    }
+    const bin = Buffer.concat(views.map(v => Buffer.concat([v, Buffer.alloc(((v.length + 3) & ~3) - v.length)])));
+    const gltf = {
+      asset: { version: '2.0' },
+      meshes: [{ primitives: [{ attributes: { POSITION: 0 }, material: 0 }] }],
+      accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] }],
+      materials: [{ pbrMetallicRoughness: { baseColorTexture: { index: 0 } } }],
+      textures: images.map((_, i) => ({ source: i })),
+      images: images.map((_, i) => ({ bufferView: i + 1, mimeType: 'image/png' })),
+      bufferViews,
+      buffers: [{ byteLength: bin.length }]
+    };
+    let json = Buffer.from(JSON.stringify(gltf));
+    json = Buffer.concat([json, Buffer.alloc((4 - (json.length % 4)) % 4, 0x20)]);
+    const header = Buffer.alloc(12);
+    header.writeUInt32LE(0x46546c67, 0);
+    header.writeUInt32LE(2, 4);
+    header.writeUInt32LE(12 + 8 + json.length + 8 + bin.length, 8);
+    const jh = Buffer.alloc(8); jh.writeUInt32LE(json.length, 0); jh.writeUInt32LE(0x4e4f534a, 4);
+    const bh = Buffer.alloc(8); bh.writeUInt32LE(bin.length, 0); bh.writeUInt32LE(0x004e4942, 4);
+    return Buffer.concat([header, jh, json, bh, bin]);
+  }
+
+  function facadePng(): Buffer {
+    const w = 8, h = 8;
+    const rgba = Buffer.alloc(w * h * 4);
+    for (let i = 0; i < w * h; i++) {
+      rgba[i * 4] = 40 + i * 3; rgba[i * 4 + 1] = 90; rgba[i * 4 + 2] = 150 - i; rgba[i * 4 + 3] = 255;
+    }
+    return encodePng(w, h, rgba);
+  }
+
+  function readImage(glb: Buffer, imageIndex: number): Buffer {
+    const jsonLength = glb.readUInt32LE(12);
+    const gltf = JSON.parse(glb.toString('utf8', 20, 20 + jsonLength));
+    const bin = glb.subarray(20 + jsonLength + 8);
+    const bv = gltf.bufferViews[gltf.images[imageIndex].bufferView];
+    return bin.subarray(bv.byteOffset, bv.byteOffset + bv.byteLength);
+  }
+
   describe('recolor3DTilesGlb Programmatic API', () => {
-    it('executes in mock mode returning compliant GlbRecolorApiResult', async () => {
+    it('recolours a real embedded texture, reports an undecodable one as failed, and verifies geometry bytes', async () => {
+      const original = facadePng();
+      const corrupt = Buffer.from('\x89PNG this is not really a png at all', 'latin1');
       const result = await recolor3DTilesGlb({
-        inputGlb: '/fake/path/colosseum.glb',
+        inputGlb: buildTexturedGlb([original, corrupt]),
         palettePreset: 'dusk_twilight',
-        mockExecution: true
+        pbr: { generateNormalMaps: false, generateRoughnessMaps: false }
       });
 
       expect(result.success).toBe(true);
-      expect(result.driftMm).toBe(0.000);
       expect(result.textureCount).toBe(1);
-      expect(result.normalMapCount).toBe(1);
-      expect(result.roughnessMapCount).toBe(1);
-      expect(result.glbBuffer).toBeDefined();
-      expect(result.glbBuffer.length).toBeGreaterThan(12);
+      expect(result.failedTextures.map(f => f.imageIndex)).toEqual([1]);
+      expect(result.summary).toContain('1 texture(s) failed');
+      expect(result.geometryBytesIdentical).toBe(true);
+      expect((result as any).driftMm).toBeUndefined();
+      const recoloured = readImage(result.glbBuffer, 0);
+      expect(recoloured.subarray(1, 4).toString('latin1')).toBe('PNG');
+      expect(recoloured.equals(original)).toBe(false);
+      expect(readImage(result.glbBuffer, 1).equals(corrupt)).toBe(true);
       expect(result.paletteUsed).toEqual(DEFAULT_NANO_BANANA_GLB_PALETTE);
-      expect(result.summary).toContain('3D Tile GLB recolored successfully');
     });
 
-    it('supports custom output file writing in mock mode', async () => {
+    it('fails (success false, nothing counted) when no texture could be recoloured', async () => {
+      const result = await recolor3DTilesGlb({
+        inputGlb: buildTexturedGlb([Buffer.from('not an image at all, just bytes')]),
+        pbr: { generateNormalMaps: false, generateRoughnessMaps: false }
+      });
+      expect(result.success).toBe(false);
+      expect(result.textureCount).toBe(0);
+      expect(result.failedTextures.length).toBe(1);
+      expect(result.summary).toContain('No texture was recoloured');
+    });
+
+    it('writes the output file and resolves presets and custom swatches', async () => {
       const tempOut = path.join(os.tmpdir(), `test_recolor_${Date.now()}.glb`);
       try {
         const result = await recolor3DTilesGlb({
-          inputGlb: '/fake/path/colosseum.glb',
+          inputGlb: buildTexturedGlb([facadePng()]),
           outputGlbPath: tempOut,
           palettePreset: 'golden_hour',
-          mockExecution: true
+          pbr: { generateNormalMaps: false, generateRoughnessMaps: false }
         });
-
-        expect(result.success).toBe(true);
         expect(result.outputGlbPath).toBe(tempOut);
-        expect(fs.existsSync(tempOut)).toBe(true);
+        expect(fs.readFileSync(tempOut).equals(result.glbBuffer)).toBe(true);
         expect(result.paletteUsed).toEqual(GLB_RECOLOR_PRESETS.golden_hour);
       } finally {
         if (fs.existsSync(tempOut)) fs.unlinkSync(tempOut);
       }
-    });
 
-    it('resolves cyberpunk_neon and monochrome_noir presets', async () => {
-      const neonRes = await recolor3DTilesGlb({
-        inputGlb: '/fake/model.glb',
-        palettePreset: 'cyberpunk_neon',
-        mockExecution: true
+      expect(GLB_RECOLOR_PRESETS.cyberpunk_neon.midtone.a).toBeGreaterThan(50);
+      expect(GLB_RECOLOR_PRESETS.monochrome_noir.midtone.a).toBeCloseTo(0, 1);
+
+      const customRes = await GlbTextureRecolorService.recolor({
+        inputGlb: buildTexturedGlb([facadePng()]),
+        customPalette: { shadowHex: '#001122', midtoneHex: '#DDAA55', highlightHex: '#FFFFAA' },
+        pbr: { generateNormalMaps: false, generateRoughnessMaps: false }
       });
-      expect(neonRes.paletteUsed.midtone.a).toBeGreaterThan(50); // High vibrant magenta a*
-
-      const noirRes = await recolor3DTilesGlb({
-        inputGlb: '/fake/model.glb',
-        palettePreset: 'monochrome_noir',
-        mockExecution: true
-      });
-      expect(noirRes.paletteUsed.midtone.a).toBeCloseTo(0, 1);
-      expect(noirRes.paletteUsed.midtone.b).toBeCloseTo(0, 1);
-    });
-
-    it('accepts custom hex color swatches in customPalette', async () => {
-      const customRes = await recolor3DTilesGlb({
-        inputGlb: '/fake/model.glb',
-        customPalette: {
-          shadowHex: '#001122',
-          midtoneHex: '#DDAA55',
-          highlightHex: '#FFFFAA'
-        },
-        mockExecution: true
-      });
-
       expect(customRes.paletteUsed.shadow.L).toBeGreaterThan(0);
       expect(customRes.paletteUsed.midtone.b).toBeGreaterThan(20);
       expect(customRes.paletteUsed.highlight.L).toBeGreaterThan(85);
-    });
-
-    it('exposes static GlbTextureRecolorService.recolor alias', async () => {
-      const res = await GlbTextureRecolorService.recolor({
-        inputGlb: '/fake/model.glb',
-        mockExecution: true
-      });
-      expect(res.success).toBe(true);
-      expect(res.driftMm).toBe(0.000);
     });
   });
 

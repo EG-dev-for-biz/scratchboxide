@@ -8,7 +8,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { spawn } from 'child_process';
+import { decodeImageToRgba, encodeRgbaToJpeg, encodeRgbaToPng } from '../image-codec-ffmpeg';
 
 /**
  * CIELAB Target Color Swatch
@@ -73,7 +73,12 @@ export interface GlbRecolorResult {
   success: boolean;
   inputGlbPath: string;
   outputGlbPath: string;
+  /** Embedded textures that were actually recoloured. */
   textureCount: number;
+  /** Embedded textures that could not be decoded/recoloured/encoded; their original bytes are kept unchanged. */
+  failedTextures: Array<{ imageIndex: number; reason: string }>;
+  /** True when every non-image bufferView in the written GLB is byte-identical to the input (re-read and compared). */
+  geometryBytesIdentical: boolean;
   originalByteLength: number;
   recoloredByteLength: number;
   durationMs: number;
@@ -210,7 +215,6 @@ export interface GlbRecolorApiOptions {
   highlightCompress?: number; // Default 0.4
   concurrency?: number; // Default 12
   jpegQuality?: number; // Default 2
-  mockExecution?: boolean; // Offline emulation mode for instantaneous testing
 }
 
 /**
@@ -221,12 +225,16 @@ export interface GlbRecolorApiResult {
   inputGlbPath?: string;
   outputGlbPath?: string;
   glbBuffer: Buffer;
+  /** Embedded textures that were actually recoloured. */
   textureCount: number;
+  /** Embedded textures left unchanged because they failed, with the reason. */
+  failedTextures: Array<{ imageIndex: number; reason: string }>;
+  /** Every non-image bufferView of the output was re-read and compared byte-for-byte with the input. */
+  geometryBytesIdentical: boolean;
   normalMapCount: number;
   roughnessMapCount: number;
   originalByteLength: number;
   recoloredByteLength: number;
-  driftMm: number; // 0.000 mm guaranteed
   durationMs: number;
   paletteUsed: NanoBananaGlbPalette;
   summary: string;
@@ -238,6 +246,8 @@ interface ProcessedImageChannels {
   recoloredBuf: Buffer;
   normalBuf?: Buffer;
   roughnessBuf?: Buffer;
+  /** Set when the texture could not be processed; recoloredBuf is then the original bytes. */
+  failure?: string;
 }
 
 /**
@@ -247,7 +257,7 @@ interface ProcessedImageChannels {
  * 1. CIELAB Hue-Aware Material Segmentation (protects green foliage and slate asphalt).
  * 2. Intrinsic shadow de-lighting and Prussian Blue crevice lift.
  * 3. PBR Normal Map & Roughness Map synthesis from photogrammetry albedo.
- * 4. 100% bit-for-bit geometry locking (0.000 mm vertex/triangle drift).
+ * 4. Geometry bufferViews copied byte-for-byte (verified on the written GLB, reported as geometryBytesIdentical).
  */
 export class GlbTextureRecolorService {
 
@@ -371,6 +381,8 @@ export class GlbTextureRecolorService {
 
     // 5. Parallel Texture Processing
     const channelResults: ProcessedImageChannels[] = [];
+    const failedTextures: Array<{ imageIndex: number; reason: string }> = [];
+    const originalBufferViewCount = bufferViews.length;
     await this.processImageTasksInPool(
       imageTasks,
       concurrency,
@@ -383,9 +395,14 @@ export class GlbTextureRecolorService {
       pbr,
       result => {
         processedBufferViews[result.bvIndex] = result.recoloredBuf;
-        channelResults.push(result);
+        if (result.failure) {
+          failedTextures.push({ imageIndex: result.imageIndex, reason: result.failure });
+        } else {
+          channelResults.push(result);
+        }
       }
     );
+    failedTextures.sort((x, y) => x.imageIndex - y.imageIndex);
 
     // 6. Integrate Synthesized PBR Texture Channels into glTF
     let normalMapCount = 0;
@@ -524,12 +541,17 @@ export class GlbTextureRecolorService {
     }
     fs.writeFileSync(outputGlbPath, finalGlbBuffer);
 
+    // Re-read the written GLB and compare every original non-image bufferView with the input bytes.
+    const geometryBytesIdentical = this.nonImageBufferViewsMatch(glbBuffer, fs.readFileSync(outputGlbPath), imageBvIndices, originalBufferViewCount);
+
     const durationMs = performance.now() - startTime;
     return {
-      success: true,
+      success: channelResults.length > 0,
       inputGlbPath,
       outputGlbPath,
-      textureCount: imageTasks.length,
+      textureCount: channelResults.length,
+      failedTextures,
+      geometryBytesIdentical,
       originalByteLength,
       recoloredByteLength: finalGlbBuffer.length,
       durationMs,
@@ -577,11 +599,12 @@ export class GlbTextureRecolorService {
           );
           onCompleted(result);
         } catch (err) {
-          console.error(`Failed to process texture image ${task.imageIndex}:`, err);
+          // Keep the original bytes so the GLB stays valid, and report the texture as failed (not recoloured).
           onCompleted({
             imageIndex: task.imageIndex,
             bvIndex: task.bvIndex,
-            recoloredBuf: task.buffer
+            recoloredBuf: task.buffer,
+            failure: err instanceof Error ? err.message : String(err)
           });
         }
       }
@@ -607,15 +630,12 @@ export class GlbTextureRecolorService {
     segmentation: Required<MaterialSegmentationOptions>,
     pbr: Required<PbrSynthesisOptions>
   ): Promise<ProcessedImageChannels> {
-    const dims = this.parseImageDimensions(imgBuffer);
-    if (!dims) {
-      return { imageIndex, bvIndex, recoloredBuf: imgBuffer };
-    }
-
-    // 1. Decode Image to Raw RGBA
-    const rawRgba = await this.decodeToRgba(imgBuffer);
-    if (!rawRgba || rawRgba.length !== dims.width * dims.height * 4) {
-      return { imageIndex, bvIndex, recoloredBuf: imgBuffer };
+    // 1. Decode Image to Raw RGBA (throws on an unknown format or a failed decode)
+    const decoded = await decodeImageToRgba(imgBuffer);
+    const dims = { width: decoded.width, height: decoded.height };
+    const rawRgba = decoded.rgba;
+    if (rawRgba.length !== dims.width * dims.height * 4) {
+      throw new Error(`decoded ${rawRgba.length} bytes for a ${dims.width}x${dims.height} image`);
     }
 
     // 2. Apply Segmentation & Material Synthesis
@@ -652,6 +672,31 @@ export class GlbTextureRecolorService {
       normalBuf,
       roughnessBuf
     };
+  }
+
+  /** Splits a GLB into its parsed JSON and BIN chunk. */
+  private static readGlbChunks(glb: Buffer): { gltf: any; bin: Buffer } {
+    const jsonLength = glb.readUInt32LE(12);
+    const gltf = JSON.parse(glb.toString('utf8', 20, 20 + jsonLength));
+    const binHeader = 20 + jsonLength;
+    const binLength = glb.readUInt32LE(binHeader);
+    return { gltf, bin: glb.subarray(binHeader + 8, binHeader + 8 + binLength) };
+  }
+
+  /** True when bufferViews [0, count) that are not images hold identical bytes in both GLBs. */
+  private static nonImageBufferViewsMatch(input: Buffer, output: Buffer, imageBvIndices: Set<number>, count: number): boolean {
+    const a = this.readGlbChunks(input);
+    const b = this.readGlbChunks(output);
+    for (let i = 0; i < count; i++) {
+      if (imageBvIndices.has(i)) continue;
+      const va = a.gltf.bufferViews?.[i];
+      const vb = b.gltf.bufferViews?.[i];
+      if (!va || !vb || va.byteLength !== vb.byteLength) return false;
+      const sa = a.bin.subarray(va.byteOffset || 0, (va.byteOffset || 0) + va.byteLength);
+      const sb = b.bin.subarray(vb.byteOffset || 0, (vb.byteOffset || 0) + vb.byteLength);
+      if (!sa.equals(sb)) return false;
+    }
+    return true;
   }
 
   /**
@@ -725,74 +770,18 @@ export class GlbTextureRecolorService {
   }
 
   /**
-   * Decode any image format into raw RGBA via ffmpeg
-   */
-  private static decodeToRgba(buf: Buffer): Promise<Buffer> {
-    return new Promise((resolve, reject) => {
-      const proc = spawn('ffmpeg', [
-        '-v', 'error',
-        '-i', 'pipe:0',
-        '-f', 'rawvideo',
-        '-pix_fmt', 'rgba',
-        'pipe:1'
-      ]);
-
-      const chunks: Buffer[] = [];
-      proc.stdout.on('data', chunk => chunks.push(chunk));
-      proc.on('close', code => {
-        if (code === 0) {
-          resolve(Buffer.concat(chunks));
-        } else {
-          resolve(Buffer.alloc(0));
-        }
-      });
-      proc.on('error', err => reject(err));
-
-      proc.stdin.write(buf);
-      proc.stdin.end();
-    });
-  }
-
-  /**
-   * Encode raw RGBA into compressed JPEG/PNG via ffmpeg
+   * Encode raw RGBA into PNG, or JPEG at an ffmpeg-style qscale (1 best .. 31), failing loudly (never empty bytes).
    */
   private static encodeFromRgba(
     rgbaBuf: Buffer,
     width: number,
     height: number,
     isPng: boolean,
-    quality: number
+    qscale: number
   ): Promise<Buffer> {
-    return new Promise((resolve, reject) => {
-      const args = [
-        '-v', 'error',
-        '-f', 'rawvideo',
-        '-pix_fmt', 'rgba',
-        '-s', `${width}x${height}`,
-        '-i', 'pipe:0'
-      ];
-
-      if (isPng) {
-        args.push('-f', 'image2', '-c:v', 'png', 'pipe:1');
-      } else {
-        args.push('-q:v', `${quality}`, '-f', 'mjpeg', 'pipe:1');
-      }
-
-      const proc = spawn('ffmpeg', args);
-      const chunks: Buffer[] = [];
-      proc.stdout.on('data', chunk => chunks.push(chunk));
-      proc.on('close', code => {
-        if (code === 0) {
-          resolve(Buffer.concat(chunks));
-        } else {
-          resolve(Buffer.alloc(0));
-        }
-      });
-      proc.on('error', err => reject(err));
-
-      proc.stdin.write(rgbaBuf);
-      proc.stdin.end();
-    });
+    if (isPng) return encodeRgbaToPng(rgbaBuf, width, height);
+    const quality = Math.max(1, Math.min(100, 100 - (Math.max(1, qscale) - 1) * 5));
+    return encodeRgbaToJpeg(rgbaBuf, width, height, { quality });
   }
 
   /**
@@ -1051,31 +1040,6 @@ export async function recolor3DTilesGlb(options: GlbRecolorApiOptions): Promise<
     else if (cp.accent && typeof cp.accent.L === 'number') resolvedPalette.accent = cp.accent;
   }
 
-  // 2. Handle Mock Execution (Offline Fast Path)
-  if (options.mockExecution === true) {
-    const mockGlbBuffer = Buffer.from('glTF\x02\x00\x00\x00\x20\x00\x00\x00JSON{}\x00\x00BIN\x00', 'utf-8');
-    if (options.outputGlbPath) {
-      fs.mkdirSync(path.dirname(options.outputGlbPath), { recursive: true });
-      fs.writeFileSync(options.outputGlbPath, mockGlbBuffer);
-    }
-    const durationMs = Math.round(performance.now() - startTime);
-    return {
-      success: true,
-      inputGlbPath: typeof options.inputGlb === 'string' ? options.inputGlb : undefined,
-      outputGlbPath: options.outputGlbPath,
-      glbBuffer: mockGlbBuffer,
-      textureCount: 1,
-      normalMapCount: options.pbr?.generateNormalMaps !== false ? 1 : 0,
-      roughnessMapCount: options.pbr?.generateRoughnessMaps !== false ? 1 : 0,
-      originalByteLength: mockGlbBuffer.length,
-      recoloredByteLength: mockGlbBuffer.length,
-      driftMm: 0.000,
-      durationMs,
-      paletteUsed: resolvedPalette,
-      summary: `[Mock] 3D Tile GLB recolored successfully in ${(durationMs / 1000).toFixed(2)}s with 0.000 mm drift.`
-    };
-  }
-
   // 3. Resolve Input Path & Temporary Files
   let tempInputPath: string | undefined;
   let resolvedInputPath: string;
@@ -1143,20 +1107,32 @@ export async function recolor3DTilesGlb(options: GlbRecolorApiOptions): Promise<
     const normalCount = recolorResult.pbrGenerated?.normalMapCount ?? 0;
     const roughCount = recolorResult.pbrGenerated?.roughnessMapCount ?? 0;
 
+    const failed = recolorResult.failedTextures;
+    const failedNote = failed.length > 0
+      ? ` ${failed.length} texture(s) failed and were left unchanged: ${failed.map(f => `#${f.imageIndex} (${f.reason})`).join('; ')}.`
+      : '';
+    const geometryNote = recolorResult.geometryBytesIdentical
+      ? ' Geometry bufferViews verified byte-identical to the input.'
+      : ' WARNING: geometry bufferViews differ from the input.';
+    const summary = recolorResult.success
+      ? `Recoloured ${recolorResult.textureCount} embedded texture(s) in ${(durationMs / 1000).toFixed(2)}s, with ${normalCount} normal map(s) and ${roughCount} roughness map(s).${failedNote}${geometryNote}`
+      : `No texture was recoloured (${recolorResult.textureCount + failed.length} embedded texture(s) found).${failedNote}`;
+
     return {
-      success: true,
+      success: recolorResult.success,
       inputGlbPath: typeof options.inputGlb === 'string' ? options.inputGlb : undefined,
       outputGlbPath: options.outputGlbPath,
       glbBuffer: outBuffer,
       textureCount: recolorResult.textureCount,
+      failedTextures: recolorResult.failedTextures,
+      geometryBytesIdentical: recolorResult.geometryBytesIdentical,
       normalMapCount: normalCount,
       roughnessMapCount: roughCount,
       originalByteLength: recolorResult.originalByteLength,
       recoloredByteLength: recolorResult.recoloredByteLength,
-      driftMm: 0.000,
       durationMs,
       paletteUsed: resolvedPalette,
-      summary: `3D Tile GLB recolored successfully in ${(durationMs / 1000).toFixed(2)}s. Re-graded ${recolorResult.textureCount} textures with ${normalCount} PBR normal maps and ${roughCount} roughness maps. Geometric drift: 0.000 mm (100% locked).`
+      summary
     };
   } finally {
     if (tempInputPath && fs.existsSync(tempInputPath)) {

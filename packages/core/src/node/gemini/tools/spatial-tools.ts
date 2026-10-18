@@ -285,7 +285,7 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'google_3d_tiles_recolor_glb',
-        description: 'Recolor a 3D Tile GLB model using the Sophisticated v2 Architecture 2 offline texture atlas re-grading engine. Performs hue-aware semantic segmentation (protecting green foliage and slate asphalt from turning terracotta), intrinsic shadow de-lighting, and PBR normal/roughness map synthesis with 100% geometric vertex lock (0.000 mm drift).',
+        description: 'Recolor a 3D Tile GLB model using the Sophisticated v2 Architecture 2 offline texture atlas re-grading engine. Performs hue-aware semantic segmentation (protecting green foliage and slate asphalt from turning terracotta), intrinsic shadow de-lighting, and PBR normal/roughness map synthesis. Geometry bufferViews are copied unchanged and verified byte-identical on the output; textures that fail are left unchanged and listed in failedTextures.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -802,11 +802,13 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                 roughnessMapCount: result.roughnessMapCount,
                 originalByteLength: result.originalByteLength,
                 recoloredByteLength: result.recoloredByteLength,
-                driftMm: result.driftMm,
+                failedTextures: result.failedTextures,
+                geometryBytesIdentical: result.geometryBytesIdentical,
                 durationMs: result.durationMs,
                 paletteUsed: result.paletteUsed,
                 summary: result.summary
             },
+            status: result.success ? 'completed' : 'failed',
             summaryResult: result.summary
         };
     },
@@ -1968,10 +1970,13 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 inputGlbPath: result.inputGlbPath,
                 outputGlbPath: result.outputGlbPath,
                 textureCount: result.textureCount,
+                failedTextures: result.failedTextures,
+                geometryBytesIdentical: result.geometryBytesIdentical,
                 originalByteLength: result.originalByteLength,
                 recoloredByteLength: result.recoloredByteLength
             } as any,
-            summaryResult: `Re-graded ${result.textureCount} texture(s) of ${inputGlbPath} to the style ${modelUsed} read from ${referenceImagePath} (vertex data is not modified). Output: ${result.outputGlbPath}.`
+            status: result.success ? 'completed' : 'failed',
+            summaryResult: `Re-graded ${result.textureCount} texture(s) of ${inputGlbPath} to the style ${modelUsed} read from ${referenceImagePath}${result.failedTextures.length ? ` (${result.failedTextures.length} failed and left unchanged)` : ''}; geometry bytes ${result.geometryBytesIdentical ? 'verified unchanged' : 'DIFFER from the input'}. Output: ${result.outputGlbPath}.`
         };
     },
 
@@ -4031,14 +4036,14 @@ export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
 export const OPTICS_LENS_DISTORTION_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'optics_configure_lens_distortion',
-        description: 'Configures Brown-Conrady and VFX optical lens distortion shader parameters, derives distortion coefficients from camera focal length or lens archetypes, calculates overscan margin, evaluates UV coordinate displacement, or outputs production GLSL shader code.',
+        description: 'Configures Brown-Conrady and VFX optical lens distortion shader parameters from an explicit lens (a presetId, a focalLengthMm, or customParams coefficients), calculates overscan margin, evaluates UV coordinate displacement, or outputs production GLSL shader code. One of presetId, focalLengthMm or customParams is required; no lens is assumed.',
         parameters: {
             type: 'OBJECT',
             properties: {
-                focalLengthMm: { type: 'NUMBER', description: 'Lens focal length in mm (e.g. 14, 18, 24, 26, 50, 85)' },
+                focalLengthMm: { type: 'NUMBER', description: 'Lens focal length in mm (e.g. 14, 18, 24, 26, 50, 85). Used when presetId is not given.' },
                 presetId: {
                     type: 'STRING',
-                    description: 'Optional lens archetype preset (e.g. smartphone_wide_26mm, ultrawide_14mm, action_cam_fisheye, cinema_anamorphic_2x, standard_prime_50mm, telephoto_portrait_85mm, drone_surveying_lens, cooke_s4_wide_18mm, arri_ultra_prime_24mm, panavision_c_series_anamorphic_50mm)'
+                    description: 'Lens preset id; an unknown id is an error (e.g. smartphone_wide_26mm, ultrawide_14mm, action_cam_fisheye, cinema_anamorphic_2x, standard_prime_50mm, telephoto_portrait_85mm, drone_surveying_lens, cooke_s4_wide_18mm, arri_ultra_prime_24mm, panavision_c_series_anamorphic_50mm)'
                 },
                 mode: {
                     type: 'STRING',
@@ -4054,7 +4059,7 @@ export const OPTICS_LENS_DISTORTION_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 customParams: {
                     type: 'OBJECT',
-                    description: 'Explicit parameters (k1, k2, k3, k4, p1, p2, opticalCenter, chromaticAberration, anamorphicSqueeze)',
+                    description: 'Explicit parameters (k1, k2, k3, k4, p1, p2, opticalCenter, chromaticAberration, anamorphicSqueeze). Override the preset / focal-length values; on their own they must include at least one of k1..k4, p1, p2.',
                     properties: {
                         k1: { type: 'NUMBER' },
                         k2: { type: 'NUMBER' },
@@ -4085,7 +4090,7 @@ export const OPTICS_LENS_DISTORTION_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'optics_export_lens_distortion',
-        description: 'Exports calibrated lens distortion parameters to industry-standard VFX formats: 3DEqualizer 4 (.lens), Foundry Nuke LensDistortion (.nk), OpenCV camera calibration matrix, or STMap raw specifications.',
+        description: 'Exports lens distortion parameters to industry-standard VFX formats: 3DEqualizer 4 (.lens), Foundry Nuke LensDistortion (.nk), OpenCV camera calibration matrix, or STMap raw specifications. The lens must be given as a presetId or customParams coefficients; no lens is assumed.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -4095,11 +4100,11 @@ export const OPTICS_LENS_DISTORTION_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 presetId: {
                     type: 'STRING',
-                    description: 'Optional lens preset name (e.g. cooke_s4_wide_18mm, arri_ultra_prime_24mm, cinema_anamorphic_2x)'
+                    description: 'Lens preset id (e.g. cooke_s4_wide_18mm, arri_ultra_prime_24mm, cinema_anamorphic_2x); an unknown id is an error. Required unless customParams carries the coefficients.'
                 },
                 customParams: {
                     type: 'OBJECT',
-                    description: 'Optional custom distortion parameters (k1, k2, k3, k4, p1, p2, anamorphicSqueeze, opticalCenter)',
+                    description: 'Custom distortion parameters (k1, k2, k3, k4, p1, p2, anamorphicSqueeze, opticalCenter). Override the preset; on their own they must include at least one of k1..k4, p1, p2.',
                     properties: {
                         k1: { type: 'NUMBER' },
                         k2: { type: 'NUMBER' },
@@ -4134,16 +4139,37 @@ export const OPTICS_LENS_DISTORTION_TOOL_DECLARATIONS: ToolDeclaration[] = [
     }
 ];
 
+const LENS_COEFFICIENT_KEYS = ['k1', 'k2', 'k3', 'k4', 'p1', 'p2'] as const;
+
+function hasLensCoefficients(customParams: unknown): boolean {
+    if (!customParams || typeof customParams !== 'object') return false;
+    const cp = customParams as Record<string, unknown>;
+    return LENS_COEFFICIENT_KEYS.some(k => typeof cp[k] === 'number' && Number.isFinite(cp[k] as number));
+}
+
+/** Resolves the preset the caller named; an unknown id is an error rather than a silent stand-in lens. */
+function requireKnownLensPreset(tool: string, presetId: unknown): LensDistortionConfig | undefined {
+    if (presetId === undefined || presetId === null || presetId === '') return undefined;
+    if (typeof presetId !== 'string' || !LENS_OPTICAL_PRESETS[presetId]) {
+        throw new MissingInputError(tool, 'a known presetId', `"${String(presetId)}" is not one of ${Object.keys(LENS_OPTICAL_PRESETS).join(', ')}`);
+    }
+    return { ...LENS_OPTICAL_PRESETS[presetId].config };
+}
+
 export const opticsLensDistortionHandlers: Record<string, ToolHandler> = {
     optics_configure_lens_distortion: async (args, _ctx) => {
-        let config: LensDistortionConfig = {};
+        const TOOL = 'optics_configure_lens_distortion';
+        let config: LensDistortionConfig;
 
-        if (typeof args.presetId === 'string' && LENS_OPTICAL_PRESETS[args.presetId]) {
-            config = { ...LENS_OPTICAL_PRESETS[args.presetId].config };
-        } else if (typeof args.focalLengthMm === 'number') {
+        const preset = requireKnownLensPreset(TOOL, args.presetId);
+        if (preset) {
+            config = preset;
+        } else if (typeof args.focalLengthMm === 'number' && Number.isFinite(args.focalLengthMm) && args.focalLengthMm > 0) {
             config = calculateBrownConradyFromFocalLength(args.focalLengthMm);
+        } else if (hasLensCoefficients(args.customParams)) {
+            config = {};
         } else {
-            config = { ...LENS_OPTICAL_PRESETS.smartphone_wide_26mm.config };
+            throw new MissingInputError(TOOL, 'a lens: presetId, focalLengthMm, or customParams with distortion coefficients', 'no default lens is assumed');
         }
 
         if (args.customParams && typeof args.customParams === 'object') {
@@ -4239,12 +4265,13 @@ export const opticsLensDistortionHandlers: Record<string, ToolHandler> = {
     },
 
     optics_export_lens_distortion: async (args, _ctx) => {
-        let params: any = {};
-
-        if (typeof args.presetId === 'string' && LENS_OPTICAL_PRESETS[args.presetId]) {
-            params = { ...LENS_OPTICAL_PRESETS[args.presetId].config };
-        } else {
-            params = { ...LENS_OPTICAL_PRESETS.smartphone_wide_26mm.config };
+        const TOOL = 'optics_export_lens_distortion';
+        let params: any = requireKnownLensPreset(TOOL, args.presetId);
+        if (!params) {
+            if (!hasLensCoefficients(args.customParams)) {
+                throw new MissingInputError(TOOL, 'a lens: presetId or customParams with distortion coefficients', 'no default lens is assumed');
+            }
+            params = {};
         }
 
         if (args.customParams && typeof args.customParams === 'object') {
