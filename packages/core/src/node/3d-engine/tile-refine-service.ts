@@ -12,8 +12,9 @@
  * a raw photogrammetric tile GLB in, a better-defined textured GLB + studio-clay GLB + stats JSON out.
  *
  * - Paths are confined to the workspace root (resolveWithinRoot).
- * - The binary is built with clang++ on first use and rebuilt only when one of its sources (clang's -MMD dependency
- *   list) is newer than it. It runs through execFile (no shell) with a timeout.
+ * - The binary is built through the native build cache (native-build-cache.ts): rebuilt only when the content of its
+ *   source or of a header it includes changes; a failed build is an error. It runs through execFile (no shell) with
+ *   a timeout.
  * - Results are cached under <root>/.scratchbox/cache/tile_refine/<sha256(binary + tile bytes + params)>/, so a
  *   repeat request returns without running anything.
  * - `publishAs` copies the results into <root>/public/models for the in-app viewer; a different file already there
@@ -27,6 +28,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { resolveWithinRoot } from '../security/path-guard';
+import { compileNativeCached, defaultNativeFlags, NativeBuildError, placeCachedBinary } from './native-build-cache';
 
 export interface TileRefineRequest {
     /** Tile GLB, relative to the workspace root or absolute inside it. `glbPath` is an alias. */
@@ -143,22 +145,6 @@ function sha256File(file: string, hash: crypto.Hash): void {
     }
 }
 
-function mtimeMs(file: string): number {
-    try {
-        return fs.statSync(file).mtimeMs;
-    } catch {
-        return Number.POSITIVE_INFINITY; // a dependency that vanished forces a rebuild
-    }
-}
-
-/** Prerequisites listed in a Makefile-style dependency file written by clang -MMD. */
-function readDepFile(file: string): string[] {
-    const text = fs.readFileSync(file, 'utf8').replace(/\\\r?\n/g, ' ');
-    const colon = text.indexOf(': ');
-    if (colon < 0) return [];
-    return text.slice(colon + 2).split(/(?<!\\)\s+/).filter(Boolean).map(p => p.replace(/\\ /g, ' '));
-}
-
 function sameBytes(a: string, b: string): boolean {
     const sa = fs.statSync(a);
     const sb = fs.statSync(b);
@@ -226,43 +212,24 @@ export class TileRefineService {
 
     private async buildIfStale(): Promise<TileRefineResult['binary']> {
         const bin = path.join(this.repoRoot, BINARY);
-        const depFile = `${bin}.d`;
         const source = path.join(this.repoRoot, CLI_SOURCE);
         const include = path.join(this.repoRoot, INCLUDE_DIR);
-        let deps: string[];
-        if (fs.existsSync(depFile)) {
-            deps = readDepFile(depFile);
-        } else {
-            deps = [source, ...fs.readdirSync(include).filter(f => f.endsWith('.hpp') || f.endsWith('.h')).map(f => path.join(include, f))];
-        }
-        const binTime = fs.existsSync(bin) ? fs.statSync(bin).mtimeMs : -1;
-        const stale = binTime < 0 || !fs.existsSync(depFile) || deps.some(d => mtimeMs(d) > binTime);
-        if (!stale) return { path: bin, built: false };
-        if (!fs.existsSync(source)) {
-            if (binTime >= 0) return { path: bin, built: false, warning: `source ${source} missing; using the existing binary` };
-            throw new TileRefineError('not_found', `tile_refine source not found: ${source}`);
-        }
-
-        fs.mkdirSync(path.dirname(bin), { recursive: true });
-        const tag = `${process.pid}.${crypto.randomBytes(4).toString('hex')}`;
-        const tmpBin = `${bin}.tmp-${tag}`;
-        const tmpDep = `${depFile}.tmp-${tag}`;
-        const args = ['-std=c++20', '-O3', '-pthread'];
-        if (process.env.SCRATCHBOX_NATIVE_ARCH === '1') args.push('-march=native');
-        args.push('-I', include, source, '-o', tmpBin, '-MMD', '-MF', tmpDep, '-lz');
+        if (!fs.existsSync(source)) throw new TileRefineError('not_found', `tile_refine source not found: ${source}`);
         const t0 = Date.now();
         try {
-            await runFile(process.env.CXX || 'clang++', args, 600_000);
-            fs.renameSync(tmpBin, bin);
-            fs.renameSync(tmpDep, depFile);
-            return { path: bin, built: true, buildMs: Date.now() - t0 };
+            const built = await compileNativeCached({
+                sourcePath: source,
+                includeDirs: [include],
+                flags: defaultNativeFlags(['-pthread']),
+                libs: ['-lz'],
+                name: 'tile_refine',
+                timeoutMs: 600_000
+            });
+            placeCachedBinary(built.binaryPath, bin);
+            return built.cacheHit ? { path: bin, built: false } : { path: bin, built: true, buildMs: Date.now() - t0 };
         } catch (err) {
-            for (const f of [tmpBin, tmpDep]) fs.rmSync(f, { force: true });
-            const detail = err instanceof TileRefineError ? err.detail : String(err);
-            if (binTime >= 0) {
-                return { path: bin, built: false, warning: `rebuild failed, using the existing binary: ${(detail ?? '').slice(-400)}` };
-            }
-            throw new TileRefineError('build_failed', 'could not build tile_refine', detail);
+            // A failed build is an error: an older binary is never run in its place.
+            throw new TileRefineError('build_failed', 'could not build tile_refine', err instanceof NativeBuildError ? err.compilerOutput : String(err));
         }
     }
 

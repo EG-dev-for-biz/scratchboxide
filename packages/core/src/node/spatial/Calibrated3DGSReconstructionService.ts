@@ -21,6 +21,7 @@ import { SurveyStationRenderService } from './SurveyStationRenderService';
 import { NativeCppCompilerService } from '../3d-engine/native-compiler-service';
 import { encodeGaussianPly, type EncodableGaussian } from '../../common/gaussian-ply-codec';
 import { Splat3DTilesService, type Splat3DTilesResult, type Splat3DTilesOptions } from './Splat3DTilesService';
+import { buildNativeIfStale } from '../3d-engine/native-build';
 
 const execAsync = promisify(exec);
 
@@ -137,22 +138,11 @@ export class Calibrated3DGSReconstructionService {
     }
 
     /**
-     * Ensures the native C++20 station_to_splats baker is compiled and up-to-date.
+     * Ensures the native C++20 station_to_splats baker is built from the current sources (native build cache).
      */
     public async ensureBaker(): Promise<string> {
         const src = path.resolve(process.cwd(), 'scripts/station_to_splats.cpp');
-        if (fs.existsSync(this.bakerPath)) {
-            const srcStat = await fs.stat(src);
-            const binStat = await fs.stat(this.bakerPath);
-            if (binStat.mtimeMs >= srcStat.mtimeMs) {
-                return this.bakerPath;
-            }
-        }
-        await fs.ensureDir(path.dirname(this.bakerPath));
-        await execAsync(
-            `${process.env.CXX || 'clang++'} -std=c++20 -O3 -I "${this.compiler.getSdkIncludePath()}" -lz "${src}" -o "${this.bakerPath}"`
-        );
-        return this.bakerPath;
+        return buildNativeIfStale({ source: src, binary: this.bakerPath, includeDir: this.compiler.getSdkIncludePath(), libs: ['-lz'] });
     }
 
     /**

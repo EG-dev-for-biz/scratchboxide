@@ -15,6 +15,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { NativeCppCompilerService } from './native-compiler-service';
 import { BakedGaussian } from '../../common/geospatial-4d-protocol';
+import { buildNativeIfStale } from './native-build';
 
 const execFileAsync = promisify(execFile);
 
@@ -95,25 +96,11 @@ export class SplatService {
      * Ensures native C++20 Gaussian Splatting CLI binary is compiled and up-to-date.
      */
     async ensureBinary(): Promise<string> {
-        if (fs.existsSync(this.binaryPath)) {
-            return this.binaryPath;
-        }
-
-        const binDir = path.dirname(this.binaryPath);
-        if (!fs.existsSync(binDir)) {
-            fs.mkdirSync(binDir, { recursive: true });
-        }
-
-        const includePath = this.compilerService.getSdkIncludePath();
-        const repoRoot = findRepoRoot();
-        const sourcePath = path.resolve(repoRoot, 'scripts/run_splat_pipeline.cpp');
-
+        const sourcePath = path.resolve(findRepoRoot(), 'scripts/run_splat_pipeline.cpp');
         if (!fs.existsSync(sourcePath)) {
             throw new Error(`Splat CLI pipeline source not found at: ${sourcePath}`);
         }
-
-        await execFileAsync('clang++', ['-std=c++20', '-O3', '-I', includePath, '-lz', sourcePath, '-o', this.binaryPath]);
-        return this.binaryPath;
+        return buildNativeIfStale({ source: sourcePath, binary: this.binaryPath, includeDir: this.compilerService.getSdkIncludePath(), libs: ['-lz'] });
     }
 
     /**

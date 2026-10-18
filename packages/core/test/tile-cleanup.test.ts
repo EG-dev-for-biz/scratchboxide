@@ -18,6 +18,7 @@ import {
     NativeCppCompilerService
 } from '../src/node';
 import { MissingInputError } from '../src/common/errors/pipeline-errors';
+import { nativeBinaryIsFresh } from '../src/node/3d-engine/native-build';
 
 // A real building GLB from the repo (an SB-Archi temple), used as the tile to clean.
 const INPUT_GLB = path.resolve(__dirname, '../../../deploy/cloud-run/spatial-separator/assets/temple_venus_roma_sb_archi.glb');
@@ -61,8 +62,8 @@ describe('3D Photogrammetry & Tile Cleanup Pipeline (In-App / Cloud Run)', () =>
     it('2. cleans the tile it is given (triangle counts come from the input GLB)', async () => {
         const binPath = await service.ensureBinary();
         expect(fs.existsSync(binPath)).toBe(true);
-        // Built through native-build, which records the dependency list it uses to rebuild a stale binary.
-        expect(fs.existsSync(`${binPath}.d`)).toBe(true);
+        // Built through native-build: the binary is the shared build cache's entry for its current sources.
+        expect(nativeBinaryIsFresh({ source: path.resolve(process.cwd(), 'scripts/run_tile_cleanup_pipeline.cpp'), binary: binPath, includeDir: path.resolve(process.cwd(), 'packages/core/src/native/3d-engine/include'), libs: ['-lz'] })).toBe(true);
 
         const result = await service.cleanPhotogrammetryTile({
             inputGlbPath: INPUT_GLB,

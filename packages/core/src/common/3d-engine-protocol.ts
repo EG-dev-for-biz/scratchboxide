@@ -25,6 +25,8 @@ export interface CompilationAsset {
 export interface CppCompilationResult {
     success: boolean;
     binaryPath?: string;
+    /** True when the binary came from the native build cache (nothing was compiled). */
+    cacheHit?: boolean;
     diagnostics: CppCompilerDiagnostic[];
     compilerOutput: string;
     compilationTimeMs: number;

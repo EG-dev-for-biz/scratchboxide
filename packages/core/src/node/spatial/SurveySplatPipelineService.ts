@@ -23,6 +23,7 @@ import type { BakedGaussian } from '../../common/geospatial-4d-protocol';
 import { decodePng, calibrateStoneAlbedoRgba, type StoneAlbedoPreset } from '../texture-processing';
 import type { TileSunSpec } from '../3d-engine/native-tile-path-tracer-service';
 import type { Scene3DData, Media4DObject } from '../../browser/generative-canvas/canvas-types';
+import { buildNativeIfStale } from '../3d-engine/native-build';
 
 const execAsync = promisify(exec);
 
@@ -173,16 +174,8 @@ export class SurveySplatPipelineService {
 
     async ensureBaker(signal?: AbortSignal): Promise<string> {
         const src = path.resolve(process.cwd(), 'scripts/station_to_splats.cpp');
-        if (fs.existsSync(this.bakerPath)) {
-            const srcStat = await fs.stat(src);
-            const binStat = await fs.stat(this.bakerPath);
-            if (binStat.mtimeMs >= srcStat.mtimeMs) {
-                return this.bakerPath;
-            }
-        }
-        await fs.ensureDir(path.dirname(this.bakerPath));
-        await execAsync(`${process.env.CXX || 'clang++'} -std=c++20 -O3 -I "${this.compiler.getSdkIncludePath()}" -lz "${src}" -o "${this.bakerPath}"`, { signal });
-        return this.bakerPath;
+        throwIfStopped(signal);
+        return buildNativeIfStale({ source: src, binary: this.bakerPath, includeDir: this.compiler.getSdkIncludePath(), libs: ['-lz'] });
     }
 
     async run(req: SurveySplatPipelineRequest, report: ProgressReporter = () => {}): Promise<SurveySplatPipelineResult> {

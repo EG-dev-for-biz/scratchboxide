@@ -12,6 +12,7 @@ import * as path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { NativeCppCompilerService } from './native-compiler-service';
+import { buildNativeIfStale } from './native-build';
 
 const execAsync = promisify(exec);
 
@@ -70,34 +71,15 @@ export class ColmapReconstructionService {
     }
 
     /**
-     * Ensures the native C++20 COLMAP -> GLB converter is compiled and not older
-     * than its source or the COLMAP header (a stale binary would run old behaviour).
+     * Ensures the native C++20 COLMAP -> GLB converter is built from the current source and every header it
+     * includes (native build cache; a stale binary would run old behaviour).
      */
     async ensureBinary(): Promise<string> {
-        const includePath = this.compilerService.getSdkIncludePath();
         const sourcePath = path.resolve(process.cwd(), 'scripts/run_colmap_glb_pipeline.cpp');
-        const headerPath = path.join(includePath, 'scratchbox_colmap.hpp');
-
-        if (fs.existsSync(this.binaryPath)) {
-            const binTime = fs.statSync(this.binaryPath).mtimeMs;
-            const inputs = [sourcePath, headerPath].filter(p => fs.existsSync(p));
-            if (inputs.every(p => fs.statSync(p).mtimeMs <= binTime)) {
-                return this.binaryPath;
-            }
-        }
-
-        const binDir = path.dirname(this.binaryPath);
-        if (!fs.existsSync(binDir)) {
-            fs.mkdirSync(binDir, { recursive: true });
-        }
-
         if (!fs.existsSync(sourcePath)) {
             throw new Error(`COLMAP CLI pipeline source not found at: ${sourcePath}`);
         }
-
-        const compileCmd = `clang++ -std=c++20 -O3 -I "${includePath}" "${sourcePath}" -o "${this.binaryPath}"`;
-        await execAsync(compileCmd);
-        return this.binaryPath;
+        return buildNativeIfStale({ source: sourcePath, binary: this.binaryPath, includeDir: this.compilerService.getSdkIncludePath() });
     }
 
     /**
