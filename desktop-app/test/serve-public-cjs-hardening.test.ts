@@ -174,7 +174,7 @@ describe('serve_public.cjs path containment and CORS', () => {
             `}`,
             `exports.GeoBoxPrecisionResectionService = GeoBoxPrecisionResectionService;`
         ].join('\n'));
-        write(root, 'packages/core/dist/node/spatial/PhotometricUsdBridgeService.js', [
+        write(root, 'build/serve-public-core/node/spatial/PhotometricUsdBridgeService.js', [
             `const fs = require('fs');`,
             `const path = require('path');`,
             `const log = ${JSON.stringify(usdLog)};`,
@@ -364,17 +364,17 @@ describe('serve_public.cjs path containment and CORS', () => {
         for (const outputPath of [`../${ESCAPE_NAME}.usda`, `${ESCAPE_NAME}.usda`, path.join(root, 'public/data/absolute.usda'),
             'public/outside.usda', 'public/models/rig.usda', 'public/data/../../outside.usda', 'public/data/evil.html',
             'public/data/.hidden.usda', 'scripts/serve_public.cjs']) {
-            assertRejected(await postJson(port, '/api/lighting/export-usd', { rig: {}, outputPath }), 400, `export-usd ${outputPath}`);
+            assertRejected(await postJson(port, '/api/lighting/export-usd', { rig: { lights: [] }, outputPath }), 400, `export-usd ${outputPath}`);
         }
         assert.deepStrictEqual(readLog(usdLog), [], 'an escaping outputPath reached the exporter');
         assertNothingWrittenOutsidePublic('export-usd');
 
-        // geobox_demo.html sends no outputPath; the default lands in public/data.
-        const demo = await postJson(port, '/api/lighting/export-usd', { rig: {}, assetName: 'ThePlazaHotel' }, { Origin: `http://127.0.0.1:${port}` });
+        // No outputPath: the default lands in public/data.
+        const demo = await postJson(port, '/api/lighting/export-usd', { rig: { lights: [] }, assetName: 'ThePlazaHotel' }, { Origin: `http://127.0.0.1:${port}` });
         assert.strictEqual(demo.status, 200, demo.body);
         assert.strictEqual(JSON.parse(demo.body).usdaUrl, '/data/scene_lighting_export.usda');
         assert.ok(fs.existsSync(path.join(root, 'public/data/scene_lighting_export.usda')));
-        const custom = await postJson(port, '/api/lighting/export-usd', { rig: {}, outputPath: 'public/data/custom_rig.usda' });
+        const custom = await postJson(port, '/api/lighting/export-usd', { rig: { lights: [] }, outputPath: 'public/data/custom_rig.usda' });
         assert.strictEqual(custom.status, 200, custom.body);
         assert.ok(fs.existsSync(path.join(root, 'public/data/custom_rig.usda')));
     });
@@ -438,12 +438,14 @@ describe('serve_public.cjs path containment and CORS', () => {
         assert.deepStrictEqual(readLog(usdLog).filter(([kind]) => kind === 'match'), [], 'an escaping imagePath reached the matcher');
         assertNothingWrittenOutsidePublic('match-reference');
 
-        // geobox_demo.html's default image, the pipeline's absolute image_path, and no imagePath at all.
+        // No image is a 400: there is no default photo.
+        assertRejected(await postJson(port, '/api/lighting/match-reference', {}), 400, 'match-reference without an image');
+
+        // A repo-relative public path and the pipeline's absolute image_path.
         for (const [imagePath, rel, url] of [
             [PLAZA_PHOTO, PLAZA_PHOTO, '/test_images/the_plaza_hotel_user_photo.jpg'],
-            [path.join(root, 'public/uploads/pipeline_frame.jpg'), 'public/uploads/pipeline_frame.jpg', '/uploads/pipeline_frame.jpg'],
-            [undefined, PLAZA_PHOTO, '/test_images/the_plaza_hotel_user_photo.jpg']
-        ] as Array<[string | undefined, string, string]>) {
+            [path.join(root, 'public/uploads/pipeline_frame.jpg'), 'public/uploads/pipeline_frame.jpg', '/uploads/pipeline_frame.jpg']
+        ] as Array<[string, string, string]>) {
             const res = await postJson(port, '/api/lighting/match-reference', { imagePath });
             assert.strictEqual(res.status, 200, res.body);
             assert.strictEqual(JSON.parse(res.body).imageRelUrl, url);

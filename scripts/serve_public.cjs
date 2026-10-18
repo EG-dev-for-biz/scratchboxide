@@ -5,6 +5,10 @@ const path = require('path');
 const { execFile } = require('child_process');
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 8080;
+// Loopback only unless SERVE_PUBLIC_HOST says otherwise; Dockerfile.inference sets 0.0.0.0 so the container port is
+// reachable. Binding wider does not widen what is accepted: the Host and Origin allowlists below still admit only
+// loopback names on this port plus SERVE_PUBLIC_ALLOWED_HOSTS / SERVE_PUBLIC_ALLOWED_ORIGINS.
+const HOST = String(process.env.SERVE_PUBLIC_HOST || '').trim() || '127.0.0.1';
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const UPLOADS_DIR = path.join(PUBLIC_DIR, 'uploads');
 const REPO_ROOT = path.join(__dirname, '..');
@@ -119,8 +123,11 @@ class CoreModuleUnavailableError extends Error {
 /** HTTP status for an error thrown by a core service: typed input errors are the caller's, the rest are ours. */
 function statusForError(err) {
     switch (err && err.code) {
-        case 'missing_input': return 400;
-        case 'location_unresolved': return 422;
+        case 'missing_input':
+        case 'invalid_input': return 400;
+        case 'location_unresolved':
+        case 'sun_not_found':
+        case 'lighting_unmeasured': return 422;
         case 'service_unavailable': return 503;
         default: return 500;
     }
@@ -608,100 +615,75 @@ const server = http.createServer(async (req, res) => {
         }
     }
 
-    // Endpoint: Learn & Persist Refined Camera Calibration
-    if (req.method === 'POST' && reqPath === '/api/geobox/calibrate') {
+    // Endpoint: Inversely solve and match lighting to a reference photograph (PhotometricUsdBridgeService). The
+    // image is required; location, capture time and camera are the request's own, with no default place or pose.
+    if (req.method === 'POST' && reqPath === '/api/lighting/match-reference') {
+        let body;
         try {
-            const body = await parseBody(req);
-            const calibrationsFile = path.join(PUBLIC_DIR, 'data', 'learned_resections.json');
-            fs.mkdirpSync(path.dirname(calibrationsFile));
-
-            let existing = {};
-            if (fs.existsSync(calibrationsFile)) {
-                try { existing = JSON.parse(fs.readFileSync(calibrationsFile, 'utf8')); } catch (e) {}
-            }
-
-            const key = (body.landmark || body.landmarkName || 'default').toLowerCase().replace(/[^a-z0-9]/g, '_');
-            existing[key] = {
-                ...body,
-                updatedAt: new Date().toISOString()
-            };
-
-            fs.writeFileSync(calibrationsFile, JSON.stringify(existing, null, 2));
-            console.log(`[GeoBox Learning] Persisted learned camera calibration for "${key}":`, body.geodetic || body.cameraPosition);
-
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                success: true,
-                message: `Learned calibration saved for ${body.landmark || key}`,
-                calibration: existing[key]
-            }));
-            return;
+            body = (await parseBody(req)) || {};
         } catch (err) {
-            console.error('[GeoBox Learning] Error:', err);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: false, error: err.message }));
+            rejectRequest(res, 400, err.message || 'Invalid JSON body');
             return;
         }
-    }
-
-    // Endpoint: Inversely solve and match lighting to reference photograph
-    if (req.method === 'POST' && reqPath === '/api/lighting/match-reference') {
-        try {
-            const body = await parseBody(req);
-            let imgPath = body.imagePath;
-            let relativeImgUrl = null;
-
-            if (body.imageBase64) {
-                const timestamp = Date.now();
-                let b64 = body.imageBase64;
-                let ext = '.jpg';
-                const match = b64.match(/^data:image\/([a-zA-Z0-9+]+);base64,/);
-                if (match) {
-                    ext = match[1] === 'png' ? '.png' : '.jpg';
-                    b64 = b64.slice(match[0].length);
-                }
-                const filename = `matched_light_ref_${timestamp}${ext}`;
-                imgPath = path.join(UPLOADS_DIR, filename);
-                fs.writeFileSync(imgPath, Buffer.from(b64, 'base64'));
-                relativeImgUrl = `/uploads/${filename}`;
-            } else {
-                imgPath = resolvePublicInputFile(body.imagePath || 'test_images/the_plaza_hotel_user_photo.jpg');
-                if (!imgPath) {
-                    rejectRequest(res, 400, `Image not found under public/: ${body.imagePath}`);
-                    return;
-                }
-                relativeImgUrl = publicUrlFor(imgPath);
+        let imgPath;
+        let relativeImgUrl;
+        if (typeof body.imageBase64 === 'string' && body.imageBase64) {
+            let b64 = body.imageBase64;
+            let ext = '.jpg';
+            const match = b64.match(/^data:image\/([a-zA-Z0-9+]+);base64,/);
+            if (match) {
+                ext = match[1] === 'png' ? '.png' : '.jpg';
+                b64 = b64.slice(match[0].length);
             }
+            const filename = `matched_light_ref_${Date.now()}${ext}`;
+            fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+            imgPath = path.join(UPLOADS_DIR, filename);
+            fs.writeFileSync(imgPath, Buffer.from(b64, 'base64'));
+            relativeImgUrl = `/uploads/${filename}`;
+        } else if (body.imagePath) {
+            imgPath = resolvePublicInputFile(body.imagePath);
+            if (!imgPath) {
+                rejectRequest(res, 400, `Image not found under public/: ${body.imagePath}`);
+                return;
+            }
+            relativeImgUrl = publicUrlFor(imgPath);
+        } else {
+            rejectRequest(res, 400, 'imagePath (under public/) or imageBase64 is required');
+            return;
+        }
 
-            const { matchImageAndLightingToLocation, matchLightingToReference } = require('../packages/core/dist/node/spatial/PhotometricUsdBridgeService.js');
+        try {
+            const lighting = loadCoreModule('node/spatial/PhotometricUsdBridgeService');
+            const outputUsdPath = path.join(PUBLIC_DIR, 'data', 'matched_lighting_rig.usda');
+            const locationName = body.landmarkName || body.locationName;
             let result;
-
-            if (body.autoAlignCamera !== false && (body.locationName || body.landmarkName || body.geodeticCoords)) {
-                result = await matchImageAndLightingToLocation({
+            if (locationName && !body.geodeticCoords) {
+                // A place name alone: resolved with Google Places by the service.
+                result = await lighting.matchImageAndLightingToLocation({
                     imagePath: imgPath,
-                    locationName: body.landmarkName || body.locationName,
-                    geodeticCoords: body.geodeticCoords,
+                    locationName,
+                    timestampIso: body.timestampIso,
                     cameraPosition: body.cameraPosition,
                     cameraTarget: body.cameraTarget,
-                    fovDeg: body.fovDeg || 54,
-                    stoneType: body.stoneType || 'travertine',
-                    autoAlignCamera: true,
+                    fovDeg: body.fovDeg,
+                    stoneType: body.stoneType,
                     autoExportUsd: true,
-                    outputUsdPath: path.join(PUBLIC_DIR, 'data', 'matched_lighting_rig.usda')
+                    outputUsdPath
                 });
             } else {
-                result = await matchLightingToReference({
+                result = await lighting.matchLightingToReference({
                     imagePath: imgPath,
-                    landmarkName: body.landmarkName || 'The Plaza Hotel',
-                    geodeticCoords: body.geodeticCoords || { lat: 40.7646, lng: -73.9743 },
-                    cameraHeadingDeg: body.cameraHeadingDeg || 215.3,
-                    cameraPitchDeg: body.cameraPitchDeg || 5.2,
+                    landmarkName: locationName,
+                    geodeticCoords: body.geodeticCoords,
+                    timestampIso: body.timestampIso,
+                    cameraHeadingDeg: body.cameraHeadingDeg,
+                    cameraPitchDeg: body.cameraPitchDeg,
                     cameraPosition: body.cameraPosition,
                     cameraTarget: body.cameraTarget,
-                    fovDeg: body.fovDeg || 54,
-                    stoneType: body.stoneType || 'travertine',
+                    fovDeg: body.fovDeg,
+                    stoneType: body.stoneType,
                     autoExportUsd: true,
-                    outputUsdPath: path.join(PUBLIC_DIR, 'data', 'matched_lighting_rig.usda')
+                    outputUsdPath
                 });
             }
 
@@ -712,27 +694,37 @@ const server = http.createServer(async (req, res) => {
                 usdDownloadUrl: result.usdExportPath ? '/data/' + path.basename(result.usdExportPath) : null,
                 mtlxDownloadUrl: result.mtlxExportPath ? '/data/' + path.basename(result.mtlxExportPath) : null
             }));
-            return;
         } catch (err) {
-            console.error('[Lighting Match API] Error:', err);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: false, error: err.message }));
-            return;
+            const status = statusForError(err);
+            if (status === 500) console.error('[Lighting Match API] Error:', err);
+            res.writeHead(status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, code: err.code || 'lighting_match_failed', error: err.message, imageRelUrl: relativeImgUrl }));
         }
+        return;
     }
 
-    // Endpoint: Export scene lighting to OpenUSD (.usda) and MaterialX (.mtlx)
+    // Endpoint: Export a lighting rig to OpenUSD (.usda) and MaterialX (.mtlx) (PhotometricUsdBridgeService)
     if (req.method === 'POST' && reqPath === '/api/lighting/export-usd') {
+        let body;
         try {
-            const body = await parseBody(req);
-            const outPath = body.outputPath
-                ? resolveWriteTarget(body.outputPath, USD_WRITE_DIRS, '.usda')
-                : path.join(PUBLIC_DIR, 'data', 'scene_lighting_export.usda');
-            if (!outPath) {
-                rejectRequest(res, 400, 'outputPath must be a .usda path under public/data/');
-                return;
-            }
-            const { PhotometricUsdBridgeService } = require('../packages/core/dist/node/spatial/PhotometricUsdBridgeService.js');
+            body = (await parseBody(req)) || {};
+        } catch (err) {
+            rejectRequest(res, 400, err.message || 'Invalid JSON body');
+            return;
+        }
+        const outPath = body.outputPath
+            ? resolveWriteTarget(body.outputPath, USD_WRITE_DIRS, '.usda')
+            : path.join(PUBLIC_DIR, 'data', 'scene_lighting_export.usda');
+        if (!outPath) {
+            rejectRequest(res, 400, 'outputPath must be a .usda path under public/data/');
+            return;
+        }
+        if (!body.rig || typeof body.rig !== 'object' || !Array.isArray(body.rig.lights)) {
+            rejectRequest(res, 400, 'rig with a lights array is required');
+            return;
+        }
+        try {
+            const { PhotometricUsdBridgeService } = loadCoreModule('node/spatial/PhotometricUsdBridgeService');
             const result = PhotometricUsdBridgeService.exportToUsd(body.rig, {
                 outputPath: outPath,
                 assetName: body.assetName || 'PhotometricScene',
@@ -750,13 +742,13 @@ const server = http.createServer(async (req, res) => {
                 mtlxUrl: result.mtlxFilePath ? '/data/' + path.basename(result.mtlxFilePath) : undefined,
                 usdaContent: result.usdaContent
             }));
-            return;
         } catch (err) {
-            console.error('[USD Export API] Error:', err);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: false, error: err.message }));
-            return;
+            const status = statusForError(err);
+            if (status === 500) console.error('[USD Export API] Error:', err);
+            res.writeHead(status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, code: err.code || 'usd_export_failed', error: err.message }));
         }
+        return;
     }
 
     // Endpoint: Ingest & Retrieve 3D Object Mesh via getGoogle3DTilesFullTexture
@@ -1053,11 +1045,12 @@ const server = http.createServer(async (req, res) => {
     });
 });
 
-server.listen(PORT, '127.0.0.1', () => {
-    // PORT=0 binds an ephemeral port; report the one actually bound.
-    const port = server.address().port;
-    console.log(`[Scratchbox Hub & GeoBox Resection Server] Running at http://127.0.0.1:${port}/`);
-    console.log(`  - Hub: http://127.0.0.1:${port}/index.html`);
-    console.log(`  - Showcase: http://127.0.0.1:${port}/model_showcase.html?model=geobox`);
-    console.log(`  - API Resection: POST http://127.0.0.1:${port}/api/geobox/resect`);
+server.listen(PORT, HOST, () => {
+    // PORT=0 binds an ephemeral port; report the address and port actually bound.
+    const { address, port } = server.address();
+    const shown = address.includes(':') ? `[${address}]` : address;
+    console.log(`[Scratchbox Hub & GeoBox Resection Server] Running at http://${shown}:${port}/`);
+    console.log(`  - Hub: http://${shown}:${port}/index.html`);
+    console.log(`  - Showcase: http://${shown}:${port}/model_showcase.html?model=geobox`);
+    console.log(`  - API Resection: POST http://${shown}:${port}/api/geobox/resect`);
 });

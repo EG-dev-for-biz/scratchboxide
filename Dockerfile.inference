@@ -5,20 +5,26 @@
 # and native Clang C++20 toolchains.
 # ------------------------------------------------------------------------------
 
-# Compile the packages/core services serve_public.cjs calls (npm run build:serve-public). The output needs no
-# npm packages at runtime; only the compiler is installed here.
+# Compile the packages/core services serve_public.cjs calls (npm run build:serve-public) to CommonJS. The lighting
+# service (PhotometricUsdBridgeService) needs three and jpeg-js at runtime; they are installed beside the output at
+# the versions package-lock.json pins for packages/core.
 FROM node:22-bookworm-slim AS serve-public-core
 WORKDIR /build
 RUN npm install --no-save --no-package-lock typescript@5.9.3
 COPY package.json ./
 COPY packages/core/src ./packages/core/src
-RUN npm run build:serve-public
+RUN npm run build:serve-public \
+    && npm install --no-save --no-package-lock --omit=dev --prefix build/serve-public-core three@0.186.0 jpeg-js@0.4.4
 
 FROM node:22-bookworm-slim
 
 # Prevent interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PORT=8080
+# Listen on all interfaces so the published container port is reachable. Requests are still admitted only with a
+# loopback Host header on this port (e.g. the HEALTHCHECK below) or one listed in SERVE_PUBLIC_ALLOWED_HOSTS, and
+# cross-origin API calls only from SERVE_PUBLIC_ALLOWED_ORIGINS: set those to the deployed hostname / origin.
+ENV SERVE_PUBLIC_HOST=0.0.0.0
 ENV PYTHON_BIN=python3
 
 # Install system dependencies: Python 3, pip, Clang C++20 compiler, FFmpeg
@@ -57,8 +63,8 @@ COPY scripts ./scripts
 COPY tools ./tools
 COPY packages ./packages
 
-# serve_public.cjs runs the TypeScript GeoBox resection service (and the 3D Tiles service) from packages/core,
-# compiled to CommonJS for plain Node in the serve-public-core stage below.
+# serve_public.cjs runs the TypeScript GeoBox resection, 3D Tiles and photometric lighting / OpenUSD services from
+# packages/core, compiled to CommonJS for plain Node in the serve-public-core stage above.
 COPY --from=serve-public-core /build/build/serve-public-core ./build/serve-public-core
 
 # Expose Google Cloud Run standard port
