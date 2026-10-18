@@ -1706,6 +1706,10 @@ const DEFINITIONS = {
         texelShare: ref('unit'), multiViewShare: ref('unit'), facades: NONNEG_INT, charts: NONNEG_INT, panos: NONNEG_INT, ms: ref('nonneg'),
         nonPlanar: obj(['texelShare', 'p90DeviationM', 'maxDeviationM'], { texelShare: ref('unit'), p90DeviationM: ref('nonneg'), maxDeviationM: ref('nonneg') }),
         heldOut: obj(['panoIds', 'mppM', 'methods'], { panoIds: arr(STR), mppM: ref('nonneg'), methods: { type: 'object', additionalProperties: ref('photoTierFitScores') } }),
+        occluderCheck: obj(['singlePx', 'rejectedPx', 'sky', 'vegetation', 'tile'], { singlePx: NONNEG_INT, rejectedPx: NONNEG_INT, sky: NONNEG_INT, vegetation: NONNEG_INT, tile: NONNEG_INT }),
+        delight: obj(['texels', 'meanLiftKept', 'liftHalvedTexels'], { texels: NONNEG_INT, meanLiftKept: ref('unit'), liftHalvedTexels: NONNEG_INT }),
+        exposure: obj(['charts', 'meanAbsLogGain', 'maxAbsLogGain'], { charts: NONNEG_INT, meanAbsLogGain: ref('nonneg'), maxAbsLogGain: ref('nonneg') }),
+        merged: obj(['rung0Texels', 'rung1Texels', 'rung1KeptBelowTexels', 'texelShare'], { rung0Texels: NONNEG_INT, rung1Texels: NONNEG_INT, rung1KeptBelowTexels: NONNEG_INT, texelShare: ref('unit') }),
         timingsMs: numberMap
     }),
     surfaceUvMap: obj(['nodeName', 'kind', 'texelsPerMeter', 'atlasRect'], {
@@ -1726,8 +1730,8 @@ const DEFINITIONS = {
             chamferPx: NUM_OR_NULL, clayChamferPx: NUM_OR_NULL, gradNcc: NUM_OR_NULL, scoredViews: NONNEG_INT, heldOutShare: ref('unit'), widthPx: NONNEG_INT,
             photo: obj(['chamferPx', 'gradNcc', 'pixels'], { chamferPx: NUM_OR_NULL, gradNcc: NUM_OR_NULL, pixels: NONNEG_INT }),
             loo: obj(['chamferPx', 'gradNcc', 'pixels', 'panos', 'skipped', 'perPano'], {
-                chamferPx: NUM_OR_NULL, gradNcc: NUM_OR_NULL, pixels: NONNEG_INT, panos: NONNEG_INT, skipped: NONNEG_INT,
-                perPano: arr(obj(['panoId', 'pixels', 'chamferPx', 'gradNcc'], { panoId: STR, pixels: NONNEG_INT, chamferPx: NUM_OR_NULL, gradNcc: NUM_OR_NULL }))
+                chamferPx: NUM_OR_NULL, gradNcc: NUM_OR_NULL, pixels: NONNEG_INT, panos: NONNEG_INT, skipped: NONNEG_INT, panosTotal: NONNEG_INT, sampled: { type: 'boolean' },
+                perPano: arr(obj(['panoId', 'pixels', 'chamferPx', 'gradNcc'], { panoId: STR, pixels: NONNEG_INT, chamferPx: NUM_OR_NULL, gradNcc: NUM_OR_NULL, ms: ref('nonneg') }))
             }),
             views: arr(obj(['panoId', 'pixels', 'ownPixels', 'chamferPx', 'clayChamferPx', 'gradNcc'], {
                 panoId: STR, pixels: NONNEG_INT, ownPixels: NONNEG_INT, chamferPx: NUM_OR_NULL, clayChamferPx: NUM_OR_NULL, gradNcc: NUM_OR_NULL,
