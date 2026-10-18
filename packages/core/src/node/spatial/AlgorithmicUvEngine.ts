@@ -14,6 +14,7 @@ import { calculateNOAASolarPosition, calculateENUSunVector } from '../../browser
 import { SphericalHarmonics9 } from '../../browser/generative-canvas/services/atmosphere/volumetric-participating-media';
 import { decodeImageToRgba, encodeRgbaToJpeg, readImageDimensions, sniffImageFormat, type RgbaImage } from '../image-codec-ffmpeg';
 import { encodePng } from '../texture-processing';
+import { readAccessor, nodeWorldMatrices, type Mat4 } from '../3d-engine/staged-location/glb-bytes';
 
 // ============================================================================
 // Public Interfaces & Options Contracts
@@ -201,6 +202,46 @@ export interface PbrDecompositionResult {
   width: number;
   height: number;
   toksvigMipPyramid?: ToksvigMipLevel[];
+  /** Present when solar inverse de-lighting ran: texels divided by E(N) and painted texels left as they were (no geometry normal). */
+  solarDelighting?: { sunVector: [number, number, number]; delitTexels: number; paintedTexelsWithoutNormal: number };
+  /** Where each output map comes from. The normal, roughness and AO maps are estimated from the image itself, not measured. */
+  mapProvenance: PbrMapProvenance;
+}
+
+/** Source of each map decomposePbr writes. */
+export interface PbrMapProvenance {
+  normal: string;
+  roughness: string;
+  ao: string;
+  metalness: string;
+}
+
+/**
+ * The normal, roughness and AO maps are image heuristics: they read luminance gradients, Laplacian curvature and colour
+ * thresholds of the albedo, so they guess surface relief and gloss from brightness. None of them is a measurement.
+ */
+export const IMAGE_DERIVED_MAP_PROVENANCE: PbrMapProvenance = Object.freeze({
+  normal: 'heuristic: luminance gradient of the albedo (image-derived, not geometry)',
+  roughness: 'heuristic: base roughness from the contract, varied by albedo luminance curvature and colour thresholds (not measured)',
+  ao: 'heuristic: horizon/cavity estimate from the image-derived normal or luminance (not ray-traced against geometry)',
+  metalness: 'constant from the material contract (not measured)'
+});
+
+/** Thrown when solar inverse de-lighting is asked for without a geometry normal per texel. */
+export class SolarDelightingNormalsError extends Error {
+  readonly code = 'SOLAR_DELIGHT_NEEDS_GEOMETRY_NORMALS';
+  constructor(message: string) {
+    super(message);
+    this.name = 'SolarDelightingNormalsError';
+  }
+}
+
+/** One triangle primitive that samples a baseColor image, and which UV set it samples it with. */
+export interface UvPrimitiveRef {
+  meshIndex: number;
+  primitive: any;
+  texCoord: number;
+  textureTransformed: boolean;
 }
 
 /** Texture periodicity measured by 1D autocorrelation of one decoded baseColor image (pixel units only). */
@@ -224,6 +265,20 @@ export interface TextureImageReport {
   normalMapGenerated?: boolean;
   metallicRoughnessGenerated?: boolean;
   occlusionGenerated?: boolean;
+  /** Solar de-lighting of this image: texels divided by E(N) from the mesh normals rasterized into its UV space. */
+  solarDelighting?: {
+    applied: boolean;
+    /** Why it did not run (no rasterizable geometry normals for this image). */
+    skippedReason?: string;
+    normalSource?: 'vertex-normals' | 'face-normals-from-positions' | 'mixed';
+    texelsWithGeometryNormal?: number;
+    /** Texels that several triangles map to with disagreeing normals (tiled or shared UVs); left unlit-corrected. */
+    texelsWithConflictingNormals?: number;
+    delitTexels?: number;
+    paintedTexelsWithoutNormal?: number;
+  };
+  /** Where the generated maps come from (the normal, roughness and AO maps are image heuristics). */
+  mapProvenance?: PbrMapProvenance;
   error?: string;
 }
 
@@ -615,7 +670,7 @@ export class AlgorithmicUvEngine {
     let verticesProcessed = 0;
 
     // Each baseColor image, the materials that sample it, and the contract of the first primitive that uses it.
-    const imageJobs = new Map<number, { textureIndex: number; materials: Set<number>; contract: Required<BiophysicalMaterialContract> }>();
+    const imageJobs = new Map<number, { textureIndex: number; materials: Set<number>; contract: Required<BiophysicalMaterialContract>; prims: UvPrimitiveRef[] }>();
     const images: TextureImageReport[] = [];
     const sourcelessTextures = new Set<number>();
 
@@ -649,10 +704,12 @@ export class AlgorithmicUvEngine {
           // (e.g. Google tiles 'Material_0') must not override the lithology contract.
           const partCat = options.submeshCategoryMap?.[meshIdx] || mat?.extras?.category;
           const contract = options.enablePartAwarePbr && partCat ? resolveBiophysicalContract(String(partCat)) : imageContract;
-          job = { textureIndex, materials: new Set<number>(), contract };
+          job = { textureIndex, materials: new Set<number>(), contract, prims: [] };
           imageJobs.set(imageIndex, job);
         }
         job.materials.add(prim.material);
+        const btex = mat.pbrMetallicRoughness.baseColorTexture;
+        job.prims.push({ meshIndex: meshIdx, primitive: prim, texCoord: btex.texCoord ?? 0, textureTransformed: !!btex.extensions?.KHR_texture_transform });
       }
     }
 
@@ -685,23 +742,69 @@ export class AlgorithmicUvEngine {
     let inducedSpatialProfile: MeasuredSpatialProfile | undefined;
     let solarDelightingApplied = false;
 
+    const meshNodes = new Map<number, Mat4[]>();
+    if (pbr.enableSolarInverseDelighting) {
+      // Throws before any image work when no sun vector or place and time was given.
+      this.resolveSolarSunVector(pbr.solarDelighting);
+      const worlds = nodeWorldMatrices(json);
+      (json.nodes ?? []).forEach((n: any, i: number) => {
+        if (n.mesh === undefined) return;
+        if (!meshNodes.has(n.mesh)) meshNodes.set(n.mesh, []);
+        meshNodes.get(n.mesh)!.push(worlds[i]);
+      });
+    }
+
     for (const [imageIndex, job] of imageJobs) {
       const users = [...job.materials].map(m => materials[m]);
+      // Solar de-lighting divides by E(N) with N from the mesh: the primitives that sample this image are
+      // rasterized into its UV space. Without geometry normals for the image it does not run, and the report says why.
+      let imageOpts: PbrDecompositionOptions = { ...pbrOpts, biophysicalContract: job.contract };
+      let solarReport: TextureImageReport['solarDelighting'];
+      if (pbr.enableSolarInverseDelighting) {
+        try {
+          const dims = readImageDimensions(imageBytes(imageIndex));
+          if (!dims) throw new Error('image dimensions could not be read');
+          const raster = this.rasterizeGeometryNormalsToUv(glb, job.prims, meshNodes, dims.width, dims.height);
+          if (raster.texelsWithNormal === 0) {
+            solarReport = { applied: false, skippedReason: raster.reason ?? 'no triangle of the primitives using this image covers a texel' };
+            imageOpts = { ...imageOpts, enableSolarInverseDelighting: false };
+          } else {
+            solarReport = {
+              applied: true,
+              normalSource: raster.normalSource,
+              texelsWithGeometryNormal: raster.texelsWithNormal,
+              texelsWithConflictingNormals: raster.texelsConflicting
+            };
+            imageOpts = { ...imageOpts, worldNormalsMap: raster.normals };
+          }
+        } catch (err) {
+          solarReport = { applied: false, skippedReason: `geometry normals could not be rasterized: ${err instanceof Error ? err.message : String(err)}` };
+          imageOpts = { ...imageOpts, enableSolarInverseDelighting: false };
+        }
+      }
       const want = {
-        delight: passes.delight,
+        delight: !!(pbr.enableAlbedoDeLighting || imageOpts.enableSolarInverseDelighting),
         normal: passes.normal && users.some(m => !m.normalTexture),
         roughness: passes.roughness && users.some(m => !m.pbrMetallicRoughness?.metallicRoughnessTexture),
         ao: passes.ao && users.some(m => !m.occlusionTexture),
         profile: imageIndex === profileImageIndex
       };
-      if (!want.delight && !want.normal && !want.roughness && !want.ao && !want.profile) continue;
+      if (!want.delight && !want.normal && !want.roughness && !want.ao && !want.profile) {
+        if (solarReport) images.push({ textureIndex: job.textureIndex, imageIndex, status: 'processed', albedoRewritten: false, solarDelighting: solarReport });
+        continue;
+      }
 
-      const report: TextureImageReport = { textureIndex: job.textureIndex, imageIndex, status: 'processed' };
+      const report: TextureImageReport = { textureIndex: job.textureIndex, imageIndex, status: 'processed', solarDelighting: solarReport };
       images.push(report);
       try {
         const bytes = imageBytes(imageIndex);
         report.sourceMimeType = json.images[imageIndex].mimeType;
-        const out = await this.processTextureBuffer(bytes, { ...pbrOpts, biophysicalContract: job.contract }, want, passes.packOrm);
+        const out = await this.processTextureBuffer(bytes, imageOpts, want, passes.packOrm);
+        if (out.solarDelighting && report.solarDelighting) {
+          report.solarDelighting.delitTexels = out.solarDelighting.delitTexels;
+          report.solarDelighting.paintedTexelsWithoutNormal = out.solarDelighting.paintedTexelsWithoutNormal;
+        }
+        if (out.mapProvenance && (out.normalPng || out.metallicRoughnessPng || out.occlusionPng)) report.mapProvenance = out.mapProvenance;
 
         report.width = out.width;
         report.height = out.height;
@@ -713,7 +816,7 @@ export class AlgorithmicUvEngine {
         texelsProcessed += report.texels;
 
         if (out.profile) inducedSpatialProfile = { sourceImageIndex: imageIndex, ...out.profile };
-        if (out.albedo && pbr.enableSolarInverseDelighting) solarDelightingApplied = true;
+        if (out.albedo && out.solarDelighting && out.solarDelighting.delitTexels > 0) solarDelightingApplied = true;
         if (out.albedo || out.normalPng || out.metallicRoughnessPng || out.occlusionPng) {
           rewrites.set(imageIndex, {
             replacement: out.albedo,
@@ -1759,6 +1862,7 @@ export class AlgorithmicUvEngine {
     }
 
     // 1b. Solar Inverse De-Lighting via NOAA Ephemeris & Ramamoorthi SH9 Irradiance
+    let solarDelighting: PbrDecompositionResult['solarDelighting'];
     if (options.enableSolarInverseDelighting) {
       const cfg = options.solarDelighting || {};
       // The sun is the one given (a vector, or a place and time for the NOAA ephemeris); no place or date is assumed.
@@ -1780,39 +1884,41 @@ export class AlgorithmicUvEngine {
       const ambientWeight = cfg.ambientWeight ?? 0.35;
       const eps = cfg.regularizationEpsilon ?? 0.18;
 
-      // Estimate local tangent-space normal from luminance gradient
-      const getL = (px: number, py: number) => {
-        const cx = Math.max(0, Math.min(width - 1, px));
-        const cy = Math.max(0, Math.min(height - 1, py));
-        const cidx = (cy * width + cx) * 4;
-        return (0.299 * albedoRgba[cidx] + 0.587 * albedoRgba[cidx + 1] + 0.114 * albedoRgba[cidx + 2]) / 255.0;
-      };
+      // E(N) needs the surface normal of each texel. It comes from the geometry (worldNormalsMap, one world-space
+      // unit normal per texel in the sun vector's frame), never from the image: a normal estimated from the
+      // gradient of the same pixels makes the divisor a function of the texture it divides.
+      const normals = options.worldNormalsMap;
+      if (!normals || normals.length !== totalPixels * 3) {
+        throw new SolarDelightingNormalsError(
+          `solar de-lighting needs worldNormalsMap with one geometry normal per texel (${totalPixels * 3} floats for ${width}x${height}); got ${normals ? normals.length : 'none'}`
+        );
+      }
       const irradianceMap = new Float32Array(totalPixels);
       let irradianceSum = 0.0;
-      let painted = 0;
-      for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-          if (albedoRgba[(y * width + x) * 4 + 3] === 0) continue;
-          const dx = (getL(x + 1, y) - getL(x - 1, y)) * 1.5;
-          const dy = (getL(x, y + 1) - getL(x, y - 1)) * 1.5;
-          const normal: [number, number, number] = [-dx, -dy, 1.0];
-          const irradiance = this.computeSolarIrradiance(normal, sunVec, skyShCoeffs, directWeight, ambientWeight, eps);
-          irradianceMap[y * width + x] = irradiance;
-          irradianceSum += irradiance;
-          painted++;
-        }
+      let delitTexels = 0;
+      let paintedWithoutNormal = 0;
+      for (let i = 0; i < totalPixels; i++) {
+        if (albedoRgba[i * 4 + 3] === 0) continue;
+        const nx = normals[i * 3], ny = normals[i * 3 + 1], nz = normals[i * 3 + 2];
+        if (!(Math.hypot(nx, ny, nz) > 1e-6)) { paintedWithoutNormal++; continue; }
+        const irradiance = this.computeSolarIrradiance([nx, ny, nz], sunVec, skyShCoeffs, directWeight, ambientWeight, eps);
+        irradianceMap[i] = irradiance;
+        irradianceSum += irradiance;
+        delitTexels++;
       }
 
-      // E(N) inverse division relative to the mean irradiance: removes the directional light, keeps the brightness
-      const meanIrradiance = painted > 0 ? irradianceSum / painted : 1.0;
+      // E(N) inverse division relative to the mean irradiance: removes the directional light, keeps the brightness.
+      // Texels with no geometry normal keep their pixels.
+      const meanIrradiance = delitTexels > 0 ? irradianceSum / delitTexels : 1.0;
       for (let i = 0; i < totalPixels; i++) {
         const idx = i * 4;
-        if (albedoRgba[idx + 3] === 0) continue;
+        if (albedoRgba[idx + 3] === 0 || irradianceMap[i] === 0) continue;
         const gain = meanIrradiance / irradianceMap[i];
         albedoOut[idx]     = Math.min(255, Math.max(0, Math.round(albedoOut[idx] * gain)));
         albedoOut[idx + 1] = Math.min(255, Math.max(0, Math.round(albedoOut[idx + 1] * gain)));
         albedoOut[idx + 2] = Math.min(255, Math.max(0, Math.round(albedoOut[idx + 2] * gain)));
       }
+      solarDelighting = { sunVector: sunVec, delitTexels, paintedTexelsWithoutNormal: paintedWithoutNormal };
     }
 
     // Build luminance float buffer for differential operators
@@ -1987,7 +2093,9 @@ export class AlgorithmicUvEngine {
       orm: ormMap,
       width,
       height,
-      toksvigMipPyramid
+      toksvigMipPyramid,
+      solarDelighting,
+      mapProvenance: IMAGE_DERIVED_MAP_PROVENANCE
     };
   }
 
@@ -2025,6 +2133,116 @@ export class AlgorithmicUvEngine {
    * decoded. Returns only what was computed: `albedo` when de-lighting ran (JPEG sources stay JPEG, others
    * become PNG), and PNG normal / metallicRoughness / occlusion maps at the image's own resolution.
    */
+  /**
+   * World-space geometry normal of every texel of a width x height image, from the triangle primitives that sample it.
+   * Each primitive is rasterized in its texCoord UV space (glTF v down) under every node that instances its mesh.
+   * Normals are NORMAL interpolated by barycentrics, or the face normal of the world positions when NORMAL is absent,
+   * and are transformed by the node's inverse-transpose. A texel several triangles map to keeps the mean only when the
+   * normals agree (mean length >= 0.9); otherwise it gets none. Primitives whose texture has KHR_texture_transform,
+   * or that are not triangle lists, are not rasterized, since their texels cannot be placed without guessing.
+   */
+  public static rasterizeGeometryNormalsToUv(
+    glb: { json: any; bin: Uint8Array },
+    prims: UvPrimitiveRef[],
+    meshNodes: Map<number, Mat4[]>,
+    width: number,
+    height: number
+  ): { normals: Float32Array; texelsWithNormal: number; texelsConflicting: number; normalSource?: 'vertex-normals' | 'face-normals-from-positions' | 'mixed'; reason?: string } {
+    const total = width * height;
+    const sum = new Float32Array(total * 3);
+    const hits = new Uint32Array(total);
+    const skipped: string[] = [];
+    let usedVertex = false, usedFace = false;
+    for (const ref of prims) {
+      const prim = ref.primitive;
+      if ((prim.mode ?? 4) !== 4) { skipped.push(`mesh ${ref.meshIndex}: primitive mode ${prim.mode} is not a triangle list`); continue; }
+      if (ref.textureTransformed) { skipped.push(`mesh ${ref.meshIndex}: baseColorTexture uses KHR_texture_transform`); continue; }
+      const uvAcc = prim.attributes?.[`TEXCOORD_${ref.texCoord}`];
+      if (uvAcc === undefined) { skipped.push(`mesh ${ref.meshIndex}: no TEXCOORD_${ref.texCoord}`); continue; }
+      if (prim.attributes?.POSITION === undefined) { skipped.push(`mesh ${ref.meshIndex}: no POSITION`); continue; }
+      const nodes = meshNodes.get(ref.meshIndex);
+      if (!nodes || nodes.length === 0) { skipped.push(`mesh ${ref.meshIndex}: no scene node instances it`); continue; }
+
+      const uv = readAccessor(glb, uvAcc);
+      const uvDef = glb.json.accessors[uvAcc];
+      const uvScale = uvDef.normalized ? (uvDef.componentType === 5121 ? 1 / 255 : uvDef.componentType === 5123 ? 1 / 65535 : 1) : 1;
+      const pos = readAccessor(glb, prim.attributes.POSITION);
+      const nrm = prim.attributes.NORMAL !== undefined ? readAccessor(glb, prim.attributes.NORMAL) : undefined;
+      if (nrm) usedVertex = true; else usedFace = true;
+      const idx = prim.indices !== undefined ? readAccessor(glb, prim.indices).data : undefined;
+      const triCount = Math.floor((idx ? idx.length : pos.count) / 3);
+
+      for (const m of nodes) {
+        // Inverse-transpose of the upper 3x3 (column-major m) via the cofactor matrix, signed by the determinant.
+        const a = m[0], b = m[4], c = m[8], d = m[1], e = m[5], f = m[9], g = m[2], h = m[6], k = m[10];
+        const C = [e * k - f * h, -(d * k - f * g), d * h - e * g, -(b * k - c * h), a * k - c * g, -(a * h - b * g), b * f - c * e, -(a * f - c * d), a * e - b * d];
+        const det = a * C[0] + b * C[1] + c * C[2];
+        const sgn = det < 0 ? -1 : 1;
+        const xfN = (x: number, y: number, z: number): [number, number, number] => [
+          sgn * (C[0] * x + C[1] * y + C[2] * z), sgn * (C[3] * x + C[4] * y + C[5] * z), sgn * (C[6] * x + C[7] * y + C[8] * z)
+        ];
+        const xfP = (i: number): [number, number, number] => {
+          const x = pos.data[i * 3], y = pos.data[i * 3 + 1], z = pos.data[i * 3 + 2];
+          return [m[0] * x + m[4] * y + m[8] * z + m[12], m[1] * x + m[5] * y + m[9] * z + m[13], m[2] * x + m[6] * y + m[10] * z + m[14]];
+        };
+        for (let t = 0; t < triCount; t++) {
+          const vi = [0, 1, 2].map(j => (idx ? idx[t * 3 + j] : t * 3 + j));
+          const px = vi.map(v => uv.data[v * 2] * uvScale * width);
+          const py = vi.map(v => uv.data[v * 2 + 1] * uvScale * height);
+          const area = (px[1] - px[0]) * (py[2] - py[0]) - (px[2] - px[0]) * (py[1] - py[0]);
+          if (!(Math.abs(area) > 1e-12)) continue;
+          let vn: [number, number, number][];
+          if (nrm) {
+            vn = vi.map(v => xfN(nrm.data[v * 3], nrm.data[v * 3 + 1], nrm.data[v * 3 + 2]));
+          } else {
+            const [p0, p1, p2] = vi.map(xfP);
+            const ux = p1[0] - p0[0], uy = p1[1] - p0[1], uz = p1[2] - p0[2];
+            const wx = p2[0] - p0[0], wy = p2[1] - p0[1], wz = p2[2] - p0[2];
+            const fn: [number, number, number] = [uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx];
+            vn = [fn, fn, fn];
+          }
+          const x0 = Math.max(0, Math.floor(Math.min(px[0], px[1], px[2])));
+          const x1 = Math.min(width - 1, Math.ceil(Math.max(px[0], px[1], px[2])));
+          const y0 = Math.max(0, Math.floor(Math.min(py[0], py[1], py[2])));
+          const y1 = Math.min(height - 1, Math.ceil(Math.max(py[0], py[1], py[2])));
+          for (let y = y0; y <= y1; y++) {
+            const cy = y + 0.5;
+            for (let x = x0; x <= x1; x++) {
+              const cx = x + 0.5;
+              const w0 = ((px[1] - cx) * (py[2] - cy) - (px[2] - cx) * (py[1] - cy)) / area;
+              const w1 = ((px[2] - cx) * (py[0] - cy) - (px[0] - cx) * (py[2] - cy)) / area;
+              const w2 = 1 - w0 - w1;
+              if (w0 < -1e-6 || w1 < -1e-6 || w2 < -1e-6) continue;
+              let nx = w0 * vn[0][0] + w1 * vn[1][0] + w2 * vn[2][0];
+              let ny = w0 * vn[0][1] + w1 * vn[1][1] + w2 * vn[2][1];
+              let nz = w0 * vn[0][2] + w1 * vn[1][2] + w2 * vn[2][2];
+              const len = Math.hypot(nx, ny, nz);
+              if (!(len > 1e-12)) continue;
+              nx /= len; ny /= len; nz /= len;
+              const ti = y * width + x;
+              sum[ti * 3] += nx; sum[ti * 3 + 1] += ny; sum[ti * 3 + 2] += nz;
+              hits[ti]++;
+            }
+          }
+        }
+      }
+    }
+    const normals = new Float32Array(total * 3);
+    let texelsWithNormal = 0, texelsConflicting = 0;
+    for (let i = 0; i < total; i++) {
+      if (hits[i] === 0) continue;
+      const len = Math.hypot(sum[i * 3], sum[i * 3 + 1], sum[i * 3 + 2]);
+      if (len / hits[i] < 0.9) { texelsConflicting++; continue; }
+      normals[i * 3] = sum[i * 3] / len; normals[i * 3 + 1] = sum[i * 3 + 1] / len; normals[i * 3 + 2] = sum[i * 3 + 2] / len;
+      texelsWithNormal++;
+    }
+    const normalSource = usedVertex && usedFace ? 'mixed' : usedVertex ? 'vertex-normals' : usedFace ? 'face-normals-from-positions' : undefined;
+    const reason = texelsWithNormal === 0
+      ? (skipped.length ? skipped.join('; ') : texelsConflicting > 0 ? `all ${texelsConflicting} covered texels have conflicting normals (shared or tiled UVs)` : undefined)
+      : undefined;
+    return { normals, texelsWithNormal, texelsConflicting, normalSource, reason };
+  }
+
   private static async processTextureBuffer(
     imgBuffer: Buffer,
     pbrOpts: PbrDecompositionOptions,
@@ -2038,6 +2256,8 @@ export class AlgorithmicUvEngine {
     metallicRoughnessPng?: Buffer;
     occlusionPng?: Buffer;
     profile?: Omit<MeasuredSpatialProfile, 'sourceImageIndex'>;
+    solarDelighting?: PbrDecompositionResult['solarDelighting'];
+    mapProvenance?: PbrMapProvenance;
   }> {
     const format = sniffImageFormat(imgBuffer);
     if (format === 'png') this.assertDecodablePng(imgBuffer);
@@ -2061,6 +2281,8 @@ export class AlgorithmicUvEngine {
     if (!want.delight && !want.normal && !want.roughness && !want.ao) return out;
 
     const pbr = await this.decomposePbr(rgba, pbrOpts, width, height);
+    out.solarDelighting = pbr.solarDelighting;
+    out.mapProvenance = pbr.mapProvenance;
     const asBuffer = (u: Uint8Array) => Buffer.from(u.buffer, u.byteOffset, u.byteLength);
 
     if (want.delight) {

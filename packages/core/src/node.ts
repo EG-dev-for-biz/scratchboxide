@@ -1015,7 +1015,12 @@ export {
 // Universal 3D Object Separation & Visual Alignment Verification Services
 export {
     Universal3DObjectSeparationService,
+    measureShapeDescriptors,
+    routeFromDescriptors,
+    isBroadLowSurface,
     type UniversalSpatialCategory,
+    type SpatialEntityLabel,
+    type SpatialShapeDescriptors,
     type DownstreamGeneratorRouting,
     type UniversalSeparatedObject,
     type UniversalSeparatedScene,

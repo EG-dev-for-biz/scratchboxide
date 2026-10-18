@@ -13,7 +13,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { getGoogle3DTilesFullTexture, getGoogle3DTilesClay, GeoAnchor } from './Google3DTileBlockoutPipelineService';
 import { TileExtractionError } from '../../common/errors/pipeline-errors';
-import { Universal3DObjectSeparationService, UniversalSeparatedScene, UniversalSeparatedObject } from './Universal3DObjectSeparationService';
+import { Universal3DObjectSeparationService, UniversalSeparatedScene, UniversalSeparatedObject, isBroadLowSurface } from './Universal3DObjectSeparationService';
 
 export interface ExtractedVegetationAnchor {
   id: string;
@@ -127,27 +127,12 @@ export class GeospatialTileExtractionBridge {
     let archCount = 0;
     let terrainCount = 0;
 
-    for (let i = 0; i < separation.objects.length; ++i) {
-      const obj = separation.objects[i];
-      if (obj.category === 'foliage' || obj.category === 'foliage_trees') {
-        const radius = Math.max(0.5, Math.max(obj.boundingBox.dimensions[0], obj.boundingBox.dimensions[2]) * 0.5);
-        const height = Math.max(1.0, obj.boundingBox.dimensions[1]);
-        const seed = Math.abs((obj.id.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) * 1103515245) % 2147483647);
-
-        vegetationAnchors.push({
-          id: obj.id,
-          name: obj.name,
-          centroid: obj.boundingBox.centroid,
-          dimensions: obj.boundingBox.dimensions,
-          radius,
-          height,
-          seed
-        });
-      } else if (obj.category === 'architecture' || obj.category === 'landmark') {
-        archCount++;
-      } else if (obj.category === 'terrain') {
-        terrainCount++;
-      }
+    // Ground and structure counts come from each entity's measured shape, never its label. No vegetation is read
+    // from separated geometry (a bounding box cannot tell a crown from a kiosk); trees are measured from the photo
+    // tiles by tile_vegetation, so vegetationAnchors stays empty here.
+    for (const obj of separation.objects) {
+      if (isBroadLowSurface(obj.descriptors)) terrainCount++;
+      else archCount++;
     }
 
     const queryString = typeof queryOrCoords === 'string'

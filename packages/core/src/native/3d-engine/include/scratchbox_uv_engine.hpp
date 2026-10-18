@@ -288,35 +288,47 @@ inline float computeSolarIrradiance(
     return std::clamp(total, config.regularizationEpsilon, 1.8f);
 }
 
-inline void applySolarInverseDelighting(
+/**
+ * Divides each texel by E(N) relative to the mean E over the de-lit texels (removes the directional light, keeps the
+ * brightness). N is the geometry normal of the surface the texel lies on (`texelNormals`, one per texel, rasterized
+ * from the mesh); texels whose normal is zero-length are left as they are. The normal is never estimated from the
+ * image: a normal taken from the gradient of the same pixels would make the divisor a function of the texture.
+ * Returns the number of texels divided.
+ */
+inline int applySolarInverseDelighting(
     ImageBuffer& albedo,
+    const std::vector<Vec3>& texelNormals,
     const SolarEphemerisConfig& config = {}
 ) {
     int w = albedo.width;
     int h = albedo.height;
+    if (static_cast<int>(texelNormals.size()) != w * h) return 0;
+
+    std::vector<float> irradiance(static_cast<size_t>(w) * h, 0.0f);
+    double sum = 0.0;
+    int count = 0;
+    for (int i = 0; i < w * h; ++i) {
+        const Vec3& n = texelNormals[i];
+        if (n.dot(n) < 1e-12f) continue;
+        irradiance[i] = computeSolarIrradiance(n, config);
+        sum += irradiance[i];
+        ++count;
+    }
+    if (count == 0) return 0;
+    float mean = static_cast<float>(sum / count);
 
     for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
-            Vec3 col = albedo.getPixelRGB(x, y);
-
-            float lumL = albedo.getLuminance(std::max(0, x - 1), y);
-            float lumR = albedo.getLuminance(std::min(w - 1, x + 1), y);
-            float lumB = albedo.getLuminance(x, std::max(0, y - 1));
-            float lumT = albedo.getLuminance(x, std::min(h - 1, y + 1));
-
-            float dx = (lumR - lumL) * 1.5f;
-            float dy = (lumT - lumB) * 1.5f;
-            Vec3 normal(-dx, -dy, 1.0f);
-
-            float irradiance = computeSolarIrradiance(normal, config);
-            col = col * (1.0f / irradiance);
+            float e = irradiance[y * w + x];
+            if (e <= 0.0f) continue;
+            Vec3 col = albedo.getPixelRGB(x, y) * (mean / e);
             col.x = std::clamp(col.x, 0.0f, 1.0f);
             col.y = std::clamp(col.y, 0.0f, 1.0f);
             col.z = std::clamp(col.z, 0.0f, 1.0f);
-
             albedo.setPixelRGB(x, y, col);
         }
     }
+    return count;
 }
 
 // ============================================================================
@@ -430,6 +442,14 @@ struct UvEngineResult {
     int processedTexels{0};
     double executionTimeMs{0.0};
     PbrTextureSet pbrSet;
+    /** Texels divided by E(N) of their interpolated mesh normal (0 when solar de-lighting was off or skipped). */
+    int solarDelitTexels{0};
+    /** Set when solar de-lighting was requested but did not run. */
+    std::string solarDelightingSkippedReason;
+    /** Maps estimated from the image itself rather than measured, with how. */
+    std::vector<std::string> heuristicMaps;
+    /** Roughness is not produced: nothing here measures it (a luminance guess is not roughness). */
+    std::string roughnessUnmeasuredReason;
 };
 
 inline UvEngineResult processMeshUvEngine(
@@ -451,6 +471,8 @@ inline UvEngineResult processMeshUvEngine(
     int h = sourceTexture.height;
     ImageBuffer enhancedAlbedo = sourceTexture;
     std::vector<bool> coverageMask(w * h, false);
+    // Interpolated mesh normal of every covered texel (zero where no triangle covers it), for solar de-lighting
+    std::vector<Vec3> texelNormals(static_cast<size_t>(w) * h, Vec3{0.0f, 0.0f, 0.0f});
 
     // 1. Process mode: conformal reparameterization if requested
     if (options.mode == "conformal-reparameterize") {
@@ -496,6 +518,8 @@ inline UvEngineResult processMeshUvEngine(
                 int idx = py * w + px;
                 coverageMask[idx] = true;
                 result.processedTexels++;
+                Vec3 nInterp = v0.normal * bc.u + v1.normal * bc.v + v2.normal * bc.w;
+                if (nInterp.dot(nInterp) > 1e-12f) texelNormals[idx] = nInterp.normalized();
 
                 // Interpolate continuous 3D world position
                 Vec3 p3d = v0.position * bc.u + v1.position * bc.v + v2.position * bc.w;
@@ -542,15 +566,18 @@ inline UvEngineResult processMeshUvEngine(
         }
 
         if (options.enableSolarDelighting) {
-            applySolarInverseDelighting(result.pbrSet.albedo, options.solarEphemeris);
+            result.solarDelitTexels = applySolarInverseDelighting(result.pbrSet.albedo, texelNormals, options.solarEphemeris);
+            if (result.solarDelitTexels == 0) {
+                result.solarDelightingSkippedReason = "no texel is covered by a mesh triangle with a non-zero normal";
+            }
         }
 
         result.pbrSet.normal = texture::computeSobelNormalMap(result.pbrSet.albedo, options.bumpStrength);
-        result.pbrSet.roughness = texture::extractRoughnessMap(result.pbrSet.albedo, 0.85f);
         result.pbrSet.ao = computeSkyDomeAO(result.pbrSet.albedo, mesh);
-
-        // Standard glTF ORM texture packing
-        result.pbrSet.orm = texture::packOrmTexture(result.pbrSet.ao, result.pbrSet.roughness, result.pbrSet.metallic);
+        result.heuristicMaps.push_back("normal: Sobel of albedo luminance (image-derived, not geometry)");
+        result.heuristicMaps.push_back("ao: albedo luminance cavity (image-derived, not ray-traced)");
+        // No roughness map and no ORM: the only source here would be a luminance guess, which is not a measurement.
+        result.roughnessUnmeasuredReason = "roughness is not measured by the UV engine; no roughness or ORM map is written";
     } else {
         result.pbrSet.albedo = enhancedAlbedo;
     }

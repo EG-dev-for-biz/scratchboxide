@@ -9,7 +9,7 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { AdaptiveMaterialPbrService } from '../src/node/3d-engine/adaptive-material-pbr-service';
-import { PbrUnknownArchetypeError } from '../src/node/3d-engine/adaptive-pbr-errors';
+import { PbrUnknownArchetypeError, AdaptivePbrMaterialSpecError } from '../src/node/3d-engine/adaptive-pbr-errors';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -33,19 +33,23 @@ describe('PBR Material Gemini Tools & Multi-Resolution Engine', () => {
         expect(synthTool?.parameters?.properties?.domain?.enum).toEqual(['organic', 'nonorganic']);
     });
 
-    it('should retrieve biophysical material catalog with 50 archetypes', async () => {
+    it('lists 50 example descriptors as data (each with its full descriptor) and narrows them by free text', async () => {
         const handler = pbrMaterialHandlers.pbr_get_material_catalog;
         const res = await handler({}, {} as any);
-        expect(res.summaryResult).toContain('50 biophysical PBR material archetypes');
+        expect(res.summaryResult).toMatch(/Listed 50 example material descriptors\. They are reference points .* not a closed list/);
         const payload = res.resultPayload as any;
         expect(payload.totalCount).toBe(50);
-        expect(payload.categories.length).toBe(7);
+        expect(payload.requiredDescriptorFields).toEqual(['albedoLinear', 'conduction', 'roughnessBaseline']);
+        for (const e of payload.examples) {
+            expect(e.descriptor.albedoLinear).toHaveLength(3);
+            expect(Object.keys(e.descriptor)).toHaveLength(16); // 16 fields = 20 floats (two RGB triples)
+        }
 
-        // Filter by category
-        const stonesRes = await handler({ category: 'stones' }, {} as any);
-        const stonesPayload = stonesRes.resultPayload as any;
-        expect(stonesPayload.totalCount).toBeGreaterThan(0);
-        expect(stonesPayload.archetypes.every((a: any) => a.category.toLowerCase().includes('stone'))).toBe(true);
+        const marble = (await handler({ query: 'marble' }, {} as any)).resultPayload as any;
+        expect(marble.totalCount).toBeGreaterThan(0);
+        expect(marble.examples.every((a: any) => `${a.key} ${a.displayName} ${a.description} ${a.group}`.toLowerCase().includes('marble'))).toBe(true);
+        // The older parameter name still narrows the list
+        expect(((await handler({ category: 'stones' }, {} as any)).resultPayload as any).totalCount).toBeGreaterThan(0);
     });
 
     it('should interpolate two continuous material descriptors in R^20 (ADA Compliance)', async () => {
@@ -253,6 +257,28 @@ describe('PBR Material Gemini Tools & Multi-Resolution Engine', () => {
             expect(err.validArchetypes).toContain('corten_steel');
             const interp: any = await pbrMaterialHandlers.pbr_interpolate_materials({ materialA: 'carrara_marble', materialB: 'no_such_material', alpha: 0.5 }, {} as any).catch(e => e);
             expect(interp).toBeInstanceOf(PbrUnknownArchetypeError);
+        });
+
+        it('assumes no material: neither archetype nor a descriptor with its required fields is an error, not limestone', async () => {
+            const none: any = await pbrMaterialHandlers.pbr_synthesize_material({ resolution: 64, format: 'png_pack' }, {} as any).catch(e => e);
+            expect(none).toBeInstanceOf(AdaptivePbrMaterialSpecError);
+            expect(none.message).toMatch(/give albedoLinear, conduction, roughnessBaseline .*missing albedoLinear, conduction, roughnessBaseline/);
+            const partial: any = await pbrMaterialHandlers.pbr_synthesize_material({ resolution: 64, format: 'png_pack', descriptor: { albedoLinear: [0.2, 0.6, 0.3], conduction: 0 } }, {} as any).catch(e => e);
+            expect(partial).toBeInstanceOf(AdaptivePbrMaterialSpecError);
+            expect(partial.message).toMatch(/missing roughnessBaseline/);
+            const interp: any = await pbrMaterialHandlers.pbr_interpolate_materials({ materialA: 'carrara_marble', materialB: { conduction: 1 }, alpha: 0.5 }, {} as any).catch(e => e);
+            expect(interp).toBeInstanceOf(AdaptivePbrMaterialSpecError);
+        });
+
+        it('interpolates an example with a descriptor nobody catalogued (read from words), field by field', async () => {
+            // "a glossy bioluminescent teal chitin": the model fills the fields; no catalog entry is involved
+            const chitin = { albedoLinear: [0.05, 0.55, 0.5], conduction: 0.1, roughnessBaseline: 0.15, anisotropyStrength: 0.6 };
+            const res = await pbrMaterialHandlers.pbr_interpolate_materials({ materialA: 'carrara_marble', materialB: chitin, alpha: 1 }, {} as any);
+            const d = (res.resultPayload as any).descriptor;
+            [0.05, 0.55, 0.5].forEach((v, i) => expect(d.albedoLinear[i]).toBeCloseTo(v, 9));
+            expect(d.roughnessBaseline).toBeCloseTo(0.15, 6);
+            expect(d.anisotropyStrength).toBeCloseTo(0.6, 6);
+            expect(d.microPorosity).toBeCloseTo(0.15 * 0.45, 6); // neutral completion from its own roughness, not marble's
         });
     });
 });
