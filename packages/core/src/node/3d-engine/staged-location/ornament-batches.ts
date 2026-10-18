@@ -201,6 +201,19 @@ function downscaleRgba(src: Buffer, sw: number, sh: number, w: number, h: number
 }
 
 /**
+ * A JPEG whose longest side passes `maxSidePx`, re-encoded smaller (area average, quality 92); anything else as it came.
+ * The same bytes in give the same bytes out, so a request built from them keys the reply cache the same way every run.
+ */
+export async function capImageSide(bytes: Buffer, mimeType: string, widthPx: number, heightPx: number, maxSidePx: number): Promise<{ bytes: Buffer; mimeType: string; widthPx: number; heightPx: number; downscaled: boolean }> {
+    if (Math.max(widthPx, heightPx) <= maxSidePx) return { bytes, mimeType, widthPx, heightPx, downscaled: false };
+    const img = await decodeImageToRgba(bytes);
+    const s = maxSidePx / Math.max(img.width, img.height);
+    const w = Math.max(1, Math.round(img.width * s)), h = Math.max(1, Math.round(img.height * s));
+    const out = await encodeRgbaToJpeg(downscaleRgba(img.rgba, img.width, img.height, w, h), w, h, { quality: 92 });
+    return { bytes: out, mimeType: 'image/jpeg', widthPx: w, heightPx: h, downscaled: true };
+}
+
+/**
  * Street View close-ups whose longest side passes `maxSidePx`, sent smaller: the reference records the size sent, its
  * hash, and the coarser metres per pixel (so rule 10 judges what the model was shown). A close-up that cannot be
  * re-encoded is sent as it came.

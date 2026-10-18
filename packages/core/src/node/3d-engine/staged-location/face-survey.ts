@@ -36,6 +36,7 @@ import type { GroundModel } from '../../spatial/StreetViewSurveyPlanner';
 import type { StructurePickResult } from './extraction-sizing';
 import { MIN_VIEW_DISTANCE_M, MAX_VIEW_DISTANCE_M, pointHidden } from './evidence-aim';
 import { ORNAMENT_MAX_OUTPUT_TOKENS, ORNAMENT_THINKING_BUDGET, VisionStageError, visionUse } from './ornament-vision';
+import { capImageSide } from './ornament-batches';
 import { decodeJpegInMemory, measurePalette } from './photo-palette';
 import { chartNormal, chartPoint } from './slot-projection';
 import {
@@ -43,11 +44,13 @@ import {
 } from './streetview-evidence';
 
 const DEG = Math.PI / 180;
-export const SURVEY_PROMPT_VERSION = 'survey/v1';
+export const SURVEY_PROMPT_VERSION = 'survey/v2';
+/** A survey image is sent to the vision model at most this long on its longest side (the full image is kept for the palette and registration). */
+export const SURVEY_SEND_MAX_SIDE_PX = 1024;
 export const SURVEY_FOV_MIN_DEG = 55;
 export const SURVEY_FOV_MAX_DEG = 70;
 export const SURVEY_IMAGE_TIMEOUT_MS = 30_000;
-/** One call, so one limit: the model reads four images and writes a reply of a few thousand tokens. */
+/** One call per face, each with this limit: the model reads one image and writes a reply of a few thousand tokens. */
 export const SURVEY_VISION_TIMEOUT_MS = 240_000;
 /** A pano must stand within this angle of a face's outward normal. */
 export const SURVEY_MAX_OFF_NORMAL_DEG = 80;
@@ -337,9 +340,11 @@ export interface RunSurveyInput {
     signal?: AbortSignal;
     onProgress?: (message: string) => void;
     now?: () => number;
+    /** Called once the survey images are in hand, before they are read (the caller may fetch what it will want next). */
+    onFetched?: (read: SurveyResult['read']) => void;
 }
 
-/** Fetch the faces in parallel, read them in one call, measure their colours. Throws VisionStageError when the call gives nothing usable. */
+/** Fetch the faces in parallel, read each in its own call (in parallel), measure their colours. A face whose call fails is left out with why; throws VisionStageError when no call gives anything usable. */
 export async function runFaceSurvey(input: RunSurveyInput): Promise<SurveyResult> {
     const now = input.now ?? Date.now;
     const started = now();
@@ -359,37 +364,57 @@ export async function runFaceSurvey(input: RunSurveyInput): Promise<SurveyResult
         index: k, face: faceOf.get((im.view as SurveyView).faceId)!, view: im.view as SurveyView, widthPx: im.widthPx, heightPx: im.heightPx, bytes: im.bytes, mimeType: im.mimeType, sha256: im.sha256, id: im.id, fetchMs: im.fetchMs
     }));
     const fetchFailures = fetched.failures.map(f => ({ faceId: (f.view as SurveyView).faceId, error: f.error }));
+    if (images.length) input.onFetched?.(images.map(im => ({ view: im.view, widthPx: im.widthPx, heightPx: im.heightPx, imageIndex: im.index, sha256: im.sha256 })));
     if (!images.length) {
         throw new VisionStageError(`every survey image failed to fetch (${fetchFailures.map(f => f.error).slice(0, 2).join('; ')})`, emptyModel('no image'), true, 'no_street_view');
     }
 
-    input.onProgress?.(`reading ${images.length} face${images.length === 1 ? '' : 's'} with ${input.chain.current}`);
+    // one call per face, all at once: each sends one image capped at SURVEY_SEND_MAX_SIDE_PX (the boxes are in 0..1000 of the
+    // image, so the size sent does not change them); the full image stays in hand for the palette and the registration
+    input.onProgress?.(`reading ${images.length} face${images.length === 1 ? '' : 's'} with ${input.chain.current}, one call each in parallel`);
     const timeoutMs = SURVEY_VISION_TIMEOUT_MS;
-    const own = new AbortController();
-    const timer = setTimeout(() => own.abort(Object.assign(new Error(`the vision call took longer than ${Math.round(timeoutMs / 1000)} s`), { name: 'TimeoutError' })), timeoutMs);
-    const signal = input.signal ? AbortSignal.any([input.signal, own.signal]) : own.signal;
     let usage: { promptTokens?: number; outputTokens?: number; thinkingTokens?: number; finishReason?: string } = {};
-    let parsed: ParsedSurvey;
-    try {
-        const r = await input.chain.generate({
-            contents: surveyContents(images),
-            config: { responseMimeType: 'application/json', temperature: 0.2, maxOutputTokens: ORNAMENT_MAX_OUTPUT_TOKENS, abortSignal: signal }
-        }, {
-            stage: 'survey', thinkingBudget: ORNAMENT_THINKING_BUDGET, stream: true,
-            onFirstToken: ms => input.onProgress?.(`surveying the faces (first token after ${(ms / 1000).toFixed(1)} s)`)
-        });
-        const u = r.response.usageMetadata;
-        const finishReason = r.response.candidates?.[0]?.finishReason as string | undefined;
-        usage = { promptTokens: u?.promptTokenCount, outputTokens: u?.candidatesTokenCount, thinkingTokens: u?.thoughtsTokenCount, ...(finishReason ? { finishReason } : {}) };
-        parsed = parseSurveyReply(responseText(r.response), finishReason, images.length);
-    } catch (err) {
-        if (input.signal?.aborted) throw err;
-        const timedOut = own.signal.aborted;
-        const message = timedOut ? `the vision call took longer than ${Math.round(timeoutMs / 1000)} s` : (err as Error).message;
-        const transient = timedOut || /transient|quota|429|5\d\d|network|fetch failed|None of the chat's models is served/.test(message);
-        throw new VisionStageError(message, visionUse(input.chain, 'failed', { ...usage, error: message }), transient, /valid JSON|no "faces"|cut off|ended with/.test(message) ? 'vision_invalid_reply' : 'vision_unavailable');
-    } finally {
-        clearTimeout(timer);
+    const parsed: ParsedSurvey = { faces: new Map(), problems: [] };
+    const readFace = async (im: SurveyImage): Promise<{ error?: Error; transient?: boolean; invalid?: boolean }> => {
+        const own = new AbortController();
+        const timer = setTimeout(() => own.abort(Object.assign(new Error(`the vision call took longer than ${Math.round(timeoutMs / 1000)} s`), { name: 'TimeoutError' })), timeoutMs);
+        const signal = input.signal ? AbortSignal.any([input.signal, own.signal]) : own.signal;
+        try {
+            const sent = await capImageSide(im.bytes, im.mimeType, im.widthPx, im.heightPx, SURVEY_SEND_MAX_SIDE_PX);
+            const r = await input.chain.generate({
+                contents: surveyContents([{ ...im, index: 0, bytes: sent.bytes, mimeType: sent.mimeType, widthPx: sent.widthPx, heightPx: sent.heightPx }]),
+                config: { responseMimeType: 'application/json', temperature: 0.2, maxOutputTokens: ORNAMENT_MAX_OUTPUT_TOKENS, abortSignal: signal }
+            }, {
+                stage: 'survey', thinkingBudget: ORNAMENT_THINKING_BUDGET, stream: true,
+                onFirstToken: ms => input.onProgress?.(`surveying the ${Math.round(im.face.headingDeg)}° face (first token after ${(ms / 1000).toFixed(1)} s)`)
+            });
+            const u = r.response.usageMetadata;
+            const finishReason = r.response.candidates?.[0]?.finishReason as string | undefined;
+            const one = parseSurveyReply(responseText(r.response), finishReason, 1);
+            r.remember();
+            usage = {
+                promptTokens: (usage.promptTokens ?? 0) + (u?.promptTokenCount ?? 0), outputTokens: (usage.outputTokens ?? 0) + (u?.candidatesTokenCount ?? 0),
+                thinkingTokens: (usage.thinkingTokens ?? 0) + (u?.thoughtsTokenCount ?? 0), ...(finishReason ? { finishReason } : {})
+            };
+            const answer = one.faces.get(0);
+            if (answer) parsed.faces.set(im.index, answer);
+            parsed.problems.push(...one.problems.map(p => `image ${im.index}: ${p.replace(/^image 0: /, '')}`));
+            return {};
+        } catch (err) {
+            if (input.signal?.aborted) throw err;
+            const timedOut = own.signal.aborted;
+            const message = timedOut ? `the vision call took longer than ${Math.round(timeoutMs / 1000)} s` : (err as Error).message;
+            return { error: new Error(message), transient: timedOut || /transient|quota|429|5\d\d|network|fetch failed|None of the chat's models is served/.test(message), invalid: /valid JSON|no "faces"|cut off|ended with/.test(message) };
+        } finally {
+            clearTimeout(timer);
+        }
+    };
+    const outcomes = await Promise.all(images.map(readFace));
+    if (input.signal?.aborted) throw input.signal.reason;
+    const failed = outcomes.flatMap((o, k) => (o.error ? [{ im: images[k], ...o }] : []));
+    if (failed.length === images.length) {
+        const f = failed[0];
+        throw new VisionStageError(f.error!.message, visionUse(input.chain, 'failed', { ...usage, error: f.error!.message }), !!f.transient, f.invalid ? 'vision_invalid_reply' : 'vision_unavailable');
     }
     const thinking = input.chain.attempts.length ? input.chain.attempts[input.chain.attempts.length - 1].thinking : undefined;
     const model = visionUse(input.chain, 'answered', { ...usage, ...(thinking ? { thinking } : {}) });
@@ -397,8 +422,16 @@ export async function runFaceSurvey(input: RunSurveyInput): Promise<SurveyResult
     // the colours: measured from the decoded pixels inside the surveyed elements (the whole frame for a face with none)
     const faces = faceRecords();
     const read: SurveyResult['read'] = [];
+    const unread = new Map(failed.map(f => [f.im.index, f]));
     for (const im of images) {
         const rec = faces.find(f => f.faceId === im.face.faceId)!;
+        const lost = unread.get(im.index);
+        if (lost) {
+            rec.panoId = im.view.panoId;
+            rec.skipped = `its reading failed (${lost.error!.message})`;
+            parsed.problems.push(`image ${im.index}: no reading (${lost.error!.message})`);
+            continue;
+        }
         const answer = parsed.faces.get(im.index);
         rec.panoId = im.view.panoId;
         if (im.view.date) rec.captureDate = im.view.date;
@@ -415,7 +448,7 @@ export async function runFaceSurvey(input: RunSurveyInput): Promise<SurveyResult
         const rec = faces.find(x => x.faceId === f.faceId);
         if (rec) rec.skipped = `its image did not arrive (${f.error})`;
     }
-    const cost: StageCost = { images: images.length, visionCalls: 1, seconds: Math.round(((now() - started) / 1000) * 10) / 10 };
+    const cost: StageCost = { images: images.length, visionCalls: images.length, seconds: Math.round(((now() - started) / 1000) * 10) / 10 };
     const hints: MaterialHints = {
         schema: 'scratchbox.material-hints/1', label: 'photo-inferred', palette: 'measured-from-photo',
         textureUse: 'none: the Street View pixels are not projected onto the model', faces, model, cost
@@ -431,5 +464,5 @@ export function describeSurvey(r: Pick<SurveyResult, 'faces' | 'cost' | 'model'>
     const elements = surveyed.reduce((n, f) => n + f.elements.length, 0);
     const colours = surveyed.reduce((n, f) => n + (f.palette?.colours.length ?? 0), 0);
     const skipped = r.faces.length - surveyed.length;
-    return `${surveyed.length} of ${r.faces.length} faces surveyed in ${r.cost.seconds.toFixed(1)} s (${r.cost.images} images, ${r.cost.visionCalls} vision call by ${r.model.used}): ${elements} photo-inferred elements, ${colours} colours measured from the photos${skipped ? `, ${skipped} face${skipped === 1 ? '' : 's'} without a view` : ''}`;
+    return `${surveyed.length} of ${r.faces.length} faces surveyed in ${r.cost.seconds.toFixed(1)} s (${r.cost.images} images, ${r.cost.visionCalls} vision call${r.cost.visionCalls === 1 ? '' : 's'} by ${r.model.used}): ${elements} photo-inferred elements, ${colours} colours measured from the photos${skipped ? `, ${skipped} face${skipped === 1 ? '' : 's'} without a view` : ''}`;
 }

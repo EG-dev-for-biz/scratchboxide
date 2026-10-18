@@ -40,6 +40,7 @@ import { IMAGE_MODEL_ASPECT_RATIOS, IMAGE_MODEL_PRIORITY, nearestImageAspectRati
 import { generateImageWithModels } from '../../google-media-generation-service';
 import { MediaModelUnavailableError } from '../../../common/errors/pipeline-errors';
 import { encodePng } from '../../texture-processing';
+import { encodeRgbaToJpeg } from '../../image-codec-ffmpeg';
 import { blur1, ciede2000, edgeMap, exactDistanceTransform, laplacianVariance, linearRgbToLab, maskedNcc } from '../../spatial/StreetViewStage3Metrics';
 import { SRGB8_TO_LINEAR } from '../../../common/spatial/photogrammetric-delight';
 import { decodeImageInMemory, TILE_TRANSFER_RUNG, type RgbaImage8 } from './tile-texture-transfer';
@@ -57,7 +58,7 @@ export interface EnhanceModelRequest {
     /** The transferred crop, PNG. */
     image: { mimeType: 'image/png'; bytes: Uint8Array; width: number; height: number };
     /** Real Street View views of the same surface, PNG crops. */
-    references: Array<{ panoId: string; mimeType: 'image/png'; bytes: Uint8Array }>;
+    references: Array<{ panoId: string; mimeType: 'image/png' | 'image/jpeg'; bytes: Uint8Array }>;
     signal?: AbortSignal;
 }
 
@@ -312,6 +313,8 @@ export interface EnhanceTransferInput {
     maxReferences?: number;
     /** Charts with fewer transferred texels are left alone. Default 64. */
     minChartTexels?: number;
+    /** Largest side of a grounding reference sent to the model (JPEG). Default ENHANCE_REFERENCE_MAX_SIDE. */
+    maxReferenceSide?: number;
     /** Largest crop side sent to the model; larger crops are box-downsampled and the answer resized back. Default 2048. */
     maxModelSide?: number;
     /** Charts in flight at once. Default 12 (a call takes 10 to 20 s; the wall clock, not the cost, is the limit). */
@@ -354,6 +357,8 @@ interface ChartJob {
 }
 
 /** Fewest texels the gate can judge (inside a 2 px border) for a chart to be sent: below it the gate has nothing to measure. */
+/** Grounding references are sent as JPEG at most this long on their longest side. */
+export const ENHANCE_REFERENCE_MAX_SIDE = 1024;
 export const MIN_GATEABLE_TEXELS = 256;
 /** Least share of its crop a chart must fill: a few scattered fragments in a crop of flat fill give the model nothing to sharpen and room to invent. */
 export const MIN_CHART_FILL = 0.3;
@@ -460,7 +465,12 @@ export async function enhanceTransferredAtlas(input: EnhanceTransferInput): Prom
         const request: EnhanceModelRequest = {
             label: job.label, models, prompt: enhancePrompt(sent.width, sent.height, refs.length),
             image: { mimeType: 'image/png', bytes: png(sent), width: sent.width, height: sent.height },
-            references: refs.map(r => ({ panoId: r.view.panoId, mimeType: 'image/png' as const, bytes: png(boxDownsample(cropRgba(r.view.image, r.rect), maxSide)) })),
+            // the references only ground the model in what the surface looks like: JPEG at ENHANCE_REFERENCE_MAX_SIDE is plenty, and
+            // much less to send than a lossless crop of up to maxSide (the crop being enhanced stays lossless at maxSide)
+            references: await Promise.all(refs.map(async r => {
+                const ref = boxDownsample(cropRgba(r.view.image, r.rect), Math.min(maxSide, input.maxReferenceSide ?? ENHANCE_REFERENCE_MAX_SIDE));
+                return { panoId: r.view.panoId, mimeType: 'image/jpeg' as const, bytes: await encodeRgbaToJpeg(Buffer.from(ref.rgba.buffer, ref.rgba.byteOffset, ref.rgba.byteLength), ref.width, ref.height, { quality: 90 }) };
+            })),
             signal
         };
         let answer: EnhanceModelAnswer;

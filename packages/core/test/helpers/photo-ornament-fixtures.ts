@@ -72,6 +72,18 @@ export function corniceReply(): object {
 export interface RoutedCall { kind: 'survey' | 'ornament' | 'other'; params: any }
 
 /** A vision client that answers by the kind of request: the survey prompt gets `survey`, anything else `ornament`. */
+/**
+ * The survey reads one face per call: the stand-in answers with the entry of `full` for that face, picked by the face's
+ * compass quarter in the caption (north 0, east 1, south 2, west 3), as image 0. Anything else passes through.
+ */
+export function perFaceSurveyReply<T>(full: T, promptText: string): T | { faces: any[] } {
+    const m = /face whose outward direction is (\d+)°/.exec(promptText);
+    if (!m || !full || full instanceof Error || !Array.isArray((full as any).faces)) return full;
+    const quarter = Math.round((Number(m[1]) % 360) / 90) % 4;
+    const entry = (full as any).faces.find((f: any) => f.image === quarter);
+    return { faces: entry ? [{ ...entry, image: 0 }] : [] };
+}
+
 export function routedVisionClient(replies: { survey?: object | Error; ornament?: object | Error }, record: RoutedCall[] = []): VisionGenAIClient {
     return {
         models: {
@@ -80,7 +92,7 @@ export function routedVisionClient(replies: { survey?: object | Error; ornament?
                 const text0 = JSON.stringify(params.contents?.[0]?.parts?.filter((p: any) => p.text).map((p: any) => p.text) ?? []);
                 const kind: RoutedCall['kind'] = /surveying one real structure/.test(text0) ? 'survey' : /reading (architectural ornament|ONE repeating)/.test(text0) ? 'ornament' : 'other';
                 record.push({ kind, params });
-                const reply = kind === 'survey' ? replies.survey : replies.ornament;
+                const reply = kind === 'survey' ? perFaceSurveyReply(replies.survey, text0) : replies.ornament;
                 if (reply instanceof Error) throw reply;
                 if (!reply) throw new Error(`no ${kind} reply configured`);
                 const text = JSON.stringify(reply);

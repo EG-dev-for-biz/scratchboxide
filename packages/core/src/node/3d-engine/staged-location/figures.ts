@@ -203,7 +203,7 @@ export function detectFigureBlobs(
     return { figures, rejected };
 }
 
-function corroborate(blob: FigureBlob, survey: Pick<SurveyResult, 'faces' | 'read'>): FigureBlob['corroboratedBy'] | undefined {
+export function corroborate(blob: FigureBlob, survey: Pick<SurveyResult, 'faces' | 'read'>): FigureBlob['corroboratedBy'] | undefined {
     for (const r of survey.read) {
         const face = survey.faces.find(f => f.faceId === r.view.faceId);
         if (!face) continue;
@@ -357,48 +357,94 @@ export function parseFigureReply(text: string, finishReason: string | undefined,
 
 export interface ReadFiguresInput { images: FigureImage[]; chain: VisionModelChain<string>; signal?: AbortSignal; onProgress?: (m: string) => void; timeoutMs?: number }
 
+/** Figures read and built at once (each its own vision call and native build). */
+export const FIGURE_CONCURRENCY = 4;
 /** A figure's reading is asked this many times at most when its reply comes back unreadable (cut off, not JSON). */
 export const FIGURE_READ_ATTEMPTS = 3;
 const UNREADABLE = /not valid JSON|cut off|ended with|no "figures"/;
 
+/** What one figure's reading came to: a reading (and, with a builder, its build), or the problems of its last reply, or the error. */
+export interface FigureOutcome<T> {
+    reading?: FigureReading;
+    built?: T;
+    problems?: string[];
+    /** The builder refused the last reading (its message was passed back while attempts were left). */
+    buildError?: unknown;
+    error?: unknown;
+    model?: VisionModelUse;
+    calls: number;
+}
+
 /**
- * One call per figure, in parallel, each asked again (up to FIGURE_READ_ATTEMPTS) when its reply came back unreadable: a reply
- * for one figure is short, so a cut-off or truncated stream costs that figure one more call, not every figure the whole reading.
- * The attempts of one figure share `timeoutMs` (the first gets all of it, a retry what is left). A figure whose every attempt
- * failed is a problem of its image, and the others stand; when every figure failed the first error is thrown.
+ * One figure: read, asked again (up to FIGURE_READ_ATTEMPTS calls in all) when the reply cannot be read, when its spec
+ * breaks the builder's rules, or, with `build`, when the builder refuses it. A refused spec is asked again WITH the
+ * reason it was refused (the validator's problems or the builder's message), as a follow-up to the reply it refused.
+ * The calls share `timeoutMs` (the first gets all of it; a retry starts only with 20 s or more left); builds do not use it.
+ */
+export async function readFigure<T>(input: Omit<ReadFiguresInput, 'images'> & { image: FigureImage; build?: (spec: ObjectBuildSpec) => Promise<T> }): Promise<FigureOutcome<T>> {
+    const total = input.timeoutMs ?? FIGURE_VISION_TIMEOUT_MS;
+    const im = input.image;
+    let calls = 0;
+    let readMs = 0;
+    let last: Omit<FigureOutcome<T>, 'calls'> = {};
+    let followUp: { previousText: string; ask: string } | undefined;
+    for (let attempt = 0; attempt < FIGURE_READ_ATTEMPTS; attempt++) {
+        const left = total - readMs;
+        if (attempt > 0 && left < 20_000) break;
+        calls++;
+        const t0 = Date.now();
+        let r: Awaited<ReturnType<typeof readFiguresOnce>>;
+        try {
+            r = await readFiguresOnce({ ...input, images: [{ ...im, index: 0 }], timeoutMs: left, ...(followUp ? { followUp } : {}) });
+        } catch (err) {
+            readMs += Date.now() - t0;
+            last = { error: err };
+            if (input.signal?.aborted || !UNREADABLE.test((err as Error).message)) break;
+            input.onProgress?.(`the reply for figure ${im.index + 1} could not be read (${(err as Error).message.slice(0, 80)}); asking again`);
+            continue;
+        }
+        readMs += Date.now() - t0;
+        const reading = r.parsed.readings.get(0);
+        const problems = r.parsed.problems.get(0);
+        if (!reading) {
+            last = { ...(problems ? { problems } : {}), model: r.model };
+            // a spec the builder's rules refuse is asked for again, with the rules it broke
+            if (problems && attempt + 1 < FIGURE_READ_ATTEMPTS) {
+                input.onProgress?.(`the spec for figure ${im.index + 1} breaks the builder's rules (${problems[0].slice(0, 80)}); asking again with why`);
+                followUp = { previousText: r.text, ask: `That spec cannot be built: ${problems.map((p, i) => `${i + 1}. ${p}`).join(' ')} Reply with the complete corrected JSON.` };
+                continue;
+            }
+            break;
+        }
+        const found = { ...reading, index: im.index };
+        if (!input.build) return { reading: found, ...(problems ? { problems } : {}), model: r.model, calls };
+        try {
+            const built = await input.build(reading.spec);
+            return { reading: found, built, model: r.model, calls };
+        } catch (err) {
+            if (isAbortLike(err) || input.signal?.aborted) throw err;
+            last = { reading: found, buildError: err, model: r.model };
+            if (attempt + 1 < FIGURE_READ_ATTEMPTS && total - readMs >= 20_000) {
+                const message = (err as Error)?.message ?? String(err);
+                input.onProgress?.(`the builder refused the spec for figure ${im.index + 1} (${message.slice(0, 80)}); asking again with why`);
+                followUp = { previousText: r.text, ask: `The builder could not build that spec: ${message.slice(0, 2000)} Reply with the complete corrected JSON.` };
+                continue;
+            }
+            break;
+        }
+    }
+    return { ...last, calls };
+}
+
+const isAbortLike = (err: unknown) => (err as { name?: string } | undefined)?.name === 'AbortError';
+
+/**
+ * One call per figure, in parallel, each asked again (up to FIGURE_READ_ATTEMPTS) when its reply came back unreadable or
+ * its spec broke the builder's rules (readFigure). A figure whose every attempt failed is a problem of its image, and the
+ * others stand; when every figure failed the first error is thrown.
  */
 export async function readFigures(input: ReadFiguresInput): Promise<{ parsed: ParsedFigures; model: VisionModelUse; calls: number }> {
-    const total = input.timeoutMs ?? FIGURE_VISION_TIMEOUT_MS;
-    let calls = 0;
-    const one = async (im: FigureImage): Promise<{ reading?: FigureReading; problems?: string[]; model?: VisionModelUse; error?: unknown }> => {
-        const started = Date.now();
-        let last: unknown;
-        for (let attempt = 0; attempt < FIGURE_READ_ATTEMPTS; attempt++) {
-            const left = total - (Date.now() - started);
-            if (attempt > 0 && left < 20_000) break;
-            calls++;
-            try {
-                const r = await readFiguresOnce({ ...input, images: [{ ...im, index: 0 }], timeoutMs: left });
-                const reading = r.parsed.readings.get(0);
-                const problems = r.parsed.problems.get(0);
-                // a spec the builder's rules refuse is asked for afresh while attempts are left (live: a relief part attached to a parent)
-                if (!reading && problems && attempt + 1 < FIGURE_READ_ATTEMPTS) {
-                    last = { reading: undefined, problems, model: r.model };
-                    input.onProgress?.(`the spec for figure ${im.index + 1} breaks the builder's rules (${problems[0].slice(0, 80)}); asking again`);
-                    continue;
-                }
-                return { ...(reading ? { reading: { ...reading, index: im.index } } : {}), ...(problems ? { problems } : {}), model: r.model };
-            } catch (err) {
-                last = err;
-                if (input.signal?.aborted || !UNREADABLE.test((err as Error).message)) break;
-                input.onProgress?.(`the reply for figure ${im.index + 1} could not be read (${(err as Error).message.slice(0, 80)}); asking again`);
-            }
-        }
-        // the attempts ended on a refused spec: its problems stand, as from the last reply
-        if (last && typeof last === 'object' && 'problems' in (last as object)) return last as { problems: string[]; model: VisionModelUse };
-        return { error: last };
-    };
-    const results = await Promise.all(input.images.map(one));
+    const results = await Promise.all(input.images.map(image => readFigure({ ...input, image })));
     if (input.signal?.aborted) throw input.signal.reason;
     const readings = new Map<number, FigureReading>();
     const problems = new Map<number, string[]>();
@@ -411,10 +457,10 @@ export async function readFigures(input: ReadFiguresInput): Promise<{ parsed: Pa
         if (r.model && !model) model = r.model;
     });
     if (!model) throw results.find(r => r.error)?.error ?? new Error('no figure was read');
-    return { parsed: { readings, problems }, model, calls };
+    return { parsed: { readings, problems }, model, calls: results.reduce((n, r) => n + r.calls, 0) };
 }
 
-async function readFiguresOnce(input: ReadFiguresInput): Promise<{ parsed: ParsedFigures; model: VisionModelUse }> {
+async function readFiguresOnce(input: ReadFiguresInput & { followUp?: { previousText: string; ask: string } }): Promise<{ parsed: ParsedFigures; model: VisionModelUse; text: string }> {
     const timeoutMs = input.timeoutMs ?? FIGURE_VISION_TIMEOUT_MS;
     const own = new AbortController();
     const timer = setTimeout(() => own.abort(Object.assign(new Error(`the vision call took longer than ${Math.round(timeoutMs / 1000)} s`), { name: 'TimeoutError' })), timeoutMs);
@@ -423,7 +469,9 @@ async function readFiguresOnce(input: ReadFiguresInput): Promise<{ parsed: Parse
     try {
         input.onProgress?.(`reading ${input.images.length} figure${input.images.length === 1 ? '' : 's'} with ${input.chain.current}`);
         const r = await input.chain.generate({
-            contents: figureContents(input.images),
+            contents: input.followUp
+                ? [...figureContents(input.images), { role: 'model', parts: [{ text: input.followUp.previousText }] }, { role: 'user', parts: [{ text: input.followUp.ask }] }]
+                : figureContents(input.images),
             config: { responseMimeType: 'application/json', temperature: 0.2, maxOutputTokens: ORNAMENT_MAX_OUTPUT_TOKENS, abortSignal: signal }
         }, { stage: 'figures', thinkingBudget: ORNAMENT_THINKING_BUDGET, stream: true, onFirstToken: ms => input.onProgress?.(`reading the figures (first token after ${(ms / 1000).toFixed(1)} s)`) });
         const u = r.response.usageMetadata;
@@ -431,8 +479,9 @@ async function readFiguresOnce(input: ReadFiguresInput): Promise<{ parsed: Parse
         usage = { ...(u?.promptTokenCount !== undefined ? { promptTokens: u.promptTokenCount } : {}), ...(u?.candidatesTokenCount !== undefined ? { outputTokens: u.candidatesTokenCount } : {}), ...(finishReason ? { finishReason } : {}) };
         const text = (r.response.candidates?.[0]?.content?.parts ?? []).filter(p => !(p as { thought?: boolean }).thought).map(p => p.text ?? '').join('');
         const parsed = parseFigureReply(text, finishReason, input.images.length);
+        r.remember();
         const thinking = input.chain.attempts.length ? input.chain.attempts[input.chain.attempts.length - 1].thinking : undefined;
-        return { parsed, model: visionUse(input.chain, 'answered', { ...usage, ...(thinking ? { thinking } : {}) }) };
+        return { parsed, text, model: visionUse(input.chain, 'answered', { ...usage, ...(thinking ? { thinking } : {}) }) };
     } catch (err) {
         if (input.signal?.aborted) throw err;
         const timedOut = own.signal.aborted;

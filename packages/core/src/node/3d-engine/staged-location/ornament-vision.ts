@@ -753,6 +753,8 @@ export async function readOrnament(input: ReadOrnamentInput): Promise<OrnamentRe
     const located = input.located ?? [];
     const first = ornamentContents(fit, input.evidence, located, input.offer, input.focus, input.scope);
     const replies: string[] = [];
+    // the replies a finished reading was made from are recorded (with a reply cache), so the same request reads them back
+    const received: Array<() => void> = [];
     let calls = 0, retries = 0;
     let usage: { promptTokens?: number; outputTokens?: number; thinkingTokens?: number; finishReason?: string } = {};
     let ttftMs: number | undefined;
@@ -786,6 +788,7 @@ export async function readOrnament(input: ReadOrnamentInput): Promise<OrnamentRe
             };
             const text = responseText(r.response);
             replies.push(text);
+            received.push(r.remember);
             return { text, finishReason };
         } catch (err) {
             if (input.signal?.aborted) throw err;
@@ -872,6 +875,7 @@ export async function readOrnament(input: ReadOrnamentInput): Promise<OrnamentRe
         revision: { passes, problems },
         dropped: check.dropped.map(d => ({ elementId: d.elementId, slotId: d.slotId, by: d.by, problems: d.problems }))
     };
+    for (const remember of received) remember();
     return { spec, replies, supportTestRequired, dropped: check.dropped, rejectedCorrections: check.rejectedCorrections, anchored: check.anchored ?? [], calls, retries };
 }
 

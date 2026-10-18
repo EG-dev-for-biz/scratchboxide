@@ -34,7 +34,7 @@ import { scanToGeodetic } from '../src/node/spatial/StreetViewSurveyPlanner';
 import { spyOnFsWrites } from './helpers/fs-write-spy';
 import { parseGlbNodes } from '../src/node/3d-engine/staged-location/glb-nodes';
 import { writeStagedGlb, writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
-import { bandJpeg, figureGlb, figuresReply, GREY, lumpMesh, SKY, STONE, surveyReply } from './helpers/photo-ornament-fixtures';
+import { bandJpeg, figureGlb, figuresReply, GREY, lumpMesh, perFaceSurveyReply, SKY, STONE, surveyReply } from './helpers/photo-ornament-fixtures';
 
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-staged-orch-')));
 afterAll(() => fs.rmSync(TMP, { recursive: true, force: true }));
@@ -283,7 +283,7 @@ function visionClient(reply: object | Error, record: any[] = [], surveyRecord: a
                 if (/surveying one real structure/.test(JSON.stringify(params.contents?.[0]?.parts?.filter((x: any) => x.text).map((x: any) => x.text) ?? []))) {
                     surveyRecord.push(params);
                     if (surveyBehaviour.reply instanceof Error) throw surveyBehaviour.reply;
-                    const text = JSON.stringify(surveyBehaviour.reply ?? surveyReply());
+                    const text = JSON.stringify(perFaceSurveyReply(surveyBehaviour.reply ?? surveyReply(), JSON.stringify(params.contents?.[0]?.parts?.filter((x: any) => x.text).map((x: any) => x.text) ?? [])));
                     return (async function* () { yield { candidates: [{ content: { parts: [{ text }] }, finishReason: 'STOP' }], modelVersion: `${params.model}-001` } as any; })();
                 }
                 if (/reading standing figures/.test(JSON.stringify(params.contents?.[0]?.parts?.filter((x: any) => x.text).map((x: any) => x.text) ?? []))) {
@@ -553,7 +553,7 @@ describe('an isolated structure', () => {
 });
 
 describe('pass 1: the draft survey', () => {
-    it('runs beside the remesh and the fit, reads four faces in one call, measures the colours, and puts the hints on the result and in the scene', async () => {
+    it('runs beside the remesh and the fit, reads four faces in parallel calls (one each), measures the colours, and puts the hints on the result and in the scene', async () => {
         const sv = streetViewStandIn();
         const calls: any[] = [], surveyCalls: any[] = [];
         const s = setup(ARCH, {}, {
@@ -562,9 +562,11 @@ describe('pass 1: the draft survey', () => {
         });
         const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
         const survey = result.stages.find(x => x.stage === 'survey')!;
-        expect(survey).toMatchObject({ title: 'Surveying the four faces', status: 'committed', cost: { images: 4, visionCalls: 1 } });
-        expect(survey.source).toMatch(/^4 of 4 faces surveyed in [\d.]+ s \(4 images, 1 vision call by gemini-4-argon\)/);
-        expect(surveyCalls.length).toBe(1);
+        expect(survey).toMatchObject({ title: 'Surveying the four faces', status: 'committed', cost: { images: 4, visionCalls: 4 } });
+        expect(survey.source).toMatch(/^4 of 4 faces surveyed in [\d.]+ s \(4 images, 4 vision calls by gemini-4-argon\)/);
+        expect(surveyCalls.length).toBe(4);
+        // each call sends one image
+        for (const c of surveyCalls) expect(c.contents[0].parts.filter((x: any) => x.inlineData).length).toBe(1);
         // it starts as soon as the structure is known, not after the fit: it began before the fit ended
         const fit = result.stages.find(x => x.stage === 'fit')!;
         expect(survey.timings.startedAtMs).toBeLessThan(fit.timings.endedAtMs!);
@@ -574,7 +576,7 @@ describe('pass 1: the draft survey', () => {
         expect(hints.faces.filter(f => f.palette?.colours.length).length).toBe(4);
         expect(hints.faces.map(f => f.panoId).sort()).toEqual(['PE', 'PN', 'PS', 'PW']);
         expect((result.artifact as any).data.stagedBuild.materialHints).toEqual(hints);
-        expect(result.photoCost!.byStage.survey).toEqual({ images: 4, visionCalls: 1, seconds: expect.any(Number) });
+        expect(result.photoCost!.byStage.survey).toEqual({ images: 4, visionCalls: 4, seconds: expect.any(Number) });
         expect(result.photoCost!.total.visionCalls).toBeGreaterThanOrEqual(2); // the survey and the reading
         // pass 2 starts from the survey: its elements are cast onto the fitted faces, and the reading is given them as placed hints
         expect(result.ornament!.surveyLocated!.elements).toBeGreaterThan(0);
@@ -614,6 +616,36 @@ describe('pass 1: the draft survey', () => {
         expect(result.stages.find(x => x.stage === 'survey')).toMatchObject({ status: 'degraded' });
         expect(result.degradations.find(d => d.stage === 'survey')).toMatchObject({ reasonCode: 'no_street_view', reason: expect.stringContaining('Street View not configured') });
         expect(surveyCalls).toEqual([]);
+    });
+});
+
+describe('a rerun reads the vision replies back', () => {
+    it('the same request again makes no vision call (survey, matching, figures, reading) and gives the same result', async () => {
+        figureBehaviour.calls.length = 0;
+        const sv = streetViewStandIn();
+        const calls: any[] = [], surveyCalls: any[] = [];
+        let modelCalls = 0;
+        const client = visionClient(REPLY, calls, surveyCalls);
+        const counting: VisionGenAIClient = { models: { generateContent: client.models.generateContent, generateContentStream: async (p: any) => { modelCalls++; return client.models.generateContentStream!(p); } } };
+        const s = setup(ARCH, {}, {
+            scanFit: fakeScanFit(path.join(TMP, 'sf-rerun'), { figureBlob: true }).deps,
+            vision: { client: counting, candidates: ['gemini-4-argon'] }, streetView: sv.deps, figureBuilder: async () => ({ glb: figureGlb() })
+        });
+        const first = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
+        const cold = modelCalls;
+        expect(cold).toBeGreaterThanOrEqual(6); // 4 survey faces, the figure, the reading
+        // the stage-level reading cache is cleared so the reading itself is asked again: its batches come back from the reply cache
+        fs.rmSync(path.join(s.cache.dir, 'vision'), { recursive: true, force: true });
+        const second = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
+        expect(modelCalls - cold).toBe(0);
+        const strip = (x: unknown) => JSON.parse(JSON.stringify(x, (k, v) => (['ms', 'ttftMs', 'seconds', 'builtAtMs', 'startedAtMs', 'endedAtMs', 'cached', 'thinking'].includes(k) ? undefined : v)));
+        expect(strip(second.result.materialHints!.faces)).toEqual(strip(first.result.materialHints!.faces));
+        expect(strip(second.result.figures)).toEqual(strip(first.result.figures));
+        expect(strip(second.result.ornament)).toEqual(strip(first.result.ornament));
+        const layers = (r: typeof first) => (r.result.artifact as any).data.stagedBuild.layers.map((l: any) => [l.layer, l.counts, l.provenance.label]);
+        expect(layers(second)).toEqual(layers(first));
+        // the replayed calls are on record as cached, with the model that first answered
+        expect(second.result.materialHints!.model).toMatchObject({ used: 'gemini-4-argon', outcome: 'answered' });
     });
 });
 

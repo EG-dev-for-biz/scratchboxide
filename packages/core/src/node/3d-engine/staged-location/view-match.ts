@@ -41,13 +41,15 @@ export function planRingViews(
     faces: SurveyFaceTarget[],
     candidates: Map<string, SurveyCandidate[]>,
     survey: Pick<SurveyResult, 'faces' | 'read'>,
-    perFace = RING_VIEWS_PER_FACE
+    perFace = RING_VIEWS_PER_FACE,
+    /** False plans for every face with a survey image, elements or not (the prefetch while the survey is read: a superset). */
+    requireElements = true
 ): RingView[] {
     const out: RingView[] = [];
     for (const face of faces) {
         const rec = survey.faces.find(f => f.faceId === face.faceId);
         const primary = survey.read.find(r => r.view.faceId === face.faceId);
-        if (!rec || rec.skipped || !primary || !rec.elements.length) continue;
+        if (!rec || rec.skipped || !primary || (requireElements && !rec.elements.length)) continue;
         const list = (candidates.get(face.faceId) ?? []).filter(c => c.pano.panoId !== primary.view.panoId);
         const chosen: SurveyCandidate[] = [];
         const bearings = [bearingOf(primary.view.eye, face)];
@@ -193,6 +195,7 @@ export async function runViewMatch(input: MatchInput): Promise<MatchResult> {
             const r = await input.chain.generate({ contents, config: { responseMimeType: 'application/json', temperature: 0.1, maxOutputTokens: ORNAMENT_MAX_OUTPUT_TOKENS, abortSignal: signal } },
                 { stage: 'survey', thinkingBudget: ORNAMENT_THINKING_BUDGET, stream: true });
             const parsed = parseMatchReply(responseText(r.response), r.response.candidates?.[0]?.finishReason as string | undefined, els.map(e => e.id), images.length);
+            r.remember();
             result.problems.push(...parsed.problems.map(p => `${faceId}: ${p}`));
             const regPrimary: RegView = { eye: primary.view.eye, headingDeg: primary.view.headingDeg, pitchDeg: primary.view.pitchDeg, fovDeg: primary.view.fovDeg, widthPx: primary.widthPx, heightPx: primary.heightPx, panoId: primary.view.panoId };
             const viewOf = (im: EvidenceImage): RegView => ({ eye: im.view.eye, headingDeg: im.view.headingDeg, pitchDeg: im.view.pitchDeg, fovDeg: im.view.fovDeg, widthPx: im.widthPx, heightPx: im.heightPx, panoId: im.view.panoId });

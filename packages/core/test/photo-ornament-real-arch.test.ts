@@ -350,7 +350,8 @@ describe.skipIf(!arch.requirement.ok || !stagedChrome.ok)('photo-read refinement
         expect(run.log.grounding.filter(g => g.kind === 'wide').length).toBeLessThanOrEqual(4 * (1 + RING_VIEWS_PER_FACE));
         // the wide reading's close-ups, and up to two narrow crops per repeating run or band (run-reading.ts)
         expect(run.log.grounding.filter(g => g.kind === 'close').length).toBeLessThanOrEqual(16 + 12 * 2);
-        expect(run.log.vision.filter(v => v.kind === 'survey').length).toBe(1);
+        // one survey call per face image, all at once
+        expect(run.log.vision.filter(v => v.kind === 'survey').length).toBe(stage('survey').cost.images);
     }, 1_800_000);
 
     it('the whole-tile isolate: the fit is accepted, pass 2 runs on the real fitted faces', async () => {
@@ -362,8 +363,8 @@ describe.skipIf(!arch.requirement.ok || !stagedChrome.ok)('photo-read refinement
         console.log(`[photo-ornament wide] screenshots ${shots.join(', ')}`);
         const stage = (id: string) => run.result.stages.find((s: any) => s.stage === id);
         expect(stage('fit').status).toBe('committed');
-        expect(stage('survey').cost.visionCalls).toBe(1);
-        expect(run.log.vision.filter(v => v.kind === 'survey').length).toBe(1);
+        expect(stage('survey').cost.visionCalls).toBe(stage('survey').cost.images);
+        expect(run.log.vision.filter(v => v.kind === 'survey').length).toBe(stage('survey').cost.images);
         // the wide reading (and its one revision) and at most one small focused reading per repeating run or band (run-reading.ts)
         expect(run.log.vision.filter(v => v.kind === 'ornament').length).toBeLessThanOrEqual(2 + 12 * 2);
         // one call per figure crop, asked again at most FIGURE_READ_ATTEMPTS times when its reply cannot be read or built

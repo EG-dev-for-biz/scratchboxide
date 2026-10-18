@@ -195,7 +195,11 @@ export class InterViewAgreement {
     constructor(frames: EdgeRegFrame[], private readonly mesh: RenderMesh3D, private readonly stride = 3, sigma = INTER_VIEW_GRADIENT_SIGMA_PX) {
         this.frames = frames.map(f => ({ f, grad: gradientOf(f.image, sigma) }));
     }
-    private depthOf(g: GradFrame, corr: PoseCorrection): { cam: FrameCamera; depth: Float32Array } {
+    /** The scan's depth through frame `f` under `corr`, rendered once per (frame, pose) and kept. */
+    depthAt(f: EdgeRegFrame, corr: PoseCorrection): { cam: FrameCamera; depth: Float32Array } {
+        return this.depthOf({ f } as GradFrame, corr);
+    }
+    private depthOf(g: Pick<GradFrame, 'f'>, corr: PoseCorrection): { cam: FrameCamera; depth: Float32Array } {
         const cam = camOf(g.f, corr);
         const key = `${g.f.key}|${corr.dx},${corr.dy},${corr.dz},${corr.dyawDeg},${corr.dpitchDeg},${corr.drollDeg},${corr.referenceHeadingDeg ?? ''}`;
         let d = this.depth.get(key);
@@ -326,8 +330,8 @@ export function registerPanosByEdges(input: EdgeRegistrationInput): EdgeRegistra
             let edgeResidualM: number | undefined;
             if (after !== null) {
                 const ms = frames.filter(f => f.view.panoId === id).map(f => {
-                    const cam = camOf(f, e.corr);
-                    const d = renderFrameDepth(input.mesh, cam);
+                    // the same (frame, pose) the agreement score just rendered: its depth is reused, not rendered again
+                    const { cam, depth: d } = agree.depthAt(f, e.corr);
                     const ds: number[] = []; for (let i = 0; i < d.length; i += 97) if (d[i] < EMPTY_DEPTH) ds.push(d[i]);
                     return ds.length ? (after / cam.fx) * median(ds) : NaN;
                 }).filter(Number.isFinite);

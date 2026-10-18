@@ -220,18 +220,25 @@ async function pool<T, R>(items: T[], n: number, fn: (x: T) => Promise<R>): Prom
     return out;
 }
 
+/** The focused readings themselves, before they are merged into a wide reading (they do not depend on it, so they can run beside it). */
+export interface RunTargetReadings {
+    report: RunReadingReport;
+    results: Array<{ t: RunTarget; reading: Awaited<ReturnType<typeof readOrnament>>; refs: EvidenceImageRef[] } | undefined>;
+}
+
+/** The wide reading with the focused readings merged in (readRunTargets then mergeRunReadings). */
 export async function readRuns(input: RunReadingInput): Promise<RunReadingResult> {
+    return mergeRunReadings(input, await readRunTargets(input));
+}
+
+/** Steps 1-3: the views, the crops and one focused reading per target. Needs no wide reading. */
+export async function readRunTargets(input: Omit<RunReadingInput, 'base'>): Promise<RunTargetReadings> {
     const { fit } = input;
     // the pass's budget counts from here, so fetching the crops comes out of it too (the caller sizes it to the time it has left)
     const budgetStarted = Date.now();
     const targets = selectRunTargets(input.located);
     const report: RunReadingReport = { targets: targets.length, read: 0, elements: 0, replaced: 0, skipped: [], perTarget: [] };
-    const anchored: AnchorNote[] = [];
-    const dropped: RunReadingResult['dropped'] = [];
-    const imageRefs: EvidenceImageRef[] = [];
-    const newElements: OrnamentElement[] = [];
-    const emptyBase = { spec: input.base, anchored, report, imageRefs, dropped };
-    if (!targets.length) return emptyBase;
+    if (!targets.length) return { report, results: [] };
     const solid: FittedShells | undefined = readFittedShells(fit);
     const slotById = new Map(fit.slots.map(s => [s.id, s]));
     const coverCache = new Map<string, import('./slot-cover').SlotCover | undefined>();
@@ -248,7 +255,7 @@ export async function readRuns(input: RunReadingInput): Promise<RunReadingResult
         if (!views.length) report.skipped.push({ id: t.id, kind: t.located.kind, slotId: t.slotId, reason: 'no pano shows its slot squarely from 6-70 m, unoccluded' });
         for (const v of views) wanted.push({ t, view: v.view });
     }
-    if (!wanted.length) return { ...emptyBase, report };
+    if (!wanted.length) return { report, results: [] };
 
     // 2. fetch every crop at once
     const got = await fetchViews(wanted.map(w => w.view), input.streetView, input.signal);
@@ -303,6 +310,18 @@ export async function readRuns(input: RunReadingInput): Promise<RunReadingResult
     });
 
     clearTimeout(budgetTimer);
+    return { report, results };
+}
+
+/** Step 4: the focused readings merged into the wide reading `input.base`. */
+export function mergeRunReadings(input: Pick<RunReadingInput, 'fit' | 'base'>, readings: RunTargetReadings): RunReadingResult {
+    const { report, results } = readings;
+    const slotById = new Map(input.fit.slots.map(s => [s.id, s]));
+    const anchored: AnchorNote[] = [];
+    const dropped: RunReadingResult['dropped'] = [];
+    const imageRefs: EvidenceImageRef[] = [];
+    const newElements: OrnamentElement[] = [];
+    if (!results.length) return { spec: input.base, anchored, report, imageRefs, dropped };
     // 4. merge: ids made unique, the focused reading replaces whatever the wide reading put on the same stretch of the same slot
     let k = 0;
     const merged: OrnamentElement[] = [];

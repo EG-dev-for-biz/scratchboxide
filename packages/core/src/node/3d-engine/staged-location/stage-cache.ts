@@ -324,3 +324,15 @@ export class StageCache {
         return JSON.parse(fs.readFileSync(file, 'utf8')) as T;
     }
 }
+
+/**
+ * The vision models' usable replies, kept per request (stage "vision-reply"): a rerun with the same images and prompt
+ * reads them back instead of calling the model again. Only text is kept; the request's image bytes are hashed into the
+ * key, never stored.
+ */
+export function stagedReplyCache(cache: StageCache): import('../../gemini/vision-model-chain').VisionReplyCache {
+    return {
+        get: key => cache.get<import('../../gemini/vision-model-chain').VisionReplyRecord>('vision-reply', key)?.value,
+        put: (key, record) => { cache.remember('vision-reply', key, record, []); }
+    };
+}

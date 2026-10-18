@@ -94,7 +94,7 @@ describe('which panos look at which faces', () => {
     });
 });
 
-describe('the one vision call', () => {
+describe('the survey calls (one per face, in parallel)', () => {
     const faces = footprintSurveyFaces(STRUCTURE);
     const grounding = (calls: any[], pixels: Record<string, Array<[number, number, number]>>) => ({
         retrieveGroundingImage: async (req: any) => {
@@ -104,7 +104,7 @@ describe('the one vision call', () => {
     });
     const chainFor = (replies: Parameters<typeof routedVisionClient>[0], record: RoutedCall[]) => new VisionModelChain<string>({ client: routedVisionClient(replies, record), candidates: ['gemini-4-argon'] });
 
-    it('fetches up to four images in parallel, makes ONE vision call, measures the colours from the pixels, and builds the hints', async () => {
+    it('fetches up to four images in parallel, reads each face in its own call, measures the colours from the pixels, and builds the hints', async () => {
         const fetched: any[] = [];
         const record: RoutedCall[] = [];
         const msgs: string[] = [];
@@ -112,15 +112,15 @@ describe('the one vision call', () => {
             faces, panos: PANOS, structure: STRUCTURE, ground: GROUND, top: new Float32Array(0), deps: { mapsApiKey: 'k', grounding: grounding(fetched, { N1: [SKY, STONE, STONE, GREY], E1: [GREY], S1: [STONE], W1: [GREY, STONE] }) },
             chain: chainFor({ survey: surveyReply() }, record), onProgress: m => msgs.push(m)
         });
-        // budget: 4 images, 1 call
+        // budget: 4 images, 4 calls (one per face)
         expect(fetched.length).toBe(4);
-        expect(record.filter(c => c.kind === 'survey').length).toBe(1);
-        expect(r.cost).toEqual({ images: 4, visionCalls: 1, seconds: expect.any(Number) });
+        expect(record.filter(c => c.kind === 'survey').length).toBe(4);
+        expect(r.cost).toEqual({ images: 4, visionCalls: 4, seconds: expect.any(Number) });
         // the grounding pitch is in the API's sign (negative looks up) and the images were requested wide
         for (const q of fetched) { expect(q.pitchDegree).toBeLessThan(0); expect(q.fovDegree).toBeGreaterThanOrEqual(55); expect(q.aspectRatio).toBe('RATIO_4X3'); }
-        // the model sees all four images and the prompt has no closed list of kinds
+        // each call shows the model one image, and the prompt has no closed list of kinds
+        for (const c of record) expect(c.params.contents[0].parts.filter((p: any) => p.inlineData).length).toBe(1);
         const parts: any[] = record[0].params.contents[0].parts;
-        expect(parts.filter(p => p.inlineData).length).toBe(4);
         const text = parts.filter(p => p.text).map(p => p.text).join('\n');
         expect(text).toMatch(/your own plain word/);
         expect(text).not.toMatch(/\b(dentil|cornice|balustrade|pilaster|column|window)\b.*\|/);

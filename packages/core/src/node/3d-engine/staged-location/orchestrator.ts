@@ -75,7 +75,7 @@ import { VisionModelChain, type VisionGenAIClient } from '../../gemini/vision-mo
 import { loadScanMesh, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
 import { readGlbScene, sceneToRenderMesh } from '../../spatial/StreetViewPoseRegistrar';
 import type { RenderMesh3D } from '../../spatial/HeadlessMeshSilhouetteRenderer';
-import { StageCache, sha256File, stageKey, type CachedStage } from './stage-cache';
+import { StageCache, sha256File, stageKey, stagedReplyCache, type CachedStage } from './stage-cache';
 import {
     composeStagedArtifact, glbBounds, layerObjectId, retireSupersededLayers, stagedArtifactId, stagedCamera,
     type StagedCamera, type StagedLayerObjectMeta
@@ -97,12 +97,12 @@ import { describeJointRegistration, JOINT_REGISTRATION_BUDGET_MS, registerPanosJ
 import { LOO_BUDGET_MS } from './texture-fit-metric';
 import { jointRegistrationEnabled } from './round5-switch';
 import { registerPanos, type Registration } from './pano-registration';
-import { MATCH_TIMEOUT_MS, matchRingImages, runViewMatch, type MatchResult } from './view-match';
+import { MATCH_TIMEOUT_MS, matchRingImages, planRingViews, runViewMatch, type MatchResult } from './view-match';
 import { castCamera, fitFaces } from './survey-casting';
 import type { AnchorNote } from './ornament-anchor';
-import { EVIDENCE_DISCOVERY_ALLOWANCE_MS } from './streetview-evidence';
+import { EVIDENCE_DISCOVERY_ALLOWANCE_MS, memoizeGrounding } from './streetview-evidence';
 import {
-    constrainFigure, detectFigureBlobs, figureNode, figureProvenance, figureRecord, FIGURE_VISION_TIMEOUT_MS, planFigureViews, readFigures, smoothLump, SMOOTHED_SCAN_LABEL, TAUBIN,
+    constrainFigure, detectFigureBlobs, figureNode, figureProvenance, figureRecord, FIGURE_VISION_TIMEOUT_MS, planFigureViews, readFigure, corroborate, FIGURE_CONCURRENCY, type FigureOutcome, type FigureReading, smoothLump, SMOOTHED_SCAN_LABEL, TAUBIN,
     type FigureBlob, type FigureImage, type FigureView
 } from './figures';
 import { parseGlbNodes, readGlbNodes } from './glb-nodes';
@@ -111,7 +111,7 @@ import { buildObjectFromSpec } from '../reference-object-builder';
 import type { ObjectBuildSpec } from '../../../common/spatial/object-build-spec';
 import { nominalPose, projectSlots, registeredPose } from './slot-projection';
 import { computeSlotOffer, describeOffer } from './slot-exposure';
-import { readRuns, RUN_PASS_BUDGET_MS, type RunReadingReport } from './run-reading';
+import { mergeRunReadings, readRunTargets, RUN_PASS_BUDGET_MS, type RunReadingReport, type RunTargetReadings } from './run-reading';
 import { readOrnamentBatched, ORNAMENT_PASS_BUDGET_MS, ORNAMENT_REVISION_BUDGET_MS } from './ornament-batches';
 import { registeredUncertaintyAt } from './survey-detail';
 import {
@@ -449,11 +449,15 @@ class StagedRun {
         }, artifact);
     }
 
+    /** Told of every commit (the texture pass textures a layer the rebuild commits as soon as it lands). */
+    readonly commitListeners = new Set<(layer: StagedLayer) => void>();
+
     commit(layer: StagedLayer, meta: StagedLayerObjectMeta): void {
         if (this.closed) return;
         const i = this.state.layers.findIndex(l => l.objectId === layer.objectId);
         if (i >= 0) this.state.layers[i] = layer; else this.state.layers.push(layer);
         this.layerMeta[layer.objectId] = meta;
+        for (const listen of this.commitListeners) listen(layer);
     }
 
     /** Makes `objectId` the one layer objects stand on. */
@@ -767,6 +771,11 @@ export interface TextureStageValue {
     viewsUnavailable?: string;
 }
 
+/** The fitted charts a layer is textured with, as a key: a layer textured with charts a later refit replaced is textured again. */
+function surfacesKey(surfaces: Array<{ id: string; chart: unknown }> | undefined): string {
+    return surfaces?.length ? sha256Bytes(Buffer.from(JSON.stringify(surfaces))) : 'none';
+}
+
 function sha256Bytes(bytes: Uint8Array): string {
     return crypto.createHash('sha256').update(bytes).digest('hex');
 }
@@ -800,6 +809,8 @@ function loadMesh(files: Array<string | undefined>): RenderMesh3D {
 export async function runStagedLocation(requestIn: StagedLocationRequest, deps: StagedLocationDeps, ctx: StagedLocationContext = {}): Promise<StagedLocationOutcome> {
     const now = deps.now ?? Date.now;
     const cache = deps.cache;
+    // one grounding request per view per run: a view fetched ahead (the ring, while the survey reads) is reused, never refetched
+    const streetView = deps.streetView?.grounding ? { ...deps.streetView, grounding: memoizeGrounding(deps.streetView.grounding) } : deps.streetView;
     // a retry rebuilds the recorded request exactly; the model never re-words it
     let request = requestIn;
     let recordedArtifactId: string | undefined;
@@ -811,6 +822,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     }
     const retryStage = ctx.retry?.stage;
     const bypass = (id: StageId) => retryStage === id;
+    // the vision replies of identical earlier requests are read back (a retry of the stage asks the model again)
+    const replyCacheFor = (id: StageId) => (bypass(id) ? {} : { replyCache: stagedReplyCache(cache) });
     const runId = deps.newRunId?.() ?? crypto.randomBytes(4).toString('hex');
     const active = ctx.activeArtifact?.type === '3d-scene' ? ctx.activeArtifact : undefined;
     const intoActive = active && (request.stageIntoActiveScene || (recordedArtifactId && active.id === recordedArtifactId)) ? active : undefined;
@@ -962,6 +975,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
 
         // ---------------- survey (pass 1: starts now and runs beside the remesh and the fit; needs only the structure pick) ----------------
         const visionForSurvey = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
+        const visionAvailable = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
+        const rebuildPossible = isolateMode && !!deps.scanFit;
         // the free pano discovery is done once for the survey and the close-ups; it ends only with the call
         const discoveryStop = new AbortController();
         ctx.signal?.addEventListener('abort', () => discoveryStop.abort(), { once: true });
@@ -969,7 +984,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         const discoverOnce = (): ReturnType<typeof discoverPanos> => {
             panoDiscovery ??= (async () => {
                 const origin: GeodeticOrigin = { lat: placeValue!.lat, lng: placeValue!.lng, heightMeters: extraction.originEllipsoidalHeightM };
-                return discoverPanos(origin, facadeGeometry(structure!), { ...(deps.streetView ?? {}), metadataCachePath: path.join(cache.dir, 'streetview', 'metadata.json') }, discoveryStop.signal, structure!.centroid);
+                return discoverPanos(origin, facadeGeometry(structure!), { ...(streetView ?? {}), metadataCachePath: path.join(cache.dir, 'streetview', 'metadata.json') }, discoveryStop.signal, structure!.centroid);
             })();
             return panoDiscovery;
         };
@@ -987,17 +1002,25 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             surveyPromise = runner.stage<SurveyResult>({
                 id: 'survey',
                 run: async io => {
-                    const sv = deps.streetView ?? {};
+                    const sv = streetView ?? {};
                     const missing = missingCredentials(sv);
                     if (missing) return noSurvey('no_street_view', missing);
                     io.progress('finding Google Street View panoramas around the structure');
                     const found = await discoverOnce();
                     const faces = surveyFaceTargets(structure!);
                     let result: SurveyResult;
-                    const chain = new VisionModelChain<string>({ client: visionForSurvey.client, candidates: visionForSurvey.candidates, signal: ctx.signal, ...(deps.sleep ? { sleep: deps.sleep } : {}) });
+                    const chain = new VisionModelChain<string>({ client: visionForSurvey.client, candidates: visionForSurvey.candidates, signal: ctx.signal, ...replyCacheFor('survey'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
                     try {
                         result = await runFaceSurvey({
-                            faces, panos: found.panos, structure: structure!, ground: t.ground!, top: t.unmaskedTop ?? t.ground!.top, deps: sv, chain, signal: io.signal, onProgress: m => io.progress(m), now
+                            faces, panos: found.panos, structure: structure!, ground: t.ground!, top: t.unmaskedTop ?? t.ground!.top, deps: sv, chain, signal: io.signal, onProgress: m => io.progress(m), now,
+                            // while the faces are read, the ring views the matching will want are fetched (for every face with an image: a superset)
+                            onFetched: read => {
+                                if (!visionAvailable || !rebuildPossible) return;
+                                try {
+                                    const ring = planRingViews(faces, surveyCandidates(found.panos, faces, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top), { faces: faces.map(f => ({ faceId: f.faceId, headingDeg: f.headingDeg, source: f.source, elements: [], materials: [] })), read }, undefined, false);
+                                    if (ring.length) void fetchViews(ring, sv, discoveryStop.signal, 30_000).catch(() => undefined);
+                                } catch { /* the matching fetches its own views */ }
+                            }
                         });
                     } catch (err) {
                         if (isAbort(err) || io.signal.aborted) throw err;
@@ -1012,7 +1035,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const degradations = result.faces.filter(f => f.skipped).map(f => run.degrade(record('survey', 'face_not_surveyed', {
                         part: { description: `the ${Math.round(f.headingDeg)}° face of the structure` }, intended: 'a wide Street View view of this face in the survey',
                         fellTo: 'this face is left out of the survey and reported', provenanceAfter: PROVENANCE.photoInferred, reason: `the ${Math.round(f.headingDeg)}° face was not surveyed: ${f.skipped}`,
-                        transient: /did not arrive/.test(f.skipped ?? ''), runId, now: now(), suffix: f.faceId
+                        transient: /did not arrive|reading failed/.test(f.skipped ?? ''), runId, now: now(), suffix: f.faceId
                     })));
                     return { status: degradations.length ? 'degraded' : 'committed', value: result, source: describeSurvey(result), model: result.model, degradations };
                 },
@@ -1025,8 +1048,6 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         }
 
         // ---------------- evidence (starts when the fit is accepted: a rejected fit has nothing to place a photo on, and no image is fetched for it) ----------------
-        const visionAvailable = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
-        const rebuildPossible = isolateMode && !!deps.scanFit;
         let evidencePromise = undefined as Promise<{ images: EvidenceImage[]; panos: PanoCandidate[]; cost: EvidenceCost; plan?: DetailPlan; registration?: Registration; match?: MatchResult; status: string }> | undefined;
         // ended (skipped, as not needed) when the run ends before the evidence does
         const evidenceStop = new AbortController();
@@ -1037,7 +1058,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             evidencePromise = surveyDone.then(surveyOut => runner.stage<{ images: EvidenceImage[]; panos: PanoCandidate[]; cost: EvidenceCost; plan?: DetailPlan; registration?: Registration; match?: MatchResult }>({
                 id: 'evidence',
                 run: async io => {
-                    const sv = deps.streetView ?? {};
+                    const sv = streetView ?? {};
                     const missing = missingCredentials(sv);
                     if (missing) {
                         return {
@@ -1060,7 +1081,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         try {
                             const surveyFaces = surveyFaceTargets(structure!);
                             const candidates = surveyCandidates(found.panos, surveyFaces, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top);
-                            const matchChain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...(deps.sleep ? { sleep: deps.sleep } : {}) });
+                            const matchChain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...replyCacheFor('evidence'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
                             match = await runViewMatch({ faces: surveyFaces, survey: surveyOut.result, candidates, deps: sv, chain: matchChain, signal: io.signal, onProgress: m => io.progress(m) });
                             if (match.correspondences.length) {
                                 registration = registerPanos(match.correspondences, fitFaces(fit));
@@ -1166,13 +1187,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         let figuresPromise: Promise<unknown> | undefined;
         const startFigures = (fit: StructureFit, out: { figures?: FigureRecord[] }): void => {
             const surveyDone = surveyPromise ? surveyPromise.catch(() => undefined) : Promise.resolve(undefined);
-            figuresPromise = surveyDone.then(surveyOut => runner.stage<{ records: FigureRecord[] }>({
+            // the figures are found and read without the survey (it only corroborates them), so they start with the fit
+            figuresPromise = Promise.resolve().then(() => runner.stage<{ records: FigureRecord[] }>({
                 id: 'figures',
                 run: async io => {
                     const passFile = fit.outputs.passThroughGlb;
                     if (!passFile || !fs.existsSync(passFile)) return { status: 'skipped', source: '', reason: 'the fit kept no part of the scan as scanned' };
                     const nodes = readGlbNodes(passFile);
-                    const detection = detectFigureBlobs(fit, nodes, surveyOut?.result);
+                    const detection = detectFigureBlobs(fit, nodes, undefined);
                     if (!detection.figures.length) return { status: 'skipped', source: '', reason: `no compact scanned blob stands on a fitted pedestal (${detection.rejected.length} kept region${detection.rejected.length === 1 ? '' : 's'} checked)` };
                     io.progress(`${detection.figures.length} scanned figure${detection.figures.length === 1 ? '' : 's'} found standing on fitted pedestals`);
                     const fitSha = sha256File(fit.outputs.reportJson);
@@ -1182,9 +1204,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     let cost = { images: 0, visionCalls: 0, seconds: 0 };
                     const started = now();
                     const fail = (b: FigureBlob, reasonCode: string, reason: string, transient = false) => { rungs.set(b.regionId, { reasonCode, reason, transient }); };
+                    const readyFigures: Array<{ im: FigureImage; reading: FigureReading; fitted: ReturnType<typeof constrainFigure> }> = [];
 
                     // the crops and the one reading
-                    const sv = deps.streetView ?? {};
+                    const sv = streetView ?? {};
                     const missing = missingCredentials(sv);
                     const chainSource = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
                     let images: FigureImage[] = [];
@@ -1204,50 +1227,62 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             cost.images = got.images.length;
                         }
                         if (images.length) {
-                            const chain = new VisionModelChain<string>({ client: chainSource.client, candidates: chainSource.candidates, signal: ctx.signal, ...(deps.sleep ? { sleep: deps.sleep } : {}) });
-                            try {
-                                const read = await readFigures({ images, chain, signal: io.signal, onProgress: m => io.progress(m) });
-                                model = read.model;
-                                cost.visionCalls = read.calls;
-                                const builder = deps.figureBuilder ?? (async (spec: ObjectBuildSpec, signal?: AbortSignal) => ({ glb: (await buildObjectFromSpec(spec, { signal })).glb }));
-                                let order = 0;
-                                for (const im of images) {
-                                    const reading = read.parsed.readings.get(im.index);
-                                    if (!reading) {
-                                        const why = read.parsed.problems.get(im.index);
-                                        fail(im.blob, 'figure_not_read', why ? `its spec could not be built (${why.join('; ')})` : 'the reading gave no figure for its crop');
-                                        continue;
-                                    }
-                                    try {
-                                        const glb = await builder(reading.spec, io.signal);
-                                        const nodesBuilt = parseGlbNodes(glb.glb);
-                                        const merged = { positions: Float32Array.from(nodesBuilt.flatMap(n => Array.from(n.positions))), indices: undefined as Uint32Array | undefined };
-                                        // one node per part: stitch indices with offsets
-                                        let offset = 0; const idx: number[] = [];
-                                        for (const n of nodesBuilt) { const ii = n.indices ?? Uint32Array.from({ length: n.positions.length / 3 }, (_, k) => k); for (const v of ii) idx.push(v + offset); offset += n.positions.length / 3; }
-                                        merged.indices = Uint32Array.from(idx);
-                                        const fitted = constrainFigure(merged, im.blob, im.view.eye);
-                                        const node = figureNode({
-                                            id: `fig-${im.blob.regionId}`, positions: fitted.positions, indices: fitted.indices, order: order++, count: images.length, regionId: im.blob.regionId,
-                                            provenance: figureProvenance('photo-inferred', {
-                                                confidence: reading.confidence / 100, sourceId: `sv:${im.view.panoId}:${im.view.headingDeg}:${im.view.pitchDeg}:${im.view.fovDeg}`,
-                                                method: `ObjectBuildSpec read from one Street View crop by ${model.used}, built natively and fitted to the scan blob's bounds (scale ${fitted.scale.join(' × ')}, yaw ${fitted.yawDeg}°)`,
-                                                note: `bounded by the scanned lump ${im.blob.acrossM} × ${im.blob.alongM} × ${im.blob.heightM} m on the pedestal ${im.blob.pedestal.surfaceId}${im.blob.corroboratedBy ? `; the survey saw "${im.blob.corroboratedBy.kind}" there` : ''}`
-                                            })
-                                        });
-                                        built.set(im.blob.regionId, { node, record: figureRecord(im.blob, 'photo-inferred', { panoId: im.view.panoId, confidence: reading.confidence / 100 }) });
-                                    } catch (err) {
-                                        if (isAbort(err) || io.signal.aborted) throw err;
-                                        fail(im.blob, 'figure_not_built', `its spec could not be built inside the scan's bounds (${errorMessage(err)})`);
-                                    }
+                            const chain = new VisionModelChain<string>({ client: chainSource.client, candidates: chainSource.candidates, signal: ctx.signal, ...replyCacheFor('figures'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
+                            const builder = deps.figureBuilder ?? (async (spec: ObjectBuildSpec, signal?: AbortSignal) => ({ glb: (await buildObjectFromSpec(spec, { signal })).glb }));
+                            // each figure is read and built on its own, FIGURE_CONCURRENCY at once; a spec the builder refuses is
+                            // asked again with the builder's reason (figures.ts readFigure)
+                            const buildOne = (im: FigureImage) => async (spec: ObjectBuildSpec) => {
+                                const glb = await builder(spec, io.signal);
+                                const nodesBuilt = parseGlbNodes(glb.glb);
+                                const merged = { positions: Float32Array.from(nodesBuilt.flatMap(n => Array.from(n.positions))), indices: undefined as Uint32Array | undefined };
+                                // one node per part: stitch indices with offsets
+                                let offset = 0; const idx: number[] = [];
+                                for (const n of nodesBuilt) { const ii = n.indices ?? Uint32Array.from({ length: n.positions.length / 3 }, (_, k) => k); for (const v of ii) idx.push(v + offset); offset += n.positions.length / 3; }
+                                merged.indices = Uint32Array.from(idx);
+                                return constrainFigure(merged, im.blob, im.view.eye);
+                            };
+                            const outcomes: Array<FigureOutcome<ReturnType<typeof constrainFigure>>> = new Array(images.length);
+                            let nextFigure = 0;
+                            await Promise.all(Array.from({ length: Math.min(FIGURE_CONCURRENCY, images.length) }, async () => {
+                                while (nextFigure < images.length) {
+                                    const k = nextFigure++;
+                                    outcomes[k] = await readFigure({ image: images[k], chain, signal: io.signal, onProgress: m => io.progress(m), build: buildOne(images[k]) });
                                 }
-                            } catch (err) {
-                                if (isAbort(err) || io.signal.aborted) throw err;
+                            }));
+                            if (io.signal.aborted) throw io.signal.reason;
+                            model = outcomes.find(o => o.model)?.model;
+                            if (!model) {
+                                // no figure got any usable reply
+                                const err = outcomes.find(o => o.error)?.error ?? new Error('no figure was read');
                                 const used = err instanceof VisionStageError ? err.model : undefined;
                                 if (used) { model = used; cost.visionCalls = 1; }
                                 for (const im of images) fail(im.blob, 'figures_unreadable', `the vision model gave no usable reading (${errorMessage(err)})`, err instanceof VisionStageError ? err.transient : true);
+                            } else {
+                                cost.visionCalls = outcomes.reduce((n, o) => n + o.calls, 0);
+                                images.forEach((im, k) => {
+                                    const o = outcomes[k];
+                                    if (o.built && o.reading) { readyFigures.push({ im, reading: o.reading, fitted: o.built }); return; }
+                                    if (o.reading && o.buildError) { fail(im.blob, 'figure_not_built', `its spec could not be built inside the scan's bounds (${errorMessage(o.buildError)})`); return; }
+                                    const why = o.problems ?? (o.error ? [`its reading failed (${(o.error as Error)?.message ?? String(o.error)})`] : undefined);
+                                    fail(im.blob, 'figure_not_read', why ? `its spec could not be built (${why.join('; ')})` : 'the reading gave no figure for its crop');
+                                });
                             }
                         }
+                    }
+                    // the survey only corroborates the figures (it may still be reading when they are built): its word goes on their notes
+                    const surveyOut = await surveyDone;
+                    if (surveyOut?.result) for (const f of detection.figures) f.corroboratedBy = corroborate(f, surveyOut.result);
+                    let builtOrder = 0;
+                    for (const { im, reading, fitted } of readyFigures) {
+                        const node = figureNode({
+                            id: `fig-${im.blob.regionId}`, positions: fitted.positions, indices: fitted.indices, order: builtOrder++, count: images.length, regionId: im.blob.regionId,
+                            provenance: figureProvenance('photo-inferred', {
+                                confidence: reading.confidence / 100, sourceId: `sv:${im.view.panoId}:${im.view.headingDeg}:${im.view.pitchDeg}:${im.view.fovDeg}`,
+                                method: `ObjectBuildSpec read from one Street View crop by ${model!.used}, built natively and fitted to the scan blob's bounds (scale ${fitted.scale.join(' × ')}, yaw ${fitted.yawDeg}°)`,
+                                note: `bounded by the scanned lump ${im.blob.acrossM} × ${im.blob.alongM} × ${im.blob.heightM} m on the pedestal ${im.blob.pedestal.surfaceId}${im.blob.corroboratedBy ? `; the survey saw "${im.blob.corroboratedBy.kind}" there` : ''}`
+                            })
+                        });
+                        built.set(im.blob.regionId, { node, record: figureRecord(im.blob, 'photo-inferred', { panoId: im.view.panoId, confidence: reading.confidence / 100 }) });
                     }
                     cost.seconds = round((now() - started) / 1000, 1);
                     run.summary('figures').cost = cost;
@@ -1361,7 +1396,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     // a layer another layer supersedes is hidden once that one reveals, so it is skipped unless it is the ground
                     const fitSurfaces = () => (rebuildOut.refit ?? rebuildOut.fit)?.value.surfaces.filter(x => x.chart).map(x => ({ id: x.id, chart: x.chart })) ?? [];
                     const handled = new Set<string>();
-                    const pick = (): Array<{ layer: StagedLayer; file: string; surfaces?: Array<{ id: string; chart: any }> }> => {
+                    const pick = (): Array<{ layer: StagedLayer; file: string; surfaces?: Array<{ id: string; chart: any }>; late?: boolean }> => {
                         const live = run.state.layers.filter(l => !l.retired);
                         const superseded = new Set(live.flatMap(l => l.supersedes));
                         return live.filter(l => {
@@ -1414,10 +1449,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     ] : [];
                     const tileSha = tile ? sha256File(extraction.texturedGlb) : 'no-tile';
                     const enhance = deps.textures?.enhance;
-                    const outcomes: Array<{ layer: StagedLayer; out: Omit<TextureLayerOutcome, 'glb' | 'measureLoo'>; url: string; bytes: number; cached: boolean; builtAtMs: number }> = [];
+                    const outcomes: Array<{ layer: StagedLayer; out: Omit<TextureLayerOutcome, 'glb' | 'measureLoo'>; url: string; bytes: number; cached: boolean; builtAtMs: number; surfaces: string; late: boolean }> = [];
                     // leave-one-pano-out fits, run once every layer is textured (TextureLayerOutcome.measureLoo)
                     const looJobs = new Map<string, NonNullable<TextureLayerOutcome['measureLoo']>>();
-                    const passDegradations: TexturePassDegradation[] = [];
                     const done = (k: number) => {
                         run.state.texturePass = {
                             status: 'running', layersDone: k, layersTotal: targets.length,
@@ -1431,7 +1465,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const textureOne = async (target: typeof targets[number]) => {
                         handled.add(target.layer.objectId);
                         const clay = fs.readFileSync(target.file);
-                        const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), wideHeld.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048);
+                        const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), wideHeld.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048, surfacesKey(target.surfaces));
                         const entry = await cache.run<Omit<TextureLayerOutcome, 'glb'>>('textures', key, async dir => {
                             const out = await textureLayer({ layerKey: target.layer.layer, clayGlb: clay, ...(target.surfaces?.length ? { surfaces: target.surfaces } : {}) }, {
                                 views, ...(wideViews.length ? { photoTierViews: wideViews } : {}), ...(photoTierEnabled() ? { photoTier: true } : {}), ...(viewsUnavailable ? { viewsUnavailable } : {}), occluder, ...(context.indices.length ? { context } : {}), observedSurface: TEXTURE_OBSERVED_SURFACE, poseEdgeGuardShare: TEXTURE_POSE_EDGE_GUARD_SHARE,
@@ -1448,8 +1482,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             return { value };
                         }, { publish: () => [{ from: 'twin.glb', as: `${base}_${target.layer.layer}_tex_${key.slice(0, 8)}.glb` }], bypass: bypass('textures') });
                         const pub = entry.published[0];
-                        outcomes.push({ layer: target.layer, out: entry.value, url: pub.url, bytes: pub.bytes, cached: entry.cached, builtAtMs: entry.builtAtMs });
-                        passDegradations.push(...entry.value.degradations);
+                        const prior = outcomes.findIndex(o => o.layer.objectId === target.layer.objectId);
+                        if (prior >= 0) outcomes.splice(prior, 1);
+                        outcomes.push({ layer: target.layer, out: entry.value, url: pub.url, bytes: pub.bytes, cached: entry.cached, builtAtMs: entry.builtAtMs, surfaces: surfacesKey(target.surfaces), late: !!target.late });
                         // the layer gains its textured variant: same object, clay stays mounted; the viewport shows it in the textured material mode
                         const current = run.state.layers.find(l => l.objectId === target.layer.objectId) ?? target.layer;
                         const updated: StagedLayer = {
@@ -1465,21 +1500,67 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         done(k);
                         run.emit('textures', 'running', { message: `${target.layer.layer} textured`, layers: [updated], progress: Math.min(1, k / targets.length) }, true);
                     };
-                    const textureAll = async (list: typeof targets) => {
-                        let nextLayer = 0;
-                        await Promise.all(Array.from({ length: Math.min(TEXTURE_LAYER_CONCURRENCY, list.length) }, async () => {
-                            while (nextLayer < list.length) await textureOne(list[nextLayer++]);
-                        }));
+                    // at most TEXTURE_LAYER_CONCURRENCY layers at once, the first targets and the late ones alike, in the order they came
+                    let running = 0;
+                    const waiting: Array<() => void> = [];
+                    const withSlot = async (fn: () => Promise<void>) => {
+                        if (running >= TEXTURE_LAYER_CONCURRENCY) await new Promise<void>(r => waiting.push(r));
+                        running++;
+                        try { await fn(); } finally { running--; waiting.shift()?.(); }
                     };
-                    await textureAll(targets);
-                    // layers the rebuild commits later (photo-read detail, a refit body, figures) get their twins once it settles
-                    if (request.isolate) {
-                        await rebuildPromise.catch(() => undefined);
-                        if (figuresPromise) await (figuresPromise as Promise<unknown>).catch(() => undefined);
-                        const late = pick();
+                    const textureAll = (list: typeof targets) => Promise.all(list.map(t => withSlot(() => textureOne(t))));
+                    // a layer the rebuild commits later (photo-read detail, a refit body, figures) is textured as soon as it lands,
+                    // beside the others; once the rebuild settles, each is checked against what the settled scene asks of it
+                    const lateWork: Array<Promise<unknown>> = [];
+                    const takeLate = () => {
+                        const late = pick().map(t => ({ ...t, late: true }));
+                        for (const t of late) handled.add(t.layer.objectId);
+                        if (!late.length) return;
                         targets.push(...late);
-                        await textureAll(late);
+                        const work = textureAll(late);
+                        work.catch(() => undefined);
+                        lateWork.push(work);
+                    };
+                    const onCommit = (layer: StagedLayer) => { if (request.isolate && !layer.textured && !handled.has(layer.objectId)) takeLate(); };
+                    run.commitListeners.add(onCommit);
+                    try {
+                        await textureAll(targets.slice());
+                        if (request.isolate) {
+                            await rebuildPromise.catch(() => undefined);
+                            if (figuresPromise) await (figuresPromise as Promise<unknown>).catch(() => undefined);
+                            run.commitListeners.delete(onCommit);
+                            takeLate();
+                            for (let i = 0; i < lateWork.length; i++) await lateWork[i];
+                            // what the settled scene asks of the layers textured early: a layer another one now hides is not
+                            // textured (unless it is the ground); one textured with charts a later refit replaced is textured again
+                            const live = run.state.layers.filter(l => !l.retired);
+                            const superseded = new Set(live.flatMap(l => l.supersedes));
+                            const redo: typeof targets = [];
+                            for (const o of outcomes.filter(x => x.late)) {
+                                const meta = run.layerMeta[o.layer.objectId];
+                                const current = run.state.layers.find(l => l.objectId === o.layer.objectId);
+                                if (!current || current.retired || (superseded.has(o.layer.objectId) && !meta?.isGround)) {
+                                    outcomes.splice(outcomes.indexOf(o), 1);
+                                    looJobs.delete(o.layer.objectId);
+                                    if (current) { const { textured: _t, ...clay } = current; run.commit(clay, run.layerMeta[current.objectId]); }
+                                    continue;
+                                }
+                                const surfaces = fitSurfaces();
+                                if (surfacesKey(surfaces) !== o.surfaces) {
+                                    const t = targets.find(x => x.layer.objectId === o.layer.objectId)!;
+                                    redo.push({ ...t, surfaces });
+                                }
+                            }
+                            if (redo.length) await textureAll(redo);
+                        }
+                    } finally {
+                        run.commitListeners.delete(onCommit);
                     }
+                    // the layers in a fixed order: the first targets as picked, then the late ones in scene order
+                    const sceneIndex = (id: string) => run.state.layers.findIndex(l => l.objectId === id);
+                    const firstIndex = new Map(targets.filter(t => !t.late).map((t, i) => [t.layer.objectId, i]));
+                    outcomes.sort((a, b) => (a.late === b.late ? (a.late ? sceneIndex(a.layer.objectId) - sceneIndex(b.layer.objectId) : firstIndex.get(a.layer.objectId)! - firstIndex.get(b.layer.objectId)!) : a.late ? 1 : -1));
+                    const passDegradations: TexturePassDegradation[] = outcomes.flatMap(o => o.out.degradations);
                     // within the stage's own limit (the layers come first): what is left of it, less a margin, is the measurement's
                     const looDeadline = started + STAGES.textures.budgetMs - TEXTURE_LOO_MARGIN_MS;
                     // layers the rectified photo tier wrote come first (their fit is the one in question), then the others in order
@@ -1996,7 +2077,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             });
             if (evidence.plan) out.located = evidence.plan;
             out.evidenceCounts = { tileOrthos: inputs.filter(i => i.ref.kind === 'tile-ortho').length, streetView: inputs.filter(i => i.ref.kind === 'streetview-grounding').length };
-            const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...(deps.sleep ? { sleep: deps.sleep } : {}) });
+            const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...replyCacheFor('vision'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
             let fitSha = '';
             let visionKey = '';
             let offer: ReturnType<typeof computeSlotOffer> | undefined;
@@ -2021,27 +2102,42 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         return { status: 'committed', value: hit.value.spec, source: `${hit.value.spec.elements.length} photo-inferred elements (cached reading by ${hit.value.spec.model.used})`, model: hit.value.spec.model, cached: true, builtAtMs: hit.builtAtMs };
                     }
                     run.cacheStatus.vision = bypass('vision') ? 'bypassed' : 'miss';
-                    const reading = await readOrnamentBatched({ fit, fitSha256: fitSha, evidence: inputs, chain, signal: io.signal, onProgress: m => io.progress(m), located, offer, budgetMs: ORNAMENT_PASS_BUDGET_MS });
+                    // the targeted second pass: every repeating run or band the survey found, read again alone from narrow crops
+                    // (run-reading.ts). It needs no wide reading, so it runs beside it and is merged into it after; it is cut at
+                    // its own window, and the wide reading is never lost to it
+                    const svDeps = streetView ?? {};
+                    const runsWindowMs = Math.min(RUN_PASS_BUDGET_MS, STAGES.vision.budgetMs - VISION_STAGE_MARGIN_MS - (Date.now() - stageStarted));
+                    if (evidence.plan?.located.length && runsWindowMs < MIN_RUNS_WINDOW_MS) io.progress(`the focused run readings were not started: ${Math.max(0, Math.round(runsWindowMs / 1000))} s of the stage were left; the wide reading stands`);
+                    const runsCut = new AbortController();
+                    let runsTimer: ReturnType<typeof setTimeout> | undefined;
+                    let runsPromise: Promise<RunTargetReadings> | undefined;
+                    if (evidence.plan?.located.length && runsWindowMs >= MIN_RUNS_WINDOW_MS && !missingCredentials(svDeps) && t.ground) {
+                        runsTimer = setTimeout(() => runsCut.abort(Object.assign(new Error(`the focused run readings ran past their ${Math.round(runsWindowMs / 1000)} s`), { name: 'TimeoutError' })), runsWindowMs + 5_000);
+                        // started as a promise so that a failure to set it up (the fitted body cannot be read) is the runs' failure, not the reading's
+                        runsPromise = Promise.resolve().then(() => readRunTargets({
+                            fit, fitSha256: fitSha, located: evidence.plan.located, panos: evidence.panos, groundAt: (x, z) => t.ground!.groundAt(x, z), fallbackGroundY: structure!.groundY,
+                            ...(evidence.registration ? { registration: evidence.registration } : {}), occluder: loadMesh([fit.outputs.fittedGlb, fit.outputs.passThroughGlb]), streetView: svDeps, chain,
+                            signal: AbortSignal.any([io.signal, runsCut.signal]), budgetMs: runsWindowMs, onProgress: m => io.progress(m)
+                        }));
+                        runsPromise.catch(() => undefined);
+                    }
+                    let reading: Awaited<ReturnType<typeof readOrnamentBatched>>;
+                    try {
+                        reading = await readOrnamentBatched({ fit, fitSha256: fitSha, evidence: inputs, chain, signal: io.signal, onProgress: m => io.progress(m), located, offer, budgetMs: ORNAMENT_PASS_BUDGET_MS });
+                    } catch (err) {
+                        runsCut.abort(err);
+                        clearTimeout(runsTimer);
+                        throw err;
+                    }
                     const batchFailures = reading.batches.filter(b => b.status === 'failed');
                     io.progress(`${reading.batches.length - batchFailures.length} of ${reading.batches.length} batches read in ${(reading.spec.model.ms / 1000).toFixed(1)} s (${reading.calls} calls${reading.retries ? `, ${reading.retries} asked again after a stall` : ''})${batchFailures.length ? `; ${batchFailures.map(b => `${b.id} failed: ${b.reason}`).join('; ')}` : ''}`);
-                    // the targeted second pass: every repeating run or band the survey found, read again alone from narrow crops (run-reading.ts)
                     let spec = reading.spec;
                     let anchored = reading.anchored;
                     let runReport: RunReadingReport | undefined;
                     const runDropped: Array<{ elementId: string; slotId: string; reasonCode: string; problems: string[] }> = [];
-                    const svDeps = deps.streetView ?? {};
-                    // the run readings get what the stage has left, minus its margin, and are cut there: the wide reading is never lost to them
-                    const runsWindowMs = Math.min(RUN_PASS_BUDGET_MS, STAGES.vision.budgetMs - VISION_STAGE_MARGIN_MS - (Date.now() - stageStarted));
-                    if (evidence.plan?.located.length && runsWindowMs < MIN_RUNS_WINDOW_MS) io.progress(`the focused run readings were not started: ${Math.max(0, Math.round(runsWindowMs / 1000))} s of the stage were left; the wide reading stands`);
-                    if (evidence.plan?.located.length && runsWindowMs >= MIN_RUNS_WINDOW_MS && !missingCredentials(svDeps) && t.ground) {
-                        const runsCut = new AbortController();
-                        const runsTimer = setTimeout(() => runsCut.abort(Object.assign(new Error(`the focused run readings ran past their ${Math.round(runsWindowMs / 1000)} s`), { name: 'TimeoutError' })), runsWindowMs + 5_000);
+                    if (runsPromise) {
                         try {
-                            const rr = await readRuns({
-                                fit, fitSha256: fitSha, base: reading.spec, located: evidence.plan.located, panos: evidence.panos, groundAt: (x, z) => t.ground!.groundAt(x, z), fallbackGroundY: structure!.groundY,
-                                ...(evidence.registration ? { registration: evidence.registration } : {}), occluder: loadMesh([fit.outputs.fittedGlb, fit.outputs.passThroughGlb]), streetView: svDeps, chain,
-                                signal: AbortSignal.any([io.signal, runsCut.signal]), budgetMs: runsWindowMs, onProgress: m => io.progress(m)
-                            });
+                            const rr = mergeRunReadings({ fit, base: reading.spec }, await runsPromise);
                             spec = rr.spec; anchored = [...reading.anchored, ...rr.anchored]; runReport = rr.report; runDropped.push(...rr.dropped);
                             io.progress(`${rr.report.read} of ${rr.report.targets} runs and bands read from narrow crops: ${rr.report.elements} elements${rr.report.replaced ? `, replacing ${rr.report.replaced} from the wide reading` : ''}${rr.report.skipped.length ? `; ${rr.report.skipped.length} left as they were (${rr.report.skipped[0].reason})` : ''}`);
                         } catch (err) {

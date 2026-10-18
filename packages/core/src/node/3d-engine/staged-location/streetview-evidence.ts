@@ -327,3 +327,36 @@ export async function fetchViews(views: SelectedView[], deps: StreetViewEvidence
         elapsedMs: (deps.now ?? Date.now)() - started
     };
 }
+
+/**
+ * The grounding service with one request per (pano, heading, pitch, fov, aspect) per run: a view fetched ahead (the ring
+ * views while the survey reads its faces) is handed to whoever asks for it next. Only a successful answer is shared; a
+ * caller whose shared request failed for someone else's reason (that caller's stop or time limit) asks again on its own.
+ * The bytes live in memory for the run only, like every other Street View image here.
+ */
+export function memoizeGrounding(grounding: NonNullable<StreetViewEvidenceDeps['grounding']>): NonNullable<StreetViewEvidenceDeps['grounding']> & { prefetched(): number } {
+    const memo = new Map<string, Promise<GroundingImage>>();
+    let shared = 0;
+    const keyOf = (req: GroundingImageRequest) => JSON.stringify([req.panoId, req.headingDegree, req.pitchDegree, req.fovDegree, req.aspectRatio ?? null]);
+    return {
+        prefetched: () => shared,
+        retrieveGroundingImage: async (req, signal) => {
+            const key = keyOf(req);
+            const pending = memo.get(key);
+            if (pending) {
+                try {
+                    const got = await pending;
+                    shared++;
+                    return got;
+                } catch {
+                    if (signal?.aborted) throw signal.reason;
+                    // the shared request failed: this caller asks on its own below
+                }
+            }
+            const work = grounding.retrieveGroundingImage(req, signal);
+            memo.set(key, work);
+            work.catch(() => { if (memo.get(key) === work) memo.delete(key); });
+            return work;
+        }
+    };
+}

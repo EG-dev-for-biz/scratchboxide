@@ -21,8 +21,13 @@
  *   can still name the model and thinking level that were tried.
  *
  * Errors are made by the caller's factory, so the object builder keeps its own typed errors and messages.
+ *
+ * With a `replyCache`, a call whose request (contents, config, stage, thinking budget, candidates) was answered before
+ * returns that recorded answer without a model call (`cached: true`, the attempt marked cached). A reply is recorded
+ * only when the caller says it was usable (`remember()`), so a cut-off or invalid reply is never replayed.
  */
 
+import * as crypto from 'crypto';
 import type { GenerateContentParameters, GenerateContentResponse } from '@google/genai';
 import { classifyMediaGenerationError } from '../../common/media-generation-protocol';
 import { isModelNotFoundError } from './gemini-client';
@@ -51,6 +56,45 @@ export interface VisionAttempt {
     error?: string;
     httpStatus?: number;
     code?: string;
+    /** The answer was the recorded reply of an identical earlier request (no model call was made). */
+    cached?: boolean;
+}
+
+/** A usable reply, recorded so an identical request gets it back without a model call. */
+export interface VisionReplyRecord {
+    schema: 'scratchbox.vision-reply/1';
+    model: string;
+    answeredVersion: string;
+    /** The answer's non-thought text, its finish reason, usage and model version. */
+    text: string;
+    finishReason?: string;
+    usageMetadata?: GenerateContentResponse['usageMetadata'];
+    modelVersion?: string;
+    attempt: VisionAttempt;
+    skipped: Array<{ model: string; reason: string }>;
+}
+
+export interface VisionReplyCache {
+    get(key: string): VisionReplyRecord | undefined;
+    put(key: string, record: VisionReplyRecord): void;
+}
+
+/** sha256 of a request: every content part (image bytes included), the config without its abort signal, the stage, the thinking budget and the candidates. */
+export function visionRequestKey(params: Omit<GenerateContentParameters, 'model'>, stage: string, thinkingBudget: number | undefined, candidates: string[]): string {
+    const { abortSignal: _a, ...config } = (params.config ?? {}) as Record<string, unknown>;
+    const h = crypto.createHash('sha256').update('vision-request/v1');
+    h.update('\0').update(JSON.stringify({ stage, thinkingBudget: thinkingBudget ?? null, candidates, config }));
+    const contents = Array.isArray(params.contents) ? params.contents : [params.contents];
+    for (const c of contents as Array<{ role?: string; parts?: Array<Record<string, unknown>> } | string>) {
+        if (typeof c === 'string') { h.update('\0t').update(c); continue; }
+        h.update('\0r').update(c.role ?? '');
+        for (const p of c.parts ?? []) {
+            const inline = p.inlineData as { mimeType?: string; data?: string } | undefined;
+            if (inline) h.update('\0i').update(inline.mimeType ?? '').update('\0').update(inline.data ?? '');
+            else h.update('\0p').update(JSON.stringify(p));
+        }
+    }
+    return h.digest('hex');
 }
 
 export interface VisionErrorDetails {
@@ -72,6 +116,8 @@ export interface VisionModelChainOptions<Stage extends string> {
     makeError?: (stage: Stage, message: string, details: VisionErrorDetails) => Error;
     /** Time source (tests). */
     now?: () => number;
+    /** Usable replies of identical earlier requests (see the header). */
+    replyCache?: VisionReplyCache;
 }
 
 export class VisionChainError extends Error {
@@ -99,6 +145,10 @@ export interface VisionCallResult {
     ms: number;
     ttftMs?: number;
     thinking?: GeminiThinkingConfig;
+    /** The recorded reply of an identical earlier request: no model call was made. */
+    cached?: boolean;
+    /** Records this reply as usable, so an identical request later gets it back (a no-op without a reply cache, or for a cached reply). */
+    remember: () => void;
 }
 
 /**
@@ -213,8 +263,9 @@ export class VisionModelChain<Stage extends string = string> {
                     : this.options.client.models.generateContent(full);
                 const response = await raceAbort(work, [callSignal, signal]);
                 const ms = this.now() - started;
-                this.attempts.push({ model, ...(thinking ? { thinking: describeThinking(thinking) } : {}), ms, ...(ttftMs !== undefined ? { ttftMs } : {}), outcome: 'answered' });
-                return { response, model, ms, ...(ttftMs !== undefined ? { ttftMs } : {}), ...(thinking ? { thinking } : {}) };
+                const attempt: VisionAttempt = { model, ...(thinking ? { thinking: describeThinking(thinking) } : {}), ms, ...(ttftMs !== undefined ? { ttftMs } : {}), outcome: 'answered' };
+                this.attempts.push(attempt);
+                return { response, model, ms, ...(ttftMs !== undefined ? { ttftMs } : {}), ...(thinking ? { thinking } : {}), remember: () => this.record(params, opts, model, response, attempt) };
             } catch (err) {
                 const ms = this.now() - started;
                 // A stop aborts the request in flight: report the stop, not a model failure.
@@ -248,8 +299,45 @@ export class VisionModelChain<Stage extends string = string> {
      * One call. The first call walks the candidates (only "not found" moves on); later calls use the model that
      * answered. Throws the factory's error: the last model's failure, or "none is served" when every one was not found.
      */
+    /** The recorded reply for this request, replayed (the chain takes the model it came from when none has answered yet). */
+    private replay(params: Omit<GenerateContentParameters, 'model'>, opts: VisionCallOptions<Stage>): VisionCallResult | undefined {
+        const cache = this.options.replyCache;
+        if (!cache) return undefined;
+        let rec: VisionReplyRecord | undefined;
+        try { rec = cache.get(visionRequestKey(params, opts.stage, opts.thinkingBudget, this.options.candidates)); } catch { rec = undefined; }
+        if (!rec || (this.model && this.model !== rec.model)) return undefined;
+        if (!this.model) {
+            for (const s of rec.skipped) if (!this.skipped.some(x => x.model === s.model)) this.skipped.push(s);
+            this.model = rec.model;
+            this.answeredVersion = rec.answeredVersion;
+        }
+        this.attempts.push({ ...rec.attempt, cached: true });
+        const response = {
+            candidates: [{ content: { role: 'model', parts: [{ text: rec.text }] }, ...(rec.finishReason ? { finishReason: rec.finishReason } : {}) }],
+            ...(rec.usageMetadata ? { usageMetadata: rec.usageMetadata } : {}), ...(rec.modelVersion ? { modelVersion: rec.modelVersion } : {})
+        } as GenerateContentResponse;
+        const thinking = opts.thinkingBudget !== undefined ? thinkingConfigFor(rec.model, opts.thinkingBudget) : undefined;
+        return { response, model: rec.model, ms: rec.attempt.ms, ...(rec.attempt.ttftMs !== undefined ? { ttftMs: rec.attempt.ttftMs } : {}), ...(thinking ? { thinking } : {}), cached: true, remember: () => undefined };
+    }
+
+    private record(params: Omit<GenerateContentParameters, 'model'>, opts: VisionCallOptions<Stage>, model: string, response: GenerateContentResponse, attempt: VisionAttempt): void {
+        const cache = this.options.replyCache;
+        if (!cache) return;
+        const text = (response.candidates?.[0]?.content?.parts ?? []).filter(p => !(p as { thought?: boolean }).thought).map(p => p.text ?? '').join('');
+        const finishReason = response.candidates?.[0]?.finishReason as string | undefined;
+        try {
+            cache.put(visionRequestKey(params, opts.stage, opts.thinkingBudget, this.options.candidates), {
+                schema: 'scratchbox.vision-reply/1', model, answeredVersion: this.answeredVersion ?? response.modelVersion ?? model, text,
+                ...(finishReason ? { finishReason } : {}), ...(response.usageMetadata ? { usageMetadata: response.usageMetadata } : {}), ...(response.modelVersion ? { modelVersion: response.modelVersion } : {}),
+                attempt, skipped: [...this.skipped]
+            });
+        } catch { /* a reply that cannot be recorded is asked for again next time */ }
+    }
+
     async generate(params: Omit<GenerateContentParameters, 'model'>, opts: VisionCallOptions<Stage>): Promise<VisionCallResult> {
         this.asked = true;
+        const replayed = this.replay(params, opts);
+        if (replayed) return replayed;
         if (this.model) return this.callOne(this.model, params, opts);
         const candidates = this.options.candidates;
         for (let i = this.skipped.length; i < candidates.length; i++) {
