@@ -34,9 +34,12 @@
  * that has received levels [top .. L] can render a complete surface by treating level L as leaves,
  * so the model is visible after the first few kilobytes and sharpens as the stream arrives.
  *
- * Layout (little-endian, 4-byte words):
- *   header (128 bytes)          see SbvgHeaderWord
- *   level table                 levelCount * 12 words, coarsest level first
+ * Layout (little-endian, 4-byte words), version 2:
+ *   header (128 bytes)          see writeSbvg (word 24: skipped non-triangle primitives)
+ *   level table                 levelCount * 16 words, coarsest level first; the block's byte
+ *                               offset and length are 64-bit (lo, hi word pairs at words 9-10 and
+ *                               11-12), so files past 4 GiB are addressable. Version 1 used 12-word
+ *                               rows with 32-bit offsets at words 9 and 10.
  *   level blocks (16-byte aligned), each:
  *     clusters   clusterCount * 32 words  (see writeSbvg for the record layout)
  *     vertices   vertexCount * 6 f32      (position xyz relative to origin, normal xyz)
@@ -64,11 +67,31 @@ constexpr uint32_t kMaxClusterVertices = 128;
 constexpr uint32_t kMaxClusterTriangles = 128;
 constexpr uint32_t kGroupSize = 8;
 constexpr uint32_t kSbvgMagic = 0x47564253; // 'SBVG'
-constexpr uint32_t kSbvgVersion = 1;
+constexpr uint32_t kSbvgVersion = 2;
 constexpr uint32_t kSbvgHeaderBytes = 128;
-constexpr uint32_t kSbvgLevelWords = 12;
+constexpr uint32_t kSbvgLevelWords = 16;
 constexpr uint32_t kSbvgClusterWords = 32;
 constexpr float kRootParentError = 3.0e38f;
+/** Node instances a glTF scene graph may expand to (shared children are visited once per parent). */
+constexpr uint64_t kMaxNodeInstances = 1u << 20;
+/** Vertices (after instancing) the loader accepts; vertex ids are 32-bit. */
+constexpr uint64_t kMaxSourceVertices = 1u << 29;
+/** Triangles (after instancing) the loader accepts. */
+constexpr uint64_t kMaxSourceTriangles = 1u << 30;
+constexpr int kMaxJsonDepth = 512;
+
+/** A malformed or unsupported GLB: the message says which part. */
+struct GlbFormatError : std::runtime_error {
+    explicit GlbFormatError(const std::string& what) : std::runtime_error(what) {}
+};
+
+/**
+ * True when a level of `nextTris` triangles is worth adding above a level of `currentTris`
+ * (it removes at least 5%). 64-bit: currentTris * 95 overflows 32 bits above ~45M triangles.
+ */
+inline bool levelReducesEnough(uint64_t nextTris, uint64_t currentTris) {
+    return nextTris <= currentTris * 95 / 100;
+}
 
 // ============================================================================
 // Small vector math
@@ -123,7 +146,12 @@ struct Json {
     bool isNull() const { return type == Null; }
     size_t size() const { return type == Array ? arr.size() : 0; }
     double asNumber(double def) const { return type == Number ? num : def; }
-    int64_t asInt(int64_t def) const { return type == Number ? static_cast<int64_t>(num) : def; }
+    /** Integer value; `def` when absent. Throws on a non-integral or out-of-range number. */
+    int64_t asInt(int64_t def) const {
+        if (type != Number) return def;
+        if (!(num >= -9.0e15 && num <= 9.0e15) || num != std::floor(num)) throw GlbFormatError("glTF JSON: integer expected, got " + std::to_string(num));
+        return static_cast<int64_t>(num);
+    }
 };
 
 class JsonParser {
@@ -139,7 +167,15 @@ private:
     const char* p_;
     const char* end_;
 
-    [[noreturn]] void fail(const char* what) { throw std::runtime_error(std::string("glTF JSON parse error: ") + what); }
+    int depth_{0};
+
+    [[noreturn]] void fail(const char* what) { throw GlbFormatError(std::string("glTF JSON parse error: ") + what); }
+
+    void literal(const char* word) {
+        size_t n = std::strlen(word);
+        if (static_cast<size_t>(end_ - p_) < n || std::memcmp(p_, word, n) != 0) fail("bad literal");
+        p_ += n;
+    }
 
     void ws() {
         while (p_ < end_ && (*p_ == ' ' || *p_ == '\t' || *p_ == '\n' || *p_ == '\r')) ++p_;
@@ -148,6 +184,8 @@ private:
     Json value() {
         ws();
         if (p_ >= end_) fail("unexpected end");
+        if (++depth_ > kMaxJsonDepth) fail("nesting too deep");
+        struct DepthGuard { int& d; ~DepthGuard() { --d; } } guard{depth_};
         Json v;
         char c = *p_;
         if (c == '{') {
@@ -186,9 +224,9 @@ private:
         } else if (c == 't' || c == 'f') {
             v.type = Json::Bool;
             v.b = (c == 't');
-            p_ += v.b ? 4 : 5;
+            literal(v.b ? "true" : "false");
         } else if (c == 'n') {
-            p_ += 4;
+            literal("null");
         } else {
             v.type = Json::Number;
             char* numEnd = nullptr;
@@ -231,7 +269,7 @@ private:
 struct SourceMesh {
     std::vector<F3> positions;
     std::vector<uint32_t> indices;
-    uint32_t skippedPrimitives{0}; // non-triangle primitives (points / lines)
+    uint32_t skippedPrimitives{0}; // primitives without a surface (points / lines) or without POSITION
 };
 
 using Mat4 = std::array<double, 16>; // column-major
@@ -244,10 +282,10 @@ inline Mat4 mat4Identity() {
 
 inline Mat4 mat4Mul(const Mat4& a, const Mat4& b) {
     Mat4 r{};
-    for (int c = 0; c < 4; ++c) {
-        for (int row = 0; row < 4; ++row) {
+    for (size_t c = 0; c < 4; ++c) {
+        for (size_t row = 0; row < 4; ++row) {
             double s = 0;
-            for (int k = 0; k < 4; ++k) s += a[k * 4 + row] * b[c * 4 + k];
+            for (size_t k = 0; k < 4; ++k) s += a[k * 4 + row] * b[c * 4 + k];
             r[c * 4 + row] = s;
         }
     }
@@ -303,22 +341,22 @@ public:
     }
 
     static SourceMesh load(const uint8_t* data, size_t len) {
-        if (len < 20) throw std::runtime_error("GLB too small");
+        if (len < 20) throw GlbFormatError("GLB too small");
         uint32_t magic, version, jsonLen, jsonType;
         std::memcpy(&magic, data, 4);
         std::memcpy(&version, data + 4, 4);
         std::memcpy(&jsonLen, data + 12, 4);
         std::memcpy(&jsonType, data + 16, 4);
-        if (magic != 0x46546C67) throw std::runtime_error("not a GLB file (bad magic)");
-        if (version != 2) throw std::runtime_error("unsupported GLB version");
-        if (jsonType != 0x4E4F534A || 20ull + jsonLen > len) throw std::runtime_error("GLB JSON chunk missing");
+        if (magic != 0x46546C67) throw GlbFormatError("not a GLB file (bad magic)");
+        if (version != 2) throw GlbFormatError("unsupported GLB version");
+        if (jsonType != 0x4E4F534A || uint64_t(jsonLen) > len - 20) throw GlbFormatError("GLB JSON chunk missing");
 
         Json root = JsonParser(reinterpret_cast<const char*>(data + 20), jsonLen).parse();
 
         const uint8_t* bin = nullptr;
         size_t binLen = 0;
-        size_t binHeader = 20 + jsonLen;
-        if (binHeader + 8 <= len) {
+        size_t binHeader = 20 + size_t(jsonLen);
+        if (len - binHeader >= 8) {
             uint32_t chunkLen, chunkType;
             std::memcpy(&chunkLen, data + binHeader, 4);
             std::memcpy(&chunkType, data + binHeader + 4, 4);
@@ -332,8 +370,8 @@ public:
         for (size_t i = 0; i < required.size(); ++i) {
             const std::string& ext = required[i].str;
             if (ext == "KHR_draco_mesh_compression" || ext == "EXT_meshopt_compression" || ext == "KHR_mesh_quantization") {
-                throw std::runtime_error("GLB requires " + ext + ", which the virtual geometry builder does not decode; "
-                                         "export the mesh uncompressed with float positions");
+                throw GlbFormatError("GLB requires " + ext + ", which the virtual geometry builder does not decode; "
+                                     "export the mesh uncompressed with float positions");
             }
         }
 
@@ -347,22 +385,30 @@ private:
     const uint8_t* bin_;
     size_t binLen_;
     SourceMesh out_;
+    uint64_t instances_{0};
 
     GlbSceneLoader(const Json& root, const uint8_t* bin, size_t binLen) : root_(root), bin_(bin), binLen_(binLen) {}
+
+    /** Array index from JSON: `def` when absent, GlbFormatError when negative (out-of-range indices read as null). */
+    static size_t index(const Json& v, int64_t def = -1) {
+        int64_t i = v.asInt(def);
+        if (i < 0) throw GlbFormatError("glTF index must be a non-negative integer");
+        return static_cast<size_t>(i);
+    }
 
     void walk() {
         const Json& scenes = root_["scenes"];
         const Json& nodes = root_["nodes"];
         if (scenes.size() > 0) {
-            const Json& scene = scenes[static_cast<size_t>(root_["scene"].asInt(0))];
+            const Json& scene = scenes[index(root_["scene"], 0)];
             const Json& roots = scene["nodes"];
-            for (size_t i = 0; i < roots.size(); ++i) visitNode(static_cast<size_t>(roots[i].asInt(0)), mat4Identity(), 0);
+            for (size_t i = 0; i < roots.size(); ++i) visitNode(index(roots[i]), mat4Identity(), 0);
         } else if (nodes.size() > 0) {
             std::vector<uint8_t> isChild(nodes.size(), 0);
             for (size_t n = 0; n < nodes.size(); ++n) {
                 const Json& ch = nodes[n]["children"];
                 for (size_t c = 0; c < ch.size(); ++c) {
-                    size_t ci = static_cast<size_t>(ch[c].asInt(0));
+                    size_t ci = index(ch[c]);
                     if (ci < isChild.size()) isChild[ci] = 1;
                 }
             }
@@ -374,28 +420,62 @@ private:
     }
 
     void visitNode(size_t nodeIndex, const Mat4& parent, int depth) {
-        if (depth > 256) throw std::runtime_error("glTF node hierarchy too deep (cycle?)");
+        if (depth > 256) throw GlbFormatError("glTF node hierarchy too deep (cycle?)");
+        // Children shared by several parents are instanced once per path; a small DAG can name
+        // exponentially many paths, so the expansion is bounded as well as the depth.
+        if (++instances_ > kMaxNodeInstances) {
+            throw GlbFormatError("glTF scene graph expands to more than " + std::to_string(kMaxNodeInstances) +
+                                 " node instances (shared children reached along too many paths)");
+        }
         const Json& node = root_["nodes"][nodeIndex];
         if (node.isNull()) return;
         Mat4 world = mat4Mul(parent, nodeLocalMatrix(node));
         const Json& meshIdx = node["mesh"];
-        if (!meshIdx.isNull()) appendMesh(root_["meshes"][static_cast<size_t>(meshIdx.asInt(0))], world);
+        if (!meshIdx.isNull()) appendMesh(root_["meshes"][index(meshIdx)], world);
         const Json& children = node["children"];
-        for (size_t c = 0; c < children.size(); ++c) visitNode(static_cast<size_t>(children[c].asInt(0)), world, depth + 1);
+        for (size_t c = 0; c < children.size(); ++c) visitNode(index(children[c]), world, depth + 1);
     }
 
+    /** Non-negative integer field, `def` when absent. */
+    static uint64_t field(const Json& obj, const char* name, int64_t def) {
+        int64_t v = obj[name].asInt(def);
+        if (v < 0) throw GlbFormatError(std::string("glTF ") + name + " must not be negative");
+        return static_cast<uint64_t>(v);
+    }
+
+    /**
+     * Element `count` x `elemSize` bytes at `stride` from an accessor, checked against its
+     * bufferView and the BIN chunk. All arithmetic is 64-bit with every term bounded first, so no
+     * check can wrap.
+     */
     const uint8_t* accessorData(const Json& acc, size_t elemSize, size_t& stride, size_t& count) {
-        if (!acc["sparse"].isNull()) throw std::runtime_error("sparse glTF accessors are not supported");
-        count = static_cast<size_t>(acc["count"].asInt(0));
+        if (!acc["sparse"].isNull()) throw GlbFormatError("sparse glTF accessors are not supported");
+        if (acc.type != Json::Object) throw GlbFormatError("glTF accessor index out of range");
         const Json& bvIdx = acc["bufferView"];
-        if (bvIdx.isNull()) throw std::runtime_error("glTF accessor without bufferView is not supported");
-        const Json& bv = root_["bufferViews"][static_cast<size_t>(bvIdx.asInt(0))];
-        if (bv["buffer"].asInt(0) != 0 || !bin_) throw std::runtime_error("glTF buffer outside the GLB BIN chunk is not supported");
-        size_t offset = static_cast<size_t>(bv["byteOffset"].asInt(0) + acc["byteOffset"].asInt(0));
-        stride = static_cast<size_t>(bv["byteStride"].asInt(0));
-        if (stride == 0) stride = elemSize;
-        if (count > 0 && offset + (count - 1) * stride + elemSize > binLen_) throw std::runtime_error("glTF accessor out of BIN bounds");
-        return bin_ + offset;
+        if (bvIdx.isNull()) throw GlbFormatError("glTF accessor without bufferView is not supported");
+        const Json& bv = root_["bufferViews"][index(bvIdx)];
+        if (bv.type != Json::Object) throw GlbFormatError("glTF bufferView index out of range");
+        if (field(bv, "buffer", 0) != 0 || !bin_) throw GlbFormatError("glTF buffer outside the GLB BIN chunk is not supported");
+        if (bv["byteLength"].isNull()) throw GlbFormatError("glTF bufferView without byteLength");
+
+        const uint64_t binLen = binLen_;
+        const uint64_t viewOffset = field(bv, "byteOffset", 0);
+        const uint64_t viewLength = field(bv, "byteLength", 0);
+        if (viewOffset > binLen || viewLength > binLen - viewOffset) throw GlbFormatError("glTF bufferView out of BIN bounds");
+        const uint64_t accOffset = field(acc, "byteOffset", 0);
+        const uint64_t n = field(acc, "count", 0);
+        uint64_t s = field(bv, "byteStride", 0);
+        if (s == 0) s = elemSize;
+        if (s < elemSize || s > 252) throw GlbFormatError("glTF byteStride must be between the element size and 252");
+        if (accOffset > viewLength) throw GlbFormatError("glTF accessor byteOffset beyond its bufferView");
+        if (n > 0) {
+            // n <= viewLength / s + 1 bounds n before it is multiplied.
+            const uint64_t room = viewLength - accOffset;
+            if (room < elemSize || (n - 1) > (room - elemSize) / s) throw GlbFormatError("glTF accessor runs past the end of its bufferView");
+        }
+        stride = static_cast<size_t>(s);
+        count = static_cast<size_t>(n);
+        return bin_ + viewOffset + accOffset;
     }
 
     void appendMesh(const Json& mesh, const Mat4& world) {
@@ -404,15 +484,19 @@ private:
         for (size_t p = 0; p < prims.size(); ++p) {
             const Json& prim = prims[p];
             int64_t mode = prim["mode"].asInt(4);
-            if (mode != 4) { out_.skippedPrimitives++; continue; }
+            // 4 triangles, 5 triangle strip, 6 triangle fan; points and lines have no surface.
+            if (mode < 4 || mode > 6) { out_.skippedPrimitives++; continue; }
             const Json& posIdx = prim["attributes"]["POSITION"];
             if (posIdx.isNull()) { out_.skippedPrimitives++; continue; }
-            const Json& posAcc = root_["accessors"][static_cast<size_t>(posIdx.asInt(0))];
+            const Json& posAcc = root_["accessors"][index(posIdx)];
             if (posAcc["componentType"].asInt(0) != 5126 || posAcc["type"].str != "VEC3") {
-                throw std::runtime_error("glTF POSITION must be float32 VEC3");
+                throw GlbFormatError("glTF POSITION must be float32 VEC3");
             }
             size_t stride = 0, count = 0;
             const uint8_t* src = accessorData(posAcc, 12, stride, count);
+            if (uint64_t(out_.positions.size()) + count > kMaxSourceVertices) {
+                throw GlbFormatError("GLB scene has more than " + std::to_string(kMaxSourceVertices) + " vertices after instancing");
+            }
             uint32_t base = static_cast<uint32_t>(out_.positions.size());
             for (size_t i = 0; i < count; ++i) {
                 float v[3];
@@ -423,33 +507,52 @@ private:
                 out_.positions.emplace_back(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
             }
 
-            std::vector<uint32_t> tri;
+            // Vertex sequence the primitive mode is applied to.
+            std::vector<uint32_t> seq;
             const Json& idx = prim["indices"];
             if (idx.isNull()) {
-                for (size_t i = 0; i + 2 < count; i += 3) {
-                    tri.push_back(base + static_cast<uint32_t>(i));
-                    tri.push_back(base + static_cast<uint32_t>(i + 1));
-                    tri.push_back(base + static_cast<uint32_t>(i + 2));
-                }
+                seq.resize(count);
+                for (size_t i = 0; i < count; ++i) seq[i] = static_cast<uint32_t>(i);
             } else {
-                const Json& ia = root_["accessors"][static_cast<size_t>(idx.asInt(0))];
+                const Json& ia = root_["accessors"][index(idx)];
                 int64_t ct = ia["componentType"].asInt(0);
                 size_t es = ct == 5121 ? 1 : ct == 5123 ? 2 : ct == 5125 ? 4 : 0;
-                if (es == 0) throw std::runtime_error("glTF index componentType must be u8, u16 or u32");
+                if (es == 0) throw GlbFormatError("glTF index componentType must be u8, u16 or u32");
                 size_t istride = 0, icount = 0;
                 const uint8_t* isrc = accessorData(ia, es, istride, icount);
-                for (size_t i = 0; i + 2 < icount; i += 3) {
-                    for (size_t k = 0; k < 3; ++k) {
-                        const uint8_t* e = isrc + (i + k) * istride;
-                        uint32_t v = es == 1 ? e[0] : es == 2 ? static_cast<uint32_t>(e[0] | (e[1] << 8)) : 0;
-                        if (es == 4) std::memcpy(&v, e, 4);
-                        if (v >= count) throw std::runtime_error("glTF index out of range");
-                        tri.push_back(base + v);
-                    }
+                seq.resize(icount);
+                for (size_t i = 0; i < icount; ++i) {
+                    const uint8_t* e = isrc + i * istride;
+                    uint32_t v = 0;
+                    if (es == 1) v = e[0];
+                    else if (es == 2) v = static_cast<uint32_t>(e[0]) | (static_cast<uint32_t>(e[1]) << 8);
+                    else std::memcpy(&v, e, 4);
+                    if (v >= count) throw GlbFormatError("glTF index out of range");
+                    seq[i] = v;
                 }
             }
-            if (flip) {
-                for (size_t i = 0; i + 2 < tri.size(); i += 3) std::swap(tri[i + 1], tri[i + 2]);
+
+            std::vector<uint32_t> tri;
+            auto emit = [&](uint32_t a, uint32_t b, uint32_t c) {
+                if (flip) std::swap(b, c);
+                tri.push_back(base + a);
+                tri.push_back(base + b);
+                tri.push_back(base + c);
+            };
+            if (mode == 4) {
+                tri.reserve(seq.size() / 3 * 3);
+                for (size_t i = 0; i + 2 < seq.size(); i += 3) emit(seq[i], seq[i + 1], seq[i + 2]);
+            } else if (mode == 5) {
+                // glTF strip winding: odd triangles swap their first two vertices.
+                for (size_t i = 0; i + 2 < seq.size(); ++i) {
+                    if (i % 2 == 0) emit(seq[i], seq[i + 1], seq[i + 2]);
+                    else emit(seq[i + 1], seq[i], seq[i + 2]);
+                }
+            } else {
+                for (size_t i = 1; i + 1 < seq.size(); ++i) emit(seq[i], seq[i + 1], seq[0]);
+            }
+            if (uint64_t(out_.indices.size() + tri.size()) / 3 > kMaxSourceTriangles) {
+                throw GlbFormatError("GLB scene has more than " + std::to_string(kMaxSourceTriangles) + " triangles after instancing");
             }
             out_.indices.insert(out_.indices.end(), tri.begin(), tri.end());
         }
@@ -569,7 +672,7 @@ public:
             float e = a == 0 ? ext.x : a == 1 ? ext.y : ext.z;
             dims_[a] = std::max(1, std::min(1024, static_cast<int>(std::floor(e / cell_)) + 1));
         }
-        cells_.resize(static_cast<size_t>(dims_[0]) * dims_[1] * dims_[2]);
+        cells_.resize(static_cast<size_t>(dims_[0]) * static_cast<size_t>(dims_[1]) * static_cast<size_t>(dims_[2]));
         for (uint32_t i = 0; i < points.size(); ++i) cells_[cellIndex(points[i])].push_back(i);
     }
 
@@ -595,20 +698,22 @@ public:
                     for (int z = c[2] - r; z <= c[2] + r; ++z) {
                         if (z < 0 || z >= dims_[2]) continue;
                         if (std::max({std::abs(x - c[0]), std::abs(y - c[1]), std::abs(z - c[2])}) != r) continue;
-                        auto& list = cells_[(static_cast<size_t>(x) * dims_[1] + y) * dims_[2] + z];
+                        auto& list = cells_[(static_cast<size_t>(x) * static_cast<size_t>(dims_[1]) + static_cast<size_t>(y)) * static_cast<size_t>(dims_[2]) + static_cast<size_t>(z)];
                         for (size_t k = 0; k < list.size();) {
                             uint32_t idx = list[k];
                             if (!alive_[idx]) { list[k] = list.back(); list.pop_back(); continue; }
                             F3 d = points_[idx] - q;
                             float d2 = dot(d, d);
-                            if (d2 < bestD2) { bestD2 = d2; best = idx; }
+                            // Ties go to the lower index, so the answer does not depend on cell layout or list order.
+                            if (d2 < bestD2 || (d2 == bestD2 && idx < best)) { bestD2 = d2; best = idx; }
                             ++k;
                         }
                     }
                 }
             }
-            // Any point in a ring beyond r is at least r * cell_ away.
-            if (best != UINT32_MAX && std::sqrt(bestD2) <= r * cell_) break;
+            // Any point in a ring beyond r is at least r * cell_ away (strict, so an equally near point
+            // with a lower index further out is still found).
+            if (best != UINT32_MAX && std::sqrt(bestD2) < static_cast<float>(r) * cell_) break;
         }
         if (best != UINT32_MAX && maxDist >= 0 && bestD2 > maxDist * maxDist) return UINT32_MAX;
         return best;
@@ -631,7 +736,7 @@ private:
     size_t cellIndex(const F3& p) const {
         int c[3];
         coords(p, c);
-        return (static_cast<size_t>(c[0]) * dims_[1] + c[1]) * dims_[2] + c[2];
+        return (static_cast<size_t>(c[0]) * static_cast<size_t>(dims_[1]) + static_cast<size_t>(c[1])) * static_cast<size_t>(dims_[2]) + static_cast<size_t>(c[2]);
     }
 };
 
@@ -722,7 +827,7 @@ inline std::vector<Cluster> buildClusters(const std::vector<uint32_t>& tris, con
     std::vector<uint32_t> adj(localTri.size());
     {
         std::vector<uint32_t> fill(start.begin(), start.end() - 1);
-        for (uint32_t t = 0; t < triCount; ++t) for (int k = 0; k < 3; ++k) adj[fill[localTri[t * 3 + k]]++] = t;
+        for (uint32_t t = 0; t < triCount; ++t) for (uint32_t k = 0; k < 3; ++k) adj[fill[localTri[t * 3 + k]]++] = t;
     }
 
     std::vector<F3> centroids(triCount);
@@ -756,7 +861,7 @@ inline std::vector<Cluster> buildClusters(const std::vector<uint32_t>& tris, con
         auto addTri = [&](uint32_t t) {
             used[t] = 1;
             grid.remove(t);
-            for (int k = 0; k < 3; ++k) {
+            for (uint32_t k = 0; k < 3; ++k) {
                 uint32_t v = localTri[t * 3 + k];
                 if (slot[v] < 0) {
                     slot[v] = static_cast<int32_t>(clusterLocalVerts.size());
@@ -772,7 +877,7 @@ inline std::vector<Cluster> buildClusters(const std::vector<uint32_t>& tris, con
         };
         auto newVerts = [&](uint32_t t) {
             uint32_t n = 0;
-            for (int k = 0; k < 3; ++k) if (slot[localTri[t * 3 + k]] < 0) n++;
+            for (uint32_t k = 0; k < 3; ++k) if (slot[localTri[t * 3 + k]] < 0) n++;
             return n;
         };
 
@@ -861,7 +966,15 @@ private:
         double cost;
         uint32_t from, to;      // local ids: `from` collapses onto `to`
         uint32_t vFrom, vTo;    // versions at push time
-        bool operator>(const Candidate& o) const { return cost > o.cost; }
+        // Total order: equal costs are broken by vertex ids, so the collapse sequence is the same with
+        // every standard library's heap (libc++ and libstdc++ pop equal keys in different orders).
+        bool operator>(const Candidate& o) const {
+            if (cost != o.cost) return cost > o.cost;
+            if (from != o.from) return from > o.from;
+            if (to != o.to) return to > o.to;
+            if (vFrom != o.vFrom) return vFrom > o.vFrom;
+            return vTo > o.vTo;
+        }
     };
 
     const WeldedMesh& mesh_;
@@ -904,7 +1017,7 @@ private:
         auto key = [](uint32_t a, uint32_t b) { return a < b ? (uint64_t(a) << 32 | b) : (uint64_t(b) << 32 | a); };
         for (uint32_t t = 0; t < tri_.size(); ++t) {
             const auto& tr = tri_[t];
-            for (int k = 0; k < 3; ++k) {
+            for (uint32_t k = 0; k < 3; ++k) {
                 vtris_[tr[k]].push_back(t);
                 edgeUse[key(tr[k], tr[(k + 1) % 3])]++;
             }
@@ -913,14 +1026,14 @@ private:
             double area = 0.5 * length(cr);
             F3 nrm = normalize(cr);
             double d = -dot(nrm, p0);
-            for (int k = 0; k < 3; ++k) q_[tr[k]].addPlane(nrm.x, nrm.y, nrm.z, d, area);
+            for (uint32_t k = 0; k < 3; ++k) q_[tr[k]].addPlane(nrm.x, nrm.y, nrm.z, d, area);
         }
         // Open borders get a perpendicular constraint plane so they keep their outline.
         for (uint32_t t = 0; t < tri_.size(); ++t) {
             const auto& tr = tri_[t];
             F3 p0 = pos(tr[0]), p1 = pos(tr[1]), p2 = pos(tr[2]);
             F3 nrm = normalize(cross(p1 - p0, p2 - p0));
-            for (int k = 0; k < 3; ++k) {
+            for (uint32_t k = 0; k < 3; ++k) {
                 uint32_t a = tr[k], b = tr[(k + 1) % 3];
                 if (edgeUse[key(a, b)] != 1) continue;
                 F3 e = pos(b) - pos(a);
@@ -975,7 +1088,7 @@ private:
             const auto& tr = tri_[t];
             if (tr[0] == to || tr[1] == to || tr[2] == to) continue;
             F3 p[3], q[3];
-            for (int k = 0; k < 3; ++k) { p[k] = pos(tr[k]); q[k] = tr[k] == from ? target : p[k]; }
+            for (uint32_t k = 0; k < 3; ++k) { p[k] = pos(tr[k]); q[k] = tr[k] == from ? target : p[k]; }
             F3 n0 = cross(p[1] - p[0], p[2] - p[0]);
             F3 n1 = cross(q[1] - q[0], q[2] - q[0]);
             float l0 = length(n0), l1 = length(n1);
@@ -988,7 +1101,7 @@ private:
     void run(uint32_t targetTris) {
         for (uint32_t t = 0; t < tri_.size(); ++t) {
             const auto& tr = tri_[t];
-            for (int k = 0; k < 3; ++k) {
+            for (uint32_t k = 0; k < 3; ++k) {
                 pushEdge(tr[k], tr[(k + 1) % 3]);
             }
         }
@@ -1157,7 +1270,7 @@ inline ClusterDag buildClusterDag(WeldedMesh mesh, uint32_t maxLevels = 24) {
     uint32_t nextGroupId = 0;
 
     auto levelTriangles = [&](const std::vector<uint32_t>& ids) {
-        uint32_t n = 0;
+        uint64_t n = 0;
         for (uint32_t id : ids) n += dag.clusters[id].triangleCount();
         return n;
     };
@@ -1186,6 +1299,7 @@ inline ClusterDag buildClusterDag(WeldedMesh mesh, uint32_t maxLevels = 24) {
         };
         std::vector<GroupResult> results;
         LevelStats stats{level + 1, 0, 0, static_cast<uint32_t>(groups.size()), 0, 0};
+        uint64_t nextTriangles = 0;
         for (const auto& group : groups) {
             std::vector<uint32_t> tris;
             std::vector<Sphere> spheres;
@@ -1196,12 +1310,12 @@ inline ClusterDag buildClusterDag(WeldedMesh mesh, uint32_t maxLevels = 24) {
                 spheres.push_back(c.selfLod);
                 childError = std::max(childError, c.selfError);
             }
-            uint32_t groupTris = static_cast<uint32_t>(tris.size() / 3);
-            SimplifyResult simp = LockedSimplifier::simplify(tris, m, groupTris / 2, [&](uint32_t v) { return shared.count(v) > 0; });
+            const uint64_t groupTris = tris.size() / 3;
+            SimplifyResult simp = LockedSimplifier::simplify(tris, m, static_cast<uint32_t>(groupTris / 2), [&](uint32_t v) { return shared.count(v) > 0; });
 
             std::vector<uint32_t> parentTris;
             float groupError = childError;
-            if (simp.tris.size() / 3 > groupTris * 85 / 100) {
+            if (uint64_t(simp.tris.size() / 3) > groupTris * 85 / 100) {
                 // Locked borders left too little to remove: carry the group up unchanged so every
                 // level still covers the whole surface (the next level groups it differently).
                 parentTris = std::move(tris);
@@ -1211,12 +1325,13 @@ inline ClusterDag buildClusterDag(WeldedMesh mesh, uint32_t maxLevels = 24) {
                 groupError = childError + simp.error;
             }
             GroupResult r{group, mergeSpheres(spheres), groupError, buildClusters(parentTris, m)};
-            for (const auto& p : r.parents) stats.triangles += p.triangleCount();
+            for (const auto& p : r.parents) nextTriangles += p.triangleCount();
             results.push_back(std::move(r));
         }
 
         // A level that removes almost nothing would only duplicate the one below: stop instead.
-        if (stats.triangles > levelTriangles(current) * 95 / 100) break;
+        if (!levelReducesEnough(nextTriangles, levelTriangles(current))) break;
+        stats.triangles = static_cast<uint32_t>(nextTriangles);
 
         std::vector<uint32_t> next;
         for (auto& r : results) {
@@ -1255,13 +1370,24 @@ inline ClusterDag buildClusterDag(WeldedMesh mesh, uint32_t maxLevels = 24) {
 struct SbvgSummary {
     uint32_t vertexCount{0};
     uint32_t clusterCount{0};
-    uint32_t triangleCount{0};
-    uint32_t leafTriangleCount{0};
+    uint64_t triangleCount{0};
+    uint64_t leafTriangleCount{0};
     uint32_t levelCount{0};
     uint64_t fileBytes{0};
 };
 
-inline SbvgSummary writeSbvg(const ClusterDag& dag, const std::string& path) {
+/** Element count or index stored in a 32-bit field; throws instead of wrapping. */
+inline uint32_t sbvgU32(uint64_t v, const char* what) {
+    if (v > UINT32_MAX) throw std::runtime_error(std::string("virtual geometry too large for the .sbvg format: ") + what + " exceeds 2^32");
+    return static_cast<uint32_t>(v);
+}
+
+inline void putU64(uint32_t* w, uint64_t v) {
+    w[0] = static_cast<uint32_t>(v & 0xFFFFFFFFull);
+    w[1] = static_cast<uint32_t>(v >> 32);
+}
+
+inline SbvgSummary writeSbvg(const ClusterDag& dag, const std::string& path, uint32_t skippedPrimitives = 0) {
     const WeldedMesh& m = dag.mesh;
     std::vector<std::vector<uint32_t>> byLevel(dag.levelCount);
     for (uint32_t i = 0; i < dag.clusters.size(); ++i) byLevel[dag.clusters[i].level].push_back(i);
@@ -1271,11 +1397,11 @@ inline SbvgSummary writeSbvg(const ClusterDag& dag, const std::string& path) {
     auto putF = [](std::vector<uint32_t>& w, size_t at, float f) { std::memcpy(&w[at], &f, 4); };
 
     SbvgSummary sum;
-    uint32_t clusterBase = 0, vertexBase = 0, refBase = 0, triBase = 0;
+    uint64_t clusterBase = 0, vertexBase = 0, refBase = 0, triBase = 0;
     std::vector<uint32_t> body;
     size_t levelRow = 0;
     for (int lvl = static_cast<int>(dag.levelCount) - 1; lvl >= 0; --lvl, ++levelRow) {
-        const auto& ids = byLevel[lvl];
+        const auto& ids = byLevel[static_cast<size_t>(lvl)];
         while ((words.size() + body.size()) % 4) body.push_back(0); // 16-byte alignment
         size_t blockStart = words.size() + body.size();
 
@@ -1284,9 +1410,9 @@ inline SbvgSummary writeSbvg(const ClusterDag& dag, const std::string& path) {
         for (size_t i = 0; i < ids.size(); ++i) {
             const Cluster& c = dag.clusters[ids[i]];
             uint32_t* w = &clusterWords[i * kSbvgClusterWords];
-            w[0] = refBase + static_cast<uint32_t>(refs.size());
+            w[0] = sbvgU32(refBase + refs.size(), "vertex reference count");
             w[1] = static_cast<uint32_t>(c.vertices.size());
-            w[2] = triBase + static_cast<uint32_t>(tris.size());
+            w[2] = sbvgU32(triBase + tris.size(), "triangle count");
             w[3] = c.triangleCount();
             w[4] = c.level;
             w[5] = c.group;
@@ -1298,7 +1424,7 @@ inline SbvgSummary writeSbvg(const ClusterDag& dag, const std::string& path) {
             std::memcpy(w + 24, pf, sizeof(pf));
             for (uint32_t v : c.vertices) {
                 if (newIndex[v] == UINT32_MAX) {
-                    newIndex[v] = vertexBase + static_cast<uint32_t>(newVerts.size());
+                    newIndex[v] = sbvgU32(vertexBase + newVerts.size(), "vertex count");
                     newVerts.push_back(v);
                 }
                 refs.push_back(newIndex[v]);
@@ -1325,38 +1451,40 @@ inline SbvgSummary writeSbvg(const ClusterDag& dag, const std::string& path) {
 
         uint32_t* row = &words[kSbvgHeaderBytes / 4 + levelRow * kSbvgLevelWords];
         row[0] = static_cast<uint32_t>(lvl);
-        row[1] = clusterBase;
-        row[2] = static_cast<uint32_t>(ids.size());
-        row[3] = vertexBase;
-        row[4] = static_cast<uint32_t>(newVerts.size());
-        row[5] = refBase;
-        row[6] = static_cast<uint32_t>(refs.size());
-        row[7] = triBase;
-        row[8] = static_cast<uint32_t>(tris.size());
-        row[9] = static_cast<uint32_t>(blockStart * 4);
-        row[10] = static_cast<uint32_t>((blockEnd - blockStart) * 4);
+        row[1] = sbvgU32(clusterBase, "cluster count");
+        row[2] = sbvgU32(ids.size(), "cluster count");
+        row[3] = sbvgU32(vertexBase, "vertex count");
+        row[4] = sbvgU32(newVerts.size(), "vertex count");
+        row[5] = sbvgU32(refBase, "vertex reference count");
+        row[6] = sbvgU32(refs.size(), "vertex reference count");
+        row[7] = sbvgU32(triBase, "triangle count");
+        row[8] = sbvgU32(tris.size(), "triangle count");
+        putU64(row + 9, uint64_t(blockStart) * 4);
+        putU64(row + 11, uint64_t(blockEnd - blockStart) * 4);
 
-        clusterBase += static_cast<uint32_t>(ids.size());
-        vertexBase += static_cast<uint32_t>(newVerts.size());
-        refBase += static_cast<uint32_t>(refs.size());
-        triBase += static_cast<uint32_t>(tris.size());
+        clusterBase += ids.size();
+        vertexBase += newVerts.size();
+        refBase += refs.size();
+        triBase += tris.size();
     }
 
     words[0] = kSbvgMagic;
     words[1] = kSbvgVersion;
-    words[2] = static_cast<uint32_t>(words.size() * 4);
+    words[2] = sbvgU32(uint64_t(words.size()) * 4, "header size");
     words[3] = dag.levelCount;
-    words[4] = vertexBase;
-    words[5] = clusterBase;
-    words[6] = refBase;
-    words[7] = triBase;
-    words[8] = sum.leafTriangleCount;
+    words[4] = sbvgU32(vertexBase, "vertex count");
+    words[5] = sbvgU32(clusterBase, "cluster count");
+    words[6] = sbvgU32(refBase, "vertex reference count");
+    words[7] = sbvgU32(triBase, "triangle count");
+    words[8] = sbvgU32(sum.leafTriangleCount, "triangle count");
     words[9] = m.sourceTriangles;
     words[10] = kMaxClusterVertices;
     words[11] = kMaxClusterTriangles;
     putF(words, 12, m.aabbMin.x); putF(words, 13, m.aabbMin.y); putF(words, 14, m.aabbMin.z);
     putF(words, 15, m.aabbMax.x); putF(words, 16, m.aabbMax.y); putF(words, 17, m.aabbMax.z);
     std::memcpy(&words[18], m.origin.data(), 24);
+    words[24] = skippedPrimitives;
+    words[25] = m.droppedDegenerate;
 
     std::ofstream f(path, std::ios::binary);
     if (!f) throw std::runtime_error("cannot write " + path);
@@ -1364,8 +1492,8 @@ inline SbvgSummary writeSbvg(const ClusterDag& dag, const std::string& path) {
     f.write(reinterpret_cast<const char*>(body.data()), static_cast<std::streamsize>(body.size() * 4));
     if (!f) throw std::runtime_error("failed writing " + path);
 
-    sum.vertexCount = vertexBase;
-    sum.clusterCount = clusterBase;
+    sum.vertexCount = static_cast<uint32_t>(vertexBase);
+    sum.clusterCount = static_cast<uint32_t>(clusterBase);
     sum.levelCount = dag.levelCount;
     sum.fileBytes = (words.size() + body.size()) * 4ull;
     return sum;

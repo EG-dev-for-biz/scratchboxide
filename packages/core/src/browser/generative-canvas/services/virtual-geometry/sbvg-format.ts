@@ -14,9 +14,12 @@
  */
 
 export const SBVG_MAGIC = 0x47564253; // 'SBVG'
-export const SBVG_VERSION = 1;
+/** Version the builder writes. Version 2 has 64-bit level block offsets; version 1 files are still read. */
+export const SBVG_VERSION = 2;
 export const SBVG_HEADER_BYTES = 128;
-export const SBVG_LEVEL_WORDS = 12;
+export const SBVG_LEVEL_WORDS = 16;
+/** Level row size of version 1 files (32-bit block offset and length at words 9 and 10). */
+export const SBVG_V1_LEVEL_WORDS = 12;
 export const SBVG_CLUSTER_WORDS = 32;
 export const SBVG_CLUSTER_BYTES = SBVG_CLUSTER_WORDS * 4;
 export const SBVG_VERTEX_FLOATS = 6;
@@ -33,11 +36,13 @@ export interface SbvgLevel {
     refCount: number;
     triangleStart: number;
     triangleCount: number;
+    /** Bytes from the start of the file (64-bit in the file; exact in a JS number below 2^53). */
     byteOffset: number;
     byteLength: number;
 }
 
 export interface SbvgHeader {
+    version: number;
     headerBytes: number;
     levelCount: number;
     vertexCount: number;
@@ -48,6 +53,10 @@ export interface SbvgHeader {
     /** Triangles at full detail (level 0). */
     leafTriangleCount: number;
     sourceTriangleCount: number;
+    /** Primitives of the source left out of the build (points, lines, no POSITION); 0 in version 1 files. */
+    skippedPrimitives: number;
+    /** Degenerate source triangles dropped while welding; 0 in version 1 files. */
+    droppedDegenerate: number;
     maxClusterVertices: number;
     maxClusterTriangles: number;
     aabbMin: [number, number, number];
@@ -75,22 +84,33 @@ export function parseSbvgHeader(bytes: Uint8Array): SbvgHeader {
     const u = (word: number) => view.getUint32(word * 4, true);
     const f = (word: number) => view.getFloat32(word * 4, true);
     if (u(0) !== SBVG_MAGIC) throw new SbvgFormatError('sbvg: bad magic (not a virtual geometry file)');
-    if (u(1) !== SBVG_VERSION) throw new SbvgFormatError(`sbvg: unsupported version ${u(1)}`);
+    const version = u(1);
+    if (version !== 1 && version !== 2) {
+        throw new SbvgFormatError(`sbvg: unsupported version ${version} (this reader handles 1 and 2); rebuild the file from its GLB`);
+    }
+    const levelWords = version === 1 ? SBVG_V1_LEVEL_WORDS : SBVG_LEVEL_WORDS;
+    // A 64-bit field as a JS number; offsets past 2^53 bytes cannot be addressed and are refused.
+    const u64 = (word: number) => {
+        const v = u(word) + u(word + 1) * 4294967296;
+        if (!Number.isSafeInteger(v)) throw new SbvgFormatError('sbvg: offset beyond 2^53 bytes');
+        return v;
+    };
     const headerBytes = u(2);
     const levelCount = u(3);
-    if (headerBytes !== SBVG_HEADER_BYTES + levelCount * SBVG_LEVEL_WORDS * 4) throw new SbvgFormatError('sbvg: inconsistent header size');
+    if (headerBytes !== SBVG_HEADER_BYTES + levelCount * levelWords * 4) throw new SbvgFormatError('sbvg: inconsistent header size');
     if (bytes.byteLength < headerBytes) throw new SbvgFormatError('sbvg: truncated level table');
 
     const levels: SbvgLevel[] = [];
     let fileBytes = headerBytes;
     for (let i = 0; i < levelCount; i++) {
-        const w = SBVG_HEADER_BYTES / 4 + i * SBVG_LEVEL_WORDS;
+        const w = SBVG_HEADER_BYTES / 4 + i * levelWords;
         const level: SbvgLevel = {
             level: u(w), clusterStart: u(w + 1), clusterCount: u(w + 2),
             vertexStart: u(w + 3), vertexCount: u(w + 4),
             refStart: u(w + 5), refCount: u(w + 6),
             triangleStart: u(w + 7), triangleCount: u(w + 8),
-            byteOffset: u(w + 9), byteLength: u(w + 10)
+            byteOffset: version === 1 ? u(w + 9) : u64(w + 9),
+            byteLength: version === 1 ? u(w + 10) : u64(w + 11)
         };
         const expected = level.clusterCount * SBVG_CLUSTER_BYTES + level.vertexCount * SBVG_VERTEX_BYTES + (level.refCount + level.triangleCount) * 4;
         if (expected !== level.byteLength) throw new SbvgFormatError(`sbvg: level ${level.level} block size mismatch`);
@@ -98,6 +118,7 @@ export function parseSbvgHeader(bytes: Uint8Array): SbvgHeader {
         levels.push(level);
     }
     return {
+        version,
         headerBytes,
         levelCount,
         vertexCount: u(4),
@@ -106,6 +127,8 @@ export function parseSbvgHeader(bytes: Uint8Array): SbvgHeader {
         triangleCount: u(7),
         leafTriangleCount: u(8),
         sourceTriangleCount: u(9),
+        skippedPrimitives: version === 1 ? 0 : u(24),
+        droppedDegenerate: version === 1 ? 0 : u(25),
         maxClusterVertices: u(10),
         maxClusterTriangles: u(11),
         aabbMin: [f(12), f(13), f(14)],
