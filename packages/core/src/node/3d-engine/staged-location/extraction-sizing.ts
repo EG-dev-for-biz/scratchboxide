@@ -464,6 +464,12 @@ export const ISOLATE_CORE_GROW_M = 2;
 /** Of the structure tile_refine isolated: the share within the core grow of the pick, and the share that is roofed. */
 export const ISOLATE_PRECISION_MIN = 0.7;
 export const ISOLATE_ROOFED_MIN = 0.6;
+/**
+ * Of the pick, the share the isolate must still cover: the ownership vote may trim the pick (an attachment, a crown), but
+ * when it takes away most of it the vote and the pick disagree about the structure, and what is left is the remains of a
+ * block around a hole, not a structure.
+ */
+export const ISOLATE_RECALL_MIN = 0.5;
 
 export interface IsolateCheck {
     /** Cells of the isolated structure (1 m, standing STRUCTURE_MIN_HEIGHT_M above the pick's terrain). */
@@ -471,14 +477,14 @@ export interface IsolateCheck {
     areaM2: number;
     /** Share of the isolated cells within ISOLATE_CORE_GROW_M of a picked cell: what tile_refine kept lies on the pick. */
     precision: number;
-    /** Share of the picked cells within ISOLATE_CORE_GROW_M of an isolated cell (a vote may legitimately trim the pick). */
+    /** Share of the picked cells within ISOLATE_CORE_GROW_M of an isolated cell (a vote may trim the pick, not take most of it). */
     recall: number;
     /** Share of the isolated cells whose highest surface is an up-facing one (a roof), not walls alone (a hollow shell). */
     roofed: number;
     /** Whether the isolated structure holds the seed (within ISOLATE_CORE_GROW_M). */
     holdsSeed: boolean;
     iou: number;
-    /** min(precision, roofed), 0 without the seed: below ISOLATE_PRECISION_MIN or a roofed share under ISOLATE_ROOFED_MIN, the isolate is not the pick. */
+    /** min(precision, roofed, recall), 0 without the seed (diagnostic; `ok` applies each threshold). */
     agreement: number;
     ok: boolean;
 }
@@ -494,8 +500,8 @@ function nearCell(k: string, other: ReadonlySet<string>, tolM: number): boolean 
 /**
  * Whether tile_refine isolated the structure picked. tile_refine is handed the pick, so it cannot isolate another
  * structure by its own rule; what can still go wrong is that its result strays from the pick (closure), or that the
- * ownership vote leaves a shell of facades without its roof, or something away from the seed. A vote that trims the pick
- * to a coherent, roofed structure holding the seed is accepted (recall is reported, not required).
+ * ownership vote leaves a shell of facades without its roof, something away from the seed, or the remains of the pick after
+ * it took most of it away. A vote that trims the pick (at most by half) to a roofed structure holding the seed is accepted.
  */
 export function checkIsolate(rawClayGlb: string, pick: Pick<StructurePickResult, 'cells' | 'seed'>, terrain: GroundModel): IsolateCheck {
     const scan = loadScanMesh(rawClayGlb);
@@ -519,10 +525,10 @@ export function checkIsolate(rawClayGlb: string, pick: Pick<StructurePickResult,
     const recall = pick.cells.size ? covered / pick.cells.size : 0;
     const roofedShare = cells.size ? roofed / cells.size : 0;
     const holdsSeed = nearCell(cellKey(pick.seed.x, pick.seed.z), cells, ISOLATE_CORE_GROW_M);
-    const agreement = holdsSeed ? Math.min(precision, roofedShare) : 0;
+    const agreement = holdsSeed ? Math.min(precision, roofedShare, recall) : 0;
     return {
         cells, areaM2: cells.size * cell * cell, precision, recall, roofed: roofedShare, holdsSeed, iou: footprintIoU(pick.cells, cells), agreement,
-        ok: holdsSeed && precision >= ISOLATE_PRECISION_MIN && roofedShare >= ISOLATE_ROOFED_MIN
+        ok: holdsSeed && precision >= ISOLATE_PRECISION_MIN && roofedShare >= ISOLATE_ROOFED_MIN && recall >= ISOLATE_RECALL_MIN
     };
 }
 

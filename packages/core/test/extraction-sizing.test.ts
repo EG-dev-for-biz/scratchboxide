@@ -127,6 +127,13 @@ describe('pickStructure and the isolate check: the plaza', () => {
         const hollow = checkIsolate(shell, pick, ground);
         expect(hollow.roofed).toBeLessThan(0.6);
         expect(hollow.ok).toBe(false);
+        // the remains of the pick after a vote took most of it (a third of the building, holding the seed) are not it either
+        const remains = writeTris(path.join(TMP, 'iso_remains.glb'), [...groundGrid(30).map(t => t.map((v, i) => (i % 3 === 0 ? v - 15 : v)) as Tri).filter(t => t[0] < -1), ...building(-12, -6, -10, 10, 18)]);
+        const part = checkIsolate(remains, pick, ground);
+        expect(part.holdsSeed).toBe(true);
+        expect(part.precision).toBeGreaterThan(0.9);
+        expect(part.recall).toBeLessThan(0.5);
+        expect(part.ok).toBe(false);
 
         // screenshot: the plaza, the picked structure's cells raised in blue
         const cells: number[] = [];

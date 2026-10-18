@@ -85,7 +85,7 @@ import {
 import { describeRemeshProvenance, readRemeshProvenance } from './remesh-provenance';
 import { putBackScannedTrees } from './scanned-trees';
 import {
-    checkIsolate, grownOutline, pickOnScan, sizeExtraction, writeIsolationPick, ISOLATE_PRECISION_MIN, NO_STRUCTURE_DISTRICT_RADIUS_M, type StructurePickResult
+    checkIsolate, grownOutline, pickOnScan, sizeExtraction, writeIsolationPick, ISOLATE_PRECISION_MIN, ISOLATE_ROOFED_MIN, NO_STRUCTURE_DISTRICT_RADIUS_M, type StructurePickResult
 } from './extraction-sizing';
 import {
     discoverPanos, facadeGeometry, fetchViews, missingCredentials, EVIDENCE_STAGE_BUDGET_MS, type EvidenceImage, type PanoCandidate, type StreetViewEvidenceDeps
@@ -1754,7 +1754,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             if (!chk.ok) {
                                 const why = !chk.holdsSeed ? 'it does not hold the structure at the seed'
                                     : chk.precision < ISOLATE_PRECISION_MIN ? `only ${Math.round(chk.precision * 100)}% of it lies on the footprint picked`
-                                    : `only ${Math.round(chk.roofed * 100)}% of it is roofed (a shell of facades)`;
+                                    : chk.roofed < ISOLATE_ROOFED_MIN ? `only ${Math.round(chk.roofed * 100)}% of it is roofed (a shell of facades)`
+                                    : `it covers only ${Math.round(chk.recall * 100)}% of the footprint picked (the ownership vote took the rest away)`;
                                 mismatch = `tile_refine isolated a different structure than the one picked: ${why} (${Math.round(chk.areaM2)} m² isolated against ${Math.round(picked.areaM2)} m² picked, ${Math.round(chk.recall * 100)}% of the pick covered, seed ${structure!.seed.x}, ${structure!.seed.z})`;
                             }
                         }
