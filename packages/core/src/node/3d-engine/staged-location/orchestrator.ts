@@ -92,7 +92,10 @@ import { selectViewsForFit } from './evidence-aim';
 import { describeSurvey, runFaceSurvey, surveyCandidates, surveyFaceTargets, surveyImageBytes, SURVEY_IMAGE_TIMEOUT_MS, SURVEY_VISION_TIMEOUT_MS, type SurveyResult } from './face-survey';
 import { describeLocated, locateSurveyElements, planDetailFromSurvey, type DetailPlan } from './survey-detail';
 import { DETAIL_REPROJECTION_MIN_IOU, reprojectDetail } from './detail-reprojection';
-import { EDGE_REGISTRATION_BUDGET_MS, edgeFramesFromImages, registerPanosByEdges, describeEdgeRegistration, type EdgeRegistrationResult } from './pano-edge-registration';
+import { EDGE_MAX_RESIDUAL_PX, EDGE_REGISTRATION_BUDGET_MS, edgeFramesFromImages, registerPanosByEdges, describeEdgeRegistration, type EdgeRegistrationResult } from './pano-edge-registration';
+import { describeJointRegistration, JOINT_REGISTRATION_BUDGET_MS, registerPanosJointly } from './pano-joint-registration';
+import { LOO_BUDGET_MS } from './texture-fit-metric';
+import { jointRegistrationEnabled } from './round5-switch';
 import { registerPanos, type Registration } from './pano-registration';
 import { MATCH_TIMEOUT_MS, matchRingImages, runViewMatch, type MatchResult } from './view-match';
 import { castCamera, fitFaces } from './survey-casting';
@@ -143,7 +146,7 @@ export const STAGES = {
     resolve: { order: -1, title: 'Place', budgetMs: 10_000 },
     tiles: { order: 1, title: 'Google 3D Tiles', budgetMs: 360_000 },
     survey: { order: -1, title: 'Surveying the four faces', budgetMs: EVIDENCE_DISCOVERY_ALLOWANCE_MS + SURVEY_IMAGE_TIMEOUT_MS + SURVEY_VISION_TIMEOUT_MS + 15_000 },
-    evidence: { order: -1, title: 'Street View close-ups', budgetMs: EVIDENCE_STAGE_BUDGET_MS + 30_000 + MATCH_TIMEOUT_MS + 60_000 + EDGE_REGISTRATION_BUDGET_MS + 15_000 },
+    evidence: { order: -1, title: 'Street View close-ups', budgetMs: EVIDENCE_STAGE_BUDGET_MS + 30_000 + MATCH_TIMEOUT_MS + 60_000 + EDGE_REGISTRATION_BUDGET_MS + 15_000 + JOINT_REGISTRATION_BUDGET_MS + 30_000 },
     'trees-measure': { order: -1, title: 'Measuring the trees', budgetMs: 300_000 },
     remesh: { order: 2, title: 'Remeshed scan', budgetMs: 300_000 },
     fit: { order: 3, title: 'Scan-fitted rebuild', budgetMs: 30_000 },
@@ -746,6 +749,8 @@ export const TEXTURE_OBSERVED_SURFACE = { baseM: 0.5, perMeter: 0.03 };
  * part of what the wider guard was for (a sample carried across a silhouette by the pose error).
  */
 export const TEXTURE_POSE_EDGE_GUARD_SHARE = 0.25;
+/** Time the texture stage keeps free of the leave-one-pano-out measurement at its end (writing the record, publishing). */
+export const TEXTURE_LOO_MARGIN_MS = 60_000;
 
 /** What the texture stage hands the result and the summary. */
 export interface TextureStageValue {
@@ -1109,6 +1114,27 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 // pass 2 places the surveyed elements through the chosen poses (the close-ups stay as aimed)
                                 if (plan && surveyOut?.result) plan = { ...plan, ...locateSurveyElements(surveyOut.result, fit, registration) };
                             }
+                            // joint registration: all panos together (edges against the scan, cross-view photo consistency through it,
+                            // priors), from the better of box and edge per pano; kept only when the held-out fit improves (pano-joint-registration.ts)
+                            if (jointRegistrationEnabled() && edgeReg.registration && edgeReg.panos.length >= 2) {
+                                io.progress(`registering ${edgeReg.panos.length} panos jointly (edges, cross-view consistency through the scan, priors)`);
+                                const candidates = new Map(edgeReg.panos.map(p => [p.panoId, {
+                                    box: p.prior, ...(p.edge ? { edge: p.edge } : {}),
+                                    edgeLocked: p.edgeResidualPx.edge !== null && p.edgeResidualPx.edge <= EDGE_MAX_RESIDUAL_PX && (p.edgeResidualPx.prior === null || p.edgeResidualPx.edge < p.edgeResidualPx.prior)
+                                }]));
+                                const joint = registerPanosJointly({ frames, mesh, current: registration ?? edgeReg.registration, candidates, budgetMs: JOINT_REGISTRATION_BUDGET_MS, log: m => io.progress(m) });
+                                io.progress(describeJointRegistration(joint));
+                                cache.writeRunNote(runId, 'joint_registration', {
+                                    chosen: joint.chosen, reason: joint.reason, matches: joint.matches, timingsMs: joint.timingsMs, panos: joint.panos,
+                                    fit: Object.fromEntries(Object.entries(joint.fit).map(([k, v]) => [k, v && { chamferPx: v.chamferPx, clayChamferPx: v.clayChamferPx, gradNcc: v.gradNcc, views: v.views }])),
+                                    warps: joint.warps.map(w => ({ panoId: w.panoId, samples: w.samples, medianDeg: w.medianDeg }))
+                                });
+                                if (joint.chosen !== 'current') {
+                                    registration = joint.registration;
+                                    // the surveyed elements are placed again through the joint poses, so the built detail and the texture agree
+                                    if (plan && surveyOut?.result) plan = { ...plan, ...locateSurveyElements(surveyOut.result, fit, registration) };
+                                }
+                            }
                         }
                     } catch (err) {
                         if (isAbort(err) || io.signal.aborted) throw err;
@@ -1374,10 +1400,15 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     // the full tile mesh: the real opening, the statues, the trees and the buildings behind decide what each photo shows
                     const context = loadMesh([extraction.geometryGlb]);
                     const residual = evidence?.registration?.afterRmsM;
-                    const poseHash = evidence?.registration ? [...evidence.registration.corrections.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)) : [];
+                    const poseHash = evidence?.registration ? [
+                        ...[...evidence.registration.corrections.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)),
+                        ...[...(evidence.registration.warps?.entries() ?? [])].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([id, w]) => [id, Array.from(w.dh), Array.from(w.dp)])
+                    ] : [];
                     const tileSha = tile ? sha256File(extraction.texturedGlb) : 'no-tile';
                     const enhance = deps.textures?.enhance;
-                    const outcomes: Array<{ layer: StagedLayer; out: Omit<TextureLayerOutcome, 'glb'>; url: string; bytes: number; cached: boolean; builtAtMs: number }> = [];
+                    const outcomes: Array<{ layer: StagedLayer; out: Omit<TextureLayerOutcome, 'glb' | 'measureLoo'>; url: string; bytes: number; cached: boolean; builtAtMs: number }> = [];
+                    // leave-one-pano-out fits, run once every layer is textured (TextureLayerOutcome.measureLoo)
+                    const looJobs = new Map<string, NonNullable<TextureLayerOutcome['measureLoo']>>();
                     const passDegradations: TexturePassDegradation[] = [];
                     const done = (k: number) => {
                         run.state.texturePass = {
@@ -1404,7 +1435,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 onProgress: m => { io.progress(`textures: ${m}`); run.emit('textures', 'running', { message: m }); }
                             });
                             fs.writeFileSync(path.join(dir, 'twin.glb'), out.glb);
-                            const { glb: _glb, ...value } = out;
+                            const { glb: _glb, measureLoo, ...value } = out;
+                            if (measureLoo) looJobs.set(target.layer.objectId, measureLoo);
                             return { value };
                         }, { publish: () => [{ from: 'twin.glb', as: `${base}_${target.layer.layer}_tex_${key.slice(0, 8)}.glb` }], bypass: bypass('textures') });
                         const pub = entry.published[0];
@@ -1440,10 +1472,30 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         targets.push(...late);
                         await textureAll(late);
                     }
+                    // within the stage's own limit (the layers come first): what is left of it, less a margin, is the measurement's
+                    const looDeadline = started + STAGES.textures.budgetMs - TEXTURE_LOO_MARGIN_MS;
+                    for (const o of outcomes) {
+                        const job = looJobs.get(o.layer.objectId);
+                        if (!job || !o.out.bundle.fit) continue;
+                        const left = looDeadline - now();
+                        if (left < 10_000) { io.progress(`textures: ${o.layer.layer}: no time left in the stage for the leave-one-pano-out fit`); continue; }
+                        const tl = now();
+                        try {
+                            const loo = await job(Math.min(LOO_BUDGET_MS, left));
+                            o.out = { ...o.out, bundle: { ...o.out.bundle, fit: { ...o.out.bundle.fit, loo } }, timingsMs: { ...o.out.timingsMs, fitLoo: now() - tl } };
+                            io.progress(`textures: ${o.layer.layer}: leave-one-pano-out fit over ${loo.panos} panos: texture edge chamfer ${loo.chamferPx ?? 'n/a'} px, gradient NCC ${loo.gradNcc ?? 'n/a'}${loo.skipped ? ` (${loo.skipped} panos past the budget)` : ''}`);
+                        } catch (err) {
+                            if (isAbort(err) || io.signal.aborted) throw err;
+                            io.progress(`textures: ${o.layer.layer}: the leave-one-pano-out fit could not be measured (${errorMessage(err)})`);
+                        }
+                        await new Promise(r => setImmediate(r));
+                    }
                     const layers: TextureLayerBundle[] = outcomes.map(o => ({ ...o.out.bundle, maps: { albedo: `${o.url}#albedo` }, confidence: `${o.url}#confidence` }));
                     const timingsMs: Record<string, number> = { total: now() - started, tileLoad: tileLoadMs };
                     for (const o of outcomes) for (const [kk, v] of Object.entries(o.out.timingsMs)) timingsMs[`${o.layer.layer}.${kk}`] = v;
                     const record: TexturePassRecord = { passVersion: TEXTURE_PASS_VERSION, layers, degradations: passDegradations, timingsMs };
+                    // the held-out fit per layer, kept with the run so rounds can be compared on the same measure
+                    cache.writeRunNote(runId, 'texture_fit', outcomes.map(o => ({ layer: o.layer.layer, fit: o.out.bundle.fit ?? null, projection: o.out.projection ? { outputSeam: o.out.projection.outputSeam, context: o.out.projection.context, alignment: o.out.projection.alignment && { nccBefore: o.out.projection.alignment.nccBefore, nccAfter: o.out.projection.alignment.nccAfter }, poseRefine: o.out.projection.poseRefine } : null, rungShares: o.out.rungShares, timingsMs: o.out.timingsMs })));
                     const shares = weightedShares(outcomes.map(o => ({ shares: o.out.rungShares, texels: o.out.atlasTexels })));
                     run.state.texturePass = { status: 'committed', layersDone: outcomes.length, layersTotal: targets.length, rungShares: shares.map(x => round(x, 4)), message: 'textures ready' };
                     textureValue = {

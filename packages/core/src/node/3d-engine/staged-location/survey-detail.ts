@@ -143,8 +143,8 @@ function placeOf(reg: Registration | undefined, panoId: string, faceId: string, 
     const mine = reg?.pairs.filter(p => p.used && p.id.startsWith(`${faceId}.e${k}@`)) ?? [];
     const pano = reg?.perPano.find(p => p.panoId === panoId);
     // a pano posed against the scan's edges: the place is as good as that pose, whether or not the element was matched in another view
-    if (reg && pano?.method === 'edges' && pano.edgeResidualM !== undefined) {
-        return { locationUncertaintyM: registeredUncertaintyAt(distanceM, pano.edgeResidualM, 0), placeSource: `the survey model's bounding box cast through pano ${panoId}'s pose registered against the scan's silhouette and edges (eye shifted ${Math.hypot(pano.dxM, pano.dzM).toFixed(2)} m, heading ${pano.dyawDeg.toFixed(2)}°, pitch ${pano.dpitchDeg.toFixed(2)}°; edge residual ${pano.edgeResidualM.toFixed(2)} m)` };
+    if (reg && (pano?.method === 'edges' || pano?.method === 'joint') && pano.edgeResidualM !== undefined) {
+        return { locationUncertaintyM: registeredUncertaintyAt(distanceM, pano.edgeResidualM, 0), placeSource: `the survey model's bounding box cast through pano ${panoId}'s pose registered against the scan's silhouette and edges${pano.method === 'joint' ? ' jointly with the other panos (cross-view photo consistency through the scan)' : ''} (eye shifted ${Math.hypot(pano.dxM, pano.dzM).toFixed(2)} m, heading ${pano.dyawDeg.toFixed(2)}°, pitch ${pano.dpitchDeg.toFixed(2)}°; ${pano.method === 'joint' ? 'joint' : 'edge'} residual ${pano.edgeResidualM.toFixed(2)} m)` };
     }
     const panoPairs = pano?.pairs ?? 0;
     if (!reg || !mine.length || panoPairs < 1) return { locationUncertaintyM: poseUncertaintyAt(distanceM), placeSource: LOCATED_PLACE_SOURCE };

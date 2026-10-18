@@ -23,13 +23,9 @@ The **PBR Material Director Skill** equips AI agents with high-performance, phot
   - Fissure Frequency & Depth
   - Cellular & Grain Multi-Scale Fields
                      │
-        ┌────────────┴────────────┐
-        ▼                         ▼
- [Tier 1: Native C++20 Engine]   [Resilient Procedural Fallback]
- (scratchbox_pbr_manifold.hpp,    (Node.js / texture-processing.ts)
-  OpenMP/std::async, SIMD)
-        │                         │
-        └────────────┬────────────┘
+                     ▼
+ [Native C++20 Engine: scratchbox_pbr_manifold.hpp, OpenMP/std::async, SIMD]
+ (the only synthesizer: a compile or run failure is a NativePbrSynthesisError, never a substitute)
                      │
                      ▼
  [Multi-Channel Biophysical Synthesizer]
@@ -181,7 +177,7 @@ $$\mathbf{n}_{\text{rnm}} = \operatorname{normalize}\begin{pmatrix} \mathbf{n}_{
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Core Architecture** | Analytical $\mathbb{R}^{20}$ Manifold + Native C++20 SIMD | Multi-View Latent Diffusion | GPU Node Shader Painting | XML Material Specification | 2D Latent Diffusion |
 | **Resolution Range** | **1K, 2K, 4K, 8K, 12K ($12288^2$)** | 8K–16K (Cloud Diffusion) | Up to 16K (Manual paint) | Host-dependent | $512 \times 512$ |
-| **Generation Latency** | **1.5s–6s (Local CPU/SIMD) / 15ms (TS)** | 30s–90s (Cloud Queue) | Interactive Manual | N/A | 15s–30s (GPU) |
+| **Generation Latency** | **~0.1s at 1K, ~0.4s at 2K kernel time measured on an M-series Mac (reported per call in `nativeTimingsMs`)** | 30s–90s (Cloud Queue) | Interactive Manual | N/A | 15s–30s (GPU) |
 | **Zero Closed Taxonomies (ADA)** | **100% (Continuous $\mathbb{R}^{20}$ Manifold)** | ❌ (Trained latent priors) | ❌ (Manual node graphs) | ❌ (Node taxonomy) | ❌ (Fixed dataset) |
 | **Compute & Cost** | **Zero GPU / Apple Clang native ($0)** | High-cost cloud GPU cluster ($$$) | Local Desktop GPU | Host Dependent | NVIDIA GPU (PyTorch) |
 | **Binary glTF 2.0 Output** | **Direct binary `.glb` plane & plinth** | Cloud export mesh | Manual export | DCC Export | Python numpy export |
@@ -217,7 +213,7 @@ In compliance with the **Adaptive Domain Architecture (ADA)**, surface classific
   }
 }
 ```
-**Returns**: `domainClassification`, `organicityIndex`, `recommendedStrategy`, `seamStrategy` (`seamPlacement`, `seamMitigationMethod`, `recommendedGutterPaddingPx`, `tangentSpaceHandednessGuaranteed`, `seamRationale`).
+**Returns** measured quantities only: counts (`submeshCount`, `primitiveCount`, `renderedInstances`, `vertexCount`, `triangleCount`, `imageCount`, `texturedPrimitives`), world `bounds` (`boundsSpace` says how they were measured), the outcome of each routing rule (`rules`), `recommendedStrategy` with the `routingRule` that picked it, `methodThatRuns` (for `height_blended_triplanar` / `carrier_conformal_sheet` that is per-triangle box projection) and what it does about UV `seams`. There is no organicity index or confidence score.
 
 #### B. Synthesize & Apply Adaptive PBR to Target Mesh
 ```json

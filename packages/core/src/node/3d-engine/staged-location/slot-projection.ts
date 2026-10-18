@@ -19,7 +19,7 @@
  */
 
 import type { RenderMesh3D } from '../../spatial/HeadlessMeshSilhouetteRenderer';
-import { frameCamera, projectToFrame, renderFrameDepth, ZERO_CORRECTION, type FrameCamera, type PoseCorrection } from '../../spatial/StreetViewPoseRegistrar';
+import { frameCamera, groundingHorizontalFovDeg, projectToFrame, renderFrameDepth, ZERO_CORRECTION, type FrameCamera, type PoseCorrection } from '../../spatial/StreetViewPoseRegistrar';
 import type { EvidenceImageRef, FittedSurface, OrnamentSlot, StructureFit, SurfaceChart, Vec2, Vec3 } from '../../../common/spatial/staged-location-contracts';
 import { NOMINAL_POSE_UNCERTAINTY } from './streetview-evidence';
 
@@ -134,9 +134,9 @@ export interface ProjectedView {
     correction?: PoseCorrection;
 }
 
-/** The nominal camera of a view (the requested fov taken as horizontal). */
+/** The nominal camera of a view (the requested fov converted to the grounding crop's true horizontal fov). */
 export function viewCamera(v: ProjectedView, width = v.widthPx, height = v.heightPx): FrameCamera {
-    return frameCamera(v.eye as [number, number, number], v.headingDeg, v.pitchDeg, v.fovDeg, width, height, v.correction ?? ZERO_CORRECTION, v.correction?.referenceHeadingDeg ?? v.headingDeg);
+    return frameCamera(v.eye as [number, number, number], v.headingDeg, v.pitchDeg, groundingHorizontalFovDeg(v.fovDeg, width, height), width, height, v.correction ?? ZERO_CORRECTION, v.correction?.referenceHeadingDeg ?? v.headingDeg);
 }
 
 /** Every slot as seen in one view: its polygon (0-1000, [y, x, …]) and the share of its samples not occluded. */

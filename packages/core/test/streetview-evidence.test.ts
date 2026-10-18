@@ -179,7 +179,8 @@ describe('Street View evidence', () => {
             expect(img.sha256).toBe(crypto.createHash('sha256').update(sent.get(img.view.panoId)!).digest('hex'));
             expect([img.widthPx, img.heightPx]).toEqual(img.view.aspectRatio === 'RATIO_3X4' ? [480, 640] : [640, 480]);
             expect(img.id).toBe(`sv:${img.view.panoId}:${img.view.headingDeg}:${img.view.pitchDeg}:${img.view.fovDeg}`);
-            expect(img.nativeSampleM).toBeCloseTo(img.view.distanceM * img.view.fovDeg * Math.PI / 180 / img.widthPx, 9);
+            // the grounding camera: fx = 960 / tan(fov / 2) at the delivered crop (groundingFocalPx)
+            expect(img.nativeSampleM).toBeCloseTo(img.view.distanceM * Math.tan(img.view.fovDeg * Math.PI / 360) / 960 * (Math.min(1920, 1280 * img.widthPx / img.heightPx) / img.widthPx), 9);
         }
         // nothing new on disk: no image, no temp file, anywhere under the workspace temp dir or the system temp dir
         const after = snapshot(watched);

@@ -24,7 +24,7 @@
 
 import { MAX_STREET_VIEW_IMAGES_PER_BUILDING, type FittedSurface, type OrnamentSlot, type StructureFit, type Vec3 } from '../../../common/spatial/staged-location-contracts';
 import type { GroundingAspectRatio } from '../../spatial/StreetViewGroundingImageService';
-import { frameCamera, projectToFrame, ZERO_CORRECTION } from '../../spatial/StreetViewPoseRegistrar';
+import { frameCamera, groundingHorizontalFovDeg, groundingRequestFovDeg, projectToFrame, ZERO_CORRECTION } from '../../spatial/StreetViewPoseRegistrar';
 import type { GroundModel } from '../../spatial/StreetViewSurveyPlanner';
 import { chartNormal, slotPoints } from './slot-projection';
 import { bearingDeg, STREET_VIEW_EYE_HEIGHT_M, type PanoCandidate, type SelectedView } from './streetview-evidence';
@@ -139,7 +139,8 @@ export function aimAt(eye: Vec3, t: SlotTarget): { headingDeg: number; elevation
     hAz = Math.min(80, hAz); hEl = Math.min(80, hEl);
     let best = { fov: Infinity, aspect: ASPECTS[1] };
     for (const a of ASPECTS) {
-        const need = 2 * Math.atan(Math.max(Math.tan(hAz * DEG), a.ratio * Math.tan(hEl * DEG)) / 0.9) / DEG;
+        // the crop's true horizontal fov the outline needs, as the fov to request (a crop of the 1920 px grounding frame)
+        const need = groundingRequestFovDeg(2 * Math.atan(Math.max(Math.tan(hAz * DEG), a.ratio * Math.tan(hEl * DEG)) / 0.9) / DEG, a.ratio);
         if (need < best.fov) best = { fov: need, aspect: a };
     }
     const fovDeg = Math.round(Math.max(MIN_VIEW_FOV_DEG, Math.min(MAX_VIEW_FOV_DEG, best.fov)) * 10) / 10;
@@ -189,7 +190,7 @@ export function selectViewsForFit(
             const aim = aimAt(eye, t);
             const ratio = ASPECTS.find(a => a.name === aim.aspectRatio)!.ratio;
             const W = 1000, H = W / ratio;
-            const cam = frameCamera(eye, aim.headingDeg, aim.elevationDeg, aim.fovDeg, W, H, ZERO_CORRECTION, aim.headingDeg);
+            const cam = frameCamera(eye, aim.headingDeg, aim.elevationDeg, groundingHorizontalFovDeg(aim.fovDeg, W, H), W, H, ZERO_CORRECTION, aim.headingDeg);
             const covers = new Map<string, number>();
             targets.forEach((u, j) => {
                 if (seen[j] < 0.4) return;
@@ -197,7 +198,7 @@ export function selectViewsForFit(
                 if (q && q[0] > 0.04 * W && q[0] < 0.96 * W && q[1] > 0.04 * H && q[1] < 0.96 * H) covers.set(u.slotId, seen[j]);
             });
             if (!covers.has(t.slotId)) return;
-            const native = (aim.distanceM * aim.fovDeg * DEG) / GROUNDING_NATIVE_WIDTH_PX;
+            const native = (aim.distanceM * 2 * Math.tan((aim.fovDeg * DEG) / 2)) / GROUNDING_NATIVE_WIDTH_PX;
             candidates.push({
                 recency,
                 native,

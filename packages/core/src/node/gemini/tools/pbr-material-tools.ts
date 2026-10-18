@@ -17,7 +17,8 @@ import {
     type NativePbrTextureSet
 } from '../../3d-engine/native-material-pbr-service';
 import { AdaptiveMaterialPbrService } from '../../3d-engine/adaptive-material-pbr-service';
-import { AdaptiveUvOrchestrator } from '../../3d-engine/adaptive-uv-orchestrator';
+import { AdaptiveUvOrchestrator, type PartMaterialAssignment } from '../../3d-engine/adaptive-uv-orchestrator';
+import { AdaptivePbrMaterialSpecError } from '../../3d-engine/adaptive-pbr-errors';
 import { GltfBinaryPacker } from '../../3d-engine/gltf-binary-packer';
 import { MaterialXService } from '../../3d-engine/materialx-service';
 import { UsdzPacker } from '../../3d-engine/usdz-packer';
@@ -95,13 +96,13 @@ function sanitizeDescriptor(raw: any, fallback: ContinuousMaterialDescriptor): C
 export const PBR_MATERIAL_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'pbr_synthesize_material',
-        description: 'Synthesizes physically grounded, 100% offline procedural PBR materials across 1K, 2K, 4K, 8K, up to 12K (12288x12288) resolution in native multithreaded C++20. Emits diffuse Albedo, Scharr tangent normal, glTF 2.0 packed ORM (AO, Roughness, Metallic), and virtual Height maps. Fully compliant with Adaptive Domain Architecture (ADA): parameters are continuous physical coordinates in R^20 (zero closed enums), passing the Alien Planet Test with sub-second execution.',
+        description: 'Synthesizes procedural PBR texture maps (albedo, tangent normal, packed ORM, height; plus separate roughness / metallic / AO for MaterialX and USDZ) from a 50-entry archetype catalog or a continuous descriptor, in the native C++20 kernel (scratchbox_pbr_manifold.hpp) compiled with clang++. There is no fallback synthesizer: if the kernel cannot compile or run, the call fails with that error. Timings in the result are measured. With targetMeshPath the maps are applied to the mesh by per-triangle box projection and the textured GLB is written.',
         parameters: {
             type: 'OBJECT',
             properties: {
                 resolution: {
                     type: 'STRING',
-                    description: 'Target texture resolution. Supported standard tiers: "1K" (1024), "2K" (2048), "4K" (4096), "8K" (8192), "12K" (12288x12288). Default: "2K".',
+                    description: 'Target texture resolution. Supported standard tiers: "1K" (1024), "2K" (2048), "4K" (4096), "8K" (8192), "12K" (12288x12288). Default: "2K". With targetMeshPath each set is capped at 4096 px and must be square; a larger request fails rather than being reduced.',
                     enum: ['1K', '2K', '4K', '8K', '12K']
                 },
                 width: {
@@ -114,7 +115,7 @@ export const PBR_MATERIAL_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 archetype: {
                     type: 'STRING',
-                    description: 'Optional baseline biophysical archetype key or display name (e.g. "carrara_marble", "weathered_concrete", "brushed_titanium", "cor_ten_steel", "low_e_glazing", "indiana_limestone").'
+                    description: 'Optional baseline biophysical archetype: a catalog key or display name, exactly (e.g. "carrara_marble", "weathered_concrete", "brushed_titanium", "corten_steel", "solar_low_e_glass", "indiana_limestone", "polished_brass", "quartersawn_walnut", "wrought_iron"; pbr_get_material_catalog lists all 50). An unknown name fails with the key list (a fragment of exactly one key, e.g. "titanium", resolves to it); no other material is substituted. With neither archetype nor descriptor the tool default indiana_limestone is used and the result says so.'
                 },
                 descriptor: {
                     type: 'OBJECT',
@@ -155,7 +156,46 @@ export const PBR_MATERIAL_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 targetMeshPath: {
                     type: 'STRING',
-                    description: 'Optional absolute or relative path to a target 3D model (.glb) to adaptively wrap, seam-align, and texture.'
+                    description: 'Optional absolute or relative path to a target 3D model (.glb) to texture. The synthesized maps are written into a new GLB (outputDir / outputFileName, default <mesh>_adaptive_pbr.glb) as embedded PNG images with a REPEAT sampler and one material per distinct assignment. For "height_blended_triplanar" and "carrier_conformal_sheet" the maps are applied by per-triangle dominant-axis box projection in world metres (UV = metres along the two non-dominant world axes / tile size; vertices are split where the axis changes): the result names this as appliedMethod, because a triplanar shader blend or a conformal sheet is not what runs. Existing materials of the mesh are replaced, TANGENT is removed (it belongs to the old UVs), COLOR_n is removed unless preserveVertexColors, and TEXCOORD_0 is replaced unless preserveExistingUvs.'
+                },
+                partMaterials: {
+                    type: 'ARRAY',
+                    description: 'With targetMeshPath: give different parts different materials. Each entry names parts and their material; parts no entry names take the request-level archetype/descriptor (or indiana_limestone if none is given, which the result states). Names are matched exactly, never loosely: a string is the exact name of a glTF node or of a glTF mesh as the scene lists them (every node with that name or that mesh), a number is a node index, and naming a group node names everything below it (a more specific entry wins over a group entry). A name that is not in the scene fails with the list of real names, so look at the scene first. One texture set is synthesized per distinct (archetype, descriptor) and shared by every part using it; at most 12 distinct sets, 4096 px per set and 64 Mtexels over all sets per call.',
+                    items: {
+                        type: 'OBJECT',
+                        properties: {
+                            nodes: {
+                                type: 'ARRAY',
+                                description: 'Exact node names, exact mesh names, or node indices (numbers) of the parts this entry covers.',
+                                items: { type: 'STRING', description: 'A node name or mesh name exactly as listed in the scene (a decimal index such as "7" is read as node 7 only when no node or mesh has that exact name).' }
+                            },
+                            materialArchetype: {
+                                type: 'STRING',
+                                description: 'Catalog archetype key or display name for these parts, exact (e.g. "polished_brass", "quartersawn_walnut", "wrought_iron"). Omit to use the request-level material.'
+                            },
+                            descriptor: {
+                                type: 'OBJECT',
+                                description: 'Continuous descriptor fields for these parts. Over materialArchetype they override its fields; without materialArchetype they must give albedoLinear ([r,g,b]), conduction and roughnessBaseline.'
+                            },
+                            tileSizeMeters: {
+                                type: 'NUMBER',
+                                description: 'Edge length of one texture tile on these parts, in metres. Omit and a size is derived from the parts and the descriptor, and reported as derived.'
+                            }
+                        },
+                        required: ['nodes']
+                    }
+                },
+                tileSizeMeters: {
+                    type: 'NUMBER',
+                    description: 'With targetMeshPath: edge length of one texture tile in metres, for every part whose partMaterials entry gives none. Omit and a size is derived per material group from the median part size and the descriptor\'s fissureScale, and reported as derived.'
+                },
+                preserveExistingUvs: {
+                    type: 'BOOLEAN',
+                    description: 'With targetMeshPath: keep each primitive\'s own TEXCOORD_0 and write the box-projection UVs to the next free TEXCOORD_n (the material then reads that set). Default false: TEXCOORD_0 is replaced.'
+                },
+                preserveVertexColors: {
+                    type: 'BOOLEAN',
+                    description: 'With targetMeshPath: keep COLOR_n vertex colours on the textured primitives. Default false: they are removed, because glTF multiplies them into the base colour and would tint the new material.'
                 },
                 domain: {
                     type: 'STRING',
@@ -164,27 +204,27 @@ export const PBR_MATERIAL_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 uvStrategy: {
                     type: 'STRING',
-                    description: 'Explicit UV wrapping strategy override: "auto", "carrier_conformal_sheet", "elevation_stratified_conformal", "height_blended_triplanar", or "recipe_hybrid".',
+                    description: 'Strategy override, default "auto" (the topology probe recommends one). What each really does with targetMeshPath: "height_blended_triplanar" and "carrier_conformal_sheet" synthesize the material and apply it by per-triangle box projection (the result names method box_projection_uv; the triplanar blend / conformal sheet themselves are not run). "recipe_hybrid" keeps the mesh\'s own UVs and textures and adds per-vertex recipe attributes (one primitive per mesh, TEXCOORD_0 required). "elevation_stratified_conformal" decomposes the mesh\'s embedded baseColor images into albedo / normal / ORM. The last two do not synthesize a material, so archetype, descriptor, partMaterials, tileSizeMeters and the preserve flags are refused for them rather than ignored.',
                     enum: ['auto', 'carrier_conformal_sheet', 'elevation_stratified_conformal', 'height_blended_triplanar', 'recipe_hybrid']
                 },
                 solarCoordinates: {
                     type: 'OBJECT',
-                    description: 'For solar inverse de-lighting: { latitude: number, longitude: number, timestampIso: string }, the place and UTC time whose sun lit the source imagery (all three are required; the current time is not assumed).'
+                    description: 'For solar inverse de-lighting, used only by "elevation_stratified_conformal" (others list it under ignoredOptions): { latitude: number, longitude: number, timestampIso: string }, the place and UTC time whose sun lit the source imagery (all three are required; the current time is not assumed).'
                 },
                 carrierSpinePoints: {
                     type: 'ARRAY',
-                    description: 'Ordered 3D skeletal spine points [[x, y, z], ...] for organic SO(3) Frenet-Serret carrier-frame conformal unfolding.'
+                    description: 'Ordered 3D skeletal spine points [[x, y, z], ...] for a carrier-frame conformal unfolding. No strategy implements that unfolding, so the result lists this under ignoredOptions when given.'
                 },
                 seamPaddingPx: {
                     type: 'NUMBER',
-                    description: 'Gutter dilation padding in pixels around UV island borders (default: 8 for organic, 16 for high-rise facades, 0 for triplanar).'
+                    description: 'Gutter dilation padding in pixels around UV island borders. Box projection has no UV islands, so it does not use this; the result lists it under ignoredOptions when given.'
                 }
             }
         }
     },
     {
         name: 'pbr_probe_mesh_topology',
-        description: 'Analyzes a 3D mesh (.glb) to evaluate whether it is organic or non-organic, determines the optimal UV wrapping technique (Carrier Sheet, Elevation-Stratified Conformal, Height-Blended Triplanar, or Recipe Hybrid), and computes the exact seam placement and seam mitigation strategy (Hermite margin overlap, MikkTSpace handedness, dilated gutters, or boundary welding).',
+        description: 'Measures a .glb (mesh / primitive / triangle counts, world bounds, embedded images) and reports which uvStrategy pbr_synthesize_material would pick for it, the threshold rule that picked it with the measured values, the method that really runs for that strategy, and what it does about UV seams. The classification is a rule outcome, not a shape analysis.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -261,7 +301,7 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
         const probeResult = AdaptiveUvOrchestrator.probeTopology(meshPath, domain);
         return {
             resultPayload: probeResult as unknown as ToolResultPayload,
-            summaryResult: `Probed mesh topology for ${meshPath}: Classified as [${probeResult.domainClassification}] (Organicity: ${probeResult.organicityIndex.toFixed(2)}). Recommended UV strategy: [${probeResult.recommendedStrategy}]. Seam Strategy: ${probeResult.seamStrategy.seamPlacement} via ${probeResult.seamStrategy.seamMitigationMethod} (${probeResult.seamStrategy.recommendedGutterPaddingPx}px padding).`
+            summaryResult: `Probed ${meshPath}: ${probeResult.rationale} Seams: ${probeResult.seams}`
         };
     },
 
@@ -285,47 +325,93 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
             fs.mkdirSync(outDir, { recursive: true });
             const filePrefix = asString(args.outputFileName) || `${path.basename(meshPath, path.extname(meshPath))}_adaptive_pbr`;
             const outPath = path.join(outDir, `${filePrefix}.glb`);
+            if (width !== height) {
+                throw new AdaptivePbrMaterialSpecError(`With targetMeshPath the texture is applied as a square tile; width ${width} and height ${height} differ. Give one resolution.`, { width, height });
+            }
+            const archetype = args.archetype === undefined || args.archetype === null || args.archetype === ''
+                ? undefined
+                : (typeof args.archetype === 'number' ? args.archetype : asString(args.archetype));
 
             const adaptiveResult = await AdaptiveUvOrchestrator.applyAdaptivePbr({
                 inputGlbPath: meshPath,
                 domain,
                 strategy: uvStrategy,
                 outputPath: outPath,
-                resolution: (args.resolution as any) || '2K',
+                resolutionPx: args.resolution !== undefined || args.width !== undefined || args.height !== undefined ? width : undefined,
+                seed: asNumber(args.seed),
+                materialArchetype: archetype,
+                continuousDescriptor: args.descriptor as any,
+                tileSizeMeters: asNumber(args.tileSizeMeters),
+                partMaterials: args.partMaterials as PartMaterialAssignment[] | undefined,
+                preserveExistingUvs: args.preserveExistingUvs === true,
+                preserveVertexColors: args.preserveVertexColors === true,
                 formats: format === 'materialx' ? ['glb', 'materialx'] : format === 'usdz' ? ['glb', 'usdz'] : ['glb'],
                 solarDelighting: args.solarCoordinates ? {
                     latitude: (args.solarCoordinates as any).latitude,
                     longitude: (args.solarCoordinates as any).longitude,
                     timestampIso: (args.solarCoordinates as any).timestampIso
                 } : undefined,
+                carrierSpinePoints: Array.isArray(args.carrierSpinePoints) ? args.carrierSpinePoints as [number, number, number][] : undefined,
                 gutterPaddingPx: asNumber(args.seamPaddingPx, undefined)
             });
 
+            const toolIgnored = ['uvTilingX', 'uvTilingY', 'planeWidthMeters', 'displacementScaleMeters']
+                .filter(k => args[k] !== undefined);
+            if (format === 'raw_buffer') toolIgnored.push('format=raw_buffer');
+            const ignoredOptions = [...adaptiveResult.ignoredOptions, ...toolIgnored];
+            const method = adaptiveResult.appliedMethod;
+            const box = adaptiveResult.boxProjection;
             const elapsedMs = Math.round(performance.now() - startTime);
+            const outputBytes = adaptiveResult.glbBuffer?.length ?? 0;
+
+            const seams = AdaptiveUvOrchestrator.describeMethod(adaptiveResult.appliedStrategy).seams;
+            const strategySentence = method.differsFromStrategy
+                ? `Method run: ${method.method}. Strategy ${adaptiveResult.appliedStrategy} (${args.uvStrategy && args.uvStrategy !== 'auto' ? 'requested' : `picked by the routing rule: ${adaptiveResult.topology.routingRule}`}) was NOT run as such: ${method.note}`
+                : `Applied ${method.method} for strategy ${adaptiveResult.appliedStrategy}: ${method.note} Seams: ${seams}`;
+            let detail = '';
+            if (box) {
+                const r = box.report;
+                detail = ` Textured ${r.projectedNodes} parts / ${r.projectedPrimitives} primitives / ${r.triangles} triangles with ${box.textureSets.length} texture set(s) [${box.textureSets.map(t => `${t.label}: ${t.archetypeKey ?? 'custom'} ${t.resolutionPx}px via ${t.synthesizer}`).join('; ')}]; ${r.verticesBefore} -> ${r.verticesAfter} vertices (split per projection axis); ${r.materialsCreated} material(s), ${r.imagesEmbedded} embedded PNG(s). Groups: ${box.groups.map(g => `${g.name} -> ${g.textureSet}, tile ${g.tileSize.meters.toPrecision(3)} m (${g.tileSize.source})`).join('; ')}.`
+                    + (box.inferred.length ? ` Inferred or defaulted (${box.inferred.length}, listed in the result): ${box.inferred.slice(0, 3).join(' | ')}${box.inferred.length > 3 ? ' | ...' : ''}.` : '')
+                    + (r.skippedNonTrianglePrimitives.length ? ` Left untouched, not triangle lists: ${r.skippedNonTrianglePrimitives.length} primitive(s).` : '');
+            }
+            if (ignoredOptions.length) detail += ` Not used by this method: ${ignoredOptions.join(', ')}.`;
+
             return {
                 resultPayload: {
                     appliedStrategy: adaptiveResult.appliedStrategy,
+                    appliedMethod: method,
+                    ignoredOptions,
                     domainClassification: adaptiveResult.domainClassification,
                     topology: adaptiveResult.topology,
-                    seamStrategy: adaptiveResult.seamStrategy,
+                    seams,
+                    boxProjection: box,
                     outputFiles: adaptiveResult.outputFiles,
+                    outputBytes,
                     executionTimeMs: elapsedMs
                 } as unknown as ToolResultPayload,
-                summaryResult: `Applied Adaptive PBR [${adaptiveResult.appliedStrategy}] (${adaptiveResult.domainClassification}) to ${meshPath}. Seam placement: ${adaptiveResult.seamStrategy.seamPlacement} (${adaptiveResult.seamStrategy.seamMitigationMethod}, ${adaptiveResult.seamStrategy.recommendedGutterPaddingPx}px padding). Output: ${outPath} (${elapsedMs}ms).`
+                summaryResult: `${strategySentence}${detail} Output: ${outPath} (${(outputBytes / 1048576).toFixed(2)} MB, ${elapsedMs}ms).`
             };
         }
 
         // 2. Resolve continuous descriptor
-        const archetypeInput = args.archetype ? (typeof args.archetype === 'number' ? args.archetype : asString(args.archetype)) : undefined;
+        const archetypeInput = args.archetype !== undefined && args.archetype !== null && args.archetype !== ''
+            ? (typeof args.archetype === 'number' ? args.archetype : asString(args.archetype))
+            : undefined;
         let baseDesc: ContinuousMaterialDescriptor;
         let archetypeKey = 'custom_manifold';
+        let materialSource: 'archetype' | 'archetype_with_descriptor_overrides' | 'descriptor_over_tool_default' | 'tool_default_indiana_limestone';
 
         if (archetypeInput !== undefined) {
+            // Unknown names throw PbrUnknownArchetypeError listing the valid keys; nothing is substituted
             const resolved = service.resolveArchetype(archetypeInput);
             baseDesc = service.getAnchorDescriptor(resolved.archetypeId);
             archetypeKey = resolved.key;
+            materialSource = args.descriptor ? 'archetype_with_descriptor_overrides' : 'archetype';
         } else {
             baseDesc = service.getAnchorDescriptor(0);
+            materialSource = args.descriptor ? 'descriptor_over_tool_default' : 'tool_default_indiana_limestone';
+            if (!args.descriptor) archetypeKey = 'indiana_limestone';
         }
 
         const descriptor = sanitizeDescriptor(args.descriptor, baseDesc);
@@ -335,7 +421,7 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
         fs.mkdirSync(outDir, { recursive: true });
         const filePrefix = asString(args.outputFileName) || `${archetypeKey}_${width}x${height}`;
 
-        // 4. Multithreaded C++20 synthesis
+        // 4. Native C++20 synthesis (a compile or run failure throws NativePbrSynthesisError; there is no substitute)
         const pbrResult: NativePbrTextureSet = await service.synthesizeContinuousManifoldPbr(descriptor, {
             width,
             height,
@@ -345,50 +431,29 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
         });
 
         const writtenFiles: Record<string, string> = {};
+        let encodeMs = 0;
 
         // 5. Handle output formats
         if (format === 'png_pack' || format === 'glb' || format === 'materialx' || format === 'usdz') {
-            // Virtual height into RGBA PNG
-            const heightRgba = Buffer.alloc(width * height * 4);
-            const roughnessRgba = Buffer.alloc(width * height * 4);
-            const metallicRgba = Buffer.alloc(width * height * 4);
-            const aoRgba = Buffer.alloc(width * height * 4);
-
-            for (let i = 0; i < width * height; i++) {
-                const hVal = pbrResult.heightRgb[i * 3];
-                heightRgba[i * 4 + 0] = hVal;
-                heightRgba[i * 4 + 1] = hVal;
-                heightRgba[i * 4 + 2] = hVal;
-                heightRgba[i * 4 + 3] = 255;
-
-                const rVal = pbrResult.roughnessRgb[i * 3];
-                roughnessRgba[i * 4 + 0] = rVal;
-                roughnessRgba[i * 4 + 1] = rVal;
-                roughnessRgba[i * 4 + 2] = rVal;
-                roughnessRgba[i * 4 + 3] = 255;
-
-                const mVal = pbrResult.metallicRgb[i * 3];
-                metallicRgba[i * 4 + 0] = mVal;
-                metallicRgba[i * 4 + 1] = mVal;
-                metallicRgba[i * 4 + 2] = mVal;
-                metallicRgba[i * 4 + 3] = 255;
-
-                const aVal = pbrResult.aoRgb[i * 3];
-                aoRgba[i * 4 + 0] = aVal;
-                aoRgba[i * 4 + 1] = aVal;
-                aoRgba[i * 4 + 2] = aVal;
-                aoRgba[i * 4 + 3] = 255;
-            }
-
-            const [albedoPng, normalPng, ormPng, heightPng, roughnessPng, metallicPng, aoPng] = await Promise.all([
-                AdaptiveMaterialPbrService.encodeFromRgba(pbrResult.albedoRgba, width, height, true),
-                AdaptiveMaterialPbrService.encodeFromRgba(pbrResult.normalRgba, width, height, true),
-                AdaptiveMaterialPbrService.encodeFromRgba(pbrResult.ormRgba, width, height, true),
-                AdaptiveMaterialPbrService.encodeFromRgba(heightRgba, width, height, true),
-                AdaptiveMaterialPbrService.encodeFromRgba(roughnessRgba, width, height, true),
-                AdaptiveMaterialPbrService.encodeFromRgba(metallicRgba, width, height, true),
-                AdaptiveMaterialPbrService.encodeFromRgba(aoRgba, width, height, true)
+            // Only the maps that are written are encoded; the deflate runs off the main thread (encodePngAsync)
+            const separateChannels = format === 'materialx' || format === 'usdz';
+            const greyToRgba = (rgb: Buffer): Buffer => {
+                const out = Buffer.alloc(width * height * 4);
+                for (let i = 0; i < width * height; i++) {
+                    const v = rgb[i * 3];
+                    out[i * 4] = v; out[i * 4 + 1] = v; out[i * 4 + 2] = v; out[i * 4 + 3] = 255;
+                }
+                return out;
+            };
+            const encodeStart = performance.now();
+            const png = (rgba: Buffer) => AdaptiveMaterialPbrService.encodePngAsync(rgba, width, height);
+            const [albedoPng, normalPng, ormPng, heightPng] = await Promise.all([
+                png(pbrResult.albedoRgba), png(pbrResult.normalRgba), png(pbrResult.ormRgba), png(greyToRgba(pbrResult.heightRgb))
             ]);
+            const [roughnessPng, metallicPng, aoPng] = separateChannels
+                ? await Promise.all([png(greyToRgba(pbrResult.roughnessRgb)), png(greyToRgba(pbrResult.metallicRgb)), png(greyToRgba(pbrResult.aoRgb))])
+                : [undefined, undefined, undefined];
+            encodeMs = Math.round(performance.now() - encodeStart);
 
             const albedoPath = path.join(outDir, `${filePrefix}_albedo.png`);
             const normalPath = path.join(outDir, `${filePrefix}_normal.png`);
@@ -405,7 +470,7 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
             writtenFiles.orm = ormPath;
             writtenFiles.height = heightPath;
 
-            if (format === 'materialx' || format === 'usdz') {
+            if (roughnessPng && metallicPng && aoPng) {
                 const roughnessPath = path.join(outDir, `${filePrefix}_roughness.png`);
                 const metallicPath = path.join(outDir, `${filePrefix}_metallic.png`);
                 const aoPath = path.join(outDir, `${filePrefix}_ao.png`);
@@ -445,9 +510,9 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
                     descriptor,
                     albedoPng,
                     normalPng,
-                    roughnessPng,
-                    metallicPng,
-                    aoPng,
+                    roughnessPng: roughnessPng!,
+                    metallicPng: metallicPng!,
+                    aoPng: aoPng!,
                     ormPng,
                     heightPng,
                     outputPath: usdzPath,
@@ -619,13 +684,24 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
             descriptor,
             format,
             executionTimeMs: elapsedMs,
-            cCompilerTimeMs: pbrResult.executionTimeMs,
+            materialSource,
+            synthesizer: pbrResult.synthesizer,
+            nativeTimingsMs: {
+                total: Math.round(pbrResult.executionTimeMs),
+                compile: Math.round(pbrResult.timings.compileMs),
+                compileCacheHit: pbrResult.timings.compileCacheHit,
+                kernel: Math.round(pbrResult.timings.kernelMs),
+                readback: Math.round(pbrResult.timings.readbackMs)
+            },
+            pngEncodeMs: encodeMs,
             outputDirectory: outDir,
             files: writtenFiles
         };
 
         const tierName = args.resolution || `${width}x${height}`;
-        const summary = `Synthesized ${tierName} (${width}x${height}) PBR material [${archetypeKey}] in ${elapsedMs}ms (C++20 kernel: ${pbrResult.executionTimeMs}ms). Format: ${format}. Conduction: ${descriptor.conduction.toFixed(2)}, Roughness: ${descriptor.roughnessBaseline.toFixed(2)}, Fissure: ${descriptor.fissureScale?.toFixed(1) ?? '8.0'}. Files written to: ${outDir}.`;
+        const t = pbrResult.timings;
+        const materialNote = materialSource === 'tool_default_indiana_limestone' ? ' (no archetype or descriptor given: the tool default)' : '';
+        const summary = `Synthesized ${tierName} (${width}x${height}) PBR material [${archetypeKey}]${materialNote} in ${elapsedMs}ms: native C++20 kernel ${Math.round(t.kernelMs)}ms, compile ${t.compileCacheHit ? 'cached' : `${Math.round(t.compileMs)}ms`}, PNG encode ${encodeMs}ms. Format: ${format}. Conduction: ${descriptor.conduction.toFixed(2)}, Roughness: ${descriptor.roughnessBaseline.toFixed(2)}, Fissure: ${descriptor.fissureScale?.toFixed(1) ?? '8.0'}. Files: ${Object.values(writtenFiles).map(f => path.basename(f)).join(', ')} in ${outDir}.`;
 
         return {
             resultPayload: payload,

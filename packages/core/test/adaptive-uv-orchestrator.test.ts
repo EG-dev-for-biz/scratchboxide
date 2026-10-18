@@ -101,60 +101,55 @@ function createMockGlb(options: {
   return GltfBinaryPacker.packGlb(gltf, bufferViews).glbBuffer;
 }
 
-describe('AdaptiveUvOrchestrator Scenario-Adaptive Evaluation & Seam Mitigation', () => {
-  it('classifies organic articulated anatomy and assigns Carrier Sheet with natural occlusion seams', () => {
-    // Slender aspect ratio (Y=12m, X=1m, Z=1m) => ratio 12.0
-    const glb = createMockGlb({ submeshCount: 1, height: 12.0, width: 1.0, depth: 1.0 });
-    const probe = AdaptiveUvOrchestrator.probeTopology(glb, 'organic');
-
+describe('AdaptiveUvOrchestrator.probeTopology reports what it measured and the rule that routed it', () => {
+  // createMockGlb: per mesh one triangle (-w/2,0,-d/2) (w/2,0,-d/2) (0,h,d/2); no node places the meshes
+  it('the caller-given organic domain routes to carrier_conformal_sheet, and the result says the caller decided', () => {
+    const probe = AdaptiveUvOrchestrator.probeTopology(createMockGlb({ submeshCount: 1, height: 12.0, width: 1.0, depth: 1.0 }), 'organic');
     expect(probe.domainClassification).toBe('organic');
-    expect(probe.organicityIndex).toBe(1.0);
+    expect(probe.domainSource).toBe('caller');
     expect(probe.recommendedStrategy).toBe('carrier_conformal_sheet');
-    expect(probe.seamStrategy.seamPlacement).toBe('natural_occlusion_geodesics');
-    expect(probe.seamStrategy.seamMitigationMethod).toBe('hermite_margin_overlap');
-    expect(probe.seamStrategy.recommendedGutterPaddingPx).toBe(8);
-    expect(probe.seamStrategy.tangentSpaceHandednessGuaranteed).toBe(true);
-    expect(probe.seamStrategy.seamRationale).toContain('lateral neutral lines');
+    expect(probe.routingRule).toMatch(/given by the caller/);
+    expect(probe.methodThatRuns).toMatch(/^box_projection_uv/);
+    expect(probe.bounds.dimensions).toEqual([1, 12, 1]);
+    expect(probe.boundsSpace).toBe('mesh_local_unplaced');
+    expect(probe.triangleCount).toBe(1);
+    expect(probe.vertexCount).toBe(3);
+    expect(probe).not.toHaveProperty('organicityIndex');
+    expect(probe).not.toHaveProperty('confidenceScore');
+    expect(probe).not.toHaveProperty('seamStrategy');
   });
 
-  it('classifies high-rise vertical architecture and assigns Elevation-Stratified Conformal with reveal seams', () => {
-    // High-rise: Height = 50m, Width = 20m, Depth = 20m (aspect ratio >= 1.5, Height >= 35m)
-    const glb = createMockGlb({ submeshCount: 1, height: 50.0, width: 20.0, depth: 20.0 });
-    const probe = AdaptiveUvOrchestrator.probeTopology(glb, 'nonorganic');
-
+  it('a 50 m tall, 20 m wide mesh fires the tall-slender rule, and the measured ratio is in the rule text', () => {
+    const probe = AdaptiveUvOrchestrator.probeTopology(createMockGlb({ submeshCount: 1, height: 50.0, width: 20.0, depth: 20.0 }), 'nonorganic');
     expect(probe.domainClassification).toBe('nonorganic');
-    expect(probe.organicityIndex).toBe(0.0);
-    expect(probe.isHighRiseArchitecture).toBe(true);
+    expect(probe.rules).toEqual({ tallSlender: true, manyTexturedMeshes: false, elongatedUntextured: false });
     expect(probe.recommendedStrategy).toBe('elevation_stratified_conformal');
-    expect(probe.seamStrategy.seamPlacement).toBe('architectural_reveals_and_mullions');
-    expect(probe.seamStrategy.seamMitigationMethod).toBe('gutter_dilation_clamping');
-    expect(probe.seamStrategy.recommendedGutterPaddingPx).toBe(16);
-    expect(probe.seamStrategy.tangentSpaceHandednessGuaranteed).toBe(true);
+    expect(probe.routingRule).toContain('height 50.00 m >= 35');
+    expect(probe.routingRule).toContain('= 2.500 >= 1.5');
+    expect(probe.seams).toMatch(/existing UVs/);
   });
 
-  it('classifies massive photogrammetric scans and assigns Recipe Hybrid with welded boundaries', () => {
-    // 12 submeshes + pre-baked texture
-    const glb = createMockGlb({ submeshCount: 12, height: 10.0, width: 30.0, depth: 30.0, hasTexture: true });
-    const probe = AdaptiveUvOrchestrator.probeTopology(glb);
-
-    expect(probe.domainClassification).toBe('nonorganic');
-    expect(probe.isMassiveScan).toBe(true);
+  it('12 textured meshes fire the many-textured-meshes rule', () => {
+    const probe = AdaptiveUvOrchestrator.probeTopology(createMockGlb({ submeshCount: 12, height: 10.0, width: 30.0, depth: 30.0, hasTexture: true }));
+    expect(probe.submeshCount).toBe(12);
+    expect(probe.imageCount).toBe(1);
+    expect(probe.hasPrebakedTextures).toBe(true);
+    expect(probe.rules.manyTexturedMeshes).toBe(true);
     expect(probe.recommendedStrategy).toBe('recipe_hybrid');
-    expect(probe.seamStrategy.seamPlacement).toBe('photogrammetric_boundary_welded');
-    expect(probe.seamStrategy.seamMitigationMethod).toBe('affine_edge_altitude_bevel');
-    expect(probe.seamStrategy.tangentSpaceHandednessGuaranteed).toBe(true);
+    expect(probe.routingRule).toContain('12 meshes >= 10');
+    expect(probe.domainSource).toBe('routing_rule');
   });
 
-  it('classifies standard mechanical props / CAD and assigns Height-Blended Triplanar with zero seams', () => {
-    // Regular boxy prop (Height = 2m, Width = 2m, Depth = 2m)
-    const glb = createMockGlb({ submeshCount: 1, height: 2.0, width: 2.0, depth: 2.0 });
-    const probe = AdaptiveUvOrchestrator.probeTopology(glb);
-
-    expect(probe.domainClassification).toBe('nonorganic');
-    expect(probe.recommendedStrategy).toBe('height_blended_triplanar');
-    expect(probe.seamStrategy.seamPlacement).toBe('zero_seams_continuous');
-    expect(probe.seamStrategy.seamMitigationMethod).toBe('triplanar_height_blended');
-    expect(probe.seamStrategy.recommendedGutterPaddingPx).toBe(0);
+  it('an elongated untextured mesh is classified organic by the rule, a squat one falls through to the default', () => {
+    const tall = AdaptiveUvOrchestrator.probeTopology(createMockGlb({ submeshCount: 1, height: 6.0, width: 1.0, depth: 1.0 }));
+    expect(tall.rules.elongatedUntextured).toBe(true);
+    expect(tall.domainClassification).toBe('organic');
+    expect(tall.domainSource).toBe('routing_rule');
+    const squat = AdaptiveUvOrchestrator.probeTopology(createMockGlb({ submeshCount: 1, height: 2.0, width: 2.0, depth: 2.0 }));
+    expect(squat.domainClassification).toBe('nonorganic');
+    expect(squat.recommendedStrategy).toBe('height_blended_triplanar');
+    expect(squat.routingRule).toMatch(/^no other rule fired/);
+    expect(squat.seams).toMatch(/different axes/);
   });
 
   it('executes applyAdaptivePbr for recipe_hybrid strategy successfully', async () => {

@@ -7,7 +7,9 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { AdaptiveMaterialPbrService } from '../src/node/3d-engine/adaptive-material-pbr-service';
+import { PbrUnknownArchetypeError } from '../src/node/3d-engine/adaptive-pbr-errors';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -104,7 +106,7 @@ describe('PBR Material Gemini Tools & Multi-Resolution Engine', () => {
             const handler = pbrMaterialHandlers.pbr_synthesize_material;
             const res = await handler({
                 resolution: 128,
-                archetype: 'cor_ten_steel',
+                archetype: 'corten_steel',
                 format: 'glb',
                 outputDir: tmpDir,
                 outputFileName: 'steel_preview',
@@ -114,6 +116,8 @@ describe('PBR Material Gemini Tools & Multi-Resolution Engine', () => {
 
             const payload = res.resultPayload as any;
             expect(payload.success).toBe(true);
+            expect(payload.archetype).toBe('corten_steel');
+            expect(payload.synthesizer).toBe('native-cpp20');
             expect(payload.files.glb).toBeDefined();
             expect(fs.existsSync(payload.files.glb)).toBe(true);
 
@@ -209,4 +213,46 @@ describe('PBR Material Gemini Tools & Multi-Resolution Engine', () => {
             } catch {}
         }
     }, 120000);
+
+    describe('only the maps that are written are encoded, and the timings are measured', () => {
+        afterEach(() => vi.restoreAllMocks());
+        const encodedFor = async (format: string) => {
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pbr_tool_encode_'));
+            const spy = vi.spyOn(AdaptiveMaterialPbrService, 'encodePngAsync');
+            try {
+                const res: any = await pbrMaterialHandlers.pbr_synthesize_material({ resolution: 64, archetype: 'carrara_marble', format, outputDir: dir, outputFileName: 'm' }, {} as any);
+                const pngs = fs.readdirSync(dir).filter(f => f.endsWith('.png')).sort();
+                return { calls: spy.mock.calls.length, pngs, payload: res.resultPayload, summary: res.summaryResult as string };
+            } finally {
+                fs.rmSync(dir, { recursive: true, force: true });
+            }
+        };
+
+        it('png_pack encodes and writes four maps; materialx encodes and writes seven', async () => {
+            const pack = await encodedFor('png_pack');
+            expect(pack.pngs).toEqual(['m_albedo.png', 'm_height.png', 'm_normal.png', 'm_orm.png']);
+            expect(pack.calls).toBe(4);
+            const mtlx = await encodedFor('materialx');
+            expect(mtlx.pngs).toHaveLength(7);
+            expect(mtlx.calls).toBe(7);
+        }, 60000);
+
+        it('the result reports the native kernel and its measured phases, not a constant', async () => {
+            const { payload, summary } = await encodedFor('png_pack');
+            expect(payload.synthesizer).toBe('native-cpp20');
+            expect(payload.nativeTimingsMs.kernel).toBeGreaterThanOrEqual(0);
+            expect(payload.nativeTimingsMs.total).toBeGreaterThanOrEqual(payload.nativeTimingsMs.kernel);
+            expect(payload).not.toHaveProperty('cCompilerTimeMs');
+            expect(summary).toMatch(/native C\+\+20 kernel \d+ms/);
+            expect(payload.materialSource).toBe('archetype');
+        }, 60000);
+
+        it('an unknown archetype fails with the catalog keys instead of synthesizing limestone', async () => {
+            const err: any = await pbrMaterialHandlers.pbr_synthesize_material({ resolution: 64, archetype: 'cor_ten_steel', format: 'png_pack' }, {} as any).catch(e => e);
+            expect(err).toBeInstanceOf(PbrUnknownArchetypeError);
+            expect(err.validArchetypes).toContain('corten_steel');
+            const interp: any = await pbrMaterialHandlers.pbr_interpolate_materials({ materialA: 'carrara_marble', materialB: 'no_such_material', alpha: 0.5 }, {} as any).catch(e => e);
+            expect(interp).toBeInstanceOf(PbrUnknownArchetypeError);
+        });
+    });
 });
