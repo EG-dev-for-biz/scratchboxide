@@ -88,7 +88,7 @@ export class TaskCapabilityResolver {
 
         // VFX & Video
         if (
-            /vfx|visual\s*effects|matchmove|camera\s*solve|keyframe\s*calibrat|camera\s*track|ephemeris|solar\s*position|holdout|occlusion\s*matte|segment(?:ation)?\s*mask|\bsegment\b|rotoscop|cut\s*out|\bmatte\b|nle|video\s*timeline|clip\s*split|ripple\s*delete|audio\s*track|b-roll/i.test(lower)
+            /vfx|visual\s*effects|matchmove|camera\s*solve|keyframe\s*calibrat|camera\s*track|ephemeris|solar\s*position|holdout|occlusion\s*matte|segment(?:ation)?\s*mask|rotoscop|cut\s*out|\bmatte\b|nle|video\s*timeline|clip\s*split|ripple\s*delete|audio\s*track|b-roll/i.test(lower)
         ) {
             return 'vfx';
         }
