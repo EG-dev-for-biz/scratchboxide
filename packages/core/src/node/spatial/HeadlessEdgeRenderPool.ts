@@ -13,6 +13,7 @@ import * as fs from 'fs';
 import { Worker } from 'worker_threads';
 import { HeadlessMeshSilhouetteRenderer, type RenderMesh3D } from './HeadlessMeshSilhouetteRenderer';
 import type { CameraPose6DOF, SobelEdgeField } from './SubPixelEdgeAlignmentOptimizer';
+import type { EdgeRenderWorkerInit } from './edge-render-worker';
 
 /** Loads the worker entry: compiled .js as is, the .ts source through ts-node (development and tests). */
 const BOOTSTRAP = `
@@ -40,18 +41,22 @@ function workerEntry(): string {
  */
 export class HeadlessEdgeRenderPool {
     private nextId = 0;
+    /** Set when a worker failed or exited: every later render rejects with it. */
+    private broken?: Error;
     private readonly pending = new Map<number, { left: number; depths: Float32Array[][]; resolve: (d: Float32Array[][]) => void; reject: (e: Error) => void }>();
 
     private constructor(private readonly workers: Worker[], private readonly width: number, private readonly height: number) {
         workers.forEach((w, wi) => {
             w.on('message', (msg: { id: number; depths?: Float32Array[]; error?: string }) => {
+                if (typeof msg?.id !== 'number') return;
                 const job = this.pending.get(msg.id);
                 if (!job) return;
                 if (msg.error) { this.pending.delete(msg.id); job.reject(new Error(`Edge render worker failed: ${msg.error}`)); return; }
                 job.depths[wi] = msg.depths!;
                 if (--job.left === 0) { this.pending.delete(msg.id); job.resolve(job.depths); }
             });
-            w.on('error', err => this.failAll(err));
+            w.on('error', err => this.failAll((this.broken = err)));
+            w.on('exit', code => { if (!this.closed) this.failAll((this.broken = new Error(`Edge render worker exited (code ${code})`))); });
         });
     }
 
@@ -78,11 +83,14 @@ export class HeadlessEdgeRenderPool {
         try {
             for (let i = 0; i < n; i++) {
                 const triangleRange: [number, number] = [Math.floor((triCount * i) / n), Math.floor((triCount * (i + 1)) / n)];
-                workers.push(new Worker(BOOTSTRAP, { eval: true, workerData: { entry, vertices, indices, width, height, triangleRange } }));
+                const workerData: EdgeRenderWorkerInit & { entry: string } = { entry, vertices, indices, width, height, triangleRange };
+                workers.push(new Worker(BOOTSTRAP, { eval: true, workerData }));
             }
+            // Ready once the worker has loaded the renderer (a failed load is an error here, not a hang later).
             await Promise.all(workers.map(w => new Promise<void>((resolve, reject) => {
-                w.once('online', () => resolve());
+                w.on('message', (m: { ready?: boolean }) => { if (m?.ready) resolve(); });
                 w.once('error', reject);
+                w.once('exit', code => reject(new Error(`Edge render worker exited before it was ready (code ${code})`)));
             })));
         } catch (err) {
             await Promise.all(workers.map(w => w.terminate()));
@@ -93,6 +101,7 @@ export class HeadlessEdgeRenderPool {
 
     /** Edge fields of `poses`, in order. */
     async render(poses: CameraPose6DOF[]): Promise<SobelEdgeField[]> {
+        if (this.broken) throw this.broken;
         if (!poses.length) return [];
         const id = this.nextId++;
         const shards = await new Promise<Float32Array[][]>((resolve, reject) => {
@@ -112,7 +121,10 @@ export class HeadlessEdgeRenderPool {
         });
     }
 
+    private closed = false;
+
     async close(): Promise<void> {
+        this.closed = true;
         this.failAll(new Error('Edge render pool closed'));
         await Promise.all(this.workers.map(w => w.terminate()));
     }

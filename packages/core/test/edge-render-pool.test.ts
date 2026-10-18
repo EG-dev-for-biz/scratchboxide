@@ -58,4 +58,11 @@ describe('HeadlessEdgeRenderPool', () => {
         expect(pooled.subpixelResidualPx).toBe(sync.subpixelResidualPx);
         expect(pooled.overlapScorePercent).toBeGreaterThan(SubPixelEdgeAlignmentOptimizer.optimizePoseTo100Percent(initialPose, query, render, { ...opts, maxIterations: 0 }).overlapScorePercent);
     });
+
+    it('a worker that dies makes renders fail with the reason instead of hanging', async () => {
+        const doomed = await HeadlessEdgeRenderPool.create(mesh, 64, 48, 2);
+        await (doomed as any).workers[1].terminate();
+        await expect(doomed.render([truth])).rejects.toThrow(/exited/);
+        await doomed.close();
+    }, 30_000);
 });

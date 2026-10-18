@@ -15,7 +15,8 @@ import { parentPort, workerData } from 'worker_threads';
 import { HeadlessMeshSilhouetteRenderer } from './HeadlessMeshSilhouetteRenderer';
 import type { CameraPose6DOF } from './SubPixelEdgeAlignmentOptimizer';
 
-interface WorkerInit {
+/** workerData of an edge-render worker (the pool imports this type, which also keeps this file in compiled builds). */
+export interface EdgeRenderWorkerInit {
     vertices: SharedArrayBuffer;
     indices: SharedArrayBuffer;
     width: number;
@@ -23,7 +24,7 @@ interface WorkerInit {
     triangleRange: [number, number];
 }
 
-const init = workerData as WorkerInit;
+const init = workerData as EdgeRenderWorkerInit & { entry: string };
 const mesh = { vertices: new Float32Array(init.vertices), indices: new Uint32Array(init.indices) };
 
 parentPort!.on('message', (msg: { id: number; poses: CameraPose6DOF[] }) => {
@@ -34,3 +35,5 @@ parentPort!.on('message', (msg: { id: number; poses: CameraPose6DOF[] }) => {
         parentPort!.postMessage({ id: msg.id, error: err instanceof Error ? err.message : String(err) });
     }
 });
+
+parentPort!.postMessage({ ready: true });
