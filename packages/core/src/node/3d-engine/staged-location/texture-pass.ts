@@ -336,7 +336,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
                 planes = w.planes;
                 const share = w.report.rejected / Math.max(1, countCovered(atlas));
                 degradations.push({ stage: 'bake-projection', reasonCode: 'single_pano_contradicted', layerKey: layer.layerKey, fromRung: 1, toRung: 2, texelShare: share,
-                    reason: `${w.report.rejected} of ${w.report.checked} texels only one pano saw differ from the tile photo by more than ${WITNESS_MAX_DELTA_E} CIE76 over ~0.2 m (exposure matched, gain ${w.report.gain.map(g => g.toFixed(2)).join('/')}): something stood in front in that pano, or the sky showed past a misplaced edge, so the tile photo colours them.` });
+                    reason: `${w.report.rejected} of ${w.report.checked} texels only one pano saw differ from the tile photo by more than ${w.report.limitDeltaE ?? WITNESS_MAX_DELTA_E} CIE76 over ~0.2 m (the layer's typical disagreement + 4 robust sigmas, within ${WITNESS_MAX_DELTA_E}-30) (exposure matched, gain ${w.report.gain.map(g => g.toFixed(2)).join('/')}): something stood in front in that pano, or the sky showed past a misplaced edge, so the tile photo colours them.` });
                 progress(`${w.report.rejected} single-pano texels contradicted by the tile photo left to it (${w.report.checked} checked, ${w.report.noWitness} with no tile near)`);
             }
             projection = {

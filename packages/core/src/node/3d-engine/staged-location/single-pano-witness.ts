@@ -30,6 +30,8 @@ import { linearToLab } from './texel-exposure';
 
 export const WITNESS_RADIUS_M = 0.2;
 export const WITNESS_MAX_DELTA_E = 20;
+/** The adaptive limit never passes this: sky against stone or a bird against it differ by more, whatever the layer's level. */
+export const WITNESS_MAX_LIMIT_DELTA_E = 30;
 /** How far from the texel the tile surface may be to act as its witness. */
 export const WITNESS_MAX_DISTANCE_M = 0.3;
 
@@ -41,6 +43,8 @@ export interface SinglePanoWitnessReport {
     noWitness: number;
     /** Linear per-channel gain applied to the tile before comparing (median Street View / tile over the texels both cover). */
     gain: Vec3;
+    /** The CIE76 limit used: the layer's median disagreement + 4 robust sigmas, within [maxDeltaE, WITNESS_MAX_LIMIT_DELTA_E]. */
+    limitDeltaE?: number;
 }
 
 export interface SinglePanoWitnessOptions { radiusM?: number; maxDeltaE?: number; maxDistanceM?: number }
@@ -131,13 +135,23 @@ export function witnessSinglePano(planes: BakedTexturePlanes, atlas: Pick<UvAtla
         report.checked++;
         dE[t] = Math.hypot(mSv[t * 3] - mTile[t * 3], mSv[t * 3 + 1] - mTile[t * 3 + 1], mSv[t * 3 + 2] - mTile[t * 3 + 2]);
     }
+    // the threshold is the layer's own: the tile and the photos disagree everywhere a little (the tile is coarse, melted in
+    // places, lit another day), so a texel is contradicted only well past that level (median + 4 robust sigmas), never below maxDeltaE
+    const seen: number[] = [];
+    for (let t = 0; t < n; t++) if (single[t] && both[t] && (t & 3) === 0) seen.push(dE[t]);
+    seen.sort((a, b) => a - b);
+    const med = seen.length ? seen[seen.length >> 1] : 0;
+    const dev = seen.map(x => Math.abs(x - med)).sort((a, b) => a - b);
+    const mad = dev.length ? dev[dev.length >> 1] : 0;
+    const limit = Math.min(WITNESS_MAX_LIMIT_DELTA_E, Math.max(maxDeltaE, med + 4 * 1.4826 * mad));
+    report.limitDeltaE = Math.round(limit * 10) / 10;
     const drop = new Uint8Array(n);
     const stack: number[] = [];
-    for (let t = 0; t < n; t++) if (dE[t] > maxDeltaE) { drop[t] = 1; stack.push(t); }
+    for (let t = 0; t < n; t++) if (dE[t] > limit) { drop[t] = 1; stack.push(t); }
     while (stack.length) {
         const t = stack.pop()!, x = t % W;
         for (const q of [x > 0 ? t - 1 : -1, x < W - 1 ? t + 1 : -1, t - W, t + W]) {
-            if (q < 0 || q >= n || drop[q] || !(dE[q] > maxDeltaE / 2)) continue;
+            if (q < 0 || q >= n || drop[q] || !(dE[q] > limit / 2)) continue;
             drop[q] = 1; stack.push(q);
         }
     }
