@@ -94,6 +94,7 @@ import { describeLocated, locateSurveyElements, planDetailFromSurvey, type Detai
 import { DETAIL_REPROJECTION_MIN_IOU, reprojectDetail } from './detail-reprojection';
 import { EDGE_MAX_RESIDUAL_PX, EDGE_REGISTRATION_BUDGET_MS, edgeFramesFromImages, registerPanosByEdges, describeEdgeRegistration, type EdgeRegistrationResult } from './pano-edge-registration';
 import { describeJointRegistration, JOINT_REGISTRATION_BUDGET_MS, registerPanosJointly } from './pano-joint-registration';
+import { LOO_BUDGET_MS } from './texture-fit-metric';
 import { jointRegistrationEnabled } from './round5-switch';
 import { registerPanos, type Registration } from './pano-registration';
 import { MATCH_TIMEOUT_MS, matchRingImages, runViewMatch, type MatchResult } from './view-match';
@@ -748,6 +749,8 @@ export const TEXTURE_OBSERVED_SURFACE = { baseM: 0.5, perMeter: 0.03 };
  * part of what the wider guard was for (a sample carried across a silhouette by the pose error).
  */
 export const TEXTURE_POSE_EDGE_GUARD_SHARE = 0.25;
+/** Time the texture stage keeps free of the leave-one-pano-out measurement at its end (writing the record, publishing). */
+export const TEXTURE_LOO_MARGIN_MS = 60_000;
 
 /** What the texture stage hands the result and the summary. */
 export interface TextureStageValue {
@@ -1469,12 +1472,16 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         targets.push(...late);
                         await textureAll(late);
                     }
+                    // within the stage's own limit (the layers come first): what is left of it, less a margin, is the measurement's
+                    const looDeadline = started + STAGES.textures.budgetMs - TEXTURE_LOO_MARGIN_MS;
                     for (const o of outcomes) {
                         const job = looJobs.get(o.layer.objectId);
                         if (!job || !o.out.bundle.fit) continue;
+                        const left = looDeadline - now();
+                        if (left < 10_000) { io.progress(`textures: ${o.layer.layer}: no time left in the stage for the leave-one-pano-out fit`); continue; }
                         const tl = now();
                         try {
-                            const loo = await job();
+                            const loo = await job(Math.min(LOO_BUDGET_MS, left));
                             o.out = { ...o.out, bundle: { ...o.out.bundle, fit: { ...o.out.bundle.fit, loo } }, timingsMs: { ...o.out.timingsMs, fitLoo: now() - tl } };
                             io.progress(`textures: ${o.layer.layer}: leave-one-pano-out fit over ${loo.panos} panos: texture edge chamfer ${loo.chamferPx ?? 'n/a'} px, gradient NCC ${loo.gradNcc ?? 'n/a'}${loo.skipped ? ` (${loo.skipped} panos past the budget)` : ''}`);
                         } catch (err) {

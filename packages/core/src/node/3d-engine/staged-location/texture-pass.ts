@@ -127,7 +127,7 @@ export interface TextureLayerOutcome {
     /** Held-out fit of the final textured layer against the Street View photos (texture-fit-metric.ts). */
     fit?: LayerFit;
     /** The leave-one-pano-out fit, to run once all layers are textured (texture-fit-metric.ts leaveOnePanoOut); not cached. */
-    measureLoo?: () => Promise<LooFit>;
+    measureLoo?: (budgetMs?: number) => Promise<LooFit>;
     modelsUsed: string[];
     timingsMs: Record<string, number>;
 }
@@ -410,7 +410,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
     planes = { ...planes, provenance: m.provenance };
     // the held-out fit: the final layer rendered from every view's pose against that photo, on what the view's pano did not make
     let fit: LayerFit | undefined;
-    let measureLoo: (() => Promise<LooFit>) | undefined;
+    let measureLoo: ((budgetMs?: number) => Promise<LooFit>) | undefined;
     const judge = src.context ?? src.occluder;
     if (src.views.length && judge) {
         t = Date.now();
@@ -427,7 +427,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
         // other layers' native unwrappers it starved them past their time limits)
         if (looBake && fit) {
             const bake = looBake, depth = depthForMesh(judge), views = src.views.filter(v => v.poseQuality > 0);
-            measureLoo = () => leaveOnePanoOut(atlas, views, bake, depth, src.signal);
+            measureLoo = (budgetMs?: number) => leaveOnePanoOut(atlas, views, bake, depth, src.signal, budgetMs);
         }
     }
     t = Date.now();
