@@ -56,7 +56,14 @@ function allocate(count: number, format: DecodedSpz['format'], shDegree = 0): De
     };
 }
 
-export function decodeSpz(bytes: Uint8Array): DecodedSpz {
+export interface DecodeSpzOptions {
+    /** When false (default) higher-order SH coefficients are skipped entirely.
+     *  Set true only when the caller actually uses them — at 2 M splats degree-3
+     *  SH allocates ~360 MB that would otherwise be dead weight. */
+    decodeSH?: boolean;
+}
+
+export function decodeSpz(bytes: Uint8Array, options: DecodeSpzOptions = {}): DecodedSpz {
     if (isGzip(bytes)) throw new Error('decodeSpz expects a decompressed SPZ payload');
     if (bytes.length < 16) throw new Error('SPZ payload too small for its header');
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -93,7 +100,7 @@ export function decodeSpz(bytes: Uint8Array): DecodedSpz {
             const qz = bytes[rotOff + i * 3 + 2] / 127.5 - 1;
             out.quats.set([qx, qy, qz, Math.sqrt(Math.max(0, 1 - (qx * qx + qy * qy + qz * qz)))], i * 4);
         }
-        if (shDim > 0) {
+        if (shDim > 0 && options.decodeSH) {
             const coeffs = shDim * 3;
             out.sh = new Float32Array(n * coeffs);
             for (let j = 0; j < n * coeffs; j++) out.sh[j] = (bytes[shOff + j] - 127.5) / 127.5;

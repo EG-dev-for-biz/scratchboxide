@@ -106,12 +106,16 @@ describe('PhotorealGaussianSplatMesh & Spatial Engine Integration', () => {
 
     splatMesh.updateDepthSort(camera, true);
 
-    // Verify instance center attributes have been sorted along Z
-    const instCenter = (splatMesh.children[0] as THREE.Mesh).geometry.getAttribute(
-      'instanceCenter'
+    // With texture-based splat data, sorting writes original splat indices into sortOrder.
+    // Verify the first draw slot maps to the spatially furthest splat and the last to the closest.
+    const sortAttr = (splatMesh.children[0] as THREE.Mesh).geometry.getAttribute(
+      'sortOrder'
     ) as THREE.InstancedBufferAttribute;
-    const z0 = instCenter.getZ(0); // farthest
-    const zLast = instCenter.getZ(count - 1); // closest
+    const firstOrigIdx = sortAttr.getX(0);       // draw slot 0 → furthest splat
+    const lastOrigIdx  = sortAttr.getX(count - 1); // draw slot N-1 → closest splat
+
+    const z0    = splatData.positions[firstOrigIdx * 3 + 2];
+    const zLast = splatData.positions[lastOrigIdx  * 3 + 2];
 
     expect(z0).toBeGreaterThan(zLast);
 

@@ -255,7 +255,7 @@ export class SplatService {
     static parseSpzBuffer(buffer: Buffer | ArrayBuffer): BakedGaussian[] {
         let raw = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
         if (raw.length >= 2 && raw[0] === 0x1f && raw[1] === 0x8b) raw = zlib.gunzipSync(raw);
-        const d = decodeSpz(new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength));
+        const d = decodeSpz(new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength), { decodeSH: true });
         const shPer = d.sh ? d.sh.length / Math.max(1, d.count) : 0;
         const splats: BakedGaussian[] = [];
         for (let i = 0; i < d.count; i++) {
