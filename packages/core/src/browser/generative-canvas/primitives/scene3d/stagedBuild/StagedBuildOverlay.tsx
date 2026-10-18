@@ -44,6 +44,8 @@ export interface MaterialsSummary {
     pass?: StagedTexturePassState;
     /** Share of texels per rung (TEXTURE_LADDER_RUNGS order). */
     rungShares?: number[];
+    /** Share of texels the facade material reading wrote (glass, photo-inferred), when it ran. */
+    materialShare?: number;
 }
 
 export interface StagedBuildOverlayProps {

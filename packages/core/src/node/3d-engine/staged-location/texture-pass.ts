@@ -50,11 +50,15 @@ import { describeLayerFit, leaveOnePanoOut, measureLayerFit, type LayerFit, type
 import { measureScanDeviation, type ScanDeviation } from './scan-deviation';
 import { round5Enabled } from './round5-switch';
 import { WITNESS_MAX_DELTA_E, witnessSinglePano } from './single-pano-witness';
+import { facadeMaterialsEnabled, type MaterialEvidence } from './facade-material-evidence';
+import { materialParamsImage, readFacadeMaterials, type FacadeMaterialRecord, type FacadeMaterialResult } from './facade-materials';
+import { bakeCourseProfile, courseProfilesImage } from './masonry-relief-native';
+import type { DepthMap } from '../../../common/spatial/texture-pass-contracts';
 
 /** Part of every texture cache key: a change to the pass's maths is a new version. */
 /** Photo tier A is opt-in (round 6 on the arch: no leave-one-pano-out gain over the projection); SCRATCHBOX_PHOTO_TIER=1 turns it on for a server. */
 export const photoTierEnabled = (): boolean => process.env.SCRATCHBOX_PHOTO_TIER === '1';
-export const TEXTURE_PASS_VERSION = `texture-pass/11${photoTierEnabled() ? '+tier' : ''}`;
+export const TEXTURE_PASS_VERSION = `texture-pass/11${photoTierEnabled() ? '+tier' : ''}${facadeMaterialsEnabled() ? '+mat1' : ''}`;
 export const RUNG_PALETTE = 3;
 export const RUNG_GENERATED_PBR = 4;
 /** The enhancement rung's own time budget per layer (layers run in parallel inside the stage's 600 s). */
@@ -111,6 +115,12 @@ export interface TexturePassSources {
     photoTierUnavailable?: string;
     /** More registered views for photo tier A only (whole-face survey and ring views: its outline anchors). */
     photoTierViews?: ProjectionView[];
+    /**
+     * The facade material reading's evidence (facade-material-evidence.ts: open-vocabulary masks from Street View and the tile
+     * faces). Opt-in (SCRATCHBOX_FACADE_MATERIALS=1): absent = the reading does not run, `materialsUnavailable` says why.
+     */
+    materials?: MaterialEvidence;
+    materialsUnavailable?: string;
     /** The survey's measured palettes. */
     palette: PaletteFace[];
     /** Texel density and atlas size. */
@@ -142,6 +152,8 @@ export interface TextureLayerOutcome {
     tileMethod?: string;
     /** Photo tier A on this layer (also in bundle.photoTier). */
     photoTier?: PhotoTierLayerRecord;
+    /** The facade material reading on this layer (also in bundle.materials). */
+    materials?: FacadeMaterialRecord;
     enhance?: { charts: number; accepted: number; rejected: number; failed: number; timedOut?: number; modelsUsed: string[] };
     /** Held-out fit of the final textured layer against the Street View photos (texture-fit-metric.ts). */
     fit?: LayerFit;
@@ -284,6 +296,9 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
     aborted(src.signal);
     let planes = emptyPlanes(atlas);
     let projection: TextureLayerOutcome['projection'];
+    // one depth render per view and mesh, shared by the projection, the material reading and the fits
+    const occDepth = src.occluder ? depthForMesh(src.occluder) : undefined;
+    const ctxDepth = src.context ? depthForMesh(src.context) : undefined;
 
     // where a fitted surface stands off the scan the photos show, they are not projected onto it (the scan carries them there)
     let offScan: ScanDeviation | undefined;
@@ -316,7 +331,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
             const witnessed = (baked: BakedTexturePlanes) => (src.tile ? witnessSinglePano(baked, projAtlas, src.tile.sample.bind(src.tile)) : undefined);
             looBake = async views => { const b = await bakeStreetViewProjection({ ...request, views }); return witnessed(b)?.planes ?? b; };
             const request = {
-                atlas: projAtlas, views: src.views, depthFor: depthForMesh(src.occluder), ...(src.context ? { contextDepthFor: depthForMesh(src.context) } : {}), paletteLab: src.palette.length ? paletteLab(src.palette) : undefined,
+                atlas: projAtlas, views: src.views, depthFor: occDepth!, ...(ctxDepth ? { contextDepthFor: ctxDepth } : {}), paletteLab: src.palette.length ? paletteLab(src.palette) : undefined,
                 signal: src.signal, options: {
                     // the tile photo is registered to the geometry, so the per-chart alignment uses it as its reference
                     ...(src.tile ? { alignReference: (P: Vec3, N: Vec3) => {
@@ -472,6 +487,49 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
     timingsMs.photoTier = Date.now() - t;
     aborted(src.signal);
 
+    // the facade material reading (opt-in): glass and coursing read per region, accepted only where held-out evidence agrees
+    t = Date.now();
+    let material: FacadeMaterialResult | undefined;
+    let materialRecord: FacadeMaterialRecord | undefined;
+    let courseImage: ReturnType<typeof courseProfilesImage> | undefined;
+    const readMaterials = (base: BakedTexturePlanes, excludePano?: string) => readFacadeMaterials({
+        atlas, planes: base, views: src.views, evidence: src.materials!, ...(occDepth ? { occluderDepth: occDepth } : {}), ...(ctxDepth ? { contextDepth: ctxDepth } : {}),
+        delit: (projection?.delight?.texels ?? 0) > 0, ...(excludePano ? { excludePano } : {}),
+        nodeNameOfMap: m => atlas.maps[m]?.nodeName, ...(src.signal ? { signal: src.signal } : {})
+    });
+    if (src.materials) {
+        progress(`reading the facade materials (${src.materials.views.length} Street View masks, ${src.materials.surfaces.length} tile faces)`);
+        try {
+            material = readMaterials(planes);
+            materialRecord = material.record;
+            planes = material.planes;
+            const tot = material.record.totals;
+            if (tot.rejected) degradations.push({ stage: 'materials', reasonCode: 'material_regions_rejected', layerKey: layer.layerKey,
+                reason: `${tot.rejected} of ${tot.candidates} regions the masks proposed as ${src.materials.target} were not accepted (the held-out evidence did not agree), so they keep the projected photo.` });
+            if (material.record.courses.length) {
+                try {
+                    const profiles = [];
+                    for (const c of material.record.courses) profiles.push(await bakeCourseProfile(c.pitchM, c.jointWidthM, c.jointDepthM));
+                    courseImage = courseProfilesImage(profiles);
+                } catch (err) {
+                    if (src.signal?.aborted) throw err;
+                    material.course.fill(0);
+                    degradations.push({ stage: 'materials', reasonCode: 'course_relief_failed', layerKey: layer.layerKey,
+                        reason: `The coursing was measured but the kernel could not draw it (${(err as Error)?.message ?? String(err)}), so the walls keep the photo without joint relief.` });
+                }
+            }
+            progress(`facade materials: ${tot.accepted} of ${tot.candidates} glass regions accepted (${Object.entries(tot.byDecider).map(([k, v]) => `${v} by ${k}`).join(', ') || 'none'}), ${(tot.glassShare * 100).toFixed(1)}% of texels; ${material.record.courses.length} coursing reading${material.record.courses.length === 1 ? '' : 's'}`);
+        } catch (err) {
+            if ((err as Error)?.name === 'AbortError' || src.signal?.aborted) throw err;
+            material = undefined;
+            degradations.push({ stage: 'materials', reasonCode: 'material_reading_failed', layerKey: layer.layerKey,
+                reason: `The facade material reading failed (${(err as Error)?.message ?? String(err)}), so every texel keeps the projected photo as one diffuse material.` });
+        }
+    } else if (src.materialsUnavailable) {
+        degradations.push({ stage: 'materials', reasonCode: 'material_reading_not_run', layerKey: layer.layerKey, reason: `The facade material reading was not run: ${src.materialsUnavailable}.` });
+    }
+    timingsMs.materials = Date.now() - t;
+
     // rung 3: measured palette; rung 4 (generated PBR) is not available; rung 5: clay
     t = Date.now();
     const pal = paletteFill(atlas, planes, src.palette);
@@ -502,7 +560,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
     if (src.views.length && judge) {
         t = Date.now();
         try {
-            fit = measureLayerFit({ atlas, planes, views: src.views.filter(v => v.poseQuality > 0), depthFor: depthForMesh(judge), ...(src.signal ? { signal: src.signal } : {}) });
+            fit = measureLayerFit({ atlas, planes, views: src.views.filter(v => v.poseQuality > 0), depthFor: judge === src.context && ctxDepth ? ctxDepth : depthForMesh(judge), ...(src.signal ? { signal: src.signal } : {}) });
             progress(describeLayerFit(fit));
         } catch (err) {
             if (src.signal?.aborted) throw err;
@@ -516,18 +574,47 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
             // with photo tier A on the layer, the judged texture is the projection with the tier's texels over it, both made
             // without the judging pano
             const projBake = looBake, tierBake = photoTierLoo;
-            const bake = tierBake ? async (vs: ProjectionView[]) => tierBake(vs, await projBake(vs)) : projBake;
-            const depth = depthForMesh(judge), views = src.views.filter(v => v.poseQuality > 0);
+            const bake0 = tierBake ? async (vs: ProjectionView[]) => tierBake(vs, await projBake(vs)) : projBake;
+            const depth = judge === src.context && ctxDepth ? ctxDepth : depthForMesh(judge), views = src.views.filter(v => v.poseQuality > 0);
+            // with the material reading on, the judged texture carries it, read without the judging pano's masks; the walls'
+            // fit with and without it is measured on the same bakes (materialLoo)
+            const allPanos = [...new Set(views.map(v => v.panoId))];
+            const leftOut = (vs: ProjectionView[]) => { const k = new Set(vs.map(v => v.panoId)); return allPanos.find(p => !k.has(p)); };
+            const materialPairs: Array<{ before: BakedTexturePlanes; after: BakedTexturePlanes; glass: Uint8Array; pano: string }> = [];
+            const bake = material ? async (vs: ProjectionView[]) => {
+                const before = await bake0(vs);
+                const pano = leftOut(vs);
+                const r = readMaterials(before, pano);
+                if (pano) materialPairs.push({ before, after: r.planes, glass: r.glass, pano });
+                return r.planes;
+            } : bake0;
             const dispose = photoTierCacheDispose;
-            measureLoo = dispose ? async (budgetMs?: number) => { try { return await leaveOnePanoOut(atlas, views, bake, depth, src.signal, budgetMs); } finally { dispose(); } }
-                : (budgetMs?: number) => leaveOnePanoOut(atlas, views, bake, depth, src.signal, budgetMs);
+            const run = async (budgetMs?: number) => {
+                const loo = await leaveOnePanoOut(atlas, views, bake, depth, src.signal, budgetMs);
+                if (material && materialRecord && materialPairs.length) materialRecord.loo = materialLoo(atlas, views, depth, materialPairs, src.signal);
+                return loo;
+            };
+            measureLoo = dispose ? async (budgetMs?: number) => { try { return await run(budgetMs); } finally { dispose(); } } : run;
             photoTierCacheDispose = undefined;
         }
     }
     // no leave-one-pano-out job holds the photo tier's worker cache: remove it now
     photoTierCacheDispose?.();
     t = Date.now();
-    const twin = writeTexturedTwinGlb({ clayGlb: layer.clayGlb, atlas, planes });
+    const twin = writeTexturedTwinGlb({
+        clayGlb: layer.clayGlb, atlas, planes,
+        ...(material ? {
+            roughness: material.roughness, metalness: material.metalness,
+            material: {
+                params: materialParamsImage(material),
+                // the fallback: the final texture with the projected photo where the reading wrote glass
+                photoAlbedo: (() => { const a = Uint8Array.from(planes.albedo); for (let i = 0; i < material!.glass.length; i++) if (material!.glass[i]) a.set(material!.photoAlbedo.subarray(i * 4, i * 4 + 4), i * 4); return a; })(),
+                ...(courseImage && material.record.courses.length ? { courses: { image: courseImage, readings: material.record.courses.map(c => ({ pitchM: c.pitchM, phaseM: c.phaseM, jointWidthM: c.jointWidthM, jointDepthM: c.jointDepthM })) } } : {}),
+                provenanceIndices: material.provenanceIndices,
+                summary: { target: material.record.target, totals: material.record.totals }
+            }
+        } : {})
+    });
     timingsMs.write = Date.now() - t;
     const worst = m.ladderRung;
     // one entry per distinct cause (a pano seen in several close-ups reports the same cause once per image)
@@ -536,14 +623,48 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
     return {
         layerKey: layer.layerKey, glb: twin.glb,
         bundle: {
-            layerKey: layer.layerKey, uv: twin.uv, ...(photoTier ? { photoTier } : {}), provenance: m.provenance, ladderRung: worst,
+            layerKey: layer.layerKey, uv: twin.uv, ...(photoTier ? { photoTier } : {}), ...(materialRecord ? { materials: materialRecord } : {}), provenance: m.provenance, ladderRung: worst,
             ...(fit && fit.scoredViews ? { fit: { chamferPx: fit.chamferPx, clayChamferPx: fit.clayChamferPx, gradNcc: fit.gradNcc, scoredViews: fit.scoredViews, heldOutShare: fit.heldOutShare, widthPx: fit.widthPx, photo: fit.photo, ...(fit.loo ? { loo: fit.loo } : {}), views: fit.views } } : {}),
             rungReason: `${Math.round(m.rungShares[worst] * 100)} percent of the texels are at '${TEXTURE_LADDER_RUNGS[worst]}' (the worst rung above 10 percent)`
         },
         rungShares: m.rungShares, rungTexels: m.rungTexels, atlasTexels: m.total,
         atlas: { width: atlas.width, height: atlas.height, texelsPerMeter: atlas.layout.stats.texelsPerMeter, charts: atlas.layout.stats.charts, islands: atlas.layout.stats.islands },
-        degradations: unique, ...(projection ? { projection } : {}), ...(tileMethod ? { tileMethod } : {}), ...(photoTier ? { photoTier } : {}), ...(enhance ? { enhance } : {}), ...(fit ? { fit } : {}), ...(measureLoo ? { measureLoo } : {}),
+        degradations: unique, ...(projection ? { projection } : {}), ...(tileMethod ? { tileMethod } : {}), ...(photoTier ? { photoTier } : {}), ...(materialRecord ? { materials: materialRecord } : {}), ...(enhance ? { enhance } : {}), ...(fit ? { fit } : {}), ...(measureLoo ? { measureLoo } : {}),
         modelsUsed: [...new Set(modelsUsed)], timingsMs
+    };
+}
+
+/**
+ * The walls' (and the glass's) held-out fit with and without the material reading, on the leave-one-pano-out bakes: per
+ * judged pano, the same bake before and after the reading (made without that pano's masks), scored by its views on the
+ * texels the reading left as walls, then on those it wrote as glass. Pixel-weighted means. `kept` says whether the walls
+ * did not get worse (the gate the reading must pass).
+ */
+export function materialLoo(atlas: LaidOutUvAtlas, views: ProjectionView[], depth: (v: { camera: ProjectionView["camera"] }) => DepthMap,
+    pairs: Array<{ before: BakedTexturePlanes; after: BakedTexturePlanes; glass: Uint8Array; pano: string }>, signal?: AbortSignal): NonNullable<FacadeMaterialRecord['loo']> {
+    const acc = { wb: [0, 0, 0, 0], wa: [0, 0, 0, 0], gb: [0, 0, 0, 0], ga: [0, 0, 0, 0] };
+    const add = (a: number[], f: ReturnType<typeof measureLayerFit>) => {
+        const px = f.views.reduce((s, v) => s + (v.chamferPx !== null ? v.pixels : 0), 0), pn = f.views.reduce((s, v) => s + (v.gradNcc !== null ? v.pixels : 0), 0);
+        if (f.chamferPx !== null) { a[0] += f.chamferPx * px; a[1] += px; }
+        if (f.gradNcc !== null) { a[2] += f.gradNcc * pn; a[3] += pn; }
+    };
+    for (const p of pairs) {
+        if (signal?.aborted) break;
+        const judge = views.filter(v => v.panoId === p.pano);
+        const wall = new Uint8Array(p.glass.length), glass = new Uint8Array(p.glass.length);
+        let gl = 0;
+        for (let i = 0; i < wall.length; i++) { if (p.glass[i]) { glass[i] = 1; gl++; } else wall[i] = 1; }
+        const fit = (planes: BakedTexturePlanes, scoreTexels: Uint8Array) => measureLayerFit({ atlas, planes, views: judge, depthFor: depth, scoreTexels, ...(signal ? { signal } : {}) });
+        add(acc.wb, fit(p.before, wall)); add(acc.wa, fit(p.after, wall));
+        if (gl) { add(acc.gb, fit(p.before, glass)); add(acc.ga, fit(p.after, glass)); }
+    }
+    const pair = (a: number[]) => ({ chamferPx: a[1] ? Math.round((a[0] / a[1]) * 1000) / 1000 : null, gradNcc: a[3] ? Math.round((a[2] / a[3]) * 1000) / 1000 : null });
+    const wallBefore = pair(acc.wb), wallAfter = pair(acc.wa);
+    const worse = (wallAfter.chamferPx !== null && wallBefore.chamferPx !== null && wallAfter.chamferPx > wallBefore.chamferPx + 1e-3)
+        || (wallAfter.gradNcc !== null && wallBefore.gradNcc !== null && wallAfter.gradNcc < wallBefore.gradNcc - 1e-3);
+    return {
+        wallBefore, wallAfter, ...(acc.gb[1] || acc.gb[3] ? { glassBefore: pair(acc.gb), glassAfter: pair(acc.ga) } : {}), panos: pairs.length, kept: !worse,
+        reason: worse ? 'the walls\' held-out fit got worse with the reading' : 'the walls\' held-out fit did not get worse with the reading'
     };
 }
 

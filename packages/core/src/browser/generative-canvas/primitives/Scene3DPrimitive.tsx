@@ -175,6 +175,7 @@ import { useStagedBuild } from './scene3d/stagedBuild/useStagedBuild';
 import { readStagedBuild, type StagedSceneData } from './scene3d/stagedBuild/stagedBuildState';
 import { carryTwinObjects } from './scene3d/stagedBuild/texturedTwins';
 import { prepareTexturedTwinModel } from './scene3d/stagedBuild/texturedTwinModel';
+import { refreshFacadeReflections } from './scene3d/stagedBuild/facadeMaterialLook';
 
 // Aircraft helpers live in services/mesh/aircraft.ts (single source of truth, shared with the
 // transformer engine's sandbox template); re-exported here to keep the public API stable.
@@ -2839,7 +2840,13 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     const lod = new TreeLodController(model);
                     if (lod.hasTrees) model.userData.sbTreeLod = lod;
                     // A staged layer's textured twin keeps its photo material under the clay pass, and its confidence texture is loaded.
-                    void prepareTexturedTwinModel(gltf);
+                    void prepareTexturedTwinModel(gltf).then(() => {
+                        // the facade material reading's glass reflects the scene: render its probe once the textures are in,
+                        // and again for the other twins (this layer is now part of what they see)
+                        const stack = stackRef.current;
+                        if (!stack || !model.parent) return;
+                        try { refreshFacadeReflections(stack.renderer, stack.scene, currentMap.values()); } catch (err) { console.warn('[staged textures] the glass reflection probe failed:', err); }
+                    });
                     applyClayRenderMode([model], renderModeRef.current === 'clay');
                     // An explicit material on the object wins over the clay default.
                     syncObjectMaterial(model, latestDef(obj).material, renderModeRef.current === 'clay');

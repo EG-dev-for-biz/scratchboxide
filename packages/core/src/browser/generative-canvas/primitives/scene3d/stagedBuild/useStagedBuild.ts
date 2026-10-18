@@ -45,6 +45,7 @@ import { StagedBuildOverlay, type DegradationPlacementNote, type MaterialsSummar
 import { placeDegradations, type Placement, type PlacementRoot } from './degradationPlacement';
 import { nodeProgress, nodeRevealWindow, stepRevealSchedule, type LayerLoadState, type LayerRevealFrame, type RevealFrame, type RevealSchedule } from './revealScheduler';
 import { REVEAL_ATTRIBUTE, StagedMaterialRegistry, installRenderGuard, type MeshStagedLook } from './revealMaterial';
+import { FACADE_MATERIAL_SOURCE } from './facadeMaterialLook';
 import { TEXTURE_RUNG_COLORS, classUniforms, legendRows, patternCode, provenanceBackground, resolveLegend, shadingClasses, styleFor, textureRungLegendRows, uncertaintyCoverage, type LegendStyle } from './provenanceShading';
 import { isInterrupted, isRunSettled, stageEventsFor, streamedProgress, subscribeStageEvents, withStreamedEvents, type StageProgress } from './stagedBuildState';
 import {
@@ -749,7 +750,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
             layers: (frame?.layers ?? []).filter(l => !isMaterialSwapLayer(l)),
             materials,
             onToggleMaterials: () => setUserMode(materials.mode === 'textured' ? 'clay' : 'textured'),
-            rungLegend: provenanceOn && materials.mode === 'textured' && materials.shown > 0 ? textureRungLegendRows(materials.rungShares) : undefined,
+            rungLegend: provenanceOn && materials.mode === 'textured' && materials.shown > 0 ? textureRungLegendRows(materials.rungShares, materials.materialShare) : undefined,
             progress: progress as Map<string, StageProgress>,
             nowMs: performance.now(),
             wallNowMs: Date.now(),
@@ -802,5 +803,9 @@ export function materialsSummary(state: StagedBuildState, frame: RevealFrame | u
             rungShares = TEXTURE_RUNG_COLORS.map((_, i) => ls.reduce((a, l) => a + (l.textured!.rungShares[i] ?? 0) * Math.max(1, l.textured!.bytes), 0) / w);
         }
     }
-    return { mode: sw.mode, available, engaged, shown, failedLayerIds: failed, ...(state.texturePass ? { pass: state.texturePass } : {}), ...(rungShares ? { rungShares } : {}) };
+    // texels the facade material reading wrote (its provenance entries' coverage), weighted like the rungs
+    const read = state.layers.filter(l => !l.retired && l.textured?.provenance?.some(p => p.source === FACADE_MATERIAL_SOURCE));
+    const rw = state.layers.filter(l => !l.retired && l.textured).reduce((a, l) => a + Math.max(1, l.textured!.bytes), 0);
+    const materialShare = read.length && rw ? read.reduce((a, l) => a + l.textured!.provenance.filter(p => p.source === FACADE_MATERIAL_SOURCE).reduce((x, p) => x + p.coverage, 0) * Math.max(1, l.textured!.bytes), 0) / rw : undefined;
+    return { mode: sw.mode, available, engaged, shown, failedLayerIds: failed, ...(state.texturePass ? { pass: state.texturePass } : {}), ...(rungShares ? { rungShares } : {}), ...(materialShare !== undefined ? { materialShare } : {}) };
 }

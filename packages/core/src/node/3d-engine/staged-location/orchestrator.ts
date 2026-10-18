@@ -124,6 +124,7 @@ import {
 import { buildSwitchLocationPills, switchLocationMarkdown } from '../../../common/spatial/switch-location';
 import { summarizeStagedBuild, type StagedSummaryInput } from './staged-summary';
 import { palettesFromSurvey, photoTierEnabled, textureLayer, TEXTURE_PASS_VERSION, type TextureLayerOutcome } from './texture-pass';
+import { facadeMaterialsEnabled, gatherMaterialEvidence, scanFacePlanes, segmenterTool, type MaterialEvidence, type SegmentImage } from './facade-material-evidence';
 import { prepareTextureSources, type TextureSourcesInput } from './texture-sources';
 import { TextureWorkerPool, textureWorkersEnabled } from './texture-worker-pool';
 import { eventLoopStats, runBlockTracer } from './event-loop-stats';
@@ -273,7 +274,9 @@ export interface StagedLocationDeps {
      * The texture pass's optional model enhancement of the tile transfer (an image model, edge-gated); absent = that
      * rung is not attempted (tests, or no client). `densityTexelsPerMeter` caps the atlas density (default 20, 5 cm).
      */
-    textures?: { enhance?: EnhanceModelClient; enhanceModels?: string[]; maxDensityTexelsPerMeter?: number; maxSide?: number; disabled?: string };
+    textures?: { enhance?: EnhanceModelClient; enhanceModels?: string[]; maxDensityTexelsPerMeter?: number; maxSide?: number; disabled?: string;
+        /** The facade material reading's segmenter (default: vfx_segment_subject's ObjectSegmenterService); used only with SCRATCHBOX_FACADE_MATERIALS=1. */
+        segment?: SegmentImage };
     now?: () => number;
     newRunId?: () => string;
     sleep?: (ms: number) => Promise<void>;
@@ -1476,6 +1479,29 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         ...[...(evidence.registration.warps?.entries() ?? [])].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([id, w]) => [id, Array.from(w.dh), Array.from(w.dp)])
                     ] : [];
                     const enhance = deps.textures?.enhance;
+                    // the facade material reading's evidence (opt-in): masks from the Street View views and the tile's fitted faces,
+                    // gathered once for every layer
+                    let materials: MaterialEvidence | undefined;
+                    let materialsUnavailable: string | undefined;
+                    if (facadeMaterialsEnabled()) {
+                        if (!visionAvailable && !deps.textures?.segment) materialsUnavailable = 'no vision model is configured to segment the photos';
+                        else {
+                            const tm = now();
+                            try {
+                                materials = await gatherMaterialEvidence({
+                                    // the fitted faces; a layer set without a fit is read on the scan's own planar faces
+                                    views, surfaces: fitSurfaces().length ? fitSurfaces() : occluder ? scanFacePlanes(occluder) : [], ...(tile ? { tile } : {}), segment: deps.textures?.segment ?? segmenterTool(), signal: io.signal,
+                                    onProgress: m => io.progress(`textures: ${m}`)
+                                });
+                                io.progress(`textures: facade material masks: ${materials.views.length} Street View views, ${materials.surfaces.length} tile faces, ${materials.calls} segmentation calls (${materials.failedCalls} failed) in ${((now() - tm) / 1000).toFixed(1)} s`);
+                                if (!materials.views.length && !materials.surfaces.length) { materialsUnavailable = `no mask was read (${materials.unavailable.join('; ') || 'no source'})`; materials = undefined; }
+                            } catch (err) {
+                                if (isAbort(err) || io.signal.aborted) throw err;
+                                materialsUnavailable = `the masks could not be gathered (${errorMessage(err)})`;
+                            }
+                        }
+                    }
+                    const materialsKey = materials ? sha256Bytes(Buffer.concat([...materials.views.map(v => Buffer.from(v.mask)), ...materials.surfaces.map(f => Buffer.from(f.mask))])) : facadeMaterialsEnabled() ? 'materials-unavailable' : 'materials-off';
                     const outcomes: Array<{ layer: StagedLayer; out: Omit<TextureLayerOutcome, 'glb' | 'measureLoo'>; url: string; bytes: number; cached: boolean; builtAtMs: number; surfaces: string; late: boolean }> = [];
                     // leave-one-pano-out fits, run once every layer is textured (TextureLayerOutcome.measureLoo)
                     const looJobs = new Map<string, NonNullable<TextureLayerOutcome['measureLoo']>>();
@@ -1492,10 +1518,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const textureOne = async (target: typeof targets[number]) => {
                         handled.add(target.layer.objectId);
                         const clay = fs.readFileSync(target.file);
-                        const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), wideHeld.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048, surfacesKey(target.surfaces));
+                        const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), wideHeld.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048, surfacesKey(target.surfaces), materialsKey);
                         const entry = await cache.run<Omit<TextureLayerOutcome, 'glb'>>('textures', key, async dir => {
                             const out = await (texturePool ? texturePool.textureLayer.bind(texturePool) : textureLayer)({ layerKey: target.layer.layer, clayGlb: clay, ...(target.surfaces?.length ? { surfaces: target.surfaces } : {}) }, {
-                                views, ...(wideViews.length ? { photoTierViews: wideViews } : {}), ...(photoTierEnabled() ? { photoTier: true } : {}), ...(viewsUnavailable ? { viewsUnavailable } : {}), occluder, ...(context.indices.length ? { context } : {}), observedSurface: TEXTURE_OBSERVED_SURFACE, poseEdgeGuardShare: TEXTURE_POSE_EDGE_GUARD_SHARE,
+                                views, ...(wideViews.length ? { photoTierViews: wideViews } : {}), ...(photoTierEnabled() ? { photoTier: true } : {}), ...(viewsUnavailable ? { viewsUnavailable } : {}), occluder,
+                                ...(materials ? { materials } : {}), ...(materialsUnavailable ? { materialsUnavailable } : {}), ...(context.indices.length ? { context } : {}), observedSurface: TEXTURE_OBSERVED_SURFACE, poseEdgeGuardShare: TEXTURE_POSE_EDGE_GUARD_SHARE,
                                 delight: { latitude: run.geoAnchor.lat, longitude: run.geoAnchor.lng },
                                 ...(tile ? { tile } : {}), ...(tileUnavailable ? { tileUnavailable } : {}),
                                 ...(residual !== undefined ? { registrationResidualM: residual } : {}),
