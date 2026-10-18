@@ -209,6 +209,11 @@ export async function generateImageWithModels(client: any, request: ImageModelRe
     throw mediaModelUnavailable(models[0], message, { code: 'unsupported', message, retryable: false, model: models[0] });
 }
 
+/** Adaptive video-operation poll delay: 3 s for the first check, growing 1.5x per check, capped at 15 s. */
+export function veoPollDelayMs(attempt: number): number {
+    return Math.min(15000, Math.round(3000 * Math.pow(1.5, attempt)));
+}
+
 export class GoogleMediaGenerationService {
     protected readonly credentials?: GoogleMediaCredentialsService;
 
@@ -348,12 +353,19 @@ export class GoogleMediaGenerationService {
                 } as any));
                 await onStage?.('running', operation.name, model);
 
+                // A fixed interval when the caller set one; otherwise adaptive: first check after 3 s, backing off
+                // to 15 s, within the same total wait as before (maxPollAttempts x 10 s, 30 min by default). Short
+                // jobs are picked up seconds after they finish instead of up to 10 s later.
                 const maxAttempts = this.options.maxPollAttempts || 180;
-                const interval = this.options.pollIntervalMs === undefined ? 10000 : this.options.pollIntervalMs;
+                const fixed = this.options.pollIntervalMs;
+                const maxWaitMs = maxAttempts * (fixed ?? 10000);
                 let attempts = 0;
-                while (!operation.done && attempts < maxAttempts) {
+                let waitedMs = 0;
+                while (!operation.done && (fixed === undefined ? waitedMs < maxWaitMs : attempts < maxAttempts)) {
+                    const interval = fixed ?? Math.min(veoPollDelayMs(attempts), maxWaitMs - waitedMs);
                     attempts++;
                     await this.delay(interval);
+                    waitedMs += interval;
                     const current = operation;
                     operation = await modelCall(() => client.operations.getVideosOperation({ operation: current }));
                 }
