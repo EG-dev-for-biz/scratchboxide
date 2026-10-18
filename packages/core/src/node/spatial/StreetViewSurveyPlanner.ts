@@ -37,6 +37,7 @@ import { fetchStreetViewPanoMetadata } from './StreetViewPanoramaProjectionServi
 import { StreetViewRestyleService } from './StreetViewRestyleService';
 import { frameCamera, renderFrameDepth, streetViewForward, ZERO_CORRECTION, readGlbScene, sceneToRenderMesh, readJpegSize, type FrameCamera } from './StreetViewPoseRegistrar';
 import { mapLimit } from '../../common/map-limit';
+import { isGoogleCapture } from './StreetViewGroundingImageService';
 
 const DEG = Math.PI / 180;
 
@@ -500,6 +501,8 @@ export interface DiscoveryOptions {
     thinMeters?: number;
     /** JSON cache of metadata responses (free calls, cached anyway). */
     cachePath?: string;
+    /** Panos the grounding API refused ("not published or eligible"): left out before thinning, so an eligible neighbour is kept. */
+    refusedPanoIds?: ReadonlySet<string>;
     fetchImpl?: typeof fetch;
     log?: (msg: string) => void;
 }
@@ -582,11 +585,13 @@ export async function discoverPanos(scan: ScanMesh, ground: GroundModel, hero: H
     const byId = new Map<string, PanoRecord>();
     let rejectedCopyright = 0, rejectedOld = 0;
     const months = (d?: string) => { const m = /^(\d{4})-(\d{2})/.exec(d ?? ''); return m ? Number(m[1]) * 12 + Number(m[2]) - 1 : -Infinity; };
-    const newest = Math.max(...results.filter(r => r && r.status === 'OK' && r.copyright === '© Google').map(r => months(r.date)));
+    // the grounding API's own test (isGoogleCapture): "© 2024 Google" is a Google capture as much as "© Google" is
+    const newest = Math.max(...results.filter(r => r && r.status === 'OK' && isGoogleCapture(r.copyright)).map(r => months(r.date)));
     const minMonths = newest - 12 * (opts.maxCaptureAgeYears ?? 2);
     for (const r of results) {
         if (!r || r.status !== 'OK' || byId.has(r.panoId)) continue;
-        if (r.copyright !== '© Google') { rejectedCopyright++; continue; }
+        if (!isGoogleCapture(r.copyright)) { rejectedCopyright++; continue; }
+        if (opts.refusedPanoIds?.has(r.panoId)) continue;
         if (months(r.date) < minMonths) { rejectedOld++; continue; }
         const q = geodeticToScan(opts.origin, r.lat, r.lng);
         if (q.x < scan.bounds.min[0] + 5 || q.x > scan.bounds.max[0] - 5 || q.z < scan.bounds.min[2] + 5 || q.z > scan.bounds.max[2] - 5) continue;

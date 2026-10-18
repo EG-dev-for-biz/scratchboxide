@@ -909,7 +909,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     const now = deps.now ?? Date.now;
     const cache = deps.cache;
     // one grounding request per view per run: a view fetched ahead (the ring, while the survey reads) is reused, never refetched
-    const streetView = deps.streetView?.grounding ? { ...deps.streetView, grounding: memoizeGrounding(deps.streetView.grounding) } : deps.streetView;
+    // the grounding API's refusals this run: a refused pano is never asked for again, and the next eligible one is
+    const streetView = deps.streetView?.grounding ? { ...deps.streetView, grounding: memoizeGrounding(deps.streetView.grounding), refusedPanos: deps.streetView.refusedPanos ?? new Map<string, string>() } : deps.streetView;
     // a retry rebuilds the recorded request exactly; the model never re-words it
     let request = requestIn;
     let recordedArtifactId: string | undefined;
@@ -1141,6 +1142,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     }
                     run.state.materialHints = result.hints;
                     run.summary('survey').cost = result.cost;
+                    if (result.refusals.length) cache.writeRunNote(runId, 'grounding_refusals', { stage: 'survey', refusals: result.refusals });
                     if (result.faces.some(f => f.panoId)) run.state.attribution = [...new Set([...run.state.attribution, 'Street View ©Google'])];
                     const degradations = result.faces.filter(f => f.skipped).map(f => run.degrade(record('survey', 'face_not_surveyed', {
                         part: { description: `the ${Math.round(f.headingDeg)}° face of the structure` }, intended: 'a wide Street View view of this face in the survey',
@@ -1204,7 +1206,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         }
                     }
                     let plan = surveyOut?.result ? planDetailFromSurvey(surveyOut.result, fit, undefined, registration) : undefined;
-                    const views = plan?.views.length ? plan.views : selectViewsForFit(found.panos, fit, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top);
+                    const views = plan?.views.length ? plan.views : selectViewsForFit(found.panos.filter(p => !sv.refusedPanos?.has(p.panoId)), fit, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top);
                     if (plan) io.progress(describeLocated(surveyOut!.result!.faces, plan));
                     const discovery = { metadataCalls: found.metadataCalls, cachedCalls: found.cachedCalls };
                     if (!views.length) {

@@ -119,7 +119,56 @@ export interface StreetViewEvidenceDeps {
     fetchImpl?: typeof fetch;
     /** JSON cache of metadata answers (pano ids, locations, dates only). */
     metadataCachePath?: string;
+    /**
+     * Panos the grounding API refused ("Pano is not published or eligible", 403) this run, with the error: no later view
+     * in the run asks for them again. Kept beside the metadata cache too (REFUSALS_FILE), so discovery leaves them out
+     * for REFUSAL_TTL_MS and a nearby eligible pano is not thinned away in their favour.
+     */
+    refusedPanos?: Map<string, string>;
     now?: () => number;
+}
+
+/** Beside the metadata cache: {panoId: {atMs, error}} of the grounding API's refusals. */
+export const REFUSALS_FILE = 'grounding_refusals.json';
+/** A refusal is trusted this long (a pano's eligibility can change). */
+export const REFUSAL_TTL_MS = 30 * 24 * 3600 * 1000;
+
+/** The grounding API refused the pano itself (not a transient failure): another pano must be asked. */
+export function isGroundingRefusal(message: string): boolean {
+    return /not published or eligible|\b403\b/i.test(message);
+}
+
+function refusalsPath(deps: Pick<StreetViewEvidenceDeps, 'metadataCachePath'>): string | undefined {
+    return deps.metadataCachePath ? path.join(path.dirname(deps.metadataCachePath), REFUSALS_FILE) : undefined;
+}
+
+/** The refusals recorded within REFUSAL_TTL_MS, and this run's. */
+export function knownRefusals(deps: Pick<StreetViewEvidenceDeps, 'metadataCachePath' | 'refusedPanos' | 'now'>): Map<string, string> {
+    const out = new Map<string, string>();
+    const file = refusalsPath(deps);
+    if (file && fs.existsSync(file)) {
+        try {
+            const rec = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, { atMs: number; error: string }>;
+            const now = (deps.now ?? Date.now)();
+            for (const [id, r] of Object.entries(rec)) if (r && now - r.atMs < REFUSAL_TTL_MS) out.set(id, r.error);
+        } catch { /* an unreadable record is ignored; it is rewritten on the next refusal */ }
+    }
+    for (const [id, e] of deps.refusedPanos ?? []) out.set(id, e);
+    return out;
+}
+
+/** Records a refusal for the run and on disk. */
+export function recordRefusal(deps: StreetViewEvidenceDeps, panoId: string, error: string): void {
+    deps.refusedPanos?.set(panoId, error);
+    const file = refusalsPath(deps);
+    if (!file) return;
+    let rec: Record<string, { atMs: number; error: string }> = {};
+    try { if (fs.existsSync(file)) rec = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { rec = {}; }
+    rec[panoId] = { atMs: (deps.now ?? Date.now)(), error };
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(rec));
+    fs.renameSync(tmp, file);
 }
 
 /** "Street View not configured: <which>", or undefined when both credentials are there. */
@@ -215,7 +264,7 @@ const months = (d?: string) => { const m = /^(\d{4})-(\d{2})/.exec(d ?? ''); ret
  * arch has about 24 within 100 m, most of them from 2021 and one from 2026: a 3-year window would have kept the one);
  * recency is a factor in the view score instead.
  */
-export async function discoverPanos(origin: GeodeticOrigin, facades: FacadeGeometry[], deps: StreetViewEvidenceDeps, signal?: AbortSignal, centre?: { x: number; z: number }): Promise<{ panos: PanoCandidate[]; metadataCalls: number; cachedCalls: number; rejectedNotGoogle: number }> {
+export async function discoverPanos(origin: GeodeticOrigin, facades: FacadeGeometry[], deps: StreetViewEvidenceDeps, signal?: AbortSignal, centre?: { x: number; z: number }): Promise<{ panos: PanoCandidate[]; metadataCalls: number; cachedCalls: number; rejectedNotGoogle: number; rejectedRefused: number }> {
     const points = candidatePoints(facades, centre);
     const cache: Record<string, any> = deps.metadataCachePath && fs.existsSync(deps.metadataCachePath) ? JSON.parse(fs.readFileSync(deps.metadataCachePath, 'utf8')) : {};
     let calls = 0, cached = 0;
@@ -241,9 +290,12 @@ export async function discoverPanos(origin: GeodeticOrigin, facades: FacadeGeome
         fs.writeFileSync(deps.metadataCachePath, JSON.stringify(cache));
     }
     const ok = answers.filter(a => a && a.status === 'OK');
+    // the grounding API's own refusals are left out before thinning, so an eligible pano beside one is kept
+    const refused = knownRefusals(deps);
     const google = ok.filter(a => isGoogleCapture(a.copyright));
     const byId = new Map<string, PanoCandidate>();
     for (const a of google) {
+        if (refused.has(a.panoId)) continue;
         if (byId.has(a.panoId)) continue;
         const q = geodeticToScan(origin, a.lat, a.lng);
         byId.set(a.panoId, { panoId: a.panoId, lat: a.lat, lng: a.lng, date: a.date, copyright: a.copyright, x: q.x, z: q.z });
@@ -253,7 +305,10 @@ export async function discoverPanos(origin: GeodeticOrigin, facades: FacadeGeome
     for (const p of sorted) if (!kept.some(q => Math.hypot(q.x - p.x, q.z - p.z) < 6)) kept.push(p);
     if (centre) kept.sort((a, b) => Math.hypot(a.x - centre.x, a.z - centre.z) - Math.hypot(b.x - centre.x, b.z - centre.z));
     kept.splice(MAX_CANDIDATE_PANOS);
-    return { panos: kept, metadataCalls: calls, cachedCalls: cached, rejectedNotGoogle: new Set(ok.filter(a => !isGoogleCapture(a.copyright)).map(a => a.panoId)).size };
+    return {
+        panos: kept, metadataCalls: calls, cachedCalls: cached, rejectedNotGoogle: new Set(ok.filter(a => !isGoogleCapture(a.copyright)).map(a => a.panoId)).size,
+        rejectedRefused: new Set(google.filter(a => refused.has(a.panoId)).map(a => a.panoId)).size
+    };
 }
 
 /**
@@ -290,7 +345,7 @@ export function evidenceImageId(v: Pick<SelectedView, 'panoId' | 'headingDeg' | 
  * Fetches the views in parallel, each with a 30 s timeout (retries of 503s included) and the request's signal; a failed image is recorded and the
  * others continue. The bytes stay in memory as they arrived.
  */
-export async function fetchViews(views: SelectedView[], deps: StreetViewEvidenceDeps, signal?: AbortSignal, timeoutMs = EVIDENCE_IMAGE_TIMEOUT_MS): Promise<{ images: EvidenceImage[]; failures: Array<{ view: SelectedView; error: string; transient: boolean }>; elapsedMs: number }> {
+export async function fetchViews(views: SelectedView[], deps: StreetViewEvidenceDeps, signal?: AbortSignal, timeoutMs = EVIDENCE_IMAGE_TIMEOUT_MS): Promise<{ images: EvidenceImage[]; failures: Array<{ view: SelectedView; error: string; transient: boolean; refused: boolean }>; elapsedMs: number }> {
     const started = (deps.now ?? Date.now)();
     if (!deps.grounding) throw new Error(missingCredentials(deps) ?? 'Street View not configured');
     const grounding = deps.grounding;
@@ -320,14 +375,16 @@ export async function fetchViews(views: SelectedView[], deps: StreetViewEvidence
             };
         } catch (err) {
             const message = own.signal.aborted && !signal?.aborted ? `timed out after ${timeoutMs / 1000} s` : (err as Error).message;
-            return { ok: false as const, view, error: message, transient: !/not published or eligible|400|403/.test(message) };
+            const refused = !signal?.aborted && isGroundingRefusal(message);
+            if (refused) recordRefusal(deps, view.panoId, message);
+            return { ok: false as const, view, error: message, transient: !/not published or eligible|400|403/.test(message), refused };
         } finally {
             timer.clear();
         }
     }));
     return {
         images: results.flatMap(r => (r.ok ? [r.image] : [])),
-        failures: results.flatMap(r => (r.ok ? [] : [{ view: r.view, error: r.error, transient: r.transient }])),
+        failures: results.flatMap(r => (r.ok ? [] : [{ view: r.view, error: r.error, transient: r.transient, refused: r.refused }])),
         elapsedMs: (deps.now ?? Date.now)() - started
     };
 }
