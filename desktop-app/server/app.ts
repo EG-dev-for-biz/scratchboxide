@@ -39,6 +39,9 @@ import {
     LongRunningAgentService,
     SubagentPoolService,
     NativeCppCompilerService,
+    getVirtualGeometryBuildService,
+    virtualGeometryServeDir,
+    VIRTUAL_GEOMETRY_URL_PREFIX,
     HeadlessVideoCompositorService,
     PhotorealTileCleanupService,
     SurveyApi,
@@ -55,6 +58,7 @@ import { createGeminiRouter } from './routes/geminiRoutes';
 import { createMemoriesRouter } from './routes/memoriesRoutes';
 import { createWorkspaceRouter, createGitRouter } from './routes/workspaceRoutes';
 import { createCppRouter } from './routes/cppRoutes';
+import { createVirtualGeometryRouter } from './routes/virtualGeometryRoutes';
 import { createTileRefineRouter } from './routes/tileRefineRoutes';
 import { createMediaRouter, createVideoRouter } from './routes/mediaVideoRoutes';
 import {
@@ -420,6 +424,8 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     ]) {
         app.use('/build/3d-python', express.static(dir));
     }
+    // Built virtual geometry (.sbvg) files, named by their source GLB's content hash.
+    app.use(VIRTUAL_GEOMETRY_URL_PREFIX, express.static(virtualGeometryServeDir(), { immutable: true, maxAge: '1y' }));
 
     // Trigger asynchronous background asset hydration for showcase demos. Not under the test runner
     // (vitest sets SCRATCHBOX_TEST=1): it would write offline placeholder assets into public/, which
@@ -539,6 +545,7 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     app.use('/3d', cppRouter);
     app.use('/compiler', cppRouter);
     app.use('/3d/tiles', createTileRefineRouter(routeContext));
+    app.use('/3d/virtual-geometry', createVirtualGeometryRouter(getVirtualGeometryBuildService(), routeContext));
 
     // 5. Media & Video Compositor Endpoints
     const mediaRouter = createMediaRouter({

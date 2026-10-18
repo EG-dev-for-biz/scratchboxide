@@ -829,7 +829,7 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
 
         return {
             status: 'completed',
-            summaryResult: `Separated ${scene.objects.length} discrete 3D spatial entities from "${scene.modelName}" (${scene.totalVertices.toLocaleString()} vertices). Categories: ${JSON.stringify(scene.objectCounts)}.`,
+            summaryResult: `Separated ${scene.objects.length} discrete 3D spatial entities from "${scene.modelName}" (${scene.totalVertices.toLocaleString()} vertices). Stage labels (diagnostic): ${JSON.stringify(scene.objectCounts)}. Each object carries its measured shape descriptors (height, footprint, slenderness, compactness, planarity, verticality, elevation).`,
             resultPayload: {
                 success: true,
                 modelName: scene.modelName,
@@ -849,7 +849,8 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                     vertexCount: o.vertexCount,
                     triangleCount: o.triangleCount,
                     ...(o.sampledVertexCount !== undefined ? { sampledVertexCount: o.sampledVertexCount } : {}),
-                    routingRecommendation: o.routingRecommendation
+                    routingRecommendation: o.routingRecommendation,
+                    descriptors: o.descriptors
                 }))
             }
         };

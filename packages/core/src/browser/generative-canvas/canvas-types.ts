@@ -1005,6 +1005,33 @@ export interface Scene3DData {
         glbPath?: string;
         diagnostics?: any[];
     };
+    /**
+     * Shows the scene in the WebGPU virtual geometry viewport instead of the three.js stage: the GLB
+     * is built into a cluster LOD DAG (.sbvg) by the native builder and streamed to the GPU, which
+     * picks per-cluster detail every frame. For meshes too heavy for the regular viewport.
+     */
+    virtualGeometry?: {
+        /** GLB to build from, relative to workspaceRoot (or to the open workspace when workspaceRoot is unset). */
+        sourceGlbPath?: string;
+        /** Absolute workspace root sourceGlbPath is relative to (set by virtual_geometry_open_glb). */
+        workspaceRoot?: string;
+        /** Built file, served by the app (e.g. /build/3d-virtual-geometry/<hash>.sbvg). Set after a build. */
+        sbvgUrl?: string;
+        /** Allowed screen-space geometric error in pixels (default 1). */
+        errorThresholdPx?: number;
+        shading?: 'clay' | 'clusters' | 'lod-levels';
+        /** Render back faces too (for meshes with inconsistent winding). */
+        doubleSided?: boolean;
+        buildStats?: {
+            sourceTriangles: number;
+            clusterCount: number;
+            levelCount: number;
+            fileBytes: number;
+            buildMs: number;
+            /** Source primitives left out of the build (points, lines, no POSITION). */
+            skippedPrimitives?: number;
+        };
+    };
     shaders?: Record<string, {
         vertexShader?: string;
         fragmentShader?: string;

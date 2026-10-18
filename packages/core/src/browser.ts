@@ -295,30 +295,20 @@ export {
     type GlazeCrackleConfig
 } from './browser/generative-canvas/services/spatial/ProceduralMicroSurfaceShaderPatcher';
 
-// Next-Gen Astro Viewport Engine & Real WebGPU Compute Culling Pipeline
+// Virtual geometry: streamed cluster LOD DAGs (.sbvg) rendered with WebGPU compute culling
 export {
-    NextGenAstroViewportEngine,
-    NextGenAstraViewportEngine,
-    CULL_MESHLETS_WGSL,
-    MICRO_RASTERIZER_WGSL,
-    VISIBILITY_BUFFER_SHADING_WGSL,
-    TEMPORAL_SUPER_RES_WGSL,
-    RELIEF_MICRO_DISPLACEMENT_WGSL,
-    CLUSTER_SLOT_SIZE_BYTES,
-    VRAM_PAGE_POOL_SIZE_MB,
-    TOTAL_RESIDENT_SLOTS,
-    VIRTUAL_GEOMETRY_CAPACITY_TRIANGLES,
-    type ViewportTelemetry,
-    type MeshletCluster,
-    type NextGenViewportOptions,
-    type VirtualClusterSlot
-} from './browser/generative-canvas/services/NextGenAstraViewportEngine';
-
+    VirtualGeometryRenderer,
+    VirtualGeometryFetchError,
+    type VirtualGeometryRendererOptions,
+    type VirtualGeometryShading,
+    type VirtualGeometryStats
+} from './browser/generative-canvas/services/virtual-geometry/VirtualGeometryRenderer';
 export {
-    WebGpuMeshletCullingPipeline,
-    type WebGpuPipelineTelemetry,
-    type FrustumPlane
-} from './browser/generative-canvas/services/WebGpuMeshletCullingPipeline';
+    parseSbvgHeader,
+    SbvgFormatError,
+    type SbvgHeader,
+    type SbvgLevel
+} from './browser/generative-canvas/services/virtual-geometry/sbvg-format';
 
 
 

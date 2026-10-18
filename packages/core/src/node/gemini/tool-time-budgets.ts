@@ -44,6 +44,8 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
     build_3d_object_from_reference: { maxMs: 50 * MIN },
     // The first call compiles the native binary (up to 10 min) before the run (up to 5 min).
     tile_refine: { maxMs: 16 * MIN },
+    // Native cluster LOD build: about 2 s per 170k triangles, longer for multi-million-triangle scans.
+    virtual_geometry_open_glb: { maxMs: 12 * MIN },
     // Several serial image-model calls each.
     panorama_to_3dgs: { maxMs: 15 * MIN },
     mesh_bake_ai_textures: { maxMs: 15 * MIN },
