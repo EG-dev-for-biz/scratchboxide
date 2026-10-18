@@ -259,3 +259,127 @@ describe('headless realism fixes', () => {
         expect([...ys][0]).toBeLessThan(2);
     });
 });
+
+describe('material operators never invent a material', () => {
+    const fresh = () => new DirectDispatchOperatorEngine({ title: 'm', customMeshes: [{ id: 'hero', type: 'box' }], objects: [] } as Scene3DData);
+
+    it('fails for an unknown materialId instead of registering an empty one or a grey fallback', () => {
+        const engine = fresh();
+        const cases: Array<[string, any]> = [
+            ['sb_assign_material', { objectId: 'hero', materialId: 'nope' }],
+            ['sb_set_material_pbr', { materialId: 'nope', roughness: 0.2 }],
+            ['sb_set_pbr_clearcoat', { materialId: 'nope', clearcoat: 1 }],
+            ['sb_set_pbr_transmission', { materialId: 'nope', transmission: 0.5 }],
+            ['sb_assign_pbr_preset', { materialId: 'nope', preset: 'mirror_chrome' }],
+            ['sb_assign_pbr_preset', { preset: 'mirror_chrome' }]
+        ];
+        for (const [op, params] of cases) {
+            const res = engine.dispatch(op, params);
+            expect(res.success, op).toBe(false);
+            expect(engine.getMaterial('nope'), op).toBeUndefined();
+        }
+        expect(engine.getSceneData().customMeshes![0].material).toBeUndefined();
+    });
+
+    it('sb_set_pbr_clearcoat fails for an unknown targetId even when a materialId is given', () => {
+        const engine = fresh();
+        engine.dispatch('sb_create_material', { materialId: 'lacquer', color: '#d90f14' });
+        const res = engine.dispatch('sb_set_pbr_clearcoat', { materialId: 'lacquer', targetId: 'ghost', clearcoat: 1 });
+        expect(res.success).toBe(false);
+        expect(engine.getMaterial('lacquer').clearcoat).toBeUndefined();
+    });
+
+    it('sb_create_material keeps only properties the viewport renders', () => {
+        const engine = fresh();
+        const res = engine.dispatch('sb_create_material', { materialId: 'velvet', sheenColor: '#ff0000', anisotropy: 0.5, iridescence: 1, attenuationDistance: 2, roughness: 0.8 });
+        expect(res.success).toBe(true);
+        const mat = engine.getMaterial('velvet');
+        expect(mat.roughness).toBe(0.8);
+        for (const key of ['sheenColor', 'anisotropy', 'iridescence', 'attenuationDistance']) expect(mat, key).not.toHaveProperty(key);
+    });
+});
+
+describe('a failed dispatch leaves the scene data as it was', () => {
+    it('sb_setup_lighting with a time of day and no location changes nothing', () => {
+        const engine = new DirectDispatchOperatorEngine({ title: 'l', environment: { lighting: 'studio', skybox: 'studio' }, customMeshes: [], objects: [] } as Scene3DData);
+        const before = JSON.stringify(engine.getSceneData().environment);
+        const res = engine.dispatch('sb_setup_lighting', { preset: 'sunset', timeOfDay: 18 });
+        expect(res.success).toBe(false);
+        expect(JSON.stringify(engine.getSceneData().environment)).toBe(before);
+    });
+
+    it('rolls back whatever an operator wrote before it threw', () => {
+        const engine = new DirectDispatchOperatorEngine({ title: 'r', customMeshes: [{ id: 'a', type: 'box', position: [0, 0, 0] }], objects: [] } as Scene3DData);
+        engine.registerOperator({
+            name: 'test_half_write', category: 'transform', description: 'writes then throws',
+            execute: ctx => { ctx.getSceneData().customMeshes![0].position = [9, 9, 9]; throw new Error('boom'); }
+        });
+        engine.dispatch('sb_translate', { objectId: 'a', delta: [1, 0, 0] });
+        expect(engine.dispatch('test_half_write', {}).success).toBe(false);
+        expect(engine.getSceneData().customMeshes![0].position).toEqual([1, 0, 0]);
+        expect(engine.getOperatorStack().map(o => o.operator)).toEqual(['sb_translate']);
+        // Also off the in-sync history path (a dispatch that skipped recording).
+        engine.dispatch('sb_translate', { objectId: 'a', delta: [1, 0, 0] }, { recordHistory: false });
+        expect(engine.dispatch('test_half_write', {}).success).toBe(false);
+        expect(engine.getSceneData().customMeshes![0].position).toEqual([2, 0, 0]);
+    });
+});
+
+describe('curvature sign and its consumers', () => {
+    /** A ground grid in XZ with a bump at x = -2 and a pit at x = +2. */
+    function bumpAndPit(): { geometry: THREE.BufferGeometry; bump: number; pit: number } {
+        const geometry = new THREE.PlaneGeometry(8, 8, 64, 64);
+        geometry.rotateX(-Math.PI / 2);
+        const pos = geometry.getAttribute('position') as THREE.BufferAttribute;
+        let bump = 0, pit = 0;
+        for (let i = 0; i < pos.count; i++) {
+            const x = pos.getX(i), z = pos.getZ(i);
+            pos.setY(i, 0.6 * Math.exp(-((x + 2) ** 2 + z ** 2) / 0.5) - 0.6 * Math.exp(-((x - 2) ** 2 + z ** 2) / 0.5));
+            if (Math.hypot(x + 2, z) < Math.hypot(pos.getX(bump) + 2, pos.getZ(bump))) bump = i;
+            if (Math.hypot(x - 2, z) < Math.hypot(pos.getX(pit) - 2, pos.getZ(pit))) pit = i;
+        }
+        geometry.computeVertexNormals();
+        return { geometry, bump, pit };
+    }
+
+    it('a sphere with outward normals is convex (+1/R) and gets edge wear', () => {
+        const ball = named('ball', new THREE.SphereGeometry(2, 32, 16));
+        const { engine } = liveEngine([ball]);
+        const curv = engine.dispatch('sb_compute_halfedge_curvature', { targetId: 'ball' });
+        expect(curv.data.meanCurvature.mean).toBeGreaterThan(0.4);
+        expect(curv.data.meanCurvature.mean).toBeLessThan(0.6);
+        expect(curv.data.shapeIndex.mean).toBeGreaterThan(0.9);
+        const wear = engine.dispatch('sb_synthesize_differential_wear', { targetId: 'ball', options: { microNoiseScale: 0 } });
+        expect(wear.data.averageWear).toBeGreaterThan(0.5);
+    });
+
+    it('wear goes to the bump, moisture pools in the pit', async () => {
+        const { computeStratifiedWear, synthesizeMoistureRunoff } = await import('../src/browser/generative-canvas/services/headless-realism-service');
+        const a = bumpAndPit();
+        const wear = computeStratifiedWear(a.geometry, { microNoiseScale: 0 });
+        expect(wear.wearExposures[a.bump]).toBeGreaterThan(wear.wearExposures[a.pit]);
+        const b = bumpAndPit();
+        const wet = synthesizeMoistureRunoff(b.geometry, { rainStreakFrequency: 0 } as any);
+        expect(wet.moistureLevels[b.pit]).toBeGreaterThan(wet.moistureLevels[b.bump]);
+    });
+});
+
+describe('weighted normals', () => {
+    it('keeps the normal of a vertex no face uses, and handles non-indexed meshes', async () => {
+        const { applyWeightedNormals } = await import('../src/browser/generative-canvas/services/headless-realism-service');
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 0, 1, 5, 5, 5], 3));
+        geometry.setAttribute('normal', new THREE.Float32BufferAttribute([0, 1, 0, 0, 1, 0, 0, 1, 0, 0.6, 0.8, 0], 3));
+        geometry.setIndex([0, 2, 1]);
+        applyWeightedNormals(geometry);
+        const n = geometry.getAttribute('normal');
+        expect([n.getX(3), n.getY(3), n.getZ(3)]).toEqual([0.6000000238418579, 0.800000011920929, 0]);
+        expect(n.getY(0)).toBeCloseTo(1, 6);
+        const soup = new THREE.BoxGeometry(1, 1, 1).toNonIndexed();
+        soup.setAttribute('normal', new THREE.Float32BufferAttribute(new Float32Array(soup.getAttribute('position').count * 3).fill(0.577), 3));
+        applyWeightedNormals(soup, { keepSharpEdges: false });
+        // Each triangle of the soup gets its own flat face normal.
+        const sn = soup.getAttribute('normal');
+        expect(Math.abs(sn.getX(0)) + Math.abs(sn.getY(0)) + Math.abs(sn.getZ(0))).toBeCloseTo(1, 5);
+    });
+});

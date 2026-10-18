@@ -165,7 +165,9 @@ export function estimateDifferentialCurvature(geometry: THREE.BufferGeometry): C
             const distSq = edge.lengthSq();
             if (distSq < 1e-10) continue;
 
-            const kappa = (2.0 * edge.dot(nI)) / distSq;
+            // Normal curvature along the edge, positive where the surface bends away from its normal (convex with
+            // outward normals: a sphere of radius R gives +1/R), negative in crevices.
+            const kappa = (-2.0 * edge.dot(nI)) / distSq;
             minKappa = Math.min(minKappa, kappa);
             maxKappa = Math.max(maxKappa, kappa);
             count++;
@@ -177,9 +179,12 @@ export function estimateDifferentialCurvature(geometry: THREE.BufferGeometry): C
             const H = 0.5 * (k1 + k2);
             const K = k1 * k2;
             const diff = k1 - k2;
+            // Shape index: +1 cap (convex), -1 cup (concave), 0 saddle; an umbilic point (k1 = k2) is a pure cap or cup.
             let S = 0;
             if (Math.abs(diff) > 1e-6) {
                 S = (2.0 / Math.PI) * Math.atan((k1 + k2) / diff);
+            } else if (Math.abs(k1 + k2) > 1e-9) {
+                S = Math.sign(k1 + k2);
             }
             const C = Math.sqrt(0.5 * (k1 * k1 + k2 * k2));
 
@@ -284,7 +289,8 @@ export function applyWeightedNormals(
     if (!posAttr) return;
     const vertexCount = posAttr.count;
 
-    const indices = geometry.index ? Array.from(geometry.index.array) : [];
+    // A non-indexed mesh is a triangle soup: every three vertices are one face.
+    const indices = geometry.index ? Array.from(geometry.index.array) : Array.from({ length: vertexCount - (vertexCount % 3) }, (_, i) => i);
     if (indices.length < 3) return;
 
     const areaPower = options.areaWeightPower ?? 1.0;
@@ -337,10 +343,15 @@ export function applyWeightedNormals(
 
     for (let v = 0; v < vertexCount; v++) {
         const faces = vertFaces[v];
-        if (faces.length === 0) continue;
-
         if (normAttr) origNorm.fromBufferAttribute(normAttr, v);
         else origNorm.set(0, 1, 0);
+        if (faces.length === 0) {
+            // No face uses this vertex: it keeps the normal it had.
+            newNormals[v * 3] = origNorm.x;
+            newNormals[v * 3 + 1] = origNorm.y;
+            newNormals[v * 3 + 2] = origNorm.z;
+            continue;
+        }
 
         accum.set(0, 0, 0);
         pV.fromBufferAttribute(posAttr, v);

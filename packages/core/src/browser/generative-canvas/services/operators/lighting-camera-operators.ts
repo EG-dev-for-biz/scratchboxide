@@ -75,6 +75,12 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
             godRaysIntensity?: number;
         }) => {
             const scene = ctx.getSceneData();
+            // Validate before writing anything: a time of day only fixes the sun at a place.
+            const latitude: number | undefined = params.timeOfDay !== undefined ? (params.latitude ?? scene.geoAnchor?.lat) : undefined;
+            const longitude: number | undefined = params.timeOfDay !== undefined ? (params.longitude ?? scene.geoAnchor?.lng) : undefined;
+            if (params.timeOfDay !== undefined && (latitude === undefined || longitude === undefined)) {
+                throw new Error('sb_setup_lighting: timeOfDay needs latitude/longitude (or a scene geoAnchor) to place the sun; or give sunElevation/sunAzimuth. Nothing was changed.');
+            }
             if (!scene.environment) scene.environment = {};
             if (!scene.features) scene.features = {};
 
@@ -84,15 +90,7 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
             let diurnalState: any = null;
             let sunElevation: number;
             let sunAzimuth: number;
-            let latitude: number | undefined;
-            let longitude: number | undefined;
-            if (params.timeOfDay !== undefined) {
-                // A time of day only fixes the sun at a place: the scene's anchor or the given coordinates.
-                latitude = params.latitude ?? scene.geoAnchor?.lat;
-                longitude = params.longitude ?? scene.geoAnchor?.lng;
-                if (latitude === undefined || longitude === undefined) {
-                    throw new Error('sb_setup_lighting: timeOfDay needs latitude/longitude (or a scene geoAnchor) to place the sun; or give sunElevation/sunAzimuth.');
-                }
+            if (params.timeOfDay !== undefined && latitude !== undefined && longitude !== undefined) {
                 const sun = sunAtLocalSolarTime(latitude, longitude, params.timeOfDay);
                 sunElevation = sun.elevationDeg;
                 sunAzimuth = sun.azimuthDeg;

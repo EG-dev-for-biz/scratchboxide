@@ -79,6 +79,8 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
     /** Shared viewport timeline; when attached it replaces the private whole-scene snapshots above. */
     private sharedHistory?: ViewportHistory;
     private recordingDepth = 0;
+    /** True while the top of the private history stack is a copy of the live scene (a free rollback point). */
+    private historyInSync = false;
 
     constructor(initialScene?: Scene3DData) {
         this.sceneData = initialScene ? snapshotScene(initialScene, []) : {
@@ -101,6 +103,7 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
 
     public setSceneData(data: Scene3DData): void {
         this.sceneData = data;
+        this.historyInSync = false;
     }
 
     public getOperatorStack(): Array<{ operator: string; params?: any; timestamp?: number; result?: any }> {
@@ -231,6 +234,7 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
             this.historyStack = this.historyStack.slice(0, this.historyIndex + 1);
         }
         this.historyStack.push(snapshotScene(this.sceneData));
+        this.historyInSync = true;
         if (this.historyStack.length > this.maxHistory) {
             this.historyStack.shift();
         } else {
@@ -243,6 +247,7 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
         if (this.historyIndex > 0) {
             this.historyIndex--;
             this.restoreSnapshot(this.historyStack[this.historyIndex]);
+            this.historyInSync = true;
             this.syncToThreeScene();
             return true;
         }
@@ -254,6 +259,7 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
         if (this.historyIndex < this.historyStack.length - 1) {
             this.historyIndex++;
             this.restoreSnapshot(this.historyStack[this.historyIndex]);
+            this.historyInSync = true;
             this.syncToThreeScene();
             return true;
         }
@@ -261,10 +267,14 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
     }
 
     /** Makes a copy of `snapshot` the live scene, keeping the running action log (undo is logged, not undone). */
-    private restoreSnapshot(snapshot: Scene3DData): void {
-        const actionLog = this.sceneData.actionLog;
-        this.sceneData = snapshotScene(snapshot);
-        if (actionLog) this.sceneData.actionLog = actionLog;
+    private restoreSnapshot(snapshot: Scene3DData, keepKeys: ReadonlyArray<string> = ['actionLog']): void {
+        const current = this.sceneData as unknown as Record<string, unknown>;
+        const next = snapshotScene(snapshot) as unknown as Record<string, unknown>;
+        for (const key of keepKeys) {
+            if (current[key] !== undefined) next[key] = current[key];
+            else delete next[key];
+        }
+        this.sceneData = next as unknown as Scene3DData;
     }
 
     public resetScene(initialData?: Partial<Scene3DData>): void {
@@ -352,6 +362,13 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
             && operatorName !== 'sb_undo' && operatorName !== 'sb_redo' && operatorName !== 'sb_reset_scene'
             && options?.recordHistory !== false && (params as any)?.recordHistory !== false;
         const tracker = trackEdit ? this.beginTrackedEdit([{ operator: operatorName, params }]) : undefined;
+        // A failed operator leaves the scene data as it was: roll back to the tracked copy, the private history top
+        // when it matches the scene, or a copy taken now. (Inspect operators do not write.)
+        const rollbackPoint = op.category === 'inspect'
+            ? undefined
+            : tracker?.before
+                ?? (!this.sharedHistory && this.historyInSync && this.historyIndex >= 0 ? this.historyStack[this.historyIndex] : undefined)
+                ?? snapshotScene(this.sceneData);
 
         const paramsRecord = params ? cloneJsonLike(params) : undefined;
         try {
@@ -361,6 +378,8 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
             const shouldRecord = options?.recordHistory !== false && (params as any)?.recordHistory !== false && op.category !== 'inspect';
             if (shouldRecord && operatorName !== 'sb_undo' && operatorName !== 'sb_redo') {
                 this.recordState(`Dispatch ${operatorName}`);
+            } else if (op.category !== 'inspect' && operatorName !== 'sb_undo' && operatorName !== 'sb_redo') {
+                this.historyInSync = false;
             }
 
             const endTime = getNowMs();
@@ -393,7 +412,12 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
                 timestamp: Date.now()
             };
         } catch (err: any) {
-            // Whatever the operator changed before failing is still a change the user can undo.
+            if (rollbackPoint) {
+                // The failed dispatch did not change the bookkeeping (log, operator stack); it stays as it is now.
+                this.restoreSnapshot(rollbackPoint, ['actionLog', ...SCENE_BOOKKEEPING_KEYS]);
+                this.syncToThreeScene();
+            }
+            // Live Three.js edits made before the failure cannot be rolled back here; they stay undoable.
             tracker?.commit();
             const endTime = getNowMs();
             const executionTimeMs = Math.max(0.001, endTime - startTime);
@@ -494,7 +518,7 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
         return Array.from(found);
     }
 
-    private beginTrackedEdit(commands: BatchCommand[], snapshot?: Scene3DData): { commit: () => void } {
+    private beginTrackedEdit(commands: BatchCommand[], snapshot?: Scene3DData): { before: Scene3DData; commit: () => void } {
         const history = this.sharedHistory!;
         // The delta ignores the bookkeeping keys, so the copy leaves them out; a batch's rollback copy is reused.
         const before = snapshot ?? snapshotScene(this.sceneData, SCENE_BOOKKEEPING_KEYS);
@@ -506,6 +530,7 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
             ? `${name(first.operator).replace(/^./, c => c.toUpperCase())}${typeof objectId === 'string' ? `: ${objectId}` : ''}`
             : `Agent batch: ${commands.length} operators`;
         return {
+            before,
             commit: () => {
                 const delta = computeSceneDelta(before, this.sceneData, { clone: true, ignoreKeys: SCENE_BOOKKEEPING_KEYS });
                 const live = capture.finish();

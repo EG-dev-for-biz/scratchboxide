@@ -291,7 +291,10 @@ int main() {
         expect(engine.getObject('car-body').material.roughness).toBe(0.12);
         expect(engine.dispatch('sb_set_material_pbr', { objectId: 'car-body', color: 'not-a-colour' }).success).toBe(false);
 
-        // 6. sb_assign_pbr_preset copies the calibrated preset values
+        // 6. sb_assign_pbr_preset copies the calibrated preset values onto a registered material; an unknown id fails
+        expect(engine.dispatch('sb_assign_pbr_preset', { materialId: 'mat-gold', preset: 'polished_gold_24k' }).success).toBe(false);
+        expect(engine.getMaterial('mat-gold')).toBeUndefined();
+        expect(engine.dispatch('sb_create_material', { materialId: 'mat-gold' }).success).toBe(true);
         const presetResult = engine.dispatch('sb_assign_pbr_preset', { materialId: 'mat-gold', preset: 'polished_gold_24k' });
         expect(presetResult.success).toBe(true);
         expect(engine.getMaterial('mat-gold').metalness).toBe(1.0);

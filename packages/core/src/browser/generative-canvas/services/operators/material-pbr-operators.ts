@@ -7,7 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import type { OperatorDefinition } from './types';
+import type { IOperatorContext, OperatorDefinition } from './types';
 import type { Scene3DData } from '../../canvas-types';
 import { readStagedBuild, type StagedSceneData } from '../../primitives/scene3d/stagedBuild/stagedBuildState';
 import { resolveOverrideColor } from '../../primitives/scene3d/overrideColor';
@@ -71,6 +71,26 @@ export function applyStagedMaterialMode(data: Scene3DData, params: { mode?: unkn
     };
 }
 
+/**
+ * The material an operator edits: the named object's material (created empty on the object if it has none), or a
+ * material registered with sb_create_material. An unknown object or material id fails; nothing is invented.
+ */
+function resolveMaterialTarget(ctx: IOperatorContext, operator: string, materialId: string | undefined, objectId: string | undefined): any {
+    let registered: any;
+    if (materialId) {
+        registered = ctx.getMaterial(materialId);
+        if (!registered) throw new Error(`${operator}: no material '${materialId}' is registered; define it with sb_create_material first. Nothing was changed.`);
+    }
+    if (objectId) {
+        const found = ctx.findObject(objectId);
+        if (!found) throw new Error(`${operator}: no object with id "${objectId}" in the scene, so no material was changed.`);
+        if (!found.object.material) found.object.material = {};
+        return found.object.material;
+    }
+    if (!registered) throw new Error(`${operator} needs a materialId (from sb_create_material) or the id of an object whose material to change.`);
+    return registered;
+}
+
 export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_set_staged_material_mode',
@@ -85,7 +105,7 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_create_material',
         category: 'materials_pbr',
-        description: 'Defines and registers a PBR material configuration with microfacet Cook-Torrance and PBR Next extensions.',
+        description: 'Defines and registers a PBR material (color, roughness, metalness, transmission, ior, thickness, clearcoat, emissive, wireframe), optionally starting from a preset, for sb_assign_material and the PBR setters.',
         execute: (ctx, params: {
             materialId?: string;
             name?: string;
@@ -100,16 +120,6 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
             clearcoat?: number;
             clearcoatRoughness?: number;
             thickness?: number;
-            attenuationColor?: number | string;
-            attenuationDistance?: number;
-            sheenColor?: number | string;
-            sheenRoughness?: number;
-            anisotropy?: number;
-            anisotropyRotation?: number;
-            iridescence?: number;
-            iridescenceIor?: number;
-            iridescenceThicknessMin?: number;
-            iridescenceThicknessMax?: number;
             wireframe?: boolean;
             id?: string;
         }) => {
@@ -132,16 +142,6 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
                 clearcoat: params.clearcoat !== undefined ? params.clearcoat : baseMat.clearcoat,
                 clearcoatRoughness: params.clearcoatRoughness !== undefined ? params.clearcoatRoughness : (baseMat.clearcoatRoughness ?? 0.03),
                 thickness: params.thickness !== undefined ? params.thickness : baseMat.thickness,
-                attenuationColor: params.attenuationColor !== undefined ? params.attenuationColor : baseMat.attenuationColor,
-                attenuationDistance: params.attenuationDistance !== undefined ? params.attenuationDistance : baseMat.attenuationDistance,
-                sheenColor: params.sheenColor !== undefined ? params.sheenColor : baseMat.sheenColor,
-                sheenRoughness: params.sheenRoughness !== undefined ? params.sheenRoughness : baseMat.sheenRoughness,
-                anisotropy: params.anisotropy !== undefined ? params.anisotropy : baseMat.anisotropy,
-                anisotropyRotation: params.anisotropyRotation !== undefined ? params.anisotropyRotation : baseMat.anisotropyRotation,
-                iridescence: params.iridescence !== undefined ? params.iridescence : baseMat.iridescence,
-                iridescenceIor: params.iridescenceIor !== undefined ? params.iridescenceIor : baseMat.iridescenceIor,
-                iridescenceThicknessMin: params.iridescenceThicknessMin !== undefined ? params.iridescenceThicknessMin : baseMat.iridescenceThicknessMin,
-                iridescenceThicknessMax: params.iridescenceThicknessMax !== undefined ? params.iridescenceThicknessMax : baseMat.iridescenceThicknessMax,
                 wireframe: params.wireframe || false
             };
 
@@ -180,23 +180,7 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
                 }
             }
 
-            if (params.materialId) {
-                targetMat = ctx.getMaterial(params.materialId);
-            }
-
-            if (params.objectId) {
-                const found = ctx.findObject(params.objectId);
-                if (!found) {
-                    throw new Error(`sb_set_material_pbr: no object with id "${params.objectId}" in the scene, so no material was changed.`);
-                }
-                if (!found.object.material) found.object.material = {};
-                targetMat = found.object.material;
-            }
-
-            if (!targetMat && params.materialId) {
-                targetMat = { id: params.materialId };
-                ctx.registerMaterial(targetMat);
-            }
+            targetMat = resolveMaterialTarget(ctx, 'sb_set_material_pbr', params.materialId, params.objectId);
 
             if (targetMat) {
                 if (params.color !== undefined) targetMat.color = params.color;
@@ -230,20 +214,7 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
         category: 'materials_pbr',
         description: 'Configures dual-layer specular clearcoat lacquer on target material or mesh.',
         execute: (ctx, params: { targetId?: string; materialId?: string; clearcoat: number; clearcoatRoughness?: number }) => {
-            let targetMat: any;
-            if (params.materialId) targetMat = ctx.getMaterial(params.materialId);
-            if (params.targetId) {
-                const found = ctx.findObject(params.targetId);
-                if (found) {
-                    if (!found.object.material) found.object.material = {};
-                    targetMat = found.object.material;
-                }
-            }
-            if (!targetMat && params.materialId) {
-                targetMat = { id: params.materialId };
-                ctx.registerMaterial(targetMat);
-            }
-            if (!targetMat) throw new Error('Target material or object not specified.');
+            const targetMat = resolveMaterialTarget(ctx, 'sb_set_pbr_clearcoat', params.materialId, params.targetId);
 
             targetMat.clearcoat = Math.max(0.0, Math.min(1.0, params.clearcoat));
             if (params.clearcoatRoughness !== undefined) {
@@ -264,19 +235,7 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
             ior?: number;
             thickness?: number;
         }) => {
-            let targetMat: any;
-            if (params.materialId) targetMat = ctx.getMaterial(params.materialId);
-            if (params.targetId) {
-                const found = ctx.findObject(params.targetId);
-                if (!found) throw new Error(`sb_set_pbr_transmission: object '${params.targetId}' not found.`);
-                if (!found.object.material) found.object.material = {};
-                targetMat = found.object.material;
-            }
-            if (!targetMat && params.materialId) {
-                targetMat = { id: params.materialId };
-                ctx.registerMaterial(targetMat);
-            }
-            if (!targetMat) throw new Error('Target material or object not specified.');
+            const targetMat = resolveMaterialTarget(ctx, 'sb_set_pbr_transmission', params.materialId, params.targetId);
 
             targetMat.transmission = Math.max(0.0, Math.min(1.0, params.transmission));
             if (params.ior !== undefined) targetMat.ior = params.ior;
@@ -295,28 +254,7 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
                 throw new Error(`Unknown PBR preset '${params.preset}'. Available presets: ${Object.keys(PBR_PRESETS).join(', ')}`);
             }
 
-            let targetMat: any;
-            if (params.materialId) {
-                targetMat = ctx.getMaterial(params.materialId);
-                if (!targetMat) {
-                    targetMat = { id: params.materialId };
-                    ctx.registerMaterial(targetMat);
-                }
-            }
-
-            if (params.targetId) {
-                const found = ctx.findObject(params.targetId);
-                if (found) {
-                    if (!found.object.material) found.object.material = {};
-                    targetMat = found.object.material;
-                }
-            }
-
-            if (!targetMat) {
-                const matId = `mat-${params.preset}-${Date.now()}`;
-                targetMat = { id: matId };
-                ctx.registerMaterial(targetMat);
-            }
+            const targetMat = resolveMaterialTarget(ctx, 'sb_assign_pbr_preset', params.materialId, params.targetId);
 
             Object.assign(targetMat, JSON.parse(JSON.stringify(presetData)));
 
@@ -334,11 +272,9 @@ export const MATERIAL_PBR_OPERATORS: OperatorDefinition[] = [
             let mat = params.material;
             if (!mat && params.materialId) {
                 mat = ctx.getMaterial(params.materialId);
+                if (!mat) throw new Error(`sb_assign_material: no material '${params.materialId}' is registered; define it with sb_create_material first. Nothing was changed.`);
             }
-
-            if (!mat) {
-                mat = { id: params.materialId, color: 0xcccccc, roughness: 0.5, metalness: 0.0 };
-            }
+            if (!mat) throw new Error('sb_assign_material needs a materialId (from sb_create_material) or a material object.');
 
             found.object.material = JSON.parse(JSON.stringify(mat));
 
