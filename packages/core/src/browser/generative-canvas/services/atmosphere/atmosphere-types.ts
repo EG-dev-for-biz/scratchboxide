@@ -154,7 +154,7 @@ export interface AtmosphericSkyDomeModule {
     diurnalProfile: DiurnalLightingProfile;
     update: (time: number, delta: number) => void;
     setSunCoordinates: (elevationDeg: number, azimuthDeg: number) => void;
-    setTimeOfDay: (timeHours: number, lat?: number, lng?: number) => void;
+    setTimeOfDay: (timeHours: number, lat: number, lng: number) => void;
     setPreset: (preset: TimeOfDayPreset) => void;
     dispose: () => void;
 }

@@ -19,16 +19,16 @@ import {
     type SlopeMaterialStop
 } from '../spatial/SbTerrainGroundEngine';
 import { findViewportMeshes } from './mesh-edit-operators';
+import { instantAtLocalMeanSolarTime } from '../../../../common/coordinate/solarPosition';
 
 /**
  * NOAA sun position at `timeOfDay` hours of local mean solar time (UTC + longitude / 15) on the UTC day of
  * `isoDate` (today when omitted) at the given location.
  */
 export function sunAtLocalSolarTime(latitude: number, longitude: number, timeOfDay: number, isoDate?: string): { elevationDeg: number; azimuthDeg: number } {
-    const date = isoDate ? new Date(isoDate) : new Date();
-    date.setUTCHours(0, 0, 0, 0);
-    date.setTime(date.getTime() + (timeOfDay - longitude / 15) * 3600_000);
-    const sol = calculateNOAASolarPosition(date, latitude, longitude);
+    const day = isoDate ? new Date(isoDate) : new Date();
+    const instant = instantAtLocalMeanSolarTime(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), timeOfDay, longitude);
+    const sol = calculateNOAASolarPosition(instant, latitude, longitude);
     return { elevationDeg: sol.elevationDeg, azimuthDeg: sol.azimuthDeg };
 }
 
@@ -102,7 +102,10 @@ export const NATURE_ATMOSPHERE_OPERATORS: OperatorDefinition[] = [
             let azimuth: number | undefined = params.sunAzimuth;
             const latitude = params.latitude ?? currentAtm.latitude ?? scene.geoAnchor?.lat;
             const longitude = params.longitude ?? currentAtm.longitude ?? scene.geoAnchor?.lng;
-            let timeOfDay: number | undefined = params.timeOfDay;
+            const timeOfDay: number | undefined = params.timeOfDay;
+            if (timeOfDay !== undefined && (params.preset || params.sunElevation !== undefined)) {
+                throw new Error(`sb_set_diurnal_time_of_day: timeOfDay ${timeOfDay} and ${params.preset ? `preset '${params.preset}'` : 'sunElevation'} are two different suns; give one.`);
+            }
 
             if (params.preset) {
                 const presetState = getPresetLightingState(params.preset as any);
@@ -121,7 +124,6 @@ export const NATURE_ATMOSPHERE_OPERATORS: OperatorDefinition[] = [
                 throw new Error('sb_set_diurnal_time_of_day needs sunElevation, a preset, or a location (latitude/longitude, or the scene geoAnchor) with isoDate or timeOfDay: the sun position cannot be derived from a time alone.');
             }
             if (azimuth === undefined) azimuth = currentAtm.sunAzimuth ?? 180.0;
-            if (timeOfDay === undefined) timeOfDay = currentAtm.timeOfDay;
 
             const diurnalProfile = computeDiurnalLightingProfile(elevation);
             const sunDir = getSunVectorFromAngles(elevation, azimuth);
@@ -129,6 +131,7 @@ export const NATURE_ATMOSPHERE_OPERATORS: OperatorDefinition[] = [
             const updatedAtm: any = {
                 ...currentAtm,
                 enabled: currentAtm.enabled ?? true,
+                // Only a time that placed this sun is recorded; an earlier one would now be stale.
                 timeOfDay,
                 sunElevation: elevation,
                 sunAzimuth: azimuth,
