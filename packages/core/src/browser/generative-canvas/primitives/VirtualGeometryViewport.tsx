@@ -15,10 +15,11 @@ import {
     type VirtualGeometryShading,
     type VirtualGeometryStats
 } from '../services/virtual-geometry/VirtualGeometryRenderer';
+import { virtualGeometryLoadPlan } from '../services/virtual-geometry/viewport-source';
 
 export interface VirtualGeometryViewportProps {
     data: Scene3DData;
-    /** Workspace root the source GLB path resolves against. */
+    /** Open workspace: the root the source GLB path resolves against when the scene does not name one. */
     workspacePath?: string;
     onUpdate?: (updated: Scene3DData) => void;
 }
@@ -71,31 +72,34 @@ export const VirtualGeometryViewport: React.FC<VirtualGeometryViewportProps> = (
         update?.({ ...d, virtualGeometry: { ...d.virtualGeometry, ...patch } });
     }, []);
 
-    // A URL this component just built and persisted must not restart the load it came from.
-    const producedUrl = React.useRef<string | null>(null);
-    const source = vg.sbvgUrl && vg.sbvgUrl !== producedUrl.current ? `url:${vg.sbvgUrl}` : `glb:${vg.sourceGlbPath ?? ''}`;
+    const plan = virtualGeometryLoadPlan(vg, workspacePath);
+    // The load restarts only when what it loads from changes (not when the URL it persisted comes back).
+    const source = plan.kind === 'build' ? `glb:${plan.request.workspaceRoot ?? ''}|${plan.request.sourceGlbPath}` : plan.kind === 'url' ? `url:${plan.url}` : 'none';
 
-    // Build (if needed), create the renderer and stream the file. Re-runs only when the source changes.
+    // Build or re-check, create the renderer and stream the file. Re-runs only when the source changes.
     React.useEffect(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
         let cancelled = false;
         let renderer: VirtualGeometryRenderer | null = null;
         let detachStats: (() => void) | null = null;
+        const requests = new AbortController();
+        const current = virtualGeometryLoadPlan(latest.current.data.virtualGeometry, workspacePath);
 
-        const build = async (): Promise<string> => {
-            if (!vg.sourceGlbPath) throw new Error('This scene has no virtual geometry source: set virtualGeometry.sourceGlbPath to a GLB in the workspace.');
+        // The server answers from its cache when the GLB and builder are unchanged, else builds.
+        const build = async (request: { sourceGlbPath: string; workspaceRoot?: string }): Promise<string> => {
             setPhase({ kind: 'building' });
             const res = await fetch('/3d/virtual-geometry/build', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sourceGlbPath: vg.sourceGlbPath, workspaceRoot: workspacePath })
+                body: JSON.stringify(request),
+                signal: requests.signal
             });
             const body = await res.json().catch(() => ({}));
             if (!res.ok || !body.success) throw new Error(body.error || `Virtual geometry build failed (HTTP ${res.status})`);
             const url = body.sbvgUrl as string;
-            if (!cancelled) {
-                producedUrl.current = url;
+            const saved = latest.current.data.virtualGeometry;
+            if (!cancelled && (url !== saved?.sbvgUrl || body.stats)) {
                 persist({
                     sbvgUrl: url,
                     ...(body.stats ? {
@@ -104,7 +108,8 @@ export const VirtualGeometryViewport: React.FC<VirtualGeometryViewportProps> = (
                             clusterCount: body.stats.clusterCount,
                             levelCount: body.stats.levelCount,
                             fileBytes: body.stats.fileBytes,
-                            buildMs: body.buildMs
+                            buildMs: body.buildMs,
+                            skippedPrimitives: body.stats.skippedPrimitives
                         }
                     } : {})
                 });
@@ -114,7 +119,8 @@ export const VirtualGeometryViewport: React.FC<VirtualGeometryViewportProps> = (
 
         (async () => {
             try {
-                let url = source.startsWith('url:') ? source.slice(4) : await build();
+                if (current.kind === 'none') throw new Error('This scene has no virtual geometry source: set virtualGeometry.sourceGlbPath to a GLB in the workspace.');
+                const url = current.kind === 'url' ? current.url : await build(current.request);
                 if (cancelled) return;
                 setPhase({ kind: 'streaming' });
                 renderer = new VirtualGeometryRenderer(canvas, {
@@ -131,12 +137,10 @@ export const VirtualGeometryViewport: React.FC<VirtualGeometryViewportProps> = (
                 try {
                     await renderer.load(url);
                 } catch (err) {
-                    // A saved file that is gone (cleaned build directory) is rebuilt from its source GLB.
-                    if (!(err instanceof VirtualGeometryFetchError && err.status === 404 && source.startsWith('url:') && vg.sourceGlbPath)) throw err;
-                    url = await build();
-                    if (cancelled) return;
-                    setPhase({ kind: 'streaming' });
-                    await renderer.load(url);
+                    if (err instanceof VirtualGeometryFetchError && err.status === 404 && current.kind === 'url') {
+                        throw new Error(`${url} is no longer on the server and this scene has no source GLB to rebuild it from.`);
+                    }
+                    throw err;
                 }
                 if (!cancelled) setPhase({ kind: 'ready' });
             } catch (err: any) {
@@ -146,12 +150,13 @@ export const VirtualGeometryViewport: React.FC<VirtualGeometryViewportProps> = (
 
         return () => {
             cancelled = true;
+            requests.abort();
             detachStats?.();
             renderer?.dispose();
             rendererRef.current = null;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [source, vg.doubleSided, workspacePath]);
+    }, [source, vg.doubleSided]);
 
     // Keep the drawing buffer at the element's device-pixel size.
     React.useEffect(() => {
@@ -214,6 +219,11 @@ export const VirtualGeometryViewport: React.FC<VirtualGeometryViewportProps> = (
                     <div>Clusters drawn: {fmt(stats.visibleClusters)} of {fmt(stats.clusterCount)} · {stats.drawCalls} draw call</div>
                     <div>{stats.fps.toFixed(0)} fps{stats.gpuCullMs !== null ? ` · GPU cull ${stats.gpuCullMs.toFixed(2)} ms · draw ${stats.gpuDrawMs!.toFixed(2)} ms` : ' · GPU timing unavailable on this adapter'}</div>
                     <div>Streamed {stats.loadedLevels}/{stats.levelCount} levels · {mb(stats.bytesReceived)} of {mb(stats.bytesTotal)}</div>
+                    {stats.skippedPrimitives > 0 && (
+                        <div style={{ color: '#fcd34d' }} data-testid="virtual-geometry-skipped">
+                            {fmt(stats.skippedPrimitives)} source primitive{stats.skippedPrimitives === 1 ? '' : 's'} without a surface (points, lines or no POSITION) not shown
+                        </div>
+                    )}
                 </div>
             )}
 

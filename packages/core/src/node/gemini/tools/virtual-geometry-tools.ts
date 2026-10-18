@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import * as fs from 'fs';
+import * as path from 'path';
 import type { CanvasArtifact, Scene3DData } from '../../../browser/generative-canvas/canvas-types';
 import type { ToolDeclaration, ToolHandler } from './types';
 import { getVirtualGeometryBuildService, VirtualGeometryBuildError } from '../../3d-engine/virtual-geometry-service';
@@ -46,11 +47,16 @@ export const virtualGeometryHandlers: Record<string, ToolHandler> = {
 
         let built;
         try {
-            built = await getVirtualGeometryBuildService().buildServed(file);
+            built = await getVirtualGeometryBuildService().buildServed(file, { signal: ctx.signal });
         } catch (err) {
             if (err instanceof VirtualGeometryBuildError) return fail(err.message);
             throw err;
         }
+        // Stored relative to the root it was resolved against, with that root, so the viewport's rebuild
+        // request resolves the same file whatever workspace the canvas has open.
+        const workspaceRoot = path.resolve(ctx.workspaceRoot);
+        // resolveWithinRoot returns the real path; compare against the root's real path (macOS /var -> /private/var).
+        const sourceGlbPath = path.relative(fs.realpathSync(workspaceRoot), fs.realpathSync(file)).split(path.sep).join('/');
 
         const title = (typeof args.title === 'string' && args.title.trim()) || `${glbPath.split(/[\\/]/).pop()} (virtual geometry)`;
         const threshold = typeof args.errorThresholdPx === 'number' && args.errorThresholdPx > 0 ? args.errorThresholdPx : undefined;
@@ -58,7 +64,8 @@ export const virtualGeometryHandlers: Record<string, ToolHandler> = {
             title,
             environment: { skybox: 'studio', lighting: 'studio', ground: false },
             virtualGeometry: {
-                sourceGlbPath: glbPath,
+                sourceGlbPath,
+                workspaceRoot,
                 sbvgUrl: built.sbvgUrl,
                 ...(threshold ? { errorThresholdPx: threshold } : {}),
                 ...(args.doubleSided === true ? { doubleSided: true } : {}),
@@ -68,7 +75,8 @@ export const virtualGeometryHandlers: Record<string, ToolHandler> = {
                         clusterCount: built.stats.clusterCount,
                         levelCount: built.stats.levelCount,
                         fileBytes: built.stats.fileBytes,
-                        buildMs: built.buildMs ?? 0
+                        buildMs: built.buildMs ?? 0,
+                        skippedPrimitives: built.summary.skippedPrimitives
                     }
                 } : {})
             }
@@ -82,13 +90,15 @@ export const virtualGeometryHandlers: Record<string, ToolHandler> = {
             createdAt: new Date().toISOString(),
             version: 1
         };
-        const s = built.stats;
-        const detail = s
-            ? `${s.sourceTriangles.toLocaleString()} triangles -> ${s.clusterCount.toLocaleString()} clusters in ${s.levelCount} LOD levels (${(s.fileBytes / 1048576).toFixed(1)} MB), built in ${((built.buildMs ?? 0) / 1000).toFixed(1)} s`
-            : 'reused the existing build for this GLB';
+        const s = built.summary;
+        const detail = `${s.sourceTriangles.toLocaleString()} triangles -> ${s.clusterCount.toLocaleString()} clusters in ${s.levelCount} LOD levels (${(s.fileBytes / 1048576).toFixed(1)} MB), `
+            + (built.cached ? 'reused the existing build for this GLB' : `built in ${((built.buildMs ?? 0) / 1000).toFixed(1)} s`);
+        const skipped = s.skippedPrimitives > 0
+            ? ` ${s.skippedPrimitives} primitive${s.skippedPrimitives === 1 ? '' : 's'} without a surface (points, lines or no POSITION) ${s.skippedPrimitives === 1 ? 'was' : 'were'} left out.`
+            : '';
         return {
-            resultPayload: { status: 'success', artifact, sbvgUrl: built.sbvgUrl, cached: built.cached, stats: built.stats },
-            summaryResult: `Opened ${glbPath} in the virtual geometry viewport: ${detail}.`
+            resultPayload: { status: 'success', artifact, sbvgUrl: built.sbvgUrl, cached: built.cached, summary: built.summary, stats: built.stats },
+            summaryResult: `Opened ${sourceGlbPath} in the virtual geometry viewport: ${detail}.${skipped}`
         };
     }
 };

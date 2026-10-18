@@ -27,6 +27,7 @@
  * timestamp queries where the adapter supports them; nothing is estimated.
  */
 
+import type { ClusterSelectionParams } from './cluster-selection';
 import {
     parseSbvgHeader,
     sbvgHeaderBytesNeeded,
@@ -69,6 +70,8 @@ export interface VirtualGeometryStats {
     visibleTriangles: number;
     /** Triangles of the full-detail mesh. */
     leafTriangles: number;
+    /** Source primitives the builder left out (points, lines, no POSITION). */
+    skippedPrimitives: number;
     levelCount: number;
     loadedLevels: number;
     /** Finest level resident on the GPU (0 = full detail). */
@@ -128,6 +131,7 @@ struct DrawArgs {
 @group(0) @binding(2) var<storage, read_write> draw: DrawArgs;
 @group(0) @binding(3) var<storage, read_write> visible: array<u32>;
 
+// Same rule as projectedLodError / clusterSelected in cluster-selection.ts (the CPU copy the tests compare against).
 fn projectedError(sphere: vec4<f32>, err: f32) -> f32 {
     if (err <= 0.0) { return 0.0; }
     if (err >= 1.0e37) { return 1.0e30; }
@@ -308,6 +312,7 @@ export class VirtualGeometryRenderer {
     private stats: VirtualGeometryStats;
     private listeners: Array<(s: VirtualGeometryStats) => void> = [];
     private detachInput: (() => void) | null = null;
+    private lastSelection: ClusterSelectionParams | null = null;
 
     constructor(canvas: HTMLCanvasElement, options: VirtualGeometryRendererOptions = {}) {
         this.canvas = canvas;
@@ -321,7 +326,7 @@ export class VirtualGeometryRenderer {
         };
         this.stats = {
             adapter: 'unknown', fps: 0, cpuFrameMs: 0, gpuCullMs: null, gpuDrawMs: null, drawCalls: 0,
-            clusterCount: 0, loadedClusters: 0, visibleClusters: 0, visibleTriangles: 0, leafTriangles: 0,
+            clusterCount: 0, loadedClusters: 0, visibleClusters: 0, visibleTriangles: 0, leafTriangles: 0, skippedPrimitives: 0,
             levelCount: 0, loadedLevels: 0, finestLoadedLevel: 0, bytesReceived: 0, bytesTotal: 0,
             errorThresholdPx: this.options.errorThresholdPx
         };
@@ -468,7 +473,7 @@ export class VirtualGeometryRenderer {
         this.vertexBuffer = make(sizes.vertices);
         this.refBuffer = make(sizes.refs);
         this.triangleBuffer = make(sizes.triangles);
-        this.visibleBuffer = make(header.clusterCount * 4);
+        this.visibleBuffer = this.device.createBuffer({ size: Math.max(16, header.clusterCount * 4), usage: BUFFER_STORAGE | BUFFER_COPY_DST | BUFFER_COPY_SRC });
         this.header = header;
 
         this.cullBindGroup = this.device.createBindGroup({
@@ -494,6 +499,7 @@ export class VirtualGeometryRenderer {
         this.frameModel(header);
         this.stats.clusterCount = header.clusterCount;
         this.stats.leafTriangles = header.leafTriangleCount;
+        this.stats.skippedPrimitives = header.skippedPrimitives;
         this.stats.levelCount = header.levelCount;
         this.stats.bytesTotal = header.fileBytes;
     }
@@ -716,6 +722,32 @@ export class VirtualGeometryRenderer {
         return { ...this.stats };
     }
 
+    /** LOD selection inputs of the last frame (as float32 on the GPU), for checking the GPU's choice on the CPU. */
+    getSelectionParams(): ClusterSelectionParams | null {
+        return this.lastSelection ? { ...this.lastSelection, eye: [...this.lastSelection.eye] } : null;
+    }
+
+    /** Indices of the clusters the last frame's cull pass selected, ascending. Diagnostic: maps GPU memory. */
+    async readVisibleClusters(): Promise<number[]> {
+        if (!this.device || !this.visibleBuffer || !this.header) return [];
+        const bytes = Math.max(16, this.header.clusterCount * 4);
+        const countRead = this.device.createBuffer({ size: 16, usage: BUFFER_MAP_READ | BUFFER_COPY_DST });
+        const listRead = this.device.createBuffer({ size: bytes, usage: BUFFER_MAP_READ | BUFFER_COPY_DST });
+        const encoder = this.device.createCommandEncoder();
+        encoder.copyBufferToBuffer(this.drawBuffer, 0, countRead, 0, 16);
+        encoder.copyBufferToBuffer(this.visibleBuffer, 0, listRead, 0, bytes);
+        this.device.queue.submit([encoder.finish()]);
+        try {
+            await Promise.all([countRead.mapAsync(MAP_MODE_READ), listRead.mapAsync(MAP_MODE_READ)]);
+            const count = new Uint32Array(countRead.getMappedRange().slice(0))[1];
+            const list = Array.from(new Uint32Array(listRead.getMappedRange().slice(0)).subarray(0, count));
+            return list.sort((a, b) => a - b);
+        } finally {
+            countRead.destroy();
+            listRead.destroy();
+        }
+    }
+
     /** Forces the next frame to read back GPU statistics. */
     requestStats() {
         this.framesSinceStats = Number.MAX_SAFE_INTEGER;
@@ -810,6 +842,7 @@ export class VirtualGeometryRenderer {
         });
         const lodScale = this.canvas.height / (2 * Math.tan(this.camera.fovY / 2));
         data.set([lodScale, this.options.errorThresholdPx, near, 0], 44);
+        this.lastSelection = { eye: [eye[0], eye[1], eye[2]], lodScale, near, thresholdPx: this.options.errorThresholdPx, finestLevel: this.finestLoadedLevel };
         const flags = (this.options.frustumCulling ? 1 : 0) | (this.options.coneCulling && !this.options.doubleSided ? 2 : 0);
         new Uint32Array(data.buffer).set([this.loadedClusters, this.finestLoadedLevel, flags, SHADING_CODE[this.options.shading]], 48);
         this.device.queue.writeBuffer(this.uniformBuffer, 0, data);

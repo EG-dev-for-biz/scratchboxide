@@ -17,9 +17,11 @@ import { RouteContext } from './types';
 
 /**
  * POST /build  { sourceGlbPath, workspaceRoot? } | { glbBase64 }
- *   Builds (or reuses) the cluster LOD DAG for a GLB. Files are keyed by the GLB's content hash, so
- *   the same model is built once and its URL is stable.
- *   -> { success, sbvgUrl, cached, stats?, buildMs? }
+ *   Builds (or reuses) the cluster LOD DAG for a GLB. Files are keyed by the GLB's content hash and the
+ *   builder's hash, so the same model is built once per builder and a changed GLB gets a new URL. The
+ *   viewport calls this every time it opens a scene with a source, so a stale saved URL is replaced.
+ *   A client that disconnects stops the build.
+ *   -> { success, sbvgUrl, cached, summary, stats?, buildMs? }
  */
 export function createVirtualGeometryRouter(service: VirtualGeometryBuildService, ctx: RouteContext): Router {
     const router = Router();
@@ -27,6 +29,8 @@ export function createVirtualGeometryRouter(service: VirtualGeometryBuildService
     router.post('/build', async (req: Request, res: Response) => {
         const body = req.body || {};
         let tmpDir: string | undefined;
+        const disconnected = new AbortController();
+        res.on('close', () => { if (!res.writableFinished) disconnected.abort(); });
         try {
             let glbPath: string;
             if (typeof body.glbBase64 === 'string' && body.glbBase64.length > 0) {
@@ -49,9 +53,10 @@ export function createVirtualGeometryRouter(service: VirtualGeometryBuildService
                 res.status(400).json({ success: false, error: 'Send sourceGlbPath (inside the workspace) or glbBase64' });
                 return;
             }
-            const { sbvgUrl, cached, stats, buildMs } = await service.buildServed(glbPath);
-            res.json({ success: true, sbvgUrl, cached, stats, buildMs });
+            const { sbvgUrl, cached, summary, stats, buildMs } = await service.buildServed(glbPath, { signal: disconnected.signal });
+            res.json({ success: true, sbvgUrl, cached, summary, stats, buildMs });
         } catch (err) {
+            if ((err as Error)?.name === 'AbortError') return; // the client is gone
             if (err instanceof VirtualGeometryBuildError) {
                 res.status(422).json({ success: false, error: err.message, output: err.output });
                 return;

@@ -1011,8 +1011,10 @@ export interface Scene3DData {
      * picks per-cluster detail every frame. For meshes too heavy for the regular viewport.
      */
     virtualGeometry?: {
-        /** GLB to build from, inside the workspace root (relative paths resolve against it). */
+        /** GLB to build from, relative to workspaceRoot (or to the open workspace when workspaceRoot is unset). */
         sourceGlbPath?: string;
+        /** Absolute workspace root sourceGlbPath is relative to (set by virtual_geometry_open_glb). */
+        workspaceRoot?: string;
         /** Built file, served by the app (e.g. /build/3d-virtual-geometry/<hash>.sbvg). Set after a build. */
         sbvgUrl?: string;
         /** Allowed screen-space geometric error in pixels (default 1). */
@@ -1026,6 +1028,8 @@ export interface Scene3DData {
             levelCount: number;
             fileBytes: number;
             buildMs: number;
+            /** Source primitives left out of the build (points, lines, no POSITION). */
+            skippedPrimitives?: number;
         };
     };
     shaders?: Record<string, {
