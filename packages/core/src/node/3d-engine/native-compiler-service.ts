@@ -13,7 +13,7 @@ import * as path from 'path';
 import { resolveWithinRoot } from '../security/path-guard';
 import { buildScrubbedEnv } from '../security/sandbox-policy';
 import * as crypto from 'crypto';
-import { exec, execFile } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import type {
     CompilationAsset,
@@ -22,11 +22,21 @@ import type {
     CppExecutionResult,
     Streamed3DChunk
 } from '../../common/3d-engine-protocol';
+import {
+    compileNativeCached,
+    compilerIdentity,
+    hashIncludeClosure,
+    NativeBuildError,
+    placeCachedBinary,
+    type NativeCompileResult,
+    type NativeCompileSpec
+} from './native-build-cache';
 
-const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 
 const pchBuilds = new Map<string, Promise<boolean>>();
+/** PCHs clang rejected (another target, or inputs changed under it): compiles in this process go without them. */
+const rejectedPchs = new Set<string>();
 
 /**
  * Environment for executing generated binaries: the sandbox allowlist (PATH, HOME, TMPDIR, ...)
@@ -95,24 +105,26 @@ export class NativeCppCompilerService {
     }
 
     /**
-     * Path of the Scratchbox C++20 precompiled header, keyed by compiler and every SDK header's mtime/size
-     * so any header edit yields a fresh PCH instead of a stale one.
+     * Path of the Scratchbox C++20 precompiled header, keyed by the compiler identity and the content, size and mtime
+     * of scratchbox_engine.hpp and every header it includes (recursively): any header edit yields a fresh PCH, and so
+     * does a touch, because clang rejects a PCH whose inputs' mtimes changed.
      */
     getPchPath(): string {
         const hasher = crypto.createHash('sha256')
-            .update(this.compilerBinary)
             .update(process.platform)
             .update(process.arch)
             .update(this.sdkIncludePath);
+        const headerPath = path.join(this.sdkIncludePath, 'scratchbox_engine.hpp');
         try {
-            for (const hFile of fs.readdirSync(this.sdkIncludePath).sort()) {
-                if (hFile.endsWith('.hpp') || hFile.endsWith('.h')) {
-                    const stat = fs.statSync(path.join(this.sdkIncludePath, hFile));
-                    hasher.update(`${hFile}:${stat.mtimeMs}:${stat.size}`);
-                }
+            hasher.update(compilerIdentity(this.compilerBinary));
+            const closure = hashIncludeClosure({ file: headerPath }, [this.sdkIncludePath]);
+            hasher.update(closure.hash);
+            for (const f of [headerPath, ...closure.files]) {
+                const st = fs.statSync(f);
+                hasher.update(`${f}:${st.size}:${st.mtimeMs}`);
             }
         } catch {
-            // Missing include dir: the PCH simply never validates.
+            // Missing header or compiler: the PCH build fails and compiles go without it.
         }
         return path.join(os.tmpdir(), 'scratchbox-native-pch', `scratchbox_engine_${hasher.digest('hex').slice(0, 24)}.pch`);
     }
@@ -185,6 +197,13 @@ export class NativeCppCompilerService {
 
     /**
      * Compile a standalone C++20 source string against the Scratchbox native 3D engine SDK headers.
+     *
+     * Builds go through the shared native build cache (native-build-cache.ts): keyed on the content of the source and
+     * of every header it includes, the flags and the compiler, shared across processes, never rewritten once built.
+     * The binary is placed at `<outputDir>/<outputBinaryName>` (a hard link to the cache entry), so a cache hit
+     * writes nothing but that link. Assets are staged in outputDir (each written to a temp name and renamed); without
+     * an explicit outputDir a call with assets gets its own directory, so concurrent calls never overwrite each
+     * other's assets.
      */
     async compileSource(
         sourceCode: string,
@@ -197,173 +216,94 @@ export class NativeCppCompilerService {
         } = {}
     ): Promise<CppCompilationResult> {
         const startTime = Date.now();
-        const outputDir = options.outputDir || path.resolve(process.cwd(), 'build/3d-native');
-        if (!fs.existsSync(outputDir)) {
-            fs.mkdirSync(outputDir, { recursive: true });
-        }
-
-        // Stage external assets (e.g., downloaded photorealistic 3D tile GLBs or geodetic anchors)
-        if (options.assets && options.assets.length > 0) {
-            for (const asset of options.assets) {
-                // Asset names come from request bodies and tool args: keep them inside outputDir.
-                const assetPath = resolveWithinRoot(outputDir, asset.name);
-                if (typeof asset.content === 'string') {
-                    if (asset.encoding === 'base64') {
-                        fs.writeFileSync(assetPath, Buffer.from(asset.content, 'base64'));
-                    } else {
-                        fs.writeFileSync(assetPath, asset.content, 'utf8');
-                    }
-                } else if (asset.content instanceof Uint8Array) {
-                    fs.writeFileSync(assetPath, Buffer.from(asset.content));
-                }
-            }
-        }
-
         const randSuffix = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         const binName = options.outputBinaryName || `generator_${randSuffix}`;
-        const sourcePath = path.join(outputDir, `${binName}.cpp`);
+        const baseDir = path.resolve(process.cwd(), 'build/3d-native');
+        const hasAssets = Boolean(options.assets && options.assets.length > 0);
+        const outputDir = options.outputDir || (hasAssets ? path.join(baseDir, 'runs', binName) : baseDir);
+        fs.mkdirSync(outputDir, { recursive: true });
+
+        // Stage external assets (e.g., downloaded photorealistic 3D tile GLBs or geodetic anchors)
+        for (const asset of options.assets ?? []) {
+            // Asset names come from request bodies and tool args: keep them inside outputDir.
+            const assetPath = resolveWithinRoot(outputDir, asset.name);
+            let bytes: Buffer | undefined;
+            if (typeof asset.content === 'string') {
+                bytes = asset.encoding === 'base64' ? Buffer.from(asset.content, 'base64') : Buffer.from(asset.content, 'utf8');
+            } else if (asset.content instanceof Uint8Array) {
+                bytes = Buffer.from(asset.content);
+            }
+            if (bytes) {
+                fs.mkdirSync(path.dirname(assetPath), { recursive: true });
+                const tmp = `${assetPath}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+                fs.writeFileSync(tmp, bytes);
+                fs.renameSync(tmp, assetPath);
+            }
+        }
+
         const binaryPath = path.join(outputDir, binName);
-
-        fs.writeFileSync(sourcePath, sourceCode, 'utf8');
-
         const optFlag = options.optimization || '-O3';
         const extraFlags = options.extraFlags || [];
-
-        // The PCH is built at -O3; -O0 would trip clang's __OPTIMIZE__ PCH mismatch check.
-        const pchPath = this.getPchPath();
-        const usePch = optFlag !== '-O0' && await this.ensurePrecompiledHeader();
-
-        // High-performance compilation cache: SHA-256 binary replay with SDK header mtime validation
-        const cacheDir = path.join(outputDir, '.cache');
-        if (!fs.existsSync(cacheDir)) {
-            fs.mkdirSync(cacheDir, { recursive: true });
-        }
-        const hasher = crypto.createHash('sha256')
-            .update(sourceCode)
-            .update(optFlag)
-            .update(extraFlags.join(' '))
-            .update(this.sdkIncludePath)
-            .update(usePch ? `pch:${pchPath}` : 'no-pch');
-
-        try {
-            if (fs.existsSync(this.sdkIncludePath)) {
-                const headerFiles = fs.readdirSync(this.sdkIncludePath);
-                for (const hFile of headerFiles) {
-                    if (hFile.endsWith('.hpp') || hFile.endsWith('.h')) {
-                        const stat = fs.statSync(path.join(this.sdkIncludePath, hFile));
-                        hasher.update(`${hFile}:${stat.mtimeMs}:${stat.size}`);
-                    }
-                }
-            }
-        } catch {
-            // Non-fatal if header stat fails
-        }
-
-        const sourceHash = hasher.digest('hex');
-        const cachedBinaryPath = path.join(cacheDir, `bin_${sourceHash}`);
-
-        if (fs.existsSync(cachedBinaryPath)) {
-            return {
-                success: true,
-                binaryPath: cachedBinaryPath,
-                diagnostics: [],
-                compilerOutput: 'Hit compilation cache (0ms)',
-                compilationTimeMs: Date.now() - startTime
-            };
-        }
-
-        // Construct argument vector for execFile (zero shell expansion)
-        const compileArgs = [
-            '-std=c++20',
-            optFlag,
-            `-I${this.sdkIncludePath}`
-        ];
-
+        // -l / -L arguments are linker inputs: they go after the source.
+        const libs = extraFlags.filter(f => /^-[lL]/.test(f));
+        const flags = ['-std=c++20', optFlag, ...extraFlags.filter(f => !/^-[lL]/.test(f))];
         if (process.platform === 'darwin') {
             const macSdk = '/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk';
             if (fs.existsSync(macSdk)) {
-                compileArgs.push('-isysroot', macSdk);
+                flags.push('-isysroot', macSdk);
             }
         }
 
-        if (usePch) {
-            compileArgs.push('-include-pch', pchPath);
-        }
+        // The PCH is built at -O3; -O0 would trip clang's __OPTIMIZE__ PCH mismatch check.
+        const usePch = optFlag !== '-O0' && !rejectedPchs.has(this.getPchPath()) && await this.ensurePrecompiledHeader();
+        const spec: NativeCompileSpec = {
+            sourceCode,
+            sourceDir: outputDir,
+            includeDirs: [this.sdkIncludePath],
+            flags,
+            libs,
+            pchPath: usePch ? this.getPchPath() : undefined,
+            name: binName,
+            compiler: this.compilerBinary,
+            timeoutMs: 180000
+        };
 
-        if (extraFlags.length > 0) {
-            compileArgs.push(...extraFlags);
-        }
-
-        compileArgs.push('-o', binaryPath, sourcePath);
-
-        try {
-            const { stdout, stderr } = await execFileAsync(this.compilerBinary, compileArgs, {
-                cwd: outputDir,
-                timeout: 180000,
-                maxBuffer: 32 * 1024 * 1024
-            });
-
-            // Populate compilation cache for instant replay
-            try {
-                fs.copyFileSync(binaryPath, cachedBinaryPath);
-            } catch {
-                // Non-fatal cache write error
-            }
-
-            const diagnostics = this.parseDiagnostics(stderr);
+        const finish = (result: NativeCompileResult): CppCompilationResult => {
+            placeCachedBinary(result.binaryPath, binaryPath);
             return {
                 success: true,
                 binaryPath,
-                diagnostics,
-                compilerOutput: stderr || stdout,
+                cacheHit: result.cacheHit,
+                diagnostics: this.parseDiagnostics(result.compilerOutput),
+                compilerOutput: result.cacheHit ? `Hit compilation cache (${result.key})` : result.compilerOutput,
                 compilationTimeMs: Date.now() - startTime
             };
-        } catch (err: any) {
-            const initialStderr = err.stderr || '';
-
-            // Automatic fallback if PCH had mismatched target/architecture
-            if (usePch && /precompiled|PCH/i.test(initialStderr)) {
-                try {
-                    const fallbackArgs = compileArgs.filter((arg, idx) => arg !== '-include-pch' && compileArgs[idx - 1] !== '-include-pch');
-                    const { stdout, stderr } = await execFileAsync(this.compilerBinary, fallbackArgs, {
-                        cwd: outputDir,
-                        timeout: 180000,
-                        maxBuffer: 32 * 1024 * 1024
-                    });
-
-                    try {
-                        fs.copyFileSync(binaryPath, cachedBinaryPath);
-                    } catch {
-                        // Non-fatal
-                    }
-
-                    return {
-                        success: true,
-                        binaryPath,
-                        diagnostics: this.parseDiagnostics(stderr),
-                        compilerOutput: stderr || stdout,
-                        compilationTimeMs: Date.now() - startTime
-                    };
-                } catch (fallbackErr: any) {
-                    const combined = (fallbackErr.stderr || '') + '\n' + (fallbackErr.stdout || '') + '\n' + (fallbackErr.message || '');
-                    return {
-                        success: false,
-                        diagnostics: this.parseDiagnostics(combined),
-                        compilerOutput: combined.trim(),
-                        compilationTimeMs: Date.now() - startTime
-                    };
-                }
-            }
-
-            const combinedOutput = (err.stderr || '') + '\n' + (err.stdout || '') + '\n' + (err.message || '');
-            const diagnostics = this.parseDiagnostics(combinedOutput);
-
+        };
+        const failure = (err: unknown): CppCompilationResult => {
+            const combined = err instanceof NativeBuildError ? (err.compilerOutput || err.message) : String((err as Error)?.message ?? err);
             return {
                 success: false,
-                diagnostics,
-                compilerOutput: combinedOutput.trim(),
+                diagnostics: this.parseDiagnostics(combined),
+                compilerOutput: combined.trim(),
                 compilationTimeMs: Date.now() - startTime
             };
+        };
+
+        try {
+            return finish(await compileNativeCached(spec));
+        } catch (err) {
+            // A PCH from another target/architecture is rejected by clang: compile the same source without it.
+            const output = err instanceof NativeBuildError ? err.compilerOutput : '';
+            if (usePch && /precompiled|PCH/i.test(output)) {
+                // not offered again in this process, so later compiles do not each pay for a failed attempt
+                rejectedPchs.add(spec.pchPath!);
+                try {
+                    return finish(await compileNativeCached({ ...spec, pchPath: undefined }));
+                } catch (retryErr) {
+                    return failure(retryErr);
+                }
+            }
+            return failure(err);
         }
     }
 

@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -44,6 +45,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -1273,6 +1275,45 @@ struct AgdField {
     int samples{0};
 };
 
+/**
+ * Lowers `nearest` to the geodesic distance from `source` wherever that is smaller, exploring only those vertices.
+ * Exact, not approximate: a vertex whose distance from `source` is not below its `nearest` cannot lie on the shortest
+ * path to one whose distance is (float addition of non-negative lengths is monotone), so the vertices it updates get
+ * the same float distances a full Dijkstra from `source` computes.
+ */
+inline void lowerNearest(const WeldedGraph& g, uint32_t source, std::vector<float>& nearest, std::vector<float>& dist, std::vector<uint32_t>& touched) {
+    using Item = std::pair<float, uint32_t>;
+    std::priority_queue<Item, std::vector<Item>, std::greater<Item>> heap;
+    touched.clear();
+    dist[source] = 0.0f;
+    touched.push_back(source);
+    heap.push({0.0f, source});
+    while (!heap.empty()) {
+        auto [d, v] = heap.top();
+        heap.pop();
+        if (d > dist[v]) continue;
+        for (uint32_t e = g.adjOffset[v]; e < g.adjOffset[v + 1]; ++e) {
+            uint32_t u = g.adjVertex[e];
+            float nd = d + g.adjLength[e];
+            if (nd < dist[u] && nd < nearest[u]) {
+                if (dist[u] == kInf) touched.push_back(u);
+                dist[u] = nd;
+                heap.push({nd, u});
+            }
+        }
+    }
+    for (uint32_t v : touched) {
+        nearest[v] = std::min(nearest[v], dist[v]);
+        dist[v] = kInf;
+    }
+}
+
+/**
+ * Average geodesic distance from `samples` farthest-point sources. The sources are chosen one after another (each is
+ * the vertex farthest from all before it), with each step exploring only the region the new source is nearest to;
+ * the full distance fields of the sources, which every vertex sums, are then computed in parallel and added in source
+ * order, so the field and diameter are the same as running the searches one by one.
+ */
 inline AgdField computeAgd(const WeldedGraph& g, int samples) {
     AgdField f;
     const auto& main = g.mainVertices;
@@ -1285,15 +1326,40 @@ inline AgdField computeAgd(const WeldedGraph& g, int samples) {
     };
     uint32_t source = argmax(dist);
     f.samples = std::min<int>(samples, static_cast<int>(main.size()));
-    std::vector<double> sum(g.size(), 0.0);
-    std::vector<float> nearest(g.size(), kInf);
-    for (int s = 0; s < f.samples; ++s) {
-        f.diameter = std::max(f.diameter, Geodesics::run(g, {source}, dist));
-        for (uint32_t v : main) {
-            sum[v] += dist[v];
-            nearest[v] = std::min(nearest[v], dist[v]);
+
+    // 1. the farthest-point sources, in order
+    std::vector<uint32_t> sources;
+    sources.reserve(static_cast<size_t>(std::max(f.samples, 0)));
+    {
+        std::vector<float> nearest(g.size(), kInf), scratch(g.size(), kInf);
+        std::vector<uint32_t> touched;
+        for (int s = 0; s < f.samples; ++s) {
+            sources.push_back(source);
+            lowerNearest(g, source, nearest, scratch, touched);
+            source = argmax(nearest);
         }
-        source = argmax(nearest);
+    }
+
+    // 2. their full distance fields, a batch in parallel, summed in source order
+    std::vector<double> sum(g.size(), 0.0);
+    const size_t threads = std::max<size_t>(1, std::min<size_t>(16, std::thread::hardware_concurrency()));
+    const size_t batch = std::min(threads, std::max<size_t>(1, sources.size()));
+    std::vector<std::vector<float>> fields(batch);
+    std::vector<float> reach(batch, 0.0f);
+    for (size_t first = 0; first < sources.size(); first += batch) {
+        const size_t count = std::min(batch, sources.size() - first);
+        std::atomic<size_t> next{0};
+        auto work = [&] {
+            for (size_t i; (i = next.fetch_add(1)) < count;) reach[i] = Geodesics::run(g, {sources[first + i]}, fields[i]);
+        };
+        std::vector<std::thread> pool;
+        for (size_t t = 1; t < count; ++t) pool.emplace_back(work);
+        work();
+        for (auto& t : pool) t.join();
+        for (size_t i = 0; i < count; ++i) {
+            f.diameter = std::max(f.diameter, reach[i]);
+            for (uint32_t v : main) sum[v] += fields[i][v];
+        }
     }
     f.value.assign(g.size(), -1.0f);
     double lo = std::numeric_limits<double>::max(), hi = std::numeric_limits<double>::lowest();

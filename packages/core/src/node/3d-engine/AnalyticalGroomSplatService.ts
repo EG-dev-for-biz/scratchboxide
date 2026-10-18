@@ -10,6 +10,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { NativeCppCompilerService } from './native-compiler-service';
+import { compileNativeCached, defaultNativeFlags, type NativeCompileResult } from './native-build-cache';
 import { MissingInputError } from '../../common/errors/pipeline-errors';
 import type {
     AnalyticalGroomContract,
@@ -26,6 +27,89 @@ export interface AnalyticalGroomDescriptors {
     groom?: ContinuousGroomDescriptor;
     splat?: ContinuousSplatOptions;
 }
+
+/**
+ * The groom generator: one binary for every groom. argv: spz ply glb('' for none) guideCount strandCount
+ * segmentsPerStrand length rootWidth tipWidth clumping curlRadius curlFrequency waveFrequency waveAmplitude eumelanin
+ * pheomelanin centerX centerY centerZ baseRadius harmonicFrequency harmonicAmplitude axialTaper baseR baseG baseB
+ * tipR tipG tipB scaleMultiplier opacity (a colour of -1 -1 -1 means none).
+ */
+const GROOM_GENERATOR_SOURCE = `#include <cstdlib>
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <string>
+#include "scratchbox_hair.hpp"
+#include "scratchbox_spz.hpp"
+#include "scratchbox_io.hpp"
+
+using namespace scratchbox;
+
+int main(int argc, char** argv) {
+    if (argc < 32) {
+        std::cerr << "analytical_groom: expected 31 arguments, got " << (argc - 1) << std::endl;
+        return 2;
+    }
+    auto f = [&](int i) { return std::strtof(argv[i], nullptr); };
+    auto n = [&](int i) { return std::atoi(argv[i]); };
+    const std::string spzPath = argv[1];
+    const std::string plyPath = argv[2];
+    const std::string glbPath = argv[3];
+    std::cout << "[AnalyticalGroomSplat] Initializing biophysical hair grooming..." << std::endl;
+
+    hair::HairGroomConfig config;
+    config.guideCount = n(4);
+    config.strandCount = n(5);
+    config.segmentsPerStrand = n(6);
+    config.length = f(7);
+    config.rootWidth = f(8);
+    config.tipWidth = f(9);
+    config.clumping = f(10);
+    config.curlRadius = f(11);
+    config.curlFrequency = f(12);
+    config.waveFrequency = f(13);
+    config.waveAmplitude = f(14);
+    config.eumelanin = f(15);
+    config.pheomelanin = f(16);
+
+    math::Vec3 center(f(17), f(18), f(19));
+    float baseRadius = f(20);
+    int harmonicFrequency = n(21);
+    float harmonicAmplitude = f(22);
+    float axialTaper = f(23);
+
+    auto guides = hair::HairGroomer::generateHarmonicGuides(
+        center, baseRadius, harmonicFrequency, harmonicAmplitude, config, axialTaper
+    );
+
+    auto strands = hair::HairGroomer::synthesizeDenseStrands(guides, config);
+
+    math::Vec3 customBaseColor(f(24), f(25), f(26));
+    math::Vec3 customTipColor(f(27), f(28), f(29));
+
+    float scaleMultiplier = f(30);
+    float baseOpacity = f(31);
+
+    auto splats = hair::HairSplatBuilder::buildStrandSplats(
+        strands, scaleMultiplier, baseOpacity, customBaseColor, customTipColor
+    );
+
+    hair::HairSplatBuilder::saveToSpzFile(spzPath, splats);
+    hair::HairSplatBuilder::saveToPlyFile(plyPath, splats);
+
+    if (!glbPath.empty()) {
+        // Also build surfel mesh glb
+        auto surfelMesh = spz::SplatMeshBuilder::buildSurfelMesh(splats, 1.25f, 0.05f);
+        if (!io::GlbWriter::writeToFile(surfelMesh, glbPath)) {
+            std::cerr << "analytical_groom: could not write " << glbPath << std::endl;
+            return 1;
+        }
+    }
+
+    std::cout << "__SPLATS_DONE__ count=" << splats.size() << " strands=" << strands.size() << std::endl;
+    return 0;
+}
+`;
 
 /**
  * Analytical Groom & 3D Gaussian Splatting Service.
@@ -133,108 +217,42 @@ export class AnalyticalGroomSplatService {
         };
     }
 
-    private toCppFloat(val: number | undefined, defaultVal: number): string {
-        const v = typeof val === 'number' && !isNaN(val) ? val : defaultVal;
-        return Number.isInteger(v) ? `${v}.0f` : `${v}f`;
-    }
-
     /**
-     * Programmatically generate standalone C++20 generator source code.
+     * The command line of the groom generator for a contract: output paths, then every descriptor as decimal text
+     * (the generator parses floats with strtof, the same float a C++ literal of that text is). Descriptors the
+     * contract leaves out take the generator's defaults.
      */
-    public generateCppSource(
-        contract: AnalyticalGroomContract,
-        spzPath: string,
-        plyPath: string,
-        glbPath?: string
-    ): string {
+    public generatorArgs(contract: AnalyticalGroomContract, spzPath: string, plyPath: string, glbPath?: string): string[] {
         const s = contract.surface;
         const g = contract.groom;
         const splat = contract.splat || {};
-
+        const f = (val: number | undefined, defaultVal: number) => String(typeof val === 'number' && !isNaN(val) ? val : defaultVal);
+        const i = (val: number | undefined, defaultVal: number) => String(Math.trunc(val ?? defaultVal));
         const center = s.center || [0, 0, 0];
-        const baseColorStr = g.baseColorRgb
-            ? `math::Vec3(${this.toCppFloat(g.baseColorRgb[0], 0)}, ${this.toCppFloat(g.baseColorRgb[1], 0)}, ${this.toCppFloat(g.baseColorRgb[2], 0)})`
-            : `math::Vec3(-1.0f, -1.0f, -1.0f)`;
-        const tipColorStr = g.tipColorRgb
-            ? `math::Vec3(${this.toCppFloat(g.tipColorRgb[0], 0)}, ${this.toCppFloat(g.tipColorRgb[1], 0)}, ${this.toCppFloat(g.tipColorRgb[2], 0)})`
-            : `math::Vec3(-1.0f, -1.0f, -1.0f)`;
-
+        const rgb = (c?: [number, number, number]) => c ? [f(c[0], 0), f(c[1], 0), f(c[2], 0)] : ['-1', '-1', '-1'];
         const shouldBuildGlb = Boolean(glbPath && (splat.exportFormat === 'glb' || splat.exportFormat === 'all'));
-
-        return `#include <iostream>
-#include <fstream>
-#include <vector>
-#include <string>
-#include "scratchbox_hair.hpp"
-#include "scratchbox_spz.hpp"
-#include "scratchbox_io.hpp"
-
-using namespace scratchbox;
-
-int main(int argc, char** argv) {
-    std::cout << "[AnalyticalGroomSplat] Initializing biophysical hair grooming..." << std::endl;
-
-    hair::HairGroomConfig config;
-    config.guideCount = ${g.guideCount ?? 64};
-    config.strandCount = ${g.strandCount ?? 4096};
-    config.segmentsPerStrand = ${g.segmentsPerStrand ?? 12};
-    config.length = ${this.toCppFloat(g.length, 0.25)};
-    config.rootWidth = ${this.toCppFloat(g.rootWidth, 0.003)};
-    config.tipWidth = ${this.toCppFloat(g.tipWidth, 0.0006)};
-    config.clumping = ${this.toCppFloat(g.clumping, 0.75)};
-    config.curlRadius = ${this.toCppFloat(g.curlRadius, 0.012)};
-    config.curlFrequency = ${this.toCppFloat(g.curlFrequency, 3.5)};
-    config.waveFrequency = ${this.toCppFloat(g.waveFrequency, 2.0)};
-    config.waveAmplitude = ${this.toCppFloat(g.waveAmplitude, 0.008)};
-    config.eumelanin = ${this.toCppFloat(g.eumelanin, 0.6)};
-    config.pheomelanin = ${this.toCppFloat(g.pheomelanin, 0.2)};
-
-    math::Vec3 center(${this.toCppFloat(center[0], 0)}, ${this.toCppFloat(center[1], 0)}, ${this.toCppFloat(center[2], 0)});
-    float baseRadius = ${this.toCppFloat(s.baseRadius, 1.0)};
-    int harmonicFrequency = ${s.harmonicFrequency ?? 0};
-    float harmonicAmplitude = ${this.toCppFloat(s.harmonicAmplitude, 0.0)};
-    float axialTaper = ${this.toCppFloat(s.axialTaper, 0.0)};
-
-    auto guides = hair::HairGroomer::generateHarmonicGuides(
-        center, baseRadius, harmonicFrequency, harmonicAmplitude, config, axialTaper
-    );
-
-    auto strands = hair::HairGroomer::synthesizeDenseStrands(guides, config);
-
-    math::Vec3 customBaseColor = ${baseColorStr};
-    math::Vec3 customTipColor = ${tipColorStr};
-
-    float scaleMultiplier = ${this.toCppFloat(splat.scaleMultiplier, 1.0)};
-    float baseOpacity = ${this.toCppFloat(splat.opacity, 0.92)};
-
-    auto splats = hair::HairSplatBuilder::buildStrandSplats(
-        strands, scaleMultiplier, baseOpacity, customBaseColor, customTipColor
-    );
-
-    hair::HairSplatBuilder::saveToSpzFile("${spzPath}", splats);
-    hair::HairSplatBuilder::saveToPlyFile("${plyPath}", splats);
-
-    ${shouldBuildGlb ? `
-    // Also build surfel mesh glb
-    auto surfelMesh = spz::SplatMeshBuilder::buildSurfelMesh(splats, 1.25f, 0.05f);
-    io::ScratchboxGlbWriter::saveToFile("${glbPath}", surfelMesh);
-    ` : ''}
-
-    std::cout << "__SPLATS_DONE__ count=" << splats.size() << " strands=" << strands.size() << std::endl;
-    return 0;
-}
-`;
+        return [
+            spzPath, plyPath, shouldBuildGlb ? glbPath! : '',
+            i(g.guideCount, 64), i(g.strandCount, 4096), i(g.segmentsPerStrand, 12),
+            f(g.length, 0.25), f(g.rootWidth, 0.003), f(g.tipWidth, 0.0006), f(g.clumping, 0.75),
+            f(g.curlRadius, 0.012), f(g.curlFrequency, 3.5), f(g.waveFrequency, 2.0), f(g.waveAmplitude, 0.008),
+            f(g.eumelanin, 0.6), f(g.pheomelanin, 0.2),
+            f(center[0], 0), f(center[1], 0), f(center[2], 0),
+            f(s.baseRadius, 1.0), i(s.harmonicFrequency, 0), f(s.harmonicAmplitude, 0.0), f(s.axialTaper, 0.0),
+            ...rgb(g.baseColorRgb), ...rgb(g.tipColorRgb),
+            f(splat.scaleMultiplier, 1.0), f(splat.opacity, 0.92)
+        ];
     }
 
     /**
-     * Compile and execute an AnalyticalGroomContract.
-     * Ephemerally builds via NativeCppCompilerService and outputs the requested SPZ/PLY/GLB files.
+     * Execute an AnalyticalGroomContract and write the requested SPZ/PLY/GLB files. The generator binary is built
+     * once (native build cache) and takes the contract on its command line, so a second groom compiles nothing and
+     * leaves no binary or source in outputDir.
      */
     public async executeGroomSplat(
         contract: AnalyticalGroomContract,
         options: {
             outputDir?: string;
-            keepIntermediateFiles?: boolean;
         } = {}
     ): Promise<AnalyticalGroomExecutionResult> {
         const startTime = Date.now();
@@ -247,30 +265,31 @@ int main(int argc, char** argv) {
         const plyPath = path.join(outputDir, `${contract.id}.ply`);
         const glbPath = path.join(outputDir, `${contract.id}.glb`);
 
-        const sourceCode = this.generateCppSource(contract, spzPath, plyPath, glbPath);
-
-        // 1. Ephemeral Compilation
-        const compileResult = await this.compiler.compileSource(sourceCode, {
-            outputDir,
-            outputBinaryName: `groom_bin_${contract.id}`,
-            optimization: '-O3',
-            extraFlags: ['-lz']
-        });
-
-        if (!compileResult.success || !compileResult.binaryPath) {
+        // 1. One generator binary for every groom, built once through the native build cache.
+        let compiled: NativeCompileResult;
+        try {
+            compiled = await compileNativeCached({
+                sourceCode: GROOM_GENERATOR_SOURCE,
+                includeDirs: [this.compiler.getSdkIncludePath()],
+                flags: defaultNativeFlags(),
+                libs: ['-lz'],
+                name: 'analytical_groom'
+            });
+        } catch (err: any) {
             return {
                 success: false,
                 contract,
                 splatCount: 0,
                 strandCount: 0,
                 executionTimeMs: 0,
-                compilationTimeMs: compileResult.compilationTimeMs,
-                error: `Compilation failed: ${compileResult.compilerOutput}`
+                compilationTimeMs: Date.now() - startTime,
+                error: `Compilation failed: ${err?.compilerOutput || err?.message || err}`
             };
         }
+        const compilationTimeMs = compiled.cacheHit ? 0 : compiled.compileMs;
 
         // 2. Binary Execution
-        const execResult = await this.compiler.executeBinary(compileResult.binaryPath, [], outputDir);
+        const execResult = await this.compiler.executeBinary(compiled.binaryPath, this.generatorArgs(contract, spzPath, plyPath, glbPath), outputDir);
 
         if (!execResult.success || execResult.exitCode !== 0) {
             return {
@@ -279,7 +298,7 @@ int main(int argc, char** argv) {
                 splatCount: 0,
                 strandCount: 0,
                 executionTimeMs: execResult.executionTimeMs,
-                compilationTimeMs: compileResult.compilationTimeMs,
+                compilationTimeMs,
                 error: `Execution failed (exit ${execResult.exitCode}): ${execResult.stderr || execResult.stdout}`
             };
         }
@@ -303,21 +322,6 @@ int main(int argc, char** argv) {
         const finalPlyPath = fs.existsSync(plyPath) ? plyPath : undefined;
         const finalGlbPath = fs.existsSync(glbPath) ? glbPath : undefined;
 
-        // Clean up intermediate binary and .cpp generator if requested (zero repo proliferation)
-        if (!options.keepIntermediateFiles) {
-            try {
-                if (fs.existsSync(compileResult.binaryPath)) {
-                    fs.unlinkSync(compileResult.binaryPath);
-                }
-                const cppSource = path.join(outputDir, `groom_bin_${contract.id}.cpp`);
-                if (fs.existsSync(cppSource)) {
-                    fs.unlinkSync(cppSource);
-                }
-            } catch {
-                // Non-fatal cleanup error
-            }
-        }
-
         return {
             success: true,
             contract,
@@ -328,7 +332,7 @@ int main(int argc, char** argv) {
             plyPath: finalPlyPath,
             glbPath: finalGlbPath,
             executionTimeMs: execResult.executionTimeMs,
-            compilationTimeMs: compileResult.compilationTimeMs
+            compilationTimeMs
         };
     }
 }

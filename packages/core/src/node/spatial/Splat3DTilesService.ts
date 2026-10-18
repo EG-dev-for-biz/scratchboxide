@@ -13,6 +13,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { LocalTangentPlane, type LatLngAlt } from '../../common/coordinate/LocalTangentPlane';
 import { NativeCppCompilerService } from '../3d-engine/native-compiler-service';
+import { buildNativeIfStale } from '../3d-engine/native-build';
 
 const execFileAsync = promisify(execFile);
 
@@ -65,15 +66,9 @@ export class Splat3DTilesService {
     private binaryPath = path.resolve(process.cwd(), 'build/splat_to_3dtiles');
 
     async ensureBinary(): Promise<string> {
-        if (fs.existsSync(this.binaryPath)) return this.binaryPath;
         const src = path.resolve(process.cwd(), 'scripts/splat_to_3dtiles.cpp');
         if (!fs.existsSync(src)) throw new Error(`Tiler source not found: ${src}`);
-        await fs.ensureDir(path.dirname(this.binaryPath));
-        const include = this.compiler.getSdkIncludePath();
-        // CXX may carry a launcher/flags (e.g. "ccache clang++"): split it into argv, no shell involved.
-        const [cxx, ...cxxArgs] = (process.env.CXX || 'clang++').trim().split(/\s+/);
-        await execFileAsync(cxx, [...cxxArgs, '-std=c++20', '-O3', '-I', include, '-lz', src, '-o', this.binaryPath]);
-        return this.binaryPath;
+        return buildNativeIfStale({ source: src, binary: this.binaryPath, includeDir: this.compiler.getSdkIncludePath(), libs: ['-lz'] });
     }
 
     async convert(options: Splat3DTilesOptions): Promise<Splat3DTilesResult> {

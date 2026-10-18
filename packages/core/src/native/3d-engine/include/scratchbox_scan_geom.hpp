@@ -63,17 +63,20 @@ struct P2 {
     P2 unit() const { const double l = len(); return l > 1e-15 ? P2(x / l, y / l) : P2(1, 0); }
 };
 
-inline void parallelFor(size_t n, const std::function<void(size_t)>& f) {
+/** Runs f(0..n-1) on up to 16 threads, `grain` indices at a time (sequentially when n < grain or on one core). */
+inline void parallelFor(size_t n, const std::function<void(size_t)>& f, size_t grain = 64) {
+    grain = std::max<size_t>(1, grain);
     const unsigned T = std::max(1u, std::min(16u, std::thread::hardware_concurrency()));
-    if (n < 64 || T == 1) { for (size_t i = 0; i < n; ++i) f(i); return; }
+    if (n < grain || T == 1) { for (size_t i = 0; i < n; ++i) f(i); return; }
     std::atomic<size_t> next{0};
     std::vector<std::thread> pool;
-    for (unsigned t = 0; t < T; ++t) {
+    const unsigned workers = static_cast<unsigned>(std::min<size_t>(T, (n + grain - 1) / grain));
+    for (unsigned t = 0; t < workers; ++t) {
         pool.emplace_back([&] {
             for (;;) {
-                const size_t i = next.fetch_add(64);
+                const size_t i = next.fetch_add(grain);
                 if (i >= n) break;
-                for (size_t k = i; k < std::min(n, i + 64); ++k) f(k);
+                for (size_t k = i; k < std::min(n, i + grain); ++k) f(k);
             }
         });
     }

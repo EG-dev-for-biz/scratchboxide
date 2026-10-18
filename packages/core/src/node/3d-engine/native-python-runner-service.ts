@@ -125,6 +125,9 @@ export function findWrittenGlb(expected: string, before: GlbFileStamp | undefine
  * to construct complex 3D scenes using high-level Python abstractions (mirroring Blender bpy)
  * while executing at native C++20 speed and streaming glTF 2.0 (.glb) into the canvas viewport.
  */
+/** Last native-source fingerprint per engine directory, with the file signature it was computed for. */
+const fingerprintMemo = new Map<string, { signature: string; fingerprint: string }>();
+
 export class NativePythonRunnerService {
     private static instance?: NativePythonRunnerService;
     private pythonExecutable: string;
@@ -207,9 +210,11 @@ export class NativePythonRunnerService {
 
     /**
      * Hash of everything that goes into the native module, so any engine edit (or interpreter switch) triggers a rebuild.
+     * The files are only stat'ed on each call: the hash (several MB of sources) is recomputed only when one of them
+     * changed (inode, size, mtime or ctime), was added or was removed.
      */
     private computeNativeSourceFingerprint(engineDir: string): string {
-        const hasher = crypto.createHash('sha256').update(this.pythonExecutable).update(process.platform).update(process.arch);
+        const files: string[] = [path.join(engineDir, 'CMakeLists.txt')];
         const walk = (dir: string) => {
             if (!fs.existsSync(dir)) return;
             for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((x, y) => x.name.localeCompare(y.name))) {
@@ -217,13 +222,24 @@ export class NativePythonRunnerService {
                 if (entry.isDirectory()) {
                     walk(full);
                 } else if (/\.(hpp|h|cpp|cc|cxx|inl)$/.test(entry.name)) {
-                    hasher.update(path.relative(engineDir, full)).update(fs.readFileSync(full));
+                    files.push(full);
                 }
             }
         };
-        hasher.update(fs.readFileSync(path.join(engineDir, 'CMakeLists.txt')));
         for (const sub of ['include', 'bindings', 'src']) walk(path.join(engineDir, sub));
-        return hasher.digest('hex');
+        const signature = [this.pythonExecutable, ...files.map(f => {
+            const st = fs.statSync(f);
+            return `${f}:${st.dev}:${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
+        })].join('\n');
+        const memo = fingerprintMemo.get(engineDir);
+        if (memo && memo.signature === signature) return memo.fingerprint;
+
+        const hasher = crypto.createHash('sha256').update(this.pythonExecutable).update(process.platform).update(process.arch);
+        hasher.update(fs.readFileSync(files[0]));
+        for (const full of files.slice(1)) hasher.update(path.relative(engineDir, full)).update(fs.readFileSync(full));
+        const fingerprint = hasher.digest('hex');
+        fingerprintMemo.set(engineDir, { signature, fingerprint });
+        return fingerprint;
     }
 
     private hasBuiltModule(dir: string): boolean {

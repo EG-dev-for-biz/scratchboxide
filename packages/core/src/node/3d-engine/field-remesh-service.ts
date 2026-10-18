@@ -12,6 +12,7 @@ import * as path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { NativeCppCompilerService } from './native-compiler-service';
+import { buildNativeIfStale } from './native-build';
 
 const execAsync = promisify(exec);
 
@@ -76,21 +77,13 @@ export class FieldAlignedQuadRemeshService {
      * Ensures the native C++20 quad remesher binary is compiled and available.
      */
     async ensureBinary(): Promise<string> {
-        if (fs.existsSync(this.binaryPath)) {
-            return this.binaryPath;
-        }
-
-        const sourcePath = path.resolve(process.cwd(), 'scripts/run_field_remesh_pipeline.cpp');
-        const includePath = this.compiler.getSdkIncludePath();
-        const outputDir = path.dirname(this.binaryPath);
-
-        if (!fs.existsSync(outputDir)) {
-            fs.mkdirSync(outputDir, { recursive: true });
-        }
-
-        const compileCmd = `clang++ -std=c++20 -O3 -march=native -I "${includePath}" "${sourcePath}" -o "${this.binaryPath}"`;
-        await execAsync(compileCmd);
-        return this.binaryPath;
+        const candidateSources = [
+            path.resolve(process.cwd(), 'scripts/run_field_remesh_pipeline.cpp'),
+            path.resolve(__dirname, '../../../../scripts/run_field_remesh_pipeline.cpp')
+        ];
+        const sourcePath = candidateSources.find(p => fs.existsSync(p)) || candidateSources[0];
+        // -march=native only with SCRATCHBOX_NATIVE_ARCH=1 (added by the build cache's default flags).
+        return buildNativeIfStale({ source: sourcePath, binary: this.binaryPath, includeDir: this.compiler.getSdkIncludePath() });
     }
 
     /**

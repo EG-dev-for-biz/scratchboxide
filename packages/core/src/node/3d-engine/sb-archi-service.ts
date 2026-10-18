@@ -12,6 +12,7 @@ import * as path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { NativeCppCompilerService } from './native-compiler-service';
+import { buildNativeIfStale } from './native-build';
 import {
     SbArchiInversionOptions,
     SbArchiInversionResult,
@@ -83,28 +84,7 @@ export class SbArchiService {
             path.resolve(__dirname, '../../../../scripts/run_sb_archi.cpp')
         ];
         const sourcePath = candidateSources.find(p => fs.existsSync(p)) || candidateSources[0];
-        const includePath = this.compiler.getSdkIncludePath();
-
-        // Reuse the binary only if it is newer than its source and the SB-Archi headers.
-        if (fs.existsSync(this.binaryPath)) {
-            const binTime = fs.statSync(this.binaryPath).mtimeMs;
-            const inputs = [sourcePath, ...['scratchbox_sb_archi.hpp', 'scratchbox_sb_archi_optimizer.hpp'].map(h => path.join(includePath, h))]
-                .filter(p => fs.existsSync(p));
-            if (inputs.every(p => fs.statSync(p).mtimeMs <= binTime)) {
-                return this.binaryPath;
-            }
-        }
-        const outputDir = path.dirname(this.binaryPath);
-
-        if (!fs.existsSync(outputDir)) {
-            fs.mkdirSync(outputDir, { recursive: true });
-        }
-
-        const cxx = process.env.CXX || 'clang++';
-        const archFlag = process.env.SCRATCHBOX_NATIVE_ARCH === '1' ? '-march=native' : '';
-        const compileCmd = `${cxx} -std=c++20 -O3 ${archFlag} -I "${includePath}" "${sourcePath}" -o "${this.binaryPath}"`;
-        await execAsync(compileCmd);
-        return this.binaryPath;
+        return buildNativeIfStale({ source: sourcePath, binary: this.binaryPath, includeDir: this.compiler.getSdkIncludePath() });
     }
 
     /**
@@ -204,29 +184,7 @@ export class SbArchiService {
             path.resolve(__dirname, '../../../../scripts/run_arch_constantine.cpp')
         ];
         const sourcePath = candidateSources.find(p => fs.existsSync(p)) || candidateSources[0];
-
-        if (fs.existsSync(this.archConstantineBinaryPath)) {
-            const binStat = fs.statSync(this.archConstantineBinaryPath);
-            const srcStat = fs.existsSync(sourcePath) ? fs.statSync(sourcePath) : null;
-            const analyzerHeader = path.join(this.compiler.getSdkIncludePath(), 'scratchbox_tectonic_analyzer.hpp');
-            const headerMtime = fs.existsSync(analyzerHeader) ? fs.statSync(analyzerHeader).mtimeMs : 0;
-            if (srcStat && binStat.mtimeMs >= srcStat.mtimeMs && binStat.mtimeMs >= headerMtime) {
-                return this.archConstantineBinaryPath;
-            }
-        }
-
-        const includePath = this.compiler.getSdkIncludePath();
-        const outputDir = path.dirname(this.archConstantineBinaryPath);
-
-        if (!fs.existsSync(outputDir)) {
-            fs.mkdirSync(outputDir, { recursive: true });
-        }
-
-        const cxx = process.env.CXX || 'clang++';
-        const archFlag = process.env.SCRATCHBOX_NATIVE_ARCH === '1' ? '-march=native' : '';
-        const compileCmd = `${cxx} -std=c++20 -O3 ${archFlag} -I "${includePath}" "${sourcePath}" -o "${this.archConstantineBinaryPath}"`;
-        await execAsync(compileCmd);
-        return this.archConstantineBinaryPath;
+        return buildNativeIfStale({ source: sourcePath, binary: this.archConstantineBinaryPath, includeDir: this.compiler.getSdkIncludePath() });
     }
 
     /**

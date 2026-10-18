@@ -51,9 +51,10 @@ describe('Analytical Groom & 3D Gaussian Splatting Engine', () => {
             expect(contract.groom.strandCount).toBe(512);
             expect(contract.groom.tipColorRgb).toEqual([0.2, 0.8, 0.4]);
             expect(contract.groom.eumelanin).toBe(0);
-            const src = AnalyticalGroomSplatService.getInstance().generateCppSource(contract, '/tmp/a.spz', '/tmp/a.ply');
-            expect(src).toContain('config.clumping = 0.0f;');
-            expect(src).toContain('math::Vec3 customTipColor = math::Vec3(0.2f, 0.8f, 0.4f);');
+            const args = AnalyticalGroomSplatService.getInstance().generatorArgs(contract, '/tmp/a.spz', '/tmp/a.ply');
+            expect(args.slice(0, 3)).toEqual(['/tmp/a.spz', '/tmp/a.ply', '']);
+            expect(args[9]).toBe('0'); // clumping
+            expect(args.slice(26, 29)).toEqual(['0.2', '0.8', '0.4']); // tip colour
         });
 
         it('the tool requires the shape and length descriptors and has no prompt input', async () => {

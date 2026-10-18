@@ -28,6 +28,7 @@ import { promisify } from 'util';
 import { NativeCppCompilerService } from './native-compiler-service';
 import { applyRectification, parseGlb, readSbrxSidecar, serializeGlb, type GlbDocument, type GltfJson } from './glb-geometry-patcher';
 import { recolor3DTilesGlb } from '../spatial/GlbTextureRecolorService';
+import { buildNativeIfStale } from './native-build';
 
 const execFileAsync = promisify(execFile);
 
@@ -103,19 +104,11 @@ export class TileRestyleService {
     private readonly compiler = new NativeCppCompilerService();
     private readonly binaryPath = path.resolve(process.cwd(), 'build/3d-native/run_tile_restyle');
 
-    /** Builds the CLI when it is missing or older than its sources. */
+    /** Builds the CLI through the native build cache (rebuilt when its source or an included header changes). */
     async ensureBinary(): Promise<string> {
         const src = path.resolve(process.cwd(), 'scripts/run_tile_restyle.cpp');
         if (!fs.existsSync(src)) throw new Error(`Tile restyle source not found: ${src}`);
-        const include = this.compiler.getSdkIncludePath();
-        const header = path.join(include, 'scratchbox_tile_restyle.hpp');
-        const newestSource = Math.max(fs.statSync(src).mtimeMs, fs.statSync(header).mtimeMs);
-        if (fs.existsSync(this.binaryPath) && fs.statSync(this.binaryPath).mtimeMs >= newestSource) return this.binaryPath;
-        fs.mkdirSync(path.dirname(this.binaryPath), { recursive: true });
-        // CXX may carry a launcher/flags (e.g. "ccache clang++"): split it into argv, no shell involved.
-        const [cxx, ...cxxArgs] = (process.env.CXX || 'clang++').trim().split(/\s+/);
-        await execFileAsync(cxx, [...cxxArgs, '-std=c++20', '-O3', '-I', include, src, '-o', this.binaryPath, '-lz'], { maxBuffer: 16 * 1024 * 1024 });
-        return this.binaryPath;
+        return buildNativeIfStale({ source: src, binary: this.binaryPath, includeDir: this.compiler.getSdkIncludePath(), libs: ['-lz'] });
     }
 
     async restyle(request: TileRestyleRequest): Promise<TileRestyleResult> {
