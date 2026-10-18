@@ -498,11 +498,11 @@ On `l3b` the tier writes 34% of the texels (8% where two panos agree) from 14 pa
 - **Time.** 72 s per layer squeezes round 5's leave-one-pano-out out of the 600 s stage limit.
 - **De-lighting.** The tier does not de-light (the projection does), so its texels differ in exposure from their neighbours.
 
-## Round 6 (branch `photo-tier-a`, 2026-10-17): not pushed
+## Round 6 (branch `photo-tier-a`, 2026-10-17): pushed with photo tier A off by default
 
 Worktree `.claude/worktrees/photo-tier-a` (photo tier A merged with round 5, `c4ec7b8c`). Ports: web 3072, API 3073, tools 3074 (`npm --prefix <worktree> run dev`, `secrets.json` symlinked for the runs and removed after). Three cold runs of `Washington Square Arch` (the vision/detail and texture caches cleared before each; the evidence and its registration always run again): `98e8d2f8` (tier on), `71cddb48` (tier off, `SCRATCHBOX_PHOTO_TIER_OFF=1`), `41d7bc30` (tier on). Screenshots (of `98e8d2f8`): `test-results/screenshots/texture_live_v6/` (`clay_*`, `tex_*`, `prov_*`, the 16 view names of photo tier A, 808 x 943; gitignored), set with `__SB_SET_CAMERA_VIEW__` around the l3b box centre `[-1.25, 10.8, -2.4]`, front heading 33°.
 
-**Status: Needs Fix.** Every change works live, no stage or server error, the stage stays inside its 600 s limit (549 s and 556 s) with the tier at 16 s per layer, but with the tier on the leave-one-pano-out fit of `l3b` is worse than round 5's (6.37 and 6.14 px against 5.51), so the branch was not pushed.
+**Status: Verified with the tier off; the tier Needs Fix.** Every change works live, no stage or server error, the stage stays inside its 600 s limit (549 s and 556 s) with the tier at 16 s per layer. With the tier on the leave-one-pano-out fit of `l3b` is worse than round 5's (6.37 and 6.14 px against 5.51); with it off and the outline term on (`71cddb48`) it is 5.10 / 0.233 against round 5's 5.51 / 0.229 (not worse, within the 1.6 px control noise). So the round was pushed with **photo tier A opt-in, off by default**: `SCRATCHBOX_PHOTO_TIER=1` turns it on for a server (the texture pass option `photoTier: true` or options per call; the pass version is `texture-pass/10`, `+tier` when on). The outline term, the merge rule, the de-light and exposure match, the caching, the leave-one-pano-out sampling labels, the contract schema and the MediaPipe model ship either way. (`SCRATCHBOX_PHOTO_TIER_OFF` is gone.)
 
 ### What changed
 

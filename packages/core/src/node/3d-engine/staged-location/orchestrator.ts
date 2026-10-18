@@ -120,7 +120,7 @@ import {
 } from './ornament-vision';
 import { buildSwitchLocationPills, switchLocationMarkdown } from '../../../common/spatial/switch-location';
 import { summarizeStagedBuild, type StagedSummaryInput } from './staged-summary';
-import { palettesFromSurvey, projectionViewsFromEvidence, textureLayer, TEXTURE_PASS_VERSION, type TextureLayerOutcome } from './texture-pass';
+import { palettesFromSurvey, projectionViewsFromEvidence, photoTierEnabled, textureLayer, TEXTURE_PASS_VERSION, type TextureLayerOutcome } from './texture-pass';
 import { loadTileSurface, type TileTextureSurface } from './tile-texture-transfer';
 import type { EnhanceModelClient } from './texture-enhance';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
@@ -1434,7 +1434,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), wideHeld.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048);
                         const entry = await cache.run<Omit<TextureLayerOutcome, 'glb'>>('textures', key, async dir => {
                             const out = await textureLayer({ layerKey: target.layer.layer, clayGlb: clay, ...(target.surfaces?.length ? { surfaces: target.surfaces } : {}) }, {
-                                views, ...(wideViews.length ? { photoTierViews: wideViews } : {}), ...(process.env.SCRATCHBOX_PHOTO_TIER_OFF === '1' ? { photoTier: false as const, photoTierUnavailable: 'turned off for this server (SCRATCHBOX_PHOTO_TIER_OFF=1)' } : {}), ...(viewsUnavailable ? { viewsUnavailable } : {}), occluder, ...(context.indices.length ? { context } : {}), observedSurface: TEXTURE_OBSERVED_SURFACE, poseEdgeGuardShare: TEXTURE_POSE_EDGE_GUARD_SHARE,
+                                views, ...(wideViews.length ? { photoTierViews: wideViews } : {}), ...(photoTierEnabled() ? { photoTier: true } : {}), ...(viewsUnavailable ? { viewsUnavailable } : {}), occluder, ...(context.indices.length ? { context } : {}), observedSurface: TEXTURE_OBSERVED_SURFACE, poseEdgeGuardShare: TEXTURE_POSE_EDGE_GUARD_SHARE,
                                 delight: { latitude: run.geoAnchor.lat, longitude: run.geoAnchor.lng },
                                 ...(tile ? { tile } : {}), ...(tileUnavailable ? { tileUnavailable } : {}),
                                 ...(residual !== undefined ? { registrationResidualM: residual } : {}),

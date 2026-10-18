@@ -327,7 +327,7 @@ describe('photo tier A in the texture ladder (texture-pass.ts)', () => {
         const views = scene().rendered.map(r => r.view);
         const wallOnly = sceneMesh({ statue: false });
         const out = await textureLayer({ layerKey: 'l3b', clayGlb, surfaces: WALL_SURFACES as any }, {
-            views, occluder: wallOnly, context: sceneMesh(), palette: [{ headingDeg: 180, colours: [{ srgb: [180, 176, 170] as Vec3, share: 1 }] }],
+            views, occluder: wallOnly, context: sceneMesh(), photoTier: true, palette: [{ headingDeg: 180, colours: [{ srgb: [180, 176, 170] as Vec3, share: 1 }] }],
             densityTexelsPerMeter: 20, maxSide: 512
         });
         const rect = out.bundle.provenance.find(p => p.source === PHOTO_TIER_SOURCE);
@@ -341,6 +341,13 @@ describe('photo tier A in the texture ladder (texture-pass.ts)', () => {
         expect(out.bundle.provenance.some(p => p.source !== PHOTO_TIER_SOURCE && p.coverage > 0.01)).toBe(true);
         expect(out.bundle.provenance.reduce((a, p) => a + p.coverage, 0)).toBeCloseTo(1, 6);
         expect(out.timingsMs.photoTier).toBeGreaterThan(0);
+        // opt-in: without `photoTier` the same layer has no rectified texels
+        const off = await textureLayer({ layerKey: 'l3b', clayGlb, surfaces: WALL_SURFACES as any }, {
+            views, occluder: wallOnly, context: sceneMesh(), palette: [{ headingDeg: 180, colours: [{ srgb: [180, 176, 170] as Vec3, share: 1 }] }],
+            densityTexelsPerMeter: 20, maxSide: 512
+        });
+        expect(off.photoTier).toBeUndefined();
+        expect(off.bundle.provenance.some(p => p.source === PHOTO_TIER_SOURCE)).toBe(false);
     }, 300_000);
 });
 

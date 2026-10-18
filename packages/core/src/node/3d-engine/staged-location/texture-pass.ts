@@ -51,7 +51,9 @@ import { measureScanDeviation, type ScanDeviation } from './scan-deviation';
 import { round5Enabled } from './round5-switch';
 
 /** Part of every texture cache key: a change to the pass's maths is a new version. */
-export const TEXTURE_PASS_VERSION = `texture-pass/9${process.env.SCRATCHBOX_PHOTO_TIER_OFF === '1' ? '+tier-off' : ''}`;
+/** Photo tier A is opt-in (round 6 on the arch: no leave-one-pano-out gain over the projection); SCRATCHBOX_PHOTO_TIER=1 turns it on for a server. */
+export const photoTierEnabled = (): boolean => process.env.SCRATCHBOX_PHOTO_TIER === '1';
+export const TEXTURE_PASS_VERSION = `texture-pass/10${photoTierEnabled() ? '+tier' : ''}`;
 export const RUNG_PALETTE = 3;
 export const RUNG_GENERATED_PBR = 4;
 /** The enhancement rung's own time budget per layer (layers run in parallel inside the stage's 600 s). */
@@ -100,9 +102,11 @@ export interface TexturePassSources {
     enhanceUnavailable?: string;
     /**
      * Photo tier A (photo-tier-rectify.ts): rectified Street View pixels on the fitted planar faces, above the projection.
-     * Runs when there are views, fitted surfaces and the tile mesh (`context`); `false` turns it off (with the reason).
+     * Opt-in: runs only when given (`true` or options) and there are views, fitted surfaces and the tile mesh (`context`).
+     * Off by default: on Washington Square Arch it did not improve the leave-one-pano-out fit over the projection
+     * (docs/processes/staged_location_texture_pass_live_arch.md, round 6). `photoTierUnavailable` records why it did not run.
      */
-    photoTier?: false | { pythonExecutable?: string; timeoutMs?: number; heldOut?: boolean };
+    photoTier?: boolean | { pythonExecutable?: string; timeoutMs?: number; heldOut?: boolean };
     photoTierUnavailable?: string;
     /** More registered views for photo tier A only (whole-face survey and ring views: its outline anchors). */
     photoTierViews?: ProjectionView[];
@@ -407,7 +411,8 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
     /** Photo tier A again with a subset of the panos (the leave-one-pano-out fit). */
     let photoTierLoo: ((views: ProjectionView[], below: BakedTexturePlanes) => Promise<BakedTexturePlanes>) | undefined;
     let photoTierCacheDispose: (() => void) | undefined;
-    if (src.photoTier === false) {
+    const tierOpts = typeof src.photoTier === 'object' ? src.photoTier : undefined;
+    if (!src.photoTier) {
         if (src.photoTierUnavailable) degradations.push({ stage: 'photo-tier', reasonCode: 'photo_tier_not_run', layerKey: layer.layerKey, reason: `The rectified photo tier was not run: ${src.photoTierUnavailable}.` });
     } else if (src.views.length && src.context && layer.surfaces?.length) {
         progress('rectifying Street View photos onto the fitted faces');
@@ -418,9 +423,9 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
                 atlas, surfaces: layer.surfaces, views: [...src.views, ...(src.photoTierViews ?? [])], context: src.context, previous: planes,
                 ...(src.tile ? { tile: src.tile, tileMaxDistanceM: Math.max(0.25, 2 * (src.registrationResidualM ?? 0)) } : {}),
                 densityTexelsPerMeter: atlas.layout.stats.texelsPerMeter || src.densityTexelsPerMeter, signal: src.signal, onProgress: progress,
-                ...(src.photoTier?.pythonExecutable ? { pythonExecutable: src.photoTier.pythonExecutable } : {}),
-                ...(src.photoTier?.timeoutMs ? { timeoutMs: src.photoTier.timeoutMs } : {}),
-                ...(src.photoTier?.heldOut === false ? { heldOut: false } : {})
+                ...(tierOpts?.pythonExecutable ? { pythonExecutable: tierOpts.pythonExecutable } : {}),
+                ...(tierOpts?.timeoutMs ? { timeoutMs: tierOpts.timeoutMs } : {}),
+                ...(tierOpts?.heldOut === false ? { heldOut: false } : {})
             });
             degradations.push(...res.degradations);
             photoTier = res.record;
@@ -428,7 +433,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
                 const merged = mergePhotoTier(planes, res.planes);
                 planes = merged.planes;
                 photoTier = { ...photoTier, merged: { rung0Texels: merged.rung0Texels, rung1Texels: merged.rung1Texels, rung1KeptBelowTexels: merged.rung1KeptBelowTexels, texelShare: (merged.rung0Texels + merged.rung1Texels) / Math.max(1, countCovered(atlas)) } };
-                const all = src.views, extra = src.photoTierViews ?? [], surfaces = layer.surfaces, context = src.context, python = src.photoTier ? src.photoTier.pythonExecutable : undefined;
+                const all = src.views, extra = src.photoTierViews ?? [], surfaces = layer.surfaces, context = src.context, python = tierOpts?.pythonExecutable;
                 const tile = src.tile, tileMaxDistanceM = Math.max(0.25, 2 * (src.registrationResidualM ?? 0));
                 keepCache = true;
                 photoTierLoo = async (views, below) => {
