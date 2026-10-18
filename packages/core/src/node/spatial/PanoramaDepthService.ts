@@ -13,6 +13,7 @@ import { getPythonWorkerPool } from '../process/persistent-python-worker';
 import * as os from 'os';
 import { GeneratorFailedError, InvalidInputError } from '../../common/errors/pipeline-errors';
 import { encodePng } from '../texture-processing';
+import { resolveRepoPython } from '../process/repo-python';
 
 
 export interface PanoramaDepthOptions {
@@ -83,13 +84,6 @@ export interface PanoramaDepthServiceOptions {
     timeoutMs?: number;
 }
 
-/** The repo's .venv interpreter when it exists (it carries torch and transformers), else `python3`. */
-export function defaultDepthPython(): string {
-    if (process.env.SCRATCHBOX_DEPTH_PYTHON) return process.env.SCRATCHBOX_DEPTH_PYTHON;
-    const venv = path.resolve(process.cwd(), '.venv/bin/python');
-    return fs.existsSync(venv) ? venv : 'python3';
-}
-
 /**
  * Runs the local depth sidecar (tools/depth/panorama_depth.py, Depth Anything V2 Small, Apache-2.0). The model predicts
  * relative depth: panoramas are made metric by a floor fit to the given eye height, photos are relative (median 1)
@@ -105,7 +99,7 @@ export class PanoramaDepthService {
 
     constructor(customSidecarPath?: string, options: PanoramaDepthServiceOptions = {}) {
         this.sidecarPath = customSidecarPath || path.resolve(process.cwd(), 'tools/depth/panorama_depth.py');
-        this.pythonExecutable = options.pythonExecutable || defaultDepthPython();
+        this.pythonExecutable = options.pythonExecutable || resolveRepoPython('SCRATCHBOX_DEPTH_PYTHON');
         this.env = options.env;
         this.timeoutMs = options.timeoutMs ?? 120_000;
     }
