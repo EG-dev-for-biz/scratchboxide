@@ -43,7 +43,8 @@ describe('Admin Access & Comprehensive Showcase Demos Catalog in Settings', () =
         expect(adminSrc).toContain('image_to_adaptive_pbr_studio.html');
         expect(adminSrc).toContain('geobox_eval_report.html');
         expect(adminSrc).toContain('vfx_plate_anti_drift_demo.html');
-        expect(adminSrc).toContain('colmap_visualizer.html');
+        // colmap_visualizer.html was removed: it showed a built-in synthetic orbit, not a reconstruction.
+        expect(adminSrc).not.toContain('colmap_visualizer.html');
         expect(adminSrc).toContain('botanical_visualizer.html');
         expect(adminSrc).toContain('plaza_matchmove_demo.html');
     });
@@ -80,7 +81,6 @@ describe('Admin Access & Comprehensive Showcase Demos Catalog in Settings', () =
             'image_to_adaptive_pbr_studio.html',
             'geobox_eval_report.html',
             'vfx_plate_anti_drift_demo.html',
-            'colmap_visualizer.html',
             'botanical_visualizer.html',
             'plaza_matchmove_demo.html',
             'geobox_demo.html',

@@ -251,8 +251,7 @@ export {
     ColmapCameraModel,
     ColmapGlbOptions,
     ColmapReconstructionSummary,
-    GlomapOptions,
-    GlomapResult
+    ColmapSparseModelRequiredError
 } from './node/3d-engine/colmap-reconstruction-service';
 export {
     NativeTileLightingService,

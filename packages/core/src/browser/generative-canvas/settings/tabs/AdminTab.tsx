@@ -158,17 +158,6 @@ export const STANDALONE_STUDIOS_CATALOG: StandaloneStudioItem[] = [
         tags: ['Anti-Drift Engine', '4-Quadrant Cockpit', 'Brown-Conrady', 'NOAA Sun Lock', 'Depth Holdout'],
         badge: 'ANTI-DRIFT'
     },
-    // 7. COLMAP / GLOMAP 3D Reconstruction Viewer
-    {
-        id: 'colmap-visualizer',
-        title: 'COLMAP / GLOMAP 3D Reconstruction Viewer',
-        subtitle: 'Structure-from-Motion Sparse Rig & OpenCV-to-OpenGL Frame Bridge',
-        category: 'Geospatial & 3D Tiles',
-        path: '/colmap_visualizer.html',
-        description: 'Interactive 3D inspection of sparse SfM point cloud reconstructions with multi-camera orbital frustums and C++20 SIMD telemetry.',
-        tags: ['COLMAP / GLOMAP', 'C++20 Native', 'SfM Sparse Rig', 'Optical Poses', 'Frustum Viz'],
-        badge: 'C++20 NATIVE'
-    },
     // 8. Botanical & Vegetation Pipeline Visualizer
     {
         id: 'botanical-visualizer',
