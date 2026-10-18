@@ -567,6 +567,14 @@ export interface ElementEvidence { imageId: string; box1000: Box1000 }
 /** The most repeats one replicate domain takes per axis (the OrnamentSpec schema's limit); longer readings are split (ornament-expand.ts splitOversizeReplicates). */
 export const ORNAMENT_REPLICATE_MAX_COUNT = 400;
 
+/**
+ * The most instances one read replicate may place (along: its count; grid: the product of its counts). The count is
+ * the model's, and every check of a reading expands it into instance points (about 200 bytes each), so a reply past
+ * this is sent back before anything is expanded: one reading can never grow the server's heap without bound (run
+ * 18683533 reached the 4 GB limit inside that expansion). 10,000 is 25 builder blocks along an edge or a 100 x 100 grid.
+ */
+export const ORNAMENT_REPLICATE_MAX_INSTANCES = 10_000;
+
 export interface OrnamentElement {
     /** "e014". */
     id: string;

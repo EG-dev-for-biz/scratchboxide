@@ -32,6 +32,7 @@ import { groundingFocalPx } from '../../spatial/StreetViewPoseRegistrar';
 import * as crypto from 'crypto';
 import type { Content, Part } from '@google/genai';
 import {
+    ORNAMENT_REPLICATE_MAX_INSTANCES,
     PHOTO_CORRECTION_TOLERANCE_M,
     STAGED_VISION_MODEL_DEFAULT,
     schemaClosure,
@@ -290,6 +291,8 @@ function leafFootprint(spec: OperatorSpec, slot: OrnamentSlot, at: Vec2 = [0, 0]
 export function instances(spec: OperatorSpec, slot: OrnamentSlot): Vec2[] {
     if (spec.operator !== 'replicate') return [[0, 0]];
     const d = spec.replicate.domain;
+    const n = 'along' in d ? d.along.count : d.lattice.counts[0] * d.lattice.counts[1];
+    if (!(n <= ORNAMENT_REPLICATE_MAX_INSTANCES)) throw new RangeError(`a replicate of ${n} instances is past the ${ORNAMENT_REPLICATE_MAX_INSTANCES} one element takes`);
     const L = 'edge' in slot.host ? slot.host.edge.carrier.lengthM : 0;
     if ('along' in d) {
         const t0 = 'slot' in d.along.carrier ? d.along.carrier.slot.t0 * L : 0;
@@ -482,7 +485,22 @@ export function checkReply(text: string, finishReason: string | undefined, fit: 
     });
     for (const [slot, n] of perSlot) if (n > MAX_ELEMENTS_PER_SLOT) result.problems.push(`rule 9 of the prompt: slot ${slot} has ${n} elements, at most ${MAX_ELEMENTS_PER_SLOT}`);
 
-    const expanded: ExpandedElement[] = expandElements(reply.elements, fit, evidence, method);
+    // rule 7, first: a repeat's count is the model's and the checks below expand it into instances, so a count past the
+    // bound is sent back (or, after the revision, dropped) before anything is expanded
+    const oversize = new Set<number>();
+    reply.elements.forEach((e, i) => {
+        if (!('replicate' in e.op)) return;
+        const r = e.op.replicate;
+        const n = r.along ? r.along[2] : r.grid ? r.grid[4] * r.grid[5] : 0;
+        if (n > ORNAMENT_REPLICATE_MAX_INSTANCES || !Number.isFinite(n)) {
+            oversize.add(i);
+            add(i, `rule 7: a repeat of ${n} instances is more than one element takes (${ORNAMENT_REPLICATE_MAX_INSTANCES}); give the visible count of the repeat or one band of it`);
+            if (final && fit.slots.some(s => s.id === e.slot)) {
+                result.dropped.push({ elementId: `e${String(i).padStart(3, '0')}`, slotId: e.slot, by: 'validator', problems: elementProblems.get(i)!, reasonCode: 'still_invalid_after_revision' });
+            }
+        }
+    });
+    const expanded: ExpandedElement[] = expandElements(reply.elements, fit, evidence, method).filter(x => !oversize.has(x.replyIndex));
     // anchor the model's estimates to the scan's geometry before the slot rules: within the tolerance they are snapped, beyond it they are problems
     const anchored = anchorElements(expanded, fit, located, undefined, final, covers);
     result.anchored = anchored.notes;

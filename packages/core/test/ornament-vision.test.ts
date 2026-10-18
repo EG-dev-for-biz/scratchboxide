@@ -20,7 +20,7 @@ import {
     ORNAMENT_PROMPT_VERSION, ORNAMENT_VISION_TIMEOUT_MS, type EvidenceInput
 } from '../src/node/3d-engine/staged-location/ornament-vision';
 import { VisionModelChain, type VisionGenAIClient } from '../src/node/gemini/vision-model-chain';
-import { schemaClosure, STAGED_VISION_MODEL_DEFAULT, validateContract, type CompactElement, type EvidenceImageRef, type StructureFit, type VisionOrnamentReply } from '../src/common/spatial/staged-location-contracts';
+import { ORNAMENT_REPLICATE_MAX_INSTANCES, schemaClosure, STAGED_VISION_MODEL_DEFAULT, validateContract, type CompactElement, type EvidenceImageRef, type StructureFit, type VisionOrnamentReply } from '../src/common/spatial/staged-location-contracts';
 import { structureFit } from './helpers/staged-location-fixtures';
 
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452000000100000001008060000001ff3ff61', 'hex');
@@ -180,6 +180,33 @@ describe('the checks of §5.5, one by one', () => {
         expect(check([zero]).problems.join(' ')).toMatch(/rule 7: a repeat along an edge needs a whole count of at least 1 and a positive pitch \(count 0/);
         const one: CompactElement = { ...CORNICE, op: { replicate: { seed: { revolve: { at: [0, 200], axis: 'n', profile: [0, 0, 100, 0, 0, 60] } }, along: [0, 0, 1] } } };
         expect(check([one]).problems.join(' ')).not.toMatch(/positive pitch/);
+    });
+    it('rule 7: a repeat count past the per-element bound is sent back before it is expanded, so one reply cannot exhaust the heap', () => {
+        // run 18683533: the server's heap reached its 4 GB limit inside footprint(), expanding a reading's repeat into instances
+        const seed = { revolve: { at: [0, 200] as [number, number], axis: 'n' as const, profile: [0, 0, 100, 0, 0, 60] } };
+        const huge: CompactElement[] = [
+            { ...CORNICE, op: { replicate: { seed, along: [0, 1, 3_000_000] } } },
+            { ...ROUNDEL, op: { replicate: { seed: { relief: { box: [0, 0, 300, 300], depth: 40 } }, grid: [2000, 12000, 1, 1, 2000, 1500, 0] } } }
+        ];
+        const before = process.memoryUsage().heapUsed;
+        const t0 = Date.now();
+        const r = check(huge);
+        const grewMB = (process.memoryUsage().heapUsed - before) / 1e6;
+        expect(r.problems).toEqual([
+            `element 0: rule 7: a repeat of 3000000 instances is more than one element takes (${ORNAMENT_REPLICATE_MAX_INSTANCES}); give the visible count of the repeat or one band of it`,
+            `element 1: rule 7: a repeat of 3000000 instances is more than one element takes (${ORNAMENT_REPLICATE_MAX_INSTANCES}); give the visible count of the repeat or one band of it`
+        ]);
+        expect(grewMB).toBeLessThan(32);
+        expect(Date.now() - t0).toBeLessThan(2000);
+        // after the revision the same reading is dropped, still unexpanded, and says why
+        const fin = check(huge, [], 'STOP', true);
+        expect(fin.kept).toEqual([]);
+        expect(fin.dropped.map(d => [d.elementId, d.reasonCode])).toEqual([['e000', 'still_invalid_after_revision'], ['e001', 'still_invalid_after_revision']]);
+        // at the bound a repeat is still checked as before (this one runs past its edge)
+        const atBound: CompactElement = { ...CORNICE, op: { replicate: { seed, along: [0, 1000, ORNAMENT_REPLICATE_MAX_INSTANCES] } } };
+        const at = check([atBound]).problems;
+        expect(at).toContain('element 0: rule 7: the element runs past the 26.30 m edge S02');
+        expect(at.join(' ')).not.toMatch(/instances is more than one element takes/);
     });
     it('rule 8: overlapping elements in one slot, unless one contains the other', () => {
         const a: CompactElement = { ...ROUNDEL, op: { relief: { box: [2000, 12000, 5000, 15000], depth: 50 } } };
