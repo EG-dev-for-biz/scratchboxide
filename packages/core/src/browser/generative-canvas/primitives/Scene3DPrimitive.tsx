@@ -623,6 +623,7 @@ import { BakedGaussian } from '../../../common/geospatial-4d-protocol';
 import { NativeSpatialBridge } from '../../../common/spatial/NativeSpatialBridge';
 import { loadServedGeneratorGlb } from '../../../common/strip-embedded-glb';
 import { PhotorealGaussianSplatMesh } from '../services/spatial/PhotorealGaussianSplatMesh';
+import { EWA_CUTOFF_SIGMA, EWA_SPLAT_GLSL } from '../../../common/spatial/splat-ewa-projection';
 
 // ==========================================
 // Pluggable Splat Representation (ISplatViewer)
@@ -658,7 +659,7 @@ export class InHouseSplatViewer implements ISplatViewer {
         const count = gaussians.length;
         if (count === 0) return;
 
-        // Base unit quad geometry: 4 vertices [-1..1] spanning 2-sigma ellipse
+        // Base unit quad geometry: 4 vertices [-1..1] spanning the 3-sigma ellipse
         const quadPositions = new Float32Array([
             -1.0, -1.0, 0.0,
              1.0, -1.0, 0.0,
@@ -708,88 +709,35 @@ export class InHouseSplatViewer implements ISplatViewer {
         instGeometry.setAttribute('instanceColor', new THREE.InstancedBufferAttribute(colorArray, 4));
 
         const material = new THREE.ShaderMaterial({
+            uniforms: { uViewport: { value: new THREE.Vector2(1920, 1080) } },
             vertexShader: `
                 attribute vec3 instancePosition;
                 attribute vec3 instanceScale;
                 attribute vec4 instanceQuat;
                 attribute vec4 instanceColor;
 
+                uniform vec2 uViewport;
                 varying vec4 vColor;
                 varying vec2 vQuadPos;
 
-                mat3 quatToMat3(vec4 q) {
-                    float x2 = q.x + q.x, y2 = q.y + q.y, z2 = q.z + q.z;
-                    float xx = q.x * x2, xy = q.x * y2, xz = q.x * z2;
-                    float yy = q.y * y2, yz = q.y * z2, zz = q.z * z2;
-                    float wx = q.w * x2, wy = q.w * y2, wz = q.w * z2;
-                    return mat3(
-                        1.0 - (yy + zz), xy + wz, xz - wy,
-                        xy - wz, 1.0 - (xx + zz), yz + wx,
-                        xz + wy, yz - wx, 1.0 - (xx + yy)
-                    );
-                }
+                ${EWA_SPLAT_GLSL}
 
                 void main() {
-                    vColor = instanceColor;
-                    vQuadPos = position.xy * 2.0;
-
                     vec4 camPos = modelViewMatrix * vec4(instancePosition, 1.0);
-                    if (camPos.z >= -0.01) {
+                    vec4 clipCenter;
+                    vec2 axisMajorPx;
+                    vec2 axisMinorPx;
+                    float opacity;
+                    if (!sbEwaProject(camPos, instanceScale, instanceQuat, mat3(modelViewMatrix), projectionMatrix, uViewport, 0.0,
+                                      instanceColor.a, clipCenter, axisMajorPx, axisMinorPx, opacity)) {
                         gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
                         return;
                     }
-
-                    mat3 R = quatToMat3(instanceQuat);
-                    mat3 S = mat3(
-                        instanceScale.x, 0.0, 0.0,
-                        0.0, instanceScale.y, 0.0,
-                        0.0, 0.0, instanceScale.z
-                    );
-                    mat3 M = R * S;
-                    mat3 Sigma = M * transpose(M);
-
-                    mat3 W = mat3(modelViewMatrix);
-                    mat3 V = W * Sigma * transpose(W);
-
-                    float tz = -camPos.z;
-                    float tz2 = tz * tz;
-                    float fx = projectionMatrix[0][0];
-                    float fy = projectionMatrix[1][1];
-
-                    mat3 J = mat3(
-                        fx / tz, 0.0, 0.0,
-                        0.0, fy / tz, 0.0,
-                        -fx * camPos.x / tz2, -fy * camPos.y / tz2, 0.0
-                    );
-
-                    mat3 Sigma2D = J * V * transpose(J);
-
-                    float s00 = Sigma2D[0][0] + 0.0001;
-                    float s01 = Sigma2D[0][1];
-                    float s11 = Sigma2D[1][1] + 0.0001;
-
-                    float det = s00 * s11 - s01 * s01;
-                    float trace = s00 + s11;
-                    float disc = max(0.0, trace * trace * 0.25 - det);
-                    float lambda1 = trace * 0.5 + sqrt(disc);
-                    float lambda2 = max(0.0, trace * 0.5 - sqrt(disc));
-
-                    float radius1 = sqrt(max(lambda1, 1e-6));
-                    float radius2 = sqrt(max(lambda2, 1e-6));
-
-                    float theta = 0.5 * atan(2.0 * s01, s00 - s11);
-                    float cosT = cos(theta);
-                    float sinT = sin(theta);
-
-                    vec2 majorAxis = vec2(cosT, sinT) * radius1 * 3.0;
-                    vec2 minorAxis = vec2(-sinT, cosT) * radius2 * 3.0;
-
-                    vec2 ndcOffset = position.x * majorAxis + position.y * minorAxis;
-
-                    vec4 centerNdc = projectionMatrix * camPos;
-                    centerNdc.xy += ndcOffset * centerNdc.w;
-
-                    gl_Position = centerNdc;
+                    vColor = vec4(instanceColor.rgb, opacity);
+                    // Quad corners at +-1 span +-3 sigma along the screen-space eigenvectors.
+                    vQuadPos = position.xy * ${EWA_CUTOFF_SIGMA.toFixed(1)};
+                    vec2 offsetPx = position.x * axisMajorPx + position.y * axisMinorPx;
+                    gl_Position = clipCenter + vec4(offsetPx * 2.0 / uViewport * clipCenter.w, 0.0, 0.0);
                 }
             `,
             fragmentShader: `
@@ -798,9 +746,9 @@ export class InHouseSplatViewer implements ISplatViewer {
 
                 void main() {
                     float r2 = dot(vQuadPos, vQuadPos);
-                    if (r2 > 4.0) discard;
-                    float alpha = exp(-0.5 * r2) * vColor.a;
-                    if (alpha < 0.02) discard;
+                    if (r2 > ${(EWA_CUTOFF_SIGMA * EWA_CUTOFF_SIGMA).toFixed(1)}) discard;
+                    float alpha = min(0.99, exp(-0.5 * r2) * vColor.a);
+                    if (alpha < 1.0 / 255.0) discard;
                     gl_FragColor = vec4(vColor.rgb, alpha);
                 }
             `,
@@ -813,6 +761,14 @@ export class InHouseSplatViewer implements ISplatViewer {
 
         this.splatMesh = new THREE.Mesh(instGeometry as any, material);
         this.splatMesh.frustumCulled = false;
+        // The EWA projection works in pixels: track the drawing buffer being rendered.
+        const drawingBuffer = new THREE.Vector2();
+        this.splatMesh.onBeforeRender = (renderer: THREE.WebGLRenderer) => {
+            const target = renderer.getRenderTarget();
+            if (target) drawingBuffer.set(target.width, target.height);
+            else renderer.getDrawingBufferSize(drawingBuffer);
+            if (drawingBuffer.x > 0 && drawingBuffer.y > 0) material.uniforms.uViewport.value.copy(drawingBuffer);
+        };
         this.group.add(this.splatMesh);
     }
 

@@ -1622,13 +1622,80 @@
           uniform float uAperture;
           uniform float uFocusDist;
           uniform float uDofStrength;
+          uniform vec2 viewport;
 
           varying vec2 vUv;
+          varying vec2 vSigmaCoord;
           varying vec3 vColor;
           varying float vOpacity;
           varying float vDepth;
           varying vec3 vNormal;
           varying vec3 vViewPos;
+
+          // EWA projection (same GLSL as packages/core/src/common/spatial/splat-ewa-projection.ts).
+          bool sbEwaProject(
+            vec4 viewCenter, vec3 sigma, vec4 quat, mat3 viewRot, mat4 proj, vec2 viewportPx, float extraVarPx2, float opacity,
+            out vec4 clipCenter, out vec2 axisMajorPx, out vec2 axisMinorPx, out float opacityOut
+          ) {
+            clipCenter = proj * viewCenter;
+            axisMajorPx = vec2(0.0);
+            axisMinorPx = vec2(0.0);
+            opacityOut = 0.0;
+            bool persp = abs(proj[2][3]) > 0.5;
+            if (clipCenter.w <= 0.0) return false;
+            if (clipCenter.z < -clipCenter.w || clipCenter.z > clipCenter.w) return false;
+
+            float ql = length(quat);
+            vec4 q = ql > 1e-8 ? quat / ql : vec4(0.0, 0.0, 0.0, 1.0);
+            float xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z;
+            float xy = q.x * q.y, xz = q.x * q.z, yz = q.y * q.z;
+            float wx = q.w * q.x, wy = q.w * q.y, wz = q.w * q.z;
+            // Columns of R scaled by the sigmas (M = R S), then taken to view space (T = W M).
+            vec3 t0 = viewRot * (vec3(1.0 - 2.0 * (yy + zz), 2.0 * (xy + wz), 2.0 * (xz - wy)) * sigma.x);
+            vec3 t1 = viewRot * (vec3(2.0 * (xy - wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz + wx)) * sigma.y);
+            vec3 t2 = viewRot * (vec3(2.0 * (xz + wy), 2.0 * (yz - wx), 1.0 - 2.0 * (xx + yy)) * sigma.z);
+
+            float fx = proj[0][0] * 0.5 * viewportPx.x;
+            float fy = proj[1][1] * 0.5 * viewportPx.y;
+            float j00, j02, j11, j12;
+            if (persp) {
+              float tz = -viewCenter.z;
+              float limX = 1.30 / proj[0][0];
+              float limY = 1.30 / proj[1][1];
+              float tx = clamp(viewCenter.x / tz, -limX, limX) * tz;
+              float ty = clamp(viewCenter.y / tz, -limY, limY) * tz;
+              j00 = fx / tz; j02 = fx * tx / (tz * tz);
+              j11 = fy / tz; j12 = fy * ty / (tz * tz);
+            } else {
+              j00 = fx; j02 = 0.0; j11 = fy; j12 = 0.0;
+            }
+            // A = J T (2x3); Σ' = A Aᵀ.
+            vec3 a0 = vec3(j00 * t0.x + j02 * t0.z, j00 * t1.x + j02 * t1.z, j00 * t2.x + j02 * t2.z);
+            vec3 a1 = vec3(j11 * t0.y + j12 * t0.z, j11 * t1.y + j12 * t1.z, j11 * t2.y + j12 * t2.z);
+            float s00 = dot(a0, a0), s01 = dot(a0, a1), s11 = dot(a1, a1);
+
+            float det0 = max(s00 * s11 - s01 * s01, 0.0);
+            float dil = 0.30 + max(extraVarPx2, 0.0);
+            s00 += dil; s11 += dil;
+            float det1 = s00 * s11 - s01 * s01;
+            opacityOut = opacity * sqrt(det0 / det1);
+            if (opacityOut < 1.0 / 255.0) return false;
+
+            float mid = 0.5 * (s00 + s11);
+            float rad = sqrt(max(0.25 * (s00 - s11) * (s00 - s11) + s01 * s01, 0.0));
+            float l1 = mid + rad;
+            float l2 = max(mid - rad, 0.0);
+            vec2 v1 = abs(s01) > 1e-12 ? normalize(vec2(l1 - s11, s01)) : (s00 >= s11 ? vec2(1.0, 0.0) : vec2(0.0, 1.0));
+            float maxR = 2.0 * max(viewportPx.x, viewportPx.y);
+            axisMajorPx = v1 * min(3.0 * sqrt(l1), maxR);
+            axisMinorPx = vec2(-v1.y, v1.x) * min(3.0 * sqrt(l2), maxR);
+
+            // Cull when the 3-sigma bounding box lies entirely outside the viewport.
+            vec2 ndc = clipCenter.xy / clipCenter.w;
+            vec2 extNdc = 3.0 * sqrt(vec2(s00, s11)) * 2.0 / viewportPx;
+            if (abs(ndc.x) - extNdc.x > 1.0 || abs(ndc.y) - extNdc.y > 1.0) return false;
+            return true;
+          }
 
           void main() {
             vUv = uv;
@@ -1636,8 +1703,8 @@
 
             vec4 viewCenter = modelViewMatrix * vec4(instanceCenter, 1.0);
             vDepth = -viewCenter.z;
+            vViewPos = viewCenter.xyz;
 
-            // Decode normal from quaternion (with fallback)
             vec4 q = instanceQuat;
             vec3 localNorm = vec3(
               2.0 * (q.x * q.z + q.w * q.y),
@@ -1649,41 +1716,26 @@
             }
             vNormal = normalize(localNorm);
 
-            // 2D EWA Screen-Space Covariance & Anisotropic Principal Axes
-            vec3 viewNorm = normalize((modelViewMatrix * vec4(localNorm, 0.0)).xyz);
-            float cosIncidence = clamp(abs(dot(viewNorm, vec3(0.0, 0.0, 1.0))), 0.18, 1.0);
-
-            vec3 S = instanceScale * uSplatScale;
-            S = clamp(S, vec3(0.0008), vec3(0.035));
-            float rMajor = max(S.x, S.y) * 3.6;
-            float rMinor = max(0.0018, min(S.x, S.y) * 3.2 * cosIncidence);
-
-            // Physical Thin-Lens Depth of Field
+            // Physical thin-lens depth of field as an added screen-space blur variance (36 mm sensor width).
             float fMeters = uFocalLength * 0.001;
             float dFocus = max(1.0, uFocusDist);
             float N_ap = max(1.4, uAperture);
-            float coc = abs((fMeters * fMeters / (N_ap * max(0.001, dFocus - fMeters))) * ((vDepth - dFocus) / max(0.1, vDepth)));
-            coc = clamp(coc * 35.0 * uDofStrength, 0.0, 12.0);
+            float cocSensor = abs((fMeters * fMeters / (N_ap * max(0.001, dFocus - fMeters))) * ((vDepth - dFocus) / max(0.1, vDepth)));
+            float blurSigmaPx = 0.25 * clamp(cocSensor / 0.036 * viewport.x * uDofStrength, 0.0, 64.0);
 
-            float bokehSpread = coc * 0.6;
-            rMajor += bokehSpread;
-            rMinor += bokehSpread;
-
-            vec2 screenTangent = normalize(viewNorm.xy + vec2(0.0001));
-            float theta = atan(screenTangent.y, screenTangent.x);
-
-            vec2 localPos = position.xy;
-            vec2 rotatedCorner = vec2(
-              localPos.x * cos(theta) - localPos.y * sin(theta),
-              localPos.x * sin(theta) + localPos.y * cos(theta)
-            );
-
-            vec2 screenOffset = vec2(rotatedCorner.x * rMajor, rotatedCorner.y * rMinor);
-            vec4 viewPos = viewCenter + vec4(screenOffset, 0.0, 0.0);
-            vViewPos = viewPos.xyz;
-            gl_Position = projectionMatrix * viewPos;
-
-            vOpacity = instanceOpacity / (1.0 + coc * 0.75);
+            vec4 clipCenter;
+            vec2 axisMajorPx;
+            vec2 axisMinorPx;
+            float ewaOpacity;
+            if (!sbEwaProject(viewCenter, instanceScale * uSplatScale, instanceQuat, mat3(modelViewMatrix), projectionMatrix, viewport,
+                              blurSigmaPx * blurSigmaPx, instanceOpacity, clipCenter, axisMajorPx, axisMinorPx, ewaOpacity)) {
+              gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+              return;
+            }
+            vec2 corner = position.xy * 2.0;
+            vSigmaCoord = corner * 3.0;
+            gl_Position = clipCenter + vec4((corner.x * axisMajorPx + corner.y * axisMinorPx) * 2.0 / viewport * clipCenter.w, 0.0, 0.0);
+            vOpacity = ewaOpacity;
           }
         `,
         fragmentShader: `
@@ -1697,6 +1749,7 @@
           uniform float uContactAO;
           uniform float uViewDependenceSH;
 
+          varying vec2 vSigmaCoord;
           varying vec2 vUv;
           varying vec3 vColor;
           varying float vOpacity;
@@ -1714,13 +1767,10 @@
           }
 
           void main() {
-            vec2 d = (vUv - vec2(0.5)) * 2.0;
-            float r2 = dot(d, d);
-            if (r2 > 1.0) discard;
-
-            // Anisotropic EWA Gaussian Alpha Decay with smooth boundary falloff (zero disc edge artifacts)
-            float alpha = clamp((1.0 - smoothstep(0.65, 1.0, r2)) * exp(-0.8 * r2) * 1.5 * vOpacity, 0.0, 1.0);
-            if (alpha < 0.015) discard;
+            float r2 = dot(vSigmaCoord, vSigmaCoord);
+            if (r2 > 9.0) discard;
+            float alpha = min(0.99, vOpacity * exp(-0.5 * r2));
+            if (alpha < 1.0 / 255.0) discard;
 
             vec3 color = vColor;
 
