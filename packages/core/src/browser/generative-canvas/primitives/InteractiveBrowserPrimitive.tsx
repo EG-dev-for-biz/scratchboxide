@@ -35,6 +35,9 @@ import {
     IconTrash
 } from '../canvas-icons';
 
+/** How long the server may hold a pending-actions request open waiting for the agent's next action. */
+const BROWSER_ACTION_LONG_POLL_MS = 25_000;
+
 export interface InteractiveBrowserPrimitiveProps {
     data: InteractiveBrowserData;
     onUpdate?: (updatedData: InteractiveBrowserData) => void;
@@ -252,27 +255,29 @@ export const InteractiveBrowserPrimitive: React.FC<InteractiveBrowserPrimitivePr
         }, '*');
     }, []);
 
-    // Polling hook to fetch pending actions from server and dispatch to iframe bridge.
-    // Runs only while this primitive is mounted AND the document is visible; in-flight requests
-    // are aborted and the interval cleared on unmount or when the tab is hidden.
+    // Long-poll for the agent's pending actions and dispatch them to the iframe bridge: the server holds the request
+    // until an action is queued (or ~25 s pass), so an action reaches the page at once instead of on the next 1 s
+    // poll. Runs only while this primitive is mounted AND the document is visible; the request in flight is aborted
+    // on unmount or when the tab is hidden.
     React.useEffect(() => {
         if (typeof document === 'undefined') return;
         let cancelled = false;
         let inFlight = false;
-        let interval: ReturnType<typeof setInterval> | null = null;
+        let looping = false;
         let controller: AbortController | null = null;
 
         const isVisible = () => document.visibilityState !== 'hidden';
 
-        const pollOnce = async () => {
-            if (cancelled || inFlight || !isVisible()) return;
+        /** One long-poll; false when it failed (the loop then waits a second before asking again). */
+        const pollOnce = async (): Promise<boolean> => {
+            if (cancelled || inFlight || !isVisible()) return false;
             inFlight = true;
             controller = new AbortController();
             try {
-                const res = await fetch('/api/browser/pending-actions', { signal: controller.signal });
-                if (cancelled || !res.ok) return;
+                const res = await fetch(`/api/browser/pending-actions?waitMs=${BROWSER_ACTION_LONG_POLL_MS}`, { signal: controller.signal });
+                if (cancelled || !res.ok) return false;
                 const actions = await res.json();
-                if (cancelled) return;
+                if (cancelled) return false;
                 if (Array.isArray(actions) && actions.length > 0) {
                     for (const action of actions) {
                         const iframe = iframeRef.current;
@@ -334,40 +339,46 @@ export const InteractiveBrowserPrimitive: React.FC<InteractiveBrowserPrimitivePr
                         }
                     }
                 }
+                return true;
             } catch (e) {
-                // Aborted or transport error: nothing to dispatch this tick.
+                // Aborted or transport error: nothing to dispatch.
+                return false;
             } finally {
                 inFlight = false;
                 controller = null;
             }
         };
 
-        const startInterval = () => {
-            if (interval || cancelled) return;
-            interval = setInterval(pollOnce, 1000);
-        };
-        const stopInterval = () => {
-            if (interval) {
-                clearInterval(interval);
-                interval = null;
+        const startPolling = async () => {
+            if (looping || cancelled) return;
+            looping = true;
+            try {
+                while (!cancelled && isVisible()) {
+                    const ok = await pollOnce();
+                    if (!ok && !cancelled && isVisible()) await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+            } finally {
+                looping = false;
             }
+        };
+        const stopPolling = () => {
             controller?.abort();
         };
         const handleVisibilityChange = () => {
             if (isVisible()) {
-                startInterval();
+                void startPolling();
             } else {
-                stopInterval();
+                stopPolling();
             }
         };
 
         document.addEventListener('visibilitychange', handleVisibilityChange);
-        if (isVisible()) startInterval();
+        if (isVisible()) void startPolling();
 
         return () => {
             cancelled = true;
             document.removeEventListener('visibilitychange', handleVisibilityChange);
-            stopInterval();
+            stopPolling();
         };
     }, [currentUrl, triggerSnapshotFetch]);
 

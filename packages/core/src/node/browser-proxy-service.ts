@@ -129,6 +129,8 @@ export class BrowserProxyService {
     // Pending action queue & deferred promises
     private pendingActions: any[] = [];
     private actionPromises = new Map<string, { resolve: (val: any) => void, reject: (err: any) => void }>();
+    /** Long-poll requests waiting for the next queued action (see waitForPendingActions). */
+    private actionWaiters: Array<(actions: any[]) => void> = [];
 
     public updateState(state: Partial<BrowserActiveState>) {
         const merged = { ...(this.activeState ?? {}), ...state };
@@ -147,6 +149,9 @@ export class BrowserProxyService {
         const id = Math.random().toString(36).substring(2, 11);
         const pending = { id, action, params };
         this.pendingActions.push(pending);
+        // A canvas browser waiting on a long-poll gets the action now.
+        const waiter = this.actionWaiters.shift();
+        if (waiter) waiter(this.getPendingActions());
 
         return new Promise((resolve, reject) => {
             this.actionPromises.set(id, { resolve, reject });
@@ -165,6 +170,30 @@ export class BrowserProxyService {
         const actions = [...this.pendingActions];
         this.pendingActions = []; // Clear pending list
         return actions;
+    }
+
+    /**
+     * Pending actions, waiting up to `timeoutMs` for one to be queued when there are none (long-poll for the canvas
+     * browser: actions reach it as they are queued, not on its next poll). Resolves [] on timeout or when `signal`
+     * aborts (the request went away); an aborted waiter never takes actions.
+     */
+    public waitForPendingActions(timeoutMs: number, signal?: AbortSignal): Promise<any[]> {
+        if (this.pendingActions.length > 0 || timeoutMs <= 0 || signal?.aborted) return Promise.resolve(this.getPendingActions());
+        return new Promise(resolve => {
+            const done = (actions: any[]) => {
+                clearTimeout(timer);
+                signal?.removeEventListener('abort', onAbort);
+                resolve(actions);
+            };
+            const leave = () => {
+                this.actionWaiters = this.actionWaiters.filter(w => w !== done);
+                done([]);
+            };
+            const onAbort = () => leave();
+            const timer = setTimeout(leave, timeoutMs);
+            signal?.addEventListener('abort', onAbort, { once: true });
+            this.actionWaiters.push(done);
+        });
     }
 
     public resolveAction(id: string, success: boolean, result: any, error?: string) {
@@ -742,8 +771,9 @@ export class BrowserProxyService {
                         port: parsedUrl.port || (isHttps ? 443 : 80),
                         path: parsedUrl.path || '/',
                         method: options.method || 'GET',
-                        headers: requestHeaders,
-                        rejectUnauthorized: false // Allow self-signed or local dev certs
+                        // TLS is verified (Node's default): a page with a bad certificate fails to load
+                        // instead of being proxied as if it were the site.
+                        headers: requestHeaders
                     } as https.RequestOptions,
                     res => {
                         const statusCode = res.statusCode || 200;

@@ -159,10 +159,12 @@ async function runMediaJobPollingTests() {
     const browserSrc = fs.readFileSync(path.join(GC_DIR, 'primitives/InteractiveBrowserPrimitive.tsx'), 'utf-8');
     const pollIdx = browserSrc.indexOf('/api/browser/pending-actions');
     assert.ok(pollIdx > 0, 'pending-actions polling must still exist');
-    const window = browserSrc.slice(Math.max(0, pollIdx - 3000), pollIdx + 4000);
+    const window = browserSrc.slice(Math.max(0, pollIdx - 3000), pollIdx + 6000);
     assert.ok(/visibilityState|isActive|isVisible/.test(window), 'Pending-action polling must be gated on visibility/active state');
     assert.ok(/AbortController|cancelled/.test(window), 'Pending-action polling must guard in-flight fetches on cleanup');
-    assert.ok(/clearInterval\(/.test(window), 'Pending-action polling must clear its interval on cleanup');
+    // Long-poll (no interval): cleanup aborts the request the server is holding.
+    assert.ok(/waitMs=/.test(window), 'Pending actions are long-polled, not polled on an interval');
+    assert.ok(/controller\?\.abort\(\)/.test(window), 'Pending-action long-poll must abort its request on cleanup');
     console.log('  ✓ Test 6 Passed: browser polling is gated and cleaned up.');
 
     console.log('\n🎉 ALL MEDIA JOB POLLING HOOK TESTS PASSED SUCCESSFULLY!');
