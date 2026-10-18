@@ -544,7 +544,7 @@ export class TaskCapabilityResolver {
             } else if (/atmosphere|lighting|rayleigh|mie|scattering|turbidity|sky\s*dome|aerial\s*perspective|god\s*rays|diurnal|kelvin|cloud\s*shadow|match\s*lighting|de-?light|delighting|harmonize\s*lighting|lighting[\s\w-]{0,30}3d\s*object|portal\s*fixture|window\s*(?:illumination|backlight)|gaffer|rembrandt|butterfly|film\s*noir|cinematic\s*light|photographic\s*light|key-?to-?fill|inverse\s*light/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'threejs-webgl';
-                nativeCapabilities.push('Photographic Gaffer Engine (LightingGafferService & sb_configure_gaffer_rig)');
+                nativeCapabilities.push('Photographic Gaffer Engine (LightingGafferService & lighting_configure_gaffer_rig)');
                 nativeCapabilities.push('Inverse Photometric Image Estimator (InverseLightingEstimatorService)');
                 nativeCapabilities.push('Closed-Loop Photometric Matchmove Optimizer (ClosedLoopLightingOptimizerService)');
                 nativeCapabilities.push('Atmosphere Service (AtmosphereService & AtmosphereImageEstimationService)');
