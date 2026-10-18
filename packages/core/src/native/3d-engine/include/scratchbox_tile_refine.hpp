@@ -3564,7 +3564,23 @@ private:
                    << ", \"inferredCells\": " << a.inferredCells << ", \"inferredContradicted\": " << a.inferredContradicted << ", \"filled\": " << (a.latticeFilled ? "true" : "false")
                    << ", \"rowResidualRms_m\": " << num(a.rowResidualRms) << ", \"rowResidualMax_m\": " << num(a.rowResidualMax) << ", \"offGridCells\": " << a.offGridCells
                    << ", \"cellsTested\": " << a.cellsTested << ", \"cellsAtMaxDepth\": " << a.cellsAtMaxDepth << ", \"extent_m\": [" << num(f.sMax - f.sMin) << "," << num(f.tMax - f.tMin) << "]"
-                   << ", \"ortho\": [" << f.orthoWidth << "," << f.orthoHeight << "], \"analysisMs\": " << num(f.analysisMs) << "}";
+                   << ", \"ortho\": [" << f.orthoWidth << "," << f.orthoHeight << "], \"analysisMs\": " << num(f.analysisMs)
+                   << ", \"grammar\": " << (a.grammarApplied ? "true" : "false") << "}";
+            }
+        }
+        js << "], \"grammar\": [";
+        {
+            // every facade a grammar was given for: applied (its cells and how the photo's own cells met it) or why not
+            bool first = true;
+            for (const auto& f : relief.facades) {
+                const auto& a = f.analysis;
+                if (!a.grammarGiven) continue;
+                js << (first ? "" : ",") << "{\"facadeId\": " << f.id << ", \"applied\": " << (a.grammarApplied ? "true" : "false") << ", \"note\": \"" << jsonEscape(a.grammarNote)
+                   << "\", \"source\": \"" << jsonEscape(a.grammarSource) << "\", \"confidence\": " << num(a.grammarConfidence) << ", \"cells\": " << a.grammarCells
+                   << ", \"overObserved\": " << a.grammarSnapped << ", \"inferred\": " << a.grammarFilled << ", \"contradicted\": " << a.grammarContradicted
+                   << ", \"uncovered\": " << a.grammarUncovered << ", \"observedDropped\": " << a.grammarDropped << ", \"snapRms_m\": " << num(a.grammarSnapRms)
+                   << ", \"snapMax_m\": " << num(a.grammarSnapMax) << "}";
+                first = false;
             }
         }
         js << "]},\n";

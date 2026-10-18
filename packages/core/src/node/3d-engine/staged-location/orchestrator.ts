@@ -129,6 +129,7 @@ import { TextureWorkerPool, textureWorkersEnabled } from './texture-worker-pool'
 import { eventLoopStats, runBlockTracer } from './event-loop-stats';
 import type { EnhanceModelClient } from './texture-enhance';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
+import { facadeGrammarEnabled, grammarFileText, runFacadeGrammarPass, FACADE_GRAMMAR_PROMPT_VERSION, type GrammarFacadeOutcome } from './facade-grammar';
 import { TEXTURE_LADDER_RUNGS, type TexturePassDegradation, type TexturePassRecord, type TextureLayerBundle } from '../../../common/spatial/texture-pass-contracts';
 
 /** What the evidence stage spent: free metadata queries, billed images and the seconds the images took. */
@@ -154,6 +155,9 @@ export const STAGES = {
     evidence: { order: -1, title: 'Street View close-ups', budgetMs: EVIDENCE_STAGE_BUDGET_MS + 30_000 + MATCH_TIMEOUT_MS + 60_000 + EDGE_REGISTRATION_BUDGET_MS + 15_000 + JOINT_REGISTRATION_BUDGET_MS + 30_000 },
     'trees-measure': { order: -1, title: 'Measuring the trees', budgetMs: 300_000 },
     remesh: { order: 2, title: 'Remeshed scan', budgetMs: 300_000 },
+    // the facades' grammars read from the tile photo (three readings per facade, concurrently), gated, and the relief run
+    // again with the accepted ones
+    grammar: { order: 2, title: 'Facade grammar', budgetMs: 300_000 },
     fit: { order: 3, title: 'Scan-fitted rebuild', budgetMs: 30_000 },
     project: { order: -1, title: 'Slots in the photos', budgetMs: 10_000 },
     // the batched wide reading (bounded by its own budget), then the focused run readings in what is left, then the margin the
@@ -1691,6 +1695,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         }
 
         // ---------------- remesh ----------------
+        // facade grammar: on by flag, with a vision model, on a relief that runs
+        const grammarOn = facadeGrammarEnabled() && !!visionAvailable && (request.relief ?? TILE_REFINE_RELIEF_DEFAULT) !== false;
+        let remeshRequest: TileRefineRequest | undefined;
         type RemeshValue = { refined?: TileRefineResult; flattened?: ScanFitFlattenResult; groundLayerId: string; groundFile: string; committed: boolean };
         const remesh = await runner.stage<RemeshValue>({
             id: 'remesh',
@@ -1721,12 +1728,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         }
                     }
                 }
-                const r = await deps.refine.refine({
+                remeshRequest = {
                     tilePath,
                     ...(isolateMode ? { isolate: true, anchor: { x: structure!.seed.x, z: structure!.seed.z } } : {}),
                     ...(ownership ? { ownership } : {}),
                     ...((request.relief ?? TILE_REFINE_RELIEF_DEFAULT) === false ? { relief: false } : {})
-                });
+                };
+                // the facades' orthophotos for the grammar reading (facade-grammar.ts), only when it will run
+                const r = await deps.refine.refine({ ...remeshRequest, ...(grammarOn ? { reliefOrthos: true } : {}) });
                 run.keys.remesh = r.cacheKey;
                 run.cacheStatus.remesh = r.cached ? 'hit' : 'miss';
                 const key8 = r.cacheKey.slice(0, 8);
@@ -1840,6 +1849,103 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         persist();
         const remeshed = remesh.status !== 'stopped' && remesh.value?.committed === true ? remesh.value.refined : undefined;
         const isolateOk = isolateMode && !!remeshed?.rawClayGlb && !run.state.degradations.some(d => d.reasonCode === 'isolate_mismatch');
+
+        // ---------------- facade grammar (photo-inferred window lattices on the remeshed facades) ----------------
+        const grammarRun = async (): Promise<void> => {
+            if (!grammarOn) {
+                runner.skip('grammar', !facadeGrammarEnabled() ? 'facade grammar is off (SCRATCHBOX_FACADE_GRAMMAR=1 turns it on)' : !visionAvailable ? 'no vision model is configured' : 'the photometric relief is off');
+                return;
+            }
+            const orthosDir = remeshed?.reliefOrthosDir;
+            const l2 = run.state.layers.find(l => l.layer === 'l2' && l.stage === 'remesh');
+            if (!remeshed || !orthosDir || !remeshRequest || !l2) { runner.skip('grammar', remeshed ? 'the remesh wrote no facade orthophotos' : 'the remesh failed, so there are no remeshed facades to read'); return; }
+            type GrammarValue = { facades: GrammarFacadeOutcome[]; calls: number; passMs: number; refine?: { cacheKey: string; clayGlb: string; stats: Record<string, any>; ms: number } };
+            await runner.stage<GrammarValue>({
+                id: 'grammar',
+                run: async io => {
+                    const chain = new VisionModelChain<string>({ client: visionAvailable!.client, candidates: visionAvailable!.candidates, signal: ctx.signal, ...chainExtras('grammar'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
+                    const key = stageKey('facade-grammar/v1', FACADE_GRAMMAR_PROMPT_VERSION, remeshed.cacheKey, visionAvailable!.candidates);
+                    run.keys.grammar = key;
+                    const entry = await cache.run<GrammarValue>('grammar', key, async dir => {
+                        io.progress('reading the facades\' grammar from the tile photo');
+                        const pass = await runFacadeGrammarPass({
+                            orthosDir, chain, anchor: structure ? structure.seed : { x: 0, z: 0 }, signal: io.signal, onProgress: m => io.progress(m), overlayDir: path.join(dir, 'overlays')
+                        });
+                        fs.writeFileSync(path.join(dir, 'pass.json'), JSON.stringify(pass));
+                        const value: GrammarValue = { facades: pass.facades, calls: pass.calls, passMs: pass.ms };
+                        if (pass.accepted.length) {
+                            const file = path.join(dir, 'grammar.txt');
+                            fs.writeFileSync(file, grammarFileText(pass.accepted));
+                            fs.writeFileSync(path.join(dir, 'grammar.json'), JSON.stringify(pass.accepted, null, 1));
+                            io.progress(`relief with ${pass.accepted.length} facade grammar${pass.accepted.length === 1 ? '' : 's'}`);
+                            const r = await deps.refine.refine({ ...remeshRequest!, facadeGrammar: file });
+                            value.refine = { cacheKey: r.cacheKey, clayGlb: r.clayGlb, stats: { relief: { grammar: r.stats?.relief?.grammar ?? [], lattices: (r.stats?.relief?.lattices ?? []).filter((l: any) => l.grammar) } }, ms: r.ms };
+                        }
+                        return { value };
+                    }, { bypass: bypass('grammar') });
+                    run.cacheStatus.grammar = entry.cached ? 'hit' : bypass('grammar') ? 'bypassed' : 'miss';
+                    const v = entry.value;
+                    cache.writeRunNote(runId, 'facade_grammar', v);
+                    const accepted = v.facades.filter(f => f.accepted && f.grammar);
+                    const rejected = v.facades.filter(f => !f.accepted && f.grammar);
+                    const applied = new Map<number, any>((v.refine?.stats.relief.grammar ?? []).map((g: any) => [g.facadeId, g]));
+                    const describe = (f: GrammarFacadeOutcome) => {
+                        const h = f.heldOut;
+                        return `facade ${f.facadeId} (${Math.round(f.areaM2)} m², ${f.grammar!.source}): ${f.grammar!.tiers.length} tiers, ${f.grammar!.tiers.reduce((s, t) => s + t.cols.length, 0)} openings${h ? `; held out: edge chamfer ${h.before.chamferPx.toFixed(2)} -> ${h.after.chamferPx.toFixed(2)} px, gradient NCC ${h.before.gradNcc.toFixed(3)} -> ${h.after.gradNcc.toFixed(3)}` : ''}`;
+                    };
+                    for (const f of v.facades) io.progress(`facade grammar: facade ${f.facadeId}: ${f.accepted ? 'accepted' : 'not used'}: ${f.reason}`);
+                    const degradations = rejected.map(f => run.degrade(record('grammar', 'grammar_rejected', {
+                        part: { description: `the window lattice of facade ${f.facadeId} (${Math.round(f.areaM2)} m²)` }, intended: 'a photo-inferred facade grammar as its window lattice',
+                        fellTo: "the relief's own window lattice on that facade", provenanceAfter: PROVENANCE.remeshed,
+                        reason: `the grammar read from the tile photo was not used: ${f.reason}`, transient: false, runId, now: now(), suffix: String(f.facadeId)
+                    })));
+                    if (!accepted.length || !v.refine) {
+                        return {
+                            status: degradations.length ? 'degraded' : 'committed', value: v, degradations,
+                            source: `facade grammar: no facade took a grammar (${v.facades.length} read, ${rejected.length} rejected by the scan or held-out check)`
+                        };
+                    }
+                    const key8 = v.refine.cacheKey.slice(0, 8);
+                    const pub = cache.publishFile(v.refine.clayGlb, `${base}_grammar_${key8}.glb`);
+                    const prov = readRemeshProvenance(v.refine.clayGlb);
+                    const confidence = Math.min(...accepted.map(f => f.grammar!.confidence));
+                    const cells = [...applied.values()].reduce((s, g) => s + g.overObserved + g.inferred, 0);
+                    const note = `facade grammar (photo-inferred, confidence ${confidence.toFixed(2)}): ${accepted.map(describe).join('; ')}`;
+                    const layer: StagedLayer = {
+                        objectId: layerObjectId(v.refine.cacheKey, 'l2g'), stage: 'grammar', layer: 'l2g', order: STAGES.grammar.order, url: pub.url, bytes: pub.bytes,
+                        provenance: {
+                            label: PROVENANCE.remeshed, measuredGeometry: false, confidence,
+                            inferred: { grammarFacades: accepted.length, grammarCells: cells, grammarConfidence: confidence, reliefCarvedVertices: prov.summary.relief?.carvedVertices ?? 0 },
+                            method: `${l2.provenance.method}; facade grammar read from the tile photo by the vision model (tiers of openings, fitted to the facade's metric frame), used where it passed the scan and held-out checks`,
+                            sources: [...l2.provenance.sources, { kind: 'stage-output', id: `grammar:${key8}` }], note
+                        },
+                        provenanceLabels: [PROVENANCE.remeshed, PROVENANCE.photoInferred], vertexProvenance: prov.summary, supersedes: [l2.objectId], revealAfter: [l2.objectId],
+                        reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [l2.objectId] }, cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(v.refine.clayGlb)
+                    };
+                    run.commit(layer, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress });
+                    run.note(PROVENANCE.photoInferred, note);
+                    return {
+                        status: degradations.length ? 'degraded' : 'committed', value: v, layers: [layer], degradations, cached: entry.cached, builtAtMs: entry.builtAtMs,
+                        source: `facade grammar: ${accepted.length} of ${v.facades.length} facades took a photo-inferred grammar (${cells} openings, confidence ${confidence.toFixed(2)}); ${accepted.map(describe).join('; ')}${rejected.length ? `; ${rejected.length} rejected` : ''}`
+                    };
+                },
+                degrade: async err => ({
+                    status: 'degraded', source: "the relief's own window lattices stand", reason: `the facade grammar failed (${errorMessage(err)})`,
+                    degradations: [run.degrade(record('grammar', 'grammar_failed', {
+                        part: { description: 'the window lattices of the remeshed facades' }, intended: 'photo-inferred facade grammars as the window lattices',
+                        fellTo: "the remeshed scan with the relief's own window lattices", provenanceAfter: PROVENANCE.remeshed,
+                        reason: `the facade grammar failed (${errorMessage(err)}); the relief's own window lattices stand`, cause: err, transient: true, runId, now: now(), reuses: ['resolve', 'tiles', 'trees-measure', 'remesh']
+                    }))]
+                })
+            });
+        };
+        const grammarPromise = grammarRun().catch(err => {
+            if (isAbort(err)) throw err;
+            const why = `the facade grammar stopped on an unexpected error (${errorMessage(err)})`;
+            const st = run.summary('grammar').status;
+            if (st === 'pending' || st === 'running') run.emit('grammar', 'degraded', { source: "the relief's own window lattices stand", reason: why, degradations: [] }, true);
+        });
+        siblings.push(grammarPromise);
 
         // ---------------- trees (plant) ‖ the rebuild ----------------
         const treesRun = async (): Promise<{ trees?: LocationClayTrees; putBack?: { triangles: number; crowns: number; reason: string } }> => {

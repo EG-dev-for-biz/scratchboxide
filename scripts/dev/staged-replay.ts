@@ -221,7 +221,7 @@ function installHeapSignal(): void {
     }
 }
 
-const RUN_VARIANT_STAGES = ['survey', 'evidence', 'vision', 'vision-reply', 'figures', 'textures'];
+const RUN_VARIANT_STAGES = ['survey', 'evidence', 'vision', 'vision-reply', 'figures', 'textures', 'grammar'];
 
 async function runHeadless(argv: string[]): Promise<void> {
     const arg = (name: string, dflt: string) => { const i = argv.indexOf(`--${name}`); return i >= 0 ? argv[i + 1] : dflt; };

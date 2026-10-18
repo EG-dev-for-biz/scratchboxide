@@ -24,13 +24,54 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <sstream>
 #include <string>
 
 using scratchbox::tile_refine::TileRefine;
 using scratchbox::tile_refine::TileRefineParams;
+
+/**
+ * Facade grammars, one block per facade:
+ *   facade <id> <nx> <ny> <nz> <cx> <cy> <cz> <confidence> <source>
+ *   tier <t0> <t1> <s0> <s1> [<s0> <s1> ...]
+ * (plane coordinates of that facade, metres; '#' starts a comment line).
+ */
+static bool readFacadeGrammars(const std::string& file, std::vector<scratchbox::photometric_relief::FacadeGrammar>& out, std::string& err) {
+    std::ifstream in(file);
+    if (!in) { err = "cannot read " + file; return false; }
+    std::string line;
+    int n = 0;
+    while (std::getline(in, line)) {
+        ++n;
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream ls(line);
+        std::string kind;
+        ls >> kind;
+        if (kind == "facade") {
+            scratchbox::photometric_relief::FacadeGrammar g;
+            ls >> g.facadeId >> g.normal.x >> g.normal.y >> g.normal.z >> g.centroid.x >> g.centroid.y >> g.centroid.z >> g.confidence;
+            if (!ls) { err = "line " + std::to_string(n) + ": facade needs id, normal, centroid and confidence"; return false; }
+            std::getline(ls >> std::ws, g.source);
+            out.push_back(std::move(g));
+        } else if (kind == "tier") {
+            if (out.empty()) { err = "line " + std::to_string(n) + ": tier before any facade"; return false; }
+            scratchbox::photometric_relief::FacadeGrammar::Tier t;
+            ls >> t.t0 >> t.t1;
+            double a, b;
+            while (ls >> a >> b) t.cols.push_back({a, b});
+            if (!std::isfinite(t.t0) || !std::isfinite(t.t1) || t.cols.empty()) { err = "line " + std::to_string(n) + ": tier needs t0 t1 and at least one s0 s1"; return false; }
+            out.back().tiers.push_back(std::move(t));
+        } else {
+            err = "line " + std::to_string(n) + ": unknown record '" + kind + "'";
+            return false;
+        }
+    }
+    return true;
+}
 
 static void usage() {
     std::cerr <<
@@ -62,6 +103,9 @@ static void usage() {
         "  --roi-radius M          relief region of interest: the anchor's footprint grown by M (default 60; <0 = whole tile)\n"
         "  --no-relief             skip the photometric relief (rectified scan only)\n"
         "  --relief-own-regions    relief: grow its own facade regions instead of using the detected wall planes\n"
+        "  --relief-orthos DIR     write each analysed facade's orthophoto (facade_<id>.png) and frame (facades.json)\n"
+        "  --facade-grammar FILE   photo-inferred facade grammars (text: 'facade id nx ny nz cx cy cz confidence source'\n"
+        "                          then 'tier t0 t1 s0 s1 [s0 s1 ...]' lines); each becomes its facade's window lattice\n"
         "  --flatten-band M        facade flatten: vertices within M of a detected wall plane move onto it (default 0.10)\n"
         "  --no-flatten            skip the facade flatten\n"
         "  --flatten-parallel-deg DEG  facade flatten: a face lies along a plane within DEG (default 30)\n"
@@ -95,7 +139,7 @@ static bool parsePair(const std::string& s, double& a, double& b) {
 
 int main(int argc, char** argv) {
     TileRefineParams p;
-    std::string input, outTextured, outClay, statsPath, compare;
+    std::string input, outTextured, outClay, statsPath, compare, grammarPath;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         auto next = [&]() -> std::string {
@@ -136,6 +180,8 @@ int main(int argc, char** argv) {
         }
         else if (a == "--no-relief") p.relief = false;
         else if (a == "--relief-own-regions") p.reliefOnWallPlanes = false;
+        else if (a == "--relief-orthos") p.reliefParams.orthoExportDir = next();
+        else if (a == "--facade-grammar") grammarPath = next();
         else if (a == "--flatten-band") p.flatten.band = num();
         else if (a == "--no-flatten") p.flatten.band = 0;
         else if (a == "--flatten-parallel-deg") p.flatten.parallelDeg = num();
@@ -167,6 +213,11 @@ int main(int argc, char** argv) {
         std::cerr << "--apron and --isolate-reach must be >= 0, --isolate-min-height finite\n";
         return 2;
     }
+    if (!grammarPath.empty()) {
+        std::string err;
+        if (!readFacadeGrammars(grammarPath, p.reliefParams.grammars, err)) { std::cerr << "--facade-grammar: " << err << "\n"; return 2; }
+    }
+    if (!p.reliefParams.orthoExportDir.empty()) std::filesystem::create_directories(p.reliefParams.orthoExportDir);
     p.reliefParams.recessMin = std::min(p.reliefParams.recessMin, p.reliefParams.maxDepth);
     p.reliefParams.recessMax = std::min(p.reliefParams.recessMax, p.reliefParams.maxDepth);
     if (!compare.empty()) {
