@@ -594,3 +594,80 @@ Tests: `staged-texture-worker.test.ts` (bit-identical twin, planes, report and l
 
 - Move the vision stage's slot cover and evidence downscaling (JS JPEG codec) to a worker thread too: they are the largest main-thread blocks left.
 - A run replay for the texture stage from a run's recorded inputs, so the main-thread and worker paths (or two rounds) can be compared on identical inputs live.
+
+## Round 9: the l2 fit "regression", bisected on replayed evidence; back-side artifacts; main-thread blocks (2026-10-18)
+
+Worktree `.claude/worktrees/fit-regression` from `origin/main` `97987c35`; bisect worktrees `fr-df49d8ef`, `fr-72870107`, `fr-97987c35` (removed after). Ports: web 3082, API 3083, tools 3084 (server started from the worktree root with `npm run dev`, `secrets.json` symlinked for the runs and removed after). Screenshots: `test-results/screenshots/fit_regression/` (`run1_tex_back`, `run2_tex_{front,back,frieze_back,attic_back_close,spandrels_back}`, `run2_prov_{front,back,frieze_back}`, `run3_tex_*`; gitignored), views set with `__SB_SET_CAMERA_VIEW__` around `[-1.25, 10.8, -2.4]` (theta = 180° − heading) and written with `__scratchbox_capture_active_3d_scene` to a localhost receiver.
+
+**Status: Verified, with the l2 shift explained as evidence and geometry variability, not a code regression.** The back-side fixes remove the sky texels and the stretched tile texels; the wedge and the keystone square remain as geometry (pass-through scan pieces), see below.
+
+### Replay harness (identical evidence through different commits)
+
+A scratch harness (not committed) ran `runStagedLocation` headless at a given commit with the app's own dependencies, wrapping three of them: the Street View grounding service (each request answered from a recording, live on a miss), the vision client (each request keyed by its normalised content, images by their pixels without the APP segments; live on a miss and recorded), and the tree strip (optionally answering with another commit's devegetated tile). Survey replies were bridged between the old single-call survey and the per-face survey by the image captions (boxes are 0..1000, size-independent). Tiles and geocode came from round 8's cache; texture enhancement off in every arm. The same commit replayed twice gave bit-identical numbers (run `52517386` = `4e198670` = `5a30df8d`).
+
+### Bisect (same survey replies, same Street View recordings)
+
+| Code | Tree strip (geometry) | Registration held-out, per-pano -> joint (px / NCC) | Images in common with `97987c35` | l2 LOO | l3b LOO | l3cf LOO |
+|---|---|---|---|---|---|---|
+| `97987c35` | its own (`0b6ef750` crown merge: 6,450 tris removed, remesh 2,106 tris) | 8.137 / 0.126 -> 7.117 / 0.196 | 54 of 54 | 5.301 / 0.216 | 5.058 / 0.234 | 4.443 / 0.153 |
+| `df49d8ef` (before the scheduling commits) | `97987c35`'s | 8.137 / 0.126 -> 7.117 / 0.196 | 54 of 54 | 5.301 / 0.216 | 5.058 / 0.234 | 4.443 / 0.153 |
+| `df49d8ef` | its own (old strip: 2,955 tris removed, remesh 2,203 tris) | 7.696 / 0.139 -> 7.24 / 0.208 | 22 of 54 | 6.99 / 0.006 | 7.61 / 0.005 | 8.86 (2 of 4) |
+| `97987c35` | `df49d8ef`'s | 7.696 / 0.139 -> 7.24 / 0.208 | (same as the row above) | 6.99 / 0.006 | 7.61 / 0.005 | 8.42 (3 of 4) |
+
+- Every commit from `df49d8ef` to `97987c35` (the scheduling commits `59a15531`, `c6580650`, `2326971e`, `72870107`, the merge `5595a53f`, the worker change) gives the same fit, to the digit, on the same evidence and geometry. None of them moves the fit.
+- The geometry does. `0b6ef750` (tile vegetation: one crown for a two-bump crown top, cut-at-boundary crowns removed) changes the devegetated tile, so the remesh (`l2`) changes, mostly in the ground apron (old-only 470 / new-only 381 triangle centroids more than 0.3 m from the other, all but 8 below y = 2 m). The fit changes with it, so the box registration of the *same* 395 matched element pairs uses 172 pairs (after RMS 1.14 m) instead of 337 (1.40 m), the close-ups are aimed differently (32 of 54 images differ), and the leave-one-pano-out fit moves by 1.7 px. On this sample the new geometry is the better one (5.30 against 6.99).
+- So `l2` is not a control: its geometry and its close-ups change with the run. The round-8 live spread (5.94-7.41) and this round's live runs (6.67, 5.06, 6.09, 5.63) are evidence variability: the survey and matching readings change from run to run, which re-aims the close-ups that both texture and judge the layer.
+
+### Back-side artifacts (run `1ac2b311`, traced through the confidence planes)
+
+A point-splat render of each layer twin from the back, coloured by rung and by provenance entry (scratch tool), located each artifact:
+
+| Artifact | Layer, rung | Cause | Fix |
+|---|---|---|---|
+| Sky-blue wedge, right spandrel | `l3cf` node `x21` (as-scanned pass-through piece, one 6.2 m² triangle), rung 1 from pano `5bmwoz` | one pano's texels show the sky past the arch's edge; nothing outvotes one pano | single-pano witness (below) leaves them to the tile; the wedge itself is scan geometry and stays (grey now) |
+| Pale square at the keystone | `l3cf` node `x18`, rung **0** but from two crops of the same pano | rung 0 counted views, not panos | rung 0 now needs two distinct panos; witness |
+| Dark object, right of the frieze | `l3b`, rung 1 from `5bmwoz` | one pano's texels | witness; in the live runs after the fix the spot is tile-rung texels and a dark mark remains: the tile photo has it too, so it is probably on the arch |
+| Smeared right half of the attic | `l3b`, rung 2 (tile transfer) | fitted texels 0.3-1.5 m off the tile (median 0.32 m) took the nearest tile point within 2.08 m (2 x the Street View residual): past the tile's edge that is the edge, stretched across the band | the tile sampler takes only points in front of or behind a texel (sideways at most 0.15 m + 0.3 x the normal offset) |
+
+Single-pano witness (`single-pano-witness.ts`): texels only one pano saw are compared with the tile photo at the same texel (both low-passed over 0.2 m, the tile exposure-matched over the layer); past the layer's own disagreement level (median + 4 robust sigmas, within 20-30 CIE76, with hysteresis) they are left to the tile rung, in the leave-one-pano-out re-bakes too, and counted in a `single_pano_contradicted` degradation. A flat 20 dropped 79 % of `l3cf`'s single-pano texels (its leave-one-pano-out 4.44 -> 5.74 px), hence the adaptive limit.
+
+On the same replayed evidence, before -> after the fixes: l2 5.30 -> 5.16 px (NCC 0.216 -> 0.237), l3b 5.06 -> 5.03, l3cf 4.44 -> 4.46; the registration is unchanged to the digit.
+
+### Main-thread blocks
+
+CPU profiles of replayed runs (12 s vision reply latency, so the stages overlap as live) and a whole-run block tracer:
+
+| Block | Before | After |
+|---|---|---|
+| Evidence: frame decode, edge search, cross-view matching (the main thread waited on the pool with `Atomics.wait`), held-out scoring | 107 s in one block | in a worker thread (`pano-registration-run.ts`), same poses |
+| Evidence: box registration of the matched pairs (`registerPanos` ray casts) | 7.1 s | in the registration thread |
+| Vision: slot cover (`computeSlotOffer` crossings) | ~0.5 s live, 153 ms here | time-sliced per slot (`time-slice.ts`, 8 ms slices) |
+| Vision: `downscaleEvidence` / survey `capImageSide` (YCC conversion, area average, encode in JS) | 614 ms active for 8 images | one ffmpeg process per image (Y'CbCr planes), 14 ms active |
+| Detail: reprojection gate renders | ~0.2 s | time-sliced per render |
+
+The round-8 13.6 s block was not reproduced in the replays; the 107 s registration block was the largest block in every replayed profile and is the likely source. Live after the fixes (whole run, `main_thread.json`): run `49a4a860` p99 12.6 ms, max 1.24 s (evidence, while the narrow crops are fetched); run `8c465131` max 5.2 s in one block while the detail and texture stages ran (not reproduced in run `9f3f817f`, max 1.5 s, evidence; its CPU profile was lost when the server was stopped); texture stage p99 12.0-12.6 ms.
+
+Also: the cross-view match and edge render pools loaded their `.ts` workers through ts-node with the working directory's tsconfig (the repo root's gives no target, so ES5: a worker summing a Set returned 0). All three pools now share `worker-ts-register.ts` (ES2022, project tsconfig skipped).
+
+### Live (cold for the survey, evidence, vision/detail, figures and texture stages)
+
+| Run | Total | Textures | l2 LOO | l3b | l3cf | l4 | Joint registration held-out (chosen) | Main thread p99 / max |
+|---|---|---|---|---|---|---|---|---|
+| `c999d28a` | 9 min 9 s | 6 min 16 s | 6.67 / 0.180 | 6.54 / 0.109 | 6.29 | 7.59 | 7.02 / 0.195 (joint) | (tracer not yet in) |
+| `49a4a860` | 8 min 20 s | 5 min 6 s | 5.06 / 0.297 | 5.82 / 0.091 | 6.71 | 3.26 | 7.34 / 0.164 (joint+warp) | 12.6 ms / 1.24 s |
+| `18683533` | – | – | – | – | – | – | – | server out of memory (below) |
+| `8c465131` | ~9 min | 6 min 9 s | 6.09 / 0.136 | 5.96 / 0.155 | 5.11 | 5.98 (3 of 4) | 6.62 / 0.231 (joint) | 12.6 ms / 5.2 s |
+| `9f3f817f` | ~8 min | 4 min 32 s | 5.63 / 0.248 | 5.81 / 0.183 | 5.42 | 4.44 | 7.24 / 0.170 (joint+warp) | 12.0 ms / 1.5 s |
+
+`18683533`: the server's main isolate ran out of heap (4 GB, `Ineffective mark-compacts near heap limit`) three minutes into the second build in one server process. The orchestrator itself retains nothing between runs (replayed three builds in one process on `97987c35` and on this branch: heap after GC 70 -> 71 -> 72 MB and 69 -> 70 -> 70 MB; peak heap during one build 311 MB and 347 MB), so the growth is in the server around it (chat payloads of 0.7 MB per tool result, scene artifacts); not traced further. Each later run used a fresh server.
+
+### What I saw (`fit_regression` against `texture_worker`)
+
+- **Better:** the sky-blue wedge on the right spandrel is grey (tile texels on the pass-through piece), the keystone square is no longer pale, and the back attic is no longer streaked (run 3 reads the whole inscription across the attic).
+- **Still wrong:** the wedge and the keystone square remain visible as shapes: they are as-scanned pass-through pieces of `l3cf` drawn over `l3b` (geometry, not texture). A dark mark stays right of the frieze in every run; the tile photo has it too. The left spandrel shows a lighter rectangle in run 2 (an `l3cf` piece with its own exposure).
+
+### Candidate tool/service ideas
+
+- Commit the replay harness as a dev tool (`scripts/staged_replay.ts`: record/replay of Street View and vision replies, geometry swap) so later rounds are compared on identical evidence.
+- A per-layer exposure tie between overlapping layers (`l3cf` pieces over `l3b`), or drop pass-through pieces that lie within a few centimetres of a fitted face.
+- Find the server-side heap growth across staged builds (run two builds in one server with a heap snapshot after each).
