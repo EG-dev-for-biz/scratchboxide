@@ -22,6 +22,7 @@ import type { Box1000, OrnamentElement } from '../../../common/spatial/staged-lo
 import type { RenderMesh3D } from '../../spatial/HeadlessMeshSilhouetteRenderer';
 import { renderFrameDepth, type FrameCamera } from '../../spatial/StreetViewPoseRegistrar';
 import type { GlbNode } from './glb-nodes';
+import { timeSlicer, type TimeSlicer } from './time-slice';
 
 /**
  * An element is kept when its best cited image's IoU reaches this. Calibrated on the live arch (round 4, staged location
@@ -95,7 +96,26 @@ export function renderedBox(mesh: RenderMesh3D, cam: FrameCamera, sceneDepth?: F
  * (the fitted structure) hides the parts of an element the structure stands in front of.
  */
 export function reprojectDetail(nodes: GlbNode[], elements: OrnamentElement[], cameraFor: (imageId: string) => FrameCamera | undefined,
-    opts: { occluder?: RenderMesh3D; minIoU?: number; widthPx?: number } = {}): ElementReprojection[] {
+    opts: ReprojectOptions = {}): ElementReprojection[] {
+    const steps = reprojectSteps(nodes, elements, cameraFor, opts);
+    for (;;) { const r = steps.next(); if (r.done) return r.value; }
+}
+
+/**
+ * reprojectDetail, time-sliced between renders (time-slice.ts): the same result, with the main thread let go every few
+ * milliseconds (live, the renders held it ~0.2 s in one block while vision calls were waiting to be read).
+ */
+export async function reprojectDetailAsync(nodes: GlbNode[], elements: OrnamentElement[], cameraFor: (imageId: string) => FrameCamera | undefined,
+    opts: ReprojectOptions = {}, slicer: TimeSlicer = timeSlicer()): Promise<ElementReprojection[]> {
+    const steps = reprojectSteps(nodes, elements, cameraFor, opts);
+    for (;;) { const r = steps.next(); if (r.done) return r.value; await slicer.due(); }
+}
+
+export interface ReprojectOptions { occluder?: RenderMesh3D; minIoU?: number; widthPx?: number }
+
+/** The reprojection as steps: it pauses (yields) before each render. */
+function* reprojectSteps(nodes: GlbNode[], elements: OrnamentElement[], cameraFor: (imageId: string) => FrameCamera | undefined,
+    opts: ReprojectOptions): Generator<void, ElementReprojection[], void> {
     const minIoU = opts.minIoU ?? DETAIL_REPROJECTION_MIN_IOU;
     const width = opts.widthPx ?? RENDER_WIDTH_PX;
     const byName = new Map(nodes.map(n => [n.name, n]));
@@ -113,8 +133,9 @@ export function reprojectDetail(nodes: GlbNode[], elements: OrnamentElement[], c
             let scene: Float32Array | undefined;
             if (opts.occluder) {
                 scene = sceneCache.get(ev.imageId);
-                if (!scene) { scene = renderFrameDepth(opts.occluder, cam); sceneCache.set(ev.imageId, scene); }
+                if (!scene) { yield; scene = renderFrameDepth(opts.occluder, cam); sceneCache.set(ev.imageId, scene); }
             }
+            yield;
             const r = renderedBox(mesh, cam, scene);
             list.push({ imageId: ev.imageId, cited: ev.box1000, ...(r ? { rendered: r } : {}) });
         }

@@ -92,7 +92,7 @@ import {
 import { selectViewsForFit } from './evidence-aim';
 import { describeSurvey, runFaceSurvey, surveyCandidates, surveyFaceTargets, surveyImageBytes, SURVEY_IMAGE_TIMEOUT_MS, SURVEY_VISION_TIMEOUT_MS, type SurveyResult } from './face-survey';
 import { describeLocated, locateSurveyElements, planDetailFromSurvey, type DetailPlan } from './survey-detail';
-import { DETAIL_REPROJECTION_MIN_IOU, reprojectDetail } from './detail-reprojection';
+import { DETAIL_REPROJECTION_MIN_IOU, reprojectDetailAsync } from './detail-reprojection';
 import { EDGE_MAX_RESIDUAL_PX, EDGE_REGISTRATION_BUDGET_MS, edgeFramesFromImages, registerPanosByEdges, describeEdgeRegistration, type EdgeRegistrationResult } from './pano-edge-registration';
 import { describeJointRegistration, JOINT_REGISTRATION_BUDGET_MS, registerPanosJointly } from './pano-joint-registration';
 import { LOO_BUDGET_MS } from './texture-fit-metric';
@@ -111,7 +111,7 @@ import { writeStagedGlbFile, type StagedGlbNode } from './staged-glb-writer';
 import { buildObjectFromSpec } from '../reference-object-builder';
 import type { ObjectBuildSpec } from '../../../common/spatial/object-build-spec';
 import { nominalPose, projectSlots, registeredPose } from './slot-projection';
-import { computeSlotOffer, describeOffer } from './slot-exposure';
+import { computeSlotOfferAsync, describeOffer } from './slot-exposure';
 import { fetchRunCrops, mergeRunReadings, readRunTargets, RUN_PASS_BUDGET_MS, type RunCrops, type RunReadingReport, type RunTargetReadings } from './run-reading';
 import { readOrnamentBatched, ORNAMENT_PASS_BUDGET_MS, ORNAMENT_REVISION_BUDGET_MS } from './ornament-batches';
 import { registeredUncertaintyAt } from './survey-detail';
@@ -2123,14 +2123,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...chainExtras('vision'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
             let fitSha = '';
             let visionKey = '';
-            let offer: ReturnType<typeof computeSlotOffer> | undefined;
+            let offer: Awaited<ReturnType<typeof computeSlotOfferAsync>> | undefined;
             const read = await runner.stage<OrnamentSpec>({
                 id: 'vision',
                 run: async io => {
                     const stageStarted = Date.now();
                     if (!inputs.length) return { status: 'skipped', source: '', reason: 'no image shows the structure' };
                     fitSha = sha256File(fit.outputs.reportJson);
-                    offer = computeSlotOffer(fit, inputs.map(i => i.ref));
+                    offer = await computeSlotOfferAsync(fit, inputs.map(i => i.ref));
                     if (evidence.registration) out.registration = { pairs: evidence.match?.correspondences.length ?? evidence.registration.pairs.length, used: evidence.registration.used, beforeRmsM: evidence.registration.beforeRmsM, afterRmsM: evidence.registration.afterRmsM, perPano: evidence.registration.perPano, setAside: evidence.registration.setAside.map(a => ({ panoId: a.panoId, reason: a.reason })) };
                     out.slotsOffered = { offered: offer.offeredIds.size, total: fit.slots.length, hidden: offer.hidden, unseen: offer.unseen, exposureJudged: offer.exposureJudged };
                     io.progress(describeOffer(offer, fit.slots.length));
@@ -2305,7 +2305,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         // the fitted structure hides what stands behind it; without it (a body that cannot be read) the elements are rendered alone
                         try { gateOccluder = loadMesh([currentFit.value.outputs.fittedGlb, currentFit.value.outputs.passThroughGlb]); } catch { gateOccluder = undefined; }
                     }
-                    const gate = gated ? reprojectDetail(readGlbNodes(r.detailGlb), spec.elements, id => cams.get(id), gateOccluder ? { occluder: gateOccluder } : {}) : [];
+                    const gate = gated ? await reprojectDetailAsync(readGlbNodes(r.detailGlb), spec.elements, id => cams.get(id), gateOccluder ? { occluder: gateOccluder } : {}) : [];
                     const rejectedByGate = gate.filter(g => !g.accepted);
                     if (gated) cache.writeRunNote(runId, 'detail_reprojection', { minIoU: DETAIL_REPROJECTION_MIN_IOU, elements: gate });
                     if (gated) io.progress(`reprojection gate: ${gate.length - rejectedByGate.length} of ${gate.length} elements land where they were read (IoU >= ${DETAIL_REPROJECTION_MIN_IOU})${rejectedByGate.length ? `; rejected ${rejectedByGate.map(g => `${g.elementId}${g.label ? ` (${g.label})` : ''} IoU ${g.iou?.toFixed(2) ?? 'n/a'}`).join(', ')}` : ''}`);

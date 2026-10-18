@@ -25,6 +25,7 @@
 import type { EvidenceImageRef, StructureFit } from '../../../common/spatial/staged-location-contracts';
 import { computeSlotCover, type SlotCover } from './slot-cover';
 import { insideSolid, readFittedShells, type FittedShells } from './fitted-solid';
+import { timeSlicer, type TimeSlicer } from './time-slice';
 
 export { insideSolid, readFittedShells, type FittedShells, type Shell } from './fitted-solid';
 
@@ -58,31 +59,50 @@ export interface SlotOffer {
     exposureJudged: boolean;
 }
 
+type OfferTally = { entries: SlotOfferEntry[]; covers: Map<string, SlotCover>; hidden: number; unseen: number };
+
+function offerSlot(t: OfferTally, slot: StructureFit['slots'][number], fit: Pick<StructureFit, 'slots' | 'surfaces' | 'outputs'>, evidence: EvidenceImageRef[], solid: FittedShells | undefined, coverCache?: Map<string, SlotCover | undefined>): void {
+    const images = evidence.flatMap(e => {
+        const s = e.slotsShown.find(x => x.slotId === slot.id);
+        return s && s.visibleFraction >= MIN_SHOWN_FRACTION ? [{ index: e.index, visibleFraction: s.visibleFraction }] : [];
+    });
+    let exposedShare: number | undefined;
+    let cover: SlotCover | undefined;
+    if (solid) {
+        if (coverCache?.has(slot.id)) cover = coverCache.get(slot.id);
+        else { cover = computeSlotCover(slot, fit, solid); coverCache?.set(slot.id, cover); }
+        exposedShare = cover ? 1 - cover.share : 0;
+        if (cover && cover.share > 0) t.covers.set(slot.id, cover);
+    }
+    let why: string | undefined;
+    if (exposedShare !== undefined && exposedShare < MIN_EXPOSED_SHARE) { why = `on a hidden or interior face (${Math.round(exposedShare * 100)}% of it open to the air)`; t.hidden++; }
+    else if (!images.length) { why = `no image shows it (${MIN_SHOWN_FRACTION * 100}% visible needed)`; t.unseen++; }
+    t.entries.push({ slotId: slot.id, ...(exposedShare !== undefined ? { exposedShare: Math.round(exposedShare * 100) / 100 } : {}), images, offered: !why, ...(cover && cover.share > 0 ? { cover } : {}), ...(why ? { why } : {}) });
+}
+
+const offerOf = (t: OfferTally, solid: FittedShells | undefined): SlotOffer =>
+    ({ entries: t.entries, offeredIds: new Set(t.entries.filter(e => e.offered).map(e => e.slotId)), covers: t.covers, hidden: t.hidden, unseen: t.unseen, exposureJudged: !!solid });
+
 /** `only`: judge just these slots (a focused reading asks about one); `coverCache`: covers already worked out for this fit's solid, filled as they are. */
 export function computeSlotOffer(fit: Pick<StructureFit, 'slots' | 'surfaces' | 'outputs'>, evidence: EvidenceImageRef[], solid: FittedShells | undefined = readFittedShells(fit), only?: Set<string>, coverCache?: Map<string, SlotCover | undefined>): SlotOffer {
-    const entries: SlotOfferEntry[] = [];
-    const covers = new Map<string, SlotCover>();
-    let hidden = 0, unseen = 0;
+    const t: OfferTally = { entries: [], covers: new Map(), hidden: 0, unseen: 0 };
+    for (const slot of fit.slots) if (!only || only.has(slot.id)) offerSlot(t, slot, fit, evidence, solid, coverCache);
+    return offerOf(t, solid);
+}
+
+/**
+ * computeSlotOffer, time-sliced between slots (time-slice.ts): the same offer, but the main thread is let go every few
+ * milliseconds. Live (Washington Square Arch) the covers' fitted-solid crossings held the thread ~0.5 s in one block
+ * while the vision calls were waiting to be read.
+ */
+export async function computeSlotOfferAsync(fit: Pick<StructureFit, 'slots' | 'surfaces' | 'outputs'>, evidence: EvidenceImageRef[], solid: FittedShells | undefined = readFittedShells(fit), only?: Set<string>, coverCache?: Map<string, SlotCover | undefined>, slicer: TimeSlicer = timeSlicer()): Promise<SlotOffer> {
+    const t: OfferTally = { entries: [], covers: new Map(), hidden: 0, unseen: 0 };
     for (const slot of fit.slots) {
         if (only && !only.has(slot.id)) continue;
-        const images = evidence.flatMap(e => {
-            const s = e.slotsShown.find(x => x.slotId === slot.id);
-            return s && s.visibleFraction >= MIN_SHOWN_FRACTION ? [{ index: e.index, visibleFraction: s.visibleFraction }] : [];
-        });
-        let exposedShare: number | undefined;
-        let cover: SlotCover | undefined;
-        if (solid) {
-            if (coverCache?.has(slot.id)) cover = coverCache.get(slot.id);
-            else { cover = computeSlotCover(slot, fit, solid); coverCache?.set(slot.id, cover); }
-            exposedShare = cover ? 1 - cover.share : 0;
-            if (cover && cover.share > 0) covers.set(slot.id, cover);
-        }
-        let why: string | undefined;
-        if (exposedShare !== undefined && exposedShare < MIN_EXPOSED_SHARE) { why = `on a hidden or interior face (${Math.round(exposedShare * 100)}% of it open to the air)`; hidden++; }
-        else if (!images.length) { why = `no image shows it (${MIN_SHOWN_FRACTION * 100}% visible needed)`; unseen++; }
-        entries.push({ slotId: slot.id, ...(exposedShare !== undefined ? { exposedShare: Math.round(exposedShare * 100) / 100 } : {}), images, offered: !why, ...(cover && cover.share > 0 ? { cover } : {}), ...(why ? { why } : {}) });
+        await slicer.due();
+        offerSlot(t, slot, fit, evidence, solid, coverCache);
     }
-    return { entries, offeredIds: new Set(entries.filter(e => e.offered).map(e => e.slotId)), covers, hidden, unseen, exposureJudged: !!solid };
+    return offerOf(t, solid);
 }
 
 export function describeOffer(offer: SlotOffer, total: number): string {
