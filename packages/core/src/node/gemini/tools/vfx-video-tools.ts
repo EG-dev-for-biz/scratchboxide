@@ -19,9 +19,11 @@ import { MediaPipeVideoDirectorService } from '../../video/MediaPipeVideoDirecto
 import { buildContactSheet, normalizePlates } from '../../video/ConditioningPlateService';
 import { checkVideo, VideoQAError } from '../../video/GenerativeVideoQAService';
 import { VfxSubjectSegmenterService } from '../../video/VfxSubjectSegmenterService';
-import { GeneratorFailedError } from '../../../common/errors/pipeline-errors';
+import { ObjectSegmenterService } from '../../video/ObjectSegmenterService';
+import type { NormBox, NormPoint } from '../../video/segment-target-locator';
+import { GeneratorFailedError, InvalidInputError, MissingInputError } from '../../../common/errors/pipeline-errors';
 import type { VideoTimelineData } from '../../../browser/generative-canvas/services/video/videoTypes';
-import type { ToolDeclaration, ToolHandler } from './types';
+import type { ToolDeclaration, ToolHandler, ToolParameterSchema } from './types';
 
 function asString(val: unknown): string {
     return typeof val === 'string' ? val : '';
@@ -1844,62 +1846,95 @@ export const videoQAHandlers: Record<string, ToolHandler> = {
 // ============================================================================
 
 const segmenterService = new VfxSubjectSegmenterService();
+const objectSegmenterService = new ObjectSegmenterService();
+
+const POINT_LIST: { type: 'ARRAY'; items: ToolParameterSchema } = {
+    type: 'ARRAY',
+    items: { type: 'ARRAY', items: { type: 'NUMBER' } }
+};
 
 export const SEGMENTATION_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'vfx_segment_subject',
-        description: 'Generate per-frame holdout matte masks for the person in a video with the MediaPipe selfie segmenter. Produces a PNG sequence with one mask per sampled frame and no gaps (mask_0000.png, mask_0001.png, …) in the output directory, where white pixels (255) mark the person and black pixels (0) the background. Masks are directly usable as FFmpeg alphamerge inputs or as holdout mattes in the Video Timeline compositor. The call fails, naming the frame and the error, if any frame cannot be segmented (for example when MediaPipe is not installed); it then leaves no masks behind. The result names the MediaPipe model that made the masks.',
+        description: 'Cut out any object in an image or a video as binary masks and soft mattes (open vocabulary: whatever the user names, not a fixed list of kinds). Say what to cut out with `target` in words (e.g. "the statue on the left pier", "the red car", "the tree in front of the arch") and/or `positivePoints` / `negativePoints` / `box` in normalised 0..1 image coordinates. A description is turned into a box and points on the object (and points on neighbouring things) by the chat\'s vision model; the MediaPipe Interactive Segmenter then makes the mask from those prompts and OpenCV GrabCut refines its edge (refine: false to skip). Video: the first frame is segmented from the prompts and each later frame follows the previous mask by matching the object\'s motion; with a description the vision model re-checks every recheckEveryFrames frames and whenever the mask jumps, and the result lists every re-check. Writes mask_0000.png… (255 = the object) and matte_0000.png… (soft edge) plus segment_report.json with per-frame area, centroid, box and where each frame\'s prompts came from. Fails with a typed error when the described object is not in the image; it never cuts out something else instead. With none of target/points/box and a video, or with selfieSegmenter: true, it makes person masks with the MediaPipe selfie segmenter (the earlier behaviour).',
         parameters: {
             type: 'OBJECT',
             properties: {
-                videoPath: {
-                    type: 'STRING',
-                    description: 'Absolute path to the source video file (MP4, MOV, WebM, etc.)'
-                },
-                outputDir: {
-                    type: 'STRING',
-                    description: 'Absolute path to the directory where mask PNGs will be written. Created automatically if absent.'
-                },
-                fps: {
-                    type: 'NUMBER',
-                    description: 'Frame sampling rate in frames-per-second (default 5). Lower values run faster with fewer masks.'
-                },
-                dryRun: {
-                    type: 'BOOLEAN',
-                    description: 'If true, validates parameters and returns expected output paths without running segmentation.'
-                }
+                imagePath: { type: 'STRING', description: 'Absolute path to one image to segment (PNG / JPEG). Give this or videoPath.' },
+                videoPath: { type: 'STRING', description: 'Absolute path to a video to segment frame by frame (MP4, MOV, WebM, …). Give this or imagePath.' },
+                outputDir: { type: 'STRING', description: 'Absolute path to the directory for the masks, mattes and report. Created if absent.' },
+                target: { type: 'STRING', description: 'The object to cut out, described in the user\'s words, as specifically as the conversation allows (position, colour, what it is next to).' },
+                positivePoints: { ...POINT_LIST, description: 'Points on the object as [x, y] normalised to 0..1 of the image width and height. When given, no vision model is asked.' },
+                negativePoints: { ...POINT_LIST, description: 'Points on things that are NOT the object (neighbours, occluders), as [x, y] normalised 0..1.' },
+                box: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'A box around the object as [x0, y0, x1, y1] normalised 0..1.' },
+                refine: { type: 'BOOLEAN', description: 'Refine the mask edge with GrabCut (default true).' },
+                fps: { type: 'NUMBER', description: 'Video frame sampling rate (default 5, 1..30).' },
+                recheckEveryFrames: { type: 'NUMBER', description: 'Video with a target: the vision model re-checks the object every this many frames (default 10; 0 = only when the mask jumps).' },
+                selfieSegmenter: { type: 'BOOLEAN', description: 'Make person masks for a video with the MediaPipe selfie segmenter instead of an object mask.' },
+                dryRun: { type: 'BOOLEAN', description: 'Person masks only: validate and return the expected output without segmenting.' }
             },
-            required: ['videoPath', 'outputDir']
+            required: ['outputDir']
         }
     }
 ];
 
+function pointList(name: string, v: unknown): NormPoint[] | undefined {
+    if (v === undefined || v === null) return undefined;
+    if (!Array.isArray(v)) throw new InvalidInputError('vfx_segment_subject', name, 'must be a list of [x, y] points');
+    return v as NormPoint[];
+}
+
 export const segmentationHandlers: Record<string, ToolHandler> = {
-    vfx_segment_subject: async (args) => {
-        const videoPath = typeof args.videoPath === 'string' ? args.videoPath : '';
-        const outputDir = typeof args.outputDir === 'string' ? args.outputDir : '';
+    vfx_segment_subject: async (args, ctx) => {
+        const str = (k: string) => typeof args[k] === 'string' && (args[k] as string).trim() ? (args[k] as string).trim() : undefined;
+        const videoPath = str('videoPath');
+        const imagePath = str('imagePath');
+        const outputDir = str('outputDir');
+        const target = str('target');
         const fps = typeof args.fps === 'number' ? args.fps : undefined;
-        const dryRun = args.dryRun === true;
+        const positivePoints = pointList('positivePoints', args.positivePoints);
+        const negativePoints = pointList('negativePoints', args.negativePoints);
+        const box = args.box === undefined || args.box === null ? undefined : args.box as NormBox;
+        if (!outputDir) throw new MissingInputError('vfx_segment_subject', 'outputDir');
 
-        if (!videoPath) {
-            return { resultPayload: { success: false, error: 'videoPath is required' }, status: 'failed', summaryResult: 'Missing videoPath' };
+        const prompted = !!target || !!positivePoints?.length || box !== undefined;
+        if (args.selfieSegmenter === true || !prompted) {
+            if (prompted) throw new InvalidInputError('vfx_segment_subject', 'selfieSegmenter', 'the person segmenter takes no target, points or box; leave selfieSegmenter off to cut out the described object');
+            if (!videoPath) throw new MissingInputError('vfx_segment_subject', 'target, positivePoints or box', 'say what to cut out of the image (the person segmenter only runs on a video)');
+            const dryRun = args.dryRun === true;
+            // A missing video, a failed probe or extraction, or any frame the segmenter cannot do throws a typed error,
+            // which fails the call; a result is a complete mask sequence.
+            const result = await segmenterService.segmentSubject({ videoPath, outputDir, fps, dryRun });
+            const madeBy = result.models.length ? ` with ${result.models.join(', ')}` : '';
+            const notes = result.modelNotes.length ? ` ${result.modelNotes.join(' ')}` : '';
+            return {
+                resultPayload: { ...result, segmenter: 'person (MediaPipe selfie segmenter)' } as Record<string, unknown>,
+                status: 'completed',
+                summaryResult: dryRun
+                    ? `Dry run: would produce ${result.totalFrames} person masks at ${result.sampleFps} fps → ${outputDir} (nothing segmented)`
+                    : `Generated ${result.totalFrames} person holdout masks (${result.width}×${result.height}, every sampled frame)${madeBy} → ${outputDir}.${notes}`
+            };
         }
-        if (!outputDir) {
-            return { resultPayload: { success: false, error: 'outputDir is required' }, status: 'failed', summaryResult: 'Missing outputDir' };
-        }
 
-        // A missing video, a failed probe or extraction, or any frame the segmenter cannot do throws a typed error,
-        // which fails the call; a result is a complete mask sequence.
-        const result = await segmenterService.segmentSubject({ videoPath, outputDir, fps, dryRun });
-        const madeBy = result.models.length ? ` with ${result.models.join(', ')}` : '';
-        const notes = result.modelNotes.length ? ` ${result.modelNotes.join(' ')}` : '';
-
+        const result = await objectSegmenterService.segment({
+            imagePath, videoPath, outputDir, target, positivePoints, negativePoints, box,
+            refine: args.refine !== false,
+            fps,
+            recheckEveryFrames: typeof args.recheckEveryFrames === 'number' ? args.recheckEveryFrames : undefined,
+            requestedModel: ctx?.request?.model || undefined,
+            signal: ctx?.signal,
+            reportProgress: ctx?.reportProgress
+        });
+        const p = result.prompts;
+        const from = p.visionModel ? `prompts from ${p.visionModel.model} ("${p.visionModel.label}")` : 'the given prompts';
+        const area = result.frames.reduce((s, f) => s + f.areaFraction, 0) / result.frames.length;
+        const rechecks = result.mode === 'video'
+            ? ` ${result.rechecks.length} vision re-check${result.rechecks.length === 1 ? '' : 's'}${result.unrecheckedJumps.length ? `; mask jumps not re-checked at frames ${result.unrecheckedJumps.join(', ')}` : ''}.`
+            : '';
         return {
             resultPayload: result as Record<string, unknown>,
             status: 'completed',
-            summaryResult: dryRun
-                ? `Dry run: would produce ${result.totalFrames} masks at ${result.sampleFps} fps → ${outputDir} (nothing segmented)`
-                : `Generated ${result.totalFrames} holdout matte masks (${result.width}×${result.height}, every sampled frame)${madeBy} → ${outputDir}.${notes}`
+            summaryResult: `Cut out ${target ? JSON.stringify(target) : 'the prompted object'} in ${result.totalFrames} ${result.mode === 'video' ? 'frames' : 'image'} (${result.width}×${result.height}, mean ${(area * 100).toFixed(1)}% of the frame) from ${from}, MediaPipe Interactive Segmenter${result.refinement === 'grabcut' ? ' + GrabCut edge' : ''} → ${outputDir}.${rechecks}`
         };
     }
 };

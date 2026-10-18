@@ -41,6 +41,19 @@ describe('TaskCapabilityResolver', () => {
     });
 
     describe('Native resolution', () => {
+        it('routes masking any described object to vfx_segment_subject (not person-only)', () => {
+            for (const prompt of [
+                'cut out the statue on the left pier from this video',
+                'rotoscope the bioluminescent spore tower in frame 3',
+                'make a matte for the red car'
+            ]) {
+                const res = TaskCapabilityResolver.resolveTaskCapability(prompt);
+                expect(res.canSolveNatively).toBe(true);
+                expect(res.tier1Assessment.suggestedNativeAction?.targetTool).toBe('vfx_segment_subject');
+                expect(res.tier1Assessment.rationale).toMatch(/any object/);
+            }
+        });
+
         it('resolves general 3D natively and leaves the choice of 3D tool to the agent', () => {
             const res = TaskCapabilityResolver.resolveTaskCapability(
                 'Create a procedural mountain terrain with FastNoise3D and Marching Cubes SDFs'

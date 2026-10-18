@@ -1,0 +1,154 @@
+[
+  {
+    "key": "37ed73616448e6a9dcb1739a8243c341368e462544a175125cb2130feeeba6cf",
+    "case": "synthetic_statue",
+    "model": "gemini-4-argon",
+    "modelVersion": "gemini-4-argon",
+    "text": "{\"found\": true, \"label\": \"statue on a plinth\", \"box_2d\": [244, 359, 960, 684], \"positive\": [[302, 502], [546, 503], [883, 502], [358, 623], [658, 419]], \"negative\": [[373, 577], [567, 616], [712, 427], [794, 358], [792, 641]]}",
+    "recordedAt": "2026-10-18T18:21:02.931Z"
+  },
+  {
+    "key": "67027405e17cf7c491422b61ad076d3cc096307021c605efc4617d0a4d6632aa",
+    "case": "synthetic_urn",
+    "model": "gemini-4-argon",
+    "modelVersion": "gemini-4-argon",
+    "text": "{\"found\": true, \"label\": \"pale urn on the left\", \"box_2d\": [250, 230, 829, 484], \"positive\": [[281, 357], [469, 357], [600, 282], [600, 432], [750, 357]], \"negative\": [[595, 504], [469, 504], [731, 504], [336, 429], [336, 286]]}",
+    "recordedAt": "2026-10-18T18:21:11.158Z"
+  },
+  {
+    "key": "7f43be4d895bb016063c1cbfa3d5a1c10b2fcf66974ab5b0fadbfb27e924008a",
+    "case": "synthetic_panel",
+    "model": "gemini-4-argon",
+    "modelVersion": "gemini-4-argon",
+    "text": "{\"found\": true, \"label\": \"the pale rectangular panel behind the dark vertical post\", \"box_2d\": [275, 282, 752, 718], \"positive\": [[400, 375], [600, 375], [400, 625], [600, 625]], \"negative\": [[350, 500], [500, 500], [650, 500], [200, 375], [800, 625], [500, 220]]}",
+    "recordedAt": "2026-10-18T18:21:28.438Z"
+  },
+  {
+    "key": "768b9abb398b53d45cb7ca194c3892ea3bc2d46297dfabdf6445fb69c6b35a3f",
+    "case": "absent",
+    "model": "gemini-4-argon",
+    "modelVersion": "gemini-4-argon",
+    "text": "{\"found\": false, \"reason\": \"The image is an abstract noisy pattern with a figure on a pedestal; there is no bicycle leaning against a wall.\"}",
+    "recordedAt": "2026-10-18T18:22:29.268Z"
+  },
+  {
+    "key": "31aaeb5273bb2315b991ffa872e458e006d682e43f8359ce15f4c46cff5984cf",
+    "case": "synthetic_video",
+    "model": "gemini-4-argon",
+    "modelVersion": "gemini-4-argon",
+    "text": "{\"found\": true, \"label\": \"the red object with a short mast\", \"box_2d\": [288, 100, 691, 362], \"positive\": [[590, 230], [590, 145], [590, 315], [470, 215], [355, 250]], \"negative\": [[375, 210], [490, 130], [480, 305], [725, 230]]}",
+    "recordedAt": "2026-10-18T18:22:34.053Z"
+  },
+  {
+    "key": "4136f4d8c7dd273dcc04849661757f655612c975c8a7b85f372912923e0ee858",
+    "case": "sv18_left_statue",
+    "model": "gemini-4-argon",
+    "modelVersion": "gemini-4-argon",
+    "text": "{\"found\": true, \"label\": \"statue on left pier\", \"box_2d\": [666, 108, 932, 214], \"positive\": [[690, 178], [760, 169], [848, 178], [912, 134], [835, 138]], \"negative\": [[675, 198], [733, 224], [852, 216], [947, 152], [750, 118], [890, 99]]}",
+    "recordedAt": "2026-10-18T18:23:06.368Z"
+  },
+  {
+    "key": "1b643a7d191bdb40ee37d60d0f199a9aae002a596476ce85eb257e95cb6288b3",
+    "case": "sv18_right_statue",
+    "model": "gemini-4-argon",
+    "modelVersion": "gemini-4-argon",
+    "text": "{\"found\": true, \"label\": \"statue on right pier\", \"box_2d\": [659, 833, 932, 954], \"positive\": [[727, 868], [805, 896], [858, 869], [916, 931], [678, 862]], \"negative\": [[946, 902], [750, 817], [712, 898], [860, 825], [848, 949]]}",
+    "recordedAt": "2026-10-18T18:23:21.129Z"
+  },
+  {
+    "key": "c03ff4c1e287d12a25151e9066aa3f8c861f9a4a5b6ee5fe79985497e494d9eb",
+    "case": "sv46_statue",
+    "model": "gemini-4-argon",
+    "modelVersion": "gemini-4-argon",
+    "text": "{\"found\": true, \"label\": \"the statue\", \"box_2d\": [0, 0, 725, 329], \"positive\": [[84, 154], [283, 169], [527, 179], [689, 88], [391, 44], [692, 235]], \"negative\": [[750, 96], [750, 217], [386, 360], [67, 329], [625, 365]]}",
+    "recordedAt": "2026-10-18T18:23:54.908Z"
+  },
+  {
+    "key": "99233fe4770611bb933ece93b7735ff21ba5b1f677ba15c9b1487fe36bd09eef",
+    "case": "sv65_statue",
+    "model": "gemini-4-argon",
+    "modelVersion": "gemini-4-argon",
+    "text": "{\"found\": true, \"label\": \"statue group on the right pier\", \"box_2d\": [540, 706, 854, 833], \"positive\": [[659, 738], [768, 749], [608, 795], [750, 798], [583, 761]], \"negative\": [[871, 756], [527, 748], [671, 845], [692, 697]]}",
+    "recordedAt": "2026-10-18T18:24:03.652Z"
+  },
+  {
+    "key": "df711619dabfcb533c135a83dd8c8a0a650ae56246b121269485b0abcf390ad8",
+    "case": "sv65_lamp",
+    "model": "gemini-4-argon",
+    "modelVersion": "gemini-4-argon",
+    "text": "{\"found\": true, \"label\": \"the street lamp post in front of the arch\", \"box_2d\": [581, 867, 1000, 954], \"positive\": [[656, 899], [705, 897], [789, 916], [859, 922], [931, 928]], \"negative\": [[754, 862], [860, 886], [862, 956], [625, 867]]}",
+    "recordedAt": "2026-10-18T18:24:12.171Z"
+  },
+  {
+    "key": "67b916e617e9a0dd84618f5b4331a53fb5774544ff0df9b6731c1cb9f7a6953b",
+    "case": "sv15_statue",
+    "model": "gemini-4-argon",
+    "modelVersion": "gemini-4-argon",
+    "text": "{\"found\": true, \"label\": \"the statue (only the parts not hidden by leaves)\", \"box_2d\": [0, 0, 1000, 581], \"positive\": [[144, 114], [435, 169], [534, 300], [748, 250], [920, 214], [78, 300]], \"negative\": [[300, 419], [600, 419], [712, 514], [912, 475]]}",
+    "recordedAt": "2026-10-18T18:24:51.901Z"
+  },
+  {
+    "key": "ec14429a369e552b894695b22d0477e173fdd9b9f4580cf25026c245c32cc170",
+    "case": "sv2_tree",
+    "model": "gemini-4-argon",
+    "modelVersion": "gemini-4-argon",
+    "text": "{\"found\": true, \"label\": \"the leafy tree on the left in front of the buildings\", \"box_2d\": [765, 221, 998, 343], \"positive\": [[852, 287], [912, 272], [798, 294], [931, 307]], \"negative\": [[901, 211], [826, 240], [835, 343], [984, 326]]}",
+    "recordedAt": "2026-10-18T18:25:06.654Z"
+  },
+  {
+    "key": "55109714b6928ab7b5cc202a434a25de0476a65484cfc445cc5aa77bd14a60e8",
+    "case": "sv8_fence",
+    "model": "gemini-4-argon",
+    "modelVersion": "gemini-4-argon",
+    "text": "{\"found\": true, \"label\": \"the black iron fence along the path\", \"box_2d\": [702, 0, 910, 1000], \"positive\": [[796, 597], [835, 932], [898, 466], [748, 421], [897, 134], [746, 756]], \"negative\": [[809, 293], [817, 629], [817, 451], [826, 133], [924, 520], [760, 642]]}",
+    "recordedAt": "2026-10-18T18:25:14.449Z"
+  },
+  {
+    "key": "6379c88985ff34a9c3a75023718d990ab716bb05e295f07c9ba41e45fb50d55d",
+    "case": "sv18_clip",
+    "model": "gemini-4-argon",
+    "modelVersion": "gemini-4-argon",
+    "text": "{\"found\": true, \"label\": \"statue on the left pier\", \"box_2d\": [666, 108, 933, 214], \"positive\": [[791, 162], [723, 173], [866, 184], [692, 180], [872, 134]], \"negative\": [[942, 152], [750, 223], [773, 120], [662, 184]]}",
+    "recordedAt": "2026-10-18T18:25:25.187Z"
+  },
+  {
+    "key": "7717114d448e3f9cb0817b1d4a313bd48b403f14b89d1c44130f5e82f8fcb5dd",
+    "case": "synthetic_video",
+    "model": "gemini-4-argon",
+    "modelVersion": "gemini-4-argon",
+    "text": "{\"found\": true, \"label\": \"the red object with a short mast\", \"box_2d\": [244, 396, 703, 688], \"positive\": [[584, 542], [456, 529], [312, 567], [584, 446], [584, 638]], \"negative\": [[350, 521], [350, 608], [678, 412], [678, 671]]}",
+    "recordedAt": "2026-10-18T18:34:19.754Z"
+  },
+  {
+    "key": "34caa8904ef579c69859ada0beb9d35cda6d9888d1d2f6fe706c83d0a263c1dd",
+    "case": "synthetic_video",
+    "model": "gemini-4-argon",
+    "modelVersion": "gemini-4-argon",
+    "text": "{\"found\": true, \"label\": \"the red object with a short mast\", \"box_2d\": [219, 544, 688, 854], \"positive\": [[562, 619], [566, 777], [431, 681], [306, 721]], \"negative\": [[325, 673], [447, 594], [619, 512], [516, 875]]}",
+    "recordedAt": "2026-10-18T18:34:31.071Z"
+  },
+  {
+    "key": "c4e27a0c6da2f1794003ea46de3795f1a1d1982ea8b2088806ee8f463cda12fa",
+    "case": "sv18_clip",
+    "model": "gemini-4-argon",
+    "modelVersion": "gemini-4-argon",
+    "text": "{\"found\": true, \"label\": \"the statue on the left pier of the arch\", \"box_2d\": [666, 98, 945, 208], \"positive\": [[762, 165], [875, 133], [830, 179], [723, 172]], \"negative\": [[969, 137], [835, 90], [671, 211], [789, 224]]}",
+    "recordedAt": "2026-10-18T18:35:11.214Z"
+  },
+  {
+    "key": "75f5f8689c1c88c2a0b490c8aa23203de6653f2660a5db93b0fb8988f3770a2d",
+    "case": "sv18_clip",
+    "model": "gemini-4-argon",
+    "modelVersion": "gemini-4-argon",
+    "text": "{\"found\": true, \"label\": \"statue on left pier\", \"box_2d\": [650, 90, 966, 255], \"positive\": [[796, 159], [712, 169], [912, 159], [744, 215], [685, 224]], \"negative\": [[982, 146], [859, 92], [869, 254], [619, 187]]}",
+    "recordedAt": "2026-10-18T18:35:27.392Z"
+  },
+  {
+    "key": "8ba47a6ced84add99660714773f790788e580254f28c190fd4b3e25a51a08282",
+    "case": "synthetic_video",
+    "model": "gemini-4-argon",
+    "modelVersion": "gemini-4-argon",
+    "text": "{\"found\": true, \"label\": \"the red object with a short mast\", \"box_2d\": [291, 249, 713, 524], \"positive\": [[610, 294], [610, 480], [662, 386], [562, 386], [478, 369], [362, 408]], \"negative\": [[362, 377], [362, 435], [478, 295], [478, 456], [610, 225], [750, 386]]}",
+    "recordedAt": "2026-10-18T18:37:00.114Z"
+  }
+]
