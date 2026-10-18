@@ -3,18 +3,16 @@
  *
  * Local SF3D (Stable Fast 3D) Organic Prop Generator Test Suite
  * Validates:
- * 1. LocalSf3DService execution in no_pbr mode (< 500ms, 18% Studio Grey Clay)
- * 2. glTF 2.0 binary header validation & metric dimension enforcement
- * 3. Ground contact plane snapping (Y_min = 0.0)
- * 4. In-App Agent Tool execution (generate_local_sf3d_organic_prop) & 3d-scene artifact
- * 5. TaskCapabilityResolver routing for local organic props
+ * 1. Counts and bounds come from the GLB the runner wrote
+ * 2. Runner failures (including SF3D not installed) throw LocalSf3DError; no substitute mesh
+ * 3. TaskCapabilityResolver routing and tool offering for SF3D
  ********************************************************************************/
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { LocalSf3DService } from '../src/node/3d-engine/local-sf3d-service';
+import { LocalSf3DError, LocalSf3DService, readGlbMeshStats } from '../src/node/3d-engine/local-sf3d-service';
 import { localSf3DHandlers } from '../src/node/gemini/tools/local-sf3d-tools';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
 import { buildToolDeclarations, createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
@@ -33,66 +31,109 @@ describe('Local SF3D Organic Prop Engine (no_pbr)', () => {
         fs.rmSync(testOutputDir, { recursive: true, force: true });
     });
 
-    it('1. Executes LocalSf3DService with no_pbr and verifies binary glTF 2.0 output', async () => {
-        const service = LocalSf3DService.getInstance();
-        const result = await service.generateOrganicProp({
-            imagePath: dummyImagePath,
-            outputGlbPath,
-            noPbr: true,
-            targetScaleMeters: 0.40,
-            groundCut: true,
-            device: 'cpu',
-            promptHint: 'chanterelle mushroom'
-        });
+    /** Minimal binary glTF with one indexed triangle primitive of the given size and POSITION bounds. */
+    function buildGlb(vertexCount: number, indexCount: number, min: number[], max: number[]): Buffer {
+        const binLength = vertexCount * 12 + indexCount * 4;
+        const json = Buffer.from(JSON.stringify({
+            asset: { version: '2.0' },
+            meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1, mode: 4 }] }],
+            accessors: [
+                { bufferView: 0, componentType: 5126, count: vertexCount, type: 'VEC3', min, max },
+                { bufferView: 1, componentType: 5125, count: indexCount, type: 'SCALAR' }
+            ],
+            bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: vertexCount * 12 }, { buffer: 0, byteOffset: vertexCount * 12, byteLength: indexCount * 4 }],
+            buffers: [{ byteLength: binLength }]
+        }));
+        const jsonPadded = Buffer.concat([json, Buffer.alloc((4 - (json.length % 4)) % 4, 0x20)]);
+        const bin = Buffer.alloc(binLength);
+        const header = Buffer.alloc(12);
+        header.write('glTF', 0, 'utf8');
+        header.writeUInt32LE(2, 4);
+        header.writeUInt32LE(12 + 8 + jsonPadded.length + 8 + bin.length, 8);
+        const jh = Buffer.alloc(8); jh.writeUInt32LE(jsonPadded.length, 0); jh.writeUInt32LE(0x4e4f534a, 4);
+        const bh = Buffer.alloc(8); bh.writeUInt32LE(bin.length, 0); bh.writeUInt32LE(0x004e4942, 4);
+        return Buffer.concat([header, jh, jsonPadded, bh, bin]);
+    }
 
-        expect(result.success).toBe(true);
-        expect(result.mode).toBe('no_pbr_clay');
-        expect(fs.existsSync(result.glbPath)).toBe(true);
+    /** Service whose "python" is a shell script standing in for the SF3D runner subprocess. */
+    function serviceWithRunner(shellBody: string): LocalSf3DService {
+        const exe = path.join(testOutputDir, `fake_python_${Math.random().toString(36).slice(2)}.sh`);
+        fs.writeFileSync(exe, `#!/bin/sh\n${shellBody}\n`, { mode: 0o755 });
+        return new LocalSf3DService({
+            ensureNativeModule: async () => null,
+            getPythonExecutable: () => exe,
+            getModuleDirectory: () => ''
+        } as any);
+    }
 
-        // Verify standard glTF 2.0 binary header
-        const buffer = fs.readFileSync(result.glbPath);
-        expect(buffer.length).toBeGreaterThan(1000);
-        expect(buffer.toString('utf8', 0, 4)).toBe('glTF'); // magic 0x46546C67
-        expect(buffer.readUInt32LE(4)).toBe(2); // glTF version 2
-
-        // Verify metric scale
-        const bbox = result.overallBoundingBox;
-        expect(bbox).toBeDefined();
-        const maxDim = Math.max(...bbox.dimensions);
-        expect(maxDim).toBeCloseTo(0.40, 2);
-
-        // Verify ground plane snap (Y_min must be 0)
-        expect(bbox.min[1]).toBeCloseTo(0.0, 3);
-        expect(result.vertexCount).toBeGreaterThan(1000);
-        expect(result.triangleCount).toBeGreaterThan(2000);
+    it('1. Reports vertex/triangle counts and bounds read from the GLB the runner wrote', async () => {
+        const glbSource = path.join(testOutputDir, 'runner_output.glb');
+        fs.writeFileSync(glbSource, buildGlb(5123, 3 * 9871, [-0.1, 0, -0.12], [0.1, 0.4, 0.12]));
+        // The runner's JSON carries no counts or bounds: they must come from the GLB itself.
+        const service = serviceWithRunner(
+            `cp "${glbSource}" "$3"\necho __LOCAL_SF3D_RESULT_START__\necho '{"success": true, "device": "cpu"}'\necho __LOCAL_SF3D_RESULT_END__`
+        );
+        const out = path.join(testOutputDir, 'counted.glb');
+        const result = await service.generateOrganicProp({ imagePath: dummyImagePath, outputGlbPath: out, targetScaleMeters: 0.4 });
+        expect(result.vertexCount).toBe(5123);
+        expect(result.triangleCount).toBe(9871);
+        expect(result.overallBoundingBox.min).toEqual([-0.1, 0, -0.12]);
+        expect(result.overallBoundingBox.dimensions[1]).toBeCloseTo(0.4, 6);
+        expect(result.overallBoundingBox.dimensions[0]).toBeCloseTo(0.2, 6);
+        expect(result.device).toBe('cpu');
+        expect(readGlbMeshStats(fs.readFileSync(out)).vertexCount).toBe(5123);
     });
 
-    it('2. Invokes generate_local_sf3d_organic_prop tool handler and creates 3d-scene artifact', async () => {
-        const handler = localSf3DHandlers.generate_local_sf3d_organic_prop;
-        expect(handler).toBeDefined();
+    it('2. A failing runner throws LocalSf3DError even when a stale GLB sits at the target path', async () => {
+        const out = path.join(testOutputDir, 'stale.glb');
+        fs.writeFileSync(out, buildGlb(10, 3, [0, 0, 0], [1, 1, 1]));
+        const service = serviceWithRunner(
+            `echo __LOCAL_SF3D_ERROR_START__\necho '{"success": false, "code": "SF3D_RUN_FAILED", "error": "CUDA out of memory"}'\necho __LOCAL_SF3D_ERROR_END__\nexit 4`
+        );
+        const err = await service.generateOrganicProp({ imagePath: dummyImagePath, outputGlbPath: out }).catch(e => e);
+        expect(err).toBeInstanceOf(LocalSf3DError);
+        expect(err.code).toBe('SF3D_RUN_FAILED');
+        expect(err.message).toContain('CUDA out of memory');
+    });
 
-        const toolRes = await handler({
-            imagePath: dummyImagePath,
-            outputGlbPath: path.join(testOutputDir, 'test_coral_prop.glb'),
-            noPbr: true,
-            targetScaleMeters: 0.25,
-            groundCut: true,
-            promptHint: 'small coral formation'
-        }, {} as any);
+    it('2b. The real runner script exits non-zero with SF3D_NOT_INSTALLED when SF3D is missing (no substitute mesh)', async () => {
+        const { execFileSync, spawnSync } = await import('child_process');
+        const py = 'python3';
+        const probe = spawnSync(py, ['-I', '-c', 'import sf3d'], { encoding: 'utf8' });
+        if (probe.status === 0) return; // SF3D installed here: the not-installed path cannot be exercised.
+        const script = new LocalSf3DService({} as any).resolveScriptPath();
+        const out = path.join(testOutputDir, 'not_installed.glb');
+        let status = 0;
+        let stdout = '';
+        try {
+            execFileSync(py, ['-I', script, dummyImagePath, out], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        } catch (e: any) {
+            status = e.status;
+            stdout = e.stdout;
+        }
+        expect(status).toBe(3);
+        expect(stdout).toContain('"code": "SF3D_NOT_INSTALLED"');
+        expect(fs.existsSync(out)).toBe(false);
+    });
 
-        expect(toolRes.status).toBe('completed');
-        expect(toolRes.resultPayload.success).toBe(true);
-        expect(toolRes.resultPayload.mode).toBe('no_pbr_clay');
-        expect(toolRes.resultPayload.targetScaleMeters).toBe(0.25);
-
-        // Verify 3d-scene artifact contract. Since f05f9f2 the handler returns a ToolHandlerOutcome and the
-        // artifact lives in resultPayload, which is where streaming.ts mounts it from.
-        const artifact = (toolRes.resultPayload as any).artifact;
-        expect(artifact).toBeDefined();
-        expect(artifact?.type).toBe('3d-scene');
-        expect(artifact?.data.renderMode).toBe('clay');
-        expect(artifact?.data.environment.lighting).toBe('studio');
-        expect(artifact?.data.camera).toBeDefined();
+    it('2c. The tool handler fails with the error code when SF3D cannot run', async () => {
+        const failing = serviceWithRunner(
+            `echo __LOCAL_SF3D_ERROR_START__\necho '{"success": false, "code": "SF3D_NOT_INSTALLED", "error": "No module named sf3d"}'\necho __LOCAL_SF3D_ERROR_END__\nexit 3`
+        );
+        const prev = (LocalSf3DService as any).instance;
+        (LocalSf3DService as any).instance = failing;
+        try {
+            const res = await localSf3DHandlers.generate_local_sf3d_organic_prop({
+                imagePath: dummyImagePath,
+                outputGlbPath: path.join(testOutputDir, 'tool.glb')
+            }, {} as any);
+            expect(res.status).toBe('failed');
+            expect(res.resultPayload.code).toBe('SF3D_NOT_INSTALLED');
+            expect(res.summaryResult).toContain('No module named sf3d');
+            expect(fs.existsSync(path.join(testOutputDir, 'tool.glb'))).toBe(false);
+        } finally {
+            (LocalSf3DService as any).instance = prev;
+        }
     });
 
     it('3. Routes to LocalSf3DService only when the request names SF3D', () => {
