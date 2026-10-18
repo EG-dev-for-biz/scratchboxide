@@ -349,6 +349,7 @@ class DiskCache:
 
 
 CACHE = DiskCache(None)
+ANCHOR_TO_OUTLINE = True
 
 
 def load_frame(d, fr):
@@ -371,6 +372,14 @@ def place_facade(fac, views, d, feat_cache):
         return None, rep
     panos = {}
     for k in keys: panos.setdefault(views[k]['panoId'], []).append(k)
+    if not ANCHOR_TO_OUTLINE:
+        # diagnostic: every view at its registered pose (no outline anchor, no cross-pano homography); the chart fusion still
+        # co-registers to the reference warp and votes per pano
+        ref = max(panos, key=lambda p: len(panos[p]))
+        rep['reference'] = ref
+        for k in keys: rep['views'][k] = {'placement': 'registered pose'}
+        rep['seconds'] = round(time.time() - t0, 2)
+        return {'K': {k: np.eye(3) for k in keys}, 'ref': ref, 'placed': {k: (H0[k], rep['views'][k]) for k in keys}, 'panos': panos}, rep
     # 1. wide view per pano and its outline anchor
     G, wide = {}, {}
     for pid, ks in panos.items():
@@ -648,6 +657,8 @@ def main(d):
     job, views = load_job(d)
     global CACHE
     CACHE = DiskCache(job.get('cacheDir'))
+    global ANCHOR_TO_OUTLINE
+    ANCHOR_TO_OUTLINE = job.get('anchorToOutline', True)
     feat_cache = {}
     result = {'facades': [], 'charts': {}, 'heldOut': None}
     scorer = Scorer(); held = []
@@ -669,6 +680,14 @@ def main(d):
             tc = time.time()
             fr = load_frame(d, chj['frame'])
             region = np.fromfile(os.path.join(d, chj['region']), np.uint8).reshape(fr['H'], fr['W']) > 0
+            # the photos are rectified on the tile's own surface, not on the fitted face: where the fit stands off the scan
+            # (tens of cm on this kind of fit) a photo warped onto the fitted plane lands in the wrong place, differently in
+            # every view. The plane moves along its normal to the median depth of the tile surface over the chart.
+            d0 = fr['dev'][region & (np.abs(np.nan_to_num(fr['dev'], nan=99)) < 1.0)]
+            offset = float(np.median(d0)) if d0.size > 50 else 0.0
+            if offset:
+                n_ = np.asarray(fr['plane']['normal'], np.float64)
+                fr = load_frame(d, {**chj['frame'], 'plane': {'point': (np.asarray(fr['plane']['point']) + offset * n_).tolist(), 'normal': fr['plane']['normal']}})
             dev = fr['dev']
             devm = cv2.medianBlur(np.nan_to_num(dev, nan=99.0).astype(np.float32), 5)
             nonplanar = (np.abs(devm) > RELIEF_TOL_M)
@@ -677,7 +696,7 @@ def main(d):
             ch = {'fr': fr, 'region': planar}
             np_px = region & nonplanar
             finite = np.abs(dev[np_px & np.isfinite(dev)])
-            crep = {'facade': fac['id'], 'regionPx': int(region.sum()), 'nonPlanarPx': int(np_px.sum()),
+            crep = {'facade': fac['id'], 'regionPx': int(region.sum()), 'planeOffsetM': round(offset, 4), 'nonPlanarPx': int(np_px.sum()),
                     'nonPlanarNoSurfacePx': int((np_px & ~np.isfinite(dev)).sum()),
                     'nonPlanarP90M': None if not finite.size else round(float(np.percentile(finite, 90)), 3),
                     'nonPlanarMaxM': None if not finite.size else round(float(min(finite.max(), 99)), 3)}

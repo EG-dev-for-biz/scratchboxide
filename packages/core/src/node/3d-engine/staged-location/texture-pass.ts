@@ -51,7 +51,7 @@ import { measureScanDeviation, type ScanDeviation } from './scan-deviation';
 import { round5Enabled } from './round5-switch';
 
 /** Part of every texture cache key: a change to the pass's maths is a new version. */
-export const TEXTURE_PASS_VERSION = 'texture-pass/8';
+export const TEXTURE_PASS_VERSION = `texture-pass/8${process.env.SCRATCHBOX_PHOTO_TIER_OFF === '1' ? '+tier-off' : process.env.SCRATCHBOX_PHOTO_TIER_POSE_ONLY === '1' ? '+tier-pose-only' : ''}`;
 export const RUNG_PALETTE = 3;
 export const RUNG_GENERATED_PBR = 4;
 /** The enhancement rung's own time budget per layer (layers run in parallel inside the stage's 600 s). */

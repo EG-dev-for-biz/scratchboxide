@@ -46,7 +46,7 @@ import {
     type BakedTexturePlanes, type PhotoTierFitScores, type PhotoTierLayerRecord, type ProjectionView, type TexelProvenance, type TexturePassDegradation, type UvAtlas
 } from '../../../common/spatial/texture-pass-contracts';
 import type { RenderMesh3D } from '../../spatial/HeadlessMeshSilhouetteRenderer';
-import { renderFrameDepth, type FrameCamera } from '../../spatial/StreetViewPoseRegistrar';
+import { projectToFrame, renderFrameDepth, type FrameCamera } from '../../spatial/StreetViewPoseRegistrar';
 import type { TileTextureSurface } from './tile-texture-transfer';
 
 export const PHOTO_TIER_SOURCE = 'street-view-rectified';
@@ -101,7 +101,7 @@ interface WorkerFacade {
     views: Record<string, WorkerViewInfo>;
 }
 interface WorkerChart {
-    facade: string; regionPx: number; nonPlanarPx: number; nonPlanarNoSurfacePx: number; nonPlanarP90M: number | null; nonPlanarMaxM: number | null;
+    facade: string; regionPx: number; planeOffsetM?: number; nonPlanarPx: number; nonPlanarNoSurfacePx: number; nonPlanarP90M: number | null; nonPlanarMaxM: number | null;
     views: number; viewKeys?: string[]; panoIds?: string[]; dates?: string[]; coveredPx?: number; multiViewPx?: number; outW?: number; outH?: number; heldOutPx?: number; seconds?: number;
     /** Per placed view on this chart: co-registration inliers, gradient NCC to the reference warp (fused above 0.25). */
     viewInfo?: Record<string, { coreg?: number[]; gradNccToRef?: number | null; agreement?: string }>;
@@ -151,12 +151,6 @@ function coarser(fr: PlaneFrame, k: number): PlaneFrame {
 function framePoint(fr: PlaneFrame, x: number, y: number): Vec3 {
     const a = (x + 0.5 - fr.W / 2) * fr.mpp, b = -(y + 0.5 - fr.H / 2) * fr.mpp;
     return add(fr.centre, add(mul(fr.right, a), mul(fr.up, b)));
-}
-
-/** Frame pixel (continuous, pixel centres at integers) of a plane point. */
-function frameXY(fr: PlaneFrame, p: Vec3): [number, number] {
-    const d = sub(p, fr.centre);
-    return [dot(d, fr.right) / fr.mpp + fr.W / 2 - 0.5, -dot(d, fr.up) / fr.mpp + fr.H / 2 - 0.5];
 }
 
 /** Triangles of `mesh` inside the slab |signed distance to the plane| <= slab (any vertex) and the plane window (+ margin). */
@@ -437,7 +431,7 @@ export async function rectifyPhotoTier(input: PhotoTierInput): Promise<PhotoTier
             return { key: `v${vi}`, panoId: v.panoId, date: v.captureDate ?? null, file: `v${vi}.rgba`, width: v.image.width, height: v.image.height, cam: camJson(v.camera as FrameCamera) };
         });
         if (!jobViews.length) return skip('photo_tier_no_views', 'No registered Street View view looks at a fitted wall face of this layer.');
-        fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify({ facades: jobFacades, views: jobViews, heldOut: input.heldOut !== false, ...(input.cacheDir ? { cacheDir: input.cacheDir } : {}), ...(process.env.SCRATCHBOX_PHOTO_TIER_KEEP ? { debug: true } : {}) }));
+        fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify({ facades: jobFacades, views: jobViews, heldOut: input.heldOut !== false, ...(input.cacheDir ? { cacheDir: input.cacheDir } : {}), ...(process.env.SCRATCHBOX_PHOTO_TIER_POSE_ONLY === '1' ? { anchorToOutline: false } : {}), ...(process.env.SCRATCHBOX_PHOTO_TIER_KEEP ? { debug: true } : {}) }));
         progress(`rectifying ${jobViews.length} Street View views onto ${units1.size} fitted faces (${facadeGroups.length} facades)`);
         const tW = Date.now();
         try {
@@ -507,8 +501,13 @@ export async function rectifyPhotoTier(input: PhotoTierInput): Promise<PhotoTier
             const W1 = ch.outW, H1 = ch.outH;
             if (W1 !== fr1.W || H1 !== fr1.H) throw new Error(`photo tier: chart ${id} came back ${W1}x${H1}, expected ${fr1.W}x${fr1.H}`);
             const rgb = fs.readFileSync(path.join(dir, `${id}_fused.rgb`)), mask = fs.readFileSync(path.join(dir, `${id}_mask.u8`));
+            // the worker rectified on the tile's surface, `planeOffsetM` along the normal from the fitted face: a texel reads the
+            // photo where its normal meets that surface
+            const off = ch.planeOffsetM ?? 0;
             for (const t of u.texels) {
-                const [x, y] = frameXY(fr1, texelPos(atlas, t));
+                const q = projectToFrame(fr1.cam, add(texelPos(atlas, t), mul(u.normal, off)));
+                if (!q) continue;
+                const x = q[0] - 0.5, y = q[1] - 0.5;
                 const x0 = Math.floor(x), y0 = Math.floor(y), tx = x - x0, ty = y - y0;
                 if (x0 < 0 || y0 < 0 || x0 + 1 >= W1 || y0 + 1 >= H1) continue;
                 const i00 = y0 * W1 + x0, i10 = i00 + 1, i01 = i00 + W1, i11 = i01 + 1;
