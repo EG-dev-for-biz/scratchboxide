@@ -1011,6 +1011,10 @@ struct StripParams {
     // hangs below that surface: it is not what the tree stands on (in a continuous canopy the nearest level patches can be
     // flat canopy tops), so its ground is not measured and it is kept as scanned (no_measured_ground).
     double maxCrownBelowSupport{0.1};
+    // A crown at a raised level whose footprint shows no surface there is regrown from a lower surface only while the bare
+    // trunk that needs stays within this many crown depths (a street tree beside a terrace); longer, it would pass through
+    // the structure (a roof garden over a hollow building mesh) and the crown is kept as scanned.
+    double maxBareTrunkPerCrownDepth{3.0};
     // A standable surface under a crown's stem within this of the terrain model is the ground (m).
     double groundTerrainBand{2.0};
     // A surface the scan shows under a crown is its ground only when at least this share of the vertical lines through
@@ -1127,6 +1131,7 @@ struct StripStats {
     size_t crownsTree{0}, crownsLow{0}, crownsCut{0}, crownsCutRemoved{0}, crownsTooSmall{0}, crownsNoGround{0};
     size_t crownsNotRegrowable{0};   // trees the regrown SB-Veggie tree does not fill: kept as scanned (see growCrown)
     size_t crownsHangingBelowSupport{0}; // of crownsNoGround: those whose crown hangs below the surface measured around it
+    size_t crownsRaisedLevelNotShown{0}; // of crownsNoGround: a crown at a raised level (a roof) the scan does not show under it
     size_t crownsSupportedUnderStem{0};  // trees standing on the surface the scan shows under their footprint and stem, not the one around them
     size_t crownsSupportedUnderFootprint{0}; // trees standing on the surface shown under their footprint, which agrees with the one around them
     size_t crownsOutsideRoi{0};          // trees whose stem lies outside the region of interest: not regrown, kept as scanned
@@ -2265,7 +2270,21 @@ private:
             // The trunk stands on what the scan shows under this crown's footprint and stem. When the surface measured
             // around it is not what lies under it (a canopy top, a path below a mound, a street beside a terrace), the
             // surface shown under it is its ground; when they agree within the support band, the surface around it is.
-            if (shown) {
+            // A crown standing at the level of the raised surface around it (it does not hang below it) whose footprint
+            // shows no surface at that level, only one so far below that the bare trunk would be more than
+            // maxBareTrunkPerCrownDepth crown depths (a roof garden whose roof the scan replaced with the planting, over a
+            // hollow building mesh), is not regrown from that lower surface: the trunk would pass through the structure.
+            // It is kept as scanned, with the reason.
+            const double crownDepth = static_cast<double>(rec.apex.y) - static_cast<double>(lowest);
+            if (shown && hangs <= P.maxCrownBelowSupport && shown->yAtStem < rec.supportY - P.supportBand &&
+                static_cast<double>(lowest) - shown->yAtStem > P.maxBareTrunkPerCrownDepth * crownDepth) {
+                groundMeasured = false;
+                rec.groundReasonCode = "raised_level_not_under_it";
+                rec.groundReason = "its crown stands at the level of the surface measured around it (" + detail::fixed(rec.supportY, 1) + " m), but the scan shows no surface at that level under it, only one at " +
+                                   detail::fixed(shown->yAtStem, 1) + " m, " + detail::fixed(static_cast<double>(lowest) - shown->yAtStem, 1) + " m below its crown (more than " + detail::fixed(P.maxBareTrunkPerCrownDepth, 0) + " times its crown's depth, " +
+                                   detail::fixed(crownDepth, 1) + " m): a trunk to that surface would pass through the structure it stands on, so it is kept as scanned";
+                ++R.stats.crownsRaisedLevelNotShown;
+            } else if (shown) {
                 const std::string why = std::abs(shown->yAtStem - rec.supportY) <= P.supportBand
                     ? "the surface measured around it lies at " + detail::fixed(rec.supportY, 1) + " m"
                     : hangs > P.maxCrownBelowSupport
@@ -3681,7 +3700,7 @@ inline std::string stripStatsJson(const StripResult& r) {
     s << "  \"canopyAreaM2\": " << json::num(st.canopyAreaM2) << ",\n  \"treeCanopyAreaM2\": " << json::num(st.treeCanopyAreaM2) << ",\n";
     s << "  \"crowns\": {\"tree\": " << st.crownsTree << ", \"treesReachingBoundary\": " << st.treesReachingBoundary << ", \"belowMinHeight\": " << st.crownsLow
       << ", \"cutAtBoundary\": " << st.crownsCut << ", \"cutAtBoundaryRemoved\": " << st.crownsCutRemoved << ", \"tooSmall\": " << st.crownsTooSmall
-      << ", \"noMeasuredGround\": " << st.crownsNoGround << ", \"hangingBelowSupport\": " << st.crownsHangingBelowSupport << ", \"supportedUnderStem\": " << st.crownsSupportedUnderStem
+      << ", \"noMeasuredGround\": " << st.crownsNoGround << ", \"hangingBelowSupport\": " << st.crownsHangingBelowSupport << ", \"raisedLevelNotShown\": " << st.crownsRaisedLevelNotShown << ", \"supportedUnderStem\": " << st.crownsSupportedUnderStem
       << ", \"outsideRoi\": " << st.crownsOutsideRoi << ", \"supportedUnderFootprint\": " << st.crownsSupportedUnderFootprint << ", \"supportUndecided\": " << st.crownsSupportUndecided << ", \"notRegrowable\": " << st.crownsNotRegrowable << "},\n";
     // trunk bases measured against the ground the removal rebuilt (or kept) under their stems, pass by pass
     s << "  \"trunkGround\": {\"passes\": " << st.groundPasses << ", \"restood\": " << st.trunksRestood << ", \"supportUndecided\": " << st.crownsSupportUndecided
