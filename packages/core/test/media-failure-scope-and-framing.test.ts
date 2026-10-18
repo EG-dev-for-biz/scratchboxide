@@ -253,30 +253,35 @@ describe('Panorama edits are sent at a ratio the model accepts and checked befor
     });
 
     it('refuses an answer that would have to be enlarged more than maxModelUpscale, and says how far it was enlarged when allowed', async () => {
-        const small = recordingImageClient([84, 36]); // 21:9, but 7x smaller than the 597x256 canvas
+        // Answers at the asked ratio but only 36 px tall: 7.11x smaller than a 256-px-tall canvas.
+        const RATIO: Record<string, number> = { '3:4': 3 / 4, '21:9': 21 / 9 };
+        const small = recordingImageClient(req => [Math.round(36 * RATIO[req.config.imageConfig.aspectRatio]), 36]);
         const service = new Google360PanoramaPipelineService(credentialsFor(small.client));
         const outputImagePath = path.join(WORK, 'soft_heal.png');
         const refused = await service.healPanoramaSeam({ inputImageBuffer: columnCodedPanorama(512, 256), outputImagePath }).catch(e => e);
         // The model answered smaller than the size asked for: refused, and not reported as an unavailable model.
+        // (The seam band is sent as a 3:4 region around it, 192x256, not as the whole frame.)
         expect(refused).toBeInstanceOf(ModelAnswerResolutionError);
         expect(refused).not.toBeInstanceOf(MediaModelUnavailableError);
         expect(refused.beforeCall).toBe(false);
-        expect(refused.message).toContain('answered at 84x36 for an imageSize 1K request, which would have to be enlarged 7.11x to the 597x256 canvas (more than the allowed 2x');
+        expect(refused.message).toContain('answered at 27x36 for an imageSize 1K request, which would have to be enlarged 7.11x to the 192x256 canvas (more than the allowed 2x');
         expect(fs.existsSync(outputImagePath)).toBe(false);
+        // The nadir band spans the whole width, so it is sent whole (widened to 21:9).
         const inpaintRefused = await service.inpaintPanorama({ inputImageBuffer: columnCodedPanorama(512, 256), nadirOnly: true }).catch(e => e);
-        expect(inpaintRefused.message).toContain('enlarged 7.11x');
+        expect(inpaintRefused.message).toContain('answered at 84x36 for an imageSize 1K request, which would have to be enlarged 7.11x to the 597x256 canvas');
 
         const allowed = await service.healPanoramaSeam({ inputImageBuffer: columnCodedPanorama(512, 256), maxModelUpscale: 8 });
-        expect(allowed.summary).toContain('resampled to 597x256 (7.11x larger)');
+        expect(allowed.summary).toContain('resampled to 192x256 (7.11x larger)');
         await expect(service.healPanoramaSeam({ inputImageBuffer: columnCodedPanorama(512, 256), maxModelUpscale: 0.5 })).rejects.toThrow(MissingInputError);
     });
 
-    it('a generated panorama says it was resampled from the model\'s 21:9 answer to 2:1, squeezing it horizontally', async () => {
+    it('a generated panorama keeps the centre 2:1 of the model\'s 21:9 answer instead of squeezing it, and says so', async () => {
         const fake = recordingImageClient([420, 180]);
         const service = new Google360PanoramaPipelineService(credentialsFor(fake.client));
         const result = await service.generate360Panorama({ prompt: 'salt flats at dawn', width: 256, height: 128, healSeam: false });
         expect(fake.requests[0].config.imageConfig).toEqual({ aspectRatio: '21:9', imageSize: '1K' });
-        expect(result.summary).toContain('The model answered at 420x180 for a 21:9, imageSize 1K request; it was resampled to 256x128 (1.41x smaller, squeezed 14% horizontally).');
+        expect(result.summary).toContain('The model answered at 420x180 for a 21:9, imageSize 1K request; it was resampled to 299x128 (1.40x smaller), and its centre 256 columns were kept (the answer is wider than the canvas; nothing was squeezed).');
+        expect(result.summary).not.toContain('squeezed 14%');
     });
 
     it('refuses an answer at another aspect ratio instead of stretching it onto the panorama', async () => {

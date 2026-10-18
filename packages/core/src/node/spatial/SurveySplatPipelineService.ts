@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { mapBounded } from '../../common/async/bounded-concurrency';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { exec } from 'child_process';
@@ -42,6 +43,8 @@ export interface SurveySplatPipelineRequest {
     beautify: StationBeautifyContext;
     /** 'chained' warps each accepted image into the next station (consistent materials); 'fanout' beautifies independently. */
     mode?: 'chained' | 'fanout';
+    /** Fanout mode only: how many stations are beautified and baked at once (default 4). */
+    fanoutConcurrency?: number;
     /** Optional ranking cap: keep only the best N stations (uses enrichment metrics). */
     maxStations?: number;
     renderWidth?: number;          // default 1920
@@ -206,8 +209,13 @@ export class SurveySplatPipelineService {
             const reports: SurveySplatStationReport[] = [];
             const bakedStations: { splatPath: string; station: ColmapCameraPose }[] = [];
             let reference: BeautifyStationResult | undefined;
-            for (let i = 0; i < stations.length; i++) {
+            // One station end to end: reuse or beautify its plate, then bake it. In chained mode each station is
+            // conditioned on the previous accepted one, so they run in order; in fanout mode they are independent
+            // and run several at a time (the image calls overlap; the bake is a native subprocess per station).
+            const runStation = async (i: number, signal: AbortSignal | undefined): Promise<{ localReports: SurveySplatStationReport[]; localBaked: { splatPath: string; station: ColmapCameraPose }[] }> => {
                 throwIfStopped(signal);
+                const localReports: SurveySplatStationReport[] = [];
+                const localBaked: { splatPath: string; station: ColmapCameraPose }[] = [];
                 const st = stations[i];
                 const base = path.join(stationsDir, `station_${String(st.id).padStart(3, '0')}`);
                 const splatPath = `${base}.splat`;
@@ -237,7 +245,7 @@ export class SurveySplatPipelineService {
                             const pose = await fs.readJson(posePath).catch(() => null);
                             const posENU: [number, number, number] = (pose?.eye || verified.aligned.positionLocalENU || st.positionLocalENU) as [number, number, number];
                             const fwdVec: [number, number, number] = (pose?.forward || verified.aligned.forwardVector || st.forwardVector) as [number, number, number];
-                            reports.push({
+                            localReports.push({
                                 stationId: st.id, accepted: true, attempts: 0, usedReference: false, splatCount: Math.floor(stStat.size / 32), splatPath,
                                 imagePath: beautifiedPath, blockoutPath,
                                 qc: verified.qc,
@@ -247,8 +255,8 @@ export class SurveySplatPipelineService {
                                 name: st.name,
                                 imageSource: `Reused the station splat already on disk at ${splatPath}, after its beautified plate passed geometry QC again (${pctOf(verified.qc)}); no image was generated.`
                             });
-                            bakedStations.push({ splatPath, station: { ...st, positionLocalENU: posENU, forwardVector: fwdVec } });
-                            continue;
+                            localBaked.push({ splatPath, station: { ...st, positionLocalENU: posENU, forwardVector: fwdVec } });
+                            return { localReports, localBaked };
                         }
                         res = {
                             station: st,
@@ -313,10 +321,25 @@ export class SurveySplatPipelineService {
                     const baked = await this.bakeStation(baker, res, `${base}.splat`, req);
                     rep.splatCount = baked.splatCount;
                     rep.splatPath = baked.splatPath;
-                    bakedStations.push({ splatPath: baked.splatPath, station: res.alignedStation });
+                    localBaked.push({ splatPath: baked.splatPath, station: res.alignedStation });
                     if (mode === 'chained') reference = res;
                 }
-                reports.push(rep);
+                localReports.push(rep);
+                return { localReports, localBaked };
+            };
+            const outcomes = mode === 'chained'
+                ? await (async () => {
+                    const seq: Awaited<ReturnType<typeof runStation>>[] = [];
+                    for (let i = 0; i < stations.length; i++) seq.push(await runStation(i, signal));
+                    return seq;
+                })()
+                : await mapBounded(stations.map((_, i) => i), (i, _k, stationSignal) => runStation(i, stationSignal), {
+                    limit: Math.max(1, req.fanoutConcurrency ?? 4),
+                    signal
+                });
+            for (const outcome of outcomes) {
+                reports.push(...outcome.localReports);
+                bakedStations.push(...outcome.localBaked);
             }
             if (bakedStations.length === 0) throw new Error('No station passed QC; nothing to bake');
 

@@ -1,4 +1,4 @@
-import { test } from 'vitest';
+import { test, expect } from 'vitest';
 /********************************************************************************
  * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
@@ -284,6 +284,43 @@ test('a named video model is the only one tried: an Omni request is not widened 
         }).catch((e: Error) => e);
         assert.ok(failed instanceof MediaModelUnavailableError, String(failed));
         assert.deepStrictEqual(attempted, ['google/omni-1.1']);
+    } finally {
+        await fs.remove(workspaceRoot);
+    }
+});
+
+test('video operations are polled adaptively: 3 s first, backing off to 15 s, within the same 30 min total wait', async () => {
+    const { veoPollDelayMs } = await import('../src/node/google-media-generation-service');
+    expect(veoPollDelayMs(0)).toBe(3000);
+    expect([0, 1, 2, 3, 4, 5].map(veoPollDelayMs)).toEqual([3000, 4500, 6750, 10125, 15000, 15000]);
+
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'scratchbox-veo-poll-'));
+    try {
+        const run = async (doneAfterPolls: number) => {
+            let polls = 0;
+            const client: any = {
+                models: { generateVideos: async ({ model }: any) => ({ name: `operations/${model}`, done: false }) },
+                operations: {
+                    getVideosOperation: async ({ operation }: any) => ++polls >= doneAfterPolls
+                        ? { ...operation, done: true, response: { generatedVideos: [{ video: { videoBytes: Buffer.from('mp4').toString('base64'), mimeType: 'video/mp4' } }] } }
+                        : operation
+                }
+            };
+            const service = new GoogleMediaGenerationService(new MediaAssetStore(), async () => client);
+            const waits: number[] = [];
+            (service as any).delay = async (ms: number) => { waits.push(ms); };
+            const result = await service.generateVideo({ kind: 'video', prompt: 'waves', workspaceRoot, idempotencyKey: `poll-${doneAfterPolls}`, modelPriority: ['veo-3.1-fast-generate-preview'] }).catch((e: Error) => e);
+            return { result, waits };
+        };
+        // A 20 s job is seen after ~3+4.5+6.75+10.1 = 24 s of waiting (fixed 10 s polling: 30 s).
+        const quick = await run(4);
+        expect(quick.waits).toEqual([3000, 4500, 6750, 10125]);
+        // A job that never finishes times out after the same total wait as before (180 x 10 s).
+        const never = await run(Number.POSITIVE_INFINITY);
+        expect(never.result).toBeInstanceOf(Error);
+        expect(String((never.result as Error).message)).toMatch(/timed out/i);
+        expect(never.waits.reduce((a, b) => a + b, 0)).toBe(180 * 10000);
+        expect(Math.max(...never.waits)).toBe(15000);
     } finally {
         await fs.remove(workspaceRoot);
     }
