@@ -120,7 +120,7 @@ import {
 } from './ornament-vision';
 import { buildSwitchLocationPills, switchLocationMarkdown } from '../../../common/spatial/switch-location';
 import { summarizeStagedBuild, type StagedSummaryInput } from './staged-summary';
-import { palettesFromSurvey, projectionViewsFromEvidence, textureLayer, TEXTURE_PASS_VERSION, type TextureLayerOutcome } from './texture-pass';
+import { palettesFromSurvey, projectionViewsFromEvidence, photoTierEnabled, textureLayer, TEXTURE_PASS_VERSION, type TextureLayerOutcome } from './texture-pass';
 import { loadTileSurface, type TileTextureSurface } from './tile-texture-transfer';
 import type { EnhanceModelClient } from './texture-enhance';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
@@ -1122,11 +1122,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                     box: p.prior, ...(p.edge ? { edge: p.edge } : {}),
                                     edgeLocked: p.edgeResidualPx.edge !== null && p.edgeResidualPx.edge <= EDGE_MAX_RESIDUAL_PX && (p.edgeResidualPx.prior === null || p.edgeResidualPx.edge < p.edgeResidualPx.prior)
                                 }]));
-                                const joint = registerPanosJointly({ frames, mesh, current: registration ?? edgeReg.registration, candidates, budgetMs: JOINT_REGISTRATION_BUDGET_MS, log: m => io.progress(m) });
+                                const joint = registerPanosJointly({ frames, mesh, current: registration ?? edgeReg.registration, candidates, faces: fitFaces(fit), budgetMs: JOINT_REGISTRATION_BUDGET_MS, log: m => io.progress(m) });
                                 io.progress(describeJointRegistration(joint));
                                 cache.writeRunNote(runId, 'joint_registration', {
-                                    chosen: joint.chosen, reason: joint.reason, matches: joint.matches, timingsMs: joint.timingsMs, panos: joint.panos,
-                                    fit: Object.fromEntries(Object.entries(joint.fit).map(([k, v]) => [k, v && { chamferPx: v.chamferPx, clayChamferPx: v.clayChamferPx, gradNcc: v.gradNcc, views: v.views }])),
+                                    chosen: joint.chosen, reason: joint.reason, matches: joint.matches, timingsMs: joint.timingsMs, panos: joint.panos, outlineTerm: joint.outlineTerm,
+                                    fit: Object.fromEntries(Object.entries(joint.fit).map(([k, v]) => [k, v && { chamferPx: v.chamferPx, clayChamferPx: v.clayChamferPx, gradNcc: v.gradNcc, outlinePx: v.outlinePx ?? null, views: v.views }])),
                                     warps: joint.warps.map(w => ({ panoId: w.panoId, samples: w.samples, medianDeg: w.medianDeg }))
                                 });
                                 if (joint.chosen !== 'current') {
@@ -1377,6 +1377,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     // the sources, once for every layer
                     const images = evidence?.images ?? [];
                     const { views, failures } = projectionViewsFromEvidence(images, evidence?.registration);
+                    // photo tier A anchors each pano on the tile outline through a WIDE view of it: the survey's and the ring's
+                    // whole-face views (registered by the same joint poses), used by that tier only
+                    const surveyRes = surveyPromise ? (await surveyPromise.catch(() => undefined))?.result : undefined;
+                    const wideHeld = [
+                        ...(surveyRes?.read ?? []).flatMap(r => { const bytes = surveyImageBytes(surveyRes!, r.imageIndex); return bytes ? [{ view: r.view, bytes, widthPx: r.widthPx, heightPx: r.heightPx, sha256: r.sha256 }] : []; }),
+                        ...(evidence?.match ? matchRingImages(evidence.match) : [])
+                    ];
+                    const wideViews = projectionViewsFromEvidence(wideHeld as EvidenceImage[], evidence?.registration).views;
                     const viewsUnavailable = images.length ? (views.length ? undefined : `none of the ${images.length} grounding images decoded (${failures[0] ?? ''})`)
                         : evidence ? `the Street View stage ${evidence.status === 'skipped' ? 'was skipped' : 'returned no image'}` : (visionAvailable ? 'the Street View stage did not run (no accepted fit to aim it at)' : 'no vision model is configured, so no Street View close-ups were fetched');
                     let tile: TileTextureSurface | undefined;
@@ -1423,10 +1431,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const textureOne = async (target: typeof targets[number]) => {
                         handled.add(target.layer.objectId);
                         const clay = fs.readFileSync(target.file);
-                        const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048);
+                        const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), wideHeld.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048);
                         const entry = await cache.run<Omit<TextureLayerOutcome, 'glb'>>('textures', key, async dir => {
                             const out = await textureLayer({ layerKey: target.layer.layer, clayGlb: clay, ...(target.surfaces?.length ? { surfaces: target.surfaces } : {}) }, {
-                                views, ...(viewsUnavailable ? { viewsUnavailable } : {}), occluder, ...(context.indices.length ? { context } : {}), observedSurface: TEXTURE_OBSERVED_SURFACE, poseEdgeGuardShare: TEXTURE_POSE_EDGE_GUARD_SHARE,
+                                views, ...(wideViews.length ? { photoTierViews: wideViews } : {}), ...(photoTierEnabled() ? { photoTier: true } : {}), ...(viewsUnavailable ? { viewsUnavailable } : {}), occluder, ...(context.indices.length ? { context } : {}), observedSurface: TEXTURE_OBSERVED_SURFACE, poseEdgeGuardShare: TEXTURE_POSE_EDGE_GUARD_SHARE,
                                 delight: { latitude: run.geoAnchor.lat, longitude: run.geoAnchor.lng },
                                 ...(tile ? { tile } : {}), ...(tileUnavailable ? { tileUnavailable } : {}),
                                 ...(residual !== undefined ? { registrationResidualM: residual } : {}),
@@ -1474,7 +1482,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     }
                     // within the stage's own limit (the layers come first): what is left of it, less a margin, is the measurement's
                     const looDeadline = started + STAGES.textures.budgetMs - TEXTURE_LOO_MARGIN_MS;
-                    for (const o of outcomes) {
+                    // layers the rectified photo tier wrote come first (their fit is the one in question), then the others in order
+                    for (const o of [...outcomes.filter(x => (x.out.photoTier?.texelShare ?? 0) > 0), ...outcomes.filter(x => !((x.out.photoTier?.texelShare ?? 0) > 0))]) {
                         const job = looJobs.get(o.layer.objectId);
                         if (!job || !o.out.bundle.fit) continue;
                         const left = looDeadline - now();
@@ -1483,7 +1492,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         try {
                             const loo = await job(Math.min(LOO_BUDGET_MS, left));
                             o.out = { ...o.out, bundle: { ...o.out.bundle, fit: { ...o.out.bundle.fit, loo } }, timingsMs: { ...o.out.timingsMs, fitLoo: now() - tl } };
-                            io.progress(`textures: ${o.layer.layer}: leave-one-pano-out fit over ${loo.panos} panos: texture edge chamfer ${loo.chamferPx ?? 'n/a'} px, gradient NCC ${loo.gradNcc ?? 'n/a'}${loo.skipped ? ` (${loo.skipped} panos past the budget)` : ''}`);
+                            io.progress(`textures: ${o.layer.layer}: leave-one-pano-out fit over ${loo.panos} panos${loo.sampled ? ` (sampled: ${loo.panos} of ${loo.panosTotal})` : ''}: texture edge chamfer ${loo.chamferPx ?? 'n/a'} px, gradient NCC ${loo.gradNcc ?? 'n/a'}${loo.skipped ? ` (${loo.skipped} panos past the budget)` : ''}`);
                         } catch (err) {
                             if (isAbort(err) || io.signal.aborted) throw err;
                             io.progress(`textures: ${o.layer.layer}: the leave-one-pano-out fit could not be measured (${errorMessage(err)})`);
