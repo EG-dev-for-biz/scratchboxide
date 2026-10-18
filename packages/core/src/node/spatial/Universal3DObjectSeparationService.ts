@@ -24,18 +24,132 @@ import {
 import type { Scene3DData, Media4DObject } from '../../browser/generative-canvas/canvas-types';
 import { GltfBinaryPacker } from '../3d-engine/gltf-binary-packer';
 
-export type UniversalSpatialCategory =
-  | 'landmark'
-  | 'vehicle'
-  | 'monument'
-  | 'architecture'
-  | 'foliage'
-  | 'terrain'
-  | 'ruin'
-  | 'urban_infrastructure'
-  | 'prop'
-  | 'foliage_trees'
-  | 'colosseum_architecture';
+/**
+ * Diagnostic label for a separated entity: which clustering stage produced it, for people reading a report.
+ * Open-ended (any string); no execution path branches on it. Routing and counts read `SpatialShapeDescriptors`.
+ */
+export type SpatialEntityLabel = 'architecture' | 'terrain' | 'landmark' | 'residual' | (string & {});
+
+/** @deprecated Open diagnostic label; use `SpatialEntityLabel`. Kept so existing imports compile. */
+export type UniversalSpatialCategory = SpatialEntityLabel;
+
+/**
+ * What was measured of one separated entity's points (metres, Y up). Everything downstream that decides anything
+ * about an entity (routing, ground/structure counts) reads these numbers, never its label.
+ */
+export interface SpatialShapeDescriptors {
+  /** Vertical extent of the points. */
+  heightMeters: number;
+  /** Horizontal footprint of the oriented box (its two horizontal sides multiplied). */
+  footprintAreaM2: number;
+  footprintMaxSpanMeters: number;
+  footprintMinSpanMeters: number;
+  /** Lowest point above the lowest point of the whole model. */
+  baseElevationMeters: number;
+  /** Centroid height as a fraction of the model's height (0 = model bottom, 1 = model top). */
+  relativeElevation: number;
+  /** heightMeters / sqrt(footprintAreaM2): under ~0.1 a broad sheet, over ~3 a mast-like form. */
+  slenderness: number;
+  /** footprintMinSpan / footprintMaxSpan: 1 for a square or round plan, towards 0 for a long strip. */
+  compactness: number;
+  /** Point-covariance eigenvalues l1 >= l2 >= l3: (l2 - l3) / l1. Near 1 for a flat sheet. */
+  planarity: number;
+  /** (l1 - l2) / l1. Near 1 for a line-like spread. */
+  linearity: number;
+  /** 1 - |up . smallest-variance axis|: 0 when the best-fit plane is horizontal, 1 when it is vertical. */
+  verticality: number;
+  /** Points the descriptors were measured from. */
+  pointCount: number;
+  /** Source submeshes the entity spans. */
+  connectedSubmeshCount: number;
+}
+
+/**
+ * A broad, low-lying sheet: wider than it is tall by ten or more (slenderness under 0.1), in the lower 30 percent of
+ * the model, with a mostly horizontal best-fit plane. Ground surfaces have this shape, whatever they are made of.
+ */
+export function isBroadLowSurface(d: SpatialShapeDescriptors): boolean {
+  return d.slenderness < 0.1 && d.relativeElevation < 0.3 && d.verticality < 0.5;
+}
+
+/** Downstream generator for an entity, from its measured shape: broad low sheets go to terrain, the rest to the scan-fitted building rebuild. */
+export function routeFromDescriptors(d: SpatialShapeDescriptors): DownstreamGeneratorRouting {
+  return isBroadLowSurface(d) ? 'sb-terrain' : 'archie-building';
+}
+
+/** Symmetric 3x3 eigen-decomposition (cyclic Jacobi). Returns eigenvalues descending and the matching unit eigenvectors. */
+function symmetricEigen3(m: number[][]): { values: number[]; vectors: [number, number, number][] } {
+  const a = m.map(r => r.slice());
+  const v = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+  for (let sweep = 0; sweep < 32; sweep++) {
+    const off = a[0]![1]! ** 2 + a[0]![2]! ** 2 + a[1]![2]! ** 2;
+    if (off < 1e-20) break;
+    for (const [p, q] of [[0, 1], [0, 2], [1, 2]] as const) {
+      const apq = a[p]![q]!;
+      if (Math.abs(apq) < 1e-30) continue;
+      const theta = (a[q]![q]! - a[p]![p]!) / (2 * apq);
+      const t = Math.sign(theta || 1) / (Math.abs(theta) + Math.sqrt(theta * theta + 1));
+      const c = 1 / Math.sqrt(t * t + 1), sn = t * c;
+      for (let k = 0; k < 3; k++) {
+        const akp = a[k]![p]!, akq = a[k]![q]!;
+        a[k]![p] = c * akp - sn * akq; a[k]![q] = sn * akp + c * akq;
+      }
+      for (let k = 0; k < 3; k++) {
+        const apk = a[p]![k]!, aqk = a[q]![k]!;
+        a[p]![k] = c * apk - sn * aqk; a[q]![k] = sn * apk + c * aqk;
+      }
+      for (let k = 0; k < 3; k++) {
+        const vkp = v[k]![p]!, vkq = v[k]![q]!;
+        v[k]![p] = c * vkp - sn * vkq; v[k]![q] = sn * vkp + c * vkq;
+      }
+    }
+  }
+  const order = [0, 1, 2].sort((i, j) => a[j]![j]! - a[i]![i]!);
+  return {
+    values: order.map(i => Math.max(0, a[i]![i]!)),
+    vectors: order.map(i => [v[0]![i]!, v[1]![i]!, v[2]![i]!] as [number, number, number])
+  };
+}
+
+/** Measures `SpatialShapeDescriptors` from an entity's points, its oriented box and the whole model's box. */
+export function measureShapeDescriptors(
+  points: readonly (readonly [number, number, number])[],
+  obbDimensions: readonly [number, number, number],
+  modelBox: { min: readonly [number, number, number]; max: readonly [number, number, number] },
+  connectedSubmeshCount: number
+): SpatialShapeDescriptors {
+  const n = points.length;
+  let minY = Infinity, maxY = -Infinity, cx = 0, cy = 0, cz = 0;
+  for (const p of points) { cx += p[0]; cy += p[1]; cz += p[2]; if (p[1] < minY) minY = p[1]; if (p[1] > maxY) maxY = p[1]; }
+  if (n > 0) { cx /= n; cy /= n; cz /= n; } else { minY = maxY = 0; }
+  const cov = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+  for (const p of points) {
+    const d = [p[0] - cx, p[1] - cy, p[2] - cz];
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) cov[i]![j]! += d[i]! * d[j]!;
+  }
+  if (n > 0) for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) cov[i]![j]! /= n;
+  const { values: [l1, l2, l3], vectors } = symmetricEigen3(cov);
+  const spanA = obbDimensions[0], spanB = obbDimensions[2];
+  const footprintMax = Math.max(spanA, spanB), footprintMin = Math.min(spanA, spanB);
+  const footprintAreaM2 = spanA * spanB;
+  const heightMeters = maxY - minY;
+  const modelHeight = modelBox.max[1] - modelBox.min[1];
+  return {
+    heightMeters,
+    footprintAreaM2,
+    footprintMaxSpanMeters: footprintMax,
+    footprintMinSpanMeters: footprintMin,
+    baseElevationMeters: minY - modelBox.min[1],
+    relativeElevation: modelHeight > 0 ? (cy - modelBox.min[1]) / modelHeight : 0,
+    slenderness: footprintAreaM2 > 0 ? heightMeters / Math.sqrt(footprintAreaM2) : Infinity,
+    compactness: footprintMax > 0 ? footprintMin / footprintMax : 0,
+    planarity: l1! > 0 ? (l2! - l3!) / l1! : 0,
+    linearity: l1! > 0 ? (l1! - l2!) / l1! : 0,
+    verticality: l1! > 0 ? 1 - Math.abs(vectors[2]![1]) : 0,
+    pointCount: n,
+    connectedSubmeshCount
+  };
+}
 
 export type DownstreamGeneratorRouting =
   | 'sb-archi'
@@ -75,7 +189,10 @@ export interface BoundingBox3DMetric {
 export interface UniversalSeparatedObject {
   id: string;
   name: string;
-  category: UniversalSpatialCategory;
+  /** Diagnostic label only (which stage produced the entity); decisions read `descriptors`. */
+  category: SpatialEntityLabel;
+  /** Measured shape of the entity's points. */
+  descriptors: SpatialShapeDescriptors;
   boundingBox: BoundingBox3DMetric;
   orientedBoundingBox: OrientedBoundingBox3D;
   tightnessGainPercent: number;
@@ -121,6 +238,7 @@ export interface UniversalSeparatedScene {
   objectCounts?: Record<string, number>;
   totalEntities: number;
   overallVertexCount: number;
+  /** Entities per diagnostic label. */
   categoryCounts: Record<string, number>;
 }
 
@@ -361,7 +479,7 @@ export class Universal3DObjectSeparationService {
     let clusters: {
       id: string;
       name: string;
-      category: UniversalSpatialCategory;
+      category: SpatialEntityLabel;
       submeshIndices: number[];
       extractedVertices: [number, number, number][];
       vertexIndices?: number[];
@@ -403,12 +521,14 @@ export class Universal3DObjectSeparationService {
       const obb = dualResult.obb;
       const counts = this.countClusterGeometry(cluster, submeshData);
 
-      const routingRecommendation = cluster.routingRecommendation || this.determineRoutingRecommendation(cluster.category);
+      const descriptors = measureShapeDescriptors(cluster.extractedVertices, obb.dimensions, overallBoundingBox, cluster.submeshIndices.length);
+      const routingRecommendation = cluster.routingRecommendation || routeFromDescriptors(descriptors);
 
       return {
         id: cluster.id,
         name: cluster.name,
         category: cluster.category,
+        descriptors,
         boundingBox: {
           min: aabb.min,
           max: aabb.max,
@@ -486,7 +606,7 @@ export class Universal3DObjectSeparationService {
   ): {
     id: string;
     name: string;
-    category: UniversalSpatialCategory;
+    category: SpatialEntityLabel;
     submeshIndices: number[];
     extractedVertices: [number, number, number][];
     colorHex: string;
@@ -537,7 +657,7 @@ export class Universal3DObjectSeparationService {
       {
         id: 'sep-tall-structures',
         name: 'Tall structures (over 15 m high, over 20 m across)',
-        category: 'architecture' as UniversalSpatialCategory,
+        category: 'architecture' as SpatialEntityLabel,
         indices: tallIndices,
         colorHex: '#3b82f6',
         prompt: 'Structure geometry from the scan, over 15 m high and over 20 m across',
@@ -547,7 +667,7 @@ export class Universal3DObjectSeparationService {
       {
         id: 'sep-terrain-ground',
         name: 'Broad low surfaces (ground)',
-        category: 'terrain' as UniversalSpatialCategory,
+        category: 'terrain' as SpatialEntityLabel,
         indices: terrainIndices,
         colorHex: '#64748b',
         prompt: 'Broad low ground surface geometry from the scan',
@@ -560,7 +680,7 @@ export class Universal3DObjectSeparationService {
       clustersConfig.push({
         id: 'sep-other-structures',
         name: 'Other structures',
-        category: 'architecture' as UniversalSpatialCategory,
+        category: 'architecture' as SpatialEntityLabel,
         indices: architectureIndices,
         colorHex: '#fbbf24',
         prompt: 'Structure geometry from the scan',
@@ -573,7 +693,7 @@ export class Universal3DObjectSeparationService {
       clustersConfig.push({
         id: 'sep-low-structures',
         name: 'Low structures near the ground (1 to 8 m high)',
-        category: 'architecture' as UniversalSpatialCategory,
+        category: 'architecture' as SpatialEntityLabel,
         indices: lowIndices,
         colorHex: '#f97316',
         prompt: 'Structure geometry from the scan, 1 to 8 m high near the ground',
@@ -663,32 +783,6 @@ export class Universal3DObjectSeparationService {
       }
     }
     return { vertexCount: cluster.vertexIndices.length, triangleCount };
-  }
-
-  private determineRoutingRecommendation(category: UniversalSpatialCategory): DownstreamGeneratorRouting {
-    switch (category) {
-      case 'landmark':
-      case 'monument':
-      case 'ruin':
-        return 'sb-archi';
-      case 'vehicle':
-        return 'sb-vehicle';
-      case 'foliage':
-      case 'foliage_trees':
-        return 'sb-veggie';
-      case 'architecture':
-      case 'colosseum_architecture':
-      case 'urban_infrastructure':
-        return 'archie-building';
-      case 'terrain':
-        return 'sb-terrain';
-      case 'prop':
-        // Discrete props can optionally use neural mesh diffusion if an asset model is needed
-        return 'trellis';
-      default:
-        // Default to native architectural engine in codebase for all scene structures
-        return 'sb-archi';
-    }
   }
 
   /**

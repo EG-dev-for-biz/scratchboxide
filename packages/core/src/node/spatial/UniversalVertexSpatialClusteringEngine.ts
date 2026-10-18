@@ -14,7 +14,7 @@
  ********************************************************************************/
 
 import type {
-  UniversalSpatialCategory,
+  SpatialEntityLabel,
   DownstreamGeneratorRouting
 } from './Universal3DObjectSeparationService';
 
@@ -57,7 +57,8 @@ export interface VertexClusteringOptions {
 export interface DecomposedCluster {
   id: string;
   name: string;
-  category: UniversalSpatialCategory;
+  /** Diagnostic label: the stage that produced the cluster. */
+  category: SpatialEntityLabel;
   submeshIndices: number[];
   extractedVertices: [number, number, number][];
   /** Submesh-local vertex indices (paired element-wise with `vertexSubmeshIndices`). */
@@ -254,14 +255,15 @@ export class UniversalVertexSpatialClusteringEngine {
       const submeshSet = new Set(terrainVerts.map(v => v.submeshIndex));
       clusters.push({
         id: 'sep-terrain-ground-datum',
-        name: 'Terrain Ground Apron & Plaza Datum',
+        name: 'Upward-facing surface within 1.8 m of the ground datum',
         category: 'terrain',
         submeshIndices: Array.from(submeshSet),
         extractedVertices: terrainVerts.map(v => [v.x, v.y, v.z]),
         vertexIndices: terrainVerts.map(v => v.vertexIndex),
         vertexSubmeshIndices: terrainVerts.map(v => v.submeshIndex),
         colorHex: '#64748b',
-        prompt: 'Pedestrian ground pavement and geological apron datum with tactile surface materials',
+        // Measured: up-facing (normal y >= 0.6) and low. What the surface is made of is not in the geometry.
+        prompt: `Up-facing scan surface within 1.8 m of the ground datum (${terrainVerts.length} vertices)`,
         roughness: 0.90,
         metalness: 0.04,
         routingRecommendation: 'sb-terrain'
@@ -426,14 +428,14 @@ export class UniversalVertexSpatialClusteringEngine {
         const bDepth = bMaxZ - bMinZ;
         const footprintM2 = bWidth * bDepth;
 
-        const category: UniversalSpatialCategory = 'architecture';
-        // named and described by what was measured: its use and style are not in the geometry
+        // named and described by what was measured: its use and style are not in the geometry. The label only says
+        // which stage found it (connected tall-vertex footprint); nothing downstream branches on it.
         const bName = `Building Envelope #${bldCounter}`;
 
         clusters.push({
           id: `arch-building-${String(bldCounter).padStart(3, '0')}`,
           name: bName,
-          category,
+          category: 'architecture',
           submeshIndices: Array.from(submeshSet),
           extractedVertices: clusterVerts.map(v => [v.x, v.y, v.z]),
           vertexIndices: clusterVerts.map(v => v.vertexIndex),
@@ -459,14 +461,15 @@ export class UniversalVertexSpatialClusteringEngine {
       const submeshSet = new Set(residualVerts.map(v => v.submeshIndex));
       clusters.push({
         id: 'infra-urban-props',
-        name: 'Ground Urban Infrastructure & Peripheral Props',
-        category: 'urban_infrastructure',
+        name: 'Unclustered residual geometry',
+        category: 'residual',
         submeshIndices: Array.from(submeshSet),
         extractedVertices: residualVerts.map(v => [v.x, v.y, v.z]),
         vertexIndices: residualVerts.map(v => v.vertexIndex),
         vertexSubmeshIndices: residualVerts.map(v => v.submeshIndex),
         colorHex: '#f59e0b',
-        prompt: 'Pedestrian street furniture, bollards, curbs, and surrounding urban infrastructure elements',
+        // What these points are is not measured: they are what no stage above claimed.
+        prompt: `Residual scan geometry no clustering stage claimed (${residualVerts.length} vertices)`,
         roughness: 0.88,
         metalness: 0.05,
         routingRecommendation: 'archie-building'

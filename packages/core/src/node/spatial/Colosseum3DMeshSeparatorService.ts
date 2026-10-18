@@ -1172,7 +1172,7 @@ export class Colosseum3DMeshSeparatorService {
           monuments_temples: universal.categoryCounts.monument || 0,
           foliage_trees: universal.categoryCounts.foliage || 0,
           archaeology_ruins: universal.categoryCounts.ruin || 0,
-          urban_infrastructure: universal.categoryCounts.urban_infrastructure || 0
+          urban_infrastructure: universal.categoryCounts.residual || 0
         }
       };
     }

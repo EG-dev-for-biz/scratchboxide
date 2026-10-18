@@ -34,8 +34,10 @@ describe('Admin Access & Comprehensive Showcase Demos Catalog in Settings', () =
         expect(adminSrc).toContain('handleLaunchInAppDemo');
 
         // Check the core user-provided visualizer/studios are cataloged:
-        expect(adminSrc).toContain('next_gen_astra_viewport_studio.html');
-        expect(adminSrc).toContain('nanite_meshlet_pathtracing_studio.html');
+        // The fake viewport studios (hardcoded telemetry, no real GPU pipeline) were removed; the real one is the
+        // virtual geometry viewport (virtual_geometry_open_glb).
+        expect(adminSrc).not.toContain('next_gen_astra_viewport_studio.html');
+        expect(adminSrc).not.toContain('nanite_meshlet_pathtracing_studio.html');
         expect(adminSrc).toContain('colosseum_recolor_proof.html');
         expect(adminSrc).toContain('walkable_3dgs_viewer.html');
         expect(adminSrc).toContain('agent_lighting_proof.html');
@@ -72,8 +74,6 @@ describe('Admin Access & Comprehensive Showcase Demos Catalog in Settings', () =
 
     it('7. Cataloged standalone HTML demo studios exist in public directory', () => {
         const requiredFiles = [
-            'next_gen_astra_viewport_studio.html',
-            'nanite_meshlet_pathtracing_studio.html',
             'colosseum_recolor_proof.html',
             'walkable_3dgs_viewer.html',
             'agent_lighting_proof.html',

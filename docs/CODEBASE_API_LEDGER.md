@@ -452,7 +452,7 @@ Hosted by the desktop application server in `desktop-app/server/app.ts`:
 44. **`scratchbox_view_transform.hpp`**: ACEScg, AgX, and Filmic display transform curves.
 45. **`scratchbox_headless_realism.hpp`**: Multi-spectral ground bounce and sky occlusion evaluation.
 46. **`scratchbox_lod.hpp`**: Continuous Level-Of-Detail generator and geometric error evaluation.
-47. **`scratchbox_nanite.hpp`**: Cluster-based hierarchical geometric level of detail and streaming.
+47. **`scratchbox_nanite.hpp`**: Cluster-based hierarchical geometric level of detail and streaming. Superseded for rendering by `scratchbox_virtual_geometry.hpp` (below).
 48. **`scratchbox_tile_cleanup.hpp`**: Automated photogrammetric noise pruning and planar simplification.
 49. **`scratchbox_tile_abstractor.hpp`**: Semantic architectural element abstraction from point clouds.
 50. **`scratchbox_tiles.hpp`**: Cesium 3D Tiles 1.1 (B3DM, I3DM, PNTS) parsing and streaming.
@@ -483,6 +483,7 @@ Hosted by the desktop application server in `desktop-app/server/app.ts`:
 75. **`scratchbox_substrate.hpp`**: Multi-tier memory buffer management.
 76. **`scratchbox_io.hpp`**: Thread-safe memory-mapped disk I/O.
 77. **`scratchbox_spatial_kernel.hpp`**: Spatial octrees, Kd-trees, and radius nearest neighbor queries.
+78. **`scratchbox_virtual_geometry.hpp`**: GLB scene → border-locked cluster LOD DAG → streamable `.sbvg` (coarsest level first); built by `VirtualGeometryBuildService` and drawn by the WebGPU `VirtualGeometryRenderer` (`VirtualGeometryViewport`, agent tool `virtual_geometry_open_glb`). Process: `docs/processes/virtual-geometry-webgpu-viewport.md`.
 
 ---
 

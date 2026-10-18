@@ -95,7 +95,7 @@ export interface BoxProjectionTextureSetReport {
     descriptor: Partial<ContinuousMaterialDescriptor>;
     /** Descriptor fields nobody set; the synthesizer applies its own defaults to them. */
     unspecifiedDescriptorFields: string[];
-    materialSource: 'archetype' | 'archetype_with_descriptor_overrides' | 'descriptor' | 'tool_default_indiana_limestone';
+    materialSource: 'archetype' | 'archetype_with_descriptor_overrides' | 'descriptor';
     synthesizer: 'native-cpp20';
     /** Measured wall time of synthesizing this set, and its phases as the native service measured them. */
     synthesisMs: number;
@@ -187,8 +187,11 @@ function resolveMaterialSpec(service: NativeService, where: string, archetype: u
     }
     const overrides = descriptor !== undefined && descriptor !== null ? validateDescriptorOverrides(where, descriptor) : undefined;
     if (!base && !overrides) {
-        const entry = service.findArchetype(0)!;
-        return { descriptor: service.getAnchorDescriptor(0), archetypeKey: entry.key, archetypeId: entry.archetypeId, source: 'tool_default_indiana_limestone' };
+        // No material is assumed: the caller reads a descriptor from the user's words (or names a catalog example).
+        throw new AdaptivePbrMaterialSpecError(
+            `${where}: no material given. Pass a descriptor with ${REQUIRED_WITHOUT_ARCHETYPE.join(', ')} (read from the user's description of the surface), or a materialArchetype naming a catalog example.`,
+            { missing: [...REQUIRED_WITHOUT_ARCHETYPE] }
+        );
     }
     if (!base) {
         const missing = REQUIRED_WITHOUT_ARCHETYPE.filter(k => (overrides as Record<string, unknown>)[k] === undefined);
@@ -279,11 +282,6 @@ export async function runBoxProjectionPbr(req: BoxProjectionPbrRequest): Promise
     const unassigned = geometryParts.filter(p => !selection.entryOfNode.has(p.nodeIndex));
     if (unassigned.length) {
         groups.push(make('parts no partMaterials entry names', null, unassigned, resolveMaterialSpec(service, 'request', req.materialArchetype, req.descriptor), requestTile, 'request'));
-    }
-    for (const g of groups) {
-        if (g.spec.source === 'tool_default_indiana_limestone') {
-            inferred.push(`${g.name}: no material was given, so the tool default indiana_limestone is used`);
-        }
     }
 
     // Distinct texture sets and the caps on them
