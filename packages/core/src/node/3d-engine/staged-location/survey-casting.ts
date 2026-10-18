@@ -21,7 +21,7 @@
  */
 
 import type { FittedSurface, StructureFit, Vec2, Vec3 } from '../../../common/spatial/staged-location-contracts';
-import { frameCamera, ZERO_CORRECTION, type FrameCamera, type PoseCorrection } from '../../spatial/StreetViewPoseRegistrar';
+import { frameCamera, groundingHorizontalFovDeg, ZERO_CORRECTION, type FrameCamera, type PoseCorrection } from '../../spatial/StreetViewPoseRegistrar';
 
 const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const add = (a: Vec3, b: Vec3): Vec3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
@@ -42,8 +42,9 @@ export interface CastView {
     correction?: PoseCorrection;
 }
 
+/** The camera of a grounding view: `fovDeg` is the requested fov, converted to the crop's true horizontal fov (groundingFocalPx). */
 export function castCamera(v: CastView): FrameCamera {
-    return frameCamera(v.eye, v.headingDeg, v.pitchDeg, v.fovDeg, v.widthPx, v.heightPx, v.correction ?? ZERO_CORRECTION, v.correction?.referenceHeadingDeg ?? v.headingDeg);
+    return frameCamera(v.eye, v.headingDeg, v.pitchDeg, groundingHorizontalFovDeg(v.fovDeg, v.widthPx, v.heightPx), v.widthPx, v.heightPx, v.correction ?? ZERO_CORRECTION, v.correction?.referenceHeadingDeg ?? v.headingDeg);
 }
 
 /** The ray through a pixel (x right, y down), unit direction in the tile frame. */

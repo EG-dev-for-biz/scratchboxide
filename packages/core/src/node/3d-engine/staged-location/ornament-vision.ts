@@ -28,6 +28,7 @@
  * again cannot add evidence). Rule 13 rejects the correction (recorded, not a degradation).
  */
 
+import { groundingFocalPx } from '../../spatial/StreetViewPoseRegistrar';
 import * as crypto from 'crypto';
 import type { Content, Part } from '@google/genai';
 import {
@@ -407,7 +408,7 @@ export function boxOnSlot(box: [number, number, number, number], polygon1000: nu
 function uncertainty1000(ref: EvidenceImageRef): [number, number] {
     if (ref.kind !== 'streetview-grounding' || !ref.pose) return [0, 0];
     const fov = (ref.fovDeg ?? 60) * DEG;
-    const f = ref.widthPx / (2 * Math.tan(fov / 2));
+    const f = groundingFocalPx(fov / DEG, ref.widthPx, ref.heightPx);
     const px = f * (ref.pose.uncertaintyM / Math.max(1, ref.distanceM ?? 20) + ref.pose.uncertaintyDeg * DEG);
     return [(px / ref.widthPx) * 1000, (px / ref.heightPx) * 1000];
 }

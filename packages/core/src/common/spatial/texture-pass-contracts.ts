@@ -89,6 +89,27 @@ export interface TextureLayerBundle {
     rungReason?: string;
     /** Ref of the baked per-texel confidence plane (ConfidencePlane, PNG): R = index into provenance[], G = weight, B = rung. */
     confidence: string;
+    /** Held-out fit of the textured layer against the Street View photos (texture-fit-metric.ts); absent when no view scored. */
+    fit?: TextureLayerFit;
+}
+
+/**
+ * How well a textured layer, rendered from each Street View pose, lines up with that photo, scored only on texels the
+ * photo's own pano did not make (leave one pano out). Chamfer distances in pixels at `widthPx` (lower is better), NCC of the
+ * surface's luminance gradients (higher is better). Pixel-weighted means over the scoring views.
+ */
+export interface TextureLayerFit {
+    chamferPx: number | null;
+    clayChamferPx: number | null;
+    gradNcc: number | null;
+    scoredViews: number;
+    heldOutShare: number;
+    widthPx: number;
+    /** The same on the photo-tier texels only. */
+    photo?: { chamferPx: number | null; gradNcc: number | null; pixels: number };
+    /** Leave one pano out for real: the photo tier baked again without each pano's views, judged by that pano's views. */
+    loo?: { chamferPx: number | null; gradNcc: number | null; pixels: number; panos: number; skipped: number; perPano: Array<{ panoId: string; pixels: number; chamferPx: number | null; gradNcc: number | null }> };
+    views: Array<{ panoId: string; pixels: number; ownPixels: number; chamferPx: number | null; clayChamferPx: number | null; gradNcc: number | null; photoPixels?: number; photoChamferPx?: number | null; photoGradNcc?: number | null }>;
 }
 
 export interface TexturePassDegradation {
@@ -187,6 +208,11 @@ export interface ProjectionView {
     captureDate?: string;
     /** Pixel rects [x0,y0,x1,y1] of detected redaction blur; weight is zeroed inside. */
     redactionRects?: Array<[number, number, number, number]>;
+    /**
+     * Non-rigid correction of the photo (the joint registration's per-pano warp, pano-joint-registration.ts): pixel displacement
+     * at `gw` x `gh` lattice nodes spanning the image. The colour of a texel the pose puts at (x, y) is read at (x, y) + d(x, y).
+     */
+    warp?: { gw: number; gh: number; dx: Float32Array; dy: Float32Array };
 }
 
 /** Software depth (metres along `fwd`, row-major, Infinity where nothing) of the occluder as seen from a view. */
