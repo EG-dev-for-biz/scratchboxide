@@ -85,3 +85,13 @@ export class MissingInputError extends PipelineError {
         this.name = 'MissingInputError';
     }
 }
+
+/** A supplied input is not one the tool can use (e.g. a preset name it does not define). The tool does not substitute another. */
+export class InvalidInputError extends PipelineError {
+    readonly code = 'invalid_input';
+
+    constructor(readonly tool: string, readonly arg: string, detail?: string) {
+        super(`${tool}: ${arg} is not usable${detail ? `: ${detail}` : ''}`);
+        this.name = 'InvalidInputError';
+    }
+}

@@ -27,7 +27,7 @@ function asBoolean(val: unknown, defaultVal = false): boolean {
 export const TURNAROUND_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'generate_multi_angle_turnaround',
-        description: 'Generates a geometrically consistent multi-angle turnaround image set of an object, prop, vehicle or structure with an image model (Nano Banana Lite first by default). Each view after the first is conditioned on the hero view and the previous view, with continuous spherical camera orbit mathematics and strict isolation (no ground/pedestal, no cast shadows, no text/labels). Optionally sends the views to Trellis on Fal.ai for a GLB (only when downstreamTarget is "trellis-fal"). The result names the image model that produced the views and why any earlier model was skipped; a step that fails fails the tool.',
+        description: 'Generates a geometrically consistent multi-angle turnaround image set of an object, prop, vehicle or structure with an image model (Nano Banana Lite first by default). By default the hero view is generated first and every other view at once, each conditioned on the hero view (fast: about two image calls of wall time); conditioning "chained" instead generates one view at a time, each conditioned on the hero view and the previous view (slower, tighter detail between neighbouring views). Uses continuous spherical camera orbit mathematics and strict isolation (no ground/pedestal, no cast shadows, no text/labels). Optionally sends the views to Trellis on Fal.ai for a GLB (only when downstreamTarget is "trellis-fal"). The result names the image model that produced the views and why any earlier model was skipped; a step that fails fails the tool.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -58,6 +58,10 @@ export const TURNAROUND_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 downstreamTarget: {
                     type: 'STRING',
                     description: 'Downstream 3D reconstruction: "none" (default) or "trellis-fal" (Trellis on Fal.ai; needs FAL_KEY, and only when the user asks for a reconstruction).'
+                },
+                conditioning: {
+                    type: 'STRING',
+                    description: '"hero-parallel" (default): every view after the hero at once, each conditioned on the hero view only. "chained": one view at a time, each conditioned on the hero and the previous view; about N/2 times slower for an N-view rig, but adjacent views agree more closely in fine detail.'
                 },
                 model: {
                     type: 'STRING',
@@ -116,6 +120,7 @@ export const turnaroundHandlers: Record<string, ToolHandler> = {
             model,
             // Stop (or the tool time limit) ends the capture before the next station or the Trellis upload.
             signal: ctx.signal,
+            conditioning: asString(args.conditioning) === 'chained' ? 'chained' : 'hero-parallel',
             onProgress: (fraction, message) => ctx.reportProgress?.(message, fraction)
         });
 
@@ -130,7 +135,7 @@ export const turnaroundHandlers: Record<string, ToolHandler> = {
                 // Image bytes stay on disk; the payload carries their paths.
                 views: views.map(({ buffer, ...view }) => view)
             } as unknown as Record<string, unknown>,
-            summaryResult: `Captured ${views.length} views of "${subject}" on rig "${rigPreset}" in ${result.totalDurationMs}ms into ${outputDir}. ${result.modelNote}${downstreamSummary}`
+            summaryResult: `Captured ${views.length} views of "${subject}" on rig "${rigPreset}" (${result.conditioning === 'chained' ? 'chained: each view conditioned on the hero and the previous view' : 'every view after the hero generated at once, conditioned on the hero view'}) in ${result.totalDurationMs}ms into ${outputDir}. ${result.modelNote}${downstreamSummary}`
         };
     }
 };

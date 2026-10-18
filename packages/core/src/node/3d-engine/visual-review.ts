@@ -6,6 +6,7 @@
 import { HeadlessMeshSilhouetteRenderer } from '../spatial/HeadlessMeshSilhouetteRenderer';
 import type { TriangleSoup } from './part-connectivity';
 import { GeminiClient } from '../gemini/gemini-client';
+import { decodePng } from '../texture-processing';
 
 export interface ReviewView {
     label: string;
@@ -142,11 +143,34 @@ const AUDIT_VIEWS: Array<{ label: string; azimuthDeg: number; elevationDeg: numb
     { label: 'top view', azimuthDeg: 20, elevationDeg: 72 }
 ];
 
-export function buildAuditPrompt(request: string, labels: string[]): string {
+/** Grid positions of tiled views, in tile order. */
+const GRID_POSITIONS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+
+/**
+ * Tiles up to four equal-size view renders into one 2x2 PNG (row-major), so a vision check sends one image instead
+ * of four; empty cells stay white.
+ */
+export function tileViews2x2(views: ReviewView[]): Buffer {
+    const tiles = views.slice(0, 4).map(v => decodePng(v.png));
+    const tw = tiles[0].width, th = tiles[0].height;
+    const out = Buffer.alloc(tw * 2 * th * 2 * 4, 255);
+    tiles.forEach((t, i) => {
+        const ox = (i % 2) * tw, oy = Math.floor(i / 2) * th;
+        for (let y = 0; y < Math.min(th, t.height); y++) {
+            t.rgba.copy(out, ((oy + y) * tw * 2 + ox) * 4, y * t.width * 4, (y * t.width + Math.min(tw, t.width)) * 4);
+        }
+    });
+    return HeadlessMeshSilhouetteRenderer.encodePng(tw * 2, th * 2, out);
+}
+
+export function buildAuditPrompt(request: string, labels: string[], tiled = false): string {
+    const layout = tiled
+        ? `The image is a 2x2 grid of software renders of the actual model file with its real material colors and simple lighting: ${labels.map((l, i) => `${GRID_POSITIONS[i]} ${l}`).join(', ')}. Surface textures are not shown.`
+        : `The images are software renders of the actual model file with its real material colors and simple lighting, in this order: ${labels.join(', ')}. Surface textures are not shown.`;
     return [
         'You are auditing a finished 3D model against what the user asked for. Judge only what is visible in the images.',
         `User request: "${request}"`,
-        `The images are software renders of the actual model file with its real material colors and simple lighting, in this order: ${labels.join(', ')}. Surface textures are not shown.`,
+        layout,
         'Check every requirement in the request: each named part is present, counts are right, parts are attached and oriented correctly, ' +
         'proportions are plausible, and the colors match any color, material or finish the user asked for (for example "grey clay", "brass", "white").',
         'Perspective can make symmetric parts look offset in one view. Mark a problem "high" confidence only if it is unmistakable; otherwise "low".',
@@ -166,7 +190,8 @@ export async function auditModelAgainstRequest(
 ): Promise<{ result: VisualReviewResult & { checked: string[] }; views: ReviewView[] }> {
     const views = renderReviewViews(soup, 512, { useMaterialColors: true, views: AUDIT_VIEWS });
     try {
-        const reply = await callVisionModel(buildAuditPrompt(request, views.map(v => v.label)), views.map(v => v.png));
+        // The four 512 px views go as one 1024 px 2x2 image: one upload, the same pixels.
+        const reply = await callVisionModel(buildAuditPrompt(request, views.map(v => v.label), true), [tileViews2x2(views)]);
         const parsed = parseReviewReply(reply);
         let checked: string[] = [];
         try {

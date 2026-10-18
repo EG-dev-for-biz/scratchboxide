@@ -1714,8 +1714,8 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 startPose: { type: 'OBJECT', description: 'Start camera pose (6-DOF).' },
                 endPose: { type: 'OBJECT', description: 'End camera pose (6-DOF).' },
                 prompt: { type: 'STRING', description: 'Atmospheric scene prompt describing the video subject and kinematics.' },
-                width: { type: 'NUMBER', description: 'Render viewport width.' },
-                height: { type: 'NUMBER', description: 'Render viewport height.' },
+                width: { type: 'NUMBER', description: 'Keyframe render width (default 1280). The video model answers 16:9 or 9:16, so the keyframes are rendered at whichever is nearer: landscape keeps this width, portrait keeps the height.' },
+                height: { type: 'NUMBER', description: 'Keyframe render height (default 720).' },
                 durationSeconds: { type: 'NUMBER', description: 'Output video duration in seconds.' }
             },
             required: ['glbPath', 'startPose', 'endPose', 'prompt']
@@ -2091,7 +2091,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 skippedModels: result.skippedModels,
                 modelNote: result.modelNote
             },
-            summaryResult: `Smart point inpainting written to ${outPath}: the 3D point projects to (${maskRes.x.toFixed(1)}, ${maskRes.y.toFixed(1)}) in the ${dims.width}x${dims.height} image, ${maskRes.depth.toFixed(2)} from the camera and ${maskRes.surfaceDepth === undefined ? 'with no mesh surface at that pixel' : `not hidden by the mesh (surface at ${maskRes.surfaceDepth.toFixed(2)})`}; ${maskRes.maskedPixels} pixels within ${radiusPx}px of it were blended from the model's edit and every other pixel is unchanged. ${result.modelNote} The model answered at ${result.answerWidth}x${result.answerHeight}.`
+            summaryResult: `Smart point inpainting written to ${outPath}: the 3D point projects to (${maskRes.x.toFixed(1)}, ${maskRes.y.toFixed(1)}) in the ${dims.width}x${dims.height} image, ${maskRes.depth.toFixed(2)} from the camera and ${maskRes.surfaceDepth === undefined ? 'with no mesh surface at that pixel' : `not hidden by the mesh (surface at ${maskRes.surfaceDepth.toFixed(2)})`}; ${maskRes.maskedPixels} pixels within ${radiusPx}px of it were blended from the model's edit and every other pixel is unchanged. ${result.modelNote} The model answered at ${result.answerWidth}x${result.answerHeight}${result.sentRegion ? ` for the ${result.sentRegion.width}x${result.sentRegion.height} region at ${result.sentRegion.x},${result.sentRegion.y} (sent instead of the whole image)` : ''}.`
         };
     },
     spatial_keyframe_video_interpolation: async (args, ctx) => {
@@ -2099,8 +2099,8 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const startPose = args.startPose as CameraPose6DOF;
         const endPose = args.endPose as CameraPose6DOF;
         const prompt = asString(args.prompt);
-        const width = typeof args.width === 'number' ? args.width : 640;
-        const height = typeof args.height === 'number' ? args.height : 480;
+        const width = typeof args.width === 'number' ? args.width : 1280;
+        const height = typeof args.height === 'number' ? args.height : 720;
         const durationSeconds = typeof args.durationSeconds === 'number' ? args.durationSeconds : 6;
 
         if (!glbPath) throw new Error('spatial_keyframe_video_interpolation: "glbPath" argument is required.');
@@ -2126,7 +2126,8 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             prompt,
             width,
             height,
-            durationSeconds
+            durationSeconds,
+            signal: ctx.signal
         });
 
         const outVideoPath = `public/models/keyframe_interpolation_${Date.now()}.mp4`;
@@ -2139,9 +2140,12 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 videoPath: outVideoPath,
                 durationSeconds,
                 videoModel: result.videoModel,
-                keyframeImageSources: result.imageSources
+                keyframeImageSources: result.imageSources,
+                aspectRatio: result.aspectRatio,
+                keyframeWidth: result.width,
+                keyframeHeight: result.height
             },
-            summaryResult: `Keyframe video written to ${outVideoPath}: start and end renders restyled (${result.imageSources.join(' ')}), video interpolated by ${result.videoModel}.`
+            summaryResult: `Keyframe video written to ${outVideoPath}: start and end renders (${result.width}x${result.height}, ${result.aspectRatio}) restyled (${result.imageSources.join(' ')}), video interpolated by ${result.videoModel}.`
         };
     },
     mesh_bake_ai_textures: async (args, ctx) => {
@@ -3699,7 +3703,7 @@ export const GEOBOX_PRECISION_TOOL_DECLARATIONS: ToolDeclaration[] = [
     EDGE_ALIGNMENT_DECLARATION('geobox_optimize_edge_alignment'),
     {
         name: 'spatial_solve_pnp',
-        description: 'Analytically solves Perspective-n-Point (solvePnP / solvePnPRansac: EPnP/P3P/DLT closed forms refined by Levenberg-Marquardt) to recover the 6-DOF camera pose from 2D-to-3D point correspondences at a known focal length. It does not estimate the focal length: give focalLengthPx, or 1.2 x imageWidth is assumed and reported as assumed.',
+        description: 'Analytically solves Perspective-n-Point (solvePnP / solvePnPRansac) using Direct Linear Transform (DLT) and Levenberg-Marquardt non-linear optimization to recover the 6-DOF camera pose from 2D-to-3D point correspondences. The focal length is held fixed (focalLengthPx, or 1.2 x the image width when omitted, said so in the result); it is not recovered.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -3730,7 +3734,7 @@ export const GEOBOX_PRECISION_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 imageWidth: { type: 'NUMBER', description: 'Image width in pixels (e.g. 1920)' },
                 imageHeight: { type: 'NUMBER', description: 'Image height in pixels (e.g. 1080)' },
-                focalLengthPx: { type: 'NUMBER', description: 'Focal length in pixels, held fixed by the solver (default: 1.2 x imageWidth, reported as assumed)' },
+                focalLengthPx: { type: 'NUMBER', description: 'Focal length in pixels, held fixed during the solve. When omitted, 1.2 x imageWidth is assumed and the result says so.' },
                 useRansac: { type: 'BOOLEAN', description: 'Whether to use RANSAC outlier rejection (default: true)' },
                 ransacReprojThresholdPx: { type: 'NUMBER', description: 'RANSAC inlier threshold in pixels (default: 3.0)' }
             },
@@ -3985,10 +3989,16 @@ export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
 
         const imageWidth = typeof args.imageWidth === 'number' ? args.imageWidth : 1920;
         const imageHeight = typeof args.imageHeight === 'number' ? args.imageHeight : 1080;
-        const focalGiven = typeof args.focalLengthPx === 'number';
-        const focalLengthPx = focalGiven ? (args.focalLengthPx as number) : (imageWidth * 1.2);
-        const focalNote = focalGiven ? `focal ${focalLengthPx.toFixed(1)} px (given)` : `focal ${focalLengthPx.toFixed(1)} px ASSUMED (1.2 x image width; give focalLengthPx)`;
-        const focal = { focalLengthPx, focalLengthSource: focalGiven ? 'given' : 'assumed: 1.2 x imageWidth' };
+        const focalGiven = typeof args.focalLengthPx === 'number' && args.focalLengthPx > 0;
+        const focalLengthPx: number = focalGiven ? (args.focalLengthPx as number) : (imageWidth * 1.2);
+        // The solver holds the intrinsics fixed, so the focal length (and the fov derived from it) is an input, not
+        // a measurement.
+        const focal = {
+            focalLengthPx,
+            focalLengthSource: focalGiven ? 'given (focalLengthPx), held fixed' : 'assumed 1.2 x image width (focalLengthPx not given), held fixed',
+            focalLengthRecovered: false as const
+        };
+        const focalNote = ` Focal length ${focalLengthPx.toFixed(1)} px ${focalGiven ? 'as given' : '(assumed 1.2 x image width)'}, held fixed, not recovered.`;
         const useRansac = args.useRansac !== false;
         const threshold = typeof args.ransacReprojThresholdPx === 'number' ? args.ransacReprojThresholdPx : 3.0;
 
@@ -4013,13 +4023,13 @@ export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
             const p = ransacResult.pose;
             return {
                 resultPayload: { ...ransacResult, ...focal } as unknown as ToolResultPayload,
-                summaryResult: `Analytically solved 6-DOF camera pose via solvePnPRansac (${ransacResult.inlierCount}/${points2D.length} inliers): camera pos [${p.cameraCenterWorld.map((v: number) => v.toFixed(2)).join(', ')}], attitude (heading: ${p.attitude.headingDeg.toFixed(1)}°, pitch: ${p.attitude.pitchDeg.toFixed(1)}°, roll: ${p.attitude.rollDeg.toFixed(1)}°), ${focalNote}, fov: ${p.fovYDeg.toFixed(1)}°, mean residual: ${p.meanReprojectionErrorPx.toFixed(3)}px.`
+                summaryResult: `Analytically solved 6-DOF camera pose via solvePnPRansac (${ransacResult.inlierCount}/${points2D.length} inliers): camera pos [${p.cameraCenterWorld.map((v: number) => v.toFixed(2)).join(', ')}], attitude (heading: ${p.attitude.headingDeg.toFixed(1)}°, pitch: ${p.attitude.pitchDeg.toFixed(1)}°, roll: ${p.attitude.rollDeg.toFixed(1)}°), fov: ${p.fovYDeg.toFixed(1)}°, mean residual: ${p.meanReprojectionErrorPx.toFixed(3)}px.${focalNote}`
             };
         } else {
             const p = SpatialPoseEstimatorService.solvePnP(points3D, points2D, intrinsics);
             return {
                 resultPayload: { ...p, ...focal } as unknown as ToolResultPayload,
-                summaryResult: `Analytically solved 6-DOF camera pose via solvePnP: camera pos [${p.cameraCenterWorld.map((v: number) => v.toFixed(2)).join(', ')}], attitude (heading: ${p.attitude.headingDeg.toFixed(1)}°, pitch: ${p.attitude.pitchDeg.toFixed(1)}°, roll: ${p.attitude.rollDeg.toFixed(1)}°), ${focalNote}, fov: ${p.fovYDeg.toFixed(1)}°, mean residual: ${p.meanReprojectionErrorPx.toFixed(3)}px.`
+                summaryResult: `Analytically solved 6-DOF camera pose via solvePnP: camera pos [${p.cameraCenterWorld.map((v: number) => v.toFixed(2)).join(', ')}], attitude (heading: ${p.attitude.headingDeg.toFixed(1)}°, pitch: ${p.attitude.pitchDeg.toFixed(1)}°, roll: ${p.attitude.rollDeg.toFixed(1)}°), fov: ${p.fovYDeg.toFixed(1)}°, mean residual: ${p.meanReprojectionErrorPx.toFixed(3)}px.${focalNote}`
             };
         }
     },
@@ -4796,7 +4806,7 @@ export const AVATAR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'performer_4d_create_from_video',
-        description: 'Builds a dynamic 4D Gaussian Splatting performer avatar from a monocular video (or a hero image) with tracked motion (GVHMR or MediaPipe), 4-bone LBS skinning, video texture backprojection and foot-contact ground clamping. Geographic venue anchoring happens only when venueId is given. Fails with a typed error when the input is missing/unreadable, no hero frame can be decoded, or no motion can be tracked (unless allowSyntheticIdleMotion is set, in which case the motion is a labelled synthetic idle sway).',
+        description: 'Builds a dynamic 4D Gaussian Splatting performer avatar from a monocular video (or a hero image) with tracked motion (GVHMR or MediaPipe), 4-bone LBS skinning, video texture backprojection and foot-contact ground clamping. Geographic venue anchoring happens only when a venue (name, lat, lng, altMeters, stageHeadingDeg) is given. Fails with a typed error when the input is missing/unreadable, no hero frame can be decoded, or no motion can be tracked (unless allowSyntheticIdleMotion is set, in which case the motion is a labelled synthetic idle sway).',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -4816,9 +4826,17 @@ export const AVATAR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'NUMBER',
                     description: 'Number of surface Gaussians to sample (default: 35000)'
                 },
-                venueId: {
-                    type: 'STRING',
-                    description: 'Optional venue id for geodetic stage anchoring (e.g. "red_rocks", "hollywood_bowl", "the_gorge"). Omit for no venue; an unknown id is an error.'
+                venue: {
+                    type: 'OBJECT',
+                    description: 'Optional geodetic stage anchor. Give all of name, lat, lng (WGS-84 degrees), altMeters (ground altitude above mean sea level) and stageHeadingDeg (clockwise from true north). Omit for no venue; nothing is looked up or assumed.',
+                    properties: {
+                        name: { type: 'STRING' },
+                        lat: { type: 'NUMBER' },
+                        lng: { type: 'NUMBER' },
+                        altMeters: { type: 'NUMBER' },
+                        stageHeadingDeg: { type: 'NUMBER' }
+                    },
+                    required: ['name', 'lat', 'lng', 'altMeters', 'stageHeadingDeg']
                 },
                 allowSyntheticIdleMotion: {
                     type: 'BOOLEAN',
@@ -5071,7 +5089,7 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
         const characterId = args.characterId ? asString(args.characterId) : undefined;
         const targetHeightMeters = args.targetHeightMeters ? Number(args.targetHeightMeters) : undefined;
         const numGaussians = args.numGaussians ? Number(args.numGaussians) : undefined;
-        const venueId = args.venueId ? asString(args.venueId) : undefined;
+        const venue = args.venue && typeof args.venue === 'object' ? args.venue as any : undefined;
         const fps = args.fps ? Number(args.fps) : undefined;
         const allowSyntheticIdleMotion = args.allowSyntheticIdleMotion === true;
         VideoTo4DPerformerPipelineService.assertReadableInput(videoPath);
@@ -5082,7 +5100,7 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
             characterId,
             targetHeightMeters,
             numGaussians,
-            venueId,
+            venue,
             fps,
             allowSyntheticIdleMotion
         });

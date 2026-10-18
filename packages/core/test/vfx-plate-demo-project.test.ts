@@ -183,5 +183,16 @@ describe('VFX Plate Anti-Drift Demo Project Integration Suite', () => {
             // Verify directional color reflects warm late afternoon / golden hour grading
             expect(solar.directionalColor).toMatch(/^#ff/i);
         });
+
+        it('stores the sun computed for the anchor instant and place, not hand-entered numbers', () => {
+            const timeline = synthesizeContextualVideoTimeline('vfx plate anti drift demo');
+            const ephemeris = timeline.tracks[0].elements[0].vfxPlate!.ephemerisAnchor!;
+            const expected = VfxPlateMatchmoveService.computeSolarLighting({ ...ephemeris, calculatedSolar: undefined, solarDirectionVector: undefined });
+            expect(ephemeris.calculatedSolar!.altitude).toBeCloseTo(expected.solarPosition.altitude, 9);
+            expect(ephemeris.calculatedSolar!.azimuth).toBeCloseTo(expected.solarPosition.azimuth, 9);
+            // radians, as SolarPosition documents
+            expect(Math.abs(ephemeris.calculatedSolar!.altitude!)).toBeLessThanOrEqual(Math.PI / 2);
+            ephemeris.solarDirectionVector!.forEach((c, i) => expect(c).toBeCloseTo(expected.directionVector[i], 9));
+        });
     });
 });

@@ -1997,7 +1997,7 @@ export class Google3DTileBlockoutPipelineService {
                 const webmPath = outputVideoPath.replace(/\.mp4$/, '.webm');
                 try {
                   await execFileAsync(this.ffmpegPath, [
-                    '-y', '-framerate', String(fps), '-i', frameGlob, '-c:v', 'libvpx-vp9', '-b:v', '4M', webmPath
+                    '-y', '-framerate', String(fps), '-i', frameGlob, '-c:v', 'libvpx-vp9', '-row-mt', '1', '-deadline', 'good', '-cpu-used', '4', '-b:v', '4M', webmPath
                   ], { maxBuffer: 16 * 1024 * 1024, timeout: 10 * 60000 });
                   webmVideoPath = webmPath;
                 } catch (e: any) {

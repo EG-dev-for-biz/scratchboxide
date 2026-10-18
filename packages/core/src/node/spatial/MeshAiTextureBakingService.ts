@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { mapBounded } from '../../common/async/bounded-concurrency';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { RenderMesh3D } from './HeadlessMeshSilhouetteRenderer';
@@ -200,18 +201,29 @@ export class MeshAiTextureBakingService {
         const rejectedViews: RejectedBakeView[] = [];
         const plates: StationPlate[] = [];
 
-        for (const [index, camera] of rig.entries()) {
-            if (request.signal?.aborted) {
-                throw Object.assign(new Error('Texture bake was stopped'), { name: 'AbortError' });
-            }
-            request.onProgress?.(`Restyling the ${camera.name} view (${index + 1}/${rig.length})`, 0.8 * (index / rig.length));
+        if (request.signal?.aborted) {
+            throw Object.assign(new Error('Texture bake was stopped'), { name: 'AbortError' });
+        }
+        // The six views are independent model calls: restyle them all at once (wall time ~ one call, not six),
+        // then assemble in rig order so the result does not depend on which call answered first.
+        let finished = 0;
+        request.onProgress?.(`Restyling ${rig.length} views at once`, 0);
+        const answers = await mapBounded(rig, async (camera, _index, signal) => {
             const beauty = await renderer.renderAiBeautyFrame({
                 mesh,
                 pose: camera.pose,
                 prompt: `A close-up view of ${request.stylePrompt} material surface, high definition, flat uniform studio lighting, perfectly seamless textures. View direction: ${camera.name}`,
                 width,
-                height
+                height,
+                signal
             });
+            finished++;
+            request.onProgress?.(`Restyled the ${camera.name} view (${finished}/${rig.length})`, 0.8 * (finished / rig.length));
+            return beauty;
+        }, { signal: request.signal });
+
+        for (const [index, camera] of rig.entries()) {
+            const beauty = answers[index];
             let decoded: { rgba: Buffer; width: number; height: number };
             try {
                 decoded = await decodeImageToRgba(beauty.image);

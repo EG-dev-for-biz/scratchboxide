@@ -419,9 +419,7 @@
       "extension": ".glb",
       "sizeBytes": 24126928,
       "hydrationStrategy": "procedural_mesh",
-      "usedByDemos": [
-        "geobox_demo.html"
-      ],
+      "usedByDemos": [],
       "mirrors": [
         "https://storage.googleapis.com/scratchbox-demo-assets/models/colosseum_rome_textured.glb",
         "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/colosseum_rome_textured.glb"
@@ -971,9 +969,7 @@
       "extension": ".jpg",
       "sizeBytes": 82320,
       "hydrationStrategy": "procedural_image",
-      "usedByDemos": [
-        "geobox_demo.html"
-      ],
+      "usedByDemos": [],
       "mirrors": [
         "https://storage.googleapis.com/scratchbox-demo-assets/test_images/sydney_opera_house.jpg",
         "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/sydney_opera_house.jpg"

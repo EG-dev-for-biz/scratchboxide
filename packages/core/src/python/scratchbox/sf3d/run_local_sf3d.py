@@ -251,6 +251,10 @@ EXIT_NOT_INSTALLED = 3
 EXIT_RUN_FAILED = 4
 
 
+# Loaded models kept between calls when this script runs under packages/core/src/python/scratchbox/worker_host.py.
+_MODELS = {}
+
+
 def emit_failure(code: str, message: str) -> None:
     print("__LOCAL_SF3D_ERROR_START__")
     print(json.dumps({"success": False, "code": code, "error": message}))
@@ -295,15 +299,21 @@ def run_sf3d_model(image_path: str, remesh_option: str, device: str):
                 f"The input image has no transparent background and rembg is not installed to remove it ({e}). "
                 "Install rembg or pass an RGBA image with the subject cut out.",
             )
-        image = remove_background(image, rembg.new_session())
+        if "rembg" not in _MODELS:
+            _MODELS["rembg"] = rembg.new_session()
+        image = remove_background(image, _MODELS["rembg"])
     image = resize_foreground(image, 0.85)
 
     try:
-        model = SF3D.from_pretrained(
-            "stabilityai/stable-fast-3d", config_name="config.yaml", weight_name="model.safetensors"
-        )
-        model.to(device)
-        model.eval()
+        # Loaded once per device; a persistent worker (worker_host.py) reuses it for every later image.
+        model = _MODELS.get(("sf3d", str(device)))
+        if model is None:
+            model = SF3D.from_pretrained(
+                "stabilityai/stable-fast-3d", config_name="config.yaml", weight_name="model.safetensors"
+            )
+            model.to(device)
+            model.eval()
+            _MODELS[("sf3d", str(device))] = model
         with torch.no_grad():
             mesh, _glob = model.run_image(image, bake_resolution=1024, remesh=remesh_option, vertex_count=-1)
     except Exception as e:

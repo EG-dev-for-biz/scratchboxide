@@ -15,6 +15,7 @@ import { DirectDispatchOperatorEngine, type BatchCommand } from '../../../browse
 import * as fs from 'fs';
 import * as path from 'path';
 import { glbToTriangleSoup } from '../../3d-engine/part-connectivity';
+import { measureGlbBase64MeshCounts } from '../../../common/glb-mesh-counts';
 import { auditModelAgainstRequest, callVisionModel } from '../../3d-engine/visual-review';
 import type { ToolDeclaration, ToolHandler } from './types';
 import { applyClayFirstPassBaseline, keepOpenSceneRenderMode } from '../scene3d-clay-baseline';
@@ -346,9 +347,8 @@ export const canvasHandlers: Record<string, ToolHandler> = {
                 sourceCode: cppSource || p.cppGenerator?.sourceCode || '',
                 glbBase64: cppGlbBase64,
                 glbPath: cppGlbPath,
-                // Counts only when the payload states them; none are made up for a GLB nobody measured.
-                vertexCount: p.cppGenerator?.vertexCount,
-                triangleCount: p.cppGenerator?.triangleCount
+                // Counts are measured from the GLB bytes; the payload's own numbers are not stored, and without bytes there are none.
+                ...(cppGlbBase64 ? measureGlbBase64MeshCounts(cppGlbBase64) : undefined)
             } : p.cppGenerator;
 
             // The title is the model's too; the synthesizer's would name the tab after prompt keywords.

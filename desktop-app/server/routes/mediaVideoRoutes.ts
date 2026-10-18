@@ -12,7 +12,8 @@ import {
     IMAGE_MODEL_PRIORITY,
     VIDEO_MODEL_PRIORITY,
     classifyMediaGenerationError,
-    MediaGenerationRequest
+    MediaGenerationRequest,
+    resolveTtsModel
 } from '../../../packages/core/src/common';
 import {
     GoogleMediaGenerationService,
@@ -71,6 +72,8 @@ export function createMediaRouter(services: MediaRouterServices, ctx: RouteConte
     router.get('/capabilities', async (_req: Request, res: Response) => {
         try {
             const caps = await mediaGenerator.detectCapabilities();
+            // The model /gemini/tts calls: SCRATCHBOX_TTS_MODEL when set, else the default Gemini TTS model.
+            const tts = resolveTtsModel(process.env.SCRATCHBOX_TTS_MODEL);
             res.json({
                 ...caps,
                 image: {
@@ -85,7 +88,9 @@ export function createMediaRouter(services: MediaRouterServices, ctx: RouteConte
                 },
                 audio: {
                     supported: true,
-                    models: ['gemini-2.5-flash-tts']
+                    models: [tts.model],
+                    primaryModel: tts.model,
+                    modelSource: tts.source
                 }
             });
         } catch (err: any) {

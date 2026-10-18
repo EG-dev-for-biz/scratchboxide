@@ -54,7 +54,7 @@ describe('Native 3D Engine AI Render & Keyframing Suite', () => {
             expect(passes.mist).toBeInstanceOf(Buffer); // Mist is encoded grayscale image
             expect(passes.mist.length).toBeGreaterThan(0);
             expect(passes.normal).toBeInstanceOf(Buffer); // Normal shaded pass
-            expect(passes.normal.length).toBeGreaterThan(0);
+            expect(passes.normal!.length).toBeGreaterThan(0);
         });
 
         it('can synthesize an AI beauty frame using a mock generator', async () => {

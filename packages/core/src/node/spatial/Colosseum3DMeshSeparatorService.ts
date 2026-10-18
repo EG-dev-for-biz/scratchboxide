@@ -1197,6 +1197,9 @@ export class Colosseum3DMeshSeparatorService {
       max: [number, number, number];
       count: number;
       positions: Float32Array | null;
+      /** Triangle vertex indices (TRIANGLES mode), or null when the primitive is unindexed. */
+      indices: Uint32Array | Uint16Array | Uint8Array | null;
+      mode: number;
     }[] = [];
 
     let totalVertices = 0;
@@ -1214,6 +1217,20 @@ export class Colosseum3DMeshSeparatorService {
       if (acc.componentType === 5126 && acc.type === 'VEC3') {
         return new Float32Array(glbBuffer.buffer, glbBuffer.byteOffset + offset, count * 3);
       }
+      return null;
+    };
+
+    const getIndexData = (accIndex: number | undefined): Uint32Array | Uint16Array | Uint8Array | null => {
+      if (accIndex === undefined || accIndex === null) return null;
+      const acc = gltf.accessors?.[accIndex];
+      if (!acc || acc.bufferView === undefined) return null;
+      const bv = gltf.bufferViews[acc.bufferView];
+      const at = glbBuffer.byteOffset + binOffset + (bv.byteOffset || 0) + (acc.byteOffset || 0);
+      const n = acc.count || 0;
+      const bytes = new Uint8Array(glbBuffer.buffer, at, n * (acc.componentType === 5125 ? 4 : acc.componentType === 5123 ? 2 : 1)).slice();
+      if (acc.componentType === 5125) return new Uint32Array(bytes.buffer);
+      if (acc.componentType === 5123) return new Uint16Array(bytes.buffer);
+      if (acc.componentType === 5121) return bytes;
       return null;
     };
 
@@ -1235,7 +1252,7 @@ export class Colosseum3DMeshSeparatorService {
         const max: [number, number, number] = [acc.max[0], acc.max[1], acc.max[2]];
 
         const positions = getAccessorData(posAccIdx);
-        submeshData[mIdx] = { min, max, count, positions };
+        submeshData[mIdx] = { min, max, count, positions, indices: getIndexData(prim.indices), mode: prim.mode ?? 4 };
 
         for (let k = 0; k < 3; k++) {
           if (min[k] < overallMin[k]) overallMin[k] = min[k];
@@ -1297,6 +1314,8 @@ export class Colosseum3DMeshSeparatorService {
     const objects: Separated3DObject[] = entityDefs.map(def => {
       const matchedSubmeshes: number[] = [];
       const extractedVerts: [number, number, number][] = [];
+      // Triangles of the matched submeshes whose three vertices all pass the entity's filter.
+      let measuredTriangles = 0;
 
       for (const smIdx of def.submeshCluster) {
         const sd = submeshData[smIdx];
@@ -1317,6 +1336,7 @@ export class Colosseum3DMeshSeparatorService {
             ] as [number, number, number, number, number, number]
           } : undefined);
 
+          const kept = new Uint8Array(numV);
           for (let i = 0; i < numV; i++) {
             const x = pos[i * 3];
             const y = pos[i * 3 + 1];
@@ -1338,9 +1358,19 @@ export class Colosseum3DMeshSeparatorService {
             }
 
             extractedVerts.push([x, y, z]);
+            kept[i] = 1;
+          }
+          if (sd.mode === 4) {
+            const ix = sd.indices;
+            const corners = ix ? ix.length : numV;
+            for (let t = 0; t + 2 < corners; t += 3) {
+              const a = ix ? ix[t] : t, b = ix ? ix[t + 1] : t + 1, c = ix ? ix[t + 2] : t + 2;
+              if (kept[a] && kept[b] && kept[c]) measuredTriangles++;
+            }
           }
         }
       }
+      const measuredVertices = extractedVerts.length;
 
       // If spatial filter matched no vertices or no vertex buffer, construct synthetic corners from nominal bounds
       if (extractedVerts.length < 8) {
@@ -1381,8 +1411,9 @@ export class Colosseum3DMeshSeparatorService {
         ? Math.abs((obb.volumeM3 - nominalVol) / nominalVol) * 100
         : 0;
 
-      const vCount = dualResult.vertexCount;
-      const triCount = Math.floor(vCount * 1.8);
+      // Counts are the matched mesh's own (0 when nothing matched), never derived from each other or from the nominal box.
+      const vCount = measuredVertices;
+      const triCount = measuredTriangles;
 
       return {
         id: def.id,

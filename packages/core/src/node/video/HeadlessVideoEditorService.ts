@@ -13,6 +13,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { randomUUID } from 'crypto';
+import { chooseH264Encoder, getFfmpegCapabilities, h264EncodeArgs, vp9EncodeArgs, DEFAULT_X264_PRESET } from './ffmpeg-capabilities';
 
 const execFileAsync = promisify(execFile);
 
@@ -142,6 +143,11 @@ export interface StoryboardSheetOptions {
     labelTimecode?: boolean;
     timeoutMs?: number;
     dryRun?: boolean;
+    /**
+     * The input's length in seconds. Measured with ffprobe when the input exists; a dry run of an input that is not
+     * on disk needs it to plan the frame times.
+     */
+    durationSec?: number;
     /** The caller's Stop: kills the running ffmpeg, which rejects with an AbortError. */
     signal?: AbortSignal;
 }
@@ -316,59 +322,37 @@ export class HeadlessVideoEditorService {
 
         const sizeBytes = fs.statSync(resolvedInput).size;
 
-        // 1. Duration
-        const durCmd = await execFileAsync(this.ffprobeBin, [
+        // One ffprobe call for duration, the first video stream's size and frame rate, and the audio streams.
+        const probe = await execFileAsync(this.ffprobeBin, [
             '-v', 'error',
-            '-show_entries', 'format=duration',
-            '-of', 'default=noprint_wrappers=1:nokey=1',
+            '-show_entries', 'format=duration:stream=codec_type,width,height,avg_frame_rate,r_frame_rate',
+            '-of', 'json',
             resolvedInput
-        ], { timeout: timeoutMs });
-        const durationSec = parseFloat(durCmd.stdout.trim()) || 0;
-
-        // 2. Dimensions
-        const dimCmd = await execFileAsync(this.ffprobeBin, [
-            '-v', 'error',
-            '-select_streams', 'v:0',
-            '-show_entries', 'stream=width,height',
-            '-of', 'csv=p=0:s=x',
-            inputPath
-        ], { timeout: timeoutMs });
-        const [rawW, rawH] = dimCmd.stdout.trim().split('x').map(Number);
-        const width = rawW || 1920;
-        const height = rawH || 1080;
-
-        // 3. Audio Presence
-        let hasAudio = false;
+        ], { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 });
+        let info: any;
         try {
-            const audioCmd = await execFileAsync(this.ffprobeBin, [
-                '-v', 'error',
-                '-select_streams', 'a',
-                '-show_entries', 'stream=index',
-                '-of', 'csv=p=0',
-                inputPath
-            ], { timeout: timeoutMs });
-            hasAudio = audioCmd.stdout.trim().length > 0;
+            info = JSON.parse(probe.stdout);
         } catch {
-            hasAudio = false;
+            throw new Error(`probeMedia: ffprobe printed no JSON for "${inputPath}"`);
         }
-
-        // 4. FPS
-        let fps = 30;
-        try {
-            const fpsCmd = await execFileAsync(this.ffprobeBin, [
-                '-v', 'error',
-                '-select_streams', 'v:0',
-                '-show_entries', 'stream=avg_frame_rate',
-                '-of', 'default=noprint_wrappers=1:nokey=1',
-                inputPath
-            ], { timeout: timeoutMs });
-            const [num, den] = fpsCmd.stdout.trim().split('/').map(Number);
-            if (num && den) {
-                fps = Math.round((num / den) * 100) / 100;
-            }
-        } catch {
-            fps = 30;
+        const streams: any[] = Array.isArray(info?.streams) ? info.streams : [];
+        const video = streams.find(st => st.codec_type === 'video');
+        const hasAudio = streams.some(st => st.codec_type === 'audio');
+        const durationSec = parseFloat(info?.format?.duration) || 0;
+        const width = Number(video?.width);
+        const height = Number(video?.height);
+        if (!video || !(width > 0) || !(height > 0)) {
+            throw new Error(`probeMedia: ffprobe found no video stream with a size in "${inputPath}"`);
         }
+        const rate = (r: unknown) => {
+            const [num, den] = String(r ?? '').split('/').map(Number);
+            return num > 0 && den > 0 ? num / den : 0;
+        };
+        const fpsRaw = rate(video.avg_frame_rate) || rate(video.r_frame_rate);
+        if (!(fpsRaw > 0)) {
+            throw new Error(`probeMedia: ffprobe reported no frame rate for the video stream of "${inputPath}"`);
+        }
+        const fps = Math.round(fpsRaw * 100) / 100;
 
         const ext = path.extname(inputPath).replace('.', '').toLowerCase();
 
@@ -401,7 +385,7 @@ export class HeadlessVideoEditorService {
             remuxAudioPath,
             format = 'mp4',
             crf = 20,
-            preset = 'fast',
+            preset,
             dryRun = false,
             timeoutMs = 120000,
             signal
@@ -507,10 +491,12 @@ export class HeadlessVideoEditorService {
             }
 
             if (format === 'webm') {
-                args.push('-c:v', 'libvpx-vp9', '-crf', String(crf || 28), '-b:v', '0', '-pix_fmt', 'yuv420p');
+                args.push(...vp9EncodeArgs(crf || 28), '-pix_fmt', 'yuv420p');
             } else {
-                // Default mp4 / mov: H.264 high compatibility
-                args.push('-c:v', 'libx264', '-preset', preset, '-crf', String(crf), '-pix_fmt', 'yuv420p', '-movflags', '+faststart');
+                // Default mp4 / mov: H.264. A named x264 preset pins libx264; otherwise the hardware encoder when the
+                // capability check proved it works (the command names the encoder used).
+                const encoder = await chooseH264Encoder(this.ffmpegBin, preset);
+                args.push(...h264EncodeArgs(encoder, crf, preset), '-pix_fmt', 'yuv420p', '-movflags', '+faststart');
             }
 
             // Audio handling
@@ -598,41 +584,58 @@ export class HeadlessVideoEditorService {
             fs.mkdirSync(outDir, { recursive: true });
         }
 
-        const outputPaths: string[] = [];
-        const executedCommands: string[] = [];
-
-        for (let i = 0; i < targetTimestamps.length; i++) {
-            const ts = targetTimestamps[i];
-            let outPath: string;
+        if (outputPathPattern && !outputPathPattern.includes('%') && targetTimestamps.length > 1) {
+            throw new Error(`extractKeyframes: ${targetTimestamps.length} timestamps need a numbered output pattern (e.g. frame_%04d.png), not the single path "${outputPathPattern}"`);
+        }
+        const outputPaths: string[] = targetTimestamps.map((ts, i) => {
             if (outputPathPattern && outputPathPattern.includes('%')) {
-                outPath = outputPathPattern.replace(/%0?(\d+)d/, (_, width) => String(i).padStart(parseInt(width, 10), '0'));
-            } else if (outputPathPattern) {
-                outPath = outputPathPattern;
-            } else {
-                const base = path.basename(inputPath, path.extname(inputPath));
-                const tsLabel = String(Math.round(ts * 100)).padStart(4, '0');
-                outPath = path.join(outDir, `${base}_keyframe_${i}_${tsLabel}cs.${format}`);
+                return outputPathPattern.replace(/%0?(\d+)d/, (_, width) => String(i).padStart(parseInt(width, 10), '0'));
             }
+            if (outputPathPattern) return outputPathPattern;
+            const base = path.basename(inputPath, path.extname(inputPath));
+            const tsLabel = String(Math.round(ts * 100)).padStart(4, '0');
+            return path.join(outDir, `${base}_keyframe_${i}_${tsLabel}cs.${format}`);
+        });
 
-            outputPaths.push(outPath);
+        // One ffmpeg per batch of up to KEYFRAME_BATCH timestamps instead of one per frame: each timestamp is its
+        // own fast-seeked input (-ss before -i, the same frame a single-frame extraction picks) mapped to its own
+        // one-frame output, so ffmpeg seeks and decodes them in one process. Batches run two at a time.
+        const KEYFRAME_BATCH = 24;
+        const batches: number[][] = [];
+        for (let start = 0; start < targetTimestamps.length; start += KEYFRAME_BATCH) {
+            batches.push(targetTimestamps.slice(start, start + KEYFRAME_BATCH).map((_, k) => start + k));
+        }
+        const batchArgs = batches.map(indices => {
+            const args = ['-y', '-hide_banner', '-v', 'error'];
+            for (const i of indices) args.push('-ss', String(targetTimestamps[i]), '-i', inputPath);
+            indices.forEach((i, k) => args.push('-map', `${k}:v:0`, '-frames:v', '1', '-q:v', '2', outputPaths[i]));
+            return args;
+        });
+        const executedCommands = batchArgs.map(args => `${this.ffmpegBin} ${args.join(' ')}`);
 
-            const args = [
-                '-y',
-                '-ss', String(ts),
-                '-i', inputPath,
-                '-frames:v', '1',
-                '-q:v', '2',
-                outPath
-            ];
-
-            const cmd = `${this.ffmpegBin} ${args.join(' ')}`;
-            executedCommands.push(cmd);
-
-            if (!dryRun) {
-                if (signal?.aborted) {
-                    throw Object.assign(new Error(`extractKeyframes was stopped after ${i} of ${targetTimestamps.length} frames`), { name: 'AbortError', cause: signal.reason });
+        if (!dryRun) {
+            let finished = 0;
+            const stopped = () => Object.assign(new Error(`extractKeyframes was stopped after ${finished} of ${targetTimestamps.length} frames`), { name: 'AbortError', cause: signal?.reason });
+            if (signal?.aborted) throw stopped();
+            let next = 0;
+            const lane = async () => {
+                while (next < batchArgs.length) {
+                    const b = next++;
+                    if (signal?.aborted) throw stopped();
+                    try {
+                        await execFileAsync(this.ffmpegBin, batchArgs[b], { timeout: timeoutMs, signal, maxBuffer: 8 * 1024 * 1024 });
+                    } catch (err) {
+                        if (signal?.aborted) throw stopped();
+                        throw err;
+                    }
+                    finished += batches[b].length;
                 }
-                await execFileAsync(this.ffmpegBin, args, { timeout: timeoutMs, signal });
+            };
+            await Promise.all(Array.from({ length: Math.min(2, batchArgs.length) }, lane));
+            const missing = outputPaths.filter(p => !fs.existsSync(p));
+            if (missing.length > 0) {
+                const firstIdx = outputPaths.indexOf(missing[0]);
+                throw new Error(`extractKeyframes: ffmpeg wrote no frame for ${missing.length} of ${outputPaths.length} timestamp(s) (first: ${targetTimestamps[firstIdx]} s, past the last frame of "${inputPath}"?)`);
             }
         }
 
@@ -694,9 +697,9 @@ export class HeadlessVideoEditorService {
         ];
 
         if (format === 'webm') {
-            args.push('-c:v', 'libvpx-vp9', '-crf', String(crf || 28), '-b:v', '0', '-pix_fmt', 'yuv420p');
+            args.push(...vp9EncodeArgs(crf || 28), '-pix_fmt', 'yuv420p');
         } else {
-            args.push('-c:v', 'libx264', '-preset', 'fast', '-crf', String(crf), '-pix_fmt', 'yuv420p', '-movflags', '+faststart');
+            args.push(...h264EncodeArgs('libx264', crf), '-pix_fmt', 'yuv420p', '-movflags', '+faststart');
         }
 
         args.push(actualOutput);
@@ -780,7 +783,7 @@ export class HeadlessVideoEditorService {
                     '-f', 'lavfi', '-i', `anullsrc=r=${targetAudioRate}:cl=stereo`,
                     '-shortest',
                     '-vf', `scale=${evenW}:${evenH}:force_original_aspect_ratio=decrease,pad=${evenW}:${evenH}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${targetFps},format=yuv420p`,
-                    '-c:v', 'libx264', '-preset', 'fast', '-crf', '20', '-pix_fmt', 'yuv420p',
+                    '-c:v', 'libx264', '-preset', DEFAULT_X264_PRESET, '-crf', '20', '-pix_fmt', 'yuv420p',
                     '-c:a', 'aac', '-ar', String(targetAudioRate), '-ac', '2', '-b:a', '128k',
                     '-movflags', '+faststart',
                     normPath
@@ -874,35 +877,47 @@ export class HeadlessVideoEditorService {
         const dryRun = !!opts.dryRun;
         const timeoutMs = opts.timeoutMs || 60000;
 
-        let fpsFilter = 'fps=1/2';
-        if (!dryRun && fs.existsSync(inputPath)) {
-            try {
-                const meta = await this.probeMedia(inputPath, 5000);
-                if (meta.durationSec > 0) {
-                    const interval = Math.max(0.1, meta.durationSec / totalFrames);
-                    fpsFilter = `fps=1/${interval.toFixed(4)}`;
-                }
-            } catch {
-                fpsFilter = 'fps=1/2';
+        // The cells are evenly spaced frames: cell k shows the frame at k * duration / totalFrames. Each is its own
+        // fast-seeked input (-ss before -i), so ffmpeg seeks to the nine (or N) frames instead of decoding the whole
+        // video through an fps filter.
+        let durationSec = opts.durationSec;
+        if (fs.existsSync(inputPath)) {
+            const meta = await this.probeMedia(inputPath, 10000);
+            durationSec = meta.durationSec;
+        }
+        if (!(typeof durationSec === 'number' && durationSec > 0)) {
+            throw new Error(fs.existsSync(inputPath)
+                ? `generateStoryboardSheet: ffprobe could not measure the length of "${inputPath}"`
+                : `generateStoryboardSheet: "${inputPath}" does not exist${dryRun ? ' (a dry run of a missing input needs durationSec)' : ''}`);
+        }
+        const interval = durationSec / totalFrames;
+        const seekTimes = Array.from({ length: totalFrames }, (_, k) => Math.round(k * interval * 1000) / 1000);
+
+        // Timecodes need the drawtext filter, which an ffmpeg built without libfreetype lacks. Then the sheet is made
+        // without them and the result says so (timecodeBurnedIn: false, with the reason); nothing else stands in.
+        const notes: string[] = [];
+        let burnTimecode = labelTimecode;
+        if (labelTimecode) {
+            const caps = await getFfmpegCapabilities(this.ffmpegBin).catch(() => undefined);
+            if (caps && !caps.filters.has('drawtext')) {
+                burnTimecode = false;
+                notes.push(`timecodes not burnt in: ${this.ffmpegBin} has no drawtext filter (built without libfreetype); cell k is the frame at ${interval.toFixed(3)} * k s`);
             }
         }
-
-        const scaleFilter = `scale=${cellWidth}:${cellHeight}:flags=lanczos:force_original_aspect_ratio=decrease,pad=${cellWidth}:${cellHeight}:(ow-iw)/2:(oh-ih)/2`;
-        const timecodeFilter = labelTimecode
+        const scaleFilter = `scale=${cellWidth}:${cellHeight}:flags=lanczos:force_original_aspect_ratio=decrease,pad=${cellWidth}:${cellHeight}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
+        const timecodeFilter = burnTimecode
             ? `drawtext=text='%{pts\\:hms}':x=10:y=h-24:fontsize=16:fontcolor=white:box=1:boxcolor=black@0.6`
             : '';
         const tileFilter = `tile=${columns}x${rows}:nb_frames=${totalFrames}:padding=${padding}:margin=${margin}:color=black`;
 
-        const filterChain = [fpsFilter, scaleFilter, timecodeFilter, tileFilter].filter(Boolean).join(',');
+        // setpts puts each cell back at its seek time, so the burnt-in timecode is the frame's time in the video.
+        const cellChains = seekTimes.map((t, k) =>
+            `[${k}:v:0]trim=end_frame=1,setpts=PTS-STARTPTS+${t}/TB,${[scaleFilter, timecodeFilter].filter(Boolean).join(',')}[c${k}]`);
+        const filterComplex = `${cellChains.join(';')};${seekTimes.map((_, k) => `[c${k}]`).join('')}concat=n=${totalFrames}:v=1:a=0,${tileFilter}[sheet]`;
 
-        const args = [
-            '-y',
-            '-i', inputPath,
-            '-vf', filterChain,
-            '-frames:v', '1',
-            '-q:v', '2',
-            outputPath
-        ];
+        const args = ['-y', '-hide_banner', '-v', 'error'];
+        for (const t of seekTimes) args.push('-ss', String(t), '-i', inputPath);
+        args.push('-filter_complex', filterComplex, '-map', '[sheet]', '-frames:v', '1', '-q:v', '2', outputPath);
 
         const cmdStr = `${this.ffmpegBin} ${args.join(' ')}`;
 
@@ -914,7 +929,10 @@ export class HeadlessVideoEditorService {
                 commandString: cmdStr,
                 ffmpegCommand: cmdStr,
                 commands: [cmdStr],
-                args
+                args,
+                cellTimesSec: seekTimes,
+                timecodeBurnedIn: burnTimecode,
+                notes
             };
         }
 
@@ -934,7 +952,10 @@ export class HeadlessVideoEditorService {
             commandString: cmdStr,
             ffmpegCommand: cmdStr,
             commands: [cmdStr],
-            args
+            args,
+            cellTimesSec: seekTimes,
+            timecodeBurnedIn: burnTimecode,
+            notes
         };
     }
 
@@ -950,7 +971,7 @@ export class HeadlessVideoEditorService {
         const intensity = Math.max(0.0, Math.min(1.0, opts.intensity ?? 1.0));
         const interpolation = opts.interpolation || 'tetrahedral';
         const crf = opts.crf ?? 18;
-        const preset = opts.preset || 'fast';
+        const preset = opts.preset || DEFAULT_X264_PRESET;
         const dryRun = !!opts.dryRun;
         const timeoutMs = opts.timeoutMs || 120000;
 
@@ -1047,7 +1068,7 @@ export class HeadlessVideoEditorService {
                 : ',despill=green'
             : '';
         const crf = opts.crf ?? 18;
-        const preset = opts.preset || 'fast';
+        const preset = opts.preset || DEFAULT_X264_PRESET;
         const dryRun = !!opts.dryRun;
         const timeoutMs = opts.timeoutMs || 120000;
 
@@ -1148,7 +1169,7 @@ export class HeadlessVideoEditorService {
             '-i', inputPath,
             '-vf', filterChain,
             '-c:v', 'libx264',
-            '-preset', 'fast',
+            '-preset', DEFAULT_X264_PRESET,
             '-crf', String(crf),
             '-pix_fmt', 'yuv420p',
             '-an',
@@ -1221,7 +1242,7 @@ export class HeadlessVideoEditorService {
             '-i', inputPath,
             '-vf', `vidstabtransform=input=${trfPath}:smoothing=${smoothing}:zoom=${zoomPercent}:optzoom=1`,
             '-c:v', 'libx264',
-            '-preset', 'fast',
+            '-preset', DEFAULT_X264_PRESET,
             '-crf', '18',
             '-pix_fmt', 'yuv420p',
             '-c:a', 'copy',
@@ -1294,7 +1315,7 @@ export class HeadlessVideoEditorService {
                 '-filter_complex', '[0:v]reverse[rev];[0:v][rev]concat=n=2:v=1:a=0[v]',
                 '-map', '[v]',
                 '-c:v', 'libx264',
-                '-preset', 'fast',
+                '-preset', DEFAULT_X264_PRESET,
                 '-crf', String(crf),
                 '-pix_fmt', 'yuv420p',
                 '-movflags', '+faststart',
@@ -1318,7 +1339,7 @@ export class HeadlessVideoEditorService {
                 '-filter_complex', filterComplex,
                 '-map', '[v]',
                 '-c:v', 'libx264',
-                '-preset', 'fast',
+                '-preset', DEFAULT_X264_PRESET,
                 '-crf', String(crf),
                 '-pix_fmt', 'yuv420p',
                 '-movflags', '+faststart',
@@ -1497,7 +1518,7 @@ export class HeadlessVideoEditorService {
         const fps = opts.fps || 24;
         const codec = opts.codec || 'h264';
         const crf = opts.crf ?? 18;
-        const preset = opts.preset || 'medium';
+        const preset = opts.preset;
         const faststart = opts.faststart !== false;
         const dryRun = !!opts.dryRun;
         const timeoutMs = opts.timeoutMs || 300000;
@@ -1518,9 +1539,10 @@ export class HeadlessVideoEditorService {
         if (codec === 'prores') {
             args.push('-c:v', 'prores_ks', '-profile:v', '3', '-pix_fmt', 'yuv422p10le');
         } else if (codec === 'vp9') {
-            args.push('-c:v', 'libvpx-vp9', '-crf', String(crf), '-b:v', '0', '-pix_fmt', 'yuv420p');
+            args.push(...vp9EncodeArgs(crf), '-pix_fmt', 'yuv420p');
         } else {
-            args.push('-c:v', 'libx264', '-preset', preset, '-crf', String(crf), '-pix_fmt', 'yuv420p');
+            const encoder = await chooseH264Encoder(this.ffmpegBin, preset);
+            args.push(...h264EncodeArgs(encoder, crf, preset), '-pix_fmt', 'yuv420p');
         }
 
         if (faststart && (outputPath.endsWith('.mp4') || outputPath.endsWith('.mov'))) {

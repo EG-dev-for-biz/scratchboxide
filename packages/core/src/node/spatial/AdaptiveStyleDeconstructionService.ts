@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { downscaleForVision } from '../vision-image-downscale';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { Type, type Schema } from '@google/genai';
@@ -172,7 +173,15 @@ export class AdaptiveStyleDeconstructionService {
       throw new MissingInputError('adaptive style deconstruction', 'fidelity', `"${fidelity}" is not one of "balanced" or "deep-multimodal"`);
     }
     const modelName = fidelity === 'deep-multimodal' ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
-    const { data: imageBase64, mimeType } = await this.readImage(imageInput);
+    const full = await this.readImage(imageInput);
+    // Style is read from the image's content: a 1024 px long edge carries it, and uploads and answers faster.
+    // An image this process cannot decode is sent as given; the model reads more formats than we do.
+    const vision = await downscaleForVision(Buffer.from(full.data, 'base64'), full.mimeType).catch(() => undefined);
+    const imageBase64 = vision?.downscaled ? vision.data.toString('base64') : full.data;
+    const mimeType = vision?.downscaled ? vision.mimeType : full.mimeType;
+    const sizeNote = vision?.downscaled
+      ? `The image was downscaled from ${vision.originalWidth}x${vision.originalHeight} to ${vision.width}x${vision.height} for analysis; give pixel measures (such as lineWidth) at the original ${vision.originalWidth}x${vision.originalHeight} size.`
+      : '';
 
     let genai: any;
     try {
@@ -196,6 +205,7 @@ CRITICAL DIRECTIVES:
 5. Identify non-photorealistic filters: cel shading (quantizationBands, quantizationSoftness), paint strokes / painterly effects (kuwaharaRadius), halftone screens (halftoneDensity), or retro dither matrices (ditherMatrixSize).
 
 ${options.promptHint ? `Additional Style Intent / Hint: "${options.promptHint}"` : ''}
+${sizeNote}
 ${cameraPose ? `The target 3D world camera pose will be: Position: [${cameraPose.position}], Target: [${cameraPose.target}], FOV: ${cameraPose.fov}°` : ''}`
     ];
 

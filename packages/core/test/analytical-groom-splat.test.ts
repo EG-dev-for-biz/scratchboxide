@@ -67,31 +67,31 @@ describe('Analytical Groom & 3D Gaussian Splatting Engine', () => {
     });
 
     describe('Task Capability Resolver ("Capabilities Before Tools" Pre-Flight Pass)', () => {
-        it('resolves star creature and fur groom tasks directly to Tier 1 native cpp-3d-engine', () => {
+        // ADA: no noun list ("star", "creature", "fur", "hair", "groom") routes a task; the model picks the groom tool
+        // from its declaration. Only naming the tool or the technique pre-loads it.
+        it('does not route on subject words such as star creature or fur', () => {
             const assessment = TaskCapabilityResolver.resolveTaskCapability(
                 'Generate a 5-pointed star creature covered in volumetric fur and export splats'
             );
-
-            expect(assessment.canSolveNatively).toBe(true);
-            expect(assessment.canSolveNatively).toBe(true);
-            expect(assessment.primaryNativeEngine).toBe('cpp-3d-engine');
-            expect(assessment.nativeCapabilities).toEqual(
-                expect.arrayContaining([
-                    expect.stringContaining('scratchbox_hair.hpp'),
-                    expect.stringContaining('scratchbox_spz.hpp'),
-                    expect.stringContaining('splat_synthesize_analytical_groom')
-                ])
-            );
+            expect(assessment.suggestedNativeAction?.targetTool).not.toBe('splat_synthesize_analytical_groom');
+            expect(assessment.nativeCapabilities.join(' ')).not.toContain('scratchbox_hair.hpp');
         });
 
-        it('never falls back to Trellis diffusion for analytical hair or fur splats', () => {
+        it('pre-loads the groom tool when the request names it or the analytical forward-splat technique', () => {
+            for (const goal of ['Run splat_synthesize_analytical_groom on this surface', 'Use analytical forward splatting for the strands of this 3d model']) {
+                const assessment = TaskCapabilityResolver.resolveTaskCapability(goal, { domainHint: '3d' } as any);
+                expect(assessment.canSolveNatively).toBe(true);
+                expect(assessment.primaryNativeEngine).toBe('cpp-3d-engine');
+                expect(assessment.suggestedNativeAction?.targetTool).toBe('splat_synthesize_analytical_groom');
+            }
+        });
+
+        it('never sends hair or fur splats to Trellis diffusion', () => {
             const assessment = TaskCapabilityResolver.resolveTaskCapability(
                 'Create a biophysical hair groom splat with Voronoi clumping'
             );
-
             expect(assessment.canSolveNatively).toBe(true);
-            expect(assessment.canSolveNatively).toBe(true);
-            expect(assessment.primaryNativeEngine).toBe('cpp-3d-engine');
+            expect(JSON.stringify(assessment)).not.toMatch(/trellis/i);
         });
     });
 

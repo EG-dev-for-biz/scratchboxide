@@ -172,6 +172,69 @@ export class HeadlessMeshSilhouetteRenderer {
      * Renders a 3D mesh and computes the Sobel edge field on the resulting
      * silhouette and depth boundaries.
      */
+    /**
+     * The part of `mesh` a camera near `pose` can see: drops every triangle whose three vertices all lie outside the
+     * same side of a widened frustum (each half-angle widened by `marginDegrees`, apex pulled back `marginMeters` along
+     * the view axis) or all lie more than `marginMeters` behind the camera, and compacts the vertices. Renders from
+     * poses within that margin are pixel-identical to renders of the whole mesh; a pose search that re-renders many
+     * nearby poses runs on the visible part only.
+     */
+    public static cullMeshToView(
+        mesh: RenderMesh3D,
+        pose: CameraPose6DOF,
+        width: number,
+        height: number,
+        options: { marginMeters?: number; marginDegrees?: number } = {}
+    ): RenderMesh3D {
+        const m = options.marginMeters ?? 10;
+        const marginRad = ((options.marginDegrees ?? 45) * Math.PI) / 180;
+        const maxHalf = (85 * Math.PI) / 180;
+        const eye = [pose.x, pose.y, pose.z];
+        let fx = pose.targetX - pose.x, fy = pose.targetY - pose.y, fz = pose.targetZ - pose.z;
+        const fl = Math.hypot(fx, fy, fz) || 1; fx /= fl; fy /= fl; fz /= fl;
+        const up0 = pose.up ?? [0, 1, 0];
+        let rx = fy * up0[2] - fz * up0[1], ry = fz * up0[0] - fx * up0[2], rz = fx * up0[1] - fy * up0[0];
+        const rl = Math.hypot(rx, ry, rz);
+        if (rl < 1e-9) return mesh; // degenerate basis: nothing safe to drop
+        rx /= rl; ry /= rl; rz /= rl;
+        const ux = ry * fz - rz * fy, uy = rz * fx - rx * fz, uz = rx * fy - ry * fx;
+        const halfY = (pose.fov * Math.PI) / 360;
+        const halfX = Math.atan(Math.tan(halfY) * (width / height));
+        const tanY = Math.tan(Math.min(maxHalf, halfY + marginRad));
+        const tanX = Math.tan(Math.min(maxHalf, halfX + marginRad));
+        const vertCount = Math.floor(mesh.vertices.length / 3);
+        // Per-vertex outcode: bit 0 right, 1 left, 2 top, 3 bottom, 4 behind.
+        const code = new Uint8Array(vertCount);
+        for (let i = 0; i < vertCount; i++) {
+            const dx = mesh.vertices[i * 3] - eye[0], dy = mesh.vertices[i * 3 + 1] - eye[1], dz = mesh.vertices[i * 3 + 2] - eye[2];
+            const x = dx * rx + dy * ry + dz * rz, y = dx * ux + dy * uy + dz * uz, z = dx * fx + dy * fy + dz * fz;
+            const zz = z + m;
+            let c = 0;
+            if (x > tanX * zz) c |= 1;
+            if (-x > tanX * zz) c |= 2;
+            if (y > tanY * zz) c |= 4;
+            if (-y > tanY * zz) c |= 8;
+            if (z < -m) c |= 16;
+            code[i] = c;
+        }
+        const remap = new Int32Array(vertCount).fill(-1);
+        const verts: number[] = [];
+        const idx: number[] = [];
+        const triCount = Math.floor(mesh.indices.length / 3);
+        for (let t = 0; t < triCount; t++) {
+            const a = mesh.indices[t * 3], b = mesh.indices[t * 3 + 1], c = mesh.indices[t * 3 + 2];
+            if (code[a] & code[b] & code[c]) continue;
+            for (const v of [a, b, c]) {
+                if (remap[v] < 0) {
+                    remap[v] = verts.length / 3;
+                    verts.push(mesh.vertices[v * 3], mesh.vertices[v * 3 + 1], mesh.vertices[v * 3 + 2]);
+                }
+                idx.push(remap[v]);
+            }
+        }
+        return { vertices: new Float32Array(verts), indices: new Uint32Array(idx) };
+    }
+
     public static renderEdgeField(
         mesh: RenderMesh3D,
         pose: CameraPose6DOF,

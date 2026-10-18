@@ -22,6 +22,10 @@ import {
     NativeCppCompilerService
 } from '../src/node/3d-engine/native-compiler-service';
 import type { Scene3DData } from '../src/browser/generative-canvas/canvas-types';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { writeBoxGroundGlb } from './helpers/box-ground-glb';
 
 describe('C/C++ First 3D Engine Architecture Directive', () => {
 
@@ -86,21 +90,36 @@ int main() {
     return 0;
 }`;
 
+        // Caller-supplied counts are not evidence: with no GLB there is nothing to measure, so none are stored.
         const res = engine.dispatch('sb_set_cpp_generator', {
             sourceCode: testSource,
             filename: 'custom_procedural.cpp',
             enabled: true,
             vertexCount: 1024,
             triangleCount: 2048
-        });
+        } as any);
 
         expect(res.success).toBe(true);
         const updated = engine.getSceneData();
         expect(updated.cppGenerator).toBeDefined();
         expect(updated.cppGenerator?.sourceCode).toBe(testSource);
         expect(updated.cppGenerator?.filename).toBe('custom_procedural.cpp');
-        expect(updated.cppGenerator?.vertexCount).toBe(1024);
-        expect(updated.cppGenerator?.triangleCount).toBe(2048);
+        expect(updated.cppGenerator?.vertexCount).toBeUndefined();
+        expect(updated.cppGenerator?.triangleCount).toBeUndefined();
+
+        // With the GLB the counts are measured from it (box + 20x20 ground grid: 1620 vertices, 810 triangles).
+        const glbFile = path.join(os.tmpdir(), `sb_cpp_gen_counts_${process.pid}.glb`);
+        writeBoxGroundGlb(glbFile, [-5, 0, -5], [5, 20, 5], 100);
+        const glbBase64 = fs.readFileSync(glbFile).toString('base64');
+        fs.unlinkSync(glbFile);
+        const withGlb = engine.dispatch('sb_set_cpp_generator', { sourceCode: testSource, glbBase64, vertexCount: 1, triangleCount: 1 } as any);
+        expect(withGlb.success).toBe(true);
+        expect(engine.getSceneData().cppGenerator?.vertexCount).toBe(1620);
+        expect(engine.getSceneData().cppGenerator?.triangleCount).toBe(810);
+
+        // Bytes that are not a GLB have no measurable count, so none is stored.
+        expect(engine.dispatch('sb_set_cpp_generator', { sourceCode: testSource, glbBase64: Buffer.from('not a glb at all, honestly').toString('base64'), vertexCount: 7 } as any).success).toBe(true);
+        expect(engine.getSceneData().cppGenerator?.vertexCount).toBeUndefined();
     });
 
     it('5. should compile and stream glTF 2.0 binary using NativeCppCompilerService for synthesized flight C++ source', async () => {

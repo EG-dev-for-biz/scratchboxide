@@ -31,6 +31,7 @@ import {
     createSpatialNode,
     createIdentityMatrix
 } from '../../common/spatial/universal-spatial-node';
+import { measureGlbEdgeManifold } from '../3d-engine/glb-edge-manifold';
 
 export type SupportedArchiTypology =
     // Classical Stereotomic Heritage (Preserved 1:1)
@@ -2250,7 +2251,8 @@ export class UniversalArchiBridgeService {
                 buildTimeMs,
                 outputVertices,
                 outputTriangles,
-                isManifold: outputVertices > 0,
+                // Welded edges of the written GLB each used by exactly two triangles; false without a GLB to check.
+                isManifold: glbBuffer ? measureGlbEdgeManifold(glbBuffer).isManifold : false,
                 inversionRan,
                 detectedDatumsCount,
                 floorCount,

@@ -243,7 +243,7 @@ describe('Humanoid Avatar Pipeline & Multi-Modality Skinning', () => {
     });
 
     it('ConcertStagePerformerService seamlessly accepts rigged PBR SkinnedMesh and updates skeleton', () => {
-        const service = new ConcertStagePerformerService();
+        const service = new ConcertStagePerformerService({ venue: { name: 'Test stage', lat: 0, lng: 0, altMeters: 0, stageHeadingDeg: 0 } });
         expect(service.skinningMode).toBe(PerformerSkinningMode.SCRATCHBOX_LBS_4BONE);
 
         // Create a 22-bone Three.js SkinnedMesh
