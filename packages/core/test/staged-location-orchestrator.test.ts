@@ -390,11 +390,12 @@ describe('an isolated structure', () => {
         const layers = (result.artifact as any).data.stagedBuild.layers;
         // the rebuild chain commits in its real order; the trees (l5) commit beside it, whenever they finish
         const order = layers.map((l: any) => l.layer);
-        expect(order.filter((x: string) => x !== 'l5')).toEqual(['l1', 'l2', 'l3a', 'l3b', 'l3c', 'l3ar', 'l3br', 'l4']);
+        // l3ch: the face of the pass-through box lying on the fitted body (z = -5.5) is redundant with it, hidden as a replaced layer
+        expect(order.filter((x: string) => x !== 'l5')).toEqual(['l1', 'l2', 'l3a', 'l3ch', 'l3b', 'l3c', 'l3ar', 'l3br', 'l4']);
         expect(order).toContain('l5');
         expect(order.indexOf('l5')).toBeGreaterThan(order.indexOf('l2'));
         const byLayer = Object.fromEntries(layers.map((l: any) => [l.layer, l]));
-        expect(byLayer.l3b).toMatchObject({ supersedes: [byLayer.l2.objectId], reveal: { crossfadeFrom: [byLayer.l2.objectId] }, revealAfter: [byLayer.l2.objectId, byLayer.l3a.objectId] });
+        expect(byLayer.l3b).toMatchObject({ supersedes: [byLayer.l2.objectId, byLayer.l3ch.objectId], reveal: { crossfadeFrom: [byLayer.l2.objectId] }, revealAfter: [byLayer.l2.objectId, byLayer.l3a.objectId] });
         expect(byLayer.l3br).toMatchObject({ supersedes: [byLayer.l3b.objectId], reveal: { crossfadeFrom: [byLayer.l3b.objectId], only: { primitiveIds: ['p00'] } } });
         expect(byLayer.l4).toMatchObject({ provenance: { label: 'photo-inferred', measuredGeometry: false }, revealAfter: [byLayer.l3br.objectId] });
         expect(result.structureFit!.corrections.filter(c => c.check.accepted).map(c => [c.primitiveId, c.to, c.check.residualAfter.rmsM])).toEqual([['p00', 24.8, 0.05]]);

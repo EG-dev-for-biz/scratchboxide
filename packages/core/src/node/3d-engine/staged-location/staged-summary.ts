@@ -106,7 +106,7 @@ export function stagedDigest(input: StagedSummaryInput): string {
     const retryStages = [...new Set(input.degradations.filter(d => d.transient && d.retry).map(d => d.retry!.args.retryStage))];
     const stopped = input.stages.filter(s => s.status === 'stopped').map(s => s.stage);
     const retry = `retry retryRunId ${input.runId}${retryStages.length ? ` stage ${retryStages[0]}` : stopped.length ? ` stage ${stopped[0]}` : ''}.`;
-    const degr = input.degradations.filter(d => d.reasonCode !== 'pass_through');
+    const degr = input.degradations.filter(d => d.reasonCode !== 'pass_through' && d.reasonCode !== 'pass_through_hidden');
     const lead = input.status === 'stopped' && stopped.length ? [`stopped before ${stopped.join(', ')}`] : [];
     const compose = (parts: string[]) => `${head}${parts.length ? `; ${parts.join('; ')}` : ''}; ${retry}`;
     for (const form of [shortDegradation, codeDegradation]) {
@@ -243,12 +243,18 @@ export function correctionSentences(input: StagedSummaryInput): string[] {
 export function degradationSentences(input: StagedSummaryInput): string[] {
     const limit = STAGED_SUMMARY_LIMITS.degradedPartsWrittenOut;
     const passThrough = input.degradations.filter(d => d.reasonCode === 'pass_through');
-    const others = input.degradations.filter(d => d.reasonCode !== 'pass_through');
+    const hidden = input.degradations.filter(d => d.reasonCode === 'pass_through_hidden');
+    const others = input.degradations.filter(d => d.reasonCode !== 'pass_through' && d.reasonCode !== 'pass_through_hidden');
     const out = others.slice(0, limit).map(d => `${upperFirst(d.part.description)} fell to ${d.fellTo}: ${lowerFirst(d.reason).replace(/\.$/, '')}.`);
     if (others.length > limit) out.push(`And ${n(others.length - limit)} more (listed in degradations).`);
     if (passThrough.length) {
         const area = input.structureFit?.passThroughAreaM2;
         out.push(`${n(passThrough.length)} region${passThrough.length === 1 ? '' : 's'}${area !== undefined ? ` (${area.toFixed(1)} m²)` : ''} kept as scanned where no fitted shape explained the scan.`);
+    }
+    if (hidden.length) {
+        const h = input.structureFit?.passThroughHidden;
+        const tol = h ? (h.toleranceM.min === h.toleranceM.max ? `${h.toleranceM.max.toFixed(2)} m` : `${h.toleranceM.min.toFixed(2)}-${h.toleranceM.max.toFixed(2)} m`) : 'the tolerance';
+        out.push(`${h ? `${h.areaM2.toFixed(1)} m² of the scan kept as scanned` : 'Parts of the scan kept as scanned'} (${n(hidden.length)} region${hidden.length === 1 ? '' : 's'}) hidden where a fitted face lies within ${tol} behind them; shown under replaced layers.`);
     }
     return out;
 }

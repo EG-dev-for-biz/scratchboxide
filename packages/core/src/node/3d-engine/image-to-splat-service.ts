@@ -322,7 +322,10 @@ export class ImageToSplatService {
             edgeTau = 0.08,
             minDepth = 0.2,
             maxDepth = 200.0,
-            splatScaleMultiplier = 2.10,
+            // Gaussian sigma as a fraction of the pixel spacing at the splat's depth. Measured with the EWA splat renderer
+            // against the source photo: 1.0 is gapless on surfaces at the source view and +-12 deg orbits; 2.1 halved
+            // the source-view SSIM. Below ~0.9 the pixel lattice shows.
+            splatScaleMultiplier = 1.0,
             splatThicknessRatio = 0.22,
             pose
         } = options;
@@ -1417,7 +1420,8 @@ export class ImageToSplatService {
                     qw = aw * invLen;
                 }
 
-                let arc = depth * deltaYaw * Math.max(0.2, cosPitch) * 2.10;
+                // Sigma = 1.0 x the sample spacing (as convertSingleImageToSplat); the splats face the capture point.
+                let arc = depth * deltaYaw * Math.max(0.2, cosPitch) * 1.0;
                 arc = Math.max(0.02, Math.min(arc, 4.0));
 
                 splats.push({

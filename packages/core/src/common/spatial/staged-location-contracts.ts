@@ -1020,6 +1020,11 @@ export interface StagedLocationResult {
         scanToFitRmsM: number; fitToScanRmsM: number; coverage: number;
         passThroughAreaM2: number; unobservedFaceAreaM2: number;
         gates: GateResult[]; corrections: PrimitiveCorrection[]; reportPath: string;
+        /**
+         * The pass-through scan hidden where a fitted face lies within the tolerance behind it (redundant-scan.ts): drawn in
+         * the replaced layer 'l3ch', not in 'l3c'/'l3cf', their textured twins or their exports.
+         */
+        passThroughHidden?: { triangles: number; trianglesSplit: number; areaM2: number; areaKeptM2: number; regions: number; toleranceM: { min: number; max: number }; reportPath: string };
     };
     ornament?: {
         /** The elements BUILT and committed to the detail layer (what is visible); 0 when the detail build did not commit a layer. */
@@ -1822,7 +1827,11 @@ const DEFINITIONS = {
             buildingId: { type: 'string', pattern: '^[0-9a-f]{16}$' }, accepted: BOOL, primitives: NONNEG_INT,
             scanToFitRmsM: ref('nonneg'), fitToScanRmsM: ref('nonneg'), coverage: ref('unit'),
             passThroughAreaM2: ref('nonneg'), unobservedFaceAreaM2: ref('nonneg'),
-            gates: arr(ref('gate')), corrections: arr(ref('correction')), reportPath: STR
+            gates: arr(ref('gate')), corrections: arr(ref('correction')), reportPath: STR,
+            passThroughHidden: obj(['triangles', 'trianglesSplit', 'areaM2', 'areaKeptM2', 'regions', 'toleranceM', 'reportPath'], {
+                triangles: NONNEG_INT, trianglesSplit: NONNEG_INT, areaM2: ref('nonneg'), areaKeptM2: ref('nonneg'), regions: NONNEG_INT,
+                toleranceM: obj(['min', 'max'], { min: ref('nonneg'), max: ref('nonneg') }), reportPath: STR
+            })
         }),
         ornament: obj(['elements', 'slotsFilled', 'slotsEmpty', 'confidence', 'evidence', 'model', 'revisionPass', 'dropped', 'specPath'], {
             elements: NONNEG_INT, slotsFilled: NONNEG_INT, slotsEmpty: NONNEG_INT, read: NONNEG_INT,

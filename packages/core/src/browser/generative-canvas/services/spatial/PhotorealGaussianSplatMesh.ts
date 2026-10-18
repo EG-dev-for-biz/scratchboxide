@@ -60,6 +60,11 @@ export interface PhotorealSplatOptions {
  * Integrates 2D EWA Screen-Space Ellipse Covariance, Thin-Lens Optical Bokeh (DoF),
  * Degree-1 Spherical Harmonics Radiance, Radix/Depth Sorting, and Continuous
  * Volumetric Soft-Z Depth Interleaving against Google Photorealistic 3D Tiles.
+ *
+ * Per-splat data (positions, scales, colors, quats) is stored in GPU DataTextures
+ * indexed by a single sortOrder instance attribute. Depth-sorting therefore only
+ * uploads one 4-byte-per-splat index buffer per sort event instead of rewriting
+ * all five attribute arrays — roughly 14× less GPU bandwidth per sort.
  */
 export class PhotorealGaussianSplatMesh extends THREE.Group {
   public readonly isPhotorealGaussianSplatMesh = true;
@@ -80,9 +85,23 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
   // High-performance radix sorter with Web Worker support
   private radixSorter: SplatRadixSorter;
 
-  // Depth sorting working buffers
-  private sortIndices?: Uint32Array;
-  private sortDistances?: Float32Array;
+  // GPU DataTextures — per-splat data lives here, not in instance attributes
+  private _posTex!: THREE.DataTexture;
+  private _scaleTex!: THREE.DataTexture;
+  private _colorOpacityTex!: THREE.DataTexture;
+  private _quatTex!: THREE.DataTexture;
+  private _posHighTex!: THREE.DataTexture;
+  private _posLowTex!: THREE.DataTexture;
+  private _texWidth = 1;
+
+  private static readonly _dummyRgbaF32 = (() => {
+    const t = new THREE.DataTexture(new Float32Array(4), 1, 1, THREE.RGBAFormat, THREE.FloatType);
+    t.magFilter = THREE.NearestFilter;
+    t.minFilter = THREE.NearestFilter;
+    t.generateMipmaps = false;
+    t.needsUpdate = true;
+    return t;
+  })();
 
   constructor(splatData: SplatData, options: PhotorealSplatOptions = {}) {
     super();
@@ -92,65 +111,31 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
 
     this.enableDepthSort = options.enableDepthSort ?? true;
     this.sortFrequencyFrames = options.sortFrequencyFrames ?? 4;
-    this.radixSorter = new SplatRadixSorter(options.enableAsyncWorkerSort ?? false);
+    this.radixSorter = new SplatRadixSorter(options.enableAsyncWorkerSort ?? true);
 
-    // If Split-64 RTC is requested, ensure high/low position attributes are populated
-    if (options.enableRTC && (!splatData.positionsHigh || !splatData.positionsLow)) {
-      const split = CameraRelativeRTC.getSplit64Attributes(splatData.positions);
-      splatData.positionsHigh = split.high;
-      splatData.positionsLow = split.low;
-    }
+    // 1. Build per-splat DataTextures (replaces five scatter-rewritten instance attributes)
+    const { w: texW } = this._buildSplatTextures(splatData, options);
+    this._texWidth = texW;
 
-    // 1. Build Instanced Quad Geometry
+    // 2. Build Instanced Quad Geometry with a single sortOrder attribute
     const quadGeo = new THREE.PlaneGeometry(1, 1);
     const instancedGeo = new THREE.InstancedBufferGeometry();
     instancedGeo.index = quadGeo.index;
     instancedGeo.attributes.position = quadGeo.attributes.position;
     instancedGeo.attributes.uv = quadGeo.attributes.uv;
 
-    instancedGeo.setAttribute(
-      'instanceCenter',
-      new THREE.InstancedBufferAttribute(new Float32Array(splatData.positions), 3)
-    );
-    if (splatData.positionsHigh && splatData.positionsLow) {
-      instancedGeo.setAttribute(
-        'instanceCenterHigh',
-        new THREE.InstancedBufferAttribute(new Float32Array(splatData.positionsHigh), 3)
-      );
-      instancedGeo.setAttribute(
-        'instanceCenterLow',
-        new THREE.InstancedBufferAttribute(new Float32Array(splatData.positionsLow), 3)
-      );
-    } else {
-      instancedGeo.setAttribute(
-        'instanceCenterHigh',
-        new THREE.InstancedBufferAttribute(new Float32Array(splatData.count * 3), 3)
-      );
-      instancedGeo.setAttribute(
-        'instanceCenterLow',
-        new THREE.InstancedBufferAttribute(new Float32Array(splatData.count * 3), 3)
-      );
-    }
-    instancedGeo.setAttribute(
-      'instanceScale',
-      new THREE.InstancedBufferAttribute(new Float32Array(splatData.scales), 3)
-    );
-    instancedGeo.setAttribute(
-      'instanceColor',
-      new THREE.InstancedBufferAttribute(new Float32Array(splatData.colors), 3)
-    );
-    instancedGeo.setAttribute(
-      'instanceOpacity',
-      new THREE.InstancedBufferAttribute(new Float32Array(splatData.opacities), 1)
-    );
-    instancedGeo.setAttribute(
-      'instanceQuat',
-      new THREE.InstancedBufferAttribute(new Float32Array(splatData.quats), 4)
-    );
+    // sortOrder[i] = original splat index for draw slot i.
+    // Sorting rewrites only this array (4 bytes × count) instead of all five attribute
+    // arrays (56 bytes × count), reducing per-sort GPU upload by ~14×.
+    // Float32 holds every integer index exactly up to 2^24.
+    if (splatData.count > 1 << 24) throw new Error(`PhotorealGaussianSplatMesh supports at most ${1 << 24} splats (got ${splatData.count})`);
+    const sortOrderArray = new Float32Array(splatData.count);
+    for (let i = 0; i < splatData.count; i++) sortOrderArray[i] = i;
+    instancedGeo.setAttribute('sortOrder', new THREE.InstancedBufferAttribute(sortOrderArray, 1));
 
     this.splatGeometry = instancedGeo;
 
-    // 2. Build Production Shader Material
+    // 3. Build Production Shader Material
     const vw = options.viewportWidth || 1920;
     const vh = options.viewportHeight || 1080;
 
@@ -173,49 +158,64 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
       toneMapped: false,
       blending: THREE.NormalBlending,
       uniforms: {
-        uClipZ: { value: 10000.0 },
-        uSplatScale: { value: splatScale },
+        // Splat data textures
+        uPosTex:          { value: this._posTex },
+        uScaleTex:        { value: this._scaleTex },
+        uColorOpacityTex: { value: this._colorOpacityTex },
+        uQuatTex:         { value: this._quatTex },
+        uPosHighTex:      { value: this._posHighTex },
+        uPosLowTex:       { value: this._posLowTex },
+        uTexWidth:        { value: texW },
+        // Render parameters
+        uClipZ:       { value: 10000.0 },
+        uSplatScale:  { value: splatScale },
         uFocalLength: { value: options.focalLengthMm ?? 50.0 },
-        uAperture: { value: options.apertureFStop ?? 2.8 },
-        uFocusDist: { value: options.focusDistMeters ?? 5.0 },
+        uAperture:    { value: options.apertureFStop ?? 2.8 },
+        uFocusDist:   { value: options.focusDistMeters ?? 5.0 },
         uDofStrength: { value: options.dofStrength ?? 0.0 },
-        viewport: { value: new THREE.Vector2(vw, vh) },
-        uExposureEV: { value: options.exposureEV ?? 0.0 },
-        uTonemap: { value: 1 }, // 1: ACES filmic
-        uAtmosphere: { value: 0 },
-        uSunDir: { value: new THREE.Vector3(0.5, 0.8, 0.3).normalize() },
-        uSunColor: { value: new THREE.Color(1.0, 0.95, 0.88) },
-        uSunIntensity: { value: 1.2 },
-        uSunSpecular: { value: 0.3 },
-        uSkyAmbient: { value: new THREE.Color(0.35, 0.33, 0.30) },
-        uContactAO: { value: options.contactAO ?? 0.7 },
+        viewport:     { value: new THREE.Vector2(vw, vh) },
+        uExposureEV:  { value: options.exposureEV ?? 0.0 },
+        uTonemap:     { value: 1 }, // 1: ACES filmic
+        uAtmosphere:  { value: 0 },
+        uSunDir:      { value: new THREE.Vector3(0.5, 0.8, 0.3).normalize() },
+        uSunColor:    { value: new THREE.Color(1.0, 0.95, 0.88) },
+        uSunIntensity:   { value: 1.2 },
+        uSunSpecular:    { value: 0.3 },
+        uSkyAmbient:     { value: new THREE.Color(0.35, 0.33, 0.30) },
+        uContactAO:      { value: options.contactAO ?? 0.7 },
         uViewDependenceSH: { value: options.viewDependenceSH ?? 0.8 },
         // Soft-Z and hardware depth uniforms
-        uTileDepthMap: { value: options.tileDepthMap ?? dummyDepth },
+        uTileDepthMap:  { value: options.tileDepthMap ?? dummyDepth },
         uTileDepthNear: { value: options.tileDepthNear ?? 0.1 },
-        uTileDepthFar: { value: options.tileDepthFar ?? 1000.0 },
-        uSoftZEpsilon: { value: options.softZEpsilonMeters ?? 0.25 },
-        uSoftZEnabled: { value: isSoftZ ? 1.0 : 0.0 },
+        uTileDepthFar:  { value: options.tileDepthFar ?? 1000.0 },
+        uSoftZEpsilon:  { value: options.softZEpsilonMeters ?? 0.25 },
+        uSoftZEnabled:  { value: isSoftZ ? 1.0 : 0.0 },
         uDepthInterleaveMode: { value: isHardware ? 0 : isSoftZ ? 1 : 2 },
         // Split-64 RTC Uniforms
         uCameraHigh: { value: new THREE.Vector3(0, 0, 0) },
-        uCameraLow: { value: new THREE.Vector3(0, 0, 0) },
-        uEnableRTC: { value: options.enableRTC ? 1.0 : 0.0 },
+        uCameraLow:  { value: new THREE.Vector3(0, 0, 0) },
+        uEnableRTC:  { value: options.enableRTC ? 1.0 : 0.0 },
         // Spatial Cropping Bounding Box Uniforms
-        uClipBoxMin: { value: new THREE.Vector3(-1e9, -1e9, -1e9) },
-        uClipBoxMax: { value: new THREE.Vector3(1e9, 1e9, 1e9) },
+        uClipBoxMin:     { value: new THREE.Vector3(-1e9, -1e9, -1e9) },
+        uClipBoxMax:     { value: new THREE.Vector3(1e9, 1e9, 1e9) },
         uClipBoxEnabled: { value: 0.0 }
       },
       vertexShader: `
-        ${CameraRelativeRTC.getVertexShaderRTCChunk()}
         ${options.useLogarithmicDepth ? '#include <logdepthbuf_pars_vertex>' : ''}
         ${EWA_SPLAT_GLSL}
 
-        attribute vec3 instanceCenter;
-        attribute vec3 instanceScale;
-        attribute vec3 instanceColor;
-        attribute float instanceOpacity;
-        attribute vec4 instanceQuat;
+        // Per-splat data textures — indexed by sortOrder, never rewritten during sorting
+        uniform sampler2D uPosTex;
+        uniform sampler2D uScaleTex;
+        uniform sampler2D uColorOpacityTex;
+        uniform sampler2D uQuatTex;
+        uniform sampler2D uPosHighTex;
+        uniform sampler2D uPosLowTex;
+        uniform int uTexWidth;
+
+        // The only per-instance attribute: the original splat index for this draw slot.
+        // Depth sorting rewrites only this array (4 bytes/splat vs ~56 bytes/splat before).
+        attribute float sortOrder;
 
         uniform float uClipZ;
         uniform float uSplatScale;
@@ -227,6 +227,11 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
         uniform vec3 uClipBoxMax;
         uniform float uClipBoxEnabled;
         uniform vec2 viewport;
+
+        // RTC uniforms
+        uniform vec3 uCameraHigh;
+        uniform vec3 uCameraLow;
+        uniform float uEnableRTC;
 
         varying vec2 vUv;
         varying vec2 vSigmaCoord;
@@ -242,8 +247,29 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
 
         void main() {
           vUv = uv;
-          vColor = instanceColor;
-          vec3 effectiveCenter = evaluateRtcCenter(instanceCenter);
+
+          // Resolve the original splat index for this instance and compute texture coords.
+          int origIdx = int(sortOrder + 0.5);
+          ivec2 tc = ivec2(origIdx % uTexWidth, origIdx / uTexWidth);
+
+          // Fetch per-splat data from textures (one texelFetch per attribute, zero scatter).
+          vec3 instanceCenter  = texelFetch(uPosTex,          tc, 0).xyz;
+          vec3 instanceScale   = texelFetch(uScaleTex,        tc, 0).xyz;
+          vec4 colorOpacity    = texelFetch(uColorOpacityTex, tc, 0);
+          vec4 instanceQuat    = texelFetch(uQuatTex,         tc, 0);
+
+          vColor = colorOpacity.rgb;
+          float instanceOpacity = colorOpacity.a;
+
+          // RTC: emulated double precision via split float32 high/low textures
+          vec3 effectiveCenter;
+          if (uEnableRTC > 0.5) {
+            vec3 high = texelFetch(uPosHighTex, tc, 0).xyz;
+            vec3 low  = texelFetch(uPosLowTex,  tc, 0).xyz;
+            effectiveCenter = (high - uCameraHigh) + (low - uCameraLow);
+          } else {
+            effectiveCenter = instanceCenter;
+          }
           vCenter = effectiveCenter;
 
           vec4 viewCenter = modelViewMatrix * vec4(effectiveCenter, 1.0);
@@ -362,9 +388,9 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
           if (uSoftZEnabled > 0.5) {
             vec2 screenUv = gl_FragCoord.xy / max(vec2(1.0), viewport);
             float tileDepthSample = texture2D(uTileDepthMap, screenUv).r;
-            float zTile = (uTileDepthNear * uTileDepthFar) / 
+            float zTile = (uTileDepthNear * uTileDepthFar) /
               (uTileDepthFar - tileDepthSample * (uTileDepthFar - uTileDepthNear));
-            
+
             float zSplat = vDepth;
             float deltaZ = zTile - zSplat;
             float eps = max(0.005, uSoftZEpsilon);
@@ -434,19 +460,115 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
     };
     this.add(this.splatMesh);
 
-    // 3. Soft Contact Ground Shadow (disabled by default to honor zero artificial ground plane invariant)
+    // 4. Soft Contact Ground Shadow (disabled by default to honor zero artificial ground plane invariant)
     if (options.contactShadow === true) {
       this.buildContactShadow(splatData, options);
     }
+  }
 
-    // 4. Initialize Sort Buffers
-    if (this.enableDepthSort) {
-      this.sortIndices = new Uint32Array(this.splatCount);
-      this.sortDistances = new Float32Array(this.splatCount);
-      for (let i = 0; i < this.splatCount; i++) {
-        this.sortIndices[i] = i;
+  /**
+   * Packs all per-splat arrays into GPU DataTextures and returns the texture dimensions.
+   * Using textures instead of instance attributes means depth-sorting only needs to
+   * upload one sortOrder index buffer per frame, not all five attribute arrays.
+   */
+  private _buildSplatTextures(splatData: SplatData, options: PhotorealSplatOptions): { w: number; h: number } {
+    const { w, h } = PhotorealGaussianSplatMesh._calcTexDims(splatData.count);
+    const texelCount = w * h;
+
+    // RGBA32F: positions (xyz) + pad
+    const posData = new Float32Array(texelCount * 4);
+    for (let i = 0; i < splatData.count; i++) {
+      posData[i * 4 + 0] = splatData.positions[i * 3 + 0];
+      posData[i * 4 + 1] = splatData.positions[i * 3 + 1];
+      posData[i * 4 + 2] = splatData.positions[i * 3 + 2];
+      posData[i * 4 + 3] = 1.0;
+    }
+    this._posTex = PhotorealGaussianSplatMesh._makeF32Tex(posData, w, h);
+
+    // RGBA32F: scales (xyz) + pad
+    const scaleData = new Float32Array(texelCount * 4);
+    for (let i = 0; i < splatData.count; i++) {
+      scaleData[i * 4 + 0] = splatData.scales[i * 3 + 0];
+      scaleData[i * 4 + 1] = splatData.scales[i * 3 + 1];
+      scaleData[i * 4 + 2] = splatData.scales[i * 3 + 2];
+      scaleData[i * 4 + 3] = 0.0;
+    }
+    this._scaleTex = PhotorealGaussianSplatMesh._makeF32Tex(scaleData, w, h);
+
+    // RGBA8: color (rgb) + opacity (a) — 4 bytes/splat vs 16 for F32, and precision is sufficient
+    const colorData = new Uint8Array(texelCount * 4);
+    for (let i = 0; i < splatData.count; i++) {
+      colorData[i * 4 + 0] = Math.min(255, Math.max(0, Math.round(splatData.colors[i * 3 + 0] * 255)));
+      colorData[i * 4 + 1] = Math.min(255, Math.max(0, Math.round(splatData.colors[i * 3 + 1] * 255)));
+      colorData[i * 4 + 2] = Math.min(255, Math.max(0, Math.round(splatData.colors[i * 3 + 2] * 255)));
+      colorData[i * 4 + 3] = Math.min(255, Math.max(0, Math.round(splatData.opacities[i] * 255)));
+    }
+    this._colorOpacityTex = new THREE.DataTexture(colorData, w, h, THREE.RGBAFormat, THREE.UnsignedByteType);
+    this._colorOpacityTex.magFilter = THREE.NearestFilter;
+    this._colorOpacityTex.minFilter = THREE.NearestFilter;
+    this._colorOpacityTex.generateMipmaps = false;
+    this._colorOpacityTex.needsUpdate = true;
+
+    // RGBA32F: quaternions (xyzw)
+    const quatData = new Float32Array(texelCount * 4);
+    for (let i = 0; i < splatData.count; i++) {
+      quatData[i * 4 + 0] = splatData.quats[i * 4 + 0];
+      quatData[i * 4 + 1] = splatData.quats[i * 4 + 1];
+      quatData[i * 4 + 2] = splatData.quats[i * 4 + 2];
+      quatData[i * 4 + 3] = splatData.quats[i * 4 + 3];
+    }
+    this._quatTex = PhotorealGaussianSplatMesh._makeF32Tex(quatData, w, h);
+
+    // RTC high/low textures — built now when enableRTC is requested, else on the first setCameraRtc call.
+    this._posHighTex = PhotorealGaussianSplatMesh._dummyRgbaF32;
+    this._posLowTex = PhotorealGaussianSplatMesh._dummyRgbaF32;
+    if (options.enableRTC) this._buildRtcTextures(w, h);
+
+    return { w, h };
+  }
+
+  /** Split-64 high/low position textures for camera-relative rendering (from splatData.positionsHigh/Low when given). */
+  private _buildRtcTextures(w: number, h: number): void {
+    const splatData = this.splatData;
+    let high = splatData.positionsHigh;
+    let low = splatData.positionsLow;
+    if (!high || !low) {
+      const split = CameraRelativeRTC.getSplit64Attributes(splatData.positions);
+      high = split.high;
+      low = split.low;
+    }
+    const posHighData = new Float32Array(w * h * 4);
+    const posLowData = new Float32Array(w * h * 4);
+    for (let i = 0; i < splatData.count; i++) {
+      for (let k = 0; k < 3; k++) {
+        posHighData[i * 4 + k] = high[i * 3 + k];
+        posLowData[i * 4 + k] = low[i * 3 + k];
       }
     }
+    this._posHighTex = PhotorealGaussianSplatMesh._makeF32Tex(posHighData, w, h);
+    this._posLowTex = PhotorealGaussianSplatMesh._makeF32Tex(posLowData, w, h);
+    const u = this.splatMaterial?.uniforms;
+    if (u) {
+      u.uPosHighTex.value = this._posHighTex;
+      u.uPosLowTex.value = this._posLowTex;
+    }
+  }
+
+  private static _makeF32Tex(data: Float32Array, w: number, h: number): THREE.DataTexture {
+    const t = new THREE.DataTexture(data, w, h, THREE.RGBAFormat, THREE.FloatType);
+    t.magFilter = THREE.NearestFilter;
+    t.minFilter = THREE.NearestFilter;
+    t.generateMipmaps = false;
+    t.needsUpdate = true;
+    return t;
+  }
+
+  private static _calcTexDims(count: number): { w: number; h: number } {
+    const sqrtN = Math.ceil(Math.sqrt(Math.max(1, count)));
+    // Round width up to next power of 2 for broad driver compatibility with texelFetch
+    const w = Math.pow(2, Math.ceil(Math.log2(sqrtN)));
+    const h = Math.ceil(count / w);
+    return { w, h };
   }
 
   /**
@@ -467,9 +589,9 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
       depthWrite: false,
       blending: THREE.NormalBlending,
       uniforms: {
-        uShadowColor: { value: new THREE.Color(0.02, 0.02, 0.04) },
+        uShadowColor:   { value: new THREE.Color(0.02, 0.02, 0.04) },
         uShadowOpacity: { value: 0.72 },
-        uSunDir: { value: new THREE.Vector3(0.5, 0.8, 0.3).normalize() }
+        uSunDir:        { value: new THREE.Vector3(0.5, 0.8, 0.3).normalize() }
       },
       vertexShader: `
         varying vec2 vUv;
@@ -544,6 +666,11 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
     this.lastSortedCamPos.copy(camPos);
     this.lastSortedCamDir.copy(camDir);
 
+    // A forced sort is applied before returning (callers render right after); otherwise sort off-thread when possible.
+    if (force) {
+      this.applySortedIndices(this.radixSorter.sortSync(this.splatData.positions, camPos, camDir, this.splatCount));
+      return;
+    }
     this.radixSorter.sort(
       this.splatData.positions,
       camPos,
@@ -554,78 +681,17 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
   }
 
   /**
-   * Applies reordered index array to GPU instance buffer attributes.
+   * Applies the new draw order by writing sorted original indices into the sortOrder
+   * attribute. Only this one buffer is uploaded to the GPU per sort event (~4 bytes/splat),
+   * whereas the previous approach rewrote all five attribute arrays (~56 bytes/splat).
    */
   public applySortedIndices(indices: Uint32Array): void {
-    const centerAttr = this.splatGeometry.getAttribute('instanceCenter') as THREE.InstancedBufferAttribute;
-    const scaleAttr = this.splatGeometry.getAttribute('instanceScale') as THREE.InstancedBufferAttribute;
-    const colorAttr = this.splatGeometry.getAttribute('instanceColor') as THREE.InstancedBufferAttribute;
-    const opacAttr = this.splatGeometry.getAttribute('instanceOpacity') as THREE.InstancedBufferAttribute;
-    const quatAttr = this.splatGeometry.getAttribute('instanceQuat') as THREE.InstancedBufferAttribute;
-    const centerHighAttr = this.splatGeometry.getAttribute('instanceCenterHigh') as THREE.InstancedBufferAttribute | undefined;
-    const centerLowAttr = this.splatGeometry.getAttribute('instanceCenterLow') as THREE.InstancedBufferAttribute | undefined;
-
-    const cArr = centerAttr.array as Float32Array;
-    const sArr = scaleAttr.array as Float32Array;
-    const colArr = colorAttr.array as Float32Array;
-    const oArr = opacAttr.array as Float32Array;
-    const qArr = quatAttr.array as Float32Array;
-
-    const srcPos = this.splatData.positions;
-    const srcScale = this.splatData.scales;
-    const srcCol = this.splatData.colors;
-    const srcOpac = this.splatData.opacities;
-    const srcQuat = this.splatData.quats;
-    const count = this.splatCount;
-
-    for (let i = 0; i < count; i++) {
-      const origIdx = indices[i];
-
-      cArr[i * 3 + 0] = srcPos[origIdx * 3 + 0];
-      cArr[i * 3 + 1] = srcPos[origIdx * 3 + 1];
-      cArr[i * 3 + 2] = srcPos[origIdx * 3 + 2];
-
-      sArr[i * 3 + 0] = srcScale[origIdx * 3 + 0];
-      sArr[i * 3 + 1] = srcScale[origIdx * 3 + 1];
-      sArr[i * 3 + 2] = srcScale[origIdx * 3 + 2];
-
-      colArr[i * 3 + 0] = srcCol[origIdx * 3 + 0];
-      colArr[i * 3 + 1] = srcCol[origIdx * 3 + 1];
-      colArr[i * 3 + 2] = srcCol[origIdx * 3 + 2];
-
-      oArr[i] = srcOpac[origIdx];
-
-      qArr[i * 4 + 0] = srcQuat[origIdx * 4 + 0];
-      qArr[i * 4 + 1] = srcQuat[origIdx * 4 + 1];
-      qArr[i * 4 + 2] = srcQuat[origIdx * 4 + 2];
-      qArr[i * 4 + 3] = srcQuat[origIdx * 4 + 3];
+    const sortAttr = this.splatGeometry.getAttribute('sortOrder') as THREE.InstancedBufferAttribute;
+    const arr = sortAttr.array as Float32Array;
+    for (let i = 0; i < this.splatCount; i++) {
+      arr[i] = indices[i];
     }
-
-    if (centerHighAttr && centerLowAttr && this.splatData.positionsHigh && this.splatData.positionsLow) {
-      const chArr = centerHighAttr.array as Float32Array;
-      const clArr = centerLowAttr.array as Float32Array;
-      const srcHigh = this.splatData.positionsHigh;
-      const srcLow = this.splatData.positionsLow;
-
-      for (let i = 0; i < count; i++) {
-        const origIdx = indices[i];
-        chArr[i * 3 + 0] = srcHigh[origIdx * 3 + 0];
-        chArr[i * 3 + 1] = srcHigh[origIdx * 3 + 1];
-        chArr[i * 3 + 2] = srcHigh[origIdx * 3 + 2];
-
-        clArr[i * 3 + 0] = srcLow[origIdx * 3 + 0];
-        clArr[i * 3 + 1] = srcLow[origIdx * 3 + 1];
-        clArr[i * 3 + 2] = srcLow[origIdx * 3 + 2];
-      }
-      centerHighAttr.needsUpdate = true;
-      centerLowAttr.needsUpdate = true;
-    }
-
-    centerAttr.needsUpdate = true;
-    scaleAttr.needsUpdate = true;
-    colorAttr.needsUpdate = true;
-    opacAttr.needsUpdate = true;
-    quatAttr.needsUpdate = true;
+    sortAttr.needsUpdate = true;
   }
 
   /**
@@ -635,6 +701,9 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
     const cx = 'x' in cameraEcef ? cameraEcef.x : cameraEcef[0];
     const cy = 'y' in cameraEcef ? cameraEcef.y : cameraEcef[1];
     const cz = 'z' in cameraEcef ? cameraEcef.z : cameraEcef[2];
+    if (this._posHighTex === PhotorealGaussianSplatMesh._dummyRgbaF32) {
+      this._buildRtcTextures(this._texWidth, this._posTex.image.height);
+    }
     const split = CameraRelativeRTC.splitCameraPosition(cx, cy, cz);
     const u = this.splatMaterial.uniforms;
     u.uCameraHigh.value.set(split.high[0], split.high[1], split.high[2]);
@@ -729,10 +798,10 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
     const count = Math.floor(arrayBuffer.byteLength / BYTES_PER_SPLAT);
 
     const positions = new Float32Array(count * 3);
-    const scales = new Float32Array(count * 3);
-    const colors = new Float32Array(count * 3);
+    const scales    = new Float32Array(count * 3);
+    const colors    = new Float32Array(count * 3);
     const opacities = new Float32Array(count);
-    const quats = new Float32Array(count * 4);
+    const quats     = new Float32Array(count * 4);
 
     const view = new DataView(arrayBuffer);
     let minX = Infinity, minY = Infinity, minZ = Infinity;
@@ -762,7 +831,7 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
       colors[i * 3 + 0] = view.getUint8(off + 24) / 255.0;
       colors[i * 3 + 1] = view.getUint8(off + 25) / 255.0;
       colors[i * 3 + 2] = view.getUint8(off + 26) / 255.0;
-      opacities[i] = view.getUint8(off + 27) / 255.0;
+      opacities[i]      = view.getUint8(off + 27) / 255.0;
 
       quats[i * 4 + 0] = (view.getUint8(off + 28) - 128) / 127.0;
       quats[i * 4 + 1] = (view.getUint8(off + 29) - 128) / 127.0;
@@ -771,12 +840,7 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
     }
 
     return {
-      count,
-      positions,
-      scales,
-      colors,
-      opacities,
-      quats,
+      count, positions, scales, colors, opacities, quats,
       bounds: count > 0 ? { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] } : undefined,
       centroid: count > 0 ? [sumX / count, sumY / count, sumZ / count] : undefined
     };
@@ -784,6 +848,8 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
 
   /**
    * Parses .spz (Scaniverse / Niantic compressed format) buffer into SplatData.
+   * Higher-order SH coefficients are not decoded by default — pass decodeSH: true
+   * to the codec options if the caller actually needs them.
    */
   public static async parseSpzBuffer(buffer: ArrayBuffer | Uint8Array): Promise<SplatData> {
     let raw = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
@@ -802,7 +868,7 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
     }
 
     if (isGzip(raw)) throw new Error('SPZ payload is gzip-compressed and DecompressionStream is unavailable');
-    const d = decodeSpz(raw);
+    const d = decodeSpz(raw); // decodeSH defaults to false — saves up to 360 MB for large degree-3 files
     let minX = Infinity, minY = Infinity, minZ = Infinity;
     let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
     let sumX = 0, sumY = 0, sumZ = 0;
@@ -817,10 +883,10 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
     return {
       count,
       positions: d.positions,
-      scales: d.scales,
-      colors: d.colors,
+      scales:    d.scales,
+      colors:    d.colors,
       opacities: d.opacities,
-      quats: d.quats,
+      quats:     d.quats,
       bounds: count > 0 ? { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] } : undefined,
       centroid: count > 0 ? [sumX / count, sumY / count, sumZ / count] : undefined
     };
@@ -850,6 +916,13 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
     this.radixSorter.dispose();
     this.splatGeometry.dispose();
     this.splatMaterial.dispose();
+    this._posTex.dispose();
+    this._scaleTex.dispose();
+    this._colorOpacityTex.dispose();
+    this._quatTex.dispose();
+    // Don't dispose the shared static dummy textures
+    if (this._posHighTex !== PhotorealGaussianSplatMesh._dummyRgbaF32) this._posHighTex.dispose();
+    if (this._posLowTex  !== PhotorealGaussianSplatMesh._dummyRgbaF32) this._posLowTex.dispose();
     if (this.contactShadowMesh) {
       this.contactShadowMesh.geometry.dispose();
       (this.contactShadowMesh.material as THREE.Material).dispose();

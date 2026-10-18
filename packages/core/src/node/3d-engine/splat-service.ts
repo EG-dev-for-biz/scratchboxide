@@ -255,7 +255,7 @@ export class SplatService {
     static parseSpzBuffer(buffer: Buffer | ArrayBuffer): BakedGaussian[] {
         let raw = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
         if (raw.length >= 2 && raw[0] === 0x1f && raw[1] === 0x8b) raw = zlib.gunzipSync(raw);
-        const d = decodeSpz(new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength));
+        const d = decodeSpz(new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength), { decodeSH: true });
         const shPer = d.sh ? d.sh.length / Math.max(1, d.count) : 0;
         const splats: BakedGaussian[] = [];
         for (let i = 0; i < d.count; i++) {
@@ -463,10 +463,11 @@ export class SplatService {
                     qw /= qLen;
                 }
 
-                // Anisotropic scale (surfel ellipsoid disk)
-                const baseScale = (d / 500.0) * sampleStep * 1.8;
-                const sx = Math.max(0.02, Math.min(5.0, lenTx > 1e-4 ? lenTx * 0.75 : baseScale));
-                const sy = Math.max(0.02, Math.min(5.0, lenTy > 1e-4 ? lenTy * 0.75 : baseScale));
+                // Anisotropic scale (surfel ellipsoid disk): sigma = 1.0 x the sample spacing (lenTx / lenTy span two
+                // samples), the factor measured for the other depth bakes (ImageToSplatService.convertSingleImageToSplat).
+                const baseScale = (d / 500.0) * sampleStep;
+                const sx = Math.max(0.02, Math.min(5.0, lenTx > 1e-4 ? lenTx * 0.5 : baseScale));
+                const sy = Math.max(0.02, Math.min(5.0, lenTy > 1e-4 ? lenTy * 0.5 : baseScale));
                 const sz = Math.max(0.005, Math.min(sx, sy) * 0.2); // Flattened into surfel
 
                 const opacity = isEdge ? 0.75 : 0.98;

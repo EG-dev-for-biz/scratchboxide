@@ -143,7 +143,7 @@ int main(int argc, char** argv) {
         }
 
         finalSplats = DepthToGaussianEngine::convertEquirectangularToGaussianSplats(
-            rgb.data(), width, height, 3, nullptr, stride, 1.70f, 65.0f
+            rgb.data(), width, height, 3, nullptr, nullptr, stride, 1.70f, 65.0f
         );
     } else if (sceneType == "cyber_shibuya_360") {
         // Cyber Shibuya 360: Neon high-rises and wet asphalt
@@ -189,7 +189,7 @@ int main(int argc, char** argv) {
         }
 
         finalSplats = DepthToGaussianEngine::convertEquirectangularToGaussianSplats(
-            rgb.data(), width, height, 3, nullptr, stride, 1.70f, 90.0f
+            rgb.data(), width, height, 3, nullptr, nullptr, stride, 1.70f, 90.0f
         );
     } else if (sceneType == "alpine_basin_360") {
         // Alpine Basin 360: 360-degree mountain amphitheater
@@ -229,7 +229,7 @@ int main(int argc, char** argv) {
         }
 
         finalSplats = DepthToGaussianEngine::convertEquirectangularToGaussianSplats(
-            rgb.data(), width, height, 3, nullptr, stride, 1.70f, 120.0f
+            rgb.data(), width, height, 3, nullptr, nullptr, stride, 1.70f, 120.0f
         );
     } else {
         // Single 2D architectural image synthesis
