@@ -10,7 +10,7 @@
 import * as React from 'react';
 import type { ViewportHistorySnapshot } from '../../services/viewport-history';
 
-const BTN = 'sb-3d-toolstrip-btn relative group flex items-center justify-center w-5 h-5 rounded-md transition-all';
+const BTN = 'relative group flex items-center justify-center w-5 h-5 rounded-md transition-all';
 const ENABLED = 'text-zinc-300 hover:text-white hover:bg-white/10 border border-transparent';
 const DISABLED = 'text-zinc-600 cursor-not-allowed border border-transparent opacity-40';
 
@@ -26,7 +26,7 @@ export const ViewportHistoryButtons: React.FC<{
             disabled={!snapshot.canUndo}
             aria-label="Undo"
             data-testid="sb-3d-undo"
-            className={`${BTN} ${snapshot.canUndo ? ENABLED : DISABLED}`}
+            className={`sb-3d-toolstrip-btn ${BTN} ${snapshot.canUndo ? ENABLED : DISABLED}`}
             onClick={onUndo}
             title={snapshot.canUndo ? `Undo: ${snapshot.undoLabel} (⌘Z / Ctrl+Z)` : 'Nothing to undo'}
         >
@@ -39,7 +39,7 @@ export const ViewportHistoryButtons: React.FC<{
             disabled={!snapshot.canRedo}
             aria-label="Redo"
             data-testid="sb-3d-redo"
-            className={`${BTN} ${snapshot.canRedo ? ENABLED : DISABLED}`}
+            className={`sb-3d-toolstrip-btn ${BTN} ${snapshot.canRedo ? ENABLED : DISABLED}`}
             onClick={onRedo}
             title={snapshot.canRedo ? `Redo: ${snapshot.redoLabel} (⌘⇧Z / Ctrl+Y)` : 'Nothing to redo'}
         >
