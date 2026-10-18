@@ -2894,7 +2894,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const delit = (result.submeshes || []).some(sub => sub.solarDelightingApplied === true);
         const delightNote = delit
             ? `with NOAA solar de-lighting for ${isoDate} at ${lat}, ${lng}`
-            : `without solar de-lighting (${delightRequested ? 'the PBR decomposition did not apply it' : `it needs ${isoDate === undefined ? 'the isoDate the images depict' : 'anchor coordinates in the stations file'}`})`;
+            : `without solar de-lighting (${delightRequested ? `not applied: ${[...new Set((result.submeshes || []).map(sub => sub.pbrResult?.solarDelighting?.skippedReason).filter(Boolean))].join('; ') || 'the PBR decomposition did not run it'}` : `it needs ${isoDate === undefined ? 'the isoDate the images depict' : 'anchor coordinates in the stations file'}`})`;
 
         return {
             resultPayload: {

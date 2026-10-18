@@ -730,8 +730,10 @@ describe('SurveyTextureUnprojector: Survey-to-Atlas Inverse Projection (SAIP)', 
             expect(p1.outGlbPath.startsWith(path.join(ws, 'public', 'models'))).toBe(true);
 
             const dated = await spatialHandlers.survey_beautify_to_texture({ ...args, isoDate: '2026-06-21T02:00:00Z' }, { workspaceRoot: ws } as any);
-            expect((dated.resultPayload as any).solarDelightingApplied).toBe(true);
-            expect(dated.summaryResult).toContain(`with NOAA solar de-lighting for 2026-06-21T02:00:00Z at ${ANCHOR.lat}, ${ANCHOR.lng}`);
+            // the date is passed through; whether the pass changes pixels depends on the sun and on the ambient fit the
+            // texture supports, and the summary says which (this fake image is too uniform to measure the ambient)
+            expect((dated.resultPayload as any).solarDelightingApplied).toBe(false);
+            expect(dated.summaryResult).toMatch(/without solar de-lighting \(not applied: (the sun is at or below the horizon|too few texels|the ambient-to-sun ratio|the shading fit)/);
 
             await expect(spatialHandlers.survey_beautify_to_texture({ ...args, stationsJsonPath: path.join(ws, 'missing.json') }, { workspaceRoot: ws } as any))
                 .rejects.toThrow(/survey_beautify_to_texture needs stationsJsonPath: .*missing\.json does not exist/);

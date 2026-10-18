@@ -88,11 +88,8 @@ export interface TopologyProbeResult {
 export interface AdaptiveSolarDelightingConfig {
   latitude: number;
   longitude: number;
-  /** The UTC time whose sun lit the source imagery (required: the run's own clock is not that time). */
+  /** The capture instant whose sun lit the source imagery, with a time of day and UTC offset (required: the run's own clock is not that time). */
   timestampIso: string;
-  regularizationEpsilon?: number;
-  ambientWeight?: number;
-  directWeight?: number;
 }
 
 export interface AdaptivePbrRequest {
@@ -396,10 +393,7 @@ export class AdaptiveUvOrchestrator {
           solarDelighting: solar && {
             latitude: solar.latitude,
             longitude: solar.longitude,
-            timestampIso: solar.timestampIso,
-            regularizationEpsilon: solar.regularizationEpsilon ?? 0.18,
-            ambientWeight: solar.ambientWeight ?? 0.35,
-            directWeight: solar.directWeight ?? 0.65
+            timestampIso: solar.timestampIso
           }
         },
         khrMaterials: {

@@ -209,7 +209,7 @@ export interface SubmeshTextureResult {
     metallicPng: Buffer;
     metrics: UnprojectionMetrics;
     pbrResult?: PbrDecompositionResult;
-    /** True when the albedo was de-lit for the sun position given in options.solarDelighting. */
+    /** True when the albedo was de-lit for the sun of options.solarDelighting (the ambient-to-sun fit was accepted; see pbrResult.solarDelighting). */
     solarDelightingApplied?: boolean;
 }
 
@@ -896,7 +896,6 @@ export class SurveyTextureUnprojector {
             if ((!isDraft || options.pbrDecomposition?.enableSolarInverseDelighting === true) &&
                 Number.isFinite(options.solarDelighting?.lat) && Number.isFinite(options.solarDelighting?.lng) && options.solarDelighting?.isoDate) {
                 pbrOpts.enableSolarInverseDelighting = true;
-                solarDelightingApplied = true;
                 pbrOpts.solarDelighting = {
                     latitude: options.solarDelighting.lat!,
                     longitude: options.solarDelighting.lng!,
@@ -919,6 +918,8 @@ export class SurveyTextureUnprojector {
                 atlasW,
                 atlasH
             );
+            // Applied only when the ambient-to-sun fit was accepted; otherwise pbrResult.solarDelighting.skippedReason says why
+            solarDelightingApplied = pbrResult.solarDelighting?.applied === true;
             console.log(`[Submesh ${primIndex}] decomposePbr finished in ${((performance.now() - tPbr0) / 1000).toFixed(2)}s`);
 
             const defaultNormal = Buffer.alloc(totalTexels * 4);
