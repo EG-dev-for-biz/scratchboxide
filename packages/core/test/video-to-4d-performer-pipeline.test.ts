@@ -16,9 +16,9 @@ import {
     SBHUMAN_22_JOINTS,
     HeroFrameExtractionError,
     PerformerInputUnreadableError,
-    PerformerMotionUnavailableError,
-    UnknownVenueError
+    PerformerMotionUnavailableError
 } from '../src/node/spatial/VideoTo4DPerformerPipelineService';
+import { InvalidInputError } from '../src/common/errors/pipeline-errors';
 import { execSync } from 'child_process';
 import * as jpeg from 'jpeg-js';
 import { SbHumanLoader } from '../src/common/spatial/SbHumanLoader';
@@ -196,8 +196,9 @@ describe('VideoTo4DPerformerPipelineService', () => {
         await fs.writeFile(garbageImg, Buffer.alloc(1024));
         await expect(pipeline.extractHeroFrame(garbageImg, out, 0)).rejects.toBeInstanceOf(HeroFrameExtractionError);
 
-        await expect(pipeline.executePipeline({ videoPath: garbageImg, outputDir: out, venueId: 'no_such_venue' }))
-            .rejects.toBeInstanceOf(UnknownVenueError);
+        // A venue is the caller's coordinates; an unusable one fails before any work, and none is looked up.
+        await expect(pipeline.executePipeline({ videoPath: garbageImg, outputDir: out, venue: { name: 'x', lat: 91, lng: 0, altMeters: 0, stageHeadingDeg: 0 } }))
+            .rejects.toBeInstanceOf(InvalidInputError);
     });
 
     it('4d. emits no venue anchor unless one is requested, and labels synthetic motion', async () => {
@@ -243,7 +244,7 @@ describe('VideoTo4DPerformerPipelineService', () => {
             characterId: 'performer_red_rocks_test',
             numGaussians: 1000,
             targetHeightMeters: 1.80,
-            venueId: 'red_rocks',
+            venue: { id: 'red_rocks', name: 'Red Rocks Amphitheatre', lat: 39.66555, lng: -105.20525, altMeters: 1932.0, stageHeadingDeg: 285.0 },
             fps: 25,
             motionSequenceLengthSec: 1.0,
             allowSyntheticIdleMotion: true

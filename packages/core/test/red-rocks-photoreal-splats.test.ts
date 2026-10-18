@@ -20,8 +20,8 @@ import {
   type SplatData
 } from '../src/browser/generative-canvas/services/spatial/PhotorealGaussianSplatMesh';
 import {
-  MUSIC_VENUE_PRESETS,
-  ConcertStagePerformerService
+  ConcertStagePerformerService,
+  type StageVenueAnchor
 } from '../src/browser/generative-canvas/services/ConcertStagePerformerService';
 
 const execAsync = promisify(exec);
@@ -78,7 +78,7 @@ function decodeRgba(pngBuffer: Buffer): { width: number; height: number; data: B
 
 describe('Red Rocks Auditorium Photoreal Gaussian Splats Integration', () => {
   it('1. Verifies Red Rocks Amphitheatre geospatial venue anchor and stage parameters', () => {
-    const venue = MUSIC_VENUE_PRESETS.red_rocks;
+    const venue: StageVenueAnchor = { id: 'red_rocks', name: 'Red Rocks Amphitheatre', lat: 39.66555, lng: -105.20525, altMeters: 1932.0, stageHeadingDeg: 285.0 };
     expect(venue).toBeDefined();
     expect(venue.id).toBe('red_rocks');
     expect(venue.lat).toBeCloseTo(39.66555, 4);

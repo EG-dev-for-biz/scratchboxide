@@ -4771,7 +4771,7 @@ export const AVATAR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'performer_4d_create_from_video',
-        description: 'Builds a dynamic 4D Gaussian Splatting performer avatar from a monocular video (or a hero image) with tracked motion (GVHMR or MediaPipe), 4-bone LBS skinning, video texture backprojection and foot-contact ground clamping. Geographic venue anchoring happens only when venueId is given. Fails with a typed error when the input is missing/unreadable, no hero frame can be decoded, or no motion can be tracked (unless allowSyntheticIdleMotion is set, in which case the motion is a labelled synthetic idle sway).',
+        description: 'Builds a dynamic 4D Gaussian Splatting performer avatar from a monocular video (or a hero image) with tracked motion (GVHMR or MediaPipe), 4-bone LBS skinning, video texture backprojection and foot-contact ground clamping. Geographic venue anchoring happens only when a venue (name, lat, lng, altMeters, stageHeadingDeg) is given. Fails with a typed error when the input is missing/unreadable, no hero frame can be decoded, or no motion can be tracked (unless allowSyntheticIdleMotion is set, in which case the motion is a labelled synthetic idle sway).',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -4791,9 +4791,17 @@ export const AVATAR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'NUMBER',
                     description: 'Number of surface Gaussians to sample (default: 35000)'
                 },
-                venueId: {
-                    type: 'STRING',
-                    description: 'Optional venue id for geodetic stage anchoring (e.g. "red_rocks", "hollywood_bowl", "the_gorge"). Omit for no venue; an unknown id is an error.'
+                venue: {
+                    type: 'OBJECT',
+                    description: 'Optional geodetic stage anchor. Give all of name, lat, lng (WGS-84 degrees), altMeters (ground altitude above mean sea level) and stageHeadingDeg (clockwise from true north). Omit for no venue; nothing is looked up or assumed.',
+                    properties: {
+                        name: { type: 'STRING' },
+                        lat: { type: 'NUMBER' },
+                        lng: { type: 'NUMBER' },
+                        altMeters: { type: 'NUMBER' },
+                        stageHeadingDeg: { type: 'NUMBER' }
+                    },
+                    required: ['name', 'lat', 'lng', 'altMeters', 'stageHeadingDeg']
                 },
                 allowSyntheticIdleMotion: {
                     type: 'BOOLEAN',
@@ -5046,7 +5054,7 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
         const characterId = args.characterId ? asString(args.characterId) : undefined;
         const targetHeightMeters = args.targetHeightMeters ? Number(args.targetHeightMeters) : undefined;
         const numGaussians = args.numGaussians ? Number(args.numGaussians) : undefined;
-        const venueId = args.venueId ? asString(args.venueId) : undefined;
+        const venue = args.venue && typeof args.venue === 'object' ? args.venue as any : undefined;
         const fps = args.fps ? Number(args.fps) : undefined;
         const allowSyntheticIdleMotion = args.allowSyntheticIdleMotion === true;
         VideoTo4DPerformerPipelineService.assertReadableInput(videoPath);
@@ -5057,7 +5065,7 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
             characterId,
             targetHeightMeters,
             numGaussians,
-            venueId,
+            venue,
             fps,
             allowSyntheticIdleMotion
         });

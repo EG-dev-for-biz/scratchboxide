@@ -169,11 +169,11 @@ export type {
 export {
     ConcertStagePerformerService,
     PerformerSkinningMode,
-    MUSIC_VENUE_PRESETS,
+    requireStageVenueAnchor,
     SBHUMAN_22_JOINT_NAMES,
     SBHUMAN_22_PARENTS,
     DEFAULT_CANONICAL_JOINTS,
-    type MusicVenuePreset,
+    type StageVenueAnchor,
     type ConcertStageOptions,
     type PerformerKinematicsFrame,
     type PerformerTelemetry
