@@ -13,7 +13,7 @@ import { encodePng, resampleRgba } from '../texture-processing';
 import { GeminiClient } from '../gemini/gemini-client';
 import { decodeImageToRgba } from '../image-codec-ffmpeg';
 import { generateImageWithModels } from '../google-media-generation-service';
-import { IMAGE_MODEL_ASPECT_RATIOS, IMAGE_MODEL_PRIORITY, nearestImageAspectRatio, resolveRequestedModels, type SkippedMediaModel } from '../../common/media-generation-protocol';
+import { IMAGE_MODEL_ASPECT_RATIOS, IMAGE_MODEL_PRIORITY, nearestImageAspectRatio, resolveRequestedModels, chooseEditCrop, maskBoundingBox, type EditCropRegion, type SkippedMediaModel } from '../../common/media-generation-protocol';
 import { MediaModelUnavailableError, MissingInputError } from '../../common/errors/pipeline-errors';
 import { MODEL_ANSWER_ASPECT_TOLERANCE, ModelAnswerResolutionError } from './Google360PanoramaPipelineService';
 
@@ -169,26 +169,38 @@ export class SpatialSmartPointInpaintService {
         prompt: string;
         model?: string;
         signal?: AbortSignal;
-    }): Promise<{ image: Buffer; mimeType: string; width: number; height: number; modelUsed: string; modelNote: string; skippedModels?: SkippedMediaModel[]; answerWidth: number; answerHeight: number }> {
+    }): Promise<{ image: Buffer; mimeType: string; width: number; height: number; modelUsed: string; modelNote: string; skippedModels?: SkippedMediaModel[]; answerWidth: number; answerHeight: number; sentRegion?: { x: number; y: number; width: number; height: number } }> {
         const base = await decodeImageToRgba(request.image);
         const mask = await decodeImageToRgba(request.mask);
         if (mask.width !== base.width || mask.height !== base.height) {
             throw new MissingInputError('spatial_smart_point_inpaint', 'mask', `the mask is ${mask.width}x${mask.height} but the image is ${base.width}x${base.height}`);
         }
-        const aspectRatio = nearestImageAspectRatio(base.width, base.height);
+        // The edit is local: the region around the mask (with context) is sent at an accepted aspect ratio, not the
+        // whole frame, when that region is clearly smaller; only that region of the answer is blended back.
+        const box = maskBoundingBox(mask.rgba, base.width, base.height);
+        const region: EditCropRegion = chooseEditCrop(box ?? { x0: 0, y0: 0, x1: 0, y1: 0 }, base.width, base.height)
+            ?? { x: 0, y: 0, width: base.width, height: base.height, aspectRatio: nearestImageAspectRatio(base.width, base.height) };
+        const whole = region.width === base.width && region.height === base.height;
+        const aspectRatio = region.aspectRatio;
         const asked = IMAGE_MODEL_ASPECT_RATIOS.find(([label]) => label === aspectRatio)![1];
-        const own = base.width / base.height;
+        const own = region.width / region.height;
         if (Math.abs(own - asked) / asked > MODEL_ANSWER_ASPECT_TOLERANCE) {
             throw new MissingInputError('spatial_smart_point_inpaint', 'imagePath',
                 `a ${base.width}x${base.height} image (${own.toFixed(3)}:1) has no aspect ratio the image models accept (nearest ${aspectRatio}); the answer would be re-framed and the edit would not line up`);
         }
+        const crop = (rgba: Buffer) => {
+            if (whole) return rgba;
+            const outCrop = Buffer.alloc(region.width * region.height * 4);
+            for (let y = 0; y < region.height; y++) rgba.copy(outCrop, y * region.width * 4, ((region.y + y) * base.width + region.x) * 4, ((region.y + y) * base.width + region.x + region.width) * 4);
+            return outCrop;
+        };
         const client = await this.getClient();
         const answer = await generateImageWithModels(client, {
             models: resolveRequestedModels(request.model, IMAGE_MODEL_PRIORITY),
             contents: [
-                { inlineData: { mimeType: 'image/png', data: encodePng(base.width, base.height, base.rgba).toString('base64') } },
-                { inlineData: { mimeType: 'image/png', data: request.mask.toString('base64') } },
-                { text: `${request.prompt} Edit only the white region of the mask (the second image); answer with the whole image at exactly the same framing and ${aspectRatio} aspect ratio.` }
+                { inlineData: { mimeType: 'image/png', data: encodePng(region.width, region.height, crop(base.rgba)).toString('base64') } },
+                { inlineData: { mimeType: 'image/png', data: whole ? request.mask.toString('base64') : encodePng(region.width, region.height, crop(mask.rgba)).toString('base64') } },
+                { text: `${request.prompt} Edit only the white region of the mask (the second image); answer with the whole image at exactly the same framing and ${aspectRatio} aspect ratio.${whole ? '' : ' The images are a crop of a larger picture around the region to edit.'}` }
             ],
             imageConfig: { aspectRatio },
             signal: request.signal
@@ -204,14 +216,18 @@ export class SpatialSmartPointInpaintService {
             throw new ModelAnswerResolutionError(false,
                 `${answer.modelUsed} was asked for a ${aspectRatio} image and answered ${decoded.width}x${decoded.height} (${answered.toFixed(3)}:1); the inpainted region would not line up with the smart point`);
         }
-        const edited = decoded.width === base.width && decoded.height === base.height
+        const edited = decoded.width === region.width && decoded.height === region.height
             ? decoded.rgba
-            : resampleRgba(decoded.rgba, decoded.width, decoded.height, base.width, base.height);
+            : resampleRgba(decoded.rgba, decoded.width, decoded.height, region.width, region.height);
         const out = Buffer.from(base.rgba);
-        for (let i = 0; i < out.length; i += 4) {
-            const m = mask.rgba[i] / 255;
-            if (m <= 0) continue;
-            for (let k = 0; k < 3; k++) out[i + k] = Math.round(base.rgba[i + k] * (1 - m) + edited[i + k] * m);
+        for (let y = 0; y < region.height; y++) {
+            for (let x = 0; x < region.width; x++) {
+                const i = ((region.y + y) * base.width + region.x + x) * 4;
+                const m = mask.rgba[i] / 255;
+                if (m <= 0) continue;
+                const j = (y * region.width + x) * 4;
+                for (let k = 0; k < 3; k++) out[i + k] = Math.round(base.rgba[i + k] * (1 - m) + edited[j + k] * m);
+            }
         }
         return {
             image: encodePng(base.width, base.height, out),
@@ -222,7 +238,8 @@ export class SpatialSmartPointInpaintService {
             modelNote: answer.modelNote,
             skippedModels: answer.skippedModels,
             answerWidth: decoded.width,
-            answerHeight: decoded.height
+            answerHeight: decoded.height,
+            sentRegion: whole ? undefined : { x: region.x, y: region.y, width: region.width, height: region.height }
         };
     }
 }

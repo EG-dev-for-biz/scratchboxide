@@ -18,7 +18,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { mapBounded, allAbortable } from '../src/common/async/bounded-concurrency';
-import { encodePng } from '../src/node/texture-processing';
+import { encodePng, decodePng } from '../src/node/texture-processing';
 import { MeshAiTextureBakingService } from '../src/node/spatial/MeshAiTextureBakingService';
 import { MultiPerspectivePanoramaSynthesisService } from '../src/node/spatial/MultiPerspectivePanoramaSynthesisService';
 import { SceneKeyframeVideoService } from '../src/node/spatial/SceneKeyframeVideoService';
@@ -251,5 +251,129 @@ describe('cullMeshToView', () => {
             const part = HeadlessMeshSilhouetteRenderer.renderMesh(culled, p, 160, 120, { clipNearPlane: true });
             expect(Buffer.from(part.depthBuffer.buffer).equals(Buffer.from(full.depthBuffer.buffer))).toBe(true);
         }
+    });
+});
+
+describe('panorama: crops for local edits, seam and nadir at once, 4K delegation', () => {
+    const RATIOS: Record<string, number> = { '9:16': 9 / 16, '2:3': 2 / 3, '3:4': 3 / 4, '4:5': 4 / 5, '1:1': 1, '5:4': 5 / 4, '4:3': 4 / 3, '3:2': 3 / 2, '16:9': 16 / 9, '21:9': 21 / 9 };
+    /** Answers every image call with a flat colour at the asked ratio (height 256) after `delay`, honouring the signal. */
+    function panoClient(wait: (ms: number, s?: AbortSignal) => Promise<void>, delay: number, log: Array<{ aspect: string; w: number; h: number }>) {
+        return {
+            createClient: async () => ({
+                models: {
+                    generateContent: async (req: any) => {
+                        const aspect = req.config.imageConfig.aspectRatio as string;
+                        const sent = req.contents.find((c: any) => c.inlineData);
+                        const dims = sent ? decodePng(Buffer.from(sent.inlineData.data, 'base64')) : { width: 0, height: 0 };
+                        log.push({ aspect, w: dims.width, h: dims.height });
+                        await wait(delay, req.config.abortSignal);
+                        const h = 512, w = Math.round(h * RATIOS[aspect]);
+                        return { candidates: [{ content: { parts: [{ inlineData: { data: solidPng(w, h, 200).toString('base64'), mimeType: 'image/png' } }] } }] };
+                    }
+                }
+            })
+        } as any;
+    }
+    function gradientPano(w: number, h: number): Buffer {
+        const rgba = Buffer.alloc(w * h * 4);
+        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const i = (y * w + x) * 4; rgba[i] = x % 256; rgba[i + 1] = y % 256; rgba[i + 2] = 60; rgba[i + 3] = 255; }
+        return encodePng(w, h, rgba);
+    }
+
+    it('heals the seam from a 9:16 crop around the band, leaving every pixel outside the band unchanged', async () => {
+        const { Google360PanoramaPipelineService } = await import('../src/node/spatial/Google360PanoramaPipelineService');
+        const log: Array<{ aspect: string; w: number; h: number }> = [];
+        const svc = new Google360PanoramaPipelineService(panoClient(async () => {}, 0, log));
+        const input = gradientPano(2048, 1024);
+        const res = await svc.healPanoramaSeam({ inputImageBuffer: input });
+        expect(log).toHaveLength(1);
+        expect(log[0].aspect).toBe('9:16');
+        expect(log[0].h).toBe(1024);
+        expect(log[0].w).toBeLessThan(2048 * 0.3);     // the full frame would be sent widened to 21:9 (2389 px)
+        expect(res.summary).toMatch(/region at \d+,0 was sent, not the whole image/);
+        const a = decodePng(input).rgba, b = decodePng(res.outputBuffer).rgba;
+        // Columns far from the wrap seam (x = 0 / 2047) are untouched.
+        for (const x of [300, 1024, 1700]) for (const y of [0, 500, 1023]) {
+            const i = (y * 2048 + x) * 4;
+            expect([b[i], b[i + 1], b[i + 2]]).toEqual([a[i], a[i + 1], a[i + 2]]);
+        }
+    });
+
+    it('generate: seam heal and nadir infill run at once on the base; a Stop cancels both', async () => {
+        const { Google360PanoramaPipelineService } = await import('../src/node/spatial/Google360PanoramaPipelineService');
+        const { rec, wait } = flightRecorder();
+        const log: Array<{ aspect: string; w: number; h: number }> = [];
+        const svc = new Google360PanoramaPipelineService(panoClient(wait, DELAY_MS, log));
+        const t0 = Date.now();
+        const res = await svc.generate360Panorama({ prompt: 'salt flats', width: 512, height: 256, inpaintNadir: true });
+        const wall = Date.now() - t0;
+        expect(log.map(l => l.aspect)[0]).toBe('21:9');     // the base
+        expect(log).toHaveLength(3);
+        expect(rec.maxInFlight).toBe(2);                      // seam + nadir together
+        expect(wall).toBeLessThan(3 * DELAY_MS);              // sequential: 3 x DELAY_MS
+        expect(res.seamHealed).toBe(true);
+        expect(res.summary).toContain('Nadir infill');
+        expect(res.summary).toContain('nothing was squeezed');
+
+        const stop = flightRecorder();
+        const ctl = new AbortController();
+        const slow = new Google360PanoramaPipelineService(panoClient((ms, s) => stop.wait(stop.rec.started === 0 ? 5 : 10_000, s), 0, []));
+        const p = slow.generate360Panorama({ prompt: 'salt flats', width: 512, height: 256, inpaintNadir: true, signal: ctl.signal });
+        setTimeout(() => ctl.abort(), 120);
+        await expect(p).rejects.toThrow();
+        expect(stop.rec.started).toBe(3);
+        expect(stop.rec.aborted).toBe(2);
+    });
+
+    it('the 4K path passes the Stop to its model call and still makes a nadir infill asked for', async () => {
+        const { Google360PanoramaPipelineService } = await import('../src/node/spatial/Google360PanoramaPipelineService');
+        const log: Array<{ aspect: string; w: number; h: number }> = [];
+        const stop = flightRecorder();
+        const ctl = new AbortController();
+        const svc = new Google360PanoramaPipelineService(panoClient((ms, s) => stop.wait(10_000, s), 0, log));
+        const p = svc.generate360Panorama({ prompt: 'nave', width: 4096, height: 2048, signal: ctl.signal });
+        setTimeout(() => ctl.abort(), 40);
+        await expect(p).rejects.toThrow();
+        expect(stop.rec.aborted).toBe(1);
+
+        const ok = new Google360PanoramaPipelineService(panoClient(async () => {}, 0, log));
+        log.length = 0;
+        const res = await ok.generate360Panorama({ prompt: 'nave', width: 4096, height: 2048, inpaintNadir: true, maxModelUpscale: 8 });
+        expect(log).toHaveLength(2);
+        expect(res.summary).toContain('Nadir infill');
+    }, 60_000);
+});
+
+describe('spatial_smart_point_inpaint: sends the region around the point', () => {
+    it('sends a crop around a small mask, blends only inside the mask, and reports the region', async () => {
+        const { SpatialSmartPointInpaintService } = await import('../src/node/spatial/SpatialSmartPointInpaintService');
+        const W = 1024, H = 768;
+        const base = Buffer.alloc(W * H * 4);
+        for (let i = 0; i < W * H; i++) { base[i * 4] = 40; base[i * 4 + 1] = 120; base[i * 4 + 2] = 200; base[i * 4 + 3] = 255; }
+        const mask = Buffer.alloc(W * H * 4);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            const v = Math.hypot(x - 700, y - 300) <= 20 ? 255 : 0;
+            mask.fill(v, (y * W + x) * 4, (y * W + x) * 4 + 3); mask[(y * W + x) * 4 + 3] = 255;
+        }
+        const sent: Array<{ w: number; h: number; aspect: string }> = [];
+        const client = {
+            models: {
+                generateContent: async (req: any) => {
+                    const img = decodePng(Buffer.from(req.contents[0].inlineData.data, 'base64'));
+                    sent.push({ w: img.width, h: img.height, aspect: req.config.imageConfig.aspectRatio });
+                    return { candidates: [{ content: { parts: [{ inlineData: { data: solidPng(img.width, img.height, 250).toString('base64'), mimeType: 'image/png' } }] } }] };
+                }
+            }
+        };
+        const svc = new SpatialSmartPointInpaintService({ client });
+        const res = await svc.executeSpatialInpaint({ image: encodePng(W, H, base), mask: encodePng(W, H, mask), prompt: 'a brass bollard', model: 'gemini-3.1-flash-image' });
+        expect(sent).toHaveLength(1);
+        expect(sent[0].w * sent[0].h).toBeLessThan(W * H * 0.1);
+        expect(res.sentRegion).toBeDefined();
+        const out = decodePng(res.image).rgba;
+        const px = (x: number, y: number) => Array.from(out.subarray((y * W + x) * 4, (y * W + x) * 4 + 3));
+        expect(px(700, 300)).toEqual([250, 250, 250]);   // inside the mask: the model's edit
+        expect(px(700, 330)).toEqual([40, 120, 200]);    // in the crop, outside the mask: the input
+        expect(px(100, 100)).toEqual([40, 120, 200]);    // outside the crop: the input
     });
 });

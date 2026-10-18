@@ -2087,7 +2087,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 skippedModels: result.skippedModels,
                 modelNote: result.modelNote
             },
-            summaryResult: `Smart point inpainting written to ${outPath}: the 3D point projects to (${maskRes.x.toFixed(1)}, ${maskRes.y.toFixed(1)}) in the ${dims.width}x${dims.height} image, ${maskRes.depth.toFixed(2)} from the camera and ${maskRes.surfaceDepth === undefined ? 'with no mesh surface at that pixel' : `not hidden by the mesh (surface at ${maskRes.surfaceDepth.toFixed(2)})`}; ${maskRes.maskedPixels} pixels within ${radiusPx}px of it were blended from the model's edit and every other pixel is unchanged. ${result.modelNote} The model answered at ${result.answerWidth}x${result.answerHeight}.`
+            summaryResult: `Smart point inpainting written to ${outPath}: the 3D point projects to (${maskRes.x.toFixed(1)}, ${maskRes.y.toFixed(1)}) in the ${dims.width}x${dims.height} image, ${maskRes.depth.toFixed(2)} from the camera and ${maskRes.surfaceDepth === undefined ? 'with no mesh surface at that pixel' : `not hidden by the mesh (surface at ${maskRes.surfaceDepth.toFixed(2)})`}; ${maskRes.maskedPixels} pixels within ${radiusPx}px of it were blended from the model's edit and every other pixel is unchanged. ${result.modelNote} The model answered at ${result.answerWidth}x${result.answerHeight}${result.sentRegion ? ` for the ${result.sentRegion.width}x${result.sentRegion.height} region at ${result.sentRegion.x},${result.sentRegion.y} (sent instead of the whole image)` : ''}.`
         };
     },
     spatial_keyframe_video_interpolation: async (args, ctx) => {
