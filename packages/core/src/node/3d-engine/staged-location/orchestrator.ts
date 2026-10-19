@@ -128,6 +128,7 @@ import { buildSwitchLocationPills, switchLocationMarkdown } from '../../../commo
 import { summarizeStagedBuild, type StagedSummaryInput } from './staged-summary';
 import { palettesFromSurvey, photoTierEnabled, textureLayer, TEXTURE_PASS_VERSION, type TextureLayerOutcome } from './texture-pass';
 import { prepareTextureSources, type TextureSourcesInput } from './texture-sources';
+import { objectSegmenter, ownViews, OWNERSHIP_VERSION, type OwnershipSegmenter } from './streetview-ownership';
 import { correctViewsLighting, lightingModels, lightingPromptVariant, textureArmOptions, type LightingCorrectedView } from './texture-lighting';
 import { TextureWorkerPool, textureWorkersEnabled } from './texture-worker-pool';
 import { eventLoopStats, runBlockTracer } from './event-loop-stats';
@@ -296,6 +297,11 @@ export interface StagedLocationDeps {
          * absent = not run. `lightingModels` default lightingModels().
          */
         lighting?: EnhanceModelClient; lightingModels?: string[];
+        /**
+         * The segmenter that cuts the structure out of each Street View photo (streetview-ownership.ts); default the repo's
+         * ObjectSegmenterService (MediaPipe interactive + GrabCut). false = no ownership check (SCRATCHBOX_TEXTURE_OWNERSHIP=0 too).
+         */
+        segmenter?: OwnershipSegmenter | false;
     };
     now?: () => number;
     newRunId?: () => string;
@@ -1604,7 +1610,22 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     await warming;
                     const { views: sourceViews, failures, wideViews, tile, tileUnavailable, tileLoadMs, tileSha, occluder, context } = sources;
                     // bake-off arms (SCRATCHBOX_TEXTURE_STREET_VIEW=off, experiment only): the layers are textured from the tile photo alone
-                    const views = arm.streetView === 'off' ? [] : sourceViews;
+                    let views = arm.streetView === 'off' ? [] : sourceViews;
+                    // pixel ownership: a photo pixel textures the structure only if the photo shows the structure there
+                    // (streetview-ownership.ts); views it cannot vouch for texture nothing, and the tile photo takes their texels
+                    const ownVision = visionAvailable;
+                    const segmenter = process.env.SCRATCHBOX_TEXTURE_OWNERSHIP === '0' ? false : deps.textures?.segmenter
+                        ?? objectSegmenter(ownVision ? { modelSource: { getGenAIClient: async () => ownVision.client, getModelCandidates: () => ownVision.candidates } } : {});
+                    let ownershipKey: string | undefined;
+                    if (views.length && segmenter && occluder.indices.length) {
+                        const to = now();
+                        const own = await ownViews({ views, structure: occluder, ...(ownVision ? { target: request.query } : {}), ...(context.indices.length ? { context } : {}), segment: segmenter, signal: io.signal, onProgress: m => io.progress(`textures: ${m}`), ...(process.env.SCRATCHBOX_OWNERSHIP_DEBUG_DIR ? { debugDir: path.join(process.env.SCRATCHBOX_OWNERSHIP_DEBUG_DIR, runId) } : {}) });
+                        views = own.views;
+                        const kept = own.records.filter(r => r.status === 'segmented').length;
+                        ownershipKey = `sv-ownership/${OWNERSHIP_VERSION}:${sha256Bytes(Buffer.concat(views.map(v => Buffer.from(v.ownerMask ?? new Uint8Array(0)))))}`;
+                        cache.writeRunNote(runId, 'texture_ownership', { ms: now() - to, records: own.records });
+                        io.progress(`textures: the structure was cut out of ${kept} of ${own.records.length} Street View photos; ${own.records.length - kept} photos vouch for no pixel (${own.records.find(r => r.status === 'refused')?.reason ?? 'none'})`);
+                    }
                     const viewsUnavailable = arm.streetView === 'off' ? 'Street View is turned off for this build (SCRATCHBOX_TEXTURE_STREET_VIEW=off, an experiment arm)' : images.length ? (views.length ? undefined : `none of the ${images.length} grounding images decoded (${failures[0] ?? ''})`)
                         : evidence ? `the Street View stage ${evidence.status === 'skipped' ? 'was skipped' : 'returned no image'}` : (visionAvailable ? 'the Street View stage did not run' : 'no vision model is configured, so no Street View close-ups were fetched');
                     const palette = palettesFromSurvey(run.state.materialHints?.faces);
@@ -1659,7 +1680,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const textureOne = async (target: typeof targets[number]) => {
                         handled.add(target.layer.objectId);
                         const clay = fs.readFileSync(target.file);
-                        const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), wideHeld.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048, surfacesKey(target.surfaces), ...(!(rebuildOut.refit ?? rebuildOut.fit) && views.length ? ['no-fit-held-out-gate/2'] : []), ...(lightingClient ? [`light:${lightingModelIds.join(',')}:${lightingPromptVariant()}:${lightingViews?.length ?? 0}`] : []), ...(arm.key ? [arm.key] : []));
+                        const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), wideHeld.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048, surfacesKey(target.surfaces), ...(!(rebuildOut.refit ?? rebuildOut.fit) && views.length ? ['no-fit-held-out-gate/2'] : []), ...(lightingClient ? [`light:${lightingModelIds.join(',')}:${lightingPromptVariant()}:${lightingViews?.length ?? 0}`] : []), ...(arm.key ? [arm.key] : []), ...(ownershipKey ? [ownershipKey] : []));
                         const entry = await cache.run<Omit<TextureLayerOutcome, 'glb'>>('textures', key, async dir => {
                             const bake = (bakeViews: typeof views, bakeUnavailable: string | undefined) => (texturePool ? texturePool.textureLayer.bind(texturePool) : textureLayer)({ layerKey: target.layer.layer, clayGlb: clay, ...(target.surfaces?.length ? { surfaces: target.surfaces } : {}) }, {
                                 views: bakeViews, ...(wideViews.length ? { photoTierViews: wideViews } : {}), ...(photoTierEnabled() ? { photoTier: true } : {}), ...(bakeUnavailable ? { viewsUnavailable: bakeUnavailable } : {}), occluder, ...(context.indices.length ? { context } : {}), observedSurface: TEXTURE_OBSERVED_SURFACE, poseEdgeGuardShare: TEXTURE_POSE_EDGE_GUARD_SHARE,

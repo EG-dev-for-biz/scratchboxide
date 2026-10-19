@@ -274,6 +274,12 @@ export interface ProjectionView {
      * at `gw` x `gh` lattice nodes spanning the image. The colour of a texel the pose puts at (x, y) is read at (x, y) + d(x, y).
      */
     warp?: { gw: number; gh: number; dx: Float32Array; dy: Float32Array };
+    /**
+     * Which photo pixels show the structure (streetview-ownership.ts: the structure cut out of the photo by the segmenter,
+     * prompted from the registered geometry), 1 per pixel, row-major at the image's size. When present, a texel is projected
+     * only from a pixel the mask holds; the others fall to the next view or rung. Absent: no ownership check.
+     */
+    ownerMask?: Uint8Array;
 }
 
 /** Software depth (metres along `fwd`, row-major, Infinity where nothing) of the occluder as seen from a view. */
