@@ -4354,7 +4354,9 @@ export const opticsLensDistortionHandlers: Record<string, ToolHandler> = {
         if (typeof config.anamorphicSqueeze === 'number' && config.anamorphicSqueeze !== (sceneData.camera.lens?.anamorphicSqueeze ?? 1)) lensParams.anamorphicSqueeze = config.anamorphicSqueeze;
         const res = engine.dispatch('sb_set_camera_lens', lensParams);
         if (!res.success) return notApplied(res.error || 'sb_set_camera_lens failed');
+        const lensIssues = ((res.data as { issues?: string[] })?.issues) ?? [];
         const notAppliedParts = [
+            ...lensIssues,
             ...(Array.isArray(config.opticalCenter) && (config.opticalCenter[0] !== 0.5 || config.opticalCenter[1] !== 0.5) ? ['the off-centre optical centre: the viewport distorts about the frame centre'] : []),
             ...(args.edgeMode !== undefined ? ['edgeMode: the viewport renders overscan so the distorted frame has no edges to fill'] : []),
             ...(args.filterQuality !== undefined ? ['filterQuality: the viewport pass samples bilinearly'] : []),
@@ -4779,8 +4781,10 @@ export const physicalCameraHandlers: Record<string, ToolHandler> = {
         if (!lensRes.success) return notApplied(lensRes.error || 'sb_set_camera_lens failed');
         const passes = ((lensRes.data as { passes?: string[] })?.passes) ?? [];
         const dofDrawn = passes.includes('depth-of-field');
+        const lensIssues = (((lensRes.data as { issues?: string[] })?.issues) ?? []).filter(i => !/^depth of field needs/.test(i));
 
         const notAppliedParts = [
+            ...lensIssues,
             ...(!enableDepthOfField ? ['depth of field: enableDepthOfField is false (the lens values are stored, no blur is drawn)'] : []),
             ...(enableDepthOfField && !hasFocus ? ['depth of field: no focus distance or focus object was given, so no plane of focus exists to blur around'] : []),
             ...(anamorphicRatio !== 1 ? [`the ${anamorphicRatio}x anamorphic desqueeze of the frame: the viewport keeps its own aspect ratio (the squeeze shapes the bokeh and any lens distortion)`] : []),

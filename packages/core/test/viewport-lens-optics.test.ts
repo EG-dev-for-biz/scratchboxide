@@ -25,6 +25,7 @@ import {
     cameraToFrameCoefficients,
     displayedNdcToPinholeNdc,
     distortionOverscan,
+    distortionMaxAspect,
     distortCameraPoint,
     undistortCameraPoint,
     circleOfConfusionMm,
@@ -124,6 +125,15 @@ describe('viewport lens distortion is the spatial services\' Brown-Conrady model
         expect(distortionOverscan({ coefficients: { ...BARREL, k1: 0.1 }, anamorphicSqueeze: 1 }, fov, aspect).overscan).toBe(1);
         // a lens folding inside the frame is detected
         expect(distortionOverscan({ coefficients: { ...BARREL, k1: -2 }, anamorphicSqueeze: 1 }, fov, aspect).folds).toBe(true);
+    });
+
+    it('distortionMaxAspect finds the widest frame before the model folds', () => {
+        // fov with s = 2 tan(fov/2) = 1: r (1 - 0.15 r^2) peaks at 0.9938; corner (1/2) sqrt(w^2 + 1) reaches it at w = 1.718
+        const fov1 = 2 * Math.atan(0.5) * 180 / Math.PI;
+        const w = distortionMaxAspect({ coefficients: BARREL, anamorphicSqueeze: 1 }, fov1);
+        const peak = (1 / Math.sqrt(0.45)) * (1 - 0.15 / 0.45);
+        expect(w).toBeCloseTo(Math.sqrt((2 * peak) ** 2 - 1), 2);
+        expect(distortionMaxAspect({ coefficients: BARREL, anamorphicSqueeze: 1 }, 16)).toBe(Infinity);
     });
 
     it('draws a k1 = -0.15 grid through the pass mapping (screenshot)', () => {

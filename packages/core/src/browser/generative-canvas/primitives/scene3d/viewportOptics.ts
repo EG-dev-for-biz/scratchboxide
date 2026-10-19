@@ -123,6 +123,21 @@ export function undistortCameraPoint(x: number, y: number, c: Coefficients, iter
     return VfxPlateMatchmoveService.undistortPoint(x, y, { k1: c.k1, k2: c.k2, k3: c.k3, p1: c.p1, p2: c.p2 }, iterations, 1e-12);
 }
 
+/** True when the distortion map keeps orientation at (x, y) and on the segment from the centre to it (before any fold). */
+export function distortionIsOrientationPreserving(x: number, y: number, c: Coefficients, steps = 16): boolean {
+    const h = 1e-6;
+    for (let i = 1; i <= steps; i++) {
+        const px = (x * i) / steps, py = (y * i) / steps;
+        const [ax, ay] = distortCameraPoint(px + h, py, c);
+        const [bx, by] = distortCameraPoint(px - h, py, c);
+        const [cx, cy] = distortCameraPoint(px, py + h, c);
+        const [dx, dy] = distortCameraPoint(px, py - h, c);
+        const det = ((ax - bx) * (cy - dy) - (ay - by) * (cx - dx)) / (4 * h * h);
+        if (!(det > 0)) return false;
+    }
+    return true;
+}
+
 /**
  * Coefficients in normalized camera coordinates -> the frame-height units LensDistortionEffect's shader works in
  * (coord = (uv - centre) * (aspect, 1), so the top edge is 0.5). With s = 2 tan(vfov / 2), a camera coordinate is
@@ -154,6 +169,8 @@ export function displayedNdcToPinholeNdc(
     const [xu, yu] = undistortCameraPoint(xd, yd, plan.coefficients);
     const [rx, ry] = distortCameraPoint(xu, yu, plan.coefficients);
     if (!Number.isFinite(xu) || !Number.isFinite(yu) || Math.hypot(rx - xd, ry - yd) > 1e-6 * Math.max(1, Math.hypot(xd, yd))) return null;
+    // a preimage past the fold (the map's Jacobian not positive there) shows the scene flipped: not a lens image
+    if (!distortionIsOrientationPreserving(xu, yu, plan.coefficients)) return null;
     return [(xu * squeeze / s) * 2 / aspect, (yu / s) * 2];
 }
 
@@ -178,6 +195,22 @@ export function distortionOverscan(
         }
     }
     return { overscan: m, folds };
+}
+
+/**
+ * Widest frame (width / height) the distortion can be drawn on at this vertical field of view: beyond it the
+ * polynomial folds back (no inverse) at the frame corners. Infinity when it never folds up to 4:1.
+ */
+export function distortionMaxAspect(plan: Pick<ViewportDistortionPlan, 'coefficients' | 'anamorphicSqueeze'>, verticalFovDeg: number): number {
+    const folds = (aspect: number) => distortionOverscan(plan, verticalFovDeg, aspect, 5).folds;
+    if (!folds(4)) return Infinity;
+    let lo = 0.05, hi = 4;
+    if (folds(lo)) return 0;
+    for (let i = 0; i < 30; i++) {
+        const mid = (lo + hi) / 2;
+        if (folds(mid)) hi = mid; else lo = mid;
+    }
+    return lo;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -230,8 +263,16 @@ export interface ViewportOpticsStatus {
 export interface ViewportOpticsFrameIO {
     /** Drawn after depth of field and before distortion (sharp, bent with the scene); hidden during the scene draw. */
     overlays: Array<THREE.Object3D | null | undefined>;
-    /** Draws the scene into `target` (the current render target is set to it) and returns the depth texture to use. */
-    drawScene: (target: THREE.WebGLRenderTarget) => THREE.Texture | null;
+    /** The scene drawn (its flat background colour is composited after tone mapping, as a direct draw clears to it). */
+    scene: THREE.Scene;
+    /**
+     * Draws the scene into `target` (the current render target is set to it). Returns the depth texture to use, and
+     * `displayReferred` when what it wrote is already final display values (a post pass such as aerial perspective
+     * drew it): the output then copies it instead of tone mapping it again.
+     */
+    drawScene: (target: THREE.WebGLRenderTarget) => { depthTexture: THREE.Texture | null; displayReferred?: boolean };
+    /** True when drawScene will return displayReferred (known before the draw, so the background is left in place). */
+    displayReferred?: boolean;
     /** Resolves a focus object id to the viewport object. */
     resolveObject: (id: string) => THREE.Object3D | undefined;
 }
@@ -246,11 +287,21 @@ const OUTPUT_SHADER = {
     `,
     fragmentShader: /* glsl */ `
         uniform sampler2D tDiffuse;
+        uniform vec3 uBackground;   // flat background, already in the output colour space (not tone mapped)
+        uniform bool uDisplayReferred;
         varying vec2 vUv;
         void main() {
-            gl_FragColor = texture2D(tDiffuse, vUv);
+            vec4 c = texture2D(tDiffuse, vUv);
+            if (uDisplayReferred) {
+                gl_FragColor = vec4(c.rgb, 1.0);
+                return;
+            }
+            // the scene was drawn over a transparent clear: alpha is its coverage (blur spreads it like the colour)
+            float a = clamp(c.a, 0.0, 1.0);
+            gl_FragColor = vec4(a > 1e-4 ? c.rgb / a : vec3(0.0), 1.0);
             #include <tonemapping_fragment>
             #include <colorspace_fragment>
+            gl_FragColor = vec4(mix(uBackground, gl_FragColor.rgb, a), 1.0);
         }
     `
 };
@@ -284,7 +335,7 @@ export class ViewportOpticsChain {
     private lensTarget: THREE.WebGLRenderTarget | null = null;
     private output: { scene: THREE.Scene; camera: THREE.OrthographicCamera; material: THREE.ShaderMaterial; mesh: THREE.Mesh } | null = null;
     private overscanKey = '';
-    private overscanValue = { overscan: 1, folds: false };
+    private overscanValue: { overscan: number; folds: boolean; maxAspect?: number } = { overscan: 1, folds: false };
     private focus: { id: string; object: THREE.Object3D; centre: THREE.Vector3; frame: number } | null = null;
     private frame = 0;
     private readonly size = new THREE.Vector2();
@@ -339,12 +390,13 @@ export class ViewportOpticsChain {
         return p ? ndc.set(p[0], p[1]) : ndc;
     }
 
-    private overscanFor(camera: THREE.PerspectiveCamera): { overscan: number; folds: boolean } {
+    private overscanFor(camera: THREE.PerspectiveCamera): { overscan: number; folds: boolean; maxAspect?: number } {
         const d = this.plan.distortion!;
         const key = `${camera.fov.toFixed(4)}|${camera.aspect.toFixed(4)}`;
         if (key !== this.overscanKey) {
             this.overscanKey = key;
             this.overscanValue = distortionOverscan(d, camera.fov, camera.aspect);
+            if (this.overscanValue.folds) this.overscanValue.maxAspect = distortionMaxAspect(d, camera.fov);
         }
         return this.overscanValue;
     }
@@ -399,7 +451,7 @@ export class ViewportOpticsChain {
         if (distortion) {
             const o = this.overscanFor(camera);
             if (o.folds) {
-                issues.push('lens distortion folds back inside the frame at this field of view (no inverse); not drawn');
+                issues.push(`lens distortion not drawn: at a ${camera.fov.toFixed(1)}° field of view these coefficients fold back (have no inverse) inside a ${camera.aspect.toFixed(2)}:1 frame; they can be drawn up to ${(o.maxAspect ?? 0).toFixed(2)}:1`);
                 distortion = null;
             } else {
                 overscan = canWiden ? Math.min(o.overscan, MAX_OVERSCAN) : 1;
@@ -417,14 +469,31 @@ export class ViewportOpticsChain {
 
         const overlays = io.overlays.filter((o): o is THREE.Object3D => !!o && o.visible);
         overlays.forEach(o => { o.visible = false; });
-        let depthTexture: THREE.Texture | null;
+        // A flat background (or none: the clear colour) is not tone mapped when drawn straight to the canvas, so the
+        // scene is drawn over a transparent clear and the output composites that colour after tone mapping.
+        const scene = io.scene;
+        const background = scene.background;
+        const flatBackground = !io.displayReferred && (!background || (background as THREE.Color).isColor === true);
+        const backgroundColour = flatBackground ? (background ? (background as THREE.Color).clone() : renderer.getClearColor(new THREE.Color())) : null;
+        const clearColour = renderer.getClearColor(new THREE.Color());
+        const clearAlpha = renderer.getClearAlpha();
+        let drawn_: { depthTexture: THREE.Texture | null; displayReferred?: boolean };
         const previousTarget = renderer.getRenderTarget();
         try {
+            if (flatBackground) {
+                scene.background = null;
+                renderer.setClearColor(0x000000, 0);
+            }
             renderer.setRenderTarget(this.sceneTarget);
-            depthTexture = io.drawScene(this.sceneTarget);
+            drawn_ = io.drawScene(this.sceneTarget);
         } finally {
+            if (flatBackground) {
+                scene.background = background;
+                renderer.setClearColor(clearColour, clearAlpha);
+            }
             overlays.forEach(o => { o.visible = true; });
         }
+        const depthTexture = drawn_.depthTexture;
         let current = this.sceneTarget;
 
         // depth of field
@@ -487,7 +556,7 @@ export class ViewportOpticsChain {
         // output: tone mapping + output colour space, as a direct draw to the canvas would get
         if (!this.output) {
             const material = new THREE.ShaderMaterial({
-                uniforms: { tDiffuse: { value: null } },
+                uniforms: { tDiffuse: { value: null }, uBackground: { value: new THREE.Vector3() }, uDisplayReferred: { value: false } },
                 vertexShader: OUTPUT_SHADER.vertexShader,
                 fragmentShader: OUTPUT_SHADER.fragmentShader,
                 depthTest: false,
@@ -499,7 +568,12 @@ export class ViewportOpticsChain {
             scene.add(mesh);
             this.output = { scene, camera: new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1), material, mesh };
         }
-        this.output.material.uniforms.tDiffuse.value = current.texture;
+        const ou = this.output.material.uniforms;
+        ou.tDiffuse.value = current.texture;
+        ou.uDisplayReferred.value = !!drawn_.displayReferred;
+        // a texture / cube background was drawn into the target opaque; the composite then never shows this colour
+        const bg = backgroundColour ? backgroundColour.getRGB({ r: 0, g: 0, b: 0 }, renderer.outputColorSpace) : { r: 0, g: 0, b: 0 };
+        (ou.uBackground.value as THREE.Vector3).set(bg.r, bg.g, bg.b);
         renderer.setRenderTarget(null);
         renderer.render(this.output.scene, this.output.camera);
         drawn.push('output');

@@ -253,6 +253,18 @@ describe('optics_configure_lens_distortion writes the lens into the scene, or sa
         expect(out.summaryResult).toMatch(/^NOT applied: computed only\..*mode "undistort" processes a camera plate/);
     });
 
+    it('a lens that folds only on wide frames is kept, and the result says on which frames it is not drawn', async () => {
+        const active = clayScene();
+        (active.data as any).camera.fov = 2 * Math.atan(12 / 24) * 180 / Math.PI; // a 24 mm lens on a 24 mm-high frame
+        const out = await opticsLensDistortionHandlers.optics_configure_lens_distortion({ customParams: { k1: -0.15 } }, withScene(active)) as any;
+        expect(out.resultPayload.applied).toBe(true);
+        // r (1 + k1 r^2) peaks at 0.9938 (r = 1.49); the corner of a w:1 frame is at (s / 2) sqrt(w^2 + 1) with s = 1
+        const maxAspect = Math.sqrt((2 * 0.99381) ** 2 - 1);
+        const note = out.resultPayload.notAppliedParts.find((p: string) => /folds back/.test(p));
+        expect(note).toMatch(/frames wider than (\d\.\d\d):1/);
+        expect(Number(/wider than (\d\.\d\d)/.exec(note)![1])).toBeCloseTo(maxAspect, 1);
+    });
+
     it('coefficients that fold inside the frame are refused, and nothing changes', async () => {
         const out = await opticsLensDistortionHandlers.optics_configure_lens_distortion({ customParams: { k1: -2 } }, withScene(clayScene())) as any;
         expect(out.resultPayload.applied).toBe(false);

@@ -17,7 +17,7 @@ import {
 } from '../atmosphere';
 import { sunAtLocalSolarTime } from './nature-atmosphere-operators';
 import type { SceneCameraLens, SceneLensDistortion } from '../../canvas-types';
-import { planViewportOptics, distortionOverscan } from '../../primitives/scene3d/viewportOptics';
+import { planViewportOptics, distortionMaxAspect } from '../../primitives/scene3d/viewportOptics';
 
 /** Parameters of sb_set_camera_lens: a field given replaces it, null removes it, an absent field is kept. */
 export interface SetCameraLensParams {
@@ -36,11 +36,14 @@ export interface SetCameraLensParams {
 
 const LENS_POSITIVE_FIELDS = ['focalLengthMm', 'sensorWidthMm', 'sensorHeightMm', 'apertureFStop', 'focusDistanceMeters', 'anamorphicSqueeze'] as const;
 const DISTORTION_FIELDS = ['k1', 'k2', 'k3', 'p1', 'p2', 'chromaticAberration'] as const;
-/** Aspect the fold check uses when writing a lens (the viewport re-checks at its own aspect every frame). */
-const LENS_CHECK_ASPECT = 16 / 9;
+/** Frames up to this wide (width / height) are expected; a lens that folds inside one is reported (not refused). */
+const LENS_WIDE_ASPECT = 2.39;
 
-/** Validates and merges sb_set_camera_lens parameters into a lens; throws (nothing written) on a bad value. */
-export function mergeCameraLens(previous: SceneCameraLens | undefined, params: SetCameraLensParams, verticalFovDeg: number): SceneCameraLens | undefined {
+/**
+ * Validates and merges sb_set_camera_lens parameters into a lens; throws (nothing written) on a bad value, including
+ * distortion that folds back (has no inverse) even inside a square frame. `warnings` gets what is kept but limited.
+ */
+export function mergeCameraLens(previous: SceneCameraLens | undefined, params: SetCameraLensParams, verticalFovDeg: number, warnings: string[] = []): SceneCameraLens | undefined {
     if (params.clear) return undefined;
     const lens: SceneCameraLens = { ...(previous || {}) };
     if (previous?.distortion) lens.distortion = { ...previous.distortion };
@@ -83,9 +86,12 @@ export function mergeCameraLens(previous: SceneCameraLens | undefined, params: S
     }
     const plan = planViewportOptics(lens);
     if (plan.distortion) {
-        const { folds } = distortionOverscan(plan.distortion, verticalFovDeg, LENS_CHECK_ASPECT);
-        if (folds) {
-            throw new Error(`sb_set_camera_lens: these distortion coefficients fold back inside a ${verticalFovDeg.toFixed(1)}° frame (the model has no inverse at its edge), so the viewport could not draw them. Nothing was changed.`);
+        const maxAspect = distortionMaxAspect(plan.distortion, verticalFovDeg);
+        if (maxAspect < 1) {
+            throw new Error(`sb_set_camera_lens: these distortion coefficients fold back inside a square ${verticalFovDeg.toFixed(1)}° frame (the model has no inverse at its edge), so the viewport could not draw them${maxAspect > 0 ? ` on frames wider than ${maxAspect.toFixed(2)}:1` : ''}. Nothing was changed.`);
+        }
+        if (maxAspect < LENS_WIDE_ASPECT) {
+            warnings.push(`at this ${verticalFovDeg.toFixed(1)}° field of view the distortion folds back (no inverse) on frames wider than ${maxAspect.toFixed(2)}:1; a wider viewport draws no distortion and shows a notice saying so`);
         }
     }
     return Object.keys(lens).length > 0 ? lens : undefined;
@@ -285,13 +291,14 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
             const scene = ctx.getSceneData();
             if (!scene.camera) throw new Error('sb_set_camera_lens: the scene has no camera pose to put a lens on (set one with sb_set_camera first). Nothing was changed.');
             const fov = typeof scene.camera.fov === 'number' && scene.camera.fov > 0 && scene.camera.fov < 180 ? scene.camera.fov : 45;
-            const lens = mergeCameraLens(scene.camera.lens, params || {}, fov);
+            const warnings: string[] = [];
+            const lens = mergeCameraLens(scene.camera.lens, params || {}, fov, warnings);
             const camera = { ...scene.camera };
             if (lens) camera.lens = lens;
             else delete camera.lens;
             scene.camera = camera;
             const plan = planViewportOptics(lens);
-            return { lens: lens ?? null, passes: plan.passes, issues: plan.issues };
+            return { lens: lens ?? null, passes: plan.passes, issues: [...plan.issues, ...warnings] };
         }
     },
     {

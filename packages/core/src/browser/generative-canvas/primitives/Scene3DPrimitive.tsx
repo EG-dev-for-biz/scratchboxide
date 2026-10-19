@@ -1100,6 +1100,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     // Failures of the scene's own content sources, shown in the viewport (never swapped for other geometry).
     const [generatorError, setGeneratorError] = React.useState<GeneratorRunError | null>(null);
     const [tilesError, setTilesError] = React.useState<string | null>(null);
+    /** What the scene lens configures but the viewport cannot draw (e.g. a missing focus object), shown as a notice. */
+    const [opticsIssues, setOpticsIssues] = React.useState<string[]>([]);
     const [sceneBudget, setSceneBudget] = React.useState<SceneBudgetTelemetry | null>(null);
 
     // ---------------------------------------------------------
@@ -1989,14 +1991,15 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
         // The scene draw: through the aerial-perspective pass when the atmosphere has one, else straight. Into
         // the current render target (the canvas, or the optics chain's scene target, whose depth it returns).
-        const drawScene = (target: THREE.WebGLRenderTarget | null): THREE.Texture | null => {
+        const drawScene = (target: THREE.WebGLRenderTarget | null): { depthTexture: THREE.Texture | null; displayReferred?: boolean } => {
             const aerial = aerialPerspectiveRef.current;
             if (aerial && skyDomeModuleRef.current) {
                 aerial.render(renderer, scene, camera, skyDomeModuleRef.current.sunDirection, skyDomeModuleRef.current.diurnalProfile, skyDomeModuleRef.current);
-                return aerial.renderTarget?.depthTexture ?? null;
+                // its full-screen pass writes final values (it applies no tone mapping of its own on the canvas either)
+                return { depthTexture: aerial.renderTarget?.depthTexture ?? null, displayReferred: true };
             }
             renderer.render(scene, camera);
-            return target?.depthTexture ?? null;
+            return { depthTexture: target?.depthTexture ?? null };
         };
         const opticsChain = new ViewportOpticsChain();
         opticsChain.configure(sceneDataRef.current.camera?.lens);
@@ -2013,15 +2016,24 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             });
             return found;
         };
+        let reportedOpticsIssues = '';
         const renderFrame = () => {
             if (opticsChain.active) {
                 opticsChain.render(renderer, camera, {
                     overlays: [transformGizmoGroupRef.current, selectionBoxRef.current, brushCursorMeshRef.current],
+                    scene,
+                    displayReferred: !!(aerialPerspectiveRef.current && skyDomeModuleRef.current),
                     drawScene,
                     resolveObject: resolveViewportObject
                 });
             } else {
                 drawScene(null);
+            }
+            const issues = opticsChain.active ? opticsChain.status.issues : opticsChain.getPlan().issues;
+            const key = issues.join('\n');
+            if (key !== reportedOpticsIssues) {
+                reportedOpticsIssues = key;
+                setOpticsIssues([...issues]);
             }
         };
         renderFrameRef.current = renderFrame;
@@ -3472,8 +3484,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         contentKind: sceneContentKind,
         hasAuxiliaryContent: !!sceneData.vectorRoadmap?.groundBlueprint || wantsWasmMesh || drawsBiomeTerrain,
         objectLoadErrors,
-        undrawableObjects
-    }), [webglError, currentGeneratorError, tilesError, sceneContentKind, sceneData.vectorRoadmap?.groundBlueprint, wantsWasmMesh, drawsBiomeTerrain, objectLoadErrors, undrawableObjects]);
+        undrawableObjects,
+        opticsIssues
+    }), [webglError, currentGeneratorError, tilesError, sceneContentKind, sceneData.vectorRoadmap?.groundBlueprint, wantsWasmMesh, drawsBiomeTerrain, objectLoadErrors, undrawableObjects, opticsIssues]);
 
     const handleExportGlb = React.useCallback(async () => {
         if (!threeSceneRef.current) return;
