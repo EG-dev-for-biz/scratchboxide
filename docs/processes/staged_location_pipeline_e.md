@@ -1,7 +1,7 @@
 # Staged Location Builds: Pipeline E (clean vector massing, ortho textures, verified inference, opt-in enhanced mode)
 
 > **Recorded:** 2026-10-19
-> **Status:** Verified behind a flag (`SCRATCHBOX_STAGED_PIPELINE=e`, off by default). Within pipeline E enhanced appearance is the default since round 4 (realism-first directive); the real-data view is `enhance: false` or `SCRATCHBOX_STAGED_ENHANCE=0`. Not on main: for the user's review.
+> **Status:** Verified behind a flag (`SCRATCHBOX_STAGED_PIPELINE=e`, off by default). Within pipeline E enhanced appearance is the default since round 4 (realism-first directive); the real-data view is `enhance: false` or `SCRATCHBOX_STAGED_ENHANCE=0`. Since round 5 enhanced mode uses Nano Banana Lite behind an identity gate (section 7). Not on main: for the user's review.
 > **Tags:** `operate-scratchbox` `staged-build` `pipeline-e` `google-vector-data` `solar-api` `facade-grammar` `photo-match` `provenance`
 > **Target Domain:** Real-world 3D locations (`google_3d_tiles_get_clay`, `isolate: true`)
 
@@ -24,7 +24,7 @@ The current pipeline (D) remeshes the scan, tries a scan fit and textures the re
    - (f) colour (`colour-transfer.ts`): Street View photos (the no-fit rung's views, ownership and occluder masks), per-wall per-channel gain, kept when it lowers CIEDE2000 by 10 % on both held-out halves;
    - (g) occluders (`occluders.ts`): tree crowns of the strip projected onto walls, uncovered texels and the vision model's open-vocabulary boxes; filled by averaged bays, then the same wall a bay pitch along or another facade at the same height (holes up to 30 m²), then Nano Banana Lite through `texture-inpaint.ts`'s lock (labelled `generated`), then the nearest texel.
 6. **Trees**: the existing strip + SB-Veggie stages, unchanged; facade texels behind crowns get the occluder fill.
-7. **Enhanced mode** (opt-in, `pipeline-e/enhance.ts`): the 8 largest walls redrawn once by `gemini-3.1-flash-image` with `buildTexturePlatePrompt` (new; the AI Beautify template is unchanged; its keep-in-place sentences are the de-light study's `plain-detailed` ones), the adjacent finished wall as reference. Gate: corrective shift/scale, then rejected when the symmetric edge chamfer exceeds 2.2 px or more than 15 % of the tile's edges have no edge within 0.3 m. Accepted texels are `generated`, "AI-enhanced from tile (model, texture-plate/v1)". The facade grammar is read again from the plates and used only where it passes its gates and the tile check. The build summary says enhanced mode was used and how many walls were enhanced or rejected.
+7. **Enhanced mode** (`pipeline-e/enhance.ts`; the default within pipeline E since round 4): the 8 largest walls redrawn once by Nano Banana Lite (`gemini-3.1-flash-lite-image`, since round 5; `gemini-3.1-flash-image` before) with `buildTexturePlatePrompt` (new; the AI Beautify template is unchanged; its keep-in-place sentences are the de-light study's `plain-detailed` ones), the adjacent finished wall as reference. Gate (round 5, section 7): corrective shift/scale, then the identity gate (framing, storey and bay counts, colour family, a gross-failure bound); the symmetric edge chamfer and the share of the tile's edges lost are reported per wall, not gated (round 3-4 rejected above 2.2 px or 15 %). Accepted texels are `generated`, "AI-enhanced from tile (model, texture-plate/v1)". The facade grammar is read again from the plates and used only where it passes its gates and the tile check. The build summary says enhanced mode was used and how many walls were enhanced or rejected.
 
 ## 2. Bake-off (round 3): E-minus-inference, E, E-enhanced
 
@@ -90,5 +90,47 @@ Eh0 and Eh1 were scored identically on every view: the reverted regions (Puck's 
 
 **Build time** (warm tile and strip caches, model answers replayed where recorded, plates cached on rebuilds): Puck E 91 s, Eh0 184 s, Eh1 279-316 s (survey 86 s beside the readings, redraws 185 s); Jefferson 84 / 110 / 141 s; Haughwout 20 / 39 / 175 s; St. Mark's 53 / 18 / 56 s.
 
-## 7. Reproduction
-Headless: `SCRATCHBOX_STAGED_PIPELINE=e [SCRATCHBOX_STAGED_PIPELINE_E_INFERENCE=0 | SCRATCHBOX_STAGED_ENHANCE=1] node -r ts-node/register -r ./scripts/dev/staged-replay.ts <build.ts> "<query>"` (the tool entry with `isolate: true`); run notes `pipeline_e.json` and `pipeline_e_inference.json` in `.scratchbox/cache/staged_location/runs/<runId>/`. Evaluation: `scripts/dev/photo-match-eval.ts <manifest>` with `context.cut` listing the isolate and the strip's `removed_trees.glb`. Tests: `packages/core/test/staged-pipeline-e.test.ts` (12 synthetic tests; screenshots in `test-results/screenshots/version_e/`).
+## 7. Round 5 (2026-10-19): Nano Banana Lite, the identity gate, openings that follow the plate
+
+The user chose the round-4 "After Lite Rejected" plates (Puck wall 17 at chamfer 4.4 px / 35 % of the tile's edges lost; Jefferson wall 157, red brick with white stone arches, at 3.5 px / 17 %) as the most realistic. Commits f12ff53a, 6a0954ec on `version-e`.
+
+**What changed**
+- **Model:** `ENHANCE_MODEL_DEFAULT` is `gemini-3.1-flash-lite-image` (`SCRATCHBOX_STAGED_ENHANCE_MODELS` still overrides).
+- **Identity gate** (`pipeline-e/plate-identity.ts`) in place of the 2.2 px / 15 % edge gate. A plate is accepted when (a) the answer's aspect is within 3 % of the one asked for; (b) the vision model, shown the tile and the plate together with the same definitions (`countPrompt`), reads storey and bay counts that agree within 15 % of the tile's (at least one; a count of 0 on the tile, or a reply that cannot be read, is "not counted" and says so); (c) the median CIELAB colour stays in the tile's family (lightness weighted 0.3, at most 22; the CIEDE2000 distance is reported); (d) a gross-failure bound holds: chamfer at most 6 px and lost share at most 60 %. Then the region audit (`plate-audit.ts`) as before, now tolerant of 0.5 m of drift (a structure match found off its place counts 0.25 less in NCC). Chamfer and lost are reported per wall in the build notes, `inference.json` and the layer's texel provenance (`chamferPx`, `lostShare` on the wall's own `generated` entry).
+- **Choosing the bounds.** Counted apart, the soft tile and the crisp plate were read with different definitions (Puck wall 17: 3 bays on the tile, the ground floor's arches; 9 on the plate), so the counts are read in one look. On the Eh2 plates of Puck: every same-wall plate within tolerance, 4 of 56 cross-wall pairs (another wall's plate resized to this one) within it; on Jefferson's small walls (1-3 storeys and bays) 27 of 56 cross pairs pass the counts, so there the colour family and the region audit carry the identity. Chamfer does not separate a wrong wall (cross-wall pairs 4.2-5.2 px against same-wall plates 0.8-5.1 px): it only catches garbage (a flat or blank answer scores 8 px). Colour family: same-wall plates 0.5-19.5 (Jefferson wall 85, its washed pink tile redrawn as darker brick); Puck wall 35, a near-black tile redrawn as a different building with a "PUCK" sign, 25.7.
+- **Openings follow the plate** (`pipeline-e/plate-lattice.ts`, inference step `enhance-lattice`). On a wall whose openings were carved from the tile's facade grammar, the lattice is read again from the accepted plate: each tier's top and bottom and each opening's sides move (at most 0.6 m) to where the plate's edges are, only where the mean edge distance falls by 15 % and at least 1 px; counts and order are kept and the massing is untouched; the solid is rebuilt (`native3`). Diagnostic `wall_<n>_lattice_refit.png` (red the tile's openings, green the plate's). Walls without a tile grammar take the plate's own grammar (round 4's `enhance-grammar`), which already follows the plate.
+- **Two bugs fixed on the way** (they affected every arm): a wall the rebuilt solid split in pieces (`<key>:0`, `<key>:1`, where a raised roof block's corner projects onto it) took the plain tile ortho instead of its inferred or enhanced texture (`parentFace`), and the native massing dropped that wall's openings silently (Haughwout wall 3 lost all 43; now the piece under each opening's centre takes it, in its own frame, and an opening with no wall is reported).
+
+**Street View guidance under the new gate** (walls the user named; plate per wall in `test-results/screenshots/version_e/enhance3/<place>_wall_sheet.png`):
+
+| Wall | Round 4 (Eh1) | Round 5 (Eh2): used |
+|---|---|---|
+| Puck 17 | full model, plain (photo redraw failed 2.2 px) | **photo-guided** (chamfer 3.52, lost 0.20; 117 cells supported by the photo, 24 contradicting it) |
+| Puck 19 (fire escape) | full model, plain | **photo-guided** (2.70 / 0.14; 47 supported, 41 contradicted, 297 m² reverted) |
+| Puck 32 | full model, plain | plain Lite: no registered photo shows 10 % of its street band (0.96 / 0.01) |
+| Haughwout 2 | rejected | **photo-guided** (3.07 / 0.12; 100 supported, 12 contradicted) |
+| Haughwout 3 | rejected | **photo-guided** (4.33 / 0.33; 65 supported, 1 contradicted) |
+| Jefferson 236 | full model, plain | **photo-guided** (1.51 / 0.06; 19 supported, none contradicted) |
+| Jefferson 157 | full model, plain | kept the tile: no photo; the Lite plate (a different Gothic front) failed the region audit (73 % erased) |
+| Jefferson 85 | full model, plain | kept the tile: no photo; the Lite plate failed the region audit (72 % replaced) |
+
+Puck walls 24 and 25 also took their photo-guided plates (wall 24 carries the real flag and street-level arcade).
+
+**Walls enhanced, before → after:** Puck 3 → 6 of 8 (35: another building on a near-black tile, colour and gross bound; 36: bays 3 / 10), Haughwout 0 → 2 of 2, Jefferson 5 → 4 of 8 (109, 157, 85, 153 failed the region audit: the Lite plates there invent a different front over a tile the scan barely sees), St. Mark's 0 → 2 of 2 (its tile counts read 0: not counted). Haughwout's walls 2 and 3 also had their openings moved onto the plate (79 of 140 and 46 of 96 lattice lines, mean 0.25-0.27 m; openings' borders 2.68 → 1.75 px and 3.31 → 1.99 px from the plate's nearest edge); Puck wall 24 took 48 openings from the plate's own grammar.
+
+**Bake-off (round 5)**: same 24 held-out views, in context, `gemini-4-argon` blind ×3. Arms: E (real data, this code, so with the two fixes), Eh1 (round 4's enhanced GLBs, as built then), Eh2 (this). Full tables: `test-results/screenshots/version_e/enhance3/bakeoff_round5.md`; grids in `test-results/screenshots/version_e/bakeoff5/`.
+
+| Arm (all 24 views) | shape | materials | detail | errors | overall | realism | identity | view wins |
+|---|---|---|---|---|---|---|---|---|
+| E | 4.47 | 4.07 | 3.37 | 3.31 | 3.72 | 3.21 | 4.58 | 5.0 |
+| Eh1 | 4.50 | 4.39 | 3.74 | 3.35 | 4.01 | 3.44 | 4.86 | 6.0 |
+| Eh2 | **4.76** | **4.74** | **4.26** | **3.65** | **4.39** | **3.82** | **5.17** | **13.0** |
+
+Per place (overall / realism / identity): Puck E 3.27 / 3.00 / 4.40, Eh1 4.20 / 4.00 / 5.33, Eh2 **4.93 / 4.13 / 5.87**; Haughwout E 3.40 / 3.00 / 3.93, Eh1 3.87 / 3.13 / 4.33, Eh2 **4.93 / 4.80 / 5.27**; St. Mark's, the arch and Jefferson equal across arms (St. Mark's two small enhanced walls and Jefferson's four are not what the held-out views show; the arch runs the current pipeline in every arm). Judge spread: mean within-view sd 0.09, 82 % of cells identical across the three runs. Eh2 raised realism (+0.38 over Eh1) without lowering identity (+0.31), the directive's acceptance rule.
+
+**Build time** (warm tile, strip and tile_refine caches, vision replies replayed where recorded): first Eh2 build with live Lite redraws and counts Puck 329 s, Jefferson 213 s, Haughwout 188 s, St. Mark's 91 s; rebuilt with the plates cached Puck 265 s (survey 90 s beside the readings, redraws and counts 162 s), Jefferson 149 s, Haughwout 180 s (survey 122 s), St. Mark's 69 s; E (real data) 91 / 74 / 21 / 15 s. The grammar stage limit stays 420 s.
+
+**Not solved:** Lite invents over walls the scan barely sees (Jefferson 104: lettering read nowhere; its counts on the tile were 0, so not counted); a photo-guided plate carries the photo's sun and shade (Puck 24); a reverted region shows the tile's smear next to crisp plate (Puck 24, the region audit's feathered revert). Plates are drawn once per wall input and cached; a change upstream (e.g. which neighbour is the reference) draws a new plate.
+
+## 8. Reproduction
+Headless: `SCRATCHBOX_STAGED_PIPELINE=e [SCRATCHBOX_STAGED_PIPELINE_E_INFERENCE=0 | SCRATCHBOX_STAGED_ENHANCE=1] node -r ts-node/register -r ./scripts/dev/staged-replay.ts <build.ts> "<query>"` (the tool entry with `isolate: true`); run notes `pipeline_e.json` and `pipeline_e_inference.json` in `.scratchbox/cache/staged_location/runs/<runId>/`. Evaluation: `scripts/dev/photo-match-eval.ts <manifest>` with `context.cut` listing the isolate and the strip's `removed_trees.glb`. Tests: `packages/core/test/staged-pipeline-e.test.ts` (12 synthetic tests), `staged-pipeline-e-guards.test.ts` (14), `staged-pipeline-e-identity.test.ts` (8: the identity gate, the drift-tolerant audit, the lattice refit, split walls); screenshots in `test-results/screenshots/version_e/`.
