@@ -134,3 +134,32 @@ Per place (overall / realism / identity): Puck E 3.27 / 3.00 / 4.40, Eh1 4.20 / 
 
 ## 8. Reproduction
 Headless: `SCRATCHBOX_STAGED_PIPELINE=e [SCRATCHBOX_STAGED_PIPELINE_E_INFERENCE=0 | SCRATCHBOX_STAGED_ENHANCE=1] node -r ts-node/register -r ./scripts/dev/staged-replay.ts <build.ts> "<query>"` (the tool entry with `isolate: true`); run notes `pipeline_e.json` and `pipeline_e_inference.json` in `.scratchbox/cache/staged_location/runs/<runId>/`. Evaluation: `scripts/dev/photo-match-eval.ts <manifest>` with `context.cut` listing the isolate and the strip's `removed_trees.glb`. Tests: `packages/core/test/staged-pipeline-e.test.ts` (12 synthetic tests), `staged-pipeline-e-guards.test.ts` (14), `staged-pipeline-e-identity.test.ts` (8: the identity gate, the drift-tolerant audit, the lattice refit, split walls); screenshots in `test-results/screenshots/version_e/`.
+
+## 9. Round 6 (2026-10-19): merge readiness, the clay arm, combined bake-off
+
+**Merges.** `origin/version-e-relief` (measured relief, generated profiles) and `origin/main` twice (tree crown shading, lobed crowns and the near-mid level, UV unwrap/rewrap, tool honesty, `streetview_survey` temporary check on by default; then tree LOD by screen space, crown breakup, the tree texture library, the camera settings panel, viewport lens distortion and depth of field). Conflicts only in the native massing (round 5's split-wall opening placement kept; it reports an opening with no wall as relief did), the inference (lattice refit kept, the plates' openings also handed to the relief stage) and the stage limits (grammar 420 s, relief 480 s).
+
+**Fixes on the way.** The real-data view (enhanced mode off) no longer adds generated relief profiles. The inference note no longer calls enhanced mode "opt-in" (it is the default within E). The relief test's profile plot hung its worker on a row with a sentinel standard error (after every assertion passed); it now skips such rows. `readTileTriangles` takes an untextured triangle's colour as base colour times COLOR_0.
+
+**Clay arm** (`photo-match-eval.ts` `renderTriangles({ clay })`, `judgeViewClay`; `photo_match_evaluate` `clay`, default true; dev driver manifest `"clay": true`). Every arm is rendered again from the held-out pose in one clay (its street in a lighter clay, a key light raised behind the camera so a band's soffit reads darker than the wall) and judged blind for `shape` only. Textured judging is unchanged.
+
+**Bake-off (round 6).** Round 5's held-out views, minus Puck's `9bNcQu` (the Eh build's Street View guidance fetched it this round): 23 views, in context, `gemini-4-argon` blind x3, textured and clay. Arms: A raw tile (cut to the target), D main's default pipeline, E pipeline E real-data view (`SCRATCHBOX_STAGED_ENHANCE=0`), Eh pipeline E default (enhanced Lite + relief). The regrown SB-Veggie trees are left out of every built arm and the scanned trees stay in the street for all arms: the trees GLB holds every LOD level and instanced leaves that the viewer resolves at run time, and drawn whole it put grey hulls in front of the facades (`bakeoff6_run2_trees_lods/`; the in-app tool already leaves the trees stage out). Grids: `test-results/screenshots/version_e/bakeoff6/` (`*_clay.png` for the clay arm).
+
+| Arm (23 views) | shape | materials | detail | errors | overall | realism | identity | clay shape |
+|---|---|---|---|---|---|---|---|---|
+| A raw tile | 4.62 | 4.39 | 3.62 | 3.86 | 4.12 | 3.38 | 4.80 | 3.36 |
+| D main default | 4.38 | 4.26 | 3.86 | 3.51 | 3.90 | 3.46 | 4.91 | 3.87 |
+| E real data | 4.46 | 4.17 | 3.77 | 3.58 | 4.06 | 3.43 | 4.84 | 4.80 |
+| Eh enhanced + relief | **4.81** | **4.75** | **4.59** | **3.88** | **4.61** | **3.97** | **5.36** | **4.94** |
+
+Per place (overall / realism / identity / clay shape): Puck A 4.25/3.50/5.25/2.00, D 3.00/3.00/4.25/3.17, E 4.00/3.17/5.25/1.33, Eh **5.33/4.50/6.42**/1.83; Haughwout A 3.33/3.07/3.93/3.53, D 3.00/3.00/3.67/3.40, E 3.93/3.60/4.27/5.60, Eh **5.40/5.07/5.73/5.87**; St. Mark's A **4.17/3.58/5.00**/3.58, D 3.50/3.17/4.67/3.25, E and Eh 2.75/2.50/3.67/**5.75**; the arch (E falls back to D in both E arms) A 3.83/3.00/4.28/4.22, D=E=Eh **5.17/4.22/5.94/4.95**; Jefferson A **5.33/4.00/6.00**/3.00, D 4.42/3.67/5.83/4.17, E and Eh 3.92/3.25/4.67/**6.08**. Judge spread: within-view sd 0.22 textured, 0.35 clay.
+
+- Eh is the best arm overall on every textured criterion and on clay shape; against D it raises realism +0.51 and identity +0.45.
+- The clay arm separates what texture hides: E's geometry beats D's in clay at Haughwout, St. Mark's and Jefferson (+2.2, +2.5, +1.9), while Puck's E massing, with no window grammar accepted, scores lowest in clay (1.33).
+- Not won: at St. Mark's and Jefferson the raw tile still scores best textured (E's texture on the clean massing reads worse than the scan's own); St. Mark's enhanced redraws do not show from the held-out poses (Eh = E there).
+
+**Build time** (warm tile caches, replayed vision answers where recorded; live calls for what changed): Puck D 225 / E 146 / Eh 312 s, Haughwout 147 / 60 / 232 s, St. Mark's 142 / 71 / 91 s, the arch 170 / 174 / 174 s, Jefferson 175 / 130 / 144 s. Largest stages: grammar 244 s (Puck Eh; limit 420 s), relief 76 s (Haughwout Eh; limit 480 s). First visual 0.6-1.5 s everywhere.
+
+**Fallbacks.** Only the arch: "the structure's footprint did not come from Google vector data (the vector footprint (111 m²) and the scan disagree: only 0% of it stands 3 m or more above the terrain in the scan)": the arch builds through the current pipeline and says so in the `remesh` degradation; relief is skipped there with its reason.
+
+**In the app.** A place no bake-off used, Grace Church (802 Broadway), live in the chat with `SCRATCHBOX_STAGED_PIPELINE=e`: [staged_location_pipeline_e_grace_church_live.md](./staged_location_pipeline_e_grace_church_live.md).
