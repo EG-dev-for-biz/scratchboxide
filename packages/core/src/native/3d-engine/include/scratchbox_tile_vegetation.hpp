@@ -58,6 +58,7 @@
 #include "scratchbox_nature.hpp"
 #include "scratchbox_staged_glb.hpp"
 #include "scratchbox_tree_lod.hpp"
+#include "scratchbox_tree_textures.hpp"
 #include "scratchbox_texture.hpp"
 #include <algorithm>
 #include <array>
@@ -827,6 +828,11 @@ struct PlantParams {
     double lodFadeM{6.0};
     double lodNearMidFadeShare{0.2}; // the near-mid to mid handover dissolves over this share of its distance (at least lodFadeM)
     double lodFarFadeShare{0.25};    // the mid to far handover dissolves over this share of its distance (at least lodFadeM)
+    // The tree texture library (scratchbox_tree_textures.hpp; null: none): each tree's leaf set and bark are chosen from it
+    // by appearance, its wood carries UVs in the chosen bark's tiles, and the choice and tints are in its extras.
+    std::shared_ptr<const tree_textures::Library> textures;
+    std::string textureIndex;        // where the library was read from, as given (written to the root extras)
+    tree_textures::ChoiceParams textureChoice;
 };
 
 /** The triangles a crown's size asks for (see PlantParams::trianglesPerCrownM2), never fewer than minTrianglesPerTree. */
@@ -1010,6 +1016,7 @@ struct StripParams {
     double cell{0.5};                // surface model cell (m)
     double terrainCell{4.0};         // terrain model cell (m)
     double terrainRadius{40.0};      // terrain opening radius (m)
+    double crownColourTrim{0.1};     // a crown's colour leaves out this share of its darkest and of its brightest cells
     double exgMin{0.06};             // normalised excess green a vegetation triangle must exceed
     double exgrMin{-0.2};            // ExG - ExR a vegetation triangle must exceed (a weak guard against red-dominated hues)
     double darkGuard{0.06};          // mean texture value (0..1) below which chroma is not judged
@@ -1121,6 +1128,12 @@ struct CrownRecord {
     std::array<double, 16> sectorRadii{};
     std::vector<Vec3> samples;
     int cells{0};
+    // the crown's colour in the tile's photo (measureCrownColour): linear sRGB mean and spread of its trimmed cells, and
+    // the season cues (share of green cells, hue and chroma of the mean)
+    bool colourKnown{false};
+    std::array<double, 3> colourMean{}, colourSpread{};
+    size_t colourSamples{0}, colourCells{0};
+    double greenShare{std::numeric_limits<double>::quiet_NaN()}, hueDeg{0}, chroma{0};
     bool hasGeodetic{false};
     TileFrame::Geodetic apexGeo{}, stemGeo{};
     // the regrowth check (trees and not_regrowable crowns): how much of the measured surface the regrown leaves reach
@@ -1321,6 +1334,7 @@ private:
     std::vector<Vec3> centroid, normal;
     std::vector<float> area;
     std::vector<float> exg, exgr;      // NaN where chroma is not judged
+    std::vector<std::array<float, 3>> triRgb;  // the photo's mean colour over the triangle (linear sRGB; NaN where untextured)
     std::vector<uint8_t> chromaVeg;
     std::vector<float> dispersion;
     std::vector<uint8_t> surface;      // face of a large planar segment
@@ -1501,6 +1515,7 @@ private:
     void measureChroma() {
         exg.assign(T, std::numeric_limits<float>::quiet_NaN());
         exgr.assign(T, std::numeric_limits<float>::quiet_NaN());
+        triRgb.assign(T, {std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f});
         chromaVeg.assign(T, 0);
         veg.assign(T, 0);
         std::atomic<size_t> textured{0}, green{0};
@@ -1524,6 +1539,11 @@ private:
                     double rgb[3];
                     detail::sampleTexture(mat, img, uv, rgb);
                     for (int k = 0; k < 3; ++k) s[k] += rgb[k] / 7.0;
+                }
+                {
+                    // the triangle's colour, decoded to linear light (the photo is sRGB-encoded)
+                    auto lin = [](double c) { return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4); };
+                    triRgb[t] = {static_cast<float>(lin(s[0])), static_cast<float>(lin(s[1])), static_cast<float>(lin(s[2]))};
                 }
                 const double sum = s[0] + s[1] + s[2];
                 if (sum / 3.0 < P.darkGuard) continue;
@@ -1728,6 +1748,51 @@ private:
     std::vector<int> edgeDist;       // per cell: distance (cells, 4-connected) from the extraction's outer edge
 
     double windowRadius(double h) const { return std::clamp(P.windowBase + P.windowSlope * h, P.windowMin, P.windowMax); }
+
+    /**
+     * The crown's colour in the tile's photo: the colours (linear sRGB) of the top triangles over its footprint cells, the
+     * darkest and brightest crownColourTrim of them by luminance left out (deep shadow, glints), their mean and standard
+     * deviation; and the season cues they imply: the share of its cells whose chroma passes the vegetation test (green
+     * leaf cover), the mean's hue and chroma.
+     */
+    void measureCrownColour(const CrownWork& w, CrownRecord& rec) const {
+        const auto& g = surf.top;
+        std::vector<std::array<float, 3>> cols;
+        size_t green = 0, judged = 0;
+        for (size_t c : w.cells) {
+            const int t = surf.topTriangle[c];
+            if (t < 0 || std::isnan(triRgb[static_cast<size_t>(t)][0])) continue;
+            cols.push_back(triRgb[static_cast<size_t>(t)]);
+            if (!std::isnan(exg[static_cast<size_t>(t)])) { ++judged; green += chromaVeg[static_cast<size_t>(t)] ? 1 : 0; }
+        }
+        (void)g;
+        if (cols.size() < 3) return;
+        auto Y = [](const std::array<float, 3>& c) { return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+        std::sort(cols.begin(), cols.end(), [&](const auto& a, const auto& b) { return Y(a) < Y(b); });
+        const size_t cut = static_cast<size_t>(std::floor(P.crownColourTrim * static_cast<double>(cols.size())));
+        const size_t lo = std::min(cut, cols.size() / 2 - 1), hi = cols.size() - lo;
+        double m[3] = {0, 0, 0}, v[3] = {0, 0, 0};
+        for (size_t i = lo; i < hi; ++i) for (int k = 0; k < 3; ++k) m[k] += cols[i][static_cast<size_t>(k)];
+        const double n = static_cast<double>(hi - lo);
+        for (int k = 0; k < 3; ++k) m[k] /= n;
+        for (size_t i = lo; i < hi; ++i) for (int k = 0; k < 3; ++k) v[k] += (cols[i][static_cast<size_t>(k)] - m[k]) * (cols[i][static_cast<size_t>(k)] - m[k]);
+        rec.colourKnown = true;
+        for (int k = 0; k < 3; ++k) { rec.colourMean[static_cast<size_t>(k)] = m[k]; rec.colourSpread[static_cast<size_t>(k)] = std::sqrt(v[k] / n); }
+        rec.colourSamples = hi - lo;
+        rec.colourCells = cols.size();
+        rec.greenShare = judged ? static_cast<double>(green) / static_cast<double>(judged) : std::numeric_limits<double>::quiet_NaN();
+        // hue (degrees, 0 red, 120 green) and chroma of the mean, in linear light
+        const double mx = std::max({m[0], m[1], m[2]}), mn = std::min({m[0], m[1], m[2]}), d = mx - mn;
+        double h = 0;
+        if (d > 1e-9) {
+            if (mx == m[0]) h = 60.0 * std::fmod((m[1] - m[2]) / d, 6.0);
+            else if (mx == m[1]) h = 60.0 * ((m[2] - m[0]) / d + 2.0);
+            else h = 60.0 * ((m[0] - m[1]) / d + 4.0);
+            if (h < 0) h += 360.0;
+        }
+        rec.hueDeg = h;
+        rec.chroma = mx > 1e-9 ? d / mx : 0.0;
+    }
 
     void segmentCrowns() {
         const auto& g = surf.top;
@@ -2206,6 +2271,7 @@ private:
             rec.supportSource = "surrounding_surface";
         }
         // sector radii (16 sectors around the stem) and voxel samples of the crown surface
+        measureCrownColour(w, rec);
         rec.sectorRadii.fill(0.0);
         std::unordered_map<uint64_t, std::pair<Vec3, int>> vox;
         for (size_t c : w.cells) {
@@ -3721,6 +3787,13 @@ inline std::string crownsJson(const StripResult& r, const StripParams& P) {
             // kept as scanned, its side over rebuilt ground closed down to it: not in the scan
             s << ",\"keptSkirt\":{\"areaM2\":" << json::num(c.keptSkirtAreaM2) << ",\"topY\":" << json::num(c.keptSkirtTopY) << ",\"bottomY\":" << json::num(c.keptSkirtBottomY) << "}";
         }
+        if (c.colourKnown) {
+            // measured in the tile's photo (linear sRGB): see measureCrownColour
+            s << ",\"colour\":{\"meanLinearRgb\":[" << json::num(c.colourMean[0]) << "," << json::num(c.colourMean[1]) << "," << json::num(c.colourMean[2])
+              << "],\"spreadLinearRgb\":[" << json::num(c.colourSpread[0]) << "," << json::num(c.colourSpread[1]) << "," << json::num(c.colourSpread[2])
+              << "],\"samples\":" << c.colourSamples << ",\"cells\":" << c.colourCells << ",\"greenShare\":" << json::num(c.greenShare)
+              << ",\"hueDeg\":" << json::num(c.hueDeg) << ",\"chroma\":" << json::num(c.chroma) << "}";
+        }
         s << ",\"samples\":[";
         for (size_t k = 0; k < c.samples.size(); ++k) s << (k ? "," : "") << v3(c.samples[k]);
         s << "]}";
@@ -3833,6 +3906,10 @@ struct PlantedTree {
     double groundGapM{std::numeric_limits<double>::quiet_NaN()};  // trunk base minus the nearest ground-mesh surface at its stem (NaN: none there)
     bool offGround{false};           // ... further than groundTolerance from it, or no surface there
     const io::GlbJsonValue* crown{nullptr};
+    // the textures chosen for it from PlantParams::textures (hasTextures false without a library)
+    bool hasTextures{false};
+    tree_textures::TreeAppearance look;
+    tree_textures::Choice textures;
 };
 
 struct PlantResult {
@@ -4019,6 +4096,27 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
     lodParams.morphology = P.growth.morphology;
     if (P.lod) R.library = std::make_shared<tree_lod::ClusterLibrary>(tree_lod::buildClusterLibrary(lodParams));
     const double psi = std::clamp(P.psiSeason, 0.0, 1.0);
+    // a tree whose crown has no measured colour is chosen by its neighbours' (the median of the measured crowns of this
+    // planting, per channel), else by the library's leaf-on prior
+    tree_textures::MeasuredColour fallbackColour;
+    if (P.textures) {
+        std::array<std::vector<double>, 3> ch;
+        for (const auto* c : chosen) {
+            const auto& col = (*c)["colour"]["meanLinearRgb"];
+            if (col.type == io::GlbJsonValue::Array && col.arr.size() == 3 && col[0].type == io::GlbJsonValue::Number) for (size_t k = 0; k < 3; ++k) ch[k].push_back(std::max(0.0, col[k].num));
+        }
+        fallbackColour.known = true;
+        if (!ch[0].empty()) {
+            fallbackColour.source = "neighbours";
+            for (size_t k = 0; k < 3; ++k) {
+                std::nth_element(ch[k].begin(), ch[k].begin() + static_cast<std::ptrdiff_t>(ch[k].size() / 2), ch[k].end());
+                fallbackColour.meanLinear[k] = ch[k][ch[k].size() / 2];
+            }
+        } else {
+            fallbackColour.source = "prior";
+            fallbackColour.meanLinear = tree_textures::leafOnPrior(*P.textures);
+        }
+    }
     detail::forEachIndex(n, P.threads, [&](size_t i) {
         PlantedTree& tr = R.trees[i];
         try {
@@ -4048,6 +4146,26 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
                 return;
             }
             if (psi >= 1.0) tr.shortOfCrown = m.shortfall(g, shapes[i], P.growth.minSurfaceReached, tr.budget);
+            if (P.textures) {
+                // its textures, by appearance: the crown's colour in the tile's photo, its size
+                const auto& cj = *chosen[i];
+                tr.look.seed = tree_lod::mix64(static_cast<uint64_t>(g.seed) ^ 0x7E87u);
+                tr.look.heightM = g.heightAboveSupport;
+                tr.look.trunkRadiusM = g.trunkRadius;
+                double rs = 0;
+                for (double r : shapes[i].sectorRadii) rs += r / 16.0;
+                tr.look.crownRadiusM = rs;
+                const auto& col = cj["colour"]["meanLinearRgb"];
+                if (col.type == io::GlbJsonValue::Array && col.arr.size() == 3 && col[0].type == io::GlbJsonValue::Number) {
+                    tr.look.colour.known = true;
+                    tr.look.colour.source = "measured";
+                    for (size_t k = 0; k < 3; ++k) tr.look.colour.meanLinear[k] = std::max(0.0, col[k].num);
+                } else {
+                    tr.look.colour = fallbackColour;
+                }
+                tr.textures = tree_textures::choose(*P.textures, tr.look, P.textureChoice);
+                tr.hasTextures = true;
+            }
             if (P.lod) {
                 tree_lod::TreeLodInput in;
                 in.cfg = &g.cfg;
@@ -4062,6 +4180,11 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
                 in.heightAboveSupport = g.heightAboveSupport;
                 in.seed = g.seed;
                 in.woodBudget = tr.budget;
+                if (tr.hasTextures) {
+                    const auto& bark = P.textures->bark[tr.textures.bark];
+                    in.barkTileAroundM = static_cast<float>(bark.tileAroundM);
+                    in.barkTileAlongM = static_cast<float>(bark.tileAlongM);
+                }
                 const auto tLod = std::chrono::steady_clock::now();
                 tree_lod::buildTreeLod(tr.lod, in, *R.library);
                 tr.lodMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tLod).count();
@@ -4229,6 +4352,29 @@ inline std::string treeExtrasMembers(const PlantedTree& tr, const PlantParams& P
     return ex.str();
 }
 
+/** `,"colour":{...}` of a tree's extras: its crown's colour as the tile's photo shows it (crowns.json), or nothing. */
+inline std::string treeColourMembers(const io::GlbJsonValue& crown) {
+    const auto& c = crown["colour"];
+    if (c.type != io::GlbJsonValue::Object || c["meanLinearRgb"].arr.size() != 3) return std::string();
+    std::string season = ",\"season\":{\"greenShare\":" + json::write(c["greenShare"]) + ",\"hueDeg\":" + json::write(c["hueDeg"]) + ",\"chroma\":" + json::write(c["chroma"]) + "}";
+    return ",\"colour\":{\"meanLinearRgb\":" + json::write(c["meanLinearRgb"]) + ",\"spreadLinearRgb\":" + json::write(c["spreadLinearRgb"]) +
+           ",\"samples\":" + json::write(c["samples"]) + season + ",\"provenance\":\"measured\",\"source\":\"the tile's photo texture over the crown's footprint\"}";
+}
+
+/** `,"texture":{...}` of a tree's extras: the leaf set and bark chosen for it, their tints, and why. */
+inline std::string treeTextureMembers(const PlantedTree& tr, const tree_textures::Library& lib) {
+    const auto& t = tr.textures;
+    auto rgb = [](const tree_textures::RGB& c) { return "[" + json::num(c[0]) + "," + json::num(c[1]) + "," + json::num(c[2]) + "]"; };
+    const auto& L = lib.leaves[t.leaf];
+    const auto& B = lib.bark[t.bark];
+    return ",\"texture\":{\"leaves\":{\"entry\":" + json::str(L.id) + ",\"tint\":" + rgb(t.leafTint) + ",\"leafLengthM\":" + json::num(L.leafLengthM) +
+           ",\"targetLeafLengthM\":" + json::num(t.targetLeafLengthM) + ",\"cost\":" + json::num(t.leafCost) + ",\"provenance\":\"library\"}" +
+           ",\"bark\":{\"entry\":" + json::str(B.id) + ",\"tint\":" + rgb(t.barkTint) + ",\"tileM\":[" + json::num(B.tileAroundM) + "," + json::num(B.tileAlongM) + "]" +
+           ",\"reliefIndex\":" + json::num(B.reliefIndex) + ",\"targetReliefIndex\":" + json::num(t.targetRelief) + ",\"sizeShare\":" + json::num(t.sizeShare) +
+           ",\"cost\":" + json::num(t.barkCost) + ",\"provenance\":\"library\"}" +
+           ",\"massColourLinear\":" + rgb(t.massColourLinear) + ",\"colourProvenance\":" + json::str(t.colourSource) + "}";
+}
+
 /** A crown kept as scanned: its status says so, and it has a measured footprint to outline. */
 inline bool keptAsScanned(const io::GlbJsonValue& c) {
     const std::string& st = c["status"].asString();
@@ -4344,6 +4490,12 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
             l2.name = base + "_lod2";
             l3.name = base + "_lod3";
             l0.primitives.push_back(primitiveOf(L.wood, L.woodGrowth));
+            if (tr.hasTextures && L.wood.uvs.size() == L.wood.vertices.size()) {
+                // the wood in the chosen bark's tiles (u around, v along the path from the root)
+                auto& uv = l0.primitives.back().uvs;
+                uv.reserve(L.wood.uvs.size());
+                for (const auto& t : L.wood.uvs) uv.push_back({t.x, t.y});
+            }
             l0.frameGroup = l3.frameGroup = base;
             l1.meshFrom = l0.name;
             l2.meshFrom = l0.name;
@@ -4424,7 +4576,8 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
                 }
                 crownJson += "}";
             }
-            lodMembers += ",\"sbTree\":{\"id\":" + std::to_string(tr.crownId) + ",\"hashSeed\":" + std::to_string(tr.seed) + ",\"label\":\"grown to the measured crown\"" + crownJson + "}";
+            lodMembers += ",\"sbTree\":{\"id\":" + std::to_string(tr.crownId) + ",\"hashSeed\":" + std::to_string(tr.seed) + ",\"label\":\"grown to the measured crown\"" + crownJson +
+                          detail::treeColourMembers(*tr.crown) + (tr.hasTextures ? detail::treeTextureMembers(tr, *P.textures) : std::string()) + "}";
         } else {
             node.primitives = std::move(blobPrims);
         }
@@ -4521,6 +4674,8 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
             lm.primitive.positions = m.positions;
             lm.primitive.normals = m.normals;
             lm.primitive.indices = m.indices;
+            if (m.uvs.size() == m.positions.size()) for (const auto& t : m.uvs) lm.primitive.uvs.push_back({t.x, t.y});
+            if (m.leaf.size() == m.positions.size()) lm.primitive.leaf = m.leaf;
             return lm;
         };
         std::string variants;
@@ -4535,7 +4690,12 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
             variants += "," + std::string("{\"mesh\":") + json::str(tw.name) + ",\"leavesLevel0\":0,\"leavesNearMid\":0,\"leavesLevel1\":0}";
         }
         members += ",\"sbTrees\":{\"schema\":\"scratchbox.trees-lod/2\",\"psiSeason\":" + json::num(std::clamp(P.psiSeason, 0.0, 1.0)) + ",\"clusterLibrary\":{\"variants\":[" + variants +
-                   "],\"leafSizeModel\":{\"sizeRatioToCrownHeight\":" + json::num(lib.params.leafSizeRatioToCrownHeight) + ",\"minM\":" + json::num(lib.params.leafMinM) + ",\"maxM\":" + json::num(lib.params.leafMaxM) + "}}}";
+                   "],\"leafSizeModel\":{\"sizeRatioToCrownHeight\":" + json::num(lib.params.leafSizeRatioToCrownHeight) + ",\"minM\":" + json::num(lib.params.leafMinM) + ",\"maxM\":" + json::num(lib.params.leafMaxM) + "}" +
+                   // a leaf card's TEXCOORD_0 (u = 0.5 + across / length, v = along / length): its outline's box is widthRatio wide
+                   ",\"leafCard\":{\"widthRatio\":" + json::num(lib.params.morphology.blade.widthRatio) + ",\"uv\":\"TEXCOORD_0: u = 0.5 + across / blade length, v = along / blade length (base 0)\",\"leafAttribute\":\"_LEAF: x atlas pick in [0, 1), y 1 on a blade, 0 on a stalk or shoot\"}}" +
+                   (P.textures ? ",\"textures\":{\"schema\":" + json::str(P.textures->schema) + ",\"index\":" + json::str(P.textureIndex) +
+                                 ",\"woodUv\":\"TEXCOORD_0 in the chosen bark's tiles: u around (whole tiles), v along the path from the root\",\"chosenBy\":\"appearance: measured crown colour, leaf size from the tree's height and crown, bark relief from its size\"}"
+                               : std::string()) + "}";
     }
     opt.generator = "Scratchbox SB-Veggie (space colonisation, tile_vegetation plant)";
     opt.rootName = "sb_veggie_trees";

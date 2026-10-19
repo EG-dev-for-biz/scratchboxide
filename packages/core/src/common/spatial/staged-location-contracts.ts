@@ -772,14 +772,50 @@ export interface TreeCrownExtras {
     lobes?: Array<[number, number, number, number]>; lobeBlendM?: number;
 }
 
-/** Node extras `sbTree` of each tree node. Carries no species or measured claim for leaves. */
-export interface TreeNodeExtras { id: number; hashSeed: number; label: string; crown?: TreeCrownExtras }
+/**
+ * A tree's crown colour as the tile's photo shows it (measured): the linear sRGB mean and standard deviation of the photo
+ * over the crown's footprint cells (the darkest and brightest tenth by luminance left out), and the season cues it
+ * implies: the share of its cells whose chroma passes the vegetation test (green leaf cover), the mean's hue (degrees,
+ * 0 red, 120 green) and chroma (0 grey .. 1 saturated). greenShare is null where no cell's chroma could be judged.
+ */
+export interface TreeColourExtras {
+    meanLinearRgb: [number, number, number]; spreadLinearRgb: [number, number, number]; samples: number;
+    season: { greenShare: number | null; hueDeg: number; chroma: number };
+    provenance: 'measured'; source: string;
+}
+
+/**
+ * The surface textures chosen for a tree from the tree texture library (assets/textures/trees/index.json), by appearance:
+ * the leaf set nearest its measured crown colour and a leaf length in proportion to its size, the bark whose relief is
+ * nearest one that grows with its size. Tints multiply the textures' linear colour. Entries are library ids, never
+ * species or categories. colourProvenance says what colour the leaves were chosen by: the tree's own measured crown colour,
+ * the median of its planting's measured crowns ('neighbours'), or the library's leaf-on prior ('prior').
+ */
+export interface TreeTextureExtras {
+    leaves: { entry: string; tint: [number, number, number]; leafLengthM: number; targetLeafLengthM: number; cost: number; provenance: 'library' };
+    bark: {
+        entry: string; tint: [number, number, number]; tileM: [number, number]; reliefIndex: number; targetReliefIndex: number; sizeShare: number;
+        cost: number; provenance: 'library';
+    };
+    /** The far level's leaf masses: the chosen leaves' mean linear colour under the tint. */
+    massColourLinear: [number, number, number];
+    colourProvenance: 'measured' | 'neighbours' | 'prior' | 'none';
+}
+
+/** Node extras `sbTree` of each tree node. Carries no species or measured claim for leaves (its crown colour is measured from the photo). */
+export interface TreeNodeExtras { id: number; hashSeed: number; label: string; crown?: TreeCrownExtras; colour?: TreeColourExtras; texture?: TreeTextureExtras }
 
 /** Root extras `sbTrees` of the trees GLB. psiSeason 0..1 scales leaf density (0 bare winter, 1 full summer). */
 export interface TreesGlbRootExtras {
     schema: 'scratchbox.trees-lod/1' | 'scratchbox.trees-lod/2';
     psiSeason: number;
-    clusterLibrary: { variants: TreeClusterVariant[]; leafSizeModel: TreeLeafSizeModel };
+    clusterLibrary: {
+        variants: TreeClusterVariant[]; leafSizeModel: TreeLeafSizeModel;
+        /** The leaf cards' texture coordinates (TEXCOORD_0, by blade length) and `_LEAF` attribute; widthRatio is the outline's width over its length. */
+        leafCard?: { widthRatio: number; uv: string; leafAttribute: string };
+    };
+    /** Present when the trees were textured from the tree texture library (their sbTree.texture names the entries). */
+    textures?: { schema: string; index: string; woodUv: string; chosenBy: string };
 }
 
 // =============================================================================
@@ -1756,6 +1792,24 @@ const DEFINITIONS = {
             centre: ref('vec3'), radii: arr({ type: 'number', exclusiveMinimum: 0 }, { minItems: 3, maxItems: 3 }), yawRad: NUM,
             leanM: arr(NUM, { minItems: 2, maxItems: 2 }), points: NONNEG_INT, fittedTo: STR,
             lobes: arr(arr(NUM, { minItems: 4, maxItems: 4 }), { minItems: 1, maxItems: 16 }), lobeBlendM: { type: 'number', exclusiveMinimum: 0 }
+        }),
+        colour: obj(['meanLinearRgb', 'spreadLinearRgb', 'samples', 'season', 'provenance', 'source'], {
+            meanLinearRgb: arr(ref('nonneg'), { minItems: 3, maxItems: 3 }), spreadLinearRgb: arr(ref('nonneg'), { minItems: 3, maxItems: 3 }), samples: NONNEG_INT,
+            season: obj(['greenShare', 'hueDeg', 'chroma'], { greenShare: { oneOf: [ref('unit'), { type: 'null' }] }, hueDeg: { type: 'number', minimum: 0, maximum: 360 }, chroma: ref('unit') }),
+            provenance: { const: 'measured' }, source: STR
+        }),
+        texture: obj(['leaves', 'bark', 'massColourLinear', 'colourProvenance'], {
+            leaves: obj(['entry', 'tint', 'leafLengthM', 'targetLeafLengthM', 'cost', 'provenance'], {
+                entry: { type: 'string', minLength: 1 }, tint: arr(ref('nonneg'), { minItems: 3, maxItems: 3 }), leafLengthM: { type: 'number', exclusiveMinimum: 0 },
+                targetLeafLengthM: { type: 'number', exclusiveMinimum: 0 }, cost: ref('nonneg'), provenance: { const: 'library' }
+            }),
+            bark: obj(['entry', 'tint', 'tileM', 'reliefIndex', 'targetReliefIndex', 'sizeShare', 'cost', 'provenance'], {
+                entry: { type: 'string', minLength: 1 }, tint: arr(ref('nonneg'), { minItems: 3, maxItems: 3 }),
+                tileM: arr({ type: 'number', exclusiveMinimum: 0 }, { minItems: 2, maxItems: 2 }), reliefIndex: ref('nonneg'), targetReliefIndex: ref('nonneg'),
+                sizeShare: ref('unit'), cost: ref('nonneg'), provenance: { const: 'library' }
+            }),
+            massColourLinear: arr(ref('nonneg'), { minItems: 3, maxItems: 3 }),
+            colourProvenance: { enum: ['measured', 'neighbours', 'prior', 'none'] }
         })
     }),
     TreesGlbRootExtras: obj(['schema', 'psiSeason', 'clusterLibrary'], {
@@ -1764,8 +1818,10 @@ const DEFINITIONS = {
             variants: arr(obj(['mesh', 'leavesLevel0', 'leavesLevel1'], { mesh: { type: 'string', minLength: 1 }, leavesLevel0: NONNEG_INT, leavesNearMid: NONNEG_INT, leavesLevel1: NONNEG_INT }), { minItems: 1 }),
             leafSizeModel: obj(['sizeRatioToCrownHeight', 'minM', 'maxM'], {
                 sizeRatioToCrownHeight: ref('nonneg'), minM: { type: 'number', exclusiveMinimum: 0 }, maxM: { type: 'number', exclusiveMinimum: 0 }
-            })
-        })
+            }),
+            leafCard: obj(['widthRatio', 'uv', 'leafAttribute'], { widthRatio: { type: 'number', exclusiveMinimum: 0 }, uv: STR, leafAttribute: STR })
+        }),
+        textures: obj(['schema', 'index', 'woodUv', 'chosenBy'], { schema: STR, index: STR, woodUv: STR, chosenBy: STR })
     }),
     vertexProvenance: obj(['schema', 'attributes', 'vertices'], {
         schema: { const: 'scratchbox.vertex-provenance/1' }, attributes: arr(STR), vertices: NONNEG_INT,

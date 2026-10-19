@@ -82,6 +82,9 @@ static void usage() {
         "    --quantize 0|1 (1: KHR_mesh_quantization, positions within --max-quantization-error M (0.01) measured on the file)\n"
         "    --stage-key KEY           the staged build's stage key for the root extras (the caller's cache key)\n"
         "    --reveal 0|1 (1: each tree's growth order on its vertices as _REVEAL; 0: the same meshes without it)\n"
+        "    --texture-index PATH      the tree texture library (assets/textures/trees/index.json): each tree's leaf set and\n"
+        "                              bark chosen by appearance, its wood in the bark's tiles, the choice in its extras\n"
+        "    --texture-index-label S   how the root extras name the library (default: the path given)\n"
         "    --crown-base-ratio V --trunk-radius-per-height V --shell-depth V --min-surface-reached V\n"
         "                              (default: what crowns.json recorded as its growth, else 0.35, 0.016, 0.8, 0.9;\n"
         "                              a value other than the recorded one is refused)\n"
@@ -381,6 +384,16 @@ static int runPlant(const Args& a) {
     if (P.woodShare < 0 || P.woodShare > 1) throw VegetationError("bad_request", "--wood-share must be in [0, 1]");
     if (!(P.minTrianglesPerTree >= 1)) throw VegetationError("bad_request", "--min-triangles-per-tree must be at least 1");
     if (P.trianglesPerCrownM2 < 0) throw VegetationError("bad_request", "--triangles-per-crown-m2 must be >= 0");
+    if (a.has("texture-index")) {
+        // the tree texture library: each tree's leaf set and bark chosen by appearance (scratchbox_tree_textures.hpp)
+        const auto idx = readFileBytes(a.str("texture-index"));
+        try {
+            P.textures = std::make_shared<const tree_textures::Library>(tree_textures::parseIndex(std::string(idx.begin(), idx.end())));
+        } catch (const tree_textures::TextureIndexError& e) {
+            throw VegetationError("bad_input", std::string("--texture-index: ") + e.what());
+        }
+        P.textureIndex = a.has("texture-index-label") ? a.str("texture-index-label") : a.str("texture-index");
+    }
 
     const auto bytes = readFileBytes(a.str("crowns"));
     const std::string text(bytes.begin(), bytes.end());

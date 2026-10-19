@@ -56,6 +56,7 @@ namespace scratchbox {
 namespace tree_lod {
 
 using math::Quat;
+using math::Vec2;
 using math::Vec3;
 using math::Vec4;
 namespace nat = scratchbox::nature;
@@ -201,6 +202,8 @@ inline double leafLengthFor(const LodParams& P, double crownHeightM) {
 struct LibraryMesh {
     std::string name;
     std::vector<Vec3> positions, normals;
+    std::vector<Vec2> uvs;               // TEXCOORD_0: a cluster's blade coordinates (SbVeggieClusterMesh::uvs), a twig's bark coordinates
+    std::vector<std::array<float, 2>> leaf;  // `_LEAF` on cluster meshes (SbVeggieClusterMesh::leaf); empty on twigs
     std::vector<uint32_t> indices;
     std::vector<uint32_t> bladeFront;    // upper-side blade triangles alone (the surface a leaf measurement uses)
     std::vector<Vec3> support;           // hull points for fitting into a crown
@@ -240,6 +243,8 @@ inline LibraryMesh fromCluster(const std::string& name, const sv::SbVeggieCluste
     m.name = name;
     m.positions = c.positions;
     m.normals = c.normals;
+    m.uvs = c.uvs;
+    m.leaf = c.leaf;
     m.indices = c.indices;
     m.bladeFront = c.bladeFrontIndices;
     m.support = c.support;
@@ -289,6 +294,8 @@ inline LibraryMesh buildTwigTube(int sides, double taper, const std::string& nam
             const float a = math::TWO_PI * s / S;
             const float r = ring ? static_cast<float>(taper) : 1.0f;
             m.positions.push_back(Vec3(std::cos(a) * r, std::sin(a) * r, static_cast<float>(ring)));
+            // bark coordinates: a narrow strip of the bark texture (a twig is a few centimetres round), half a tile along
+            m.uvs.push_back(Vec2(0.08f * static_cast<float>(s) / static_cast<float>(S), 0.5f * static_cast<float>(ring)));
             // a round section: the normal points out, tilted a little along the taper
             m.normals.push_back(Vec3(std::cos(a), std::sin(a), static_cast<float>(1.0 - taper)).normalized());
         }
@@ -302,6 +309,7 @@ inline LibraryMesh buildTwigTube(int sides, double taper, const std::string& nam
     const uint32_t centre = static_cast<uint32_t>(m.positions.size());
     m.positions.push_back(Vec3(0, 0, 1));
     m.normals.push_back(Vec3(0, 0, 1));
+    m.uvs.push_back(Vec2(0.04f, 0.5f));
     for (int s = 0; s < S; ++s) m.indices.insert(m.indices.end(), {centre, static_cast<uint32_t>(S + s), static_cast<uint32_t>(S + (s + 1) % S)});
     m.reach = 1.0;
     return m;
@@ -402,6 +410,7 @@ struct TreeLodInput {
     double heightAboveSupport{0};
     uint32_t seed{0};
     size_t woodBudget{0};                        // triangles for wood: all of the tree's budget
+    float barkTileAroundM{0}, barkTileAlongM{0}; // the chosen bark's real size: the wood's UVs in its tiles (0: legacy UVs)
 };
 
 /** What the delivered leaves of one level reach of the measured surface, and how far past it they go. */
@@ -610,6 +619,8 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
     // ---- wood: the whole budget ----
     cfg.triangleBudget = static_cast<float>(in.woodBudget);
     cfg.woodBudgetShare = 1.0f;
+    cfg.barkTileAroundM = in.barkTileAroundM;
+    cfg.barkTileAlongM = in.barkTileAlongM;
     nat::TreeBudgetReport rep;
     nat::MeshGrowth growth;
     auto meshes = nat::SpaceColonizationTreeGenerator::meshGrownSkeleton(cfg, sk, &rep, &growth);
