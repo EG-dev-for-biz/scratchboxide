@@ -39,7 +39,7 @@ import {
     type GroundModel,
     type ScanMesh
 } from '../../spatial/StreetViewSurveyPlanner';
-import type { CanopyMask, Vec2 } from '../../../common/spatial/staged-location-contracts';
+import type { CanopyMask, StripKeepCells, Vec2 } from '../../../common/spatial/staged-location-contracts';
 import type { EvidenceLookup } from './vector-footprints';
 
 /** tile_refine's isolate values (scratchbox_tile_refine.hpp): minimum height, seed search. */
@@ -75,7 +75,14 @@ export interface StructurePickResult {
     /** What decided the footprint: the building footprint from Google vector data, or the scan's geometry alone. */
     footprintSource: 'vector-footprint' | 'scan-geometry' | (string & {});
     /** The vector footprint found at the place, how far the scan agrees with it, and why it was not used when it was not. */
-    vectorFootprint?: { used: boolean; featureIds: string[]; areaM2: number; raisedShare: number; iou: number; reason?: string };
+    vectorFootprint?: {
+        used: boolean; featureIds: string[]; areaM2: number; raisedShare: number; iou: number; reason?: string;
+        /** Shares of the footprint the scan shows as open ground (not raised, not canopy) and as tree canopy. */
+        openShare: number; canopyShare: number;
+        /** The footprint is larger than the structure: under FOOTPRINT_MIN_RAISED_SHARE of it is raised, but the raised
+         *  structure at the place lies within it (a churchyard, a forecourt, a yard with its trees inside the outline). */
+        enclosesStructure: boolean;
+    };
 }
 
 function cellKey(x: number, z: number): string {
@@ -291,8 +298,15 @@ export interface FootprintLookup { buildingAt(x: number, z: number): number; bui
 export const FOOTPRINT_SEARCH_M = 10;
 /** The footprint is grown by this before it limits the pick: the scan's facades stand within it of the vector outline (m). */
 export const FOOTPRINT_TOLERANCE_M = 2;
-/** At least this share of the footprint must be raised in the scan for the footprint to be used. */
+/** At least this share of the footprint must be raised in the scan for the footprint to be used as it is drawn. */
 export const FOOTPRINT_MIN_RAISED_SHARE = 0.5;
+/**
+ * A footprint less raised than that is still used when it encloses the structure: at least this share of it is raised,
+ * and at most FOOTPRINT_MAX_SPILL_SHARE of the raised mass at the place reaches past it (grown by FOOTPRINT_TOLERANCE_M),
+ * other buildings' footprints aside. The rest of it is open ground or canopy (a yard, a forecourt, the trees in them).
+ */
+export const FOOTPRINT_MIN_ENCLOSED_SHARE = 0.2;
+export const FOOTPRINT_MAX_SPILL_SHARE = 0.2;
 
 function iouMasks(a: Uint8Array, b: Uint8Array, N: number): number {
     let i = 0, u = 0;
@@ -307,12 +321,12 @@ function iouMasks(a: Uint8Array, b: Uint8Array, N: number): number {
  * neighbouring footprint), seeded at its raised cell nearest the place.
  */
 function footprintAt(fp: FootprintLookup, g: GroundModel, tall: Uint8Array, a: { x: number; z: number }, rawSeed: number, minH: number):
-    { used: boolean; featureIds: string[]; mask: Uint8Array; limit: Uint8Array; seed: number; cells: number; raisedShare: number; reason?: string } {
+    { used: boolean; featureIds: string[]; mask: Uint8Array; limit: Uint8Array; seed: number; cells: number; raisedShare: number; openShare: number; canopyShare: number; enclosesStructure: boolean; reason?: string } {
     const { nx, nz, cellMeters: cell } = g;
     const N = nx * nz;
     const lab = new Int32Array(N);
     for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) lab[k * nx + i] = fp.buildingAt(g.x0 + (i + 0.5) * cell, g.z0 + (k + 0.5) * cell);
-    const none = (reason: string) => ({ used: false, featureIds: [], mask: new Uint8Array(N), limit: new Uint8Array(N), seed: rawSeed, cells: 0, raisedShare: 0, reason });
+    const none = (reason: string) => ({ used: false, featureIds: [], mask: new Uint8Array(N), limit: new Uint8Array(N), seed: rawSeed, cells: 0, raisedShare: 0, openShare: 0, canopyShare: 0, enclosesStructure: false, reason });
     let target = fp.buildingAt(a.x, a.z);
     if (!target) target = lab[rawSeed];
     if (!target) {
@@ -326,13 +340,14 @@ function footprintAt(fp: FootprintLookup, g: GroundModel, tall: Uint8Array, a: {
     }
     if (!target) return none(`no building footprint in the vector data within ${FOOTPRINT_SEARCH_M} m of the place`);
     const mask = new Uint8Array(N);
-    let cells = 0, raised = 0;
-    for (let c = 0; c < N; c++) if (lab[c] === target) { mask[c] = 1; cells++; if (tall[c]) raised++; }
+    let cells = 0, raised = 0, canopy = 0;
+    for (let c = 0; c < N; c++) if (lab[c] === target) { mask[c] = 1; cells++; if (tall[c]) raised++; else if (g.canopy?.[c]) canopy++; }
     const featureIds = [fp.buildings[target - 1]?.id ?? String(target)];
     const raisedShare = cells ? raised / cells : 0;
-    if (raisedShare < FOOTPRINT_MIN_RAISED_SHARE) {
-        return { ...none(`the vector footprint (${cells} m²) and the scan disagree: only ${Math.round(raisedShare * 100)}% of it stands ${minH} m or more above the terrain in the scan`), featureIds, mask, cells, raisedShare };
-    }
+    const canopyShare = cells ? canopy / cells : 0;
+    const openShare = cells ? (cells - raised - canopy) / cells : 0;
+    const shares = { raisedShare, openShare, canopyShare };
+    const area = Math.round(cells * cell * cell);
     const r = Math.max(1, Math.round(FOOTPRINT_TOLERANCE_M / cell));
     const limit = new Uint8Array(N);
     for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) {
@@ -343,6 +358,23 @@ function footprintAt(fp: FootprintLookup, g: GroundModel, tall: Uint8Array, a: {
             if (ii >= 0 && kk >= 0 && ii < nx && kk < nz && di * di + dk * dk <= r * r && !(lab[kk * nx + ii] && lab[kk * nx + ii] !== target)) limit[kk * nx + ii] = 1;
         }
     }
+    let enclosesStructure = false;
+    if (raisedShare < FOOTPRINT_MIN_RAISED_SHARE) {
+        const disagree = (why: string) => ({ ...none(`the vector footprint (${area} m²) and the scan disagree: only ${Math.round(raisedShare * 100)}% of it stands ${minH} m or more above the terrain in the scan (${Math.round(openShare * 100)}% open ground, ${Math.round(canopyShare * 100)}% canopy)${why}`), featureIds, mask, cells, ...shares });
+        if (raisedShare < FOOTPRINT_MIN_ENCLOSED_SHARE) return disagree('');
+        // larger than the structure, or off it: the raised mass the footprint holds, followed past its outline (never into
+        // another building's footprint), mostly lies within it only when the footprint encloses the structure
+        const mass = new Uint8Array(N);
+        for (let c = 0; c < N; c++) {
+            if (!mask[c] || !tall[c] || mass[c]) continue;
+            flood4(nx, nz, c, n => tall[n] === 1 && !(lab[n] && lab[n] !== target), mass);
+        }
+        let inside = 0, spill = 0;
+        for (let c = 0; c < N; c++) if (mass[c]) { if (limit[c]) inside++; else spill++; }
+        const spillShare = inside + spill ? spill / (inside + spill) : 1;
+        if (spillShare > FOOTPRINT_MAX_SPILL_SHARE) return disagree(`, and ${Math.round(spillShare * 100)}% of the raised mass it holds reaches past it`);
+        enclosesStructure = true;
+    }
     // the seed: the raised footprint cell nearest the place
     const ai = (a.x - g.x0) / cell, ak = (a.z - g.z0) / cell;
     let seed = -1, best = Infinity;
@@ -351,7 +383,7 @@ function footprintAt(fp: FootprintLookup, g: GroundModel, tall: Uint8Array, a: {
         const d = ((c % nx) + 0.5 - ai) ** 2 + (((c / nx) | 0) + 0.5 - ak) ** 2;
         if (d < best) { best = d; seed = c; }
     }
-    return { used: seed >= 0, featureIds, mask, limit, seed: seed >= 0 ? seed : rawSeed, cells, raisedShare };
+    return { used: seed >= 0, featureIds, mask, limit, seed: seed >= 0 ? seed : rawSeed, cells, ...shares, enclosesStructure };
 }
 
 export interface PickOptions {
@@ -415,7 +447,10 @@ export function pickStructure(scan: ScanMesh, ground: GroundModel, opts: PickOpt
     const comp = new Uint8Array(N);
     if (fp?.used) {
         seed = fp.seed;
-        flood4(nx, nz, seed, c => tall[c] === 1 && fp.limit[c] === 1, comp);
+        // a footprint larger than the structure holds open ground and trees: there only what the scan itself shows raised
+        // is the structure (the canopy it holds is the yard's trees, not a roof garden)
+        const body = fp.enclosesStructure ? raised : tall;
+        flood4(nx, nz, seed, c => body[c] === 1 && fp.limit[c] === 1, comp);
     } else {
         // the opening disc, scaled to the mass at the seed (its largest half-width within the window)
         let openCells = 0;
@@ -515,8 +550,38 @@ export function pickStructure(scan: ScanMesh, ground: GroundModel, opts: PickOpt
         footprintMask,
         coreHeightM: round3(coreHeightM),
         footprintSource: fp?.used ? 'vector-footprint' : 'scan-geometry',
-        ...(fp ? { vectorFootprint: { used: fp.used, featureIds: fp.featureIds, areaM2: fp.cells * cell * cell, raisedShare: round3(fp.raisedShare), iou: round3(fp.used ? iouMasks(fp.mask, comp, N) : 0), ...(fp.reason ? { reason: fp.reason } : {}) } } : {})
+        ...(fp ? {
+            vectorFootprint: {
+                used: fp.used, featureIds: fp.featureIds, areaM2: fp.cells * cell * cell, raisedShare: round3(fp.raisedShare), iou: round3(fp.used ? iouMasks(fp.mask, comp, N) : 0),
+                openShare: round3(fp.openShare), canopyShare: round3(fp.canopyShare), enclosesStructure: fp.enclosesStructure, ...(fp.reason ? { reason: fp.reason } : {})
+            }
+        } : {})
     };
+}
+
+/**
+ * The structure the strip must leave as scanned (StripRoi.keep): the pick's core, its cells the scan shows raised to at
+ * least the low-attachment cut (coreHeightM, and never under minHeightM) that are not tree canopy. Taking a tree out beside
+ * the structure then never takes the structure's own roof or walls with it as the tree's drape (a wall's triangles lie in
+ * the rim cells, whose surface is the roof's edge); a crown over the roof (canopy cells) still goes, and so does anything
+ * low the pick took along at its foot (a shed, a crown the classifier missed), which the strip may still find to be a tree.
+ * Undefined when the pick has no such cell.
+ */
+export function structureKeepCells(pick: Pick<StructurePickResult, 'footprintMask' | 'coreHeightM'>, ground: Pick<GroundModel, 'x0' | 'z0' | 'nx' | 'nz' | 'cellMeters' | 'top' | 'ground' | 'canopy'>, minHeightM = STRUCTURE_MIN_HEIGHT_M): StripKeepCells | undefined {
+    const { nx, nz } = ground;
+    const N = nx * nz;
+    if (pick.footprintMask.length !== N) throw new Error('structureKeepCells: the pick and the ground model are on different grids');
+    const cut = Math.max(minHeightM, pick.coreHeightM);
+    const runs: number[] = [];
+    let value = 0, run = 0, kept = 0;
+    for (let c = 0; c < N; c++) {
+        const keep = pick.footprintMask[c] === PICK_STRUCTURE && !ground.canopy?.[c] && ground.top[c] - ground.ground[c] >= cut ? 1 : 0;
+        kept += keep;
+        if (keep !== value) { runs.push(run); run = 0; value = keep; }
+        run++;
+    }
+    runs.push(run);
+    return kept ? { cellM: ground.cellMeters, x0: ground.x0, z0: ground.z0, nx, nz, runs } : undefined;
 }
 
 /** The survey planner's hero measurements (facade headings, ground around it) on the picked cells, dilated 2 m. */

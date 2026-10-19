@@ -1328,8 +1328,14 @@ export interface FlattenStats {
 /** tile_vegetation canopy: the cells strip's own classifier calls canopy, as run-lengths (first run = not canopy). */
 export interface CanopyMask { schema: 'scratchbox.canopy-mask/1'; cellM: number; x0: number; z0: number; nx: number; nz: number; runs: number[]; canopyCells: number; ms: number }
 
-/** Where strip may measure and regrow trees: a polygon in the tile frame (x east, z south), metres. CLI: --roi-json <file>. */
-export interface StripRoi { schema: 'scratchbox.strip-roi/1'; polygon: Vec2[] }
+/**
+ * Where strip may measure and regrow trees: a polygon in the tile frame (x east, z south), metres. CLI: --roi-json <file>.
+ * `keep`: the structure the caller isolates (its raised, roofed cells that are not canopy), run-length coded like the
+ * canopy mask (first run not kept). Removal treats what stands on them as architecture, so a tree taken out beside the
+ * structure never takes its roof or walls with it.
+ */
+export interface StripRoi { schema: 'scratchbox.strip-roi/1'; polygon: Vec2[]; keep?: StripKeepCells }
+export interface StripKeepCells { cellM: number; x0: number; z0: number; nx: number; nz: number; runs: number[] }
 
 // =============================================================================
 // §3.9 JSON Schema (draft-07 subset)
@@ -1683,7 +1689,12 @@ const DEFINITIONS = {
         schema: { const: 'scratchbox.canopy-mask/1' }, cellM: { type: 'number', exclusiveMinimum: 0 }, x0: NUM, z0: NUM, nx: { type: 'integer', minimum: 1 },
         nz: { type: 'integer', minimum: 1 }, runs: arr(NONNEG_INT), canopyCells: NONNEG_INT, ms: NUM
     }),
-    StripRoi: obj(['schema', 'polygon'], { schema: { const: 'scratchbox.strip-roi/1' }, polygon: ref('polygon2') }),
+    StripRoi: obj(['schema', 'polygon'], {
+        schema: { const: 'scratchbox.strip-roi/1' }, polygon: ref('polygon2'),
+        keep: obj(['cellM', 'x0', 'z0', 'nx', 'nz', 'runs'], {
+            cellM: { type: 'number', exclusiveMinimum: 0 }, x0: NUM, z0: NUM, nx: { type: 'integer', minimum: 1 }, nz: { type: 'integer', minimum: 1 }, runs: arr(NONNEG_INT)
+        })
+    }),
     StagedNodeExtras: {
         // open at the root: the crawler's frame extras sit beside `sb`
         type: 'object', required: ['sb'],

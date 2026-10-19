@@ -42,8 +42,17 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
     // Image, vision and native build calls with up to two revision passes; with a location it first stages on 3D
     // Tiles (above), which can go a long time between progress reports.
     build_3d_object_from_reference: { maxMs: 50 * MIN },
+    // With a place not yet built it extracts and isolates the structure from 3D Tiles first (minutes, cached after), then
+    // the grounding fetches, the registration (up to 90 s edges + 120 s joint) and, optionally, the segmenter per view.
+    streetview_survey: { maxMs: 40 * MIN, idleMs: 10 * MIN },
     // The first call compiles the native binary (up to 10 min) before the run (up to 5 min).
     tile_refine: { maxMs: 16 * MIN },
+    // Street View discovery and fetch, edge registration (worker thread), then several judge calls per view; reports
+    // progress at each step and after every judged view.
+    photo_match_evaluate: { maxMs: 30 * MIN, idleMs: 10 * MIN },
+    // Leaf-tile extraction rounds, tree measurement, the mask vote's vision calls and tile_refine (each first-use build
+    // up to 10 min); reports progress between steps.
+    location_isolate_structure: { maxMs: 30 * MIN, idleMs: 15 * MIN },
     // Native cluster LOD build: about 2 s per 170k triangles, longer for multi-million-triangle scans.
     virtual_geometry_open_glb: { maxMs: 12 * MIN },
     // Several serial image-model calls each.

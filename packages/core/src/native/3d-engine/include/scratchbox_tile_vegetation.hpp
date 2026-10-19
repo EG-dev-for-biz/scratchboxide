@@ -1028,7 +1028,11 @@ struct StripParams {
     // Where trees may be measured and regrown (a polygon in the tile frame, x east and z south; empty: everywhere). A tree
     // whose stem lies outside it is neither regrown nor removed: its canopy stays as scanned (status outside_roi).
     std::vector<std::array<double, 2>> roi;
-    double footprintDilation{1.0};   // everything under the apex this far beyond the crown footprint goes with the tree (m)
+    // The structure the caller isolates, as a cell raster in the tile frame (empty: none): its raised, roofed cells that
+    // are not canopy. Removal treats every triangle standing on them as architecture, so taking a tree out beside a
+    // building never takes the building's roof or walls with it as drape (the structure the pick decided stays as scanned).
+    struct KeepCells { double x0{0}, z0{0}, cell{1}; int nx{0}, nz{0}; std::vector<uint8_t> flags; } keep;
+    double footprintDilation{1.0};  // everything under the apex this far beyond the crown footprint goes with the tree (m)
     double drapeReach{10.0};          // the scanned drape connected to a tree goes with it out to this far from its crown (m)
     double clearance{0.3};           // removal stops this high above the support (m)
     double supportBand{1.5};         // a tree's cap never lies further than this from its measured support (m)
@@ -1141,6 +1145,8 @@ struct StripStats {
     size_t trunksOffRebuiltGround{0};    // after the last pass: removed trees whose trunk base is further than groundTolerance from it
     size_t treesReachingBoundary{0}; // trees whose crown runs to the extraction's edge (their apex is inside it)
     double cutCanopyRemovedM2{0};    // canopy of cut crowns taken with the trees it joined (not replanted)
+    size_t keepCells{0};             // cells of the structure the caller keeps (P.keep)
+    size_t keptStructureTriangles{0}; // triangles on them that removal would not otherwise treat as architecture: kept as the structure's
     std::array<double, 3> greenDispersionQuartiles{}, otherDispersionQuartiles{};
     std::vector<std::pair<std::string, double>> ms;
 };
@@ -2422,7 +2428,27 @@ private:
      * sheets of the drape around a tree (see classifyDrapeSurfaces).
      */
     std::vector<uint8_t> drapeFace;
-    bool isArchitecture(size_t t) const { return surface[t] && !chromaVeg[t] && !(drapeFace.size() == T && drapeFace[t]); }
+    /** Triangles standing on the caller's structure cells (P.keep): architecture whatever their shape or colour. */
+    std::vector<uint8_t> keepTri;
+    bool isArchitecture(size_t t) const { return (keepTri.size() == T && keepTri[t]) || (surface[t] && !chromaVeg[t] && !(drapeFace.size() == T && drapeFace[t])); }
+
+    /** Marks the triangles whose centroid stands on a P.keep cell (once; the mesh does not change between passes). */
+    void markKeep() {
+        if (keepTri.size() == T) return;
+        keepTri.assign(T, 0);
+        const auto& K = P.keep;
+        R.stats.keepCells = 0;
+        R.stats.keptStructureTriangles = 0;
+        if (K.nx <= 0 || K.nz <= 0 || K.flags.size() != static_cast<size_t>(K.nx) * static_cast<size_t>(K.nz)) return;
+        for (uint8_t f : K.flags) R.stats.keepCells += f ? 1 : 0;
+        for (size_t t = 0; t < T; ++t) {
+            const double fi = std::floor((centroid[t].x - K.x0) / K.cell), fk = std::floor((centroid[t].z - K.z0) / K.cell);
+            if (fi < 0 || fk < 0 || fi >= K.nx || fk >= K.nz) continue;
+            if (!K.flags[static_cast<size_t>(fk) * static_cast<size_t>(K.nx) + static_cast<size_t>(fi)]) continue;
+            if (!(surface[t] && !chromaVeg[t])) ++R.stats.keptStructureTriangles;
+            keepTri[t] = 1;
+        }
+    }
 
     /**
      * Planar sheets of the photogrammetric drape around a tree, told apart from walls and roofs by what they meet: a
@@ -2737,6 +2763,7 @@ private:
         // seed and growth masks per cell: dilated footprints of the trees
         std::vector<int> seedMask(N, -1);
         growMask.assign(N, -1);
+        markKeep();
         const int rs = static_cast<int>(std::ceil(P.footprintDilation / P.cell));
         const int rg = static_cast<int>(std::ceil(2.0 * P.footprintDilation / P.cell));
         // a crown's own footprint is its own: what stands in it is measured against its own ground, never a neighbour's
@@ -2868,7 +2895,7 @@ private:
         std::queue<uint32_t> q;
         // 1. the tree's vegetation
         for (size_t t = 0; t < T; ++t) {
-            if (!veg[t]) continue;
+            if (!veg[t] || keepTri[t]) continue;
             const long c = cellOf(centroid[t]);
             if (c < 0 || seedMask[static_cast<size_t>(c)] < 0 || keptCell[static_cast<size_t>(c)]) continue;
             const int m = seedMask[static_cast<size_t>(c)];
@@ -3743,6 +3770,7 @@ inline std::string stripStatsJson(const StripResult& r) {
     }
     s << "],\n";
     s << "  \"cutCanopyRemovedM2\": " << json::num(st.cutCanopyRemovedM2) << ",\n";
+    s << "  \"keepCells\": " << st.keepCells << ", \"keptStructureTriangles\": " << st.keptStructureTriangles << ",\n";
     s << "  \"removedAsScanned\": {\"nodes\": " << r.removedNodes << ", \"bytes\": " << r.removedGlb.size() << "},\n";
     auto q3 = [](const std::array<double, 3>& q) { return "[" + json::num(q[0]) + ", " + json::num(q[1]) + ", " + json::num(q[2]) + "]"; };
     s << "  \"dispersionQuartiles\": {\"green\": " << q3(st.greenDispersionQuartiles) << ", \"other\": " << q3(st.otherDispersionQuartiles) << "},\n";
