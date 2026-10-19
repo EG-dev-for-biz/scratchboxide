@@ -30,6 +30,8 @@ import { createStreetViewGroundingImageService } from '../../spatial/StreetViewG
 import { Google3DTileBlockoutPipelineService, getGoogle3DTilesFullTexture } from '../../spatial/Google3DTileBlockoutPipelineService';
 import { resolveMapsApiKey } from '../../../browser/generative-canvas/services/google-maps-service';
 import { getTileRefineService } from '../tile-refine-service';
+import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
+import { fetchVectorEvidence } from './vector-footprints';
 import { getTileVegetationService } from '../tile-vegetation-service';
 import { loadScanFit } from '../scan-fit-loader';
 import { StageCache, stagedWorkspaceRoot } from './stage-cache';
@@ -215,6 +217,10 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
             ...(typeof canopy === 'function' ? { canopy: (req: { tilePath: string; cellM?: number; signal?: AbortSignal }) => canopy.call(vegetation, req) } : {})
         },
         refine: getTileRefineService(workspaceRoot),
+        // building footprints, water and roads from Google vector data (vectortiles.featuretiles, the service account)
+        ...(gemini.ensureAuth()
+            ? { vectorEvidence: (req: { lat: number; lng: number; radiusM: number }) => fetchVectorEvidence({ ...req, fetchTile: (x, y, z) => GoogleVectorTileService.fetchVectorTile(x, y, z, '') }) }
+            : {}),
         ...(fitter.service ? { scanFit: fitter.service } : { scanFitUnavailable: fitter.unavailable }),
         streetView: {
             mapsApiKey: resolveMapsApiKey(),

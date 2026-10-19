@@ -15,7 +15,8 @@
  *   more digits, so the end-of-turn commit (resolveCanvasArtifactId) keeps it and the viewport is not remounted. An
  *   active scene whose own id ends in such a run gets "<id>-s", since the commit would re-key it anyway.
  * - One objects[] entry per committed, unretired layer, with id = StagedLayer.objectId (from the stage cache key) and
- *   role 'environment', so a later staging replaces them (isLocationLayer).
+ *   role 'environment', so a later staging replaces them (isLocationLayer); a structure rebuild's layers (source
+ *   'scan_fit') are kept by a later district staged into the scene (kept-structure.ts).
  * - The camera is computed once, from L1's bounds when it commits, and never changes during the run: elevation 28°,
  *   azimuth 45° (the app's auto-framing defaults), distance max(the stand-off for the structure, 1.2 × L1's bounding
  *   sphere radius), the elevation raised in 5° steps up to 70° until the eye is outside L1's box. Every later layer is
@@ -26,6 +27,7 @@
 import * as fs from 'fs';
 import type { CanvasArtifact, Media4DObject } from '../../../browser/generative-canvas/canvas-types';
 import type { StagedBuildState, StagedLayer } from '../../../common/spatial/staged-location-contracts';
+import { anchorOffset, isLocationLayer, offsetObjects, partitionActiveScene, type ActiveScenePartition } from './kept-structure';
 
 export type Vec3 = [number, number, number];
 export interface Bounds3 { min: Vec3; max: Vec3 }
@@ -145,18 +147,18 @@ export interface StagedArtifactInput {
     geoAnchor: { lat: number; lng: number; elevation?: number; [k: string]: unknown };
     /** The active scene to stage into (its own objects other than location layers are kept). */
     activeScene?: CanvasArtifact;
+    /**
+     * The active scene split by partitionActiveScene: its other objects and an earlier build's structure rebuild are
+     * kept (the structure moved into this build's frame, its layer records carried so its twins and provenance stay),
+     * its location layers replaced. Computed from activeScene when absent.
+     */
+    carried?: ActiveScenePartition;
     /** One line for the artifact summary (staged-summary's digest). */
     summary: string;
     version: number;
 }
 
-/** Previous environment layers of a scene the tiles are staged into: replaced, never stacked (as spatial-tools). */
-export function isLocationLayer(o: any): boolean {
-    const s = String(o?.content?.metadata?.source || '').toLowerCase();
-    const role = String(o?.content?.metadata?.role || '').toLowerCase();
-    return s === 'google3dtilesclay' || s === 'google_3d_tiles_clay' || s === 'google3dtilesfulltexture' || s === 'google_3d_tiles_full_texture'
-        || s === 'googlevectortileservice' || s === 'google_vector_tile_service' || s === 'sb-veggie' || role === 'environment' || role === 'vegetation';
-}
+export { isLocationLayer };
 
 export function composeStagedArtifact(input: StagedArtifactInput): CanvasArtifact {
     const { state } = input;
@@ -178,13 +180,23 @@ export function composeStagedArtifact(input: StagedArtifactInput): CanvasArtifac
     };
     if (input.activeScene) {
         const prev = (input.activeScene.data as any) || {};
-        const kept = (Array.isArray(prev.objects) ? prev.objects : []).filter((o: any) => !isLocationLayer(o));
+        const carried = input.carried ?? partitionActiveScene(input.activeScene);
+        // the kept structure, moved into this build's frame; its layer records join this build's so the viewport keeps
+        // drawing it (and its textured twins) as it was
+        const structure = offsetObjects(carried.structure, anchorOffset(carried.anchor, input.geoAnchor));
+        const ownIds = new Set(state.layers.map(l => l.objectId));
+        const keptLayers = carried.structureLayers.filter(l => !ownIds.has(l.objectId));
+        const stagedBuild: StagedBuildState = {
+            ...state,
+            layers: [...keptLayers, ...state.layers],
+            ...(state.materialMode === undefined && carried.materialMode !== undefined && keptLayers.length ? { materialMode: carried.materialMode } : {})
+        };
         return {
             ...input.activeScene,
             id: state.artifactId,
             version: input.version,
             summary: input.summary,
-            data: { ...prev, ...base, objects: [...kept, ...objects] }
+            data: { ...prev, ...base, stagedBuild, objects: [...carried.other, ...structure.filter(o => !ownIds.has(o.id)), ...objects] }
         } as CanvasArtifact;
     }
     return {

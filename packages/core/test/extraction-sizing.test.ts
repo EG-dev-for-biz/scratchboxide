@@ -9,7 +9,7 @@
 
 /**
  * Request-sized extraction and the one structure pick: a canopy-masked footprint, the containment loop and its cap,
- * the district fallbacks, and the IoU check against the structure tile_refine isolated. Synthetic scans with known
+ * the district fallbacks, and the check of the structure tile_refine isolated against it. Synthetic scans with known
  * truth; the "extraction" keeps the triangles whose centroid lies within the square a crawl of whole leaves would
  * reach (radius + 10 m), cutting anything longer, as leaves do. Screenshot: the plaza and the structure picked.
  */
@@ -19,7 +19,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
-    containmentRadius, footprintIoU, grownOutline, isolatedStructureCells, pickStructure, sizeExtraction, touchesEdge,
+    checkIsolate, containmentRadius, grownOutline, pickStructure, sizeExtraction, touchesEdge,
     CONTAINMENT_MAX_RADIUS_M, NO_STRUCTURE_DISTRICT_RADIUS_M
 } from '../src/node/3d-engine/staged-location/extraction-sizing';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
@@ -90,13 +90,13 @@ function worldExtractor(world: Tri[], name: string) {
     };
 }
 
-describe('pickStructure and the IoU check: the plaza', () => {
+describe('pickStructure and the isolate check: the plaza', () => {
     // two buildings around a plaza, the geocoded point (0, 0) in between and nearer the west one
     const west = building(-24, -6, -10, 10, 18);
     const east = building(9, 27, -10, 10, 22);
     const scanFile = writeTris(path.join(TMP, 'plaza.glb'), [...groundGrid(60), ...west, ...east]);
 
-    it('picks the nearest structure by tile_refine\'s rule, and tile_refine\'s isolate of the same one agrees (IoU >= 0.7)', () => {
+    it('picks the nearest structure, and the check accepts tile_refine\'s isolate of it, not another one or a roofless shell', () => {
         const scan = loadScanMesh(scanFile);
         const ground = buildGroundModel(scan, { cellMeters: 1 });
         const pick = pickStructure(scan, ground)!;
@@ -112,12 +112,28 @@ describe('pickStructure and the IoU check: the plaza', () => {
 
         // tile_refine isolated the same building: its raw_clay holds it with an apron
         const isoSame = writeTris(path.join(TMP, 'iso_west.glb'), [...groundGrid(30).map(t => t.map((v, i) => (i % 3 === 0 ? v - 15 : v)) as Tri).filter(t => t[0] < -1), ...west]);
-        const same = isolatedStructureCells(isoSame, pick.seed);
-        expect(footprintIoU(pick.cells, same.cells)).toBeGreaterThanOrEqual(0.7);
-        // forced to the other building, the IoU says the pick does not match (isolate_mismatch)
+        const same = checkIsolate(isoSame, pick, ground);
+        expect(same.ok).toBe(true);
+        expect(same.iou).toBeGreaterThanOrEqual(0.7);
+        expect(same.roofed).toBeGreaterThan(0.9);
+        // forced to the other building, the check says the pick does not match (isolate_mismatch)
         const isoOther = writeTris(path.join(TMP, 'iso_east.glb'), [...groundGrid(40), ...east]);
-        const other = isolatedStructureCells(isoOther, { x: 9.5, z: 0 });
-        expect(footprintIoU(pick.cells, other.cells)).toBeLessThan(0.1);
+        const other = checkIsolate(isoOther, pick, ground);
+        expect(other.ok).toBe(false);
+        expect(other.holdsSeed).toBe(false);
+        expect(other.iou).toBeLessThan(0.1);
+        // the walls of the same building without its roof (a shell a vote left) are not the structure either
+        const shell = writeTris(path.join(TMP, 'iso_shell.glb'), [...groundGrid(30).map(t => t.map((v, i) => (i % 3 === 0 ? v - 15 : v)) as Tri).filter(t => t[0] < -1), ...west.filter(t => Math.abs(t[1] - t[4]) + Math.abs(t[1] - t[7]) > 0.01)]);
+        const hollow = checkIsolate(shell, pick, ground);
+        expect(hollow.roofed).toBeLessThan(0.6);
+        expect(hollow.ok).toBe(false);
+        // the remains of the pick after a vote took most of it (a third of the building, holding the seed) are not it either
+        const remains = writeTris(path.join(TMP, 'iso_remains.glb'), [...groundGrid(30).map(t => t.map((v, i) => (i % 3 === 0 ? v - 15 : v)) as Tri).filter(t => t[0] < -1), ...building(-12, -6, -10, 10, 18)]);
+        const part = checkIsolate(remains, pick, ground);
+        expect(part.holdsSeed).toBe(true);
+        expect(part.precision).toBeGreaterThan(0.9);
+        expect(part.recall).toBeLessThan(0.5);
+        expect(part.ok).toBe(false);
 
         // screenshot: the plaza, the picked structure's cells raised in blue
         const cells: number[] = [];

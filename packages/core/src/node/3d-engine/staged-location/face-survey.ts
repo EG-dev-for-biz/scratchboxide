@@ -40,7 +40,7 @@ import { capImageSide } from './ornament-batches';
 import { decodeJpegInMemory, measurePalette } from './photo-palette';
 import { chartNormal, chartPoint } from './slot-projection';
 import {
-    bearingDeg, facadeGeometry, fetchViews, STREET_VIEW_EYE_HEIGHT_M, type EvidenceImage, type PanoCandidate, type SelectedView, type StreetViewEvidenceDeps
+    bearingDeg, facadeGeometry, fetchViews, knownRefusals, STREET_VIEW_EYE_HEIGHT_M, type EvidenceImage, type PanoCandidate, type SelectedView, type StreetViewEvidenceDeps
 } from './streetview-evidence';
 import { callTimeout, type CallTimer } from './call-timer';
 
@@ -194,6 +194,16 @@ export function surveyCandidates(
     return candidates;
 }
 
+/** The wide view of `face` from candidate `pick`. */
+export function surveyViewFor(face: SurveyFaceTarget, pick: SurveyCandidate): SurveyView {
+    const aim = surveyAim(pick.eye, face);
+    return {
+        faceId: face.faceId, panoId: pick.pano.panoId, date: pick.pano.date, copyright: pick.pano.copyright, eye: pick.eye, facadeHeadingDeg: Math.round(face.headingDeg),
+        headingDeg: aim.headingDeg, pitchDeg: aim.elevationDeg, fovDeg: aim.fovDeg, aspectRatio: 'RATIO_4X3', distanceM: aim.distanceM,
+        score: Math.round(pick.score * 1000) / 1000, aimedSlotIds: [], coveredSlotIds: []
+    };
+}
+
 /**
  * One pano per face, each looking at its face from the outward side, all different, at different bearings from the
  * structure where the candidates allow. A face no pano sees is skipped, with the reason. The faces with the fewest
@@ -224,12 +234,7 @@ export function selectSurveyViews(
         const apart = free.filter(c => bearings.every(b => angleBetween(b, c.bearing) >= SURVEY_MIN_BEARING_SEPARATION_DEG));
         const pick = (apart.length ? apart : free)[0];
         used.add(pick.pano.panoId); bearings.push(pick.bearing);
-        const aim = surveyAim(pick.eye, face);
-        chosen.set(face.faceId, {
-            faceId: face.faceId, panoId: pick.pano.panoId, date: pick.pano.date, copyright: pick.pano.copyright, eye: pick.eye, facadeHeadingDeg: Math.round(face.headingDeg),
-            headingDeg: aim.headingDeg, pitchDeg: aim.elevationDeg, fovDeg: aim.fovDeg, aspectRatio: 'RATIO_4X3', distanceM: aim.distanceM,
-            score: Math.round(pick.score * 1000) / 1000, aimedSlotIds: [], coveredSlotIds: []
-        });
+        chosen.set(face.faceId, surveyViewFor(face, pick));
     }
     return { views: faces.map(f => chosen.get(f.faceId)).filter((v): v is SurveyView => !!v), skipped: skipped.sort((a, b) => a.headingDeg - b.headingDeg) };
 }
@@ -328,7 +333,15 @@ export interface SurveyResult {
     cost: StageCost;
     problems: string[];
     fetchFailures: Array<{ faceId: string; error: string }>;
+    /**
+     * The grounding API's refusals ("Pano is not published or eligible"): the face, the pano refused, why, and the next
+     * eligible pano asked instead (absent when the face had no other candidate). Recorded, never silently dropped.
+     */
+    refusals: Array<{ faceId: string; panoId: string; error: string; replacedBy?: string }>;
 }
+
+/** Rounds of asking the next candidate pano for a face whose pano the grounding API refused. */
+export const SURVEY_REFUSAL_RETRIES = 3;
 
 export interface RunSurveyInput {
     faces: SurveyFaceTarget[];
@@ -349,7 +362,10 @@ export interface RunSurveyInput {
 export async function runFaceSurvey(input: RunSurveyInput): Promise<SurveyResult> {
     const now = input.now ?? Date.now;
     const started = now();
-    const plan = selectSurveyViews(input.panos, input.faces, input.structure, input.ground, input.top);
+    // panos the grounding API already refused (this run or recently) are never asked for
+    const refusedBefore = knownRefusals(input.deps);
+    const panos = input.panos.filter(p => !refusedBefore.has(p.panoId));
+    const plan = selectSurveyViews(panos, input.faces, input.structure, input.ground, input.top);
     const faceOf = new Map(input.faces.map(f => [f.faceId, f]));
     const faceRecords = (): SurveyedFace[] => input.faces.map(f => {
         const skip = plan.skipped.find(s => s.faceId === f.faceId);
@@ -361,10 +377,41 @@ export async function runFaceSurvey(input: RunSurveyInput): Promise<SurveyResult
     }
     input.onProgress?.(`requesting ${plan.views.length} wide view${plan.views.length === 1 ? '' : 's'} of the structure's faces in parallel`);
     const fetched = await fetchViews(plan.views, input.deps, input.signal, SURVEY_IMAGE_TIMEOUT_MS);
-    const images: SurveyImage[] = fetched.images.map((im: EvidenceImage, k) => ({
+    // a pano the grounding API refuses is replaced by the face's next eligible candidate (a different pano, not one
+    // another face uses), up to SURVEY_REFUSAL_RETRIES rounds; every refusal is recorded
+    const got: EvidenceImage[] = [...fetched.images];
+    const notFetched: typeof fetched.failures = [];
+    const refusals: SurveyResult['refusals'] = [];
+    let pending = fetched.failures;
+    const candidates = surveyCandidates(panos, input.faces, input.structure, input.ground, input.top);
+    for (let round = 0; round < SURVEY_REFUSAL_RETRIES && pending.length; round++) {
+        if (input.signal?.aborted) break;
+        notFetched.push(...pending.filter(f => !f.refused));
+        const used = new Set(plan.views.map(v => v.panoId));
+        const retry: SurveyView[] = [];
+        for (const f of pending.filter(x => x.refused)) {
+            const faceId = (f.view as SurveyView).faceId;
+            const face = faceOf.get(faceId)!;
+            const next = (candidates.get(faceId) ?? []).find(c => !used.has(c.pano.panoId) && !input.deps.refusedPanos?.has(c.pano.panoId) && !refusedBefore.has(c.pano.panoId));
+            refusals.push({ faceId, panoId: f.view.panoId, error: f.error, ...(next ? { replacedBy: next.pano.panoId } : {}) });
+            if (!next) { notFetched.push(f); continue; }
+            used.add(next.pano.panoId);
+            const view = surveyViewFor(face, next);
+            plan.views = plan.views.map(v => (v.faceId === faceId ? view : v));
+            retry.push(view);
+        }
+        pending = [];
+        if (!retry.length) break;
+        input.onProgress?.(`the grounding API refused ${retry.length} pano${retry.length === 1 ? '' : 's'}; asking the next eligible one for ${retry.length === 1 ? 'that face' : 'those faces'}`);
+        const again = await fetchViews(retry, input.deps, input.signal, SURVEY_IMAGE_TIMEOUT_MS);
+        got.push(...again.images);
+        pending = again.failures;
+    }
+    notFetched.push(...pending);
+    const images: SurveyImage[] = got.map((im: EvidenceImage, k) => ({
         index: k, face: faceOf.get((im.view as SurveyView).faceId)!, view: im.view as SurveyView, widthPx: im.widthPx, heightPx: im.heightPx, bytes: im.bytes, mimeType: im.mimeType, sha256: im.sha256, id: im.id, fetchMs: im.fetchMs
     }));
-    const fetchFailures = fetched.failures.map(f => ({ faceId: (f.view as SurveyView).faceId, error: f.error }));
+    const fetchFailures = notFetched.map(f => ({ faceId: (f.view as SurveyView).faceId, error: f.error }));
     if (images.length) input.onFetched?.(images.map(im => ({ view: im.view, widthPx: im.widthPx, heightPx: im.heightPx, imageIndex: im.index, sha256: im.sha256 })));
     if (!images.length) {
         throw new VisionStageError(`every survey image failed to fetch (${fetchFailures.map(f => f.error).slice(0, 2).join('; ')})`, emptyModel('no image'), true, 'no_street_view');
@@ -449,23 +496,27 @@ export async function runFaceSurvey(input: RunSurveyInput): Promise<SurveyResult
     }
     for (const f of fetchFailures) {
         const rec = faces.find(x => x.faceId === f.faceId);
-        if (rec) rec.skipped = `its image did not arrive (${f.error})`;
+        const tried = refusals.filter(r => r.faceId === f.faceId);
+        if (rec) rec.skipped = `its image did not arrive (${f.error})${tried.length ? `; the grounding API refused ${tried.map(r => r.panoId).join(', ')}${tried.some(r => !r.replacedBy) ? ' and no other eligible pano looks at this face' : ''}` : ''}`;
     }
     const cost: StageCost = { images: images.length, visionCalls: images.length, seconds: Math.round(((now() - started) / 1000) * 10) / 10 };
     const hints: MaterialHints = {
         schema: 'scratchbox.material-hints/1', label: 'photo-inferred', palette: 'measured-from-photo',
         textureUse: 'none: the Street View pixels are not projected onto the model', faces, model, cost
     };
-    const out: SurveyResult = { plan, faces, read, hints, model, cost, problems: parsed.problems, fetchFailures };
+    const out: SurveyResult = { plan, faces, read, hints, model, cost, problems: parsed.problems, fetchFailures, refusals };
     SURVEY_IMAGES.set(out, new Map(images.map(im => [im.index, im.bytes])));
     return out;
 }
 
 /** One sentence of what the survey found, for the overlay's source line. */
-export function describeSurvey(r: Pick<SurveyResult, 'faces' | 'cost' | 'model'>): string {
+export function describeSurvey(r: Pick<SurveyResult, 'faces' | 'cost' | 'model'> & { refusals?: SurveyResult['refusals'] }): string {
     const surveyed = r.faces.filter(f => !f.skipped);
     const elements = surveyed.reduce((n, f) => n + f.elements.length, 0);
     const colours = surveyed.reduce((n, f) => n + (f.palette?.colours.length ?? 0), 0);
     const skipped = r.faces.length - surveyed.length;
-    return `${surveyed.length} of ${r.faces.length} faces surveyed in ${r.cost.seconds.toFixed(1)} s (${r.cost.images} images, ${r.cost.visionCalls} vision call${r.cost.visionCalls === 1 ? '' : 's'} by ${r.model.used}): ${elements} photo-inferred elements, ${colours} colours measured from the photos${skipped ? `, ${skipped} face${skipped === 1 ? '' : 's'} without a view` : ''}`;
+    const refused = r.refusals ?? [];
+    const replaced = refused.filter(x => x.replacedBy).length;
+    const refusedText = refused.length ? `; the grounding API refused ${refused.length} pano${refused.length === 1 ? '' : 's'} (${refused.map(x => x.panoId).join(', ')})${replaced ? `, ${replaced} replaced by the face's next eligible pano` : ''}` : '';
+    return `${surveyed.length} of ${r.faces.length} faces surveyed in ${r.cost.seconds.toFixed(1)} s (${r.cost.images} images, ${r.cost.visionCalls} vision call${r.cost.visionCalls === 1 ? '' : 's'} by ${r.model.used}): ${elements} photo-inferred elements, ${colours} colours measured from the photos${skipped ? `, ${skipped} face${skipped === 1 ? '' : 's'} without a view` : ''}${refusedText}`;
 }

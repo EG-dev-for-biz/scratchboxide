@@ -30,7 +30,7 @@ import { StageCache, stageKey } from '../src/node/3d-engine/staged-location/stag
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
 import { buildGroundModel, loadScanMesh } from '../src/node/spatial/StreetViewSurveyPlanner';
 import { readGlbScene } from '../src/node/spatial/StreetViewPoseRegistrar';
-import { canopyLookup, footprintIoU, isolatedStructureCells, maskCanopy, pickStructure, touchesEdge } from '../src/node/3d-engine/staged-location/extraction-sizing';
+import { canopyLookup, checkIsolate, maskCanopy, pickStructure, touchesEdge } from '../src/node/3d-engine/staged-location/extraction-sizing';
 import { readRemeshProvenance } from '../src/node/3d-engine/staged-location/remesh-provenance';
 import { validateContract, type CanopyMask, type StageEvent } from '../src/common/spatial/staged-location-contracts';
 import type { CanvasArtifact } from '../src/browser/generative-canvas/canvas-types';
@@ -297,8 +297,8 @@ describe.skipIf(!arch.requirement.ok)(withReason('the Washington Square Arch, is
         const last = s.cuts[s.cuts.length - 1];
         const lastEntry = s.deps.cache.entryDir('tiles', stageKey('extract/v2', (40.73122).toFixed(6), (-73.99709).toFixed(6), Math.round(last.radiusM)));
         const scan = loadScanMesh(path.join(lastEntry, 'textured.glb'));
-        const ground = buildGroundModel(scan, { cellMeters: 1 });
         const mask = canopyMaskFromCrowns(real.strip.crowns);
+        const ground = buildGroundModel(scan, { cellMeters: 1, exclude: canopyLookup(mask) });
         const { masked, cells } = maskCanopy(ground, mask);
         expect(cells).toBeGreaterThan(1000);
         const pick = pickStructure(scan, masked, { canopyCellsMasked: cells })!;
@@ -310,9 +310,10 @@ describe.skipIf(!arch.requirement.ok)(withReason('the Washington Square Arch, is
         expect(canopyInside).toEqual([]);
         expect(touchesEdge(pick, ground)).toBe(false);
         expect(Math.hypot(pick.seed.x - result.structure!.seed[0], pick.seed.z - result.structure!.seed[1])).toBeLessThan(0.01);
-        // tile_refine's isolated structure, by the same 1 m rule, is this one
-        const iso = isolatedStructureCells(real.refine.rawClay, pick.seed);
-        expect(footprintIoU(pick.cells, iso.cells)).toBeGreaterThanOrEqual(0.7);
+        // tile_refine's isolated structure, on the pick's terrain, is this one
+        const iso = checkIsolate(real.refine.rawClay, pick, masked);
+        expect(iso.ok).toBe(true);
+        expect(iso.iou).toBeGreaterThanOrEqual(0.7);
         console.log(`[real data] Arch: extraction sized to ${result.extraction.radiusM} m in ${result.structure!.containmentRounds} round(s); footprint ${Math.round(pick.areaM2)} m² (${box.long.toFixed(1)} x ${box.short.toFixed(1)} m oriented box, ${Math.round(pick.heightM)} m tall), ${cells} canopy cells masked, IoU with tile_refine's isolate ${result.structure!.isolateIoU}`);
 
         // the layers: the tiles as downloaded (geometry only), then the real remesh of the structure, with tile_refine's own

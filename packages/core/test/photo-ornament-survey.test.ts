@@ -13,11 +13,14 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-    fitSurveyFaces, footprintSurveyFaces, parseSurveyReply, runFaceSurvey, selectSurveyViews, surveyAim, surveyContents, surveyPrompt, SURVEY_FOV_MAX_DEG, SURVEY_FOV_MIN_DEG
+    describeSurvey, fitSurveyFaces, footprintSurveyFaces, parseSurveyReply, runFaceSurvey, selectSurveyViews, surveyAim, surveyContents, surveyPrompt, SURVEY_FOV_MAX_DEG, SURVEY_FOV_MIN_DEG
 } from '../src/node/3d-engine/staged-location/face-survey';
 import { VisionModelChain } from '../src/node/gemini/vision-model-chain';
 import { validateContract } from '../src/common/spatial/staged-location-contracts';
-import type { PanoCandidate } from '../src/node/3d-engine/staged-location/streetview-evidence';
+import { isGroundingRefusal, knownRefusals, type PanoCandidate } from '../src/node/3d-engine/staged-location/streetview-evidence';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { VisionStageError } from '../src/node/3d-engine/staged-location/ornament-vision';
 import { ProColorGradeMatchingService as Colour } from '../src/node/image/ProColorGradeMatchingService';
 import { bandJpeg, GREY, routedVisionClient, SKY, STONE, surveyReply, type RoutedCall } from './helpers/photo-ornament-fixtures';
@@ -173,6 +176,39 @@ describe('the survey calls (one per face, in parallel)', () => {
         const failing = { retrieveGroundingImage: async () => { throw new Error('Maps Imagery Grounding API 503: Deadline expired'); } };
         await expect(runFaceSurvey({ faces, panos: PANOS, structure: STRUCTURE, ground: GROUND, top: new Float32Array(0), deps: { mapsApiKey: 'k', grounding: failing }, chain: chainFor({ survey: surveyReply() }, []) }))
             .rejects.toMatchObject({ reasonCode: 'no_street_view', transient: true });
+    });
+
+    it('a pano the grounding API refuses (403 "not published or eligible") is replaced by the face\'s next eligible pano, and every refusal is recorded', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-refusals-'));
+        const fetched: any[] = [];
+        const base = grounding(fetched, {});
+        const refusing = {
+            retrieveGroundingImage: async (req: any) => {
+                if (req.panoId === 'N1' || req.panoId === 'W1') { fetched.push(req); throw new Error('Maps Imagery Grounding API 403: Pano is not published or eligible. (use a Google-captured panorama, not a user photosphere)'); }
+                return base.retrieveGroundingImage(req);
+            }
+        };
+        const refusedPanos = new Map<string, string>();
+        const deps = { mapsApiKey: 'k', grounding: refusing, refusedPanos, metadataCachePath: path.join(dir, 'metadata.json') };
+        const r = await runFaceSurvey({ faces, panos: PANOS, structure: STRUCTURE, ground: GROUND, top: new Float32Array(0), deps, chain: chainFor({ survey: surveyReply() }, []) });
+        // the north face got N2 after N1 was refused; the west face had no other pano and says so
+        expect(r.refusals.length).toBe(2);
+        expect(r.refusals).toEqual(expect.arrayContaining([
+            expect.objectContaining({ faceId: 'h0', panoId: 'N1', replacedBy: 'N2', error: expect.stringMatching(/not published or eligible/) }),
+            expect.objectContaining({ faceId: 'h270', panoId: 'W1' })
+        ]));
+        expect(r.refusals.find(x => x.panoId === 'W1')!.replacedBy).toBeUndefined();
+        expect(r.faces.find(f => f.headingDeg === 0)!.panoId).toBe('N2');
+        expect(r.faces.find(f => f.headingDeg === 0)!.skipped).toBeUndefined();
+        expect(r.faces.find(f => f.headingDeg === 270)!.skipped).toMatch(/the grounding API refused W1 and no other eligible pano looks at this face/);
+        expect(r.cost.images).toBe(3);
+        expect(describeSurvey(r)).toMatch(/the grounding API refused 2 panos \(.*\), 1 replaced by the face's next eligible pano/);
+        // N1 and W1 were each asked once; the refusals are kept for the run and on disk, so discovery leaves them out next time
+        expect(fetched.filter(q => q.panoId === 'N1').length).toBe(1);
+        expect([...refusedPanos.keys()].sort()).toEqual(['N1', 'W1']);
+        expect([...knownRefusals({ metadataCachePath: deps.metadataCachePath }).keys()].sort()).toEqual(['N1', 'W1']);
+        expect(isGroundingRefusal('Maps Imagery Grounding API 503: Deadline expired')).toBe(false);
+        fs.rmSync(dir, { recursive: true, force: true });
     });
 
     it('parses defensively: truncation and a wrong image index', () => {

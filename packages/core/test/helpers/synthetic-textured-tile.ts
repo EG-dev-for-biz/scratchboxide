@@ -25,7 +25,11 @@ export interface SyntheticTree { x: number; z: number; height: number; radius: n
  * leaves are cut along planes and the scan hangs a planar curtain there), in the plane through (x0, z0)-(x1, z1).
  */
 export interface SyntheticCurtain { x0: number; z0: number; x1: number; z1: number; belowCanopy: number }
-export interface SyntheticBuilding { x0: number; z0: number; x1: number; z1: number; height: number; roofBump?: { x: number; z: number; height: number; radius: number } }
+/**
+ * A building: planar walls and a flat roof, which may carry a green bump (a roof garden: the bump replaces the roof under
+ * it). `hollow`: the ground runs on under the building (a photogrammetric building mesh is a shell over the street).
+ */
+export interface SyntheticBuilding { x0: number; z0: number; x1: number; z1: number; height: number; roofBump?: { x: number; z: number; height: number; radius: number }; hollow?: boolean }
 
 export interface SyntheticTileSpec {
     /** Ground covers [-halfSize, halfSize] in x and z. */
@@ -133,7 +137,7 @@ export function buildSyntheticTile(spec: SyntheticTileSpec): Buffer {
     const facade: Prim = { pos: [], uv: [], idx: [] };
     const drape: Prim = { pos: [], uv: [], idx: [] };
     const b = spec.building;
-    const inBuilding = (x: number, z: number) => !!b && x > b.x0 - 1e-6 && x < b.x1 + 1e-6 && z > b.z0 - 1e-6 && z < b.z1 + 1e-6;
+    const inBuilding = (x: number, z: number) => !!b && !b.hollow && x > b.x0 - 1e-6 && x < b.x1 + 1e-6 && z > b.z0 - 1e-6 && z < b.z1 + 1e-6;
 
     // ground + canopy heightfield
     const H: number[][] = [];

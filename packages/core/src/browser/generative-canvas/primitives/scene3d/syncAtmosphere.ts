@@ -16,6 +16,7 @@ import {
 import { buildThreeJsLightingRig } from './lightingRigs';
 import type { AtmosphereHandle, RendererStack, Scene3DRenderMode } from './types';
 import { removeAndDispose } from './types';
+import { hasExplicitSun } from '../../../../common/scene-atmosphere-opt-in';
 
 export interface AtmosphereInput {
     skybox?: string;
@@ -98,8 +99,10 @@ export function classifyAtmosphere(input: AtmosphereInput): AtmosphereClassifica
     const isClayMode = input.renderMode === 'clay';
 
     // In clay mode, focus strictly on clay mode and geometry before color and atmospherics.
-    // Atmospheric skybox domes, volumetric god rays, and biomes are suppressed in clay mode.
-    const atmoConfig = isClayMode ? undefined : (input.atmosphericScattering || input.atmosphere);
+    // Atmospheric skybox domes, volumetric god rays, and biomes are suppressed in clay mode, unless the scene places
+    // the sun explicitly (the user asked for that sun): then its sky, sunlight and shadows are drawn on the clay.
+    const explicitSun = hasExplicitSun(input.atmosphericScattering) || hasExplicitSun(input.atmosphere);
+    const atmoConfig = isClayMode && !explicitSun ? undefined : (input.atmosphericScattering || input.atmosphere);
     const hasAtmosphere = !!(
         atmoConfig && (
             atmoConfig === true ||
@@ -215,6 +218,31 @@ function createStarfield(scene: THREE.Scene): THREE.Points {
 }
 
 /**
+ * The atmospheric sun's shadow camera sized to the content: an orthographic box of half-width `radius` around the scene's
+ * centre, the light placed along the sun direction outside it, and a map fine enough for that extent (the three.js default
+ * box is 10 m wide, which leaves anything larger unshadowed).
+ */
+export function fitSunShadowToContent(sunLight: THREE.DirectionalLight | undefined, radius: number): void {
+    if (!sunLight?.shadow) return;
+    const dir = sunLight.position.clone();
+    if (dir.lengthSq() === 0) return;
+    dir.normalize();
+    sunLight.position.copy(dir.multiplyScalar(radius * 3));
+    sunLight.target.position.set(0, 0, 0);
+    const cam = sunLight.shadow.camera as THREE.OrthographicCamera;
+    cam.left = -radius; cam.right = radius; cam.top = radius; cam.bottom = -radius;
+    cam.near = 0.5; cam.far = radius * 10;
+    cam.updateProjectionMatrix();
+    const size = radius > 150 ? 4096 : 2048;
+    sunLight.shadow.mapSize.set(size, size);
+    // bias in light-space depth units, scaled to texel size so large extents do not acne
+    sunLight.shadow.bias = -0.0002;
+    sunLight.shadow.normalBias = Math.max(0.02, (2 * radius) / size);
+    sunLight.shadow.map?.dispose();
+    sunLight.shadow.map = null as never;
+}
+
+/**
  * Synchronises everything "environmental": background, fog, sky dome + aerial perspective +
  * cloud shadows, god rays, fallback lights, terrain floor, procedural biome terrain, starfield
  * and grid visibility. Re-run only when the atmosphere fingerprint changes; the renderer stack
@@ -295,8 +323,14 @@ export function syncAtmosphere(
         const atmoConfig = (typeof input.atmosphericScattering === 'object' && input.atmosphericScattering !== null)
             ? input.atmosphericScattering
             : {};
-        skyDomeModule = createAtmosphericSkyDome(scene, isSunset, atmoConfig);
+        // the shadow reach: the config's own (atmosphere_configure_scene sizes it to the scene), else the content's radius
+        const shadowRadius = typeof atmoConfig.sunShadowRadiusMeters === 'number' && atmoConfig.sunShadowRadiusMeters > 0
+            ? atmoConfig.sunShadowRadiusMeters
+            : Math.max(30, input.contentRadiusMeters ?? (isLargeScale ? 300 : 30));
+        // the dome encloses the camera's orbit around content of that size (the stand-off camera sits a few radii out)
+        skyDomeModule = createAtmosphericSkyDome(scene, isSunset, atmoConfig, { sphereRadius: Math.max(280, shadowRadius * 8) });
         skyDomeObject = skyDomeModule.skyDome;
+        fitSunShadowToContent(skyDomeModule.sunLight, shadowRadius);
 
         if (atmoConfig.aerialPerspectiveEnabled === true) {
             try {

@@ -37,6 +37,7 @@ import { fetchStreetViewPanoMetadata } from './StreetViewPanoramaProjectionServi
 import { StreetViewRestyleService } from './StreetViewRestyleService';
 import { frameCamera, renderFrameDepth, streetViewForward, ZERO_CORRECTION, readGlbScene, sceneToRenderMesh, readJpegSize, type FrameCamera } from './StreetViewPoseRegistrar';
 import { mapLimit } from '../../common/map-limit';
+import { isGoogleCapture } from './StreetViewGroundingImageService';
 
 const DEG = Math.PI / 180;
 
@@ -141,8 +142,14 @@ export interface GroundModel {
     top: Float32Array;
     /** Local terrain per cell. */
     ground: Float32Array;
-    /** 1 where the cell is open ground (top within `openToleranceMeters` of the terrain). */
+    /** 1 where the cell is open ground (top within `openToleranceMeters` of the terrain, above or below). */
     open: Uint8Array;
+    /** How the terrain was measured: the walkable street surface, or (no walkable surface found) a low percentile. */
+    terrainMethod: 'walkable-surface' | 'low-percentile';
+    /** Cells of the walkable surface the terrain was measured on (1), or undefined for the low-percentile terrain. */
+    walkable?: Uint8Array;
+    /** Cells whose surface was masked as tree canopy (1), when a canopy mask was applied. */
+    canopy?: Uint8Array;
     cellIndex(x: number, z: number): number;
     groundAt(x: number, z: number): number;
     topAt(x: number, z: number): number;
@@ -150,12 +157,36 @@ export interface GroundModel {
 
 export interface GroundModelOptions {
     cellMeters?: number;          // default 1
-    /** Terrain block size for the low-percentile statistic. Default 8 m. */
+    /** Terrain block size: the terrain is a smooth surface through block values. Default 8 m. */
     blockMeters?: number;
-    /** Half-window (metres) over which the terrain takes a low percentile of block values. Default 32. */
+    /** Half-window (metres) of the low-percentile terrain (used only when no walkable surface is found). Default 32. */
     terrainRadiusMeters?: number;
     openToleranceMeters?: number; // default 1.5
+    /** Cells to leave out of the terrain measurement (tree canopy, from tile_vegetation's classifier). */
+    exclude?: (x: number, z: number) => boolean;
+    /** Where the surface is water (Google vector data): never part of the walkable surface, so never the ground. */
+    water?: (x: number, z: number) => boolean;
+    /** Where a road runs (Google vector data): the street level the walkable surface is chosen by. */
+    road?: (x: number, z: number) => boolean;
 }
+
+/**
+ * The walkable surface. Cells whose surfaces join with steps of at most WALKABLE_RISE_PER_M x cell (min
+ * WALKABLE_STEP_MIN_M) form surfaces; a surface most of whose rim steps down is a top (a roof, a crown, a car), the
+ * rest are open surfaces. The street is the open surface the most structure rises from (rim contacts where a cell at
+ * least WALKABLE_FOOT_RISE_M higher stands on a surface that is not itself open, less the rim where it steps down onto
+ * another open surface): every building fronts a street, while water and sunken gardens meet mostly the street's own
+ * retaining walls, and a plinth or quay above the street steps down onto it. Other open surfaces join the street when they lie
+ * within WALKABLE_JOIN_TOLERANCE_M of the terrain through it (street fragments cut apart by canopy, courtyards at grade).
+ */
+export const WALKABLE_RISE_PER_M = 0.5;
+export const WALKABLE_STEP_MIN_M = 0.3;
+export const WALKABLE_FOOT_RISE_M = 3.0;
+export const WALKABLE_TOP_RIM_FRACTION = 0.5;
+export const WALKABLE_MIN_AREA_M2 = 16;
+export const WALKABLE_JOIN_TOLERANCE_M = 1.0;
+/** How many of the strongest open surfaces are tried as the street's level. */
+export const WALKABLE_LEVEL_CANDIDATES = 8;
 
 function percentile(values: number[], q: number): number {
     if (!values.length) return NaN;
@@ -163,8 +194,151 @@ function percentile(values: number[], q: number): number {
     return a[Math.min(a.length - 1, Math.max(0, Math.floor(q * (a.length - 1))))];
 }
 
-export function buildGroundModel(scan: ScanMesh, opts: GroundModelOptions = {}): GroundModel {
-    const cell = opts.cellMeters ?? 1, block = opts.blockMeters ?? 8, radius = opts.terrainRadiusMeters ?? 32, openTol = opts.openToleranceMeters ?? 1.5;
+/** The walkable street surface (1 per cell), or undefined when no open surface has structure rising from it. */
+export function walkableSurface(top: Float32Array, nx: number, nz: number, cell: number, usable: Uint8Array, road?: Uint8Array): Uint8Array | undefined {
+    const N = nx * nz;
+    const step = Math.max(WALKABLE_STEP_MIN_M, WALKABLE_RISE_PER_M * cell);
+    const label = new Int32Array(N).fill(-1);
+    const area: number[] = [];
+    const stack: number[] = [];
+    for (let s = 0; s < N; s++) {
+        if (label[s] >= 0 || !usable[s]) continue;
+        const id = area.length;
+        area.push(0);
+        label[s] = id; stack.push(s);
+        while (stack.length) {
+            const c = stack.pop()!;
+            area[id]++;
+            const i = c % nx, k = (c / nx) | 0;
+            for (let q = 0; q < 4; q++) {
+                const ii = i + (q === 0 ? 1 : q === 1 ? -1 : 0), kk = k + (q === 2 ? 1 : q === 3 ? -1 : 0);
+                if (ii < 0 || kk < 0 || ii >= nx || kk >= nz) continue;
+                const n = kk * nx + ii;
+                if (label[n] >= 0 || !usable[n] || Math.abs(top[n] - top[c]) > step) continue;
+                label[n] = id; stack.push(n);
+            }
+        }
+    }
+    const R = area.length;
+    if (!R) return undefined;
+    // rim contacts: up (the neighbour is higher) and down
+    const up = new Float64Array(R), down = new Float64Array(R);
+    const eachContact = (fn: (lo: number, hi: number) => void) => {
+        for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) {
+            const c = k * nx + i;
+            if (label[c] < 0) continue;
+            if (i + 1 < nx) { const n = c + 1; if (label[n] >= 0 && label[n] !== label[c]) top[n] > top[c] ? fn(c, n) : fn(n, c); }
+            if (k + 1 < nz) { const n = c + nx; if (label[n] >= 0 && label[n] !== label[c]) top[n] > top[c] ? fn(c, n) : fn(n, c); }
+        }
+    };
+    eachContact((lo, hi) => { up[label[lo]]++; down[label[hi]]++; });
+    const minCells = Math.max(1, Math.round(WALKABLE_MIN_AREA_M2 / (cell * cell)));
+    const isOpen = (r: number) => area[r] >= minCells && down[r] <= WALKABLE_TOP_RIM_FRACTION * (up[r] + down[r]);
+    // structure feet: a cell standing WALKABLE_FOOT_RISE_M or more above an open surface, on a surface that is not open
+    // less the rim where it steps down onto another open surface (a plinth, a terrace or a quay above the street: what stands
+    // on it stands above the street too)
+    const feet = new Float64Array(R);
+    eachContact((lo, hi) => {
+        if (!isOpen(label[lo])) return;
+        if (!isOpen(label[hi])) { if (top[hi] - top[lo] >= WALKABLE_FOOT_RISE_M) feet[label[lo]]++; } else feet[label[hi]]--;
+    });
+    // the street is one level: each of the strongest open surfaces is grown by the open surfaces at its level (fragments cut
+    // apart by canopy or traffic, courtyards at grade), and the level the most structure rises from wins
+    // (a road the vector data places on a surface is evidence that surface is the street: each road cell counts as a foot)
+    if (road) for (let c = 0; c < N; c++) if (road[c] && label[c] >= 0 && isOpen(label[c])) feet[label[c]]++;
+    const candidates = [...Array(R).keys()].filter(r => isOpen(r) && feet[r] > 0).sort((p, q) => feet[q] - feet[p]).slice(0, WALKABLE_LEVEL_CANDIDATES);
+    if (!candidates.length) return undefined;
+    let best: { walk: Uint8Array; score: number } | undefined;
+    for (const seed of candidates) {
+        const walk = new Uint8Array(N);
+        for (let c = 0; c < N; c++) if (label[c] === seed) walk[c] = 1;
+        const terrain = terrainThrough(top, nx, nz, cell, walk, 8);
+        const dev: number[][] = Array.from({ length: R }, () => []);
+        for (let c = 0; c < N; c++) { const r = label[c]; if (r >= 0 && r !== seed && isOpen(r)) dev[r].push(top[c] - terrain[c]); }
+        let score = feet[seed];
+        const joins = new Uint8Array(R);
+        for (let r = 0; r < R; r++) if (dev[r].length && Math.abs(percentile(dev[r], 0.5)) <= WALKABLE_JOIN_TOLERANCE_M) { joins[r] = 1; score += Math.max(0, feet[r]); }
+        if (best && score <= best.score) continue;
+        for (let c = 0; c < N; c++) if (label[c] >= 0 && joins[label[c]]) walk[c] = 1;
+        best = { walk, score };
+    }
+    return best!.walk;
+}
+
+/**
+ * A smooth terrain through the walkable cells: per block the lower quartile of the walkable surface, blocks without any
+ * filled from their neighbours (nearest first, then relaxed so the fill is smooth), bilinear to cells.
+ */
+function terrainThrough(top: Float32Array, nx: number, nz: number, cell: number, walk: Uint8Array, blockMeters: number): Float32Array {
+    const bs = Math.max(1, Math.round(blockMeters / cell));
+    const bnx = Math.ceil(nx / bs), bnz = Math.ceil(nz / bs);
+    const B = new Float32Array(bnx * bnz).fill(NaN);
+    const measured = new Uint8Array(bnx * bnz);
+    for (let bk = 0; bk < bnz; bk++) for (let bi = 0; bi < bnx; bi++) {
+        const vals: number[] = [];
+        for (let k = bk * bs; k < Math.min(nz, (bk + 1) * bs); k++) for (let i = bi * bs; i < Math.min(nx, (bi + 1) * bs); i++) {
+            const c = k * nx + i;
+            if (walk[c]) vals.push(top[c]);
+        }
+        if (vals.length >= Math.max(2, Math.round(bs * bs * 0.05))) { B[bk * bnx + bi] = percentile(vals, 0.25); measured[bk * bnx + bi] = 1; }
+    }
+    // fill outward from the measured blocks: each pass gives an empty block the mean of its filled 8-neighbours
+    for (let changed = true; changed;) {
+        changed = false;
+        const next = Float32Array.from(B);
+        for (let bk = 0; bk < bnz; bk++) for (let bi = 0; bi < bnx; bi++) {
+            const b = bk * bnx + bi;
+            if (B[b] === B[b]) continue;
+            let s = 0, w = 0;
+            for (let dk = -1; dk <= 1; dk++) for (let di = -1; di <= 1; di++) {
+                const ii = bi + di, kk = bk + dk;
+                if (ii < 0 || kk < 0 || ii >= bnx || kk >= bnz) continue;
+                const v = B[kk * bnx + ii];
+                if (v === v) { s += v; w++; }
+            }
+            if (w) { next[b] = s / w; changed = true; }
+        }
+        B.set(next);
+    }
+    // relax the filled blocks (Laplace, measured blocks fixed) so a large footprint gets a smooth surface, not rings
+    for (let it = 0; it < 64; it++) {
+        const next = Float32Array.from(B);
+        for (let bk = 0; bk < bnz; bk++) for (let bi = 0; bi < bnx; bi++) {
+            const b = bk * bnx + bi;
+            if (measured[b] || B[b] !== B[b]) continue;
+            let s = 0, w = 0;
+            for (const [di, dk] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+                const ii = bi + di, kk = bk + dk;
+                if (ii < 0 || kk < 0 || ii >= bnx || kk >= bnz) continue;
+                const v = B[kk * bnx + ii];
+                if (v === v) { s += v; w++; }
+            }
+            if (w) next[b] = s / w;
+        }
+        B.set(next);
+    }
+    return blocksToCells(B, bnx, bnz, bs, nx, nz);
+}
+
+function blocksToCells(blocks: Float32Array, bnx: number, bnz: number, bs: number, nx: number, nz: number): Float32Array {
+    const ground = new Float32Array(nx * nz);
+    const bg = (i: number, k: number) => {
+        i = Math.min(bnx - 1, Math.max(0, i)); k = Math.min(bnz - 1, Math.max(0, k));
+        return blocks[k * bnx + i];
+    };
+    for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) {
+        const fx = (i + 0.5) / bs - 0.5, fz = (k + 0.5) / bs - 0.5;
+        const i0 = Math.floor(fx), k0 = Math.floor(fz), tx = fx - i0, tz = fz - k0;
+        const vals = [[bg(i0, k0), (1 - tx) * (1 - tz)], [bg(i0 + 1, k0), tx * (1 - tz)], [bg(i0, k0 + 1), (1 - tx) * tz], [bg(i0 + 1, k0 + 1), tx * tz]];
+        let s = 0, w = 0;
+        for (const [v, ww] of vals) if (v === v) { s += v * ww; w += ww; }
+        ground[k * nx + i] = w > 0 ? s / w : NaN;
+    }
+    return ground;
+}
+
+/** The surface model (highest surface per cell) of a scan on a `cell` grid; `include` limits it to some triangles. */
+export function surfaceModel(scan: ScanMesh, cell: number, include?: (triangle: number) => boolean): { x0: number; z0: number; nx: number; nz: number; top: Float32Array } {
     const x0 = Math.floor(scan.bounds.min[0]), z0 = Math.floor(scan.bounds.min[2]);
     const nx = Math.ceil((scan.bounds.max[0] - x0) / cell) + 1, nz = Math.ceil((scan.bounds.max[2] - z0) / cell) + 1;
     const top = new Float32Array(nx * nz).fill(NaN);
@@ -176,6 +350,7 @@ export function buildGroundModel(scan: ScanMesh, opts: GroundModelOptions = {}):
         if (!(top[c] >= y)) top[c] = y;
     };
     for (let t = 0; t < scan.triCount; t++) {
+        if (include && !include(t)) continue;
         const a = I[t * 3] * 3, b = I[t * 3 + 1] * 3, c = I[t * 3 + 2] * 3;
         const ext = Math.max(Math.hypot(V[b] - V[a], V[b + 2] - V[a + 2]), Math.hypot(V[c] - V[a], V[c + 2] - V[a + 2]), Math.hypot(V[c] - V[b], V[c + 2] - V[b + 2]));
         const n = Math.max(1, Math.ceil(ext / (cell * 0.6)));
@@ -184,14 +359,19 @@ export function buildGroundModel(scan: ScanMesh, opts: GroundModelOptions = {}):
             splat(V[a] * w + V[b] * u + V[c] * v, V[a + 1] * w + V[b + 1] * u + V[c + 1] * v, V[a + 2] * w + V[b + 2] * u + V[c + 2] * v);
         }
     }
-    // Terrain: 10th percentile per block, then 15th percentile of blocks within the radius
+    return { x0, z0, nx, nz, top };
+}
+
+/** The low-percentile terrain (10th percentile per block, 15th of the blocks within the radius): no walkable surface found. */
+function lowPercentileTerrain(top: Float32Array, nx: number, nz: number, cell: number, usable: Uint8Array, block: number, radius: number): Float32Array {
     const bs = Math.max(1, Math.round(block / cell));
     const bnx = Math.ceil(nx / bs), bnz = Math.ceil(nz / bs);
     const blockLow = new Float32Array(bnx * bnz).fill(NaN);
     for (let bk = 0; bk < bnz; bk++) for (let bi = 0; bi < bnx; bi++) {
         const vals: number[] = [];
         for (let k = bk * bs; k < Math.min(nz, (bk + 1) * bs); k++) for (let i = bi * bs; i < Math.min(nx, (bi + 1) * bs); i++) {
-            const v = top[k * nx + i]; if (v === v) vals.push(v);
+            const c = k * nx + i;
+            if (usable[c]) vals.push(top[c]);
         }
         if (vals.length >= bs) blockLow[bk * bnx + bi] = percentile(vals, 0.1);
     }
@@ -205,28 +385,36 @@ export function buildGroundModel(scan: ScanMesh, opts: GroundModelOptions = {}):
         }
         blockGround[bk * bnx + bi] = percentile(vals, 0.15);
     }
-    // Bilinear interpolation of block terrain to cells
-    const ground = new Float32Array(nx * nz);
-    const bg = (i: number, k: number) => {
-        i = Math.min(bnx - 1, Math.max(0, i)); k = Math.min(bnz - 1, Math.max(0, k));
-        return blockGround[k * bnx + i];
-    };
+    return blocksToCells(blockGround, bnx, bnz, bs, nx, nz);
+}
+
+/**
+ * Surface model and terrain. The terrain is measured on the walkable street surface (walkableSurface): water, sunken
+ * gardens and roofs never define it. Only when no walkable surface with structure rising from it exists (a scan of a
+ * single roof, open country) does it fall back to a low percentile of the surface model.
+ */
+export function buildGroundModel(scan: ScanMesh, opts: GroundModelOptions = {}): GroundModel {
+    const cell = opts.cellMeters ?? 1, block = opts.blockMeters ?? 8, radius = opts.terrainRadiusMeters ?? 32, openTol = opts.openToleranceMeters ?? 1.5;
+    const { x0, z0, nx, nz, top } = surfaceModel(scan, cell);
+    const usable = new Uint8Array(nx * nz);
+    const road = opts.road ? new Uint8Array(nx * nz) : undefined;
     for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) {
-        const fx = (i + 0.5) / bs - 0.5, fz = (k + 0.5) / bs - 0.5;
-        const i0 = Math.floor(fx), k0 = Math.floor(fz), tx = fx - i0, tz = fz - k0;
-        const vals = [[bg(i0, k0), (1 - tx) * (1 - tz)], [bg(i0 + 1, k0), tx * (1 - tz)], [bg(i0, k0 + 1), (1 - tx) * tz], [bg(i0 + 1, k0 + 1), tx * tz]];
-        let s = 0, w = 0;
-        for (const [v, ww] of vals) if (v === v) { s += v * ww; w += ww; }
-        ground[k * nx + i] = w > 0 ? s / w : NaN;
+        const c = k * nx + i;
+        const x = x0 + (i + 0.5) * cell, z = z0 + (k + 0.5) * cell;
+        usable[c] = top[c] === top[c] && !(opts.exclude && opts.exclude(x, z)) && !(opts.water && opts.water(x, z)) ? 1 : 0;
+        if (road && opts.road!(x, z)) road[c] = 1;
     }
+    const walkable = walkableSurface(top, nx, nz, cell, usable, road);
+    const ground = walkable ? terrainThrough(top, nx, nz, cell, walkable, block) : lowPercentileTerrain(top, nx, nz, cell, usable, block, radius);
     const open = new Uint8Array(nx * nz);
-    for (let c = 0; c < nx * nz; c++) open[c] = top[c] === top[c] && ground[c] === ground[c] && top[c] - ground[c] <= openTol ? 1 : 0;
+    for (let c = 0; c < nx * nz; c++) open[c] = top[c] === top[c] && ground[c] === ground[c] && Math.abs(top[c] - ground[c]) <= openTol ? 1 : 0;
     const cellIndex = (x: number, z: number) => {
         const i = Math.floor((x - x0) / cell), k = Math.floor((z - z0) / cell);
         return i < 0 || k < 0 || i >= nx || k >= nz ? -1 : k * nx + i;
     };
     return {
         cellMeters: cell, x0, z0, nx, nz, top, ground, open, cellIndex,
+        terrainMethod: walkable ? 'walkable-surface' : 'low-percentile', ...(walkable ? { walkable } : {}),
         groundAt: (x, z) => { const c = cellIndex(x, z); return c < 0 ? NaN : ground[c]; },
         topAt: (x, z) => { const c = cellIndex(x, z); return c < 0 ? NaN : top[c]; }
     };
@@ -500,6 +688,8 @@ export interface DiscoveryOptions {
     thinMeters?: number;
     /** JSON cache of metadata responses (free calls, cached anyway). */
     cachePath?: string;
+    /** Panos the grounding API refused ("not published or eligible"): left out before thinning, so an eligible neighbour is kept. */
+    refusedPanoIds?: ReadonlySet<string>;
     fetchImpl?: typeof fetch;
     log?: (msg: string) => void;
 }
@@ -582,11 +772,13 @@ export async function discoverPanos(scan: ScanMesh, ground: GroundModel, hero: H
     const byId = new Map<string, PanoRecord>();
     let rejectedCopyright = 0, rejectedOld = 0;
     const months = (d?: string) => { const m = /^(\d{4})-(\d{2})/.exec(d ?? ''); return m ? Number(m[1]) * 12 + Number(m[2]) - 1 : -Infinity; };
-    const newest = Math.max(...results.filter(r => r && r.status === 'OK' && r.copyright === '© Google').map(r => months(r.date)));
+    // the grounding API's own test (isGoogleCapture): "© 2024 Google" is a Google capture as much as "© Google" is
+    const newest = Math.max(...results.filter(r => r && r.status === 'OK' && isGoogleCapture(r.copyright)).map(r => months(r.date)));
     const minMonths = newest - 12 * (opts.maxCaptureAgeYears ?? 2);
     for (const r of results) {
         if (!r || r.status !== 'OK' || byId.has(r.panoId)) continue;
-        if (r.copyright !== '© Google') { rejectedCopyright++; continue; }
+        if (!isGoogleCapture(r.copyright)) { rejectedCopyright++; continue; }
+        if (opts.refusedPanoIds?.has(r.panoId)) continue;
         if (months(r.date) < minMonths) { rejectedOld++; continue; }
         const q = geodeticToScan(opts.origin, r.lat, r.lng);
         if (q.x < scan.bounds.min[0] + 5 || q.x > scan.bounds.max[0] - 5 || q.z < scan.bounds.min[2] + 5 || q.z > scan.bounds.max[2] - 5) continue;
