@@ -111,13 +111,13 @@ describe('on-screen size arithmetic', () => {
 });
 
 describe('TreeLodController by what the camera sees', () => {
-    it('chooses the same level as the metre bands at the default 45° lens, for a tree in the centre of view', async () => {
+    it('chooses the same level as the metre bands at the default 45° lens with the foveal weight off; the centre weight then reads a centre tree nearer', async () => {
         const root = await loadFixture(1);
         const tree = treeNodes(root)[0];
         const root2 = await loadFixture(1);
         const c = clock();
         // the default dead band also grows with distance (3 %, a log-space band); with it at 0 both filter alike
-        const screen = new TreeLodController(root, { now: c.now, view: { screen: { hysteresisShare: 0 } } });
+        const screen = new TreeLodController(root, { now: c.now, view: { screen: { hysteresisShare: 0 }, foveal: { enabled: false } } });
         const metres = new TreeLodController(root2, { now: c.now, view: { screen: { enabled: false } } });
         const tree2 = treeNodes(root2)[0];
         for (const d of [10, 30, 55, 75, 100, 140, 185, 260, 600, 120, 52, 20]) {
@@ -128,13 +128,18 @@ describe('TreeLodController by what the camera sees', () => {
             expect(screen.explain(0).equivalentDistM).toBeCloseTo(metres.explain(0).equivalentDistM, 6);
         }
         expect(metres.stats.screenSpace).toBe(false); expect(screen.stats.screenSpace).toBe(true);
+        // the default foveal weight: a tree in the centre of view is read at its distance / centreWeight
+        screen.setView({ screen: { hysteresisShare: 0 } });
+        settle(screen, cameraAt(tree, 90), c, { heightPx: 846 });
+        expect(screen.explain(0).fovealWeight).toBe(2);
+        expect(Math.abs(screen.explain(0).equivalentDistM - 45)).toBeLessThanOrEqual(2 + 1e-9);   // 90 m / 2, within the 2 m dead band
     });
 
     it('an 85 mm lens keeps leaves on a tree 120 m away; 14 mm drops it to the far masses; metre bands ignore the lens', async () => {
         const root = await loadFixture(1);
         const tree = treeNodes(root)[0];
         const c = clock();
-        const lod = new TreeLodController(root, { now: c.now });
+        const lod = new TreeLodController(root, { now: c.now, view: { foveal: { enabled: false } } });
         settle(lod, cameraAt(tree, 120, 45), c);
         expect(levelOf(lod, 0)).toBe(2);                                  // mid at 45°
         settle(lod, cameraAt(tree, 120, fovOf(85)), c);
@@ -142,7 +147,7 @@ describe('TreeLodController by what the camera sees', () => {
         expect(lod.explain(0).projectedPx).toBeGreaterThan(projectedHeightPx(lod.explain(0).sizeM, 120, 45, 1080) * 2.5);
         settle(lod, cameraAt(tree, 120, fovOf(14)), c);
         expect(levelOf(lod, 0)).toBe(3);                                  // far: solid masses
-        lod.setView({ screen: { enabled: false } });
+        lod.setView({ screen: { enabled: false }, foveal: { enabled: false } });
         settle(lod, cameraAt(tree, 120, fovOf(85)), c);
         expect(levelOf(lod, 0)).toBe(2);                                  // the old metre behaviour
         expect(lod.stats.screenSpace).toBe(false);
@@ -167,7 +172,7 @@ describe('TreeLodController by what the camera sees', () => {
         settle(lod, cam, c);
         expect(lod.stats.demotedTrees).toBe(0);
         const w = [0, 1, 2, 3, 4].map(i => lod.explain(i).fovealWeight);
-        expect(w[2]).toBe(1); expect(w[0]).toBeLessThan(0.7); expect(w[4]).toBeLessThan(0.7);
+        expect(w[2]).toBe(lod.viewOptions.foveal.centreWeight); expect(w[0]).toBeLessThan(0.6 * w[2]); expect(w[4]).toBeLessThan(0.6 * w[2]);
         expect(w[1]).toBeGreaterThan(w[0]); expect(w[3]).toBeGreaterThan(w[4]);
         const lv = [0, 1, 2, 3, 4].map(i => levelOf(lod, i));
         expect(lv[2]).toBeLessThan(lv[0]); expect(lv[2]).toBeLessThan(lv[4]);
@@ -182,12 +187,12 @@ describe('TreeLodController by what the camera sees', () => {
         const { root, cam } = await rowAcrossFrame();
         const c = clock();
         // same distance and equal weights: only the place in the frame differs
-        const roomy = new TreeLodController(root, { now: c.now, view: { foveal: { edgeWeight: 1 } }, triangleBudget: 1e9 });
+        const roomy = new TreeLodController(root, { now: c.now, view: { foveal: { centreWeight: 1, edgeWeight: 1 } }, triangleBudget: 1e9 });
         settle(roomy, cam, c);
         const full = roomy.stats.estimatedTriangles;
         expect(new Set([0, 1, 2, 3, 4].map(i => levelOf(roomy, i))).size).toBe(1);
         roomy.dispose();
-        const tight = new TreeLodController(root, { now: c.now, view: { foveal: { edgeWeight: 0.999 } }, triangleBudget: full - 1 });
+        const tight = new TreeLodController(root, { now: c.now, view: { foveal: { centreWeight: 1, edgeWeight: 0.999 } }, triangleBudget: full - 1 });
         settle(tight, cam, c);
         expect(tight.stats.demotedTrees).toBeGreaterThan(0);
         const demoted = [0, 1, 2, 3, 4].filter(i => tight.explain(i).budgetDemotions > 0);

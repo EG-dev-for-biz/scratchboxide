@@ -43,6 +43,9 @@ function cameraAt(tree: THREE.Object3D, d: number, cam = new THREE.PerspectiveCa
     return cam;
 }
 
+/** The foveal weight off: a tree in the centre of a 45° view is read at its own distance, as the metre bands did (tree-lod-screen.test.ts covers the weight). */
+const CENTRE_AS_METRES = { foveal: { enabled: false } };
+
 const clock = (): { now: () => number; tick: (ms?: number) => void } => { let t = 1000; return { now: () => t, tick: (ms = 16.7) => { t += ms; } }; };
 
 describe('TreeLodController on the contract fixture', () => {
@@ -66,7 +69,7 @@ describe('TreeLodController on the contract fixture', () => {
     it('shows one pure level inside each band and splits the hash between two levels across an overlap', async () => {
         const root = await loadFixture(1);
         const c = clock();
-        const lod = new TreeLodController(root, { now: c.now });
+        const lod = new TreeLodController(root, { view: CENTRE_AS_METRES, now: c.now });
         const tree = treeNodes(root)[0];
         lod.update(cameraAt(tree, 20)); expect(lod.stateOf(0)).toEqual(['full', 'off', 'off', 'off']);
         lod.forceLevel(null); c.tick(5000);
@@ -94,7 +97,7 @@ describe('TreeLodController on the contract fixture', () => {
     it('changes the draw ranges only at a bounded rate, with the ranges always tiling the hash (no pop, no hole)', async () => {
         const root = await loadFixture(1);
         const c = clock();
-        const lod = new TreeLodController(root, { now: c.now, fadeSeconds: 0.35 });
+        const lod = new TreeLodController(root, { view: CENTRE_AS_METRES, now: c.now, fadeSeconds: 0.35 });
         const tree = treeNodes(root)[0];
         lod.update(cameraAt(tree, 20));
         const e0 = lod.edgesOf(0); expect(e0).toEqual([1, 1, 1]);
@@ -115,7 +118,7 @@ describe('TreeLodController on the contract fixture', () => {
     it('does not retarget when the camera shakes inside the dead band', async () => {
         const root = await loadFixture(1);
         const c = clock();
-        const lod = new TreeLodController(root, { now: c.now, hysteresisM: 2 });
+        const lod = new TreeLodController(root, { view: CENTRE_AS_METRES, now: c.now, hysteresisM: 2 });
         const tree = treeNodes(root)[0];
         for (let i = 0; i < 40; i++) { c.tick(); lod.update(cameraAt(tree, 55)); }
         const settled = lod.edgesOf(0);
@@ -145,7 +148,7 @@ describe('TreeLodController on the contract fixture', () => {
     it('keeps to its per-frame work budgets, nearest tree first, and finishes over the next frames', async () => {
         const root = await loadFixture(40);
         const c = clock();
-        const lod = new TreeLodController(root, { now: c.now, maxCommitsPerFrame: 10 });
+        const lod = new TreeLodController(root, { view: CENTRE_AS_METRES, now: c.now, maxCommitsPerFrame: 10 });
         const cam = new THREE.PerspectiveCamera(60, 1, 0.1, 6000);
         cam.position.set(200, 10, 700); cam.lookAt(200, 0, 0); cam.updateMatrixWorld(true);
         lod.update(cam);
@@ -160,7 +163,7 @@ describe('TreeLodController on the contract fixture', () => {
     it('limits new dither variants per frame and shares them between trees', async () => {
         const root = await loadFixture(12, true);
         const c = clock();
-        const lod = new TreeLodController(root, { now: c.now, maxNewVariantsPerFrame: 2 });
+        const lod = new TreeLodController(root, { view: CENTRE_AS_METRES, now: c.now, maxNewVariantsPerFrame: 2 });
         const t0 = treeNodes(root)[0];
         const cam = cameraAt(t0, 55);
         lod.update(cam);                                              // snapped straight into the overlap: 4 variants needed (2 levels x wood/leaves)
@@ -179,7 +182,7 @@ describe('TreeLodController on the contract fixture', () => {
         const cam = cameraAt(trees[0], 8);
         cam.position.x -= 30; cam.lookAt(trees[1].position); cam.updateMatrixWorld(true);
         const c = clock();
-        const tight = new TreeLodController(root, { now: c.now, triangleBudget: 1 });
+        const tight = new TreeLodController(root, { view: CENTRE_AS_METRES, now: c.now, triangleBudget: 1 });
         tight.update(cam);
         expect(tight.stats.demotedTrees).toBeGreaterThan(0);
         // the nearest tree is the last to give anything up
@@ -198,7 +201,7 @@ describe('TreeLodController on the contract fixture', () => {
         const decoy = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshStandardMaterial({ color: 0x123456 }));
         root.add(decoy);
         const c = clock();
-        const lod = new TreeLodController(root, { now: c.now });
+        const lod = new TreeLodController(root, { view: CENTRE_AS_METRES, now: c.now });
         applyClayRenderMode([root], true);
         const shared = sharedTreeClayMaterial();
         const meshes: THREE.Mesh[] = [];
@@ -256,7 +259,7 @@ describe('TreeLodController: triangle estimates and old three-level files', () =
     it('estimates what it submits: every level with a share counts in full, and a pure level its own triangles', async () => {
         const root = await loadFixture(1);
         const c = clock();
-        const lod = new TreeLodController(root, { now: c.now });
+        const lod = new TreeLodController(root, { view: CENTRE_AS_METRES, now: c.now });
         const tree = treeNodes(root)[0];
         // the fixture's levels: 12, 9, 6, 4 wood triangles, plus 2 cluster nodes x instances x 1 triangle at levels 0-2 (3, 2, 2 instances)
         const expected = [12 + 2 * 3, 9 + 2 * 2, 6 + 2 * 2, 4];
@@ -294,7 +297,7 @@ describe('TreeLodController: triangle estimates and old three-level files', () =
         const buf = fs.readFileSync(file);
         const root = (await new GLTFLoader().parseAsync(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer, '')).scene;
         const c = clock();
-        const lod = new TreeLodController(root, { now: c.now });
+        const lod = new TreeLodController(root, { view: CENTRE_AS_METRES, now: c.now });
         expect(lod.treeCount).toBe(2); expect(lod.levelsPerTree).toBe(3);
         const tree = treeNodes(root)[0];
         expect(tree.children.filter(ch => ch.name.startsWith('sb-lod-gate-'))).toHaveLength(3);
@@ -333,7 +336,7 @@ describe('TreeLodController shadows', () => {
         const root = await loadFixture(1);
         root.traverse(o => { if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).castShadow = true; });
         const c = clock();
-        const lod = new TreeLodController(root, { now: c.now });
+        const lod = new TreeLodController(root, { view: CENTRE_AS_METRES, now: c.now });
         const tree = treeNodes(root)[0];
         const cam = cameraAt(tree, 20);
         const shadowCam = new THREE.OrthographicCamera(-500, 500, 500, -500, 0.1, 2000);

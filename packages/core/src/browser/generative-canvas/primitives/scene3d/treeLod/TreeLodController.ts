@@ -101,8 +101,12 @@ export interface TreeLodViewOptions {
     screen: ScreenSizeParams & { enabled: boolean; hysteresisShare: number };
     /** Detail toward the centre of the view. */
     foveal: FovealParams & { enabled: boolean; followFocus: boolean };
-    /** Depth-of-field demotion (radius in px of the drawn blur). */
-    blur: BlurDemotionParams & { enabled: boolean };
+    /**
+     * Depth-of-field demotion (radius in px of the drawn blur). The continuous demotion is held at whole levels with a dead band
+     * of `levelHysteresis` levels, so a blurred tree settles on one level instead of dithering between two (which draws both);
+     * a change of whole level still crossfades at the usual rate.
+     */
+    blur: BlurDemotionParams & { enabled: boolean; levelHysteresis: number };
     /** Tint each level (near green, near-mid yellow, mid orange, far red) to see the levels in the viewport. */
     debugTint: boolean;
 }
@@ -114,8 +118,8 @@ export type TreeLodViewInput = {
 
 export const DEFAULT_TREE_LOD_VIEW: Readonly<TreeLodViewOptions> = {
     screen: { enabled: true, referenceFovDeg: 45, referenceHeightPx: 1080, resolutionExponent: 0, hysteresisShare: 0.03 },
-    foveal: { enabled: true, centreWeight: 1, edgeWeight: 0.55, centreRadius: 0.2, edgeRadius: 1, curve: 1, verticalWeight: 0.5, followFocus: true },
-    blur: { enabled: true, startPx: 1.5, fullPx: 6, maxLevels: 2 },
+    foveal: { enabled: true, centreWeight: 2, edgeWeight: 0.55, centreRadius: 0.2, edgeRadius: 1, curve: 1, verticalWeight: 0.5, followFocus: true },
+    blur: { enabled: true, startPx: 1.5, fullPx: 6, maxLevels: 2, levelHysteresis: 0.15 },
     debugTint: false
 };
 
@@ -155,7 +159,8 @@ export interface TreeLodReason {
     equivalentDistM: number;
     /** The tree's pixel thresholds at the reference lens: [enter, leave] per level. */
     thresholdsPx: Array<[number, number]>;
-    blurRadiusPx: number; blurDemotion: number; focusProtected: boolean;
+    /** The blur radius (px), the continuous demotion it calls for, and the whole levels applied (held with a dead band). */
+    blurRadiusPx: number; blurDemotion: number; blurLevelsApplied: number; focusProtected: boolean;
     budgetDemotions: number;
     /** Level with the largest share of the hash now. */
     level: number;
@@ -482,7 +487,7 @@ export class TreeLodController {
             centerLocal: node.worldToLocal(sphere.center.clone()), radiusLocal, sizeLocal,
             reason: {
                 inView: false, culled: true, rangeM: 0, sizeM: sizeLocal, projectedPx: 0, fovealWeight: 1, importance: 0, equivalentDistM: 0,
-                thresholdsPx: [], blurRadiusPx: 0, blurDemotion: 0, focusProtected: false, budgetDemotions: 0, level: n - 1
+                thresholdsPx: [], blurRadiusPx: 0, blurDemotion: 0, blurLevelsApplied: 0, focusProtected: false, budgetDemotions: 0, level: n - 1
             },
             importance: 0, blurLevels: 0,
             filteredD: undefined, edges: edgesAtLevel(n - 1, n), snap: true, culled: false, target: edgesAtLevel(n - 1, n), inMain: true, inShadow: false, castLevel: -1, dist: 0, want: new Array(n).fill('off')
@@ -574,7 +579,7 @@ export class TreeLodController {
             if (!t.inMain && !t.inShadow) {
                 t.culled = true; t.snap = true;
                 if (t.node.visible) t.node.visible = false;
-                r.inView = false; r.culled = true; r.importance = 0; r.blurRadiusPx = 0; r.blurDemotion = 0; r.focusProtected = false;
+                r.inView = false; r.culled = true; r.importance = 0; r.blurRadiusPx = 0; r.blurDemotion = 0; r.blurLevelsApplied = 0; r.focusProtected = false;
                 s.culledTrees++;
                 continue;
             }
@@ -585,7 +590,14 @@ export class TreeLodController {
             let w = 1;
             if (screen && v.foveal.enabled) {
                 this.ndc.set(sphere.center.x, sphere.center.y, sphere.center.z, 1).applyMatrix4(this.pv);
-                const rad = this.ndc.w > 1e-6 ? fovealRadius(this.ndc.x / this.ndc.w - cx, this.ndc.y / this.ndc.w - cy, v.foveal.verticalWeight) : v.foveal.edgeRadius;
+                // the part of the tree nearest the foveal centre counts: its sphere's projected half-size is taken off each axis, so a
+                // large near tree reaching toward the centre is not treated as an edge tree
+                let rad = v.foveal.edgeRadius;
+                if (this.ndc.w > 1e-6) {
+                    const halfY = sphere.radius / (Math.max(this.ndc.w, sphere.radius) * Math.tan(THREE.MathUtils.degToRad(fovDeg) / 2));
+                    const halfX = halfY / Math.max(1e-6, persp!.aspect);
+                    rad = fovealRadius(Math.max(0, Math.abs(this.ndc.x / this.ndc.w - cx) - halfX), Math.max(0, Math.abs(this.ndc.y / this.ndc.w - cy) - halfY), v.foveal.verticalWeight);
+                }
                 w = fovealWeight(t.inMain ? rad : Math.max(rad, v.foveal.edgeRadius), v.foveal);
             }
             const dEq = screen ? screenEquivalentDistance(t.dist, fovDeg, heightPx, w, v.screen) : t.dist;
@@ -610,11 +622,12 @@ export class TreeLodController {
                     if (finite(dof.maxBlurRadiusPx)) blur = Math.min(blur, dof.maxBlurRadiusPx);
                 }
             }
-            t.blurLevels = protectedByFocus ? 0 : blurDemotionLevels(blur, v.blur);
+            const blurWant = protectedByFocus ? 0 : blurDemotionLevels(blur, v.blur);
+            if (t.snap || protectedByFocus || Math.abs(blurWant - t.blurLevels) >= 0.5 + Math.max(0, v.blur.levelHysteresis)) t.blurLevels = Math.round(blurWant);
             if (protectedByFocus) s.focusProtectedTrees++;
             if (t.blurLevels > 0) s.blurDemotedTrees++;
             r.inView = t.inMain; r.culled = false; r.rangeM = t.dist; r.sizeM = sizeM; r.projectedPx = px; r.fovealWeight = w; r.importance = t.importance;
-            r.equivalentDistM = t.filteredD; r.blurRadiusPx = blur; r.blurDemotion = t.blurLevels; r.focusProtected = protectedByFocus;
+            r.equivalentDistM = t.filteredD; r.blurRadiusPx = blur; r.blurDemotion = blurWant; r.blurLevelsApplied = t.blurLevels; r.focusProtected = protectedByFocus;
             t.culled = false;
             visible.push(t);
         }
