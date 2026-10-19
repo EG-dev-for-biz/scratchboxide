@@ -77,6 +77,8 @@ export interface BuildingShapeRequest {
     storeys?: number;
     /** At most this many neighbours are reported, nearest first (default 25, at most 400). */
     maxNeighbours?: number;
+    /** Ask the Solar API for each building's roof segments (default true; false skips buildingInsights, the DSM is still read). */
+    roofSegments?: boolean;
     /** Where GLBs go (default <workspace>/public/models/building_shape). */
     outputDir?: string;
 }
@@ -240,6 +242,9 @@ export interface FootprintPartReport {
     ringWgs84: LngLat[];
     /** [east, north] metres from the place point. */
     ringLocalMeters: XY[];
+    /** Holes in the part (a courtyard, a light well), when the vector data draws them. */
+    holesWgs84?: LngLat[][];
+    /** Plan area of the ring less its holes. */
     areaM2: number;
     /** Vector top of this part above its base: extruded maxZ, or the highest modeled vertex over it. */
     vectorHeightMeters?: number;
@@ -355,19 +360,27 @@ interface Candidate {
     centroid: XY;
 }
 
+/** The holes the decoder found in a polygon (its loops after the outer one). */
+function innerRingsOf(p: VectorFeaturePolygon): LngLat[][] {
+    const inner = (p as VectorFeaturePolygon & { innerRings?: Array<Array<[number, number]>> }).innerRings;
+    return Array.isArray(inner) ? inner.map(r => r as LngLat[]) : [];
+}
+
 function buildCandidate(group: FeatureRecord[], frame: LocalFrame): Candidate | undefined {
     const extruded = group.flatMap(f => f.extruded);
     const areas = group.flatMap(f => f.areas);
     const modeled = group.flatMap(f => f.modeled);
     const modeledMin = modeled.length ? Math.min(...modeled.map(m => m.minZMeters)) : 0;
     const modeledMax = modeled.length ? Math.max(...modeled.map(m => m.maxZMeters)) : 0;
-    const part = (id: string, kind: FootprintPartReport['kind'], ring: LngLat[], h?: number, minH?: number): FootprintPartReport => {
+    const part = (id: string, kind: FootprintPartReport['kind'], ring: LngLat[], h?: number, minH?: number, holes: LngLat[][] = []): FootprintPartReport => {
         const local = ring.map(p => frame.toLocal(p));
+        const holesOk = holes.filter(hl => hl.length >= 3);
         return {
             id, kind,
             ringWgs84: ring.map(([a, b]) => [r7(a), r7(b)] as LngLat),
             ringLocalMeters: local.map(([a, b]) => [r2(a), r2(b)] as XY),
-            areaM2: r1(ringArea(local)),
+            ...(holesOk.length ? { holesWgs84: holesOk.map(hl => hl.map(([a, b]) => [r7(a), r7(b)] as LngLat)) } : {}),
+            areaM2: r1(Math.max(0, ringArea(local) - holesOk.reduce((a, hl) => a + ringArea(hl.map(q => frame.toLocal(q))), 0))),
             ...(h !== undefined && h > 0 ? { vectorHeightMeters: r2(h) } : {}),
             ...(minH ? { vectorMinHeightMeters: r2(minH) } : {})
         };
@@ -380,7 +393,7 @@ function buildCandidate(group: FeatureRecord[], frame: LocalFrame): Candidate | 
     let vectorHeight: number | undefined;
     const hull = modeled.length ? convexHull(modeled.flatMap(m => m.vertices.filter(v => v[2] - modeledMin < 2).map(v => [v[0], v[1]] as LngLat))) : [];
     if (extruded.length) {
-        parts = extruded.map(e => part(e.id, 'extruded_area', e.ring as LngLat[], Number(e.properties?.heightMeters), Number(e.properties?.minHeightMeters) || undefined));
+        parts = extruded.map(e => part(e.id, 'extruded_area', e.ring as LngLat[], Number(e.properties?.heightMeters), Number(e.properties?.minHeightMeters) || undefined, innerRingsOf(e)));
         chosen = 'extruded_area';
         why = `Google extrudes ${extruded.length === 1 ? 'this area' : `these ${extruded.length} areas`} to the building's modeled height, so ${extruded.length === 1 ? 'it is' : 'they are'} the footprint the vector height belongs to.`;
         vectorKind = 'extruded';
@@ -391,7 +404,7 @@ function buildCandidate(group: FeatureRecord[], frame: LocalFrame): Candidate | 
         const inside = (ring: XY[]) => modeled.flatMap(m => m.vertices.filter(v => pointInRing(...frame.toLocal([v[0], v[1]]), ring)).map(v => v[2]));
         parts = areas.map(a => {
             const zs = inside((a.ring as LngLat[]).map(q => frame.toLocal(q)));
-            return part(a.id, 'plan_area', a.ring as LngLat[], zs.length ? Math.max(...zs) - modeledMin : undefined);
+            return part(a.id, 'plan_area', a.ring as LngLat[], zs.length ? Math.max(...zs) - modeledMin : undefined, undefined, innerRingsOf(a));
         });
         chosen = 'plan_area';
         why = `The building is a modeled 3D volume; its own flat plan area${areas.length === 1 ? ' is' : 's are'} the footprint (exact outline, unlike the convex hull of the volume's base).`;
@@ -405,7 +418,7 @@ function buildCandidate(group: FeatureRecord[], frame: LocalFrame): Candidate | 
         vectorKind = 'modeled';
         vectorHeight = modeledMax - modeledMin;
     } else if (areas.length) {
-        parts = areas.map(a => part(a.id, 'plan_area', a.ring as LngLat[]));
+        parts = areas.map(a => part(a.id, 'plan_area', a.ring as LngLat[], undefined, undefined, innerRingsOf(a)));
         chosen = 'plan_area';
         why = 'Only a flat plan area exists for this building in the vector data: a footprint with no height.';
         vectorKind = 'footprint_only';
@@ -414,8 +427,9 @@ function buildCandidate(group: FeatureRecord[], frame: LocalFrame): Candidate | 
     }
     const partsLocal = parts.map(p => (p.ringWgs84 as LngLat[]).map(q => frame.toLocal(q)));
     const contains = partsLocal.some(r => pointInRing(0, 0, r));
+    const holeArea = parts.reduce((a, p) => a + (p.holesWgs84 ?? []).reduce((b, hl) => b + ringArea(hl.map(q => frame.toLocal(q))), 0), 0);
     const distance = contains ? 0 : Math.min(...partsLocal.map(r => distanceToRing(0, 0, r)));
-    const area = partsLocal.reduce((a, r) => a + ringArea(r), 0);
+    const area = Math.max(0, partsLocal.reduce((a, r) => a + ringArea(r), 0) - holeArea);
     const all = partsLocal.flat();
     const centroid: XY = [all.reduce((a, p) => a + p[0], 0) / all.length, all.reduce((a, p) => a + p[1], 0) / all.length];
     const featureIds = group.map(f => f.key);
@@ -845,6 +859,7 @@ export async function runBuildingShape(req: BuildingShapeRequest, deps: Building
     let dsmReason: string | undefined;
     progress('Fetching the Solar API DSM and roof segments', 0.4);
     const insightsP = mapLimit(reported, 4, async c => {
+        if (req.roofSegments === false) return { reason: 'Roof segments were not asked for (roofSegments false).' };
         if (!apiKey) return { reason: 'No Google Maps API key is configured for the Solar API.' };
         const [lng, lat] = frame.toLngLat(c.centroid);
         try {

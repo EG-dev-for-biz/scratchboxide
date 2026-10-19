@@ -148,6 +148,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name === 'location_generate_3dgs') return 'Location 3DGS: Synthesize Radiance Field';
             if (name === 'location_building_shape') return 'Location Evidence: Building Shape';
             if (name === 'location_isolate_structure') return 'Location Evidence: Isolate Structure';
+            if (name === 'location_split_block') return 'Location Evidence: Split Block';
             if (name.startsWith('location_')) return `Location 3DGS: ${name.replace('location_', '').replace(/_/g, ' ')}`;
             if (name === 'google_3d_tiles_recolor_glb') return '3D Tiles: Recolor & PBR Synthesis';
             if (name.startsWith('google_3d_tiles_')) return `Google 3D Tiles: ${name.replace('google_3d_tiles_', '').replace(/_/g, ' ')}`;
@@ -174,6 +175,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name === 'read_sb_script_guide') return 'Python 3D: Script Guide';
             if (name === 'location_building_shape') return 'Location Evidence: Building Shape';
             if (name === 'location_isolate_structure') return 'Location Evidence: Isolate Structure';
+            if (name === 'location_split_block') return 'Location Evidence: Split Block';
             if (name.startsWith('location_')) return `Location 3DGS: ${name.replace('location_', '').replace(/_/g, ' ')}`;
             if (name === 'google_3d_tiles_recolor_glb') return '3D Tiles: Recolor & PBR';
             if (name.startsWith('google_3d_tiles_')) return `3D Tiles: ${name.replace('google_3d_tiles_', '').replace(/_/g, ' ')}`;
@@ -198,6 +200,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name === 'read_sb_script_guide') return 'Read the rules for writing an sb Python script';
             if (name === 'location_building_shape') return 'Read the building footprint, vector height, Solar DSM and roof segments at a place';
             if (name === 'location_isolate_structure') return 'Isolate one structure from Google 3D Tiles: footprint, ground, kept and removed areas';
+            if (name === 'location_split_block') return 'Split a block from Google 3D Tiles into one mesh per building footprint, party walls and the unassigned rest';
             if (name.startsWith('location_')) return `Synthesize real-world location 3D Gaussian Splats: ${name.replace('location_', '').replace(/_/g, ' ')}`;
             if (name === 'google_3d_tiles_recolor_glb') return 'Recolor 3D tile GLB with material segmentation and PBR normal/roughness synthesis';
             if (name.startsWith('google_3d_tiles_')) return `Ingest Google 3D Tiles: ${name.replace('google_3d_tiles_', '').replace(/_/g, ' ')}`;
