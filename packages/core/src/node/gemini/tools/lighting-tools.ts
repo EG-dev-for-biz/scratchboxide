@@ -45,13 +45,12 @@ function asGeodetic(val: unknown): { lat: number; lng: number; altitudeMeters?: 
 }
 
 /**
- * The viewport's exposure reference: the irradiance the three_point_studio key light puts on its subject (intensity over
- * distance squared, in three.js units). A gaffer rig's key lands at this irradiance; every other light keeps its lux ratio
+ * The viewport's exposure reference: the irradiance the default studio rig's key (a directional light, so its intensity is
+ * its irradiance) puts on the content. A gaffer rig's key lands at this irradiance; every other light keeps its lux ratio
  * to the key, so the stop ratios hold while absolute lux (which the viewport has no exposure for) does not.
  */
 function studioKeyIrradiance(): number {
-    const key = CINEMATIC_RIGS.three_point_studio.lights[0];
-    return key.intensity / (key.position[0] ** 2 + key.position[1] ** 2 + key.position[2] ** 2);
+    return CINEMATIC_RIGS.studio.lights[0].intensity;
 }
 
 /** A gaffer rig (built around a subject at the origin) as an explicit scene rig the viewport draws. */

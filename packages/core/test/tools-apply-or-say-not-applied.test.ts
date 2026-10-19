@@ -114,6 +114,8 @@ describe('lighting_configure_gaffer_rig applies its rig to the open scene, or sa
         const irr = (l: any) => l.intensity / (l.position[0] ** 2 + l.position[1] ** 2 + l.position[2] ** 2);
         const key = rig.lights.find((l: any) => /Key/.test(l.name)), fill = rig.lights.find((l: any) => /Fill/.test(l.name));
         expect(irr(key) / irr(fill)).toBeCloseTo(4, 9);
+        // the key lands at the default studio key's irradiance (its directional key, intensity 2.25)
+        expect(irr(key)).toBeCloseTo(2.25, 9);
 
         // the viewport: the explicit rig replaces the studio rig, placed around the camera target
         const stack = fakeStack();
