@@ -10,6 +10,9 @@
 import * as THREE from 'three';
 import type { RendererStack } from './types';
 
+/** The viewport camera's vertical field of view when the scene names none. */
+export const DEFAULT_CAMERA_FOV_DEG = 45;
+
 export interface CreateRendererStackOptions {
     container: HTMLElement;
     /** Initial camera position; orbit mode overrides it every frame from the orbit state. */
@@ -33,7 +36,7 @@ export function createRendererStack(options: CreateRendererStackOptions): Render
 
     const scene = new THREE.Scene();
 
-    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 20000);
+    const camera = new THREE.PerspectiveCamera(DEFAULT_CAMERA_FOV_DEG, width / height, 0.1, 20000);
     const [px, py, pz] = options.cameraPosition || [15, 12, 15];
     camera.position.set(px, py, pz);
 

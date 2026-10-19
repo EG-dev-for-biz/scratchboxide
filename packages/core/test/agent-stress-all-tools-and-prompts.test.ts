@@ -79,6 +79,8 @@ function writeTexturedQuadGlb(filePath: string): void {
     fs.writeFileSync(filePath, Buffer.concat([header, chunkHeader(jsonBuf.length, 0x4e4f534a), jsonBuf, chunkHeader(bin.length, 0x004e4942), bin]));
 }
 
+const sceneCtx = (ctx: any) => ({ ...ctx, request: { ...ctx.request, activeArtifact: { id: 'scene-stress', type: '3d-scene', title: 'Stress Scene', version: 1, data: { title: 'Stress Scene', renderMode: 'clay', environment: { skybox: 'studio', lighting: 'studio', ground: false }, camera: { position: [8, 5, 8], target: [0, 1, 0], fov: 45 } } } } });
+
 describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => {
     let registry: ToolRegistry;
     let mockContext: ToolContext;
@@ -461,8 +463,9 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
         it('executes lighting_configure_gaffer_rig for classical cinematic styles', async () => {
             const res = await registry.dispatch('lighting_configure_gaffer_rig', {
                 style: 'rembrandt'
-            }, mockContext);
+            }, sceneCtx(mockContext));
             expect(res.exec.status).toBe('completed');
+            expect((res.resultPayload as any).applied).toBe(true);
             expect((res.resultPayload as any).rigId).toBeDefined();
             expect((res.resultPayload as any).lights.length).toBeGreaterThan(0);
         });
@@ -509,8 +512,9 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
                 apertureFStop: 2.8,
                 focusDistanceMeters: 5.0,
                 sensorFormat: 'full_frame_35mm'
-            }, mockContext);
+            }, sceneCtx(mockContext));
             expect(res.exec.status).toBe('completed');
+            expect((res.resultPayload as any).applied).toBe(true);
             expect((res.resultPayload as any).frustum.horizontalFovDeg).toBeGreaterThan(35);
             expect((res.resultPayload as any).depthOfField).toBeDefined();
         });

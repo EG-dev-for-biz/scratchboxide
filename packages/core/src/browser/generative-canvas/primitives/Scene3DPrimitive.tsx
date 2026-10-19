@@ -130,7 +130,7 @@ import {
 } from '../services/mesh/aircraft';
 import type { ArticulatedAircraftComponents } from '../services/mesh/aircraft';
 import { useLatest } from '../hooks/useLatest';
-import { createRendererStack, attachViewportResize, reconcileDrawingBufferSize } from './scene3d/createRendererStack';
+import { createRendererStack, attachViewportResize, reconcileDrawingBufferSize, DEFAULT_CAMERA_FOV_DEG } from './scene3d/createRendererStack';
 import { liveTilesAnchor, syncTilesLayer } from './scene3d/syncTilesLayer';
 import { sceneAsksForLiveTiles } from './scene3d/liveTilesAnchor';
 import { groundDatumBadge, projectRoutePoint } from './scene3d/geoAnchorLabels';
@@ -1225,6 +1225,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     // component's render, which triggers "Cannot update a component while rendering
     // a different component". Compute `next` from the latest value, commit, then notify.
     const sceneDataRef = useLatest(sceneData);
+    /** The treeCrownShading scene data last passed to the tree level-of-detail controllers. */
+    const appliedTreeCrownShadingRef = React.useRef<Scene3DData['treeCrownShading']>(undefined);
     const selectedObjectIdRef = useLatest(selectedObjectId);
     const restoreSelectionRef = React.useRef<(id: string | null) => void>(() => undefined);
     const applySceneMutation = React.useCallback((
@@ -1797,6 +1799,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         lighting: sceneData.environment?.lighting,
         ambientIntensity: sceneData.environment?.ambientIntensity,
         cinematicRig: sceneData.environment?.cinematicRig,
+        lightingRig: sceneData.environment?.lightingRig,
         lightingKelvin: sceneData.environment?.lightingKelvin,
         ground: sceneData.environment?.ground,
         fog: sceneData.environment?.fog,
@@ -1810,7 +1813,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         terrainBiomes: sceneData.features?.terrainBiomes,
         contentRadiusMeters: generatedContentRadius ?? undefined
     }), [
-        sceneData.environment?.skybox, sceneData.environment?.lighting, sceneData.environment?.ambientIntensity, sceneData.environment?.cinematicRig,
+        sceneData.environment?.skybox, sceneData.environment?.lighting, sceneData.environment?.ambientIntensity, sceneData.environment?.cinematicRig, sceneData.environment?.lightingRig,
         sceneData.environment?.lightingKelvin, sceneData.environment?.ground, sceneData.environment?.fog,
         worldBranch, renderMode, hasGeoCoordinates, has3DTiles,
         sceneData.features?.atmosphericScattering, (sceneData as any).atmosphere, sceneData.features?.godRays, sceneData.features?.terrainBiomes,
@@ -2092,10 +2095,15 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
                 // 12.9 Tree levels of detail: per-tree level, dither and culling for loaded trees GLBs (before the render).
                 let treeShadowCamera: THREE.Camera | null | undefined;
+                // scene data's treeCrownShading, passed on when it changes (so a controller's own setting holds until then)
+                const crownShading = sceneDataRef.current?.treeCrownShading;
+                const crownShadingChanged = crownShading !== appliedTreeCrownShadingRef.current;
+                appliedTreeCrownShadingRef.current = crownShading;
                 externalObjectsMapRef.current.forEach(model => {
                     const lod = model.parent ? (model.userData.sbTreeLod as TreeLodController | undefined) : undefined;
                     if (!lod) return;
                     if (treeShadowCamera === undefined) treeShadowCamera = findShadowCamera(stack.scene, !!stack.renderer?.shadowMap?.enabled);
+                    if (crownShadingChanged) lod.setCrownShading(crownShading);
                     lod.update(camera, treeShadowCamera);
                 });
 
@@ -2275,6 +2283,12 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         const stack = stackRef.current;
         if (!stack) return;
         const cameraDef = sceneDataRef.current.camera;
+        // the scene's vertical field of view (sb_set_camera, configure_physical_camera), else the stack's default
+        const fov = typeof cameraDef?.fov === 'number' && cameraDef.fov > 0 && cameraDef.fov < 180 ? cameraDef.fov : DEFAULT_CAMERA_FOV_DEG;
+        if (stack.camera.fov !== fov) {
+            stack.camera.fov = fov;
+            stack.camera.updateProjectionMatrix();
+        }
         const groundY = terrainManagerRef.current?.sampleGroundHeight(0, 0) ?? 0;
         const tx = cameraDef?.target ? cameraDef.target[0] : 0;
         const ty = cameraDef?.target ? cameraDef.target[1] : (groundY + 1.5);
@@ -2836,7 +2850,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     if (attach) liveScene.add(model);
                     model.updateMatrixWorld(true);
                     // A trees GLB (nodes with extras sbTree) gets its level-of-detail controller before the clay pass, so wood and leaves share one material.
-                    const lod = new TreeLodController(model);
+                    const lod = new TreeLodController(model, { crownShading: sceneDataRef.current?.treeCrownShading });
                     if (lod.hasTrees) model.userData.sbTreeLod = lod;
                     // A staged layer's textured twin keeps its photo material under the clay pass, and its confidence texture is loaded.
                     void prepareTexturedTwinModel(gltf);
