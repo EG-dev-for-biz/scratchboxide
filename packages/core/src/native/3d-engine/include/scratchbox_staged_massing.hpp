@@ -100,6 +100,14 @@ struct SweepSpec { std::string id, provenance; double confidence{0}; std::vector
 
 struct OpeningSpec { std::string id, face, provenance; double s0{0}, s1{0}, t0{0}, t1{0}, depth{0}, confidence{0}; bool scanned{false}; };
 
+/**
+ * A profile swept along one axis of a face's own frame (a curve sweep on the face plane): `axis` 0 sweeps along s with the
+ * profile in (offset along the normal, t), 1 along t with the profile in (offset, s). The profile is a function
+ * offset(c) >= 0 sampled at increasing c; the solid is 0 <= offset' <= offset(c), its back on the face. Each placement
+ * (a0, a1, dc) sweeps it from a0 to a1 with the profile's c shifted by dc; the ends are capped.
+ */
+struct FaceSweepSpec { std::string id, provenance, face; double confidence{0}; int axis{0}; std::vector<std::pair<double, double>> profile; std::vector<std::array<double, 3>> placements; };
+
 struct Spec {
     std::string tile, isolate, outDir;
     double pixel{0.05}, slabBack{1.5}, slabFront{0.8}, protrusionReach{2.5};
@@ -111,6 +119,7 @@ struct Spec {
     std::vector<MeshSolid> meshes;
     std::vector<SweepSpec> sweeps;
     std::vector<OpeningSpec> openings;
+    std::vector<FaceSweepSpec> faceSweeps;
 };
 
 /** A planar face of the solid: frame, polygon in its (s, t), triangles. */
@@ -1203,6 +1212,69 @@ private:
     }
     std::vector<std::string> rejectedSweeps_;
 
+    /** A profile swept along an axis of one face's frame, at each placement, capped (FaceSweepSpec). */
+    void emitFaceSweep(const FaceSweepSpec& fs) {
+        size_t fi = faces_.size();
+        for (size_t i = 0; i < faces_.size(); ++i) if (faces_[i].key == fs.face) { fi = i; break; }
+        if (fi == faces_.size() || fs.profile.size() < 2 || fs.placements.empty()) { rejectedSweeps_.push_back(fs.id); return; }
+        const Face& f = faces_[fi];
+        OutNode node;
+        node.name = "facesweep:" + fs.id;
+        node.kind = "sweep";
+        node.provenance = fs.provenance;
+        node.confidence = fs.confidence;
+        // (along, cross, offset) -> world, and the face's (s, t) for the texture
+        auto P = [&](double a, double c, double o) { return fs.axis == 0 ? f.at(a, c) + f.n * o : f.at(c, a) + f.n * o; };
+        auto put = [&](const V3& p, const V3& n) {
+            OutVertex v;
+            v.p = p; v.n = n; v.face = static_cast<int>(fi);
+            double s, t;
+            f.st(p, s, t);
+            v.s = std::clamp(s, f.sMin, f.sMax);
+            v.t = std::clamp(t, f.tMin, f.tMax);
+            node.idx.push_back(static_cast<uint32_t>(node.v.size()));
+            node.v.push_back(v);
+        };
+        auto tri = [&](const V3& a, const V3& b, const V3& c, const V3& n) {
+            bool flip = (b - a).cross(c - a).dot(n) < 0;
+            put(a, n); put(flip ? c : b, n); put(flip ? b : c, n);
+        };
+        const V3 A = fs.axis == 0 ? f.axisS : f.axisT, C = fs.axis == 0 ? f.axisT : f.axisS;
+        const auto& pr = fs.profile;
+        for (const auto& pl : fs.placements) {
+            const double a0 = std::min(pl[0], pl[1]), a1 = std::max(pl[0], pl[1]), dc = pl[2];
+            if (a1 - a0 < 1e-3) continue;
+            for (size_t k = 0; k + 1 < pr.size(); ++k) {
+                const double c0 = pr[k].second + dc, o0 = std::max(0.0, pr[k].first), c1 = pr[k + 1].second + dc, o1 = std::max(0.0, pr[k + 1].first);
+                if (o0 <= 1e-6 && o1 <= 1e-6) continue;
+                // the front: the profile segment's outward normal in the (normal, cross) plane, away from the face
+                V3 n = (f.n * (c1 - c0) - C * (o1 - o0)).unit();
+                if (n.dot(f.n) < 0) n = n * -1.0;
+                if (std::abs(c1 - c0) < 1e-9) n = (C * (o1 > o0 ? -1.0 : 1.0));
+                V3 p00 = P(a0, c0, o0), p01 = P(a1, c0, o0), p11 = P(a1, c1, o1), p10 = P(a0, c1, o1);
+                tri(p00, p01, p11, n); tri(p00, p11, p10, n);
+                // the caps: the strip between this segment and the face
+                for (int end = 0; end < 2; ++end) {
+                    const double a = end ? a1 : a0;
+                    const V3 cn = A * (end ? 1.0 : -1.0);
+                    V3 q0 = P(a, c0, 0), q1 = P(a, c1, 0), q2 = P(a, c1, o1), q3 = P(a, c0, o0);
+                    tri(q0, q1, q2, cn); tri(q0, q2, q3, cn);
+                }
+            }
+            // the profile's first and last samples standing off the face close against it
+            for (int end = 0; end < 2; ++end) {
+                const auto& q = end ? pr.back() : pr.front();
+                if (q.first <= 1e-6) continue;
+                const double c = q.second + dc;
+                const V3 cn = C * (end ? 1.0 : -1.0);
+                V3 b0 = P(a0, c, 0), b1 = P(a1, c, 0), b2 = P(a1, c, q.first), b3 = P(a0, c, q.first);
+                tri(b0, b1, b2, cn); tri(b0, b2, b3, cn);
+            }
+        }
+        if (node.v.empty()) { rejectedSweeps_.push_back(fs.id); return; }
+        nodes_.push_back(std::move(node));
+    }
+
     void emitGeometry() {
         nodes_.clear();
         for (size_t i = 0; i < faces_.size(); ++i) emitFaceNode(i);
@@ -1216,6 +1288,7 @@ private:
             }
         }
         for (const auto& sw : spec_.sweeps) emitSweep(sw);
+        for (const auto& fs : spec_.faceSweeps) emitFaceSweep(fs);
         if (!residualTris_.empty()) emitResidual();
     }
 
@@ -1498,6 +1571,29 @@ private:
                 for (size_t i = 0; i < N; ++i) { if (z[i] < -1e29f) z[i] = std::numeric_limits<float>::quiet_NaN(); if (zp[i] < -1e29f) zp[i] = std::numeric_limits<float>::quiet_NaN(); }
                 detail::writeFile(base + ".depth", z.data(), N * sizeof(float));
                 detail::writeFile(base + ".prot", zp.data(), N * sizeof(float));
+                // the face's own extent in its ortho frame (1 inside its polygon, openings cut out): the relief maps' mask
+                {
+                    std::vector<uint8_t> inside(N, 0);
+                    std::vector<std::pair<V3, std::pair<double, double>>> ft;
+                    faceTriangles(f, ft);
+                    for (size_t q = 0; q + 2 < ft.size(); q += 3) {
+                        double xs[3], ys[3];
+                        for (int c = 0; c < 3; ++c) { xs[c] = (ft[q + c].second.first - f.orthoSMin) / f.pixel; ys[c] = (f.orthoTMax - ft[q + c].second.second) / f.pixel; }
+                        double ar = (xs[1] - xs[0]) * (ys[2] - ys[0]) - (xs[2] - xs[0]) * (ys[1] - ys[0]);
+                        if (std::abs(ar) < 1e-12) continue;
+                        int qx0 = std::max(0, static_cast<int>(std::floor(std::min({xs[0], xs[1], xs[2]})))), qx1 = std::min(f.width - 1, static_cast<int>(std::ceil(std::max({xs[0], xs[1], xs[2]}))));
+                        int qy0 = std::max(0, static_cast<int>(std::floor(std::min({ys[0], ys[1], ys[2]})))), qy1 = std::min(f.height - 1, static_cast<int>(std::ceil(std::max({ys[0], ys[1], ys[2]}))));
+                        for (int y = qy0; y <= qy1; ++y) for (int x = qx0; x <= qx1; ++x) {
+                            double px2 = x + 0.5, py2 = y + 0.5;
+                            double w0 = (xs[1] - px2) * (ys[2] - py2) - (xs[2] - px2) * (ys[1] - py2);
+                            double w1 = (xs[2] - px2) * (ys[0] - py2) - (xs[0] - px2) * (ys[2] - py2);
+                            double w2 = (xs[0] - px2) * (ys[1] - py2) - (xs[1] - px2) * (ys[0] - py2);
+                            if (ar < 0) { w0 = -w0; w1 = -w1; w2 = -w2; }
+                            if (w0 >= 0 && w1 >= 0 && w2 >= 0) inside[static_cast<size_t>(y) * f.width + x] = 1;
+                        }
+                    }
+                    detail::writeFile(base + ".inside", inside.data(), N);
+                }
                 if (f.kind == "wall") {
                     // the grammar's photo: uncovered pixels exactly mid grey (tile_refine's convention)
                     texture::ImageBuffer g(f.width, f.height, 3, 128);
@@ -1745,6 +1841,7 @@ private:
  *   mesh <id> <nv> <nt> <provenance>               then: v x y z (nv lines), t i j k (nt lines)
  *   sweep <id> <confidence> <provenance> <np> o y ... <nf> <face> ...
  *   opening <id> <face> <s0> <s1> <t0> <t1> <depth> <scanned 0|1> <confidence> <provenance>
+ *   facesweep <id> <confidence> <provenance> <face> <axis 0|1> <np> o c ... <nplace> a0 a1 dc ...
  */
 inline Spec readSpec(std::istream& in) {
     Spec s;
@@ -1845,6 +1942,15 @@ inline Spec readSpec(std::istream& in) {
             if (!ls) fail("opening needs id face s0 s1 t0 t1 depth scanned confidence provenance");
             o.scanned = sc != 0;
             s.openings.push_back(o);
+        } else if (k == "facesweep") {
+            FaceSweepSpec w;
+            size_t np, nl;
+            ls >> w.id >> w.confidence >> w.provenance >> w.face >> w.axis >> np;
+            for (size_t i = 0; i < np && ls; ++i) { double o, c; ls >> o >> c; w.profile.push_back({o, c}); }
+            ls >> nl;
+            for (size_t i = 0; i < nl && ls; ++i) { std::array<double, 3> q{}; ls >> q[0] >> q[1] >> q[2]; w.placements.push_back(q); }
+            if (!ls || (w.axis != 0 && w.axis != 1)) fail("facesweep needs id confidence provenance face axis(0|1) np (o c)... nplace (a0 a1 dc)...");
+            s.faceSweeps.push_back(std::move(w));
         } else fail("unknown item " + k);
     }
     if (s.outDir.empty()) throw std::runtime_error("spec: no out dir");

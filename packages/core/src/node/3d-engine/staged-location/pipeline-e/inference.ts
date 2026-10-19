@@ -80,6 +80,14 @@ export interface InferenceOutcome {
     timingsMs: Record<string, number>;
     /** Enhanced mode: per wall redrawn, accepted or not and why. */
     enhanced: EnhanceWallRecord[];
+    /** What the layer was built from (the relief stage builds on it): parts, sweeps and openings as given to the native tool. */
+    build: { parts: MassingPart[]; sweeps: SweepItem[]; openings: OpeningItem[] };
+    /** The layer's face textures, by face index of `run`. */
+    textures: Map<number, FaceTexture>;
+    /** Per face of the input run (its ortho frame): texels an occluder took (uncovered, behind a tree crown, a box the vision model marked). */
+    occluderMasks: Map<number, Uint8Array>;
+    /** The Street View photos the colour step had (with their registered cameras), when it had any. */
+    streetViews?: ProjectionView[];
 }
 
 /** Legend entries the inference adds after the base ones (face-textures.ts). */
@@ -409,12 +417,14 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
     // (f) colour from Street View
     const colStep = rec('colour');
     const colour: ColourResult[] = [];
+    let svViews: ProjectionView[] | undefined;
     if (!svRead) colStep.skipped = input.streetViews ? 'no massing mesh to check visibility against' : 'no Street View source';
     else {
         const views = await svRead;
         if (views instanceof Error) colStep.skipped = `the Street View photos could not be had (${views.message.slice(0, 160)})`;
         else if (!views.length) colStep.skipped = 'no Street View photo of the structure';
         else {
+            svViews = views;
             const withDepth = views.map(v => ({ ...v, depth: renderFrameDepth(input.structureMesh!, v.camera as never) }));
             colStep.notes.push(`${views.length} Street View photos, ${views.filter(v => v.ownerMask?.some(x => x)).length} with owned pixels`);
             for (const f of faces) {
@@ -439,6 +449,7 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
     // ------------------------------------------------------------------ enhanced mode (opt-in): each large wall redrawn once, gated
     let runOut = run2;
     const enhanced: EnhanceWallRecord[] = [];
+    const enhancedOpenings: OpeningItem[] = [];
     if (input.enhance) {
         t = now();
         const enhStep = rec('enhance');
@@ -507,6 +518,7 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
                     } else { plateStep.rejected++; plateStep.notes.push(`wall ${o.facadeId}: not used: ${o.accepted ? `on the tile ortho: ${tileCheck?.why}` : o.reason.slice(0, 200)}`); }
                 }
                 if (extra.length) {
+                    enhancedOpenings.push(...extra);
                     progress('enhanced mode: building the solid again with the plates\' openings');
                     runOut = await runNativeMassing({ parts: allParts, meshes: massing.meshes }, { tilePath: input.tilePath, isolateGlb: input.isolateGlb, dir: path.join(input.dir, 'native3'), sweeps, openings: [...openings, ...extra], params: { snapMaxM: 0, sections: 0, topdown: 0 }, ...(input.signal ? { signal: input.signal } : {}) });
                 }
@@ -542,7 +554,7 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
             fs.writeFileSync(path.join(input.dir, `wall_${f.index}_before_after.png`), encodePng(W, H, Buffer.from(rgb), 3));
         }
     } catch { /* diagnostics only */ }
-    return { files, run: runOut, steps, legend, grammars, timingsMs, enhanced };
+    return { files, run: runOut, steps, legend, grammars, timingsMs, enhanced, build: { parts: allParts, sweeps, openings: [...openings, ...enhancedOpenings] }, textures: tex2, occluderMasks: masks, ...(svViews ? { streetViews: svViews } : {}) };
 }
 
 /** Recessed openings of a grammar on a wall: the recess the scan's ortho depth measures (inside against the frame), else 0.12 m. */

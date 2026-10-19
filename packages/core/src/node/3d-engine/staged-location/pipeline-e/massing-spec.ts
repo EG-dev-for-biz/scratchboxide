@@ -329,6 +329,12 @@ export function buildMassing(inp: MassingInputs): Massing {
 
 export interface SweepItem { id: string; confidence: number; provenance: string; profile: Array<[number, number]>; faces: string[] }
 export interface OpeningItem { id: string; face: string; s0: number; s1: number; t0: number; t1: number; depth: number; scanned: boolean; confidence: number; provenance: string }
+/**
+ * A profile swept along one axis of a face's own frame (scratchbox_staged_massing.hpp FaceSweepSpec): axis 0 along s with the
+ * profile in (offset, t), 1 along t with it in (offset, s); offset(c) >= 0 at increasing c; each placement [a0, a1, dc]
+ * sweeps it from a0 to a1 with c shifted by dc, capped.
+ */
+export interface FaceSweepItem { id: string; confidence: number; provenance: string; face: string; axis: 0 | 1; profile: Array<[number, number]>; placements: Array<[number, number, number]> }
 
 const tok = (s: string) => s.replace(/\s+/g, '_') || '_';
 const n6 = (v: number) => (Number.isFinite(v) ? Number(v.toFixed(6)).toString() : '0');
@@ -336,7 +342,7 @@ const n6 = (v: number) => (Number.isFinite(v) ? Number(v.toFixed(6)).toString() 
 /** The spec text scripts/staged_massing.cpp reads (scratchbox_staged_massing.hpp readSpec). */
 export function massingSpecText(m: Pick<Massing, 'parts' | 'meshes'>, opts: {
     outDir: string; tile?: string; isolate?: string; params?: Record<string, number>;
-    sweeps?: SweepItem[]; openings?: OpeningItem[]; provenance?: string;
+    sweeps?: SweepItem[]; openings?: OpeningItem[]; faceSweeps?: FaceSweepItem[]; provenance?: string;
 }): string {
     const L: string[] = ['# scratchbox staged massing spec v1'];
     if (opts.tile) L.push(`tile ${opts.tile}`);
@@ -355,6 +361,7 @@ export function massingSpecText(m: Pick<Massing, 'parts' | 'meshes'>, opts: {
         for (let i = 0; i + 2 < mesh.indices.length; i += 3) L.push(`t ${mesh.indices[i]} ${mesh.indices[i + 1]} ${mesh.indices[i + 2]}`);
     }
     for (const s of opts.sweeps ?? []) L.push(`sweep ${tok(s.id)} ${n6(s.confidence)} ${tok(s.provenance)} ${s.profile.length} ${s.profile.map(([o, y]) => `${n6(o)} ${n6(y)}`).join(' ')} ${s.faces.length} ${s.faces.map(tok).join(' ')}`);
+    for (const w of opts.faceSweeps ?? []) L.push(`facesweep ${tok(w.id)} ${n6(w.confidence)} ${tok(w.provenance)} ${tok(w.face)} ${w.axis} ${w.profile.length} ${w.profile.map(([o, c]) => `${n6(o)} ${n6(c)}`).join(' ')} ${w.placements.length} ${w.placements.map(q => q.map(n6).join(' ')).join(' ')}`);
     for (const o of opts.openings ?? []) L.push(`opening ${tok(o.id)} ${tok(o.face)} ${n6(o.s0)} ${n6(o.s1)} ${n6(o.t0)} ${n6(o.t1)} ${n6(o.depth)} ${o.scanned ? 1 : 0} ${n6(o.confidence)} ${tok(o.provenance)}`);
     return L.join('\n') + '\n';
 }
