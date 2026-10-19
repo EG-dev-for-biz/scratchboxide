@@ -16,6 +16,8 @@ import { PipelineError } from '../../../common/errors/pipeline-errors';
 import { GeometricComplexityGate, GeometricSceneMetrics, GeometricMeshSummary, ComplexityGateReport } from '../../../common/spatial/GeometricComplexityGate';
 import { analyzePartConnectivityAsync, ConnectivityAnalysisAbortedError, describeFloatingParts, glbToTriangleSoup, type PartConnectivityReport, type TriangleSoup } from '../../3d-engine/part-connectivity';
 import { callVisionModel, describeVisualProblems, reviewModelVisually, type VisualReviewResult } from '../../3d-engine/visual-review';
+import { formatSbApiErrors, sbTypeCheckMetadata, typeCheckSbScript } from '../../3d-engine/sb-script-typecheck';
+import { SB_API_CORE_SUMMARY, SB_API_VERSION } from '../../3d-engine/sb-api.generated';
 
 export interface GlbAabbBounds {
     min: [number, number, number];
@@ -159,17 +161,17 @@ export function extractGlbAabb(glbBuffer: Buffer): GlbAabbBounds | null {
 }
 
 /**
- * Without a reference the model guesses common names (mesh.clone(), mesh.transform, a materials
- * module) that do not exist, and every guess costs a failed tool call. Every name here is checked
- * against the real package by python-3d-api-reference.test.ts.
+ * Without a reference the model guesses common names (mesh.clone(), mesh.transform, a materials module) that do not
+ * exist, and every guess costs a failed tool call. The API listing is generated from the stubs of the live module
+ * (SB_API_CORE_SUMMARY, scripts/gen_sb_stubs.py); the notes below are usage the signatures cannot express.
  */
-export const PYTHON_3D_API_REFERENCE = `Verified scratchbox API. Only use names listed here or in the system instructions; do not guess others.
-- Primitives (each returns a Mesh and accepts material=): sb.create_box(width=, height=, depth=) or sb.create_box(size=(w, h, d)); sb.create_beveled_box(size=(w, h, d), bevel=0.02); sb.create_cylinder(radius=, height=, segments=24); sb.create_sphere(radius=, rings=16, sectors=32); sb.create_cone(radius=, height=); sb.create_plane(width=, height=); sb.create_lathe(profile, segments=32); sb.create_loft(slices); sb.sweep_curve_profile(path, profile_dimensions=(w, h)); sb.revolve_harmonic_solid(profile_curve=, harmonic_lobe_count=0); sb.replicate_metric_array(guide_points=, pitch_meters=, seed_geometry=).
-- Mesh methods (modify the mesh in place): translate(x, y, z); rotate_x(deg); rotate_y(deg); rotate_z(deg); scale(s) or scale(x, y, z); append(other); merge(other); subtract(other); set_material(mat); subdivide(iterations); taper(factor, axis); bend(angle_deg, radius); twist(angle_deg, axis); bulge(); displace(frequency, amplitude); recompute_smooth_normals(); weld_vertices() (call before subdividing boxes, whose faces arrive unwelded and crack apart otherwise); get_positions_flat(). Properties, read without parentheses: vertex_count, triangle_count, bounds (with .min and .max).
-- Reading geometry back: get_positions_flat returns float32 xyz as bytes; wrap it with Python's array module, typecode "f". Subdivision rounds and shrinks shapes and deformers move vertices, so measure positions after deforming instead of assuming the original sizes.
+export const PYTHON_3D_API_REFERENCE = `${SB_API_CORE_SUMMARY}
+Usage notes:
+- Mesh methods modify the mesh in place (and return it). vertex_count, triangle_count and bounds (with .min and .max) are properties, read without parentheses.
+- Reading geometry back: get_positions_flat returns float32 xyz as bytes; wrap it with Python's array module, typecode "f". Subdivision rounds and shrinks shapes and deformers move vertices, so measure positions after deforming instead of assuming the original sizes. Call weld_vertices() before subdividing boxes, whose faces arrive unwelded and crack apart otherwise.
 - Assemblies (legs, rungs, frames, struts, rails): compute the joint points first, then build each member between two joints with sb.sweep_curve_profile(path=[start, end], profile_dimensions=(r, r)). Take a connecting member's ends from points on the members it joins (a rung from lerp(top_a, foot_a, t) to lerp(top_b, foot_b, t)) so it attaches by construction; run member ends slightly into what they join. Do not place parts by rotating them about the origin and guessing offsets. Every result is checked: parts that touch nothing are listed in structuralIssues, and you must fix them.
-- Meshes have no clone(), copy() or transform. To duplicate: dup = sb.geometry.Mesh(); dup.append(mesh), then position it with translate, rotate_x/y/z and scale.
-- Materials: sb.PbrMaterial(base_color=(r, g, b, a), roughness=, metallic=) or presets such as sb.PbrMaterial.clay(), sb.PbrMaterial.wood_oak(), sb.PbrMaterial.chrome(), sb.PbrMaterial.glass_tinted(). There is no separate materials module.
+- Meshes have no clone(), copy() or transform. To duplicate: dup = sb.geometry.Mesh(); dup.append(mesh), then position it with translate, rotate_x/y/z (degrees) and scale.
+- Materials: sb.PbrMaterial(base_color=(r, g, b, a), roughness=, metallic=) or a preset such as sb.PbrMaterial.clay(). There is no separate materials module.
 - Scene and export: scene = sb.Scene(); scene.add_mesh(mesh); finish with sb.io.write_glb(OUTPUT_GLB_PATH, scene). A single Mesh can be written directly too.`;
 
 export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
@@ -257,7 +259,23 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
             };
         }
 
-        // 2. Execute Python script
+        // 2. Type-check against the generated scratchbox stubs: a call to something the API does not have is returned
+        // to the model to fix, without running. A check that could not finish lets the script run (logged, not "passed").
+        const typeCheck = await typeCheckSbScript(script);
+        const typeCheckMeta = sbTypeCheckMetadata(typeCheck);
+        if (typeCheck.status === 'rejected') {
+            const error = formatSbApiErrors(typeCheck.errors);
+            return {
+                status: 'failed',
+                resultPayload: { success: false, error, apiErrors: typeCheck.errors, typeCheck: typeCheckMeta },
+                summaryResult: `Python 3D script rejected before running: ${typeCheck.errors.length} call(s) to names or arguments the scratchbox API does not have (${typeCheck.durationMs}ms check). ${typeCheck.errors.slice(0, 3).map(e => `line ${e.line}: ${e.message}`).join('; ')}`
+            };
+        }
+        if (typeCheck.status !== 'passed') {
+            console.warn(`[execute_3d_python_script] scratchbox type check ${typeCheck.status} after ${typeCheck.durationMs}ms; running unchecked: ${typeCheck.note}`);
+        }
+
+        // 3. Execute Python script
         const runner = NativePythonRunnerService.getInstance();
         const effectiveScript = script;
         const result = await runner.runScript(effectiveScript, {
@@ -277,7 +295,8 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                     stdout: result.stdout,
                     stderr: result.stderr,
                     errorDetails: result.errorDetails,
-                    executionTimeMs: result.executionTimeMs
+                    executionTimeMs: result.executionTimeMs,
+                    typeCheck: typeCheckMeta
                 },
                 summaryResult: `Python 3D execution failed: ${result.errorDetails || result.stderr || 'Non-zero exit code'}`
             };
@@ -285,7 +304,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
 
         const desc = (typeof args.description === 'string' && args.description.trim()) ? args.description.trim() : 'Procedural 3D Python Scene';
 
-        // 3. Analytical AABB Bounding Box & Geometric Fidelity Evaluation
+        // 4. Analytical AABB Bounding Box & Geometric Fidelity Evaluation
         let cameraPosition: [number, number, number] = [0, 18, 38];
         let cameraTarget: [number, number, number] = [0, 4, 0];
         const cameraFov = 50;
@@ -414,6 +433,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                 vertexCount: writtenGeometry.totalVertices,
                 triangleCount: writtenGeometry.totalTriangles,
                 executionTimeMs: result.executionTimeMs,
+                typeCheck: typeCheckMeta,
                 stdout: result.stdout,
                 description: desc,
                 overallBoundingBox: bounds,
@@ -466,7 +486,10 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                             sourceCode: effectiveScript,
                             glbBase64: result.glbBase64,
                             glbPath: result.glbPath,
-                            lastCompiledTimeMs: Date.now()
+                            lastCompiledTimeMs: Date.now(),
+                            // the scratchbox API (hash of the generated stubs) the script was written and checked against
+                            sbApiVersion: SB_API_VERSION,
+                            typeCheck: typeCheckMeta
                         }
                     }
                 }

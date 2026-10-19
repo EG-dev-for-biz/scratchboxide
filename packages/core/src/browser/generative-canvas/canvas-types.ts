@@ -1058,6 +1058,10 @@ export interface Scene3DData {
         glbBase64?: string;
         glbPath?: string;
         diagnostics?: any[];
+        /** Version (hash of the generated stubs) of the scratchbox Python API the script was written and checked against. */
+        sbApiVersion?: string;
+        /** The pre-execution type check against those stubs: passed, or why it could not run (the script then ran unchecked). */
+        typeCheck?: { status: string; durationMs: number; apiVersion: string; ignoredDiagnostics: number; note?: string };
     };
     /**
      * Shows the scene in the WebGPU virtual geometry viewport instead of the three.js stage: the GLB

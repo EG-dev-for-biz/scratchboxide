@@ -19,6 +19,7 @@ import type { WorkspaceConfigService } from '../workspace-config-service';
 import { isReadOnlyMode } from './tool-permissions';
 import { OBJECT_BUILD_SOURCE, type BuiltObjectRecord } from '../../common/spatial/object-build-spec';
 import { stagedBuildContext } from '../3d-engine/staged-location/staged-summary';
+import { SB_API_SUMMARY } from '../3d-engine/sb-api.generated';
 
 /** Workspace-intelligence services the system instruction draws context from. */
 export interface PromptContextServices {
@@ -574,31 +575,9 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
 
 - OPEN ARCHITECTURAL INVARIANT: For indoor and pavilion scenes (dojos, shrines, arenas, workshops, laboratories), NEVER enclose the scene in an opaque closed 6-sided solid cube where interior props are hidden. Model open-air or cutaway structures (open entrance/colonnades/timber posts) so that interior training floors, equipment, and structural trusses remain 100% visible to the orbit camera.
 
-Direct Primitive & Procedural Helpers on \`sb\`:
-- \`sb.layout.BoundingVolume(extents=(w, h, d), center=(x, y, z))\` -> \`.get_socket("ground" | "crown" | "left" | "right" | "bow" | "stern")\`
-- \`sb.geometry.create_wheel(radius=0.35, width=0.30, rim_radius=..., ground=True, axis="lateral")\` -> authentic tire, recessed alloy rim, brake rotor, hub nut, grounded upright
-- \`sb.geometry.create_wheel_assembly(track_width=1.6, wheelbase=3.2, wheel_radius=0.35, tire_width=0.30, suspension="double_wishbone")\` -> spawns upright grounded wheel pairs with wishbone linkages
-- \`sb.geometry.create_lofted_hull(stations=[{"z":..., "width":..., "height":..., "y":..., "m":2.8}], profile="superellipse", close_ends=True)\` -> continuous compound curvature monocoque / fuselage / hull
-- \`sb.geometry.create_cambered_foil(span=1.8, chord=0.45, camber=0.04, thickness=0.05, angle_of_attack_deg=-4.0, endplates=True)\` -> aerodynamic wings & downforce elements
-- \`sb.geometry.create_revolving_component(radius, length, axis="lateral"|"vertical"|"longitudinal", profile="cylinder"|"beveled"|"fluted")\` -> functional revolving solids aligned to motion axes
-- \`sb.validation.validate_scene(scene, auto_heal=True)\` -> audits rolling orientations and compound curvature, auto-healing flat pancake wheels
-- \`sb.create_cylinder(radius=..., height=..., segments=...)\`
-- \`sb.create_cone(radius=..., height=..., segments=...)\`
-- \`sb.create_box(width=..., height=..., depth=...)\`
-- \`sb.create_sphere(radius=..., rings=..., sectors=...)\`
-- \`sb.create_plane(width=..., height=..., seg_x=..., seg_y=...)\`
-- \`sb.geometry.create_catenary_cable(start=(x,y,z), end=(x,y,z), sag=..., radius=...)\`
-- \`sb.create_building(width=..., depth=..., floors=..., curvature=0.0..1.0, superellipse_exponent=2.4, twist_degrees=..., taper=..., bulge=..., roof='flat'|'hip'|'mansard'|'gable'|'dome'|'vault', bake_curvature_ao=True)\`
-- \`sb.create_curved_building(width=..., depth=..., floors=..., curvature=0.85, superellipse_exponent=2.4, twist_degrees=..., taper=..., bulge=..., roof='dome')\`
-- \`sb.create_tower(width=..., depth=..., floors=12, twist_degrees=45.0, taper=0.7, bulge=0.08, roof='flat')\`
-- \`sb.create_tree(attractor_count=..., crown_center=(x, y, z), crown_extents=(ex, ey, ez))\`
-- \`mesh.taper(factor=..., axis=0|1|2)\`, \`mesh.twist(angle_deg=..., axis=0|1|2)\`, \`mesh.bend(angle_deg=..., radius=...)\`, \`mesh.bulge(center=..., radius=..., strength=...)\`, \`mesh.displace(freq=..., amp=...)\`
-- \`mesh.translate(x, y, z)\`, \`mesh.rotate_x(deg)\`, \`mesh.rotate_y(deg)\`, \`mesh.rotate_z(deg)\` (Note: Native rotations take **DEGREES**, e.g. \`mesh.rotate_z(90.0)\`), \`mesh.scale(s)\`
-- \`mesh.compute_curvature_ao(intensity=0.7)\`
-- \`mesh.snap_to(target, face="top", clearance=0.0, offset=(0, 0, 0))\`, \`mesh.ground_on(target, clearance=0.0)\`, \`sb.layout.resolve_constraints(meshes, relations, terrain=None)\`
-- \`mesh.bounds.min\` / \`mesh.bounds.max\` / \`mesh.bounds.center\` / \`mesh.bounds.size\` (each has .x .y .z)
-- \`mesh.taubin_smooth(iterations=10)\`, \`mesh.isotropic_remesh(target_edge_length=0.25)\`, \`mesh.decimate(ratio=0.5)\`, \`mesh.fill_holes()\`, \`mesh.clean()\`
-- \`sb.pbr.PbrMaterial(base_color="#hex", roughness=0.3, metalness=0.8, emissive="#hex", emissive_intensity=1.0)\`
+THE sb API (generated from the engine's type stubs by scripts/gen_sb_stubs.py, so it matches the running module; every script is type-checked against the same stubs before it runs):
+${SB_API_SUMMARY}
+Notes the signatures do not carry: mesh.rotate_x/y/z take DEGREES (\`mesh.rotate_z(90.0)\`); \`mesh.bounds.min\` / \`.max\` are Vec3 (.x .y .z); \`sb.PbrMaterial(name, base_color=(r, g, b, a) or "#hex", roughness=, metallic=, emissive=, emissive_intensity=, clearcoat=, ior=)\` takes keywords, and \`sb.PbrMaterial.<preset>()\` answers any material name with plausible values.
 
 FORM-DRIVEN CONSTRUCTION (choose the operator by the geometric form, not by stacking primitives):
 - Surfaces of revolution (towers, columns, vessels, domes, nozzles, turned parts): describe the WHOLE silhouette as one profile of (radius, height) pairs and revolve it once, so plinth, taper, flares and cap stay one continuous surface:
