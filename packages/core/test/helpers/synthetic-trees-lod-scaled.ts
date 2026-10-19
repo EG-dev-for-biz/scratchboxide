@@ -236,7 +236,7 @@ export function buildScaledTreesGltf(opts: ScaledTreesOptions = {}): { json: any
     const bin = Buffer.concat(parts);
     const json = {
         asset: { version: '2.0' }, extensionsUsed: ['EXT_mesh_gpu_instancing'], extras: { sbTrees: root },
-        buffers: [{ byteLength: bin.length }], bufferViews, accessors, meshes, nodes, scenes: [{ nodes: sceneNodes }], scene: 0
+        buffers: [{ byteLength: bin.length }], bufferViews, accessors, meshes, nodes, scenes: [{ nodes: sceneNodes, extras: { sbTrees: root } }], scene: 0
     };
     return { json, bin };
 }

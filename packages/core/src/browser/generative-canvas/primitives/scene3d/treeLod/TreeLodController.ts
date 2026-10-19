@@ -154,6 +154,15 @@ export function findShadowCamera(scene: THREE.Object3D, shadowMapEnabled: boolea
     return found;
 }
 
+/** The number of `sbLod` children of the first tree node under `root` (undefined when there is none). */
+function levelsOfFirstTree(root: THREE.Object3D): number | undefined {
+    let n: number | undefined;
+    root.traverse(o => {
+        if (n === undefined && (o.userData as { sbTree?: TreeNodeExtras })?.sbTree) n = o.children.filter(c => (c.userData as { sbLod?: TreeLodExtras })?.sbLod).length || undefined;
+    });
+    return n;
+}
+
 const keyOf = (r: [number, number]): string => {
     const q = quantiseRange(r);
     return q === null ? 'off' : q === 'full' ? 'full' : `${q[0]}-${q[1]}`;
@@ -188,7 +197,8 @@ export class TreeLodController {
         };
         this.psiSeason = (root.userData?.sbTrees as TreesGlbRootExtras | undefined)?.psiSeason;
         const rootExtras = root.userData?.sbTrees as TreesGlbRootExtras | undefined;
-        this.levelCount = treesLodLevelCount(rootExtras?.schema);
+        // the schema names the level count; a root without it (extras the loader did not carry to the scene) counts a tree's levels
+        this.levelCount = rootExtras?.schema ? treesLodLevelCount(rootExtras.schema) : levelsOfFirstTree(root) ?? treesLodLevelCount(undefined);
         this.leafVariantNames = new Set((rootExtras?.clusterLibrary?.variants ?? []).filter(v => v.leavesLevel0 > 0 || (v.leavesNearMid ?? 0) > 0 || v.leavesLevel1 > 0).map(v => v.mesh));
         this.crown = resolveCrownShading(options.crownShading);
         this.crownKey = JSON.stringify(this.crown);

@@ -270,6 +270,22 @@ describe('TreeLodController: triangle estimates and old three-level files', () =
         expect(lod.stats.estimatedTriangles).toBe(expected[1] + expected[2]);
     });
 
+    it('counts a tree\'s levels when the root carries no schema (extras only at the glTF top level, which the loader does not put on the scene)', async () => {
+        for (const levels of [3, 4] as const) {
+            const gltf = buildTreesLodGltf({ trees: 2, levels });
+            for (const sc of gltf.json.scenes) delete sc.extras;
+            const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-lodnx-')), 't.glb');
+            writeTreesLodGlb(file, gltf);
+            const buf = fs.readFileSync(file);
+            const root = (await new GLTFLoader().parseAsync(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer, '')).scene;
+            expect(root.userData.sbTrees).toBeUndefined();
+            const lod = new TreeLodController(root);
+            expect(lod.levelsPerTree).toBe(levels);
+            expect(lod.treeCount).toBe(2);
+            lod.dispose();
+        }
+    });
+
     it('loads and renders an old trees-lod/1 file: three levels, the same bands, its mid level shaded as mid', async () => {
         const gltf = buildTreesLodGltf({ trees: 2, levels: 3, crown: true });
         expect(gltf.json.extras.sbTrees.schema).toBe('scratchbox.trees-lod/1');
