@@ -21,10 +21,10 @@ import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { massingSpecText, type Massing } from '../src/node/3d-engine/staged-location/pipeline-e/massing-spec';
-import { runMassing, type MassingNode, type MassingRun } from '../src/node/3d-engine/staged-location/pipeline-e/native-massing';
+import { runMassing, type MassingFace, type MassingNode, type MassingRun } from '../src/node/3d-engine/staged-location/pipeline-e/native-massing';
 import { writeMassingTexturedGlb } from '../src/node/3d-engine/staged-location/pipeline-e/massing-glb';
 import { plainTextures, MASSING_PARAMS } from '../src/node/3d-engine/staged-location/pipeline-e/pipeline-e';
-import { reliefMap, runReliefAverage, runReliefStage, K_SIGMA, MIN_BLOCKS, MIN_OPENINGS, MEASURED_AVERAGED_LABEL, type ReliefOutcome } from '../src/node/3d-engine/staged-location/pipeline-e/relief';
+import { reliefMap, retargetGeometry, runReliefAverage, runReliefStage, K_SIGMA, MIN_BLOCKS, MIN_OPENINGS, MEASURED_AVERAGED_LABEL, type ReliefOutcome } from '../src/node/3d-engine/staged-location/pipeline-e/relief';
 import type { FacadeGrammar } from '../src/node/3d-engine/staged-location/facade-grammar';
 import { renderFrameDepth, type FrameCamera } from '../src/node/spatial/StreetViewPoseRegistrar';
 
@@ -299,4 +299,38 @@ describe('pipeline E relief: averaging the scan along repeats (synthetic facade,
         const u = fr.units[0];
         expect([u.reveal, u.below, u.above, u.left, u.right].filter(x => x.accepted).length).toBe(0);
     }, 60_000);
+});
+
+describe('pipeline E relief: geometry onto a wall the refined layer split', () => {
+    it('moves measured sweeps and openings onto the pieces, in their own frames', () => {
+        const wall = (key: string, x0: number, len: number): MassingFace => ({
+            index: 0, key, kind: 'wall', part: 'p', loop: 0, edge: 0, wall: true, normal: [0, 0, 1], axisS: [1, 0, 0], axisT: [0, 1, 0], origin: [x0, 0, 0],
+            sMin: 0, sMax: len, tMin: 0, tMax: 15, tBottom: 0, area: len * 15, pixel: 0.05, orthoSMin: -0.05, orthoTMax: 15.05, width: 1, height: 1, coverage: 1, openings: [], top: [[0, 15], [len, 15]]
+        });
+        const from = [wall('w:p:0:0', 0, 24)], to = [wall('w:p:0:0:0', 0, 10), wall('w:p:0:0:1', 10, 14)];
+        const g = retargetGeometry({
+            sweeps: [{ id: 'relief_band_0_chain', confidence: 1, provenance: 'measured-averaged', profile: [[0, 13], [0.5, 13.5], [0, 14]], faces: ['w:p:0:0'] }],
+            faceSweeps: [{ id: 'relief_band_0_1', confidence: 1, provenance: 'measured-averaged', face: 'w:p:0:0', axis: 0, profile: [[0, 4.8], [0.15, 4.9], [0, 5.1]], placements: [[2, 20, 0]] },
+                { id: 'relief_vert_0_0', confidence: 1, provenance: 'measured-averaged', face: 'w:p:0:0', axis: 1, profile: [[0, 15], [0.12, 15.2], [0, 15.4]], placements: [[0, 13, 0]] }],
+            openings: [{ id: 'win_0_3', face: 'w:p:0:0', s0: 12, s1: 13.4, t0: 6, t1: 8.2, depth: 0.25, scanned: false, confidence: 1, provenance: 'measured-averaged' }],
+            features: [], replacedSweeps: [], provenance: new Map(), builds: new Map()
+        }, from, to);
+        expect(g.sweeps[0].faces).toEqual(['w:p:0:0:0', 'w:p:0:0:1']);
+        const band = g.faceSweeps.filter(f => f.id.startsWith('relief_band_0_1'));
+        expect(band.map(b => [b.face, b.placements[0][0], b.placements[0][1]])).toEqual([['w:p:0:0:0', 2, 10], ['w:p:0:0:1', 0, 10]]);
+        const vert = g.faceSweeps.find(f => f.id.startsWith('relief_vert_0_0'))!;
+        expect(vert.face).toBe('w:p:0:0:1');
+        expect(vert.placements[0][2]).toBeCloseTo(-10, 9);
+        expect(g.openings[0]).toMatchObject({ face: 'w:p:0:0:1', s0: 2, t0: 6 });
+        expect(g.openings[0].s1).toBeCloseTo(3.4, 9);
+        // the record of the retarget, for the screenshot convention: the plan of the pieces and what lies on them
+        const W = 480, H = 300, rgb = new Uint8Array(W * H * 3).fill(240);
+        const X = (x: number) => Math.round(10 + x * 19), Y = (t: number) => Math.round(H - 10 - t * 18);
+        const rect = (x0: number, x1: number, t0: number, t1: number, c: number[]) => { for (let y = Y(t1); y <= Y(t0); y++) for (let x = X(x0); x <= X(x1); x++) if (x >= 0 && y >= 0 && x < W && y < H) rgb.set(c, (y * W + x) * 3); };
+        rect(0, 10, 0, 15, [200, 205, 215]); rect(10, 24, 0, 15, [215, 205, 200]);
+        for (const b of band) { const x0 = b.face.endsWith(':1') ? 10 : 0; rect(x0 + b.placements[0][0], x0 + b.placements[0][1], 4.8, 5.1, [60, 60, 200]); }
+        rect(10 + vert.placements[0][2] + 15, 10 + vert.placements[0][2] + 15.4, 0, 13, [60, 160, 60]);
+        rect(12, 13.4, 6, 8.2, [40, 40, 40]);
+        shot('retarget_split_wall.png', W, H, rgb);
+    });
 });

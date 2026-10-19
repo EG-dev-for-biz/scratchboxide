@@ -449,6 +449,62 @@ export function reliefGeometry(run: MassingRun, report: ReliefReport, input: {
     return { sweeps: [...keptSweeps, ...sweeps], faceSweeps, openings, features, replacedSweeps, provenance, builds };
 }
 
+/**
+ * The geometry onto the faces of the solid it is built on. The relief is measured on the first run's faces; the layer it
+ * refines may have split a wall where a part was added (an inferred roof block): the split faces keep the plane and get
+ * keys `<key>:<k>`, each with its own origin along the wall. Measured sweeps, face sweeps and openings on such a wall are
+ * moved onto the pieces (s and t shifted by the piece's origin, clipped to its extent).
+ */
+export function retargetGeometry(g: ReliefGeometry, from: MassingFace[], to: MassingFace[]): ReliefGeometry {
+    const toKeys = new Set(to.map(f => f.key));
+    const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const cache = new Map<string, Array<{ f: MassingFace; ds: number; dt: number }> | undefined>();
+    const pieces = (key: string) => {
+        if (toKeys.has(key)) return undefined;
+        if (cache.has(key)) return cache.get(key);
+        const f1 = from.find(f => f.key === key);
+        const out = !f1 ? [] : to.filter(f => f.key.startsWith(`${key}:`) && dot(f.normal, f1.normal) > 0.999 && Math.abs(dot([f.origin[0] - f1.origin[0], f.origin[1] - f1.origin[1], f.origin[2] - f1.origin[2]], f1.normal)) < 0.01)
+            .map(f => { const d = [f.origin[0] - f1.origin[0], f.origin[1] - f1.origin[1], f.origin[2] - f1.origin[2]]; return { f, ds: dot(d, f1.axisS), dt: dot(d, f1.axisT) }; })
+            .sort((a, b) => a.ds + a.f.sMin - (b.ds + b.f.sMin));
+        cache.set(key, out);
+        return out;
+    };
+    const measured = (prov: string) => prov === MEASURED_AVERAGED_TOKEN;
+    const sweeps = g.sweeps.map(sw => !measured(sw.provenance) ? sw : { ...sw, faces: sw.faces.flatMap(k => pieces(k)?.map(p => p.f.key) ?? [k]) });
+    const faceSweeps: FaceSweepItem[] = [];
+    for (const fs_ of g.faceSweeps) {
+        const ps = pieces(fs_.face);
+        if (!ps) { faceSweeps.push(fs_); continue; }
+        const cMid = (fs_.profile[0][1] + fs_.profile[fs_.profile.length - 1][1]) / 2;
+        ps.forEach((p, k) => {
+            const placements: Array<[number, number, number]> = [];
+            for (const [a0, a1, dc] of fs_.placements) {
+                if (fs_.axis === 0) {
+                    const b0 = Math.max(a0 - p.ds, p.f.sMin), b1 = Math.min(a1 - p.ds, p.f.sMax);
+                    if (b1 - b0 >= 0.2) placements.push([b0, b1, dc - p.dt]);
+                } else {
+                    const s = cMid + dc - p.ds;
+                    if (s >= p.f.sMin && s <= p.f.sMax) placements.push([a0 - p.dt, a1 - p.dt, dc - p.ds]);
+                }
+            }
+            if (!placements.length) return;
+            const id = `${fs_.id}_p${k}`;
+            faceSweeps.push({ ...fs_, id, face: p.f.key, placements });
+            const rec = g.provenance.get(`facesweep:${fs_.id}`);
+            if (rec) g.provenance.set(`facesweep:${id}`, rec);
+            g.builds.set(id, g.builds.get(fs_.id) ?? []);
+        });
+    }
+    const openings = g.openings.map(o => {
+        const ps = measured(o.provenance) ? pieces(o.face) : undefined;
+        if (!ps) return o;
+        const sm = (o.s0 + o.s1) / 2;
+        const p = ps.find(q => sm - q.ds >= q.f.sMin && sm - q.ds <= q.f.sMax);
+        return p ? { ...o, face: p.f.key, s0: o.s0 - p.ds, s1: o.s1 - p.ds, t0: o.t0 - p.dt, t1: o.t1 - p.dt } : o;
+    });
+    return { ...g, sweeps, faceSweeps, openings };
+}
+
 // ------------------------------------------------------------------------------------------------ the photo-match gate
 
 export interface PhotoGateResult {
@@ -578,7 +634,7 @@ export async function runReliefStage(input: ReliefStageInput): Promise<ReliefOut
     const report = await runReliefAverage(job, path.join(input.dir, 'average'), { ...(input.signal ? { signal: input.signal } : {}) });
     timingsMs.average = Date.now() - t;
     // 2. features to geometry
-    const geometry = reliefGeometry(input.run, report, { sweeps: input.build.sweeps, openings: input.build.openings, grammars: grammarOf });
+    const geometry = retargetGeometry(reliefGeometry(input.run, report, { sweeps: input.build.sweeps, openings: input.build.openings, grammars: grammarOf }), input.run.report.faces, input.base.run.report.faces);
     const counts = {
         bands: countFeatures(geometry.features, f => f.axis === 's'),
         verticals: countFeatures(geometry.features, f => f.axis === 't'),
@@ -597,8 +653,14 @@ export async function runReliefStage(input: ReliefStageInput): Promise<ReliefOut
         const feat = geometry.features.find(f => f.id === fid);
         if (feat) { feat.built = false; feat.why += '; the native tool found no face for it'; }
     }
-    // a measured recess whose opening did not fit its wall is not built
-    for (const id of run2.report.rejectedOpenings) if (geometry.provenance.has(`opening:${id}`)) geometry.provenance.delete(`opening:${id}`);
+    // a measured recess whose opening did not fit its wall (or found no wall) is not built; a unit none of whose openings
+    // was built is not either
+    const dropped = new Set(run2.report.rejectedOpenings);
+    for (const id of dropped) geometry.provenance.delete(`opening:${id}`);
+    for (const f of geometry.features) if (f.id.endsWith('_reveal') && f.built) {
+        const own = geometry.openings.filter(o => o.provenance === MEASURED_AVERAGED_TOKEN && (o.face === f.faceKey || o.face.startsWith(`${f.faceKey}:`)));
+        if (own.length && own.every(o => dropped.has(o.id))) { f.built = false; f.why += '; none of its openings fits its wall in this solid'; }
+    }
     // 4. textures: the refined layer's, onto the new faces
     t = Date.now();
     const textures = new Map<number, FaceTexture>();

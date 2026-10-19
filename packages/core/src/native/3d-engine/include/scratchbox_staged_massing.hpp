@@ -800,7 +800,9 @@ private:
         // openings onto their faces
         for (size_t oi = 0; oi < spec_.openings.size(); ++oi) {
             const auto& o = spec_.openings[oi];
-            for (auto& f : faces_) if (f.key == o.face && f.wall) { attachOpening(f, static_cast<int>(oi)); break; }
+            bool found = false;
+            for (auto& f : faces_) if (f.key == o.face && f.wall) { attachOpening(f, static_cast<int>(oi)); found = true; break; }
+            if (!found) rejectedOpenings_.push_back(o.id);  // no wall of that key in this solid
         }
     }
 
