@@ -125,7 +125,7 @@ export const NATURE_ATMOSPHERE_OPERATORS: OperatorDefinition[] = [
             }
             if (azimuth === undefined) azimuth = currentAtm.sunAzimuth ?? 180.0;
 
-            const diurnalProfile = computeDiurnalLightingProfile(elevation);
+            const diurnalProfile = computeDiurnalLightingProfile(elevation, { turbidity: currentAtm.turbidity });
             const sunDir = getSunVectorFromAngles(elevation, azimuth);
 
             const updatedAtm: any = {

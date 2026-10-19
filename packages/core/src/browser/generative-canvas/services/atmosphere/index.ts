@@ -20,3 +20,14 @@ export * from './AtmosphereService';
 export * from './AtmosphereImageEstimationService';
 export * from './LocationObjectLightingService';
 export * from './sky-photometry';
+export {
+    spectralSun,
+    spectralBeamTransmittance,
+    extraterrestrialSolarIrradiance,
+    blackbodyLinearRgbSpectral,
+    correlatedColorTemperature,
+    cieColorMatching,
+    kastenYoungAirMass,
+    ozoneAbsorption
+} from './spectral-sun';
+export type { SpectralSun, SpectralSunOptions } from './spectral-sun';

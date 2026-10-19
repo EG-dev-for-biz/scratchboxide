@@ -66,6 +66,8 @@ export interface DiurnalLightingProfile {
     ambientIntensity?: number;
     shadowSoftness?: number;
     sunLinearRgb?: [number, number, number];
+    /** Direct-normal illuminance of the spectral sun beam (lux at 1 AU); absent once the disc has set. */
+    sunIlluminanceLux?: number;
     ambientLinearRgb?: [number, number, number];
     skyColorLinear?: [number, number, number];
     groundAlbedoLinear?: [number, number, number];

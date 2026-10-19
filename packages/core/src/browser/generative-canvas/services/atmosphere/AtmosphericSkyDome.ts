@@ -11,6 +11,7 @@ import * as THREE from 'three';
 import {
     AtmosphericScatteringConfig,
     AtmosphericSkyDomeModule,
+    DiurnalLightingProfile,
     TimeOfDayPreset
 } from './atmosphere-types';
 import { kelvinToRGB } from './kelvin';
@@ -421,6 +422,29 @@ export function groundBounceColor(profile: { isGoldenHour: boolean; isNight: boo
     return new THREE.Color().setRGB(Math.min(1, albedo[0] * gain), Math.min(1, albedo[1] * gain), Math.min(1, albedo[2] * gain), THREE.LinearSRGBColorSpace);
 }
 
+/**
+ * The direct sun's colour. A `kelvinTemperature` in the config is a chosen colour and keeps the phase-tinted blackbody;
+ * otherwise, while the disc is up, it is the profile's spectral beam (blackbody sun through Rayleigh, aerosol and ozone).
+ * After sunset the phase tint stands in for the sky light that is left.
+ */
+export function directSunColor(profile: DiurnalLightingProfile, config: AtmosphericScatteringConfig, warm: boolean): THREE.Color {
+    if (config.kelvinTemperature === undefined && profile.sunIlluminanceLux !== undefined && profile.sunLinearRgb) {
+        const [r, g, b] = profile.sunLinearRgb;
+        return new THREE.Color().setRGB(r, g, b, THREE.LinearSRGBColorSpace);
+    }
+    const kelvin = config.kelvinTemperature || (warm ? 3200 : (profile.isNight ? 12000 : 6500));
+    const tint = new THREE.Color(
+        profile.isGoldenHour
+            ? '#ffb355'
+            : profile.isTwilight
+            ? '#5c7ab3'
+            : profile.isNight
+            ? '#1a243d'
+            : '#fffdf0'
+    );
+    return tint.multiply(kelvinToRGB(kelvin));
+}
+
 export function createAtmosphericSkyDome(
     scene: THREE.Scene,
     isSunset: boolean = false,
@@ -432,7 +456,7 @@ export function createAtmosphericSkyDome(
     // Resolve initial solar elevation / azimuth
     // A time of day only fixes the sun at a place: it is used with the config's latitude/longitude, never an assumed one.
     const timedSun = config.timeOfDay !== undefined && (config.sunElevation === undefined || config.sunAzimuth === undefined) && !isSunset
-        ? getDiurnalLightingState(...requireLocation('createAtmosphericSkyDome', config.latitude, config.longitude), config.timeOfDay)
+        ? getDiurnalLightingState(...requireLocation('createAtmosphericSkyDome', config.latitude, config.longitude), config.timeOfDay, { turbidity: config.turbidity })
         : undefined;
     let initialElev = config.sunElevation !== undefined
         ? config.sunElevation
@@ -441,22 +465,10 @@ export function createAtmosphericSkyDome(
         ? config.sunAzimuth
         : (isSunset ? 260.0 : (timedSun ? timedSun.sunAzimuth : 180.0));
 
-    let diurnalProfile = computeDiurnalLightingProfile(initialElev);
+    const beamOptions = { turbidity: config.turbidity };
+    let diurnalProfile = timedSun ?? computeDiurnalLightingProfile(initialElev, beamOptions);
     let sunDirection = getSunVectorFromAngles(initialElev, initialAzim);
-
-    // Compute effective sun color from Kelvin & diurnal phase
-    const kelvin = config.kelvinTemperature || (isSunset ? 3200 : (diurnalProfile.isNight ? 12000 : 6500));
-    const kelvinCol = kelvinToRGB(kelvin);
-    const baseCol = new THREE.Color(
-        diurnalProfile.isGoldenHour
-            ? '#ffb355'
-            : diurnalProfile.isTwilight
-            ? '#5c7ab3'
-            : diurnalProfile.isNight
-            ? '#1a243d'
-            : '#fffdf0'
-    );
-    const effectiveSunColor = baseCol.multiply(kelvinCol);
+    const effectiveSunColor = directSunColor(diurnalProfile, config, isSunset);
 
     // Uniforms initialization
     const uniforms = {
@@ -539,21 +551,9 @@ export function createAtmosphericSkyDome(
     const applySolarState = (elevDeg: number, azimDeg: number, customProfile?: any) => {
         initialElev = elevDeg;
         initialAzim = azimDeg;
-        diurnalProfile = customProfile || computeDiurnalLightingProfile(elevDeg);
+        diurnalProfile = customProfile || computeDiurnalLightingProfile(elevDeg, beamOptions);
         sunDirection = getSunVectorFromAngles(elevDeg, azimDeg);
-
-        const currentKelvin = config.kelvinTemperature || (diurnalProfile.isGoldenHour ? 3200 : (diurnalProfile.isNight ? 12000 : 6500));
-        const kCol = kelvinToRGB(currentKelvin);
-        const bCol = new THREE.Color(
-            diurnalProfile.isGoldenHour
-                ? '#ffb355'
-                : diurnalProfile.isTwilight
-                ? '#5c7ab3'
-                : diurnalProfile.isNight
-                ? '#1a243d'
-                : '#fffdf0'
-        );
-        const effSun = bCol.multiply(kCol);
+        const effSun = directSunColor(diurnalProfile, config, diurnalProfile.isGoldenHour);
 
         uniforms.uSunDirection.value.copy(sunDirection);
         uniforms.uSunColor.value.copy(effSun);
@@ -594,11 +594,11 @@ export function createAtmosphericSkyDome(
             applySolarState(elevDeg, azimDeg);
         },
         setTimeOfDay: (timeHours: number, lat: number, lng: number) => {
-            const diurnalState = getDiurnalLightingState(...requireLocation('setTimeOfDay', lat, lng), timeHours);
+            const diurnalState = getDiurnalLightingState(...requireLocation('setTimeOfDay', lat, lng), timeHours, beamOptions);
             applySolarState(diurnalState.sunElevation, diurnalState.sunAzimuth, diurnalState);
         },
         setPreset: (preset: TimeOfDayPreset) => {
-            const presetState = getPresetLightingState(preset);
+            const presetState = getPresetLightingState(preset, beamOptions);
             applySolarState(presetState.elevationDeg, presetState.azimuthDeg, presetState);
         },
         dispose: () => {
