@@ -22,7 +22,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { ProvenanceRecord } from '../../../../common/spatial/staged-location-contracts';
 import type { VectorBuilding } from '../vector-footprints';
-import { buildMassing, massingSpecText, type Massing, type OpeningItem, type SweepItem } from './massing-spec';
+import { buildMassing, massingSpecText, type FaceSweepItem, type Massing, type OpeningItem, type SweepItem } from './massing-spec';
 import { writeMassingClayGlb, writeMassingTexturedGlb, type FaceTexture, type TexelSource } from './massing-glb';
 import { readFaceOrtho, runMassing, type MassingNode, type MassingRun } from './native-massing';
 import { baseLegend, fillNearest, medianColour, SRC, textureFromOrtho } from './face-textures';
@@ -86,8 +86,8 @@ export function massingProvenance(node: Pick<MassingNode, 'kind' | 'provenance' 
 }
 
 /** Runs the native tool on the massing (and, when given, the inferred openings and sweeps). */
-export async function runNativeMassing(m: Pick<Massing, 'parts' | 'meshes'>, opts: { tilePath: string; isolateGlb: string; dir: string; sweeps?: SweepItem[]; openings?: OpeningItem[]; params?: Record<string, number>; signal?: AbortSignal }): Promise<MassingRun> {
-    const text = massingSpecText(m, { outDir: opts.dir, tile: opts.tilePath, isolate: opts.isolateGlb, params: { ...MASSING_PARAMS, ...(opts.params ?? {}) }, sweeps: opts.sweeps, openings: opts.openings });
+export async function runNativeMassing(m: Pick<Massing, 'parts' | 'meshes'>, opts: { tilePath: string; isolateGlb: string; dir: string; sweeps?: SweepItem[]; openings?: OpeningItem[]; faceSweeps?: FaceSweepItem[]; params?: Record<string, number>; signal?: AbortSignal }): Promise<MassingRun> {
+    const text = massingSpecText(m, { outDir: opts.dir, tile: opts.tilePath, isolate: opts.isolateGlb, params: { ...MASSING_PARAMS, ...(opts.params ?? {}) }, sweeps: opts.sweeps, openings: opts.openings, faceSweeps: opts.faceSweeps });
     return runMassing(text, opts.dir, { signal: opts.signal });
 }
 
@@ -113,7 +113,7 @@ export function plainTextures(run: MassingRun): { textures: Map<number, FaceText
 }
 
 /** Writes the clay layer and its textured twin into `dir`. */
-export function writeMassingLayer(run: MassingRun, massing: Pick<Massing, 'check'>, textures: Map<number, FaceTexture>, legend: TexelSource[], dir: string, stage: string, stageKey: string, name = 'massing'): MassingLayerFiles {
+export function writeMassingLayer(run: MassingRun, massing: Pick<Massing, 'check'>, textures: Map<number, FaceTexture>, legend: TexelSource[], dir: string, stage: string, stageKey: string, name = 'massing', provenanceOf?: (n: MassingNode) => ProvenanceRecord | undefined): MassingLayerFiles {
     const tileImages = new Map<number, { bytes: Uint8Array; mimeType: string }>();
     for (const im of run.report.images) {
         const f = path.join(run.dir, im.file);
@@ -121,7 +121,7 @@ export function writeMassingLayer(run: MassingRun, massing: Pick<Massing, 'check
     }
     const input = {
         nodes: run.nodes, faces: run.report.faces, stage, stageKey, textures, legend, tileImages, tileLegendIndex: 0,
-        provenanceOf: (n: MassingNode) => massingProvenance(n, massing)
+        provenanceOf: (n: MassingNode) => provenanceOf?.(n) ?? massingProvenance(n, massing)
     };
     const clayGlb = path.join(dir, `${name}_clay.glb`), texturedGlb = path.join(dir, `${name}_textured.glb`);
     fs.writeFileSync(clayGlb, writeMassingClayGlb(input));
