@@ -136,6 +136,8 @@ function latticePixels(g: FacadeGrammar, f: MassingFace): Array<Array<{ x0: numb
 }
 
 const now = () => Date.now();
+/** The enhanced plates' grammar (up to 2 walls, about a minute) starts only this long into the stage (its limit is 300 s). */
+export const PLATE_GRAMMAR_LATEST_MS = 190_000;
 
 export async function runInferenceE(input: InferenceInput): Promise<InferenceOutcome> {
     const { run, massing } = input;
@@ -476,7 +478,9 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
         await Promise.all(Array.from({ length: Math.min(ENHANCE_CONCURRENCY, Math.max(0, order.length - 1)) }, async () => { for (let k; (k = nextE++) < order.length;) await enhanceOne(order[k]); }));
         // the grammar read from the enhanced plates, used only where it passes the grammar's own gates and the scan/tile check
         const plateStep = rec('enhance-grammar');
-        if (chain && plates.size) {
+        const elapsed = now() - tRead;
+        if (chain && plates.size && elapsed > PLATE_GRAMMAR_LATEST_MS) plateStep.skipped = `no time left in the stage (${Math.round(elapsed / 1000)} s spent; the plates' grammar starts only before ${PLATE_GRAMMAR_LATEST_MS / 1000} s)`;
+        else if (chain && plates.size) {
             const pdir = path.join(input.dir, 'plates');
             fs.mkdirSync(pdir, { recursive: true });
             const tileIdx = readReliefOrthos(run.dir);
@@ -489,7 +493,7 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
             }
             fs.writeFileSync(path.join(pdir, 'facades.json'), JSON.stringify({ schema: 'scratchbox.relief-orthos/1', facades: index }));
             if (index.length) {
-                const pass = await runFacadeGrammarPass({ orthosDir: pdir, chain, ...(input.signal ? { signal: input.signal } : {}), onProgress: m => progress(`enhanced plates: ${m}`) });
+                const pass = await runFacadeGrammarPass({ orthosDir: pdir, chain, maxFacades: 2, ...(input.signal ? { signal: input.signal } : {}), onProgress: m => progress(`enhanced plates: ${m}`) });
                 const extra: OpeningItem[] = [];
                 for (const o of pass.facades) {
                     if (!o.grammar) continue;
