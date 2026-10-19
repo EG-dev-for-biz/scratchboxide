@@ -954,6 +954,23 @@ export interface Scene3DData {
             clumpTop?: number; clumpCrevice?: number; lobeVariation?: number; treeVariation?: number;
         };
     };
+    /**
+     * How staged trees choose their level of detail from what the camera sees (scene3d/treeLod/TreeLodController.ts
+     * TreeLodViewOptions; every field optional, continuous except the switches). `screen`: on-screen size at the current lens,
+     * the file's metre bands read as pixel thresholds at `referenceFovDeg` / `referenceHeightPx` (`enabled: false` = metre
+     * bands, for comparison). `foveal`: detail toward the view centre or the focus point (`centreWeight`, `edgeWeight`,
+     * `centreRadius`, `edgeRadius` in frame half-widths, `curve`, `verticalWeight`). `blur`: depth-of-field demotion by up to
+     * `maxLevels` levels between blur radii `startPx` and `fullPx`. `triangleBudget`; `debugTint` tints each level;
+     * `statsOverlay` shows a stats line in the viewport.
+     */
+    treeLod?: {
+        screen?: { enabled?: boolean; referenceFovDeg?: number; referenceHeightPx?: number; resolutionExponent?: number; hysteresisShare?: number };
+        foveal?: { enabled?: boolean; centreWeight?: number; edgeWeight?: number; centreRadius?: number; edgeRadius?: number; curve?: number; verticalWeight?: number; followFocus?: boolean };
+        blur?: { enabled?: boolean; startPx?: number; fullPx?: number; maxLevels?: number };
+        triangleBudget?: number;
+        debugTint?: boolean;
+        statsOverlay?: boolean;
+    };
     clayPreset?: 'warm-clay' | 'alabaster' | 'onyx' | 'studio-grey' | 'terracotta' | 'porcelain' | 'concrete' | string;
     restructuringTelemetry?: {
         vertices?: number;

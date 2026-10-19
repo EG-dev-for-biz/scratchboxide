@@ -154,13 +154,14 @@ import { NumericPrecisionInspector } from './scene3d/NumericPrecisionInspector';
 import { computeSceneGeometryBounds, calculateStandoffCamera } from './scene3d/autoFraming';
 import type { RendererStack, AtmosphereHandle, TilesLayerHandle, SceneContentHandle, WasmMeshHandle, VectorRoadmapHandle, Scene3DRenderMode } from './scene3d/types';
 import { applyClayRenderMode } from './scene3d/clayRenderMode';
-import { ViewportOpticsChain } from './scene3d/viewportOptics';
+import { MAX_BLUR_RADIUS_FRAME_FRACTION, ViewportOpticsChain } from './scene3d/viewportOptics';
 import { ViewportFocusController, pinholeNdcToDisplayedNdc, viewAxisDepth } from './scene3d/viewportFocus';
 import { CameraSettingsControl } from './scene3d/CameraSettingsControl';
 import type { SetCameraLensParams } from '../services/operators/lighting-camera-operators';
 import { keepsStoredPose, lensCommands, liveViewMatches, runCameraCommands, withLivePose, type CameraCommand, type Vec3 } from './scene3d/cameraSettings';
 import { syncObjectMaterial } from './scene3d/materialOverride';
-import { TreeLodController, findShadowCamera } from './scene3d/treeLod/TreeLodController';
+import { TreeLodController, findShadowCamera, formatTreeLodStats, type TreeLodFrame } from './scene3d/treeLod/TreeLodController';
+import { applyTreeTextures, loadTreeTextureLibrary } from './scene3d/treeLod/treeTextureMaterials';
 import { disposeObject3DDeep, releaseObject3D } from './scene3d/disposeObject';
 import {
     resolveSelectableObject,
@@ -1114,6 +1115,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const [tilesError, setTilesError] = React.useState<string | null>(null);
     /** What the scene lens configures but the viewport cannot draw (e.g. a missing focus object), shown as a notice. */
     const [opticsIssues, setOpticsIssues] = React.useState<string[]>([]);
+    /** The tree level-of-detail stats line (scene data treeLod.statsOverlay), refreshed four times a second. */
+    const [treeLodStatsLine, setTreeLodStatsLine] = React.useState<string | null>(null);
     const [sceneBudget, setSceneBudget] = React.useState<SceneBudgetTelemetry | null>(null);
 
     // ---------------------------------------------------------
@@ -1308,6 +1311,12 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         const { prev, next } = applySceneMutation(mutator, opInfo);
         recordSceneEdit(prev, next, opInfo, options?.history);
     }, [applySceneMutation, recordSceneEdit]);
+
+    // debug hook: sets scene data treeLod (the tree level-of-detail view options, stats overlay and level tint) as a view-only change
+    React.useEffect(() => {
+        (window as any).__SB_SET_TREE_LOD__ = (value: Scene3DData['treeLod']) => mutateSceneData(prev => ({ ...prev, treeLod: value }), { operator: 'set_tree_lod', params: value }, { history: false });
+        return () => { delete (window as any).__SB_SET_TREE_LOD__; };
+    }, [mutateSceneData]);
 
     // Sync external data prop updates into sceneData
     React.useEffect(() => {
@@ -2060,6 +2069,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         };
         resolveViewportObjectRef.current = resolveViewportObject;
         let reportedOpticsIssues = '';
+        const treeFrameSize = new THREE.Vector2();
+        let treeStatsShownAt = 0;
         const renderFrame = () => {
             if (opticsChain.active) {
                 opticsChain.render(renderer, camera, {
@@ -2081,6 +2092,58 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 setOpticsIssues([...issues]);
             }
         };
+        // Tree levels of detail (step 12.9 of the frame): per-tree level, dither and culling for loaded trees GLBs, before the render.
+        // Scene data's treeCrownShading and treeLod are passed on when they change (so a controller's own setting holds until then).
+        let appliedTreeLodView: Scene3DData['treeLod'] | null = null;
+        let lastTreeFrame: TreeLodFrame | undefined;
+        const treeLodControllers = (): TreeLodController[] => {
+            const out: TreeLodController[] = [];
+            externalObjectsMapRef.current.forEach(model => {
+                const lod = model.parent ? (model.userData.sbTreeLod as TreeLodController | undefined) : undefined;
+                if (lod) out.push(lod);
+            });
+            return out;
+        };
+        const updateTreeLods = (now: number): void => {
+            const lods = treeLodControllers();
+            const crownShading = sceneDataRef.current?.treeCrownShading;
+            const crownShadingChanged = crownShading !== appliedTreeCrownShadingRef.current;
+            appliedTreeCrownShadingRef.current = crownShading;
+            const treeLodView = sceneDataRef.current?.treeLod;
+            const viewChanged = treeLodView !== appliedTreeLodView;
+            appliedTreeLodView = treeLodView;
+            if (!lods.length) return;
+            const shadowCamera = findShadowCamera(stack.scene, !!stack.renderer?.shadowMap?.enabled);
+            // what the frame shows beyond the camera: its height in pixels, the distortion overscan and the depth of field as drawn
+            const optics = opticsChainRef.current;
+            const heightPx = renderer.getDrawingBufferSize(treeFrameSize).y;
+            const dofPlan = optics?.active ? optics.getPlan().depthOfField : null;
+            const focusM = optics?.status.focusDistanceMeters;
+            const overscan = optics?.active ? optics.status.overscan : 1;
+            const focus = dofPlan?.focusObjectId ? optics?.focusTarget : null;
+            const frame: TreeLodFrame = {
+                heightPx, overscan,
+                dof: dofPlan && typeof focusM === 'number' && focusM > 0
+                    ? { focalLengthMm: dofPlan.focalLengthMm, apertureFStop: dofPlan.apertureFStop, focusM, focusPoint: focus?.centre ?? null, focusObject: focus?.object ?? null, maxBlurRadiusPx: Math.max(4, MAX_BLUR_RADIUS_FRAME_FRACTION * heightPx * overscan) }
+                    : null
+            };
+            lastTreeFrame = frame;
+            for (const lod of lods) {
+                if (crownShadingChanged) lod.setCrownShading(crownShading);
+                if (viewChanged) lod.setView(treeLodView);
+                lod.update(camera, shadowCamera, frame);
+            }
+            if (treeLodView?.statsOverlay && now - treeStatsShownAt > 250) {
+                treeStatsShownAt = now;
+                setTreeLodStatsLine(formatTreeLodStats(lods.map(l => l.stats)));
+            } else if (!treeLodView?.statsOverlay && treeStatsShownAt !== 0) {
+                treeStatsShownAt = 0;
+                setTreeLodStatsLine(null);
+            }
+        };
+        // debug hook: the controllers, the last frame they were given, and one level update outside the animation loop
+        (window as any).__SB_TREE_LOD__ = { controllers: treeLodControllers, lastFrame: () => lastTreeFrame, update: () => updateTreeLods(performance.now()) };
+
         renderFrameRef.current = renderFrame;
         (window as any).__SB_3D_RENDER_FRAME__ = renderFrame;
 
@@ -2265,18 +2328,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 }
 
                 // 12.9 Tree levels of detail: per-tree level, dither and culling for loaded trees GLBs (before the render).
-                let treeShadowCamera: THREE.Camera | null | undefined;
-                // scene data's treeCrownShading, passed on when it changes (so a controller's own setting holds until then)
-                const crownShading = sceneDataRef.current?.treeCrownShading;
-                const crownShadingChanged = crownShading !== appliedTreeCrownShadingRef.current;
-                appliedTreeCrownShadingRef.current = crownShading;
-                externalObjectsMapRef.current.forEach(model => {
-                    const lod = model.parent ? (model.userData.sbTreeLod as TreeLodController | undefined) : undefined;
-                    if (!lod) return;
-                    if (treeShadowCamera === undefined) treeShadowCamera = findShadowCamera(stack.scene, !!stack.renderer?.shadowMap?.enabled);
-                    if (crownShadingChanged) lod.setCrownShading(crownShading);
-                    lod.update(camera, treeShadowCamera);
-                });
+                updateTreeLods(now);
 
                 // 13. Gaussian Splat viewer camera sync & depth sort
                 if (splatViewerRef.current && typeof splatViewerRef.current.updateCamera === 'function') {
@@ -3031,8 +3083,14 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     if (attach) liveScene.add(model);
                     model.updateMatrixWorld(true);
                     // A trees GLB (nodes with extras sbTree) gets its level-of-detail controller before the clay pass, so wood and leaves share one material.
-                    const lod = new TreeLodController(model, { crownShading: sceneDataRef.current?.treeCrownShading });
-                    if (lod.hasTrees) model.userData.sbTreeLod = lod;
+                    const lod = new TreeLodController(model, { crownShading: sceneDataRef.current?.treeCrownShading, view: sceneDataRef.current?.treeLod });
+                    if (lod.hasTrees) {
+                        model.userData.sbTreeLod = lod;
+                        // textured mode's tree surfaces (the library the trees' extras chose from); clay mode keeps the shared tree clay
+                        loadTreeTextureLibrary()
+                            .then(lib => { model.userData.sbTreeTextures = applyTreeTextures(model, lib); })
+                            .catch(err => console.warn('[Scene3D] tree textures not applied:', (err as Error).message));
+                    }
                     // A staged layer's textured twin keeps its photo material under the clay pass, and its confidence texture is loaded.
                     void prepareTexturedTwinModel(gltf);
                     applyClayRenderMode([model], renderModeRef.current === 'clay');
@@ -3783,6 +3841,17 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 <span ref={focusReticleRef} className="sb-3d-focus-reticle" data-testid="sb-3d-focus-reticle" aria-hidden="true" />
                 <ViewportNotice notices={viewportNotices} />
             </div>
+            {treeLodStatsLine && (
+                <div
+                    className="sb-3d-tree-lod-stats"
+                    style={{
+                        position: 'absolute', top: 56, right: 12, zIndex: 30, padding: '4px 8px', borderRadius: 4, background: 'rgba(0, 0, 0, 0.72)', color: '#f4f4f5',
+                        pointerEvents: 'none', whiteSpace: 'pre', fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 10, lineHeight: 1.35
+                    }}
+                >
+                    {treeLodStatsLine}
+                </div>
+            )}
             {staged.overlay({ bottomInsetPx: isTimelineDrawerOpen ? 255 : 16 })}
 
             {/* Precision Creative Vertical Tool Strip (Left Docked - 50% Compact Scale) */}

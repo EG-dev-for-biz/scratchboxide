@@ -377,6 +377,11 @@ export class ViewportOpticsChain {
         return this.plan;
     }
 
+    /** The object depth of field holds focus on and its centre (world) as last measured, or null. */
+    public get focusTarget(): { object: THREE.Object3D; centre: THREE.Vector3 } | null {
+        return this.focus ? { object: this.focus.object, centre: this.focus.centre } : null;
+    }
+
     /** True when the scene lens configures any pass; the viewport renders through render() only then. */
     public get active(): boolean {
         return this.plan.passes.length > 0;
