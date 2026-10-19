@@ -12,6 +12,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { getPythonWorkerPool, PythonWorkerError } from '../process/persistent-python-worker';
 import { GeneratorFailedError } from '../../common/errors/pipeline-errors';
+import { resolveRepoPython } from '../process/repo-python';
 import type {
     IPointTracker
 } from '../../common/tracking/PointTrackingModel';
@@ -50,7 +51,7 @@ export interface TrackingExecutionResult {
  * When TAPIR cannot run, the call fails with the reason; it never switches to optical flow on its own.
  */
 export class TapirTrackingService implements IPointTracker {
-    private pythonBinary: string;
+    private readonly pythonOverride?: string;
     private scriptPath: string;
     private checkpointPath?: string;
     private timeoutMs: number;
@@ -58,12 +59,17 @@ export class TapirTrackingService implements IPointTracker {
     private syntheticTracker: SyntheticTracker;
 
     constructor(options?: TapirTrackingServiceOptions) {
-        this.pythonBinary = options?.pythonBinary ?? process.env.PYTHON_BIN ?? 'python3';
+        this.pythonOverride = options?.pythonBinary;
         this.scriptPath = options?.scriptPath ?? path.resolve(process.cwd(), 'scripts/run_tapir.py');
         this.checkpointPath = options?.checkpointPath;
         this.timeoutMs = options?.timeoutMs ?? 30_000;
         this.lkTracker = new LucasKanadeFlowTracker();
         this.syntheticTracker = new SyntheticTracker();
+    }
+
+    /** The interpreter (the caller's, else the project's, checked at first use: PythonEnvironmentError). */
+    private get pythonBinary(): string {
+        return this.pythonOverride ?? resolveRepoPython({ modules: ['numpy', 'cv2'], purpose: 'TAPIR point tracking (scripts/run_tapir.py)' });
     }
 
     /**

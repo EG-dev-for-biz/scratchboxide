@@ -166,7 +166,6 @@ function checkNorm(name: string, values: unknown, size: 2 | 4): void {
 }
 
 export class ObjectSegmenterService {
-    private readonly pythonBinary: string;
     private readonly scriptPath: string;
     private readonly frameTimeoutMs: number;
     private readonly video: VfxSubjectSegmenterService;
@@ -181,10 +180,14 @@ export class ObjectSegmenterService {
         scriptPath?: string;
         frameTimeoutMs?: number;
     } = {}) {
-        this.pythonBinary = options.pythonBinary ?? resolveRepoPython('PYTHON_BIN');
         this.scriptPath = options.scriptPath ?? repoPath('scripts', 'segment_object.py');
         this.frameTimeoutMs = options.frameTimeoutMs ?? 120_000;
-        this.video = new VfxSubjectSegmenterService({ pythonBinary: this.pythonBinary });
+        this.video = new VfxSubjectSegmenterService({ ...(options.pythonBinary ? { pythonBinary: options.pythonBinary } : {}) });
+    }
+
+    /** The interpreter (the caller's, else the project's, resolved and checked at first use: PythonEnvironmentError). */
+    private get pythonBinary(): string {
+        return this.options.pythonBinary ?? resolveRepoPython({ modules: ['numpy', 'cv2', 'mediapipe'], purpose: 'The object segmenter (scripts/segment_object.py)' });
     }
 
     private modelSource(): LocatorModelSource {

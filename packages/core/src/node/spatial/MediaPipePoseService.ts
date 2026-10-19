@@ -49,7 +49,7 @@ export function defaultMediaPipeWorkers(): number {
 }
 
 export class MediaPipePoseService {
-    private pythonBinary: string;
+    private readonly pythonOverride?: string;
     private scriptPath: string;
     private modelAssetPath: string;
     private timeoutMs: number;
@@ -58,11 +58,16 @@ export class MediaPipePoseService {
     private static unavailable = false;
 
     constructor(options?: MediaPipePoseServiceOptions) {
-        this.pythonBinary = options?.pythonBinary ?? resolveRepoPython('SCRATCHBOX_POSE_PYTHON', 'PYTHON_BIN');
+        this.pythonOverride = options?.pythonBinary;
         this.scriptPath = options?.scriptPath ?? repoPath('scripts', 'detect_pose.py');
         this.modelAssetPath = options?.modelAssetPath ?? repoPath('assets', 'models', 'pose_landmarker_full.task');
         this.timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
         this.maxWorkers = Math.max(1, Math.floor(options?.maxWorkers ?? defaultMediaPipeWorkers()));
+    }
+
+    /** The interpreter (the caller's, else SCRATCHBOX_POSE_PYTHON / the project's, checked at first use: PythonEnvironmentError). */
+    private get pythonBinary(): string {
+        return this.pythonOverride ?? resolveRepoPython({ overrideVars: ['SCRATCHBOX_POSE_PYTHON'], modules: ['numpy', 'cv2', 'mediapipe'], purpose: 'MediaPipe pose detection (scripts/detect_pose.py)' });
     }
 
     /**

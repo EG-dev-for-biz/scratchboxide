@@ -93,15 +93,20 @@ export interface PanoramaDepthServiceOptions {
  */
 export class PanoramaDepthService {
     private sidecarPath: string;
-    private pythonExecutable: string;
+    private readonly pythonOverride?: string;
     private env?: NodeJS.ProcessEnv;
     private timeoutMs: number;
 
     constructor(customSidecarPath?: string, options: PanoramaDepthServiceOptions = {}) {
         this.sidecarPath = customSidecarPath || repoPath('tools', 'depth', 'panorama_depth.py');
-        this.pythonExecutable = options.pythonExecutable || resolveRepoPython('SCRATCHBOX_DEPTH_PYTHON');
+        this.pythonOverride = options.pythonExecutable || undefined;
         this.env = options.env;
         this.timeoutMs = options.timeoutMs ?? 120_000;
+    }
+
+    /** The interpreter (the caller's, else SCRATCHBOX_DEPTH_PYTHON / the project's, checked at first use: PythonEnvironmentError). */
+    private get pythonExecutable(): string {
+        return this.pythonOverride ?? resolveRepoPython({ overrideVars: ['SCRATCHBOX_DEPTH_PYTHON'], modules: ['numpy', 'torch', 'transformers', 'PIL'], purpose: 'The depth model (tools/depth/panorama_depth.py)' });
     }
 
     /** Runs the sidecar and returns its metadata JSON, checking that it reports every key in `required`. */

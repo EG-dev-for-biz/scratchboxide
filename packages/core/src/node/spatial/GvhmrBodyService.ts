@@ -11,6 +11,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { execFileBuffer } from '../process/exec-file-async';
+import { resolveRepoPython } from '../process/repo-python';
 import { HumanoidMotionData, SkinWeightedGaussian } from '../3d-engine/Dynamic4DGaussianSplatService';
 import { SBHUMAN22_PARENTS, Vec3 } from '../../common/humanoid-skinning';
 import { resolveBinary } from '../video/HeadlessVideoEditorService';
@@ -114,7 +115,7 @@ function quatFromNormal(n: Vec3): [number, number, number, number] {
 export class GvhmrBodyService {
     public static resolvePythonBinary(explicit?: string): string {
         const candidates = [explicit, process.env.SCRATCHBOX_GVHMR_PYTHON, path.join(os.homedir(), '.cache/scratchbox/gvhmr-venv/bin/python')];
-        return candidates.find(c => c && fs.existsSync(c)) || 'python3';
+        return candidates.find(c => c && fs.existsSync(c)) || resolveRepoPython({ purpose: 'GVHMR' });
     }
 
     public static resolveGvhmrRoot(explicit?: string): string {
