@@ -88,6 +88,8 @@ static void usage() {
         "    --crown-base-ratio V --trunk-radius-per-height V --shell-depth V --min-surface-reached V\n"
         "                              (default: what crowns.json recorded as its growth, else 0.35, 0.016, 0.8, 0.9;\n"
         "                              a value other than the recorded one is refused)\n"
+        "    --coverage-fill 0|1 (1) --coverage-leaf-area-index V (4.6) --coverage-max-fill-share V (0.8)   fill each crown toward 1 - exp(-0.5 LAI leafiness)\n"
+        "    --mid-area-gain V --near-mid-area-gain V   leaf area of the mid / near-mid clusters as a multiple of the near level's\n"
         "    --threads N\n";
 }
 
@@ -373,6 +375,13 @@ static int runPlant(const Args& a) {
     P.treeLod.clusterRadiusPerLeaf = a.num("cluster-radius-per-leaf", P.treeLod.clusterRadiusPerLeaf);
     P.treeLod.shellDepthPerHeight = a.num("shell-depth-per-height", P.treeLod.shellDepthPerHeight);
     P.treeLod.spacingRatio = a.num("station-spacing", P.treeLod.spacingRatio);
+    P.treeLod.coverageFill = a.num("coverage-fill", P.treeLod.coverageFill ? 1 : 0) != 0;
+    P.treeLod.coverageLeafAreaIndex = a.num("coverage-leaf-area-index", P.treeLod.coverageLeafAreaIndex);
+    P.treeLod.coverageMaxFillShare = a.num("coverage-max-fill-share", P.treeLod.coverageMaxFillShare);
+    P.treeLod.level1AreaGain = a.num("mid-area-gain", P.treeLod.level1AreaGain);
+    P.treeLod.nearMidAreaGain = a.num("near-mid-area-gain", P.treeLod.nearMidAreaGain);
+    if (P.treeLod.coverageLeafAreaIndex < 0 || P.treeLod.coverageMaxFillShare < 0) throw VegetationError("bad_request", "--coverage-leaf-area-index and --coverage-max-fill-share must be >= 0");
+    if (!(P.treeLod.level1AreaGain > 0) || !(P.treeLod.nearMidAreaGain > 0)) throw VegetationError("bad_request", "--mid-area-gain and --near-mid-area-gain must be > 0");
     P.treeLod.farWoodTrianglesPerHeightM = a.num("far-wood-triangles-per-height", P.treeLod.farWoodTrianglesPerHeightM);
     P.treeLod.farWoodMinTriangles = a.num("far-wood-min-triangles", P.treeLod.farWoodMinTriangles);
     P.treeLod.farWoodMaxTriangles = a.num("far-wood-max-triangles", P.treeLod.farWoodMaxTriangles);
@@ -533,7 +542,8 @@ static int runPlant(const Args& a) {
               << ", \"unfit\": " << L.unfit << ", \"inset\": " << L.inset << ", \"outsideCrown\": " << L.outsideCrown << ", \"prunedBelowRadiusM\": " << json::num(L.prunedBelowRadiusM) << ", \"skeletonNodes\": " << t.report.skeletonNodes << ", \"twigs\": " << L.twigCount() << ", \"twigRadiusMinM\": " << json::num(L.twigRadiusMinM) << ", \"twigRadiusMedianM\": " << json::num(L.twigRadiusMedianM) << ", \"twigRadiusMaxM\": " << json::num(L.twigRadiusMaxM) << ", \"woodTriangles\": " << L.woodTriangles
               << ", \"level0\": " << lvl(L.level0, L.drawnLevel0()) << ", \"nearMid\": " << lvl(L.nearMid, L.drawnNearMid()) << ", \"level1\": " << lvl(L.level1, L.drawnLevel1()) << ", \"level2Triangles\": " << L.drawnFar(t.foliage.indices.size() / 3) << ", \"farWoodTriangles\": " << L.farWoodTriangles << ", \"farWoodPrunedBelowRadiusM\": " << json::num(L.farWoodPrunedBelowRadiusM)
               << ", \"ms\": " << json::num(t.lodMs) << ", \"msWood\": " << json::num(L.msWood) << ", \"msTwigs\": " << json::num(L.msTwigs) << ", \"msStations\": " << json::num(L.msStations)
-              << ", \"msRepair\": " << json::num(L.msRepair) << ", \"msMeasure\": " << json::num(L.msMeasure) << "}";
+              << ", \"msRepair\": " << json::num(L.msRepair) << ", \"msFill\": " << json::num(L.msFill) << ", \"msMeasure\": " << json::num(L.msMeasure)
+              << ", \"coverage\": " << detail::coverageJson(L.coverage) << "}";
         }
         s << "}";
     }

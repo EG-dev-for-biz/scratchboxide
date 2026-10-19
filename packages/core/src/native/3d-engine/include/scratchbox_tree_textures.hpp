@@ -50,6 +50,7 @@ struct LeafEntry {
     std::string id;
     RGB meanLinear{0, 0, 0};
     double leafLengthM{0}, leafWidthM{0};
+    double fill{0.7};   // share of a leaf's cell box (length x width) its cut-out covers (index leaf.fill; 0.7 when absent)
 };
 
 struct BarkEntry {
@@ -146,6 +147,7 @@ inline Library parseIndex(const std::string& text) {
         L.meanLinear = detail::rgbOf(e["colour"]["meanLinearRgb"], L.id + ".colour.meanLinearRgb");
         L.leafLengthM = detail::positive(e["leaf"]["lengthM"], L.id + ".leaf.lengthM");
         L.leafWidthM = detail::positive(e["leaf"]["widthM"], L.id + ".leaf.widthM");
+        if (e["leaf"]["fill"].type == io::GlbJsonValue::Number && e["leaf"]["fill"].num > 0 && e["leaf"]["fill"].num <= 1) L.fill = e["leaf"]["fill"].num;
         lib.leaves.push_back(L);
     }
     for (const auto& e : doc["bark"].arr) {

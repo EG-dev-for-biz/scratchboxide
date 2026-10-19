@@ -55,6 +55,15 @@ export interface CrownShadingOptions {
     occlusion: CrownSlotFactors;
     /** Use the crown's lobes (a smooth union of spheres) where the file has them; off, every tree uses its ellipsoid. */
     lobes: boolean;
+    /**
+     * Inner-crown darkening, an ambient-occlusion-like term: a leaf's diffuse colour is multiplied by
+     * 1 - innerDarkening x (1 - exp(-d / innerDepthM)), with d its depth (m) below the surface of the crown ellipsoid
+     * (sbTree.crown), whatever shape the occlusion uses. Light that reaches a leaf deep in a crown has passed more leaves
+     * (Beer-Lambert), so the core reads darker than the shell. Every slot, clay and textured alike; 0 turns it off.
+     */
+    innerDarkening: number;
+    /** The depth (m) over which the inner darkening reaches 1 - 1/e of its strength. */
+    innerDepthM: number;
     /** Ragged silhouettes, holes and clump value variation of the leaves (treeCrownBreakup below). */
     breakup: CrownBreakupOptions;
 }
@@ -111,7 +120,7 @@ export const DEFAULT_CROWN_BREAKUP: Readonly<CrownBreakupOptions> = Object.freez
 
 export const DEFAULT_CROWN_SHADING: Readonly<CrownShadingOptions> = Object.freeze<CrownShadingOptions>({
     enabled: true, blend: [0, 0.45, 0.9, 0.75], skyBias: 0.18, noise: [0, 0.06, 0.12, 0.06], occlusion: [0.6, 0.55, 0.45, 0.4], lobes: true,
-    breakup: DEFAULT_CROWN_BREAKUP
+    innerDarkening: 0.3, innerDepthM: 1.5, breakup: DEFAULT_CROWN_BREAKUP
 });
 
 /** Lobes per mesh are read from a float texture LOBE_TEX_WIDTH texels wide (one RGBA texel a lobe: centre xyz, radius). */
@@ -135,6 +144,8 @@ const uniforms = {
     uSbCrownOcclusion: { value: new THREE.Vector4(...DEFAULT_CROWN_SHADING.occlusion) },
     uSbCrownSky: { value: DEFAULT_CROWN_SHADING.skyBias },
     uSbCrownUseLobes: { value: 1 },
+    // innerDarkening, innerDepthM
+    uSbCrownInner: { value: new THREE.Vector2(DEFAULT_CROWN_SHADING.innerDarkening, DEFAULT_CROWN_SHADING.innerDepthM) },
     uSbCrownLobes: { value: makeLobeTexture(lobeAtlas.data, lobeAtlas.rows) },
     uSbBkOn: { value: 1 },
     uSbBkHoles: { value: new THREE.Vector4(...DEFAULT_CROWN_BREAKUP.holes) },
@@ -187,7 +198,7 @@ export function crownLobesAt(start: number, count: number): Array<[number, numbe
 }
 
 /** Writes the adjustable factors into the shared uniforms (clamped to their meaningful ranges). */
-export function setCrownShadingUniforms(o: Pick<CrownShadingOptions, 'blend' | 'skyBias' | 'noise' | 'occlusion'> & Partial<Pick<CrownShadingOptions, 'lobes' | 'breakup' | 'enabled'>>): void {
+export function setCrownShadingUniforms(o: Pick<CrownShadingOptions, 'blend' | 'skyBias' | 'noise' | 'occlusion'> & Partial<Pick<CrownShadingOptions, 'lobes' | 'breakup' | 'enabled' | 'innerDarkening' | 'innerDepthM'>>): void {
     const c01 = (x: number) => Math.min(1, Math.max(0, Number.isFinite(x) ? x : 0));
     const pos = (x: number) => Math.max(0, Number.isFinite(x) ? x : 0);
     uniforms.uSbCrownBlend.value.set(...(o.blend.map(c01) as CrownSlotFactors));
@@ -195,6 +206,7 @@ export function setCrownShadingUniforms(o: Pick<CrownShadingOptions, 'blend' | '
     uniforms.uSbCrownOcclusion.value.set(...(o.occlusion.map(c01) as CrownSlotFactors));
     uniforms.uSbCrownSky.value = pos(o.skyBias);
     uniforms.uSbCrownUseLobes.value = o.lobes === false ? 0 : 1;
+    uniforms.uSbCrownInner.value.set(c01(o.innerDarkening ?? DEFAULT_CROWN_SHADING.innerDarkening), Math.max(0.05, pos(o.innerDepthM ?? DEFAULT_CROWN_SHADING.innerDepthM)));
     const b = o.breakup ?? DEFAULT_CROWN_BREAKUP;
     // the depth materials (shadows) wear the breakup whatever the leaf material: off with the crown shading too
     uniforms.uSbBkOn.value = b.enabled && o.enabled !== false ? 1 : 0;
@@ -238,6 +250,8 @@ export function resolveCrownShading(o: CrownShadingInput | undefined | null): Cr
         noise: slotFactors(o?.noise, d.noise),
         occlusion: slotFactors(o?.occlusion, d.occlusion),
         lobes: o?.lobes ?? d.lobes,
+        innerDarkening: typeof o?.innerDarkening === 'number' && Number.isFinite(o.innerDarkening) ? o.innerDarkening : d.innerDarkening,
+        innerDepthM: typeof o?.innerDepthM === 'number' && Number.isFinite(o.innerDepthM) ? o.innerDepthM : d.innerDepthM,
         breakup: resolveCrownBreakup(o?.breakup)
     };
 }
@@ -509,6 +523,7 @@ uniform vec4 uSbCrownBlend;
 uniform vec4 uSbCrownNoise;
 uniform vec4 uSbCrownOcclusion;
 uniform float uSbCrownSky;
+uniform vec2 uSbCrownInner;
 varying float vSbCrownOcc;
 varying float vSbCrownFlip;
 `;
@@ -547,6 +562,16 @@ vSbCrownFlip = 1.0;
     // occlusion: 1 on the sky side of the crown's surface, darker toward its underside and its core
     float sbLit = ( 0.5 + 0.5 * dot( sbN, sbUp ) ) * ( 1.0 - 0.6 * sbDepth );
     vSbCrownOcc = mix( 1.0, 0.4 + 0.6 * sbLit, dot( uSbCrownOcclusion, sbSel ) );
+    // inner-crown darkening: the depth (m) below the crown ellipsoid's surface, whatever shape the occlusion uses
+    {
+        vec3 sbE = sbLocal.xyz - sbCrownC.xyz;
+        vec3 sbQ = vec3(
+            dot( vec3( sbCrownS0.x, sbCrownS1.x, sbCrownS1.y ), sbE ),
+            dot( vec3( sbCrownS1.x, sbCrownS0.y, sbCrownS1.z ), sbE ),
+            dot( vec3( sbCrownS1.y, sbCrownS1.z, sbCrownS0.z ), sbE ) );
+        float sbInnerM = clamp( 1.0 - sqrt( max( dot( sbE, sbQ ), 0.0 ) ), 0.0, 1.0 ) * sbCrownS0.w;
+        vSbCrownOcc *= 1.0 - uSbCrownInner.x * ( 1.0 - exp( - sbInnerM / max( uSbCrownInner.y, 0.05 ) ) );
+    }
     if ( sbBlend > 0.0 ) {
         // per-leaf noise: smooth in the leaf's own normal (one leaf, one direction), varied by the cluster's place
 #ifdef USE_INSTANCING

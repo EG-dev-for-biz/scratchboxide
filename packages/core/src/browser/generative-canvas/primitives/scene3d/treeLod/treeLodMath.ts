@@ -201,3 +201,6 @@ export function blurDemotionLevels(blurRadiusPx: number, p: BlurDemotionParams):
     if (!(blurRadiusPx > p.startPx)) return 0;
     return p.maxLevels * smoothstep01((blurRadiusPx - p.startPx) / Math.max(1e-6, p.fullPx - p.startPx));
 }
+
+/** The crown-shading detail slot (0 near, 1 near-mid, 2 mid, 3 far) of a level of a tree with `levels` levels. */
+export const crownSlotOf = (level: number, levels: number): number => (levels >= 4 ? Math.min(3, level) : [0, 2, 3][Math.min(2, level)]);

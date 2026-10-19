@@ -18,7 +18,7 @@ import {
     setCrownShadingUniforms, supportsCrownShading, type CrownShadingInput, type CrownShadingOptions
 } from './treeCrownShading';
 import {
-    FADE_STEPS, blurDemotionLevels, demoteEdges, edgesAtLevel, edgesNoFinerThan, finestLevel, fovealRadius, fovealWeight, hysteresisDistanceRelative, levelRange, pixelThresholds,
+    FADE_STEPS, crownSlotOf, blurDemotionLevels, demoteEdges, edgesAtLevel, edgesNoFinerThan, finestLevel, fovealRadius, fovealWeight, hysteresisDistanceRelative, levelRange, pixelThresholds,
     projectedHeightPx, quantiseRange, screenEquivalentDistance, stepEdges, targetEdges,
     type BlurDemotionParams, type FovealParams, type LodBand, type LodEdges, type ScreenSizeParams
 } from './treeLodMath';
@@ -253,8 +253,8 @@ const castingLevel = (e: LodEdges): number => {
     return best;
 };
 
-/** The crown-shading detail slot (0 near, 1 near-mid, 2 mid, 3 far) of a level of a tree with `levels` levels. */
-export const crownSlotOf = (level: number, levels: number): number => (levels >= 4 ? Math.min(3, level) : [0, 2, 3][Math.min(2, level)]);
+/** The crown-shading detail slot of a level (treeLodMath.ts crownSlotOf). */
+export { crownSlotOf };
 
 /** The shadow camera of the first light under `scene` that casts shadows, or null when no shadow map is rendered. */
 export function findShadowCamera(scene: THREE.Object3D, shadowMapEnabled: boolean): THREE.Camera | null {
