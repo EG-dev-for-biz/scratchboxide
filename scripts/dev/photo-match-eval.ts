@@ -14,8 +14,14 @@
  *   "views": [{ "id": "...", "label": "far 85 m", "photo": "x.jpg", "camera": PinholeCamera }
  *          or { ..., "pose": { "panoId", "eye", "headingDeg", "pitchDeg", "fovDeg", "widthPx", "heightPx", "correction"? } }],
  *   "arms": [{ "id": "A", "label": "A raw tile", "glbs": ["a.glb"], "keepNear"?: "iso.glb" }],
- *   "occluder"?: "geometry.glb"                               // the full tile mesh: what stands in front hides every arm alike
+ *   "occluder"?: "geometry.glb",                              // the full tile mesh: what stands in front hides every arm alike
+ *   "context"?: { "glb": "textured.glb", "cut": "raw_clay.glb" }  // in context: every arm drawn in the same street (below)
  * }
+ * With `context`, every arm is rendered in its place: the photo-textured tile with the target's own triangles (those within
+ * 1 cm of `cut`'s, the isolate tile_refine wrote) taken out, identical for every arm, drawn and depth-tested with the arm and lit
+ * the same. Each arm replaces only the target, so the judge compares a street with a street. `occluder` is not used then (the
+ * context hides what stands in front). The metrics' mask is still the target (the arm's own coverage).
+ */
  * `keepNear` keeps only the triangles of the arm's GLBs whose centroid lies within 1 cm of a triangle centroid of that GLB
  * (e.g. the photo-textured tile cut to the isolated scan tile_refine wrote). Every arm must be in the tile frame.
  */
@@ -36,8 +42,8 @@ function centroids(t: Json): Float32Array {
     return c;
 }
 
-/** Triangles of `t` whose centroid is within `tol` of one of `ref`'s centroids (a 1 cm hash grid). */
-function keepNear(t: Json, ref: Json, tol = 0.01): Json {
+/** Triangles of `t` whose centroid is within `tol` of one of `ref`'s centroids (a 1 cm hash grid); `drop` keeps the others. */
+function keepNear(t: Json, ref: Json, tol = 0.01, drop = false): Json {
     const grid = new Map<string, number[]>();
     const rc = centroids(ref), key = (x: number, y: number, z: number) => `${Math.floor(x / tol)},${Math.floor(y / tol)},${Math.floor(z / tol)}`;
     for (let i = 0; i < rc.length; i += 3) { const k = key(rc[i], rc[i + 1], rc[i + 2]); (grid.get(k) ?? grid.set(k, []).get(k)!).push(i); }
@@ -49,7 +55,7 @@ function keepNear(t: Json, ref: Json, tol = 0.01): Json {
             const g = grid.get(`${Math.floor(x / tol) + dx},${Math.floor(y / tol) + dy},${Math.floor(z / tol) + dz}`);
             if (g?.some(j => Math.hypot(rc[j] - x, rc[j + 1] - y, rc[j + 2] - z) <= tol)) hit = true;
         }
-        if (hit) keep.push(i);
+        if (hit !== drop) keep.push(i);
     }
     const pick = (a: Float32Array | Int32Array, w: number) => { const o = new (a.constructor as Json)(keep.length * w); keep.forEach((s, d) => o.set(a.subarray(s * w, s * w + w), d * w)); return o; };
     return { positions: pick(t.positions, 9), uvs: pick(t.uvs, 6), normals: pick(t.normals, 3), texture: pick(t.texture, 1), flatLinear: pick(t.flatLinear, 3), textures: t.textures };
@@ -81,9 +87,16 @@ async function main(): Promise<void> {
         console.log(`[photo-match] arm ${a.id}: ${tris} triangles from ${a.glbs.length} GLBs${a.keepNear ? ' (kept near the isolate)' : ''}`);
         return { ...a, meshes, tris };
     });
-    const occluder = m.occluder ? sceneToRenderMesh(readGlbScene(m.occluder)) : undefined;
+    let context: Json[] | undefined;
+    if (m.context) {
+        const full = readTileTriangles(fs.readFileSync(m.context.glb));
+        const cut = keepNear(full, readTileTriangles(fs.readFileSync(m.context.cut)), 0.01, true);
+        context = [cut];
+        console.log(`[photo-match] context: ${cut.texture.length} of ${full.texture.length} tile triangles (the target cut out)`);
+    }
+    const occluder = !context && m.occluder ? sceneToRenderMesh(readGlbScene(m.occluder)) : undefined;
     const chain = noJudge ? undefined : await judgeClient();
-    const report: Json = { place: m.place, slug: m.slug, arms: arms.map((a: Json) => ({ id: a.id, label: a.label, glbs: a.glbs, triangles: a.tris })), views: [] };
+    const report: Json = { place: m.place, slug: m.slug, inContext: !!m.context, arms: arms.map((a: Json) => ({ id: a.id, label: a.label, glbs: a.glbs, triangles: a.tris })), views: [] };
     for (const v of m.views) {
         if (exclude.has(v.panoId ?? v.pose?.panoId)) throw new Error(`view ${v.id}: pano ${v.panoId ?? v.pose?.panoId} was used by an arm; it cannot be held out`);
         const bytes = fs.readFileSync(v.photo);
@@ -92,7 +105,7 @@ async function main(): Promise<void> {
         const camera = v.camera ?? castCamera({ ...v.pose, widthPx: img.width, heightPx: img.height });
         if (camera.width !== img.width || camera.height !== img.height) throw new Error(`view ${v.id}: the camera is ${camera.width}x${camera.height}, the photo ${img.width}x${img.height}`);
         const occluderDepth = occluder ? renderFrameDepth(occluder, camera) : undefined;
-        const renders = arms.map((a: Json) => ({ arm: a, r: pm.renderTriangles(a.meshes, camera, occluderDepth ? { occluderDepth } : {}) }));
+        const renders = arms.map((a: Json) => ({ arm: a, r: pm.renderTriangles(a.meshes, camera, { ...(occluderDepth ? { occluderDepth } : {}), ...(context ? { context } : {}) }) }));
         const maskSrc = renders.find((x: Json) => x.arm.id === (m.maskArm ?? arms[0].id))!.r;
         const mask = pm.coverageMask(maskSrc);
         const perceptual: Json = {};
@@ -110,7 +123,7 @@ async function main(): Promise<void> {
             sublabel: judge ? `JUDGE ${judge.stats[arm.id].overall.mean.toFixed(1)} +- ${judge.stats[arm.id].overall.sd.toFixed(1)}  SSIM ${perceptual[arm.id].ssim ?? '-'}` : `SSIM ${perceptual[arm.id].ssim ?? '-'} EDGE ${perceptual[arm.id].edgeChamferPx ?? '-'}`
         }))];
         const grid = path.join(gridDir, `${m.slug}_${v.id}.png`);
-        fs.writeFileSync(grid, pm.composeGrid(tiles, { tileWidth: 560, columns: Math.min(4, tiles.length), title: `${m.place} - ${v.label ?? v.id}` }));
+        fs.writeFileSync(grid, pm.composeGrid(tiles, { tileWidth: 560, columns: Math.min(4, tiles.length), title: `${m.place} - ${v.label ?? v.id}${context ? ' - IN CONTEXT' : ''}` }));
         report.views.push({ id: v.id, label: v.label, panoId: v.panoId ?? v.pose?.panoId, size: [img.width, img.height], maskPixels: mask.reduce((s: number, x: number) => s + x, 0), perceptual, ...(judge ? { judge } : {}), grid, renderMs: Object.fromEntries(renders.map((x: Json) => [x.arm.id, x.r.ms])) });
         console.log(`[photo-match] ${m.slug} ${v.id}: ${arms.map((a: Json) => `${a.id} ${judge ? judge.stats[a.id].overall.mean : '-'} (ssim ${perceptual[a.id].ssim}, edge ${perceptual[a.id].edgeChamferPx}, dE ${perceptual[a.id].colourDeltaE}, cov ${perceptual[a.id].coverage})`).join(' | ')} -> ${grid}`);
         fs.writeFileSync(path.join(outDir, 'report.json'), JSON.stringify(report, null, 1));

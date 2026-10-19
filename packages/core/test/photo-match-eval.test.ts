@@ -88,6 +88,30 @@ describe('photo-match evaluator', () => {
         expect(same.coverage[60 * 160 + 80]).toBe(1);
     });
 
+    it('draws the arm in its context: the same street around every arm, depth-tested with it, the coverage the arm\'s alone', () => {
+        const cam = camera();
+        const green: [number, number, number] = [20, 160, 40];
+        // the street: a wall behind the target (12 m) spanning the whole view, and a post in front of its left part (6 m)
+        const context = [wall(12, -20, 20, -20, 20, stripes(16, green, green)), wall(6, -2.2, -1.2, -1, 1, stripes(16, [10, 10, 10], [10, 10, 10]))];
+        const r = renderTriangles([wall(10, -3, 3, -2, 2, stripes(64, red, cream))], cam, { context });
+        // the target is drawn over the street behind it, and the post in front hides part of it
+        expect(px(r, 5, 5)[1]).toBeGreaterThan(140);                 // the street, not the grey background
+        expect(px(r, 100, 60)[1]).toBeLessThan(140);                 // the target in front of the street wall
+        expect(px(r, 42, 60)[0]).toBeLessThan(40);                   // the post in front of the target
+        // the coverage (the metrics' mask) is the target's: not the street, not where the post hides it
+        expect(r.coverage[5 * 160 + 5]).toBe(0);
+        expect(r.coverage[60 * 160 + 100]).toBe(1);
+        expect(r.coverage[60 * 160 + 42]).toBe(0);
+        expect(r.triangles).toBe(2);
+        // every arm sees the same context: an empty arm renders the street exactly as a context-only render
+        const bare = renderTriangles([], cam, { context });
+        const bare2 = renderTriangles([], cam, { context });
+        expect(Buffer.from(bare.rgba).equals(Buffer.from(bare2.rgba))).toBe(true);
+        expect(bare.coverage.every(c => c === 0)).toBe(true);
+        fs.mkdirSync(SHOTS, { recursive: true });
+        fs.writeFileSync(path.join(SHOTS, 'photo_match_in_context.png'), composeGrid([{ image: bare, label: 'CONTEXT' }, { image: r, label: 'ARM IN CONTEXT' }], { tileWidth: 320, columns: 2 }));
+    });
+
     it('clips a wall that passes behind the camera without smearing it across the image', () => {
         // a floor from 1 m behind the eye to 20 m ahead, 1.5 m below it
         const P = [-2, -1.5, -1, 2, -1.5, -1, 2, -1.5, 20, -2, -1.5, -1, 2, -1.5, 20, -2, -1.5, 20];

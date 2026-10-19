@@ -53,7 +53,7 @@ export interface ArmRender {
     height: number;
     /** sRGB8 RGBA, background where nothing renders. */
     rgba: Uint8Array;
-    /** 0..1 share of each pixel's samples that hit the arm. */
+    /** 0..1 share of each pixel's samples that hit the arm (never its context). */
     coverage: Float32Array;
     triangles: number;
     ms: number;
@@ -132,6 +132,12 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
      * (by 0.25 m + 2 percent) is hidden, as the photo hides it, so every arm is seen through the same occluders.
      */
     occluderDepth?: Float32Array;
+    /**
+     * The place around the arm (e.g. the photo-textured tile with the target cut out, identical for every arm): drawn with
+     * the arm, depth-tested against it and lit the same, so the arm is seen in its street as the photo shows it. `coverage`
+     * still counts the arm's samples only, so the metrics' mask stays the target.
+     */
+    context?: TileTriangles[];
 } = {}): ArmRender {
     const t0 = Date.now();
     const ss = Math.max(1, Math.round(options.supersample ?? 2));
@@ -143,6 +149,8 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
     const levelOf = new Map<number, Float32Array>(); // per mesh: mip level per triangle
     const { eye, right, up, fwd } = camera;
     let drawn = 0;
+    const armMeshes = meshes.length;
+    if (options.context?.length) meshes = [...meshes, ...options.context];
     meshes.forEach((m, mi) => {
         const nt = m.texture.length;
         const levels = new Float32Array(nt);
@@ -201,7 +209,7 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
                     }
                 }
             }
-            drawn++;
+            if (mi < armMeshes) drawn++;
         }
     });
     // shade the samples, then box-reduce to the camera's resolution
@@ -242,7 +250,7 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
         const cos = Math.abs((m.normals[n] * dx + m.normals[n + 1] * dy + m.normals[n + 2] * dz) / dl);
         const shade = amb + (1 - amb) * cos;
         acc[o * 3] += col[0] * shade; acc[o * 3 + 1] += col[1] * shade; acc[o * 3 + 2] += col[2] * shade;
-        cov[o] += 1;
+        if (mi < armMeshes) cov[o] += 1;
     }
     const k = ss * ss;
     const rgba = new Uint8Array(outW * outH * 4);
