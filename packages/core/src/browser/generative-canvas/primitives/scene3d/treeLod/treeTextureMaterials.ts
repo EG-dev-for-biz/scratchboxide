@@ -21,8 +21,8 @@ import { setPerMeshAttribute } from './treeCrownShading';
  * trees whose extras name their choice (sbTree.texture, chosen by appearance in the native trees writer). Clay mode is
  * untouched: these materials are what a tree mesh wears outside clay (clayRenderMode keeps the shared tree clay there).
  *
- * - Leaf cards (the instanced clusters of the near, near-mid and mid levels): the chosen leaf set's colour, opacity, normal
- *   and roughness maps. A card carries its blade coordinates (TEXCOORD_0) and a pick (`_LEAF`.x) that chooses one leaf cell
+ * - Leaf cards (the instanced clusters of the near, near-mid and mid levels): the chosen leaf set's colour (its opacity packed
+ *   into the alpha, one texture) and normal map, at most leafAtlasPx on the GPU. A card carries its blade coordinates (TEXCOORD_0) and a pick (`_LEAF`.x) that chooses one leaf cell
  *   of the atlas; the vertex stage maps it there (leafAtlasUv in tree-texture-library.ts, the same mapping), and the
  *   fragment stage cuts the leaf out with alpha to coverage. The colour is tinted to the tree's measured crown colour (a
  *   per-mesh attribute, the tint the writer chose) with a small variation per leaf and per cluster, and a cheap backlight
@@ -50,9 +50,13 @@ export interface TreeTextureOptions {
     massNoise: number;
     /** How much wider than its atlas aspect a narrow leaf may be drawn (tree-texture-library.ts DEFAULT_LEAF_STRETCH). */
     leafStretch: number;
+    /** How much a leaf's alpha is raised per mip level of the opacity map it samples (keeps distant leaves from eroding). */
+    alphaMipScale: number;
+    /** Longest side of a leaf atlas on the GPU (the library's files are 2K; 1K keeps a leaf a few hundred texels long). */
+    leafAtlasPx: number;
 }
 
-export const DEFAULT_TREE_TEXTURE_OPTIONS: Readonly<TreeTextureOptions> = Object.freeze({ leafVariation: 0.18, translucency: 0.45, massNoise: 0.16, leafStretch: DEFAULT_LEAF_STRETCH });
+export const DEFAULT_TREE_TEXTURE_OPTIONS: Readonly<TreeTextureOptions> = Object.freeze({ leafVariation: 0.18, translucency: 0.45, massNoise: 0.16, leafStretch: DEFAULT_LEAF_STRETCH, alphaMipScale: 0.4, leafAtlasPx: 1024 });
 
 export const LEAF_VERTEX_PARS = `
 attribute vec2 _leaf;
@@ -110,6 +114,7 @@ export const LEAF_VERTEX_MAIN = `
 export const LEAF_FRAGMENT_PARS = `
 uniform vec3 uSbStem;
 uniform float uSbTranslucency;
+uniform float uSbMipScale;
 varying vec2 vSbST;
 varying float vSbBlade;
 varying vec3 vSbTint;
@@ -121,8 +126,19 @@ if ( vSbBlade < 0.5 ) diffuseColor.rgb = uSbStem;
 diffuseColor.rgb *= vSbTint;
 `;
 
-/** After alphamap_fragment: stalks are opaque; outside the leaf's cell the card shows nothing. */
+/**
+ * After alphamap_fragment: stalks are opaque; outside the leaf's cell the card shows nothing. A leaf seen small samples a
+ * coarse mip of the opacity map, whose averaged edges fall under the cutoff and would erode the leaf away; the alpha is
+ * raised with the mip level the sample reads (uSbMipScale per level), so a distant leaf keeps its coverage.
+ */
 export const LEAF_FRAGMENT_ALPHA = `
+#ifdef USE_MAP
+{
+    vec2 sbTexels = fwidth( vMapUv ) * vec2( textureSize( map, 0 ) );
+    float sbMip = max( 0.0, log2( max( max( sbTexels.x, sbTexels.y ), 1e-6 ) ) );
+    diffuseColor.a *= 1.0 + sbMip * uSbMipScale;
+}
+#endif
 if ( vSbBlade < 0.5 ) diffuseColor.a = 1.0;
 else if ( vSbST.x < 0.0 || vSbST.x > 1.0 || vSbST.y < 0.0 || vSbST.y > 1.0 ) diffuseColor.a = 0.0;
 `;
@@ -172,17 +188,65 @@ const replaceOrThrow = (src: string, find: string, add: string, what: string): s
     return src.replace(find, `${find}\n${add}`);
 };
 
-export type TextureLoad = (url: string, colour: boolean) => THREE.Texture;
+/**
+ * What the library asks a loader for: one texture from `url`, or several maps packed into one texture so a leaf set or
+ * a bark costs fewer GPU textures: `alphaUrl` (a leaf's opacity into the alpha of its colour), `aoUrl` (a bark's ambient
+ * occlusion into R beside its roughness in G, three's ORM layout). `maxPx`: the longest side uploaded.
+ */
+export interface TextureRequest { url: string; colour: boolean; alphaUrl?: string; aoUrl?: string; maxPx?: number }
+export type TextureLoad = (req: TextureRequest) => THREE.Texture;
 
-/** Loads a texture for the trees: repeat-wrapped, mipmapped, anisotropic, sRGB for colour maps. */
+const loadImage = (url: string): Promise<HTMLImageElement> => new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error(`tree texture ${url} did not load`));
+    img.src = url;
+});
+
+/** An image's pixels at `w` x `h` (rows top to bottom), through a canvas (opaque images only: no premultiplication loss). */
+function pixelsOf(img: HTMLImageElement, w: number, h: number): Uint8ClampedArray {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d', { willReadFrequently: true })!;
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(img, 0, 0, w, h);
+    return g.getImageData(0, 0, w, h).data;
+}
+
+/** Loads a texture for the trees: repeat-wrapped, mipmapped, anisotropic, sRGB for colour; packed maps as a DataTexture. */
 export const defaultTextureLoad: TextureLoad = (() => {
     const loader = new THREE.TextureLoader();
-    return (url: string, colour: boolean) => {
-        const t = loader.load(url);
-        t.wrapS = t.wrapT = THREE.RepeatWrapping;
-        t.anisotropy = 8;
-        t.colorSpace = colour ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-        return t;
+    return (req: TextureRequest) => {
+        const finish = (t: THREE.Texture) => {
+            t.wrapS = t.wrapT = THREE.RepeatWrapping;
+            t.anisotropy = 8;
+            t.colorSpace = req.colour ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+            return t;
+        };
+        if (!req.alphaUrl && !req.aoUrl) return finish(loader.load(req.url));
+        // packed: an empty texture now, filled when both images have loaded (rows flipped so v = 0 is the image's bottom,
+        // as a flipY image texture has it; a DataTexture is never premultiplied, so a cut leaf's colour stays under its alpha)
+        const tex = finish(new THREE.DataTexture(new Uint8Array(4), 1, 1, THREE.RGBAFormat));
+        tex.magFilter = THREE.LinearFilter;
+        tex.minFilter = THREE.LinearMipmapLinearFilter;
+        tex.generateMipmaps = true;
+        Promise.all([loadImage(req.url), loadImage((req.alphaUrl ?? req.aoUrl)!)]).then(([a, b]) => {
+            const scale = Math.min(1, (req.maxPx ?? Infinity) / Math.max(a.naturalWidth, a.naturalHeight));
+            const w = Math.max(1, Math.round(a.naturalWidth * scale)), h = Math.max(1, Math.round(a.naturalHeight * scale));
+            const pa = pixelsOf(a, w, h), pb = pixelsOf(b, w, h);
+            const out = new Uint8Array(w * h * 4);
+            for (let y = 0; y < h; y++) {
+                for (let x = 0; x < w; x++) {
+                    const i = (y * w + x) * 4, o = ((h - 1 - y) * w + x) * 4;
+                    if (req.alphaUrl) { out[o] = pa[i]; out[o + 1] = pa[i + 1]; out[o + 2] = pa[i + 2]; out[o + 3] = pb[i]; }
+                    else { out[o] = pb[i]; out[o + 1] = pa[i]; out[o + 2] = 0; out[o + 3] = 255; }
+                }
+            }
+            tex.image = { data: out, width: w, height: h } as unknown as typeof tex.image;
+            tex.needsUpdate = true;
+        }).catch(err => console.warn('[tree textures]', (err as Error).message));
+        return tex;
     };
 })();
 
@@ -190,14 +254,15 @@ export const defaultTextureLoad: TextureLoad = (() => {
 export type TreeSurface = 'leaves' | 'bark' | 'masses' | (string & {});
 
 function leafMaterial(e: TreeLeafTextureEntry, url: (f: string) => string, load: TextureLoad, o: TreeTextureOptions): THREE.MeshStandardMaterial {
+    // colour with the opacity in its alpha (one texture), and the normal map; a leaf's roughness is near constant, so it
+    // is a number, not a texture
     const mat = new THREE.MeshStandardMaterial({
-        map: load(url(e.maps.color), true), alphaMap: load(url(e.maps.opacity), false),
-        normalMap: e.maps.normal ? load(url(e.maps.normal), false) : null,
-        roughnessMap: e.maps.roughness ? load(url(e.maps.roughness), false) : null,
-        roughness: 1, metalness: 0, side: THREE.DoubleSide, alphaTest: 0.5, alphaToCoverage: true
+        map: load({ url: url(e.maps.color), colour: true, alphaUrl: url(e.maps.opacity), maxPx: o.leafAtlasPx }),
+        normalMap: e.maps.normal ? load({ url: url(e.maps.normal), colour: false }) : null,
+        roughness: 0.6, metalness: 0, side: THREE.DoubleSide, alphaTest: 0.5, alphaToCoverage: true
     });
     // the atlas maps are clamped (a cell never wraps into its neighbour)
-    for (const t of [mat.map, mat.alphaMap, mat.normalMap, mat.roughnessMap]) if (t) t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+    for (const t of [mat.map, mat.normalMap]) if (t) t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
     const cells = e.atlas.cells.slice(0, MAX_LEAF_CELLS);
     const pad = <T,>(a: T[], fill: T) => [...a, ...new Array(MAX_LEAF_CELLS - a.length).fill(fill)];
     const stem = new THREE.Vector3(...e.colour.meanLinearRgb).multiplyScalar(0.55);
@@ -208,7 +273,8 @@ function leafMaterial(e: TreeLeafTextureEntry, url: (f: string) => string, load:
         uSbLeafStretch: { value: o.leafStretch },
         uSbLeafVariation: { value: o.leafVariation },
         uSbStem: { value: stem },
-        uSbTranslucency: { value: o.translucency }
+        uSbTranslucency: { value: o.translucency },
+        uSbMipScale: { value: o.alphaMipScale }
     };
     mat.name = `sb-tree-leaves-${e.id}`;
     mat.userData = { sbTreeSurface: 'leaves' as TreeSurface, sbTreeTextureEntry: e.id, sbTreeUniforms: uniforms };
@@ -241,10 +307,15 @@ function tintedMaterial(params: THREE.MeshStandardMaterialParameters, surface: T
 
 function barkMaterial(e: TreeBarkTextureEntry, url: (f: string) => string, load: TextureLoad): THREE.MeshStandardMaterial {
     const mat = tintedMaterial({
-        map: load(url(e.maps.color), true), normalMap: e.maps.normal ? load(url(e.maps.normal), false) : null,
-        roughnessMap: e.maps.roughness ? load(url(e.maps.roughness), false) : null, aoMap: e.maps.ao ? load(url(e.maps.ao), false) : null,
+        map: load({ url: url(e.maps.color), colour: true }), normalMap: e.maps.normal ? load({ url: url(e.maps.normal), colour: false }) : null,
         roughness: 1, metalness: 0, aoMapIntensity: 0.8
     }, 'bark', 0, `sb-tree-bark-${e.id}`);
+    // roughness (G) and ambient occlusion (R) in one texture
+    if (e.maps.roughness) {
+        const orm = load({ url: url(e.maps.roughness), colour: false, ...(e.maps.ao ? { aoUrl: url(e.maps.ao) } : {}) });
+        mat.roughnessMap = orm;
+        if (e.maps.ao) mat.aoMap = orm;
+    }
     mat.userData.sbTreeTextureEntry = e.id;
     return mat;
 }
@@ -362,6 +433,8 @@ export function applyTreeTextures(root: THREE.Object3D, lib: TreeTextureLibrary)
             if (!m.isMesh || Array.isArray(m.material)) return;
             const g = m.geometry as THREE.BufferGeometry;
             const hasUv = !!g.getAttribute('uv');
+            // what the loader gave it, for comparison (the textured mode before the library)
+            m.userData.sbTreeLoaderMaterial ??= (m.userData.sbClayOriginalMaterial ?? m.userData.sbLodBase ?? m.material) as THREE.Material;
             if ((m as THREE.InstancedMesh).isInstancedMesh) {
                 const cluster = clusterOf(m);
                 if (cluster && leafVariants.has(cluster)) {

@@ -84,7 +84,7 @@ export interface TreeTextureIndex {
 export const MAX_LEAF_CELLS = 24;
 
 /** How much wider than its own aspect a narrow leaf may be drawn to fill more of its card (1 keeps the atlas's aspect). */
-export const DEFAULT_LEAF_STRETCH = 1.5;
+export const DEFAULT_LEAF_STRETCH = 2;
 
 const finite = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x);
 const vec = (v: unknown, n: number): boolean => Array.isArray(v) && v.length === n && v.every(finite);

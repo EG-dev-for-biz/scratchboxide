@@ -44,6 +44,9 @@ const INDEX = JSON.parse(fs.readFileSync(path.join(REPO, 'assets/textures/trees/
 type Vec3 = [number, number, number];
 const lin = (c: number) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
 const chroma = (c: number[]) => { const s = c[0] + c[1] + c[2]; return c.map(x => x / s); };
+/** Hue (degrees) of a colour in its chromaticity plane, as the native choice measures it. */
+const hue = (c: number[]) => Math.atan2(Math.sqrt(3) * (c[1] - c[2]), 2 * c[0] - c[1] - c[2]) * 180 / Math.PI;
+const hueDiff = (a: number[], b: number[]) => { const d = Math.abs(hue(a) - hue(b)) % 360; return d > 180 ? 360 - d : d; };
 const dist = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
 function crown(id: number, stem: [number, number], supportY: number, apexY: number, radius: number, colour?: Vec3) {
@@ -147,16 +150,16 @@ describe('textures chosen per tree (plant)', () => {
 
     it('chooses leaves by measured colour and bark by size', () => {
         const byId = new Map(treesOf(json).map(({ tree }) => [tree.id, tree.texture!]));
-        // the chosen leaf set is among the three nearest the measured chromaticity
+        // the chosen leaf set is among the four nearest the measured hue
         for (const c of CROWNS.filter(c => c.colour)) {
-            const want = chroma(c.colour!.meanLinearRgb);
-            const ranked = [...INDEX.leaves].sort((a, b) => dist(chroma(a.colour.meanLinearRgb), want) - dist(chroma(b.colour.meanLinearRgb), want)).map(e => e.id);
-            expect(ranked.slice(0, 3), `crown ${c.id}`).toContain(byId.get(c.id)!.leaves.entry);
+            const want = c.colour!.meanLinearRgb;
+            const ranked = [...INDEX.leaves].sort((a, b) => hueDiff(a.colour.meanLinearRgb, want) - hueDiff(b.colour.meanLinearRgb, want)).map(e => e.id);
+            expect(ranked.slice(0, 4), `crown ${c.id}`).toContain(byId.get(c.id)!.leaves.entry);
         }
         // the crown without a colour of its own is chosen by the neighbours' median, which is green here (4 of 6 green)
-        const medianWant = chroma([0, 1, 2].map(k => [...CROWNS.filter(c => c.colour).map(c => c.colour!.meanLinearRgb[k])].sort((a, b) => a - b)[3]));
-        const rankedForNone = [...INDEX.leaves].sort((a, b) => dist(chroma(a.colour.meanLinearRgb), medianWant) - dist(chroma(b.colour.meanLinearRgb), medianWant)).map(e => e.id);
-        expect(rankedForNone.slice(0, 3)).toContain(byId.get(6)!.leaves.entry);
+        const medianWant = [0, 1, 2].map(k => [...CROWNS.filter(c => c.colour).map(c => c.colour!.meanLinearRgb[k])].sort((a, b) => a - b)[3]);
+        const rankedForNone = [...INDEX.leaves].sort((a, b) => hueDiff(a.colour.meanLinearRgb, medianWant) - hueDiff(b.colour.meanLinearRgb, medianWant)).map(e => e.id);
+        expect(rankedForNone.slice(0, 4)).toContain(byId.get(6)!.leaves.entry);
         // a yellow crown gets a yellower set than a green one (red over green of the chosen set's mean)
         const ratio = (id: string) => { const e = INDEX.leaves.find(x => x.id === id)!.colour.meanLinearRgb; return e[0] / e[1]; };
         expect(ratio(byId.get(1)!.leaves.entry)).toBeGreaterThan(ratio(byId.get(0)!.leaves.entry) + 0.3);
@@ -293,7 +296,7 @@ describe('textures chosen per tree (plant)', () => {
             expect(s.uniforms.uSbCellA.value.length).toBe(24);
             expect((mat as THREE.MeshStandardMaterial).alphaTest).toBe(0.5);
             expect((mat as THREE.MeshStandardMaterial).alphaToCoverage).toBe(true);
-            expect((mat as THREE.MeshStandardMaterial).alphaMap).toBeTruthy();
+            expect((mat as THREE.MeshStandardMaterial).map).toBeTruthy();
         }
         // the mesh the controller dressed wears a crown variant of the textured leaf
         expect(isCrownVariant(leafMesh.material as THREE.Material) || (leafMesh.material as THREE.Material).userData.sbTreeSurface === 'leaves').toBe(true);

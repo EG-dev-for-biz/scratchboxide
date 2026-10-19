@@ -18,8 +18,8 @@
  * its leaves' length and width in metres, its bark's relief and real-world size), never by a species or a category,
  * and nothing here branches on an entry's name or its free-text appearance.
  *
- * - Leaves: the entry whose colour is nearest the crown colour the tile photo shows (chromaticity, so brightness is
- *   normalised away), and whose typical leaf length is nearest a length in proportion to the tree's height and crown
+ * - Leaves: the entry whose colour is nearest the crown colour the tile photo shows (its hue, and weakly its saturation:
+ *   brightness is normalised away, and haze greys a photo), and whose typical leaf length is nearest a length in proportion to the tree's height and crown
  *   radius. Its tint takes the entry's mean colour most of the way to the measured chromaticity (tintChromaShare), with
  *   a gentle brightness change.
  * - Bark: the entry whose relief is nearest a relief that grows continuously with the tree's size (height and trunk
@@ -76,6 +76,14 @@ inline double luminance(const RGB& c) { return 0.2126 * c[0] + 0.7152 * c[1] + 0
 inline RGB chromaticity(const RGB& c) {
     const double s = std::max(1e-9, c[0] + c[1] + c[2]);
     return {c[0] / s, c[1] / s, c[2] / s};
+}
+
+/** Hue (degrees, 0 red, about 120 green, 240 blue) and saturation (distance of the chromaticity from grey) of a colour. */
+inline std::array<double, 2> hueSaturation(const RGB& c) {
+    const RGB q = chromaticity(c);
+    const double h = std::atan2(std::sqrt(3.0) * (q[1] - q[2]), 2.0 * q[0] - q[1] - q[2]) * 180.0 / 3.14159265358979323846;
+    const double s = std::sqrt((q[0] - 1.0 / 3) * (q[0] - 1.0 / 3) + (q[1] - 1.0 / 3) * (q[1] - 1.0 / 3) + (q[2] - 1.0 / 3) * (q[2] - 1.0 / 3));
+    return {h, s};
 }
 
 namespace detail {
@@ -194,14 +202,18 @@ struct TreeAppearance {
 
 /** The constants of the choice. All continuous. */
 struct ChoiceParams {
-    double chromaSigma{0.035};          // chromaticity distance that costs 1 (squared)
+    // colour: a tile photo's crown colour is greyed by haze and sky light, so leaves are matched on hue (the angle of the
+    // chromaticity around grey) and only weakly on saturation (its distance from grey)
+    double hueSigmaDeg{12.0};           // hue difference that costs 1 (squared)
+    double saturationSigmaLog{2.0};     // |ln(entry saturation / measured saturation)| that costs 1 (squared)
+    double greySaturation{0.06};        // below this measured saturation the hue counts for proportionally less
     double leafSizeSigmaLog{0.35};      // |ln(entry length / target length)| that costs 1 (squared)
     double leafPerHeight{0.0065};       // target leaf length: the geometric mean of leafPerHeight x height ...
     double leafPerCrownRadius{0.018};   // ... and leafPerCrownRadius x crown radius,
     double leafMinM{0.04}, leafMaxM{0.35};  // within these
-    double margin{1.0};                 // entries within this cost of the best may be picked
-    double tintBrightnessMin{0.6}, tintBrightnessMax{1.4};
-    double tintChannelMin{0.4}, tintChannelMax{2.0};
+    double margin{1.5};                 // entries within this cost of the best may be picked
+    double tintBrightnessMin{0.35}, tintBrightnessMax{1.4};
+    double tintChannelMin{0.2}, tintChannelMax{2.0};
     // the share (as a power of the ratio) of the way from the entry's chromaticity to the measured one: a tile photo's
     // crown colour carries haze and sky light, so the full shift would grey the leaves
     double tintChromaShare{0.75};
@@ -253,9 +265,12 @@ inline Choice choose(const Library& lib, const TreeAppearance& t, const ChoicePa
         const double dl = std::log(e.leafLengthM / out.targetLeafLengthM) / C.leafSizeSigmaLog;
         double cost = dl * dl;
         if (t.colour.known) {
-            const RGB have = chromaticity(e.meanLinear);
-            const double d = std::sqrt((have[0] - want[0]) * (have[0] - want[0]) + (have[1] - want[1]) * (have[1] - want[1]) + (have[2] - want[2]) * (have[2] - want[2])) / C.chromaSigma;
-            cost += d * d;
+            const auto hw = hueSaturation(t.colour.meanLinear), he = hueSaturation(e.meanLinear);
+            double dh = std::fmod(std::abs(he[0] - hw[0]), 360.0);
+            if (dh > 180.0) dh = 360.0 - dh;
+            const double hueWeight = std::min(1.0, hw[1] / C.greySaturation);
+            const double ds = std::log(std::max(1e-6, he[1]) / std::max(1e-6, hw[1])) / C.saturationSigmaLog;
+            cost += hueWeight * (dh / C.hueSigmaDeg) * (dh / C.hueSigmaDeg) + ds * ds;
         }
         lc[i] = cost;
     }
