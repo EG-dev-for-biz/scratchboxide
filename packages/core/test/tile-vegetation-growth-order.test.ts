@@ -66,13 +66,13 @@ function writeCrowns(name: string, crowns: any[]): string {
 
 /**
  * Per tree node of a trees GLB: its rank-order extras and the _REVEAL values of its wood and its leaf masses. A tree with
- * levels holds its wood in level 0 (shared by levels 1 and 2) and its blob leaf masses in level 2.
+ * levels holds its wood in level 0 (shared by levels 1, 2 and 3) and its blob leaf masses in level 3.
  */
 function revealOf(file: string): Array<{ node: any; reveal: Float64Array[]; positions: Float64Array[]; instanceReveal: Float64Array[] }> {
     const { json, bin } = parseGlb(fs.readFileSync(file));
     return json.nodes.filter((n: any) => n.extras?.sb?.revealKind === 'grow').map((n: any) => {
         const kids = (n.children ?? []).map((i: number) => json.nodes[i]);
-        const l0 = kids.find((k: any) => k.extras?.sbLod?.level === 0), l2 = kids.find((k: any) => k.extras?.sbLod?.level === 2);
+        const l0 = kids.find((k: any) => k.extras?.sbLod?.level === 0), l2 = kids.find((k: any) => k.extras?.sbLod?.level === 3);
         const prims = [json.meshes[l0.mesh].primitives[0], ...json.meshes[l2.mesh].primitives.slice(1)];
         const inst = (l0.children ?? []).map((i: number) => json.nodes[i].extensions.EXT_mesh_gpu_instancing.attributes._REVEAL).filter((a: any) => a !== undefined);
         return {
@@ -230,10 +230,10 @@ describe('the trees layer carries its real growth order', () => {
         expect(gltf.userData.sb).toMatchObject({ schema: 'scratchbox.staged-glb/2', stage: 'trees' });
         expect(gltf.scene.userData.sb).toMatchObject({ schema: 'scratchbox.staged-glb/2', stage: 'trees' });
         gltf.scene.updateMatrixWorld(true);
-        // the blob level (level 2) of every tree, as the loader gives it, against the unquantised file's
+        // the blob level (level 3, the far one) of every tree, as the loader gives it, against the unquantised file's
         const plain = readGlbTriangles(fs.readFileSync((await svc.plant({ crownsPath: 'loader.json', triangleBudget: 9000, seed: 'abc', quantize: false })).treesGlb));
         const level2: any[] = [];
-        gltf.scene.traverse((o: any) => { if (typeof o.name === 'string' && o.name.endsWith('_lod2')) level2.push(o); });
+        gltf.scene.traverse((o: any) => { if (typeof o.name === 'string' && o.name.endsWith('_lod3')) level2.push(o); });
         expect(level2).toHaveLength(3);
         let worst = 0, offset = 0, meshes = 0, instanced = 0;
         for (const holder of level2) {

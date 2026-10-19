@@ -84,22 +84,24 @@ function mul(a: number[], b: number[]): number[] {
 }
 
 /**
- * Every triangle primitive of every node instance, in world space. A trees GLB with levels (scratchbox.trees-lod/1) holds
- * each tree three times (nodes tagged extras.sbLod, instanced leaf clusters under levels 0 and 1): only the `level` asked
- * for is read (default 2, the blob level every tree has whole in the file), its ranges named and tagged as its tree's, and
- * instanced nodes are not expanded (their instances are not triangles of the file).
+ * Every triangle primitive of every node instance, in world space. A trees GLB with levels holds each tree once per level
+ * (nodes tagged extras.sbLod: four in trees-lod/2, three in trees-lod/1, instanced leaf clusters under all but the last):
+ * only the `level` asked for is read (default: each tree's far level, its last, the blob level every tree has whole in the
+ * file), its ranges named and tagged as its tree's, and instanced nodes are not expanded (their instances are not
+ * triangles of the file).
  */
-export function readGlbTriangles(buffer: Buffer, level: 0 | 1 | 2 = 2): GlbTriangles {
+export function readGlbTriangles(buffer: Buffer, level?: number): GlbTriangles {
     const { json, bin } = parseGlb(buffer);
     const pos: number[] = [];
     const idx: number[] = [];
     const nodeRanges: GlbTriangles['nodeRanges'] = [];
     const nodes = json.nodes ?? [];
     const roots: number[] = json.scenes?.[json.scene ?? 0]?.nodes ?? nodes.map((_: any, i: number) => i);
+    const farOf = (tree: any): number => Math.max(...(tree?.children ?? []).map((i: number) => nodes[i]?.extras?.sbLod?.level ?? -1));
     const walk = (n: number, parent: number[], tree?: any) => {
         const node = nodes[n];
         if (node.extensions?.EXT_mesh_gpu_instancing) return;
-        if (node.extras?.sbLod && node.extras.sbLod.level !== level) return;
+        if (node.extras?.sbLod && node.extras.sbLod.level !== (level ?? farOf(tree))) return;
         const world = mul(parent, nodeMatrix(node));
         if (node.mesh !== undefined) {
             const first = idx.length / 3;

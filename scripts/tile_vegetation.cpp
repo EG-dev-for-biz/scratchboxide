@@ -372,6 +372,8 @@ static int runPlant(const Args& a) {
     P.treeLod.spacingRatio = a.num("station-spacing", P.treeLod.spacingRatio);
     P.lodNearPerHeight = a.num("lod-near-per-height", P.lodNearPerHeight);
     P.lodFarPerHeight = a.num("lod-far-per-height", P.lodFarPerHeight);
+    P.lodNearMidPerHeight = a.num("lod-near-mid-per-height", P.lodNearMidPerHeight);
+    P.lodNearMidMaxM = a.num("lod-near-mid-max", P.lodNearMidMaxM);
     P.lodNearMaxM = a.num("lod-near-max", P.lodNearMaxM);
     P.lodFarMaxM = a.num("lod-far-max", P.lodFarMaxM);
     P.lodFadeM = a.num("lod-fade", P.lodFadeM);
@@ -513,7 +515,7 @@ static int runPlant(const Args& a) {
             };
             s << ", \"lod\": {\"leafLengthM\": " << json::num(L.leafLengthM) << ", \"stations\": " << L.stations << ", \"repairStations\": " << L.repairStations << ", \"fitShrunk\": " << L.fitShrunk
               << ", \"unfit\": " << L.unfit << ", \"inset\": " << L.inset << ", \"outsideCrown\": " << L.outsideCrown << ", \"prunedBelowRadiusM\": " << json::num(L.prunedBelowRadiusM) << ", \"skeletonNodes\": " << t.report.skeletonNodes << ", \"twigs\": " << L.twigCount() << ", \"twigRadiusMinM\": " << json::num(L.twigRadiusMinM) << ", \"twigRadiusMedianM\": " << json::num(L.twigRadiusMedianM) << ", \"twigRadiusMaxM\": " << json::num(L.twigRadiusMaxM) << ", \"woodTriangles\": " << L.woodTriangles
-              << ", \"level0\": " << lvl(L.level0, L.drawnLevel0()) << ", \"level1\": " << lvl(L.level1, L.drawnLevel1()) << ", \"level2Triangles\": " << (L.woodTriangles + t.foliage.indices.size() / 3)
+              << ", \"level0\": " << lvl(L.level0, L.drawnLevel0()) << ", \"nearMid\": " << lvl(L.nearMid, L.drawnNearMid()) << ", \"level1\": " << lvl(L.level1, L.drawnLevel1()) << ", \"level2Triangles\": " << (L.woodTriangles + t.foliage.indices.size() / 3)
               << ", \"ms\": " << json::num(t.lodMs) << ", \"msWood\": " << json::num(L.msWood) << ", \"msTwigs\": " << json::num(L.msTwigs) << ", \"msStations\": " << json::num(L.msStations)
               << ", \"msRepair\": " << json::num(L.msRepair) << ", \"msMeasure\": " << json::num(L.msMeasure) << "}";
         }
@@ -535,8 +537,9 @@ static int runPlant(const Args& a) {
         if (P.lod) {
             s << "  \"lodFrames\": {\"poses\": " << f.poses << ", \"median\": " << json::num(f.median) << ", \"p95\": " << json::num(f.p95) << ", \"max\": " << json::num(f.max)
               << ", \"allAroundMedian\": " << json::num(f.allAroundMedian) << ", \"allAroundMax\": " << json::num(f.allAroundMax) << ", \"allLevel0\": " << json::num(f.allLevel0)
+              << ", \"allNearMid\": " << json::num(f.allNearMid)
               << ", \"allLevel1\": " << json::num(f.allLevel1) << ", \"allLevel2\": " << json::num(f.allLevel2) << ", \"worstTreesPerLevel\": [" << f.worstTreesPerLevel[0] << ", " << f.worstTreesPerLevel[1] << ", "
-              << f.worstTreesPerLevel[2] << "]},\n";
+              << f.worstTreesPerLevel[2] << ", " << f.worstTreesPerLevel[3] << "]},\n";
         }
     }
     s << "  \"totalMs\": " << json::num(r.ms) << "\n}\n";

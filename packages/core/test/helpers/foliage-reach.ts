@@ -33,11 +33,12 @@ export function readTreeFoliage(glb: Buffer): TreeFoliage[] {
     const trees: TreeFoliage[] = [];
     for (const node of json.nodes ?? []) {
         if (node.extras?.crownId === undefined) continue;
-        // a tree with levels (scratchbox.trees-lod/1) holds its blob leaf masses in its level-2 child (the last primitive);
+        // a tree with levels (trees-lod/2 or /1) holds its blob leaf masses in its far (last) level child (the last primitive);
         // a tree without holds them in its own mesh
         let holder = node;
         if (Array.isArray(node.children) && node.children.length) {
-            holder = node.children.map((i: number) => json.nodes[i]).find((c: any) => c.extras?.sbLod?.level === 2);
+            const kids = node.children.map((i: number) => json.nodes[i]).filter((c: any) => c.extras?.sbLod);
+            holder = kids.reduce((a: any, c: any) => (!a || c.extras.sbLod.level > a.extras.sbLod.level ? c : a), undefined);
             if (!holder) continue;
         }
         if (holder.mesh === undefined) continue;

@@ -8,13 +8,16 @@
  ********************************************************************************/
 
 /**
- * Trees written at three levels on one skeleton (scratchbox_tree_lod.hpp, written by writeTreesGlb), compiled with clang++
+ * Trees written at four levels on one skeleton (scratchbox_tree_lod.hpp, written by writeTreesGlb), compiled with clang++
  * and run through TileVegetationService on synthetic crowns:
  *
- * - the file passes the contract (validateTreesGlbJson): three levels per tree, instanced leaf clusters under levels 0 and
- *   1, the cluster library named in the root extras, no species and no "measured" claim on a leaf;
- * - leaves have real sizes (7-14 cm blades, scaled from the tree's height), level 1 draws about an eighth of level 0's
- *   triangles, and the delivered leaves of every level are measured against the measured crown;
+ * - the file passes the contract (validateTreesGlbJson): four levels per tree (near, near-mid, mid, far), instanced leaf
+ *   clusters under the first three, the cluster library named in the root extras, no species and no "measured" claim on a leaf;
+ * - leaves have real sizes (7-14 cm blades, scaled from the tree's height), the near-mid level draws about a third of the
+ *   near level's leaf triangles and the mid level about an eighth, and the delivered leaves of every level are measured
+ *   against the measured crown;
+ * - every crown carries its lobes (a smooth union of spheres) around its leaves, and the levels' bands follow each other
+ *   with no gap, each handover centred where lodBandsFor puts it;
  * - a tree is the same bytes at any thread count;
  * - psiSeason scales leaf density, down to the wood alone;
  * - no two trunks fork at the same relative height.
@@ -70,7 +73,7 @@ afterAll(() => {
     if (work) fs.rmSync(work, { recursive: true, force: true });
 });
 
-describe('trees at three levels', () => {
+describe('trees at four levels', () => {
     it('writes a file that passes the contract, with leaves of real size and honest labels', async () => {
         const planted = await svc.plant({ crownsPath: writeCrowns('four.json', CROWNS), triangleBudget: 16000, seed: 'abc' });
         const { json } = parseGlb(fs.readFileSync(planted.treesGlb));
@@ -103,9 +106,45 @@ describe('trees at three levels', () => {
             for (const r of [crown.radii[0], crown.radii[2]]) { expect(r).toBeGreaterThan(0.7 * radius); expect(r).toBeLessThan(1.3 * radius); }
             expect(crown.centre[1] + crown.radii[1]).toBeLessThan(c.apex[1] + 1.0);
             expect(crown.centre[1] - crown.radii[1]).toBeGreaterThan(c.supportY);
-            const l2 = t.children.map((k: number) => json.nodes[k]).find((n: any) => n.extras.sbLod.level === 2);
-            expect(l2.extras.sbLod.foliagePrimitives).toEqual([1]);
-            expect(json.meshes[l2.mesh].primitives).toHaveLength(2);
+            // the lobes: within the crown's extent, their union reaching about as wide as the crown
+            expect(crown.lobes.length).toBeGreaterThanOrEqual(1);
+            expect(crown.lobes.length).toBeLessThanOrEqual(8);
+            expect(crown.lobeBlendM).toBeGreaterThan(0);
+            for (const l of crown.lobes) {
+                expect(l[3]).toBeGreaterThan(0.25);
+                expect(Math.hypot(l[0] - c.stem[0], l[2] - c.stem[1])).toBeLessThan(radius);
+                expect(l[1]).toBeLessThan(c.apex[1]); expect(l[1]).toBeGreaterThan(c.supportY);
+            }
+            const reach = Math.max(...crown.lobes.map((l: number[]) => Math.hypot(l[0] - c.stem[0], l[2] - c.stem[1]) + l[3]));
+            expect(reach).toBeGreaterThan(0.7 * radius); expect(reach).toBeLessThan(1.4 * radius);
+            const levels = t.children.map((k: number) => json.nodes[k]).sort((a: any, b: any) => a.extras.sbLod.level - b.extras.sbLod.level);
+            expect(levels.map((n: any) => n.extras.sbLod.level)).toEqual([0, 1, 2, 3]);
+            expect(levels.map((n: any) => n.extras.sbLod.instanced)).toEqual([true, true, true, false]);
+            const l3 = levels[3];
+            expect(l3.extras.sbLod.foliagePrimitives).toEqual([1]);
+            expect(json.meshes[l3.mesh].primitives).toHaveLength(2);
+            // the near-mid and mid levels share the near level's wood mesh, and draw no twigs
+            expect(levels[1].mesh).toBe(levels[0].mesh); expect(levels[2].mesh).toBe(levels[0].mesh);
+            for (const lv of [1, 2]) for (const ci of levels[lv].children) expect(json.nodes[ci].extras.sbCluster.clusterMesh).toMatch(/leaf_cluster/);
+            // bands: each handover centred on lodBandsFor's distance, neighbours overlapping (no gap), handovers in order
+            const H = t.extras.heightAboveSupportM as number;
+            const b = levels.map((n: any) => n.extras.sbLod);
+            // lodBandsFor's defaults: near 1.0 H in [12, 30], near-mid 3.0 H in [25, 60], mid 4.0 H in [60, 140], fades 6 m, 0.2 and 0.25 of their distance
+            const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
+            const d0 = clamp(H, 12, 30), nm = clamp(3 * H, 25, 60), far = clamp(4 * H, 60, 140);
+            const fadeNM = Math.max(6, 0.2 * nm), fade1 = Math.max(6, 0.25 * far);
+            const d1 = Math.max(d0 + 3 + fadeNM + 0.5 * fade1, far), dNM = clamp(nm, d0 + 0.5 * (6 + fadeNM), d1 - 0.5 * (fadeNM + fade1));
+            expect((b[0].maxDistM + b[1].minDistM) / 2).toBeCloseTo(d0, 2);
+            expect((b[1].maxDistM + b[2].minDistM) / 2).toBeCloseTo(dNM, 2);
+            expect((b[2].maxDistM + b[3].minDistM) / 2).toBeCloseTo(d1, 2);
+            expect(b[1].maxDistM - b[2].minDistM).toBeCloseTo(fadeNM, 2);
+            for (let k = 0; k < 3; k++) {
+                expect(b[k + 1].minDistM).toBeLessThanOrEqual(b[k].maxDistM);           // no gap
+                expect(b[k + 1].minDistM).toBeGreaterThan(b[k].minDistM);
+                if (k < 2) expect(b[k].maxDistM).toBeLessThanOrEqual(b[k + 2].minDistM + 1e-6);   // handovers do not overlap each other
+            }
+            // triangles per level: near > near-mid > mid > far
+            expect(b[0].triangles).toBeGreaterThan(b[1].triangles); expect(b[1].triangles).toBeGreaterThan(b[2].triangles); expect(b[2].triangles).toBeGreaterThan(b[3].triangles);
         }
         // blade length follows the tree's height within the real range of leaf sizes
         const model = json.extras.sbTrees.clusterLibrary.leafSizeModel;
@@ -115,19 +154,28 @@ describe('trees at three levels', () => {
         for (const l of lens) { expect(l).toBeGreaterThanOrEqual(model.minM - 1e-9); expect(l).toBeLessThanOrEqual(model.maxM + 1e-9); }
         // the taller tree's leaves are never smaller than a shorter one's
         expect(lens[3]).toBeGreaterThanOrEqual(lens[0]);
-        // levels: distances in order, level 1 draws about an eighth of level 0's triangles in its leaves, level 2 is the blob masses
+        // levels: the near-mid level draws about a third of the near level's triangles in its leaves, the mid level about an eighth
         for (const t of planted.stats.perTree) {
-            const { level0, level1 } = t.lod;
+            const { level0, nearMid, level1 } = t.lod;
             expect(level0.leaves).toBeGreaterThan(50);
+            expect(nearMid.leaves).toBeGreaterThan(level1.leaves); expect(nearMid.leaves).toBeLessThan(level0.leaves);
+            expect(nearMid.leafTriangles).toBeLessThan(level0.leafTriangles * 0.5);
+            expect(nearMid.leafTriangles).toBeGreaterThan(level1.leafTriangles);
             expect(level1.leafTriangles).toBeLessThan(level0.leafTriangles * 0.2);
             expect(level1.leafTriangles).toBeGreaterThan(level0.leafTriangles * 0.05);
-            expect(level1.drawnTriangles).toBeLessThan(level0.drawnTriangles);
+            expect(nearMid.drawnTriangles).toBeLessThan(level0.drawnTriangles);
+            expect(level1.drawnTriangles).toBeLessThan(nearMid.drawnTriangles);
+            expect(nearMid.within1mShare).toBeGreaterThanOrEqual(0.8);
             // measured on the delivered leaves of each level, and the leaves reach the apex
             expect(level0.within1mShare).toBeGreaterThanOrEqual(0.85);
             expect(level1.within1mShare).toBeGreaterThanOrEqual(0.8);
             expect(Math.abs(level0.leavesBelowApexM)).toBeLessThan(1.0);
             expect(level0.sectorsOver1p5).toBe(0);
         }
+        // the frame estimate counts the near-mid level between the near and mid ones
+        const f = planted.stats.lodFrames;
+        expect(f.allNearMid).toBeLessThan(f.allLevel0); expect(f.allNearMid).toBeGreaterThan(f.allLevel1); expect(f.allLevel1).toBeGreaterThan(f.allLevel2);
+        expect(f.worstTreesPerLevel).toHaveLength(4);
         // the cluster library is in the file once, whatever the trees: a handful of meshes
         expect(planted.stats.glb.instances).toBeGreaterThan(1000);
         expect(planted.stats.glb.instancedTriangles).toBeGreaterThan(planted.stats.glb.triangles);
@@ -171,26 +219,31 @@ describe('trees at three levels', () => {
     }, 300_000);
 });
 
-    it('gives level 1 level1AreaGain times the leaf area of level 0 in every shared cluster', () => {
+    it('gives the mid level level1AreaGain and the near-mid level nearMidAreaGain times the near level\'s leaf area in every shared cluster', () => {
         // the library is built by the header itself: compile a probe against it and read back the blade areas
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-lodarea-'));
         const src = path.join(dir, 'probe.cpp'), bin = path.join(dir, 'probe');
         fs.writeFileSync(src, `#include "scratchbox_tile_vegetation.hpp"
 #include <cstdio>
 int main(){ using namespace scratchbox; tree_lod::LodParams P; auto lib = tree_lod::buildClusterLibrary(P);
-  std::printf("%.4f", P.level1AreaGain);
-  for (auto& v : lib.variants) std::printf(" %.5f %.5f", v.level0.bladeArea, v.level1.bladeArea); }`);
+  std::printf("%.4f %.4f", P.level1AreaGain, P.nearMidAreaGain);
+  for (auto& v : lib.variants) std::printf(" %.5f %.5f %.5f %d %d %d", v.level0.bladeArea, v.level1.bladeArea, v.nearMid.bladeArea, v.level0.leaves, v.nearMid.leaves, v.level1.leaves); }`);
         const r = spawnSync(process.env.CXX || 'clang++', ['-std=c++20', '-O1', '-I' + path.join(REPO, 'packages/core/src/native/3d-engine/include'), src, '-o', bin], { encoding: 'utf8' });
         expect(r.status, r.stderr).toBe(0);
         const out = spawnSync(bin, [], { encoding: 'utf8' });
         expect(out.status).toBe(0);
-        const [gain, ...areas] = out.stdout.trim().split(' ').map(Number);
+        const [gain, nmGain, ...areas] = out.stdout.trim().split(' ').map(Number);
         expect(gain).toBeGreaterThan(1);
-        expect(areas.length).toBeGreaterThanOrEqual(6);
-        for (let k = 0; k < areas.length; k += 2) {
+        expect(nmGain).toBeGreaterThan(0);
+        expect(areas.length).toBeGreaterThanOrEqual(36);
+        for (let k = 0; k < areas.length; k += 6) {
             expect(areas[k]).toBeGreaterThan(0.05);
             expect(areas[k + 1] / areas[k]).toBeGreaterThan(gain * 0.97);
             expect(areas[k + 1] / areas[k]).toBeLessThan(gain * 1.03);
+            expect(areas[k + 2] / areas[k]).toBeGreaterThan(nmGain * 0.97);
+            expect(areas[k + 2] / areas[k]).toBeLessThan(nmGain * 1.03);
+            // leaf counts: near > near-mid > mid
+            expect(areas[k + 3]).toBeGreaterThan(areas[k + 4]); expect(areas[k + 4]).toBeGreaterThan(areas[k + 5]);
         }
     }, 120_000);
 
