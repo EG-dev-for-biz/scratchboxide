@@ -16,6 +16,8 @@
  * - leaves have real sizes (7-14 cm blades, scaled from the tree's height), the near-mid level draws about a third of the
  *   near level's leaf triangles and the mid level about an eighth, and the delivered leaves of every level are measured
  *   against the measured crown;
+ * - the far level holds its own wood, the trunk and main limbs within a few hundred triangles (trees-lod/3), counted in
+ *   its triangles;
  * - every crown carries its lobes (a smooth union of spheres) around its leaves, and the levels' bands follow each other
  *   with no gap, each handover centred where lodBandsFor puts it;
  * - a tree is the same bytes at any thread count;
@@ -78,6 +80,7 @@ describe('trees at four levels', () => {
         const planted = await svc.plant({ crownsPath: writeCrowns('four.json', CROWNS), triangleBudget: 16000, seed: 'abc' });
         const { json } = parseGlb(fs.readFileSync(planted.treesGlb));
         expect(validateTreesGlbJson(json)).toEqual([]);
+        expect(json.extras.sbTrees.schema).toBe('scratchbox.trees-lod/3');
         const trees = json.nodes.filter((n: any) => n.extras?.sbTree !== undefined);
         expect(trees).toHaveLength(4);
         // no species and no measured claim on anything a leaf is: the trees stay "grown to the measured crown"
@@ -123,6 +126,22 @@ describe('trees at four levels', () => {
             const l3 = levels[3];
             expect(l3.extras.sbLod.foliagePrimitives).toEqual([1]);
             expect(json.meshes[l3.mesh].primitives).toHaveLength(2);
+            // the far level's own wood: the trunk and main limbs within a few hundred triangles (trees-lod/3), not the near
+            // level's whole wood, rising from the ground into the crown and reaching out along its limbs
+            const per = planted.stats.perTree.find((p: any) => p.crownId === c.id);
+            const [farWoodPrim, blobPrim] = json.meshes[l3.mesh].primitives;
+            const farWoodTris = json.accessors[farWoodPrim.indices].count / 3, blobTris = json.accessors[blobPrim.indices].count / 3;
+            expect(farWoodTris).toBe(per.lod.farWoodTriangles);
+            expect(farWoodTris).toBeGreaterThanOrEqual(100); expect(farWoodTris).toBeLessThanOrEqual(700);
+            expect(farWoodTris).toBeLessThan(per.lod.woodTriangles);
+            expect(farWoodPrim.attributes.POSITION).not.toBe(json.meshes[levels[0].mesh].primitives[0].attributes.POSITION);
+            expect(l3.extras.sbLod.triangles).toBe(farWoodTris + blobTris);
+            expect(per.lod.level2Triangles).toBe(farWoodTris + blobTris);
+            expect(t.extras.farLevelTriangles).toBe(farWoodTris + blobTris);
+            expect(t.extras.farWoodTriangles).toBe(farWoodTris);
+            const wp = json.accessors[farWoodPrim.attributes.POSITION];
+            expect(wp.max[1] - wp.min[1]).toBeGreaterThan(0.5 * (c.apex[1] - c.supportY));
+            expect(Math.max(wp.max[0] - wp.min[0], wp.max[2] - wp.min[2])).toBeGreaterThan(0.5 * radius);
             // the near-mid and mid levels share the near level's wood mesh, and draw no twigs
             expect(levels[1].mesh).toBe(levels[0].mesh); expect(levels[2].mesh).toBe(levels[0].mesh);
             for (const lv of [1, 2]) for (const ci of levels[lv].children) expect(json.nodes[ci].extras.sbCluster.clusterMesh).toMatch(/leaf_cluster/);

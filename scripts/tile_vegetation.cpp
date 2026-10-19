@@ -370,6 +370,9 @@ static int runPlant(const Args& a) {
     P.treeLod.clusterRadiusPerLeaf = a.num("cluster-radius-per-leaf", P.treeLod.clusterRadiusPerLeaf);
     P.treeLod.shellDepthPerHeight = a.num("shell-depth-per-height", P.treeLod.shellDepthPerHeight);
     P.treeLod.spacingRatio = a.num("station-spacing", P.treeLod.spacingRatio);
+    P.treeLod.farWoodTrianglesPerHeightM = a.num("far-wood-triangles-per-height", P.treeLod.farWoodTrianglesPerHeightM);
+    P.treeLod.farWoodMinTriangles = a.num("far-wood-min-triangles", P.treeLod.farWoodMinTriangles);
+    P.treeLod.farWoodMaxTriangles = a.num("far-wood-max-triangles", P.treeLod.farWoodMaxTriangles);
     P.lodNearPerHeight = a.num("lod-near-per-height", P.lodNearPerHeight);
     P.lodFarPerHeight = a.num("lod-far-per-height", P.lodFarPerHeight);
     P.lodNearMidPerHeight = a.num("lod-near-mid-per-height", P.lodNearMidPerHeight);
@@ -515,7 +518,7 @@ static int runPlant(const Args& a) {
             };
             s << ", \"lod\": {\"leafLengthM\": " << json::num(L.leafLengthM) << ", \"stations\": " << L.stations << ", \"repairStations\": " << L.repairStations << ", \"fitShrunk\": " << L.fitShrunk
               << ", \"unfit\": " << L.unfit << ", \"inset\": " << L.inset << ", \"outsideCrown\": " << L.outsideCrown << ", \"prunedBelowRadiusM\": " << json::num(L.prunedBelowRadiusM) << ", \"skeletonNodes\": " << t.report.skeletonNodes << ", \"twigs\": " << L.twigCount() << ", \"twigRadiusMinM\": " << json::num(L.twigRadiusMinM) << ", \"twigRadiusMedianM\": " << json::num(L.twigRadiusMedianM) << ", \"twigRadiusMaxM\": " << json::num(L.twigRadiusMaxM) << ", \"woodTriangles\": " << L.woodTriangles
-              << ", \"level0\": " << lvl(L.level0, L.drawnLevel0()) << ", \"nearMid\": " << lvl(L.nearMid, L.drawnNearMid()) << ", \"level1\": " << lvl(L.level1, L.drawnLevel1()) << ", \"level2Triangles\": " << (L.woodTriangles + t.foliage.indices.size() / 3)
+              << ", \"level0\": " << lvl(L.level0, L.drawnLevel0()) << ", \"nearMid\": " << lvl(L.nearMid, L.drawnNearMid()) << ", \"level1\": " << lvl(L.level1, L.drawnLevel1()) << ", \"level2Triangles\": " << L.drawnFar(t.foliage.indices.size() / 3) << ", \"farWoodTriangles\": " << L.farWoodTriangles << ", \"farWoodPrunedBelowRadiusM\": " << json::num(L.farWoodPrunedBelowRadiusM)
               << ", \"ms\": " << json::num(t.lodMs) << ", \"msWood\": " << json::num(L.msWood) << ", \"msTwigs\": " << json::num(L.msTwigs) << ", \"msStations\": " << json::num(L.msStations)
               << ", \"msRepair\": " << json::num(L.msRepair) << ", \"msMeasure\": " << json::num(L.msMeasure) << "}";
         }
