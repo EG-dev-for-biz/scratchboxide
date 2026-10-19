@@ -2244,8 +2244,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const kept = out.steps.filter(s => s.accepted > 0);
                     const conf = Math.max(0.05, Math.min(1, ...out.grammars.map(g => g.confidence), 0.75));
                     const key8 = e.key.slice(0, 8);
-                    const pubClay = cache.publishFile(out.files.clayGlb, `${base}_massing_${key8}_inferred.glb`);
-                    const pubTex = cache.publishFile(out.files.texturedGlb, `${base}_massing_${key8}_inferred_tex.glb`);
+                    // the enhanced layer is published under its own name: it never replaces the plain inferred one
+                    const suffix = enhanceOn ? 'enhanced' : 'inferred';
+                    const pubClay = cache.publishFile(out.files.clayGlb, `${base}_massing_${key8}_${suffix}.glb`);
+                    const pubTex = cache.publishFile(out.files.texturedGlb, `${base}_massing_${key8}_${suffix}_tex.glb`);
                     const enh = out.enhanced;
                     const enhNote = enhanceOn ? `; enhanced mode (opt-in) was used: ${enh.filter(x => x.accepted).length} of ${enh.length} walls redrawn by ${enhanceModels().join(', ')} and kept (labelled generated, "AI-enhanced from tile"), ${enh.filter(x => !x.accepted).length} rejected by the alignment gate and keep the tile texture${visionAvailable ? '' : ' (no image model: nothing was enhanced)'}` : '';
                     const describe = out.steps.map(s => `${s.step}: ${s.skipped ? `skipped (${s.skipped})` : `${s.accepted} of ${s.proposed} kept`}`).join('; ') + enhNote;
