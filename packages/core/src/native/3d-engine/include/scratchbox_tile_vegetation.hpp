@@ -4180,7 +4180,15 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
                 in.heightAboveSupport = g.heightAboveSupport;
                 in.seed = g.seed;
                 in.woodBudget = tr.budget;
+                {
+                    // the crown's season cue: its measured colour (the share of green cells, else the mean's hue and chroma)
+                    const auto& col = (*chosen[i])["colour"];
+                    const auto num = [&](const char* k) { return col.type == io::GlbJsonValue::Object && col[k].type == io::GlbJsonValue::Number ? col[k].num : std::numeric_limits<double>::quiet_NaN(); };
+                    in.leafiness = tree_lod::seasonLeafiness(lodParams, num("greenShare"), num("hueDeg"), num("chroma"));
+                }
                 if (tr.hasTextures) {
+                    in.cutoutFill = P.textures->leaves[tr.textures.leaf].fill;
+                    in.cutoutAspect = P.textures->leaves[tr.textures.leaf].leafWidthM / std::max(1e-6, P.textures->leaves[tr.textures.leaf].leafLengthM);
                     const auto& bark = P.textures->bark[tr.textures.bark];
                     in.barkTileAroundM = static_cast<float>(bark.tileAroundM);
                     in.barkTileAlongM = static_cast<float>(bark.tileAlongM);
@@ -4350,6 +4358,21 @@ inline std::string treeExtrasMembers(const PlantedTree& tr, const PlantParams& P
        << ",\"foliageClumps\":" << tr.report.foliageClumps << ",\"surfaceMasses\":" << tr.report.surfaceMasses << ",\"surfaceMassesNeeded\":" << tr.report.surfaceMassesNeeded
        << ",\"seed\":" << tr.seed;
     return ex.str();
+}
+
+/** The projected coverage of a tree's leaves (tree_lod::CoverageReport) as a JSON object. */
+inline std::string coverageJson(const tree_lod::CoverageReport& c) {
+    auto lv = [](const tree_lod::CoverageLevel& l) {
+        return "{\"mean\":" + json::num(l.meanEllipsoid) + ",\"min\":" + json::num(l.minEllipsoid) + ",\"meanHull\":" + json::num(l.meanHull) + "}";
+    };
+    std::string o = "{\"measured\":" + std::string(c.measured ? "true" : "false") + ",\"leafiness\":" + json::num(c.leafiness) + ",\"target\":" + json::num(c.target) +
+                    ",\"views\":" + std::to_string(c.views) + ",\"cellM\":" + json::num(c.cellM) + ",\"fillStations\":" + std::to_string(c.fillStations);
+    if (c.measured) {
+        o += ",\"level0Before\":" + lv(c.level0Before) + ",\"level0\":" + lv(c.level0) + ",\"nearMid\":" + lv(c.nearMid) + ",\"mid\":" + lv(c.mid);
+        if (c.level0Cutout.meanEllipsoid > 0 || c.midCutout.meanEllipsoid > 0)
+            o += ",\"cutout\":{\"level0\":" + lv(c.level0Cutout) + ",\"mid\":" + lv(c.midCutout) + "}";
+    }
+    return o + ",\"of\":\"the share of the measured crown (an ellipsoid fitted to its surface samples and footprint) the leaves cover, seen from outside, the mean over the views\"}";
 }
 
 /** `,"colour":{...}` of a tree's extras: its crown's colour as the tile's photo shows it (crowns.json), or nothing. */
@@ -4566,7 +4589,8 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
                          ",\"twigs\":" + std::to_string(L.twigCount()) + ",\"woodTriangles\":" + std::to_string(L.woodTriangles) +
                          ",\"level0\":" + levelJson(L.level0, L.drawnLevel0()) + ",\"nearMid\":" + levelJson(L.nearMid, L.drawnNearMid()) + ",\"level1\":" + levelJson(L.level1, L.drawnLevel1()) +
                          ",\"far\":{\"woodTriangles\":" + std::to_string(L.farWoodTriangles) + ",\"woodPrunedBelowRadiusM\":" + json::num(L.farWoodPrunedBelowRadiusM) +
-                         ",\"drawnTriangles\":" + std::to_string(L.drawnFar(tr.foliage.indices.size() / 3)) + "}}";
+                         ",\"drawnTriangles\":" + std::to_string(L.drawnFar(tr.foliage.indices.size() / 3)) + "}" +
+                         ",\"fillStations\":" + std::to_string(L.coverage.fillStations) + ",\"coverage\":" + detail::coverageJson(L.coverage) + "}";
             // the crown envelope of the delivered leaves (tree node frame = the tile frame): a viewer shades the leaves with its normals
             std::string crownJson;
             const tree_lod::CrownEllipsoid ce = tree_lod::crownOfLeaves(L, lib);

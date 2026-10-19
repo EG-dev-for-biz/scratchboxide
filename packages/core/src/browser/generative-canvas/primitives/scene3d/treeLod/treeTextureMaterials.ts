@@ -15,6 +15,7 @@ import {
 } from '../../../../../common/spatial/tree-texture-library';
 import { setTreeLodTexturedMaterial } from '../clayRenderMode';
 import { setPerMeshAttribute } from './treeCrownShading';
+import { crownSlotOf } from './treeLodMath';
 
 /**
  * Textured mode for the staged trees: the surfaces of the tree texture library (assets/textures/trees, index.json) on the
@@ -40,6 +41,11 @@ export const TREE_TEXTURE_BASE_URL = '/assets/textures/trees/';
 
 /** Per-mesh attribute: rgb a multiplier of the surface's linear colour (a tint, or the masses' colour); w the leaf cards' width ratio (leaves). */
 export const TREE_TINT_ATTRIBUTE = 'sbTreeTint';
+/** Per-mesh attribute of a leaf mesh: x the card zoom, y the alpha gain of its level's detail slot (TreeTextureOptions). */
+export const TREE_CARD_ATTRIBUTE = 'sbTreeCard';
+
+/** A factor per detail slot: near, near-mid, mid, far (crownSlotOf). */
+export type LeafSlotFactors = [number, number, number, number];
 
 export interface TreeTextureOptions {
     /** Variation of a leaf's colour around the tree's tint (0 none). */
@@ -54,13 +60,25 @@ export interface TreeTextureOptions {
     alphaMipScale: number;
     /** Longest side of a leaf atlas on the GPU (the library's files are 2K; 1K keeps a leaf a few hundred texels long). */
     leafAtlasPx: number;
+    /**
+     * Card zoom per detail slot: the leaf image drawn this many times larger on its card, about the card's centre (the card
+     * crops it). A cut-out leaf covers only part of its card (its cell's fill, 0.6-0.7), and the coarser levels' cards are
+     * larger and coarser (a kite at the mid level), so from the mid distances a textured crown read thinner than a clay
+     * one of the same cards; zooming the leaf in fills more of each card there, where a single leaf's outline is a few
+     * pixels. 1 draws the leaf as it is (the near level).
+     */
+    cardZoom: LeafSlotFactors;
+    /** Alpha gain per detail slot: the leaf's alpha (after the mip lift) times this, so its soft rim stays in the cut at a distance. */
+    alphaGain: LeafSlotFactors;
 }
 
-export const DEFAULT_TREE_TEXTURE_OPTIONS: Readonly<TreeTextureOptions> = Object.freeze({ leafVariation: 0.18, translucency: 0.45, massNoise: 0.16, leafStretch: DEFAULT_LEAF_STRETCH, alphaMipScale: 0.4, leafAtlasPx: 1024 });
+export const DEFAULT_TREE_TEXTURE_OPTIONS: Readonly<TreeTextureOptions> = Object.freeze({ leafVariation: 0.18, translucency: 0.45, massNoise: 0.16, leafStretch: DEFAULT_LEAF_STRETCH, alphaMipScale: 0.4, leafAtlasPx: 1024,
+    cardZoom: [1, 1.15, 1.3, 1.3] as LeafSlotFactors, alphaGain: [1, 1.1, 1.25, 1.25] as LeafSlotFactors });
 
 export const LEAF_VERTEX_PARS = `
 attribute vec2 _leaf;
 attribute vec4 ${TREE_TINT_ATTRIBUTE};
+attribute vec4 ${TREE_CARD_ATTRIBUTE};
 uniform vec4 uSbCellA[ ${MAX_LEAF_CELLS} ];
 uniform vec4 uSbCellB[ ${MAX_LEAF_CELLS} ];
 uniform float uSbCellCount;
@@ -69,6 +87,7 @@ uniform float uSbLeafVariation;
 varying vec2 vSbST;
 varying float vSbBlade;
 varying vec3 vSbTint;
+varying float vSbAlphaGain;
 `;
 
 /** After uv_vertex: the card's blade coordinates into its leaf cell (mirrors leafAtlasUv), and the leaf's tint. */
@@ -83,6 +102,11 @@ export const LEAF_VERTEX_MAIN = `
     float sbF = min( 1.0, sbCard / sbDrawn );
     float sbT = uv.y / sbF;
     float sbS = 0.5 + ( uv.x - 0.5 ) / ( sbF * sbDrawn );
+    // the level's card zoom, about the card's centre (a mesh without the attribute reads 0: no zoom, no gain)
+    float sbZoom = ${TREE_CARD_ATTRIBUTE}.x > 0.0 ? ${TREE_CARD_ATTRIBUTE}.x : 1.0;
+    sbS = 0.5 + ( sbS - 0.5 ) / sbZoom;
+    sbT = 0.5 + ( sbT - 0.5 ) / sbZoom;
+    vSbAlphaGain = ${TREE_CARD_ATTRIBUTE}.y > 0.0 ? ${TREE_CARD_ATTRIBUTE}.y : 1.0;
     vSbST = vec2( sbS, sbT );
     vec2 sbUv = sbA.xy + sbT * sbA.zw + sbS * sbB.xy;
 #ifdef USE_MAP
@@ -118,6 +142,7 @@ uniform float uSbMipScale;
 varying vec2 vSbST;
 varying float vSbBlade;
 varying vec3 vSbTint;
+varying float vSbAlphaGain;
 `;
 
 /** After map_fragment: stalks take the stalk colour; everything takes the tree's tint. */
@@ -129,14 +154,15 @@ diffuseColor.rgb *= vSbTint;
 /**
  * After alphamap_fragment: stalks are opaque; outside the leaf's cell the card shows nothing. A leaf seen small samples a
  * coarse mip of the opacity map, whose averaged edges fall under the cutoff and would erode the leaf away; the alpha is
- * raised with the mip level the sample reads (uSbMipScale per level), so a distant leaf keeps its coverage.
+ * raised with the mip level the sample reads (uSbMipScale per level), so a distant leaf keeps its coverage, and by its
+ * level's alpha gain (vSbAlphaGain).
  */
 export const LEAF_FRAGMENT_ALPHA = `
 #ifdef USE_MAP
 {
     vec2 sbTexels = fwidth( vMapUv ) * vec2( textureSize( map, 0 ) );
     float sbMip = max( 0.0, log2( max( max( sbTexels.x, sbTexels.y ), 1e-6 ) ) );
-    diffuseColor.a *= 1.0 + sbMip * uSbMipScale;
+    diffuseColor.a *= ( 1.0 + sbMip * uSbMipScale ) * vSbAlphaGain;
 }
 #endif
 if ( vSbBlade < 0.5 ) diffuseColor.a = 1.0;
@@ -396,6 +422,20 @@ function levelOf(m: THREE.Object3D): { lod: TreeLodExtras; primitive: number } |
     return undefined;
 }
 
+/** The detail slot (0 near .. 3 far) of a leaf mesh's level, from its level and its tree's number of levels (crownSlotOf). */
+function leafSlotOf(m: THREE.Object3D): number {
+    let o: THREE.Object3D | null = m;
+    while (o) {
+        const lod = (o.userData as { sbLod?: TreeLodExtras }).sbLod;
+        if (lod) {
+            const levels = o.parent ? o.parent.children.filter(c => (c.userData as { sbLod?: unknown }).sbLod).length : 4;
+            return crownSlotOf(lod.level, levels);
+        }
+        o = o.parent;
+    }
+    return 0;
+}
+
 function clusterOf(m: THREE.Object3D): string | undefined {
     let o: THREE.Object3D | null = m;
     while (o) {
@@ -440,6 +480,8 @@ export function applyTreeTextures(root: THREE.Object3D, lib: TreeTextureLibrary)
                 if (cluster && leafVariants.has(cluster)) {
                     if (!hasUv || !g.getAttribute('_leaf')) return;
                     setPerMeshAttribute(m, 'sbTreeTint', [...tex.leaves.tint, cardWidth]);
+                    const slot = leafSlotOf(m);
+                    setPerMeshAttribute(m, TREE_CARD_ATTRIBUTE, [lib.options.cardZoom[slot] ?? 1, lib.options.alphaGain[slot] ?? 1, 0, 0]);
                     setTreeLodTexturedMaterial(m, leaves);
                     stats.leafMeshes++;
                 } else if (hasUv) {
