@@ -21,7 +21,6 @@
  * 1 cm of `cut`'s, the isolate tile_refine wrote) taken out, identical for every arm, drawn and depth-tested with the arm and lit
  * the same. Each arm replaces only the target, so the judge compares a street with a street. `occluder` is not used then (the
  * context hides what stands in front). The metrics' mask is still the target (the arm's own coverage).
- */
  * `keepNear` keeps only the triangles of the arm's GLBs whose centroid lies within 1 cm of a triangle centroid of that GLB
  * (e.g. the photo-textured tile cut to the isolated scan tile_refine wrote). Every arm must be in the tile frame.
  */
