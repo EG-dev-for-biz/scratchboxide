@@ -68,7 +68,8 @@ static void usage() {
         "    --removed-out PATH        also write what the removal took, as scanned, one node per crown (put back when the\n"
         "                              tree stage fails)\n"
         "    --roi-json PATH           a scratchbox.strip-roi/1 polygon: trees whose stem lies outside it are neither regrown nor\n"
-        "                              removed (status outside_roi, kept as scanned)\n"
+        "                              removed (status outside_roi, kept as scanned); its optional keep cells (the structure\n"
+        "                              the caller isolates, run-length) are architecture: removal never takes them\n"
         "  tile_vegetation canopy --tile <tile.glb> --out <mask.json> [--cell M (0.5)] [strip classifier options]\n"
         "    the cells strip's own classifier calls canopy, as a scratchbox.canopy-mask/1 run-length mask; nothing is regrown or removed\n"
         "  tile_vegetation plant --crowns <crowns.json> --out <trees.glb> --stats <stats.json> (--triangle-budget N | --scene-triangle-cap N) [options]\n"
@@ -182,6 +183,40 @@ static std::vector<std::array<double, 2>> readRoi(const std::string& path) {
     return out;
 }
 
+/**
+ * The structure cells of a StripRoi file (optional "keep": {"cellM", "x0", "z0", "nx", "nz", "runs"}, run-lengths with the
+ * first run not kept, the canopy mask's encoding): removal leaves everything standing on them as scanned.
+ */
+static StripParams::KeepCells readKeep(const std::string& path) {
+    const auto bytes = readFileBytes(path);
+    const io::GlbJsonValue doc = json::parse(std::string(bytes.begin(), bytes.end()));
+    StripParams::KeepCells K;
+    const auto& k = doc["keep"];
+    if (k.type != io::GlbJsonValue::Object) return K;
+    auto num = [&](const char* f) {
+        if (k[f].type != io::GlbJsonValue::Number || !std::isfinite(k[f].num)) throw VegetationError("bad_request", std::string("the region of interest's keep cells need a finite ") + f);
+        return k[f].num;
+    };
+    K.cell = num("cellM"); K.x0 = num("x0"); K.z0 = num("z0");
+    const double nx = num("nx"), nz = num("nz");
+    if (!(K.cell > 0) || nx < 1 || nz < 1 || nx * nz > 64e6 || nx != std::floor(nx) || nz != std::floor(nz)) throw VegetationError("bad_request", "the region of interest's keep grid is not a positive grid");
+    K.nx = static_cast<int>(nx); K.nz = static_cast<int>(nz);
+    K.flags.assign(static_cast<size_t>(K.nx) * static_cast<size_t>(K.nz), 0);
+    const auto& runs = k["runs"];
+    if (runs.type != io::GlbJsonValue::Array) throw VegetationError("bad_request", "the region of interest's keep cells need runs");
+    size_t at = 0;
+    uint8_t value = 0;
+    for (const auto& r : runs.arr) {
+        if (r.type != io::GlbJsonValue::Number || r.num < 0 || r.num != std::floor(r.num)) throw VegetationError("bad_request", "keep runs must be counts");
+        const size_t n = static_cast<size_t>(r.num);
+        if (at + n > K.flags.size()) throw VegetationError("bad_request", "keep runs cover more cells than the grid holds");
+        if (value) std::fill(K.flags.begin() + static_cast<std::ptrdiff_t>(at), K.flags.begin() + static_cast<std::ptrdiff_t>(at + n), 1);
+        at += n;
+        value ^= 1;
+    }
+    return K;
+}
+
 static StripParams readStripParams(const Args& a);
 
 static StripParams readStripParams(const Args& a) {
@@ -231,7 +266,7 @@ static StripParams readStripParams(const Args& a) {
     P.growth.seed = parseSeed(a);
     if (P.cell <= 0 || P.terrainCell <= 0 || P.sampleSpacing <= 0 || P.capGrid <= 0) throw VegetationError("bad_request", "cell sizes and spacings must be > 0");
 
-    if (a.has("roi-json")) P.roi = readRoi(a.str("roi-json"));
+    if (a.has("roi-json")) { P.roi = readRoi(a.str("roi-json")); P.keep = readKeep(a.str("roi-json")); }
     return P;
 }
 

@@ -43,7 +43,7 @@ import type { TileRefineRequest, TileRefineResult } from '../../../3d-engine/til
 import type { TileVegetationStripResult } from '../../../3d-engine/tile-vegetation-service';
 import type { GroundModel } from '../../../spatial/StreetViewSurveyPlanner';
 import {
-    checkIsolate, grownOutline, pickOnScan, sizeExtraction, writeIsolationPick,
+    checkIsolate, grownOutline, pickOnScan, sizeExtraction, structureKeepCells, writeIsolationPick,
     FOOTPRINT_TOLERANCE_M, ISOLATE_PRECISION_MIN, ISOLATE_RECALL_MIN, ISOLATE_ROOFED_MIN,
     PICK_CANOPY, PICK_LOW_ATTACHMENT, PICK_STRUCTURE, STRUCTURE_MIN_HEIGHT_M,
     type IsolateCheck, type SizingNote, type StructurePickResult
@@ -187,7 +187,7 @@ export interface IsolateStructureResult {
          * by it; for the scan geometry and the mask vote, the IoU of the pick with the structure tile_refine isolated.
          */
         iouWithScan: number;
-        vectorFootprint?: { used: boolean; featureIds: string[]; areaM2: number; raisedShare: number; iou: number; reason?: string; polygon?: Vec2[][] };
+        vectorFootprint?: NonNullable<StructurePickResult['vectorFootprint']> & { polygon?: Vec2[][] };
         maskVote?: { ran: boolean; reason: string; votingViews?: number; views?: number; joinedTriangles?: number; leftTriangles?: number; model?: string };
         isolateCheck?: { iou: number; precision: number; recall: number; roofed: number; holdsSeed: boolean; isolatedAreaM2: number; ok: boolean };
     };
@@ -529,7 +529,9 @@ export async function runIsolateStructure(request: IsolateStructureRequest, deps
         progress('measuring the trees around the structure');
         t = now();
         try {
-            strip = await deps.vegetation.strip({ tilePath: extraction.texturedGlb, signal: ctx.signal, roi: { schema: 'scratchbox.strip-roi/1', polygon: roiPolygon } });
+            // the structure picked stays as scanned: a tree taken out beside it never takes its roof or walls along
+            const keep = structureKeepCells(structure, ground);
+            strip = await deps.vegetation.strip({ tilePath: extraction.texturedGlb, signal: ctx.signal, roi: { schema: 'scratchbox.strip-roi/1', polygon: roiPolygon, ...(keep ? { keep } : {}) } });
             tilePath = strip.devegetatedGlb;
         } catch (err) {
             if (ctx.signal?.aborted) throw err;
@@ -646,7 +648,7 @@ export async function runIsolateStructure(request: IsolateStructureRequest, deps
         part: 'structure footprint', areaKind: 'plan', areaM2: pick.areaM2,
         reasonCode: pick.footprintSource === 'vector-footprint' ? 'within_vector_footprint' : 'structure_rule',
         reason: pick.footprintSource === 'vector-footprint' && vf
-            ? `the scan's cells ${STRUCTURE_MIN_HEIGHT_M} m or more above the ground within ${FOOTPRINT_TOLERANCE_M} m of Google vector footprint ${vf.featureIds.join(', ')} (${Math.round(vf.areaM2)} m², ${Math.round(vf.raisedShare * 100)}% of it raised in the scan)`
+            ? `the scan's cells ${STRUCTURE_MIN_HEIGHT_M} m or more above the ground within ${FOOTPRINT_TOLERANCE_M} m of Google vector footprint ${vf.featureIds.join(', ')} (${Math.round(vf.areaM2)} m², ${Math.round(vf.raisedShare * 100)}% of it raised in the scan, ${Math.round(vf.openShare * 100)}% open ground, ${Math.round(vf.canopyShare * 100)}% tree canopy${vf.enclosesStructure ? '; the footprint is larger than the structure and encloses it, so only what the scan shows raised within it is the structure' : ''})`
             : `the raised mass (${STRUCTURE_MIN_HEIGHT_M} m or more above the ground) at the place, after the opening scaled to the mass and the parts across height steps${vf?.reason ? `; the vector footprint was not used: ${vf.reason}` : ''}`,
         detail: { heightM: pick.heightM, seed: pick.seed, coreHeightM: pick.coreHeightM }
     });

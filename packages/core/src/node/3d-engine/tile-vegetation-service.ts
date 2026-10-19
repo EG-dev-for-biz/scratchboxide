@@ -275,7 +275,15 @@ function checkRoi(roi: StripRoi): StripRoi {
     const problems = validateContract('StripRoi', roi);
     if (problems.length) throw new TileVegetationError('bad_request', `roi is not a StripRoi: ${problems.slice(0, 3).join('; ')}`);
     if (roi.polygon.some(p => !p.every(Number.isFinite))) throw new TileVegetationError('bad_request', 'roi points must be finite metres');
-    return { schema: roi.schema, polygon: roi.polygon.map(p => [p[0], p[1]] as [number, number]) };
+    let keep: StripRoi['keep'];
+    if (roi.keep) {
+        const k = roi.keep;
+        const cells = k.runs.reduce((n, r) => n + r, 0);
+        if (![k.cellM, k.x0, k.z0].every(Number.isFinite)) throw new TileVegetationError('bad_request', 'roi keep cells must be on a finite grid');
+        if (cells > k.nx * k.nz) throw new TileVegetationError('bad_request', `roi keep runs cover ${cells} cells, more than the ${k.nx} x ${k.nz} grid`);
+        keep = { cellM: k.cellM, x0: k.x0, z0: k.z0, nx: k.nx, nz: k.nz, runs: [...k.runs] };
+    }
+    return { schema: roi.schema, polygon: roi.polygon.map(p => [p[0], p[1]] as [number, number]), ...(keep ? { keep } : {}) };
 }
 
 export interface TileVegetationPlantResult {
@@ -548,7 +556,7 @@ export class TileVegetationService {
         const seed = (req.seed ?? tileSha256.slice(0, 16)).toLowerCase();
         const roi = req.roi === undefined ? undefined : checkRoi(req.roi);
         const key = crypto.createHash('sha256').update(CACHE_VERSION).update('\0strip\0').update(this.hashBinary(bin)).update('\0')
-            .update(tileSha256).update('\0').update(JSON.stringify({ ...keyParams, topDown: !!req.topDown, seed, ...(roi ? { roi: roi.polygon } : {}) })).digest('hex');
+            .update(tileSha256).update('\0').update(JSON.stringify({ ...keyParams, topDown: !!req.topDown, seed, ...(roi ? { roi: roi.polygon, ...(roi.keep ? { keep: roi.keep } : {}) } : {}) })).digest('hex');
         const outputs = ['devegetated.glb', 'removed_trees.glb', 'crowns.json', 'stats.json', ...(req.topDown ? ['topdown.png'] : [])];
         const res = await this.cached(key, outputs, async (dir, signal) => {
             const args = ['strip', '--input', input, '--out', path.join(dir, 'devegetated.glb'), '--removed-out', path.join(dir, 'removed_trees.glb'),

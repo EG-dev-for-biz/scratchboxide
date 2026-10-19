@@ -29,8 +29,9 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
-    checkIsolate, pickStructure, writeIsolationPick, PICK_OTHER, PICK_LOW_ATTACHMENT, PICK_STRUCTURE
+    canopyLookup, checkIsolate, maskCanopy, pickStructure, structureKeepCells, writeIsolationPick, PICK_CANOPY, PICK_LOW_ATTACHMENT, PICK_OPEN, PICK_OTHER, PICK_STRUCTURE
 } from '../src/node/3d-engine/staged-location/extraction-sizing';
+import type { CanopyMask } from '../src/common/spatial/staged-location-contracts';
 import { evidenceLookup, type VectorEvidence } from '../src/node/3d-engine/staged-location/vector-footprints';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
 import { buildGroundModel, loadScanMesh } from '../src/node/spatial/StreetViewSurveyPlanner';
@@ -233,6 +234,41 @@ describe('a roof garden over a hollow building mesh', () => {
     }, 600_000);
 });
 
+describe('the strip keeps the structure the pick decided', () => {
+    it('never removes what stands on the keep cells, and removes the same tree without them', async () => {
+        const work = path.join(TMP, 'keep');
+        fs.mkdirSync(work, { recursive: true });
+        // a tree against a building: told the tree's cells are the structure, the strip leaves them as scanned
+        fs.writeFileSync(path.join(work, 'tile.glb'), buildSyntheticTile({ halfSize: 30, spacing: 0.75, trees: [{ x: -8, z: 4, height: 9, radius: 3.5 }], building: { x0: 2, z0: -10, x1: 16, z1: 10, height: 12 } }));
+        const svc = new TileVegetationService({ workspaceRoot: work, repoRoot: REPO });
+        const polygon: Array<[number, number]> = [[-29, -29], [29, -29], [29, 29], [-29, 29]];
+        const plain = await svc.strip({ tilePath: 'tile.glb', roi: { schema: 'scratchbox.strip-roi/1', polygon } });
+        const nx = 60, flags = new Uint8Array(nx * nx);
+        for (let z = -1; z < 9; z++) for (let x = -13; x < -3; x++) flags[(z + 30) * nx + (x + 30)] = 1;
+        const runs: number[] = [];
+        let v = 0, run = 0;
+        for (const f of flags) { if (f !== v) { runs.push(run); run = 0; v = f; } run++; }
+        runs.push(run);
+        const kept = await svc.strip({ tilePath: 'tile.glb', roi: { schema: 'scratchbox.strip-roi/1', polygon, keep: { cellM: 1, x0: -30, z0: -30, nx, nz: nx, runs } } });
+        const stats = (r: typeof plain) => JSON.parse(fs.readFileSync(path.join(path.dirname(r.devegetatedGlb), 'stats.json'), 'utf8'));
+        const removedNear = (r: typeof plain) => {
+            const t = readGlbTriangles(fs.readFileSync(r.devegetatedGlb.replace('devegetated.glb', 'removed_trees.glb')));
+            let n = 0;
+            for (let i = 0; i < t.indices.length; i += 3) {
+                let cx = 0, cz = 0;
+                for (let k = 0; k < 3; k++) { cx += t.positions[3 * t.indices[i + k]]; cz += t.positions[3 * t.indices[i + k] + 2]; }
+                if (cx / 3 >= -13 && cx / 3 < -3 && cz / 3 >= -1 && cz / 3 < 9) n++;
+            }
+            return n;
+        };
+        expect(removedNear(plain)).toBeGreaterThan(50);
+        expect(removedNear(kept)).toBe(0);
+        expect(stats(kept).keepCells).toBe(100);
+        expect(stats(kept).keptStructureTriangles).toBeGreaterThan(0);
+        expect(stats(plain).keepCells).toBe(0);
+    }, 600_000);
+});
+
 describe('Google vector data as evidence', () => {
     const rect = (x0: number, z0: number, x1: number, z1: number): Array<[number, number]> => [[x0, z0], [x1, z0], [x1, z1], [x0, z1]];
 
@@ -273,6 +309,74 @@ describe('Google vector data as evidence', () => {
         expect(pick.vectorFootprint!.used).toBe(false);
         expect(pick.vectorFootprint!.reason).toMatch(/disagree/);
         expect(pick.areaM2).toBeGreaterThan(14 * 16 * 0.95);
+    });
+
+    /** A canopy mask (CanopyMask run-lengths) over the given rectangles, on a 1 m grid covering [-60, 60]². */
+    function canopyMask(rects: Array<[number, number, number, number]>): CanopyMask {
+        const nx = 120, nz = 120, flags = new Uint8Array(nx * nz);
+        for (const [x0, z0, x1, z1] of rects) for (let z = z0; z < z1; z++) for (let x = x0; x < x1; x++) flags[(z + 60) * nx + (x + 60)] = 1;
+        const runs: number[] = [];
+        let v = 0, run = 0, cells = 0;
+        for (const f of flags) { cells += f; if (f !== v) { runs.push(run); run = 0; v = f; } run++; }
+        runs.push(run);
+        return { schema: 'scratchbox.canopy-mask/1', cellM: 1, x0: -60, z0: -60, nx, nz, runs, canopyCells: cells, ms: 0 };
+    }
+
+    it('uses a footprint larger than the structure: the church inside it, not its churchyard, trees or the neighbour', () => {
+        // a 14 m church (16 x 20 m) built wall to wall with a neighbour of its height on the west; the church's vector
+        // footprint also takes in its churchyard to the east (open ground and three trees), so under half of it is raised
+        const trees: Array<[number, number, number, number]> = [[2, -6, 7, -1], [8, 2, 13, 7], [2, 5, 6, 9]];
+        const scene = [
+            ...plane(-60, 60, -60, 60, 0), ...boxTris(-18, -2, -10, 10, 14), ...boxTris(-34, -18, -10, 10, 14),
+            ...trees.flatMap(([x0, z0, x1, z1]) => boxTris(x0, x1, z0, z1, 9))
+        ];
+        const scan = loadScanMesh(writeTris(path.join(TMP, 'churchyard.glb'), scene));
+        const mask = canopyMask(trees.map(([x0, z0, x1, z1]) => [x0 - 1, z0 - 1, x1 + 1, z1 + 1]));
+        const ground = maskCanopy(buildGroundModel(scan, { cellMeters: 1, exclude: canopyLookup(mask) }), mask).masked;
+        const ev: VectorEvidence = {
+            buildings: [{ id: 'church', parts: [[rect(-18, -12, 16, 14)]] }, { id: 'neighbour', parts: [[rect(-34, -10, -18, 10)]] }],
+            water: [], roads: [], tiles: 1, zoom: 17
+        };
+        const L = evidenceLookup(ev, 60);
+        const pick = pickStructure(scan, ground, { anchor: { x: -10, z: 0 }, footprints: { buildingAt: L.buildingAt, buildings: ev.buildings } })!;
+        shotWithPick('pick_footprint_encloses_churchyard', scene, pick.cells, 15, [-40, -25, 25, 25]);
+        // the footprint was used, and says what the rest of it is
+        expect(pick.footprintSource).toBe('vector-footprint');
+        const vf = pick.vectorFootprint!;
+        expect(vf).toMatchObject({ used: true, featureIds: ['church'], enclosesStructure: true });
+        expect(vf.raisedShare).toBeLessThan(0.5);
+        expect(vf.openShare).toBeGreaterThan(0.4);
+        expect(vf.canopyShare).toBeGreaterThan(0.05);
+        expect(vf.raisedShare + vf.openShare + vf.canopyShare).toBeCloseTo(1, 2);
+        // the church alone: not the neighbour past its party wall, not the churchyard's trees
+        expect(pick.bounds.minX).toBeGreaterThanOrEqual(-20);   // (the tolerance band past the corner of the party wall)
+        expect(pick.bounds.maxX).toBeLessThanOrEqual(0);
+        expect(pick.areaM2).toBeGreaterThan(16 * 20 * 0.95);
+        expect(pick.areaM2).toBeLessThan(17 * 21 * 1.05);
+        expect(pick.footprintMask[ground.cellIndex(4.5, -3.5)]).toBe(PICK_CANOPY);
+        expect(pick.footprintMask[ground.cellIndex(10.5, -8.5)]).toBe(PICK_OPEN);
+        // the strip is told to keep the church's raised cells, never the trees
+        const keep = structureKeepCells(pick, ground)!;
+        const flags: number[] = [];
+        keep.runs.forEach((n, i) => { for (let j = 0; j < n; j++) flags.push(i % 2); });
+        const kept = (x: number, z: number) => flags[Math.floor(z - keep.z0) * keep.nx + Math.floor(x - keep.x0)];
+        expect(kept(-10.5, 0.5)).toBe(1);
+        expect(kept(4.5, -3.5)).toBe(0);
+        expect(kept(-26.5, 0.5)).toBe(0);
+    });
+
+    it('still rejects a footprint drawn off the building: most of the raised mass it holds lies past it', () => {
+        const scene = [...plane(-60, 60, -60, 60, 0), ...boxTris(-20, 4, -10, 10, 15)];
+        const scan = loadScanMesh(writeTris(path.join(TMP, 'offset.glb'), scene));
+        const ground = buildGroundModel(scan, { cellMeters: 1 });
+        // a footprint over the building's east third and the open ground beyond it
+        const ev: VectorEvidence = { buildings: [{ id: 'off', parts: [[rect(-4, -10, 30, 10)]] }], water: [], roads: [], tiles: 1, zoom: 17 };
+        const L = evidenceLookup(ev, 60);
+        const pick = pickStructure(scan, ground, { anchor: { x: 0, z: 0 }, footprints: { buildingAt: L.buildingAt, buildings: ev.buildings } })!;
+        expect(pick.footprintSource).toBe('scan-geometry');
+        expect(pick.vectorFootprint!.enclosesStructure).toBe(false);
+        expect(pick.vectorFootprint!.reason).toMatch(/reaches past it/);
+        expect(pick.areaM2).toBeGreaterThan(24 * 20 * 0.95);
     });
 
     it('never takes water as the ground: a river with buildings rising straight from it, a narrow quay street', () => {
