@@ -954,6 +954,11 @@ export interface Scene3DData {
         fov?: number;
         /** Physical lens optics the viewport draws (sb_set_camera_lens); absent = an ideal pinhole, no optics passes. */
         lens?: SceneCameraLens;
+        /**
+         * The pose was saved on purpose (the viewport's camera panel, sb_set_camera keepPoseOnLoad): loading the scene
+         * opens on it instead of re-framing generated content.
+         */
+        keepPoseOnLoad?: boolean;
     };
     environment?: {
         skybox?: string;

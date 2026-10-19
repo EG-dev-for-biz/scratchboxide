@@ -155,6 +155,8 @@ import { computeSceneGeometryBounds, calculateStandoffCamera } from './scene3d/a
 import type { RendererStack, AtmosphereHandle, TilesLayerHandle, SceneContentHandle, WasmMeshHandle, VectorRoadmapHandle, Scene3DRenderMode } from './scene3d/types';
 import { applyClayRenderMode } from './scene3d/clayRenderMode';
 import { ViewportOpticsChain } from './scene3d/viewportOptics';
+import { CameraSettingsControl } from './scene3d/CameraSettingsControl';
+import { keepsStoredPose, lensCommands, liveViewMatches, runCameraCommands, withLivePose, type CameraCommand, type Vec3 } from './scene3d/cameraSettings';
 import { syncObjectMaterial } from './scene3d/materialOverride';
 import { TreeLodController, findShadowCamera } from './scene3d/treeLod/TreeLodController';
 import { disposeObject3DDeep, releaseObject3D } from './scene3d/disposeObject';
@@ -1019,6 +1021,14 @@ const HUD_SEGMENT_ACTIVE_STYLE: React.CSSProperties = {
 };
 
 /** Scene data after an external (agent / pipeline) `data` update, or `prev` itself when nothing relevant changed. */
+/** Name of the node a generated model (pythonGenerator / cppGenerator base64) is drawn under. */
+const GENERATED_ROOT_NAME = 'scratchbox-cpp-generated-root';
+
+/** The objects[] entry a generated model is saved as (its hero file), which draws it once the base64 copy is gone. */
+function generatedHeroObjectId(scene: Scene3DData): string | undefined {
+    return (scene.objects || []).find(o => o.content?.metadata?.role === 'hero')?.id;
+}
+
 function mergeExternalSceneData(prev: Scene3DData, data: Scene3DData): Scene3DData {
     const hasNewPython = data.pythonGenerator && data.pythonGenerator.sourceCode !== prev.pythonGenerator?.sourceCode;
     const hasNewCpp = data.cppGenerator && data.cppGenerator.sourceCode !== prev.cppGenerator?.sourceCode;
@@ -1487,6 +1497,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const renderFrameRef = React.useRef<(() => void) | null>(null);
     /** Lens distortion and depth of field from scene camera.lens; inactive (no cost) when nothing is configured. */
     const opticsChainRef = React.useRef<ViewportOpticsChain | null>(null);
+    /** Set while the camera panel picks a focus point: the next viewport click goes here instead of selecting. */
+    const focusPickRef = React.useRef<((hit: THREE.Intersection | undefined, event: MouseEvent) => void) | null>(null);
+    /** False until the first generated model of this mount is framed (a reload keeps a saved camera pose). */
+    const generatedFramedOnceRef = React.useRef(false);
     const hasWarnedFrameErrorRef = React.useRef<boolean>(false);
     const cameraRotationRef = React.useRef<{ theta: number; phi: number; distance: number }>({
         theta: Math.PI / 4,
@@ -1837,7 +1851,11 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const atmosphereFingerprint = React.useMemo(() => JSON.stringify(atmosphereInput), [atmosphereInput]);
     const atmosphereInputRef = useLatest(atmosphereInput);
 
-    const cameraFingerprint = React.useMemo(() => JSON.stringify(sceneData.camera ?? null), [sceneData.camera]);
+    // Pose and field of view only: a lens edit (distortion, depth of field) does not move the camera.
+    const cameraFingerprint = React.useMemo(() => {
+        const c = sceneData.camera;
+        return JSON.stringify(c ? { position: c.position ?? null, target: c.target ?? null, fov: c.fov ?? null } : null);
+    }, [sceneData.camera]);
 
     const activeScript = sceneData.customScript || sceneData.code;
     const hasActiveScript = !!(activeScript && activeScript.trim().length > 0);
@@ -1972,6 +1990,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             selectionBox: selectionBoxRef,
             ignoredPickObjects: () => [atmosphereRef.current?.starsMesh, stack.gridHelper],
             mapPointerNdc: ndc => opticsChainRef.current?.active ? opticsChainRef.current.mapPointerNdc(ndc, camera) : ndc,
+            pointPick: focusPickRef,
             resolveSelectableObject,
             selectObject: selectObjectRef,
             mutateSceneData: mutateSceneDataRef,
@@ -2010,6 +2029,11 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             if (custom?.parent) return custom;
             const external = externalObjectsMapRef.current.get(id);
             if (external?.parent) return external;
+            // a generated model's hero object is drawn from its base64 copy while that is loaded
+            if (id === generatedHeroObjectId(sceneDataRef.current)) {
+                const generated = scene.getObjectByName(GENERATED_ROOT_NAME);
+                if (generated) return generated;
+            }
             let found: THREE.Object3D | undefined;
             scene.traverse(child => {
                 if (!found && (child.name === id || child.userData?.id === id)) found = child;
@@ -2353,6 +2377,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             stack.camera.fov = fov;
             stack.camera.updateProjectionMatrix();
         }
+        // The view already stands at the stored pose (the camera panel stored the live view): nothing to move.
+        if (cameraDef?.position && cameraDef.target && liveViewMatches(stack.camera.position, cameraTargetRef.current, cameraDef.position, cameraDef.target)) return;
         const groundY = terrainManagerRef.current?.sampleGroundHeight(0, 0) ?? 0;
         const tx = cameraDef?.target ? cameraDef.target[0] : 0;
         const ty = cameraDef?.target ? cameraDef.target[1] : (groundY + 1.5);
@@ -2656,11 +2682,16 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 if (Number.isFinite(generatedSphere.radius) && generatedSphere.radius > 0) {
                     setGeneratedContentRadius(Number(generatedSphere.radius.toPrecision(2)));
                 }
-                // Automatically frame camera around generated procedural geometry using calculateStandoffCamera
+                // Automatically frame camera around generated procedural geometry using calculateStandoffCamera.
+                // The first model of a mount (a reload) opens on a saved pose, or the pose a lens was set for (its
+                // focus distance is measured from there); calculateStandoffCamera still re-frames a pose inside the
+                // geometry. New generated content re-frames.
+                const keepPose = !generatedFramedOnceRef.current && keepsStoredPose(sceneDataRef.current.camera);
+                generatedFramedOnceRef.current = true;
                 const bounds = computeSceneGeometryBounds(stack.scene);
                 const autoFrame = calculateStandoffCamera(bounds, sceneDataRef.current.camera, {
                     fovDegrees: stack.camera.fov,
-                    force: true
+                    force: !keepPose
                 });
                 if (autoFrame && stack.camera) {
                     cameraTargetRef.current.set(autoFrame.target[0], autoFrame.target[1], autoFrame.target[2]);
@@ -2949,7 +2980,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                         const sphere = new THREE.Box3().setFromObject(model).getBoundingSphere(new THREE.Sphere());
                         if (Number.isFinite(sphere.radius) && sphere.radius > 0) setGeneratedContentRadius(Number(sphere.radius.toPrecision(2)));
                     }
-                    if (attach) autoFrameIfNeeded(isGeneratedHero);
+                    // As for its base64 copy (effect 5b): the first model of a mount keeps a saved pose or a lens's pose.
+                    const keepPose = isGeneratedHero && !generatedFramedOnceRef.current && keepsStoredPose(sceneDataRef.current.camera);
+                    if (attach && isGeneratedHero) generatedFramedOnceRef.current = true;
+                    if (attach) autoFrameIfNeeded(isGeneratedHero && !keepPose);
                 },
                 (evt: ProgressEvent) => {
                     if (pending.get(obj.id) !== uri) return; // superseded by a newer URL
@@ -3254,9 +3288,107 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         }
         mutateSceneData(prev => ({
             ...prev,
-            camera: { position: [px, py, pz], target: [tx, ty, tz] }
+            camera: { ...prev.camera, position: [px, py, pz], target: [tx, ty, tz] }
         }), { operator: 'sb_set_camera', params: { position: [px, py, pz], target: [tx, ty, tz] } }, { history: false });
     }, [sceneData.camera, mutateSceneData]);
+
+    // ---- Camera settings panel: every edit runs sb_set_camera / sb_set_camera_lens on the scene camera ----
+    const [pickingFocus, setPickingFocus] = React.useState(false);
+    const [focusPickError, setFocusPickError] = React.useState<string | null>(null);
+
+    const liveCameraPose = React.useCallback((): { position: Vec3; target: Vec3 } | null => {
+        const cam = stackRef.current?.camera;
+        if (!cam) return null;
+        const t = cameraTargetRef.current;
+        return { position: [cam.position.x, cam.position.y, cam.position.z], target: [t.x, t.y, t.z] };
+    }, []);
+
+    /** Runs the panel's operator commands (plus the live pose) as one undoable step; returns the refusal, if any. */
+    const runCameraPanelCommands = React.useCallback((commands: CameraCommand[], meta: { label: string; continuous?: boolean }): string | null => {
+        const prev = sceneDataRef.current;
+        const all = withLivePose(commands, prev.camera, liveCameraPose());
+        const result = runCameraCommands(prev, all);
+        if (!result.ok) return result.error;
+        const last = all[all.length - 1];
+        // the step's other operators go into the log the agent reads, ahead of the one the commit records
+        const at = Date.now();
+        const earlier = all.slice(0, -1).map(c => ({ operator: c.operator, params: c.params, timestamp: at }));
+        mutateSceneData(p => ({
+            ...p,
+            camera: result.camera,
+            ...(result.cameraMode ? { cameraMode: result.cameraMode } : {}),
+            operatorStack: [...(p.operatorStack || []), ...earlier],
+            actionLog: [...(p.actionLog || []), ...earlier.map(e => ({ ...e, executionTimeMs: 0, success: true }))]
+        }), { operator: last.operator, params: last.params }, { history: { label: meta.label, coalesce: !!meta.continuous } });
+        return null;
+    }, [mutateSceneData, liveCameraPose]);
+
+    const handleSaveCameraView = React.useCallback(
+        () => runCameraPanelCommands([{ operator: 'sb_set_camera', params: { keepPoseOnLoad: true } }], { label: 'Save camera view' }),
+        [runCameraPanelCommands]
+    );
+
+    /** Moves the view to the stored camera pose (a view change, not an edit). */
+    const handleRestoreCameraView = React.useCallback(() => {
+        const stack = stackRef.current;
+        const def = sceneDataRef.current.camera;
+        if (!stack || !def?.position) return;
+        const [px, py, pz] = def.position;
+        const [tx, ty, tz] = def.target ?? [0, 0, 0];
+        cameraTargetRef.current.set(tx, ty, tz);
+        const dist = Math.max(1e-3, Math.hypot(px - tx, py - ty, pz - tz));
+        cameraRotationRef.current = {
+            theta: Math.atan2(px - tx, pz - tz),
+            phi: Math.acos(Math.max(-1, Math.min(1, (py - ty) / dist))),
+            distance: dist
+        };
+        stack.camera.position.set(px, py, pz);
+        stack.camera.lookAt(cameraTargetRef.current);
+    }, []);
+
+    const readFocusDistance = React.useCallback(() => opticsChainRef.current?.status.focusDistanceMeters ?? null, []);
+
+    // Pick focus: a click focuses at the clicked point; Alt-click focuses on (and tracks) the whole object.
+    React.useEffect(() => {
+        const container = stackRef.current?.container;
+        if (!pickingFocus) {
+            focusPickRef.current = null;
+            return;
+        }
+        setFocusPickError(null);
+        const previousCursor = container?.style.cursor ?? '';
+        if (container) container.style.cursor = 'crosshair';
+        focusPickRef.current = (hit, event) => {
+            const stack = stackRef.current;
+            if (!stack) return;
+            if (!hit) {
+                setFocusPickError('Nothing under the cursor there; click on geometry (Esc cancels).');
+                return;
+            }
+            let params: { focusObjectId: string } | { focusDistanceMeters: number; focusObjectId: null };
+            let label: string;
+            const target = event.altKey ? (findExternalObjectRoot(hit.object) || resolveSelectableObject(hit.object, stack.scene)) : null;
+            let objectId = target ? (findExternalObjectRoot(target) === target ? externalObjectIdOf(target) : target.name) : '';
+            // the generated model is saved as its hero object: name that, so the focus survives a reload
+            if (objectId === GENERATED_ROOT_NAME) objectId = generatedHeroObjectId(sceneDataRef.current) ?? objectId;
+            if (objectId) {
+                params = { focusObjectId: objectId };
+                label = `Camera: focus on ${objectId}`;
+            } else {
+                const forward = stack.camera.getWorldDirection(new THREE.Vector3());
+                const depth = hit.point.clone().sub(stack.camera.position).dot(forward);
+                params = { focusDistanceMeters: Number(depth.toFixed(3)), focusObjectId: null };
+                label = `Camera: focus ${depth.toFixed(2)} m`;
+            }
+            const refused = runCameraPanelCommands(lensCommands(sceneDataRef.current.camera, { ...params, depthOfField: true }), { label });
+            setFocusPickError(refused);
+            if (!refused) setPickingFocus(false);
+        };
+        return () => {
+            focusPickRef.current = null;
+            if (container) container.style.cursor = previousCursor;
+        };
+    }, [pickingFocus, runCameraPanelCommands]);
 
     const handleUpdateVectorRoadmap = React.useCallback((updated: Partial<VectorRoadmapConfig>) => {
         mutateSceneData(prev => ({
@@ -3572,6 +3704,19 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                         <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
                     </svg>
                 </button>
+
+                {/* Camera settings: lens, depth of field, distortion (sb_set_camera / sb_set_camera_lens) */}
+                <CameraSettingsControl
+                    camera={sceneData.camera}
+                    opticsIssues={opticsIssues}
+                    onCommands={runCameraPanelCommands}
+                    onSaveView={handleSaveCameraView}
+                    onRestoreView={handleRestoreCameraView}
+                    pickingFocus={pickingFocus}
+                    onPickingFocusChange={setPickingFocus}
+                    pickError={focusPickError}
+                    readFocusDistance={readFocusDistance}
+                />
 
                 {/* 2. Translate / Move (W) */}
                 <button
