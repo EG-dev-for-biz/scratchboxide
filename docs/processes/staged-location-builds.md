@@ -16,7 +16,7 @@ resolve -> tiles -> trees-measure -> remesh -> (isolated structure only: fit || 
 ```
 
 - A district (default 250 m) commits the tiles, the remeshed scan and the regrown trees.
-- An isolated structure (`isolate`) is picked once, on a canopy-masked surface model, and the extraction is sized to it (25 m probe, grown in up to three rounds to 150 m until the footprint is 3 m inside the edge). `radiusMeters` is ignored. The structure is then fitted by `scan_fit`, and facade detail is read from the tile photos and up to four Street View images.
+- An isolated structure (`isolate`) is picked once, on a canopy-masked surface model, and the extraction is sized to it (25 m probe, grown in up to three rounds to 150 m until the footprint is 3 m inside the edge). `radiusMeters` is ignored. The structure is then fitted by `scan_fit` (with the building's plan from Google vector data as its footprint prior when the pick used one: the frame, the plan whose walls the scan measures, and the neighbours that make party walls), and facade detail is read from the tile photos and up to four Street View images.
 
 ## Degrade, don't fabricate
 
@@ -25,7 +25,7 @@ Every stage has one lower rung built from the same real data. A degraded part ge
 | Failure | Rung (same real data) | Provenance after |
 |---|---|---|
 | photo-read detail (vision) | the flat fitted face; the record names the model and thinking level tried | fitted |
-| the fitted rebuild | the remeshed scan stays the structure | remeshed |
+| the fitted rebuild | the remeshed scan stays the structure; Street View is still fetched, aimed at the structure's facades cut into 8 m tiles, and projected onto the remeshed scan (the no-fit rung: nothing is read from it); a layer scored on fewer than 5 held-out views, or whose held-out edge chamfer is no better than the clay's, is textured from the tile photo instead (`street_view_set_aside`) | remeshed (texels photo-inferred) |
 | the remesh | the raw scan with its facades flattened (`scan_fit flatten`), else the raw scan as downloaded; its scanned trees stay in it and nothing is planted over them | scan-flattened / as-scanned |
 | a facade grammar that fails the scan or held-out check | that facade keeps the relief's own window lattice (`grammar_rejected`) | remeshed |
 | a tree that cannot regrow | that tree stays as scanned | as-scanned |
@@ -39,7 +39,7 @@ Every stage has one lower rung built from the same real data. A degraded part ge
 
 Only an unresolved place and a place with no tile coverage fail the call (`StagedLocationHardFailure`); nothing real is discarded then.
 
-A stage the run ends because nothing downstream can use it (the Street View fetch once the fit failed) is `skipped` with the reason it was ended for. It is not a time limit and records no degradation. Every stage promise is settled before the call returns or throws, the result holds copies of the stages and degradations, and work a Stop or a time limit abandoned can no longer commit or stream.
+A stage the run ends because nothing downstream can use it (the reading, correction and detail once the fit failed) is `skipped` with the reason it was ended for. It is not a time limit and records no degradation. Every stage promise is settled before the call returns or throws, the result holds copies of the stages and degradations, and work a Stop or a time limit abandoned can no longer commit or stream.
 
 The `GeometricComplexityGate` verdict is reported, never thrown. Scan-derived layers, a measured rebuild (on an accepted StructureFit the gate checks itself) and SB-Veggie trees grown to measured crowns (`measuredCrowns`, a whole number of crowns of at least 1) are exempt from the vertex floor, each with its basis; a gate that does not pass, and an exemption it refused, are stated in the summary. The photo-corrected layers are `measuredGeometry: false` with the correction's confidence.
 

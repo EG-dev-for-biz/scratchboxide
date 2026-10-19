@@ -187,7 +187,9 @@ export const STAGE_IDS = Object.keys(STAGES) as StageId[];
 export const RUN_BUDGET_MS = 38 * 60_000;
 export const RUN_DEADLINE_MARGIN_MS = 120_000;
 /** Layers the texture pass works on at once. */
-export const TEXTURE_LAYER_CONCURRENCY = 3;
+export /** The no-fit rung's Street View is kept only on at least this many held-out views (fewer cannot tell it from the clay). */
+const NO_FIT_MIN_SCORED_VIEWS = 5;
+const TEXTURE_LAYER_CONCURRENCY = 3;
 /**
  * A vision call with no first token after this long is sent once more and the first answer taken. Live (Washington Square
  * Arch): first tokens came in 2-9 s for the survey and reading calls, 38-108 s at times for the same kind of call.
@@ -1615,10 +1617,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const textureOne = async (target: typeof targets[number]) => {
                         handled.add(target.layer.objectId);
                         const clay = fs.readFileSync(target.file);
-                        const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), wideHeld.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048, surfacesKey(target.surfaces));
+                        const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), wideHeld.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048, surfacesKey(target.surfaces), ...(!(rebuildOut.refit ?? rebuildOut.fit) && views.length ? ['no-fit-held-out-gate/2'] : []));
                         const entry = await cache.run<Omit<TextureLayerOutcome, 'glb'>>('textures', key, async dir => {
-                            const out = await (texturePool ? texturePool.textureLayer.bind(texturePool) : textureLayer)({ layerKey: target.layer.layer, clayGlb: clay, ...(target.surfaces?.length ? { surfaces: target.surfaces } : {}) }, {
-                                views, ...(wideViews.length ? { photoTierViews: wideViews } : {}), ...(photoTierEnabled() ? { photoTier: true } : {}), ...(viewsUnavailable ? { viewsUnavailable } : {}), occluder, ...(context.indices.length ? { context } : {}), observedSurface: TEXTURE_OBSERVED_SURFACE, poseEdgeGuardShare: TEXTURE_POSE_EDGE_GUARD_SHARE,
+                            const bake = (bakeViews: typeof views, bakeUnavailable: string | undefined) => (texturePool ? texturePool.textureLayer.bind(texturePool) : textureLayer)({ layerKey: target.layer.layer, clayGlb: clay, ...(target.surfaces?.length ? { surfaces: target.surfaces } : {}) }, {
+                                views: bakeViews, ...(wideViews.length ? { photoTierViews: wideViews } : {}), ...(photoTierEnabled() ? { photoTier: true } : {}), ...(bakeUnavailable ? { viewsUnavailable: bakeUnavailable } : {}), occluder, ...(context.indices.length ? { context } : {}), observedSurface: TEXTURE_OBSERVED_SURFACE, poseEdgeGuardShare: TEXTURE_POSE_EDGE_GUARD_SHARE,
                                 delight: { latitude: run.geoAnchor.lat, longitude: run.geoAnchor.lng },
                                 ...(tile ? { tile } : {}), ...(tileUnavailable ? { tileUnavailable } : {}),
                                 ...(residual !== undefined ? { registrationResidualM: residual } : {}),
@@ -1626,6 +1628,25 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 palette, densityTexelsPerMeter: density, maxSide: deps.textures?.maxSide ?? 2048, signal: io.signal,
                                 onProgress: m => { io.progress(`textures: ${m}`); run.emit('textures', 'running', { message: m }); }
                             });
+                            let out = await bake(views, viewsUnavailable);
+                            // the no-fit rung keeps its Street View only where it shows the structure better than the clay does, on
+                            // enough held-out evidence: when fewer than NO_FIT_MIN_SCORED_VIEWS held-out views score the layer, or they find
+                            // its edges no nearer their own than the clay's, the layer is baked again from the tile photo, and says why
+                            const heldOut = out.bundle.fit;
+                            const noFit = !(rebuildOut.refit ?? rebuildOut.fit) && views.length > 0;
+                            const scored = heldOut && typeof heldOut.chamferPx === 'number' && typeof heldOut.clayChamferPx === 'number' ? heldOut : undefined;
+                            const why = !noFit ? undefined
+                                : !scored ? 'no held-out view could score it'
+                                : scored.scoredViews < NO_FIT_MIN_SCORED_VIEWS ? `only ${scored.scoredViews} held-out views scored it (at least ${NO_FIT_MIN_SCORED_VIEWS} are needed to decide)`
+                                : scored.chamferPx! >= scored.clayChamferPx! ? `its held-out edge chamfer ${scored.chamferPx} px is no better than the clay's ${scored.clayChamferPx} px over ${scored.scoredViews} views`
+                                : undefined;
+                            if (why) {
+                                const reason = `Street View aimed at the facades (no fit was accepted) was set aside on ${target.layer.layer}: ${why}, so the layer is textured from the tile photo`;
+                                io.progress(`textures: ${reason}`);
+                                (out as TextureLayerOutcome & { release?: () => void }).release?.();
+                                const again = await bake([], reason);
+                                out = { ...again, degradations: [...again.degradations, { stage: 'projection', reasonCode: 'street_view_set_aside', reason, layerKey: target.layer.layer, fromRung: 1, toRung: 2 }] };
+                            }
                             fs.writeFileSync(path.join(dir, 'twin.glb'), out.glb);
                             // a worker's layer keeps its thread for the leave-one-pano-out job; the pool's close ends it if it never runs
                             const { glb: _glb, measureLoo, release: _release, ...value } = out as TextureLayerOutcome & { release?: () => void };
