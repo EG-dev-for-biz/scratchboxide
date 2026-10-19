@@ -46,6 +46,7 @@ import {
     STREAM_ENDED,
     STREAM_FAILED,
     upsertExecution,
+    withCommittedArtifact,
     upsertStep,
     USER_STOP,
     type PartialReply,
@@ -750,7 +751,7 @@ function finalizeBackendMessage(d: SendMessageDeps, ctx: GenerationContext, back
 
 /** Step 5 — register the artifact in the project graph, update the session list and reset live UI. */
 function commitAssistantMessage(d: SendMessageDeps, ctx: GenerationContext, finalAssistantMsg: ChatMessage, generatedArtifact: CanvasArtifact | undefined): void {
-    const { sessions, setSessions, messages, setMessages, setIsGenerating, setLiveThinkingText, setLiveThinkingSeconds, setLiveSteps, setLiveStreamedText, setActiveStreamingSectionId, activeSessionRef, activeArtifact, setActiveArtifact, artifactHistory, layoutMode, setLayoutMode, recordArtifactVersion, setAttachedDataFile, graphControllerRef, setGraphEpoch, activeWorkspace, persistSessionsImmediately } = d;
+    const { sessions, setSessions, messages, setMessages, setIsGenerating, setLiveThinkingText, setLiveThinkingSeconds, setLiveSteps, setLiveStreamedText, setActiveStreamingSectionId, activeSessionRef, activeArtifact, setActiveArtifact, artifactHistory, setArtifactHistory, layoutMode, setLayoutMode, recordArtifactVersion, setAttachedDataFile, graphControllerRef, setGraphEpoch, activeWorkspace, persistSessionsImmediately } = d;
     const { text, targetSessionId, updatedMessages, thinkingTimer } = ctx;
     // Clear attached data file after generation
     setAttachedDataFile(undefined);
@@ -790,7 +791,8 @@ function commitAssistantMessage(d: SendMessageDeps, ctx: GenerationContext, fina
             visible: { artifactHistory, layoutMode },
             stored: existingSession,
             finalArtifact,
-            finalArtifactMode: finalArtifact ? resolveModeForArtifact(finalArtifact.type) : undefined
+            finalArtifactMode: finalArtifact ? resolveModeForArtifact(finalArtifact.type) : undefined,
+            streamedArtifactId: generatedArtifact?.id
         });
         const sessionData: ChatSession = {
             id: targetSessionId,
@@ -824,6 +826,8 @@ function commitAssistantMessage(d: SendMessageDeps, ctx: GenerationContext, fina
         setActiveStreamingSectionId(undefined);
         if (finalArtifact) {
             setActiveArtifact(finalArtifact);
+            // The tab the artifact streamed into becomes the committed one (the commit may have given it its project id).
+            setArtifactHistory(prev => withCommittedArtifact(prev, finalArtifact, generatedArtifact?.id));
             setLayoutMode(resolveModeForArtifact(finalArtifact.type));
             recordArtifactVersion(finalArtifact);
         }

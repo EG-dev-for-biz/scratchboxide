@@ -72,6 +72,16 @@ export interface TileRefineRequest {
     isolatePick?: string;
     /** Also write raw-vs-output thumbnails into the cache entry (adds ~1-2 s). */
     thumbnails?: boolean;
+    /**
+     * Also write each analysed facade's orthophoto and metric frame (relief_orthos/: facade_<id>.png, facades.json) into
+     * the cache entry: the images a facade grammar is read from (facade-grammar.ts).
+     */
+    reliefOrthos?: boolean;
+    /**
+     * A facade grammar file (facade-grammar.ts grammarFileText; inside the workspace): each grammar is its facade's window
+     * lattice in the relief. Photo-inferred; the outputs label its cells (_LATTICE_CELL 3 and 4, asset.extras.scratchbox.facadeGrammar).
+     */
+    facadeGrammar?: string;
     /** Worker threads (default: all cores). Not part of the cache key. */
     threads?: number;
     /** Timeout of the pipeline run itself, not counting a first-use build (default 300 s). */
@@ -109,6 +119,8 @@ export interface TileRefineResult {
     /** Ownership requests: the vote of every kept triangle by centroid (SBOV) and the owner-coloured diagnostics. */
     ownershipVotes?: string;
     ownershipDebugDir?: string;
+    /** reliefOrthos requests: the facades' orthophotos and frames (facades.json). */
+    reliefOrthosDir?: string;
     stats: Record<string, any>;
     cached: boolean;
     ms: number;
@@ -327,6 +339,13 @@ export class TileRefineService {
             keyParams.isolatePick = crypto.createHash('sha256').update(fs.readFileSync(pickFile)).digest('hex');
         }
         if (req.thumbnails) keyParams.thumbnails = true;
+        if (req.reliefOrthos) keyParams.reliefOrthos = true;
+        if (req.facadeGrammar !== undefined) {
+            const file = typeof req.facadeGrammar === 'string' ? resolveWithinRoot(this.workspaceRoot, req.facadeGrammar) : '';
+            if (!file || !fs.existsSync(file)) throw new TileRefineError('bad_request', 'facadeGrammar must be a grammar file inside the workspace');
+            cliArgs.push('--facade-grammar', file);
+            keyParams.facadeGrammar = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+        }
         if (req.threads !== undefined) {
             if (!Number.isInteger(req.threads) || req.threads < 1 || req.threads > 256) throw new TileRefineError('bad_request', 'threads must be an integer in 1..256');
             cliArgs.push('--threads', String(req.threads));
@@ -349,7 +368,7 @@ export class TileRefineService {
 
         let pending = this.inFlight.get(key);
         if (!pending) {
-            pending = this.runCached(key, input, cliArgs, !!keyParams.thumbnails, !!keyParams.isolate, binary, timeoutMs, !!keyParams.ownership)
+            pending = this.runCached(key, input, cliArgs, !!keyParams.thumbnails, !!keyParams.isolate, binary, timeoutMs, !!keyParams.ownership, !!keyParams.reliefOrthos)
                 .finally(() => this.inFlight.delete(key));
             this.inFlight.set(key, pending);
         }
@@ -392,7 +411,9 @@ export class TileRefineService {
         const thumbs = path.join(dir, 'thumbs');
         const rawClay = path.join(dir, 'raw_clay.glb');
         const votes = path.join(dir, 'ownership.sbov'), debug = path.join(dir, 'ownership_debug');
+        const orthos = path.join(dir, 'relief_orthos');
         return {
+            ...(fs.existsSync(path.join(orthos, 'facades.json')) ? { reliefOrthosDir: orthos } : {}),
             ...(fs.existsSync(votes) ? { ownershipVotes: votes } : {}),
             ...(fs.existsSync(debug) ? { ownershipDebugDir: debug } : {}),
             texturedGlb: path.join(dir, 'textured.glb'),
@@ -408,7 +429,7 @@ export class TileRefineService {
     }
 
     private async runCached(key: string, input: string, cliArgs: string[], thumbnails: boolean, isolate: boolean,
-        binary: TileRefineResult['binary'], timeoutMs: number, ownership = false): Promise<TileRefineResult> {
+        binary: TileRefineResult['binary'], timeoutMs: number, ownership = false, reliefOrthos = false): Promise<TileRefineResult> {
         const dir = path.join(this.cacheDir, key);
         const done = path.join(dir, 'done.json');
         if (fs.existsSync(done)) return this.entryResult(dir, key, true, binary);
@@ -425,6 +446,7 @@ export class TileRefineService {
             if (thumbnails) args.push('--thumbs', path.join(tmp, 'thumbs'));
             if (isolate) args.push('--out-raw-clay', path.join(tmp, 'raw_clay.glb'));
             if (ownership) args.push('--ownership-out', path.join(tmp, 'ownership.sbov'), '--ownership-debug', path.join(tmp, 'ownership_debug'));
+            if (reliefOrthos) args.push('--relief-orthos', path.join(tmp, 'relief_orthos'));
             const t0 = Date.now();
             await runFile(binary.path, args, timeoutMs);
             for (const f of ['textured.glb', 'clay.glb', 'stats.json', ...(isolate ? ['raw_clay.glb'] : [])]) {
