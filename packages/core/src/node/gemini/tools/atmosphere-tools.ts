@@ -15,7 +15,8 @@ import {
     anglesToDirection,
     AtmosphereImageEstimationService,
     angstromBeta,
-    directSunTransmittance
+    directSunTransmittance,
+    resolveCloudShellLayers
 } from '../../../browser/generative-canvas/services/atmosphere';
 import { MissingInputError } from '../../../common/errors/pipeline-errors';
 import type { ToolDeclaration, ToolHandler } from './types';
@@ -57,7 +58,7 @@ export function applySunToScene(
         { operator: 'sb_set_diurnal_time_of_day', params: { sunElevation: s.elevation, sunAzimuth: s.azimuth, ...(s.lat !== undefined && s.lng !== undefined ? { latitude: s.lat, longitude: s.lng } : {}) } }
     ];
     const scattering: Record<string, unknown> = { enabled: true, volumetricClouds: s.clouds };
-    for (const k of ['turbidity', 'cloudCoverage', 'cloudDensity', 'cloudAltitude'] as const) if (s.config[k] !== undefined) scattering[k] = s.config[k];
+    for (const k of ['turbidity', 'cloudCoverage', 'cloudDensity', 'cloudAltitude', 'cloudLayers'] as const) if (s.config[k] !== undefined) scattering[k] = s.config[k];
     commands.push({ operator: 'sb_configure_atmospheric_scattering', params: scattering });
     if (s.config.aerialPerspectiveEnabled === true) commands.push({ operator: 'sb_configure_aerial_perspective', params: { enabled: true } });
     if (s.config.cloudShadowsEnabled === true) commands.push({ operator: 'sb_configure_terrain_cloud_shadows', params: { enabled: true } });
@@ -185,6 +186,28 @@ export const ATMOSPHERE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 enableCloudShadows: {
                     type: 'BOOLEAN',
                     description: 'Cast terrain cloud shadows (only with cloudCoverage, and only when true).'
+                },
+                cloudLayers: {
+                    type: 'ARRAY',
+                    description: 'Optional thin cloud decks (up to 4) drawn as stacked Earth-curved shells behind the volumetric layer: cheap, and they converge on the horizon. Describe each deck physically: cirrus is high (6-12 km), thin (opticalDepth 0.05-1), streaky (streakElongation 4-12); an altostratus sheet is mid-level (2-6 km), dense (opticalDepth 3-15) and near-complete coverage; smoke or dust uses a scatteringAlbedo below 1. Added only when given.',
+                    items: {
+                        type: 'OBJECT',
+                        properties: {
+                            label: { type: 'STRING', description: 'Name for reports only.' },
+                            baseAltitudeMeters: { type: 'NUMBER', description: 'Deck base above the ground, metres.' },
+                            thicknessMeters: { type: 'NUMBER', description: 'Vertical depth of the deck, metres (0 = one sheet).' },
+                            coverage: { type: 'NUMBER', description: 'Fraction of sky covered, 0-1.' },
+                            opticalDepth: { type: 'NUMBER', description: 'Vertical optical depth of a covered column.' },
+                            featureSizeMeters: { type: 'NUMBER', description: 'Horizontal size of cells or streaks, metres.' },
+                            streakElongation: { type: 'NUMBER', description: 'Length/width of features along the heading (1 = round).' },
+                            streakHeadingDeg: { type: 'NUMBER', description: 'Streak direction, degrees clockwise from north.' },
+                            forwardScattering: { type: 'NUMBER', description: 'Henyey-Greenstein g (ice ~0.75, water ~0.85).' },
+                            scatteringAlbedo: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Linear [r, g, b] single-scattering albedo, default [1, 1, 1].' },
+                            shellCount: { type: 'NUMBER', description: 'Stacked shells 1-8 (default one per ~400 m).' },
+                            windSpeedMetersPerSecond: { type: 'NUMBER', description: 'Drift along the heading, m/s.' }
+                        },
+                        required: ['baseAltitudeMeters', 'thicknessMeters', 'coverage', 'opticalDepth', 'featureSizeMeters']
+                    }
                 }
             }
         }
@@ -386,10 +409,16 @@ export const atmosphereHandlers: Record<string, ToolHandler> = {
             if (num(args.cloudDensity) !== undefined) config.cloudDensity = num(args.cloudDensity);
             if (num(args.cloudAltitudeMeters) !== undefined) config.cloudAltitude = num(args.cloudAltitudeMeters);
         }
+        if (args.cloudLayers !== undefined) {
+            // Checked here so a bad deck fails the call with the field named, before anything is applied.
+            resolveCloudShellLayers(args.cloudLayers, 'atmosphere_configure_scene');
+            config.cloudLayers = args.cloudLayers;
+        }
         if (args.enableGodRays === true) {
             config.godRays = num(args.godRayIntensity) !== undefined ? { enabled: true, intensity: num(args.godRayIntensity) } : { enabled: true };
         }
-        const layers = [clouds ? `clouds ${cloudCoverage}` : undefined, config.cloudShadowsEnabled ? 'cloud shadows' : undefined, config.aerialPerspectiveEnabled ? 'aerial perspective' : undefined, config.godRays ? 'god rays' : undefined].filter(Boolean);
+        const shellDecks = Array.isArray(config.cloudLayers) ? (config.cloudLayers as Array<{ label?: string }>) : [];
+        const layers = [clouds ? `clouds ${cloudCoverage}` : undefined, shellDecks.length ? `${shellDecks.length} shell cloud deck${shellDecks.length > 1 ? 's' : ''}${shellDecks.some(d => d.label) ? ` (${shellDecks.map(d => d.label ?? 'unnamed').join(', ')})` : ''}` : undefined, config.cloudShadowsEnabled ? 'cloud shadows' : undefined, config.aerialPerspectiveEnabled ? 'aerial perspective' : undefined, config.godRays ? 'god rays' : undefined].filter(Boolean);
         const sunText = `sun elevation ${elevation.toFixed(1)}°, azimuth ${azimuth.toFixed(1)}° (${sunSource}), ${profile.phase}, ${profile.kelvinTemperature} K`;
 
         // Applied to the open 3D scene through the scene's own atmosphere operators, so the viewport draws it: a directional

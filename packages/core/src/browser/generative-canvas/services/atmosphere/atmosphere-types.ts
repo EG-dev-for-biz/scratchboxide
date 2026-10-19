@@ -73,6 +73,39 @@ export interface DiurnalLightingProfile {
     groundAlbedoLinear?: [number, number, number];
 }
 
+/**
+ * A thin cloud deck drawn as stacked Earth-concentric shells instead of a raymarched volume: cheap for distant, flat
+ * decks and correct at the horizon, where a curved shell converges and a flat plane would not. Every field is a physical
+ * quantity, so cirrus streaks, an altostratus sheet, a smoke or ash pall, or a methane haze on another world are all
+ * points in the same space.
+ */
+export interface CloudShellLayer {
+    /** Diagnostic name only; the renderer never reads it. */
+    label?: 'cirrus' | 'cirrostratus' | 'altostratus' | 'cirrocumulus' | (string & {});
+    /** Height of the deck's base above the ground, metres. */
+    baseAltitudeMeters: number;
+    /** Vertical depth the stacked shells span, metres (0 = a single sheet). */
+    thicknessMeters: number;
+    /** Fraction of the sky the deck covers, 0-1. */
+    coverage: number;
+    /** Vertical optical depth of a fully covered column (thin cirrus ~0.03-1, altostratus ~2-20). */
+    opticalDepth: number;
+    /** Horizontal size of the deck's main features (cells, streaks), metres. */
+    featureSizeMeters: number;
+    /** How much longer features are along `streakHeadingDeg` than across it (1 = round cells). Default 1. */
+    streakElongation?: number;
+    /** Direction of elongation, degrees clockwise from north. Default 0. */
+    streakHeadingDeg?: number;
+    /** Henyey-Greenstein asymmetry of the particles (ice ~0.75, water ~0.85, smoke ~0.6). Default 0.75. */
+    forwardScattering?: number;
+    /** Linear-RGB single-scattering albedo (white water/ice ~[1,1,1]; soot, dust or ash below 1). Default [1, 1, 1]. */
+    scatteringAlbedo?: [number, number, number];
+    /** Number of stacked shells, 1-8. Default: one per ~400 m of thickness. */
+    shellCount?: number;
+    /** Drift speed of the deck, m/s along the streak heading. Default 0. */
+    windSpeedMetersPerSecond?: number;
+}
+
 export interface AtmosphericScatteringConfig {
     enabled?: boolean;
     rayleigh?: number;
@@ -89,6 +122,8 @@ export interface AtmosphericScatteringConfig {
     cloudDensity?: number;
     cloudAltitude?: number;
     volumetricClouds?: boolean;
+    /** Thin cloud decks drawn as stacked curved shells, behind the volumetric layer. Strictly opt-in: none by default. */
+    cloudLayers?: CloudShellLayer[];
     kelvinTemperature?: number;
     wavelengthDispersion?: [number, number, number];
 
@@ -158,6 +193,8 @@ export interface AtmosphericSkyDomeModule {
     setSunCoordinates: (elevationDeg: number, azimuthDeg: number) => void;
     setTimeOfDay: (timeHours: number, lat: number, lng: number) => void;
     setPreset: (preset: TimeOfDayPreset) => void;
+    /** Replaces the shell cloud decks (an empty list removes them). */
+    setCloudLayers: (layers: CloudShellLayer[]) => void;
     dispose: () => void;
 }
 

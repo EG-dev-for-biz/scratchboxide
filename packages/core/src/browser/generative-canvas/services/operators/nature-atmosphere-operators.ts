@@ -19,6 +19,8 @@ import {
     type SlopeMaterialStop
 } from '../spatial/SbTerrainGroundEngine';
 import { findViewportMeshes } from './mesh-edit-operators';
+import { resolveCloudShellLayers } from '../atmosphere/cloud-shell-layers';
+import type { CloudShellLayer } from '../atmosphere/atmosphere-types';
 import { instantAtLocalMeanSolarTime } from '../../../../common/coordinate/solarPosition';
 import { measureGlbBase64MeshCounts } from '../../../../common/glb-mesh-counts';
 
@@ -37,7 +39,7 @@ export const NATURE_ATMOSPHERE_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_configure_atmospheric_scattering',
         category: 'nature_atmosphere',
-        description: 'Configures Rayleigh/Mie physical atmospheric scattering, turbidity, and 3D volumetric raymarched cloud layers.',
+        description: 'Configures Rayleigh/Mie physical atmospheric scattering, turbidity, the 3D volumetric raymarched cloud layer, and cloudLayers: up to 4 thin decks drawn as stacked Earth-curved shells (an empty list removes them).',
         execute: (ctx, params: {
             enabled?: boolean;
             rayleigh?: number;
@@ -48,6 +50,7 @@ export const NATURE_ATMOSPHERE_OPERATORS: OperatorDefinition[] = [
             cloudDensity?: number;
             cloudAltitude?: number;
             volumetricClouds?: boolean;
+            cloudLayers?: CloudShellLayer[];
         }) => {
             const scene = ctx.getSceneData();
             if (!scene.features) scene.features = {};
@@ -69,6 +72,10 @@ export const NATURE_ATMOSPHERE_OPERATORS: OperatorDefinition[] = [
             if (params.cloudDensity !== undefined) updatedAtm.cloudDensity = params.cloudDensity;
             if (params.cloudAltitude !== undefined) updatedAtm.cloudAltitude = params.cloudAltitude;
             if (params.volumetricClouds !== undefined) updatedAtm.volumetricClouds = params.volumetricClouds;
+            if (params.cloudLayers !== undefined) {
+                resolveCloudShellLayers(params.cloudLayers, 'sb_configure_atmospheric_scattering');
+                updatedAtm.cloudLayers = params.cloudLayers;
+            }
 
             scene.features.atmosphericScattering = updatedAtm;
 

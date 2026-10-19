@@ -21,6 +21,7 @@ import {
     getPresetLightingState
 } from './diurnal-lighting';
 import { getSunVectorFromAngles } from './solar-position';
+import { cloudShellUniformArrays, cloudShellWindSpeeds, MAX_CLOUD_SHELL_LAYERS, resolveCloudShellLayers } from './cloud-shell-layers';
 import { MissingInputError } from '../../../../common/errors/pipeline-errors';
 
 export const ATMOSPHERE_VERTEX_SHADER = /* glsl */ `
@@ -53,6 +54,15 @@ uniform float uCloudCoverage;
 uniform float uCloudDensity;
 uniform float uCloudAltitude;
 uniform float uTime;
+
+// Shell cloud decks (CloudShellLayer), highest first. A: base, thickness, coverage, optical depth.
+// B: feature size, elongation, heading (rad), HG g. C: albedo rgb, shell count.
+#define MAX_CLOUD_SHELL_LAYERS 4
+uniform int uShellLayerCount;
+uniform vec4 uShellA[MAX_CLOUD_SHELL_LAYERS];
+uniform vec4 uShellB[MAX_CLOUD_SHELL_LAYERS];
+uniform vec4 uShellC[MAX_CLOUD_SHELL_LAYERS];
+uniform float uShellWind[MAX_CLOUD_SHELL_LAYERS];
 
 uniform bool uIsNight;
 uniform bool uIsGoldenHour;
@@ -204,6 +214,95 @@ float henyeyGreenstein(float cosAngle, float g) {
     return (1.0 - g2) / (4.0 * 3.14159265359 * pow(1.0 + g2 - 2.0 * g * cosAngle, 1.5));
 }
 
+// Cheap 2D value-noise fBm for the shell decks (sine-free hash, quintic fade, rotated octaves), in [0, 1] with mean 0.5.
+// Each shell samples it once or twice per pixel, so it must stay far cheaper than the 3D simplex used by the cumulus.
+float shellHash(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+float shellValueNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    return mix(mix(shellHash(i), shellHash(i + vec2(1.0, 0.0)), u.x),
+               mix(shellHash(i + vec2(0.0, 1.0)), shellHash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+float shellFbm(vec2 p, float octaves) {
+    const mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);
+    float sum = 0.0, amp = 0.5, norm = 0.0;
+    for (int o = 0; o < 6; o++) {
+        float w = clamp(octaves - float(o), 0.0, 1.0);
+        sum += amp * w * shellValueNoise(p);
+        norm += amp * w;
+        p = rot * p * 2.03 + vec2(17.1, 9.7);
+        amp *= 0.5;
+    }
+    return sum / max(norm, 1e-4);
+}
+
+// Composites the shell cloud decks over the sky colour, back to front. Each shell is a sphere concentric with the Earth,
+// so a deck converges on the horizon instead of running to infinity. A shell's radiance is single scattering of the
+// sun that reaches it through the deck above (Beer-Lambert, two-lobe Henyey-Greenstein phase), the diffuse sunlight a
+// two-stream slab passes on, (1 / (1 + 0.75 (1 - g) tau) - direct), and the sky light around it.
+// Shapes are domain-warped fBm with an eroding detail octave; where a feature shrinks toward a pixel (the view ray's
+// angular footprint times distance, over the feature size) the detail and then the shapes fade to the mean coverage.
+vec3 compositeCloudShells(vec3 sky, vec3 rayDir, float cosViewSun, vec3 ambient) {
+    if (uShellLayerCount <= 0 || rayDir.y < -0.01) return sky;
+    float sunMu = max(uSunDirection.y, 0.03);
+    vec3 sunIrradiance = uSunColor * uSunIntensity;
+    vec3 cloudAmbient = mix(ambient, vec3(dot(ambient, vec3(0.2126, 0.7152, 0.0722))), 0.5);
+    // Angle one pixel spans; smooth across the dome's triangles, unlike derivatives of the projected coordinates.
+    float pixelAngle = length(fwidth(rayDir));
+    for (int L = 0; L < MAX_CLOUD_SHELL_LAYERS; L++) {
+        if (L >= uShellLayerCount) break;
+        vec4 A = uShellA[L];
+        vec4 B = uShellB[L];
+        vec4 C = uShellC[L];
+        float shells = C.w;
+        float g = B.w;
+        float phase = mix(henyeyGreenstein(cosViewSun, g), henyeyGreenstein(cosViewSun, -0.2), 0.25);
+        vec2 along = vec2(sin(B.z), cos(B.z));
+        vec2 across = vec2(cos(B.z), -sin(B.z));
+        float threshold = mix(0.72, 0.28, A.z);
+        for (int s = 7; s >= 0; s--) {
+            if (float(s) >= shells) continue;
+            float f = (float(s) + 0.5) / shells;
+            float h = A.x + A.y * f;
+            float t = getAtmosphereDistance(rayDir, h);
+            vec3 p = rayDir * t;
+            vec3 n = normalize(p + vec3(0.0, 6371000.0, 0.0));
+            float mu = max(dot(rayDir, n), 0.02);
+            vec2 en = vec2(p.x, -p.z);
+            vec2 q = vec2(dot(en, along) - uShellWind[L] * uTime, dot(en, across)) / vec2(B.x * B.y, B.x);
+            float footprint = pixelAngle * t / (mu * B.x);
+            vec2 seed = vec2(float(L) * 37.1 + f * 3.3, float(L) * 11.7 - f * 5.9);
+            // Octaves finer than ~2 pixels are dropped (footprint is in feature units; each octave halves the size).
+            float octaves = clamp(log2(0.5 / max(footprint, 1e-4)) + 1.0, 1.0, 6.0);
+            vec2 warp = vec2(shellFbm(q * 0.5 + seed, 3.0), shellFbm(q * 0.5 + seed.yx + 5.2, 3.0)) - 0.5;
+            float shape = shellFbm(q + warp * 1.2 + seed, octaves);
+            float detail = shellFbm(q * 3.7 + warp * 2.0 + seed + 3.0, octaves - 2.0);
+            float erosion = mix(mix(0.45, 1.0, smoothstep(0.3, 0.7, detail)), 1.0, smoothstep(0.08, 0.3, footprint));
+            float density = smoothstep(threshold - 0.12, threshold + 0.28, shape) * erosion;
+            density = mix(density, A.z, smoothstep(0.25, 1.0, footprint));
+            if (density <= 0.001) continue;
+            float trans = exp(-A.w / shells * density / mu);
+            float tauAbove = A.w * density * (1.0 - f);
+            float direct = exp(-tauAbove / sunMu);
+            float diffuseTrans = 1.0 / (1.0 + 0.75 * (1.0 - g) * tauAbove);
+            float diffuse = max(0.0, diffuseTrans - direct);
+            // The dome's sky colours are display-referred, about pi brighter than radiometric radiance next to the sun
+            // term, so diffuse light carries E mu_s (not E mu_s / pi) to sit on the same scale as the sky behind it.
+            // Sky light inside the deck is as attenuated as the sun's diffuse part and loses most of its blue.
+            vec3 inscatter = C.rgb * (sunIrradiance * (direct * phase + diffuse * sunMu) + cloudAmbient * diffuseTrans);
+            vec3 lit = sky * trans + (1.0 - trans) * inscatter;
+            // Distant shells fade into the sky behind them (aerial perspective, ~150 km e-folding).
+            sky = mix(lit, sky, 1.0 - exp(-t / 150000.0));
+        }
+    }
+    return sky;
+}
+
 void main() {
     vec3 rayDir = normalize(vWorldPosition);
     float cosViewSun = dot(rayDir, uSunDirection);
@@ -273,6 +372,9 @@ void main() {
 
         skyColor += physicalSun;
     }
+
+    // --- 2b. SHELL CLOUD DECKS (behind the volumetric layer; they dim the sun disc they cross) ---
+    skyColor = compositeCloudShells(skyColor, rayDir, cosViewSun, mix(zenithColor, horizonColor, 0.5) * 0.9);
 
     // --- 3. TRUE 3D VOLUMETRIC CUMULUS BILLOW DOME CLOUDS ---
     if (uCloudCoverage > 0.01 && rayDir.y > 0.005) {
@@ -490,10 +592,27 @@ export function createAtmosphericSkyDome(
         uCloudAltitude: { value: config.cloudAltitude ?? 1200.0 },
         uTime: { value: 0.0 },
 
+        uShellLayerCount: { value: 0 },
+        uShellA: { value: Array.from({ length: MAX_CLOUD_SHELL_LAYERS }, () => new THREE.Vector4()) },
+        uShellB: { value: Array.from({ length: MAX_CLOUD_SHELL_LAYERS }, () => new THREE.Vector4()) },
+        uShellC: { value: Array.from({ length: MAX_CLOUD_SHELL_LAYERS }, () => new THREE.Vector4()) },
+        uShellWind: { value: new Array<number>(MAX_CLOUD_SHELL_LAYERS).fill(0) },
+
         uIsNight: { value: diurnalProfile.isNight },
         uIsGoldenHour: { value: diurnalProfile.isGoldenHour || isSunset },
         uIsTwilight: { value: diurnalProfile.isTwilight }
     };
+
+    const applyCloudLayers = (layers: unknown) => {
+        const resolved = resolveCloudShellLayers(layers, 'createAtmosphericSkyDome');
+        const packed = cloudShellUniformArrays(resolved);
+        uniforms.uShellLayerCount.value = packed.count;
+        packed.a.forEach((v, i) => uniforms.uShellA.value[i].fromArray(v));
+        packed.b.forEach((v, i) => uniforms.uShellB.value[i].fromArray(v));
+        packed.c.forEach((v, i) => uniforms.uShellC.value[i].fromArray(v));
+        uniforms.uShellWind.value = cloudShellWindSpeeds(resolved);
+    };
+    applyCloudLayers(config.cloudLayers);
 
     const skyGeo = new THREE.SphereGeometry(radius, 32, 24);
     const skyMat = new THREE.ShaderMaterial({
@@ -601,6 +720,7 @@ export function createAtmosphericSkyDome(
             const presetState = getPresetLightingState(preset, beamOptions);
             applySolarState(presetState.elevationDeg, presetState.azimuthDeg, presetState);
         },
+        setCloudLayers: (layers) => applyCloudLayers(layers),
         dispose: () => {
             scene.remove(skyDome);
             scene.remove(sunMesh);
