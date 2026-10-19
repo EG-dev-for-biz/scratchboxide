@@ -76,7 +76,7 @@ import type { TileRefineRequest, TileRefineResult } from '../tile-refine-service
 import { evidenceLookup, footprintPriorFor, type EvidenceLookup, type VectorEvidence } from './vector-footprints';
 import { VisionModelChain, type VisionGenAIClient } from '../../gemini/vision-model-chain';
 import { segmentOwnershipViews } from './ownership-masks';
-import { loadScanMesh, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
+import { geodeticToScan, loadScanMesh, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
 import { readGlbScene, renderFrameDepth, sceneToRenderMesh } from '../../spatial/StreetViewPoseRegistrar';
 import type { RenderMesh3D } from '../../spatial/HeadlessMeshSilhouetteRenderer';
 import { StageCache, sha256File, stageKey, stagedReplyCache, type CachedStage } from './stage-cache';
@@ -129,12 +129,17 @@ import { summarizeStagedBuild, type StagedSummaryInput } from './staged-summary'
 import { palettesFromSurvey, photoTierEnabled, textureLayer, TEXTURE_PASS_VERSION, type TextureLayerOutcome } from './texture-pass';
 import { prepareTextureSources, type TextureSourcesInput } from './texture-sources';
 import { objectSegmenter, ownViews, OWNERSHIP_VERSION, type OwnershipSegmenter } from './streetview-ownership';
-import { correctViewsLighting, lightingModels, lightingPromptVariant, textureArmOptions, type LightingCorrectedView } from './texture-lighting';
+import { correctViewsLighting, lightingModels, lightingPromptVariant, textureArmOptions, LIGHTING_MODEL_LITE, type LightingCorrectedView } from './texture-lighting';
 import { TextureWorkerPool, textureWorkersEnabled } from './texture-worker-pool';
 import { eventLoopStats, runBlockTracer } from './event-loop-stats';
 import type { EnhanceModelClient } from './texture-enhance';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { fetchFootprints, type FootprintSource } from './facade-footprints';
+import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, massingProvenance, type MassingStageResult } from './pipeline-e/pipeline-e';
+import { mslToTileY, type SolarRoof } from './pipeline-e/solar-roof';
+import { runInferenceE, type StepRecord } from './pipeline-e/inference';
+import { crownsFromStrip } from './pipeline-e/occluders';
+import { projectionViewsFromEvidence } from './texture-pass';
 import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
 import { facadeGrammarEnabled, grammarFileText, runFacadeGrammarPass, FACADE_GRAMMAR_GATE_VERSION, FACADE_GRAMMAR_PROMPT_VERSION, type GrammarFacadeOutcome } from './facade-grammar';
 import { TEXTURE_LADDER_RUNGS, type TexturePassDegradation, type TexturePassRecord, type TextureLayerBundle } from '../../../common/spatial/texture-pass-contracts';
@@ -282,6 +287,8 @@ export interface StagedLocationDeps {
     streetView?: StreetViewEvidenceDeps;
     /** The vision model client and the models to try (the staged default first); or why there is none. */
     vision?: { client: VisionGenAIClient; candidates: string[] } | { unavailable: string };
+    /** Google Solar API roof facets of the building closest to (lat, lng) (pipeline E's massing); absent without a key. */
+    solarRoof?(lat: number, lng: number): Promise<SolarRoof>;
     /** Vector building footprints near a place (facade grammar's independent check); default: Google vector feature tiles. */
     footprints?: (place: { lat: number; lng: number }, radiusM: number) => Promise<FootprintSource>;
     /** Builds a figure spec natively and returns its GLB (metres, +Y up, front +Z, origin at the centre of its base); the reference object builder's native build by default. */
@@ -1140,6 +1147,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         };
         const surveyStop = new AbortController();
         let surveyPromise: Promise<{ result?: SurveyResult; status: string }> | undefined;
+        // pipeline E (SCRATCHBOX_STAGED_PIPELINE=e, off by default): the structure from the vector massing; it needs the
+        // building's vector footprint, else the current pipeline runs and the reason is recorded
+        const pipelineE = stagedPipelineE() && request.isolate;
+        const eBuildings = structure?.vectorFootprint?.used && t.vector ? t.vector.raster.buildings.filter(b => structure.vectorFootprint!.featureIds.includes(b.id)) : [];
+        const eWhyNot = !pipelineE ? undefined : !isolateMode ? 'the structure could not be isolated' : !eBuildings.length ? `the structure's footprint did not come from Google vector data (${structure?.vectorFootprint?.reason ?? 'no vector footprint at the place'})` : undefined;
+        const eEligible = pipelineE && !eWhyNot;
+        const startSurvey = (): void => {
         if (isolateMode && visionForSurvey) {
             const noSurvey = (reasonCode: string, reason: string, cause?: unknown, model?: VisionModelUse, transient = false) => ({
                 status: 'degraded' as const, source: 'no survey: the detail passes aim at the scan-only slots', reason,
@@ -1197,6 +1211,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         } else {
             runner.skip('survey', isolateMode ? (deps.vision && 'unavailable' in deps.vision ? deps.vision.unavailable : 'no vision model is configured') : 'not an isolated structure');
         }
+        };
+        if (!eEligible) startSurvey();
 
         // ---------------- evidence (starts when the fit is accepted, aimed at its slots; when no fit is accepted, aimed at the structure's
         // facades, and the images then only texture the remeshed scan: nothing is read from them) ----------------
@@ -1907,9 +1923,100 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         const grammarOn = facadeGrammarEnabled() && !!visionAvailable && (request.relief ?? TILE_REFINE_RELIEF_DEFAULT) !== false;
         let remeshRequest: TileRefineRequest | undefined;
         type RemeshValue = { refined?: TileRefineResult; flattened?: ScanFitFlattenResult; groundLayerId: string; groundFile: string; committed: boolean };
+        let eState: { stage: MassingStageResult; refined: TileRefineResult; layer: StagedLayer; key: string; ms: number } | undefined;
+        /** Pipeline E's massing (step 1-3): the committed clean layer, or undefined (the reason recorded) for the current pipeline. */
+        const runPipelineE = async (io: StageIO): Promise<StageResult<RemeshValue> | undefined> => {
+            const t0 = now();
+            const fallBack = (reasonCode: string, reason: string, cause?: unknown): undefined => {
+                run.degrade(record('remesh', reasonCode, {
+                    part: { description: 'the structure' }, intended: 'pipeline E: a clean massing from Google vector data, textured from the tile photo', fellTo: 'the current pipeline (remesh, fit, detail)',
+                    provenanceAfter: PROVENANCE.remeshed, reason, ...(cause ? { cause } : {}), transient: false, runId, now: now()
+                }));
+                cache.writeRunNote(runId, 'pipeline_e', { fellBack: true, reasonCode, reason });
+                io.progress(`pipeline E: ${reason}; the current pipeline builds the structure`);
+                startSurvey();
+                return undefined;
+            };
+            try {
+                io.progress('pipeline E: the isolated scan');
+                const tilePath = strip ? strip.devegetatedGlb : extraction.texturedGlb;
+                let picked: { pick: StructurePickResult; ground: GroundModel } = { pick: structure!, ground: t.ground! };
+                if (tilePath !== extraction.texturedGlb) picked = pickOnScan(tilePath, structure!.seed, t.canopy, t.vector) ?? picked;
+                const bytesKey = crypto.createHash('sha256').update(picked.pick.footprintMask).update(Buffer.from(Float32Array.from(picked.ground.ground).buffer)).update(Buffer.from(Float32Array.from(picked.ground.top).buffer)).digest('hex').slice(0, 16);
+                const isolatePick = writeIsolationPick(path.join(path.dirname(tilePath), `structure_pick_${bytesKey}.sbip`), picked.pick, picked.ground);
+                const refined = await deps.refine.refine({ tilePath, isolate: true, anchor: { x: structure!.seed.x, z: structure!.seed.z }, isolatePick, relief: false });
+                if (!refined.rawClayGlb) return fallBack('pipeline_e_fallback', 'tile_refine wrote no isolated scan');
+                const chk = checkIsolate(refined.rawClayGlb, picked.pick, picked.ground);
+                if (!chk.ok) return fallBack('pipeline_e_fallback', `the isolated scan does not match the structure picked (IoU ${round(chk.iou, 2)}, agreement ${round(chk.agreement, 2)})`);
+                // Solar roof facets, in the tile frame
+                let solar: Array<{ pitchDeg: number; azimuthDeg: number; planeHeightMsl: number; center: { lat: number; lng: number }; areaM2: number; x: number; z: number; y: number }> = [];
+                let solarNote = 'no Solar roof facets (no API key)';
+                if (deps.solarRoof) {
+                    try {
+                        const sr = await deps.solarRoof(placeValue!.lat, placeValue!.lng);
+                        const origin = { lat: placeValue!.lat, lng: placeValue!.lng, heightMeters: 0 };
+                        solar = sr.segments.map(sg => { const q = geodeticToScan(origin, sg.center.lat, sg.center.lng); return { ...sg, x: q.x, z: q.z, y: mslToTileY(sg.planeHeightMsl, sg.center.lat, sg.center.lng, extraction.originEllipsoidalHeightM) }; });
+                        solarNote = `${solar.length} Solar roof facets (imagery ${sr.imageryQuality ?? '?'}, ${sr.imageryDate ?? 'date unknown'})`;
+                    } catch (err) { solarNote = `no Solar roof facets (${errorMessage(err)})`; }
+                }
+                const key = stageKey(PIPELINE_E_VERSION, refined.cacheKey, sha256File(tilePath).slice(0, 16), sha256Bytes(Buffer.from(JSON.stringify({ eBuildings, solar }))));
+                const dir = path.join(cache.dir, 'pipeline_e', key.slice(0, 24));
+                io.progress('pipeline E: the clean massing, its orthos and the scanned residual');
+                const ground = picked.ground;
+                const scanTop = (x: number, z: number) => { const i = ground.cellIndex(x, z); return i < 0 ? NaN : ground.top[i]; };
+                const r = await runMassingStage({ tilePath, isolateGlb: refined.rawClayGlb, buildings: eBuildings, groundY: picked.pick.groundY, scanTop, cells: picked.pick.cells, solar, outDir: dir, signal: io.signal }, 'remesh', key);
+                cache.writeRunNote(runId, 'pipeline_e', { check: r.massing.check, solar: r.massing.solar, solarNote, notes: r.massing.notes, timingsMs: r.timingsMs, native: r.run ? { timingsMs: r.run.report.timingsMs, snap: r.run.report.snap, residual: r.run.report.residual, faces: r.run.report.faces.length } : undefined });
+                const c = r.massing.check;
+                if (!c.ok || !r.run || !r.files) return fallBack('pipeline_e_fallback', `${c.reason ?? 'the massing could not be built'} (plan IoU ${c.iou}, roof ${c.heightErrMedianM} m off the scan, median; ${c.heightErrP90M} m at the 90th percentile)`);
+                run.keys.remesh = key;
+                run.cacheStatus.remesh = 'miss';
+                const key8 = key.slice(0, 8);
+                const pubClay = cache.publishFile(r.files.clayGlb, `${base}_massing_${key8}.glb`);
+                const pubTex = cache.publishFile(r.files.texturedGlb, `${base}_massing_${key8}_tex.glb`);
+                const l1 = run.state.layers.find(l => l.layer === 'l1')!;
+                const counts = layerCounts(r.files.clayGlb);
+                const residual = r.run.report.residual;
+                const note = `pipeline E massing: ${r.massing.parts.length} extruded parts, ${r.massing.meshes.length} modelled volumes; plan IoU with the scan ${c.iou}, roof ${c.heightErrMedianM} m off (median); ${solarNote}; walls moved onto the scanned facade: ${r.run.report.snap.filter(x => x.applied).length} of ${r.run.report.snap.length}; scanned residual kept: ${residual.proud} proud and ${residual.cut} cut-in triangles in ${residual.clusters.length} clusters, ${residual.apron} ground apron`;
+                const legend = r.legend!;
+                const layer: StagedLayer = {
+                    objectId: layerObjectId(key, 'l2'), stage: 'remesh', layer: 'l2', order: STAGES.remesh.order, url: pubClay.url, bytes: pubClay.bytes,
+                    provenance: { ...massingProvenance({ kind: 'wall', provenance: 'massing', confidence: null }, r.massing), note },
+                    provenanceLabels: ['vector-massing', PROVENANCE.asScanned], supersedes: [l1.objectId], revealAfter: [],
+                    reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [l1.objectId] }, cached: false, builtAtMs: now(), counts,
+                    textured: {
+                        url: pubTex.url, bytes: pubTex.bytes, ladderRung: r.files.texturedShares.findIndex((_, k, a) => a.slice(k + 1).reduce((x, y) => x + y, 0) <= 0.1),
+                        rungShares: r.files.texturedShares, provenance: legend.map(e => ({ source: e.source, label: e.label, method: e.method, coverage: 0 })),
+                        confidenceChannels: 'R = index into provenance[], G = weight 0..255, B = ladder rung (TEXTURE_LADDER_RUNGS), A = 255 where a stage produced the texel', builtAtMs: now(), cached: false
+                    }
+                };
+                run.commit(layer, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, extra: { rawGlbPath: extraction.rawGlbPath ?? extraction.texturedGlb, pipeline: 'e' } });
+                run.setGround(layer.objectId);
+                run.note('vector-massing', note);
+                eState = { stage: r, refined, layer, key, ms: now() - t0 };
+                return {
+                    status: 'committed', value: { refined, groundLayerId: layer.objectId, groundFile: r.files.clayGlb, committed: true },
+                    source: `pipeline E: clean massing from Google vector data, textured from the tile photo, in ${((now() - t0) / 1000).toFixed(1)} s (${counts.triangles.toLocaleString('en-US')} triangles)`,
+                    layers: [layer], cached: false, builtAtMs: now()
+                };
+            } catch (err) {
+                if (isAbort(err) || io.signal.aborted) throw err;
+                return fallBack('pipeline_e_failed', `pipeline E failed (${errorMessage(err)})`, err);
+            }
+        };
+        if (pipelineE && eWhyNot) {
+            run.degrade(record('remesh', 'pipeline_e_fallback', {
+                part: { description: 'the structure' }, intended: 'pipeline E: a clean massing from Google vector data, textured from the tile photo', fellTo: 'the current pipeline (remesh, fit, detail)',
+                provenanceAfter: PROVENANCE.remeshed, reason: eWhyNot, transient: false, runId, now: now()
+            }));
+            cache.writeRunNote(runId, 'pipeline_e', { fellBack: true, reasonCode: 'pipeline_e_fallback', reason: eWhyNot });
+        }
         const remesh = await runner.stage<RemeshValue>({
             id: 'remesh',
             run: async io => {
+                if (eEligible) {
+                    const e = await runPipelineE(io);
+                    if (e) return e;
+                }
                 io.progress(isolateMode ? 'remeshing the structure' : 'remeshing the district');
                 const tilePath = strip ? strip.devegetatedGlb : extraction.texturedGlb;
                 // object ownership: outlines of the requested structure in registered views of the tile, voted onto its triangles
@@ -2090,8 +2197,76 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         const remeshed = remesh.status !== 'stopped' && remesh.value?.committed === true ? remesh.value.refined : undefined;
         const isolateOk = isolateMode && !!remeshed?.rawClayGlb && !run.state.degradations.some(d => d.reasonCode === 'isolate_mismatch');
 
+        // ---------------- pipeline E inference (the grammar stage's slot): roof, bands, windows, bays, fill, straightening, colour ----------------
+        const eInferenceRun = async (e: NonNullable<typeof eState>): Promise<void> => {
+            if (!pipelineEInference()) { runner.skip('grammar', 'pipeline E without inference (SCRATCHBOX_STAGED_PIPELINE_E_INFERENCE=0)'); return; }
+            await runner.stage<{ steps: StepRecord[] }>({
+                id: 'grammar',
+                run: async io => {
+                    const t0 = now();
+                    const r = e.stage;
+                    const chain = visionAvailable ? new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...chainExtras('grammar'), ...(deps.sleep ? { sleep: deps.sleep } : {}) }) : undefined;
+                    const structureMesh = sceneToRenderMesh(readGlbScene(r.files!.clayGlb));
+                    const sv = streetView ?? {};
+                    const segmenter = process.env.SCRATCHBOX_TEXTURE_OWNERSHIP === '0' ? false : deps.textures?.segmenter
+                        ?? objectSegmenter(visionAvailable ? { modelSource: { getGenAIClient: async () => visionAvailable.client, getModelCandidates: () => visionAvailable.candidates } } : {});
+                    const streetViews = !missingCredentials(sv) && segmenter ? async (mesh: RenderMesh3D) => {
+                        const found = await discoverOnce();
+                        const usable = found.panos.filter(p => !sv.refusedPanos?.has(p.panoId));
+                        const views = selectViewsForStructure(usable, footprintSurveyFaces(structure!), structure!, t.ground!, t.unmaskedTop ?? t.ground!.top);
+                        io.progress(`pipeline E: fetching ${views.length} Street View photos for the facades' colour`);
+                        const got = await fetchViews(views, sv, io.signal);
+                        if (got.images.length) run.state.attribution = [...new Set([...run.state.attribution, 'Street View ©Google'])];
+                        const pv = projectionViewsFromEvidence(got.images).views;
+                        const context = sceneToRenderMesh(readGlbScene(extraction.geometryGlb));
+                        const own = await ownViews({ views: pv, structure: mesh, ...(visionAvailable ? { target: request.query } : {}), context, segment: segmenter, signal: io.signal, onProgress: m => io.progress(`pipeline E: ${m}`) });
+                        cache.writeRunNote(runId, 'pipeline_e_ownership', { records: own.records, panos: got.images.map(i => i.view.panoId) });
+                        return own.views;
+                    } : undefined;
+                    const crowns = strip ? crownsFromStrip(JSON.parse(fs.readFileSync(strip.crownsJson, 'utf8'))) : [];
+                    const enhance = deps.textures?.enhance;
+                    const out = await runInferenceE({
+                        massing: r.massing, run: r.run!, textures: r.textures!, tilePath: strip ? strip.devegetatedGlb : extraction.texturedGlb, isolateGlb: e.refined.rawClayGlb!,
+                        dir: path.join(cache.dir, 'pipeline_e', e.key.slice(0, 24), 'inference'), stage: 'grammar', stageKey: e.key,
+                        ...(chain ? { chain } : {}), ...(streetViews ? { streetViews } : {}), structureMesh, crowns,
+                        ...(enhance ? { inpaint: { client: enhance, models: [LIGHTING_MODEL_LITE] } } : {}),
+                        solar: [], anchor: structure!.seed, signal: io.signal, onProgress: m => io.progress(m)
+                    });
+                    cache.writeRunNote(runId, 'pipeline_e_inference', { steps: out.steps, timingsMs: out.timingsMs });
+                    const kept = out.steps.filter(s => s.accepted > 0);
+                    const conf = Math.max(0.05, Math.min(1, ...out.grammars.map(g => g.confidence), 0.75));
+                    const key8 = e.key.slice(0, 8);
+                    const pubClay = cache.publishFile(out.files.clayGlb, `${base}_massing_${key8}_inferred.glb`);
+                    const pubTex = cache.publishFile(out.files.texturedGlb, `${base}_massing_${key8}_inferred_tex.glb`);
+                    const describe = out.steps.map(s => `${s.step}: ${s.skipped ? `skipped (${s.skipped})` : `${s.accepted} of ${s.proposed} kept`}`).join('; ');
+                    const layer: StagedLayer = {
+                        objectId: layerObjectId(e.key, 'l2g'), stage: 'grammar', layer: 'l2g', order: STAGES.grammar.order, url: pubClay.url, bytes: pubClay.bytes,
+                        provenance: { label: PROVENANCE.photoInferred, measuredGeometry: false, confidence: conf, method: 'pipeline E inference on the clean massing: roof, bands and windows read from the tile photo and kept where the scan agrees; averaged bays, occluder fill, straightened texture and Street View colour on its textures', sources: [{ kind: 'stage-output', id: `pipeline-e:${key8}` }], note: describe },
+                        provenanceLabels: ['vector-massing', PROVENANCE.photoInferred, PROVENANCE.asScanned, 'generated'], supersedes: [e.layer.objectId], revealAfter: [e.layer.objectId],
+                        reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [e.layer.objectId] }, cached: false, builtAtMs: now(), counts: layerCounts(out.files.clayGlb),
+                        textured: {
+                            url: pubTex.url, bytes: pubTex.bytes, ladderRung: out.files.texturedShares.findIndex((_, k, a) => a.slice(k + 1).reduce((x, y) => x + y, 0) <= 0.1),
+                            rungShares: out.files.texturedShares, provenance: out.legend.map(x => ({ source: x.source, label: x.label, method: x.method, coverage: 0 })),
+                            confidenceChannels: 'R = index into provenance[], G = weight 0..255, B = ladder rung (TEXTURE_LADDER_RUNGS), A = 255 where a stage produced the texel', builtAtMs: now(), cached: false
+                        }
+                    };
+                    run.commit(layer, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, extra: { pipeline: 'e' } });
+                    run.note(PROVENANCE.photoInferred, `pipeline E inference: ${describe}`);
+                    return { status: kept.length ? 'committed' : 'degraded', value: { steps: out.steps }, layers: [layer], source: `pipeline E inference in ${((now() - t0) / 1000).toFixed(0)} s: ${describe}`, ...(kept.length ? {} : { reason: 'no inferred step was kept' }) };
+                },
+                degrade: async err => ({
+                    status: 'degraded', source: 'the clean massing stands without inference', reason: `pipeline E inference failed (${errorMessage(err)})`,
+                    degradations: [run.degrade(record('grammar', 'pipeline_e_inference_failed', {
+                        part: { description: 'the inferred detail of the massing' }, intended: 'photo-inferred roof, bands, windows and texture repairs', fellTo: 'the clean massing with its tile ortho textures',
+                        provenanceAfter: 'vector-massing', reason: `pipeline E inference failed (${errorMessage(err)})`, cause: err, transient: true, runId, now: now(), reuses: ['resolve', 'tiles', 'trees-measure', 'remesh']
+                    }))]
+                })
+            });
+        };
+
         // ---------------- facade grammar (photo-inferred window lattices on the remeshed facades) ----------------
         const grammarRun = async (): Promise<void> => {
+            if (eState) { await eInferenceRun(eState); return; }
             if (!grammarOn) {
                 runner.skip('grammar', !facadeGrammarEnabled() ? 'facade grammar is off (SCRATCHBOX_FACADE_GRAMMAR=0)' : !visionAvailable ? 'no vision model is configured' : 'the photometric relief is off');
                 return;
@@ -2345,6 +2520,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 for (const id of from) runner.skip(id, reason);
             };
             if (!request.isolate) { skipRest('not an isolated structure'); return out; }
+            if (eState) {
+                const why = 'pipeline E built the structure from the vector massing (SCRATCHBOX_STAGED_PIPELINE=e)';
+                skipRest(why);
+                runner.skip('survey', why);
+                runner.skip('textures', 'pipeline E textures its faces from orthographic renders of the tile photo');
+                return out;
+            }
             if (!isolateMode) { skipRest('the structure could not be isolated, so it is shown without a rebuild'); return out; }
             if (!remeshed) { skipRest('the remesh failed, so there is no isolated scan to fit'); return out; }
             if (!isolateOk) { skipRest('tile_refine isolated a different structure than the one picked'); return out; }
