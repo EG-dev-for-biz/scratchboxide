@@ -50,6 +50,26 @@ export const LIGHTING_MODEL_FULL = 'gemini-3.1-flash-image';
 /** SCRATCHBOX_TEXTURE_LIGHTING=1 turns the correction on for a server (off by default). */
 export const lightingCorrectionEnabled = (): boolean => process.env.SCRATCHBOX_TEXTURE_LIGHTING === '1';
 
+/**
+ * Experiment arm (photo-match bake-off): the tile correction forced on. Every map of the layer's atlas is sent (a scan's island
+ * atlas too) and each answer that passes the detail lock is applied without the Street View agreement gate. Off by default;
+ * SCRATCHBOX_TEXTURE_LIGHTING_TILE_FORCE=1 turns it on, with SCRATCHBOX_TEXTURE_LIGHTING=1.
+ */
+export const lightingTileForced = (): boolean => process.env.SCRATCHBOX_TEXTURE_LIGHTING_TILE_FORCE === '1';
+
+/**
+ * Experiment knobs of the texture stage for bake-off arms (never set in production; each is part of the texture cache key):
+ * SCRATCHBOX_TEXTURE_STREET_VIEW=off textures from the tile photo alone, =keep keeps the no-fit rung's Street View without its
+ * held-out gate; SCRATCHBOX_TEXTURE_TARGET_LAYERS=l2,l2g textures exactly those layers, superseded or not.
+ */
+export function textureArmOptions(): { streetView?: 'off' | 'keep'; targetLayers?: string[]; key?: string } {
+    const sv = process.env.SCRATCHBOX_TEXTURE_STREET_VIEW;
+    const streetView = sv === 'off' || sv === 'keep' ? sv : undefined;
+    const targetLayers = (process.env.SCRATCHBOX_TEXTURE_TARGET_LAYERS ?? '').split(',').map(x => x.trim()).filter(Boolean);
+    const parts = [streetView ? `sv:${streetView}` : '', targetLayers.length ? `layers:${targetLayers.join(',')}` : '', lightingTileForced() ? 'tile-force/2' : ''].filter(Boolean);
+    return { ...(streetView ? { streetView } : {}), ...(targetLayers.length ? { targetLayers } : {}), ...(parts.length ? { key: `arm:${parts.join(';')}` } : {}) };
+}
+
 /** The models asked, in order (SCRATCHBOX_TEXTURE_LIGHTING_MODELS, comma separated); default Nano Banana Lite (cost and speed; the full model is a comparison arm). */
 export function lightingModels(): string[] {
     const env = (process.env.SCRATCHBOX_TEXTURE_LIGHTING_MODELS ?? '').split(',').map(s => s.trim()).filter(Boolean);
@@ -543,7 +563,7 @@ function tileChartJobs(atlas: { width: number; height: number; maps: Array<{ nod
     atlas.maps.forEach((m, mapIndex) => {
         // only fitted faces (a chart: its crop is a frontal render of the face); a scan island atlas is fragments of many
         // surfaces at once, which no image model can relight as one photo
-        if (m.chartId === undefined) return;
+        if (m.chartId === undefined && !lightingTileForced()) return;
         const [u0, v0, u1, v1] = m.atlasRect;
         const X0 = Math.max(0, Math.floor(u0 * W)), Y0 = Math.max(0, Math.floor(v0 * H)), X1 = Math.min(W, Math.ceil(u1 * W)), Y1 = Math.min(H, Math.ceil(v1 * H));
         let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
@@ -636,7 +656,7 @@ export async function correctTilePlaneLighting(input: {
     const { atlas, plane } = input;
     const W = plane.width, H = plane.height;
     const all = tileChartJobs(atlas, plane.rgb, plane.has);
-    const jobs = all.filter(j => j.gateable >= (input.minGateable ?? 256) && j.fill >= (input.minFill ?? 0.3));
+    const jobs = all.filter(j => j.gateable >= (input.minGateable ?? 256) && j.fill >= (input.minFill ?? (lightingTileForced() ? 0 : 0.3)));
     const report: TileLightingReport = { charts: all.length, sent: jobs.length, accepted: 0, rejected: 0, failed: 0, reverted: 0, unmeasured: 0, applied: false, records: [] };
     const results = await mapConcurrent(jobs, input.concurrency ?? LIGHTING_CONCURRENCY, job => lightingCorrectImage({ label: `tile ${job.label}`, image: job.crop, mask: job.mask, client: input.client, models: input.models, ...(input.signal ? { signal: input.signal } : {}) }), input.signal);
     report.records = results.map(r => r.record);
@@ -648,6 +668,25 @@ export async function correctTilePlaneLighting(input: {
     const after = Float32Array.from(plane.rgb);
     for (const { r, job } of accepted) applyLightingFieldSrgbFloat(after, job.w, job.h, r.field!, (x, y) => job.texelIndex[y * job.w + x]);
     const ex = plane.existing;
+    if (lightingTileForced()) {
+        // the experiment arm: every answer the detail lock passed is applied, with no Street View agreement gate
+        plane.rgb.set(after);
+        report.applied = true;
+        report.reason = 'forced on (experiment arm): applied without the Street View agreement gate';
+        const texels = new Uint8Array(W * H);
+        for (const { job } of accepted) for (let j = 0; j < job.texelIndex.length; j++) if (job.texelIndex[j] >= 0) texels[job.texelIndex[j]] = 1;
+        const models = [...new Set(accepted.map(k => k.r.record.modelUsed!).filter(Boolean))];
+        const conf = accepted.reduce((s, k) => s + (k.r.record.confidence ?? 0) * k.job.count, 0) / Math.max(1, accepted.reduce((s, k) => s + k.job.count, 0));
+        const note = `photo, lighting corrected by ${models.join(', ')} (forced, ungated experiment)`;
+        return {
+            texels, report,
+            provenance: {
+                source: 'tile-photo-transfer', label: 'photo-inferred',
+                method: `tile photo transfer, ${note}: the tile photo's own texels times a smooth gain field from the model's shadowless relighting, detail-locked; ${accepted.length} of ${jobs.length} maps; not gated on Street View agreement`,
+                lightingCorrection: { models, note, confidence: Math.round(conf * 1000) / 1000, images: accepted.length }
+            }
+        };
+    }
     if (!ex) { report.reason = 'there are no Street View texels to judge the tile correction against'; return { report }; }
     const overlap = new Uint8Array(W * H);
     for (let i = 0; i < W * H; i++) if (plane.has[i] && ex.albedo[i * 4 + 3]) { const c = input.unpackRung(i); if (c.covered && c.rung <= 1) overlap[i] = 1; }

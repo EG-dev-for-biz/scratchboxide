@@ -128,7 +128,7 @@ import { buildSwitchLocationPills, switchLocationMarkdown } from '../../../commo
 import { summarizeStagedBuild, type StagedSummaryInput } from './staged-summary';
 import { palettesFromSurvey, photoTierEnabled, textureLayer, TEXTURE_PASS_VERSION, type TextureLayerOutcome } from './texture-pass';
 import { prepareTextureSources, type TextureSourcesInput } from './texture-sources';
-import { correctViewsLighting, lightingModels, lightingPromptVariant, type LightingCorrectedView } from './texture-lighting';
+import { correctViewsLighting, lightingModels, lightingPromptVariant, textureArmOptions, type LightingCorrectedView } from './texture-lighting';
 import { TextureWorkerPool, textureWorkersEnabled } from './texture-worker-pool';
 import { eventLoopStats, runBlockTracer } from './event-loop-stats';
 import type { EnhanceModelClient } from './texture-enhance';
@@ -1560,12 +1560,16 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     // a layer another layer supersedes is hidden once that one reveals, so it is skipped unless it is the ground
                     const fitSurfaces = () => (rebuildOut.refit ?? rebuildOut.fit)?.value.surfaces.filter(x => x.chart).map(x => ({ id: x.id, chart: x.chart })) ?? [];
                     const handled = new Set<string>();
+                    const arm = textureArmOptions();
+                    const armTargets = arm.targetLayers;
                     const pick = (): Array<{ layer: StagedLayer; file: string; surfaces?: Array<{ id: string; chart: any }>; late?: boolean }> => {
                         const live = run.state.layers.filter(l => !l.retired);
                         const superseded = new Set(live.flatMap(l => l.supersedes));
                         return live.filter(l => {
                             const meta = run.layerMeta[l.objectId];
                             if (handled.has(l.objectId) || l.textured || meta?.vegetation || !(l.counts.triangles > 0)) return false;
+                            // bake-off arms (SCRATCHBOX_TEXTURE_TARGET_LAYERS, experiment only): exactly the named layers, superseded or not
+                            if (armTargets) return armTargets.includes(l.layer) && fs.existsSync(path.join(cache.modelsDir, path.basename(l.url)));
                             if (superseded.has(l.objectId) && !meta?.isGround) return false;
                             return fs.existsSync(path.join(cache.modelsDir, path.basename(l.url)));
                         }).map(l => ({ layer: l, file: path.join(cache.modelsDir, path.basename(l.url)), surfaces: fitSurfaces() }));
@@ -1596,8 +1600,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const warming = texturePool?.warm();
                     const sources = texturePool ? await texturePool.prepare(sourcesInput, io.signal) : prepareTextureSources(sourcesInput, now);
                     await warming;
-                    const { views, failures, wideViews, tile, tileUnavailable, tileLoadMs, tileSha, occluder, context } = sources;
-                    const viewsUnavailable = images.length ? (views.length ? undefined : `none of the ${images.length} grounding images decoded (${failures[0] ?? ''})`)
+                    const { views: sourceViews, failures, wideViews, tile, tileUnavailable, tileLoadMs, tileSha, occluder, context } = sources;
+                    // bake-off arms (SCRATCHBOX_TEXTURE_STREET_VIEW=off, experiment only): the layers are textured from the tile photo alone
+                    const views = arm.streetView === 'off' ? [] : sourceViews;
+                    const viewsUnavailable = arm.streetView === 'off' ? 'Street View is turned off for this build (SCRATCHBOX_TEXTURE_STREET_VIEW=off, an experiment arm)' : images.length ? (views.length ? undefined : `none of the ${images.length} grounding images decoded (${failures[0] ?? ''})`)
                         : evidence ? `the Street View stage ${evidence.status === 'skipped' ? 'was skipped' : 'returned no image'}` : (visionAvailable ? 'the Street View stage did not run' : 'no vision model is configured, so no Street View close-ups were fetched');
                     const palette = palettesFromSurvey(run.state.materialHints?.faces);
                     const bestSample = Math.min(...images.map(i => i.nativeSampleM).filter(v => v > 0), ...(tile && Number.isFinite(tile.texelSizeM) && !views.length ? [tile.texelSizeM] : []));
@@ -1651,7 +1657,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const textureOne = async (target: typeof targets[number]) => {
                         handled.add(target.layer.objectId);
                         const clay = fs.readFileSync(target.file);
-                        const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), wideHeld.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048, surfacesKey(target.surfaces), ...(!(rebuildOut.refit ?? rebuildOut.fit) && views.length ? ['no-fit-held-out-gate/2'] : []), ...(lightingClient ? [`light:${lightingModelIds.join(',')}:${lightingPromptVariant()}:${lightingViews?.length ?? 0}`] : []));
+                        const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), wideHeld.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048, surfacesKey(target.surfaces), ...(!(rebuildOut.refit ?? rebuildOut.fit) && views.length ? ['no-fit-held-out-gate/2'] : []), ...(lightingClient ? [`light:${lightingModelIds.join(',')}:${lightingPromptVariant()}:${lightingViews?.length ?? 0}`] : []), ...(arm.key ? [arm.key] : []));
                         const entry = await cache.run<Omit<TextureLayerOutcome, 'glb'>>('textures', key, async dir => {
                             const bake = (bakeViews: typeof views, bakeUnavailable: string | undefined) => (texturePool ? texturePool.textureLayer.bind(texturePool) : textureLayer)({ layerKey: target.layer.layer, clayGlb: clay, ...(target.surfaces?.length ? { surfaces: target.surfaces } : {}) }, {
                                 views: bakeViews, ...(wideViews.length ? { photoTierViews: wideViews } : {}), ...(photoTierEnabled() ? { photoTier: true } : {}), ...(bakeUnavailable ? { viewsUnavailable: bakeUnavailable } : {}), occluder, ...(context.indices.length ? { context } : {}), observedSurface: TEXTURE_OBSERVED_SURFACE, poseEdgeGuardShare: TEXTURE_POSE_EDGE_GUARD_SHARE,
@@ -1668,7 +1674,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             // enough held-out evidence: when fewer than NO_FIT_MIN_SCORED_VIEWS held-out views score the layer, or they find
                             // its edges no nearer their own than the clay's, the layer is baked again from the tile photo, and says why
                             const heldOut = out.bundle.fit;
-                            const noFit = !(rebuildOut.refit ?? rebuildOut.fit) && views.length > 0;
+                            // bake-off arms (SCRATCHBOX_TEXTURE_STREET_VIEW=keep, experiment only): the no-fit rung's Street View is kept without its held-out gate
+                            const noFit = !(rebuildOut.refit ?? rebuildOut.fit) && views.length > 0 && arm.streetView !== 'keep';
                             const scored = heldOut && typeof heldOut.chamferPx === 'number' && typeof heldOut.clayChamferPx === 'number' ? heldOut : undefined;
                             const why = !noFit ? undefined
                                 : !scored ? 'no held-out view could score it'

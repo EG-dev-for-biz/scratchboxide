@@ -419,7 +419,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
                 timingsMs.tileLighting = Date.now() - tl;
                 if (r.report.applied) modelsUsed.push(...(r.provenance?.lightingCorrection?.models ?? []));
                 else degradations.push({ stage: 'lighting', reasonCode: 'lighting_tile_no_gain', layerKey: layer.layerKey, reason: `The tile photo keeps its own lighting on this layer: ${r.report.reason}.` });
-                progress(`tile lighting: ${r.report.accepted} of ${r.report.sent} charts relit, ${r.report.reverted} set back; agreement with Street View CIEDE2000 median ${r.report.before?.medianDeltaE ?? 'n/a'} -> ${r.report.after?.medianDeltaE ?? 'n/a'}, p95 ${r.report.before?.p95DeltaE ?? 'n/a'} -> ${r.report.after?.p95DeltaE ?? 'n/a'}; ${r.report.applied ? 'applied' : 'not applied'}`);
+                progress(`tile lighting: ${r.report.accepted} of ${r.report.sent} charts relit (${r.report.charts} maps in the atlas), ${r.report.reverted} set back; agreement with Street View CIEDE2000 median ${r.report.before?.medianDeltaE ?? 'n/a'} -> ${r.report.after?.medianDeltaE ?? 'n/a'}, p95 ${r.report.before?.p95DeltaE ?? 'n/a'} -> ${r.report.after?.p95DeltaE ?? 'n/a'}; ${r.report.applied ? 'applied' : 'not applied'}`);
                 return r.texels && r.provenance ? { texels: r.texels, provenance: r.provenance } : undefined;
             } : undefined;
             let transfer = await transferTilePhoto({ atlas, tileSample: src.tile.sample, surface: src.tile, maxDistanceM, existing: planes, signal: src.signal, ...(correctCandidates ? { correctCandidates } : {}) } as Parameters<typeof transferTilePhoto>[0]);
