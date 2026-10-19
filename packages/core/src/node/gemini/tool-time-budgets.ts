@@ -44,6 +44,9 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
     build_3d_object_from_reference: { maxMs: 50 * MIN },
     // The first call compiles the native binary (up to 10 min) before the run (up to 5 min).
     tile_refine: { maxMs: 16 * MIN },
+    // Street View discovery and fetch, edge registration (worker thread), then several judge calls per view; reports
+    // progress at each step and after every judged view.
+    photo_match_evaluate: { maxMs: 30 * MIN, idleMs: 10 * MIN },
     // Leaf-tile extraction rounds, tree measurement, the mask vote's vision calls and tile_refine (each first-use build
     // up to 10 min); reports progress between steps.
     location_isolate_structure: { maxMs: 30 * MIN, idleMs: 15 * MIN },
