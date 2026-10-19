@@ -198,7 +198,11 @@ export function readTileTriangles(glb: Uint8Array): TileTriangles {
                 const texInfo = pbr?.baseColorTexture;
                 const ti = hasUv && texInfo && (texInfo.texCoord ?? 0) === 0 ? textureFor(texInfo.index) : -1;
                 const f = pbr?.baseColorFactor || [1, 1, 1, 1];
-                if (ti < 0 && !pbr?.baseColorFactor) continue; // no colour information: not a photo surface
+                // an untextured surface's colour is the base colour factor times its vertex colours (COLOR_0, glTF 2.0
+                // 3.9.2), e.g. SB-Veggie's bark and leaves; averaged over the triangle's corners
+                const C = ti < 0 && prim.attributes.COLOR_0 !== undefined ? readAccessor(json, bin, prim.attributes.COLOR_0) : undefined;
+                const cw = C ? C.length / nv : 0;
+                if (ti < 0 && !pbr?.baseColorFactor && !C) continue; // no colour information: not a photo surface
                 const W = new Float64Array(nv * 3);
                 for (let i = 0; i < nv; i++) {
                     const x = P[i * 3], y = P[i * 3 + 1], z = P[i * 3 + 2];
@@ -220,7 +224,8 @@ export function readTileTriangles(glb: Uint8Array): TileTriangles {
                     else uv.push(0, 0, 0, 0, 0, 0);
                     nrm.push(nx, ny, nz);
                     texIdx.push(ti);
-                    flat.push(f[0], f[1], f[2]);
+                    if (C) for (let k = 0; k < 3; k++) flat.push(f[k] * (C[a * cw + k] + C[b * cw + k] + C[c * cw + k]) / 3);
+                    else flat.push(f[0], f[1], f[2]);
                 }
             }
         }

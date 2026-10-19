@@ -22,7 +22,8 @@ import {
     aggregateRuns, clayJudgePrompt, composeGrid, coverageMask, judgePrompt, judgeView, judgeViewClay, parseClayJudgeReply, parseJudgeReply, perceptualScores, PHOTO_MATCH_BACKGROUND, PHOTO_MATCH_CLAY,
     renderPng, renderTriangles, seededShuffle, type JudgeClient
 } from '../src/node/3d-engine/staged-location/photo-match-eval';
-import type { TileTriangles } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
+import { readTileTriangles, type TileTriangles } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
+import { assembleGlb } from '../src/node/3d-engine/staged-location/glb-bytes';
 
 const SHOTS = path.resolve(__dirname, '../../../test-results/screenshots/photo_match');
 
@@ -259,5 +260,33 @@ describe('photo-match evaluator', () => {
         expect(parseJudgeReply('{"renders":[{"image":1,"shape":6}]}', 1).problems.length).toBe(1);
         const textured = await judgeView({ client: { async generate() { return { model: 'm', response: { candidates: [{ content: { parts: [{ text: '{"renders":[{"image":1,"shape":5,"materials":5,"detail":5,"errors":5,"overall":5}]}' }] } }] } }; } }, place: 'x', photo: { bytes: renderPng(right), mimeType: 'image/png' }, renders: [{ armId: 'a', png: renderPng(right) }], repeats: 1, seed: 's' });
         expect(textured[0].scores.a.overall).toBe(5);
+    });
+
+    it('reads vertex colours on untextured surfaces (SB-Veggie trees): the base colour factor times COLOR_0', () => {
+        // one triangle, clay base colour, its corners green (float RGB) and one blue (normalized RGBA ubyte)
+        const P = Float32Array.from([0, 0, 5, 1, 0, 5, 0, 1, 5]);
+        const C = Float32Array.from([0, 1, 0, 0, 1, 0, 0, 1, 0]);
+        const C2 = Uint8Array.from([0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255]);
+        const bin = Buffer.concat([Buffer.from(P.buffer), Buffer.from(C.buffer), Buffer.from(C2)]);
+        const json = {
+            asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0, 1] }], nodes: [{ mesh: 0 }, { mesh: 1 }],
+            meshes: [{ primitives: [{ attributes: { POSITION: 0, COLOR_0: 1 }, material: 0 }] }, { primitives: [{ attributes: { POSITION: 0, COLOR_0: 2 }, material: 0 }] }],
+            materials: [{ pbrMetallicRoughness: { baseColorFactor: [0.5, 0.6, 0.7, 1] } }],
+            accessors: [
+                { bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 5], max: [1, 1, 5] },
+                { bufferView: 1, componentType: 5126, count: 3, type: 'VEC3' },
+                { bufferView: 2, componentType: 5121, normalized: true, count: 3, type: 'VEC4' }
+            ],
+            bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: 36 }, { buffer: 0, byteOffset: 36, byteLength: 36 }, { buffer: 0, byteOffset: 72, byteLength: 12 }],
+            buffers: [{ byteLength: bin.length }]
+        };
+        const t = readTileTriangles(assembleGlb(json, bin));
+        expect(t.texture.length).toBe(2);
+        expect(Array.from(t.flatLinear.subarray(0, 3)).map(v => Math.round(v * 100) / 100)).toEqual([0, 0.6, 0]);
+        expect(Array.from(t.flatLinear.subarray(3, 6)).map(v => Math.round(v * 100) / 100)).toEqual([0, 0, 0.7]);
+        // and the renders show it (the trees no longer come out as clay-grey blobs in the textured arm)
+        const r = renderTriangles([t], camera(64, 48, 60));
+        const c = px(r, 34, 22);
+        expect(c[2]).toBeGreaterThan(c[0] + 40);
     });
 });
