@@ -1021,6 +1021,14 @@ const HUD_SEGMENT_ACTIVE_STYLE: React.CSSProperties = {
 };
 
 /** Scene data after an external (agent / pipeline) `data` update, or `prev` itself when nothing relevant changed. */
+/** Name of the node a generated model (pythonGenerator / cppGenerator base64) is drawn under. */
+const GENERATED_ROOT_NAME = 'scratchbox-cpp-generated-root';
+
+/** The objects[] entry a generated model is saved as (its hero file), which draws it once the base64 copy is gone. */
+function generatedHeroObjectId(scene: Scene3DData): string | undefined {
+    return (scene.objects || []).find(o => o.content?.metadata?.role === 'hero')?.id;
+}
+
 function mergeExternalSceneData(prev: Scene3DData, data: Scene3DData): Scene3DData {
     const hasNewPython = data.pythonGenerator && data.pythonGenerator.sourceCode !== prev.pythonGenerator?.sourceCode;
     const hasNewCpp = data.cppGenerator && data.cppGenerator.sourceCode !== prev.cppGenerator?.sourceCode;
@@ -2021,6 +2029,11 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             if (custom?.parent) return custom;
             const external = externalObjectsMapRef.current.get(id);
             if (external?.parent) return external;
+            // a generated model's hero object is drawn from its base64 copy while that is loaded
+            if (id === generatedHeroObjectId(sceneDataRef.current)) {
+                const generated = scene.getObjectByName(GENERATED_ROOT_NAME);
+                if (generated) return generated;
+            }
             let found: THREE.Object3D | undefined;
             scene.traverse(child => {
                 if (!found && (child.name === id || child.userData?.id === id)) found = child;
@@ -2967,7 +2980,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                         const sphere = new THREE.Box3().setFromObject(model).getBoundingSphere(new THREE.Sphere());
                         if (Number.isFinite(sphere.radius) && sphere.radius > 0) setGeneratedContentRadius(Number(sphere.radius.toPrecision(2)));
                     }
-                    if (attach) autoFrameIfNeeded(isGeneratedHero);
+                    // As for its base64 copy (effect 5b): the first model of a mount keeps a saved pose or a lens's pose.
+                    const keepPose = isGeneratedHero && !generatedFramedOnceRef.current && keepsStoredPose(sceneDataRef.current.camera);
+                    if (attach && isGeneratedHero) generatedFramedOnceRef.current = true;
+                    if (attach) autoFrameIfNeeded(isGeneratedHero && !keepPose);
                 },
                 (evt: ProgressEvent) => {
                     if (pending.get(obj.id) !== uri) return; // superseded by a newer URL
@@ -3352,7 +3368,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             let params: { focusObjectId: string } | { focusDistanceMeters: number; focusObjectId: null };
             let label: string;
             const target = event.altKey ? (findExternalObjectRoot(hit.object) || resolveSelectableObject(hit.object, stack.scene)) : null;
-            const objectId = target ? (findExternalObjectRoot(target) === target ? externalObjectIdOf(target) : target.name) : '';
+            let objectId = target ? (findExternalObjectRoot(target) === target ? externalObjectIdOf(target) : target.name) : '';
+            // the generated model is saved as its hero object: name that, so the focus survives a reload
+            if (objectId === GENERATED_ROOT_NAME) objectId = generatedHeroObjectId(sceneDataRef.current) ?? objectId;
             if (objectId) {
                 params = { focusObjectId: objectId };
                 label = `Camera: focus on ${objectId}`;
