@@ -17,11 +17,13 @@
  *
  *   - framing: the answer has the aspect it was asked for (within MAX_ASPECT_DRIFT), and the corrective warp (enhance.ts
  *     alignPlate) brought it within the gross bound below;
- *   - storeys and bays: counted by the vision model on the tile ortho and on the plate with the same prompt (countPrompt),
- *     agreeing within COUNT_TOLERANCE of the tile's count, and always within one. The melted tile's storeys rarely repeat
- *     cleanly enough for an autocorrelation count (Puck's, normalised 0.1-0.2), so the counts are read, not measured; a
- *     wall whose counts could not be read says so and is not held to them;
- *   - colour: the wall's median CIELAB colour within MAX_WALL_COLOUR_DE (CIEDE2000) of the tile's (one colour family);
+ *   - storeys and bays: counted by the vision model on the tile ortho and on the plate in one look (countPrompt: both
+ *     images, the same definitions), agreeing within COUNT_TOLERANCE of the tile's count, and always within one. The melted
+ *     tile's storeys rarely repeat cleanly enough for an autocorrelation count (Puck's, normalised 0.1-0.2), and counted
+ *     apart the soft tile and the crisp plate were read with different definitions (Puck wall 17: 3 bays on the tile, the
+ *     ground floor's arches; 9 on the plate), so they are read together; a wall whose counts could not be read says so and
+ *     is not held to them;
+ *   - colour: the wall's median CIELAB colour in the tile's colour family (MAX_FAMILY_DE, lightness weighted down);
  *   - a loose gross-failure bound on the reported alignment (GROSS_MAX_CHAMFER_PX, GROSS_MAX_LOST_SHARE), chosen from the
  *     round-4 and round-5 plates (docs/processes/staged_location_pipeline_e.md, round 5) so that the redraws the user chose
  *     pass and a broken answer does not.
@@ -47,39 +49,56 @@ export const GROSS_MAX_LOST_SHARE = 0.6;
 /** Storey and bay counts agree within this share of the tile's count (and always within one). */
 export const COUNT_TOLERANCE = 0.15;
 /**
- * The wall's median colour may move at most this far (CIEDE2000) from the tile's: the same colour family. A redraw lit
- * evenly, or guided by a Street View photo, moves it (rounds 4-5: up to 18); red brick redrawn as pale stone moves it 30+.
+ * The wall's colour family: the distance between the tile's and the plate's median CIELAB colour with lightness weighted
+ * by FAMILY_LIGHTNESS_WEIGHT (a redraw lit evenly lifts a shadowed or washed wall's lightness; repainting it moves hue and
+ * chroma) may be at most MAX_FAMILY_DE. The full CIEDE2000 distance is reported. Round 5: same-wall redraws 0.5-19.5
+ * (Jefferson wall 85, its washed pink tile redrawn as darker red brick); a different building drawn over a near-black wall
+ * (Puck wall 35) 25.7.
  */
-export const MAX_WALL_COLOUR_DE = 22;
+export const FAMILY_LIGHTNESS_WEIGHT = 0.3;
+export const MAX_FAMILY_DE = 22;
 
 export interface FacadeCounts { storeys: number; bays: number; conf: number }
-/** Reads a wall image's storey and bay counts (the vision model in a build; a stub in tests). */
-export type FacadeCounter = (png: Uint8Array, widthM: number, heightM: number) => Promise<FacadeCounts>;
+/**
+ * Reads the storey and bay counts of the tile and of the plate in one look (the vision model in a build, a stand-in in
+ * tests): both images side by side with the same definitions, so a definition read one way on the soft tile and another on
+ * the crisp plate does not count as a difference.
+ */
+export type FacadeCounter = (tilePng: Uint8Array, platePng: Uint8Array, widthM: number, heightM: number) => Promise<{ tile: FacadeCounts; plate: FacadeCounts }>;
 
 export function countPrompt(widthM: number, heightM: number): string {
     return [
-        `This image is a straight-on (orthographic) texture of one exterior wall of a building, ${widthM.toFixed(1)} m wide and ${heightM.toFixed(1)} m tall; up is up. Uniform grey areas are not covered.`,
-        'Count two things on the wall as drawn:',
-        '- "storeys": the floors of the wall from the ground to the top of the wall (a tall ground floor counts once; a roof, parapet or cornice is not a storey);',
+        `Two images follow. Both are straight-on (orthographic) textures of one exterior wall of a building, ${widthM.toFixed(1)} m wide and ${heightM.toFixed(1)} m tall, at the same scale; up is up; uniform grey areas are not covered.`,
+        'The first is a soft photogrammetric scan texture of the real wall (blurred, smeared, with street clutter at the bottom). The second is an image model\'s sharper redraw of it.',
+        'For each image separately, count with the same definitions:',
+        '- "storeys": the floors of the wall from the ground to the top of the wall (a tall ground floor counts once; string courses, bands of stone or brick, a roof, parapet or cornice are not storeys);',
         '- "bays": the vertical columns of windows or openings across the whole width, counted at the most typical upper storey (an opening holding a group of windows between two piers counts once).',
-        'Reply with JSON only: {"storeys": <integer>, "bays": <integer>, "conf": <0-100>}.'
+        'Count what each image shows; do not assume they agree.',
+        'Reply with JSON only: {"first": {"storeys": <integer>, "bays": <integer>}, "second": {"storeys": <integer>, "bays": <integer>}, "conf": <0-100>}.'
     ].join('\n');
 }
 
-export function parseCountReply(text: string): FacadeCounts {
-    const m = text.match(/\{[\s\S]*\}/);
-    if (!m) throw new Error(`no JSON in the count reply: ${text.slice(0, 120)}`);
-    const j = JSON.parse(m[0]) as Record<string, unknown>;
-    const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v) : NaN);
-    const out = { storeys: n(j.storeys), bays: n(j.bays), conf: typeof j.conf === 'number' ? j.conf : 50 };
-    if (!Number.isFinite(out.storeys) || !Number.isFinite(out.bays)) throw new Error(`the count reply has no storeys or bays: ${m[0].slice(0, 120)}`);
+function countsOf(v: unknown, conf: number, which: string): FacadeCounts {
+    const j = (v ?? {}) as Record<string, unknown>;
+    const n = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) && x >= 0 ? Math.round(x) : NaN);
+    const out = { storeys: n(j.storeys), bays: n(j.bays), conf };
+    if (!Number.isFinite(out.storeys) || !Number.isFinite(out.bays)) throw new Error(`the count reply has no storeys or bays for the ${which} image`);
     return out;
 }
 
-/** The production counter: one vision call through the chain (temperature 0), remembered when it parsed. */
+export function parseCountReply(text: string): { tile: FacadeCounts; plate: FacadeCounts } {
+    const m = text.match(/\{[\s\S]*\}/);
+    if (!m) throw new Error(`no JSON in the count reply: ${text.slice(0, 120)}`);
+    const j = JSON.parse(m[0]) as Record<string, unknown>;
+    const conf = typeof j.conf === 'number' ? j.conf : 50;
+    return { tile: countsOf(j.first, conf, 'first'), plate: countsOf(j.second, conf, 'second') };
+}
+
+/** The production counter: one vision call through the chain (temperature 0) with both images, remembered when it parsed. */
 export function visionFacadeCounter(chain: VisionModelChain<string>): FacadeCounter {
-    return async (png, widthM, heightM) => {
-        const r = await chain.generate({ contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: Buffer.from(png).toString('base64') } }, { text: countPrompt(widthM, heightM) }] }], config: { responseMimeType: 'application/json', temperature: 0 } }, { stage: 'grammar' });
+    return async (tilePng, platePng, widthM, heightM) => {
+        const img = (b: Uint8Array) => ({ inlineData: { mimeType: 'image/png', data: Buffer.from(b).toString('base64') } });
+        const r = await chain.generate({ contents: [{ role: 'user', parts: [{ text: countPrompt(widthM, heightM) }, { text: 'First image (the scan texture):' }, img(tilePng), { text: 'Second image (the redraw):' }, img(platePng)] }], config: { responseMimeType: 'application/json', temperature: 0 } }, { stage: 'grammar' });
         const text = r.response.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '';
         const value = parseCountReply(text);
         r.remember();
@@ -118,7 +137,7 @@ export interface IdentityGate {
     gross: { chamferPx: number; lostShare: number; passed: boolean };
     storeys: CountCheck;
     bays: CountCheck;
-    colour: { tileLab: [number, number, number]; plateLab: [number, number, number]; de: number; passed: boolean };
+    colour: { tileLab: [number, number, number]; plateLab: [number, number, number]; de: number; familyDe: number; passed: boolean };
 }
 
 /**
@@ -138,13 +157,14 @@ export function identityGate(input: Uint8Array, aligned: Uint8Array, W: number, 
     const bays = countCheck('bays', c?.tile?.bays, c?.plate?.bays, c?.unread);
     const tileLab = medianLab(input, W, H, use), plateLab = medianLab(aligned, W, H, use);
     const de = Math.round(ciede2000(tileLab, plateLab) * 10) / 10;
-    const colour = { tileLab: tileLab.map(v => Math.round(v * 10) / 10) as [number, number, number], plateLab: plateLab.map(v => Math.round(v * 10) / 10) as [number, number, number], de, passed: de <= MAX_WALL_COLOUR_DE };
+    const familyDe = Math.round(Math.hypot(FAMILY_LIGHTNESS_WEIGHT * (plateLab[0] - tileLab[0]), plateLab[1] - tileLab[1], plateLab[2] - tileLab[2]) * 10) / 10;
+    const colour = { tileLab: tileLab.map(v => Math.round(v * 10) / 10) as [number, number, number], plateLab: plateLab.map(v => Math.round(v * 10) / 10) as [number, number, number], de, familyDe, passed: familyDe <= MAX_FAMILY_DE };
     const passed = aspect.passed && gross.passed && storeys.passed && bays.passed && colour.passed;
     const parts = [
         `aspect ${aspect.answered} for ${aspect.asked}${aspect.passed ? '' : ` (more than ${100 * MAX_ASPECT_DRIFT}% off: reframed)`}`,
         `edge chamfer ${a.chamferPx.toFixed(2)} px, ${(100 * a.lostShare).toFixed(0)}% of the tile's edges lost (reported; gross failure above ${GROSS_MAX_CHAMFER_PX} px or ${100 * GROSS_MAX_LOST_SHARE}%${gross.passed ? '' : ': a broken answer'})`,
         storeys.why, bays.why,
-        `wall colour ${de.toFixed(1)} dE00 from the tile's${colour.passed ? '' : ` (more than ${MAX_WALL_COLOUR_DE}: another colour family)`}`
+        `wall colour ${de.toFixed(1)} dE00 from the tile's, ${familyDe.toFixed(1)} in hue and chroma${colour.passed ? '' : ` (more than ${MAX_FAMILY_DE}: another colour family)`}`
     ];
     return { passed, why: parts.join('; '), aspect, gross, storeys, bays, colour };
 }

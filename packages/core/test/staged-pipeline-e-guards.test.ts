@@ -183,12 +183,13 @@ describe('enhanced mode: the invention and erasure check', () => {
 
     it('rejects the whole wall when the flagged area is too large', async () => {
         const input = soften(wall());
-        // the left half of the wall repainted a cold grey: the windows stay, the material does not
-        const plate = wall((xm, ym) => (xm < 16 && !(ym > 3.5 && ((xm % 3) / 3) > 0.3 && ((xm % 3) / 3) < 0.7 && (((ym - 3.5) % 3.5) / 3.5) > 0.2 && (((ym - 3.5) % 3.5) / 3.5) < 0.8) ? [128, 134, 142] : undefined));
+        // the left half of the wall repainted a dark burnt brown: the windows stay, the material does not (in the identity
+        // gate's colour family, where lightness counts little; the region audit is what rejects it)
+        const plate = wall((xm, ym) => (xm < 16 && !(ym > 3.5 && ((xm % 3) / 3) > 0.3 && ((xm % 3) / 3) < 0.7 && (((ym - 3.5) % 3.5) / 3.5) > 0.2 && (((ym - 3.5) % 3.5) / 3.5) < 0.8) ? [92, 58, 44] : undefined));
         const g = guardPlate(input, plate, W, H, all(), PX);
         expect(g.audit.flaggedShare).toBeGreaterThan(MAX_FLAGGED_SHARE);
         expect(g.reject).toBe(true);
-        // enhanceWall: the same answer through a model client is accepted by the alignment gate alone, and rejected with the guards
+        // enhanceWall: the same answer through a model client is accepted by the identity gate alone, and rejected with the guards
         const client = async (r: PlateRequest) => ({ bytes: new Uint8Array(encodePng(r.width, r.height, Buffer.from(padTo(plate, r.width, r.height)), 4)), modelUsed: 'fake' });
         const mk = () => ({ width: W, height: H, rgba: input.slice(), source: new Uint8Array(W * H) });
         const off = await enhanceWall(face(), mk(), all(), { client, models: ['fake'], locationName: 'X', source: 3, guards: false });

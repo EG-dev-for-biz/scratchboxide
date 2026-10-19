@@ -222,13 +222,17 @@ export interface EnhanceIdentityRecord {
     storeys: { tile?: number; plate?: number; measured: boolean; passed: boolean };
     bays: { tile?: number; plate?: number; measured: boolean; passed: boolean };
     colourDe: number;
+    /** Hue and chroma distance (lightness weighted down) of the median colours, and the medians (CIELAB). */
+    familyDe: number;
+    tileLab: [number, number, number];
+    plateLab: [number, number, number];
     colourPassed: boolean;
     grossPassed: boolean;
 }
 
 export function identityRecord(g: IdentityGate): EnhanceIdentityRecord {
     const r = (c: IdentityGate['storeys']) => ({ ...(c.tile !== undefined ? { tile: c.tile } : {}), ...(c.plate !== undefined ? { plate: c.plate } : {}), measured: c.measured, passed: c.passed });
-    return { passed: g.passed, aspectDrift: g.aspect.drift, storeys: r(g.storeys), bays: r(g.bays), colourDe: g.colour.de, colourPassed: g.colour.passed, grossPassed: g.gross.passed };
+    return { passed: g.passed, aspectDrift: g.aspect.drift, storeys: r(g.storeys), bays: r(g.bays), colourDe: g.colour.de, familyDe: g.colour.familyDe, tileLab: g.colour.tileLab, plateLab: g.colour.plateLab, colourPassed: g.colour.passed, grossPassed: g.gross.passed };
 }
 
 export interface EnhanceWallRecord {
@@ -311,8 +315,7 @@ export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Arra
     photoCheckOnly?: boolean;
     /** Reads storey and bay counts of the tile and of the plate (plate-identity.ts); without it the counts are not checked. */
     counter?: FacadeCounter;
-    /** The tile's counts when already read (the redraw without the photo reuses them). */
-    tileCounts?: Promise<FacadeCounts>;
+
     /**
      * Where answers are kept, keyed by everything the model is sent (models, prompt, images): the same wall with the same
      * inputs gets the same plate on every rebuild.
@@ -335,9 +338,6 @@ export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Arra
     let answer: PlateAnswer;
     const image = new Uint8Array(encodePng(padded.width, padded.height, Buffer.from(padded.rgba), 4));
     const widthM = t.width * f.pixel, heightM = t.height * f.pixel;
-    // the tile's storeys and bays, read while the model redraws (the same prompt reads the plate's after)
-    const tileCounts = opts.tileCounts ?? (opts.counter ? opts.counter(new Uint8Array(encodePng(sw, sh, Buffer.from(small.rgba), 4)), widthM, heightM) : undefined);
-    tileCounts?.catch(() => undefined);
     const request: PlateRequest = { prompt, image, width: padded.width, height: padded.height, ...(ref ? { reference: ref } : {}), ...(guide ? { streetView: sv!.crop } : {}), models: opts.models, ...(opts.signal ? { signal: opts.signal } : {}) };
     try {
         answer = await cachedPlate(opts.cacheDir, request, opts.client);
@@ -353,12 +353,15 @@ export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Arra
     const back = resizeRgba({ width: sw, height: sh, rgba: inner }, t.width, t.height).rgba;
     const g = alignPlate(t.rgba, back, t.width, t.height, use, f.pixel);
     let counts: { tile?: FacadeCounts; plate?: FacadeCounts; unread?: string } | undefined;
-    if (opts.counter && tileCounts) {
+    if (opts.counter) {
+        // the tile as sent and the aligned plate at the same size, counted together
         const plateSmall = resizeRgba({ width: t.width, height: t.height, rgba: g.aligned }, sw, sh);
-        const [tc, pc] = await Promise.allSettled([tileCounts, opts.counter(new Uint8Array(encodePng(sw, sh, Buffer.from(plateSmall.rgba), 4)), widthM, heightM)]);
-        counts = { ...(tc.status === 'fulfilled' ? { tile: tc.value } : {}), ...(pc.status === 'fulfilled' ? { plate: pc.value } : {}) };
-        const bad = [tc, pc].filter(x => x.status === 'rejected') as PromiseRejectedResult[];
-        if (bad.length) counts.unread = `the count could not be read: ${String((bad[0].reason as Error)?.message ?? bad[0].reason).slice(0, 120)}`;
+        try {
+            counts = await opts.counter(new Uint8Array(encodePng(sw, sh, Buffer.from(small.rgba), 4)), new Uint8Array(encodePng(sw, sh, Buffer.from(plateSmall.rgba), 4)), widthM, heightM);
+        } catch (err) {
+            if (opts.signal?.aborted) throw err;
+            counts = { unread: `the count could not be read: ${(err as Error).message.slice(0, 120)}` };
+        }
     } else counts = { unread: 'no vision model to count with' };
     const idg = identityGate(t.rgba, g.aligned, t.width, t.height, use, { askedAspect: padded.width / padded.height, answeredAspect: dec.width / dec.height, chamferPx: g.chamferPx, lostShare: g.lostShare, counts });
     const why0 = `corrective warp ${g.dx}, ${g.dy} px, scale ${g.scale.toFixed(3)}; ${idg.why}`;
@@ -366,7 +369,7 @@ export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Arra
     if (!idg.passed && guide && opts.retryWithoutPhoto !== false) {
         // the photo pulled the redraw away from the wall: one more redraw without it; the tile check and the check against the
         // photo still apply
-        const again = await enhanceWall(f, t, use, { ...opts, photoCheckOnly: true, ...(tileCounts ? { tileCounts } : {}) });
+        const again = await enhanceWall(f, t, use, { ...opts, photoCheckOnly: true });
         return { ...again, ms: Date.now() - t0, streetView: { ...(again.streetView ?? svRec!), guidedRejected: rec.why } };
     }
     if (!idg.passed) return rec;

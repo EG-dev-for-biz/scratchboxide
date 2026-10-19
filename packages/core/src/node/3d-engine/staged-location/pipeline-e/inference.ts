@@ -125,6 +125,17 @@ export function writeWallOrthoIndex(run: MassingRun, minAreaM2 = 80): string {
     return run.dir;
 }
 
+/**
+ * The face of the first solid a face of a rebuilt solid comes from: the same key, or the longest key it extends (the native
+ * solid splits a wall in pieces `<key>:0`, `<key>:1` when a changed roof or a raised block cuts it; the pieces lie in its
+ * plane and take its texture).
+ */
+export function parentFace<F extends { key: string }>(faces: F[], key: string): F | undefined {
+    let best: F | undefined;
+    for (const f of faces) if ((key === f.key || key.startsWith(`${f.key}:`)) && (!best || f.key.length > best.key.length)) best = f;
+    return best;
+}
+
 /** A face texture moved from one frame to another (same face key): nearest sampling by (s, t). */
 export function reframe(t: FaceTexture, a: MassingFace, b: MassingFace): FaceTexture {
     if (a.width === b.width && a.height === b.height && Math.abs(a.orthoSMin - b.orthoSMin) < 1e-6 && Math.abs(a.orthoTMax - b.orthoTMax) < 1e-6 && a.pixel === b.pixel) return t;
@@ -649,7 +660,7 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
     const tex2 = new Map<number, FaceTexture>();
     const plain2 = plainTextures(runOut).textures;
     for (const f2 of runOut.report.faces) {
-        const f1 = faces.find(f => f.key === f2.key);
+        const f1 = parentFace(faces, f2.key);
         const t1 = f1 ? textures.get(f1.index) : undefined;
         if (t1 && f1 && f2.width) tex2.set(f2.index, reframe(t1, f1, f2));
         else if (plain2.has(f2.index)) tex2.set(f2.index, plain2.get(f2.index)!);

@@ -94,9 +94,9 @@ function answer(plate: Uint8Array, r: PlateRequest, aspect?: number): Uint8Array
 
 /**
  * A stand-in for the vision model's count: the runs of dark (window) columns across the wall and of dark rows up it. It
- * reads the PNG it is given, like the model.
+ * reads the PNGs it is given (the tile and the plate), like the model.
  */
-const counter: FacadeCounter = async png => {
+const countOne = async (png: Uint8Array) => {
     const img = decodeImageInMemory(png);
     const { width: w, height: h, rgba } = img;
     const dark = (i: number) => 0.299 * rgba[i * 4] + 0.587 * rgba[i * 4 + 1] + 0.114 * rgba[i * 4 + 2] < 80;
@@ -105,6 +105,7 @@ const counter: FacadeCounter = async png => {
     const row = (y: number) => { let d = 0; for (let x = 0; x < w; x++) if (dark(y * w + x)) d++; return d / w; };
     return { storeys: runs(h, row), bays: runs(w, col), conf: 90 };
 };
+const counter: FacadeCounter = async (tile, plate) => ({ tile: await countOne(tile), plate: await countOne(plate) });
 
 async function redraw(plate: Uint8Array, opts: { aspect?: number } = {}) {
     const t = { width: W, height: H, rgba: wall({ noise: 18, blur: 3 }), source: new Uint8Array(W * H) };
@@ -176,10 +177,10 @@ describe('enhanced mode: the identity gate', () => {
         expect(r.why).toMatch(/storeys: not counted \(the count could not be read: quota\)/);
     });
 
-    it('asks for storeys and bays in one JSON reply and refuses a reply without them', () => {
-        expect(countPrompt(18, 12)).toMatch(/"storeys"/);
-        expect(parseCountReply('```json\n{"storeys": 6, "bays": 9, "conf": 80}\n```')).toEqual({ storeys: 6, bays: 9, conf: 80 });
-        expect(() => parseCountReply('{"floors": 3}')).toThrow(/no storeys or bays/);
+    it('asks for both images\' storeys and bays in one JSON reply and refuses a reply without them', () => {
+        expect(countPrompt(18, 12)).toMatch(/For each image separately/);
+        expect(parseCountReply('```json\n{"first": {"storeys": 6, "bays": 3}, "second": {"storeys": 6, "bays": 9}, "conf": 80}\n```')).toEqual({ tile: { storeys: 6, bays: 3, conf: 80 }, plate: { storeys: 6, bays: 9, conf: 80 } });
+        expect(() => parseCountReply('{"first": {"floors": 3}, "second": {"storeys": 3, "bays": 2}}')).toThrow(/no storeys or bays for the first image/);
     });
 
     it('audits a drifted redraw against the tile without reverting its windows', () => {
@@ -226,5 +227,16 @@ describe('enhanced mode: the carved openings follow the plate', () => {
             return img;
         };
         shot('lattice_refit.png', [draw(plate.slice(), g, [255, 40, 40], 0), draw(plate.slice(), r.grammar, [40, 255, 80], 0)]);
+    });
+});
+
+describe('pipeline E: textures of a rebuilt solid', () => {
+    it('gives a wall the rebuilt solid split in pieces its own texture, not the plain tile ortho', async () => {
+        const { parentFace } = await import('../src/node/3d-engine/staged-location/pipeline-e/inference');
+        const faces = [{ key: 'w:p/e0:0:3' }, { key: 'w:p/e0:0:31' }, { key: 'w:p/e0:0' }];
+        expect(parentFace(faces, 'w:p/e0:0:3:0')?.key).toBe('w:p/e0:0:3');
+        expect(parentFace(faces, 'w:p/e0:0:3')?.key).toBe('w:p/e0:0:3');
+        expect(parentFace(faces, 'w:p/e0:0:31:1')?.key).toBe('w:p/e0:0:31');
+        expect(parentFace(faces, 'w:q/e0:0:3:0')).toBeUndefined();
     });
 });

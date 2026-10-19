@@ -788,10 +788,29 @@ private:
             addBase(pi);
         }
         for (const auto& m : spec_.meshes) addMeshFacets(m);
-        // openings onto their faces
+        // openings onto their faces: the wall of that key, or, where this solid split the edge in pieces (<key>:0, <key>:1, ...:
+        // another part's corner projects onto it), the piece under the opening's centre, the opening moved into that piece's
+        // frame (the whole edge's frame has its origin at the edge's start, a piece's at its own); an opening with no such wall
+        // is reported, never dropped silently
         for (size_t oi = 0; oi < spec_.openings.size(); ++oi) {
-            const auto& o = spec_.openings[oi];
-            for (auto& f : faces_) if (f.key == o.face && f.wall) { attachOpening(f, static_cast<int>(oi)); break; }
+            auto& o = spec_.openings[oi];
+            Face* host = nullptr;
+            double shift = 0;
+            for (auto& f : faces_) {
+                if (!f.wall) continue;
+                if (f.key == o.face) { host = &f; shift = 0; break; }
+                if (f.key.size() <= o.face.size() || f.key.compare(0, o.face.size(), o.face) != 0 || f.key[o.face.size()] != ':') continue;
+                const Part* part = nullptr;
+                for (const auto& pp : spec_.parts) if (pp.id == f.part) part = &pp;
+                if (!part || f.loop < 0 || static_cast<size_t>(f.loop) >= part->loops.size() || f.edge < 0 || static_cast<size_t>(f.edge) >= part->loops[static_cast<size_t>(f.loop)].size()) continue;
+                const V2 a = part->loops[static_cast<size_t>(f.loop)][static_cast<size_t>(f.edge)];
+                const double d = (V3{a.x, 0, a.z} - f.origin).dot(f.axisS);
+                const double sc = 0.5 * (o.s0 + o.s1) + d;
+                if (sc >= f.sMin && sc <= f.sMax) { host = &f; shift = d; }
+            }
+            if (!host) { rejectedOpenings_.push_back(o.id); continue; }
+            o.s0 += shift; o.s1 += shift;
+            attachOpening(*host, static_cast<int>(oi));
         }
     }
 
