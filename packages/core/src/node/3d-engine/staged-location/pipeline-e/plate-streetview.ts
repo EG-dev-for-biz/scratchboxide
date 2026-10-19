@@ -269,3 +269,18 @@ export function verifyAgainstPhoto(input: Uint8Array, plate: Uint8Array, rect: R
         nccPlate: compared ? Math.round((sumP / compared) * 100) / 100 : NaN, nccInput: compared ? Math.round((sumI / compared) * 100) / 100 : NaN
     };
 }
+
+/**
+ * The rectified photo as the model's reference: the photo already resampled into the plate's own frame (same size and
+ * geometry as the first image), mid-grey where it does not show the wall, at most maxSide px; PNG.
+ */
+export function rectifiedReference(rect: RectifiedPhoto, W: number, H: number, maxSide = 768): Uint8Array {
+    const out = new Uint8Array(W * H * 4);
+    for (let i = 0; i < W * H; i++) {
+        for (let c = 0; c < 3; c++) out[i * 4 + c] = rect.valid[i] ? rect.rgba[i * 4 + c] : 128;
+        out[i * 4 + 3] = 255;
+    }
+    const k = Math.min(1, maxSide / Math.max(W, H));
+    const r = resizeRgba({ width: W, height: H, rgba: out }, Math.max(8, Math.round(W * k)), Math.max(8, Math.round(H * k)));
+    return new Uint8Array(encodePng(r.width, r.height, Buffer.from(r.rgba), 4));
+}

@@ -44,7 +44,7 @@ import { straighten, type StraightenResult } from './straighten';
 import type { EnhanceModelClient } from '../texture-enhance';
 import { decodeOrtho, checkAgainstScan, readReliefOrthos } from '../facade-grammar';
 import { enhanceOrder, enhanceWall, ENHANCE_CONCURRENCY, TEXTURE_PLATE_PROMPT_ID, TEXTURE_PLATE_STREET_VIEW_PROMPT_ID, type EnhanceWallRecord, type PlateModelClient, type WallStreetView } from './enhance';
-import { bestStreetViewForWall, streetViewCrop, type GuideView } from './plate-streetview';
+import { bestStreetViewForWall, rectifiedReference, type GuideView } from './plate-streetview';
 
 export interface StepRecord { step: string; proposed: number; accepted: number; rejected: number; skipped?: string; notes: string[]; ms: number }
 
@@ -520,7 +520,7 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
             let sv: WallStreetView | undefined, noSv = noGuide;
             if (guards && guide.length) {
                 const best = bestStreetViewForWall(f, guide);
-                if (best.view && best.rect) sv = { view: best.view, rect: best.rect, crop: streetViewCrop(best.view, best.rect), why: best.why };
+                if (best.view && best.rect) sv = { view: best.view, rect: best.rect, crop: rectifiedReference(best.rect, tex.width, tex.height), why: best.why };
                 else noSv = best.why;
             }
             progress(`enhanced mode: redrawing wall ${f.index} (${Math.round(f.area)} m2)${sv ? `, guided by Street View ${sv.view.panoId}` : ''}`);
@@ -532,7 +532,7 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
             enhanced.push({ ...r, ...(ref ? { referenceFace: ref.index } : {}), plate: undefined, guarded: undefined, labels: undefined, grid: undefined } as EnhanceWallRecord);
             enhStep.proposed++;
             if (r.accepted) { enhStep.accepted++; done.push(f); if (r.plate) plates.set(f.index, { plate: tex.rgba.slice(), use }); } else enhStep.rejected++;
-            enhStep.notes.push(`wall ${f.index}: ${r.accepted ? 'enhanced' : 'kept its tile texture'}: ${r.why}${r.model ? ` (${r.model})` : ''}${ref ? `; reference wall ${ref.index}` : ''}${sv ? `; ${sv.why}` : guards && noSv ? `; no Street View guidance: ${noSv}` : ''}`);
+            enhStep.notes.push(`wall ${f.index}: ${r.accepted ? 'enhanced' : 'kept its tile texture'}: ${r.why}${r.model ? ` (${r.model})` : ''}${ref ? `; reference wall ${ref.index}` : ''}${sv ? `; ${sv.why}${r.streetView?.guidedRejected ? ` (the redraw with it failed the alignment gate: ${r.streetView.guidedRejected}; redrawn without it)` : ''}` : guards && noSv ? `; no Street View guidance: ${noSv}` : ''}`);
             try {
                 if (r.plate) writeEnhanceDiagnostic(path.join(input.dir, `wall_${f.index}_tile_vs_enhanced.png`), before.rgba, r.plate, r.guarded, r.labels, r.grid, sv?.rect.rgba, sv?.rect.valid, tex.width, tex.height);
             } catch { /* diagnostics only */ }

@@ -254,6 +254,25 @@ describe('enhanced mode: the Street View photo', () => {
         expect(Array.from(t.source).filter(v => v === 9).length).toBeGreaterThan(0.9 * W * H);
     });
 
+    it('redraws once without the photo when the photo-guided redraw moves the wall\'s geometry', async () => {
+        const truth = wall();
+        const input = soften(truth);
+        const f = face();
+        const view = guide(photoOf(truth, 12, 14, 12, 4), 'pano-d');
+        const rect = rectifyViewOntoWall(f, view);
+        // with the photo the model answers a facade whose windows sit half a bay along; without it, the facade in place
+        const moved = wall((xm, ym) => { const lx = ((xm + 1.5) % 3) / 3, ly = ((ym - 3.5) % 3.5) / 3.5; return ym > 3.5 ? (lx > 0.3 && lx < 0.7 && ly > 0.2 && ly < 0.8 ? [45, 55, 75] : BRICK) : undefined; });
+        const asked: boolean[] = [];
+        const client = async (r: PlateRequest) => { asked.push(!!r.streetView); return { bytes: new Uint8Array(encodePng(r.width, r.height, Buffer.from(padTo(r.streetView ? moved : truth, r.width, r.height)), 4)), modelUsed: 'fake' }; };
+        const t = { width: W, height: H, rgba: input.slice(), source: new Uint8Array(W * H) };
+        const r = await enhanceWall(f, t, all(), { client, models: ['fake'], locationName: 'X', source: 3, streetView: { view, rect, crop: new Uint8Array(1), why: 'test' }, streetViewSource: 9 });
+        expect(asked).toEqual([true, false]);
+        expect(r.accepted).toBe(true);
+        expect(r.streetView?.guidedRejected).toMatch(/edge chamfer/);
+        expect(Array.from(t.source).filter(v => v === 3).length).toBeGreaterThan(0.9 * W * H);
+        expect(Array.from(t.source).some(v => v === 9)).toBe(false);
+    });
+
     it('aims a street-level view of the same pano at the lower storeys', async () => {
         const { streetLevelView, STREET_LEVEL_AIM_M } = await import('../src/node/3d-engine/staged-location/streetview-registered-views');
         const faceT = { faceId: 'f', headingDeg: 180, centre: [0, 15, 0], outward: [0, 0, 1], widthM: 30, heightM: 30 } as never;

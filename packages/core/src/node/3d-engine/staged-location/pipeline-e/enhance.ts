@@ -76,7 +76,7 @@ export function genAiPlateClient(genai: unknown): PlateModelClient {
     return async r => {
         const parts: unknown[] = [{ text: r.prompt }, { inlineData: { mimeType: 'image/png', data: Buffer.from(r.image).toString('base64') } }];
         if (r.reference) parts.push({ text: 'Second image: the adjacent wall, already finished (reference for materials only).' }, { inlineData: { mimeType: 'image/png', data: Buffer.from(r.reference).toString('base64') } });
-        if (r.streetView) parts.push({ text: `${r.reference ? 'Third' : 'Second'} image: a street-level photograph of this wall (Google Street View; grey where it does not show the wall).` }, { inlineData: { mimeType: 'image/png', data: Buffer.from(r.streetView).toString('base64') } });
+        if (r.streetView) parts.push({ text: `${r.reference ? 'Third' : 'Second'} image: a street-level photograph of this wall (Google Street View), resampled onto the first image's frame; grey where it does not show the wall.` }, { inlineData: { mimeType: 'image/png', data: Buffer.from(r.streetView).toString('base64') } });
         const a = await generateImageWithModels(genai, { models: r.models, contents: [{ role: 'user', parts }], imageConfig: { aspectRatio: nearestImageAspectRatio(r.width, r.height) }, ...(r.signal ? { signal: r.signal } : {}) } as never);
         return { bytes: new Uint8Array(a.data.buffer, a.data.byteOffset, a.data.byteLength), modelUsed: a.modelUsed };
     };
@@ -173,6 +173,8 @@ export interface EnhanceStreetViewRecord {
     comparedCells?: number;
     supportedCells?: number;
     contradictedCells?: number;
+    /** The photo-guided redraw failed the alignment gate (why); the wall was redrawn without the photo. */
+    guidedRejected?: string;
 }
 
 export interface EnhanceWallRecord {
@@ -244,6 +246,8 @@ export function guardPlate(input: Uint8Array, aligned: Uint8Array, W: number, H:
 export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Array, opts: {
     client: PlateModelClient; models: string[]; locationName: string; reference?: FaceTexture; source: number; signal?: AbortSignal;
     guards?: boolean; streetView?: WallStreetView; streetViewSource?: number; noStreetView?: string;
+    /** When the photo-guided redraw fails the alignment gate, redraw once without the photo (default true). */
+    retryWithoutPhoto?: boolean;
 }): Promise<EnhanceWallRecord & { plate?: Uint8Array; guarded?: Uint8Array; labels?: string[]; grid?: CellGrid }> {
     const t0 = Date.now();
     const guards = opts.guards ?? true;
@@ -271,6 +275,11 @@ export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Arra
     const back = resizeRgba({ width: sw, height: sh, rgba: inner }, t.width, t.height).rgba;
     const g = alignPlate(t.rgba, back, t.width, t.height, use, f.pixel);
     const rec = { ...base, accepted: g.accepted, why: g.why, model: answer.modelUsed, chamferPx: g.chamferPx, lostShare: g.lostShare, ms: Date.now() - t0, plate: g.aligned };
+    if (!g.accepted && sv && opts.retryWithoutPhoto !== false) {
+        // the photo pulled the redraw off the wall's geometry: one more redraw without it (the tile check still applies)
+        const again = await enhanceWall(f, t, use, { ...opts, streetView: undefined, noStreetView: `the redraw guided by Street View ${sv.view.panoId} failed the alignment gate (${g.why}); redrawn without the photo` });
+        return { ...again, ms: Date.now() - t0, streetView: { ...svRec!, guidedRejected: g.why } };
+    }
     if (!g.accepted) return rec;
     let out = g.aligned, weight: Float32Array | undefined;
     let extra: { audit?: EnhanceAuditRecord; guarded?: Uint8Array; labels?: string[]; grid?: CellGrid } = {};
