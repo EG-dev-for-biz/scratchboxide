@@ -187,6 +187,9 @@ describe('isolating a terrace house by its vector footprint', () => {
         for (const [lat, lng] of f.polygonLatLng) { expect(Math.abs(lat - PLACE.lat)).toBeLessThan(0.0005); expect(Math.abs(lng - PLACE.lng)).toBeLessThan(0.0005); }
         expect(f.isolateCheck!.ok).toBe(true);
         expect(f.maskVote!.ran).toBe(false);
+        // its heights are within their typical range: no plausibility warning, none in the digest
+        expect(result.plausibility).toEqual([]);
+        expect(result.digest).not.toContain('plausibility');
         // the ground: the walkable street, with the vector road as its level
         expect(result.ground!.source).toBe('walkable-surface');
         expect(result.ground!.roadsFromVectorData).toBe(true);
