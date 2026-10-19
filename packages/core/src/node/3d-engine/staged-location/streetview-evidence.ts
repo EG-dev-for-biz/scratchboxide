@@ -264,7 +264,7 @@ const months = (d?: string) => { const m = /^(\d{4})-(\d{2})/.exec(d ?? ''); ret
  * arch has about 24 within 100 m, most of them from 2021 and one from 2026: a 3-year window would have kept the one);
  * recency is a factor in the view score instead.
  */
-export async function discoverPanos(origin: GeodeticOrigin, facades: FacadeGeometry[], deps: StreetViewEvidenceDeps, signal?: AbortSignal, centre?: { x: number; z: number }): Promise<{ panos: PanoCandidate[]; metadataCalls: number; cachedCalls: number; rejectedNotGoogle: number; rejectedRefused: number }> {
+export async function discoverPanos(origin: GeodeticOrigin, facades: FacadeGeometry[], deps: StreetViewEvidenceDeps, signal?: AbortSignal, centre?: { x: number; z: number }): Promise<{ panos: PanoCandidate[]; metadataCalls: number; cachedCalls: number; rejectedNotGoogle: number; rejectedRefused: number; superseded: PanoCandidate[] }> {
     const points = candidatePoints(facades, centre);
     const cache: Record<string, any> = deps.metadataCachePath && fs.existsSync(deps.metadataCachePath) ? JSON.parse(fs.readFileSync(deps.metadataCachePath, 'utf8')) : {};
     let calls = 0, cached = 0;
@@ -302,12 +302,15 @@ export async function discoverPanos(origin: GeodeticOrigin, facades: FacadeGeome
     }
     const sorted = [...byId.values()].sort((a, b) => months(b.date) - months(a.date) || a.panoId.localeCompare(b.panoId));
     const kept: PanoCandidate[] = [];
-    for (const p of sorted) if (!kept.some(q => Math.hypot(q.x - p.x, q.z - p.z) < 6)) kept.push(p);
+    // an older capture within 6 m of a newer one kept is left out of the candidates, but listed: a newer capture that shows
+    // something temporary in front of the structure can be replaced by it (temporary-structures.ts)
+    const superseded: PanoCandidate[] = [];
+    for (const p of sorted) (kept.some(q => Math.hypot(q.x - p.x, q.z - p.z) < 6) ? superseded : kept).push(p);
     if (centre) kept.sort((a, b) => Math.hypot(a.x - centre.x, a.z - centre.z) - Math.hypot(b.x - centre.x, b.z - centre.z));
     kept.splice(MAX_CANDIDATE_PANOS);
     return {
         panos: kept, metadataCalls: calls, cachedCalls: cached, rejectedNotGoogle: new Set(ok.filter(a => !isGoogleCapture(a.copyright)).map(a => a.panoId)).size,
-        rejectedRefused: new Set(google.filter(a => refused.has(a.panoId)).map(a => a.panoId)).size
+        rejectedRefused: new Set(google.filter(a => refused.has(a.panoId)).map(a => a.panoId)).size, superseded
     };
 }
 
