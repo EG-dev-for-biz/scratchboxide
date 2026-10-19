@@ -47,6 +47,7 @@ import {
     type SolarRoofSegment
 } from '../../../spatial/building-shape-fusion';
 import { GltfBinaryPacker } from '../../../3d-engine/gltf-binary-packer';
+import { checkDimensions, checkHeightForStoreys, plausibilitySummary, type PlausibilityFlag } from '../../../../common/spatial/plausibility';
 
 export const BUILDING_SHAPE_TOOL_NAME = 'location_building_shape';
 
@@ -72,6 +73,12 @@ export interface BuildingShapeRequest {
     maxSnapMeters?: number;
     /** Write one extruded massing GLB of the buildings reported, from the vector data alone. */
     writeMassingGlb?: boolean;
+    /** The target building's storey count when known (from the caller): its heights are checked against it. */
+    storeys?: number;
+    /** At most this many neighbours are reported, nearest first (default 25, at most 400). */
+    maxNeighbours?: number;
+    /** Ask the Solar API for each building's roof segments (default true; false skips buildingInsights, the DSM is still read). */
+    roofSegments?: boolean;
     /** Where GLBs go (default <workspace>/public/models/building_shape). */
     outputDir?: string;
 }
@@ -235,6 +242,9 @@ export interface FootprintPartReport {
     ringWgs84: LngLat[];
     /** [east, north] metres from the place point. */
     ringLocalMeters: XY[];
+    /** Holes in the part (a courtyard, a light well), when the vector data draws them. */
+    holesWgs84?: LngLat[][];
+    /** Plan area of the ring less its holes. */
     areaM2: number;
     /** Vector top of this part above its base: extruded maxZ, or the highest modeled vertex over it. */
     vectorHeightMeters?: number;
@@ -315,6 +325,8 @@ export interface BuildingReport {
     comparison: SourceComparison;
     /** building-shape-fusion's preferred height (DSM where it covers the footprint, else vector); the sources stay above. */
     fusion?: { heightMeters?: number; heightSource: FusedBuilding['heightSource']; confidence: FusedBuilding['confidence'] };
+    /** Heights outside their typical range (plausibility.ts): flags only, the values above are unchanged. */
+    plausibility: PlausibilityFlag[];
 }
 
 export interface BuildingShapeResult {
@@ -348,19 +360,27 @@ interface Candidate {
     centroid: XY;
 }
 
+/** The holes the decoder found in a polygon (its loops after the outer one). */
+function innerRingsOf(p: VectorFeaturePolygon): LngLat[][] {
+    const inner = (p as VectorFeaturePolygon & { innerRings?: Array<Array<[number, number]>> }).innerRings;
+    return Array.isArray(inner) ? inner.map(r => r as LngLat[]) : [];
+}
+
 function buildCandidate(group: FeatureRecord[], frame: LocalFrame): Candidate | undefined {
     const extruded = group.flatMap(f => f.extruded);
     const areas = group.flatMap(f => f.areas);
     const modeled = group.flatMap(f => f.modeled);
     const modeledMin = modeled.length ? Math.min(...modeled.map(m => m.minZMeters)) : 0;
     const modeledMax = modeled.length ? Math.max(...modeled.map(m => m.maxZMeters)) : 0;
-    const part = (id: string, kind: FootprintPartReport['kind'], ring: LngLat[], h?: number, minH?: number): FootprintPartReport => {
+    const part = (id: string, kind: FootprintPartReport['kind'], ring: LngLat[], h?: number, minH?: number, holes: LngLat[][] = []): FootprintPartReport => {
         const local = ring.map(p => frame.toLocal(p));
+        const holesOk = holes.filter(hl => hl.length >= 3);
         return {
             id, kind,
             ringWgs84: ring.map(([a, b]) => [r7(a), r7(b)] as LngLat),
             ringLocalMeters: local.map(([a, b]) => [r2(a), r2(b)] as XY),
-            areaM2: r1(ringArea(local)),
+            ...(holesOk.length ? { holesWgs84: holesOk.map(hl => hl.map(([a, b]) => [r7(a), r7(b)] as LngLat)) } : {}),
+            areaM2: r1(Math.max(0, ringArea(local) - holesOk.reduce((a, hl) => a + ringArea(hl.map(q => frame.toLocal(q))), 0))),
             ...(h !== undefined && h > 0 ? { vectorHeightMeters: r2(h) } : {}),
             ...(minH ? { vectorMinHeightMeters: r2(minH) } : {})
         };
@@ -373,7 +393,7 @@ function buildCandidate(group: FeatureRecord[], frame: LocalFrame): Candidate | 
     let vectorHeight: number | undefined;
     const hull = modeled.length ? convexHull(modeled.flatMap(m => m.vertices.filter(v => v[2] - modeledMin < 2).map(v => [v[0], v[1]] as LngLat))) : [];
     if (extruded.length) {
-        parts = extruded.map(e => part(e.id, 'extruded_area', e.ring as LngLat[], Number(e.properties?.heightMeters), Number(e.properties?.minHeightMeters) || undefined));
+        parts = extruded.map(e => part(e.id, 'extruded_area', e.ring as LngLat[], Number(e.properties?.heightMeters), Number(e.properties?.minHeightMeters) || undefined, innerRingsOf(e)));
         chosen = 'extruded_area';
         why = `Google extrudes ${extruded.length === 1 ? 'this area' : `these ${extruded.length} areas`} to the building's modeled height, so ${extruded.length === 1 ? 'it is' : 'they are'} the footprint the vector height belongs to.`;
         vectorKind = 'extruded';
@@ -384,7 +404,7 @@ function buildCandidate(group: FeatureRecord[], frame: LocalFrame): Candidate | 
         const inside = (ring: XY[]) => modeled.flatMap(m => m.vertices.filter(v => pointInRing(...frame.toLocal([v[0], v[1]]), ring)).map(v => v[2]));
         parts = areas.map(a => {
             const zs = inside((a.ring as LngLat[]).map(q => frame.toLocal(q)));
-            return part(a.id, 'plan_area', a.ring as LngLat[], zs.length ? Math.max(...zs) - modeledMin : undefined);
+            return part(a.id, 'plan_area', a.ring as LngLat[], zs.length ? Math.max(...zs) - modeledMin : undefined, undefined, innerRingsOf(a));
         });
         chosen = 'plan_area';
         why = `The building is a modeled 3D volume; its own flat plan area${areas.length === 1 ? ' is' : 's are'} the footprint (exact outline, unlike the convex hull of the volume's base).`;
@@ -398,7 +418,7 @@ function buildCandidate(group: FeatureRecord[], frame: LocalFrame): Candidate | 
         vectorKind = 'modeled';
         vectorHeight = modeledMax - modeledMin;
     } else if (areas.length) {
-        parts = areas.map(a => part(a.id, 'plan_area', a.ring as LngLat[]));
+        parts = areas.map(a => part(a.id, 'plan_area', a.ring as LngLat[], undefined, undefined, innerRingsOf(a)));
         chosen = 'plan_area';
         why = 'Only a flat plan area exists for this building in the vector data: a footprint with no height.';
         vectorKind = 'footprint_only';
@@ -407,8 +427,9 @@ function buildCandidate(group: FeatureRecord[], frame: LocalFrame): Candidate | 
     }
     const partsLocal = parts.map(p => (p.ringWgs84 as LngLat[]).map(q => frame.toLocal(q)));
     const contains = partsLocal.some(r => pointInRing(0, 0, r));
+    const holeArea = parts.reduce((a, p) => a + (p.holesWgs84 ?? []).reduce((b, hl) => b + ringArea(hl.map(q => frame.toLocal(q))), 0), 0);
     const distance = contains ? 0 : Math.min(...partsLocal.map(r => distanceToRing(0, 0, r)));
-    const area = partsLocal.reduce((a, r) => a + ringArea(r), 0);
+    const area = Math.max(0, partsLocal.reduce((a, r) => a + ringArea(r), 0) - holeArea);
     const all = partsLocal.flat();
     const centroid: XY = [all.reduce((a, p) => a + p[0], 0) / all.length, all.reduce((a, p) => a + p[1], 0) / all.length];
     const featureIds = group.map(f => f.key);
@@ -529,7 +550,8 @@ function reportBuilding(
     dsmReason: string | undefined,
     insights: { data?: SolarInsightsJson; reason?: string },
     otherRings: LngLat[][],
-    roads: RoadPointIndex
+    roads: RoadPointIndex,
+    storeys?: number
 ): BuildingReport {
     const segments = solarSegments(insights.data);
     const fused = c.parts.map(p => fuseBuilding(
@@ -609,6 +631,7 @@ function reportBuilding(
         statement: `${bits.join('; ')}.`
     };
     const pref = top ?? fused.find(f => f.heightMeters !== undefined);
+    const plausibility = buildingPlausibility(c.vectorHeight, top?.dsmRoofHeightMeters, storeys);
     const vectorNote = c.vectorKind === 'extruded'
         ? 'Height of the extrusion top (maxZ) above its base, from the vector tile.'
         : c.vectorKind === 'modeled'
@@ -635,8 +658,24 @@ function reportBuilding(
         solarInsights,
         roofSegments,
         comparison,
-        ...(pref ? { fusion: { ...(pref.heightMeters !== undefined ? { heightMeters: r2(pref.heightMeters) } : {}), heightSource: pref.heightSource, confidence: pref.confidence } } : {})
+        ...(pref ? { fusion: { ...(pref.heightMeters !== undefined ? { heightMeters: r2(pref.heightMeters) } : {}), heightSource: pref.heightSource, confidence: pref.confidence } } : {}),
+        plausibility
     };
+}
+
+/** The vector and DSM heights against the building-height range, and against the storey count when it is known. */
+export function buildingPlausibility(vectorHeightM: number | undefined, dsmRoofM: number | undefined, storeys?: number): PlausibilityFlag[] {
+    const flags = checkDimensions([
+        { dimension: 'buildingHeight', valueM: vectorHeightM, label: 'vector height', cause: 'vector data' },
+        { dimension: 'buildingHeight', valueM: dsmRoofM, label: 'Solar DSM main roof height', cause: 'DSM or street level' }
+    ]);
+    if (storeys !== undefined) {
+        for (const [h, label, cause] of [[vectorHeightM, 'vector height', 'vector height or storey count'], [dsmRoofM, 'Solar DSM main roof height', 'DSM or storey count']] as const) {
+            const f = h !== undefined ? checkHeightForStoreys(h, storeys, { label, cause }) : undefined;
+            if (f) flags.push(f);
+        }
+    }
+    return flags;
 }
 
 interface MeshOut { name: string; positions: number[]; normals: number[]; indices: number[]; extras: Record<string, unknown> }
@@ -744,6 +783,7 @@ export async function runBuildingShape(req: BuildingShapeRequest, deps: Building
     const progress = deps.progress ?? (() => undefined);
     const neighbourRadius = Math.max(0, Math.min(150, Number(req.neighbourRadiusMeters) || 0));
     const maxSnap = Math.max(0, Math.min(50, req.maxSnapMeters ?? 12));
+    const maxNeighbours = Math.max(0, Math.min(400, Math.round(req.maxNeighbours ?? MAX_NEIGHBOURS)));
     progress('Resolving the place', 0.05);
     const place = await resolvePlace(req, deps);
     const frame = new LocalFrame(place.lat, place.lng);
@@ -805,7 +845,7 @@ export async function runBuildingShape(req: BuildingShapeRequest, deps: Building
             .map(c => ({ c, gap: footprintGap(t.partsLocal, c.partsLocal) }))
             .filter(x => x.gap <= neighbourRadius)
             .sort((a, b) => a.gap - b.gap)
-            .slice(0, MAX_NEIGHBOURS)
+            .slice(0, maxNeighbours)
             .map(x => { gapById.set(x.c.id, x.gap); return x.c; });
     }
     const reported = [target, ...neighbours];
@@ -819,6 +859,7 @@ export async function runBuildingShape(req: BuildingShapeRequest, deps: Building
     let dsmReason: string | undefined;
     progress('Fetching the Solar API DSM and roof segments', 0.4);
     const insightsP = mapLimit(reported, 4, async c => {
+        if (req.roofSegments === false) return { reason: 'Roof segments were not asked for (roofSegments false).' };
         if (!apiKey) return { reason: 'No Google Maps API key is configured for the Solar API.' };
         const [lng, lat] = frame.toLngLat(c.centroid);
         try {
@@ -843,7 +884,7 @@ export async function runBuildingShape(req: BuildingShapeRequest, deps: Building
     const allRings = candidates.map(c => c.parts.map(p => p.ringWgs84));
     const reports = reported.map((c, i) => {
         const others = candidates.flatMap((o, k) => (o === c ? [] : allRings[k]));
-        const r = reportBuilding(c, i === 0 ? 'target' : 'neighbour', frame, dsm, dsmReason, insights[i], others, roads);
+        const r = reportBuilding(c, i === 0 ? 'target' : 'neighbour', frame, dsm, dsmReason, insights[i], others, roads, i === 0 ? req.storeys : undefined);
         const gap = gapById.get(c.id);
         return gap === undefined ? r : { ...r, distanceFromTargetMeters: r1(gap) };
     });
@@ -878,7 +919,9 @@ export async function runBuildingShape(req: BuildingShapeRequest, deps: Building
 
     const t = reports[0];
     const summary = `${place.resolvedAs}: ${targetWhy} Footprint: ${t.footprint.chosen.replace(/_/g, ' ')}, ${t.footprint.parts.length} part${t.footprint.parts.length === 1 ? '' : 's'}, ${t.footprint.areaM2} m2. ${t.comparison.statement}`
-        + (neighbours.length ? ` ${neighbours.length} neighbour${neighbours.length === 1 ? '' : 's'} within ${neighbourRadius} m of its footprint reported.` : '');
+        + (neighbours.length ? ` ${neighbours.length} neighbour${neighbours.length === 1 ? '' : 's'} within ${neighbourRadius} m of its footprint reported.` : '')
+        + (t.plausibility.length ? ` ${plausibilitySummary(t.plausibility)}.` : '')
+        + (reports.slice(1).some(r => r.plausibility.length) ? ` ${reports.slice(1).filter(r => r.plausibility.length).length} neighbour(s) carry plausibility warnings.` : '');
     progress('Done', 1);
     return {
         place,
@@ -899,7 +942,7 @@ export async function runBuildingShape(req: BuildingShapeRequest, deps: Building
 
 export const BUILDING_SHAPE_TOOL_DECLARATION: ToolDeclaration = {
     name: BUILDING_SHAPE_TOOL_NAME,
-    description: 'What Google\'s own data says about the shape of the building at a real place, source by source: its footprint polygon (WGS-84 and local metres) from Google vector tiles, the vector height (extruded or modeled) with the modeled volume as a GLB when there is one, street level and roof/peak heights measured by the Solar API DSM, and the Solar roof segments (pitch, azimuth, height, area). Every source\'s value is shown side by side with the disagreement stated, never averaged, and it says which footprint was chosen and why. Optionally reports neighbouring buildings and writes an extruded massing GLB from the vector data. When there is no building footprint at the place it fails with code no_footprint and lists the nearest ones; it never invents a footprint. Other failure codes: geocode_failed, missing_credentials, no_coverage, vector_unavailable.',
+    description: 'What Google\'s own data says about the shape of the building at a real place, source by source: its footprint polygon (WGS-84 and local metres) from Google vector tiles, the vector height (extruded or modeled) with the modeled volume as a GLB when there is one, street level and roof/peak heights measured by the Solar API DSM, and the Solar roof segments (pitch, azimuth, height, area). Every source\'s value is shown side by side with the disagreement stated, never averaged, and it says which footprint was chosen and why. Each building carries plausibility flags for heights outside their typical range (and against the storey count when given); flags only, no value is changed. Optionally reports neighbouring buildings and writes an extruded massing GLB from the vector data. When there is no building footprint at the place it fails with code no_footprint and lists the nearest ones; it never invents a footprint. Other failure codes: geocode_failed, missing_credentials, no_coverage, vector_unavailable.',
     parameters: {
         type: 'OBJECT',
         properties: {
@@ -908,7 +951,8 @@ export const BUILDING_SHAPE_TOOL_DECLARATION: ToolDeclaration = {
             longitude: { type: 'NUMBER', description: 'WGS-84 longitude of the place point.' },
             neighbourRadiusMeters: { type: 'NUMBER', description: 'Also report the buildings whose footprint comes within this many metres of the target building\'s footprint (default 0, max 150; at most 25 neighbours, nearest first).' },
             maxSnapMeters: { type: 'NUMBER', description: 'When no footprint contains the place point, the nearest within this distance is used (default 12 m, max 50).' },
-            writeMassingGlb: { type: 'BOOLEAN', description: 'Also write a clean extruded massing GLB of the reported buildings from the vector data alone (flat base, provenance "from Google vector data").' }
+            writeMassingGlb: { type: 'BOOLEAN', description: 'Also write a clean extruded massing GLB of the reported buildings from the vector data alone (flat base, provenance "from Google vector data").' },
+            storeys: { type: 'NUMBER', description: 'The target building\'s storey count, when known: its vector and DSM heights are checked against it (plausibility flags only, nothing is changed).' }
         }
     }
 };
@@ -922,7 +966,8 @@ export const buildingShapeHandler: ToolHandler = async (args, ctx): Promise<Tool
             longitude: num(args.longitude),
             neighbourRadiusMeters: num(args.neighbourRadiusMeters),
             maxSnapMeters: num(args.maxSnapMeters),
-            writeMassingGlb: args.writeMassingGlb === true
+            writeMassingGlb: args.writeMassingGlb === true,
+            storeys: num(args.storeys)
         }, { workspaceRoot: ctx.workspaceRoot, progress: ctx.reportProgress });
         return { status: 'completed', summaryResult: result.summary, resultPayload: { status: 'success', ...result } };
     } catch (err) {
