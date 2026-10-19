@@ -233,7 +233,42 @@ export function crownLobeField(lobes: ReadonlyArray<readonly [number, number, nu
 }
 
 /** One value for every instance of a mesh (and for a plain mesh, which draws as instance 0). */
-const PER_MESH_DIVISOR = 1 << 30;
+export const PER_MESH_DIVISOR = 1 << 30;
+
+/**
+ * The mesh's own geometry: a light geometry that shares every buffer of the current one (the renderer keys buffers by
+ * attribute, so the shared ones stay one GPU buffer each), made on the first call and returned as it is after that. Per-tree
+ * values (the crown, a texture tint) go on it as per-mesh attributes, never on a geometry other trees share.
+ */
+export function ownGeometryOf(mesh: THREE.Mesh): THREE.BufferGeometry {
+    const g = mesh.geometry as THREE.BufferGeometry;
+    if (g.userData?.sbCrownOwn) return g;
+    const own = new THREE.BufferGeometry();
+    own.name = g.name;
+    own.setIndex(g.index);
+    for (const [name, attr] of Object.entries(g.attributes)) own.setAttribute(name, attr);
+    for (const [name, list] of Object.entries(g.morphAttributes)) (own.morphAttributes as Record<string, Array<THREE.BufferAttribute | THREE.InterleavedBufferAttribute>>)[name] = list;
+    own.morphTargetsRelative = g.morphTargetsRelative;
+    for (const grp of g.groups) own.addGroup(grp.start, grp.count, grp.materialIndex);
+    own.drawRange = { ...g.drawRange };
+    if (g.boundingBox) own.boundingBox = g.boundingBox.clone();
+    if (g.boundingSphere) own.boundingSphere = g.boundingSphere.clone();
+    own.userData = { ...g.userData, sbCrownOwn: true };
+    mesh.geometry = own;
+    return own;
+}
+
+/** Sets (or updates in place) a per-mesh attribute: one value for the whole mesh, on its own geometry. */
+export function setPerMeshAttribute(mesh: THREE.Mesh, name: string, v: number[]): void {
+    const geom = ownGeometryOf(mesh);
+    const a = geom.getAttribute(name) as THREE.InstancedBufferAttribute | undefined;
+    if (a && (a as THREE.InstancedBufferAttribute).isInstancedBufferAttribute && a.array.length === v.length) {
+        (a.array as Float32Array).set(v);
+        a.needsUpdate = true;
+        return;
+    }
+    geom.setAttribute(name, new THREE.InstancedBufferAttribute(new Float32Array(v), v.length, false, PER_MESH_DIVISOR));
+}
 
 /**
  * Gives `mesh` its own geometry that shares every buffer of the current one and adds the crown attributes. The shared
@@ -242,35 +277,10 @@ const PER_MESH_DIVISOR = 1 << 30;
  * index, count, blend radius, mean lobe radius] (mesh units); count 0 means the ellipsoid.
  */
 export function attachCrownAttributes(mesh: THREE.Mesh, quadric: ReturnType<typeof crownQuadricInMeshFrame>, lobes: [number, number, number, number] = [0, 0, 0, 0]): void {
-    const g = mesh.geometry as THREE.BufferGeometry;
-    const set = (geom: THREE.BufferGeometry, name: string, v: number[]) => {
-        const a = geom.getAttribute(name) as THREE.InstancedBufferAttribute | undefined;
-        if (a && (a as THREE.InstancedBufferAttribute).isInstancedBufferAttribute) {
-            (a.array as Float32Array).set(v);
-            a.needsUpdate = true;
-            return;
-        }
-        geom.setAttribute(name, new THREE.InstancedBufferAttribute(new Float32Array(v), v.length, false, PER_MESH_DIVISOR));
-    };
-    let own = g;
-    if (!g.userData?.sbCrownOwn) {
-        own = new THREE.BufferGeometry();
-        own.name = g.name;
-        own.setIndex(g.index);
-        for (const [name, attr] of Object.entries(g.attributes)) own.setAttribute(name, attr);
-        for (const [name, list] of Object.entries(g.morphAttributes)) (own.morphAttributes as Record<string, Array<THREE.BufferAttribute | THREE.InterleavedBufferAttribute>>)[name] = list;
-        own.morphTargetsRelative = g.morphTargetsRelative;
-        for (const grp of g.groups) own.addGroup(grp.start, grp.count, grp.materialIndex);
-        own.drawRange = { ...g.drawRange };
-        if (g.boundingBox) own.boundingBox = g.boundingBox.clone();
-        if (g.boundingSphere) own.boundingSphere = g.boundingSphere.clone();
-        own.userData = { ...g.userData, sbCrownOwn: true };
-        mesh.geometry = own;
-    }
-    set(own, 'sbCrownC', quadric.c);
-    set(own, 'sbCrownS0', quadric.s0);
-    set(own, 'sbCrownS1', quadric.s1);
-    set(own, 'sbCrownL', lobes);
+    setPerMeshAttribute(mesh, 'sbCrownC', quadric.c);
+    setPerMeshAttribute(mesh, 'sbCrownS0', quadric.s0);
+    setPerMeshAttribute(mesh, 'sbCrownS1', quadric.s1);
+    setPerMeshAttribute(mesh, 'sbCrownL', lobes);
 }
 
 /**
