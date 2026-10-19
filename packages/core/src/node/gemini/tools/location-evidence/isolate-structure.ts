@@ -408,6 +408,50 @@ function publish(cache: StageCache, file: string, name: string): GlbOutput {
     return { path: p.path, url: p.url, bytes: p.bytes };
 }
 
+/** The place: as given, or from the staged geocode cache (the staged build's own key and TTL). */
+export async function resolveStagedPlace(
+    request: { query: string; place?: ResolvedPlace }, deps: Pick<IsolateStructureDeps, 'cache' | 'geocode' | 'now'>, ctx: IsolateStructureContext = {}
+): Promise<{ place: ResolvedPlace; cached: boolean }> {
+    if (request.place) return { place: request.place, cached: false };
+    const now = deps.now ?? Date.now;
+    ctx.reportProgress?.(`resolving ${request.query}`);
+    const key = stageKey('geocode/v1', request.query.trim().toLowerCase().replace(/\s+/g, ' '));
+    const hit = deps.cache.get<ResolvedPlace>('resolve', key);
+    if (hit && now() - hit.builtAtMs < GEOCODE_TTL_MS) return { place: hit.value, cached: true };
+    try {
+        return { place: (await deps.cache.run('resolve', key, async () => ({ value: await deps.geocode(request.query, ctx.signal) }), { bypass: true })).value, cached: false };
+    } catch (err) {
+        if (ctx.signal?.aborted) throw err;
+        throw new IsolateStructureFailure('place_unresolved', `The place could not be resolved: ${errorMessage(err)}`);
+    }
+}
+
+/**
+ * The staged extraction cache (key extract/v2, its TTL): the leaves within a radius of the place, extracted once and served
+ * to every tool and stage that asks for the same radius. `last` says whether the latest call came from the cache.
+ */
+export function stagedExtractor(place: ResolvedPlace, deps: Pick<IsolateStructureDeps, 'cache' | 'extract' | 'now'>, ctx: IsolateStructureContext = {}): { extract(radiusM: number): Promise<StagedExtraction>; last(): { key: string; cached: boolean } | undefined } {
+    const now = deps.now ?? Date.now;
+    const cache = deps.cache;
+    let last: { key: string; cached: boolean } | undefined;
+    const extract = async (radiusM: number): Promise<StagedExtraction> => {
+        const key = stageKey('extract/v2', place.lat.toFixed(6), place.lng.toFixed(6), Math.round(radiusM));
+        const inEntry = (dir: string, v: StagedExtraction): StagedExtraction => ({ ...v, texturedGlb: path.join(dir, v.texturedGlb), geometryGlb: path.join(dir, v.geometryGlb) });
+        const hit = cache.get<StagedExtraction>('tiles', key);
+        if (hit && now() - hit.builtAtMs < EXTRACTION_TTL_MS) {
+            const v = inEntry(hit.dir, hit.value);
+            if (fs.existsSync(v.texturedGlb) && fs.existsSync(v.geometryGlb)) { last = { key, cached: true }; return v; }
+        }
+        const entry = await cache.run('tiles', key, async dir => {
+            const x = await deps.extract({ lat: place.lat, lng: place.lng, radiusM, outDir: dir, place, signal: ctx.signal, onProgress: m => ctx.reportProgress?.(m) });
+            return { value: { ...x, texturedGlb: path.relative(dir, x.texturedGlb), geometryGlb: path.relative(dir, x.geometryGlb) } };
+        }, { bypass: true });
+        last = { key, cached: false };
+        return inEntry(entry.dir, entry.value);
+    };
+    return { extract, last: () => last };
+}
+
 export async function runIsolateStructure(request: IsolateStructureRequest, deps: IsolateStructureDeps, ctx: IsolateStructureContext = {}): Promise<IsolateStructureResult> {
     const now = deps.now ?? Date.now;
     const cache = deps.cache;
@@ -421,42 +465,14 @@ export async function runIsolateStructure(request: IsolateStructureRequest, deps
     const lap = (name: string, since: number) => { timings[name] = now() - since; };
 
     // ---------------- the place (the staged geocode cache) ----------------
-    let place: ResolvedPlace, placeCached = false;
     let t = now();
-    if (request.place) place = request.place;
-    else {
-        progress(`resolving ${request.query}`);
-        const key = stageKey('geocode/v1', request.query.trim().toLowerCase().replace(/\s+/g, ' '));
-        const hit = cache.get<ResolvedPlace>('resolve', key);
-        if (hit && now() - hit.builtAtMs < GEOCODE_TTL_MS) { place = hit.value; placeCached = true; }
-        else {
-            try {
-                place = (await cache.run('resolve', key, async () => ({ value: await deps.geocode(request.query, ctx.signal) }), { bypass: true })).value;
-            } catch (err) {
-                if (ctx.signal?.aborted) throw err;
-                throw new IsolateStructureFailure('place_unresolved', `The place could not be resolved: ${errorMessage(err)}`);
-            }
-        }
-    }
+    const resolved = await resolveStagedPlace(request, deps, ctx);
+    const place = resolved.place, placeCached = resolved.cached;
     lap('resolve', t);
 
     // ---------------- the extraction sized to the structure, and the pick (the staged extraction cache) ----------------
-    let last: { key: string; cached: boolean } | undefined;
-    const extractCached = async (radiusM: number): Promise<StagedExtraction> => {
-        const key = stageKey('extract/v2', place.lat.toFixed(6), place.lng.toFixed(6), Math.round(radiusM));
-        const inEntry = (dir: string, v: StagedExtraction): StagedExtraction => ({ ...v, texturedGlb: path.join(dir, v.texturedGlb), geometryGlb: path.join(dir, v.geometryGlb) });
-        const hit = cache.get<StagedExtraction>('tiles', key);
-        if (hit && now() - hit.builtAtMs < EXTRACTION_TTL_MS) {
-            const v = inEntry(hit.dir, hit.value);
-            if (fs.existsSync(v.texturedGlb) && fs.existsSync(v.geometryGlb)) { last = { key, cached: true }; return v; }
-        }
-        const entry = await cache.run('tiles', key, async dir => {
-            const x = await deps.extract({ lat: place.lat, lng: place.lng, radiusM, outDir: dir, place, signal: ctx.signal, onProgress: m => progress(m) });
-            return { value: { ...x, texturedGlb: path.relative(dir, x.texturedGlb), geometryGlb: path.relative(dir, x.geometryGlb) } };
-        }, { bypass: true });
-        last = { key, cached: false };
-        return inEntry(entry.dir, entry.value);
-    };
+    const extractor = stagedExtractor(place, deps, ctx);
+    const extractCached = extractor.extract;
     t = now();
     let sizing: Awaited<ReturnType<typeof sizeExtraction<StagedExtraction>>>;
     try {
@@ -480,7 +496,7 @@ export async function runIsolateStructure(request: IsolateStructureRequest, deps
     };
     const extractionOut: IsolateStructureResult['extraction'] = {
         radiusM: sizing.radiusM, rounds: sizing.rounds, leafTiles: extraction.leafTiles, coveredRadiusM: extraction.coveredRadiusM,
-        rawGlbPath: extraction.rawGlbPath ?? extraction.texturedGlb, cached: last?.cached ?? false, originEllipsoidalHeightM: extraction.originEllipsoidalHeightM
+        rawGlbPath: extraction.rawGlbPath ?? extraction.texturedGlb, cached: extractor.last()?.cached ?? false, originEllipsoidalHeightM: extraction.originEllipsoidalHeightM
     };
     const reliefOpt = request.relief ? {} : { relief: false };
 

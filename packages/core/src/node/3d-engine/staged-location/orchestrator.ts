@@ -128,6 +128,7 @@ import { buildSwitchLocationPills, switchLocationMarkdown } from '../../../commo
 import { summarizeStagedBuild, type StagedSummaryInput } from './staged-summary';
 import { palettesFromSurvey, photoTierEnabled, textureLayer, TEXTURE_PASS_VERSION, type TextureLayerOutcome } from './texture-pass';
 import { prepareTextureSources, type TextureSourcesInput } from './texture-sources';
+import { maskTemporaryInViews, temporaryCheckEnabled, visionTemporaryChecker, TEMPORARY_CHECK_VERSION } from './temporary-structures';
 import { objectSegmenter, ownViews, OWNERSHIP_VERSION, type OwnershipSegmenter } from './streetview-ownership';
 import { correctViewsLighting, lightingModels, lightingPromptVariant, textureArmOptions, LIGHTING_MODEL_LITE, type LightingCorrectedView } from './texture-lighting';
 import { TextureWorkerPool, textureWorkersEnabled } from './texture-worker-pool';
@@ -1651,6 +1652,19 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         cache.writeRunNote(runId, 'texture_ownership', { ms: now() - to, records: own.records });
                         io.progress(`textures: the structure was cut out of ${kept} of ${own.records.length} Street View photos; ${own.records.length - kept} photos vouch for no pixel (${own.records.find(r => r.status === 'refused')?.reason ?? 'none'})`);
                     }
+                    // temporary structures (SCRATCHBOX_SURVEY_TEMPORARY=1 only): what the vision model outlines as temporary in front of
+                    // the structure (scaffolding, netting, ...) is taken out of each view's ownership mask, an occluder for the bake
+                    let temporaryKey: string | undefined;
+                    if (views.length && temporaryCheckEnabled() && visionAvailable) {
+                        const tt = now();
+                        const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: io.signal, ...chainExtras('textures'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
+                        const tmp = await maskTemporaryInViews({ views, check: visionTemporaryChecker(chain), target: request.query, signal: io.signal, onProgress: m => io.progress(`textures: ${m}`) });
+                        views = tmp.views;
+                        temporaryKey = `sv-temporary/${TEMPORARY_CHECK_VERSION}:${sha256Bytes(Buffer.from(JSON.stringify(tmp.records.map(r => [r.panoId, r.flagged, r.maskedPixels]))))}`;
+                        cache.writeRunNote(runId, 'texture_temporary', { ms: now() - tt, records: tmp.records });
+                        const flagged = tmp.records.filter(r => r.flagged);
+                        io.progress(`textures: ${flagged.length} of ${tmp.records.length} Street View photos show something temporary in front of the structure${flagged.length ? ` (${flagged.map(r => r.description).filter(Boolean).slice(0, 3).join('; ')}); those regions texture nothing` : ''}`);
+                    }
                     const viewsUnavailable = arm.streetView === 'off' ? 'Street View is turned off for this build (SCRATCHBOX_TEXTURE_STREET_VIEW=off, an experiment arm)' : images.length ? (views.length ? undefined : `none of the ${images.length} grounding images decoded (${failures[0] ?? ''})`)
                         : evidence ? `the Street View stage ${evidence.status === 'skipped' ? 'was skipped' : 'returned no image'}` : (visionAvailable ? 'the Street View stage did not run' : 'no vision model is configured, so no Street View close-ups were fetched');
                     const palette = palettesFromSurvey(run.state.materialHints?.faces);
@@ -1705,7 +1719,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const textureOne = async (target: typeof targets[number]) => {
                         handled.add(target.layer.objectId);
                         const clay = fs.readFileSync(target.file);
-                        const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), wideHeld.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048, surfacesKey(target.surfaces), ...(!(rebuildOut.refit ?? rebuildOut.fit) && views.length ? ['no-fit-held-out-gate/2'] : []), ...(lightingClient ? [`light:${lightingModelIds.join(',')}:${lightingPromptVariant()}:${lightingViews?.length ?? 0}`] : []), ...(arm.key ? [arm.key] : []), ...(ownershipKey ? [ownershipKey] : []));
+                        const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), wideHeld.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048, surfacesKey(target.surfaces), ...(!(rebuildOut.refit ?? rebuildOut.fit) && views.length ? ['no-fit-held-out-gate/2'] : []), ...(lightingClient ? [`light:${lightingModelIds.join(',')}:${lightingPromptVariant()}:${lightingViews?.length ?? 0}`] : []), ...(arm.key ? [arm.key] : []), ...(ownershipKey ? [ownershipKey] : []), ...(temporaryKey ? [temporaryKey] : []));
                         const entry = await cache.run<Omit<TextureLayerOutcome, 'glb'>>('textures', key, async dir => {
                             const bake = (bakeViews: typeof views, bakeUnavailable: string | undefined) => (texturePool ? texturePool.textureLayer.bind(texturePool) : textureLayer)({ layerKey: target.layer.layer, clayGlb: clay, ...(target.surfaces?.length ? { surfaces: target.surfaces } : {}) }, {
                                 views: bakeViews, ...(wideViews.length ? { photoTierViews: wideViews } : {}), ...(photoTierEnabled() ? { photoTier: true } : {}), ...(bakeUnavailable ? { viewsUnavailable: bakeUnavailable } : {}), occluder, ...(context.indices.length ? { context } : {}), observedSurface: TEXTURE_OBSERVED_SURFACE, poseEdgeGuardShare: TEXTURE_POSE_EDGE_GUARD_SHARE,

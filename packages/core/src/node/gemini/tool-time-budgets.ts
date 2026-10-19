@@ -53,6 +53,9 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
     // Leaf-tile extraction rounds, tree measurement, the mask vote's vision calls and tile_refine (each first-use build
     // up to 10 min); reports progress between steps.
     location_isolate_structure: { maxMs: 30 * MIN, idleMs: 15 * MIN },
+    // One block extraction, a structure pick per building, the tree strip, the per-triangle split and one GLB pair per
+    // building; with the mask vote, a render, vision outlines and an isolate per building.
+    location_split_block: { maxMs: 45 * MIN, idleMs: 15 * MIN },
     // Native cluster LOD build: about 2 s per 170k triangles, longer for multi-million-triangle scans.
     virtual_geometry_open_glb: { maxMs: 12 * MIN },
     // Several serial image-model calls each.
