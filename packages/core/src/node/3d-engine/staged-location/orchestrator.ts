@@ -2347,11 +2347,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const c = out.counts;
                     const gen = out.generated;
                     const builtMeasured = out.geometry.features.some(f => f.built);
-                    const builtGenerated = !!gen && gen.geometry.features.some(f => f.label === GENERATED_LABEL && f.built);
+                    // the real-data view (enhanced mode off) shows real sources only: measured relief, never the generated typical profiles
+                    const realDataView = !(request.enhance ?? stagedEnhance());
+                    const builtGenerated = !realDataView && !!gen && gen.geometry.features.some(f => f.label === GENERATED_LABEL && f.built);
                     const kept = out.geometry.features.filter(f => f.built);
                     const depths = kept.map(f => `${f.role}: ${f.depthM.toFixed(2)} +- ${f.seM.toFixed(2)} m`).slice(0, 12).join('; ');
                     const describe = `measured: bands ${c.bands.accepted} of ${c.bands.proposed} kept, vertical elements ${c.verticals.accepted} of ${c.verticals.proposed}, window reveals ${c.reveals.accepted} of ${c.reveals.proposed}, projections beside openings ${c.projections.accepted} of ${c.projections.proposed} (gate: depth >= ${RELIEF_PARAMS.k} standard errors and >= ${RELIEF_PARAMS.minDepth} m, from >= ${RELIEF_PARAMS.minBlocks} blocks of ${RELIEF_PARAMS.block} m or >= ${RELIEF_PARAMS.minOpenings} openings)` +
-                        (gen ? `; generated (typical profiles in the scan's evidence bounds): bands ${gen.counts.bands.built}, window reveals ${gen.counts.reveals.built}` : '');
+                        (gen ? (realDataView ? `; generated typical profiles not used (the real-data view shows real sources only)` : `; generated (typical profiles in the scan's evidence bounds): bands ${gen.counts.bands.built}, window reveals ${gen.counts.reveals.built}`) : '');
                     cache.writeRunNote(runId, 'pipeline_e_relief', { counts: c, features: out.geometry.features, generated: gen ? { counts: gen.counts, features: gen.geometry.features.filter(f => f.label === GENERATED_LABEL) } : undefined, replacedSweeps: out.geometry.replacedSweeps, maps: out.maps, timingsMs: out.timingsMs });
                     if (!builtMeasured && !builtGenerated) return { status: 'degraded', value: { outcome: { counts: c } }, source: `measured relief: nothing stood out of the scan significantly (${describe})`, reason: 'no measured feature passed its gate' };
                     // the layer gate: the layer it refines, the measured layer, and the measured layer with the generated
