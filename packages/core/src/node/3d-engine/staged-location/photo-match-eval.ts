@@ -23,6 +23,9 @@
  *    the symmetric structural-edge chamfer (texture-fit-metric.ts's edges and truncation) and the mean CIEDE2000 of the
  *    blurred colours, plus how much of the mask the arm covers;
  *  - a grid image: the photo beside every arm render, labelled, for a person to look at.
+ * The clay arm (`clay` in renderTriangles, `judgeViewClay`) renders every arm again from the same pose in one uniform clay,
+ * its street in a lighter clay, under a raised key light behind the camera, and the judge scores shape only (massing,
+ * openings, surface relief): geometry changes that the photo texture hides (measured relief, reveals) can be scored there.
  *
  * Nothing here knows a place or a pipeline; the arms are whatever GLBs the caller names. The photos must not have been used
  * to texture or register any arm: the caller holds them out (the bake-off driver checks the pano ids).
@@ -47,6 +50,10 @@ export const PHOTO_MATCH_BACKGROUND: Vec3 = [128, 128, 128];
 export const PHOTO_MATCH_AMBIENT = 0.72;
 /** Nearest depth rendered (m). */
 export const PHOTO_MATCH_NEAR_M = 0.25;
+/** The clay renders: the arm's clay, its street's (lighter, so the target reads against it), the background and the light. */
+export const PHOTO_MATCH_CLAY: { albedo: Vec3; contextAlbedo: Vec3; background: Vec3; ambient: number } = {
+    albedo: [150, 152, 156], contextAlbedo: [206, 204, 198], background: [222, 226, 232], ambient: 0.34
+};
 
 export interface ArmRender {
     width: number;
@@ -138,6 +145,12 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
      * still counts the arm's samples only, so the metrics' mask stays the target.
      */
     context?: TileTriangles[];
+    /**
+     * Render untextured: every arm triangle in one clay albedo and the context in a lighter one (sRGB; PHOTO_MATCH_CLAY by
+     * default), lit by a key light raised behind the camera (each facet's normal turned to face the camera, then max(0, n . L))
+     * over an ambient share, so relief shows as shading: soffits darker, reveals' sides apart. No texture is sampled.
+     */
+    clay?: boolean | { albedo?: Vec3; contextAlbedo?: Vec3 };
 } = {}): ArmRender {
     const t0 = Date.now();
     const ss = Math.max(1, Math.round(options.supersample ?? 2));
@@ -213,8 +226,18 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
         }
     });
     // shade the samples, then box-reduce to the camera's resolution
-    const amb = options.ambient ?? PHOTO_MATCH_AMBIENT;
-    const bg = options.background ?? PHOTO_MATCH_BACKGROUND;
+    const clay = options.clay ? { ...PHOTO_MATCH_CLAY, ...(typeof options.clay === 'object' ? options.clay : {}) } : undefined;
+    const amb = options.ambient ?? (clay ? clay.ambient : PHOTO_MATCH_AMBIENT);
+    const bg = options.background ?? (clay ? clay.background : PHOTO_MATCH_BACKGROUND);
+    const clayLin = clay ? clay.albedo.map(c => SRGB8_TO_LINEAR[c]) : undefined;
+    const clayCtxLin = clay ? clay.contextAlbedo.map(c => SRGB8_TO_LINEAR[c]) : undefined;
+    // the clay key light: behind the camera, raised and a little to its left (world up is +y in the tile frame)
+    let key: [number, number, number] = [0, 0, 0];
+    if (clay) {
+        const k = [0, 1, 2].map(a => -0.55 * fwd[a] + (a === 1 ? 0.7 : 0) - 0.35 * right[a]);
+        const kl = Math.hypot(k[0], k[1], k[2]) || 1;
+        key = [k[0] / kl, k[1] / kl, k[2] / kl];
+    }
     const bgLin = bg.map(c => SRGB8_TO_LINEAR[c]);
     const outW = camera.width, outH = camera.height;
     const acc = new Float64Array(outW * outH * 3), cov = new Float32Array(outW * outH);
@@ -229,7 +252,10 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
         }
         if (mi < 0) { acc[o * 3] += bgLin[0]; acc[o * 3 + 1] += bgLin[1]; acc[o * 3 + 2] += bgLin[2]; continue; }
         const m = meshes[mi], t = tri[i], ti = m.texture[t];
-        if (ti >= 0) {
+        if (clay) {
+            const c = mi < armMeshes ? clayLin! : clayCtxLin!;
+            col[0] = c[0]; col[1] = c[1]; col[2] = c[2];
+        } else if (ti >= 0) {
             const tex = m.textures[ti], chain = mipChain(tex);
             const lv = levelOf.get(mi)![t];
             const l0 = Math.min(chain.length - 1, Math.floor(lv)), l1 = Math.min(chain.length - 1, l0 + 1), f = Math.min(1, lv - l0);
@@ -247,8 +273,16 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
         const dx = right[0] * xc + up[0] * yc + fwd[0], dy = right[1] * xc + up[1] * yc + fwd[1], dz = right[2] * xc + up[2] * yc + fwd[2];
         const dl = Math.hypot(dx, dy, dz);
         const n = t * 3;
-        const cos = Math.abs((m.normals[n] * dx + m.normals[n + 1] * dy + m.normals[n + 2] * dz) / dl);
-        const shade = amb + (1 - amb) * cos;
+        const nv = (m.normals[n] * dx + m.normals[n + 1] * dy + m.normals[n + 2] * dz) / dl;
+        let shade: number;
+        if (clay) {
+            // the facet's normal turned towards the camera (scan normals are not reliably outward), then the key light
+            const sgn = nv > 0 ? -1 : 1;
+            const nl = sgn * (m.normals[n] * key[0] + m.normals[n + 1] * key[1] + m.normals[n + 2] * key[2]);
+            shade = amb + (1 - amb) * Math.max(0, nl);
+        } else {
+            shade = amb + (1 - amb) * Math.abs(nv);
+        }
         acc[o * 3] += col[0] * shade; acc[o * 3 + 1] += col[1] * shade; acc[o * 3 + 2] += col[2] * shade;
         if (mi < armMeshes) cov[o] += 1;
     }
@@ -395,7 +429,11 @@ export interface JudgeClient {
         opts: { stage: string; thinkingBudget?: number }): Promise<{ response: { candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> }; finishReason?: string }> }; model: string; remember?: () => void }>;
 }
 
-export interface JudgeRun { order: string[]; scores: Record<string, JudgeScores>; notes: Record<string, string>; model: string }
+export interface JudgeRun<S = JudgeScores> { order: string[]; scores: Record<string, S>; notes: Record<string, string>; model: string }
+
+/** The clay judge's one criterion: shape (geometry only: the renders carry no texture). */
+export const CLAY_JUDGE_CRITERIA = ['shape'] as const;
+export type ClayJudgeScores = { shape: number };
 
 /** Deterministic shuffle (mulberry32 seeded by a string). */
 export function seededShuffle<T>(items: T[], seed: string): T[] {
@@ -426,7 +464,31 @@ export function judgePrompt(place: string, count: number): { preamble: string; c
     };
 }
 
+/** The clay judgement's prompt: the same pose and blind protocol, every render in untextured clay, shape only. */
+export function clayJudgePrompt(place: string, count: number): { preamble: string; closing: string } {
+    return {
+        preamble: `You are judging how closely the 3D geometry of reconstructions matches a real place. Image 0 is a real photograph (Google Street View) of ${place}. ` +
+            `Images 1 to ${count} are renders of ${count} different 3D reconstructions of that building, each rendered from exactly the camera position, direction, field of view and resolution of the photograph, ` +
+            'all in the same uniform untextured grey clay (no colour, no texture, no materials) under the same light, with the surrounding street in a lighter clay. ' +
+            'Judge only the shape of the target building: ignore colour, materials and texture (no render has any), the sky, trees, vehicles, people, street furniture and the neighbouring buildings. ' +
+            'The renders are in no particular order and come from different methods.',
+        closing: 'Score every render 1-10 (10 best) against the photograph on one criterion:\n' +
+            '- shape: how well the geometry matches the building in the photograph: massing and silhouette, roofline and setbacks, storeys and openings in the right places and sizes, ' +
+            'and the surface relief the photograph shows (cornices, string courses, piers, window reveals, projections), with nothing melted, broken or invented.\n' +
+            `Use the whole scale and compare the renders with each other. Reply with JSON only: {"renders":[{"image":1,"shape":n,"note":"at most 20 words on what decides it"}, ...]} with one entry for each of images 1 to ${count}.`
+    };
+}
+
 export function parseJudgeReply(text: string, count: number): { scores: Array<JudgeScores & { note: string }>; problems: string[] } {
+    return parseScores<JudgeScores>(text, count, JUDGE_CRITERIA, JUDGE_REQUIRED_CRITERIA);
+}
+
+/** A clay judgement's reply: `shape` in 1-10 for every image. */
+export function parseClayJudgeReply(text: string, count: number): { scores: Array<ClayJudgeScores & { note: string }>; problems: string[] } {
+    return parseScores<ClayJudgeScores>(text, count, CLAY_JUDGE_CRITERIA, CLAY_JUDGE_CRITERIA);
+}
+
+function parseScores<S>(text: string, count: number, criteria: readonly string[], required: readonly string[]): { scores: Array<S & { note: string }>; problems: string[] } {
     const problems: string[] = [];
     let j: { renders?: Array<Record<string, unknown>> };
     try {
@@ -435,20 +497,19 @@ export function parseJudgeReply(text: string, count: number): { scores: Array<Ju
     } catch {
         return { scores: [], problems: ['the reply is not JSON'] };
     }
-    const out: Array<JudgeScores & { note: string }> = [];
+    const out: Array<S & { note: string }> = [];
     for (let k = 1; k <= count; k++) {
         const r = j.renders?.find(x => Number(x.image) === k);
         if (!r) { problems.push(`no entry for image ${k}`); continue; }
-        const sc = {} as JudgeScores;
+        const sc = {} as Record<string, number>;
         let ok = true;
-        for (const c of JUDGE_CRITERIA) {
-            const required = (JUDGE_REQUIRED_CRITERIA as readonly string[]).includes(c);
-            if (!required && r[c] === undefined) continue;
+        for (const c of criteria) {
+            if (!required.includes(c) && r[c] === undefined) continue;
             const v = Number(r[c]);
             if (!Number.isFinite(v) || v < 1 || v > 10) { ok = false; problems.push(`image ${k}: ${c} is ${String(r[c])}`); break; }
-            sc[c as keyof JudgeScores] = v;
+            sc[c] = v;
         }
-        if (ok) out[k - 1] = { ...sc, note: typeof r.note === 'string' ? r.note : '' };
+        if (ok) out[k - 1] = { ...(sc as S), note: typeof r.note === 'string' ? r.note : '' };
     }
     return { scores: out, problems };
 }
@@ -459,33 +520,50 @@ const jpegOrPngB64 = (img: { bytes: Uint8Array; mimeType: string }) => ({ inline
  * One blind judgement of a view, `repeats` times: the photo, then the arm renders in an order shuffled per repeat (seeded by
  * `seed` and the repeat), unlabelled. Returns the scores mapped back to the arm ids. A reply that does not parse is retried once.
  */
-export async function judgeView(input: {
+export async function judgeView(input: JudgeViewInput): Promise<JudgeRun[]> {
+    return judgeRepeats<JudgeScores>(input, judgePrompt, parseJudgeReply, 'photo-match-judge');
+}
+
+/**
+ * The clay judgement of a view: the arms' clay renders (renderTriangles with `clay`), the same blind protocol (shuffled per
+ * repeat, unlabelled, a reply that does not parse retried once), shape only.
+ */
+export async function judgeViewClay(input: JudgeViewInput): Promise<Array<JudgeRun<ClayJudgeScores>>> {
+    return judgeRepeats<ClayJudgeScores>(input, clayJudgePrompt, parseClayJudgeReply, 'photo-match-judge-clay');
+}
+
+export interface JudgeViewInput {
     client: JudgeClient; place: string; photo: { bytes: Uint8Array; mimeType: string };
     renders: Array<{ armId: string; png: Uint8Array }>; repeats?: number; seed: string; thinkingBudget?: number; temperature?: number;
-}): Promise<JudgeRun[]> {
-    const runs: JudgeRun[] = [];
+}
+
+async function judgeRepeats<S>(
+    input: JudgeViewInput, prompt: (place: string, count: number) => { preamble: string; closing: string },
+    parse: (text: string, count: number) => { scores: Array<S & { note: string }>; problems: string[] }, stage: string
+): Promise<Array<JudgeRun<S>>> {
+    const runs: Array<JudgeRun<S>> = [];
     const repeats = input.repeats ?? 3;
     for (let r = 0; r < repeats; r++) {
         const order = seededShuffle(input.renders, `${input.seed}#${r}`);
-        const { preamble, closing } = judgePrompt(input.place, order.length);
+        const { preamble, closing } = prompt(input.place, order.length);
         const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [{ text: preamble }, { text: 'Image 0: the real photograph.' }, jpegOrPngB64(input.photo)];
         order.forEach((o, k) => { parts.push({ text: `Image ${k + 1}: a render.` }, jpegOrPngB64({ bytes: o.png, mimeType: 'image/png' })); });
         parts.push({ text: closing });
-        let parsed: ReturnType<typeof parseJudgeReply> | undefined;
+        let parsed: ReturnType<typeof parse> | undefined;
         let model = '';
         for (let attempt = 0; attempt < 2; attempt++) {
             const res = await input.client.generate({
                 contents: [{ role: 'user', parts: attempt ? [...parts, { text: `(Attempt ${attempt + 1}: reply with the JSON object only.)` }] : parts }],
                 config: { responseMimeType: 'application/json', temperature: input.temperature ?? 1 }
-            }, { stage: 'photo-match-judge', thinkingBudget: input.thinkingBudget ?? 24_576 });
+            }, { stage, thinkingBudget: input.thinkingBudget ?? 24_576 });
             model = res.model;
             const text = (res.response.candidates?.[0]?.content?.parts ?? []).filter(p => !p.thought).map(p => p.text ?? '').join('');
-            parsed = parseJudgeReply(text, order.length);
+            parsed = parse(text, order.length);
             if (!parsed.problems.length) { res.remember?.(); break; }
         }
         if (!parsed || parsed.problems.length) throw new Error(`photo-match judge: the reply could not be read (${parsed?.problems.slice(0, 3).join('; ')})`);
-        const scores: Record<string, JudgeScores> = {}, notes: Record<string, string> = {};
-        order.forEach((o, k) => { const { note, ...sc } = parsed!.scores[k]; scores[o.armId] = sc; notes[o.armId] = note; });
+        const scores: Record<string, S> = {}, notes: Record<string, string> = {};
+        order.forEach((o, k) => { const { note, ...sc } = parsed!.scores[k]; scores[o.armId] = sc as unknown as S; notes[o.armId] = note; });
         runs.push({ order: order.map(o => o.armId), scores, notes, model });
     }
     return runs;
@@ -494,7 +572,7 @@ export async function judgeView(input: {
 export interface CriterionStat { mean: number; sd: number; min: number; max: number }
 
 /** Mean, standard deviation (population) and range of each arm's scores over the runs. */
-export function aggregateRuns(runs: JudgeRun[], armIds: string[]): Record<string, Record<JudgeCriterion, CriterionStat>> {
+export function aggregateRuns(runs: Array<JudgeRun<Partial<Record<JudgeCriterion, number>>>>, armIds: string[]): Record<string, Record<JudgeCriterion, CriterionStat>> {
     const out: Record<string, Record<JudgeCriterion, CriterionStat>> = {};
     for (const a of armIds) {
         out[a] = {} as Record<JudgeCriterion, CriterionStat>;
