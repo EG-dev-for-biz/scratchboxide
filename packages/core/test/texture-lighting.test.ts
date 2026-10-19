@@ -283,7 +283,7 @@ describe('texture lighting: cross-view gate and bake', () => {
         const corrected = views.map((v, k) => ({ index: k, panoId: v.panoId, image: { width: 8, height: 8, rgba: new Uint8Array(256).fill(k + 1) }, modelUsed: LIGHTING_MODEL_LITE, confidence: 1 }));
         const origOf = new Map<ProjectionView, ProjectionView>(), corrOf = new Map<ProjectionView, ProjectionView>();
         const isCorr = (v: ProjectionView) => origOf.has(v);
-        const agreement = (median: number, p95: number, perView: number[] = []) => ({ sampled: 100, texels: 100, medianDeltaE: median, p95DeltaE: p95, footprintM: 0.5, strideTexels: 1,
+        const agreement = (median: number, p95: number, perView: number[] = []) => ({ sampled: 1000, texels: 1000, medianDeltaE: median, p95DeltaE: p95, footprintM: 0.5, strideTexels: 1,
             perView: perView.map((m, k) => ({ panoId: `v${k}`, samples: 10, pairs: 10, medianDeltaE: m, meanDeltaE: m })) });
         // scripted: originals 4 / 10; every corrected 3 / 9; c's correction is bad: without it 2 / 8
         const measure = (vs: ProjectionView[]) => {
@@ -301,6 +301,19 @@ describe('texture lighting: cross-view gate and bake', () => {
         expect(chosen[2]).toBe(views[2]);
         expect(chosen[0]).not.toBe(views[0]);
         expect(report.chosen.medianDeltaE).toBe(2);
+    });
+
+    it('does not judge a correction on too few multiply-seen texels', () => {
+        const views = ['a', 'b'].map(panoId => ({ panoId, camera: lookAtCamera([0, 0, -5], [0, 0, 0], 8, 8, 60), image: { width: 8, height: 8, rgba: new Uint8Array(256) }, poseQuality: 1, poseSigmaPx: 0 } as ProjectionView));
+        const corrected = views.map((v, k) => ({ index: k, panoId: v.panoId, image: { width: 8, height: 8, rgba: new Uint8Array(256).fill(9) }, modelUsed: LIGHTING_MODEL_LITE, confidence: 1 }));
+        const origOf = new Map<ProjectionView, ProjectionView>();
+        const measure = (vs: ProjectionView[]) => ({ sampled: 400, texels: 200, medianDeltaE: vs.some(v => origOf.has(v)) ? 1 : 5, p95DeltaE: vs.some(v => origOf.has(v)) ? 2 : 9, footprintM: 0.5, strideTexels: 1,
+            perView: vs.map(v => ({ panoId: v.panoId, samples: 10, pairs: 10, medianDeltaE: 1, meanDeltaE: 1 })) });
+        let report: any;
+        const chosen = gateLightingViews({ views, corrected, measure, origOf, corrOf: new Map(), report: r => { report = r; } });
+        expect(report.applied).toBe(false);
+        expect(report.reason).toMatch(/too few/);
+        expect(chosen).toBe(views);
     });
 
     it('stays off when the corrections make the views disagree more', async () => {

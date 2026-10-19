@@ -639,6 +639,12 @@ export { CONFIDENCE_CHANNELS };
 export type { ConfidencePlane };
 
 /**
+ * Least multiply-seen texels (two panos) for the layer's gate to judge a lighting correction by: on the arch's detail layer
+ * (236) the gate passed while the leave-one-pano-out fit got worse (gradient NCC 0.254 -> 0.219); the layers with 2000+ improved.
+ */
+export const LIGHTING_GATE_MIN_TEXELS = 500;
+
+/**
  * Which lighting-corrected photos the layer projects (texture-lighting.ts): the views' agreement (measureCrossViewAgreement)
  * with the originals, then with every corrected photo in place of its original; a photo whose own pairs disagree more after (mean)
  * is set back to its original (per image), and the corrected set stands only when the layer's multiply-seen texels disagree
@@ -682,8 +688,9 @@ export function gateLightingViews(input: {
         if (score(m) < score(final)) { chosen = trial; final = m; reverted.push(views[f.k].panoId); }
     }
     const used = chosen.filter((v, k) => v !== views[k]).length;
-    const ok = used > 0 && before.medianDeltaE !== null && final.medianDeltaE !== null && final.medianDeltaE < before.medianDeltaE && (final.p95DeltaE ?? Infinity) <= (before.p95DeltaE ?? Infinity);
+    const ok = used > 0 && before.texels >= LIGHTING_GATE_MIN_TEXELS && before.medianDeltaE !== null && final.medianDeltaE !== null && final.medianDeltaE < before.medianDeltaE && (final.p95DeltaE ?? Infinity) <= (before.p95DeltaE ?? Infinity);
     const reason = ok ? undefined : used === 0 ? 'no corrected photo is left to use'
+        : before.texels < LIGHTING_GATE_MIN_TEXELS ? `only ${before.texels} texels are seen by two panos (fewer than ${LIGHTING_GATE_MIN_TEXELS}), too few to judge the correction by`
         : `with the corrected photos the views disagree no less (CIEDE2000 median ${before.medianDeltaE} -> ${final.medianDeltaE}, p95 ${before.p95DeltaE} -> ${final.p95DeltaE} over ${before.texels} multiply-seen texels)`;
     const pick = ok ? { m: final, views: chosen, reverted } : undefined;
     input.report({ before, after, ...(reverted.length ? { final } : {}), ...(pick ? { chosen: pick.m } : {}), offered, used: ok ? used : 0, reverted, applied: ok, ...(reason ? { reason } : {}) });
