@@ -861,6 +861,25 @@ struct FoliageReach {
 
 namespace detail {
 
+/**
+ * The height cluster a tree stands on, from the heights of the surfaces around it sorted ascending (clusters split where
+ * two neighbouring heights differ by more than `step`): the lowest cluster that holds at least a quarter of them, else
+ * (when they spread over more clusters than that, none holding a quarter) the largest, the lowest of equals. Returns
+ * [first index, count]; the count is 0 only when there are no heights.
+ */
+inline std::pair<size_t, size_t> supportCluster(const std::vector<float>& sortedY, double step) {
+    size_t quarterLo = 0, quarterN = 0, bigLo = 0, bigN = 0, lo = 0;
+    for (size_t i = 1; i <= sortedY.size(); ++i) {
+        if (i == sortedY.size() || sortedY[i] - sortedY[i - 1] > step) {
+            const size_t n = i - lo;
+            if (quarterN == 0 && 4 * n >= sortedY.size()) { quarterN = n; quarterLo = lo; }
+            if (n > bigN) { bigN = n; bigLo = lo; }
+            lo = i;
+        }
+    }
+    return quarterN > 0 ? std::pair<size_t, size_t>{quarterLo, quarterN} : std::pair<size_t, size_t>{bigLo, bigN};
+}
+
 /** Distance from p to triangle abc (closest point). */
 inline double pointTriangleDistance(const Vec3& p, const Vec3& a, const Vec3& b, const Vec3& c) { return tree_lod::pointTriangleDistance(p, a, b, c); }
 
@@ -2158,13 +2177,9 @@ private:
             // height clusters of the surrounding surfaces; the tree stands on the lowest one that holds at least a quarter
             // of them (a street tree under an awning or beside a kiosk stands on the street; a roof garden sees only roof)
             std::sort(samples.begin(), samples.end(), [](const SupportSample& a, const SupportSample& b) { return a.y < b.y; });
-            size_t bestLo = 0, bestN = 0, lo = 0;
-            for (size_t i = 1; i <= samples.size(); ++i) {
-                if (i == samples.size() || samples[i].y - samples[i - 1].y > P.supportStep) {
-                    if (bestN == 0 && 4 * (i - lo) >= samples.size()) { bestN = i - lo; bestLo = lo; }
-                    lo = i;
-                }
-            }
+            std::vector<float> ys(samples.size());
+            for (size_t i = 0; i < samples.size(); ++i) ys[i] = samples[i].y;
+            const auto [bestLo, bestN] = detail::supportCluster(ys, P.supportStep);
             // That surface may slope (a hillside, a street on a grade). Its gradient is the median gradient of the planar
             // surfaces the samples lie on, whatever the grade: steps between level surfaces (curbs, stairs, a raised plaza
             // within supportStep) have no gradient themselves, so they do not tilt it. (Calling a surface level whenever
