@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 /**
- * Google Solar API roof segments (buildingInsights:findClosest) for pipeline E's massing: planar roof facets with pitch,
+ * Google Solar API roof segments (buildingInsights, read through location_building_shape) for pipeline E's massing: planar roof facets with pitch,
  * azimuth, the plane's height at its centre (metres above mean sea level) and area. Heights are moved into the tile frame
  * by the EGM96 undulation (tiles are ellipsoidal) and the frame's origin height; the massing then checks each facet
  * against the scan before it shapes a roof.
@@ -34,45 +34,21 @@ export interface SolarRoof {
     center?: { lat: number; lng: number };
 }
 
-/** Parses a buildingInsights answer; tolerant of missing fields (a facet without its numbers is left out). */
-export function parseBuildingInsights(json: unknown): SolarRoof {
-    const j = (json ?? {}) as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-    const segs = Array.isArray(j.solarPotential?.roofSegmentStats) ? j.solarPotential.roofSegmentStats : [];
-    const segments: SolarRoofSegment[] = [];
-    for (const s of segs) {
-        const pitch = Number(s?.pitchDegrees), az = Number(s?.azimuthDegrees ?? 0), h = Number(s?.planeHeightAtCenterMeters);
-        const lat = Number(s?.center?.latitude), lng = Number(s?.center?.longitude), area = Number(s?.stats?.areaMeters2);
-        if (![pitch, az, h, lat, lng, area].every(Number.isFinite)) continue;
-        segments.push({ pitchDeg: pitch, azimuthDeg: az, planeHeightMsl: h, center: { lat, lng }, areaM2: area });
-    }
-    const d = j.imageryDate;
+/**
+ * The Solar roof facets of the building at (lat, lng), through location_building_shape (runBuildingShape: the vector
+ * footprint the Solar building is matched to, its buildingInsights roof segments). Facets of another building (the API
+ * answered for a neighbour) are not used. Throws with the tool's typed reason when there is nothing.
+ */
+export async function solarRoofFromBuildingShape(lat: number, lng: number, workspaceRoot: string, apiKey?: string): Promise<SolarRoof> {
+    const { runBuildingShape } = await import('../../../gemini/tools/location-evidence/building-shape');
+    const r = await runBuildingShape({ latitude: lat, longitude: lng }, { workspaceRoot, ...(apiKey ? { apiKey } : {}) });
+    const ins = r.target.solarInsights;
+    if (ins.status !== 'found') throw new Error(`no Solar roof facets for the building (${ins.status}${ins.reason ? `: ${ins.reason}` : ''})`);
     return {
-        segments,
-        ...(typeof j.imageryQuality === 'string' ? { imageryQuality: j.imageryQuality } : {}),
-        ...(d?.year ? { imageryDate: `${d.year}-${String(d.month ?? 1).padStart(2, '0')}-${String(d.day ?? 1).padStart(2, '0')}` } : {}),
-        ...(Number.isFinite(Number(j.center?.latitude)) ? { center: { lat: Number(j.center.latitude), lng: Number(j.center.longitude) } } : {})
+        segments: r.target.roofSegments.map(s => ({ pitchDeg: s.pitchDegrees, azimuthDeg: s.azimuthDegrees, planeHeightMsl: s.planeHeightMsl, center: { lat: s.centerWgs84[1], lng: s.centerWgs84[0] }, areaM2: s.areaM2 })),
+        ...(ins.imageryDate ? { imageryDate: ins.imageryDate } : {}),
+        ...(ins.solarBuildingCenterWgs84 ? { center: { lat: ins.solarBuildingCenterWgs84[1], lng: ins.solarBuildingCenterWgs84[0] } } : {})
     };
-}
-
-const memo = new Map<string, Promise<SolarRoof>>();
-
-/** The Solar roof segments of the building closest to (lat, lng). Throws with the API's message when there is none. */
-export function fetchSolarRoof(lat: number, lng: number, apiKey: string, fetchImpl: typeof fetch = fetch): Promise<SolarRoof> {
-    if (!apiKey) return Promise.reject(new Error('no Google Maps API key for the Solar API'));
-    const key = `${lat.toFixed(6)},${lng.toFixed(6)}`;
-    let p = memo.get(key);
-    if (!p) {
-        p = (async () => {
-            const params = new URLSearchParams({ 'location.latitude': String(lat), 'location.longitude': String(lng), requiredQuality: 'LOW', key: apiKey });
-            const res = await fetchImpl(`https://solar.googleapis.com/v1/buildingInsights:findClosest?${params}`);
-            const json = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(`Solar buildingInsights unavailable (${res.status}): ${(json as { error?: { message?: string } })?.error?.message ?? 'no answer'}`);
-            return parseBuildingInsights(json);
-        })();
-        p.catch(() => memo.delete(key));
-        memo.set(key, p);
-    }
-    return p;
 }
 
 /** Tile-frame y of a height above mean sea level at (lat, lng): ellipsoidal (+ EGM96 N) minus the frame origin's height. */

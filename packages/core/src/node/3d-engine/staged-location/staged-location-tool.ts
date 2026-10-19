@@ -20,7 +20,7 @@
  *   the final scene. A place that cannot be resolved or has no tile coverage fails the call; nothing else does.
  */
 
-import { fetchSolarRoof } from './pipeline-e/solar-roof';
+import { solarRoofFromBuildingShape } from './pipeline-e/solar-roof';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { ToolContext, ToolHandlerOutcome, ToolResultPayload } from '../../gemini/tools/types';
@@ -226,7 +226,7 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
             : {}),
         ...(fitter.service ? { scanFit: fitter.service } : { scanFitUnavailable: fitter.unavailable }),
         // Solar API roof facets (pipeline E's massing, SCRATCHBOX_STAGED_PIPELINE=e)
-        ...(resolveMapsApiKey() ? { solarRoof: (lat: number, lng: number) => fetchSolarRoof(lat, lng, resolveMapsApiKey()!) } : {}),
+        ...(resolveMapsApiKey() ? { solarRoof: (lat: number, lng: number) => solarRoofFromBuildingShape(lat, lng, workspaceRoot, resolveMapsApiKey()) } : {}),
         streetView: {
             mapsApiKey: resolveMapsApiKey(),
             // Street View images come only through the Maps Imagery Grounding API, on the app's service account
