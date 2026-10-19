@@ -19,7 +19,7 @@ import { describe, expect, it } from 'vitest';
 import type { PinholeCamera } from '../src/common/spatial/texture-pass-contracts';
 import { SRGB8_TO_LINEAR } from '../src/common/spatial/photogrammetric-delight';
 import {
-    aggregateRuns, composeGrid, coverageMask, judgeView, parseJudgeReply, perceptualScores, PHOTO_MATCH_BACKGROUND, renderPng, renderTriangles, seededShuffle,
+    aggregateRuns, composeGrid, coverageMask, judgePrompt, judgeView, parseJudgeReply, perceptualScores, PHOTO_MATCH_BACKGROUND, renderPng, renderTriangles, seededShuffle,
     type JudgeClient
 } from '../src/node/3d-engine/staged-location/photo-match-eval';
 import type { TileTriangles } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
@@ -181,6 +181,15 @@ describe('photo-match evaluator', () => {
         expect(parseJudgeReply('{"renders":[{"image":1,"shape":11,"materials":6,"detail":7,"errors":8,"overall":9}]}', 1).problems.length).toBe(1);
         expect(parseJudgeReply('{"renders":[]}', 2).problems).toEqual(['no entry for image 1', 'no entry for image 2']);
         expect(parseJudgeReply('not json', 1).problems).toEqual(['the reply is not JSON']);
+        // realism and identity are read when present, checked like the rest, and not required of older replies
+        const both = parseJudgeReply('{"renders":[{"image":1,"shape":5,"materials":6,"detail":7,"errors":8,"overall":9,"realism":4,"identity":8}]}', 1);
+        expect(both.problems).toEqual([]);
+        expect([both.scores[0].realism, both.scores[0].identity]).toEqual([4, 8]);
+        expect(ok.scores[0].realism).toBeUndefined();
+        expect(parseJudgeReply('{"renders":[{"image":1,"shape":5,"materials":6,"detail":7,"errors":8,"overall":9,"realism":0,"identity":8}]}', 1).problems.length).toBe(1);
+        expect(judgePrompt('X', 2).closing).toMatch(/- realism: [^\n]*real photograph/);
+        expect(judgePrompt('X', 2).closing).toMatch(/- identity: would someone who knows this place recognise it/);
+        expect(aggregateRuns([{ order: ['a'], scores: { a: { shape: 1, materials: 1, detail: 1, errors: 1, overall: 1 } }, notes: {}, model: 'm' }], ['a']).a.realism.mean).toBeNaN();
         const a = seededShuffle(['A', 'B', 'C', 'D'], 'x#0'), b = seededShuffle(['A', 'B', 'C', 'D'], 'x#0');
         expect(a).toEqual(b);
         expect([...a].sort()).toEqual(['A', 'B', 'C', 'D']);

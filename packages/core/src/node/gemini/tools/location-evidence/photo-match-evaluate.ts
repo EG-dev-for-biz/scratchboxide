@@ -63,7 +63,7 @@ export const PHOTO_MATCH_EVALUATE_DECLARATION: ToolDeclaration = {
         'Use it to check a location build (google_3d_tiles_get_clay, tile_refine output, any GLB in the tile frame) BEFORE telling the user it looks right or that one version is better than another. ' +
         'It picks held-out Street View views near the structure (never a pano any build used: it checks), registers each against the tile mesh (a view that does not lock is not used), ' +
         'renders every build from exactly those camera poses in its street, and has a vision model score the renders blind against each photo (shuffled and unlabelled, several runs) ' +
-        'on shape, materials, detail, errors (10 = nothing wrong or invented) and overall, 1-10. Returns per-view and mean scores per criterion with their spread across runs and views, ' +
+        'on shape, materials, detail, errors (10 = nothing wrong or invented), overall, realism (looks like a real photograph) and identity (recognisably this place), 1-10. Returns per-view and mean scores per criterion with their spread across runs and views, ' +
         'pixel metrics (SSIM, edge chamfer, colour difference: secondary, they do not rank builds reliably), the grid images (photo beside each render) and a short summary. ' +
         'With no build named it evaluates the open staged scene. Compare versions by passing arms. Scores are relative judgements, not measurements: report the spread, and say when the views are few. ' +
         'Fails with a typed error (no scores) when no held-out view can be found or registered. Takes a few minutes (Street View fetch, registration, several judge calls per view).',
@@ -758,7 +758,7 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         for (const c of JUDGE_CRITERIA) {
             const per = scored.map(p => p.view.judge!.stats[a.id]?.[c]).filter((x): x is CriterionStat => !!x && Number.isFinite(x.mean));
             const means = per.map(x => x.mean);
-            const mean = means.reduce((t, x) => t + x, 0) / Math.max(1, means.length);
+            const mean = means.length ? means.reduce((t, x) => t + x, 0) / means.length : NaN;
             s[c] = {
                 mean: r2(mean),
                 runSd: r2(per.reduce((t, x) => t + x.sd, 0) / Math.max(1, per.length)),
@@ -821,7 +821,7 @@ function summarize(input: {
     const { loaded, scores, scored, nRuns } = input;
     const line = (a: { id: string; label: string }) => {
         const s = scores[a.id];
-        return `${a.label} [${a.id}]: overall ${s.overall.mean.toFixed(1)} (runs ±${s.overall.runSd.toFixed(1)}, views ${s.overall.min.toFixed(1)}-${s.overall.max.toFixed(1)}); shape ${s.shape.mean.toFixed(1)}, materials ${s.materials.mean.toFixed(1)}, detail ${s.detail.mean.toFixed(1)}, errors ${s.errors.mean.toFixed(1)}`;
+        return `${a.label} [${a.id}]: overall ${s.overall.mean.toFixed(1)} (runs ±${s.overall.runSd.toFixed(1)}, views ${s.overall.min.toFixed(1)}-${s.overall.max.toFixed(1)}); shape ${s.shape.mean.toFixed(1)}, materials ${s.materials.mean.toFixed(1)}, detail ${s.detail.mean.toFixed(1)}, errors ${s.errors.mean.toFixed(1)}${Number.isFinite(s.realism?.mean) ? `; realism ${s.realism.mean.toFixed(1)}` : ''}${Number.isFinite(s.identity?.mean) ? `, identity ${s.identity.mean.toFixed(1)}` : ''}`;
     };
     const ranked = [...loaded].sort((a, b) => scores[b.id].overall.mean - scores[a.id].overall.mean);
     const top = ranked[0], second = ranked[1];

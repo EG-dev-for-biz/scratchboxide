@@ -379,9 +379,15 @@ export function coverageMask(render: ArmRender): Uint8Array {
 // Blind judging
 // =============================================================================
 
-export const JUDGE_CRITERIA = ['shape', 'materials', 'detail', 'errors', 'overall'] as const;
+/**
+ * The judge's criteria. The first five are required in every reply; `realism` (does the render look like a real
+ * photograph) and `identity` (would someone who knows the place recognise it) were added later and are read when present,
+ * so older replies and callers that read only the first five still work.
+ */
+export const JUDGE_CRITERIA = ['shape', 'materials', 'detail', 'errors', 'overall', 'realism', 'identity'] as const;
+export const JUDGE_REQUIRED_CRITERIA = ['shape', 'materials', 'detail', 'errors', 'overall'] as const;
 export type JudgeCriterion = typeof JUDGE_CRITERIA[number];
-export type JudgeScores = Record<JudgeCriterion, number>;
+export type JudgeScores = Record<typeof JUDGE_REQUIRED_CRITERIA[number], number> & Partial<Record<'realism' | 'identity', number>>;
 
 /** The part of a vision chain the judge calls (VisionModelChain.generate). */
 export interface JudgeClient {
@@ -408,13 +414,15 @@ export function judgePrompt(place: string, count: number): { preamble: string; c
             `Images 1 to ${count} are renders of ${count} different 3D reconstructions of that building, each rendered from exactly the camera position, direction, field of view and resolution of the photograph, ` +
             'all with the same flat neutral light on the same flat grey background. Judge only the target building the renders show: ignore the sky, trees, vehicles, people, street furniture and any neighbouring buildings the renders leave out, ' +
             'and do not reward or penalise a render for the absence of sun and shadows (no render has them). The renders are in no particular order and come from different methods.',
-        closing: `Score every render 1-10 (10 best) against the photograph on five criteria:\n` +
+        closing: `Score every render 1-10 (10 best) against the photograph on seven criteria:\n` +
             '- shape: shape and silhouette match (massing, roofline, setbacks, openings in the right places);\n' +
             '- materials: materials and colour match (the facade materials and their colours as the photograph shows them);\n' +
             '- detail: detail believability (windows, cornices, ornament, storefronts read as the real ones, at a believable sharpness);\n' +
             '- errors: wrong or invented content, 10 = none (melted or broken geometry, smeared or doubled textures, things painted where they are not, content that is not in the photograph);\n' +
-            '- overall: how much the render looks like this place in the photograph.\n' +
-            `Use the whole scale and compare the renders with each other. Reply with JSON only: {"renders":[{"image":1,"shape":n,"materials":n,"detail":n,"errors":n,"overall":n,"note":"at most 20 words on what decides it"}, ...]} with one entry for each of images 1 to ${count}.`
+            '- overall: how much the render looks like this place in the photograph;\n' +
+            '- realism: does the render look like a real photograph of a real building (convincing materials, sharpness and surface detail), whatever place it shows;\n' +
+            '- identity: would someone who knows this place recognise it in the render (massing, window rhythm, materials, colour, distinctive features such as towers, fire escapes, signage, the storefront layout), whether or not the finer detail is exact.\n' +
+            `Use the whole scale and compare the renders with each other. Reply with JSON only: {"renders":[{"image":1,"shape":n,"materials":n,"detail":n,"errors":n,"overall":n,"realism":n,"identity":n,"note":"at most 20 words on what decides it"}, ...]} with one entry for each of images 1 to ${count}.`
     };
 }
 
@@ -434,9 +442,11 @@ export function parseJudgeReply(text: string, count: number): { scores: Array<Ju
         const sc = {} as JudgeScores;
         let ok = true;
         for (const c of JUDGE_CRITERIA) {
+            const required = (JUDGE_REQUIRED_CRITERIA as readonly string[]).includes(c);
+            if (!required && r[c] === undefined) continue;
             const v = Number(r[c]);
             if (!Number.isFinite(v) || v < 1 || v > 10) { ok = false; problems.push(`image ${k}: ${c} is ${String(r[c])}`); break; }
-            sc[c] = v;
+            sc[c as keyof JudgeScores] = v;
         }
         if (ok) out[k - 1] = { ...sc, note: typeof r.note === 'string' ? r.note : '' };
     }
@@ -490,8 +500,8 @@ export function aggregateRuns(runs: JudgeRun[], armIds: string[]): Record<string
         out[a] = {} as Record<JudgeCriterion, CriterionStat>;
         for (const c of JUDGE_CRITERIA) {
             const v = runs.map(r => r.scores[a]?.[c]).filter((x): x is number => typeof x === 'number');
-            const mean = v.reduce((s, x) => s + x, 0) / Math.max(1, v.length);
-            const sd = Math.sqrt(v.reduce((s, x) => s + (x - mean) ** 2, 0) / Math.max(1, v.length));
+            const mean = v.length ? v.reduce((s, x) => s + x, 0) / v.length : NaN;
+            const sd = v.length ? Math.sqrt(v.reduce((s, x) => s + (x - mean) ** 2, 0) / v.length) : NaN;
             out[a][c] = { mean: Math.round(mean * 100) / 100, sd: Math.round(sd * 100) / 100, min: v.length ? Math.min(...v) : NaN, max: v.length ? Math.max(...v) : NaN };
         }
     }
