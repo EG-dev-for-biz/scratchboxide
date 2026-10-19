@@ -34,7 +34,7 @@ class World:
         self.scattered_meshes: List[Any] = []
         self._rng = random.Random(self.seed)
 
-    def add(self, entity: Any) -> Any:
+    def add(self, entity: Any) -> "scratchbox_native.geometry.Mesh":
         """Add any standalone mesh, structure, or terrain to the world."""
         if hasattr(entity, "mesh"):
             self.standalone_meshes.append(entity.mesh)
@@ -46,7 +46,7 @@ class World:
             self.standalone_meshes.append(entity)
         return entity
 
-    def add_mesh(self, mesh: Any) -> Any:
+    def add_mesh(self, mesh: Any) -> "scratchbox_native.geometry.Mesh":
         """Add any standalone mesh (building, prop, or custom asset) to the world."""
         return self.add(mesh)
 
