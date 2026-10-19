@@ -831,7 +831,7 @@ Available workspace tools:
 - utdra_slice_elevation: Keep the part of a tile above an elevation, clipping straddling triangles exactly (Sutherland-Hodgman) so no hole opens along the cut.
 - utdra_carve_bridge_voids: Remove the near-vertical curtain-wall triangles inside a span box you give (an elevated deck's footprint and heights). It does not find bridges itself.
 - webxr_geospatial_align_coordinates: Bidirectionally convert coordinates between WGS-84 geodetic GPS (lat/lng/alt) and WebXR metric space (meters, +Y up), or convert between compass headings and WebXR quaternions.
-- webxr_geospatial_calibrate: Calibrate geodetic-to-WebXR coordinate alignment via anchor origin, autonomous sensor fusion (GPS + compass + viewer pose), or optical manual pin calibration.
+- webxr_geospatial_calibrate: Compute a geodetic-to-WebXR coordinate alignment via anchor origin, sensor fusion (GPS + compass + viewer pose), or optical manual pin (computed only, applied: false; feed its headingOffsetDeg and translationOffset to webxr_geospatial_align_coordinates).
 - webxr_geospatial_project_vectors: Project Google Maps Platform road centerlines or parcel boundaries into WebXR 3D metric lines and extruded volume massing coordinates.
 - atmosphere_calculate_solar_position: Calculate sub-arcminute NOAA solar elevation, azimuth, distance in AU, and diurnal phase for any latitude, longitude, and date.
 - atmosphere_get_diurnal_profile: Compute photometric sun intensity, ambient bounce, Planckian kelvin temperature, and linear RGB spectra for a given solar elevation.

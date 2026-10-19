@@ -220,11 +220,10 @@ describe('Gemini Physical Camera Agent Tools', () => {
             apertureFStop: 1.8,
             sensorFormat: 'full_frame_35mm',
             focusDistanceMeters: 2.5
-        });
+        }, { request: { activeArtifact: { id: 'scene-cam', type: '3d-scene', title: 'Cam', version: 1, data: { title: 'Cam', camera: { position: [6, 3, 6], target: [0, 1, 0], fov: 45 } } } } } as any);
 
-        expect(result.summaryResult).toContain('35mm');
-        expect(result.summaryResult).toContain('f/1.8');
-        expect(result.summaryResult).toContain('Vertical FOV');
+        expect(result.summaryResult).toMatch(/^Applied to the active 3D scene "Cam": 35 mm, f\/1\.8, full_frame_35mm: vertical FOV /);
+        expect((result.resultPayload as any).applied).toBe(true);
         const payload = result.resultPayload as any;
         expect(payload.frustum.verticalFovDeg).toBeGreaterThan(30);
         expect(payload.depthOfField.nearFocusLimitMeters).toBeLessThan(2.5);

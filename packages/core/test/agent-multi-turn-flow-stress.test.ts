@@ -25,6 +25,8 @@ const avatar2785536 = requireAssets(
     'scripts/regenerate_5_demos.ts (GVHMR body via scripts/run_gvhmr.py)'
 );
 
+const sceneCtx = (ctx: any) => ({ ...ctx, request: { ...ctx.request, activeArtifact: { id: 'scene-stress', type: '3d-scene', title: 'Stress Scene', version: 1, data: { title: 'Stress Scene', renderMode: 'clay', environment: { skybox: 'studio', lighting: 'studio', ground: false }, camera: { position: [8, 5, 8], target: [0, 1, 0], fov: 45 } } } } });
+
 describe('Agent Multi-Turn Interactive User Journeys & End-to-End Stress Test', () => {
     let registry: ToolRegistry;
     let mockContext: ToolContext;
@@ -142,8 +144,9 @@ describe('Agent Multi-Turn Interactive User Journeys & End-to-End Stress Test', 
         // Step 6: Cinematic Gaffer Rig Setup
         const gafferRes = await registry.dispatch('lighting_configure_gaffer_rig', {
             style: 'golden_hour_glamour'
-        }, mockContext);
+        }, sceneCtx(mockContext));
         expect(gafferRes.exec.status).toBe('completed');
+        expect((gafferRes.resultPayload as any).applied).toBe(true);
         expect((gafferRes.resultPayload as any).lights.length).toBeGreaterThan(0);
 
         // Step 7: AI Beautify Prompt Synthesis strictly maintaining camera framing
@@ -215,6 +218,7 @@ describe('Agent Multi-Turn Interactive User Journeys & End-to-End Stress Test', 
             includeGlslShader: true
         }, mockContext);
         expect(lensRes.exec.status).toBe('completed');
+        expect((lensRes.resultPayload as any).applied).toBe(false);
         expect((lensRes.resultPayload as any).overscanMargin).toBeGreaterThan(0);
         expect((lensRes.resultPayload as any).shader).toBeDefined();
 
@@ -224,8 +228,9 @@ describe('Agent Multi-Turn Interactive User Journeys & End-to-End Stress Test', 
             apertureFStop: 2.0,
             focusDistanceMeters: 4.5,
             sensorFormat: 'super35'
-        }, mockContext);
+        }, sceneCtx(mockContext));
         expect(camRes.exec.status).toBe('completed');
+        expect((camRes.resultPayload as any).applied).toBe(true);
         expect((camRes.resultPayload as any).frustum.horizontalFovDeg).toBeGreaterThan(50);
 
         // Step 3: Export to 3DEqualizer, Nuke, OpenCV and STMap

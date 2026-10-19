@@ -15,6 +15,10 @@ import {
     matchImageAndLightingToLocation
 } from '../../spatial/PhotometricUsdBridgeService';
 import type { ToolDeclaration, ToolHandler } from './types';
+import type { PhotometricLightingRigData } from '../../../common/spatial/photometric-units';
+import type { CanvasArtifact, Scene3DData } from '../../../browser/generative-canvas/canvas-types';
+import { CINEMATIC_RIGS, type SceneLightingRig } from '../../../browser/generative-canvas/primitives/scene3d/lightingRigs';
+import { DirectDispatchOperatorEngine } from '../../../browser/generative-canvas/services/direct-dispatch-operator-engine';
 
 
 function asString(val: unknown): string {
@@ -38,6 +42,48 @@ function asGeodetic(val: unknown): { lat: number; lng: number; altitudeMeters?: 
     if (typeof v.lat !== 'number' || typeof v.lng !== 'number') return undefined;
     const alt = typeof v.alt === 'number' ? v.alt : typeof v.altitudeMeters === 'number' ? v.altitudeMeters : undefined;
     return { lat: v.lat, lng: v.lng, ...(alt !== undefined ? { altitudeMeters: alt } : {}) };
+}
+
+/**
+ * The viewport's exposure reference: the irradiance the three_point_studio key light puts on its subject (intensity over
+ * distance squared, in three.js units). A gaffer rig's key lands at this irradiance; every other light keeps its lux ratio
+ * to the key, so the stop ratios hold while absolute lux (which the viewport has no exposure for) does not.
+ */
+function studioKeyIrradiance(): number {
+    const key = CINEMATIC_RIGS.three_point_studio.lights[0];
+    return key.intensity / (key.position[0] ** 2 + key.position[1] ** 2 + key.position[2] ** 2);
+}
+
+/** A gaffer rig (built around a subject at the origin) as an explicit scene rig the viewport draws. */
+export function gafferRigToSceneRig(rig: PhotometricLightingRigData, origin: [number, number, number]): SceneLightingRig {
+    const key = rig.lights.find(l => l.role === 'key') ?? rig.lights[0];
+    const keyLux = key?.intensityLux || 1;
+    const eRef = studioKeyIrradiance();
+    return {
+        name: `gaffer_${rig.style}`,
+        label: rig.name,
+        description: `${rig.style} rig, ${rig.keyToFillRatio}:1 key-to-fill (lighting_configure_gaffer_rig)`,
+        ambientColor: 0xffffff,
+        ambientIntensity: 0,
+        origin,
+        lights: rig.lights.map(l => {
+            const d = Math.hypot(l.position[0], l.position[1], l.position[2]);
+            return {
+                name: l.name,
+                type: l.type === 'spot' || l.type === 'directional' ? l.type : 'point',
+                position: [l.position[0], l.position[1], l.position[2]] as [number, number, number],
+                ...(l.type !== 'point' ? { direction: [-l.position[0], -l.position[1], -l.position[2]] as [number, number, number] } : {}),
+                kelvin: l.cctKelvin,
+                // the same irradiance ratio to the key at the subject as the rig's lux ratio
+                intensity: l.type === 'directional' ? eRef * ((l.intensityLux ?? 0) / keyLux) : eRef * ((l.intensityLux ?? 0) / keyLux) * d * d,
+                range: 0,
+                ...(l.beamInnerConeRad !== undefined ? { innerConeAngle: l.beamInnerConeRad } : {}),
+                ...(l.beamOuterConeRad !== undefined ? { outerConeAngle: l.beamOuterConeRad } : {}),
+                castShadow: l.castShadow,
+                ...(l.shadowBias !== undefined ? { shadowBias: l.shadowBias } : {})
+            };
+        })
+    };
 }
 
 export const LIGHTING_TOOL_DECLARATIONS: ToolDeclaration[] = [
@@ -76,7 +122,7 @@ export const LIGHTING_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'lighting_configure_gaffer_rig',
-        description: 'Builds a calibrated cinematic and photographic lighting rig (Rembrandt chiaroscuro, Paramount butterfly glamour, Film noir split, Loop, High-key) enforcing photographic stop ratios and beam modifiers (gobos, softbox diffusion, barn doors).',
+        description: 'Lights the open 3D scene with a photographic rig (Rembrandt, butterfly, split, loop, three-point, high-key, noir): key, fill and rim lights at the style\'s angles around the scene\'s camera target, at their colour temperatures and the key-to-fill stop ratio, replacing the studio rig (and switching off a sun/sky atmosphere the scene had). The result says applied: true and returns the updated scene; with no 3D scene open it says NOT applied and changes nothing. Absolute lux is not reproduced (the viewport has no photometric exposure; the ratios are), and gobo cookies are computed only (the viewport projects none).',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -282,9 +328,11 @@ export const lightingHandlers: Record<string, ToolHandler> = {
         };
     },
 
-    lighting_configure_gaffer_rig: (args, _ctx) => {
+    lighting_configure_gaffer_rig: (args, ctx) => {
         const style = (asString(args.style) || 'rembrandt') as any;
         const rig = LightingGafferService.buildGafferRig(style, {
+            // built around the origin; the scene rig is placed at the scene's camera target
+            subjectPosition: [0, 0, 0],
             keyToFillRatio: typeof args.keyToFillRatio === 'number' ? args.keyToFillRatio : undefined,
             keyKelvin: typeof args.keyKelvin === 'number' ? args.keyKelvin : undefined,
             fillKelvin: typeof args.fillKelvin === 'number' ? args.fillKelvin : undefined,
@@ -292,19 +340,56 @@ export const lightingHandlers: Record<string, ToolHandler> = {
             goboCookie: args.goboCookie as any,
             penumbraSoftness: typeof args.penumbraSoftness === 'number' ? args.penumbraSoftness : undefined
         });
+        const rigText = `${String(style).toUpperCase()} rig, ${rig.keyToFillRatio}:1 key-to-fill (${rig.keyToFillStops.toFixed(1)} stops), ${rig.lights.length} lights (${rig.lights.map(l => `${l.role} ${l.type} ${Math.round(l.cctKelvin)} K`).join(', ')})`;
+        const notAppliedParts = [
+            ...(args.goboCookie ? [`the ${String(args.goboCookie)} gobo cookie (the viewport projects no cookie through a light)`] : []),
+            'absolute lux (the viewport has no photometric exposure; the key is set to the studio key\'s brightness and the other lights keep their ratios to it)'
+        ];
+        const rigPayload = { rigId: rig.rigId, name: rig.name, style: rig.style, keyToFillRatio: rig.keyToFillRatio, keyToFillStops: rig.keyToFillStops, lightCount: rig.lights.length, lights: rig.lights };
 
+        const active = ctx?.request?.activeArtifact;
+        if (!active || active.type !== '3d-scene' || !active.data) {
+            const why = 'no 3D scene is open, so nothing was lit';
+            return {
+                status: 'failed',
+                resultPayload: { success: false, applied: false, notApplied: why, ...rigPayload },
+                summaryResult: `NOT applied: computed only. ${why}. Computed: ${rigText}. Open a 3D scene and call this again to light it.`
+            };
+        }
+        const data0 = active.data as Scene3DData;
+        const t = data0.camera?.target;
+        const origin: [number, number, number] = Array.isArray(t) && t.length === 3 && t.every(v => Number.isFinite(v)) ? [t[0], t[1], t[2]] : [0, 0, 0];
+        const sceneRig = gafferRigToSceneRig(rig, origin);
+        const engine = new DirectDispatchOperatorEngine(JSON.parse(JSON.stringify(data0)) as Scene3DData);
+        const res = engine.dispatch('sb_set_explicit_lighting_rig', { rig: sceneRig });
+        if (!res.success) {
+            const why = res.error || 'the lighting operator failed';
+            return {
+                status: 'failed',
+                resultPayload: { success: false, applied: false, notApplied: why, ...rigPayload },
+                summaryResult: `NOT applied: computed only. ${why}. Computed: ${rigText}.`
+            };
+        }
+        const switchedOff: string[] = res.data?.atmosphereSwitchedOff ?? [];
+        const artifact = {
+            ...active,
+            data: engine.getSceneData(),
+            summary: `Gaffer rig applied: ${String(style)} ${rig.keyToFillRatio}:1.`,
+            version: ((active as { version?: number }).version || 1) + 1
+        } as CanvasArtifact;
         return {
             resultPayload: {
                 success: true,
-                rigId: rig.rigId,
-                name: rig.name,
-                style: rig.style,
-                keyToFillRatio: rig.keyToFillRatio,
-                keyToFillStops: rig.keyToFillStops,
-                lightCount: rig.lights.length,
-                lights: rig.lights
+                applied: true,
+                appliedTo: active.id,
+                operators: ['sb_set_explicit_lighting_rig'],
+                ...rigPayload,
+                sceneRig,
+                atmosphereSwitchedOff: switchedOff,
+                notAppliedParts,
+                artifact
             },
-            summaryResult: `Configured ${style.toUpperCase()} photographic lighting rig with ${rig.keyToFillRatio}:1 key-to-fill ratio (${rig.keyToFillStops.toFixed(1)} stops delta) and ${rig.lights.length} physical lights.`
+            summaryResult: `Applied to the active 3D scene "${active.title || active.id}": ${rigText}, aimed at [${origin.map(v => +v.toFixed(2)).join(', ')}] and scaled with the content; it replaces the studio rig${switchedOff.length ? ', and the scene\'s sun/sky atmosphere was switched off' : ''}. Not reproduced: ${notAppliedParts.join('; ')}.`
         };
     },
 

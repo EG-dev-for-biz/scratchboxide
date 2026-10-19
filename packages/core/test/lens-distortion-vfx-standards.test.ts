@@ -433,7 +433,7 @@ describe('VFX Professional Lens Distortion Standards Suite', () => {
                 sampleUvs: [[0.1, 0.1], [0.5, 0.5]]
             }, {} as any);
 
-            expect(result.exec.summaryResult).toContain('Configured Brown-Conrady lens distortion');
+            expect(result.exec.summaryResult).toMatch(/^NOT applied: computed only. Brown-Conrady lens distortion k1 /);
             const payload = result.resultPayload as any;
             expect(payload.config.k1).toBeCloseTo(-0.042, 3);
             expect(payload.config.k3).toBeCloseTo(-0.0012, 4);

@@ -243,8 +243,10 @@ describe('Brown-Conrady Optical Lens Distortion Shader Engine & API', () => {
             );
 
             expect(outcome.exec.status).toBe('completed');
-            expect(outcome.exec.summaryResult).toContain('Configured Brown-Conrady lens distortion');
+            expect(outcome.exec.summaryResult).toMatch(/^NOT applied: computed only. Brown-Conrady lens distortion k1 /);
             const payload = outcome.resultPayload as any;
+            expect(payload.applied).toBe(false);
+            expect(payload.notApplied).toMatch(/no lens-distortion pass/);
             expect(payload.config).toBeDefined();
             expect(payload.distortedSamples).toHaveLength(3);
             expect(payload.distortedSamples[0].distortedUv[0]).toBeCloseTo(0.5, 5);

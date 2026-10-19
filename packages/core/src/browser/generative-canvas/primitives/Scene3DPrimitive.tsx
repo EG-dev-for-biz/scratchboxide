@@ -130,7 +130,7 @@ import {
 } from '../services/mesh/aircraft';
 import type { ArticulatedAircraftComponents } from '../services/mesh/aircraft';
 import { useLatest } from '../hooks/useLatest';
-import { createRendererStack, attachViewportResize, reconcileDrawingBufferSize } from './scene3d/createRendererStack';
+import { createRendererStack, attachViewportResize, reconcileDrawingBufferSize, DEFAULT_CAMERA_FOV_DEG } from './scene3d/createRendererStack';
 import { liveTilesAnchor, syncTilesLayer } from './scene3d/syncTilesLayer';
 import { sceneAsksForLiveTiles } from './scene3d/liveTilesAnchor';
 import { groundDatumBadge, projectRoutePoint } from './scene3d/geoAnchorLabels';
@@ -1797,6 +1797,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         lighting: sceneData.environment?.lighting,
         ambientIntensity: sceneData.environment?.ambientIntensity,
         cinematicRig: sceneData.environment?.cinematicRig,
+        lightingRig: sceneData.environment?.lightingRig,
         lightingKelvin: sceneData.environment?.lightingKelvin,
         ground: sceneData.environment?.ground,
         fog: sceneData.environment?.fog,
@@ -1810,7 +1811,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         terrainBiomes: sceneData.features?.terrainBiomes,
         contentRadiusMeters: generatedContentRadius ?? undefined
     }), [
-        sceneData.environment?.skybox, sceneData.environment?.lighting, sceneData.environment?.ambientIntensity, sceneData.environment?.cinematicRig,
+        sceneData.environment?.skybox, sceneData.environment?.lighting, sceneData.environment?.ambientIntensity, sceneData.environment?.cinematicRig, sceneData.environment?.lightingRig,
         sceneData.environment?.lightingKelvin, sceneData.environment?.ground, sceneData.environment?.fog,
         worldBranch, renderMode, hasGeoCoordinates, has3DTiles,
         sceneData.features?.atmosphericScattering, (sceneData as any).atmosphere, sceneData.features?.godRays, sceneData.features?.terrainBiomes,
@@ -2275,6 +2276,12 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         const stack = stackRef.current;
         if (!stack) return;
         const cameraDef = sceneDataRef.current.camera;
+        // the scene's vertical field of view (sb_set_camera, configure_physical_camera), else the stack's default
+        const fov = typeof cameraDef?.fov === 'number' && cameraDef.fov > 0 && cameraDef.fov < 180 ? cameraDef.fov : DEFAULT_CAMERA_FOV_DEG;
+        if (stack.camera.fov !== fov) {
+            stack.camera.fov = fov;
+            stack.camera.updateProjectionMatrix();
+        }
         const groundY = terrainManagerRef.current?.sampleGroundHeight(0, 0) ?? 0;
         const tx = cameraDef?.target ? cameraDef.target[0] : 0;
         const ty = cameraDef?.target ? cameraDef.target[1] : (groundY + 1.5);

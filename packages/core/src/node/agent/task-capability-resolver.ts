@@ -533,13 +533,13 @@ export class TaskCapabilityResolver {
                 nativeCapabilities.push('Analytical Brown-Conrady CPU projection (computeBrownConradyUV)');
                 nativeCapabilities.push('Lens archetype presets (LENS_OPTICAL_PRESETS) & focal calibration');
                 nativeCapabilities.push('optics_configure_lens_distortion Gemini Agent Tool');
-                rationale = 'Native LensDistortionEffect applies hardware-accelerated Brown-Conrady lens distortion, chromatic dispersion, and optical presets directly via Three.js WebGL post-processing and analytical CPU routines.';
+                rationale = 'optics_configure_lens_distortion computes Brown-Conrady coefficients, overscan, sampled UV displacement and the GLSL pass from an explicit lens; LensDistortionEffect is a Three.js post-processing pass, but it is not wired into the 3D viewport, so the tool result is computed only (applied: false).';
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'LensDistortionEffect & optics_configure_lens_distortion tool',
                     targetTool: 'optics_configure_lens_distortion',
                     targetService: 'LensDistortionEffect',
-                    details: 'Instantiate LensDistortionEffect, apply optical profile or calculate focal coefficients, and chain into post-processing pipeline.'
+                    details: 'Compute the lens coefficients with optics_configure_lens_distortion (computed only; the 3D viewport draws no lens distortion), and use its GLSL or LensDistortionEffect in a renderer that draws it.'
                 };
             } else if (/geobox|resection|optical\s*center|camera\s*resection|edge\s*overlap|sub-?pixel\s*(?:edge|alignment)|brown-?conrady|image\s*location|localize\s*photo|solvepnp|pnp|2d-to-3d|feature\s*match|pose\s*estimation/i.test(lower)) {
                 canSolveNatively = true;

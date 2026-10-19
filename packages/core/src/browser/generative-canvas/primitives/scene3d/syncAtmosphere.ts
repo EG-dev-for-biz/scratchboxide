@@ -13,7 +13,7 @@ import {
     createAerialPerspectiveEffect,
     createTerrainCloudShadows
 } from '../../services/atmosphere';
-import { buildThreeJsLightingRig } from './lightingRigs';
+import { buildThreeJsLightingRig, isSceneLightingRig } from './lightingRigs';
 import type { AtmosphereHandle, RendererStack, Scene3DRenderMode } from './types';
 import { removeAndDispose } from './types';
 import { hasExplicitSun } from '../../../../common/scene-atmosphere-opt-in';
@@ -23,6 +23,8 @@ export interface AtmosphereInput {
     lighting?: string;
     ambientIntensity?: number;
     cinematicRig?: string;
+    /** An explicit rig (environment.lightingRig); drawn when cinematicRig names it. */
+    lightingRig?: unknown;
     lightingKelvin?: number;
     ground?: boolean;
     backgroundHex?: number;
@@ -384,9 +386,11 @@ export function syncAtmosphere(
         // Radiometric illumination and atmospheric scattering interact directly with genuine scene geometry.
     } else {
         const rigKey = input.cinematicRig || input.lighting;
-        if (rigKey && rigKey !== 'default') {
-            const rigLights = buildThreeJsLightingRig(rigKey, {
-                kelvin: input.lightingKelvin,
+        // an explicit rig (lighting_configure_gaffer_rig) keeps its own colour temperatures, so no rig-wide Kelvin
+        const customRig = isSceneLightingRig(input.lightingRig) && input.lightingRig.name === input.cinematicRig ? input.lightingRig : undefined;
+        if (customRig || (rigKey && rigKey !== 'default')) {
+            const rigLights = buildThreeJsLightingRig(customRig ?? rigKey, {
+                kelvin: customRig ? undefined : input.lightingKelvin,
                 scale: resolveStudioRigScale({ isLargeScale, contentRadiusMeters: input.contentRadiusMeters }),
                 isLargeScale
             });
