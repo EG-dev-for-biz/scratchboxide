@@ -38,7 +38,7 @@ import { encodePng } from './png-encode';
 import { decodeImageInMemory } from './tile-texture-transfer';
 
 /** Part of the texture cache key: a change to the ownership step is a new version. */
-export const OWNERSHIP_VERSION = 1;
+export const OWNERSHIP_VERSION = 2;
 /** Below this agreement between the cut-out and the structure's projection, the view vouches for no pixel. */
 export const OWNERSHIP_MIN_IOU = 0.3;
 /** The structure needs this share of the view's pixels for a cut-out to be asked for. */
@@ -52,6 +52,8 @@ type NormBox = [number, number, number, number];
 export interface OwnershipPrompts {
     /** 1 where the structure is the nearest surface in the view. */
     target: Uint8Array;
+    /** 1 where the structure is in the view but the tile mesh puts something nearer (the depth test's occluders). */
+    hidden: Uint8Array;
     targetPixels: number;
     box: NormBox;
     positive: NormPoint[];
@@ -83,13 +85,23 @@ function erode(mask: Uint8Array, W: number, H: number, r: number): Uint8Array {
     return out;
 }
 
-/** Grows a binary mask by `r` pixels. */
+/** Grows a binary mask by `r` pixels (square structuring element, separable; nothing outside the image is set). */
 export function dilateMask(mask: Uint8Array, W: number, H: number, r: number): Uint8Array {
-    const inv = new Uint8Array(W * H);
-    for (let i = 0; i < inv.length; i++) inv[i] = mask[i] ? 0 : 1;
-    const e = erode(inv, W, H, r);
-    for (let i = 0; i < e.length; i++) e[i] = e[i] ? 0 : 1;
-    return e;
+    if (r <= 0) return mask.slice();
+    const tmp = new Uint8Array(W * H), out = new Uint8Array(W * H);
+    for (let y = 0; y < H; y++) {
+        let last = -Infinity;
+        for (let x = 0; x < W; x++) { if (mask[y * W + x]) last = x; if (x - last <= r) tmp[y * W + x] = 1; }
+        last = Infinity;
+        for (let x = W - 1; x >= 0; x--) { if (mask[y * W + x]) last = x; if (last - x <= r) tmp[y * W + x] = 1; }
+    }
+    for (let x = 0; x < W; x++) {
+        let last = -Infinity;
+        for (let y = 0; y < H; y++) { if (tmp[y * W + x]) last = y; if (y - last <= r) out[y * W + x] = 1; }
+        last = Infinity;
+        for (let y = H - 1; y >= 0; y--) { if (tmp[y * W + x]) last = y; if (last - y <= r) out[y * W + x] = 1; }
+    }
+    return out;
 }
 
 /** Up to `k` pixels of `mask`, spread out (farthest-point sampling from the mask's most interior pixel), normalised. */
@@ -119,7 +131,7 @@ function spread(mask: Uint8Array, W: number, H: number, k: number): NormPoint[] 
  * points well inside it, negative points on what the tile mesh shows nearer or next to it inside the box.
  */
 export function ownershipPrompts(targetDepth: Float32Array, contextDepth: Float32Array | undefined, W: number, H: number): OwnershipPrompts {
-    const target = new Uint8Array(W * H), other = new Uint8Array(W * H);
+    const target = new Uint8Array(W * H), other = new Uint8Array(W * H), hidden = new Uint8Array(W * H);
     let n = 0, x0 = W, y0 = H, x1 = -1, y1 = -1;
     for (let i = 0; i < W * H; i++) {
         const c = contextDepth ? contextDepth[i] : Infinity;
@@ -127,9 +139,12 @@ export function ownershipPrompts(targetDepth: Float32Array, contextDepth: Float3
             target[i] = 1; n++;
             const x = i % W, y = (i / W) | 0;
             if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
-        } else if (Number.isFinite(c) && c < 1e8) other[i] = 1;
+        } else if (Number.isFinite(c) && c < 1e8) {
+            other[i] = 1;
+            if (Number.isFinite(targetDepth[i]) && targetDepth[i] < 1e8) hidden[i] = 1;
+        }
     }
-    if (!n) return { target, targetPixels: 0, box: [0, 0, 1, 1], positive: [], negative: [] };
+    if (!n) return { target, hidden, targetPixels: 0, box: [0, 0, 1, 1], positive: [], negative: [] };
     const pad = 0.03 * Math.max(W, H);
     const bx0 = Math.max(0, x0 - pad), by0 = Math.max(0, y0 - pad), bx1 = Math.min(W, x1 + 1 + pad), by1 = Math.min(H, y1 + 1 + pad);
     const r = Math.max(2, Math.round(0.03 * Math.min(W, H)));
@@ -138,7 +153,7 @@ export function ownershipPrompts(targetDepth: Float32Array, contextDepth: Float3
     const otherInner = erode(other, W, H, r);
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (x < bx0 || x >= bx1 || y < by0 || y >= by1) otherInner[y * W + x] = 0;
     return {
-        target, targetPixels: n, box: [bx0 / W, by0 / H, bx1 / W, by1 / H],
+        target, hidden, targetPixels: n, box: [bx0 / W, by0 / H, bx1 / W, by1 / H],
         positive: spread(inner.some(v => v) ? inner : target, W, H, 5), negative: spread(otherInner, W, H, 4)
     };
 }
@@ -173,7 +188,50 @@ export interface ViewOwnershipRecord {
     maskPixels: number;
     /** Agreement of the cut-out with where the geometry puts the structure. */
     iou?: number;
+    /**
+     * What stands in front of the structure, taken out of the cut-out: pixels by the depth test (the tile mesh nearer), by
+     * the segmenter's occluder cut-out, grown along thin vertical structures, and in all after the dilation (each a count of
+     * pixels inside the structure's cut-out). `segmenter` says what the segmenter answered.
+     */
+    occluders?: { depthPixels: number; segmentedPixels: number; grownPixels: number; removedPixels: number; segmenter: string };
     ms: number;
+}
+
+/** The open-vocabulary occluder prompt: whatever stands between the camera and the structure's surface. No class list. */
+export function occluderDescription(target: string): string {
+    return `anything standing in front of the facade of ${target}, between the camera and the building's own surface`;
+}
+
+/** Pixels the occluder mask is grown by (as a share of the image's longest side): thin poles and railings are a weak case. */
+export const OCCLUDER_DILATE_SHARE = 0.005;
+
+/**
+ * Thin vertical structures the segmenter caught only part of (a sign on its pole, a lamp's head): from every occluder pixel the
+ * mask is grown up and down its column while the photo there is a thin line: luma differing by at least `contrast` in the same
+ * direction from both pixels `halfWidthPx` to either side (a pole against the wall behind it). Gaps up to 2 px are crossed.
+ */
+export function growThinVertical(seed: Uint8Array, image: { width: number; height: number; rgba: Uint8Array }, within: Uint8Array, opts: { halfWidthPx?: number; contrast?: number } = {}): Uint8Array {
+    const W = image.width, H = image.height, w = opts.halfWidthPx ?? Math.max(3, Math.round(0.004 * W)), k = opts.contrast ?? 18;
+    const L = new Float32Array(W * H);
+    for (let i = 0; i < W * H; i++) L[i] = 0.299 * image.rgba[i * 4] + 0.587 * image.rgba[i * 4 + 1] + 0.114 * image.rgba[i * 4 + 2];
+    const line = (x: number, y: number): boolean => {
+        if (x - w < 0 || x + w >= W) return false;
+        const c = L[y * W + x], a = L[y * W + x - w], b = L[y * W + x + w];
+        return (c - a > k && c - b > k) || (a - c > k && b - c > k);
+    };
+    const out = seed.slice();
+    for (let x = 0; x < W; x++) {
+        for (const dir of [1, -1]) {
+            let gap = 0, growing = false;
+            for (let y = dir > 0 ? 0 : H - 1; y >= 0 && y < H; y += dir) {
+                const i = y * W + x;
+                if (seed[i]) { growing = true; gap = 0; continue; }
+                if (!growing) continue;
+                if (within[i] && line(x, y)) { out[i] = 1; gap = 0; } else if (++gap > 2) growing = false;
+            }
+        }
+    }
+    return out;
 }
 
 /**
@@ -227,10 +285,33 @@ export async function ownViews(input: {
                     continue;
                 }
                 const mask = dilateMask(raw, W, H, OWNERSHIP_DILATE_PX);
+                // what stands in front of the structure: the depth test's occluders, the segmenter's cut-out of "anything in
+                // front" (open vocabulary, the structure's box as the hint), grown along thin vertical structures, then dilated
+                const occ = new Uint8Array(W * H);
+                let depthPx = 0, segPx = 0, grownPx = 0, removed = 0;
+                for (let i = 0; i < occ.length; i++) if (p.hidden[i]) { occ[i] = 1; if (mask[i]) depthPx++; }
+                let segNote = 'not asked (no description of the structure)';
+                if (input.target) {
+                    try {
+                        const o = await input.segment(v.image, { box: p.box, positive: [], negative: [], target: occluderDescription(input.target) }, input.signal);
+                        if (o.length !== W * H) throw new Error(`the segmenter returned ${o.length} pixels for a ${W}x${H} view`);
+                        const bx0 = Math.floor(p.box[0] * W), by0 = Math.floor(p.box[1] * H), bx1 = Math.ceil(p.box[2] * W), by1 = Math.ceil(p.box[3] * H);
+                        for (let y = by0; y < by1; y++) for (let x = bx0; x < bx1; x++) { const i = y * W + x; if (o[i]) { if (!occ[i] && mask[i]) segPx++; occ[i] = 1; } }
+                        segNote = 'cut out';
+                    } catch (err) {
+                        if (input.signal?.aborted) throw err;
+                        segNote = err instanceof OwnershipTargetNotFound ? `nothing found in front (${err.reason.slice(0, 160)})` : `failed (${err instanceof Error ? err.message : String(err)})`;
+                    }
+                }
+                const grown = growThinVertical(occ, v.image, mask);
+                for (let i = 0; i < occ.length; i++) if (grown[i] && !occ[i]) { grownPx++; occ[i] = 1; }
+                const occD = dilateMask(occ, W, H, Math.max(2, Math.round(OCCLUDER_DILATE_SHARE * Math.max(W, H))));
                 let m = 0;
-                for (let i = 0; i < mask.length; i++) m += mask[i];
+                for (let i = 0; i < mask.length; i++) { if (mask[i] && occD[i]) { mask[i] = 0; removed++; } m += mask[i]; }
+                if (input.debugDir) writeOverlay(path.join(input.debugDir, `${String(k).padStart(2, '0')}_${v.panoId}_owned.png`), v.image, mask, p, occD);
                 out[k] = { ...v, ownerMask: mask };
-                records[k] = { panoId: v.panoId, status: 'segmented', prompts: input.target ? 'description+geometry' : 'geometry', targetPixels: p.targetPixels, maskPixels: m, iou: Math.round(iou * 1000) / 1000, ms: Date.now() - t0 };
+                records[k] = { panoId: v.panoId, status: 'segmented', prompts: input.target ? 'description+geometry' : 'geometry', targetPixels: p.targetPixels, maskPixels: m, iou: Math.round(iou * 1000) / 1000,
+                    occluders: { depthPixels: depthPx, segmentedPixels: segPx, grownPixels: grownPx, removedPixels: removed, segmenter: segNote }, ms: Date.now() - t0 };
             } catch (err) {
                 if (input.signal?.aborted) throw err;
                 refuse(`the segmenter failed (${err instanceof Error ? err.message : String(err)})`, 0);
@@ -244,9 +325,11 @@ export async function ownViews(input: {
 }
 
 /** Diagnostics: the photo dimmed outside the cut-out, the projected structure's outline red, the prompts as dots. */
-function writeOverlay(file: string, image: { width: number; height: number; rgba: Uint8Array }, mask: Uint8Array, p: OwnershipPrompts): void {
+function writeOverlay(file: string, image: { width: number; height: number; rgba: Uint8Array }, mask: Uint8Array, p: OwnershipPrompts, occluders?: Uint8Array): void {
     const W = image.width, H = image.height, rgb = new Uint8Array(W * H * 3);
     for (let i = 0; i < W * H; i++) for (let c = 0; c < 3; c++) rgb[i * 3 + c] = mask[i] ? image.rgba[i * 4 + c] : image.rgba[i * 4 + c] >> 2;
+    // occluders taken out of the cut-out: tinted orange
+    if (occluders) for (let i = 0; i < W * H; i++) if (occluders[i] && !mask[i]) { rgb[i * 3] = Math.min(255, 120 + (image.rgba[i * 4] >> 1)); rgb[i * 3 + 1] = 60 + (image.rgba[i * 4 + 1] >> 2); rgb[i * 3 + 2] = image.rgba[i * 4 + 2] >> 3; }
     for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
         const i = y * W + x;
         if (p.target[i] && (!p.target[i - 1] || !p.target[i + 1] || !p.target[i - W] || !p.target[i + W])) rgb.set([255, 0, 0], i * 3);

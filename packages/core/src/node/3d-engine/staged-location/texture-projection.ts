@@ -210,6 +210,11 @@ export interface ProjectionBakeReport {
     context?: { caughtOccluded: number; caughtSeenPast: number; caughtEdge: number; kept: number; leakShare: number };
     /** The pixel-ownership check (present when any view carries an ownerMask): samples refused and kept, views checked. */
     ownership?: { views: number; refusedSamples: number; keptSamples: number };
+    /**
+     * 1 per texel some view saw with something in front of it (the full scan nearer, or a photo pixel the ownership mask
+     * refuses: an occluder, a neighbour). The texture pass fills those texels no view and no tile photo colours by inpainting.
+     */
+    maskedTexels?: Uint8Array;
     timingsMs: Record<string, number>;
 }
 
@@ -236,7 +241,7 @@ export function poseSigmaTerm(poseSigmaPx: number, z: number, gsdM: number): num
     return 1 / (1 + (sigmaM / POSE_SIGMA_SCALE_M) ** 2);
 }
 
-interface RawSamples { texel: number[]; rgb: number[]; logW: number[]; wAbs: number[]; x: number[]; y: number[]; /** Per sample: the footprint's major axis (px vector) and minor width (px); absent when point-sampled. */ fp?: number[]; /** Samples the context geometry removed that the occluder alone kept: hidden, seen past, at an edge. */ caught?: [number, number, number]; /** Samples refused because their photo pixel is not the structure's (ProjectionView.ownerMask). */ notOwned?: number }
+interface RawSamples { texel: number[]; rgb: number[]; logW: number[]; wAbs: number[]; x: number[]; y: number[]; /** Per sample: the footprint's major axis (px vector) and minor width (px); absent when point-sampled. */ fp?: number[]; /** Samples the context geometry removed that the occluder alone kept: hidden, seen past, at an edge. */ caught?: [number, number, number]; /** Samples refused because their photo pixel is not the structure's (ProjectionView.ownerMask). */ notOwned?: number; /** Texels this view saw with something in front: the full scan nearer (context) or a pixel the ownership mask refuses. */ masked?: number[] }
 
 /** Why a texel is not seen by a view (visibility codes). */
 const VIS_OK = 0, VIS_OCCLUDED = 1, VIS_SEEN_PAST = 2, VIS_EDGE = 3;
@@ -448,6 +453,9 @@ function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: De
         return VIS_OK;
     };
     const exclude = opts.excludeTexels, minRes = opts.minResolution ?? 0;
+    // a view that vouches for no pixel at all (its photo is not the structure) says nothing about occluders: its refusals are
+    // not counted as occluded texels
+    const ownsAny = !view.ownerMask || view.ownerMask.some(v => v !== 0);
     for (let t = 0; t < n; t++) {
         if (!covered[t] || gutter[t] || (exclude && exclude[t])) continue;
         const o = t * 3;
@@ -473,7 +481,11 @@ function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: De
         const vis = visibility(D, C ?? D, px, py, z, o, dx, dy, dz, Math.ceil(Math.max(hx, hy)));
         if (vis !== VIS_OK) {
             // a leak caught: the occluder alone would have let this sample through
-            if (C && out.caught && visibility(P, P, px, py, z, o, dx, dy, dz, Math.ceil(Math.max(hx, hy))) === VIS_OK) out.caught[vis - 1]++;
+            if (C && out.caught && visibility(P, P, px, py, z, o, dx, dy, dz, Math.ceil(Math.max(hx, hy))) === VIS_OK) {
+                out.caught[vis - 1]++;
+                // something the full scan holds stands in front of the texel in this photo (a tree, a statue): an occluder
+                if (vis === VIS_OCCLUDED) (out.masked ??= []).push(t);
+            }
             continue;
         }
         // weight
@@ -488,7 +500,7 @@ function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: De
         let sx = x, sy = y;
         if (warp) { const d = latticeAt(warp, x, y, W, H); sx = Math.min(W - 0.01, Math.max(0, x + d[0])); sy = Math.min(H - 0.01, Math.max(0, y + d[1])); }
         // ownership: the pixel the colour is read from must show the structure (the photo's own cut-out of it)
-        if (view.ownerMask && !view.ownerMask[Math.min(H - 1, Math.floor(sy)) * W + Math.min(W - 1, Math.floor(sx))]) { out.notOwned = (out.notOwned ?? 0) + 1; continue; }
+        if (view.ownerMask && !view.ownerMask[Math.min(H - 1, Math.floor(sy)) * W + Math.min(W - 1, Math.floor(sx))]) { out.notOwned = (out.notOwned ?? 0) + 1; if (ownsAny) (out.masked ??= []).push(t); continue; }
         if (out.fp && f) {
             sampleFootprint(view, sx, sy, f[0], f[1], f[2], col);
             out.fp.push(f[0], f[1], f[2]);
@@ -739,6 +751,8 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
         const caught = c[0] + c[1] + c[2];
         contextReport = { caughtOccluded: c[0], caughtSeenPast: c[1], caughtEdge: c[2], kept, leakShare: caught + kept ? Math.round((caught / (caught + kept)) * 10000) / 10000 : 0 };
     }
+    let maskedTexels: Uint8Array | undefined;
+    for (const r of raw) if (r.masked?.length) { maskedTexels ??= new Uint8Array(n); for (const t of r.masked) maskedTexels[t] = 1; }
     let ownership: ProjectionBakeReport['ownership'];
     const owned = views.filter(v => v.ownerMask).length;
     if (owned) {
@@ -1228,7 +1242,7 @@ export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Pr
             outputSeam: { p95DeltaE: pct(outA, 0.95), maxDeltaE: outA.length ? outA[outA.length - 1] : 0, samples: outA.length, interiorP95DeltaE: pct(outI, 0.95), lowFreqP95DeltaE: pct(lowA, 0.95), lowFreqMedianDeltaE: pct(lowA, 0.5), lowFreqInteriorP95DeltaE: pct(lowI, 0.95), lowFreqInteriorMedianDeltaE: pct(lowI, 0.5) },
             ...(delightReport ? { delight: delightReport } : {}),
             ...(contextReport ? { context: contextReport } : {}),
-            ...(ownership ? { ownership } : {}),
+            ...(ownership ? { ownership } : {}), ...(maskedTexels ? { maskedTexels } : {}),
             ...(alignment ? { alignment } : {}),
             ...(poseRefine ? { poseRefine } : {}),
             ...(regions ? { regions } : {}),

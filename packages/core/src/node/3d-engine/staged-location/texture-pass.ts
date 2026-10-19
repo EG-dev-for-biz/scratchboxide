@@ -39,12 +39,13 @@ import { CONFIDENCE_CHANNELS, writeTexturedTwinGlb } from './staged-glb-writer';
 import { linearToLab } from './texel-exposure';
 import { enhanceTransferredAtlas, type EnhanceModelClient, type EnhanceReferenceView } from './texture-enhance';
 import { bakeStreetViewProjection, measureCrossViewAgreement, type CrossViewAgreement, type ProjectionBakeReport, type ProjectionDelightOptions } from './texture-projection';
-import { correctTilePlaneLighting, lightingCorrectionEnabled, lightingModels, lightingPromptVariant, measureSourceSeam, type LightingCorrectedView, type LightingImageRecord, type TileLightingReport } from './texture-lighting';
+import { correctTilePlaneLighting, LIGHTING_MODEL_LITE, lightingCorrectionEnabled, lightingModels, lightingPromptVariant, measureSourceSeam, type LightingCorrectedView, type LightingImageRecord, type TileLightingReport } from './texture-lighting';
 import { depthForMesh, projectionViewFromRegistered } from './texture-projection-views';
 import type { Registration } from './pano-registration';
 import type { EvidenceImage } from './streetview-evidence';
 import { buildUvAtlas, type LaidOutUvAtlas } from './texture-uv';
 import { mergeBakedPlanes, transferTilePhoto, type TileTextureSurface } from './tile-texture-transfer';
+import { inpaintMaskedTexels, type InpaintRectRecord } from './texture-inpaint';
 import { createPhotoTierCache, mergePhotoTier, rectifyPhotoTier } from './photo-tier-rectify';
 import type { PhotoTierLayerRecord } from '../../../common/spatial/texture-pass-contracts';
 import { describeLayerFit, leaveOnePanoOut, measureLayerFit, type LayerFit, type LooFit } from './texture-fit-metric';
@@ -55,7 +56,7 @@ import { WITNESS_MAX_DELTA_E, witnessSinglePano } from './single-pano-witness';
 /** Part of every texture cache key: a change to the pass's maths is a new version. */
 /** Photo tier A is opt-in (round 6 on the arch: no leave-one-pano-out gain over the projection); SCRATCHBOX_PHOTO_TIER=1 turns it on for a server. */
 export const photoTierEnabled = (): boolean => process.env.SCRATCHBOX_PHOTO_TIER === '1';
-export const TEXTURE_PASS_VERSION = `texture-pass/12${photoTierEnabled() ? '+tier' : ''}${lightingCorrectionEnabled() ? `+light:${lightingModels().join(',')}:${lightingPromptVariant()}` : ''}`;
+export const TEXTURE_PASS_VERSION = `texture-pass/13${photoTierEnabled() ? '+tier' : ''}${lightingCorrectionEnabled() ? `+light:${lightingModels().join(',')}:${lightingPromptVariant()}` : ''}`;
 export const RUNG_PALETTE = 3;
 export const RUNG_GENERATED_PBR = 4;
 /** The enhancement rung's own time budget per layer (layers run in parallel inside the stage's 600 s). */
@@ -159,6 +160,10 @@ export interface TextureLayerOutcome {
         views?: { before: CrossViewAgreement; after?: CrossViewAgreement; final?: CrossViewAgreement; /** The set used. */ chosen?: CrossViewAgreement; offered: number; used: number; reverted: string[]; applied: boolean; reason?: string };
         tile?: Omit<TileLightingReport, 'records'> & { records: LightingImageRecord[] };
     };
+    /** Texels some photo saw occluded, by where they ended up (the fill order: other views, the tile photo, inpainting, palette). */
+    maskedFill?: { texels: number; streetView: number; tilePhoto: number; inpainted: number; palette: number; clay: number };
+    /** The inpainting of texels an occluder hid in every photo (texture-inpaint.ts). */
+    inpaint?: { targetTexels: number; filledTexels: number; rects: number; accepted: number; records: InpaintRectRecord[] };
     /** The seam between Street View and tile texels on the final texture (texture-lighting.ts measureSourceSeam). */
     sourceSeam?: { pairs: number; medianDeltaE: number | null; p95DeltaE: number | null };
     /** Held-out fit of the final textured layer against the Street View photos (texture-fit-metric.ts). */
@@ -326,6 +331,8 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
     t = Date.now();
     /** The same bake with another set of views (the leave-one-pano-out fit below). */
     let looBake: ((views: ProjectionView[]) => Promise<BakedTexturePlanes>) | undefined;
+    /** Texels some view saw with an occluder in front (the projection's report): the inpainting rung's candidates. */
+    let maskedTexels: Uint8Array | undefined;
     if (src.views.length && src.occluder) {
         progress(`projecting ${src.views.length} Street View views`);
         try {
@@ -369,6 +376,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
             };
             const res = await bakeStreetViewProjection(request);
             planes = res;
+            maskedTexels = res.report.maskedTexels;
             degradations.push(...res.degradations);
             const w = witnessed(res);
             if (w && w.report.rejected) {
@@ -525,6 +533,25 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
     timingsMs.photoTier = Date.now() - t;
     aborted(src.signal);
 
+    // texels an occluder hid in every photo and the tile photo does not cover: generative inpainting, labelled generated
+    // (texture-inpaint.ts), only where no real view exists and only where the answer keeps and joins the real texels
+    t = Date.now();
+    let inpaint: TextureLayerOutcome['inpaint'];
+    if (maskedTexels && src.enhance) {
+        progress('inpainting the texels an occluder hid in every photo');
+        try {
+            const r = await inpaintMaskedTexels({ atlas, planes, masked: maskedTexels, client: src.enhance.client, models: [LIGHTING_MODEL_LITE], ...(src.signal ? { signal: src.signal } : {}) });
+            degradations.push(...r.degradations);
+            if (r.planes) { planes = mergeBakedPlanes(planes, r.planes); modelsUsed.push(...r.modelsUsed); }
+            inpaint = { targetTexels: r.targetTexels, filledTexels: r.filledTexels, rects: r.records.length, accepted: r.records.filter(x => x.decision === 'accepted').length, records: r.records };
+            if (r.targetTexels) progress(`inpainting: ${r.filledTexels} of ${r.targetTexels} hidden texels filled (${inpaint.accepted} of ${inpaint.rects} rects kept)`);
+        } catch (err) {
+            if ((err as Error)?.name === 'AbortError' || src.signal?.aborted) throw err;
+            degradations.push({ stage: 'inpaint', reasonCode: 'inpaint_failed', layerKey: layer.layerKey, reason: `The inpainting of hidden texels failed (${(err as Error)?.message ?? String(err)}); they keep the measured palette colour.` });
+        }
+    }
+    timingsMs.inpaint = Date.now() - t;
+
     // rung 3: measured palette; rung 4 (generated PBR) is not available; rung 5: clay
     t = Date.now();
     const pal = paletteFill(atlas, planes, src.palette);
@@ -548,6 +575,20 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
     // measured provenance and rungs, then the twin
     const m = measurePlanes(atlas, planes);
     planes = { ...planes, provenance: m.provenance };
+    // where the texels some photo saw occluded ended up: another view (multi-view fill), the tile photo, inpainting, palette
+    let maskedFill: TextureLayerOutcome['maskedFill'];
+    if (maskedTexels) {
+        const f = { texels: 0, streetView: 0, tilePhoto: 0, inpainted: 0, palette: 0, clay: 0 };
+        for (const i of targets(atlas)) {
+            if (!maskedTexels[i]) continue;
+            f.texels++;
+            const c = unpackConfidenceTexel(planes.confidence, i);
+            const rung = c.covered && planes.albedo[i * 4 + 3] ? c.rung : TEXTURE_RUNG_CLAY;
+            if (rung <= 1) f.streetView++; else if (rung === 2) f.tilePhoto++; else if (rung === RUNG_GENERATED_PBR) f.inpainted++; else if (rung === RUNG_PALETTE) f.palette++; else f.clay++;
+        }
+        maskedFill = f;
+        progress(`occluded texels (${f.texels}): ${f.streetView} from another Street View view, ${f.tilePhoto} from the tile photo, ${f.inpainted} inpainted, ${f.palette} palette, ${f.clay} clay`);
+    }
     // the held-out fit: the final layer rendered from every view's pose against that photo, on what the view's pano did not make
     let fit: LayerFit | undefined;
     let measureLoo: ((budgetMs?: number) => Promise<LooFit>) | undefined;
@@ -598,7 +639,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
         rungShares: m.rungShares, rungTexels: m.rungTexels, atlasTexels: m.total,
         atlas: { width: atlas.width, height: atlas.height, texelsPerMeter: atlas.layout.stats.texelsPerMeter, charts: atlas.layout.stats.charts, islands: atlas.layout.stats.islands },
         degradations: unique, ...(projection ? { projection } : {}), ...(tileMethod ? { tileMethod } : {}), ...(photoTier ? { photoTier } : {}), ...(enhance ? { enhance } : {}), ...(fit ? { fit } : {}), ...(measureLoo ? { measureLoo } : {}),
-        ...(lightingViews || lightingTile ? { lighting: { ...(lightingViews ? { views: lightingViews } : {}), ...(lightingTile ? { tile: lightingTile } : {}) } } : {}), sourceSeam,
+        ...(lightingViews || lightingTile ? { lighting: { ...(lightingViews ? { views: lightingViews } : {}), ...(lightingTile ? { tile: lightingTile } : {}) } } : {}), sourceSeam, ...(inpaint ? { inpaint } : {}), ...(maskedFill ? { maskedFill } : {}),
         modelsUsed: [...new Set(modelsUsed)], timingsMs
     };
 }

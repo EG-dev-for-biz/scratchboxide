@@ -24,7 +24,7 @@ import type { Vec3 } from '../src/common/spatial/staged-location-contracts';
 import type { DepthMap, PinholeCamera, ProjectionView } from '../src/common/spatial/texture-pass-contracts';
 import { bakeStreetViewProjection, type ProjectionBakeResult } from '../src/node/3d-engine/staged-location/texture-projection';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
-import { maskIou, ownershipPrompts, OwnershipTargetNotFound, ownViews, OWNERSHIP_MIN_IOU, type OwnershipSegmenter } from '../src/node/3d-engine/staged-location/streetview-ownership';
+import { dilateMask, growThinVertical, maskIou, occluderDescription, ownershipPrompts, OwnershipTargetNotFound, ownViews, OWNERSHIP_MIN_IOU, type OwnershipSegmenter } from '../src/node/3d-engine/staged-location/streetview-ownership';
 import { renderFrameDepth } from '../src/node/spatial/StreetViewPoseRegistrar';
 import { FACADE, facadeAtlas, lookAtCamera } from './helpers/texture-pass-fixtures';
 
@@ -142,6 +142,7 @@ describe('Street View projection: pixel ownership', () => {
         const seen: Array<string | undefined> = [];
         const segment: OwnershipSegmenter = async (image, prompts) => {
             seen.push(prompts.target);
+            if (prompts.target === occluderDescription('the test facade')) return new Uint8Array(image.width * image.height); // nothing in front
             const k = views.findIndex(v => v.image === image);
             if (views[k].panoId === 'left') throw new OwnershipTargetNotFound('the photo shows a green neighbour, not the structure');
             if (views[k].panoId === 'right') return new Uint8Array(image.width * image.height).map((_, i) => (i % image.width < 30 ? 1 : 0)); // a strip at the edge
@@ -149,7 +150,8 @@ describe('Street View projection: pixel ownership', () => {
         };
         const own = await ownViews({ views, structure: facadeMesh(), segment, target: 'the test facade' });
         const by = Object.fromEntries(own.records.map(x => [x.panoId, x]));
-        expect(seen.every(t => t === 'the test facade')).toBe(true);
+        expect(seen.filter(t => t === 'the test facade').length).toBe(3);
+        expect(seen.filter(t => t === occluderDescription('the test facade')).length).toBe(1); // only the kept view is asked what stands in front
         expect(by.front).toMatchObject({ status: 'segmented', prompts: 'description+geometry' });
         expect(by.front.iou!).toBeGreaterThan(OWNERSHIP_MIN_IOU);
         expect(by.left).toMatchObject({ status: 'refused', maskPixels: 0 });
@@ -164,5 +166,64 @@ describe('Street View projection: pixel ownership', () => {
         const broken = await ownViews({ views: [views[0]], structure: facadeMesh(), segment: async () => { throw new Error('python is missing'); } });
         expect(broken.records[0]).toMatchObject({ status: 'refused', prompts: 'geometry' });
         expect(broken.records[0].reason).toMatch(/the segmenter failed \(python is missing\)/);
+    });
+
+    it('takes what stands in front out of the cut-out (depth and the segmenter), grows it along a thin pole, and the bake counts those texels occluded', async () => {
+        const cam = lookAtCamera(EYES.front, [5, 3, 0], 240, 144, 70);
+        // the photo: the facade, a dark sign box over part of it, and a thin dark pole under the sign down to the bottom
+        const shot = shoot(cam, () => undefined);
+        const W = cam.width, H = cam.height;
+        const sign = (x: number, y: number) => x >= 100 && x < 130 && y >= 40 && y < 60;
+        const pole = (x: number, y: number) => x >= 114 && x < 116 && y >= 60;
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (sign(x, y) || pole(x, y)) shot.image.rgba.set([25, 25, 30, 255], (y * W + x) * 4);
+        const view: ProjectionView = { panoId: 'front', camera: cam, image: shot.image, poseQuality: 1, poseSigmaPx: 0 };
+        const structure = new Uint8Array(W * H);
+        for (let i = 0; i < W * H; i++) structure[i] = Number.isFinite(shot.depth.depthM[i]) ? 1 : 0;
+        const asked: string[] = [];
+        const segment: OwnershipSegmenter = async (_image, prompts) => {
+            asked.push(prompts.target ?? '');
+            if (prompts.target === occluderDescription('the test facade')) {
+                // the occluder cut-out finds the sign only (thin poles are the segmenter's weak case)
+                const m = new Uint8Array(W * H);
+                for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (sign(x, y)) m[y * W + x] = 1;
+                return m;
+            }
+            return structure;
+        };
+        const own = await ownViews({ views: [view], structure: facadeMesh(), segment, target: 'the test facade' });
+        expect(asked).toEqual(['the test facade', occluderDescription('the test facade')]);
+        const rec = own.records[0];
+        expect(rec.status).toBe('segmented');
+        expect(rec.occluders!.segmentedPixels).toBeGreaterThan(500);
+        expect(rec.occluders!.grownPixels).toBeGreaterThan(50); // the pole, from the sign down
+        const mask = own.views[0].ownerMask!;
+        // the sign and the pole are out of the mask; the open facade beside them is in
+        for (let y = 62; y < H - 4; y += 7) expect(mask[y * W + 115]).toBe(0);
+        expect(mask[50 * W + 115]).toBe(0);
+        expect(mask[90 * W + 60]).toBe(1);
+        // the projection skips those pixels and reports the texels it saw occluded
+        const atlas = facadeAtlas(48);
+        const res = await bakeStreetViewProjection({ atlas, views: own.views, depthFor: () => shot.depth, options: { align: false, refinePose: false } });
+        let occluded = 0;
+        for (let t = 0; t < atlas.width * atlas.height; t++) occluded += res.report.maskedTexels?.[t] ?? 0;
+        expect(occluded).toBeGreaterThan(20);
+        expect(wrong(res).baked).toBeLessThan(atlas.width * atlas.height);
+        for (let t = 0; t < atlas.width * atlas.height; t++) if (res.albedo[t * 4 + 3] === 255) expect(res.albedo[t * 4]).toBeGreaterThan(100); // no dark sign or pole
+    });
+
+    it('grows only along thin lines and dilates without touching the image border', () => {
+        const W = 60, H = 40, rgba = new Uint8Array(W * H * 4).fill(200);
+        for (let y = 0; y < H; y++) rgba.set([20, 20, 20, 255], (y * W + 30) * 4); // a 1 px pole
+        for (let y = 0; y < 10; y++) for (let x = 5; x < 15; x++) rgba.set([20, 20, 20, 255], (y * W + x) * 4); // a wide dark block
+        const seed = new Uint8Array(W * H); seed[0 * W + 30] = 1; seed[0 * W + 10] = 1;
+        const g = growThinVertical(seed, { width: W, height: H, rgba }, new Uint8Array(W * H).fill(1), { halfWidthPx: 3 });
+        let pole = 0, block = 0;
+        for (let y = 0; y < H; y++) { pole += g[y * W + 30]; block += g[y * W + 10]; }
+        expect(pole).toBe(H);   // the whole pole
+        expect(block).toBe(1);  // a wide block is not a thin line: only the seed
+        const d = dilateMask(new Uint8Array(W * H), W, H, 3);
+        expect(d.some(v => v)).toBe(false);
+        const one = new Uint8Array(W * H); one[20 * W + 20] = 1;
+        expect(dilateMask(one, W, H, 2).reduce((a, b) => a + b, 0)).toBe(25);
     });
 });
