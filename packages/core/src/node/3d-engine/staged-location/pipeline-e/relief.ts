@@ -58,6 +58,8 @@ export const MEASURED_AVERAGED_TOKEN = 'measured-averaged';
 export const K_SIGMA = 3;
 /** ...and MIN_DEPTH_M... */
 export const MIN_DEPTH_M = 0.05;
+/** ...and at most MAX_DEPTH_M (deeper stands in front of the wall: the scanned residual keeps what is clearly proud)... */
+export const MAX_DEPTH_M = 1.2;
 /** ...from at least MIN_BLOCKS blocks of BLOCK_M (a band's length, a vertical element's height)... */
 export const MIN_BLOCKS = 6;
 export const BLOCK_M = 0.5;
@@ -65,7 +67,7 @@ export const BLOCK_M = 0.5;
 export const MIN_OPENINGS = 4;
 
 /** The native averaging's parameters (scratchbox_relief_average.hpp Params). */
-export const RELIEF_PARAMS = { k: K_SIGMA, block: BLOCK_M, trim: 0.2, minDepth: MIN_DEPTH_M, consistency: 0.7, minBlocks: MIN_BLOCKS, minOpenings: MIN_OPENINGS, margin: 0.5, shift: 0.15, detrendWindow: 4 };
+export const RELIEF_PARAMS = { k: K_SIGMA, block: BLOCK_M, trim: 0.2, minDepth: MIN_DEPTH_M, maxDepth: MAX_DEPTH_M, consistency: 0.7, minBlocks: MIN_BLOCKS, minOpenings: MIN_OPENINGS, margin: 0.5, shift: 0.15, detrendWindow: 4 };
 
 /** The judge the photo-match gate asks first (photo_match_evaluate's default; the chat's fallbacks follow). */
 export const RELIEF_GATE_JUDGE = 'gemini-4-argon';

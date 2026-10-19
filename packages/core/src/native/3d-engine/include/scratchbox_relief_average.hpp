@@ -59,6 +59,8 @@ struct Params {
     double trim{0.2};
     /** Least averaged depth worth building (metres). */
     double minDepth{0.05};
+    /** Deeper than this is not relief on the wall (an object in front of it, or the scanned residual's to keep). */
+    double maxDepth{1.2};
     /** Least share of a line's blocks standing out by half the line's depth (bands, verticals). */
     double consistency{0.7};
     /** Least blocks behind a line feature. */
@@ -409,6 +411,7 @@ inline std::vector<LineFeature> lineFeatures(const Field& f, int along, double b
         std::snprintf(buf, sizeof buf, "%.3f m out (+- %.3f m SE) from %d blocks, %.0f%% agreeing, %d lines", lf.depth, lf.se, lf.blocks, 100 * lf.agree, runLines);
         lf.why = buf;
         if (!(lf.depth >= p.minDepth)) lf.why += "; below the least depth";
+        else if (lf.depth > p.maxDepth) lf.why += "; deeper than relief on the wall (something in front of it)";
         else if (!(lf.depth >= p.k * lf.se)) lf.why += "; not significant (under k SE)";
         else if (lf.blocks < p.minBlocks) lf.why += "; too few blocks";
         else if (lf.agree < p.consistency) lf.why += "; not consistent along its length";
@@ -460,6 +463,7 @@ inline void gateScalar(UnitProfile& u, const RobustStat& s, const Params& p, con
     u.why = buf;
     if (!std::isfinite(s.mean) || s.n < p.minOpenings) u.why += "; too few openings";
     else if (!(s.mean >= p.minDepth)) u.why += "; below the least depth";
+    else if (s.mean > p.maxDepth) u.why += "; deeper than relief on the wall";
     else if (!(s.mean >= p.k * s.se)) u.why += "; not significant (under k SE)";
     else u.accepted = true;
 }

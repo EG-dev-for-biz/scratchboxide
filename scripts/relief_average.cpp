@@ -111,7 +111,7 @@ int main(int argc, char** argv) {
                 else if (name == "margin") p.margin = v; else if (name == "shift") p.shift = v;
                 else if (name == "slabLo") p.slabLo = v; else if (name == "slabHi") p.slabHi = v; else if (name == "clampGuard") p.clampGuard = v;
                 else if (name == "maxVerticalShare") p.maxVerticalShare = v; else if (name == "fullLength") p.fullLength = v;
-                else if (name == "detrendWindow") p.detrendWindow = v;
+                else if (name == "detrendWindow") p.detrendWindow = v; else if (name == "maxDepth") p.maxDepth = v;
                 else throw std::runtime_error("unknown param " + name);
             } else if (kw == "face") {
                 FaceJob f;
@@ -130,7 +130,7 @@ int main(int argc, char** argv) {
         std::ostringstream js;
         js << "{\"schema\":\"scratchbox.relief-average/1\",\"params\":{\"k\":" << num(p.k) << ",\"block\":" << num(p.block) << ",\"trim\":" << num(p.trim)
            << ",\"minDepth\":" << num(p.minDepth) << ",\"consistency\":" << num(p.consistency) << ",\"minBlocks\":" << p.minBlocks << ",\"minOpenings\":" << p.minOpenings
-           << ",\"margin\":" << num(p.margin) << ",\"shift\":" << num(p.shift) << ",\"detrendWindow\":" << num(p.detrendWindow) << "},\"faces\":[";
+           << ",\"margin\":" << num(p.margin) << ",\"shift\":" << num(p.shift) << ",\"detrendWindow\":" << num(p.detrendWindow) << ",\"maxDepth\":" << num(p.maxDepth) << "},\"faces\":[";
         bool firstFace = true;
         for (const auto& fj : faces) {
             ra::Field f;
