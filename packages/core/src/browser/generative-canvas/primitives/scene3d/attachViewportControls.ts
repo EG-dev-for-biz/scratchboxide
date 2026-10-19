@@ -59,6 +59,11 @@ export interface ViewportControlContext {
     selectionBox: Ref<THREE.BoxHelper | null>;
     /** Objects that must never be pick targets (starfield, grid, ...). */
     ignoredPickObjects: () => Array<THREE.Object3D | null | undefined>;
+    /**
+     * Pointer NDC on the displayed frame -> the NDC whose camera ray shows there. Identity unless a lens-distortion
+     * pass bends the frame (ViewportOpticsChain.mapPointerNdc); without it picks and gizmo drags miss off-centre.
+     */
+    mapPointerNdc?: (ndc: THREE.Vector2) => THREE.Vector2;
 
     resolveSelectableObject: (hit: THREE.Object3D, root: THREE.Object3D) => THREE.Object3D;
     selectObject: Ref<(obj: THREE.Object3D | null) => void>;
@@ -139,7 +144,8 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
         const rect = container.getBoundingClientRect();
         const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
         const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-        raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
+        const ndc = new THREE.Vector2(ndcX, ndcY);
+        raycaster.setFromCamera(ctx.mapPointerNdc ? ctx.mapPointerNdc(ndc) : ndc, camera);
     };
 
     const isPickable = (item: THREE.Intersection): boolean => {

@@ -154,6 +154,7 @@ import { NumericPrecisionInspector } from './scene3d/NumericPrecisionInspector';
 import { computeSceneGeometryBounds, calculateStandoffCamera } from './scene3d/autoFraming';
 import type { RendererStack, AtmosphereHandle, TilesLayerHandle, SceneContentHandle, WasmMeshHandle, VectorRoadmapHandle, Scene3DRenderMode } from './scene3d/types';
 import { applyClayRenderMode } from './scene3d/clayRenderMode';
+import { ViewportOpticsChain } from './scene3d/viewportOptics';
 import { syncObjectMaterial } from './scene3d/materialOverride';
 import { TreeLodController, findShadowCamera } from './scene3d/treeLod/TreeLodController';
 import { disposeObject3DDeep, releaseObject3D } from './scene3d/disposeObject';
@@ -275,10 +276,18 @@ export interface Scene3DPrimitiveProps {
 export function captureSceneScreenshot(
     renderer?: THREE.WebGLRenderer | null,
     scene?: THREE.Scene | null,
-    camera?: THREE.Camera | null
+    camera?: THREE.Camera | null,
+    /** The viewport's own frame draw (lens optics and atmosphere passes included); used instead of a bare render. */
+    renderFrame?: (() => void) | null
 ): string | null {
     if (renderer && renderer.domElement) {
-        if (scene && camera && typeof renderer.render === 'function') {
+        if (renderFrame) {
+            try {
+                renderFrame();
+            } catch (e) {
+                // ignore render error if in tear down
+            }
+        } else if (scene && camera && typeof renderer.render === 'function') {
             try {
                 renderer.render(scene, camera);
             } catch (e) {
@@ -1439,7 +1448,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     // Automated Capture Frame & Visual Verification Hooks
     // ---------------------------------------------------------
     const captureFrame = React.useCallback((): string | null => {
-        return captureSceneScreenshot(threeRendererRef.current, threeSceneRef.current, threeCameraRef.current);
+        return captureSceneScreenshot(threeRendererRef.current, threeSceneRef.current, threeCameraRef.current, renderFrameRef.current);
     }, []);
 
     React.useEffect(() => {
@@ -1472,6 +1481,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const cameraTargetRef = React.useRef<THREE.Vector3>(new THREE.Vector3(0, 0, 0));
 
     const animationFrameIdRef = React.useRef<number | null>(null);
+    /** Draws one viewport frame (optics passes when the scene lens configures them); set while the renderer is mounted. */
+    const renderFrameRef = React.useRef<(() => void) | null>(null);
+    /** Lens distortion and depth of field from scene camera.lens; inactive (no cost) when nothing is configured. */
+    const opticsChainRef = React.useRef<ViewportOpticsChain | null>(null);
     const hasWarnedFrameErrorRef = React.useRef<boolean>(false);
     const cameraRotationRef = React.useRef<{ theta: number; phi: number; distance: number }>({
         theta: Math.PI / 4,
@@ -1956,6 +1969,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             brushCursor: brushCursorMeshRef,
             selectionBox: selectionBoxRef,
             ignoredPickObjects: () => [atmosphereRef.current?.starsMesh, stack.gridHelper],
+            mapPointerNdc: ndc => opticsChainRef.current?.active ? opticsChainRef.current.mapPointerNdc(ndc, camera) : ndc,
             resolveSelectableObject,
             selectObject: selectObjectRef,
             mutateSceneData: mutateSceneDataRef,
@@ -1972,6 +1986,46 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         let lastHeadingUpdateTime = 0;
         const gizmoWorldPos = new THREE.Vector3();
         const gizmoWorldQuat = new THREE.Quaternion();
+
+        // The scene draw: through the aerial-perspective pass when the atmosphere has one, else straight. Into
+        // the current render target (the canvas, or the optics chain's scene target, whose depth it returns).
+        const drawScene = (target: THREE.WebGLRenderTarget | null): THREE.Texture | null => {
+            const aerial = aerialPerspectiveRef.current;
+            if (aerial && skyDomeModuleRef.current) {
+                aerial.render(renderer, scene, camera, skyDomeModuleRef.current.sunDirection, skyDomeModuleRef.current.diurnalProfile, skyDomeModuleRef.current);
+                return aerial.renderTarget?.depthTexture ?? null;
+            }
+            renderer.render(scene, camera);
+            return target?.depthTexture ?? null;
+        };
+        const opticsChain = new ViewportOpticsChain();
+        opticsChain.configure(sceneDataRef.current.camera?.lens);
+        opticsChainRef.current = opticsChain;
+        (window as any).__SB_3D_OPTICS__ = opticsChain;
+        const resolveViewportObject = (id: string): THREE.Object3D | undefined => {
+            const custom = customMeshRegistryRef.current.get(id)?.mesh;
+            if (custom?.parent) return custom;
+            const external = externalObjectsMapRef.current.get(id);
+            if (external?.parent) return external;
+            let found: THREE.Object3D | undefined;
+            scene.traverse(child => {
+                if (!found && (child.name === id || child.userData?.id === id)) found = child;
+            });
+            return found;
+        };
+        const renderFrame = () => {
+            if (opticsChain.active) {
+                opticsChain.render(renderer, camera, {
+                    overlays: [transformGizmoGroupRef.current, selectionBoxRef.current, brushCursorMeshRef.current],
+                    drawScene,
+                    resolveObject: resolveViewportObject
+                });
+            } else {
+                drawScene(null);
+            }
+        };
+        renderFrameRef.current = renderFrame;
+        (window as any).__SB_3D_RENDER_FRAME__ = renderFrame;
 
         const animate = () => {
             try {
@@ -2118,18 +2172,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     }
                 });
 
-                if (aerialPerspectiveRef.current && skyDomeModuleRef.current) {
-                    aerialPerspectiveRef.current.render(
-                        renderer,
-                        scene,
-                        camera,
-                        skyDomeModuleRef.current.sunDirection,
-                        skyDomeModuleRef.current.diurnalProfile,
-                        skyDomeModuleRef.current
-                    );
-                } else {
-                    renderer.render(scene, camera);
-                }
+                renderFrame();
             } catch (frameErr) {
                 if (!hasWarnedFrameErrorRef.current) {
                     hasWarnedFrameErrorRef.current = true;
@@ -2167,6 +2210,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             externalObjectsMapRef.current.forEach(obj3d => releaseObject3D(obj3d));
             externalObjectsMapRef.current.clear();
             activeSplatMeshesRef.current.clear();
+            renderFrameRef.current = null;
+            opticsChain.dispose();
+            opticsChainRef.current = null;
             stack.dispose();
             stackRef.current = null;
             threeSceneRef.current = null;
@@ -2277,6 +2323,12 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             terrainBiomeRef.current = null;
         };
     }, [atmosphereFingerprint]);
+
+    // ---- 3b. Lens optics: distortion and depth-of-field passes from camera.lens (none when it configures none) ----
+    const lensFingerprint = JSON.stringify(sceneData.camera?.lens ?? null);
+    React.useEffect(() => {
+        opticsChainRef.current?.configure(sceneDataRef.current.camera?.lens);
+    }, [lensFingerprint]);
 
     // ---- 4. Camera preset (position / ground-grounded look-at target) ------------
     React.useEffect(() => {

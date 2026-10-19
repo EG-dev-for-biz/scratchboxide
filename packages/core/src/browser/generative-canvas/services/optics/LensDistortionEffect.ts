@@ -35,6 +35,8 @@ export interface LensDistortionUniforms {
     filterQuality: { value: number }; // 0 = bilinear, 1 = bicubic
     enabled: { value: boolean };
     letterboxColor: { value: THREE.Vector4 };
+    /** Source uv per unit of output uv about the centre: (1, 1), or 1 / overscan when the source was rendered wider. */
+    sourceScale: { value: THREE.Vector2 };
 }
 
 /**
@@ -267,7 +269,8 @@ export const LENS_DISTORTION_SHADER = {
         edgeMode: { value: 0 }, // 0 = letterbox, 1 = clamp, 2 = transparent
         filterQuality: { value: 0 }, // 0 = bilinear, 1 = bicubic
         enabled: { value: true },
-        letterboxColor: { value: new THREE.Vector4(0.02, 0.04, 0.08, 1.0) }
+        letterboxColor: { value: new THREE.Vector4(0.02, 0.04, 0.08, 1.0) },
+        sourceScale: { value: new THREE.Vector2(1, 1) }
     },
 
     vertexShader: /* glsl */ `
@@ -297,6 +300,7 @@ export const LENS_DISTORTION_SHADER = {
         uniform int filterQuality; // 0 = bilinear, 1 = bicubic
         uniform bool enabled;
         uniform vec4 letterboxColor;
+        uniform vec2 sourceScale;
 
         varying vec2 vUv;
 
@@ -374,7 +378,8 @@ export const LENS_DISTORTION_SHADER = {
             mappedCoord.x *= anamorphicSqueeze;
             mappedCoord.x /= aspectRatio;
 
-            vec2 finalUv = opticalCenter + mappedCoord;
+            // the source may cover more than the output frame (overscan): map output-frame uv into it
+            vec2 finalUv = 0.5 + (opticalCenter + mappedCoord - 0.5) * sourceScale;
 
             // STMap output
             if (mode == 2) {
@@ -398,8 +403,8 @@ export const LENS_DISTORTION_SHADER = {
 
             float r2 = dot(coord, coord);
             if (chromaticAberration > 0.00001) {
-                vec2 redUv = clamp(opticalCenter + (mappedCoord * (1.0 + chromaticAberration * r2)), 0.0, 1.0);
-                vec2 blueUv = clamp(opticalCenter + (mappedCoord * (1.0 - chromaticAberration * r2)), 0.0, 1.0);
+                vec2 redUv = clamp(0.5 + (opticalCenter + mappedCoord * (1.0 + chromaticAberration * r2) - 0.5) * sourceScale, 0.0, 1.0);
+                vec2 blueUv = clamp(0.5 + (opticalCenter + mappedCoord * (1.0 - chromaticAberration * r2) - 0.5) * sourceScale, 0.0, 1.0);
 
                 float r = texture2D(tDiffuse, redUv).r;
                 float g = texture2D(tDiffuse, finalUv).g;
@@ -592,7 +597,8 @@ export class LensDistortionEffect {
                 edgeMode: { value: edgeMap[edgeMode] },
                 filterQuality: { value: filterMap[filterQuality] },
                 enabled: { value: this.currentConfig.enabled },
-                letterboxColor: { value: lbColor }
+                letterboxColor: { value: lbColor },
+                sourceScale: { value: new THREE.Vector2(1, 1) }
             },
             vertexShader: LENS_DISTORTION_SHADER.vertexShader,
             fragmentShader: LENS_DISTORTION_SHADER.fragmentShader,
@@ -644,6 +650,15 @@ export class LensDistortionEffect {
         this.material.uniforms.k4.value = k4;
         this.material.uniforms.p1.value = p1;
         this.material.uniforms.p2.value = p2;
+        return this;
+    }
+
+    /**
+     * Sets how much of the source texture one unit of output uv spans about the centre: 1 / overscan on each axis
+     * when the source was rendered with a wider frustum than the output frame (so barrel edges have pixels to pull in).
+     */
+    public setSourceScale(sx: number, sy: number): this {
+        (this.material.uniforms.sourceScale.value as THREE.Vector2).set(sx, sy);
         return this;
     }
 

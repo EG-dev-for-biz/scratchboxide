@@ -839,6 +839,45 @@ export type GroundTileMode =
     | 'none'
     | (string & {});
 
+/**
+ * Brown-Conrady distortion of a lens, in normalized camera coordinates (OpenCV: x = X/Z, y = Y/Z on the image plane
+ * at unit focal length), the frame VfxPlateMatchmoveService.distortPoint / undistortPoint and the pose solvers use:
+ *   r^2 = x^2 + y^2,  x_d = x (1 + k1 r^2 + k2 r^4 + k3 r^6) + 2 p1 x y + p2 (r^2 + 2 x^2),
+ *                     y_d = y (1 + k1 r^2 + k2 r^4 + k3 r^6) + p1 (r^2 + 2 y^2) + 2 p2 x y.
+ * k1 < 0 is barrel, k1 > 0 pincushion. The viewport draws it as a redistort pass (straight lines in the scene bend).
+ */
+export interface SceneLensDistortion {
+    k1: number;
+    k2?: number;
+    k3?: number;
+    p1?: number;
+    p2?: number;
+    /** Lateral colour: red and blue sample at radius (1 +/- chromaticAberration r^2), r in frame heights from the centre (0 = none). */
+    chromaticAberration?: number;
+}
+
+/**
+ * A real lens on the scene camera. Every field is a continuous physical quantity; the viewport adds a pass only for
+ * what is configured: lens distortion when `distortion` has a non-zero coefficient, thin-lens depth of field when
+ * focal length, f-number and a focus (distance or object) are set and `depthOfField` is not false.
+ */
+export interface SceneCameraLens {
+    distortion?: SceneLensDistortion;
+    focalLengthMm?: number;
+    /** Sensor (film back) size in mm. The circle of confusion is scaled to pixels by the frame height on the sensor. */
+    sensorWidthMm?: number;
+    sensorHeightMm?: number;
+    apertureFStop?: number;
+    /** Distance of the plane of focus from the camera, along the view axis, in metres. */
+    focusDistanceMeters?: number;
+    /** Focus held on a scene object (customMesh / object id, or a viewport node name); the viewport measures its depth every frame. */
+    focusObjectId?: string;
+    /** Anamorphic squeeze (1 = spherical): oval bokeh and distortion computed on the squeezed sensor. */
+    anamorphicSqueeze?: number;
+    /** False keeps the lens values but draws no depth of field. */
+    depthOfField?: boolean;
+}
+
 export interface Scene3DData {
     title: string;
     subtitle?: string;
@@ -902,6 +941,8 @@ export interface Scene3DData {
         position: [number, number, number];
         target: [number, number, number];
         fov?: number;
+        /** Physical lens optics the viewport draws (sb_set_camera_lens); absent = an ideal pinhole, no optics passes. */
+        lens?: SceneCameraLens;
     };
     environment?: {
         skybox?: string;
