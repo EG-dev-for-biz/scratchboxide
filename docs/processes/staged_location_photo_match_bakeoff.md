@@ -45,5 +45,30 @@ Fractional view wins: A 9.3, C 9.1, D 4.6, B+ 0.75, B 0.25. Judge consistency: t
 3. Re-check the no-fit Street View gate against this judge: on Puck it set aside Street View that the judge preferred.
 4. Make the photo-match evaluator the standard check for future work.
 
+## Round 2: the fixes, and the bake-off again in context (2026-10-19)
+
+**Fixes on main.** 1c61ffbf: the tile transfer's distance gate widens per texel by the move tile_refine recorded (`|_RECTIFY_DISPLACEMENT| + |_RELIEF_HEIGHT|`, at most 1 m more). e2740520: the texture stage waits for the facade grammar, so `l2g` is textured on a first build. 454fe988 and ab37e077: Street View pixel ownership and occluder cleaning (`streetview-ownership.ts`), then fill order other view, tile photo, inpainting (`texture-inpaint.ts`). 5ef62719 and ba7a13c7: the evaluator renders every arm in its street.
+
+**What fix 1 measured.** The rectification move is not why the cleaned mesh falls to the palette. Re-running the transfer on the bake-off layers, widening the gate by the recorded move lowers the palette share by only 0.4 to 2 points (Puck 28.5 -> 27.7%, St. Mark's 54.5 -> 54.1%, Jefferson 51.0 -> 48.9%, Haughwout 8.4 -> 7.4%); even a flat 1 m gate recovers 3 to 7 points. Most palette texels have no same-facing tile surface within 1 m at all: party walls cut against neighbours, faces inside the isolate, ground and lower walls under tree canopy (the tile surface is 4 to 12 m above them), and on Puck stretches of facade where the tile's photo surface lies several metres from the remeshed wall. These are not fixed; B still loses materials to A.
+
+**Ownership and occluders.** Per photo the structure is cut out by the vision model plus MediaPipe/GrabCut (box from the projected scan), and what stands in front is taken out (depth test against the tile mesh, an open-vocabulary "anything standing in front of the facade" cut-out, growth along thin vertical lines, dilation). Photos kept / sent: Puck 8/9, Haughwout 3/8, St. Mark's 1/5, the arch 16/16, Jefferson 3/5; the photos refused show neighbours (the model names them: storefronts, the Valentino-poster brick building, apartment buildings). Occluded texels, by where they ended up (C arm, main layer): Puck 7% other view / 85% tile / 0.05% inpainted / 8% palette; Haughwout 2 / 97 / 0.1 / 1; St. Mark's 0.03 / 61 / 0.2 / 38; the arch 70 / 30 / 0 / 0; Jefferson 4 / 71 / 7 / 17. Inpainting writes few texels: most holes sit in small islands with too little real texture around them, and the lock refused answers that left magenta or did not join the rim.
+
+**Thin structures.** The growth caught poles where the segmenter had caught part of them (a traffic-signal pole and lamp posts on Haughwout, a pole against the arch pier), about 1 to 3% of the removed pixels. Free-standing poles the segmenter missed entirely are still missed. False positives: on one Haughwout photo the occluder cut-out took a whole right-hand bay of the facade, and on the arch small pieces of frieze sculpture; those texels fall to the tile photo.
+
+**The evaluator in context.** Each arm is drawn inside the photo-textured tile with only the target's own triangles cut out, the same street for every arm. On the same Puck builds the old renders (isolated on grey) score A 3.47, B 3.80, C 3.87, D 3.80; in context A 4.53, B 3.27, C 3.47, D 3.27. The raw tile goes from last to first once it is seen in its street.
+
+| Place (views) | A raw | B cleaned | C +Street View (owned) | D default | Winner |
+|---|---|---|---|---|---|
+| Puck Building (5) | **4.53** | 3.27 | 3.47 | 3.27 | A |
+| Haughwout Building (5) | **3.67** | 3.20 | **3.67** | **3.67** | A = C = D |
+| St. Mark's Church (4) | **3.92** | 3.67 | 3.58 | 3.67 | A |
+| Washington Square Arch (6) | 3.72 | 3.83 | 5.28 | **5.33** | D |
+| Jefferson Market Library (4, one view dropped: a build now uses its pano) | **4.83** | 4.08 | 4.00 | 4.00 | A |
+| **All 24 views** | **4.10** | 3.60 | 4.07 | 4.06 | A (narrowly) |
+
+The two rounds are not comparable number for number (the renders changed from isolated to in context). Within round 2, C and D no longer paint the wrong building: St. Mark's C rises from last of the pipeline arms (2.92, round 1) to within 0.1 of B and D. Judge consistency: mean within-view standard deviation 0.18.
+
+**The no-fit gate on Puck (fix 5).** After ownership the gate still sets Puck's Street View aside (held-out chamfer 7.84 px against the clay's 7.10), and the judge still prefers keeping it, by a small margin: C 3.47 against D 3.27 in context, 3.87 against 3.80 in the old renders. The gate is unchanged.
+
 ## Reproduction
 `scripts/dev/photo-match-heldout.ts`, then `scripts/dev/photo-match-eval.ts <manifest>` (each script's header gives its usage).
