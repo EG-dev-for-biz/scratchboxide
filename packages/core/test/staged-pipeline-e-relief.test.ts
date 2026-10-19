@@ -24,8 +24,8 @@ import { massingSpecText, type Massing } from '../src/node/3d-engine/staged-loca
 import { runMassing, type MassingFace, type MassingNode, type MassingRun } from '../src/node/3d-engine/staged-location/pipeline-e/native-massing';
 import { writeMassingTexturedGlb } from '../src/node/3d-engine/staged-location/pipeline-e/massing-glb';
 import { plainTextures, MASSING_PARAMS } from '../src/node/3d-engine/staged-location/pipeline-e/pipeline-e';
-import { reliefMap, retargetGeometry, runReliefAverage, runReliefStage, K_SIGMA, MIN_BLOCKS, MIN_OPENINGS, MEASURED_AVERAGED_LABEL, type ReliefOutcome } from '../src/node/3d-engine/staged-location/pipeline-e/relief';
-import type { FacadeGrammar } from '../src/node/3d-engine/staged-location/facade-grammar';
+import { reliefGeometry, reliefMap, retargetGeometry, runReliefAverage, GENERATED_LABEL, TYPICAL_BAND_DEPTH_M, TYPICAL_REVEAL_DEPTH_M, runReliefStage, K_SIGMA, MIN_BLOCKS, MIN_OPENINGS, MEASURED_AVERAGED_LABEL, type LineFeature, type ReliefOutcome, type ReliefReport, type UnitSide } from '../src/node/3d-engine/staged-location/pipeline-e/relief';
+import { grammarCells, type FacadeGrammar } from '../src/node/3d-engine/staged-location/facade-grammar';
 import { renderFrameDepth, type FrameCamera } from '../src/node/spatial/StreetViewPoseRegistrar';
 
 const SHOTS = path.resolve(__dirname, '../../../test-results/screenshots/version_e_relief');
@@ -332,5 +332,64 @@ describe('pipeline E relief: geometry onto a wall the refined layer split', () =
         rect(10 + vert.placements[0][2] + 15, 10 + vert.placements[0][2] + 15.4, 0, 13, [60, 160, 60]);
         rect(12, 13.4, 6, 8.2, [40, 40, 40]);
         shot('retarget_split_wall.png', W, H, rgb);
+    });
+});
+
+describe('pipeline E relief: generated profiles where the averages are too weak', () => {
+    it('adds a typical band at a storey line and a typical reveal, inside the scan\'s evidence bounds, labelled generated; nothing where the scan bounds it out', () => {
+        const face: MassingFace = {
+            index: 0, key: 'w:p:0:0', kind: 'wall', part: 'p', loop: 0, edge: 0, wall: true, normal: [0, 0, 1], axisS: [1, 0, 0], axisT: [0, 1, 0], origin: [0, 0, 0],
+            sMin: 0, sMax: 24, tMin: 0, tMax: 15, tBottom: 0, area: 360, pixel: 0.05, orthoSMin: -0.05, orthoTMax: 15.05, width: 482, height: 302, coverage: 1, openings: [], top: [[0, 15], [24, 15]]
+        };
+        const row = (t: number) => Math.round((face.orthoTMax - t) / face.pixel - 0.5);
+        const line = (t0: number, t1: number, depth: number, se: number, blocks: number): LineFeature => ({ along: 0, l0: row(t1), l1: row(t0), i0: 0, i1: 482, fullLength: true, depth, se, maxSe: se, blocks, agree: 0.8, accepted: false, why: 'refused', lines: [row(t1), row(t0)], profile: [depth, depth], profileSe: [se, se] });
+        const side = (o: Partial<UnitSide>): UnitSide => ({ proposed: true, accepted: false, why: 'refused', depth: 0, se: 0, n: 0, cross: [], offset: [], offsetSe: [], a0: 0, a1: 0, ...o });
+        const g = grammarFor(0);
+        const report: ReliefReport = {
+            schema: 'scratchbox.relief-average/1', params: {}, ms: 0,
+            faces: [{
+                index: 0, baseline: 0, trendRms: 0, valid: 1, texels: 1, verticals: [],
+                bands: [
+                    line(3.7, 3.95, 0.07, 0.03, 9),    // weak (0.07 < 3 x 0.03), at the top of the first tier (3.6): generated, bounds 0-0.16
+                    line(12.6, 12.8, 0.06, 0.025, 9),  // weak, but at no storey line and not the top: nothing
+                    line(14.6, 14.9, 0.015, 0.01, 9)  // the crown, but the scan bounds it under 0.05 m: nothing
+                ],
+                units: [{ group: 0, members: [0, 1, 2], shifts: [], nccGain: 0, widthM: 1.4, heightM: 2.2, pw: 0, ph: 0, mx: 0, my: 0, patch: '',
+                    reveal: side({ depth: 0.09, se: 0.04, n: 3, why: 'too few openings' }), below: side({ proposed: false }), above: side({ proposed: false }), left: side({ proposed: false }), right: side({ proposed: false }) }]
+            }]
+        };
+        const run = { dir: '', nodes: [], ms: 0, binary: { path: '', built: false }, report: { faces: [face] } } as unknown as MassingRun;
+        const openings = grammarCells(g).map((c, k) => ({ id: `win_0_${k}`, face: face.key, ...c, depth: 0.12, scanned: false, confidence: 0.6, provenance: 'photo-inferred' }));
+        const without = reliefGeometry(run, report, { sweeps: [], openings, grammars: new Map([[0, g]]) });
+        expect(without.features.filter(f => f.label === GENERATED_LABEL).length).toBe(0);
+        const geo = reliefGeometry(run, report, { sweeps: [], openings, grammars: new Map([[0, g]]), generated: true });
+        const gen = geo.features.filter(f => f.label === GENERATED_LABEL);
+        const built = gen.filter(f => f.built);
+        expect(built.map(f => f.axis).sort()).toEqual(['s', 'unit']);
+        const band = built.find(f => f.axis === 's')!;
+        expect(band.depthM).toBeCloseTo(TYPICAL_BAND_DEPTH_M, 6);             // inside the bounds 0 .. 0.16
+        expect(band.role).toMatch(/storey line/);
+        const reveal = built.find(f => f.axis === 'unit')!;
+        expect(reveal.depthM).toBeCloseTo(TYPICAL_REVEAL_DEPTH_M, 6);         // inside 0 .. 0.21
+        expect(geo.openings.filter(o => o.provenance === 'generated').map(o => o.id)).toEqual(['win_0_0', 'win_0_1', 'win_0_2']);
+        const rec = geo.provenance.get(`facesweep:${band.id}`)!;
+        expect(rec.label).toBe(GENERATED_LABEL);
+        expect(rec.measuredGeometry).toBe(false);
+        expect(rec.note).toMatch(/within the scan's bounds 0-0\.16 m/);
+        // the crown the scan bounds under the least depth, and the weak band at no storey line: not added
+        expect(gen.filter(f => !f.built).length).toBe(1);
+        expect(gen.find(f => !f.built)!.why).toMatch(/bounds it under the least depth/);
+        // a tight bound below the typical depth clamps it
+        report.faces[0].bands[0] = line(3.7, 3.95, 0.04, 0.015, 9);
+        const tight = reliefGeometry(run, report, { sweeps: [], openings, grammars: new Map([[0, g]]), generated: true }).features.find(f => f.label === GENERATED_LABEL && f.axis === 's' && f.built)!;
+        expect(tight.depthM).toBeCloseTo(0.085, 6);
+        // the record, for the screenshot convention: the face with the generated band (orange) and recessed openings (dark)
+        const W = 480, H = 300, rgb = new Uint8Array(W * H * 3).fill(235);
+        const X = (x: number) => Math.round(10 + x * 19), Y = (t: number) => Math.round(H - 10 - t * 18);
+        const rect = (x0: number, x1: number, t0: number, t1: number, c: number[]) => { for (let y = Y(t1); y <= Y(t0); y++) for (let x = X(x0); x <= X(x1); x++) if (x >= 0 && y >= 0 && x < W && y < H) rgb.set(c, (y * W + x) * 3); };
+        rect(0, 24, 0, 15, [200, 202, 208]);
+        for (const fs_ of geo.faceSweeps) rect(fs_.placements[0][0], fs_.placements[0][1], fs_.profile[0][1], fs_.profile[fs_.profile.length - 1][1], [230, 140, 40]);
+        for (const o of geo.openings) rect(o.s0, o.s1, o.t0, o.t1, o.provenance === 'generated' ? [60, 60, 70] : [140, 140, 150]);
+        shot('generated_band_and_reveal.png', W, H, rgb);
     });
 });

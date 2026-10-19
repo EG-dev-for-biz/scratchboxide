@@ -49,8 +49,20 @@ import { type MassingFace, type MassingNode, type MassingRun } from './native-ma
 import { plainTextures, runNativeMassing, writeMassingLayer, LOW_COVERAGE, type MassingLayerFiles } from './pipeline-e';
 
 export const RELIEF_VERSION = 'pipeline-e-relief/v1';
-/** The label of what this stage keeps. */
-export const MEASURED_AVERAGED_LABEL = 'measured by averaging the scan';
+/** The label of what this stage measures (AGENTS.md: `measured`, here averaged from the scan along repeats). */
+export const MEASURED_AVERAGED_LABEL = 'measured';
+/** The label of a typical profile added where the facade clearly has a feature the averages cannot resolve. */
+export const GENERATED_LABEL = 'generated';
+export const GENERATED_TOKEN = 'generated';
+/**
+ * Typical depths of a generated feature, each clamped into the scan's evidence bounds [mean - k SE, mean + k SE] of the
+ * averaged candidate it stands in for (continuous numbers; the band's height and extent are the candidate's own).
+ */
+export const TYPICAL_BAND_DEPTH_M = 0.12;
+export const TYPICAL_CROWN_DEPTH_M = 0.35;
+export const TYPICAL_REVEAL_DEPTH_M = 0.15;
+/** A band within this of the face's top is its crowning band (a typical crown projects further). */
+export const CROWN_REACH_M = 1.5;
 /** The node provenance token of it (no spaces in the native spec). */
 export const MEASURED_AVERAGED_TOKEN = 'measured-averaged';
 
@@ -205,6 +217,8 @@ export interface ReliefFeature {
     /** The line's axis on the face: s (runs along the face), t (runs up it), or a lattice unit. */
     axis: 's' | 't' | 'unit';
     role: string;
+    /** measured (averaged from the scan, passed its gate) or generated (a typical profile in the scan's evidence bounds). */
+    label: string;
     accepted: boolean;
     built: boolean;
     why: string;
@@ -283,9 +297,18 @@ function combineProfiles(items: Array<{ profile: Array<[number, number]>; se: nu
 function measuredRecord(what: string, depth: number, se: number, samples: number, unit: string, extra = ''): ProvenanceRecord {
     return {
         label: MEASURED_AVERAGED_LABEL, measuredGeometry: true,
-        method: `pipeline E relief: ${what}, its profile the robust (trimmed) mean of the scan's relief map over ${samples} ${unit}, kept at >= ${K_SIGMA} standard errors and >= ${MIN_DEPTH_M} m from >= ${unit === 'openings' ? MIN_OPENINGS : MIN_BLOCKS} ${unit}`,
+        method: `pipeline E relief, measured by averaging the scan along repeats: ${what}, its profile the robust (trimmed) mean of the scan's relief map over ${samples} ${unit}, kept at >= ${K_SIGMA} standard errors and >= ${MIN_DEPTH_M} m from >= ${unit === 'openings' ? MIN_OPENINGS : MIN_BLOCKS} ${unit}`,
         sources: [{ kind: 'tile-extraction', id: 'isolate' }, { kind: 'stage-output', id: 'pipeline-e-relief' }],
         note: `depth ${r3(depth)} m +- ${r3(se)} m (standard error), ${samples} ${unit}${extra}`
+    };
+}
+
+function generatedRecord(what: string, depth: number, lo: number, hi: number, evidence: string): ProvenanceRecord {
+    return {
+        label: GENERATED_LABEL, measuredGeometry: false, confidence: 0.5,
+        method: `pipeline E relief, generated: ${what}; a typical profile where the facade clearly has the feature and the scan's average is too weak to measure it, its depth clamped into the scan's evidence bounds (mean +- ${K_SIGMA} standard errors)`,
+        sources: [{ kind: 'stage-output', id: 'pipeline-e-relief' }],
+        note: `depth ${r3(depth)} m, within the scan's bounds ${r3(lo)}-${r3(hi)} m; ${evidence}`
     };
 }
 
@@ -305,6 +328,8 @@ export function reliefGeometry(run: MassingRun, report: ReliefReport, input: {
     sweeps: SweepItem[]; openings: OpeningItem[];
     /** Per face index: the grammar the job's openings came from (cells in grammarCells order). */
     grammars: Map<number, FacadeGrammar>;
+    /** Add typical profiles (labelled generated) where the facade clearly has a feature the averages could not resolve. */
+    generated?: boolean;
 }): ReliefGeometry {
     const faces = run.report.faces;
     const features: ReliefFeature[] = [];
@@ -319,7 +344,7 @@ export function reliefGeometry(run: MassingRun, report: ReliefReport, input: {
         fr.bands.forEach((lf, k) => {
             const profile = lineProfile(f, lf);
             const s0 = Math.max(f.sMin, f.orthoSMin + lf.i0 * f.pixel), s1 = Math.min(f.sMax, f.orthoSMin + lf.i1 * f.pixel);
-            const feature: ReliefFeature = { id: `relief_band_${f.index}_${k}`, face: f.index, faceKey: f.key, axis: 's', role: `a band ${lf.fullLength ? 'along the whole face' : 'along part of the face'} at ${r3(profile[0][1])}-${r3(profile[profile.length - 1][1])} m`, accepted: lf.accepted, built: false, why: lf.why, depthM: lf.depth, seM: lf.se, samples: lf.blocks, profile: simplifyProfile(profile), extent: [r3(s0), r3(s1)] };
+            const feature: ReliefFeature = { id: `relief_band_${f.index}_${k}`, face: f.index, faceKey: f.key, axis: 's', label: MEASURED_AVERAGED_LABEL, role: `a band ${lf.fullLength ? 'along the whole face' : 'along part of the face'} at ${r3(profile[0][1])}-${r3(profile[profile.length - 1][1])} m`, accepted: lf.accepted, built: false, why: lf.why, depthM: lf.depth, seM: lf.se, samples: lf.blocks, profile: simplifyProfile(profile), extent: [r3(s0), r3(s1)] };
             features.push(feature);
             if (lf.accepted) accBands.push({ face: f, lf, profile, feature });
         });
@@ -327,7 +352,7 @@ export function reliefGeometry(run: MassingRun, report: ReliefReport, input: {
             const profile = lineProfile(f, lf);
             const tTop = Math.min(f.tMax, f.orthoTMax - lf.i0 * f.pixel), tBot = Math.max(f.wall ? f.tBottom : f.tMin, f.orthoTMax - lf.i1 * f.pixel);
             const id = `relief_vert_${f.index}_${k}`;
-            const feature: ReliefFeature = { id, face: f.index, faceKey: f.key, axis: 't', role: `an element running up the face, ${r3(profile[profile.length - 1][1] - profile[0][1])} m wide, ${r3(tBot)}-${r3(tTop)} m`, accepted: lf.accepted, built: false, why: lf.why, depthM: lf.depth, seM: lf.se, samples: lf.blocks, profile: simplifyProfile(profile), extent: [r3(tBot), r3(tTop)] };
+            const feature: ReliefFeature = { id, face: f.index, faceKey: f.key, axis: 't', label: MEASURED_AVERAGED_LABEL, role: `an element running up the face, ${r3(profile[profile.length - 1][1] - profile[0][1])} m wide, ${r3(tBot)}-${r3(tTop)} m`, accepted: lf.accepted, built: false, why: lf.why, depthM: lf.depth, seM: lf.se, samples: lf.blocks, profile: simplifyProfile(profile), extent: [r3(tBot), r3(tTop)] };
             features.push(feature);
             if (!lf.accepted || tTop - tBot < 2 * BLOCK_M) { if (lf.accepted) feature.why += '; its extent up the face is too short to build'; return; }
             faceSweeps.push({ id, confidence: 1, provenance: MEASURED_AVERAGED_TOKEN, face: f.key, axis: 1, profile: simplifyProfile(profile), placements: [[tBot, tTop, 0]] });
@@ -404,7 +429,7 @@ export function reliefGeometry(run: MassingRun, report: ReliefReport, input: {
             const unitRole = `${members.length} openings ${r3(u.widthM)} x ${r3(u.heightM)} m`;
             // the reveal: every opening of the group recessed by the measured depth
             const rv = u.reveal;
-            const rf: ReliefFeature = { id: `${base}_reveal`, face: f.index, faceKey: f.key, axis: 'unit', role: `the reveal of ${unitRole}`, accepted: rv.accepted, built: false, why: rv.why, depthM: rv.depth, seM: rv.se, samples: rv.n };
+            const rf: ReliefFeature = { id: `${base}_reveal`, face: f.index, faceKey: f.key, axis: 'unit', label: MEASURED_AVERAGED_LABEL, role: `the reveal of ${unitRole}`, accepted: rv.accepted, built: false, why: rv.why, depthM: rv.depth, seM: rv.se, samples: rv.n };
             features.push(rf);
             if (rv.accepted) {
                 let changed = 0;
@@ -429,7 +454,7 @@ export function reliefGeometry(run: MassingRun, report: ReliefReport, input: {
                 const u2 = u[sd.key];
                 if (!u2.proposed) continue;
                 const id = `${base}_${sd.key}`;
-                const feat: ReliefFeature = { id, face: f.index, faceKey: f.key, axis: 'unit', role: `the projection ${sd.key === 'below' || sd.key === 'above' ? sd.key : `to the ${sd.key} of`} ${unitRole}`, accepted: u2.accepted, built: false, why: u2.why, depthM: u2.depth, seM: u2.se, samples: u2.n };
+                const feat: ReliefFeature = { id, face: f.index, faceKey: f.key, axis: 'unit', label: MEASURED_AVERAGED_LABEL, role: `the projection ${sd.key === 'below' || sd.key === 'above' ? sd.key : `to the ${sd.key} of`} ${unitRole}`, accepted: u2.accepted, built: false, why: u2.why, depthM: u2.depth, seM: u2.se, samples: u2.n };
                 features.push(feat);
                 if (!u2.accepted) continue;
                 // profile in (offset, cross relative to the edge) at increasing cross
@@ -446,7 +471,73 @@ export function reliefGeometry(run: MassingRun, report: ReliefReport, input: {
             }
         }
     }
+    if (input.generated) addGenerated();
     return { sweeps: [...keptSweeps, ...sweeps], faceSweeps, openings, features, replacedSweeps, provenance, builds };
+
+    /**
+     * Generated, where the facade clearly has the feature and the scan's average is too weak to measure it:
+     *  - a band: a candidate the averaging proposed (standing out, its blocks mostly agreeing) but refused only for its
+     *    standard error or its block count, that the facade's own evidence places: at the face's top (a crowning band) or
+     *    at a storey line of the accepted grammar (within 0.6 m of a tier's top or bottom);
+     *  - a reveal: a lattice group whose averaged recess was refused, the grammar having read the openings.
+     * Its depth is the typical one clamped into the candidate's evidence bounds [mean - k SE, mean + k SE]; none when the
+     * upper bound is under MIN_DEPTH_M (the scan says it does not stand out). Profiles: a sloped underside and a flat
+     * front for a band; a plain recess for a reveal.
+     */
+    function addGenerated(): void {
+        for (const fr of report.faces) {
+            const f = faces[fr.index];
+            if (!f) continue;
+            const g = input.grammars.get(fr.index);
+            const storeyLines = g ? g.tiers.flatMap(t => [t.t0, t.t1]) : [];
+            fr.bands.forEach((lf, k) => {
+                if (lf.accepted || !(lf.depth > 0) || lf.agree < 0.6 || lf.depth > RELIEF_PARAMS.maxDepth) return;
+                const weakOnly = lf.depth < K_SIGMA * lf.se || lf.blocks < MIN_BLOCKS;
+                if (!weakOnly) return;
+                const t0 = rowT(f, lf.l1) - f.pixel / 2, t1 = rowT(f, lf.l0) + f.pixel / 2;
+                const crown = f.tMax - t1 <= CROWN_REACH_M;
+                const storey = storeyLines.some(y => Math.abs(y - t0) <= 0.6 || Math.abs(y - t1) <= 0.6);
+                if (!crown && !storey) return;
+                const lo = Math.max(0, lf.depth - K_SIGMA * lf.se), hi = lf.depth + K_SIGMA * lf.se;
+                const id = `relief_gen_band_${f.index}_${k}`;
+                const feature: ReliefFeature = { id, face: f.index, faceKey: f.key, axis: 's', label: GENERATED_LABEL, role: `a ${crown ? 'crowning band' : 'band at a storey line'} at ${r3(t0)}-${r3(t1)} m (typical profile)`, accepted: false, built: false, why: lf.why, depthM: 0, seM: lf.se, samples: lf.blocks };
+                features.push(feature);
+                if (hi < MIN_DEPTH_M) { feature.why += '; generated: not added, the scan bounds it under the least depth'; return; }
+                const depth = Math.min(hi, Math.max(lo, MIN_DEPTH_M, crown ? TYPICAL_CROWN_DEPTH_M : TYPICAL_BAND_DEPTH_M));
+                const h = Math.max(0.2, t1 - t0), slope = Math.min(0.35 * h, depth);
+                const s0 = Math.max(f.sMin, f.orthoSMin + lf.i0 * f.pixel), s1 = Math.min(f.sMax, f.orthoSMin + lf.i1 * f.pixel);
+                const ext: [number, number] = lf.fullLength || s1 - s0 < 2 * BLOCK_M ? [f.sMin, f.sMax] : [s0, s1];
+                const tb = (t0 + t1) / 2 - h / 2;
+                const profile: Array<[number, number]> = [[0, tb], [depth, tb + slope], [depth, tb + h - 1e-3], [0, tb + h]];
+                faceSweeps.push({ id, confidence: 0.5, provenance: GENERATED_TOKEN, face: f.key, axis: 0, profile, placements: [[ext[0], ext[1], 0]] });
+                builds.set(id, [id]);
+                provenance.set(`facesweep:${id}`, generatedRecord(feature.role, depth, lo, hi, `the averaged candidate stood ${r3(lf.depth)} m +- ${r3(lf.se)} m out over ${lf.blocks} blocks`));
+                Object.assign(feature, { accepted: true, built: true, depthM: depth, profile, extent: [r3(ext[0]), r3(ext[1])] });
+                feature.why += `; generated: typical profile ${r3(depth)} m deep within the scan's bounds ${r3(lo)}-${r3(hi)} m`;
+            });
+            if (!g) continue;
+            const cells = grammarCells(g);
+            for (const u of fr.units) {
+                const rv = u.reveal;
+                if (rv.accepted || !Number.isFinite(rv.depth)) continue;
+                const lo = Math.max(0, rv.depth - K_SIGMA * (Number.isFinite(rv.se) ? rv.se : 0.1)), hi = rv.depth + K_SIGMA * (Number.isFinite(rv.se) ? rv.se : 0.1);
+                const id = `relief_gen_unit_${f.index}_${u.group}_reveal`;
+                const feature: ReliefFeature = { id, face: f.index, faceKey: f.key, axis: 'unit', label: GENERATED_LABEL, role: `the reveal of ${u.members.length} openings ${r3(u.widthM)} x ${r3(u.heightM)} m (typical depth)`, accepted: false, built: false, why: rv.why, depthM: 0, seM: rv.se, samples: rv.n };
+                features.push(feature);
+                if (hi < MIN_DEPTH_M) { feature.why += '; generated: not added, the scan bounds the recess under the least depth'; continue; }
+                const depth = Math.min(hi, Math.max(lo, MIN_DEPTH_M, TYPICAL_REVEAL_DEPTH_M));
+                let changed = 0;
+                for (const m of u.members) {
+                    const c = cells[m];
+                    const o = c && (openings.find(x => x.id === `win_${f.index}_${m}`) ?? openings.find(x => x.face === f.key && Math.abs(x.s0 - c.s0) < 1e-6 && Math.abs(x.t0 - c.t0) < 1e-6));
+                    if (!o) continue;
+                    o.depth = depth; o.provenance = GENERATED_TOKEN; o.confidence = 0.5; changed++;
+                    provenance.set(`opening:${o.id}`, generatedRecord(feature.role, depth, lo, hi, `the averaged recess was ${r3(rv.depth)} m +- ${r3(rv.se)} m over ${rv.n} openings`));
+                }
+                if (changed) { Object.assign(feature, { accepted: true, built: true, depthM: depth }); feature.why += `; generated: typical recess ${r3(depth)} m within the scan's bounds ${r3(lo)}-${r3(hi)} m on ${changed} openings`; }
+            }
+        }
+    }
 }
 
 /**
@@ -469,7 +560,7 @@ export function retargetGeometry(g: ReliefGeometry, from: MassingFace[], to: Mas
         cache.set(key, out);
         return out;
     };
-    const measured = (prov: string) => prov === MEASURED_AVERAGED_TOKEN;
+    const measured = (prov: string) => prov === MEASURED_AVERAGED_TOKEN || prov === GENERATED_TOKEN;
     const sweeps = g.sweeps.map(sw => !measured(sw.provenance) ? sw : { ...sw, faces: sw.faces.flatMap(k => pieces(k)?.map(p => p.f.key) ?? [k]) });
     const faceSweeps: FaceSweepItem[] = [];
     for (const fs_ of g.faceSweeps) {
@@ -507,55 +598,65 @@ export function retargetGeometry(g: ReliefGeometry, from: MassingFace[], to: Mas
 
 // ------------------------------------------------------------------------------------------------ the photo-match gate
 
+export interface PhotoGateArm { id: string; glb: string }
 export interface PhotoGateResult {
     ran: boolean;
-    kept: boolean;
     why: string;
     views: number;
     repeats: number;
-    /** Mean judge scores per criterion over views and runs: before (the layer refined) and after (with the relief). */
-    before?: Record<string, number>;
-    after?: Record<string, number>;
-    perView?: Array<{ panoId: string; before: number; after: number }>;
+    /** Per arm: mean judge scores per criterion over views and runs. */
+    scores?: Record<string, Record<string, number>>;
+    perView?: Array<{ panoId: string; overall: Record<string, number> }>;
 }
 
 /**
- * The layer gate: the layer before and after the relief, rendered from each Street View photo's registered camera (what
- * stands in front in the full tile hides both alike) and judged blind against the photo (photo-match-eval.ts judgeView,
- * shuffled). Kept unless the overall score after is lower than before.
+ * The layer gate: each arm (the layer refined first, then the candidates) rendered from each Street View photo's registered
+ * camera (what stands in front in the full tile hides all alike) and judged blind against the photo, shuffled
+ * (photo-match-eval.ts judgeView). The caller decides from the scores.
  */
 export async function photoMatchGate(input: {
-    views: ProjectionView[]; beforeGlb: string; afterGlb: string; judge: JudgeClient; place: string;
+    views: ProjectionView[]; arms: PhotoGateArm[]; judge: JudgeClient; place: string;
     occluder?: RenderMesh3D; repeats?: number; maxViews?: number; dir?: string; signal?: AbortSignal;
 }): Promise<PhotoGateResult> {
     const repeats = input.repeats ?? 3;
     const views = input.views.filter(v => v.poseQuality > 0).slice(0, input.maxViews ?? 4);
-    if (!views.length) return { ran: false, kept: true, why: 'no registered Street View photo to judge against', views: 0, repeats };
-    const before = [readTileTriangles(fs.readFileSync(input.beforeGlb))], after = [readTileTriangles(fs.readFileSync(input.afterGlb))];
+    if (!views.length) return { ran: false, why: 'no registered Street View photo to judge against', views: 0, repeats };
+    const meshes = input.arms.map(a => [readTileTriangles(fs.readFileSync(a.glb))]);
+    const ids = input.arms.map(a => a.id);
     const runsAll: JudgeRun[] = [];
     const perView: NonNullable<PhotoGateResult['perView']> = [];
     await Promise.all(views.map(async (v, k) => {
         const occ = input.occluder ? renderFrameDepth(input.occluder, v.camera as never) : undefined;
-        const rb = renderTriangles(before, v.camera, occ ? { occluderDepth: occ } : {});
-        const ra = renderTriangles(after, v.camera, occ ? { occluderDepth: occ } : {});
-        const pb = renderPng(rb), pa = renderPng(ra);
+        const pngs = meshes.map(m => renderPng(renderTriangles(m, v.camera, occ ? { occluderDepth: occ } : {})));
         const photo = encodePng(v.image.width, v.image.height, Buffer.from(v.image.rgba), 4);
         if (input.dir) {
             fs.mkdirSync(input.dir, { recursive: true });
-            fs.writeFileSync(path.join(input.dir, `gate_${k}_before.png`), pb);
-            fs.writeFileSync(path.join(input.dir, `gate_${k}_after.png`), pa);
+            pngs.forEach((p, i) => fs.writeFileSync(path.join(input.dir!, `gate_${k}_${ids[i]}.png`), p));
         }
         if (input.signal?.aborted) throw new Error('aborted');
-        const runs = await judgeView({ client: input.judge, place: input.place, photo: { bytes: photo, mimeType: 'image/png' }, renders: [{ armId: 'before', png: pb }, { armId: 'after', png: pa }], repeats, seed: `relief-gate:${v.panoId}` });
+        const runs = await judgeView({ client: input.judge, place: input.place, photo: { bytes: photo, mimeType: 'image/png' }, renders: pngs.map((png, i) => ({ armId: ids[i], png })), repeats, seed: `relief-gate:${v.panoId}:${k}` });
         runsAll.push(...runs);
-        const st = aggregateRuns(runs, ['before', 'after']);
-        perView.push({ panoId: v.panoId, before: st.before.overall.mean, after: st.after.overall.mean });
+        const st = aggregateRuns(runs, ids);
+        perView.push({ panoId: v.panoId, overall: Object.fromEntries(ids.map(id => [id, st[id].overall.mean])) });
     }));
-    const agg = aggregateRuns(runsAll, ['before', 'after']);
-    const pick = (a: 'before' | 'after') => Object.fromEntries(Object.entries(agg[a]).map(([c, s]) => [c, s.mean]));
-    const b = agg.before.overall.mean, a = agg.after.overall.mean;
-    const kept = a >= b;
-    return { ran: true, kept, why: `overall ${a} with the relief against ${b} without it, ${views.length} photos x ${repeats} blind runs${kept ? '' : ': worse, so the relief layer is not used'}`, views: views.length, repeats, before: pick('before'), after: pick('after'), perView };
+    const agg = aggregateRuns(runsAll, ids);
+    const scores = Object.fromEntries(ids.map(id => [id, Object.fromEntries(Object.entries(agg[id]).map(([c, x]) => [c, x.mean]))]));
+    return { ran: true, why: `${views.length} photos x ${repeats} blind runs: ${ids.map(id => `${id} overall ${scores[id].overall}, shape ${scores[id].shape}, detail ${scores[id].detail}`).join('; ')}`, views: views.length, repeats, scores, perView };
+}
+
+/**
+ * The decisions from the gate's scores. Overall (does it look like this place) and shape stand for identity; detail and
+ * errors for realism. The measured layer is kept unless its overall falls below the layer it refines; the generated
+ * additions are kept only when they lower neither overall nor shape against what they would be added to (identity), and
+ * do not lower detail (realism).
+ */
+export function gateDecision(g: PhotoGateResult, base: string, measured: string, generated?: string): { measured: boolean; generated: boolean; why: string } {
+    if (!g.ran || !g.scores) return { measured: true, generated: !!generated, why: `photo-match gate not run: ${g.why}` };
+    const sc = g.scores;
+    const m = sc[measured].overall >= sc[base].overall;
+    const ref = m ? measured : base;
+    const gen = !!generated && sc[generated].overall >= sc[ref].overall && sc[generated].shape >= sc[ref].shape && sc[generated].detail >= sc[ref].detail;
+    return { measured: m, generated: gen, why: `photo-match gate (${g.why}): measured ${m ? 'kept' : 'not kept (lower overall)'}${generated ? `, generated ${gen ? 'kept' : 'not kept (lowers identity or realism)'}` : ''}` };
 }
 
 // ------------------------------------------------------------------------------------------------ the stage
@@ -589,6 +690,8 @@ export interface ReliefOutcome {
     counts: { bands: ReliefCounts; verticals: ReliefCounts; reveals: ReliefCounts; projections: ReliefCounts };
     maps: Array<{ face: number; key: string; valid: number; masked: { outside: number; occluder: number; crown: number; residual: number } }>;
     timingsMs: Record<string, number>;
+    /** The measured layer with the generated profiles added (labelled generated), when any was added. */
+    generated?: { files: MassingLayerFiles; run: MassingRun; geometry: ReliefGeometry; counts: { bands: ReliefCounts; reveals: ReliefCounts } };
 }
 
 /** Reframes a texture from face `a`'s ortho frame to face `b`'s (same key), nearest by (s, t). */
@@ -642,38 +745,17 @@ export async function runReliefStage(input: ReliefStageInput): Promise<ReliefOut
         projections: countFeatures(geometry.features, f => f.axis === 'unit' && !f.id.endsWith('_reveal'))
     };
     progress(`kept: bands ${counts.bands.accepted} of ${counts.bands.proposed}, vertical elements ${counts.verticals.accepted} of ${counts.verticals.proposed}, window reveals ${counts.reveals.accepted} of ${counts.reveals.proposed}, projections beside openings ${counts.projections.accepted} of ${counts.projections.proposed}`);
-    // 3. the solid again with them
-    t = Date.now();
-    const run2 = await runNativeMassing({ parts: input.build.parts, meshes: input.massing.meshes }, {
-        tilePath: input.tilePath, isolateGlb: input.isolateGlb, dir: path.join(input.dir, 'native'), sweeps: geometry.sweeps, openings: geometry.openings, faceSweeps: geometry.faceSweeps,
-        params: { snapMaxM: 0, sections: 0, topdown: 0 }, ...(input.signal ? { signal: input.signal } : {})
-    });
-    timingsMs.native = Date.now() - t;
-    for (const id of run2.report.rejectedSweeps) for (const fid of geometry.builds.get(id) ?? []) {
-        const feat = geometry.features.find(f => f.id === fid);
-        if (feat) { feat.built = false; feat.why += '; the native tool found no face for it'; }
+    // 3. the solid again with them: the measured layer, and (when any was added) the measured layer with the generated
+    const built = await buildLayer(geometry, 'native', 'massing_relief');
+    const genGeometry = retargetGeometry(reliefGeometry(input.run, report, { sweeps: input.build.sweeps, openings: input.build.openings, grammars: grammarOf, generated: true }), input.run.report.faces, input.base.run.report.faces);
+    const genFeatures = genGeometry.features.filter(f => f.label === GENERATED_LABEL);
+    let generated: ReliefOutcome['generated'];
+    if (genFeatures.some(f => f.built)) {
+        progress(`generated: ${genFeatures.filter(f => f.built).length} typical profiles where the facade clearly has the feature and the scan's average is too weak`);
+        const g = await buildLayer(genGeometry, 'native_generated', 'massing_relief_generated');
+        generated = { files: g.files, run: g.run, geometry: genGeometry, counts: { bands: countFeatures(genFeatures, f => f.axis === 's'), reveals: countFeatures(genFeatures, f => f.axis === 'unit') } };
     }
-    // a measured recess whose opening did not fit its wall (or found no wall) is not built; a unit none of whose openings
-    // was built is not either
-    const dropped = new Set(run2.report.rejectedOpenings);
-    for (const id of dropped) geometry.provenance.delete(`opening:${id}`);
-    for (const f of geometry.features) if (f.id.endsWith('_reveal') && f.built) {
-        const own = geometry.openings.filter(o => o.provenance === MEASURED_AVERAGED_TOKEN && (o.face === f.faceKey || o.face.startsWith(`${f.faceKey}:`)));
-        if (own.length && own.every(o => dropped.has(o.id))) { f.built = false; f.why += '; none of its openings fits its wall in this solid'; }
-    }
-    // 4. textures: the refined layer's, onto the new faces
-    t = Date.now();
-    const textures = new Map<number, FaceTexture>();
-    const plain = plainTextures(run2).textures;
-    for (const f2 of run2.report.faces) {
-        const f1 = input.base.run.report.faces.find(f => f.key === f2.key);
-        const t1 = f1 ? input.base.textures.get(f1.index) : undefined;
-        if (t1 && f1 && f2.width) textures.set(f2.index, reframeTexture(t1, f1, f2));
-        else if (plain.has(f2.index)) textures.set(f2.index, plain.get(f2.index)!);
-    }
-    const files = writeMassingLayer(run2, input.massing, textures, input.base.legend, input.dir, input.stage, input.stageKey, 'massing_relief', (n: MassingNode) => geometry.provenance.get(n.name));
-    timingsMs.glb = Date.now() - t;
-    fs.writeFileSync(path.join(input.dir, 'relief.json'), JSON.stringify({ version: RELIEF_VERSION, params: RELIEF_PARAMS, counts, features: geometry.features, replacedSweeps: geometry.replacedSweeps, maps, timingsMs, nativeMs: report.ms }, null, 1));
+    fs.writeFileSync(path.join(input.dir, 'relief.json'), JSON.stringify({ version: RELIEF_VERSION, params: RELIEF_PARAMS, counts, features: geometry.features, generated: genFeatures, replacedSweeps: geometry.replacedSweeps, maps, timingsMs, nativeMs: report.ms }, null, 1));
     // diagnostics: per face with a kept feature, its relief map (blue in, red out of the wall's line)
     try {
         for (const fr of report.faces) {
@@ -689,5 +771,40 @@ export async function runReliefStage(input: ReliefStageInput): Promise<ReliefOut
             fs.writeFileSync(path.join(input.dir, `relief_map_${fr.index}.png`), encodePng(W, H, Buffer.from(rgb), 3));
         }
     } catch { /* diagnostics only */ }
-    return { files, run: run2, report, geometry, counts, maps, timingsMs };
+    return { files: built.files, run: built.run, report, geometry, counts, maps, timingsMs, ...(generated ? { generated } : {}) };
+
+    async function buildLayer(geom: ReliefGeometry, sub: string, name: string): Promise<{ files: MassingLayerFiles; run: MassingRun }> {
+        let t2 = Date.now();
+        const run2 = await runNativeMassing({ parts: input.build.parts, meshes: input.massing.meshes }, {
+            tilePath: input.tilePath, isolateGlb: input.isolateGlb, dir: path.join(input.dir, sub), sweeps: geom.sweeps, openings: geom.openings, faceSweeps: geom.faceSweeps,
+            params: { snapMaxM: 0, sections: 0, topdown: 0 }, ...(input.signal ? { signal: input.signal } : {})
+        });
+        timingsMs[sub] = Date.now() - t2;
+        for (const id of run2.report.rejectedSweeps) for (const fid of geom.builds.get(id) ?? []) {
+            const feat = geom.features.find(f => f.id === fid);
+            if (feat) { feat.built = false; feat.why += '; the native tool found no face for it'; }
+        }
+        // a recess whose opening did not fit its wall (or found no wall) is not built; a unit none of whose openings was
+        // built is not either
+        const dropped = new Set(run2.report.rejectedOpenings);
+        for (const id of dropped) geom.provenance.delete(`opening:${id}`);
+        for (const f of geom.features) if (f.id.endsWith('_reveal') && f.built) {
+            const token = f.label === GENERATED_LABEL ? GENERATED_TOKEN : MEASURED_AVERAGED_TOKEN;
+            const own = geom.openings.filter(o => o.provenance === token && (o.face === f.faceKey || o.face.startsWith(`${f.faceKey}:`)));
+            if (own.length && own.every(o => dropped.has(o.id))) { f.built = false; f.why += '; none of its openings fits its wall in this solid'; }
+        }
+        // textures: the refined layer's, onto the new faces
+        t2 = Date.now();
+        const textures = new Map<number, FaceTexture>();
+        const plain = plainTextures(run2).textures;
+        for (const f2 of run2.report.faces) {
+            const f1 = input.base.run.report.faces.find(f => f.key === f2.key);
+            const t1 = f1 ? input.base.textures.get(f1.index) : undefined;
+            if (t1 && f1 && f2.width) textures.set(f2.index, reframeTexture(t1, f1, f2));
+            else if (plain.has(f2.index)) textures.set(f2.index, plain.get(f2.index)!);
+        }
+        const files = writeMassingLayer(run2, input.massing, textures, input.base.legend, input.dir, input.stage, input.stageKey, name, (n: MassingNode) => geom.provenance.get(n.name));
+        timingsMs[`${sub}_glb`] = Date.now() - t2;
+        return { files, run: run2 };
+    }
 }

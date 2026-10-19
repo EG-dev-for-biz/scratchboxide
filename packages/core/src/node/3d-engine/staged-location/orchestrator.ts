@@ -138,7 +138,7 @@ import { fetchFootprints, type FootprintSource } from './facade-footprints';
 import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, massingProvenance, type MassingStageResult } from './pipeline-e/pipeline-e';
 import { mslToTileY, type SolarRoof } from './pipeline-e/solar-roof';
 import { runInferenceE, type InferenceOutcome, type StepRecord } from './pipeline-e/inference';
-import { photoMatchGate, pipelineERelief, runReliefStage, MEASURED_AVERAGED_LABEL, RELIEF_GATE_JUDGE, RELIEF_PARAMS, RELIEF_VERSION, type PhotoGateResult, type ReliefOutcome } from './pipeline-e/relief';
+import { gateDecision, photoMatchGate, pipelineERelief, runReliefStage, GENERATED_LABEL, MEASURED_AVERAGED_LABEL, RELIEF_GATE_JUDGE, RELIEF_PARAMS, RELIEF_VERSION, type PhotoGateResult, type ReliefOutcome } from './pipeline-e/relief';
 import { crownsFromStrip } from './pipeline-e/occluders';
 import { enhanceModels, genAiPlateClient, stagedEnhance } from './pipeline-e/enhance';
 import { projectionViewsFromEvidence } from './texture-pass';
@@ -2309,59 +2309,71 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         dir: path.join(cache.dir, 'pipeline_e', e.key.slice(0, 24), 'relief'), stage: 'relief', stageKey: key, signal: io.signal, onProgress: m => io.progress(m)
                     });
                     const c = out.counts;
-                    const builtAny = out.geometry.features.some(f => f.built);
+                    const gen = out.generated;
+                    const builtMeasured = out.geometry.features.some(f => f.built);
+                    const builtGenerated = !!gen && gen.geometry.features.some(f => f.label === GENERATED_LABEL && f.built);
                     const kept = out.geometry.features.filter(f => f.built);
                     const depths = kept.map(f => `${f.role}: ${f.depthM.toFixed(2)} +- ${f.seM.toFixed(2)} m`).slice(0, 12).join('; ');
-                    const describe = `bands ${c.bands.accepted} of ${c.bands.proposed} kept, vertical elements ${c.verticals.accepted} of ${c.verticals.proposed}, window reveals ${c.reveals.accepted} of ${c.reveals.proposed}, projections beside openings ${c.projections.accepted} of ${c.projections.proposed} (gate: depth >= ${RELIEF_PARAMS.k} standard errors and >= ${RELIEF_PARAMS.minDepth} m, from >= ${RELIEF_PARAMS.minBlocks} blocks of ${RELIEF_PARAMS.block} m or >= ${RELIEF_PARAMS.minOpenings} openings)`;
-                    cache.writeRunNote(runId, 'pipeline_e_relief', { counts: c, features: out.geometry.features, replacedSweeps: out.geometry.replacedSweeps, maps: out.maps, timingsMs: out.timingsMs });
-                    if (!builtAny) return { status: 'degraded', value: { outcome: { counts: c } }, source: `measured relief: nothing stood out of the scan significantly (${describe})`, reason: 'no measured feature passed its gate' };
-                    // the layer gate: not worse on the photo-match judge than the layer it refines
-                    let gate: PhotoGateResult | undefined;
+                    const describe = `measured: bands ${c.bands.accepted} of ${c.bands.proposed} kept, vertical elements ${c.verticals.accepted} of ${c.verticals.proposed}, window reveals ${c.reveals.accepted} of ${c.reveals.proposed}, projections beside openings ${c.projections.accepted} of ${c.projections.proposed} (gate: depth >= ${RELIEF_PARAMS.k} standard errors and >= ${RELIEF_PARAMS.minDepth} m, from >= ${RELIEF_PARAMS.minBlocks} blocks of ${RELIEF_PARAMS.block} m or >= ${RELIEF_PARAMS.minOpenings} openings)` +
+                        (gen ? `; generated (typical profiles in the scan's evidence bounds): bands ${gen.counts.bands.built}, window reveals ${gen.counts.reveals.built}` : '');
+                    cache.writeRunNote(runId, 'pipeline_e_relief', { counts: c, features: out.geometry.features, generated: gen ? { counts: gen.counts, features: gen.geometry.features.filter(f => f.label === GENERATED_LABEL) } : undefined, replacedSweeps: out.geometry.replacedSweeps, maps: out.maps, timingsMs: out.timingsMs });
+                    if (!builtMeasured && !builtGenerated) return { status: 'degraded', value: { outcome: { counts: c } }, source: `measured relief: nothing stood out of the scan significantly (${describe})`, reason: 'no measured feature passed its gate' };
+                    // the layer gate: the layer it refines, the measured layer, and the measured layer with the generated
+                    let gate: PhotoGateResult;
                     const views = inf?.out.streetViews ?? [];
-                    if (!visionAvailable) gate = { ran: false, kept: true, why: 'no vision model for the photo-match judge', views: 0, repeats: 0 };
-                    else if (!views.length) gate = { ran: false, kept: true, why: 'no Street View photo of the structure was had in this build', views: 0, repeats: 0 };
+                    const arms = [{ id: 'base', glb: baseTextured }, ...(builtMeasured ? [{ id: 'measured', glb: out.files.texturedGlb }] : []), ...(builtGenerated ? [{ id: 'generated', glb: gen!.files.texturedGlb }] : [])];
+                    if (!visionAvailable) gate = { ran: false, why: 'no vision model for the photo-match judge', views: 0, repeats: 0 };
+                    else if (!views.length) gate = { ran: false, why: 'no Street View photo of the structure was had in this build', views: 0, repeats: 0 };
                     else {
-                        io.progress(`pipeline E relief: the photo-match gate on ${Math.min(4, views.length)} Street View photos`);
+                        io.progress(`pipeline E relief: the photo-match gate on ${Math.min(4, views.length)} Street View photos (${arms.map(x => x.id).join(', ')})`);
                         const judge = new VisionModelChain<string>({ client: visionAvailable.client, candidates: [...new Set([RELIEF_GATE_JUDGE, ...visionAvailable.candidates])], signal: ctx.signal, ...chainExtras('relief'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
                         try {
-                            gate = await photoMatchGate({ views, beforeGlb: baseTextured, afterGlb: out.files.texturedGlb, judge, place: placeValue!.formattedAddress, occluder: sceneToRenderMesh(readGlbScene(extraction.geometryGlb)), dir: path.join(cache.dir, 'pipeline_e', e.key.slice(0, 24), 'relief', 'gate'), signal: io.signal });
+                            gate = await photoMatchGate({ views, arms, judge, place: placeValue!.formattedAddress, occluder: sceneToRenderMesh(readGlbScene(extraction.geometryGlb)), dir: path.join(cache.dir, 'pipeline_e', e.key.slice(0, 24), 'relief', 'gate'), signal: io.signal });
                         } catch (err) {
                             if (isAbort(err) || io.signal.aborted) throw err;
-                            gate = { ran: false, kept: true, why: `the photo-match judge could not be had (${errorMessage(err).slice(0, 160)})`, views: 0, repeats: 0 };
+                            gate = { ran: false, why: `the photo-match judge could not be had (${errorMessage(err).slice(0, 160)})`, views: 0, repeats: 0 };
                         }
                     }
-                    cache.writeRunNote(runId, 'pipeline_e_relief_gate', gate);
-                    if (gate.ran && !gate.kept) {
+                    // a measured-only arm missing (nothing measured was built): the generated is judged against the base
+                    const decision = gateDecision(gate, 'base', builtMeasured ? 'measured' : 'base', builtGenerated ? 'generated' : undefined);
+                    const useMeasured = builtMeasured && decision.measured;
+                    const useGenerated = builtGenerated && decision.generated && (useMeasured || !builtMeasured);
+                    cache.writeRunNote(runId, 'pipeline_e_relief_gate', { gate, decision });
+                    if (!useMeasured && !useGenerated) {
                         return {
-                            status: 'degraded', value: { outcome: { counts: c }, gate }, source: `measured relief not used: ${gate.why}`, reason: `the relief layer scored lower on the photo-match judge (${gate.why})`,
+                            status: 'degraded', value: { outcome: { counts: c }, gate }, source: `measured relief not used: ${decision.why}`, reason: `the relief layer scored lower on the photo-match judge (${decision.why})`,
                             degradations: [run.degrade(record('relief', 'relief_photo_match_worse', {
                                 part: { description: 'the measured relief of the massing' }, intended: 'measured bands, vertical elements and window units averaged from the scan', fellTo: 'the layer before it',
-                                provenanceAfter: baseLayer.provenance.label, reason: `the relief layer scored lower on the photo-match judge (${gate.why})`, transient: false, runId, now: now()
+                                provenanceAfter: baseLayer.provenance.label, reason: `the relief layer scored lower on the photo-match judge (${decision.why})`, transient: false, runId, now: now()
                             }))]
                         };
                     }
+                    const files = useGenerated ? gen!.files : out.files;
                     const key8 = key.slice(0, 8);
-                    const pubClay = cache.publishFile(out.files.clayGlb, `${base}_massing_${key8}_relief.glb`);
-                    const pubTex = cache.publishFile(out.files.texturedGlb, `${base}_massing_${key8}_relief_tex.glb`);
-                    const gateNote = gate.ran ? `photo-match gate: ${gate.why}` : `photo-match gate not run: ${gate.why}`;
+                    const suffix = useGenerated ? 'relief_gen' : 'relief';
+                    const pubClay = cache.publishFile(files.clayGlb, `${base}_massing_${key8}_${suffix}.glb`);
+                    const pubTex = cache.publishFile(files.texturedGlb, `${base}_massing_${key8}_${suffix}_tex.glb`);
+                    const gateNote = decision.why;
+                    const labels = [...(useMeasured ? [MEASURED_AVERAGED_LABEL] : []), ...(useGenerated ? [GENERATED_LABEL] : [])];
                     const layer: StagedLayer = {
                         objectId: layerObjectId(key, 'l2r'), stage: 'relief', layer: 'l2r', order: STAGES.relief.order, url: pubClay.url, bytes: pubClay.bytes,
                         provenance: {
-                            label: MEASURED_AVERAGED_LABEL, measuredGeometry: true,
-                            method: 'pipeline E relief: the scan\'s relief maps about each face of the clean massing, averaged along what repeats (rows for bands, columns for vertical elements, the facade grammar\'s lattice for openings); each kept feature carries its depth and standard error',
+                            label: useMeasured ? MEASURED_AVERAGED_LABEL : GENERATED_LABEL, measuredGeometry: useMeasured, ...(useMeasured ? {} : { confidence: 0.5 }),
+                            method: 'pipeline E relief: the scan\'s relief maps about each face of the clean massing, averaged along what repeats (rows for bands, columns for vertical elements, the facade grammar\'s lattice for openings); each measured feature carries its depth and standard error' +
+                                (useGenerated ? '; typical profiles (labelled generated) where the facade clearly has a band or a window recess the averages could not resolve, their depth within the scan\'s evidence bounds' : ''),
                             sources: [{ kind: 'tile-extraction', id: 'isolate' }, { kind: 'stage-output', id: `pipeline-e-relief:${key8}` }], note: `${describe}; ${depths}; ${gateNote}`
                         },
-                        provenanceLabels: [...new Set([...(baseLayer.provenanceLabels ?? []), MEASURED_AVERAGED_LABEL])], supersedes: [baseLayer.objectId], revealAfter: [baseLayer.objectId],
-                        reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [baseLayer.objectId] }, cached: false, builtAtMs: now(), counts: layerCounts(out.files.clayGlb),
+                        provenanceLabels: [...new Set([...(baseLayer.provenanceLabels ?? []), ...labels])], supersedes: [baseLayer.objectId], revealAfter: [baseLayer.objectId],
+                        reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [baseLayer.objectId] }, cached: false, builtAtMs: now(), counts: layerCounts(files.clayGlb),
                         textured: {
-                            url: pubTex.url, bytes: pubTex.bytes, ladderRung: out.files.texturedShares.findIndex((_, k, a) => a.slice(k + 1).reduce((x, y) => x + y, 0) <= 0.1),
-                            rungShares: out.files.texturedShares, provenance: (inf?.out.legend ?? r.legend!).map(x => ({ source: x.source, label: x.label, method: x.method, coverage: 0 })),
+                            url: pubTex.url, bytes: pubTex.bytes, ladderRung: files.texturedShares.findIndex((_, k, a) => a.slice(k + 1).reduce((x, y) => x + y, 0) <= 0.1),
+                            rungShares: files.texturedShares, provenance: (inf?.out.legend ?? r.legend!).map(x => ({ source: x.source, label: x.label, method: x.method, coverage: 0 })),
                             confidenceChannels: 'R = index into provenance[], G = weight 0..255, B = ladder rung (TEXTURE_LADDER_RUNGS), A = 255 where a stage produced the texel', builtAtMs: now(), cached: false
                         }
                     };
                     run.commit(layer, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, extra: { pipeline: 'e' } });
                     run.note(MEASURED_AVERAGED_LABEL, `pipeline E relief: ${describe}; ${gateNote}`);
-                    return { status: 'committed', value: { outcome: { counts: c }, gate }, layers: [layer], source: `measured relief in ${((now() - t0) / 1000).toFixed(0)} s: ${describe}; ${gateNote}` };
+                    return { status: 'committed', value: { outcome: { counts: c }, gate }, layers: [layer], source: `relief in ${((now() - t0) / 1000).toFixed(0)} s: ${describe}; ${gateNote}` };
                 },
                 degrade: async err => ({
                     status: 'degraded', source: 'the layer before it stands without measured relief', reason: `pipeline E relief failed (${errorMessage(err)})`,
