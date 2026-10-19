@@ -541,6 +541,9 @@ function tileChartJobs(atlas: { width: number; height: number; maps: Array<{ nod
     const W = atlas.width, H = atlas.height;
     const jobs: TileChartJob[] = [];
     atlas.maps.forEach((m, mapIndex) => {
+        // only fitted faces (a chart: its crop is a frontal render of the face); a scan island atlas is fragments of many
+        // surfaces at once, which no image model can relight as one photo
+        if (m.chartId === undefined) return;
         const [u0, v0, u1, v1] = m.atlasRect;
         const X0 = Math.max(0, Math.floor(u0 * W)), Y0 = Math.max(0, Math.floor(v0 * H)), X1 = Math.min(W, Math.ceil(u1 * W)), Y1 = Math.min(H, Math.ceil(v1 * H));
         let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;

@@ -518,13 +518,13 @@ export interface CrossViewAgreement {
  * exactly as the bake projects it (projectView: visibility, incidence, redaction, footprint sampling) but over a footprint of
  * `footprintM` metres, so the measure is the surface's lighting and colour, not misregistered detail; each view's relative
  * exposure is solved as the bake solves it (solveRelativeGains) and applied; then, per texel seen by two or more views, the
- * mean pairwise CIEDE2000 between the views. Used to judge a lighting correction of the views: the same texel seen from
+ * mean pairwise CIEDE2000 between the views of different panos (two crops of one pano are one capture). Used to judge a lighting correction of the views: the same texel seen from
  * different views must disagree less after it than before.
  */
 export function measureCrossViewAgreement(input: ProjectionBakeInput & {
     options?: Pick<ProjectionBakeOptions, 'featherPx' | 'minCosIncidence' | 'minResolution' | 'excludeTexels' | 'depthToleranceBaseM' | 'depthTolerancePerMeter' | 'edgeGuardPx' | 'observedSurface' | 'poseEdgeGuardShare'>;
     footprintM?: number; spacingM?: number;
-    /** Which view pairs count (indices into `views`); default all. */
+    /** Which view pairs count (indices into `views`); pairs of one pano never count. */
     pairFilter?: (a: number, b: number) => boolean;
 }): CrossViewAgreement {
     const { atlas } = input;
@@ -581,7 +581,8 @@ export function measureCrossViewAgreement(input: ProjectionBakeInput & {
         let s = 0, m = 0;
         for (let p = a; p < b; p++) for (let q = p + 1; q < b; q++) {
             const va = index.view[p], vb = index.view[q], ia = index.sample[p] * 3, ib = index.sample[q] * 3;
-            if (input.pairFilter && !input.pairFilter(va, vb)) continue;
+            // two crops of one pano are one capture: they agree by construction, so only pairs of different panos count
+            if (input.views[va].panoId === input.views[vb].panoId || (input.pairFilter && !input.pairFilter(va, vb))) continue;
             const d = deltaE00([labs[va][ia], labs[va][ia + 1], labs[va][ia + 2]], [labs[vb][ib], labs[vb][ib + 1], labs[vb][ib + 2]]);
             s += d; m++;
             perViewPairs[va].push(d); perViewPairs[vb].push(d);

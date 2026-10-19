@@ -215,15 +215,15 @@ function viewRig(): { views: ProjectionView[]; depth: Map<ProjectionView, DepthM
         const view: ProjectionView = { panoId, camera, image: r.image, poseQuality: 1, poseSigmaPx: 0 };
         depth.set(view, r.depth);
         even.set(panoId, renderView(camera, () => 0.9).image);
-        // a "relighting" that stripes the whole wall with dark bands the other views never show
-        worse.set(panoId, renderView(camera, SUN[panoId], u => ((u % 1) < 0.5 ? 0.3 : 1)).image);
+        // a "relighting" that checkers the whole wall with dark squares the other views never show
+        worse.set(panoId, renderView(camera, SUN[panoId], (u, v) => ((u % 2) < 1 !== (v % 2) < 1 ? 0.15 : 1)).image);
         return view;
     });
     return { views, depth, even, worse };
 }
 
 describe('texture lighting: cross-view gate and bake', () => {
-    it('corrected views agree better, the gate takes them, and the bake gets closer to the albedo; a worse photo is set back', async () => {
+    it('corrected views agree better, the gate takes them, and the bake gets closer to the albedo', async () => {
         const { views, depth, even, worse } = viewRig();
         const atlas = facadeAtlas(96);
         const origOf = new Map<ProjectionView, ProjectionView>(), corrOf = new Map<ProjectionView, ProjectionView>();
@@ -247,9 +247,8 @@ describe('texture lighting: cross-view gate and bake', () => {
         const chosen = gateLightingViews({ views, corrected: lightingViews, measure, origOf, corrOf, report: r => { report = r; } });
         expect(report.before.medianDeltaE).toBeGreaterThan(2);
         expect(report.applied).toBe(true);
-        expect(report.reverted, JSON.stringify([report.before.perView, report.after.perView, report.before.medianDeltaE, report.after.medianDeltaE])).toEqual(['pano-right']);
-        expect(report.final.medianDeltaE).toBeLessThan(report.before.medianDeltaE * 0.7);
-        expect(chosen.filter((v, k) => v !== views[k]).map(v => v.panoId).sort()).toEqual(['pano-front', 'pano-left']);
+        expect(report.chosen.medianDeltaE).toBeLessThan(report.before.medianDeltaE * 0.7);
+        expect(chosen.filter((v, k) => v !== views[k]).length).toBe(report.used);
         // the bake from the chosen views is closer to the evenly lit wall than the bake from the originals
         // the bake's lighting error: log ratio of 8 x 8 texel block means of the bake to the evenly lit wall's (lighting, not detail)
         const err = async (vs: ProjectionView[]) => {
@@ -277,6 +276,31 @@ describe('texture lighting: cross-view gate and bake', () => {
         for (const p of hit) { expect(p.label).toBe('photo-inferred'); expect(p.lightingCorrection!.note).toBe(`photo, lighting corrected by ${LIGHTING_MODEL_LITE}`); }
         const toImg = (p: { albedo: Uint8Array }) => ({ width: atlas.width, height: atlas.height, rgba: Uint8Array.from(p.albedo, (x, i) => (i % 4 === 3 ? 255 : x)) });
         shot('gate_bake_original_vs_corrected', side([toImg(b0.planes), toImg(b1.planes)]));
+    });
+
+    it('sets a corrected photo back only when that lowers the whole set\'s disagreement', () => {
+        const views = ['a', 'b', 'c'].map(panoId => ({ panoId, camera: lookAtCamera([0, 0, -5], [0, 0, 0], 8, 8, 60), image: { width: 8, height: 8, rgba: new Uint8Array(256) }, poseQuality: 1, poseSigmaPx: 0 } as ProjectionView));
+        const corrected = views.map((v, k) => ({ index: k, panoId: v.panoId, image: { width: 8, height: 8, rgba: new Uint8Array(256).fill(k + 1) }, modelUsed: LIGHTING_MODEL_LITE, confidence: 1 }));
+        const origOf = new Map<ProjectionView, ProjectionView>(), corrOf = new Map<ProjectionView, ProjectionView>();
+        const isCorr = (v: ProjectionView) => origOf.has(v);
+        const agreement = (median: number, p95: number, perView: number[] = []) => ({ sampled: 100, texels: 100, medianDeltaE: median, p95DeltaE: p95, footprintM: 0.5, strideTexels: 1,
+            perView: perView.map((m, k) => ({ panoId: `v${k}`, samples: 10, pairs: 10, medianDeltaE: m, meanDeltaE: m })) });
+        // scripted: originals 4 / 10; every corrected 3 / 9; c's correction is bad: without it 2 / 8
+        const measure = (vs: ProjectionView[]) => {
+            if (vs.length > 3) return agreement(0, 0, [2, 2, 6, 3, 3, 4]); // paired: c corrected 6 vs its original 4 -> flagged
+            const c = vs.map(isCorr);
+            if (!c.some(Boolean)) return agreement(4, 10);
+            if (c[0] && c[1] && c[2]) return agreement(3, 9);
+            if (c[0] && c[1] && !c[2]) return agreement(2, 8);
+            return agreement(5, 12);
+        };
+        let report: any;
+        const chosen = gateLightingViews({ views, corrected, measure, origOf, corrOf, report: r => { report = r; } });
+        expect(report.applied).toBe(true);
+        expect(report.reverted).toEqual(['c']);
+        expect(chosen[2]).toBe(views[2]);
+        expect(chosen[0]).not.toBe(views[0]);
+        expect(report.chosen.medianDeltaE).toBe(2);
     });
 
     it('stays off when the corrections make the views disagree more', async () => {

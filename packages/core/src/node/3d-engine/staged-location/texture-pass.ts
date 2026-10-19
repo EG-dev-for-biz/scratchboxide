@@ -156,7 +156,7 @@ export interface TextureLayerOutcome {
     enhance?: { charts: number; accepted: number; rejected: number; failed: number; timedOut?: number; modelsUsed: string[] };
     /** The model lighting correction on this layer (texture-lighting.ts): the views' agreement before and after, and the tile's. */
     lighting?: {
-        views?: { before: CrossViewAgreement; after?: CrossViewAgreement; final?: CrossViewAgreement; offered: number; used: number; reverted: string[]; applied: boolean; reason?: string };
+        views?: { before: CrossViewAgreement; after?: CrossViewAgreement; final?: CrossViewAgreement; /** The set used. */ chosen?: CrossViewAgreement; offered: number; used: number; reverted: string[]; applied: boolean; reason?: string };
         tile?: Omit<TileLightingReport, 'records'> & { records: LightingImageRecord[] };
     };
     /** The seam between Street View and tile texels on the final texture (texture-lighting.ts measureSourceSeam). */
@@ -351,7 +351,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
                 });
                 timingsMs.lightingGate = Date.now() - tg;
                 if (lightingViews && !lightingViews.applied) degradations.push({ stage: 'lighting', reasonCode: 'lighting_views_no_gain', layerKey: layer.layerKey, reason: `The Street View photos keep their own lighting on this layer: ${lightingViews.reason}.` });
-                if (lightingViews) progress(`lighting-corrected photos: cross-view CIEDE2000 median ${lightingViews.before.medianDeltaE} -> ${lightingViews.final?.medianDeltaE ?? lightingViews.after?.medianDeltaE}, p95 ${lightingViews.before.p95DeltaE} -> ${lightingViews.final?.p95DeltaE ?? lightingViews.after?.p95DeltaE} over ${lightingViews.before.texels} texels; ${lightingViews.applied ? `${lightingViews.used} used` : 'not used'}`);
+                if (lightingViews) progress(`lighting-corrected photos: cross-view CIEDE2000 median ${lightingViews.before.medianDeltaE} -> ${lightingViews.chosen?.medianDeltaE ?? lightingViews.after?.medianDeltaE}, p95 ${lightingViews.before.p95DeltaE} -> ${lightingViews.chosen?.p95DeltaE ?? lightingViews.after?.p95DeltaE} over ${lightingViews.before.texels} texels; ${lightingViews.applied ? `${lightingViews.used} used` : 'not used'}`);
             }
             looBake = async views => { const b = await bakeStreetViewProjection({ ...request, views: views.map(v => corrOf.get(v) ?? v) }); return lightingProvenance(witnessed(b)?.planes ?? b, corrOf, src.lightingViews); };
             const request = {
@@ -668,22 +668,28 @@ export function gateLightingViews(input: {
     const ks = cand.map((c, k) => (c ? k : -1)).filter(k => k >= 0);
     const n = views.length, keyOf = (i: number) => (i < n ? i : ks[i - n]);
     const paired = input.measure([...all, ...ks.map(k => views[k])], (a, b) => (a < n || b < n) && keyOf(a) !== keyOf(b));
+    // a photo whose corrected version agrees less with the others than its original does is a candidate to set back; it is
+    // set back only when that lowers the whole set's disagreement (median + p95 / 4), one at a time, worst first: corrected and
+    // original photos side by side can disagree more than either set alone
+    const flagged = ks.map(k => ({ k, a: paired.perView[k].meanDeltaE, b: paired.perView[n + ks.indexOf(k)].meanDeltaE }))
+        .filter(f => f.a !== null && f.b !== null && f.a > f.b).sort((p, q) => (q.a! - q.b!) - (p.a! - p.b!));
+    const score = (m: CrossViewAgreement) => (m.medianDeltaE ?? Infinity) + 0.25 * (m.p95DeltaE ?? Infinity);
+    let chosen = all, final = after;
     const reverted: string[] = [];
-    const chosen = all.map((v, k) => {
-        if (!cand[k]) return v;
-        const withCorrected = paired.perView[k].meanDeltaE, withOriginal = paired.perView[n + ks.indexOf(k)].meanDeltaE;
-        if (withCorrected !== null && withOriginal !== null && withCorrected > withOriginal) { reverted.push(v.panoId); return views[k]; }
-        return v;
-    });
-    const final = reverted.length ? input.measure(chosen) : after;
+    for (const f of flagged) {
+        const trial = chosen.map((v, k) => (k === f.k ? views[k] : v));
+        const m = input.measure(trial);
+        if (score(m) < score(final)) { chosen = trial; final = m; reverted.push(views[f.k].panoId); }
+    }
     const used = chosen.filter((v, k) => v !== views[k]).length;
     const ok = used > 0 && before.medianDeltaE !== null && final.medianDeltaE !== null && final.medianDeltaE < before.medianDeltaE && (final.p95DeltaE ?? Infinity) <= (before.p95DeltaE ?? Infinity);
-    const reason = ok ? undefined : used === 0 ? `every corrected photo made its own views disagree more (${reverted.length} set back)`
+    const reason = ok ? undefined : used === 0 ? 'no corrected photo is left to use'
         : `with the corrected photos the views disagree no less (CIEDE2000 median ${before.medianDeltaE} -> ${final.medianDeltaE}, p95 ${before.p95DeltaE} -> ${final.p95DeltaE} over ${before.texels} multiply-seen texels)`;
-    input.report({ before, after, ...(reverted.length ? { final } : {}), offered, used: ok ? used : 0, reverted, applied: ok, ...(reason ? { reason } : {}) });
-    if (!ok) return views;
-    chosen.forEach((v, k) => { if (v !== views[k]) corrOf.set(views[k], v); });
-    return chosen;
+    const pick = ok ? { m: final, views: chosen, reverted } : undefined;
+    input.report({ before, after, ...(reverted.length ? { final } : {}), ...(pick ? { chosen: pick.m } : {}), offered, used: ok ? used : 0, reverted, applied: ok, ...(reason ? { reason } : {}) });
+    if (!pick) return views;
+    pick.views.forEach((v, k) => { if (v !== views[k]) corrOf.set(views[k], v); });
+    return pick.views;
 }
 
 /** Labels the projection's entries that hold lighting-corrected photos ("photo, lighting corrected by <model>"). */
