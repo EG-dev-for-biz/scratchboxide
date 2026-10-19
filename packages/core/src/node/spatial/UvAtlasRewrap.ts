@@ -37,7 +37,7 @@ import { spawn, execFile } from 'child_process';
 import { assembleGlb, gatherElements, nodeWorldMatrices, parseGlbBytes, readAccessor, type Mat4, type ParsedGlb } from '../3d-engine/staged-location/glb-bytes';
 import { findUvAtlasRepoRoot } from '../3d-engine/staged-location/texture-uv';
 import { decodeImageInMemory } from '../3d-engine/staged-location/tile-texture-transfer';
-import { decodeImageToRgba, encodeRgbaToJpeg } from '../image-codec-ffmpeg';
+import { decodeImageToRgba, encodeRgbaToJpeg, readImageDimensions } from '../image-codec-ffmpeg';
 import { encodePng } from '../texture-processing';
 
 // =============================================================================
@@ -991,7 +991,19 @@ export async function unwrapRewrapGlb(mode: UvRewrapMode, input: Buffer | Uint8A
         else if (sz) { [atlasW, atlasH] = Array.isArray(sz) ? sz : [sz, sz]; at.densitySource = 'requested-atlas-size'; }
         else {
             // measured on the input's own textures: the first colour slot (or any slot), old UVs in texels per metre
-            const job = jobs.find(j => j.kind === SLOT_KIND.srgb) ?? jobs[0];
+            let job: { texCoord: number; apply?: (u: number, v: number) => [number, number]; img?: { width: number; height: number } } | undefined = jobs.find(j => j.kind === SLOT_KIND.srgb) ?? jobs[0];
+            if (!job && material) {
+                // 'unwrap' decodes nothing: the image size comes from its header
+                for (const ref of materialSlots(material)) {
+                    const image = imageOfTexture(json, ref.info.index);
+                    const im = image !== undefined ? json.images?.[image] : undefined;
+                    if (!im || im.bufferView === undefined) continue;
+                    const bv = json.bufferViews[im.bufferView];
+                    const dims = readImageDimensions(glb.bin.subarray(bv.byteOffset ?? 0, (bv.byteOffset ?? 0) + bv.byteLength));
+                    const tr = textureTransform(ref.info);
+                    if (dims && prims.every(p => p.def.attributes[`TEXCOORD_${tr.texCoord}`] !== undefined)) { job = { texCoord: tr.texCoord, apply: tr.apply, img: dims }; break; }
+                }
+            }
             let uvPx = 0;
             if (job?.img) {
                 prims.forEach(p => {

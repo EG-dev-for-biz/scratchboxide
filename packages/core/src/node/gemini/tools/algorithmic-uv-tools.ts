@@ -68,11 +68,15 @@ async function runUvAtlasMode(mode: 'unwrap' | 'rewrap', inputGlbPath: string, o
     }
     const r = result.uvRewrap!;
     const f2 = (x: number) => x.toFixed(2);
-    const atlases = r.atlases.map(a => {
-        const { chartDetails, ...rest } = a;
-        const worst = [...chartDetails].sort((x, y) => y.stretchRms * y.areaRms - x.stretchRms * x.areaRms).slice(0, 5);
-        return { ...rest, worstCharts: worst };
+    // the payload stays small for the model: the 12 largest atlases in full (worst 3 charts each), the rest as one line
+    const bySize = [...r.atlases].sort((x, y) => y.triangles - x.triangles);
+    const atlases = bySize.slice(0, 12).map(a => {
+        const { chartDetails, textures, ...rest } = a;
+        const worst = [...chartDetails].sort((x, y) => y.stretchRms * y.areaRms - x.stretchRms * x.areaRms).slice(0, 3)
+            .map(c => ({ method: c.method, triangles: c.triangles, stretchRms: c.stretchRms, areaRms: c.areaRms, overThreshold: c.overThreshold }));
+        return { ...rest, worstCharts: worst, textures: textures.map(t => ({ slots: t.slots, outputSize: t.outputSize, outputBytes: t.outputBytes, mimeType: t.mimeType })) };
     });
+    const otherAtlases = bySize.slice(12).map(a => ({ material: a.material, status: a.status, triangles: a.triangles, charts: a.charts, size: [a.width, a.height], textures: a.textures.length, failures: a.failures }));
     const done = r.atlases.filter(a => a.status !== 'skipped');
     const parts: string[] = [];
     parts.push(`UV ${mode}: ${done.length} of ${r.atlases.length} material atlases in ${(r.totalMs / 1000).toFixed(1)} s; ${r.charts} charts (${r.lscmCharts} LSCM, ${r.charts - r.lscmCharts} orthographic), ${r.overlappingTrianglePairs} overlapping triangle pairs.`);
@@ -85,7 +89,7 @@ async function runUvAtlasMode(mode: 'unwrap' | 'rewrap', inputGlbPath: string, o
     parts.push(`Output: ${outPath} (${(result.outputGlbBuffer!.length / 1e6).toFixed(1)} MB).`);
     const { outputGlbBuffer, uvRewrap, ...base } = result;
     return {
-        resultPayload: { ...base, outputGlbPath: outPath, outputGlbBytes: outputGlbBuffer!.length, uvRewrap: { ...uvRewrap!, atlases } } as unknown as ToolResultPayload,
+        resultPayload: { ...base, outputGlbPath: outPath, outputGlbBytes: outputGlbBuffer!.length, uvRewrap: { ...uvRewrap!, texturesRebaked: uvRewrap!.texturesRebaked.slice(0, 12), texturesRebakedCount: uvRewrap!.texturesRebaked.length, atlases, otherAtlases } } as unknown as ToolResultPayload,
         status: result.success ? 'completed' : 'failed',
         summaryResult: parts.join(' ')
     };

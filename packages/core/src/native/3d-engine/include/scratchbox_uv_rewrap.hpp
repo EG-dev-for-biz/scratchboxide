@@ -719,9 +719,9 @@ inline UnwrapResult unwrap(const float* positions, uint32_t vertexCount, const u
             uint32_t h = detail::skylinePack(rects, w, prm.allowRotation);
             if (h == UINT32_MAX) continue;
             uint32_t hh = std::max<uint32_t>(16, (h + 3) / 4 * 4);
-            if (hh <= maxH && (best.first == 0 || uint64_t(w) * hh < uint64_t(best.first) * best.second ||
-                               (uint64_t(w) * hh == uint64_t(best.first) * best.second && std::abs(int64_t(w) - hh) < std::abs(int64_t(best.first) - best.second))))
-                best = {w, hh};
+            // smallest area, with a mild preference for square atlases (elongated ones waste mip levels and limits)
+            auto cost = [](uint32_t W2, uint32_t H2) { return double(W2) * H2 * (1.0 + 0.1 * std::fabs(std::log2(double(W2) / H2))); };
+            if (hh <= maxH && (best.first == 0 || cost(w, hh) < cost(best.first, best.second))) best = {w, hh};
         }
         if (best.first) detail::skylinePack(rects, best.first, prm.allowRotation);
         return best;
