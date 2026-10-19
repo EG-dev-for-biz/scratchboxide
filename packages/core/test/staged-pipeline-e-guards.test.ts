@@ -151,17 +151,34 @@ describe('enhanced mode: the invention and erasure check', () => {
     });
 
     it('flags a dark bay the plate painted over as wall and windows', () => {
-        // the input: a dark recessed bay with diagonal stairs, 4 m wide, the full height above the ground storey
-        const bay = (xm: number, ym: number): Rgb | undefined => (xm > 12 && xm < 16 && ym > 1 ? (((xm + ym) % 1.4) < 0.25 ? [95, 95, 100] : [28, 30, 34]) : undefined);
+        // the input: a dark recessed bay with diagonal stairs, 4 m wide, the full height above the ground storey, seen through
+        // a gap: a 1.6 m band of wall-coloured occluder fill across it
+        const bay = (xm: number, ym: number): Rgb | undefined => (xm > 12 && xm < 16 && ym > 1 ? (ym > 7.9 && ym < 9.5 ? BRICK : ((xm + ym) % 1.4) < 0.25 ? [95, 95, 100] : [28, 30, 34]) : undefined);
         const input = soften(wall(bay));
-        const plate = wall();
+        // the plate paints the bay over as rusticated wall (coursing in the wall's own colour)
+        const plate = wall((xm, ym) => (xm > 12 && xm < 16 && ym > 1 ? ((ym % 0.45) < 0.1 || ((xm + (Math.floor(ym / 0.45) % 2) * 0.45) % 0.9) < 0.08 ? [120, 78, 58] : [190, 128, 96]) : undefined));
         const a = auditPlate(input, plate, W, H, all(), PX);
         const covered = a.regions.filter(r => r.box[0] * PX < 16 && r.box[2] * PX > 12).reduce((s, r) => s + r.areaM2, 0);
         expect(covered).toBeGreaterThan(0.5 * 4 * 14);
         const g = guardPlate(input, plate, W, H, all(), PX);
         expect(g.reject).toBe(false);
-        expect(mad(g.rgba, input, inBox(12.8, 15.2, 3, 14))).toBeLessThan(3);
+        expect(mad(g.rgba, input, inBox(12.8, 15.2, 3, 7.5))).toBeLessThan(3);
+        expect(mad(g.rgba, input, inBox(12.8, 15.2, 10, 14))).toBeLessThan(3);
+        // the fill bands inside the bay go back too: the bay is reverted as a whole, not round its visible pieces
+        expect(mad(g.rgba, input, inBox(12.9, 15.1, 8.5, 8.9))).toBeLessThan(3);
         shot('audit_erased_bay.png', [input, plate, g.rgba]);
+    });
+
+    it('counts cells next to a distinct element as part of it (an element seen in pieces)', async () => {
+        const { classifyCells, DISTINCT_REACH_CELLS } = await import('../src/node/3d-engine/staged-location/pipeline-e/plate-audit');
+        // a row of 8 cells: cell 0 is a distinct dark piece; every cell has structure in the plate the input does not support
+        const n = 8, f = (v: number) => new Float32Array(n).fill(v);
+        const feats = { cw: n, ch: 1, cellPx: 5, cover: f(1), toneDe: f(2), distinctDe: Float32Array.from({ length: n }, (_, k) => (k === 0 ? 30 : 2)), nccIn: f(0), contrastIn: f(3), contrastOut: f(8) };
+        const labels = classifyCells(feats);
+        expect(labels[0]).toBe('replaced');
+        for (let k = 1; k <= DISTINCT_REACH_CELLS; k++) expect(labels[k]).toBe('replaced');
+        for (let k = DISTINCT_REACH_CELLS + 1; k < n; k++) expect(labels[k]).toBe('invented-detail');
+        expect(DISTINCT_REACH_CELLS).toBeGreaterThanOrEqual(1);
     });
 
     it('rejects the whole wall when the flagged area is too large', async () => {

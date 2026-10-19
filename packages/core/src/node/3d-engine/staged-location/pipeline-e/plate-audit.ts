@@ -63,6 +63,11 @@ export const DISTINCT_BLUR_M = 1;
 export const DISTINCT_DE = 15;
 /** ... or whose input band contrast is at least this (openings, signage, a fire escape's bars). */
 export const DISTINCT_CONTRAST_L = 9;
+/**
+ * A cell within this many cells of a distinct one counts as distinct too: an element is rarely distinct in every cell (a
+ * fire-escape bay the scan saw through gaps, with the occluder fill between), and redrawing round its pieces still erases it.
+ */
+export const DISTINCT_REACH_CELLS = 2;
 /** Smallest flagged region that counts, square metres. */
 export const MIN_REGION_M2 = 3;
 /** Blend width of a reverted region's edge, metres. */
@@ -253,13 +258,29 @@ export function plateFeatures(input: Uint8Array, plate: Uint8Array, W: number, H
  * structure: a dark bay, a storefront, signage, a tower's openings) is "replaced"; flattening such structure is "erased";
  * a changed colour is "retoned".
  */
+export function distinctCells(f: CellFeatures): Uint8Array {
+    const own = new Uint8Array(f.cw * f.ch);
+    for (let k = 0; k < own.length; k++) own[k] = f.cover[k] >= 0.5 && (f.distinctDe[k] >= DISTINCT_DE || f.contrastIn[k] >= DISTINCT_CONTRAST_L) ? 1 : 0;
+    const out = new Uint8Array(own.length), R = DISTINCT_REACH_CELLS;
+    for (let y = 0; y < f.ch; y++) for (let x = 0; x < f.cw; x++) {
+        let hit = 0;
+        for (let dy = -R; dy <= R && !hit; dy++) for (let dx = -R; dx <= R && !hit; dx++) {
+            const xx = x + dx, yy = y + dy;
+            if (xx >= 0 && yy >= 0 && xx < f.cw && yy < f.ch && own[yy * f.cw + xx]) hit = 1;
+        }
+        out[y * f.cw + x] = hit;
+    }
+    return out;
+}
+
 export function classifyCells(f: CellFeatures): string[] {
     const out: string[] = new Array(f.cw * f.ch).fill('');
+    const near = distinctCells(f);
     for (let k = 0; k < out.length; k++) {
         if (f.cover[k] < 0.5) continue;
         const ci = f.contrastIn[k], co = f.contrastOut[k], r = f.nccIn[k];
         const supported = Number.isFinite(r) && r >= MIN_SUPPORT_NCC;
-        const distinct = f.distinctDe[k] >= DISTINCT_DE || ci >= DISTINCT_CONTRAST_L;
+        const distinct = near[k] === 1;
         if (distinct && ci >= MIN_CONTRAST_L && co < ERASE_CONTRAST_RATIO * ci) out[k] = 'erased';
         else if (co >= MIN_CONTRAST_L && !supported) out[k] = distinct ? (co >= ci ? 'replaced' : 'erased') : 'invented-detail';
         else if (f.toneDe[k] > MAX_TONE_DE) out[k] = 'retoned';
