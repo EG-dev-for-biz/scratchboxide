@@ -42,6 +42,8 @@ import { plainTextures, runNativeMassing, writeMassingLayer, LOW_COVERAGE, type 
 import { decideRoof, parseRoofReply, roofPrompt, PARAPET_THICKNESS_M, type RoofDecision } from './roof-infer';
 import { straighten, type StraightenResult } from './straighten';
 import type { EnhanceModelClient } from '../texture-enhance';
+import { decodeOrtho, checkAgainstScan, readReliefOrthos } from '../facade-grammar';
+import { enhanceOrder, enhanceWall, TEXTURE_PLATE_PROMPT_ID, type EnhanceWallRecord, type PlateModelClient } from './enhance';
 
 export interface StepRecord { step: string; proposed: number; accepted: number; rejected: number; skipped?: string; notes: string[]; ms: number }
 
@@ -63,6 +65,8 @@ export interface InferenceInput {
     inpaint?: { client: EnhanceModelClient; models: string[]; maxRects?: number };
     solar?: Array<{ pitchDeg: number; areaM2: number; x: number; z: number }>;
     anchor?: { x: number; z: number };
+    /** Enhanced mode (opt-in): each large wall redrawn once by an image model (enhance.ts), gated on edge alignment. */
+    enhance?: { client: PlateModelClient; models: string[]; locationName: string; maxWalls?: number };
     signal?: AbortSignal;
     onProgress?: (m: string) => void;
 }
@@ -74,6 +78,8 @@ export interface InferenceOutcome {
     legend: TexelSource[];
     grammars: FacadeGrammar[];
     timingsMs: Record<string, number>;
+    /** Enhanced mode: per wall redrawn, accepted or not and why. */
+    enhanced: EnhanceWallRecord[];
 }
 
 /** Legend entries the inference adds after the base ones (face-textures.ts). */
@@ -258,29 +264,9 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
                 winStep.accepted++;
                 grammars.push(o.grammar);
                 const f = faces[o.facadeId];
-                const ortho = readFaceOrtho(run.dir, f);
-                let measured = 0, assumed = 0;
-                grammarCells(o.grammar).forEach((c, k) => {
-                    // the recess the scan measures: the ortho depth inside the opening's core against the frame around it
-                    let depth = NaN;
-                    if (ortho) {
-                        const inner: number[] = [], ring: number[] = [];
-                        const x0 = Math.floor((c.s0 - f.orthoSMin) / f.pixel), x1 = Math.ceil((c.s1 - f.orthoSMin) / f.pixel), y0 = Math.floor((f.orthoTMax - c.t1) / f.pixel), y1 = Math.ceil((f.orthoTMax - c.t0) / f.pixel);
-                        const m = Math.max(2, Math.round(0.3 / f.pixel));
-                        for (let y = y0 - m; y < y1 + m; y++) for (let x = x0 - m; x < x1 + m; x++) {
-                            if (x < 0 || y < 0 || x >= f.width || y >= f.height) continue;
-                            const v = ortho.depth[y * f.width + x];
-                            if (!Number.isFinite(v)) continue;
-                            const core = x >= x0 + (x1 - x0) * 0.2 && x < x1 - (x1 - x0) * 0.2 && y >= y0 + (y1 - y0) * 0.2 && y < y1 - (y1 - y0) * 0.2;
-                            const outside = x < x0 || x >= x1 || y < y0 || y >= y1;
-                            if (core) inner.push(v); else if (outside) ring.push(v);
-                        }
-                        if (inner.length >= 6 && ring.length >= 6) depth = medianOf(ring) - medianOf(inner);
-                    }
-                    const ok = Number.isFinite(depth) && depth >= 0.05;
-                    if (ok) measured++; else assumed++;
-                    openings.push({ id: `win_${f.index}_${k}`, face: f.key, s0: c.s0, s1: c.s1, t0: c.t0, t1: c.t1, depth: ok ? Math.min(0.6, Math.max(0.08, depth)) : 0.12, scanned: false, confidence: o.grammar!.confidence, provenance: 'photo-inferred' });
-                });
+                const made = openingsFromGrammar(run, f, o.grammar, `win_${f.index}`);
+                openings.push(...made.openings);
+                const measured = made.measured, assumed = made.assumed;
                 winStep.notes.push(`wall ${o.facadeId}: ${grammarCells(o.grammar).length} openings (recess measured on ${measured}, ${assumed} at 0.12 m): ${o.reason.slice(0, 160)}`);
             }
         }
@@ -448,19 +434,91 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
     }
     timingsMs.textures = now() - t;
 
+    // ------------------------------------------------------------------ enhanced mode (opt-in): each large wall redrawn once, gated
+    let runOut = run2;
+    const enhanced: EnhanceWallRecord[] = [];
+    if (input.enhance) {
+        t = now();
+        const enhStep = rec('enhance');
+        const ENH = legend.length;
+        legend.push({ source: 'ai-enhanced', label: 'generated', method: `AI-enhanced from tile (${input.enhance.models.join(', ')}, ${TEXTURE_PLATE_PROMPT_ID})`, rung: 4, weight: 0.2 });
+        const order = enhanceOrder(faces, textures, LOW_COVERAGE).slice(0, input.enhance.maxWalls ?? 16);
+        const done: MassingFace[] = [];
+        const plates = new Map<number, { plate: Uint8Array; use: Uint8Array }>();
+        for (const f of order) {
+            const tex = textures.get(f.index)!;
+            const use = new Uint8Array(tex.width * tex.height);
+            for (let i = 0; i < use.length; i++) use[i] = tex.source[i] === SRC.tileOrtho || tex.source[i] === BAY || tex.source[i] === OTHER || tex.source[i] === COLOURED ? 1 : 0;
+            // the reference: the finished wall next to this one round the plan, else the last finished
+            const ref = done.find(d => d.part === f.part && d.loop === f.loop && Math.abs(d.edge - f.edge) === 1) ?? done[done.length - 1];
+            progress(`enhanced mode: redrawing wall ${f.index} (${Math.round(f.area)} m2)`);
+            const r = await enhanceWall(f, tex, use, { client: input.enhance.client, models: input.enhance.models, locationName: input.enhance.locationName, ...(ref ? { reference: textures.get(ref.index)! } : {}), source: ENH, ...(input.signal ? { signal: input.signal } : {}) });
+            enhanced.push({ ...r, ...(ref ? { referenceFace: ref.index } : {}), plate: undefined } as EnhanceWallRecord);
+            enhStep.proposed++;
+            if (r.accepted) { enhStep.accepted++; done.push(f); if (r.plate) plates.set(f.index, { plate: r.plate, use }); } else enhStep.rejected++;
+            enhStep.notes.push(`wall ${f.index}: ${r.accepted ? 'enhanced' : 'kept its tile texture'}: ${r.why}${r.model ? ` (${r.model})` : ''}`);
+            try {
+                if (r.plate) {
+                    const W2 = tex.width * 2 + 8, rgb = new Uint8Array(W2 * tex.height * 3), before = input.textures.get(f.index);
+                    for (let y = 0; y < tex.height; y++) for (let x = 0; x < tex.width; x++) {
+                        if (before) rgb.set(before.rgba.subarray((y * tex.width + x) * 4, (y * tex.width + x) * 4 + 3), (y * W2 + x) * 3);
+                        rgb.set(r.plate.subarray((y * tex.width + x) * 4, (y * tex.width + x) * 4 + 3), (y * W2 + x + tex.width + 8) * 3);
+                    }
+                    fs.writeFileSync(path.join(input.dir, `wall_${f.index}_tile_vs_enhanced.png`), encodePng(W2, tex.height, Buffer.from(rgb), 3));
+                }
+            } catch { /* diagnostics only */ }
+        }
+        // the grammar read from the enhanced plates, used only where it passes the grammar's own gates and the scan/tile check
+        const plateStep = rec('enhance-grammar');
+        if (chain && plates.size) {
+            const pdir = path.join(input.dir, 'plates');
+            fs.mkdirSync(pdir, { recursive: true });
+            const tileIdx = readReliefOrthos(run.dir);
+            const index = tileIdx.filter(r => plates.has(r.facadeId) && !grammars.some(g => g.facadeId === r.facadeId));
+            for (const r of index) {
+                const { plate, use } = plates.get(r.facadeId)!;
+                const rgb = new Uint8Array(r.width * r.height * 3).fill(128);
+                for (let i = 0; i < r.width * r.height; i++) if (use[i]) { for (let c = 0; c < 3; c++) rgb[i * 3 + c] = plate[i * 4 + c]; if (rgb[i * 3] === 128 && rgb[i * 3 + 1] === 128 && rgb[i * 3 + 2] === 128) rgb[i * 3] = 129; }
+                fs.writeFileSync(path.join(pdir, r.image), encodePng(r.width, r.height, Buffer.from(rgb), 3));
+            }
+            fs.writeFileSync(path.join(pdir, 'facades.json'), JSON.stringify({ schema: 'scratchbox.relief-orthos/1', facades: index }));
+            if (index.length) {
+                const pass = await runFacadeGrammarPass({ orthosDir: pdir, chain, ...(input.signal ? { signal: input.signal } : {}), onProgress: m => progress(`enhanced plates: ${m}`) });
+                const extra: OpeningItem[] = [];
+                for (const o of pass.facades) {
+                    if (!o.grammar) continue;
+                    plateStep.proposed++;
+                    const rf = index.find(r => r.facadeId === o.facadeId)!;
+                    const tileCheck = o.accepted ? checkAgainstScan(o.grammar, rf, decodeOrtho(fs.readFileSync(path.join(run.dir, rf.image)))) : undefined;
+                    if (o.accepted && tileCheck?.passed) {
+                        plateStep.accepted++;
+                        extra.push(...openingsFromGrammar(run, faces[o.facadeId], o.grammar, `plate_${o.facadeId}`).openings);
+                        plateStep.notes.push(`wall ${o.facadeId}: the plate's grammar is used: ${o.reason.slice(0, 160)}; on the tile ortho: ${tileCheck.why.slice(0, 120)}`);
+                    } else { plateStep.rejected++; plateStep.notes.push(`wall ${o.facadeId}: not used: ${o.accepted ? `on the tile ortho: ${tileCheck?.why}` : o.reason.slice(0, 200)}`); }
+                }
+                if (extra.length) {
+                    progress('enhanced mode: building the solid again with the plates\' openings');
+                    runOut = await runNativeMassing({ parts: allParts, meshes: massing.meshes }, { tilePath: input.tilePath, isolateGlb: input.isolateGlb, dir: path.join(input.dir, 'native3'), sweeps, openings: [...openings, ...extra], params: { snapMaxM: 0, sections: 0, topdown: 0 }, ...(input.signal ? { signal: input.signal } : {}) });
+                }
+            }
+        } else plateStep.skipped = chain ? 'no wall was enhanced' : noVision;
+        enhStep.ms = now() - t;
+        timingsMs.enhance = now() - t;
+    }
+
     // ------------------------------------------------------------------ the layer
     t = now();
     const tex2 = new Map<number, FaceTexture>();
-    const plain2 = plainTextures(run2).textures;
-    for (const f2 of run2.report.faces) {
+    const plain2 = plainTextures(runOut).textures;
+    for (const f2 of runOut.report.faces) {
         const f1 = faces.find(f => f.key === f2.key);
         const t1 = f1 ? textures.get(f1.index) : undefined;
         if (t1 && f1 && f2.width) tex2.set(f2.index, reframe(t1, f1, f2));
         else if (plain2.has(f2.index)) tex2.set(f2.index, plain2.get(f2.index)!);
     }
-    const files = writeMassingLayer(run2, massing, tex2, legend, input.dir, input.stage, input.stageKey, 'massing_inferred');
+    const files = writeMassingLayer(runOut, massing, tex2, legend, input.dir, input.stage, input.stageKey, input.enhance ? 'massing_enhanced' : 'massing_inferred');
     timingsMs.glb = now() - t;
-    fs.writeFileSync(path.join(input.dir, 'inference.json'), JSON.stringify({ steps, roof: roofDecisions, grammars: grammarOutcomes.map(o => ({ facadeId: o.facadeId, accepted: o.accepted, reason: o.reason })), colour, straightened: straightened.map(s => ({ ...s, texture: undefined })), timingsMs }, null, 1));
+    fs.writeFileSync(path.join(input.dir, 'inference.json'), JSON.stringify({ steps, enhanced, roof: roofDecisions, grammars: grammarOutcomes.map(o => ({ facadeId: o.facadeId, accepted: o.accepted, reason: o.reason })), colour, straightened: straightened.map(s => ({ ...s, texture: undefined })), timingsMs }, null, 1));
     // the overlays: each wall's final texture beside its plain one (diagnostics)
     try {
         for (const g of grammars) {
@@ -474,7 +532,35 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
             fs.writeFileSync(path.join(input.dir, `wall_${f.index}_before_after.png`), encodePng(W, H, Buffer.from(rgb), 3));
         }
     } catch { /* diagnostics only */ }
-    return { files, run: run2, steps, legend, grammars, timingsMs };
+    return { files, run: runOut, steps, legend, grammars, timingsMs, enhanced };
+}
+
+/** Recessed openings of a grammar on a wall: the recess the scan's ortho depth measures (inside against the frame), else 0.12 m. */
+export function openingsFromGrammar(run: MassingRun, f: MassingFace, g: FacadeGrammar, idPrefix: string): { openings: OpeningItem[]; measured: number; assumed: number } {
+    const ortho = readFaceOrtho(run.dir, f);
+    const openings: OpeningItem[] = [];
+    let measured = 0, assumed = 0;
+    grammarCells(g).forEach((c, k) => {
+        let depth = NaN;
+        if (ortho) {
+            const inner: number[] = [], ring: number[] = [];
+            const x0 = Math.floor((c.s0 - f.orthoSMin) / f.pixel), x1 = Math.ceil((c.s1 - f.orthoSMin) / f.pixel), y0 = Math.floor((f.orthoTMax - c.t1) / f.pixel), y1 = Math.ceil((f.orthoTMax - c.t0) / f.pixel);
+            const m = Math.max(2, Math.round(0.3 / f.pixel));
+            for (let y = y0 - m; y < y1 + m; y++) for (let x = x0 - m; x < x1 + m; x++) {
+                if (x < 0 || y < 0 || x >= f.width || y >= f.height) continue;
+                const v = ortho.depth[y * f.width + x];
+                if (!Number.isFinite(v)) continue;
+                const core = x >= x0 + (x1 - x0) * 0.2 && x < x1 - (x1 - x0) * 0.2 && y >= y0 + (y1 - y0) * 0.2 && y < y1 - (y1 - y0) * 0.2;
+                const outside = x < x0 || x >= x1 || y < y0 || y >= y1;
+                if (core) inner.push(v); else if (outside) ring.push(v);
+            }
+            if (inner.length >= 6 && ring.length >= 6) depth = medianOf(ring) - medianOf(inner);
+        }
+        const ok = Number.isFinite(depth) && depth >= 0.05;
+        if (ok) measured++; else assumed++;
+        openings.push({ id: `${idPrefix}_${k}`, face: f.key, s0: c.s0, s1: c.s1, t0: c.t0, t1: c.t1, depth: ok ? Math.min(0.6, Math.max(0.08, depth)) : 0.12, scanned: false, confidence: g.confidence, provenance: 'photo-inferred' });
+    });
+    return { openings, measured, assumed };
 }
 
 function inLoopsLocal(x: number, z: number, loops: Vec2[][]): boolean {

@@ -139,6 +139,7 @@ import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSIO
 import { mslToTileY, type SolarRoof } from './pipeline-e/solar-roof';
 import { runInferenceE, type StepRecord } from './pipeline-e/inference';
 import { crownsFromStrip } from './pipeline-e/occluders';
+import { enhanceModels, genAiPlateClient, stagedEnhance } from './pipeline-e/enhance';
 import { projectionViewsFromEvidence } from './texture-pass';
 import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
 import { facadeGrammarEnabled, grammarFileText, runFacadeGrammarPass, FACADE_GRAMMAR_GATE_VERSION, FACADE_GRAMMAR_PROMPT_VERSION, type GrammarFacadeOutcome } from './facade-grammar';
@@ -230,6 +231,11 @@ export interface StagedLocationRequest {
     stageIntoActiveScene?: boolean;
     /** The place already resolved (a 'Switch location' choice): used as given, the query is not geocoded. */
     place?: ResolvedPlace;
+    /**
+     * Pipeline E's enhanced mode (opt-in, also SCRATCHBOX_STAGED_ENHANCE=1): each large wall's texture redrawn once by an
+     * image model, kept only where it keeps the tile's edges; labelled generated.
+     */
+    enhance?: boolean;
 }
 
 export interface StagedExtraction {
@@ -2224,12 +2230,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         return own.views;
                     } : undefined;
                     const crowns = strip ? crownsFromStrip(JSON.parse(fs.readFileSync(strip.crownsJson, 'utf8'))) : [];
+                    const enhanceOn = request.enhance === true || stagedEnhance();
                     const enhance = deps.textures?.enhance;
                     const out = await runInferenceE({
                         massing: r.massing, run: r.run!, textures: r.textures!, tilePath: strip ? strip.devegetatedGlb : extraction.texturedGlb, isolateGlb: e.refined.rawClayGlb!,
                         dir: path.join(cache.dir, 'pipeline_e', e.key.slice(0, 24), 'inference'), stage: 'grammar', stageKey: e.key,
                         ...(chain ? { chain } : {}), ...(streetViews ? { streetViews } : {}), structureMesh, crowns,
                         ...(enhance ? { inpaint: { client: enhance, models: [LIGHTING_MODEL_LITE] } } : {}),
+                        ...(enhanceOn && visionAvailable ? { enhance: { client: genAiPlateClient(visionAvailable.client), models: enhanceModels(), locationName: placeValue!.formattedAddress } } : {}),
                         solar: [], anchor: structure!.seed, signal: io.signal, onProgress: m => io.progress(m)
                     });
                     cache.writeRunNote(runId, 'pipeline_e_inference', { steps: out.steps, timingsMs: out.timingsMs });
@@ -2238,7 +2246,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const key8 = e.key.slice(0, 8);
                     const pubClay = cache.publishFile(out.files.clayGlb, `${base}_massing_${key8}_inferred.glb`);
                     const pubTex = cache.publishFile(out.files.texturedGlb, `${base}_massing_${key8}_inferred_tex.glb`);
-                    const describe = out.steps.map(s => `${s.step}: ${s.skipped ? `skipped (${s.skipped})` : `${s.accepted} of ${s.proposed} kept`}`).join('; ');
+                    const enh = out.enhanced;
+                    const enhNote = enhanceOn ? `; enhanced mode (opt-in) was used: ${enh.filter(x => x.accepted).length} of ${enh.length} walls redrawn by ${enhanceModels().join(', ')} and kept (labelled generated, "AI-enhanced from tile"), ${enh.filter(x => !x.accepted).length} rejected by the alignment gate and keep the tile texture${visionAvailable ? '' : ' (no image model: nothing was enhanced)'}` : '';
+                    const describe = out.steps.map(s => `${s.step}: ${s.skipped ? `skipped (${s.skipped})` : `${s.accepted} of ${s.proposed} kept`}`).join('; ') + enhNote;
                     const layer: StagedLayer = {
                         objectId: layerObjectId(e.key, 'l2g'), stage: 'grammar', layer: 'l2g', order: STAGES.grammar.order, url: pubClay.url, bytes: pubClay.bytes,
                         provenance: { label: PROVENANCE.photoInferred, measuredGeometry: false, confidence: conf, method: 'pipeline E inference on the clean massing: roof, bands and windows read from the tile photo and kept where the scan agrees; averaged bays, occluder fill, straightened texture and Street View colour on its textures', sources: [{ kind: 'stage-output', id: `pipeline-e:${key8}` }], note: describe },

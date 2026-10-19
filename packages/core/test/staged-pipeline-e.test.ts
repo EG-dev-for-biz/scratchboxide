@@ -264,3 +264,37 @@ describe('tree separation', () => {
         expect(green).toBe(0);
     });
 });
+
+describe('enhanced mode (alignment gate and plate prompt)', () => {
+    it('accepts a sharper redraw a few pixels off (corrected) and rejects one whose openings moved', async () => {
+        const { alignPlate } = await import('../src/node/3d-engine/staged-location/pipeline-e/enhance');
+        const W = 300, H = 120;
+        const { tex } = facade(W, H, 6, 1, 20);
+        const use = new Uint8Array(W * H).fill(1);
+        // a clean redraw: the noiseless facade, 3 px to the right
+        const clean = facade(W, H, 6, 1, 0).tex.rgba;
+        const shifted = new Uint8Array(clean.length);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const sx = Math.max(0, x - 3); shifted.set(clean.subarray((y * W + sx) * 4, (y * W + sx) * 4 + 4), (y * W + x) * 4); }
+        const ok = alignPlate(tex.rgba, shifted, W, H, use, 0.05);
+        expect(ok.accepted).toBe(true);
+        expect(Math.abs(ok.dx + 3)).toBeLessThanOrEqual(1);
+        // openings moved: a facade with 5 bays instead of 6
+        const moved = facade(W, H, 5, 1, 0).tex.rgba;
+        const bad = alignPlate(tex.rgba, moved, W, H, use, 0.05);
+        expect(bad.accepted).toBe(false);
+        const rgba = new Uint8Array(W * 3 * H * 4);
+        for (let y = 0; y < H; y++) { rgba.set(tex.rgba.subarray(y * W * 4, (y + 1) * W * 4), y * W * 12); rgba.set(ok.aligned.subarray(y * W * 4, (y + 1) * W * 4), y * W * 12 + W * 4); rgba.set(bad.aligned.subarray(y * W * 4, (y + 1) * W * 4), y * W * 12 + W * 8); }
+        shot('enhance_alignment_gate.png', W * 3, H, rgba);
+    });
+
+    it('builds the texture-plate prompt without changing the Beautify template', async () => {
+        const svc = await import('../src/browser/generative-canvas/services/location-beautify-service');
+        const { preserveClause } = await import('../src/node/3d-engine/staged-location/pipeline-e/enhance');
+        const p = svc.buildTexturePlatePrompt({ locationName: 'X', widthM: 20, heightM: 10, widthPx: 400, heightPx: 200, preserveClause: preserveClause(400, 200), withReference: true });
+        expect(p).toMatch(/flat orthographic elevation/);
+        expect(p).toMatch(/Keep every object, edge, letter and ornament exactly where it is/);
+        expect(p).toMatch(/no depth of field, no haze/);
+        expect(p).toMatch(/adjacent wall/);
+        expect(svc.buildBeautifyPrompt({ locationName: 'X', coords: '1.000000, 2.000000', heading: 0, aspectRatio: '16:9', earthUrl: 'u' })).toMatch(/^Transform this photorealistic 3D tiles rendering of X/);
+    });
+});

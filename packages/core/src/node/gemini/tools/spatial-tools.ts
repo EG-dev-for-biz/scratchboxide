@@ -212,6 +212,10 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'BOOLEAN',
                     description: STAGED_ISOLATE_DESCRIPTION
                 },
+                enhance: {
+                    type: 'BOOLEAN',
+                    description: 'Enhanced textures (default false; only when the user asks for cleaner or more detailed textures and accepts AI-drawn detail): with the vector-massing pipeline (SCRATCHBOX_STAGED_PIPELINE=e), each large wall is redrawn once by an image model from its tile photo, kept only where its windows and edges stay in place, and labelled generated ("AI-enhanced from tile"); the result says how many walls were enhanced or rejected.'
+                },
                 atomicBuildingIntegrity: {
                     type: 'BOOLEAN',
                     description: 'Enforce Atomic Building Integrity rule: guarantees zero horizontal roof slicing, zero bisected building envelopes, and multi-tier zenith camera settle (defaults to true)'
