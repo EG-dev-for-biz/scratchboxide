@@ -168,8 +168,53 @@ export function selectViewsForFit(
     unmaskedTop: Float32Array,
     max = MAX_STREET_VIEW_IMAGES_PER_BUILDING
 ): SelectedView[] {
+    return selectViewsForTargets(panos, slotTargets(fit, structure.centroid), structure, ground, unmaskedTop, max);
+}
+
+/** A face to aim at without a fit: its middle, outward direction and size (face-survey's SurveyFaceTarget). */
+export interface FaceTarget { faceId: string; centre: Vec3; outward: Vec3; widthM: number; heightM: number }
+
+/** A face cut into tiles of at most `tileM` a side, each a target (an 8 m tile fills a view from the street; a whole tower face does not). */
+export function faceTileTargets(faces: FaceTarget[], tileM = 8): SlotTarget[] {
+    const out: SlotTarget[] = [];
+    for (const f of faces) {
+        const t: Vec3 = unit([-f.outward[2], 0, f.outward[0]]);
+        const nu = Math.max(1, Math.ceil(f.widthM / tileM)), nv = Math.max(1, Math.ceil(f.heightM / tileM));
+        const du = f.widthM / nu, dv = f.heightM / nv;
+        for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) {
+            const u0 = -f.widthM / 2 + i * du, v0 = -f.heightM / 2 + j * dv;
+            const at = (u: number, v: number): Vec3 => [f.centre[0] + t[0] * u, f.centre[1] + v, f.centre[2] + t[2] * u];
+            const outline = [at(u0, v0), at(u0 + du, v0), at(u0 + du, v0 + dv), at(u0, v0 + dv)];
+            out.push({ slotId: `${f.faceId}:${i}:${j}`, centre: at(u0 + du / 2, v0 + dv / 2), outward: unit([f.outward[0], 0, f.outward[2]]), outline, weight: du * dv });
+        }
+    }
+    return out;
+}
+
+/**
+ * The views to fetch when no fit was accepted: the same greedy cover, of the structure's facades (its footprint faces, cut
+ * into tiles) instead of the fitted slots. The images texture the remeshed scan; nothing is read from them.
+ */
+export function selectViewsForStructure(
+    panos: PanoCandidate[],
+    faces: FaceTarget[],
+    structure: Pick<StructurePickResult, 'cells' | 'groundY' | 'heightM' | 'centroid'>,
+    ground: Pick<GroundModel, 'cellIndex' | 'groundAt'>,
+    unmaskedTop: Float32Array,
+    max = MAX_STREET_VIEW_IMAGES_PER_BUILDING
+): SelectedView[] {
+    return selectViewsForTargets(panos, faceTileTargets(faces), structure, ground, unmaskedTop, max);
+}
+
+function selectViewsForTargets(
+    panos: PanoCandidate[],
+    targets: SlotTarget[],
+    structure: Pick<StructurePickResult, 'cells' | 'groundY' | 'heightM' | 'centroid'>,
+    ground: Pick<GroundModel, 'cellIndex' | 'groundAt'>,
+    unmaskedTop: Float32Array,
+    max: number
+): SelectedView[] {
     const limit = Math.max(0, Math.min(MAX_STREET_VIEW_IMAGES_PER_BUILDING, max));
-    const targets = slotTargets(fit, structure.centroid);
     if (!limit || !targets.length || !panos.length) return [];
     const totalWeight = targets.reduce((s, t) => s + t.weight, 0);
     const newest = Math.max(...panos.map(p => months(p.date)));

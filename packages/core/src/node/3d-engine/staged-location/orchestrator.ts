@@ -73,7 +73,7 @@ import {
 import { glbMeshCounts, plantTrees, summarizeTrees, type LocationClayTrees } from '../location-clay-pipeline';
 import { TileVegetationError, type TileVegetationPlantRequest, type TileVegetationPlantResult, type TileVegetationStripRequest, type TileVegetationStripResult } from '../tile-vegetation-service';
 import type { TileRefineRequest, TileRefineResult } from '../tile-refine-service';
-import { evidenceLookup, type EvidenceLookup, type VectorEvidence } from './vector-footprints';
+import { evidenceLookup, footprintPriorFor, type EvidenceLookup, type VectorEvidence } from './vector-footprints';
 import { VisionModelChain, type VisionGenAIClient } from '../../gemini/vision-model-chain';
 import { segmentOwnershipViews } from './ownership-masks';
 import { loadScanMesh, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
@@ -92,8 +92,8 @@ import {
 import {
     discoverPanos, facadeGeometry, fetchViews, missingCredentials, EVIDENCE_STAGE_BUDGET_MS, type EvidenceImage, type PanoCandidate, type StreetViewEvidenceDeps
 } from './streetview-evidence';
-import { selectViewsForFit } from './evidence-aim';
-import { describeSurvey, runFaceSurvey, surveyCandidates, surveyFaceTargets, surveyImageBytes, SURVEY_IMAGE_TIMEOUT_MS, SURVEY_VISION_TIMEOUT_MS, type SurveyResult } from './face-survey';
+import { selectViewsForFit, selectViewsForStructure } from './evidence-aim';
+import { describeSurvey, footprintSurveyFaces, runFaceSurvey, surveyCandidates, surveyFaceTargets, surveyImageBytes, SURVEY_IMAGE_TIMEOUT_MS, SURVEY_VISION_TIMEOUT_MS, type SurveyResult } from './face-survey';
 import { describeLocated, locateSurveyElements, planDetailFromSurvey, type DetailPlan } from './survey-detail';
 import { DETAIL_REPROJECTION_MIN_IOU, reprojectDetailAsync } from './detail-reprojection';
 import { EDGE_REGISTRATION_BUDGET_MS, describeEdgeRegistration, type EdgeRegistrationResult } from './pano-edge-registration';
@@ -1170,12 +1170,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             runner.skip('survey', isolateMode ? (deps.vision && 'unavailable' in deps.vision ? deps.vision.unavailable : 'no vision model is configured') : 'not an isolated structure');
         }
 
-        // ---------------- evidence (starts when the fit is accepted: a rejected fit has nothing to place a photo on, and no image is fetched for it) ----------------
+        // ---------------- evidence (starts when the fit is accepted, aimed at its slots; when no fit is accepted, aimed at the structure's
+        // facades, and the images then only texture the remeshed scan: nothing is read from them) ----------------
         let evidencePromise = undefined as Promise<{ images: EvidenceImage[]; panos: PanoCandidate[]; cost: EvidenceCost; plan?: DetailPlan; registration?: Registration; match?: MatchResult; runCrops?: RunCrops; status: string }> | undefined;
         // ended (skipped, as not needed) when the run ends before the evidence does
         const evidenceStop = new AbortController();
 
-        const startEvidence = (fit: StructureFit): void => {
+        const startEvidence = (fit: StructureFit | undefined): void => {
             // the close-ups are planned from what the survey found: they wait for it (it began long before the fit ended)
             const surveyDone = surveyPromise ? surveyPromise.catch(() => undefined) : Promise.resolve(undefined);
             evidencePromise = surveyDone.then(surveyOut => runner.stage<{ images: EvidenceImage[]; panos: PanoCandidate[]; cost: EvidenceCost; plan?: DetailPlan; registration?: Registration; match?: MatchResult; runCrops?: RunCrops }>({
@@ -1200,7 +1201,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     // poses of the panos are solved so that the rays through the same element agree on the fitted faces (pano-registration.ts)
                     let match: MatchResult | undefined;
                     let registration: Registration | undefined;
-                    if (surveyOut?.result && visionAvailable) {
+                    if (fit && surveyOut?.result && visionAvailable) {
                         try {
                             const surveyFaces = surveyFaceTargets(structure!);
                             const candidates = surveyCandidates(found.panos.filter(p => !sv.refusedPanos?.has(p.panoId)), surveyFaces, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top);
@@ -1216,13 +1217,18 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             io.progress(`pose registration failed (${errorMessage(err)}); the nominal pano poses stand, good to ±2 m`);
                         }
                     }
-                    let plan = surveyOut?.result ? planDetailFromSurvey(surveyOut.result, fit, undefined, registration) : undefined;
-                    const views = plan?.views.length ? plan.views : selectViewsForFit(found.panos.filter(p => !sv.refusedPanos?.has(p.panoId)), fit, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top);
+                    let plan = fit && surveyOut?.result ? planDetailFromSurvey(surveyOut.result, fit, undefined, registration) : undefined;
+                    const usable = found.panos.filter(p => !sv.refusedPanos?.has(p.panoId));
+                    const views = plan?.views.length ? plan.views
+                        : fit ? selectViewsForFit(usable, fit, structure!, t.ground!, t.unmaskedTop ?? t.ground!.top)
+                        // no accepted fit: the structure's facades, cut into tiles a view can frame
+                        : selectViewsForStructure(usable, footprintSurveyFaces(structure!), structure!, t.ground!, t.unmaskedTop ?? t.ground!.top);
+                    if (!fit) io.progress(`no fit was accepted: ${views.length} Street View views aimed at the structure's facades, to texture the remeshed scan`);
                     if (plan) io.progress(describeLocated(surveyOut!.result!.faces, plan));
                     const discovery = { metadataCalls: found.metadataCalls, cachedCalls: found.cachedCalls };
                     if (!views.length) {
                         return {
-                            status: 'degraded', value: { images: [], panos: found.panos, cost: { ...NO_EVIDENCE_COST, ...discovery }, ...(plan ? { plan } : {}) }, source: 'no Street View images', reason: 'no Google Street View panorama looks at the fitted slots',
+                            status: 'degraded', value: { images: [], panos: found.panos, cost: { ...NO_EVIDENCE_COST, ...discovery }, ...(plan ? { plan } : {}) }, source: 'no Street View images', reason: `no Google Street View panorama looks at the ${fit ? 'fitted slots' : "structure's facades"}`,
                             degradations: [run.degrade(record('evidence', 'no_street_view', {
                                 part: { description: 'Street View close-ups of the structure' }, intended: 'up to 4 Street View images (© Google)', fellTo: 'no Street View images',
                                 provenanceAfter: PROVENANCE.photoInferred, reason: `no Google-captured Street View panorama within 12-60 m looks at the facades (${found.panos.length} found nearby)`, transient: false, runId, now: now()
@@ -1238,6 +1244,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         provenanceAfter: PROVENANCE.photoInferred, reason: `the image could not be fetched: ${f.error}`, cause: f.error, transient: f.transient, runId, now: now(), suffix: f.view.panoId
                     })));
                     if (got.images.length) run.state.attribution = [...new Set([...run.state.attribution, 'Street View ©Google'])];
+                    if (got.images.length && !fit) run.note(PROVENANCE.photoInferred, `Street View (© Google) projected onto the remeshed scan: no fit was accepted, so ${got.images.length} views were aimed at the structure's facades (the no-fit rung); nothing was read from them`);
                     // geometric registration: every pano with an image in hand (survey, ring and close-ups) is posed against the full tile
                     // mesh by its silhouette and edges; the pose that agrees better with the other panos is kept per pano (pano-edge-registration.ts)
                     let edgeReg: EdgeRegistrationResult | undefined;
@@ -1250,7 +1257,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         // vision calls in flight (figures, reading) instead of being held ~100 s
                         const reg = await runPanoRegistrationOffThread({
                             images: [...surveyFrames, ...(match ? matchRingImages(match) : []), ...got.images], meshFiles: [extraction.geometryGlb],
-                            ...(registration ? { prior: registration } : {}), correspondences: match?.correspondences ?? [], faces: fitFaces(fit)
+                            ...(registration ? { prior: registration } : {}), correspondences: match?.correspondences ?? [], faces: fit ? fitFaces(fit) : []
                         }, { signal: io.signal, log: m => io.progress(m) });
                         if (reg.edge) {
                             edgeReg = reg.edge;
@@ -1269,7 +1276,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         if (reg.registration) {
                             registration = reg.registration;
                             // the surveyed elements are placed again through the edge or joint poses, so the built detail and the texture agree
-                            if (plan && surveyOut?.result) plan = { ...plan, ...locateSurveyElements(surveyOut.result, fit, registration) };
+                            if (fit && plan && surveyOut?.result) plan = { ...plan, ...locateSurveyElements(surveyOut.result, fit, registration) };
                         }
                     } catch (err) {
                         if (isAbort(err) || io.signal.aborted) throw err;
@@ -1278,7 +1285,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     // the narrow crops of the repeating runs and bands the reading will look at, fetched now, before the texture pass
                     // starts its long computations (the reading would otherwise fetch them while those hold the thread)
                     let runCrops: RunCrops | undefined;
-                    if (visionAvailable && plan?.located.length && t.ground) {
+                    if (fit && visionAvailable && plan?.located.length && t.ground) {
                         try {
                             runCrops = await fetchRunCrops({
                                 fit, located: plan.located, panos: found.panos, groundAt: (x, z) => t.ground!.groundAt(x, z), fallbackGroundY: structure!.groundY,
@@ -1293,7 +1300,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const cost: EvidenceCost = { ...discovery, imagesRequested: views.length, imagesFetched: got.images.length, fetchMs: got.elapsedMs };
                     run.summary('evidence').cost = { images: got.images.length + (match?.images ?? 0), visionCalls: match?.visionCalls ?? 0, seconds: round(got.elapsedMs / 1000 + (match?.seconds ?? 0), 1) };
                     return {
-                        status, value: { images: got.images, panos: found.panos, cost, ...(plan ? { plan } : {}), ...(registration ? { registration } : {}), ...(match ? { match } : {}), ...(runCrops ? { runCrops } : {}) }, source: `${got.images.length} of ${views.length} Street View images (© Google), kept in memory only${match ? `; ${match.images} ring views, ${match.correspondences.length} matched element pairs${registration ? `, ${describeRegistration(registration, match.correspondences.length)}` : ', no pose registered'}${edgeReg ? `; ${describeEdgeRegistration(edgeReg)}` : ''}${match.failures.length ? `; ${match.failures.length} matching call${match.failures.length === 1 ? '' : 's'} failed (${match.failures[0].slice(0, 80)})` : ''}` : ''}`,
+                        status, value: { images: got.images, panos: found.panos, cost, ...(plan ? { plan } : {}), ...(registration ? { registration } : {}), ...(match ? { match } : {}), ...(runCrops ? { runCrops } : {}) }, source: `${got.images.length} of ${views.length} Street View images (© Google), kept in memory only${fit ? '' : ", aimed at the structure's facades (no fit was accepted): they texture the remeshed scan"}${match ? `; ${match.images} ring views, ${match.correspondences.length} matched element pairs${registration ? `, ${describeRegistration(registration, match.correspondences.length)}` : ', no pose registered'}${edgeReg ? `; ${describeEdgeRegistration(edgeReg)}` : ''}${match.failures.length ? `; ${match.failures.length} matching call${match.failures.length === 1 ? '' : 's'} failed (${match.failures[0].slice(0, 80)})` : ''}` : ''}`,
                         ...(got.images.length ? {} : { reason: 'every Street View image failed to fetch' }),
                         degradations
                     };
@@ -1569,7 +1576,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     await warming;
                     const { views, failures, wideViews, tile, tileUnavailable, tileLoadMs, tileSha, occluder, context } = sources;
                     const viewsUnavailable = images.length ? (views.length ? undefined : `none of the ${images.length} grounding images decoded (${failures[0] ?? ''})`)
-                        : evidence ? `the Street View stage ${evidence.status === 'skipped' ? 'was skipped' : 'returned no image'}` : (visionAvailable ? 'the Street View stage did not run (no accepted fit to aim it at)' : 'no vision model is configured, so no Street View close-ups were fetched');
+                        : evidence ? `the Street View stage ${evidence.status === 'skipped' ? 'was skipped' : 'returned no image'}` : (visionAvailable ? 'the Street View stage did not run' : 'no vision model is configured, so no Street View close-ups were fetched');
                     const palette = palettesFromSurvey(run.state.materialHints?.faces);
                     const bestSample = Math.min(...images.map(i => i.nativeSampleM).filter(v => v > 0), ...(tile && Number.isFinite(tile.texelSizeM) && !views.length ? [tile.texelSizeM] : []));
                     const cap = deps.textures?.maxDensityTexelsPerMeter ?? 20;
@@ -2129,11 +2136,16 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     provenanceAfter: PROVENANCE.remeshed, reason: `${reason}, so the remeshed scan stands as the structure`, transient: false, runId, now: now()
                 }));
                 runner.skip('fit', reason, [rec]);
-                skipRest('there is no fitted structure to place detail on', ['evidence', 'project', 'vision', 'correct', 'detail', 'figures']);
+                skipRest('there is no fitted structure to place detail on', ['project', 'vision', 'correct', 'detail', 'figures']);
+                // the remeshed scan is still textured, with Street View aimed at the structure's facades (the no-fit rung)
+                startEvidence(undefined);
+                startTextures();
                 return out;
             }
-            // fit
-            const fitKey = stageKey('scan_fit/fit/v2', remeshed.cacheKey, sha256File(remeshed.rawClayGlb!), structure!.seed);
+            // fit: with the building's plan from Google vector data, and its neighbours', when the pick used it
+            const vf = structure!.vectorFootprint;
+            const fitPrior = vf?.used && t.vector ? footprintPriorFor(t.vector.raster.buildings, vf.featureIds) : undefined;
+            const fitKey = stageKey('scan_fit/fit/v3', remeshed.cacheKey, sha256File(remeshed.rawClayGlb!), structure!.seed, fitPrior ? sha256Bytes(Buffer.from(JSON.stringify(fitPrior))) : 'no-prior');
             run.keys.fit = fitKey;
             const negative = !bypass('fit') ? cache.negative('fit', fitKey) : undefined;
             const fitted = await runner.stage<ScanFitFitResult>({
@@ -2143,10 +2155,18 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const r = await deps.scanFit!.fit({
                         scanGlb: remeshed.rawClayGlb!, texturedGlb: extraction.texturedGlb, remeshGlb: remeshed.clayGlb, anchor: structure!.seed,
                         ...(remeshed.ownershipVotes ? { ownershipVotes: remeshed.ownershipVotes } : {}),
+                        ...(fitPrior ? { prior: fitPrior } : {}),
                         sourceLimits: out.sourceLimits!, signal: io.signal, onProgress: (f, m) => io.progress(`scan_fit: ${m}`, f), timeoutMs: STAGES.fit.budgetMs
                     });
                     run.cacheStatus.fit = r.cached ? 'hit' : 'miss';
                     const fit = r.value;
+                    const fp = fit.input.footprintPrior;
+                    if (fp) {
+                        io.progress(fp.used
+                            ? `scan_fit: plan from ${fp.source} (${Math.round(fp.areaM2)} m², fitted footprint IoU ${fp.fittedIoU.toFixed(2)}), roof levels ${fp.roofLevelsM.map(l => `${l.toFixed(1)} m`).join(', ')} measured in the scan`
+                            : `scan_fit: ${fp.source} was given, but the scan measured no roof level inside it; the plan was traced from the scan's walls`);
+                        if (fit.accepted && (fit.metrics.partyWallAreaM2 ?? 0) > 0) run.note(PROVENANCE.fittedUnobserved, `${(fit.metrics.partyWallAreaM2 ?? 0).toFixed(1)} m² of the rebuild stands against neighbouring buildings (${fp.source}): party walls, labelled, not counted as unobserved`);
+                    }
                     if (!fit.accepted) {
                         const failed = fit.gates.filter(g => !g.passed).map(g => `${g.gate} ${g.unit === 'm' ? `${(g.value * 100).toFixed(1)} cm` : g.value} ${g.comparison === '<=' ? '>' : '<'} ${g.unit === 'm' ? `${(g.threshold * 100).toFixed(1)} cm` : g.threshold}`).join('; ');
                         return {
@@ -2205,8 +2225,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 }
             });
             if (fitted.status !== 'committed' || !fitted.value) {
-                skipRest('there is no accepted fit to place detail on', ['evidence', 'project', 'vision', 'correct', 'detail', 'figures']);
-                // the remeshed scan still gets its textures (tile photo; no Street View was fetched for a rejected fit)
+                skipRest('there is no accepted fit to place detail on', ['project', 'vision', 'correct', 'detail', 'figures']);
+                // the remeshed scan still gets its textures: Street View aimed at the structure's facades (the no-fit rung: nothing is
+                // read from the images, they are projected onto the remeshed scan), then the tile photo where they do not reach
+                startEvidence(undefined);
                 startTextures();
                 return out;
             }

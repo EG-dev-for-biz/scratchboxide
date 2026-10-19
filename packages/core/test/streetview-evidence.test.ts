@@ -37,7 +37,8 @@ vi.mock('../src/node/spatial/StreetViewPoseRegistrar', async orig => ({
 import {
     discoverPanos, facadeGeometry, fetchViews, missingCredentials, type PanoCandidate, type SelectedView
 } from '../src/node/3d-engine/staged-location/streetview-evidence';
-import { selectViewsForFit } from '../src/node/3d-engine/staged-location/evidence-aim';
+import { faceTileTargets, selectViewsForFit, selectViewsForStructure } from '../src/node/3d-engine/staged-location/evidence-aim';
+import { footprintSurveyFaces } from '../src/node/3d-engine/staged-location/face-survey';
 import { projectSlots, uncertaintyPx, chartPoint } from '../src/node/3d-engine/staged-location/slot-projection';
 import { geodeticToScan, scanToGeodetic } from '../src/node/spatial/StreetViewSurveyPlanner';
 import { MAX_STREET_VIEW_IMAGES_PER_BUILDING } from '../src/common/spatial/staged-location-contracts';
@@ -141,6 +142,28 @@ describe('Street View evidence', () => {
         expect(n1.aimedSlotIds?.length).toBe(1);
         expect(views.every(v => v.panoId === 'N1')).toBe(true);
         expect(selectViewsForFit(panos, fit, STRUCTURE, GROUND, new Float32Array(0), 0)).toEqual([]);
+    });
+
+    it('with no accepted fit, aims at the structure\'s facades cut into tiles: every face a pano stands in front of is covered, none from behind', () => {
+        const pano = (id: string, x: number, z: number, date = '2025-06'): PanoCandidate => ({ panoId: id, lat: 0, lng: 0, x, z, date, copyright: '© Google' });
+        const faces = footprintSurveyFaces(STRUCTURE);
+        expect(faces.map(f => f.headingDeg).sort((a, b) => a - b)).toEqual([0, 90, 180, 270]);
+        // the 26.3 x 24.4 m north face is cut into tiles no larger than 8 m: 4 across, 4 up
+        const tiles = faceTileTargets(faces).filter(t => t.slotId.startsWith(faces.find(f => f.headingDeg === 0)!.faceId + ':'));
+        expect(tiles).toHaveLength(16);
+        for (const t of tiles) expect(t.outward[2]).toBeLessThan(-0.99);
+        const panos = [pano('N1', -6, -30), pano('N2', 8, -28), pano('S1', 0, 35), pano('FAR', 0, -190)];
+        const views = selectViewsForStructure(panos, faces, STRUCTURE, GROUND, new Float32Array(0));
+        expect(views.length).toBeGreaterThan(1);
+        expect(views.length).toBeLessThanOrEqual(MAX_STREET_VIEW_IMAGES_PER_BUILDING);
+        expect(views.some(v => v.panoId === 'FAR')).toBe(false);
+        // the north panos look south at the north face, the south one north at the south face
+        for (const v of views) {
+            if (v.panoId.startsWith('N')) { expect(v.headingDeg).toBeGreaterThan(110); expect(v.headingDeg).toBeLessThan(250); }
+            if (v.panoId === 'S1') expect(Math.min(v.headingDeg, 360 - v.headingDeg)).toBeLessThan(70);
+        }
+        expect(new Set(views.map(v => v.panoId))).toEqual(new Set(['N1', 'N2', 'S1']));
+        expect(selectViewsForStructure(panos, faces, STRUCTURE, GROUND, new Float32Array(0), 0)).toEqual([]);
     });
 
     it('fetches in parallel, times one image out while the others land, and keeps the bytes in memory only, undecoded', async () => {
