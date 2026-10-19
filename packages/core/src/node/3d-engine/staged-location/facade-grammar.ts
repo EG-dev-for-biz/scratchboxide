@@ -800,9 +800,11 @@ export function heldOutCheck(f: ReliefOrthoFacade, o: OrthoRaster, folds: Array<
     const c = { chamferPx: avg(x => x.control.chamferPx), gradNcc: avg(x => x.control.gradNcc) };
     const fails: string[] = [];
     if (used.length < 2 || px < 0.4 * all) fails.push(`the readings with parts hidden predicted openings in ${used.length} of ${out.length} folds (${all ? Math.round((100 * px) / all) : 0}% of the hidden facade): too little to judge`);
-    if (a.chamferPx > b.chamferPx - HELD_OUT_MIN_CHAMFER_GAIN_PX) fails.push(`held-out edge chamfer ${a.chamferPx.toFixed(2)} px against ${b.chamferPx.toFixed(2)} px for the relief's own lattice (needs ${HELD_OUT_MIN_CHAMFER_GAIN_PX} px less)`);
-    if (a.gradNcc < b.gradNcc) fails.push(`held-out gradient NCC ${a.gradNcc.toFixed(3)} against ${b.gradNcc.toFixed(3)} for the relief's own lattice`);
-    if (a.chamferPx > c.chamferPx - HELD_OUT_MIN_CHAMFER_GAIN_PX || a.gradNcc <= c.gradNcc) fails.push(`no better than its openings moved half a bay or storey out of place (chamfer ${a.chamferPx.toFixed(2)} against ${c.chamferPx.toFixed(2)} px, NCC ${a.gradNcc.toFixed(3)} against ${c.gradNcc.toFixed(3)})`);
+    else {
+        if (a.chamferPx > b.chamferPx - HELD_OUT_MIN_CHAMFER_GAIN_PX) fails.push(`held-out edge chamfer ${a.chamferPx.toFixed(2)} px against ${b.chamferPx.toFixed(2)} px for the relief's own lattice (needs ${HELD_OUT_MIN_CHAMFER_GAIN_PX} px less)`);
+        if (a.gradNcc < b.gradNcc) fails.push(`held-out gradient NCC ${a.gradNcc.toFixed(3)} against ${b.gradNcc.toFixed(3)} for the relief's own lattice`);
+        if (a.chamferPx > c.chamferPx - HELD_OUT_MIN_CHAMFER_GAIN_PX || a.gradNcc <= c.gradNcc) fails.push(`no better than its openings moved half a bay or storey out of place (chamfer ${a.chamferPx.toFixed(2)} against ${c.chamferPx.toFixed(2)} px, NCC ${a.gradNcc.toFixed(3)} against ${c.gradNcc.toFixed(3)})`);
+    }
     return {
         passed: fails.length === 0,
         why: fails.length ? fails.join('; ') : `held out (${used.length} of ${folds.length} readings with parts hidden): gradient NCC ${b.gradNcc.toFixed(3)} -> ${a.gradNcc.toFixed(3)}, edge chamfer ${b.chamferPx.toFixed(2)} -> ${a.chamferPx.toFixed(2)} px (out of place: ${c.chamferPx.toFixed(2)} px, ${c.gradNcc.toFixed(3)})`,

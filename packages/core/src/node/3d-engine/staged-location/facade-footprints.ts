@@ -124,7 +124,7 @@ export function footprintAgreement(g: FacadeGrammar, sectionSpans: Array<[number
 
 /** Fetches the extruded building footprints within `radiusM` of a place (zoom 17 feature tiles), in the tile frame. */
 export async function fetchFootprints(place: { lat: number; lng: number }, radiusM: number,
-    fetchTile: (x: number, y: number, z: number) => Promise<{ buildings: Array<{ id: string; ring: LngLat[]; properties: Record<string, any> }> }>): Promise<FootprintSource> {
+    fetchTile: (x: number, y: number, z: number) => Promise<{ buildings: Array<{ id: string; ring: LngLat[]; properties: Record<string, unknown> }> }>): Promise<FootprintSource> {
     const z = 17;
     const n = 2 ** z;
     const tx = (lng: number) => Math.floor(((lng + 180) / 360) * n);

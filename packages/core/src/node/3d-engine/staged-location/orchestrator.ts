@@ -1945,6 +1945,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     run.note(PROVENANCE.photoInferred, note);
                     return {
                         status: degradations.length ? 'degraded' : 'committed', value: v, layers: [layer], degradations, cached: entry.cached, builtAtMs: entry.builtAtMs,
+                        ...(rejected.length ? { reason: `${accepted.length} of ${v.facades.length} facades took a photo-inferred grammar; ${rejected.length} read ${rejected.length === 1 ? 'was' : 'were'} not used (facade ${rejected[0].facadeId}: ${rejected[0].reason.slice(0, 160)})` } : {}),
                         source: `facade grammar: ${accepted.length} of ${v.facades.length} facades took a photo-inferred grammar (${cells} openings, confidence ${confidence.toFixed(2)}); ${accepted.map(describe).join('; ')}${rejected.length ? `; ${rejected.length} rejected` : ''}${v.footprintsNote ? `; checked against ${v.footprintsNote}` : ''}`
                     };
                 },
