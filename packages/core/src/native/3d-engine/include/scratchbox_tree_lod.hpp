@@ -873,6 +873,102 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
     T.msMeasure = msSince(tPhase);
 }
 
+// ================================================================================================
+// the crown envelope: the soft shape whose normals a viewer gives the leaves
+// ================================================================================================
+
+/**
+ * An ellipsoid around a tree's delivered leaves, in the frame the leaves are in: centre, three semi-axes (radii[0] along
+ * the horizontal axis at yawRad from +x toward +z, radii[1] vertical, radii[2] the other horizontal axis). A viewer
+ * shades the leaves with its normals (the gradient of the ellipsoid), so the crown reads as one soft volume.
+ */
+struct CrownEllipsoid {
+    Vec3 centre;
+    std::array<double, 3> radii{0, 0, 0};
+    double yawRad{0};
+    size_t points{0};
+    bool valid() const { return points > 0 && radii[0] > 0 && radii[1] > 0 && radii[2] > 0; }
+};
+
+/**
+ * Fits a crown ellipsoid to points on the leaves (e.g. the hull points of every placed leaf cluster). The horizontal axes
+ * are the principal axes of the points' horizontal spread; along each axis the ellipsoid spans the `trim` and
+ * 1 - `trim` quantiles of the points (so a stray cluster does not inflate the crown), centred between them (so a crown
+ * leaning off its stem has its centre where its leaves are). Radii never fall below `minRadius`.
+ */
+inline CrownEllipsoid fitCrownEllipsoid(const std::vector<Vec3>& pts, double trim = 0.02, double minRadius = 0.25) {
+    CrownEllipsoid e;
+    if (pts.empty()) return e;
+    // the horizontal axes from the points near the crown: those within three median distances of the median point (a
+    // stray cluster far off would otherwise turn the axes toward itself)
+    const auto median = [](std::vector<double> v) {
+        const size_t h = v.size() / 2;
+        std::nth_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(h), v.end());
+        return v[h];
+    };
+    std::vector<double> xs, zs;
+    xs.reserve(pts.size()); zs.reserve(pts.size());
+    for (const auto& p : pts) { xs.push_back(p.x); zs.push_back(p.z); }
+    const double medX = median(xs), medZ = median(zs);
+    std::vector<double> dist;
+    dist.reserve(pts.size());
+    for (const auto& p : pts) dist.push_back(std::hypot(p.x - medX, p.z - medZ));
+    const double keep = 3.0 * std::max(1e-6, median(dist));
+    double mx = 0, mz = 0, kept = 0;
+    for (size_t i = 0; i < pts.size(); ++i) if (dist[i] <= keep) { mx += pts[i].x; mz += pts[i].z; kept += 1; }
+    mx /= kept;
+    mz /= kept;
+    double cxx = 0, cxz = 0, czz = 0;
+    for (size_t i = 0; i < pts.size(); ++i) {
+        if (dist[i] > keep) continue;
+        const double dx = pts[i].x - mx, dz = pts[i].z - mz;
+        cxx += dx * dx; cxz += dx * dz; czz += dz * dz;
+    }
+    // principal horizontal axis (angle from +x toward +z); a round crown keeps yaw 0
+    const double yaw = (std::abs(cxz) < 1e-12 && std::abs(cxx - czz) < 1e-12) ? 0.0 : 0.5 * std::atan2(2.0 * cxz, cxx - czz);
+    const double cy = std::cos(yaw), sy = std::sin(yaw);
+    std::array<std::vector<double>, 3> along;
+    for (auto& a : along) a.reserve(pts.size());
+    for (const auto& p : pts) {
+        const double dx = p.x - mx, dz = p.z - mz;
+        along[0].push_back(dx * cy + dz * sy);
+        along[1].push_back(p.y);
+        along[2].push_back(-dx * sy + dz * cy);
+    }
+    const double t = std::clamp(trim, 0.0, 0.49);
+    std::array<double, 3> mid{};
+    for (int a = 0; a < 3; ++a) {
+        auto& v = along[static_cast<size_t>(a)];
+        std::sort(v.begin(), v.end());
+        const auto at = [&](double q) {
+            const double f = q * static_cast<double>(v.size() - 1);
+            const size_t i = static_cast<size_t>(std::floor(f));
+            const size_t j = std::min(v.size() - 1, i + 1);
+            return v[i] + (v[j] - v[i]) * (f - static_cast<double>(i));
+        };
+        const double lo = at(t), hi = at(1.0 - t);
+        mid[static_cast<size_t>(a)] = 0.5 * (lo + hi);
+        e.radii[static_cast<size_t>(a)] = std::max(minRadius, 0.5 * (hi - lo));
+    }
+    e.centre = Vec3(static_cast<float>(mx + mid[0] * cy - mid[2] * sy), static_cast<float>(mid[1]), static_cast<float>(mz + mid[0] * sy + mid[2] * cy));
+    e.yawRad = yaw;
+    e.points = pts.size();
+    return e;
+}
+
+/** The crown ellipsoid of a tree's level-0 leaves: the hull points of each placed cluster, in the tree's frame. */
+inline CrownEllipsoid crownOfLeaves(const TreeLod& T, const ClusterLibrary& lib) {
+    std::vector<Vec3> pts;
+    for (size_t k = 0; k < T.clusters.size() && k < lib.variants.size(); ++k) {
+        const auto& support = lib.variants[k].level0.support;
+        for (const auto& in : T.clusters[k]) {
+            if (support.empty()) { pts.push_back(in.t); continue; }
+            for (const auto& sp : support) pts.push_back(detail::transformPoint(in.t, in.q, in.s, sp));
+        }
+    }
+    return fitCrownEllipsoid(pts);
+}
+
 } // namespace tree_lod
 } // namespace scratchbox
 

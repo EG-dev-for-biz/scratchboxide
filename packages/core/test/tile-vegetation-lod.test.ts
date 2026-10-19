@@ -89,6 +89,24 @@ describe('trees at three levels', () => {
                 for (const c of level.children ?? []) expect(JSON.stringify(json.nodes[c].extras)).not.toMatch(/measured/i);
             }
         }
+        // each tree carries the crown ellipsoid of its delivered leaves (in the tree node's frame = the tile frame), around
+        // its measured crown: centred over the stem (these crowns are round and upright), as wide as the crown, inside its height
+        for (const t of trees) {
+            const c = CROWNS.find(k => k.id === t.extras.sbTree.id)!;
+            const crown = t.extras.sbTree.crown;
+            expect(crown, `tree ${c.id} has a crown`).toBeTruthy();
+            expect(crown.fittedTo).toBe('leaf clusters');
+            expect(crown.points).toBeGreaterThan(100);
+            expect(Math.hypot(crown.centre[0] - c.stem[0], crown.centre[2] - c.stem[1])).toBeLessThan(1.0);
+            expect(Math.hypot(crown.leanM[0], crown.leanM[1])).toBeLessThan(1.0);
+            const radius = c.sectorRadii[0];
+            for (const r of [crown.radii[0], crown.radii[2]]) { expect(r).toBeGreaterThan(0.7 * radius); expect(r).toBeLessThan(1.3 * radius); }
+            expect(crown.centre[1] + crown.radii[1]).toBeLessThan(c.apex[1] + 1.0);
+            expect(crown.centre[1] - crown.radii[1]).toBeGreaterThan(c.supportY);
+            const l2 = t.children.map((k: number) => json.nodes[k]).find((n: any) => n.extras.sbLod.level === 2);
+            expect(l2.extras.sbLod.foliagePrimitives).toEqual([1]);
+            expect(json.meshes[l2.mesh].primitives).toHaveLength(2);
+        }
         // blade length follows the tree's height within the real range of leaf sizes
         const model = json.extras.sbTrees.clusterLibrary.leafSizeModel;
         expect(model.minM).toBeGreaterThanOrEqual(0.07);

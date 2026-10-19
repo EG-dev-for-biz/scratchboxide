@@ -1225,6 +1225,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     // component's render, which triggers "Cannot update a component while rendering
     // a different component". Compute `next` from the latest value, commit, then notify.
     const sceneDataRef = useLatest(sceneData);
+    /** The treeCrownShading scene data last passed to the tree level-of-detail controllers. */
+    const appliedTreeCrownShadingRef = React.useRef<Scene3DData['treeCrownShading']>(undefined);
     const selectedObjectIdRef = useLatest(selectedObjectId);
     const restoreSelectionRef = React.useRef<(id: string | null) => void>(() => undefined);
     const applySceneMutation = React.useCallback((
@@ -2093,10 +2095,15 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
                 // 12.9 Tree levels of detail: per-tree level, dither and culling for loaded trees GLBs (before the render).
                 let treeShadowCamera: THREE.Camera | null | undefined;
+                // scene data's treeCrownShading, passed on when it changes (so a controller's own setting holds until then)
+                const crownShading = sceneDataRef.current?.treeCrownShading;
+                const crownShadingChanged = crownShading !== appliedTreeCrownShadingRef.current;
+                appliedTreeCrownShadingRef.current = crownShading;
                 externalObjectsMapRef.current.forEach(model => {
                     const lod = model.parent ? (model.userData.sbTreeLod as TreeLodController | undefined) : undefined;
                     if (!lod) return;
                     if (treeShadowCamera === undefined) treeShadowCamera = findShadowCamera(stack.scene, !!stack.renderer?.shadowMap?.enabled);
+                    if (crownShadingChanged) lod.setCrownShading(crownShading);
                     lod.update(camera, treeShadowCamera);
                 });
 
@@ -2843,7 +2850,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     if (attach) liveScene.add(model);
                     model.updateMatrixWorld(true);
                     // A trees GLB (nodes with extras sbTree) gets its level-of-detail controller before the clay pass, so wood and leaves share one material.
-                    const lod = new TreeLodController(model);
+                    const lod = new TreeLodController(model, { crownShading: sceneDataRef.current?.treeCrownShading });
                     if (lod.hasTrees) model.userData.sbTreeLod = lod;
                     // A staged layer's textured twin keeps its photo material under the clay pass, and its confidence texture is loaded.
                     void prepareTexturedTwinModel(gltf);
