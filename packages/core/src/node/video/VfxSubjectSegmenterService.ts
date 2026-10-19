@@ -72,7 +72,7 @@ type FrameOutcome = { ok: true; model?: string; modelNote?: string } | { ok: fal
 // ============================================================================
 
 export class VfxSubjectSegmenterService {
-    private pythonBinary: string;
+    private readonly pythonOverride?: string;
     private scriptPath: string;
     private maxWorkers: number;
     private frameTimeoutMs: number;
@@ -83,11 +83,16 @@ export class VfxSubjectSegmenterService {
      * @param options.frameTimeoutMs time limit for one frame (default 120 s; the first frame includes the model load).
      */
     constructor(options?: { pythonBinary?: string; scriptPath?: string; maxWorkers?: number; frameTimeoutMs?: number }) {
-        this.pythonBinary = options?.pythonBinary ?? resolveRepoPython('PYTHON_BIN');
+        this.pythonOverride = options?.pythonBinary;
         this.scriptPath = options?.scriptPath
             ?? repoPath('scripts', 'segment_subject.py');
         this.maxWorkers = Math.max(1, Math.floor(options?.maxWorkers ?? Math.min(4, Math.max(1, Math.floor(os.cpus().length / 2)))));
         this.frameTimeoutMs = options?.frameTimeoutMs ?? 120_000;
+    }
+
+    /** The interpreter (the caller's, else the project's, resolved and checked at first use: PythonEnvironmentError). */
+    private get pythonBinary(): string {
+        return this.pythonOverride ?? resolveRepoPython({ modules: ['numpy', 'cv2', 'mediapipe'], purpose: 'The subject segmenter (scripts/segment_subject.py)' });
     }
 
     /**

@@ -17,6 +17,7 @@ import { assertWorkspaceRoot, PathTraversalError } from '../../packages/core/src
 import { FileKeyStore } from '../../packages/core/src/node/key-store';
 import { KEY_STORE_SERVICE, KEY_STORE_GEMINI_ACCOUNT } from '../../packages/core/src/node/gemini/gemini-client';
 import { preferSavedMapsKey } from '../../packages/core/src/node/spatial/maps-key-settings';
+import { logPythonEnvironment } from '../../packages/core/src/node/process/repo-python';
 import {
     WorkspaceConfigService,
     ProjectArtifactStore,
@@ -362,6 +363,8 @@ function createLaunchTokenMiddleware(token: string) {
  */
 export function createStandaloneServer(options: StandaloneServerOptions = {}): Express {
     loadEnvironmentSecrets();
+    // which Python the sidecars (masks, pose, depth) run on, or why they will fail and how to fix it
+    logPythonEnvironment();
     const app = express();
 
     const launchToken = resolveLaunchToken();

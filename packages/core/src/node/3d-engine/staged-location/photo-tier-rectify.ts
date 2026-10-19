@@ -42,6 +42,7 @@
  */
 
 import { execFile } from 'child_process';
+import { resolveRepoPython } from '../../process/repo-python';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -305,9 +306,7 @@ export function createPhotoTierCache(): PhotoTierCache {
 }
 
 export function photoTierPython(): string {
-    if (process.env.SCRATCHBOX_PYTHON && fs.existsSync(process.env.SCRATCHBOX_PYTHON)) return process.env.SCRATCHBOX_PYTHON;
-    const here = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
-    return findUp(here, '.venv/bin/python') ?? findUp(process.cwd(), '.venv/bin/python') ?? 'python3';
+    return resolveRepoPython({ modules: ['numpy', 'cv2'], purpose: 'The photo tier face rectification (face_rectify.py)' });
 }
 
 function runWorker(python: string, script: string, dir: string, timeoutMs: number, signal?: AbortSignal): Promise<void> {

@@ -15,6 +15,7 @@ import { resolveWithinRoot } from '../security/path-guard';
 import { buildScrubbedEnv } from '../security/sandbox-policy';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { resolveRepoPython } from '../process/repo-python';
 
 const execFileAsync = promisify(execFile);
 
@@ -130,7 +131,8 @@ const fingerprintMemo = new Map<string, { signature: string; fingerprint: string
 
 export class NativePythonRunnerService {
     private static instance?: NativePythonRunnerService;
-    private pythonExecutable: string;
+    private readonly customPython?: string;
+    private resolvedPython?: string;
     private moduleDirectory: string;
 
     public static getInstance(): NativePythonRunnerService {
@@ -141,7 +143,7 @@ export class NativePythonRunnerService {
     }
 
     constructor(customPython?: string, customModuleDir?: string) {
-        this.pythonExecutable = customPython || this.resolvePythonExecutable();
+        this.customPython = customPython || undefined;
         this.moduleDirectory = customModuleDir || this.resolveModuleDirectory();
     }
 
@@ -159,36 +161,6 @@ export class NativePythonRunnerService {
         return process.cwd();
     }
 
-    /**
-     * Locate the preferred Python interpreter (.venv first, then system).
-     */
-    private resolvePythonExecutable(): string {
-        if (process.env.SCRATCHBOX_PYTHON && fs.existsSync(process.env.SCRATCHBOX_PYTHON)) {
-            return process.env.SCRATCHBOX_PYTHON;
-        }
-
-        const repoRoot = this.resolveRepoRoot();
-        const baseDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
-        const candidatePaths = [
-            path.resolve(repoRoot, '.venv/bin/python'),
-            path.resolve(repoRoot, '.venv/bin/python3'),
-            path.resolve(process.cwd(), '.venv/bin/python'),
-            path.resolve(process.cwd(), '.venv/bin/python3'),
-            path.resolve(baseDir, '../../../../../.venv/bin/python'),
-            path.resolve(baseDir, '../../../../.venv/bin/python'),
-            '/opt/homebrew/bin/python3',
-            '/usr/local/bin/python3',
-            'python3'
-        ];
-
-        for (const p of candidatePaths) {
-            if (p.includes('/') && fs.existsSync(p)) {
-                return p;
-            }
-        }
-        return 'python3';
-    }
-
     private resolveEngineDir(): string {
         return path.resolve(this.resolveRepoRoot(), 'packages/core/src/native/3d-engine');
     }
@@ -202,6 +174,11 @@ export class NativePythonRunnerService {
 
     public getPythonExecutable(): string {
         return this.pythonExecutable;
+    }
+
+    /** The interpreter: the caller's, else SCRATCHBOX_PYTHON / the project's .venv (resolveRepoPython), at first use. */
+    private get pythonExecutable(): string {
+        return this.customPython ?? (this.resolvedPython ??= resolveRepoPython({ purpose: 'The Python 3D engine' }));
     }
 
     public getModuleDirectory(): string {
