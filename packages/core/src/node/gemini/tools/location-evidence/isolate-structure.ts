@@ -56,6 +56,7 @@ import {
     type ResolvedPlace, type StagedExtraction, type StagedLocationDeps
 } from '../../../3d-engine/staged-location/orchestrator';
 import { createStagedLocationDeps } from '../../../3d-engine/staged-location/staged-location-tool';
+import { glbBounds } from '../../../3d-engine/staged-location/staged-artifact';
 
 export const ISOLATE_STRUCTURE_TOOL = 'location_isolate_structure';
 
@@ -130,6 +131,8 @@ export type FootprintSource = 'vector-footprint' | 'scan-geometry' | 'mask-vote'
 export interface AreaRecord {
     part: string;
     areaM2: number;
+    /** plan: footprint area on the ground (1 m cells); surface: area of the triangles themselves (walls included). */
+    areaKind: 'plan' | 'surface';
     reasonCode: string;
     reason: string;
     /** Further measurements of the part (heights, triangle counts, positions). */
@@ -325,7 +328,7 @@ export function adjacentMassesRemoved(pick: StructurePickResult, ground: GroundM
             ? `a lower part attached to the structure (below its core height of ${pick.coreHeightM} m), left out as a low attachment`
             : vf?.used ? `raised scan beyond Google vector footprint ${vf.featureIds.join(', ')} grown by ${FOOTPRINT_TOLERANCE_M} m: the neighbouring building past the party wall`
             : `a raised mass the structure rule separates from it (a narrow neck the opening cuts, or a height step of more than 3 m between parts)`;
-        out.push({ part: lowAttachment ? 'low attachment' : 'adjacent raised mass', areaM2: cells * cell * cell, reasonCode, reason, contact, detail: { contactM: contact * cell, maxHeightM: Math.round(hmax * 100) / 100 } });
+        out.push({ part: lowAttachment ? 'low attachment' : 'adjacent raised mass', areaKind: 'plan', areaM2: cells * cell * cell, reasonCode, reason, contact, detail: { contactM: contact * cell, maxHeightM: Math.round(hmax * 100) / 100 } });
     }
     return out.sort((a, b) => b.contact - a.contact).slice(0, 12).map(({ contact: _c, ...r }) => r);
 }
@@ -640,7 +643,7 @@ export async function runIsolateStructure(request: IsolateStructureRequest, deps
 
     // kept
     kept.push({
-        part: 'structure footprint', areaM2: pick.areaM2,
+        part: 'structure footprint', areaKind: 'plan', areaM2: pick.areaM2,
         reasonCode: pick.footprintSource === 'vector-footprint' ? 'within_vector_footprint' : 'structure_rule',
         reason: pick.footprintSource === 'vector-footprint' && vf
             ? `the scan's cells ${STRUCTURE_MIN_HEIGHT_M} m or more above the ground within ${FOOTPRINT_TOLERANCE_M} m of Google vector footprint ${vf.featureIds.join(', ')} (${Math.round(vf.areaM2)} m², ${Math.round(vf.raisedShare * 100)}% of it raised in the scan)`
@@ -649,10 +652,10 @@ export async function runIsolateStructure(request: IsolateStructureRequest, deps
     });
     let enclosed = 0;
     if (terrain.canopy) for (let c = 0; c < fpMask.length; c++) if (pick.footprintMask[c] === PICK_STRUCTURE && terrain.canopy[c]) enclosed++;
-    if (enclosed) kept.push({ part: 'enclosed tree canopy', areaM2: enclosed * terrain.cellMeters ** 2, reasonCode: 'canopy_enclosed_by_structure', reason: 'tree canopy the structure encloses (a roof garden or a courtyard planting the street cannot reach without crossing the structure) is part of it' });
-    if (typeof iso.groundPatch?.area_m2 === 'number') kept.push({ part: 'ground apron', areaM2: round3(iso.groundPatch.area_m2), reasonCode: 'apron', reason: `the ground within ${iso.apron_m ?? 4} m of the footprint, so the structure stands on its street`, detail: { triangles: iso.groundPatch.triangles } });
+    if (enclosed) kept.push({ part: 'enclosed tree canopy', areaKind: 'plan', areaM2: enclosed * terrain.cellMeters ** 2, reasonCode: 'canopy_enclosed_by_structure', reason: 'tree canopy the structure encloses (a roof garden or a courtyard planting the street cannot reach without crossing the structure) is part of it' });
+    if (typeof iso.groundPatch?.area_m2 === 'number') kept.push({ part: 'ground apron', areaKind: 'surface', areaM2: round3(iso.groundPatch.area_m2), reasonCode: 'apron', reason: `the ground within ${iso.apron_m ?? 4} m of the footprint, so the structure stands on its street`, detail: { triangles: iso.groundPatch.triangles } });
     for (const c of own?.clusters ?? []) {
-        const rec: AreaRecord = { part: c.change === 'joined' ? 'mask-vote addition' : 'mask-vote removal', areaM2: round3(Number(c.area_m2)), reasonCode: c.change === 'joined' ? 'vote_joined' : 'vote_left',
+        const rec: AreaRecord = { part: c.change === 'joined' ? 'mask-vote addition' : 'mask-vote removal', areaKind: 'surface', areaM2: round3(Number(c.area_m2)), reasonCode: c.change === 'joined' ? 'vote_joined' : 'vote_left',
             reason: c.change === 'joined' ? 'outlined as part of the structure in the views that see it, though the geometric rules left it out' : 'outlined as not part of the structure in the views that see it, though the geometric rules took it',
             detail: { triangles: c.triangles, bearingFromAnchorDeg: c.bearingFromAnchorDeg, distanceFromAnchorM: c.distanceFromAnchor_m, aboveTerrainM: c.aboveTerrain_m } };
         (c.change === 'joined' ? kept : removed).push(rec);
@@ -660,22 +663,22 @@ export async function runIsolateStructure(request: IsolateStructureRequest, deps
     // removed
     removed.push(...adjacentMassesRemoved(pick, terrain));
     const canopyNear = cellsNearStructure(pick, terrain, PICK_CANOPY, 4);
-    if (canopyNear) removed.push({ part: 'tree canopy at the structure', areaM2: canopyNear, reasonCode: 'canopy_masked', reason: 'cells tile_vegetation classifies as tree canopy within 4 m of the structure, left out of its footprint' });
+    if (canopyNear) removed.push({ part: 'tree canopy at the structure', areaKind: 'plan', areaM2: canopyNear, reasonCode: 'canopy_masked', reason: 'cells tile_vegetation classifies as tree canopy within 4 m of the structure, left out of its footprint' });
     const la = iso.lowAttachment;
-    if (la && la.trianglesDropped > 0) removed.push({ part: 'low attachment (triangles)', areaM2: round3(la.area_m2), reasonCode: 'low_attachment', reason: `scan below the core height of ${la.coreHeight_m} m on cells the pick left out as a low attachment`, detail: { triangles: la.trianglesDropped } });
-    if (Number(iso.interiorFloorsDropped) > 0) removed.push({ part: 'interior floors', areaM2: 0, reasonCode: 'interior_floor', reason: 'surfaces inside the structure below its roof that no view can see', detail: { triangles: iso.interiorFloorsDropped } });
+    if (la && la.trianglesDropped > 0) removed.push({ part: 'low attachment (triangles)', areaKind: 'plan', areaM2: round3(la.area_m2), reasonCode: 'low_attachment', reason: `scan below the core height of ${la.coreHeight_m} m on cells the pick left out as a low attachment`, detail: { triangles: la.trianglesDropped } });
+    if (Number(iso.interiorFloorsDropped) > 0) removed.push({ part: 'interior floors', areaKind: 'surface', areaM2: 0, reasonCode: 'interior_floor', reason: 'surfaces inside the structure below its roof that no view can see', detail: { triangles: iso.interiorFloorsDropped } });
     const bg = iso.belowGround;
-    if (bg && bg.dropped > 0) removed.push({ part: 'below ground', areaM2: 0, reasonCode: 'below_ground', reason: `scan more than ${bg.margin_m} m below the ground (y < ${bg.clipY})`, detail: { triangles: bg.dropped, cut: bg.cut } });
-    if (Number(own?.leftAsOrphans) > 0) removed.push({ part: 'orphaned pieces', areaM2: 0, reasonCode: 'vote_orphan', reason: 'pieces the vote cut off from the structure, holding nothing it kept', detail: { triangles: own!.leftAsOrphans, pieces: own!.orphanPieces } });
+    if (bg && bg.dropped > 0) removed.push({ part: 'below ground', areaKind: 'surface', areaM2: 0, reasonCode: 'below_ground', reason: `scan more than ${bg.margin_m} m below the ground (y < ${bg.clipY})`, detail: { triangles: bg.dropped, cut: bg.cut } });
+    if (Number(own?.leftAsOrphans) > 0) removed.push({ part: 'orphaned pieces', areaKind: 'surface', areaM2: 0, reasonCode: 'vote_orphan', reason: 'pieces the vote cut off from the structure, holding nothing it kept', detail: { triangles: own!.leftAsOrphans, pieces: own!.orphanPieces } });
     if (strip) {
         const crowns = readCrowns(strip.crownsJson);
         const trees = crowns.filter(c => c.status === 'tree' && insidePolygon(c.stem, roiPolygon));
-        if (trees.length) removed.push({ part: 'trees', areaM2: round3(trees.reduce((s, c) => s + c.areaM2, 0)), reasonCode: 'measured_tree', reason: `${trees.length} tree crown${trees.length === 1 ? '' : 's'} measured in the photo tiles within ${ISOLATE_TREE_REACH_M} m of the structure, taken out of the scan so no crown joins it (this tool does not regrow them)`, detail: { crownIds: trees.map(c => c.id) } });
+        if (trees.length) removed.push({ part: 'trees', areaKind: 'plan', areaM2: round3(trees.reduce((s, c) => s + c.areaM2, 0)), reasonCode: 'measured_tree', reason: `${trees.length} tree crown${trees.length === 1 ? '' : 's'} measured in the photo tiles within ${ISOLATE_TREE_REACH_M} m of the structure, taken out of the scan so no crown joins it (this tool does not regrow them)`, detail: { crownIds: trees.map(c => c.id) } });
         for (const c of crowns) {
             if (c.ground?.reasonCode !== 'raised_level_not_under_it') continue;
             rooftop.push({ crownId: c.id, stem: c.stem, apexY: c.apex[1], areaM2: round3(c.areaM2), reasonCode: c.ground.reasonCode, reason: c.ground.reason });
         }
-        if (rooftop.length) kept.push({ part: 'rooftop canopy', areaM2: round3(rooftop.reduce((s, c) => s + c.areaM2, 0)), reasonCode: 'raised_level_not_under_it', reason: 'crowns at roof level over a roof the scan replaced with the planting: kept as scanned, not regrown from the street', detail: { crownIds: rooftop.map(c => c.crownId) } });
+        if (rooftop.length) kept.push({ part: 'rooftop canopy', areaKind: 'plan', areaM2: round3(rooftop.reduce((s, c) => s + c.areaM2, 0)), reasonCode: 'raised_level_not_under_it', reason: 'crowns at roof level over a roof the scan replaced with the planting: kept as scanned, not regrown from the street', detail: { crownIds: rooftop.map(c => c.crownId) } });
     }
 
     if (mismatch) {
@@ -717,7 +720,7 @@ export function digestOf(r: IsolateStructureResult): string {
     }
     if (r.ground) parts.push(`ground ${r.ground.source} at y ${r.ground.heightM} m`);
     if (r.rooftopCanopyKeptAsScanned.length) parts.push(`${r.rooftopCanopyKeptAsScanned.length} rooftop crown(s) kept as scanned`);
-    const removed = r.removed.filter(x => x.areaM2 > 0);
+    const removed = r.removed.filter(x => x.areaKind === 'plan' && x.areaM2 > 0);
     if (removed.length) parts.push(`removed ${removed.map(x => `${x.part} ${Math.round(x.areaM2)} m² (${x.reasonCode})`).join(', ')}`);
     return `${parts.join('; ')}.`;
 }
@@ -729,20 +732,22 @@ function scene(r: IsolateStructureResult): CanvasArtifact | undefined {
         glbs.push({ id: 'isolated-clay', g: r.structure.clayGlb, role: 'hero', label: 'isolated structure (clay)' });
     } else if (r.district?.clayGlb) glbs.push({ id: 'district-clay', g: r.district.clayGlb, role: 'environment', label: `district (${r.reasonCode})` });
     if (!glbs.length) return undefined;
-    // the clay twin beside the textured isolate, east of it by its width and a gap
-    const poly = r.footprint?.polygon ?? [];
-    const xs = poly.map(p => p[0]), zs = poly.map(p => p[1]);
-    const minX = xs.length ? Math.min(...xs) : -30, maxX = xs.length ? Math.max(...xs) : 30, minZ = zs.length ? Math.min(...zs) : -30, maxZ = zs.length ? Math.max(...zs) : 30;
-    const width = maxX - minX + 8;
+    // the clay twin beside the textured isolate, east of it by the isolate's width and a gap, both standing on y = 0
+    const bounds = glbs.map(x => glbBounds(x.g.path) ?? { min: [-30, 0, -30] as [number, number, number], max: [30, 30, 30] as [number, number, number] });
     const gy = r.ground?.heightM ?? 0;
-    const h = r.structure?.heightM ?? 20;
-    const cx = r.structure ? (minX + maxX + width) / 2 : (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
-    const span = Math.max(r.structure ? 2 * width : maxX - minX, maxZ - minZ, h);
+    const offsetX = glbs.length > 1 ? bounds[0].max[0] - bounds[1].min[0] + 10 : 0;
+    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    bounds.forEach((bb, i) => { for (let k = 0; k < 3; k++) { const o = k === 0 && i === 1 ? offsetX : k === 1 ? -gy : 0; lo[k] = Math.min(lo[k], bb.min[k] + o); hi[k] = Math.max(hi[k], bb.max[k] + o); } });
+    const target: [number, number, number] = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 3, (lo[2] + hi[2]) / 2];
+    const radius = Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) / 2;
+    const dist = (radius / Math.sin((45 * Math.PI) / 360)) * 1.05;
+    const el = (28 * Math.PI) / 180, az = (20 * Math.PI) / 180;
+    const camera = { position: [target[0] + dist * Math.cos(el) * Math.sin(az), target[1] + dist * Math.sin(el), target[2] + dist * Math.cos(el) * Math.cos(az)].map(round3), target: target.map(round3), fov: 45 };
     const tag = crypto.createHash('sha256').update(glbs.map(x => x.g.url).join('|')).digest('hex').slice(0, 10);
     const objects = glbs.map(x => ({
         id: `iso-${tag}-${x.id}`,
         content: { type: '3d-model', durableUri: x.g.url, mimeType: 'model/gltf-binary', metadata: { source: 'location_isolate_structure', role: x.role, description: x.label, metricScale: 1.0, groundDatumMeters: 0.0, resolvedAddress: r.place.resolvedAddress, outcome: r.outcome } },
-        space: { spatial3d: { x: x.id === 'isolated-clay' ? width : 0, y: -gy, z: 0 } },
+        space: { spatial3d: { x: x.id === 'isolated-clay' ? round3(offsetX) : 0, y: round3(-gy), z: 0 } },
         time: { startMs: 0, durationMs: 20000 },
         lineage: { version: 1 }
     }));
@@ -759,8 +764,7 @@ function scene(r: IsolateStructureResult): CanvasArtifact | undefined {
             cameraMode: 'orbit',
             environment: { skybox: 'studio', lighting: 'studio', ground: false },
             groundDatum: { coordinateSystem: 'metric-enu', units: 'meters', scale: 1.0, groundDatumMeters: 0.0, groundLogic: 'shared-metric-ground' },
-            geoAnchor: { lat: r.place.lat, lng: r.place.lng },
-            camera: { position: [cx + span * 0.8, h * 0.6 + span * 0.55, cz + span * 0.9], target: [cx, h * 0.4, cz], fov: 45 },
+            camera,
             objects
         }
     } as unknown as CanvasArtifact;
