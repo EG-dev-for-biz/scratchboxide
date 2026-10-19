@@ -57,6 +57,7 @@ import {
 } from '../../../3d-engine/staged-location/orchestrator';
 import { createStagedLocationDeps } from '../../../3d-engine/staged-location/staged-location-tool';
 import { glbBounds } from '../../../3d-engine/staged-location/staged-artifact';
+import { checkDimensions, plausibilitySummary, type PlausibilityFlag } from '../../../../common/spatial/plausibility';
 
 export const ISOLATE_STRUCTURE_TOOL = 'location_isolate_structure';
 
@@ -74,7 +75,7 @@ export const ISOLATE_STRUCTURE_TOOL_DECLARATION: ToolDeclaration = {
         'exactly that footprint; when a vision model is configured, a multi-view mask vote decides which raised triangles belong to the structure. ' +
         'Returns the footprint polygon (tile frame and lat/lng) and area, the footprint source (vector-footprint, scan-geometry or mask-vote) and its IoU ' +
         'with the scan, the ground height and how it was measured, the areas kept and removed around it with the reason for each, and rooftop canopy kept as ' +
-        'scanned. It never returns fragments: when the structure cannot be contained (outcome containment_failed), when no structure stands at the place, ' +
+        'scanned, and plausibility flags for heights outside their typical range (flags only). It never returns fragments: when the structure cannot be contained (outcome containment_failed), when no structure stands at the place, ' +
         'or when the isolate does not match the pick (outcome district_fallback), it returns the district around it, remeshed whole, with the reason. ' +
         'Reuses the staged-location caches, so a place already built with google_3d_tiles_get_clay comes back quickly. Mounts the result in the viewport.',
     parameters: {
@@ -205,6 +206,8 @@ export interface IsolateStructureResult {
     kept: AreaRecord[];
     removed: AreaRecord[];
     rooftopCanopyKeptAsScanned: RooftopCanopyRecord[];
+    /** The structure's heights outside their typical range (plausibility.ts): flags only, nothing is changed. */
+    plausibility: PlausibilityFlag[];
     notes: string[];
     timingsMs: Record<string, number>;
     digest: string;
@@ -496,11 +499,12 @@ export async function runIsolateStructure(request: IsolateStructureRequest, deps
             return { rawGlbPath, remeshError: errorMessage(err) };
         } finally { lap('district_remesh', td); }
     };
-    const finish = (r: Omit<IsolateStructureResult, 'schema' | 'place' | 'target' | 'extraction' | 'kept' | 'removed' | 'rooftopCanopyKeptAsScanned' | 'notes' | 'timingsMs' | 'digest'>): IsolateStructureResult => {
+    const plausibility: PlausibilityFlag[] = [];
+    const finish = (r: Omit<IsolateStructureResult, 'schema' | 'place' | 'target' | 'extraction' | 'kept' | 'removed' | 'rooftopCanopyKeptAsScanned' | 'plausibility' | 'notes' | 'timingsMs' | 'digest'>): IsolateStructureResult => {
         timings.total = now() - t0;
         const full: IsolateStructureResult = {
             schema: 'scratchbox.isolate-structure/1', place: placeOut, target: request.target, extraction: extractionOut,
-            ...r, kept, removed, rooftopCanopyKeptAsScanned: rooftop, notes, timingsMs: timings, digest: ''
+            ...r, kept, removed, rooftopCanopyKeptAsScanned: rooftop, plausibility, notes, timingsMs: timings, digest: ''
         };
         full.digest = digestOf(full);
         return full;
@@ -631,6 +635,12 @@ export async function runIsolateStructure(request: IsolateStructureRequest, deps
         ...(maskVote ? { maskVote } : {}),
         ...(check ? { isolateCheck: { iou: round3(check.iou), precision: round3(check.precision), recall: round3(check.recall), roofed: round3(check.roofed), holdsSeed: check.holdsSeed, isolatedAreaM2: check.areaM2, ok: check.ok } } : {})
     };
+    // the heights against their typical range: the scan's (above the pick's ground) and the vector data's
+    const vectorHeight = vf?.featureIds.length && sizing.vector ? sizing.vector.raster.buildings.find(b => b.id === vf.featureIds[0])?.heightM : undefined;
+    plausibility.push(...checkDimensions([
+        { dimension: 'buildingHeight', valueM: pick.heightM, label: 'scan height above the ground', cause: 'structure pick or ground' },
+        { dimension: 'buildingHeight', valueM: vectorHeight, label: 'vector height', cause: 'vector data' }
+    ]));
     if (!vf) notes.push(`footprint from the scan's geometry alone: ${sizing.vectorError ? `Google vector data could not be read (${sizing.vectorError})` : 'no Google vector data was available'}`);
     const walkable = terrain.walkable ? terrain.walkable.reduce((s, v) => s + v, 0) * terrain.cellMeters ** 2 : undefined;
     const groundOut: NonNullable<IsolateStructureResult['ground']> = {
@@ -721,6 +731,7 @@ export function digestOf(r: IsolateStructureResult): string {
         parts.push(`Did not isolate the structure at ${place} (${r.outcome}, ${r.reasonCode}): ${r.reason}`);
     }
     if (r.ground) parts.push(`ground ${r.ground.source} at y ${r.ground.heightM} m`);
+    if (r.plausibility.length) parts.push(plausibilitySummary(r.plausibility));
     if (r.rooftopCanopyKeptAsScanned.length) parts.push(`${r.rooftopCanopyKeptAsScanned.length} rooftop crown(s) kept as scanned`);
     const removed = r.removed.filter(x => x.areaKind === 'plan' && x.areaM2 > 0);
     if (removed.length) parts.push(`removed ${removed.map(x => `${x.part} ${Math.round(x.areaM2)} m² (${x.reasonCode})`).join(', ')}`);
