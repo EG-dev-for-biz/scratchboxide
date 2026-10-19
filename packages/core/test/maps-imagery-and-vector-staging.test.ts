@@ -157,7 +157,7 @@ describe('GoogleVectorTileService (3D Vector Tiles Staging)', () => {
             features: [
                 {
                     types: ['FEATURE_TYPE_BUILDING'],
-                    geometry: { extrudedAreas: [{ maxZ: 400, area: { type: 'TRIANGLE_FAN', vertexOffsets: { xOffsets: [2048, -100, 200, 0, -200], yOffsets: [2048, -100, 0, 200, 0] } } }] }
+                    geometry: { extrudedAreas: [{ maxZ: 400, area: { type: 'TRIANGLE_FAN', vertexOffsets: { xOffsets: [1948, 200, 0, -200], yOffsets: [1948, 0, 200, 0] } } }] }
                 },
                 {
                     types: ['FEATURE_TYPE_INFRASTRUCTURE', 'FEATURE_TYPE_ROAD'],
