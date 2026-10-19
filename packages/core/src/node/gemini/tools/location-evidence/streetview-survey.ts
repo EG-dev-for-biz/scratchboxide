@@ -255,6 +255,17 @@ const r3 = (v: number) => Math.round(v * 1000) / 1000;
 const r6 = (v: number) => Math.round(v * 1e6) / 1e6;
 const angleBetween = (a: number, b: number) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
 
+/**
+ * Every facade of the structure as a survey face. footprintSurveyFaces keeps the first four (the staged survey's budget);
+ * a structure whose outline has more sides (a corner lot, a chamfered block) would lose faces that way, so the faces are
+ * taken four headings at a time through it and all kept.
+ */
+export function structureFaces(structure: StructurePickResult): SurveyFaceTarget[] {
+    const out: SurveyFaceTarget[] = [];
+    for (let k = 0; k < structure.facadeHeadingsDeg.length; k += 4) out.push(...footprintSurveyFaces({ ...structure, facadeHeadingsDeg: structure.facadeHeadingsDeg.slice(k, k + 4) }));
+    return out;
+}
+
 /** The structure's faces to cover: those nearest each requested heading (within FACE_MATCH_TOLERANCE_DEG), else all. */
 export function facesToCover(all: SurveyFaceTarget[], headingsDeg?: number[]): { faces: SurveyFaceTarget[]; unmatched: Array<{ headingDeg: number; reason: string }> } {
     if (!headingsDeg?.length) return { faces: all, unmatched: [] };
@@ -291,8 +302,10 @@ export function planSurveyViews(
             added = true;
         }
     }
-    // a face skipped only because the staged survey's budget of four was spent, but given a view here, is not skipped
-    const skipped = base.skipped.filter(s => !views.some(v => v.faceId === s.faceId));
+    // a face skipped only because the staged survey's budget of four was spent, but given a view here, is not skipped; one
+    // still without a view says so in this call's terms
+    const skipped = base.skipped.filter(s => !views.some(v => v.faceId === s.faceId))
+        .map(s => (/image budget/.test(s.reason) ? { ...s, reason: `the ${maxViews} view${maxViews === 1 ? '' : 's'} asked for went to other faces first (the faces with the fewest panoramas choose first)` } : s));
     return { views, skipped, candidates };
 }
 
@@ -424,7 +437,7 @@ export async function runStreetViewSurvey(site: SurveySite, options: StreetViewS
     const maxViews = Math.max(1, Math.min(STREETVIEW_SURVEY_MAX_VIEWS, Math.floor(options.maxViews ?? STREETVIEW_SURVEY_DEFAULT_VIEWS)));
     const progress = deps.onProgress ?? (() => undefined);
 
-    const allFaces = footprintSurveyFaces(site.structure);
+    const allFaces = structureFaces(site.structure);
     const { faces, unmatched } = facesToCover(allFaces, options.faceHeadingsDeg);
     if (!faces.length) throw new StreetViewSurveyNoCoverageError(`none of the requested faces is a facade of the structure (${unmatched.map(u => u.reason).join('; ')})`);
 
@@ -582,7 +595,7 @@ export async function runStreetViewSurvey(site: SurveySite, options: StreetViewS
 // the site from the staged caches
 // ---------------------------------------------------------------------------------------------------------------------
 
-/** The triangles of the scan standing on the structure's cells (its footprint grown by one cell), tile frame. */
+/** The triangles of the scan standing on the structure's cells (its footprint grown by one cell) above the street (0.3 m), tile frame. */
 export function cropScanToStructure(scan: ScanMesh, structure: Pick<StructurePickResult, 'cells' | 'groundY'>): RenderMesh3D {
     const keep = (x: number, z: number) => {
         const cx = Math.floor(x), cz = Math.floor(z);
@@ -592,7 +605,7 @@ export function cropScanToStructure(scan: ScanMesh, structure: Pick<StructurePic
     const src = scan.mesh, idx: number[] = [];
     for (let t = 0; t < scan.triCount; t++) {
         const cx = scan.triCentroid[t * 3], cy = scan.triCentroid[t * 3 + 1], cz = scan.triCentroid[t * 3 + 2];
-        if (cy > structure.groundY - 0.5 && keep(cx, cz)) idx.push(src.indices[t * 3], src.indices[t * 3 + 1], src.indices[t * 3 + 2]);
+        if (cy > structure.groundY + 0.3 && keep(cx, cz)) idx.push(src.indices[t * 3], src.indices[t * 3 + 1], src.indices[t * 3 + 2]);
     }
     return { vertices: src.vertices, indices: Uint32Array.from(idx) };
 }

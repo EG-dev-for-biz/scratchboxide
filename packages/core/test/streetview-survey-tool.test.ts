@@ -33,7 +33,7 @@ import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { decodeJpegInMemory } from '../src/node/3d-engine/staged-location/photo-palette';
 import { imageContentSha256 } from '../src/node/image-codec-ffmpeg';
 import {
-    prepareSurveySite, runStreetViewSurvey, StreetViewSurveyCredentialsError, StreetViewSurveyNoCoverageError, cameraAngles, facesToCover,
+    prepareSurveySite, runStreetViewSurvey, structureFaces, StreetViewSurveyCredentialsError, StreetViewSurveyNoCoverageError, cameraAngles, facesToCover,
     type StreetViewSurveyDeps, type SurveySite
 } from '../src/node/gemini/tools/location-evidence/streetview-survey';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
@@ -313,6 +313,13 @@ describe('streetview_survey (synthetic street, recorded-style inputs, no network
         expect(err).toBeInstanceOf(StreetViewSurveyNoCoverageError);
         expect((err as StreetViewSurveyNoCoverageError).code).toBe('no_coverage');
     }, 120_000);
+
+    it('keeps every facade of a structure with more than four sides as a face', () => {
+        const eight = { ...site.structure, facadeHeadingsDeg: [0, 45, 90, 135, 180, 225, 270, 315] };
+        const faces = structureFaces(eight);
+        expect(faces.map(f => Math.round(f.headingDeg))).toEqual([0, 45, 90, 135, 180, 225, 270, 315]);
+        expect(new Set(faces.map(f => f.faceId)).size).toBe(8);
+    });
 
     it('reads heading, elevation and roll back from a camera basis', () => {
         const pitched = cameraAngles(castCamera({ eye: [0, 0, 0], headingDeg: 123, pitchDeg: 17, fovDeg: 60, widthPx: W, heightPx: H }));
