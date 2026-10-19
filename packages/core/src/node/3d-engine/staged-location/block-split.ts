@@ -34,6 +34,8 @@ import { FOOTPRINT_TOLERANCE_M, ISOLATE_CORE_GROW_M, openMask, STRUCTURE_MIN_HEI
 
 /** Surfaces this far above the terrain are raised (a kerb, a step and the ground's own noise are not). */
 export const SPLIT_RAISED_ABOVE_M = 0.5;
+/** Surfaces more than this below the terrain are below the street (tile_refine's isolate clips there too). */
+export const SPLIT_BELOW_GROUND_M = 0.3;
 /** Triangles whose normal is within this of horizontal (|n.y| below it) are walls. */
 export const SPLIT_WALL_NY = 0.7;
 /** A raised triangle in the open within this of a building's cells is that building's (tile_refine's core grow). */
@@ -253,16 +255,20 @@ export function labelTriangles(scan: Pick<ScanMesh, 'triCount' | 'triCentroid' |
         const c = k * nx + i;
         const gr = g.ground[c];
         const above = gr === gr ? y - gr : y - g.groundAt(x, z);
-        if (above < -0.3) { kind[t] = TRI_BELOW_GROUND; continue; }
-        if (opts.isTree?.(t) && above > SPLIT_RAISED_ABOVE_M) { kind[t] = TRI_TREE; continue; }
         const wall = Math.abs(scan.triNormal[t * 3 + 1]) < SPLIT_WALL_NY;
+        // a surface below the street is not a building's, but a wall may go down past it (the rear of a house on a slope,
+        // down to a yard lower than the street): walls are judged by where they stand, not by their height
+        if (above < -SPLIT_BELOW_GROUND_M && !wall) { kind[t] = TRI_BELOW_GROUND; continue; }
+        if (opts.isTree?.(t) && above > SPLIT_RAISED_ABOVE_M) { kind[t] = TRI_TREE; continue; }
         const raised = above > SPLIT_RAISED_ABOVE_M;
         let l = owner[c];
         if (l) {
             if (!raised && !wall) { kind[t] = TRI_GROUND; continue; }
             kind[t] = TRI_OWNED_CELL;
         } else {
-            l = raised ? near.label[c] : 0;
+            // outside its cells: raised surfaces within reach, and low walls (at or below the street) only right at its edge
+            l = raised || (wall && near.dist[c] <= cell) ? near.label[c] : 0;
+            if (!l && !raised && above < -SPLIT_BELOW_GROUND_M) { kind[t] = TRI_BELOW_GROUND; continue; }
             if (!l) { kind[t] = raised ? TRI_RAISED_UNOWNED : TRI_GROUND; continue; }
             // a wall in reach is the building's own facade only when it faces it: the way to the building's nearest cell runs
             // along the wall's normal (a wall running away from the building, the side of something beside it, is not)
@@ -536,10 +542,12 @@ export interface UnmappedStructure {
     centroid: Vec2;
     /** Labels of the buildings it touches. */
     touches: number[];
+    /** Share of its cells inside some vector footprint (0 without `inFootprint`). */
+    footprintShare: number;
 }
 
 /** Raised masses (STRUCTURE_MIN_HEIGHT_M or more, not tree canopy) no building owns, at least `minAreaM2`, largest first. */
-export function unmappedStructures(g: Grid, owner: Int32Array, minAreaM2 = 6): UnmappedStructure[] {
+export function unmappedStructures(g: Grid, owner: Int32Array, minAreaM2 = 6, inFootprint?: Uint8Array): UnmappedStructure[] {
     const { nx, nz, cellMeters: cell } = g;
     const N = nx * nz;
     const raised = (c: number) => !owner[c] && !g.canopy?.[c] && g.top[c] === g.top[c] && g.ground[c] === g.ground[c] && g.top[c] - g.ground[c] >= STRUCTURE_MIN_HEIGHT_M;
@@ -549,11 +557,12 @@ export function unmappedStructures(g: Grid, owner: Int32Array, minAreaM2 = 6): U
         if (seen[s] || !raised(s)) continue;
         const st = [s];
         seen[s] = 1;
-        let n = 0, h = 0, sx = 0, sz = 0;
+        let n = 0, h = 0, sx = 0, sz = 0, inFp = 0;
         const touches = new Set<number>();
         while (st.length) {
             const c = st.pop()!;
             n++;
+            if (inFootprint?.[c]) inFp++;
             h = Math.max(h, g.top[c] - g.ground[c]);
             const i = c % nx, k = (c / nx) | 0;
             sx += g.x0 + (i + 0.5) * cell; sz += g.z0 + (k + 0.5) * cell;
@@ -565,7 +574,7 @@ export function unmappedStructures(g: Grid, owner: Int32Array, minAreaM2 = 6): U
             }
         }
         const area = n * cell * cell;
-        if (area >= minAreaM2) out.push({ areaM2: area, heightM: Math.round(h * 100) / 100, centroid: [Math.round((sx / n) * 100) / 100, Math.round((sz / n) * 100) / 100], touches: [...touches].sort((a, b) => a - b) });
+        if (area >= minAreaM2) out.push({ areaM2: area, heightM: Math.round(h * 100) / 100, centroid: [Math.round((sx / n) * 100) / 100, Math.round((sz / n) * 100) / 100], touches: [...touches].sort((a, b) => a - b), footprintShare: Math.round((inFp / n) * 1000) / 1000 });
     }
     return out.sort((a, b) => b.areaM2 - a.areaM2);
 }

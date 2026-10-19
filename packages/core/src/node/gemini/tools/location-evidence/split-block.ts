@@ -201,7 +201,12 @@ export interface SplitBlockResult {
         /** Surface by what it is: ground, trees, raised scan no footprint owns, below ground, detached pieces, outside the grid. */
         surfaceByKindM2: Record<string, number>;
         /** Raised masses (3 m or more, not canopy) no building owns: an unmapped structure, or a footprint not split. */
-        unmappedStructures: Array<{ areaM2: number; heightM: number; centroid: Vec2; latLng: [number, number]; touches: string[]; withinFootprint?: string }>;
+        /**
+         * Raised masses (3 m or more, not canopy) no split building owns, those touching a split building first: with the
+         * share of their cells inside some vector footprint (about 0: a structure with no footprint; about 1: buildings outside
+         * the block, or a footprint not split) and the footprint holding their centroid.
+         */
+        unmappedStructures: Array<{ areaM2: number; heightM: number; centroid: Vec2; latLng: [number, number]; touches: string[]; footprintShare: number; withinFootprint?: string }>;
     };
     overview: { clayGlb: GlbOutput; colours: Record<string, string> };
     partition: { inputTriangles: number; outputTriangles: number; everyTriangleOnce: boolean; byKind: Record<string, number> };
@@ -454,7 +459,7 @@ export async function runSplitBlock(request: SplitBlockRequest, deps: SplitBlock
     const members: Member[] = fits.map((f, i) => ({ report: f.report, parts: partsInScan(f.report, origin), reach: f.reach, label: i + 1 }));
 
     // ---------------- the whole split, cached on its inputs ----------------
-    const key = stageKey('split-block/v1', extractor.last()?.key ?? extraction.texturedGlb, members.map(m => [m.report.id, m.parts.map(p => p.map(r => r.map(([x, z]) => [r2(x), r2(z)])))]),
+    const key = stageKey('split-block/v2', extractor.last()?.key ?? extraction.texturedGlb, members.map(m => [m.report.id, m.parts.map(p => p.map(r => r.map(([x, z]) => [r2(x), r2(z)])))]),
         all.filter(b => !members.some(m => m.report === b)).map(b => b.id), request.trees, request.maskVote, !!deps.vegetation?.canopy, !!vector);
     const base = slug(request.query);
     const k8 = key.slice(0, 8);
@@ -817,11 +822,11 @@ export async function runSplitBlock(request: SplitBlockRequest, deps: SplitBlock
         let ownedCells = 0, dataCells = 0;
         for (let c = 0; c < N; c++) { if (owner[c] && kept.some(m => m.label === owner[c])) ownedCells++; if (ground.top[c] === ground.top[c]) dataCells++; }
         const keptOwner = Int32Array.from(owner, o => (kept.some(m => m.label === o) ? o : 0));
-        const unmapped = unmappedStructures(ground, keptOwner).slice(0, 25).map(u => {
-            const ci = ground.cellIndex(u.centroid[0], u.centroid[1]);
-            const within = all.find(b => ci >= 0 && distanceToFootprint(u.centroid[0], u.centroid[1], partsInScan(b, origin)) === 0);
-            return { areaM2: u.areaM2, heightM: u.heightM, centroid: u.centroid, latLng: latLngOf(origin, u.centroid), touches: u.touches.map(idOf), ...(within ? { withinFootprint: within.id } : {}) };
-        });
+        const unmapped = unmappedStructures(ground, keptOwner, 6, anyFootprint)
+            .sort((p, q) => Number(q.touches.length > 0) - Number(p.touches.length > 0) || q.areaM2 - p.areaM2).slice(0, 25).map(u => {
+                const within = all.find(b => distanceToFootprint(u.centroid[0], u.centroid[1], partsInScan(b, origin)) === 0);
+                return { areaM2: u.areaM2, heightM: u.heightM, centroid: u.centroid, latLng: latLngOf(origin, u.centroid), touches: u.touches.map(idOf), footprintShare: u.footprintShare, ...(within ? { withinFootprint: within.id } : {}) };
+            });
         const plausibleWarnings = buildings.reduce((s, b) => s + b.plausibility.length, 0);
         return {
             timings: tm,
@@ -888,7 +893,9 @@ export function digestOf(r: SplitBlockResult): string {
         for (const n of r.notSplit) by.set(n.reasonCode, (by.get(n.reasonCode) ?? 0) + 1);
         parts.push(`not split: ${[...by].map(([k, v]) => `${v} ${k}`).join(', ')} (each with its reason; their scan is in the unassigned mesh)`);
     }
-    parts.push(`unassigned ${Math.round(r.unassigned.surfaceAreaM2).toLocaleString('en-US')} m² of scan surface over ${Math.round(r.unassigned.planAreaM2).toLocaleString('en-US')} m² of plan${r.unassigned.unmappedStructures.length ? `, with ${r.unassigned.unmappedStructures.length} raised mass(es) no split footprint owns (largest ${Math.round(r.unassigned.unmappedStructures[0].areaM2)} m²)` : ''}`);
+    const noFootprint = r.unassigned.unmappedStructures.filter(u => u.touches.length && u.footprintShare < 0.5);
+    parts.push(`unassigned ${Math.round(r.unassigned.surfaceAreaM2).toLocaleString('en-US')} m² of scan surface over ${Math.round(r.unassigned.planAreaM2).toLocaleString('en-US')} m² of plan`
+        + (noFootprint.length ? `, with ${noFootprint.length} raised structure(s) against the block that no vector footprint holds (${noFootprint.slice(0, 3).map(u => `${Math.round(u.areaM2)} m², ${u.heightM} m`).join('; ')}), left unassigned` : ''));
     parts.push(r.partition.everyTriangleOnce ? `all ${r.partition.inputTriangles.toLocaleString('en-US')} triangles in exactly one output` : `PARTITION CHECK FAILED: ${r.partition.outputTriangles} of ${r.partition.inputTriangles} triangles written`);
     const flags = r.buildings.flatMap(b => b.plausibility);
     if (flags.length) parts.push(`${plausibilitySummary(flags, 2)} on ${r.plausibility.buildings} building(s)`);
@@ -898,12 +905,18 @@ export function digestOf(r: SplitBlockResult): string {
 function scene(r: SplitBlockResult): CanvasArtifact | undefined {
     const g = r.overview.clayGlb;
     if (!g?.path || !fs.existsSync(g.path)) return undefined;
-    const bb = glbBounds(g.path) ?? { min: [-50, 0, -50] as [number, number, number], max: [50, 30, 50] as [number, number, number] };
+    // framed on the separated buildings (the unassigned scan around them reaches the extraction's edge)
+    const bb = { min: [Infinity, Infinity, Infinity] as [number, number, number], max: [-Infinity, -Infinity, -Infinity] as [number, number, number] };
+    for (const b of r.buildings) {
+        const x = fs.existsSync(b.clayGlb.path) ? glbBounds(b.clayGlb.path) : undefined;
+        if (x) for (let k = 0; k < 3; k++) { bb.min[k] = Math.min(bb.min[k], x.min[k]); bb.max[k] = Math.max(bb.max[k], x.max[k]); }
+    }
+    if (!(bb.max[0] > bb.min[0])) { const all = glbBounds(g.path) ?? { min: [-50, 0, -50] as [number, number, number], max: [50, 30, 50] as [number, number, number] }; bb.min = all.min; bb.max = all.max; }
     const grounds = r.buildings.map(b => b.ground.heightM).sort((a, b) => a - b);
     const gy = grounds.length ? grounds[Math.floor(grounds.length / 2)] : 0;
     const target: [number, number, number] = [(bb.min[0] + bb.max[0]) / 2, (bb.min[1] + bb.max[1]) / 3 - gy, (bb.min[2] + bb.max[2]) / 2];
     const radius = Math.hypot(bb.max[0] - bb.min[0], bb.max[1] - bb.min[1], bb.max[2] - bb.min[2]) / 2;
-    const dist = (radius / Math.sin((45 * Math.PI) / 360)) * 0.8;
+    const dist = (radius / Math.sin((45 * Math.PI) / 360)) * 0.9;
     const el = (40 * Math.PI) / 180, az = (25 * Math.PI) / 180;
     const camera = { position: [target[0] + dist * Math.cos(el) * Math.sin(az), target[1] + dist * Math.sin(el), target[2] + dist * Math.cos(el) * Math.cos(az)].map(r3), target: target.map(r3), fov: 45 };
     const tag = crypto.createHash('sha256').update(g.url).digest('hex').slice(0, 10);

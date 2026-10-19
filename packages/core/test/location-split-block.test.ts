@@ -326,6 +326,8 @@ describe('a footprint missing from the vector data, and one with nothing standin
         expect(m.areaM2).toBeLessThan(10 * 12 + 30);
         expect(m.heightM).toBeCloseTo(16, 0);
         expect(m.withinFootprint).toBeUndefined();
+        expect(m.footprintShare).toBeLessThan(0.2);
+        expect(r.digest).toMatch(/1 raised structure\(s\) against the block that no vector footprint holds/);
         expect(m.touches.sort()).toEqual([a.id, c.id].sort());
         expect(centroids(r.unassigned.clayGlb.path).filter(([x, y]) => Math.abs(x) < 4 && y > 15.9).length).toBeGreaterThan(10);
         // the empty lot: not split, with the reason; nothing of it is written
