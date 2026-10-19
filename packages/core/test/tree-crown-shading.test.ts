@@ -29,7 +29,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { TreeLodController } from '../src/browser/generative-canvas/primitives/scene3d/treeLod/TreeLodController';
 import {
-    CROWN_VERTEX_MAIN, crownLevelFactors, makeCrownVariant, crownLobesInMeshFrame, crownLobeField, crownLobesAt, crownQuadricInMeshFrame, crownShadingUniforms, isCrownVariant, resolveCrownShading, setCrownShadingUniforms, DEFAULT_CROWN_SHADING
+    BREAKUP_FRAGMENT_DISCARD, CROWN_FIELD_VERTEX_PARS, CROWN_FRAGMENT_COLOR, CROWN_VERTEX_MAIN, crownLevelFactors, makeCrownVariant, crownLobesInMeshFrame, crownLobeField, crownLobesAt, crownQuadricInMeshFrame, crownShadingUniforms, isCrownVariant, resolveCrownShading, setCrownShadingUniforms, DEFAULT_CROWN_SHADING
 } from '../src/browser/generative-canvas/primitives/scene3d/treeLod/treeCrownShading';
 import { isFadeVariant, makeFadeVariant } from '../src/browser/generative-canvas/primitives/scene3d/treeLod/treeLodFade';
 import { applyClayRenderMode, sharedTreeClayMaterial } from '../src/browser/generative-canvas/primitives/scene3d/clayRenderMode';
@@ -237,11 +237,11 @@ describe('crown lobes in a mesh frame and in the shader', () => {
                     const e = im.instanceMatrix.array;
                     const fld = crownLobeField(expected.lobes, expected.blend, [e[16 * i + 12], e[16 * i + 13], e[16 * i + 14]]);
                     expect(I.getX(i)).toBeCloseTo(fld.gradient[0], 5); expect(I.getY(i)).toBeCloseTo(fld.gradient[1], 5); expect(I.getZ(i)).toBeCloseTo(fld.gradient[2], 5);
-                    expect(I.getW(i)).toBeCloseTo(Math.min(1, Math.max(0, -fld.f / expected.meanRadius)), 5);
+                    expect(I.getW(i)).toBeCloseTo(-fld.f / expected.meanRadius, 5);      // signed: the occlusion clamps it, the breakup extends it
                 }
             }
         }
-        expect(CROWN_VERTEX_MAIN).toMatch(/#ifdef USE_INSTANCING\s+\/\/[^\n]*\n\s+sbG = sbCrownI\.xyz;/);
+        expect(CROWN_FIELD_VERTEX_PARS).toMatch(/#ifdef USE_INSTANCING\s+\/\/[^\n]*\n\s+sbG = sbCrownI\.xyz;/);
         lod.forceLevel(3); lod.update(cameraAt(tree, 20));
         const far = leaves.find(m => levelOf(m) === 3)!;
         const sh = compiled(far.material as THREE.Material);
@@ -389,7 +389,8 @@ describe('TreeLodController with crown shading', () => {
             expect(s.vertexShader).toContain('uSbRange');                                    // the dither is still there
             // the flip is kept for a level that does not blend (vSbCrownFlip = 1, the near level) and dropped where it blends
             expect(s.fragmentShader).toContain('float faceDirection = vSbCrownFlip > 0.5 ? ( gl_FrontFacing ? 1.0 : - 1.0 ) : 1.0;');
-            expect(s.fragmentShader).toContain('diffuseColor.rgb *= vSbCrownOcc;');
+            expect(s.fragmentShader).toContain(CROWN_FRAGMENT_COLOR);
+            expect(s.fragmentShader).toContain(BREAKUP_FRAGMENT_DISCARD);
             expect((m.material as THREE.Material).customProgramCacheKey()).toMatch(/sbcrown.*sbfade/);
         }
         for (const m of wood) {

@@ -23,7 +23,9 @@
  *                       area (about 0.3 of the level-0 triangles).
  *   level 2 (mid)       the same wood, the same cluster positions, fewer larger leaves per cluster as coarse cards (about
  *                       one eighth of the level-0 triangles); no twigs.
- *   level 3 (far)       the blob masses the budgeted meshing already builds on the same skeleton (nature::meshWithinBudget).
+ *   level 3 (far)       the blob masses the budgeted meshing already builds on the same skeleton (nature::meshWithinBudget),
+ *                       over its own wood: the trunk and main limbs only, a few hundred triangles (farWoodBudgetFor), which a
+ *                       viewer shows through the holes it opens in the masses.
  *
  * In this file's types `level1` is the mid level (2 in the GLB) and `nearMid` the near-mid level (1 in the GLB).
  *
@@ -187,8 +189,19 @@ struct LodParams {
     std::array<double, 3> twigTapers{0.3, 0.6, 0.85};
     double twigMinRadiusM{0.004};        // a drawn twig is at least this thick
     double twigMergeTolerance{2.5};      // consecutive pruned segments of a chain are one tube while the nodes between lie within this many radii of the line
+    // The far level's wood: the trunk and main limbs only (the thickest segments, the budgeted meshing's radius pruning),
+    // within clamp(farWoodTrianglesPerHeightM x tree height, farWoodMinTriangles, farWoodMaxTriangles) triangles, so a
+    // viewer that opens holes in the far blob masses shows structure inside the crown for a few hundred triangles.
+    double farWoodTrianglesPerHeightM{24.0};
+    double farWoodMinTriangles{160};
+    double farWoodMaxTriangles{600};
     sv::SbVeggieMorphology morphology;
 };
+
+/** Triangles the far level's wood (trunk and main limbs) is meshed within, for a tree `heightM` tall. */
+inline size_t farWoodBudgetFor(const LodParams& P, double heightM) {
+    return static_cast<size_t>(std::ceil(std::clamp(P.farWoodTrianglesPerHeightM * std::max(0.0, heightM), P.farWoodMinTriangles, std::max(P.farWoodMinTriangles, P.farWoodMaxTriangles))));
+}
 
 /** Blade length of a tree: scales with the crown's height within the real range of leaf sizes. */
 inline double leafLengthFor(const LodParams& P, double crownHeightM) {
@@ -428,6 +441,10 @@ struct TreeLod {
     std::vector<float> woodGrowth;               // when each wood vertex grew
     size_t woodTriangles{0};
     float prunedBelowRadiusM{0};
+    geometry::Mesh farWood;                      // the far level's wood: trunk and main limbs (farWoodBudgetFor)
+    std::vector<float> farWoodGrowth;            // when each far wood vertex grew
+    size_t farWoodTriangles{0};
+    float farWoodPrunedBelowRadiusM{0};
     std::vector<std::vector<Instance>> twigs;    // per library twig (taper)
     size_t twigCount() const { size_t n = 0; for (const auto& t : twigs) n += t.size(); return n; }
     std::vector<std::vector<Instance>> clusters; // per library variant (levels 0 and 1 share the positions)
@@ -442,6 +459,8 @@ struct TreeLod {
     size_t drawnLevel0() const { return woodTriangles + twigTriangles + level0.clusterTriangles; }
     size_t drawnLevel1() const { return woodTriangles + level1.clusterTriangles; }
     size_t drawnNearMid() const { return woodTriangles + nearMid.clusterTriangles; }
+    /** Triangles of the far level given its blob leaf masses: the trunk and main limbs and the masses. */
+    size_t drawnFar(size_t blobTriangles) const { return farWoodTriangles + blobTriangles; }
 };
 
 namespace detail {
@@ -628,6 +647,18 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
     T.woodGrowth = std::move(growth.wood);
     T.woodTriangles = rep.woodTriangles;
     T.prunedBelowRadiusM = rep.prunedBelowRadius;
+    {
+        // the far level's wood: the same skeleton within a few hundred triangles, so the budget keeps the trunk and main limbs
+        nat::SpaceColonizationConfig farCfg = cfg;
+        farCfg.triangleBudget = static_cast<float>(farWoodBudgetFor(P, in.heightAboveSupport));
+        nat::TreeBudgetReport farRep;
+        nat::MeshGrowth farGrowth;
+        auto far = nat::SpaceColonizationTreeGenerator::meshGrownSkeleton(farCfg, sk, &farRep, &farGrowth);
+        T.farWood = std::move(far.first);
+        T.farWoodGrowth = std::move(farGrowth.wood);
+        T.farWoodTriangles = farRep.woodTriangles;
+        T.farWoodPrunedBelowRadiusM = farRep.prunedBelowRadius;
+    }
 
     T.msWood = msSince(tPhase); tPhase = Clock::now();
     // ---- twigs: the segments the pruning dropped, one instance of the unit tube each ----

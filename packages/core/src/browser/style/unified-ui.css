@@ -9310,6 +9310,92 @@ body.sb-light .sb-3d-budget-btn {
     margin: 2px 0 !important;
 }
 
+/* Camera settings panel, anchored to the right of its tool strip button (scene3d/CameraSettingsControl.tsx) */
+.sb-3d-camera-control {
+    position: relative;
+}
+.sb-3d-camera-panel {
+    position: absolute;
+    left: calc(100% + 14px);
+    top: -6px;
+    z-index: 30;
+    width: 272px;
+    max-height: calc(100vh - 120px);
+    overflow-y: auto;
+    padding: 10px 12px 12px;
+    border-radius: 14px;
+    background: rgba(18, 18, 22, 0.94);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 20px 48px -8px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.05);
+    color: #e4e4e7;
+    font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+    text-align: left;
+    pointer-events: auto;
+    user-select: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.sb-3d-camera-panel:focus { outline: none; }
+.sb-3d-camera-panel .sb-cam-header { display: flex; align-items: center; justify-content: space-between; }
+.sb-3d-camera-panel .sb-cam-header > span { font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.sb-3d-camera-panel .sb-cam-close {
+    display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0;
+    border: 1px solid transparent; border-radius: 6px; background: transparent; color: #a1a1aa; cursor: pointer;
+}
+.sb-3d-camera-panel .sb-cam-close:hover { color: #fff; background: rgba(255, 255, 255, 0.1); }
+.sb-3d-camera-panel .sb-cam-section { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px solid rgba(255, 255, 255, 0.07); }
+.sb-3d-camera-panel .sb-cam-section-head { display: flex; align-items: center; justify-content: space-between; min-height: 18px; }
+.sb-3d-camera-panel .sb-cam-section-head h3 { margin: 0; font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #a1a1aa; }
+.sb-3d-camera-panel .sb-cam-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sb-3d-camera-panel .sb-cam-label { flex: 0 0 64px; color: #a1a1aa; }
+.sb-3d-camera-panel .sb-cam-key { flex: 0 0 20px; color: #a1a1aa; }
+.sb-3d-camera-panel .sb-cam-unit { flex: 0 0 20px; color: #71717a; }
+.sb-3d-camera-panel .sb-cam-num { flex: 0 0 66px; }
+.sb-3d-camera-panel .sb-cam-num .sb-cam-row .sb-cam-label { display: none; }
+.sb-3d-camera-panel .sb-cam-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.sb-3d-camera-panel .sb-cam-pair .sb-cam-label { flex-basis: 14px; }
+.sb-3d-camera-panel .sb-cam-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.sb-3d-camera-panel .sb-cam-chip {
+    padding: 2px 6px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(0, 0, 0, 0.25);
+    color: #d4d4d8; font: inherit; font-size: 10px; font-variant-numeric: tabular-nums; cursor: pointer; transition: background 0.12s, border-color 0.12s;
+}
+.sb-3d-camera-panel .sb-cam-chip:hover:not(:disabled) { background: rgba(255, 255, 255, 0.1); color: #fff; }
+.sb-3d-camera-panel .sb-cam-chip:disabled { opacity: 0.4; cursor: default; }
+.sb-3d-camera-panel .sb-cam-chip-on { border-color: rgba(96, 165, 250, 0.65); background: rgba(59, 130, 246, 0.3); color: #bfdbfe; }
+.sb-3d-camera-panel .sb-cam-wide { width: 100%; padding: 4px 6px; text-align: center; }
+.sb-3d-camera-panel .sb-cam-danger { border-color: rgba(244, 63, 94, 0.35); background: rgba(76, 5, 25, 0.35); color: #fecdd3; }
+.sb-3d-camera-panel .sb-cam-input {
+    flex: 1 1 auto; width: 100%; min-width: 0; box-sizing: border-box; padding: 2px 6px; border-radius: 5px;
+    border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(0, 0, 0, 0.4); color: #f4f4f5;
+    font: inherit; font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; user-select: text;
+}
+.sb-3d-camera-panel .sb-cam-input:focus { outline: none; border-color: #3b82f6; }
+.sb-3d-camera-panel .sb-cam-select { text-align: left; }
+.sb-3d-camera-panel .sb-cam-range { flex: 1 1 auto; min-width: 0; accent-color: #3b82f6; }
+.sb-3d-camera-panel .sb-cam-readout { display: flex; justify-content: space-between; color: #a1a1aa; }
+.sb-3d-camera-panel .sb-cam-value { color: #f4f4f5; font-variant-numeric: tabular-nums; }
+.sb-3d-camera-panel .sb-cam-truncate { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-3d-camera-panel .sb-cam-note { color: #71717a; font-size: 10px; }
+.sb-3d-camera-panel .sb-cam-right { text-align: right; }
+.sb-3d-camera-panel .sb-cam-warn-text { color: #fcd34d; font-size: 10px; }
+.sb-3d-camera-panel .sb-cam-error-text { color: #fda4af; font-size: 10px; }
+.sb-3d-camera-panel .sb-cam-disclosure { align-self: flex-start; padding: 0; border: 0; background: none; color: #a1a1aa; font: inherit; font-size: 10px; cursor: pointer; }
+.sb-3d-camera-panel .sb-cam-disclosure:hover { color: #e4e4e7; }
+.sb-3d-camera-panel .sb-cam-switch {
+    position: relative; width: 26px; height: 15px; padding: 0; border-radius: 999px; cursor: pointer;
+    border: 1px solid rgba(255, 255, 255, 0.18); background: rgba(0, 0, 0, 0.4); transition: background 0.12s;
+}
+.sb-3d-camera-panel .sb-cam-switch-on { background: rgba(37, 99, 235, 0.75); border-color: rgba(96, 165, 250, 0.6); }
+.sb-3d-camera-panel .sb-cam-switch-knob { position: absolute; top: 2px; left: 2px; width: 9px; height: 9px; border-radius: 50%; background: #f4f4f5; transition: left 0.12s; }
+.sb-3d-camera-panel .sb-cam-switch-on .sb-cam-switch-knob { left: 13px; }
+.sb-3d-camera-panel .sb-cam-notice { padding: 6px; border-radius: 6px; border: 1px solid rgba(245, 158, 11, 0.35); background: rgba(69, 26, 3, 0.45); color: #fde68a; font-size: 10px; }
+.sb-3d-camera-panel .sb-cam-notice-title { font-weight: 600; }
+.sb-3d-camera-panel .sb-cam-error { padding: 6px; border-radius: 6px; border: 1px solid rgba(244, 63, 94, 0.45); background: rgba(76, 5, 25, 0.55); color: #fecdd3; font-size: 10px; }
+.sb-3d-camera-panel button:focus-visible, .sb-3d-camera-panel input:focus-visible, .sb-3d-camera-panel select:focus-visible { outline: 1px solid #60a5fa; outline-offset: 1px; }
+
 /* 3D Top Header Bar: flex container preventing collisions across all viewport widths */
 .sb-3d-top-header-bar {
     position: absolute !important;

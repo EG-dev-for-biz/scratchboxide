@@ -4270,7 +4270,7 @@ inline LodFrameEstimate estimateLodFrames(const PlantResult& R, const PlantParam
         t.x = (*tr.crown)["stem"][0].num;
         t.z = (*tr.crown)["stem"][1].num;
         t.b = lodBandsFor(tr.heightAboveSupport, P);
-        t.tri = {static_cast<double>(tr.lod.drawnLevel0()), static_cast<double>(tr.lod.drawnNearMid()), static_cast<double>(tr.lod.drawnLevel1()), static_cast<double>(tr.lod.woodTriangles + tr.foliage.indices.size() / 3)};
+        t.tri = {static_cast<double>(tr.lod.drawnLevel0()), static_cast<double>(tr.lod.drawnNearMid()), static_cast<double>(tr.lod.drawnLevel1()), static_cast<double>(tr.lod.drawnFar(tr.foliage.indices.size() / 3))};
         trees.push_back(t);
     }
     LodFrameEstimate E;
@@ -4345,7 +4345,7 @@ inline std::string treeExtrasMembers(const PlantedTree& tr, const PlantParams& P
     // `triangles` is the budgeted blob tree (what `triangleBudget` bounds); with levels the far level the file holds is the
     // delivered wood (given the whole budget, by the near levels) under the same blob masses: `farLevelTriangles`
     ex << ",\"triangles\":" << (tr.wood.indices.size() + tr.foliage.indices.size()) / 3 << ",\"triangleBudget\":" << tr.budget << ",\"ownBudget\":" << tr.ownBudget;
-    if (tr.hasLod) ex << ",\"farLevelTriangles\":" << tr.lod.woodTriangles + tr.foliage.indices.size() / 3 << ",\"deliveredWoodTriangles\":" << tr.lod.woodTriangles;
+    if (tr.hasLod) ex << ",\"farLevelTriangles\":" << tr.lod.drawnFar(tr.foliage.indices.size() / 3) << ",\"deliveredWoodTriangles\":" << tr.lod.woodTriangles << ",\"farWoodTriangles\":" << tr.lod.farWoodTriangles;
     ex << ",\"woodTriangles\":" << tr.report.woodTriangles << ",\"foliageTriangles\":" << tr.report.foliageTriangles
        << ",\"foliageClumps\":" << tr.report.foliageClumps << ",\"surfaceMasses\":" << tr.report.surfaceMasses << ",\"surfaceMassesNeeded\":" << tr.report.surfaceMassesNeeded
        << ",\"seed\":" << tr.seed;
@@ -4391,8 +4391,9 @@ inline bool keptAsScanned(const io::GlbJsonValue& c) {
  * the contract's TreeLodExtras): level 0 holds the wood (the whole triangle budget) and, as child nodes instancing library
  * meshes (EXT_mesh_gpu_instancing, positions in the level's quantisation frame), its pruned twigs and leaf clusters; levels 1
  * (near-mid: a share of the leaves with the near outline, each larger) and 2 (mid: fewer larger leaves as cards) share the
- * wood mesh, draw no twigs and instance the same cluster positions (their instance data is level 0's); level 3 holds the
- * same wood (its primitive reuses level 0's accessors) and the blob leaf masses meshCrown builds. The library
+ * wood mesh, draw no twigs and instance the same cluster positions (their instance data is level 0's); level 3 holds its
+ * own wood, the trunk and main limbs only (tree_lod::farWoodBudgetFor, a few hundred triangles; schema trees-lod/3; a
+ * trees-lod/2 file's level 3 reused level 0's whole wood), and the blob leaf masses meshCrown builds. The library
  * (the cluster meshes, the twig tubes) and psiSeason are in the root extras `sbTrees`. Without levels a tree node holds its wood
  * and foliage primitives (the foliage last). Either way it holds its measurements as extras, and
  * extras.sb (StagedNodeExtras): provenance "grown to the measured crown" (stem, crown extent and height measured from
@@ -4452,9 +4453,9 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
                 triangles += m->indices.size() / 3;
             }
         } else {
-            // levels: the wood (written once, shared by levels 0, 1 and 2) and the level-2 leaf masses
-            vertices = tr.lod.wood.vertices.size() + tr.foliage.vertices.size();
-            triangles = tr.lod.woodTriangles + tr.foliage.indices.size() / 3;
+            // levels: the wood (written once, shared by levels 0, 1 and 2), the far level's trunk and limbs and its leaf masses
+            vertices = tr.lod.wood.vertices.size() + tr.lod.farWood.vertices.size() + tr.foliage.vertices.size();
+            triangles = tr.lod.woodTriangles + tr.lod.drawnFar(tr.foliage.indices.size() / 3);
         }
         std::string lodMembers;
         if (levels) {
@@ -4533,15 +4534,24 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
             l0.extrasJson = lodExtras(0, 0.0, d0 + 0.5 * fade, fade, L.drawnLevel0(), instanced0);
             l1.extrasJson = lodExtras(1, d0 - 0.5 * fade, dNM + 0.5 * fadeNM, fadeNM, L.drawnNearMid(), instanced1);
             l2.extrasJson = lodExtras(2, dNM - 0.5 * fadeNM, d1 + 0.5 * fade1, fade1, L.drawnLevel1(), instanced2);
-            // level 3: the same wood (written once, in the level-0 node), and the blob masses meshCrown builds on the same skeleton
-            {
-                staged_glb::StagedPrimitive woodRef;
+            // level 3: its own wood, the trunk and main limbs (a few hundred triangles; a viewer shows them through the holes it opens
+            // in the masses), and the blob masses meshCrown builds on the same skeleton
+            size_t level3Wood = L.farWoodTriangles;
+            if (!L.farWood.indices.empty()) {
+                l3.primitives.push_back(primitiveOf(L.farWood, L.farWoodGrowth));
+                if (tr.hasTextures && L.farWood.uvs.size() == L.farWood.vertices.size()) {
+                    auto& uv = l3.primitives.back().uvs;
+                    for (const auto& t : L.farWood.uvs) uv.push_back({t.x, t.y});
+                }
+            } else {
+                staged_glb::StagedPrimitive woodRef;     // no far wood (never expected: the trunk is always kept): level 0's wood
                 woodRef.reuseNode = l0.name;
                 woodRef.reuseIndex = 0;
                 l3.primitives.push_back(std::move(woodRef));
-                if (!tr.foliage.indices.empty()) l3.primitives.push_back(primitiveOf(tr.foliage, tr.growth.foliage));
+                level3Wood = L.woodTriangles;
             }
-            const size_t level3Triangles = L.woodTriangles + tr.foliage.indices.size() / 3;
+            if (!tr.foliage.indices.empty()) l3.primitives.push_back(primitiveOf(tr.foliage, tr.growth.foliage));
+            const size_t level3Triangles = level3Wood + tr.foliage.indices.size() / 3;
             // which of the level-3 primitives are leaves (the wood is primitive 0): a viewer shades only these with the crown
             l3.extrasJson = lodExtras(3, d1 - 0.5 * fade1, 1.0e6, fade1, level3Triangles, false, tr.foliage.indices.empty() ? std::string() : std::string(",\"foliagePrimitives\":[1]"));
             node.children.push_back(std::move(l0));
@@ -4554,7 +4564,9 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
             };
             lodMembers = ",\"lod\":{\"leafLengthM\":" + json::num(L.leafLengthM) + ",\"stations\":" + std::to_string(L.stations) + ",\"repairStations\":" + std::to_string(L.repairStations) +
                          ",\"twigs\":" + std::to_string(L.twigCount()) + ",\"woodTriangles\":" + std::to_string(L.woodTriangles) +
-                         ",\"level0\":" + levelJson(L.level0, L.drawnLevel0()) + ",\"nearMid\":" + levelJson(L.nearMid, L.drawnNearMid()) + ",\"level1\":" + levelJson(L.level1, L.drawnLevel1()) + "}";
+                         ",\"level0\":" + levelJson(L.level0, L.drawnLevel0()) + ",\"nearMid\":" + levelJson(L.nearMid, L.drawnNearMid()) + ",\"level1\":" + levelJson(L.level1, L.drawnLevel1()) +
+                         ",\"far\":{\"woodTriangles\":" + std::to_string(L.farWoodTriangles) + ",\"woodPrunedBelowRadiusM\":" + json::num(L.farWoodPrunedBelowRadiusM) +
+                         ",\"drawnTriangles\":" + std::to_string(L.drawnFar(tr.foliage.indices.size() / 3)) + "}}";
             // the crown envelope of the delivered leaves (tree node frame = the tile frame): a viewer shades the leaves with its normals
             std::string crownJson;
             const tree_lod::CrownEllipsoid ce = tree_lod::crownOfLeaves(L, lib);
@@ -4660,7 +4672,7 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
     }
     if (crownsDoc.has("label") && crownsDoc["label"].type == io::GlbJsonValue::String) members += "\"label\":" + json::write(crownsDoc["label"]) + ",";
     size_t farTotal = 0;
-    for (const auto& t : R.trees) farTotal += t.hasLod ? t.lod.woodTriangles + t.foliage.indices.size() / 3 : (t.wood.indices.size() + t.foliage.indices.size()) / 3;
+    for (const auto& t : R.trees) farTotal += t.hasLod ? t.lod.drawnFar(t.foliage.indices.size() / 3) : (t.wood.indices.size() + t.foliage.indices.size()) / 3;
     members += "\"sbVeggie\":{\"trees\":" + std::to_string(R.trees.size()) + ",\"triangles\":" + std::to_string(R.triangles) + (R.library ? ",\"farLevelTriangles\":" + std::to_string(farTotal) : std::string()) +
                ",\"triangleBudget\":" + std::to_string(static_cast<size_t>(R.triangleBudget)) + ",\"shortOfCrown\":" + std::to_string(R.shortOfCrown) +
                (R.groundChecked ? ",\"offGround\":" + std::to_string(R.offGround) : std::string()) + ",\"keptAsScannedRings\":" + std::to_string(rings.size()) +
@@ -4689,7 +4701,7 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
             opt.library.push_back(libMesh(tw));
             variants += "," + std::string("{\"mesh\":") + json::str(tw.name) + ",\"leavesLevel0\":0,\"leavesNearMid\":0,\"leavesLevel1\":0}";
         }
-        members += ",\"sbTrees\":{\"schema\":\"scratchbox.trees-lod/2\",\"psiSeason\":" + json::num(std::clamp(P.psiSeason, 0.0, 1.0)) + ",\"clusterLibrary\":{\"variants\":[" + variants +
+        members += ",\"sbTrees\":{\"schema\":\"scratchbox.trees-lod/3\",\"psiSeason\":" + json::num(std::clamp(P.psiSeason, 0.0, 1.0)) + ",\"clusterLibrary\":{\"variants\":[" + variants +
                    "],\"leafSizeModel\":{\"sizeRatioToCrownHeight\":" + json::num(lib.params.leafSizeRatioToCrownHeight) + ",\"minM\":" + json::num(lib.params.leafMinM) + ",\"maxM\":" + json::num(lib.params.leafMaxM) + "}" +
                    // a leaf card's TEXCOORD_0 (u = 0.5 + across / length, v = along / length): its outline's box is widthRatio wide
                    ",\"leafCard\":{\"widthRatio\":" + json::num(lib.params.morphology.blade.widthRatio) + ",\"uv\":\"TEXCOORD_0: u = 0.5 + across / blade length, v = along / blade length (base 0)\",\"leafAttribute\":\"_LEAF: x atlas pick in [0, 1), y 1 on a blade, 0 on a stalk or shoot\"}}" +

@@ -64,6 +64,11 @@ export interface ViewportControlContext {
      * pass bends the frame (ViewportOpticsChain.mapPointerNdc); without it picks and gizmo drags miss off-centre.
      */
     mapPointerNdc?: (ndc: THREE.Vector2) => THREE.Vector2;
+    /**
+     * While set, a click hands the hit under the cursor (or undefined on a miss) and the event to this callback instead
+     * of selecting, and presses skip the gizmo and sculpt tools (the camera panel's "pick focus"). Drags still orbit and pan.
+     */
+    pointPick?: Ref<((hit: THREE.Intersection | undefined, event: MouseEvent) => void) | null>;
 
     resolveSelectableObject: (hit: THREE.Object3D, root: THREE.Object3D) => THREE.Object3D;
     selectObject: Ref<(obj: THREE.Object3D | null) => void>;
@@ -183,9 +188,10 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
         pendingPick = false;
         isPanning = false;
 
+        const pointPicking = !!ctx.pointPick?.current;
         // 1. Transform gizmo handle hit
         const selected = ctx.selectedObject.current;
-        if (ctx.toolMode.current === 'transform' && ctx.gizmoGroup.current && selected) {
+        if (!pointPicking && ctx.toolMode.current === 'transform' && ctx.gizmoGroup.current && selected) {
             const hit = ctx.gizmoEngine.current.hitTest(raycaster, ctx.gizmoGroup.current);
             if (hit) {
                 isGizmoDragging = true;
@@ -202,7 +208,7 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
         }
 
         // 2. Sculpt stroke start (the only press that needs a scene raycast up front)
-        if (ctx.toolMode.current === 'sculpt') {
+        if (!pointPicking && ctx.toolMode.current === 'sculpt') {
             const validHit = pickSceneHit();
             const targetMesh = (validHit && (validHit.object as any).isMesh) ? (validHit.object as THREE.Mesh) : ctx.sculptMesh.current;
             if (targetMesh && targetMesh.geometry && validHit) {
@@ -451,7 +457,10 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
         if (pendingPick && Math.hypot(e.clientX - downX, e.clientY - downY) < CLICK_TRAVEL_PX) {
             setRayFromEvent(e);
             const hit = pickSceneHit();
-            if (hit) {
+            const pointPick = ctx.pointPick?.current;
+            if (pointPick) {
+                pointPick(hit, e);
+            } else if (hit) {
                 const modelRoot = e.altKey ? findExternalObjectRoot(hit.object) : null;
                 ctx.selectObject.current(modelRoot || ctx.resolveSelectableObject(hit.object, scene));
             } else if (ctx.selectionBox.current?.visible) {

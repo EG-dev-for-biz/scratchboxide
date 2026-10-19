@@ -4605,7 +4605,7 @@ export const PHYSICAL_CAMERA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 focalLengthMm: {
                     type: 'NUMBER',
-                    description: 'Lens focal length in millimeters (e.g. 24, 35, 50, 85, 135).'
+                    description: 'Lens focal length in millimeters, any positive value: 8 mm ultra-wide (about 113° vertical / 132° horizontal on full frame) through 200 mm telephoto (about 7° vertical) and beyond (e.g. 8, 14, 24, 35, 50, 85, 135, 200).'
                 },
                 apertureFStop: {
                     type: 'NUMBER',
@@ -4681,6 +4681,13 @@ export const physicalCameraHandlers: Record<string, ToolHandler> = {
     async configure_physical_camera(args, ctx) {
         const focalLengthMm = Number(args.focalLengthMm ?? 50);
         const apertureFStop = Number(args.apertureFStop ?? 2.8);
+        if (!(Number.isFinite(focalLengthMm) && focalLengthMm > 0) || !(Number.isFinite(apertureFStop) && apertureFStop > 0)) {
+            return {
+                status: 'failed' as const,
+                resultPayload: { success: false, applied: false, error: `focalLengthMm and apertureFStop must be positive numbers (got ${String(args.focalLengthMm)}, ${String(args.apertureFStop)})` } as unknown as ToolResultPayload,
+                summaryResult: `NOT applied: focalLengthMm and apertureFStop must be positive numbers (got ${String(args.focalLengthMm)}, ${String(args.apertureFStop)}).`
+            };
+        }
         const focusGiven = args.focusDistanceMeters !== undefined && args.focusDistanceMeters !== null;
         const focusObjectId = typeof args.focusObjectId === 'string' && args.focusObjectId.trim() ? args.focusObjectId.trim() : undefined;
         const sensorFormat = (args.sensorFormat as SensorFormatPreset) ?? 'full_frame_35mm';

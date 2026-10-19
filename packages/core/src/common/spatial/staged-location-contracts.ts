@@ -735,9 +735,11 @@ export interface StagedGlbRootExtras { sb: { schema: 'scratchbox.staged-glb/2'; 
 // =============================================================================
 
 /**
- * Detail level of one tree. Schema trees-lod/2 (four levels): 0 near (instanced leaf clusters, twigs), 1 near-mid (same cluster
+ * Detail level of one tree. Schema trees-lod/3 (four levels): 0 near (instanced leaf clusters, twigs), 1 near-mid (same cluster
  * positions, a share of the leaves with the near outline, each larger; no twigs), 2 mid (same positions, fewer larger leaves
- * as cards), 3 far (blob masses). Schema trees-lod/1 (three levels, still read): 0 near, 1 mid, 2 far.
+ * as cards), 3 far (blob masses over the trunk and main limbs only, a few hundred triangles of wood, so holes a viewer opens
+ * in the masses show structure). Schema trees-lod/2 (still read) is the same four levels with level 0's whole wood under
+ * the far masses; schema trees-lod/1 (three levels, still read): 0 near, 1 mid, 2 far.
  */
 export type TreeLodLevel = 0 | 1 | 2 | 3;
 
@@ -807,7 +809,7 @@ export interface TreeNodeExtras { id: number; hashSeed: number; label: string; c
 
 /** Root extras `sbTrees` of the trees GLB. psiSeason 0..1 scales leaf density (0 bare winter, 1 full summer). */
 export interface TreesGlbRootExtras {
-    schema: 'scratchbox.trees-lod/1' | 'scratchbox.trees-lod/2';
+    schema: 'scratchbox.trees-lod/1' | 'scratchbox.trees-lod/2' | 'scratchbox.trees-lod/3';
     psiSeason: number;
     clusterLibrary: {
         variants: TreeClusterVariant[]; leafSizeModel: TreeLeafSizeModel;
@@ -1813,7 +1815,7 @@ const DEFINITIONS = {
         })
     }),
     TreesGlbRootExtras: obj(['schema', 'psiSeason', 'clusterLibrary'], {
-        schema: { enum: ['scratchbox.trees-lod/1', 'scratchbox.trees-lod/2'] }, psiSeason: ref('unit'),
+        schema: { enum: ['scratchbox.trees-lod/1', 'scratchbox.trees-lod/2', 'scratchbox.trees-lod/3'] }, psiSeason: ref('unit'),
         clusterLibrary: obj(['variants', 'leafSizeModel'], {
             variants: arr(obj(['mesh', 'leavesLevel0', 'leavesLevel1'], { mesh: { type: 'string', minLength: 1 }, leavesLevel0: NONNEG_INT, leavesNearMid: NONNEG_INT, leavesLevel1: NONNEG_INT }), { minItems: 1 }),
             leafSizeModel: obj(['sizeRatioToCrownHeight', 'minM', 'maxM'], {
@@ -2280,7 +2282,7 @@ export function validateContract(name: StagedSchemaName, value: unknown): string
 
 /**
  * Validates the JSON chunk of a trees GLB against the LOD structure: root extras `sbTrees`; every node with extras `sbTree`
- * has exactly one child tagged `sbLod` per level (four for schema trees-lod/2, three for trees-lod/1), the levels' distance
+ * has exactly one child tagged `sbLod` per level (four for schema trees-lod/3 and /2, three for trees-lod/1), the levels' distance
  * bands in order with no gap between neighbours, the far (last) level not instanced; instanced children carry
  * EXT_mesh_gpu_instancing and `sbCluster` naming a variant of the cluster library; no leaf node claims "measured"; a crown's
  * lobes have positive radii and come with their blend radius.

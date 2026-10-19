@@ -144,6 +144,10 @@ export interface TileVegetationPlantParams {
      * up to lodFarPerHeight x its height (4, 60-140 m, at most lodFarMax), far beyond, dithered over lodFade (6 m) or more.
      */
     lodNearPerHeight?: number;
+    /** The far level's wood (trunk and main limbs): clamp(farWoodTrianglesPerHeight x tree height, farWoodMinTriangles, farWoodMaxTriangles) triangles (24, 160, 600). */
+    farWoodTrianglesPerHeight?: number;
+    farWoodMinTriangles?: number;
+    farWoodMaxTriangles?: number;
     lodNearMidPerHeight?: number;
     lodFarPerHeight?: number;
     lodNearMax?: number;
@@ -163,7 +167,7 @@ export interface TileVegetationPlantParams {
  * budgets are scaled down to fit under this cap, what the leaf masses need first (never below the per-tree minimum of
  * 120). 1.5 million triangles: the trees model is written as positions, normals and 32-bit indices, about 33 bytes a
  * triangle (Central Park at a 250 m radius: 1,043 trees, 1.43 million budgeted triangles, 47 MB for the budgeted blob
- * trees; the written far level, which is that wood under the leaf masses of the blob trees, holds about 2.2 million, and
+ * trees; the written far level, the trunk and main limbs under the leaf masses of the blob trees, holds less, and
  * the near levels instance their leaves, so the file is larger than that figure), so at the cap the budgeted trees stay near
  * 50 MB, about the size of the photo-textured extraction of a 250 m radius it was measured in (41 MB there); with the
  * remeshed tile (0.1-1 million triangles) the scene stays under about 2.5 million triangles, which a WebGL viewport draws

@@ -268,8 +268,9 @@ describe('tile_vegetation plant (SB-Veggie, space colonisation)', () => {
         expect(glb.json.extras).toEqual({ frame: 'x = east, y = up, z = south (metres)', sbVeggie: expect.any(Object), sbTrees: expect.any(Object), sb: expect.objectContaining({ schema: 'scratchbox.staged-glb/2', stage: 'trees' }) });
         expect(JSON.stringify(glb.json)).not.toMatch(/LatLng|localToEcef|anchor/);
         const tris = readGlbTriangles(fs.readFileSync(planted.treesGlb));
-        // the level every tree has whole: its wood (shared by the levels) and its blob leaf masses
-        expect(tris.indices.length / 3).toBe(tris.nodeRanges.reduce((n, r) => n + r.extras.lod.woodTriangles + r.extras.foliageTriangles, 0));
+        // the level every tree has whole (the far one): its trunk and main limbs (trees-lod/3) and its blob leaf masses
+        expect(tris.indices.length / 3).toBe(tris.nodeRanges.reduce((n, r) => n + r.extras.farWoodTriangles + r.extras.foliageTriangles, 0));
+        for (const r of tris.nodeRanges) { expect(r.extras.farWoodTriangles).toBeGreaterThan(0); expect(r.extras.farWoodTriangles).toBeLessThan(r.extras.lod.woodTriangles); }
         expect(tris.nodeRanges).toHaveLength(INTERIOR.length);
         for (const range of tris.nodeRanges) {
             expect(range.name).toMatch(/^sb_veggie_crown_\d+$/);

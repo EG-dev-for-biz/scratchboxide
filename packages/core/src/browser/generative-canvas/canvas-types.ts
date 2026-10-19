@@ -919,9 +919,18 @@ export interface Scene3DData {
      * normals for comparison. Per-level factors take four values (near, near-mid, mid, far) or three (near, mid, far; the
      * near-mid one is then halfway): `blend` the crown normal's share, `noise` the per-leaf variation, `occlusion` the
      * darkening toward the crown's underside and core. `skyBias` tilts the crown normal toward the sky; `lobes: false`
-     * shades every crown with its ellipsoid instead of its lobes.
+     * shades every crown with its ellipsoid instead of its lobes. `breakup` (on by default; `breakup: { enabled: false }`
+     * for comparison) opens world-space holes toward the crown's rim and a few pockets, and varies the grey by clump, lobe
+     * and tree; its fields are the continuous factors of treeCrownShading.ts CrownBreakupOptions.
      */
-    treeCrownShading?: { enabled?: boolean; blend?: number[]; skyBias?: number; noise?: number[]; occlusion?: number[]; lobes?: boolean };
+    treeCrownShading?: {
+        enabled?: boolean; blend?: number[]; skyBias?: number; noise?: number[]; occlusion?: number[]; lobes?: boolean;
+        breakup?: {
+            enabled?: boolean; holes?: number[]; pockets?: number[]; clump?: number[]; tone?: number[]; shadowHoles?: number; clumpPerCrownRadius?: number; clumpMinM?: number; clumpMaxM?: number;
+            coarseOctave?: number; rimWidth?: number; edgeSoftness?: number; filterStart?: number; filterEnd?: number; gapDarkening?: number;
+            clumpTop?: number; clumpCrevice?: number; lobeVariation?: number; treeVariation?: number;
+        };
+    };
     clayPreset?: 'warm-clay' | 'alabaster' | 'onyx' | 'studio-grey' | 'terracotta' | 'porcelain' | 'concrete' | string;
     restructuringTelemetry?: {
         vertices?: number;
@@ -945,6 +954,11 @@ export interface Scene3DData {
         fov?: number;
         /** Physical lens optics the viewport draws (sb_set_camera_lens); absent = an ideal pinhole, no optics passes. */
         lens?: SceneCameraLens;
+        /**
+         * The pose was saved on purpose (the viewport's camera panel, sb_set_camera keepPoseOnLoad): loading the scene
+         * opens on it instead of re-framing generated content.
+         */
+        keepPoseOnLoad?: boolean;
     };
     environment?: {
         skybox?: string;
