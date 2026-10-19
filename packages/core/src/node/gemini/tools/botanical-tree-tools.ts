@@ -134,12 +134,13 @@ export const botanicalTreeHandlers: Record<string, ToolHandler> = {
                 grown: { heightMeters: grownHeight, crownSpreadMeters: grownSpread, bounds: tree.bounds },
                 triangles: tree.lod?.level2Triangles ?? tree.triangles,
                 woodTriangles: tree.lod?.woodTriangles ?? tree.wood,
-                levelTriangles: tree.lod ? [tree.lod.level0?.drawnTriangles, tree.lod.level1?.drawnTriangles, tree.lod.level2Triangles] : undefined,
+                // per level, near to far: near, near-mid, mid, far
+                levelTriangles: tree.lod ? [tree.lod.level0?.drawnTriangles, tree.lod.nearMid?.drawnTriangles, tree.lod.level1?.drawnTriangles, tree.lod.level2Triangles] : undefined,
                 triangleBudget: budget,
                 inferred,
                 seed
             } as unknown as ToolResultPayload,
-            summaryResult: `Grew one SB-Veggie tree (space colonisation, studio clay): ${grownHeight.toFixed(1)} m tall and ${grownSpread.toFixed(1)} m across (asked for ${height} m and ${diameter} m), ${tree.lod?.level2Triangles ?? tree.triangles} triangles at the far level (${tree.lod?.woodTriangles ?? tree.wood} of them wood, within the ${budget} budget for wood; nearer levels draw ${tree.lod?.level0?.drawnTriangles ?? 'n/a'} and ${tree.lod?.level1?.drawnTriangles ?? 'n/a'}). ${Object.keys(inferred).length ? `Inferred, not given: ${Object.entries(inferred).map(([k, v]) => `${k} ${v}`).join(', ')}. ` : ''}GLB: ${outputGlbPath}.`
+            summaryResult: `Grew one SB-Veggie tree (space colonisation, studio clay): ${grownHeight.toFixed(1)} m tall and ${grownSpread.toFixed(1)} m across (asked for ${height} m and ${diameter} m), ${tree.lod?.level2Triangles ?? tree.triangles} triangles at the far level (${tree.lod?.woodTriangles ?? tree.wood} of them wood, within the ${budget} budget for wood; nearer levels draw ${tree.lod?.level0?.drawnTriangles ?? 'n/a'} (near), ${tree.lod?.nearMid?.drawnTriangles ?? 'n/a'} (near-mid) and ${tree.lod?.level1?.drawnTriangles ?? 'n/a'} (mid)). ${Object.keys(inferred).length ? `Inferred, not given: ${Object.entries(inferred).map(([k, v]) => `${k} ${v}`).join(', ')}. ` : ''}GLB: ${outputGlbPath}.`
         };
     }
 };

@@ -138,10 +138,16 @@ export interface TileVegetationPlantParams {
     shellDepthPerHeight?: number;
     /** Distance between leaf clusters / cluster reach (0.5). */
     stationSpacing?: number;
-    /** Distances (m from the camera) at which a viewport changes a tree's level: level 0 up to lodNearPerHeight x its height (1, at most lodNearMax 30 m), level 1 up to lodFarPerHeight x its height (4, at most lodFarMax 140 m), dithered over lodFade (6 m). */
+    /**
+     * Distances (m from the camera) at which a viewport changes a tree's level: near up to lodNearPerHeight x its height (1,
+     * 12-30 m, at most lodNearMax), near-mid up to lodNearMidPerHeight x its height (3, 25-60 m, at most lodNearMidMax), mid
+     * up to lodFarPerHeight x its height (4, 60-140 m, at most lodFarMax), far beyond, dithered over lodFade (6 m) or more.
+     */
     lodNearPerHeight?: number;
+    lodNearMidPerHeight?: number;
     lodFarPerHeight?: number;
     lodNearMax?: number;
+    lodNearMidMax?: number;
     lodFarMax?: number;
     lodFade?: number;
     supportTolerance?: number;
@@ -168,7 +174,7 @@ export const SCENE_TREE_TRIANGLE_CAP = 1_500_000;
 
 /**
  * What the trees may draw, as opposed to what they store (SCENE_TREE_TRIANGLE_CAP above, which bounds each tree's wood, shared
- * by every level, and the blob tree the far masses are fitted to; the far level written is that wood under the masses, so a little over it). Trees are written at three levels, and a viewport draws one per tree
+ * by every level, and the blob tree the far masses are fitted to; the far level written is that wood under the masses, so a little over it). Trees are written at four levels, and a viewport draws one per tree
  * by its distance, so a frame draws far fewer triangles than the file holds: at most this many in a park view, in
  * total and per level. stats.lodFrames measures it on the written trees (camera poses on a grid over the location, an
  * 80 degree view, every tree within 8 m).

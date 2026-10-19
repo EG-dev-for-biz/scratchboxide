@@ -37,7 +37,7 @@ import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { decodeImageInMemory } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 import { VisionModelChain } from '../src/node/gemini/vision-model-chain';
 import {
-    maskTemporaryInViews, parseTemporaryReply, replaceTemporaryViews, temporaryMask, visionTemporaryChecker, TEMPORARY_MIN_CONFIDENCE, type TemporaryChecker
+    maskTemporaryInViews, parseTemporaryReply, replaceTemporaryViews, temporaryMask, visionTemporaryChecker, TEMPORARY_MIN_CONFIDENCE, surveyTemporaryDefault, textureTemporaryEnabled, TEMPORARY_ENV_FLAG, TEXTURE_TEMPORARY_ENV_FLAG, type TemporaryChecker
 } from '../src/node/3d-engine/staged-location/temporary-structures';
 import { prepareSurveySite, runStreetViewSurvey, STREETVIEW_SURVEY_DECLARATION, type StreetViewSurveyDeps, type StreetViewSurveyResult, type SurveySite } from '../src/node/gemini/tools/location-evidence/streetview-survey';
 import type { ProjectionView } from '../src/common/spatial/texture-pass-contracts';
@@ -358,6 +358,21 @@ describe('streetview_survey checkTemporary (synthetic street, synthetic vision r
     it('is declared as a tool option', () => {
         const props = (STREETVIEW_SURVEY_DECLARATION.parameters as { properties: Record<string, { type: string }> }).properties;
         expect(props.checkTemporary.type).toBe('BOOLEAN');
+        expect((props.checkTemporary as unknown as { description: string }).description).toMatch(/Default true/);
+        expect(STREETVIEW_SURVEY_DECLARATION.description).toMatch(/By default also asks, per view, whether anything temporary/);
+    });
+
+    it('is on by default for the tool (SCRATCHBOX_SURVEY_TEMPORARY=0 turns it off); the texture pass stays off unless asked', () => {
+        expect(surveyTemporaryDefault({})).toBe(true);
+        expect(surveyTemporaryDefault({ [TEMPORARY_ENV_FLAG]: '1' })).toBe(true);
+        expect(surveyTemporaryDefault({ [TEMPORARY_ENV_FLAG]: '0' })).toBe(false);
+        // the texture pass: off by default, its own flag, and the legacy survey flag still turns it on
+        expect(textureTemporaryEnabled({})).toBe(false);
+        expect(textureTemporaryEnabled({ [TEMPORARY_ENV_FLAG]: '0' })).toBe(false);
+        expect(textureTemporaryEnabled({ [TEXTURE_TEMPORARY_ENV_FLAG]: '1' })).toBe(true);
+        expect(textureTemporaryEnabled({ [TEMPORARY_ENV_FLAG]: '1' })).toBe(true);
+        expect(textureTemporaryEnabled({ [TEMPORARY_ENV_FLAG]: '1', [TEXTURE_TEMPORARY_ENV_FLAG]: '0' })).toBe(false);
+        expect(TEXTURE_TEMPORARY_ENV_FLAG).not.toBe(TEMPORARY_ENV_FLAG);
     });
 });
 

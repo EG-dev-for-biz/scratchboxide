@@ -207,7 +207,10 @@ describe('Algorithmic UV Unwrap & Rewrap Engine', () => {
     expect(result.canSolveNatively).toBe(true);
     expect(result.tier1Assessment.canSolveNatively).toBe(true);
     expect(result.tier1Assessment.primaryNativeEngine).toBe('cpp-3d-engine');
-    expect(result.tier1Assessment.nativeCapabilitiesUsed).toContain('Algorithmic UV Unwrap & Rewrap Engine (AlgorithmicUvEngine)');
+    expect(result.tier1Assessment.nativeCapabilitiesUsed).toEqual(expect.arrayContaining([
+      expect.stringMatching(/^UV unwrap: .*LSCM.*AlgorithmicUvEngine mode 'unwrap'/),
+      expect.stringMatching(/^Texture rewrap \(mode 'rewrap'\)/)
+    ]));
   });
 
   it('provides registered Gemini agent tools for Algorithmic UV unwrapping and packing', async () => {

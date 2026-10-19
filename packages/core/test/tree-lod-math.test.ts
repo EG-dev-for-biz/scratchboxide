@@ -10,63 +10,91 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-    FADE_STEPS, crossfadeInterval, hysteresisDistance, levelRange, quantiseRange, smoothstep01, stepEdges, targetEdges, type LodBand
+    FADE_STEPS, crossfadeInterval, edgesAtLevel, edgesNoFinerThan, finestLevel, hysteresisDistance, levelRange, quantiseRange, smoothstep01, stepEdges, targetEdges, type LodBand
 } from '../src/browser/generative-canvas/primitives/scene3d/treeLod/treeLodMath';
 
-const BANDS: [LodBand, LodBand, LodBand] = [{ minDistM: 0, maxDistM: 60, fadeM: 10 }, { minDistM: 50, maxDistM: 200, fadeM: 30 }, { minDistM: 170, maxDistM: 1e6, fadeM: 60 }];
+/** An old trees-lod/1 file: near, mid, far. */
+const BANDS3: LodBand[] = [{ minDistM: 0, maxDistM: 60, fadeM: 10 }, { minDistM: 50, maxDistM: 200, fadeM: 30 }, { minDistM: 170, maxDistM: 1e6, fadeM: 60 }];
+/** A trees-lod/2 file: near, near-mid, mid, far. */
+const BANDS4: LodBand[] = [{ minDistM: 0, maxDistM: 60, fadeM: 10 }, { minDistM: 50, maxDistM: 110, fadeM: 20 }, { minDistM: 90, maxDistM: 200, fadeM: 30 }, { minDistM: 170, maxDistM: 1e6, fadeM: 60 }];
+
+const tiles = (e: number[]) => {
+    const r = Array.from({ length: e.length + 1 }, (_, k) => levelRange(e, k));
+    expect(r[0][0]).toBe(0); expect(r[r.length - 1][1]).toBe(1);
+    for (let k = 0; k + 1 < r.length; k++) expect(r[k][1]).toBe(r[k + 1][0]);
+};
 
 describe('tree LOD arithmetic', () => {
     it('crossfades where the bands overlap, and around a gap or a touching pair', () => {
-        expect(crossfadeInterval(BANDS, 0)).toEqual([50, 60]);
-        expect(crossfadeInterval(BANDS, 1)).toEqual([170, 200]);
-        const touching: [LodBand, LodBand, LodBand] = [{ minDistM: 0, maxDistM: 60, fadeM: 10 }, { minDistM: 60, maxDistM: 200, fadeM: 30 }, { minDistM: 200, maxDistM: 1e6, fadeM: 60 }];
+        expect(crossfadeInterval(BANDS3, 0)).toEqual([50, 60]);
+        expect(crossfadeInterval(BANDS3, 1)).toEqual([170, 200]);
+        expect(crossfadeInterval(BANDS4, 1)).toEqual([90, 110]);
+        expect(crossfadeInterval(BANDS4, 2)).toEqual([170, 200]);
+        const touching: LodBand[] = [{ minDistM: 0, maxDistM: 60, fadeM: 10 }, { minDistM: 60, maxDistM: 200, fadeM: 30 }, { minDistM: 200, maxDistM: 1e6, fadeM: 60 }];
         const [a, b] = crossfadeInterval(touching, 0);
         expect(a).toBeLessThan(60); expect(b).toBeGreaterThan(60);
-        const gap: [LodBand, LodBand, LodBand] = [{ minDistM: 0, maxDistM: 40, fadeM: 10 }, { minDistM: 50, maxDistM: 200, fadeM: 30 }, { minDistM: 200, maxDistM: 1e6, fadeM: 60 }];
+        const gap: LodBand[] = [{ minDistM: 0, maxDistM: 40, fadeM: 10 }, { minDistM: 50, maxDistM: 200, fadeM: 30 }, { minDistM: 200, maxDistM: 1e6, fadeM: 60 }];
         const [ga, gb] = crossfadeInterval(gap, 0);
         expect(ga).toBeLessThan(45); expect(gb).toBeGreaterThan(45);
     });
 
-    it('target edges are 0 <= e0 <= e1 <= 1, continuous and monotone in distance, and settle to a pure level inside each band', () => {
-        let prev = targetEdges(0, BANDS);
-        expect(prev).toEqual({ e0: 1, e1: 1 });                       // level 0 alone
-        let maxJump = 0;
-        for (let d = 0.1; d <= 400; d += 0.1) {
-            const e = targetEdges(d, BANDS);
-            expect(e.e0).toBeGreaterThanOrEqual(0); expect(e.e1).toBeLessThanOrEqual(1 + 1e-9); expect(e.e1).toBeGreaterThanOrEqual(e.e0 - 1e-9);
-            expect(e.e0).toBeLessThanOrEqual(prev.e0 + 1e-9);          // level 0's share only shrinks with distance
-            expect(e.e1).toBeLessThanOrEqual(prev.e1 + 1e-9);
-            maxJump = Math.max(maxJump, Math.abs(e.e0 - prev.e0), Math.abs(e.e1 - prev.e1));
-            prev = e;
-        }
-        expect(maxJump).toBeLessThan(0.08);                           // a 0.1 m step never changes a share by more than 8 %
-        expect(targetEdges(100, BANDS)).toEqual({ e0: 0, e1: 1 });    // level 1 alone
-        expect(targetEdges(500, BANDS)).toEqual({ e0: 0, e1: 0 });    // level 2 alone
-        const mid = targetEdges(55, BANDS);
-        expect(mid.e0).toBeCloseTo(0.5, 5); expect(mid.e1).toBe(1);   // half and half across the first overlap
+    for (const [name, bands] of [['three levels', BANDS3], ['four levels', BANDS4]] as const) {
+        it(`target edges are ordered in [0, 1], continuous and monotone in distance, and settle to a pure level inside each band (${name})`, () => {
+            const n = bands.length;
+            let prev = targetEdges(0, bands);
+            expect(prev).toEqual(edgesAtLevel(0, n));                   // level 0 alone
+            let maxJump = 0;
+            for (let d = 0.1; d <= 400; d += 0.1) {
+                const e = targetEdges(d, bands);
+                expect(e).toHaveLength(n - 1);
+                for (let k = 0; k < e.length; k++) {
+                    expect(e[k]).toBeGreaterThanOrEqual(k ? e[k - 1] - 1e-12 : 0); expect(e[k]).toBeLessThanOrEqual(1 + 1e-9);
+                    expect(e[k]).toBeLessThanOrEqual(prev[k] + 1e-9);   // a finer level's share only shrinks with distance
+                    maxJump = Math.max(maxJump, Math.abs(e[k] - prev[k]));
+                }
+                prev = e;
+            }
+            expect(maxJump).toBeLessThan(0.08);                         // a 0.1 m step never changes a share by more than 8 %
+            expect(targetEdges(500, bands)).toEqual(edgesAtLevel(n - 1, n));
+            expect(targetEdges(55, bands)[0]).toBeCloseTo(0.5, 5);      // half and half across the first overlap
+        });
+    }
+
+    it('settles to the near-mid level between its handovers, and to the mid level after them', () => {
+        expect(targetEdges(80, BANDS4)).toEqual(edgesAtLevel(1, 4));
+        expect(targetEdges(140, BANDS4)).toEqual(edgesAtLevel(2, 4));
+        expect(targetEdges(100, BANDS3)).toEqual(edgesAtLevel(1, 3));
+        const half = targetEdges(100, BANDS4);
+        expect(half[0]).toBe(0); expect(half[1]).toBeCloseTo(0.5, 5); expect(half[2]).toBe(1);
     });
 
-    it('every hash value is drawn by exactly one level: the three ranges tile [0, 1)', () => {
-        for (const e of [{ e0: 0.3, e1: 0.8 }, { e0: 1, e1: 1 }, { e0: 0, e1: 0 }, { e0: 0.5, e1: 0.5 }]) {
-            const r = [0, 1, 2].map(k => levelRange(e, k as 0 | 1 | 2));
-            expect(r[0][0]).toBe(0); expect(r[2][1]).toBe(1);
-            expect(r[0][1]).toBe(r[1][0]); expect(r[1][1]).toBe(r[2][0]);
-        }
+    it('every hash value is drawn by exactly one level: the ranges tile [0, 1)', () => {
+        for (const e of [[0.3, 0.8], [1, 1], [0, 0], [0.5, 0.5], [0.2, 0.4, 0.9], [0, 0, 0], [1, 1, 1], [0, 0.5, 0.5]]) tiles(e);
     });
 
     it('moves the edges at a bounded rate and keeps them ordered', () => {
-        let cur = { e0: 1, e1: 1 };
-        const target = { e0: 0, e1: 0 };
-        let frames = 0;
-        while ((cur.e0 > 0 || cur.e1 > 0) && frames < 100) {
-            const next = stepEdges(cur, target, 0.1);
-            expect(Math.abs(next.e0 - cur.e0)).toBeLessThanOrEqual(0.1 + 1e-12); expect(Math.abs(next.e1 - cur.e1)).toBeLessThanOrEqual(0.1 + 1e-12);
-            expect(next.e1).toBeGreaterThanOrEqual(next.e0);
-            cur = next; frames++;
+        for (const n of [3, 4]) {
+            let cur = edgesAtLevel(0, n);
+            const target = edgesAtLevel(n - 1, n);
+            let frames = 0;
+            while (cur.some(x => x > 0) && frames < 100) {
+                const next = stepEdges(cur, target, 0.1);
+                next.forEach((x, k) => { expect(Math.abs(x - cur[k])).toBeLessThanOrEqual(0.1 + 1e-12); if (k) expect(x).toBeGreaterThanOrEqual(next[k - 1]); });
+                cur = next; frames++;
+            }
+            expect(frames).toBeGreaterThanOrEqual(10); expect(frames).toBeLessThanOrEqual(11);
         }
-        expect(frames).toBeGreaterThanOrEqual(10); expect(frames).toBeLessThanOrEqual(11);
-        const inverted = stepEdges({ e0: 0.9, e1: 0.9 }, { e0: 0.9, e1: 0.2 }, 0.5);
-        expect(inverted.e1).toBeGreaterThanOrEqual(inverted.e0);
+        const inverted = stepEdges([0.9, 0.9], [0.9, 0.2], 0.5);
+        expect(inverted[1]).toBeGreaterThanOrEqual(inverted[0]);
+    });
+
+    it('gives up the finest level first (the triangle budget) and keeps a level coarse enough for a shadow', () => {
+        expect(finestLevel([0.4, 0.7, 1])).toBe(0);
+        expect(finestLevel([0, 0.7, 1])).toBe(1);
+        expect(finestLevel([0, 0, 0])).toBe(3);
+        expect(edgesNoFinerThan([0.4, 0.7, 1], 1)).toEqual([0, 0.7, 1]);   // the near share goes to near-mid
+        expect(edgesNoFinerThan([0.4, 0.7, 1], 2)).toEqual([0, 0, 1]);     // ... and near-mid's to mid
+        tiles(edgesNoFinerThan([0.4, 0.7, 1], 2));
     });
 
     it('quantises a range to FADE_STEPS: empty, full, or a step range', () => {

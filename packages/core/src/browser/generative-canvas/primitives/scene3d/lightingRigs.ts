@@ -402,14 +402,36 @@ export const CINEMATIC_RIGS: Record<string, CinematicRigDefinition> = {
 };
 
 /**
- * Creates Three.js lights for a given cinematic rig definition.
+ * A rig written into a scene as explicit lights (environment.lightingRig, e.g. by lighting_configure_gaffer_rig): light
+ * positions are relative to `origin` (the subject) and scaled with the content like the preset rigs; intensities keep the
+ * rig's ratios.
+ */
+export interface SceneLightingRig extends CinematicRigDefinition {
+    /** Scene point the light positions are relative to (default the scene origin). */
+    origin?: [number, number, number];
+}
+
+/** Whether a value is a usable explicit rig: a name and at least one light with a type, a position and an intensity. */
+export function isSceneLightingRig(value: unknown): value is SceneLightingRig {
+    if (!value || typeof value !== 'object') return false;
+    const r = value as Partial<SceneLightingRig>;
+    const vec = (v: unknown) => Array.isArray(v) && v.length === 3 && v.every(n => typeof n === 'number' && Number.isFinite(n));
+    return typeof r.name === 'string' && r.name.length > 0 && Array.isArray(r.lights) && r.lights.length > 0
+        && r.lights.every(l => !!l && (l.type === 'directional' || l.type === 'point' || l.type === 'spot') && vec(l.position) && typeof l.intensity === 'number' && Number.isFinite(l.intensity) && l.intensity >= 0)
+        && (r.origin === undefined || vec(r.origin));
+}
+
+/**
+ * Creates Three.js lights for a cinematic rig: a preset key from CINEMATIC_RIGS, or an explicit rig definition.
  */
 export function buildThreeJsLightingRig(
-    rigKey: string = 'three_point_studio',
+    rigKey: string | SceneLightingRig = 'three_point_studio',
     options?: { kelvin?: number; scale?: number; isLargeScale?: boolean }
 ): THREE.Light[] {
-    const key = rigKey.toLowerCase().replace(/[-\s]/g, '_');
-    const rig = CINEMATIC_RIGS[key] || CINEMATIC_RIGS.three_point_studio;
+    const rig: SceneLightingRig = typeof rigKey === 'string'
+        ? (CINEMATIC_RIGS[rigKey.toLowerCase().replace(/[-\s]/g, '_')] || CINEMATIC_RIGS.three_point_studio)
+        : rigKey;
+    const [ox, oy, oz] = typeof rigKey === 'string' ? [0, 0, 0] : (rigKey.origin ?? [0, 0, 0]);
     const lights: THREE.Light[] = [];
 
     // Ambient light baseline (boosted for large geospatial scenes). Its colour is the rig's own: a sky-blue fill here tinted
@@ -444,7 +466,7 @@ export function buildThreeJsLightingRig(
         if (cfg.type === 'directional') {
             const dir = new THREE.DirectionalLight(color, cfg.intensity);
             dir.name = cfg.name;
-            dir.position.set(cfg.position[0] * scale, cfg.position[1] * scale, cfg.position[2] * scale);
+            dir.position.set(ox + cfg.position[0] * scale, oy + cfg.position[1] * scale, oz + cfg.position[2] * scale);
             if (cfg.direction) {
                 const target = new THREE.Object3D();
                 target.position.set(
@@ -471,7 +493,7 @@ export function buildThreeJsLightingRig(
                 cfg.innerConeAngle ? 1.0 - (cfg.innerConeAngle / (cfg.outerConeAngle ?? 0.6)) : 0.4
             );
             spot.name = cfg.name;
-            spot.position.set(cfg.position[0] * scale, cfg.position[1] * scale, cfg.position[2] * scale);
+            spot.position.set(ox + cfg.position[0] * scale, oy + cfg.position[1] * scale, oz + cfg.position[2] * scale);
             if (cfg.direction) {
                 const target = new THREE.Object3D();
                 target.position.set(
@@ -497,7 +519,7 @@ export function buildThreeJsLightingRig(
                 2.0 // inverse square decay
             );
             point.name = cfg.name;
-            point.position.set(cfg.position[0] * scale, cfg.position[1] * scale, cfg.position[2] * scale);
+            point.position.set(ox + cfg.position[0] * scale, oy + cfg.position[1] * scale, oz + cfg.position[2] * scale);
             if (cfg.castShadow) {
                 point.castShadow = true;
                 point.shadow.mapSize.width = 1024;

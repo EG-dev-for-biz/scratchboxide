@@ -875,6 +875,14 @@ export interface Scene3DData {
     parentCommitId?: string;
     objects?: Media4DObject[];
     renderMode?: 'wireframe' | 'solid' | 'shaded' | 'pbr' | 'clay';
+    /**
+     * Soft crown shading on the leaves of staged trees (on by default): `enabled: false` shows the leaves with their own
+     * normals for comparison. Per-level factors take four values (near, near-mid, mid, far) or three (near, mid, far; the
+     * near-mid one is then halfway): `blend` the crown normal's share, `noise` the per-leaf variation, `occlusion` the
+     * darkening toward the crown's underside and core. `skyBias` tilts the crown normal toward the sky; `lobes: false`
+     * shades every crown with its ellipsoid instead of its lobes.
+     */
+    treeCrownShading?: { enabled?: boolean; blend?: number[]; skyBias?: number; noise?: number[]; occlusion?: number[]; lobes?: boolean };
     clayPreset?: 'warm-clay' | 'alabaster' | 'onyx' | 'studio-grey' | 'terracotta' | 'porcelain' | 'concrete' | string;
     restructuringTelemetry?: {
         vertices?: number;

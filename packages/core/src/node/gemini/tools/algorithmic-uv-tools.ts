@@ -39,10 +39,66 @@ function unsupportedPngVariant(buf: Buffer): string | undefined {
     return undefined;
 }
 
+/** 'unwrap' / 'rewrap': runs the engine and summarises the report (chart details trimmed to the worst charts). */
+async function runUvAtlasMode(mode: 'unwrap' | 'rewrap', inputGlbPath: string, outputGlbPath: string | undefined, args: Record<string, unknown>): Promise<ToolHandlerOutcome> {
+    const fail = (error: string): ToolHandlerOutcome => ({ resultPayload: { success: false, mode, inputGlbPath, error } as unknown as ToolResultPayload, status: 'failed', summaryResult: `UV ${mode} FAILED: ${error}` });
+    const outPath = outputGlbPath ?? inputGlbPath.replace(/\.glb$/i, '') + `_${mode}.glb`;
+    const size = asNumber(args.atlasSize);
+    const outputImageFormat = asString(args.outputImageFormat);
+    let result;
+    try {
+        result = await AlgorithmicUvEngine.processGlb({
+            inputGlbPath, outputGlbPath: outPath, mode,
+            uvRewrap: {
+                texelsPerMeter: asNumber(args.texelsPerMeter),
+                atlasSize: size,
+                texelDensityScale: asNumber(args.texelDensityScale),
+                gutterTexels: asNumber(args.gutterTexels),
+                maxAngleStretch: asNumber(args.maxAngleStretch),
+                maxAreaDistortion: asNumber(args.maxAreaDistortion),
+                chartNormalToleranceDeg: asNumber(args.chartNormalToleranceDeg),
+                conformal: asBoolean(args.conformal, true),
+                outputImageFormat: outputImageFormat === 'png' || outputImageFormat === 'jpeg' ? outputImageFormat : 'source',
+                transferSourceGlbPath: asString(args.transferSourceGlbPath),
+                transferMaxDistanceM: asNumber(args.transferMaxDistanceM)
+            }
+        });
+    } catch (e) {
+        return fail((e as Error).message);
+    }
+    const r = result.uvRewrap!;
+    const f2 = (x: number) => x.toFixed(2);
+    // the payload stays small for the model: the 12 largest atlases in full (worst 3 charts each), the rest as one line
+    const bySize = [...r.atlases].sort((x, y) => y.triangles - x.triangles);
+    const atlases = bySize.slice(0, 12).map(a => {
+        const { chartDetails, textures, ...rest } = a;
+        const worst = [...chartDetails].sort((x, y) => y.stretchRms * y.areaRms - x.stretchRms * x.areaRms).slice(0, 3)
+            .map(c => ({ method: c.method, triangles: c.triangles, stretchRms: c.stretchRms, areaRms: c.areaRms, overThreshold: c.overThreshold }));
+        return { ...rest, worstCharts: worst, textures: textures.map(t => ({ slots: t.slots, outputSize: t.outputSize, outputBytes: t.outputBytes, mimeType: t.mimeType })) };
+    });
+    const otherAtlases = bySize.slice(12).map(a => ({ material: a.material, status: a.status, triangles: a.triangles, charts: a.charts, size: [a.width, a.height], textures: a.textures.length, failures: a.failures }));
+    const done = r.atlases.filter(a => a.status !== 'skipped');
+    const parts: string[] = [];
+    parts.push(`UV ${mode}: ${done.length} of ${r.atlases.length} material atlases in ${(r.totalMs / 1000).toFixed(1)} s; ${r.charts} charts (${r.lscmCharts} LSCM, ${r.charts - r.lscmCharts} orthographic), ${r.overlappingTrianglePairs} overlapping triangle pairs.`);
+    parts.push(`Distortion (area-weighted RMS): angle stretch ${f2(r.distortion.stretchRms)} (max ${f2(r.distortion.stretchMax)}), area ratio ${f2(r.distortion.areaRms)} (max ${f2(r.distortion.areaMax)}); orthographic projection of the same charts would be ${f2(r.orthographicDistortion.stretchRms)} / ${f2(r.orthographicDistortion.areaRms)}.`);
+    parts.push(`Texel density ${r.texelDensity.meanTexelsPerMeter.toFixed(1)} texels/m (CV ${f2(r.texelDensity.cv)}, p5/p95 ${f2(r.texelDensity.uniformity)}); atlas utilisation ${(r.utilisation * 100).toFixed(1)}%; sizes ${[...new Set(done.map(a => `${a.width}x${a.height}`))].slice(0, 6).join(', ')}.`);
+    if (mode === 'rewrap') parts.push(`Rebaked ${r.texturesRebaked.length} textures (${r.texturesRebaked.slice(0, 4).map(t => `${t.slots.join('+')} ${t.outputSize[0]}x${t.outputSize[1]}`).join('; ')}${r.texturesRebaked.length > 4 ? '; ...' : ''}).`);
+    else parts.push(`New UVs written as ${[...new Set(done.map(a => a.texCoordWritten))].join(', ')}; textures untouched.`);
+    if (r.texturesFailed.length) parts.push(`NOT rebaked (${r.texturesFailed.length}): ${r.texturesFailed.slice(0, 4).map(f => `${f.slot}: ${f.reason}`).join('; ')}.`);
+    if (r.primitivesSkipped.length) parts.push(`Primitives left as they were (${r.primitivesSkipped.length}): ${r.primitivesSkipped.slice(0, 3).map(p => `mesh ${p.mesh}/${p.primitive}: ${p.reason}`).join('; ')}.`);
+    parts.push(`Output: ${outPath} (${(result.outputGlbBuffer!.length / 1e6).toFixed(1)} MB).`);
+    const { outputGlbBuffer, uvRewrap, ...base } = result;
+    return {
+        resultPayload: { ...base, outputGlbPath: outPath, outputGlbBytes: outputGlbBuffer!.length, uvRewrap: { ...uvRewrap!, texturesRebaked: uvRewrap!.texturesRebaked.slice(0, 12), texturesRebakedCount: uvRewrap!.texturesRebaked.length, atlases, otherAtlases } } as unknown as ToolResultPayload,
+        status: result.success ? 'completed' : 'failed',
+        summaryResult: parts.join(' ')
+    };
+}
+
 export const ALGORITHMIC_UV_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'algorithmic_uv_unwrap_rewrap',
-        description: 'Decode every embedded baseColor texture of a .glb (JPEG, PNG or WebP) and compute PBR maps from its pixels. Geometry and UVs are not modified. Writes a tangent-space normal map and an ORM texture (R = ambient occlusion, G = roughness, B = metalness) as PNG and attaches them to each material\'s empty normalTexture, metallicRoughnessTexture and occlusionTexture slots (KHR_materials_unlit is removed from those materials so the maps are shaded). Optional albedo de-lighting rewrites the baseColor image itself. Reports decoded image sizes and texel counts; any texture that cannot be decoded fails the call.',
+        description: 'UV unwrap, texture rewrap, or PBR maps for a .glb, by mode. "unwrap": new non-overlapping UV charts for every triangle primitive (normal-clustered charts; each chart\'s distortion is measured as angle stretch and area ratio, charts the orthographic projection distorts are flattened conformally with LSCM, and charts neither passes are split), packed into one atlas per material with gutters at one texel density, written as a new TEXCOORD set (TEXCOORD_0 when the mesh had none); textures are untouched. "rewrap": the same atlas replaces TEXCOORD_0 and every texture the material uses (baseColor, normal, metallicRoughness, occlusion, emissive and extension textures) is rebaked into it from the old UVs (exact per-triangle transfer, bilinear, gutter dilation); normal maps are converted to the new tangent frame and TANGENT is rewritten; with transferSourceGlbPath the textures are baked instead from another mesh by nearest surface (e.g. a remesh from the scan it came from). A texture that cannot be rebaked is reported with the reason and its material keeps its old UVs. Reports charts (orthographic / LSCM), distortion per chart and overall, texel-density uniformity, atlas utilisation and size, and each texture rebaked with its size. "preserve-100-lock" (default): geometry and UVs untouched; computes a normal map and an ORM texture (R = AO, G = roughness, B = metalness) from each baseColor image\'s pixels (image heuristics, not measurements) and attaches them; optional albedo de-lighting rewrites the baseColor image.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -52,7 +108,51 @@ export const ALGORITHMIC_UV_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 mode: {
                     type: 'STRING',
-                    description: 'Engine mode. Only "preserve-100-lock" (geometry and UVs untouched) is implemented; "conformal-reparameterize" fails because no UV reparameterization exists. Defaults to "preserve-100-lock".'
+                    description: '"unwrap" (new UV set, textures untouched), "rewrap" (new UVs and every texture rebaked into them) or "preserve-100-lock" (UVs untouched, PBR maps from the baseColor pixels). Default "preserve-100-lock".'
+                },
+                texelsPerMeter: {
+                    type: 'NUMBER',
+                    description: 'unwrap / rewrap: atlas texel density in texels per metre. Default: the source texture\'s measured density (times texelDensityScale); for an untextured mesh the largest density that fits a 2048 atlas.'
+                },
+                atlasSize: {
+                    type: 'NUMBER',
+                    description: 'unwrap / rewrap: square atlas size in texels; the largest texel density that fits is used (instead of texelsPerMeter).'
+                },
+                texelDensityScale: {
+                    type: 'NUMBER',
+                    description: 'unwrap / rewrap: multiplier on the source texture\'s measured density when neither texelsPerMeter nor atlasSize is given (default 1).'
+                },
+                gutterTexels: {
+                    type: 'NUMBER',
+                    description: 'unwrap / rewrap: texels of padding around every chart, filled by dilation (default 2).'
+                },
+                maxAngleStretch: {
+                    type: 'NUMBER',
+                    description: 'unwrap / rewrap: accepted area-weighted RMS of the angle stretch sigma1/sigma2 per chart (default 1.25; 1 = conformal).'
+                },
+                maxAreaDistortion: {
+                    type: 'NUMBER',
+                    description: 'unwrap / rewrap: accepted area-weighted RMS of the area ratio max(r, 1/r) per chart (default 1.5).'
+                },
+                chartNormalToleranceDeg: {
+                    type: 'NUMBER',
+                    description: 'unwrap / rewrap: normal tolerance in degrees charts are grown with before distortion splits them (default 60).'
+                },
+                conformal: {
+                    type: 'BOOLEAN',
+                    description: 'unwrap / rewrap: flatten charts the orthographic projection distorts with LSCM before splitting them (default true).'
+                },
+                transferSourceGlbPath: {
+                    type: 'STRING',
+                    description: 'rewrap only: bake the textures from this other .glb by nearest surface instead of from the input\'s own textures (both in the same coordinate frame).'
+                },
+                transferMaxDistanceM: {
+                    type: 'NUMBER',
+                    description: 'rewrap with transferSourceGlbPath: ignore source surface farther than this (metres; default unlimited).'
+                },
+                outputImageFormat: {
+                    type: 'STRING',
+                    description: 'rewrap: "source" (default: JPEG where the source image was JPEG, else PNG), "png" or "jpeg" for rebaked colour textures; normal maps are always PNG.'
                 },
                 lithologyProfile: {
                     type: 'STRING',
@@ -224,7 +324,7 @@ export const ALGORITHMIC_UV_TOOL_DECLARATIONS: ToolDeclaration[] = [
 ];
 
 export const algorithmicUvHandlers: Record<string, ToolHandler> = {
-    algorithmic_uv_unwrap_rewrap: async (args, _ctx) => {
+    algorithmic_uv_unwrap_rewrap: async (args, ctx) => {
         const inputGlbPath = asString(args.inputGlbPath);
         if (!inputGlbPath) {
             return {
@@ -240,6 +340,14 @@ export const algorithmicUvHandlers: Record<string, ToolHandler> = {
             ? args.biophysicalContract as BiophysicalMaterialContract
             : undefined;
         const autoInducePeriodicity = asBoolean(args.autoInducePeriodicity, false);
+
+        if (mode === 'unwrap' || mode === 'rewrap') {
+            // relative paths resolve against the workspace root
+            const base = ctx?.workspaceRoot || process.cwd();
+            const abs = (p?: string) => p ? path.resolve(base, p) : undefined;
+            const src = asString(args.transferSourceGlbPath);
+            return runUvAtlasMode(mode, abs(inputGlbPath)!, abs(outputGlbPath), { ...args, ...(src ? { transferSourceGlbPath: abs(src) } : {}) });
+        }
 
         const result = await AlgorithmicUvEngine.processGlb({
             inputGlbPath,

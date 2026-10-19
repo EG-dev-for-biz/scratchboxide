@@ -330,10 +330,11 @@ describe('Agent Lighting Intelligence - Unit 5: Gemini Agent Domain Pack & Opera
             style: 'noir',
             keyToFillRatio: 8.0,
             keyKelvin: 3800
-        }, {} as any);
+        }, { request: { activeArtifact: { id: 'scene-noir', type: '3d-scene', title: 'Noir', version: 1, data: { title: 'Noir', camera: { position: [6, 3, 6], target: [0, 1, 0] } } } } } as any);
 
         expect(res.resultPayload).toBeDefined();
         expect(res.resultPayload.success).toBe(true);
+        expect(res.resultPayload.applied).toBe(true);
         expect(res.resultPayload.style).toBe('noir');
         expect(res.resultPayload.keyToFillRatio).toBe(8.0);
         expect(res.resultPayload.keyToFillStops).toBe(3.0);

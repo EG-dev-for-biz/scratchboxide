@@ -99,6 +99,8 @@ import type { ToolContext, ToolDeclaration, ToolHandler, ToolHandlerOutcome, Too
 import { STAGED_MATERIAL_MODE_DECLARATION, STAGED_MATERIAL_MODE_TOOL, runStagedMaterialModeTool } from './staged-material-mode-tool';
 import { anchorOffset, offsetObjects, partitionActiveScene } from '../../3d-engine/staged-location/kept-structure';
 import { applySunToScene } from './atmosphere-tools';
+import type { CanvasArtifact, Scene3DData } from '../../../browser/generative-canvas/canvas-types';
+import { DirectDispatchOperatorEngine } from '../../../browser/generative-canvas/services/direct-dispatch-operator-engine';
 
 /** Street View grounding service shared by calls, so its project-number lookup runs once per process. */
 let streetViewGroundingService: StreetViewGroundingImageService | undefined;
@@ -3251,7 +3253,7 @@ export const WEBXR_GEOSPATIAL_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'webxr_geospatial_calibrate',
-        description: 'Calibrate geodetic-to-WebXR coordinate alignment via anchor origin, autonomous sensor fusion (device GPS + compass heading + WebXR viewer pose), or optical manual pin to eliminate GPS drift.',
+        description: 'Computes a geodetic-to-WebXR coordinate alignment (heading offset, translation, alignment matrix) via anchor origin, sensor fusion (device GPS + compass heading + WebXR viewer pose), or optical manual pin. Computed only (applied: false): no XR session holds it; pass its headingOffsetDeg and translationOffset to webxr_geospatial_align_coordinates to use it.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -3538,6 +3540,8 @@ export const webxrGeospatialHandlers: Record<string, ToolHandler> = {
         return {
             resultPayload: {
                 success: true,
+                applied: false,
+                notApplied: 'no WebXR session holds this alignment; it is returned for webxr_geospatial_align_coordinates (headingOffsetDeg, translationOffset) or a running XR session to use',
                 mode,
                 originAnchor,
                 alignmentState: {
@@ -3548,7 +3552,7 @@ export const webxrGeospatialHandlers: Record<string, ToolHandler> = {
                     matrixElements: state.alignmentMatrix.elements
                 }
             },
-            summaryResult: `Calibrated WebXR geospatial alignment via ${mode} mode (source: ${state.calibrationSource}, heading offset: ${state.headingOffsetDeg.toFixed(2)}°, translation: [${state.translationOffset[0].toFixed(2)}, ${state.translationOffset[1].toFixed(2)}, ${state.translationOffset[2].toFixed(2)}]).`
+            summaryResult: `NOT applied: computed only. WebXR geospatial alignment via ${mode} mode (source: ${state.calibrationSource}, heading offset ${state.headingOffsetDeg.toFixed(2)}°, translation [${state.translationOffset[0].toFixed(2)}, ${state.translationOffset[1].toFixed(2)}, ${state.translationOffset[2].toFixed(2)}]). No WebXR session holds it: the server runs no XR session and this alignment is not stored anywhere; to use it, pass headingOffsetDeg and translationOffset to webxr_geospatial_align_coordinates, or load it into the WebXRGeospatialAnchorBridge of a running XR session.`
         };
     },
 
@@ -4122,7 +4126,7 @@ export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
 export const OPTICS_LENS_DISTORTION_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'optics_configure_lens_distortion',
-        description: 'Configures Brown-Conrady and VFX optical lens distortion shader parameters from an explicit lens (a presetId, a focalLengthMm, or customParams coefficients), calculates overscan margin, evaluates UV coordinate displacement, or outputs production GLSL shader code. One of presetId, focalLengthMm or customParams is required; no lens is assumed.',
+        description: 'Computes Brown-Conrady lens distortion parameters (computed only: the 3D viewport has no lens-distortion pass, so nothing on screen changes; the result says applied: false) from an explicit lens (a presetId, a focalLengthMm, or customParams coefficients), calculates overscan margin, evaluates UV coordinate displacement, or outputs production GLSL shader code. One of presetId, focalLengthMm or customParams is required; no lens is assumed.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -4344,9 +4348,10 @@ export const opticsLensDistortionHandlers: Record<string, ToolHandler> = {
             };
         }
 
+        const notApplied = 'the 3D viewport has no lens-distortion pass (LensDistortionEffect is not wired into it), so no viewport or render changed; applying it needs that pass in the viewport, or the GLSL (includeGlslShader) in a renderer that draws it';
         return {
-            resultPayload: result as unknown as ToolResultPayload,
-            summaryResult: `Configured Brown-Conrady lens distortion (k1: ${config.k1?.toFixed(4)}, k2: ${config.k2?.toFixed(4)}, mode: ${config.mode ?? 'redistort'}, overscanMargin: ${(overscanMargin * 100).toFixed(1)}%) with ${distortedSamples.length} sampled points.`
+            resultPayload: { ...result, applied: false, notApplied } as unknown as ToolResultPayload,
+            summaryResult: `NOT applied: computed only. Brown-Conrady lens distortion k1 ${config.k1?.toFixed(4)}, k2 ${config.k2?.toFixed(4)}, mode ${config.mode ?? 'redistort'}, overscan margin ${(overscanMargin * 100).toFixed(1)}%, ${distortedSamples.length} sampled points. ${notApplied}.`
         };
     },
 
@@ -4543,7 +4548,7 @@ export const poseDepthHandlers: Record<string, ToolHandler> = {
 export const PHYSICAL_CAMERA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'configure_physical_camera',
-        description: 'Configures real-world physical camera optical parameters (sensor format, focal length, aperture f-stop, anamorphic squeeze, focus distance) and computes exact optical frustum FOV, Zeiss hyperfocal distance, depth of field limits, and circle of confusion blur diameters.',
+        description: 'Puts a real-world lens on the open 3D scene\'s camera: sets the viewport\'s vertical field of view from the focal length and sensor height (sensor format, focal length), and computes the optical frustum, hyperfocal distance and depth-of-field limits for the aperture and focus distance. The result says applied: true and returns the updated scene; with no 3D scene (or no camera pose in it) it says NOT applied and changes nothing. Depth of field, bokeh and anamorphic squeeze are computed only: the 3D viewport has no depth-of-field pass and keeps its own aspect ratio.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -4641,7 +4646,7 @@ export const PHYSICAL_CAMERA_TOOL_DECLARATIONS: ToolDeclaration[] = [
 ];
 
 export const physicalCameraHandlers: Record<string, ToolHandler> = {
-    async configure_physical_camera(args) {
+    async configure_physical_camera(args, ctx) {
         const focalLengthMm = Number(args.focalLengthMm ?? 50);
         const apertureFStop = Number(args.apertureFStop ?? 2.8);
         const focusDistanceMeters = args.focusDistanceMeters !== undefined ? Number(args.focusDistanceMeters) : 5.0;
@@ -4673,26 +4678,63 @@ export const physicalCameraHandlers: Record<string, ToolHandler> = {
             frustum.sensorDimensions.diagonalMm
         );
 
+        const computed = {
+            config,
+            frustum: {
+                verticalFovDeg: Number(frustum.verticalFovDeg.toFixed(2)),
+                horizontalFovDeg: Number(frustum.horizontalFovDeg.toFixed(2)),
+                diagonalFovDeg: Number(frustum.diagonalFovDeg.toFixed(2)),
+                aspectRatio: Number(frustum.aspectRatio.toFixed(3)),
+                sensorDimensions: frustum.sensorDimensions
+            },
+            hyperfocalDistanceMeters: Number(hyperfocal.toFixed(3)),
+            depthOfField: {
+                nearFocusLimitMeters: Number(dof.nearFocusLimitMeters.toFixed(3)),
+                farFocusLimitMeters: Number(dof.farFocusLimitMeters.toFixed(3)),
+                dofThicknessMeters: Number(dof.dofThicknessMeters.toFixed(3)),
+                hyperfocalDistanceMeters: Number(dof.hyperfocalDistanceMeters.toFixed(3)),
+                isInfinitelyDeep: dof.isInfinitelyDeep
+            }
+        };
+        const lensText = `${focalLengthMm} mm, f/${apertureFStop}, ${sensorFormat}: vertical FOV ${frustum.verticalFovDeg.toFixed(1)}° (horizontal ${frustum.horizontalFovDeg.toFixed(1)}° on the sensor's ${frustum.aspectRatio.toFixed(2)}:1)`;
+        const dofText = `focus ${focusDistanceMeters.toFixed(1)} m, sharp from ${dof.nearFocusLimitMeters.toFixed(2)} m to ${dof.isInfinitelyDeep ? '∞' : dof.farFocusLimitMeters.toFixed(2) + ' m'}`;
+        const notAppliedParts = [
+            `depth of field and bokeh (${dofText}${enableDepthOfField ? '' : ', disabled anyway'}): the 3D viewport has no depth-of-field pass`,
+            ...(anamorphicRatio !== 1 ? [`the ${anamorphicRatio}x anamorphic squeeze: the viewport keeps its own aspect ratio`] : []),
+            'the horizontal field of view: the viewport\'s width follows its panel, not the sensor aspect'
+        ];
+        const notApplied = (why: string) => ({
+            status: 'failed' as const,
+            resultPayload: { success: false, applied: false, notApplied: why, ...computed } as unknown as ToolResultPayload,
+            summaryResult: `NOT applied: computed only. ${why}. Computed: ${lensText}; ${dofText}.`
+        });
+        const active = ctx?.request?.activeArtifact;
+        if (!active || active.type !== '3d-scene' || !active.data) return notApplied('no 3D scene is open, so no camera changed');
+        const data0 = active.data as Scene3DData;
+        if (!data0.camera || !Array.isArray(data0.camera.position)) return notApplied(`the scene "${active.title || active.id}" has no camera pose to put the lens on (frame it with sb_set_camera first)`);
+        const fov = Number(frustum.verticalFovDeg.toFixed(3));
+        if (!(fov > 0 && fov < 180)) return notApplied(`the computed vertical field of view ${fov}° is not a usable camera FOV`);
+        const engine = new DirectDispatchOperatorEngine(JSON.parse(JSON.stringify(data0)) as Scene3DData);
+        const res = engine.dispatch('sb_set_camera', { fov });
+        if (!res.success) return notApplied(res.error || 'sb_set_camera failed');
+        const artifact = {
+            ...active,
+            data: engine.getSceneData(),
+            summary: `Camera lens applied: ${focalLengthMm} mm on ${sensorFormat} (vertical FOV ${fov.toFixed(1)}°).`,
+            version: ((active as { version?: number }).version || 1) + 1
+        } as CanvasArtifact;
         return {
             resultPayload: {
-                config,
-                frustum: {
-                    verticalFovDeg: Number(frustum.verticalFovDeg.toFixed(2)),
-                    horizontalFovDeg: Number(frustum.horizontalFovDeg.toFixed(2)),
-                    diagonalFovDeg: Number(frustum.diagonalFovDeg.toFixed(2)),
-                    aspectRatio: Number(frustum.aspectRatio.toFixed(3)),
-                    sensorDimensions: frustum.sensorDimensions
-                },
-                hyperfocalDistanceMeters: Number(hyperfocal.toFixed(3)),
-                depthOfField: {
-                    nearFocusLimitMeters: Number(dof.nearFocusLimitMeters.toFixed(3)),
-                    farFocusLimitMeters: Number(dof.farFocusLimitMeters.toFixed(3)),
-                    dofThicknessMeters: Number(dof.dofThicknessMeters.toFixed(3)),
-                    hyperfocalDistanceMeters: Number(dof.hyperfocalDistanceMeters.toFixed(3)),
-                    isInfinitelyDeep: dof.isInfinitelyDeep
-                }
+                success: true,
+                applied: true,
+                appliedTo: active.id,
+                operators: ['sb_set_camera'],
+                appliedFovDeg: fov,
+                ...computed,
+                notAppliedParts,
+                artifact
             } as unknown as ToolResultPayload,
-            summaryResult: `Configured physical camera (${focalLengthMm}mm, f/${apertureFStop}, ${sensorFormat}): Vertical FOV ${frustum.verticalFovDeg.toFixed(1)}°, Focus ${focusDistanceMeters.toFixed(1)}m, Sharp DoF: [${dof.nearFocusLimitMeters.toFixed(2)}m - ${dof.isInfinitelyDeep ? '∞' : dof.farFocusLimitMeters.toFixed(2) + 'm'}].`
+            summaryResult: `Applied to the active 3D scene "${active.title || active.id}": ${lensText}; the viewport camera's vertical FOV is now ${fov.toFixed(1)}° (was ${data0.camera.fov ?? 'unset, 45'}°). Computed only, NOT applied: ${notAppliedParts.join('; ')}.`
         };
     },
 

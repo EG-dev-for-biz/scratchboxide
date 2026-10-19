@@ -128,7 +128,7 @@ import { buildSwitchLocationPills, switchLocationMarkdown } from '../../../commo
 import { summarizeStagedBuild, type StagedSummaryInput } from './staged-summary';
 import { palettesFromSurvey, photoTierEnabled, textureLayer, TEXTURE_PASS_VERSION, type TextureLayerOutcome } from './texture-pass';
 import { prepareTextureSources, type TextureSourcesInput } from './texture-sources';
-import { maskTemporaryInViews, temporaryCheckEnabled, visionTemporaryChecker, TEMPORARY_CHECK_VERSION } from './temporary-structures';
+import { maskTemporaryInViews, textureTemporaryEnabled, visionTemporaryChecker, TEMPORARY_CHECK_VERSION } from './temporary-structures';
 import { objectSegmenter, ownViews, OWNERSHIP_VERSION, type OwnershipSegmenter } from './streetview-ownership';
 import { correctViewsLighting, lightingModels, lightingPromptVariant, textureArmOptions, LIGHTING_MODEL_LITE, type LightingCorrectedView } from './texture-lighting';
 import { TextureWorkerPool, textureWorkersEnabled } from './texture-worker-pool';
@@ -1655,10 +1655,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         cache.writeRunNote(runId, 'texture_ownership', { ms: now() - to, records: own.records });
                         io.progress(`textures: the structure was cut out of ${kept} of ${own.records.length} Street View photos; ${own.records.length - kept} photos vouch for no pixel (${own.records.find(r => r.status === 'refused')?.reason ?? 'none'})`);
                     }
-                    // temporary structures (SCRATCHBOX_SURVEY_TEMPORARY=1 only): what the vision model outlines as temporary in front of
+                    // temporary structures (SCRATCHBOX_TEXTURE_TEMPORARY=1, or legacy SCRATCHBOX_SURVEY_TEMPORARY=1, only): what the vision model outlines as temporary in front of
                     // the structure (scaffolding, netting, ...) is taken out of each view's ownership mask, an occluder for the bake
                     let temporaryKey: string | undefined;
-                    if (views.length && temporaryCheckEnabled() && visionAvailable) {
+                    if (views.length && textureTemporaryEnabled() && visionAvailable) {
                         const tt = now();
                         const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: io.signal, ...chainExtras('textures'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
                         const tmp = await maskTemporaryInViews({ views, check: visionTemporaryChecker(chain), target: request.query, signal: io.signal, onProgress: m => io.progress(`textures: ${m}`) });

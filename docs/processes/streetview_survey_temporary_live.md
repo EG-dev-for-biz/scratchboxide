@@ -9,8 +9,19 @@
 
 ## 1. Session Context
 
-* **What prompted this session:** Street View captures taken while scaffolding, a sidewalk shed or netting stood in front of a building paint it onto the texture. `streetview_survey` gained an option, `checkTemporary` (default false), that asks the vision model chain about every view, replaces a flagged view by a clear capture of the same face from another month when one exists, and writes the flagged regions as masks.
-* **Code:** `packages/core/src/node/3d-engine/staged-location/temporary-structures.ts` (question, parsing, masks, the swap, the texture-pass helper); `streetview-survey.ts` (option, result fields); `streetview-evidence.ts` (`discoverPanos` now also lists the panos its 6 m thinning dropped, `superseded`: an older capture next to a newer one); `orchestrator.ts` (texture pass, only with `SCRATCHBOX_SURVEY_TEMPORARY=1`).
+* **What prompted this session:** Street View captures taken while scaffolding, a sidewalk shed or netting stood in front of a building paint it onto the texture. `streetview_survey` gained an option, `checkTemporary` (default false), that asks the vision model chain about every view (default true for the tool since a later change, see below), replaces a flagged view by a clear capture of the same face from another month when one exists, and writes the flagged regions as masks.
+* **Code:** `packages/core/src/node/3d-engine/staged-location/temporary-structures.ts` (question, parsing, masks, the swap, the texture-pass helper); `streetview-survey.ts` (option, result fields); `streetview-evidence.ts` (`discoverPanos` now also lists the panos its 6 m thinning dropped, `superseded`: an older capture next to a newer one); `orchestrator.ts` (texture pass, only with `SCRATCHBOX_TEXTURE_TEMPORARY=1`, or the legacy `SCRATCHBOX_SURVEY_TEMPORARY=1`).
+* **Default changed (2026-10-19, later):** the `streetview_survey` tool now runs the check by default. A call passes `checkTemporary: false` to skip it, and `SCRATCHBOX_SURVEY_TEMPORARY=0` makes false the tool's default. `runStreetViewSurvey` itself (the library function) still runs it only when its `checkTemporary` option is true; the tool sets that option.
+* **The texture pass has its own flag:** the staged texture pass (`orchestrator.ts`) still asks nothing by default. `SCRATCHBOX_TEXTURE_TEMPORARY=1` turns its check on (`=0` keeps it off whatever else is set). When `SCRATCHBOX_TEXTURE_TEMPORARY` is unset, the old `SCRATCHBOX_SURVEY_TEMPORARY=1` still turns it on, so a setup that relied on that flag behaves as before. The helpers are `surveyTemporaryDefault()` and `textureTemporaryEnabled()` in `temporary-structures.ts`.
+
+| Setting | streetview_survey tool default | Texture pass |
+|---|---|---|
+| nothing set | on | off |
+| `SCRATCHBOX_SURVEY_TEMPORARY=0` | off | off |
+| `SCRATCHBOX_SURVEY_TEMPORARY=1` | on | on (legacy) |
+| `SCRATCHBOX_TEXTURE_TEMPORARY=1` | on | on |
+| `SCRATCHBOX_TEXTURE_TEMPORARY=0` | on | off |
+
 * **Instance used:** web `3072`, API `3071`, tools `3073`, started from the worktree with `npm run dev` and env vars, `SCRATCHBOX_PYTHON` set to the checkout's `.venv`. The handler was also run from a script (same code, same caches) to keep the payloads for contact sheets.
 
 ---
@@ -39,7 +50,7 @@
 * **Run-to-run variation:** the first arch run had no flag; the second flagged distant crowd barriers at 0.72 (off the face, so harmless).
 * **Misses:** at the Jefferson Market Library view 0 (2024-09) shows green netting at its right edge and was read clear. At the Ansonia the 2026-08 hoist mast was not outlined (the shed was).
 * **Old captures:** the metadata endpoint returns only the newest pano at a point, so another month is only found where a nearby point resolves to a different pano (or in the panos the discovery thins out). At the Flatiron those were mostly indoor panos.
-* **Texture pass (`SCRATCHBOX_SURVEY_TEMPORARY=1`), live:** two isolated staged builds of Grace Church through the agent ("Use google_3d_tiles_get_clay on "Grace Church, 802 Broadway, New York" with isolate true"). The texture pass asked about every Street View close-up and wrote the run note `texture_temporary`:
+* **Texture pass (`SCRATCHBOX_SURVEY_TEMPORARY=1` at the time; now `SCRATCHBOX_TEXTURE_TEMPORARY=1`), live:** two isolated staged builds of Grace Church through the agent ("Use google_3d_tiles_get_clay on "Grace Church, 802 Broadway, New York" with isolate true"). The texture pass asked about every Street View close-up and wrote the run note `texture_temporary`:
   * With the ownership step on (run `45b3b0a8`), 1 of 3 close-ups was flagged ("scaffolding and blue construction netting on the left side of the church", 0.96), but the ownership step had already refused all three views (the structure not in the photo, or IoU 0.25), so the regions had no owned pixel to remove (`maskedPixels` 0, as it should).
   * With `SCRATCHBOX_TEXTURE_OWNERSHIP=0` (run `6147a82b`), 2 of 4 close-ups were flagged and their regions took 278,398 and 368,693 pixels out of the views (`maskedPixels`).
   * In both builds the no-fit rung then set Street View aside on its held-out gate (unrelated to this change), so the layers were textured from the tile photo. Screenshots: `grace_staged_build_flag_on.jpg`, `grace_staged_build_flag_on_ownership_off.jpg`. Without the flag nothing changes (the step is skipped, and the cache key is unchanged).
@@ -56,5 +67,5 @@
 ## 5. Reproduction Steps
 
 1. In the worktree, symlink `secrets.json` (remove it afterwards). Start the app with `SCRATCHBOX_PYTHON=<checkout>/.venv/bin/python SCRATCHBOX_NO_ELECTRON=true PORT=3071 SCRATCHBOX_WEB_PORT=3072 SCRATCHBOX_TOOLS_PORT=3073 SCRATCHBOX_ALLOWED_ORIGINS=http://127.0.0.1:3072 npm run dev` and open the token URL.
-2. Ask: "Use the streetview_survey tool on "The Ansonia, 2109 Broadway, New York" with maxViews 6 and checkTemporary true."
+2. Ask: "Use the streetview_survey tool on "The Ansonia, 2109 Broadway, New York" with maxViews 6." (checkTemporary is on by default; add "checkTemporary false" to skip it.)
 3. Images and masks (`*_temporary.png`, 255 = a flagged region) are in `desktop-app/build/streetview-grounding/`. The synthetic test is `packages/core/test/streetview-survey-temporary.test.ts` (contact sheet in `test-results/screenshots/survey_temporary/`).
