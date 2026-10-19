@@ -487,6 +487,12 @@ export interface TileTransferTuning {
     liftCap?: { radiusM: number; contrastGain: number } | false;
     /** Match the tile's exposure to the Street View texels of `existing` where both cover (default true). */
     matchExposure?: boolean;
+    /**
+     * A correction of the de-lit tile candidates before the exposure match and the fusion (texture-lighting.ts: the model's
+     * lighting estimate, detail-locked). It edits `rgb` (sRGB 0..255 floats, 3 per texel, where `has`) in place and returns
+     * the texels it changed with their provenance entry, or undefined when it changed nothing.
+     */
+    correctCandidates?: (plane: { rgb: Float32Array; has: Uint8Array; width: number; height: number; existing?: BakedTexturePlanes }) => Promise<{ texels: Uint8Array; provenance: Omit<TexelProvenance, 'coverage'> } | undefined>;
 }
 
 /** Overlap texels the exposure match needs. */
@@ -572,6 +578,11 @@ export const transferTilePhoto: TransferTilePhoto = async (input: TileTransferIn
         for (let i = 0; i < N; i++) if (hasLit[i]) for (let c = 0; c < 3; c++) cand[i * 3 + c] = linearToSrgb255(litLin[i * 3 + c]);
     }
 
+    // 1b'. The optional lighting correction of the candidates (before the exposure match, so the match sees the corrected tile).
+    let corrected: { texels: Uint8Array; provenance: Omit<TexelProvenance, 'coverage'> } | undefined;
+    if (input.correctCandidates) corrected = await input.correctCandidates({ rgb: cand, has: hasCand, width: W, height: H, ...(existing ? { existing } : {}) });
+    throwIfAborted(signal);
+
     // 1c. Exposure match to tier 1: the tile photo and the Street View views were taken under different light and white
     //     balance, so a tile texel next to a Street View texel shows a colour step (a seam). Per channel, the median of
     //     the linear ratio Street View / tile over the texels both cover is applied to every tile texel (clamped to
@@ -641,12 +652,14 @@ export const transferTilePhoto: TransferTilePhoto = async (input: TileTransferIn
     // 3. Planes.
     const albedo = new Uint8Array(N * 4);
     const confidence: ConfidencePlane = { width: W, height: H, data: new Uint8Array(N * 4) };
-    let filled = 0;
+    let filled = 0, filledCorrected = 0;
     for (let i = 0; i < N; i++) {
         if (!take[i]) continue;
         albedo[i * 4] = Math.round(cand[i * 3]); albedo[i * 4 + 1] = Math.round(cand[i * 3 + 1]); albedo[i * 4 + 2] = Math.round(cand[i * 3 + 2]); albedo[i * 4 + 3] = 255;
-        packConfidenceTexel(confidence, i, 0, candW[i], TILE_TRANSFER_RUNG);
+        const lit = !!corrected?.texels[i];
+        packConfidenceTexel(confidence, i, lit ? 1 : 0, candW[i], TILE_TRANSFER_RUNG);
         filled++;
+        if (lit) filledCorrected++;
     }
     const atlasTexels = countCovered(atlas.texels.covered);
     const d = input.surface?.delight;
@@ -656,8 +669,10 @@ export const transferTilePhoto: TransferTilePhoto = async (input: TileTransferIn
         source: 'tile-photo-transfer', label: 'photo-inferred',
         method: `nearest tile surface (BVH, <= ${round3(maxDistanceM)} m, normal within ${round3(Math.acos(minCos) * 180 / Math.PI)} deg), bilinear in tile UV`
             + `${input.surface && Number.isFinite(input.surface.texelSizeM) ? ` (tile texel ${round3(input.surface.texelSizeM)} m)` : ''}, ${delightLine}${exposureLine}, confidence <= ${TILE_CONFIDENCE_CAP}`,
-        coverage: atlasTexels ? filled / atlasTexels : 0
+        coverage: atlasTexels ? (filled - filledCorrected) / atlasTexels : 0
     }];
+    // the lighting-corrected texels: index 1, always present when a correction ran (so the indices stay fixed)
+    if (corrected) provenance.push({ ...corrected.provenance, coverage: atlasTexels ? filledCorrected / atlasTexels : 0 });
 
     // 4. Degradations: texels that needed a fill and got none move on to the palette rung.
     const degradations: TexturePassDegradation[] = [];

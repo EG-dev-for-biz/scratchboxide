@@ -498,6 +498,103 @@ function projectView(input: ProjectionBakeInput, view: ProjectionView, depth: De
     return out;
 }
 
+/** Cross-view colour agreement of a set of views on an atlas (measureCrossViewAgreement). */
+export interface CrossViewAgreement {
+    /** Atlas texels sampled (every `strideTexels`-th along each axis) and those seen by two or more views. */
+    sampled: number;
+    texels: number;
+    /** Per multiply-seen texel, the mean pairwise CIEDE2000 between its views; median and 95th percentile of that. */
+    medianDeltaE: number | null;
+    p95DeltaE: number | null;
+    /** Per view (input order): its samples and the median and mean pairwise CIEDE2000 of the pairs it is in. */
+    perView: Array<{ panoId: string; samples: number; pairs: number; medianDeltaE: number | null; meanDeltaE: number | null }>;
+    /** The surface footprint each sample averages (m) and the stride (texels). */
+    footprintM: number;
+    strideTexels: number;
+}
+
+/**
+ * How much the views disagree about the same surface: every `strideTexels`-th texel of the atlas is projected into each view
+ * exactly as the bake projects it (projectView: visibility, incidence, redaction, footprint sampling) but over a footprint of
+ * `footprintM` metres, so the measure is the surface's lighting and colour, not misregistered detail; each view's relative
+ * exposure is solved as the bake solves it (solveRelativeGains) and applied; then, per texel seen by two or more views, the
+ * mean pairwise CIEDE2000 between the views. Used to judge a lighting correction of the views: the same texel seen from
+ * different views must disagree less after it than before.
+ */
+export function measureCrossViewAgreement(input: ProjectionBakeInput & {
+    options?: Pick<ProjectionBakeOptions, 'featherPx' | 'minCosIncidence' | 'minResolution' | 'excludeTexels' | 'depthToleranceBaseM' | 'depthTolerancePerMeter' | 'edgeGuardPx' | 'observedSurface' | 'poseEdgeGuardShare'>;
+    footprintM?: number; spacingM?: number;
+    /** Which view pairs count (indices into `views`); default all. */
+    pairFilter?: (a: number, b: number) => boolean;
+}): CrossViewAgreement {
+    const { atlas } = input;
+    const o = input.options ?? {};
+    const W = atlas.width, H = atlas.height, n = W * H;
+    const footprintM = input.footprintM ?? 0.5;
+    // the stride from the atlas's median texel size, for a sample every spacingM metres
+    const sizes: number[] = [];
+    for (let i = 0; i < n; i += 97) if (atlas.texels.covered[i] && !atlas.texels.gutter[i]) sizes.push(atlas.texels.sizeM[i]);
+    sizes.sort((a, b) => a - b);
+    const texelM = sizes.length ? sizes[sizes.length >> 1] : 0.05;
+    const stride = Math.max(1, Math.round((input.spacingM ?? 0.25) / Math.max(1e-3, texelM)));
+    const covered = new Uint8Array(n), sizeM = Float32Array.from(atlas.texels.sizeM);
+    let sampled = 0;
+    for (let y = 0; y < H; y += stride) for (let x = 0; x < W; x += stride) {
+        const i = y * W + x;
+        if (!atlas.texels.covered[i] || atlas.texels.gutter[i]) continue;
+        covered[i] = 1; sizeM[i] = Math.max(sizeM[i], footprintM); sampled++;
+    }
+    const probe: ProjectionBakeInput = { ...input, atlas: { ...atlas, texels: { ...atlas.texels, covered, sizeM } } };
+    const opts = {
+        featherPx: o.featherPx ?? 6, minCosIncidence: o.minCosIncidence ?? 0.15, depthToleranceBaseM: o.depthToleranceBaseM ?? 0.20,
+        depthTolerancePerMeter: o.depthTolerancePerMeter ?? 0.02, edgeGuardPx: o.edgeGuardPx ?? 3, footprint: true,
+        ...(o.observedSurface ? { observedSurface: o.observedSurface } : {}), ...(o.poseEdgeGuardShare ? { poseEdgeGuardShare: o.poseEdgeGuardShare } : {}),
+        ...(o.excludeTexels ? { excludeTexels: o.excludeTexels } : {})
+    };
+    const samples: ViewSamples[] = input.views.map(view => {
+        if (!(view.poseQuality > 0) || view.image.width !== view.camera.width || view.image.height !== view.camera.height) return { texel: new Int32Array(0), rgb: new Float32Array(0) };
+        const r = projectView(probe, view, input.depthFor(view), opts, input.contextDepthFor?.(view));
+        return { texel: Int32Array.from(r.texel), rgb: Float32Array.from(r.rgb) };
+    });
+    // CSR, equal weights
+    const count = new Int32Array(n + 1);
+    samples.forEach(s => { for (const t of s.texel) count[t + 1]++; });
+    for (let t = 0; t < n; t++) count[t + 1] += count[t];
+    const index: TexelSampleIndex = { start: count, view: new Int32Array(count[n]), sample: new Int32Array(count[n]), weight: new Float64Array(count[n]) };
+    const fill = count.slice(0, n);
+    samples.forEach((s, k) => s.texel.forEach((t, i) => { const p = fill[t]++; index.view[p] = k; index.sample[p] = i; }));
+    for (let t = 0; t < n; t++) { const a = index.start[t], b = index.start[t + 1]; for (let p = a; p < b; p++) index.weight[p] = 1 / (b - a); }
+    const rel = solveRelativeGains(samples, index, n);
+    const labs = samples.map((s, k) => {
+        const out = new Float32Array(s.texel.length * 3);
+        for (let i = 0; i < s.texel.length; i++) {
+            const l = linearToLab(s.rgb[i * 3] * Math.exp(rel.logGain[k * 3]), s.rgb[i * 3 + 1] * Math.exp(rel.logGain[k * 3 + 1]), s.rgb[i * 3 + 2] * Math.exp(rel.logGain[k * 3 + 2]));
+            out[i * 3] = l[0]; out[i * 3 + 1] = l[1]; out[i * 3 + 2] = l[2];
+        }
+        return out;
+    });
+    const perTexel: number[] = [];
+    const perViewPairs: number[][] = input.views.map(() => []);
+    for (let t = 0; t < n; t++) {
+        const a = index.start[t], b = index.start[t + 1];
+        if (b - a < 2) continue;
+        let s = 0, m = 0;
+        for (let p = a; p < b; p++) for (let q = p + 1; q < b; q++) {
+            const va = index.view[p], vb = index.view[q], ia = index.sample[p] * 3, ib = index.sample[q] * 3;
+            if (input.pairFilter && !input.pairFilter(va, vb)) continue;
+            const d = deltaE00([labs[va][ia], labs[va][ia + 1], labs[va][ia + 2]], [labs[vb][ib], labs[vb][ib + 1], labs[vb][ib + 2]]);
+            s += d; m++;
+            perViewPairs[va].push(d); perViewPairs[vb].push(d);
+        }
+        if (m) perTexel.push(s / m);
+    }
+    const quant = (a: number[], q: number): number | null => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return Math.round(s[Math.min(s.length - 1, Math.floor(q * s.length))] * 1000) / 1000; };
+    return {
+        sampled, texels: perTexel.length, medianDeltaE: quant(perTexel, 0.5), p95DeltaE: quant(perTexel, 0.95), footprintM, strideTexels: stride,
+        perView: input.views.map((v, k) => ({ panoId: v.panoId, samples: samples[k].texel.length, pairs: perViewPairs[k].length, medianDeltaE: quant(perViewPairs[k], 0.5), meanDeltaE: perViewPairs[k].length ? Math.round((perViewPairs[k].reduce((a, b) => a + b, 0) / perViewPairs[k].length) * 1000) / 1000 : null }))
+    };
+}
+
 /** The bake. Implements BakeStreetViewProjection; extra options ride on the input. */
 export async function bakeStreetViewProjection(input: ProjectionBakeRequest): Promise<ProjectionBakeResult> {
     const t0 = Date.now();

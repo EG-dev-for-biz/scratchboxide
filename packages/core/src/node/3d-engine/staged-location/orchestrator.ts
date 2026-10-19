@@ -77,7 +77,7 @@ import { evidenceLookup, type EvidenceLookup, type VectorEvidence } from './vect
 import { VisionModelChain, type VisionGenAIClient } from '../../gemini/vision-model-chain';
 import { segmentOwnershipViews } from './ownership-masks';
 import { loadScanMesh, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
-import { readGlbScene, sceneToRenderMesh } from '../../spatial/StreetViewPoseRegistrar';
+import { readGlbScene, renderFrameDepth, sceneToRenderMesh } from '../../spatial/StreetViewPoseRegistrar';
 import type { RenderMesh3D } from '../../spatial/HeadlessMeshSilhouetteRenderer';
 import { StageCache, sha256File, stageKey, stagedReplyCache, type CachedStage } from './stage-cache';
 import {
@@ -128,6 +128,7 @@ import { buildSwitchLocationPills, switchLocationMarkdown } from '../../../commo
 import { summarizeStagedBuild, type StagedSummaryInput } from './staged-summary';
 import { palettesFromSurvey, photoTierEnabled, textureLayer, TEXTURE_PASS_VERSION, type TextureLayerOutcome } from './texture-pass';
 import { prepareTextureSources, type TextureSourcesInput } from './texture-sources';
+import { correctViewsLighting, lightingModels, lightingPromptVariant, type LightingCorrectedView } from './texture-lighting';
 import { TextureWorkerPool, textureWorkersEnabled } from './texture-worker-pool';
 import { eventLoopStats, runBlockTracer } from './event-loop-stats';
 import type { EnhanceModelClient } from './texture-enhance';
@@ -278,7 +279,14 @@ export interface StagedLocationDeps {
      * The texture pass's optional model enhancement of the tile transfer (an image model, edge-gated); absent = that
      * rung is not attempted (tests, or no client). `densityTexelsPerMeter` caps the atlas density (default 20, 5 cm).
      */
-    textures?: { enhance?: EnhanceModelClient; enhanceModels?: string[]; maxDensityTexelsPerMeter?: number; maxSide?: number; disabled?: string };
+    textures?: {
+        enhance?: EnhanceModelClient; enhanceModels?: string[]; maxDensityTexelsPerMeter?: number; maxSide?: number; disabled?: string;
+        /**
+         * The model lighting correction of the Street View photos and the tile photo (texture-lighting.ts; SCRATCHBOX_TEXTURE_LIGHTING);
+         * absent = not run. `lightingModels` default lightingModels().
+         */
+        lighting?: EnhanceModelClient; lightingModels?: string[];
+    };
     now?: () => number;
     newRunId?: () => string;
     sleep?: (ms: number) => Promise<void>;
@@ -1580,6 +1588,32 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         ...[...(evidence.registration.warps?.entries() ?? [])].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([id, w]) => [id, Array.from(w.dh), Array.from(w.dp)])
                     ] : [];
                     const enhance = deps.textures?.enhance;
+                    // the model lighting correction of the Street View photos (texture-lighting.ts), once for every layer: the calls in
+                    // parallel, each answer detail-locked to its photo; which corrected photos a layer uses is that layer's gate
+                    const lightingClient = deps.textures?.lighting;
+                    const lightingModelIds = deps.textures?.lightingModels ?? lightingModels();
+                    let lightingViews: LightingCorrectedView[] | undefined;
+                    let lightingUnavailable: string | undefined;
+                    if (lightingClient && views.length) {
+                        const tl = now();
+                        io.progress(`textures: correcting the lighting of ${views.length} Street View photos with ${lightingModelIds.join(', ')} (detail-locked)`);
+                        try {
+                            // the subject of each photo: whatever the tile mesh shows there (not the sky), so neither blur reads it
+                            const maskFor = context.indices.length ? (k: number) => {
+                                const d = renderFrameDepth(context, views[k].camera), m = new Uint8Array(d.length);
+                                for (let i = 0; i < d.length; i++) m[i] = Number.isFinite(d[i]) && d[i] < 1e8 ? 1 : 0;
+                                return m;
+                            } : undefined;
+                            const r = await correctViewsLighting({ views, client: lightingClient, models: lightingModelIds, ...(maskFor ? { maskFor } : {}), signal: io.signal });
+                            lightingViews = r.corrected;
+                            cache.writeRunNote(runId, 'texture_lighting_views', { models: lightingModelIds, ms: now() - tl, corrected: r.corrected.length, records: r.records });
+                            io.progress(`textures: lighting: ${r.corrected.length} of ${views.length} photos came back as a usable relighting (${Math.round((now() - tl) / 1000)} s)`);
+                            if (!r.corrected.length) lightingUnavailable = `none of the ${views.length} Street View photos came back as a usable relighting (${r.records.find(x => x.reason)?.reason ?? 'no answer'})`;
+                        } catch (err) {
+                            if (isAbort(err) || io.signal.aborted) throw err;
+                            lightingUnavailable = `the lighting correction of the Street View photos failed (${errorMessage(err)})`;
+                        }
+                    }
                     const outcomes: Array<{ layer: StagedLayer; out: Omit<TextureLayerOutcome, 'glb' | 'measureLoo'>; url: string; bytes: number; cached: boolean; builtAtMs: number; surfaces: string; late: boolean }> = [];
                     // leave-one-pano-out fits, run once every layer is textured (TextureLayerOutcome.measureLoo)
                     const looJobs = new Map<string, NonNullable<TextureLayerOutcome['measureLoo']>>();
@@ -1596,7 +1630,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const textureOne = async (target: typeof targets[number]) => {
                         handled.add(target.layer.objectId);
                         const clay = fs.readFileSync(target.file);
-                        const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), wideHeld.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048, surfacesKey(target.surfaces));
+                        const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), wideHeld.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048, surfacesKey(target.surfaces), ...(lightingClient ? [`light:${lightingModelIds.join(',')}:${lightingPromptVariant()}:${lightingViews?.length ?? 0}`] : []));
                         const entry = await cache.run<Omit<TextureLayerOutcome, 'glb'>>('textures', key, async dir => {
                             const out = await (texturePool ? texturePool.textureLayer.bind(texturePool) : textureLayer)({ layerKey: target.layer.layer, clayGlb: clay, ...(target.surfaces?.length ? { surfaces: target.surfaces } : {}) }, {
                                 views, ...(wideViews.length ? { photoTierViews: wideViews } : {}), ...(photoTierEnabled() ? { photoTier: true } : {}), ...(viewsUnavailable ? { viewsUnavailable } : {}), occluder, ...(context.indices.length ? { context } : {}), observedSurface: TEXTURE_OBSERVED_SURFACE, poseEdgeGuardShare: TEXTURE_POSE_EDGE_GUARD_SHARE,
@@ -1604,6 +1638,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 ...(tile ? { tile } : {}), ...(tileUnavailable ? { tileUnavailable } : {}),
                                 ...(residual !== undefined ? { registrationResidualM: residual } : {}),
                                 ...(enhance ? { enhance: { client: enhance, ...(deps.textures?.enhanceModels ? { models: deps.textures.enhanceModels } : {}) } } : { enhanceUnavailable: 'no image model client is configured for it' }),
+                                ...(lightingViews?.length ? { lightingViews } : {}), ...(lightingClient ? { lighting: { client: lightingClient, models: lightingModelIds } } : {}), ...(lightingUnavailable ? { lightingUnavailable } : {}),
                                 palette, densityTexelsPerMeter: density, maxSide: deps.textures?.maxSide ?? 2048, signal: io.signal,
                                 onProgress: m => { io.progress(`textures: ${m}`); run.emit('textures', 'running', { message: m }); }
                             });
@@ -1732,7 +1767,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     for (const o of outcomes) for (const [kk, v] of Object.entries(o.out.timingsMs)) timingsMs[`${o.layer.layer}.${kk}`] = v;
                     const record: TexturePassRecord = { passVersion: TEXTURE_PASS_VERSION, layers, degradations: passDegradations, timingsMs };
                     // the held-out fit per layer, kept with the run so rounds can be compared on the same measure
-                    cache.writeRunNote(runId, 'texture_fit', outcomes.map(o => ({ layer: o.layer.layer, fit: o.out.bundle.fit ?? null, projection: o.out.projection ? { outputSeam: o.out.projection.outputSeam, context: o.out.projection.context, alignment: o.out.projection.alignment && { nccBefore: o.out.projection.alignment.nccBefore, nccAfter: o.out.projection.alignment.nccAfter }, poseRefine: o.out.projection.poseRefine } : null, rungShares: o.out.rungShares, timingsMs: o.out.timingsMs })));
+                    cache.writeRunNote(runId, 'texture_fit', outcomes.map(o => ({ layer: o.layer.layer, fit: o.out.bundle.fit ?? null, sourceSeam: o.out.sourceSeam ?? null, lighting: o.out.lighting ?? null, projection: o.out.projection ? { outputSeam: o.out.projection.outputSeam, context: o.out.projection.context, alignment: o.out.projection.alignment && { nccBefore: o.out.projection.alignment.nccBefore, nccAfter: o.out.projection.alignment.nccAfter }, poseRefine: o.out.projection.poseRefine } : null, rungShares: o.out.rungShares, timingsMs: o.out.timingsMs })));
                     const shares = weightedShares(outcomes.map(o => ({ shares: o.out.rungShares, texels: o.out.atlasTexels })));
                     run.state.texturePass = { status: 'committed', layersDone: outcomes.length, layersTotal: targets.length, rungShares: shares.map(x => round(x, 4)), message: 'textures ready' };
                     textureValue = {

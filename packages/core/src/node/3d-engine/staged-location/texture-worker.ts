@@ -34,7 +34,7 @@ let nextCall = 0;
 /** The last layer's leave-one-pano-out job, kept for 'loo'. */
 let loo: NonNullable<TextureLayerOutcome['measureLoo']> | undefined;
 
-function enhanceProxy(id: number): EnhanceModelClient {
+function enhanceProxy(id: number, purpose?: 'lighting'): EnhanceModelClient {
     return request => new Promise<EnhanceModelAnswer>((resolve, reject) => {
         const callId = ++nextCall;
         const { signal, ...wire } = request;
@@ -45,7 +45,7 @@ function enhanceProxy(id: number): EnhanceModelClient {
             post({ type: 'enhance-abort', id, callId });
             reject(signal.reason instanceof Error ? signal.reason : Object.assign(new Error('stopped'), { name: 'AbortError' }));
         }, { once: true });
-        post({ type: 'enhance', id, callId, request: wire });
+        post({ type: 'enhance', id, callId, request: wire, ...(purpose ? { purpose } : {}) });
     });
 }
 
@@ -78,6 +78,7 @@ port.on('message', (msg: ToWorker) => {
                 const out = await textureLayer(msg.layer, {
                     ...src, ...(msg.tile ? { tile: tileSurfaceFromState(msg.tile) } : {}),
                     ...(msg.enhance ? { enhance: { client: enhanceProxy(msg.id), ...(msg.enhance.models ? { models: msg.enhance.models } : {}), ...(msg.enhance.budgetMs ? { budgetMs: msg.enhance.budgetMs } : {}) } } : {}),
+                    ...(msg.lighting ? { lighting: { client: enhanceProxy(msg.id, 'lighting'), models: msg.lighting.models } } : {}),
                     signal, onProgress: message => post({ type: 'progress', id: msg.id, message })
                 });
                 const { glb, measureLoo, ...rest } = out;

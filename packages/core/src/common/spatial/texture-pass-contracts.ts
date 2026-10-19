@@ -49,6 +49,11 @@ export interface TexelProvenance {
     captureDates?: string[];
     /** Share of the layer's texels this entry accounts for, 0..1. Entries of a layer sum to 1 (every texel is labelled). */
     coverage: number;
+    /**
+     * The photo's lighting was corrected by an image model's estimate (texture-lighting.ts): still the photo's own pixels,
+     * times a smooth gain field the model's relit answer gave. `note` reads "photo, lighting corrected by <model>".
+     */
+    lightingCorrection?: { models: string[]; note: string; /** 0..1, how surely the field is a relighting of the very image. */ confidence: number; images: number };
 }
 
 /**

@@ -16,11 +16,11 @@ import type { TileSurfaceState } from './tile-texture-transfer';
 import type { LooFit } from './texture-fit-metric';
 
 /** A layer's sources as they cross: no functions (the tile as its state, the model client and progress by message). */
-export type WireLayerSources = Omit<TexturePassSources, 'tile' | 'enhance' | 'signal' | 'onProgress'>;
+export type WireLayerSources = Omit<TexturePassSources, 'tile' | 'enhance' | 'lighting' | 'signal' | 'onProgress'>;
 
 export type ToWorker =
     | { type: 'prepare'; id: number; input: TextureSourcesInput }
-    | { type: 'texture'; id: number; layer: TextureLayerInput; src: WireLayerSources; tile?: TileSurfaceState; enhance?: { models?: string[]; budgetMs?: number } }
+    | { type: 'texture'; id: number; layer: TextureLayerInput; src: WireLayerSources; tile?: TileSurfaceState; enhance?: { models?: string[]; budgetMs?: number }; lighting?: { models: string[] } }
     | { type: 'loo'; id: number; budgetMs?: number }
     | { type: 'release' }
     | { type: 'abort'; id: number }
@@ -31,7 +31,7 @@ export type WireOutcome = Omit<TextureLayerOutcome, 'glb' | 'measureLoo'> & { gl
 export type FromWorker =
     | { type: 'ready' }
     | { type: 'progress'; id: number; message: string }
-    | { type: 'enhance'; id: number; callId: number; request: Omit<EnhanceModelRequest, 'signal'> }
+    | { type: 'enhance'; id: number; callId: number; request: Omit<EnhanceModelRequest, 'signal'>; /** 'lighting': the lighting correction's client, else the enhancement's. */ purpose?: 'lighting' }
     | { type: 'enhance-abort'; id: number; callId: number }
     | { type: 'result'; id: number; value: unknown }
     | { type: 'error'; id: number; error: WireError };

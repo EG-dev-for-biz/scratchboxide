@@ -86,6 +86,8 @@ interface Job {
     reject: (e: Error) => void;
     onProgress?: (m: string) => void;
     enhance?: EnhanceModelClient;
+    /** The lighting correction's client (texture-lighting.ts), for calls marked purpose 'lighting'. */
+    lighting?: EnhanceModelClient;
     signal?: AbortSignal;
     /** The enhancement calls in flight on the main thread, to stop with the job. */
     calls: Map<number, AbortController>;
@@ -146,7 +148,7 @@ class TextureThread {
                 const ctl = new AbortController();
                 job.calls.set(m.callId, ctl);
                 const signal = job.signal ? AbortSignal.any([job.signal, ctl.signal]) : ctl.signal;
-                const client = job.enhance;
+                const client = m.purpose === 'lighting' ? job.lighting : job.enhance;
                 const answer = client ? client({ ...m.request, signal }) : Promise.reject(new Error('no model client was given for the enhancement'));
                 answer.then(
                     a => { if (job.calls.delete(m.callId) && this.job === job) { const bytes = ownedBytes(a.bytes); this.post({ type: 'enhance-result', callId: m.callId, answer: { ...a, bytes } }, [bytes.buffer as ArrayBuffer]); } },
@@ -165,7 +167,7 @@ class TextureThread {
     }
 
     /** Runs one job; the signal stops it by terminating the thread. */
-    async call<T>(msg: ToWorker & { id: number }, opts: { transfer?: Transferable[]; signal?: AbortSignal; onProgress?: (m: string) => void; enhance?: EnhanceModelClient } = {}): Promise<T> {
+    async call<T>(msg: ToWorker & { id: number }, opts: { transfer?: Transferable[]; signal?: AbortSignal; onProgress?: (m: string) => void; enhance?: EnhanceModelClient; lighting?: EnhanceModelClient } = {}): Promise<T> {
         await this.ready;
         if (this.dead) throw new TextureWorkerCrashError('the texture worker is gone');
         if (this.job) throw new Error('texture worker pool: a thread was given two jobs');
@@ -173,7 +175,7 @@ class TextureThread {
         if (signal?.aborted) throw abortError(signal);
         return new Promise<T>((resolve, reject) => {
             const job: Job = { id: msg.id, resolve: v => { cleanup(); resolve(v as T); }, reject: e => { cleanup(); reject(e); }, calls: new Map(),
-                ...(opts.onProgress ? { onProgress: opts.onProgress } : {}), ...(opts.enhance ? { enhance: opts.enhance } : {}), ...(signal ? { signal } : {}) };
+                ...(opts.onProgress ? { onProgress: opts.onProgress } : {}), ...(opts.enhance ? { enhance: opts.enhance } : {}), ...(opts.lighting ? { lighting: opts.lighting } : {}), ...(signal ? { signal } : {}) };
             const onAbort = () => {
                 if (this.job !== job) return;
                 this.job = undefined;
@@ -296,7 +298,7 @@ export class TextureWorkerPool {
      * `release` drops it without running it. A rejected job has no thread left to release.
      */
     async textureLayer(layer: TextureLayerInput, src: TexturePassSources): Promise<TextureLayerOutcome & { release?: () => void }> {
-        const { tile, enhance, signal, onProgress, ...rest } = src;
+        const { tile, enhance, lighting, signal, onProgress, ...rest } = src;
         const tileState = tile ? tileSurfaceState(tile) : undefined;
         if (tile && !tileState) throw new Error('texture worker pool: the tile surface carries no state to send to a thread');
         await this.slot(signal);
@@ -309,8 +311,9 @@ export class TextureWorkerPool {
             const wire = await t.call<WireOutcome>({
                 type: 'texture', id: ++this.nextId, layer: { ...layer, clayGlb: clay }, src: shareDeep(rest),
                 ...(tileState ? { tile: shareDeep(tileState) } : {}),
-                ...(enhance ? { enhance: { ...(enhance.models ? { models: enhance.models } : {}), ...(enhance.budgetMs ? { budgetMs: enhance.budgetMs } : {}) } } : {})
-            }, { transfer, ...(signal ? { signal } : {}), ...(onProgress ? { onProgress } : {}), ...(enhance ? { enhance: enhance.client } : {}) });
+                ...(enhance ? { enhance: { ...(enhance.models ? { models: enhance.models } : {}), ...(enhance.budgetMs ? { budgetMs: enhance.budgetMs } : {}) } } : {}),
+                ...(lighting ? { lighting: { models: lighting.models } } : {})
+            }, { transfer, ...(signal ? { signal } : {}), ...(onProgress ? { onProgress } : {}), ...(enhance ? { enhance: enhance.client } : {}), ...(lighting ? { lighting: lighting.client } : {}) });
             const { glb, hasLoo, ...value } = wire;
             const out: TextureLayerOutcome & { release?: () => void } = { ...value, glb: Buffer.from(glb.buffer, glb.byteOffset, glb.byteLength) };
             if (hasLoo) {

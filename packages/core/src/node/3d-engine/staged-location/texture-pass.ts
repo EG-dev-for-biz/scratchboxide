@@ -38,7 +38,8 @@ import type { RenderMesh3D } from '../../spatial/HeadlessMeshSilhouetteRenderer'
 import { CONFIDENCE_CHANNELS, writeTexturedTwinGlb } from './staged-glb-writer';
 import { linearToLab } from './texel-exposure';
 import { enhanceTransferredAtlas, type EnhanceModelClient, type EnhanceReferenceView } from './texture-enhance';
-import { bakeStreetViewProjection, type ProjectionBakeReport, type ProjectionDelightOptions } from './texture-projection';
+import { bakeStreetViewProjection, measureCrossViewAgreement, type CrossViewAgreement, type ProjectionBakeReport, type ProjectionDelightOptions } from './texture-projection';
+import { correctTilePlaneLighting, lightingCorrectionEnabled, lightingModels, lightingPromptVariant, measureSourceSeam, type LightingCorrectedView, type LightingImageRecord, type TileLightingReport } from './texture-lighting';
 import { depthForMesh, projectionViewFromRegistered } from './texture-projection-views';
 import type { Registration } from './pano-registration';
 import type { EvidenceImage } from './streetview-evidence';
@@ -54,7 +55,7 @@ import { WITNESS_MAX_DELTA_E, witnessSinglePano } from './single-pano-witness';
 /** Part of every texture cache key: a change to the pass's maths is a new version. */
 /** Photo tier A is opt-in (round 6 on the arch: no leave-one-pano-out gain over the projection); SCRATCHBOX_PHOTO_TIER=1 turns it on for a server. */
 export const photoTierEnabled = (): boolean => process.env.SCRATCHBOX_PHOTO_TIER === '1';
-export const TEXTURE_PASS_VERSION = `texture-pass/11${photoTierEnabled() ? '+tier' : ''}`;
+export const TEXTURE_PASS_VERSION = `texture-pass/11${photoTierEnabled() ? '+tier' : ''}${lightingCorrectionEnabled() ? `+light:${lightingModels().join(',')}:${lightingPromptVariant()}` : ''}`;
 export const RUNG_PALETTE = 3;
 export const RUNG_GENERATED_PBR = 4;
 /** The enhancement rung's own time budget per layer (layers run in parallel inside the stage's 600 s). */
@@ -109,6 +110,16 @@ export interface TexturePassSources {
      */
     photoTier?: boolean | { pythonExecutable?: string; timeoutMs?: number; heldOut?: boolean };
     photoTierUnavailable?: string;
+    /**
+     * The Street View photos with their lighting corrected by an image model's estimate (texture-lighting.ts, detail-locked),
+     * by index into `views`. The layer projects them in place of the originals only where they make the views agree better
+     * (per view, then the layer as a whole); the held-out fits still judge against the original photos.
+     */
+    lightingViews?: LightingCorrectedView[];
+    /** The model for the tile photo's lighting correction (its charts' frontal crops); absent = the tile is not corrected. */
+    lighting?: { client: EnhanceModelClient; models: string[] };
+    /** Why the lighting correction did not run, when it was asked for. */
+    lightingUnavailable?: string;
     /** More registered views for photo tier A only (whole-face survey and ring views: its outline anchors). */
     photoTierViews?: ProjectionView[];
     /** The survey's measured palettes. */
@@ -143,6 +154,13 @@ export interface TextureLayerOutcome {
     /** Photo tier A on this layer (also in bundle.photoTier). */
     photoTier?: PhotoTierLayerRecord;
     enhance?: { charts: number; accepted: number; rejected: number; failed: number; timedOut?: number; modelsUsed: string[] };
+    /** The model lighting correction on this layer (texture-lighting.ts): the views' agreement before and after, and the tile's. */
+    lighting?: {
+        views?: { before: CrossViewAgreement; after?: CrossViewAgreement; final?: CrossViewAgreement; offered: number; used: number; reverted: string[]; applied: boolean; reason?: string };
+        tile?: Omit<TileLightingReport, 'records'> & { records: LightingImageRecord[] };
+    };
+    /** The seam between Street View and tile texels on the final texture (texture-lighting.ts measureSourceSeam). */
+    sourceSeam?: { pairs: number; medianDeltaE: number | null; p95DeltaE: number | null };
     /** Held-out fit of the final textured layer against the Street View photos (texture-fit-metric.ts). */
     fit?: LayerFit;
     /** The leave-one-pano-out fit, to run once all layers are textured (texture-fit-metric.ts leaveOnePanoOut); not cached. */
@@ -284,6 +302,8 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
     aborted(src.signal);
     let planes = emptyPlanes(atlas);
     let projection: TextureLayerOutcome['projection'];
+    let lightingViews: NonNullable<TextureLayerOutcome['lighting']>['views'];
+    let lightingTile: NonNullable<TextureLayerOutcome['lighting']>['tile'];
 
     // where a fitted surface stands off the scan the photos show, they are not projected onto it (the scan carries them there)
     let offScan: ScanDeviation | undefined;
@@ -314,9 +334,28 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
             // the single-pano texels a second capture (the tile photo) contradicts are left to the next rung (single-pano-witness.ts),
             // in the leave-one-pano-out re-bakes too, so the fit judges the texture the layer gets
             const witnessed = (baked: BakedTexturePlanes) => (src.tile ? witnessSinglePano(baked, projAtlas, src.tile.sample.bind(src.tile)) : undefined);
-            looBake = async views => { const b = await bakeStreetViewProjection({ ...request, views }); return witnessed(b)?.planes ?? b; };
+            // a lighting-corrected view is the same camera as its original: it reads the original's depth (rendered once)
+            const occDepth = depthForMesh(src.occluder), ctxDepth = src.context ? depthForMesh(src.context) : undefined;
+            const origOf = new Map<ProjectionView, ProjectionView>(), corrOf = new Map<ProjectionView, ProjectionView>();
+            const depthFor = (v: ProjectionView) => occDepth(origOf.get(v) ?? v);
+            const contextDepthFor = ctxDepth ? (v: ProjectionView) => ctxDepth(origOf.get(v) ?? v) : undefined;
+            const selection = !round5Enabled('viewSelection') ? {} : { minCosIncidence: VIEW_MIN_COS_INCIDENCE, minResolution: VIEW_MIN_RESOLUTION };
+            let bakeViews = src.views;
+            if (src.lightingViews?.length) {
+                const tg = Date.now();
+                progress(`judging the lighting-corrected photos (${src.lightingViews.length} of ${src.views.length}) by cross-view agreement`);
+                bakeViews = gateLightingViews({
+                    views: src.views, corrected: src.lightingViews, origOf, corrOf, report: r => { lightingViews = r; },
+                    measure: (vs, pairFilter) => measureCrossViewAgreement({ atlas: projAtlas, views: vs, depthFor, ...(pairFilter ? { pairFilter } : {}), ...(contextDepthFor ? { contextDepthFor } : {}),
+                        options: { ...selection, ...(src.observedSurface ? { observedSurface: src.observedSurface } : {}), ...(src.poseEdgeGuardShare ? { poseEdgeGuardShare: src.poseEdgeGuardShare } : {}), ...(offScan?.noScanTexels ? { excludeTexels: offScan.noScan } : {}) } })
+                });
+                timingsMs.lightingGate = Date.now() - tg;
+                if (lightingViews && !lightingViews.applied) degradations.push({ stage: 'lighting', reasonCode: 'lighting_views_no_gain', layerKey: layer.layerKey, reason: `The Street View photos keep their own lighting on this layer: ${lightingViews.reason}.` });
+                if (lightingViews) progress(`lighting-corrected photos: cross-view CIEDE2000 median ${lightingViews.before.medianDeltaE} -> ${lightingViews.final?.medianDeltaE ?? lightingViews.after?.medianDeltaE}, p95 ${lightingViews.before.p95DeltaE} -> ${lightingViews.final?.p95DeltaE ?? lightingViews.after?.p95DeltaE} over ${lightingViews.before.texels} texels; ${lightingViews.applied ? `${lightingViews.used} used` : 'not used'}`);
+            }
+            looBake = async views => { const b = await bakeStreetViewProjection({ ...request, views: views.map(v => corrOf.get(v) ?? v) }); return lightingProvenance(witnessed(b)?.planes ?? b, corrOf, src.lightingViews); };
             const request = {
-                atlas: projAtlas, views: src.views, depthFor: depthForMesh(src.occluder), ...(src.context ? { contextDepthFor: depthForMesh(src.context) } : {}), paletteLab: src.palette.length ? paletteLab(src.palette) : undefined,
+                atlas: projAtlas, views: bakeViews, depthFor, ...(contextDepthFor ? { contextDepthFor } : {}), paletteLab: src.palette.length ? paletteLab(src.palette) : undefined,
                 signal: src.signal, options: {
                     // the tile photo is registered to the geometry, so the per-chart alignment uses it as its reference
                     ...(src.tile ? { alignReference: (P: Vec3, N: Vec3) => {
@@ -325,7 +364,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
                     } } : {}),
                     ...(src.delight ? { delight: src.delight } : {}), ...(src.observedSurface ? { observedSurface: src.observedSurface } : {}), ...(src.poseEdgeGuardShare ? { poseEdgeGuardShare: src.poseEdgeGuardShare } : {}),
                     // view selection: no grazing or coarse views, photo-inconsistent views rejected per region (round 5)
-                    ...(!round5Enabled('viewSelection') ? {} : { minCosIncidence: VIEW_MIN_COS_INCIDENCE, minResolution: VIEW_MIN_RESOLUTION, regionSelect: { outlierDeltaE: VIEW_OUTLIER_DELTA_E } }),
+                    ...(!round5Enabled('viewSelection') ? {} : { ...selection, regionSelect: { outlierDeltaE: VIEW_OUTLIER_DELTA_E } }),
                     ...(offScan?.noScanTexels ? { excludeTexels: offScan.noScan } : {}) }
             };
             const res = await bakeStreetViewProjection(request);
@@ -339,6 +378,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
                     reason: `${w.report.rejected} of ${w.report.checked} texels only one pano saw differ from the tile photo by more than ${w.report.limitDeltaE ?? WITNESS_MAX_DELTA_E} CIE76 over ~0.2 m (the layer's typical disagreement + 4 robust sigmas, within ${WITNESS_MAX_DELTA_E}-30) (exposure matched, gain ${w.report.gain.map(g => g.toFixed(2)).join('/')}): something stood in front in that pano, or the sky showed past a misplaced edge, so the tile photo colours them.` });
                 progress(`${w.report.rejected} single-pano texels contradicted by the tile photo left to it (${w.report.checked} checked, ${w.report.noWitness} with no tile near)`);
             }
+            if (corrOf.size) planes = lightingProvenance(planes, corrOf, src.lightingViews);
             projection = {
                 views: src.views.length, bakedTexels: res.report.bakedTexels, multiViewTexels: res.report.multiViewTexels,
                 maxSeamDeltaE: res.report.maxSeamDeltaE, p95SeamDeltaE: res.report.p95SeamDeltaE, outputSeam: res.report.outputSeam, timingsMs: res.report.timingsMs,
@@ -369,7 +409,20 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
         progress('transferring the tile photo');
         try {
             const maxDistanceM = Math.max(0.25, 2 * (src.registrationResidualM ?? 0));
-            let transfer = await transferTilePhoto({ atlas, tileSample: src.tile.sample, surface: src.tile, maxDistanceM, existing: planes, signal: src.signal } as Parameters<typeof transferTilePhoto>[0]);
+            const lighting = src.lighting;
+            const existing = planes;
+            const correctCandidates = lighting ? async (plane: { rgb: Float32Array; has: Uint8Array; width: number; height: number; existing?: BakedTexturePlanes }) => {
+                const tl = Date.now();
+                progress('correcting the tile photo\'s lighting chart by chart with an image model (detail-locked)');
+                const r = await correctTilePlaneLighting({ atlas, plane, unpackRung: i => { const c = unpackConfidenceTexel(existing.confidence, i); return { covered: c.covered, rung: c.rung }; }, client: lighting.client, models: lighting.models, ...(src.signal ? { signal: src.signal } : {}) });
+                lightingTile = r.report;
+                timingsMs.tileLighting = Date.now() - tl;
+                if (r.report.applied) modelsUsed.push(...(r.provenance?.lightingCorrection?.models ?? []));
+                else degradations.push({ stage: 'lighting', reasonCode: 'lighting_tile_no_gain', layerKey: layer.layerKey, reason: `The tile photo keeps its own lighting on this layer: ${r.report.reason}.` });
+                progress(`tile lighting: ${r.report.accepted} of ${r.report.sent} charts relit, ${r.report.reverted} set back; agreement with Street View CIEDE2000 median ${r.report.before?.medianDeltaE ?? 'n/a'} -> ${r.report.after?.medianDeltaE ?? 'n/a'}, p95 ${r.report.before?.p95DeltaE ?? 'n/a'} -> ${r.report.after?.p95DeltaE ?? 'n/a'}; ${r.report.applied ? 'applied' : 'not applied'}`);
+                return r.texels && r.provenance ? { texels: r.texels, provenance: r.provenance } : undefined;
+            } : undefined;
+            let transfer = await transferTilePhoto({ atlas, tileSample: src.tile.sample, surface: src.tile, maxDistanceM, existing: planes, signal: src.signal, ...(correctCandidates ? { correctCandidates } : {}) } as Parameters<typeof transferTilePhoto>[0]);
             tileMethod = transfer.provenance[0]?.method;
             degradations.push(...transfer.degradations);
             timingsMs.tileTransfer = Date.now() - t;
@@ -524,6 +577,8 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
             photoTierCacheDispose = undefined;
         }
     }
+    const sourceSeam = measureSourceSeam(atlas, planes, i => { const c = unpackConfidenceTexel(planes.confidence, i); return c.covered ? c.rung : undefined; });
+    if (src.lightingUnavailable) degradations.push({ stage: 'lighting', reasonCode: 'lighting_not_run', layerKey: layer.layerKey, reason: `The model lighting correction was not run: ${src.lightingUnavailable}.` });
     // no leave-one-pano-out job holds the photo tier's worker cache: remove it now
     photoTierCacheDispose?.();
     t = Date.now();
@@ -543,6 +598,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
         rungShares: m.rungShares, rungTexels: m.rungTexels, atlasTexels: m.total,
         atlas: { width: atlas.width, height: atlas.height, texelsPerMeter: atlas.layout.stats.texelsPerMeter, charts: atlas.layout.stats.charts, islands: atlas.layout.stats.islands },
         degradations: unique, ...(projection ? { projection } : {}), ...(tileMethod ? { tileMethod } : {}), ...(photoTier ? { photoTier } : {}), ...(enhance ? { enhance } : {}), ...(fit ? { fit } : {}), ...(measureLoo ? { measureLoo } : {}),
+        ...(lightingViews || lightingTile ? { lighting: { ...(lightingViews ? { views: lightingViews } : {}), ...(lightingTile ? { tile: lightingTile } : {}) } } : {}), sourceSeam,
         modelsUsed: [...new Set(modelsUsed)], timingsMs
     };
 }
@@ -581,3 +637,68 @@ export function palettesFromSurvey(faces: Array<{ headingDeg: number; palette?: 
 
 export { CONFIDENCE_CHANNELS };
 export type { ConfidencePlane };
+
+/**
+ * Which lighting-corrected photos the layer projects (texture-lighting.ts): the views' agreement (measureCrossViewAgreement)
+ * with the originals, then with every corrected photo in place of its original; a photo whose own pairs disagree more after (mean)
+ * is set back to its original (per image), and the corrected set stands only when the layer's multiply-seen texels disagree
+ * less (median lower, 95th percentile no higher) than with the originals. Fills origOf (corrected -> original) for the
+ * candidates and corrOf (original -> corrected) for the photos kept.
+ */
+export function gateLightingViews(input: {
+    views: ProjectionView[]; corrected: LightingCorrectedView[]; measure: (views: ProjectionView[], pairFilter?: (a: number, b: number) => boolean) => CrossViewAgreement;
+    origOf: Map<ProjectionView, ProjectionView>; corrOf: Map<ProjectionView, ProjectionView>;
+    report: (r: NonNullable<NonNullable<TextureLayerOutcome['lighting']>['views']>) => void;
+}): ProjectionView[] {
+    const { views, origOf, corrOf } = input;
+    const cand = views.map((v, k) => {
+        const c = input.corrected.find(x => x.index === k && x.panoId === v.panoId);
+        if (!c || c.image.width !== v.image.width || c.image.height !== v.image.height) return undefined;
+        const cv: ProjectionView = { ...v, image: c.image };
+        origOf.set(cv, v);
+        return cv;
+    });
+    const offered = cand.filter(Boolean).length;
+    const before = input.measure(views);
+    const all = views.map((v, k) => cand[k] ?? v);
+    const after = input.measure(all);
+    // per image, against the same partners: each corrected photo and its original, both compared with the other photos
+    // corrected (the original rides as an extra view that pairs only with the others); the mean of a photo's pairs, so a
+    // correction that damages one region of it shows even where the median holds
+    const ks = cand.map((c, k) => (c ? k : -1)).filter(k => k >= 0);
+    const n = views.length, keyOf = (i: number) => (i < n ? i : ks[i - n]);
+    const paired = input.measure([...all, ...ks.map(k => views[k])], (a, b) => (a < n || b < n) && keyOf(a) !== keyOf(b));
+    const reverted: string[] = [];
+    const chosen = all.map((v, k) => {
+        if (!cand[k]) return v;
+        const withCorrected = paired.perView[k].meanDeltaE, withOriginal = paired.perView[n + ks.indexOf(k)].meanDeltaE;
+        if (withCorrected !== null && withOriginal !== null && withCorrected > withOriginal) { reverted.push(v.panoId); return views[k]; }
+        return v;
+    });
+    const final = reverted.length ? input.measure(chosen) : after;
+    const used = chosen.filter((v, k) => v !== views[k]).length;
+    const ok = used > 0 && before.medianDeltaE !== null && final.medianDeltaE !== null && final.medianDeltaE < before.medianDeltaE && (final.p95DeltaE ?? Infinity) <= (before.p95DeltaE ?? Infinity);
+    const reason = ok ? undefined : used === 0 ? `every corrected photo made its own views disagree more (${reverted.length} set back)`
+        : `with the corrected photos the views disagree no less (CIEDE2000 median ${before.medianDeltaE} -> ${final.medianDeltaE}, p95 ${before.p95DeltaE} -> ${final.p95DeltaE} over ${before.texels} multiply-seen texels)`;
+    input.report({ before, after, ...(reverted.length ? { final } : {}), offered, used: ok ? used : 0, reverted, applied: ok, ...(reason ? { reason } : {}) });
+    if (!ok) return views;
+    chosen.forEach((v, k) => { if (v !== views[k]) corrOf.set(views[k], v); });
+    return chosen;
+}
+
+/** Labels the projection's entries that hold lighting-corrected photos ("photo, lighting corrected by <model>"). */
+export function lightingProvenance(planes: BakedTexturePlanes, corrOf: Map<ProjectionView, ProjectionView>, corrected: LightingCorrectedView[] | undefined): BakedTexturePlanes {
+    if (!corrOf.size || !corrected?.length) return planes;
+    const used = new Set([...corrOf.keys()].map(v => v.panoId));
+    const kept = corrected.filter(c => used.has(c.panoId));
+    const provenance = planes.provenance.map(p => {
+        const ids = new Set(p.panoIds ?? []);
+        const hit = kept.filter(c => ids.has(c.panoId));
+        if (!hit.length || p.lightingCorrection) return p;
+        const models = [...new Set(hit.map(h => h.modelUsed))];
+        const note = `photo, lighting corrected by ${models.join(', ')}`;
+        const confidence = Math.round((hit.reduce((s, h) => s + h.confidence, 0) / hit.length) * 1000) / 1000;
+        return { ...p, method: `${p.method}; ${note} (the photo's own pixels times a smooth gain field from the model's shadowless relighting, detail-locked)`, lightingCorrection: { models, note, confidence, images: hit.length } };
+    });
+    return { ...planes, provenance };
+}

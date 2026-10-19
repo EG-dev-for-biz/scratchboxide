@@ -36,6 +36,7 @@ import { getTileVegetationService } from '../tile-vegetation-service';
 import { loadScanFit } from '../scan-fit-loader';
 import { StageCache, stagedWorkspaceRoot } from './stage-cache';
 import { genAiEnhanceClient } from './texture-enhance';
+import { lightingCorrectionEnabled, lightingModels } from './texture-lighting';
 import {
     STAGE_IDS, runStagedLocation, type StageId, type StagedExtraction, type StagedLocationDeps, type StagedLocationRequest, type ResolvedPlace
 } from './orchestrator';
@@ -232,8 +233,12 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
         },
         vision,
         // the texture pass's optional enhancement rung: the image model edits the tile transfer, kept only past its edge
-        // gate (SCRATCHBOX_TEXTURE_ENHANCE=0 turns the rung off)
-        textures: 'client' in vision && process.env.SCRATCHBOX_TEXTURE_ENHANCE !== '0' ? { enhance: genAiEnhanceClient(vision.client) } : {}
+        // gate (SCRATCHBOX_TEXTURE_ENHANCE=0 turns the rung off); and the model lighting correction of the photos, detail-locked
+        // (texture-lighting.ts; SCRATCHBOX_TEXTURE_LIGHTING=1 turns it on, SCRATCHBOX_TEXTURE_LIGHTING_MODELS picks the model)
+        textures: 'client' in vision ? {
+            ...(process.env.SCRATCHBOX_TEXTURE_ENHANCE !== '0' ? { enhance: genAiEnhanceClient(vision.client) } : {}),
+            ...(lightingCorrectionEnabled() ? { lighting: genAiEnhanceClient(vision.client), lightingModels: lightingModels() } : {})
+        } : {}
     };
 }
 
