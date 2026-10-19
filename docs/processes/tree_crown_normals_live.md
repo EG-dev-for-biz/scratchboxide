@@ -57,3 +57,12 @@ The camera was set with `__SB_SET_CAMERA_VIEW__`. Crown shading was toggled with
 3. In the console, get the controller: `const lod = [...__SB_3D_EXTERNAL_OBJECTS__.values()].find(m => m.userData.sbTreeLod).userData.sbTreeLod`.
 4. Toggle with `lod.setCrownShading({ enabled: false })` and `lod.setCrownShading({ enabled: true })`. Change the factors with `lod.setCrownShading({ blend: [0.7, 0.9, 0.75] })`.
 5. To make it persistent, set it in scene data: `treeCrownShading: { enabled: false }`.
+
+---
+
+## 6. Follow-up (2026-10-19): near leaves lost their shape
+
+* **Reported:** close up, leaves of the staged Washington Square Arch district (clay) read as large flat angular plates.
+* **Cause:** not the material. The leaves are geometry (SB-Veggie blades, no texture cutout), and the crown variant is a clone that keeps every material property. The cause was the near level's normal blend (0.7 toward the crown normal), plus the card normals turned to the crown's side with three's back-face flip dropped. Neighbouring leaves got almost the same normal, so their folds and outlines merged into flat patches, and the shootlets and petioles lit as bright as the blades.
+* **Fix:** the near level no longer blends normals (`blend` 0 / 0.9 / 1.0). Leaves keep their own normal and three's back-face flip. Crown volume at every level now also comes from an occlusion term on the diffuse colour: darker toward the crown's underside and core, no normal change (`occlusion` 0.6 / 0.45 / 0.35). The mid and far levels still blend normals as before.
+* **Evidence** (same camera, 13 m from a crown near the arch, port 3241; `test-results/screenshots/tree_lod_step/`): `regress_close_off_before.png` (shading off), `regress_close_on_broken.png` (a2e1b127), `regress_close_on_fixed.png` (fix), `regress_mid_on_fixed.png` / `regress_mid_off.png` (70 m).

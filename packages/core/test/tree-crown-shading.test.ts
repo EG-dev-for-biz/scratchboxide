@@ -12,10 +12,11 @@
  * - the native crown fit (tree_lod::fitCrownEllipsoid, compiled with clang++) recovers a leaning, elongated, turned crown
  *   from points on its leaves, and ignores a few stray ones;
  * - the crown quadric a leaf mesh carries, in the mesh's own frame, has the ellipsoid's normal as its gradient;
- * - blend factors per level (defaults 0.7 / 0.9 / 1.0), adjustable, clamped;
+ * - factors per level (defaults: normal blend 0 / 0.9 / 1.0, occlusion 0.6 / 0.45 / 0.35), adjustable, clamped;
  * - leaf meshes (clusters of levels 0 and 1, the level-2 foliage primitive) wear the crown variant; wood and twigs never;
  * - the dither variants of a leaf mesh carry the crown chunk (so a crossfade keeps it), the wood's do not;
- * - the leaf fragment stage does not flip back faces;
+ * - the leaf fragment stage keeps three's back-face flip where the level does not blend (near), drops it where it does;
+ * - the crown and dither variants keep everything that defines a leaf's silhouette (maps, alpha test, transparency, side);
  * - off by toggle, and a material swapped behind the controller (clay pass) is dressed again.
  */
 
@@ -28,9 +29,9 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { TreeLodController } from '../src/browser/generative-canvas/primitives/scene3d/treeLod/TreeLodController';
 import {
-    CROWN_VERTEX_MAIN, crownLevelFactors, crownQuadricInMeshFrame, crownShadingUniforms, isCrownVariant, resolveCrownShading, setCrownShadingUniforms, DEFAULT_CROWN_SHADING
+    CROWN_VERTEX_MAIN, crownLevelFactors, makeCrownVariant, crownQuadricInMeshFrame, crownShadingUniforms, isCrownVariant, resolveCrownShading, setCrownShadingUniforms, DEFAULT_CROWN_SHADING
 } from '../src/browser/generative-canvas/primitives/scene3d/treeLod/treeCrownShading';
-import { isFadeVariant } from '../src/browser/generative-canvas/primitives/scene3d/treeLod/treeLodFade';
+import { isFadeVariant, makeFadeVariant } from '../src/browser/generative-canvas/primitives/scene3d/treeLod/treeLodFade';
 import { applyClayRenderMode, sharedTreeClayMaterial } from '../src/browser/generative-canvas/primitives/scene3d/clayRenderMode';
 import { buildTreesLodGltf, writeTreesLodGlb } from './helpers/synthetic-trees-lod-glb';
 import { validateTreesGlbJson, type TreeCrownExtras } from '../src/common/spatial/staged-location-contracts';
@@ -136,21 +137,28 @@ describe('crown quadric and blend factors', () => {
             // the shader's way: gradient S (x - c) in the mesh frame, carried by the normal matrix
             const pMesh = pTree.clone().applyMatrix4(meshToTree.clone().invert());
             const g = pMesh.clone().sub(new THREE.Vector3(q.c[0], q.c[1], q.c[2])).applyMatrix3(S);
+            // the quadric's value is 1 on the ellipsoid (the occlusion reads it as the depth inside the crown)
+            const dMesh = pMesh.clone().sub(new THREE.Vector3(q.c[0], q.c[1], q.c[2]));
+            expect(dMesh.dot(dMesh.clone().applyMatrix3(S))).toBeCloseTo(1, 4);
             const back = g.applyMatrix3(normalMat).normalize();
             expect(back.dot(nTree)).toBeGreaterThan(0.9999);
         }
     });
 
-    it('blends 0.7 near, 0.9 mid, 1.0 far by default, and the factors are adjustable and clamped', () => {
-        expect(DEFAULT_CROWN_SHADING.blend).toEqual([0.7, 0.9, 1.0]);
+    it('keeps the near leaves\' own normals (blend 0, occlusion only), blends 0.9 mid and 1.0 far, and the factors are adjustable and clamped', () => {
+        expect(DEFAULT_CROWN_SHADING.blend).toEqual([0, 0.9, 1.0]);
+        expect(DEFAULT_CROWN_SHADING.occlusion).toEqual([0.6, 0.45, 0.35]);
         setCrownShadingUniforms(resolveCrownShading(undefined));
-        expect([0, 1, 2].map(l => crownLevelFactors(l).blend)).toEqual([0.7, 0.9, 1.0].map(x => Math.fround(x) === x ? x : expect.closeTo(x, 6)));
-        expect(crownLevelFactors(0).noise).toBeGreaterThan(crownLevelFactors(1).noise);
+        expect([0, 1, 2].map(l => crownLevelFactors(l).blend)).toEqual([0, 0.9, 1.0].map(x => Math.fround(x) === x ? x : expect.closeTo(x, 6)));
+        expect([0, 1, 2].map(l => crownLevelFactors(l).occlusion)).toEqual([0.6, 0.45, 0.35].map(x => expect.closeTo(x, 6)));
+        expect(crownLevelFactors(0).noise).toBe(0);
         expect(crownLevelFactors(2).noise).toBe(0);
         setCrownShadingUniforms(resolveCrownShading({ blend: [0.5, 1.4, -2], skyBias: 0.3 }));
         expect([0, 1, 2].map(l => crownLevelFactors(l).blend)).toEqual([0.5, 1, 0]);
         expect(crownShadingUniforms().uSbCrownSky.value).toBeCloseTo(0.3);
-        expect(resolveCrownShading({ blend: [1, 2] as any }).blend).toEqual([0.7, 0.9, 1.0]);   // malformed: the default
+        expect(resolveCrownShading({ blend: [1, 2] as any }).blend).toEqual([0, 0.9, 1.0]);   // malformed: the default
+        setCrownShadingUniforms(resolveCrownShading({ occlusion: [2, -1, 0.5] }));
+        expect([0, 1, 2].map(l => crownLevelFactors(l).occlusion)).toEqual([1, 0, 0.5]);
         setCrownShadingUniforms(resolveCrownShading(undefined));
     });
 });
@@ -194,7 +202,7 @@ describe('TreeLodController with crown shading', () => {
         }
     });
 
-    it('keeps the crown chunk in the dither variants of a crossfade (leaves only) and never flips a leaf\'s back face', async () => {
+    it('keeps the crown chunk in the dither variants of a crossfade (leaves only), with the back-face flip only where the level does not blend', async () => {
         const root = await loadFixture(1);
         const c = clock();
         const lod = new TreeLodController(root, { now: c.now });
@@ -207,8 +215,9 @@ describe('TreeLodController with crown shading', () => {
             const s = compiled(m.material as THREE.Material);
             expect(s.vertexShader).toContain(CROWN_VERTEX_MAIN);
             expect(s.vertexShader).toContain('uSbRange');                                    // the dither is still there
-            expect(s.fragmentShader).toContain('float faceDirection = 1.0;');
-            expect(s.fragmentShader).not.toContain('gl_FrontFacing ? 1.0 : - 1.0');
+            // the flip is kept for a level that does not blend (vSbCrownFlip = 1, the near level) and dropped where it blends
+            expect(s.fragmentShader).toContain('float faceDirection = vSbCrownFlip > 0.5 ? ( gl_FrontFacing ? 1.0 : - 1.0 ) : 1.0;');
+            expect(s.fragmentShader).toContain('diffuseColor.rgb *= vSbCrownOcc;');
             expect((m.material as THREE.Material).customProgramCacheKey()).toMatch(/sbcrown.*sbfade/);
         }
         for (const m of wood) {
@@ -216,8 +225,9 @@ describe('TreeLodController with crown shading', () => {
             expect(s.vertexShader).not.toContain('sbCrownC');
             expect(s.fragmentShader).toContain('#include <normal_fragment_begin>');      // three's own chunk, with its flip
         }
-        // the vertex stage turns a card's own normal to the crown's side before blending, so its back side is lit like its front
-        expect(CROWN_VERTEX_MAIN).toMatch(/if \( dot\( sbOwn, sbN \) < 0\.0 \) sbOwn = - sbOwn;/);
+        // the vertex stage turns a card's own normal to the crown's side before blending, so its back side is lit like its front,
+        // and only where the level blends: with blend 0 the normal varying is left as the plain material writes it
+        expect(CROWN_VERTEX_MAIN).toMatch(/if \( sbW > 0\.0 \) \{[\s\S]*if \( dot\( sbOwn, sbC \) < 0\.0 \) sbOwn = - sbOwn;[\s\S]*vSbCrownFlip = 0\.0;/);
     });
 
     it('turns off for comparison and back on, and dresses again a mesh the clay pass swapped', async () => {
@@ -248,6 +258,34 @@ describe('TreeLodController with crown shading', () => {
         applyClayRenderMode([root], false);
         lod.dispose();
         expect(lodMeshes(root)).toHaveLength(0);
+    });
+
+    it('keeps every property that defines a leaf\'s silhouette in the crown variant and in its dither variants', async () => {
+        const tex = (v: number) => { const t = new THREE.DataTexture(new Uint8Array([v, v, v, 255]), 1, 1); t.needsUpdate = true; return t; };
+        const leafMat = new THREE.MeshStandardMaterial({ color: 0x6a8f4e, map: tex(200), alphaMap: tex(128), alphaTest: 0.5, transparent: true, opacity: 0.9, side: THREE.DoubleSide, roughness: 0.7 });
+        const props = (m: THREE.Material) => { const x = m as THREE.MeshStandardMaterial; return { map: x.map, alphaMap: x.alphaMap, alphaTest: x.alphaTest, transparent: x.transparent, opacity: x.opacity, side: x.side, alphaToCoverage: x.alphaToCoverage, color: x.color.getHex(), roughness: x.roughness }; };
+        const crown = makeCrownVariant(leafMat);
+        expect(props(crown)).toEqual(props(leafMat));
+        for (const instanced of [true, false]) expect(props(makeFadeVariant(crown, 4, 12, instanced))).toEqual(props(leafMat));
+        // the compiled leaf shader still tests alpha and samples both maps (the define-driven chunks stay in place)
+        const sh = compiled(crown);
+        for (const chunk of ['#include <alphamap_fragment>', '#include <alphatest_fragment>', '#include <map_fragment>']) expect(sh.fragmentShader).toContain(chunk);
+        // through the controller: leaf meshes whose loader material has a cutout wear crown and dither variants that keep it
+        const root = await loadFixture(1);
+        root.traverse(o => { const m = o as THREE.Mesh; if ((m as THREE.InstancedMesh).isInstancedMesh) m.material = leafMat; });
+        const c = clock();
+        const lod = new TreeLodController(root, { now: c.now });
+        const tree = treeNodes(root)[0];
+        lod.forceLevel(0); lod.update(cameraAt(tree, 20));
+        lod.forceLevel(null);
+        for (let i = 0; i < 80; i++) { c.tick(); lod.update(cameraAt(tree, 55)); }
+        const leaves = lodMeshes(root).filter(m => m.userData.sbCrownLeaf && (m as THREE.InstancedMesh).isInstancedMesh);
+        expect(leaves.length).toBeGreaterThan(0);
+        expect(leaves.some(m => isFadeVariant(m.material as THREE.Material))).toBe(true);
+        for (const m of leaves) {
+            expect(isCrownVariant(m.material as THREE.Material) || isFadeVariant(m.material as THREE.Material)).toBe(true);
+            expect(props(m.material as THREE.Material)).toEqual(props(leafMat));
+        }
     });
 
     it('leaves a trees file without crowns as it was', async () => {

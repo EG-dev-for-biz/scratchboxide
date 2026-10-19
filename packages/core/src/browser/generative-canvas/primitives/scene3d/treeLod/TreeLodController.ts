@@ -60,7 +60,7 @@ export interface TreeLodOptions {
     triangleBudget?: number;
     /** Clock in ms, replaceable in tests. */
     now?: () => number;
-    /** Crown shading of the leaves (defaults: on, blend 0.7 / 0.9 / 1.0). */
+    /** Crown shading of the leaves (defaults: on, blend 0 / 0.9 / 1.0, occlusion 0.6 / 0.45 / 0.35). */
     crownShading?: Partial<CrownShadingOptions>;
 }
 

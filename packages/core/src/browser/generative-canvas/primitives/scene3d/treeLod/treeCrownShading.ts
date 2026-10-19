@@ -12,10 +12,11 @@ import * as THREE from 'three';
 import type { TreeCrownExtras } from '../../../../../common/spatial/staged-location-contracts';
 
 /**
- * Soft crown ("envelope") normals for the leaves of a tree. The trees GLB carries, per tree, an ellipsoid fitted to its
- * delivered leaves (extras sbTree.crown, written by the native trees writer). The leaves of every level are shaded with
- * a blend of their own normal and the ellipsoid's normal at the vertex (its gradient), tilted a little toward the sky, so
- * a crown reads as one soft volume instead of faceted cards or rocky masses. Wood is never touched.
+ * Soft crown ("envelope") shading for the leaves of a tree. The trees GLB carries, per tree, an ellipsoid fitted to its
+ * delivered leaves (extras sbTree.crown, written by the native trees writer). Two effects, with factors per level:
+ * occlusion darkens a leaf's diffuse colour toward the crown's underside and core (no normal changes, so near leaves keep
+ * their own outline, fold and lighting), and the mid and far levels also blend their normal toward the ellipsoid's normal
+ * (its gradient), tilted a little toward the sky, so cards and blob masses read as one soft volume. Wood is never touched.
  *
  * Leaf clusters are instanced and their geometry is shared by every tree, so nothing is baked: each leaf mesh gets a light
  * geometry of its own that shares the cluster's buffers and adds the crown as three instanced attributes with a divisor
@@ -25,9 +26,10 @@ import type { TreeCrownExtras } from '../../../../../common/spatial/staged-locat
  * factors are adjustable at run time for every tree at once.
  *
  * The leaf material is a variant of the mesh's base (the shared clay, or the loader's material) that only leaf meshes
- * wear; the dither variants of treeLodFade are made from it, so a crossfade keeps the soft shading. A leaf card's own
- * normal is first turned to face the crown normal, and the fragment stage does not flip the normal of a back face, so the
- * underside of a card is not dark.
+ * wear; the dither variants of treeLodFade are made from it, so a crossfade keeps the soft shading. The variant keeps every
+ * property of its base (it is a clone): colour, maps, alpha test, transparency, side. At a level that blends, a card's own
+ * normal is first turned to face the crown normal and the fragment stage does not flip the normal of a back face, so the
+ * underside of a card is not dark; at a level that does not blend (the near level by default), three's own flip applies.
  */
 
 export interface CrownShadingOptions {
@@ -37,15 +39,21 @@ export interface CrownShadingOptions {
     blend: [number, number, number];
     /** How far the crown normal tilts toward world up (added to the unit normal before renormalising). */
     skyBias: number;
-    /** Amplitude of the per-leaf normal noise at each level, so a near crown does not read as a balloon. */
+    /** Amplitude of the per-leaf normal noise at each level (only where the level blends), so a crown does not read as a balloon. */
     noise: [number, number, number];
+    /**
+     * Share of the crown occlusion in the leaf's diffuse colour at each level: leaves on the crown's underside and in its core
+     * are darkened, leaves on its sky side are not. It changes no normal, so a leaf keeps its own shape and fold.
+     */
+    occlusion: [number, number, number];
 }
 
-export const DEFAULT_CROWN_SHADING: Readonly<CrownShadingOptions> = Object.freeze<CrownShadingOptions>({ enabled: true, blend: [0.7, 0.9, 1.0], skyBias: 0.18, noise: [0.3, 0.12, 0] });
+export const DEFAULT_CROWN_SHADING: Readonly<CrownShadingOptions> = Object.freeze<CrownShadingOptions>({ enabled: true, blend: [0, 0.9, 1.0], skyBias: 0.18, noise: [0, 0.12, 0], occlusion: [0.6, 0.45, 0.35] });
 
 const uniforms = {
     uSbCrownBlend: { value: new THREE.Vector3(...DEFAULT_CROWN_SHADING.blend) },
     uSbCrownNoise: { value: new THREE.Vector3(...DEFAULT_CROWN_SHADING.noise) },
+    uSbCrownOcclusion: { value: new THREE.Vector3(...DEFAULT_CROWN_SHADING.occlusion) },
     uSbCrownSky: { value: DEFAULT_CROWN_SHADING.skyBias }
 };
 
@@ -53,10 +61,11 @@ const uniforms = {
 export const crownShadingUniforms = (): Readonly<typeof uniforms> => uniforms;
 
 /** Writes the adjustable factors into the shared uniforms (clamped to their meaningful ranges). */
-export function setCrownShadingUniforms(o: Pick<CrownShadingOptions, 'blend' | 'skyBias' | 'noise'>): void {
+export function setCrownShadingUniforms(o: Pick<CrownShadingOptions, 'blend' | 'skyBias' | 'noise' | 'occlusion'>): void {
     const c01 = (x: number) => Math.min(1, Math.max(0, Number.isFinite(x) ? x : 0));
     uniforms.uSbCrownBlend.value.set(c01(o.blend[0]), c01(o.blend[1]), c01(o.blend[2]));
     uniforms.uSbCrownNoise.value.set(Math.max(0, o.noise[0] || 0), Math.max(0, o.noise[1] || 0), Math.max(0, o.noise[2] || 0));
+    uniforms.uSbCrownOcclusion.value.set(c01(o.occlusion[0]), c01(o.occlusion[1]), c01(o.occlusion[2]));
     uniforms.uSbCrownSky.value = Math.max(0, Number.isFinite(o.skyBias) ? o.skyBias : 0);
 }
 
@@ -69,21 +78,22 @@ export function resolveCrownShading(o: Partial<CrownShadingOptions> | undefined 
         enabled: o?.enabled ?? d.enabled,
         blend: triple(o?.blend, d.blend),
         skyBias: typeof o?.skyBias === 'number' && Number.isFinite(o.skyBias) ? o.skyBias : d.skyBias,
-        noise: triple(o?.noise, d.noise)
+        noise: triple(o?.noise, d.noise),
+        occlusion: triple(o?.occlusion, d.occlusion)
     };
 }
 
 /** The blend factor and noise amplitude the shader picks for a level, from the shared uniforms (mirrors the GLSL). */
-export function crownLevelFactors(level: number): { blend: number; noise: number } {
+export function crownLevelFactors(level: number): { blend: number; noise: number; occlusion: number } {
     const k = level < 0.5 ? 'x' : level < 1.5 ? 'y' : 'z';
-    return { blend: uniforms.uSbCrownBlend.value[k], noise: uniforms.uSbCrownNoise.value[k] };
+    return { blend: uniforms.uSbCrownBlend.value[k], noise: uniforms.uSbCrownNoise.value[k], occlusion: uniforms.uSbCrownOcclusion.value[k] };
 }
 
 /**
  * The crown ellipsoid as a quadric in a mesh's own frame. `meshToTree` maps the mesh's frame (where its instance matrices
  * put the vertices) into the tree node's frame (where the crown is). Returns the centre (xyz, w = level) and the symmetric
- * matrix S as its diagonal (xx, yy, zz) and off-diagonal (xy, xz, yz), scaled so its largest entry is 1 (the gradient's
- * direction is all the shader needs).
+ * matrix S as its diagonal (xx, yy, zz) and off-diagonal (xy, xz, yz), unscaled: (x - c)^T S (x - c) is 1 on the
+ * ellipsoid, which the occlusion reads as the depth inside the crown, and S (x - c) is the gradient.
  */
 export function crownQuadricInMeshFrame(crown: TreeCrownExtras, meshToTree: THREE.Matrix4, level: number): { c: [number, number, number, number]; s0: [number, number, number]; s1: [number, number, number] } {
     const [r0, r1, r2] = crown.radii.map(r => Math.max(1e-3, r));
@@ -102,9 +112,8 @@ export function crownQuadricInMeshFrame(crown: TreeCrownExtras, meshToTree: THRE
     const s = t.clone().transpose().multiply(q).multiply(t);
     const e = s.elements;
     const sxx = e[0], syy = e[4], szz = e[8], sxy = 0.5 * (e[1] + e[3]), sxz = 0.5 * (e[2] + e[6]), syz = 0.5 * (e[5] + e[7]);
-    const scale = Math.max(Math.abs(sxx), Math.abs(syy), Math.abs(szz), Math.abs(sxy), Math.abs(sxz), Math.abs(syz), 1e-30);
     const centre = new THREE.Vector3(...crown.centre).applyMatrix4(meshToTree.clone().invert());
-    return { c: [centre.x, centre.y, centre.z, level], s0: [sxx / scale, syy / scale, szz / scale], s1: [sxy / scale, sxz / scale, syz / scale] };
+    return { c: [centre.x, centre.y, centre.z, level], s0: [sxx, syy, szz], s1: [sxy, sxz, syz] };
 }
 
 /** One value for every instance of a mesh (and for a plain mesh, which draws as instance 0). */
@@ -157,17 +166,30 @@ export const supportsCrownShading = (m: THREE.Material): boolean => {
     return !!(x.isMeshStandardMaterial || x.isMeshLambertMaterial || x.isMeshPhongMaterial || x.isMeshToonMaterial);
 };
 
-/** Vertex code: after the projection, replaces the leaf's normal varying with the blend toward the crown normal. */
 export const CROWN_VERTEX_PARS = `
 attribute vec4 sbCrownC;
 attribute vec3 sbCrownS0;
 attribute vec3 sbCrownS1;
 uniform vec3 uSbCrownBlend;
 uniform vec3 uSbCrownNoise;
+uniform vec3 uSbCrownOcclusion;
 uniform float uSbCrownSky;
+varying float vSbCrownOcc;
+varying float vSbCrownFlip;
 `;
 
+/**
+ * Vertex code, after the projection. Two effects, each with its own factor per level:
+ * - occlusion (every level): the leaf's diffuse colour is darkened by where it sits in the crown, from the crown normal's
+ *   facing toward the sky and the depth inside the crown, so the crown reads as a lit volume while every leaf keeps its own
+ *   normal, its fold and its outline (the near level relies on this alone by default);
+ * - normal blend: the leaf's normal varying is replaced with a blend toward the crown normal (mid and far levels). Only a
+ *   level that blends has its card normal turned to the crown's side and the back-face flip dropped; a level with blend 0
+ *   is lit exactly as the plain material lights it (three's own back-face flip, vSbCrownFlip = 1).
+ */
 export const CROWN_VERTEX_MAIN = `
+vSbCrownOcc = 1.0;
+vSbCrownFlip = 1.0;
 #ifndef FLAT_SHADED
 {
     vec4 sbLocal = vec4( transformed, 1.0 );
@@ -185,26 +207,47 @@ export const CROWN_VERTEX_MAIN = `
     vec3 sbSel = vec3( 1.0 - step( 0.5, sbLvl ), step( 0.5, sbLvl ) * ( 1.0 - step( 1.5, sbLvl ) ), step( 1.5, sbLvl ) );
     float sbW = dot( uSbCrownBlend, sbSel );
     float sbAmp = dot( uSbCrownNoise, sbSel );
-    // per-leaf noise: smooth in the leaf's own normal (one leaf, one direction), varied by the cluster's place
+    // occlusion: 1 on the sky side of the crown's surface, darker toward its underside and its core (the quadric is 1 on the surface)
+    float sbDepth = 1.0 - sqrt( clamp( dot( sbD, sbG ), 0.0, 1.0 ) );
+    float sbLit = ( 0.5 + 0.5 * dot( sbN, sbUp ) ) * ( 1.0 - 0.6 * sbDepth );
+    vSbCrownOcc = mix( 1.0, 0.4 + 0.6 * sbLit, dot( uSbCrownOcclusion, sbSel ) );
+    if ( sbW > 0.0 ) {
+        // per-leaf noise: smooth in the leaf's own normal (one leaf, one direction), varied by the cluster's place
 #ifdef USE_INSTANCING
-    vec3 sbSeed = instanceMatrix[3].xyz;
+        vec3 sbSeed = instanceMatrix[3].xyz;
 #else
-    vec3 sbSeed = vec3( 0.0 );
+        vec3 sbSeed = vec3( 0.0 );
 #endif
-    float sbH = fract( sin( dot( floor( sbSeed * 1024.0 ), vec3( 12.9898, 78.233, 37.719 ) ) ) * 43758.5453 ) * 6.2831853;
-    vec3 sbJ = sin( objectNormal * vec3( 7.13, 9.31, 8.77 ) + vec3( sbH, sbH * 1.7, sbH * 2.3 ) );
-    sbN = normalize( sbN + uSbCrownSky * sbUp + sbAmp * normalMatrix * sbJ );
-    vec3 sbOwn = normalize( vNormal );
-    if ( dot( sbOwn, sbN ) < 0.0 ) sbOwn = - sbOwn;
-    vNormal = normalize( mix( sbOwn, sbN, sbW ) );
+        float sbH = fract( sin( dot( floor( sbSeed * 1024.0 ), vec3( 12.9898, 78.233, 37.719 ) ) ) * 43758.5453 ) * 6.2831853;
+        vec3 sbJ = sin( objectNormal * vec3( 7.13, 9.31, 8.77 ) + vec3( sbH, sbH * 1.7, sbH * 2.3 ) );
+        vec3 sbC = normalize( sbN + uSbCrownSky * sbUp + sbAmp * normalMatrix * sbJ );
+        vec3 sbOwn = normalize( vNormal );
+        if ( dot( sbOwn, sbC ) < 0.0 ) sbOwn = - sbOwn;
+        vNormal = normalize( mix( sbOwn, sbC, sbW ) );
+        vSbCrownFlip = 0.0;
+    }
 }
 #endif
 `;
 
-/** normal_fragment_begin without the back-face flip: the crown normal already faces the viewer's side of the crown. */
+/** Fragment declarations of the crown variant. */
+export const CROWN_FRAGMENT_PARS = `
+varying float vSbCrownOcc;
+varying float vSbCrownFlip;
+`;
+
+/** After color_fragment: the crown's occlusion on the leaf's diffuse colour. */
+export const CROWN_FRAGMENT_COLOR = `
+diffuseColor.rgb *= vSbCrownOcc;
+`;
+
+/**
+ * normal_fragment_begin whose back-face flip applies only where the level does not blend toward the crown normal (a
+ * blended normal already faces the crown's side, so flipping it would light the back of a card as the dark side).
+ */
 export const crownNormalFragmentBegin = (): string => {
     const chunk = THREE.ShaderChunk.normal_fragment_begin;
-    const out = chunk.replace('float faceDirection = gl_FrontFacing ? 1.0 : - 1.0;', 'float faceDirection = 1.0;');
+    const out = chunk.replace('float faceDirection = gl_FrontFacing ? 1.0 : - 1.0;', 'float faceDirection = vSbCrownFlip > 0.5 ? ( gl_FrontFacing ? 1.0 : - 1.0 ) : 1.0;');
     if (out === chunk) throw new Error('treeCrownShading: three.js normal_fragment_begin no longer has the faceDirection line this patch replaces');
     return out;
 };
@@ -221,7 +264,12 @@ export function makeCrownVariant(base: THREE.Material): THREE.Material {
         shader.vertexShader = shader.vertexShader
             .replace('#include <common>', `#include <common>\n${CROWN_VERTEX_PARS}`)
             .replace('#include <project_vertex>', `#include <project_vertex>\n${CROWN_VERTEX_MAIN}`);
-        shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_begin>', crownNormalFragmentBegin());
+        const frag = shader.fragmentShader
+            .replace('#include <common>', `#include <common>\n${CROWN_FRAGMENT_PARS}`)
+            .replace('#include <color_fragment>', `#include <color_fragment>\n${CROWN_FRAGMENT_COLOR}`)
+            .replace('#include <normal_fragment_begin>', crownNormalFragmentBegin());
+        if (!frag.includes(CROWN_FRAGMENT_COLOR)) throw new Error('treeCrownShading: the leaf material has no color_fragment chunk to darken');
+        shader.fragmentShader = frag;
     };
     mat.needsUpdate = true;
     return mat;
