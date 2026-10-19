@@ -1,7 +1,7 @@
 # Staged Location Builds: Pipeline E (clean vector massing, ortho textures, verified inference, opt-in enhanced mode)
 
 > **Recorded:** 2026-10-19
-> **Status:** Verified behind a flag (`SCRATCHBOX_STAGED_PIPELINE=e`, off by default; enhanced mode `SCRATCHBOX_STAGED_ENHANCE=1` or the clay tool's `enhance: true`, also off). Not the default: for the user's review.
+> **Status:** Verified behind a flag (`SCRATCHBOX_STAGED_PIPELINE=e`, off by default). Within pipeline E enhanced appearance is the default since round 4 (realism-first directive); the real-data view is `enhance: false` or `SCRATCHBOX_STAGED_ENHANCE=0`. Not on main: for the user's review.
 > **Tags:** `operate-scratchbox` `staged-build` `pipeline-e` `google-vector-data` `solar-api` `facade-grammar` `photo-match` `provenance`
 > **Target Domain:** Real-world 3D locations (`google_3d_tiles_get_clay`, `isolate: true`)
 
@@ -65,5 +65,30 @@ Instance from the `version-e` worktree, web 3471 / API 3472 / tools 3473, `SCRAT
 - Stage titles per pipeline (E's massing currently shows as "Remeshed scan").
 - A held-out pose refinement for the Street View colour pairs (nominal poses make the colour step pass 1 in 27).
 
-## 6. Reproduction
+## 6. Round 4 (2026-10-19): identity check, Street View guidance, realism and identity scores
+
+**What changed** (commits 8f62a85a .. on `version-e`):
+- **Identity check** (`pipeline-e/plate-audit.ts`, `guardPlate` in `enhance.ts`), after the alignment gate. Per 0.5 m cell: the low-passed CIELAB distance after one global colour map (chroma in full, lightness ×0.6), the band-pass (0.08-0.8 m) contrast of input and plate and their NCC over 1.5 m, and how far the input stands from the wall's median colour (≥ 15) or how strong its structure is (≥ 9 L\*), reaching 1 m round each distinct cell. Unsupported structure over a distinct element is `replaced`, flattened distinct structure `erased`, a changed colour `retoned`; unsupported structure over ordinary wall is `invented-detail` and kept (realism-first: finer detail is the point). 8-connected regions ≥ 3 m² revert to the input, feathered over 0.5 m; > 35 % of the wall flagged rejects it. On the round-3 plates: the Lite redraw's painted-over fire-escape bay and arched ground floor (wall 17 then) revert; its stone base over smeared street clutter (wall 15 then) is kept unless a photo contradicts it (no distinct element in the tile there).
+- **Street View guidance** (`pipeline-e/plate-streetview.ts`, `streetview-registered-views.ts`): enhanced mode runs the `streetview_survey` planning, refusal retry and edge+joint registration (moved out of the tool, re-exported) for 5 survey views plus a street-level view of each pano (aimed 4.5 m above the foot: the survey's wide views leave the lower storeys below the frame), cut out by the ownership and occluder masks. Per wall the registered view that best sees its street-level band (9 m; at least 10 %) is rectified onto the wall (pose, joint warp, depth test) and sent as a third image, resampled onto the plate's frame (`texture-plate/v1+street-view`; a perspective crop pulled the plates off the walls' geometry). A photo-guided redraw that fails the gate is redrawn once without the photo, which then only checks it. The check: after a ±1 m shift search, per cell over 2.5 m, where the input agrees with the photo clearly better than the plate (NCC +0.25 or colour +10) the plate contradicts it and reverts; where the photo supports the plate, tile flags are lifted. Provenance: "AI-enhanced from tile, guided by Street View <panoId>".
+- **Judge** (`photo-match-eval.ts`): two more criteria, `realism` and `identity`, optional in the reply schema.
+- **Consistency:** plates cached per wall (`enhance_plates/`, keyed by models, prompt and every image); walls redrawn in rounds, each referencing only earlier rounds.
+- Grammar stage limit 420 s (enhanced mode's survey runs beside the readings).
+
+**Bake-off (round 4)**: same 24 held-out views (none used by any build of this round), in context, `gemini-4-argon` blind ×3. Arms: E (real-data view), Eh0 (enhanced before: gate only), Eh1 (enhanced after). St. Mark's now takes pipeline E (plan IoU 0.73 after the picker fix). Full tables: `test-results/screenshots/version_e/enhance2/bakeoff_round4.md`.
+
+| Arm (all 24 views) | shape | materials | detail | errors | overall | realism | identity |
+|---|---|---|---|---|---|---|---|
+| E | 4.57 | 4.08 | 3.47 | 3.29 | 3.82 | 3.21 | 4.85 |
+| Eh0 | 4.58 | 4.32 | 3.81 | 3.29 | 4.00 | 3.44 | 5.03 |
+| Eh1 | 4.58 | 4.32 | 3.81 | 3.29 | 4.00 | 3.44 | 5.03 |
+
+Eh0 and Eh1 were scored identically on every view: the reverted regions (Puck's fire-escape bay, 26 m² replaced + 21.5 m² retoned, 96.5 m² reverted) are seen edge-on or not at all from the held-out poses, and the judge reads the scanned street-level residue as the dominant error. The change is measured on the walls instead (below). Enhanced (either) against the real-data view: realism +0.23, identity +0.18, errors unchanged; on Puck realism 3.00 → 4.07, identity 4.93 → 5.73.
+
+**Walls (Eh1 builds):** Puck 3 of 8 enhanced (wall 19: 47.6 m² flagged, 96.5 m² reverted, 30.5 m² finer detail kept; wall 32: 17 m² flagged; wall 17: none); Jefferson 5 of 8 (3.1 m² flagged on wall 109); Haughwout 0 of 2; St. Mark's 0 of 2 (one model refusal, one gate failure). Street View: Puck 10 views all jointly registered and owned, 4 walls with a photo, every photo-guided redraw failed the gate and was redrawn without it, then checked (wall 19: 10 cells contradicted, 27 supported); Haughwout 10 registered, 7 owned (round 3: 0 owned at nominal poses), 2 walls with a photo; Jefferson 10 registered, 3 owned, 1 wall; St. Mark's no pose held (churchyard trees), no wall.
+
+**Haughwout (0 walls before and after):** per band the plates miss the tile by 2.5-5 px with different best shifts per band (wall 3: +6 px at the top, -5 px in the body): the model re-lays the storeys at a slightly different pitch, replaces the scan's roof junk at the top with sky (40 % of edges lost there), and the tile's cast-iron arcade is melted and doubled, so even a faithful redraw cannot land within 2.2 px of its edges. A per-band corrective warp would be the fix; not done.
+
+**Build time** (warm tile and strip caches, model answers replayed where recorded, plates cached on rebuilds): Puck E 91 s, Eh0 184 s, Eh1 279-316 s (survey 86 s beside the readings, redraws 185 s); Jefferson 84 / 110 / 141 s; Haughwout 20 / 39 / 175 s; St. Mark's 53 / 18 / 56 s.
+
+## 7. Reproduction
 Headless: `SCRATCHBOX_STAGED_PIPELINE=e [SCRATCHBOX_STAGED_PIPELINE_E_INFERENCE=0 | SCRATCHBOX_STAGED_ENHANCE=1] node -r ts-node/register -r ./scripts/dev/staged-replay.ts <build.ts> "<query>"` (the tool entry with `isolate: true`); run notes `pipeline_e.json` and `pipeline_e_inference.json` in `.scratchbox/cache/staged_location/runs/<runId>/`. Evaluation: `scripts/dev/photo-match-eval.ts <manifest>` with `context.cut` listing the isolate and the strip's `removed_trees.glb`. Tests: `packages/core/test/staged-pipeline-e.test.ts` (12 synthetic tests; screenshots in `test-results/screenshots/version_e/`).
