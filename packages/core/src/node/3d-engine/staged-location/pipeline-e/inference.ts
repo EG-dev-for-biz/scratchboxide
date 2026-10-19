@@ -513,7 +513,7 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
     }
     timingsMs.textures = now() - t;
 
-    // ------------------------------------------------------------------ enhanced mode (opt-in): each large wall redrawn once, gated
+    // ------------------------------------------------------------------ enhanced mode (the default within E): each large wall redrawn once, gated
     let runOut = run2;
     const enhanced: EnhanceWallRecord[] = [];
     const latticeRefits: Array<Record<string, unknown>> = [];

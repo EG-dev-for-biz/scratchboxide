@@ -172,7 +172,7 @@ export const STAGES = {
     'trees-measure': { order: -1, title: 'Measuring the trees', budgetMs: 300_000 },
     remesh: { order: 2, title: 'Remeshed scan', budgetMs: 300_000 },
     // the facades' grammars read from the tile photo (three readings per facade, concurrently), gated, and the relief run
-    // again with the accepted ones; pipeline E's inference runs here too, and in its opt-in enhanced mode also a registered
+    // again with the accepted ones; pipeline E's inference runs here too, and in its enhanced mode (the default within E) also a registered
     // Street View survey (about 3 min, alongside the readings) and up to 8 redraws (about 2.5 min)
     grammar: { order: 2, title: 'Facade grammar', budgetMs: 420_000 },
     // pipeline E: measured relief on the clean massing (the scan averaged along what repeats), then the photo-match gate
@@ -2291,7 +2291,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const pubClay = cache.publishFile(out.files.clayGlb, `${base}_massing_${key8}_${suffix}.glb`);
                     const pubTex = cache.publishFile(out.files.texturedGlb, `${base}_massing_${key8}_${suffix}_tex.glb`);
                     const enh = out.enhanced;
-                    const enhNote = enhanceOn ? `; enhanced mode (opt-in) was used: ${enh.filter(x => x.accepted).length} of ${enh.length} walls redrawn by ${enhanceModels().join(', ')} and kept (labelled generated, "AI-enhanced from tile"), ${enh.filter(x => !x.accepted).length} rejected (identity gate or region audit) and keep the tile texture; edge chamfer per wall ${enh.filter(x => x.chamferPx !== undefined).map(x => `${x.face} ${x.chamferPx} px / ${Math.round(100 * (x.lostShare ?? 0))}% lost`).join(', ') || 'none'} (reported, not gated)${visionAvailable ? '' : ' (no image model: nothing was enhanced)'}` : '';
+                    const enhNote = enhanceOn ? `; enhanced mode (the default within pipeline E; SCRATCHBOX_STAGED_ENHANCE=0 or the real-data view turns it off) was used: ${enh.filter(x => x.accepted).length} of ${enh.length} walls redrawn by ${enhanceModels().join(', ')} and kept (labelled generated, "AI-enhanced from tile"), ${enh.filter(x => !x.accepted).length} rejected (identity gate or region audit) and keep the tile texture; edge chamfer per wall ${enh.filter(x => x.chamferPx !== undefined).map(x => `${x.face} ${x.chamferPx} px / ${Math.round(100 * (x.lostShare ?? 0))}% lost`).join(', ') || 'none'} (reported, not gated)${visionAvailable ? '' : ' (no image model: nothing was enhanced)'}` : '';
                     const describe = out.steps.map(s => `${s.step}: ${s.skipped ? `skipped (${s.skipped})` : `${s.accepted} of ${s.proposed} kept`}`).join('; ') + enhNote;
                     const layer: StagedLayer = {
                         objectId: layerObjectId(e.key, 'l2g'), stage: 'grammar', layer: 'l2g', order: STAGES.grammar.order, url: pubClay.url, bytes: pubClay.bytes,
