@@ -22,7 +22,7 @@ async function stageScenario(tileStreetMsl?: number) {
     const tile = {
         x: tx, y: ty, zoom,
         features: [
-            { types: ['FEATURE_TYPE_BUILDING'], geometry: { extrudedAreas: [{ maxZ: 530 /* ~30 m at z17 */, area: { type: 'TRIANGLE_FAN', vertexOffsets: { xOffsets: [gx, -200, 400, 0, -400], yOffsets: [gy, -200, 0, 400, 0] } } }] } },
+            { types: ['FEATURE_TYPE_BUILDING'], geometry: { extrudedAreas: [{ maxZ: 530 /* ~30 m at z17 */, area: { type: 'TRIANGLE_FAN', vertexOffsets: { xOffsets: [gx - 200, 400, 0, -400], yOffsets: [gy - 200, 0, 400, 0] } } }] } },
             { types: ['FEATURE_TYPE_ROAD'], geometry: { lines: [{ vertexOffsets: { xOffsets: [gx - 1500, 3000], yOffsets: [gy + 500, 0] } }] } }
         ]
     };
