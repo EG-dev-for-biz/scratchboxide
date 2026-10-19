@@ -70,5 +70,9 @@ The two rounds are not comparable number for number (the renders changed from is
 
 **The no-fit gate on Puck (fix 5).** After ownership the gate still sets Puck's Street View aside (held-out chamfer 7.84 px against the clay's 7.10), and the judge still prefers keeping it, by a small margin: C 3.47 against D 3.27 in context, 3.87 against 3.80 in the old renders. The gate is unchanged.
 
+## Round 3: pipeline E (2026-10-19)
+
+Pipeline E (clean vector massing, ortho-textured faces, scanned residual, verified inference, opt-in enhanced textures; `staged_location_pipeline_e.md`) was judged with the same 24 held-out views in context, blind ×3, on three arms the user chose: E-minus-inference 3.85, E 3.81, E-enhanced **4.07** (all views). E applies at Puck, Haughwout and Jefferson; St. Mark's (massing IoU 0.54) and the arch (no vector footprint) fall back to the current pipeline in every arm. The gain is enhanced mode on Puck (4.53 against 3.40-3.53); inference alone does not move the score. Grids: `test-results/screenshots/version_e/bakeoff/` (photo | E-minus | E | E-enhanced).
+
 ## Reproduction
 `scripts/dev/photo-match-heldout.ts`, then `scripts/dev/photo-match-eval.ts <manifest>` (each script's header gives its usage).
