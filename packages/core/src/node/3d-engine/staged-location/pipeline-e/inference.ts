@@ -43,7 +43,7 @@ import { decideRoof, parseRoofReply, roofPrompt, PARAPET_THICKNESS_M, type RoofD
 import { straighten, type StraightenResult } from './straighten';
 import type { EnhanceModelClient } from '../texture-enhance';
 import { decodeOrtho, checkAgainstScan, readReliefOrthos } from '../facade-grammar';
-import { enhanceOrder, enhanceWall, TEXTURE_PLATE_PROMPT_ID, type EnhanceWallRecord, type PlateModelClient } from './enhance';
+import { enhanceOrder, enhanceWall, ENHANCE_CONCURRENCY, TEXTURE_PLATE_PROMPT_ID, type EnhanceWallRecord, type PlateModelClient } from './enhance';
 
 export interface StepRecord { step: string; proposed: number; accepted: number; rejected: number; skipped?: string; notes: string[]; ms: number }
 
@@ -442,32 +442,38 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
         const enhStep = rec('enhance');
         const ENH = legend.length;
         legend.push({ source: 'ai-enhanced', label: 'generated', method: `AI-enhanced from tile (${input.enhance.models.join(', ')}, ${TEXTURE_PLATE_PROMPT_ID})`, rung: 4, weight: 0.2 });
-        const order = enhanceOrder(faces, textures, LOW_COVERAGE).slice(0, input.enhance.maxWalls ?? 16);
+        // the largest walls (at most maxWalls), the first alone so the rest have a finished reference; then ENHANCE_CONCURRENCY at once
+        const order = enhanceOrder(faces, textures, LOW_COVERAGE).sort((p, q) => q.area - p.area).slice(0, input.enhance.maxWalls ?? 8);
         const done: MassingFace[] = [];
         const plates = new Map<number, { plate: Uint8Array; use: Uint8Array }>();
-        for (const f of order) {
+        const enhanceOne = async (f: MassingFace) => {
             const tex = textures.get(f.index)!;
             const use = new Uint8Array(tex.width * tex.height);
             for (let i = 0; i < use.length; i++) use[i] = tex.source[i] === SRC.tileOrtho || tex.source[i] === BAY || tex.source[i] === OTHER || tex.source[i] === COLOURED ? 1 : 0;
-            // the reference: the finished wall next to this one round the plan, else the last finished
-            const ref = done.find(d => d.part === f.part && d.loop === f.loop && Math.abs(d.edge - f.edge) === 1) ?? done[done.length - 1];
+            // the reference: a finished wall next to this one round the plan, else the first finished
+            const ref = done.find(d => d.part === f.part && d.loop === f.loop && Math.abs(d.edge - f.edge) === 1) ?? done[0];
+            const refTex = ref ? textures.get(ref.index)! : undefined;
             progress(`enhanced mode: redrawing wall ${f.index} (${Math.round(f.area)} m2)`);
-            const r = await enhanceWall(f, tex, use, { client: input.enhance.client, models: input.enhance.models, locationName: input.enhance.locationName, ...(ref ? { reference: textures.get(ref.index)! } : {}), source: ENH, ...(input.signal ? { signal: input.signal } : {}) });
+            const before = { width: tex.width, height: tex.height, rgba: tex.rgba.slice() };
+            const r = await enhanceWall(f, tex, use, { client: input.enhance!.client, models: input.enhance!.models, locationName: input.enhance!.locationName, ...(refTex ? { reference: refTex } : {}), source: ENH, ...(input.signal ? { signal: input.signal } : {}) });
             enhanced.push({ ...r, ...(ref ? { referenceFace: ref.index } : {}), plate: undefined } as EnhanceWallRecord);
             enhStep.proposed++;
             if (r.accepted) { enhStep.accepted++; done.push(f); if (r.plate) plates.set(f.index, { plate: r.plate, use }); } else enhStep.rejected++;
-            enhStep.notes.push(`wall ${f.index}: ${r.accepted ? 'enhanced' : 'kept its tile texture'}: ${r.why}${r.model ? ` (${r.model})` : ''}`);
+            enhStep.notes.push(`wall ${f.index}: ${r.accepted ? 'enhanced' : 'kept its tile texture'}: ${r.why}${r.model ? ` (${r.model})` : ''}${ref ? `; reference wall ${ref.index}` : ''}`);
             try {
                 if (r.plate) {
-                    const W2 = tex.width * 2 + 8, rgb = new Uint8Array(W2 * tex.height * 3), before = input.textures.get(f.index);
+                    const W2 = tex.width * 2 + 8, rgb = new Uint8Array(W2 * tex.height * 3);
                     for (let y = 0; y < tex.height; y++) for (let x = 0; x < tex.width; x++) {
-                        if (before) rgb.set(before.rgba.subarray((y * tex.width + x) * 4, (y * tex.width + x) * 4 + 3), (y * W2 + x) * 3);
+                        rgb.set(before.rgba.subarray((y * tex.width + x) * 4, (y * tex.width + x) * 4 + 3), (y * W2 + x) * 3);
                         rgb.set(r.plate.subarray((y * tex.width + x) * 4, (y * tex.width + x) * 4 + 3), (y * W2 + x + tex.width + 8) * 3);
                     }
                     fs.writeFileSync(path.join(input.dir, `wall_${f.index}_tile_vs_enhanced.png`), encodePng(W2, tex.height, Buffer.from(rgb), 3));
                 }
             } catch { /* diagnostics only */ }
-        }
+        };
+        if (order.length) await enhanceOne(order[0]);
+        let nextE = 1;
+        await Promise.all(Array.from({ length: Math.min(ENHANCE_CONCURRENCY, Math.max(0, order.length - 1)) }, async () => { for (let k; (k = nextE++) < order.length;) await enhanceOne(order[k]); }));
         // the grammar read from the enhanced plates, used only where it passes the grammar's own gates and the scan/tile check
         const plateStep = rec('enhance-grammar');
         if (chain && plates.size) {

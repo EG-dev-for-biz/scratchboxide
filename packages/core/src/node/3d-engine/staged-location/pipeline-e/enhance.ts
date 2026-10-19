@@ -43,6 +43,8 @@ export const MAX_CHAMFER_PX = 2.2;
 export const MAX_LOST_SHARE = 0.15;
 export const LOST_EDGE_M = 0.3;
 export const MIN_ENHANCE_AREA_M2 = 60;
+/** Walls redrawn at once after the first (each references a finished wall). */
+export const ENHANCE_CONCURRENCY = 3;
 
 /**
  * The image model redrawing the plates. Chosen on evidence (Puck and Haughwout, 5 walls, 2026-10-19): the full model kept
