@@ -8,17 +8,20 @@
  ********************************************************************************/
 
 /**
- * Location evidence tools: checks of a location build against the real place (Street View, footprints, the scan).
- * Each tool lives in its own file under location-evidence/; this pack only lists them, one line per tool.
+ * Location evidence: tools that report what independent sources say about a real place, each source's value kept
+ * beside the others. Implementations live in ./location-evidence/.
  */
 
 import type { ToolDeclaration, ToolHandler } from './types';
-import { PHOTO_MATCH_EVALUATE_DECLARATION, PHOTO_MATCH_EVALUATE_TOOL, runPhotoMatchEvaluate } from './location-evidence/photo-match-evaluate';
+import { BUILDING_SHAPE_TOOL_DECLARATION, buildingShapeHandler } from './location-evidence/building-shape';
+import { PHOTO_MATCH_EVALUATE_DECLARATION, runPhotoMatchEvaluate } from './location-evidence/photo-match-evaluate';
 
 export const LOCATION_EVIDENCE_TOOL_DECLARATIONS: ToolDeclaration[] = [
-    PHOTO_MATCH_EVALUATE_DECLARATION,
+    BUILDING_SHAPE_TOOL_DECLARATION,
+    PHOTO_MATCH_EVALUATE_DECLARATION
 ];
 
 export const locationEvidenceHandlers: Record<string, ToolHandler> = {
-    [PHOTO_MATCH_EVALUATE_TOOL]: runPhotoMatchEvaluate,
+    [BUILDING_SHAPE_TOOL_DECLARATION.name]: buildingShapeHandler,
+    [PHOTO_MATCH_EVALUATE_DECLARATION.name]: runPhotoMatchEvaluate
 };

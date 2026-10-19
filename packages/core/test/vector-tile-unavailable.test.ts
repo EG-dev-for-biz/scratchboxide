@@ -16,7 +16,7 @@ const response = (status: number, contentType: string, body: unknown): any => ({
 test('calls vectortiles.featuretiles with the service account and the required parameters', async () => {
     GoogleVectorTileService.authProvider = async () => ({ token: 'tok', project: 'scoutscan' });
     let seen: any;
-    const tile = { x: 38598, y: 49263, zoom: 17, features: [{ types: ['FEATURE_TYPE_BUILDING'], geometry: { extrudedAreas: [{ maxZ: 100, area: { type: 'TRIANGLE_FAN', vertexOffsets: { xOffsets: [10, 0, 5, 0, -5], yOffsets: [10, -5, 0, 5, 0] } } }] } }] };
+    const tile = { x: 38598, y: 49263, zoom: 17, features: [{ types: ['FEATURE_TYPE_BUILDING'], geometry: { extrudedAreas: [{ maxZ: 100, area: { type: 'TRIANGLE_FAN', vertexOffsets: { xOffsets: [10, 5, 0, -5], yOffsets: [5, 0, 5, 0] } } }] } }] };
     const out = await GoogleVectorTileService.fetchVectorTile(38598, 49263, 17, 'ignored-key', (async (url: string, init: any) => { seen = { url, init }; return response(200, 'application/json', tile); }) as any);
     const u = new URL(seen.url);
     assert.strictEqual(u.pathname, '/v1/vectortiles/featuretiles/17/38598/49263');
