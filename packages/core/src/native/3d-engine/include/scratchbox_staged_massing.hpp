@@ -527,7 +527,7 @@ public:
         if (haveTile_ && !spec_.isolate.empty()) matchIsolate();
         timings_.push_back({"match_isolate", detail::nowMs() - t});
         t = detail::nowMs();
-        if (haveTile_ && !isoTris_.empty() && spec_.snapMaxM > 0) snapWalls();
+        if (haveTile_ && !isoTris_.empty() && spec_.snapMaxM > 0) { snapWalls(); snapMeshes(); }
         timings_.push_back({"snap", detail::nowMs() - t});
         t = detail::nowMs();
         buildFaces();
@@ -686,6 +686,81 @@ private:
             }
         }
     }
+
+    /**
+     * A triangle solid (a modelled volume) moved as a whole onto the facades the scan measures: per vertical triangle, the
+     * area-weighted mode of the scan's same-facing vertical surface along its normal within the snap distance; then the
+     * horizontal translation that best explains those offsets (weighted least squares, offsets it leaves more than a metre
+     * off dropped once). Applied only when the offsets constrain both horizontal directions.
+     */
+    void snapMeshes() {
+        for (auto& m : spec_.meshes) {
+            V3 cen{0, 0, 0};
+            for (const auto& v : m.v) cen = cen + v;
+            cen = cen * (1.0 / std::max<size_t>(1, m.v.size()));
+            struct Obs { V3 n; double o, w; };
+            std::vector<Obs> obs;
+            const double reach = spec_.snapMaxM + 0.25, bin = 0.05;
+            const int nb = static_cast<int>(std::ceil(2 * reach / bin));
+            for (size_t t = 0; t + 2 < m.tri.size(); t += 3) {
+                V3 a = m.v[m.tri[t]], b = m.v[m.tri[t + 1]], c = m.v[m.tri[t + 2]];
+                V3 cr = (b - a).cross(c - a);
+                double area = 0.5 * cr.len();
+                if (area < 1.0) continue;
+                V3 n = cr.unit();
+                if (std::abs(n.y) > 0.3) continue;
+                n = V3{n.x, 0, n.z}.unit();
+                V3 ctr = (a + b + c) * (1.0 / 3.0);
+                if (n.dot(ctr - cen) < 0) n = n * -1.0;
+                V3 tan{-n.z, 0, n.x};
+                double s0 = std::min({(a - ctr).dot(tan), (b - ctr).dot(tan), (c - ctr).dot(tan)}), s1 = std::max({(a - ctr).dot(tan), (b - ctr).dot(tan), (c - ctr).dot(tan)});
+                double y0 = std::min({a.y, b.y, c.y}), y1 = std::max({a.y, b.y, c.y});
+                std::vector<double> hist(static_cast<size_t>(nb), 0.0);
+                double total = 0;
+                for (uint32_t it : isoTris_) {
+                    V3 tn = tile_.n[it];
+                    if (std::abs(tn.y) > 0.35 || tn.x * n.x + tn.z * n.z < 0.8) continue;
+                    V3 q = (tile_.p[3 * it] + tile_.p[3 * it + 1] + tile_.p[3 * it + 2]) * (1.0 / 3.0);
+                    if (q.y < y0 || q.y > y1) continue;
+                    double sq = (q - ctr).dot(tan);
+                    if (sq < s0 || sq > s1) continue;
+                    double h = (q - ctr).dot(n);
+                    if (h < -reach || h >= reach) continue;
+                    hist[static_cast<size_t>((h + reach) / bin)] += tile_.area[it];
+                    total += tile_.area[it];
+                }
+                if (total < 0.3 * area) continue;
+                int best = 0;
+                double bv = -1;
+                for (int k = 0; k < nb; ++k) {
+                    double v = hist[static_cast<size_t>(k)] + 0.5 * ((k > 0 ? hist[static_cast<size_t>(k - 1)] : 0) + (k + 1 < nb ? hist[static_cast<size_t>(k + 1)] : 0));
+                    if (v > bv) { bv = v; best = k; }
+                }
+                obs.push_back({n, -reach + (best + 0.5) * bin, total});
+            }
+            double tx = 0, tz = 0;
+            bool ok = false;
+            for (int round = 0; round < 2; ++round) {
+                double A = 0, B = 0, C = 0, D = 0, E = 0;
+                for (const auto& o : obs) {
+                    if (round == 1 && std::abs(o.n.x * tx + o.n.z * tz - o.o) > 1.0) continue;
+                    A += o.w * o.n.x * o.n.x; B += o.w * o.n.x * o.n.z; C += o.w * o.n.z * o.n.z; D += o.w * o.n.x * o.o; E += o.w * o.n.z * o.o;
+                }
+                double det = A * C - B * B, tr = A + C;
+                // both directions constrained: the smaller eigenvalue at least a fifth of the larger
+                double disc = std::sqrt(std::max(0.0, tr * tr / 4 - det)), lmin = tr / 2 - disc, lmax = tr / 2 + disc;
+                if (lmax <= 0 || lmin < 0.2 * lmax) { ok = false; break; }
+                tx = (C * D - B * E) / det;
+                tz = (A * E - B * D) / det;
+                ok = true;
+            }
+            const bool applied = ok && std::hypot(tx, tz) <= spec_.snapMaxM;
+            if (applied) for (auto& v : m.v) { v.x += tx; v.z += tz; }
+            meshSnaps_.push_back({m.id, tx, tz, obs.size(), applied});
+        }
+    }
+    struct MeshSnap { std::string id; double tx, tz; size_t constraints; bool applied; };
+    std::vector<MeshSnap> meshSnaps_;
 
     // ------------------------------------------------------------------------------------------------
     // faces
@@ -1638,6 +1713,8 @@ private:
             js << (i ? "," : "") << "{\"part\":" << detail::jstr(s.part) << ",\"loop\":" << s.loop << ",\"edge\":" << s.edge << ",\"lengthM\":" << detail::fmt(s.lengthM) << ",\"offsetM\":" << detail::fmt(s.offsetM)
                << ",\"supportShare\":" << detail::fmt(s.supportShare) << ",\"applied\":" << (s.applied ? "true" : "false") << "}";
         }
+        js << "],\"meshSnap\":[";
+        for (size_t i = 0; i < meshSnaps_.size(); ++i) js << (i ? "," : "") << "{\"mesh\":" << detail::jstr(meshSnaps_[i].id) << ",\"tx\":" << detail::fmt(meshSnaps_[i].tx) << ",\"tz\":" << detail::fmt(meshSnaps_[i].tz) << ",\"constraints\":" << meshSnaps_[i].constraints << ",\"applied\":" << (meshSnaps_[i].applied ? "true" : "false") << "}";
         js << "],\"residual\":{\"isolateTriangles\":" << isoTris_.size() << ",\"surface\":" << residualStats_[0] << ",\"proud\":" << residualStats_[1] << ",\"cut\":" << residualStats_[2]
            << ",\"apron\":" << residualStats_[3] << ",\"droppedSmall\":" << residualStats_[4] << ",\"clusters\":[";
         for (size_t i = 0; i < clusters_.size(); ++i) {

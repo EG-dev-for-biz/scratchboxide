@@ -15,7 +15,7 @@
  *          or { ..., "pose": { "panoId", "eye", "headingDeg", "pitchDeg", "fovDeg", "widthPx", "heightPx", "correction"? } }],
  *   "arms": [{ "id": "A", "label": "A raw tile", "glbs": ["a.glb"], "keepNear"?: "iso.glb" }],
  *   "occluder"?: "geometry.glb",                              // the full tile mesh: what stands in front hides every arm alike
- *   "context"?: { "glb": "textured.glb", "cut": "raw_clay.glb" }  // in context: every arm drawn in the same street (below)
+ *   "context"?: { "glb": "textured.glb", "cut": "raw_clay.glb" | ["raw_clay.glb", "removed_trees.glb"] }  // in context: every arm drawn in the same street (below)
  * }
  * With `context`, every arm is rendered in its place: the photo-textured tile with the target's own triangles (those within
  * 1 cm of `cut`'s, the isolate tile_refine wrote) taken out, identical for every arm, drawn and depth-tested with the arm and lit
@@ -89,7 +89,9 @@ async function main(): Promise<void> {
     let context: Json[] | undefined;
     if (m.context) {
         const full = readTileTriangles(fs.readFileSync(m.context.glb));
-        const cut = keepNear(full, readTileTriangles(fs.readFileSync(m.context.cut)), 0.01, true);
+        // `cut` may name several GLBs (the target's isolate, and e.g. the scanned trees an arm regrows): each is taken out
+        let cut = full;
+        for (const c of ([] as string[]).concat(m.context.cut)) cut = keepNear(cut, readTileTriangles(fs.readFileSync(c)), 0.01, true);
         context = [cut];
         console.log(`[photo-match] context: ${cut.texture.length} of ${full.texture.length} tile triangles (the target cut out)`);
     }

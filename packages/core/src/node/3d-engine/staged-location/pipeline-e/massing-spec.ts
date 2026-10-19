@@ -195,6 +195,30 @@ export function meshTopCells(m: MassingMesh): Map<string, number> {
     return out;
 }
 
+/**
+ * A modelled volume as one closed surface: Google's volumes carry each triangle twice (both windings, drawn double-sided);
+ * of a triangle repeated on the same three corners the copy facing away from the volume's centre is kept.
+ */
+export function singleSided(m: MassingMesh): MassingMesh {
+    const V = m.vertices;
+    const key = (i: number) => V[i].map(c => Math.round(c * 1e5)).join(',');
+    const c = [0, 0, 0];
+    for (const v of V) for (let k = 0; k < 3; k++) c[k] += v[k] / Math.max(1, V.length);
+    const best = new Map<string, { tri: [number, number, number]; out: number }>();
+    for (let t = 0; t + 2 < m.indices.length; t += 3) {
+        const tri: [number, number, number] = [m.indices[t], m.indices[t + 1], m.indices[t + 2]];
+        const [a, b, d] = tri.map(i => V[i]);
+        const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], w = [d[0] - a[0], d[1] - a[1], d[2] - a[2]];
+        const n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
+        const ctr = [(a[0] + b[0] + d[0]) / 3 - c[0], (a[1] + b[1] + d[1]) / 3 - c[1], (a[2] + b[2] + d[2]) / 3 - c[2]];
+        const out = n[0] * ctr[0] + n[1] * ctr[1] + n[2] * ctr[2];
+        const k = tri.map(key).sort().join('|');
+        const cur = best.get(k);
+        if (!cur || out > cur.out) best.set(k, { tri, out });
+    }
+    return { ...m, indices: [...best.values()].flatMap(x => x.tri) };
+}
+
 // ------------------------------------------------------------------------------------------------
 // the massing
 // ------------------------------------------------------------------------------------------------
@@ -210,7 +234,7 @@ export function buildMassing(inp: MassingInputs): Massing {
         // the modelled volume, where Google has one, is the massing as given
         for (const [vi, v] of (b.volumes ?? []).entries()) {
             if (v.vertices.length < 4 || v.indices.length < 12) continue;
-            meshes.push({ id: `${b.id}/v${vi}`, vertices: v.vertices.map(([x, h, z]) => [x, inp.groundY + h, z]), indices: v.indices.slice() });
+            meshes.push(singleSided({ id: `${b.id}/v${vi}`, vertices: v.vertices.map(([x, h, z]) => [x, inp.groundY + h, z]), indices: v.indices.slice() }));
         }
         const extruded = (b.extruded ?? []).filter(p => !(p.planOnly && (b.volumes?.length ?? 0) > 0));
         for (const [pi, p] of extruded.entries()) {
