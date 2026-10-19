@@ -208,8 +208,10 @@ export interface EnhanceStreetViewRecord {
     comparedCells?: number;
     supportedCells?: number;
     contradictedCells?: number;
-    /** The photo-guided redraw failed the alignment gate (why); the wall was redrawn without the photo. */
+    /** The photo-guided redraw failed the alignment gate (why); the wall was redrawn without the photo, which then only checked it. */
     guidedRejected?: string;
+    /** The photo was not sent to the model; it only checked the plate. */
+    checkOnly?: boolean;
 }
 
 export interface EnhanceWallRecord {
@@ -284,6 +286,8 @@ export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Arra
     guards?: boolean; streetView?: WallStreetView; streetViewSource?: number; noStreetView?: string;
     /** When the photo-guided redraw fails the alignment gate, redraw once without the photo (default true). */
     retryWithoutPhoto?: boolean;
+    /** Do not send the photo; only check the plate against it (the redraw after a photo-guided one failed the gate). */
+    photoCheckOnly?: boolean;
     /**
      * Where answers are kept, keyed by everything the model is sent (models, prompt, images): the same wall with the same
      * inputs gets the same plate on every rebuild.
@@ -293,17 +297,19 @@ export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Arra
     const t0 = Date.now();
     const guards = opts.guards ?? true;
     const sv = guards ? opts.streetView : undefined;
+    // the photo is sent to the model unless this is the redraw without it (it then only checks the plate)
+    const guide = !!sv && !opts.photoCheckOnly;
     const scale = Math.min(1, ENHANCE_MAX_SIDE / Math.max(t.width, t.height));
     const sw = Math.max(16, Math.round(t.width * scale)), sh = Math.max(16, Math.round(t.height * scale));
     const small: RgbaImage8 = resizeRgba({ width: t.width, height: t.height, rgba: t.rgba }, sw, sh);
     const { padded, offset } = padToModelAspect(small);
     const ref = opts.reference ? (() => { const rs = Math.min(1, 768 / Math.max(opts.reference.width, opts.reference.height)); const r = resizeRgba({ width: opts.reference.width, height: opts.reference.height, rgba: opts.reference.rgba }, Math.max(8, Math.round(opts.reference.width * rs)), Math.max(8, Math.round(opts.reference.height * rs))); return new Uint8Array(encodePng(r.width, r.height, Buffer.from(r.rgba), 4)); })() : undefined;
-    const prompt = buildTexturePlatePrompt({ locationName: opts.locationName, widthM: t.width * f.pixel, heightM: t.height * f.pixel, widthPx: padded.width, heightPx: padded.height, preserveClause: preserveClause(padded.width, padded.height), withReference: !!ref, ...(sv ? { withStreetView: true } : {}) });
-    const svRec: EnhanceStreetViewRecord | undefined = sv ? { panoId: sv.view.panoId, method: sv.view.registration?.method ?? 'nominal', bandCover: Math.round(sv.rect.bandCover * 1000) / 1000, pxPerM: Math.round(sv.rect.pxPerM * 10) / 10 } : undefined;
+    const prompt = buildTexturePlatePrompt({ locationName: opts.locationName, widthM: t.width * f.pixel, heightM: t.height * f.pixel, widthPx: padded.width, heightPx: padded.height, preserveClause: preserveClause(padded.width, padded.height), withReference: !!ref, ...(guide ? { withStreetView: true } : {}) });
+    const svRec: EnhanceStreetViewRecord | undefined = sv ? { ...(guide ? {} : { checkOnly: true }), panoId: sv.view.panoId, method: sv.view.registration?.method ?? 'nominal', bandCover: Math.round(sv.rect.bandCover * 1000) / 1000, pxPerM: Math.round(sv.rect.pxPerM * 10) / 10 } : undefined;
     const base = { face: f.index, key: f.key, ...(svRec ? { streetView: svRec } : {}), ...(guards && !sv && opts.noStreetView ? { noStreetView: opts.noStreetView } : {}) };
     let answer: PlateAnswer;
     const image = new Uint8Array(encodePng(padded.width, padded.height, Buffer.from(padded.rgba), 4));
-    const request: PlateRequest = { prompt, image, width: padded.width, height: padded.height, ...(ref ? { reference: ref } : {}), ...(sv ? { streetView: sv.crop } : {}), models: opts.models, ...(opts.signal ? { signal: opts.signal } : {}) };
+    const request: PlateRequest = { prompt, image, width: padded.width, height: padded.height, ...(ref ? { reference: ref } : {}), ...(guide ? { streetView: sv!.crop } : {}), models: opts.models, ...(opts.signal ? { signal: opts.signal } : {}) };
     try {
         answer = await cachedPlate(opts.cacheDir, request, opts.client);
     } catch (err) {
@@ -318,10 +324,11 @@ export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Arra
     const back = resizeRgba({ width: sw, height: sh, rgba: inner }, t.width, t.height).rgba;
     const g = alignPlate(t.rgba, back, t.width, t.height, use, f.pixel);
     const rec = { ...base, accepted: g.accepted, why: g.why, model: answer.modelUsed, chamferPx: g.chamferPx, lostShare: g.lostShare, ms: Date.now() - t0, plate: g.aligned };
-    if (!g.accepted && sv && opts.retryWithoutPhoto !== false) {
-        // the photo pulled the redraw off the wall's geometry: one more redraw without it (the tile check still applies)
-        const again = await enhanceWall(f, t, use, { ...opts, streetView: undefined, noStreetView: `the redraw guided by Street View ${sv.view.panoId} failed the alignment gate (${g.why}); redrawn without the photo` });
-        return { ...again, ms: Date.now() - t0, streetView: { ...svRec!, guidedRejected: g.why } };
+    if (!g.accepted && guide && opts.retryWithoutPhoto !== false) {
+        // the photo pulled the redraw off the wall's geometry: one more redraw without it; the tile check and the check against
+        // the photo still apply
+        const again = await enhanceWall(f, t, use, { ...opts, photoCheckOnly: true });
+        return { ...again, ms: Date.now() - t0, streetView: { ...(again.streetView ?? svRec!), guidedRejected: g.why } };
     }
     if (!g.accepted) return rec;
     let out = g.aligned, weight: Float32Array | undefined;
@@ -334,7 +341,7 @@ export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Arra
         out = gp.rgba; weight = gp.weight;
         rec.why = `${g.why}; ${gp.why}`;
     }
-    const src = sv && opts.streetViewSource !== undefined ? opts.streetViewSource : opts.source;
+    const src = guide && opts.streetViewSource !== undefined ? opts.streetViewSource : opts.source;
     for (let i = 0; i < t.width * t.height; i++) {
         t.rgba[i * 4] = out[i * 4]; t.rgba[i * 4 + 1] = out[i * 4 + 1]; t.rgba[i * 4 + 2] = out[i * 4 + 2]; t.rgba[i * 4 + 3] = 255;
         if (!weight || weight[i] < 0.5) t.source[i] = src;

@@ -291,6 +291,9 @@ describe('enhanced mode: the Street View photo', () => {
         expect(asked).toEqual([true, false]);
         expect(r.accepted).toBe(true);
         expect(r.streetView?.guidedRejected).toMatch(/edge chamfer/);
+        // the photo still checks the redraw made without it
+        expect(r.streetView?.checkOnly).toBe(true);
+        expect(r.streetView?.comparedCells).toBeGreaterThan(0);
         expect(Array.from(t.source).filter(v => v === 3).length).toBeGreaterThan(0.9 * W * H);
         expect(Array.from(t.source).some(v => v === 9)).toBe(false);
     });

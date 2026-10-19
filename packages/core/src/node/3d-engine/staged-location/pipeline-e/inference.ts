@@ -535,7 +535,7 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
             enhanced.push({ ...r, ...(ref ? { referenceFace: ref.index } : {}), plate: undefined, guarded: undefined, labels: undefined, grid: undefined } as EnhanceWallRecord);
             enhStep.proposed++;
             if (r.accepted) { enhStep.accepted++; finished.push(f); if (r.plate) plates.set(f.index, { plate: tex.rgba.slice(), use }); } else enhStep.rejected++;
-            enhStep.notes.push(`wall ${f.index}: ${r.accepted ? 'enhanced' : 'kept its tile texture'}: ${r.why}${r.model ? ` (${r.model})` : ''}${ref ? `; reference wall ${ref.index}` : ''}${sv ? `; ${sv.why}${r.streetView?.guidedRejected ? ` (the redraw with it failed the alignment gate: ${r.streetView.guidedRejected}; redrawn without it)` : ''}` : guards && noSv ? `; no Street View guidance: ${noSv}` : ''}`);
+            enhStep.notes.push(`wall ${f.index}: ${r.accepted ? 'enhanced' : 'kept its tile texture'}: ${r.why}${r.model ? ` (${r.model})` : ''}${ref ? `; reference wall ${ref.index}` : ''}${sv ? `; ${sv.why}${r.streetView?.guidedRejected ? ` (the redraw with it failed the alignment gate: ${r.streetView.guidedRejected}; redrawn without it, then checked against it)` : ''}` : guards && noSv ? `; no Street View guidance: ${noSv}` : ''}`);
             try {
                 if (r.plate) writeEnhanceDiagnostic(path.join(input.dir, `wall_${f.index}_tile_vs_enhanced.png`), before.rgba, r.plate, r.guarded, r.labels, r.grid, sv?.rect.rgba, sv?.rect.valid, tex.width, tex.height);
             } catch { /* diagnostics only */ }
