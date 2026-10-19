@@ -33,6 +33,7 @@ import {
     unpackRgbaDepth
 } from '../src/browser/generative-canvas/primitives/scene3d/viewportFocus';
 import { physicalCameraHandlers } from '../src/node/gemini/tools/spatial-tools';
+import { resolveViewportNotice } from '../src/browser/generative-canvas/primitives/scene3d/ViewportNotice';
 
 const base = (): Scene3DData => ({
     title: 'Colonnade',
@@ -248,6 +249,11 @@ describe('a tracked point (the real ViewportFocusController)', () => {
         expect(measure(issues)).toBe(before);
         expect(issues).toEqual([`focus: the tracked point's object 'hero' is not in the viewport; holding the last focus distance ${before.toFixed(2)} m`]);
         expect(controller.status.notice).toBe(issues[0]);
+        // over the viewport: 'Focus held' (a status, not 'Lens optics not fully drawn': depth of field is still drawn)
+        const notices = resolveViewportNotice({ webglError: null, generatorError: null, tilesError: null, contentKind: 'objects', opticsIssues: issues });
+        expect(notices).toEqual([{ kind: 'focus', title: 'Focus held', detail: issues[0].slice('focus: '.length) }]);
+        // auto focus looking at the sky is said on the reticle and in the panel only
+        expect(resolveViewportNotice({ webglError: null, generatorError: null, tilesError: null, contentKind: 'objects', opticsIssues: ['focus: auto focus sees no surface under the AF area (sky or empty); holding 9.00 m'] })).toEqual([]);
         // a camera that turns away so the point is behind it: held too
         scene.add(hero);
         place([0, 2.5, 6], [0, 2.5, 20]);

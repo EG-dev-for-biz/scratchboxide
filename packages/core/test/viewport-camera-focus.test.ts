@@ -206,6 +206,7 @@ describe.skipIf(!stagedChrome.ok)('auto focus and a tracked focus point in the r
         expect(await page.eval<string>(`${q('sb-camera-focus-notice')}.innerText`)).toMatch(/^auto focus sees no surface under the AF area \(sky or empty\); holding \d+\.\d\d m$/);
         r = await reticle();
         expect(r.state).toBe('held');
+        expect(await page.eval<number>(`document.querySelectorAll('[data-testid="sb-3d-viewport-notice"]').length`)).toBe(0); // no banner for the sky
         await shot('05_auto_sky_holds');
         await moveCamera(through(NEAR_COLUMN));
         await frames(8);
@@ -216,6 +217,8 @@ describe.skipIf(!stagedChrome.ok)('auto focus and a tracked focus point in the r
         await clickTestId('sb-camera-focus-mode-track');
         expect(await page.eval<string>(`${q('sb-camera-track-hint')}.innerText`)).toMatch(/Click locks focus onto that surface point/);
         expect((await last()).camera.lens.focusMode).toBe('auto'); // nothing changes until the click
+        expect(await checked('track')).toBe('true'); // pending
+        expect(await checked('auto')).toBe('false');
         const point: V3 = [3.6, 2.5, -12];
         await moveCamera(through(point, EYE, 2.5));
         const [px, py] = await project([3.6, 2.5, -12]);
@@ -259,6 +262,7 @@ describe.skipIf(!stagedChrome.ok)('auto focus and a tracked focus point in the r
         await ensureOpen();
         expect(await page.eval<string>(`${q('sb-camera-focus-notice')}.innerText`)).toBe(`the tracked point's object '${ROOT}' is not in the viewport; holding the last focus distance ${heldAt.toFixed(2)} m`);
         expect((await optics()).drawn).toContain('depth-of-field');
+        expect(await page.eval<string>(`document.querySelector('[data-testid="sb-3d-viewport-notice"][data-kind="focus"]').innerText`)).toMatch(/^Focus held\s+the tracked point's object/);
         await shot('08_track_point_lost_holds');
         await page.eval(`(() => { const d = window.__sbDetached; d.parent.add(d.r); d.r.position.set(0, 0, 0); })()`);
         await frames(2);

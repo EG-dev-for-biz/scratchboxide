@@ -443,7 +443,9 @@ export const CameraSettingsControl: React.FC<CameraSettingsControlProps> = ({
                             <span className="sb-cam-label">Focus</span>
                             <div className="sb-cam-chips" role="radiogroup" aria-label="Focus mode">
                                 {([['manual', 'Manual'], ['auto', 'Auto'], ['track', 'Track']] as const).map(([mode, label]) => {
-                                    const on = focusMode === mode || (mode === 'track' && pickingFocus && pickTracksPoint && focusMode !== 'track');
+                                    // while a point is being picked for Track, Track shows as the pending choice
+                                    const pendingTrack = pickingFocus && pickTracksPoint && focusMode !== 'track';
+                                    const on = pendingTrack ? mode === 'track' : focusMode === mode;
                                     return (
                                         <button
                                             key={mode}

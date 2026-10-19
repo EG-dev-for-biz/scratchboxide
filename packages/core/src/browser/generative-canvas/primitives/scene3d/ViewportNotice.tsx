@@ -12,7 +12,7 @@ import type { SceneContentKind } from './types';
 import type { GeneratorRunError } from './generatorRun';
 
 export interface ViewportNoticeEntry {
-    kind: 'webgl-error' | 'generator-error' | 'tiles-error' | 'object-load-error' | 'undrawable-objects' | 'optics' | 'empty';
+    kind: 'webgl-error' | 'generator-error' | 'tiles-error' | 'object-load-error' | 'undrawable-objects' | 'optics' | 'focus' | 'empty';
     title: string;
     detail?: string;
 }
@@ -68,9 +68,16 @@ export function resolveViewportNotice(input: ViewportNoticeInput): ViewportNotic
             detail: listOf(undrawable.map(o => `${o.id}: ${o.reason}`))
         });
     }
-    const optics = input.opticsIssues || [];
+    // focus notices ('focus: ...', viewportFocus.ts) are not missing optics: depth of field is drawn at a held distance
+    const allOptics = input.opticsIssues || [];
+    const optics = allOptics.filter(i => !i.startsWith('focus: '));
     if (optics.length > 0) {
         notices.push({ kind: 'optics', title: 'Lens optics not fully drawn', detail: listOf(optics) });
+    }
+    // a lost tracked point is said over the viewport; auto focus looking at the sky shows on the reticle and the panel only
+    const held = allOptics.filter(i => i.startsWith('focus: ') && !i.startsWith('focus: auto focus')).map(i => i.slice('focus: '.length));
+    if (held.length > 0) {
+        notices.push({ kind: 'focus', title: 'Focus held', detail: listOf(held) });
     }
     if (notices.length === 0 && input.contentKind === 'empty' && !input.hasAuxiliaryContent) {
         notices.push({ kind: 'empty', title: 'No geometry', detail: 'This scene has no models, meshes, generator or script to draw.' });
@@ -105,14 +112,14 @@ export const ViewportNotice: React.FC<{ notices: ViewportNoticeEntry[] }> = ({ n
                     key={n.kind}
                     data-testid="sb-3d-viewport-notice"
                     data-kind={n.kind}
-                    role={n.kind === 'empty' ? 'status' : 'alert'}
-                    style={{ ...PANEL_STYLE, ...(n.kind === 'empty' ? EMPTY_STYLE : ERROR_STYLE) }}
+                    role={n.kind === 'empty' || n.kind === 'focus' ? 'status' : 'alert'}
+                    style={{ ...PANEL_STYLE, ...(n.kind === 'empty' || n.kind === 'focus' ? EMPTY_STYLE : ERROR_STYLE) }}
                 >
                     <div style={{ fontWeight: 600 }}>{n.title}</div>
                     {n.detail && (
                         <div style={{
                             // Error details are tool output (stderr, compiler messages): keep their layout.
-                            ...(n.kind === 'empty' ? {} : { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', whiteSpace: 'pre-wrap' as const }),
+                            ...(n.kind === 'empty' || n.kind === 'focus' ? {} : { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', whiteSpace: 'pre-wrap' as const }),
                             wordBreak: 'break-word', marginTop: 4, opacity: 0.9
                         }}>{n.detail}</div>
                     )}
