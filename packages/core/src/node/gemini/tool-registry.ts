@@ -91,10 +91,10 @@ import {
     browserHandlers,
     TILE_REFINE_TOOL_DECLARATIONS,
     tileRefineHandlers,
-    LOCATION_EVIDENCE_TOOL_DECLARATIONS,
-    locationEvidenceHandlers,
     VIRTUAL_GEOMETRY_TOOL_DECLARATIONS,
     virtualGeometryHandlers,
+    LOCATION_EVIDENCE_TOOL_DECLARATIONS,
+    locationEvidenceHandlers,
     IMAGE_TO_PBR_TOOL_DECLARATIONS,
     imageToPbrHandlers,
     PBR_MATERIAL_TOOL_DECLARATIONS,
@@ -146,6 +146,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name === 'ask_user_question') return 'Ask User Clarification';
             if (name === 'present_execution_plan') return 'Present Execution Plan';
             if (name === 'location_generate_3dgs') return 'Location 3DGS: Synthesize Radiance Field';
+            if (name === 'location_building_shape') return 'Location Evidence: Building Shape';
             if (name.startsWith('location_')) return `Location 3DGS: ${name.replace('location_', '').replace(/_/g, ' ')}`;
             if (name === 'google_3d_tiles_recolor_glb') return '3D Tiles: Recolor & PBR Synthesis';
             if (name.startsWith('google_3d_tiles_')) return `Google 3D Tiles: ${name.replace('google_3d_tiles_', '').replace(/_/g, ' ')}`;
@@ -170,6 +171,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name === 'execute_3d_python_script') return 'Python 3D: Execute Script';
             if (name === 'build_3d_object_from_reference') return '3D Object: Build';
             if (name === 'read_sb_script_guide') return 'Python 3D: Script Guide';
+            if (name === 'location_building_shape') return 'Location Evidence: Building Shape';
             if (name.startsWith('location_')) return `Location 3DGS: ${name.replace('location_', '').replace(/_/g, ' ')}`;
             if (name === 'google_3d_tiles_recolor_glb') return '3D Tiles: Recolor & PBR';
             if (name.startsWith('google_3d_tiles_')) return `3D Tiles: ${name.replace('google_3d_tiles_', '').replace(/_/g, ' ')}`;
@@ -192,6 +194,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name === 'execute_3d_python_script') return 'Execute procedural 3D Python script with Scratchbox C++20 engine';
             if (name === 'build_3d_object_from_reference') return 'Draw an internal reference, read it into a build spec and build the object natively in clay';
             if (name === 'read_sb_script_guide') return 'Read the rules for writing an sb Python script';
+            if (name === 'location_building_shape') return 'Read the building footprint, vector height, Solar DSM and roof segments at a place';
             if (name.startsWith('location_')) return `Synthesize real-world location 3D Gaussian Splats: ${name.replace('location_', '').replace(/_/g, ' ')}`;
             if (name === 'google_3d_tiles_recolor_glb') return 'Recolor 3D tile GLB with material segmentation and PBR normal/roughness synthesis';
             if (name.startsWith('google_3d_tiles_')) return `Ingest Google 3D Tiles: ${name.replace('google_3d_tiles_', '').replace(/_/g, ' ')}`;
