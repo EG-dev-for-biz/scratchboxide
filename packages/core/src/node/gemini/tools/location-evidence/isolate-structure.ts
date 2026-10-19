@@ -754,7 +754,7 @@ function scene(r: IsolateStructureResult): CanvasArtifact | undefined {
     return {
         id: `scene-iso-${tag}`,
         type: '3d-scene',
-        title: `${r.place.resolvedAddress} (isolated)`,
+        title: `${r.place.resolvedAddress} (${r.outcome === 'isolated' ? 'isolated' : `district: ${r.reasonCode}`})`,
         summary: r.digest,
         version: 1,
         data: {
