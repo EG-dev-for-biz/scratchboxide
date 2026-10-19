@@ -45,8 +45,8 @@ export const MAX_CHAMFER_PX = 2.2;
 export const MAX_LOST_SHARE = 0.15;
 export const LOST_EDGE_M = 0.3;
 export const MIN_ENHANCE_AREA_M2 = 60;
-/** Street View views enhanced mode's survey fetches and registers (one wide view per face first, then more per face). */
-export const ENHANCE_STREET_VIEWS = 8;
+/** Survey views enhanced mode fetches (one wide view per face first, then more per face), each with a street-level view of the same pano. */
+export const ENHANCE_STREET_VIEWS = 5;
 /** Walls redrawn at once after the first (each references a finished wall). */
 export const ENHANCE_CONCURRENCY = 3;
 

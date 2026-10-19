@@ -143,8 +143,8 @@ function latticePixels(g: FacadeGrammar, f: MassingFace): Array<Array<{ x0: numb
 }
 
 const now = () => Date.now();
-/** The enhanced plates' grammar (up to 2 walls, about a minute) starts only this long into the stage (its limit is 300 s). */
-export const PLATE_GRAMMAR_LATEST_MS = 190_000;
+/** The enhanced plates' grammar (up to 2 walls, about a minute) starts only this long into the stage (its limit is 420 s). */
+export const PLATE_GRAMMAR_LATEST_MS = 310_000;
 
 /**
  * The enhanced-mode diagnostic: the input | the aligned plate | the guarded plate with the flagged cells tinted (magenta

@@ -254,6 +254,17 @@ describe('enhanced mode: the Street View photo', () => {
         expect(Array.from(t.source).filter(v => v === 9).length).toBeGreaterThan(0.9 * W * H);
     });
 
+    it('aims a street-level view of the same pano at the lower storeys', async () => {
+        const { streetLevelView, STREET_LEVEL_AIM_M } = await import('../src/node/3d-engine/staged-location/streetview-registered-views');
+        const faceT = { faceId: 'f', headingDeg: 180, centre: [0, 15, 0], outward: [0, 0, 1], widthM: 30, heightM: 30 } as never;
+        const v = { faceId: 'f', panoId: 'p', eye: [0, 2.5, 20], headingDeg: 180, pitchDeg: 33, fovDeg: 60, aspectRatio: 'RATIO_4X3', distanceM: 24, facadeHeadingDeg: 0, score: 1, aimedSlotIds: [], coveredSlotIds: [] } as never;
+        const low = streetLevelView(v, faceT, 0);
+        expect(low.panoId).toBe('p');
+        expect(low.headingDeg).toBe(180);
+        expect(low.pitchDeg).toBeCloseTo((Math.atan2(STREET_LEVEL_AIM_M - 2.5, 20) * 180) / Math.PI, 1);
+        expect(low.pitchDeg).toBeLessThan(10);
+    });
+
     it('adds the Street View wording to the plate prompt only when a photo is sent', () => {
         const o = { locationName: 'X', widthM: 20, heightM: 10, widthPx: 400, heightPx: 200, preserveClause: 'Keep it.', withReference: true };
         const plain = buildTexturePlatePrompt(o), sv = buildTexturePlatePrompt({ ...o, withStreetView: true });

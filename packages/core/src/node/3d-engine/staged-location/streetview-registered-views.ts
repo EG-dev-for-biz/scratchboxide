@@ -136,6 +136,20 @@ export async function fetchWithRefusalRetry(
     return { images, refusals, failures, views };
 }
 
+/** Height above the structure's foot a street-level view is aimed at (the middle of a ground storey and the one above it). */
+export const STREET_LEVEL_AIM_M = 4.5;
+
+/**
+ * The same pano and heading as a survey view, aimed lower: at STREET_LEVEL_AIM_M above the structure's foot, so the lower
+ * storeys (which a view framing the whole face from a narrow street leaves below its frame) are in the photo. Registered
+ * with its pano's other view, as one pano.
+ */
+export function streetLevelView(v: SurveyView, face: SurveyFaceTarget, groundY: number): SurveyView {
+    const d = Math.max(1, Math.hypot(face.centre[0] - v.eye[0], face.centre[2] - v.eye[2]));
+    const elevationDeg = Math.max(-20, Math.min(30, (Math.atan2(groundY + STREET_LEVEL_AIM_M - v.eye[1], d) * 180) / Math.PI));
+    return { ...v, pitchDeg: Math.round(elevationDeg * 10) / 10 };
+}
+
 /** How a view's pose was had: 'joint', 'edges' (registered against the tile mesh) or 'nominal' (good to about ±2 m and ±2°). */
 export interface ViewRegistration { method: 'joint' | 'edges' | 'nominal' | (string & {}); residualM: number | null }
 
@@ -152,11 +166,16 @@ export async function registeredSurveyViews(input: {
     site: SurveyGround; panos: PanoCandidate[]; maxViews: number; sv: StreetViewEvidenceDeps; tileMeshFiles: string[];
     structureMesh: RenderMesh3D; context?: RenderMesh3D; segment: OwnershipSegmenter; target?: string;
     register?: (job: PanoRegistrationJob, opts: { signal?: AbortSignal; log?: (m: string) => void }) => Promise<PanoRegistrationOutcome>;
+    /** Also a street-level view (streetLevelView) of each planned view's pano (default false). */
+    streetLevel?: boolean;
     signal?: AbortSignal; onProgress?: (m: string) => void;
 }): Promise<{ views: RegisteredView[]; images: EvidenceImage[]; refusals: SurveyRefusal[]; failures: SurveyFetchFailure[]; registrationError?: string; ms: { fetch: number; register: number; own: number } }> {
     const progress = input.onProgress ?? (() => undefined);
     const faces = structureFaces(input.site.structure);
-    const plan = planSurveyViews(input.panos, faces, input.site, input.maxViews);
+    const planned = planSurveyViews(input.panos, faces, input.site, input.maxViews);
+    const faceOf = new Map(faces.map(f => [f.faceId, f]));
+    const lower = input.streetLevel ? planned.views.map(v => streetLevelView(v, faceOf.get(v.faceId)!, input.site.structure.groundY)).filter((v, k) => Math.abs(v.pitchDeg - planned.views[k].pitchDeg) >= 3) : [];
+    const plan = { ...planned, views: [...planned.views, ...lower] };
     if (!plan.views.length) return { views: [], images: [], refusals: [], failures: [], ms: { fetch: 0, register: 0, own: 0 } };
     let t = Date.now();
     progress(`requesting ${plan.views.length} Street View views of the structure's faces`);
@@ -180,7 +199,7 @@ export async function registeredSurveyViews(input: {
         jpeg: im.bytes, ...(registration ? { registration } : {}), ...(im.view.date ? { captureDate: im.view.date } : {})
     }));
     t = Date.now();
-    const own = await ownViews({ views: pviews, structure: input.structureMesh, ...(input.context ? { context: input.context } : {}), segment: input.segment, ...(input.target ? { target: input.target } : {}), signal: input.signal, onProgress: progress });
+    const own = await ownViews({ views: pviews, structure: input.structureMesh, concurrency: 4, ...(input.context ? { context: input.context } : {}), segment: input.segment, ...(input.target ? { target: input.target } : {}), signal: input.signal, onProgress: progress });
     const views: RegisteredView[] = own.views.map((v, k) => {
         const per = registration?.perPano.find(p => p.panoId === v.panoId);
         const method = per?.method ?? 'nominal';

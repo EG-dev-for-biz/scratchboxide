@@ -39,7 +39,7 @@ import type { MassingFace } from './native-massing';
 /** The street-level band: texels up to this height above the wall's foot. */
 export const STREET_LEVEL_M = 9;
 /** A view must show at least this share of the band to guide or check the wall. */
-export const MIN_BAND_COVER = 0.2;
+export const MIN_BAND_COVER = 0.1;
 /** The rectified photo may move this far against the plate before the comparison (the registered pose's residual). */
 export const MAX_PHOTO_SHIFT_M = 1;
 /** Cells each side of a cell in the photo comparison's window (the pose is rougher than the plate's alignment). */
@@ -68,6 +68,8 @@ export interface RectifiedPhoto {
     score: number;
     /** The photo's pixel box of the valid texels [x0, y0, x1, y1). */
     photoBox: [number, number, number, number];
+    /** Texels of the street-level band left out, by reason (diagnostics). */
+    bandRejected: { facing: number; frame: number; owner: number; depth: number };
 }
 
 /** Rows [0, y) of the wall's texture at most STREET_LEVEL_M above its foot: returns the first such row (the band is rows >= it). */
@@ -91,20 +93,22 @@ export function rectifyViewOntoWall(face: MassingFace, v: GuideView, bandTop = s
     const rgba = new Uint8Array(W * H * 4), valid = new Uint8Array(W * H);
     const ppm: number[] = [];
     let score = 0, bandValid = 0, bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+    const rej = { facing: 0, frame: 0, owner: 0, depth: 0 };
+    const no = (y: number, k: keyof typeof rej) => { if (y >= bandTop) rej[k]++; };
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
         const s = face.orthoSMin + (x + 0.5) * face.pixel, t = face.orthoTMax - (y + 0.5) * face.pixel;
         const p: [number, number, number] = [face.origin[0] + face.axisS[0] * s + face.axisT[0] * t, face.origin[1] + face.axisS[1] * s + face.axisT[1] * t, face.origin[2] + face.axisS[2] * s + face.axisT[2] * t];
         const toCam = [cam.eye[0] - p[0], cam.eye[1] - p[1], cam.eye[2] - p[2]];
         const dist = Math.hypot(toCam[0], toCam[1], toCam[2]);
         const cos = (toCam[0] * face.normal[0] + toCam[1] * face.normal[1] + toCam[2] * face.normal[2]) / dist;
-        if (cos <= 0.15) continue;
+        if (cos <= 0.15) { no(y, 'facing'); continue; }
         const q = project(cam, p);
-        if (!q) continue;
+        if (!q) { no(y, 'frame'); continue; }
         let u = q.u, w = q.v;
-        if (u < 1 || w < 1 || u >= cam.width - 2 || w >= cam.height - 2) continue;
+        if (u < 1 || w < 1 || u >= cam.width - 2 || w >= cam.height - 2) { no(y, 'frame'); continue; }
         const pi = Math.floor(w) * cam.width + Math.floor(u);
-        if (v.ownerMask && !v.ownerMask[pi]) continue;
-        if (v.depth && !(Math.abs(v.depth[pi] - q.z) < DEPTH_TOLERANCE_M)) continue;
+        if (v.ownerMask && !v.ownerMask[pi]) { no(y, 'owner'); continue; }
+        if (v.depth && !(Math.abs(v.depth[pi] - q.z) < DEPTH_TOLERANCE_M)) { no(y, 'depth'); continue; }
         if (v.warp) { const d = warpAt(v.warp, cam.width, cam.height, u, w); u = Math.max(0, Math.min(cam.width - 1.001, u + d[0])); w = Math.max(0, Math.min(cam.height - 1.001, w + d[1])); }
         const x0 = Math.floor(u), y0 = Math.floor(w), fx = u - x0, fy = w - y0, iw = img.width;
         const i = y * W + x;
@@ -123,7 +127,7 @@ export function rectifyViewOntoWall(face: MassingFace, v: GuideView, bandTop = s
     const bandTexels = W * Math.max(0, H - bandTop);
     return {
         panoId: v.panoId, rgba, valid, pxPerM: ppm.length ? ppm[ppm.length >> 1] : 0, bandCover: bandTexels ? bandValid / bandTexels : 0, score: score * face.pixel * face.pixel,
-        photoBox: Number.isFinite(bx0) ? [Math.floor(bx0), Math.floor(by0), Math.ceil(bx1), Math.ceil(by1)] : [0, 0, 0, 0]
+        photoBox: Number.isFinite(bx0) ? [Math.floor(bx0), Math.floor(by0), Math.ceil(bx1), Math.ceil(by1)] : [0, 0, 0, 0], bandRejected: rej
     };
 }
 

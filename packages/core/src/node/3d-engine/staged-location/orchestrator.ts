@@ -170,8 +170,9 @@ export const STAGES = {
     'trees-measure': { order: -1, title: 'Measuring the trees', budgetMs: 300_000 },
     remesh: { order: 2, title: 'Remeshed scan', budgetMs: 300_000 },
     // the facades' grammars read from the tile photo (three readings per facade, concurrently), gated, and the relief run
-    // again with the accepted ones
-    grammar: { order: 2, title: 'Facade grammar', budgetMs: 300_000 },
+    // again with the accepted ones; pipeline E's inference runs here too, and in its opt-in enhanced mode also a registered
+    // Street View survey (about 3 min, alongside the readings) and up to 8 redraws (about 2.5 min)
+    grammar: { order: 2, title: 'Facade grammar', budgetMs: 420_000 },
     fit: { order: 3, title: 'Scan-fitted rebuild', budgetMs: 30_000 },
     project: { order: -1, title: 'Slots in the photos', budgetMs: 10_000 },
     // the batched wide reading (bounded by its own budget), then the focused run readings in what is left, then the margin the
@@ -2241,7 +2242,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const usable = found.panos.filter(p => !sv.refusedPanos?.has(p.panoId));
                         io.progress('pipeline E: enhanced mode: surveying the facades with Street View (registered views)');
                         const got = await registeredSurveyViews({
-                            site: { structure: structure!, ground: t.ground!, unmaskedTop: t.unmaskedTop ?? t.ground!.top }, panos: usable, maxViews: ENHANCE_STREET_VIEWS,
+                            site: { structure: structure!, ground: t.ground!, unmaskedTop: t.unmaskedTop ?? t.ground!.top }, panos: usable, maxViews: ENHANCE_STREET_VIEWS, streetLevel: true,
                             sv: { ...sv, refusedPanos: sv.refusedPanos ?? new Map<string, string>() }, tileMeshFiles: [extraction.geometryGlb], structureMesh,
                             context: sceneToRenderMesh(readGlbScene(extraction.geometryGlb)), segment: segmenter, ...(visionAvailable ? { target: request.query } : {}),
                             signal: io.signal, onProgress: m => io.progress(`pipeline E: enhanced mode: ${m}`)
