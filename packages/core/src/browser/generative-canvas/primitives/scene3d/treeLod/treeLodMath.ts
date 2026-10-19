@@ -97,3 +97,107 @@ export function hysteresisDistance(filtered: number | undefined, d: number, hyst
     if (filtered === undefined || Math.abs(d - filtered) > hysteresisM) return filtered === undefined ? d : d - Math.sign(d - filtered) * hysteresisM;
     return filtered;
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// On-screen size
+// ---------------------------------------------------------------------------------------------------------------
+
+/**
+ * Screen-space levels. A tree's bands are metres from the camera at a reference lens (vertical field of view
+ * `referenceFovDeg`) on a frame `referenceHeightPx` tall; at that lens a band edge D is the on-screen height
+ * P = S H_ref / (2 D tan(fov_ref / 2)) of a tree S metres tall, so the bands are pixel thresholds. A tree's projected height
+ * at the current lens, P = S H / (2 r tan(fov / 2)) times its view weight w, is mapped back to the reference distance that
+ * gives the same height, and the bands are read there:
+ *
+ *     d_ref = r (tan(fov / 2) / tan(fov_ref / 2)) (H_ref / H)^e / w
+ *
+ * where `e` (resolutionExponent) says how much the frame's pixel count counts: 0 = the share of the frame height decides
+ * (a larger window does not change levels), 1 = actual pixels (a taller window keeps detail farther). At the reference lens
+ * with w = 1 the result is r: the metre bands unchanged. The tree height S cancels out of the level, and only orders trees
+ * by importance under the budget.
+ */
+export interface ScreenSizeParams { referenceFovDeg: number; referenceHeightPx: number; resolutionExponent: number }
+
+const tanHalf = (fovDeg: number): number => Math.tan((Math.min(179, Math.max(1e-3, fovDeg)) * Math.PI) / 360);
+
+/** Projected height in pixels of an object `sizeM` tall at range `rangeM` (clamped to 0.5 m) on a frame `heightPx` tall. */
+export function projectedHeightPx(sizeM: number, rangeM: number, verticalFovDeg: number, heightPx: number): number {
+    return (sizeM * heightPx) / (2 * Math.max(0.5, rangeM) * tanHalf(verticalFovDeg));
+}
+
+/** The reference-lens distance whose bands apply to a tree at `rangeM` seen with this lens and frame, at view weight `weight`. */
+export function screenEquivalentDistance(rangeM: number, verticalFovDeg: number, heightPx: number, weight: number, p: ScreenSizeParams): number {
+    const res = Math.pow(p.referenceHeightPx / Math.max(1, heightPx), p.resolutionExponent);
+    return (rangeM * (tanHalf(verticalFovDeg) / tanHalf(p.referenceFovDeg)) * res) / Math.max(1e-3, weight);
+}
+
+/** The on-screen heights (px, at the reference lens and frame) a tree `sizeM` tall crosses at its band edges: [enter, leave] per level. */
+export function pixelThresholds(bands: readonly LodBand[], sizeM: number, p: Pick<ScreenSizeParams, 'referenceFovDeg' | 'referenceHeightPx'>): Array<[number, number]> {
+    const px = (d: number) => (d <= 0 ? Infinity : projectedHeightPx(sizeM, d, p.referenceFovDeg, p.referenceHeightPx));
+    return bands.map(b => [px(b.minDistM), px(b.maxDistM)]);
+}
+
+/**
+ * Distance hysteresis with a dead band that grows with distance (a log-space band): the filtered distance moves only once
+ * the real one is more than max(hysteresisM, share x filtered) away, so a turning camera or a small dolly does not retarget a tree.
+ */
+export function hysteresisDistanceRelative(filtered: number | undefined, d: number, hysteresisM: number, share: number): number {
+    return hysteresisDistance(filtered, d, filtered === undefined ? hysteresisM : Math.max(hysteresisM, share * filtered));
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Foveal weight: detail toward the centre of view
+// ---------------------------------------------------------------------------------------------------------------
+
+/**
+ * Weight of a tree's on-screen size by where it is in the frame. `r` is its radial distance from the view centre (or the focus
+ * point) in frame half-widths: r = sqrt(dx^2 + (verticalWeight dy)^2) with dx, dy in normalised device coordinates (each axis
+ * normalised by its own half field of view, so the falloff is an ellipse matching the frame's aspect, squashed toward
+ * horizontal bands by verticalWeight < 1). Inside `centreRadius` the weight is `centreWeight`; past `edgeRadius` it is
+ * `edgeWeight`; between, a smoothstep of ((r - centreRadius) / (edgeRadius - centreRadius))^curve.
+ */
+export interface FovealParams { centreWeight: number; edgeWeight: number; centreRadius: number; edgeRadius: number; curve: number; verticalWeight: number }
+
+export function fovealRadius(dxNdc: number, dyNdc: number, verticalWeight: number): number {
+    return Math.hypot(dxNdc, verticalWeight * dyNdc);
+}
+
+export function fovealWeight(r: number, p: FovealParams): number {
+    const span = Math.max(1e-6, p.edgeRadius - p.centreRadius);
+    const t = Math.min(1, Math.max(0, (r - p.centreRadius) / span));
+    const s = smoothstep01(Math.pow(t, Math.max(1e-3, p.curve)));
+    return p.centreWeight + (p.edgeWeight - p.centreWeight) * s;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Demotion by a continuous number of levels (depth-of-field blur)
+// ---------------------------------------------------------------------------------------------------------------
+
+/** Edges with every hash item one level coarser (level k's share goes to k + 1; the last level keeps its own and gains the one before). */
+function shiftCoarser(e: LodEdges): LodEdges {
+    return e.map((_, k) => (k === 0 ? 0 : e[k - 1]));
+}
+
+/**
+ * Edges demoted by `amount` levels, continuous in `amount`: between whole numbers the edges are the linear blend of the two
+ * whole demotions (a blend of ordered edges is ordered, so the shares still tile the hash). Changing `amount` slowly therefore
+ * dissolves a tree from one level into the next with the same crossfade as a distance change.
+ */
+export function demoteEdges(e: LodEdges, amount: number): LodEdges {
+    const a = Math.min(e.length, Math.max(0, amount));
+    if (a <= 0) return e;
+    const whole = Math.floor(a), frac = a - whole;
+    let lo = e;
+    for (let i = 0; i < whole; i++) lo = shiftCoarser(lo);
+    if (frac <= 0) return lo;
+    const hi = shiftCoarser(lo);
+    return lo.map((x, k) => x + (hi[k] - x) * frac);
+}
+
+/** Levels a tree is demoted by for a blur radius (px): 0 up to `startPx`, `maxLevels` from `fullPx`, a smoothstep between. */
+export interface BlurDemotionParams { startPx: number; fullPx: number; maxLevels: number }
+
+export function blurDemotionLevels(blurRadiusPx: number, p: BlurDemotionParams): number {
+    if (!(blurRadiusPx > p.startPx)) return 0;
+    return p.maxLevels * smoothstep01((blurRadiusPx - p.startPx) / Math.max(1e-6, p.fullPx - p.startPx));
+}

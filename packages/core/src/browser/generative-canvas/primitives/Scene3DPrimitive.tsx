@@ -154,11 +154,11 @@ import { NumericPrecisionInspector } from './scene3d/NumericPrecisionInspector';
 import { computeSceneGeometryBounds, calculateStandoffCamera } from './scene3d/autoFraming';
 import type { RendererStack, AtmosphereHandle, TilesLayerHandle, SceneContentHandle, WasmMeshHandle, VectorRoadmapHandle, Scene3DRenderMode } from './scene3d/types';
 import { applyClayRenderMode } from './scene3d/clayRenderMode';
-import { ViewportOpticsChain } from './scene3d/viewportOptics';
+import { MAX_BLUR_RADIUS_FRAME_FRACTION, ViewportOpticsChain } from './scene3d/viewportOptics';
 import { CameraSettingsControl } from './scene3d/CameraSettingsControl';
 import { keepsStoredPose, lensCommands, liveViewMatches, runCameraCommands, withLivePose, type CameraCommand, type Vec3 } from './scene3d/cameraSettings';
 import { syncObjectMaterial } from './scene3d/materialOverride';
-import { TreeLodController, findShadowCamera } from './scene3d/treeLod/TreeLodController';
+import { TreeLodController, findShadowCamera, formatTreeLodStats, type TreeLodFrame } from './scene3d/treeLod/TreeLodController';
 import { disposeObject3DDeep, releaseObject3D } from './scene3d/disposeObject';
 import {
     resolveSelectableObject,
@@ -1112,6 +1112,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const [tilesError, setTilesError] = React.useState<string | null>(null);
     /** What the scene lens configures but the viewport cannot draw (e.g. a missing focus object), shown as a notice. */
     const [opticsIssues, setOpticsIssues] = React.useState<string[]>([]);
+    /** The tree level-of-detail stats line (scene data treeLod.statsOverlay), refreshed four times a second. */
+    const [treeLodStatsLine, setTreeLodStatsLine] = React.useState<string | null>(null);
     const [sceneBudget, setSceneBudget] = React.useState<SceneBudgetTelemetry | null>(null);
 
     // ---------------------------------------------------------
@@ -2041,6 +2043,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             return found;
         };
         let reportedOpticsIssues = '';
+        const treeFrameSize = new THREE.Vector2();
+        let treeStatsShownAt = 0;
         const renderFrame = () => {
             if (opticsChain.active) {
                 opticsChain.render(renderer, camera, {
@@ -2189,13 +2193,40 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 const crownShading = sceneDataRef.current?.treeCrownShading;
                 const crownShadingChanged = crownShading !== appliedTreeCrownShadingRef.current;
                 appliedTreeCrownShadingRef.current = crownShading;
+                // what the frame shows beyond the camera: its height in pixels, the distortion overscan and the depth of field as drawn
+                let treeFrame: TreeLodFrame | undefined;
+                const treeLodView = sceneDataRef.current?.treeLod;
+                const treeLodStats: Array<{ lod: TreeLodController }> = [];
                 externalObjectsMapRef.current.forEach(model => {
                     const lod = model.parent ? (model.userData.sbTreeLod as TreeLodController | undefined) : undefined;
                     if (!lod) return;
                     if (treeShadowCamera === undefined) treeShadowCamera = findShadowCamera(stack.scene, !!stack.renderer?.shadowMap?.enabled);
+                    if (!treeFrame) {
+                        const optics = opticsChainRef.current;
+                        const heightPx = renderer.getDrawingBufferSize(treeFrameSize).y;
+                        const dofPlan = optics?.active ? optics.getPlan().depthOfField : null;
+                        const focusM = optics?.status.focusDistanceMeters;
+                        const overscan = optics?.active ? optics.status.overscan : 1;
+                        const focus = dofPlan?.focusObjectId ? optics?.focusTarget : null;
+                        treeFrame = {
+                            heightPx, overscan,
+                            dof: dofPlan && typeof focusM === 'number' && focusM > 0
+                                ? { focalLengthMm: dofPlan.focalLengthMm, apertureFStop: dofPlan.apertureFStop, focusM, focusPoint: focus?.centre ?? null, focusObject: focus?.object ?? null, maxBlurRadiusPx: Math.max(4, MAX_BLUR_RADIUS_FRAME_FRACTION * heightPx * overscan) }
+                                : null
+                        };
+                    }
                     if (crownShadingChanged) lod.setCrownShading(crownShading);
-                    lod.update(camera, treeShadowCamera);
+                    lod.setView(treeLodView);
+                    lod.update(camera, treeShadowCamera, treeFrame);
+                    treeLodStats.push({ lod });
                 });
+                if (treeLodView?.statsOverlay && treeLodStats.length && now - treeStatsShownAt > 250) {
+                    treeStatsShownAt = now;
+                    setTreeLodStatsLine(formatTreeLodStats(treeLodStats.map(x => x.lod.stats)));
+                } else if (!treeLodView?.statsOverlay && treeStatsShownAt !== 0) {
+                    treeStatsShownAt = 0;
+                    setTreeLodStatsLine(null);
+                }
 
                 // 13. Gaussian Splat viewer camera sync & depth sort
                 if (splatViewerRef.current && typeof splatViewerRef.current.updateCamera === 'function') {
@@ -3672,6 +3703,11 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     />
                 )}
                 <ViewportNotice notices={viewportNotices} />
+                {treeLodStatsLine && (
+                    <div className="sb-3d-tree-lod-stats absolute bottom-2 right-2 z-20 px-2 py-1 rounded bg-black/60 text-[10px] font-mono text-zinc-100 pointer-events-none whitespace-pre">
+                        {treeLodStatsLine}
+                    </div>
+                )}
             </div>
             {staged.overlay({ bottomInsetPx: isTimelineDrawerOpen ? 255 : 16 })}
 

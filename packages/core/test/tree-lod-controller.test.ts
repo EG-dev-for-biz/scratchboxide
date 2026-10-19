@@ -35,7 +35,7 @@ const treeNodes = (root: THREE.Object3D): THREE.Object3D[] => { const out: THREE
 function sphereOf(o: THREE.Object3D): THREE.Sphere { return new THREE.Box3().setFromObject(o).getBoundingSphere(new THREE.Sphere()); }
 
 /** A camera `d` metres from the nearest point of the tree's sphere, looking at it. */
-function cameraAt(tree: THREE.Object3D, d: number, cam = new THREE.PerspectiveCamera(60, 1, 0.1, 6000)): THREE.PerspectiveCamera {
+function cameraAt(tree: THREE.Object3D, d: number, cam = new THREE.PerspectiveCamera(45, 1, 0.1, 6000)): THREE.PerspectiveCamera {
     tree.updateMatrixWorld(true);
     const s = sphereOf(tree);
     cam.position.copy(s.center).add(new THREE.Vector3(0, 0, s.radius + d));
