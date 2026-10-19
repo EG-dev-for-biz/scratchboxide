@@ -242,6 +242,11 @@ export interface UvAtlas {
         normal: Float32Array;
         /** Surface sample spacing in metres at the texel (area per texel is its square). */
         sizeM: Float32Array;
+        /**
+         * Metres tile_refine moved the scan surface at the texel (|_RECTIFY_DISPLACEMENT| + |_RELIEF_HEIGHT|, interpolated from
+         * the vertices); absent when the layer carries neither attribute. The tile photo of a moved texel lies that much further off.
+         */
+        movedM?: Float32Array;
     };
 }
 

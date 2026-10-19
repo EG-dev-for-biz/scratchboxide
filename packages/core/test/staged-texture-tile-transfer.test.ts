@@ -218,4 +218,32 @@ describe('tile photo transfer (tier 2)', () => {
         expect(smeared).toBeGreaterThan(4); // within its 2.08 m reach the nearest-point sampler stretched the edge's colour across them
         expect(maxErr).toBeLessThan(4);
     });
+
+    it('widens the distance gate by the distance tile_refine moved the surface: a rectified wall still carries the tile photo', async () => {
+        // the scan wall was 0.6 m in front of where rectify put it: the tile photo is 0.6 m off the texels, past the 0.25 m gate
+        const glb = buildTileGlb([facadeTileSheet(0.6)]);
+        const atlas = facadeAtlas(SIDE);
+        const plain = await transferTilePhotoFromGlb(glb, { atlas, maxDistanceM: 0.25 }, { delight: false });
+        // the left half of the wall was moved 0.6 m (rectify), the right half is as scanned (0): only the moved half widens
+        const movedM = new Float32Array(SIDE * SIDE);
+        for (let i = 0; i < SIDE * SIDE; i++) movedM[i] = i % SIDE < SIDE / 2 ? 0.6 : 0;
+        const moved = await transferTilePhotoFromGlb(glb, { atlas: { ...atlas, texels: { ...atlas.texels, movedM } }, maxDistanceM: 0.25 }, { delight: false });
+        let plainFilled = 0, left = 0, right = 0, maxErr = 0;
+        for (let i = 0; i < SIDE * SIDE; i++) {
+            if (plain.planes.albedo[i * 4 + 3]) plainFilled++;
+            if (!moved.planes.albedo[i * 4 + 3]) continue;
+            if (i % SIDE < SIDE / 2) left++; else right++;
+            const t = facadeAlbedo(...texelUv(i));
+            for (let k = 0; k < 3; k++) maxErr = Math.max(maxErr, Math.abs(moved.planes.albedo[i * 4 + k] - t[k]));
+            // the weight ramp is measured past the move: a moved texel sampled where the scan was is not penalised
+            expect(unpackConfidenceTexel(moved.planes.confidence, i).weight01).toBeGreaterThan(0.3);
+        }
+        expect(plainFilled).toBe(0);
+        expect(left).toBe(SIDE * SIDE / 2);
+        expect(right).toBe(0);
+        expect(maxErr).toBeLessThanOrEqual(2);
+        expect(moved.planes.provenance[0].method).toMatch(/plus the distance tile_refine moved the surface at the texel, at most 1 m more \(2048 texels sampled past 0.25 m\)/);
+        expect(moved.planes.degradations[0]).toMatchObject({ reasonCode: 'tile_surface_out_of_range', texelShare: 0.5 });
+        saveStrip('transfer_moved_gate', [planePanel(SIDE, SIDE, truthPanel(facadeAlbedo)), planePanel(SIDE, SIDE, plain.planes.albedo), planePanel(SIDE, SIDE, moved.planes.albedo)]);
+    });
 });

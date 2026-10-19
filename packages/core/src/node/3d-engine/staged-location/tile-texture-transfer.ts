@@ -495,6 +495,13 @@ export interface TileTransferTuning {
     correctCandidates?: (plane: { rgb: Float32Array; has: Uint8Array; width: number; height: number; existing?: BakedTexturePlanes }) => Promise<{ texels: Uint8Array; provenance: Omit<TexelProvenance, 'coverage'> } | undefined>;
 }
 
+/**
+ * Largest widening of the distance gate by the move tile_refine recorded at a texel (TILE_REFINE_VERTEX_ATTRIBUTES): the
+ * rectify / flatten moves measured on the bake-off places reach 0.45 m at the 99th percentile; past 1 m the nearest same-facing
+ * tile surface is more likely another surface than the one the texel was moved from.
+ */
+export const MAX_MOVED_WIDENING_M = 1;
+
 /** Overlap texels the exposure match needs. */
 export const MIN_EXPOSURE_OVERLAP = 500;
 
@@ -543,7 +550,8 @@ export const transferTilePhoto: TransferTilePhoto = async (input: TileTransferIn
     const cand = new Float32Array(N * 3), candW = new Float32Array(N), hasCand = new Uint8Array(N);
     let litLin: Float32Array | undefined;
     const hasLit = new Uint8Array(N);
-    let wanted = 0;
+    let wanted = 0, widened = 0;
+    const movedM = atlas.texels.movedM;
     let liftReport: DelightPlaneReport | undefined;
     for (let y = 0; y < H; y++) {
         if ((y & 31) === 0) { throwIfAborted(signal); if (y) await new Promise<void>(r => setImmediate(r)); }
@@ -552,11 +560,16 @@ export const transferTilePhoto: TransferTilePhoto = async (input: TileTransferIn
             if (!atlas.texels.covered[i] || atlas.texels.gutter[i]) continue;
             wanted++;
             const P = atlas.texels.position, Nn = atlas.texels.normal;
-            const s = tileSample([P[i * 3], P[i * 3 + 1], P[i * 3 + 2]], [Nn[i * 3], Nn[i * 3 + 1], Nn[i * 3 + 2]], maxDistanceM);
+            // a texel tile_refine moved off the scan (rectify, facade flatten, relief) finds the tile photo that much further away
+            const moved = movedM ? Math.min(MAX_MOVED_WIDENING_M, movedM[i]) : 0;
+            const gate = maxDistanceM + moved;
+            const s = tileSample([P[i * 3], P[i * 3 + 1], P[i * 3 + 2]], [Nn[i * 3], Nn[i * 3 + 1], Nn[i * 3 + 2]], gate);
             if (!s) continue;
+            if (s.distanceM > maxDistanceM) widened++;
             const cosN = 'cosNormal' in s ? (s as TileSample).cosNormal : 1;
             const agree = Math.min(1, Math.max(0, (cosN - minCos) / Math.max(1e-6, 1 - minCos)));
-            const near = 1 - 0.5 * Math.min(1, s.distanceM / Math.max(1e-6, maxDistanceM));
+            // the distance ramp is measured past the move: a moved texel sampled exactly where the scan was is "near"
+            const near = 1 - 0.5 * Math.min(1, Math.max(0, s.distanceM - moved) / Math.max(1e-6, maxDistanceM));
             cand[i * 3] = s.rgb[0]; cand[i * 3 + 1] = s.rgb[1]; cand[i * 3 + 2] = s.rgb[2];
             const lit = (s as TileSample).litLinear;
             if (lit) { if (!litLin) litLin = new Float32Array(N * 3); litLin[i * 3] = lit[0]; litLin[i * 3 + 1] = lit[1]; litLin[i * 3 + 2] = lit[2]; hasLit[i] = 1; }
@@ -667,7 +680,7 @@ export const transferTilePhoto: TransferTilePhoto = async (input: TileTransferIn
     const delightLine = d === false ? 'not de-lit' : `de-lit (shadowLift ${(d || PHOTOGRAMMETRIC_DELIGHT.defaults).shadowLift}, highlightCompress ${(d || PHOTOGRAMMETRIC_DELIGHT.defaults).highlightCompress}${liftReport ? `; lift capped by local contrast, ${Math.round(liftReport.meanLiftKept * 100)} percent of it kept on average` : ''})`;
     const provenance: TexelProvenance[] = [{
         source: 'tile-photo-transfer', label: 'photo-inferred',
-        method: `nearest tile surface (BVH, <= ${round3(maxDistanceM)} m, normal within ${round3(Math.acos(minCos) * 180 / Math.PI)} deg), bilinear in tile UV`
+        method: `nearest tile surface (BVH, <= ${round3(maxDistanceM)} m${movedM ? ` plus the distance tile_refine moved the surface at the texel, at most ${MAX_MOVED_WIDENING_M} m more (${widened} texels sampled past ${round3(maxDistanceM)} m)` : ''}, normal within ${round3(Math.acos(minCos) * 180 / Math.PI)} deg), bilinear in tile UV`
             + `${input.surface && Number.isFinite(input.surface.texelSizeM) ? ` (tile texel ${round3(input.surface.texelSizeM)} m)` : ''}, ${delightLine}${exposureLine}, confidence <= ${TILE_CONFIDENCE_CAP}`,
         coverage: atlasTexels ? (filled - filledCorrected) / atlasTexels : 0
     }];
@@ -686,7 +699,7 @@ export const transferTilePhoto: TransferTilePhoto = async (input: TileTransferIn
         degradations.push({
             stage: 'tile-transfer', reasonCode: 'tile_surface_out_of_range', layerKey: atlas.layerKey,
             fromRung: TILE_TRANSFER_RUNG, toRung: NEXT_RUNG, texelShare: atlasTexels ? unfilled / atlasTexels : 0,
-            reason: `${unfilled} texels had no tile surface within ${round3(maxDistanceM)} m facing the same way (within ${round3(Math.acos(minCos) * 180 / Math.PI)} degrees), so the tile photo cannot colour them.`
+            reason: `${unfilled} texels had no tile surface within ${round3(maxDistanceM)} m${movedM ? ' (plus the distance tile_refine moved the surface there)' : ''} facing the same way (within ${round3(Math.acos(minCos) * 180 / Math.PI)} degrees), so the tile photo cannot colour them.`
         });
     }
     return { layerKey: atlas.layerKey, width: W, height: H, albedo, confidence, provenance, degradations };

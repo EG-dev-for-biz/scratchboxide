@@ -529,3 +529,28 @@ describe('texture pass B: real arch data (skipped when the gitignored scan_fit /
         }
     }, 300_000);
 });
+
+describe('texture pass B: the move tile_refine recorded', () => {
+    it('carries the distance tile_refine moved the scan (|_RECTIFY_DISPLACEMENT| + |_RELIEF_HEIGHT|) to every texel, interpolated', async () => {
+        // a flat 4 x 2 m scan wall whose move grows linearly along x: 0 at x = 0, 0.8 m at x = 4 (relief adds a constant -0.1 m)
+        const wall = grid(8, 4, (i, j) => [0.5 * i, 0.5 * j, 0]);
+        const nv = wall.positions.length / 3;
+        const disp = Float32Array.from({ length: nv }, (_, v) => 0.2 * wall.positions[v * 3]);
+        const relief = new Float32Array(nv).fill(-0.1);
+        const glb = writeStagedGlb([{ name: 'x00', ...wall, attributes: { _RECTIFY_DISPLACEMENT: disp, _RELIEF_HEIGHT: relief }, extras: { regionId: 'x00' } }], { rootExtras: { sb: { stage: 'remesh' } } });
+        const atlas = await buildUvAtlas({ layerKey: 'l2', clayGlb: glb, densityTexelsPerMeter: 16, maxSide: 256 });
+        const moved = atlas.texels.movedM;
+        expect(moved).toBeDefined();
+        let checked = 0, maxErr = 0;
+        for (let i = 0; i < atlas.width * atlas.height; i++) {
+            if (!atlas.texels.covered[i] || atlas.texels.gutter[i]) continue;
+            checked++;
+            maxErr = Math.max(maxErr, Math.abs(moved![i] - (0.2 * atlas.texels.position[i * 3] + 0.1)));
+        }
+        expect(checked).toBeGreaterThan(1000);
+        expect(maxErr).toBeLessThan(1e-4);
+        // a layer without the attributes makes no claim
+        const plain = writeStagedGlb([{ name: 'x00', ...wall, extras: { regionId: 'x00' } }], { rootExtras: { sb: { stage: 'remesh' } } });
+        expect((await buildUvAtlas({ layerKey: 'l2', clayGlb: plain, densityTexelsPerMeter: 16, maxSide: 256 })).texels.movedM).toBeUndefined();
+    });
+});

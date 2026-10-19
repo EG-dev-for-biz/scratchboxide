@@ -29,7 +29,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawn, execFile } from 'child_process';
-import type { FittedSurface, SurfaceChart, Vec3 } from '../../../common/spatial/staged-location-contracts';
+import { TILE_REFINE_VERTEX_ATTRIBUTES, type FittedSurface, type SurfaceChart, type Vec3 } from '../../../common/spatial/staged-location-contracts';
 import type { BuildUvAtlas, SurfaceUvMap, UvAtlas, UvAtlasInput } from '../../../common/spatial/texture-pass-contracts';
 import { chartPoint } from './slot-projection';
 import { nodeWorldMatrices, parseGlbBytes, readAccessor, readPositionsExact, transformPoint, type Mat4, type ParsedGlb } from './glb-bytes';
@@ -290,6 +290,8 @@ interface Prim {
     nodeIndex: number; nodeName: string; meshIndex: number; primitiveIndex: number; mapIndex: number;
     positions: Float32Array; indices: Uint32Array; world: Mat4;
     chart?: SurfaceChart; chartKind?: string; chartId?: string;
+    /** Metres tile_refine moved the scan surface under each vertex (|_RECTIFY_DISPLACEMENT| + |_RELIEF_HEIGHT|), when written. */
+    movedM?: Float32Array;
 }
 
 interface Item {
@@ -372,10 +374,22 @@ export async function buildUvAtlas(input: BuildUvAtlasOptions): Promise<LaidOutU
                 mapOfNode.set(nodeIndex, maps.length);
                 maps.push({ nodeName, kind: 'atlas', texelsPerMeter: 0, atlasRect: [1, 1, 0, 0] });
             }
+            // how far tile_refine moved the scan surface at each vertex (rectify, facade flatten, photo relief): the tile photo
+            // of a moved texel lies that much further away (tile-texture-transfer.ts widens its distance gate by it)
+            let movedM: Float32Array | undefined;
+            for (const name of [TILE_REFINE_VERTEX_ATTRIBUTES.rectifyDisplacement, TILE_REFINE_VERTEX_ATTRIBUTES.reliefHeight]) {
+                const a = prim.attributes?.[name];
+                if (a === undefined) continue;
+                const d = readAccessor(glb, a).data;
+                if (d.length !== n) continue;
+                movedM ??= new Float32Array(n);
+                for (let v = 0; v < n; v++) if (Number.isFinite(d[v])) movedM[v] += Math.abs(d[v]);
+            }
             const surfaceId: string = node.extras?.sb?.ids?.surfaceId ?? nodeName;
             const surface = surfaces.get(surfaceId);
             prims.push({
                 nodeIndex, nodeName, meshIndex: node.mesh, primitiveIndex, mapIndex: mapOfNode.get(nodeIndex)!, positions, indices, world: world[nodeIndex],
+                ...(movedM ? { movedM } : {}),
                 ...(surface ? { chart: surface.chart, chartKind: 'plane' in surface.chart ? 'chart-plane' : 'chart-cylinder', chartId: surface.id } : {})
             });
         });
@@ -523,6 +537,7 @@ export async function buildUvAtlas(input: BuildUvAtlasOptions): Promise<LaidOutU
     const N = W * H;
     const covered = new Uint8Array(N), gutter = new Uint8Array(N), mapIndex = new Uint16Array(N).fill(65535);
     const position = new Float32Array(N * 3), normal = new Float32Array(N * 3), sizeM = new Float32Array(N);
+    const movedM = prims.some(p => p.movedM) ? new Float32Array(N) : undefined;
     const owner = new Int32Array(N).fill(-1), ownerScore = new Float32Array(N);
     let overlapTexels = 0, triId = 0;
     const triItem: Item[] = [];
@@ -581,6 +596,7 @@ export async function buildUvAtlas(input: BuildUvAtlasOptions): Promise<LaidOutU
                     position[i * 3] = P[0]; position[i * 3 + 1] = P[1]; position[i * 3 + 2] = P[2];
                     normal[i * 3] = Nn[0]; normal[i * 3 + 1] = Nn[1]; normal[i * 3 + 2] = Nn[2];
                     sizeM[i] = islandSize;
+                    if (movedM) { const D = p.movedM; movedM[i] = D ? l0 * D[it.sourceVertex[ia]] + l1 * D[it.sourceVertex[ib]] + l2 * D[it.sourceVertex[ic]] : 0; }
                 }
             }
         }
@@ -608,7 +624,7 @@ export async function buildUvAtlas(input: BuildUvAtlasOptions): Promise<LaidOutU
         }
         for (let k = 0; k < add.length; k += 2) {
             const i = add[k], f = add[k + 1];
-            covered[i] = 1; gutter[i] = 1; mapIndex[i] = mapIndex[f]; sizeM[i] = sizeM[f];
+            covered[i] = 1; gutter[i] = 1; mapIndex[i] = mapIndex[f]; sizeM[i] = sizeM[f]; if (movedM) movedM[i] = movedM[f];
             position.copyWithin(i * 3, f * 3, f * 3 + 3); normal.copyWithin(i * 3, f * 3, f * 3 + 3);
         }
     }
@@ -617,7 +633,7 @@ export async function buildUvAtlas(input: BuildUvAtlasOptions): Promise<LaidOutU
 
     return {
         layerKey: input.layerKey, width: W, height: H, maps,
-        texels: { covered, gutter, mapIndex, position, normal, sizeM },
+        texels: { covered, gutter, mapIndex, position, normal, sizeM, ...(movedM ? { movedM } : {}) },
         layout: {
             claySha256: crypto.createHash('sha256').update(input.clayGlb).digest('hex'), gutterTexels: G, primitives, untextured,
             rects: items.map(it => ({ x: it.pack.x, y: it.pack.y, width: it.pack.w, height: it.pack.h, kind: it.chart ? 'chart' as const : 'island' as const, mapIndex: it.prim.mapIndex })),
