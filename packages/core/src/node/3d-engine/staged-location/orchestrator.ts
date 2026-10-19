@@ -129,7 +129,9 @@ import { TextureWorkerPool, textureWorkersEnabled } from './texture-worker-pool'
 import { eventLoopStats, runBlockTracer } from './event-loop-stats';
 import type { EnhanceModelClient } from './texture-enhance';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
-import { facadeGrammarEnabled, grammarFileText, runFacadeGrammarPass, FACADE_GRAMMAR_PROMPT_VERSION, type GrammarFacadeOutcome } from './facade-grammar';
+import { fetchFootprints, type FootprintSource } from './facade-footprints';
+import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
+import { facadeGrammarEnabled, grammarFileText, runFacadeGrammarPass, FACADE_GRAMMAR_GATE_VERSION, FACADE_GRAMMAR_PROMPT_VERSION, type GrammarFacadeOutcome } from './facade-grammar';
 import { TEXTURE_LADDER_RUNGS, type TexturePassDegradation, type TexturePassRecord, type TextureLayerBundle } from '../../../common/spatial/texture-pass-contracts';
 
 /** What the evidence stage spent: free metadata queries, billed images and the seconds the images took. */
@@ -271,6 +273,8 @@ export interface StagedLocationDeps {
     streetView?: StreetViewEvidenceDeps;
     /** The vision model client and the models to try (the staged default first); or why there is none. */
     vision?: { client: VisionGenAIClient; candidates: string[] } | { unavailable: string };
+    /** Vector building footprints near a place (facade grammar's independent check); default: Google vector feature tiles. */
+    footprints?: (place: { lat: number; lng: number }, radiusM: number) => Promise<FootprintSource>;
     /** Builds a figure spec natively and returns its GLB (metres, +Y up, front +Z, origin at the centre of its base); the reference object builder's native build by default. */
     figureBuilder?: (spec: ObjectBuildSpec, signal?: AbortSignal) => Promise<{ glb: Buffer }>;
     /**
@@ -684,6 +688,10 @@ function record(stage: StageId | 'finish', reasonCode: string, fields: {
         atMs: fields.now
     };
 }
+
+/** Google's vector building footprints (feature tiles, the app's service account). */
+const defaultFootprints = (place: { lat: number; lng: number }, radiusM: number): Promise<FootprintSource> =>
+    fetchFootprints(place, radiusM, (x, y, z) => GoogleVectorTileService.fetchVectorTile(x, y, z, ''));
 
 function errorMessage(err: unknown): string {
     return err instanceof Error ? err.message : String(err);
@@ -1859,20 +1867,31 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             const orthosDir = remeshed?.reliefOrthosDir;
             const l2 = run.state.layers.find(l => l.layer === 'l2' && l.stage === 'remesh');
             if (!remeshed || !orthosDir || !remeshRequest || !l2) { runner.skip('grammar', remeshed ? 'the remesh wrote no facade orthophotos' : 'the remesh failed, so there are no remeshed facades to read'); return; }
-            type GrammarValue = { facades: GrammarFacadeOutcome[]; calls: number; passMs: number; refine?: { cacheKey: string; clayGlb: string; stats: Record<string, any>; ms: number } };
+            type GrammarValue = { facades: GrammarFacadeOutcome[]; calls: number; passMs: number; footprintsNote?: string; refine?: { cacheKey: string; clayGlb: string; stats: Record<string, any>; ms: number } };
             await runner.stage<GrammarValue>({
                 id: 'grammar',
                 run: async io => {
                     const chain = new VisionModelChain<string>({ client: visionAvailable!.client, candidates: visionAvailable!.candidates, signal: ctx.signal, ...chainExtras('grammar'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
-                    const key = stageKey('facade-grammar/v1', FACADE_GRAMMAR_PROMPT_VERSION, remeshed.cacheKey, visionAvailable!.candidates);
+                    const key = stageKey('facade-grammar/v1', FACADE_GRAMMAR_PROMPT_VERSION, FACADE_GRAMMAR_GATE_VERSION, remeshed.cacheKey, visionAvailable!.candidates);
                     run.keys.grammar = key;
                     const entry = await cache.run<GrammarValue>('grammar', key, async dir => {
+                        // the vector building footprints: an independent check of each grammar (which building each section is, how tall)
+                        let footprints: FootprintSource | undefined;
+                        let footprintsNote = '';
+                        try {
+                            footprints = await (deps.footprints ?? defaultFootprints)({ lat: extraction.geoAnchor.lat, lng: extraction.geoAnchor.lng }, Math.max(100, extraction.coveredRadiusM ?? extraction.radiusM));
+                            footprintsNote = footprints.note;
+                        } catch (err) {
+                            footprintsNote = `no vector building footprints (${errorMessage(err)})`;
+                        }
+                        io.progress(`facade grammar: ${footprintsNote}`);
                         io.progress('reading the facades\' grammar from the tile photo');
                         const pass = await runFacadeGrammarPass({
-                            orthosDir, chain, anchor: structure ? structure.seed : { x: 0, z: 0 }, signal: io.signal, onProgress: m => io.progress(m), overlayDir: path.join(dir, 'overlays')
+                            orthosDir, chain, anchor: structure ? structure.seed : { x: 0, z: 0 }, signal: io.signal, onProgress: m => io.progress(m), overlayDir: path.join(dir, 'overlays'),
+                            ...(footprints ? { footprints: footprints.buildings } : {})
                         });
                         fs.writeFileSync(path.join(dir, 'pass.json'), JSON.stringify(pass));
-                        const value: GrammarValue = { facades: pass.facades, calls: pass.calls, passMs: pass.ms };
+                        const value: GrammarValue = { facades: pass.facades, calls: pass.calls, passMs: pass.ms, footprintsNote };
                         if (pass.accepted.length) {
                             const file = path.join(dir, 'grammar.txt');
                             fs.writeFileSync(file, grammarFileText(pass.accepted));
@@ -1891,7 +1910,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const applied = new Map<number, any>((v.refine?.stats.relief.grammar ?? []).map((g: any) => [g.facadeId, g]));
                     const describe = (f: GrammarFacadeOutcome) => {
                         const h = f.heldOut;
-                        return `facade ${f.facadeId} (${Math.round(f.areaM2)} m², ${f.grammar!.source}): ${f.grammar!.tiers.length} tiers, ${f.grammar!.tiers.reduce((s, t) => s + t.cols.length, 0)} openings${h ? `; held out: edge chamfer ${h.before.chamferPx.toFixed(2)} -> ${h.after.chamferPx.toFixed(2)} px, gradient NCC ${h.before.gradNcc.toFixed(3)} -> ${h.after.gradNcc.toFixed(3)}` : ''}`;
+                        return `facade ${f.facadeId} (${Math.round(f.areaM2)} m², read from ${f.grammar!.source}${f.agreedSources && f.agreedSources.length > 1 ? `, agreed by ${f.agreedSources.slice(1).join(', ')}` : f.footprints?.buildings ? ', footprints disagree' : ''}): ${f.grammar!.tiers.length} tiers, ${f.grammar!.tiers.reduce((s, t) => s + t.cols.length, 0)} openings${h ? `; held out: edge chamfer ${h.before.chamferPx.toFixed(2)} -> ${h.after.chamferPx.toFixed(2)} px, gradient NCC ${h.before.gradNcc.toFixed(3)} -> ${h.after.gradNcc.toFixed(3)}` : ''}`;
                     };
                     for (const f of v.facades) io.progress(`facade grammar: facade ${f.facadeId}: ${f.accepted ? 'accepted' : 'not used'}: ${f.reason}`);
                     const degradations = rejected.map(f => run.degrade(record('grammar', 'grammar_rejected', {
@@ -1926,7 +1945,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     run.note(PROVENANCE.photoInferred, note);
                     return {
                         status: degradations.length ? 'degraded' : 'committed', value: v, layers: [layer], degradations, cached: entry.cached, builtAtMs: entry.builtAtMs,
-                        source: `facade grammar: ${accepted.length} of ${v.facades.length} facades took a photo-inferred grammar (${cells} openings, confidence ${confidence.toFixed(2)}); ${accepted.map(describe).join('; ')}${rejected.length ? `; ${rejected.length} rejected` : ''}`
+                        source: `facade grammar: ${accepted.length} of ${v.facades.length} facades took a photo-inferred grammar (${cells} openings, confidence ${confidence.toFixed(2)}); ${accepted.map(describe).join('; ')}${rejected.length ? `; ${rejected.length} rejected` : ''}${v.footprintsNote ? `; checked against ${v.footprintsNote}` : ''}`
                     };
                 },
                 degrade: async err => ({

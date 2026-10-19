@@ -16,14 +16,17 @@
  * heights. The reading is fitted to the facade's metric frame as continuous numbers (opening bands per
  * storey, bay centres and widths, storey heights), regularised into one lattice per facade, and then measured:
  *
- *  (a) the scan: every opening lies on the measured facade within the fit's residual tolerance (PHOTO_CORRECTION_TOLERANCE_M),
+ *  (a) the scan: the openings lie on the measured facade within the fit's residual tolerance (PHOTO_CORRECTION_TOLERANCE_M;
+ *      the few read off it are dropped, more than MAX_OFF_FACADE_SHARE and the grammar is not taken),
  *      and at least half the windows the relief measured on the scan's own photo texture (tile_refine's observed cells)
  *      fall in the grammar's openings within that tolerance;
- *  (b) held-out evidence: the facade is read again from each half of the orthophoto alone (left, right, top, bottom), and
- *      the grammar read from one half predicts the openings of the other: bays continue on their rhythm, storeys on their
- *      pitch. Its edges there must agree with the photo better than the relief's own lattice does (symmetric edge chamfer
- *      lower by HELD_OUT_MIN_CHAMFER_GAIN_PX, structural gradient NCC not lower, over the four folds). The half it is scored
- *      on was not shown to it; the relief's lattice there was made from that very photo.
+ *  (b) held-out evidence: the facade is read again four times with parts of its photo hidden (greyed out): alternate
+ *      vertical stripes (two readings, each hiding the stripes the other shows) and alternate horizontal bands (two more).
+ *      The grammar read from what was shown predicts the openings of what was hidden: bays continue on their rhythm,
+ *      storeys on their pitch. Over the four folds its edges there must agree with the photo better than the relief's own lattice does
+ *      (symmetric edge chamfer lower by HELD_OUT_MIN_CHAMFER_GAIN_PX, structural gradient NCC not lower), and better than
+ *      the same prediction moved by half its bay and half its storey (the control: as many edges, out of place). The
+ *      half it is scored on was not shown to it; the relief's lattice there was made from that very photo.
  *
  * Only a grammar passing both is used: tile_refine then takes it as that facade's window lattice (the photo's own cells
  * snap onto it; its other openings are carved only where the photo is no brighter than their frame). Everything it
@@ -39,9 +42,18 @@ import type { VisionModelChain } from '../../gemini/vision-model-chain';
 import { PHOTO_CORRECTION_TOLERANCE_M } from '../../../common/spatial/staged-location-contracts';
 import { distanceTransform, gaussianBlur, sobel } from '../../spatial/StreetViewPoseRegistrar';
 import { encodePng } from './png-encode';
+import { facadeBuildingParts, footprintAgreement, type FootprintAgreement, type FootprintBuilding } from './facade-footprints';
 import { decodeImageInMemory } from './tile-texture-transfer';
 
 export const FACADE_GRAMMAR_PROMPT_VERSION = 'facade-grammar/v1';
+/** The fit and the gates (part of the stage's cache key with the prompt version). */
+export const FACADE_GRAMMAR_GATE_VERSION = 'grammar-gates/v7';
+/** Openings read off the measured facade (beyond the tolerance) are dropped; more than this share of them and the grammar is not taken. */
+export const MAX_OFF_FACADE_SHARE = 0.1;
+/** The held-out folds: the covered width in at most this many alternating stripes, the covered height in at most this many bands, each about HELD_OUT_SPAN_M. */
+export const HELD_OUT_STRIPES = 6;
+export const HELD_OUT_BANDS = 4;
+export const HELD_OUT_SPAN_M = 8;
 /** Off until it passes on real data (SCRATCHBOX_FACADE_GRAMMAR=1 turns it on, =0 off). */
 export const FACADE_GRAMMAR_DEFAULT = false;
 /** The scan side of the gate: the fit's own residual tolerance. */
@@ -51,6 +63,8 @@ export const MAX_GRAMMAR_FACADES = 12;
 export const MIN_GRAMMAR_FACADE_AREA_M2 = 120;
 /** A facade whose photo covers less of its frame than this is not read. */
 export const MIN_PHOTO_COVERAGE = 0.3;
+/** A grammar the vector footprints disagree with keeps this share of its confidence. */
+export const FOOTPRINT_DISAGREEMENT_CONFIDENCE = 0.75;
 /** Below this covered width the facade cannot be split into two halves that each show a repeat. */
 export const MIN_HELD_OUT_WIDTH_M = 8;
 /** Held-out gate: the symmetric edge chamfer must fall by at least this much (ortho px) below the relief's own lattice's... */
@@ -202,38 +216,69 @@ export function replyToPlane(reply: GrammarReply, f: ReliefOrthoFacade, win: Rea
     })).sort((a, b) => a.t0 - b.t0);
 }
 
+/** Where along s the photo shows the facade to a reading (a hidden stripe does not; default: everywhere). */
+export type ShownAlong = (s: number) => boolean;
+
 /**
- * The bay rhythm of a tier's openings: the shortest repeating group (1, 2 or 3 openings) that explains the centres, its
- * period and the offsets in it. Used to regularise the reading and to continue the tier past what an image showed.
+ * The bay rhythm of a tier's openings: a period p and one to three phase offsets (a group of openings that repeats) with
+ * each phase's width, such that every opening centre is offset_k + n p for an integer n. Openings need not be
+ * consecutive (a reading may skip what it was not shown), so the candidates are the openings' spacings over 1..6, and a
+ * candidate is kept only when it explains every opening (within a fifth of the width) and puts at most a fifth of its
+ * places, between the openings and where the reading was shown the facade, on wall. The fewest phases win, then the shortest period (a longer one that also fits is
+ * a multiple of it that leaves out openings the reading was not shown).
  */
-export function bayRhythm(cols: Array<[number, number]>): { group: number; period: number; offsets: number[]; widths: number[]; rms: number } | undefined {
+export function bayRhythm(cols: Array<[number, number]>, shown: ShownAlong = () => true): { group: number; period: number; offsets: number[]; widths: number[]; rms: number } | undefined {
     const c = cols.map(([a, b]) => 0.5 * (a + b)), w = cols.map(([a, b]) => b - a);
     if (c.length < 2) return undefined;
+    const wMed = median(w), tol = Math.max(0.2 * wMed, 0.05);
+    const cands: number[] = [];
+    for (let i = 0; i < c.length; i++) for (let j = i + 1; j < c.length; j++) for (let m = 1; m <= 6; m++) {
+        const p = Math.abs(c[j] - c[i]) / m;
+        if (p >= 1.1 * wMed && !cands.some(q => Math.abs(q - p) <= 0.02 * p)) cands.push(p);
+    }
+    const lo = Math.min(...c), hi = Math.max(...c);
     let best: { group: number; period: number; offsets: number[]; widths: number[]; rms: number; score: number } | undefined;
-    // a group must be seen at least twice (each of its openings twice), or any sequence would "repeat"
-    for (let g = 1; g <= 3 && 2 * g <= c.length; g++) {
-        // period: median of c[i + g] - c[i]
-        const d: number[] = [];
-        for (let i = 0; i + g < c.length; i++) d.push(c[i + g] - c[i]);
-        const period = median(d);
-        if (!(period > 0)) continue;
-        // each phase k of the group: centres c[k + j g] - j period, their median is the offset
-        const offsets: number[] = [], widths: number[] = [];
-        let s2 = 0, n = 0;
-        for (let k = 0; k < g; k++) {
-            const v: number[] = [], ww: number[] = [];
-            for (let i = k; i < c.length; i += g) { v.push(c[i] - ((i - k) / g) * period); ww.push(w[i]); }
-            const o = median(v);
-            offsets.push(o); widths.push(median(ww));
-            for (const x of v) { s2 += (x - o) ** 2; n++; }
+    for (const p of cands) {
+        // phases of the centres in [0, p), clustered (circularly) within the tolerance
+        const ph = c.map((x, i) => ({ v: (((x - lo) % p) + p) % p, i })).sort((a, b) => a.v - b.v);
+        const clusters: Array<typeof ph> = [];
+        for (const q of ph) { const last = clusters[clusters.length - 1]; if (last && q.v - last[last.length - 1].v <= tol) last.push(q); else clusters.push([q]); }
+        if (clusters.length > 1 && clusters[0][0].v + p - clusters[clusters.length - 1][clusters[clusters.length - 1].length - 1].v <= tol) {
+            clusters[0] = [...clusters.pop()!.map(q => ({ ...q, v: q.v - p })), ...clusters[0]];
         }
-        const rms = Math.sqrt(s2 / Math.max(1, n));
-        // a longer group must explain the centres clearly better (it has more freedom)
-        const score = rms * (1 + 0.5 * (g - 1));
-        if (!best || score < best.score) best = { group: g, period, offsets, widths, rms, score };
+        if (clusters.length > 3) continue;
+        // a group of openings must repeat: each phase seen twice at least, unless the rhythm has one phase
+        if (clusters.length > 1 && clusters.some(k => k.length < 2)) continue;
+        const offsets = clusters.map(k => lo + median(k.map(q => q.v)));
+        const widths = clusters.map(k => median(k.map(q => w[q.i])));
+        let s2 = 0;
+        for (const k of clusters) { const m = median(k.map(q => q.v)); for (const q of k) s2 += (q.v - m) ** 2; }
+        const rms = Math.sqrt(s2 / c.length);
+        if (rms > tol) continue;
+        // wall where the rhythm puts an opening, between the openings read, in what the reading was shown: not this rhythm
+        // (a reading may miss an opening or two: up to a fifth of the places may be empty)
+        let missing = 0, places = 0;
+        for (let n = Math.floor((lo - Math.max(...offsets)) / p) - 1; n <= Math.ceil((hi - Math.min(...offsets)) / p) + 1; n++)
+            for (const o of offsets) {
+                const x = o + n * p;
+                if (x < lo - tol || x > hi + tol || !shown(x)) continue;
+                places++;
+                if (!c.some(y => Math.abs(y - x) <= Math.max(tol, 0.5 * wMed))) missing++;
+            }
+        if (missing > Math.floor(0.2 * places)) continue;
+        // the fewest phases, then the shortest period: a longer one is a multiple that leaves out openings nothing showed
+        const score = clusters.length * 1000 + p;
+        if (!best || score < best.score) best = { group: clusters.length, period: p, offsets, widths, rms, score };
     }
     if (!best) return undefined;
     return { group: best.group, period: best.period, offsets: best.offsets, widths: best.widths, rms: best.rms };
+}
+
+/** The opening of a rhythm nearest a centre: its lattice centre and its phase's width. */
+function onRhythm(rh: NonNullable<ReturnType<typeof bayRhythm>>, centre: number): [number, number] {
+    let bc = centre, bw = rh.widths[0], bd = Infinity;
+    rh.offsets.forEach((o, k) => { const n = Math.round((centre - o) / rh.period), x = o + n * rh.period; if (Math.abs(x - centre) < bd) { bd = Math.abs(x - centre); bc = x; bw = rh.widths[k]; } });
+    return [bc - 0.5 * bw, bc + 0.5 * bw];
 }
 
 /**
@@ -242,7 +287,7 @@ export function bayRhythm(cols: Array<[number, number]>): { group: number; perio
  * width, each opening is centred on the measured windows of its size inside it, and tiers whose openings line up share one
  * set of columns. Everything stays a number: no tier or opening has a type.
  */
-export function fitGrammar(tiers: GrammarTier[], f: ReliefOrthoFacade, opts: { confidence: number; source: string; label?: string; measured?: Rect[] } = { confidence: 0.5, source: 'tiles' }): FacadeGrammar {
+export function fitGrammar(tiers: GrammarTier[], f: ReliefOrthoFacade, opts: { confidence: number; source: string; label?: string; measured?: Rect[]; shown?: ShownAlong } = { confidence: 0.5, source: 'tiles' }): FacadeGrammar {
     const measured = opts.measured ?? observedCells(f);
     const mc = measured.map(m => ({ s: 0.5 * (m.s0 + m.s1), t: 0.5 * (m.t0 + m.t1), w: m.s1 - m.s0, h: m.t1 - m.t0 }));
     // a measured window speaks for an opening only when it is about the same size (within 30%): a smaller dark spot inside
@@ -257,18 +302,9 @@ export function fitGrammar(tiers: GrammarTier[], f: ReliefOrthoFacade, opts: { c
         // and is not taken: the reading's own size is the better one)
         if (inBand.length >= 2) { const tc = median(inBand.map(m => m.t)); t0 = tc - 0.5 * h; t1 = tc + 0.5 * h; }
         let cols = raw.cols.map(c => [c[0], c[1]] as [number, number]);
-        const rh = bayRhythm(cols);
-        const wMed = median(cols.map(([a, b]) => b - a));
-        if (rh && rh.rms <= 0.2 * wMed) {
-            // the openings on their rhythm: centre = offset of its phase + its group index x period, width = its phase's
-            const c0 = cols.map(([a, b]) => 0.5 * (a + b));
-            cols = cols.map((_, i) => {
-                const k = i % rh.group, j = (i - k) / rh.group;
-                const c = rh.offsets[k] + j * rh.period, w = rh.widths[k];
-                void c0;
-                return [c - 0.5 * w, c + 0.5 * w] as [number, number];
-            });
-        }
+        // the openings on their rhythm: each on its lattice place, with its phase's width
+        const rh = bayRhythm(cols, opts.shown);
+        if (rh) cols = cols.map(([a, b]) => onRhythm(rh, 0.5 * (a + b)));
         // each opening column centred on the measured windows inside it (two or more)
         cols = cols.map(([a, b]) => {
             const w = b - a;
@@ -407,13 +443,15 @@ export function grammarCells(g: Pick<FacadeGrammar, 'tiers'>): Rect[] {
 
 /**
  * The grammar continued over a part of the facade (metres): in each tier, the openings repeat on their bay rhythm past the
- * ones read; in each section, the regular storeys (the most tiers of one opening height on one pitch) repeat on their pitch
+ * ones read; in each section, the regular storeys (the most tiers of one opening height on one rhythm) repeat on it
  * above and below, with the columns of their nearest tier, inside the section's own width. This is how a reading of one
+ * part of a facade predicts the rest; where the facade does not repeat (a ground floor, an attic) the prediction is
+ * wrong and the held-out check counts it against the grammar. This is how a reading of one
  * part of a facade predicts the rest. The openings read stay as read.
  */
-export function continueGrammar(g: Pick<FacadeGrammar, 'tiers'>, area: { s0: number; s1: number; t0: number; t1: number }): GrammarTier[] {
+export function continueGrammar(g: Pick<FacadeGrammar, 'tiers'>, area: { s0: number; s1: number; t0: number; t1: number }, shown?: ShownAlong, shownT?: ShownAlong): GrammarTier[] {
     const along = (t: GrammarTier): GrammarTier => {
-        const rh = bayRhythm(t.cols);
+        const rh = bayRhythm(t.cols, shown);
         if (!rh || !(rh.period > 0)) return { ...t, cols: t.cols.map(c => [c[0], c[1]] as [number, number]) };
         const cols: Array<[number, number]> = [];
         const jMin = Math.floor((area.s0 - Math.max(...rh.offsets)) / rh.period) - 1, jMax = Math.ceil((area.s1 - Math.min(...rh.offsets)) / rh.period) + 1;
@@ -433,7 +471,7 @@ export function continueGrammar(g: Pick<FacadeGrammar, 'tiers'>, area: { s0: num
     for (const sec of sections(g.tiers)) {
         const tiers = sec.map(along);
         out.push(...tiers);
-        // the section's regular storeys: the largest group of one opening height (within 20%) whose spacing is one pitch (10%)
+        // the section's regular storeys: the largest group of tiers of one opening height (within 20%), on their rhythm along t
         const sorted = [...sec].sort((a, b) => a.t0 - b.t0);
         let best: GrammarTier[] = [];
         for (const t0 of sorted) {
@@ -442,23 +480,19 @@ export function continueGrammar(g: Pick<FacadeGrammar, 'tiers'>, area: { s0: num
             if (grp.length > best.length) best = grp;
         }
         if (best.length < 2) continue;
-        const c = best.map(t => 0.5 * (t.t0 + t.t1));
-        const d = c.slice(1).map((x, j) => x - c[j]);
-        const pitch = median(d);
-        if (!(pitch > 0) || !d.every(x => Math.abs(x - pitch) <= 0.1 * pitch || Math.abs(x / pitch - Math.round(x / pitch)) <= 0.1)) continue;
-        const h = median(best.map(t => t.t1 - t.t0));
-        const lo = best[0], hi = best[best.length - 1];
+        const rh = bayRhythm(best.map(t => [t.t0, t.t1] as [number, number]), shownT);
+        if (!rh) continue;
         const span: [number, number] = [Math.min(...sec.flatMap(t => t.cols.map(x => x[0]))), Math.max(...sec.flatMap(t => t.cols.map(x => x[1])))];
-        const occupied = (tc: number) => sec.some(t => tc + 0.5 * h > t.t0 && tc - 0.5 * h < t.t1);
-        for (const [from, dir] of [[hi, 1], [lo, -1]] as Array<[GrammarTier, number]>) {
-            const cols = along(from).cols.filter(([a, b]) => b > span[0] && a < span[1]);
-            for (let k = 1; k < 200; k++) {
-                const tc = 0.5 * (from.t0 + from.t1) + dir * k * pitch;
-                if (tc - 0.5 * h > area.t1 || tc + 0.5 * h < area.t0) break;
-                if (occupied(tc)) break;
-                out.push({ t0: tc - 0.5 * h, t1: tc + 0.5 * h, cols: cols.map(x => [x[0], x[1]] as [number, number]) });
-            }
-        }
+        const occupied = (t0: number, t1: number) => sec.some(t => t1 > t.t0 && t0 < t.t1);
+        for (let n = Math.floor((area.t0 - Math.max(...rh.offsets)) / rh.period) - 1; n <= Math.ceil((area.t1 - Math.min(...rh.offsets)) / rh.period) + 1; n++)
+            rh.offsets.forEach((o, k) => {
+                const tc = o + n * rh.period, h = rh.widths[k];
+                if (tc - 0.5 * h > area.t1 || tc + 0.5 * h < area.t0 || occupied(tc - 0.5 * h, tc + 0.5 * h)) return;
+                // the columns of the nearest storey of the group, inside the section's own width
+                const near = best.reduce((p, q) => (Math.abs(0.5 * (q.t0 + q.t1) - tc) < Math.abs(0.5 * (p.t0 + p.t1) - tc) ? q : p));
+                const cols = along(near).cols.filter(([a, b]) => b > span[0] && a < span[1]);
+                if (cols.length) out.push({ t0: tc - 0.5 * h, t1: tc + 0.5 * h, cols: cols.map(x => [x[0], x[1]] as [number, number]) });
+            });
     }
     return out;
 }
@@ -523,19 +557,6 @@ export function cellDistinctness(o: OrthoRaster, f: ReliefOrthoFacade, c: Rect, 
     return Math.max(dc, de) / Math.max(20, Math.hypot(w[0], w[1], w[2]));
 }
 
-/** The column (and the row) that splits the covered pixels in two equal halves (the held-out splits). */
-export function splitColumn(o: OrthoRaster): number { return covMedian(o, true); }
-export function splitRow(o: OrthoRaster): number { return covMedian(o, false); }
-function covMedian(o: OrthoRaster, cols: boolean): number {
-    const n = cols ? o.width : o.height;
-    const per = new Float64Array(n);
-    let total = 0;
-    for (let y = 0; y < o.height; y++) for (let x = 0; x < o.width; x++) if (o.cov[y * o.width + x]) { per[cols ? x : y]++; total++; }
-    let acc = 0;
-    for (let k = 0; k < n; k++) { acc += per[k]; if (acc >= 0.5 * total) return k + 1; }
-    return n >> 1;
-}
-
 /** Rows of the ortho that hold any covered pixel: [first, last + 1). */
 export function coveredRows(o: OrthoRaster): [number, number] {
     let a = o.height, b = -1;
@@ -565,14 +586,14 @@ export interface EdgeAgreement {
 }
 
 /**
- * How well a set of rectangles' outlines agrees with the photo's edges over the covered pixels of a window of the ortho.
+ * How well a set of rectangles' outlines agrees with the photo's edges over the covered pixels of a part of the ortho.
  * Photo edges: the blurred luminance's gradient maxima across the edge, in the top 15% of the region's magnitudes.
  */
-export function edgeAgreement(o: OrthoRaster, f: ReliefOrthoFacade, cells: Rect[], win: ReadWindow): EdgeAgreement {
+export function edgeAgreement(o: OrthoRaster, f: ReliefOrthoFacade, cells: Rect[], scored: Uint8Array): EdgeAgreement {
     const W = o.width, H = o.height, n = W * H;
     const region = new Uint8Array(n);
     let pixels = 0;
-    for (let y = Math.max(0, win.y0); y < Math.min(H, win.y1); y++) for (let x = Math.max(0, win.x0); x < Math.min(W, win.x1); x++) { const i = y * W + x; if (o.cov[i]) { region[i] = 1; pixels++; } }
+    for (let i = 0; i < n; i++) if (scored[i] && o.cov[i]) { region[i] = 1; pixels++; }
     const blurred = gaussianBlur(o.lum, W, H, 1.0);
     const { gx, gy, mag } = sobel(blurred, W, H);
     const mags: number[] = [];
@@ -633,7 +654,7 @@ export interface ScanCheck {
     passed: boolean;
     why: string;
     toleranceM: number;
-    /** Openings off the measured facade (beyond the tolerance). */
+    /** Openings read off the measured facade (beyond the tolerance): dropped from the grammar. */
     openingsOffFacade: number;
     measuredWindows: number;
     measuredExplained: number;
@@ -645,9 +666,19 @@ export interface ScanCheck {
 }
 
 /** (a): the grammar against the scan (the measured facade and the windows the relief measured on it). */
-export function checkAgainstScan(g: FacadeGrammar, f: ReliefOrthoFacade, o: OrthoRaster, tol = GRAMMAR_TOLERANCE_M): ScanCheck {
+/** An opening further off the measured facade than the tolerance. */
+export const offFacade = (c: Rect, f: Pick<ReliefOrthoFacade, 'sMin' | 'sMax' | 'tMin' | 'tMax'>, tol = GRAMMAR_TOLERANCE_M) => c.s0 < f.sMin - tol || c.s1 > f.sMax + tol || c.t0 < f.tMin - tol || c.t1 > f.tMax + tol;
+
+/** The grammar without the openings off the measured facade, and how many were dropped. */
+export function onFacade(g: FacadeGrammar, f: ReliefOrthoFacade, tol = GRAMMAR_TOLERANCE_M): { grammar: FacadeGrammar; dropped: number } {
+    let dropped = 0;
+    const tiers = g.tiers.map(t => ({ ...t, cols: t.cols.filter(([a, b]) => { const off = offFacade({ s0: a, s1: b, t0: t.t0, t1: t.t1 }, f, tol); if (off) dropped++; return !off; }) })).filter(t => t.cols.length);
+    return { grammar: dropped ? describeGrammar(tiers, f, g.confidence, g.source, g.label) : g, dropped };
+}
+
+export function checkAgainstScan(g: FacadeGrammar, f: ReliefOrthoFacade, o: OrthoRaster, tol = GRAMMAR_TOLERANCE_M, droppedOff = 0): ScanCheck {
     const cells = grammarCells(g);
-    const off = cells.filter(c => c.s0 < f.sMin - tol || c.s1 > f.sMax + tol || c.t0 < f.tMin - tol || c.t1 > f.tMax + tol).length;
+    const off = droppedOff + cells.filter(c => offFacade(c, f, tol)).length;
     const measured = observedCells(f);
     let explained = 0, s2 = 0;
     for (const m of measured) {
@@ -668,22 +699,24 @@ export function checkAgainstScan(g: FacadeGrammar, f: ReliefOrthoFacade, o: Orth
     for (const c of cells) { const k = cellDistinctness(o, f, c, frame); if (k === null) continue; judged++; if (k < MIN_OPENING_DISTINCTNESS) indistinct++; }
     const fails: string[] = [];
     if (!cells.length) fails.push('the grammar has no openings');
-    if (off > 0) fails.push(`${off} of ${cells.length} openings lie off the measured facade by more than ${tol.toFixed(2)} m`);
+    if (off > MAX_OFF_FACADE_SHARE * (cells.length + droppedOff)) fails.push(`${off} of ${cells.length + droppedOff} openings lie off the measured facade by more than ${tol.toFixed(2)} m`);
     if (measured.length >= 3 && explained / measured.length < MIN_MEASURED_EXPLAINED) fails.push(`only ${explained} of the ${measured.length} windows measured on the scan's photo fall in its openings`);
     return {
         passed: fails.length === 0,
-        why: fails.length ? fails.join('; ') : `${cells.length} openings on the measured facade; ${explained} of ${measured.length} windows measured on the scan's photo in them (centres ${rms.toFixed(2)} m rms from theirs); ${indistinct} of ${judged} indistinct in the photo`,
+        why: fails.length ? fails.join('; ') : `${cells.length} openings on the measured facade${off ? ` (${off} read off it dropped)` : ''}; ${explained} of ${measured.length} windows measured on the scan's photo in them (centres ${rms.toFixed(2)} m rms from theirs); ${indistinct} of ${judged} indistinct in the photo`,
         toleranceM: tol, openingsOffFacade: off, measuredWindows: measured.length, measuredExplained: explained, explainedRmsM: r3(rms), indistinct, judged
     };
 }
 
 export interface HeldOutFold {
-    /** The part of the ortho the reading saw, and the part it was scored on (pixels). */
-    shown: ReadWindow; scored: ReadWindow;
+    /** Which fold (stripes or bands, and which of the two) and the pixel spans it hid: what it was scored on. */
+    fold: string; hidden: Hidden;
     /** The openings it predicted there (metres, facade plane). */
     cells: Rect[];
     before: EdgeAgreement;
     after: EdgeAgreement;
+    /** The prediction moved by half a bay along s and by half a storey along t (mean of the two): as many edges, out of place. */
+    control: { chamferPx: number; gradNcc: number };
     /** Openings of the held-out part the shown part predicted. */
     predicted: number;
 }
@@ -692,35 +725,101 @@ export interface HeldOutCheck {
     passed: boolean;
     why: string;
     folds: HeldOutFold[];
-    /** Pixel-weighted over the folds: the relief's own lattice (before) and the grammar's prediction (after). */
+    /** Pixel-weighted over the folds that predicted openings: the relief's own lattice (before), the grammar's prediction (after), and the control. */
     before: { chamferPx: number; gradNcc: number };
     after: { chamferPx: number; gradNcc: number };
+    control: { chamferPx: number; gradNcc: number };
     pixels: number;
 }
 
-/** (b): each half's reading predicts the other half; scored against the relief's own cells there. */
-export function heldOutCheck(f: ReliefOrthoFacade, o: OrthoRaster, folds: Array<{ shown: ReadWindow; scored: ReadWindow; grammar: FacadeGrammar | undefined }>): HeldOutCheck {
+/** Pixel spans of the ortho hidden from a reading: columns (stripes) or rows (bands). */
+export interface Hidden { xs?: Array<[number, number]>; ys?: Array<[number, number]> }
+
+export function hiddenMask(o: OrthoRaster, h: Hidden): Uint8Array {
+    const m = new Uint8Array(o.width * o.height);
+    for (const [a, b] of h.xs ?? []) for (let y = 0; y < o.height; y++) for (let x = Math.max(0, a); x < Math.min(o.width, b); x++) m[y * o.width + x] = 1;
+    for (const [a, b] of h.ys ?? []) for (let y = Math.max(0, a); y < Math.min(o.height, b); y++) for (let x = 0; x < o.width; x++) m[y * o.width + x] = 1;
+    return m;
+}
+
+/** Where along s a reading with these parts hidden was shown the facade (bands hide no s). */
+export function shownAlong(f: ReliefOrthoFacade, h: Hidden | undefined): ShownAlong {
+    const spans = (h?.xs ?? []).map(([a, b]) => [f.orthoSMin + a * f.pixel, f.orthoSMin + b * f.pixel] as [number, number]);
+    return s => !spans.some(([a, b]) => s >= a && s <= b);
+}
+
+/** Where along t (up) a reading with these parts hidden was shown the facade (stripes hide no t). */
+export function shownUp(f: ReliefOrthoFacade, h: Hidden | undefined): ShownAlong {
+    const spans = (h?.ys ?? []).map(([a, b]) => [f.orthoTMax - b * f.pixel, f.orthoTMax - a * f.pixel] as [number, number]);
+    return t => !spans.some(([a, b]) => t >= a && t <= b);
+}
+
+/** The four held-out folds: alternate stripes of the covered width, and alternate bands of the covered height. */
+export function heldOutFolds(o: OrthoRaster, f: Pick<ReliefOrthoFacade, 'pixel'>): Array<{ fold: string; hidden: Hidden }> {
+    const [ca, cb] = coveredColumns(o), [ra, rb] = coveredRows(o);
+    const cut = (a: number, b: number, k: number) => Array.from({ length: k }, (_, i) => [Math.round(a + ((b - a) * i) / k), Math.round(a + ((b - a) * (i + 1)) / k)] as [number, number]);
+    // stripes and bands about HELD_OUT_SPAN_M wide (each shows several bays or storeys), two to six of them
+    const k = (px: number, most: number) => Math.max(2, Math.min(most, Math.round((px * f.pixel) / HELD_OUT_SPAN_M)));
+    const stripes = cut(ca, cb, k(cb - ca, HELD_OUT_STRIPES)), bands = cut(ra, rb, k(rb - ra, HELD_OUT_BANDS));
+    const pick = <T,>(v: T[], odd: number) => v.filter((_, i) => i % 2 === odd);
+    return [
+        { fold: 'stripes-a', hidden: { xs: pick(stripes, 1) } }, { fold: 'stripes-b', hidden: { xs: pick(stripes, 0) } },
+        { fold: 'bands-a', hidden: { ys: pick(bands, 1) } }, { fold: 'bands-b', hidden: { ys: pick(bands, 0) } }
+    ];
+}
+
+/** (b): each reading with parts hidden predicts the hidden parts; scored there against the relief's own cells and the control. */
+export function heldOutCheck(f: ReliefOrthoFacade, o: OrthoRaster, folds: Array<{ fold: string; hidden: Hidden; grammar: FacadeGrammar | undefined }>): HeldOutCheck {
     const before = reliefLatticeCells(f);
     const out: HeldOutFold[] = [];
+    const whole = { s0: f.orthoSMin, s1: f.orthoSMin + o.width * f.pixel, t0: f.orthoTMax - o.height * f.pixel, t1: f.orthoTMax };
     for (const fo of folds) {
-        const area = { s0: f.orthoSMin + fo.scored.x0 * f.pixel, s1: f.orthoSMin + fo.scored.x1 * f.pixel, t0: f.orthoTMax - fo.scored.y1 * f.pixel, t1: f.orthoTMax - fo.scored.y0 * f.pixel };
-        const predicted = fo.grammar ? grammarCells({ tiers: continueGrammar(fo.grammar, area) }).filter(c => c.s1 > area.s0 && c.s0 < area.s1 && c.t1 > area.t0 && c.t0 < area.t1) : [];
-        out.push({ shown: fo.shown, scored: fo.scored, cells: predicted, before: edgeAgreement(o, f, before, fo.scored), after: edgeAgreement(o, f, predicted, fo.scored), predicted: predicted.length });
+        const mask = hiddenMask(o, fo.hidden);
+        const inHidden = (c: Rect) => { const x = Math.floor(toX(f, 0.5 * (c.s0 + c.s1))), y = Math.floor(toY(f, 0.5 * (c.t0 + c.t1))); return x >= 0 && y >= 0 && x < o.width && y < o.height && mask[y * o.width + x] === 1; };
+        const shown = shownAlong(f, fo.hidden);
+        const predicted = fo.grammar ? grammarCells({ tiers: continueGrammar(fo.grammar, whole, shown, shownUp(f, fo.hidden)) }).filter(inHidden) : [];
+        const after = edgeAgreement(o, f, predicted, mask);
+        // the control: the same openings half a bay along s, and half a storey along t, out of place
+        const { ds, dt } = halfPitches(predicted);
+        const cs = edgeAgreement(o, f, predicted.map(c => ({ ...c, s0: c.s0 + ds, s1: c.s1 + ds })), mask);
+        const ct = edgeAgreement(o, f, predicted.map(c => ({ ...c, t0: c.t0 + dt, t1: c.t1 + dt })), mask);
+        const control = predicted.length ? { chamferPx: r3(0.5 * (cs.chamferPx + ct.chamferPx)), gradNcc: r3(0.5 * (cs.gradNcc + ct.gradNcc)) } : { chamferPx: after.chamferPx, gradNcc: after.gradNcc };
+        out.push({ fold: fo.fold, hidden: fo.hidden, cells: predicted, before: edgeAgreement(o, f, before, mask), after, control, predicted: predicted.length });
     }
-    const px = out.reduce((s, x) => s + x.before.pixels, 0);
-    const avg = (pick: (x: HeldOutFold) => number) => px ? r3(out.reduce((s, x) => s + pick(x) * x.before.pixels, 0) / px) : 0;
+    // scored where the reading predicted something: a fold whose reading found no rhythm to continue makes no claim there
+    // (the relief's own lattice is scored on the same folds); at least two folds and 40% of the hidden pixels must be
+    const used = out.filter(x => x.predicted > 0);
+    const all = out.reduce((s, x) => s + x.before.pixels, 0);
+    const px = used.reduce((s, x) => s + x.before.pixels, 0);
+    const avg = (pick: (x: HeldOutFold) => number) => px ? r3(used.reduce((s, x) => s + pick(x) * x.before.pixels, 0) / px) : 0;
     const b = { chamferPx: avg(x => x.before.chamferPx), gradNcc: avg(x => x.before.gradNcc) };
     const a = { chamferPx: avg(x => x.after.chamferPx), gradNcc: avg(x => x.after.gradNcc) };
+    const c = { chamferPx: avg(x => x.control.chamferPx), gradNcc: avg(x => x.control.gradNcc) };
     const fails: string[] = [];
-    const missing = folds.filter(x => !x.grammar).length;
-    if (missing > 1) fails.push(`${missing} of the ${folds.length} halves of the facade gave no reading`);
+    if (used.length < 2 || px < 0.4 * all) fails.push(`the readings with parts hidden predicted openings in ${used.length} of ${out.length} folds (${all ? Math.round((100 * px) / all) : 0}% of the hidden facade): too little to judge`);
     if (a.chamferPx > b.chamferPx - HELD_OUT_MIN_CHAMFER_GAIN_PX) fails.push(`held-out edge chamfer ${a.chamferPx.toFixed(2)} px against ${b.chamferPx.toFixed(2)} px for the relief's own lattice (needs ${HELD_OUT_MIN_CHAMFER_GAIN_PX} px less)`);
     if (a.gradNcc < b.gradNcc) fails.push(`held-out gradient NCC ${a.gradNcc.toFixed(3)} against ${b.gradNcc.toFixed(3)} for the relief's own lattice`);
+    if (a.chamferPx > c.chamferPx - HELD_OUT_MIN_CHAMFER_GAIN_PX || a.gradNcc <= c.gradNcc) fails.push(`no better than its openings moved half a bay or storey out of place (chamfer ${a.chamferPx.toFixed(2)} against ${c.chamferPx.toFixed(2)} px, NCC ${a.gradNcc.toFixed(3)} against ${c.gradNcc.toFixed(3)})`);
     return {
         passed: fails.length === 0,
-        why: fails.length ? fails.join('; ') : `held out (${folds.length} halves): gradient NCC ${b.gradNcc.toFixed(3)} -> ${a.gradNcc.toFixed(3)}, edge chamfer ${b.chamferPx.toFixed(2)} -> ${a.chamferPx.toFixed(2)} px`,
-        folds: out, before: b, after: a, pixels: px
+        why: fails.length ? fails.join('; ') : `held out (${used.length} of ${folds.length} readings with parts hidden): gradient NCC ${b.gradNcc.toFixed(3)} -> ${a.gradNcc.toFixed(3)}, edge chamfer ${b.chamferPx.toFixed(2)} -> ${a.chamferPx.toFixed(2)} px (out of place: ${c.chamferPx.toFixed(2)} px, ${c.gradNcc.toFixed(3)})`,
+        folds: out, before: b, after: a, control: c, pixels: px
     };
+}
+
+/** Half the median spacing of neighbouring openings along s (same band) and of neighbouring bands along t. */
+function halfPitches(cells: Rect[]): { ds: number; dt: number } {
+    const bands = new Map<string, Rect[]>();
+    for (const c of cells) { const k = `${c.t0.toFixed(2)}`; bands.set(k, [...(bands.get(k) ?? []), c]); }
+    const dS: number[] = [];
+    for (const b of bands.values()) {
+        const cs = b.map(c => 0.5 * (c.s0 + c.s1)).sort((x, y) => x - y);
+        for (let i = 1; i < cs.length; i++) dS.push(cs[i] - cs[i - 1]);
+    }
+    const ts = [...new Set(cells.map(c => 0.5 * (c.t0 + c.t1)))].sort((x, y) => x - y);
+    const dT = ts.slice(1).map((t, i) => t - ts[i]);
+    const w = median(cells.map(c => c.s1 - c.s0)), h = median(cells.map(c => c.t1 - c.t0));
+    return { ds: 0.5 * (dS.length ? median(dS) : 2 * w), dt: 0.5 * (dT.length ? median(dT) : 2 * h) };
 }
 
 // ----------------------------------------------------------------------------------------------------------------
@@ -728,7 +827,8 @@ export function heldOutCheck(f: ReliefOrthoFacade, o: OrthoRaster, folds: Array<
 // ----------------------------------------------------------------------------------------------------------------
 
 /** A window of the ortho as a PNG the model reads (at most GRAMMAR_IMAGE_MAX_SIDE on its long side). */
-export function windowPng(o: OrthoRaster, win: ReadWindow): Buffer {
+export function windowPng(o: OrthoRaster, win: ReadWindow, hidden?: Hidden): Buffer {
+    const mask = hidden ? hiddenMask(o, hidden) : undefined;
     const w0 = win.x1 - win.x0, h0 = win.y1 - win.y0;
     const k = Math.min(1, GRAMMAR_IMAGE_MAX_SIDE / Math.max(w0, h0));
     const w = Math.max(1, Math.round(w0 * k)), h = Math.max(1, Math.round(h0 * k));
@@ -737,7 +837,7 @@ export function windowPng(o: OrthoRaster, win: ReadWindow): Buffer {
         // box filter over the source footprint
         const sx0 = win.x0 + Math.floor(x / k), sx1 = Math.max(sx0 + 1, win.x0 + Math.floor((x + 1) / k)), sy0 = win.y0 + Math.floor(y / k), sy1 = Math.max(sy0 + 1, win.y0 + Math.floor((y + 1) / k));
         let r = 0, g = 0, b = 0, n = 0;
-        for (let yy = sy0; yy < Math.min(win.y1, sy1); yy++) for (let xx = sx0; xx < Math.min(win.x1, sx1); xx++) { const i = (yy * o.width + xx) * 3; r += o.rgb[i]; g += o.rgb[i + 1]; b += o.rgb[i + 2]; n++; }
+        for (let yy = sy0; yy < Math.min(win.y1, sy1); yy++) for (let xx = sx0; xx < Math.min(win.x1, sx1); xx++) { const p = yy * o.width + xx, i = p * 3; if (mask?.[p]) { r += 128; g += 128; b += 128; } else { r += o.rgb[i]; g += o.rgb[i + 1]; b += o.rgb[i + 2]; } n++; }
         const j = (y * w + x) * 3;
         px[j] = n ? Math.round(r / n) : 128; px[j + 1] = n ? Math.round(g / n) : 128; px[j + 2] = n ? Math.round(b / n) : 128;
     }
@@ -746,10 +846,10 @@ export function windowPng(o: OrthoRaster, win: ReadWindow): Buffer {
 
 export interface GrammarReading { reply: GrammarReply; tiers: GrammarTier[]; model: string; ms: number; cached: boolean }
 
-export async function readGrammar(chain: VisionModelChain<string>, f: ReliefOrthoFacade, o: OrthoRaster, win: ReadWindow): Promise<GrammarReading> {
-    const png = windowPng(o, win);
+export async function readGrammar(chain: VisionModelChain<string>, f: ReliefOrthoFacade, o: OrthoRaster, win: ReadWindow, hidden?: Hidden): Promise<GrammarReading> {
+    const png = windowPng(o, win, hidden);
     const r = await chain.generate({
-        contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: png.toString('base64') } }, { text: grammarPrompt((win.x1 - win.x0) * f.pixel, (win.y1 - win.y0) * f.pixel, win.x0 > 0 || win.x1 < o.width || win.y0 > 0 || win.y1 < o.height) }] }],
+        contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: png.toString('base64') } }, { text: grammarPrompt((win.x1 - win.x0) * f.pixel, (win.y1 - win.y0) * f.pixel, win.x0 > 0 || win.x1 < o.width || win.y0 > 0 || win.y1 < o.height || !!hidden) }] }],
         config: { responseMimeType: 'application/json', temperature: 0 }
     }, { stage: 'grammar' });
     const text = r.response.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '';
@@ -762,7 +862,16 @@ export async function readGrammar(chain: VisionModelChain<string>, f: ReliefOrth
         tiers: reply.tiers.filter(t => !(cutTop && t.y[0] <= 5) && !(cutBottom && t.y[1] >= 995))
             .map(t => ({ ...t, cols: t.cols.filter(([a, b]) => !(cutLeft && a <= 5) && !(cutRight && b >= 995)) })).filter(t => t.cols.length)
     };
-    return { reply: whole, tiers: replyToPlane(whole, f, win), model: r.model, ms: r.ms, cached: !!r.cached };
+    // an opening touching a hidden span (within 1% of the image) is only partly shown: it is not read either
+    const nearX = (x0: number, x1: number) => (hidden?.xs ?? []).some(([a, b]) => x1 > a - 0.01 * o.width && x0 < b + 0.01 * o.width);
+    const nearY = (y0: number, y1: number) => (hidden?.ys ?? []).some(([a, b]) => y1 > a - 0.01 * o.height && y0 < b + 0.01 * o.height);
+    const px = (v: number, a: number, b: number) => a + (v / 1000) * (b - a);
+    const shown: GrammarReply = {
+        ...whole,
+        tiers: whole.tiers.filter(t => !nearY(px(t.y[0], win.y0, win.y1), px(t.y[1], win.y0, win.y1)))
+            .map(t => ({ ...t, cols: t.cols.filter(([a, b]) => !nearX(px(a, win.x0, win.x1), px(b, win.x0, win.x1))) })).filter(t => t.cols.length)
+    };
+    return { reply: shown, tiers: replyToPlane(shown, f, win), model: r.model, ms: r.ms, cached: !!r.cached };
 }
 
 // ----------------------------------------------------------------------------------------------------------------
@@ -776,13 +885,17 @@ export interface GrammarFacadeOutcome {
     /** Why it was not used (the gate that failed), or what it passed. */
     reason: string;
     grammar?: FacadeGrammar;
-    /** The grammars read from each half alone (left, right, top, bottom): what the held-out check scored. */
+    /** The grammars read with parts hidden (stripes a, b, bands a, b): what the held-out check scored. */
     halves?: Array<FacadeGrammar | undefined>;
     scan?: ScanCheck;
     heldOut?: HeldOutCheck;
     /** Openings the relief's own lattice had on the facade. */
     reliefCells: number;
-    readings: Array<{ window: ReadWindow; tiers: number; openings: number; conf: number; model: string; ms: number; cached: boolean; error?: string }>;
+    /** The vector building footprints on the facade, and whether they agree with the grammar (absent: none were given). */
+    footprints?: FootprintAgreement;
+    /** The independent sources that agree with the accepted grammar: 'tiles' (it was read there), 'vector footprints' (open). */
+    agreedSources?: string[];
+    readings: Array<{ view: string; tiers: number; openings: number; conf: number; model: string; ms: number; cached: boolean; error?: string }>;
     ms: number;
 }
 
@@ -812,13 +925,15 @@ async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Prom
 
 /**
  * Reads, fits and gates the grammar of each selected facade of a relief ortho export. Five readings per facade: the
- * whole orthophoto (the grammar used) and each half alone, left, right, top and bottom (the held-out check). A facade whose reading fails, or whose
+ * whole orthophoto (the grammar used) and four with parts hidden (the held-out check). A facade whose reading fails, or whose
  * grammar fails a gate, keeps the relief's own lattice; the outcome says why.
  */
 export async function runFacadeGrammarPass(opts: {
     orthosDir: string; chain: VisionModelChain<string>; anchor?: { x: number; z: number }; maxFacades?: number; signal?: AbortSignal; onProgress?: (m: string) => void;
     /** Diagnostic overlays (the photo with the relief's cells and the grammar's) are written here when set. */
     overlayDir?: string;
+    /** Vector building footprints in the tile frame (facade-footprints.ts): an independent check of each grammar. */
+    footprints?: FootprintBuilding[];
 }): Promise<GrammarPassResult> {
     const t0 = Date.now();
     const all = readReliefOrthos(opts.orthosDir);
@@ -837,30 +952,35 @@ export async function runFacadeGrammarPass(opts: {
             const [ca, cb] = coveredColumns(o);
             const coveredM = (cb - ca) * f.pixel;
             if (coveredM < MIN_HELD_OUT_WIDTH_M) return { ...base, reason: `the facade is ${coveredM.toFixed(1)} m wide where the scan covers it: too narrow to hold half of it out`, ms: Date.now() - tf };
-            const mid = splitColumn(o), midRow = splitRow(o), W = o.width, H = o.height;
-            const full: ReadWindow = { x0: 0, x1: W, y0: 0, y1: H };
-            const left: ReadWindow = { x0: 0, x1: mid, y0: 0, y1: H }, right: ReadWindow = { x0: mid, x1: W, y0: 0, y1: H };
-            const top: ReadWindow = { x0: 0, x1: W, y0: 0, y1: midRow }, bottom: ReadWindow = { x0: 0, x1: W, y0: midRow, y1: H };
-            const windows: ReadWindow[] = [full, left, right, top, bottom];
-            const reads = await Promise.all(windows.map(async w => {
+            const full: ReadWindow = { x0: 0, x1: o.width, y0: 0, y1: o.height };
+            const folds = heldOutFolds(o, f);
+            const views: Array<Hidden | undefined> = [undefined, ...folds.map(x => x.hidden)];
+            const reads = await Promise.all(views.map(async h => {
                 calls++;
-                try { return await readGrammar(opts.chain, f, o, w); } catch (err) { return err instanceof Error ? err : new Error(String(err)); }
+                try { return await readGrammar(opts.chain, f, o, full, h); } catch (err) { return err instanceof Error ? err : new Error(String(err)); }
             }));
+            const labels = ['whole', ...folds.map(x => x.fold)];
             reads.forEach((r, k) => base.readings.push(r instanceof Error
-                ? { window: windows[k], tiers: 0, openings: 0, conf: 0, model: '', ms: 0, cached: false, error: r.message.slice(0, 200) }
-                : { window: windows[k], tiers: r.tiers.length, openings: r.tiers.reduce((s, t) => s + t.cols.length, 0), conf: r.reply.conf, model: r.model, ms: r.ms, cached: r.cached }));
+                ? { view: labels[k], tiers: 0, openings: 0, conf: 0, model: '', ms: 0, cached: false, error: r.message.slice(0, 200) }
+                : { view: labels[k], tiers: r.tiers.length, openings: r.tiers.reduce((s, t) => s + t.cols.length, 0), conf: r.reply.conf, model: r.model, ms: r.ms, cached: r.cached }));
             const whole = reads[0];
             if (whole instanceof Error) return { ...base, reason: `the reading failed (${whole.message.slice(0, 160)})`, ms: Date.now() - tf };
             if (!whole.tiers.length) return { ...base, reason: 'the model read no openings on the facade', ms: Date.now() - tf };
-            const fit = (r: GrammarReading) => fitGrammar(r.tiers, f, { confidence: r.reply.conf / 100, source: 'tiles', ...(r.reply.notes ? { label: r.reply.notes } : {}) });
-            const grammar0 = fit(whole);
-            const scan = checkAgainstScan(grammar0, f, o);
-            const grammar: FacadeGrammar = { ...grammar0, confidence: r3(grammar0.confidence * (scan.judged ? 1 - scan.indistinct / scan.judged : 1)) };
-            const halves = reads.slice(1).map(r => (r instanceof Error || !r.tiers.length ? undefined : fit(r)));
-            const heldOut = heldOutCheck(f, o, [
-                { shown: left, scored: right, grammar: halves[0] }, { shown: right, scored: left, grammar: halves[1] },
-                { shown: top, scored: bottom, grammar: halves[2] }, { shown: bottom, scored: top, grammar: halves[3] }
-            ]);
+            const fit = (r: GrammarReading, h?: Hidden) => fitGrammar(r.tiers, f, { confidence: r.reply.conf / 100, source: 'tiles', shown: shownAlong(f, h), ...(r.reply.notes ? { label: r.reply.notes } : {}) });
+            const clipped = onFacade(fit(whole), f);
+            const grammar0 = clipped.grammar;
+            const scan = checkAgainstScan(grammar0, f, o, GRAMMAR_TOLERANCE_M, clipped.dropped);
+            // the vector footprints, when given: do the grammar's sections stay inside one building each, and does its top
+            // opening reach each building's roof? Not a gate: a disagreement lowers the confidence and is reported
+            let foot: FootprintAgreement | undefined;
+            if (opts.footprints) {
+                const spans = sections(grammar0.tiers).map(sec => [Math.min(...sec.flatMap(t => t.cols.map(c => c[0]))), Math.max(...sec.flatMap(t => t.cols.map(c => c[1])))] as [number, number]);
+                foot = footprintAgreement(grammar0, spans, f, facadeBuildingParts(f, opts.footprints));
+            }
+            const footFactor = foot && foot.buildings > 0 && !foot.agrees ? FOOTPRINT_DISAGREEMENT_CONFIDENCE : 1;
+            const grammar: FacadeGrammar = { ...grammar0, confidence: r3(grammar0.confidence * footFactor * (scan.judged ? 1 - scan.indistinct / scan.judged : 1)) };
+            const halves = reads.slice(1).map((r, k) => (r instanceof Error || !r.tiers.length ? undefined : fit(r, folds[k].hidden)));
+            const heldOut = heldOutCheck(f, o, folds.map((x, k) => ({ ...x, grammar: halves[k] })));
             if (opts.overlayDir) {
                 try {
                     writeOverlay(path.join(opts.overlayDir, `facade_${f.facadeId}_grammar.png`), o, f, reliefLatticeCells(f), grammarCells(grammar));
@@ -869,7 +989,8 @@ export async function runFacadeGrammarPass(opts: {
             }
             const accepted = scan.passed && heldOut.passed;
             const reason = !scan.passed ? `scan: ${scan.why}` : !heldOut.passed ? `held-out: ${heldOut.why}` : `${scan.why}; ${heldOut.why}`;
-            return { ...base, accepted, reason, grammar, halves, scan, heldOut, ms: Date.now() - tf };
+            const agreedSources = accepted ? ['tiles', ...(foot?.agrees ? ['vector footprints'] : [])] : undefined;
+            return { ...base, accepted, reason: foot ? `${reason}; footprints: ${foot.why}` : reason, grammar, halves, scan, heldOut, ...(foot ? { footprints: foot } : {}), ...(agreedSources ? { agreedSources } : {}), ms: Date.now() - tf };
         } catch (err) {
             if (opts.signal?.aborted) throw err;
             return { ...base, reason: `the facade could not be read (${err instanceof Error ? err.message : String(err)})`, ms: Date.now() - tf };

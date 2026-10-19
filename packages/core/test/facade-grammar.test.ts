@@ -30,7 +30,7 @@ import { type Chunk, quad, flat, writeGlb, readGlb, encodePng, buildTileRefine }
 import {
     decodeOrtho, grammarFileText, readReliefOrthos, runFacadeGrammarPass, writeOverlay, grammarCells, type ReliefOrthoFacade
 } from '../src/node/3d-engine/staged-location/facade-grammar';
-import { decodeImageInMemory } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
+import { promptImage, simulatedReply, type TrueOpening } from './helpers/facade-grammar-reader';
 
 const REPO = path.resolve(__dirname, '../../..');
 const WORK = path.join(REPO, 'test-results/facade-grammar');
@@ -88,53 +88,27 @@ function facadeTexture(): Buffer {
 /** The world point (x = 10) of texture coordinates (s, t). */
 const world = (s: number, t: number): [number, number, number] => [10, t, 15 - s];
 
-/**
- * A simulated reading: the true openings whose centre the image shows, in its per-mille coordinates, a few per-mille
- * off (deterministic, up to 3), with every tier moved by `tierShiftM` (a wrong reading). The image's place in the ortho is found by
- * matching its pixels against the full orthophoto (the reading is told nothing else).
- */
-function fakeChain(f: ReliefOrthoFacade, fullPng: Buffer, opts: { tierShiftM?: number } = {}) {
-    const full = decodeImageInMemory(fullPng);
+/** The true openings in the facade's plane frame (s, t), as tile_refine framed it. */
+function truthOnPlane(f: ReliefOrthoFacade): TrueOpening[] {
     const toS = (w: [number, number, number]) => (w[0] - f.centroid[0]) * f.axisS[0] + (w[1] - f.centroid[1]) * f.axisS[1] + (w[2] - f.centroid[2]) * f.axisS[2];
     const toT = (w: [number, number, number]) => (w[0] - f.centroid[0]) * f.axisT[0] + (w[1] - f.centroid[1]) * f.axisT[1] + (w[2] - f.centroid[2]) * f.axisT[2];
+    return TRUTH.map(o => {
+        const a = world(o.s0, o.t0), b = world(o.s1, o.t1);
+        return { s0: Math.min(toS(a), toS(b)), s1: Math.max(toS(a), toS(b)), t0: Math.min(toT(a), toT(b)), t1: Math.max(toT(a), toT(b)) };
+    });
+}
+
+/** A chain answering every facade-grammar call with the simulated reader (helpers/facade-grammar-reader.ts). */
+function fakeChain(f: ReliefOrthoFacade, fullPng: Buffer, opts: { tierShiftM?: number } = {}) {
     let calls = 0;
+    const truth = truthOnPlane(f);
     return {
         calls: () => calls,
         chain: {
             generate: async (params: any) => {
                 calls++;
-                const png = Buffer.from(params.contents[0].parts[0].inlineData.data, 'base64');
-                const img = decodeImageInMemory(png);
-                // the crop's place in the full ortho (a band of columns or of rows, same pixels)
-                let x0 = -1, y0 = -1;
-                const same = (ox: number, oy: number) => {
-                    for (let y = 0; y < img.height; y += 7) for (let x = 0; x < img.width; x += 13)
-                        for (let c = 0; c < 3; c++) if (img.rgba[(y * img.width + x) * 4 + c] !== full.rgba[((y + oy) * full.width + x + ox) * 4 + c]) return false;
-                    return true;
-                };
-                if (img.height === full.height) { for (let off = 0; off + img.width <= full.width && x0 < 0; off++) if (same(off, 0)) { x0 = off; y0 = 0; } }
-                else if (img.width === full.width) { for (let off = 0; off + img.height <= full.height && y0 < 0; off++) if (same(0, off)) { x0 = 0; y0 = off; } }
-                if (x0 < 0 || y0 < 0) throw new Error('the simulated reader could not place the image');
-                const sMin = f.orthoSMin + x0 * f.pixel, sMax = sMin + img.width * f.pixel, tMax = f.orthoTMax - y0 * f.pixel, H = img.height * f.pixel;
-                const tiers = new Map<number, Array<[number, number]>>();
-                const bands = new Map<number, [number, number]>();
-                let k = 0;
-                for (const o of TRUTH) {
-                    const a = world(o.s0, o.t0), b = world(o.s1, o.t1);
-                    const s0 = Math.min(toS(a), toS(b)), s1 = Math.max(toS(a), toS(b));
-                    const t0 = Math.min(toT(a), toT(b)) + (opts.tierShiftM ?? 0), t1 = Math.max(toT(a), toT(b)) + (opts.tierShiftM ?? 0);
-                    const sc = 0.5 * (s0 + s1), tc = 0.5 * (t0 + t1);
-                    if (sc < sMin || sc > sMax || tc > tMax || tc < tMax - H) continue;
-                    const j = ((k++ * 5) % 7) - 3;  // -3..3 per-mille
-                    const key = Math.round(t0 * 10);
-                    bands.set(key, [Math.max(0, ((tMax - t1) / H) * 1000 + j), Math.min(1000, ((tMax - t0) / H) * 1000 - j)]);
-                    const cols = tiers.get(key) ?? [];
-                    // an opening the image cuts is read to the image's edge
-                    cols.push([Math.max(0, ((s0 - sMin) / (sMax - sMin)) * 1000 - j), Math.min(1000, ((s1 - sMin) / (sMax - sMin)) * 1000 + j)]);
-                    tiers.set(key, cols);
-                }
-                const reply = { tiers: [...tiers.keys()].sort((a, b) => b - a).map(key => ({ y: bands.get(key)!.map(v => Math.round(v)), cols: tiers.get(key)!.map(c => c.map(v => Math.round(v))) })), conf: 80, notes: 'simulated' };
-                return { response: { candidates: [{ content: { parts: [{ text: JSON.stringify(reply) }] } }] }, model: 'simulated-reader', ms: 1, remember: () => undefined };
+                const text = simulatedReply(f, fullPng, promptImage(params), truth, opts);
+                return { response: { candidates: [{ content: { parts: [{ text }] } }] }, model: 'simulated-reader', ms: 1, remember: () => undefined };
             }
         } as any
     };
@@ -221,7 +195,7 @@ describe('facade grammar: a noisy scanned facade with a known grammar', () => {
         expect(facade).toBeDefined();
         const reader = fakeChain(facade, png);
         const pass = await runFacadeGrammarPass({ orthosDir: orthos, chain: reader.chain, overlayDir: SHOTS });
-        expect(reader.calls()).toBe(5);   // the whole facade and each half alone (left, right, top, bottom)
+        expect(reader.calls()).toBe(5);   // the whole facade, and four times with stripes or bands of it hidden
         const out = pass.facades.find(f => f.facadeId === facade.facadeId)!;
         expect(out.accepted, out.reason).toBe(true);
         expect(out.scan!.passed).toBe(true);
