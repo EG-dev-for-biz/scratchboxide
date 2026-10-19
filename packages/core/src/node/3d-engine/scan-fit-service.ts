@@ -49,7 +49,9 @@ import {
     type ScanFitOrnamentResult,
     type ScanFitOutput,
     type ScanFitRefitRequest,
-    type StructureFit
+    type StructureFit,
+    type FootprintPrior,
+    type Vec2
 } from '../../common/spatial/staged-location-contracts';
 import { resolveWithinRoot } from '../security/path-guard';
 import { buildNativeIfStale } from './native-build';
@@ -107,6 +109,30 @@ function fileSha256(file: string): string {
 }
 
 const stoppedError = (): ScanFitError => new ScanFitError('aborted', 'Stopped by the chat before it finished');
+
+/** A footprint prior the CLI can read: finite [x, z] points, loops of at least three, at least one part. */
+function checkPrior(p: FootprintPrior): FootprintPrior {
+    const parts = (v: unknown, what: string): Vec2[][][] => {
+        if (!Array.isArray(v)) throw new ScanFitError('input_unreadable', `prior.${what} must be an array of parts`);
+        return v.map(part => {
+            if (!Array.isArray(part)) throw new ScanFitError('input_unreadable', `prior.${what}: a part is an array of loops`);
+            return part.map(loop => {
+                if (!Array.isArray(loop) || loop.length < 3 || loop.some(q => !Array.isArray(q) || q.length !== 2 || !q.every(Number.isFinite))) {
+                    throw new ScanFitError('input_unreadable', `prior.${what}: every loop is at least three finite [x, z] points`);
+                }
+                return loop.map(q => [q[0], q[1]] as Vec2);
+            });
+        }).filter(part => part.length > 0);
+    };
+    const footprint = parts(p.footprint, 'footprint');
+    if (!footprint.length) throw new ScanFitError('input_unreadable', 'prior.footprint holds no part');
+    return {
+        source: String(p.source || 'a footprint prior'), footprint,
+        ...(Number.isFinite(p.heightM) && (p.heightM as number) > 0 ? { heightM: p.heightM } : {}),
+        neighbours: (p.neighbours ?? []).map((n, i) => ({ ...(n.id ? { id: String(n.id) } : {}), parts: parts(n.parts, `neighbours[${i}].parts`), ...(Number.isFinite(n.heightM) && (n.heightM as number) > 0 ? { heightM: n.heightM } : {}) }))
+            .filter(n => n.parts.length > 0)
+    };
+}
 
 interface RunOutcome { stdout: string; stderr: string }
 
@@ -300,12 +326,14 @@ export class ScanFitService {
         if (!a || !Number.isFinite(a.x) || !Number.isFinite(a.z)) throw new ScanFitError('input_unreadable', 'anchor must be finite metres { x, z } in the tile frame');
         const limits = req.sourceLimits;
         if (!limits || !(limits.leafGeometricErrorM > 0)) throw new ScanFitError('input_unreadable', 'sourceLimits.leafGeometricErrorM must be > 0');
+        const prior = req.prior ? checkPrior(req.prior) : undefined;
         const engine = await this.engine();
         const scanSha = fileSha256(scan);
         const texturedSha = textured ? fileSha256(textured) : '';
         const remeshSha = remesh ? fileSha256(remesh) : '';
+        const priorText = prior ? JSON.stringify(prior) : '';
         const key = crypto.createHash('sha256').update(CACHE_VERSION).update('\0fit\0').update(engine.sha)
-            .update(JSON.stringify([scanSha, texturedSha, remeshSha, [a.x, a.z], limits.leafGeometricErrorM, limits.texelM, ...(votes ? [fileSha256(votes)] : [])])).digest('hex');
+            .update(JSON.stringify([scanSha, texturedSha, remeshSha, [a.x, a.z], limits.leafGeometricErrorM, limits.texelM, ...(votes ? [fileSha256(votes)] : []), ...(prior ? [crypto.createHash('sha256').update(priorText).digest('hex')] : [])])).digest('hex');
         const res = await this.cached(key, ['structure_fit.json', 'fitted.glb', 'outlines.glb'], req, async (dir, signal) => {
             fs.writeFileSync(path.join(dir, 'source_limits.json'), JSON.stringify({ leafGeometricErrorM: limits.leafGeometricErrorM, ...(limits.texelM ? { texelM: limits.texelM } : {}) }));
             const args = ['fit', '--scan', scan, '--anchor', `${a.x},${a.z}`, '--source-limits-json', path.join(dir, 'source_limits.json'), '--scan-sha256', scanSha,
@@ -313,9 +341,13 @@ export class ScanFitService {
             if (textured) args.push('--textured', textured, '--textured-sha256', texturedSha);
             if (remesh) args.push('--remesh', remesh);
             if (votes) args.push('--ownership', votes);
+            if (prior) {
+                fs.writeFileSync(path.join(dir, 'prior.json'), priorText);
+                args.push('--prior-json', path.join(dir, 'prior.json'));
+            }
             await runCli(engine.bin, args, req.timeoutMs ?? this.defaultTimeoutMs, req.onProgress, signal);
             // what a refit needs again (the inputs it re-reads)
-            fs.writeFileSync(path.join(dir, 'inputs.json'), JSON.stringify({ scan, textured, remesh, ...(votes ? { ownership: votes } : {}), anchor: [a.x, a.z], leafGeometricErrorM: limits.leafGeometricErrorM, texelM: limits.texelM ?? null, scanSha256: scanSha }));
+            fs.writeFileSync(path.join(dir, 'inputs.json'), JSON.stringify({ scan, textured, remesh, ...(votes ? { ownership: votes } : {}), ...(prior ? { prior: path.join(dir, 'prior.json') } : {}), anchor: [a.x, a.z], leafGeometricErrorM: limits.leafGeometricErrorM, texelM: limits.texelM ?? null, scanSha256: scanSha }));
             this.readContract<StructureFit>(path.join(dir, 'structure_fit.json'), 'StructureFit');
         }, dir => this.absoluteOutputs(this.readContract<StructureFit>(path.join(dir, 'structure_fit.json'), 'StructureFit'), dir));
         return this.envelope(res.value, res.dir, 'structure_fit.json', key, engine, res.cached, t0);
@@ -344,6 +376,12 @@ export class ScanFitService {
             if (typeof inputs.textured === 'string' && fs.existsSync(inputs.textured)) args.push('--textured', inputs.textured, '--textured-sha256', fileSha256(inputs.textured));
             if (typeof inputs.remesh === 'string' && fs.existsSync(inputs.remesh)) args.push('--remesh', inputs.remesh);
             if (typeof inputs.ownership === 'string' && fs.existsSync(inputs.ownership)) args.push('--ownership', inputs.ownership);
+            // the refit traces the same plan: the prior goes with it (copied, as the fit's entry may be evicted)
+            if (typeof inputs.prior === 'string' && fs.existsSync(inputs.prior)) {
+                fs.copyFileSync(inputs.prior, path.join(dir, 'prior.json'));
+                args.push('--prior-json', path.join(dir, 'prior.json'));
+                inputs.prior = path.join(dir, 'prior.json');
+            }
             await runCli(engine.bin, args, req.timeoutMs ?? this.defaultTimeoutMs, req.onProgress, signal);
             fs.writeFileSync(path.join(dir, 'inputs.json'), JSON.stringify(inputs));
             this.readContract<StructureFit>(path.join(dir, 'structure_fit.json'), 'StructureFit');

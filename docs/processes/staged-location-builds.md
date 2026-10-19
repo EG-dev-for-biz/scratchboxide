@@ -16,7 +16,7 @@ resolve -> tiles -> trees-measure -> remesh -> (isolated structure only: fit || 
 ```
 
 - A district (default 250 m) commits the tiles, the remeshed scan and the regrown trees.
-- An isolated structure (`isolate`) is picked once, on a canopy-masked surface model, and the extraction is sized to it (25 m probe, grown in up to three rounds to 150 m until the footprint is 3 m inside the edge). `radiusMeters` is ignored. The structure is then fitted by `scan_fit`, and facade detail is read from the tile photos and up to four Street View images.
+- An isolated structure (`isolate`) is picked once, on a canopy-masked surface model, and the extraction is sized to it (25 m probe, grown in up to three rounds to 150 m until the footprint is 3 m inside the edge). `radiusMeters` is ignored. The structure is then fitted by `scan_fit` (with the building's plan from Google vector data as its footprint prior when the pick used one: the frame, the plan whose walls the scan measures, and the neighbours that make party walls), and facade detail is read from the tile photos and up to four Street View images.
 
 ## Degrade, don't fabricate
 
@@ -25,8 +25,9 @@ Every stage has one lower rung built from the same real data. A degraded part ge
 | Failure | Rung (same real data) | Provenance after |
 |---|---|---|
 | photo-read detail (vision) | the flat fitted face; the record names the model and thinking level tried | fitted |
-| the fitted rebuild | the remeshed scan stays the structure | remeshed |
+| the fitted rebuild | the remeshed scan stays the structure; Street View is still fetched, aimed at the structure's facades cut into 8 m tiles, and projected onto the remeshed scan (the no-fit rung: nothing is read from it); a layer scored on fewer than 5 held-out views, or whose held-out edge chamfer is no better than the clay's, is textured from the tile photo instead (`street_view_set_aside`) | remeshed (texels photo-inferred) |
 | the remesh | the raw scan with its facades flattened (`scan_fit flatten`), else the raw scan as downloaded; its scanned trees stay in it and nothing is planted over them | scan-flattened / as-scanned |
+| a facade grammar that fails the scan or held-out check | that facade keeps the relief's own window lattice (`grammar_rejected`) | remeshed |
 | a tree that cannot regrow | that tree stays as scanned | as-scanned |
 | the whole tree stage | the scanned trees are put back as their own layer, labelled as scanned (never "no trees") | as-scanned |
 | measuring the trees | the raw tile is remeshed with its own trees | remeshed |
@@ -38,13 +39,22 @@ Every stage has one lower rung built from the same real data. A degraded part ge
 
 Only an unresolved place and a place with no tile coverage fail the call (`StagedLocationHardFailure`); nothing real is discarded then.
 
-A stage the run ends because nothing downstream can use it (the Street View fetch once the fit failed) is `skipped` with the reason it was ended for. It is not a time limit and records no degradation. Every stage promise is settled before the call returns or throws, the result holds copies of the stages and degradations, and work a Stop or a time limit abandoned can no longer commit or stream.
+A stage the run ends because nothing downstream can use it (the reading, correction and detail once the fit failed) is `skipped` with the reason it was ended for. It is not a time limit and records no degradation. Every stage promise is settled before the call returns or throws, the result holds copies of the stages and degradations, and work a Stop or a time limit abandoned can no longer commit or stream.
 
 The `GeometricComplexityGate` verdict is reported, never thrown. Scan-derived layers, a measured rebuild (on an accepted StructureFit the gate checks itself) and SB-Veggie trees grown to measured crowns (`measuredCrowns`, a whole number of crowns of at least 1) are exempt from the vertex floor, each with its basis; a gate that does not pass, and an exemption it refused, are stated in the summary. The photo-corrected layers are `measuredGeometry: false` with the correction's confidence.
 
 ## Provenance labels (what the viewport shades and the model reports)
 
 `as-scanned`, `scan-flattened`, `remeshed`, `fitted`, `fitted-unobserved`, `photo-corrected`, `photo-inferred`, `grown to the measured crown`. tile_refine's photometric relief stays on by default: it is gated (confirmed patterns only) and labelled inferred. Its per-vertex attributes (`_RELIEF_HEIGHT`, `_RECTIFY_DISPLACEMENT`, `_PROUD_BLOCK`) are read in bands (untouched under 1 cm, moved 1-5 cm, reshaped over 5 cm), never by an exact-zero test; an absent attribute means no per-vertex claim, never "as scanned".
+
+## Facade grammar (stage `grammar`, layer `l2g`)
+
+On by default (`SCRATCHBOX_FACADE_GRAMMAR=0` turns it off). The remesh writes each facade's photo (`tile_refine --relief-orthos`: the textured scan within a slab of 2.5 m behind and 0.75 m in front of the wall plane, projected onto it, with the plane's metric frame), so no camera pose is involved. The vision model reads the facade as tiers of openings (one band along the height, its own openings along the width; side-by-side buildings have their own tiers); `facade-grammar.ts` fits the reading as continuous numbers (bay rhythm, storey pitch, one shared set of columns for tiers that line up) and gates it:
+
+- scan: the openings lie on the measured facade within `PHOTO_CORRECTION_TOLERANCE_M` (openings read off it are dropped; more than 10% and it is refused);
+- held out: four more readings with alternate stripes or bands of the photo greyed out; the grammar read from what was shown predicts the hidden parts, and must beat the relief's own lattice there (symmetric edge chamfer 0.25 px lower, structural gradient NCC not lower) and the same prediction moved half a bay and half a storey (the control).
+
+An accepted grammar is the facade's window lattice in a second relief run (`--facade-grammar`): the relief's own cells snap onto it, its other openings are carved where the photo shows something other than wall. The `l2g` layer supersedes `l2`, labelled `remeshed` + `photo-inferred` with the grammar's confidence; per vertex `_LATTICE_CELL` 3 (grammar over an observed cell) and 4 (grammar, inferred); `asset.extras.scratchbox.facadeGrammar`; `stats.relief.grammar`. Google's vector building footprints (feature tiles, extruded areas with heights) are an independent check reported per facade (`agreedSources`): sections inside one building each, top openings reaching each roof. Run note: `facade_grammar.json`; overlays of each reading in the grammar stage cache. Findings: `facade_grammar_live.md`.
 
 ## Evidence and the vision call
 
@@ -73,7 +83,7 @@ Per-stage caches live under `<workspace>/.scratchbox/cache/staged_location/` (th
 
 ## Tests
 
-`staged-location-orchestrator`, `staged-location-tool`, `staged-location-handoff`, `staged-stage-cache`, `staged-artifact`, `staged-summary`, `staged-scanned-trees`, `staged-remesh-provenance`, `staged-tile-extraction`, `extraction-sizing`, `streetview-evidence`, `ornament-vision`, `vision-model-chain`, `streaming-stage-events`, `complexity-gate-staged`, `native-warmup`, and `desktop-app/test/native-warmup-startup`. The registry-level `tile-tools-do-what-was-asked` exercises the real crawler, the real tool registry and the staged build against a fake tile server. Visual cases write screenshots to `test-results/screenshots/staged/`.
+`staged-location-orchestrator`, `staged-location-grammar`, `facade-grammar`, `staged-location-tool`, `staged-location-handoff`, `staged-stage-cache`, `staged-artifact`, `staged-summary`, `staged-scanned-trees`, `staged-remesh-provenance`, `staged-tile-extraction`, `extraction-sizing`, `streetview-evidence`, `ornament-vision`, `vision-model-chain`, `streaming-stage-events`, `complexity-gate-staged`, `native-warmup`, and `desktop-app/test/native-warmup-startup`. The registry-level `tile-tools-do-what-was-asked` exercises the real crawler, the real tool registry and the staged build against a fake tile server. Visual cases write screenshots to `test-results/screenshots/staged/`.
 
 ## Not in this branch
 

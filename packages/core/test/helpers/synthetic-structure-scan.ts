@@ -418,3 +418,59 @@ export function texturedFacade(dir: string, blank: boolean): { glb: string; text
     writeGlb(textured, [front, ...twin.chunks], [stripedPng(256, 16, blank)]);
     return { glb, textured, anchor: [0, 0], widthM: 20, heightM: 10 };
 }
+
+/**
+ * An ordinary city building as tile_refine isolates it, with what the tiles and the street do to it:
+ *   - a flat-roofed block 24 x 16 m to 15 m, set back on its +z side above that: the upper part 24 x 10 m to 21 m;
+ *   - a party wall: a 12 m neighbour stands against its +x side, so the scan has that wall only above 12 m, and the isolate
+ *     reaches 1.5 m onto the neighbour's roof;
+ *   - a tile seam: the scan arrives in two pieces split at x = 0, 2 cm apart, as two 3D Tiles leaves leave a building;
+ *   - turned by `yawDeg` (the street grid's angle to east).
+ * With it, the footprint prior the vector data would give: the block's plan, `priorOffsetM` off along z (vector outlines stand
+ * up to a metre or two from the scanned facades), the neighbour's plan and height, and one building across the street.
+ */
+export function partyWallSetback(dir: string, opts: { yawDeg?: number; priorOffsetM?: number; name?: string; roofMass?: boolean } = {}): SyntheticScan & { prior: { source: string; footprint: P2[][][]; heightM: number; neighbours: Array<{ id: string; parts: P2[][][]; heightM: number }> } } {
+    const yawDeg = opts.yawDeg ?? 29, gap = 0.02;
+    const sc = new Scene(83, yawDeg);
+    // the two pieces: x < 0 as built, x > 0 moved 2 cm along +x (the seam); every wall one quad, so the roofs share their edges
+    // (one welded mesh per piece, as a tile leaf is)
+    const piece = (sx: number, x0: number, x1: number) => {
+        const X = (x: number) => x + sx;
+        // lower part, 0..15 m: front (-z) and back (+z) walls, the west (-x) wall on the west piece, the party side (+x) only above 12 m
+        sc.wall([X(x0), -8], [X(x1), -8], 0, 15, [X((x0 + x1) / 2), -20], 1000);
+        sc.wall([X(x0), 8], [X(x1), 8], 0, 15, [X((x0 + x1) / 2), 20], 1000);
+        if (x0 === -12) sc.wall([X(-12), -8], [X(-12), 8], 0, 15, [X(-20), 0], 1000);
+        if (x1 === 12) sc.wall([X(12), -8], [X(12), 8], 12, 15, [X(20), 0], 1000);
+        // the lower roof: what the setback leaves (z 2..8), and the upper part's walls and roof
+        sc.polygon([[X(x0), 2], [X(x1), 2], [X(x1), 8], [X(x0), 8]], 15, true);
+        sc.wall([X(x0), -8], [X(x1), -8], 15, 21, [X((x0 + x1) / 2), -20], 1000);
+        sc.wall([X(x0), 2], [X(x1), 2], 15, 21, [X((x0 + x1) / 2), 20], 1000);
+        if (x0 === -12) sc.wall([X(-12), -8], [X(-12), 2], 15, 21, [X(-20), -3], 1000);
+        if (x1 === 12) sc.wall([X(12), -8], [X(12), 2], 15, 21, [X(20), -3], 1000);
+        sc.polygon([[X(x0), -8], [X(x1), -8], [X(x1), 2], [X(x0), 2]], 21, true);
+    };
+    piece(0, -12, 0);
+    piece(gap, 0, 12);
+    // `roofMass`: a large rounded mass on the upper roof that no wall or roof of the plan explains (it must not pass as fitted)
+    if (opts.roofMass) sc.blob([-4, 25, -3], 6, 4.5, 4.5);
+    // the isolate's reach onto the neighbour's roof, and the street and pavement on the other three sides
+    sc.polygon([[12 + gap, -8], [13.5, -8], [13.5, 8], [12 + gap, 8]], 12, true);
+    sc.polygon([[-16, -12], [12, -12], [12, -8], [-12, -8]], 0, true);
+    sc.polygon([[-12, 8], [12, 8], [12, 12], [-16, 12]], 0, true);
+    sc.polygon([[-16, -12], [-12, -8], [-12, 8], [-16, 12]], 0, true);
+    const glb = path.join(dir, `${opts.name ?? 'synthetic_party_setback'}.glb`);
+    sc.save(glb);
+    // the vector data, in the tile frame (turned like the scan)
+    const a = (yawDeg * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
+    const turn = (p: P2): P2 => [p[0] * c + p[1] * s, -p[0] * s + p[1] * c];
+    const rect = (x0: number, x1: number, z0: number, z1: number): P2[][][] => [[[[x0, z0], [x1, z0], [x1, z1], [x0, z1]].map(p => turn(p as P2))]];
+    const dz = opts.priorOffsetM ?? 0.6;
+    return {
+        name: 'flat-roofed block with a setback, a party wall and a tile seam', glb, anchor: [0, -3],
+        truth: { lowerTopM: 15, upperTopM: 21, lowerAreaM2: 24 * 16, upperAreaM2: 24 * 10, partyWallM: 16, yawDeg },
+        prior: {
+            source: 'synthetic vector data', footprint: rect(-12, 12, -8 + dz, 8 + dz), heightM: 21,
+            neighbours: [{ id: 'party', parts: rect(12, 30, -8, 8), heightM: 12 }, { id: 'across', parts: rect(-12, 12, 20, 36), heightM: 30 }]
+        }
+    };
+}

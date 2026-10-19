@@ -363,7 +363,9 @@ describe('an isolated structure', () => {
         expect(s.native.refineCalls[0]).toMatchObject({ isolate: true, anchor: { x: expect.any(Number), z: expect.any(Number) } });
         expect(result.structure!.isolateIoU).toBeGreaterThanOrEqual(0.7);
         expect(result.degradations.map(d => d.reasonCode)).toEqual(expect.arrayContaining(['canopy_not_masked', 'scan_fit_unavailable']));
-        for (const st of ['evidence', 'project', 'vision', 'correct', 'detail']) expect(result.stages.find(x => x.stage === st)!.status).toBe('skipped');
+        for (const st of ['project', 'vision', 'correct', 'detail']) expect(result.stages.find(x => x.stage === st)!.status).toBe('skipped');
+        // the Street View fetch still runs for the remeshed scan's texture (the no-fit rung); with no Street View configured here it says so
+        expect(result.stages.find(x => x.stage === 'evidence')!).toMatchObject({ status: 'degraded', source: 'no Street View images' });
         // the strip got the ROI around the structure
         expect(s.native.stripCalls[0].roi).toMatchObject({ schema: 'scratchbox.strip-roi/1' });
         // trees plant against the isolated structure
@@ -813,7 +815,7 @@ describe('Stop, the deadline and hard failures', () => {
 });
 
 describe('the call settles before it returns or throws', () => {
-    it('a rejected fit fetches no Street View image (nothing is billed for it): evidence is skipped, no time limit, no detail claimed, and nothing changes after the result', async () => {
+    it('a rejected fit fetches Street View aimed at the structure\'s facades to texture the remeshed scan (the no-fit rung): nothing is read from it, no time limit, no detail claimed, and nothing changes after the result', async () => {
         const sv = streetViewStandIn(500);
         const calls: any[] = [];
         const s = setup(ARCH, {}, {
@@ -821,10 +823,14 @@ describe('the call settles before it returns or throws', () => {
             vision: { client: visionClient(REPLY, calls), candidates: ['gemini-4-argon'] }, streetView: sv.deps
         });
         const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
-        expect(sv.requested).toEqual([]); // the close-ups start when the fit is accepted: a rejected fit never started them (the wide survey does not wait for the fit)
+        // the views are aimed at the structure's facades (no fitted slot exists), within the per-building budget
+        expect(sv.requested.length).toBeGreaterThan(0);
+        expect(sv.requested.length).toBeLessThanOrEqual(16);
         const evidence = result.stages.find(x => x.stage === 'evidence')!;
-        expect(evidence).toMatchObject({ status: 'skipped', reason: 'there is no accepted fit to place detail on' });
-        expect(statusOf(s.events, 'evidence')).toEqual(['skipped']);
+        expect(evidence.status).toBe('committed');
+        expect(evidence.source).toContain("aimed at the structure's facades (no fit was accepted): they texture the remeshed scan");
+        // what reads the images (vision, correction, detail) stays skipped: there is no fit to place detail on
+        for (const id of ['vision', 'detail']) expect(result.stages.find(x => x.stage === id)).toMatchObject({ status: 'skipped', reason: 'there is no accepted fit to place detail on' });
         expect(result.degradations.map(d => d.reasonCode)).toEqual(['canopy_not_masked', 'fit_rejected']);
         // none of the three false statements: a 60 s limit, a run deadline, detail read from the tile photos
         const everything = JSON.stringify(result);
@@ -844,7 +850,7 @@ describe('the call settles before it returns or throws', () => {
         expect(s.events.length).toBe(eventsAtReturn);
     });
 
-    it('Street View is credited only where an image was read: a rejected fit fetched no close-up, the survey read four wide views and is credited', async () => {
+    it('Street View is credited where an image was used: a rejected fit fetched views aimed at the facades (none reached the model), the survey read four wide views', async () => {
         const sv = streetViewStandIn();
         const calls: any[] = [];
         const s = setup(ARCH, {}, {
@@ -852,8 +858,8 @@ describe('the call settles before it returns or throws', () => {
             vision: { client: visionClient(REPLY, calls), candidates: ['gemini-4-argon'] }, streetView: sv.deps
         });
         const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
-        expect(sv.requested).toEqual([]); // no close-up was fetched for a fit that was then rejected
-        expect(result.stages.find(x => x.stage === 'evidence')!.status).toBe('skipped');
+        expect(sv.requested.length).toBeGreaterThan(0); // the no-fit rung: views aimed at the facades, for the remeshed scan's texture
+        expect(result.stages.find(x => x.stage === 'evidence')!.status).toBe('committed');
         expect(calls).toEqual([]); // and none reached the model
         expect(result.extraction.attribution).toEqual(['Map data ©Google', 'Street View ©Google']);
         expect((result.artifact as any).data.stagedBuild.attribution).toEqual(['Map data ©Google', 'Street View ©Google']);

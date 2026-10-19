@@ -242,6 +242,63 @@ inline std::vector<int> components(const Scan& s, int* count = nullptr) {
     return lab;
 }
 
+/**
+ * Joins components that meet along an open seam: a 3D Tiles scan arrives as one mesh per tile, and a structure that
+ * straddles a tile boundary is several pieces whose border vertices lie a centimetre or two apart rather than coinciding
+ * (the weld does not join them). Two components are joined when at least `minPairs` boundary vertices (on an edge used by
+ * one triangle) of one, above `minY`, lie within `seamM` of boundary vertices of the other. `lab` and `count` are relabelled in
+ * place; returns how many joins were made.
+ */
+inline int joinAcrossSeams(const Scan& s, std::vector<int>& lab, int& count, double seamM, double minY = -std::numeric_limits<double>::infinity(), int minPairs = 1) {
+    const size_t T = s.triangles();
+    if (count <= 1 || T == 0 || !(seamM > 0)) return 0;
+    std::unordered_map<uint64_t, int> edgeUse;
+    edgeUse.reserve(3 * T);
+    auto ek = [](uint32_t a, uint32_t b) { return a < b ? (uint64_t(a) << 32 | b) : (uint64_t(b) << 32 | a); };
+    for (size_t t = 0; t < T; ++t) for (int j = 0; j < 3; ++j) ++edgeUse[ek(s.tri[3 * t + j], s.tri[3 * t + (j + 1) % 3])];
+    std::vector<int> vlab(s.pos.size(), -1);
+    for (size_t t = 0; t < T; ++t) for (int j = 0; j < 3; ++j) {
+        const uint32_t a = s.tri[3 * t + j], b = s.tri[3 * t + (j + 1) % 3];
+        if (edgeUse[ek(a, b)] == 1) { vlab[a] = lab[t]; vlab[b] = lab[t]; }
+    }
+    std::vector<int> parent(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i) parent[static_cast<size_t>(i)] = i;
+    auto find = [&](int x) { while (parent[static_cast<size_t>(x)] != x) { parent[static_cast<size_t>(x)] = parent[static_cast<size_t>(parent[static_cast<size_t>(x)])]; x = parent[static_cast<size_t>(x)]; } return x; };
+    auto cellKey = [&](int64_t x, int64_t y, int64_t z) { return (uint64_t(x + (1 << 20)) & 0x1FFFFF) | ((uint64_t(y + (1 << 20)) & 0x1FFFFF) << 21) | ((uint64_t(z + (1 << 20)) & 0x1FFFFF) << 42); };
+    std::unordered_map<uint64_t, std::vector<uint32_t>> grid;
+    auto cell = [&](double v) { return static_cast<int64_t>(std::floor(v / seamM)); };
+    for (uint32_t v = 0; v < s.pos.size(); ++v) if (vlab[v] >= 0) grid[cellKey(cell(s.pos[v].x), cell(s.pos[v].y), cell(s.pos[v].z))].push_back(v);
+    int joins = 0;
+    const double r2 = seamM * seamM;
+    // the seam vertex pairs between each two components (above minY): a seam through a facade or a roof joins them, one through
+    // the ground (the street running on under the tile edge) does not
+    std::map<std::pair<int, int>, int> pairs;
+    for (uint32_t v = 0; v < s.pos.size(); ++v) {
+        if (vlab[v] < 0 || s.pos[v].y < minY) continue;
+        const int64_t cx = cell(s.pos[v].x), cy = cell(s.pos[v].y), cz = cell(s.pos[v].z);
+        for (int64_t dx = -1; dx <= 1; ++dx) for (int64_t dy = -1; dy <= 1; ++dy) for (int64_t dz = -1; dz <= 1; ++dz) {
+            const auto it = grid.find(cellKey(cx + dx, cy + dy, cz + dz));
+            if (it == grid.end()) continue;
+            for (uint32_t w : it->second) {
+                if (w <= v || vlab[w] == vlab[v] || s.pos[w].y < minY || (s.pos[w] - s.pos[v]).dot(s.pos[w] - s.pos[v]) > r2) continue;
+                ++pairs[{std::min(vlab[v], vlab[w]), std::max(vlab[v], vlab[w])}];
+            }
+        }
+    }
+    for (const auto& [ab, n] : pairs) {
+        if (n < minPairs) continue;
+        const int a = find(ab.first), b = find(ab.second);
+        if (a != b) { parent[static_cast<size_t>(std::max(a, b))] = std::min(a, b); ++joins; }
+    }
+    if (!joins) return 0;
+    std::vector<int> remap(static_cast<size_t>(count), -1);
+    int n = 0;
+    for (int i = 0; i < count; ++i) { const int r = find(i); if (remap[static_cast<size_t>(r)] < 0) remap[static_cast<size_t>(r)] = n++; }
+    for (auto& l : lab) l = remap[static_cast<size_t>(find(l))];
+    count = n;
+    return joins;
+}
+
 inline ScratchboxMesh toMesh(const std::vector<Vec3>& pos, const std::vector<uint32_t>& tri) {
     ScratchboxMesh m("scan");
     m.vertices.reserve(pos.size());

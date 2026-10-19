@@ -17,7 +17,7 @@
  */
 
 import { geodeticToScan } from '../../spatial/StreetViewSurveyPlanner';
-import type { Vec2 } from '../../../common/spatial/staged-location-contracts';
+import type { FootprintPrior, Vec2 } from '../../../common/spatial/staged-location-contracts';
 
 /** A building: every boundary loop of its parts (outer rings and holes, filled even-odd per part), and its height. */
 export interface VectorBuilding { id: string; parts: Vec2[][][]; heightM?: number }
@@ -174,5 +174,35 @@ export function evidenceLookup(ev: VectorEvidence, radiusM: number, cellMeters =
         buildingAt: (x, z) => { const c = at(x, z); return c < 0 ? 0 : raster.building[c]; },
         waterAt: (x, z) => { const c = at(x, z); return c >= 0 && raster.water[c] === 1; },
         roadAt: (x, z) => { const c = at(x, z); return c >= 0 && raster.road[c] === 1; }
+    };
+}
+
+/** Neighbours whose plan comes within this of the building's are given to the fit (m). */
+export const PRIOR_NEIGHBOUR_REACH_M = 30;
+
+/**
+ * The fit's footprint prior (FootprintPrior) for the building the pick used: its parts (the features `featureIds` name),
+ * its height, and the buildings within PRIOR_NEIGHBOUR_REACH_M of it, which say where its party walls are. Undefined when
+ * the evidence holds none of the features.
+ */
+export function footprintPriorFor(buildings: VectorBuilding[], featureIds: string[]): FootprintPrior | undefined {
+    const target = buildings.filter(b => featureIds.includes(b.id));
+    if (!target.length) return undefined;
+    const box = (bs: VectorBuilding[]) => {
+        let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+        for (const b of bs) for (const part of b.parts) for (const loop of part) for (const [x, z] of loop) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
+        return { x0, x1, z0, z1 };
+    };
+    const t = box(target), r = PRIOR_NEIGHBOUR_REACH_M;
+    const heights = target.map(b => b.heightM).filter((h): h is number => Number.isFinite(h) && (h as number) > 0);
+    const neighbours = buildings.filter(b => !featureIds.includes(b.id)).filter(b => {
+        const n = box([b]);
+        return n.x1 >= t.x0 - r && n.x0 <= t.x1 + r && n.z1 >= t.z0 - r && n.z0 <= t.z1 + r;
+    });
+    return {
+        source: `Google vector data (building ${featureIds.join(', ')})`,
+        footprint: target.flatMap(b => b.parts),
+        ...(heights.length ? { heightM: Math.max(...heights) } : {}),
+        neighbours: neighbours.map(b => ({ id: b.id, parts: b.parts, ...(Number.isFinite(b.heightM) && (b.heightM as number) > 0 ? { heightM: b.heightM } : {}) }))
     };
 }
