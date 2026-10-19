@@ -83,7 +83,9 @@ export interface StagedPage {
     step(n?: number, dtMs?: number): Promise<void>;
     screenshot(name: string): Promise<string>;
     drag(from: [number, number], to: [number, number], steps?: number): Promise<void>;
-    key(key: string, code?: string): Promise<void>;
+    key(key: string, code?: string, opts?: { shift?: boolean }): Promise<void>;
+    /** A primary-button click at page coordinates (press and release in place); alt holds the Alt key. */
+    click(x: number, y: number, opts?: { alt?: boolean }): Promise<void>;
     consoleErrors(): string[];
     blockedRequests(): string[];
     close(): Promise<void>;
@@ -233,9 +235,19 @@ ${opts.manualFrames ? MANUAL_FRAMES : ''}</head><body><div id="root"></div><scri
             }
             await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: to[0], y: to[1], button: 'left', clickCount: 1 });
         },
-        async key(key, code = key) {
-            await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode: key === 'Escape' ? 27 : key === 'Enter' ? 13 : key === ' ' ? 32 : 0 });
-            await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code });
+        async key(key, code = key, o = {}) {
+            const vk = key === 'Escape' ? 27 : key === 'Enter' ? 13 : key === ' ' ? 32 : key === 'Tab' ? 9 : 0;
+            const modifiers = o.shift ? 8 : 0;
+            // Enter and Space carry text so the page sees the keypress that activates a focused button.
+            const text = key === 'Enter' ? '\r' : key === ' ' ? ' ' : undefined;
+            await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode: vk, modifiers, ...(text ? { text } : {}) });
+            await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode: vk, modifiers });
+        },
+        async click(x, y, o = {}) {
+            const modifiers = o.alt ? 1 : 0;
+            await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, modifiers });
+            await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1, modifiers });
+            await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1, modifiers });
         },
         consoleErrors: () => [...errors],
         blockedRequests: () => [...blocked],

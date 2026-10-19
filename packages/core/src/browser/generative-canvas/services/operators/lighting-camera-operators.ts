@@ -270,8 +270,8 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_set_camera',
         category: 'lighting_camera',
-        description: 'Sets camera position, target, field of view, and camera projection mode.',
-        execute: (ctx, params: { position?: [number, number, number]; target?: [number, number, number]; fov?: number; cameraMode?: 'orbit' | 'fps' }) => {
+        description: 'Sets camera position, target, field of view, and camera projection mode. keepPoseOnLoad: true makes loading the scene open on this pose instead of re-framing generated content (false clears it).',
+        execute: (ctx, params: { position?: [number, number, number]; target?: [number, number, number]; fov?: number; cameraMode?: 'orbit' | 'fps'; keepPoseOnLoad?: boolean }) => {
             const scene = ctx.getSceneData();
             if (!scene.camera) scene.camera = { position: [10, 10, 10], target: [0, 0, 0], fov: 60 };
 
@@ -279,6 +279,8 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
             if (params.target) scene.camera.target = [...params.target];
             if (params.fov) scene.camera.fov = params.fov;
             if (params.cameraMode) scene.cameraMode = params.cameraMode;
+            if (params.keepPoseOnLoad === true) scene.camera.keepPoseOnLoad = true;
+            else if (params.keepPoseOnLoad === false) delete scene.camera.keepPoseOnLoad;
 
             return { camera: scene.camera, cameraMode: scene.cameraMode };
         }
