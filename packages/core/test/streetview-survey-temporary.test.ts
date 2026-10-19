@@ -389,6 +389,29 @@ describe('temporary-structure readings and masks', () => {
         expect(r.cost).toEqual({ images: 0, questions: 1 });
     });
 
+    it('never offers a view swapped out as another view\'s alternative', async () => {
+        const face = { faceId: 'f0', headingDeg: 180, source: 'footprint', centre: [0, 7, 5], outward: [0, 0, 1], widthM: 12, heightM: 14 } as never;
+        const view = (panoId: string, date: string) => ({ faceId: 'f0', panoId, date, facadeHeadingDeg: 180, eye: [0, 2.5, 24], headingDeg: 180, pitchDeg: 10, fovDeg: 60, aspectRatio: 'RATIO_4X3' });
+        // each pano's photo a flat grey of its own level (p1 10, p2 20, p3 30)
+        const level = (panoId: string) => 10 * Number(panoId.slice(1));
+        const jpeg = (panoId: string) => Buffer.from(jpegJs.encode({ data: Buffer.alloc(100 * 80 * 4, level(panoId)), width: 100, height: 80 }, 95).data);
+        const image = (panoId: string, date: string) => ({ view: view(panoId, date), bytes: jpeg(panoId), mimeType: 'image/jpeg', widthPx: 100, heightPx: 80, sha256: panoId, id: `sv:${panoId}`, nativeSampleM: 0.01, fetchMs: 1 }) as never;
+        const pano = (panoId: string, date: string) => ({ pano: { panoId, date, lat: 0, lng: 0, x: 0, z: 24 }, eye: [0, 2.5, 24], score: 1, bearing: 180 }) as never;
+        const flaggedPanos = new Set(['p1', 'p2']);
+        const panoOf = (bytes: Buffer) => `p${Math.round(decodeImageInMemory(bytes).rgba[0] / 10)}`;
+        const check: TemporaryChecker = async im => (flaggedPanos.has(panoOf(im.bytes))
+            ? { present: true, confidence: 0.9, description: 'a sidewalk shed', buildingShare: 0.5, regions: [], flagged: true }
+            : { present: false, confidence: 0.9, description: 'clear', buildingShare: 0.5, regions: [], flagged: false });
+        const asked: string[] = [];
+        const r = await replaceTemporaryViews({
+            images: [image('p1', '2026-04'), image('p2', '2026-08')], faces: [face], candidatesFor: () => [pano('p3', '2026-08'), pano('p1', '2026-04')], check, target: 'x', refused: new Set(),
+            streetView: { grounding: { retrieveGroundingImage: async (req: GroundingImageRequest) => { asked.push(req.panoId); return { image: jpeg(req.panoId), mimeType: 'image/jpeg', panoId: req.panoId, headingDegree: 180, pitchDegree: 0, fovDegree: 60 }; } } } as never
+        });
+        expect(r.swaps.map(x => [x.from.panoId, x.to.panoId])).toEqual([['p1', 'p3']]);
+        expect(asked).toEqual(['p3']);
+        expect(r.kept).toEqual([expect.objectContaining({ panoId: 'p2', reason: 'no eligible pano of this face from another capture month' })]);
+    });
+
     it('a failed question leaves the view unchecked, never clear', async () => {
         const failing = { models: { generateContent: async () => { throw Object.assign(new Error('bad request'), { status: 400 }); } } };
         const check = visionTemporaryChecker(new VisionModelChain<string>({ client: failing, candidates: ['m'] }));

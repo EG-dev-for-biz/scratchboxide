@@ -380,7 +380,9 @@ export async function replaceTemporaryViews(input: {
                 from: { panoId: view.panoId, ...(month ? { captureMonth: month } : {}) }, to: { panoId: alt.pano.panoId, ...(altMonth ? { captureMonth: altMonth } : {}) },
                 reason: `${r.description || 'something temporary'} (confidence ${r.confidence})`, tried: triedHere
             });
+            // the pano swapped out is known to show something temporary: never tried again for another view
             used.delete(view.panoId);
+            tried.add(view.panoId);
             used.add(alt.pano.panoId);
             images[k] = im;
             readings[k] = reading;
