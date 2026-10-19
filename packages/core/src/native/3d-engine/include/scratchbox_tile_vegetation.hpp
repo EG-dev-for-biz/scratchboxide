@@ -4288,9 +4288,9 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
             const double H = tr.heightAboveSupport;
             const LodBands bands = lodBandsFor(H, P);
             const double d0 = bands.d0, d1 = bands.d1, fade = bands.fade, fade1 = bands.fade1;
-            auto lodExtras = [&](int level, double lo, double hi, size_t tris, bool instanced) {
+            auto lodExtras = [&](int level, double lo, double hi, size_t tris, bool instanced, const std::string& more = std::string()) {
                 return "{\"sbLod\":{\"level\":" + std::to_string(level) + ",\"minDistM\":" + json::num(std::max(0.0, lo)) + ",\"maxDistM\":" + json::num(hi) +
-                       ",\"fadeM\":" + json::num(level == 0 ? fade : fade1) + ",\"triangles\":" + std::to_string(tris) + ",\"instanced\":" + (instanced ? "true" : "false") + "}}";
+                       ",\"fadeM\":" + json::num(level == 0 ? fade : fade1) + ",\"triangles\":" + std::to_string(tris) + ",\"instanced\":" + (instanced ? "true" : "false") + more + "}}";
             };
             auto instancesOf = [&](const std::vector<tree_lod::Instance>& in, const std::string& mesh) {
                 staged_glb::StagedInstances si;
@@ -4350,7 +4350,8 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
                 if (!tr.foliage.indices.empty()) l2.primitives.push_back(primitiveOf(tr.foliage, tr.growth.foliage));
             }
             const size_t level2Triangles = L.woodTriangles + tr.foliage.indices.size() / 3;
-            l2.extrasJson = lodExtras(2, d1 - 0.5 * fade1, 1.0e6, level2Triangles, false);
+            // which of the level-2 primitives are leaves (the wood is primitive 0): a viewer shades only these with the crown
+            l2.extrasJson = lodExtras(2, d1 - 0.5 * fade1, 1.0e6, level2Triangles, false, tr.foliage.indices.empty() ? std::string() : std::string(",\"foliagePrimitives\":[1]"));
             node.children.push_back(std::move(l0));
             node.children.push_back(std::move(l1));
             node.children.push_back(std::move(l2));
@@ -4361,7 +4362,17 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
             lodMembers = ",\"lod\":{\"leafLengthM\":" + json::num(L.leafLengthM) + ",\"stations\":" + std::to_string(L.stations) + ",\"repairStations\":" + std::to_string(L.repairStations) +
                          ",\"twigs\":" + std::to_string(L.twigCount()) + ",\"woodTriangles\":" + std::to_string(L.woodTriangles) +
                          ",\"level0\":" + levelJson(L.level0, L.drawnLevel0()) + ",\"level1\":" + levelJson(L.level1, L.drawnLevel1()) + "}";
-            lodMembers += ",\"sbTree\":{\"id\":" + std::to_string(tr.crownId) + ",\"hashSeed\":" + std::to_string(tr.seed) + ",\"label\":\"grown to the measured crown\"}";
+            // the crown envelope of the delivered leaves (tree node frame = the tile frame): a viewer shades the leaves with its normals
+            std::string crownJson;
+            const tree_lod::CrownEllipsoid ce = tree_lod::crownOfLeaves(L, lib);
+            if (ce.valid()) {
+                const auto& stem = (*tr.crown)["stem"];
+                const double sx = stem.arr.size() == 2 ? stem[0].num : static_cast<double>(ce.centre.x), sz = stem.arr.size() == 2 ? stem[1].num : static_cast<double>(ce.centre.z);
+                crownJson = ",\"crown\":{\"centre\":[" + json::num(ce.centre.x) + "," + json::num(ce.centre.y) + "," + json::num(ce.centre.z) + "],\"radii\":[" + json::num(ce.radii[0]) + "," +
+                            json::num(ce.radii[1]) + "," + json::num(ce.radii[2]) + "],\"yawRad\":" + json::num(ce.yawRad) + ",\"leanM\":[" + json::num(ce.centre.x - sx) + "," + json::num(ce.centre.z - sz) +
+                            "],\"points\":" + std::to_string(ce.points) + ",\"fittedTo\":\"leaf clusters\"}";
+            }
+            lodMembers += ",\"sbTree\":{\"id\":" + std::to_string(tr.crownId) + ",\"hashSeed\":" + std::to_string(tr.seed) + ",\"label\":\"grown to the measured crown\"" + crownJson + "}";
         } else {
             node.primitives = std::move(blobPrims);
         }

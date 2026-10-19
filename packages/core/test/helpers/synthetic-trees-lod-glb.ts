@@ -16,7 +16,11 @@
 import * as fs from 'fs';
 import type { TreeLodExtras, TreesGlbRootExtras } from '../../src/common/spatial/staged-location-contracts';
 
-export interface TreesLodFixtureOptions { trees?: number; psiSeason?: number }
+export interface TreesLodFixtureOptions {
+    trees?: number; psiSeason?: number;
+    /** Give each tree a crown ellipsoid (sbTree.crown) and a level-2 foliage primitive after the wood, as the native writer does. */
+    crown?: boolean;
+}
 
 /** The glTF JSON and binary of the fixture; `mutate` lets a test break one detail. */
 export function buildTreesLodGltf(opts: TreesLodFixtureOptions = {}): { json: any; bin: Buffer } {
@@ -67,6 +71,13 @@ export function buildTreesLodGltf(opts: TreesLodFixtureOptions = {}): { json: an
         for (let level = 0; level < 3; level++) {
             const f = fan(levelTris[level], 0.3 - 0.05 * level, 8);
             const wood = addMesh(f.positions, f.indices);
+            if (opts.crown && level === 2) {
+                // the blob leaf mass: a second primitive of the level-2 mesh
+                const blob = fan(8, 2.5, 3);
+                const extra = mesh(blob.positions.map((v, i) => (i % 3 === 1 ? v + 5 : v)), blob.indices);
+                pad();
+                meshes[wood].primitives.push(extra.primitives[0]);
+            }
             const instanced = level < 2;
             const children: number[] = [];
             if (instanced) {
@@ -81,10 +92,11 @@ export function buildTreesLodGltf(opts: TreesLodFixtureOptions = {}): { json: an
                 }
             }
             const lod: TreeLodExtras = { level: level as 0 | 1 | 2, minDistM: bands[level][0], maxDistM: bands[level][1], fadeM: bands[level][2], triangles: levelTris[level], instanced };
+            if (opts.crown && level === 2) lod.foliagePrimitives = [1];
             nodes.push({ name: `tree${t}_lod${level}`, mesh: wood, ...(children.length ? { children } : {}), extras: { sbLod: lod } });
             levelNodes.push(nodes.length - 1);
         }
-        nodes.push({ name: `tree${t}`, translation: [10 * t, 0, 0], children: levelNodes, extras: { sbTree: { id: t, hashSeed: 7919 * (t + 1), label: 'grown to the measured crown' } } });
+        nodes.push({ name: `tree${t}`, translation: [10 * t, 0, 0], children: levelNodes, extras: { sbTree: { id: t, hashSeed: 7919 * (t + 1), label: 'grown to the measured crown', ...(opts.crown ? { crown: { centre: [0.1, 6, 0.2], radii: [2.5, 2, 1.5], yawRad: 0.3, leanM: [0.1, 0.2], points: 9, fittedTo: 'leaf clusters' } } : {}) } } });
         treeNodes.push(nodes.length - 1);
     }
     const root: TreesGlbRootExtras = {
@@ -98,7 +110,7 @@ export function buildTreesLodGltf(opts: TreesLodFixtureOptions = {}): { json: an
     const bin = Buffer.concat(parts);
     const json = {
         asset: { version: '2.0' }, extensionsUsed: ['EXT_mesh_gpu_instancing'], extras: { sbTrees: root },
-        buffers: [{ byteLength: bin.length }], bufferViews, accessors, meshes, nodes, scenes: [{ nodes: treeNodes }], scene: 0
+        buffers: [{ byteLength: bin.length }], bufferViews, accessors, meshes, nodes, scenes: [{ nodes: treeNodes, extras: { sbTrees: root } }], scene: 0
     };
     return { json, bin };
 }

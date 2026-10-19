@@ -2096,6 +2096,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     const lod = model.parent ? (model.userData.sbTreeLod as TreeLodController | undefined) : undefined;
                     if (!lod) return;
                     if (treeShadowCamera === undefined) treeShadowCamera = findShadowCamera(stack.scene, !!stack.renderer?.shadowMap?.enabled);
+                    lod.setCrownShading(sceneDataRef.current?.treeCrownShading);
                     lod.update(camera, treeShadowCamera);
                 });
 

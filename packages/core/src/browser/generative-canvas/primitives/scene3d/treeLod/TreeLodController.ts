@@ -12,6 +12,7 @@ import * as THREE from 'three';
 import type { TreeLodExtras, TreeNodeExtras, TreesGlbRootExtras } from '../../../../../common/spatial/staged-location-contracts';
 import { isStagedMaterial } from '../stagedBuild/revealMaterial';
 import { makeFadeVariant } from './treeLodFade';
+import { attachCrownAttributes, crownQuadricInMeshFrame, makeCrownVariant, resolveCrownShading, setCrownShadingUniforms, supportsCrownShading, type CrownShadingOptions } from './treeCrownShading';
 import { FADE_STEPS, hysteresisDistance, levelRange, quantiseRange, stepEdges, targetEdges, type LodBand, type LodEdges } from './treeLodMath';
 
 /**
@@ -38,6 +39,12 @@ import { FADE_STEPS, hysteresisDistance, levelRange, quantiseRange, stepEdges, t
  * shadow camera sees stays drawable at level 1 or 2 (never the leaf-bearing near level) so its shadow still falls into
  * view, and the triangle budget counts the shadow pass beside the main pass when a shadow camera is given.
  * Trees are labelled by the layer ("grown to the measured crown") at every level; nothing here names a species.
+ *
+ * Crown shading (treeCrownShading.ts): a tree whose extras carry its crown ellipsoid has its leaf meshes (the leaf-cluster
+ * instances of levels 0 and 1, named by the root's cluster library, and the level-2 primitives its extras list as foliage;
+ * never wood or twigs) wear a crown variant of their base, and the dither variants of a leaf mesh are made from that
+ * variant. On by default; `setCrownShading` turns it off for comparison or changes its factors. A mesh whose material was
+ * swapped behind the controller's back (the clay pass, a material override) is dressed again at the next frame.
  */
 
 export interface TreeLodOptions {
@@ -53,6 +60,8 @@ export interface TreeLodOptions {
     triangleBudget?: number;
     /** Clock in ms, replaceable in tests. */
     now?: () => number;
+    /** Crown shading of the leaves (defaults: on, blend 0.7 / 0.9 / 1.0). */
+    crownShading?: Partial<CrownShadingOptions>;
 }
 
 export interface TreeLodStats {
@@ -76,6 +85,10 @@ export interface TreeLodStats {
     demotedTrees: number;
     /** JS time spent in update() (ms). */
     updateMs: number;
+    /** Trees whose leaves carry a crown (crown shading applies to them when it is on). */
+    crownTrees: number;
+    /** Leaf meshes that carry crown attributes. */
+    crownLeafMeshes: number;
 }
 
 interface LevelState { gate: THREE.Object3D; meshes: THREE.Mesh[]; triangles: number; applied: string }
@@ -134,7 +147,7 @@ const keyOf = (r: [number, number]): string => {
 export class TreeLodController {
     readonly psiSeason: number | undefined;
     private readonly trees: TreeState[] = [];
-    private readonly opts: Required<Omit<TreeLodOptions, 'now'>> & { now: () => number };
+    private readonly opts: Required<Omit<TreeLodOptions, 'now' | 'crownShading'>> & { now: () => number };
     private readonly variants = new Map<THREE.Material, Map<string, THREE.Material>>();
     private forced: 0 | 1 | 2 | undefined;
     private lastMs: number | undefined;
@@ -143,7 +156,11 @@ export class TreeLodController {
     private readonly pvShadow = new THREE.Matrix4();
     private readonly shadowFrustum = new THREE.Frustum();
     private readonly tmp = new THREE.Vector3();
-    readonly stats: TreeLodStats = { trees: 0, visibleTrees: 0, culledTrees: 0, atLevel: [0, 0, 0], fading: 0, estimatedTriangles: 0, estimatedShadowTriangles: 0, shadowOnlyTrees: 0, commits: 0, deferredCommits: 0, newVariants: 0, demotedTrees: 0, updateMs: 0 };
+    readonly stats: TreeLodStats = { trees: 0, visibleTrees: 0, culledTrees: 0, atLevel: [0, 0, 0], fading: 0, estimatedTriangles: 0, estimatedShadowTriangles: 0, shadowOnlyTrees: 0, commits: 0, deferredCommits: 0, newVariants: 0, demotedTrees: 0, updateMs: 0, crownTrees: 0, crownLeafMeshes: 0 };
+    private crown: CrownShadingOptions;
+    private crownKey = '';
+    private readonly crownVariants = new Map<THREE.Material, THREE.Material>();
+    private readonly leafVariantNames: Set<string>;
 
     /** Finds the trees under `root` (a loaded trees GLB scene) and puts a gate above each level node. Returns nothing to do when there are none. */
     constructor(readonly root: THREE.Object3D, options: TreeLodOptions = {}) {
@@ -154,6 +171,10 @@ export class TreeLodController {
             now: options.now ?? (() => performance.now())
         };
         this.psiSeason = (root.userData?.sbTrees as TreesGlbRootExtras | undefined)?.psiSeason;
+        this.leafVariantNames = new Set(((root.userData?.sbTrees as TreesGlbRootExtras | undefined)?.clusterLibrary?.variants ?? []).filter(v => v.leavesLevel0 > 0 || v.leavesLevel1 > 0).map(v => v.mesh));
+        this.crown = resolveCrownShading(options.crownShading);
+        this.crownKey = JSON.stringify(this.crown);
+        setCrownShadingUniforms(this.crown);
         root.updateMatrixWorld(true);
         const found: THREE.Object3D[] = [];
         root.traverse(o => { if ((o.userData as { sbTree?: TreeNodeExtras })?.sbTree) found.push(o); });
@@ -162,6 +183,52 @@ export class TreeLodController {
             if (s) this.trees.push(s);
         }
         this.stats.trees = this.trees.length;
+    }
+
+    /** The crown shading in force. */
+    get crownShading(): Readonly<CrownShadingOptions> { return this.crown; }
+
+    /**
+     * Turns the crown shading of the leaves on or off, or changes its factors (a partial override of the defaults). The
+     * factors live in uniforms every crown variant shares, so they apply at once; switching it on or off redresses every
+     * tree over the next frames. Cheap when nothing changed, so it can be called every frame.
+     */
+    setCrownShading(options: Partial<CrownShadingOptions> | undefined | null): void {
+        const next = resolveCrownShading(options);
+        const key = JSON.stringify(next);
+        if (key === this.crownKey) return;
+        const toggled = next.enabled !== this.crown.enabled;
+        this.crown = next;
+        this.crownKey = key;
+        setCrownShadingUniforms(next);
+        if (toggled) for (const t of this.trees) for (const l of t.levels) if (l.applied !== 'off') l.applied = 'redress';
+    }
+
+    /** The material a mesh wears in full: its base, or for a leaf mesh with a crown (when crown shading is on) the base's crown variant. */
+    private fullMaterialOf(m: THREE.Mesh, base: THREE.Material): THREE.Material {
+        if (!this.crown.enabled || !m.userData.sbCrownLeaf || !supportsCrownShading(base)) return base;
+        let v = this.crownVariants.get(base);
+        if (!v) this.crownVariants.set(base, v = makeCrownVariant(base));
+        return v;
+    }
+
+    /**
+     * Leaf meshes of a level: the leaf-cluster instances (their cluster mesh is a variant of the root's cluster library;
+     * twigs are wood) and the node's own primitives its extras list as foliage.
+     */
+    private leafMeshesOf(obj: THREE.Object3D, lod: TreeLodExtras): THREE.Mesh[] {
+        const out: THREE.Mesh[] = [];
+        obj.traverse(o => {
+            const m = o as THREE.Mesh;
+            const cl = (o.userData as { sbCluster?: { clusterMesh?: string } }).sbCluster;
+            if (m.isMesh && (m as THREE.InstancedMesh).isInstancedMesh && cl?.clusterMesh && this.leafVariantNames.has(cl.clusterMesh)) out.push(m);
+        });
+        if (lod.foliagePrimitives?.length) {
+            // the node's own primitives: the node itself when it has one, else the loader's group of them (child nodes excluded)
+            const prims = (obj as THREE.Mesh).isMesh ? [obj as THREE.Mesh] : obj.children.filter(c => (c as THREE.Mesh).isMesh && !c.userData?.sbCluster && !c.userData?.sbLod) as THREE.Mesh[];
+            for (const i of lod.foliagePrimitives) if (prims[i] && !(prims[i] as THREE.InstancedMesh).isInstancedMesh) out.push(prims[i]);
+        }
+        return out;
     }
 
     get treeCount(): number { return this.trees.length; }
@@ -192,6 +259,21 @@ export class TreeLodController {
             });
             return { gate, meshes, triangles: meshes.reduce((a, m) => a + triangleCountOf(m), 0), applied: 'off' };
         }) as [LevelState, LevelState, LevelState];
+        const crown = (node.userData.sbTree as TreeNodeExtras).crown;
+        if (crown && crown.radii?.length === 3 && crown.centre?.length === 3) {
+            node.updateMatrixWorld(true);
+            const nodeInv = node.matrixWorld.clone().invert();
+            let leaves = 0;
+            byLevel.forEach(l => {
+                for (const m of this.leafMeshesOf(l!.obj, l!.lod)) {
+                    const meshToTree = nodeInv.clone().multiply(m.matrixWorld);
+                    attachCrownAttributes(m, crownQuadricInMeshFrame(crown, meshToTree, l!.lod.level));
+                    m.userData.sbCrownLeaf = true;
+                    leaves++;
+                }
+            });
+            if (leaves > 0) { this.stats.crownTrees++; this.stats.crownLeafMeshes += leaves; }
+        }
         const box = new THREE.Box3().setFromObject(node);
         const sphere = box.isEmpty() ? new THREE.Sphere(node.getWorldPosition(new THREE.Vector3()), 1) : box.getBoundingSphere(new THREE.Sphere());
         const scale = Math.max(1e-6, node.matrixWorld.getMaxScaleOnAxis());
@@ -298,6 +380,11 @@ export class TreeLodController {
             t.snap = false;
             let changed = false;
             for (let k = 0; k < 3; k++) {
+                const lvl = t.levels[k];
+                // a mesh whose material was swapped behind our back (the clay pass, an override) wears its new base plain: dress it again
+                if (lvl.applied !== 'off' && lvl.applied !== 'redress') {
+                    for (const m of lvl.meshes) if (m.userData.sbLodWorn !== undefined && m.material !== m.userData.sbLodWorn && !isStagedMaterial(m.material as THREE.Material)) { lvl.applied = 'redress'; break; }
+                }
                 const w = keyOf(levelRange(t.edges, k as 0 | 1 | 2));
                 t.want[k] = w;
                 if (w !== t.levels[k].applied) changed = true;
@@ -346,22 +433,23 @@ export class TreeLodController {
             const base = m.userData.sbLodBase as THREE.Material | undefined;
             if (!base) continue;
             if (isStagedMaterial(m.material as THREE.Material)) { handDressed = true; continue; }
-            if (want === 'full') { dressed.push([m, base]); continue; }
+            const full = this.fullMaterialOf(m, base);
+            if (want === 'full') { dressed.push([m, full]); continue; }
             const inst = !!(m as THREE.InstancedMesh).isInstancedMesh;
             const key = `${want}|${inst ? 'I' : 'P'}`;
-            let perBase = this.variants.get(base);
-            if (!perBase) this.variants.set(base, perBase = new Map());
+            let perBase = this.variants.get(full);
+            if (!perBase) this.variants.set(full, perBase = new Map());
             let v = perBase.get(key);
             if (!v) {
                 if (variantBudget - made <= 0) return { ok: false, made };
                 const [lo, hi] = want.split('-').map(Number);
-                v = makeFadeVariant(base, lo, hi, inst);
+                v = makeFadeVariant(full, lo, hi, inst);
                 perBase.set(key, v);
                 made++;
             }
             dressed.push([m, v]);
         }
-        for (const [m, mat] of dressed) if (m.material !== mat) m.material = mat;
+        for (const [m, mat] of dressed) { if (m.material !== mat) m.material = mat; m.userData.sbLodWorn = mat; }
         // A level the staged-build hook has dressed cannot dither: it shows when it has the larger share, else it is off.
         lvl.gate.visible = !handDressed || want === 'full' || (() => { const [lo, hi] = want.split('-').map(Number); return hi - lo >= FADE_STEPS / 2; })();
         lvl.applied = want;
@@ -376,6 +464,7 @@ export class TreeLodController {
                     const base = m.userData.sbLodBase as THREE.Material | undefined;
                     if (base && !isStagedMaterial(m.material as THREE.Material)) m.material = base;
                     delete m.userData.sbTreeLodMesh;
+                    delete m.userData.sbLodWorn;
                     if (m.userData.sbLodCast !== undefined) { m.castShadow = m.userData.sbLodCast as boolean; delete m.userData.sbLodCast; }
                 }
                 const child = l.gate.children[0];
@@ -386,6 +475,8 @@ export class TreeLodController {
         }
         for (const per of this.variants.values()) for (const v of per.values()) v.dispose();
         this.variants.clear();
+        for (const v of this.crownVariants.values()) v.dispose();
+        this.crownVariants.clear();
         this.trees.length = 0;
     }
 }

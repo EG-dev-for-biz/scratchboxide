@@ -875,6 +875,12 @@ export interface Scene3DData {
     parentCommitId?: string;
     objects?: Media4DObject[];
     renderMode?: 'wireframe' | 'solid' | 'shaded' | 'pbr' | 'clay';
+    /**
+     * Soft crown normals on the leaves of staged trees (on by default): `enabled: false` shows the leaves with their own
+     * normals for comparison; `blend` is the crown normal's share at the near, mid and far level, `skyBias` the tilt
+     * toward the sky, `noise` the per-leaf variation at each level.
+     */
+    treeCrownShading?: { enabled?: boolean; blend?: [number, number, number]; skyBias?: number; noise?: [number, number, number] };
     clayPreset?: 'warm-clay' | 'alabaster' | 'onyx' | 'studio-grey' | 'terracotta' | 'porcelain' | 'concrete' | string;
     restructuringTelemetry?: {
         vertices?: number;

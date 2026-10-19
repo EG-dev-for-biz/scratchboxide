@@ -738,7 +738,11 @@ export interface StagedGlbRootExtras { sb: { schema: 'scratchbox.staged-glb/2'; 
 export type TreeLodLevel = 0 | 1 | 2;
 
 /** Node extras `sbLod` of each of the three children of a tree node. Distances are metres from the camera; fadeM is the dither band. */
-export interface TreeLodExtras { level: TreeLodLevel; minDistM: number; maxDistM: number; fadeM: number; triangles: number; instanced: boolean }
+export interface TreeLodExtras {
+    level: TreeLodLevel; minDistM: number; maxDistM: number; fadeM: number; triangles: number; instanced: boolean;
+    /** Indices of this level node's own primitives that are leaves (level 2: the blob masses after the wood). */
+    foliagePrimitives?: number[];
+}
 
 /** Node extras `sbCluster` of an EXT_mesh_gpu_instancing leaf-cluster node (a child of a level-0/1 node): which shared mesh it instances and its hash seed for the dither. */
 export interface TreeClusterExtras { clusterMesh: string; hashSeed: number }
@@ -749,8 +753,15 @@ export interface TreeLeafSizeModel { sizeRatioToCrownHeight: number; minM: numbe
 /** One shared cluster mesh: how many leaves it holds at level 0 and level 1. */
 export interface TreeClusterVariant { mesh: string; leavesLevel0: number; leavesLevel1: number }
 
+/**
+ * The crown envelope of a tree's delivered leaves, in the tree node's frame: an ellipsoid with semi-axes `radii`
+ * ([0] horizontal at `yawRad` from +x toward +z, [1] vertical, [2] the other horizontal). A viewer shades the leaves
+ * with its normals so the crown reads as one soft volume. `leanM` is the centre's horizontal offset from the stem.
+ */
+export interface TreeCrownExtras { centre: [number, number, number]; radii: [number, number, number]; yawRad: number; leanM: [number, number]; points: number; fittedTo: string }
+
 /** Node extras `sbTree` of each tree node. Carries no species or measured claim for leaves. */
-export interface TreeNodeExtras { id: number; hashSeed: number; label: string }
+export interface TreeNodeExtras { id: number; hashSeed: number; label: string; crown?: TreeCrownExtras }
 
 /** Root extras `sbTrees` of the trees GLB. psiSeason 0..1 scales leaf density (0 bare winter, 1 full summer). */
 export interface TreesGlbRootExtras {
@@ -1724,10 +1735,16 @@ const DEFINITIONS = {
     },
     treeLodExtras: obj(['level', 'minDistM', 'maxDistM', 'fadeM', 'triangles', 'instanced'], {
         level: { type: 'integer', minimum: 0, maximum: 2 }, minDistM: ref('nonneg'), maxDistM: ref('nonneg'), fadeM: ref('nonneg'),
-        triangles: NONNEG_INT, instanced: BOOL
+        triangles: NONNEG_INT, instanced: BOOL, foliagePrimitives: arr(NONNEG_INT)
     }),
     treeClusterExtras: obj(['clusterMesh', 'hashSeed'], { clusterMesh: { type: 'string', minLength: 1 }, hashSeed: NONNEG_INT }),
-    treeNodeExtras: obj(['id', 'hashSeed', 'label'], { id: NONNEG_INT, hashSeed: NONNEG_INT, label: { type: 'string', minLength: 1 } }),
+    treeNodeExtras: obj(['id', 'hashSeed', 'label'], {
+        id: NONNEG_INT, hashSeed: NONNEG_INT, label: { type: 'string', minLength: 1 },
+        crown: obj(['centre', 'radii', 'yawRad', 'leanM', 'points', 'fittedTo'], {
+            centre: ref('vec3'), radii: arr({ type: 'number', exclusiveMinimum: 0 }, { minItems: 3, maxItems: 3 }), yawRad: NUM,
+            leanM: arr(NUM, { minItems: 2, maxItems: 2 }), points: NONNEG_INT, fittedTo: STR
+        })
+    }),
     TreesGlbRootExtras: obj(['schema', 'psiSeason', 'clusterLibrary'], {
         schema: { const: 'scratchbox.trees-lod/1' }, psiSeason: ref('unit'),
         clusterLibrary: obj(['variants', 'leafSizeModel'], {
