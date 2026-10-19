@@ -477,7 +477,7 @@ export function reliefGeometry(run: MassingRun, report: ReliefReport, input: {
     /**
      * Generated, where the facade clearly has the feature and the scan's average is too weak to measure it:
      *  - a band: a candidate the averaging proposed (standing out, its blocks mostly agreeing) but refused only for its
-     *    standard error or its block count, that the facade's own evidence places: at the face's top (a crowning band) or
+     *    standard error or its block count, that the facade's own evidence places: at a wall's top (a crowning band) or
      *    at a storey line of the accepted grammar (within 0.6 m of a tier's top or bottom);
      *  - a reveal: a lattice group whose averaged recess was refused, the grammar having read the openings.
      * Its depth is the typical one clamped into the candidate's evidence bounds [mean - k SE, mean + k SE]; none when the
@@ -495,7 +495,8 @@ export function reliefGeometry(run: MassingRun, report: ReliefReport, input: {
                 const weakOnly = lf.depth < K_SIGMA * lf.se || lf.blocks < MIN_BLOCKS;
                 if (!weakOnly) return;
                 const t0 = rowT(f, lf.l1) - f.pixel / 2, t1 = rowT(f, lf.l0) + f.pixel / 2;
-                const crown = f.tMax - t1 <= CROWN_REACH_M;
+                // a crowning band is the top of a wall (the top of a modelled volume's facet is not the building's crown)
+                const crown = f.wall && f.tMax - t1 <= CROWN_REACH_M;
                 const storey = storeyLines.some(y => Math.abs(y - t0) <= 0.6 || Math.abs(y - t1) <= 0.6);
                 if (!crown && !storey) return;
                 const lo = Math.max(0, lf.depth - K_SIGMA * lf.se), hi = lf.depth + K_SIGMA * lf.se;
