@@ -159,6 +159,7 @@ import { CameraSettingsControl } from './scene3d/CameraSettingsControl';
 import { keepsStoredPose, lensCommands, liveViewMatches, runCameraCommands, withLivePose, type CameraCommand, type Vec3 } from './scene3d/cameraSettings';
 import { syncObjectMaterial } from './scene3d/materialOverride';
 import { TreeLodController, findShadowCamera, formatTreeLodStats, type TreeLodFrame } from './scene3d/treeLod/TreeLodController';
+import { applyTreeTextures, loadTreeTextureLibrary } from './scene3d/treeLod/treeTextureMaterials';
 import { disposeObject3DDeep, releaseObject3D } from './scene3d/disposeObject';
 import {
     resolveSelectableObject,
@@ -2997,7 +2998,13 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     model.updateMatrixWorld(true);
                     // A trees GLB (nodes with extras sbTree) gets its level-of-detail controller before the clay pass, so wood and leaves share one material.
                     const lod = new TreeLodController(model, { crownShading: sceneDataRef.current?.treeCrownShading, view: sceneDataRef.current?.treeLod });
-                    if (lod.hasTrees) model.userData.sbTreeLod = lod;
+                    if (lod.hasTrees) {
+                        model.userData.sbTreeLod = lod;
+                        // textured mode's tree surfaces (the library the trees' extras chose from); clay mode keeps the shared tree clay
+                        loadTreeTextureLibrary()
+                            .then(lib => { model.userData.sbTreeTextures = applyTreeTextures(model, lib); })
+                            .catch(err => console.warn('[Scene3D] tree textures not applied:', (err as Error).message));
+                    }
                     // A staged layer's textured twin keeps its photo material under the clay pass, and its confidence texture is loaded.
                     void prepareTexturedTwinModel(gltf);
                     applyClayRenderMode([model], renderModeRef.current === 'clay');

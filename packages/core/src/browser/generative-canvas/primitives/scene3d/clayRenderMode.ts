@@ -33,6 +33,20 @@ export function sharedTreeClayMaterial(): THREE.MeshStandardMaterial {
     return sharedTreeClay;
 }
 
+/**
+ * Gives a tree level-of-detail mesh the material it wears outside clay mode (its textured surface). In clay mode the mesh
+ * keeps the shared clay and the material waits to be restored when clay is turned off; otherwise it is the mesh's base at
+ * once (the controller redresses the mesh, dither and crown variants included, at its next frame).
+ */
+export function setTreeLodTexturedMaterial(mesh: THREE.Mesh, material: THREE.Material): void {
+    if (mesh.userData[ORIGINAL_KEY]) {
+        mesh.userData[ORIGINAL_KEY] = material;
+        return;
+    }
+    mesh.userData.sbLodBase = material;
+    mesh.material = material;
+}
+
 function resetClay(mat: THREE.MeshStandardMaterial): void {
     mat.color.setHex(CLAY_SURFACE.color);
     mat.roughness = CLAY_SURFACE.roughness;

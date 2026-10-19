@@ -19,7 +19,9 @@
  *   - per primitive: POSITION, NORMAL (triangles; computed area-weighted when the caller gives none), COLOR_0 (optional,
  *     VEC4 UNSIGNED_BYTE normalised), `_REVEAL` (optional, VEC2 UNSIGNED_SHORT normalised: x = item order in the node,
  *     y = order inside the item, the generator's real build order) and `_DISP` (optional, VEC3 FLOAT metres: the
- *     host-surface-to-final displacement the reveal scales from 0 to 1);
+ *     host-surface-to-final displacement the reveal scales from 0 to 1), TEXCOORD_0 (optional, VEC2 FLOAT: texture
+ *     coordinates, e.g. a tree's wood in bark-texture tiles) and `_LEAF` (optional, VEC2 UNSIGNED_SHORT normalised: a leaf
+ *     card's atlas pick and whether the vertex is on a blade); library meshes carry the same optional attributes;
  *   - node extras: the caller's JSON object (it must hold `sb`, the StagedNodeExtras), copied verbatim;
  *   - one studio clay material; the root extras (StagedGlbRootExtras `sb`, the frame beside it) are the document's and
  *     the scene's extras (see WriteOptions::rootExtrasJson), never a node's.
@@ -294,6 +296,8 @@ struct StagedPrimitive {
     std::vector<std::array<uint8_t, 4>> colors;      // optional COLOR_0 (RGBA 0..255)
     std::vector<std::array<float, 2>> reveal;        // optional _REVEAL (0..1 each)
     std::vector<Vec3> disp;                          // optional _DISP (metres)
+    std::vector<std::array<float, 2>> uvs;           // optional TEXCOORD_0 (float)
+    std::vector<std::array<float, 2>> leaf;          // optional _LEAF (each in [0, 1], written UNSIGNED_SHORT normalised)
     // Reuses the buffers of a primitive written earlier (nothing is written again): the node named here must be in the same
     // frameGroup, and `reuseIndex` counts that node's written primitives. All other members are then empty.
     std::string reuseNode;
@@ -453,6 +457,30 @@ inline int8_t snorm8(double v) { return static_cast<int8_t>(std::clamp(std::lrou
 inline double unSnorm16(int16_t q) { return std::max(static_cast<double>(q) / 32767.0, -1.0); }
 inline double unSnorm8(int8_t q) { return std::max(static_cast<double>(q) / 127.0, -1.0); }
 
+/** TEXCOORD_0 (float) and `_LEAF` (unorm16) of a primitive, when it has them. */
+inline void writeTexAttributes(Builder& gb, json::Object& attrs, const StagedPrimitive& pr, size_t nv, const std::string& who) {
+    if (!pr.uvs.empty()) {
+        if (pr.uvs.size() != nv) throw StagedGlbError(who + ": " + std::to_string(pr.uvs.size()) + " TEXCOORD_0 values for " + std::to_string(nv) + " vertices");
+        std::vector<float> f(nv * 2);
+        for (size_t v = 0; v < nv; ++v) {
+            if (!std::isfinite(pr.uvs[v][0]) || !std::isfinite(pr.uvs[v][1])) throw StagedGlbError(who + " has a non-finite TEXCOORD_0 value");
+            f[v * 2] = pr.uvs[v][0];
+            f[v * 2 + 1] = pr.uvs[v][1];
+        }
+        attrs.i("TEXCOORD_0", gb.addAccessor(gb.addView(f.data(), f.size() * 4, 34962), 5126, nv, "VEC2", false));
+    }
+    if (!pr.leaf.empty()) {
+        if (pr.leaf.size() != nv) throw StagedGlbError(who + ": " + std::to_string(pr.leaf.size()) + " _LEAF values for " + std::to_string(nv) + " vertices");
+        std::vector<uint16_t> q(nv * 2);
+        for (size_t v = 0; v < nv; ++v) {
+            if (!std::isfinite(pr.leaf[v][0]) || !std::isfinite(pr.leaf[v][1])) throw StagedGlbError(who + " has a non-finite _LEAF value");
+            q[v * 2] = unorm16(pr.leaf[v][0]);
+            q[v * 2 + 1] = unorm16(pr.leaf[v][1]);
+        }
+        attrs.i("_LEAF", gb.addAccessor(gb.addView(q.data(), q.size() * 2, 34962), 5123, nv, "VEC2", true));
+    }
+}
+
 } // namespace detail
 
 /**
@@ -493,6 +521,7 @@ inline std::vector<uint8_t> write(const std::vector<StagedNode>& nodesIn, const 
         json::Object attrs;
         attrs.i("POSITION", gb.addAccessor(gb.addView(f.data(), f.size() * 4, 34962), 5126, nv, "VEC3", false, &flo, &fhi));
         attrs.i("NORMAL", gb.addAccessor(gb.addView(g.data(), g.size() * 4, 34962), 5126, nv, "VEC3", false));
+        detail::writeTexAttributes(gb, attrs, pr, nv, "library mesh '" + lm.name + "'");
         int indexAccessor;
         if (nv < 65535) {
             std::vector<uint16_t> ix(pr.indices.begin(), pr.indices.end());
@@ -692,6 +721,7 @@ inline std::vector<uint8_t> write(const std::vector<StagedNode>& nodesIn, const 
                 const int view = gb.addView(r.data(), r.size() * 2, 34962);
                 attrs.i("_REVEAL", gb.addAccessor(view, 5123, nv, "VEC2", true));
             }
+            detail::writeTexAttributes(gb, attrs, pr, nv, "node '" + node.name + "'");
             if (!pr.disp.empty()) {
                 std::vector<float> d(nv * 3);
                 for (size_t v = 0; v < nv; ++v) { d[v * 3] = pr.disp[v].x; d[v * 3 + 1] = pr.disp[v].y; d[v * 3 + 2] = pr.disp[v].z; }

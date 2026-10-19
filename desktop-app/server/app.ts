@@ -417,6 +417,16 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
         }
     }
 
+    // The tree texture library (assets/textures/trees: surface textures the viewport puts on staged trees in textured
+    // mode, with their descriptor index). Public application assets, served before the token gate.
+    for (const root of [process.cwd(), path.resolve(process.cwd(), '..'), path.resolve(__dirname, '..', '..'), path.resolve(__dirname, '..', '..', '..')]) {
+        const dir = path.join(root, 'assets', 'textures', 'trees');
+        if (fs.existsSync(path.join(dir, 'index.json'))) {
+            app.use('/assets/textures/trees', express.static(dir, { maxAge: '1h' }));
+            break;
+        }
+    }
+
     // The Python runner's output files. Saved scenes load their generator's model from here, so these are
     // served whether or not the directory exists yet: the runner creates it on its first run, after startup,
     // and a cleaned build directory comes back the same way. express.static looks files up per request and
