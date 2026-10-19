@@ -1861,7 +1861,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // ---------------- facade grammar (photo-inferred window lattices on the remeshed facades) ----------------
         const grammarRun = async (): Promise<void> => {
             if (!grammarOn) {
-                runner.skip('grammar', !facadeGrammarEnabled() ? 'facade grammar is off (SCRATCHBOX_FACADE_GRAMMAR=1 turns it on)' : !visionAvailable ? 'no vision model is configured' : 'the photometric relief is off');
+                runner.skip('grammar', !facadeGrammarEnabled() ? 'facade grammar is off (SCRATCHBOX_FACADE_GRAMMAR=0)' : !visionAvailable ? 'no vision model is configured' : 'the photometric relief is off');
                 return;
             }
             const orthosDir = remeshed?.reliefOrthosDir;
@@ -1920,7 +1920,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     })));
                     if (!accepted.length || !v.refine) {
                         return {
-                            status: degradations.length ? 'degraded' : 'committed', value: v, degradations,
+                            status: degradations.length ? 'degraded' : 'committed', value: v, degradations, cached: entry.cached, builtAtMs: entry.builtAtMs,
                             source: `facade grammar: no facade took a grammar (${v.facades.length} read, ${rejected.length} rejected by the scan or held-out check)`
                         };
                     }

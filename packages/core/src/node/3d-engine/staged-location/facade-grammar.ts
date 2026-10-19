@@ -54,8 +54,11 @@ export const MAX_OFF_FACADE_SHARE = 0.1;
 export const HELD_OUT_STRIPES = 6;
 export const HELD_OUT_BANDS = 4;
 export const HELD_OUT_SPAN_M = 8;
-/** Off until it passes on real data (SCRATCHBOX_FACADE_GRAMMAR=1 turns it on, =0 off). */
-export const FACADE_GRAMMAR_DEFAULT = false;
+/**
+ * On: it passed on real data (Haughwout Building and Puck Building, 2026-10-18: the accepted grammars beat the relief's
+ * own lattice and their out-of-place control on held-out photo evidence). SCRATCHBOX_FACADE_GRAMMAR=0 turns it off.
+ */
+export const FACADE_GRAMMAR_DEFAULT = true;
 /** The scan side of the gate: the fit's own residual tolerance. */
 export const GRAMMAR_TOLERANCE_M = PHOTO_CORRECTION_TOLERANCE_M;
 /** Facades read per build (the nearest the anchor first). */
