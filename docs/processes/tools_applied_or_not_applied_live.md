@@ -38,8 +38,7 @@ Screenshots: `test-results/screenshots/small_fixes/`.
 
 ## 4. Candidate Tool/Service Ideas
 
-* **A lens-distortion pass in the 3D viewport** (`LensDistortionEffect` exists but is not wired in), so `optics_configure_lens_distortion` could apply.
-* **A depth-of-field pass** (`CinematicBokehPass` exists, also not wired in) for `configure_physical_camera`'s focus and aperture.
+* ~~**A lens-distortion pass in the 3D viewport**~~ and ~~**a depth-of-field pass**~~: done, see `viewport_lens_distortion_dof_live.md` (`optics_configure_lens_distortion` and `configure_physical_camera` now apply them through `camera.lens`).
 
 ---
 

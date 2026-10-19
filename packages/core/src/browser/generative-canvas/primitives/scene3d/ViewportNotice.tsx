@@ -12,7 +12,7 @@ import type { SceneContentKind } from './types';
 import type { GeneratorRunError } from './generatorRun';
 
 export interface ViewportNoticeEntry {
-    kind: 'webgl-error' | 'generator-error' | 'tiles-error' | 'object-load-error' | 'undrawable-objects' | 'empty';
+    kind: 'webgl-error' | 'generator-error' | 'tiles-error' | 'object-load-error' | 'undrawable-objects' | 'optics' | 'empty';
     title: string;
     detail?: string;
 }
@@ -31,6 +31,8 @@ export interface ViewportNoticeInput {
     objectLoadErrors?: Array<{ id: string; error: string }>;
     /** Declared objects the loader skips (not a model or splat file); see undrawableSceneObjects. */
     undrawableObjects?: Array<{ id: string; reason: string }>;
+    /** Lens values in camera.lens the viewport does not draw, and why (ViewportOpticsChain status). */
+    opticsIssues?: string[];
 }
 
 const listOf = (items: string[]) => items.slice(0, 6).join('\n') + (items.length > 6 ? `\n… and ${items.length - 6} more` : '');
@@ -65,6 +67,10 @@ export function resolveViewportNotice(input: ViewportNoticeInput): ViewportNotic
             title: undrawable.length === 1 ? 'An object cannot be drawn' : `${undrawable.length} objects cannot be drawn`,
             detail: listOf(undrawable.map(o => `${o.id}: ${o.reason}`))
         });
+    }
+    const optics = input.opticsIssues || [];
+    if (optics.length > 0) {
+        notices.push({ kind: 'optics', title: 'Lens optics not fully drawn', detail: listOf(optics) });
     }
     if (notices.length === 0 && input.contentKind === 'empty' && !input.hasAuxiliaryContent) {
         notices.push({ kind: 'empty', title: 'No geometry', detail: 'This scene has no models, meshes, generator or script to draw.' });

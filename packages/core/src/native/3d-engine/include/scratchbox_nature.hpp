@@ -107,6 +107,12 @@ inline void transferFoliageNormals(
     }
 }
 
+/** UVs of a branch cylinder in texture tiles: u = turn share x `around` tiles, v from vStart (start ring) to vEnd (end ring). */
+struct BranchUv {
+    float around{1.0f};
+    float vStart{0.0f}, vEnd{1.0f};
+};
+
 /**
  * Generates procedural cylindrical branch segments between two 3D points.
  */
@@ -120,7 +126,8 @@ inline void appendBranchCylinder(
     int segments = 6,
     bool roundEnd = false,
     float startExtend = 0.0f,   // the tube runs this much past its ends along its own axis, to cover the wedge a bend opens
-    float endExtend = 0.0f      // against the next tube (a joint of two tubes at an angle)
+    float endExtend = 0.0f,     // against the next tube (a joint of two tubes at an angle)
+    const BranchUv* tiled = nullptr  // texture-tile UVs instead of the legacy cylindrical ones
 ) {
     Vec3 dir = end - start;
     float len = dir.length();
@@ -148,13 +155,13 @@ inline void appendBranchCylinder(
         mesh.vertices.push_back((start - dir * startExtend) + ringRadial * rStart);
         mesh.normals.push_back(ringRadial);
         mesh.vertexColors.push_back(woodColor);
-        mesh.uvs.push_back(Vec2(u * 2.0f, start.y * 1.5f));
+        mesh.uvs.push_back(tiled ? Vec2(u * tiled->around, tiled->vStart) : Vec2(u * 2.0f, start.y * 1.5f));
 
         // Top vertex
         mesh.vertices.push_back((end + dir * endExtend) + ringRadial * rEnd);
         mesh.normals.push_back(ringRadial);
         mesh.vertexColors.push_back(woodColor);
-        mesh.uvs.push_back(Vec2(u * 2.0f, end.y * 1.5f));
+        mesh.uvs.push_back(tiled ? Vec2(u * tiled->around, tiled->vEnd) : Vec2(u * 2.0f, end.y * 1.5f));
     }
 
     // Connect quads as triangles
@@ -182,7 +189,7 @@ inline void appendBranchCylinder(
             mesh.vertices.push_back(end + dir * (endExtend + 0.9f * std::max(rEnd, 1e-3f)));
             mesh.normals.push_back(dir);
             mesh.vertexColors.push_back(woodColor);
-            mesh.uvs.push_back(Vec2(1.0f, end.y * 1.5f));
+            mesh.uvs.push_back(tiled ? Vec2(0.5f * tiled->around, tiled->vEnd) : Vec2(1.0f, end.y * 1.5f));
         }
         for (int i = 0; i < segments; ++i) {
             mesh.indices.push_back(baseIndex + (i + 1) * 2 + 1);
@@ -1049,6 +1056,11 @@ struct SpaceColonizationConfig {
     Vec4 woodColor{0.28f, 0.20f, 0.14f, 1.0f};
     Vec4 leafColor{0.18f, 0.45f, 0.12f, 1.0f};
     uint32_t seed{1337};
+    // The budgeted wood's UVs in bark-texture tiles (both > 0): u around a branch, an integer number of tiles round (the
+    // nearest to its circumference over barkTileAroundM, at least one, so the seam meets), v along the path from the root
+    // over barkTileAlongM. Otherwise the UVs are the legacy cylindrical ones.
+    float barkTileAroundM{0.0f};
+    float barkTileAlongM{0.0f};
 
     // Strategy B: Direct Mesh-Conformal Attractor Seeding
     std::vector<Vec3> customAttractors; // If populated, overrides synthetic ellipsoid
@@ -2268,6 +2280,15 @@ private:
             const float len = (node(s.b).position - node(s.a).position).length();
             return std::min({r * std::tan(std::min(halfBend, 1.2f)), r, 0.45f * len});
         };
+        // bark-tile UVs: v is the path length from the root (nodes are created after their parents)
+        const bool tiledUv = cfg.barkTileAroundM > 0.0f && cfg.barkTileAlongM > 0.0f;
+        std::vector<float> arc(tiledUv ? N : 0, 0.0f);
+        if (tiledUv) {
+            for (size_t i = 0; i < N; ++i) {
+                const int p = g[i].parentId;
+                if (p >= 0 && static_cast<size_t>(p) < i) arc[i] = arc[static_cast<size_t>(p)] + (g[i].position - g[static_cast<size_t>(p)].position).length();
+            }
+        }
         for (const auto& s : segs) {
             if (!s.trunk && s.rA < rMin) {
                 if (growth) growth->pruned.push_back({s.a, s.b, s.rA, rad(s.b)});
@@ -2275,8 +2296,14 @@ private:
             }
             const size_t before = wood.vertices.size();
             const bool ends = endsHere(s, rMin);
+            BranchUv tile;
+            if (tiledUv) {
+                tile.around = std::max(1.0f, std::round(math::TWO_PI * s.rA / cfg.barkTileAroundM));
+                tile.vStart = arc[static_cast<size_t>(s.a)] / cfg.barkTileAlongM;
+                tile.vEnd = arc[static_cast<size_t>(s.b)] / cfg.barkTileAlongM;
+            }
             appendBranchCylinder(wood, node(s.a).position, node(s.b).position, s.rA, rad(s.b), cfg.woodColor, sides(s.rA, sidesMax), ends,
-                                 jointExtend(s, false), jointExtend(s, true));
+                                 jointExtend(s, false), jointExtend(s, true), tiledUv ? &tile : nullptr);
             if (growth) {
                 // the cylinder's vertices alternate start ring, end ring (a closing cone's two apex vertices are the end's)
                 const float ga = static_cast<float>(s.a) / growthDen, gb = static_cast<float>(s.b) / growthDen;

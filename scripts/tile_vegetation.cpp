@@ -82,6 +82,9 @@ static void usage() {
         "    --quantize 0|1 (1: KHR_mesh_quantization, positions within --max-quantization-error M (0.01) measured on the file)\n"
         "    --stage-key KEY           the staged build's stage key for the root extras (the caller's cache key)\n"
         "    --reveal 0|1 (1: each tree's growth order on its vertices as _REVEAL; 0: the same meshes without it)\n"
+        "    --texture-index PATH      the tree texture library (assets/textures/trees/index.json): each tree's leaf set and\n"
+        "                              bark chosen by appearance, its wood in the bark's tiles, the choice in its extras\n"
+        "    --texture-index-label S   how the root extras name the library (default: the path given)\n"
         "    --crown-base-ratio V --trunk-radius-per-height V --shell-depth V --min-surface-reached V\n"
         "                              (default: what crowns.json recorded as its growth, else 0.35, 0.016, 0.8, 0.9;\n"
         "                              a value other than the recorded one is refused)\n"
@@ -370,6 +373,9 @@ static int runPlant(const Args& a) {
     P.treeLod.clusterRadiusPerLeaf = a.num("cluster-radius-per-leaf", P.treeLod.clusterRadiusPerLeaf);
     P.treeLod.shellDepthPerHeight = a.num("shell-depth-per-height", P.treeLod.shellDepthPerHeight);
     P.treeLod.spacingRatio = a.num("station-spacing", P.treeLod.spacingRatio);
+    P.treeLod.farWoodTrianglesPerHeightM = a.num("far-wood-triangles-per-height", P.treeLod.farWoodTrianglesPerHeightM);
+    P.treeLod.farWoodMinTriangles = a.num("far-wood-min-triangles", P.treeLod.farWoodMinTriangles);
+    P.treeLod.farWoodMaxTriangles = a.num("far-wood-max-triangles", P.treeLod.farWoodMaxTriangles);
     P.lodNearPerHeight = a.num("lod-near-per-height", P.lodNearPerHeight);
     P.lodFarPerHeight = a.num("lod-far-per-height", P.lodFarPerHeight);
     P.lodNearMidPerHeight = a.num("lod-near-mid-per-height", P.lodNearMidPerHeight);
@@ -381,6 +387,16 @@ static int runPlant(const Args& a) {
     if (P.woodShare < 0 || P.woodShare > 1) throw VegetationError("bad_request", "--wood-share must be in [0, 1]");
     if (!(P.minTrianglesPerTree >= 1)) throw VegetationError("bad_request", "--min-triangles-per-tree must be at least 1");
     if (P.trianglesPerCrownM2 < 0) throw VegetationError("bad_request", "--triangles-per-crown-m2 must be >= 0");
+    if (a.has("texture-index")) {
+        // the tree texture library: each tree's leaf set and bark chosen by appearance (scratchbox_tree_textures.hpp)
+        const auto idx = readFileBytes(a.str("texture-index"));
+        try {
+            P.textures = std::make_shared<const tree_textures::Library>(tree_textures::parseIndex(std::string(idx.begin(), idx.end())));
+        } catch (const tree_textures::TextureIndexError& e) {
+            throw VegetationError("bad_input", std::string("--texture-index: ") + e.what());
+        }
+        P.textureIndex = a.has("texture-index-label") ? a.str("texture-index-label") : a.str("texture-index");
+    }
 
     const auto bytes = readFileBytes(a.str("crowns"));
     const std::string text(bytes.begin(), bytes.end());
@@ -515,7 +531,7 @@ static int runPlant(const Args& a) {
             };
             s << ", \"lod\": {\"leafLengthM\": " << json::num(L.leafLengthM) << ", \"stations\": " << L.stations << ", \"repairStations\": " << L.repairStations << ", \"fitShrunk\": " << L.fitShrunk
               << ", \"unfit\": " << L.unfit << ", \"inset\": " << L.inset << ", \"outsideCrown\": " << L.outsideCrown << ", \"prunedBelowRadiusM\": " << json::num(L.prunedBelowRadiusM) << ", \"skeletonNodes\": " << t.report.skeletonNodes << ", \"twigs\": " << L.twigCount() << ", \"twigRadiusMinM\": " << json::num(L.twigRadiusMinM) << ", \"twigRadiusMedianM\": " << json::num(L.twigRadiusMedianM) << ", \"twigRadiusMaxM\": " << json::num(L.twigRadiusMaxM) << ", \"woodTriangles\": " << L.woodTriangles
-              << ", \"level0\": " << lvl(L.level0, L.drawnLevel0()) << ", \"nearMid\": " << lvl(L.nearMid, L.drawnNearMid()) << ", \"level1\": " << lvl(L.level1, L.drawnLevel1()) << ", \"level2Triangles\": " << (L.woodTriangles + t.foliage.indices.size() / 3)
+              << ", \"level0\": " << lvl(L.level0, L.drawnLevel0()) << ", \"nearMid\": " << lvl(L.nearMid, L.drawnNearMid()) << ", \"level1\": " << lvl(L.level1, L.drawnLevel1()) << ", \"level2Triangles\": " << L.drawnFar(t.foliage.indices.size() / 3) << ", \"farWoodTriangles\": " << L.farWoodTriangles << ", \"farWoodPrunedBelowRadiusM\": " << json::num(L.farWoodPrunedBelowRadiusM)
               << ", \"ms\": " << json::num(t.lodMs) << ", \"msWood\": " << json::num(L.msWood) << ", \"msTwigs\": " << json::num(L.msTwigs) << ", \"msStations\": " << json::num(L.msStations)
               << ", \"msRepair\": " << json::num(L.msRepair) << ", \"msMeasure\": " << json::num(L.msMeasure) << "}";
         }

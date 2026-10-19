@@ -95,7 +95,7 @@ export class TaskCapabilityResolver {
 
         // 3D & XR (Adaptive Domain Architecture: Physical/Spatial Synthesis & Dimensional Representations)
         // 1. Explicit 3D representations, rendering engines, and geospatial/optical formats:
-        const hasExplicit3DTerms = /3d|mesh|geometry|sdf|marching\s*cubes|terrain|biome|glb|gltf|three\.js|webgl|c\+\+|clang|polygon|voxel|photorealistic\s*3d\s*tiles|cesium|quad\s*remesh|utdra|uldra|tile|void\s*carv|bridge\s*void|underpass|webxr|geospatial\s*anchor|arcore|resect(?:ion)?|geobox|image\s*location|optical\s*center|edge\s*overlap|sub-?pixel|solvepnp|pnp|feature\s*match|point\s*correspondence|lens\s*distortion|barrel\s*distortion|pincushion|chromatic\s*aberration|optical\s*lens|lens\s*shader|anamorphic\s*squeeze|atmosphere|lighting|rayleigh|mie|scattering|turbidity|sky\s*dome|aerial\s*perspective|god\s*rays|diurnal|kelvin|cloud\s*shadow|uv|unwrap|rewrap|pbr|cavitation|texture\s*atlas|splat|gaussian|3dgs|radiance\s*field|blender|\b(?:stage|staging|plinth|pedestal|cyclorama|curved\s*cove|hero\s*staging|vector\s*world|vector\s*tile|population\s*staging)\b/i.test(lower);
+        const hasExplicit3DTerms = /3d|mesh|geometry|sdf|marching\s*cubes|terrain|biome|glb|gltf|three\.js|webgl|c\+\+|clang|polygon|voxel|photorealistic\s*3d\s*tiles|cesium|quad\s*remesh|utdra|uldra|tile|void\s*carv|bridge\s*void|underpass|webxr|geospatial\s*anchor|arcore|resect(?:ion)?|geobox|image\s*location|optical\s*center|edge\s*overlap|sub-?pixel|solvepnp|pnp|feature\s*match|point\s*correspondence|lens\s*distortion|barrel\s*distortion|pincushion|depth\s*of\s*field|bokeh|chromatic\s*aberration|optical\s*lens|lens\s*shader|anamorphic\s*squeeze|atmosphere|lighting|rayleigh|mie|scattering|turbidity|sky\s*dome|aerial\s*perspective|god\s*rays|diurnal|kelvin|cloud\s*shadow|uv|unwrap|rewrap|pbr|cavitation|texture\s*atlas|splat|gaussian|3dgs|radiance\s*field|blender|\b(?:stage|staging|plinth|pedestal|cyclorama|curved\s*cove|hero\s*staging|vector\s*world|vector\s*tile|population\s*staging)\b/i.test(lower);
 
         if (hasExplicit3DTerms) {
             return '3d';
@@ -523,21 +523,34 @@ export class TaskCapabilityResolver {
                     targetService: 'WebXRGeospatialAnchorBridge',
                     details: 'Use webxr_geospatial_align_coordinates, webxr_geospatial_calibrate, or webxr_geospatial_project_vectors to synchronize geodetic anchors and render into WebXR viewport.'
                 };
+            } else if (/depth\s*of\s*field|bokeh|\bf\/\d|rack\s*focus|shallow\s*focus/i.test(lower)) {
+                canSolveNatively = true;
+                primaryNativeEngine = 'threejs-webgl';
+                nativeCapabilities.push('Thin-lens depth of field in the 3D viewport (CinematicBokehPass via ViewportOpticsChain, circle of confusion from focal length, f-number and focus)');
+                nativeCapabilities.push('configure_physical_camera Gemini Agent Tool (FOV from sensor and focal length; focus distance or a tracked focus object; anamorphic oval bokeh)');
+                rationale = 'configure_physical_camera puts the lens on the open scene\'s camera (camera.lens): the viewport draws thin-lens depth of field from the focal length, f-number and focus distance or focus object, and the result says applied: true.';
+                suggestedNativeAction = {
+                    primitiveType: '3d-scene',
+                    serviceOrTool: 'configure_physical_camera tool & ViewportOpticsChain',
+                    targetTool: 'configure_physical_camera',
+                    targetService: 'CinematicBokehPass',
+                    details: 'Call configure_physical_camera with focalLengthMm, apertureFStop and focusDistanceMeters or focusObjectId; the viewport draws the depth of field.'
+                };
             } else if (/lens\s*shader|optical\s*(?:distortion|effect|lens)|lens\s*distortion(?:\s*shader|\s*pass)?|brown-?conrady\s*(?:shader|pass|distortion)|chromatic\s*aberration|barrel\s*distortion|pincushion\s*distortion|anamorphic\s*squeeze/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'threejs-webgl';
-                nativeCapabilities.push('LensDistortionEffect & BrownConradyLensDistortionPass (Three.js WebGL post-processing)');
+                nativeCapabilities.push('LensDistortionEffect & BrownConradyLensDistortionPass, drawn by the 3D viewport (ViewportOpticsChain, with overscan and distortion-aware picking)');
                 nativeCapabilities.push('LENS_DISTORTION_SHADER (GLSL Brown-Conrady radial/tangential & chromatic dispersion)');
                 nativeCapabilities.push('Analytical Brown-Conrady CPU projection (computeBrownConradyUV)');
                 nativeCapabilities.push('Lens archetype presets (LENS_OPTICAL_PRESETS) & focal calibration');
                 nativeCapabilities.push('optics_configure_lens_distortion Gemini Agent Tool');
-                rationale = 'optics_configure_lens_distortion computes Brown-Conrady coefficients, overscan, sampled UV displacement and the GLSL pass from an explicit lens; LensDistortionEffect is a Three.js post-processing pass, but it is not wired into the 3D viewport, so the tool result is computed only (applied: false).';
+                rationale = 'optics_configure_lens_distortion writes Brown-Conrady coefficients (normalized camera coordinates) into the open scene\'s camera.lens through sb_set_camera_lens; the 3D viewport draws them as a lens-distortion pass and the result says applied: true. It also returns overscan, sampled UV displacement and, on request, the GLSL.';
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'LensDistortionEffect & optics_configure_lens_distortion tool',
                     targetTool: 'optics_configure_lens_distortion',
                     targetService: 'LensDistortionEffect',
-                    details: 'Compute the lens coefficients with optics_configure_lens_distortion (computed only; the 3D viewport draws no lens distortion), and use its GLSL or LensDistortionEffect in a renderer that draws it.'
+                    details: 'Call optics_configure_lens_distortion with customParams (k1, k2, k3, p1, p2), a presetId or a focalLengthMm; the viewport draws the distortion on the open scene.'
                 };
             } else if (/geobox|resection|optical\s*center|camera\s*resection|edge\s*overlap|sub-?pixel\s*(?:edge|alignment)|brown-?conrady|image\s*location|localize\s*photo|solvepnp|pnp|2d-to-3d|feature\s*match|pose\s*estimation/i.test(lower)) {
                 canSolveNatively = true;

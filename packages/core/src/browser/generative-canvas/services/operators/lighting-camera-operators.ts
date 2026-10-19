@@ -16,6 +16,86 @@ import {
     getSunVectorFromAngles
 } from '../atmosphere';
 import { sunAtLocalSolarTime } from './nature-atmosphere-operators';
+import type { SceneCameraLens, SceneLensDistortion } from '../../canvas-types';
+import { planViewportOptics, distortionMaxAspect } from '../../primitives/scene3d/viewportOptics';
+
+/** Parameters of sb_set_camera_lens: a field given replaces it, null removes it, an absent field is kept. */
+export interface SetCameraLensParams {
+    distortion?: SceneLensDistortion | null;
+    focalLengthMm?: number | null;
+    sensorWidthMm?: number | null;
+    sensorHeightMm?: number | null;
+    apertureFStop?: number | null;
+    focusDistanceMeters?: number | null;
+    focusObjectId?: string | null;
+    anamorphicSqueeze?: number | null;
+    depthOfField?: boolean | null;
+    /** Removes the whole lens (an ideal pinhole again: no optics passes). */
+    clear?: boolean;
+}
+
+const LENS_POSITIVE_FIELDS = ['focalLengthMm', 'sensorWidthMm', 'sensorHeightMm', 'apertureFStop', 'focusDistanceMeters', 'anamorphicSqueeze'] as const;
+const DISTORTION_FIELDS = ['k1', 'k2', 'k3', 'p1', 'p2', 'chromaticAberration'] as const;
+/** Frames up to this wide (width / height) are expected; a lens that folds inside one is reported (not refused). */
+const LENS_WIDE_ASPECT = 2.39;
+
+/**
+ * Validates and merges sb_set_camera_lens parameters into a lens; throws (nothing written) on a bad value, including
+ * distortion that folds back (has no inverse) even inside a square frame. `warnings` gets what is kept but limited.
+ */
+export function mergeCameraLens(previous: SceneCameraLens | undefined, params: SetCameraLensParams, verticalFovDeg: number, warnings: string[] = []): SceneCameraLens | undefined {
+    if (params.clear) return undefined;
+    const lens: SceneCameraLens = { ...(previous || {}) };
+    if (previous?.distortion) lens.distortion = { ...previous.distortion };
+    for (const key of LENS_POSITIVE_FIELDS) {
+        const v = params[key];
+        if (v === undefined) continue;
+        if (v === null) { delete lens[key]; continue; }
+        if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) throw new Error(`sb_set_camera_lens: ${key} must be a positive number (got ${String(v)}). Nothing was changed.`);
+        lens[key] = v;
+    }
+    if (params.focusObjectId !== undefined) {
+        if (params.focusObjectId === null || params.focusObjectId === '') delete lens.focusObjectId;
+        else if (typeof params.focusObjectId !== 'string') throw new Error('sb_set_camera_lens: focusObjectId must be an object id or name. Nothing was changed.');
+        else { lens.focusObjectId = params.focusObjectId; if (params.focusDistanceMeters === undefined) delete lens.focusDistanceMeters; }
+    } else if (typeof params.focusDistanceMeters === 'number') {
+        // a distance given on its own replaces a tracked focus object
+        delete lens.focusObjectId;
+    }
+    if (params.depthOfField !== undefined) {
+        if (params.depthOfField === null) delete lens.depthOfField;
+        else lens.depthOfField = !!params.depthOfField;
+    }
+    if (params.distortion !== undefined) {
+        if (params.distortion === null) delete lens.distortion;
+        else {
+            const d: SceneLensDistortion = { ...(lens.distortion || { k1: 0 }) };
+            for (const key of DISTORTION_FIELDS) {
+                const v = (params.distortion as unknown as Record<string, unknown>)[key];
+                if (v === undefined) continue;
+                if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error(`sb_set_camera_lens: distortion.${key} must be a finite number (got ${String(v)}). Nothing was changed.`);
+                (d as unknown as Record<string, number>)[key] = v;
+            }
+            if (d.chromaticAberration !== undefined && d.chromaticAberration < 0) throw new Error('sb_set_camera_lens: distortion.chromaticAberration cannot be negative. Nothing was changed.');
+            lens.distortion = d;
+        }
+    }
+    const f = lens.focalLengthMm;
+    if (f !== undefined && lens.focusDistanceMeters !== undefined && !(lens.focusDistanceMeters > f / 1000)) {
+        throw new Error(`sb_set_camera_lens: the focus distance ${lens.focusDistanceMeters} m is inside the ${f} mm focal length; a lens cannot focus there. Nothing was changed.`);
+    }
+    const plan = planViewportOptics(lens);
+    if (plan.distortion) {
+        const maxAspect = distortionMaxAspect(plan.distortion, verticalFovDeg);
+        if (maxAspect < 1) {
+            throw new Error(`sb_set_camera_lens: these distortion coefficients fold back inside a square ${verticalFovDeg.toFixed(1)}° frame (the model has no inverse at its edge), so the viewport could not draw them${maxAspect > 0 ? ` on frames wider than ${maxAspect.toFixed(2)}:1` : ''}. Nothing was changed.`);
+        }
+        if (maxAspect < LENS_WIDE_ASPECT) {
+            warnings.push(`at this ${verticalFovDeg.toFixed(1)}° field of view the distortion folds back (no inverse) on frames wider than ${maxAspect.toFixed(2)}:1; a wider viewport draws no distortion and shows a notice saying so`);
+        }
+    }
+    return Object.keys(lens).length > 0 ? lens : undefined;
+}
 
 
 /** Local bounds of the unit shape the viewport draws for a customMesh of `type` (syncCustomMeshes createGeometry). */
@@ -190,8 +270,8 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_set_camera',
         category: 'lighting_camera',
-        description: 'Sets camera position, target, field of view, and camera projection mode.',
-        execute: (ctx, params: { position?: [number, number, number]; target?: [number, number, number]; fov?: number; cameraMode?: 'orbit' | 'fps' }) => {
+        description: 'Sets camera position, target, field of view, and camera projection mode. keepPoseOnLoad: true makes loading the scene open on this pose instead of re-framing generated content (false clears it).',
+        execute: (ctx, params: { position?: [number, number, number]; target?: [number, number, number]; fov?: number; cameraMode?: 'orbit' | 'fps'; keepPoseOnLoad?: boolean }) => {
             const scene = ctx.getSceneData();
             if (!scene.camera) scene.camera = { position: [10, 10, 10], target: [0, 0, 0], fov: 60 };
 
@@ -199,8 +279,28 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
             if (params.target) scene.camera.target = [...params.target];
             if (params.fov) scene.camera.fov = params.fov;
             if (params.cameraMode) scene.cameraMode = params.cameraMode;
+            if (params.keepPoseOnLoad === true) scene.camera.keepPoseOnLoad = true;
+            else if (params.keepPoseOnLoad === false) delete scene.camera.keepPoseOnLoad;
 
             return { camera: scene.camera, cameraMode: scene.cameraMode };
+        }
+    },
+    {
+        name: 'sb_set_camera_lens',
+        category: 'lighting_camera',
+        description: 'Puts lens optics on the scene camera, drawn by the viewport: Brown-Conrady distortion (k1, k2, k3, p1, p2 in normalized camera coordinates, k1 < 0 barrel) and thin-lens depth of field (focal length, f-number, focus distance or a focus object, anamorphic squeeze). A field given replaces it, null removes it; clear removes the lens.',
+        execute: (ctx, params: SetCameraLensParams) => {
+            const scene = ctx.getSceneData();
+            if (!scene.camera) throw new Error('sb_set_camera_lens: the scene has no camera pose to put a lens on (set one with sb_set_camera first). Nothing was changed.');
+            const fov = typeof scene.camera.fov === 'number' && scene.camera.fov > 0 && scene.camera.fov < 180 ? scene.camera.fov : 45;
+            const warnings: string[] = [];
+            const lens = mergeCameraLens(scene.camera.lens, params || {}, fov, warnings);
+            const camera = { ...scene.camera };
+            if (lens) camera.lens = lens;
+            else delete camera.lens;
+            scene.camera = camera;
+            const plan = planViewportOptics(lens);
+            return { lens: lens ?? null, passes: plan.passes, issues: [...plan.issues, ...warnings] };
         }
     },
     {
