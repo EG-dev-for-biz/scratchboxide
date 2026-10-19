@@ -1541,6 +1541,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // ---------------- textures (background: after the photo survey/registration and the fit commit; the clay layers never wait for it) ----------------
         let texturesPromise: Promise<unknown> | undefined;
         let textureValue: TextureStageValue | undefined;
+        /** The facade grammar stage (it commits l2g, a layer the texture pass must texture however late it lands). */
+        const grammarGate: { settled?: Promise<unknown> } = {};
         const startTextures = (): void => {
             if (texturesPromise) return;
             if (deps.textures?.disabled) { runner.skip('textures', deps.textures.disabled); return; }
@@ -1771,6 +1773,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             early.catch(() => undefined);
                             await rebuildPromise.catch(() => undefined);
                             if (figuresPromise) await (figuresPromise as Promise<unknown>).catch(() => undefined);
+                            // the facade grammar runs beside the rebuild and on a first build often outlasts it (its vision reading):
+                            // its l2g is the layer the scene shows, so the stage keeps listening until the grammar has settled
+                            if (grammarGate.settled) await grammarGate.settled.catch(() => undefined);
                             run.commitListeners.delete(onCommit);
                             takeLate();
                             for (let i = 0; i < lateWork.length; i++) await lateWork[i];
@@ -2171,6 +2176,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             const st = run.summary('grammar').status;
             if (st === 'pending' || st === 'running') run.emit('grammar', 'degraded', { source: "the relief's own window lattices stand", reason: why, degradations: [] }, true);
         });
+        grammarGate.settled = grammarPromise;
         siblings.push(grammarPromise);
 
         // ---------------- trees (plant) ‖ the rebuild ----------------

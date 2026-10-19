@@ -145,4 +145,73 @@ describe('the facade grammar stage', () => {
             if (prev === undefined) delete process.env.SCRATCHBOX_FACADE_GRAMMAR; else process.env.SCRATCHBOX_FACADE_GRAMMAR = prev;
         }
     }, 300_000);
+
+    it('textures the grammar layer even when it commits after the rest of the build has settled (an uncached first build)', async () => {
+        // live (bake-off, Haughwout and Jefferson Market, first builds): the grammar's vision reading took longer than the
+        // rebuild, so l2g committed after the texture stage had stopped listening for late layers, and showed in clay
+        const prev = process.env.SCRATCHBOX_FACADE_GRAMMAR;
+        process.env.SCRATCHBOX_FACADE_GRAMMAR = '1';
+        try {
+            const root = path.join(TMP, 'ws-late');
+            fs.mkdirSync(root, { recursive: true });
+            const native = fakeNative(path.join(root, 'native'), { ground: 40, buildings: [[-13, 13, -6, 5, 22]], trees: [] });
+            const good = facadeOf(3, [20, 10, 0]);
+            const refine = {
+                refine: async (req: TileRefineRequest) => {
+                    const r = await native.deps.refine.refine(req);
+                    if (req.reliefOrthos) {
+                        const dir = path.join(path.dirname(r.clayGlb), 'relief_orthos');
+                        fs.mkdirSync(dir, { recursive: true });
+                        fs.writeFileSync(path.join(dir, good.meta.image), good.png);
+                        fs.writeFileSync(path.join(dir, 'facades.json'), JSON.stringify({ schema: 'scratchbox.relief-orthos/1', facades: [good.meta] }));
+                        return { ...r, reliefOrthosDir: dir };
+                    }
+                    if (req.facadeGrammar) return { ...r, cacheKey: `${r.cacheKey}g`, stats: { relief: { grammar: [{ facadeId: 3, applied: true, overObserved: 3, inferred: 27, contradicted: 0 }], lattices: [] } } };
+                    return r;
+                }
+            };
+            let textureStageDone = false;
+            const vision: VisionGenAIClient = {
+                models: {
+                    generateContent: async (params: any) => {
+                        const img = promptImage(params);
+                        // the reading is slow: it answers only once the texture stage has textured everything else
+                        for (let i = 0; i < 6000 && !textureStageDone; i++) await new Promise(r => setTimeout(r, 10));
+                        const text = simulatedReply(good.meta, good.png, img, good.truth);
+                        return { candidates: [{ content: { parts: [{ text }] }, finishReason: 'STOP' }], modelVersion: `${params.model}-001` } as any;
+                    }
+                }
+            };
+            const deps: StagedLocationDeps = {
+                cache: new StageCache({ workspaceRoot: root }),
+                geocode: async q => ({ lat: 40.72181, lng: -73.99949, formattedAddress: `${q}, New York, NY`, placeId: 'p' }),
+                extract: native.deps.extract, vegetation: native.deps.vegetation, refine,
+                vision: { client: vision, candidates: ['gemini-4-argon'] },
+                footprints: async () => ({ buildings: [{ id: 'b1/e0', buildingId: 'b1', ring: [[20, -20], [20, 20], [40, 20], [40, -20]], heightM: 30, heightSource: 'vector' }], note: '1 extruded building footprint (stand-in)' }),
+                newRunId: () => 'a1b2c3d5', sleep: async () => undefined,
+                textures: { maxDensityTexelsPerMeter: 4, maxSide: 256 }
+            };
+            const events: StageEvent[] = [];
+            const { result } = await runStagedLocation({ query: 'Haughwout Building', isolate: true, trees: false }, deps, {
+                emitStage: e => {
+                    events.push(e);
+                    // the first layers' textures are done: from here on the grammar's reading may answer
+                    if (e.stage === 'textures' && /l2 textured/.test(String((e as any).message ?? ''))) textureStageDone = true;
+                }
+            });
+            const layers: any[] = (result.artifact as any).data.stagedBuild.layers;
+            const l2g = layers.find(l => l.layer === 'l2g');
+            expect(l2g, JSON.stringify(result.stages.map(s => [s.stage, s.status, s.reason]))).toBeDefined();
+            // committed after the l2 texture, and still textured
+            const grammarCommit = events.find(e => e.stage === 'grammar' && (e.status === 'committed' || e.status === 'degraded'))!.seq;
+            const l2Textured = events.find(e => e.stage === 'textures' && /l2 textured/.test(String((e as any).message ?? '')))!.seq;
+            expect(grammarCommit).toBeGreaterThan(l2Textured);
+            expect(l2g.textured, 'l2g has no textured variant').toBeDefined();
+            expect(l2g.textured.url).not.toBe(l2g.url);
+            expect(l2g.textured.rungShares.reduce((a: number, b: number) => a + b, 0)).toBeCloseTo(1, 3);
+            expect(result.texturePass!.layers.map(l => l.layerKey)).toContain('l2g');
+        } finally {
+            if (prev === undefined) delete process.env.SCRATCHBOX_FACADE_GRAMMAR; else process.env.SCRATCHBOX_FACADE_GRAMMAR = prev;
+        }
+    }, 300_000);
 });
