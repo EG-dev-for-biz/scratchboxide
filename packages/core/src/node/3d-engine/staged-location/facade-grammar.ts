@@ -44,6 +44,7 @@ import { distanceTransform, gaussianBlur, sobel } from '../../spatial/StreetView
 import { encodePng } from './png-encode';
 import { facadeBuildingParts, footprintAgreement, type FootprintAgreement, type FootprintBuilding } from './facade-footprints';
 import { decodeImageInMemory } from './tile-texture-transfer';
+import { checkDimensions, plausibilitySummary, type PlausibilityFlag } from '../../../common/spatial/plausibility';
 
 export const FACADE_GRAMMAR_PROMPT_VERSION = 'facade-grammar/v1';
 /** The fit and the gates (part of the stage's cache key with the prompt version). */
@@ -898,7 +899,26 @@ export interface GrammarFacadeOutcome {
     /** The independent sources that agree with the accepted grammar: 'tiles' (it was read there), 'vector footprints' (open). */
     agreedSources?: string[];
     readings: Array<{ view: string; tiers: number; openings: number; conf: number; model: string; ms: number; cached: boolean; error?: string }>;
+    /** The grammar's storey heights, bay widths and opening sizes outside their typical range (plausibility.ts): flags only. */
+    plausibility?: PlausibilityFlag[];
     ms: number;
+}
+
+/**
+ * A grammar's measured dimensions against their typical ranges: the storey heights (the lowest spacing against the ground
+ * storey's range), and per tier the opening width and height and the bay pitch. Flags only; the grammar is unchanged.
+ */
+export function grammarPlausibility(g: Pick<FacadeGrammar, 'facadeId' | 'storeyHeightsM' | 'openings'>): PlausibilityFlag[] {
+    const cause = 'fit or grammar';
+    const at = `facade ${g.facadeId}`;
+    return checkDimensions([
+        ...g.storeyHeightsM.map((h, i) => ({ dimension: i === 0 ? 'groundStoreyHeight' : 'storeyHeight', valueM: h, label: `${at}, storey ${i + 1}`, cause })),
+        ...g.openings.flatMap((o, i) => [
+            { dimension: 'windowWidth', valueM: o.count ? o.widthM : undefined, label: `${at}, tier ${i + 1} opening width`, cause },
+            { dimension: 'windowHeight', valueM: o.count ? o.heightM : undefined, label: `${at}, tier ${i + 1} opening height`, cause },
+            { dimension: 'bayWidth', valueM: o.count >= 2 ? o.bayPitchM : undefined, label: `${at}, tier ${i + 1} bay width`, cause }
+        ])
+    ]);
 }
 
 export interface GrammarPassResult {
@@ -992,7 +1012,10 @@ export async function runFacadeGrammarPass(opts: {
             const accepted = scan.passed && heldOut.passed;
             const reason = !scan.passed ? `scan: ${scan.why}` : !heldOut.passed ? `held-out: ${heldOut.why}` : `${scan.why}; ${heldOut.why}`;
             const agreedSources = accepted ? ['tiles', ...(foot?.agrees ? ['vector footprints'] : [])] : undefined;
-            return { ...base, accepted, reason: foot ? `${reason}; footprints: ${foot.why}` : reason, grammar, halves, scan, heldOut, ...(foot ? { footprints: foot } : {}), ...(agreedSources ? { agreedSources } : {}), ms: Date.now() - tf };
+            // the grammar's dimensions against their typical ranges: reported beside it, never a gate and never a change
+            const plausibility = grammarPlausibility(grammar);
+            const why = `${foot ? `${reason}; footprints: ${foot.why}` : reason}${plausibility.length ? `; ${plausibilitySummary(plausibility)}` : ''}`;
+            return { ...base, accepted, reason: why, grammar, halves, scan, heldOut, ...(foot ? { footprints: foot } : {}), ...(agreedSources ? { agreedSources } : {}), plausibility, ms: Date.now() - tf };
         } catch (err) {
             if (opts.signal?.aborted) throw err;
             return { ...base, reason: `the facade could not be read (${err instanceof Error ? err.message : String(err)})`, ms: Date.now() - tf };
