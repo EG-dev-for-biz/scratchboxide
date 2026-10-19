@@ -208,7 +208,7 @@ describe('configure_physical_camera sets the scene camera\'s FOV, or says NOT ap
         expect(out.resultPayload.applied).toBe(true);
         expect(out.resultPayload.passes).toEqual([]);
         expect(out.resultPayload.depthOfField).toBeUndefined();
-        expect(out.resultPayload.notAppliedParts[0]).toMatch(/no focus distance or focus object was given/);
+        expect(out.resultPayload.notAppliedParts[0]).toMatch(/no focus distance, focus mode, point or object was given/);
     });
 });
 

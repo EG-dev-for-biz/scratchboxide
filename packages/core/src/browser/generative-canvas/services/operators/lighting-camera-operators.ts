@@ -16,8 +16,22 @@ import {
     getSunVectorFromAngles
 } from '../atmosphere';
 import { sunAtLocalSolarTime } from './nature-atmosphere-operators';
-import type { SceneCameraLens, SceneLensDistortion } from '../../canvas-types';
+import type { Scene3DData, SceneCameraLens, SceneLensDistortion } from '../../canvas-types';
 import { planViewportOptics, distortionMaxAspect } from '../../primitives/scene3d/viewportOptics';
+import { FOCUS_MODES_DRAWN, effectiveFocusMode, isFocusPoint } from '../../primitives/scene3d/viewportFocus';
+
+type Vec3 = [number, number, number];
+
+/**
+ * A focus point for sb_set_camera_lens: `localPosition` in the local frame of `objectId`, or `worldPosition` (the
+ * operator converts it with the object's transform: the live viewport object, else the customMesh / objects[] transform
+ * in the scene data). Without objectId the point is a fixed world point.
+ */
+export interface FocusPointParams {
+    objectId?: string;
+    localPosition?: Vec3;
+    worldPosition?: Vec3;
+}
 
 /** Parameters of sb_set_camera_lens: a field given replaces it, null removes it, an absent field is kept. */
 export interface SetCameraLensParams {
@@ -28,6 +42,14 @@ export interface SetCameraLensParams {
     apertureFStop?: number | null;
     focusDistanceMeters?: number | null;
     focusObjectId?: string | null;
+    /** 'manual' | 'auto' | 'track' (see SceneCameraLens.focusMode); null removes it. */
+    focusMode?: string | null;
+    /** Auto focus area: side of the centred square as a fraction of the frame height, (0, 1]. */
+    autoFocusAreaFraction?: number | null;
+    /** Focus-pull time constant in seconds, >= 0 (0 snaps). */
+    focusPullSeconds?: number | null;
+    /** Track this point (implies focusMode 'track' unless a mode is given); null removes it. */
+    focusPoint?: FocusPointParams | null;
     anamorphicSqueeze?: number | null;
     depthOfField?: boolean | null;
     /** Removes the whole lens (an ideal pinhole again: no optics passes). */
@@ -54,14 +76,66 @@ export function mergeCameraLens(previous: SceneCameraLens | undefined, params: S
         if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) throw new Error(`sb_set_camera_lens: ${key} must be a positive number (got ${String(v)}). Nothing was changed.`);
         lens[key] = v;
     }
+    // focus targets: one at a time (a point, a whole object, or none)
+    const setsTarget = (params.focusObjectId !== undefined && params.focusObjectId !== null && params.focusObjectId !== '')
+        || (params.focusPoint !== undefined && params.focusPoint !== null);
+    if (params.focusObjectId !== undefined && params.focusPoint !== undefined && params.focusObjectId && params.focusPoint) {
+        throw new Error('sb_set_camera_lens: give a focusPoint or a focusObjectId, not both. Nothing was changed.');
+    }
     if (params.focusObjectId !== undefined) {
         if (params.focusObjectId === null || params.focusObjectId === '') delete lens.focusObjectId;
         else if (typeof params.focusObjectId !== 'string') throw new Error('sb_set_camera_lens: focusObjectId must be an object id or name. Nothing was changed.');
-        else { lens.focusObjectId = params.focusObjectId; if (params.focusDistanceMeters === undefined) delete lens.focusDistanceMeters; }
-    } else if (typeof params.focusDistanceMeters === 'number') {
-        // a distance given on its own replaces a tracked focus object
-        delete lens.focusObjectId;
+        else {
+            lens.focusObjectId = params.focusObjectId;
+            delete lens.focusPoint;
+            if (params.focusDistanceMeters === undefined) delete lens.focusDistanceMeters;
+        }
     }
+    if (params.focusPoint !== undefined) {
+        if (params.focusPoint === null) delete lens.focusPoint;
+        else {
+            const p = params.focusPoint;
+            if (p.worldPosition !== undefined && p.localPosition === undefined) throw new Error('sb_set_camera_lens: focusPoint.worldPosition could not be converted to the object\'s local frame. Nothing was changed.');
+            const point = { ...(p.objectId ? { objectId: p.objectId } : {}), localPosition: p.localPosition as Vec3 };
+            if (!isFocusPoint(point)) throw new Error('sb_set_camera_lens: focusPoint needs localPosition (or worldPosition) as three finite numbers, and objectId (if given) as a non-empty string. Nothing was changed.');
+            lens.focusPoint = point;
+            delete lens.focusObjectId;
+        }
+    }
+    if (setsTarget && params.focusMode === undefined) lens.focusMode = 'track';
+    if (!setsTarget && params.focusMode === undefined && typeof params.focusDistanceMeters === 'number') {
+        // a distance given on its own is manual focus: it replaces a tracked point or object and auto focus
+        delete lens.focusObjectId;
+        delete lens.focusPoint;
+        delete lens.focusMode;
+    }
+    if (params.focusMode !== undefined) {
+        if (params.focusMode === null || params.focusMode === '') delete lens.focusMode;
+        else if (typeof params.focusMode !== 'string' || !FOCUS_MODES_DRAWN.includes(params.focusMode)) {
+            throw new Error(`sb_set_camera_lens: focusMode '${String(params.focusMode)}' is not one the viewport draws (${FOCUS_MODES_DRAWN.join(', ')}). Nothing was changed.`);
+        } else {
+            lens.focusMode = params.focusMode;
+            // manual and auto focus have no target; tracking needs one
+            if (params.focusMode !== 'track') { delete lens.focusObjectId; delete lens.focusPoint; }
+            else if (!lens.focusObjectId && !isFocusPoint(lens.focusPoint)) {
+                throw new Error('sb_set_camera_lens: focusMode \'track\' needs a focusPoint (a point on an object) or a focusObjectId (a whole object). Nothing was changed.');
+            }
+        }
+    }
+    if (params.autoFocusAreaFraction !== undefined) {
+        const v = params.autoFocusAreaFraction;
+        if (v === null) delete lens.autoFocusAreaFraction;
+        else if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0 || v > 1) throw new Error(`sb_set_camera_lens: autoFocusAreaFraction must be in (0, 1], a fraction of the frame height (got ${String(v)}). Nothing was changed.`);
+        else lens.autoFocusAreaFraction = v;
+    }
+    if (params.focusPullSeconds !== undefined) {
+        const v = params.focusPullSeconds;
+        if (v === null) delete lens.focusPullSeconds;
+        else if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) throw new Error(`sb_set_camera_lens: focusPullSeconds must be a number of seconds >= 0 (got ${String(v)}). Nothing was changed.`);
+        else lens.focusPullSeconds = v;
+    }
+    // a legacy lens (focusObjectId without a mode) reads as tracking; a stored mode stays consistent with its target
+    if (lens.focusMode === 'track' && effectiveFocusMode({ ...lens, focusMode: undefined }) !== 'track') delete lens.focusMode;
     if (params.depthOfField !== undefined) {
         if (params.depthOfField === null) delete lens.depthOfField;
         else lens.depthOfField = !!params.depthOfField;
@@ -115,6 +189,44 @@ function customMeshWorldMatrix(def: any, byId: Map<string, any>, depth = 0): THR
     );
     const parent = def.parentId && def.parentId !== def.id ? byId.get(def.parentId) : undefined;
     return parent && depth < 64 ? customMeshWorldMatrix(parent, byId, depth + 1).multiply(local) : local;
+}
+
+/**
+ * A focus point given as worldPosition -> localPosition in its object's frame: through the live viewport object when
+ * there is one, else the customMesh (with its parent chain) or objects[] (space.spatial3d, rotation in degrees)
+ * transform in the scene data. Throws (nothing written) when the object's transform is not known.
+ */
+function focusPointToLocal(ctx: { getThreeObject(id: string): THREE.Object3D | undefined }, scene: Pick<Scene3DData, 'customMeshes' | 'objects'>, p: FocusPointParams): FocusPointParams {
+    if (!p || p.worldPosition === undefined || p.localPosition !== undefined) return p;
+    const w = p.worldPosition;
+    if (!Array.isArray(w) || w.length !== 3 || !w.every(v => typeof v === 'number' && Number.isFinite(v))) {
+        throw new Error('sb_set_camera_lens: focusPoint.worldPosition must be three finite numbers. Nothing was changed.');
+    }
+    const world = new THREE.Vector3(w[0], w[1], w[2]);
+    if (!p.objectId) return { localPosition: [w[0], w[1], w[2]] };
+    let matrix: THREE.Matrix4 | null = null;
+    const live = ctx.getThreeObject(p.objectId);
+    if (live) {
+        live.updateWorldMatrix(true, false);
+        matrix = live.matrixWorld.clone();
+    } else {
+        const meshes: Array<{ id?: string; name?: string }> = scene.customMeshes || [];
+        const mesh = meshes.find(m => m.id === p.objectId || m.name === p.objectId);
+        const obj = (scene.objects || []).find(o => o.id === p.objectId);
+        if (mesh) matrix = customMeshWorldMatrix(mesh, new Map(meshes.map(m => [m.id ?? '', m] as [string, typeof m])));
+        else if (obj) {
+            const s3: { x?: number; y?: number; z?: number; pitch?: number; yaw?: number; roll?: number } = obj.space?.spatial3d || {};
+            const deg = Math.PI / 180;
+            matrix = new THREE.Matrix4().compose(
+                new THREE.Vector3(s3.x ?? 0, s3.y ?? 0, s3.z ?? 0),
+                new THREE.Quaternion().setFromEuler(new THREE.Euler((s3.pitch ?? 0) * deg, (s3.yaw ?? 0) * deg, (s3.roll ?? 0) * deg)),
+                new THREE.Vector3(1, 1, 1)
+            );
+        }
+    }
+    if (!matrix) throw new Error(`sb_set_camera_lens: '${p.objectId}' is not a customMesh or object in the scene data, so its transform is unknown; give focusPoint.localPosition in its local frame, or a worldPosition without objectId (a fixed world point). Nothing was changed.`);
+    const local = world.applyMatrix4(matrix.invert());
+    return { objectId: p.objectId, localPosition: [local.x, local.y, local.z] };
 }
 
 export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
@@ -288,13 +400,15 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_set_camera_lens',
         category: 'lighting_camera',
-        description: 'Puts lens optics on the scene camera, drawn by the viewport: Brown-Conrady distortion (k1, k2, k3, p1, p2 in normalized camera coordinates, k1 < 0 barrel) and thin-lens depth of field (focal length, f-number, focus distance or a focus object, anamorphic squeeze). A field given replaces it, null removes it; clear removes the lens.',
+        description: 'Puts lens optics on the scene camera, drawn by the viewport: Brown-Conrady distortion (k1, k2, k3, p1, p2 in normalized camera coordinates, k1 < 0 barrel) and thin-lens depth of field (focal length, f-number, anamorphic squeeze) and how it focuses: focusMode \'manual\' (focusDistanceMeters), \'auto\' (continuous autofocus on the centre of the frame: autoFocusAreaFraction of the frame height, focusPullSeconds glide), or \'track\' (a focusPoint locked to an object, given as localPosition or worldPosition, or a whole focusObjectId). A field given replaces it, null removes it; clear removes the lens.',
         execute: (ctx, params: SetCameraLensParams) => {
             const scene = ctx.getSceneData();
             if (!scene.camera) throw new Error('sb_set_camera_lens: the scene has no camera pose to put a lens on (set one with sb_set_camera first). Nothing was changed.');
             const fov = typeof scene.camera.fov === 'number' && scene.camera.fov > 0 && scene.camera.fov < 180 ? scene.camera.fov : 45;
             const warnings: string[] = [];
-            const lens = mergeCameraLens(scene.camera.lens, params || {}, fov, warnings);
+            const given = params || {};
+            const merged = given.focusPoint ? { ...given, focusPoint: focusPointToLocal(ctx, scene, given.focusPoint) } : given;
+            const lens = mergeCameraLens(scene.camera.lens, merged, fov, warnings);
             const camera = { ...scene.camera };
             if (lens) camera.lens = lens;
             else delete camera.lens;
@@ -322,7 +436,7 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
             } else {
                 // Scene data only: customMeshes are drawn as unit shapes (customMeshUnitBounds) under their transforms.
                 const meshes = scene.customMeshes || [];
-                const byId = new Map(meshes.map(m => [m.id, m]));
+                const byId = new Map(meshes.map(m => [m.id ?? '', m] as [string, typeof m]));
                 const targets = params.targetId ? meshes.filter(m => m.id === params.targetId || m.name === params.targetId) : meshes;
                 if (params.targetId && targets.length === 0) {
                     if (ctx.findObject(params.targetId)) throw new OperatorUnavailableError(`sb_frame_bounds: '${params.targetId}' has no customMesh shape to measure here; its bounds are only known in the live 3D viewport.`);

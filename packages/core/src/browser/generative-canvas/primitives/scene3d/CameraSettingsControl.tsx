@@ -10,6 +10,7 @@
 import * as React from 'react';
 import type { SetCameraLensParams } from '../../services/operators/lighting-camera-operators';
 import { planViewportOptics } from './viewportOptics';
+import { DEFAULT_AUTO_FOCUS_AREA_FRACTION, DEFAULT_FOCUS_PULL_SECONDS, autoFocusAreaOf, effectiveFocusMode, focusPullSecondsOf, isFocusPoint } from './viewportFocus';
 import {
     type CameraCommand,
     type SceneCamera,
@@ -76,7 +77,13 @@ export interface CameraSettingsControlProps {
     /** Moves the view to the stored camera pose. */
     onRestoreView: () => void;
     pickingFocus: boolean;
-    onPickingFocusChange: (on: boolean) => void;
+    /** Starts / stops picking in the viewport; `trackPoint` locks focus onto the clicked surface point (else a static distance). */
+    onPickingFocusChange: (on: boolean, trackPoint?: boolean) => void;
+    /** True while the pick locks onto a point (Track mode). */
+    pickTracksPoint?: boolean;
+    /** The focus reticle (AF area / tracked point) drawn over the viewport; never part of captures. */
+    showFocusReticle?: boolean;
+    onShowFocusReticleChange?: (show: boolean) => void;
     /** Why the last viewport focus pick changed nothing, if it did not. */
     pickError?: string | null;
     /** The focus distance the viewport measured last frame (a tracked focus object), when it draws depth of field. */
@@ -154,7 +161,8 @@ const Section: React.FC<{ title: string; children: React.ReactNode; aside?: Reac
  * distortion, anamorphic squeeze, saving and restoring the view, and a reset. Every edit is an operator command.
  */
 export const CameraSettingsControl: React.FC<CameraSettingsControlProps> = ({
-    camera, opticsIssues, onCommands, onSaveView, onRestoreView, pickingFocus, onPickingFocusChange, pickError, readFocusDistance
+    camera, opticsIssues, onCommands, onSaveView, onRestoreView, pickingFocus, onPickingFocusChange, pickError, readFocusDistance,
+    pickTracksPoint = false, showFocusReticle = true, onShowFocusReticleChange
 }) => {
     const [open, setOpen] = React.useState(false);
     const [error, setError] = React.useState<string | null>(null);
@@ -176,11 +184,31 @@ export const CameraSettingsControl: React.FC<CameraSettingsControlProps> = ({
     const horizontalFov = (2 * Math.atan((sensor.width / sensor.height) * Math.tan((fov * Math.PI) / 360)) * 180) / Math.PI;
     const distortion = lens?.distortion;
     const plan = planViewportOptics(lens);
-    const wantsDof = lens?.apertureFStop !== undefined || lens?.focusDistanceMeters !== undefined || !!lens?.focusObjectId;
+    const focusMode = effectiveFocusMode(lens);
+    const wantsDof = lens?.apertureFStop !== undefined || lens?.focusDistanceMeters !== undefined || !!lens?.focusObjectId || focusMode !== 'manual';
     const dofOn = lens?.depthOfField === true || (lens?.depthOfField !== false && wantsDof);
     const dofMissing = plan.issues.find(i => i.startsWith('depth of field needs'));
-    // the depth-of-field hint is shown in its own section
-    const notDrawn = opticsIssues.filter(i => !i.startsWith('depth of field needs'));
+    // the depth-of-field hint and the focus notices (a lost target, nothing under the AF area) are shown in its section
+    const isFocusIssue = (i: string) => i.startsWith('focus');
+    const focusNotices = opticsIssues.filter(isFocusIssue);
+    const notDrawn = opticsIssues.filter(i => !i.startsWith('depth of field needs') && !isFocusIssue(i));
+    const heldDistance = measuredFocus !== null ? { focusDistanceMeters: Number(measuredFocus.toFixed(3)) } : {};
+    const setFocusMode = (mode: 'manual' | 'auto') => {
+        if (mode === focusMode) return;
+        if (mode === 'auto') {
+            runLens({
+                focusMode: 'auto',
+                ...heldDistance,
+                autoFocusAreaFraction: lens?.autoFocusAreaFraction ?? DEFAULT_AUTO_FOCUS_AREA_FRACTION,
+                focusPullSeconds: lens?.focusPullSeconds ?? DEFAULT_FOCUS_PULL_SECONDS
+            }, 'Camera: auto focus');
+        } else {
+            // manual keeps the distance the viewport was focused at
+            runLens({ focusMode: 'manual', ...heldDistance }, 'Camera: manual focus');
+        }
+    };
+    const areaFraction = autoFocusAreaOf(lens);
+    const pullSeconds = focusPullSecondsOf(lens);
 
     const close = React.useCallback((restoreFocus: boolean) => {
         setOpen(false);
@@ -411,33 +439,114 @@ export const CameraSettingsControl: React.FC<CameraSettingsControlProps> = ({
                         </div>
                         <NumberField label="f-stop" min={0.1} value={lens?.apertureFStop} placeholder="—" testId="sb-camera-fstop"
                             onCommit={v => runLens({ apertureFStop: v }, `Camera: f/${v}`)} onClear={() => runLens({ apertureFStop: null }, 'Camera: f-stop removed')} />
-                        {lens?.focusObjectId ? (
-                            <div className="sb-cam-row" data-testid="sb-camera-focus-object">
-                                <span className="sb-cam-label">Focus on</span>
-                                <span className="sb-cam-value sb-cam-truncate" title={lens.focusObjectId}>{lens.focusObjectId}</span>
-                                <button type="button" className={`${CHIP} ${CHIP_IDLE}`} aria-label="Stop tracking the focus object"
-                                    onClick={() => runLens(measuredFocus ? { focusDistanceMeters: Number(measuredFocus.toFixed(3)), focusObjectId: null } : { focusObjectId: null }, 'Camera: focus distance')}>
-                                    Clear
-                                </button>
+                        <div className="sb-cam-row">
+                            <span className="sb-cam-label">Focus</span>
+                            <div className="sb-cam-chips" role="radiogroup" aria-label="Focus mode">
+                                {([['manual', 'Manual'], ['auto', 'Auto'], ['track', 'Track']] as const).map(([mode, label]) => {
+                                    const on = focusMode === mode || (mode === 'track' && pickingFocus && pickTracksPoint && focusMode !== 'track');
+                                    return (
+                                        <button
+                                            key={mode}
+                                            type="button"
+                                            role="radio"
+                                            aria-checked={on}
+                                            data-testid={`sb-camera-focus-mode-${mode}`}
+                                            className={`${CHIP} ${on ? CHIP_ON : CHIP_IDLE}`}
+                                            title={mode === 'manual' ? 'Focus at a set distance' : mode === 'auto' ? 'Continuous autofocus on the centre of the frame' : 'Click a point: focus locks onto it and follows it'}
+                                            onClick={() => (mode === 'track' ? (focusMode !== 'track' && onPickingFocusChange(true, true)) : setFocusMode(mode))}
+                                        >
+                                            {label}
+                                        </button>
+                                    );
+                                })}
                             </div>
-                        ) : (
-                            <NumberField label="Focus" unit="m" min={0.001} value={lens?.focusDistanceMeters} placeholder="—" testId="sb-camera-focus"
-                                onCommit={v => runLens({ focusDistanceMeters: v, focusObjectId: null }, `Camera: focus ${v} m`)}
-                                onClear={() => runLens({ focusDistanceMeters: null }, 'Camera: focus removed')} />
+                        </div>
+                        {focusMode === 'manual' && (
+                            <>
+                                <NumberField label="Distance" unit="m" min={0.001} value={lens?.focusDistanceMeters} placeholder="—" testId="sb-camera-focus"
+                                    onCommit={v => runLens({ focusDistanceMeters: v, focusObjectId: null }, `Camera: focus ${v} m`)}
+                                    onClear={() => runLens({ focusDistanceMeters: null }, 'Camera: focus removed')} />
+                                <button
+                                    type="button"
+                                    aria-pressed={pickingFocus && !pickTracksPoint}
+                                    data-testid="sb-camera-pick-focus"
+                                    className={`${CHIP} sb-cam-wide ${pickingFocus && !pickTracksPoint ? CHIP_ON : CHIP_IDLE}`}
+                                    onClick={() => onPickingFocusChange(!(pickingFocus && !pickTracksPoint), false)}
+                                >
+                                    {pickingFocus && !pickTracksPoint ? 'Click a point in the viewport (Esc cancels)' : 'Pick focus in viewport'}
+                                </button>
+                                {pickingFocus && !pickTracksPoint && <div className="sb-cam-note">Click focuses at that point's distance; Alt-click tracks the whole object.</div>}
+                            </>
                         )}
-                        {lens?.focusObjectId && measuredFocus !== null && (
+                        {focusMode === 'auto' && (
+                            <>
+                                <div className="sb-cam-row">
+                                    <span className="sb-cam-label">AF area</span>
+                                    <input type="range" aria-label="AF area slider" data-testid="sb-camera-af-area-slider" className="sb-cam-range"
+                                        min={0.02} max={0.6} step={0.01} value={Math.min(0.6, areaFraction)}
+                                        onChange={e => runLens({ autoFocusAreaFraction: Number(e.target.value) }, 'Camera: AF area', true)} />
+                                </div>
+                                <NumberField label="AF area" unit="% H" min={1} max={100} value={Number((areaFraction * 100).toFixed(2))} testId="sb-camera-af-area"
+                                    onCommit={v => runLens({ autoFocusAreaFraction: v / 100 }, `Camera: AF area ${v} %`)} />
+                                <div className="sb-cam-row">
+                                    <span className="sb-cam-label">Focus pull</span>
+                                    <input type="range" aria-label="Focus pull slider" data-testid="sb-camera-focus-pull-slider" className="sb-cam-range"
+                                        min={0} max={2} step={0.01} value={Math.min(2, pullSeconds)}
+                                        onChange={e => runLens({ focusPullSeconds: Number(e.target.value) }, 'Camera: focus pull', true)} />
+                                </div>
+                                <NumberField label="Pull time" unit="s" min={0} max={60} value={pullSeconds} testId="sb-camera-focus-pull"
+                                    onCommit={v => runLens({ focusPullSeconds: v }, `Camera: focus pull ${v} s`)} />
+                                <div className="sb-cam-note">Focuses continuously on the nearest surface in the centre square; the pull time is how long a focus change takes to settle (about 2.3x it for 90 %).</div>
+                            </>
+                        )}
+                        {focusMode === 'track' && (
+                            <>
+                                {lens?.focusObjectId ? (
+                                    <div className="sb-cam-row" data-testid="sb-camera-focus-object">
+                                        <span className="sb-cam-label">Object</span>
+                                        <span className="sb-cam-value sb-cam-truncate" title={lens.focusObjectId}>{lens.focusObjectId}</span>
+                                        <button type="button" className={`${CHIP} ${CHIP_IDLE}`} aria-label="Stop tracking the focus object"
+                                            onClick={() => runLens({ focusMode: 'manual', ...heldDistance }, 'Camera: focus distance')}>
+                                            Clear
+                                        </button>
+                                    </div>
+                                ) : isFocusPoint(lens?.focusPoint) ? (
+                                    <div className="sb-cam-row" data-testid="sb-camera-focus-point">
+                                        <span className="sb-cam-label">Point</span>
+                                        <span className="sb-cam-value sb-cam-truncate" title={`${lens!.focusPoint!.objectId ?? 'world'} (${lens!.focusPoint!.localPosition.map(v => fmt(v, 3)).join(', ')})`}>
+                                            {lens!.focusPoint!.objectId ? `on ${lens!.focusPoint!.objectId}` : 'world point'}
+                                        </span>
+                                        <button type="button" className={`${CHIP} ${CHIP_IDLE}`} aria-label="Stop tracking the focus point"
+                                            onClick={() => runLens({ focusMode: 'manual', ...heldDistance }, 'Camera: focus distance')}>
+                                            Clear
+                                        </button>
+                                    </div>
+                                ) : null}
+                                <button
+                                    type="button"
+                                    aria-pressed={pickingFocus}
+                                    data-testid="sb-camera-pick-focus"
+                                    className={`${CHIP} sb-cam-wide ${pickingFocus ? CHIP_ON : CHIP_IDLE}`}
+                                    onClick={() => onPickingFocusChange(!pickingFocus, true)}
+                                >
+                                    {pickingFocus ? 'Click a point in the viewport (Esc cancels)' : 'Pick another point'}
+                                </button>
+                            </>
+                        )}
+                        {pickingFocus && pickTracksPoint && <div className="sb-cam-note" data-testid="sb-camera-track-hint">Click locks focus onto that surface point and follows it; Alt-click tracks the whole object.</div>}
+                        {focusMode !== 'manual' && measuredFocus !== null && (
                             <div className="sb-cam-note sb-cam-right" data-testid="sb-camera-focus-measured">{`now ${fmt(measuredFocus, 2)} m from the camera`}</div>
                         )}
-                        <button
-                            type="button"
-                            aria-pressed={pickingFocus}
-                            data-testid="sb-camera-pick-focus"
-                            className={`${CHIP} sb-cam-wide ${pickingFocus ? CHIP_ON : CHIP_IDLE}`}
-                            onClick={() => onPickingFocusChange(!pickingFocus)}
-                        >
-                            {pickingFocus ? 'Click a point in the viewport (Esc cancels)' : 'Pick focus in viewport'}
-                        </button>
-                        {pickingFocus && <div className="sb-cam-note">Click focuses at that point; Alt-click focuses on the whole object and follows it.</div>}
+                        {(focusMode !== 'manual') && onShowFocusReticleChange && (
+                            <label className="sb-cam-row sb-cam-check">
+                                <input type="checkbox" data-testid="sb-camera-focus-reticle" checked={showFocusReticle}
+                                    onChange={e => onShowFocusReticleChange(e.target.checked)} />
+                                <span>Show focus reticle (not in captures)</span>
+                            </label>
+                        )}
+                        {focusNotices.map(n => (
+                            <div key={n} role="status" className="sb-cam-warn-text" data-testid="sb-camera-focus-notice">{n.replace(/^focus: /, '')}</div>
+                        ))}
                         {pickError && <div role="alert" className="sb-cam-error-text" data-testid="sb-camera-pick-error">{pickError}</div>}
                         {dofOn && dofMissing && <div className="sb-cam-warn-text" data-testid="sb-camera-dof-missing">{`Not drawn yet: ${dofMissing}.`}</div>}
                     </Section>

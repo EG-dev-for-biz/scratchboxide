@@ -534,7 +534,7 @@ export class TaskCapabilityResolver {
                     serviceOrTool: 'configure_physical_camera tool & ViewportOpticsChain',
                     targetTool: 'configure_physical_camera',
                     targetService: 'CinematicBokehPass',
-                    details: 'Call configure_physical_camera with focalLengthMm, apertureFStop and focusDistanceMeters or focusObjectId; the viewport draws the depth of field.'
+                    details: 'Call configure_physical_camera with focalLengthMm, apertureFStop and a focus: focusDistanceMeters (manual), focusMode "auto" (continuous autofocus on the centre of the frame, autoFocusAreaFraction, focusPullSeconds), a focusPoint on an object, or a focusObjectId; the viewport draws the depth of field.'
                 };
             } else if (/lens\s*shader|optical\s*(?:distortion|effect|lens)|lens\s*distortion(?:\s*shader|\s*pass)?|brown-?conrady\s*(?:shader|pass|distortion)|chromatic\s*aberration|barrel\s*distortion|pincushion\s*distortion|anamorphic\s*squeeze/i.test(lower)) {
                 canSolveNatively = true;

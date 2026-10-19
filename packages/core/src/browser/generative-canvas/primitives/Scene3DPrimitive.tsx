@@ -155,7 +155,9 @@ import { computeSceneGeometryBounds, calculateStandoffCamera } from './scene3d/a
 import type { RendererStack, AtmosphereHandle, TilesLayerHandle, SceneContentHandle, WasmMeshHandle, VectorRoadmapHandle, Scene3DRenderMode } from './scene3d/types';
 import { applyClayRenderMode } from './scene3d/clayRenderMode';
 import { ViewportOpticsChain } from './scene3d/viewportOptics';
+import { ViewportFocusController, pinholeNdcToDisplayedNdc, viewAxisDepth } from './scene3d/viewportFocus';
 import { CameraSettingsControl } from './scene3d/CameraSettingsControl';
+import type { SetCameraLensParams } from '../services/operators/lighting-camera-operators';
 import { keepsStoredPose, lensCommands, liveViewMatches, runCameraCommands, withLivePose, type CameraCommand, type Vec3 } from './scene3d/cameraSettings';
 import { syncObjectMaterial } from './scene3d/materialOverride';
 import { TreeLodController, findShadowCamera } from './scene3d/treeLod/TreeLodController';
@@ -1497,6 +1499,18 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const renderFrameRef = React.useRef<(() => void) | null>(null);
     /** Lens distortion and depth of field from scene camera.lens; inactive (no cost) when nothing is configured. */
     const opticsChainRef = React.useRef<ViewportOpticsChain | null>(null);
+    const focusControllerRef = React.useRef<ViewportFocusController | null>(null);
+    const resolveViewportObjectRef = React.useRef<((id: string) => THREE.Object3D | undefined) | null>(null);
+    const focusReticleRef = React.useRef<HTMLSpanElement>(null);
+    const [showFocusReticle, setShowFocusReticleState] = React.useState<boolean>(() => {
+        try { return window.localStorage.getItem('sb.viewport.focusReticle') !== 'hidden'; } catch { return true; }
+    });
+    const showFocusReticleRef = React.useRef(showFocusReticle);
+    showFocusReticleRef.current = showFocusReticle;
+    const setShowFocusReticle = React.useCallback((show: boolean) => {
+        setShowFocusReticleState(show);
+        try { window.localStorage.setItem('sb.viewport.focusReticle', show ? 'shown' : 'hidden'); } catch { /* a per-viewer preference only */ }
+    }, []);
     /** Set while the camera panel picks a focus point: the next viewport click goes here instead of selecting. */
     const focusPickRef = React.useRef<((hit: THREE.Intersection | undefined, event: MouseEvent) => void) | null>(null);
     /** False until the first generated model of this mount is framed (a reload keeps a saved camera pose). */
@@ -2024,6 +2038,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         opticsChain.configure(sceneDataRef.current.camera?.lens);
         opticsChainRef.current = opticsChain;
         (window as any).__SB_3D_OPTICS__ = opticsChain;
+        const focusController = new ViewportFocusController();
+        focusController.configure(sceneDataRef.current.camera?.lens);
+        focusControllerRef.current = focusController;
+        (window as any).__SB_3D_FOCUS__ = focusController;
         const resolveViewportObject = (id: string): THREE.Object3D | undefined => {
             const custom = customMeshRegistryRef.current.get(id)?.mesh;
             if (custom?.parent) return custom;
@@ -2040,6 +2058,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             });
             return found;
         };
+        resolveViewportObjectRef.current = resolveViewportObject;
         let reportedOpticsIssues = '';
         const renderFrame = () => {
             if (opticsChain.active) {
@@ -2048,7 +2067,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     scene,
                     displayReferred: !!(aerialPerspectiveRef.current && skyDomeModuleRef.current),
                     drawScene,
-                    resolveObject: resolveViewportObject
+                    resolveObject: resolveViewportObject,
+                    measureFocus: (cam, depthTexture, frame, issues) =>
+                        focusController.focusDistance(renderer, cam, depthTexture, frame, resolveViewportObject, performance.now(), issues)
                 });
             } else {
                 drawScene(null);
@@ -2062,6 +2083,66 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         };
         renderFrameRef.current = renderFrame;
         (window as any).__SB_3D_RENDER_FRAME__ = renderFrame;
+
+        // The focus reticle: a DOM overlay over the canvas (the AF area, or the tracked point), never drawn into the
+        // frame, so canvas captures and exports never contain it.
+        const reticleWorld = new THREE.Vector3();
+        const reticleScratch = new THREE.Vector3();
+        const reticleBox = new THREE.Box3();
+        let reticleObject: { id: string; centre: THREE.Vector3; frame: number } | null = null;
+        let reticleFrame = 0;
+        const updateFocusReticle = () => {
+            const el = focusReticleRef.current;
+            if (!el) return;
+            reticleFrame++;
+            const lens = sceneDataRef.current.camera?.lens;
+            const mode = focusController.focusMode;
+            const canvas = renderer.domElement;
+            const w = canvas.clientWidth, h = canvas.clientHeight;
+            let place: { x: number; y: number; side: number } | null = null;
+            if (showFocusReticleRef.current && w > 0 && h > 0) {
+                if (mode === 'auto') {
+                    const side = Math.max(6, focusController.areaFraction * h);
+                    place = { x: w / 2, y: h / 2, side };
+                } else if (mode === 'track') {
+                    let world: THREE.Vector3 | null = focusController.trackedPointWorld(resolveViewportObject);
+                    if (!world && lens?.focusObjectId) {
+                        // a whole object: its bounding-box centre, refreshed as the optics chain does (every 30 frames)
+                        if (!reticleObject || reticleObject.id !== lens.focusObjectId || reticleFrame - reticleObject.frame >= 30) {
+                            const object = resolveViewportObject(lens.focusObjectId);
+                            reticleObject = null;
+                            if (object) {
+                                object.updateWorldMatrix(true, true);
+                                reticleBox.setFromObject(object);
+                                if (!reticleBox.isEmpty()) reticleObject = { id: lens.focusObjectId, centre: reticleBox.getCenter(new THREE.Vector3()), frame: reticleFrame };
+                            }
+                        }
+                        world = reticleObject ? reticleWorld.copy(reticleObject.centre) : null;
+                    }
+                    if (world && viewAxisDepth(world, camera, reticleScratch) > 0) {
+                        const ndc = reticleScratch.copy(world).project(camera);
+                        let nx = ndc.x, ny = ndc.y;
+                        const distortion = opticsChain.active ? opticsChain.getPlan().distortion : null;
+                        if (distortion) [nx, ny] = pinholeNdcToDisplayedNdc(nx, ny, distortion, camera.fov, camera.aspect);
+                        if (Math.abs(nx) <= 1.05 && Math.abs(ny) <= 1.05) place = { x: (nx + 1) / 2 * w, y: (1 - ny) / 2 * h, side: 22 };
+                    }
+                }
+            }
+            if (!place) {
+                if (el.style.display !== 'none') el.style.display = 'none';
+                return;
+            }
+            const held = !!focusController.status.notice || opticsChain.status.issues.some(i => i.startsWith('focus'));
+            el.style.display = 'block';
+            el.style.left = `${canvas.offsetLeft}px`;
+            el.style.top = `${canvas.offsetTop}px`;
+            el.style.width = `${place.side}px`;
+            el.style.height = `${place.side}px`;
+            el.style.transform = `translate(${(place.x - place.side / 2).toFixed(1)}px, ${(place.y - place.side / 2).toFixed(1)}px)`;
+            if (el.dataset.mode !== mode) el.dataset.mode = mode;
+            const state = held ? 'held' : 'locked';
+            if (el.dataset.state !== state) el.dataset.state = state;
+        };
 
         const animate = () => {
             try {
@@ -2209,6 +2290,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 });
 
                 renderFrame();
+                updateFocusReticle();
             } catch (frameErr) {
                 if (!hasWarnedFrameErrorRef.current) {
                     hasWarnedFrameErrorRef.current = true;
@@ -2249,6 +2331,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             renderFrameRef.current = null;
             opticsChain.dispose();
             opticsChainRef.current = null;
+            focusController.dispose();
+            focusControllerRef.current = null;
+            resolveViewportObjectRef.current = null;
             stack.dispose();
             stackRef.current = null;
             threeSceneRef.current = null;
@@ -2364,6 +2449,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const lensFingerprint = JSON.stringify(sceneData.camera?.lens ?? null);
     React.useEffect(() => {
         opticsChainRef.current?.configure(sceneDataRef.current.camera?.lens);
+        focusControllerRef.current?.configure(sceneDataRef.current.camera?.lens);
     }, [lensFingerprint]);
 
     // ---- 4. Camera preset (position / ground-grounded look-at target) ------------
@@ -3293,7 +3379,13 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     }, [sceneData.camera, mutateSceneData]);
 
     // ---- Camera settings panel: every edit runs sb_set_camera / sb_set_camera_lens on the scene camera ----
-    const [pickingFocus, setPickingFocus] = React.useState(false);
+    const [pickingFocus, setPickingFocusState] = React.useState(false);
+    /** The pick locks focus onto the clicked surface point (Track) instead of setting a static distance (Manual). */
+    const [pickTracksPoint, setPickTracksPoint] = React.useState(false);
+    const setPickingFocus = React.useCallback((on: boolean, trackPoint = false) => {
+        setPickingFocusState(on);
+        setPickTracksPoint(on && trackPoint);
+    }, []);
     const [focusPickError, setFocusPickError] = React.useState<string | null>(null);
 
     const liveCameraPose = React.useCallback((): { position: Vec3; target: Vec3 } | null => {
@@ -3348,7 +3440,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
     const readFocusDistance = React.useCallback(() => opticsChainRef.current?.status.focusDistanceMeters ?? null, []);
 
-    // Pick focus: a click focuses at the clicked point; Alt-click focuses on (and tracks) the whole object.
+    // Pick focus: a click focuses at the clicked point's distance (Manual) or locks onto that surface point, stored in
+    // its object's local frame so it follows the object (Track); Alt-click tracks the whole object.
     React.useEffect(() => {
         const container = stackRef.current?.container;
         if (!pickingFocus) {
@@ -3365,18 +3458,33 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 setFocusPickError('Nothing under the cursor there; click on geometry (Esc cancels).');
                 return;
             }
-            let params: { focusObjectId: string } | { focusDistanceMeters: number; focusObjectId: null };
+            let params: SetCameraLensParams;
             let label: string;
-            const target = event.altKey ? (findExternalObjectRoot(hit.object) || resolveSelectableObject(hit.object, stack.scene)) : null;
+            const named = event.altKey || pickTracksPoint;
+            const target = named ? (findExternalObjectRoot(hit.object) || resolveSelectableObject(hit.object, stack.scene)) : null;
             let objectId = target ? (findExternalObjectRoot(target) === target ? externalObjectIdOf(target) : target.name) : '';
             // the generated model is saved as its hero object: name that, so the focus survives a reload
             if (objectId === GENERATED_ROOT_NAME) objectId = generatedHeroObjectId(sceneDataRef.current) ?? objectId;
-            if (objectId) {
+            const forward = stack.camera.getWorldDirection(new THREE.Vector3());
+            const depth = hit.point.clone().sub(stack.camera.position).dot(forward);
+            if (event.altKey && objectId) {
                 params = { focusObjectId: objectId };
                 label = `Camera: focus on ${objectId}`;
+            } else if (pickTracksPoint) {
+                // the point in the frame of the object its id resolves to (what the viewport reads back every frame)
+                const frameObject = objectId ? (resolveViewportObjectRef.current?.(objectId) ?? target) : null;
+                const local = hit.point.clone();
+                if (frameObject) {
+                    frameObject.updateWorldMatrix(true, false);
+                    frameObject.worldToLocal(local);
+                }
+                const round = (v: number) => Number(v.toFixed(5));
+                params = {
+                    focusPoint: { ...(frameObject && objectId ? { objectId } : {}), localPosition: [round(local.x), round(local.y), round(local.z)] },
+                    focusDistanceMeters: Number(depth.toFixed(3))
+                };
+                label = `Camera: track focus point${objectId ? ` on ${objectId}` : ''}`;
             } else {
-                const forward = stack.camera.getWorldDirection(new THREE.Vector3());
-                const depth = hit.point.clone().sub(stack.camera.position).dot(forward);
                 params = { focusDistanceMeters: Number(depth.toFixed(3)), focusObjectId: null };
                 label = `Camera: focus ${depth.toFixed(2)} m`;
             }
@@ -3388,7 +3496,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             focusPickRef.current = null;
             if (container) container.style.cursor = previousCursor;
         };
-    }, [pickingFocus, runCameraPanelCommands]);
+    }, [pickingFocus, pickTracksPoint, runCameraPanelCommands, setPickingFocus]);
 
     const handleUpdateVectorRoadmap = React.useCallback((updated: Partial<VectorRoadmapConfig>) => {
         mutateSceneData(prev => ({
@@ -3671,6 +3779,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                         style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: '100%', height: '100%' }}
                     />
                 )}
+                {/* a span: the frame forces every direct div child to fill it */}
+                <span ref={focusReticleRef} className="sb-3d-focus-reticle" data-testid="sb-3d-focus-reticle" aria-hidden="true" />
                 <ViewportNotice notices={viewportNotices} />
             </div>
             {staged.overlay({ bottomInsetPx: isTimelineDrawerOpen ? 255 : 16 })}
@@ -3714,6 +3824,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     onRestoreView={handleRestoreCameraView}
                     pickingFocus={pickingFocus}
                     onPickingFocusChange={setPickingFocus}
+                    pickTracksPoint={pickTracksPoint}
+                    showFocusReticle={showFocusReticle}
+                    onShowFocusReticleChange={setShowFocusReticle}
                     pickError={focusPickError}
                     readFocusDistance={readFocusDistance}
                 />

@@ -26,6 +26,7 @@ import type { SceneCameraLens, SceneLensDistortion } from '../../canvas-types';
 import { VfxPlateMatchmoveService } from '../../services/video/VfxPlateMatchmoveService';
 import { LensDistortionEffect } from '../../services/optics/LensDistortionEffect';
 import { CinematicBokehPass } from '../../services/optics/CinematicBokehPass';
+import { lensMeasuresFocus } from './viewportFocus';
 
 /** Widest overscan rendered for distortion (2x the frame on each axis = 4x the pixels). */
 export const MAX_OVERSCAN = 2;
@@ -81,8 +82,10 @@ export function planViewportOptics(lens: SceneCameraLens | undefined | null): Vi
     }
 
     if (lens.depthOfField !== false) {
-        const wantsDof = lens.apertureFStop !== undefined || lens.focusDistanceMeters !== undefined || lens.focusObjectId !== undefined;
-        const hasFocus = finitePositive(lens.focusDistanceMeters) || (typeof lens.focusObjectId === 'string' && lens.focusObjectId.length > 0);
+        // auto focus and a tracked point are measured by the viewport (viewportFocus.ts): no stored distance needed
+        const measured = lensMeasuresFocus(lens);
+        const wantsDof = lens.apertureFStop !== undefined || lens.focusDistanceMeters !== undefined || lens.focusObjectId !== undefined || measured;
+        const hasFocus = finitePositive(lens.focusDistanceMeters) || (typeof lens.focusObjectId === 'string' && lens.focusObjectId.length > 0) || measured;
         if (finitePositive(lens.focalLengthMm) && finitePositive(lens.apertureFStop) && hasFocus) {
             plan.depthOfField = {
                 focalLengthMm: lens.focalLengthMm,
@@ -275,6 +278,11 @@ export interface ViewportOpticsFrameIO {
     displayReferred?: boolean;
     /** Resolves a focus object id to the viewport object. */
     resolveObject: (id: string) => THREE.Object3D | undefined;
+    /**
+     * Focus measured by the viewport (auto focus, a tracked point) from the scene's depth: a distance, null when there
+     * is none yet, undefined to let the chain resolve the lens's focus distance or focus object.
+     */
+    measureFocus?: (camera: THREE.PerspectiveCamera, depthTexture: THREE.Texture | null, frame: { width: number; height: number; renderWidth: number; renderHeight: number }, issues: string[]) => number | null | undefined;
 }
 
 const OUTPUT_SHADER = {
@@ -499,7 +507,8 @@ export class ViewportOpticsChain {
         // depth of field
         let focusM: number | null = null;
         if (this.plan.depthOfField && this.bokehPass) {
-            focusM = this.focusDistance(camera, io, issues);
+            const measured = io.measureFocus?.(camera, depthTexture, { width: W, height: H, renderWidth: RW, renderHeight: RH }, issues);
+            focusM = measured !== undefined ? measured : this.focusDistance(camera, io, issues);
             if (focusM !== null && depthTexture) {
                 const dof = this.plan.depthOfField;
                 this.dofTarget = this.ensureTarget(this.dofTarget, RW, RH, false, 0);
