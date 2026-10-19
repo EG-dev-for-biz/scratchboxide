@@ -234,8 +234,9 @@ export interface StagedLocationRequest {
     /** The place already resolved (a 'Switch location' choice): used as given, the query is not geocoded. */
     place?: ResolvedPlace;
     /**
-     * Pipeline E's enhanced mode (opt-in, also SCRATCHBOX_STAGED_ENHANCE=1): each large wall's texture redrawn once by an
-     * image model, kept only where it keeps the tile's edges; labelled generated.
+     * Pipeline E's enhanced appearance (the default within pipeline E; false, or SCRATCHBOX_STAGED_ENHANCE=0, is the real-data
+     * view): each large wall's texture redrawn once by an image model, kept only where it keeps the tile's edges and erases
+     * or contradicts nothing distinct; labelled generated.
      */
     enhance?: boolean;
 }
@@ -2234,7 +2235,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         return own.views;
                     } : undefined;
                     const crowns = strip ? crownsFromStrip(JSON.parse(fs.readFileSync(strip.crownsJson, 'utf8'))) : [];
-                    const enhanceOn = request.enhance === true || stagedEnhance();
+                    const enhanceOn = request.enhance ?? stagedEnhance();
                     // enhanced mode's own Street View survey: the views registered against the tile mesh (edges, then jointly) and
                     // cut out, so each wall's redraw is guided by and checked against a photo whose pose holds (plate-streetview.ts)
                     const guideViews = enhanceOn && enhanceGuards() && !missingCredentials(sv) && segmenter ? async () => {
@@ -2260,7 +2261,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         dir: path.join(cache.dir, 'pipeline_e', e.key.slice(0, 24), 'inference'), stage: 'grammar', stageKey: e.key,
                         ...(chain ? { chain } : {}), ...(streetViews ? { streetViews } : {}), structureMesh, crowns,
                         ...(enhance ? { inpaint: { client: enhance, models: [LIGHTING_MODEL_LITE] } } : {}),
-                        ...(enhanceOn && visionAvailable ? { enhance: { client: genAiPlateClient(visionAvailable.client), models: enhanceModels(), locationName: placeValue!.formattedAddress, guards: enhanceGuards(), ...(guideViews ? { streetViews: guideViews } : {}) } } : {}),
+                        ...(enhanceOn && visionAvailable ? { enhance: { client: genAiPlateClient(visionAvailable.client), models: enhanceModels(), locationName: placeValue!.formattedAddress, guards: enhanceGuards(), cacheDir: path.join(cache.dir, 'enhance_plates'), ...(guideViews ? { streetViews: guideViews } : {}) } } : {}),
                         solar: [], anchor: structure!.seed, signal: io.signal, onProgress: m => io.progress(m)
                     });
                     cache.writeRunNote(runId, 'pipeline_e_inference', { steps: out.steps, timingsMs: out.timingsMs });

@@ -73,6 +73,8 @@ export interface InferenceInput {
         guards?: boolean;
         /** The Street View survey's views of the structure, registered against the tile mesh and cut out (streetview-registered-views.ts). */
         streetViews?: () => Promise<GuideView[]>;
+        /** Where the model's answers are cached per wall (enhance.ts cachedPlate). */
+        cacheDir?: string;
     };
     signal?: AbortSignal;
     onProgress?: (m: string) => void;
@@ -148,10 +150,10 @@ export const PLATE_GRAMMAR_LATEST_MS = 310_000;
 
 /**
  * The enhanced-mode diagnostic: the input | the aligned plate | the guarded plate with the flagged cells tinted (magenta
- * added, cyan erased, yellow retoned, red contradicts the photo) | the rectified Street View photo, when there is one.
+ * replaced, cyan erased, yellow retoned, red contradicts the photo; green finer detail kept) | the rectified Street View photo, when there is one.
  */
 export function writeEnhanceDiagnostic(file: string, input: Uint8Array, plate: Uint8Array, guarded: Uint8Array | undefined, labels: string[] | undefined, grid: { cw: number; cellPx: number } | undefined, photo: Uint8Array | undefined, photoValid: Uint8Array | undefined, W: number, H: number): void {
-    const tint: Record<string, [number, number, number]> = { added: [255, 0, 255], erased: [0, 255, 255], retoned: [255, 230, 0], 'contradicts-photo': [255, 0, 0] };
+    const tint: Record<string, [number, number, number]> = { replaced: [255, 0, 255], erased: [0, 255, 255], retoned: [255, 230, 0], 'contradicts-photo': [255, 0, 0], 'invented-detail': [0, 200, 0] };
     const panels: Uint8Array[] = [input, plate];
     if (guarded) {
         const g = guarded.slice();
@@ -514,6 +516,7 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
             const use = new Uint8Array(tex.width * tex.height);
             for (let i = 0; i < use.length; i++) use[i] = tex.source[i] === SRC.tileOrtho || tex.source[i] === BAY || tex.source[i] === OTHER || tex.source[i] === COLOURED ? 1 : 0;
             // the reference: a finished wall next to this one round the plan, else the first finished
+            // (`done` holds only the walls of earlier rounds, so the reference, and with it the cached answer, does not depend on timing)
             const ref = done.find(d => d.part === f.part && d.loop === f.loop && Math.abs(d.edge - f.edge) === 1) ?? done[0];
             const refTex = ref ? textures.get(ref.index)! : undefined;
             // the Street View photo that shows most of the wall's street-level band
@@ -527,19 +530,25 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
             const before = { width: tex.width, height: tex.height, rgba: tex.rgba.slice() };
             const r = await enhanceWall(f, tex, use, {
                 client: input.enhance!.client, models: input.enhance!.models, locationName: input.enhance!.locationName, ...(refTex ? { reference: refTex } : {}), source: ENH,
-                guards, ...(sv ? { streetView: sv, streetViewSource: sourceForPano(sv.view.panoId) } : {}), ...(noSv ? { noStreetView: noSv } : {}), ...(input.signal ? { signal: input.signal } : {})
+                guards, ...(input.enhance!.cacheDir ? { cacheDir: input.enhance!.cacheDir } : {}), ...(sv ? { streetView: sv, streetViewSource: sourceForPano(sv.view.panoId) } : {}), ...(noSv ? { noStreetView: noSv } : {}), ...(input.signal ? { signal: input.signal } : {})
             });
             enhanced.push({ ...r, ...(ref ? { referenceFace: ref.index } : {}), plate: undefined, guarded: undefined, labels: undefined, grid: undefined } as EnhanceWallRecord);
             enhStep.proposed++;
-            if (r.accepted) { enhStep.accepted++; done.push(f); if (r.plate) plates.set(f.index, { plate: tex.rgba.slice(), use }); } else enhStep.rejected++;
+            if (r.accepted) { enhStep.accepted++; finished.push(f); if (r.plate) plates.set(f.index, { plate: tex.rgba.slice(), use }); } else enhStep.rejected++;
             enhStep.notes.push(`wall ${f.index}: ${r.accepted ? 'enhanced' : 'kept its tile texture'}: ${r.why}${r.model ? ` (${r.model})` : ''}${ref ? `; reference wall ${ref.index}` : ''}${sv ? `; ${sv.why}${r.streetView?.guidedRejected ? ` (the redraw with it failed the alignment gate: ${r.streetView.guidedRejected}; redrawn without it)` : ''}` : guards && noSv ? `; no Street View guidance: ${noSv}` : ''}`);
             try {
                 if (r.plate) writeEnhanceDiagnostic(path.join(input.dir, `wall_${f.index}_tile_vs_enhanced.png`), before.rgba, r.plate, r.guarded, r.labels, r.grid, sv?.rect.rgba, sv?.rect.valid, tex.width, tex.height);
             } catch { /* diagnostics only */ }
         };
-        if (order.length) await enhanceOne(order[0]);
-        let nextE = 1;
-        await Promise.all(Array.from({ length: Math.min(ENHANCE_CONCURRENCY, Math.max(0, order.length - 1)) }, async () => { for (let k; (k = nextE++) < order.length;) await enhanceOne(order[k]); }));
+        // in rounds: the largest wall alone, then ENHANCE_CONCURRENCY at a time, each round referencing the walls finished in the
+        // rounds before it (never one finishing alongside), so a rebuild sends the model the same images and gets the cached plates
+        const finished: MassingFace[] = [];
+        for (let k = 0; k < order.length;) {
+            const round = order.slice(k, k === 0 ? 1 : k + ENHANCE_CONCURRENCY);
+            k += round.length;
+            await Promise.all(round.map(f => enhanceOne(f)));
+            done.push(...order.filter(f => finished.includes(f) && !done.includes(f)));
+        }
         // the grammar read from the enhanced plates, used only where it passes the grammar's own gates and the scan/tile check
         const plateStep = rec('enhance-grammar');
         const elapsed = now() - tRead;

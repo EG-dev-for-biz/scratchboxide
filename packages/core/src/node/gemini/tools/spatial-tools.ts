@@ -214,7 +214,7 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 enhance: {
                     type: 'BOOLEAN',
-                    description: 'Enhanced textures (default false; only when the user asks for cleaner or more detailed textures and accepts AI-drawn detail): with the vector-massing pipeline (SCRATCHBOX_STAGED_PIPELINE=e), each large wall is redrawn once by an image model from its tile photo, kept only where its windows and edges stay in place, and labelled generated ("AI-enhanced from tile"); the result says how many walls were enhanced or rejected.'
+                    description: 'Enhanced appearance (default true with the vector-massing pipeline, SCRATCHBOX_STAGED_PIPELINE=e): each large wall is redrawn once by an image model from its tile photo, guided by a registered Street View photo of the wall where one shows it, kept only where its windows and edges stay in place and nothing distinct (a fire escape, a storefront, signage, the colour) is erased or contradicted, and labelled generated ("AI-enhanced from tile"); the result says how many walls were enhanced or rejected. Pass false for the real-data view (tile photo and real sources only), e.g. when the user asks for the real data.'
                 },
                 atomicBuildingIntegrity: {
                     type: 'BOOLEAN',

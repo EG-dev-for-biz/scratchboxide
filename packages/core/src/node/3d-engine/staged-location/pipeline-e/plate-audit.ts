@@ -8,24 +8,29 @@
  ********************************************************************************/
 
 /**
- * Pipeline E, enhanced mode: the invention and erasure check of a redrawn wall plate.
+ * Pipeline E, enhanced mode: the invention and erasure check of a redrawn wall plate, framed by identity.
  *
  * The alignment gate (enhance.ts) only asks whether the input's edges are still where they were. A plate can pass it and
- * still paint a large element over (a dark recessed bay turned into wall and windows), add one the input does not show
- * (a clean ground floor drawn over what the scan smeared, a band of stone that is not there), or change a block's tone.
- * This check compares the plate with its input region by region, with nothing known about what the regions are:
+ * still paint a distinct element over (a dark fire-escape bay turned into wall and windows), replace one (a stone base or a
+ * storefront redrawn as something else) or change a block's colour. Under the realism-first directive finer detail drawn
+ * over ordinary wall is the point of the redraw and stays; what the check reverts is a region that erases, replaces or
+ * recolours what makes the wall recognisable. It compares the plate with its input region by region, with nothing known
+ * about what the regions are:
  *
  *   - tone: both images low-passed (about TONE_BLUR_M) in CIELAB, the plate first mapped onto the input's colour with one
- *     robust affine map per channel (a global relight is no invention); per cell (AUDIT_CELL_M) the mean colour distance;
+ *     robust affine map per channel (a global relight is no change of identity); per cell (AUDIT_CELL_M) the mean colour
+ *     distance, lightness weighted down (an even relight takes baked sun and shade off; repainting moves chroma);
  *   - structure: the band-pass of the lightness (BAND_FINE_M .. BAND_COARSE_M, the scale of openings, piers and bays) in a
- *     window of 3 x 3 cells round each cell: its contrast in each image, and their normalised cross-correlation. Structure
- *     the plate shows strongly where its correlation with the input is low is unsupported ("added"); strong structure of
- *     the input the plate flattens is "erased";
- *   - the flagged cells are grouped into 8-connected regions, and only regions of at least MIN_REGION_M2 count (single
- *     cells are what a redraw is for: crisper edges, cleaned smears).
+ *     window of 3 x 3 cells round each cell: its contrast in each image and their normalised cross-correlation;
+ *   - distinctness: how far the input's cell stands from the wall's median colour, or how strong its structure is;
+ *   - per cell: the plate's unsupported structure where the input is distinct is "replaced", flattened distinct structure
+ *     "erased", a changed colour "retoned"; unsupported structure over ordinary wall is "invented-detail" and kept;
+ *   - the flagged cells are grouped into 8-connected regions, and only regions of at least MIN_REGION_M2 count.
  *
  * A flagged region goes back to the input's texels, blended over FEATHER_M (revertRegions); the rest of the plate stays.
- * When the flagged regions cover more than MAX_FLAGGED_SHARE of the wall's covered texels the whole wall is rejected.
+ * When the flagged regions cover more than MAX_FLAGGED_SHARE of the wall's covered texels the whole wall is rejected. The
+ * street-level Street View photo (plate-streetview.ts) is the identity anchor for the lower storeys: what it shows the
+ * plate drawing is kept even when the tile flagged it, and what contradicts it is reverted.
  */
 
 import { SRGB8_TO_LINEAR } from '../../../../common/spatial/photogrammetric-delight';
@@ -52,6 +57,12 @@ export const MIN_CONTRAST_L = 4;
 export const MIN_SUPPORT_NCC = 0.2;
 /** The plate keeps less than this share of the input's band contrast: the input's structure was erased. */
 export const ERASE_CONTRAST_RATIO = 0.4;
+/** Blur radius of the input's colour when telling a distinct element from ordinary wall, metres. */
+export const DISTINCT_BLUR_M = 1;
+/** A cell whose input colour stands this far (CIELAB, lightness weighted) from the wall's median is a distinct element. */
+export const DISTINCT_DE = 15;
+/** ... or whose input band contrast is at least this (openings, signage, a fire escape's bars). */
+export const DISTINCT_CONTRAST_L = 9;
 /** Smallest flagged region that counts, square metres. */
 export const MIN_REGION_M2 = 3;
 /** Blend width of a reverted region's edge, metres. */
@@ -60,7 +71,7 @@ export const FEATHER_M = 0.5;
 export const MAX_FLAGGED_SHARE = 0.35;
 
 /** Open labels: diagnostic only, never branched on. */
-export type FlagKind = 'added' | 'erased' | 'retoned' | 'contradicts-photo' | (string & {});
+export type FlagKind = 'replaced' | 'erased' | 'retoned' | 'contradicts-photo' | 'invented-detail' | (string & {});
 
 export interface FlaggedRegion {
     kind: FlagKind;
@@ -81,6 +92,8 @@ export interface CellGrid {
 
 export interface CellFeatures extends CellGrid {
     toneDe: Float32Array;
+    /** Per cell: how far the input's low-passed colour stands from the wall's median colour (CIELAB). */
+    distinctDe: Float32Array;
     nccIn: Float32Array;
     contrastIn: Float32Array;
     contrastOut: Float32Array;
@@ -216,22 +229,46 @@ export function plateFeatures(input: Uint8Array, plate: Uint8Array, W: number, H
         if (m > 0) toneDe[cy * g.cw + cx] = boxSum(S, W, x0, y0, x1, y1) / m;
     }
     const st = windowStructure(bandPass(Li, use, W, H, pixelM), bandPass(Lo, use, W, H, pixelM), use, W, H, g);
-    return { ...g, toneDe, nccIn: st.ncc, contrastIn: st.contrastA, contrastOut: st.contrastB };
+    // how far each cell of the input stands out from the wall as a whole (a dark bay, a storefront, a stone base)
+    const rd = Math.max(2, Math.round(DISTINCT_BLUR_M / pixelM));
+    const inD = [maskedBlur(Li, use, W, H, rd), maskedBlur(Ai, use, W, H, rd), maskedBlur(Bi, use, W, H, rd)];
+    const med = inD.map(p => { const v: number[] = []; const step = Math.max(1, Math.floor(p.length / 40000)); for (let i = 0; i < p.length; i += step) if (use[i] && Number.isFinite(p[i])) v.push(p[i]); return quantile(v, 0.5); });
+    const dd = new Float32Array(W * H);
+    for (let i = 0; i < W * H; i++) { let q = 0; for (let c = 0; c < 3; c++) { const x = (inD[c][i] - med[c]) * (c ? 1 : LIGHTNESS_WEIGHT); q += x * x; } dd[i] = Math.sqrt(q); }
+    const Sd = integral(dd, use, W, H, i => dd[i]);
+    const distinctDe = new Float32Array(g.cw * g.ch).fill(NaN);
+    for (let cy = 0; cy < g.ch; cy++) for (let cx = 0; cx < g.cw; cx++) {
+        const x0 = cx * g.cellPx, y0 = cy * g.cellPx, x1 = Math.min(W, x0 + g.cellPx), y1 = Math.min(H, y0 + g.cellPx);
+        const m = boxSum(Sn, W, x0, y0, x1, y1);
+        if (m > 0) distinctDe[cy * g.cw + cx] = boxSum(Sd, W, x0, y0, x1, y1) / m;
+    }
+    return { ...g, toneDe, distinctDe, nccIn: st.ncc, contrastIn: st.contrastA, contrastOut: st.contrastB };
 }
 
-/** Per cell: the kind of disagreement, or '' (cells less than half covered are never flagged). */
+/**
+ * Per cell: the kind of disagreement, or '' (cells less than half covered are never flagged). Under the realism-first
+ * directive, inventing finer detail is the point of a redraw; what is reverted is a plate that erases or contradicts what
+ * makes the input this wall. So structure the plate adds where the input is ordinary wall (its colour near the wall's median
+ * and its contrast low) is "invented-detail" and kept; the same where the input stands out (distinct colour or strong
+ * structure: a dark bay, a storefront, signage, a tower's openings) is "replaced"; flattening such structure is "erased";
+ * a changed colour is "retoned".
+ */
 export function classifyCells(f: CellFeatures): string[] {
     const out: string[] = new Array(f.cw * f.ch).fill('');
     for (let k = 0; k < out.length; k++) {
         if (f.cover[k] < 0.5) continue;
         const ci = f.contrastIn[k], co = f.contrastOut[k], r = f.nccIn[k];
         const supported = Number.isFinite(r) && r >= MIN_SUPPORT_NCC;
-        if (ci >= MIN_CONTRAST_L && co < ERASE_CONTRAST_RATIO * ci) out[k] = 'erased';
-        else if (co >= MIN_CONTRAST_L && !supported) out[k] = co >= ci ? 'added' : 'erased';
+        const distinct = f.distinctDe[k] >= DISTINCT_DE || ci >= DISTINCT_CONTRAST_L;
+        if (distinct && ci >= MIN_CONTRAST_L && co < ERASE_CONTRAST_RATIO * ci) out[k] = 'erased';
+        else if (co >= MIN_CONTRAST_L && !supported) out[k] = distinct ? (co >= ci ? 'replaced' : 'erased') : 'invented-detail';
         else if (f.toneDe[k] > MAX_TONE_DE) out[k] = 'retoned';
     }
     return out;
 }
+
+/** Labels of cells that are kept even though the plate differs there (reported, not reverted). */
+export const KEPT_KINDS: ReadonlySet<string> = new Set(['invented-detail']);
 
 /** 8-connected regions of the cells `on` marks, each with its cells; the kind is the most common label among them. */
 export function cellRegions(on: (k: number) => boolean, cw: number, ch: number): number[][] {
@@ -285,10 +322,11 @@ export function describeRegions(labels: string[], g: CellGrid, pixelM: number, W
 }
 
 /** The invention and erasure check of `plate` (aligned to `input`, both W x H RGBA8) over the texels `use` marks. */
-export function auditPlate(input: Uint8Array, plate: Uint8Array, W: number, H: number, use: Uint8Array, pixelM: number): PlateAudit & { features: CellFeatures; labels: string[] } {
+export function auditPlate(input: Uint8Array, plate: Uint8Array, W: number, H: number, use: Uint8Array, pixelM: number): PlateAudit & { features: CellFeatures; labels: string[]; inventedDetailM2: number } {
     const features = plateFeatures(input, plate, W, H, use, pixelM);
     const labels = classifyCells(features);
-    const { regions, flagged } = describeRegions(labels, features, pixelM, W, H, { toneDe: features.toneDe, ncc: features.nccIn });
+    const { regions, flagged } = describeRegions(labels.map(l => (KEPT_KINDS.has(l) ? '' : l)), features, pixelM, W, H, { toneDe: features.toneDe, ncc: features.nccIn });
+    const inventedDetailM2 = Math.round(labels.reduce((t, l, k) => t + (KEPT_KINDS.has(l) ? features.cover[k] : 0), 0) * (features.cellPx * pixelM) ** 2 * 10) / 10;
     const cellM2 = (features.cellPx * pixelM) ** 2;
     const coveredAreaM2 = features.cover.reduce((s, v) => s + v, 0) * cellM2;
     const flaggedAreaM2 = regions.reduce((s, r) => s + r.areaM2, 0);
@@ -300,7 +338,7 @@ export function auditPlate(input: Uint8Array, plate: Uint8Array, W: number, H: n
     const why = regions.length
         ? `${regions.length} region${regions.length === 1 ? '' : 's'} the input does not support (${kinds}), ${(100 * share).toFixed(0)}% of the wall's ${coveredAreaM2.toFixed(0)} m2${reject ? ` (more than ${100 * MAX_FLAGGED_SHARE}%: the wall keeps its input)` : ': reverted to the input there'}`
         : 'no region of the plate adds or removes structure the input does not support';
-    return { grid: features, flagged, regions, flaggedAreaM2: Math.round(flaggedAreaM2 * 10) / 10, coveredAreaM2: Math.round(coveredAreaM2 * 10) / 10, flaggedShare: Math.round(share * 1000) / 1000, reject, why, features, labels };
+    return { grid: features, flagged, regions, inventedDetailM2, flaggedAreaM2: Math.round(flaggedAreaM2 * 10) / 10, coveredAreaM2: Math.round(coveredAreaM2 * 10) / 10, flaggedShare: Math.round(share * 1000) / 1000, reject, why, features, labels };
 }
 
 /** The per-pixel mask of flagged cells. */

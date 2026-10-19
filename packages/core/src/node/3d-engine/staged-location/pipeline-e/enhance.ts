@@ -23,6 +23,9 @@
  *     size). A rejected wall keeps its tile texture.
  */
 
+import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 import { LIGHTING_PROMPTS } from '../texture-lighting';
 import { buildTexturePlatePrompt, TEXTURE_PLATE_PROMPT_ID, TEXTURE_PLATE_STREET_VIEW_PROMPT_ID } from '../../../../browser/generative-canvas/services/location-beautify-service';
 import { edgeMap, exactDistanceTransform } from '../../../spatial/StreetViewStage3Metrics';
@@ -34,7 +37,7 @@ import { nearestImageAspectRatio } from '../../../../common/media-generation-pro
 import { lumaPlane } from './image-ops';
 import type { FaceTexture } from './massing-glb';
 import type { MassingFace } from './native-massing';
-import { auditPlate, cellMaskToPixels, describeRegions, revertRegions, MAX_FLAGGED_SHARE, type CellGrid, type FlaggedRegion } from './plate-audit';
+import { auditPlate, cellMaskToPixels, describeRegions, revertRegions, KEPT_KINDS, MAX_FLAGGED_SHARE, type CellGrid, type FlaggedRegion } from './plate-audit';
 import { streetBandTop, verifyAgainstPhoto, type GuideView, type PhotoCheck, type RectifiedPhoto } from './plate-streetview';
 
 export const ENHANCE_MAX_SIDE = 1024;
@@ -62,9 +65,12 @@ export function enhanceModels(env: NodeJS.ProcessEnv = process.env): string[] {
     return m.length ? m : [ENHANCE_MODEL_DEFAULT];
 }
 
-/** SCRATCHBOX_STAGED_ENHANCE=1 turns enhanced mode on for a server (off by default). */
+/**
+ * Within pipeline E enhanced appearance is the default (the realism-first directive); SCRATCHBOX_STAGED_ENHANCE=0 makes the
+ * real-data view the server's default instead. A request's own `enhance` overrides it either way.
+ */
 export function stagedEnhance(env: NodeJS.ProcessEnv = process.env): boolean {
-    return env.SCRATCHBOX_STAGED_ENHANCE === '1';
+    return env.SCRATCHBOX_STAGED_ENHANCE !== '0';
 }
 
 export interface PlateRequest { prompt: string; image: Uint8Array; width: number; height: number; reference?: Uint8Array; streetView?: Uint8Array; models: string[]; signal?: AbortSignal }
@@ -80,6 +86,33 @@ export function genAiPlateClient(genai: unknown): PlateModelClient {
         const a = await generateImageWithModels(genai, { models: r.models, contents: [{ role: 'user', parts }], imageConfig: { aspectRatio: nearestImageAspectRatio(r.width, r.height) }, ...(r.signal ? { signal: r.signal } : {}) } as never);
         return { bytes: new Uint8Array(a.data.buffer, a.data.byteOffset, a.data.byteLength), modelUsed: a.modelUsed };
     };
+}
+
+/** The key of a plate request: everything the model is sent. */
+export function plateCacheKey(r: PlateRequest): string {
+    const h = crypto.createHash('sha256').update(JSON.stringify({ v: 1, models: r.models, prompt: r.prompt, width: r.width, height: r.height }));
+    for (const b of [r.image, r.reference, r.streetView]) { h.update(b ? `|${b.length}|` : '|-|'); if (b) h.update(b); }
+    return h.digest('hex').slice(0, 40);
+}
+
+/** The model's answer to `r`, from `dir` when it was answered before (then stored there). */
+export async function cachedPlate(dir: string | undefined, r: PlateRequest, client: PlateModelClient): Promise<PlateAnswer & { cached?: boolean }> {
+    const key = dir ? plateCacheKey(r) : '';
+    if (dir) {
+        try {
+            const meta = JSON.parse(fs.readFileSync(path.join(dir, `${key}.json`), 'utf8')) as { modelUsed: string };
+            return { bytes: new Uint8Array(fs.readFileSync(path.join(dir, `${key}.img`))), modelUsed: meta.modelUsed, cached: true };
+        } catch { /* not cached */ }
+    }
+    const a = await client(r);
+    if (dir) {
+        try {
+            fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(path.join(dir, `${key}.img`), a.bytes);
+            fs.writeFileSync(path.join(dir, `${key}.json`), JSON.stringify({ modelUsed: a.modelUsed, models: r.models, at: new Date().toISOString() }));
+        } catch { /* the cache is an optimisation */ }
+    }
+    return a;
 }
 
 /** The de-light study's winning "keep everything in place" sentences (texture-lighting.ts, plain-detailed). */
@@ -160,6 +193,8 @@ export interface EnhanceAuditRecord {
     revertedAreaM2: number;
     /** Cells the tile check flagged that the Street View photo shows as the plate draws them (kept), square metres. */
     photoKeptM2: number;
+    /** Finer detail the plate adds over ordinary wall (kept: the point of the redraw), square metres. */
+    inventedDetailM2: number;
 }
 
 export interface EnhanceStreetViewRecord {
@@ -217,7 +252,8 @@ export function guardPlate(input: Uint8Array, aligned: Uint8Array, W: number, H:
             else if (check.verdict[k] === 'contradicts-photo') labels[k] = 'contradicts-photo';
         }
     }
-    const { regions, flagged } = describeRegions(labels, a.grid, pixelM, W, H, { toneDe: a.features.toneDe, ncc: a.features.nccIn });
+    const { regions, flagged } = describeRegions(labels.map(l => (KEPT_KINDS.has(l) ? '' : l)), a.grid, pixelM, W, H, { toneDe: a.features.toneDe, ncc: a.features.nccIn });
+    const inventedDetailM2 = Math.round(labels.reduce((t, l, k) => t + (KEPT_KINDS.has(l) ? a.grid.cover[k] : 0), 0) * (a.grid.cellPx * pixelM) ** 2 * 10) / 10;
     const flaggedAreaM2 = Math.round(regions.reduce((s, r) => s + r.areaM2, 0) * 10) / 10;
     const share = a.coveredAreaM2 > 0 ? flaggedAreaM2 / a.coveredAreaM2 : 0;
     const reject = share > MAX_FLAGGED_SHARE;
@@ -229,13 +265,13 @@ export function guardPlate(input: Uint8Array, aligned: Uint8Array, W: number, H:
     const cellM2 = (a.grid.cellPx * pixelM) ** 2;
     const audit: EnhanceAuditRecord = {
         regions, flaggedAreaM2, coveredAreaM2: a.coveredAreaM2, flaggedShare: Math.round(share * 1000) / 1000,
-        revertedAreaM2: Math.round(reverted * pixelM * pixelM * 10) / 10, photoKeptM2: Math.round(photoKept * cellM2 * 10) / 10
+        revertedAreaM2: Math.round(reverted * pixelM * pixelM * 10) / 10, photoKeptM2: Math.round(photoKept * cellM2 * 10) / 10, inventedDetailM2
     };
     const kinds = [...byKind.entries()].map(([k, v]) => `${k} ${v.toFixed(1)} m2`).join(', ');
     const why = regions.length
-        ? `${regions.length} region${regions.length === 1 ? '' : 's'} not supported (${kinds}), ${(100 * share).toFixed(0)}% of ${a.coveredAreaM2.toFixed(0)} m2${reject ? `: more than ${100 * MAX_FLAGGED_SHARE}%, the wall keeps its tile texture` : `: ${audit.revertedAreaM2.toFixed(1)} m2 reverted to the tile texture`}`
-        : 'no region adds or removes structure the tile does not support';
-    return { audit, reject, why: `${why}${photoKept ? `; ${audit.photoKeptM2} m2 the tile check flagged kept because the Street View photo shows it` : ''}`, rgba, weight, labels, grid: a.grid, ...(check ? { photo: check } : {}) };
+        ? `${regions.length} region${regions.length === 1 ? '' : 's'} that erase, replace or recolour a distinct element (${kinds}), ${(100 * share).toFixed(0)}% of ${a.coveredAreaM2.toFixed(0)} m2${reject ? `: more than ${100 * MAX_FLAGGED_SHARE}%, the wall keeps its tile texture` : `: ${audit.revertedAreaM2.toFixed(1)} m2 reverted to the tile texture`}`
+        : 'no region erases, replaces or recolours a distinct element of the tile';
+    return { audit, reject, why: `${why}${inventedDetailM2 ? `; ${inventedDetailM2} m2 of finer detail drawn over ordinary wall kept` : ''}${photoKept ? `; ${audit.photoKeptM2} m2 the tile check flagged kept because the Street View photo shows it` : ''}`, rgba, weight, labels, grid: a.grid, ...(check ? { photo: check } : {}) };
 }
 
 /**
@@ -248,6 +284,11 @@ export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Arra
     guards?: boolean; streetView?: WallStreetView; streetViewSource?: number; noStreetView?: string;
     /** When the photo-guided redraw fails the alignment gate, redraw once without the photo (default true). */
     retryWithoutPhoto?: boolean;
+    /**
+     * Where answers are kept, keyed by everything the model is sent (models, prompt, images): the same wall with the same
+     * inputs gets the same plate on every rebuild.
+     */
+    cacheDir?: string;
 }): Promise<EnhanceWallRecord & { plate?: Uint8Array; guarded?: Uint8Array; labels?: string[]; grid?: CellGrid }> {
     const t0 = Date.now();
     const guards = opts.guards ?? true;
@@ -261,8 +302,10 @@ export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Arra
     const svRec: EnhanceStreetViewRecord | undefined = sv ? { panoId: sv.view.panoId, method: sv.view.registration?.method ?? 'nominal', bandCover: Math.round(sv.rect.bandCover * 1000) / 1000, pxPerM: Math.round(sv.rect.pxPerM * 10) / 10 } : undefined;
     const base = { face: f.index, key: f.key, ...(svRec ? { streetView: svRec } : {}), ...(guards && !sv && opts.noStreetView ? { noStreetView: opts.noStreetView } : {}) };
     let answer: PlateAnswer;
+    const image = new Uint8Array(encodePng(padded.width, padded.height, Buffer.from(padded.rgba), 4));
+    const request: PlateRequest = { prompt, image, width: padded.width, height: padded.height, ...(ref ? { reference: ref } : {}), ...(sv ? { streetView: sv.crop } : {}), models: opts.models, ...(opts.signal ? { signal: opts.signal } : {}) };
     try {
-        answer = await opts.client({ prompt, image: new Uint8Array(encodePng(padded.width, padded.height, Buffer.from(padded.rgba), 4)), width: padded.width, height: padded.height, ...(ref ? { reference: ref } : {}), ...(sv ? { streetView: sv.crop } : {}), models: opts.models, ...(opts.signal ? { signal: opts.signal } : {}) });
+        answer = await cachedPlate(opts.cacheDir, request, opts.client);
     } catch (err) {
         if (opts.signal?.aborted) throw err;
         return { ...base, accepted: false, why: `the model did not answer (${(err as Error).message.slice(0, 160)})`, ms: Date.now() - t0 };

@@ -125,24 +125,29 @@ describe('enhanced mode: the invention and erasure check', () => {
         expect(a.reject).toBe(false);
     });
 
-    it('flags a block the input does not show and reverts it, feathered', () => {
-        const truth = wall();
-        // the plate draws a glazed front with mullions where the input's ground storey is plain brick
-        const plate = wall((xm, ym) => (xm > 6 && xm < 18 && ym < 3.2 ? ((xm % 1.2) < 0.15 || (ym % 1.6) < 0.15 ? [235, 235, 230] : [30, 40, 55]) : undefined));
-        const input = soften(truth);
+    it('keeps finer detail drawn over ordinary wall, and reverts, feathered, a block that replaces a distinct element', () => {
+        // the input's ground storey: plain brick, and a distinct grey stone base under the right half
+        const stone = (xm: number, ym: number): Rgb | undefined => (xm > 18 && xm < 30 && ym < 3.2 ? [150, 150, 145] : undefined);
+        const input = soften(wall(stone));
+        // the plate draws rusticated coursing on the plain brick (finer detail in the same material) and a glazed front with
+        // mullions on the stone base (replacing it)
+        const coursing = (xm: number, ym: number): Rgb | undefined => (ym < 3.2 && xm > 3 && xm < 12 ? ((ym % 0.45) < 0.1 || ((xm + (Math.floor(ym / 0.45) % 2) * 0.45) % 0.9) < 0.08 ? [120, 78, 58] : [190, 128, 96]) : undefined);
+        const glazed = (xm: number, ym: number): Rgb | undefined => (ym < 3.2 && xm > 19 && xm < 29 ? ((xm % 1.2) < 0.15 || (ym % 1.6) < 0.15 ? [235, 235, 230] : [30, 40, 55]) : undefined);
+        const plate = wall((x, y) => coursing(x, y) ?? glazed(x, y) ?? stone(x, y));
         const a = auditPlate(input, plate, W, H, all(), PX);
-        const added = a.regions.filter(r => r.kind === 'added' || r.kind === 'retoned' || r.kind === 'erased');
-        expect(added.length).toBeGreaterThan(0);
-        const area = added.reduce((s, r) => s + r.areaM2, 0);
-        expect(area).toBeGreaterThan(20);
-        expect(area).toBeLessThan(80);
+        expect(a.inventedDetailM2).toBeGreaterThan(5);
+        const onStone = a.regions.filter(r => r.box[0] * PX >= 17).reduce((t, r) => t + r.areaM2, 0);
+        const onBrick = a.regions.filter(r => r.box[2] * PX <= 13).reduce((t, r) => t + r.areaM2, 0);
+        expect(onStone).toBeGreaterThan(15);
+        expect(onBrick).toBe(0);
         const { rgba, weight } = revertRegions(input, plate, W, H, cellMaskToPixels(a.flagged, a.grid, W, H), PX);
-        // inside the block the input is back; far from it the plate is untouched; the blend is gradual at its edge
-        expect(mad(rgba, input, inBox(8, 16, 0.5, 2.5))).toBeLessThan(2);
-        expect(mad(rgba, plate, inBox(22, 29, 6, 14))).toBe(0);
+        // the stone is back; the coursing on the brick and the wall above are the plate's; the blend is gradual at the edge
+        expect(mad(rgba, input, inBox(20.5, 27.5, 0.5, 2.5))).toBeLessThan(2);
+        expect(mad(rgba, plate, inBox(4, 11, 0.5, 2.5))).toBe(0);
+        expect(mad(rgba, plate, inBox(2, 15, 6, 14))).toBe(0);
         const ramp = Array.from(weight).filter(w => w > 0.05 && w < 0.95).length;
         expect(ramp).toBeGreaterThan(50);
-        shot('audit_added_block.png', [input, plate, rgba]);
+        shot('audit_detail_kept_element_reverted.png', [input, plate, rgba]);
     });
 
     it('flags a dark bay the plate painted over as wall and windows', () => {
@@ -271,6 +276,32 @@ describe('enhanced mode: the Street View photo', () => {
         expect(r.streetView?.guidedRejected).toMatch(/edge chamfer/);
         expect(Array.from(t.source).filter(v => v === 3).length).toBeGreaterThan(0.9 * W * H);
         expect(Array.from(t.source).some(v => v === 9)).toBe(false);
+    });
+
+    it('caches the answer per wall by everything sent, so a rebuild gets the same plate', async () => {
+        const { cachedPlate, plateCacheKey } = await import('../src/node/3d-engine/staged-location/pipeline-e/enhance');
+        const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'plates-'));
+        let calls = 0;
+        const client = async () => { calls++; return { bytes: new Uint8Array([calls, 2, 3]), modelUsed: 'm' }; };
+        const req = { prompt: 'p', image: new Uint8Array([1]), width: 4, height: 4, models: ['m'] };
+        const a = await cachedPlate(dir, req, client), b = await cachedPlate(dir, { ...req }, client);
+        expect(calls).toBe(1);
+        expect(Array.from(b.bytes)).toEqual(Array.from(a.bytes));
+        expect((b as { cached?: boolean }).cached).toBe(true);
+        // anything sent differently is another key: the image, a reference, the photo, the prompt
+        const keys = new Set([req, { ...req, image: new Uint8Array([2]) }, { ...req, reference: new Uint8Array([1]) }, { ...req, streetView: new Uint8Array([1]) }, { ...req, prompt: 'q' }].map(plateCacheKey));
+        expect(keys.size).toBe(5);
+        await cachedPlate(dir, { ...req, prompt: 'q' }, client);
+        expect(calls).toBe(2);
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('makes enhanced appearance the default within pipeline E, with the real-data view as the opt-out', async () => {
+        const { stagedEnhance } = await import('../src/node/3d-engine/staged-location/pipeline-e/enhance');
+        expect(stagedEnhance({} as NodeJS.ProcessEnv)).toBe(true);
+        expect(stagedEnhance({ SCRATCHBOX_STAGED_ENHANCE: '0' } as NodeJS.ProcessEnv)).toBe(false);
+        const { stagedPipelineE } = await import('../src/node/3d-engine/staged-location/pipeline-e/pipeline-e');
+        expect(stagedPipelineE({} as NodeJS.ProcessEnv)).toBe(false);
     });
 
     it('aims a street-level view of the same pano at the lower storeys', async () => {
