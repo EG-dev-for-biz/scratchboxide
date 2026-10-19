@@ -13,14 +13,19 @@
 /**
  * Level-of-detail trees on one skeleton.
  *
- * A tree grown into a measured crown (space colonisation, scratchbox_nature.hpp) is drawn at three levels:
+ * A tree grown into a measured crown (space colonisation, scratchbox_nature.hpp) is drawn at four levels:
  *
- *   level 0 (near)  its wood (the whole triangle budget), the twigs the budget prunes as instances of one tapered tube,
- *                   and leaves as instances of shared SB-Veggie leaf clusters (scratchbox_sb_veggie.hpp
- *                   SbVeggieFoliage::buildCluster): real blade sizes, scaled from the tree's height.
- *   level 1 (mid)   the same wood, the same cluster positions, fewer larger leaves per cluster (about one eighth of the
- *                   level-0 triangles); no twigs.
- *   level 2 (far)   the blob masses the budgeted meshing already builds on the same skeleton (nature::meshWithinBudget).
+ *   level 0 (near)      its wood (the whole triangle budget), the twigs the budget prunes as instances of one tapered tube,
+ *                       and leaves as instances of shared SB-Veggie leaf clusters (scratchbox_sb_veggie.hpp
+ *                       SbVeggieFoliage::buildCluster): real blade sizes, scaled from the tree's height.
+ *   level 1 (near-mid)  the same wood without the twigs, the same cluster positions, a share of each cluster's leaves
+ *                       (nearMidLeafCountShare) with the near blade outline, each larger so the cluster keeps its leaf
+ *                       area (about 0.3 of the level-0 triangles).
+ *   level 2 (mid)       the same wood, the same cluster positions, fewer larger leaves per cluster as coarse cards (about
+ *                       one eighth of the level-0 triangles); no twigs.
+ *   level 3 (far)       the blob masses the budgeted meshing already builds on the same skeleton (nature::meshWithinBudget).
+ *
+ * In this file's types `level1` is the mid level (2 in the GLB) and `nearMid` the near-mid level (1 in the GLB).
  *
  * Everything here is a continuous quantity: leaf length follows the crown's height, leaf density follows how far a
  * station lies below the measured canopy surface, the clusters' orientation follows the shoot and the crown's outward
@@ -152,6 +157,19 @@ struct LodParams {
     // a mass whose opacity is the leaf cover, not single blades, and level 1 hands over to the solid far masses: a little more
     // cover keeps that handover (dithered over a wide band) from changing the tree's weight.
     double level1AreaGain{1.5};
+    // The near-mid level (between near and mid): this share of a cluster's leaves, with the near blade outline (rows) and no
+    // petioles or sub-shoots, each scaled so the cluster's leaf area is nearMidAreaGain times the near level's.
+    double nearMidLeafCountShare{0.35};
+    double nearMidAreaGain{1.0};
+    int bladeRowsNearMid{1};
+    // The crown's lobes (a smooth union of spheres a viewer shades the leaves with): the placed clusters are grouped into
+    // lobes of about crownLobeRadiusM (at most crownLobeMax of them, at least one); a lobe's radius covers the
+    // crownLobeCoverQuantile of its clusters' hull points; the smooth-min blend radius is crownLobeBlendPerRadius times the
+    // mean lobe radius.
+    int crownLobeMax{8};
+    double crownLobeRadiusM{2.5};
+    double crownLobeCoverQuantile{0.85};
+    double crownLobeBlendPerRadius{0.5};
     // stations
     double spacingRatio{0.5};            // distance between clusters / cluster reach
     double outwardBlend{0.45};           // cluster axis: the shoot's direction blended towards the crown's outward direction
@@ -200,10 +218,10 @@ struct LibraryMesh {
     size_t triangles() const { return indices.size() / 3; }
 };
 
-/** One shared cluster: its level-0 and level-1 meshes (same attachment, same reach). */
+/** One shared cluster: its near, near-mid and mid meshes (same attachment, same reach). */
 struct ClusterVariant {
-    std::string name;                    // base name; level 1 is name + "_mid"
-    LibraryMesh level0, level1;
+    std::string name;                    // base name; the mid mesh is name + "_mid", the near-mid one name + "_nearmid"
+    LibraryMesh level0, level1, nearMid;
     int densityClass{0};
     bool terminal{true};
 };
@@ -291,7 +309,8 @@ inline LibraryMesh buildTwigTube(int sides, double taper, const std::string& nam
 
 /**
  * The clusters every tree shares: densityClasses x 2 attachments (a tip spray reaches 1.15 x, a lateral one 0.92 x), each at
- * level 0 (full) and level 1 (a share of the leaves, each larger, a single row, no petioles, no sub-shoots), plus the twig.
+ * level 0 (full), near-mid (a share of the leaves with the near outline, each larger, no petioles, no sub-shoots) and
+ * level 1 (a smaller share, each larger, coarse cards, no petioles, no sub-shoots), plus the twig.
  */
 inline ClusterLibrary buildClusterLibrary(const LodParams& P) {
     ClusterLibrary lib;
@@ -335,6 +354,22 @@ inline ClusterLibrary buildClusterLibrary(const LodParams& P) {
                 if (std::abs(ratio - 1.0) < 0.02) break;
                 c1.leafLengthM = static_cast<float>(c1.leafLengthM * std::sqrt(ratio));
                 v.level1 = detail::fromCluster(v.name + "_mid", sv::SbVeggieFoliage::buildCluster(c1, P.supportDirections));
+            }
+            // near-mid: the near outline, a share of the leaves, each larger, rescaled to the near level's leaf area times nearMidAreaGain
+            sv::SbVeggieClusterParams cn = cp;
+            const double nmShare = std::clamp(P.nearMidLeafCountShare, 0.05, 1.0);
+            cn.leafCount = std::max(2, static_cast<int>(std::lround(cp.leafCount * nmShare)));
+            cn.leafLengthM = static_cast<float>(cp.leafLengthM * std::sqrt(static_cast<double>(cp.leafCount) / cn.leafCount));
+            cn.morphology.blade.rows = P.bladeRowsNearMid;
+            cn.morphology.blade.petioleRatio = 0.0f;
+            cn.petioles = false;
+            cn.shootletRadiusM = 0.0f;
+            v.nearMid = detail::fromCluster(v.name + "_nearmid", sv::SbVeggieFoliage::buildCluster(cn, P.supportDirections));
+            for (int pass = 0; pass < 3 && v.nearMid.bladeArea > 0 && v.level0.bladeArea > 0; ++pass) {
+                const double ratio = P.nearMidAreaGain * v.level0.bladeArea / v.nearMid.bladeArea;
+                if (std::abs(ratio - 1.0) < 0.02) break;
+                cn.leafLengthM = static_cast<float>(cn.leafLengthM * std::sqrt(ratio));
+                v.nearMid = detail::fromCluster(v.name + "_nearmid", sv::SbVeggieFoliage::buildCluster(cn, P.supportDirections));
             }
             lib.variants.push_back(std::move(v));
         }
@@ -391,12 +426,13 @@ struct TreeLod {
     size_t stations{0}, repairStations{0}, fitShrunk{0}, unfit{0}, outsideCrown{0}, inset{0};
     size_t twigTriangles{0};
     float twigRadiusMinM{0}, twigRadiusMedianM{0}, twigRadiusMaxM{0};   // of the pruned segments drawn as twigs (the radius they start at)
-    LeafLevelMeasure level0, level1;
+    LeafLevelMeasure level0, level1, nearMid;
     double msWood{0}, msTwigs{0}, msStations{0}, msRepair{0}, msMeasure{0};   // where the build's time went
     std::string error;
-    /** Triangles drawn at level 0 / level 1 (wood, twigs and clusters, instances expanded). */
+    /** Triangles drawn at the near level / the mid level / the near-mid level (wood, twigs and clusters, instances expanded). */
     size_t drawnLevel0() const { return woodTriangles + twigTriangles + level0.clusterTriangles; }
     size_t drawnLevel1() const { return woodTriangles + level1.clusterTriangles; }
+    size_t drawnNearMid() const { return woodTriangles + nearMid.clusterTriangles; }
 };
 
 namespace detail {
@@ -675,10 +711,11 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
     auto stationPosition = [&](uint32_t i, const Vec3* at) { return at ? *at : sk[i].position; };
 
     T.clusters.assign(lib.variants.size(), {});
-    detail::LeafSoup soup0, soup1;
-    detail::ReachTracker track0, track1;
+    detail::LeafSoup soup0, soup1, soupNM;
+    detail::ReachTracker track0, track1, trackNM;
     track0.init(surface, in.reachRadius, P.strictReachM, in.reachRadius + 1.5);
     track1.init(surface, in.reachRadius, P.strictReachM, in.reachRadius + 1.5);
+    trackNM.init(surface, in.reachRadius, P.strictReachM, in.reachRadius + 1.5);
     auto place = [&](uint32_t i, bool repair, const Vec3* at) {
         const Vec3 p = stationPosition(i, at);
         const Vec3 par = sk[i].parentId >= 0 ? sk[static_cast<size_t>(sk[i].parentId)].position : p - Vec3(0, 1, 0);
@@ -703,6 +740,7 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
         auto fits = [&](float s) {
             for (const auto& sp : v.level0.support) if (!env.contains(p + q.rotate(sp * s))) return false;
             for (const auto& sp : v.level1.support) if (!env.contains(p + q.rotate(sp * s))) return false;
+            for (const auto& sp : v.nearMid.support) if (!env.contains(p + q.rotate(sp * s))) return false;
             return true;
         };
         Vec3 centre = p;
@@ -723,6 +761,7 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
                     bool ok = true;
                     for (const auto& sp : v.level0.support) { if (!env.contains(c + q.rotate(sp * lo))) { ok = false; break; } }
                     for (const auto& sp : v.level1.support) { if (ok && !env.contains(c + q.rotate(sp * lo))) { ok = false; } }
+                    for (const auto& sp : v.nearMid.support) { if (ok && !env.contains(c + q.rotate(sp * lo))) { ok = false; } }
                     if (ok) { centre = c; placed = true; }
                 }
                 if (!placed) { isStation[i] = 1; ++T.unfit; return; }
@@ -736,17 +775,22 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
         }
         Instance inst{centre, q, Vec3(sc, sc, sc), static_cast<float>(i) / growthDen};
         T.clusters[k].push_back(inst);
-        const size_t g0 = soup0.clusters.size(), g1 = soup1.clusters.size();
+        const size_t g0 = soup0.clusters.size(), g1 = soup1.clusters.size(), gn = soupNM.clusters.size();
         soup0.append(v.level0, inst);
         soup1.append(v.level1, inst);
+        soupNM.append(v.nearMid, inst);
         if (soup0.clusters.size() > g0) track0.addLast(soup0);
         if (soup1.clusters.size() > g1) track1.addLast(soup1);
+        if (soupNM.clusters.size() > gn) trackNM.addLast(soupNM);
         T.level0.leaves += static_cast<size_t>(v.level0.leaves);
         T.level1.leaves += static_cast<size_t>(v.level1.leaves);
+        T.nearMid.leaves += static_cast<size_t>(v.nearMid.leaves);
         T.level0.leafTriangles += v.level0.bladeFront.size() / 3 * 2;
         T.level1.leafTriangles += v.level1.bladeFront.size() / 3 * 2;
+        T.nearMid.leafTriangles += v.nearMid.bladeFront.size() / 3 * 2;
         T.level0.clusterTriangles += v.level0.triangles();
         T.level1.clusterTriangles += v.level1.triangles();
+        T.nearMid.clusterTriangles += v.nearMid.triangles();
         ++T.stations;
         if (repair) ++T.repairStations;
         isStation[i] = 1;
@@ -786,7 +830,7 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
     // the repair works to the strict yardstick when it is the tighter one: a sample within the tree's reach radius of a
     // leaf but not within a metre still counts as unreached
     const double repairReach = std::min(reach, P.strictReachM);
-    T.level0.samples = T.level1.samples = surface.size();
+    T.level0.samples = T.level1.samples = T.nearMid.samples = surface.size();
     const std::vector<uint8_t>& flags = track0.small;   // within the strict radius of a level-0 leaf (the radius the repair works to)
     size_t reached = track0.nSmall;
     const bool repairable = psi >= 1.0;
@@ -870,6 +914,7 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
     };
     finish(T.level0, soup0, track0);
     finish(T.level1, soup1, track1);
+    finish(T.nearMid, soupNM, trackNM);
     T.msMeasure = msSince(tPhase);
 }
 
@@ -967,6 +1012,112 @@ inline CrownEllipsoid crownOfLeaves(const TreeLod& T, const ClusterLibrary& lib)
         }
     }
     return fitCrownEllipsoid(pts);
+}
+
+// ================================================================================================
+// the crown's lobes: a smooth union of spheres, so a viewer's crown keeps its real bulges
+// ================================================================================================
+
+/** One placed leaf cluster as the lobe fit sees it: where it is and points on its hull (tree frame). */
+struct LobeSeed {
+    Vec3 centre;
+    std::vector<Vec3> points;
+};
+
+/**
+ * A crown as a smooth union of spheres (centre xyz, radius), in the frame of its seeds. A viewer evaluates the smooth
+ * minimum f(x) = -k log sum exp(-(|x - c_i| - r_i) / k) with k = blendM and shades the leaves with its gradient, so the
+ * crown keeps its lobes but stays soft.
+ */
+struct CrownLobes {
+    std::vector<std::array<double, 4>> lobes;
+    double blendM{0};
+    bool valid() const { return !lobes.empty() && blendM > 0; }
+};
+
+/**
+ * Groups leaf clusters into lobes. The number of lobes is the crown's volume (the ellipsoid of all hull points) over the
+ * volume of a sphere of `targetRadiusM`, rounded, within [1, maxLobes] and never more than the seeds. The groups are
+ * k-means on the cluster centres, started from the seed farthest from the centroid and then each seed farthest from the
+ * ones taken (deterministic); a lobe's centre is its seeds' mean centre and its radius covers the `coverQuantile` of its
+ * seeds' hull points (never below minRadius). The blend radius is blendPerRadius times the mean lobe radius.
+ */
+inline CrownLobes fitCrownLobes(const std::vector<LobeSeed>& seeds, int maxLobes, double targetRadiusM, double coverQuantile, double blendPerRadius, double minRadius = 0.25) {
+    CrownLobes out;
+    if (seeds.empty() || maxLobes < 1 || !(targetRadiusM > 0)) return out;
+    std::vector<Vec3> all;
+    for (const auto& s : seeds) { if (s.points.empty()) all.push_back(s.centre); else all.insert(all.end(), s.points.begin(), s.points.end()); }
+    const CrownEllipsoid e = fitCrownEllipsoid(all, 0.02, minRadius);
+    const double vol = e.valid() ? e.radii[0] * e.radii[1] * e.radii[2] : 0.0;
+    const double ratio = vol / (targetRadiusM * targetRadiusM * targetRadiusM);
+    const size_t K = static_cast<size_t>(std::clamp<long>(std::lround(ratio), 1L, static_cast<long>(std::min<size_t>(static_cast<size_t>(maxLobes), seeds.size()))));
+    // farthest-point start
+    Vec3 mean(0, 0, 0);
+    for (const auto& s : seeds) mean += s.centre;
+    mean = mean / static_cast<float>(seeds.size());
+    std::vector<Vec3> c;
+    size_t first = 0;
+    for (size_t i = 1; i < seeds.size(); ++i) if ((seeds[i].centre - mean).lengthSquared() > (seeds[first].centre - mean).lengthSquared()) first = i;
+    c.push_back(seeds[first].centre);
+    std::vector<double> dmin(seeds.size(), std::numeric_limits<double>::infinity());
+    while (c.size() < K) {
+        size_t best = 0;
+        double bestD = -1;
+        for (size_t i = 0; i < seeds.size(); ++i) {
+            dmin[i] = std::min(dmin[i], static_cast<double>((seeds[i].centre - c.back()).lengthSquared()));
+            if (dmin[i] > bestD) { bestD = dmin[i]; best = i; }
+        }
+        if (bestD <= 0) break;
+        c.push_back(seeds[best].centre);
+    }
+    // Lloyd iterations
+    std::vector<size_t> owner(seeds.size(), std::numeric_limits<size_t>::max());
+    for (int it = 0; it < 16; ++it) {
+        bool moved = false;
+        for (size_t i = 0; i < seeds.size(); ++i) {
+            size_t b = 0;
+            for (size_t k = 1; k < c.size(); ++k) if ((seeds[i].centre - c[k]).lengthSquared() < (seeds[i].centre - c[b]).lengthSquared()) b = k;
+            if (b != owner[i]) { moved = true; owner[i] = b; }
+        }
+        if (!moved) break;
+        std::vector<Vec3> sum(c.size(), Vec3(0, 0, 0));
+        std::vector<size_t> n(c.size(), 0);
+        for (size_t i = 0; i < seeds.size(); ++i) { sum[owner[i]] += seeds[i].centre; ++n[owner[i]]; }
+        for (size_t k = 0; k < c.size(); ++k) if (n[k]) c[k] = sum[k] / static_cast<float>(n[k]);
+    }
+    const double q = std::clamp(coverQuantile, 0.0, 1.0);
+    double rSum = 0;
+    for (size_t k = 0; k < c.size(); ++k) {
+        std::vector<double> d;
+        for (size_t i = 0; i < seeds.size(); ++i) {
+            if (owner[i] != k) continue;
+            if (seeds[i].points.empty()) d.push_back((seeds[i].centre - c[k]).length());
+            for (const auto& p : seeds[i].points) d.push_back((p - c[k]).length());
+        }
+        if (d.empty()) continue;
+        std::sort(d.begin(), d.end());
+        const double r = std::max(minRadius, d[static_cast<size_t>(std::floor(q * static_cast<double>(d.size() - 1)))]);
+        out.lobes.push_back({static_cast<double>(c[k].x), static_cast<double>(c[k].y), static_cast<double>(c[k].z), r});
+        rSum += r;
+    }
+    if (!out.lobes.empty()) out.blendM = std::max(1e-3, blendPerRadius * rSum / static_cast<double>(out.lobes.size()));
+    return out;
+}
+
+/** The lobes of a tree's level-0 leaves (the hull points of each placed cluster, in the tree's frame), with the library's parameters. */
+inline CrownLobes crownLobesOfLeaves(const TreeLod& T, const ClusterLibrary& lib) {
+    std::vector<LobeSeed> seeds;
+    for (size_t k = 0; k < T.clusters.size() && k < lib.variants.size(); ++k) {
+        const auto& v = lib.variants[k].level0;
+        for (const auto& in : T.clusters[k]) {
+            LobeSeed s;
+            s.centre = v.leafSpheres.empty() ? in.t : detail::transformPoint(in.t, in.q, in.s, v.bladeCentre);
+            for (const auto& sp : v.support) s.points.push_back(detail::transformPoint(in.t, in.q, in.s, sp));
+            seeds.push_back(std::move(s));
+        }
+    }
+    const LodParams& P = lib.params;
+    return fitCrownLobes(seeds, P.crownLobeMax, P.crownLobeRadiusM, P.crownLobeCoverQuantile, P.crownLobeBlendPerRadius);
 }
 
 } // namespace tree_lod

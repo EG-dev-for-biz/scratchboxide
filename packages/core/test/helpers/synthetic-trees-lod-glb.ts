@@ -8,9 +8,10 @@
  ********************************************************************************/
 
 /**
- * A tiny trees GLB that follows the tree LOD contract (validateTreesGlbJson): per tree, three level children (0 near, 1 mid,
- * 2 far), wood as a small triangle fan, and for levels 0 and 1 two EXT_mesh_gpu_instancing leaf-cluster nodes instancing
- * one shared cluster mesh. Geometry is a stand-in sized for tests; the structure is what the contract fixes.
+ * A tiny trees GLB that follows the tree LOD contract (validateTreesGlbJson): per tree, four level children (0 near,
+ * 1 near-mid, 2 mid, 3 far; schema trees-lod/2) or, with `levels: 3`, the three of an old trees-lod/1 file (0 near, 1 mid,
+ * 2 far), wood as a small triangle fan, and for every level but the far one two EXT_mesh_gpu_instancing leaf-cluster nodes
+ * instancing one shared cluster mesh. Geometry is a stand-in sized for tests; the structure is what the contract fixes.
  */
 
 import * as fs from 'fs';
@@ -18,8 +19,12 @@ import type { TreeLodExtras, TreesGlbRootExtras } from '../../src/common/spatial
 
 export interface TreesLodFixtureOptions {
     trees?: number; psiSeason?: number;
-    /** Give each tree a crown ellipsoid (sbTree.crown) and a level-2 foliage primitive after the wood, as the native writer does. */
+    /** Give each tree a crown ellipsoid (sbTree.crown) and a far-level foliage primitive after the wood, as the native writer does. */
     crown?: boolean;
+    /** With `crown`: also the crown's lobes (sbTree.crown.lobes, lobeBlendM). */
+    lobes?: boolean;
+    /** 4 (trees-lod/2, the default) or 3 (an old trees-lod/1 file). */
+    levels?: 3 | 4;
 }
 
 /** The glTF JSON and binary of the fixture; `mutate` lets a test break one detail. */
@@ -63,22 +68,24 @@ export function buildTreesLodGltf(opts: TreesLodFixtureOptions = {}): { json: an
     const addMesh = (positions: number[], indices: number[]): number => { const m = mesh(positions, indices); pad(); meshes.push(m); return meshes.length - 1; };
     const clusterMesh = addMesh([0, 0, 0, 0.1, 0, 0, 0, 0.1, 0.05], [0, 1, 2]);
     meshes[clusterMesh].name = 'leaf_cluster_a';
-    const levelTris = [12, 6, 4];
-    const bands: Array<[number, number, number]> = [[0, 60, 10], [50, 200, 30], [170, 1e6, 60]];
+    const levelCount = opts.levels ?? 4;
+    const far = levelCount - 1;
+    const levelTris = levelCount === 4 ? [12, 9, 6, 4] : [12, 6, 4];
+    const bands: Array<[number, number, number]> = levelCount === 4 ? [[0, 60, 10], [50, 110, 20], [90, 200, 30], [170, 1e6, 60]] : [[0, 60, 10], [50, 200, 30], [170, 1e6, 60]];
     const treeNodes: number[] = [];
     for (let t = 0; t < trees; t++) {
         const levelNodes: number[] = [];
-        for (let level = 0; level < 3; level++) {
+        for (let level = 0; level < levelCount; level++) {
             const f = fan(levelTris[level], 0.3 - 0.05 * level, 8);
             const wood = addMesh(f.positions, f.indices);
-            if (opts.crown && level === 2) {
+            if (opts.crown && level === far) {
                 // the blob leaf mass: a second primitive of the level-2 mesh
                 const blob = fan(8, 2.5, 3);
                 const extra = mesh(blob.positions.map((v, i) => (i % 3 === 1 ? v + 5 : v)), blob.indices);
                 pad();
                 meshes[wood].primitives.push(extra.primitives[0]);
             }
-            const instanced = level < 2;
+            const instanced = level < far;
             const children: number[] = [];
             if (instanced) {
                 for (let c = 0; c < 2; c++) {
@@ -91,18 +98,18 @@ export function buildTreesLodGltf(opts: TreesLodFixtureOptions = {}): { json: an
                     children.push(nodes.length - 1);
                 }
             }
-            const lod: TreeLodExtras = { level: level as 0 | 1 | 2, minDistM: bands[level][0], maxDistM: bands[level][1], fadeM: bands[level][2], triangles: levelTris[level], instanced };
-            if (opts.crown && level === 2) lod.foliagePrimitives = [1];
+            const lod: TreeLodExtras = { level: level as TreeLodExtras['level'], minDistM: bands[level][0], maxDistM: bands[level][1], fadeM: bands[level][2], triangles: levelTris[level], instanced };
+            if (opts.crown && level === far) lod.foliagePrimitives = [1];
             nodes.push({ name: `tree${t}_lod${level}`, mesh: wood, ...(children.length ? { children } : {}), extras: { sbLod: lod } });
             levelNodes.push(nodes.length - 1);
         }
-        nodes.push({ name: `tree${t}`, translation: [10 * t, 0, 0], children: levelNodes, extras: { sbTree: { id: t, hashSeed: 7919 * (t + 1), label: 'grown to the measured crown', ...(opts.crown ? { crown: { centre: [0.1, 6, 0.2], radii: [2.5, 2, 1.5], yawRad: 0.3, leanM: [0.1, 0.2], points: 9, fittedTo: 'leaf clusters' } } : {}) } } });
+        nodes.push({ name: `tree${t}`, translation: [10 * t, 0, 0], children: levelNodes, extras: { sbTree: { id: t, hashSeed: 7919 * (t + 1), label: 'grown to the measured crown', ...(opts.crown ? { crown: { centre: [0.1, 6, 0.2], radii: [2.5, 2, 1.5], yawRad: 0.3, leanM: [0.1, 0.2], points: 9, fittedTo: 'leaf clusters', ...(opts.lobes ? { lobes: [[-1, 6, 0, 1.5], [1.2, 6.4, 0.3, 1.2], [0, 7.2, -0.4, 1.0]], lobeBlendM: 0.6 } : {}) } } : {}) } } });
         treeNodes.push(nodes.length - 1);
     }
     const root: TreesGlbRootExtras = {
-        schema: 'scratchbox.trees-lod/1', psiSeason: opts.psiSeason ?? 1,
+        schema: levelCount === 4 ? 'scratchbox.trees-lod/2' : 'scratchbox.trees-lod/1', psiSeason: opts.psiSeason ?? 1,
         clusterLibrary: {
-            variants: [{ mesh: 'leaf_cluster_a', leavesLevel0: 24, leavesLevel1: 3 }],
+            variants: [levelCount === 4 ? { mesh: 'leaf_cluster_a', leavesLevel0: 24, leavesNearMid: 8, leavesLevel1: 3 } : { mesh: 'leaf_cluster_a', leavesLevel0: 24, leavesLevel1: 3 }],
             leafSizeModel: { sizeRatioToCrownHeight: 0.004, minM: 0.05, maxM: 0.12 }
         }
     };

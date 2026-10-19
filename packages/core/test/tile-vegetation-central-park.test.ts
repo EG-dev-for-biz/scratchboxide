@@ -372,9 +372,9 @@ describe.skipIf(!haveTile)('tile vegetation on the Central Park photo extraction
             expect(validateContract('StagedNodeExtras', n.extras)).toEqual([]);
             expect(n.extras.sb.provenance.label).toBe('grown to the measured crown');
             expect(n.extras.sb.buildOrder).toBe(rank);
-            // wood in level 0 (level 2 shares it), the blob leaf masses in level 2
+            // wood in level 0 (the far level shares it), the blob leaf masses in the far level (3)
             const kids = n.children.map((i: number) => json.nodes[i]);
-            const lvl0 = kids.find((c: any) => c.extras.sbLod.level === 0), lvl2 = kids.find((c: any) => c.extras.sbLod.level === 2);
+            const lvl0 = kids.find((c: any) => c.extras.sbLod.level === 0), lvl2 = kids.find((c: any) => c.extras.sbLod.level === 3);
             const prims = [json.meshes[lvl0.mesh].primitives[0], ...json.meshes[lvl2.mesh].primitives.slice(1)];
             prims.forEach((pr: any, k: number) => {
                 const r = readAccessor(json, bin, pr.attributes._REVEAL).data;
