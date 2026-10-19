@@ -66,13 +66,12 @@ export class PerformerPoseTrackService {
         const candidates = [
             explicit,
             process.env.SCRATCHBOX_POSE_PYTHON,
-            path.join(os.homedir(), '.cache/scratchbox/pose-venv/bin/python'),
-            process.env.PYTHON_BIN
+            path.join(os.homedir(), '.cache/scratchbox/pose-venv/bin/python')
         ];
         for (const c of candidates) {
             if (c && (c.includes(path.sep) ? fs.existsSync(c) : true)) return c;
         }
-        return resolveRepoPython();
+        return resolveRepoPython({ modules: ['numpy', 'cv2', 'mediapipe'], purpose: 'MediaPipe performer pose tracking' });
     }
 
     public static countTrackedFrames(track: PerformerPoseTrack): number {

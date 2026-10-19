@@ -32,7 +32,6 @@ import * as os from 'os';
 import * as path from 'path';
 import type { ProjectionView } from '../../../common/spatial/texture-pass-contracts';
 import { renderFrameDepth } from '../../spatial/StreetViewPoseRegistrar';
-import { resolveRepoPython } from '../../process/repo-python';
 import type { RenderMesh3D } from '../../spatial/HeadlessMeshSilhouetteRenderer';
 import { encodePng } from './png-encode';
 import { decodeImageInMemory } from './tile-texture-transfer';
@@ -353,7 +352,7 @@ export function objectSegmenter(options: { pythonBinary?: string; modelSource?: 
     return async (image, prompts, signal) => {
         if (!svc) {
             const { ObjectSegmenterService } = require('../../video/ObjectSegmenterService');
-            svc = new ObjectSegmenterService({ pythonBinary: options.pythonBinary ?? resolveRepoPython('SCRATCHBOX_PYTHON', 'PYTHON_BIN'), ...(options.modelSource ? { modelSource: options.modelSource } : {}) });
+            svc = new ObjectSegmenterService({ ...(options.pythonBinary ? { pythonBinary: options.pythonBinary } : {}), ...(options.modelSource ? { modelSource: options.modelSource } : {}) });
         }
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-sv-own-'));
         try {

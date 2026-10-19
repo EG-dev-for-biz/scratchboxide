@@ -108,3 +108,17 @@ export class SegmentTargetNotFoundError extends PipelineError {
         this.name = 'SegmentTargetNotFoundError';
     }
 }
+
+/**
+ * The app's Python environment cannot run a sidecar: the interpreter (SCRATCHBOX_PYTHON, else the project's `.venv`) is
+ * missing, or it lacks modules the sidecar imports. `remedy` is the command that fixes it.
+ */
+export class PythonEnvironmentError extends PipelineError {
+    readonly code: 'python_interpreter_missing' | 'python_modules_missing' | (string & {});
+
+    constructor(code: PythonEnvironmentError['code'], readonly interpreter: string, readonly missingModules: string[], readonly remedy: string, detail: string) {
+        super(`${detail} Fix: ${remedy}`);
+        this.code = code;
+        this.name = 'PythonEnvironmentError';
+    }
+}
