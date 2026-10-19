@@ -244,6 +244,14 @@ export interface SessionCanvas {
 }
 
 /**
+ * An artifact history with the reply's committed artifact first, and without the entry it streamed under when the commit
+ * re-keyed it (streamedArtifactId): one tab per artifact.
+ */
+export function withCommittedArtifact(history: CanvasArtifact[], finalArtifact: CanvasArtifact, streamedArtifactId?: string): CanvasArtifact[] {
+    return [finalArtifact, ...history.filter(a => a.id !== finalArtifact.id && a.id !== streamedArtifactId)];
+}
+
+/**
  * The canvas saved with a finished reply. When the reply's session is the one on screen, the Studio's
  * live artifact history and layout are its own; when the user has moved to another session, those
  * belong to that other session, so the reply's session keeps its stored history and layout and only
@@ -259,12 +267,17 @@ export function committedSessionCanvas(opts: {
     /** The artifact this reply produced, and the layout that shows it. */
     finalArtifact?: CanvasArtifact;
     finalArtifactMode?: StudioLayoutMode;
+    /**
+     * The id the reply's artifact streamed under, when registering it in the project graph gave it another
+     * (a tool's clock id, resolveCanvasArtifactId): the same artifact, so its entry is replaced, not kept as a second tab.
+     */
+    streamedArtifactId?: string;
 }): SessionCanvas {
-    const { targetVisible, visible, stored, finalArtifact, finalArtifactMode } = opts;
+    const { targetVisible, visible, stored, finalArtifact, finalArtifactMode, streamedArtifactId } = opts;
     const baseHistory = targetVisible ? visible.artifactHistory : (stored?.artifactHistory || []);
     return {
         activeArtifact: finalArtifact || stored?.activeArtifact,
-        artifactHistory: finalArtifact ? [finalArtifact, ...baseHistory.filter(a => a.id !== finalArtifact.id)] : baseHistory,
+        artifactHistory: finalArtifact ? withCommittedArtifact(baseHistory, finalArtifact, streamedArtifactId) : baseHistory,
         layoutMode: (finalArtifact && finalArtifactMode)
             || stored?.layoutMode
             || (targetVisible ? visible.layoutMode : undefined)

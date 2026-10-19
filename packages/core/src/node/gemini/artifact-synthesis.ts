@@ -21,6 +21,7 @@ import type {
     Scene3DData
 } from '../../browser/generative-canvas/canvas-types';
 import { normalizePrimitiveType } from '../../browser/generative-canvas/canvas-types';
+import { isTimestampArtifactId } from '../../common/project-artifact-graph-protocol';
 import type { VideoTimelineData } from '../../browser/generative-canvas/services/video/videoTypes';
 import { NativePythonRunnerService } from '../3d-engine/native-python-runner-service';
 import { applyClayFirstPassBaseline } from './scene3d-clay-baseline';
@@ -790,6 +791,19 @@ function modelAuthoredDocument(
  * envelope that names a canvas primitive. Nothing is built from the prompt's words, in any mode: a reply in prose,
  * an empty tag or JSON that is not an envelope yields undefined (the canvas stays as it is).
  */
+/**
+ * The artifact a tool call mounts, as the turn's artifact: when an earlier call in this turn already mounted one of the
+ * same type and this call minted a clock id (isTimestampArtifactId: a retry or rebuild by execute_3d_python_script,
+ * an object build), it is the next version of the earlier one, under its id, so the canvas updates that tab instead
+ * of opening another. An id the tool chose on purpose (a staged run's "scene-stg-<runId>", the open scene's) is kept.
+ */
+export function continueTurnArtifact(earlier: CanvasArtifact | undefined, mounted: CanvasArtifact): CanvasArtifact {
+    if (!earlier || earlier.type !== mounted.type || earlier.id === mounted.id || !isTimestampArtifactId(mounted.id)) {
+        return mounted;
+    }
+    return { ...mounted, id: earlier.id, version: (earlier.version || 1) + 1 };
+}
+
 /**
  * Builds a 3d-scene artifact's pythonGenerator that has source but no GLB yet, asynchronously (the Python child never
  * blocks the event loop) and abortably. When the build fails the artifact is returned unbuilt and the viewport builds
