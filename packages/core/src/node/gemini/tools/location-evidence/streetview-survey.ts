@@ -59,7 +59,7 @@ import { EXTRACTION_TTL_MS, GEOCODE_TTL_MS, type ResolvedPlace, type StagedExtra
 import { stageKey, stagedWorkspaceRoot } from '../../../3d-engine/staged-location/stage-cache';
 import { createStagedLocationDeps } from '../../../3d-engine/staged-location/staged-location-tool';
 import {
-    describeTemporary, replaceTemporaryViews, temporaryCandidates, temporaryCheckEnabled, temporaryMask, visionTemporaryChecker, TEMPORARY_DILATE_SHARE, TEMPORARY_ENV_FLAG, TEMPORARY_ON_FACE_MIN_SHARE,
+    describeTemporary, replaceTemporaryViews, surveyTemporaryDefault, temporaryCandidates, temporaryMask, visionTemporaryChecker, TEMPORARY_DILATE_SHARE, TEMPORARY_ENV_FLAG, TEMPORARY_ON_FACE_MIN_SHARE,
     type TemporaryChecker, type TemporaryKept, type TemporaryReading, type TemporaryReplacement, type TemporarySwap
 } from '../../../3d-engine/staged-location/temporary-structures';
 import { VisionModelChain } from '../../vision-model-chain';
@@ -147,7 +147,8 @@ export interface StreetViewSurveyOptions {
     /**
      * Ask the vision model whether anything temporary covers or stands in front of the structure in each view, replace a
      * flagged view by a clear capture of the same face from another month when one exists (else keep and flag it), and
-     * write the flagged regions as masks (temporary-structures.ts). Needs `deps.temporary`.
+     * write the flagged regions as masks (temporary-structures.ts). Needs `deps.temporary`. Off unless set here; the
+     * streetview_survey tool sets it to true by default (surveyTemporaryDefault).
      */
     checkTemporary?: boolean;
     /** Absolute folder the images and masks are written to. */
@@ -890,7 +891,9 @@ export const STREETVIEW_SURVEY_DECLARATION: ToolDeclaration = {
         'against the Google 3D Tiles mesh (silhouette/edge registration, then jointly across views), and returns per view the pano id, capture month, the registered ' +
         'camera (position in the tile frame and as lat/lng, heading, elevation, the API pitch where POSITIVE looks down, roll, and pinhole intrinsics with ' +
         'fx = fy = 960 / tan(fov / 2) at full size), the registration method and residual, and the image path; plus refusals and coverage per face. Optionally cuts the ' +
-        'structure out of each view (ownership mask) with what stands in front of it (occluder mask). Uses the same caches as google_3d_tiles_get_clay, so a place already ' +
+        'structure out of each view (ownership mask) with what stands in front of it (occluder mask). By default also asks, per view, whether anything temporary ' +
+        '(scaffolding, netting, a sidewalk shed, ...) covers the structure, swaps a flagged view for a clear capture of the same face from another month when one ' +
+        'exists, and masks the flagged regions (checkTemporary: false skips it). Uses the same caches as google_3d_tiles_get_clay, so a place already ' +
         'built is not downloaded again. Images are saved exactly as the API returned them under build/streetview-grounding/.',
     parameters: {
         type: 'OBJECT',
@@ -902,7 +905,7 @@ export const STREETVIEW_SURVEY_DECLARATION: ToolDeclaration = {
             maxViews: { type: 'NUMBER', description: `Most views to fetch (default ${STREETVIEW_SURVEY_DEFAULT_VIEWS}, at most ${STREETVIEW_SURVEY_MAX_VIEWS}): one wide view per face first, then more views of the faces in turn from other panoramas.` },
             faceHeadingsDeg: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Outward compass headings (degrees clockwise from north) of the faces to cover, e.g. [270] for the west face. Default: every facade of the structure.' },
             ownershipMasks: { type: 'BOOLEAN', description: 'Also cut the structure out of each view and write its ownership and occluder masks (PNG, 255 = the structure / what stands in front of it). Default false.' },
-            checkTemporary: { type: 'BOOLEAN', description: `Also ask the vision model, per view, whether anything temporary (scaffolding, netting, a crane, a sidewalk shed, barriers, construction equipment, an event structure, or anything else temporary) covers or stands in front of the structure. A face whose view shows one gets a clear capture of the same face from another month when one exists (the swap is reported: face, old and new pano and month, reason); otherwise the view is kept and flagged. Returns per view temporary { present, confidence, description, regions (image polygons) } and a mask of the regions (an occluder for texturing), per face whether its coverage is temporary-free, and a one-line summary. Default false (true when ${TEMPORARY_ENV_FLAG}=1).` }
+            checkTemporary: { type: 'BOOLEAN', description: `Also ask the vision model, per view, whether anything temporary (scaffolding, netting, a crane, a sidewalk shed, barriers, construction equipment, an event structure, or anything else temporary) covers or stands in front of the structure. A face whose view shows one gets a clear capture of the same face from another month when one exists (the swap is reported: face, old and new pano and month, reason); otherwise the view is kept and flagged. Returns per view temporary { present, confidence, description, regions (image polygons) } and a mask of the regions (an occluder for texturing), per face whether its coverage is temporary-free, and a one-line summary. Default true (one vision call per view); pass false to skip it (${TEMPORARY_ENV_FLAG}=0 makes false the default).` }
         }
     }
 };
@@ -930,7 +933,7 @@ export const streetviewSurveyHandler: ToolHandler = async (args, ctx) => {
     const site = await prepareSurveySite({ ...(query ? { query } : {}), ...(hasCoords ? { lat, lng } : {}), ...(structureGlbPath ? { structureGlbPath } : {}) }, stagedDeps, { signal: ctx.signal, onProgress: report });
     const vision = stagedDeps.vision && 'client' in stagedDeps.vision ? stagedDeps.vision : undefined;
     const ownership = args.ownershipMasks === true;
-    const checkTemporary = typeof args.checkTemporary === 'boolean' ? args.checkTemporary : temporaryCheckEnabled();
+    const checkTemporary = typeof args.checkTemporary === 'boolean' ? args.checkTemporary : surveyTemporaryDefault();
     const result = await runStreetViewSurvey(site, {
         maxViews: typeof args.maxViews === 'number' ? args.maxViews : undefined,
         faceHeadingsDeg: asNumbers(args.faceHeadingsDeg),

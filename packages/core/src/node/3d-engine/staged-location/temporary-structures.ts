@@ -19,7 +19,7 @@
  * - streetview_survey (checkTemporary): a face whose view is flagged gets the best eligible pano of the same face from
  *   another capture month (one per month, up to TEMPORARY_ALTERNATIVES_MAX), the first clear one replacing it; with none
  *   clear the view is kept and flagged. Every swap and every kept view is recorded with why.
- * - The texture pass (SCRATCHBOX_SURVEY_TEMPORARY=1 only): the flagged regions are taken out of each view's ownership
+ * - The texture pass (SCRATCHBOX_TEXTURE_TEMPORARY=1, or legacy SCRATCHBOX_SURVEY_TEMPORARY=1, only): the flagged regions are taken out of each view's ownership
  *   mask, so those pixels texture nothing (they are treated as occluders).
  *
  * A view whose question fails is recorded as unchecked with the error, never as clear.
@@ -38,8 +38,16 @@ import { surveyCandidates, surveyViewFor, SURVEY_IMAGE_TIMEOUT_MS, type SurveyCa
 
 /** Part of the texture cache key: a change to the check is a new version. */
 export const TEMPORARY_CHECK_VERSION = 1;
-/** The env flag that turns the check on for the staged texture pass (and is streetview_survey's default when set). */
+/**
+ * streetview_survey's default for checkTemporary: the check runs unless this is '0' (a call's own checkTemporary wins).
+ * For backward compatibility '1' also still turns the texture pass's check on (see TEXTURE_TEMPORARY_ENV_FLAG).
+ */
 export const TEMPORARY_ENV_FLAG = 'SCRATCHBOX_SURVEY_TEMPORARY';
+/**
+ * The staged texture pass's check (orchestrator.ts), off by default: on with '1', off with '0'. When unset, the legacy
+ * SCRATCHBOX_SURVEY_TEMPORARY=1 still turns it on, so a setup that relied on that flag behaves as before.
+ */
+export const TEXTURE_TEMPORARY_ENV_FLAG = 'SCRATCHBOX_TEXTURE_TEMPORARY';
 /** A reading flags its view at or above this confidence. */
 export const TEMPORARY_MIN_CONFIDENCE = 0.5;
 /** Other capture months tried for a flagged view. */
@@ -60,7 +68,15 @@ export const TEMPORARY_ALT_MIN_SHARE_RATIO = 0.5;
 /** Pixels (share of the longest side) the flagged regions are grown by before they are taken out of a mask. */
 export const TEMPORARY_DILATE_SHARE = 0.006;
 
-export function temporaryCheckEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+/** streetview_survey's checkTemporary when the call does not say: true unless SCRATCHBOX_SURVEY_TEMPORARY=0. */
+export function surveyTemporaryDefault(env: NodeJS.ProcessEnv = process.env): boolean {
+    return env[TEMPORARY_ENV_FLAG] !== '0';
+}
+
+/** Whether the staged texture pass asks about temporary structures: off unless SCRATCHBOX_TEXTURE_TEMPORARY=1 (or legacy SCRATCHBOX_SURVEY_TEMPORARY=1). */
+export function textureTemporaryEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+    const own = env[TEXTURE_TEMPORARY_ENV_FLAG];
+    if (own !== undefined && own !== '') return own === '1';
     return env[TEMPORARY_ENV_FLAG] === '1';
 }
 
