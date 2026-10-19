@@ -106,7 +106,10 @@ export function areaBoundaryLoops(area: { type?: string; vertexOffsets?: { xOffs
     const all = Array.from({ length: n }, (_, i) => i);
     switch (area.type) {
         case 'TRIANGLE_FAN':
-            return n > 3 ? [all.slice(1)] : [all]; // vertex 0 is the fan centre
+            // Vertex 0 is a corner of the outline, not an interior centre: in real tiles the fan triangles (0, i, i+1)
+            // always sum to the area of the polygon through every vertex in order, and vertex 0 lies outside the
+            // others' outline in most fans (around SoHo, 419 of 512). Dropping it turned every rectangle into a triangle.
+            return [all];
         case 'TRIANGLE_STRIP': {
             const even = all.filter(i => i % 2 === 0), odd = all.filter(i => i % 2 === 1).reverse();
             return [[...even, ...odd]];

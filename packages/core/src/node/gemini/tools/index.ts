@@ -37,8 +37,8 @@ export * from './location-evidence-tools';
 import type { ToolDeclaration, ToolHandler } from './types';
 import { LOCAL_SF3D_TOOL_DECLARATIONS, localSf3DHandlers } from './local-sf3d-tools';
 import { TILE_REFINE_TOOL_DECLARATIONS, tileRefineHandlers } from './tile-refine-tools';
-import { LOCATION_EVIDENCE_TOOL_DECLARATIONS, locationEvidenceHandlers } from './location-evidence-tools';
 import { VIRTUAL_GEOMETRY_TOOL_DECLARATIONS, virtualGeometryHandlers } from './virtual-geometry-tools';
+import { LOCATION_EVIDENCE_TOOL_DECLARATIONS, locationEvidenceHandlers } from './location-evidence-tools';
 import { PBR_MATERIAL_TOOL_DECLARATIONS, pbrMaterialHandlers } from './pbr-material-tools';
 import { TURNAROUND_TOOL_DECLARATIONS, turnaroundHandlers } from './turnaround-tools';
 import { IMAGE_TO_PBR_TOOL_DECLARATIONS, imageToPbrHandlers } from './image-to-pbr-tools';
@@ -110,8 +110,8 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...SB_SCRIPT_GUIDE_TOOL_DECLARATIONS,
     ...GOOGLE_3D_TILES_TOOL_DECLARATIONS,
     ...TILE_REFINE_TOOL_DECLARATIONS,
-    ...LOCATION_EVIDENCE_TOOL_DECLARATIONS,
     ...VIRTUAL_GEOMETRY_TOOL_DECLARATIONS,
+    ...LOCATION_EVIDENCE_TOOL_DECLARATIONS,
     ...BOTANICAL_TREE_TOOL_DECLARATIONS,
     ...PANORAMA_TOOL_DECLARATIONS,
     ...UTDRA_TOOL_DECLARATIONS,
@@ -149,8 +149,8 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...sbScriptGuideHandlers,
     ...google3DTilesHandlers,
     ...tileRefineHandlers,
-    ...locationEvidenceHandlers,
     ...virtualGeometryHandlers,
+    ...locationEvidenceHandlers,
     ...panoramaHandlers,
     ...utdraHandlers,
     ...universal3DStructureHandlers,

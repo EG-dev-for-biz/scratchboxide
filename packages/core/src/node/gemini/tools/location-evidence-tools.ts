@@ -8,17 +8,20 @@
  ********************************************************************************/
 
 /**
- * Location evidence tools: the staged-location build's own steps exposed one at a time (each implementation lives in
- * ./location-evidence/). One import, one declaration and one handler entry per tool.
+ * Location evidence: tools that report what independent sources say about a real place, each source's value kept
+ * beside the others. Implementations live in ./location-evidence/.
  */
 
 import type { ToolDeclaration, ToolHandler } from './types';
+import { BUILDING_SHAPE_TOOL_DECLARATION, buildingShapeHandler } from './location-evidence/building-shape';
 import { ISOLATE_STRUCTURE_TOOL_DECLARATION, isolateStructureHandler } from './location-evidence/isolate-structure';
 
 export const LOCATION_EVIDENCE_TOOL_DECLARATIONS: ToolDeclaration[] = [
+    BUILDING_SHAPE_TOOL_DECLARATION,
     ISOLATE_STRUCTURE_TOOL_DECLARATION
 ];
 
 export const locationEvidenceHandlers: Record<string, ToolHandler> = {
-    location_isolate_structure: isolateStructureHandler
+    [BUILDING_SHAPE_TOOL_DECLARATION.name]: buildingShapeHandler,
+    [ISOLATE_STRUCTURE_TOOL_DECLARATION.name]: isolateStructureHandler
 };
