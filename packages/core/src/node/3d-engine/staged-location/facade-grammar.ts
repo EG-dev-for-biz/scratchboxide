@@ -17,9 +17,9 @@
  * storey, bay centres and widths, storey heights), regularised into one lattice per facade, and then measured:
  *
  *  (a) the scan: the openings lie on the measured facade within the fit's residual tolerance (PHOTO_CORRECTION_TOLERANCE_M;
- *      the few read off it are dropped, more than MAX_OFF_FACADE_SHARE and the grammar is not taken),
- *      and at least half the windows the relief measured on the scan's own photo texture (tile_refine's observed cells)
- *      fall in the grammar's openings within that tolerance;
+ *      the few read off it are dropped, more than MAX_OFF_FACADE_SHARE and the grammar is not taken). How many of the
+ *      relief's own dark cells fall in its openings is reported, not gated: on the Puck Building most of them lay on
+ *      piers, spandrels and a fire escape, so they are no measurement of where the windows are;
  *  (b) held-out evidence: the facade is read again four times with parts of its photo hidden (greyed out): alternate
  *      vertical stripes (two readings, each hiding the stripes the other shows) and alternate horizontal bands (two more).
  *      The grammar read from what was shown predicts the openings of what was hidden: bays continue on their rhythm,
@@ -47,7 +47,7 @@ import { decodeImageInMemory } from './tile-texture-transfer';
 
 export const FACADE_GRAMMAR_PROMPT_VERSION = 'facade-grammar/v1';
 /** The fit and the gates (part of the stage's cache key with the prompt version). */
-export const FACADE_GRAMMAR_GATE_VERSION = 'grammar-gates/v7';
+export const FACADE_GRAMMAR_GATE_VERSION = 'grammar-gates/v9';
 /** Openings read off the measured facade (beyond the tolerance) are dropped; more than this share of them and the grammar is not taken. */
 export const MAX_OFF_FACADE_SHARE = 0.1;
 /** The held-out folds: the covered width in at most this many alternating stripes, the covered height in at most this many bands, each about HELD_OUT_SPAN_M. */
@@ -79,8 +79,6 @@ export const EDGE_NCC_BLUR_PX = 3;
  * this) is one the photo does not show; tile_refine does not carve such an inferred opening (its grammarMinDistinct).
  */
 export const MIN_OPENING_DISTINCTNESS = 0.04;
-/** Of the scan's measured windows, at least this share must fall in the grammar's openings (when there are 3 or more). */
-export const MIN_MEASURED_EXPLAINED = 0.5;
 /** Edge chamfer truncation (ortho px). */
 export const EDGE_TRUNCATION_PX = 8;
 /** The longest side of an image sent to the model. */
@@ -703,7 +701,6 @@ export function checkAgainstScan(g: FacadeGrammar, f: ReliefOrthoFacade, o: Orth
     const fails: string[] = [];
     if (!cells.length) fails.push('the grammar has no openings');
     if (off > MAX_OFF_FACADE_SHARE * (cells.length + droppedOff)) fails.push(`${off} of ${cells.length + droppedOff} openings lie off the measured facade by more than ${tol.toFixed(2)} m`);
-    if (measured.length >= 3 && explained / measured.length < MIN_MEASURED_EXPLAINED) fails.push(`only ${explained} of the ${measured.length} windows measured on the scan's photo fall in its openings`);
     return {
         passed: fails.length === 0,
         why: fails.length ? fails.join('; ') : `${cells.length} openings on the measured facade${off ? ` (${off} read off it dropped)` : ''}; ${explained} of ${measured.length} windows measured on the scan's photo in them (centres ${rms.toFixed(2)} m rms from theirs); ${indistinct} of ${judged} indistinct in the photo`,
