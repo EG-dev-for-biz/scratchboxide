@@ -342,7 +342,8 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
                     cloudDensity: params.cloudDensity ?? existingAtmo.cloudDensity ?? 0.0,
                     cloudAltitude: params.cloudAltitude ?? existingAtmo.cloudAltitude ?? 1200.0,
                     volumetricClouds: params.volumetricClouds ?? existingAtmo.volumetricClouds ?? false,
-                    kelvinTemperature: params.kelvinTemperature ?? existingAtmo.kelvinTemperature ?? (diurnalState?.kelvin || 6500),
+                    // Only a chosen colour temperature is stored: without one the viewport colours the sun from its spectral beam.
+                    ...((params.kelvinTemperature ?? existingAtmo.kelvinTemperature) !== undefined ? { kelvinTemperature: params.kelvinTemperature ?? existingAtmo.kelvinTemperature } : {}),
 
                     // Aerial perspective parameters (Strictly opt-in: zero default haze/fog)
                     aerialPerspectiveEnabled: params.inscatteringIntensity !== undefined ? true : (existingAtmo.aerialPerspectiveEnabled ?? false),

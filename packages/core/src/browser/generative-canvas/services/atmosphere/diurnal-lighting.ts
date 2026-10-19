@@ -15,6 +15,7 @@ import {
 import { calculateNOAASolarPosition } from './solar-position';
 import { instantAtLocalMeanSolarTime } from '../../../../common/coordinate/solarPosition';
 import { blackbodyKelvinToLinearRgb } from './kelvin';
+import { spectralSun } from './spectral-sun';
 import { InvalidInputError } from '../../../../common/errors/pipeline-errors';
 
 function clamp(x: number, min: number, max: number): number {
@@ -45,10 +46,24 @@ export function classifyDiurnalPhase(altitudeDeg: number): DiurnalPhase {
     return 'Midday';
 }
 
+/** Solar elevation at which the refracted disc's upper limb sets (refraction 34' plus the 16' semi-diameter). */
+const SUN_DISC_SET_DEG = -0.83;
+
+export interface DiurnalLightingOptions {
+    /** Preetham turbidity of the air the direct beam crosses; without it the profile's own diurnal turbidity is used. */
+    turbidity?: number;
+    /** Observer height above sea level, which thins the air (and haze) the beam crosses. */
+    observerAltitudeMeters?: number;
+}
+
 /**
  * Computes physically continuous diurnal lighting parameters based on solar elevation angle.
+ *
+ * While the disc is up, the direct sun's colour, colour temperature and illuminance are the spectral beam
+ * (`spectralSun`: blackbody sun through Rayleigh, aerosol and ozone, integrated over the CIE observer). Ambient and
+ * sky fill colours, and everything once the sun has set, keep the diurnal Kelvin table.
  */
-export function computeDiurnalLightingProfile(altitudeDeg: number): DiurnalLightingProfile {
+export function computeDiurnalLightingProfile(altitudeDeg: number, options: DiurnalLightingOptions = {}): DiurnalLightingProfile {
     const phase = classifyDiurnalPhase(altitudeDeg);
     let sunIntensity = 1.45;
     let skyLightIntensity = 1.1;
@@ -195,17 +210,27 @@ export function computeDiurnalLightingProfile(altitudeDeg: number): DiurnalLight
         turbidity = 2.0;
     }
 
-    const sunLinearRgb = blackbodyKelvinToLinearRgb(kelvinTemperature);
+    const skyFillRgb = blackbodyKelvinToLinearRgb(kelvinTemperature);
     const ambientLinearRgb: [number, number, number] = [
-        sunLinearRgb[0] * 0.7 + 0.1,
-        sunLinearRgb[1] * 0.75 + 0.15,
-        sunLinearRgb[2] * 0.9 + 0.2
+        skyFillRgb[0] * 0.7 + 0.1,
+        skyFillRgb[1] * 0.75 + 0.15,
+        skyFillRgb[2] * 0.9 + 0.2
     ];
     const skyColorLinear: [number, number, number] = [
-        sunLinearRgb[0] * 0.35,
-        sunLinearRgb[1] * 0.55,
-        sunLinearRgb[2] * 0.95
+        skyFillRgb[0] * 0.35,
+        skyFillRgb[1] * 0.55,
+        skyFillRgb[2] * 0.95
     ];
+
+    if (options.turbidity !== undefined) turbidity = options.turbidity;
+    let sunLinearRgb: [number, number, number] = skyFillRgb;
+    let sunIlluminanceLux: number | undefined;
+    if (altitudeDeg > SUN_DISC_SET_DEG) {
+        const beam = spectralSun(altitudeDeg, { turbidity, observerAltitudeMeters: options.observerAltitudeMeters });
+        sunLinearRgb = beam.linearRgb;
+        kelvinTemperature = Math.round(beam.cctKelvin);
+        sunIlluminanceLux = beam.illuminanceLux;
+    }
     const groundAlbedoLinear: [number, number, number] = [0.18, 0.18, 0.18];
     const shadowSoftness = isGoldenHour ? 1.8 : 1.0;
     const ambientIntensity = skyLightIntensity;
@@ -230,6 +255,7 @@ export function computeDiurnalLightingProfile(altitudeDeg: number): DiurnalLight
         ambientIntensity,
         shadowSoftness,
         sunLinearRgb,
+        ...(sunIlluminanceLux !== undefined ? { sunIlluminanceLux } : {}),
         ambientLinearRgb,
         skyColorLinear,
         groundAlbedoLinear
@@ -240,13 +266,13 @@ export function computeDiurnalLightingProfile(altitudeDeg: number): DiurnalLight
  * Calculates diurnal lighting state from geographic latitude, longitude and time of day in hours [0.0, 24.0]
  * (local mean solar time at that longitude, so 12.0 is solar noon there).
  */
-export function getDiurnalLightingState(latitude: number, longitude: number, timeOfDay: number): DiurnalLightingProfile & { sunElevation: number; sunAzimuth: number } {
+export function getDiurnalLightingState(latitude: number, longitude: number, timeOfDay: number, options: DiurnalLightingOptions = {}): DiurnalLightingProfile & { sunElevation: number; sunAzimuth: number } {
     // timeOfDay is local mean solar time at the destination, on today's UTC date; the host time zone plays no part.
     const now = new Date();
     const date = instantAtLocalMeanSolarTime(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), timeOfDay, longitude);
 
     const sol = calculateNOAASolarPosition(date, latitude, longitude);
-    const profile = computeDiurnalLightingProfile(sol.elevationDeg);
+    const profile = computeDiurnalLightingProfile(sol.elevationDeg, options);
 
     return {
         ...profile,
@@ -285,7 +311,7 @@ export function isTimeOfDayPreset(name: unknown): boolean {
     return typeof name === 'string' && Object.prototype.hasOwnProperty.call(PRESET_LIGHTING, name.toLowerCase());
 }
 
-export function getPresetLightingState(preset: TimeOfDayPreset | string): DiurnalLightingProfile & {
+export function getPresetLightingState(preset: TimeOfDayPreset | string, options: DiurnalLightingOptions = {}): DiurnalLightingProfile & {
     elevationDeg: number;
     azimuthDeg: number;
     colorHex: string;
@@ -297,5 +323,5 @@ export function getPresetLightingState(preset: TimeOfDayPreset | string): Diurna
         throw new InvalidInputError('getPresetLightingState', `preset '${preset}'`, `known presets: ${Object.keys(PRESET_LIGHTING).join(', ')}`);
     }
     const state = PRESET_LIGHTING[key];
-    return { ...computeDiurnalLightingProfile(state.elevationDeg), ...state };
+    return { ...computeDiurnalLightingProfile(state.elevationDeg, options), ...state };
 }
