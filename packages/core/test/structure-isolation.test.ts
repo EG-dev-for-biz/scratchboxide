@@ -31,6 +31,7 @@ import * as path from 'path';
 import {
     checkIsolate, pickStructure, writeIsolationPick, PICK_OTHER, PICK_LOW_ATTACHMENT, PICK_STRUCTURE
 } from '../src/node/3d-engine/staged-location/extraction-sizing';
+import { evidenceLookup, type VectorEvidence } from '../src/node/3d-engine/staged-location/vector-footprints';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
 import { buildGroundModel, loadScanMesh } from '../src/node/spatial/StreetViewSurveyPlanner';
 import { TileVegetationService } from '../src/node/3d-engine/tile-vegetation-service';
@@ -197,7 +198,10 @@ describe('tile_refine isolates the shared pick', () => {
         expect(check.ok).toBe(true);
         expect(check.recall).toBeGreaterThan(0.95);
         const stats = JSON.parse(fs.readFileSync(path.join(WORK, 'shared_stats.json'), 'utf8')).isolate;
-        expect(stats.footprintCells).toBe(pick.cells.size);
+        // its footprint is the pick's cells its own surface model shows raised: the pick, less at most its outer ring
+        expect(stats.sharedPick).toBe(true);
+        expect(stats.footprintCells).toBeLessThanOrEqual(pick.cells.size);
+        expect(stats.footprintCells).toBeGreaterThan(0.7 * pick.cells.size);
         fs.mkdirSync(SHOTS, { recursive: true });
         const tri = (glb: string, color: [number, number, number]) => { const t = readGlbTriangles(fs.readFileSync(glb)); return { positions: t.positions, indices: t.indices, color }; };
         fs.writeFileSync(path.join(SHOTS, 'tile_refine_own_rule.png'), renderClayPng([tri(own, [0.7, 0.4, 0.3])], { kind: 'aerial', width: 900, height: 600, region: [-20, -15, 20, 15], bearingDeg: 200, elevationDeg: 35 }));
@@ -227,4 +231,67 @@ describe('a roof garden over a hollow building mesh', () => {
         expect(crowns.filter(c => c.status === 'tree' && c.apexAboveSupport > building.height)).toEqual([]);
         if (strip.topDownPng) { fs.mkdirSync(SHOTS, { recursive: true }); fs.copyFileSync(strip.topDownPng, path.join(SHOTS, 'roof_garden_kept_as_scanned_topdown.png')); }
     }, 600_000);
+});
+
+describe('Google vector data as evidence', () => {
+    const rect = (x0: number, z0: number, x1: number, z1: number): Array<[number, number]> => [[x0, z0], [x1, z0], [x1, z1], [x0, z1]];
+
+    it('separates two buildings of one height at their party wall by the vector footprint, and the scan decides the shape', () => {
+        // a terrace of two 15 m houses built wall to wall at x = 0: the scan alone sees one mass
+        const scene = [...plane(-60, 60, -60, 60, 0), ...boxTris(-14, 0, -8, 8, 15), ...boxTris(0, 16, -8, 8, 15)];
+        const scan = loadScanMesh(writeTris(path.join(TMP, 'terrace.glb'), scene));
+        const ground = buildGroundModel(scan, { cellMeters: 1 });
+        const alone = pickStructure(scan, ground, { anchor: { x: -7, z: 0 } })!;
+        expect(alone.footprintSource).toBe('scan-geometry');
+        expect(alone.bounds.maxX).toBeGreaterThan(14);   // both houses
+        // the vector footprints, 0.6 m off the scan (registration), the requested house's drawn a little short
+        const ev: VectorEvidence = { buildings: [{ id: 'west', parts: [[rect(-13.4, -7.4, 0.6, 7.4)]] }, { id: 'east', parts: [[rect(0.6, -7.4, 16.6, 8.6)]] }], water: [], roads: [], tiles: 1, zoom: 17 };
+        const L = evidenceLookup(ev, 60);
+        const pick = pickStructure(scan, ground, { anchor: { x: -7, z: 0 }, footprints: { buildingAt: L.buildingAt, buildings: ev.buildings } })!;
+        shotWithPick('pick_vector_footprint_party_wall', scene, pick.cells, 16, [-30, -20, 30, 20]);
+        expect(pick.footprintSource).toBe('vector-footprint');
+        expect(pick.vectorFootprint).toMatchObject({ used: true, featureIds: ['west'] });
+        expect(pick.vectorFootprint!.raisedShare).toBeGreaterThan(0.9);
+        expect(pick.vectorFootprint!.iou).toBeGreaterThan(0.7);
+        // the scan's raised cells within the tolerance of the footprint: the west house, its full width, not the east one
+        expect(pick.bounds.minX).toBeLessThanOrEqual(-14);
+        expect(pick.bounds.maxX).toBeLessThanOrEqual(3);
+        expect(pick.areaM2).toBeGreaterThan(14 * 16 * 0.95);
+        expect(pick.areaM2).toBeLessThan(17 * 17);
+        expect(pick.footprintMask[ground.cellIndex(10.5, 0.5)]).toBe(PICK_OTHER);
+    });
+
+    it('keeps the geometric rule, with the reason, where the vector footprint disagrees with the scan', () => {
+        const scene = [...plane(-60, 60, -60, 60, 0), ...boxTris(-14, 0, -8, 8, 15)];
+        const scan = loadScanMesh(writeTris(path.join(TMP, 'disagree.glb'), scene));
+        const ground = buildGroundModel(scan, { cellMeters: 1 });
+        // a footprint drawn where the scan has open ground, nearest the place
+        const ev: VectorEvidence = { buildings: [{ id: 'elsewhere', parts: [[rect(1, 9, 12, 20)]] }], water: [], roads: [], tiles: 1, zoom: 17 };
+        const L = evidenceLookup(ev, 60);
+        const pick = pickStructure(scan, ground, { anchor: { x: 2, z: 8 }, footprints: { buildingAt: L.buildingAt, buildings: ev.buildings } })!;
+        expect(pick.footprintSource).toBe('scan-geometry');
+        expect(pick.vectorFootprint!.used).toBe(false);
+        expect(pick.vectorFootprint!.reason).toMatch(/disagree/);
+        expect(pick.areaM2).toBeGreaterThan(14 * 16 * 0.95);
+    });
+
+    it('never takes water as the ground: a river with buildings rising straight from it, a narrow quay street', () => {
+        // the river (at -6) is wider than the street and the buildings stand in it; only the vector water polygon says it is water
+        const scene = [
+            ...plane(-60, -20, -60, 60, 0), ...plane(-20, 60, -60, 60, -6),
+            ...boxTris(-50, -30, -40, -10, 14), ...boxTris(-50, -30, 10, 40, 14),
+            ...boxTris(-14, 6, -50, -30, 12, -6), ...boxTris(-14, 6, -20, 0, 12, -6), ...boxTris(-14, 6, 10, 30, 12, -6), ...boxTris(20, 40, -40, -10, 12, -6), ...boxTris(20, 40, 10, 40, 12, -6)
+        ];
+        const scan = loadScanMesh(writeTris(path.join(TMP, 'canal.glb'), scene));
+        const ev: VectorEvidence = { buildings: [], water: [[rect(-20, -70, 70, 70)]], roads: [[[-25, -60], [-25, 60]]], tiles: 1, zoom: 17 };
+        const L = evidenceLookup(ev, 60);
+        // without the water polygon the water, with more structure rising from it, reads as the ground
+        expect(buildGroundModel(scan, { cellMeters: 1 }).groundAt(-25, 0)).toBeLessThan(-5);
+        const ground = buildGroundModel(scan, { cellMeters: 1, water: L.waterAt, road: L.roadAt });
+        expect(Math.abs(ground.groundAt(-25, 0))).toBeLessThan(0.5);
+        expect(ground.walkable![ground.cellIndex(0.5, 5.5)]).toBe(0);
+        const pick = pickStructure(scan, ground, { anchor: { x: -40, z: -25 } })!;
+        expect(pick.areaM2).toBeLessThan(21 * 31 * 1.05);
+        expect(pick.heightM).toBeGreaterThan(13);
+    });
 });

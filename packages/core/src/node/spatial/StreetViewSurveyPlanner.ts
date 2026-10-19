@@ -164,6 +164,10 @@ export interface GroundModelOptions {
     openToleranceMeters?: number; // default 1.5
     /** Cells to leave out of the terrain measurement (tree canopy, from tile_vegetation's classifier). */
     exclude?: (x: number, z: number) => boolean;
+    /** Where the surface is water (Google vector data): never part of the walkable surface, so never the ground. */
+    water?: (x: number, z: number) => boolean;
+    /** Where a road runs (Google vector data): the street level the walkable surface is chosen by. */
+    road?: (x: number, z: number) => boolean;
 }
 
 /**
@@ -191,7 +195,7 @@ function percentile(values: number[], q: number): number {
 }
 
 /** The walkable street surface (1 per cell), or undefined when no open surface has structure rising from it. */
-export function walkableSurface(top: Float32Array, nx: number, nz: number, cell: number, usable: Uint8Array): Uint8Array | undefined {
+export function walkableSurface(top: Float32Array, nx: number, nz: number, cell: number, usable: Uint8Array, road?: Uint8Array): Uint8Array | undefined {
     const N = nx * nz;
     const step = Math.max(WALKABLE_STEP_MIN_M, WALKABLE_RISE_PER_M * cell);
     const label = new Int32Array(N).fill(-1);
@@ -240,6 +244,8 @@ export function walkableSurface(top: Float32Array, nx: number, nz: number, cell:
     });
     // the street is one level: each of the strongest open surfaces is grown by the open surfaces at its level (fragments cut
     // apart by canopy or traffic, courtyards at grade), and the level the most structure rises from wins
+    // (a road the vector data places on a surface is evidence that surface is the street: each road cell counts as a foot)
+    if (road) for (let c = 0; c < N; c++) if (road[c] && label[c] >= 0 && isOpen(label[c])) feet[label[c]]++;
     const candidates = [...Array(R).keys()].filter(r => isOpen(r) && feet[r] > 0).sort((p, q) => feet[q] - feet[p]).slice(0, WALKABLE_LEVEL_CANDIDATES);
     if (!candidates.length) return undefined;
     let best: { walk: Uint8Array; score: number } | undefined;
@@ -391,11 +397,14 @@ export function buildGroundModel(scan: ScanMesh, opts: GroundModelOptions = {}):
     const cell = opts.cellMeters ?? 1, block = opts.blockMeters ?? 8, radius = opts.terrainRadiusMeters ?? 32, openTol = opts.openToleranceMeters ?? 1.5;
     const { x0, z0, nx, nz, top } = surfaceModel(scan, cell);
     const usable = new Uint8Array(nx * nz);
+    const road = opts.road ? new Uint8Array(nx * nz) : undefined;
     for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) {
         const c = k * nx + i;
-        usable[c] = top[c] === top[c] && !(opts.exclude && opts.exclude(x0 + (i + 0.5) * cell, z0 + (k + 0.5) * cell)) ? 1 : 0;
+        const x = x0 + (i + 0.5) * cell, z = z0 + (k + 0.5) * cell;
+        usable[c] = top[c] === top[c] && !(opts.exclude && opts.exclude(x, z)) && !(opts.water && opts.water(x, z)) ? 1 : 0;
+        if (road && opts.road!(x, z)) road[c] = 1;
     }
-    const walkable = walkableSurface(top, nx, nz, cell, usable);
+    const walkable = walkableSurface(top, nx, nz, cell, usable, road);
     const ground = walkable ? terrainThrough(top, nx, nz, cell, walkable, block) : lowPercentileTerrain(top, nx, nz, cell, usable, block, radius);
     const open = new Uint8Array(nx * nz);
     for (let c = 0; c < nx * nz; c++) open[c] = top[c] === top[c] && ground[c] === ground[c] && Math.abs(top[c] - ground[c]) <= openTol ? 1 : 0;
