@@ -40,12 +40,9 @@ import {
 import type { RenderMesh3D } from '../../../spatial/HeadlessMeshSilhouetteRenderer';
 import { castCamera } from '../../../3d-engine/staged-location/survey-casting';
 import {
-    discoverPanos, facadeGeometry, fetchViews, knownRefusals, missingCredentials, type EvidenceImage, type PanoCandidate, type StreetViewEvidenceDeps
+    discoverPanos, facadeGeometry, knownRefusals, missingCredentials, type StreetViewEvidenceDeps
 } from '../../../3d-engine/staged-location/streetview-evidence';
-import {
-    footprintSurveyFaces, selectSurveyViews, surveyCandidates, surveyViewFor, SURVEY_IMAGE_TIMEOUT_MS, SURVEY_REFUSAL_RETRIES,
-    type SurveyFaceTarget, type SurveyView
-} from '../../../3d-engine/staged-location/face-survey';
+import type { SurveyFaceTarget, SurveyView } from '../../../3d-engine/staged-location/face-survey';
 import { pointHidden } from '../../../3d-engine/staged-location/evidence-aim';
 import { runPanoRegistrationOffThread, type PanoRegistrationJob, type PanoRegistrationOutcome } from '../../../3d-engine/staged-location/pano-registration-run';
 import { EDGE_REG_MAX_WIDTH_PX, type HeldImage } from '../../../3d-engine/staged-location/pano-edge-registration';
@@ -60,6 +57,11 @@ import { stageKey, stagedWorkspaceRoot } from '../../../3d-engine/staged-locatio
 import { createStagedLocationDeps } from '../../../3d-engine/staged-location/staged-location-tool';
 import type { Vec3 } from '../../../../common/spatial/staged-location-contracts';
 import type { ToolDeclaration, ToolHandler, ToolResultPayload } from '../types';
+import {
+    FACE_MATCH_TOLERANCE_DEG, facesToCover, fetchWithRefusalRetry, planSurveyViews, structureFaces, type SurveyFetchFailure, type SurveyRefusal
+} from '../../../3d-engine/staged-location/streetview-registered-views';
+
+export { FACE_MATCH_TOLERANCE_DEG, facesToCover, fetchWithRefusalRetry, planSurveyViews, structureFaces, type SurveyFetchFailure, type SurveyRefusal };
 
 const DEG = Math.PI / 180;
 
@@ -68,8 +70,6 @@ export const STREETVIEW_SURVEY_TOOL_NAME = 'streetview_survey';
 export const STREETVIEW_SURVEY_DEFAULT_VIEWS = 4;
 /** Most views one call fetches (each is one grounding request, and the registration's time grows with them). */
 export const STREETVIEW_SURVEY_MAX_VIEWS = 12;
-/** A requested face heading is matched to the structure's nearest facade within this angle. */
-export const FACE_MATCH_TOLERANCE_DEG = 45;
 /** Where the images go, under the workspace: the folder `streetview_grounding_image` writes to. */
 export const STREETVIEW_IMAGE_DIR = path.join('build', 'streetview-grounding');
 
@@ -124,8 +124,6 @@ export interface SurveySite {
     structureMeshSource: 'given' | 'scan-crop' | (string & {});
 }
 
-export interface SurveyRefusal { faceId: string; panoId: string; error: string; replacedBy?: string }
-export interface SurveyFetchFailure { faceId: string; panoId: string; error: string; transient: boolean }
 
 export interface StreetViewSurveyOptions {
     maxViews?: number;
@@ -253,106 +251,7 @@ export interface StreetViewSurveyResult {
 
 const r3 = (v: number) => Math.round(v * 1000) / 1000;
 const r6 = (v: number) => Math.round(v * 1e6) / 1e6;
-const angleBetween = (a: number, b: number) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
 
-/**
- * Every facade of the structure as a survey face. footprintSurveyFaces keeps the first four (the staged survey's budget);
- * a structure whose outline has more sides (a corner lot, a chamfered block) would lose faces that way, so the faces are
- * taken four headings at a time through it and all kept.
- */
-export function structureFaces(structure: StructurePickResult): SurveyFaceTarget[] {
-    const out: SurveyFaceTarget[] = [];
-    for (let k = 0; k < structure.facadeHeadingsDeg.length; k += 4) out.push(...footprintSurveyFaces({ ...structure, facadeHeadingsDeg: structure.facadeHeadingsDeg.slice(k, k + 4) }));
-    return out;
-}
-
-/** The structure's faces to cover: those nearest each requested heading (within FACE_MATCH_TOLERANCE_DEG), else all. */
-export function facesToCover(all: SurveyFaceTarget[], headingsDeg?: number[]): { faces: SurveyFaceTarget[]; unmatched: Array<{ headingDeg: number; reason: string }> } {
-    if (!headingsDeg?.length) return { faces: all, unmatched: [] };
-    const picked = new Set<string>();
-    const unmatched: Array<{ headingDeg: number; reason: string }> = [];
-    for (const h of headingsDeg) {
-        const best = [...all].sort((a, b) => angleBetween(a.headingDeg, h) - angleBetween(b.headingDeg, h))[0];
-        if (best && angleBetween(best.headingDeg, h) <= FACE_MATCH_TOLERANCE_DEG) picked.add(best.faceId);
-        else unmatched.push({ headingDeg: h, reason: `no facade of the structure faces within ${FACE_MATCH_TOLERANCE_DEG}° of ${Math.round(h)}° (its facades face ${all.map(f => `${Math.round(f.headingDeg)}°`).join(', ') || 'nowhere measurable'})` });
-    }
-    return { faces: all.filter(f => picked.has(f.faceId)), unmatched };
-}
-
-/**
- * The views: the staged survey's one wide view per face (selectSurveyViews), then, while more are asked for, each face's
- * next best pano in turn (the faces with the fewest candidates first), never a pano twice.
- */
-export function planSurveyViews(
-    panos: PanoCandidate[], faces: SurveyFaceTarget[], site: Pick<SurveySite, 'structure' | 'ground' | 'unmaskedTop'>, maxViews: number
-): { views: SurveyView[]; skipped: Array<{ faceId: string; headingDeg: number; reason: string }>; candidates: ReturnType<typeof surveyCandidates> } {
-    const base = selectSurveyViews(panos, faces, site.structure, site.ground, site.unmaskedTop, maxViews);
-    const candidates = surveyCandidates(panos, faces, site.structure, site.ground, site.unmaskedTop);
-    const views = [...base.views];
-    const used = new Set(views.map(v => v.panoId));
-    const order = [...faces].sort((a, b) => candidates.get(a.faceId)!.length - candidates.get(b.faceId)!.length || a.headingDeg - b.headingDeg);
-    for (let added = true; added && views.length < maxViews;) {
-        added = false;
-        for (const face of order) {
-            if (views.length >= maxViews) break;
-            const next = candidates.get(face.faceId)!.find(c => !used.has(c.pano.panoId));
-            if (!next) continue;
-            used.add(next.pano.panoId);
-            views.push(surveyViewFor(face, next));
-            added = true;
-        }
-    }
-    // a face skipped only because the staged survey's budget of four was spent, but given a view here, is not skipped; one
-    // still without a view says so in this call's terms
-    const skipped = base.skipped.filter(s => !views.some(v => v.faceId === s.faceId))
-        .map(s => (/image budget/.test(s.reason) ? { ...s, reason: `the ${maxViews} view${maxViews === 1 ? '' : 's'} asked for went to other faces first (the faces with the fewest panoramas choose first)` } : s));
-    return { views, skipped, candidates };
-}
-
-/**
- * Fetches the views through the grounding service; a pano the API refuses (403, "not published or eligible") is recorded
- * and the face's next eligible pano asked instead, up to SURVEY_REFUSAL_RETRIES rounds (runFaceSurvey's rule).
- */
-export async function fetchWithRefusalRetry(
-    plan: { views: SurveyView[]; candidates: ReturnType<typeof surveyCandidates> }, faces: SurveyFaceTarget[], deps: StreetViewEvidenceDeps, signal?: AbortSignal,
-    onProgress?: (m: string) => void
-): Promise<{ images: EvidenceImage[]; refusals: SurveyRefusal[]; failures: SurveyFetchFailure[]; views: SurveyView[] }> {
-    const refusedBefore = knownRefusals(deps);
-    const faceOf = new Map(faces.map(f => [f.faceId, f]));
-    let views = plan.views;
-    const first = await fetchViews(views, deps, signal, SURVEY_IMAGE_TIMEOUT_MS);
-    const images: EvidenceImage[] = [...first.images];
-    const refusals: SurveyRefusal[] = [];
-    const notFetched: typeof first.failures = [];
-    let pending = first.failures;
-    for (let round = 0; round < SURVEY_REFUSAL_RETRIES && pending.length; round++) {
-        if (signal?.aborted) break;
-        notFetched.push(...pending.filter(f => !f.refused));
-        const used = new Set(views.map(v => v.panoId));
-        const retry: SurveyView[] = [];
-        for (const f of pending.filter(x => x.refused)) {
-            const old = f.view as SurveyView;
-            const next = (plan.candidates.get(old.faceId) ?? []).find(c => !used.has(c.pano.panoId) && !deps.refusedPanos?.has(c.pano.panoId) && !refusedBefore.has(c.pano.panoId));
-            refusals.push({ faceId: old.faceId, panoId: old.panoId, error: f.error, ...(next ? { replacedBy: next.pano.panoId } : {}) });
-            if (!next) { notFetched.push(f); continue; }
-            used.add(next.pano.panoId);
-            const view = surveyViewFor(faceOf.get(old.faceId)!, next);
-            views = views.map(v => (v === old ? view : v));
-            retry.push(view);
-        }
-        pending = [];
-        if (!retry.length) break;
-        onProgress?.(`the grounding API refused ${retry.length} pano${retry.length === 1 ? '' : 's'}; asking the next eligible one`);
-        const again = await fetchViews(retry, deps, signal, SURVEY_IMAGE_TIMEOUT_MS);
-        images.push(...again.images);
-        pending = again.failures;
-    }
-    notFetched.push(...pending);
-    // a refused view that found no replacement is in notFetched and in refusals; report it once, as a refusal
-    const failures = notFetched.filter(f => !(f.refused && refusals.some(r => r.panoId === f.view.panoId)))
-        .map(f => ({ faceId: (f.view as SurveyView).faceId, panoId: f.view.panoId, error: f.error, transient: f.transient }));
-    return { images, refusals, failures, views };
-}
 
 /** Heading, elevation (up positive) and roll of a camera basis. */
 export function cameraAngles(cam: Pick<FrameCamera, 'fwd' | 'up' | 'right'>): { headingDeg: number; elevationDeg: number; rollDeg: number } {

@@ -139,8 +139,9 @@ import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSIO
 import { mslToTileY, type SolarRoof } from './pipeline-e/solar-roof';
 import { runInferenceE, type StepRecord } from './pipeline-e/inference';
 import { crownsFromStrip } from './pipeline-e/occluders';
-import { enhanceModels, genAiPlateClient, stagedEnhance } from './pipeline-e/enhance';
+import { enhanceGuards, enhanceModels, genAiPlateClient, stagedEnhance, ENHANCE_STREET_VIEWS } from './pipeline-e/enhance';
 import { projectionViewsFromEvidence } from './texture-pass';
+import { registeredSurveyViews } from './streetview-registered-views';
 import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
 import { facadeGrammarEnabled, grammarFileText, runFacadeGrammarPass, FACADE_GRAMMAR_GATE_VERSION, FACADE_GRAMMAR_PROMPT_VERSION, type GrammarFacadeOutcome } from './facade-grammar';
 import { TEXTURE_LADDER_RUNGS, type TexturePassDegradation, type TexturePassRecord, type TextureLayerBundle } from '../../../common/spatial/texture-pass-contracts';
@@ -2233,13 +2234,32 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     } : undefined;
                     const crowns = strip ? crownsFromStrip(JSON.parse(fs.readFileSync(strip.crownsJson, 'utf8'))) : [];
                     const enhanceOn = request.enhance === true || stagedEnhance();
+                    // enhanced mode's own Street View survey: the views registered against the tile mesh (edges, then jointly) and
+                    // cut out, so each wall's redraw is guided by and checked against a photo whose pose holds (plate-streetview.ts)
+                    const guideViews = enhanceOn && enhanceGuards() && !missingCredentials(sv) && segmenter ? async () => {
+                        const found = await discoverOnce();
+                        const usable = found.panos.filter(p => !sv.refusedPanos?.has(p.panoId));
+                        io.progress('pipeline E: enhanced mode: surveying the facades with Street View (registered views)');
+                        const got = await registeredSurveyViews({
+                            site: { structure: structure!, ground: t.ground!, unmaskedTop: t.unmaskedTop ?? t.ground!.top }, panos: usable, maxViews: ENHANCE_STREET_VIEWS,
+                            sv: { ...sv, refusedPanos: sv.refusedPanos ?? new Map<string, string>() }, tileMeshFiles: [extraction.geometryGlb], structureMesh,
+                            context: sceneToRenderMesh(readGlbScene(extraction.geometryGlb)), segment: segmenter, ...(visionAvailable ? { target: request.query } : {}),
+                            signal: io.signal, onProgress: m => io.progress(`pipeline E: enhanced mode: ${m}`)
+                        });
+                        if (got.images.length) run.state.attribution = [...new Set([...run.state.attribution, 'Street View ©Google'])];
+                        cache.writeRunNote(runId, 'pipeline_e_enhance_streetview', {
+                            views: got.views.map(v => ({ panoId: v.panoId, faceId: v.faceId, registration: v.registration, ownership: v.ownership?.status, iou: v.ownership?.iou, ownedPixels: v.ownerMask?.reduce((a, x) => a + (x ? 1 : 0), 0) ?? 0 })),
+                            refusals: got.refusals, failures: got.failures, registrationError: got.registrationError, ms: got.ms
+                        });
+                        return got.views;
+                    } : undefined;
                     const enhance = deps.textures?.enhance;
                     const out = await runInferenceE({
                         massing: r.massing, run: r.run!, textures: r.textures!, tilePath: strip ? strip.devegetatedGlb : extraction.texturedGlb, isolateGlb: e.refined.rawClayGlb!,
                         dir: path.join(cache.dir, 'pipeline_e', e.key.slice(0, 24), 'inference'), stage: 'grammar', stageKey: e.key,
                         ...(chain ? { chain } : {}), ...(streetViews ? { streetViews } : {}), structureMesh, crowns,
                         ...(enhance ? { inpaint: { client: enhance, models: [LIGHTING_MODEL_LITE] } } : {}),
-                        ...(enhanceOn && visionAvailable ? { enhance: { client: genAiPlateClient(visionAvailable.client), models: enhanceModels(), locationName: placeValue!.formattedAddress } } : {}),
+                        ...(enhanceOn && visionAvailable ? { enhance: { client: genAiPlateClient(visionAvailable.client), models: enhanceModels(), locationName: placeValue!.formattedAddress, guards: enhanceGuards(), ...(guideViews ? { streetViews: guideViews } : {}) } } : {}),
                         solar: [], anchor: structure!.seed, signal: io.signal, onProgress: m => io.progress(m)
                     });
                     cache.writeRunNote(runId, 'pipeline_e_inference', { steps: out.steps, timingsMs: out.timingsMs });

@@ -43,7 +43,8 @@ import { decideRoof, parseRoofReply, roofPrompt, PARAPET_THICKNESS_M, type RoofD
 import { straighten, type StraightenResult } from './straighten';
 import type { EnhanceModelClient } from '../texture-enhance';
 import { decodeOrtho, checkAgainstScan, readReliefOrthos } from '../facade-grammar';
-import { enhanceOrder, enhanceWall, ENHANCE_CONCURRENCY, TEXTURE_PLATE_PROMPT_ID, type EnhanceWallRecord, type PlateModelClient } from './enhance';
+import { enhanceOrder, enhanceWall, ENHANCE_CONCURRENCY, TEXTURE_PLATE_PROMPT_ID, TEXTURE_PLATE_STREET_VIEW_PROMPT_ID, type EnhanceWallRecord, type PlateModelClient, type WallStreetView } from './enhance';
+import { bestStreetViewForWall, streetViewCrop, type GuideView } from './plate-streetview';
 
 export interface StepRecord { step: string; proposed: number; accepted: number; rejected: number; skipped?: string; notes: string[]; ms: number }
 
@@ -66,7 +67,13 @@ export interface InferenceInput {
     solar?: Array<{ pitchDeg: number; areaM2: number; x: number; z: number }>;
     anchor?: { x: number; z: number };
     /** Enhanced mode (opt-in): each large wall redrawn once by an image model (enhance.ts), gated on edge alignment. */
-    enhance?: { client: PlateModelClient; models: string[]; locationName: string; maxWalls?: number };
+    enhance?: {
+        client: PlateModelClient; models: string[]; locationName: string; maxWalls?: number;
+        /** The invention and erasure check and the Street View guidance (default on; enhance.ts enhanceGuards). */
+        guards?: boolean;
+        /** The Street View survey's views of the structure, registered against the tile mesh and cut out (streetview-registered-views.ts). */
+        streetViews?: () => Promise<GuideView[]>;
+    };
     signal?: AbortSignal;
     onProgress?: (m: string) => void;
 }
@@ -139,6 +146,33 @@ const now = () => Date.now();
 /** The enhanced plates' grammar (up to 2 walls, about a minute) starts only this long into the stage (its limit is 300 s). */
 export const PLATE_GRAMMAR_LATEST_MS = 190_000;
 
+/**
+ * The enhanced-mode diagnostic: the input | the aligned plate | the guarded plate with the flagged cells tinted (magenta
+ * added, cyan erased, yellow retoned, red contradicts the photo) | the rectified Street View photo, when there is one.
+ */
+export function writeEnhanceDiagnostic(file: string, input: Uint8Array, plate: Uint8Array, guarded: Uint8Array | undefined, labels: string[] | undefined, grid: { cw: number; cellPx: number } | undefined, photo: Uint8Array | undefined, photoValid: Uint8Array | undefined, W: number, H: number): void {
+    const tint: Record<string, [number, number, number]> = { added: [255, 0, 255], erased: [0, 255, 255], retoned: [255, 230, 0], 'contradicts-photo': [255, 0, 0] };
+    const panels: Uint8Array[] = [input, plate];
+    if (guarded) {
+        const g = guarded.slice();
+        if (labels && grid) for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            const c = tint[labels[Math.floor(y / grid.cellPx) * grid.cw + Math.floor(x / grid.cellPx)]];
+            if (!c) continue;
+            const i = (y * W + x) * 4;
+            for (let k = 0; k < 3; k++) g[i + k] = Math.round(0.6 * g[i + k] + 0.4 * c[k]);
+        }
+        panels.push(g);
+    }
+    if (photo && photoValid) {
+        const p = photo.slice();
+        for (let i = 0; i < W * H; i++) if (!photoValid[i]) { p[i * 4] = 40; p[i * 4 + 1] = 40; p[i * 4 + 2] = 40; }
+        panels.push(p);
+    }
+    const OW = panels.length * (W + 8) - 8, rgb = new Uint8Array(OW * H * 3);
+    panels.forEach((img, j) => { for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) rgb.set(img.subarray((y * W + x) * 4, (y * W + x) * 4 + 3), (y * OW + j * (W + 8) + x) * 3); });
+    fs.writeFileSync(file, encodePng(OW, H, Buffer.from(rgb), 3));
+}
+
 export async function runInferenceE(input: InferenceInput): Promise<InferenceOutcome> {
     const { run, massing } = input;
     const faces = run.report.faces;
@@ -159,6 +193,7 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
     const occReads = chain ? wallFaces.map(f => askJson(chain, fs.readFileSync(path.join(run.dir, `ortho_${f.index}.png`)), occluderPrompt(f.width * f.pixel, f.height * f.pixel), parseOccluderReply).catch(e => e as Error)) : [];
     const grammarRead = chain ? runFacadeGrammarPass({ orthosDir: writeWallOrthoIndex(run), chain, ...(input.anchor ? { anchor: input.anchor } : {}), ...(input.signal ? { signal: input.signal } : {}), onProgress: m => progress(m), overlayDir: path.join(input.dir, 'grammar_overlays') }).catch(e => e as Error) : undefined;
     const svRead = input.streetViews && input.structureMesh ? input.streetViews(input.structureMesh).catch(e => e as Error) : undefined;
+    const guideRead = input.enhance && input.enhance.guards !== false && input.enhance.streetViews ? input.enhance.streetViews().catch(e => e as Error) : undefined;
 
     // ------------------------------------------------------------------ (a) roof
     let t = now();
@@ -448,6 +483,32 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
         const order = enhanceOrder(faces, textures, LOW_COVERAGE).sort((p, q) => q.area - p.area).slice(0, input.enhance.maxWalls ?? 8);
         const done: MassingFace[] = [];
         const plates = new Map<number, { plate: Uint8Array; use: Uint8Array }>();
+        const guards = input.enhance.guards !== false;
+        // the registered Street View views (enhanced mode's own survey), each with its depth of the massing
+        let guide: GuideView[] = [];
+        let noGuide: string | undefined = guards ? (input.enhance.streetViews ? undefined : 'no Street View source') : undefined;
+        if (guideRead) {
+            const tg = now();
+            const got = await guideRead;
+            if (got instanceof Error) noGuide = `the Street View survey failed (${got.message.slice(0, 160)})`;
+            else {
+                guide = input.structureMesh ? got.map(v => ({ ...v, depth: renderFrameDepth(input.structureMesh!, v.camera as never) })) : got;
+                const reg = guide.filter(v => v.registration && v.registration.method !== 'nominal').length, owned = guide.filter(v => v.ownerMask?.some(x => x)).length;
+                enhStep.notes.push(`Street View guidance: ${guide.length} photos, ${reg} with a registered pose, ${owned} with owned pixels${guide.length ? ` (${guide.map(v => `${v.panoId} ${v.registration?.method ?? 'nominal'}`).join(', ')})` : ''}`);
+                if (!guide.length) noGuide = 'no Street View photo of the structure';
+            }
+            timingsMs.enhanceStreetView = now() - tg;
+        }
+        const svSource = new Map<string, number>();
+        const sourceForPano = (panoId: string): number => {
+            let k = svSource.get(panoId);
+            if (k === undefined) {
+                k = legend.length;
+                legend.push({ source: 'ai-enhanced+street-view', label: 'generated', method: `AI-enhanced from tile, guided by Street View ${panoId} (${input.enhance!.models.join(', ')}, ${TEXTURE_PLATE_STREET_VIEW_PROMPT_ID})`, rung: 4, weight: 0.25 });
+                svSource.set(panoId, k);
+            }
+            return k;
+        };
         const enhanceOne = async (f: MassingFace) => {
             const tex = textures.get(f.index)!;
             const use = new Uint8Array(tex.width * tex.height);
@@ -455,22 +516,25 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
             // the reference: a finished wall next to this one round the plan, else the first finished
             const ref = done.find(d => d.part === f.part && d.loop === f.loop && Math.abs(d.edge - f.edge) === 1) ?? done[0];
             const refTex = ref ? textures.get(ref.index)! : undefined;
-            progress(`enhanced mode: redrawing wall ${f.index} (${Math.round(f.area)} m2)`);
+            // the Street View photo that shows most of the wall's street-level band
+            let sv: WallStreetView | undefined, noSv = noGuide;
+            if (guards && guide.length) {
+                const best = bestStreetViewForWall(f, guide);
+                if (best.view && best.rect) sv = { view: best.view, rect: best.rect, crop: streetViewCrop(best.view, best.rect), why: best.why };
+                else noSv = best.why;
+            }
+            progress(`enhanced mode: redrawing wall ${f.index} (${Math.round(f.area)} m2)${sv ? `, guided by Street View ${sv.view.panoId}` : ''}`);
             const before = { width: tex.width, height: tex.height, rgba: tex.rgba.slice() };
-            const r = await enhanceWall(f, tex, use, { client: input.enhance!.client, models: input.enhance!.models, locationName: input.enhance!.locationName, ...(refTex ? { reference: refTex } : {}), source: ENH, ...(input.signal ? { signal: input.signal } : {}) });
-            enhanced.push({ ...r, ...(ref ? { referenceFace: ref.index } : {}), plate: undefined } as EnhanceWallRecord);
+            const r = await enhanceWall(f, tex, use, {
+                client: input.enhance!.client, models: input.enhance!.models, locationName: input.enhance!.locationName, ...(refTex ? { reference: refTex } : {}), source: ENH,
+                guards, ...(sv ? { streetView: sv, streetViewSource: sourceForPano(sv.view.panoId) } : {}), ...(noSv ? { noStreetView: noSv } : {}), ...(input.signal ? { signal: input.signal } : {})
+            });
+            enhanced.push({ ...r, ...(ref ? { referenceFace: ref.index } : {}), plate: undefined, guarded: undefined, labels: undefined, grid: undefined } as EnhanceWallRecord);
             enhStep.proposed++;
-            if (r.accepted) { enhStep.accepted++; done.push(f); if (r.plate) plates.set(f.index, { plate: r.plate, use }); } else enhStep.rejected++;
-            enhStep.notes.push(`wall ${f.index}: ${r.accepted ? 'enhanced' : 'kept its tile texture'}: ${r.why}${r.model ? ` (${r.model})` : ''}${ref ? `; reference wall ${ref.index}` : ''}`);
+            if (r.accepted) { enhStep.accepted++; done.push(f); if (r.plate) plates.set(f.index, { plate: tex.rgba.slice(), use }); } else enhStep.rejected++;
+            enhStep.notes.push(`wall ${f.index}: ${r.accepted ? 'enhanced' : 'kept its tile texture'}: ${r.why}${r.model ? ` (${r.model})` : ''}${ref ? `; reference wall ${ref.index}` : ''}${sv ? `; ${sv.why}` : guards && noSv ? `; no Street View guidance: ${noSv}` : ''}`);
             try {
-                if (r.plate) {
-                    const W2 = tex.width * 2 + 8, rgb = new Uint8Array(W2 * tex.height * 3);
-                    for (let y = 0; y < tex.height; y++) for (let x = 0; x < tex.width; x++) {
-                        rgb.set(before.rgba.subarray((y * tex.width + x) * 4, (y * tex.width + x) * 4 + 3), (y * W2 + x) * 3);
-                        rgb.set(r.plate.subarray((y * tex.width + x) * 4, (y * tex.width + x) * 4 + 3), (y * W2 + x + tex.width + 8) * 3);
-                    }
-                    fs.writeFileSync(path.join(input.dir, `wall_${f.index}_tile_vs_enhanced.png`), encodePng(W2, tex.height, Buffer.from(rgb), 3));
-                }
+                if (r.plate) writeEnhanceDiagnostic(path.join(input.dir, `wall_${f.index}_tile_vs_enhanced.png`), before.rgba, r.plate, r.guarded, r.labels, r.grid, sv?.rect.rgba, sv?.rect.valid, tex.width, tex.height);
             } catch { /* diagnostics only */ }
         };
         if (order.length) await enhanceOne(order[0]);

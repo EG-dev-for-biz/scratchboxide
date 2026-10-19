@@ -24,7 +24,7 @@
  */
 
 import { LIGHTING_PROMPTS } from '../texture-lighting';
-import { buildTexturePlatePrompt, TEXTURE_PLATE_PROMPT_ID } from '../../../../browser/generative-canvas/services/location-beautify-service';
+import { buildTexturePlatePrompt, TEXTURE_PLATE_PROMPT_ID, TEXTURE_PLATE_STREET_VIEW_PROMPT_ID } from '../../../../browser/generative-canvas/services/location-beautify-service';
 import { edgeMap, exactDistanceTransform } from '../../../spatial/StreetViewStage3Metrics';
 import { decodeImageInMemory, type RgbaImage8 } from '../tile-texture-transfer';
 import { padToModelAspect, resizeRgba } from '../texture-enhance';
@@ -34,6 +34,8 @@ import { nearestImageAspectRatio } from '../../../../common/media-generation-pro
 import { lumaPlane } from './image-ops';
 import type { FaceTexture } from './massing-glb';
 import type { MassingFace } from './native-massing';
+import { auditPlate, cellMaskToPixels, describeRegions, revertRegions, MAX_FLAGGED_SHARE, type CellGrid, type FlaggedRegion } from './plate-audit';
+import { streetBandTop, verifyAgainstPhoto, type GuideView, type PhotoCheck, type RectifiedPhoto } from './plate-streetview';
 
 export const ENHANCE_MAX_SIDE = 1024;
 export const MAX_SHIFT_PX = 6;
@@ -43,6 +45,8 @@ export const MAX_CHAMFER_PX = 2.2;
 export const MAX_LOST_SHARE = 0.15;
 export const LOST_EDGE_M = 0.3;
 export const MIN_ENHANCE_AREA_M2 = 60;
+/** Street View views enhanced mode's survey fetches and registers (one wide view per face first, then more per face). */
+export const ENHANCE_STREET_VIEWS = 8;
 /** Walls redrawn at once after the first (each references a finished wall). */
 export const ENHANCE_CONCURRENCY = 3;
 
@@ -63,15 +67,16 @@ export function stagedEnhance(env: NodeJS.ProcessEnv = process.env): boolean {
     return env.SCRATCHBOX_STAGED_ENHANCE === '1';
 }
 
-export interface PlateRequest { prompt: string; image: Uint8Array; width: number; height: number; reference?: Uint8Array; models: string[]; signal?: AbortSignal }
+export interface PlateRequest { prompt: string; image: Uint8Array; width: number; height: number; reference?: Uint8Array; streetView?: Uint8Array; models: string[]; signal?: AbortSignal }
 export interface PlateAnswer { bytes: Uint8Array; modelUsed: string }
 export type PlateModelClient = (r: PlateRequest) => Promise<PlateAnswer>;
 
-/** The production client: the Gen AI SDK through generateImageWithModels (the plate first, then the reference). */
+/** The production client: the Gen AI SDK through generateImageWithModels (the plate first, then the reference, then the Street View photo). */
 export function genAiPlateClient(genai: unknown): PlateModelClient {
     return async r => {
         const parts: unknown[] = [{ text: r.prompt }, { inlineData: { mimeType: 'image/png', data: Buffer.from(r.image).toString('base64') } }];
         if (r.reference) parts.push({ text: 'Second image: the adjacent wall, already finished (reference for materials only).' }, { inlineData: { mimeType: 'image/png', data: Buffer.from(r.reference).toString('base64') } });
+        if (r.streetView) parts.push({ text: `${r.reference ? 'Third' : 'Second'} image: a street-level photograph of this wall (Google Street View; grey where it does not show the wall).` }, { inlineData: { mimeType: 'image/png', data: Buffer.from(r.streetView).toString('base64') } });
         const a = await generateImageWithModels(genai, { models: r.models, contents: [{ role: 'user', parts }], imageConfig: { aspectRatio: nearestImageAspectRatio(r.width, r.height) }, ...(r.signal ? { signal: r.signal } : {}) } as never);
         return { bytes: new Uint8Array(a.data.buffer, a.data.byteOffset, a.data.byteLength), modelUsed: a.modelUsed };
     };
@@ -143,7 +148,49 @@ export function alignPlate(input: Uint8Array, answer: Uint8Array, W: number, H: 
     return { dx, dy, scale: best.s, chamferPx: Math.round(chamfer * 100) / 100, lostShare: Math.round(lostShare * 1000) / 1000, accepted, why, aligned };
 }
 
-export interface EnhanceWallRecord { face: number; key: string; accepted: boolean; why: string; model?: string; chamferPx?: number; lostShare?: number; referenceFace?: number; ms: number }
+/** The Street View photo a wall's redraw is guided by and checked against (plate-streetview.ts). */
+export interface WallStreetView { view: GuideView; rect: RectifiedPhoto; crop: Uint8Array; why: string }
+
+export interface EnhanceAuditRecord {
+    regions: FlaggedRegion[];
+    flaggedAreaM2: number;
+    coveredAreaM2: number;
+    flaggedShare: number;
+    /** Texels taken back from the input (input weight at least 0.5), square metres. */
+    revertedAreaM2: number;
+    /** Cells the tile check flagged that the Street View photo shows as the plate draws them (kept), square metres. */
+    photoKeptM2: number;
+}
+
+export interface EnhanceStreetViewRecord {
+    panoId: string;
+    method: string;
+    bandCover: number;
+    pxPerM: number;
+    shiftPx?: [number, number];
+    nccPlate?: number;
+    nccInput?: number;
+    comparedCells?: number;
+    supportedCells?: number;
+    contradictedCells?: number;
+}
+
+export interface EnhanceWallRecord {
+    face: number; key: string; accepted: boolean; why: string; model?: string; chamferPx?: number; lostShare?: number; referenceFace?: number; ms: number;
+    /** The invention and erasure check (absent when the alignment gate already rejected the wall, or the guards are off). */
+    audit?: EnhanceAuditRecord;
+    /** The Street View photo that guided and checked the redraw, or why there was none. */
+    streetView?: EnhanceStreetViewRecord;
+    noStreetView?: string;
+}
+
+/**
+ * SCRATCHBOX_STAGED_ENHANCE_GUARDS=0 turns off the invention and erasure check and the Street View guidance (enhanced mode
+ * as it was before them: the alignment gate only). On by default.
+ */
+export function enhanceGuards(env: NodeJS.ProcessEnv = process.env): boolean {
+    return env.SCRATCHBOX_STAGED_ENHANCE_GUARDS !== '0';
+}
 
 /** The walls worth enhancing, in plan-loop order (so each has its finished neighbour as the reference). */
 export function enhanceOrder(faces: MassingFace[], textures: Map<number, FaceTexture>, minCoverage: number): MassingFace[] {
@@ -151,36 +198,96 @@ export function enhanceOrder(faces: MassingFace[], textures: Map<number, FaceTex
         .sort((a, b) => a.part.localeCompare(b.part) || a.loop - b.loop || a.edge - b.edge || b.area - a.area);
 }
 
-/** Redraws one wall once and gates it. On acceptance the wall's texels become the aligned answer with `source`. */
-export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Array, opts: { client: PlateModelClient; models: string[]; locationName: string; reference?: FaceTexture; source: number; signal?: AbortSignal }): Promise<EnhanceWallRecord & { plate?: Uint8Array }> {
+/**
+ * The tile check and the photo check of an aligned plate, merged: cells the photo shows as the plate draws them are kept even
+ * when the tile flagged them (the photo is the better evidence at street level); cells that contradict the photo are flagged.
+ */
+export function guardPlate(input: Uint8Array, aligned: Uint8Array, W: number, H: number, use: Uint8Array, pixelM: number, photo?: { rect: RectifiedPhoto; bandTop: number }): {
+    audit: EnhanceAuditRecord; reject: boolean; why: string; rgba: Uint8Array; weight: Float32Array; labels: string[]; grid: CellGrid; photo?: PhotoCheck
+} {
+    const a = auditPlate(input, aligned, W, H, use, pixelM);
+    const labels = a.labels.slice();
+    let photoKept = 0;
+    const check = photo ? verifyAgainstPhoto(input, aligned, photo.rect, W, H, use, pixelM, photo.bandTop) : undefined;
+    if (check) {
+        for (let k = 0; k < labels.length; k++) {
+            if (check.verdict[k] === 'supported' && labels[k]) { labels[k] = ''; photoKept += a.grid.cover[k]; }
+            else if (check.verdict[k] === 'contradicts-photo') labels[k] = 'contradicts-photo';
+        }
+    }
+    const { regions, flagged } = describeRegions(labels, a.grid, pixelM, W, H, { toneDe: a.features.toneDe, ncc: a.features.nccIn });
+    const flaggedAreaM2 = Math.round(regions.reduce((s, r) => s + r.areaM2, 0) * 10) / 10;
+    const share = a.coveredAreaM2 > 0 ? flaggedAreaM2 / a.coveredAreaM2 : 0;
+    const reject = share > MAX_FLAGGED_SHARE;
+    const { rgba, weight } = revertRegions(input, aligned, W, H, cellMaskToPixels(flagged, a.grid, W, H), pixelM);
+    let reverted = 0;
+    for (let i = 0; i < W * H; i++) if (use[i] && weight[i] >= 0.5) reverted++;
+    const byKind = new Map<string, number>();
+    for (const r of regions) byKind.set(r.kind, (byKind.get(r.kind) ?? 0) + r.areaM2);
+    const cellM2 = (a.grid.cellPx * pixelM) ** 2;
+    const audit: EnhanceAuditRecord = {
+        regions, flaggedAreaM2, coveredAreaM2: a.coveredAreaM2, flaggedShare: Math.round(share * 1000) / 1000,
+        revertedAreaM2: Math.round(reverted * pixelM * pixelM * 10) / 10, photoKeptM2: Math.round(photoKept * cellM2 * 10) / 10
+    };
+    const kinds = [...byKind.entries()].map(([k, v]) => `${k} ${v.toFixed(1)} m2`).join(', ');
+    const why = regions.length
+        ? `${regions.length} region${regions.length === 1 ? '' : 's'} not supported (${kinds}), ${(100 * share).toFixed(0)}% of ${a.coveredAreaM2.toFixed(0)} m2${reject ? `: more than ${100 * MAX_FLAGGED_SHARE}%, the wall keeps its tile texture` : `: ${audit.revertedAreaM2.toFixed(1)} m2 reverted to the tile texture`}`
+        : 'no region adds or removes structure the tile does not support';
+    return { audit, reject, why: `${why}${photoKept ? `; ${audit.photoKeptM2} m2 the tile check flagged kept because the Street View photo shows it` : ''}`, rgba, weight, labels, grid: a.grid, ...(check ? { photo: check } : {}) };
+}
+
+/**
+ * Redraws one wall once and gates it: the alignment gate, then (guards on) the invention and erasure check and, with a
+ * Street View photo of the wall, the photo check; flagged regions revert to the input, feathered. On acceptance the wall's
+ * texels become the guarded plate with `source` (or `streetViewSource` when a photo guided it); reverted texels keep theirs.
+ */
+export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Array, opts: {
+    client: PlateModelClient; models: string[]; locationName: string; reference?: FaceTexture; source: number; signal?: AbortSignal;
+    guards?: boolean; streetView?: WallStreetView; streetViewSource?: number; noStreetView?: string;
+}): Promise<EnhanceWallRecord & { plate?: Uint8Array; guarded?: Uint8Array; labels?: string[]; grid?: CellGrid }> {
     const t0 = Date.now();
+    const guards = opts.guards ?? true;
+    const sv = guards ? opts.streetView : undefined;
     const scale = Math.min(1, ENHANCE_MAX_SIDE / Math.max(t.width, t.height));
     const sw = Math.max(16, Math.round(t.width * scale)), sh = Math.max(16, Math.round(t.height * scale));
     const small: RgbaImage8 = resizeRgba({ width: t.width, height: t.height, rgba: t.rgba }, sw, sh);
     const { padded, offset } = padToModelAspect(small);
     const ref = opts.reference ? (() => { const rs = Math.min(1, 768 / Math.max(opts.reference.width, opts.reference.height)); const r = resizeRgba({ width: opts.reference.width, height: opts.reference.height, rgba: opts.reference.rgba }, Math.max(8, Math.round(opts.reference.width * rs)), Math.max(8, Math.round(opts.reference.height * rs))); return new Uint8Array(encodePng(r.width, r.height, Buffer.from(r.rgba), 4)); })() : undefined;
-    const prompt = buildTexturePlatePrompt({ locationName: opts.locationName, widthM: t.width * f.pixel, heightM: t.height * f.pixel, widthPx: padded.width, heightPx: padded.height, preserveClause: preserveClause(padded.width, padded.height), withReference: !!ref });
+    const prompt = buildTexturePlatePrompt({ locationName: opts.locationName, widthM: t.width * f.pixel, heightM: t.height * f.pixel, widthPx: padded.width, heightPx: padded.height, preserveClause: preserveClause(padded.width, padded.height), withReference: !!ref, ...(sv ? { withStreetView: true } : {}) });
+    const svRec: EnhanceStreetViewRecord | undefined = sv ? { panoId: sv.view.panoId, method: sv.view.registration?.method ?? 'nominal', bandCover: Math.round(sv.rect.bandCover * 1000) / 1000, pxPerM: Math.round(sv.rect.pxPerM * 10) / 10 } : undefined;
+    const base = { face: f.index, key: f.key, ...(svRec ? { streetView: svRec } : {}), ...(guards && !sv && opts.noStreetView ? { noStreetView: opts.noStreetView } : {}) };
     let answer: PlateAnswer;
     try {
-        answer = await opts.client({ prompt, image: new Uint8Array(encodePng(padded.width, padded.height, Buffer.from(padded.rgba), 4)), width: padded.width, height: padded.height, ...(ref ? { reference: ref } : {}), models: opts.models, ...(opts.signal ? { signal: opts.signal } : {}) });
+        answer = await opts.client({ prompt, image: new Uint8Array(encodePng(padded.width, padded.height, Buffer.from(padded.rgba), 4)), width: padded.width, height: padded.height, ...(ref ? { reference: ref } : {}), ...(sv ? { streetView: sv.crop } : {}), models: opts.models, ...(opts.signal ? { signal: opts.signal } : {}) });
     } catch (err) {
         if (opts.signal?.aborted) throw err;
-        return { face: f.index, key: f.key, accepted: false, why: `the model did not answer (${(err as Error).message.slice(0, 160)})`, ms: Date.now() - t0 };
+        return { ...base, accepted: false, why: `the model did not answer (${(err as Error).message.slice(0, 160)})`, ms: Date.now() - t0 };
     }
     let dec: RgbaImage8;
-    try { dec = decodeImageInMemory(answer.bytes); } catch (err) { return { face: f.index, key: f.key, accepted: false, why: `the answer cannot be decoded (${(err as Error).message})`, model: answer.modelUsed, ms: Date.now() - t0 }; }
+    try { dec = decodeImageInMemory(answer.bytes); } catch (err) { return { ...base, accepted: false, why: `the answer cannot be decoded (${(err as Error).message})`, model: answer.modelUsed, ms: Date.now() - t0 }; }
     const full = resizeRgba(dec, padded.width, padded.height);
     const inner = new Uint8Array(sw * sh * 4);
     for (let y = 0; y < sh; y++) inner.set(full.rgba.subarray(((offset[1] + y) * full.width + offset[0]) * 4, ((offset[1] + y) * full.width + offset[0] + sw) * 4), y * sw * 4);
     const back = resizeRgba({ width: sw, height: sh, rgba: inner }, t.width, t.height).rgba;
     const g = alignPlate(t.rgba, back, t.width, t.height, use, f.pixel);
-    const rec = { face: f.index, key: f.key, accepted: g.accepted, why: g.why, model: answer.modelUsed, chamferPx: g.chamferPx, lostShare: g.lostShare, ms: Date.now() - t0, plate: g.aligned };
+    const rec = { ...base, accepted: g.accepted, why: g.why, model: answer.modelUsed, chamferPx: g.chamferPx, lostShare: g.lostShare, ms: Date.now() - t0, plate: g.aligned };
     if (!g.accepted) return rec;
-    for (let i = 0; i < t.width * t.height; i++) {
-        t.rgba[i * 4] = g.aligned[i * 4]; t.rgba[i * 4 + 1] = g.aligned[i * 4 + 1]; t.rgba[i * 4 + 2] = g.aligned[i * 4 + 2]; t.rgba[i * 4 + 3] = 255;
-        t.source[i] = opts.source;
+    let out = g.aligned, weight: Float32Array | undefined;
+    let extra: { audit?: EnhanceAuditRecord; guarded?: Uint8Array; labels?: string[]; grid?: CellGrid } = {};
+    if (guards) {
+        const gp = guardPlate(t.rgba, g.aligned, t.width, t.height, use, f.pixel, sv ? { rect: sv.rect, bandTop: streetBandTop(f) } : undefined);
+        if (svRec && gp.photo) Object.assign(svRec, { shiftPx: gp.photo.shiftPx, nccPlate: gp.photo.nccPlate, nccInput: gp.photo.nccInput, comparedCells: gp.photo.comparedCells, supportedCells: gp.photo.supportedCells, contradictedCells: gp.photo.contradictedCells });
+        extra = { audit: gp.audit, guarded: gp.rgba, labels: gp.labels, grid: gp.grid };
+        if (gp.reject) return { ...rec, ...extra, accepted: false, why: `${g.why}; ${gp.why}`, ms: Date.now() - t0 };
+        out = gp.rgba; weight = gp.weight;
+        rec.why = `${g.why}; ${gp.why}`;
     }
-    return rec;
+    const src = sv && opts.streetViewSource !== undefined ? opts.streetViewSource : opts.source;
+    for (let i = 0; i < t.width * t.height; i++) {
+        t.rgba[i * 4] = out[i * 4]; t.rgba[i * 4 + 1] = out[i * 4 + 1]; t.rgba[i * 4 + 2] = out[i * 4 + 2]; t.rgba[i * 4 + 3] = 255;
+        if (!weight || weight[i] < 0.5) t.source[i] = src;
+    }
+    return { ...rec, ...extra, ms: Date.now() - t0 };
 }
 
-export { TEXTURE_PLATE_PROMPT_ID };
+export { TEXTURE_PLATE_PROMPT_ID, TEXTURE_PLATE_STREET_VIEW_PROMPT_ID };
