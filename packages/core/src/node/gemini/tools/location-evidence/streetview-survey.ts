@@ -207,6 +207,8 @@ export interface SurveyedViewResult {
         reason: string;
         /** The joint registration kept a non-rigid per-pano warp: the pinhole above is the rigid part of the pose. */
         warpKept: boolean;
+        /** Joint only: the median residual of this pano's cross-view matches after the fit, px at 640 wide (null: no match held). */
+        crossViewMatchPx?: number | null;
     };
     ownership?: {
         status: ViewOwnershipRecord['status'] | 'not-run';
@@ -521,7 +523,8 @@ export async function runStreetViewSurvey(site: SurveySite, options: StreetViewS
             },
             registration: {
                 method, residualPx, residualAtWidthPx: atWidth, residualImagePx: residualPx !== null && atWidth ? r3(residualPx * im.widthPx / atWidth) : null,
-                residualM: per?.edgeResidualM ?? null, reason, warpKept: !!registration?.warps?.has(v.panoId)
+                residualM: per?.edgeResidualM ?? null, reason, warpKept: !!registration?.warps?.has(v.panoId),
+                ...(method.startsWith('joint') && joint ? { crossViewMatchPx: joint.medianPx } : {})
             }
         };
     });
