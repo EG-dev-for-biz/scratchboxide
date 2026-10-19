@@ -835,8 +835,11 @@ export interface StagedTexturedVariant {
     ladderRung: number;
     /** Share of the layer's atlas texels per rung, indexed like TEXTURE_LADDER_RUNGS (sums to 1). */
     rungShares: number[];
-    /** The provenance entries of the layer's texels (labels and sources are open strings). */
-    provenance: Array<{ source: string; label: string; method: string; panoIds?: string[]; coverage: number }>;
+    /**
+     * The provenance entries of the layer's texels (labels and sources are open strings). An AI-enhanced wall's entry also
+     * carries its plate's alignment to the tile (symmetric edge chamfer in pixels, share of the tile's edges lost), reported.
+     */
+    provenance: Array<{ source: string; label: string; method: string; panoIds?: string[]; coverage: number; chamferPx?: number; lostShare?: number }>;
     /** What the confidence image's channels mean. */
     confidenceChannels: string;
     builtAtMs: number;
@@ -1805,7 +1808,7 @@ const DEFINITIONS = {
     // texture pass (texture-pass-contracts.ts): labels and sources are open strings, nothing branches on them
     texelProvenance: obj(['source', 'label', 'method', 'coverage'], {
         source: { type: 'string', minLength: 1 }, label: { type: 'string', minLength: 1 }, method: STR,
-        panoIds: arr(STR), captureDates: arr(STR), coverage: ref('unit')
+        panoIds: arr(STR), captureDates: arr(STR), coverage: ref('unit'), chamferPx: NUM, lostShare: ref('unit')
     }),
     photoTierFitScores: obj(['pixels'], {
         pixels: NONNEG_INT, geoChamferMedianPx: PHOTO_TIER_NUM, geoChamferMeanPx: PHOTO_TIER_NUM, heldOutGradNcc: PHOTO_TIER_NUM, heldOutChamferMedianPx: PHOTO_TIER_NUM,

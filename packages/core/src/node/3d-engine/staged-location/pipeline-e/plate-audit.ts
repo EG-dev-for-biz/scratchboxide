@@ -10,8 +10,8 @@
 /**
  * Pipeline E, enhanced mode: the invention and erasure check of a redrawn wall plate, framed by identity.
  *
- * The alignment gate (enhance.ts) only asks whether the input's edges are still where they were. A plate can pass it and
- * still paint a distinct element over (a dark fire-escape bay turned into wall and windows), replace one (a stone base or a
+ * The identity gate (plate-identity.ts) asks whether the plate is the same wall as a whole (framing, storey and bay rhythm,
+ * colour family). A plate can pass it and still paint a distinct element over (a dark fire-escape bay turned into wall and windows), replace one (a stone base or a
  * storefront redrawn as something else) or change a block's colour. Under the realism-first directive finer detail drawn
  * over ordinary wall is the point of the redraw and stays; what the check reverts is a region that erases, replaces or
  * recolours what makes the wall recognisable. It compares the plate with its input region by region, with nothing known
@@ -21,7 +21,8 @@
  *     robust affine map per channel (a global relight is no change of identity); per cell (AUDIT_CELL_M) the mean colour
  *     distance, lightness weighted down (an even relight takes baked sun and shade off; repainting moves chroma);
  *   - structure: the band-pass of the lightness (BAND_FINE_M .. BAND_COARSE_M, the scale of openings, piers and bays) in a
- *     window of 3 x 3 cells round each cell: its contrast in each image and their normalised cross-correlation;
+ *     window of 3 x 3 cells round each cell: its contrast in each image and their normalised cross-correlation, the best
+ *     within AUDIT_DRIFT_M (the plate may lay an element a little off the tile's and still keep it);
  *   - distinctness: how far the input's cell stands from the wall's median colour, or how strong its structure is;
  *   - per cell: the plate's unsupported structure where the input is distinct is "replaced", flattened distinct structure
  *     "erased", a changed colour "retoned"; unsupported structure over ordinary wall is "invented-detail" and kept;
@@ -74,6 +75,18 @@ export const MIN_REGION_M2 = 3;
 export const FEATHER_M = 0.5;
 /** More of the wall's covered area flagged than this, and the whole wall keeps its input. */
 export const MAX_FLAGGED_SHARE = 0.35;
+/**
+ * Structure is supported when it correlates with the input's anywhere within this distance (metres): a redraw that keeps
+ * the wall but lays its openings a little off the melted tile's (the plates the user chose drift 0.2-0.4 m) still shows
+ * the same element there. Searched in steps of AUDIT_DRIFT_STEP_M.
+ */
+export const AUDIT_DRIFT_M = 0.5;
+export const AUDIT_DRIFT_STEP_M = 0.15;
+/**
+ * A shifted correlation counts less by this much: the best of many shifts is high by chance on unrelated texture, so
+ * structure found only off its place must correlate clearly (MIN_SUPPORT_NCC + this) to count as the same element.
+ */
+export const DRIFT_NCC_PENALTY = 0.25;
 
 /** Open labels: diagnostic only, never branched on. */
 export type FlagKind = 'replaced' | 'erased' | 'retoned' | 'contradicts-photo' | 'invented-detail' | (string & {});
@@ -213,7 +226,7 @@ export function windowStructure(a: Float32Array, b: Float32Array, use: Uint8Arra
 }
 
 /** The per-cell features of a plate against its input (see the file comment). */
-export function plateFeatures(input: Uint8Array, plate: Uint8Array, W: number, H: number, use: Uint8Array, pixelM: number): CellFeatures {
+export function plateFeatures(input: Uint8Array, plate: Uint8Array, W: number, H: number, use: Uint8Array, pixelM: number, driftM = AUDIT_DRIFT_M): CellFeatures {
     const g = cellGrid(W, H, use, pixelM);
     const [Li, Ai, Bi] = labPlanes(input, W * H), [Lo, Ao, Bo] = labPlanes(plate, W * H);
     const r = Math.max(2, Math.round(TONE_BLUR_M / pixelM));
@@ -233,7 +246,19 @@ export function plateFeatures(input: Uint8Array, plate: Uint8Array, W: number, H
         const m = boxSum(Sn, W, x0, y0, x1, y1);
         if (m > 0) toneDe[cy * g.cw + cx] = boxSum(S, W, x0, y0, x1, y1) / m;
     }
-    const st = windowStructure(bandPass(Li, use, W, H, pixelM), bandPass(Lo, use, W, H, pixelM), use, W, H, g);
+    const bi = bandPass(Li, use, W, H, pixelM), bo = bandPass(Lo, use, W, H, pixelM);
+    const st = windowStructure(bi, bo, use, W, H, g);
+    // the best correlation within the drift: the plate's band shifted against the input's
+    const R = Math.round(driftM / pixelM), step = Math.max(1, Math.round(AUDIT_DRIFT_STEP_M / pixelM));
+    if (R > 0) {
+        const shifted = new Float32Array(W * H);
+        for (let dy = -R; dy <= R; dy += step) for (let dx = -R; dx <= R; dx += step) {
+            if (!dx && !dy) continue;
+            for (let y = 0; y < H; y++) { const sy = Math.min(H - 1, Math.max(0, y + dy)); for (let x = 0; x < W; x++) shifted[y * W + x] = bo[sy * W + Math.min(W - 1, Math.max(0, x + dx))]; }
+            const s = windowStructure(bi, shifted, use, W, H, g);
+            for (let k = 0; k < st.ncc.length; k++) { const v = s.ncc[k] - DRIFT_NCC_PENALTY; if (Number.isFinite(v) && !(v <= st.ncc[k])) st.ncc[k] = v; }
+        }
+    }
     // how far each cell of the input stands out from the wall as a whole (a dark bay, a storefront, a stone base)
     const rd = Math.max(2, Math.round(DISTINCT_BLUR_M / pixelM));
     const inD = [maskedBlur(Li, use, W, H, rd), maskedBlur(Ai, use, W, H, rd), maskedBlur(Bi, use, W, H, rd)];
@@ -343,8 +368,8 @@ export function describeRegions(labels: string[], g: CellGrid, pixelM: number, W
 }
 
 /** The invention and erasure check of `plate` (aligned to `input`, both W x H RGBA8) over the texels `use` marks. */
-export function auditPlate(input: Uint8Array, plate: Uint8Array, W: number, H: number, use: Uint8Array, pixelM: number): PlateAudit & { features: CellFeatures; labels: string[]; inventedDetailM2: number } {
-    const features = plateFeatures(input, plate, W, H, use, pixelM);
+export function auditPlate(input: Uint8Array, plate: Uint8Array, W: number, H: number, use: Uint8Array, pixelM: number, driftM = AUDIT_DRIFT_M): PlateAudit & { features: CellFeatures; labels: string[]; inventedDetailM2: number } {
+    const features = plateFeatures(input, plate, W, H, use, pixelM, driftM);
     const labels = classifyCells(features);
     const { regions, flagged } = describeRegions(labels.map(l => (KEPT_KINDS.has(l) ? '' : l)), features, pixelM, W, H, { toneDe: features.toneDe, ncc: features.nccIn });
     const inventedDetailM2 = Math.round(labels.reduce((t, l, k) => t + (KEPT_KINDS.has(l) ? features.cover[k] : 0), 0) * (features.cellPx * pixelM) ** 2 * 10) / 10;

@@ -265,8 +265,8 @@ describe('tree separation', () => {
     });
 });
 
-describe('enhanced mode (alignment gate and plate prompt)', () => {
-    it('accepts a sharper redraw a few pixels off (corrected) and rejects one whose openings moved', async () => {
+describe('enhanced mode (alignment, reported, and plate prompt)', () => {
+    it('corrects a sharper redraw a few pixels off and reports how far a redraw\'s openings moved (the identity gate decides)', async () => {
         const { alignPlate } = await import('../src/node/3d-engine/staged-location/pipeline-e/enhance');
         const W = 300, H = 120;
         const { tex } = facade(W, H, 6, 1, 20);
@@ -281,7 +281,9 @@ describe('enhanced mode (alignment gate and plate prompt)', () => {
         // openings moved: a facade with 5 bays instead of 6
         const moved = facade(W, H, 5, 1, 0).tex.rgba;
         const bad = alignPlate(tex.rgba, moved, W, H, use, 0.05);
-        expect(bad.accepted).toBe(false);
+        expect(bad.chamferPx).toBeGreaterThan(ok.chamferPx + 1);
+        expect(bad.lostShare).toBeGreaterThan(ok.lostShare);
+        expect(bad.why).toMatch(/reported/);
         const rgba = new Uint8Array(W * 3 * H * 4);
         for (let y = 0; y < H; y++) { rgba.set(tex.rgba.subarray(y * W * 4, (y + 1) * W * 4), y * W * 12); rgba.set(ok.aligned.subarray(y * W * 4, (y + 1) * W * 4), y * W * 12 + W * 4); rgba.set(bad.aligned.subarray(y * W * 4, (y + 1) * W * 4), y * W * 12 + W * 8); }
         shot('enhance_alignment_gate.png', W * 3, H, rgba);

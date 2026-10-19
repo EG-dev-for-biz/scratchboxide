@@ -45,6 +45,8 @@ import type { EnhanceModelClient } from '../texture-enhance';
 import { decodeOrtho, checkAgainstScan, readReliefOrthos } from '../facade-grammar';
 import { enhanceOrder, enhanceWall, ENHANCE_CONCURRENCY, TEXTURE_PLATE_PROMPT_ID, TEXTURE_PLATE_STREET_VIEW_PROMPT_ID, type EnhanceWallRecord, type PlateModelClient, type WallStreetView } from './enhance';
 import { bestStreetViewForWall, rectifiedReference, type GuideView } from './plate-streetview';
+import { visionFacadeCounter } from './plate-identity';
+import { refitLatticeToPlate } from './plate-lattice';
 
 export interface StepRecord { step: string; proposed: number; accepted: number; rejected: number; skipped?: string; notes: string[]; ms: number }
 
@@ -66,7 +68,7 @@ export interface InferenceInput {
     inpaint?: { client: EnhanceModelClient; models: string[]; maxRects?: number };
     solar?: Array<{ pitchDeg: number; areaM2: number; x: number; z: number }>;
     anchor?: { x: number; z: number };
-    /** Enhanced mode (opt-in): each large wall redrawn once by an image model (enhance.ts), gated on edge alignment. */
+    /** Enhanced mode: each large wall redrawn once by an image model (enhance.ts), gated on identity (plate-identity.ts). */
     enhance?: {
         client: PlateModelClient; models: string[]; locationName: string; maxWalls?: number;
         /** The invention and erasure check and the Street View guidance (default on; enhance.ts enhanceGuards). */
@@ -145,6 +147,23 @@ function latticePixels(g: FacadeGrammar, f: MassingFace): Array<Array<{ x0: numb
 }
 
 const now = () => Date.now();
+
+/** The lattice diagnostic: the wall's final texture with the tile's openings (red) and the openings read from the plate (green). */
+export function writeLatticeDiagnostic(file: string, rgba: Uint8Array, f: MassingFace, tileG: FacadeGrammar, plateG: FacadeGrammar): void {
+    const W = f.width, H = f.height, rgb = new Uint8Array(W * H * 3);
+    for (let i = 0; i < W * H; i++) rgb.set(rgba.subarray(i * 4, i * 4 + 3), i * 3);
+    const box = (g: FacadeGrammar, c: [number, number, number], inset: number) => {
+        for (const cell of latticePixels(g, f).flat()) {
+            const x0 = Math.round(cell.x0) + inset, x1 = Math.round(cell.x1) - inset, y0 = Math.round(cell.y0) + inset, y1 = Math.round(cell.y1) - inset;
+            const put = (x: number, y: number) => { if (x >= 0 && y >= 0 && x < W && y < H) rgb.set(c, (y * W + x) * 3); };
+            for (let x = x0; x <= x1; x++) { put(x, y0); put(x, y1); }
+            for (let y = y0; y <= y1; y++) { put(x0, y); put(x1, y); }
+        }
+    };
+    box(tileG, [255, 40, 40], 0);
+    box(plateG, [40, 255, 80], 1);
+    fs.writeFileSync(file, encodePng(W, H, Buffer.from(rgb), 3));
+}
 /** The enhanced plates' grammar (up to 2 walls, about a minute) starts only this long into the stage (its limit is 420 s). */
 export const PLATE_GRAMMAR_LATEST_MS = 310_000;
 
@@ -476,6 +495,7 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
     // ------------------------------------------------------------------ enhanced mode (opt-in): each large wall redrawn once, gated
     let runOut = run2;
     const enhanced: EnhanceWallRecord[] = [];
+    const latticeRefits: Array<Record<string, unknown>> = [];
     if (input.enhance) {
         t = now();
         const enhStep = rec('enhance');
@@ -530,12 +550,24 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
             const before = { width: tex.width, height: tex.height, rgba: tex.rgba.slice() };
             const r = await enhanceWall(f, tex, use, {
                 client: input.enhance!.client, models: input.enhance!.models, locationName: input.enhance!.locationName, ...(refTex ? { reference: refTex } : {}), source: ENH,
-                guards, ...(input.enhance!.cacheDir ? { cacheDir: input.enhance!.cacheDir } : {}), ...(sv ? { streetView: sv, streetViewSource: sourceForPano(sv.view.panoId) } : {}), ...(noSv ? { noStreetView: noSv } : {}), ...(input.signal ? { signal: input.signal } : {})
+                guards, ...(input.enhance!.cacheDir ? { cacheDir: input.enhance!.cacheDir } : {}), ...(sv ? { streetView: sv, streetViewSource: sourceForPano(sv.view.panoId) } : {}), ...(noSv ? { noStreetView: noSv } : {}),
+                ...(chain ? { counter: visionFacadeCounter(chain) } : {}), ...(input.signal ? { signal: input.signal } : {})
             });
             enhanced.push({ ...r, ...(ref ? { referenceFace: ref.index } : {}), plate: undefined, guarded: undefined, labels: undefined, grid: undefined } as EnhanceWallRecord);
             enhStep.proposed++;
-            if (r.accepted) { enhStep.accepted++; finished.push(f); if (r.plate) plates.set(f.index, { plate: tex.rgba.slice(), use }); } else enhStep.rejected++;
-            enhStep.notes.push(`wall ${f.index}: ${r.accepted ? 'enhanced' : 'kept its tile texture'}: ${r.why}${r.model ? ` (${r.model})` : ''}${ref ? `; reference wall ${ref.index}` : ''}${sv ? `; ${sv.why}${r.streetView?.guidedRejected ? ` (the redraw with it failed the alignment gate: ${r.streetView.guidedRejected}; redrawn without it, then checked against it)` : ''}` : guards && noSv ? `; no Street View guidance: ${noSv}` : ''}`);
+            if (r.accepted) {
+                enhStep.accepted++; finished.push(f);
+                // the wall's own provenance entry: the generic one with this wall's alignment numbers (reported, not gated)
+                const used = new Set<number>(), svIdx = r.streetView ? svSource.get(r.streetView.panoId) : undefined;
+                for (let i = 0; i < tex.source.length; i++) if (tex.source[i] === ENH || tex.source[i] === svIdx) used.add(tex.source[i]);
+                for (const k of used) {
+                    const own = legend.length;
+                    legend.push({ ...legend[k], source: `${legend[k].source}:wall-${f.index}`, method: `${legend[k].method}; wall ${f.index}: edge chamfer ${r.chamferPx?.toFixed(2)} px (${((r.chamferPx ?? 0) * f.pixel).toFixed(2)} m), ${Math.round(100 * (r.lostShare ?? 0))}% of the tile's edges with no plate edge within 0.3 m (reported, not gated)${r.identity ? `; storeys ${r.identity.storeys.tile ?? '-'} / ${r.identity.storeys.plate ?? '-'}, bays ${r.identity.bays.tile ?? '-'} / ${r.identity.bays.plate ?? '-'} (tile / plate), wall colour ${r.identity.colourDe} dE00` : ''}`, chamferPx: r.chamferPx, lostShare: r.lostShare });
+                    for (let i = 0; i < tex.source.length; i++) if (tex.source[i] === k) tex.source[i] = own;
+                }
+                if (r.plate) plates.set(f.index, { plate: tex.rgba.slice(), use });
+            } else enhStep.rejected++;
+            enhStep.notes.push(`wall ${f.index}: ${r.accepted ? 'enhanced' : 'kept its tile texture'}: ${r.why}${r.model ? ` (${r.model})` : ''}${ref ? `; reference wall ${ref.index}` : ''}${sv ? `; ${sv.why}${r.streetView?.guidedRejected ? ` (the redraw with it failed the identity gate: ${r.streetView.guidedRejected}; redrawn without it, then checked against it)` : ''}` : guards && noSv ? `; no Street View guidance: ${noSv}` : ''}`);
             try {
                 if (r.plate) writeEnhanceDiagnostic(path.join(input.dir, `wall_${f.index}_tile_vs_enhanced.png`), before.rgba, r.plate, r.guarded, r.labels, r.grid, sv?.rect.rgba, sv?.rect.valid, tex.width, tex.height);
             } catch { /* diagnostics only */ }
@@ -549,8 +581,32 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
             await Promise.all(round.map(f => enhanceOne(f)));
             done.push(...order.filter(f => finished.includes(f) && !done.includes(f)));
         }
+        // the carved openings follow the plate: on a wall whose openings came from the tile's lattice, the lattice is read again
+        // from the accepted plate (its windows may lie a few decimetres off the melted tile's), within the same massing
+        const latStep = rec('enhance-lattice');
+        let refitChanged = false;
+        for (const g of grammars) {
+            const pl = plates.get(g.facadeId);
+            if (!pl) continue;
+            const f = faces[g.facadeId], tex = textures.get(f.index)!;
+            const r = refitLatticeToPlate(g, f, tex.rgba, pl.use);
+            latStep.proposed++;
+            if (r.moved) {
+                latStep.accepted++; refitChanged = true;
+                const prefix = `win_${f.index}_`;
+                const keep = openings.filter(o => !o.id.startsWith(prefix));
+                openings.length = 0;
+                openings.push(...keep, ...openingsFromGrammar(run, f, r.grammar, `win_${f.index}`).openings);
+                latticeRefits.push({ face: f.index, ...r, grammar: undefined, tiles: g.tiers, plate: r.grammar.tiers });
+            } else latStep.rejected++;
+            latStep.notes.push(`wall ${f.index}: ${r.why}`);
+            try { writeLatticeDiagnostic(path.join(input.dir, `wall_${f.index}_lattice_refit.png`), tex.rgba, f, g, r.grammar); } catch { /* diagnostics only */ }
+        }
+        if (!latStep.proposed) latStep.skipped = grammars.length ? 'no enhanced wall has openings carved from the tile\'s lattice' : 'no facade grammar was accepted on the tile';
+
         // the grammar read from the enhanced plates, used only where it passes the grammar's own gates and the scan/tile check
         const plateStep = rec('enhance-grammar');
+        const extra: OpeningItem[] = [];
         const elapsed = now() - tRead;
         if (chain && plates.size && elapsed > PLATE_GRAMMAR_LATEST_MS) plateStep.skipped = `no time left in the stage (${Math.round(elapsed / 1000)} s spent; the plates' grammar starts only before ${PLATE_GRAMMAR_LATEST_MS / 1000} s)`;
         else if (chain && plates.size) {
@@ -567,7 +623,6 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
             fs.writeFileSync(path.join(pdir, 'facades.json'), JSON.stringify({ schema: 'scratchbox.relief-orthos/1', facades: index }));
             if (index.length) {
                 const pass = await runFacadeGrammarPass({ orthosDir: pdir, chain, maxFacades: 2, ...(input.signal ? { signal: input.signal } : {}), onProgress: m => progress(`enhanced plates: ${m}`) });
-                const extra: OpeningItem[] = [];
                 for (const o of pass.facades) {
                     if (!o.grammar) continue;
                     plateStep.proposed++;
@@ -579,12 +634,12 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
                         plateStep.notes.push(`wall ${o.facadeId}: the plate's grammar is used: ${o.reason.slice(0, 160)}; on the tile ortho: ${tileCheck.why.slice(0, 120)}`);
                     } else { plateStep.rejected++; plateStep.notes.push(`wall ${o.facadeId}: not used: ${o.accepted ? `on the tile ortho: ${tileCheck?.why}` : o.reason.slice(0, 200)}`); }
                 }
-                if (extra.length) {
-                    progress('enhanced mode: building the solid again with the plates\' openings');
-                    runOut = await runNativeMassing({ parts: allParts, meshes: massing.meshes }, { tilePath: input.tilePath, isolateGlb: input.isolateGlb, dir: path.join(input.dir, 'native3'), sweeps, openings: [...openings, ...extra], params: { snapMaxM: 0, sections: 0, topdown: 0 }, ...(input.signal ? { signal: input.signal } : {}) });
-                }
             }
         } else plateStep.skipped = chain ? 'no wall was enhanced' : noVision;
+        if (extra.length || refitChanged) {
+            progress('enhanced mode: building the solid again with the plates\' openings');
+            runOut = await runNativeMassing({ parts: allParts, meshes: massing.meshes }, { tilePath: input.tilePath, isolateGlb: input.isolateGlb, dir: path.join(input.dir, 'native3'), sweeps, openings: [...openings, ...extra], params: { snapMaxM: 0, sections: 0, topdown: 0 }, ...(input.signal ? { signal: input.signal } : {}) });
+        }
         enhStep.ms = now() - t;
         timingsMs.enhance = now() - t;
     }
@@ -601,7 +656,7 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
     }
     const files = writeMassingLayer(runOut, massing, tex2, legend, input.dir, input.stage, input.stageKey, input.enhance ? 'massing_enhanced' : 'massing_inferred');
     timingsMs.glb = now() - t;
-    fs.writeFileSync(path.join(input.dir, 'inference.json'), JSON.stringify({ steps, enhanced, roof: roofDecisions, grammars: grammarOutcomes.map(o => ({ facadeId: o.facadeId, accepted: o.accepted, reason: o.reason })), colour, straightened: straightened.map(s => ({ ...s, texture: undefined })), timingsMs }, null, 1));
+    fs.writeFileSync(path.join(input.dir, 'inference.json'), JSON.stringify({ steps, enhanced, latticeRefits, roof: roofDecisions, grammars: grammarOutcomes.map(o => ({ facadeId: o.facadeId, accepted: o.accepted, reason: o.reason })), colour, straightened: straightened.map(s => ({ ...s, texture: undefined })), timingsMs }, null, 1));
     // the overlays: each wall's final texture beside its plain one (diagnostics)
     try {
         for (const g of grammars) {

@@ -8,25 +8,26 @@
  ********************************************************************************/
 
 /**
- * Pipeline E, enhanced mode (opt-in: SCRATCHBOX_STAGED_ENHANCE=1 or the tool's `enhance: true`; never the default). It
- * trades some strict realism for clean, believable detail, and says so: every texel it writes is labelled `generated`,
- * "AI-enhanced from tile (model, prompt id)".
+ * Pipeline E, enhanced mode (the default within pipeline E since round 4, the realism-first directive; the real-data view is
+ * `enhance: false` or SCRATCHBOX_STAGED_ENHANCE=0). Every texel it writes is labelled `generated`, "AI-enhanced from tile
+ * (model, prompt id)", with the wall's alignment numbers.
  *
  * Each large wall's straight-on texture (E's, after inference) is redrawn exactly once by an image model with the AI
  * Beautify prompt's texture-plate variant (buildTexturePlatePrompt), the adjacent wall already finished sent as a reference
- * so materials match across corners. The answer is resized to the input and must keep the input's geometry:
+ * so materials match across corners. The answer is resized to the input, then:
  *
  *   - a small corrective warp (a shift of up to MAX_SHIFT_PX and a scale within MAX_SCALE) is searched to best align its
- *     edges with the input's;
- *   - the wall is rejected when, after it, the symmetric edge chamfer exceeds MAX_CHAMFER_PX, or more than MAX_LOST_SHARE
- *     of the input's edge pixels have no edge of the answer within LOST_EDGE_M (an opening moved, vanished or changed
- *     size). A rejected wall keeps its tile texture.
+ *     edges with the input's; the symmetric edge chamfer and the share of the input's edges with no edge of the answer
+ *     within LOST_EDGE_M are measured and reported, not gated (round 5: the user chose redraws at 3.5-4.4 px);
+ *   - the identity gate (plate-identity.ts): same framing and aspect, storey and bay rhythm, wall colour family, and a loose
+ *     gross-failure bound on chamfer and lost share; a wall that fails it keeps its tile texture;
+ *   - the region-level identity audit (plate-audit.ts) and, with a Street View photo of the wall, the photo check.
  */
 
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { LIGHTING_PROMPTS } from '../texture-lighting';
+import { LIGHTING_MODEL_LITE, LIGHTING_PROMPTS } from '../texture-lighting';
 import { buildTexturePlatePrompt, TEXTURE_PLATE_PROMPT_ID, TEXTURE_PLATE_STREET_VIEW_PROMPT_ID } from '../../../../browser/generative-canvas/services/location-beautify-service';
 import { edgeMap, exactDistanceTransform } from '../../../spatial/StreetViewStage3Metrics';
 import { decodeImageInMemory, type RgbaImage8 } from '../tile-texture-transfer';
@@ -39,13 +40,12 @@ import type { FaceTexture } from './massing-glb';
 import type { MassingFace } from './native-massing';
 import { auditPlate, cellMaskToPixels, describeRegions, revertRegions, KEPT_KINDS, MAX_FLAGGED_SHARE, type CellGrid, type FlaggedRegion } from './plate-audit';
 import { streetBandTop, verifyAgainstPhoto, type GuideView, type PhotoCheck, type RectifiedPhoto } from './plate-streetview';
+import { identityGate, GROSS_MAX_CHAMFER_PX, GROSS_MAX_LOST_SHARE, type FacadeCounter, type FacadeCounts, type IdentityGate } from './plate-identity';
 
 export const ENHANCE_MAX_SIDE = 1024;
 export const MAX_SHIFT_PX = 6;
 export const SEARCH_SIDE = 320;
 export const MAX_SCALE = 0.02;
-export const MAX_CHAMFER_PX = 2.2;
-export const MAX_LOST_SHARE = 0.15;
 export const LOST_EDGE_M = 0.3;
 export const MIN_ENHANCE_AREA_M2 = 60;
 /** Survey views enhanced mode fetches (one wide view per face first, then more per face), each with a street-level view of the same pano. */
@@ -54,12 +54,12 @@ export const ENHANCE_STREET_VIEWS = 5;
 export const ENHANCE_CONCURRENCY = 3;
 
 /**
- * The image model redrawing the plates. Chosen on evidence (Puck and Haughwout, 5 walls, 2026-10-19): the full model kept
- * the geometry (edge chamfer 1.54-1.94 px, 2-4% of the tile's edges lost; 4 of 5 walls passed) where Nano Banana Lite
- * invented storefronts and repainted a fire escape as windows (1.80-4.35 px, 7-38% lost; 2 of 5 passed).
- * SCRATCHBOX_STAGED_ENHANCE_MODELS overrides (comma-separated).
+ * The image model redrawing the plates: Nano Banana Lite, the user's choice after the round-4 comparison sheets (its redraws
+ * of Puck wall 17 and Jefferson wall 157, which the old 2.2 px alignment gate rejected, judged the most realistic; the full
+ * model kept the tile's edges more closely, 1.05-1.95 px, but looked less real). SCRATCHBOX_STAGED_ENHANCE_MODELS overrides
+ * (comma-separated).
  */
-export const ENHANCE_MODEL_DEFAULT = 'gemini-3.1-flash-image';
+export const ENHANCE_MODEL_DEFAULT = LIGHTING_MODEL_LITE;
 export function enhanceModels(env: NodeJS.ProcessEnv = process.env): string[] {
     const m = (env.SCRATCHBOX_STAGED_ENHANCE_MODELS ?? '').split(',').map(x => x.trim()).filter(Boolean);
     return m.length ? m : [ENHANCE_MODEL_DEFAULT];
@@ -140,8 +140,9 @@ function transform(src: Uint8Array, W: number, H: number, dx: number, dy: number
 }
 
 /**
- * The alignment gate: the corrective warp (shift and scale) that brings the answer's edges nearest the input's, then the
- * symmetric chamfer and the share of the input's edges the answer lost. `use` marks the texels the tile covers.
+ * The alignment: the corrective warp (shift and scale) that brings the answer's edges nearest the input's, then the
+ * symmetric chamfer and the share of the input's edges the answer lost (`use` marks the texels the tile covers). Both are
+ * reported; `accepted` is only the loose gross-failure bound (plate-identity.ts), the identity gate decides the rest.
  */
 export function alignPlate(input: Uint8Array, answer: Uint8Array, W: number, H: number, use: Uint8Array, pixelM: number): AlignResult {
     // the search on a copy at most SEARCH_SIDE px long (shift in its pixels), the measurement at full size
@@ -176,8 +177,8 @@ export function alignPlate(input: Uint8Array, answer: Uint8Array, W: number, H: 
     }
     const chamfer = 0.5 * ((nOut ? fwd / nOut : 8) + (nIn ? back / nIn : 8));
     const lostShare = nIn ? lost / nIn : 1;
-    const accepted = chamfer <= MAX_CHAMFER_PX && lostShare <= MAX_LOST_SHARE;
-    const why = `corrective warp ${dx}, ${dy} px, scale ${best.s.toFixed(3)}; edge chamfer ${chamfer.toFixed(2)} px (at most ${MAX_CHAMFER_PX}); ${(100 * lostShare).toFixed(0)}% of the tile's edges with no edge within ${LOST_EDGE_M} m (at most ${100 * MAX_LOST_SHARE}%)`;
+    const accepted = chamfer <= GROSS_MAX_CHAMFER_PX && lostShare <= GROSS_MAX_LOST_SHARE;
+    const why = `corrective warp ${dx}, ${dy} px, scale ${best.s.toFixed(3)}; edge chamfer ${chamfer.toFixed(2)} px (${(chamfer * pixelM).toFixed(2)} m), ${(100 * lostShare).toFixed(0)}% of the tile's edges with no edge within ${LOST_EDGE_M} m (reported${accepted ? '' : `; beyond the gross-failure bound of ${GROSS_MAX_CHAMFER_PX} px or ${100 * GROSS_MAX_LOST_SHARE}%`})`;
     return { dx, dy, scale: best.s, chamferPx: Math.round(chamfer * 100) / 100, lostShare: Math.round(lostShare * 1000) / 1000, accepted, why, aligned };
 }
 
@@ -208,15 +209,35 @@ export interface EnhanceStreetViewRecord {
     comparedCells?: number;
     supportedCells?: number;
     contradictedCells?: number;
-    /** The photo-guided redraw failed the alignment gate (why); the wall was redrawn without the photo, which then only checked it. */
+    /** The photo-guided redraw failed the identity gate (why); the wall was redrawn without the photo, which then only checked it. */
     guidedRejected?: string;
     /** The photo was not sent to the model; it only checked the plate. */
     checkOnly?: boolean;
 }
 
+/** The identity gate's numbers for the record (plate-identity.ts). */
+export interface EnhanceIdentityRecord {
+    passed: boolean;
+    aspectDrift: number;
+    storeys: { tile?: number; plate?: number; measured: boolean; passed: boolean };
+    bays: { tile?: number; plate?: number; measured: boolean; passed: boolean };
+    colourDe: number;
+    colourPassed: boolean;
+    grossPassed: boolean;
+}
+
+export function identityRecord(g: IdentityGate): EnhanceIdentityRecord {
+    const r = (c: IdentityGate['storeys']) => ({ ...(c.tile !== undefined ? { tile: c.tile } : {}), ...(c.plate !== undefined ? { plate: c.plate } : {}), measured: c.measured, passed: c.passed });
+    return { passed: g.passed, aspectDrift: g.aspect.drift, storeys: r(g.storeys), bays: r(g.bays), colourDe: g.colour.de, colourPassed: g.colour.passed, grossPassed: g.gross.passed };
+}
+
 export interface EnhanceWallRecord {
-    face: number; key: string; accepted: boolean; why: string; model?: string; chamferPx?: number; lostShare?: number; referenceFace?: number; ms: number;
-    /** The invention and erasure check (absent when the alignment gate already rejected the wall, or the guards are off). */
+    face: number; key: string; accepted: boolean; why: string; model?: string;
+    /** Alignment after the corrective warp: reported, not gated (beyond the gross-failure bound). */
+    chamferPx?: number; lostShare?: number; referenceFace?: number; ms: number;
+    /** The identity gate (absent when the model did not answer). */
+    identity?: EnhanceIdentityRecord;
+    /** The invention and erasure check (absent when the identity gate already rejected the wall, or the guards are off). */
     audit?: EnhanceAuditRecord;
     /** The Street View photo that guided and checked the redraw, or why there was none. */
     streetView?: EnhanceStreetViewRecord;
@@ -224,8 +245,8 @@ export interface EnhanceWallRecord {
 }
 
 /**
- * SCRATCHBOX_STAGED_ENHANCE_GUARDS=0 turns off the invention and erasure check and the Street View guidance (enhanced mode
- * as it was before them: the alignment gate only). On by default.
+ * SCRATCHBOX_STAGED_ENHANCE_GUARDS=0 turns off the invention and erasure check and the Street View guidance (the identity
+ * gate only). On by default.
  */
 export function enhanceGuards(env: NodeJS.ProcessEnv = process.env): boolean {
     return env.SCRATCHBOX_STAGED_ENHANCE_GUARDS !== '0';
@@ -277,17 +298,21 @@ export function guardPlate(input: Uint8Array, aligned: Uint8Array, W: number, H:
 }
 
 /**
- * Redraws one wall once and gates it: the alignment gate, then (guards on) the invention and erasure check and, with a
+ * Redraws one wall once and gates it: the identity gate, then (guards on) the invention and erasure check and, with a
  * Street View photo of the wall, the photo check; flagged regions revert to the input, feathered. On acceptance the wall's
  * texels become the guarded plate with `source` (or `streetViewSource` when a photo guided it); reverted texels keep theirs.
  */
 export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Array, opts: {
     client: PlateModelClient; models: string[]; locationName: string; reference?: FaceTexture; source: number; signal?: AbortSignal;
     guards?: boolean; streetView?: WallStreetView; streetViewSource?: number; noStreetView?: string;
-    /** When the photo-guided redraw fails the alignment gate, redraw once without the photo (default true). */
+    /** When the photo-guided redraw fails the identity gate, redraw once without the photo (default true). */
     retryWithoutPhoto?: boolean;
     /** Do not send the photo; only check the plate against it (the redraw after a photo-guided one failed the gate). */
     photoCheckOnly?: boolean;
+    /** Reads storey and bay counts of the tile and of the plate (plate-identity.ts); without it the counts are not checked. */
+    counter?: FacadeCounter;
+    /** The tile's counts when already read (the redraw without the photo reuses them). */
+    tileCounts?: Promise<FacadeCounts>;
     /**
      * Where answers are kept, keyed by everything the model is sent (models, prompt, images): the same wall with the same
      * inputs gets the same plate on every rebuild.
@@ -309,6 +334,10 @@ export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Arra
     const base = { face: f.index, key: f.key, ...(svRec ? { streetView: svRec } : {}), ...(guards && !sv && opts.noStreetView ? { noStreetView: opts.noStreetView } : {}) };
     let answer: PlateAnswer;
     const image = new Uint8Array(encodePng(padded.width, padded.height, Buffer.from(padded.rgba), 4));
+    const widthM = t.width * f.pixel, heightM = t.height * f.pixel;
+    // the tile's storeys and bays, read while the model redraws (the same prompt reads the plate's after)
+    const tileCounts = opts.tileCounts ?? (opts.counter ? opts.counter(new Uint8Array(encodePng(sw, sh, Buffer.from(small.rgba), 4)), widthM, heightM) : undefined);
+    tileCounts?.catch(() => undefined);
     const request: PlateRequest = { prompt, image, width: padded.width, height: padded.height, ...(ref ? { reference: ref } : {}), ...(guide ? { streetView: sv!.crop } : {}), models: opts.models, ...(opts.signal ? { signal: opts.signal } : {}) };
     try {
         answer = await cachedPlate(opts.cacheDir, request, opts.client);
@@ -323,23 +352,33 @@ export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Arra
     for (let y = 0; y < sh; y++) inner.set(full.rgba.subarray(((offset[1] + y) * full.width + offset[0]) * 4, ((offset[1] + y) * full.width + offset[0] + sw) * 4), y * sw * 4);
     const back = resizeRgba({ width: sw, height: sh, rgba: inner }, t.width, t.height).rgba;
     const g = alignPlate(t.rgba, back, t.width, t.height, use, f.pixel);
-    const rec = { ...base, accepted: g.accepted, why: g.why, model: answer.modelUsed, chamferPx: g.chamferPx, lostShare: g.lostShare, ms: Date.now() - t0, plate: g.aligned };
-    if (!g.accepted && guide && opts.retryWithoutPhoto !== false) {
-        // the photo pulled the redraw off the wall's geometry: one more redraw without it; the tile check and the check against
-        // the photo still apply
-        const again = await enhanceWall(f, t, use, { ...opts, photoCheckOnly: true });
-        return { ...again, ms: Date.now() - t0, streetView: { ...(again.streetView ?? svRec!), guidedRejected: g.why } };
+    let counts: { tile?: FacadeCounts; plate?: FacadeCounts; unread?: string } | undefined;
+    if (opts.counter && tileCounts) {
+        const plateSmall = resizeRgba({ width: t.width, height: t.height, rgba: g.aligned }, sw, sh);
+        const [tc, pc] = await Promise.allSettled([tileCounts, opts.counter(new Uint8Array(encodePng(sw, sh, Buffer.from(plateSmall.rgba), 4)), widthM, heightM)]);
+        counts = { ...(tc.status === 'fulfilled' ? { tile: tc.value } : {}), ...(pc.status === 'fulfilled' ? { plate: pc.value } : {}) };
+        const bad = [tc, pc].filter(x => x.status === 'rejected') as PromiseRejectedResult[];
+        if (bad.length) counts.unread = `the count could not be read: ${String((bad[0].reason as Error)?.message ?? bad[0].reason).slice(0, 120)}`;
+    } else counts = { unread: 'no vision model to count with' };
+    const idg = identityGate(t.rgba, g.aligned, t.width, t.height, use, { askedAspect: padded.width / padded.height, answeredAspect: dec.width / dec.height, chamferPx: g.chamferPx, lostShare: g.lostShare, counts });
+    const why0 = `corrective warp ${g.dx}, ${g.dy} px, scale ${g.scale.toFixed(3)}; ${idg.why}`;
+    const rec = { ...base, accepted: idg.passed, why: idg.passed ? why0 : `not the same wall: ${why0}`, model: answer.modelUsed, chamferPx: g.chamferPx, lostShare: g.lostShare, identity: identityRecord(idg), ms: Date.now() - t0, plate: g.aligned };
+    if (!idg.passed && guide && opts.retryWithoutPhoto !== false) {
+        // the photo pulled the redraw away from the wall: one more redraw without it; the tile check and the check against the
+        // photo still apply
+        const again = await enhanceWall(f, t, use, { ...opts, photoCheckOnly: true, ...(tileCounts ? { tileCounts } : {}) });
+        return { ...again, ms: Date.now() - t0, streetView: { ...(again.streetView ?? svRec!), guidedRejected: rec.why } };
     }
-    if (!g.accepted) return rec;
+    if (!idg.passed) return rec;
     let out = g.aligned, weight: Float32Array | undefined;
     let extra: { audit?: EnhanceAuditRecord; guarded?: Uint8Array; labels?: string[]; grid?: CellGrid } = {};
     if (guards) {
         const gp = guardPlate(t.rgba, g.aligned, t.width, t.height, use, f.pixel, sv ? { rect: sv.rect, bandTop: streetBandTop(f) } : undefined);
         if (svRec && gp.photo) Object.assign(svRec, { shiftPx: gp.photo.shiftPx, nccPlate: gp.photo.nccPlate, nccInput: gp.photo.nccInput, comparedCells: gp.photo.comparedCells, supportedCells: gp.photo.supportedCells, contradictedCells: gp.photo.contradictedCells });
         extra = { audit: gp.audit, guarded: gp.rgba, labels: gp.labels, grid: gp.grid };
-        if (gp.reject) return { ...rec, ...extra, accepted: false, why: `${g.why}; ${gp.why}`, ms: Date.now() - t0 };
+        if (gp.reject) return { ...rec, ...extra, accepted: false, why: `${rec.why}; ${gp.why}`, ms: Date.now() - t0 };
         out = gp.rgba; weight = gp.weight;
-        rec.why = `${g.why}; ${gp.why}`;
+        rec.why = `${rec.why}; ${gp.why}`;
     }
     const src = guide && opts.streetViewSource !== undefined ? opts.streetViewSource : opts.source;
     for (let i = 0; i < t.width * t.height; i++) {

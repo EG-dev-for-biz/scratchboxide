@@ -2287,7 +2287,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const pubClay = cache.publishFile(out.files.clayGlb, `${base}_massing_${key8}_${suffix}.glb`);
                     const pubTex = cache.publishFile(out.files.texturedGlb, `${base}_massing_${key8}_${suffix}_tex.glb`);
                     const enh = out.enhanced;
-                    const enhNote = enhanceOn ? `; enhanced mode (opt-in) was used: ${enh.filter(x => x.accepted).length} of ${enh.length} walls redrawn by ${enhanceModels().join(', ')} and kept (labelled generated, "AI-enhanced from tile"), ${enh.filter(x => !x.accepted).length} rejected by the alignment gate and keep the tile texture${visionAvailable ? '' : ' (no image model: nothing was enhanced)'}` : '';
+                    const enhNote = enhanceOn ? `; enhanced mode (opt-in) was used: ${enh.filter(x => x.accepted).length} of ${enh.length} walls redrawn by ${enhanceModels().join(', ')} and kept (labelled generated, "AI-enhanced from tile"), ${enh.filter(x => !x.accepted).length} rejected (identity gate or region audit) and keep the tile texture; edge chamfer per wall ${enh.filter(x => x.chamferPx !== undefined).map(x => `${x.face} ${x.chamferPx} px / ${Math.round(100 * (x.lostShare ?? 0))}% lost`).join(', ') || 'none'} (reported, not gated)${visionAvailable ? '' : ' (no image model: nothing was enhanced)'}` : '';
                     const describe = out.steps.map(s => `${s.step}: ${s.skipped ? `skipped (${s.skipped})` : `${s.accepted} of ${s.proposed} kept`}`).join('; ') + enhNote;
                     const layer: StagedLayer = {
                         objectId: layerObjectId(e.key, 'l2g'), stage: 'grammar', layer: 'l2g', order: STAGES.grammar.order, url: pubClay.url, bytes: pubClay.bytes,
@@ -2296,7 +2296,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [e.layer.objectId] }, cached: false, builtAtMs: now(), counts: layerCounts(out.files.clayGlb),
                         textured: {
                             url: pubTex.url, bytes: pubTex.bytes, ladderRung: out.files.texturedShares.findIndex((_, k, a) => a.slice(k + 1).reduce((x, y) => x + y, 0) <= 0.1),
-                            rungShares: out.files.texturedShares, provenance: out.legend.map(x => ({ source: x.source, label: x.label, method: x.method, coverage: 0 })),
+                            rungShares: out.files.texturedShares, provenance: out.legend.map(x => ({ source: x.source, label: x.label, method: x.method, coverage: 0, ...(x.chamferPx !== undefined ? { chamferPx: x.chamferPx } : {}), ...(x.lostShare !== undefined ? { lostShare: x.lostShare } : {}) })),
                             confidenceChannels: 'R = index into provenance[], G = weight 0..255, B = ladder rung (TEXTURE_LADDER_RUNGS), A = 255 where a stage produced the texel', builtAtMs: now(), cached: false
                         }
                     };
