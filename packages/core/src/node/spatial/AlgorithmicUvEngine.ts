@@ -16,6 +16,7 @@ import { decodeImageToRgba, encodeRgbaToJpeg, readImageDimensions, sniffImageFor
 import { encodePng } from '../texture-processing';
 import { fitSolarShading, labelTexelCharts, type SolarShadingFitOptions, type SolarShadingFitResult } from './solar-shading-fit';
 import { readAccessor, nodeWorldMatrices, type Mat4 } from '../3d-engine/staged-location/glb-bytes';
+import { unwrapRewrapGlb, type UvRewrapOptions, type UvRewrapReport } from './UvAtlasRewrap';
 
 const SRGB8_TO_LINEAR = Float64Array.from({ length: 256 }, (_, i) => {
   const c = i / 255;
@@ -30,7 +31,13 @@ function linearToSrgb8(v: number): number {
 // Public Interfaces & Options Contracts
 // ============================================================================
 
-export type UvEngineMode = 'preserve-100-lock' | 'conformal-reparameterize';
+/**
+ * - 'preserve-100-lock': geometry and UVs untouched; PBR maps are computed from the baseColor pixels (processGlb below).
+ * - 'unwrap': new non-overlapping chart UVs (orthographic or LSCM per chart, by measured distortion) packed into one atlas
+ *   per material, written as a new TEXCOORD set; textures keep their own UVs.
+ * - 'rewrap': the same atlas replaces TEXCOORD_0 and every texture of the material is rebaked into it (UvAtlasRewrap.ts).
+ */
+export type UvEngineMode = 'preserve-100-lock' | 'unwrap' | 'rewrap';
 
 /**
  * Open profile identifier string supporting flexible prompts or lithology keywords.
@@ -234,6 +241,8 @@ export interface AlgorithmicUvOptions {
   boundaryToleranceMeters?: number;          // default 0.05
   submeshCategoryMap?: Record<number, string>;
   enablePartAwarePbr?: boolean;              // Dispatches biophysical material contracts per submesh part
+  /** 'unwrap' / 'rewrap' parameters; `transferSourceGlbPath` bakes from another mesh (nearest surface) on 'rewrap'. */
+  uvRewrap?: Omit<UvRewrapOptions, 'transferSource'> & { transferSourceGlbPath?: string; transferMaxDistanceM?: number; transferMaxNormalAngleDeg?: number };
 }
 
 export interface PbrDecompositionResult {
@@ -392,6 +401,8 @@ export interface AlgorithmicUvResult {
   solarSunSource?: SolarSunSource;
   khrExtensionsInjected?: string[];
   boundaryWeldingResult?: BoundarySeamWeldResult;
+  /** 'unwrap' / 'rewrap': charts, distortion, texel density, utilisation, rebaked and failed textures, timings. */
+  uvRewrap?: UvRewrapReport;
 }
 
 /**
@@ -668,17 +679,58 @@ export class AlgorithmicUvEngine {
    * High-level entry point to process any 3D model / scene (.glb) with the
    * Algorithmic UV Unwrap & Rewrap Engine.
    *
-   * Geometry and UVs are never modified ('preserve-100-lock' is the only implemented mode). Every embedded
+   * 'unwrap' and 'rewrap' are delegated to UvAtlasRewrap (new chart UVs, atlas packing, texture rebake); see
+   * UvEngineMode. In 'preserve-100-lock' geometry and UVs are never modified. Every embedded
    * baseColor image the materials sample is decoded (image-codec-ffmpeg) and the requested passes run on its
    * pixels: albedo de-lighting rewrites the baseColor image, and normal / roughness / occlusion maps are
    * encoded as PNG and attached to the materials' empty normalTexture, metallicRoughnessTexture and
    * occlusionTexture slots. An image that cannot be decoded is reported in `images` and makes `success` false.
    */
+  /** 'unwrap' / 'rewrap': new chart UVs and atlas (and for 'rewrap' every texture rebaked into it). */
+  private static async processUvAtlas(mode: 'unwrap' | 'rewrap', options: AlgorithmicUvOptions, startTime: number): Promise<AlgorithmicUvResult> {
+    let glbBuffer: Buffer;
+    if (options.inputGlbBuffer) glbBuffer = options.inputGlbBuffer;
+    else if (options.inputGlbPath && fs.existsSync(options.inputGlbPath)) glbBuffer = fs.readFileSync(options.inputGlbPath);
+    else throw new Error(`AlgorithmicUvEngine: No input GLB provided at '${options.inputGlbPath}'`);
+    const { transferSourceGlbPath, transferMaxDistanceM, transferMaxNormalAngleDeg, ...uv } = options.uvRewrap ?? {};
+    if (transferSourceGlbPath && mode !== 'rewrap') throw new Error('AlgorithmicUvEngine: transferSourceGlbPath needs mode \'rewrap\'');
+    if (transferSourceGlbPath && !fs.existsSync(transferSourceGlbPath)) throw new Error(`AlgorithmicUvEngine: transfer source '${transferSourceGlbPath}' does not exist`);
+    const { glb, report } = await unwrapRewrapGlb(mode, glbBuffer, {
+      ...uv,
+      ...(transferSourceGlbPath ? { transferSource: { glb: fs.readFileSync(transferSourceGlbPath), maxDistanceM: transferMaxDistanceM, maxNormalAngleDeg: transferMaxNormalAngleDeg } } : {})
+    });
+    if (options.outputGlbPath) {
+      fs.mkdirSync(path.dirname(options.outputGlbPath), { recursive: true });
+      fs.writeFileSync(options.outputGlbPath, glb);
+    }
+    const triangles = report.atlases.reduce((a, x) => a + x.triangles, 0);
+    return {
+      success: report.texturesFailed.length === 0,
+      mode,
+      lithologyProfile: options.lithologyProfile ?? '',
+      submeshesProcessed: report.atlases.reduce((a, x) => a + (x.status === 'skipped' ? 0 : x.primitives), 0),
+      trianglesProcessed: triangles,
+      verticesProcessed: report.atlases.reduce((a, x) => a + x.verticesIn, 0),
+      texelsProcessed: report.texturesRebaked.reduce((a, t) => a + t.outputSize[0] * t.outputSize[1], 0),
+      imagesProcessed: report.texturesRebaked.length,
+      imagesFailed: report.texturesFailed.length,
+      images: [],
+      attachments: { normalTextures: 0, metallicRoughnessTextures: 0, occlusionTextures: 0, unlitRemoved: 0 },
+      outputGlbPath: options.outputGlbPath,
+      outputGlbBuffer: glb,
+      executionTimeMs: performance.now() - startTime,
+      pbrSuiteGenerated: false,
+      backend: 'native-cpp',
+      uvRewrap: report
+    };
+  }
+
   public static async processGlb(options: AlgorithmicUvOptions): Promise<AlgorithmicUvResult> {
     const startTime = performance.now();
     const mode: UvEngineMode = options.mode ?? 'preserve-100-lock';
+    if (mode === 'unwrap' || mode === 'rewrap') return this.processUvAtlas(mode, options, startTime);
     if (mode !== 'preserve-100-lock') {
-      throw new Error(`AlgorithmicUvEngine: mode '${mode}' is not implemented (no UV reparameterization or atlas rebake exists); use 'preserve-100-lock'.`);
+      throw new Error(`AlgorithmicUvEngine: unknown mode '${mode}' (use 'preserve-100-lock', 'unwrap' or 'rewrap').`);
     }
     const lithologyProfile: LithologyProfile = options.lithologyProfile ?? options.detailSynthesis?.lithologyProfile ?? 'classical-travertine';
     const biophysicalContract = options.biophysicalContract ?? options.pbrDecomposition?.biophysicalContract ?? options.detailSynthesis?.biophysicalContract;

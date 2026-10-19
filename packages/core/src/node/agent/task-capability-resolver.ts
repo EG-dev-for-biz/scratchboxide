@@ -462,20 +462,18 @@ export class TaskCapabilityResolver {
             } else if (/algorithmic\s*uv|unwrap[\s\w-]{0,30}rewrap|rewrap[\s\w-]{0,30}unwrap|uv\s*(?:unwrap|re-?wrap|parameteriz|atlas\s*pack|maxrects)|cavitation\s*pore|calcite\s*strata|pbr\s*material\s*decompos|conformal\s*reparameteriz/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'cpp-3d-engine';
-                nativeCapabilities.push('Algorithmic UV Unwrap & Rewrap Engine (AlgorithmicUvEngine)');
-                nativeCapabilities.push('Native C++20 Astro UV Acceleration (scratchbox_uv_engine.hpp)');
-                nativeCapabilities.push('MaxRects BSSF Atlas Bin Packing with 90° Chart Rotation (85-92% Fill Density)');
-                nativeCapabilities.push('Continuous 2D-to-3D Inverse Barycentric Projection & Analytical Cavitation Synthesis');
-                nativeCapabilities.push('Photometric De-Lighting & True PBR Material Suite Decomposition');
-                nativeCapabilities.push('Preserve-100-Lock (0.000 mm Vertex Drift) & Conformal Reparameterization Modes');
-                nativeCapabilities.push('In-App Agent Tools: algorithmic_uv_unwrap_rewrap, pbr_material_decompose, atlas_maxrects_pack');
-                rationale = 'Native C++20 Algorithmic UV Unwrap & Rewrap Engine performs analytical travertine micro-cavitation, calcite bedding strata, MaxRects high-efficiency chart packing, and PBR material suite decomposition with 100% vertex/UV lock option.';
+                nativeCapabilities.push('UV unwrap: normal-clustered charts, per-chart distortion measured (angle stretch and area ratio), LSCM conformal re-parameterization where the orthographic projection distorts, splitting where neither passes; never overlapping (AlgorithmicUvEngine mode \'unwrap\', scratchbox_uv_rewrap.hpp)');
+                nativeCapabilities.push('Atlas packing per material at a requested texel density or atlas size, with gutters and 90° chart rotation (skyline packer)');
+                nativeCapabilities.push('Texture rewrap (mode \'rewrap\'): every texture of a material rebaked into the new atlas from the old UVs (exact barycentric transfer, bilinear, gutter dilation), normal maps converted between tangent frames, TANGENT rewritten; or baked from another mesh by nearest surface (transferSourceGlbPath)');
+                nativeCapabilities.push('Mode \'preserve-100-lock\': UVs untouched; normal / ORM maps estimated from the baseColor pixels and optional albedo de-lighting');
+                nativeCapabilities.push('In-App Agent Tools: algorithmic_uv_unwrap_rewrap, uv_analyze_texel_density, pbr_material_decompose, atlas_maxrects_pack');
+                rationale = 'AlgorithmicUvEngine unwraps a GLB into new non-overlapping UV charts (orthographic or LSCM per chart by measured distortion), packs them per material at one texel density, and on rewrap rebakes every texture into the new atlas; it reports chart counts, distortion, texel-density uniformity, utilisation, and each texture rebaked or not rebaked with the reason.';
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'AlgorithmicUvEngine.processGlb or algorithmic_uv_unwrap_rewrap tool',
                     targetTool: 'algorithmic_uv_unwrap_rewrap',
                     targetService: 'AlgorithmicUvEngine',
-                    details: 'Invoke algorithmic_uv_unwrap_rewrap to enhance 3D model textures and stream binary .glb into 3d-scene primitive.'
+                    details: 'Invoke algorithmic_uv_unwrap_rewrap with mode \'unwrap\' (new UV set, textures untouched) or \'rewrap\' (new UVs and every texture rebaked) and load the output .glb into the 3d-scene primitive.'
                 };
             } else if (/(?:recolor|re-color|grade|re-?grade|texture\s*atlas|material\s*harmoniz|pbr)[\s\w-]{0,40}(?:3d\s*tile|glb|model|photometry|photogrammetr)|(?:3d\s*tile|glb|texture\s*atlas)[\s\w-]{0,40}(?:recolor|re-color|grade|re-?grade|palette|foliage\s*protect|pbr)/i.test(lower)) {
                 canSolveNatively = true;
