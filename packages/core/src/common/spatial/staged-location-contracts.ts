@@ -405,6 +405,8 @@ export interface FittedSurface {
     /** Share of the surface with scan samples inside the inlier band. Below 0.5 the face was placed by the fit: 'fitted-unobserved'. */
     supportFraction: number;
     provenance: ProvenanceRecord;
+    /** It stands against a neighbouring building in the footprint prior: no scan can see it, so it is not counted as unobserved. */
+    partyWall?: boolean;
 }
 
 /** One continuous parameter of a primitive's fit, by position. Refits and corrections name a parameter by (primitiveId, index). */
@@ -515,6 +517,11 @@ export interface StructureFit {
         scanSha256: string; scanTriangles: number; scanSource: string; texturedSha256?: string; anchor: Vec2; refitOf?: string;
         /** The multi-view mask vote given to the fit (ScanFitFitRequest.ownershipVotes): scan voted not the structure was left out as clutter. */
         ownership?: { votedTriangles: number; structureTriangles: number; otherTriangles: number; otherAreaM2: number };
+        /**
+         * The footprint prior given to the fit (ScanFitFitRequest.prior): whether the plan was traced from it (it needs a roof
+         * level the scan measures), its area, the IoU of the fitted footprint with it, the neighbours given and the roof levels measured.
+         */
+        footprintPrior?: { source: string; used: boolean; areaM2: number; fittedIoU: number; neighbours: number; heightM?: number; roofLevelsM: number[] };
     };
     frame: Frame3;
     ground: { normal: Vec3; offsetM: number; tiltDeg: number; rmsM: number; baseY: number };
@@ -531,6 +538,10 @@ export interface StructureFit {
         hausdorffM: number;
         /** What the remesh moved: the real relief it removed. */
         remeshToScan?: ResidualStats;
+        /** Share of the rebuild's visible surface (party walls apart) with no scan within 25 cm: what the unobserved gate reads. */
+        unobservedShare?: number;
+        /** With a footprint prior: the rebuild's visible surface against a neighbouring building (party walls), how much of it has no scan, and the scan left out as a neighbour's. */
+        partyWallAreaM2?: number; partyWallUnobservedAreaM2?: number; neighbourScanAreaM2?: number;
     };
     gates: GateResult[];
     accepted: boolean;
@@ -1238,6 +1249,23 @@ export interface ScanFitFitRequest extends ScanFitCall {
     /** The probe seed (tile frame). */
     anchor: { x: number; z: number };
     sourceLimits: SourceLimits;
+    /**
+     * The building's plan from Google vector data and its neighbours' (FootprintPrior): it sets the frame and the plan whose
+     * walls the scan then measures, and the neighbours say which faces are party walls (expected unobserved, labelled).
+     */
+    prior?: FootprintPrior;
+}
+/**
+ * A footprint prior in the tile frame (x east, z south, metres): each part is boundary loops [[x, z], ...] filled even-odd,
+ * the parts unioned (a modelled volume's triangles are parts too).
+ */
+export interface FootprintPrior {
+    /** Where it comes from, said in the fit's notes and record (e.g. "Google vector data (building 17/38593/49276/f100)"). */
+    source: string;
+    footprint: Vec2[][][];
+    /** The vector data's height for the building, when it has one (m above its base); reported beside the measured roof levels. */
+    heightM?: number;
+    neighbours: Array<{ id?: string; parts: Vec2[][][]; heightM?: number }>;
 }
 /** A failed gate is a result (accepted: false), not an error. */
 export type ScanFitFitResult = ScanFitOutput<StructureFit>;
@@ -1491,7 +1519,10 @@ const DEFINITIONS = {
         schema: { const: 'scratchbox.structure-fit/2' }, buildingId: { type: 'string', pattern: '^[0-9a-f]{16}$' },
         input: obj(['scanSha256', 'scanTriangles', 'scanSource', 'anchor'], {
             scanSha256: STR, scanTriangles: INT, scanSource: STR, texturedSha256: STR, anchor: ref('vec2'), refitOf: STR,
-            ownership: obj(['votedTriangles', 'structureTriangles', 'otherTriangles', 'otherAreaM2'], { votedTriangles: INT, structureTriangles: INT, otherTriangles: INT, otherAreaM2: NUM })
+            ownership: obj(['votedTriangles', 'structureTriangles', 'otherTriangles', 'otherAreaM2'], { votedTriangles: INT, structureTriangles: INT, otherTriangles: INT, otherAreaM2: NUM }),
+            footprintPrior: obj(['source', 'used', 'areaM2', 'fittedIoU', 'neighbours', 'roofLevelsM'], {
+                source: STR, used: BOOL, areaM2: NUM, fittedIoU: ref('unit'), neighbours: INT, heightM: NUM, roofLevelsM: arr(NUM)
+            })
         }),
         frame: ref('frame3'),
         ground: obj(['normal', 'offsetM', 'tiltDeg', 'rmsM', 'baseY'], { normal: ref('vec3'), offsetM: NUM, tiltDeg: NUM, rmsM: NUM, baseY: NUM }),
@@ -1507,7 +1538,7 @@ const DEFINITIONS = {
         })),
         surfaces: arr(obj(['id', 'primitiveId', 'chart', 'areaM2', 'fit', 'visibleFraction', 'supportFraction', 'provenance'], {
             id: STR, primitiveId: STR, chart: ref('chart'), areaM2: NUM, fit: ref('residual'),
-            visibleFraction: ref('unit'), supportFraction: ref('unit'), provenance: ref('provenance')
+            visibleFraction: ref('unit'), supportFraction: ref('unit'), provenance: ref('provenance'), partyWall: BOOL
         })),
         slots: arr(ref('slot')),
         passThrough: obj(['triangles', 'areaM2', 'regions'], {
@@ -1518,7 +1549,8 @@ const DEFINITIONS = {
         }),
         metrics: obj(['scanToFit', 'fitToScan', 'scanToFitPlusPassThrough', 'coverage', 'hausdorffM'], {
             scanToFit: ref('residual'), fitToScan: ref('residual'), scanToFitPlusPassThrough: ref('residual'),
-            coverage: ref('unit'), hausdorffM: NUM, remeshToScan: ref('residual')
+            coverage: ref('unit'), hausdorffM: NUM, remeshToScan: ref('residual'),
+            unobservedShare: ref('unit'), partyWallAreaM2: NUM, partyWallUnobservedAreaM2: NUM, neighbourScanAreaM2: NUM
         }),
         gates: arr(ref('gate')), accepted: BOOL,
         counts,

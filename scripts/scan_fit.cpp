@@ -44,10 +44,10 @@ namespace sj = staged_glb::json;
 static void usage() {
     std::cerr <<
         "scan_fit <fit|refit|ornament|flatten> [flags]\n"
-        "  fit      --scan raw_clay.glb [--textured raw.glb] [--remesh clay.glb] [--ownership votes.sbov] --anchor x,z [--source-limits-json f.json]\n"
+        "  fit      --scan raw_clay.glb [--textured raw.glb] [--remesh clay.glb] [--ownership votes.sbov] [--prior-json prior.json] --anchor x,z [--source-limits-json f.json]\n"
         "           [--scan-sha256 H] [--textured-sha256 H] [--scan-source TEXT] [--stage-key K] --out-dir DIR\n"
         "  refit    --fit structure_fit.json --scan raw_clay.glb --set p07:2=0.50 [--set ...] [--textured raw.glb]\n"
-        "           [--remesh clay.glb] [--scan-sha256 H] [--stage-key K] --out-dir DIR\n"
+        "           [--remesh clay.glb] [--prior-json prior.json] [--scan-sha256 H] [--stage-key K] --out-dir DIR\n"
         "  ornament --fit structure_fit.json --spec ornament_spec.json --textured raw.glb [--stage-key K] --out-dir DIR\n"
         "  flatten  --input in.glb [--footprint-json fp.json] [--band 0.10] --out flattened.glb --stats stats.json\n";
 }
@@ -140,6 +140,51 @@ static scan_fit::SourceLimits readLimits(const Args& a) {
     return L;
 }
 
+/**
+ * --prior-json: {"source": "...", "footprint": [part, ...], "heightM"?: n, "neighbours"?: [{"id"?, "parts": [part, ...], "heightM"?: n}]},
+ * a part being boundary loops [[[x, z], ...], ...] in the tile frame (even-odd within a part, parts unioned).
+ */
+static scan_fit::FootprintPrior readPrior(const std::string& path) {
+    const auto d = parseJsonFile(path);
+    if (d.type != io::GlbJsonValue::Object) throw CliError("bad_request", "--prior-json must hold an object");
+    auto parts = [](const io::GlbJsonValue& v, const char* what) {
+        std::vector<scan_fit::FootprintPrior::Part> out;
+        if (v.type != io::GlbJsonValue::Array) throw CliError("bad_request", std::string(what) + " must be an array of parts");
+        for (const auto& part : v.arr) {
+            if (part.type != io::GlbJsonValue::Array) throw CliError("bad_request", std::string(what) + ": a part is an array of loops");
+            scan_fit::FootprintPrior::Part P;
+            for (const auto& loop : part.arr) {
+                if (loop.type != io::GlbJsonValue::Array || loop.arr.size() < 3) throw CliError("bad_request", std::string(what) + ": a loop has at least three [x, z] points");
+                std::vector<scan_geom::P2> L;
+                for (const auto& p : loop.arr) {
+                    if (p.type != io::GlbJsonValue::Array || p.arr.size() != 2 || !std::isfinite(p[0].num) || !std::isfinite(p[1].num)) throw CliError("bad_request", std::string(what) + ": every point is [x, z] in metres");
+                    L.push_back(scan_geom::P2(p[0].num, p[1].num));
+                }
+                P.push_back(std::move(L));
+            }
+            if (!P.empty()) out.push_back(std::move(P));
+        }
+        return out;
+    };
+    scan_fit::FootprintPrior pr;
+    pr.parts = parts(d["footprint"], "footprint");
+    if (pr.parts.empty()) throw CliError("bad_request", "--prior-json has no footprint");
+    pr.source = d.has("source") && d["source"].type == io::GlbJsonValue::String ? d["source"].str : "a footprint prior";
+    if (d.has("heightM") && std::isfinite(d["heightM"].num)) pr.heightM = d["heightM"].num;
+    if (d.has("neighbours")) {
+        const auto& nbs = d["neighbours"];
+        if (nbs.type != io::GlbJsonValue::Array) throw CliError("bad_request", "neighbours must be an array");
+        for (const auto& nb : nbs.arr) {
+            scan_fit::FootprintPrior::Neighbour N;
+            N.parts = parts(nb["parts"], "neighbours[].parts");
+            if (nb.has("heightM") && std::isfinite(nb["heightM"].num)) N.heightM = nb["heightM"].num;
+            if (nb.has("id") && nb["id"].type == io::GlbJsonValue::String) N.id = nb["id"].str;
+            if (!N.parts.empty()) pr.neighbours.push_back(std::move(N));
+        }
+    }
+    return pr;
+}
+
 struct FitRun {
     scan_fit::FitResult result;
     scan_fit::FitRequest request;
@@ -175,6 +220,7 @@ static void runFitCore(const Args& a, FitRun& run, double anchorX, double anchor
         run.ownership = readBytes(a.str("ownership"));
         Q.ownership = &run.ownership;
     }
+    if (a.has("prior-json")) Q.prior = readPrior(a.str("prior-json"));
     Q.progress = [](double f, const std::string& m) { progress(0.05 + 0.75 * f, m); };
     scan_fit::Fitter fitter(run.params, Q);
     run.result = fitter.run(scanBytes);

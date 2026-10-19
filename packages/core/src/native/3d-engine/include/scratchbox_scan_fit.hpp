@@ -92,6 +92,7 @@ struct SourceLimits {
 
 struct Params {
     double weldM{0.001};
+    double seamM{0.05}, seamMinHeightM{2.0};   // tile pieces whose open borders lie within seamM, above the ground, are one surface (3D Tiles split a structure at tile edges)
     double componentDilateM{4.0};
     int visibilityRays{16}, visibilityEscapes{3};
     double planeAngleDeg{12}, planeDistM{0.04}, planeMinAreaM2{0.4}, planeMaxRmsM{0.04};
@@ -115,6 +116,11 @@ struct Params {
     // the structure's visible surface; a larger unexplained region is a wrong or missing fit and stays in the Hausdorff.
     double fragmentMaxAreaM2{4.0}, fragmentMaxShare{0.05};
     double backedBandM{0.25};   // the rebuild's surface within this of the scan is backed by it
+    // a footprint prior (Google vector data): how far its edges may move to the scan's measured walls, how far beyond it scan
+    // standing inside a neighbouring footprint is that neighbour's, and how far out of a wall a neighbour makes it a party wall
+    double priorWallWindowM{2.0}, neighbourMarginM{0.5}, partyProbeM{0.75};
+    // roof levels inside a prior footprint: a level holds at least this area (and share of the footprint), above this height
+    double levelMinAreaM2{8.0}, levelMinShare{0.03}, levelMinHeightM{2.5}, levelMergeM{1.0};
     // global gates
     double gateCoverage{0.85}, gateScanToFitM{0.06}, gateFitToScanM{0.06}, gateHausdorffM{0.6}, gatePassShare{0.35}, gateUnobservedShare{0.35};
     // the arc sweep's chord sagitta (m)
@@ -162,6 +168,7 @@ struct Surface {
     double area{0};
     Residual fit;
     double visibleFraction{0}, supportFraction{0};
+    bool partyWall{false};   // stands against a neighbouring building (footprint prior): no scan can see it
     std::string label;  // diagnostic
 };
 
@@ -254,8 +261,74 @@ struct PassRegion {
     std::map<std::string, double> test;
 };
 
+/**
+ * A footprint prior: the building's plan from Google vector data (tile frame x, z), as parts of boundary loops (each part
+ * even-odd, the parts unioned), and the neighbouring buildings' plans with their heights. It gives the frame and the walls
+ * that the scan then measures; it never replaces a measurement, and the neighbours say which faces are party walls.
+ */
+struct FootprintPrior {
+    using Part = std::vector<std::vector<P2>>;
+    struct Neighbour { std::vector<Part> parts; double heightM{0}; std::string id; };
+    std::vector<Part> parts;
+    std::vector<Neighbour> neighbours;
+    double heightM{0};
+    std::string source;
+    bool on() const { return !parts.empty(); }
+};
+
+/**
+ * Square dilation/erosion by r cells, separable (a running count along rows, then columns): the same result as
+ * scan_geom's dilate/erode, in time independent of r.
+ */
+inline sg::Raster squareMorph(const sg::Raster& R, int r, bool dilating) {
+    if (r <= 0) return R;
+    sg::Raster tmp = R, out = R;
+    const int nx = R.nx, nz = R.nz;
+    // a cell is set after dilation when any cell within r is set; after erosion when all are (outside the raster counts as unset)
+    auto pass = [&](const sg::Raster& in, sg::Raster& o, bool alongX) {
+        const int n = alongX ? nx : nz, lines = alongX ? nz : nx;
+        std::vector<int> pre(static_cast<size_t>(n) + 1);
+        for (int l = 0; l < lines; ++l) {
+            for (int j = 0; j < n; ++j) pre[static_cast<size_t>(j) + 1] = pre[static_cast<size_t>(j)] + (alongX ? in.v[in.id(j, l)] : in.v[in.id(l, j)]);
+            for (int j = 0; j < n; ++j) {
+                const int a = std::max(0, j - r), b = std::min(n - 1, j + r);
+                const int cnt = pre[static_cast<size_t>(b) + 1] - pre[static_cast<size_t>(a)];
+                const bool full = (j - r >= 0) && (j + r <= n - 1) && cnt == 2 * r + 1;
+                const uint8_t v = dilating ? (cnt > 0) : full;
+                if (alongX) o.v[o.id(j, l)] = v; else o.v[o.id(l, j)] = v;
+            }
+        }
+    };
+    pass(R, tmp, true);
+    pass(tmp, out, false);
+    return out;
+}
+
+/** Even-odd inside a part (its loops), union over parts. */
+inline bool insideParts(const std::vector<FootprintPrior::Part>& parts, double x, double z) {
+    for (const auto& part : parts) {
+        bool in = false;
+        for (const auto& loop : part) if (loop.size() >= 3 && sg::insidePolygon(loop, x, z)) in = !in;
+        if (in) return true;
+    }
+    return false;
+}
+
+/** Distance in plan to the nearest boundary edge of the parts. */
+inline double distToParts(const std::vector<FootprintPrior::Part>& parts, double x, double z) {
+    double best = std::numeric_limits<double>::infinity();
+    for (const auto& part : parts) for (const auto& loop : part) for (size_t i = 0; i < loop.size(); ++i) {
+        const P2 a = loop[i], b = loop[(i + 1) % loop.size()], d = b - a;
+        const double l2 = d.dot(d);
+        const double t = l2 > 0 ? std::clamp(((x - a.x) * d.x + (z - a.y) * d.y) / l2, 0.0, 1.0) : 0.0;
+        best = std::min(best, std::hypot(x - (a.x + t * d.x), z - (a.y + t * d.y)));
+    }
+    return best;
+}
+
 struct FitRequest {
     double anchorX{0}, anchorZ{0};
+    FootprintPrior prior;
     SourceLimits limits;
     std::string scanSha256, scanSource, texturedSha256, refitOf;
     size_t inputTriangles{0};
@@ -292,6 +365,13 @@ struct FitResult {
     sg::Scan scan;
     size_t verticesOut{0}, trianglesOut{0};
     double unobservedArea{0};
+    // with a footprint prior: the rebuild's visible surface against a neighbouring building (party walls, expected unobserved and
+    // left out of the unobserved share), the scan standing inside a neighbour's footprint (left out as that neighbour's), and how
+    // far the fitted footprint agrees with the prior
+    double partyWallArea{0}, partyWallUnobservedArea{0}, neighbourScanArea{0}, priorIoU{0}, priorAreaM2{0};
+    bool priorUsed{false};
+    std::string priorFrameNote;
+    std::vector<double> roofLevels;   // measured roof levels inside the prior (m above the base)
     std::vector<std::string> notes;
     // the multi-view mask vote, when one was given: scan triangles matched, voted the structure / not it, and the area of
     // samples left out as not the structure
@@ -550,7 +630,22 @@ private:
         sg::Scan all = sg::weldScan(pos, sidx, P.weldM);
         if (all.triangles() == 0) throw ScanFitError("input_unreadable", "the scan has no triangles");
         int nc = 0;
-        const auto lab = sg::components(all, &nc);
+        auto lab = sg::components(all, &nc);
+        if (Q.prior.on()) {
+            // With a footprint prior the plan, not the anchor piece's box, bounds the structure, so the tile pieces it arrives in are
+            // joined: a seam is joined where it runs through raised structure (2 m over the scan's lowest 2 %), along at least 3
+            // vertex pairs; the ground running on past a structure under a tile edge stays apart. (Without a prior the anchor piece
+            // and what lies inside its box grown by 4 m are the structure, as before: a lone monument's own pieces lie inside it.)
+            std::vector<float> ys;
+            ys.reserve(all.pos.size());
+            for (const auto& p : all.pos) ys.push_back(p.y);
+            std::nth_element(ys.begin(), ys.begin() + static_cast<long>(ys.size() / 50), ys.end());
+            const double low = ys.empty() ? 0.0 : ys[ys.size() / 50];
+            const int before = nc;
+            if (sg::joinAcrossSeams(all, lab, nc, P.seamM, low + P.seamMinHeightM, 3) > 0)
+                R.notes.push_back("the scan arrives in tile pieces: " + std::to_string(before) + " pieces whose open borders meet within " + sj::num(P.seamM * 100) + " cm, " +
+                                  sj::num(P.seamMinHeightM) + " m or more above the ground, are joined into " + std::to_string(nc));
+        }
         // the component under the anchor: the highest triangle covering it seen from above, else the nearest
         long pick = -1;
         double bestY = -1e30, bestD = 1e30;
@@ -667,7 +762,39 @@ private:
             double sxx = 0, sxz = 0, szz = 0;
             for (size_t t = 0; t < T; ++t) { const double dx = s.centroid[t].x - cx, dz = s.centroid[t].z - cz; sxx += s.area[t] * dx * dx; sxz += s.area[t] * dx * dz; szz += s.area[t] * dz * dz; }
             yaw = deg(0.5 * std::atan2(2 * sxz, sxx - szz));
-            R.notes.push_back("the plan is not rectilinear (the dominant wall orientation holds " + std::to_string(static_cast<int>(std::lround(100 * share))) + "% of the walls): the frame follows its principal axes and every plane keeps its own normal");
+            if (!Q.prior.on()) R.notes.push_back("the plan is not rectilinear (the dominant wall orientation holds " + std::to_string(static_cast<int>(std::lround(100 * share))) + "% of the walls): the frame follows its principal axes and every plane keeps its own normal");
+        }
+        if (Q.prior.on()) {
+            // the frame follows the footprint prior's walls: the length-weighted mode of its boundary edges' normals modulo 90
+            // degrees (an edge is boundary when the plan is inside on one side of it only; a modelled volume's triangles have
+            // inner edges, which are not)
+            std::vector<double> hp(B, 0.0);
+            double perim = 0;
+            std::vector<std::pair<double, double>> eangs;
+            for (const auto& part : Q.prior.parts) for (const auto& loop : part) for (size_t i = 0; i < loop.size(); ++i) {
+                const P2 a = loop[i], b = loop[(i + 1) % loop.size()], d = b - a;
+                const double len = d.len();
+                if (len < 0.5) continue;
+                const P2 m = (a + b) * 0.5, nrm(d.y / len, -d.x / len);
+                const bool l = insideParts(Q.prior.parts, m.x + 0.05 * nrm.x, m.y + 0.05 * nrm.y), r = insideParts(Q.prior.parts, m.x - 0.05 * nrm.x, m.y - 0.05 * nrm.y);
+                if (l == r) continue;
+                const double f = std::fmod(deg(std::atan2(nrm.x, nrm.y)) + 360.0, 90.0);
+                hp[static_cast<int>(f * 10) % B] += len;
+                eangs.push_back({f, len});
+                perim += len;
+            }
+            if (perim > 0) {
+                std::vector<double> smp(B, 0.0);
+                for (int i = 0; i < B; ++i) for (int k = -9; k <= 9; ++k) smp[i] += hp[(i + k + B) % B] * std::exp(-0.5 * (k / 3.0) * (k / 3.0));
+                const double pm = static_cast<double>(std::max_element(smp.begin(), smp.end()) - smp.begin()) / 10.0;
+                double ex = 0, ew = 0;
+                for (const auto& [f, w] : eangs) { double d = f - pm; while (d > 45) d -= 90; while (d < -45) d += 90; if (std::fabs(d) <= 1.0) { ex += w * d; ew += w; } }
+                yaw = pm + (ew > 0 ? ex / ew : 0);
+                frameShare = 1;
+                R.priorFrameNote = "the frame follows the building footprint from " + Q.prior.source + ": " + std::to_string(static_cast<int>(std::lround(100 * ew / perim))) +
+                                   "% of its perimeter runs within 1 degree of it (the scan's own wall orientations hold " + std::to_string(static_cast<int>(std::lround(100 * share))) + "% of its walls within 0.6 degrees)";
+                R.notes.push_back(R.priorFrameNote);
+            }
         }
         const double y = rad(yaw);
         const Vec3 e1(static_cast<float>(std::sin(y)), 0, static_cast<float>(std::cos(y)));
@@ -774,6 +901,11 @@ private:
         G.cx = 0.5 * (x0 + x1); G.cz = 0.5 * (z0 + z1);
         G.radius = 0.5 * std::hypot(x1 - x0, z1 - z0) + 5;
         ext = sg::exterior(tree, lc, ln, G, P.visibilityRays, P.visibilityEscapes);
+        if (std::getenv("SCAN_FIT_DEBUG_DIR")) {
+            double wa = 0, we = 0, ra = 0, re = 0;
+            for (size_t t = 0; t < T; ++t) { if (std::fabs(ln[t].y) < 0.3f) { wa += R.scan.area[t]; if (ext[t]) we += R.scan.area[t]; } else if (ln[t].y > 0.7f) { ra += R.scan.area[t]; if (ext[t]) re += R.scan.area[t]; } }
+            std::cerr << "DEBUG exterior: walls " << we << " of " << wa << " m2, roofs " << re << " of " << ra << " m2\n";
+        }
         isGround.assign(T, 0);
         for (size_t t = 0; t < T; ++t) {
             const double hgt = lc[t].y - groundAt(lc[t].x, lc[t].z);
@@ -994,6 +1126,24 @@ private:
             const double ox = std::max({structX0 - q.p.x, q.p.x - structX1, 0.0}), oz = std::max({structZ0 - q.p.z, q.p.z - structZ1, 0.0});
             const double out = std::max(ox, oz);
             if (!sGround[i] && ((out > 2.5 && hgt < 4.0) || (out > 0.3 && hgt < 0.5))) sGround[i] = 2;  // apron clutter
+        }
+        if (Q.prior.on() && !Q.prior.neighbours.empty()) {
+            // scan standing inside a neighbouring building's footprint, and more than the margin outside this one's, is that
+            // neighbour's (the isolate reaches a little past a party wall): not fitted, not a leftover, not measured
+            double area = 0;
+            for (size_t i = 0; i < S.size(); ++i) {
+                if (sGround[i]) continue;
+                const Vec3 w = R.frame.toWorld(S[i].p);
+                if (insideParts(Q.prior.parts, w.x, w.z) || distToParts(Q.prior.parts, w.x, w.z) <= P.neighbourMarginM) continue;
+                bool inNeighbour = false;
+                for (const auto& nb : Q.prior.neighbours) if (insideParts(nb.parts, w.x, w.z)) { inNeighbour = true; break; }
+                if (!inNeighbour) continue;
+                sGround[i] = 4;
+                area += S[i].w;
+            }
+            R.neighbourScanArea = area;
+            if (area > 0.05) R.notes.push_back(sj::num(std::round(area * 10) / 10) + " m2 of the scan stands inside a neighbouring building's footprint (" + Q.prior.source + "), more than " +
+                                               sj::num(P.neighbourMarginM * 100) + " cm outside this one: left out of the fit as the neighbour's");
         }
         applyOwnershipVote();
     }
@@ -1308,6 +1458,74 @@ private:
         return true;
     }
 
+    /**
+     * measureWall for a run whose position is only known to `window` (a footprint prior's edge): within that window the
+     * outermost peak may be a cornice, an awning or a tree, so the wall is, of the peaks that stand up the band's height (the
+     * share of its 1 m slices holding at least 0.15 m2 within 8 cm of it, at least 70 % of the best), the one holding the most
+     * surface, refined as the area-weighted mean within 4 cm. Returns false with fewer than 0.5 m2 of samples.
+     */
+    bool measureWallTall(const P2& m, double c0, double tLo, double tHi, double y0, double y1, double window, double& offset, double* coverage = nullptr) const {
+        const P2 d(-m.y, m.x);
+        const int nb = static_cast<int>(std::ceil(2 * window / 0.01)) + 1;
+        const int ns = std::max(1, static_cast<int>(std::ceil((y1 - y0) / 1.0)));
+        std::vector<double> h(static_cast<size_t>(nb), 0.0);
+        std::vector<std::vector<double>> hs(static_cast<size_t>(ns), std::vector<double>(static_cast<size_t>(nb), 0.0));
+        double tot = 0;
+        for (size_t i = 0; i < S.size(); ++i) {
+            if (sGround[i]) continue;
+            const auto& q = S[i];
+            if (q.p.y < y0 || q.p.y > y1 || std::fabs(q.n.y) > 0.35f) continue;
+            const double hl = std::hypot(q.n.x, q.n.z);
+            if (hl < 1e-6 || (q.n.x * m.x + q.n.z * m.y) / hl < std::cos(rad(18.0))) continue;
+            const double t = d.x * q.p.x + d.y * q.p.z;
+            if (t < tLo || t > tHi) continue;
+            const double o = m.x * q.p.x + m.y * q.p.z - c0;
+            if (std::fabs(o) > window) continue;
+            const size_t b = static_cast<size_t>((o + window) / 0.01);
+            h[b] += q.w;
+            hs[static_cast<size_t>(std::clamp(static_cast<int>((q.p.y - y0) / 1.0), 0, ns - 1))][b] += q.w;
+            tot += q.w;
+        }
+        if (tot < 0.5) return false;
+        std::vector<double> sm(h.size(), 0.0);
+        for (size_t b = 0; b < h.size(); ++b) for (int k = -4; k <= 4; ++k) { const long j = static_cast<long>(b) + k; if (j >= 0 && j < static_cast<long>(h.size())) sm[b] += h[static_cast<size_t>(j)]; }
+        const double top = *std::max_element(sm.begin(), sm.end());
+        struct Cand { size_t b; double cov; };
+        std::vector<Cand> cands;
+        for (size_t b = 0; b < h.size(); ++b) {
+            if (sm[b] < 0.1 * top) continue;
+            bool peak = true;
+            for (int k = -6; k <= 6 && peak; ++k) { const long j = static_cast<long>(b) + k; if (k && j >= 0 && j < static_cast<long>(sm.size()) && (sm[static_cast<size_t>(j)] > sm[b] || (sm[static_cast<size_t>(j)] == sm[b] && k < 0))) peak = false; }
+            if (!peak) continue;
+            int covered = 0;
+            for (int sl = 0; sl < ns; ++sl) {
+                double a = 0;
+                for (int k = -8; k <= 8; ++k) { const long j = static_cast<long>(b) + k; if (j >= 0 && j < static_cast<long>(h.size())) a += hs[static_cast<size_t>(sl)][static_cast<size_t>(j)]; }
+                covered += a >= 0.15 ? 1 : 0;
+            }
+            cands.push_back({b, static_cast<double>(covered) / ns});
+        }
+        if (cands.empty()) return false;
+        double best = 0;
+        for (const auto& c : cands) best = std::max(best, c.cov);
+        // of the peaks that stand up the band, the one holding the most surface (the wall's mode; the relief around it, a sill
+        // or a recess, holds less)
+        size_t pick = cands.front().b;
+        double mass = -1;
+        for (const auto& c : cands) if (c.cov >= 0.7 * best && sm[c.b] > mass) { mass = sm[c.b]; pick = c.b; }
+        if (std::getenv("SCAN_FIT_DEBUG_DIR")) {
+            std::cerr << "DEBUG wallTall m " << m.x << "," << m.y << " c0 " << c0 << " t " << tLo << ".." << tHi << " tot " << tot << " cands";
+            for (const auto& c : cands) std::cerr << " [" << (-window + (c.b + 0.5) * 0.01) << " cov " << c.cov << " mass " << sm[c.b] << "]";
+            std::cerr << " pick " << (-window + (pick + 0.5) * 0.01) << "\n";
+        }
+        double sw = 0, so = 0;
+        for (int k = -4; k <= 4; ++k) { const long j = static_cast<long>(pick) + k; if (j >= 0 && j < static_cast<long>(h.size())) { sw += h[static_cast<size_t>(j)]; so += h[static_cast<size_t>(j)] * (-window + (j + 0.5) * 0.01); } }
+        if (sw <= 0) return false;
+        offset = c0 + so / sw;
+        if (coverage) *coverage = best;
+        return true;
+    }
+
     /** A vertical plane's trace in plan at height y: unit normal m (x, z) and offset c with m . (x, z) = c. */
     bool planeTrace(const Region& r, double y, P2& m, double& c) const {
         const P2 nh(r.pl.n.x, r.pl.n.z);
@@ -1372,7 +1590,10 @@ private:
                 double measured = 0;
                 const P2 tDir(-nOut.y, nOut.x);
                 const double ta = tDir.dot(sgm.a), tb = tDir.dot(sgm.b);
-                if (!hole && measureWall(nOut, cOff, std::min(ta, tb) - 0.2, std::max(ta, tb) + 0.2, y0 + 0.1, y1 - 0.1, 0.5, measured)) {
+                const bool got = !hole && (loopWindowM > 0.5 ? measureWallTall(nOut, cOff, std::min(ta, tb) - 0.2, std::max(ta, tb) + 0.2, y0 + 0.1, y1 - 0.1, loopWindowM, measured)
+                                                             : measureWall(nOut, cOff, std::min(ta, tb) - 0.2, std::max(ta, tb) + 0.2, y0 + 0.1, y1 - 0.1, loopWindowM, measured));
+                if (std::getenv("SCAN_FIT_DEBUG_DIR")) std::cerr << "DEBUG run len " << (sgm.b - sgm.a).len() << " n " << nOut.x << "," << nOut.y << " band " << y0 << ".." << y1 << " window " << loopWindowM << (got ? " measured shift " + std::to_string(measured - cOff) : std::string(" not measured")) << "\n";
+                if (got) {
                     sgm.point = sgm.point + nOut * (measured - cOff);
                     segs.push_back(sgm);
                     continue;
@@ -1410,12 +1631,14 @@ private:
         // vertices
         Loop L;
         const size_t n = segs.size();
-        auto lineX = [](const Seg& A, const Seg& Bq, const P2& corner) {
+        // a corner moves with its lines by at most a metre, or by as far as the lines may have moved (a prior's edges)
+        const double reach = std::max(1.0, 2.0 * loopWindowM);
+        auto lineX = [reach](const Seg& A, const Seg& Bq, const P2& corner) {
             const double den = A.dir.cross(Bq.dir);
             if (std::fabs(den) < std::sin(rad(10.0))) return corner;
             const double t = (Bq.point - A.point).cross(Bq.dir) / den;
             const P2 x = A.point + A.dir * t;
-            return (x - corner).len() > 1.0 ? corner : x;
+            return (x - corner).len() > reach ? corner : x;
         };
         auto lineCircle = [](const Seg& line, const sg::Circle& c, const P2& corner) {
             const P2 d = line.dir, o = line.point - P2(c.cx, c.cy);
@@ -1454,6 +1677,115 @@ private:
                 if (((d1 > 0) != (d2 > 0)) && ((d3 > 0) != (d4 > 0)) && std::fabs(d1) > 1e-9 && std::fabs(d2) > 1e-9) ok = false;
             }
         }
+        return ok ? L : fallback;
+    }
+
+    /**
+     * The plan's outer loop when a footprint prior traced it: its corners (Douglas-Peucker at 25 cm, so a staircase of cells along
+     * an oblique edge is one run), consecutive runs within 4 degrees and 30 cm of each other made one (a wall is measured whole,
+     * not in pieces), each run of a metre or more moved onto the wall the scan measures within priorWallWindowM of it
+     * (measureWallTall), the vertices at the moved lines' intersections. A run the scan does not measure (a party wall, a wall
+     * the scan never saw) stays where the plan puts it. Falls back to the traced corners when the result loses or gains more
+     * than 30 % of the area or crosses itself.
+     */
+    Loop fitPriorLoop(const std::vector<P2>& ptsIn, double y0, double y1) const {
+        std::vector<P2> pts = ptsIn;
+        if (sg::signedArea(pts) < 0) std::reverse(pts.begin(), pts.end());
+        const auto corners = sg::douglasPeuckerClosed(pts, 0.25);
+        Loop fallback;
+        for (size_t c : corners) { fallback.pts.push_back(pts[c]); fallback.bulge.push_back(0); }
+        if (corners.size() < 3) return fallback;
+        struct Run { std::vector<P2> pts; P2 point, dir, a, b; bool measured{false}; };
+        std::vector<Run> runs;
+        for (size_t k = 0; k < corners.size(); ++k) {
+            Run r;
+            for (size_t m = corners[k];; m = (m + 1) % pts.size()) { r.pts.push_back(pts[m]); if (m == corners[(k + 1) % corners.size()]) break; }
+            r.a = r.pts.front(); r.b = r.pts.back();
+            runs.push_back(std::move(r));
+        }
+        auto refit = [](Run& r) {
+            sg::line2(r.pts, r.point, r.dir);
+            if ((r.b - r.a).dot(r.dir) < 0) r.dir = r.dir * -1.0;
+        };
+        for (auto& r : runs) refit(r);
+        // one wall, one run
+        for (bool merged = true; merged && runs.size() > 3;) {
+            merged = false;
+            for (size_t k = 0; k < runs.size() && runs.size() > 3; ++k) {
+                Run& A = runs[k];
+                Run& Bq = runs[(k + 1) % runs.size()];
+                const double off = std::fabs((Bq.point - A.point).cross(A.dir));
+                if (A.dir.dot(Bq.dir) < std::cos(rad(4.0)) || off > 0.3) continue;
+                A.pts.insert(A.pts.end(), Bq.pts.begin() + 1, Bq.pts.end());
+                A.b = Bq.b;
+                refit(A);
+                runs.erase(runs.begin() + static_cast<long>((k + 1) % runs.size()));
+                merged = true;
+                break;
+            }
+        }
+        const double window = P.priorWallWindowM;
+        int moved = 0, party = 0;
+        // a run with a neighbouring building against it, standing at least as high as the run's lower half: a party wall. It
+        // stays on the plan's edge (the scan cannot see it, and what it shows behind the edge is the other building's relief)
+        auto partyRun = [&](const Run& r) {
+            if (Q.prior.neighbours.empty()) return false;
+            const P2 nOut(r.dir.y, -r.dir.x);
+            int hits = 0;
+            for (int q = 1; q <= 5; ++q) {
+                const P2 m = r.a + (r.b - r.a) * (q / 6.0) + nOut * P.partyProbeM;
+                const Vec3 w = R.frame.toWorld(Vec3(static_cast<float>(m.x), 0, static_cast<float>(m.y)));
+                for (const auto& nb : Q.prior.neighbours) {
+                    if (nb.heightM > 0 && nb.heightM < 0.5 * (y1 - y0)) continue;
+                    if (insideParts(nb.parts, w.x, w.z)) { ++hits; break; }
+                }
+            }
+            return hits >= 3;
+        };
+        for (auto& r : runs) {
+            const double len = (r.b - r.a).len();
+            if (len < 1.0) continue;
+            if (partyRun(r)) { ++party; continue; }
+            const P2 nOut(r.dir.y, -r.dir.x);   // right of travel on a counter-clockwise loop
+            const double cOff = nOut.dot(r.point);
+            const P2 tDir(-nOut.y, nOut.x);
+            const double ta = tDir.dot(r.a), tb = tDir.dot(r.b);
+            double measured = 0;
+            if (measureWallTall(nOut, cOff, std::min(ta, tb) + 0.3, std::max(ta, tb) - 0.3, y0 + 0.1, y1 - 0.1, window, measured)) {
+                r.point = r.point + nOut * (measured - cOff);
+                r.measured = true;
+                ++moved;
+                if (std::getenv("SCAN_FIT_DEBUG_DIR")) std::cerr << "DEBUG prior run " << len << " m moved " << (measured - cOff) << "\n";
+            }
+        }
+        Loop L;
+        const size_t n = runs.size();
+        const double reach = 2.0 * window + 1.0;
+        for (size_t k = 0; k < n; ++k) {
+            const Run& A = runs[(k + n - 1) % n];
+            const Run& Bq = runs[k];
+            P2 v = Bq.a;
+            const double den = A.dir.cross(Bq.dir);
+            if (std::fabs(den) >= std::sin(rad(10.0))) {
+                const double t = (Bq.point - A.point).cross(Bq.dir) / den;
+                const P2 x = A.point + A.dir * t;
+                if ((x - Bq.a).len() <= reach) v = x;
+            } else {
+                // nearly parallel neighbours (a jog): the corner moves with the measured one
+                v = Bq.a + P2(Bq.dir.y, -Bq.dir.x) * P2(Bq.dir.y, -Bq.dir.x).dot(Bq.point - Bq.a);
+            }
+            L.pts.push_back(v);
+            L.bulge.push_back(0);
+        }
+        const double a0 = std::fabs(sg::signedArea(pts)), a1 = std::fabs(sg::signedArea(L.pts));
+        bool ok = L.pts.size() >= 3 && a1 > 0.7 * a0 && a1 < 1.3 * a0;
+        for (size_t i = 0; i < L.pts.size() && ok; ++i) for (size_t j = i + 2; j < L.pts.size() && ok; ++j) {
+            if (i == 0 && j == L.pts.size() - 1) continue;
+            const P2 a = L.pts[i], b = L.pts[(i + 1) % L.pts.size()], c = L.pts[j], d = L.pts[(j + 1) % L.pts.size()];
+            const double d1 = (b - a).cross(c - a), d2 = (b - a).cross(d - a), d3 = (d - c).cross(a - c), d4 = (d - c).cross(b - c);
+            if (((d1 > 0) != (d2 > 0)) && ((d3 > 0) != (d4 > 0)) && std::fabs(d1) > 1e-9 && std::fabs(d2) > 1e-9) ok = false;
+        }
+        if (std::getenv("SCAN_FIT_DEBUG_DIR")) std::cerr << "DEBUG prior loop: " << runs.size() << " runs, " << moved << " measured, " << party << " party, area " << a0 << " -> " << a1 << (ok ? "" : " (fallback)") << "\n";
         return ok ? L : fallback;
     }
 
@@ -1518,8 +1850,215 @@ private:
         }
     }
 
+    /** How far a traced loop's line may move to the wall the scan measures (a prior's edges may stand further off). */
+    double loopWindowM{0.5};
+    bool priorLowest{false};   // the lowest band of a footprint prior's plan is being traced (fitPriorLoop)
+
+    /**
+     * Bands and footprints from a footprint prior (Google vector data), in place of the wall votes: the plan is the prior's,
+     * and the scan measures the rest. The roof levels are the plateaus of the scan's top surface inside the plan (area peaks of
+     * its height, each at least levelMinAreaM2 and levelMinShare of the plan); each band runs from one level to the next over the
+     * cells whose roof reaches its top (a setback is the next band's smaller plan). The lowest band takes the whole plan except
+     * where the scan shows a lower roof or the ground (a light well, a lower annex). Each traced run is moved onto the wall the
+     * scan measures within priorWallWindowM of it (fitLoop); a run the scan never saw (a party wall) stays where the prior puts it.
+     */
+    void priorBands() {
+        const auto& G = gridProto;
+        double yBase = std::min({groundAt(structX0, structZ0), groundAt(structX1, structZ0), groundAt(structX0, structZ1), groundAt(structX1, structZ1)});
+        R.baseY = yBase;
+        sg::Raster mask = G, neighbour = G;
+        std::fill(mask.v.begin(), mask.v.end(), 0);
+        std::fill(neighbour.v.begin(), neighbour.v.end(), 0);
+        double priorArea = 0;
+        struct Box { double x0, x1, z0, z1; };
+        auto boxOf = [](const std::vector<FootprintPrior::Part>& parts) {
+            Box b{1e30, -1e30, 1e30, -1e30};
+            for (const auto& part : parts) for (const auto& l : part) for (const auto& p : l) { b.x0 = std::min(b.x0, p.x); b.x1 = std::max(b.x1, p.x); b.z0 = std::min(b.z0, p.y); b.z1 = std::max(b.z1, p.y); }
+            return b;
+        };
+        std::vector<Box> nbox;
+        for (const auto& nb : Q.prior.neighbours) nbox.push_back(boxOf(nb.parts));
+        for (int k = 0; k < G.nz; ++k) for (int i = 0; i < G.nx; ++i) {
+            const Vec3 w = R.frame.toWorld(Vec3(static_cast<float>(G.cx(i)), 0, static_cast<float>(G.cz(k))));
+            if (insideParts(Q.prior.parts, w.x, w.z)) { mask.v[G.id(i, k)] = 1; priorArea += G.cell * G.cell; continue; }
+            for (size_t n = 0; n < nbox.size(); ++n) {
+                const auto& b = nbox[n];
+                if (w.x < b.x0 || w.x > b.x1 || w.z < b.z0 || w.z > b.z1) continue;
+                if (insideParts(Q.prior.neighbours[n].parts, w.x, w.z)) { neighbour.v[G.id(i, k)] = 1; break; }
+            }
+        }
+        R.priorAreaM2 = priorArea;
+        const sg::Raster priorOnly = mask;
+        // the plan: the prior, and the scan's raised surface joined to it that no neighbouring footprint claims (a part the vector
+        // data does not draw); a strip under a metre wide joined to it (a clipped curtain at a tile seam, an awning) is not
+        {
+            sg::Raster grown = G;
+            std::fill(grown.v.begin(), grown.v.end(), 0);
+            for (size_t c = 0; c < G.v.size(); ++c) grown.v[c] = !mask.v[c] && !neighbour.v[c] && dsm[c] > -1e29f && dsm[c] - yBase >= P.levelMinHeightM ? 1 : 0;
+            // (a part of a building is at least 4 m wide: narrower raised scan along the plan's edge is a facade's relief, a
+            // curtain at a tile seam or the gap to a neighbour, not more building)
+            const int r1 = std::max(1, static_cast<int>(std::lround(2.0 / G.cell)));
+            grown = squareMorph(squareMorph(grown, r1, false), r1, true);
+            // keep the grown cells connected to the prior
+            sg::Raster both = mask;
+            for (size_t c = 0; c < G.v.size(); ++c) both.v[c] = mask.v[c] || grown.v[c];
+            int nc = 0;
+            const auto lab = sg::rasterComponents(both, &nc);
+            std::vector<uint8_t> touches(static_cast<size_t>(std::max(nc, 1)), 0);
+            for (size_t c = 0; c < G.v.size(); ++c) if (mask.v[c] && lab[c] >= 0) touches[static_cast<size_t>(lab[c])] = 1;
+            double added = 0;
+            for (size_t c = 0; c < G.v.size(); ++c) if (grown.v[c] && lab[c] >= 0 && touches[static_cast<size_t>(lab[c])]) { mask.v[c] = 1; added += G.cell * G.cell; }
+            if (added >= 1.0) R.notes.push_back("the plan takes " + sj::num(std::round(added)) + " m2 of raised scan joined to the footprint prior that no neighbouring footprint claims");
+        }
+        double maskArea = 0;
+        for (size_t c = 0; c < G.v.size(); ++c) maskArea += mask.v[c] ? G.cell * G.cell : 0;
+        // the roof heights inside the plan, binned at 0.25 m by area
+        const double bin = 0.25;
+        std::vector<double> hist;
+        double seen = 0;
+        for (size_t c = 0; c < mask.v.size(); ++c) {
+            if (!mask.v[c] || dsm[c] < -1e29f) continue;
+            const double h = dsm[c] - yBase;
+            if (h < 0) continue;
+            const size_t b = static_cast<size_t>(h / bin);
+            if (hist.size() <= b) hist.resize(b + 1, 0.0);
+            hist[b] += G.cell * G.cell;
+            seen += G.cell * G.cell;
+        }
+        std::vector<double> sm(hist.size(), 0.0);
+        for (size_t b = 0; b < hist.size(); ++b) for (int k = -2; k <= 2; ++k) { const long j = static_cast<long>(b) + k; if (j >= 0 && j < static_cast<long>(hist.size())) sm[b] += hist[static_cast<size_t>(j)] * (3 - std::abs(k)) / 3.0; }
+        const double minA = std::max(P.levelMinAreaM2, P.levelMinShare * maskArea);
+        std::vector<double> levels;
+        for (size_t b = 0; b < sm.size(); ++b) {
+            if ((b + 0.5) * bin < P.levelMinHeightM) continue;
+            bool peak = true;
+            for (int k = -4; k <= 4 && peak; ++k) { const long j = static_cast<long>(b) + k; if (k && j >= 0 && j < static_cast<long>(sm.size()) && (sm[static_cast<size_t>(j)] > sm[b] || (sm[static_cast<size_t>(j)] == sm[b] && k < 0))) peak = false; }
+            if (!peak) continue;
+            // the plateau's area and height: the cells within half a metre of the peak
+            double a = 0, hy = 0;
+            for (size_t c = 0; c < mask.v.size(); ++c) {
+                if (!mask.v[c] || dsm[c] < -1e29f) continue;
+                const double h = dsm[c] - yBase;
+                if (std::fabs(h - (b + 0.5) * bin) <= 0.5) { a += G.cell * G.cell; hy += G.cell * G.cell * h; }
+            }
+            if (a >= minA) levels.push_back(hy / a);
+        }
+        std::sort(levels.begin(), levels.end());
+        std::vector<double> merged;
+        for (double l : levels) { if (!merged.empty() && l - merged.back() < P.levelMergeM) merged.back() = std::max(merged.back(), l); else merged.push_back(l); }
+        if (merged.empty()) {
+            R.notes.push_back("the scan's roof inside the footprint prior (" + sj::num(std::round(maskArea)) + " m2, " + sj::num(std::round(100 * seen / std::max(maskArea, 1e-9))) +
+                              "% of it seen from above) has no level of " + sj::num(std::round(minA)) + " m2: the bands are traced from the scan's walls instead");
+            R.priorUsed = false;
+            return;
+        }
+        // each level moves to the median of the roof it stands for (the cells nearer it than any other level, within 1.5 m): a
+        // roof the scan shows uneven is cut at its middle, not at its most common height
+        for (int it = 0; it < 2; ++it) {
+            std::vector<std::vector<std::pair<float, double>>> own(merged.size());
+            for (size_t c = 0; c < mask.v.size(); ++c) {
+                if (!mask.v[c] || dsm[c] < -1e29f) continue;
+                const double h = dsm[c] - yBase;
+                size_t bi = 0;
+                for (size_t l = 1; l < merged.size(); ++l) if (std::fabs(h - merged[l]) < std::fabs(h - merged[bi])) bi = l;
+                if (std::fabs(h - merged[bi]) <= 1.5) own[bi].push_back({static_cast<float>(h), G.cell * G.cell});
+            }
+            for (size_t l = 0; l < merged.size(); ++l) {
+                if (own[l].empty()) continue;
+                std::sort(own[l].begin(), own[l].end());
+                double tot = 0, acc = 0;
+                for (const auto& q : own[l]) tot += q.second;
+                for (const auto& q : own[l]) { acc += q.second; if (acc >= 0.5 * tot) { merged[l] = q.first; break; } }
+            }
+        }
+        std::sort(merged.begin(), merged.end());
+        const int r1m = std::max(1, static_cast<int>(std::lround(1.0 / G.cell)));
+        // what stands raised but under the lowest level (a lower roof too uneven or too small to be a plateau): when it holds a
+        // level's area a metre wide, its median height is the lowest level; a courtyard (under levelMinHeightM) is a hole
+        sg::Raster court = G;
+        {
+            sg::Raster sub = G;
+            for (size_t c = 0; c < G.v.size(); ++c) {
+                const bool known = mask.v[c] && dsm[c] > -1e29f;
+                const double h = known ? dsm[c] - yBase : 0;
+                court.v[c] = known && h < P.levelMinHeightM ? 1 : 0;
+                sub.v[c] = known && h >= P.levelMinHeightM && h < merged.front() - 0.6 ? 1 : 0;
+            }
+            court = squareMorph(squareMorph(court, r1m, false), r1m, true);
+            sub = squareMorph(squareMorph(sub, r1m, false), r1m, true);
+            std::vector<std::pair<float, double>> hs;
+            double a = 0;
+            for (size_t c = 0; c < G.v.size(); ++c) if (sub.v[c]) { hs.push_back({dsm[c] - static_cast<float>(yBase), G.cell * G.cell}); a += G.cell * G.cell; }
+            if (a >= P.levelMinAreaM2) {
+                std::sort(hs.begin(), hs.end());
+                double acc = 0, med = hs.front().first;
+                for (const auto& [h, w] : hs) { acc += w; if (acc >= 0.5 * a) { med = h; break; } }
+                if (med < merged.front() - P.levelMergeM) merged.insert(merged.begin(), med);
+            }
+        }
+        R.roofLevels = merged;
+        R.priorUsed = true;
+        {
+            std::string ls;
+            for (size_t i = 0; i < merged.size(); ++i) ls += (i ? ", " : "") + sj::num(std::round(merged[i] * 10) / 10) + " m";
+            R.notes.push_back("footprint prior (" + Q.prior.source + ", " + sj::num(std::round(maskArea)) + " m2): roof levels measured in the scan at " + ls + " above the base" +
+                              (Q.prior.heightM > 0 ? " (the vector data gives " + sj::num(std::round(Q.prior.heightM * 10) / 10) + " m)" : ""));
+        }
+        int order = 0;
+        double y0 = yBase;
+        const int open = std::max(1, static_cast<int>(std::lround(0.5 / G.cell)));
+        // the bands above the lowest follow the scan's roof, within the plan's own uncertainty of it (a setback's walls stand
+        // where the scan has them, not where the prior's edge happens to be), never into a neighbour's plan
+        sg::Raster reach = squareMorph(mask, std::max(1, static_cast<int>(std::lround(P.priorWallWindowM / G.cell))), true);
+        for (size_t c = 0; c < reach.v.size(); ++c) if (neighbour.v[c]) reach.v[c] = 0;
+        for (size_t k = 0; k < merged.size(); ++k) {
+            const double top = yBase + merged[k];
+            sg::Raster F = G;
+            if (k == 0) {
+                // the lowest band: the plan less its courtyards (a cell the scan has no roof over is the prior's)
+                for (size_t c = 0; c < F.v.size(); ++c) F.v[c] = mask.v[c] && !court.v[c] ? 1 : 0;
+            } else {
+                for (size_t c = 0; c < F.v.size(); ++c) F.v[c] = reach.v[c] && dsm[c] > -1e29f && dsm[c] >= top - 0.6 ? 1 : 0;
+                F = squareMorph(squareMorph(F, open, true), open, false);
+                F = squareMorph(squareMorph(F, open, false), open, true);
+            }
+            debugRaster("prior_band_" + std::to_string(static_cast<int>(std::lround(y0 * 100))), F);
+            priorLowest = k == 0;
+            for (const auto& [outerRaw, holesRaw] : loopsOf(F)) addLoopPrimitive(outerRaw, holesRaw, y0, top, order, k == 0);
+            y0 = top;
+        }
+        priorLowest = false;
+        chooseFootprint();
+        // how far the fitted plan agrees with the prior
+        if (!R.footprint.empty()) {
+            double inter = 0, uni = 0;
+            std::vector<std::pair<std::vector<P2>, std::vector<std::vector<P2>>>> tl;
+            for (size_t li = 0; li < R.footprint.size(); ++li) {
+                std::vector<std::vector<P2>> hs;
+                for (const auto& h : R.footprintHoles[li]) hs.push_back(tessellate(h, P.sagittaM));
+                tl.push_back({tessellate(R.footprint[li], P.sagittaM), hs});
+            }
+            for (int kk = 0; kk < G.nz; kk += 4) for (int i = 0; i < G.nx; i += 4) {
+                bool f = false;
+                for (const auto& [o, hs] : tl) {
+                    bool in = sg::insidePolygon(o, G.cx(i), G.cz(kk));
+                    for (const auto& h : hs) if (in && sg::insidePolygon(h, G.cx(i), G.cz(kk))) in = false;
+                    if (in) { f = true; break; }
+                }
+                const bool m = priorOnly.v[G.id(i, kk)] != 0;
+                inter += (f && m) ? 1 : 0;
+                uni += (f || m) ? 1 : 0;
+            }
+            R.priorIoU = uni > 0 ? inter / uni : 0;
+        }
+    }
+
     void bandsAndFootprints() {
         buildDsm();
+        if (Q.prior.on()) {
+            priorBands();
+            if (R.priorUsed) return;
+        }
         // ledges: horizontal planes that span the plan
         struct Ledge { double y; double area; int region; };
         std::vector<Ledge> ledges;
@@ -1584,7 +2123,7 @@ private:
             addColumn(col, order);
             return;
         }
-        Loop outer = fitLoop(outerRaw.pts, y0, y1, false);
+        Loop outer = priorLowest ? fitPriorLoop(outerRaw.pts, y0, y1) : fitLoop(outerRaw.pts, y0, y1, false);
         std::vector<Loop> holes;
         for (const auto& h : holesRaw) holes.push_back(fitLoop(h.pts, y0, y1, true));
         if (lowest) { R.footprint.push_back(outer); R.footprintHoles.push_back(holes); }
@@ -2943,7 +3482,20 @@ private:
             auto [d, t] = sgrid.nearest(FS[i].p, 3.0);
             dScan[i] = t == UINT32_MAX ? 3.0 : d;
         });
-        std::map<int, double> surfVis, surfSup, surfTot;
+        std::map<int, double> surfVis, surfSup, surfTot, surfParty;
+        // a fitted face standing against a neighbouring building (a party wall, up to the neighbour's height): the footprint prior's
+        // neighbours say so; no scan can see it, so it is reported apart and not counted as unobserved
+        auto againstNeighbour = [&](const sg::Sample& q) {
+            if (!Q.prior.on() || Q.prior.neighbours.empty() || std::fabs(q.n.y) > 0.3f) return false;
+            const Vec3 w = R.frame.toWorld(q.p + q.n * static_cast<float>(P.partyProbeM));
+            if (insideParts(Q.prior.parts, w.x, w.z)) return false;
+            for (const auto& nb : Q.prior.neighbours) {
+                if (nb.heightM > 0 && q.p.y - R.baseY > nb.heightM + 0.5) continue;
+                if (insideParts(nb.parts, w.x, w.z)) return true;
+            }
+            return false;
+        };
+        std::vector<uint8_t> fsParty;
         for (size_t i = 0; i < FS.size(); ++i) {
             const int si = ftriSurface[FS[i].tri];
             surfTot[si] += FS[i].w;
@@ -2953,6 +3505,9 @@ private:
             surfVis[si] += FS[i].w;
             fs.push_back({dScan[i], FS[i].w});
             fsSurface.push_back(si);
+            const bool party = againstNeighbour(FS[i]);
+            fsParty.push_back(party ? 1 : 0);
+            if (party) surfParty[si] += FS[i].w;
             if (dScan[i] <= P.inlierBandM) surfSup[si] += FS[i].w;
         }
         R.fitToScan = sg::residualOf(fs, P.inlierBandM);  // over all of the rebuild's visible surface; the backed part is measured below
@@ -2969,7 +3524,9 @@ private:
             // a box face keeps the support its own samples gave it
             if (boxFaceMeasured.count(static_cast<int>(si))) s.supportFraction = std::max(s.supportFraction, measuredSupport);
             else s.supportFraction = measuredSupport;
-            if (s.supportFraction < 0.5 && s.visibleFraction > 0) R.unobservedArea += s.area;
+            s.partyWall = vis > 0 && surfParty[static_cast<int>(si)] >= 0.5 * vis;
+            if (s.partyWall) s.label = "party wall";
+            if (s.supportFraction < 0.5 && s.visibleFraction > 0 && !s.partyWall) R.unobservedArea += s.area;
         }
         // fit -> scan over the rebuild's visible surface that has scan within 25 cm of it (the part the scan backs); the rest is
         // the rebuild placing faces where the scan has no samples (a face the scan never saw): reported as unobserved, and
@@ -2978,9 +3535,23 @@ private:
             std::vector<std::pair<double, double>> backed;
             double visTotal = 0, visUnobserved = 0;
             for (size_t i = 0; i < fs.size(); ++i) {
+                if (fs[i].first <= P.backedBandM) backed.push_back(fs[i]);
+                if (fsParty[i]) {
+                    // a party wall: expected unobserved, reported apart
+                    R.partyWallArea += fs[i].second;
+                    if (fs[i].first > P.backedBandM) R.partyWallUnobservedArea += fs[i].second;
+                    continue;
+                }
                 visTotal += fs[i].second;
-                if (fs[i].first <= P.backedBandM) backed.push_back(fs[i]); else visUnobserved += fs[i].second;
+                if (fs[i].first > P.backedBandM) visUnobserved += fs[i].second;
             }
+            if (std::getenv("SCAN_FIT_DEBUG_DIR")) {
+                std::map<int, std::array<double, 3>> per;   // visible, backed, party
+                for (size_t i = 0; i < fs.size(); ++i) { auto& a = per[fsSurface[i]]; a[0] += fs[i].second; if (fs[i].first <= P.backedBandM) a[1] += fs[i].second; if (fsParty[i]) a[2] += fs[i].second; }
+                for (const auto& [si, a] : per) if (a[0] > 5) std::cerr << "DEBUG surface " << R.surfaces[static_cast<size_t>(si)].id << " " << R.surfaces[static_cast<size_t>(si)].label << " visible " << a[0] << " backed " << a[1] << " party " << a[2] << "\n";
+            }
+            if (R.partyWallArea > 0.05) R.notes.push_back(sj::num(std::round(R.partyWallArea)) + " m2 of the rebuild's visible surface stands against a neighbouring building (" + Q.prior.source + "), " +
+                                                          sj::num(std::round(R.partyWallUnobservedArea)) + " m2 of it without scan: party walls, labelled and left out of the unobserved share");
             R.fitToScanAll = R.fitToScan;
             R.fitToScan = sg::residualOf(backed, P.inlierBandM);
             R.unobservedShare = visTotal > 0 ? visUnobserved / visTotal : 0;
@@ -3193,7 +3764,7 @@ private:
         R.gates.push_back({"scan→fit rms (kept-as-scanned regions count as exact)", R.scanToFitPlusPass.rms, scanGate, true, "m"});
         R.gates.push_back({"fit→scan rms (faces the scan backs)", R.fitToScan.rms, P.gateFitToScanM, true, "m"});
         R.gates.push_back({"Hausdorff without pass-through", R.hausdorff, P.gateHausdorffM, true, "m"});
-        R.gates.push_back({"unobserved share of the rebuild's visible surface", R.unobservedShare, P.gateUnobservedShare, true, "ratio"});
+        R.gates.push_back({R.partyWallArea > 0 ? "unobserved share of the rebuild's visible surface (party walls apart)" : "unobserved share of the rebuild's visible surface", R.unobservedShare, P.gateUnobservedShare, true, "ratio"});
         R.gates.push_back({"accepted body primitives", body ? 1.0 : 0.0, 1.0, false, "count"});
         R.accepted = true;
         for (const auto& g : R.gates) R.accepted = R.accepted && g.passed();
@@ -3382,6 +3953,7 @@ inline std::string surfaceProvenance(const FitResult& R, const Surface& s) {
     const bool measured = !unobserved && !pr.corrected;
     std::string note;
     if (unobserved) note = "placed by the fit where the scan has samples on " + sj::num(std::round(s.supportFraction * 1000) / 10) + "% of its visible surface";
+    if (s.partyWall) note = "a party wall: it stands against a neighbouring building in the footprint prior, so no scan sees it; placed on the prior's edge" + (unobserved ? std::string() : std::string(" and backed by the scan on ") + sj::num(std::round(s.supportFraction * 1000) / 10) + "% of it");
     if (pr.corrected) note = pr.correctionNote;
     return provenanceJson(label, measured, pr.method, unobserved ? s.supportFraction : (pr.corrected ? 0.7 : std::numeric_limits<double>::quiet_NaN()), &s.fit, note, s.supportFraction);
 }
@@ -3420,6 +3992,15 @@ inline std::string structureFitJson(const FitResult& R, const FitRequest& Q, con
         if (!Q.texturedSha256.empty()) in.s("texturedSha256", Q.texturedSha256);
         in.raw("anchor", "[" + sj::num(Q.anchorX) + "," + sj::num(Q.anchorZ) + "]");
         if (!Q.refitOf.empty()) in.s("refitOf", Q.refitOf);
+        if (R.priorUsed || Q.prior.on()) {
+            sj::Object pr;
+            pr.s("source", Q.prior.source).b("used", R.priorUsed).n("areaM2", R.priorAreaM2).n("fittedIoU", std::clamp(R.priorIoU, 0.0, 1.0)).i("neighbours", static_cast<long long>(Q.prior.neighbours.size()));
+            if (Q.prior.heightM > 0) pr.n("heightM", Q.prior.heightM);
+            std::vector<std::string> lv;
+            for (double l : R.roofLevels) lv.push_back(sj::num(l));
+            pr.raw("roofLevelsM", sj::array(lv));
+            in.raw("footprintPrior", pr.text());
+        }
         if (R.ownership.used) {
             sj::Object ow;
             ow.i("votedTriangles", static_cast<long long>(R.ownership.voted)).i("structureTriangles", static_cast<long long>(R.ownership.structure))
@@ -3514,6 +4095,7 @@ inline std::string structureFitJson(const FitResult& R, const FitRequest& Q, con
             sj::Object q;
             q.s("id", s.id).s("primitiveId", R.prims[static_cast<size_t>(s.prim)].id).raw("chart", chartJson(s)).n("areaM2", s.area).raw("fit", residualJ(s.fit))
                 .n("visibleFraction", std::clamp(s.visibleFraction, 0.0, 1.0)).n("supportFraction", std::clamp(s.supportFraction, 0.0, 1.0)).raw("provenance", surfaceProvenance(R, s));
+            if (s.partyWall) q.b("partyWall", true);
             ss.push_back(q.text());
         }
         o.raw("surfaces", sj::array(ss));
@@ -3570,6 +4152,8 @@ inline std::string structureFitJson(const FitResult& R, const FitRequest& Q, con
         m.raw("scanToFit", residualJ(R.scanToFit)).raw("fitToScan", residualJ(R.fitToScan)).raw("scanToFitPlusPassThrough", residualJ(R.scanToFitPlusPass))
             .n("coverage", std::clamp(R.coverage, 0.0, 1.0)).n("hausdorffM", R.hausdorff);
         if (R.haveRemesh) m.raw("remeshToScan", residualJ(R.remeshToScan));
+        m.n("unobservedShare", std::clamp(R.unobservedShare, 0.0, 1.0));
+        if (Q.prior.on()) m.n("partyWallAreaM2", R.partyWallArea).n("partyWallUnobservedAreaM2", R.partyWallUnobservedArea).n("neighbourScanAreaM2", R.neighbourScanArea);
         o.raw("metrics", m.text());
     }
     {
