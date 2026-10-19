@@ -182,6 +182,7 @@ test('extruded target and a neighbour: footprints, vector vs DSM side by side, r
     assert.strictEqual(payload.neighbours.length, 1);
     const nb = payload.neighbours[0];
     assert.ok(Math.abs(nb.distanceFromPlaceMeters - 20) < 0.2);
+    assert.ok(Math.abs(nb.distanceFromTargetMeters - 10) < 0.2, "gap between the two footprints");
     assert.strictEqual(nb.comparison.verdict, 'disagree');
     assert.ok(Math.abs(nb.comparison.vectorVsDsmMeters - 15) < 0.01, 'vector 35 vs DSM 20');
     assert.match(nb.comparison.statement, /DISAGREE by 15 m/);

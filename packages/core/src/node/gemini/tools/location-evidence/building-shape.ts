@@ -66,7 +66,7 @@ export interface BuildingShapeRequest {
     location?: string;
     latitude?: number;
     longitude?: number;
-    /** Also report the buildings whose footprint comes within this many metres of the place (default 0: none). */
+    /** Also report the buildings whose footprint comes within this many metres of the target's footprint (default 0: none). */
     neighbourRadiusMeters?: number;
     /** How far outside a footprint the place point may be and still pick that building (default 12 m). */
     maxSnapMeters?: number;
@@ -113,6 +113,17 @@ function distanceToRing(x: number, y: number, ring: XY[]): number {
         const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy || 1e-12;
         const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / len2));
         best = Math.min(best, Math.hypot(x - (ax + t * dx), y - (ay + t * dy)));
+    }
+    return best;
+}
+
+/** Smallest gap between two sets of rings (0 when they touch or overlap). */
+function footprintGap(a: XY[][], b: XY[][]): number {
+    let best = Infinity;
+    for (const ra of a) for (const rb of b) {
+        if (ra.some(p => pointInRing(p[0], p[1], rb)) || rb.some(p => pointInRing(p[0], p[1], ra))) return 0;
+        for (const p of ra) best = Math.min(best, distanceToRing(p[0], p[1], rb));
+        for (const p of rb) best = Math.min(best, distanceToRing(p[0], p[1], ra));
     }
     return best;
 }
@@ -260,6 +271,8 @@ export interface BuildingReport {
     featureIds: string[];
     /** 0 when the place point is inside the footprint. */
     distanceFromPlaceMeters: number;
+    /** Neighbours: the gap between this footprint and the target's (0 when they touch). */
+    distanceFromTargetMeters?: number;
     containsPlacePoint: boolean;
     footprint: {
         chosen: FootprintPartReport['kind'];
@@ -406,9 +419,10 @@ function buildCandidate(group: FeatureRecord[], frame: LocalFrame): Candidate | 
     };
 }
 
-function describeNearest(cands: Candidate[]): Array<{ id: string; distanceMeters: number; footprint: string; vectorHeightMeters?: number }> {
+function describeNearest(cands: Candidate[]): Array<{ id: string; distanceMeters: number; footprint: string; vectorHeightMeters?: number; partsWgs84: LngLat[][] }> {
     return [...cands].sort((a, b) => a.distance - b.distance).slice(0, 5).map(c => ({
-        id: c.id, distanceMeters: r1(c.distance), footprint: c.chosen, ...(c.vectorHeight !== undefined ? { vectorHeightMeters: r2(c.vectorHeight) } : {})
+        id: c.id, distanceMeters: r1(c.distance), footprint: c.chosen, ...(c.vectorHeight !== undefined ? { vectorHeightMeters: r2(c.vectorHeight) } : {}),
+        partsWgs84: c.parts.map(p => p.ringWgs84)
     }));
 }
 
@@ -444,14 +458,19 @@ async function resolvePlace(req: BuildingShapeRequest, deps: BuildingShapeDeps):
     }
 }
 
-async function fetchTiles(place: { lat: number; lng: number }, radiusM: number, deps: BuildingShapeDeps): Promise<Array<{ x: number; y: number; data: DecodedVectorTileData }>> {
-    const dLat = radiusM / M_PER_DEG_LAT, dLng = radiusM / (M_PER_DEG_LAT * Math.cos((place.lat * Math.PI) / 180));
-    const nw = tileOf(place.lng - dLng, place.lat + dLat, ZOOM), se = tileOf(place.lng + dLng, place.lat - dLat, ZOOM);
+type FetchedTile = { x: number; y: number; data: DecodedVectorTileData };
+
+/** Fetches the zoom-17 tiles covering a local [east, north] box that are not in `have` yet; returns all held tiles. */
+async function fetchTiles(frame: LocalFrame, box: [number, number, number, number], have: Map<string, FetchedTile>, deps: BuildingShapeDeps): Promise<FetchedTile[]> {
+    const [w, s0, e, n] = box;
+    const nwLL = frame.toLngLat([w, n]), seLL = frame.toLngLat([e, s0]);
+    const nw = tileOf(nwLL[0], nwLL[1], ZOOM), se = tileOf(seLL[0], seLL[1], ZOOM);
     const xy: Array<[number, number]> = [];
-    for (let x = nw.x; x <= se.x; x++) for (let y = nw.y; y <= se.y; y++) xy.push([x, y]);
+    for (let x = nw.x; x <= se.x; x++) for (let y = nw.y; y <= se.y; y++) if (!have.has(`${x}/${y}`)) xy.push([x, y]);
     const fetchTile = deps.fetchTile ?? ((x: number, y: number, z: number) => GoogleVectorTileService.fetchVectorTile(x, y, z, '', deps.fetchImpl ?? fetch));
     try {
-        return await mapLimit(xy, 6, async ([x, y]) => ({ x, y, data: await fetchTile(x, y, ZOOM) }));
+        for (const t of await mapLimit(xy, 6, async ([x, y]) => ({ x, y, data: await fetchTile(x, y, ZOOM) }))) have.set(`${t.x}/${t.y}`, t);
+        return [...have.values()];
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (/service account|service-account|HTTP 40[13]\b/i.test(message)) {
@@ -729,21 +748,23 @@ export async function runBuildingShape(req: BuildingShapeRequest, deps: Building
     const place = await resolvePlace(req, deps);
     const frame = new LocalFrame(place.lat, place.lng);
 
-    // Fetch wide enough that a building reaching the search radius is whole.
-    const searchRadius = Math.max(neighbourRadius, maxSnap) + 60;
+    // Fetch wide enough that a building within reach of the place point is whole.
+    const searchRadius = maxSnap + 60;
+    const held = new Map<string, FetchedTile>();
     progress('Fetching Google vector tiles', 0.15);
-    const tiles = await fetchTiles(place, searchRadius, deps);
+    let tiles = await fetchTiles(frame, [-searchRadius, -searchRadius, searchRadius, searchRadius], held, deps);
     const features = collectFeatures(tiles);
     if (!features.length) {
         throw new BuildingShapeError('no_coverage', `Google's vector tiles have no buildings within ${Math.round(searchRadius)} m of ${place.resolvedAs} (${tiles.length} zoom-${ZOOM} tile${tiles.length === 1 ? '' : 's'} read).`, { place });
     }
-    const candidates = joinAcrossTileEdges(features).map(g => buildCandidate(g, frame)).filter((c): c is Candidate => !!c);
+    let candidates = joinAcrossTileEdges(features).map(g => buildCandidate(g, frame)).filter((c): c is Candidate => !!c);
 
     // Target: a footprint containing the place point (the most specific: has a height, then the smallest), else the
     // nearest within maxSnap. Never a made-up footprint.
     const containing = candidates.filter(c => c.contains).sort((a, b) => Number(b.vectorHeight !== undefined) - Number(a.vectorHeight !== undefined) || a.area - b.area);
     const byDistance = [...candidates].sort((a, b) => a.distance - b.distance);
     let target: Candidate | undefined = containing[0];
+    const gapById = new Map<string, number>();
     let targetWhy: string;
     if (target) {
         targetWhy = containing.length > 1
@@ -764,7 +785,29 @@ export async function runBuildingShape(req: BuildingShapeRequest, deps: Building
             { place, nearestFootprints: nearest }
         );
     }
-    const neighbours = byDistance.filter(c => c !== target && c.distance <= neighbourRadius).slice(0, MAX_NEIGHBOURS);
+    // Neighbours: buildings whose footprint comes within the radius of the target's footprint. Widen the tiles so the
+    // whole band (and the buildings reaching into it) is read, then rebuild the candidates on the larger set.
+    let neighbours: Candidate[] = [];
+    if (neighbourRadius > 0) {
+        const pts = target.partsLocal.flat();
+        const pad = neighbourRadius + 60;
+        const box: [number, number, number, number] = [Math.min(...pts.map(p => p[0])) - pad, Math.min(...pts.map(p => p[1])) - pad, Math.max(...pts.map(p => p[0])) + pad, Math.max(...pts.map(p => p[1])) + pad];
+        const before = tiles.length;
+        tiles = await fetchTiles(frame, box, held, deps);
+        if (tiles.length > before) {
+            const key = target.features[0].key;
+            candidates = joinAcrossTileEdges(collectFeatures(tiles)).map(g => buildCandidate(g, frame)).filter((c): c is Candidate => !!c);
+            target = candidates.find(c => c.features.some(f => f.key === key))!;
+        }
+        const t = target;
+        neighbours = candidates
+            .filter(c => c !== t)
+            .map(c => ({ c, gap: footprintGap(t.partsLocal, c.partsLocal) }))
+            .filter(x => x.gap <= neighbourRadius)
+            .sort((a, b) => a.gap - b.gap)
+            .slice(0, MAX_NEIGHBOURS)
+            .map(x => { gapById.set(x.c.id, x.gap); return x.c; });
+    }
     const reported = [target, ...neighbours];
 
     // Solar API: one DSM around everything reported, and building insights per building.
@@ -800,7 +843,9 @@ export async function runBuildingShape(req: BuildingShapeRequest, deps: Building
     const allRings = candidates.map(c => c.parts.map(p => p.ringWgs84));
     const reports = reported.map((c, i) => {
         const others = candidates.flatMap((o, k) => (o === c ? [] : allRings[k]));
-        return reportBuilding(c, i === 0 ? 'target' : 'neighbour', frame, dsm, dsmReason, insights[i], others, roads);
+        const r = reportBuilding(c, i === 0 ? 'target' : 'neighbour', frame, dsm, dsmReason, insights[i], others, roads);
+        const gap = gapById.get(c.id);
+        return gap === undefined ? r : { ...r, distanceFromTargetMeters: r1(gap) };
     });
 
     // GLBs: the modeled volume (as Google gives it) when there is one; an extruded massing when asked.
@@ -833,7 +878,7 @@ export async function runBuildingShape(req: BuildingShapeRequest, deps: Building
 
     const t = reports[0];
     const summary = `${place.resolvedAs}: ${targetWhy} Footprint: ${t.footprint.chosen.replace(/_/g, ' ')}, ${t.footprint.parts.length} part${t.footprint.parts.length === 1 ? '' : 's'}, ${t.footprint.areaM2} m2. ${t.comparison.statement}`
-        + (neighbours.length ? ` ${neighbours.length} neighbour${neighbours.length === 1 ? '' : 's'} within ${neighbourRadius} m reported.` : '');
+        + (neighbours.length ? ` ${neighbours.length} neighbour${neighbours.length === 1 ? '' : 's'} within ${neighbourRadius} m of its footprint reported.` : '');
     progress('Done', 1);
     return {
         place,
@@ -861,7 +906,7 @@ export const BUILDING_SHAPE_TOOL_DECLARATION: ToolDeclaration = {
             location: { type: 'STRING', description: 'Place name or address (geocoded with Google Places), or "lat, lng". Optional when latitude and longitude are given.' },
             latitude: { type: 'NUMBER', description: 'WGS-84 latitude of the place point (with longitude; used instead of geocoding).' },
             longitude: { type: 'NUMBER', description: 'WGS-84 longitude of the place point.' },
-            neighbourRadiusMeters: { type: 'NUMBER', description: 'Also report the buildings whose footprint comes within this many metres of the place (default 0, max 150; at most 25 neighbours).' },
+            neighbourRadiusMeters: { type: 'NUMBER', description: 'Also report the buildings whose footprint comes within this many metres of the target building\'s footprint (default 0, max 150; at most 25 neighbours, nearest first).' },
             maxSnapMeters: { type: 'NUMBER', description: 'When no footprint contains the place point, the nearest within this distance is used (default 12 m, max 50).' },
             writeMassingGlb: { type: 'BOOLEAN', description: 'Also write a clean extruded massing GLB of the reported buildings from the vector data alone (flat base, provenance "from Google vector data").' }
         }
