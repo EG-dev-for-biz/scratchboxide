@@ -37,7 +37,7 @@ import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { decodeImageInMemory } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 import { VisionModelChain } from '../src/node/gemini/vision-model-chain';
 import {
-    maskTemporaryInViews, parseTemporaryReply, temporaryMask, visionTemporaryChecker, TEMPORARY_MIN_CONFIDENCE, type TemporaryChecker
+    maskTemporaryInViews, parseTemporaryReply, replaceTemporaryViews, temporaryMask, visionTemporaryChecker, TEMPORARY_MIN_CONFIDENCE, type TemporaryChecker
 } from '../src/node/3d-engine/staged-location/temporary-structures';
 import { prepareSurveySite, runStreetViewSurvey, STREETVIEW_SURVEY_DECLARATION, type StreetViewSurveyDeps, type StreetViewSurveyResult, type SurveySite } from '../src/node/gemini/tools/location-evidence/streetview-survey';
 import type { ProjectionView } from '../src/common/spatial/texture-pass-contracts';
@@ -53,7 +53,9 @@ const PANOS = [
         return { panoId: `ringPano${String(k).padStart(2, '0')}`, x: 24 * Math.sin(a), z: -24 * Math.cos(a), date: SCAFFOLD_MONTH };
     }),
     // an older capture 2 m from the ring's south pano (ringPano05 at 165°): the discovery thins it out as superseded
-    { panoId: 'olderPano2023', x: 4.6, z: 24.4, date: '2023-09' }
+    { panoId: 'olderPano2023', x: 4.6, z: 24.4, date: '2023-09' },
+    // an older pano 2 m from the ring's east pano (ringPano03 at 105°) that is an indoor capture: its photo shows no building
+    { panoId: 'indoorPano2012', x: 24.6, z: 4.6, date: '2012-03' }
 ].map(p => { const g = scanToGeodetic(ORIGIN, p.x, 0, p.z); return { ...p, lat: g.lat, lng: g.lng }; });
 
 /** Colour of a world point at a capture month: stone walls with windows; in 2025-06 orange netting on the south and east faces below 11 m. */
@@ -127,11 +129,14 @@ function syntheticVisionClient(calls: { n: number; texts: string[] }) {
             }
             if (a >= 0 && (y % 8 === 0 || !left.length)) { left.push([y, a]); right.push([y, b + 1]); }
         }
+        let bld = 0;
+        for (let i = 0; i < img.width * img.height; i++) { const r = img.rgba[i * 4], g = img.rgba[i * 4 + 1], b = img.rgba[i * 4 + 2]; if ((r > 150 && r - b > 30) || (r < 70 && g < 75 && b < 85 && b > 35) || isNetting(r, g, b)) bld++; }
+        const buildingShare = Math.round(bld / (img.width * img.height) * 100) / 100;
         const k = (v: number, d: number) => Math.round(v / d * 1000);
         const outline = [...left, ...right.reverse()].map(([y, x]) => [k(y, img.height), k(x, img.width)]);
         const reply = n > 0.02 * img.width * img.height
-            ? { present: true, confidence: 0.92, description: 'orange scaffold netting over the lower floors', regions: [{ description: 'scaffold netting', outline }] }
-            : { present: false, confidence: 0.9, description: 'the facade is clear', regions: [] };
+            ? { buildingShare, present: true, confidence: 0.92, description: 'orange scaffold netting over the lower floors', regions: [{ description: 'scaffold netting', outline }] }
+            : { buildingShare, present: false, confidence: 0.9, description: 'the facade is clear', regions: [] };
         return { candidates: [{ content: { role: 'model', parts: [{ text: '```json\n' + JSON.stringify(reply) + '\n```' }] }, finishReason: 'STOP' }], modelVersion: 'synthetic-vision' } as unknown as GenerateContentResponse;
     };
     return { models: { generateContent } };
@@ -179,6 +184,10 @@ describe('streetview_survey checkTemporary (synthetic street, synthetic vision r
         retrieveGroundingImage: async (req: GroundingImageRequest): Promise<GroundingImage> => {
             groundingCalls++;
             const p = PANOS.find(x => x.panoId === req.panoId)!;
+            if (p.panoId.startsWith('indoor')) {
+                const flat = Buffer.alloc(W * H * 4, 128);
+                return { image: Buffer.from(jpegJs.encode({ data: flat, width: W, height: H }, 90).data), mimeType: 'image/jpeg', panoId: req.panoId, headingDegree: req.headingDegree!, pitchDegree: req.pitchDegree!, fovDegree: req.fovDegree! };
+            }
             const cam = castCamera({ eye: [p.x, 2.5, p.z], headingDeg: req.headingDegree!, pitchDeg: elevationForGroundingPitch(req.pitchDegree!), fovDeg: req.fovDegree!, widthPx: W, heightPx: H });
             return { image: photo(worldMesh, cam, p.date), mimeType: 'image/jpeg', panoId: req.panoId, headingDegree: req.headingDegree!, pitchDegree: req.pitchDegree!, fovDegree: req.fovDegree! };
         }
@@ -269,10 +278,13 @@ describe('streetview_survey checkTemporary (synthetic street, synthetic vision r
         expect(southCov.temporary!.bestViewFree).toBe(true);
         expect(southCov.temporary!.flaggedViews).not.toContain(south.index);
 
-        // 2. the east face: no capture of it from another month, so its view is kept and flagged, with its regions as a mask
+        // 2. the east face: its only other capture month is an indoor pano that shows no building, so the view is kept and
+        // flagged, with its regions as a mask
         const eastKept = t.kept.find(k => Math.abs(k.faceHeadingDeg - 90) < 20)!;
         expect(eastKept).toBeDefined();
-        expect(eastKept.reason).toBe('no eligible pano of this face from another capture month');
+        expect(eastKept.reason).toBe('none of the 1 capture of this face from another month is clear');
+        expect(eastKept.tried).toEqual([expect.objectContaining({ panoId: 'indoorPano2012', captureMonth: '2012-03' })]);
+        expect(eastKept.tried[0].outcome).toMatch(/^shows too little of the building \(0 percent of the photo/);
         expect(eastKept.captureMonth).toBe(SCAFFOLD_MONTH);
         const east = faceView(res, 90);
         expect(east.panoId).toBe(faceView(plain, 90).panoId);
@@ -318,11 +330,11 @@ describe('streetview_survey checkTemporary (synthetic street, synthetic vision r
 
         // the summary says what, where, when, and what became of it
         expect(t.summary).toMatch(/orange scaffold netting over the lower floors on the 18[01]° face in 2025-06; replaced with a 2023-09 capture/);
-        expect(t.summary).toMatch(/on the (90|91)° face in 2025-06; kept and flagged \(no eligible pano/);
-        // cost: 4 questions for the views, 1 more grounding image and question for the alternative tried
-        expect(t.cost).toEqual({ images: 1, questions: 5 });
-        expect(groundingCalls - before).toBe(5);
-        expect(vision.n).toBe(5);
+        expect(t.summary).toMatch(/on the (90|91)° face in 2025-06; kept and flagged \(none of the 1 capture/);
+        // cost: 4 questions for the views, 1 more grounding image and question for each alternative tried
+        expect(t.cost).toEqual({ images: 2, questions: 6 });
+        expect(groundingCalls - before).toBe(6);
+        expect(vision.n).toBe(6);
         // the question is open vocabulary and names the target and face
         expect(vision.texts[0]).toContain('Synthetic Building');
         expect(vision.texts[0]).toMatch(/TEMPORARY/);
@@ -358,6 +370,23 @@ describe('temporary-structure readings and masks', () => {
         expect(parseTemporaryReply('{"present": false, "confidence": 0.95, "description": "clear", "regions": [{"outline": [[0,0],[0,9],[9,9]]}]}', 10, 10).regions).toEqual([]);
         expect(() => parseTemporaryReply('{"confidence": 1}', 10, 10)).toThrow(/present/);
         expect(() => parseTemporaryReply('not json', 10, 10)).toThrow(/not JSON/);
+    });
+
+    it('keeps and flags a view when no eligible pano of its face exists from another month (no grounding call)', async () => {
+        const face = { faceId: 'f0', headingDeg: 180, source: 'footprint', centre: [0, 7, 5], outward: [0, 0, 1], widthM: 12, heightM: 14 } as never;
+        const view = { faceId: 'f0', panoId: 'p2025', date: '2025-06-01', facadeHeadingDeg: 180, eye: [0, 2.5, 24], headingDeg: 180, pitchDeg: 10, fovDeg: 60, aspectRatio: 'RATIO_4X3' } as never;
+        const im = { view, bytes: Buffer.from('x'), mimeType: 'image/jpeg', widthPx: 100, heightPx: 80, sha256: 's', id: 'sv:p2025', nativeSampleM: 0.01, fetchMs: 1 } as never;
+        let fetches = 0;
+        const check: TemporaryChecker = async () => ({ present: true, confidence: 0.9, description: 'a sidewalk shed along the ground floor', buildingShare: 0.6, regions: [{ polygon: [[0, 60], [100, 60], [100, 80], [0, 80]] }], flagged: true });
+        const r = await replaceTemporaryViews({
+            images: [im], faces: [face], candidatesFor: () => [], check, target: 'x', refused: new Set(),
+            streetView: { grounding: { retrieveGroundingImage: async () => { fetches++; throw new Error('not expected'); } } } as never
+        });
+        expect(fetches).toBe(0);
+        expect(r.swaps).toEqual([]);
+        expect(r.images[0]).toBe(im);
+        expect(r.kept).toEqual([expect.objectContaining({ panoId: 'p2025', captureMonth: '2025-06', reason: 'no eligible pano of this face from another capture month', tried: [] })]);
+        expect(r.cost).toEqual({ images: 0, questions: 1 });
     });
 
     it('a failed question leaves the view unchecked, never clear', async () => {

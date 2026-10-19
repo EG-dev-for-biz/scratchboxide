@@ -249,6 +249,8 @@ export interface SurveyedTemporary {
     description: string;
     /** Outlines in image pixels at the delivered size, [x, y]. */
     regions: TemporaryReading['regions'];
+    /** Share of the photo the outside of the building occupies (the model's estimate), when given. */
+    buildingShare?: number;
     /** present with confidence at least TEMPORARY_MIN_CONFIDENCE. */
     flagged: boolean;
     /** PNG, 255 = a flagged temporary region (grown a little): treat as an occluder. Only for a flagged view with regions. */
@@ -667,7 +669,7 @@ export async function runStreetViewSurvey(site: SurveySite, options: StreetViewS
             maskPath = rel(file);
         }
         return {
-            record: { present: reading.present, confidence: reading.confidence, description: reading.description, regions: reading.regions, flagged: reading.flagged,
+            record: { present: reading.present, confidence: reading.confidence, description: reading.description, regions: reading.regions, ...(reading.buildingShare !== undefined ? { buildingShare: reading.buildingShare } : {}), flagged: reading.flagged,
                 ...(maskPath ? { maskPath } : {}), ...(reading.model ? { model: reading.model } : {}), ...(reading.error ? { error: reading.error } : {}) },
             ...(mask ? { mask } : {})
         };
@@ -951,7 +953,7 @@ export const streetviewSurveyHandler: ToolHandler = async (args, ctx) => {
     const covered = result.coverage.filter(c => c.requested);
     const summary = `Street View survey of ${site.label}: ${result.views.length} view${result.views.length === 1 ? '' : 's'} (© Google), ${registered} registered against the 3D Tiles` +
         `${result.refusals.length ? `, ${result.refusals.length} pano${result.refusals.length === 1 ? '' : 's'} refused by the grounding API` : ''}; ` +
-        `faces covered: ${covered.map(c => `${Math.round(c.headingDeg)}° ${Math.round(c.coveredFraction * 100)}%${c.temporary ? (c.temporary.free === true ? ' (temporary-free)' : c.temporary.free === false ? ' (temporary structure)' : ' (temporary: unchecked)') : ''}`).join(', ')}.` +
+        `faces covered: ${covered.map(c => `${Math.round(c.headingDeg)}° ${Math.round(c.coveredFraction * 100)}%${c.temporary && c.views.length ? (c.temporary.free === true ? ' (temporary-free)' : c.temporary.free === false ? ' (temporary structure)' : ' (temporary: unchecked)') : ''}`).join(', ')}.` +
         `${result.temporary ? ` Temporary structures: ${result.temporary.summary}.` : ''} Images in ${STREETVIEW_IMAGE_DIR}/.`;
     return {
         resultPayload: {

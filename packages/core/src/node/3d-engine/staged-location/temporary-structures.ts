@@ -50,6 +50,13 @@ export const TEMPORARY_CALL_TIMEOUT_MS = 90_000;
 const TEMPORARY_MAX_OUTPUT_TOKENS = 8192;
 /** A flagged view whose outlines hold less than this share on its own face is not replaced (the thing stands elsewhere). */
 export const TEMPORARY_ON_FACE_MIN_SHARE = 0.2;
+/**
+ * A clear alternative must show the building: at least this share of its photo, and at least
+ * TEMPORARY_ALT_MIN_SHARE_RATIO of the share the flagged view showed (an indoor pano, or one looking mostly at a neighbour,
+ * is not a replacement).
+ */
+export const TEMPORARY_ALT_MIN_BUILDING_SHARE = 0.15;
+export const TEMPORARY_ALT_MIN_SHARE_RATIO = 0.5;
 /** Pixels (share of the longest side) the flagged regions are grown by before they are taken out of a mask. */
 export const TEMPORARY_DILATE_SHARE = 0.006;
 
@@ -71,6 +78,8 @@ export interface TemporaryReading {
     /** Free text: what it is and where on the building. Recorded, never branched on. */
     description: string;
     regions: TemporaryRegion[];
+    /** Share of the photo (0..1) the outside of the building occupies, anything temporary on it included; 0 when it is not in the photo or the photo is indoors. */
+    buildingShare?: number;
     /** present and confidence >= TEMPORARY_MIN_CONFIDENCE. */
     flagged: boolean;
     model?: string;
@@ -90,7 +99,8 @@ export function temporaryPrompt(target: string, faceHeadingDeg?: number): string
         'Is anything TEMPORARY covering it or standing in front of it here: something that is not part of the building itself and will be gone after a while, ' +
         'for example scaffolding, construction netting or wrap, a crane, a sidewalk shed, barriers or fencing, construction equipment, or an event structure, or anything else of that nature. ' +
         'Ordinary passing or parked cars, people, trees, street lights, signs, awnings and permanent street furniture do not count. Blurred patches are privacy redaction and do not count. ' +
-        'Answer with JSON only: {"present": boolean, "confidence": number from 0 to 1, "description": "what it is and where on the building, in a few words", ' +
+        'Also say how much of the photo the outside of that building occupies (anything temporary on it included): 0 when the building is not in the photo or the photo is taken indoors. ' +
+        'Answer with JSON only: {"buildingShare": number from 0 to 1, "present": boolean, "confidence": number from 0 to 1, "description": "what it is and where on the building, in a few words", ' +
         '"regions": [{"description": "what this region is", "outline": [[y, x], ...]}]}. ' +
         'Outline each temporary thing as it appears in the photo, following its silhouette with at least 6 points; coordinates normalised to 0-1000 ([y, x] order, like box_2d). ' +
         'When present is false, regions is an empty list and description says what you checked.';
@@ -122,7 +132,12 @@ export function parseTemporaryReply(text: string, widthPx: number, heightPx: num
         }
     }
     const present = j.present === true;
-    return { present, confidence, description: typeof j.description === 'string' ? j.description.trim() : '', regions, flagged: present && confidence >= TEMPORARY_MIN_CONFIDENCE };
+    const share = Number(j.buildingShare);
+    return {
+        present, confidence, description: typeof j.description === 'string' ? j.description.trim() : '', regions,
+        ...(j.buildingShare !== undefined && Number.isFinite(share) ? { buildingShare: Math.max(0, Math.min(1, share)) } : {}),
+        flagged: present && confidence >= TEMPORARY_MIN_CONFIDENCE
+    };
 }
 
 /** The flagged regions filled into a W x H mask (1 inside), optionally grown by `dilatePx`. */
@@ -351,6 +366,11 @@ export async function replaceTemporaryViews(input: {
             const im = got.images[0];
             const reading = await ask(im);
             cost.questions++;
+            const needShare = Math.max(TEMPORARY_ALT_MIN_BUILDING_SHARE, TEMPORARY_ALT_MIN_SHARE_RATIO * (r.buildingShare ?? 0));
+            if (!reading.error && !((reading.buildingShare ?? 0) >= needShare)) {
+                triedHere.push({ panoId: alt.pano.panoId, ...(altMonth ? { captureMonth: altMonth } : {}), outcome: `shows too little of the building (${reading.buildingShare === undefined ? 'share not given' : `${Math.round(reading.buildingShare * 100)} percent of the photo`}, at least ${Math.round(needShare * 100)} needed): ${reading.description || 'no description'}` });
+                continue;
+            }
             if (reading.error) { triedHere.push({ panoId: alt.pano.panoId, ...(altMonth ? { captureMonth: altMonth } : {}), outcome: `not checked (${reading.error})` }); continue; }
             // an alternative flagged only for something on another side of the building is clear for this face
             if (reading.flagged && !(reading.regions.length && input.regionOnFace && input.regionOnFace(im, reading) < TEMPORARY_ON_FACE_MIN_SHARE)) { triedHere.push({ panoId: alt.pano.panoId, ...(altMonth ? { captureMonth: altMonth } : {}), outcome: `also shows something temporary: ${reading.description || 'no description'} (confidence ${reading.confidence})` }); continue; }
