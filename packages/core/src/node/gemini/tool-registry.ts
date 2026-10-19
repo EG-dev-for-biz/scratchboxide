@@ -91,6 +91,8 @@ import {
     browserHandlers,
     TILE_REFINE_TOOL_DECLARATIONS,
     tileRefineHandlers,
+    LOCATION_EVIDENCE_TOOL_DECLARATIONS,
+    locationEvidenceHandlers,
     VIRTUAL_GEOMETRY_TOOL_DECLARATIONS,
     virtualGeometryHandlers,
     IMAGE_TO_PBR_TOOL_DECLARATIONS,
@@ -614,6 +616,9 @@ export function createDefaultToolRegistry(): ToolRegistry {
     }
     for (const decl of VIRTUAL_GEOMETRY_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, virtualGeometryHandlers[decl.name], 'workspace');
+    }
+    for (const decl of LOCATION_EVIDENCE_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, locationEvidenceHandlers[decl.name], 'workspace');
     }
     for (const decl of ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, adaptiveMatchmoveHandlers[decl.name], 'workspace');

@@ -249,6 +249,11 @@ export async function ownViews(input: {
     target?: string;
     /** Writes one overlay PNG per view here (diagnostics): the photo dimmed outside the cut-out, the projection's edge in red. */
     debugDir?: string;
+    /**
+     * Called for each view the cut-out stands for, with its final mask (`owner`, the view's ownerMask) and what was taken out
+     * of it as standing in front of the structure (`occluders`, dilated), both 1 per pixel at the image's size. Read only.
+     */
+    onMasks?: (index: number, masks: { owner: Uint8Array; occluders: Uint8Array }) => void;
 }): Promise<{ views: ProjectionView[]; records: ViewOwnershipRecord[] }> {
     const out: ProjectionView[] = input.views.slice();
     const records: ViewOwnershipRecord[] = new Array(input.views.length);
@@ -310,6 +315,7 @@ export async function ownViews(input: {
                 for (let i = 0; i < mask.length; i++) { if (mask[i] && occD[i]) { mask[i] = 0; removed++; } m += mask[i]; }
                 if (input.debugDir) writeOverlay(path.join(input.debugDir, `${String(k).padStart(2, '0')}_${v.panoId}_owned.png`), v.image, mask, p, occD);
                 out[k] = { ...v, ownerMask: mask };
+                input.onMasks?.(k, { owner: mask, occluders: occD });
                 records[k] = { panoId: v.panoId, status: 'segmented', prompts: input.target ? 'description+geometry' : 'geometry', targetPixels: p.targetPixels, maskPixels: m, iou: Math.round(iou * 1000) / 1000,
                     occluders: { depthPixels: depthPx, segmentedPixels: segPx, grownPixels: grownPx, removedPixels: removed, segmenter: segNote }, ms: Date.now() - t0 };
             } catch (err) {
