@@ -40,6 +40,7 @@ import {
     type ScanMesh
 } from '../../spatial/StreetViewSurveyPlanner';
 import type { CanopyMask, Vec2 } from '../../../common/spatial/staged-location-contracts';
+import type { EvidenceLookup } from './vector-footprints';
 
 /** tile_refine's isolate values (scratchbox_tile_refine.hpp): minimum height, seed search. */
 export const STRUCTURE_MIN_HEIGHT_M = 3.0;
@@ -71,6 +72,10 @@ export interface StructurePickResult {
     footprintMask: Uint8Array;
     /** The core height of the low-attachment rule (0: not applied). */
     coreHeightM: number;
+    /** What decided the footprint: the building footprint from Google vector data, or the scan's geometry alone. */
+    footprintSource: 'vector-footprint' | 'scan-geometry' | (string & {});
+    /** The vector footprint found at the place, how far the scan agrees with it, and why it was not used when it was not. */
+    vectorFootprint?: { used: boolean; featureIds: string[]; areaM2: number; raisedShare: number; iou: number; reason?: string };
 }
 
 function cellKey(x: number, z: number): string {
@@ -279,6 +284,76 @@ export function joinParts(comp: Uint8Array, above: Float32Array, nx: number, nz:
     return { kept, parts: P, lowCutM: lowCut };
 }
 
+/** Building footprints as the pick reads them: the feature index + 1 at a point (0: none), and the features. */
+export interface FootprintLookup { buildingAt(x: number, z: number): number; buildings: Array<{ id: string }> }
+
+/** The footprint found nearest the place is searched within this of it (m). */
+export const FOOTPRINT_SEARCH_M = 10;
+/** The footprint is grown by this before it limits the pick: the scan's facades stand within it of the vector outline (m). */
+export const FOOTPRINT_TOLERANCE_M = 2;
+/** At least this share of the footprint must be raised in the scan for the footprint to be used. */
+export const FOOTPRINT_MIN_RAISED_SHARE = 0.5;
+
+function iouMasks(a: Uint8Array, b: Uint8Array, N: number): number {
+    let i = 0, u = 0;
+    for (let c = 0; c < N; c++) { if (a[c] && b[c]) i++; if (a[c] || b[c]) u++; }
+    return u ? i / u : 0;
+}
+
+/**
+ * The vector footprint of the structure at the place: the building feature under the place, else under the tall cell
+ * nearest it, else the nearest within FOOTPRINT_SEARCH_M. Used when at least FOOTPRINT_MIN_RAISED_SHARE of it stands
+ * raised in the scan; then the pick is limited to it grown by FOOTPRINT_TOLERANCE_M into the open (never into a
+ * neighbouring footprint), seeded at its raised cell nearest the place.
+ */
+function footprintAt(fp: FootprintLookup, g: GroundModel, tall: Uint8Array, a: { x: number; z: number }, rawSeed: number, minH: number):
+    { used: boolean; featureIds: string[]; mask: Uint8Array; limit: Uint8Array; seed: number; cells: number; raisedShare: number; reason?: string } {
+    const { nx, nz, cellMeters: cell } = g;
+    const N = nx * nz;
+    const lab = new Int32Array(N);
+    for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) lab[k * nx + i] = fp.buildingAt(g.x0 + (i + 0.5) * cell, g.z0 + (k + 0.5) * cell);
+    const none = (reason: string) => ({ used: false, featureIds: [], mask: new Uint8Array(N), limit: new Uint8Array(N), seed: rawSeed, cells: 0, raisedShare: 0, reason });
+    let target = fp.buildingAt(a.x, a.z);
+    if (!target) target = lab[rawSeed];
+    if (!target) {
+        const ai = Math.floor((a.x - g.x0) / cell), ak = Math.floor((a.z - g.z0) / cell), r = Math.ceil(FOOTPRINT_SEARCH_M / cell);
+        let best = Infinity;
+        for (let k = ak - r; k <= ak + r; k++) for (let i = ai - r; i <= ai + r; i++) {
+            if (i < 0 || k < 0 || i >= nx || k >= nz || !lab[k * nx + i]) continue;
+            const d = (i - ai) ** 2 + (k - ak) ** 2;
+            if (d <= r * r && d < best) { best = d; target = lab[k * nx + i]; }
+        }
+    }
+    if (!target) return none(`no building footprint in the vector data within ${FOOTPRINT_SEARCH_M} m of the place`);
+    const mask = new Uint8Array(N);
+    let cells = 0, raised = 0;
+    for (let c = 0; c < N; c++) if (lab[c] === target) { mask[c] = 1; cells++; if (tall[c]) raised++; }
+    const featureIds = [fp.buildings[target - 1]?.id ?? String(target)];
+    const raisedShare = cells ? raised / cells : 0;
+    if (raisedShare < FOOTPRINT_MIN_RAISED_SHARE) {
+        return { ...none(`the vector footprint (${cells} m²) and the scan disagree: only ${Math.round(raisedShare * 100)}% of it stands ${minH} m or more above the terrain in the scan`), featureIds, mask, cells, raisedShare };
+    }
+    const r = Math.max(1, Math.round(FOOTPRINT_TOLERANCE_M / cell));
+    const limit = new Uint8Array(N);
+    for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) {
+        if (!mask[k * nx + i]) continue;
+        for (let dk = -r; dk <= r; dk++) for (let di = -r; di <= r; di++) {
+            const ii = i + di, kk = k + dk;
+            // (grown into the open only: a neighbour's footprint keeps its cells, so the party wall stays where the vector data draws it)
+            if (ii >= 0 && kk >= 0 && ii < nx && kk < nz && di * di + dk * dk <= r * r && !(lab[kk * nx + ii] && lab[kk * nx + ii] !== target)) limit[kk * nx + ii] = 1;
+        }
+    }
+    // the seed: the raised footprint cell nearest the place
+    const ai = (a.x - g.x0) / cell, ak = (a.z - g.z0) / cell;
+    let seed = -1, best = Infinity;
+    for (let c = 0; c < N; c++) {
+        if (!mask[c] || !tall[c]) continue;
+        const d = ((c % nx) + 0.5 - ai) ** 2 + (((c / nx) | 0) + 0.5 - ak) ** 2;
+        if (d < best) { best = d; seed = c; }
+    }
+    return { used: seed >= 0, featureIds, mask, limit, seed: seed >= 0 ? seed : rawSeed, cells, raisedShare };
+}
+
 export interface PickOptions {
     anchor?: { x: number; z: number };
     minHeightM?: number;
@@ -288,6 +363,8 @@ export interface PickOptions {
     openingM?: number;
     /** Height discontinuity (m) between parts of a mass. */
     partStepM?: number;
+    /** Building footprints from Google vector data, as point lookups in the scan frame (vector-footprints.ts). */
+    footprints?: FootprintLookup;
 }
 
 /**
@@ -327,61 +404,72 @@ export function pickStructure(scan: ScanMesh, ground: GroundModel, opts: PickOpt
         }
         return seed;
     };
-    const rawSeed = nearest(tall);
+    // (seeds stand on cells the scan itself shows raised, never on canopy the mass encloses)
+    const raised = Uint8Array.from(tall, (t, c) => (t && above[c] >= minH ? 1 : 0));
+    const rawSeed = nearest(raised);
     if (rawSeed < 0) return undefined;
-    // the opening disc, scaled to the mass at the seed (its largest half-width within the window)
-    let openCells = 0;
-    if (opts.openingM !== undefined) openCells = opts.openingM > 0 ? Math.max(1, Math.round(opts.openingM / cell)) : 0;
-    else {
-        // (measured with the mass's enclosed holes filled: a light well or a roof garden does not make a building thinner)
-        const solid = Uint8Array.from(tall);
-        const outside = new Uint8Array(N);
-        for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) {
-            if (k !== 0 && k !== nz - 1 && i !== 0 && i !== nx - 1) continue;
-            const c = k * nx + i;
-            if (!tall[c] && !outside[c]) flood4(nx, nz, c, n => !tall[n], outside);
-        }
-        for (let c = 0; c < N; c++) if (!outside[c]) solid[c] = 1;
-        const inside = insideDistance(solid, nx, nz, cell);
-        const w = Math.ceil(STRUCTURE_THICKNESS_WINDOW_M / cell), si = rawSeed % nx, sk = (rawSeed / nx) | 0;
-        let half = 0;
-        for (let k = Math.max(0, sk - w); k <= Math.min(nz - 1, sk + w); k++) for (let i = Math.max(0, si - w); i <= Math.min(nx - 1, si + w); i++) {
-            if ((i - si) ** 2 + (k - sk) ** 2 <= w * w) half = Math.max(half, inside[k * nx + i]);
-        }
-        openCells = openingRadiusCells(cell, half);
-    }
-    const opened = openCells > 0 ? openMask(tall, nx, nz, openCells) : tall;
-    // a structure narrower than the opening disc everywhere (a column, a kiosk) is taken unopened
-    let mass = opened;
-    let seed = nearest(opened);
-    if (seed < 0) { mass = tall; seed = rawSeed; }
+    // the building footprint from Google vector data, when it covers the place and agrees with the scan: it separates
+    // touching buildings at their party walls; the scan decides the shape within it
+    const fp = opts.footprints ? footprintAt(opts.footprints, ground, raised, a, rawSeed, minH) : undefined;
+    let seed = rawSeed;
     const comp = new Uint8Array(N);
-    flood4(nx, nz, seed, c => mass[c] === 1, comp);
-    if (mass !== tall) {
-        // what the opening took off: a piece touching only this mass is its own (a corner the disc rounded, a narrow wing);
-        // one that also touches another opened mass is the neck between them and stays out
-        const seen = new Uint8Array(N);
-        const piece: number[] = [];
-        for (let s0 = 0; s0 < N; s0++) {
-            if (seen[s0] || !tall[s0] || mass[s0]) continue;
-            piece.length = 0;
-            let touchesThis = false, touchesOther = false;
-            const st = [s0];
-            seen[s0] = 1;
-            while (st.length) {
-                const c = st.pop()!;
-                piece.push(c);
-                const i = c % nx, k = (c / nx) | 0;
-                for (let q = 0; q < 4; q++) {
-                    const ii = i + (q === 0 ? 1 : q === 1 ? -1 : 0), kk = k + (q === 2 ? 1 : q === 3 ? -1 : 0);
-                    if (ii < 0 || kk < 0 || ii >= nx || kk >= nz) continue;
-                    const n = kk * nx + ii;
-                    if (comp[n]) touchesThis = true;
-                    else if (mass[n]) touchesOther = true;
-                    else if (tall[n] && !seen[n]) { seen[n] = 1; st.push(n); }
-                }
+    if (fp?.used) {
+        seed = fp.seed;
+        flood4(nx, nz, seed, c => tall[c] === 1 && fp.limit[c] === 1, comp);
+    } else {
+        // the opening disc, scaled to the mass at the seed (its largest half-width within the window)
+        let openCells = 0;
+        if (opts.openingM !== undefined) openCells = opts.openingM > 0 ? Math.max(1, Math.round(opts.openingM / cell)) : 0;
+        else {
+            // (measured with the mass's enclosed holes filled: a light well or a roof garden does not make a building thinner)
+            const solid = Uint8Array.from(tall);
+            const outside = new Uint8Array(N);
+            for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) {
+                if (k !== 0 && k !== nz - 1 && i !== 0 && i !== nx - 1) continue;
+                const c = k * nx + i;
+                if (!tall[c] && !outside[c]) flood4(nx, nz, c, n => !tall[n], outside);
             }
-            if (touchesThis && !touchesOther) for (const c of piece) comp[c] = 1;
+            for (let c = 0; c < N; c++) if (!outside[c]) solid[c] = 1;
+            const inside = insideDistance(solid, nx, nz, cell);
+            const w = Math.ceil(STRUCTURE_THICKNESS_WINDOW_M / cell), si = rawSeed % nx, sk = (rawSeed / nx) | 0;
+            let half = 0;
+            for (let k = Math.max(0, sk - w); k <= Math.min(nz - 1, sk + w); k++) for (let i = Math.max(0, si - w); i <= Math.min(nx - 1, si + w); i++) {
+                if ((i - si) ** 2 + (k - sk) ** 2 <= w * w) half = Math.max(half, inside[k * nx + i]);
+            }
+            openCells = openingRadiusCells(cell, half);
+        }
+        const opened = openCells > 0 ? openMask(tall, nx, nz, openCells) : tall;
+        // a structure narrower than the opening disc everywhere (a column, a kiosk) is taken unopened
+        let mass = opened;
+        seed = nearest(Uint8Array.from(opened, (o, c) => o & raised[c]));
+        if (seed < 0) { mass = tall; seed = rawSeed; }
+        flood4(nx, nz, seed, c => mass[c] === 1, comp);
+        if (mass !== tall) {
+            // what the opening took off: a piece touching only this mass is its own (a corner the disc rounded, a narrow wing);
+            // one that also touches another opened mass is the neck between them and stays out
+            const seen = new Uint8Array(N);
+            const piece: number[] = [];
+            for (let s0 = 0; s0 < N; s0++) {
+                if (seen[s0] || !tall[s0] || mass[s0]) continue;
+                piece.length = 0;
+                let touchesThis = false, touchesOther = false;
+                const st = [s0];
+                seen[s0] = 1;
+                while (st.length) {
+                    const c = st.pop()!;
+                    piece.push(c);
+                    const i = c % nx, k = (c / nx) | 0;
+                    for (let q = 0; q < 4; q++) {
+                        const ii = i + (q === 0 ? 1 : q === 1 ? -1 : 0), kk = k + (q === 2 ? 1 : q === 3 ? -1 : 0);
+                        if (ii < 0 || kk < 0 || ii >= nx || kk >= nz) continue;
+                        const n = kk * nx + ii;
+                        if (comp[n]) touchesThis = true;
+                        else if (mass[n]) touchesOther = true;
+                        else if (tall[n] && !seen[n]) { seen[n] = 1; st.push(n); }
+                    }
+                }
+                if (touchesThis && !touchesOther) for (const c of piece) comp[c] = 1;
+            }
         }
     }
     // parts across height discontinuities, joined to the seed's part by the structure rule
@@ -425,7 +513,9 @@ export function pickStructure(scan: ScanMesh, ground: GroundModel, opts: PickOpt
         groundY: round3(hero.groundY),
         canopyCellsMasked: opts.canopyCellsMasked ?? 0,
         footprintMask,
-        coreHeightM: round3(coreHeightM)
+        coreHeightM: round3(coreHeightM),
+        footprintSource: fp?.used ? 'vector-footprint' : 'scan-geometry',
+        ...(fp ? { vectorFootprint: { used: fp.used, featureIds: fp.featureIds, areaM2: fp.cells * cell * cell, raisedShare: round3(fp.raisedShare), iou: round3(fp.used ? iouMasks(fp.mask, comp, N) : 0), ...(fp.reason ? { reason: fp.reason } : {}) } } : {})
     };
 }
 
@@ -570,6 +660,8 @@ export interface SizingDeps<E extends SizingExtraction> {
     extract(radiusM: number, round: number): Promise<E>;
     /** tile_vegetation's canopy classifier on a textured extraction; absent when the engine lacks it. */
     canopy?(texturedGlb: string): Promise<CanopyMask>;
+    /** Google vector data (building footprints, water, roads) within a radius, in the scan frame; absent without credentials. */
+    vector?(radiusM: number): Promise<EvidenceLookup>;
     onProgress?(message: string): void;
     /** A Stop or a time limit: an extraction that fails because of it is never turned into a district fallback. */
     signal?: AbortSignal;
@@ -594,6 +686,9 @@ export interface SizingResult<E extends SizingExtraction> {
     unmaskedTop?: Float32Array;
     /** The canopy mask the structure was picked with (absent without a classifier). */
     canopy?: CanopyMask;
+    /** The vector evidence the structure was picked with, and why there is none when the call failed. */
+    vector?: EvidenceLookup;
+    vectorError?: string;
     notes: SizingNote[];
     timingsMs: Record<string, number>;
 }
@@ -604,6 +699,7 @@ export async function sizeExtraction<E extends SizingExtraction>(deps: SizingDep
     const timings: Record<string, number> = {};
     let radius = PROBE_RADIUS_M;
     let canopyAvailable = !!deps.canopy;
+    let vector: EvidenceLookup | undefined, vectorError: string | undefined;
     /** The last extraction that succeeded: real data the call can fall back to when a later, larger one fails. */
     let held: { extraction: E; radius: number; round: number } | undefined;
     for (let round = 1; ; round++) {
@@ -640,13 +736,24 @@ export async function sizeExtraction<E extends SizingExtraction>(deps: SizingDep
         } else if (!notes.some(n => n.reasonCode === 'canopy_not_masked')) {
             notes.push({ reasonCode: 'canopy_not_masked', reason: 'tile_vegetation has no canopy classifier in this build, so the structure was picked on the unmasked surface model and may include tree canopy' });
         }
+        if (deps.vector && !vectorError) {
+            t = now();
+            try {
+                vector = await deps.vector(radius + CONTAINMENT_MARGIN_M + 20);
+            } catch (err) {
+                if (deps.signal?.aborted) throw err;
+                vectorError = (err as Error).message;
+                vector = undefined;
+            }
+            timings[`vector_r${radius}`] = now() - t;
+        }
         t = now();
         const scan = loadScanMesh(extraction.texturedGlb);
-        const unmasked = buildGroundModel(scan, { cellMeters: 1, ...(mask ? { exclude: canopyLookup(mask) } : {}) });
+        const unmasked = buildGroundModel(scan, { cellMeters: 1, ...(mask ? { exclude: canopyLookup(mask) } : {}), ...(vector ? { water: vector.waterAt, road: vector.roadAt } : {}) });
         let ground = unmasked, canopyCells = 0;
         if (mask) { const m = maskCanopy(unmasked, mask); ground = m.masked; canopyCells = m.cells; }
         timings[`dsm_r${radius}`] = now() - t;
-        const structure = pickStructure(scan, ground, { canopyCellsMasked: canopyCells });
+        const structure = pickStructure(scan, ground, { canopyCellsMasked: canopyCells, ...(vector ? { footprints: { buildingAt: vector.buildingAt, buildings: vector.raster.buildings } } : {}) });
         if (!structure) {
             notes.push({ reasonCode: 'no_structure_at_anchor', reason: `no structure ${STRUCTURE_MIN_HEIGHT_M} m or taller stands within ${STRUCTURE_SEED_SEARCH_M} m of the place; showing the area around it` });
             if (radius === NO_STRUCTURE_DISTRICT_RADIUS_M) return { extraction, radiusM: radius, rounds: round, sizedTo: 'district-fallback', notes, timingsMs: timings };
@@ -665,7 +772,7 @@ export async function sizeExtraction<E extends SizingExtraction>(deps: SizingDep
             }
         }
         if (!touchesEdge(structure, ground)) {
-            return { extraction, radiusM: radius, rounds: round, sizedTo: 'structure', structure, ground, scan, unmaskedTop: unmasked.top, ...(mask ? { canopy: mask } : {}), notes, timingsMs: timings };
+            return { extraction, radiusM: radius, rounds: round, sizedTo: 'structure', structure, ground, scan, unmaskedTop: unmasked.top, ...(mask ? { canopy: mask } : {}), ...(vector ? { vector } : {}), ...(vectorError ? { vectorError } : {}), notes, timingsMs: timings };
         }
         const next = Math.min(CONTAINMENT_MAX_RADIUS_M, Math.max(radius + 1, containmentRadius(structure)));
         if (round >= CONTAINMENT_MAX_ROUNDS + 1 || radius >= CONTAINMENT_MAX_RADIUS_M) {
@@ -681,12 +788,12 @@ export async function sizeExtraction<E extends SizingExtraction>(deps: SizingDep
  * for): the same rule at the same seed and with the same canopy mask, so the footprint tile_refine isolates holds no crown
  * the canopy classifier left in. Undefined when no structure stands there.
  */
-export function pickOnScan(glbPath: string, seed: { x: number; z: number }, canopy?: CanopyMask): { pick: StructurePickResult; ground: GroundModel } | undefined {
+export function pickOnScan(glbPath: string, seed: { x: number; z: number }, canopy?: CanopyMask, vector?: EvidenceLookup): { pick: StructurePickResult; ground: GroundModel } | undefined {
     const scan = loadScanMesh(glbPath);
-    let ground = buildGroundModel(scan, { cellMeters: 1, ...(canopy ? { exclude: canopyLookup(canopy) } : {}) });
+    let ground = buildGroundModel(scan, { cellMeters: 1, ...(canopy ? { exclude: canopyLookup(canopy) } : {}), ...(vector ? { water: vector.waterAt, road: vector.roadAt } : {}) });
     let cells = 0;
     if (canopy) { const m = maskCanopy(ground, canopy); ground = m.masked; cells = m.cells; }
-    const pick = pickStructure(scan, ground, { anchor: seed, canopyCellsMasked: cells });
+    const pick = pickStructure(scan, ground, { anchor: seed, canopyCellsMasked: cells, ...(vector ? { footprints: { buildingAt: vector.buildingAt, buildings: vector.raster.buildings } } : {}) });
     return pick ? { pick, ground } : undefined;
 }
 

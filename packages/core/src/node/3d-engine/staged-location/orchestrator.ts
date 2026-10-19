@@ -73,6 +73,7 @@ import {
 import { glbMeshCounts, plantTrees, summarizeTrees, type LocationClayTrees } from '../location-clay-pipeline';
 import { TileVegetationError, type TileVegetationPlantRequest, type TileVegetationPlantResult, type TileVegetationStripRequest, type TileVegetationStripResult } from '../tile-vegetation-service';
 import type { TileRefineRequest, TileRefineResult } from '../tile-refine-service';
+import { evidenceLookup, type EvidenceLookup, type VectorEvidence } from './vector-footprints';
 import { VisionModelChain, type VisionGenAIClient } from '../../gemini/vision-model-chain';
 import { segmentOwnershipViews } from './ownership-masks';
 import { loadScanMesh, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
@@ -86,7 +87,7 @@ import {
 import { describeRemeshProvenance, readRemeshProvenance } from './remesh-provenance';
 import { putBackScannedTrees } from './scanned-trees';
 import {
-    checkIsolate, grownOutline, pickOnScan, sizeExtraction, writeIsolationPick, ISOLATE_PRECISION_MIN, ISOLATE_ROOFED_MIN, NO_STRUCTURE_DISTRICT_RADIUS_M, type StructurePickResult
+    checkIsolate, grownOutline, pickOnScan, FOOTPRINT_TOLERANCE_M, sizeExtraction, writeIsolationPick, ISOLATE_PRECISION_MIN, ISOLATE_ROOFED_MIN, NO_STRUCTURE_DISTRICT_RADIUS_M, type StructurePickResult
 } from './extraction-sizing';
 import {
     discoverPanos, facadeGeometry, fetchViews, missingCredentials, EVIDENCE_STAGE_BUDGET_MS, type EvidenceImage, type PanoCandidate, type StreetViewEvidenceDeps
@@ -257,6 +258,8 @@ export interface StagedLocationDeps {
         /** tile_vegetation's canopy classifier; absent until the engine has it. */
         canopy?(req: { tilePath: string; cellM?: number; signal?: AbortSignal }): Promise<{ mask: CanopyMask; cached: boolean; ms: number }>;
     };
+    /** Building footprints, water and roads from Google vector data around (lat, lng), in its scan frame; absent without credentials. */
+    vectorEvidence?(req: { lat: number; lng: number; radiusM: number }): Promise<VectorEvidence>;
     refine: {
         refine(req: TileRefineRequest): Promise<TileRefineResult>;
         /** Registered views of the tile around the structure the geometric isolate finds, for the multi-view mask vote. */
@@ -983,7 +986,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         }
 
         // ---------------- tiles ----------------
-        type TilesValue = { extraction: StagedExtraction; key: string; sizedTo: 'structure' | 'request' | 'district-fallback'; structure?: StructurePickResult; ground?: GroundModel; scan?: ScanMesh; unmaskedTop?: Float32Array; canopy?: CanopyMask; rounds: number; cached: boolean; builtAtMs: number };
+        type TilesValue = { extraction: StagedExtraction; key: string; sizedTo: 'structure' | 'request' | 'district-fallback'; structure?: StructurePickResult; ground?: GroundModel; scan?: ScanMesh; unmaskedTop?: Float32Array; canopy?: CanopyMask; vector?: EvidenceLookup; vectorError?: string; rounds: number; cached: boolean; builtAtMs: number };
         /** One extraction, cached for 7 days by place and radius; the entry holds its files, named relative to it. */
         const extractCached = async (radiusM: number, io: StageIO): Promise<{ extraction: StagedExtraction; key: string; cached: boolean; builtAtMs: number }> => {
             const key = stageKey('extract/v2', placeValue!.lat.toFixed(6), placeValue!.lng.toFixed(6), Math.round(radiusM));
@@ -1008,9 +1011,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const sizing = await sizeExtraction<StagedExtraction>({
                         extract: async radiusM => { const x = await extractCached(radiusM, io); last = x; return x.extraction; },
                         ...(deps.vegetation.canopy ? { canopy: async (tile: string) => (await deps.vegetation.canopy!({ tilePath: tile, signal: io.signal })).mask } : {}),
+                        ...(deps.vectorEvidence ? { vector: async (radiusM: number) => evidenceLookup(await deps.vectorEvidence!({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM }), radiusM) } : {}),
                         onProgress: m => io.progress(m), signal: io.signal
                     });
-                    value = { extraction: sizing.extraction, key: last!.key, sizedTo: sizing.sizedTo, structure: sizing.structure, ground: sizing.ground, scan: sizing.scan, unmaskedTop: sizing.unmaskedTop, ...(sizing.canopy ? { canopy: sizing.canopy } : {}), rounds: sizing.rounds, cached: last!.cached, builtAtMs: last!.builtAtMs };
+                    value = { extraction: sizing.extraction, key: last!.key, sizedTo: sizing.sizedTo, structure: sizing.structure, ground: sizing.ground, scan: sizing.scan, unmaskedTop: sizing.unmaskedTop, ...(sizing.canopy ? { canopy: sizing.canopy } : {}), ...(sizing.vector ? { vector: sizing.vector } : {}), ...(sizing.vectorError ? { vectorError: sizing.vectorError } : {}), rounds: sizing.rounds, cached: last!.cached, builtAtMs: last!.builtAtMs };
                     for (const n of sizing.notes) {
                         const masked = n.reasonCode === 'canopy_not_masked';
                         const districtLost = n.reasonCode === 'district_extract_failed';
@@ -1056,7 +1060,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 };
                 run.commit(layer, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, isGround: true, extra: { rawGlbPath: e.rawGlbPath ?? e.texturedGlb } });
                 if (st) {
-                    run.state.structure = { seed: [st.seed.x, st.seed.z], geocodeToStructureM: st.geocodeToStructureM, footprintAreaM2: st.areaM2, extractionRadiusM: e.radiusM, containmentRounds: value.rounds };
+                    run.state.structure = {
+                        seed: [st.seed.x, st.seed.z], geocodeToStructureM: st.geocodeToStructureM, footprintAreaM2: st.areaM2, extractionRadiusM: e.radiusM, containmentRounds: value.rounds,
+                        footprintSource: st.footprintSource, ...(st.vectorFootprint?.used ? { vectorFootprintIoU: st.vectorFootprint.iou } : {})
+                    };
+                    // what decided the footprint, said where the provenance is read
+                    const vf = st.vectorFootprint;
+                    if (vf?.used) run.note(PROVENANCE.remeshed, `footprint from Google vector data: building ${vf.featureIds.join(', ')} (${Math.round(vf.areaM2)} m²), ${Math.round(vf.raisedShare * 100)}% of it raised in the scan; the scan's raised cells within ${FOOTPRINT_TOLERANCE_M} m of it are the structure (IoU ${vf.iou} with the footprint)`);
+                    else run.note(PROVENANCE.remeshed, `footprint from the scan's geometry alone: ${vf?.reason ?? (value.vectorError ? `Google vector data could not be read (${value.vectorError})` : 'no Google vector data was available')}`);
                 }
                 // the cap on leaf tiles can stop a large request short: the scan reaches less far than asked, and says so
                 if (e.truncated && e.coveredRadiusM < e.radiusM - 0.5) {
@@ -1796,7 +1807,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // taken out it holds no crown the canopy classifier left in)
                 let isolatePick: string | undefined;
                 let remeshPick: { pick: StructurePickResult; ground: GroundModel } | undefined = isolateMode && t.ground ? { pick: structure!, ground: t.ground } : undefined;
-                if (remeshPick && tilePath !== extraction.texturedGlb) remeshPick = pickOnScan(tilePath, structure!.seed, t.canopy) ?? remeshPick;
+                if (remeshPick && tilePath !== extraction.texturedGlb) remeshPick = pickOnScan(tilePath, structure!.seed, t.canopy, t.vector) ?? remeshPick;
                 if (remeshPick) {
                     const bytesKey = crypto.createHash('sha256').update(remeshPick.pick.footprintMask).update(Buffer.from(Float32Array.from(remeshPick.ground.ground).buffer)).update(Buffer.from(Float32Array.from(remeshPick.ground.top).buffer)).digest('hex').slice(0, 16);
                     isolatePick = writeIsolationPick(path.join(path.dirname(tilePath), `structure_pick_${bytesKey}.sbip`), remeshPick.pick, remeshPick.ground);

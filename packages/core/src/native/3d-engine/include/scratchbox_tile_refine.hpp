@@ -1003,7 +1003,8 @@ private:
                         " m of the anchor (" + num(P.anchorX) + ", " + num(P.anchorZ) + ")";
             return false;
         }
-        // the shared pick: its structure cells are the footprint (raised or not here: the pick decided), the seed one of them
+        // the shared pick: its structure cells that this surface model also shows raised are the footprint (the pick decided
+        // which structure; this model, sampled at cell centres, keeps the footprint's edge where it always was), the seed one of them
         std::vector<uint8_t> otherCell(N, 0);
         if (hasPick) {
             long best = -1;
@@ -1012,7 +1013,7 @@ private:
                 for (int i = 0; i < nx; ++i) {
                     const int st = pick.state(dsm.cx(i), dsm.cz(k));
                     const size_t n = static_cast<size_t>(k) * nx + i;
-                    raised[n] = st == 1;
+                    raised[n] = st == 1 && raised[n];
                     otherCell[n] = st == 2 ? 1 : st == 4 ? 2 : 0;  // 1 another structure, 2 canopy (blocks the closure only)
                     const long d2 = static_cast<long>(i - ai) * (i - ai) + static_cast<long>(k - ak) * (k - ak);
                     if (st == 1 && d2 < bestD2) { bestD2 = d2; best = static_cast<long>(n); }

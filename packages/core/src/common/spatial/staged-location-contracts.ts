@@ -866,6 +866,10 @@ export interface StructurePick {
      * of it roofed and the share of the pick it covers (0 when it does not hold the seed); checkIsolate applies the limits.
      */
     isolateAgreement?: number;
+    /** What decided the footprint: "vector-footprint" (Google vector data, checked against the scan) or "scan-geometry". */
+    footprintSource?: string;
+    /** IoU of the structure picked with the building footprint from Google vector data, when that footprint was used. */
+    vectorFootprintIoU?: number;
 }
 
 /** Scene3DData.stagedBuild: what the viewport reads to reveal, label and shade. */
@@ -1751,7 +1755,7 @@ const DEFINITIONS = {
     }),
     structurePick: obj(['seed', 'geocodeToStructureM', 'footprintAreaM2', 'extractionRadiusM', 'containmentRounds'], {
         buildingId: STR, seed: ref('vec2'), geocodeToStructureM: ref('nonneg'), footprintAreaM2: ref('nonneg'), extractionRadiusM: ref('nonneg'),
-        containmentRounds: NONNEG_INT, isolateIoU: ref('unit'), isolateAgreement: ref('unit')
+        containmentRounds: NONNEG_INT, isolateIoU: ref('unit'), isolateAgreement: ref('unit'), footprintSource: STR, vectorFootprintIoU: ref('unit')
     }),
     // texture pass (texture-pass-contracts.ts): labels and sources are open strings, nothing branches on them
     texelProvenance: obj(['source', 'label', 'method', 'coverage'], {
