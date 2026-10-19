@@ -13,7 +13,8 @@ import { treesLodLevelCount, type TreeLodExtras, type TreeNodeExtras, type Trees
 import { isStagedMaterial } from '../stagedBuild/revealMaterial';
 import { makeFadeVariant } from './treeLodFade';
 import {
-    allocateCrownLobes, attachCrownAttributes, attachCrownInstanceField, crownLobesInMeshFrame, crownQuadricInMeshFrame, makeCrownVariant, releaseCrownLobeAtlas, resolveCrownShading, retainCrownLobeAtlas,
+    allocateCrownLobes, attachCrownAttributes, attachCrownInstanceField, breakupDepthMaterial, breakupDistanceMaterial, crownLobesInMeshFrame, crownQuadricInMeshFrame, isBreakupDepthMaterial,
+    makeCrownVariant, releaseCrownLobeAtlas, resolveCrownShading, retainCrownLobeAtlas,
     setCrownShadingUniforms, supportsCrownShading, type CrownShadingInput, type CrownShadingOptions
 } from './treeCrownShading';
 import { FADE_STEPS, edgesAtLevel, edgesNoFinerThan, finestLevel, hysteresisDistance, levelRange, quantiseRange, stepEdges, targetEdges, type LodBand, type LodEdges } from './treeLodMath';
@@ -51,6 +52,9 @@ import { FADE_STEPS, edgesAtLevel, edgesNoFinerThan, finestLevel, hysteresisDist
  * never wood or twigs) wear a crown variant of their base, and the dither variants of a leaf mesh are made from that
  * variant. On by default; `setCrownShading` turns it off for comparison or changes its factors. A mesh whose material was
  * swapped behind the controller's back (the clay pass, a material override) is dressed again at the next frame.
+ * The crown's breakup (treeCrownShading.ts CrownBreakupOptions: holes toward the rim, pockets, clump value) lives in the
+ * same variant, and every leaf mesh with a crown draws its shadow with the breakup's depth materials, so the shadow pass
+ * discards the same holes. `setCrownShading({ breakup: { enabled: false } })` turns it off for comparison.
  */
 
 export interface TreeLodOptions {
@@ -293,6 +297,8 @@ export class TreeLodController {
         if (crown && crown.radii?.length === 3 && crown.centre?.length === 3) {
             node.updateMatrixWorld(true);
             const nodeInv = node.matrixWorld.clone().invert();
+            // the breakup's metric: the crown's mean radius in the tree frame's metres, and the world units a metre is
+            const scale = { crownRadiusM: (crown.radii[0] + crown.radii[1] + crown.radii[2]) / 3, worldPerMetre: Math.max(1e-9, node.matrixWorld.getMaxScaleOnAxis()) };
             let leaves = 0, lobed = 0;
             byLevel.forEach(l => {
                 for (const m of this.leafMeshesOf(l!.obj, l!.lod)) {
@@ -302,7 +308,10 @@ export class TreeLodController {
                     let block: [number, number, number, number] = [0, 0, 0, 0];
                     if (lb) { block = [allocateCrownLobes(lb.lobes), lb.lobes.length, lb.blend, lb.meanRadius]; lobed++; }
                     else if (crown.lobes?.length) this.stats.crownLobeFallbackMeshes++;
-                    attachCrownAttributes(m, crownQuadricInMeshFrame(crown, meshToTree, crownSlotOf(l!.lod.level, n)), block);
+                    attachCrownAttributes(m, crownQuadricInMeshFrame(crown, meshToTree, crownSlotOf(l!.lod.level, n)), block, scale);
+                    // the shadow pass draws the same holes (dappled shadows): the renderer's depth materials plus the breakup
+                    if (m.customDepthMaterial === undefined) m.customDepthMaterial = breakupDepthMaterial();
+                    if (m.customDistanceMaterial === undefined) m.customDistanceMaterial = breakupDistanceMaterial();
                     if (lb && (m as THREE.InstancedMesh).isInstancedMesh) attachCrownInstanceField(m as THREE.InstancedMesh, lb.lobes, lb.blend, lb.meanRadius);
                     m.userData.sbCrownLeaf = true;
                     leaves++;
@@ -511,6 +520,8 @@ export class TreeLodController {
                     if (base && !isStagedMaterial(m.material as THREE.Material)) m.material = base;
                     delete m.userData.sbTreeLodMesh;
                     delete m.userData.sbLodWorn;
+                    if (isBreakupDepthMaterial(m.customDepthMaterial)) m.customDepthMaterial = undefined;
+                    if (isBreakupDepthMaterial(m.customDistanceMaterial)) m.customDistanceMaterial = undefined;
                     if (m.userData.sbLodCast !== undefined) { m.castShadow = m.userData.sbLodCast as boolean; delete m.userData.sbLodCast; }
                 }
                 const child = l.gate.children[0];

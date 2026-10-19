@@ -33,13 +33,14 @@ export interface Harness {
     close(): void;
 }
 
-export async function openHarness(opts: { trees?: number; areaM?: number; dir?: string; width?: number; height?: number } = {}): Promise<{ h: Harness; init: { trees: number; ms: number } }> {
+export async function openHarness(opts: { trees?: number; areaM?: number; dir?: string; width?: number; height?: number; /** a trees GLB to load instead of the synthetic park */ glbFile?: string } = {}): Promise<{ h: Harness; init: { trees: number; ms: number } }> {
     const here = __dirname;
     const dir = opts.dir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'sb-tree-lod-'));
     fs.mkdirSync(dir, { recursive: true });
     await build({ entryPoints: [path.join(here, 'harness.ts')], bundle: true, format: 'iife', outfile: path.join(dir, 'harness.bundle.js'), logLevel: 'error', target: 'chrome120' });
     fs.copyFileSync(path.join(here, 'harness.html'), path.join(dir, 'harness.html'));
-    writeTreesLodGlb(path.join(dir, 'trees.glb'), buildScaledTreesGltf({ trees: opts.trees ?? 1000, areaM: opts.areaM }));
+    if (opts.glbFile) fs.copyFileSync(opts.glbFile, path.join(dir, 'trees.glb'));
+    else writeTreesLodGlb(path.join(dir, 'trees.glb'), buildScaledTreesGltf({ trees: opts.trees ?? 1000, areaM: opts.areaM }));
 
     const port = 9300 + Math.floor(Math.random() * 400);
     const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-chrome-'));
