@@ -13,12 +13,13 @@ import {
     ProjectArtifactGraph,
     ProjectArtifactGraphEngine,
     hashValue,
+    isTimestampArtifactId,
     stableProjectArtifactId
 } from '../../common/project-artifact-graph-protocol';
 import { CanvasArtifact, PrimitiveType } from './canvas-types';
 
 export function resolveCanvasArtifactId(projectId: string, artifact: CanvasArtifact): string {
-    if (artifact.id && !/-\d{10,}$/.test(artifact.id)) {
+    if (artifact.id && !isTimestampArtifactId(artifact.id)) {
         return artifact.id;
     }
     return stableProjectArtifactId(artifact.type, `${projectId}:${artifact.title}:${JSON.stringify(artifact.data)}`);

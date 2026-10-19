@@ -43,7 +43,7 @@ import {
 import type { McpBridge } from './mcp-bridge';
 import type { LensBridge } from './lens-bridge';
 import { buildContents, buildSystemInstruction, type PromptContextServices } from './prompt-builder';
-import { buildPendingPythonGenerator, parseOrSynthesizeArtifact, withOpenArtifactRule } from './artifact-synthesis';
+import { buildPendingPythonGenerator, continueTurnArtifact, parseOrSynthesizeArtifact, withOpenArtifactRule } from './artifact-synthesis';
 import { AgentVerificationService } from './agent-verification-service';
 
 export type StreamEventSink = (event: GeminiStreamEvent) => void;
@@ -813,8 +813,12 @@ export class StreamingEngine {
                 mcpExecutions.push(exec);
 
                 if (toolName === 'mount_canvas_primitive' || (resultPayload && (resultPayload as any).artifact)) {
-                    const mountedArtifact = (resultPayload as any).artifact as CanvasArtifact;
+                    const mountedArtifact: CanvasArtifact | undefined = (resultPayload as any)?.artifact
+                        ? continueTurnArtifact(streamMountedArtifact, (resultPayload as any).artifact as CanvasArtifact)
+                        : undefined;
                     if (mountedArtifact) {
+                        // The model reads the result too: it names the artifact by the id the canvas shows.
+                        (resultPayload as any).artifact = mountedArtifact;
                         request.activeArtifact = mountedArtifact;
                         streamMountedArtifact = mountedArtifact;
                         onEvent({ type: 'artifact_start', artifact: mountedArtifact, modelUsed: model });

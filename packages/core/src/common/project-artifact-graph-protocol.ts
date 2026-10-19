@@ -282,6 +282,15 @@ function now(): string {
     return new Date().toISOString();
 }
 
+/**
+ * An id a tool minted from the clock ("artifact-3d-1792368727365"): it names one call's output, not an artifact. The
+ * end-of-turn commit gives such an artifact a project id, and a later call in the same turn continues the turn's
+ * artifact of that type instead of starting another.
+ */
+export function isTimestampArtifactId(id: string | undefined): boolean {
+    return !!id && /-\d{10,}$/.test(id);
+}
+
 export function stableProjectArtifactId(kind: string, seed: string): ArtifactId {
     return `artifact-${slug(kind)}-${hashValue(seed)}`;
 }
