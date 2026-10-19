@@ -16,7 +16,7 @@ import {
     AtmosphereImageEstimationService,
     angstromBeta,
     directSunTransmittance,
-    fitPlanckianKelvinTemperature
+    resolveCloudShellLayers
 } from '../../../browser/generative-canvas/services/atmosphere';
 import { MissingInputError } from '../../../common/errors/pipeline-errors';
 import type { ToolDeclaration, ToolHandler } from './types';
@@ -51,14 +51,14 @@ function shadowRadiusFor(data: Scene3DData): number {
  */
 export function applySunToScene(
     active: CanvasArtifact,
-    s: { elevation: number; azimuth: number; lat?: number; lng?: number; isoDate?: string; sunSource: string; kelvin?: number; config: Record<string, unknown>; clouds: boolean; args: Record<string, unknown> }
+    s: { elevation: number; azimuth: number; lat?: number; lng?: number; isoDate?: string; sunSource: string; config: Record<string, unknown>; clouds: boolean; args: Record<string, unknown> }
 ): { ok: true; artifact: CanvasArtifact; operators: string[]; shadowRadiusM: number } | { ok: false; error: string } {
     const engine = new DirectDispatchOperatorEngine(JSON.parse(JSON.stringify(active.data)) as Scene3DData);
     const commands: Array<{ operator: string; params: Record<string, unknown> }> = [
         { operator: 'sb_set_diurnal_time_of_day', params: { sunElevation: s.elevation, sunAzimuth: s.azimuth, ...(s.lat !== undefined && s.lng !== undefined ? { latitude: s.lat, longitude: s.lng } : {}) } }
     ];
     const scattering: Record<string, unknown> = { enabled: true, volumetricClouds: s.clouds };
-    for (const k of ['turbidity', 'cloudCoverage', 'cloudDensity', 'cloudAltitude'] as const) if (s.config[k] !== undefined) scattering[k] = s.config[k];
+    for (const k of ['turbidity', 'cloudCoverage', 'cloudDensity', 'cloudAltitude', 'cloudLayers'] as const) if (s.config[k] !== undefined) scattering[k] = s.config[k];
     commands.push({ operator: 'sb_configure_atmospheric_scattering', params: scattering });
     if (s.config.aerialPerspectiveEnabled === true) commands.push({ operator: 'sb_configure_aerial_perspective', params: { enabled: true } });
     if (s.config.cloudShadowsEnabled === true) commands.push({ operator: 'sb_configure_terrain_cloud_shadows', params: { enabled: true } });
@@ -72,7 +72,6 @@ export function applySunToScene(
         ...(data.features ?? {}),
         atmosphericScattering: {
             ...atm,
-            ...(s.kelvin !== undefined ? { kelvinTemperature: s.kelvin } : {}),
             sunSource: s.sunSource,
             ...(s.isoDate ? { isoDate: s.isoDate } : {}),
             sunShadowRadiusMeters: shadowRadiusM
@@ -112,7 +111,7 @@ export const ATMOSPHERE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'atmosphere_get_diurnal_profile',
-        description: 'Compute the diurnal lighting profile (phase, sun/ambient intensity, colour temperature) for a sun elevation. With turbidity, the direct-sun colour and its CCT come from the Preetham transmittance (Rayleigh + Angstrom aerosol) at that turbidity and air mass.',
+        description: 'Compute the diurnal lighting profile (phase, sun/ambient intensity, colour temperature) for a sun elevation. While the sun is up, the direct-sun colour, its CCT and its illuminance (lux) come from the full visible spectrum: a blackbody sun through Rayleigh, Angstrom aerosol (at the given turbidity, else the diurnal one) and ozone, integrated over the CIE 1931 observer.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -122,7 +121,11 @@ export const ATMOSPHERE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 turbidity: {
                     type: 'NUMBER',
-                    description: 'Optional Preetham turbidity (about 1.7 clear to 12 hazy). Without it no turbidity is reported.'
+                    description: 'Optional Preetham turbidity (about 1.7 clear to 12 hazy). Without it the diurnal turbidity for that elevation is used.'
+                },
+                observerAltitudeMeters: {
+                    type: 'NUMBER',
+                    description: 'Optional observer height above sea level in metres; thinner air above a mountain or aircraft gives a whiter, brighter sun.'
                 }
             },
             required: ['elevationDeg']
@@ -183,6 +186,28 @@ export const ATMOSPHERE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 enableCloudShadows: {
                     type: 'BOOLEAN',
                     description: 'Cast terrain cloud shadows (only with cloudCoverage, and only when true).'
+                },
+                cloudLayers: {
+                    type: 'ARRAY',
+                    description: 'Optional thin cloud decks (up to 4) drawn as stacked Earth-curved shells behind the volumetric layer: cheap, and they converge on the horizon. Describe each deck physically: cirrus is high (6-12 km), thin (opticalDepth 0.05-1), streaky (streakElongation 4-12); an altostratus sheet is mid-level (2-6 km), dense (opticalDepth 3-15) and near-complete coverage; smoke or dust uses a scatteringAlbedo below 1. Added only when given.',
+                    items: {
+                        type: 'OBJECT',
+                        properties: {
+                            label: { type: 'STRING', description: 'Name for reports only.' },
+                            baseAltitudeMeters: { type: 'NUMBER', description: 'Deck base above the ground, metres.' },
+                            thicknessMeters: { type: 'NUMBER', description: 'Vertical depth of the deck, metres (0 = one sheet).' },
+                            coverage: { type: 'NUMBER', description: 'Fraction of sky covered, 0-1.' },
+                            opticalDepth: { type: 'NUMBER', description: 'Vertical optical depth of a covered column.' },
+                            featureSizeMeters: { type: 'NUMBER', description: 'Horizontal size of cells or streaks, metres.' },
+                            streakElongation: { type: 'NUMBER', description: 'Length/width of features along the heading (1 = round).' },
+                            streakHeadingDeg: { type: 'NUMBER', description: 'Streak direction, degrees clockwise from north.' },
+                            forwardScattering: { type: 'NUMBER', description: 'Henyey-Greenstein g (ice ~0.75, water ~0.85).' },
+                            scatteringAlbedo: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Linear [r, g, b] single-scattering albedo, default [1, 1, 1].' },
+                            shellCount: { type: 'NUMBER', description: 'Stacked shells 1-8 (default one per ~400 m).' },
+                            windSpeedMetersPerSecond: { type: 'NUMBER', description: 'Drift along the heading, m/s.' }
+                        },
+                        required: ['baseAltitudeMeters', 'thicknessMeters', 'coverage', 'opticalDepth', 'featureSizeMeters']
+                    }
                 }
             }
         }
@@ -301,20 +326,17 @@ export const atmosphereHandlers: Record<string, ToolHandler> = {
         const elevation = typeof args.elevationDeg === 'number' ? args.elevationDeg : parseFloat(String(args.elevationDeg));
         if (isNaN(elevation)) throw new Error('atmosphere_get_diurnal_profile: valid elevationDeg is required.');
 
-        const profile = computeDiurnalLightingProfile(elevation);
         const turbidity = typeof args.turbidity === 'number' && Number.isFinite(args.turbidity) ? args.turbidity : undefined;
         if (turbidity !== undefined && (turbidity < 1 || turbidity > 64)) throw new Error(`atmosphere_get_diurnal_profile: turbidity ${turbidity} is outside the physical range (1 = pure Rayleigh).`);
+        const observerAltitudeMeters = typeof args.observerAltitudeMeters === 'number' && Number.isFinite(args.observerAltitudeMeters) ? args.observerAltitudeMeters : undefined;
 
-        // With a turbidity, the direct sun is attenuated through that atmosphere (Preetham 1999 transmittance).
-        let sunLinearRgb = profile.sunLinearRgb;
-        let kelvinTemperature = profile.kelvinTemperature;
-        let transmittance: [number, number, number] | undefined;
-        if (turbidity !== undefined && elevation > 0) {
-            transmittance = directSunTransmittance(turbidity, elevation);
-            const m = Math.max(...transmittance);
-            sunLinearRgb = [transmittance[0] / m, transmittance[1] / m, transmittance[2] / m];
-            kelvinTemperature = fitPlanckianKelvinTemperature(transmittance[0], transmittance[1], transmittance[2]);
-        }
+        // While the disc is up the direct sun is the spectral beam: a blackbody sun through Rayleigh, aerosol (at this
+        // turbidity, or the profile's diurnal one) and ozone, integrated over the CIE observer.
+        const profile = computeDiurnalLightingProfile(elevation, { turbidity, observerAltitudeMeters });
+        const spectral = profile.sunIlluminanceLux !== undefined;
+        const sunLinearRgb = profile.sunLinearRgb;
+        const kelvinTemperature = profile.kelvinTemperature;
+        const transmittance = turbidity !== undefined && elevation > 0 ? directSunTransmittance(turbidity, elevation) : undefined;
 
         return {
             resultPayload: {
@@ -322,7 +344,9 @@ export const atmosphereHandlers: Record<string, ToolHandler> = {
                 elevationDeg: elevation,
                 phase: profile.phase,
                 kelvinTemperature,
-                kelvinSource: transmittance ? 'preetham-transmittance' : 'diurnal-profile',
+                kelvinSource: spectral ? 'spectral-beam' : 'diurnal-profile',
+                ...(spectral ? { sunIlluminanceLux: Math.round(profile.sunIlluminanceLux!), turbidityUsed: profile.turbidity } : {}),
+                ...(observerAltitudeMeters !== undefined ? { observerAltitudeMeters } : {}),
                 sunIntensity: profile.sunIntensity,
                 ambientIntensity: profile.ambientIntensity,
                 shadowSoftness: profile.shadowSoftness,
@@ -333,7 +357,7 @@ export const atmosphereHandlers: Record<string, ToolHandler> = {
                 skyColorLinear: profile.skyColorLinear,
                 groundAlbedoLinear: profile.groundAlbedoLinear
             },
-            summaryResult: `Computed diurnal lighting profile for elevation ${elevation.toFixed(1)}° (${profile.phase}, ${kelvinTemperature}K${transmittance ? ` direct sun through turbidity ${turbidity}` : ''}, sun intensity ${profile.sunIntensity.toFixed(2)}).`
+            summaryResult: `Computed diurnal lighting profile for elevation ${elevation.toFixed(1)}° (${profile.phase}, ${kelvinTemperature}K${spectral ? ` spectral direct sun through turbidity ${profile.turbidity}, ${Math.round(profile.sunIlluminanceLux!)} lx` : ''}, sun intensity ${profile.sunIntensity.toFixed(2)}).`
         };
     },
 
@@ -363,7 +387,7 @@ export const atmosphereHandlers: Record<string, ToolHandler> = {
             throw new MissingInputError('atmosphere_configure_scene', 'the sun', 'give sunElevationDeg and sunAzimuthDeg, a preset, or latitude, longitude and isoDate');
         }
 
-        const profile = computeDiurnalLightingProfile(elevation);
+        const profile = computeDiurnalLightingProfile(elevation, { turbidity: num(args.turbidity) });
         const sunDir = anglesToDirection(elevation, azimuth);
 
         // Opt-in layers only: clouds when a coverage is given, shadows/aerial perspective/god rays when asked for.
@@ -374,7 +398,6 @@ export const atmosphereHandlers: Record<string, ToolHandler> = {
             sunElevation: elevation,
             sunAzimuth: azimuth,
             sunPosition: [sunDir[0] * 100, sunDir[1] * 100, sunDir[2] * 100],
-            kelvinTemperature: profile.kelvinTemperature,
             volumetricClouds: clouds,
             cloudShadowsEnabled: clouds && args.enableCloudShadows === true,
             aerialPerspectiveEnabled: args.enableAerialPerspective === true
@@ -386,10 +409,16 @@ export const atmosphereHandlers: Record<string, ToolHandler> = {
             if (num(args.cloudDensity) !== undefined) config.cloudDensity = num(args.cloudDensity);
             if (num(args.cloudAltitudeMeters) !== undefined) config.cloudAltitude = num(args.cloudAltitudeMeters);
         }
+        if (args.cloudLayers !== undefined) {
+            // Checked here so a bad deck fails the call with the field named, before anything is applied.
+            resolveCloudShellLayers(args.cloudLayers, 'atmosphere_configure_scene');
+            config.cloudLayers = args.cloudLayers;
+        }
         if (args.enableGodRays === true) {
             config.godRays = num(args.godRayIntensity) !== undefined ? { enabled: true, intensity: num(args.godRayIntensity) } : { enabled: true };
         }
-        const layers = [clouds ? `clouds ${cloudCoverage}` : undefined, config.cloudShadowsEnabled ? 'cloud shadows' : undefined, config.aerialPerspectiveEnabled ? 'aerial perspective' : undefined, config.godRays ? 'god rays' : undefined].filter(Boolean);
+        const shellDecks = Array.isArray(config.cloudLayers) ? (config.cloudLayers as Array<{ label?: string }>) : [];
+        const layers = [clouds ? `clouds ${cloudCoverage}` : undefined, shellDecks.length ? `${shellDecks.length} shell cloud deck${shellDecks.length > 1 ? 's' : ''}${shellDecks.some(d => d.label) ? ` (${shellDecks.map(d => d.label ?? 'unnamed').join(', ')})` : ''}` : undefined, config.cloudShadowsEnabled ? 'cloud shadows' : undefined, config.aerialPerspectiveEnabled ? 'aerial perspective' : undefined, config.godRays ? 'god rays' : undefined].filter(Boolean);
         const sunText = `sun elevation ${elevation.toFixed(1)}°, azimuth ${azimuth.toFixed(1)}° (${sunSource}), ${profile.phase}, ${profile.kelvinTemperature} K`;
 
         // Applied to the open 3D scene through the scene's own atmosphere operators, so the viewport draws it: a directional
@@ -403,7 +432,8 @@ export const atmosphereHandlers: Record<string, ToolHandler> = {
                 summaryResult: `NOT applied: ${why}. Computed only: ${sunText}${layers.length ? `, with ${layers.join(', ')}` : ''}. Nothing in any viewport changed.`
             };
         }
-        const applied = applySunToScene(active, { elevation, azimuth, lat, lng, isoDate, sunSource, kelvin: profile.kelvinTemperature, config, clouds, args });
+        // No kelvinTemperature is written: the viewport colours the sun from the same spectral beam (a stored Kelvin is an override).
+        const applied = applySunToScene(active, { elevation, azimuth, lat, lng, isoDate, sunSource, config, clouds, args });
         if (!applied.ok) {
             return {
                 status: 'failed',

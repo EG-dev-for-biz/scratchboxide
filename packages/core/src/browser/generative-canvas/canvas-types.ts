@@ -861,6 +861,15 @@ export interface SceneLensDistortion {
  * what is configured: lens distortion when `distortion` has a non-zero coefficient, thin-lens depth of field when
  * focal length, f-number and a focus (distance or object) are set and `depthOfField` is not false.
  */
+/**
+ * A point focus is locked onto: `localPosition` in the local frame of the object `objectId` names (a customMesh / object
+ * id or a viewport node name), so it moves with the object; without `objectId` it is a fixed world point.
+ */
+export interface SceneFocusPoint {
+    objectId?: string;
+    localPosition: [number, number, number];
+}
+
 export interface SceneCameraLens {
     distortion?: SceneLensDistortion;
     focalLengthMm?: number;
@@ -872,6 +881,20 @@ export interface SceneCameraLens {
     focusDistanceMeters?: number;
     /** Focus held on a scene object (customMesh / object id, or a viewport node name); the viewport measures its depth every frame. */
     focusObjectId?: string;
+    /**
+     * How the plane of focus is set. 'manual': focusDistanceMeters. 'auto': continuous autofocus on what is at the
+     * centre of the frame (autoFocusAreaFraction, focusPullSeconds; focusDistanceMeters is where it starts and what it
+     * holds when the AF area sees nothing). 'track': a focusPoint (a surface point locked to its object) or a
+     * focusObjectId (the whole object), re-measured as the camera or the object moves. Absent: 'track' when a point or
+     * object is set, else 'manual'. Open literal; sb_set_camera_lens refuses a mode the viewport does not draw.
+     */
+    focusMode?: 'manual' | 'auto' | 'track' | (string & {});
+    /** Auto focus: side of the centred square AF area, as a fraction of the frame height (0-1]. */
+    autoFocusAreaFraction?: number;
+    /** Auto focus: focus-pull time constant in seconds (an exponential glide in dioptres toward the measured depth; 0 snaps). */
+    focusPullSeconds?: number;
+    /** Track: the surface point focus is locked onto. */
+    focusPoint?: SceneFocusPoint;
     /** Anamorphic squeeze (1 = spherical): oval bokeh and distortion computed on the squeezed sensor. */
     anamorphicSqueeze?: number;
     /** False keeps the lens values but draws no depth of field. */
