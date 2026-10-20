@@ -436,6 +436,9 @@ public:
         if (cfg.bakeCurvatureAO) {
             mesh.computeCurvatureAO(0.72f);
         }
+        // Vertex colours carry every part's colour (walls, roof, glass, AO); a white base factor keeps glTF's
+        // baseColorFactor x COLOR_0 product from applying the wall colour a second time.
+        mesh.material.baseColorFactor = Vec4(1.0f, 1.0f, 1.0f, mesh.material.baseColorFactor.w);
         mesh.recomputeBounds();
         return mesh;
     }
@@ -473,6 +476,9 @@ public:
             mesh.computeCurvatureAO(0.65f);
         }
 
+        // Vertex colours carry every part's colour (walls, roof, glass, AO); a white base factor keeps glTF's
+        // baseColorFactor x COLOR_0 product from applying the wall colour a second time.
+        mesh.material.baseColorFactor = Vec4(1.0f, 1.0f, 1.0f, mesh.material.baseColorFactor.w);
         mesh.recomputeBounds();
         return mesh;
     }

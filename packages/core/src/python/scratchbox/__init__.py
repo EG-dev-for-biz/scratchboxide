@@ -90,6 +90,10 @@ random = _random
 py_math = _py_math
 
 
+def _WHITE_VERTEX():
+    return math.Vec4(1.0, 1.0, 1.0, 1.0)
+
+
 def _to_point3(pt):
     if hasattr(pt, "x") and hasattr(pt, "y") and hasattr(pt, "z"):
         return float(pt.x), float(pt.y), float(pt.z)
@@ -138,6 +142,21 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
             raise TypeError(f"scale() takes 1 or 3 arguments ({len(args)} given)")
         return self
 
+    def _rebase_factor(part_mat, container_mat):
+        """Per-channel factor taking colours drawn with part_mat to the same colours drawn with container_mat."""
+        pc = getattr(part_mat, "base_color", None) if part_mat is not None else None
+        if pc is None:
+            return None
+        cc = getattr(container_mat, "base_color", None) if container_mat is not None else None
+        if cc is None:
+            cc = math.Vec4(1.0, 1.0, 1.0, 1.0)
+        def ratio(p, c):
+            return float(p) / float(c) if abs(float(c)) > 1e-6 else float(p)
+        f = (ratio(pc.x, cc.x), ratio(pc.y, cc.y), ratio(pc.z, cc.z), ratio(pc.w, cc.w))
+        if all(abs(v - 1.0) < 1e-6 for v in f):
+            return None
+        return math.Vec4(*f)
+
     def _mesh_append(self, other):
         # Track sub-meshes per-instance directly on the C++ Mesh via dynamic_attr
         if not hasattr(self, "_sub_parts"):
@@ -151,14 +170,18 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
                 if sub is not target and sub not in self._sub_parts:
                     self._sub_parts.append(sub)
 
-        # Bake material base_color into vertices if set
-        if hasattr(target, "material") and target.material:
-            mat = target.material
-            col = getattr(mat, "base_color", getattr(mat, "baseColorFactor", None))
-            if col is not None and hasattr(target, "set_color"):
-                target.set_color(col)
-
-        _orig_append(self, target)
+        # The merged copy is drawn with this container's material, so rebase the part's own material colour
+        # onto it (vertex x part colour / container colour): glTF's baseColorFactor x COLOR_0 then gives the
+        # part's colour exactly once. Only the merged copy changes; the part keeps its own vertices, since
+        # write_glb also exports sub-parts individually with their own materials.
+        factor = _rebase_factor(getattr(target, "material", None), getattr(self, "material", None))
+        if factor is not None and hasattr(target, "multiply_vertex_colors"):
+            copy = _Mesh(getattr(target, "name", "part"))
+            _orig_append(copy, target)
+            copy.multiply_vertex_colors(factor)
+            _orig_append(self, copy)
+        else:
+            _orig_append(self, target)
         return self
 
     def _mesh_merge(self, other) -> "scratchbox_native.geometry.Mesh":
@@ -378,12 +401,13 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
 
         def _mesh_apply_material(self, mat):
             # write_glb exports merged sub-parts individually, so the material must reach each of them too.
+            # glTF renders baseColorFactor x COLOR_0: the material carries the colour, so the vertex colours
+            # are reset to white (clearing primitive default tints) rather than painted with the same colour,
+            # which squared it. Per-vertex shading baked afterwards (AO, weathering) multiplies onto white.
             for target in [self] + [p for p in (getattr(self, "_sub_parts", None) or []) if p is not self]:
                 target.material = mat
-                if mat is not None:
-                    col = getattr(mat, "base_color", getattr(mat, "baseColorFactor", None))
-                    if col is not None and hasattr(target, "set_color"):
-                        target.set_color(col)
+                if mat is not None and hasattr(target, "set_color"):
+                    target.set_color(_WHITE_VERTEX())
             return self
 
         _NativeMesh.align_to_terrain = _mesh_align_to_terrain
@@ -629,6 +653,20 @@ if _native is not None and hasattr(_native, "geometry"):
             vec_c = default_color if default_color is not None else math.Vec4(0.8, 0.8, 0.8, 1.0)
         return vec_c, mat
 
+    def _finish_primitive(mesh, color, mat):
+        """Give a new primitive its requested colour exactly once.
+
+        glTF renders baseColorFactor x COLOR_0, so the colour lives in the material and the vertex
+        colours stay white; a colour passed without a material becomes this mesh's own material colour.
+        """
+        if mat is not None and hasattr(mesh, "apply_material"):
+            mesh.apply_material(mat)
+        elif color is not None and hasattr(mesh, "set_color"):
+            vec_c, _ = _resolve_color_and_material(color, None)
+            mesh.material.base_color = vec_c
+            mesh.set_color(_WHITE_VERTEX())
+        return mesh
+
     _orig_create_cylinder = getattr(_geom, "create_cylinder", None)
     def create_cylinder(radius_top=1.0, radius_bottom=1.0, height=2.0, segments=24, color=None, material=None, capped=True, *, radius=None, **kwargs):
         rt = float(radius if radius is not None else radius_top)
@@ -636,9 +674,7 @@ if _native is not None and hasattr(_native, "geometry"):
         c, mat = _resolve_color_and_material(color, material, default_color=math.Vec4(0.8, 0.8, 0.8, 1.0))
         if _orig_create_cylinder:
             mesh = _orig_create_cylinder(rt, rb, float(height), int(segments), c, bool(capped))
-            if mat is not None and hasattr(mesh, "apply_material"):
-                mesh.apply_material(mat)
-            return mesh
+            return _finish_primitive(mesh, color, mat)
         raise RuntimeError("Native create_cylinder not available")
     _geom.create_cylinder = create_cylinder
 
@@ -661,9 +697,7 @@ if _native is not None and hasattr(_native, "geometry"):
         _, mat = _resolve_color_and_material(color, material)
         if _orig_create_plane:
             mesh = _orig_create_plane(float(width), h, sx, sy)
-            if mat is not None and hasattr(mesh, "apply_material"):
-                mesh.apply_material(mat)
-            return mesh
+            return _finish_primitive(mesh, color, mat)
         raise RuntimeError("Native create_plane not available")
     _geom.create_plane = create_plane
 
@@ -674,6 +708,7 @@ if _native is not None and hasattr(_native, "geometry"):
         material = kwargs.get("material")
         if len(args) == 3 and all(isinstance(a, (int, float)) for a in args):
             s = math.Vec3(float(args[0]), float(args[1]), float(args[2]))
+            color = kwargs.get("color")
         elif len(args) == 4 and all(isinstance(a, (int, float)) for a in args[:3]):
             s = math.Vec3(float(args[0]), float(args[1]), float(args[2]))
             color = args[3]
@@ -707,9 +742,7 @@ if _native is not None and hasattr(_native, "geometry"):
 
         if _orig_create_box:
             mesh = _orig_create_box(s, c)
-            if mat is not None and hasattr(mesh, "apply_material"):
-                mesh.apply_material(mat)
-            return mesh
+            return _finish_primitive(mesh, color, mat)
         raise RuntimeError("Native create_box not available")
     _geom.create_box = create_box
     _geom.create_cube = create_box
@@ -722,9 +755,7 @@ if _native is not None and hasattr(_native, "geometry"):
         c, mat = _resolve_color_and_material(color, material, default_color=math.Vec4(0.9, 0.3, 0.3, 1.0))
         if _orig_create_sphere:
             mesh = _orig_create_sphere(float(radius), r, s, c)
-            if mat is not None and hasattr(mesh, "apply_material"):
-                mesh.apply_material(mat)
-            return mesh
+            return _finish_primitive(mesh, color, mat)
         raise RuntimeError("Native create_sphere not available")
     _geom.create_sphere = create_sphere
 
@@ -752,9 +783,7 @@ if _native is not None and hasattr(_native, "geometry"):
         b = float(kwargs.get("bevel_radius", bevel))
         if _orig_create_beveled_box:
             mesh = _orig_create_beveled_box(s, b, c)
-            if mat is not None and hasattr(mesh, "apply_material"):
-                mesh.apply_material(mat)
-            return mesh
+            return _finish_primitive(mesh, color, mat)
         raise RuntimeError("Native create_beveled_box not available")
     _geom.create_beveled_box = create_beveled_box
 
@@ -769,9 +798,7 @@ if _native is not None and hasattr(_native, "geometry"):
             sx, sy, sz = sub, sub, sub
         if _orig_create_subdivided_box:
             mesh = _orig_create_subdivided_box(s, sx, sy, sz, c)
-            if mat is not None and hasattr(mesh, "apply_material"):
-                mesh.apply_material(mat)
-            return mesh
+            return _finish_primitive(mesh, color, mat)
         raise RuntimeError("Native create_subdivided_box not available")
     _geom.create_subdivided_box = create_subdivided_box
 
@@ -786,9 +813,7 @@ if _native is not None and hasattr(_native, "geometry"):
         cd = float(kwargs.get("center_channel", center_dip))
         if _orig_create_envelope:
             mesh = _orig_create_envelope(b, cr, sl, cd, gx, gz, c)
-            if mat is not None and hasattr(mesh, "apply_material"):
-                mesh.apply_material(mat)
-            return mesh
+            return _finish_primitive(mesh, color, mat)
         raise RuntimeError("Native create_envelope not available")
     _geom.create_envelope = create_envelope
 
@@ -803,9 +828,7 @@ if _native is not None and hasattr(_native, "geometry"):
         ss = float(kwargs.get("side_sign", side))
         if _orig_create_arched_blister:
             mesh = _orig_create_arched_blister(b, ar, sw, gphi, gw, ss, c)
-            if mat is not None and hasattr(mesh, "apply_material"):
-                mesh.apply_material(mat)
-            return mesh
+            return _finish_primitive(mesh, color, mat)
         raise RuntimeError("Native create_arched_blister not available")
     _geom.create_arched_blister = create_arched_blister
 
@@ -822,9 +845,7 @@ if _native is not None and hasattr(_native, "geometry"):
         ang = float(total_angle_rad if total_angle_rad is not None else (math.TWO_PI if hasattr(math, "TWO_PI") else 6.283185307))
         if _orig_create_lathe:
             mesh = _orig_create_lathe(prof_vec, seg, ang, c)
-            if mat is not None and hasattr(mesh, "apply_material"):
-                mesh.apply_material(mat)
-            return mesh
+            return _finish_primitive(mesh, color, mat)
         raise RuntimeError("Native create_lathe not available")
     _geom.create_lathe = create_lathe
 
@@ -842,9 +863,7 @@ if _native is not None and hasattr(_native, "geometry"):
             slices_vec.append(s_vec)
         if _orig_create_loft:
             mesh = _orig_create_loft(slices_vec, bool(close_ends), c)
-            if mat is not None and hasattr(mesh, "apply_material"):
-                mesh.apply_material(mat)
-            return mesh
+            return _finish_primitive(mesh, color, mat)
         raise RuntimeError("Native create_loft not available")
     _geom.create_loft = create_loft
 

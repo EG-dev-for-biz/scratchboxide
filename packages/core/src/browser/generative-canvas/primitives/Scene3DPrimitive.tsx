@@ -162,6 +162,7 @@ import { keepsStoredPose, lensCommands, liveViewMatches, runCameraCommands, with
 import { syncObjectMaterial } from './scene3d/materialOverride';
 import { TreeLodController, findShadowCamera, formatTreeLodStats, type TreeLodFrame } from './scene3d/treeLod/TreeLodController';
 import { countSceneTriangles, sharedTreeBudgetEnabled, type SceneTriangleShare } from './scene3d/treeLod/sceneTriangleShare';
+import { AdaptiveTreeBudget, GpuFrameTimer, adaptiveTreeBudgetEnabled, adaptiveTreeBudgetOverrides } from './scene3d/treeLod/adaptiveTreeBudget';
 import { createViewportCostProbe, viewportCostProbeEnabled } from './scene3d/viewportCost';
 import { applyTreeTextures, loadTreeTextureLibrary } from './scene3d/treeLod/treeTextureMaterials';
 import { disposeObject3DDeep, releaseObject3D } from './scene3d/disposeObject';
@@ -2111,6 +2112,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         let appliedTreeLodView: Scene3DData['treeLod'] | null = null;
         let lastTreeFrame: TreeLodFrame | undefined;
         let lastSceneShare: SceneTriangleShare | undefined;
+        // The tree budget adapted to this GPU: whole frames are timed on the GPU and the budget comes down while they stay slow
+        // (adaptiveTreeBudget.ts; off with ?sbAdaptiveTreeBudget=0).
+        const adaptiveBudget = adaptiveTreeBudgetEnabled() ? new AdaptiveTreeBudget(adaptiveTreeBudgetOverrides()) : null;
+        const gpuFrameTimer = adaptiveBudget ? new GpuFrameTimer(renderer.getContext() as WebGL2RenderingContext) : null;
         const treeLodControllers = (): TreeLodController[] => {
             const out: TreeLodController[] = [];
             externalObjectsMapRef.current.forEach(model => {
@@ -2137,7 +2142,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             const overscan = optics?.active ? optics.status.overscan : 1;
             const focus = dofPlan?.focusObjectId ? optics?.focusTarget : null;
             const frame: TreeLodFrame = {
-                heightPx, overscan,
+                heightPx, overscan, budgetScale: adaptiveBudget?.scale ?? 1,
                 dof: dofPlan && typeof focusM === 'number' && focusM > 0
                     ? { focalLengthMm: dofPlan.focalLengthMm, apertureFStop: dofPlan.apertureFStop, focusM, focusPoint: focus?.centre ?? null, focusObject: focus?.object ?? null, maxBlurRadiusPx: Math.max(4, MAX_BLUR_RADIUS_FRAME_FRACTION * heightPx * overscan) }
                     : null
@@ -2163,7 +2168,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             }
         };
         // debug hook: the controllers, the last frame they were given, and one level update outside the animation loop
-        (window as any).__SB_TREE_LOD__ = { controllers: treeLodControllers, lastFrame: () => lastTreeFrame, sceneShare: () => lastSceneShare, update: () => updateTreeLods(performance.now()) };
+        (window as any).__SB_TREE_LOD__ = {
+            controllers: treeLodControllers, lastFrame: () => lastTreeFrame, sceneShare: () => lastSceneShare, update: () => updateTreeLods(performance.now()),
+            adaptiveBudget: () => (adaptiveBudget ? { scale: adaptiveBudget.scale, smoothedGpuMs: adaptiveBudget.smoothedMs, samples: adaptiveBudget.samples, timer: !!gpuFrameTimer?.available } : null)
+        };
 
         renderFrameRef.current = renderFrame;
         (window as any).__SB_3D_RENDER_FRAME__ = renderFrame;
@@ -2373,7 +2381,11 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     }
                 });
 
+                // the frame timed on the GPU for the adaptive tree budget (only while there are trees to adapt)
+                const timeFrame = !!gpuFrameTimer?.available && treeLodControllers().length > 0;
+                if (timeFrame) gpuFrameTimer!.begin();
                 renderFrame();
+                if (timeFrame) { gpuFrameTimer!.end(); for (const ms of gpuFrameTimer!.poll()) adaptiveBudget!.sample(ms, now); }
                 updateFocusReticle();
             } catch (frameErr) {
                 if (!hasWarnedFrameErrorRef.current) {
@@ -2391,6 +2403,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 cancelAnimationFrame(animationFrameIdRef.current);
                 animationFrameIdRef.current = null;
             }
+            gpuFrameTimer?.dispose();
             detachControls();
             detachResize();
             if (selectionBoxRef.current) {

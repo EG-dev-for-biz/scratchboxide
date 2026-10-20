@@ -19,6 +19,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import { chromeAvailable, openHarness, type Harness } from './tree-lod-harness/runHarness';
+import { DEFAULT_TREE_TRIANGLE_BUDGET } from '../src/common/spatial/tree-lod-math';
+
+/** What a frame may draw: the default budget, plus the dissolves in flight (both levels of a dissolving tree) over it. */
+const DRAWN_MAX = DEFAULT_TREE_TRIANGLE_BUDGET * 1.25;
 
 const OUT = path.resolve(__dirname, '../../../test-results');
 const SHOTS = path.join(OUT, 'screenshots');
@@ -49,7 +53,7 @@ describe.skipIf(!run)('tree LOD in the viewport (1,000 trees)', () => {
             const r = await h.eval<Perf>(`window.H.perf('${cam}', 240)`);
             report[cam] = r;
             expect(r.trees).toBe(1000);
-            expect(r.drawnTriangles.max).toBeLessThanOrEqual(10_000_000);          // target: at most 5-10 M per park view
+            expect(r.drawnTriangles.max).toBeLessThanOrEqual(DRAWN_MAX);           // the budget, and the dissolves in flight
             expect(r.drawnTriangles.median).toBeGreaterThan(100_000);              // something was drawn
             expect(r.frameMs.median).toBeLessThan(33); expect(r.frameMs.p95).toBeLessThan(50); expect(r.frameMs.max).toBeLessThan(250);
             expect(r.updateMs.median).toBeLessThan(2);                              // the per-frame JS of the controller itself
@@ -66,8 +70,8 @@ describe.skipIf(!run)('tree LOD in the viewport (1,000 trees)', () => {
         try {
             const r = await dense.h.eval<Perf>(`window.H.perf('eye', 240)`);
             report.denseEye = r;
-            expect(r.estimatedTriangles.median).toBeLessThanOrEqual(8_500_000);
-            expect(r.drawnTriangles.max).toBeLessThanOrEqual(10_000_000);
+            expect(r.estimatedTriangles.median).toBeLessThanOrEqual(DEFAULT_TREE_TRIANGLE_BUDGET * 1.1);   // the destinations fit; dissolves in flight may add up to 10 %
+            expect(r.drawnTriangles.max).toBeLessThanOrEqual(DRAWN_MAX);
             expect(r.frameMs.p95).toBeLessThan(60);
             const all0 = await dense.h.eval<Perf>(`window.H.perf('eye', 4, 0)`);
             report.denseEyeAllLevel0 = all0;
