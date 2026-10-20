@@ -75,6 +75,7 @@ static void usage() {
         "                --no-relief-protection (framed panels are snapped at their own level unless this is set)\n"
         "                --no-sheets  --sheet-min-relief M (0.08)  --sheet-max-angle D (4)  --sheet-flat-spread M (0.08)  --sheet-min-area M2 (3)\n"
         "                --sheet-max-width M (3)  --sheet-ring-width M (3)  --sheet-ring-all-samples  --sheet-min-main-relief M (0.1)  --sheet-min-aspect F (3)\n"
+        "                --no-proud-blocks (also snap blocks standing off a wall on their own risers)  --proud-block-min-relief M (0.08)\n"
         "  facing:       --foreign-facing-dot F (-0.5)  --keep-unlevelable-roofs  --tier-local-radius M (6)  --tier-local-min-area M2 (8)\n"
         "  opposed:      --no-opposed  --opposed-zero-passes N (1)  --opposed-escalate  --opposed-max-gap M (1.5)  --opposed-keep-fraction F (0.5)  --opposed-keep-min M (0.05)  --fold-deg D (165; 0 = off)\n"
         "  slivers:      --drop-collapsed (flag collapsing bevels 2 instead of keeping a sliver)  --collapse-keep-width M (0.002)  --collapse-max-nudge M (0.02)\n"
@@ -227,6 +228,8 @@ int main(int argc, char** argv) {
         else if (a == "--collapse-from") p.collapseFromArea = num("--collapse-from");
         else if (a == "--collapse-to") p.collapseToArea = num("--collapse-to");
         else if (a == "--no-sheets") p.extractSheets = false;
+        else if (a == "--no-proud-blocks") p.proudBlockMinRelief = 0;
+        else if (a == "--proud-block-min-relief") p.proudBlockMinRelief = num("--proud-block-min-relief");
         else if (a == "--relief-min-step") p.reliefMinStep = num("--relief-min-step");
         else if (a == "--relief-panel-max-width") p.reliefPanelMaxWidth = num("--relief-panel-max-width");
         else if (a == "--relief-panel-min-height") p.reliefPanelMinHeight = num("--relief-panel-min-height");
