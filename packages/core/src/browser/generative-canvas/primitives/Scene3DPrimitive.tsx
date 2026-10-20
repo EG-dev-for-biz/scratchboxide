@@ -1616,8 +1616,15 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             if (effectiveWorldBranch) setWorldBranch(effectiveWorldBranch);
             if (data.renderMode) setRenderMode(data.renderMode);
             if (data.clayPreset) {
-                if (threeSceneRef.current) {
-                    TileClayProcessor.applyClayMaterial(threeSceneRef.current, data.clayPreset as any);
+                const liveScene = threeSceneRef.current;
+                if (liveScene) {
+                    // The preset is the staged place's clay look. An object standing there (a loaded model that is not an
+                    // environment layer) keeps its own materials: this pass replaces materials for good, while the clay
+                    // render mode swaps them reversibly (applyClayRenderMode).
+                    for (const child of liveScene.children) {
+                        if (child.name.startsWith(EXTERNAL_OBJECT_ROOT_PREFIX) && !child.userData.sbEnvironment) continue;
+                        TileClayProcessor.applyClayMaterial(child, data.clayPreset as any);
+                    }
                 }
             }
             if (data.cameraMode) setCameraMode(data.cameraMode);

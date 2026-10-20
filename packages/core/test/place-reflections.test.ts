@@ -263,6 +263,21 @@ describe.skipIf(!stagedChrome.ok)('place reflections in the real viewport (headl
         expect((await stats()).captures).toBe(before + 1);
     }, 120_000);
 
+    test("the staged place's clay preset clays the place, never the object standing there", async () => {
+        await mount(sceneData({ renderMode: 'pbr', geo: true }), false);
+        // the preset arrives with a later scene update (as the staged clay scene carries it), after both models loaded
+        await page.eval(`sbHarness.update(${JSON.stringify({ ...sceneData({ renderMode: 'pbr', geo: true }), clayPreset: 'studio-grey' })})`);
+        await page.step(90, STEP);
+        const looks = await page.eval<Record<string, { clayPreset: boolean; metalness: number }>>(`(() => {
+            const out = {};
+            for (const id of [${JSON.stringify(PLACE)}, ${JSON.stringify(HERO)}]) window.__SB_3D_EXTERNAL_OBJECTS__.get(id).traverse(o => { if (o.isMesh && !out[id]) out[id] = { clayPreset: !!o.material.userData.isClayMaterial, metalness: o.material.metalness }; });
+            return out;
+        })()`);
+        expect(looks[PLACE].clayPreset).toBe(true);
+        expect(looks[HERO]).toEqual({ clayPreset: false, metalness: 1 });
+        expect((await heroEnv()).envMap).toBe('sb-place-reflection-probe');
+    }, 120_000);
+
     test('clay at a place and studio scenes are pixel-identical with and without the probe', async () => {
         for (const [name, data] of [['clay_place', sceneData({ renderMode: 'clay', geo: true })], ['pbr_studio', sceneData({ renderMode: 'pbr', geo: false })]] as const) {
             await mount(data, true);
