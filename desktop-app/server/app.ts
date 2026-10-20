@@ -437,6 +437,14 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     ]) {
         app.use('/build/3d-python', express.static(dir));
     }
+    // generate_image's output files (build/generated-images, gitignored), served so the chat and a document's image
+    // sections can show them by URL. Looked up per request like the Python runner's directory above.
+    for (const dir of [
+        path.resolve(process.cwd(), 'build', 'generated-images'),
+        path.resolve(process.cwd(), '..', 'build', 'generated-images')
+    ]) {
+        app.use('/build/generated-images', express.static(dir));
+    }
     // Built virtual geometry (.sbvg) files, named by their source GLB's content hash.
     app.use(VIRTUAL_GEOMETRY_URL_PREFIX, express.static(virtualGeometryServeDir(), { immutable: true, maxAge: '1y' }));
 

@@ -51,6 +51,8 @@ import {
     adaptiveMatchmoveHandlers,
     NANO_BANANA_TOOL_DECLARATIONS,
     nanoBananaHandlers,
+    IMAGE_GENERATION_TOOL_DECLARATIONS,
+    imageGenerationHandlers,
     ALGORITHMIC_UV_TOOL_DECLARATIONS,
     algorithmicUvHandlers,
     ATMOSPHERE_TOOL_DECLARATIONS,
@@ -640,6 +642,9 @@ export function createDefaultToolRegistry(): ToolRegistry {
     }
     for (const decl of NANO_BANANA_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, nanoBananaHandlers[decl.name], 'workspace');
+    }
+    for (const decl of IMAGE_GENERATION_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, imageGenerationHandlers[decl.name], 'workspace');
     }
     for (const decl of ALGORITHMIC_UV_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, algorithmicUvHandlers[decl.name], 'workspace');
