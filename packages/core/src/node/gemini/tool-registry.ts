@@ -162,6 +162,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
         mcpName: 'Scratchbox Workspace',
         humanTitle: name => {
             if (name === 'mount_canvas_primitive') return 'Mount Canvas Primitive';
+            if (name === 'morph_canvas_primitive') return 'Morph Canvas Primitive';
             if (name === 'ask_user_question') return 'Ask User Clarification';
             if (name === 'present_execution_plan') return 'Present Execution Plan';
             if (name === 'location_generate_3dgs') return 'Location 3DGS: Synthesize Radiance Field';
@@ -188,6 +189,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
         },
         cardTitle: (name, _status) => {
             if (name === 'mount_canvas_primitive') return 'Canvas: Mount Primitive';
+            if (name === 'morph_canvas_primitive') return 'Canvas: Morph Primitive';
             if (name === 'ask_user_question') return 'User: Clarify Choice';
             if (name === 'present_execution_plan') return 'Plan: Review & Confirm';
             if (name === 'execute_3d_python_script') return 'Python 3D: Execute Script';
@@ -214,6 +216,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
         },
         stepTitle: name => {
             if (name === 'mount_canvas_primitive') return 'Mount canvas primitive on stage';
+            if (name === 'morph_canvas_primitive') return 'Morph active canvas primitive into a different view';
             if (name === 'ask_user_question') return 'Ask user clarifying question with structured choices';
             if (name === 'present_execution_plan') return 'Present execution plan card for confirmation';
             if (name === 'execute_3d_python_script') return 'Execute procedural 3D Python script with Scratchbox C++20 engine';

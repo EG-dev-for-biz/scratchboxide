@@ -14,28 +14,40 @@ import {
     KanbanCard,
     KanbanColumn,
     LiveCodeSandboxData,
+    PrimitiveType,
     AccentColor,
     getActiveUserName
 } from '../canvas-types';
 import { morphKanbanCardToSandbox } from '../primitive-transformer-engine';
 import { IconDocument } from '../canvas-icons';
+import { ViewAsMenu } from './shared/ViewAsMenu';
 
 export interface KanbanBoardPrimitiveProps {
     data: KanbanBoardData;
+    /** The full artifact wrapping `data`, when one exists — needed for the "View As" whole-board morph. */
+    activeArtifact?: CanvasArtifact;
     onUpdate?: (updatedData: KanbanBoardData) => void;
     onMorphCardToSandbox?: (sandboxData: LiveCodeSandboxData) => void;
+    /** Per-card "1-click morph this card" (e.g. Code & Test) — builds its own artifact, takes just that artifact. */
     onMorphArtifact?: (artifact: CanvasArtifact) => void;
+    /** "View As" — morphs the WHOLE board artifact into a different primitive type. Distinct from `onMorphArtifact` above. */
+    onMorphWholeBoard?: (artifact: CanvasArtifact, targetType: PrimitiveType) => void;
     onPromptAction?: (promptText: string) => void;
+    /** True while the AI agent is generating a reply — used to sequence Run Task / Run Phase execution. */
+    isAgentGenerating?: boolean;
 }
 
 const ACCENT_CYCLE: AccentColor[] = ['blue', 'indigo', 'purple', 'emerald', 'amber', 'rose', 'cyan'];
 
 export const KanbanBoardPrimitive: React.FC<KanbanBoardPrimitiveProps> = ({
     data,
+    activeArtifact,
     onUpdate,
     onMorphCardToSandbox,
     onMorphArtifact,
-    onPromptAction
+    onMorphWholeBoard,
+    onPromptAction,
+    isAgentGenerating
 }) => {
     const sanitizeBoard = (raw: KanbanBoardData): KanbanBoardData => {
         const rawCols = raw?.columns || (raw as any)?.kanbanColumns || [];
@@ -63,6 +75,83 @@ export const KanbanBoardPrimitive: React.FC<KanbanBoardPrimitiveProps> = ({
     const [expandedDraftId, setExpandedDraftId] = React.useState<string | undefined>(undefined);
     const [promotingDraftId, setPromotingDraftId] = React.useState<string | undefined>(undefined);
     const [newDraftPrompt, setNewDraftPrompt] = React.useState<string>('');
+
+    // Replit-style task runner state
+    const [runningCardId, setRunningCardId] = React.useState<string | undefined>(undefined);
+    // Queue of { cardId, colId } waiting to run after the current card finishes
+    const runQueueRef = React.useRef<Array<{ cardId: string; colId: string }>>([]);
+    const boardRef = React.useRef<KanbanBoardData>(board);
+    boardRef.current = board;
+
+    // When agent finishes generating, advance the completed card and start the next queued task
+    const prevGenerating = React.useRef<boolean | undefined>(undefined);
+    React.useEffect(() => {
+        const wasGenerating = prevGenerating.current;
+        prevGenerating.current = isAgentGenerating;
+        if (wasGenerating === true && isAgentGenerating === false && runningCardId) {
+            // Move completed card one column to the right
+            const currentBoard = boardRef.current;
+            const cols = currentBoard.columns || [];
+            const fromColIdx = cols.findIndex(col => col.cards.some(c => c.id === runningCardId));
+            if (fromColIdx !== -1 && fromColIdx < cols.length - 1) {
+                const fromCol = cols[fromColIdx];
+                const card = fromCol.cards.find(c => c.id === runningCardId);
+                if (card) {
+                    const newCols = cols.map((col, idx) => {
+                        if (idx === fromColIdx) return { ...col, cards: col.cards.filter(c => c.id !== runningCardId) };
+                        if (idx === fromColIdx + 1) return { ...col, cards: [...col.cards, card] };
+                        return col;
+                    });
+                    const newBoard: KanbanBoardData = { ...currentBoard, columns: newCols };
+                    setBoard(newBoard);
+                    onUpdate?.(newBoard);
+                }
+            }
+            setRunningCardId(undefined);
+            // Fire next item in queue
+            const next = runQueueRef.current.shift();
+            if (next) {
+                const nextBoard = boardRef.current;
+                const nextCols = nextBoard.columns || [];
+                const nextCol = nextCols.find(c => c.id === next.colId);
+                const nextCard = nextCol?.cards.find(c => c.id === next.cardId);
+                if (nextCard && onPromptAction) {
+                    setRunningCardId(next.cardId);
+                    onPromptAction(buildRunPrompt(nextCard));
+                }
+            }
+        }
+    }, [isAgentGenerating, runningCardId]);
+
+    const buildRunPrompt = (card: KanbanCard): string => {
+        const steps = card.planSteps?.length ? `\n\nPlan steps:\n${card.planSteps.map(s => `- ${s}`).join('\n')}` : '';
+        const desc = card.description ? `\n\n${card.description}` : '';
+        return `Implement this task: **${card.title}**${desc}${steps}\n\nWork through it step by step, write any code needed, and show the result.`;
+    };
+
+    const handleRunCard = (card: KanbanCard) => {
+        if (!onPromptAction || isAgentGenerating || runningCardId) return;
+        setRunningCardId(card.id);
+        onPromptAction(buildRunPrompt(card));
+    };
+
+    const handleRunPhase = (colId: string) => {
+        if (!onPromptAction) return;
+        const cols = boardRef.current.columns || [];
+        const col = cols.find(c => c.id === colId);
+        if (!col || col.cards.length === 0) return;
+        const cards = [...col.cards];
+        // First card runs immediately; the rest are queued
+        const [first, ...rest] = cards;
+        runQueueRef.current = rest.map(c => ({ cardId: c.id, colId }));
+        if (!isAgentGenerating && !runningCardId) {
+            setRunningCardId(first.id);
+            onPromptAction(buildRunPrompt(first));
+        } else {
+            // Agent is busy — queue everything including first
+            runQueueRef.current = cards.map(c => ({ cardId: c.id, colId }));
+        }
+    };
 
     const handlePromoteDraft = (cardId: string) => {
         const drafts = board.drafts || [];
@@ -503,6 +592,13 @@ export const KanbanBoardPrimitive: React.FC<KanbanBoardPrimitiveProps> = ({
                         <IconDocument size={12} />
                         <span>Export Markdown</span>
                     </button>
+                    {onMorphWholeBoard && activeArtifact && (
+                        <ViewAsMenu
+                            currentType="kanban-board"
+                            onSelect={targetType => onMorphWholeBoard(activeArtifact, targetType)}
+                            triggerClassName="sb-btn sb-btn-secondary sb-btn-xs sb-kanban-action-chip"
+                        />
+                    )}
                 </div>
 
                 <div className="sb-kanban-progress-wrapper">
@@ -652,14 +748,29 @@ export const KanbanBoardPrimitive: React.FC<KanbanBoardPrimitiveProps> = ({
                                     <span className="sb-kanban-col-dot" />
                                     <h4 className="sb-kanban-col-title">{column.title}</h4>
                                 </div>
-                                <span className="sb-kanban-col-count">{column.cards.length}</span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                    {onPromptAction && column.cards.length > 0 && (
+                                        <button
+                                            type="button"
+                                            className="sb-btn sb-btn-primary sb-btn-xs"
+                                            style={{ fontSize: '10px', padding: '2px 6px', opacity: (isAgentGenerating || runningCardId) ? 0.5 : 1 }}
+                                            title={`Run all ${column.cards.length} task${column.cards.length !== 1 ? 's' : ''} in this phase sequentially`}
+                                            onClick={() => handleRunPhase(column.id)}
+                                            disabled={!!(isAgentGenerating || runningCardId)}
+                                        >
+                                            ▶ Run Phase
+                                        </button>
+                                    )}
+                                    <span className="sb-kanban-col-count">{column.cards.length}</span>
+                                </div>
                             </div>
 
                             <div className="sb-kanban-cards-list">
                                 {column.cards.map(card => (
                                     <div
                                         key={card.id}
-                                        className="sb-kanban-card"
+                                        className={`sb-kanban-card${runningCardId === card.id ? ' sb-card-promoting-spring' : ''}`}
+                                        style={runningCardId === card.id ? { outline: '2px solid var(--sb-accent-blue, #3b82f6)', outlineOffset: '2px' } : undefined}
                                         draggable={true}
                                         onDragStart={(e) => {
                                             e.dataTransfer.setData('text/plain', JSON.stringify({ cardId: card.id, sourceColId: column.id }));
@@ -679,6 +790,12 @@ export const KanbanBoardPrimitive: React.FC<KanbanBoardPrimitiveProps> = ({
                                             {card.priority && (
                                                 <span className={`sb-card-priority ${getPriorityBadgeClass(card.priority)}`}>
                                                     {card.priority}
+                                                </span>
+                                            )}
+                                            {runningCardId === card.id && (
+                                                <span style={{ fontSize: '10px', color: 'var(--sb-accent-blue, #3b82f6)', marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                                    <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', background: 'currentColor', animation: 'pulse 1.2s ease-in-out infinite' }} />
+                                                    Running…
                                                 </span>
                                             )}
                                             <button
@@ -721,6 +838,18 @@ export const KanbanBoardPrimitive: React.FC<KanbanBoardPrimitiveProps> = ({
 
                                         {/* Card movement & Morph controls */}
                                         <div className="sb-kanban-card-actions">
+                                            {onPromptAction && (
+                                                <button
+                                                    type="button"
+                                                    className="sb-btn sb-btn-primary sb-btn-xs"
+                                                    style={{ opacity: (isAgentGenerating || runningCardId) && runningCardId !== card.id ? 0.45 : 1 }}
+                                                    title="Run this task — sends it to the AI agent and advances the card when done"
+                                                    disabled={!!(isAgentGenerating && runningCardId !== card.id) || (!!runningCardId && runningCardId !== card.id)}
+                                                    onClick={() => handleRunCard(card)}
+                                                >
+                                                    {runningCardId === card.id ? '⏳ Running…' : '▶ Run Task'}
+                                                </button>
+                                            )}
                                             <button
                                                 type="button"
                                                 className="sb-btn sb-btn-secondary sb-btn-xs sb-card-morph-btn"

@@ -273,6 +273,8 @@ export type {
 
 export interface Scene3DPrimitiveProps {
     data: Scene3DData;
+    /** The full artifact wrapping `data`, when one exists — needed to call `onMorphArtifact` (it morphs the artifact, not just its data). */
+    activeArtifact?: CanvasArtifact;
     onUpdate?: (updatedData: Scene3DData) => void;
     onPromptAction?: (promptText: string) => void;
     onMorphArtifact?: (artifact: CanvasArtifact, targetType: string) => void;
@@ -645,6 +647,7 @@ import { loadServedGeneratorGlb } from '../../../common/strip-embedded-glb';
 import { PhotorealGaussianSplatMesh } from '../services/spatial/PhotorealGaussianSplatMesh';
 import { EWA_CUTOFF_SIGMA, EWA_SPLAT_GLSL } from '../../../common/spatial/splat-ewa-projection';
 import { DEFAULT_SCENE_RENDER_MODE } from '../../../common/scene-atmosphere-opt-in';
+import { ViewAsMenu } from './shared/ViewAsMenu';
 
 // ==========================================
 // Pluggable Splat Representation (ISplatViewer)
@@ -1077,6 +1080,7 @@ function mergeExternalSceneData(prev: Scene3DData, streamed: Scene3DData): Scene
 
 export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     data,
+    activeArtifact,
     onUpdate,
     onPromptAction,
     onMorphArtifact,
@@ -4279,6 +4283,12 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
                     <span>3D Scene</span>
                 </div>
+                {onMorphArtifact && activeArtifact && (
+                    <ViewAsMenu
+                        currentType="3d-scene"
+                        onSelect={targetType => onMorphArtifact(activeArtifact, targetType)}
+                    />
+                )}
                 {(() => {
                     const badge = sceneData.geoAnchor && sceneData.geoAnchor.active !== false ? groundDatumBadge(sceneData.geoAnchor) : null;
                     return badge && (

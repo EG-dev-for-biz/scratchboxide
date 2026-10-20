@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import {
+    AccentColor,
     CanvasArtifact,
     ChartDataPoint,
     CodeFileTab,
@@ -29,6 +30,7 @@ import {
     Scene3DData
 } from './canvas-types';
 import { stableProjectArtifactId } from '../../common/project-artifact-graph-protocol';
+import { createOperatorEngine } from './services/direct-dispatch-operator-engine';
 import { synthesizeContextual3DScene } from './procedural-3d-synthesizer';
 import { slugify } from './services/text-utils';
 import { AIRCRAFT_HELPERS_SOURCE, FLIGHT_PHYSICS_SOURCE } from './services/mesh/aircraft-template';
@@ -1514,26 +1516,246 @@ export function morphScene3DToKanban(scene: Scene3DData): KanbanBoardData {
 }
 
 /**
- * Morphs a 3D Scene into a Render Pipeline Node Graph.
+ * Projects a 3D Scene's actual mesh hierarchy and scaffold (camera/environment/
+ * renderer) into an editable Node Graph. This is a real decomposition, not a
+ * decorative stand-in: one node per `customMeshes[i]`, carrying that mesh's
+ * real position/rotation/scale/material/tier/parentId as `parameters`, so an
+ * artist can open the graph view of any generated scene and see — and later
+ * (write-back path) edit — what is actually there, not a fixed placeholder set.
+ *
+ * Edges follow real structure: a mesh with a resolvable `parentId` links to its
+ * parent mesh node (hierarchy); root meshes (no parent, or an unresolved one)
+ * link from Environment and into the Renderer; Camera always feeds Renderer.
  */
+const TIER_COLOR: Record<'primary' | 'secondary' | 'tertiary', AccentColor> = {
+    primary: 'cyan',
+    secondary: 'purple',
+    tertiary: 'amber'
+};
+const TIER_COLUMN_X: Record<'primary' | 'secondary' | 'tertiary' | 'unassigned', number> = {
+    primary: 320,
+    secondary: 560,
+    tertiary: 800,
+    unassigned: 320
+};
+
+function base64ToBytes(b64: string): Uint8Array {
+    if (typeof Buffer !== 'undefined') {
+        return new Uint8Array(Buffer.from(b64, 'base64'));
+    }
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+}
+
+interface GltfNode {
+    name?: string;
+    mesh?: number;
+    translation?: [number, number, number];
+    rotation?: [number, number, number, number];
+    scale?: [number, number, number];
+    children?: number[];
+}
+
+/**
+ * Extracts the node hierarchy embedded in a compiled binary glTF (.glb) container —
+ * no mesh/texture data is decoded, only the small JSON chunk every .glb carries,
+ * which is itself a node graph (named nodes with transforms and parent/child
+ * links). Returns undefined if the bytes aren't a valid .glb or carry no JSON chunk.
+ */
+export function parseGlbNodeHierarchy(glbBase64: string): { nodes: GltfNode[]; meshNames: string[]; rootNodeIndices: number[] } | undefined {
+    try {
+        const bytes = base64ToBytes(glbBase64);
+        if (bytes.length < 20) return undefined;
+        const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        if (dv.getUint32(0, true) !== 0x46546c67) return undefined; // magic 'glTF'
+
+        let offset = 12;
+        let jsonText: string | undefined;
+        while (offset + 8 <= bytes.length) {
+            const chunkLength = dv.getUint32(offset, true);
+            const chunkType = dv.getUint32(offset + 4, true);
+            const chunkStart = offset + 8;
+            if (chunkType === 0x4e4f534a) { // 'JSON'
+                jsonText = new TextDecoder('utf-8').decode(bytes.subarray(chunkStart, chunkStart + chunkLength));
+                break;
+            }
+            offset = chunkStart + chunkLength;
+        }
+        if (!jsonText) return undefined;
+
+        const gltf = JSON.parse(jsonText);
+        const nodes: GltfNode[] = Array.isArray(gltf.nodes) ? gltf.nodes : [];
+        const meshNames: string[] = Array.isArray(gltf.meshes) ? gltf.meshes.map((m: any) => m?.name) : [];
+        const sceneIndex = typeof gltf.scene === 'number' ? gltf.scene : 0;
+        const rootNodeIndices: number[] = Array.isArray(gltf.scenes?.[sceneIndex]?.nodes) ? gltf.scenes[sceneIndex].nodes : [];
+        return { nodes, meshNames, rootNodeIndices };
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * Builds mesh GraphNodes/edges from a compiled .glb's own node hierarchy, for
+ * scenes whose geometry was authored by a Python/C++ generator and streamed as
+ * an opaque binary blob (`pythonGenerator.glbBase64`) rather than populated
+ * into `Scene3DData.customMeshes`. This is the common case for scenes built via
+ * the live chat agent's `execute_3d_python_script` path. These nodes carry a
+ * `glb-node-` id (not `mesh-`) so the write-back path in
+ * `morphNodeGraphToScene3D` naturally treats them as view-only: editing a
+ * node's position here has no effect yet, since the geometry lives inside the
+ * compiled binary, not in a JS structure the operator engine can mutate.
+ */
+function buildGlbMeshNodes(scene: Scene3DData): { nodes: GraphNode[]; edges: GraphEdge[] } | undefined {
+    const glbBase64 = scene.pythonGenerator?.glbBase64;
+    if (!glbBase64) return undefined;
+    const parsed = parseGlbNodeHierarchy(glbBase64);
+    if (!parsed || parsed.nodes.length === 0) return undefined;
+
+    const meshNodeIndices = parsed.nodes
+        .map((n, idx) => ({ n, idx }))
+        .filter(({ n }) => n.mesh !== undefined);
+    if (meshNodeIndices.length === 0) return undefined;
+
+    const glbNodeId = (idx: number) => `glb-node-${idx}`;
+    const parentOf = new Map<number, number>();
+    parsed.nodes.forEach((n, parentIdx) => {
+        (n.children ?? []).forEach(childIdx => parentOf.set(childIdx, parentIdx));
+    });
+
+    const nodes: GraphNode[] = meshNodeIndices.map(({ n, idx }, row) => ({
+        id: glbNodeId(idx),
+        label: n.name || parsed.meshNames[n.mesh!] || `Mesh ${idx}`,
+        subtitle: '.glb node (view-only — geometry is compiled binary)',
+        category: 'process',
+        color: 'indigo',
+        status: 'completed',
+        x: 320,
+        y: 60 + row * 150,
+        parameters: {
+            glbNodeIndex: idx,
+            position: n.translation,
+            rotationQuaternion: n.rotation,
+            scale: n.scale,
+            readOnly: true
+        }
+    }));
+
+    const meshNodeIndexSet = new Set(meshNodeIndices.map(({ idx }) => idx));
+    const edges: GraphEdge[] = [];
+    for (const { idx } of meshNodeIndices) {
+        const parentIdx = parentOf.get(idx);
+        if (parentIdx !== undefined && meshNodeIndexSet.has(parentIdx)) {
+            edges.push({ id: `e-glb-${parentIdx}-${idx}`, source: glbNodeId(parentIdx), target: glbNodeId(idx), style: 'solid', color: 'indigo' });
+        } else {
+            edges.push({ id: `e-env-glb-${idx}`, source: 'n-env', target: glbNodeId(idx), style: 'solid', color: 'amber' });
+            edges.push({ id: `e-glb-${idx}-render`, source: glbNodeId(idx), target: 'n-render', style: 'animated', color: 'emerald' });
+        }
+    }
+
+    return { nodes, edges };
+}
+
 export function morphScene3DToNodeGraph(scene: Scene3DData): NodeGraphData {
-    const title = scene?.title ? `${scene.title} — Render Pipeline` : '3D Scene Graph & Render Pipeline';
+    const title = scene?.title ? `${scene.title} — Scene Graph` : '3D Scene Graph';
+    const meshes = Array.isArray(scene?.customMeshes) ? scene.customMeshes : [];
+
+    const camNode: GraphNode = {
+        id: 'n-cam',
+        label: 'Perspective Camera',
+        subtitle: `FOV ${scene.camera?.fov ?? 45}° · mode ${scene.cameraMode ?? 'orbit'}`,
+        category: 'input',
+        color: 'blue',
+        status: 'completed',
+        x: 60,
+        y: 260,
+        parameters: { position: scene.camera?.position, target: scene.camera?.target, fov: scene.camera?.fov }
+    };
+    const envNode: GraphNode = {
+        id: 'n-env',
+        label: 'Environment',
+        subtitle: scene.environment?.skybox ?? 'Skybox & Lighting',
+        category: 'transformation',
+        color: 'amber',
+        status: 'completed',
+        x: 60,
+        y: 420,
+        parameters: { skybox: scene.environment?.skybox, lighting: scene.environment?.lighting, ground: scene.environment?.ground }
+    };
+    const renderNode: GraphNode = {
+        id: 'n-render',
+        label: 'WebGL Renderer',
+        subtitle: scene.renderMode ? `${scene.renderMode} render mode` : 'Renderer',
+        category: 'output',
+        color: 'emerald',
+        status: 'completed',
+        x: 1040,
+        y: 340,
+        parameters: { renderMode: scene.renderMode, animation: scene.animation }
+    };
+
+    const tierCounts: Record<string, number> = {};
+    const meshNodeId = (meshId: string) => `mesh-${meshId}`;
+    const meshNodes: GraphNode[] = meshes.map((mesh) => {
+        const tier = (mesh.tier ?? 'unassigned') as 'primary' | 'secondary' | 'tertiary' | 'unassigned';
+        const row = tierCounts[tier] ?? 0;
+        tierCounts[tier] = row + 1;
+        return {
+            id: meshNodeId(mesh.id),
+            label: mesh.name || mesh.id,
+            subtitle: [mesh.type, tier !== 'unassigned' ? `${tier} tier` : null].filter(Boolean).join(' · ') || mesh.id,
+            category: tier === 'unassigned' ? 'process' : (`mesh-${tier}` as GraphNodeCategory),
+            color: tier === 'unassigned' ? 'indigo' : TIER_COLOR[tier],
+            status: 'completed',
+            x: TIER_COLUMN_X[tier],
+            y: 60 + row * 150,
+            parameters: {
+                meshId: mesh.id,
+                parentId: mesh.parentId,
+                type: mesh.type,
+                tier: mesh.tier,
+                position: mesh.position,
+                rotation: mesh.rotation,
+                scale: mesh.scale,
+                material: mesh.material
+            }
+        };
+    });
+
+    const meshIds = new Set(meshes.map((m) => m.id));
+    const edges: GraphEdge[] = [
+        { id: 'e-cam-render', source: 'n-cam', target: 'n-render', style: 'solid', color: 'blue' }
+    ];
+    for (const mesh of meshes) {
+        const nodeId = meshNodeId(mesh.id);
+        if (mesh.parentId && meshIds.has(mesh.parentId)) {
+            edges.push({ id: `e-${mesh.parentId}-${mesh.id}`, source: meshNodeId(mesh.parentId), target: nodeId, style: 'solid', color: 'indigo' });
+        } else {
+            edges.push({ id: `e-env-${mesh.id}`, source: 'n-env', target: nodeId, style: 'solid', color: 'amber' });
+            edges.push({ id: `e-${mesh.id}-render`, source: nodeId, target: 'n-render', style: 'animated', color: 'emerald' });
+        }
+    }
+
+    if (meshes.length === 0) {
+        const glbMeshes = buildGlbMeshNodes(scene);
+        if (glbMeshes) {
+            return {
+                title,
+                subtitle: `${glbMeshes.nodes.length} mesh node${glbMeshes.nodes.length === 1 ? '' : 's'} read from the compiled .glb (view-only — not backed by customMeshes)`,
+                nodes: [camNode, envNode, ...glbMeshes.nodes, renderNode],
+                edges: [edges[0], ...glbMeshes.edges],
+                sourceArtifact: { type: '3d-scene', data: scene }
+            };
+        }
+    }
+
     return {
         title,
-        subtitle: 'WebGL node hierarchy, shader passes, and frame compositor flow',
-        nodes: [
-            { id: 'n-cam', label: 'Perspective Camera', subtitle: `FOV ${scene.camera?.fov || 45}°`, category: 'input', color: 'blue', status: 'completed', x: 80, y: 120 },
-            { id: 'n-env', label: 'Environment Lighting', subtitle: scene.environment?.skybox || 'Skybox & Sun', category: 'transformation', color: 'amber', status: 'completed', x: 280, y: 80 },
-            { id: 'n-mesh', label: 'Geometry Meshes', subtitle: `${(scene.customMeshes || []).length || 4} Scene Meshes`, category: 'transformation', color: 'indigo', status: 'completed', x: 280, y: 200 },
-            { id: 'n-shader', label: 'PBR Shaders & Materials', subtitle: 'Roughness / Metalness', category: 'transformation', color: 'purple', status: 'completed', x: 500, y: 140 },
-            { id: 'n-render', label: 'WebGL Renderer', subtitle: '60 FPS Post-Process', category: 'output', color: 'emerald', status: 'completed', x: 720, y: 140 }
-        ],
-        edges: [
-            { id: 'e1', source: 'n-cam', target: 'n-render', style: 'solid', color: 'blue' },
-            { id: 'e2', source: 'n-env', target: 'n-shader', style: 'solid', color: 'amber' },
-            { id: 'e3', source: 'n-mesh', target: 'n-shader', style: 'solid', color: 'indigo' },
-            { id: 'e4', source: 'n-shader', target: 'n-render', style: 'animated', color: 'emerald' }
-        ]
+        subtitle: `${meshes.length} mesh node${meshes.length === 1 ? '' : 's'} projected from the live scene`,
+        nodes: [camNode, envNode, ...meshNodes, renderNode],
+        edges,
+        sourceArtifact: { type: '3d-scene', data: scene }
     };
 }
 
@@ -1646,55 +1868,84 @@ export function morphKanbanToDoc(kanban: KanbanBoardData): MarkdownDocumentData 
 /**
  * Morphs a Kanban Board into a Node Graph.
  */
+/**
+ * Projects a Kanban board's real columns and cards into an editable Node
+ * Graph: one scaffold node per column (the delivery stages), one real node
+ * per card (title/description/tag/priority/subtask-progress as
+ * `parameters`), not a placeholder count. Mirrors the real decomposition
+ * built for `morphScene3DToNodeGraph` — same reasoning: an artist/PM should
+ * see what's actually on the board, not a fixed stand-in. An empty board
+ * (no cards) honestly produces zero card nodes rather than fabricating
+ * "To Do / In Progress / Done" placeholders.
+ */
 export function morphKanbanToNodeGraph(kanban: KanbanBoardData): NodeGraphData {
     const title = kanban?.title ? `${kanban.title} — Stage Workflow` : 'Kanban Stage Workflow Flow';
     const columns = Array.isArray(kanban?.columns) ? kanban.columns : [];
 
     const nodes: GraphNode[] = [];
     const edges: GraphEdge[] = [];
+    const columnNodeId = (col: KanbanColumn, idx: number) => `col-${col.id || idx}`;
+    const cardNodeId = (card: KanbanCard) => `card-${card.id}`;
 
+    let totalCards = 0;
     columns.forEach((col, idx) => {
-        const nodeId = `node-col-${col.id || idx}`;
-        nodes.push({
-            id: nodeId,
-            label: col.title,
-            subtitle: `${(col.cards || []).length} active items`,
-            category: idx === 0 ? 'input' : (idx === columns.length - 1 ? 'output' : 'transformation'),
-            color: col.color === 'emerald' ? 'emerald' : (col.color === 'amber' ? 'amber' : 'blue'),
-            status: idx === columns.length - 1 ? 'completed' : 'pending',
-            x: 80 + idx * 220,
-            y: 160
-        });
-
-        if (idx > 0) {
-            const prevId = `node-col-${columns[idx - 1].id || idx - 1}`;
-            edges.push({
-                id: `edge-${prevId}-${nodeId}`,
-                source: prevId,
-                target: nodeId,
-                style: 'solid',
-                color: 'blue'
-            });
-        }
+        totalCards += (col.cards || []).length;
     });
 
-    if (nodes.length === 0) {
-        nodes.push(
-            { id: 'n1', label: 'To Do', category: 'input', color: 'blue', status: 'pending', x: 80, y: 160 },
-            { id: 'n2', label: 'In Progress', category: 'transformation', color: 'amber', status: 'pending', x: 300, y: 160 },
-            { id: 'n3', label: 'Done', category: 'output', color: 'emerald', status: 'completed', x: 520, y: 160 }
-        );
-        edges.push(
-            { id: 'e1', source: 'n1', target: 'n2', color: 'blue' },
-            { id: 'e2', source: 'n2', target: 'n3', color: 'amber' }
-        );
-    }
+    columns.forEach((col, colIdx) => {
+        const colNodeId = columnNodeId(col, colIdx);
+        nodes.push({
+            id: colNodeId,
+            label: col.title,
+            subtitle: `${(col.cards || []).length} card${(col.cards || []).length === 1 ? '' : 's'}`,
+            category: colIdx === 0 ? 'input' : (colIdx === columns.length - 1 ? 'output' : 'transformation'),
+            color: col.color ?? 'blue',
+            status: colIdx === columns.length - 1 ? 'completed' : 'pending',
+            x: 80 + colIdx * 260,
+            y: 60,
+            parameters: { columnId: col.id, title: col.title, color: col.color }
+        });
+
+        if (colIdx > 0) {
+            const prevId = columnNodeId(columns[colIdx - 1], colIdx - 1);
+            edges.push({ id: `edge-${prevId}-${colNodeId}`, source: prevId, target: colNodeId, style: 'solid', color: 'blue' });
+        }
+
+        (col.cards || []).forEach((card, cardIdx) => {
+            const nodeId = cardNodeId(card);
+            nodes.push({
+                id: nodeId,
+                label: card.title,
+                subtitle: [card.tag, card.priority ? `${card.priority} priority` : null].filter(Boolean).join(' · ') || card.id,
+                category: 'process',
+                color: card.tagColor ?? 'indigo',
+                status: colIdx === columns.length - 1 ? 'completed' : 'pending',
+                x: 80 + colIdx * 260,
+                y: 160 + cardIdx * 130,
+                parameters: {
+                    cardId: card.id,
+                    columnId: col.id,
+                    title: card.title,
+                    description: card.description,
+                    tag: card.tag,
+                    tagColor: card.tagColor,
+                    priority: card.priority,
+                    assignee: card.assignee,
+                    dueDate: card.dueDate,
+                    completedSubtasks: card.completedSubtasks,
+                    totalSubtasks: card.totalSubtasks
+                }
+            });
+            edges.push({ id: `edge-${colNodeId}-${nodeId}`, source: colNodeId, target: nodeId, style: 'dashed', color: col.color ?? 'blue' });
+        });
+    });
 
     return {
         title,
-        subtitle: 'Sequential delivery stages mapped into executable node graph flow',
+        subtitle: `${totalCards} card${totalCards === 1 ? '' : 's'} across ${columns.length} stage${columns.length === 1 ? '' : 's'}, projected from the live board`,
         nodes,
-        edges
+        edges,
+        sourceArtifact: { type: 'kanban-board', data: kanban }
     };
 }
 
@@ -1869,10 +2120,53 @@ export function morphNodeGraphToDoc(graph: NodeGraphData): MarkdownDocumentData 
 /**
  * Morphs a Node Graph into an Engineering Kanban Board.
  */
-export function morphNodeGraphToKanban(graph: NodeGraphData): KanbanBoardData {
-    const title = graph?.title ? `${graph.title} — Implementation Roadmap` : 'Pipeline Engineering Tasks';
+/**
+ * Projects a Node Graph back onto a Kanban board.
+ *
+ * Real write-back path (`baseBoard` supplied, or recovered automatically from
+ * `graph.sourceArtifact` when it was produced by `morphKanbanToNodeGraph`):
+ * each card node's current `parameters` are written onto the matching real
+ * card (by `cardId`) in `baseBoard` — edits an artist makes in the graph view
+ * land on the real card, untouched cards are untouched, no fabricated task
+ * descriptions.
+ *
+ * Exploratory fallback (no base board, e.g. a graph built from scratch):
+ * synthesizes a 3-column board from node labels, same as before — a sketch,
+ * not a claim that this is the board the graph came from.
+ */
+export function morphNodeGraphToKanban(graph: NodeGraphData, baseBoard?: KanbanBoardData): KanbanBoardData {
     const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
 
+    const resolvedBase = baseBoard ?? (graph.sourceArtifact?.type === 'kanban-board' ? graph.sourceArtifact.data as KanbanBoardData : undefined);
+    if (resolvedBase) {
+        const cardUpdates = new Map<string, GraphNode['parameters']>();
+        for (const n of nodes) {
+            const cardId = typeof n.parameters?.cardId === 'string' ? n.parameters.cardId : undefined;
+            if (cardId) cardUpdates.set(cardId, n.parameters);
+        }
+        const columns = (resolvedBase.columns || []).map(col => ({
+            ...col,
+            cards: (col.cards || []).map(card => {
+                const update = cardUpdates.get(card.id);
+                if (!update) return card;
+                return {
+                    ...card,
+                    title: update.title ?? card.title,
+                    description: update.description ?? card.description,
+                    tag: update.tag ?? card.tag,
+                    tagColor: update.tagColor ?? card.tagColor,
+                    priority: update.priority ?? card.priority,
+                    assignee: update.assignee ?? card.assignee,
+                    dueDate: update.dueDate ?? card.dueDate,
+                    completedSubtasks: update.completedSubtasks ?? card.completedSubtasks,
+                    totalSubtasks: update.totalSubtasks ?? card.totalSubtasks
+                };
+            })
+        }));
+        return { ...resolvedBase, columns };
+    }
+
+    const title = graph?.title ? `${graph.title} — Implementation Roadmap` : 'Pipeline Engineering Tasks';
     const todoCards: KanbanCard[] = [];
     const doneCards: KanbanCard[] = [];
 
@@ -2056,11 +2350,49 @@ export default function PipelineRunner() {
 }
 
 /**
- * Morphs a Node Graph into a 3D Cybernetic Node Network.
+ * Projects a Node Graph back onto a 3D Scene.
+ *
+ * Real write-back path (`baseScene` supplied): when the graph was produced by
+ * `morphScene3DToNodeGraph`, each mesh node still carries `parameters.meshId`
+ * plus whatever position/rotation/scale/material an artist edited in the
+ * graph view. Those are dispatched as `sb_set_transform` / `sb_set_material_pbr`
+ * operator calls against `baseScene` via `DirectDispatchOperatorEngine` — the
+ * same path interactive editing already uses, so operatorStack/actionLog and
+ * undo/redo bookkeeping come for free. A node with no matching mesh in
+ * `baseScene` becomes a new mesh (`sb_set_transform` auto-creates it), so a
+ * node an artist adds in the graph editor becomes new geometry.
+ *
+ * Exploratory fallback (no `baseScene`): a graph built from scratch (e.g. a
+ * Kanban board promoted into a node graph) has no real scene behind it yet.
+ * In that case this synthesizes a fresh starting scene — one mesh per node,
+ * arranged in a ring — as a sketch to shape further, not a claim that this
+ * *is* the scene the graph was derived from.
  */
-export function morphNodeGraphToScene3D(graph: NodeGraphData): Scene3DData {
-    const title = graph?.title ? `${graph.title} — 3D Cybernetic Grid` : '3D Cybernetic Node Network';
+export function morphNodeGraphToScene3D(graph: NodeGraphData, baseScene?: Scene3DData): Scene3DData {
     const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+
+    if (baseScene) {
+        const engine = createOperatorEngine(baseScene);
+        for (const node of nodes) {
+            const meshId = typeof node.parameters?.meshId === 'string'
+                ? node.parameters.meshId
+                : (node.id.startsWith('mesh-') ? node.id.slice('mesh-'.length) : undefined);
+            if (!meshId) {
+                continue; // scaffold nodes (camera/environment/renderer) aren't scene meshes
+            }
+            const { position, rotation, scale } = node.parameters ?? {};
+            if (position || rotation || scale) {
+                engine.dispatch('sb_set_transform', { objectId: meshId, position, rotation, scale });
+            }
+            const material = node.parameters?.material;
+            if (material && typeof material === 'object') {
+                engine.dispatch('sb_set_material_pbr', { objectId: meshId, ...material });
+            }
+        }
+        return engine.getSceneData();
+    }
+
+    const title = graph?.title ? `${graph.title} — 3D Node Network` : '3D Node Network';
 
     const customMeshes = nodes.map((n, idx) => {
         const angle = (idx / Math.max(nodes.length, 1)) * Math.PI * 2;
@@ -2483,6 +2815,25 @@ export function morphSandboxToMetrics(sandbox: LiveCodeSandboxData, context?: an
 }
 
 /**
+ * Which target types `morphArtifact` actually implements for each source type.
+ * This is the single source of truth a "View As" menu should read from — never
+ * hand-list targets in a UI component, since that list will drift from what
+ * `morphArtifact` below actually handles (an offered-but-unimplemented target
+ * would silently no-op). Keep this in sync with the `if (source.type === ...)`
+ * / `if (targetType === ...)` branches below; a regression test enumerates
+ * every pair here against a real `morphArtifact` call.
+ */
+export const MORPH_TARGETS: Partial<Record<PrimitiveType, PrimitiveType[]>> = {
+    'markdown-document': ['3d-scene', 'kanban-board', 'node-graph', 'metric-dashboard', 'live-code-sandbox', 'interactive-browser'],
+    '3d-scene': ['markdown-document', 'kanban-board', 'node-graph', 'metric-dashboard', 'live-code-sandbox'],
+    'kanban-board': ['markdown-document', 'node-graph', 'metric-dashboard', '3d-scene', 'live-code-sandbox'],
+    'node-graph': ['markdown-document', 'kanban-board', 'metric-dashboard', 'live-code-sandbox', '3d-scene'],
+    'metric-dashboard': ['markdown-document', 'kanban-board', 'node-graph', '3d-scene'],
+    'live-code-sandbox': ['markdown-document', 'kanban-board', 'node-graph', 'metric-dashboard', '3d-scene', 'interactive-browser'],
+    'interactive-browser': ['live-code-sandbox']
+};
+
+/**
  * Universal polymorphic cross-surface morph dispatcher.
  */
 export function morphArtifact(source: CanvasArtifact, targetType: PrimitiveType, context?: any): CanvasArtifact {
@@ -2588,7 +2939,10 @@ export function morphArtifact(source: CanvasArtifact, targetType: PrimitiveType,
             return { id, title: sandboxData.title, summary: sandboxData.subtitle || 'Sandbox morphed from Node Graph', type: 'live-code-sandbox', data: sandboxData, createdAt: new Date().toLocaleTimeString(), version: 1 };
         }
         if (targetType === '3d-scene') {
-            const sceneData = morphNodeGraphToScene3D(graphData);
+            const baseScene = graphData.sourceArtifact?.type === '3d-scene'
+                ? graphData.sourceArtifact.data as Scene3DData
+                : (context && typeof context === 'object' && Array.isArray((context as any).customMeshes) ? context as Scene3DData : undefined);
+            const sceneData = morphNodeGraphToScene3D(graphData, baseScene);
             return { id, title: sceneData.title, summary: sceneData.subtitle || '3D Scene morphed from Node Graph', type: '3d-scene', data: sceneData, createdAt: new Date().toLocaleTimeString(), version: 1 };
         }
     }

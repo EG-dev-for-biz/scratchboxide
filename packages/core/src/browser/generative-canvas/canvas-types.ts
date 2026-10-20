@@ -426,7 +426,9 @@ export type GraphNodeCategory =
     | 'video-card'  // Video Card Node
     | 'audio'       // Audio Card
     | 'audio-card'  // Audio Card Node
-    | '3d-card';    // 3D Scene Card Node
+    | '3d-card'     // 3D Scene Card Node
+    | (string & {}); // Open extension: any domain-specific node kind (e.g. mesh tiers, pipeline stages)
+                     // a projection may need — never gate execution logic on this string.
 
 export type GraphExecutionStatus = 'active' | 'pending' | 'running' | 'completed' | 'error';
 
@@ -468,6 +470,14 @@ export interface NodeGraphData {
     edges: GraphEdge[];
     selectedNodeId?: string;
     viewport?: { x: number; y: number; zoom: number };
+    /**
+     * When this graph is a real decomposition of another artifact (e.g. a 3D
+     * scene's meshes), carries that artifact's type and data so morphing the
+     * graph back preserves what wasn't touched instead of re-synthesizing from
+     * nothing. `type` is open on purpose — any domain's structured data can be
+     * the graph's source, not just 3D scenes.
+     */
+    sourceArtifact?: { type: PrimitiveType | (string & {}); data: unknown };
 }
 
 // ==========================================
