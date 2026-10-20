@@ -8,8 +8,10 @@
  ********************************************************************************/
 
 /**
- * build_3d_object_from_reference: one object or abstract form asked for in words becomes native clay geometry
- * (reference-object-builder.ts). Given specJson instead (an edit of an earlier build's spec), it rebuilds that spec
+ * build_3d_object_from_reference: one object or abstract form asked for in words becomes native geometry
+ * (reference-object-builder.ts), each part with its own PBR material factors read from the full-colour reference
+ * (inferred from a generated image, and labelled so), shown in the viewport's 'pbr' mode; or, when the user asks
+ * for clay, all studio clay in 'clay' mode. Given specJson instead (an edit of an earlier build's spec), it rebuilds that spec
  * exactly, with no reference image and no model call.
  *
  * With a location, the object is staged on the same geocoded, remeshed clay tiles that google_3d_tiles_get_clay
@@ -46,6 +48,7 @@ import {
     type ReferenceObjectBuildRequest,
     type ReferenceObjectBuildResult,
     type ReferenceObjectBuilderDeps,
+    type MaterialProvenance,
     type SpecObjectBuildResult,
     type VisionModelUse
 } from '../../3d-engine/reference-object-builder';
@@ -56,8 +59,8 @@ import { OBJECT_BUILD_SOURCE, type BuiltObjectRecord, type ObjectBuildSpec, type
 export const OBJECT_REFERENCE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'build_3d_object_from_reference',
-        description: 'Build one specific object or an abstract form (a single prop, vehicle, creature, character, piece of furniture, sculpture or artifact) as native 3D geometry in studio grey clay. ' +
-            `It draws an internal reference picture with Nano Banana Lite (${REFERENCE_IMAGE_MODEL}; never shown or saved), reads it with the chat's model into a metric build spec of swept, revolved, replicated and relief parts, builds that in the native Python engine, and checks that every part is built and attached and that the build matches the reference (up to two revisions). ` +
+        description: 'Build one specific object or an abstract form (a single prop, vehicle, creature, character, piece of furniture, sculpture or artifact) as native 3D geometry with a physical material on every part (colour, roughness, metalness, transmission, clearcoat, emission), or all in studio grey clay when the user asks for clay. ' +
+            `It draws an internal reference picture with Nano Banana Lite (${REFERENCE_IMAGE_MODEL}; never shown or saved), reads it with the chat's model into a metric build spec of swept, revolved, replicated and relief parts with each part's material, builds that in the native Python engine, and checks that every part is built and attached and that the build's shape matches the reference (up to two revisions). The materials are read from a generated picture, so they are inferred, not measured (factor values only, no texture maps). ` +
             'It builds one object per call, not a place or a scene: for an imagined environment, a landscape or several objects with no real place, write a script for execute_3d_python_script; for a real place alone, use google_3d_tiles_get_clay. To stand the object at a real place, pass location and placement. ' +
             'Several objects at one real place take one call each with the same location and each its own placement: when the active scene is an object build staged at that location, the call reuses its tiles and adds the new object beside the objects already built there. When the active scene already shows the place (google_3d_tiles_get_clay staged it, or objects were built there) and the object belongs in that scene, pass addToActiveScene: true to add it there without staging the place again. ' +
             'The object must fit where it is placed: a spot under a tree crown or on another object fails before anything is built, and a build that would pass through a crown, a trunk, another object or a wall of the tiles fails with its spec and the nearest spots where it fits. ' +
@@ -68,6 +71,10 @@ export const OBJECT_REFERENCE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 request: {
                     type: 'STRING',
                     description: 'What to build, in the user\'s words plus any details from the conversation (parts, counts, proportions, style of form). With specJson: what the object is and the change being made.'
+                },
+                clay: {
+                    type: 'BOOLEAN',
+                    description: 'True only when the user asked for clay (grey, untextured, a blockout or a shape study): every part is studio clay, no materials are read and the scene shows clay. Omit it otherwise: the object gets its materials and the scene shows them.'
                 },
                 specJson: {
                     type: 'STRING',
@@ -791,6 +798,21 @@ interface BuiltObject {
 const quoteDifferences = (list: Array<{ partId?: string; problem: string }>) =>
     list.map(d => `"${d.partId ? `part "${d.partId}": ` : ''}${d.problem}"`).join('; ');
 
+/** The result's sentence on materials, and what data.objectBuild keeps about them. */
+function materialFacts(clay: boolean, materials: MaterialProvenance, spec: ObjectBuildSpec): { record: Record<string, unknown>; line: string } {
+    const parts = spec.parts.filter(p => p.material && !materials.clayParts.includes(p.id));
+    const describe = (p: ObjectBuildSpec['parts'][number]) => {
+        const m = p.material!;
+        return `${p.id}${m.description ? ` "${m.description}"` : ''} (metalness ${m.metalness}, roughness ${m.roughness}${m.transmission > 0 ? `, transmission ${m.transmission}` : ''}${m.emissive ? ', emissive' : ''})`;
+    };
+    return {
+        record: { clay, materials: { label: materials.label, note: materials.note, ...(materials.clayParts.length ? { clayParts: materials.clayParts } : {}) } },
+        line: clay
+            ? 'Every part is studio clay, as asked.'
+            : `${materials.note}${parts.length ? ` Surfaces: ${parts.slice(0, 12).map(describe).join('; ')}${parts.length > 12 ? `; and ${parts.length - 12} more` : ''}.` : ''}`
+    };
+}
+
 function fromReference(result: ReferenceObjectBuildResult): BuiltObject {
     const backendName = result.backend === 'vertex' ? 'Vertex AI' : result.backend === 'api-key' ? 'the Gemini API key' : 'an injected client';
     const lastPass = result.passes[result.passes.length - 1].pass;
@@ -812,6 +834,7 @@ function fromReference(result: ReferenceObjectBuildResult): BuiltObject {
         checks: result.checks,
         record: {
             source: 'reference',
+            ...materialFacts(result.clay, result.materials, result.spec).record,
             imageModel: result.imageModel,
             visionModel: result.visionModel,
             backend: result.backend,
@@ -828,6 +851,7 @@ function fromReference(result: ReferenceObjectBuildResult): BuiltObject {
                 ? `Revision pass ${result.revisionFailed.pass} failed (${result.revisionFailed.stage}: ${result.revisionFailed.reason}), so the result is pass ${result.resultPass}, the last build that passed every check.`
                 : result.resultPass !== lastPass ? `The result is pass ${result.resultPass}.` : '',
             `Reference drawn internally by ${describeImageModel(result.imageModel)} (not saved or shown); spec read by ${describeVisionModel(result.visionModel)}, via ${backendName}.`,
+            materialFacts(result.clay, result.materials, result.spec).line,
             ...compared,
             result.openProblems.length ? `Also unresolved: ${result.openProblems.join(' ')}` : ''
         ]
@@ -859,6 +883,7 @@ function fromSpec(result: SpecObjectBuildResult): BuiltObject {
         checks: result.checks,
         record: {
             source: 'spec',
+            ...materialFacts(result.clay, result.materials, result.spec).record,
             passes: [pass],
             resultPass: 1,
             ...(result.openProblems.length ? { openProblems: result.openProblems } : {})
@@ -866,6 +891,7 @@ function fromSpec(result: SpecObjectBuildResult): BuiltObject {
         lines: [
             'from the given spec, built exactly as given.',
             'No reference image was drawn and no model was called or compared the result.',
+            materialFacts(result.clay, result.materials, result.spec).line,
             result.openProblems.length ? `Unresolved: ${result.openProblems.join(' ')}` : ''
         ]
     };
@@ -921,6 +947,10 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                 return failed('addToActiveScene must be true or false.');
             }
             const addToActiveScene = args.addToActiveScene === true;
+            if (args.clay !== undefined && args.clay !== null && typeof args.clay !== 'boolean') {
+                return failed('clay must be true or false.');
+            }
+            const clay = args.clay === true;
             if (addToActiveScene && !location) {
                 return failed('addToActiveScene adds the object to the place the active scene shows: pass that place as location, and a placement.');
             }
@@ -1045,7 +1075,7 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
             try {
                 if (givenSpec !== undefined) {
                     // A given spec costs no model call: build and check it before any billed staging call.
-                    built = fromSpec(await buildObjectFromSpec(givenSpec, { signal: ctx.signal, reportProgress: ctx.reportProgress }, deps.builder));
+                    built = fromSpec(await buildObjectFromSpec(givenSpec, { signal: ctx.signal, reportProgress: ctx.reportProgress, clay }, deps.builder));
                     const staging = await stageAndPlace();
                     if (staging.failure) return staging.failure;
                     site = staging.site;
@@ -1064,6 +1094,7 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                             request,
                             requestedModel: ctx.request?.model || undefined,
                             dimensionsHintMeters: dimensions,
+                            clay,
                             signal: buildSignal,
                             reportProgress: ctx.reportProgress
                         }, deps.builder);
@@ -1134,6 +1165,7 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
             for (let n = 2; usedIds.has(heroId); n++) heroId = `hero-${Date.now()}-${n}`;
             const ownRecord: BuiltObjectRecord = {
                 spec: built.spec,
+                ...(clay ? { clay: true } : {}),
                 ...(placement ? { placement: { eastMeters: placement.eastMeters, northMeters: placement.northMeters, headingDeg: placement.headingDeg, surfaceYMeters: placement.surfaceYMeters } } : {})
             };
             const objectBuild = {
@@ -1188,15 +1220,17 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                 glbPath: built.glbPath,
                 lastCompiledTimeMs: Date.now()
             };
-            const summaryLine = `Native clay build: ${checks.vertexCount.toLocaleString()} vertices, ${built.spec.parts.length} parts.`;
+            const summaryLine = `Native ${clay ? 'clay ' : ''}build: ${checks.vertexCount.toLocaleString()} vertices, ${built.spec.parts.length} parts${clay ? '' : ', a material per part'}.`;
 
             let artifact: Record<string, unknown>;
             if (staged && placement && site) {
                 const tileData = (staged.artifact.data || {}) as Record<string, unknown>;
                 const base: Vec3 = [placement.sceneX, placement.surfaceYMeters, placement.sceneZ];
                 const title = keptBuilt.length ? `${[...keptBuilt.map(o => String(o.content?.metadata?.description || o.id)), subject].join(', ')} at ${place}` : `${subject} at ${place}`;
-                // A reused scene keeps the look it had (clay, or photo texture); a fresh staging is clay.
-                const renderMode = staged.reused && typeof tileData.renderMode === 'string' ? tileData.renderMode : 'clay';
+                // A clay request shows clay. Otherwise the object's materials show ('pbr'; the staged clay tiles keep their
+                // own look), unless a reused scene already shows another non-clay mode, which it keeps.
+                const reusedMode = staged.reused && typeof tileData.renderMode === 'string' && tileData.renderMode !== 'clay' ? tileData.renderMode : undefined;
+                const renderMode = clay ? 'clay' : reusedMode ?? 'pbr';
                 artifact = {
                     ...staged.artifact,
                     id: `artifact-3d-${Date.now()}`,
@@ -1226,8 +1260,8 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                         subtitle: summaryLine,
                         worldBranch: 'procedural/object-from-reference',
                         sceneType: 'custom',
-                        renderMode: 'clay',
-                        clayPreset: 'studio-grey',
+                        renderMode: clay ? 'clay' : 'pbr',
+                        ...(clay ? { clayPreset: 'studio-grey' } : {}),
                         cameraMode: 'orbit',
                         animation: 'orbit',
                         camera: frameCamera(checks.builtBoundingMeters, [0, 0, 0], 0),
@@ -1256,13 +1290,13 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                     site.notReused ? `The active scene's staging there could not be reused (${site.notReused.reason}), so the place was staged afresh and the objects built there earlier are not in this scene: ${site.notReused.objects.map(named).join(', ')}.` : '',
                     site.otherLocation ? `The active scene's objects were built at location "${site.otherLocation}", a different location from "${location}", so this is a new scene without them (pass that same location, or addToActiveScene: true, to add to that scene).` : ''
                 ].filter(Boolean).join(' ')
-                : 'Shown in a studio grey clay void.';
+                : clay ? 'Shown in a studio grey clay void.' : 'Shown in a neutral studio void with its materials (the viewport\'s PBR mode).';
             const editLine = staged && placement
-                ? `This object's id is ${heroId}. To change it, edit its spec (data.objectBuild.spec, also in its metadata.objectBuild) and call build_3d_object_from_reference with specJson set to the edited spec, location "${recordedQuery}", this placement, and replaceObjectId "${heroId}".`
-                : 'To change it, edit data.objectBuild.spec and call build_3d_object_from_reference with specJson set to the edited spec.';
+                ? `This object's id is ${heroId}. To change it, edit its spec (data.objectBuild.spec, also in its metadata.objectBuild; part materials are in each part's material) and call build_3d_object_from_reference with specJson set to the edited spec, location "${recordedQuery}", this placement, and replaceObjectId "${heroId}"${clay ? ', and clay: true' : ''}.`
+                : `To change it (shape or part materials), edit data.objectBuild.spec and call build_3d_object_from_reference with specJson set to the edited spec${clay ? ' and clay: true' : ''}.`;
             const [howBuilt, ...builtLines] = built.lines;
             const summary = [
-                `Built "${subject}" as native clay geometry: ${checks.vertexCount.toLocaleString()} vertices, ${checks.triangleCount.toLocaleString()} triangles, ${checks.parts.filter(p => p.built).length} of ${checks.parts.length} listed parts built and attached, ${bodiesNote}, ${checks.builtBoundingMeters.join(' x ')} m, ${howBuilt}`,
+                `Built "${subject}" as native ${clay ? 'clay ' : ''}geometry${clay ? '' : ' with a material per part'}: ${checks.vertexCount.toLocaleString()} vertices, ${checks.triangleCount.toLocaleString()} triangles, ${checks.parts.filter(p => p.built).length} of ${checks.parts.length} listed parts built and attached, ${bodiesNote}, ${checks.builtBoundingMeters.join(' x ')} m, ${howBuilt}`,
                 ...builtLines,
                 placeLine,
                 editLine

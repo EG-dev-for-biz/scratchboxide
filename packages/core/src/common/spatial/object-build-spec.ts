@@ -170,6 +170,8 @@ export const OBJECT_BUILD_SOURCE = 'build_3d_object_from_reference';
 /** What a built object keeps about itself in its scene object's metadata.objectBuild. */
 export interface BuiltObjectRecord {
     spec: ObjectBuildSpec;
+    /** Set when it was built all in studio clay (on request); otherwise its parts carry their materials. */
+    clay?: boolean;
     /** Where it stands, when it was staged at a place (east, north and heading relative to the place's anchor). */
     placement?: { eastMeters: number; northMeters: number; headingDeg: number; surfaceYMeters: number };
 }
