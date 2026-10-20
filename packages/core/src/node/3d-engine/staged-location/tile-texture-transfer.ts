@@ -94,6 +94,40 @@ export interface TileTriangles {
      * -1 = none: drawn as roughness 1, dielectric). Selections and copies of the soup may drop it (it is optional).
      */
     pbr?: { material: Int32Array; materials: TilePbrMaterial[] };
+    /**
+     * Alpha-tested surfaces (tree leaves and crown cards, tree-lod-view.ts): per triangle the cut-out the viewport's material
+     * tests in clay and in textured mode (index into `kinds`, -1 = opaque). Selections keep it.
+     */
+    cutout?: TriangleCutouts;
+}
+
+/** An alpha map a cut-out samples: alpha 0..1 per texel, row 0 at v = 0, clamped, with its box-filtered mips (level 0 first). */
+export interface CutoutAlphaMap {
+    mips: Array<{ width: number; height: number; alpha: Float32Array }>;
+    /** The anisotropic filtering the viewport's texture asks for (the footprint's longer axis is sampled this many times at most). */
+    maxAnisotropy: number;
+}
+
+/**
+ * One cut-out as a viewport material runs it: the alpha sampled at the triangle's atlas coordinates, raised by `mipScale` for
+ * each mip level the screen footprint spans (the larger of fwidth(uv) x size), times `gain`, kept where at least 0.5.
+ * `leaf`: the triangle's TEXCOORD_0 are a leaf card's blade coordinates, mapped into one leaf cell (leafAtlasUv): s = 0.5 +
+ * (u - 0.5) ks, t = 0.5 + (v kt - 0.5) / zoom, atlas uv = origin + t along + s across, nothing outside the cell's box.
+ * Without `leaf` the TEXCOORD_0 are the atlas coordinates.
+ */
+export interface CutoutKind {
+    map: number;
+    mipScale: number;
+    gain: number;
+    leaf?: { origin: [number, number]; along: [number, number]; across: [number, number]; ks: number; kt: number; zoom: number };
+}
+
+export interface TriangleCutouts {
+    /** Per triangle: index into `kinds` in clay renders and in textured ones, -1 = opaque. */
+    clay: Int32Array;
+    textured: Int32Array;
+    kinds: CutoutKind[];
+    maps: CutoutAlphaMap[];
 }
 
 /** A glTF material's metallic-roughness: the factors and, when present, its texture's G (roughness) and B (metalness) bytes. */
@@ -179,8 +213,11 @@ function instanceMatrix(T: Float64Array | undefined, R: Float64Array | undefined
     return nodeMatrix({ translation: T ? [T[i * 3], T[i * 3 + 1], T[i * 3 + 2]] : undefined, rotation: [qx, qy, qz, qw], scale: S ? [S[i * 3], S[i * 3 + 1], S[i * 3 + 2]] : undefined });
 }
 
-/** Triangle soup plus, per triangle, the glTF node whose mesh it came from (readTileTriangles with `nodeTags`). */
-export interface TaggedTileTriangles extends TileTriangles { node: Int32Array }
+/**
+ * Triangle soup plus, per triangle, the glTF node whose mesh it came from (readTileTriangles with `nodeTags`) and, with
+ * `vertexAttribute`, that attribute's first two components at each corner (6 floats a triangle, 0 where a primitive lacks it).
+ */
+export interface TaggedTileTriangles extends TileTriangles { node: Int32Array; attribute?: Float32Array }
 
 /**
  * Parses a textured tile GLB into world-frame triangles with UVs and decoded baseColor textures (linear RGB). A node with
@@ -188,8 +225,8 @@ export interface TaggedTileTriangles extends TileTriangles { node: Int32Array }
  * specifies, and never once at the node itself. `nodeTags` also returns the node of each triangle.
  */
 export function readTileTriangles(glb: Uint8Array, options?: { pbr?: boolean }): TileTriangles;
-export function readTileTriangles(glb: Uint8Array, options: { nodeTags: true; pbr?: boolean }): TaggedTileTriangles;
-export function readTileTriangles(glb: Uint8Array, options: { nodeTags?: boolean; pbr?: boolean } = {}): TileTriangles | TaggedTileTriangles {
+export function readTileTriangles(glb: Uint8Array, options: { nodeTags: true; pbr?: boolean; vertexAttribute?: string }): TaggedTileTriangles;
+export function readTileTriangles(glb: Uint8Array, options: { nodeTags?: boolean; pbr?: boolean; vertexAttribute?: string } = {}): TileTriangles | TaggedTileTriangles {
     const { json, bin } = readGlbChunks(glb);
     // the metallic-roughness of each material (options.pbr): factors (glTF defaults 1, 1) and the texture's G and B
     const pbrMaterials: TilePbrMaterial[] = [];
@@ -240,7 +277,7 @@ export function readTileTriangles(glb: Uint8Array, options: { nodeTags?: boolean
         return textures.length - 1;
     };
 
-    const pos: number[] = [], uv: number[] = [], nrm: number[] = [], texIdx: number[] = [], flat: number[] = [], tag: number[] = [];
+    const pos: number[] = [], uv: number[] = [], nrm: number[] = [], texIdx: number[] = [], flat: number[] = [], tag: number[] = [], attr: number[] = [];
     // accessors are read once (instanced cluster meshes are shared by many nodes)
     const accessors = new Map<number, Float64Array>();
     const accessor = (i: number): Float64Array => { let a = accessors.get(i); if (!a) accessors.set(i, a = readAccessor(json, bin, i)); return a; };
@@ -274,6 +311,8 @@ export function readTileTriangles(glb: Uint8Array, options: { nodeTags?: boolean
                 // 3.9.2), e.g. SB-Veggie's bark and leaves; averaged over the triangle's corners
                 const C = ti < 0 && prim.attributes.COLOR_0 !== undefined ? accessor(prim.attributes.COLOR_0) : undefined;
                 const cw = C ? C.length / nv : 0;
+                const A = options.vertexAttribute && prim.attributes[options.vertexAttribute] !== undefined ? accessor(prim.attributes[options.vertexAttribute]) : undefined;
+                const aw = A ? A.length / nv : 0;
                 if (ti < 0 && !pbr?.baseColorFactor && !C) continue; // no colour information: not a photo surface
                 const W = new Float64Array(nv * 3);
                 for (const m of placements) {
@@ -298,6 +337,10 @@ export function readTileTriangles(glb: Uint8Array, options: { nodeTags?: boolean
                         nrm.push(nx, ny, nz);
                         texIdx.push(ti);
                         tag.push(nodeIndex);
+                        if (options.vertexAttribute) {
+                            if (A) for (const v of [a, b, c]) attr.push(A[v * aw], aw > 1 ? A[v * aw + 1] : 0);
+                            else attr.push(0, 0, 0, 0, 0, 0);
+                        }
                         if (options.pbr) pbrIdx.push(pm);
                         if (C) for (let k = 0; k < 3; k++) flat.push(f[k] * (C[a * cw + k] + C[b * cw + k] + C[c * cw + k]) / 3);
                         else flat.push(f[0], f[1], f[2]);
@@ -315,21 +358,27 @@ export function readTileTriangles(glb: Uint8Array, options: { nodeTags?: boolean
         texture: Int32Array.from(texIdx), flatLinear: Float32Array.from(flat), textures,
         ...(options.pbr ? { pbr: { material: Int32Array.from(pbrIdx), materials: pbrMaterials } } : {})
     };
-    return options.nodeTags ? { ...out, node: Int32Array.from(tag) } : out;
+    return options.nodeTags ? { ...out, node: Int32Array.from(tag), ...(options.vertexAttribute ? { attribute: Float32Array.from(attr) } : {}) } : out;
 }
 
 /** The triangles of `t` whose flag in `keep` is set (textures shared). */
 export function selectTriangles(t: TileTriangles, keep: ArrayLike<number | boolean>): TileTriangles {
-    const idx: number[] = [];
-    for (let i = 0; i < t.texture.length; i++) if (keep[i]) idx.push(i);
-    const pick = <A extends Float32Array | Int32Array>(a: A, w: number, make: (n: number) => A): A => {
-        const o = make(idx.length * w);
-        idx.forEach((s, d) => o.set(a.subarray(s * w, s * w + w), d * w));
-        return o;
+    const n = t.texture.length;
+    let count = 0;
+    for (let i = 0; i < n; i++) if (keep[i]) count++;
+    const idx = new Int32Array(count);
+    for (let i = 0, d = 0; i < n; i++) if (keep[i]) idx[d++] = i;
+    const pick = <A extends Float32Array | Int32Array>(a: A, w: number, out: A): A => {
+        for (let d = 0; d < count; d++) {
+            const s = idx[d] * w, o = d * w;
+            for (let k = 0; k < w; k++) out[o + k] = a[s + k];
+        }
+        return out;
     };
     return {
-        positions: pick(t.positions, 9, n => new Float32Array(n)), uvs: pick(t.uvs, 6, n => new Float32Array(n)), normals: pick(t.normals, 3, n => new Float32Array(n)),
-        texture: pick(t.texture, 1, n => new Int32Array(n)), flatLinear: pick(t.flatLinear, 3, n => new Float32Array(n)), textures: t.textures
+        positions: pick(t.positions, 9, new Float32Array(count * 9)), uvs: pick(t.uvs, 6, new Float32Array(count * 6)), normals: pick(t.normals, 3, new Float32Array(count * 3)),
+        texture: pick(t.texture, 1, new Int32Array(count)), flatLinear: pick(t.flatLinear, 3, new Float32Array(count * 3)), textures: t.textures,
+        ...(t.cutout ? { cutout: { ...t.cutout, clay: pick(t.cutout.clay, 1, new Int32Array(count)), textured: pick(t.cutout.textured, 1, new Int32Array(count)) } } : {})
     };
 }
 

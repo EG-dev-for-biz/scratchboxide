@@ -116,7 +116,7 @@
   * The Street View pose is approximate (the density doc's exact pose was not recorded). The before/after shots share the pose.
   * The pull-back dolly passes through a crown at about 59 m.
   * Build time went from 10.8 s to 14.6 s.
-  * The photo-match evaluator's software renderer (`node/3d-engine/staged-location/tree-lod-view.ts`) draws triangles without alpha. A mid-level tree there is drawn as solid card squares.
+  * The photo-match evaluator's software renderer (`node/3d-engine/staged-location/tree-lod-view.ts`) drew triangles without alpha, so a mid-level tree there was drawn as solid card squares. Fixed on 2026-10-20 (branch `tree-view-alpha`): it now cuts cards and textured leaves out as the viewer does (`photo-match-eval-tree-cutout.test.ts`). That fix also found the viewer's clay mask opaque: an alphaMap reads green, and the bake fills empty pixels with the (white) leaf colour, so clay and loader-material cards were drawn as squares in the viewer too. `crownCardMask` now carries the cut-out in every channel.
 
 ---
 
