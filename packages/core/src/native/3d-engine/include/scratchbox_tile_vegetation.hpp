@@ -823,8 +823,8 @@ struct PlantParams {
     // near-mid blades (about 1.7 x longer) at the near-mid edge; past that the mid cards and the far masses read the same.
     // fadeM is the width of the band over which two levels dither into each other.
     double lodNearPerHeight{1.0}, lodNearMinM{12.0}, lodNearMaxM{30.0};
-    double lodNearMidPerHeight{3.0}, lodNearMidMinM{25.0}, lodNearMidMaxM{60.0};
-    double lodFarPerHeight{4.0}, lodFarMinM{60.0}, lodFarMaxM{140.0};
+    double lodNearMidPerHeight{6.0}, lodNearMidMinM{25.0}, lodNearMidMaxM{100.0};
+    double lodFarPerHeight{8.0}, lodFarMinM{60.0}, lodFarMaxM{140.0};
     double lodFadeM{6.0};
     double lodNearMidFadeShare{0.2}; // the near-mid to mid handover dissolves over this share of its distance (at least lodFadeM)
     double lodFarFadeShare{0.25};    // the mid to far handover dissolves over this share of its distance (at least lodFadeM)
