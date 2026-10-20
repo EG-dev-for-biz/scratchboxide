@@ -157,6 +157,7 @@ export const ViewportNotice: React.FC<{ notices: ViewportNoticeEntry[] }> = ({ n
                     {n.action && (
                         <button
                             type="button"
+                            className="sb-3d-viewport-notice-action"
                             data-testid="sb-3d-viewport-notice-action"
                             onClick={n.action.onClick}
                             style={{ marginTop: 8, padding: '4px 10px', borderRadius: 6, border: '1px solid rgba(255, 255, 255, 0.2)', background: 'rgba(255, 255, 255, 0.08)', color: 'inherit', font: 'inherit', cursor: 'pointer' }}
