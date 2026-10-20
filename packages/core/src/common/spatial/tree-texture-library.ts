@@ -86,6 +86,38 @@ export const MAX_LEAF_CELLS = 24;
 /** How much wider than its own aspect a narrow leaf may be drawn to fill more of its card (1 keeps the atlas's aspect). */
 export const DEFAULT_LEAF_STRETCH = 2;
 
+/** How the viewport draws the library's surfaces (treeTextureMaterials.ts); the photo-match evaluator cuts leaves out by the same numbers. */
+/** A factor per detail slot: near, near-mid, mid, far (crownSlotOf). */
+export type LeafSlotFactors = [number, number, number, number];
+
+export interface TreeTextureOptions {
+    /** Variation of a leaf's colour around the tree's tint (0 none). */
+    leafVariation: number;
+    /** Strength of the sunlight seen through a leaf lit from behind. */
+    translucency: number;
+    /** Amplitude of the far masses' colour noise. */
+    massNoise: number;
+    /** How much wider than its atlas aspect a narrow leaf may be drawn (tree-texture-library.ts DEFAULT_LEAF_STRETCH). */
+    leafStretch: number;
+    /** How much a leaf's alpha is raised per mip level of the opacity map it samples (keeps distant leaves from eroding). */
+    alphaMipScale: number;
+    /** Longest side of a leaf atlas on the GPU (the library's files are 2K; 1K keeps a leaf a few hundred texels long). */
+    leafAtlasPx: number;
+    /**
+     * Card zoom per detail slot: the leaf image drawn this many times larger on its card, about the card's centre (the card
+     * crops it). A cut-out leaf covers only part of its card (its cell's fill, 0.6-0.7), and the coarser levels' cards are
+     * larger and coarser (a kite at the mid level), so from the mid distances a textured crown read thinner than a clay
+     * one of the same cards; zooming the leaf in fills more of each card there, where a single leaf's outline is a few
+     * pixels. 1 draws the leaf as it is (the near level).
+     */
+    cardZoom: LeafSlotFactors;
+    /** Alpha gain per detail slot: the leaf's alpha (after the mip lift) times this, so its soft rim stays in the cut at a distance. */
+    alphaGain: LeafSlotFactors;
+}
+
+export const DEFAULT_TREE_TEXTURE_OPTIONS: Readonly<TreeTextureOptions> = Object.freeze({ leafVariation: 0.18, translucency: 0.45, massNoise: 0.16, leafStretch: DEFAULT_LEAF_STRETCH, alphaMipScale: 0.4, leafAtlasPx: 1024,
+    cardZoom: [1, 1.15, 1.3, 1.3] as LeafSlotFactors, alphaGain: [1, 1.1, 1.25, 1.25] as LeafSlotFactors });
+
 const finite = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x);
 const vec = (v: unknown, n: number): boolean => Array.isArray(v) && v.length === n && v.every(finite);
 
@@ -148,18 +180,28 @@ export function treeTextureFiles(index: TreeTextureIndex): string[] {
 export const leafCellIndex = (pick: number, cells: number): number => Math.min(cells - 1, Math.max(0, Math.floor(pick * cells)));
 
 /**
+ * How a leaf card's blade coordinates reach its cell (leafAtlasUv): the leaf keeps the atlas's aspect (a narrow leaf may be
+ * drawn up to `stretch` times wider) as `drawn` (width over length), scaled down by `f` when it is wider than the card.
+ * s = 0.5 + (u - 0.5) / (f drawn), t = v / f, then a card zoom about the cell's centre. Mirrors the shader.
+ */
+export function leafCardFit(cell: Pick<TreeLeafCell, 'lengthM' | 'widthM'>, cardWidthRatio: number, stretch = DEFAULT_LEAF_STRETCH): { drawn: number; f: number } {
+    const r = cell.widthM / cell.lengthM;
+    const drawn = Math.min(Math.max(r, cardWidthRatio), r * stretch);
+    return { drawn, f: Math.min(1, cardWidthRatio / drawn) };
+}
+
+/**
  * A leaf card's atlas coordinates. `cardUv` is the card's TEXCOORD_0 (u = 0.5 + across / blade length, v = along / blade
  * length), `cardWidthRatio` its outline's width over its length (the trees GLB's clusterLibrary.leafCard.widthRatio).
  * The leaf keeps the atlas's aspect (a narrow leaf may be drawn up to `stretch` times wider), scaled down when it is wider
- * than the card, base at the card's base. `inside` is false where the card shows no part of the leaf's cell (the shader
- * makes it transparent). Mirrors the shader in treeTextureMaterials.ts.
+ * than the card, base at the card's base; `zoom` (TreeTextureOptions.cardZoom of the level) draws it larger about the cell's
+ * centre. `inside` is false where the card shows no part of the leaf's cell (the shader makes it transparent). Mirrors the
+ * shader in treeTextureMaterials.ts.
  */
-export function leafAtlasUv(cardUv: [number, number], cell: Pick<TreeLeafCell, 'origin' | 'along' | 'across' | 'lengthM' | 'widthM'>, cardWidthRatio: number, stretch = DEFAULT_LEAF_STRETCH): { uv: [number, number]; st: [number, number]; inside: boolean } {
-    const r = cell.widthM / cell.lengthM;
-    const drawn = Math.min(Math.max(r, cardWidthRatio), r * stretch);
-    const f = Math.min(1, cardWidthRatio / drawn);
-    const t = cardUv[1] / f;
-    const s = 0.5 + (cardUv[0] - 0.5) / (f * drawn);
+export function leafAtlasUv(cardUv: [number, number], cell: Pick<TreeLeafCell, 'origin' | 'along' | 'across' | 'lengthM' | 'widthM'>, cardWidthRatio: number, stretch = DEFAULT_LEAF_STRETCH, zoom = 1): { uv: [number, number]; st: [number, number]; inside: boolean } {
+    const { drawn, f } = leafCardFit(cell, cardWidthRatio, stretch);
+    const t = 0.5 + (cardUv[1] / f - 0.5) / zoom;
+    const s = 0.5 + (cardUv[0] - 0.5) / (f * drawn * zoom);
     return {
         uv: [cell.origin[0] + t * cell.along[0] + s * cell.across[0], cell.origin[1] + t * cell.along[1] + s * cell.across[1]],
         st: [s, t],

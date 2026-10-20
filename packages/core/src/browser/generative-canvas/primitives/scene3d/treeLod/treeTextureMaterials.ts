@@ -11,12 +11,17 @@
 import * as THREE from 'three';
 import type { TreeCrownCardsExtras, TreeLodExtras, TreeNodeExtras, TreesGlbRootExtras } from '../../../../../common/spatial/staged-location-contracts';
 import {
-    DEFAULT_LEAF_STRETCH, MAX_LEAF_CELLS, leafCellIndex, validateTreeTextureIndex, type TreeBarkTextureEntry, type TreeLeafTextureEntry, type TreeTextureIndex
+    DEFAULT_TREE_TEXTURE_OPTIONS, MAX_LEAF_CELLS, validateTreeTextureIndex, type TreeBarkTextureEntry, type TreeLeafTextureEntry, type TreeTextureIndex, type TreeTextureOptions
 } from '../../../../../common/spatial/tree-texture-library';
+import { texturedLeafPaint, type AtlasPixels } from '../../../../../common/spatial/tree-crown-card-atlas';
 import { setTreeLodTexturedMaterial } from '../clayRenderMode';
 import { setPerMeshAttribute } from './treeCrownShading';
 import { crownSlotOf } from './treeLodMath';
-import { CARD_ALPHA_MIP, CROWN_CARD_ATLAS_PX, CROWN_CARD_MIP_SCALE, bakeCrownCardAtlas, clayLeafPaint, crownCardTexture, crownCardsOf, markCrownCardShader, type CrownCardLeafPaint } from './treeCrownCards';
+import { CARD_ALPHA_MIP, CROWN_CARD_ATLAS_PX, CROWN_CARD_MIP_SCALE, bakeCrownCardAtlas, clayLeafPaint, crownCardTexture, crownCardsOf, markCrownCardShader } from './treeCrownCards';
+
+// shared with the photo-match evaluator's software renderer (common): the options' defaults, the card painter, the atlas pixels
+export { DEFAULT_TREE_TEXTURE_OPTIONS, type LeafSlotFactors, type TreeTextureOptions } from '../../../../../common/spatial/tree-texture-library';
+export { texturedLeafPaint, type AtlasPixels } from '../../../../../common/spatial/tree-crown-card-atlas';
 
 /**
  * Textured mode for the staged trees: the surfaces of the tree texture library (assets/textures/trees, index.json) on the
@@ -47,37 +52,6 @@ export const TREE_TEXTURE_BASE_URL = '/assets/textures/trees/';
 export const TREE_TINT_ATTRIBUTE = 'sbTreeTint';
 /** Per-mesh attribute of a leaf mesh: x the card zoom, y the alpha gain of its level's detail slot (TreeTextureOptions). */
 export const TREE_CARD_ATTRIBUTE = 'sbTreeCard';
-
-/** A factor per detail slot: near, near-mid, mid, far (crownSlotOf). */
-export type LeafSlotFactors = [number, number, number, number];
-
-export interface TreeTextureOptions {
-    /** Variation of a leaf's colour around the tree's tint (0 none). */
-    leafVariation: number;
-    /** Strength of the sunlight seen through a leaf lit from behind. */
-    translucency: number;
-    /** Amplitude of the far masses' colour noise. */
-    massNoise: number;
-    /** How much wider than its atlas aspect a narrow leaf may be drawn (tree-texture-library.ts DEFAULT_LEAF_STRETCH). */
-    leafStretch: number;
-    /** How much a leaf's alpha is raised per mip level of the opacity map it samples (keeps distant leaves from eroding). */
-    alphaMipScale: number;
-    /** Longest side of a leaf atlas on the GPU (the library's files are 2K; 1K keeps a leaf a few hundred texels long). */
-    leafAtlasPx: number;
-    /**
-     * Card zoom per detail slot: the leaf image drawn this many times larger on its card, about the card's centre (the card
-     * crops it). A cut-out leaf covers only part of its card (its cell's fill, 0.6-0.7), and the coarser levels' cards are
-     * larger and coarser (a kite at the mid level), so from the mid distances a textured crown read thinner than a clay
-     * one of the same cards; zooming the leaf in fills more of each card there, where a single leaf's outline is a few
-     * pixels. 1 draws the leaf as it is (the near level).
-     */
-    cardZoom: LeafSlotFactors;
-    /** Alpha gain per detail slot: the leaf's alpha (after the mip lift) times this, so its soft rim stays in the cut at a distance. */
-    alphaGain: LeafSlotFactors;
-}
-
-export const DEFAULT_TREE_TEXTURE_OPTIONS: Readonly<TreeTextureOptions> = Object.freeze({ leafVariation: 0.18, translucency: 0.45, massNoise: 0.16, leafStretch: DEFAULT_LEAF_STRETCH, alphaMipScale: 0.4, leafAtlasPx: 1024,
-    cardZoom: [1, 1.15, 1.3, 1.3] as LeafSlotFactors, alphaGain: [1, 1.1, 1.25, 1.25] as LeafSlotFactors });
 
 export const LEAF_VERTEX_PARS = `
 attribute vec2 _leaf;
@@ -228,8 +202,6 @@ export interface TextureRequest {
     /** Called once a packed texture's pixels are in (RGBA, row 0 at v = 0), e.g. to bake the crown cards from a leaf atlas. */
     onReady?: (pixels: AtlasPixels) => void;
 }
-/** A loaded atlas's pixels: RGBA rows from v = 0 (bottom) up. */
-export interface AtlasPixels { data: Uint8Array; width: number; height: number }
 export type TextureLoad = (req: TextureRequest) => THREE.Texture;
 
 const loadImage = (url: string): Promise<HTMLImageElement> => new Promise((resolve, reject) => {
@@ -334,32 +306,6 @@ function leafMaterial(e: TreeLeafTextureEntry, url: (f: string) => string, load:
         shader.fragmentShader = f;
     };
     return mat;
-}
-
-/**
- * The crown cards' painter for a leaf set: each leaf of the layout drawn as the atlas cell its pick chooses, along the
- * leaf's axis with the cell's aspect, scaled so the cell's fill covers the clay ellipse's area (what the writer measured),
- * its colour varied a little per leaf.
- */
-export function texturedLeafPaint(e: TreeLeafTextureEntry, px: AtlasPixels, clayLeafAspect: number): (leaf: readonly number[]) => CrownCardLeafPaint {
-    const cells = e.atlas.cells.slice(0, MAX_LEAF_CELLS);
-    return leaf => {
-        const pick = leaf[4] ?? 0;
-        const c = cells[leafCellIndex(pick, cells.length)];
-        const aspect = Math.max(0.05, c.widthM / c.lengthM);
-        const k = Math.min(1.8, Math.max(0.6, Math.sqrt((Math.PI / 4) * clayLeafAspect / (Math.max(0.2, c.fill) * aspect))));
-        const shade = 0.85 + 0.3 * ((pick * 7.31 + 0.13) % 1);
-        return {
-            lengthScale: k, aspect,
-            sample: (a, b) => {
-                const u = c.origin[0] + a * c.along[0] + b * c.across[0], v = c.origin[1] + a * c.along[1] + b * c.across[1];
-                const x = Math.min(px.width - 1, Math.max(0, Math.floor(u * px.width))), y = Math.min(px.height - 1, Math.max(0, Math.floor(v * px.height)));
-                const i = (y * px.width + x) * 4, alpha = px.data[i + 3];
-                if (alpha < 8) return null;
-                return [Math.min(255, px.data[i] * shade), Math.min(255, px.data[i + 1] * shade), Math.min(255, px.data[i + 2] * shade), alpha];
-            }
-        };
-    };
 }
 
 export const CARD_VERTEX_PARS = `
