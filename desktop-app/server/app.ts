@@ -61,6 +61,7 @@ import { createWorkspaceRouter, createGitRouter } from './routes/workspaceRoutes
 import { createCppRouter } from './routes/cppRoutes';
 import { createVirtualGeometryRouter } from './routes/virtualGeometryRoutes';
 import { createTileRefineRouter } from './routes/tileRefineRoutes';
+import { createTextureRouter } from './routes/textureRoutes';
 import { createMediaRouter, createVideoRouter } from './routes/mediaVideoRoutes';
 import {
     createTileCleanupRouter,
@@ -381,6 +382,15 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
 
     app.use(createCorsMiddleware(allowedOrigins));
 
+    // 'textures' and 'extracted_textures' are no longer served from the local public dir — they
+    // now live in the private scratchbox-library-training-textures GCS bucket, fetched via
+    // short-lived signed URLs from the /api/textures/sign route registered below. Block both
+    // ahead of every static mount so the (still on-disk, for other tooling) local copies never
+    // leak out this server, however the static roots below end up resolving.
+    app.use(['/textures', '/extracted_textures'], (_req: Request, res: Response) => {
+        res.status(404).json({ error: 'Texture assets are served from the GCS texture library; request a signed URL from /api/textures/sign' });
+    });
+
     // Static assets (production, browser mode) are public application code and
     // are served before the token gate. API prefixes below always require it.
     if (options.staticDir && fs.existsSync(options.staticDir)) {
@@ -396,7 +406,7 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
         if (fs.existsSync(pRoot)) {
             app.use(express.static(pRoot));
             const subStaticDirs = [
-                'renders', 'models', 'textures', 'extracted_textures',
+                'renders', 'models',
                 'datasets', 'splats', 'real_3d_tiles_captures', 'screenshots',
                 'visual_proof_locations', 'visual_proof_real_tile'
             ];
@@ -622,6 +632,7 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     app.use('/api/geo', createGeoRouter());
     app.use('/api/panorama', createPanoramaRouter(mediaCredentials));
     app.use('/api/3d-engine/splat-studio', createSplatStudioRouter());
+    app.use('/api/textures', createTextureRouter(mediaCredentials));
 
     // 7. Standalone Tools, Models, 4D Performer & Capabilities
     app.use('/api/tools', createToolsRouter(exportedToolsStore, toolsHost, toolsPort));
