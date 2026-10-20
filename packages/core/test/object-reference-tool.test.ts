@@ -801,6 +801,26 @@ describe('build_3d_object_from_reference', () => {
         expect(build.passes.map((p: any) => p.source)).toEqual(['reference', 'revision']);
     }, 180_000);
 
+    it('applies material corrections the last revision found in one more material-only pass, and no more', async () => {
+        const glow = JSON.stringify({ differences: [{ partId: 'knob', problem: 'glows far too brightly', confidence: 'high', correction: { emissive: [0.1, 0.4, 0.4], emissiveStrength: 0.5 } }] });
+        const client = fakeClient({
+            specs: [JSON.stringify(VASE), JSON.stringify({ parts: [] })],
+            differences: [highDifference('The body should be taller.', 'vase')],
+            materialDifferences: [NO_DIFFERENCES, NO_DIFFERENCES, glow, glow]
+        });
+        const out = await handlerWith(client).run({ request: 'a tall fluted vase with a softly glowing knob' });
+        expect(out.status, String(out.resultPayload.error)).toBe('completed');
+        const build = (out.resultPayload.artifact as any).data.objectBuild;
+        expect(build.passes.map((p: any) => p.source)).toEqual(['reference', 'revision', 'revision', 'material']);
+        expect(build.resultPass).toBe(4);
+        expect(build.spec.parts.find((p: any) => p.id === 'knob').material).toMatchObject({ emissive: [0.1, 0.4, 0.4], emissiveStrength: 0.5 });
+        expect(build.materialChecks.map((m: any) => m.pass)).toEqual([1, 2, 3, 4]);
+        expect(build.materialChecks[2].applied).toHaveLength(1);
+        // The last check still lists the glow (the fake repeats it): recorded as remaining, never applied by a fifth pass.
+        expect(build.remainingMaterialDifferences.map((d: any) => d.partId)).toEqual(['knob']);
+        expect(client.calls.filter(isMaterialCall)).toHaveLength(4);
+    }, 180_000);
+
     it('adds no pass when the material render matches, records corrections it cannot apply, and skips the check for clay', async () => {
         const matched = fakeClient({ specs: [JSON.stringify(VASE)] });
         const ok = await handlerWith(matched).run({ request: 'a fluted vase with a knob on top' });

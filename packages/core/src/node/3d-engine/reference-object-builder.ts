@@ -1803,6 +1803,24 @@ export async function buildObjectFromReference(
                 `No build passed every check, so nothing was mounted: ${why}pass ${current.pass} still has these problems: ${current.problems.join(' ')}`,
                 { passes, lastPass: last, connectivity: current.checks.connectivity, missingParts: current.checks.missingParts, detachedParts: current.checks.detachedParts, spec: current.spec, timings: clock.timings, totalMs: clock.elapsedMs });
         }
+        // The passes the returned build descends from (a later pass that failed its checks is not one of them).
+        const lineage = new Set([...checkedPasses.keys()].filter(p => p <= accepted!.pass));
+        // The returned build still has material corrections and no revision was left to apply them: one material-only
+        // pass applies them (same geometry, a native rebuild and one material comparison, no spec call). Only once.
+        if (accepted.materialFixedSpec) {
+            const pass = passes.length + 1;
+            clock.pass = pass;
+            try {
+                const fixed = await materialOnlyPass(pass, accepted, accepted.materialFixedSpec, input, vision, reference, deps);
+                passes.push(passRecord(fixed, 'material'));
+                checkedPasses.set(pass, fixed);
+                lineage.add(pass);
+                accepted = fixed;
+            } catch (err) {
+                if (!(err instanceof ReferenceObjectBuildError) || err.details.aborted || input.signal?.aborted) throw err;
+                passes.push({ pass, source: 'material', outcome: 'failed', error: err.message });
+            }
+        }
         // The returned pass could not be compared: say so, and which differences it was asked to fix are unchecked.
         const comparisonFailed: ComparisonFailure | undefined = accepted.comparisonError
             ? {
@@ -1830,7 +1848,7 @@ export async function buildObjectFromReference(
             ...(comparisonFailed ? { comparisonFailed } : {}),
             checks: accepted.checks,
             remainingDifferences: accepted.checks.differences.filter(d => d.confidence === 'high'),
-            materialChecks: [...checkedPasses.values()].filter(c => c.pass <= accepted!.pass && c.material).map(c => c.pass === accepted!.pass ? unbuiltCorrections(c.material!) : c.material!),
+            materialChecks: [...checkedPasses.values()].filter(c => lineage.has(c.pass) && c.material).map(c => c.pass === accepted!.pass ? unbuiltCorrections(c.material!) : c.material!),
             remainingMaterialDifferences: (accepted.material?.differences ?? []).filter(d => d.confidence === 'high'),
             timings: clock.timings,
             totalMs: clock.elapsedMs,
