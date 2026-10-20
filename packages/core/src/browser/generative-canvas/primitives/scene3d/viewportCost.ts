@@ -23,6 +23,7 @@
  */
 
 import * as THREE from 'three';
+import { mergedPartsOf } from './stagedBuild/mergeStagedParts';
 
 export interface ViewportCostGroup {
     key: string;
@@ -106,6 +107,8 @@ function groupKeyOf(mesh: THREE.Object3D, rootToLayer: Map<THREE.Object3D, Layer
     if (lodGate !== undefined) return `trees/level ${lodGate}`;
     if (layer) {
         const base = `${layer.stage ?? '?'}:${layer.layer ?? '?'}${layer.buildingId ? `#${layer.buildingId}` : ''}${layer.role ? `(${layer.role})` : ''}`;
+        // a merged mesh (mergeStagedParts.ts) is one draw of many parts: its own group; breakdown() splits its triangles by part label too
+        if (mergedPartsOf(mesh)) return `${base}/merged`;
         // inside a layer: the node's own stage when it differs, and its provenance (vector massing, measured or generated relief, scan residual)
         return `${base}${nodeStage && nodeStage !== layer.stage ? `/${nodeStage}` : ''}${nodeLabel ? `/${nodeLabel}` : ''}`;
     }
@@ -142,6 +145,8 @@ export function createViewportCostProbe(d: ViewportCostDeps) {
         cam.updateMatrixWorld();
         frustum.setFromProjectionMatrix(pv.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
         const groups: ViewportCostGroup[] = [];
+        /** Triangles of merged meshes by part label (key `<layer>/<label> (merged)`): draw calls and memory stay on the merged group. */
+        const byLabel = new Map<string, ViewportCostGroup>();
         const seenBuf = new Set<ArrayBufferLike | object>(), seenTex = new Set<THREE.Texture>();
         meshesByGroup().forEach((meshes, key) => {
             const g: ViewportCostGroup = { key, meshes: 0, drawCalls: 0, triangles: 0, instances: 0, geometryBytes: 0, textureBytes: 0 };
@@ -172,6 +177,16 @@ export function createViewportCostProbe(d: ViewportCostDeps) {
                 if (count <= 0) continue;
                 const calls = Array.isArray(m.material) ? Math.max(1, geo.groups.length) : 1;
                 g.meshes++; g.drawCalls += calls; g.instances += count; g.triangles += trianglesOf(geo) * count;
+                const table = mergedPartsOf(m);
+                if (table) {
+                    const layerKey = key.slice(0, -'/merged'.length);
+                    table.parts.forEach((p, i) => {
+                        if (!table.visible[i]) return;
+                        const k = `${layerKey}/${p.sb.provenance?.label ?? '?'} (merged)`;
+                        const e = byLabel.get(k) ?? byLabel.set(k, { key: k, meshes: 0, drawCalls: 0, triangles: 0, instances: 0, geometryBytes: 0, textureBytes: 0 }).get(k)!;
+                        e.triangles += p.triCount; e.instances++;
+                    });
+                }
             }
             groups.push(g);
         });
@@ -185,7 +200,7 @@ export function createViewportCostProbe(d: ViewportCostDeps) {
         const fov = cam.isPerspectiveCamera ? (2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2) / (cam.zoom || 1)) * 180) / Math.PI : 0;
         const mem = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory;
         return {
-            groups, total,
+            groups: [...groups, ...[...byLabel.values()].sort((a, b) => b.triangles - a.triangles)], total,
             rendererInfo: { calls: info.render.calls, triangles: info.render.triangles, geometries: info.memory.geometries, textures: info.memory.textures, programs: info.programs?.length ?? 0 },
             camera: { position: cam.position.toArray() as [number, number, number], fovDeg: fov, focalMm: fov ? SENSOR_HEIGHT_MM / (2 * Math.tan(THREE.MathUtils.degToRad(fov) / 2)) : 0, aspect: cam.aspect },
             drawingBuffer: [size.x, size.y],

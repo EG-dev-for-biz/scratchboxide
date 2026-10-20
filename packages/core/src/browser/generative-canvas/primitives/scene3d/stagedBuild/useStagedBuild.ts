@@ -44,7 +44,8 @@ import type { RendererStack } from '../types';
 import { StagedBuildOverlay, type DegradationPlacementNote, type MaterialsSummary } from './StagedBuildOverlay';
 import { placeDegradations, type Placement, type PlacementRoot } from './degradationPlacement';
 import { nodeProgress, nodeRevealWindow, stepRevealSchedule, type LayerLoadState, type LayerRevealFrame, type RevealFrame, type RevealSchedule } from './revealScheduler';
-import { REVEAL_ATTRIBUTE, StagedMaterialRegistry, installRenderGuard, type MeshStagedLook } from './revealMaterial';
+import { REVEAL_ATTRIBUTE, StagedMaterialRegistry, installRenderGuard, type MeshStagedLook, type PartLook } from './revealMaterial';
+import { mergedPartsOf } from './mergeStagedParts';
 import { TEXTURE_RUNG_COLORS, classUniforms, legendRows, patternCode, provenanceBackground, resolveLegend, shadingClasses, styleFor, textureRungLegendRows, uncertaintyCoverage, type LegendStyle } from './provenanceShading';
 import { EVICT_AFTER_MS, evictionCandidates, sameSet, stepEviction } from './layerEviction';
 import { isInterrupted, isRunSettled, stageEventsFor, streamedProgress, subscribeStageEvents, withStreamedEvents, type StageProgress } from './stagedBuildState';
@@ -122,8 +123,20 @@ interface NodeInfo {
     ids: StagedNodeExtras['sb']['ids'];
     replaces: string[];
     meshes: Array<THREE.Mesh | THREE.LineSegments>;
+    /** A part of a merged mesh (mergeStagedParts.ts): its look goes into the mesh's per-part arrays, `meshes` is empty. */
+    part?: { mesh: THREE.Mesh; index: number };
     degradationIds: string[];
     prov?: { key: string; look: NonNullable<MeshStagedLook['provenance']> };
+}
+
+/** Every mesh a layer's nodes draw with: their own, and the merged meshes their parts live in. */
+export function meshesOfNodes(nodes: readonly NodeInfo[]): THREE.Object3D[] {
+    const out = new Set<THREE.Object3D>();
+    for (const n of nodes) {
+        for (const m of n.meshes) out.add(m);
+        if (n.part) out.add(n.part.mesh);
+    }
+    return [...out];
 }
 
 interface RootInfo {
@@ -185,6 +198,22 @@ export function buildRootInfo(layer: StagedLayer, root: THREE.Object3D, ranks: R
     root.traverse(obj => {
         const m = obj as THREE.Mesh;
         if (!(m.isMesh || (obj as THREE.Line).isLine)) return;
+        // a merged mesh: one node per part, from its range table (the parts' own extras, in their order)
+        const table = m.isMesh ? mergedPartsOf(m) : undefined;
+        if (table) {
+            for (const p of table.parts) {
+                const key = new THREE.Object3D();
+                key.name = p.name;
+                key.userData = { sb: p.sb };
+                byNode.set(key, {
+                    node: key, extras: p.sb, provenance: p.sb.provenance ?? layer.provenance, fitRmsM: p.sb.fitError?.rmsM, order: 0, count: 0,
+                    durationShare: p.sb.reveal?.durationShare, perVertex: false, itemStart: 0, window: { start: 0, span: 1 },
+                    ids: p.sb.ids ?? {}, replaces: p.sb.replacesSurfaceIds ?? [], meshes: [], part: { mesh: m, index: p.index }, degradationIds: []
+                });
+                order.push(key);
+            }
+            return;
+        }
         const node = nodeOf(obj, root);
         let info = byNode.get(node);
         if (!info) {
@@ -502,7 +531,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
             const meshes = new Set<THREE.Object3D>();
             for (const id of gone) {
                 const info = rootsRef.current.get(id);
-                if (info) for (const n of info.nodes) for (const m of n.meshes) meshes.add(m);
+                if (info) for (const m of meshesOfNodes(info.nodes)) meshes.add(m);
                 rootsRef.current.delete(id);
             }
             if (meshes.size > 0) registryRef.current.prune(m => !meshes.has(m));
@@ -562,7 +591,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         const cached = rootsRef.current.get(layer.objectId);
         if (cached && cached.root === root && cached.key === key) return cached;
         if (cached && cached.root !== root) {
-            const old = new Set<THREE.Object3D>(cached.nodes.flatMap(n => n.meshes));
+            const old = new Set<THREE.Object3D>(meshesOfNodes(cached.nodes));
             registryRef.current.prune(m => !old.has(m));
         }
         const info = buildRootInfo(layer, root, ranks);
@@ -666,9 +695,15 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
             const only = f.layer.reveal.only ? new Set(f.layer.reveal.only.primitiveIds) : undefined;
             const swap = parseSwapId(f.objectId);
             const overridden = !!L.overriddenIds?.has(modelIdOf(f.objectId));
+            const partLooks = new Map<THREE.Mesh, PartLook[]>();
             for (const n of info.nodes) {
                 const replaced = n.ids.surfaceId !== undefined && n.replaces.length === 0 ? replacedPresence.get(n.ids.surfaceId) : undefined;
                 const look = lookFor(f, n, { ghost, only, replaced, highlightOn, provenanceOn: L.provenanceOn, lg, overridden, swap: !!swap, ...(swap?.kind === 'tex' ? { rungs: RUNG_LOOK } : {}) });
+                if (n.part) {
+                    const list = partLooks.get(n.part.mesh) ?? partLooks.set(n.part.mesh, []).get(n.part.mesh)!;
+                    list[n.part.index] = look;
+                    continue;
+                }
                 for (const mesh of n.meshes) {
                     if (look === 'conceal') registry.conceal(mesh);
                     else if (look === 'hide') registry.hide(mesh);
@@ -678,6 +713,12 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
                     }
                 }
             }
+            for (const [mesh, looks] of partLooks) {
+                const table = mergedPartsOf(mesh);
+                const all: PartLook[] = Array.from({ length: table?.parts.length ?? looks.length }, (_, i) => looks[i] ?? null);
+                if (registry.applyParts(mesh, all, { allowCreate: budget > 0, pxScale, classCount: lg.classes.length, restores })) budget--;
+                if (mesh.visible) drawn++;
+            }
         }
         // Forget meshes of models the loader released (every 30 frames; the check walks the registry).
         if (stats.frames % 30 === 0) {
@@ -686,7 +727,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
                 // layers gone from the schedule (an earlier swap) no longer hold their meshes
                 if (!st.layers.some(l => l.objectId === id)) { rootsRef.current.delete(id); continue; }
                 if (objectRootsRef.current.get(modelIdOf(info.objectId)) !== info.root) continue;
-                for (const n of info.nodes) for (const m of n.meshes) liveMeshes.add(m);
+                for (const m of meshesOfNodes(info.nodes)) liveMeshes.add(m);
             }
             registry.prune(m => liveMeshes.has(m));
         }

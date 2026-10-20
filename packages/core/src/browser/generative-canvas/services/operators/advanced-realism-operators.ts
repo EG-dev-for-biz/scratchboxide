@@ -23,6 +23,7 @@ import {
     applyBurleySubsurfaceScattering
 } from '../headless-realism-service';
 import { CINEMATIC_RIGS, computeSceneBudgetTelemetry, isSceneLightingRig } from '../../primitives/scene3d/lightingRigs';
+import { stagedPartOfHit } from '../../primitives/scene3d/stagedBuild/mergeStagedParts';
 
 /**
  * Runs `edit` on a copy of the mesh's geometry and swaps the copy in, so the viewport timeline can undo the edit by
@@ -120,13 +121,16 @@ export const ADVANCED_REALISM_OPERATORS: OperatorDefinition[] = [
             const hit = raycaster.intersectObjects(targets, true).find(h => (h.object as THREE.Mesh).isMesh);
             if (!hit) return { hit: false };
             const normal = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : undefined;
+            // a staged part (its own mesh, or a range of a merged mesh): named as the node it is, with its provenance
+            const part = stagedPartOfHit(hit);
             return {
                 hit: true,
                 distance: hit.distance,
                 position: hit.point.toArray() as [number, number, number],
                 normal: normal?.toArray() as [number, number, number] | undefined,
                 faceIndex: hit.faceIndex ?? null,
-                meshName: hit.object.name || hit.object.uuid
+                meshName: part?.partIndex !== undefined ? part.name : (hit.object.name || hit.object.uuid),
+                ...(part ? { stagedPart: { name: part.name, label: part.label ?? null, ids: part.ids ?? {} } } : {})
             };
         }
     },

@@ -181,6 +181,7 @@ import { CINEMATIC_RIGS, computeSceneBudgetTelemetry } from './scene3d/lightingR
 import type { SceneBudgetTelemetry } from './scene3d/lightingRigs';
 import { useStagedBuild } from './scene3d/stagedBuild/useStagedBuild';
 import { readStagedBuild, type StagedSceneData } from './scene3d/stagedBuild/stagedBuildState';
+import { mergeStagedParts, mergeStagedPartsEnabled } from './scene3d/stagedBuild/mergeStagedParts';
 import { carryTwinObjects } from './scene3d/stagedBuild/texturedTwins';
 import { prepareTexturedTwinModel } from './scene3d/stagedBuild/texturedTwinModel';
 
@@ -3122,6 +3123,12 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     }
                     // A staged layer's textured twin keeps its photo material under the clay pass, and its confidence texture is loaded.
                     void prepareTexturedTwinModel(gltf);
+                    // A staged layer of many small parts (a pipeline E hero) draws one mesh per material; each vertex keeps its part
+                    // (provenance, ids) for the staged build, the provenance view and picking (mergeStagedParts.ts).
+                    if (!lod.hasTrees && mergeStagedPartsEnabled()) {
+                        const merged = mergeStagedParts(model);
+                        if (merged) model.userData.sbMergedReport = merged;
+                    }
                     applyClayRenderMode([model], renderModeRef.current === 'clay');
                     // An explicit material on the object wins over the clay default.
                     syncObjectMaterial(model, latestDef(obj).material, renderModeRef.current === 'clay');
