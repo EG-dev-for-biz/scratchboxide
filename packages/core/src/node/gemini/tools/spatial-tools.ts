@@ -3687,7 +3687,7 @@ export const GEOBOX_PRECISION_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'geobox_resect_camera_pose',
-        description: 'Same as geobox_resect_image_location: computes the camera position, heading, pitch, FOV, frustum and Google 3D Tiles camera config for a photo or video frame. It does not analyse the photo\'s pixels and runs no edge alignment (geobox_optimize_edge_alignment aligns a 3D model to a photo and reports what it measured). The location of what the photo shows comes from targetCoords, or from targetLandmarkName (else promptHint) resolved with Google Places. The pose needs evidence, and missing evidence is an error: 2D-3D point correspondences (points2D/points3D with imageWidthPx/imageHeightPx), the camera position (cameraOpticalCenter or knownCoords, with alt), or headingDeg with pitchDeg and standoffDistanceMeters. The result says which evidence was used.',
+        description: 'DEPRECATED alias of geobox_resect_image_location (hidden since 2026-10-20; remove after one release). Call geobox_resect_image_location instead: same parameters, same result.',
         parameters: {
             type: 'OBJECT',
             properties: geoboxResectionProperties()
@@ -3798,7 +3798,7 @@ export const GEOBOX_PRECISION_TOOL_DECLARATIONS: ToolDeclaration[] = [
     EDGE_ALIGNMENT_DECLARATION('spatial_closed_loop_edge_align'),
     {
         name: 'spatial_resect_image_location',
-        description: 'Same as geobox_resect_image_location: computes the camera position, heading, pitch, FOV, frustum and Google 3D Tiles camera config for a photo or video frame. It does not analyse the photo\'s pixels and runs no edge alignment (geobox_optimize_edge_alignment aligns a 3D model to a photo and reports what it measured). The location of what the photo shows comes from targetCoords, or from targetLandmarkName (else promptHint) resolved with Google Places. The pose needs evidence, and missing evidence is an error: 2D-3D point correspondences (points2D/points3D with imageWidthPx/imageHeightPx), the camera position (cameraOpticalCenter or knownCoords, with alt), or headingDeg with pitchDeg and standoffDistanceMeters. The result says which evidence was used.',
+        description: 'DEPRECATED alias of geobox_resect_image_location (hidden since 2026-10-20; remove after one release). Call geobox_resect_image_location instead: same parameters, same result.',
         parameters: {
             type: 'OBJECT',
             properties: geoboxResectionProperties()
@@ -3948,6 +3948,12 @@ async function alignModelEdgesToPhoto(tool: string, args: Record<string, unknown
         summaryResult: `Aligned ${glbPath} to ${imagePath}: edge correlation ${initial.overlapScorePercent.toFixed(1)}% -> ${finalEval.overlapScorePercent.toFixed(1)}% in ${opt.iterations} pass(es), ${opt.renders} render(s) (target ${target}% ${reached ? 'reached' : 'not reached'}; stopped: ${opt.stoppedBy}). The model's edges lie ${Number.isFinite(meanEdgeDistancePx) ? meanEdgeDistancePx.toFixed(1) : 'n/a'} px on average from the nearest strong photo edge. Final camera: position [${[p.x, p.y, p.z].map(v => v.toFixed(2)).join(', ')}], target [${[p.targetX, p.targetY, p.targetZ].map(v => v.toFixed(2)).join(', ')}], fov ${p.fov.toFixed(1)} deg.`
     };
 }
+
+/**
+ * Deprecated names for geobox_resect_image_location, registered but not offered (hidden since 2026-10-20) so saved
+ * scripts and chats keep working; remove after one release.
+ */
+export const GEOBOX_RESECTION_ALIAS_TOOL_NAMES: readonly string[] = ['geobox_resect_camera_pose', 'spatial_resect_image_location'];
 
 export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
     geobox_resect_image_location: async (args, _ctx) => {
@@ -5952,7 +5958,7 @@ export const analyticalGroomHandlers: Record<string, ToolHandler> = {
 export const SPATIAL_TOOL_DECLARATIONS = PANORAMA_TOOL_DECLARATIONS;
 export const spatialHandlers = panoramaHandlers;
 
-/** Parameters shared by the camera-resection tools (geobox_resect_image_location and its aliases). */
+/** Parameters of geobox_resect_image_location (shared with its deprecated aliases). */
 function geoboxResectionProperties(): NonNullable<NonNullable<ToolDeclaration['parameters']>['properties']> {
     const point = (description: string) => ({
         type: 'OBJECT' as const,

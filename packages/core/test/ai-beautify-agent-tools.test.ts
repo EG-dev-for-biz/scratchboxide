@@ -14,7 +14,7 @@ import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolv
 import type { GeminiGenerateRequest } from '../src/common/gemini-protocol';
 
 describe('AI Beautify Agent Tool & Capability Resolution', () => {
-    it('exposes build_beautify_prompt in Gemini tool declarations when workspace tools are enabled', () => {
+    it('does not offer build_beautify_prompt (deprecated, hidden): the generating tools apply the template themselves', () => {
         const geminiService = new GeminiService();
         const request: GeminiGenerateRequest = {
             prompt: 'Beautify this 3D tiles rendering of Philadelphia Independence Hall',
@@ -30,15 +30,20 @@ describe('AI Beautify Agent Tool & Capability Resolution', () => {
         const fnDecls: any[] = fnDeclsContainer.functionDeclarations;
         const toolNames = fnDecls.map((d: any) => d.name);
 
-        expect(toolNames).toContain('build_beautify_prompt');
+        expect(toolNames).not.toContain('build_beautify_prompt');
+        expect(toolNames).toContain('survey_beautify_station');
+        expect(toolNames).toContain('spatial_ai_render_scene');
 
-        const beautifyTool = fnDecls.find((d: any) => d.name === 'build_beautify_prompt');
-        expect(beautifyTool.parameters.required).toContain('locationName');
-        expect(beautifyTool.description).toMatch(/photorealistic 3D tiles rendering into a photorealistic photograph/i);
-        expect(beautifyTool.parameters.properties.aspectRatio).toBeDefined();
-        expect(beautifyTool.parameters.properties.distance).toBeDefined();
-        expect(beautifyTool.parameters.properties.coords).toBeDefined();
-        expect(beautifyTool.parameters.properties.heading).toBeDefined();
+        // Still registered for saved scripts, with its parameters intact.
+        const registry = createDefaultToolRegistry();
+        const beautifyTool = registry.get('build_beautify_prompt')!.declaration;
+        expect(registry.get('build_beautify_prompt')!.offeredByDefault).toBe(false);
+        expect(beautifyTool.parameters!.required).toContain('locationName');
+        expect(beautifyTool.description).toMatch(/^DEPRECATED \(hidden since 2026-10-20; remove after one release\)/);
+        expect(beautifyTool.parameters!.properties!.aspectRatio).toBeDefined();
+        expect(beautifyTool.parameters!.properties!.distance).toBeDefined();
+        expect(beautifyTool.parameters!.properties!.coords).toBeDefined();
+        expect(beautifyTool.parameters!.properties!.heading).toBeDefined();
     });
 
     it('executes build_beautify_prompt via tool registry and produces verbatim template with distance', async () => {
@@ -99,6 +104,6 @@ describe('AI Beautify Agent Tool & Capability Resolution', () => {
 
         expect(resolution.canSolveNatively).toBe(true);
         expect(resolution.tier1Assessment.nativeCapabilitiesUsed.some(c => c.includes('buildBeautifyPrompt'))).toBe(true);
-        expect(resolution.tier1Assessment.suggestedNativeAction?.serviceOrTool).toMatch(/buildBeautifyPrompt|build_beautify_prompt/);
+        expect(resolution.tier1Assessment.suggestedNativeAction?.serviceOrTool).toMatch(/buildBeautifyPrompt inside survey_beautify_station/);
     });
 });

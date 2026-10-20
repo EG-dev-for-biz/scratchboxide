@@ -2,7 +2,8 @@
 name: ai-beautify-location-pipeline
 description: >-
   Transform photorealistic 3D tiles renderings into photorealistic photographs using the exact
-  AI Beautify prompt template (buildBeautifyPrompt API & build_beautify_prompt tool).
+  AI Beautify prompt template (buildBeautifyPrompt), applied inside the generating tools
+  (survey_beautify_station, spatial_ai_render_scene).
   Enforces non-negotiable 3D camera framing rules, canvas aspect ratio, 6-decimal coordinates,
   Google Earth vantage references, and distance-based depth-of-field hints.
 ---
@@ -51,45 +52,14 @@ Transform this photorealistic 3D tiles rendering of {locationName} (camera at co
 
 ---
 
-## 2. In-App Agent Tool (`build_beautify_prompt`)
+## 2. Where the template is applied (no tool call needed)
 
-Gemini and Scratchbox agents can call the registered tool `build_beautify_prompt`:
+The generating tools apply the template themselves, so the agent does not build the prompt first:
 
-### Tool Declaration
-```json
-{
-  "name": "build_beautify_prompt",
-  "description": "Construct the exact AI Beautify instruction prompt to transform a photorealistic 3D tiles rendering into a photorealistic photograph with non-negotiable 3D camera framing rules, matching canvas aspect ratio, and authentic physical materials.",
-  "parameters": {
-    "type": "OBJECT",
-    "properties": {
-      "locationName": { "type": "STRING", "description": "Name of geographic location or architectural landmark" },
-      "coords": { "type": "STRING", "description": "Camera coordinates as 'lat, lng' (e.g. '39.948900, -75.150000')" },
-      "heading": { "type": "NUMBER", "description": "Camera heading azimuth in degrees" },
-      "earthUrl": { "type": "STRING", "description": "Optional Google Earth web vantage reference URL" },
-      "aspectRatio": { "type": "STRING", "description": "Canvas aspect ratio (default: '16:9')" },
-      "moodPromptContext": { "type": "STRING", "description": "Optional atmospheric lighting/weather context" },
-      "distance": { "type": "NUMBER", "description": "Optional approximate subject distance in meters" },
-      "styleSuffix": { "type": "STRING", "description": "Optional caller-supplied style modifiers" }
-    },
-    "required": ["locationName"]
-  }
-}
-```
+- `survey_beautify_station`, `survey_beautify_to_splats`, `survey_beautify_to_texture`: `BeautifyStationService` builds the prompt from the station record with `buildStationBeautifyPrompt` (coordinates, yaw, pitch, lens fov, standoff, horizon, sun) and sends exactly that text to the image model. Pass only `locationName`, `styleSuffix` and `moodPromptContext`.
+- `spatial_ai_render_scene` (a mesh render with no place): `NativeAiRenderEngineService` sends the clay-render variant, `buildClayRenderBeautifyPrompt` (same framing rules, no coordinates, heading or map reference).
 
-### Agent Tool Invocation Example
-```json
-{
-  "locationName": "Midtown Manhattan Empire State Building",
-  "coords": "40.748400, -73.985700",
-  "heading": 42,
-  "distance": 320,
-  "aspectRatio": "16:9",
-  "styleSuffix": " Early morning golden hour light striking limestone facades."
-}
-```
-
----
+The agent tool `build_beautify_prompt` is deprecated and hidden since 2026-10-20 (registered for one release so saved scripts still run); do not name it in new instructions.
 
 ## 3. Codebase API Reference
 

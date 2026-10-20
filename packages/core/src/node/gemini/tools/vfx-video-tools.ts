@@ -65,7 +65,7 @@ const directorService = new MediaPipeVideoDirectorService(editorService);
 export const AI_BEAUTIFY_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'build_beautify_prompt',
-        description: 'Construct the exact AI Beautify instruction prompt to transform a photorealistic 3D tiles rendering into a photorealistic photograph with non-negotiable 3D camera framing rules, matching canvas aspect ratio, and authentic physical materials.',
+        description: 'DEPRECATED (hidden since 2026-10-20; remove after one release): the AI Beautify template is applied automatically by the tools that generate from a render (survey_beautify_station, survey_beautify_to_splats, survey_beautify_to_texture, spatial_ai_render_scene), so there is nothing to build by hand. Still fills the exact AI Beautify prompt for a 3D tiles rendering (locationName, coords, heading, aspectRatio, distance, styleSuffix) when a saved script calls it.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -107,7 +107,7 @@ export const AI_BEAUTIFY_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'build_neutral_performer_prompt',
-        description: 'Construct the exact prompt and negative prompt for image and video creation tools (Google Omni 1.1 / Veo, Imagen 3, Nano Banana 2) strictly adhering to the Prompt Neutrality Contract: zero environmental context (#808080 neutral studio backdrop), zero directional/theatrical lighting (flat shadowless high-CRI illumination), uncropped head-to-toe vertical framing (9:16), and canonical symmetrical A-frame pose (A-pose).',
+        description: 'DEPRECATED (hidden since 2026-10-20; remove after one release): no in-app tool generates performer images or video, so this template has no generation step to run inside; the function buildNeutralPerformerPrompt (omniVideoPromptService.ts) is the template. Still fills the head-to-toe, flat shadowless #808080 studio, symmetrical A-frame pose prompt (subject, wardrobe, aspectRatio, kind, isAFramePose) when a saved script calls it.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -144,7 +144,7 @@ export const AI_BEAUTIFY_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'build_frame_motivated_performer_prompt',
-        description: 'Construct the exact frame-motivated prompt for video creation tools (Google Omni 1.1, Wan2.2-TI2V-5B, SVD) strictly conditioning motion on a reference hero frame (<FIRST_FRAME> syntax), respecting casual natural poses without forcing an A-pose unless specified, camera perspective (front 0°, left 45°, right 45°, rear 180°, or orbit 360°), and neutral shadowless studio lighting.',
+        description: 'DEPRECATED (hidden since 2026-10-20; remove after one release): no in-app tool generates performer video, so this template has no generation step to run inside; the function buildFrameMotivatedPerformerVideoPrompt (omniVideoPromptService.ts) is the template. Still fills the <FIRST_FRAME>/<LAST_FRAME> closed-loop A-pose video prompt (referenceFrameRef, subject, wardrobe, cameraPosition, videoMotion, videoModelBackbone) when a saved script calls it.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -201,6 +201,13 @@ export const AI_BEAUTIFY_TOOL_DECLARATIONS: ToolDeclaration[] = [
         }
     }
 ];
+
+/**
+ * Prompt-template tools: registered but not offered (hidden since 2026-10-20; remove after one release). The
+ * generation paths apply their templates themselves (survey beautify and the mesh render restyle read
+ * buildBeautifyPrompt / buildClayRenderBeautifyPrompt), so the model no longer has to call them first.
+ */
+export const PROMPT_TEMPLATE_TOOL_NAMES: readonly string[] = AI_BEAUTIFY_TOOL_DECLARATIONS.map(d => d.name);
 
 export const aiBeautifyHandlers: Record<string, ToolHandler> = {
     build_beautify_prompt: (args, _ctx) => {
