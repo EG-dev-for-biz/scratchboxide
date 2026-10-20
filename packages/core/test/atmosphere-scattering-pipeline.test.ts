@@ -26,8 +26,7 @@ import {
 import {
     createAtmosphericSkyDome,
     ATMOSPHERE_VERTEX_SHADER,
-    ATMOSPHERE_FRAGMENT_SHADER
-} from '../src/browser/generative-canvas/services/atmosphere/AtmosphericSkyDome';
+    ATMOSPHERE_FRAGMENT_SHADER, layerCoverageForSkyCover } from '../src/browser/generative-canvas/services/atmosphere/AtmosphericSkyDome';
 import {
     createVolumetricGodRays,
     createArticulatedAircraft
@@ -144,7 +143,9 @@ async function runAtmosphericScatteringPipelineTests() {
     assert.strictEqual(shaderMat.uniforms.uRayleigh.value, 0.65);
     assert.strictEqual(shaderMat.uniforms.uMieCoefficient.value, 0.003);
     assert.strictEqual(shaderMat.uniforms.uMieDirectionalG.value, 0.85);
-    assert.strictEqual(shaderMat.uniforms.uCloudCoverage.value, 0.40);
+    // cloudCoverage is sky cover; the shader gets the cumulus layer's plan coverage that shows as that cover.
+    assert.strictEqual(shaderMat.uniforms.uCloudCoverage.value, layerCoverageForSkyCover(0.40));
+    assert.ok(layerCoverageForSkyCover(0.40) > 0 && layerCoverageForSkyCover(0.40) < 0.40, 'plan coverage is below sky cover');
     assert.strictEqual(shaderMat.uniforms.uCloudDensity.value, 0.50);
 
     // Dynamic frame tick update

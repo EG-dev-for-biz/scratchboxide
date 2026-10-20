@@ -7,19 +7,19 @@ description: Launch and drive a live, isolated instance of the Scratchbox IDE de
 
 ## Why this exists
 
-This repo's renderer (`desktop-app/src/main.tsx`) is a plain React app that talks to its backend over `fetch` — it does not need Electron to run. `.claude/launch.json`'s `scratchbox-dev` entry runs it with `SCRATCHBOX_NO_ELECTRON=true`, so the whole app (canvas, Gemini agent, workspace/git) is drivable through the Browser pane like any web app. That means you can click through it, read its console/network, and verify a change actually renders — instead of trusting that code compiles.
+This repo's renderer (`desktop-app/src/main.tsx`) is a plain React app that talks to its backend over `fetch` — it does not need Electron to run. A `.claude/launch.json` entry runs it with `SCRATCHBOX_NO_ELECTRON=true`, so the whole app (canvas, Gemini agent, workspace/git) is drivable through the Browser pane like any web app. That means you can click through it, read its console/network, and verify a change actually renders — instead of trusting that code compiles.
 
-The procedure below exists because the naive version (`preview_start({name: "scratchbox-dev"})` with no changes) breaks in two ways the first time you hit them:
+The procedure below exists because the naive version (starting an entry without checking its ports) breaks in two ways the first time you hit them:
 1. **Port collisions with other running sessions.** This app claims three ports, not one, and a collision on any of them crashes the backend a few seconds *after* it prints a "listening" line — easy to miss if you don't check `preview_logs`.
 2. **A silent wrong-port trap.** The `vite:dev` script hardcodes `--port 3030` as a CLI flag, which overrides the `SCRATCHBOX_WEB_PORT` env var that `vite.config.ts` reads. Vite auto-increments past a busy port rather than honoring your env var, so the port you *asked for* and the port it actually *bound* can differ — never assume, always read it back from the logs.
 
-## 1. Check for a collision before you touch anything
+## 1. Use your own launch entry, never the user's
 
-Call `preview_start({name: "scratchbox-dev"})` first. Two outcomes:
-- **It works and opens a tab** — skip to step 3, you're done with setup.
-- **It errors** `Port <N> is in use by another chat's dev server` — another session already owns that port. Do **not** try to stop it (`preview_stop` can't touch another session's server anyway, and killing someone else's dev server mid-task is destructive). Go to step 2.
+`.claude/launch.json` in the main checkout holds the user's own entries. **`scratchbox-dev` is the user's app** (the newest `origin/main`, run from `.claude/worktrees/latest-main` on ports 3060/3061/3062). Never start, stop or edit `scratchbox-dev`, never use ports 3060-3062, and never touch `.claude/worktrees/latest-main`. `serve-public` (port 5180) is also the user's.
 
-## 2. Pick a free triple of ports and reconfigure
+Add your own entry instead, named after your branch (e.g. `scratchbox-<branch>`), that runs **your** checkout with `npm --prefix <your worktree> run dev`. Remove it when you are done.
+
+## 2. Pick a free triple of ports for your entry
 
 The app needs three free ports simultaneously, or the backend exits with code 1 shortly after claiming to be "listening":
 
@@ -29,15 +29,15 @@ The app needs three free ports simultaneously, or the backend exits with code 1 
 | `PORT` | 3001 | The Express API backend — hard crash, exit code 1 |
 | `SCRATCHBOX_TOOLS_PORT` | 3002 | An isolated "tools" origin the backend also binds — hard crash, exit code 1, with a clear log line: `[Scratchbox Tools] Port <N> is already in use` |
 
-Find a free triple:
+Find a free triple (check the three you intend to use):
 ```bash
-lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | grep -E ':(3030|3031|3032|3001|3011|3012|3002)\b'
+lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | grep -E ':(<web-port>|<api-port>|<tools-port>)\b'
 ```
-Pick three ports not listed as `LISTEN` above (e.g. `3031`/`3011`/`3012` worked the first time this was needed). Then edit `.claude/launch.json`'s `scratchbox-dev` entry:
+Pick three ports nothing is listening on, outside 3060-3062. Then add your entry to `.claude/launch.json`:
 
 ```json
 {
-  "name": "scratchbox-dev",
+  "name": "scratchbox-<branch>",
   "runtimeExecutable": "env",
   "runtimeArgs": [
     "SCRATCHBOX_NO_ELECTRON=true",
@@ -45,15 +45,16 @@ Pick three ports not listed as `LISTEN` above (e.g. `3031`/`3011`/`3012` worked 
     "SCRATCHBOX_WEB_PORT=<web-port>",
     "SCRATCHBOX_TOOLS_PORT=<tools-port>",
     "SCRATCHBOX_ALLOWED_ORIGINS=http://127.0.0.1:<web-port>,http://localhost:<web-port>",
-    "npm", "run", "dev"
+    "npm", "--prefix", "<absolute path of your worktree>", "run", "dev"
   ],
-  "port": <web-port>
+  "port": <web-port>,
+  "autoPort": false
 }
 ```
 
-The `SCRATCHBOX_ALLOWED_ORIGINS` line matters even though nothing asked for it yet: `desktop-app/server/app.ts`'s `resolveAllowedOrigins()` hardcodes only `:3000` and `:3030` as allowed CORS origins by default. Skip this and every mutating API call (POST/PUT, which is most of what the app does) silently fails CORS from any other port — the page loads, looks fine, and nothing works. `.claude/launch.json` is currently untracked (not committed), so editing it doesn't affect anyone else's checkout.
+The `SCRATCHBOX_ALLOWED_ORIGINS` line matters even though nothing asked for it yet: `desktop-app/server/app.ts`'s `resolveAllowedOrigins()` hardcodes only `:3000` and `:3030` as allowed CORS origins by default. Skip this and every mutating API call (POST/PUT, which is most of what the app does) silently fails CORS from any other port — the page loads, looks fine, and nothing works. `.claude/launch.json` is untracked (not committed).
 
-Then call `preview_start({name: "scratchbox-dev"})` again.
+Then call `preview_start({name: "scratchbox-<branch>"})`. If it errors `Port <N> is in use by another chat's dev server`, another session owns that port: do **not** stop it; pick another triple.
 
 ## 3. Get the real port and the auth token — don't assume either
 

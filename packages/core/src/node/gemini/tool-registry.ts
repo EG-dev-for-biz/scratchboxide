@@ -45,12 +45,15 @@ import {
     utdraHandlers,
     VFX_VIDEO_TOOL_DECLARATIONS,
     vfxVideoHandlers,
+    PROMPT_TEMPLATE_TOOL_NAMES,
     AI_BEAUTIFY_TOOL_DECLARATIONS,
     aiBeautifyHandlers,
     ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS,
     adaptiveMatchmoveHandlers,
     NANO_BANANA_TOOL_DECLARATIONS,
     nanoBananaHandlers,
+    IMAGE_GENERATION_TOOL_DECLARATIONS,
+    imageGenerationHandlers,
     ALGORITHMIC_UV_TOOL_DECLARATIONS,
     algorithmicUvHandlers,
     ATMOSPHERE_TOOL_DECLARATIONS,
@@ -63,6 +66,7 @@ import {
     webxrGeospatialHandlers,
     GEOBOX_PRECISION_TOOL_DECLARATIONS,
     geoboxPrecisionHandlers,
+    GEOBOX_RESECTION_ALIAS_TOOL_NAMES,
     OPTICS_LENS_DISTORTION_TOOL_DECLARATIONS,
     opticsLensDistortionHandlers,
     BOTANICAL_TREE_TOOL_DECLARATIONS,
@@ -121,6 +125,21 @@ interface ToolRegistration {
 
 export interface ToolRegistrationOptions {
     offeredByDefault?: boolean;
+}
+
+/**
+ * Deprecated tool names: registered so saved scripts and chats still dispatch them, but not offered to the model
+ * (hidden since 2026-10-20; remove after one release). Each one's description says what replaces it: the kept
+ * tool for an alias, or the generation path that now applies a prompt template itself.
+ */
+export const DEPRECATED_TOOL_ALIASES: ReadonlySet<string> = new Set<string>([
+    ...GEOBOX_RESECTION_ALIAS_TOOL_NAMES,
+    ...PROMPT_TEMPLATE_TOOL_NAMES
+]);
+
+/** Registration options for a declaration: hidden when its name is a deprecated alias. */
+function offeredUnlessDeprecated(name: string): ToolRegistrationOptions {
+    return { offeredByDefault: !DEPRECATED_TOOL_ALIASES.has(name) };
 }
 
 interface GroupPresentation {
@@ -403,7 +422,7 @@ export class ToolRegistry {
             }
         }
         return Array.from(this.tools.values())
-            .filter(t => toolNames.has(t.name))
+            .filter(t => t.offeredByDefault && toolNames.has(t.name))
             .map(t => sanitizeToolDeclaration(t.declaration));
     }
 
@@ -636,10 +655,13 @@ export function createDefaultToolRegistry(): ToolRegistry {
         registry.register(decl.name, decl, adaptiveMatchmoveHandlers[decl.name], 'workspace');
     }
     for (const decl of VFX_VIDEO_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, vfxVideoHandlers[decl.name], 'workspace');
+        registry.register(decl.name, decl, vfxVideoHandlers[decl.name], 'workspace', offeredUnlessDeprecated(decl.name));
     }
     for (const decl of NANO_BANANA_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, nanoBananaHandlers[decl.name], 'workspace');
+    }
+    for (const decl of IMAGE_GENERATION_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, imageGenerationHandlers[decl.name], 'workspace');
     }
     for (const decl of ALGORITHMIC_UV_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, algorithmicUvHandlers[decl.name], 'workspace');
@@ -657,7 +679,7 @@ export function createDefaultToolRegistry(): ToolRegistry {
         registry.register(decl.name, decl, webxrGeospatialHandlers[decl.name], 'workspace');
     }
     for (const decl of GEOBOX_PRECISION_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, geoboxPrecisionHandlers[decl.name], 'workspace');
+        registry.register(decl.name, decl, geoboxPrecisionHandlers[decl.name], 'workspace', offeredUnlessDeprecated(decl.name));
     }
     for (const decl of OPTICS_LENS_DISTORTION_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, opticsLensDistortionHandlers[decl.name], 'workspace');

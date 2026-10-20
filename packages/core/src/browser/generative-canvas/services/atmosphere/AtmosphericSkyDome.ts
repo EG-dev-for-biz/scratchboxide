@@ -18,9 +18,11 @@ import { kelvinToRGB } from './kelvin';
 import {
     computeDiurnalLightingProfile,
     getDiurnalLightingState,
+    skyLightColorHex,
     getPresetLightingState
 } from './diurnal-lighting';
 import { getSunVectorFromAngles } from './solar-position';
+import { buildPhysicalSkyLut } from './physical-sky';
 import { cloudShellUniformArrays, cloudShellWindSpeeds, MAX_CLOUD_SHELL_LAYERS, resolveCloudShellLayers } from './cloud-shell-layers';
 import { MissingInputError } from '../../../../common/errors/pipeline-errors';
 
@@ -54,6 +56,12 @@ uniform float uCloudCoverage;
 uniform float uCloudDensity;
 uniform float uCloudAltitude;
 uniform float uTime;
+
+// Physical sky (physical-sky.ts): radiance over (azimuth from the sun / pi, sqrt(elevation / 90°)), scaled so its
+// light on a level surface equals the scene's sky light. uPhysicalSkyWeight fades to the night palette below -6°.
+uniform sampler2D uSkyLut;
+uniform float uSkyScale;
+uniform float uPhysicalSkyWeight;
 
 // Shell cloud decks (CloudShellLayer), highest first. A: base, thickness, coverage, optical depth.
 // B: feature size, elongation, heading (rad), HG g. C: albedo rgb, shell count.
@@ -122,7 +130,7 @@ float snoise(vec3 v) {
     float n_ = 0.142857142857;
     vec3 ns = n_ * D.wyz - D.xzx;
 
-    vec4 j = p - 49.0 * floor(p * ns.z);
+    vec4 j = p - 49.0 * floor(p * ns.z * ns.z); // mod(p, 49); the missing ns.z blew snoise up to ~1e5
 
     vec4 x_ = floor(j * ns.z);
     vec4 y_ = floor(j - 7.0 * x_);
@@ -171,11 +179,12 @@ float fBm3D(vec3 p) {
 }
 
 // 3D Worley (Cellular) Noise Function
+// Sine-free hash (Hoskins): fract(sin(x) * 43758) loses its precision on GPUs once the cloud coordinates reach the
+// thousands, collapsing whole regions of cells to one value (a smooth dome and lens-shaped blobs in the cumulus).
 vec3 hash33(vec3 p) {
-    p = vec3(dot(p, vec3(127.1, 311.7, 74.7)),
-             dot(p, vec3(269.5, 183.3, 246.1)),
-             dot(p, vec3(113.5, 271.9, 124.6)));
-    return fract(sin(p) * 43758.5453123);
+    vec3 p3 = fract(p * vec3(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yxz + 33.33);
+    return fract((p3.xxy + p3.yxx) * p3.zyx);
 }
 
 float worley3D(vec3 p) {
@@ -241,6 +250,49 @@ float shellFbm(vec2 p, float octaves) {
     return sum / max(norm, 1e-4);
 }
 
+
+#define CUMULUS_THICKNESS 1800.0
+// Inverse CDF of perlinWorley3D, measured on the GPU: 0-90% in 10% steps, then 95%, and the tail to 100%.
+float perlinWorleyQuantile(float q) {
+    q = clamp(q, 0.0, 1.0);
+    if (q >= 0.95) return mix(0.6705, 0.80, (q - 0.95) / 0.05);
+    if (q >= 0.9) return mix(0.6301, 0.6705, (q - 0.9) / 0.05);
+    float x = q * 10.0;
+    int i = int(min(floor(x), 8.0));
+    float f = x - float(i);
+    float a = 0.0759, b = 0.3328;
+    if (i == 1) { a = 0.3328; b = 0.3828; } else if (i == 2) { a = 0.3828; b = 0.4198; } else if (i == 3) { a = 0.4198; b = 0.4516; }
+    else if (i == 4) { a = 0.4516; b = 0.4815; } else if (i == 5) { a = 0.4815; b = 0.5115; } else if (i == 6) { a = 0.5115; b = 0.5435; }
+    else if (i == 7) { a = 0.5435; b = 0.5803; } else if (i == 8) { a = 0.5803; b = 0.6301; }
+    return mix(a, b, f);
+}
+float remapClamped(float v, float l0, float h0, float l1, float h1) {
+    return clamp(l1 + (v - l0) * (h1 - l1) / max(h0 - l0, 1e-4), min(l1, h1), max(l1, h1));
+}
+// Cumulus density at world point p (metres from the observer); h is the normalised height in the layer.
+// detail 0-1: the erosion's weight (fades with distance, where it would only alias; 0 for the light march).
+float cumulusDensity(vec3 p, float detail, out float h) {
+    float alt = length(p + vec3(0.0, 6371000.0, 0.0)) - 6371000.0;
+    h = (alt - uCloudAltitude) / CUMULUS_THICKNESS;
+    if (h <= 0.0 || h >= 1.0) return 0.0;
+    vec3 drift = vec3(uTime * 8.0, 0.0, uTime * 3.0);
+    vec3 w = p + drift;
+    // Coverage -> threshold through the base noise's measured quantiles, so cloudCoverage is the cloud fraction of
+    // the layer. Weather (fields ~6 km across) shifts the threshold so the sky is patchy; the threshold rises with
+    // height so towers narrow and close at the top.
+    float weather = fBm3D(vec3(w.x * 0.00016, h * 0.6, w.z * 0.00016));
+    float baseThreshold = perlinWorleyQuantile(1.0 - uCloudCoverage) - (weather - 0.5) * 0.6;
+    float topThreshold = perlinWorleyQuantile(1.0 - uCloudCoverage * 0.12) + 0.06;
+    float threshold = mix(baseThreshold, topThreshold, smoothstep(0.1, 1.0, h));
+    float base = perlinWorley3D(vec3(w.x, w.y * 1.6, w.z) * 0.0006, uTime);
+    float shape = remapClamped(base, threshold, threshold + 0.07, 0.0, 1.0) * smoothstep(0.0, 0.04, h);
+    if (detail <= 0.0 || shape <= 0.0) return shape;
+    // Erosion: wispy (worley) at the base, billowy (inverted worley: cauliflower puffs) toward the tops.
+    float wf = worley3D(w * 0.0035) * 0.625 + worley3D(w * 0.0081) * 0.25 + worley3D(w * 0.017) * 0.125;
+    float erode = mix(wf, 1.0 - wf, smoothstep(0.1, 0.6, h));
+    return remapClamped(shape, erode * 0.55 * detail, 1.0, 0.0, 1.0);
+}
+
 // Composites the shell cloud decks over the sky colour, back to front. Each shell is a sphere concentric with the Earth,
 // so a deck converges on the horizon instead of running to infinity. A shell's radiance is single scattering of the
 // sun that reaches it through the deck above (Beer-Lambert, two-lobe Henyey-Greenstein phase), the diffuse sunlight a
@@ -303,6 +355,15 @@ vec3 compositeCloudShells(vec3 sky, vec3 rayDir, float cosViewSun, vec3 ambient)
     return sky;
 }
 
+vec3 physicalSkyRadiance(vec3 dir) {
+    vec2 flatSun = uSunDirection.xz;
+    vec2 flatDir = dir.xz;
+    float relAz = (length(flatSun) > 1e-4 && length(flatDir) > 1e-4) ? acos(clamp(dot(normalize(flatSun), normalize(flatDir)), -1.0, 1.0)) : 1.5707963;
+    float el = asin(clamp(dir.y, 0.0, 1.0));
+    vec2 uv = vec2(relAz / 3.14159265, sqrt(el / 1.5707963));
+    return texture2D(uSkyLut, uv).rgb * uSkyScale;
+}
+
 void main() {
     vec3 rayDir = normalize(vWorldPosition);
     float cosViewSun = dot(rayDir, uSunDirection);
@@ -347,10 +408,23 @@ void main() {
 
     // Soft vertical sky gradient
     float skyGradient = pow(1.0 - max(0.0, upFactor), 2.2);
+    // The palette was authored as display colours (the dome used to skip tone mapping); convert to scene-referred
+    // values that display the same through ACES: sRGB to linear, over ACES's slope near black (~0.172).
+    zenithColor = pow(max(zenithColor, 0.0), vec3(2.2)) / 0.172;
+    horizonColor = pow(max(horizonColor, 0.0), vec3(2.2)) / 0.172;
     vec3 skyColor = mix(zenithColor, horizonColor, skyGradient);
 
-    // Low-sun directional horizon glow
-    if (sunH > -0.05 && sunH < 0.28) {
+    // Physical sky: replaces the palette (and its zenith/horizon colours, which light the clouds) while the sun is
+    // within 6° below the horizon; deeper night keeps the palette.
+    if (uPhysicalSkyWeight > 0.0) {
+        vec3 side = normalize(vec3(-uSunDirection.z, 0.0, uSunDirection.x) + vec3(1e-4, 0.0, 0.0));
+        zenithColor = mix(zenithColor, physicalSkyRadiance(vec3(0.0, 1.0, 0.0)), uPhysicalSkyWeight);
+        horizonColor = mix(horizonColor, physicalSkyRadiance(normalize(side + vec3(0.0, 0.05, 0.0))), uPhysicalSkyWeight);
+        skyColor = mix(skyColor, physicalSkyRadiance(rayDir), uPhysicalSkyWeight);
+    }
+
+    // Low-sun directional horizon glow (the physical sky has its own)
+    if (uPhysicalSkyWeight < 1.0 && sunH > -0.05 && sunH < 0.28) {
         float sunGlow = pow(max(0.0, cosViewSun), 6.0) * pow(1.0 - max(0.0, upFactor), 2.0);
         skyColor += uSunColor * sunGlow * 0.4;
     }
@@ -368,7 +442,9 @@ void main() {
         float softGlare = pow(max(0.0, cosViewSun), 128.0) * 1.2 + pow(max(0.0, cosViewSun), 16.0) * 0.25;
 
         vec3 directSunRadiance = uSunColor * uSunIntensity * sunVisibility;
-        vec3 physicalSun = (sunDisc * 12.0 + softGlare + miePhase * uMieCoefficient * 25.0) * directSunRadiance;
+        // The physical sky already holds the aureole; the palette sky draws its own glare.
+        float glare = (softGlare + miePhase * uMieCoefficient * 25.0) * (1.0 - uPhysicalSkyWeight);
+        vec3 physicalSun = (sunDisc * 12.0 + glare) * directSunRadiance;
 
         skyColor += physicalSun;
     }
@@ -376,124 +452,87 @@ void main() {
     // --- 2b. SHELL CLOUD DECKS (behind the volumetric layer; they dim the sun disc they cross) ---
     skyColor = compositeCloudShells(skyColor, rayDir, cosViewSun, mix(zenithColor, horizonColor, 0.5) * 0.9);
 
-    // --- 3. TRUE 3D VOLUMETRIC CUMULUS BILLOW DOME CLOUDS ---
-    if (uCloudCoverage > 0.01 && rayDir.y > 0.005) {
-        float skyFade = smoothstep(0.005, 0.18, rayDir.y);
-
-        // Altitude shell bounds: uCloudAltitude to uCloudAltitude + 1800.0m in world/sky space
-        float bottomAlt = uCloudAltitude;
-        float shellThickness = 1800.0;
-        float topAlt = bottomAlt + shellThickness;
-
-        // Ray intersection with spherical sky shell bounds
-        float tBottom = getAtmosphereDistance(rayDir, bottomAlt);
-        float tTop = getAtmosphereDistance(rayDir, topAlt);
-
-        float rayLength = max(100.0, tTop - tBottom);
-        int numSteps = 24;
-        float stepSize = rayLength / float(numSteps);
-
-        // Smooth screen-space Bayer matrix dither pattern offset
-        float jitter = (bayer4x4(gl_FragCoord.xy) - 0.5) * 0.08;
-
-        float totalAccDensity = 0.0;
-        vec3 accCloudColor = vec3(0.0);
-        float transmittance = 1.0;
-
-        // Multi-step 3D volumetric raymarching loop
-        for (int i = 0; i < 24; i++) {
-            float fi = float(i) + jitter;
-            float t = tBottom + stepSize * fi;
-            vec3 pos = rayDir * t;
-
-            // Normalized height coordinate z in [0, 1] within cloud altitude shell
-            float z = clamp((pos.y - bottomAlt) / shellThickness, 0.0, 1.0);
-
-            // Convective Cumulus Height Shaping Function H(z)
-            float baseShape = smoothstep(0.02, 0.18, z);
-            float topShape = smoothstep(0.98, 0.55, z);
-            float heightShaping = baseShape * topShape * (1.0 + 0.3 * sin(z * 3.14159));
-
-            // 3D World-space sampling coordinates with wind drift
-            vec3 cloudCoord = pos * 0.00020 + vec3(uTime * 0.004, 0.0, uTime * 0.002);
-
-            // Base multi-scale 3D Perlin-Worley noise evaluation
-            float pwNoise = perlinWorley3D(cloudCoord, uTime);
-
-            // Coverage thresholding with smooth transition range
-            float threshold = 1.0 - clamp(uCloudCoverage, 0.0, 0.98) * 0.85;
-            float rawShape = smoothstep(threshold - 0.22, threshold + 0.22, pwNoise);
-
-            // Apply vertical height shaping H(z)
-            float shapedDensity = rawShape * heightShaping;
-
-            // High-octave 3D Worley detail erosion pass forming billowy cumulus cauliflower puffs
-            float wLow = worley3D(cloudCoord * 5.0 + vec3(uTime * 0.005, uTime * 0.002, 0.0));
-            float wMid = worley3D(cloudCoord * 12.0 - vec3(0.0, uTime * 0.004, uTime * 0.006));
-            float wHigh = worley3D(cloudCoord * 24.0 + vec3(uTime * 0.003, uTime * 0.005, uTime * 0.002));
-            float detailWorley = wLow * 0.50 + wMid * 0.35 + wHigh * 0.15;
-
-            float edgeModifier = smoothstep(0.0, 0.70, shapedDensity) * (1.0 - shapedDensity);
-            float erodedDensity = shapedDensity - (1.0 - detailWorley) * edgeModifier * 0.42;
-
-            float density = max(0.0, erodedDensity) * uCloudDensity;
-
-            if (density > 0.001) {
-                // Shadow sample ray towards sun for internal optical depth calculation
-                vec3 sunDir = normalize(uSunDirection + vec3(0.0, 0.10, 0.0));
-                vec3 shadowPos = cloudCoord + sunDir * 0.15;
-                float shadowPW = perlinWorley3D(shadowPos, uTime);
-                float shadowRaw = smoothstep(threshold - 0.22, threshold + 0.22, shadowPW);
-                float zShadow = clamp((pos.y + sunDir.y * 250.0 - bottomAlt) / shellThickness, 0.0, 1.0);
-                float shadowDensity = shadowRaw * (smoothstep(0.02, 0.18, zShadow) * smoothstep(0.98, 0.55, zShadow)) * uCloudDensity;
-
-                // Internal optical depth tau
-                float tau = shadowDensity * 4.2;
-
-                // Beer-Lambert extinction & Beer-Powder attenuation
-                float beerLambert = exp(-tau * (1.0 + uCloudDensity * 2.2));
-                float beerPowder = 2.0 * exp(-tau) * (1.0 - exp(-2.0 * tau));
-                float selfShadow = mix(beerLambert, beerPowder, 0.70);
-
-                // Henyey-Greenstein anisotropic phase scattering facing uSunDirection
-                float forwardG = uIsGoldenHour ? 0.86 : 0.80;
-                float hgForward = henyeyGreenstein(cosViewSun, forwardG);
-                float hgBackward = henyeyGreenstein(cosViewSun, -0.25);
-                float phase = mix(hgBackward, hgForward, 0.82);
-
-                // Soft forward-scattered silver linings
-                float rimFactor = smoothstep(0.02, 0.30, density) * (1.0 - smoothstep(0.30, 0.80, density));
-                float goldenGlowBoost = (uIsGoldenHour || sunH < 0.15) ? 2.8 : 1.5;
-                float silverLining = rimFactor * pow(max(0.0, cosViewSun * 0.5 + 0.5), 2.5) * hgForward * goldenGlowBoost;
-
-                // Directional solar lighting & soft sky ambient integration
-                float skyHeightShading = mix(0.35, 1.0, z);
-                vec3 cloudSunLight = uSunColor * uSunIntensity * (selfShadow * 1.25 + silverLining * 1.8 + phase * 0.20);
-                vec3 cloudAmbient = mix(zenithColor, horizonColor, 0.40) * skyHeightShading;
-
-                vec3 cloudBaseShade = mix(vec3(0.25, 0.28, 0.38), vec3(0.95, 0.97, 1.0), selfShadow);
-                vec3 stepColor = cloudBaseShade * (cloudSunLight + cloudAmbient * 0.90);
-
-                // Step optical integration
-                float stepOpticalDepth = density * 1.25;
-                float stepAlpha = 1.0 - exp(-stepOpticalDepth);
-
-                accCloudColor += stepColor * stepAlpha * transmittance;
-                transmittance *= (1.0 - stepAlpha);
-                totalAccDensity += density;
-
-                if (transmittance < 0.02) break;
+    // --- 3. VOLUMETRIC CUMULUS ---
+    // Raymarched cumulus layer (after Schneider's Nubis): a weather field decides where cloud fields form, a cumulus
+    // height profile (flat base, rounded taper) on the curved Earth shapes them, worley detail erodes the edges.
+    // Light: a short march toward the sun (Beer-Lambert), Wrenninge's multiple-scattering octaves over a two-lobe
+    // phase, and the physical sky's light from above. Energy-conserving step integration; distant cloud fades into haze.
+    if (uCloudCoverage > 0.01 && rayDir.y > 0.01) {
+        float tStart = getAtmosphereDistance(rayDir, uCloudAltitude);
+        float tEnd = min(getAtmosphereDistance(rayDir, uCloudAltitude + CUMULUS_THICKNESS), tStart + 30000.0);
+        if (tStart < 90000.0) {
+            // About one step per 60 m of path (24-64 steps; double steps through clear air), jittered per pixel by interleaved gradient noise so
+            // the steps do not show as striations.
+            float pathLen = tEnd - tStart;
+            int steps = int(clamp(pathLen / 60.0, 24.0, 64.0));
+            float dt = pathLen / float(steps);
+            float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+            float t = tStart + dt * ign;
+            // Extinction: 0.25/m at density 1, 0.11/m at the default 0.45 (cumulus: 1.5 LWC / (rho_w r_eff) with
+            // 0.5-1 g/m^3 of liquid water in ~10 um droplets gives 0.05-0.15/m).
+            float sigmaT = 0.25 * uCloudDensity;
+            vec3 sunE = uSunColor * uSunIntensity * smoothstep(-0.02, 0.04, uSunDirection.y);
+            vec3 L = vec3(0.0);
+            float T = 1.0;
+            bool skipped = false;
+            // Back-ups after a skipped stride use iterations but not steps, so the loop has headroom.
+            for (int i = 0; i < 96; i++) {
+                if (t > tEnd) break;
+                vec3 p = rayDir * t;
+                float h;
+                float d = cumulusDensity(p, 1.0 - smoothstep(8000.0, 25000.0, t), h);
+                if (d > 0.002 && skipped) {
+                    // A double stride landed inside cloud: back up half of it once so the cloud's edge is not stepped over.
+                    skipped = false;
+                    t -= dt;
+                    continue;
+                }
+                if (d > 0.002) {
+                    // Optical depth toward the sun over ~3.8 km (6 doubling steps, shape only): deep enough that a
+                    // backlit cloud's core goes dark while its thin rim stays bright.
+                    float od = 0.0, ls = 60.0, lt = 0.0;
+                    for (int k = 0; k < 6; k++) {
+                        lt += ls;
+                        float hh;
+                        od += cumulusDensity(p + uSunDirection * lt, 0.0, hh) * ls;
+                        ls *= 2.0;
+                    }
+                    // Direct beam (single scattering, two-lobe phase) plus the multiply scattered light that diffuses
+                    // through the cloud (two-stream transmission, isotropic re-scatter; gain 3 makes a deep cloud
+                    // reflect ~80% of the sun like a white surface, as sunlit cumulus does).
+                    float tauSun = sigmaT * od;
+                    float ph = mix(henyeyGreenstein(cosViewSun, 0.8), henyeyGreenstein(cosViewSun, -0.3), 0.3);
+                    float diffuseT = 1.0 / (1.0 + 0.75 * (1.0 - 0.85) * tauSun);
+                    // Multiply scattered light keeps part of the droplets' forward bias (Wrenninge: g halves per octave).
+                    float msPhase = mix(1.0, henyeyGreenstein(cosViewSun, 0.4) * 12.566371, 0.5);
+                    vec3 sunL = sunE * (exp(-tauSun) * ph + diffuseT * msPhase * 3.0 / 12.566371);
+                    // Sky light: the zenith's on the tops, the darker horizon/ground light under the base.
+                    // A cloud sees the sky, other cloud and the ground, so its ambient light is half desaturated.
+                    vec3 skyAmb = mix(horizonColor * 0.5, zenithColor * 1.2, h);
+                    vec3 ambient = mix(skyAmb, vec3(dot(skyAmb, vec3(0.2126, 0.7152, 0.0722))), 0.5) * mix(0.6, 1.0, diffuseT);
+                    float sT = sigmaT * d;
+                    vec3 S = sT * (sunL + ambient);
+                    float stepT = exp(-sT * dt);
+                    L += T * (S - S * stepT) / max(sT, 1e-6);
+                    T *= stepT;
+                    if (T < 0.01) break;
+                    t += dt;
+                } else {
+                    // Clear air: stride twice as far until cloud is met.
+                    t += dt * 2.0;
+                    skipped = true;
+                }
             }
+            vec3 clouded = skyColor * T + L;
+            // Aerial perspective: distant cloud sinks into the haze (e-folding 25 km), forming a soft horizon bank.
+            skyColor = mix(clouded, skyColor, 1.0 - exp(-tStart / 25000.0));
         }
-
-        float finalDensity = clamp(totalAccDensity, 0.0, 1.0);
-        float distanceFade = smoothstep(60000.0, 15000.0, tBottom);
-        float cloudAlpha = clamp(pow(max(0.0, finalDensity), 1.4) * skyFade * distanceFade, 0.0, 0.98);
-
-        skyColor = mix(skyColor, accCloudColor, cloudAlpha);
     }
 
     gl_FragColor = vec4(skyColor, 1.0);
+    // Scene-referred like every other material: the renderer's tone mapping and output colour space apply here too.
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
 }
 `;
 
@@ -547,6 +586,25 @@ export function directSunColor(profile: DiurnalLightingProfile, config: Atmosphe
     return tint.multiply(kelvinToRGB(kelvin));
 }
 
+/**
+ * Sky cover seen from the ground (15-85° up) for each plan coverage of the cumulus layer, measured on this renderer
+ * (suns 25/45/65°, four cloud positions; sd <= 0.06). Cloud sides fill sky, so a little plan cover shows as a lot.
+ */
+const CUMULUS_SKY_COVER: Array<[number, number]> = [
+    [0, 0], [0.01, 0.032], [0.025, 0.235], [0.05, 0.392], [0.075, 0.452], [0.1, 0.512], [0.15, 0.586], [0.2, 0.657],
+    [0.3, 0.757], [0.4, 0.829], [0.5, 0.873], [0.6, 0.908], [0.7, 0.938], [0.8, 0.963], [0.9, 0.984], [1, 1]
+];
+
+/** Plan coverage of the cumulus layer that shows as `skyCover` of the sky (the measured table, inverted). */
+export function layerCoverageForSkyCover(skyCover: number): number {
+    const f = Math.min(1, Math.max(0, skyCover));
+    for (let i = 1; i < CUMULUS_SKY_COVER.length; i++) {
+        const [l0, f0] = CUMULUS_SKY_COVER[i - 1], [l1, f1] = CUMULUS_SKY_COVER[i];
+        if (f <= f1) return l0 + ((l1 - l0) * (f - f0)) / Math.max(1e-9, f1 - f0);
+    }
+    return 1;
+}
+
 export function createAtmosphericSkyDome(
     scene: THREE.Scene,
     isSunset: boolean = false,
@@ -567,7 +625,8 @@ export function createAtmosphericSkyDome(
         ? config.sunAzimuth
         : (isSunset ? 260.0 : (timedSun ? timedSun.sunAzimuth : 180.0));
 
-    const beamOptions = { turbidity: config.turbidity };
+    // The lighting assumes the same cloud cover the dome draws.
+    const beamOptions = { turbidity: config.turbidity, cloudCoverage: config.cloudCoverage ?? (config.volumetricClouds === true ? 0.35 : 0) };
     let diurnalProfile = timedSun ?? computeDiurnalLightingProfile(initialElev, beamOptions);
     let sunDirection = getSunVectorFromAngles(initialElev, initialAzim);
     const effectiveSunColor = directSunColor(diurnalProfile, config, isSunset);
@@ -587,7 +646,9 @@ export function createAtmosphericSkyDome(
         uMieDirectionalG: { value: config.mieDirectionalG ?? 0.82 },
 
         // Zero Default Clouds: Only render clouds if explicitly enabled or coverage is passed
-        uCloudCoverage: { value: config.cloudCoverage ?? (config.volumetricClouds === true ? 0.35 : 0.0) },
+        // cloudCoverage is the sky cover an observer sees; the layer's own (plan) coverage is lower because cloud
+        // sides fill sky too (measured table, layerCoverageForSkyCover).
+        uCloudCoverage: { value: layerCoverageForSkyCover(config.cloudCoverage ?? (config.volumetricClouds === true ? 0.35 : 0.0)) },
         uCloudDensity: { value: config.cloudDensity ?? (config.volumetricClouds === true ? 0.45 : 0.0) },
         uCloudAltitude: { value: config.cloudAltitude ?? 1200.0 },
         uTime: { value: 0.0 },
@@ -600,7 +661,38 @@ export function createAtmosphericSkyDome(
 
         uIsNight: { value: diurnalProfile.isNight },
         uIsGoldenHour: { value: diurnalProfile.isGoldenHour || isSunset },
-        uIsTwilight: { value: diurnalProfile.isTwilight }
+        uIsTwilight: { value: diurnalProfile.isTwilight },
+
+        uSkyLut: { value: null as THREE.DataTexture | null },
+        uSkyScale: { value: 0 },
+        uPhysicalSkyWeight: { value: 0 }
+    };
+
+    // The physical sky for the current sun, scaled so the dome lights a level surface as the scene's sky light does.
+    let skyLutTexture: THREE.DataTexture | undefined;
+    const applyPhysicalSky = (elevDeg: number) => {
+        const weight = THREE.MathUtils.smoothstep(elevDeg, -10, -6);
+        uniforms.uPhysicalSkyWeight.value = weight;
+        if (weight <= 0) return;
+        const lut = buildPhysicalSkyLut({ sunElevationDeg: elevDeg, turbidity: config.turbidity ?? diurnalProfile.turbidity ?? 2 });
+        const W = lut.azimuthResolution, H = lut.elevationResolution;
+        const rgba = new Float32Array(W * H * 4);
+        for (let i = 0; i < W * H; i++) { rgba[i * 4] = lut.data[i * 3]; rgba[i * 4 + 1] = lut.data[i * 3 + 1]; rgba[i * 4 + 2] = lut.data[i * 3 + 2]; rgba[i * 4 + 3] = 1; }
+        if (!skyLutTexture || skyLutTexture.image.width !== W || skyLutTexture.image.height !== H) {
+            skyLutTexture?.dispose();
+            skyLutTexture = new THREE.DataTexture(rgba, W, H, THREE.RGBAFormat, THREE.FloatType);
+            skyLutTexture.magFilter = THREE.LinearFilter;
+            skyLutTexture.minFilter = THREE.LinearFilter;
+            skyLutTexture.wrapS = THREE.ClampToEdgeWrapping;
+            skyLutTexture.wrapT = THREE.ClampToEdgeWrapping;
+        } else {
+            (skyLutTexture.image.data as Float32Array).set(rgba);
+        }
+        skyLutTexture.needsUpdate = true;
+        uniforms.uSkyLut.value = skyLutTexture;
+        const e = lut.horizontalIrradiance;
+        const skyLightLevel = diurnalProfile.skyLightIntensity * hemiLight.color.r * 0.2126 + diurnalProfile.skyLightIntensity * hemiLight.color.g * 0.7152 + diurnalProfile.skyLightIntensity * hemiLight.color.b * 0.0722;
+        uniforms.uSkyScale.value = skyLightLevel / Math.max(1e-12, 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2]);
     };
 
     const applyCloudLayers = (layers: unknown) => {
@@ -644,12 +736,13 @@ export function createAtmosphericSkyDome(
 
     // Dynamic Hemisphere Sky & Ground Ambient Bounce Light
     const hemiLight = new THREE.HemisphereLight(
-        diurnalProfile.isGoldenHour ? 0xfdba74 : (diurnalProfile.isNight ? 0x1a243d : 0xe0f2fe),
+        skyLightColorHex(diurnalProfile),
         groundBounceColor(diurnalProfile, initialElev),
         diurnalProfile.skyLightIntensity
     );
     hemiLight.name = 'AtmosphericHemisphereLight';
     scene.add(hemiLight);
+    applyPhysicalSky(initialElev);
 
     // Physical Directional Sunlight
     const sunLight = new THREE.DirectionalLight(
@@ -691,8 +784,9 @@ export function createAtmosphericSkyDome(
         sunLight.castShadow = diurnalProfile.castShadows;
 
         hemiLight.intensity = diurnalProfile.skyLightIntensity;
-        hemiLight.color.set(diurnalProfile.isGoldenHour ? 0xfdba74 : (diurnalProfile.isNight ? 0x1a243d : 0xe0f2fe));
+        hemiLight.color.set(skyLightColorHex(diurnalProfile));
         hemiLight.groundColor.copy(groundBounceColor(diurnalProfile, elevDeg));
+        applyPhysicalSky(elevDeg);
     };
 
     return {
@@ -728,6 +822,7 @@ export function createAtmosphericSkyDome(
             scene.remove(sunLight);
             skyGeo.dispose();
             skyMat.dispose();
+            skyLutTexture?.dispose();
             sunGeo.dispose();
             sunMat.dispose();
         }

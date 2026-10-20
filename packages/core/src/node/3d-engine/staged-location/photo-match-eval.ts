@@ -38,7 +38,10 @@
  * Trees (`loadArmLayer`, `armMeshesForView`, tree-lod-view.ts): a trees GLB of the tree LOD contract holds every level of every
  * tree and instanced leaves the viewport resolves at run time; with `treeLod` (on by default) each view draws one level per tree,
  * chosen by the viewport's rule for that camera (on-screen size and place in the frame), with its leaf instances expanded.
- * `treeLod: false` draws every level at once (the old behaviour, for comparison).
+ * `treeLod: false` draws every level at once (the old behaviour, for comparison). Leaves and crown cards are alpha-tested as the
+ * viewport's materials test them (tree-lod-view.ts cut-outs): the cards' leaf spray in both renders, a textured tree's leaves
+ * cut out of its library leaf set in the textured render. Their colour stays the GLB's (the library's colour and tints are
+ * not drawn).
  *
  * Nothing here knows a place or a pipeline; the arms are whatever GLBs the caller names. The photos must not have been used
  * to texture or register any arm: the caller holds them out (the bake-off driver checks the pano ids).
@@ -51,7 +54,7 @@ import { distanceTransform, gaussianBlur } from '../../spatial/StreetViewPoseReg
 import { chamferMean, FIT_CHAMFER_TRUNCATION_PX, reducedLuminance, structuralEdges } from './texture-fit-metric';
 import { deltaE00, linearToLab } from './texel-exposure';
 import { encodePng } from './png-encode';
-import { readTileTriangles, type TileTriangles } from './tile-texture-transfer';
+import { readTileTriangles, type CutoutAlphaMap, type CutoutKind, type TileTriangles } from './tile-texture-transfer';
 import { readTreesLodGlb, treesForView, type TreesForView, type TreesLodGlb } from './tree-lod-view';
 import type { TreeLodViewInput } from '../../../common/spatial/tree-lod-math';
 
@@ -141,10 +144,34 @@ function clipNear(poly: CamVertex[], near: number): CamVertex[] {
     return out;
 }
 
+/** Bilinear alpha of one mip level at (u, v), clamped (row 0 at v = 0). */
+function alphaBilinear(m: CutoutAlphaMap['mips'][number], u: number, v: number): number {
+    const x = u * m.width - 0.5, y = v * m.height - 0.5;
+    const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+    const xa = Math.max(0, Math.min(m.width - 1, x0)), xb = Math.max(0, Math.min(m.width - 1, x0 + 1));
+    const ya = Math.max(0, Math.min(m.height - 1, y0)), yb = Math.max(0, Math.min(m.height - 1, y0 + 1));
+    const a = m.alpha;
+    return (a[ya * m.width + xa] * (1 - fx) + a[ya * m.width + xb] * fx) * (1 - fy) + (a[yb * m.width + xa] * (1 - fx) + a[yb * m.width + xb] * fx) * fy;
+}
+
+/** A cut-out's atlas coordinates at a triangle's TEXCOORD_0 (u, v), or undefined outside a leaf's cell. */
+function cutoutUv(k: CutoutKind, u: number, v: number, out: Float64Array): boolean {
+    const L = k.leaf;
+    if (!L) { out[0] = u; out[1] = v; return true; }
+    const s = 0.5 + (u - 0.5) * L.ks, t = 0.5 + (v * L.kt - 0.5) / L.zoom;
+    if (s < 0 || s > 1 || t < 0 || t > 1) return false;
+    out[0] = L.origin[0] + t * L.along[0] + s * L.across[0];
+    out[1] = L.origin[1] + t * L.along[1] + s * L.across[1];
+    return true;
+}
+
 /**
  * Renders triangle soups (readTileTriangles: tile frame, linear textures) from a pinhole camera at the camera's own
  * resolution. `supersample` samples per pixel side (2 = 4 samples). Both faces of a triangle render (scan meshes have mixed
- * winding); the nearest surface wins; `occluderDepth` hides what the real place hides.
+ * winding); the nearest surface wins; `occluderDepth` hides what the real place hides. A soup's `cutout` (tree leaves and
+ * crown cards) is alpha-tested per sample as the viewport's material does it, the clay or the textured cut-out by the
+ * render: a sample whose alpha (mip-filtered at the triangle's footprint, raised per mip level, times the gain) is under 0.5
+ * is not drawn and does not hide what is behind it.
  */
 export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, options: {
     supersample?: number; background?: Vec3; ambient?: number;
@@ -181,11 +208,13 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
     let drawn = 0;
     const armMeshes = meshes.length;
     if (options.context?.length) meshes = [...meshes, ...options.context];
+    const cutUv = new Float64Array(2);
     meshes.forEach((m, mi) => {
         const nt = m.texture.length;
         const levels = new Float32Array(nt);
         levelOf.set(mi, levels);
         const P = m.positions, UV = m.uvs;
+        const cuts = m.cutout ? (options.clay ? m.cutout.clay : m.cutout.textured) : undefined;
         for (let t = 0; t < nt; t++) {
             const poly: CamVertex[] = [];
             for (let k = 0; k < 3; k++) {
@@ -211,6 +240,30 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
                 for (let i = 1; i + 1 < sx.length; i++) scrArea += Math.abs((sx[i] - sx[0]) * (sy[i + 1] - sy[0]) - (sx[i + 1] - sx[0]) * (sy[i] - sy[0])) / 2;
                 levels[t] = scrArea > 1e-9 ? Math.max(0, 0.5 * Math.log2(texArea / scrArea)) : 0;
             }
+            // an alpha-tested triangle: its cut-out, the mip level the GPU would read at its footprint (per output pixel,
+            // anisotropic up to the map's limit) and the alpha's lift by the larger of fwidth(uv) x size, as the shaders take it
+            let cutK: CutoutKind | undefined, cutM: CutoutAlphaMap | undefined, cutLod = 0, cutLift = 1;
+            if (cuts && cuts[t] >= 0) {
+                cutK = m.cutout!.kinds[cuts[t]]; cutM = m.cutout!.maps[cutK.map];
+                const mw = cutM.mips[0].width, mh = cutM.mips[0].height;
+                // the atlas map is affine in TEXCOORD_0 (leafAtlasUv): the derivatives of TEXCOORD_0, then the map's linear part
+                const du1 = clipped[1].u - clipped[0].u, dv1 = clipped[1].v - clipped[0].v, du2 = clipped[2].u - clipped[0].u, dv2 = clipped[2].v - clipped[0].v;
+                const L = cutK.leaf;
+                // d(atlas)/d(TEXCOORD_0): s = 0.5 + (u - 0.5) ks, t = 0.5 + (v kt - 0.5) / zoom, atlas = origin + t along + s across
+                const aUu = L ? L.ks * L.across[0] : 1, aUv = L ? (L.kt / L.zoom) * L.along[0] : 0, aVu = L ? L.ks * L.across[1] : 0, aVv = L ? (L.kt / L.zoom) * L.along[1] : 1;
+                const U1 = (aUu * du1 + aUv * dv1) * mw, U2 = (aUu * du2 + aUv * dv2) * mw, V1 = (aVu * du1 + aVv * dv1) * mh, V2 = (aVu * du2 + aVv * dv2) * mh;
+                const x1 = (sx[1] - sx[0]) / ss, y1 = (sy[1] - sy[0]) / ss, x2 = (sx[2] - sx[0]) / ss, y2 = (sy[2] - sy[0]) / ss;
+                const det = x1 * y2 - x2 * y1;
+                if (Math.abs(det) > 1e-12) {
+                    const dUdx = (U1 * y2 - U2 * y1) / det, dUdy = (U2 * x1 - U1 * x2) / det;
+                    const dVdx = (V1 * y2 - V2 * y1) / det, dVdy = (V2 * x1 - V1 * x2) / det;
+                    const lenX = Math.hypot(dUdx, dVdx), lenY = Math.hypot(dUdy, dVdy), pMax = Math.max(lenX, lenY), pMin = Math.max(1e-9, Math.min(lenX, lenY));
+                    const nAniso = Math.min(Math.ceil(pMax / pMin), cutM.maxAnisotropy);
+                    cutLod = Math.max(0, Math.log2(Math.max(1e-9, pMax / nAniso)));
+                    const lift = Math.max(0, Math.log2(Math.max(1e-6, Math.abs(dUdx) + Math.abs(dUdy), Math.abs(dVdx) + Math.abs(dVdy))));
+                    cutLift = (1 + lift * cutK.mipScale) * cutK.gain;
+                } else { cutLod = cutM.mips.length - 1; cutLift = cutK.gain; }
+            }
             // fan triangulation of the clipped polygon
             for (let f = 1; f + 1 < clipped.length; f++) {
                 const ids = [0, f, f + 1];
@@ -232,10 +285,20 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
                         const z = 1 / izp;
                         const i = py * W + px;
                         if (z >= depth[i]) continue;
+                        const pu = (w0 * Z[0].u * iz[0] + w1 * Z[1].u * iz[1] + w2 * Z[2].u * iz[2]) / izp;
+                        const pv = (w0 * Z[0].v * iz[0] + w1 * Z[1].v * iz[1] + w2 * Z[2].v * iz[2]) / izp;
+                        if (cutK) {
+                            // the alpha test: outside a leaf's cell, or under 0.5 after the lift, the sample is not drawn
+                            if (!cutoutUv(cutK, pu, pv, cutUv)) continue;
+                            const mips = cutM!.mips, l0 = Math.min(mips.length - 1, Math.floor(cutLod)), l1 = Math.min(mips.length - 1, l0 + 1), lf = cutLod - Math.floor(cutLod);
+                            let a = alphaBilinear(mips[l0], cutUv[0], cutUv[1]);
+                            if (l1 !== l0 && lf > 0.01) a = a * (1 - lf) + alphaBilinear(mips[l1], cutUv[0], cutUv[1]) * lf;
+                            if (a * cutLift < 0.5) continue;
+                        }
                         depth[i] = z;
                         mesh[i] = mi; tri[i] = t;
-                        bu[i] = (w0 * Z[0].u * iz[0] + w1 * Z[1].u * iz[1] + w2 * Z[2].u * iz[2]) / izp;
-                        bv[i] = (w0 * Z[0].v * iz[0] + w1 * Z[1].v * iz[1] + w2 * Z[2].v * iz[2]) / izp;
+                        bu[i] = pu;
+                        bv[i] = pv;
                     }
                 }
             }

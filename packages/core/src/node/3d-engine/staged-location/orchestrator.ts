@@ -2626,6 +2626,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     });
                     run.keys.trees = planted.cacheKey;
                     run.cacheStatus.trees = planted.cached ? 'hit' : 'miss';
+                    if (planted.rebuiltStaleCache) io.progress(planted.rebuiltStaleCache);
                     let url: string | undefined;
                     const layers: StagedLayer[] = [];
                     if (Number(planted.stats.trees ?? 0) > 0) {

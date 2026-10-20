@@ -35,7 +35,7 @@ import { MESH_SHAPING_TOOL_DECLARATIONS } from './tools/mesh-shaping-tools';
 import { SB_RIG_TOOL_DECLARATIONS } from './tools/sb-rig-tools';
 import { ALGORITHMIC_UV_TOOL_DECLARATIONS } from './tools/algorithmic-uv-tools';
 import { BOTANICAL_TREE_TOOL_DECLARATIONS } from './tools/botanical-tree-tools';
-import { NANO_BANANA_TOOL_DECLARATIONS } from './tools/nano-banana-tools';
+import { IMAGE_GENERATION_TOOL_DECLARATIONS, NANO_BANANA_TOOL_DECLARATIONS } from './tools/nano-banana-tools';
 import { TURNAROUND_TOOL_DECLARATIONS } from './tools/turnaround-tools';
 import { VFX_VIDEO_TOOL_DECLARATIONS, AI_BEAUTIFY_TOOL_DECLARATIONS } from './tools/vfx-video-tools';
 import { ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS } from './tools/adaptive-matchmove-tools';
@@ -62,20 +62,22 @@ export interface ToolPackDefinition {
 export const CORE_WORKSPACE_PACK: ToolPackDefinition = {
     id: 'core_workspace',
     displayName: 'Core Workspace & Canvas Studio',
-    description: 'File reading/writing, diagnostics, diffs, canvas primitive mounting, native 3D scripts and reference-built objects, user dialogue, and subagent delegation.',
+    description: 'File reading/writing, diagnostics, diffs, canvas primitive mounting, native 3D scripts and reference-built objects, image generation, user dialogue, and subagent delegation.',
     declarations: [
         ...CANVAS_TOOL_DECLARATIONS,
         ...WORKSPACE_TOOL_DECLARATIONS,
         ...PYTHON_3D_TOOL_DECLARATIONS,
         ...SB_SCRIPT_GUIDE_TOOL_DECLARATIONS,
-        ...OBJECT_REFERENCE_TOOL_DECLARATIONS
+        ...OBJECT_REFERENCE_TOOL_DECLARATIONS,
+        ...IMAGE_GENERATION_TOOL_DECLARATIONS
     ],
     toolNames: [
         ...CANVAS_TOOL_DECLARATIONS.map(d => d.name),
         ...WORKSPACE_TOOL_DECLARATIONS.map(d => d.name),
         ...PYTHON_3D_TOOL_DECLARATIONS.map(d => d.name),
         ...SB_SCRIPT_GUIDE_TOOL_DECLARATIONS.map(d => d.name),
-        ...OBJECT_REFERENCE_TOOL_DECLARATIONS.map(d => d.name)
+        ...OBJECT_REFERENCE_TOOL_DECLARATIONS.map(d => d.name),
+        ...IMAGE_GENERATION_TOOL_DECLARATIONS.map(d => d.name)
     ]
 };
 

@@ -392,6 +392,27 @@ export interface BeautifyPromptOptions extends StationLockOptions {
  *
  * {styleSuffix} contains any selected style and related generation modifiers supplied by the caller verbatim.
  */
+export interface ClayRenderBeautifyPromptOptions {
+    /** What the render shows (an object, a mesh, a scene); named in the prompt, with no place, coordinates or heading. */
+    subject: string;
+    aspectRatio?: string;
+    moodPromptContext?: string;
+    subjectDistanceHint?: string;
+    styleSuffix?: string;
+}
+
+/**
+ * The AI Beautify template for a clay render that is not of a real place (a mesh render, an object, a scene with
+ * no coordinates): the same non-negotiable framing rules as buildBeautifyPrompt, with no location, coordinates,
+ * heading or map reference, so the model is never told a render is a photograph of somewhere. This is the one
+ * template every generation path restyling such a render sends (the mesh render engine and the blockout
+ * Nano Banana prompt both read it); buildBeautifyPrompt's own template is unchanged.
+ */
+export function buildClayRenderBeautifyPrompt(options: ClayRenderBeautifyPromptOptions): string {
+    const aspectRatio = options.aspectRatio || '16:9';
+    return `Transform this 3D clay rendering of ${options.subject} into a photorealistic photograph. ${options.moodPromptContext ? `${options.moodPromptContext.trimEnd()} ` : ''}CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly ${aspectRatio} aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every part of the subject must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add objects or features that are not visible in the reference. Add realistic textures, materials, natural lighting, and fine detail to make this look like a real photograph taken from this exact vantage point.${options.subjectDistanceHint || ''}${options.styleSuffix || ''}`;
+}
+
 export function buildBeautifyPrompt(options: BeautifyPromptOptions): string {
     const coordsStr = typeof options.coords === 'string'
         ? options.coords

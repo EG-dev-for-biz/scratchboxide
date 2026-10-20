@@ -740,14 +740,16 @@ varying float vSbCrownFlip;
 
 /**
  * After color_fragment: the crown's occlusion and the clump value on the leaf's diffuse colour; inside a closed blob mass
- * (a plain mesh seen from its back face, through a hole) darker still.
+ * (a plain mesh seen from its back face, through a hole) darker still. A crown card (SB_CROWN_CARD, treeCrownCards.ts) is
+ * never darkened for its back face: a card is open, double-sided foliage, and half of a crown's cards face away from the
+ * camera. (USE_INSTANCING is defined in three's vertex stage only, so this test also reaches instanced leaves.)
  */
 export const CROWN_FRAGMENT_COLOR = `
 {
     vec3 sbPM = vSbBkW / max( vSbBkInfo.y, 1e-6 );
     float sbFoot = max( length( dFdx( sbPM ) ), length( dFdy( sbPM ) ) );
     diffuseColor.rgb *= vSbCrownOcc * sbBreakupValue( sbPM, sbBkSlot( vSbBkInfo.x ), sbFoot );
-#ifndef USE_INSTANCING
+#if ! defined( USE_INSTANCING ) && ! defined( SB_CROWN_CARD )
     if ( uSbBkOn > 0.5 && ! gl_FrontFacing ) diffuseColor.rgb *= 1.0 - uSbBkFilter.w;
 #endif
 }

@@ -16,6 +16,7 @@ import { calculateNOAASolarPosition } from './solar-position';
 import { instantAtLocalMeanSolarTime } from '../../../../common/coordinate/solarPosition';
 import { blackbodyKelvinToLinearRgb } from './kelvin';
 import { spectralSun } from './spectral-sun';
+import { solarIrradiance } from './clear-sky-irradiance';
 import { InvalidInputError } from '../../../../common/errors/pipeline-errors';
 
 function clamp(x: number, min: number, max: number): number {
@@ -54,6 +55,21 @@ export interface DiurnalLightingOptions {
     turbidity?: number;
     /** Observer height above sea level, which thins the air (and haze) the beam crosses. */
     observerAltitudeMeters?: number;
+    /** Fraction of the sky covered by cloud, 0-1: moves light from the sun to the sky (Kasten & Czeplak). */
+    cloudCoverage?: number;
+}
+
+/** Colour of the sky light (hemisphere light) by phase. */
+export function skyLightColorHex(p: { isGoldenHour: boolean; isNight: boolean }): string {
+    return p.isGoldenHour ? '#fdba74' : p.isNight ? '#1a243d' : '#e0f2fe';
+}
+
+function hexLuminance(hex: string): number {
+    const v = (i: number) => {
+        const c = parseInt(hex.slice(1 + 2 * i, 3 + 2 * i), 16) / 255;
+        return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * v(0) + 0.7152 * v(1) + 0.0722 * v(2);
 }
 
 /**
@@ -233,6 +249,21 @@ export function computeDiurnalLightingProfile(altitudeDeg: number, options: Diur
     }
     const groundAlbedoLinear: [number, number, number] = [0.18, 0.18, 0.18];
     const shadowSoftness = isGoldenHour ? 1.8 : 1.0;
+    // Sun versus sky: the diurnal curves set how bright a level surface is (the exposure the viewport is tuned for);
+    // Bird's clear-sky model, with Kasten & Czeplak cloud cover, sets how that light divides between the direct sun
+    // and the sky, which is what makes shadows deep or soft. A sun-facing wall then gets the direct-normal share.
+    if (altitudeDeg > 0) {
+        const skyLum = hexLuminance(skyLightColorHex({ isGoldenHour, isNight }));
+        const sinEl = Math.sin((altitudeDeg * Math.PI) / 180);
+        const level = sunIntensity * sinEl + skyLightIntensity * skyLum;
+        const irr = solarIrradiance(altitudeDeg, { turbidity, observerAltitudeMeters: options.observerAltitudeMeters, cloudCover: options.cloudCoverage });
+        const k = level / Math.max(1e-9, irr.directHorizontal + irr.diffuseHorizontal);
+        // Bird's model holds to a sun ~5° up (zenith 85°); below, its diffuse term collapses with cos(zenith), so the
+        // split eases back to the diurnal curves' own, which matches photographed near-horizon skies.
+        const w = smoothstep(1.0, 5.0, altitudeDeg);
+        sunIntensity = lerp(sunIntensity, k * irr.directNormal, w);
+        skyLightIntensity = lerp(skyLightIntensity, (k * irr.diffuseHorizontal) / skyLum, w);
+    }
     const ambientIntensity = skyLightIntensity;
 
     return {

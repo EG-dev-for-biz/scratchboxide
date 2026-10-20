@@ -19,7 +19,7 @@ import { validateContract, type StagedBuildState, type StagedLayer, type StagedT
 import { TEXTURE_LADDER_RUNGS } from '../src/common/spatial/texture-pass-contracts';
 import { stepRevealSchedule, type LayerLoadState, type RevealSchedule } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/revealScheduler';
 import {
-    DEFAULT_MATERIAL_MODE, INITIAL_SWITCH, MATERIAL_SWAP_REVEAL_MS, carryMaterialMode, carryTwinObjects, deriveMaterialLayers, isMaterialSwapLayer, modelIdOf, nextSwitch, parseSwapId, twinObjectFor, twinObjectId,
+    DEFAULT_MATERIAL_MODE, INITIAL_SWITCH, MATERIAL_SWAP_REVEAL_MS, carryMaterialMode, carryStagedChoice, carryTwinObjects, deriveMaterialLayers, isMaterialSwapLayer, modelIdOf, nextSwitch, parseSwapId, twinObjectFor, twinObjectId, withStagedMaterialMode,
     type EngagedTwin, type MaterialSwitch
 } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/texturedTwins';
 import { TEXTURE_RUNG_COLORS, textureRungLegendRows } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/provenanceShading';
@@ -141,6 +141,33 @@ describe('textured twins: which objects load and how they crossfade', () => {
         expect(carryMaterialMode(prev, { ...later, materialMode: 'textured' })!.materialMode).toBe('textured');   // a new request wins
         expect(carryMaterialMode(prev, { ...later, runId: 'another-run' })!.materialMode).toBeUndefined();
         expect(carryMaterialMode(undefined, later)).toBe(later);
+    });
+
+    test('a later commit of a running build keeps the choice with its render mode (an object at the place stays textured)', () => {
+        const run = fixtureState([layer('l1')]);
+        // the commit composeStagedArtifact streams: renderMode 'clay', no material mode
+        const commit = { renderMode: 'clay', stagedBuild: fixtureState([layer('l1'), layer('l2', { textured: twin('l2') })]) };
+        // an object at the place, clayed then made textured again on the open scene
+        const clayed = withStagedMaterialMode({ renderMode: 'pbr', stagedBuild: run }, 'clay');
+        const textured = withStagedMaterialMode(clayed, 'textured');
+        expect(carryStagedChoice(textured, commit)).toMatchObject({ renderMode: 'pbr', stagedBuild: { materialMode: 'textured', layers: commit.stagedBuild.layers } });
+        expect(carryStagedChoice(textured, commit)).not.toHaveProperty('stagedBuildView');
+        // a clay choice keeps the mode it replaced, so textured still restores the object's materials after the commit
+        const keptClay = carryStagedChoice(clayed, commit);
+        expect(keptClay).toMatchObject({ renderMode: 'clay', stagedBuild: { materialMode: 'clay' }, stagedBuildView: { renderModeBeforeClay: 'pbr' } });
+        expect(withStagedMaterialMode(keptClay, 'textured').renderMode).toBe('pbr');
+        // a textured choice on a scene with no render mode: the commit's 'clay' is not taken
+        expect(carryStagedChoice(withStagedMaterialMode({ stagedBuild: run }, 'textured'), commit)).not.toHaveProperty('renderMode');
+        // a streamed renderModeBeforeClay is the run start's, not the open scene's
+        expect(carryStagedChoice(textured, { ...commit, stagedBuildView: { provenance: true, renderModeBeforeClay: 'shaded' } }).stagedBuildView).toEqual({ provenance: true });
+        // no choice, a new request, another run, or the same state: the commit as streamed
+        expect(carryStagedChoice({ renderMode: 'pbr', stagedBuild: run }, commit)).toBe(commit);
+        const request = { ...commit, stagedBuild: { ...commit.stagedBuild, materialMode: 'clay' } };
+        expect(carryStagedChoice(textured, request)).toBe(request);
+        const other = { ...commit, stagedBuild: { ...commit.stagedBuild, runId: 'another-run' } };
+        expect(carryStagedChoice(textured, other)).toBe(other);
+        expect(carryStagedChoice(textured, textured)).toBe(textured);
+        expect(carryStagedChoice(undefined, commit)).toBe(commit);
     });
 
     test('a layer another layer replaces (and a retired one) gets no twin', () => {
@@ -295,13 +322,14 @@ describe('overlay words and legend', () => {
 describe('staged_location_material_mode (tool) and sb_set_staged_material_mode (operator)', () => {
     const scene = (state: StagedBuildState): Scene3DData => ({ title: 'staged', renderMode: 'clay', objects: [{ id: L2 } as Media4DObject], stagedBuild: state } as Scene3DData);
 
-    test('the operator sets materialMode (and the provenance view) and nothing else', () => {
+    test('the operator sets materialMode, the matching render mode (and the provenance view) and nothing else', () => {
         const state = fixtureState([layer('l1'), layer('l2', { textured: twin('l2') })]);
         const data = scene(state);
         const before = JSON.stringify({ layers: state.layers, objects: data.objects });
         const r = applyStagedMaterialMode(data, { mode: 'textured', provenance: true });
-        expect(r).toMatchObject({ mode: 'textured', provenance: true, texturedLayers: 1, layers: 2 });
+        expect(r).toMatchObject({ mode: 'textured', renderMode: 'clay', provenance: true, texturedLayers: 1, layers: 2 });
         expect(data.stagedBuild!.materialMode).toBe('textured');
+        expect(data.renderMode).toBe('clay');   // a place staged on its own keeps its render mode
         expect((data as { stagedBuildView?: unknown }).stagedBuildView).toEqual({ provenance: true });
         expect(JSON.stringify({ layers: data.stagedBuild!.layers, objects: data.objects })).toBe(before);
         expect(validateContract('StagedBuildState', data.stagedBuild!)).toEqual([]);
@@ -313,7 +341,7 @@ describe('staged_location_material_mode (tool) and sb_set_staged_material_mode (
         expect(GOOGLE_3D_TILES_TOOL_DECLARATIONS.some(d => d.name === 'staged_location_material_mode')).toBe(true);
         expect(typeof google3DTilesHandlers.staged_location_material_mode).toBe('function');
         expect(STAGED_MATERIAL_MODE_DECLARATION.description).toMatch(/Textured is the default: clay shows first/);
-        expect(STAGED_MATERIAL_MODE_DECLARATION.description).toMatch(/"clay" shows the whole build in studio clay and stays/);
+        expect(STAGED_MATERIAL_MODE_DECLARATION.description).toMatch(/"clay" shows the whole scene in studio clay \(the staged layers and any object built at the place: it sets the scene render mode to clay\) and stays, across reloads/);
         expect(STAGED_MATERIAL_MODE_DECLARATION.description).toContain('"Show clay"');
         expect(STAGED_MATERIAL_MODE_DECLARATION.description).toMatch(/photo-inferred/);
         expect(STAGED_MATERIAL_MODE_DECLARATION.parameters!.properties!.mode.enum).toEqual(['textured', 'clay']);
@@ -332,8 +360,49 @@ describe('staged_location_material_mode (tool) and sb_set_staged_material_mode (
         expect(active.data.stagedBuild!.materialMode).toBeUndefined();   // the request's scene is not mutated
         const back = await runStagedMaterialModeTool({ mode: 'clay', provenance: false }, { request: { activeArtifact: { ...active, data: art.data } } } as never);
         expect((back.resultPayload.artifact as { data: Scene3DData }).data.stagedBuild!.materialMode).toBe('clay');
-        expect(back.summaryResult).toMatch(/studio clay .*Provenance shading is off\.$/);
+        expect((back.resultPayload.artifact as { data: Scene3DData }).data.renderMode).toBe('clay');
+        expect(back.summaryResult).toMatch(/studio clay .*Scene render mode: clay\. Provenance shading is off\.$/);
         await expect(runStagedMaterialModeTool({ mode: 'textured' }, { request: {} } as never)).rejects.toThrow(/no 3D scene is open/);
         await expect(runStagedMaterialModeTool({ mode: 'sepia' }, ctx)).rejects.toThrow(/clay" or "textured/);
+    });
+
+    test('an object built at the place: a clay view from the tool is renderMode clay, saved with the scene like the overlay toggle', async () => {
+        // build_3d_object_from_reference stages its object on the place's layers with renderMode 'pbr'
+        const state = fixtureState([layer('l1'), layer('l2', { textured: twin('l2') })], { runState: 'finished' });
+        const placeScene = { ...scene(state), renderMode: 'pbr', objects: [{ id: L2 } as Media4DObject, { id: 'hero-object' } as Media4DObject] } as Scene3DData;
+        const active = { id: state.artifactId, type: '3d-scene', title: 'chrome hydrant at a place', version: 5, data: placeScene };
+        const out = await runStagedMaterialModeTool({ mode: 'clay' }, { request: { activeArtifact: active } } as never);
+        const saved = (out.resultPayload.artifact as { data: Scene3DData }).data;
+        expect(out.resultPayload).toMatchObject({ mode: 'clay', renderMode: 'clay' });
+        expect(saved.renderMode).toBe('clay');
+        expect(saved.stagedBuild!.materialMode).toBe('clay');
+        expect(out.summaryResult).toMatch(/Scene render mode: clay\.$/);
+        // what a reload reads back (the saved session's JSON) still says clay
+        const reloaded = JSON.parse(JSON.stringify(saved)) as Scene3DData;
+        expect([reloaded.renderMode, reloaded.stagedBuild!.materialMode]).toEqual(['clay', 'clay']);
+        // the overlay toggle writes exactly the same fields
+        const shown = (d: Scene3DData) => ({ renderMode: d.renderMode, stagedBuild: d.stagedBuild, view: (d as { stagedBuildView?: unknown }).stagedBuildView, objects: d.objects });
+        expect(shown(withStagedMaterialMode(placeScene, 'clay'))).toEqual(shown(saved));
+        // and back: textured puts back the render mode clay replaced, so the object shows its own materials again
+        const back = await runStagedMaterialModeTool({ mode: 'textured' }, { request: { activeArtifact: { ...active, data: saved } } } as never);
+        const textured = (back.resultPayload.artifact as { data: Scene3DData }).data;
+        expect([textured.renderMode, textured.stagedBuild!.materialMode]).toEqual(['pbr', 'textured']);
+        expect(shown(withStagedMaterialMode(saved, 'textured'))).toEqual(shown(textured));
+    });
+
+    test('the render mode that goes with each choice: clay remembers the mode it replaced, textured puts it back', () => {
+        const staged = { stagedBuild: { materialMode: undefined as string | undefined } };
+        const clayed = withStagedMaterialMode({ ...staged, renderMode: 'pbr' }, 'clay');
+        expect(clayed).toMatchObject({ renderMode: 'clay', stagedBuild: { materialMode: 'clay' }, stagedBuildView: { renderModeBeforeClay: 'pbr' } });
+        expect(withStagedMaterialMode(clayed, 'clay')).toEqual(clayed);   // asked twice: the remembered mode stays
+        const back = withStagedMaterialMode(clayed, 'textured');
+        expect(back).toMatchObject({ renderMode: 'pbr', stagedBuild: { materialMode: 'textured' } });
+        expect(back.stagedBuildView).toEqual({});
+        // a place staged on its own is renderMode 'clay' with textured layers: both choices keep it
+        expect(withStagedMaterialMode(withStagedMaterialMode({ ...staged, renderMode: 'clay' }, 'clay'), 'textured').renderMode).toBe('clay');
+        expect(withStagedMaterialMode({ ...staged, renderMode: 'shaded', stagedBuildView: { provenance: true } }, 'clay').stagedBuildView).toEqual({ provenance: true, renderModeBeforeClay: 'shaded' });
+        expect(withStagedMaterialMode({ ...staged }, 'textured')).not.toHaveProperty('renderMode');   // no mode: the viewport's textured default
+        const plain = { title: 'not staged', renderMode: 'pbr' };
+        expect(withStagedMaterialMode(plain, 'clay')).toBe(plain);
     });
 });

@@ -22,7 +22,9 @@ function makeClay(): THREE.MeshStandardMaterial {
 
 /**
  * Wood and leaves of the trees (meshes the tree level-of-detail controller owns) share this one material at every level:
- * the same grey, with no value difference between wood and leaves. The controller reads it from `userData.sbLodBase`.
+ * the same grey, with no value difference between wood and leaves. The controller reads it from `userData.sbLodBase`. A mesh
+ * whose leaves are cut out of a card (the mid level's crown cards) names its own clay in `userData.sbTreeClay`: this surface
+ * with the card's cut-out.
  */
 let sharedTreeClay: THREE.MeshStandardMaterial | undefined;
 export function sharedTreeClayMaterial(): THREE.MeshStandardMaterial {
@@ -74,9 +76,11 @@ export function applyClayRenderMode(roots: Array<THREE.Object3D | null | undefin
             if (mesh.userData.sbKeepAuthoredMaterial) return;
             if (mesh.userData.sbTreeLodMesh) {
                 // base only: the controller puts it (or its dither variant) on the mesh at the next frame
+                // a crown card (treeLod/treeCrownCards.ts) wears its own clay: the same surface, cut out by the card's leaves
+                const clay = (mesh.userData.sbTreeClay as THREE.Material | undefined) ?? sharedTreeClayMaterial();
                 if (enabled) {
-                    if (mesh.userData.sbLodBase !== sharedTreeClayMaterial()) { mesh.userData[ORIGINAL_KEY] = mesh.userData.sbLodBase; mesh.userData.sbLodBase = sharedTreeClayMaterial(); }
-                    mesh.material = sharedTreeClayMaterial();
+                    if (mesh.userData.sbLodBase !== clay) { mesh.userData[ORIGINAL_KEY] = mesh.userData.sbLodBase; mesh.userData.sbLodBase = clay; }
+                    mesh.material = clay;
                     touched++;
                 } else if (mesh.userData[ORIGINAL_KEY]) {
                     mesh.userData.sbLodBase = mesh.userData[ORIGINAL_KEY];

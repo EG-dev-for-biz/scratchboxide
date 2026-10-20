@@ -207,11 +207,14 @@ describe('GeoBox Gemini Tool Registry & Capability Resolution', () => {
         const declarations = registry.declarations();
         const toolNames = declarations.map(d => d.name);
 
-        expect(toolNames).toContain('geobox_resect_camera_pose');
+        expect(toolNames).toContain('geobox_resect_image_location');
         expect(toolNames).toContain('geobox_optimize_edge_alignment');
+        // Deprecated alias: registered (dispatch below still works) but not offered.
+        expect(toolNames).not.toContain('geobox_resect_camera_pose');
+        expect(registry.has('geobox_resect_camera_pose')).toBe(true);
     });
 
-    it('dispatches geobox_resect_camera_pose via tool registry', async () => {
+    it('dispatches the deprecated alias geobox_resect_camera_pose via tool registry', async () => {
         const registry = createDefaultToolRegistry();
         const outcome = await registry.dispatch(
             'geobox_resect_camera_pose',

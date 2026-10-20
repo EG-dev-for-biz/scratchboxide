@@ -230,7 +230,7 @@ export class TaskCapabilityResolver {
             canSolveNatively = true;
             primaryNativeEngine = 'google-models';
             nativeCapabilities.push('Frame-Motivated Performer Video Prompt Pipeline (buildFrameMotivatedPerformerVideoPrompt)');
-            nativeCapabilities.push('build_frame_motivated_performer_prompt Agent Tool (<FIRST_FRAME> Syntax, A-Pose Invariant, Multi-View Video Positions)');
+            nativeCapabilities.push('buildFrameMotivatedPerformerVideoPrompt template (<FIRST_FRAME> Syntax, A-Pose Invariant, Multi-View Video Positions)');
             nativeCapabilities.push('Google Veo 2 / Wan2.2 conditioning tags & A-pose continuity');
             rationale = 'Native Frame-Motivated Performer Video Prompt Pipeline formulates exact <FIRST_FRAME> conditioning, A-pose continuity clauses, camera viewpoint angles (0°, 45°, 180°), and prompt neutrality rules.';
             suggestedNativeAction = {
@@ -238,21 +238,21 @@ export class TaskCapabilityResolver {
                 serviceOrTool: 'build_frame_motivated_performer_prompt',
                 targetTool: 'build_frame_motivated_performer_prompt',
                 targetService: 'FrameMotivatedPerformerService',
-                details: 'Invoke build_frame_motivated_performer_prompt with referenceFrameRef, subject, wardrobe, and cameraPosition.'
+                details: 'Write the prompt with build_frame_motivated_performer_prompt (referenceFrameRef, subject, wardrobe, cameraPosition). No in-app tool generates video, so the user runs it in their video model.'
             };
         } else if (isNeutralPerformerPrompt) {
             canSolveNatively = true;
             primaryNativeEngine = 'google-models';
             nativeCapabilities.push('Neutral Performer Studio Prompt Pipeline (buildNeutralPerformerPrompt)');
-            nativeCapabilities.push('build_neutral_performer_prompt Agent Tool (Zero Context, Shadowless Lighting, A-Frame Pose)');
+            nativeCapabilities.push('buildNeutralPerformerPrompt template (Zero Context, Shadowless Lighting, A-Frame Pose)');
             nativeCapabilities.push('Prompt Neutrality Contract & Head-to-Toe Vertical 9:16 Framing');
             rationale = 'Native Neutral Performer Studio Prompt Pipeline constructs strictly uncropped head-to-toe portraits in symmetrical A-frame pose with zero background context (#808080 studio grey) and shadowless high-CRI diffuse lighting to prevent backprojection cavities and SMPL distortion.';
             suggestedNativeAction = {
                 primitiveType: 'markdown-document',
-                serviceOrTool: 'buildNeutralPerformerPrompt or build_neutral_performer_prompt tool',
+                serviceOrTool: 'build_neutral_performer_prompt',
                 targetTool: 'build_neutral_performer_prompt',
                 targetService: 'NeutralPerformerStudioService',
-                details: 'Invoke build_neutral_performer_prompt with subject, wardrobe, aspectRatio ("9:16"), kind ("image" or "video"), and isAFramePose (true).'
+                details: 'Write the prompt with build_neutral_performer_prompt (subject, wardrobe, aspectRatio "9:16", kind "image" or "video", isAFramePose true); for a reference image, pass it to generate_image; for video, the user runs it in their video model.'
             };
         } else if (domain === 'vfx') {
             const isMatchmoveOrSolar = /matchmove|camera\s*solve|sub-frame|brown-conrady|lens\s*distortion|ephemeris|solar\s*position|sun\s*altitude|sun\s*heading|noaa/i.test(lower);
@@ -449,15 +449,15 @@ export class TaskCapabilityResolver {
                 canSolveNatively = true;
                 primaryNativeEngine = 'google-models';
                 nativeCapabilities.push('AI Beautify Location Pipeline (buildBeautifyPrompt)');
-                nativeCapabilities.push('build_beautify_prompt Agent Tool (exact framing & aspect ratio rules)');
+                nativeCapabilities.push('AI Beautify template applied inside survey_beautify_station and spatial_ai_render_scene (exact framing & aspect ratio rules)');
                 nativeCapabilities.push('Google 3D Tiles Vantage Alignment');
                 rationale = 'Native AI Beautify Location Pipeline constructs non-negotiable 3D tile framing prompts, preserving exact camera pitch/yaw, vanishing points, horizon line, and canvas aspect ratio for photorealistic restyling.';
                 suggestedNativeAction = {
                     primitiveType: 'markdown-document',
-                    serviceOrTool: 'buildBeautifyPrompt or build_beautify_prompt tool',
-                    targetTool: 'build_beautify_prompt',
+                    serviceOrTool: 'buildBeautifyPrompt inside survey_beautify_station / spatial_ai_render_scene',
+                    targetTool: 'survey_beautify_station',
                     targetService: 'BeautifyStationService',
-                    details: 'Invoke build_beautify_prompt with locationName, coords, heading, and styleSuffix.'
+                    details: 'Call survey_beautify_station (a survey station of a place) or spatial_ai_render_scene (a mesh render): each applies the AI Beautify template itself from the station or render; pass the styleSuffix only.'
                 };
             } else if (/algorithmic\s*uv|unwrap[\s\w-]{0,30}rewrap|rewrap[\s\w-]{0,30}unwrap|uv\s*(?:unwrap|re-?wrap|parameteriz|atlas\s*pack|maxrects)|cavitation\s*pore|calcite\s*strata|pbr\s*material\s*decompos|conformal\s*reparameteriz/i.test(lower)) {
                 canSolveNatively = true;
@@ -731,14 +731,14 @@ export class TaskCapabilityResolver {
                 canSolveNatively = true;
                 primaryNativeEngine = 'google-models';
                 nativeCapabilities.push('AI Beautify Location Pipeline (buildBeautifyPrompt)');
-                nativeCapabilities.push('build_beautify_prompt Agent Tool (exact framing & aspect ratio rules)');
+                nativeCapabilities.push('AI Beautify template applied inside survey_beautify_station and spatial_ai_render_scene (exact framing & aspect ratio rules)');
                 rationale = 'Native AI Beautify Location Pipeline constructs non-negotiable 3D tile framing prompts, preserving exact camera pitch/yaw, vanishing points, horizon line, and canvas aspect ratio for photorealistic restyling.';
                 suggestedNativeAction = {
                     primitiveType: 'markdown-document',
-                    serviceOrTool: 'buildBeautifyPrompt or build_beautify_prompt tool',
-                    targetTool: 'build_beautify_prompt',
+                    serviceOrTool: 'buildBeautifyPrompt inside survey_beautify_station / spatial_ai_render_scene',
+                    targetTool: 'survey_beautify_station',
                     targetService: 'BeautifyStationService',
-                    details: 'Invoke build_beautify_prompt with locationName, coords, heading, and styleSuffix.'
+                    details: 'Call survey_beautify_station (a survey station of a place) or spatial_ai_render_scene (a mesh render): each applies the AI Beautify template itself from the station or render; pass the styleSuffix only.'
                 };
             } else {
                 // Text prompts and multimodal understanding; there is no generic image tool to point at, so the

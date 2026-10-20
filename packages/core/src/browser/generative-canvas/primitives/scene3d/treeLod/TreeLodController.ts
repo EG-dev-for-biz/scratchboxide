@@ -12,6 +12,8 @@ import * as THREE from 'three';
 import { treesLodLevelCount, type TreeLodExtras, type TreeNodeExtras, type TreesGlbRootExtras } from '../../../../../common/spatial/staged-location-contracts';
 import { isStagedMaterial } from '../stagedBuild/revealMaterial';
 import { makeFadeVariant } from './treeLodFade';
+import { crownCardClayMaterial, crownCardMaskedMaterial, crownCardsOf } from './treeCrownCards';
+import { sharedTreeClayMaterial } from '../clayRenderMode';
 import {
     allocateCrownLobes, attachCrownAttributes, attachCrownInstanceField, breakupDepthMaterial, breakupDistanceMaterial, crownLobesInMeshFrame, crownQuadricInMeshFrame, isBreakupDepthMaterial,
     makeCrownVariant, releaseCrownLobeAtlas, resolveCrownShading, retainCrownLobeAtlas,
@@ -344,6 +346,9 @@ export class TreeLodController {
     private crownKey = '';
     private readonly crownVariants = new Map<THREE.Material, THREE.Material>();
     private readonly leafVariantNames: Set<string>;
+    /** The root's crown cards (the mid level drawn as cut-out cards) and their library meshes. */
+    private readonly crownCards: ReturnType<typeof crownCardsOf>;
+    private readonly cardMeshNames: Set<string>;
     /** The camera of the last frame (world matrix, projection, frame height) and when it last moved, for settling at a still camera. */
     private camSig: number[] | null = null;
     private movedAtMs = -Infinity;
@@ -367,6 +372,8 @@ export class TreeLodController {
         // the schema names the level count; a root without it (extras the loader did not carry to the scene) counts a tree's levels
         this.levelCount = rootExtras?.schema ? treesLodLevelCount(rootExtras.schema) : levelsOfFirstTree(root) ?? treesLodLevelCount(undefined);
         this.leafVariantNames = new Set((rootExtras?.clusterLibrary?.variants ?? []).filter(v => v.leavesLevel0 > 0 || (v.leavesNearMid ?? 0) > 0 || v.leavesLevel1 > 0).map(v => v.mesh));
+        this.crownCards = crownCardsOf(rootExtras);
+        this.cardMeshNames = new Set(this.crownCards?.meshes ?? []);
         this.crown = resolveCrownShading(options.crownShading);
         this.crownKey = JSON.stringify(this.crown);
         setCrownShadingUniforms(this.crown);
@@ -485,6 +492,22 @@ export class TreeLodController {
                 if (!m.isMesh) return;
                 m.userData.sbTreeLodMesh = true;
                 if (m.userData.sbLodBase === undefined && !Array.isArray(m.material)) m.userData.sbLodBase = m.material;
+                // a crown card: cut out by the card atlas's leaves whatever it wears (its own clay; its base masked until textured)
+                const card = (m.userData as { sbCluster?: { clusterMesh?: string } }).sbCluster?.clusterMesh;
+                if (this.crownCards && card && this.cardMeshNames.has(card) && !m.userData.sbCrownCard) {
+                    const clay = crownCardClayMaterial(this.crownCards);
+                    m.userData.sbCrownCard = true;
+                    m.userData.sbTreeClay = clay;
+                    const base = m.userData.sbLodBase as THREE.Material | undefined;
+                    if (base) {
+                        const cut = base === sharedTreeClayMaterial() ? clay : crownCardMaskedMaterial(base, this.crownCards);
+                        m.userData.sbLodBase = cut;
+                        m.material = cut;
+                    }
+                    // what clay mode will restore (clayRenderMode's sbClayOriginalMaterial) is cut out too
+                    const original = m.userData.sbClayOriginalMaterial as THREE.Material | undefined;
+                    if (original && original !== clay) m.userData.sbClayOriginalMaterial = crownCardMaskedMaterial(original, this.crownCards);
+                }
                 if (m.userData.sbLodCast === undefined) m.userData.sbLodCast = m.castShadow;
                 meshes.push(m);
             });

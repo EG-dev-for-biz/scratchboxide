@@ -142,9 +142,10 @@ describe('trees at four levels', () => {
             const wp = json.accessors[farWoodPrim.attributes.POSITION];
             expect(wp.max[1] - wp.min[1]).toBeGreaterThan(0.5 * (c.apex[1] - c.supportY));
             expect(Math.max(wp.max[0] - wp.min[0], wp.max[2] - wp.min[2])).toBeGreaterThan(0.5 * radius);
-            // the near-mid and mid levels share the near level's wood mesh, and draw no twigs
+            // the near-mid and mid levels share the near level's wood mesh, and draw no twigs: leaf clusters at near-mid, crown cards at mid
             expect(levels[1].mesh).toBe(levels[0].mesh); expect(levels[2].mesh).toBe(levels[0].mesh);
-            for (const lv of [1, 2]) for (const ci of levels[lv].children) expect(json.nodes[ci].extras.sbCluster.clusterMesh).toMatch(/leaf_cluster/);
+            for (const ci of levels[1].children) expect(json.nodes[ci].extras.sbCluster.clusterMesh).toMatch(/leaf_cluster/);
+            for (const ci of levels[2].children) expect(json.nodes[ci].extras.sbCluster.clusterMesh).toMatch(/leaf_cluster|crown_card/);
             // bands: each handover centred on lodBandsFor's distance, neighbours overlapping (no gap), handovers in order
             const H = t.extras.heightAboveSupportM as number;
             const b = levels.map((n: any) => n.extras.sbLod);

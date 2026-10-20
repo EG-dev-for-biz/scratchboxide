@@ -47,7 +47,7 @@ import { OBJECT_REFERENCE_TOOL_DECLARATIONS, objectReferenceHandlers } from './o
 import { SB_SCRIPT_GUIDE_TOOL_DECLARATIONS, sbScriptGuideHandlers } from './sb-script-guide-tools';
 import { MESH_SHAPING_TOOL_DECLARATIONS, meshShapingHandlers } from './mesh-shaping-tools';
 import { SB_RIG_TOOL_DECLARATIONS, sbRigHandlers } from './sb-rig-tools';
-import { NANO_BANANA_TOOL_DECLARATIONS, nanoBananaHandlers } from './nano-banana-tools';
+import { NANO_BANANA_TOOL_DECLARATIONS, nanoBananaHandlers, IMAGE_GENERATION_TOOL_DECLARATIONS, imageGenerationHandlers } from './nano-banana-tools';
 import { ALGORITHMIC_UV_TOOL_DECLARATIONS, algorithmicUvHandlers } from './algorithmic-uv-tools';
 import { WORKSPACE_TOOL_DECLARATIONS, workspaceHandlers } from './workspace-tools';
 import { LENS_TOOL_DECLARATIONS, lensHandlers, BROWSER_TOOL_DECLARATIONS, browserHandlers } from './lens-browser-tools';
@@ -119,6 +119,7 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS,
     ...VFX_VIDEO_TOOL_DECLARATIONS,
     ...NANO_BANANA_TOOL_DECLARATIONS,
+    ...IMAGE_GENERATION_TOOL_DECLARATIONS,
     ...ALGORITHMIC_UV_TOOL_DECLARATIONS,
     ...ATMOSPHERE_TOOL_DECLARATIONS,
     ...LIGHTING_TOOL_DECLARATIONS,
@@ -157,6 +158,7 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...adaptiveMatchmoveHandlers,
     ...vfxVideoHandlers,
     ...nanoBananaHandlers,
+    ...imageGenerationHandlers,
     ...turnaroundHandlers,
     ...algorithmicUvHandlers,
     ...atmosphereHandlers,

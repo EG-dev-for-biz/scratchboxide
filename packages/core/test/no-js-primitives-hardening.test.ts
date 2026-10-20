@@ -79,7 +79,8 @@ describe('Anti-JS-Primitive Hardening & Geometric Complexity Gate', () => {
         expect(fs.existsSync(agentsMdPath)).toBe(true);
 
         const content = fs.readFileSync(agentsMdPath, 'utf8');
-        expect(content).toContain('Lean on C/C++ First for 3D');
-        expect(content).toContain('C++20 as Geometry Generator, Three.js as Pure Viewport');
+        expect(content).toContain('C++20 generates geometry; Three.js only renders.');
+        expect(content).toContain('No JavaScript generative primitives.');
+        expect(content).toContain('npm run lint:primitives');
     });
 });

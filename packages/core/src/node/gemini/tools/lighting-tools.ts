@@ -242,7 +242,7 @@ export const LIGHTING_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'lighting_match_image_to_location',
-        description: 'Matches physical scene lighting (sun angle, Kelvin temperature, sky ambient) to a reference photograph taken at a location. The location is geodeticCoords, or locationName resolved with Google Places. The camera pose is not estimated from the photograph: pass cameraPosition and cameraTarget when they are known (for example from geobox_resect_camera_pose); without them the lighting is reported in the camera\'s own frame.',
+        description: 'Matches physical scene lighting (sun angle, Kelvin temperature, sky ambient) to a reference photograph taken at a location. The location is geodeticCoords, or locationName resolved with Google Places. The camera pose is not estimated from the photograph: pass cameraPosition and cameraTarget when they are known (for example from geobox_resect_image_location); without them the lighting is reported in the camera\'s own frame.',
         parameters: {
             type: 'OBJECT',
             properties: {

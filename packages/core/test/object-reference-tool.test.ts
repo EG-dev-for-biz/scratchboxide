@@ -24,6 +24,7 @@ import * as path from 'path';
 import * as THREE from 'three';
 import { createObjectReferenceHandlers, OBJECT_REFERENCE_TOOL_DECLARATIONS, SurfaceSampler, yawForHeading } from '../src/node/gemini/tools/object-reference-tools';
 import { generatorFileIsObject } from '../src/browser/generative-canvas/primitives/Scene3DPrimitive';
+import { withStagedMaterialMode } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/texturedTwins';
 import { TerrainManager } from '../src/browser/generative-canvas/services/TerrainManager';
 import { glbToTriangleSoup, mergeTriangleSoups } from '../src/node/3d-engine/part-connectivity';
 import { renderReviewViews } from '../src/node/3d-engine/visual-review';
@@ -279,6 +280,57 @@ function writeStagedTrees(): string {
     return '/models/staged_trees_test.glb';
 }
 
+/**
+ * The same trees written as the native staged-GLB writer quantises a trees layer (KHR_mesh_quantization): positions as
+ * SHORT normalised over the node's bounding cube, node translation its centre and uniform scale its half extent. `liftY`
+ * moves the node up, as a broken trees layer would be.
+ */
+function writeQuantizedStagedTrees(name: string, liftY = 0): string {
+    const quad = (x0: number, x1: number, z0: number, z1: number, y: number, base: number) => ({
+        p: [x0, y, z0, x1, y, z0, x1, y, z1, x0, y, z1],
+        i: [base, base + 2, base + 1, base, base + 3, base + 2]
+    });
+    const crown = quad(3, 9, -7, -1, 9, 0), trunk = quad(5.9, 6.1, -4.1, -3.9, 1.5, 4);
+    const positions = [...crown.p, ...trunk.p], indices = [...crown.i, ...trunk.i];
+    const lo = [0, 1, 2].map(k => Math.min(...positions.filter((_, i) => i % 3 === k)));
+    const hi = [0, 1, 2].map(k => Math.max(...positions.filter((_, i) => i % 3 === k)));
+    const centre = [0, 1, 2].map(k => (lo[k] + hi[k]) / 2);
+    const half = Math.max(...[0, 1, 2].map(k => (hi[k] - lo[k]) / 2));
+    // SHORT VEC3 padded to 4 components (8 bytes a vertex, as the writer aligns them)
+    const q = new Int16Array((positions.length / 3) * 4);
+    for (let v = 0; v < positions.length / 3; v++) for (let k = 0; k < 3; k++) q[v * 4 + k] = Math.round(((positions[v * 3 + k] - centre[k]) / half) * 32767);
+    const qMin = [0, 1, 2].map(k => Math.min(...Array.from({ length: positions.length / 3 }, (_, v) => q[v * 4 + k])));
+    const qMax = [0, 1, 2].map(k => Math.max(...Array.from({ length: positions.length / 3 }, (_, v) => q[v * 4 + k])));
+    const pad = (b: Buffer, fill: number) => Buffer.concat([b, Buffer.alloc((4 - (b.length % 4)) % 4, fill)]);
+    const pos = Buffer.from(q.buffer), idx = Buffer.from(new Uint16Array(indices).buffer);
+    const bin = pad(Buffer.concat([pos, idx]), 0);
+    const json = pad(Buffer.from(JSON.stringify({
+        asset: { version: '2.0' }, extensionsUsed: ['KHR_mesh_quantization'], extensionsRequired: ['KHR_mesh_quantization'],
+        scene: 0, scenes: [{ nodes: [0] }],
+        nodes: [{ name: 'sb_veggie_trees', children: [1] }, { mesh: 0, name: 'sb_veggie_crown_0', translation: [centre[0], centre[1] + liftY, centre[2]], scale: [half, half, half] }],
+        meshes: [{ name: 'tree', primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }],
+        buffers: [{ byteLength: bin.length }],
+        bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: pos.length, byteStride: 8 }, { buffer: 0, byteOffset: pos.length, byteLength: idx.length }],
+        accessors: [
+            { bufferView: 0, componentType: 5122, normalized: true, count: positions.length / 3, type: 'VEC3', min: qMin, max: qMax },
+            { bufferView: 1, componentType: 5123, count: indices.length, type: 'SCALAR' }
+        ]
+    })), 0x20);
+    const header = Buffer.alloc(12);
+    header.write('glTF', 0, 'ascii');
+    header.writeUInt32LE(2, 4);
+    header.writeUInt32LE(12 + 8 + json.length + 8 + bin.length, 8);
+    const chunk = (data: Buffer, type: string) => {
+        const h = Buffer.alloc(8);
+        h.writeUInt32LE(data.length, 0);
+        h.write(type, 4, 'ascii');
+        return Buffer.concat([h, data]);
+    };
+    fs.mkdirSync(MODELS_DIR, { recursive: true });
+    fs.writeFileSync(path.join(MODELS_DIR, name), Buffer.concat([header, chunk(json, 'JSON'), chunk(bin, 'BIN\0')]));
+    return `/models/${name}`;
+}
+
 /** Flat ground at y = 1.5 over 400 m x 400 m as an n x n grid of quads (2 n^2 triangles), written with typed arrays. */
 function writeLargeTile(name: string, n: number): string {
     const positions = new Float32Array((n + 1) * (n + 1) * 3);
@@ -327,9 +379,9 @@ function lagMonitor(): { stop: () => number } {
     return { stop: () => { clearInterval(timer); return Math.max(max, Date.now() - last - 5); } };
 }
 
-function stagedScene(tileUri: string, treesUri?: string): (args: Record<string, unknown>, c: ToolContext) => Promise<ToolHandlerOutcome> {
+function stagedScene(tileUri: string, treesUri?: string, treesMeta: Record<string, unknown> = {}): (args: Record<string, unknown>, c: ToolContext) => Promise<ToolHandlerOutcome> {
     const tile = { id: 'tile-clay-1', content: { type: '3d-model', durableUri: tileUri, metadata: { source: 'Google3DTilesClay', role: 'environment', isGround: true } } };
-    const trees = treesUri ? [{ id: 'tile-trees-1', content: { type: '3d-model', durableUri: treesUri, metadata: { source: 'SB-Veggie', role: 'environment', layer: 'vegetation' } }, space: { spatial3d: { x: 0, y: 0, z: 0 } } }] : [];
+    const trees = treesUri ? [{ id: 'tile-trees-1', content: { type: '3d-model', durableUri: treesUri, metadata: { source: 'SB-Veggie', role: 'environment', layer: 'vegetation', ...treesMeta } }, space: { spatial3d: { x: 0, y: 0, z: 0 } } }] : [];
     return async () => ({
         status: 'completed',
         resultPayload: {
@@ -1268,6 +1320,33 @@ describe('build_3d_object_from_reference', () => {
         screenshotSeated(models.values(), spots[0].eastMeters, -spots[0].northMeters, 3, 'object_reference_beside_tree.png');
     }, 180_000);
 
+    it('reads a quantised trees layer (KHR_mesh_quantization, as staging writes trees) at its real height, and refuses one whose bounds no place can have', async () => {
+        // Haughwout Building, 488 Broadway: the staged trees are quantised, and reading their normalised SHORT positions as raw
+        // integers put the crowns 883,679 m up, so every spot read as covered and no placement was ever clear.
+        const location = 'Union Square, San Francisco';
+        const quantised = writeQuantizedStagedTrees('staged_trees_quantised_test.glb');
+        const quantisedSoup = glbToTriangleSoup(fs.readFileSync(path.join(MODELS_DIR, path.basename(quantised))))!;
+        const ys = Array.from(quantisedSoup.positions).filter((_, i) => i % 3 === 1);
+        expect(Math.max(...ys)).toBeCloseTo(9, 2);
+        expect(Math.min(...ys)).toBeCloseTo(1.5, 2);
+        const under = await handlerWith(fakeClient({ specs: [JSON.stringify(VASE)] }), { stageAtLocation: stagedScene(writeStagedTiles(), quantised, { vegetation: true }) })
+            .run({ request: 'a fluted vase under the tree', location, placement: { eastMeters: 6, northMeters: 4, headingDeg: 0 } });
+        expect(under.status).toBe('failed');
+        expect(under.resultPayload.coveredBy).toEqual({ id: 'tile-trees-1', topYMeters: 9 });
+        expect((under.resultPayload.clearSpots as unknown[]).length).toBeGreaterThan(0);
+
+        const broken = writeQuantizedStagedTrees('staged_trees_broken_test.glb', 883_679);
+        const refused = await handlerWith(fakeClient({ specs: [JSON.stringify(VASE)] }), { stageAtLocation: stagedScene(writeStagedTiles(), broken, { vegetation: true }) })
+            .run({ request: 'a fluted vase on the street', location, placement: { eastMeters: -20, northMeters: -20, headingDeg: 0 } });
+        expect(refused.status).toBe('failed');
+        expect(refused.resultPayload.stage).toBe('placement');
+        const error = String(refused.resultPayload.error);
+        expect(error).toContain('the vegetation layer tile-trees-1 (SB-Veggie) cannot be placed against');
+        expect(error).toContain('beyond the 9,000 m any real surface can be, so it is broken and was not used');
+        expect(error).toContain('or stage it with trees: false');
+        expect(refused.resultPayload.coveredBy).toBeUndefined();
+    }, 180_000);
+
     it('builds a given spec before staging, so a spec that cannot be built makes no staging call', async () => {
         const stageArgs: unknown[] = [];
         const staging = stagedScene(writeStagedTiles());
@@ -1545,6 +1624,50 @@ describe('build_3d_object_from_reference', () => {
         expect(stageArgs).toHaveLength(1);
         const noPlace = await run({ request: 'a vase', addToActiveScene: true }, onScene(tilesOnly));
         expect(String(noPlace.resultPayload.error)).toContain('addToActiveScene adds the object to the place the active scene shows');
+    }, 180_000);
+
+    it('a follow-up build keeps the clay view the user chose on the scene, with the object\'s materials built', async () => {
+        const staging = stagedScene(writeStagedTiles(), writeStagedTrees());
+        const tilesOnly = JSON.parse(JSON.stringify((await staging({}, ctx())).resultPayload.artifact));
+        Object.assign(tilesOnly.data.objects[0].content.metadata, { resolvedAddress: 'Washington Square, New York, NY 10012, USA', remeshed: true });
+        const { run } = handlerWith(undefined);
+        const onScene = (artifact: any): ToolContext => ({ ...ctx(), request: { ...ctx().request, activeArtifact: artifact } as any });
+        const add = (artifact: any, clay?: boolean) => run({ request: 'the vase', specJson: JSON.stringify(VASE), location: 'Washington Square Park', placement: { eastMeters: 12, northMeters: 8, headingDeg: 90 }, addToActiveScene: true, ...(clay ? { clay } : {}) }, onScene(artifact));
+        const staged = { runId: 'run-1', materialMode: undefined as string | undefined };
+        const withState = (data: Record<string, unknown>) => ({ ...tilesOnly, data: { ...tilesOnly.data, ...data } });
+
+        // no choice made: the place's own clay is not a clay view, the object shows its materials
+        const plain = await add(withState({ stagedBuild: staged }));
+        expect(plain.status, String(plain.resultPayload.error)).toBe('completed');
+        expect((plain.resultPayload.artifact as any).data.renderMode).toBe('pbr');
+        expect(plain.summaryResult).not.toContain('keeps the clay view');
+
+        // the user chose clay on the place alone (the place was already clay: nothing to remember)
+        const clayed = await add(withState({ renderMode: 'clay', stagedBuild: { ...staged, materialMode: 'clay' } }));
+        expect(clayed.status, String(clayed.resultPayload.error)).toBe('completed');
+        const data = (clayed.resultPayload.artifact as any).data;
+        expect(data).toMatchObject({ renderMode: 'clay', stagedBuild: { materialMode: 'clay' }, stagedBuildView: { renderModeBeforeClay: 'pbr' } });
+        // the view is clay, the build is not: every part has its material
+        expect(clayed.resultPayload).toMatchObject({ materials: { label: 'as-given' } });
+        expect(clayed.resultPayload.clay).toBe(false);
+        expect(data.objectBuild.clay).toBeFalsy();
+        expect(clayed.summaryResult).toContain('The scene keeps the clay view chosen on it (scene render mode: clay)');
+        // textured then shows the object's materials
+        expect(withStagedMaterialMode(data, 'textured')).toMatchObject({ renderMode: 'pbr', stagedBuild: { materialMode: 'textured' } });
+
+        // a clay view chosen over another mode (an object scene shown 'shaded') remembers that mode
+        const shaded = await add(withState({ renderMode: 'clay', stagedBuild: { ...staged, materialMode: 'clay' }, stagedBuildView: { renderModeBeforeClay: 'shaded', provenance: true } }));
+        expect((shaded.resultPayload.artifact as any).data).toMatchObject({ renderMode: 'clay', stagedBuildView: { renderModeBeforeClay: 'shaded', provenance: true } });
+
+        // a textured choice stays textured
+        const textured = await add(withState({ renderMode: 'pbr', stagedBuild: { ...staged, materialMode: 'textured' } }));
+        expect((textured.resultPayload.artifact as any).data).toMatchObject({ renderMode: 'pbr', stagedBuild: { materialMode: 'textured' } });
+
+        // clay: true is still a clay build
+        const clayBuild = await add(withState({ renderMode: 'clay', stagedBuild: { ...staged, materialMode: 'clay' } }), true);
+        expect((clayBuild.resultPayload.artifact as any).data.renderMode).toBe('clay');
+        expect(clayBuild.resultPayload).toMatchObject({ clay: true, materials: { label: 'clay' } });
+        expect(clayBuild.summaryResult).not.toContain('keeps the clay view');
     }, 180_000);
 
     it('reports a stop while staging or placing as a stop', async () => {
