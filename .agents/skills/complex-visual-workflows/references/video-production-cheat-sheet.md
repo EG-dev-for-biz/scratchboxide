@@ -28,7 +28,7 @@ node scripts/run_geo_camera_matchmove_pipeline.cjs \
 1. **Video Ingestion & Probe**: Extracts framerate, frame count, resolution, and pixel aspect ratio.
 2. **Geodetic Anchor Resolution**: Resolves latitude, longitude, elevation MSL, and street heading.
 3. **6-DoF Keyframe Resection (`adaptive_matchmove_resect_keyframe`)**: Solves camera optical center, Euler angles (heading, pitch, roll), and FOV.
-4. **Continuous Spline Solving (`adaptive_matchmove_solve_spline`)**: Fits a $C^2$ continuous Catmull-Rom or Hermite-Slerp spline with gimbal-lock avoidance.
+4. **Continuous Spline Solving (`adaptive_matchmove_synthesize_trajectory`)**: Fits a $C^2$ continuous Catmull-Rom or Hermite-Slerp spline with gimbal-lock avoidance.
 5. **Headless 3D Tiles Blockout Rendering**: Renders the exact 4K trajectory against Google 3D Tiles to produce `<VIDEO_REF_0>`.
 
 ---

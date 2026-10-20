@@ -211,7 +211,7 @@ Transforms coarse 3D tile captures into photographic-grade imagery by constructi
 
 ### Runbook B: Reference Video $\rightarrow$ Matchmove $\rightarrow$ 3D Blockout $\rightarrow$ Omni Video $\rightarrow$ 50/50 QA
 1. **Probe Reference Video**: Extract framerate, resolution, and duration with `ffprobe`.
-2. **Resect Keyframes & Solve Spline**: Run `adaptive_matchmove_resect_keyframe` and `adaptive_matchmove_solve_spline` to fit continuous $C^2$ spline.
+2. **Resect Keyframes & Solve Spline**: Run `adaptive_matchmove_resect_keyframe` and `adaptive_matchmove_synthesize_trajectory` to fit continuous $C^2$ spline.
 3. **Render 4K 3D Tiles Blockout**: Execute `sbox matchmove reference.mp4 --landmark "<name>" --render-mode textured --resolution 4k` to produce `<VIDEO_REF_0>`.
 4. **Synthesize Omni 1.1 Video**: Format Omni prompt conditioned on `<VIDEO_REF_0>` with timestamped shot blocks and zero-cut enforcement.
 5. **Compile 50/50 Comparison**: Run FFmpeg `hstack` to produce side-by-side synchronized split verification video.

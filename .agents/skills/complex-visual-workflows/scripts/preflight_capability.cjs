@@ -76,7 +76,7 @@ function analyzeVisualPrompt(prompt) {
 
   if (isVideo) {
     nativeTools.push('adaptive_matchmove_resect_keyframe');
-    nativeTools.push('adaptive_matchmove_solve_spline');
+    nativeTools.push('adaptive_matchmove_synthesize_trajectory');
     nativeTools.push('video-timeline canvas primitive (HeadlessVideoEditorService)');
     nativeTools.push('atmosphere_configure_scene / atmosphere_harmonize_location_3d');
     cliCommands.push('sbox matchmove reference.mp4 --landmark "<landmark>" --render-mode textured --resolution 4k');
