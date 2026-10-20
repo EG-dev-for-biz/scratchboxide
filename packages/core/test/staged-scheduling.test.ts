@@ -28,6 +28,7 @@ import { decodeImageToRgba, imageContentSha256, readImageDimensions } from '../s
 import { performance } from 'perf_hooks';
 import * as crypto from 'crypto';
 import { bandJpeg, figuresReply, GREY, perFaceSurveyReply, SKY, STONE, surveyReply } from './helpers/photo-ornament-fixtures';
+import { startLoadProbe } from './helpers/load-probe';
 
 const memoryCache = (): VisionReplyCache & { map: Map<string, VisionReplyRecord> } => {
     const map = new Map<string, VisionReplyRecord>();
@@ -207,13 +208,16 @@ describe('the survey: one call per face, all at once', () => {
             return c.client.models.generateContentStream!(p);
         } } };
         const input = () => ({ faces, panos: PANOS, structure: STRUCTURE, ground: GROUND, top: new Float32Array(0), deps: { mapsApiKey: 'k', grounding } });
+        const probe = startLoadProbe();
         const t0 = Date.now();
         const cold = await runFaceSurvey({ ...input(), chain: new VisionModelChain<string>({ client: watch, candidates: ['gemini-4-argon'], replyCache: cache }) });
         const coldMs = Date.now() - t0;
+        const load = await probe.stop();
         expect(c.calls()).toBe(4);
         expect(c.peak()).toBe(4);
-        // the sum would be 4 x DELAY; at once it is about one DELAY (plus the decode and palettes)
-        expect(coldMs).toBeLessThan(2 * DELAY + 1500);
+        // the sum would be 4 x DELAY; at once it is about one DELAY (plus the decode and palettes, which run as much
+        // slower as the suite's other forks make CPU work while it runs)
+        expect(coldMs, JSON.stringify(load)).toBeLessThan((2 * DELAY + 1500) * load.slowdown);
         expect(sent.length).toBe(4);
         for (const [w, h] of sent) expect(Math.max(w, h)).toBe(1024);
         // the full image stays in hand for the palette and registration
@@ -269,13 +273,18 @@ describe('image caps and the per-run grounding memo', () => {
             const [p, q] = [meanAt(a, fy), meanAt(b, fy)];
             for (let c = 0; c < 3; c++) expect(Math.abs(p[c] - q[c])).toBeLessThan(4);
         }
-        // eight close-ups at once: the event loop's active time stays small (the in-thread decode/average/encode used ~60 ms each)
+        // eight close-ups at once: the event loop's active time stays small (the in-thread decode/average/encode used ~60 ms
+        // each). The measure is against what the thread would spend just decoding the eight in-process, taken right before
+        // in the same conditions: ~20 ms against ~180 ms idle; under the suite's load both grow, the pipe wake-ups most.
         const imgs = Array.from({ length: 8 }, (_, k) => bandJpeg([SKY, k % 2 ? STONE : GREY, STONE], 1920, 1440));
+        const beforeDecode = performance.eventLoopUtilization();
+        for (const im of imgs) await decodeImageToRgba(im);
+        const inThread = performance.eventLoopUtilization(beforeDecode);
         const before = performance.eventLoopUtilization();
         const out = await Promise.all(imgs.map(im => shrinkImage(im, 1024)));
         const elu = performance.eventLoopUtilization(before);
         expect(out.every(o => o && readImageDimensions(o.bytes)?.width === 1024)).toBe(true);
-        expect(elu.active).toBeLessThan(120);
+        expect(elu.active, `shrink ${elu.active.toFixed(1)} ms active, in-thread decode ${inThread.active.toFixed(1)} ms`).toBeLessThan(inThread.active);
     });
 
     it('one grounding request per view: a prefetched view is handed over, a failed one is asked again', async () => {
