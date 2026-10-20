@@ -83,6 +83,11 @@ export interface AtmosphereClassification {
      * real places (3D tiles or geo coordinates).
      */
     studioReflections: boolean;
+    /**
+     * Whether objects standing at a real place (3D tiles or geo coordinates) get reflections made from the place itself
+     * (placeReflections.ts): a probe rendered from the scene at each object, lighting and reflection only. Off in clay mode.
+     */
+    placeReflections: boolean;
 }
 
 /** environmentIntensity of the studio reflections: under the studio rig's key light, so diffuse surfaces stay as lit. */
@@ -184,7 +189,9 @@ export function classifyAtmosphere(input: AtmosphereInput): AtmosphereClassifica
 
     const studioReflections = !isClayMode && !hasAtmosphere && !isDirectedDarkOrBlack && !input.has3DTiles && !input.hasGeoCoordinates;
 
-    return { hasAtmosphere, isSkySkybox, isSunset, hasGodRays, hasBiomes, biomeType, backgroundHex, effectiveAtmosphericScattering, studioReflections };
+    const placeReflections = !isClayMode && (input.has3DTiles || input.hasGeoCoordinates);
+
+    return { hasAtmosphere, isSkySkybox, isSunset, hasGodRays, hasBiomes, biomeType, backgroundHex, effectiveAtmosphericScattering, studioReflections, placeReflections };
 }
 
 /**

@@ -135,7 +135,8 @@ import { liveTilesAnchor, syncTilesLayer } from './scene3d/syncTilesLayer';
 import { sceneAsksForLiveTiles } from './scene3d/liveTilesAnchor';
 import { groundDatumBadge, projectRoutePoint } from './scene3d/geoAnchorLabels';
 import type { TilesLayerInput } from './scene3d/syncTilesLayer';
-import { drawsProceduralBiomeTerrain, syncAtmosphere } from './scene3d/syncAtmosphere';
+import { classifyAtmosphere, drawsProceduralBiomeTerrain, syncAtmosphere } from './scene3d/syncAtmosphere';
+import { PlaceReflections, placeReflectionsEnabled } from './scene3d/placeReflections';
 import type { AtmosphereInput } from './scene3d/syncAtmosphere';
 import { classifySceneContent, drawableModelKind, hasNonFallbackObjectContent, syncSceneContent, syncWasmMesh, undrawableSceneObjects } from './scene3d/syncSceneContent';
 import { ViewportNotice, resolveViewportNotice } from './scene3d/ViewportNotice';
@@ -1777,6 +1778,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     // ---------------------------------------------------------
     const stackRef = React.useRef<RendererStack | null>(null);
     const atmosphereRef = React.useRef<AtmosphereHandle | null>(null);
+    // reflections made from the place itself for objects at real places (placeReflections.ts)
+    const placeReflectionsRef = React.useRef<PlaceReflections | null>(null);
     const tilesHandleRef = React.useRef<TilesLayerHandle | null>(null);
     const contentRef = React.useRef<SceneContentHandle | null>(null);
     const wasmHandleRef = React.useRef<WasmMeshHandle | null>(null);
@@ -2167,6 +2170,30 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
         renderFrameRef.current = renderFrame;
         (window as any).__SB_3D_RENDER_FRAME__ = renderFrame;
+        // Reflections made from the place (scenes at real places): a probe per object standing there, re-rendered when the
+        // scene changes materially. Receivers: loaded models that are neither environment layers nor staged-build layers
+        // (or their textured twins), and the generated root.
+        const placeReflections = new PlaceReflections({
+            renderer, scene, camera,
+            receivers: () => {
+                const layers = (sceneDataRef.current as { stagedBuild?: { layers?: Array<{ objectId: string }> } } | undefined)?.stagedBuild?.layers ?? [];
+                const layerIds = new Set(layers.map(l => l.objectId));
+                const out: THREE.Object3D[] = [];
+                externalObjectsMapRef.current.forEach((root, id) => {
+                    if (!root.parent || root.userData.sbEnvironment) return;
+                    if (layerIds.has(id) || layerIds.has(id.replace(/~tex$/, ''))) return;
+                    out.push(root);
+                });
+                const generated = scene.getObjectByName(GENERATED_ROOT_NAME);
+                if (generated?.parent) out.push(generated);
+                return out;
+            },
+            overlays: () => [transformGizmoGroupRef.current, selectionBoxRef.current, brushCursorMeshRef.current, stack.gridHelper],
+            // the facade glass probe shares the capture and is re-rendered with the place's probes
+            refreshOthers: () => { refreshFacadeReflections(renderer, scene, externalObjectsMapRef.current.values()); }
+        });
+        placeReflectionsRef.current = placeReflections;
+        (window as any).__SB_PLACE_REFLECTIONS__ = placeReflections;
         // dev-only cost probe (opt-in: ?sbViewportCost=1 or localStorage sb.viewportCost = 1): the frame's triangles, draw calls,
         // memory and GPU time split by layer, trees by level (viewportCost.ts)
         if (viewportCostProbeEnabled()) {
@@ -2362,6 +2389,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 // 12.9 Tree levels of detail: per-tree level, dither and culling for loaded trees GLBs (before the render).
                 updateTreeLods(now);
 
+                // 12.95 Place reflections: re-rendered only once a material change in the scene has settled (placeReflections.ts).
+                placeReflections.tick(now);
+
                 // 13. Gaussian Splat viewer camera sync & depth sort
                 if (splatViewerRef.current && typeof splatViewerRef.current.updateCamera === 'function') {
                     splatViewerRef.current.updateCamera(camera);
@@ -2413,6 +2443,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             externalObjectsMapRef.current.clear();
             activeSplatMeshesRef.current.clear();
             renderFrameRef.current = null;
+            placeReflections.dispose();
+            placeReflectionsRef.current = null;
             opticsChain.dispose();
             opticsChainRef.current = null;
             focusController.dispose();
@@ -2513,6 +2545,11 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             createProceduralBiomeTerrain
         });
         atmosphereRef.current = handle;
+        const placeProbes = placeReflectionsRef.current;
+        if (placeProbes) {
+            placeProbes.setActive(placeReflectionsEnabled() && classifyAtmosphere(atmosphereInputRef.current).placeReflections);
+            placeProbes.invalidate();
+        }
         skyDomeModuleRef.current = handle.skyDomeModule;
         aerialPerspectiveRef.current = handle.aerialPerspective;
         terrainCloudShadowsRef.current = handle.terrainCloudShadows;
@@ -3143,6 +3180,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     // An explicit material on the object wins over the clay default.
                     syncObjectMaterial(model, latestDef(obj).material, renderModeRef.current === 'clay');
                     currentMap.set(obj.id, model);
+                    placeReflectionsRef.current?.invalidate();
                     setStatus(obj.id, { phase: 'ready', loaded: 0, total: 0 });
 
                     if (attach) {
