@@ -140,7 +140,7 @@ public:
                 Vertex v;
                 v.position = Vec3(px, py - 0.2f, pz);
                 v.uv = Vec2(static_cast<float>(x) / resolution, static_cast<float>(z) / resolution);
-                v.color = terrain.material.baseColorFactor;
+                v.color = Vec4(1.0f, 1.0f, 1.0f, 1.0f); // the material carries the clay tone; COLOR_0 stays neutral
                 terrain.vertices.push_back(v);
             }
         }
@@ -195,7 +195,7 @@ public:
             if (uvs.size() >= (i + 1) * 2) {
                 v.uv = Vec2(uvs[i * 2], uvs[i * 2 + 1]);
             }
-            v.color = mesh.material.baseColorFactor;
+            v.color = Vec4(1.0f, 1.0f, 1.0f, 1.0f); // the material carries the clay tone; COLOR_0 stays neutral
             mesh.vertices.push_back(v);
         }
 

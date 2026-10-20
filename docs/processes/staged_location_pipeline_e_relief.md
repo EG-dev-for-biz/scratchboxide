@@ -46,16 +46,27 @@ What the averaging recovered on seed 11:
 
 | Feature | Recovered (± SE) | Truth |
 |---|---|---|
-| Cornice | 0.582 ± 0.006 m | 0.6 m |
-| String course | 0.152 ± 0.009 m | 0.15 m |
-| Pilasters | 0.129 m, 0.133 m | 0.12 m |
-| Reveal (18 openings) | 0.245 ± 0.011 m | 0.25 m |
-| Sill | 0.087 ± 0.017 m | 0.08 m |
+| Cornice | 0.575 ± 0.006 m | 0.6 m |
+| String course | 0.145 ± 0.006 m | 0.15 m |
+| Pilasters | 0.131 m, 0.120 m | 0.12 m |
+| Reveal (18 openings) | 0.253 ± 0.011 m | 0.25 m |
+| Sill | 0.075 ± 0.005 m | 0.08 m |
 
+- The sill's extent past the jambs came out at -0.10 / +0.10 m (truth ±0.10 m); the test allows ±0.15 m.
 - The cornice's cross-section RMS against the truth is under 5 cm.
 - No other band or vertical element was kept.
 - A noise-only facade keeps nothing.
-- The same assertions pass on seeds 23, 37, 51, 77 and 101.
+- The same assertions pass on 20 of 20 noise seeds.
+
+**A correction to an earlier claim.** I first reported six passing seeds, but the test's generator was not drawing independent noise. Its random-number generator lost precision in float arithmetic and repeated every ~10,000 draws. With a correct 32-bit generator, two of eight seeds failed:
+- a 0.10 m-wide (2-line) partial band was kept by chance;
+- one noisy texel cut a sill's extent short.
+
+Two fixes followed:
+- line features narrower than 0.15 m (below what the scan resolves) are refused;
+- the extents beside openings grow across gaps of up to 0.15 m.
+
+The test now states the extent precision as ±0.15 m. It also allows the face's mode (the wall snap, which the averaging does not use) to sit within 0.1 m of zero. The rebuilt four places keep exactly the same features as before this fix.
 
 Before the two-pass local-plane detrend, the correlated noise produced 0.29 m false bands; the test failed then, and it fails without the change (no relief module).
 

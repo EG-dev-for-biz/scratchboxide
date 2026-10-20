@@ -704,10 +704,19 @@ public:
         }
         if (hasTextureTransform) extensionsUsed.push_back("KHR_texture_transform");
 
+        bool hasClearcoat = false, hasTransmission = false, hasIor = false, hasVolume = false;
         for (const auto& mesh : subMeshes) {
             if (mesh.material.emissiveStrength > 1.001f) hasEmissiveStrength = true;
+            if (mesh.material.clearcoatFactor > 0.0f) hasClearcoat = true;
+            if (mesh.material.transmissionFactor > 0.0f) hasTransmission = true;
+            if (std::abs(mesh.material.ior - 1.5f) > 0.001f || mesh.material.transmissionFactor > 0.0f) hasIor = true;
+            if (mesh.material.thicknessFactor > 0.0f) hasVolume = true;
         }
         if (hasEmissiveStrength) extensionsUsed.push_back("KHR_materials_emissive_strength");
+        if (hasClearcoat) extensionsUsed.push_back("KHR_materials_clearcoat");
+        if (hasTransmission) extensionsUsed.push_back("KHR_materials_transmission");
+        if (hasIor) extensionsUsed.push_back("KHR_materials_ior");
+        if (hasVolume) extensionsUsed.push_back("KHR_materials_volume");
 
         if (!lights.empty()) extensionsUsed.push_back("KHR_lights_punctual");
 
@@ -841,8 +850,35 @@ public:
                     ms << ",\"alphaCutoff\":" << mat.alphaCutoff;
                 }
             }
+            // Factor-only PBR extensions, written exactly when the extension discovery above lists them.
+            std::vector<std::string> matExt;
             if (mat.emissiveStrength > 1.001f) {
-                ms << ",\"extensions\":{\"KHR_materials_emissive_strength\":{\"emissiveStrength\":" << mat.emissiveStrength << "}}";
+                std::stringstream e; e << "\"KHR_materials_emissive_strength\":{\"emissiveStrength\":" << mat.emissiveStrength << "}";
+                matExt.push_back(e.str());
+            }
+            if (mat.clearcoatFactor > 0.0f) {
+                std::stringstream e; e << "\"KHR_materials_clearcoat\":{\"clearcoatFactor\":" << mat.clearcoatFactor
+                                       << ",\"clearcoatRoughnessFactor\":" << mat.clearcoatRoughnessFactor << "}";
+                matExt.push_back(e.str());
+            }
+            if (mat.transmissionFactor > 0.0f) {
+                std::stringstream e; e << "\"KHR_materials_transmission\":{\"transmissionFactor\":" << mat.transmissionFactor << "}";
+                matExt.push_back(e.str());
+            }
+            if (std::abs(mat.ior - 1.5f) > 0.001f || mat.transmissionFactor > 0.0f) {
+                std::stringstream e; e << "\"KHR_materials_ior\":{\"ior\":" << mat.ior << "}";
+                matExt.push_back(e.str());
+            }
+            if (mat.thicknessFactor > 0.0f) {
+                std::stringstream e; e << "\"KHR_materials_volume\":{\"thicknessFactor\":" << mat.thicknessFactor
+                                       << ",\"attenuationDistance\":" << mat.attenuationDistance
+                                       << ",\"attenuationColor\":[" << mat.attenuationColor.x << "," << mat.attenuationColor.y << "," << mat.attenuationColor.z << "]}";
+                matExt.push_back(e.str());
+            }
+            if (!matExt.empty()) {
+                ms << ",\"extensions\":{";
+                for (size_t i = 0; i < matExt.size(); ++i) ms << (i ? "," : "") << matExt[i];
+                ms << "}";
             }
             ms << "}";
             const std::string json = ms.str();

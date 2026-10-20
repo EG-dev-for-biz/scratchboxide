@@ -2,7 +2,8 @@
 sb.object_spec: deterministic interpreter for an ObjectBuildSpec
 (contract and JSON schema: packages/core/src/common/spatial/object-build-spec.ts).
 
-    scene = sb.object_spec.build(spec)      # sb.Scene of clay meshes, one per part
+    scene = sb.object_spec.build(spec)      # sb.Scene, one mesh per part, each with its material
+    scene = sb.object_spec.build(spec, clay=True)   # the same geometry, every part studio clay
     sb.io.write_glb(OUTPUT_GLB_PATH, scene)
 
 Units are metres, +Y up, +X right, +Z toward the front. Each part uses one of four geometry kernels:
@@ -18,13 +19,15 @@ Units are metres, +Y up, +X right, +Z toward the front. Each part uses one of fo
 A child part attaches by parameter (u along, angle around, offset along the normal) on its parent's evaluated
 surface, and its own coordinates are offsets in object axes from that point, so parts join by construction.
 Sample density follows one target edge length derived from the object's surface area, so resolution, not padding,
-carries the detail budget. Every mesh gets sb.PbrMaterial.clay(). Invalid input raises SpecError (a ValueError);
-nothing is defaulted or substituted. Labels are never read.
+carries the detail budget. A part's `material` (linear RGB baseColor, roughness, metalness, transmission, ior,
+clearcoat, emissive, emissiveStrength) becomes its glTF material factors; a part without one, and every part of a
+clay build, gets sb.PbrMaterial.clay(). Invalid input raises SpecError (a ValueError); nothing else is defaulted
+or substituted. Labels and material descriptions are never read.
 """
 
 import math
 
-__all__ = ["SpecError", "validate", "build", "build_meshes", "TARGET_VERTICES"]
+__all__ = ["SpecError", "validate", "build", "build_meshes", "part_material", "TARGET_VERTICES"]
 
 TARGET_VERTICES = 40000
 MAX_TRIANGLES = 450000
@@ -124,6 +127,36 @@ def _given(part, key):
     return part.get(key) is not None
 
 
+def _validate_material(material, where, errors):
+    """Mirrors validatePartMaterial in object-build-spec.ts."""
+    if not isinstance(material, dict):
+        errors.append("%s: material must be an object" % where)
+        return
+
+    def in_unit(v):
+        return _is_num(v) and 0 <= v <= 1
+
+    def rgb(v):
+        return isinstance(v, (list, tuple)) and len(v) == 3 and all(in_unit(x) for x in v)
+
+    if not rgb(material.get("baseColor")):
+        errors.append("%s: material.baseColor must be [r, g, b] linear RGB, each between 0 and 1" % where)
+    for key in ("roughness", "metalness", "transmission"):
+        if not in_unit(material.get(key)):
+            errors.append("%s: material.%s must be between 0 and 1" % (where, key))
+    if _given(material, "ior") and not (_is_num(material["ior"]) and 1 <= material["ior"] <= 3):
+        errors.append("%s: material.ior must be between 1 and 3" % where)
+    if _given(material, "clearcoat") and not in_unit(material["clearcoat"]):
+        errors.append("%s: material.clearcoat must be between 0 and 1" % where)
+    if _given(material, "emissive") and not rgb(material["emissive"]):
+        errors.append("%s: material.emissive must be [r, g, b] linear RGB, each between 0 and 1" % where)
+    if _given(material, "emissiveStrength"):
+        if not (_is_num(material["emissiveStrength"]) and 0 <= material["emissiveStrength"] <= 100):
+            errors.append("%s: material.emissiveStrength must be between 0 and 100" % where)
+        elif not _given(material, "emissive"):
+            errors.append("%s: material.emissiveStrength needs material.emissive (the colour it multiplies)" % where)
+
+
 def validate(spec):
     """Returns the list of problems with the spec (empty when it can be built)."""
     errors = []
@@ -168,6 +201,11 @@ def validate(spec):
             op_of[pid] = present[0]
         if _given(part, "mirrorPlaneNormal") and (not _is_vec(part["mirrorPlaneNormal"], 3) or _length(part["mirrorPlaneNormal"]) < _EPS):
             errors.append("%s: mirrorPlaneNormal must be a non-zero [x, y, z] vector" % where)
+        if _given(part, "material"):
+            if len(present) == 1 and present[0] in ("replicate", "relief"):
+                errors.append("%s: a %s part has no surface of its own, so it cannot have a material" % (where, present[0]))
+            else:
+                _validate_material(part["material"], where, errors)
 
     def in_reach(point, where, field):
         if any(abs(x) > reach for x in point):
@@ -1347,18 +1385,50 @@ def _path_copies(path, base):
     return pieces
 
 
-def build(spec):
-    """Builds the spec into an sb.Scene: one clay mesh per part, the lowest point resting on y = 0."""
+def part_material(sb, pid, material):
+    """A native PbrMaterial holding a part's material factors exactly (studio clay when it has none)."""
+    if not material:
+        return sb.PbrMaterial.clay()
+    mat = sb.geometry.PbrMaterial(str(pid))
+    r, g, b = (float(x) for x in material["baseColor"])
+    mat.base_color = sb.math.Vec4(r, g, b, 1.0)
+    mat.roughness = float(material["roughness"])
+    mat.metallic = float(material["metalness"])
+    mat.transmission = float(material["transmission"])
+    mat.ior = float(material["ior"]) if _given(material, "ior") else 1.5
+    mat.clearcoat = float(material["clearcoat"]) if _given(material, "clearcoat") else 0.0
+    if _given(material, "emissive"):
+        er, eg, eb = (float(x) for x in material["emissive"])
+        mat.emissive = sb.math.Vec3(er, eg, eb)
+        mat.emissive_intensity = float(material["emissiveStrength"]) if _given(material, "emissiveStrength") else 1.0
+    else:
+        mat.emissive = sb.math.Vec3(0.0, 0.0, 0.0)
+        mat.emissive_intensity = 1.0
+    # A see-through surface is seen from inside too (the far wall of a bottle).
+    mat.double_sided = mat.transmission > 0.0
+    return mat
+
+
+def build(spec, clay=False):
+    """
+    Builds the spec into an sb.Scene: one mesh per part, the lowest point resting on y = 0. Each part's mesh (with
+    its replicated and mirrored copies) carries the part's material factors; with clay=True, or for a part without a
+    material, it is studio clay.
+    """
     import scratchbox as sb
     vec3 = sb.math.Vec3
     scene = sb.Scene()
-    for owner, positions, normals, triangles in build_meshes(spec):
+    built = build_meshes(spec)   # validates first
+    materials = {} if clay else dict((p["id"], p.get("material")) for p in spec["parts"])
+    for owner, positions, normals, triangles in built:
         mesh = sb.geometry.Mesh(owner)
         for p, n in zip(positions, normals):
             mesh.add_vertex(vec3(p[0], p[1], p[2]), vec3(n[0], n[1], n[2]))
         for a, b, c in triangles:
             mesh.add_triangle(a, b, c)
         mesh.recompute_bounds()
-        mesh.apply_material(sb.PbrMaterial.clay())
+        # Assigned directly, not through apply_material, which also paints the base colour into the vertex colours:
+        # glTF viewers multiply COLOR_0 by baseColorFactor, which would square every colour. Vertices stay white.
+        mesh.material = part_material(sb, owner, materials.get(owner))
         scene.add_mesh(mesh)
     return scene

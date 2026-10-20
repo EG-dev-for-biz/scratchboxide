@@ -175,6 +175,10 @@ describe('3D intent policy', () => {
         expect(SPATIAL_INTENT_POLICY).toContain('New objects and places are textured by default');
         expect(SPATIAL_INTENT_POLICY).toContain('Use studio grey clay only when the user asks for it');
         expect(SPATIAL_INTENT_POLICY).toMatch(/views and material refinement \(a clay view for reviewing the shape/);
+        // material refinement is sb_set_material_pbr or a rebuild; procedural texture maps only when asked for
+        expect(SPATIAL_INTENT_POLICY).toMatch(/views and material refinement \([^)]*sb_set_material_pbr[^)]*rebuilding with adjusted materials; 2DGS surfels; 3DGS splats\)/);
+        expect(SPATIAL_INTENT_POLICY).toContain('Offer pbr_synthesize_material only when the user asks for procedural texture maps');
+        expect(SPATIAL_INTENT_POLICY).not.toMatch(/PBR material tuning|algorithmic micro-texture/);
         expect(SPATIAL_INTENT_POLICY).not.toMatch(/start in studio grey clay/);
         expect(SPATIAL_INTENT_POLICY).toContain('tell the user the address it resolved and what its result says it contains');
     });

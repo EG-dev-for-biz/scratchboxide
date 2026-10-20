@@ -302,6 +302,10 @@ NB_MODULE(scratchbox_native, m) {
             [](const PbrMaterial& self) { return self.emissiveStrength; },
             [](PbrMaterial& self, float val) { self.emissiveStrength = val; })
         .def_rw("clearcoat", &PbrMaterial::clearcoatFactor)
+        .def_rw("clearcoat_roughness", &PbrMaterial::clearcoatRoughnessFactor)
+        .def_rw("transmission", &PbrMaterial::transmissionFactor)
+        .def_rw("thickness", &PbrMaterial::thicknessFactor)
+        .def_rw("double_sided", &PbrMaterial::doubleSided)
         .def_rw("ior", &PbrMaterial::ior)
         .def("set_base_color", [](PbrMaterial& self, const Vec4& c) { self.baseColorFactor = c; }, "color"_a)
         .def("set_color", [](PbrMaterial& self, const Vec4& c) { self.baseColorFactor = c; }, "color"_a)
@@ -395,6 +399,12 @@ NB_MODULE(scratchbox_native, m) {
             self.setColor(color);
             return self;
         }, "color"_a)
+        .def("multiply_vertex_colors", [](ScratchboxMesh& self, const Vec4& factor) -> ScratchboxMesh& {
+            for (auto& v : self.vertices) {
+                v.color = Vec4(v.color.x * factor.x, v.color.y * factor.y, v.color.z * factor.z, v.color.w * factor.w);
+            }
+            return self;
+        }, "factor"_a, "Multiply every vertex colour (COLOR_0) component-wise, keeping per-vertex variation such as AO")
         .def_rw("material", &ScratchboxMesh::material)
         .def("set_material", [](ScratchboxMesh& self, const PbrMaterial& mat) -> ScratchboxMesh& {
             self.material = mat;
@@ -1532,7 +1542,8 @@ NB_MODULE(scratchbox_native, m) {
             Vec3 rotP = rotateY(v.position, facingRad);
             Vec3 rotN = rotateY(v.normal, facingRad);
             Vec3 worldP = rotP + Vec3(position.x, groundPlacementY, position.z);
-            outMesh.vertices.push_back(Vertex{worldP, rotN, v.uv, clayTone});
+            // The material carries the clay tone; COLOR_0 stays white so the colour is applied once.
+            outMesh.vertices.push_back(Vertex{worldP, rotN, v.uv, Vec4(1.0f, 1.0f, 1.0f, 1.0f)});
         }
         outMesh.indices = figure.indices;
         outMesh.recomputeBounds();

@@ -8,12 +8,16 @@
  ********************************************************************************/
 
 /**
- * Object or abstract-form request -> native clay geometry, in four stages:
- *   1. Reference: Nano Banana Lite (gemini-3.1-flash-lite-image, exactly that model) draws one isolated grey object.
+ * Object or abstract-form request -> native geometry with per-part PBR materials (or all clay on request), in four stages:
+ *   1. Reference: Nano Banana Lite (gemini-3.1-flash-lite-image, exactly that model) draws one isolated object in its
+ *      real colours and materials under neutral studio light (a clay build asks for a uniform grey clay object).
  *      The image stays a Buffer in this process: it is never written to disk, the media store, public/ or the chat.
  *   2. Build spec: the model chat runs on (the request's model, else the chat's default, walking the chat's own
  *      fallback list on "model not found" and saying so) reads the reference into an ObjectBuildSpec, on the chat's
- *      credentials. A spec the validator or the interpreter cannot build, or whose build runs past its time limit,
+ *      credentials. Unless the build is clay, every sweep and revolve part also gets a material: continuous factors
+ *      (linear RGB base colour, roughness, metalness, transmission, ior, clearcoat, emission) read from the generated
+ *      reference, so they are inferred from a generated image, not measured; the result and the GLB say so.
+ *      A spec the validator or the interpreter cannot build, or whose build runs past its time limit,
  *      gets one corrective re-ask quoting every problem, then the call fails.
  *   3. Build: sb.object_spec.build(spec) runs in the native Python engine and writes a GLB, within BUILD_TIMEOUT_MS
  *      (a run past it is stopped and reported as having run out of time). The time limit starts once the engine's
@@ -37,8 +41,9 @@
 import * as fs from 'fs';
 import type { Content, GenerateContentParameters, GenerateContentResponse, Part } from '@google/genai';
 import {
-    OBJECT_BUILD_SPEC_JSON_SCHEMA,
     buildObjectSpecScript,
+    objectBuildSpecJsonSchema,
+    partsWithoutMaterial,
     validateObjectBuildSpec,
     type ObjectBuildSpec,
     type Vec3
@@ -107,8 +112,26 @@ export interface ReferenceObjectBuildRequest {
     /** The model the chat request named, if any; unset means the chat's own default model. */
     requestedModel?: string;
     dimensionsHintMeters?: Vec3;
+    /**
+     * True when the user asked for clay (untextured grey): the reference is drawn as clay, no materials are read and
+     * every part is studio clay. Otherwise each part gets the material read from a full-colour reference.
+     */
+    clay?: boolean;
     signal?: AbortSignal;
     reportProgress?: (message: string, fraction?: number) => void;
+}
+
+/**
+ * Where the part materials of a build came from. `generated`: read by the vision model from the reference image an
+ * image model drew (inferred, never measured); `as-given`: written in the spec the caller passed; `clay`: none.
+ */
+export interface MaterialProvenance {
+    /** Legend key (nothing branches on it). */
+    label: 'generated' | 'as-given' | 'clay' | (string & {});
+    /** One sentence saying how the materials were obtained, for the result and the GLB extras. */
+    note: string;
+    /** Sweep and revolve parts with no material, built in studio clay (a spec without them, or a part left out). */
+    clayParts: string[];
 }
 
 export interface ReferenceObjectBuilderDeps {
@@ -234,6 +257,10 @@ export interface ComparisonFailure {
 
 export interface ReferenceObjectBuildResult {
     spec: ObjectBuildSpec;
+    /** True when every part was built as studio clay (a clay request). */
+    clay: boolean;
+    /** Where the part materials came from; also written into the GLB's material extras. */
+    materials: MaterialProvenance;
     sourceCode: string;
     glb: Buffer;
     glbPath: string;
@@ -314,17 +341,31 @@ const defaultSleep = (ms: number) => new Promise<void>(resolve => setTimeout(res
 // Prompts
 // ---------------------------------------------------------------------------
 
-export function buildReferenceImagePrompt(request: string): string {
+export function buildReferenceImagePrompt(request: string, options: { clay?: boolean } = {}): string {
     return [
         `Reference picture for building a 3D model of: ${request}`,
         'Show exactly one complete object, whole and uncropped, centred and filling most of the square frame, in a three-quarter view from slightly above.',
-        'Render it as matte, untextured, uniform mid-grey clay: no colour, pattern, text, logos or decals, so only its shape reads.',
-        'Plain flat #808080 background with even, shadowless studio light. No floor, ground plane, cast shadow, display stand that is not part of the object, props, people, hands or text.'
+        options.clay
+            ? 'Render it as matte, untextured, uniform mid-grey clay: no colour, pattern, text, logos or decals, so only its shape reads.'
+            : 'Show it in its real colours and materials (paint, bare metal, glass, plastic, wood, fabric, stone, organic surfaces), each part\'s finish clearly distinct where it changes, as in a clean product photograph. No text, logos or decals.',
+        options.clay
+            ? 'Plain flat #808080 background with even, shadowless studio light. No floor, ground plane, cast shadow, display stand that is not part of the object, props, people, hands or text.'
+            : 'Plain flat #808080 background with even, soft, neutral white studio light (no coloured light, no room or window reflections). No floor, ground plane, cast shadow, display stand that is not part of the object, props, people, hands or text.'
+    ].join('\n');
+}
+
+/** How materials are read, added to the conventions of a build that is not clay. */
+export function materialConventions(): string {
+    return [
+        '- material: every sweep and revolve part has one, read from the picture (replicate copies and mirrored parts use their source part\'s; replicate and relief parts have none). Describe the surface itself, not the studio light: ignore highlights, reflections and shading when reading colour.',
+        '  baseColor is LINEAR RGB 0..1, not sRGB: convert each sRGB channel v/255 to about (v/255)^2.2 (sRGB 128 is 0.22, sRGB 200 is 0.6, sRGB 240 is 0.87). For a metal it is the metal\'s tint (steel about [0.56, 0.57, 0.58], brass [0.91, 0.78, 0.42], copper [0.95, 0.64, 0.54]).',
+        '  roughness 0 mirror-smooth .. 1 chalky; metalness 1 only for bare metal, 0 for paint (even metallic paint), plastic, glass, stone, wood and organic matter; transmission 0 opaque, about 0.9-1 for clear glass, clear plastic or liquid (baseColor then tints what is seen through it); ior only for see-through parts (glass about 1.5, water 1.33); clearcoat for glossy lacquer, car paint or varnish; emissive (linear RGB) with emissiveStrength only for parts that glow.',
+        '  A part takes the surface that covers most of it; where the finish changes, split the shape into parts so each has one surface.'
     ].join('\n');
 }
 
 /** The rules every spec follows. Sent with the first request and again with every revision, which is stateless. */
-export function specConventions(dimensionsHintMeters?: Vec3): string {
+export function specConventions(dimensionsHintMeters?: Vec3, options: { materials?: boolean } = {}): string {
     const size = dimensionsHintMeters
         ? `The user gave its size as about ${dimensionsHintMeters.map(d => `${d} m`).join(' x ')} (width x height x depth).`
         : 'Size it to its real-world scale.';
@@ -342,16 +383,17 @@ export function specConventions(dimensionsHintMeters?: Vec3): string {
         '- Root parts (no parentId) use absolute coordinates. Use one root unless the object really is several separate pieces; expectedBodies is how many separate pieces you intend (usually 1). Every child must touch its parent.',
         '- mirrorPlaneNormal also emits a part and what is attached to it reflected across the plane through the origin with that normal, e.g. [1, 0, 0] for a left/right pair.',
         '- Spend parts on the main mass first, then the secondary assemblies, then small details; use as many parts as the object needs.',
-        '- observations: short notes on proportions, counts and how the parts join.'
+        ...(options.materials ? [materialConventions()] : []),
+        `- observations: short notes on proportions, counts and how the parts join${options.materials ? ', and the materials you see' : ''}.`
     ].join('\n');
 }
 
-export function buildSpecPrompt(request: string, dimensionsHintMeters?: Vec3): string {
+export function buildSpecPrompt(request: string, dimensionsHintMeters?: Vec3, options: { materials?: boolean } = {}): string {
     return [
         `The image is a reference picture of: ${request}`,
-        'Reverse-engineer it into a build spec for a procedural modeller. Reply with JSON matching the schema.',
+        `Reverse-engineer it into a build spec for a procedural modeller${options.materials ? ', with the surface material of every part' : ''}. Reply with JSON matching the schema.`,
         '',
-        specConventions(dimensionsHintMeters)
+        specConventions(dimensionsHintMeters, options)
     ].join('\n');
 }
 
@@ -365,12 +407,12 @@ export function buildComparisonPrompt(request: string, spec: ObjectBuildSpec): s
     ].join('\n');
 }
 
-export function buildRevisionPrompt(request: string, spec: ObjectBuildSpec, problems: string[], dimensionsHintMeters?: Vec3): string {
+export function buildRevisionPrompt(request: string, spec: ObjectBuildSpec, problems: string[], dimensionsHintMeters?: Vec3, options: { materials?: boolean } = {}): string {
     return [
         `Image 1 is the reference picture of: ${request}. Image 2 is a clay render of the current build.`,
         'Return the complete corrected build spec as JSON matching the schema, following the conventions below. Fix every problem listed and keep the parts that are right unchanged.',
         '',
-        specConventions(dimensionsHintMeters),
+        specConventions(dimensionsHintMeters, options),
         '',
         `Problems:\n${problems.map(p => `- ${p}`).join('\n')}`,
         '',
@@ -451,14 +493,15 @@ async function generateReferenceImage(
     client: GenerateContentClient,
     request: string,
     deps: ReferenceObjectBuilderDeps,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    clay?: boolean
 ): Promise<{ image: ReferenceImage; answered: string }> {
     let lastFinish: string | undefined;
     // Image models sometimes finish (STOP) with no image part; ask the same model again, never another one.
     for (let attempt = 0; attempt < EMPTY_IMAGE_ATTEMPTS; attempt++) {
         const response = await callModel(client, {
             model: REFERENCE_IMAGE_MODEL,
-            contents: [{ role: 'user', parts: [{ text: buildReferenceImagePrompt(request) }] }],
+            contents: [{ role: 'user', parts: [{ text: buildReferenceImagePrompt(request, { clay }) }] }],
             config: {
                 responseModalities: ['IMAGE'],
                 imageConfig: { aspectRatio: '1:1' },
@@ -711,10 +754,11 @@ async function runBuild(
     spec: ObjectBuildSpec,
     deps: ReferenceObjectBuilderDeps,
     signal?: AbortSignal,
-    reportProgress?: (message: string) => void
+    reportProgress?: (message: string) => void,
+    clay = false
 ): Promise<NativeBuild | RejectedBuild> {
     throwIfAborted(signal, 'build');
-    const sourceCode = buildObjectSpecScript(spec);
+    const sourceCode = buildObjectSpecScript(spec, { clay });
     await prepareEngine(deps, signal, reportProgress);
     throwIfAborted(signal, 'build');
     const runPython = deps.runPython ?? ((script: string, options: PythonExecutionOptions) => NativePythonRunnerService.getInstance().runScript(script, options));
@@ -766,20 +810,22 @@ async function requestBuildableSpec(
     contents: Content[],
     deps: ReferenceObjectBuilderDeps,
     signal?: AbortSignal,
-    reportProgress?: (message: string) => void
+    reportProgress?: (message: string) => void,
+    clay = false
 ): Promise<BuildableSpec> {
+    const schema = objectBuildSpecJsonSchema({ materials: !clay });
     type Attempt = { build?: NativeBuild; spec?: ObjectBuildSpec; problems: string[]; from: 'build-spec' | 'build'; timedOut?: boolean };
     const attempt = async (reply: JsonReply): Promise<Attempt> => {
-        const errors = reply.parseError ? [reply.parseError] : validateObjectBuildSpec(reply.value);
+        const errors = reply.parseError ? [reply.parseError] : validateObjectBuildSpec(reply.value, { requireMaterials: !clay });
         if (errors.length) return { problems: errors, from: 'build-spec' };
         const spec = reply.value as ObjectBuildSpec;
-        const built = await runBuild(spec, deps, signal, reportProgress);
+        const built = await runBuild(spec, deps, signal, reportProgress, clay);
         if ('specProblems' in built) return { problems: built.specProblems, from: 'build', ...(built.timedOut ? { timedOut: true } : {}) };
         return { build: built, spec, problems: [], from: 'build' };
     };
     const finder = (a: Attempt) => a.timedOut ? 'the build ran out of time' : a.from === 'build' ? 'the interpreter found' : 'the validator found';
 
-    const first = await callJson(vision, contents, OBJECT_BUILD_SPEC_JSON_SCHEMA, 'build-spec', signal, SPEC_READ_THINKING_BUDGET);
+    const first = await callJson(vision, contents, schema, 'build-spec', signal, SPEC_READ_THINKING_BUDGET);
     const one = await attempt(first);
     if (one.build && one.spec) return { spec: one.spec, build: one.build, specRequests: 1 };
 
@@ -787,7 +833,7 @@ async function requestBuildableSpec(
         ...contents,
         { role: 'model', parts: [{ text: first.text }] },
         { role: 'user', parts: [{ text: buildCorrectionPrompt(one.problems) }] }
-    ], OBJECT_BUILD_SPEC_JSON_SCHEMA, 'build-spec', signal, SPEC_READ_THINKING_BUDGET);
+    ], schema, 'build-spec', signal, SPEC_READ_THINKING_BUDGET);
     const two = await attempt(corrected);
     if (two.build && two.spec) return { spec: two.spec, build: two.build, specRequests: 2, correctedProblems: one.problems };
     const errors = two.problems;
@@ -1060,6 +1106,8 @@ function passRecord(checked: CheckedPass, source: ObjectBuildPass['source'], req
 
 export interface SpecObjectBuildResult {
     spec: ObjectBuildSpec;
+    clay: boolean;
+    materials: MaterialProvenance;
     sourceCode: string;
     glb: Buffer;
     glbPath: string;
@@ -1070,6 +1118,72 @@ export interface SpecObjectBuildResult {
     buildMs: number;
 }
 
+/** How a build's materials are labelled: read from the generated reference, as written in a given spec, or clay. */
+export function describeMaterialProvenance(spec: ObjectBuildSpec, how: { clay: boolean; source: 'reference' | 'spec'; imageModel?: string; visionModel?: string }): MaterialProvenance {
+    if (how.clay) return { label: 'clay', note: 'Clay build: every part is studio clay, no materials were read.', clayParts: [] };
+    const clayParts = partsWithoutMaterial(spec);
+    const missing = clayParts.length ? ` Parts without a material are studio clay: ${clayParts.join(', ')}.` : '';
+    if (how.source === 'reference') {
+        return {
+            label: 'generated',
+            note: `Part materials (colour, roughness, metalness, transmission, ior, clearcoat, emission) were read by ${how.visionModel ?? 'the vision model'} from a reference image drawn by ${how.imageModel ?? REFERENCE_IMAGE_MODEL}: inferred from a generated picture, not measured from the real object. Factors only, no texture maps.${missing}`,
+            clayParts
+        };
+    }
+    return {
+        label: 'as-given',
+        note: `Part materials are as written in the given spec (a reference build reads them from a generated image; they are never measured). Factors only, no texture maps.${missing}`,
+        clayParts
+    };
+}
+
+/**
+ * The GLB with each material's provenance in its extras (materials[i].extras.scratchbox: provenance, note, the part
+ * it belongs to and the spec's description) and the build's in asset.extras.scratchbox.materialProvenance. Geometry
+ * and the binary chunk are unchanged.
+ */
+export function stampMaterialProvenance(glb: Buffer, spec: ObjectBuildSpec, provenance: MaterialProvenance): Buffer {
+    if (glb.length < 20 || glb.toString('utf8', 0, 4) !== 'glTF' || glb.readUInt32LE(16) !== 0x4E4F534A) return glb;
+    const jsonLength = glb.readUInt32LE(12);
+    const json = JSON.parse(glb.toString('utf8', 20, 20 + jsonLength));
+    const byId = new Map(spec.parts.map(p => [p.id, p]));
+    for (const mesh of json.meshes || []) {
+        for (const prim of mesh.primitives || []) {
+            const material = typeof prim.material === 'number' ? json.materials?.[prim.material] : undefined;
+            if (!material) continue;
+            const part = byId.get(mesh.name);
+            const own = !provenance.clayParts.includes(mesh.name) && provenance.label !== 'clay';
+            material.extras = {
+                ...(material.extras || {}),
+                scratchbox: {
+                    partId: mesh.name,
+                    provenance: own ? provenance.label : 'clay',
+                    ...(own && part?.material?.description ? { description: part.material.description } : {})
+                }
+            };
+        }
+    }
+    json.asset = { ...(json.asset || {}), extras: { ...(json.asset?.extras || {}), scratchbox: { ...(json.asset?.extras?.scratchbox || {}), materialProvenance: { label: provenance.label, note: provenance.note } } } };
+    let text = JSON.stringify(json);
+    while (Buffer.byteLength(text) % 4) text += ' ';
+    const jsonChunk = Buffer.from(text, 'utf8');
+    const rest = glb.subarray(20 + jsonLength);
+    const header = Buffer.alloc(20);
+    header.write('glTF', 0, 'ascii');
+    header.writeUInt32LE(2, 4);
+    header.writeUInt32LE(20 + jsonChunk.length + rest.length, 8);
+    header.writeUInt32LE(jsonChunk.length, 12);
+    header.writeUInt32LE(0x4E4F534A, 16);
+    return Buffer.concat([header, jsonChunk, rest]);
+}
+
+/** The build with its material provenance stamped into the GLB in memory and on disk. */
+function stampBuild(build: NativeBuild, spec: ObjectBuildSpec, provenance: MaterialProvenance): NativeBuild {
+    const glb = stampMaterialProvenance(build.glb, spec, provenance);
+    if (glb !== build.glb) fs.writeFileSync(build.glbPath, glb);
+    return { ...build, glb };
+}
+
 /**
  * Builds a spec exactly as given, typically an edit of an earlier build's spec: no reference image, no model call
  * and no comparison. A spec the validator or the interpreter rejects, or a build that fails its checks (a part not
@@ -1078,16 +1192,17 @@ export interface SpecObjectBuildResult {
  */
 export async function buildObjectFromSpec(
     spec: unknown,
-    input: Pick<ReferenceObjectBuildRequest, 'signal' | 'reportProgress'> = {},
+    input: Pick<ReferenceObjectBuildRequest, 'signal' | 'reportProgress' | 'clay'> = {},
     deps: ReferenceObjectBuilderDeps = {}
 ): Promise<SpecObjectBuildResult> {
+    const clay = input.clay === true;
     const errors = validateObjectBuildSpec(spec);
     if (errors.length) {
         throw new ReferenceObjectBuildError('build-spec', `The spec cannot be built (the validator found: ${errors.join('; ')})`, { errors });
     }
     const valid = spec as ObjectBuildSpec;
     input.reportProgress?.('Building the spec natively', 0.2);
-    const built = await runBuild(valid, deps, input.signal, input.reportProgress);
+    const built = await runBuild(valid, deps, input.signal, input.reportProgress, clay);
     if ('specProblems' in built) {
         throw new ReferenceObjectBuildError('build',
             `The spec cannot be built (${built.timedOut ? 'the build ran out of time' : 'the interpreter found'}: ${built.specProblems.join('; ')})`,
@@ -1100,7 +1215,9 @@ export async function buildObjectFromSpec(
         throw new ReferenceObjectBuildError('checks', `The build does not pass its checks, so nothing was mounted: ${problems.join(' ')}`,
             { problems, connectivity: measured.connectivity, missingParts: measured.missingParts, detachedParts: measured.detachedParts });
     }
-    return { spec: valid, sourceCode: built.sourceCode, glb: built.glb, glbPath: built.glbPath, checks: measured, openProblems: problems, buildMs: built.buildMs };
+    const materials = describeMaterialProvenance(valid, { clay, source: 'spec' });
+    const stamped = stampBuild(built, valid, materials);
+    return { spec: valid, clay, materials, sourceCode: stamped.sourceCode, glb: stamped.glb, glbPath: stamped.glbPath, checks: measured, openProblems: problems, buildMs: stamped.buildMs };
 }
 
 /**
@@ -1123,7 +1240,8 @@ export async function buildObjectFromReference(
     const vision = new VisionModel(client, candidates, requestedModel ? 'request' : 'chat-default', deps, input.signal);
 
     progress(`Drawing an internal reference with ${REFERENCE_IMAGE_MODEL}`, 0.05);
-    let generated: { image: ReferenceImage; answered: string } | undefined = await generateReferenceImage(client, input.request, deps, input.signal);
+    const clay = input.clay === true;
+    let generated: { image: ReferenceImage; answered: string } | undefined = await generateReferenceImage(client, input.request, deps, input.signal, clay);
     let uploadedName: string | undefined;
     try {
         const prepared = await prepareReferenceForReading(client as FilesCapableClient, generated.image, input.signal);
@@ -1134,8 +1252,8 @@ export async function buildObjectFromReference(
         progress(`Reading the reference into a build spec with ${vision.current}`, 0.2);
         const firstSpec = await requestBuildableSpec(vision, [{
             role: 'user',
-            parts: [referencePart(reference), { text: buildSpecPrompt(input.request, input.dimensionsHintMeters) }]
-        }], deps, input.signal, progress);
+            parts: [referencePart(reference), { text: buildSpecPrompt(input.request, input.dimensionsHintMeters, { materials: !clay }) }]
+        }], deps, input.signal, progress, clay);
         let current = await checkBuild(1, firstSpec.spec, firstSpec.build, input, vision, reference);
         const passes: ObjectBuildPass[] = [passRecord(current, 'reference', firstSpec)];
         const checkedPasses = new Map<number, CheckedPass>([[1, current]]);
@@ -1153,9 +1271,9 @@ export async function buildObjectFromReference(
                     parts: [
                         referencePart(reference),
                         imagePart(current.render, 'image/png'),
-                        { text: buildRevisionPrompt(input.request, current.spec, current.problems, input.dimensionsHintMeters) }
+                        { text: buildRevisionPrompt(input.request, current.spec, current.problems, input.dimensionsHintMeters, { materials: !clay }) }
                     ]
-                }], deps, input.signal, progress);
+                }], deps, input.signal, progress, clay);
                 const checked = await checkBuild(pass, revised.spec, revised.build, input, vision, reference);
                 passes.push(passRecord(checked, 'revision', revised));
                 checkedPasses.set(pass, checked);
@@ -1195,13 +1313,18 @@ export async function buildObjectFromReference(
                 unverifiedDifferences: (checkedPasses.get(accepted.pass - 1)?.checks.differences || []).filter(d => d.confidence === 'high')
             }
             : undefined;
+        const visionModel = vision.use();
+        const materials = describeMaterialProvenance(accepted.spec, { clay, source: 'reference', imageModel: imageModel.answered, visionModel: visionModel.used });
+        const stamped = stampBuild(accepted.build, accepted.spec, materials);
         return {
             spec: accepted.spec,
-            sourceCode: accepted.build.sourceCode,
-            glb: accepted.build.glb,
-            glbPath: accepted.build.glbPath,
+            clay,
+            materials,
+            sourceCode: stamped.sourceCode,
+            glb: stamped.glb,
+            glbPath: stamped.glbPath,
             imageModel,
-            visionModel: vision.use(),
+            visionModel,
             backend,
             passes,
             resultPass: accepted.pass,
