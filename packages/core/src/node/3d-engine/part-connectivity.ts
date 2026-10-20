@@ -90,7 +90,15 @@ function nodeMatrix(node: any): Mat4 {
     ];
 }
 
-const COMPONENT_BYTES: Record<number, number> = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 };
+/** The local matrix of one EXT_mesh_gpu_instancing instance; a quantised rotation is renormalised (it is unit only to its precision). */
+function instanceMatrix(T: Float64Array | undefined, R: Float64Array | undefined, S: Float64Array | undefined, i: number): Mat4 {
+    let qx = R ? R[i * 4] : 0, qy = R ? R[i * 4 + 1] : 0, qz = R ? R[i * 4 + 2] : 0, qw = R ? R[i * 4 + 3] : 1;
+    const ql = Math.hypot(qx, qy, qz, qw) || 1;
+    qx /= ql; qy /= ql; qz /= ql; qw /= ql;
+    return nodeMatrix({ translation: T ? [T[i * 3], T[i * 3 + 1], T[i * 3 + 2]] : undefined, rotation: [qx, qy, qz, qw], scale: S ? [S[i * 3], S[i * 3 + 1], S[i * 3 + 2]] : undefined });
+}
+
+const COMPONENT_BYTES: Record<number, number> ={ 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 };
 
 /**
  * Values read, or vertices transformed, between yield points inside one accessor or primitive of the GLB reader; it
@@ -98,7 +106,11 @@ const COMPONENT_BYTES: Record<number, number> = { 5120: 1, 5121: 1, 5122: 2, 512
  */
 const READ_PER_YIELD = 1 << 13;
 
-/** An accessor's values as numbers, read through a DataView (sparse accessors and normalisation are not applied). */
+/**
+ * An accessor's values as numbers, read through a DataView. A `normalized` integer accessor is mapped to [0, 1] or
+ * [-1, 1] as glTF 2.0 (3.11) specifies: KHR_mesh_quantization stores positions as normalised SHORT inside a node scale,
+ * so reading the raw integers would put every vertex up to 32767 times too far out. Sparse accessors are not applied.
+ */
 function* readAccessor(gltf: any, bin: DataView, index: number): Generator<void, { values: Float64Array; components: number }, void> {
     const acc = gltf.accessors[index];
     const view = gltf.bufferViews[acc.bufferView];
@@ -106,13 +118,14 @@ function* readAccessor(gltf: any, bin: DataView, index: number): Generator<void,
     const bytes = COMPONENT_BYTES[acc.componentType];
     const stride = view.byteStride || components * bytes;
     const base = (view.byteOffset || 0) + (acc.byteOffset || 0);
+    const norm = acc.normalized === true;
     const get: (offset: number) => number =
         acc.componentType === 5126 ? o => bin.getFloat32(o, true)
             : acc.componentType === 5125 ? o => bin.getUint32(o, true)
-                : acc.componentType === 5123 ? o => bin.getUint16(o, true)
-                    : acc.componentType === 5121 ? o => bin.getUint8(o)
-                        : acc.componentType === 5122 ? o => bin.getInt16(o, true)
-                            : o => bin.getInt8(o);
+                : acc.componentType === 5123 ? (norm ? o => bin.getUint16(o, true) / 65535 : o => bin.getUint16(o, true))
+                    : acc.componentType === 5121 ? (norm ? o => bin.getUint8(o) / 255 : o => bin.getUint8(o))
+                        : acc.componentType === 5122 ? (norm ? o => Math.max(bin.getInt16(o, true) / 32767, -1) : o => bin.getInt16(o, true))
+                            : norm ? o => Math.max(bin.getInt8(o) / 127, -1) : o => bin.getInt8(o);
     const values = new Float64Array(acc.count * components);
     for (let i = 0; i < acc.count; i++) {
         const o = base + i * stride;
@@ -134,11 +147,18 @@ interface SoupSink {
 const newSink = (colors: boolean): SoupSink => ({ positions: [], indices: [], ...(colors ? { colors: [] } : {}), vertexCount: 0 });
 
 /**
+ * What to do with EXT_mesh_gpu_instancing nodes: 'expand' draws the mesh once per instance, as glTF specifies; 'skip'
+ * leaves instanced meshes out (a trees GLB's instanced leaf clusters lie inside its far level's crown masses, which are
+ * plain meshes and are read, while expanding every leaf of a district can reach hundreds of millions of triangles).
+ */
+export type GlbInstanceMode = 'expand' | 'skip';
+
+/**
  * Walks the GLB's default scene and appends each mesh primitive, in world space, to the sink `sinkFor` picks
  * for its node (named by the node, else its mesh). Returns false when the buffer is not a GLB. Yields about every
  * READ_PER_YIELD values, so a large model can be read in slices.
  */
-function* walkGlbTriangles(glb: Buffer, sinkFor: (name: string) => SoupSink): Generator<void, boolean, void> {
+function* walkGlbTriangles(glb: Buffer, sinkFor: (name: string) => SoupSink, instances: GlbInstanceMode = 'expand'): Generator<void, boolean, void> {
     if (glb.length < 28 || glb.toString('utf8', 0, 4) !== 'glTF') return false;
     const jsonLength = glb.readUInt32LE(12);
     const gltf = JSON.parse(glb.toString('utf8', 20, 20 + jsonLength));
@@ -156,7 +176,10 @@ function* walkGlbTriangles(glb: Buffer, sinkFor: (name: string) => SoupSink): Ge
                 const base: number[] = gltf.materials?.[prim.material]?.pbrMetallicRoughness?.baseColorFactor || [0.8, 0.8, 0.8, 1];
                 const colorAcc = typeof prim.attributes?.COLOR_0 === 'number' ? prim.attributes.COLOR_0 : undefined;
                 const vc = colorAcc !== undefined ? yield* readAccessor(gltf, bin, colorAcc) : undefined;
-                const vcScale = colorAcc !== undefined ? ({ 5121: 255, 5123: 65535 } as Record<number, number>)[gltf.accessors[colorAcc].componentType] || 1 : 1;
+                // readAccessor maps a normalised accessor to 0..1 (glTF requires integer COLOR_0 to be normalised); a file
+                // that leaves the flag off is still read as 8 or 16-bit colour
+                const colorInfo = colorAcc !== undefined ? gltf.accessors[colorAcc] : undefined;
+                const vcScale = colorInfo && colorInfo.normalized !== true ? ({ 5121: 255, 5123: 65535 } as Record<number, number>)[colorInfo.componentType] || 1 : 1;
                 const colors = new Float32Array(vertexCount * 3);
                 for (let v = 0; v < vertexCount; v++) {
                     for (let c = 0; c < 3; c++) colors[v * 3 + c] = base[c] * (vc ? vc.values[v * vc.components + c] / vcScale : 1);
@@ -195,7 +218,21 @@ function* walkGlbTriangles(glb: Buffer, sinkFor: (name: string) => SoupSink): Ge
         const node = gltf.nodes?.[nodeIndex];
         if (!node) return;
         const world = multiply(parent, nodeMatrix(node));
-        if (typeof node.mesh === 'number') yield* emitMesh(node.mesh, world, sinkFor(typeof node.name === 'string' && node.name ? node.name : meshName(node.mesh)));
+        if (typeof node.mesh === 'number') {
+            const sink = sinkFor(typeof node.name === 'string' && node.name ? node.name : meshName(node.mesh));
+            // EXT_mesh_gpu_instancing draws the mesh once per instance (its TRS inside the node's frame), never at the node itself
+            const inst = node.extensions?.EXT_mesh_gpu_instancing?.attributes;
+            if (inst && instances === 'skip') {
+                // left out (GlbInstanceMode)
+            } else if (inst) {
+                const read = function* (a: unknown) { return typeof a === 'number' ? (yield* readAccessor(gltf, bin, a)).values : undefined; };
+                const T = yield* read(inst.TRANSLATION), R = yield* read(inst.ROTATION), S = yield* read(inst.SCALE);
+                const count = T ? T.length / 3 : R ? R.length / 4 : S ? S.length / 3 : 0;
+                for (let i = 0; i < count; i++) yield* emitMesh(node.mesh, multiply(world, instanceMatrix(T, R, S, i)), sink);
+            } else {
+                yield* emitMesh(node.mesh, world, sink);
+            }
+        }
         for (const child of node.children || []) yield* visit(child, world);
     }
 
@@ -252,22 +289,97 @@ export async function runInSlices<T>(
     }
 }
 
-function* soupSteps(glb: Buffer, colors: boolean): Generator<void, TriangleSoup | null, void> {
+function* soupSteps(glb: Buffer, colors: boolean, instances: GlbInstanceMode = 'expand'): Generator<void, TriangleSoup | null, void> {
     const sink = newSink(colors);
-    return (yield* walkGlbTriangles(glb, () => sink)) ? toSoup(sink) : null;
+    return (yield* walkGlbTriangles(glb, () => sink, instances)) ? toSoup(sink) : null;
 }
 
-/** The GLB as one world-space soup; `colors: false` skips reading vertex colours when only geometry is needed. */
-export function glbToTriangleSoup(glb: Buffer, options: { colors?: boolean } = {}): TriangleSoup | null {
-    return runToEnd(soupSteps(glb, options.colors !== false));
+/**
+ * The GLB as one world-space soup; `colors: false` skips reading vertex colours when only geometry is needed, and
+ * `instances` says whether instanced meshes are expanded (the default) or left out.
+ */
+export function glbToTriangleSoup(glb: Buffer, options: { colors?: boolean; instances?: GlbInstanceMode } = {}): TriangleSoup | null {
+    return runToEnd(soupSteps(glb, options.colors !== false, options.instances));
 }
 
 /** The same, read in slices of about `sliceMs` so a large model does not hold up the event loop. */
 export function glbToTriangleSoupAsync(
     glb: Buffer,
-    options: { colors?: boolean; signal?: AbortSignal; sliceMs?: number; abortError?: () => Error } = {}
+    options: { colors?: boolean; instances?: GlbInstanceMode; signal?: AbortSignal; sliceMs?: number; abortError?: () => Error } = {}
 ): Promise<TriangleSoup | null> {
-    return runInSlices(soupSteps(glb, options.colors !== false), options);
+    return runInSlices(soupSteps(glb, options.colors !== false, options.instances), options);
+}
+
+/**
+ * World-space bounds of every triangle the GLB draws, instances included, without building a soup: each mesh's local
+ * box is read once and its eight corners carried through every node and instance that draws it (so the result can be
+ * a little larger than the triangles under a rotation, never smaller). Null when the buffer is not a GLB or draws
+ * nothing; a non-finite vertex makes the bounds non-finite.
+ */
+export function glbWorldBounds(glb: Buffer): { min: Vec3; max: Vec3 } | null {
+    if (glb.length < 28 || glb.toString('utf8', 0, 4) !== 'glTF') return null;
+    const jsonLength = glb.readUInt32LE(12);
+    const gltf = JSON.parse(glb.toString('utf8', 20, 20 + jsonLength));
+    const binStart = 20 + jsonLength + 8;
+    const bin = new DataView(glb.buffer, glb.byteOffset + binStart, Math.max(0, glb.length - binStart));
+    const min: Vec3 = [Infinity, Infinity, Infinity], max: Vec3 = [-Infinity, -Infinity, -Infinity];
+    let drew = false, finite = true;
+    const local = new Map<number, { lo: Vec3; hi: Vec3 } | null>();
+    const meshBox = (meshIndex: number) => {
+        if (local.has(meshIndex)) return local.get(meshIndex)!;
+        const lo: Vec3 = [Infinity, Infinity, Infinity], hi: Vec3 = [-Infinity, -Infinity, -Infinity];
+        let any = false;
+        for (const prim of gltf.meshes?.[meshIndex]?.primitives || []) {
+            if ((prim.mode ?? 4) !== 4 || typeof prim.attributes?.POSITION !== 'number') continue;
+            const pos = runToEnd(readAccessor(gltf, bin, prim.attributes.POSITION)).values;
+            for (let i = 0; i < pos.length; i++) {
+                const v = pos[i], k = i % 3;
+                if (!Number.isFinite(v)) finite = false;
+                if (v < lo[k]) lo[k] = v;
+                if (v > hi[k]) hi[k] = v;
+                any = true;
+            }
+        }
+        const box = any ? { lo, hi } : null;
+        local.set(meshIndex, box);
+        return box;
+    };
+    const add = (box: { lo: Vec3; hi: Vec3 }, m: Mat4) => {
+        drew = true;
+        for (let c = 0; c < 8; c++) {
+            const x = c & 1 ? box.hi[0] : box.lo[0], y = c & 2 ? box.hi[1] : box.lo[1], z = c & 4 ? box.hi[2] : box.lo[2];
+            const w: Vec3 = [m[0] * x + m[4] * y + m[8] * z + m[12], m[1] * x + m[5] * y + m[9] * z + m[13], m[2] * x + m[6] * y + m[10] * z + m[14]];
+            for (let k = 0; k < 3; k++) {
+                if (!Number.isFinite(w[k])) finite = false;
+                if (w[k] < min[k]) min[k] = w[k];
+                if (w[k] > max[k]) max[k] = w[k];
+            }
+        }
+    };
+    const visit = (nodeIndex: number, parent: Mat4, depth: number) => {
+        const node = gltf.nodes?.[nodeIndex];
+        if (!node || depth > 256) return;
+        const world = multiply(parent, nodeMatrix(node));
+        const box = typeof node.mesh === 'number' ? meshBox(node.mesh) : null;
+        if (box) {
+            const inst = node.extensions?.EXT_mesh_gpu_instancing?.attributes;
+            if (inst) {
+                const read = (a: unknown) => typeof a === 'number' ? runToEnd(readAccessor(gltf, bin, a)).values : undefined;
+                const T = read(inst.TRANSLATION), R = read(inst.ROTATION), S = read(inst.SCALE);
+                const count = T ? T.length / 3 : R ? R.length / 4 : S ? S.length / 3 : 0;
+                for (let i = 0; i < count; i++) add(box, multiply(world, instanceMatrix(T, R, S, i)));
+            } else {
+                add(box, world);
+            }
+        }
+        for (const child of node.children || []) visit(child, world, depth + 1);
+    };
+    const sceneIndex = typeof gltf.scene === 'number' ? gltf.scene : 0;
+    const roots: number[] = gltf.scenes?.[sceneIndex]?.nodes ?? (gltf.nodes ? gltf.nodes.map((_: any, i: number) => i) : []);
+    for (const r of roots) visit(r, IDENTITY, 0);
+    if (!drew) return null;
+    if (!finite) return { min: [NaN, NaN, NaN], max: [NaN, NaN, NaN] };
+    return { min, max };
 }
 
 /**
