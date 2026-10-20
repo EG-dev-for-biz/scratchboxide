@@ -107,7 +107,7 @@ export const AI_BEAUTIFY_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'build_neutral_performer_prompt',
-        description: 'DEPRECATED (hidden since 2026-10-20; remove after one release): no in-app tool generates performer images or video, so this template has no generation step to run inside; the function buildNeutralPerformerPrompt (omniVideoPromptService.ts) is the template. Still fills the head-to-toe, flat shadowless #808080 studio, symmetrical A-frame pose prompt (subject, wardrobe, aspectRatio, kind, isAFramePose) when a saved script calls it.',
+        description: 'Write the exact prompt and negative prompt for a performer or avatar capture image or video (buildNeutralPerformerPrompt): head-to-toe uncropped framing, plain #808080 studio backdrop with no environment, flat shadowless light, symmetrical A-frame pose. Pass the prompt to generate_image to make the reference image, or give it to the user for their video model.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -144,7 +144,7 @@ export const AI_BEAUTIFY_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'build_frame_motivated_performer_prompt',
-        description: 'DEPRECATED (hidden since 2026-10-20; remove after one release): no in-app tool generates performer video, so this template has no generation step to run inside; the function buildFrameMotivatedPerformerVideoPrompt (omniVideoPromptService.ts) is the template. Still fills the <FIRST_FRAME>/<LAST_FRAME> closed-loop A-pose video prompt (referenceFrameRef, subject, wardrobe, cameraPosition, videoMotion, videoModelBackbone) when a saved script calls it.',
+        description: 'Write the exact frame-motivated performer video prompt (buildFrameMotivatedPerformerVideoPrompt): motion conditioned on a reference hero frame with <FIRST_FRAME>/<LAST_FRAME> syntax, returning to the starting pose, the camera position, and a neutral shadowless studio. No in-app tool generates video: give the prompt to the user for their video model.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -203,11 +203,13 @@ export const AI_BEAUTIFY_TOOL_DECLARATIONS: ToolDeclaration[] = [
 ];
 
 /**
- * Prompt-template tools: registered but not offered (hidden since 2026-10-20; remove after one release). The
+ * Prompt-template tools that are registered but not offered (hidden since 2026-10-20; remove after one release): the
  * generation paths apply their templates themselves (survey beautify and the mesh render restyle read
- * buildBeautifyPrompt / buildClayRenderBeautifyPrompt), so the model no longer has to call them first.
+ * buildBeautifyPrompt / buildClayRenderBeautifyPrompt), so the model no longer has to call them first. The two
+ * performer prompt tools stay offered (user decision, 2026-10-20): no generation path knows when an image is a
+ * performer reference, so the model writes that prompt with the tool and then calls generate_image.
  */
-export const PROMPT_TEMPLATE_TOOL_NAMES: readonly string[] = AI_BEAUTIFY_TOOL_DECLARATIONS.map(d => d.name);
+export const PROMPT_TEMPLATE_TOOL_NAMES: readonly string[] = ['build_beautify_prompt'];
 
 export const aiBeautifyHandlers: Record<string, ToolHandler> = {
     build_beautify_prompt: (args, _ctx) => {

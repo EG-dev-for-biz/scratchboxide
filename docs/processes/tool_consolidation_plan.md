@@ -115,3 +115,8 @@ Real call sites found:
 - The performer decision is reversible in one line (drop the two names from `PROMPT_TEMPLATE_TOOL_NAMES`) if the user wants the model to keep writing those prompts for runs outside the app.
 - **MCP:** `scratchbox-mcp-server.ts` and `scratchbox-mcp.ts` expose `VFX_VIDEO_TOOL_DECLARATIONS` directly, so the three still appear as `mcp__scratchbox__build_*` to external clients (Claude Code sessions use them). Left as is: an external client has no generation step to fold them into.
 - Test: `beautify-template-in-generation.test.ts` stands a fake GenAI client at `client.models.generateContent` under the real `GoogleMediaGenerationService` and asserts the exact prompt text the mesh render restyle and the survey beautify send.
+
+## Update (2026-10-20): the two performer prompt tools are offered again
+
+`build_neutral_performer_prompt` and `build_frame_motivated_performer_prompt` are offered to the model again (user decision). No generation path can tell when an image is a performer reference without keyword routing, so the model writes the prompt with the tool and then calls `generate_image` (for a reference image) or hands the prompt to the user (for video). Only `build_beautify_prompt` stays hidden, because the generation paths apply that template themselves. The capability resolver now names the two tools as its target for performer requests.
+

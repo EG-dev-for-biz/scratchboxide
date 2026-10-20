@@ -14,7 +14,7 @@ describe('deprecated tool aliases', () => {
     it('lists the resection aliases and the prompt-template tools as deprecated', () => {
         expect([...DEPRECATED_TOOL_ALIASES].sort()).toEqual([...GEOBOX_RESECTION_ALIAS_TOOL_NAMES, ...PROMPT_TEMPLATE_TOOL_NAMES].sort());
         expect(GEOBOX_RESECTION_ALIAS_TOOL_NAMES).toEqual(['geobox_resect_camera_pose', 'spatial_resect_image_location']);
-        expect(PROMPT_TEMPLATE_TOOL_NAMES).toEqual(['build_beautify_prompt', 'build_neutral_performer_prompt', 'build_frame_motivated_performer_prompt']);
+        expect(PROMPT_TEMPLATE_TOOL_NAMES).toEqual(['build_beautify_prompt']);
     });
 
     it('registers every deprecated tool with a handler and a description that names the replacement and the removal note', () => {

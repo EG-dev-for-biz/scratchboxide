@@ -147,7 +147,10 @@ describe('the AI Beautify template is applied inside generation', () => {
     it('the template tools are no longer offered, but a saved script calling one still gets the template', async () => {
         const registry = createDefaultToolRegistry();
         const offered = new Set(registry.declarations().map(d => d.name));
-        for (const name of ['build_beautify_prompt', 'build_neutral_performer_prompt', 'build_frame_motivated_performer_prompt']) {
+        for (const name of ['build_neutral_performer_prompt', 'build_frame_motivated_performer_prompt']) {
+            expect(offered.has(name), `${name} stays offered (user decision 2026-10-20)`).toBe(true);
+        }
+        for (const name of ['build_beautify_prompt']) {
             expect(offered.has(name), name).toBe(false);
             expect(registry.get(name)?.offeredByDefault, name).toBe(false);
             expect(registry.get(name)?.declaration.description, name).toMatch(/^DEPRECATED \(hidden since 2026-10-20; remove after one release\)/);

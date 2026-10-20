@@ -184,7 +184,7 @@ When generating character plates, motion references, or performer conditioning v
    - Legs straight and shoulder-width apart.
    - Feet flat on the floor pointing directly forward (eliminates leg fusion).
 5. **Programmatic Builder & In-App Tool**:
-   - Use `buildNeutralPerformerPrompt` from `omniVideoPromptService.ts`. (The agent tool `build_neutral_performer_prompt` is deprecated and hidden since 2026-10-20: no in-app tool generates performer images or video, so write the prompt from the function for the user's own model run.)
+   - Call the tool `build_neutral_performer_prompt` (function `buildNeutralPerformerPrompt`, `omniVideoPromptService.ts`). For a reference image, pass the prompt and negative prompt to `generate_image` (aspect ratio 9:16); for video, give it to the user for their video model.
 
 ---
 
@@ -212,7 +212,7 @@ Capture viewpoints must systematically cover:
 5. *(Canonical continuous loop)*: 360° orbital camera at radius $2.2\text{m}$, elevation $1.25\text{m}$, FOV $50^\circ$, 72 frames with Zero-COLMAP analytical extrinsics.
 
 ### D. Programmatic Builders & Tools
-- **Prompt Formulation**: `buildFrameMotivatedPerformerVideoPrompt` (`omniVideoPromptService.ts`). (The Gemini tool `build_frame_motivated_performer_prompt` is deprecated and hidden since 2026-10-20.)
+- **Prompt Formulation**: the tool `build_frame_motivated_performer_prompt` (function `buildFrameMotivatedPerformerVideoPrompt`, `omniVideoPromptService.ts`). No in-app tool generates video; the user runs the prompt in their video model.
 - **Pipeline Ingestion**: `VideoTo4DPerformerPipelineService.process({ frameMotivatedInput: { ... } })`.
 
 

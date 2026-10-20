@@ -235,10 +235,10 @@ export class TaskCapabilityResolver {
             rationale = 'Native Frame-Motivated Performer Video Prompt Pipeline formulates exact <FIRST_FRAME> conditioning, A-pose continuity clauses, camera viewpoint angles (0°, 45°, 180°), and prompt neutrality rules.';
             suggestedNativeAction = {
                 primitiveType: 'markdown-document',
-                serviceOrTool: 'buildFrameMotivatedPerformerVideoPrompt (omniVideoPromptService.ts)',
-                targetTool: undefined,
+                serviceOrTool: 'build_frame_motivated_performer_prompt',
+                targetTool: 'build_frame_motivated_performer_prompt',
                 targetService: 'FrameMotivatedPerformerService',
-                details: 'No in-app tool generates performer video: write the prompt with buildFrameMotivatedPerformerVideoPrompt (referenceFrameRef, subject, wardrobe, cameraPosition) for the user to run in their video model.'
+                details: 'Write the prompt with build_frame_motivated_performer_prompt (referenceFrameRef, subject, wardrobe, cameraPosition). No in-app tool generates video, so the user runs it in their video model.'
             };
         } else if (isNeutralPerformerPrompt) {
             canSolveNatively = true;
@@ -249,10 +249,10 @@ export class TaskCapabilityResolver {
             rationale = 'Native Neutral Performer Studio Prompt Pipeline constructs strictly uncropped head-to-toe portraits in symmetrical A-frame pose with zero background context (#808080 studio grey) and shadowless high-CRI diffuse lighting to prevent backprojection cavities and SMPL distortion.';
             suggestedNativeAction = {
                 primitiveType: 'markdown-document',
-                serviceOrTool: 'buildNeutralPerformerPrompt (omniVideoPromptService.ts)',
-                targetTool: undefined,
+                serviceOrTool: 'build_neutral_performer_prompt',
+                targetTool: 'build_neutral_performer_prompt',
                 targetService: 'NeutralPerformerStudioService',
-                details: 'No in-app tool generates performer images or video: write the prompt with buildNeutralPerformerPrompt (subject, wardrobe, aspectRatio "9:16", kind "image" or "video", isAFramePose true) for the user to run in their image or video model.'
+                details: 'Write the prompt with build_neutral_performer_prompt (subject, wardrobe, aspectRatio "9:16", kind "image" or "video", isAFramePose true); for a reference image, pass it to generate_image; for video, the user runs it in their video model.'
             };
         } else if (domain === 'vfx') {
             const isMatchmoveOrSolar = /matchmove|camera\s*solve|sub-frame|brown-conrady|lens\s*distortion|ephemeris|solar\s*position|sun\s*altitude|sun\s*heading|noaa/i.test(lower);
