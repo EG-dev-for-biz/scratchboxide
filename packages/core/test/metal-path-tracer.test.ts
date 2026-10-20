@@ -1,0 +1,233 @@
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
+ *
+ * This software and associated documentation files are proprietary and confidential
+ * to Scratchbox LLC. Unauthorized copying, modification, distribution, or use
+ * of this file, via any medium, is strictly prohibited without explicit written
+ * permission from Scratchbox LLC.
+ ********************************************************************************/
+
+/**
+ * The Metal path tracer against the CPU reference. Both backends of scripts/sbvg_pathtracer.mm trace
+ * the same LOD cut of the same .sbvg with the same per-pixel PCG32 sample stream, so their images
+ * agree to sampling noise: block averages (8x8 pixels of 64 samples) expose any wrong term while
+ * single pixels only show noise. Runs on macOS with a ray tracing Metal device; skips elsewhere.
+ */
+
+import { describe, it, expect, beforeAll } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { MetalPathTracerService, MetalPathTracerError, readLinearColor, type MetalDeviceInfo, type MetalPathTraceResult } from '../src/node/3d-engine/metal-path-tracer-service';
+import { VirtualGeometryBuildService } from '../src/node/3d-engine/virtual-geometry-service';
+import { requireAsset, withReason } from './helpers/requirements';
+
+const FLATIRON_GLB = 'desktop-app/public/models/flatiron_building_40.7411_-73.9897_full_texture.glb';
+const flatironGlb = requireAsset(FLATIRON_GLB, 'a Google Photorealistic 3D Tiles capture of the Flatiron district (needs Google Map Tiles API access)');
+
+/** A UV sphere as a GLB (positions and indices only), the always-available fixture. */
+function writeSphereGlb(file: string, radius = 1, rings = 48, segments = 96): void {
+    const pos: number[] = [], idx: number[] = [];
+    for (let r = 0; r <= rings; r++) {
+        const phi = Math.PI * r / rings;
+        for (let s = 0; s <= segments; s++) {
+            const th = 2 * Math.PI * s / segments;
+            pos.push(radius * Math.sin(phi) * Math.cos(th), radius * Math.cos(phi), radius * Math.sin(phi) * Math.sin(th));
+        }
+    }
+    for (let r = 0; r < rings; r++) for (let s = 0; s < segments; s++) {
+        const a = r * (segments + 1) + s, b = a + segments + 1;
+        idx.push(a, b, a + 1, a + 1, b, b + 1);
+    }
+    const p = new Float32Array(pos), i = new Uint32Array(idx);
+    const pb = Buffer.from(p.buffer), ib = Buffer.from(i.buffer);
+    const bin = Buffer.concat([pb, ib]);
+    const json = {
+        asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }],
+        meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }],
+        accessors: [
+            { bufferView: 0, componentType: 5126, count: p.length / 3, type: 'VEC3', min: [-radius, -radius, -radius], max: [radius, radius, radius] },
+            { bufferView: 1, componentType: 5125, count: i.length, type: 'SCALAR' }],
+        bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: pb.length }, { buffer: 0, byteOffset: pb.length, byteLength: ib.length }],
+        buffers: [{ byteLength: bin.length }]
+    };
+    let js = Buffer.from(JSON.stringify(json));
+    js = Buffer.concat([js, Buffer.alloc((4 - js.length % 4) % 4, 0x20)]);
+    const header = Buffer.alloc(12);
+    header.writeUInt32LE(0x46546c67, 0); header.writeUInt32LE(2, 4); header.writeUInt32LE(12 + 8 + js.length + 8 + bin.length, 8);
+    const jh = Buffer.alloc(8); jh.writeUInt32LE(js.length, 0); jh.writeUInt32LE(0x4e4f534a, 4);
+    const bh = Buffer.alloc(8); bh.writeUInt32LE(bin.length, 0); bh.writeUInt32LE(0x004e4942, 4);
+    fs.writeFileSync(file, Buffer.concat([header, jh, js, bh, bin]));
+}
+
+const luminance = (c: Float32Array, i: number) => 0.2126 * c[i] + 0.7152 * c[i + 1] + 0.0722 * c[i + 2];
+
+interface ImageAgreement {
+    meanRatio: number;
+    /** Mean over 8x8 blocks of |meanA - meanB| / meanB. */
+    blockMeanRelDiff: number;
+    /** Share of 8x8 blocks whose means differ by more than 2%. */
+    blocksOver2pct: number;
+    pixelRmsRelToMean: number;
+}
+
+function compareLinear(a: MetalPathTraceResult, b: MetalPathTraceResult): ImageAgreement {
+    const A = readLinearColor(a), B = readLinearColor(b);
+    const w = a.stats.width, h = a.stats.height;
+    expect(b.stats.width).toBe(w);
+    expect(b.stats.height).toBe(h);
+    const n = w * h;
+    const la = new Float64Array(n), lb = new Float64Array(n);
+    let sumA = 0, sumB = 0, sumSq = 0;
+    for (let p = 0; p < n; p++) {
+        la[p] = luminance(A, p * 3);
+        lb[p] = luminance(B, p * 3);
+        expect(Number.isFinite(la[p]) && Number.isFinite(lb[p])).toBe(true);
+        sumA += la[p];
+        sumB += lb[p];
+        sumSq += (la[p] - lb[p]) ** 2;
+    }
+    const meanB = sumB / n;
+    const bs = 8, bw = Math.floor(w / bs), bh = Math.floor(h / bs);
+    let blockAbs = 0, over = 0, blocks = 0;
+    for (let by = 0; by < bh; by++) for (let bx = 0; bx < bw; bx++) {
+        let sa = 0, sb = 0;
+        for (let y = 0; y < bs; y++) for (let x = 0; x < bs; x++) {
+            const p = (by * bs + y) * w + bx * bs + x;
+            sa += la[p];
+            sb += lb[p];
+        }
+        const rel = Math.abs(sa - sb) / Math.max(sb, 0.02 * meanB * bs * bs);
+        blockAbs += rel;
+        if (rel > 0.02) over++;
+        blocks++;
+    }
+    return { meanRatio: sumA / sumB, blockMeanRelDiff: blockAbs / blocks, blocksOver2pct: over / blocks, pixelRmsRelToMean: Math.sqrt(sumSq / n) / meanB };
+}
+
+function pngSize(file: string): { width: number; height: number } {
+    const buf = fs.readFileSync(file);
+    expect(buf.subarray(1, 4).toString('ascii')).toBe('PNG');
+    return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+}
+
+describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray tracing against the CPU reference)', () => {
+    const service = new MetalPathTracerService();
+    const builder = new VirtualGeometryBuildService();
+    let tmp = '';
+    let device: MetalDeviceInfo;
+    let sphereSbvg = '';
+    const sunLighting = { sun: { elevationDeg: 42, azimuthDeg: 150 } } as const;
+    const sphereCamera = { position: [0, 0.5, 4] as [number, number, number], target: [0, 0, 0] as [number, number, number], verticalFovDeg: 35 };
+
+    beforeAll(async () => {
+        tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-metal-pt-'));
+        device = await service.probe();
+        if (!device.raytracing) return;
+        const glb = path.join(tmp, 'sphere.glb');
+        writeSphereGlb(glb);
+        sphereSbvg = path.join(tmp, 'sphere.sbvg');
+        const built = await builder.build(glb, sphereSbvg);
+        expect(built.stats.leafTriangleCount).toBeGreaterThan(8000);
+    });
+
+    it('probe names the device and says whether it ray traces', async () => {
+        expect(typeof device.raytracing).toBe('boolean');
+        if (device.raytracing) {
+            expect(device.device).toBeTruthy();
+            expect(device.appleFamily).toBeGreaterThanOrEqual(7);
+        } else {
+            expect(device.error || device.device).toBeTruthy();
+        }
+    });
+
+    it('renders the sphere under the studio dome with no energy gain, counting its rays', async ctx => {
+        if (!device.raytracing) return ctx.skip();
+        const res = await service.render({
+            sbvgPath: sphereSbvg, outputDir: path.join(tmp, 'furnace'),
+            width: 160, height: 160, samplesPerPixel: 64, maxBounces: 8, clampIndirect: 0, seed: 7,
+            lighting: { studio: { radiance: [1, 1, 1] } },
+            material: { albedo: [1, 1, 1], roughness: 1, metallic: 0 },
+            camera: { position: [0, 0, 4], target: [0, 0, 0], verticalFovDeg: 35 }
+        });
+        expect(res.stats.backend).toBe('metal');
+        expect(res.stats.device).toBe(device.device);
+        expect(res.stats.lighting).toBe('studio');
+        expect(res.stats.nanSamples).toBe(0);
+        expect(res.stats.cut.triangles).toBeGreaterThan(1000);
+        expect(res.stats.cut.clusters).toBeLessThan(res.stats.file.clusters);
+        expect(res.stats.geometryCoverage).toBeGreaterThan(0.4);
+        expect(res.stats.geometryCoverage).toBeLessThan(0.6);
+        // Every pixel traces at least 64 camera rays; hits add bounce rays.
+        expect(res.stats.rays).toBeGreaterThan(160 * 160 * 64);
+        expect(res.stats.renderMs).toBeGreaterThan(0);
+        expect(pngSize(res.beautyPngPath)).toEqual({ width: 160, height: 160 });
+
+        const color = readLinearColor(res);
+        let sum = 0, count = 0;
+        for (let i = 0; i < color.length; i += 3) {
+            const l = luminance(color, i);
+            if (Math.abs(l - 1) < 1e-6) continue; // dome pixels return the dome exactly
+            sum += l;
+            count++;
+        }
+        const mean = sum / count;
+        // A convex white body under a unit dome: Lambert returns 1; single-scatter GGX at roughness 1
+        // loses some energy (no multiple-scattering term), never gains any.
+        expect(count).toBeGreaterThan(0.4 * 160 * 160);
+        expect(mean).toBeGreaterThan(0.85);
+        expect(mean).toBeLessThan(1.02);
+    });
+
+    it('agrees with the CPU reference on the sphere under the sun', async ctx => {
+        if (!device.raytracing) return ctx.skip();
+        const common = { sbvgPath: sphereSbvg, width: 320, height: 240, samplesPerPixel: 64, maxBounces: 4, seed: 3, lighting: sunLighting, camera: sphereCamera };
+        const gpu = await service.render({ ...common, outputDir: path.join(tmp, 'sphere_gpu'), backend: 'metal' });
+        const cpu = await service.render({ ...common, outputDir: path.join(tmp, 'sphere_cpu'), backend: 'cpu' });
+        expect(gpu.stats.cut).toEqual(cpu.stats.cut);
+        expect(gpu.stats.lighting).toBe('sky');
+        expect(cpu.stats.backend).toBe('cpu');
+        // Same sample stream, so the same paths up to intersection tie-breaks.
+        expect(Math.abs(gpu.stats.rays - cpu.stats.rays) / cpu.stats.rays).toBeLessThan(0.005);
+        expect(Math.abs(gpu.stats.geometryCoverage - cpu.stats.geometryCoverage)).toBeLessThan(0.002);
+        const agreement = compareLinear(gpu, cpu);
+        expect(Math.abs(agreement.meanRatio - 1)).toBeLessThan(0.01);
+        expect(agreement.blockMeanRelDiff).toBeLessThan(0.01);
+        expect(agreement.blocksOver2pct).toBeLessThan(0.03);
+    });
+
+    it.skipIf(!flatironGlb.ok)(withReason('agrees with the CPU reference on a real tile and traces it faster', flatironGlb), async ctx => {
+        if (!device.raytracing) return ctx.skip();
+        const sbvg = path.join(tmp, 'flatiron.sbvg');
+        await builder.build(path.resolve(FLATIRON_GLB), sbvg);
+        const common = {
+            sbvgPath: sbvg, width: 640, height: 360, samplesPerPixel: 32, maxBounces: 4, seed: 1, lighting: sunLighting,
+            camera: { auto: { verticalFovDeg: 40, pitchDeg: 12, headingDeg: 30, distanceScale: 0.45 } }
+        };
+        const gpu = await service.render({ ...common, outputDir: path.join(tmp, 'flatiron_gpu'), backend: 'metal' });
+        const cpu = await service.render({ ...common, outputDir: path.join(tmp, 'flatiron_cpu'), backend: 'cpu' });
+        expect(gpu.stats.cut).toEqual(cpu.stats.cut);
+        expect(gpu.stats.cut.triangles).toBeGreaterThan(100_000);
+        expect(gpu.stats.cut.triangles).toBeLessThan(gpu.stats.file.leafTriangles);
+        expect(gpu.stats.geometryCoverage).toBeGreaterThan(0.4);
+        expect(Math.abs(gpu.stats.rays - cpu.stats.rays) / cpu.stats.rays).toBeLessThan(0.002);
+        const agreement = compareLinear(gpu, cpu);
+        expect(Math.abs(agreement.meanRatio - 1)).toBeLessThan(0.005);
+        expect(agreement.blockMeanRelDiff).toBeLessThan(0.003);
+        expect(agreement.blocksOver2pct).toBeLessThan(0.005);
+        // eslint-disable-next-line no-console
+        console.log(`[metal-path-tracer] ${device.device}: ${(gpu.stats.raysPerSecond / 1e6).toFixed(1)} M rays/s GPU vs ${(cpu.stats.raysPerSecond / 1e6).toFixed(1)} M rays/s CPU; block diff ${(agreement.blockMeanRelDiff * 100).toFixed(3)}%`);
+        expect(gpu.stats.raysPerSecond).toBeGreaterThan(cpu.stats.raysPerSecond);
+    });
+
+    it('fails plainly on a file that is not .sbvg and on a CPU reference without a sun', async ctx => {
+        if (!device.raytracing) return ctx.skip();
+        const bad = path.join(tmp, 'bad.sbvg');
+        fs.writeFileSync(bad, Buffer.alloc(256, 7));
+        await expect(service.render({ sbvgPath: bad, outputDir: path.join(tmp, 'bad'), width: 16, height: 16, samplesPerPixel: 1, camera: sphereCamera }))
+            .rejects.toThrow(/not an \.sbvg file/);
+        await expect(service.render({ sbvgPath: sphereSbvg, outputDir: path.join(tmp, 'cpu_studio'), backend: 'cpu', width: 16, height: 16, samplesPerPixel: 1, camera: sphereCamera }))
+            .rejects.toThrow(/needs config\.lighting\.sun/);
+        await expect(service.render({ sbvgPath: path.join(tmp, 'missing.sbvg'), outputDir: path.join(tmp, 'missing') })).rejects.toBeInstanceOf(MetalPathTracerError);
+    });
+});
