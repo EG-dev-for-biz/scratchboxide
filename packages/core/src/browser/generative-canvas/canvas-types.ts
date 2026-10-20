@@ -1139,6 +1139,17 @@ export interface Scene3DData {
         shading?: 'clay' | 'clusters' | 'lod-levels';
         /** Render back faces too (for meshes with inconsistent winding). */
         doubleSided?: boolean;
+        /**
+         * Progressive Metal path tracing of the LOD cut (macOS, a ray tracing GPU), drawn over the
+         * WebGPU view with the source GLB's materials. Lighting is the neutral studio dome unless a sun
+         * is set. Off by default.
+         */
+        pathTrace?: {
+            enabled?: boolean;
+            sun?: { elevationDeg: number; azimuthDeg: number };
+            /** Samples per pixel a view accumulates to (default 256). */
+            targetSpp?: number;
+        };
         buildStats?: {
             sourceTriangles: number;
             clusterCount: number;

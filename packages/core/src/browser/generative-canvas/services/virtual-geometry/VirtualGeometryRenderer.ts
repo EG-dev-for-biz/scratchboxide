@@ -544,6 +544,17 @@ export class VirtualGeometryRenderer {
         return { ...this.camera, target: [...this.camera.target] as [number, number, number] };
     }
 
+    /** The orbit camera as a look-at view in the file's coordinates: what another renderer needs to draw the same shot. */
+    getView(): { eye: [number, number, number]; target: [number, number, number]; up: [number, number, number]; fovYDeg: number } {
+        const { eye, up } = this.basis();
+        return { eye: [eye[0], eye[1], eye[2]], target: [...this.camera.target] as [number, number, number], up: [up[0], up[1], up[2]], fovYDeg: (this.camera.fovY * 180) / Math.PI };
+    }
+
+    /** Scene bounds from the loaded header (file coordinates), or null before a file is loaded. */
+    getBounds(): { min: [number, number, number]; max: [number, number, number] } | null {
+        return this.header ? { min: [...this.header.aabbMin] as [number, number, number], max: [...this.header.aabbMax] as [number, number, number] } : null;
+    }
+
     setErrorThreshold(px: number) {
         this.options.errorThresholdPx = Math.max(0.05, px);
         this.stats.errorThresholdPx = this.options.errorThresholdPx;

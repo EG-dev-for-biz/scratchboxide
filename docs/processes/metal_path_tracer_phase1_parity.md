@@ -60,9 +60,21 @@ Furnace (unit sphere, uniform unit dome, albedo 1, roughness 1, metallic 0, 8 bo
 
 Agreement: mean ratio 0.99999; 8x8-block mean relative difference 0.040%; 19 of 14,400 blocks over 2% (sunlit high-contrast edges where the intersectors' tie-breaks differ). The always-available test fixture is a checkerboard-textured sphere (GLB with TEXCOORD_0, a PNG and a sampler), compared GPU vs CPU the same way and against clay.
 
+## Phase 3 (2026-10-20): the path-traced view in the app
+
+**Resident helper.** `sbvg_pathtracer --serve <dir>` keeps the GPU tracer alive: JSON commands on stdin (`open` a file and its GLB's materials, `view` with the camera, size, LOD threshold and target spp, `close`), JSON events on stdout (`opened`, `view`, `frame`). `MetalPathTracer` gained a progressive API (`beginFrame` / `samplePasses` / `readback`); the helper samples 1, 2 then 4 passes per batch and writes the display-ready 8-bit RGBA frame (AgX, the first frame's auto exposure held for the view) to `<dir>/frame.rgba` by atomic rename at most every 40 ms. The LOD cut and acceleration structure are rebuilt only when the eye moves more than a tenth of the scene radius or the LOD parameters change. Frames travel as a file in the page cache read by the server, not shared memory proper.
+
+**Server.** `MetalPathTraceSession` (spawn, line protocol, latest-frame bookkeeping) in `metal-path-tracer-service.ts`; `/3d/path-trace` (`open` by served `.sbvg` URL and workspace GLB path, `view`, `frame?after=<seq>.<spp>` answering 204 until a newer frame exists, `close`; idle sessions reaped after 10 min). The frame headers must be listed in `Access-Control-Expose-Headers`: the page runs on another origin in development and the browser hides them otherwise, which silently rejected every frame on the first live try.
+
+**Viewport.** A "Path traced" toggle (and a "Studio / Sun" toggle beside it) on `VirtualGeometryViewport`, persisted as `virtualGeometry.pathTrace`. On, it opens a session for the loaded `.sbvg` and source GLB, pauses the WebGPU loop, follows the orbit camera (`VirtualGeometryRenderer.getView()`, debounced 80 ms), polls frames every 50 ms and draws the newest over the WebGPU canvas; the HUD shows device, spp, resolution, measured rays/s, the cut and the materials. Off, it closes the session and resumes WebGPU.
+
+**Live evidence** (isolated instance `scratchbox-metal-pt`, ports 3310/3311/3312, Flatiron opened through the agent's `virtual_geometry_open_glb`): session opened with 209 materials and 209 textures; the 615x713 view cut 251,218 triangles in 4,676 clusters and reached 256 spp in about 3 s at 216 M rays/s (studio dome) and 190 M rays/s (sun); an orbit drag restarted accumulation (seen at 140 of 256 spp on the new view); a wheel zoom rebuilt the cut (238,888 triangles); toggling off closed the session. Console clean throughout. Tests: `metal-path-tracer.test.ts` (resident session: frames accumulate, a small move keeps the cut, a bad view is refused without killing the process) and `desktop-app/test/path-trace-routes.test.ts` (URL validation, a session through the standalone server).
+
+**Not done.** Frames are noisy at low spp (Phase 4 denoises); the cut rebuild (~100 ms for 240k triangles) is synchronous in the helper, so a long drag across the scene stalls frames briefly each tenth of a radius; the resolution is capped at 1280 wide.
+
 ## Next (plan)
 
-- Phase 3: a resident helper process driven by the Electron app, frames through shared memory into the `VirtualGeometryViewport`, a "Path traced" toggle.
+- Phase 4: the a-trous denoiser on the GPU and temporal reuse across camera moves.
 - Re-textured coarse levels for charted photogrammetry, so the DAG regains its depth without crossing seams.
 - Phase 4: the a-trous denoiser on the GPU and temporal reuse.
 - Rays: rasterize the camera hit with the existing WebGPU cluster pass; coarser cuts for bounce and shadow rays; any-hit shadow rays (done); merged per-chunk acceleration structures; better samplers; MetalFX upscale.

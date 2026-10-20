@@ -321,6 +321,64 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
         expect(gpu.stats.raysPerSecond).toBeGreaterThan(cpu.stats.raysPerSecond);
     });
 
+    it('runs a resident session: frames accumulate for a view, a new view restarts them, close ends the process', async ctx => {
+        if (!device.raytracing) return ctx.skip();
+        const session = await service.openSession({ sbvgPath: texturedSbvg, glbPath: texturedGlb, lighting: sunLighting }, { dir: path.join(tmp, 'session') });
+        try {
+            expect(session.alive).toBe(true);
+            expect(session.opened).toMatchObject({ device: device.device, materials: { source: 'glb', count: 1, texturesUploaded: 1 } });
+            expect(session.opened!.file.leafTriangles).toBeGreaterThan(8000);
+            expect(session.latestFrame()).toBeNull();
+
+            const view = { width: 160, height: 120, camera: sphereCamera, targetSpp: 12 };
+            const started = await session.setView(view);
+            expect(started).toMatchObject({ seq: 1, width: 160, height: 120, lighting: 'sky', targetSpp: 12 });
+            expect(started.cut.rebuilt).toBe(true);
+            expect(started.cut.triangles).toBeGreaterThan(1000);
+
+            const frames: number[] = [];
+            await new Promise<void>((resolve, reject) => {
+                const timer = setTimeout(() => reject(new Error(`no finished frame; got spp ${frames.join(',')}`)), 20_000);
+                session.on('frame', f => {
+                    frames.push(f.spp);
+                    if (f.done) { clearTimeout(timer); resolve(); }
+                });
+            });
+            expect(frames[frames.length - 1]).toBe(12);
+            for (let i = 1; i < frames.length; i++) expect(frames[i]).toBeGreaterThan(frames[i - 1]);
+            const read = session.readFrame();
+            expect(read).not.toBeNull();
+            expect(read!.rgba.length).toBe(160 * 120 * 4);
+            expect(read!.meta).toMatchObject({ seq: 1, spp: 12, done: true });
+            // Display-ready pixels: opaque, and the lit sphere is not all one value.
+            let alphaOk = true, distinct = new Set<number>();
+            for (let i = 0; i < read!.rgba.length; i += 4) {
+                if (read!.rgba[i + 3] !== 255) alphaOk = false;
+                distinct.add(read!.rgba[i]);
+            }
+            expect(alphaOk).toBe(true);
+            expect(distinct.size).toBeGreaterThan(32);
+
+            // A small camera move keeps the cut (it is within a tenth of the scene radius), restarts the samples.
+            const moved = await session.setView({ ...view, camera: { ...sphereCamera, position: [0.02, 0.5, 4] } });
+            expect(moved.seq).toBe(2);
+            expect(moved.cut.rebuilt).toBe(false);
+            expect(session.latestFrame()).toBeNull();
+            await new Promise<void>((resolve, reject) => {
+                const timer = setTimeout(() => reject(new Error('no frame after the camera move')), 20_000);
+                session.on('frame', f => { if (f.seq === 2) { clearTimeout(timer); resolve(); } });
+            });
+            expect(session.latestFrame()!.seq).toBe(2);
+            // A view with a bad size is refused without killing the session.
+            await expect(session.setView({ ...view, width: 2 })).rejects.toThrow(/between 8 and 8192/);
+            expect(session.alive).toBe(true);
+        } finally {
+            session.close();
+        }
+        await new Promise<void>(resolve => { if (!session.alive) resolve(); else session.on('exit', () => resolve()); });
+        expect(session.alive).toBe(false);
+    });
+
     it('refuses GLB materials for a .sbvg without material ids and a GLB with fewer materials than the file', async ctx => {
         if (!device.raytracing) return ctx.skip();
         // The plain sphere GLB has no materials, the checker .sbvg was built with one.

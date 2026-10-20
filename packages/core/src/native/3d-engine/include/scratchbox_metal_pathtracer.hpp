@@ -272,6 +272,24 @@ public:
      */
     render::RenderOutput render(const render::CameraSpec& camera, const Lighting& lighting, const render::RenderSettings& settings,
                                 const Material* uniformMaterial) {
+        beginFrame(camera, lighting, settings, uniformMaterial);
+        const int spp = std::max(1, settings.samplesPerPixel);
+        // A few sample passes per command buffer: the GPU watchdog bounds how long one may run.
+        for (int s = 0; s < spp; s += 4) samplePasses(std::min(4, spp - s));
+        return readback();
+    }
+
+    /** Samples accumulated since beginFrame. */
+    int samplesPerPixel() const { return frameSpp_; }
+    /** GPU time of the accumulation since beginFrame, in ms. */
+    double frameGpuMs() const { return frameGpuSeconds_ * 1000.0; }
+
+    /**
+     * Starts a progressive frame: allocates the accumulation buffer for the view and seeds every pixel's
+     * sample stream. samplePasses adds samples; readback returns the image so far. Same arguments as render.
+     */
+    void beginFrame(const render::CameraSpec& camera, const Lighting& lighting, const render::RenderSettings& settings,
+                    const Material* uniformMaterial) {
         if (!accel_) throw Error("setGeometry was not called");
         if (lighting.mode == Lighting::Mode::Sky && !lighting.sky) throw Error("Sky lighting needs a PhysicalSky");
         if (!uniformMaterial && !hasMaterials_) throw Error("setMaterials was not called and no uniform material was given");
@@ -282,7 +300,6 @@ public:
         }
         const int w = std::max(1, settings.width);
         const int h = std::max(1, settings.height);
-        const int spp = std::max(1, settings.samplesPerPixel);
         const size_t n = static_cast<size_t>(w) * h;
 
         Uniforms u;
@@ -343,95 +360,109 @@ public:
             put(u.studioRadiance, lighting.studioRadiance);
         }
 
-        render::RenderOutput out;
         @autoreleasepool {
-            id<MTLBuffer> pixels = [device_ newBufferWithLength:n * sizeof(PixelState) options:MTLResourceStorageModeShared];
-            id<MTLBuffer> uniforms = [device_ newBufferWithBytes:&u length:sizeof(Uniforms) options:MTLResourceStorageModeShared];
-            id<MTLBuffer> lutBuffer = [device_ newBufferWithBytes:lut.data() length:lut.size() * sizeof(float) options:MTLResourceStorageModeShared];
-            if (!pixels || !uniforms || !lutBuffer) throw Error("could not allocate render buffers");
-            id<MTLBuffer> materialIds = uniformMaterial ? emptyMaterialIds_ : materialIdBuffer_;
-            id<MTLBuffer> materials = uniformMaterial ? emptyMaterials_ : materialBuffer_;
-            id<MTLBuffer> textureRefs = uniformMaterial ? emptyTextures_ : textureRefBuffer_;
+            framePixels_ = [device_ newBufferWithLength:n * sizeof(PixelState) options:MTLResourceStorageModeShared];
+            frameUniforms_ = [device_ newBufferWithBytes:&u length:sizeof(Uniforms) options:MTLResourceStorageModeShared];
+            frameLut_ = [device_ newBufferWithBytes:lut.data() length:lut.size() * sizeof(float) options:MTLResourceStorageModeShared];
+            if (!framePixels_ || !frameUniforms_ || !frameLut_) throw Error("could not allocate render buffers");
+            frameUniform_ = uniformMaterial != nullptr;
+            frameWidth_ = w;
+            frameHeight_ = h;
+            frameSpp_ = 0;
+            frameGpuSeconds_ = 0.0;
 
-            const MTLSize grid = MTLSizeMake(static_cast<NSUInteger>(w), static_cast<NSUInteger>(h), 1);
+            id<MTLCommandBuffer> commands = [queue_ commandBuffer];
+            id<MTLComputeCommandEncoder> encoder = [commands computeCommandEncoder];
+            [encoder setComputePipelineState:initPso_];
+            [encoder setBuffer:framePixels_ offset:0 atIndex:0];
+            [encoder setBuffer:frameUniforms_ offset:0 atIndex:1];
+            [encoder dispatchThreads:MTLSizeMake(static_cast<NSUInteger>(w), static_cast<NSUInteger>(h), 1) threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
+            [encoder endEncoding];
+            submit(commands);
+        }
+    }
+
+    /** Adds `passes` samples to every pixel of the current frame, in one command buffer. */
+    void samplePasses(int passes) {
+        if (!framePixels_) throw Error("beginFrame was not called");
+        @autoreleasepool {
+            id<MTLBuffer> materialIds = frameUniform_ ? emptyMaterialIds_ : materialIdBuffer_;
+            id<MTLBuffer> materials = frameUniform_ ? emptyMaterials_ : materialBuffer_;
+            id<MTLBuffer> textureRefs = frameUniform_ ? emptyTextures_ : textureRefBuffer_;
+            const MTLSize grid = MTLSizeMake(static_cast<NSUInteger>(frameWidth_), static_cast<NSUInteger>(frameHeight_), 1);
             const MTLSize group = MTLSizeMake(8, 8, 1);
-            double gpuSeconds = 0.0;
-            auto submit = [&](id<MTLCommandBuffer> commands) {
-                [commands commit];
-                [commands waitUntilCompleted];
-                if (commands.error) throw Error(std::string("GPU render failed: ") + commands.error.localizedDescription.UTF8String);
-                gpuSeconds += commands.GPUEndTime - commands.GPUStartTime;
-            };
-            {
-                id<MTLCommandBuffer> commands = [queue_ commandBuffer];
+            id<MTLCommandBuffer> commands = [queue_ commandBuffer];
+            for (int k = 0; k < std::max(1, passes); ++k) {
                 id<MTLComputeCommandEncoder> encoder = [commands computeCommandEncoder];
-                [encoder setComputePipelineState:initPso_];
-                [encoder setBuffer:pixels offset:0 atIndex:0];
-                [encoder setBuffer:uniforms offset:0 atIndex:1];
+                [encoder setComputePipelineState:samplePso_];
+                [encoder setBuffer:framePixels_ offset:0 atIndex:0];
+                [encoder setBuffer:frameUniforms_ offset:0 atIndex:1];
+                [encoder setBuffer:vertexBuffer_ offset:0 atIndex:2];
+                [encoder setBuffer:indexBuffer_ offset:0 atIndex:3];
+                [encoder setBuffer:frameLut_ offset:0 atIndex:4];
+                [encoder setAccelerationStructure:accel_ atBufferIndex:5];
+                [encoder setBuffer:materialIds offset:0 atIndex:6];
+                [encoder setBuffer:materials offset:0 atIndex:7];
+                [encoder setBuffer:textureRefs offset:0 atIndex:8];
+                if (!frameUniform_) {
+                    for (id<MTLTexture> texture : textures_) [encoder useResource:texture usage:MTLResourceUsageRead];
+                }
                 [encoder dispatchThreads:grid threadsPerThreadgroup:group];
                 [encoder endEncoding];
-                submit(commands);
             }
-            // A few sample passes per command buffer: the GPU watchdog bounds how long one may run.
-            const int passesPerBuffer = 4;
-            for (int s = 0; s < spp; s += passesPerBuffer) {
-                id<MTLCommandBuffer> commands = [queue_ commandBuffer];
-                for (int k = s; k < std::min(spp, s + passesPerBuffer); ++k) {
-                    id<MTLComputeCommandEncoder> encoder = [commands computeCommandEncoder];
-                    [encoder setComputePipelineState:samplePso_];
-                    [encoder setBuffer:pixels offset:0 atIndex:0];
-                    [encoder setBuffer:uniforms offset:0 atIndex:1];
-                    [encoder setBuffer:vertexBuffer_ offset:0 atIndex:2];
-                    [encoder setBuffer:indexBuffer_ offset:0 atIndex:3];
-                    [encoder setBuffer:lutBuffer offset:0 atIndex:4];
-                    [encoder setAccelerationStructure:accel_ atBufferIndex:5];
-                    [encoder setBuffer:materialIds offset:0 atIndex:6];
-                    [encoder setBuffer:materials offset:0 atIndex:7];
-                    [encoder setBuffer:textureRefs offset:0 atIndex:8];
-                    if (!uniformMaterial) {
-                        for (id<MTLTexture> texture : textures_) [encoder useResource:texture usage:MTLResourceUsageRead];
-                    }
-                    [encoder dispatchThreads:grid threadsPerThreadgroup:group];
-                    [encoder endEncoding];
-                }
-                submit(commands);
-            }
-
-            out.width = w;
-            out.height = h;
-            out.color.assign(n, Vec3(0, 0, 0));
-            out.guides.width = w;
-            out.guides.height = h;
-            out.guides.albedo.assign(n, Vec3(0, 0, 0));
-            out.guides.normal.assign(n, Vec3(0, 0, 0));
-            out.guides.depth.assign(n, 0.0f);
-            out.guides.variance.assign(n, 0.0f);
-            out.guides.geometryMask.assign(n, 0);
-            const PixelState* state = static_cast<const PixelState*>(pixels.contents);
-            const float inv = 1.0f / static_cast<float>(spp);
-            size_t covered = 0;
-            for (size_t i = 0; i < n; ++i) {
-                const PixelState& p = state[i];
-                out.color[i] = Vec3(p.color[0], p.color[1], p.color[2]) * inv;
-                const double mean = static_cast<double>(p.lum) / spp;
-                out.guides.variance[i] = static_cast<float>(std::max(0.0, static_cast<double>(p.lumSq) / spp - mean * mean) / spp);
-                out.rays += p.rays;
-                out.nanSamples += p.nan;
-                if (p.hits * 2 >= static_cast<uint32_t>(spp)) {
-                    out.guides.geometryMask[i] = 1;
-                    out.guides.albedo[i] = Vec3(p.albedo[0], p.albedo[1], p.albedo[2]) / static_cast<float>(p.hits);
-                    out.guides.normal[i] = Vec3(p.normal[0], p.normal[1], p.normal[2]).normalized();
-                    out.guides.depth[i] = p.depth / static_cast<float>(p.hits);
-                    ++covered;
-                }
-            }
-            out.geometryCoverage = static_cast<float>(covered) / static_cast<float>(n);
-            out.renderMs = gpuSeconds * 1000.0;
+            submit(commands);
+            frameSpp_ += std::max(1, passes);
         }
+    }
+
+    /** The current frame's image: the mean of the samples so far, with the guide buffers and counts. */
+    render::RenderOutput readback() const {
+        if (!framePixels_) throw Error("beginFrame was not called");
+        const int w = frameWidth_, h = frameHeight_;
+        const int spp = std::max(1, frameSpp_);
+        const size_t n = static_cast<size_t>(w) * h;
+        render::RenderOutput out;
+        out.width = w;
+        out.height = h;
+        out.color.assign(n, Vec3(0, 0, 0));
+        out.guides.width = w;
+        out.guides.height = h;
+        out.guides.albedo.assign(n, Vec3(0, 0, 0));
+        out.guides.normal.assign(n, Vec3(0, 0, 0));
+        out.guides.depth.assign(n, 0.0f);
+        out.guides.variance.assign(n, 0.0f);
+        out.guides.geometryMask.assign(n, 0);
+        const PixelState* state = static_cast<const PixelState*>(framePixels_.contents);
+        const float inv = 1.0f / static_cast<float>(spp);
+        size_t covered = 0;
+        for (size_t i = 0; i < n; ++i) {
+            const PixelState& p = state[i];
+            out.color[i] = Vec3(p.color[0], p.color[1], p.color[2]) * inv;
+            const double mean = static_cast<double>(p.lum) / spp;
+            out.guides.variance[i] = static_cast<float>(std::max(0.0, static_cast<double>(p.lumSq) / spp - mean * mean) / spp);
+            out.rays += p.rays;
+            out.nanSamples += p.nan;
+            if (p.hits * 2 >= static_cast<uint32_t>(spp)) {
+                out.guides.geometryMask[i] = 1;
+                out.guides.albedo[i] = Vec3(p.albedo[0], p.albedo[1], p.albedo[2]) / static_cast<float>(p.hits);
+                out.guides.normal[i] = Vec3(p.normal[0], p.normal[1], p.normal[2]).normalized();
+                out.guides.depth[i] = p.depth / static_cast<float>(p.hits);
+                ++covered;
+            }
+        }
+        out.geometryCoverage = static_cast<float>(covered) / static_cast<float>(n);
+        out.renderMs = frameGpuSeconds_ * 1000.0;
         return out;
     }
 
 private:
+    void submit(id<MTLCommandBuffer> commands) {
+        [commands commit];
+        [commands waitUntilCompleted];
+        if (commands.error) throw Error(std::string("GPU render failed: ") + commands.error.localizedDescription.UTF8String);
+        frameGpuSeconds_ += commands.GPUEndTime - commands.GPUStartTime;
+    }
+
     static void put(float* dst, const Vec3& v) {
         dst[0] = v.x;
         dst[1] = v.y;
@@ -460,6 +491,14 @@ private:
     id<MTLBuffer> emptyMaterials_{nil};
     id<MTLBuffer> emptyTextures_{nil};
     id<MTLAccelerationStructure> accel_{nil};
+    id<MTLBuffer> framePixels_{nil};
+    id<MTLBuffer> frameUniforms_{nil};
+    id<MTLBuffer> frameLut_{nil};
+    bool frameUniform_{true};
+    int frameWidth_{0};
+    int frameHeight_{0};
+    int frameSpp_{0};
+    double frameGpuSeconds_{0.0};
     std::vector<id<MTLTexture>> textures_;
     std::vector<uint32_t> triMaterials_;
     std::string deviceName_;
