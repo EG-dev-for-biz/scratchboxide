@@ -12,7 +12,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { NativePythonRunnerService } from '../src/node/3d-engine/native-python-runner-service';
-import { parseOrSynthesizeArtifact } from '../src/node/gemini/artifact-synthesis';
+import { buildPendingPythonGenerator, parseOrSynthesizeArtifact } from '../src/node/gemini/artifact-synthesis';
 import { Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 
 describe('Procedural Building Complexity & Architectural Grammar Verification', () => {
@@ -116,7 +116,7 @@ print(f"VERIFICATION_ELAPSED={time.time() - start:.3f}")
         expect(version).toBe(2);
     }, 60000);
 
-    it('2. Builds the procedural architectural 3D scene the model sent in its reply', () => {
+    it('2. Builds the procedural architectural 3D scene the model sent in its reply', async () => {
         // The model's own scene envelope with its sb script; a bare code block in prose is not mounted as a scene.
         const script = `import scratchbox as sb
 
@@ -142,12 +142,15 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
             + JSON.stringify({ type: '3d-scene', title: 'Citadel Plaza', data: { pythonGenerator: { sourceCode: script } } })
             + '\n```';
 
-        const artifact = parseOrSynthesizeArtifact(
+        const synthesized = parseOrSynthesizeArtifact(
             'Create a detailed architectural building with trees on a plaza',
             pythonResponse,
             { prompt: 'Create a detailed architectural building with trees on a plaza' } as any,
             []
         );
+        // Synthesis returns the scene unbuilt; the Python child runs afterwards, off the event loop (28d12471).
+        expect((synthesized?.data as Scene3DData | undefined)?.pythonGenerator?.glbBase64).toBeUndefined();
+        const artifact = await buildPendingPythonGenerator(synthesized);
 
         expect(artifact).toBeDefined();
         expect(artifact?.type).toBe('3d-scene');
@@ -157,5 +160,5 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
         expect(sceneData.pythonGenerator?.enabled).toBe(true);
         expect(sceneData.pythonGenerator?.glbBase64).toBeDefined();
         expect(sceneData.pythonGenerator?.glbBase64?.length).toBeGreaterThan(10000);
-    });
+    }, 60000);
 });
