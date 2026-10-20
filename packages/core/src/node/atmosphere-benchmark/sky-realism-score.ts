@@ -25,7 +25,12 @@ export const SKY_REALISM_TOLERANCES = {
     /** CIE 1960 Δuv between the photographed sun disc and the scene's sun light colour. */
     sunColorDeltaUv: 0.012,
     /** |ln| of the direct-to-diffuse horizontal irradiance ratio's error (photo disc vs sky; scene sun vs hemisphere). */
-    directDiffuseLogError: 0.4
+    directDiffuseLogError: 0.4,
+    /**
+     * |ln| of the error in how bright the sky backdrop is next to the sun: the reference patch's radiance over the
+     * direct-normal irradiance (photo disc; scene sun light). Catches a backdrop too dark or too bright for the scene.
+     */
+    skyBrightnessLogError: 0.35
 };
 
 export type SkyRealismMetric = keyof typeof SKY_REALISM_TOLERANCES;
@@ -38,6 +43,8 @@ export interface SkyRealismScore {
     notComparable: Array<{ metric: SkyRealismMetric; reason: string }>;
     /** Direct:diffuse horizontal irradiance on each side, for the sign of the error. */
     directDiffuse?: { photo: number; render: number };
+    /** Sky reference radiance per unit direct-normal irradiance (1/sr) on each side. */
+    skyBrightness?: { photo: number; render: number };
     /** Per-sample detail for diagnosis: ln(render/photo) and Δuv. */
     samples: Array<{ elevationDeg: number; relAzimuthDeg: number; logLuminanceError: number; deltaUv: number; du: number; dv: number }>;
 }
@@ -62,6 +69,7 @@ function linearRgbToXy(r: number, g: number, b: number) {
 export function scoreSkyRealism(photo: SkyMeasurement, render: SkyMeasurement, lights: DomeLights, sunElevationDeg: number | undefined): SkyRealismScore {
     const metrics: Partial<Record<SkyRealismMetric, number>> = {};
     let directDiffuse: SkyRealismScore['directDiffuse'];
+    let skyBrightness: SkyRealismScore['skyBrightness'];
     const notComparable: SkyRealismScore['notComparable'] = [];
     const samples: SkyRealismScore['samples'] = [];
     for (const p of photo.samples) {
@@ -86,6 +94,11 @@ export function scoreSkyRealism(photo: SkyMeasurement, render: SkyMeasurement, l
             const renderRatio = (lights.sunIntensity * sinEl) / Math.max(1e-6, lights.hemiIntensity * lights.hemiSkyLuminance);
             metrics.directDiffuseLogError = Math.abs(Math.log(renderRatio / photoRatio));
             directDiffuse = { photo: photoRatio, render: renderRatio };
+            // Photo: reference patch over disc irradiance (both in the photo's units: refY / (ratio * refY)).
+            const photoSky = 1 / photo.sun.discToSkyRatio;
+            const renderSky = render.referenceLuminance / Math.max(1e-9, lights.sunIntensity * 0.2126 * lights.sunColor[0] + lights.sunIntensity * 0.7152 * lights.sunColor[1] + lights.sunIntensity * 0.0722 * lights.sunColor[2]);
+            metrics.skyBrightnessLogError = Math.abs(Math.log(renderSky / photoSky));
+            skyBrightness = { photo: photoSky, render: renderSky };
         } else {
             notComparable.push({ metric: 'sunColorDeltaUv', reason: 'the photo shows a sun disc but the scene has no sun light' });
         }
@@ -96,5 +109,5 @@ export function scoreSkyRealism(photo: SkyMeasurement, render: SkyMeasurement, l
 
     const passed: SkyRealismMetric[] = [], failed: SkyRealismMetric[] = [];
     for (const [k, v] of Object.entries(metrics) as Array<[SkyRealismMetric, number]>) (v <= SKY_REALISM_TOLERANCES[k] ? passed : failed).push(k);
-    return { metrics, passed, failed, notComparable, samples, directDiffuse };
+    return { metrics, passed, failed, notComparable, samples, directDiffuse, skyBrightness };
 }

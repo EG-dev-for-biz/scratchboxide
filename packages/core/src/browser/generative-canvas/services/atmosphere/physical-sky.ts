@@ -119,6 +119,18 @@ class Transmittance {
         return EARTH_RADIUS + (TOP_RADIUS - EARTH_RADIUS) * u * u;
     }
 
+    /** As at(), written into `out` (no allocation; the sky-view loop calls it per sample). */
+    atInto(r: number, mu: number, out: Float64Array): void {
+        if (mu < 0 && r * r * (mu * mu - 1) + EARTH_RADIUS * EARTH_RADIUS >= 0) { out[0] = 0; out[1] = 0; out[2] = 0; return; }
+        const u = Math.sqrt(Math.min(1, Math.max(0, (r - EARTH_RADIUS) / (TOP_RADIUS - EARTH_RADIUS))));
+        const fi = u * (this.nr - 1), fj = ((Math.min(1, Math.max(-1, mu)) + 1) / 2) * (this.nmu - 1);
+        const i0 = Math.min(this.nr - 2, Math.floor(fi)), j0 = Math.min(this.nmu - 2, Math.floor(fj));
+        const a = fi - i0, b = fj - j0, t = this.table;
+        const k00 = (i0 * this.nmu + j0) * 3, k01 = k00 + 3, k10 = k00 + this.nmu * 3, k11 = k10 + 3;
+        const w00 = (1 - a) * (1 - b), w01 = (1 - a) * b, w10 = a * (1 - b), w11 = a * b;
+        for (let c = 0; c < 3; c++) out[c] = t[k00 + c] * w00 + t[k01 + c] * w01 + t[k10 + c] * w10 + t[k11 + c] * w11;
+    }
+
     /** Transmittance from radius r toward zenith cosine mu, out of the atmosphere (0 if the ground is in the way). */
     at(r: number, mu: number): V3 {
         if (rayLength(r, mu).ground) return [0, 0, 0];
@@ -200,6 +212,16 @@ class MultipleScattering {
         }
     }
 
+    atInto(r: number, muS: number, out: Float64Array): void {
+        const fi = Math.min(1, Math.max(0, (r - EARTH_RADIUS) / (TOP_RADIUS - EARTH_RADIUS))) * (this.nr - 1);
+        const fj = ((Math.min(1, Math.max(-1, muS)) + 1) / 2) * (this.nmu - 1);
+        const i0 = Math.min(this.nr - 2, Math.floor(fi)), j0 = Math.min(this.nmu - 2, Math.floor(fj));
+        const a = fi - i0, b = fj - j0, t = this.table;
+        const k00 = (i0 * this.nmu + j0) * 3, k01 = k00 + 3, k10 = k00 + this.nmu * 3, k11 = k10 + 3;
+        const w00 = (1 - a) * (1 - b), w01 = (1 - a) * b, w10 = a * (1 - b), w11 = a * b;
+        for (let c = 0; c < 3; c++) out[c] = t[k00 + c] * w00 + t[k01 + c] * w01 + t[k10 + c] * w10 + t[k11 + c] * w11;
+    }
+
     at(r: number, muS: number): V3 {
         const fi = Math.min(1, Math.max(0, (r - EARTH_RADIUS) / (TOP_RADIUS - EARTH_RADIUS))) * (this.nr - 1);
         const fj = ((Math.min(1, Math.max(-1, muS)) + 1) / 2) * (this.nmu - 1);
@@ -244,13 +266,14 @@ export function physicalSkyRowElevation(i: number, rows: number): number {
 
 /** Builds the sky-view table for one sun. */
 export function buildPhysicalSkyLut(opts: PhysicalSkyOptions): PhysicalSkyLut {
-    const W = opts.azimuthResolution ?? 96, H = opts.elevationResolution ?? 64;
+    const W = opts.azimuthResolution ?? 64, H = opts.elevationResolution ?? 48;
     const { m, tr, ms } = atmosphere(opts.turbidity, opts.groundAlbedo ?? 0.2);
     const r0 = EARTH_RADIUS + Math.max(1, opts.observerAltitudeMeters ?? 1);
     const se = (opts.sunElevationDeg * Math.PI) / 180;
     const sun: V3 = [Math.cos(se), Math.sin(se), 0];
     const data = new Float32Array(W * H * 3);
     const E: V3 = [0, 0, 0];
+    const ts = new Float64Array(3), psi = new Float64Array(3);
     for (let i = 0; i < H; i++) {
         const el = (physicalSkyRowElevation(i, H) * Math.PI) / 180;
         for (let j = 0; j < W; j++) {
@@ -259,30 +282,33 @@ export function buildPhysicalSkyLut(opts: PhysicalSkyOptions): PhysicalSkyLut {
             const cosTheta = d[0] * sun[0] + d[1] * sun[1] + d[2] * sun[2];
             const pR = rayleighPhase(cosTheta), pM = miePhase(cosTheta);
             const { length } = rayLength(r0, d[1]);
-            const steps = 28;
-            const L: V3 = [0, 0, 0], T: V3 = [1, 1, 1];
+            const steps = 24;
+            let L0 = 0, L1 = 0, L2 = 0, T0 = 1, T1 = 1, T2 = 1;
             // Steps grow with distance (quadratic), resolving the dense air near the observer.
             let tPrev = 0;
             for (let s = 0; s < steps; s++) {
-                const t1 = length * Math.pow((s + 1) / steps, 2);
+                const t1 = length * ((s + 1) / steps) * ((s + 1) / steps);
                 const dt = t1 - tPrev, t = (tPrev + t1) / 2;
                 tPrev = t1;
                 const px = d[0] * t, py = r0 + d[1] * t, pz = d[2] * t;
                 const rr = Math.sqrt(px * px + py * py + pz * pz);
-                const [dr, dm] = densities(rr);
-                const e = extinction(rr, m);
+                const h = rr - EARTH_RADIUS;
+                const dr = Math.exp(-h / RAYLEIGH_SCALE), dm = Math.exp(-h / MIE_SCALE), dO = Math.max(0, 1 - Math.abs(h - OZONE_CENTER) / OZONE_HALF_WIDTH);
                 const muSun = (px * sun[0] + py * sun[1] + pz * sun[2]) / rr;
-                const ts = tr.at(rr, muSun);
-                const psi = ms.at(rr, muSun);
+                tr.atInto(rr, muSun, ts);
+                ms.atInto(rr, muSun, psi);
                 for (let c = 0; c < 3; c++) {
                     const sR = RAYLEIGH_SCATTERING[c] * dr, sM = m.mieScattering[c] * dm;
+                    const e = sR + m.mieExtinction[c] * dm + OZONE_ABSORPTION[c] * dO;
                     const source = ts[c] * (sR * pR + sM * pM) + (sR + sM) * psi[c];
-                    const stepT = Math.exp(-e[c] * dt);
-                    const integral = e[c] > 0 ? (1 - stepT) / e[c] : dt;
-                    L[c] += T[c] * source * integral;
-                    T[c] *= stepT;
+                    const stepT = Math.exp(-e * dt);
+                    const integral = e > 0 ? (1 - stepT) / e : dt;
+                    if (c === 0) { L0 += T0 * source * integral; T0 *= stepT; }
+                    else if (c === 1) { L1 += T1 * source * integral; T1 *= stepT; }
+                    else { L2 += T2 * source * integral; T2 *= stepT; }
                 }
             }
+            const L: V3 = [L0, L1, L2];
             const k = (i * W + j) * 3;
             data[k] = L[0]; data[k + 1] = L[1]; data[k + 2] = L[2];
             // Both halves of the sky (azimuth ±): solid angle of the cell times cos(zenith).
