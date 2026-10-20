@@ -1,7 +1,7 @@
 # Process: Facade material reading (glass, measured coursing) in the staged texture pass
 
 > **Recorded:** 2026-10-18
-> **Status:** Needs Fix (works end to end behind `SCRATCHBOX_FACADE_MATERIALS=1`; no measured gain yet on real data, so it stays off and is not on main)
+> **Status:** Needs Fix (works end to end behind `SCRATCHBOX_FACADE_MATERIALS=1`; merged to main 2026-10-19 and judged again with a specular renderer: still no gain, stays off; see [facade_materials_merge_eval.md](./facade_materials_merge_eval.md))
 > **Tags:** `operate-scratchbox` `staged-build` `texture-pass` `open-segment` `provenance` `pbr-kernel`
 > **Target Domain:** Real-world 3D locations (textured twins)
 
