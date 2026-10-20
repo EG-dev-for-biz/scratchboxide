@@ -279,6 +279,9 @@ export function judgeCluster(c: NativeCluster, skyShare: number | null, T: Resid
     return { verdict, confidence: r2(clamp01(confidence) * 1000) / 1000, reason: `${head}: ${why.join('; ')}; ${dims}`, scores: Object.fromEntries(Object.entries(sc).map(([k, v]) => [k, Math.round(v * 1000) / 1000])) as unknown as ClusterScores };
 }
 
+/** Labels only: a real cluster at least this tall over at least this plan is labelled a building part. */
+export const BUILDING_PART_MIN = { heightM: 8, planM2: 80 };
+
 /**
  * Feature-type labels from the measures and the verdict: open codes with a confidence, for prompting, filtering and export.
  * Geometry and the verdict never read them.
@@ -296,9 +299,12 @@ export function clusterTypeLabels(c: NativeCluster, j: { verdict: ResidualVerdic
     const supportAboveGround = at.baseAboveGroundM === null ? null : at.supportY - (c.lo[1] - at.baseAboveGroundM);
     const onRoof = supportAboveGround !== null && supportAboveGround > 2.5 && at.groundedShare > 0;
     const onWall = !onRoof && at.contactShare > 0 && c.surface.sideShare > 0.5 && at.groundedShare < 0.1;
-    const parent = onRoof ? 'ROOF_OBJECT' : onWall ? 'FACADE_ELEMENT' : 'OBJECT';
+    // a body storeys tall over a large plan is a part of a building the massing lacks, not something standing on it
+    const [L0, H0, W0] = c.frame.extentsM;
+    const buildingPart = H0 >= BUILDING_PART_MIN.heightM && L0 * W0 >= BUILDING_PART_MIN.planM2;
+    const parent = buildingPart ? 'BUILDING_PART' : onRoof ? 'ROOF_OBJECT' : onWall ? 'FACADE_ELEMENT' : 'OBJECT';
     const labels: SbFeatureTypeLabel[] = [{ code: P + parent, confidence: r2(s.real), by }];
-    if (onRoof) {
+    if (onRoof && !buildingPart) {
         const [L, H, W] = c.frame.extentsM;
         const slender = H / Math.max(0.1, Math.max(L, W));
         const tank = Math.min(sy.radialSymmetry, ramp(at.openBelowShare + sy.radialSymmetry * 0.5, [0.3, 0.8]));

@@ -23,6 +23,7 @@ import { auditResidual, cleanGlbBytes, judgeCluster, type AuditedCluster, type R
 import { massingSpecText, type Massing } from '../src/node/3d-engine/staged-location/pipeline-e/massing-spec';
 import { runMassing } from '../src/node/3d-engine/staged-location/pipeline-e/native-massing';
 import { parapetProfile } from '../src/node/3d-engine/staged-location/pipeline-e/band-infer';
+import { objectUnderBlock } from '../src/node/3d-engine/staged-location/pipeline-e/inference';
 import { parseGlbNodes } from '../src/node/3d-engine/staged-location/glb-nodes';
 import { contactSheet, renderSoups } from './helpers/soup-render';
 
@@ -171,6 +172,14 @@ describe('residual audit (native measures, numeric verdicts)', () => {
         const c = clusterOf(result, 'tank-on-legs')[0];
         const relabelled = { ...c, typeLabels: [{ code: 'SB_FEATURE_TYPE_SCAN_ARTEFACT_SPIKE', confidence: 1 }], feature: { ...c.feature, types: ['SB_FEATURE_TYPE_SCAN_ARTEFACT_SPIKE'] } };
         expect(judgeCluster(relabelled, c.skyShare).verdict).toBe(c.verdict);
+    });
+
+    it('keeps a raised-block box off a real object a prism misrepresents (the tank), not off a box-like one (the bulkhead)', () => {
+        const run = { audit: result };
+        // the box a roof reading would draw over the tank, and over the bulkhead
+        expect(objectUnderBlock(run, [[7.3, 0.3], [10.7, 0.3], [10.7, 3.7], [7.3, 3.7]])?.id).toBe(clusterOf(result, 'tank-on-legs')[0].id);
+        expect(objectUnderBlock(run, [[-10, 6], [-6, 6], [-6, 9], [-10, 9]])).toBeUndefined();
+        expect(objectUnderBlock({ audit: { error: 'x' } }, [[7.3, 0.3], [10.7, 0.3], [10.7, 3.7], [7.3, 3.7]])).toBeUndefined();
     });
 
     it('writes a cleaned GLB without exactly the artefact triangles, other nodes untouched', async () => {

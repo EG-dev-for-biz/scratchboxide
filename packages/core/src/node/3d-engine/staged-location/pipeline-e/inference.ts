@@ -142,8 +142,11 @@ export function writeWallOrthoIndex(run: MassingRun, minAreaM2 = 80): string {
  * solid splits a wall in pieces `<key>:0`, `<key>:1` when a changed roof or a raised block cuts it; the pieces lie in its
  * plane and take its texture).
  */
-/** Above this radial symmetry, or open-below share, a real object is not a prism (residual-audit.ts measures). */
-export const BLOCK_NOT_PRISM = { radialSymmetry: 0.5, openBelowShare: 0.3, planOverlap: 0.5 };
+/**
+ * A real object round in plan (radial symmetry at least this, residual-audit.ts) is not a prism. Open space below alone is
+ * not enough: the hollow, ragged scan of a box reads open where its sides are torn (Little Singer Building, live).
+ */
+export const BLOCK_NOT_PRISM = { radialSymmetry: 0.5, planOverlap: 0.5 };
 
 /** The real object of the run's residual audit that covers at least half of a raised block's plan box and is not a prism, if any. */
 export function objectUnderBlock(run: Pick<MassingRun, 'audit'>, loop: Vec2[]): AuditedCluster | undefined {
@@ -154,7 +157,7 @@ export function objectUnderBlock(run: Pick<MassingRun, 'audit'>, loop: Vec2[]): 
     const area = Math.max(1e-6, (bx1 - bx0) * (bz1 - bz0));
     return a.clusters.find(c => {
         if (c.verdict !== 'real-object') return false;
-        if (c.symmetry.radialSymmetry < BLOCK_NOT_PRISM.radialSymmetry && c.attachment.openBelowShare < BLOCK_NOT_PRISM.openBelowShare) return false;
+        if (c.symmetry.radialSymmetry < BLOCK_NOT_PRISM.radialSymmetry) return false;
         const ox = Math.max(0, Math.min(bx1, c.hi[0]) - Math.max(bx0, c.lo[0])), oz = Math.max(0, Math.min(bz1, c.hi[2]) - Math.max(bz0, c.lo[2]));
         return (ox * oz) / area >= BLOCK_NOT_PRISM.planOverlap;
     });
@@ -297,9 +300,9 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
                 for (const [k, b] of d.blocks.entries()) {
                     roofStep.proposed++;
                     // a box stands in for a block only when the scan there is box-like: where the residual audit measured a real
-                    // object that a prism would misrepresent (round in plan, or open space under it), the scan stays as scanned
+                    // object round in plan (a prism would misrepresent it), the scan stays as scanned
                     const scanned = b.accepted && b.loop ? objectUnderBlock(run, b.loop) : undefined;
-                    if (scanned) { b.accepted = false; b.why += `; left as scanned: the residual audit measured a real object there (cluster ${scanned.id}: radial symmetry ${scanned.symmetry.radialSymmetry.toFixed(2)}, open below ${Math.round(scanned.attachment.openBelowShare * 100)}%), which a box would misrepresent`; }
+                    if (scanned) { b.accepted = false; b.why += `; left as scanned: the residual audit measured a real object there (cluster ${scanned.id}: radial symmetry ${scanned.symmetry.radialSymmetry.toFixed(2)}, open below ${Math.round(scanned.attachment.openBelowShare * 100)}%), round in plan, which a box would misrepresent`; }
                     if (b.accepted) { roofStep.accepted++; extraParts.push({ id: `${p.id}/block${k}`, baseY: b.baseY!, topY: b.topY!, loops: [b.loop!], planes: [], heightSource: 'photo-inferred', heights: {}, provenance: 'photo-inferred' }); }
                     else roofStep.rejected++;
                     roofStep.notes.push(`part ${p.id} raised block ${k}: ${b.accepted ? 'kept' : 'not kept'}: ${b.why}`);
