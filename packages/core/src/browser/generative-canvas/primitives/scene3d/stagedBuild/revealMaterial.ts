@@ -25,6 +25,7 @@
  */
 
 import * as THREE from 'three';
+import { PART_ATTRIBUTE, mergedPartsOf, setPartVisibility } from './mergeStagedParts';
 import { DEGRADED_OUTLINE_COLOR, PROVENANCE_BACKGROUND, TEXTURE_RUNG_COLORS, VERTEX_ATTRIBUTE, STRIPE_COVERAGE, STRIPE_PERIOD_PX, hexToRgb01, vertexClassGlsl } from './provenanceShading';
 
 /** Stamp on every material the guard installs; its value says which variant. */
@@ -102,6 +103,9 @@ interface StagedUniforms {
     uSbClassColor?: { value: THREE.Color[] };
     uSbClassPattern?: { value: THREE.Vector2[] };
     uSbRungColor?: { value: THREE.Color[] };
+    /** Merged parts (mergeStagedParts.ts): per part (fade, presence, mark, pattern code) and (provenance colour, pattern coverage). */
+    uSbPartA?: { value: THREE.Vector4[] };
+    uSbPartB?: { value: THREE.Vector4[] };
 }
 
 const BASE = new WeakMap<THREE.Material, THREE.Material>();
@@ -127,6 +131,12 @@ export function stagedMaterialUniforms(m: THREE.Material): { progress: number; s
     return u ? { progress: u.uSbProgress.value, stagger: u.uSbStagger.value, fade: u.uSbFade.value, presence: u.uSbPresence.value, background: u.uSbBackground.value } : undefined;
 }
 
+/** A merged mesh's per-part fade, presence and mark as its staged material draws them (diagnostics and tests). */
+export function stagedPartUniforms(m: THREE.Material): Array<{ fade: number; presence: number; mark: number }> | undefined {
+    const u = UNIFORMS.get(m);
+    return u?.uSbPartA ? u.uSbPartA.value.map(v => ({ fade: v.x, presence: v.y, mark: v.z })) : undefined;
+}
+
 /** The material a staged material stands in for. */
 export function baseMaterialOf(m: THREE.Material): THREE.Material | undefined {
     return BASE.get(m);
@@ -140,6 +150,12 @@ uniform float uSbStagger;
 uniform float uSbHasReveal;
 uniform float uSbHasDisp;
 varying float vSbRevealK;
+#ifdef SB_PARTS
+attribute float ${PART_ATTRIBUTE};
+uniform vec4 uSbPartA[SB_PARTS];
+uniform vec4 uSbPartB[SB_PARTS];
+varying vec4 vSbPartA;
+#endif
 #ifdef SB_PROVENANCE
 attribute float ${VERTEX_ATTRIBUTE.reliefHeight};
 attribute float ${VERTEX_ATTRIBUTE.proudBlock};
@@ -157,6 +173,10 @@ varying vec2 vSbPattern;
 `;
 
 const VERTEX_BODY = `
+#ifdef SB_PARTS
+    int sbPart = int(${PART_ATTRIBUTE} + 0.5);
+    vSbPartA = uSbPartA[sbPart];
+#endif
     {
         float sbItemStart = ${REVEAL_ATTRIBUTE}.x * uSbStagger;
         float sbLocal = clamp((uSbProgress - sbItemStart) / max(1e-4, 1.0 - uSbStagger), 0.0, 1.0);
@@ -165,6 +185,10 @@ const VERTEX_BODY = `
     }
 #ifdef SB_PROVENANCE
     {${vertexClassGlsl()}
+#ifdef SB_PARTS
+    // a merged part's own legend colour and pattern stand in for the node's (class 0)
+    if (sbCls == 0) { vSbColor = uSbPartB[sbPart].rgb; vSbPattern = vec2(uSbPartA[sbPart].w, uSbPartB[sbPart].a); }
+#endif
     }
 #endif
 `;
@@ -184,6 +208,9 @@ varying float vSbRevealK;
 #ifdef SB_PROVENANCE
 varying vec3 vSbColor;
 varying vec2 vSbPattern;
+#endif
+#ifdef SB_PARTS
+varying vec4 vSbPartA;
 #endif
 float sbDither(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
 bool sbStripe(vec2 p, float period, float coverage, float dir) { return mod(p.x + dir * p.y, period) < coverage * period; }
@@ -214,8 +241,15 @@ const FRAGMENT_DISCARD = `
 #ifdef SB_REVEAL
     if (uSbProgress <= 0.0 || (uSbProgress < 1.0 && vSbRevealK >= uSbProgress)) discard;
     {
+        float sbFadeP = uSbFade;
+        float sbPresenceP = uSbPresence;
+#ifdef SB_PARTS
+        // a merged part's own fade and presence (a hidden part has fade 0)
+        sbFadeP *= vSbPartA.x;
+        sbPresenceP *= vSbPartA.y;
+#endif
         float sbH = sbDither(gl_FragCoord.xy);
-        if (sbH >= uSbFade || sbH < 1.0 - uSbPresence) discard;
+        if (sbH >= sbFadeP || sbH < 1.0 - sbPresenceP) discard;
     }
 #endif
 `;
@@ -250,7 +284,11 @@ const FRAGMENT_END = `
         float sbDots = sbPat.y > 0.0 ? sbDotAlpha(sbP + vec2(3.0), ${STRIPE_PERIOD_PX.toFixed(1)}, sbPat.y, uSbPxScale) : 0.0;
         gl_FragColor.rgb = mix(gl_FragColor.rgb, uSbBackground, 1.0 - (1.0 - sbStripes) * (1.0 - sbDots));
 #endif
-        if (uSbMark > 0.5 && sbStripe(sbP, 10.0, 0.2, -1.0)) gl_FragColor.rgb = uSbMarkColor;
+        float sbMarkOn = uSbMark;
+#ifdef SB_PARTS
+        sbMarkOn = max(sbMarkOn, vSbPartA.z);
+#endif
+        if (sbMarkOn > 0.5 && sbStripe(sbP, 10.0, 0.2, -1.0)) gl_FragColor.rgb = uSbMarkColor;
     }
 `;
 
@@ -337,6 +375,13 @@ export function createStagedMaterial(mesh: THREE.Mesh | THREE.LineSegments, base
         defs.defines = { ...(defs.defines ?? {}), SB_PROVENANCE: '', SB_CLASSES: provenanceClasses };
     }
     if (withReveal) defs.defines = { ...(defs.defines ?? {}), SB_REVEAL: '' };
+    // a merged mesh (mergeStagedParts.ts): per-part looks from uniform arrays indexed by its part attribute
+    const partCount = !isLine ? (mergedPartsOf(mesh)?.parts.length ?? 0) : 0;
+    if (partCount > 0) {
+        uniforms.uSbPartA = { value: Array.from({ length: partCount }, () => new THREE.Vector4(1, 1, 0, 0)) };
+        uniforms.uSbPartB = { value: Array.from({ length: partCount }, () => new THREE.Vector4(1, 1, 1, 0)) };
+        defs.defines = { ...(defs.defines ?? {}), SB_PARTS: partCount };
+    }
     if (confidence) {
         uniforms.uSbRungColor = { value: TEXTURE_RUNG_COLORS.map(c => new THREE.Color(c)) };
         defs.defines = { ...(defs.defines ?? {}), SB_RUNGS: '', SB_RUNG_COUNT: TEXTURE_RUNG_COLORS.length };
@@ -346,7 +391,7 @@ export function createStagedMaterial(mesh: THREE.Mesh | THREE.LineSegments, base
         defs.defines = { ...(defs.defines ?? {}), SB_RUNG_FLAT: '' };
     }
     mat.onBeforeCompile = shader => injectShader(shader, uniforms);
-    const cacheKey = `sb-staged-v3:${kind}:${provenanceClasses}:${withReveal ? 'r' : 's'}:${confidence ? 'c' : ''}`;
+    const cacheKey = `sb-staged-v3:${kind}:${provenanceClasses}:${withReveal ? 'r' : 's'}:${confidence ? 'c' : ''}:${partCount}`;
     mat.customProgramCacheKey = () => cacheKey;
     mat.userData = { ...(kind === 'reveal' ? mat.userData : {}), [STAMP]: kind, [REVEAL_VARIANT]: withReveal, ...(kind === 'reveal' && base.userData?.[CLAY_FLAG] ? { [CLAY_FLAG]: true } : {}) };
     mat.needsUpdate = true;
@@ -402,6 +447,8 @@ function setUniforms(mat: THREE.Material, mesh: THREE.Object3D, look: MeshStaged
  * per-draw uniform uploads (and the frame time) at or below the plain clay scene's. Revealing nodes keep their own.
  */
 function shareKey(mesh: THREE.Mesh | THREE.LineSegments, base: THREE.Material, look: MeshStagedLook, classCount: number): string | undefined {
+    // a merged mesh's material carries its own parts' looks
+    if (mergedPartsOf(mesh)) return undefined;
     if (!look.reveal && !look.provenance && look.rungs) {
         // one material per confidence texture (every node of a twin layer that shares its atlas)
         const conf = confidenceMapOf(base);
@@ -420,6 +467,56 @@ function shareKey(mesh: THREE.Mesh | THREE.LineSegments, base: THREE.Material, l
 /** A reveal at its end: every item shown, no fade, nothing replaced. */
 const FULL_REVEAL_LOOK: MeshStagedLook = { reveal: { progress: 1, stagger: 0, fade: 1, presence: 1 } };
 
+/** One part's look in a merged mesh this frame: a staged look, hidden (not started), concealed (replaced) or untouched. */
+export type PartLook = MeshStagedLook | 'hide' | 'conceal' | null;
+
+const PART_GREY = new THREE.Color(0x8a8f96);
+
+/**
+ * The mesh-level look of a merged mesh and its per-part uniform values: each part's fade, presence, mark and provenance
+ * colour and pattern go into the arrays; the mesh-level uniforms carry what every part shares (the class colours of the
+ * per-vertex bands, the overSource offset). Hidden parts are not here: setPartVisibility collapses their triangles. Returns
+ * null when no shown part needs a staged look.
+ */
+export function partArrays(looks: readonly PartLook[]): { look: MeshStagedLook; a: Array<[number, number, number, number]>; b: Array<[number, number, number, number]>; fading: boolean } | null {
+    const a: Array<[number, number, number, number]> = [];
+    const b: Array<[number, number, number, number]> = [];
+    let any = false, fading = false, overSource = false, noDisp = false;
+    let prov: MeshStagedLook['provenance'];
+    let rungs: MeshStagedLook['rungs'];
+    for (const l of looks) {
+        if (!l || l === 'hide' || l === 'conceal') { a.push([1, 1, 0, 0]); b.push([PART_GREY.r, PART_GREY.g, PART_GREY.b, 0]); continue; }
+        any = true;
+        const r = l.reveal;
+        // a part's reveal is a fade of the whole part (merged parts carry no per-vertex timing)
+        const fade = r ? (r.progress <= 0 ? 0 : r.fade * Math.min(1, r.progress)) : 1;
+        const presence = r ? r.presence : 1;
+        if (fade < 1 || presence < 1) fading = true;
+        if (r?.overSource) overSource = true;
+        if (r?.noDisp) noDisp = true;
+        const p = l.provenance;
+        if (p) {
+            prov ??= p;
+            const c = new THREE.Color(p.nodeColor);
+            a.push([fade, presence, l.mark ? 1 : 0, p.nodePattern]);
+            b.push([c.r, c.g, c.b, p.nodeCoverage]);
+        } else {
+            a.push([fade, presence, l.mark ? 1 : 0, 0]);
+            b.push([PART_GREY.r, PART_GREY.g, PART_GREY.b, 0]);
+        }
+        if (l.rungs) rungs ??= l.rungs;
+    }
+    if (!any) return null;
+    const look: MeshStagedLook = {
+        ...(fading || overSource ? { reveal: { progress: 1, stagger: 0, fade: 1, presence: 1, ...(overSource ? { overSource: true } : {}), ...(noDisp ? { noDisp: true } : {}) } } : {}),
+        ...(prov ? { provenance: prov } : {}),
+        ...(rungs && !prov ? { rungs } : {})
+    };
+    // a mark-only frame (a highlighted part, nothing else staged) still needs a staged material for the per-part mark
+    if (!look.reveal && !look.provenance && !look.rungs) look.reveal = { progress: 1, stagger: 0, fade: 1, presence: 1 };
+    return { look, a, b, fading };
+}
+
 /** The staged materials of one guard, with the base each mesh wore, so every one can be put back. */
 export class StagedMaterialRegistry {
     /** Mesh → the material it wore before (its clay or shaded material): what restore() puts back. */
@@ -433,6 +530,8 @@ export class StagedMaterialRegistry {
     private readonly hidden = new Set<THREE.Object3D>();
     /** castShadow values taken away while a node reveals (an unrevealed mesh must not cast a shadow). */
     private readonly shadows = new Map<THREE.Object3D, boolean>();
+    /** Merged meshes this registry has shown or hidden parts of (applyParts): restoreAll shows every part again. */
+    private readonly partMeshes = new Set<THREE.Mesh>();
 
     /** Meshes this frame that kept their (fully revealed) staged material because the frame's restore budget was spent. */
     private deferred = 0;
@@ -519,6 +618,40 @@ export class StagedMaterialRegistry {
         return created;
     }
 
+    /**
+     * A merged mesh (mergeStagedParts.ts): one look per part. All concealed or all hidden: the mesh is. Otherwise the hidden
+     * parts are collapsed in its index (setPartVisibility: no shader work, no shadow, no pick; they stay hidden after the guard
+     * is off, as hidden meshes do), and the shown parts get one staged material whose per-part arrays say each one's fade,
+     * presence, mark and provenance, or the mesh's own material when none needs a staged look. Returns true when a material
+     * was built (counted against the frame's budget).
+     */
+    applyParts(mesh: THREE.Mesh, looks: readonly PartLook[], opts: { allowCreate: boolean; pxScale: number; classCount: number; restores?: { left: number } }): boolean {
+        const table = mergedPartsOf(mesh);
+        if (!table) return false;
+        this.partMeshes.add(mesh);
+        if (looks.length > 0 && looks.every(l => l === 'conceal')) { this.conceal(mesh); return false; }
+        if (looks.length > 0 && looks.every(l => l === 'hide' || l === 'conceal')) { this.hide(mesh); return false; }
+        setPartVisibility(mesh, i => looks[i] !== 'hide' && looks[i] !== 'conceal');
+        const arrays = partArrays(looks);
+        if (!arrays) {
+            this.apply(mesh, null, opts);
+            return false;
+        }
+        const created = this.apply(mesh, arrays.look, opts);
+        const mat = mesh.material as THREE.Material;
+        const u = isStagedMaterial(mat) ? UNIFORMS.get(mat) : undefined;
+        if (u?.uSbPartA && u.uSbPartB) {
+            const n = Math.min(u.uSbPartA.value.length, arrays.a.length);
+            for (let i = 0; i < n; i++) { u.uSbPartA.value[i].fromArray(arrays.a[i]); u.uSbPartB.value[i].fromArray(arrays.b[i]); }
+        }
+        // no shadow from a mesh with parts mid-fade (the depth pass has no dither), as for a revealing node
+        if (arrays.fading && mesh.castShadow) {
+            this.shadows.set(mesh, true);
+            mesh.castShadow = false;
+        }
+        return created;
+    }
+
     /** Hides a staged mesh (an unstarted node, a superseded layer). Only meshes hidden here are ever unhidden. */
     hide(mesh: THREE.Object3D): void {
         if (!mesh.visible) return;
@@ -577,12 +710,14 @@ export class StagedMaterialRegistry {
         for (const mesh of [...this.hidden]) this.unhide(mesh);
         for (const [mesh, cast] of this.shadows) mesh.castShadow = cast;
         this.shadows.clear();
+        for (const mesh of this.partMeshes) setPartVisibility(mesh, () => true);
+        this.partMeshes.clear();
         this.freeOrphans();
     }
 
     /** Forgets meshes whose model was released by the loader (their own materials went with it). */
     prune(isLive: (mesh: THREE.Object3D) => boolean): void {
-        if (this.meshes.size === 0 && this.hidden.size === 0 && this.shadows.size === 0) return;
+        if (this.meshes.size === 0 && this.hidden.size === 0 && this.shadows.size === 0 && this.partMeshes.size === 0) return;
         for (const [mesh, base] of [...this.meshes]) {
             if (isLive(mesh)) continue;
             this.meshes.delete(mesh);
@@ -593,6 +728,7 @@ export class StagedMaterialRegistry {
         }
         for (const mesh of [...this.hidden]) if (!isLive(mesh)) this.hidden.delete(mesh);
         for (const mesh of [...this.shadows.keys()]) if (!isLive(mesh)) this.shadows.delete(mesh);
+        for (const mesh of [...this.partMeshes]) if (!isLive(mesh)) this.partMeshes.delete(mesh);
         this.freeOrphans();
     }
 

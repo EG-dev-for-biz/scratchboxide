@@ -494,6 +494,54 @@ export function buildBeautifyPrompt(options: BeautifyPromptOptions): string {
     return `Transform this photorealistic 3D tiles rendering of ${options.locationName} (camera at coordinates ${coordsStr}, facing ${heading}°) into a photorealistic photograph. Map reference: ${earthUrl}. ${moodPromptContext}This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly ${aspectRatio} aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point.${subjectDistanceHint}${stationLockHint}${styleSuffix}`;
 }
 
+/** Identifies the texture-plate prompt wording (recorded with every texel it produced). */
+export const TEXTURE_PLATE_PROMPT_ID = 'texture-plate/v1';
+/** The same prompt with a street-level photograph of the wall as an extra reference (TexturePlatePromptOptions.withStreetView). */
+export const TEXTURE_PLATE_STREET_VIEW_PROMPT_ID = 'texture-plate/v1+street-view';
+/**
+ * The variant for a wall the scan hardly sees (TexturePlatePromptOptions.unseen): its flat mid-grey areas are this same wall
+ * hidden from the scan (behind trees, against a neighbour), drawn as the wall continues instead of kept grey.
+ */
+export const TEXTURE_PLATE_UNSEEN_PROMPT_ID = 'texture-plate/v1+unseen';
+
+export interface TexturePlatePromptOptions {
+    locationName: string;
+    /** The wall's size in metres (the plate's extent). */
+    widthM: number;
+    heightM: number;
+    /** The plate's pixel size, which the answer must keep. */
+    widthPx: number;
+    heightPx: number;
+    /**
+     * The "change nothing else" wording the caller has measured to work (the de-light study's winning sentences, e.g. its
+     * keep-every-edge and same-framing sentences); appended verbatim.
+     */
+    preserveClause: string;
+    /** True when a second image (the adjacent wall, already finished) is sent as the reference. */
+    withReference?: boolean;
+    /**
+     * True when a street-level photograph of the same wall follows (after the reference, when there is one), resampled onto
+     * the plate's frame: it shows what the lower part of the facade actually looks like; the model follows it for real
+     * details and keeps the first image's geometry.
+     */
+    withStreetView?: boolean;
+    /**
+     * True for a wall the scan hardly sees: its flat mid-grey areas are not outside the wall but parts of it the scan could
+     * not see; the model draws them as the same wall continuing (materials and rhythm from the visible parts and the
+     * reference), with nothing that no image shows (no signs, lettering or features).
+     */
+    unseen?: boolean;
+}
+
+/**
+ * The AI Beautify prompt's texture-plate variant: the same non-negotiable framing rules as buildBeautifyPrompt, for a flat,
+ * straight-on elevation of one facade (a texture plate) instead of a perspective rendering, with even overcast light and
+ * no photographic effects. buildBeautifyPrompt's own template is unchanged.
+ */
+export function buildTexturePlatePrompt(o: TexturePlatePromptOptions): string {
+    return `Transform this orthographic texture plate of one wall of ${o.locationName} (a flat, straight-on elevation of the facade, ${o.widthM.toFixed(1)} m wide and ${o.heightM.toFixed(1)} m tall, resampled from a photorealistic 3D tiles scan) into a clean, photorealistic texture plate of the same facade. CRITICAL RULES — non-negotiable: (1) It stays a flat orthographic elevation: no perspective change, no camera tilt, no depth of field, no haze. (2) Keep every window, door, edge and opening exactly where it is, at the same size. ${o.preserveClause} ${o.unseen ? '(3) The flat mid-grey areas are parts of this same wall that the scan could not see (hidden behind trees or against a neighbour): fill every one of them as this wall continues, with the same materials, colours, storey lines and window rhythm as the visible parts of the plate and the reference image; keep what the plate does show where it is; do not add signs, lettering, ornament or any feature that no image shows, and leave nothing mid-grey.' : '(3) Do not invent or add windows, doors, signs, ornament or features that are not visible in the plate; flat mid-grey areas are outside the scan and stay flat mid-grey.'} (4) Give it crisp, realistic materials and architectural detail: the brick, stone, mortar joints, cornices, window frames and glazing that the plate shows, sharp and free of scan blur and smears. (5) Light it evenly, as under a bright overcast sky: diffuse light, no cast shadows, no sun hot spots. Answer with the full plate at ${o.widthPx} x ${o.heightPx} px.${o.withReference ? ' The second image is the adjacent wall of the same building, already finished: match its materials, colours and level of detail across the corner, but take every window, edge and opening from the first image only.' : ''}${o.withStreetView ? ` The ${o.withReference ? 'third' : 'second'} image is a street-level photograph of this same wall, resampled onto the first image's frame (same size and position; grey where the photograph does not show the wall): it shows what the lower part of this facade actually looks like. Follow it for the real details there (materials, openings, what is and is not at street level), and do not draw anything at street level that the photograph does not show; keep the geometry of the first image: every window, edge and opening stays where the first image has it, at the same size.` : ''}`;
+}
+
 export interface StationBeautifyContext {
     locationName: string;
     moodPromptContext?: string;

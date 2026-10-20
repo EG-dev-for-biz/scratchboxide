@@ -140,7 +140,9 @@ describe('Atmospheric Capabilities First-Class APIs', () => {
 
             const profile = AtmosphereService.computeDiurnalProfile(45.0);
             expect(profile.phase).toBe('Afternoon');
-            expect(profile.kelvinTemperature).toBeGreaterThan(5000);
+            // The direct beam at 45° through clear air is about 4500-5600 K (the sun itself is ~5800 K before the air).
+            expect(profile.kelvinTemperature).toBeGreaterThan(4500);
+            expect(profile.kelvinTemperature).toBeLessThan(5600);
 
             const presetState = AtmosphereService.getPresetLightingState('golden_hour');
             expect(presetState.elevationDeg).toBeCloseTo(5.2, 1);
@@ -345,8 +347,10 @@ describe('Atmospheric Capabilities First-Class APIs', () => {
             );
             expect(outcome.resultPayload.success).toBe(true);
             expect(outcome.resultPayload.phase).toBe('Golden Hour');
-            expect(outcome.resultPayload.kelvinTemperature).toBeGreaterThan(3000);
-            expect(outcome.resultPayload.kelvinTemperature).toBeLessThan(4500);
+            // A sun 5° up crosses ~10 air masses: a deep orange beam of roughly 2000-3200 K.
+            expect(outcome.resultPayload.kelvinTemperature).toBeGreaterThan(2000);
+            expect(outcome.resultPayload.kelvinTemperature).toBeLessThan(3200);
+            expect(outcome.resultPayload.kelvinSource).toBe('spectral-beam');
         });
 
         it('executes atmosphere_configure_scene tool handler', () => {
@@ -404,13 +408,18 @@ describe('Atmospheric Capabilities First-Class APIs', () => {
             const hazy = atmosphereHandlers.atmosphere_get_diurnal_profile({ elevationDeg: 10, turbidity: 8 }, {} as any).resultPayload as any;
             expect(clear.turbidity).toBe(2);
             expect(hazy.turbidity).toBe(8);
-            expect(clear.kelvinSource).toBe('preetham-transmittance');
+            expect(clear.kelvinSource).toBe('spectral-beam');
+            expect(clear.turbidityUsed).toBe(2);
             // More aerosol scatters more blue out of the beam: a warmer (lower CCT), redder sun.
             expect(hazy.kelvinTemperature).toBeLessThan(clear.kelvinTemperature);
             expect(hazy.directSunTransmittance[2]).toBeLessThan(clear.directSunTransmittance[2]);
             const none = atmosphereHandlers.atmosphere_get_diurnal_profile({ elevationDeg: 10 }, {} as any).resultPayload as any;
             expect(none.turbidity).toBeUndefined();
-            expect(none.kelvinSource).toBe('diurnal-profile');
+            expect(none.kelvinSource).toBe('spectral-beam');
+            expect(none.turbidityUsed).toBe(2.4);
+            const set = atmosphereHandlers.atmosphere_get_diurnal_profile({ elevationDeg: -4 }, {} as any).resultPayload as any;
+            expect(set.kelvinSource).toBe('diurnal-profile');
+            expect(set.sunIlluminanceLux).toBeUndefined();
         });
     });
 });

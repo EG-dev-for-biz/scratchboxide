@@ -619,6 +619,9 @@ export type {
 export {
     AtmosphereImageEstimationService,
     fitPlanckianKelvinTemperature,
+    spectralSun,
+    correlatedColorTemperature,
+    blackbodyLinearRgbSpectral,
     computeSkyAtmosphereMetrics,
     AtmosphereService,
     LocationObjectLightingService,

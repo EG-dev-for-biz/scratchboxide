@@ -19,8 +19,16 @@
 import { geodeticToScan } from '../../spatial/StreetViewSurveyPlanner';
 import type { FootprintPrior, Vec2 } from '../../../common/spatial/staged-location-contracts';
 
-/** A building: every boundary loop of its parts (outer rings and holes, filled even-odd per part), and its height. */
-export interface VectorBuilding { id: string; parts: Vec2[][][]; heightM?: number }
+/**
+ * A building: every boundary loop of its parts (outer rings and holes, filled even-odd per part), and its height.
+ * `extruded` keeps each extruded part with its own heights (metres above the building base), and `volumes` each modelled 3D
+ * volume as triangles (x, height above the base, z in the scan frame): what a massing needs that the plan alone loses.
+ */
+export interface VectorBuilding {
+    id: string; parts: Vec2[][][]; heightM?: number;
+    extruded?: Array<{ loops: Vec2[][]; heightM?: number; minHeightM?: number; planOnly?: boolean }>;
+    volumes?: Array<{ vertices: Array<[number, number, number]>; indices: number[]; heightM?: number }>;
+}
 
 export interface VectorEvidence {
     buildings: VectorBuilding[];
@@ -70,12 +78,16 @@ export async function fetchVectorEvidence(opts: {
     const water: Vec2[][][] = [];
     const roads: Vec2[][] = [];
     for (const t of tiles) {
+        const planOnly = new Set(t.buildingFootprints2D ?? []);
         for (const p of [...t.buildings, ...(t.buildingFootprints2D ?? [])]) {
             const key = featureOf(p.id);
             const b = byFeature.get(key) ?? { id: key, parts: [] };
-            b.parts.push([p.ring, ...(p.innerRings ?? [])].map(r => r.map(toScan)));
-            const h = Number((p as { properties?: Record<string, unknown> }).properties?.heightMeters);
+            const loops = [p.ring, ...(p.innerRings ?? [])].map(r => r.map(toScan));
+            b.parts.push(loops);
+            const props = (p as { properties?: Record<string, unknown> }).properties;
+            const h = Number(props?.heightMeters), hMin = Number(props?.minHeightMeters);
             if (Number.isFinite(h)) b.heightM = Math.max(b.heightM ?? 0, h);
+            (b.extruded ??= []).push({ loops, ...(Number.isFinite(h) && h > 0 ? { heightM: h } : {}), ...(Number.isFinite(hMin) && hMin > 0 ? { minHeightM: hMin } : {}), ...(planOnly.has(p) ? { planOnly: true } : {}) });
             byFeature.set(key, b);
         }
         // a modeled 3D building: its plan is the union of its triangles seen from above
@@ -89,6 +101,7 @@ export async function fetchVectorEvidence(opts: {
                 if (Math.abs(area) > 1e-3) b.parts.push([tri]);
             }
             if (Number.isFinite(m.heightMeters)) b.heightM = Math.max(b.heightM ?? 0, m.heightMeters!);
+            (b.volumes ??= []).push({ vertices: m.vertices.map(([lng, lat, h]) => { const [x, z] = toScan([lng, lat]); return [x, h, z] as [number, number, number]; }), indices: m.indices.slice(), ...(Number.isFinite(m.heightMeters) ? { heightM: m.heightMeters } : {}) });
             byFeature.set(key, b);
         }
         for (const w of t.water) water.push([w.ring, ...(w.innerRings ?? [])].map(r => r.map(toScan)));

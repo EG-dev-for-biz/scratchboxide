@@ -861,6 +861,15 @@ export interface SceneLensDistortion {
  * what is configured: lens distortion when `distortion` has a non-zero coefficient, thin-lens depth of field when
  * focal length, f-number and a focus (distance or object) are set and `depthOfField` is not false.
  */
+/**
+ * A point focus is locked onto: `localPosition` in the local frame of the object `objectId` names (a customMesh / object
+ * id or a viewport node name), so it moves with the object; without `objectId` it is a fixed world point.
+ */
+export interface SceneFocusPoint {
+    objectId?: string;
+    localPosition: [number, number, number];
+}
+
 export interface SceneCameraLens {
     distortion?: SceneLensDistortion;
     focalLengthMm?: number;
@@ -872,6 +881,20 @@ export interface SceneCameraLens {
     focusDistanceMeters?: number;
     /** Focus held on a scene object (customMesh / object id, or a viewport node name); the viewport measures its depth every frame. */
     focusObjectId?: string;
+    /**
+     * How the plane of focus is set. 'manual': focusDistanceMeters. 'auto': continuous autofocus on what is at the
+     * centre of the frame (autoFocusAreaFraction, focusPullSeconds; focusDistanceMeters is where it starts and what it
+     * holds when the AF area sees nothing). 'track': a focusPoint (a surface point locked to its object) or a
+     * focusObjectId (the whole object), re-measured as the camera or the object moves. Absent: 'track' when a point or
+     * object is set, else 'manual'. Open literal; sb_set_camera_lens refuses a mode the viewport does not draw.
+     */
+    focusMode?: 'manual' | 'auto' | 'track' | (string & {});
+    /** Auto focus: side of the centred square AF area, as a fraction of the frame height (0-1]. */
+    autoFocusAreaFraction?: number;
+    /** Auto focus: focus-pull time constant in seconds (an exponential glide in dioptres toward the measured depth; 0 snaps). */
+    focusPullSeconds?: number;
+    /** Track: the surface point focus is locked onto. */
+    focusPoint?: SceneFocusPoint;
     /** Anamorphic squeeze (1 = spherical): oval bokeh and distortion computed on the squeezed sensor. */
     anamorphicSqueeze?: number;
     /** False keeps the lens values but draws no depth of field. */
@@ -919,9 +942,35 @@ export interface Scene3DData {
      * normals for comparison. Per-level factors take four values (near, near-mid, mid, far) or three (near, mid, far; the
      * near-mid one is then halfway): `blend` the crown normal's share, `noise` the per-leaf variation, `occlusion` the
      * darkening toward the crown's underside and core. `skyBias` tilts the crown normal toward the sky; `lobes: false`
-     * shades every crown with its ellipsoid instead of its lobes.
+     * shades every crown with its ellipsoid instead of its lobes. `breakup` (on by default; `breakup: { enabled: false }`
+     * for comparison) opens world-space holes toward the crown's rim and a few pockets, and varies the grey by clump, lobe
+     * and tree; its fields are the continuous factors of treeCrownShading.ts CrownBreakupOptions.
      */
-    treeCrownShading?: { enabled?: boolean; blend?: number[]; skyBias?: number; noise?: number[]; occlusion?: number[]; lobes?: boolean };
+    treeCrownShading?: {
+        enabled?: boolean; blend?: number[]; skyBias?: number; noise?: number[]; occlusion?: number[]; lobes?: boolean;
+        breakup?: {
+            enabled?: boolean; holes?: number[]; pockets?: number[]; clump?: number[]; tone?: number[]; shadowHoles?: number; clumpPerCrownRadius?: number; clumpMinM?: number; clumpMaxM?: number;
+            coarseOctave?: number; rimWidth?: number; edgeSoftness?: number; filterStart?: number; filterEnd?: number; gapDarkening?: number;
+            clumpTop?: number; clumpCrevice?: number; lobeVariation?: number; treeVariation?: number;
+        };
+    };
+    /**
+     * How staged trees choose their level of detail from what the camera sees (scene3d/treeLod/TreeLodController.ts
+     * TreeLodViewOptions; every field optional, continuous except the switches). `screen`: on-screen size at the current lens,
+     * the file's metre bands read as pixel thresholds at `referenceFovDeg` / `referenceHeightPx` (`enabled: false` = metre
+     * bands, for comparison). `foveal`: detail toward the view centre or the focus point (`centreWeight`, `edgeWeight`,
+     * `centreRadius`, `edgeRadius` in frame half-widths, `curve`, `verticalWeight`). `blur`: depth-of-field demotion by up to
+     * `maxLevels` levels between blur radii `startPx` and `fullPx`. `triangleBudget`; `debugTint` tints each level;
+     * `statsOverlay` shows a stats line in the viewport.
+     */
+    treeLod?: {
+        screen?: { enabled?: boolean; referenceFovDeg?: number; referenceHeightPx?: number; resolutionExponent?: number; hysteresisShare?: number };
+        foveal?: { enabled?: boolean; centreWeight?: number; edgeWeight?: number; centreRadius?: number; edgeRadius?: number; curve?: number; verticalWeight?: number; followFocus?: boolean };
+        blur?: { enabled?: boolean; startPx?: number; fullPx?: number; maxLevels?: number };
+        triangleBudget?: number;
+        debugTint?: boolean;
+        statsOverlay?: boolean;
+    };
     clayPreset?: 'warm-clay' | 'alabaster' | 'onyx' | 'studio-grey' | 'terracotta' | 'porcelain' | 'concrete' | string;
     restructuringTelemetry?: {
         vertices?: number;

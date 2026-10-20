@@ -29,7 +29,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { TreeLodController } from '../src/browser/generative-canvas/primitives/scene3d/treeLod/TreeLodController';
 import {
-    CROWN_VERTEX_MAIN, crownLevelFactors, makeCrownVariant, crownLobesInMeshFrame, crownLobeField, crownLobesAt, crownQuadricInMeshFrame, crownShadingUniforms, isCrownVariant, resolveCrownShading, setCrownShadingUniforms, DEFAULT_CROWN_SHADING
+    BREAKUP_FRAGMENT_DISCARD, CROWN_FIELD_VERTEX_PARS, CROWN_FRAGMENT_COLOR, CROWN_VERTEX_MAIN, crownLevelFactors, makeCrownVariant, crownLobesInMeshFrame, crownLobeField, crownLobesAt, crownQuadricInMeshFrame, crownShadingUniforms, isCrownVariant, resolveCrownShading, setCrownShadingUniforms, DEFAULT_CROWN_SHADING
 } from '../src/browser/generative-canvas/primitives/scene3d/treeLod/treeCrownShading';
 import { isFadeVariant, makeFadeVariant } from '../src/browser/generative-canvas/primitives/scene3d/treeLod/treeLodFade';
 import { applyClayRenderMode, sharedTreeClayMaterial } from '../src/browser/generative-canvas/primitives/scene3d/clayRenderMode';
@@ -69,6 +69,9 @@ function compiled(mat: THREE.Material): { vertexShader: string; fragmentShader: 
     mat.onBeforeCompile(shader, {} as THREE.WebGLRenderer);
     return shader;
 }
+
+/** Metre bands: these tests place a tree at a band's distance with a 60° camera (tree-lod-screen.test.ts covers the on-screen levels). */
+const METRE_BANDS = { screen: { enabled: false } };
 
 describe('native crown fit (tree_lod::fitCrownEllipsoid)', () => {
     it('recovers a leaning, elongated, turned crown from points on its leaves and ignores stray ones', () => {
@@ -214,7 +217,7 @@ describe('crown lobes in a mesh frame and in the shader', () => {
 
     it('writes each leaf mesh\'s lobes into the shared atlas in its own frame and points the shader at them', async () => {
         const root = await loadFixture(2, true, { lobes: true });
-        const lod = new TreeLodController(root, { now: clock().now });
+        const lod = new TreeLodController(root, { view: METRE_BANDS, now: clock().now });
         expect(lod.stats.crownLobeTrees).toBe(2);
         expect(lod.stats.crownLobeMeshes).toBe(2 * 7);
         expect(lod.stats.crownLobeFallbackMeshes).toBe(0);
@@ -237,11 +240,11 @@ describe('crown lobes in a mesh frame and in the shader', () => {
                     const e = im.instanceMatrix.array;
                     const fld = crownLobeField(expected.lobes, expected.blend, [e[16 * i + 12], e[16 * i + 13], e[16 * i + 14]]);
                     expect(I.getX(i)).toBeCloseTo(fld.gradient[0], 5); expect(I.getY(i)).toBeCloseTo(fld.gradient[1], 5); expect(I.getZ(i)).toBeCloseTo(fld.gradient[2], 5);
-                    expect(I.getW(i)).toBeCloseTo(Math.min(1, Math.max(0, -fld.f / expected.meanRadius)), 5);
+                    expect(I.getW(i)).toBeCloseTo(-fld.f / expected.meanRadius, 5);      // signed: the occlusion clamps it, the breakup extends it
                 }
             }
         }
-        expect(CROWN_VERTEX_MAIN).toMatch(/#ifdef USE_INSTANCING\s+\/\/[^\n]*\n\s+sbG = sbCrownI\.xyz;/);
+        expect(CROWN_FIELD_VERTEX_PARS).toMatch(/#ifdef USE_INSTANCING\s+\/\/[^\n]*\n\s+sbG = sbCrownI\.xyz;/);
         lod.forceLevel(3); lod.update(cameraAt(tree, 20));
         const far = leaves.find(m => levelOf(m) === 3)!;
         const sh = compiled(far.material as THREE.Material);
@@ -250,7 +253,7 @@ describe('crown lobes in a mesh frame and in the shader', () => {
         lod.dispose();
         // without lobes in the file every leaf mesh keeps the ellipsoid (lobe count 0)
         const plain = await loadFixture(1);
-        const lod2 = new TreeLodController(plain, { now: clock().now });
+        const lod2 = new TreeLodController(plain, { view: METRE_BANDS, now: clock().now });
         expect(lod2.stats.crownLobeTrees).toBe(0);
         expect(lodMeshes(plain).filter(m => m.userData.sbCrownLeaf).every(m => m.geometry.getAttribute('sbCrownL').getY(0) === 0)).toBe(true);
         lod2.dispose();
@@ -260,7 +263,7 @@ describe('crown lobes in a mesh frame and in the shader', () => {
         for (const levels of [4, 3] as const) {
             const root = await loadFixture(1, true, { lobes: true, levels });
             const c = clock();
-            const lod = new TreeLodController(root, { now: c.now });
+            const lod = new TreeLodController(root, { view: METRE_BANDS, now: c.now });
             const tree = treeNodes(root)[0];
             const seen = new Set<number>();
             // dolly from close to far: every handover dithers, and every dithering leaf mesh carries the crown chunk
@@ -344,7 +347,7 @@ describe('TreeLodController with crown shading', () => {
 
     it('dresses leaf meshes with the crown variant and leaves wood untouched', async () => {
         const root = await loadFixture(2);
-        const lod = new TreeLodController(root, { now: clock().now });
+        const lod = new TreeLodController(root, { view: METRE_BANDS, now: clock().now });
         expect(lod.stats.crownTrees).toBe(2);
         lod.forceLevel(0); lod.update(cameraAt(treeNodes(root)[0], 20));
         lod.forceLevel(1); lod.update(cameraAt(treeNodes(root)[0], 20));
@@ -377,7 +380,7 @@ describe('TreeLodController with crown shading', () => {
     it('keeps the crown chunk in the dither variants of a crossfade (leaves only), with the back-face flip only where the level does not blend', async () => {
         const root = await loadFixture(1);
         const c = clock();
-        const lod = new TreeLodController(root, { now: c.now });
+        const lod = new TreeLodController(root, { view: METRE_BANDS, now: c.now });
         const tree = treeNodes(root)[0];
         for (let i = 0; i < 80; i++) { c.tick(); lod.update(cameraAt(tree, 55)); }          // inside the 0|1 overlap
         const fading = lodMeshes(root).filter(m => isFadeVariant(m.material as THREE.Material));
@@ -389,7 +392,8 @@ describe('TreeLodController with crown shading', () => {
             expect(s.vertexShader).toContain('uSbRange');                                    // the dither is still there
             // the flip is kept for a level that does not blend (vSbCrownFlip = 1, the near level) and dropped where it blends
             expect(s.fragmentShader).toContain('float faceDirection = vSbCrownFlip > 0.5 ? ( gl_FrontFacing ? 1.0 : - 1.0 ) : 1.0;');
-            expect(s.fragmentShader).toContain('diffuseColor.rgb *= vSbCrownOcc;');
+            expect(s.fragmentShader).toContain(CROWN_FRAGMENT_COLOR);
+            expect(s.fragmentShader).toContain(BREAKUP_FRAGMENT_DISCARD);
             expect((m.material as THREE.Material).customProgramCacheKey()).toMatch(/sbcrown.*sbfade/);
         }
         for (const m of wood) {
@@ -405,7 +409,7 @@ describe('TreeLodController with crown shading', () => {
     it('turns off for comparison and back on, and dresses again a mesh the clay pass swapped', async () => {
         const root = await loadFixture(1);
         const c = clock();
-        const lod = new TreeLodController(root, { now: c.now });
+        const lod = new TreeLodController(root, { view: METRE_BANDS, now: c.now });
         const tree = treeNodes(root)[0];
         lod.forceLevel(0);
         lod.update(cameraAt(tree, 20));
@@ -446,7 +450,7 @@ describe('TreeLodController with crown shading', () => {
         const root = await loadFixture(1);
         root.traverse(o => { const m = o as THREE.Mesh; if ((m as THREE.InstancedMesh).isInstancedMesh) m.material = leafMat; });
         const c = clock();
-        const lod = new TreeLodController(root, { now: c.now });
+        const lod = new TreeLodController(root, { view: METRE_BANDS, now: c.now });
         const tree = treeNodes(root)[0];
         lod.forceLevel(0); lod.update(cameraAt(tree, 20));
         lod.forceLevel(null);
@@ -463,7 +467,7 @@ describe('TreeLodController with crown shading', () => {
 
     it('leaves a trees file without crowns as it was', async () => {
         const root = await loadFixture(1, false);
-        const lod = new TreeLodController(root, { now: clock().now });
+        const lod = new TreeLodController(root, { view: METRE_BANDS, now: clock().now });
         lod.update(cameraAt(treeNodes(root)[0], 20));
         expect(lod.stats.crownTrees).toBe(0);
         expect(lodMeshes(root).some(m => isCrownVariant(m.material as THREE.Material) || m.geometry.getAttribute('sbCrownC'))).toBe(false);

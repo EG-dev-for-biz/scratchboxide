@@ -20,7 +20,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import * as THREE from 'three';
 import { Scene3DPrimitive } from '../../../src/browser/generative-canvas/primitives/Scene3DPrimitive';
 import { stagedRevealStats } from '../../../src/browser/generative-canvas/primitives/scene3d/stagedBuild/useStagedBuild';
-import { stagedMaterialUniforms } from '../../../src/browser/generative-canvas/primitives/scene3d/stagedBuild/revealMaterial';
+import { stagedMaterialUniforms, stagedPartUniforms } from '../../../src/browser/generative-canvas/primitives/scene3d/stagedBuild/revealMaterial';
+import { PART_ATTRIBUTE, mergedPartsOf } from '../../../src/browser/generative-canvas/primitives/scene3d/stagedBuild/mergeStagedParts';
 import { publishStageEvent } from '../../../src/browser/generative-canvas/primitives/scene3d/stagedBuild/stagedBuildState';
 import '../../../src/style.css';
 
@@ -37,6 +38,7 @@ const w = window as unknown as Win;
 let root: Root | undefined;
 
 let reference: Uint8Array | undefined;
+const kept = new Map<string, Uint8Array>();
 const prompts: string[] = [];
 let lastUpdate: AnyData | undefined;
 
@@ -78,21 +80,62 @@ function coverage(threshold = 12): { covered: number; total: number } {
  * those pixels in its last frame. Pixels on a node's edge (antialiased with what is behind) and pattern gaps (the
  * background colour between legend-coloured pixels) are left out.
  */
-/** The ID pass: every visible mesh drawn in a flat unique colour through the viewport's camera (the staged guard bypassed). */
-function idPass(): { ids: Uint8Array; idOf: Map<THREE.Mesh, number>; width: number; height: number } {
+/**
+ * A part of a merged mesh (mergeStagedParts.ts) as a node object: its name and extras, the same object every call, so
+ * the helpers below key parts like the nodes of an unmerged layer.
+ */
+const partNodes = new WeakMap<THREE.Mesh, THREE.Object3D[]>();
+function partNode(mesh: THREE.Mesh, index: number): THREE.Object3D {
+    let list = partNodes.get(mesh);
+    if (!list) {
+        list = mergedPartsOf(mesh)!.parts.map(p => { const o = new THREE.Object3D(); o.name = p.name; o.userData = { sb: p.sb }; return o; });
+        partNodes.set(mesh, list);
+    }
+    return list[index];
+}
+
+/**
+ * The ID pass: every visible mesh drawn in a flat unique colour through the viewport's camera (the staged guard bypassed).
+ * A merged mesh draws each of its shown parts in its own colour (`partIds`); the parts the staged build hides are left out.
+ */
+function idPass(): { ids: Uint8Array; idOf: Map<THREE.Mesh, number>; partIds: Map<THREE.Mesh, number[]>; width: number; height: number } {
     const stack = w.__SB_3D_STACK__!;
     const { width, height } = readPixels();
     const renderer = stack.renderer, scene = stack.scene, camera = stack.camera;
     const meshes: THREE.Mesh[] = [];
     scene.traverseVisible(o => { if ((o as THREE.Mesh).isMesh) meshes.push(o as THREE.Mesh); });
     const saved = new Map<THREE.Mesh, THREE.Material | THREE.Material[]>();
+    const savedGeometry = new Map<THREE.Mesh, THREE.BufferGeometry>();
     const idOf = new Map<THREE.Mesh, number>();
-    meshes.forEach((m, i) => {
-        const id = i + 1;
-        idOf.set(m, id);
+    const partIds = new Map<THREE.Mesh, number[]>();
+    let next = 1;
+    const rgb = (id: number) => [(id & 255) / 255, ((id >> 8) & 255) / 255, ((id >> 16) & 255) / 255] as const;
+    meshes.forEach(m => {
         saved.set(m, m.material);
+        const table = mergedPartsOf(m);
+        if (table) {
+            const g = m.geometry as THREE.BufferGeometry;
+            const ids = table.parts.map(() => next++);
+            partIds.set(m, ids);
+            const part = g.getAttribute(PART_ATTRIBUTE) as THREE.BufferAttribute;
+            const col = new Float32Array(part.count * 3);
+            for (let v = 0; v < part.count; v++) col.set(rgb(ids[Math.round(part.getX(v))]), v * 3);
+            const tmp = new THREE.BufferGeometry();
+            tmp.setAttribute('position', g.getAttribute('position'));
+            tmp.setAttribute('color', new THREE.BufferAttribute(col, 3));
+            const index: number[] = [];
+            const src = g.index!;
+            for (const p of table.parts) if (table.visible[p.index]) for (let k = p.triStart * 3; k < (p.triStart + p.triCount) * 3; k++) index.push(src.getX(k));
+            tmp.setIndex(index);
+            savedGeometry.set(m, g);
+            m.geometry = tmp;
+            m.material = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, toneMapped: false, vertexColors: true });
+            return;
+        }
+        const id = next++;
+        idOf.set(m, id);
         const mat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, toneMapped: false });
-        mat.color.setRGB((id & 255) / 255, ((id >> 8) & 255) / 255, ((id >> 16) & 255) / 255, THREE.LinearSRGBColorSpace);
+        mat.color.setRGB(...rgb(id), THREE.LinearSRGBColorSpace);
         m.material = mat;
     });
     const hiddenLines: THREE.Object3D[] = [];
@@ -114,17 +157,23 @@ function idPass(): { ids: Uint8Array; idOf: Map<THREE.Mesh, number>; width: numb
     scene.background = bg;
     hiddenLines.forEach(o => { o.visible = true; });
     for (const [m, mat] of saved) { (m.material as THREE.Material).dispose(); m.material = mat; }
-    return { ids, idOf, width, height };
+    for (const [m, g] of savedGeometry) { (m.geometry as THREE.BufferGeometry).dispose(); m.geometry = g; }
+    return { ids, idOf, partIds, width, height };
 }
 
 /** The interior pixels (all four neighbours on the same mesh) of each node of a layer, as indices into the frame. */
-function nodeInteriors(objectId: string, ids: Uint8Array, idOf: Map<THREE.Mesh, number>, width: number, height: number): Map<THREE.Object3D, { set: Set<number>; interior: number[] }> {
+function nodeInteriors(objectId: string, ids: Uint8Array, idOf: Map<THREE.Mesh, number>, width: number, height: number, partIds: Map<THREE.Mesh, number[]> = new Map()): Map<THREE.Object3D, { set: Set<number>; interior: number[] }> {
     const rootObj = w.__SB_3D_EXTERNAL_OBJECTS__?.get(objectId);
     const out = new Map<THREE.Object3D, { set: Set<number>; interior: number[] }>();
     if (!rootObj) return out;
     const idAt = (x: number, y: number) => { const o = (y * width + x) * 4; return ids[o] | (ids[o + 1] << 8) | (ids[o + 2] << 16); };
     rootObj.traverse(o => {
         const mesh = o as THREE.Mesh;
+        const parts = mesh.isMesh ? partIds.get(mesh) : undefined;
+        if (parts) {
+            parts.forEach((id, i) => { const node = partNode(mesh, i); out.set(node, { set: new Set([id]), interior: [] }); });
+            return;
+        }
         if (!mesh.isMesh || !idOf.has(mesh)) return;
         let node: THREE.Object3D = mesh;
         for (let p: THREE.Object3D | null = mesh; p && p !== rootObj; p = p.parent) if ((p.userData as { sb?: unknown }).sb) { node = p; break; }
@@ -152,7 +201,7 @@ function patternShare(objectId: string): Array<{ node: string; label?: string; p
     const stack = w.__SB_3D_STACK__!;
     const scene = stack.scene, renderer = stack.renderer, camera = stack.camera;
     const base = readPixels();
-    const { ids, idOf, width, height } = idPass();
+    const { ids, idOf, partIds, width, height } = idPass();
     const staged: Array<{ background: THREE.Vector3; saved: THREE.Vector3 }> = [];
     scene.traverse(o => {
         const m = (o as THREE.Mesh).material as THREE.Material | undefined;
@@ -172,7 +221,7 @@ function patternShare(objectId: string): Array<{ node: string; label?: string; p
     scene.onBeforeRender = guard;
     const denom = magenta.reduce((a, m, c) => a + (m - bg[c]) ** 2, 0);
     const out: Array<{ node: string; label?: string; pixels: number; share: number }> = [];
-    for (const [node, { interior }] of nodeInteriors(objectId, ids, idOf, width, height)) {
+    for (const [node, { interior }] of nodeInteriors(objectId, ids, idOf, width, height, partIds)) {
         if (interior.length === 0) continue;
         let sum = 0;
         for (const i of interior) {
@@ -196,10 +245,10 @@ function sampleNodes(objectId: string, perNode = 24): Array<{ node: string; labe
     const rootObj = w.__SB_3D_EXTERNAL_OBJECTS__?.get(objectId);
     if (!rootObj) return [];
     const frame = readPixels();
-    const { width, height, ids, idOf } = idPass();
+    const { width, height, ids, idOf, partIds } = idPass();
     const isGap = (o: number) => Math.abs(frame.data[o] - 0x1c) + Math.abs(frame.data[o + 1] - 0x20) + Math.abs(frame.data[o + 2] - 0x26) < 24;
     const out: Array<{ node: string; label?: string; pixels: number; gapFraction: number; samples: Array<{ x: number; y: number; rgb: [number, number, number] }> }> = [];
-    for (const [node, { interior: all }] of nodeInteriors(objectId, ids, idOf, width, height)) {
+    for (const [node, { interior: all }] of nodeInteriors(objectId, ids, idOf, width, height, partIds)) {
         const interior: number[] = [];
         let gaps = 0;
         for (const i of all) { if (isGap(i * 4)) gaps++; else interior.push(i); }
@@ -283,6 +332,21 @@ w.sbHarness = {
     attached: (id: string) => !!w.__SB_3D_EXTERNAL_OBJECTS__?.get(id)?.parent,
     ready: () => !!w.__SB_3D_STACK__,
     setReference: () => { reference = readPixels().data.slice(); },
+    /** Keeps the current frame under a name (it survives a remount), for frame-to-frame comparisons. */
+    keepFrame: (name: string) => { kept.set(name, readPixels().data.slice()); return kept.get(name)!.length; },
+    /** How two kept frames differ: the largest channel difference, and the pixels that differ by more than `threshold`. */
+    frameDiff: (a: string, b: string, threshold = 2) => {
+        const x = kept.get(a), y = kept.get(b);
+        if (!x || !y || x.length !== y.length) return null;
+        let max = 0, differing = 0, sum = 0;
+        for (let i = 0; i < x.length; i += 4) {
+            const d = Math.max(Math.abs(x[i] - y[i]), Math.abs(x[i + 1] - y[i + 1]), Math.abs(x[i + 2] - y[i + 2]));
+            if (d > max) max = d;
+            if (d > threshold) differing++;
+            sum += d;
+        }
+        return { max, differing, total: x.length / 4, meanDiff: sum / (x.length / 4) };
+    },
     clearReference: () => { reference = undefined; },
     coverage,
     /** Mean colour of the model's pixels (everything that differs from the corner background) and how many there are. */
@@ -313,6 +377,21 @@ w.sbHarness = {
             const m = o as THREE.Mesh;
             if (!m.isMesh && !(o as THREE.Line).isLine) return;
             const mat = m.material as THREE.Material;
+            const table = m.isMesh ? mergedPartsOf(m) : undefined;
+            if (table) {
+                // a merged mesh: one entry per part, as its own mesh was before the merge
+                const u = (mat && stagedMaterialUniforms(mat)) ?? null;
+                const pu = mat ? stagedPartUniforms(mat) : undefined;
+                for (const p of table.parts) {
+                    const own = pu?.[p.index];
+                    out.push({
+                        name: p.name, node: p.name, visible: o.visible && table.visible[p.index] === 1 && (!own || own.fade > 0),
+                        staged: (mat?.userData?.sbStagedPatch as string) ?? null, material: mat?.type ?? '',
+                        uniforms: u ? { ...u, fade: u.fade * (own?.fade ?? 1), presence: u.presence * (own?.presence ?? 1) } : null
+                    });
+                }
+                return;
+            }
             let node: THREE.Object3D = o;
             for (let p: THREE.Object3D | null = o; p && p !== r; p = p.parent) if ((p.userData as { sb?: unknown }).sb) { node = p; break; }
             out.push({ name: o.name, node: node.name, visible: o.visible, staged: (mat?.userData?.sbStagedPatch as string) ?? null, material: mat?.type ?? '', uniforms: (mat && stagedMaterialUniforms(mat)) ?? null });

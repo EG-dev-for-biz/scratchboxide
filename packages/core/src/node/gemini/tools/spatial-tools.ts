@@ -99,7 +99,8 @@ import type { ToolContext, ToolDeclaration, ToolHandler, ToolHandlerOutcome, Too
 import { STAGED_MATERIAL_MODE_DECLARATION, STAGED_MATERIAL_MODE_TOOL, runStagedMaterialModeTool } from './staged-material-mode-tool';
 import { anchorOffset, offsetObjects, partitionActiveScene } from '../../3d-engine/staged-location/kept-structure';
 import { applySunToScene } from './atmosphere-tools';
-import type { CanvasArtifact, Scene3DData } from '../../../browser/generative-canvas/canvas-types';
+import type { CanvasArtifact, Scene3DData, SceneCameraLens } from '../../../browser/generative-canvas/canvas-types';
+import { autoFocusAreaOf, effectiveFocusMode, focusPullSecondsOf } from '../../../browser/generative-canvas/primitives/scene3d/viewportFocus';
 import { DirectDispatchOperatorEngine } from '../../../browser/generative-canvas/services/direct-dispatch-operator-engine';
 import { cameraToFrameCoefficients } from '../../../browser/generative-canvas/primitives/scene3d/viewportOptics';
 import { DEFAULT_CAMERA_FOV_DEG } from '../../../browser/generative-canvas/primitives/scene3d/createRendererStack';
@@ -215,6 +216,10 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 isolate: {
                     type: 'BOOLEAN',
                     description: STAGED_ISOLATE_DESCRIPTION
+                },
+                enhance: {
+                    type: 'BOOLEAN',
+                    description: 'Enhanced appearance (default true with the vector-massing pipeline, SCRATCHBOX_STAGED_PIPELINE=e): each large wall is redrawn once by an image model from its tile photo, guided by a registered Street View photo of the wall where one shows it, kept only where its windows and edges stay in place and nothing distinct (a fire escape, a storefront, signage, the colour) is erased or contradicted, and labelled generated ("AI-enhanced from tile"); the result says how many walls were enhanced or rejected. Pass false for the real-data view (tile photo and real sources only), e.g. when the user asks for the real data.'
                 },
                 atomicBuildingIntegrity: {
                     type: 'BOOLEAN',
@@ -4576,7 +4581,7 @@ export const poseDepthHandlers: Record<string, ToolHandler> = {
 export const PHYSICAL_CAMERA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'configure_physical_camera',
-        description: 'Puts a real-world lens on the open 3D scene\'s camera: sets the viewport\'s vertical field of view from the focal length and sensor height, and stores the lens (sb_set_camera_lens) so the viewport draws thin-lens depth of field: blur from the circle of confusion of the focal length, f-number and focus (a focusDistanceMeters, or a focusObjectId the viewport keeps in focus as the camera moves), with oval bokeh for an anamorphic squeeze. Also computes the frustum, hyperfocal distance and depth-of-field limits. The result says applied: true and returns the updated scene; with no 3D scene (or no camera pose) it says NOT applied and changes nothing. Computed only: the horizontal field of view and the anamorphic desqueeze of the frame (the viewport keeps its own aspect ratio); without a focus, no blur is drawn.',
+        description: 'Puts a real-world lens on the open 3D scene\'s camera: sets the viewport\'s vertical field of view from the focal length and sensor height, and stores the lens (sb_set_camera_lens) so the viewport draws thin-lens depth of field: blur from the circle of confusion of the focal length, f-number and focus, with oval bokeh for an anamorphic squeeze. Focus modes (the same ones as the viewport camera panel, kept in sync both ways): manual (focusDistanceMeters); auto (focusMode "auto": continuous autofocus on the nearest surface in a centred AF area of autoFocusAreaFraction of the frame height, gliding with the focusPullSeconds time constant; sky holds the last focus); track (focusPoint: a surface point locked to an object via objectId plus localPosition or worldPosition, or a fixed world point without objectId; or focusObjectId for a whole object), re-measured every frame as the camera or object moves. Also computes the frustum, hyperfocal distance and depth-of-field limits. The result says applied: true and returns the updated scene; with no 3D scene (or no camera pose) it says NOT applied and changes nothing. Computed only: the horizontal field of view and the anamorphic desqueeze of the frame (the viewport keeps its own aspect ratio); without a focus, no blur is drawn.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -4617,7 +4622,28 @@ export const PHYSICAL_CAMERA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 focusObjectId: {
                     type: 'STRING',
-                    description: 'Keep this scene object in focus (a customMesh or object id/name, or a viewport node name): the viewport measures its depth every frame. Used when focusDistanceMeters is not given.'
+                    description: 'Track focus on this whole scene object (a customMesh or object id/name, or a viewport node name): the viewport measures its bounding-box centre\'s depth as the camera moves. Used when focusDistanceMeters is not given.'
+                },
+                focusMode: {
+                    type: 'STRING',
+                    description: 'How the camera focuses: "manual" (focusDistanceMeters), "auto" (continuous autofocus on the centre of the frame), or "track" (needs focusPoint or focusObjectId; implied by them). Giving only focusDistanceMeters switches to manual.'
+                },
+                autoFocusAreaFraction: {
+                    type: 'NUMBER',
+                    description: 'Auto focus: side of the centred square AF area as a fraction of the frame height, in (0, 1] (default 0.1).'
+                },
+                focusPullSeconds: {
+                    type: 'NUMBER',
+                    description: 'Auto focus: focus-pull time constant in seconds, >= 0 (default 0.3; 0 snaps). The focus glides in dioptres toward the measured depth.'
+                },
+                focusPoint: {
+                    type: 'OBJECT',
+                    description: 'Track focus on a surface point: objectId (customMesh / object id or viewport node name) plus localPosition [x, y, z] in its local frame, or worldPosition [x, y, z] (converted with the object\'s transform). Without objectId, worldPosition is a fixed world point.',
+                    properties: {
+                        objectId: { type: 'STRING', description: 'The object the point is attached to.' },
+                        localPosition: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'The point in the object\'s local frame.' },
+                        worldPosition: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'The point in world coordinates (metres).' }
+                    }
                 },
                 anamorphicRatio: {
                     type: 'NUMBER',
@@ -4690,6 +4716,17 @@ export const physicalCameraHandlers: Record<string, ToolHandler> = {
         }
         const focusGiven = args.focusDistanceMeters !== undefined && args.focusDistanceMeters !== null;
         const focusObjectId = typeof args.focusObjectId === 'string' && args.focusObjectId.trim() ? args.focusObjectId.trim() : undefined;
+        const focusMode = typeof args.focusMode === 'string' && args.focusMode.trim() ? args.focusMode.trim() : undefined;
+        const fp = args.focusPoint && typeof args.focusPoint === 'object' ? args.focusPoint as { objectId?: unknown; localPosition?: unknown; worldPosition?: unknown } : undefined;
+        const vec3 = (v: unknown): [number, number, number] | undefined => Array.isArray(v) && v.length === 3 ? v.map(Number) as [number, number, number] : undefined;
+        const focusPoint = fp ? {
+            ...(typeof fp.objectId === 'string' && fp.objectId.trim() ? { objectId: fp.objectId.trim() } : {}),
+            ...(vec3(fp.localPosition) ? { localPosition: vec3(fp.localPosition) } : {}),
+            ...(vec3(fp.worldPosition) ? { worldPosition: vec3(fp.worldPosition) } : {})
+        } : undefined;
+        const autoFocusAreaFraction = args.autoFocusAreaFraction !== undefined && args.autoFocusAreaFraction !== null ? Number(args.autoFocusAreaFraction) : undefined;
+        const focusPullSeconds = args.focusPullSeconds !== undefined && args.focusPullSeconds !== null ? Number(args.focusPullSeconds) : undefined;
+        const autoFocus = focusMode === 'auto';
         const sensorFormat = (args.sensorFormat as SensorFormatPreset) ?? 'full_frame_35mm';
         const anamorphicRatio = args.anamorphicRatio !== undefined ? Number(args.anamorphicRatio) : 1.0;
         const enableDepthOfField = args.enableDepthOfField !== undefined ? Boolean(args.enableDepthOfField) : true;
@@ -4727,7 +4764,8 @@ export const physicalCameraHandlers: Record<string, ToolHandler> = {
 
         const frustum = PhysicalCameraModel.calculateFrustum(config);
         const hyperfocal = PhysicalCameraModel.calculateHyperfocalDistance(focalLengthMm, apertureFStop, frustum.sensorDimensions.diagonalMm);
-        const dof = focusDistanceMeters !== undefined && focusDistanceMeters > 0
+        // auto focus and a tracked point move the plane of focus: no fixed limits to report
+        const dof = focusDistanceMeters !== undefined && focusDistanceMeters > 0 && !autoFocus && !focusPoint
             ? PhysicalCameraModel.calculateDepthOfField(focalLengthMm, apertureFStop, focusDistanceMeters, frustum.sensorDimensions.diagonalMm)
             : undefined;
 
@@ -4752,7 +4790,11 @@ export const physicalCameraHandlers: Record<string, ToolHandler> = {
             } : {})
         };
         const lensText = `${focalLengthMm} mm, f/${apertureFStop}, ${sensorFormat}: vertical FOV ${frustum.verticalFovDeg.toFixed(1)}° (horizontal ${frustum.horizontalFovDeg.toFixed(1)}° on the sensor's ${frustum.aspectRatio.toFixed(2)}:1)`;
-        const focusText = focusGiven
+        const focusText = autoFocus
+            ? `auto focus on the centre of the frame (AF area ${(((autoFocusAreaFraction ?? 0.1)) * 100).toFixed(0)} % of the frame height, ${(focusPullSeconds ?? 0.3)} s focus pull${focusGiven ? `, starting at ${focusDistanceMeters!.toFixed(1)} m` : ''})`
+            : focusPoint
+            ? `focus tracking the point ${JSON.stringify(focusPoint.localPosition ?? focusPoint.worldPosition)} ${focusPoint.localPosition ? 'local to' : 'in world coordinates'}${focusPoint.objectId ? ` '${focusPoint.objectId}'` : ''}`
+            : focusGiven
             ? `focus ${focusDistanceMeters!.toFixed(1)} m`
             : focusObjectId
                 ? `focus on '${focusObjectId}'${focusObjectDepth !== undefined ? ` (${focusObjectDepth.toFixed(1)} m from the camera now)` : ''}`
@@ -4770,18 +4812,23 @@ export const physicalCameraHandlers: Record<string, ToolHandler> = {
         const fov = Number(frustum.verticalFovDeg.toFixed(3));
         if (!(fov > 0 && fov < 180)) return notApplied(`the computed vertical field of view ${fov}° is not a usable camera FOV`);
         if (focusGiven && !(focusDistanceMeters! > focalLengthMm / 1000)) return notApplied(`the focus distance ${focusDistanceMeters} m is inside the ${focalLengthMm} mm focal length`);
+        if (focusPoint && focusObjectId) return notApplied('give focusPoint or focusObjectId, not both');
 
         const engine = new DirectDispatchOperatorEngine(JSON.parse(JSON.stringify(sceneData)) as Scene3DData);
         const res = engine.dispatch('sb_set_camera', { fov });
         if (!res.success) return notApplied(res.error || 'sb_set_camera failed');
-        const hasFocus = focusGiven || !!focusObjectId;
+        const hasFocus = focusGiven || !!focusObjectId || !!focusPoint || autoFocus;
         const lensRes = engine.dispatch('sb_set_camera_lens', {
             focalLengthMm,
             sensorWidthMm: frustum.sensorDimensions.widthMm,
             sensorHeightMm: frustum.sensorDimensions.heightMm,
             apertureFStop,
             ...(focusGiven ? { focusDistanceMeters } : {}),
-            ...(focusObjectId && !focusGiven ? { focusObjectId } : {}),
+            ...(focusObjectId && (!focusGiven || focusMode === 'track') ? { focusObjectId } : {}),
+            ...(focusPoint ? { focusPoint } : {}),
+            ...(focusMode ? { focusMode } : {}),
+            ...(autoFocusAreaFraction !== undefined ? { autoFocusAreaFraction } : {}),
+            ...(focusPullSeconds !== undefined ? { focusPullSeconds } : {}),
             anamorphicSqueeze: anamorphicRatio > 0 ? anamorphicRatio : 1,
             depthOfField: enableDepthOfField
         });
@@ -4789,11 +4836,22 @@ export const physicalCameraHandlers: Record<string, ToolHandler> = {
         const passes = ((lensRes.data as { passes?: string[] })?.passes) ?? [];
         const dofDrawn = passes.includes('depth-of-field');
         const lensIssues = (((lensRes.data as { issues?: string[] })?.issues) ?? []).filter(i => !/^depth of field needs/.test(i));
+        const resultLens = (lensRes.data as { lens?: SceneCameraLens | null })?.lens ?? undefined;
+        const focus = {
+            mode: effectiveFocusMode(resultLens),
+            ...(resultLens?.focusDistanceMeters !== undefined ? { focusDistanceMeters: resultLens.focusDistanceMeters } : {}),
+            ...(resultLens?.focusObjectId ? { focusObjectId: resultLens.focusObjectId } : {}),
+            ...(resultLens?.focusPoint ? { focusPoint: resultLens.focusPoint } : {}),
+            ...(effectiveFocusMode(resultLens) === 'auto' ? { autoFocusAreaFraction: autoFocusAreaOf(resultLens), focusPullSeconds: focusPullSecondsOf(resultLens) } : {})
+        };
+        const keptFocusNote = !focusGiven && !focusObjectId && !focusPoint && !focusMode && focus.mode !== 'manual'
+            ? ` The camera keeps its ${focus.mode} focus.`
+            : '';
 
         const notAppliedParts = [
             ...lensIssues,
             ...(!enableDepthOfField ? ['depth of field: enableDepthOfField is false (the lens values are stored, no blur is drawn)'] : []),
-            ...(enableDepthOfField && !hasFocus ? ['depth of field: no focus distance or focus object was given, so no plane of focus exists to blur around'] : []),
+            ...(enableDepthOfField && !hasFocus && !dofDrawn ? ['depth of field: no focus distance, focus mode, point or object was given, so no plane of focus exists to blur around'] : []),
             ...(anamorphicRatio !== 1 ? [`the ${anamorphicRatio}x anamorphic desqueeze of the frame: the viewport keeps its own aspect ratio (the squeeze shapes the bokeh and any lens distortion)`] : []),
             'the horizontal field of view: the viewport\'s width follows its panel, not the sensor aspect'
         ];
@@ -4814,11 +4872,12 @@ export const physicalCameraHandlers: Record<string, ToolHandler> = {
                 operators: ['sb_set_camera', 'sb_set_camera_lens'],
                 appliedFovDeg: fov,
                 passes,
+                focus,
                 ...computed,
                 notAppliedParts,
                 artifact
             } as unknown as ToolResultPayload,
-            summaryResult: `Applied to the active 3D scene "${active.title || active.id}": ${lensText}; the viewport camera's vertical FOV is now ${fov.toFixed(1)}° (was ${sceneData.camera.fov ?? 'unset, 45'}°)${dofDrawn ? `; the viewport draws thin-lens depth of field (${dofText}${anamorphicRatio !== 1 ? `, ${anamorphicRatio}x oval bokeh` : ''})` : ''}.${focusNote} Computed only, NOT applied: ${notAppliedParts.join('; ')}.`
+            summaryResult: `Applied to the active 3D scene "${active.title || active.id}": ${lensText}; the viewport camera's vertical FOV is now ${fov.toFixed(1)}° (was ${sceneData.camera.fov ?? 'unset, 45'}°)${dofDrawn ? `; the viewport draws thin-lens depth of field (${dofText}${anamorphicRatio !== 1 ? `, ${anamorphicRatio}x oval bokeh` : ''})` : ''}.${focusNote}${keptFocusNote} Computed only, NOT applied: ${notAppliedParts.join('; ')}.`
         };
     },
 

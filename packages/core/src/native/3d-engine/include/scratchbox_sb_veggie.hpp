@@ -1122,6 +1122,11 @@ struct SbVeggieClusterParams {
 
 struct SbVeggieClusterMesh {
     std::vector<Vec3> positions, normals;
+    // per vertex: a blade's own coordinates, scaled by its length (u = 0.5 + across / length, v = along / length, the
+    // blade's base at v = 0), and `leaf` = (a hash of the blade in [0, 1): which leaf of a texture atlas it shows, 1 on a
+    // blade / 0 on a petiole or sub-shoot)
+    std::vector<Vec2> uvs;
+    std::vector<std::array<float, 2>> leaf;
     std::vector<uint32_t> indices;     // the leaf cards first (blades and petioles), the sub-shoot tubes after
     size_t leafIndexCount{0};
     std::vector<uint32_t> bladeFrontIndices; // the blades' upper-side triangles alone (no underside, no petioles): the surface a leaf measurement needs
@@ -1158,6 +1163,8 @@ public:
         const float effR = cp.radiusM * cp.reachScale;
         std::vector<SbVeggieBladeVertex> verts;
         std::vector<uint32_t> idx;
+        std::vector<Vec2> bladeUv;
+        std::vector<std::array<float, 2>> bladeLeaf;
         for (int i = 0; i < n; ++i) {
             const float subPhase = (i % 4) * (PI * 0.5f) + seedPhase;
             const Vec3 subDir = (shootDir * 0.48f + (perp1 * std::cos(subPhase) + perp2 * std::sin(subPhase)) * 0.72f + Vec3(0, 0.28f, 0)).normalized();
@@ -1185,11 +1192,21 @@ public:
             pl.normal = normal;
             pl.lengthM = L;
             const size_t before = idx.size();
+            const size_t vertsBefore = verts.size();
             const size_t bladeTris = appendLeaf(cp, mo, pl, verts, idx);
+            // the blade's own coordinates, by length (its outline's bounding box is [0.5 -+ widthRatio / 2] x [0, 1])
+            const float pick = unitHash(cp.seed, 400 + i);
+            for (size_t q = vertsBefore; q < verts.size(); ++q) {
+                const Vec3 d = verts[q].position - pl.petioleTip;
+                bladeUv.push_back(Vec2(0.5f + d.dot(pl.bitangent) / L, d.dot(pl.tangent) / L));
+                bladeLeaf.push_back({pick, verts[q].petiole ? 0.0f : 1.0f});
+            }
             out.bladeFrontIndices.insert(out.bladeFrontIndices.end(), idx.begin() + static_cast<std::ptrdiff_t>(before), idx.begin() + static_cast<std::ptrdiff_t>(before + bladeTris / 2 * 3));
         }
         out.leaves = n;
         for (const auto& v : verts) { out.positions.push_back(v.position); out.normals.push_back(v.normal); }
+        out.uvs = std::move(bladeUv);
+        out.leaf = std::move(bladeLeaf);
         out.indices = idx;
         out.leafIndexCount = idx.size();
         // sub-shoots
@@ -1200,6 +1217,9 @@ public:
                 appendTube(out, Vec3(0, 0, 0), d * (effR * 0.97f), cp.shootletRadiusM, cp.shootletRadiusM * 0.4f, 4);
             }
         }
+        // the sub-shoots: wood, no leaf coordinates
+        out.uvs.resize(out.positions.size(), Vec2(0.0f, 0.0f));
+        out.leaf.resize(out.positions.size(), {0.0f, 0.0f});
         for (const auto& q : out.positions) out.reach = std::max(out.reach, q.length());
         // hull: the extreme point in each of a Fibonacci sphere of directions
         std::vector<uint8_t> used(out.positions.size(), 0);

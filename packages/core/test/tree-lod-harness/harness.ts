@@ -19,12 +19,15 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { TreeLodController } from '../../src/browser/generative-canvas/primitives/scene3d/treeLod/TreeLodController';
 import { applyClayRenderMode } from '../../src/browser/generative-canvas/primitives/scene3d/clayRenderMode';
+import { BREAKUP_FRAGMENT_PARS, breakupDepthMaterial, crownShadingUniforms, type CrownBreakupInput } from '../../src/browser/generative-canvas/primitives/scene3d/treeLod/treeCrownShading';
 
 const W = 1280, H = 800;
 let clock = 0;
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(1);
 renderer.setSize(W, H);
+const shaderErrors: string[] = [];
+renderer.debug.onShaderError = (gl, program, vs, fs) => { shaderErrors.push(`${gl.getShaderInfoLog(vs) ?? ''}${gl.getShaderInfoLog(fs) ?? ''}${gl.getProgramInfoLog(program) ?? ''}`.slice(0, 2000)); };
 document.body.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xd6d9dd);
@@ -45,7 +48,7 @@ const sleep = () => new Promise<void>(r => setTimeout(r, 0));
 const frame = (): { ms: number; updateMs: number } => {
     clock += 16.7;
     const t0 = performance.now();
-    lod!.update(camera);
+    lod!.update(camera, renderer.shadowMap.enabled ? sun.shadow.camera : null);
     const t1 = performance.now();
     renderer.render(scene, camera);
     // finish() can return before the GPU is done; reading one pixel back cannot
@@ -126,7 +129,7 @@ function imageStats(): { nonBackground: number; meanLuma: number; hash: number[]
 }
 
 /** Renders a hero shot. `level` forces a level; null lets distance decide; settle lets the dissolve finish (or not). */
-function shot(opts: { level: 0 | 1 | 2 | null; distM: number; lift: number; fov: number; settleFrames?: number }): Record<string, unknown> {
+function shot(opts: { level: 0 | 1 | 2 | 3 | null; distM: number; lift: number; fov: number; settleFrames?: number }): Record<string, unknown> {
     lod!.forceLevel(opts.level);
     heroView(opts.distM, opts.lift, opts.fov);
     clock += 5000; frame();
@@ -143,4 +146,61 @@ function transitionShot(distM: number, lift: number, fov: number): Record<string
     return { ...imageStats(), triangles: renderer.info.render.triangles, stats: { ...lod!.stats } };
 }
 
-(window as unknown as { H: unknown }).H = { init, perf, shot, transitionShot, hero: () => ({ c: hero.center.toArray(), r: hero.radius }), mem: () => ({ geometries: renderer.info.memory.geometries, programs: renderer.info.programs?.length ?? 0 }) };
+/** The breakup's factors (a partial override; null restores the defaults). */
+function setBreakup(b: CrownBreakupInput | null): void { lod!.setCrownShading(b ? { breakup: b } : null); }
+
+/** Sun shadows on (trees cast, the ground receives), the sun's shadow camera around the hero; `breakupDepth` false gives leaves the renderer's plain depth material. */
+function shadows(on: boolean, breakupDepth = true): void {
+    renderer.shadowMap.enabled = on;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
+    sun.castShadow = on;
+    sun.position.copy(hero.center).add(new THREE.Vector3(-30, 60, 25));
+    sun.target.position.copy(hero.center); sun.target.updateMatrixWorld();
+    const cam = sun.shadow.camera as THREE.OrthographicCamera;
+    cam.left = cam.bottom = -hero.radius * 3; cam.right = cam.top = hero.radius * 3; cam.near = 1; cam.far = 200; cam.updateProjectionMatrix();
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.map?.dispose(); (sun.shadow as { map: unknown }).map = null;
+    ground.receiveShadow = on;
+    root!.traverse(o => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) return;
+        m.userData.sbLodCast = on; m.castShadow = on;
+        if (m.userData.sbCrownLeaf) m.customDepthMaterial = breakupDepth ? breakupDepthMaterial() : undefined;
+    });
+    // the controller assigns castShadow per tree from its casting level at the next update; make it re-evaluate
+    (lod as unknown as { trees: Array<{ castLevel: number }> }).trees.forEach(t => { t.castLevel = -1; });
+}
+
+/** A shot of the hero (as `shot`) with the breakup on or off. */
+function breakupShot(opts: { level: 0 | 1 | 2 | 3 | null; distM: number; lift: number; fov: number; breakup: boolean }): Record<string, unknown> {
+    setBreakup({ enabled: opts.breakup });
+    return shot({ level: opts.level, distM: opts.distM, lift: opts.lift, fov: opts.fov });
+}
+
+/**
+ * The GLSL hole test evaluated on an n x n grid of world points (origin + ((i + 0.5) / n) span along x and z), one pixel
+ * each: 1 kept, 0 dropped. With the shared uniforms' current factors.
+ */
+function glslKeepGrid(o: { n: number; origin: [number, number, number]; span: number; depthS: number; slot: number; footprintM: number; dither: number; crownRadiusM: number }): number[] {
+    const rt = new THREE.WebGLRenderTarget(o.n, o.n);
+    const mat = new THREE.ShaderMaterial({
+        uniforms: { ...crownShadingUniforms(), uO: { value: new THREE.Vector3(...o.origin) }, uSpan: { value: o.span }, uDepth: { value: o.depthS }, uInfo: { value: new THREE.Vector4(o.slot, 1, o.crownRadiusM, 0.5) }, uFoot: { value: o.footprintM }, uDither: { value: o.dither } },
+        vertexShader: `uniform vec3 uO; uniform float uSpan; uniform float uDepth; uniform vec4 uInfo;
+varying vec3 vSbBkW; varying float vSbBkDepth; varying vec4 vSbBkInfo;
+void main() { vSbBkW = uO + vec3( uv.x * uSpan, 0.0, uv.y * uSpan ); vSbBkDepth = uDepth; vSbBkInfo = uInfo; gl_Position = vec4( position.xy * 2.0, 0.0, 1.0 ); }`,
+        fragmentShader: `${BREAKUP_FRAGMENT_PARS}
+uniform float uFoot; uniform float uDither;
+void main() { bool k = sbBreakupKeep( vSbBkW, vSbBkDepth, sbBkSlot( vSbBkInfo.x ), uFoot, uDither ); gl_FragColor = vec4( k ? 1.0 : 0.0, 0.0, 0.0, 1.0 ); }`
+    });
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
+    const s = new THREE.Scene(); s.add(quad);
+    renderer.setRenderTarget(rt); renderer.render(s, camera); renderer.setRenderTarget(null);
+    const px = new Uint8Array(o.n * o.n * 4);
+    renderer.readRenderTargetPixels(rt, 0, 0, o.n, o.n, px);
+    rt.dispose(); mat.dispose(); quad.geometry.dispose();
+    const out: number[] = [];
+    for (let j = 0; j < o.n; j++) for (let i = 0; i < o.n; i++) out.push(px[(j * o.n + i) * 4] > 127 ? 1 : 0);
+    return out;
+}
+
+(window as unknown as { H: unknown }).H = { init, perf, shot, transitionShot, setBreakup, shadows, breakupShot, glslKeepGrid, shaderErrors: () => [...shaderErrors], stats: () => ({ ...lod!.stats }), hero: () => ({ c: hero.center.toArray(), r: hero.radius }), mem: () => ({ geometries: renderer.info.memory.geometries, programs: renderer.info.programs?.length ?? 0 }) };

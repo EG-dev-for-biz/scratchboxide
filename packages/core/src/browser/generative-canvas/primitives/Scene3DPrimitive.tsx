@@ -154,11 +154,16 @@ import { NumericPrecisionInspector } from './scene3d/NumericPrecisionInspector';
 import { computeSceneGeometryBounds, calculateStandoffCamera } from './scene3d/autoFraming';
 import type { RendererStack, AtmosphereHandle, TilesLayerHandle, SceneContentHandle, WasmMeshHandle, VectorRoadmapHandle, Scene3DRenderMode } from './scene3d/types';
 import { applyClayRenderMode } from './scene3d/clayRenderMode';
-import { ViewportOpticsChain } from './scene3d/viewportOptics';
+import { MAX_BLUR_RADIUS_FRAME_FRACTION, ViewportOpticsChain } from './scene3d/viewportOptics';
+import { ViewportFocusController, pinholeNdcToDisplayedNdc, viewAxisDepth } from './scene3d/viewportFocus';
 import { CameraSettingsControl } from './scene3d/CameraSettingsControl';
+import type { SetCameraLensParams } from '../services/operators/lighting-camera-operators';
 import { keepsStoredPose, lensCommands, liveViewMatches, runCameraCommands, withLivePose, type CameraCommand, type Vec3 } from './scene3d/cameraSettings';
 import { syncObjectMaterial } from './scene3d/materialOverride';
-import { TreeLodController, findShadowCamera } from './scene3d/treeLod/TreeLodController';
+import { TreeLodController, findShadowCamera, formatTreeLodStats, type TreeLodFrame } from './scene3d/treeLod/TreeLodController';
+import { countSceneTriangles, sharedTreeBudgetEnabled, type SceneTriangleShare } from './scene3d/treeLod/sceneTriangleShare';
+import { createViewportCostProbe, viewportCostProbeEnabled } from './scene3d/viewportCost';
+import { applyTreeTextures, loadTreeTextureLibrary } from './scene3d/treeLod/treeTextureMaterials';
 import { disposeObject3DDeep, releaseObject3D } from './scene3d/disposeObject';
 import {
     resolveSelectableObject,
@@ -176,6 +181,7 @@ import { CINEMATIC_RIGS, computeSceneBudgetTelemetry } from './scene3d/lightingR
 import type { SceneBudgetTelemetry } from './scene3d/lightingRigs';
 import { useStagedBuild } from './scene3d/stagedBuild/useStagedBuild';
 import { readStagedBuild, type StagedSceneData } from './scene3d/stagedBuild/stagedBuildState';
+import { mergeStagedParts, mergeStagedPartsEnabled } from './scene3d/stagedBuild/mergeStagedParts';
 import { carryTwinObjects } from './scene3d/stagedBuild/texturedTwins';
 import { prepareTexturedTwinModel } from './scene3d/stagedBuild/texturedTwinModel';
 
@@ -1112,6 +1118,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const [tilesError, setTilesError] = React.useState<string | null>(null);
     /** What the scene lens configures but the viewport cannot draw (e.g. a missing focus object), shown as a notice. */
     const [opticsIssues, setOpticsIssues] = React.useState<string[]>([]);
+    /** The tree level-of-detail stats line (scene data treeLod.statsOverlay), refreshed four times a second. */
+    const [treeLodStatsLine, setTreeLodStatsLine] = React.useState<string | null>(null);
     const [sceneBudget, setSceneBudget] = React.useState<SceneBudgetTelemetry | null>(null);
 
     // ---------------------------------------------------------
@@ -1149,6 +1157,13 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const [externalLoadStatus, setExternalLoadStatus] = React.useState<Record<string, ExternalLoadStatus>>({});
     // Bumped to re-run the loader for objects whose last load failed (nothing else changes then).
     const [externalLoadRetryNonce, setExternalLoadRetryNonce] = React.useState(0);
+    /**
+     * Superseded staged layers the staged-build hook released (layerEviction.ts): the loader keeps them unloaded (their
+     * scene objects, URL and metadata, stay) until the hook needs them again, then loads them like any object.
+     */
+    const [evictedLayerIds, setEvictedLayerIds] = React.useState<ReadonlySet<string>>(() => new Set());
+    const evictedLayerIdsRef = useLatest(evictedLayerIds);
+    const evictedLayersKey = React.useMemo(() => [...evictedLayerIds].sort().join(','), [evictedLayerIds]);
     // Object id -> URL of the request in flight; survives StrictMode / HMR effect re-runs so a model
     // is never fetched and parsed twice, while a changed URL for the same id still starts a new load.
     const pendingExternalLoadsRef = React.useRef<Map<string, string>>(new Map());
@@ -1306,6 +1321,12 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         const { prev, next } = applySceneMutation(mutator, opInfo);
         recordSceneEdit(prev, next, opInfo, options?.history);
     }, [applySceneMutation, recordSceneEdit]);
+
+    // debug hook: sets scene data treeLod (the tree level-of-detail view options, stats overlay and level tint) as a view-only change
+    React.useEffect(() => {
+        (window as any).__SB_SET_TREE_LOD__ = (value: Scene3DData['treeLod']) => mutateSceneData(prev => ({ ...prev, treeLod: value }), { operator: 'set_tree_lod', params: value }, { history: false });
+        return () => { delete (window as any).__SB_SET_TREE_LOD__; };
+    }, [mutateSceneData]);
 
     // Sync external data prop updates into sceneData
     React.useEffect(() => {
@@ -1497,6 +1518,18 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const renderFrameRef = React.useRef<(() => void) | null>(null);
     /** Lens distortion and depth of field from scene camera.lens; inactive (no cost) when nothing is configured. */
     const opticsChainRef = React.useRef<ViewportOpticsChain | null>(null);
+    const focusControllerRef = React.useRef<ViewportFocusController | null>(null);
+    const resolveViewportObjectRef = React.useRef<((id: string) => THREE.Object3D | undefined) | null>(null);
+    const focusReticleRef = React.useRef<HTMLSpanElement>(null);
+    const [showFocusReticle, setShowFocusReticleState] = React.useState<boolean>(() => {
+        try { return window.localStorage.getItem('sb.viewport.focusReticle') !== 'hidden'; } catch { return true; }
+    });
+    const showFocusReticleRef = React.useRef(showFocusReticle);
+    showFocusReticleRef.current = showFocusReticle;
+    const setShowFocusReticle = React.useCallback((show: boolean) => {
+        setShowFocusReticleState(show);
+        try { window.localStorage.setItem('sb.viewport.focusReticle', show ? 'shown' : 'hidden'); } catch { /* a per-viewer preference only */ }
+    }, []);
     /** Set while the camera panel picks a focus point: the next viewport click goes here instead of selecting. */
     const focusPickRef = React.useRef<((hit: THREE.Intersection | undefined, event: MouseEvent) => void) | null>(null);
     /** False until the first generated model of this mount is framed (a reload keeps a saved camera pose). */
@@ -1910,8 +1943,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         if (sceneData.splatUrl) {
             objs.push({ id: '__primary_splat__', uri: sceneData.splatUrl, type: 'gaussian-splat', space: undefined, source: 'splatUrl', variantSet: undefined, prefetch: false });
         }
-        return JSON.stringify({ objs, splatOptions: sceneData.splatOptions, effectiveGroundTileMode, activeVariants: activeVariantIds, retry: externalLoadRetryNonce, generatorGlbFile });
-    }, [sceneData.objects, sceneData.splatUrl, sceneData.splatOptions, effectiveGroundTileMode, activeVariantIds, externalLoadRetryNonce, generatorGlbFile]);
+        return JSON.stringify({ objs, splatOptions: sceneData.splatOptions, effectiveGroundTileMode, activeVariants: activeVariantIds, retry: externalLoadRetryNonce, generatorGlbFile, evicted: evictedLayersKey });
+    }, [sceneData.objects, sceneData.splatUrl, sceneData.splatOptions, effectiveGroundTileMode, activeVariantIds, externalLoadRetryNonce, generatorGlbFile, evictedLayersKey]);
 
     // ---- 1. Renderer stack, overlays, controls and the render loop (mount once) ----
     React.useEffect(() => {
@@ -2024,6 +2057,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         opticsChain.configure(sceneDataRef.current.camera?.lens);
         opticsChainRef.current = opticsChain;
         (window as any).__SB_3D_OPTICS__ = opticsChain;
+        const focusController = new ViewportFocusController();
+        focusController.configure(sceneDataRef.current.camera?.lens);
+        focusControllerRef.current = focusController;
+        (window as any).__SB_3D_FOCUS__ = focusController;
         const resolveViewportObject = (id: string): THREE.Object3D | undefined => {
             const custom = customMeshRegistryRef.current.get(id)?.mesh;
             if (custom?.parent) return custom;
@@ -2040,7 +2077,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             });
             return found;
         };
+        resolveViewportObjectRef.current = resolveViewportObject;
         let reportedOpticsIssues = '';
+        const treeFrameSize = new THREE.Vector2();
+        let treeStatsShownAt = 0;
         const renderFrame = () => {
             if (opticsChain.active) {
                 opticsChain.render(renderer, camera, {
@@ -2048,7 +2088,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     scene,
                     displayReferred: !!(aerialPerspectiveRef.current && skyDomeModuleRef.current),
                     drawScene,
-                    resolveObject: resolveViewportObject
+                    resolveObject: resolveViewportObject,
+                    measureFocus: (cam, depthTexture, frame, issues) =>
+                        focusController.focusDistance(renderer, cam, depthTexture, frame, resolveViewportObject, performance.now(), issues)
                 });
             } else {
                 drawScene(null);
@@ -2060,8 +2102,138 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 setOpticsIssues([...issues]);
             }
         };
+        // Tree levels of detail (step 12.9 of the frame): per-tree level, dither and culling for loaded trees GLBs, before the render.
+        // Scene data's treeCrownShading and treeLod are passed on when they change (so a controller's own setting holds until then).
+        let appliedTreeLodView: Scene3DData['treeLod'] | null = null;
+        let lastTreeFrame: TreeLodFrame | undefined;
+        let lastSceneShare: SceneTriangleShare | undefined;
+        const treeLodControllers = (): TreeLodController[] => {
+            const out: TreeLodController[] = [];
+            externalObjectsMapRef.current.forEach(model => {
+                const lod = model.parent ? (model.userData.sbTreeLod as TreeLodController | undefined) : undefined;
+                if (lod) out.push(lod);
+            });
+            return out;
+        };
+        const updateTreeLods = (now: number): void => {
+            const lods = treeLodControllers();
+            const crownShading = sceneDataRef.current?.treeCrownShading;
+            const crownShadingChanged = crownShading !== appliedTreeCrownShadingRef.current;
+            appliedTreeCrownShadingRef.current = crownShading;
+            const treeLodView = sceneDataRef.current?.treeLod;
+            const viewChanged = treeLodView !== appliedTreeLodView;
+            appliedTreeLodView = treeLodView;
+            if (!lods.length) return;
+            const shadowCamera = findShadowCamera(stack.scene, !!stack.renderer?.shadowMap?.enabled);
+            // what the frame shows beyond the camera: its height in pixels, the distortion overscan and the depth of field as drawn
+            const optics = opticsChainRef.current;
+            const heightPx = renderer.getDrawingBufferSize(treeFrameSize).y;
+            const dofPlan = optics?.active ? optics.getPlan().depthOfField : null;
+            const focusM = optics?.status.focusDistanceMeters;
+            const overscan = optics?.active ? optics.status.overscan : 1;
+            const focus = dofPlan?.focusObjectId ? optics?.focusTarget : null;
+            const frame: TreeLodFrame = {
+                heightPx, overscan,
+                dof: dofPlan && typeof focusM === 'number' && focusM > 0
+                    ? { focalLengthMm: dofPlan.focalLengthMm, apertureFStop: dofPlan.apertureFStop, focusM, focusPoint: focus?.centre ?? null, focusObject: focus?.object ?? null, maxBlurRadiusPx: Math.max(4, MAX_BLUR_RADIUS_FRAME_FRACTION * heightPx * overscan) }
+                    : null
+            };
+            // One triangle budget for the frame (cheap form): what everything but the trees draws (buildings, context, hero,
+            // ground; main and shadow pass) is reserved first, and each trees GLB fits into what the ones before it left.
+            const share = sharedTreeBudgetEnabled() ? countSceneTriangles(stack.scene, camera, { shadowCamera, skip: o => !!o.userData?.sbTreeLod }) : { main: 0, shadow: 0, meshes: 0 };
+            lastSceneShare = share;
+            let reserved = share.main + share.shadow;
+            lastTreeFrame = { ...frame, reservedTriangles: reserved };
+            for (const lod of lods) {
+                if (crownShadingChanged) lod.setCrownShading(crownShading);
+                if (viewChanged) lod.setView(treeLodView);
+                const st = lod.update(camera, shadowCamera, { ...frame, reservedTriangles: reserved });
+                reserved += st.estimatedTriangles + st.estimatedShadowTriangles;
+            }
+            if (treeLodView?.statsOverlay && now - treeStatsShownAt > 250) {
+                treeStatsShownAt = now;
+                setTreeLodStatsLine(formatTreeLodStats(lods.map(l => l.stats), share));
+            } else if (!treeLodView?.statsOverlay && treeStatsShownAt !== 0) {
+                treeStatsShownAt = 0;
+                setTreeLodStatsLine(null);
+            }
+        };
+        // debug hook: the controllers, the last frame they were given, and one level update outside the animation loop
+        (window as any).__SB_TREE_LOD__ = { controllers: treeLodControllers, lastFrame: () => lastTreeFrame, sceneShare: () => lastSceneShare, update: () => updateTreeLods(performance.now()) };
+
         renderFrameRef.current = renderFrame;
         (window as any).__SB_3D_RENDER_FRAME__ = renderFrame;
+        // dev-only cost probe (opt-in: ?sbViewportCost=1 or localStorage sb.viewportCost = 1): the frame's triangles, draw calls,
+        // memory and GPU time split by layer, trees by level (viewportCost.ts)
+        if (viewportCostProbeEnabled()) {
+            (window as any).__SB_VIEWPORT_COST__ = createViewportCostProbe({
+                renderer, scene, camera,
+                renderFrame: () => { updateTreeLods(performance.now()); renderFrame(); },
+                layers: () => (sceneDataRef.current as { stagedBuild?: { layers?: Array<{ objectId: string; stage?: string; layer?: string; buildingId?: string; retired?: boolean }> } } | undefined)?.stagedBuild?.layers ?? [],
+                layerRoots: () => externalObjectsMapRef.current,
+                evicted: () => evictedLayerIdsRef.current
+            });
+        }
+
+        // The focus reticle: a DOM overlay over the canvas (the AF area, or the tracked point), never drawn into the
+        // frame, so canvas captures and exports never contain it.
+        const reticleWorld = new THREE.Vector3();
+        const reticleScratch = new THREE.Vector3();
+        const reticleBox = new THREE.Box3();
+        let reticleObject: { id: string; centre: THREE.Vector3; frame: number } | null = null;
+        let reticleFrame = 0;
+        const updateFocusReticle = () => {
+            const el = focusReticleRef.current;
+            if (!el) return;
+            reticleFrame++;
+            const lens = sceneDataRef.current.camera?.lens;
+            const mode = focusController.focusMode;
+            const canvas = renderer.domElement;
+            const w = canvas.clientWidth, h = canvas.clientHeight;
+            let place: { x: number; y: number; side: number } | null = null;
+            if (showFocusReticleRef.current && w > 0 && h > 0) {
+                if (mode === 'auto') {
+                    const side = Math.max(6, focusController.areaFraction * h);
+                    place = { x: w / 2, y: h / 2, side };
+                } else if (mode === 'track') {
+                    let world: THREE.Vector3 | null = focusController.trackedPointWorld(resolveViewportObject);
+                    if (!world && lens?.focusObjectId) {
+                        // a whole object: its bounding-box centre, refreshed as the optics chain does (every 30 frames)
+                        if (!reticleObject || reticleObject.id !== lens.focusObjectId || reticleFrame - reticleObject.frame >= 30) {
+                            const object = resolveViewportObject(lens.focusObjectId);
+                            reticleObject = null;
+                            if (object) {
+                                object.updateWorldMatrix(true, true);
+                                reticleBox.setFromObject(object);
+                                if (!reticleBox.isEmpty()) reticleObject = { id: lens.focusObjectId, centre: reticleBox.getCenter(new THREE.Vector3()), frame: reticleFrame };
+                            }
+                        }
+                        world = reticleObject ? reticleWorld.copy(reticleObject.centre) : null;
+                    }
+                    if (world && viewAxisDepth(world, camera, reticleScratch) > 0) {
+                        const ndc = reticleScratch.copy(world).project(camera);
+                        let nx = ndc.x, ny = ndc.y;
+                        const distortion = opticsChain.active ? opticsChain.getPlan().distortion : null;
+                        if (distortion) [nx, ny] = pinholeNdcToDisplayedNdc(nx, ny, distortion, camera.fov, camera.aspect);
+                        if (Math.abs(nx) <= 1.05 && Math.abs(ny) <= 1.05) place = { x: (nx + 1) / 2 * w, y: (1 - ny) / 2 * h, side: 22 };
+                    }
+                }
+            }
+            if (!place) {
+                if (el.style.display !== 'none') el.style.display = 'none';
+                return;
+            }
+            const held = !!focusController.status.notice || opticsChain.status.issues.some(i => i.startsWith('focus'));
+            el.style.display = 'block';
+            el.style.left = `${canvas.offsetLeft}px`;
+            el.style.top = `${canvas.offsetTop}px`;
+            el.style.width = `${place.side}px`;
+            el.style.height = `${place.side}px`;
+            el.style.transform = `translate(${(place.x - place.side / 2).toFixed(1)}px, ${(place.y - place.side / 2).toFixed(1)}px)`;
+            if (el.dataset.mode !== mode) el.dataset.mode = mode;
+            const state = held ? 'held' : 'locked';
+            if (el.dataset.state !== state) el.dataset.state = state;
+        };
 
         const animate = () => {
             try {
@@ -2184,18 +2356,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 }
 
                 // 12.9 Tree levels of detail: per-tree level, dither and culling for loaded trees GLBs (before the render).
-                let treeShadowCamera: THREE.Camera | null | undefined;
-                // scene data's treeCrownShading, passed on when it changes (so a controller's own setting holds until then)
-                const crownShading = sceneDataRef.current?.treeCrownShading;
-                const crownShadingChanged = crownShading !== appliedTreeCrownShadingRef.current;
-                appliedTreeCrownShadingRef.current = crownShading;
-                externalObjectsMapRef.current.forEach(model => {
-                    const lod = model.parent ? (model.userData.sbTreeLod as TreeLodController | undefined) : undefined;
-                    if (!lod) return;
-                    if (treeShadowCamera === undefined) treeShadowCamera = findShadowCamera(stack.scene, !!stack.renderer?.shadowMap?.enabled);
-                    if (crownShadingChanged) lod.setCrownShading(crownShading);
-                    lod.update(camera, treeShadowCamera);
-                });
+                updateTreeLods(now);
 
                 // 13. Gaussian Splat viewer camera sync & depth sort
                 if (splatViewerRef.current && typeof splatViewerRef.current.updateCamera === 'function') {
@@ -2209,6 +2370,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 });
 
                 renderFrame();
+                updateFocusReticle();
             } catch (frameErr) {
                 if (!hasWarnedFrameErrorRef.current) {
                     hasWarnedFrameErrorRef.current = true;
@@ -2249,6 +2411,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             renderFrameRef.current = null;
             opticsChain.dispose();
             opticsChainRef.current = null;
+            focusController.dispose();
+            focusControllerRef.current = null;
+            resolveViewportObjectRef.current = null;
             stack.dispose();
             stackRef.current = null;
             threeSceneRef.current = null;
@@ -2364,6 +2529,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const lensFingerprint = JSON.stringify(sceneData.camera?.lens ?? null);
     React.useEffect(() => {
         opticsChainRef.current?.configure(sceneDataRef.current.camera?.lens);
+        focusControllerRef.current?.configure(sceneDataRef.current.camera?.lens);
     }, [lensFingerprint]);
 
     // ---- 4. Camera preset (position / ground-grounded look-at target) ------------
@@ -2831,6 +2997,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             // The same reading the notices and the mount use (drawableModelKind), so nothing counted as drawable is skipped here.
             const modelKind = drawableModelKind(uri, obj.content?.type);
             if (!modelKind) return;
+            // a superseded staged layer the staged build released: unloaded (released below) until it is needed again
+            if (evictedLayerIdsRef.current.has(obj.id)) return;
             const isSplat = modelKind === 'splat';
             activeIds.add(obj.id);
 
@@ -2945,10 +3113,22 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     if (attach) liveScene.add(model);
                     model.updateMatrixWorld(true);
                     // A trees GLB (nodes with extras sbTree) gets its level-of-detail controller before the clay pass, so wood and leaves share one material.
-                    const lod = new TreeLodController(model, { crownShading: sceneDataRef.current?.treeCrownShading });
-                    if (lod.hasTrees) model.userData.sbTreeLod = lod;
+                    const lod = new TreeLodController(model, { crownShading: sceneDataRef.current?.treeCrownShading, view: sceneDataRef.current?.treeLod });
+                    if (lod.hasTrees) {
+                        model.userData.sbTreeLod = lod;
+                        // textured mode's tree surfaces (the library the trees' extras chose from); clay mode keeps the shared tree clay
+                        loadTreeTextureLibrary()
+                            .then(lib => { model.userData.sbTreeTextures = applyTreeTextures(model, lib); })
+                            .catch(err => console.warn('[Scene3D] tree textures not applied:', (err as Error).message));
+                    }
                     // A staged layer's textured twin keeps its photo material under the clay pass, and its confidence texture is loaded.
                     void prepareTexturedTwinModel(gltf);
+                    // A staged layer of many small parts (a pipeline E hero) draws one mesh per material; each vertex keeps its part
+                    // (provenance, ids) for the staged build, the provenance view and picking (mergeStagedParts.ts).
+                    if (!lod.hasTrees && mergeStagedPartsEnabled()) {
+                        const merged = mergeStagedParts(model);
+                        if (merged) model.userData.sbMergedReport = merged;
+                    }
                     applyClayRenderMode([model], renderModeRef.current === 'clay');
                     // An explicit material on the object wins over the clay default.
                     syncObjectMaterial(model, latestDef(obj).material, renderModeRef.current === 'clay');
@@ -3066,7 +3246,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     // ---- 5d. Staged location builds: each committed layer revealed in its real build order, overlay, provenance ----
     const staged = useStagedBuild({
         state: readStagedBuild(sceneData), overriddenIds: materialOverriddenIds, stackRef, objectRootsRef: externalObjectsMapRef, loadStatus: externalLoadStatus, mutateSceneData, onPromptAction,
-        sceneObjects: sceneData.objects, view: (sceneData as StagedSceneData).stagedBuildView
+        sceneObjects: sceneData.objects, view: (sceneData as StagedSceneData).stagedBuildView, onEvictedChange: setEvictedLayerIds
     });
 
     // ---- 6. Custom meshes from schema (id-diffed, updated in place) ---------------
@@ -3293,7 +3473,13 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     }, [sceneData.camera, mutateSceneData]);
 
     // ---- Camera settings panel: every edit runs sb_set_camera / sb_set_camera_lens on the scene camera ----
-    const [pickingFocus, setPickingFocus] = React.useState(false);
+    const [pickingFocus, setPickingFocusState] = React.useState(false);
+    /** The pick locks focus onto the clicked surface point (Track) instead of setting a static distance (Manual). */
+    const [pickTracksPoint, setPickTracksPoint] = React.useState(false);
+    const setPickingFocus = React.useCallback((on: boolean, trackPoint = false) => {
+        setPickingFocusState(on);
+        setPickTracksPoint(on && trackPoint);
+    }, []);
     const [focusPickError, setFocusPickError] = React.useState<string | null>(null);
 
     const liveCameraPose = React.useCallback((): { position: Vec3; target: Vec3 } | null => {
@@ -3348,7 +3534,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
     const readFocusDistance = React.useCallback(() => opticsChainRef.current?.status.focusDistanceMeters ?? null, []);
 
-    // Pick focus: a click focuses at the clicked point; Alt-click focuses on (and tracks) the whole object.
+    // Pick focus: a click focuses at the clicked point's distance (Manual) or locks onto that surface point, stored in
+    // its object's local frame so it follows the object (Track); Alt-click tracks the whole object.
     React.useEffect(() => {
         const container = stackRef.current?.container;
         if (!pickingFocus) {
@@ -3365,18 +3552,33 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 setFocusPickError('Nothing under the cursor there; click on geometry (Esc cancels).');
                 return;
             }
-            let params: { focusObjectId: string } | { focusDistanceMeters: number; focusObjectId: null };
+            let params: SetCameraLensParams;
             let label: string;
-            const target = event.altKey ? (findExternalObjectRoot(hit.object) || resolveSelectableObject(hit.object, stack.scene)) : null;
+            const named = event.altKey || pickTracksPoint;
+            const target = named ? (findExternalObjectRoot(hit.object) || resolveSelectableObject(hit.object, stack.scene)) : null;
             let objectId = target ? (findExternalObjectRoot(target) === target ? externalObjectIdOf(target) : target.name) : '';
             // the generated model is saved as its hero object: name that, so the focus survives a reload
             if (objectId === GENERATED_ROOT_NAME) objectId = generatedHeroObjectId(sceneDataRef.current) ?? objectId;
-            if (objectId) {
+            const forward = stack.camera.getWorldDirection(new THREE.Vector3());
+            const depth = hit.point.clone().sub(stack.camera.position).dot(forward);
+            if (event.altKey && objectId) {
                 params = { focusObjectId: objectId };
                 label = `Camera: focus on ${objectId}`;
+            } else if (pickTracksPoint) {
+                // the point in the frame of the object its id resolves to (what the viewport reads back every frame)
+                const frameObject = objectId ? (resolveViewportObjectRef.current?.(objectId) ?? target) : null;
+                const local = hit.point.clone();
+                if (frameObject) {
+                    frameObject.updateWorldMatrix(true, false);
+                    frameObject.worldToLocal(local);
+                }
+                const round = (v: number) => Number(v.toFixed(5));
+                params = {
+                    focusPoint: { ...(frameObject && objectId ? { objectId } : {}), localPosition: [round(local.x), round(local.y), round(local.z)] },
+                    focusDistanceMeters: Number(depth.toFixed(3))
+                };
+                label = `Camera: track focus point${objectId ? ` on ${objectId}` : ''}`;
             } else {
-                const forward = stack.camera.getWorldDirection(new THREE.Vector3());
-                const depth = hit.point.clone().sub(stack.camera.position).dot(forward);
                 params = { focusDistanceMeters: Number(depth.toFixed(3)), focusObjectId: null };
                 label = `Camera: focus ${depth.toFixed(2)} m`;
             }
@@ -3388,7 +3590,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             focusPickRef.current = null;
             if (container) container.style.cursor = previousCursor;
         };
-    }, [pickingFocus, runCameraPanelCommands]);
+    }, [pickingFocus, pickTracksPoint, runCameraPanelCommands, setPickingFocus]);
 
     const handleUpdateVectorRoadmap = React.useCallback((updated: Partial<VectorRoadmapConfig>) => {
         mutateSceneData(prev => ({
@@ -3671,8 +3873,21 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                         style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: '100%', height: '100%' }}
                     />
                 )}
+                {/* a span: the frame forces every direct div child to fill it */}
+                <span ref={focusReticleRef} className="sb-3d-focus-reticle" data-testid="sb-3d-focus-reticle" aria-hidden="true" />
                 <ViewportNotice notices={viewportNotices} />
             </div>
+            {treeLodStatsLine && (
+                <div
+                    className="sb-3d-tree-lod-stats"
+                    style={{
+                        position: 'absolute', top: 56, right: 12, zIndex: 30, padding: '4px 8px', borderRadius: 4, background: 'rgba(0, 0, 0, 0.72)', color: '#f4f4f5',
+                        pointerEvents: 'none', whiteSpace: 'pre', fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 10, lineHeight: 1.35
+                    }}
+                >
+                    {treeLodStatsLine}
+                </div>
+            )}
             {staged.overlay({ bottomInsetPx: isTimelineDrawerOpen ? 255 : 16 })}
 
             {/* Precision Creative Vertical Tool Strip (Left Docked - 50% Compact Scale) */}
@@ -3714,6 +3929,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     onRestoreView={handleRestoreCameraView}
                     pickingFocus={pickingFocus}
                     onPickingFocusChange={setPickingFocus}
+                    pickTracksPoint={pickTracksPoint}
+                    showFocusReticle={showFocusReticle}
+                    onShowFocusReticleChange={setShowFocusReticle}
                     pickError={focusPickError}
                     readFocusDistance={readFocusDistance}
                 />

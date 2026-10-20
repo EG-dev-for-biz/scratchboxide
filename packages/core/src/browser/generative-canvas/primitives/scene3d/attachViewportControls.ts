@@ -22,6 +22,7 @@ import {
 import type { GizmoHandleType } from '../../services/transform-gizmo-engine';
 import type { RendererStack } from './types';
 import { externalObjectIdOf, findExternalObjectRoot } from './selection';
+import { stagedPartOfHit } from './stagedBuild/mergeStagedParts';
 
 type Ref<T> = { current: T };
 
@@ -462,7 +463,13 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
                 pointPick(hit, e);
             } else if (hit) {
                 const modelRoot = e.altKey ? findExternalObjectRoot(hit.object) : null;
-                ctx.selectObject.current(modelRoot || ctx.resolveSelectableObject(hit.object, scene));
+                const selected = modelRoot || ctx.resolveSelectableObject(hit.object, scene);
+                // the staged part under the cursor (its own mesh, or its range of a merged mesh), kept on the selection
+                const part = stagedPartOfHit(hit);
+                if (part) selected.userData.sbPickedPart = { name: part.name, label: part.label, ids: part.ids };
+                else delete selected.userData.sbPickedPart;
+                (window as unknown as { __SB_LAST_PICK__?: unknown }).__SB_LAST_PICK__ = { selected: selected.name, part: part ? { name: part.name, label: part.label, ids: part.ids } : null };
+                ctx.selectObject.current(selected);
             } else if (ctx.selectionBox.current?.visible) {
                 ctx.selectObject.current(null);
             }

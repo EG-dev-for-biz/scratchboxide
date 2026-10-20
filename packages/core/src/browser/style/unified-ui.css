@@ -9395,6 +9395,32 @@ body.sb-light .sb-3d-budget-btn {
 .sb-3d-camera-panel .sb-cam-notice-title { font-weight: 600; }
 .sb-3d-camera-panel .sb-cam-error { padding: 6px; border-radius: 6px; border: 1px solid rgba(244, 63, 94, 0.45); background: rgba(76, 5, 25, 0.55); color: #fecdd3; font-size: 10px; }
 .sb-3d-camera-panel button:focus-visible, .sb-3d-camera-panel input:focus-visible, .sb-3d-camera-panel select:focus-visible { outline: 1px solid #60a5fa; outline-offset: 1px; }
+.sb-3d-camera-panel .sb-cam-check { color: #a1a1aa; font-size: 10px; cursor: pointer; }
+.sb-3d-camera-panel .sb-cam-check input { margin: 0; accent-color: #3b82f6; }
+/* Focus reticle over the viewport (a DOM overlay: never in the rendered frame, so never in captures or exports). */
+.sb-3d-focus-reticle {
+    position: absolute; top: 0; left: 0; z-index: 5; pointer-events: none; box-sizing: border-box; display: none;
+    will-change: transform;
+}
+.sb-3d-focus-reticle::before, .sb-3d-focus-reticle::after { content: ''; position: absolute; inset: 0; }
+/* the AF area: corner brackets */
+.sb-3d-focus-reticle[data-mode="auto"]::before {
+    background:
+        linear-gradient(currentColor, currentColor) top left / 8px 1.5px no-repeat,
+        linear-gradient(currentColor, currentColor) top left / 1.5px 8px no-repeat,
+        linear-gradient(currentColor, currentColor) top right / 8px 1.5px no-repeat,
+        linear-gradient(currentColor, currentColor) top right / 1.5px 8px no-repeat,
+        linear-gradient(currentColor, currentColor) bottom left / 8px 1.5px no-repeat,
+        linear-gradient(currentColor, currentColor) bottom left / 1.5px 8px no-repeat,
+        linear-gradient(currentColor, currentColor) bottom right / 8px 1.5px no-repeat,
+        linear-gradient(currentColor, currentColor) bottom right / 1.5px 8px no-repeat;
+    filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.7));
+}
+/* a tracked point: a ring with a centre dot */
+.sb-3d-focus-reticle[data-mode="track"]::before { border: 1.5px solid currentColor; border-radius: 50%; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45); }
+.sb-3d-focus-reticle[data-mode="track"]::after { inset: calc(50% - 2px); border-radius: 50%; background: currentColor; }
+.sb-3d-focus-reticle[data-state="locked"] { color: #86efac; }
+.sb-3d-focus-reticle[data-state="held"] { color: #fcd34d; }
 
 /* 3D Top Header Bar: flex container preventing collisions across all viewport widths */
 .sb-3d-top-header-bar {

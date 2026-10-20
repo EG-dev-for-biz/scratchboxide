@@ -91,7 +91,8 @@ export function sensorCommands(camera: SceneCamera | undefined, widthMm: number,
  */
 export function lensCommands(camera: SceneCamera | undefined, params: SetCameraLensParams): CameraCommand[] {
     const needsFocal = !camera?.lens?.focalLengthMm && params.focalLengthMm === undefined && !params.clear
-        && (params.depthOfField === true || params.apertureFStop != null || params.focusDistanceMeters != null || params.focusObjectId != null);
+        && (params.depthOfField === true || params.apertureFStop != null || params.focusDistanceMeters != null || params.focusObjectId != null
+            || params.focusPoint != null || (params.focusMode != null && params.focusMode !== 'manual'));
     const extra: SetCameraLensParams = needsFocal ? { focalLengthMm: round(effectiveFocalLength(camera).mm), ...sensorParams(camera?.lens) } : {};
     return [{ operator: 'sb_set_camera_lens', params: { ...extra, ...params } }];
 }

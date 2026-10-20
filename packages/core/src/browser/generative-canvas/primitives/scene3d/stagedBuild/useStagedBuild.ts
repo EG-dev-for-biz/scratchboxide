@@ -44,8 +44,10 @@ import type { RendererStack } from '../types';
 import { StagedBuildOverlay, type DegradationPlacementNote, type MaterialsSummary } from './StagedBuildOverlay';
 import { placeDegradations, type Placement, type PlacementRoot } from './degradationPlacement';
 import { nodeProgress, nodeRevealWindow, stepRevealSchedule, type LayerLoadState, type LayerRevealFrame, type RevealFrame, type RevealSchedule } from './revealScheduler';
-import { REVEAL_ATTRIBUTE, StagedMaterialRegistry, installRenderGuard, type MeshStagedLook } from './revealMaterial';
+import { REVEAL_ATTRIBUTE, StagedMaterialRegistry, installRenderGuard, type MeshStagedLook, type PartLook } from './revealMaterial';
+import { mergedPartsOf } from './mergeStagedParts';
 import { TEXTURE_RUNG_COLORS, classUniforms, legendRows, patternCode, provenanceBackground, resolveLegend, shadingClasses, styleFor, textureRungLegendRows, uncertaintyCoverage, type LegendStyle } from './provenanceShading';
+import { EVICT_AFTER_MS, evictionCandidates, evictionEnabled, sameSet, stepEviction } from './layerEviction';
 import { isInterrupted, isRunSettled, stageEventsFor, streamedProgress, subscribeStageEvents, withStreamedEvents, type StageProgress } from './stagedBuildState';
 import {
     INITIAL_SWITCH, deriveMaterialLayers, isMaterialSwapLayer, materialModeOf, modelIdOf, nextSwitch, parseSwapId, twinObjectFor, twinObjectId, twinSourceOf,
@@ -94,6 +96,11 @@ export interface UseStagedBuildOptions {
     sceneObjects?: readonly Media4DObject[];
     /** The scene's view request beside stagedBuild (staged_location_material_mode's provenance flag). */
     view?: { provenance?: boolean };
+    /**
+     * Superseded layers whose models the viewport should release (layerEviction.ts), each time the set changes. The loader
+     * leaves these unloaded until they leave the set (an opt-in view needs them again), then loads them from their URL.
+     */
+    onEvictedChange?: (objectIds: ReadonlySet<string>) => void;
 }
 
 export interface StagedBuildHandle {
@@ -116,8 +123,20 @@ interface NodeInfo {
     ids: StagedNodeExtras['sb']['ids'];
     replaces: string[];
     meshes: Array<THREE.Mesh | THREE.LineSegments>;
+    /** A part of a merged mesh (mergeStagedParts.ts): its look goes into the mesh's per-part arrays, `meshes` is empty. */
+    part?: { mesh: THREE.Mesh; index: number };
     degradationIds: string[];
     prov?: { key: string; look: NonNullable<MeshStagedLook['provenance']> };
+}
+
+/** Every mesh a layer's nodes draw with: their own, and the merged meshes their parts live in. */
+export function meshesOfNodes(nodes: readonly NodeInfo[]): THREE.Object3D[] {
+    const out = new Set<THREE.Object3D>();
+    for (const n of nodes) {
+        for (const m of n.meshes) out.add(m);
+        if (n.part) out.add(n.part.mesh);
+    }
+    return [...out];
 }
 
 interface RootInfo {
@@ -179,6 +198,22 @@ export function buildRootInfo(layer: StagedLayer, root: THREE.Object3D, ranks: R
     root.traverse(obj => {
         const m = obj as THREE.Mesh;
         if (!(m.isMesh || (obj as THREE.Line).isLine)) return;
+        // a merged mesh: one node per part, from its range table (the parts' own extras, in their order)
+        const table = m.isMesh ? mergedPartsOf(m) : undefined;
+        if (table) {
+            for (const p of table.parts) {
+                const key = new THREE.Object3D();
+                key.name = p.name;
+                key.userData = { sb: p.sb };
+                byNode.set(key, {
+                    node: key, extras: p.sb, provenance: p.sb.provenance ?? layer.provenance, fitRmsM: p.sb.fitError?.rmsM, order: 0, count: 0,
+                    durationShare: p.sb.reveal?.durationShare, perVertex: false, itemStart: 0, window: { start: 0, span: 1 },
+                    ids: p.sb.ids ?? {}, replaces: p.sb.replacesSurfaceIds ?? [], meshes: [], part: { mesh: m, index: p.index }, degradationIds: []
+                });
+                order.push(key);
+            }
+            return;
+        }
         const node = nodeOf(obj, root);
         let info = byNode.get(node);
         if (!info) {
@@ -342,7 +377,7 @@ const OverlayHost: React.FC<{ store: OverlayStore; render: (frame: RevealFrame |
 };
 
 export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
-    const { state, stackRef, objectRootsRef, loadStatus, mutateSceneData, onPromptAction, overriddenIds, sceneObjects, view } = opts;
+    const { state, stackRef, objectRootsRef, loadStatus, mutateSceneData, onPromptAction, overriddenIds, sceneObjects, view, onEvictedChange } = opts;
     const runId = state?.runId;
     const pageLoadedAtMs = React.useRef(typeof performance !== 'undefined' ? performance.timeOrigin : 0).current;
 
@@ -482,6 +517,28 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
     }
     const store = storeRef.current;
 
+    /** Superseded layers released by the loader (reported ready to the scheduler: they stay revealed and hidden). */
+    const evictedRef = React.useRef<ReadonlySet<string>>(new Set());
+    const evictSinceRef = React.useRef(new Map<string, number>());
+    const onEvictedRef = React.useRef(onEvictedChange);
+    onEvictedRef.current = onEvictedChange;
+    /** Sets the evicted layers: their meshes leave the registry and the node table, and the viewport is told. */
+    const setEvicted = React.useCallback((next: ReadonlySet<string>) => {
+        if (sameSet(next, evictedRef.current)) return;
+        const gone = [...next].filter(id => !evictedRef.current.has(id));
+        evictedRef.current = next;
+        if (gone.length > 0) {
+            const meshes = new Set<THREE.Object3D>();
+            for (const id of gone) {
+                const info = rootsRef.current.get(id);
+                if (info) for (const m of meshesOfNodes(info.nodes)) meshes.add(m);
+                rootsRef.current.delete(id);
+            }
+            if (meshes.size > 0) registryRef.current.prune(m => !meshes.has(m));
+        }
+        onEvictedRef.current?.(next);
+    }, []);
+
     // A new run starts from a clean slate.
     React.useEffect(() => {
         scheduleRef.current = undefined;
@@ -495,7 +552,9 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         setShowReplaced(false);
         setHighlight(undefined);
         lastStatuses.current.clear();
-    }, [runId]);
+        evictSinceRef.current.clear();
+        setEvicted(new Set());
+    }, [runId, setEvicted]);
 
     // The scene's provenance request (staged_location_material_mode's provenance flag), applied when it changes.
     const requestedProvenance = view?.provenance;
@@ -532,7 +591,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         const cached = rootsRef.current.get(layer.objectId);
         if (cached && cached.root === root && cached.key === key) return cached;
         if (cached && cached.root !== root) {
-            const old = new Set<THREE.Object3D>(cached.nodes.flatMap(n => n.meshes));
+            const old = new Set<THREE.Object3D>(meshesOfNodes(cached.nodes));
             registryRef.current.prune(m => !old.has(m));
         }
         const info = buildRootInfo(layer, root, ranks);
@@ -565,7 +624,8 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
             const root = objectRootsRef.current.get(model);
             const attached = !!root && !!root.parent;
             const sidecar = layer.reveal.orderUrl ? sidecarFor(layer.reveal.orderUrl) : undefined;
-            const ready = attached && (!sidecar || sidecar.status !== 'loading');
+            // an evicted layer is released on purpose: it stays ready (revealed, hidden under what replaced it)
+            const ready = evictedRef.current.has(model) || (attached && (!sidecar || sidecar.status !== 'loading'));
             if (ready && !readyAtRef.current.has(layer.objectId)) readyAtRef.current.set(layer.objectId, t0);
             if (!ready) readyAtRef.current.delete(layer.objectId);
             loads[layer.objectId] = { ready, readyAtMs: readyAtRef.current.get(layer.objectId), failed: L.loadStatus[model]?.phase === 'error' };
@@ -635,9 +695,15 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
             const only = f.layer.reveal.only ? new Set(f.layer.reveal.only.primitiveIds) : undefined;
             const swap = parseSwapId(f.objectId);
             const overridden = !!L.overriddenIds?.has(modelIdOf(f.objectId));
+            const partLooks = new Map<THREE.Mesh, PartLook[]>();
             for (const n of info.nodes) {
                 const replaced = n.ids.surfaceId !== undefined && n.replaces.length === 0 ? replacedPresence.get(n.ids.surfaceId) : undefined;
                 const look = lookFor(f, n, { ghost, only, replaced, highlightOn, provenanceOn: L.provenanceOn, lg, overridden, swap: !!swap, ...(swap?.kind === 'tex' ? { rungs: RUNG_LOOK } : {}) });
+                if (n.part) {
+                    const list = partLooks.get(n.part.mesh) ?? partLooks.set(n.part.mesh, []).get(n.part.mesh)!;
+                    list[n.part.index] = look;
+                    continue;
+                }
                 for (const mesh of n.meshes) {
                     if (look === 'conceal') registry.conceal(mesh);
                     else if (look === 'hide') registry.hide(mesh);
@@ -647,6 +713,12 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
                     }
                 }
             }
+            for (const [mesh, looks] of partLooks) {
+                const table = mergedPartsOf(mesh);
+                const all: PartLook[] = Array.from({ length: table?.parts.length ?? looks.length }, (_, i) => looks[i] ?? null);
+                if (registry.applyParts(mesh, all, { allowCreate: budget > 0, pxScale, classCount: lg.classes.length, restores })) budget--;
+                if (mesh.visible) drawn++;
+            }
         }
         // Forget meshes of models the loader released (every 30 frames; the check walks the registry).
         if (stats.frames % 30 === 0) {
@@ -655,7 +727,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
                 // layers gone from the schedule (an earlier swap) no longer hold their meshes
                 if (!st.layers.some(l => l.objectId === id)) { rootsRef.current.delete(id); continue; }
                 if (objectRootsRef.current.get(modelIdOf(info.objectId)) !== info.root) continue;
-                for (const n of info.nodes) for (const m of n.meshes) liveMeshes.add(m);
+                for (const m of meshesOfNodes(info.nodes)) liveMeshes.add(m);
             }
             registry.prune(m => liveMeshes.has(m));
         }
@@ -675,6 +747,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         // The last frame was computed for the previous state: until the guard computes one for this state, assume work.
         if (frameRef.current && (frameRef.current.layers.length !== stagedState.layers.length || frameRef.current.layers.some(x => !stagedState.layers.some(l => l.objectId === x.objectId)))) frameRef.current = undefined;
         let raf = 0;
+        let evictTimer: ReturnType<typeof setTimeout> | undefined;
         let lastOverlay = 0;
         let lastSig = '';
         let lastHighlightOn = false;
@@ -714,12 +787,25 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
                 store.skipNote = statsRef.current.skipReason;
                 store.notify();
             }
-            if (needsGuard || running || !f) raf = requestAnimationFrame(tick);
+            // Superseded layers: released once hidden for a while, loaded again as soon as an opt-in view needs them.
+            if (f && L.state) {
+                const candidates = evictionEnabled() ? evictionCandidates({ state: L.state, frame: f, engaged: twinRef.current.engaged, showReplaced: L.showReplaced, replaying: L.replaying }) : new Set<string>();
+                const { evict, nextCheckMs } = stepEviction(candidates, evictSinceRef.current, now, EVICT_AFTER_MS);
+                // a layer leaves the evicted set as soon as it stops being a candidate; one joins only after its delay
+                const next = new Set([...evictedRef.current].filter(id => candidates.has(id)));
+                for (const id of evict) next.add(id);
+                setEvicted(next);
+                if (nextCheckMs !== undefined && evictTimer === undefined) {
+                    evictTimer = setTimeout(() => { evictTimer = undefined; if (!raf) tick(); }, Math.max(16, nextCheckMs - now));
+                }
+            }
+            if (needsGuard || running || !f) raf = requestAnimationFrame(loop);
         };
+        const loop = () => { raf = 0; tick(); };
         // Synchronously: a layer the loader attaches before the next animation frame must already meet the guard.
         tick();
-        return () => cancelAnimationFrame(raf);
-    }, [stagedState, provenanceOn, showReplaced, replayEpoch, highlight, onFrame, stackRef, store, pageLoadedAtMs]);
+        return () => { cancelAnimationFrame(raf); if (evictTimer !== undefined) clearTimeout(evictTimer); };
+    }, [stagedState, provenanceOn, showReplaced, replaying, replayEpoch, highlight, onFrame, stackRef, store, pageLoadedAtMs, setEvicted]);
 
     // Off for good on unmount: the guard, the staged materials, the background.
     React.useEffect(() => () => {

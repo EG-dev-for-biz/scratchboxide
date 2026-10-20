@@ -144,8 +144,8 @@ function nodeMatrix(node: any): Mat4 {
     ];
 }
 
-/** Parses a textured tile GLB into world-frame triangles with UVs and decoded baseColor textures (linear RGB). */
-export function readTileTriangles(glb: Uint8Array): TileTriangles {
+/** The JSON and binary chunks of a binary glTF. */
+export function readGlbChunks(glb: Uint8Array): { json: any; bin: Uint8Array } {
     const dv = new DataView(glb.buffer, glb.byteOffset, glb.byteLength);
     if (glb.byteLength < 20 || dv.getUint32(0, true) !== 0x46546c67) throw new Error('tile is not a binary glTF (missing glTF magic)');
     let json: any, bin: Uint8Array = new Uint8Array(0);
@@ -157,6 +157,29 @@ export function readTileTriangles(glb: Uint8Array): TileTriangles {
         o += 8 + len;
     }
     if (!json) throw new Error('tile GLB has no JSON chunk');
+    return { json, bin };
+}
+
+/** The local matrix of one EXT_mesh_gpu_instancing instance (translation, rotation quaternion, scale; each defaulting to identity). */
+function instanceMatrix(T: Float64Array | undefined, R: Float64Array | undefined, S: Float64Array | undefined, i: number): Mat4 {
+    let qx = R ? R[i * 4] : 0, qy = R ? R[i * 4 + 1] : 0, qz = R ? R[i * 4 + 2] : 0, qw = R ? R[i * 4 + 3] : 1;
+    const ql = Math.hypot(qx, qy, qz, qw) || 1; // a quantised quaternion is unit only to its precision
+    qx /= ql; qy /= ql; qz /= ql; qw /= ql;
+    return nodeMatrix({ translation: T ? [T[i * 3], T[i * 3 + 1], T[i * 3 + 2]] : undefined, rotation: [qx, qy, qz, qw], scale: S ? [S[i * 3], S[i * 3 + 1], S[i * 3 + 2]] : undefined });
+}
+
+/** Triangle soup plus, per triangle, the glTF node whose mesh it came from (readTileTriangles with `nodeTags`). */
+export interface TaggedTileTriangles extends TileTriangles { node: Int32Array }
+
+/**
+ * Parses a textured tile GLB into world-frame triangles with UVs and decoded baseColor textures (linear RGB). A node with
+ * EXT_mesh_gpu_instancing draws its mesh once per instance (the instance's TRS inside the node's frame), as glTF 2.0
+ * specifies, and never once at the node itself. `nodeTags` also returns the node of each triangle.
+ */
+export function readTileTriangles(glb: Uint8Array): TileTriangles;
+export function readTileTriangles(glb: Uint8Array, options: { nodeTags: true }): TaggedTileTriangles;
+export function readTileTriangles(glb: Uint8Array, options: { nodeTags?: boolean } = {}): TileTriangles | TaggedTileTriangles {
+    const { json, bin } = readGlbChunks(glb);
 
     const textures: TileTexture[] = [];
     const textureOfGltfTexture = new Map<number, number>();
@@ -181,57 +204,93 @@ export function readTileTriangles(glb: Uint8Array): TileTriangles {
         return textures.length - 1;
     };
 
-    const pos: number[] = [], uv: number[] = [], nrm: number[] = [], texIdx: number[] = [], flat: number[] = [];
+    const pos: number[] = [], uv: number[] = [], nrm: number[] = [], texIdx: number[] = [], flat: number[] = [], tag: number[] = [];
+    // accessors are read once (instanced cluster meshes are shared by many nodes)
+    const accessors = new Map<number, Float64Array>();
+    const accessor = (i: number): Float64Array => { let a = accessors.get(i); if (!a) accessors.set(i, a = readAccessor(json, bin, i)); return a; };
     const visit = (nodeIndex: number, parent: Mat4): void => {
         const node = json.nodes[nodeIndex];
-        const m = mul(parent, nodeMatrix(node));
+        const nodeM = mul(parent, nodeMatrix(node));
+        const inst = node.extensions?.EXT_mesh_gpu_instancing?.attributes;
+        let placements: Mat4[] = [nodeM];
+        if (node.mesh !== undefined && inst) {
+            const T = inst.TRANSLATION !== undefined ? accessor(inst.TRANSLATION) : undefined;
+            const R = inst.ROTATION !== undefined ? accessor(inst.ROTATION) : undefined;
+            const S = inst.SCALE !== undefined ? accessor(inst.SCALE) : undefined;
+            const count = T ? T.length / 3 : R ? R.length / 4 : S ? S.length / 3 : 0;
+            placements = Array.from({ length: count }, (_, i) => mul(nodeM, instanceMatrix(T, R, S, i)));
+        }
         if (node.mesh !== undefined) {
             for (const prim of json.meshes[node.mesh].primitives) {
                 if ((prim.mode ?? 4) !== 4 || prim.attributes?.POSITION === undefined) continue;
-                const P = readAccessor(json, bin, prim.attributes.POSITION);
+                const P = accessor(prim.attributes.POSITION);
                 const hasUv = prim.attributes.TEXCOORD_0 !== undefined;
-                const T = hasUv ? readAccessor(json, bin, prim.attributes.TEXCOORD_0) : undefined;
+                const T = hasUv ? accessor(prim.attributes.TEXCOORD_0) : undefined;
                 const nv = P.length / 3;
-                const idx = prim.indices !== undefined ? readAccessor(json, bin, prim.indices) : Float64Array.from({ length: nv }, (_, i) => i);
+                const idx = prim.indices !== undefined ? accessor(prim.indices) : Float64Array.from({ length: nv }, (_, i) => i);
                 const mat = prim.material !== undefined ? json.materials?.[prim.material] : undefined;
                 const pbr = mat?.pbrMetallicRoughness;
                 const texInfo = pbr?.baseColorTexture;
                 const ti = hasUv && texInfo && (texInfo.texCoord ?? 0) === 0 ? textureFor(texInfo.index) : -1;
                 const f = pbr?.baseColorFactor || [1, 1, 1, 1];
-                if (ti < 0 && !pbr?.baseColorFactor) continue; // no colour information: not a photo surface
+                // an untextured surface's colour is the base colour factor times its vertex colours (COLOR_0, glTF 2.0
+                // 3.9.2), e.g. SB-Veggie's bark and leaves; averaged over the triangle's corners
+                const C = ti < 0 && prim.attributes.COLOR_0 !== undefined ? accessor(prim.attributes.COLOR_0) : undefined;
+                const cw = C ? C.length / nv : 0;
+                if (ti < 0 && !pbr?.baseColorFactor && !C) continue; // no colour information: not a photo surface
                 const W = new Float64Array(nv * 3);
-                for (let i = 0; i < nv; i++) {
-                    const x = P[i * 3], y = P[i * 3 + 1], z = P[i * 3 + 2];
-                    W[i * 3] = m[0] * x + m[4] * y + m[8] * z + m[12];
-                    W[i * 3 + 1] = m[1] * x + m[5] * y + m[9] * z + m[13];
-                    W[i * 3 + 2] = m[2] * x + m[6] * y + m[10] * z + m[14];
-                }
-                for (let t = 0; t + 2 < idx.length; t += 3) {
-                    const a = idx[t], b = idx[t + 1], c = idx[t + 2];
-                    const ax = W[a * 3], ay = W[a * 3 + 1], az = W[a * 3 + 2];
-                    const e1x = W[b * 3] - ax, e1y = W[b * 3 + 1] - ay, e1z = W[b * 3 + 2] - az;
-                    const e2x = W[c * 3] - ax, e2y = W[c * 3 + 1] - ay, e2z = W[c * 3 + 2] - az;
-                    let nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
-                    const l = Math.hypot(nx, ny, nz);
-                    if (!(l > 1e-12)) continue; // degenerate
-                    nx /= l; ny /= l; nz /= l;
-                    for (const v of [a, b, c]) pos.push(W[v * 3], W[v * 3 + 1], W[v * 3 + 2]);
-                    if (T) for (const v of [a, b, c]) uv.push(T[v * 2], T[v * 2 + 1]);
-                    else uv.push(0, 0, 0, 0, 0, 0);
-                    nrm.push(nx, ny, nz);
-                    texIdx.push(ti);
-                    flat.push(f[0], f[1], f[2]);
+                for (const m of placements) {
+                    for (let i = 0; i < nv; i++) {
+                        const x = P[i * 3], y = P[i * 3 + 1], z = P[i * 3 + 2];
+                        W[i * 3] = m[0] * x + m[4] * y + m[8] * z + m[12];
+                        W[i * 3 + 1] = m[1] * x + m[5] * y + m[9] * z + m[13];
+                        W[i * 3 + 2] = m[2] * x + m[6] * y + m[10] * z + m[14];
+                    }
+                    for (let t = 0; t + 2 < idx.length; t += 3) {
+                        const a = idx[t], b = idx[t + 1], c = idx[t + 2];
+                        const ax = W[a * 3], ay = W[a * 3 + 1], az = W[a * 3 + 2];
+                        const e1x = W[b * 3] - ax, e1y = W[b * 3 + 1] - ay, e1z = W[b * 3 + 2] - az;
+                        const e2x = W[c * 3] - ax, e2y = W[c * 3 + 1] - ay, e2z = W[c * 3 + 2] - az;
+                        let nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
+                        const l = Math.hypot(nx, ny, nz);
+                        if (!(l > 1e-12)) continue; // degenerate
+                        nx /= l; ny /= l; nz /= l;
+                        for (const v of [a, b, c]) pos.push(W[v * 3], W[v * 3 + 1], W[v * 3 + 2]);
+                        if (T) for (const v of [a, b, c]) uv.push(T[v * 2], T[v * 2 + 1]);
+                        else uv.push(0, 0, 0, 0, 0, 0);
+                        nrm.push(nx, ny, nz);
+                        texIdx.push(ti);
+                        tag.push(nodeIndex);
+                        if (C) for (let k = 0; k < 3; k++) flat.push(f[k] * (C[a * cw + k] + C[b * cw + k] + C[c * cw + k]) / 3);
+                        else flat.push(f[0], f[1], f[2]);
+                    }
                 }
             }
         }
-        for (const child of node.children || []) visit(child, m);
+        for (const child of node.children || []) visit(child, nodeM);
     };
     const scene = json.scenes?.[json.scene ?? 0];
     const roots: number[] = scene?.nodes ?? (json.nodes || []).map((_: unknown, i: number) => i);
     for (const r of roots) visit(r, IDENTITY);
-    return {
+    const out: TileTriangles = {
         positions: Float32Array.from(pos), uvs: Float32Array.from(uv), normals: Float32Array.from(nrm),
         texture: Int32Array.from(texIdx), flatLinear: Float32Array.from(flat), textures
+    };
+    return options.nodeTags ? { ...out, node: Int32Array.from(tag) } : out;
+}
+
+/** The triangles of `t` whose flag in `keep` is set (textures shared). */
+export function selectTriangles(t: TileTriangles, keep: ArrayLike<number | boolean>): TileTriangles {
+    const idx: number[] = [];
+    for (let i = 0; i < t.texture.length; i++) if (keep[i]) idx.push(i);
+    const pick = <A extends Float32Array | Int32Array>(a: A, w: number, make: (n: number) => A): A => {
+        const o = make(idx.length * w);
+        idx.forEach((s, d) => o.set(a.subarray(s * w, s * w + w), d * w));
+        return o;
+    };
+    return {
+        positions: pick(t.positions, 9, n => new Float32Array(n)), uvs: pick(t.uvs, 6, n => new Float32Array(n)), normals: pick(t.normals, 3, n => new Float32Array(n)),
+        texture: pick(t.texture, 1, n => new Int32Array(n)), flatLinear: pick(t.flatLinear, 3, n => new Float32Array(n)), textures: t.textures
     };
 }
 

@@ -25,7 +25,7 @@ import * as jpeg from 'jpeg-js';
 import { assembleGlb } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { readTileTriangles, decodeImageInMemory } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
-import { renderTriangles, type JudgeClient } from '../src/node/3d-engine/staged-location/photo-match-eval';
+import { renderTriangles, PHOTO_MATCH_BACKGROUND, PHOTO_MATCH_CLAY, type JudgeClient } from '../src/node/3d-engine/staged-location/photo-match-eval';
 import { castCamera } from '../src/node/3d-engine/staged-location/survey-casting';
 import type { PanoCandidate } from '../src/node/3d-engine/staged-location/streetview-evidence';
 import {
@@ -217,14 +217,29 @@ function fakeDeps(root: string, opts: { panos?: PanoCandidate[]; unlocked?: stri
     };
 }
 
-/** Scores each render by its mean absolute difference from the photo (lower difference, higher score): blind to labels. */
-function fakeJudge(calls?: { n: number }): JudgeClient & { requested: string; answeredModel: string; skipped: [] } {
+/**
+ * Scores each render by its mean absolute difference from the photo (lower difference, higher score): blind to labels. Asked
+ * for clay (the prompt says so), it scores shape only, by how well the render's sky (the clay background) matches the photo's
+ * sky (the grey background the "photos" are rendered on): the silhouette, which texture cannot change.
+ */
+function fakeJudge(calls?: { n: number; clay?: number }): JudgeClient & { requested: string; answeredModel: string; skipped: [] } {
+    const near = (img: { rgba: Uint8Array }, i: number, c: readonly number[]) => Math.abs(img.rgba[i] - c[0]) <= 8 && Math.abs(img.rgba[i + 1] - c[1]) <= 8 && Math.abs(img.rgba[i + 2] - c[2]) <= 8;
     return {
         requested: 'fake-judge', answeredModel: 'fake-judge', skipped: [],
         async generate(params) {
             if (calls) calls.n++;
             const imgs = params.contents[0].parts.filter(p => p.inlineData).map(p => decodeImageInMemory(Buffer.from(p.inlineData!.data, 'base64')));
             const [photo, ...renders] = imgs;
+            if (/untextured grey clay/.test(params.contents[0].parts.map(p => p.text ?? '').join(' '))) {
+                if (calls) calls.clay = (calls.clay ?? 0) + 1;
+                const entries = renders.map((r, k) => {
+                    let disagree = 0;
+                    for (let i = 0; i < r.rgba.length; i += 4) if (near(photo, i, PHOTO_MATCH_BACKGROUND) !== near(r, i, PHOTO_MATCH_CLAY.background)) disagree++;
+                    const s = Math.max(1, Math.min(10, Math.round(10 - 60 * disagree / (r.rgba.length / 4))));
+                    return { image: k + 1, shape: s, note: `sky-based ${s}` };
+                });
+                return { model: 'fake-judge', response: { candidates: [{ content: { parts: [{ text: JSON.stringify({ renders: entries }) }] } }] } };
+            }
             const renderEntries = renders.map((r, k) => {
                 let d = 0;
                 for (let i = 0; i < r.rgba.length; i += 4) d += Math.abs(r.rgba[i] - photo.rgba[i]) + Math.abs(r.rgba[i + 1] - photo.rgba[i + 1]) + Math.abs(r.rgba[i + 2] - photo.rgba[i + 2]);
@@ -258,7 +273,8 @@ describe('photo_match_evaluate tool', () => {
         const decl = reg.declarations(['workspace']).find(d => d.name === PHOTO_MATCH_EVALUATE_TOOL)!;
         expect(decl).toBeDefined();
         expect(decl.description).toMatch(/before telling the user it looks right/i);
-        expect(Object.keys(decl.parameters!.properties!)).toEqual(expect.arrayContaining(['runId', 'glbs', 'anchor', 'arms', 'views', 'inContext', 'judgeModel', 'runs']));
+        expect(Object.keys(decl.parameters!.properties!)).toEqual(expect.arrayContaining(['runId', 'glbs', 'anchor', 'arms', 'views', 'inContext', 'judgeModel', 'runs', 'clay']));
+        expect(decl.description).toMatch(/uniform untextured clay/);
         expect(LOCATION_EVIDENCE_TOOL_DECLARATIONS.map(d => d.name)).toContain(PHOTO_MATCH_EVALUATE_TOOL);
     });
 
@@ -266,6 +282,10 @@ describe('photo_match_evaluate tool', () => {
         expect([...collectPanoIds({ a: { panoId: 'P1' }, b: [{ panoIds: ['P2', 'P3'] }], c: 'sv:P4:90:0:60', d: { panoId: '' } })].sort()).toEqual(['P1', 'P2', 'P3', 'P4']);
         const vis = visibleStagedLayers(staged.scene.data.stagedBuild);
         expect(vis.map(l => l.layer)).toEqual(['l2']);
+        // the trees layer only on request (the evaluator then draws one level per tree per view)
+        const withTrees = { layers: [...staged.scene.data.stagedBuild.layers, { objectId: 't', stage: 'trees', layer: 'l5', order: 9, url: '/models/t.glb', counts: { triangles: 10 } } as any] };
+        expect(visibleStagedLayers(withTrees).map(l => l.layer)).toEqual(['l2']);
+        expect(visibleStagedLayers(withTrees, { trees: true }).map(l => l.layer)).toEqual(['l2', 'l5']);
     });
 
     it('evaluates the open staged scene in context against held-out views, never one the build used', async () => {
@@ -288,8 +308,8 @@ describe('photo_match_evaluate tool', () => {
         expect(r.arms[1].glbs[0]).toBe(staged.buildGlb);
         expect(r.arms[1].layers).toEqual([{ layer: 'l2', textured: true }]);
         expect(r.arms[0].triangles).toBe(10);
-        // blind judgement with reshuffles: views x runs calls, stats per criterion with spread
-        expect(calls.n).toBe(3 * 2);
+        // blind judgement with reshuffles: views x runs calls, textured and clay, stats per criterion with spread
+        expect(calls.n).toBe(3 * 2 * 2);
         for (const id of ['raw', 'build']) for (const c of ['shape', 'materials', 'detail', 'errors', 'overall']) {
             const s = r.scores[id][c];
             expect(s.mean).toBeGreaterThanOrEqual(1);
@@ -311,7 +331,55 @@ describe('photo_match_evaluate tool', () => {
         expect(fs.existsSync(path.join(r.outDir, 'report.json'))).toBe(true);
         expect(progress.some(m => /judged 3 of 3 views/.test(m))).toBe(true);
         r.grids.forEach((g: string, k: number) => fs.copyFileSync(g, path.join(SHOTS, `tool_photo_match_staged_view${k}.png`)));
+        // the clay arm is on by default: shape only, every arm untextured, its own grids
+        expect(r.clay).toBe(true);
+        expect(r.clayJudged).toBe(3);
+        expect(Object.keys(r.clayScores)).toEqual(['raw', 'build']);
+        expect(r.clayScores.raw.shape.mean).toBeGreaterThanOrEqual(1);
+        expect(r.clayScores.raw.materials).toBeUndefined();
+        expect(r.clayGrids).toHaveLength(3);
+        for (const v of r.views) {
+            for (const f of Object.values(v.clayRenders)) expect(fs.existsSync(f as string)).toBe(true);
+            expect(v.clayJudge.stats.build.shape.mean).toBeGreaterThanOrEqual(1);
+        }
+        expect(r.summary).toMatch(/Clay, untextured, shape only \(3 of 3 views\)/);
     }, 120_000);
+
+    it('scores shape in clay where the texture hides it: a wrong height with the real texture loses, the right shape with a wrong texture wins', async () => {
+        // B: the target 6 m too short, with the real facade texture; A: the right shape, wrongly textured
+        const shortGlb = path.join(root, 'public', 'models', 'synthetic_short_33333333.glb');
+        writeGlb(shortGlb, [{ ...box(0, 0, 14, 12, 10), png: realFacade }]);
+        const calls = { n: 0, clay: 0 };
+        const handler = createPhotoMatchEvaluateHandler(() => fakeDeps(root, { judgeCalls: calls }));
+        const out = await handler({
+            arms: [{ id: 'A', label: 'RIGHT SHAPE WRONG TEXTURE', runId: RUN, glbs: ['/models/synthetic_iso_l2_tex_11111111.glb'] }, { id: 'B', label: 'SHORT REAL TEXTURE', glbs: [shortGlb] }],
+            views: 3, runs: 1
+        }, ctxFor(root));
+        const r = out.resultPayload as any;
+        expect(out.status, JSON.stringify(r).slice(0, 600)).toBe('completed');
+        expect(calls.clay).toBe(3);
+        // the raw scan is the true shape: in clay it and A tie at the top, B (6 m short) below both
+        expect(r.clayScores.A.shape.mean).toBeGreaterThan(r.clayScores.B.shape.mean);
+        expect(r.clayScores.raw.shape.mean).toBeGreaterThan(r.clayScores.B.shape.mean);
+        // the clay renders carry no texture: A's clay render is the raw scan's
+        const v0 = r.views[0];
+        expect(fs.readFileSync(v0.clayRenders.A).equals(fs.readFileSync(v0.clayRenders.raw))).toBe(true);
+        expect(fs.readFileSync(v0.renders.A).equals(fs.readFileSync(v0.renders.raw))).toBe(false);
+        r.clayGrids.forEach((g: string, k: number) => fs.copyFileSync(g, path.join(SHOTS, `tool_photo_match_clay_view${k}.png`)));
+        fs.copyFileSync(r.grids[0], path.join(SHOTS, 'tool_photo_match_clay_textured_view0.png'));
+
+        // clay: false judges textured only
+        const off = { n: 0, clay: 0 };
+        const h2 = createPhotoMatchEvaluateHandler(() => fakeDeps(root, { judgeCalls: off }));
+        const out2 = await h2({ arms: [{ id: 'B', glbs: [shortGlb] }], views: 2, runs: 1, clay: false, anchor: { lat: PLACE.lat, lng: PLACE.lng }, isolateGlb: `.scratchbox/cache/tile_refine/${REMESH_KEY}/raw_clay.glb` }, ctxFor(root));
+        const r2 = out2.resultPayload as any;
+        expect(out2.status, JSON.stringify(r2).slice(0, 600)).toBe('completed');
+        expect(off.clay).toBe(0);
+        expect(off.n).toBe(2);
+        expect(r2.clay).toBe(false);
+        expect(r2.clayScores).toBeUndefined();
+        expect(r2.views[0].clayRenders).toBeUndefined();
+    }, 180_000);
 
     it('compares several builds at once (arms) from GLB paths in the run frame', async () => {
         const handler = createPhotoMatchEvaluateHandler(() => fakeDeps(root));
