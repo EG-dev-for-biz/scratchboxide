@@ -148,23 +148,36 @@ export interface IdentityGate {
 export function identityGate(input: Uint8Array, aligned: Uint8Array, W: number, H: number, use: Uint8Array, a: {
     askedAspect: number; answeredAspect: number; chamferPx: number; lostShare: number;
     counts?: { tile?: FacadeCounts; plate?: FacadeCounts; unread?: string };
+    /**
+     * A wall the tile hardly sees: why the alignment bound cannot be measured (too few covered texels to align on); the
+     * gross bound is then not applied, and the gate says so.
+     */
+    grossNotMeasured?: string;
+    /**
+     * The colour the plate's family is checked against instead of the tile's covered texels (CIELAB), when they are too few
+     * to have a colour: the building's median facade colour.
+     */
+    colourAgainst?: [number, number, number];
 }): IdentityGate {
     const drift = Math.abs(a.answeredAspect / a.askedAspect - 1);
     const aspect = { asked: Math.round(a.askedAspect * 1000) / 1000, answered: Math.round(a.answeredAspect * 1000) / 1000, drift: Math.round(drift * 1000) / 1000, passed: drift <= MAX_ASPECT_DRIFT };
-    const gross = { chamferPx: a.chamferPx, lostShare: a.lostShare, passed: a.chamferPx <= GROSS_MAX_CHAMFER_PX && a.lostShare <= GROSS_MAX_LOST_SHARE };
+    const gross = { chamferPx: a.chamferPx, lostShare: a.lostShare, passed: a.grossNotMeasured !== undefined || (a.chamferPx <= GROSS_MAX_CHAMFER_PX && a.lostShare <= GROSS_MAX_LOST_SHARE) };
     const c = a.counts;
     const storeys = countCheck('storeys', c?.tile?.storeys, c?.plate?.storeys, c?.unread);
     const bays = countCheck('bays', c?.tile?.bays, c?.plate?.bays, c?.unread);
-    const tileLab = medianLab(input, W, H, use), plateLab = medianLab(aligned, W, H, use);
+    const tileLab = a.colourAgainst ?? medianLab(input, W, H, use);
+    const plateLab = a.colourAgainst ? medianLab(aligned, W, H, new Uint8Array(W * H).fill(1)) : medianLab(aligned, W, H, use);
     const de = Math.round(ciede2000(tileLab, plateLab) * 10) / 10;
     const familyDe = Math.round(Math.hypot(FAMILY_LIGHTNESS_WEIGHT * (plateLab[0] - tileLab[0]), plateLab[1] - tileLab[1], plateLab[2] - tileLab[2]) * 10) / 10;
     const colour = { tileLab: tileLab.map(v => Math.round(v * 10) / 10) as [number, number, number], plateLab: plateLab.map(v => Math.round(v * 10) / 10) as [number, number, number], de, familyDe, passed: familyDe <= MAX_FAMILY_DE };
     const passed = aspect.passed && gross.passed && storeys.passed && bays.passed && colour.passed;
     const parts = [
         `aspect ${aspect.answered} for ${aspect.asked}${aspect.passed ? '' : ` (more than ${100 * MAX_ASPECT_DRIFT}% off: reframed)`}`,
-        `edge chamfer ${a.chamferPx.toFixed(2)} px, ${(100 * a.lostShare).toFixed(0)}% of the tile's edges lost (reported; gross failure above ${GROSS_MAX_CHAMFER_PX} px or ${100 * GROSS_MAX_LOST_SHARE}%${gross.passed ? '' : ': a broken answer'})`,
+        a.grossNotMeasured !== undefined
+            ? `alignment not measured (${a.grossNotMeasured})`
+            : `edge chamfer ${a.chamferPx.toFixed(2)} px, ${(100 * a.lostShare).toFixed(0)}% of the tile's edges lost (reported; gross failure above ${GROSS_MAX_CHAMFER_PX} px or ${100 * GROSS_MAX_LOST_SHARE}%${gross.passed ? '' : ': a broken answer'})`,
         storeys.why, bays.why,
-        `wall colour ${de.toFixed(1)} dE00 from the tile's, ${familyDe.toFixed(1)} in hue and chroma${colour.passed ? '' : ` (more than ${MAX_FAMILY_DE}: another colour family)`}`
+        `wall colour ${de.toFixed(1)} dE00 from ${a.colourAgainst ? "the building's median facade colour (the tile sees too little of this wall)" : "the tile's"}, ${familyDe.toFixed(1)} in hue and chroma${colour.passed ? '' : ` (more than ${MAX_FAMILY_DE}: another colour family)`}`
     ];
     return { passed, why: parts.join('; '), aspect, gross, storeys, bays, colour };
 }

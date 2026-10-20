@@ -197,26 +197,98 @@ export function meshTopCells(m: MassingMesh): Map<string, number> {
 
 /**
  * A modelled volume as one closed surface: Google's volumes carry each triangle twice (both windings, drawn double-sided);
- * of a triangle repeated on the same three corners the copy facing away from the volume's centre is kept.
+ * one copy of a triangle repeated on the same three corners is kept, then every triangle is turned to face out of the volume
+ * (`orientOutward`). Choosing the copy that faces away from the volume's centre (rounds 3-6) turned a tower's or a steeple's
+ * walls that face the centre inwards: their orthos saw nothing, and they took one flat colour.
  */
 export function singleSided(m: MassingMesh): MassingMesh {
     const V = m.vertices;
     const key = (i: number) => V[i].map(c => Math.round(c * 1e5)).join(',');
-    const c = [0, 0, 0];
-    for (const v of V) for (let k = 0; k < 3; k++) c[k] += v[k] / Math.max(1, V.length);
-    const best = new Map<string, { tri: [number, number, number]; out: number }>();
+    const seen = new Set<string>();
+    const indices: number[] = [];
     for (let t = 0; t + 2 < m.indices.length; t += 3) {
-        const tri: [number, number, number] = [m.indices[t], m.indices[t + 1], m.indices[t + 2]];
-        const [a, b, d] = tri.map(i => V[i]);
-        const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], w = [d[0] - a[0], d[1] - a[1], d[2] - a[2]];
-        const n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
-        const ctr = [(a[0] + b[0] + d[0]) / 3 - c[0], (a[1] + b[1] + d[1]) / 3 - c[1], (a[2] + b[2] + d[2]) / 3 - c[2]];
-        const out = n[0] * ctr[0] + n[1] * ctr[1] + n[2] * ctr[2];
+        const tri = [m.indices[t], m.indices[t + 1], m.indices[t + 2]];
         const k = tri.map(key).sort().join('|');
-        const cur = best.get(k);
-        if (!cur || out > cur.out) best.set(k, { tri, out });
+        if (seen.has(k)) continue;
+        seen.add(k);
+        indices.push(...tri);
     }
-    return { ...m, indices: [...best.values()].flatMap(x => x.tri) };
+    return orientOutward({ ...m, indices }).mesh;
+}
+
+/** Ray-triangle hit distance along `dir` from `o` (Möller-Trumbore), or -1. */
+function rayHit(o: number[], dir: number[], a: number[], b: number[], c: number[]): number {
+    const e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    const p = [dir[1] * e2[2] - dir[2] * e2[1], dir[2] * e2[0] - dir[0] * e2[2], dir[0] * e2[1] - dir[1] * e2[0]];
+    const det = e1[0] * p[0] + e1[1] * p[1] + e1[2] * p[2];
+    if (Math.abs(det) < 1e-12) return -1;
+    const inv = 1 / det;
+    const s = [o[0] - a[0], o[1] - a[1], o[2] - a[2]];
+    const u = (s[0] * p[0] + s[1] * p[1] + s[2] * p[2]) * inv;
+    if (u < 0 || u > 1) return -1;
+    const q = [s[1] * e1[2] - s[2] * e1[1], s[2] * e1[0] - s[0] * e1[2], s[0] * e1[1] - s[1] * e1[0]];
+    const v = (dir[0] * q[0] + dir[1] * q[1] + dir[2] * q[2]) * inv;
+    if (v < 0 || u + v > 1) return -1;
+    const t = (e2[0] * q[0] + e2[1] * q[1] + e2[2] * q[2]) * inv;
+    return t > 1e-6 ? t : -1;
+}
+
+/** Barycentric sample points over a triangle (its centroid and six points toward its corners and edges). */
+const SAMPLE_BARY: Array<[number, number]> = [[1 / 3, 1 / 3], [0.7, 0.15], [0.15, 0.7], [0.15, 0.15], [0.45, 0.45], [0.45, 0.1], [0.1, 0.45]];
+
+/** Unit directions spread evenly over the sphere (Fibonacci lattice). */
+function sphereDirections(n: number): number[][] {
+    const out: number[][] = [];
+    const g = Math.PI * (3 - Math.sqrt(5));
+    for (let i = 0; i < n; i++) {
+        const y = 1 - (2 * (i + 0.5)) / n, r = Math.sqrt(1 - y * y), a = g * i;
+        out.push([Math.cos(a) * r, y, Math.sin(a) * r]);
+    }
+    return out;
+}
+
+/**
+ * Turns every triangle of a mesh to face out of the solid it bounds: from just off each side of a triangle, rays in the
+ * directions of that side's hemisphere count how many escape the mesh without crossing it. The side more rays escape from is
+ * the outside; a triangle whose normal points to the other side is flipped (a triangle no ray escapes from on either side, a
+ * partition inside the volume, is left as given). Works on non-convex volumes (a corner tower, an offset steeple) and on
+ * volumes made of overlapping or nested shells, where "away from the centre" and ray parity do not. Returns the count flipped.
+ */
+export function orientOutward(m: MassingMesh, directions = 32): { mesh: MassingMesh; flipped: number } {
+    const V = m.vertices;
+    const T = Math.floor(m.indices.length / 3);
+    const out = m.indices.slice(0, T * 3);
+    const dirs = sphereDirections(directions);
+    let flipped = 0;
+    const escapes = (o: number[], side: number[], self: number): number => {
+        let n = 0;
+        for (const d of dirs) {
+            if (d[0] * side[0] + d[1] * side[1] + d[2] * side[2] < 0.05) continue;
+            let blocked = false;
+            for (let s = 0; s < T && !blocked; s++) if (s !== self && rayHit(o, d, V[out[s * 3]], V[out[s * 3 + 1]], V[out[s * 3 + 2]]) > 0) blocked = true;
+            if (!blocked) n++;
+        }
+        return n;
+    };
+    for (let t = 0; t < T; t++) {
+        const a = V[out[t * 3]], b = V[out[t * 3 + 1]], c = V[out[t * 3 + 2]];
+        const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], w = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+        const n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
+        const len = Math.hypot(n[0], n[1], n[2]);
+        if (len < 1e-12) continue;
+        const nn = n.map(x => x / len), back = nn.map(x => -x);
+        // several points over the triangle: a wall partly buried in another shell (a tower rising out of a lower roof) is
+        // decided by the part that stands free
+        let front = 0, behind = 0;
+        for (const [l1, l2] of SAMPLE_BARY) {
+            const l3 = 1 - l1 - l2;
+            const p = [0, 1, 2].map(k => l1 * a[k] + l2 * b[k] + l3 * c[k]);
+            front += escapes(p.map((x, k) => x + nn[k] * 1e-3), nn, t);
+            behind += escapes(p.map((x, k) => x - nn[k] * 1e-3), back, t);
+        }
+        if (behind > front) { const tmp = out[t * 3 + 1]; out[t * 3 + 1] = out[t * 3 + 2]; out[t * 3 + 2] = tmp; flipped++; }
+    }
+    return { mesh: { ...m, indices: out }, flipped };
 }
 
 // ------------------------------------------------------------------------------------------------

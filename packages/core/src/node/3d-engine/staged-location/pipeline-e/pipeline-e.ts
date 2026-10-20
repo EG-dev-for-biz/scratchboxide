@@ -45,7 +45,8 @@ export function pipelineEInference(env: NodeJS.ProcessEnv = process.env): boolea
 /** The native tool's parameters for E (the defaults of scratchbox_staged_massing.hpp, said here so they are in the key). */
 export const MASSING_PARAMS = {
     pixel: 0.05, slabBack: 1.5, slabFront: 0.8, protrusionReach: 2.5, snapMaxM: 4.0, snapMinSupport: 0.15,
-    residualProud: 0.6, residualCut: 0.6, residualClear: 1.5, residualOpen: 2.0, residualMinArea: 2.0, apronHeight: 0.8, attachReach: 1.5
+    residualProud: 0.6, residualCut: 0.6, residualClear: 1.5, residualOpen: 2.0, residualMinArea: 2.0, apronHeight: 0.8, attachReach: 1.5,
+    reslabBelow: 0.35, reslabReach: 4.0
 };
 
 export interface MassingStageInput {
@@ -77,6 +78,8 @@ export interface MassingStageResult {
 /** The provenance record of a node of E's layer (open labels). */
 export function massingProvenance(node: Pick<MassingNode, 'kind' | 'provenance' | 'confidence'>, massing: Pick<Massing, 'check'>): ProvenanceRecord {
     if (node.kind === 'residual') return { label: 'as-scanned', measuredGeometry: true, method: 'scan triangles the clean massing does not explain (clearly proud of it, cut into it, or the ground apron), kept with their tile photo', sources: [{ kind: 'tile-extraction', id: 'isolate' }] };
+    // openings cut from an enhanced plate's lattice (or read from a plate and checked on the tile): drawn by an image model
+    if (node.provenance === 'generated') return { label: 'generated', measuredGeometry: false, confidence: Math.max(0, Math.min(1, node.confidence ?? 0.5)), method: `pipeline E enhanced mode: ${node.kind} cut where an AI-enhanced wall plate shows it (the plate's own lattice, its lines fitted to the plate's edges); no window grammar of the scan placed it`, sources: [{ kind: 'stage-output', id: 'pipeline-e-enhance' }] };
     if (node.provenance === 'photo-inferred' || (node.kind === 'roof' && node.provenance.includes('photo-inferred'))) return { label: 'photo-inferred', measuredGeometry: false, confidence: Math.max(0, Math.min(1, node.confidence ?? 0.5)), method: `pipeline E inference: ${node.kind} read from the tile's photo and kept where the scan agrees`, sources: [{ kind: 'stage-output', id: 'pipeline-e-inference' }] };
     return {
         label: 'vector-massing', measuredGeometry: false, confidence: Math.max(0, Math.min(1, massing.check.iou)),

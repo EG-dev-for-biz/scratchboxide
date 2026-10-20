@@ -114,6 +114,12 @@ struct Spec {
     double snapMaxM{2.0}, snapMinSupport{0.15};
     double residualProud{0.6}, residualCut{0.6}, residualClear{1.5}, residualOpen{2.0}, residualMinArea{2.0}, apronHeight{0.8}, attachReach{1.5};
     double maxFaceSide{3000};
+    /**
+     * A wall the slab hardly sees (coverage under reslabBelow) is baked again about the depth where the tile's photo surface
+     * facing it lies (the projected-area mode within +-reslabReach of its plane), when that covers more: a modelled volume
+     * is moved as a whole, so one of its walls can stand a few metres off the facade the scan measures. 0 turns it off.
+     */
+    double reslabBelow{0.35}, reslabReach{4.0};
     bool bake{true}, residual{true}, sections{true}, topdown{true};
     std::vector<Part> parts;
     std::vector<MeshSolid> meshes;
@@ -143,6 +149,8 @@ struct Face {
     double pixel{0}, orthoSMin{0}, orthoTMax{0};
     int width{0}, height{0};
     double coverage{0};
+    /** Where the slab the texture was baked through is centred along the normal (0: the face's own plane). */
+    double textureOffset{0};
     V3 at(double s, double t) const { return origin + axisS * s + axisT * t; }
     void st(const V3& p, double& s, double& t) const { V3 d = p - origin; s = d.dot(axisS); t = d.dot(axisT); }
 };
@@ -449,6 +457,12 @@ struct TileSource {
     int imageOf(size_t t) const {
         uint32_t mat = t < scene.triangleMaterial.size() ? scene.triangleMaterial[t] : 0;
         return mat < scene.materials.size() ? scene.materials[mat].baseColorImage : -1;
+    }
+    /** Whether triangle t carries a photo (a decoded base-colour image). The tile's own triangles all do; surfaces a stage
+     *  added without one (the vegetation strip's caps and skirts where trees were taken out) do not, and are not a photo. */
+    bool hasPhoto(size_t t) const {
+        int img = imageOf(t);
+        return img >= 0 && img < static_cast<int>(scene.images.size()) && scene.images[static_cast<size_t>(img)].decoded;
     }
 };
 
@@ -806,8 +820,10 @@ private:
             Face* host = nullptr;
             double shift = 0;
             for (auto& f : faces_) {
-                if (!f.wall) continue;
+                // an extruded wall, or a vertical facet of a modelled volume (its own triangles, cut round the openings)
+                if (!f.wall && !(f.kind == "wall" && !f.meshTris.empty())) continue;
                 if (f.key == o.face) { host = &f; shift = 0; break; }
+                if (!f.wall) continue;
                 if (f.key.size() <= o.face.size() || f.key.compare(0, o.face.size(), o.face) != 0 || f.key[o.face.size()] != ':') continue;
                 const Part* part = nullptr;
                 for (const auto& pp : spec_.parts) if (pp.id == f.part) part = &pp;
@@ -1034,8 +1050,28 @@ private:
             }
             return -1e300;
         };
-        bool ok = o.s1 > o.s0 + 0.05 && o.t1 > o.t0 + 0.05 && o.s0 > f.sMin + 0.02 && o.s1 < f.sMax - 0.02 && o.t0 > f.tBottom + (o.scanned ? -1e9 : 0.02) &&
-                  o.t1 < std::min(topAt(o.s0), topAt(o.s1)) - 0.05;
+        bool ok;
+        if (!f.meshTris.empty()) {
+            // a modelled volume's facet: the rectangle (inset 5 cm) inside the facet's own triangles at its corners, edge
+            // midpoints and centre
+            auto inFacet = [&](double s, double t) {
+                for (size_t q = 0; q + 2 < f.meshTris.size(); q += 3) {
+                    double s0, t0, s1, t1, s2, t2;
+                    f.st(f.meshTris[q], s0, t0); f.st(f.meshTris[q + 1], s1, t1); f.st(f.meshTris[q + 2], s2, t2);
+                    double d = (s1 - s0) * (t2 - t0) - (s2 - s0) * (t1 - t0);
+                    if (std::abs(d) < 1e-12) continue;
+                    double u = ((s - s0) * (t2 - t0) - (s2 - s0) * (t - t0)) / d, v = ((s1 - s0) * (t - t0) - (s - s0) * (t1 - t0)) / d;
+                    if (u >= -1e-9 && v >= -1e-9 && u + v <= 1 + 1e-9) return true;
+                }
+                return false;
+            };
+            const double a0 = o.s0 + 0.05, a1 = o.s1 - 0.05, b0 = o.t0 + 0.05, b1 = o.t1 - 0.05;
+            ok = o.s1 > o.s0 + 0.15 && o.t1 > o.t0 + 0.15;
+            for (double s : {a0, 0.5 * (a0 + a1), a1}) for (double t : {b0, 0.5 * (b0 + b1), b1}) if (ok && !inFacet(s, t)) ok = false;
+        } else {
+            ok = o.s1 > o.s0 + 0.05 && o.t1 > o.t0 + 0.05 && o.s0 > f.sMin + 0.02 && o.s1 < f.sMax - 0.02 && o.t0 > f.tBottom + (o.scanned ? -1e9 : 0.02) &&
+                 o.t1 < std::min(topAt(o.s0), topAt(o.s1)) - 0.05;
+        }
         for (int other : f.openings) {
             const auto& p = spec_.openings[static_cast<size_t>(other)];
             if (o.s0 < p.s1 && p.s0 < o.s1 && o.t0 < p.t1 && p.t0 < o.t1) ok = false;
@@ -1053,7 +1089,48 @@ private:
         out.clear();
         auto put = [&](double s, double t) { out.push_back({f.at(s, t), {s, t}}); };
         if (!f.meshTris.empty()) {
-            for (const auto& q : f.meshTris) { double s, t; f.st(q, s, t); out.push_back({q, {s, t}}); }
+            if (f.openings.empty()) {
+                for (const auto& q : f.meshTris) { double s, t; f.st(q, s, t); out.push_back({q, {s, t}}); }
+                return;
+            }
+            // the facet's triangles minus the openings' rectangles, in its (s, t): each convex piece split by a rectangle into
+            // the parts left, right, below and above it (half-plane clips), then fanned
+            using Poly = std::vector<std::pair<double, double>>;
+            auto clip = [](const Poly& P, int axis, double v, bool keepBelow) {
+                Poly out;
+                for (size_t i = 0; i < P.size(); ++i) {
+                    const auto& a = P[i];
+                    const auto& b = P[(i + 1) % P.size()];
+                    double da = (axis == 0 ? a.first : a.second) - v, db = (axis == 0 ? b.first : b.second) - v;
+                    if (keepBelow) { da = -da; db = -db; }
+                    if (da >= 0) out.push_back(a);
+                    if ((da >= 0) != (db >= 0)) { double u = da / (da - db); out.push_back({a.first + u * (b.first - a.first), a.second + u * (b.second - a.second)}); }
+                }
+                return out;
+            };
+            std::vector<Poly> pieces;
+            for (size_t q = 0; q + 2 < f.meshTris.size(); q += 3) {
+                Poly P;
+                for (int k = 0; k < 3; ++k) { double s, t; f.st(f.meshTris[q + static_cast<size_t>(k)], s, t); P.push_back({s, t}); }
+                pieces.push_back(P);
+            }
+            for (int oi : f.openings) {
+                const auto& o = spec_.openings[static_cast<size_t>(oi)];
+                std::vector<Poly> next;
+                for (const auto& P : pieces) {
+                    auto keep = [&](const Poly& R) { if (R.size() >= 3) next.push_back(R); };
+                    keep(clip(P, 0, o.s0, true));                                         // s <= s0
+                    keep(clip(P, 0, o.s1, false));                                        // s >= s1
+                    Poly mid = clip(clip(P, 0, o.s0, false), 0, o.s1, true);              // s0 <= s <= s1
+                    if (mid.size() >= 3) { keep(clip(mid, 1, o.t0, true)); keep(clip(mid, 1, o.t1, false)); }
+                }
+                pieces.swap(next);
+            }
+            for (const auto& P : pieces) for (size_t k = 1; k + 1 < P.size(); ++k) {
+                double area = (P[k].first - P[0].first) * (P[k + 1].second - P[0].second) - (P[k + 1].first - P[0].first) * (P[k].second - P[0].second);
+                if (std::abs(area) < 1e-10) continue;
+                put(P[0].first, P[0].second); put(P[k].first, P[k].second); put(P[k + 1].first, P[k + 1].second);
+            }
             return;
         }
         if (f.wall) {
@@ -1505,6 +1582,9 @@ private:
         auto cand = tile_.query(bl, bh);
         for (uint32_t t : cand) {
             if (tile_.n[t].dot(f.n) < 0.05) continue;  // facing into the face
+            // a surface with no photo (the strip's flat caps and skirts where trees stood) is not the facade's photo: its
+            // texels stay uncovered and are filled downstream, labelled, instead of baking a flat clay patch as "as scanned"
+            if (colour && !tile_.hasPhoto(t)) continue;
             double xs[3], ys[3], hs[3];
             bool in = true;
             for (int k = 0; k < 3 && in; ++k) {
@@ -1548,6 +1628,49 @@ private:
         }
     }
 
+    /**
+     * The depth along a wall's normal (metres from its plane) where the tile's photo surface facing it lies: the mode of the
+     * projected area of the photo triangles facing out of it, over its (s, t) extent, within +-reach, in a 1.5 m window
+     * (bins of 0.25 m). NaN when nothing faces it there.
+     */
+    double photoSurfaceDepth(const Face& f, double reach) const {
+        const double bin = 0.25;
+        const int nb = static_cast<int>(std::ceil(2 * reach / bin));
+        std::vector<double> hist(static_cast<size_t>(nb), 0.0);
+        V3 c0 = f.at(f.sMin, f.tMin), c1 = f.at(f.sMax, f.tMax);
+        V3 bl{std::min(c0.x, c1.x), std::min(c0.y, c1.y), std::min(c0.z, c1.z)}, bh{std::max(c0.x, c1.x), std::max(c0.y, c1.y), std::max(c0.z, c1.z)};
+        for (const V3& q : {f.at(f.sMin, f.tMin) + f.n * reach, f.at(f.sMax, f.tMax) + f.n * reach, f.at(f.sMin, f.tMin) - f.n * reach, f.at(f.sMax, f.tMax) - f.n * reach}) {
+            bl = {std::min(bl.x, q.x), std::min(bl.y, q.y), std::min(bl.z, q.z)}; bh = {std::max(bh.x, q.x), std::max(bh.y, q.y), std::max(bh.z, q.z)};
+        }
+        double total = 0;
+        for (uint32_t t : tile_.query(bl, bh)) {
+            double facing = tile_.n[t].dot(f.n);
+            if (facing < 0.5 || !tile_.hasPhoto(t)) continue;
+            V3 m = (tile_.p[3 * t] + tile_.p[3 * t + 1] + tile_.p[3 * t + 2]) * (1.0 / 3.0);
+            double s, tt;
+            f.st(m, s, tt);
+            if (s < f.sMin || s > f.sMax || tt < f.tMin || tt > f.tMax) continue;
+            double h = (m - f.origin).dot(f.n);
+            if (h < -reach || h >= reach) continue;
+            double w = tile_.area[t] * facing;
+            hist[static_cast<size_t>(std::clamp(static_cast<int>((h + reach) / bin), 0, nb - 1))] += w;
+            total += w;
+        }
+        if (total <= 0) return std::numeric_limits<double>::quiet_NaN();
+        const int win = static_cast<int>(std::round(1.5 / bin));
+        double best = -1;
+        int at = 0;
+        for (int k = 0; k + win <= nb; ++k) {
+            double sum = 0;
+            for (int j = k; j < k + win; ++j) sum += hist[static_cast<size_t>(j)];
+            if (sum > best) { best = sum; at = k; }
+        }
+        // the window's area-weighted mean depth
+        double sw = 0, sh = 0;
+        for (int j = at; j < at + win; ++j) { sw += hist[static_cast<size_t>(j)]; sh += hist[static_cast<size_t>(j)] * (-reach + (j + 0.5) * bin); }
+        return sw > 0 ? sh / sw : std::numeric_limits<double>::quiet_NaN();
+    }
+
     void bake() {
         // image frames
         for (auto& f : faces_) {
@@ -1580,6 +1703,21 @@ private:
                 size_t covered = 0;
                 for (size_t i = 0; i < N; ++i) covered += cov[i];
                 f.coverage = static_cast<double>(covered) / static_cast<double>(N);
+                if (!up && std::abs(f.n.y) < 0.5 && spec_.reslabReach > 0 && f.coverage < spec_.reslabBelow) {
+                    double c = photoSurfaceDepth(f, spec_.reslabReach);
+                    if (std::isfinite(c) && (c < -spec_.slabBack + 0.5 || c > spec_.slabFront - 0.3)) {
+                        std::vector<float> z2(N, -1e30f);
+                        std::vector<uint8_t> rgb2(N * 3, 0), cov2(N, 0);
+                        rasterFace(f, c - spec_.slabBack, c + spec_.slabFront, true, z2, &rgb2, &cov2);
+                        size_t covered2 = 0;
+                        for (size_t i = 0; i < N; ++i) covered2 += cov2[i];
+                        if (covered2 > covered + N / 20) {
+                            z.swap(z2); rgb.swap(rgb2); cov.swap(cov2);
+                            f.coverage = static_cast<double>(covered2) / static_cast<double>(N);
+                            f.textureOffset = c;
+                        }
+                    }
+                }
                 texture::ImageBuffer img(f.width, f.height, 4, 0);
                 for (size_t i = 0; i < N; ++i) {
                     for (int c = 0; c < 3; ++c) img.data[i * 4 + c] = cov[i] ? rgb[i * 3 + c] : 128;
@@ -1805,7 +1943,7 @@ private:
                << ",\"axisT\":" << v3(f.axisT) << ",\"origin\":" << v3(f.origin) << ",\"sMin\":" << detail::fmt(f.sMin) << ",\"sMax\":" << detail::fmt(f.sMax)
                << ",\"tMin\":" << detail::fmt(f.tMin) << ",\"tMax\":" << detail::fmt(f.tMax) << ",\"tBottom\":" << detail::fmt(f.tBottom) << ",\"area\":" << detail::fmt(f.area)
                << ",\"pixel\":" << detail::fmt(f.pixel) << ",\"orthoSMin\":" << detail::fmt(f.orthoSMin) << ",\"orthoTMax\":" << detail::fmt(f.orthoTMax)
-               << ",\"width\":" << f.width << ",\"height\":" << f.height << ",\"coverage\":" << detail::fmt(f.coverage) << ",\"openings\":[";
+               << ",\"width\":" << f.width << ",\"height\":" << f.height << ",\"coverage\":" << detail::fmt(f.coverage) << ",\"textureOffsetM\":" << detail::fmt(f.textureOffset) << ",\"openings\":[";
             for (size_t k = 0; k < f.openings.size(); ++k) js << (k ? "," : "") << detail::jstr(spec_.openings[static_cast<size_t>(f.openings[k])].id);
             js << "],\"top\":[";
             for (size_t k = 0; k < f.top.size(); ++k) js << (k ? "," : "") << "[" << detail::fmt(f.top[k].first) << "," << detail::fmt(f.top[k].second) << "]";
@@ -1895,6 +2033,8 @@ inline Spec readSpec(std::istream& in) {
             else if (name == "apronHeight") s.apronHeight = v;
             else if (name == "attachReach") s.attachReach = v;
             else if (name == "maxFaceSide") s.maxFaceSide = v;
+            else if (name == "reslabBelow") s.reslabBelow = v;
+            else if (name == "reslabReach") s.reslabReach = v;
             else if (name == "bake") s.bake = v != 0;
             else if (name == "residual") s.residual = v != 0;
             else if (name == "sections") s.sections = v != 0;
