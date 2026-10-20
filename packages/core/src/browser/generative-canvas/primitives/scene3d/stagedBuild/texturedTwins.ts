@@ -31,6 +31,16 @@ export type MaterialMode = 'clay' | 'textured';
 /** The current mode and how many times it has changed (the epoch). */
 export interface MaterialSwitch { mode: MaterialMode; epoch: number }
 
+/**
+ * The mode a staged build is shown in when nobody chose one: textured (user decision 2026-10-19, textured by default,
+ * clay on request). The clay layers still come first; each layer crossfades to its twin when the texture pass commits it.
+ */
+export const DEFAULT_MATERIAL_MODE: MaterialMode = 'textured';
+
+/**
+ * The switch before the viewport's first request: clay, the look every layer is built and revealed in. The first
+ * render switches it to the wanted mode (DEFAULT_MATERIAL_MODE unless clay was chosen), so a textured view is epoch 1.
+ */
 export const INITIAL_SWITCH: MaterialSwitch = { mode: 'clay', epoch: 0 };
 
 /** A swap reveal's length: long enough to read as a crossfade, short enough to never feel like a wait. */
@@ -91,6 +101,17 @@ export function twinObjectFor(layer: StagedLayer, clayObject?: Media4DObject): M
         },
         space: clayObject?.space ?? { spatial3d: { x: 0, y: 0, z: 0 } }
     } as Media4DObject;
+}
+
+/**
+ * A staged state streamed later from the server without a material mode keeps the one chosen on the open scene (the
+ * overlay toggle or staged_location_material_mode), for the same run, so a clay choice made while the build is still
+ * running survives its later commits and is saved with the scene.
+ */
+export function carryMaterialMode<S extends { runId?: string; materialMode?: string }>(prev: S | undefined, next: S | undefined): S | undefined {
+    if (!next || !prev || prev === next || next.materialMode !== undefined || prev.materialMode === undefined) return next;
+    if (prev.runId !== next.runId) return next;
+    return { ...next, materialMode: prev.materialMode };
 }
 
 /**

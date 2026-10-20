@@ -188,7 +188,7 @@ export const STAGES = {
     figures: { order: 4, title: 'Figures', budgetMs: EVIDENCE_DISCOVERY_ALLOWANCE_MS + SURVEY_IMAGE_TIMEOUT_MS + 2 * FIGURE_VISION_TIMEOUT_MS + 4 * 120_000 + 30_000 },
     trees: { order: 5, title: 'Trees', budgetMs: 300_000 },
     /**
-     * Background: the real-world texture pass (textured twins of the staged layers); clay stays the first result. The
+     * Background: the real-world texture pass (textured twins of the staged layers); clay is the first result and the viewport crossfades to each twin as it commits (unless the user chose clay). The
      * limit covers the first layers (about 2 to 3 min live) plus the wait for the photo-read detail the rebuild commits
      * later (about 4 min after the Street View close-ups live), whose layers are textured once it settles.
      */
@@ -1764,7 +1764,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const prior = outcomes.findIndex(o => o.layer.objectId === target.layer.objectId);
                         if (prior >= 0) outcomes.splice(prior, 1);
                         outcomes.push({ layer: target.layer, out: entry.value, url: pub.url, bytes: pub.bytes, cached: entry.cached, builtAtMs: entry.builtAtMs, surfaces: surfacesKey(target.surfaces), late: !!target.late });
-                        // the layer gains its textured variant: same object, clay stays mounted; the viewport shows it in the textured material mode
+                        // the layer gains its textured variant: same object, clay stays mounted; the viewport crossfades to it (textured is the default material mode)
                         const current = run.state.layers.find(l => l.objectId === target.layer.objectId) ?? target.layer;
                         const updated: StagedLayer = {
                             ...current,

@@ -18,6 +18,7 @@ import { analyzePartConnectivityAsync, ConnectivityAnalysisAbortedError, describ
 import { callVisionModel, describeVisualProblems, reviewModelVisually, type VisualReviewResult } from '../../3d-engine/visual-review';
 import { formatSbApiErrors, sbTypeCheckMetadata, typeCheckSbScript } from '../../3d-engine/sb-script-typecheck';
 import { SB_API_CORE_SUMMARY, SB_API_VERSION } from '../../3d-engine/sb-api.generated';
+import { firstPassRenderMode } from '../scene3d-first-pass-baseline';
 
 export interface GlbAabbBounds {
     min: [number, number, number];
@@ -178,7 +179,7 @@ Usage notes:
 export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'execute_3d_python_script',
-        description: 'Runs a procedural Python 3 script with the Scratchbox 3D Engine (import scratchbox as sb) and opens the GLB it writes as a new studio-clay 3D scene in a studio void. Choose the tool by what the user asked for: a real-world place goes to google_3d_tiles_get_clay; one specific object, or an abstract form, goes to build_3d_object_from_reference (with its location when it stands at a real place); an imagined environment or landscape, a scene made of several objects, or an explicit request for a script comes here. Every call starts a new scene: nothing is carried over from the scene already on the canvas. This tool does not stage anything on a real place: a call with a location or coordinates fails without running the script. If the script writes no GLB, or one with no geometry, the call fails.\n\n' + PYTHON_3D_API_REFERENCE,
+        description: 'Runs a procedural Python 3 script with the Scratchbox 3D Engine (import scratchbox as sb) and opens the GLB it writes as a new 3D scene in a studio void, shown with the materials the script assigns (textured by default; studio clay only when the user asks for clay). Choose the tool by what the user asked for: a real-world place goes to google_3d_tiles_get_clay; one specific object, or an abstract form, goes to build_3d_object_from_reference (with its location when it stands at a real place); an imagined environment or landscape, a scene made of several objects, or an explicit request for a script comes here. Every call starts a new scene: nothing is carried over from the scene already on the canvas. This tool does not stage anything on a real place: a call with a location or coordinates fails without running the script. If the script writes no GLB, or one with no geometry, the call fails.\n\n' + PYTHON_3D_API_REFERENCE,
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -193,6 +194,11 @@ export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 timeoutMs: {
                     type: 'NUMBER',
                     description: 'Execution timeout in milliseconds (default 45000).'
+                },
+                renderMode: {
+                    type: 'STRING',
+                    enum: ['pbr', 'clay'],
+                    description: 'Optional: "clay" only when the user asks to see the scene in clay (untextured, a shape review); omit for the default, which shows the materials the script assigns.'
                 }
             },
             required: ['script']
@@ -460,7 +466,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                         subtitle: sceneSubtitle,
                         worldBranch: 'procedural/python-scene',
                         sceneType: 'custom',
-                        renderMode: 'clay',
+                        renderMode: args.renderMode === 'clay' ? 'clay' : firstPassRenderMode(_ctx?.request?.prompt),
                         cameraMode: 'orbit',
                         animation: 'orbit',
                         camera: {

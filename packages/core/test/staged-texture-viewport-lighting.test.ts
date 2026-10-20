@@ -82,7 +82,8 @@ describe.skipIf(!stagedChrome.ok)('staged viewport lighting: neutral studio on a
 
     test('a mid-grey texture renders near mid-grey and not blue; the clay renders light and no bluer than its albedo', async () => {
         const state = fixtureState([L('l2', { textured: { url: `/models/${L2()}.textured.glb`, bytes: twinGlb.length, ladderRung: 0, rungShares: [1, 0, 0, 0, 0, 0], provenance: [{ source: 'synthetic-test', label: 'generated', method: 'test', coverage: 1 }], confidenceChannels: 'R index, G weight, B rung, A produced', builtAtMs: 1, cached: false } })], { runState: 'finished' });
-        await page.eval(`sbHarness.mount(${JSON.stringify(stagedSceneData(state, { geoAnchor: { lat: 40.7312, lng: -73.9971, elevation: 9 } }))})`);
+        // opened in clay (the viewer's saved choice; textured is the default), then the toggle shows the texture
+        await page.eval(`sbHarness.mount(${JSON.stringify(stagedSceneData({ ...state, materialMode: 'clay' }, { geoAnchor: { lat: 40.7312, lng: -73.9971, elevation: 9 } }))})`);
         await page.waitFor('sbHarness.ready()');
         await page.waitFor(`sbHarness.attached(${JSON.stringify(L2())})`, 30_000, 'l2 attached');
         for (let i = 0; i < 600 && (await page.eval<{ phase: string } | null>(`sbHarness.layer(${JSON.stringify(L2())})`))?.phase !== 'revealed'; i++) await page.step(1, STEP);

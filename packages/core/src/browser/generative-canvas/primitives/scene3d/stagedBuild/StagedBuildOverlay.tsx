@@ -87,7 +87,7 @@ export function materialsSentence(state: StagedBuildState, m: MaterialsSummary):
     if (m.mode === 'textured') {
         parts.push(m.available > 0
             ? `Real textures on ${m.shown} of ${m.available} ${m.available === 1 ? 'layer' : 'layers'} (photo-inferred, labelled per texel); the rest stay clay`
-            : 'Real textures asked for; none published yet, the scene stays clay');
+            : 'Clay until the real textures are published');
     } else if (m.available > 0) {
         parts.push(`Clay. Real textures ready for ${m.available} ${m.available === 1 ? 'layer' : 'layers'}`);
     } else {
