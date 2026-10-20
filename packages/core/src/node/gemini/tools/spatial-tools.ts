@@ -3730,6 +3730,14 @@ export const GEOBOX_PRECISION_TOOL_DECLARATIONS: ToolDeclaration[] = [
                         required: ['position', 'targetPosition']
                     }
                 },
+                enableNormalSnap: {
+                    type: 'BOOLEAN',
+                    description: 'Opt-in: Cartesian Normal Snapping — regularizes wobbly photogrammetric facet normals to the building\'s cardinal wall/roof planes for crisp specular shading, with zero vertex drift (default: false)'
+                },
+                buildingAzimuthDeg: {
+                    type: 'NUMBER',
+                    description: 'Dominant building/street azimuth in degrees (e.g. from utdra_probe_tile\'s dominantStreetYawDeg telemetry). Required for enableNormalSnap to align correctly.'
+                },
                 customDelightParams: {
                     type: 'OBJECT',
                     description: 'Custom override parameters for de-lighting uniforms'
@@ -4009,6 +4017,8 @@ export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
             isoDate: typeof args.isoDate === 'string' ? args.isoDate : undefined,
             stoneType: typeof args.stoneType === 'string' ? (args.stoneType as any) : undefined,
             portals: Array.isArray(args.portals) ? (args.portals as any[]) : undefined,
+            enableNormalSnap: args.enableNormalSnap === true,
+            buildingAzimuthDeg: typeof args.buildingAzimuthDeg === 'number' ? args.buildingAzimuthDeg : undefined,
             customDelightParams: typeof args.customDelightParams === 'object' && args.customDelightParams !== null ? (args.customDelightParams as any) : undefined
         });
 
@@ -4024,7 +4034,7 @@ export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
             : `NOT applied: ${applied && !applied.ok ? applied.error : 'no 3D scene is open'}; nothing in any viewport changed. Computed only:`;
         return {
             resultPayload: { ...(result as unknown as Record<string, unknown>), applied: !!applied?.ok, ...(applied?.ok ? { appliedTo: applied.artifact.id, operators: applied.operators, artifact: applied.artifact } : { notApplied: applied && !applied.ok ? applied.error : 'no 3D scene is open' }), notAppliedParts: ['delightUniforms', 'sceneLighting intensities', 'architecturalFixtures'] } as unknown as ToolResultPayload,
-            summaryResult: `${appliedText} Location lighting for ${result.landmarkContext?.name} (${latitude!.toFixed(6)}, ${longitude!.toFixed(6)}; NOAA sun at ${result.landmarkContext?.isoDate}: elevation ${result.solarElevationDeg}°, azimuth ${result.solarAzimuthDeg}°) with the ${result.preset} look preset (diurnal: ${result.diurnalPhase}). De-lighting preset values (shadow lift: ${result.delightUniforms.uShadowLift}, highlight compress: ${result.delightUniforms.uHighlightCompress}, ground de-wash: ${result.delightUniforms.uGroundDeWash}), scene lights (ambient: ${result.sceneLighting.ambientLight.intensity}, hemi: ${result.sceneLighting.hemiLight.intensity}, sun: ${result.sceneLighting.sunLight.intensity}, placed at the computed sun). ${result.architecturalFixtures.length ? `${result.architecturalFixtures.length} portal backlighting fixtures at the given openings${result.portalDefaultsApplied?.length ? ` (fixture defaults used for ${result.portalDefaultsApplied.join(', ')})` : ''}.` : 'No portal backlighting (no window/portal openings were given).'}`
+            summaryResult: `${appliedText} Location lighting for ${result.landmarkContext?.name} (${latitude!.toFixed(6)}, ${longitude!.toFixed(6)}; NOAA sun at ${result.landmarkContext?.isoDate}: elevation ${result.solarElevationDeg}°, azimuth ${result.solarAzimuthDeg}°) with the ${result.preset} look preset (diurnal: ${result.diurnalPhase}). De-lighting preset values (shadow lift: ${result.delightUniforms.uShadowLift}, highlight compress: ${result.delightUniforms.uHighlightCompress}, ground de-wash: ${result.delightUniforms.uGroundDeWash}), scene lights (ambient: ${result.sceneLighting.ambientLight.intensity}, hemi: ${result.sceneLighting.hemiLight.intensity}, sun: ${result.sceneLighting.sunLight.intensity}, placed at the computed sun). ${result.architecturalFixtures.length ? `${result.architecturalFixtures.length} portal backlighting fixtures at the given openings${result.portalDefaultsApplied?.length ? ` (fixture defaults used for ${result.portalDefaultsApplied.join(', ')})` : ''}.` : 'No portal backlighting (no window/portal openings were given).'}${result.delightUniforms.uNormalSnapEnabled ? ` Cartesian Normal Snapping enabled (azimuth: ${result.delightUniforms.uBuildingAzimuthDeg}°).` : ''}`
         };
     },
     geobox_optimize_edge_alignment: async (args, ctx) => alignModelEdgesToPhoto('geobox_optimize_edge_alignment', args, ctx),
