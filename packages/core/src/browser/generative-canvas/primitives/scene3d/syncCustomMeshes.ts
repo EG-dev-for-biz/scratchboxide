@@ -14,6 +14,7 @@ import { removeAndDispose } from './types';
 
 import type { PbrTextureSet } from '../../canvas-types';
 import { getPresetConfig } from './proceduralPbrTextures';
+import { resolveTextureUrl } from '../../../../common/texture-url-resolver';
 
 export interface CustomMeshDefinition {
     id?: string;
@@ -53,6 +54,36 @@ function createGeometry(type: string | undefined): THREE.BufferGeometry {
     if (type === 'plane') return new THREE.PlaneGeometry(2, 2);
     if (type === 'torus') return new THREE.TorusGeometry(1, 0.4, 16, 50);
     return new THREE.BoxGeometry(1, 1, 1);
+}
+
+/**
+ * Resolves `src` (a texture-library path is exchanged for a signed GCS URL; anything else — a data
+ * URI, an already-absolute URL — passes through unchanged) and loads it, guarding against the
+ * target material having been replaced while the signed-URL request was in flight.
+ */
+function loadPbrTexture(
+    loader: THREE.TextureLoader,
+    src: string,
+    mesh: THREE.Mesh,
+    expectedMaterial: THREE.Material,
+    onLoad: (tex: THREE.Texture) => void
+): void {
+    resolveTextureUrl(src)
+        .then(resolvedUrl => {
+            loader.load(
+                resolvedUrl,
+                (tex) => {
+                    if (mesh.material !== expectedMaterial) {
+                        tex.dispose();
+                        return;
+                    }
+                    onLoad(tex);
+                },
+                undefined,
+                (err) => console.error(`[syncCustomMeshes] Failed to load PBR texture "${src}":`, err)
+            );
+        })
+        .catch(err => console.error(`[syncCustomMeshes] Failed to resolve signed URL for PBR texture "${src}":`, err));
 }
 
 function updateInstancedTransforms(mesh: THREE.InstancedMesh, transforms: NonNullable<CustomMeshDefinition['instanceTransforms']>): void {
@@ -136,7 +167,7 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
         const aoSrc = pbr.aoUrl || pbr.aoMap;
 
         if (ormSrc) {
-            loader.load(ormSrc, (tex) => {
+            loadPbrTexture(loader, ormSrc, mesh, pbrMat, (tex) => {
                 tex.wrapS = THREE.RepeatWrapping;
                 tex.wrapT = THREE.RepeatWrapping;
                 tex.repeat.set(repeat[0], repeat[1]);
@@ -150,7 +181,7 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
         }
 
         if (albedoSrc) {
-            loader.load(albedoSrc, (tex) => {
+            loadPbrTexture(loader, albedoSrc, mesh, pbrMat, (tex) => {
                 tex.wrapS = THREE.RepeatWrapping;
                 tex.wrapT = THREE.RepeatWrapping;
                 tex.repeat.set(repeat[0], repeat[1]);
@@ -160,7 +191,7 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
             });
         }
         if (normalSrc) {
-            loader.load(normalSrc, (tex) => {
+            loadPbrTexture(loader, normalSrc, mesh, pbrMat, (tex) => {
                 tex.wrapS = THREE.RepeatWrapping;
                 tex.wrapT = THREE.RepeatWrapping;
                 tex.repeat.set(repeat[0], repeat[1]);
@@ -171,7 +202,7 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
             });
         }
         if (roughnessSrc) {
-            loader.load(roughnessSrc, (tex) => {
+            loadPbrTexture(loader, roughnessSrc, mesh, pbrMat, (tex) => {
                 tex.wrapS = THREE.RepeatWrapping;
                 tex.wrapT = THREE.RepeatWrapping;
                 tex.repeat.set(repeat[0], repeat[1]);
@@ -181,7 +212,7 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
             });
         }
         if (metallicSrc) {
-            loader.load(metallicSrc, (tex) => {
+            loadPbrTexture(loader, metallicSrc, mesh, pbrMat, (tex) => {
                 tex.wrapS = THREE.RepeatWrapping;
                 tex.wrapT = THREE.RepeatWrapping;
                 tex.repeat.set(repeat[0], repeat[1]);
@@ -191,7 +222,7 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
             });
         }
         if (aoSrc) {
-            loader.load(aoSrc, (tex) => {
+            loadPbrTexture(loader, aoSrc, mesh, pbrMat, (tex) => {
                 tex.wrapS = THREE.RepeatWrapping;
                 tex.wrapT = THREE.RepeatWrapping;
                 tex.repeat.set(repeat[0], repeat[1]);

@@ -10,6 +10,7 @@
 import * as React from 'react';
 import * as THREE from 'three';
 import type { TextureMatrixResult, TextureMatrixCandidate } from '../../../common/media-generation-protocol';
+import { resolveTextureUrl } from '../../../common/texture-url-resolver';
 
 // ==========================================
 // Multimedia & Geospatial Rendering Cards
@@ -634,10 +635,29 @@ export const TextureMatrixCard: React.FC<{
 
         const loader = new THREE.TextureLoader();
         const textures = activeCandidate.textures;
+        let disposed = false;
+
+        // Resolves a texture-library path to its signed GCS URL (passthrough for anything else)
+        // before handing it to the THREE.TextureLoader; bails out if the effect was cleaned up
+        // (e.g. the selected candidate/channel changed) while the signed URL was in flight.
+        const loadTexture = (url: string, onLoad: (tex: THREE.Texture) => void): void => {
+            resolveTextureUrl(url)
+                .then(resolvedUrl => {
+                    if (disposed) return;
+                    loader.load(resolvedUrl, tex => {
+                        if (disposed) {
+                            tex.dispose();
+                            return;
+                        }
+                        onLoad(tex);
+                    }, undefined, err => console.error(`[TextureMatrixCard] Failed to load texture "${url}":`, err));
+                })
+                .catch(err => console.error(`[TextureMatrixCard] Failed to resolve signed URL for "${url}":`, err));
+        };
 
         if (activeChannel === 'composite') {
             if (textures.albedo) {
-                loader.load(textures.albedo, tex => {
+                loadTexture(textures.albedo, tex => {
                     tex.wrapS = THREE.RepeatWrapping;
                     tex.wrapT = THREE.RepeatWrapping;
                     tex.repeat.set(2, 2);
@@ -647,7 +667,7 @@ export const TextureMatrixCard: React.FC<{
                 });
             }
             if (textures.normal) {
-                loader.load(textures.normal, tex => {
+                loadTexture(textures.normal, tex => {
                     tex.wrapS = THREE.RepeatWrapping;
                     tex.wrapT = THREE.RepeatWrapping;
                     tex.repeat.set(2, 2);
@@ -658,7 +678,7 @@ export const TextureMatrixCard: React.FC<{
                 });
             }
             if (textures.roughness) {
-                loader.load(textures.roughness, tex => {
+                loadTexture(textures.roughness, tex => {
                     tex.wrapS = THREE.RepeatWrapping;
                     tex.wrapT = THREE.RepeatWrapping;
                     tex.repeat.set(2, 2);
@@ -668,7 +688,7 @@ export const TextureMatrixCard: React.FC<{
                 });
             }
             if (textures.metallic) {
-                loader.load(textures.metallic, tex => {
+                loadTexture(textures.metallic, tex => {
                     tex.wrapS = THREE.RepeatWrapping;
                     tex.wrapT = THREE.RepeatWrapping;
                     tex.repeat.set(2, 2);
@@ -678,7 +698,7 @@ export const TextureMatrixCard: React.FC<{
                 });
             }
             if (textures.ao) {
-                loader.load(textures.ao, tex => {
+                loadTexture(textures.ao, tex => {
                     tex.wrapS = THREE.RepeatWrapping;
                     tex.wrapT = THREE.RepeatWrapping;
                     tex.repeat.set(2, 2);
@@ -691,7 +711,7 @@ export const TextureMatrixCard: React.FC<{
         } else {
             const channelUrl = (textures as any)[activeChannel];
             if (channelUrl) {
-                loader.load(channelUrl, tex => {
+                loadTexture(channelUrl, tex => {
                     tex.wrapS = THREE.RepeatWrapping;
                     tex.wrapT = THREE.RepeatWrapping;
                     tex.repeat.set(2, 2);
@@ -716,6 +736,7 @@ export const TextureMatrixCard: React.FC<{
         render();
 
         return () => {
+            disposed = true;
             cancelAnimationFrame(animationFrameId);
             geometry.dispose();
             material.dispose();

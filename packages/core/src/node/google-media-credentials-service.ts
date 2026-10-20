@@ -11,6 +11,7 @@ import * as fs from 'fs-extra';
 import * as os from 'os';
 import * as path from 'path';
 import { GoogleGenAI, type GoogleGenAIOptions } from '@google/genai';
+import { Storage, type StorageOptions } from '@google-cloud/storage';
 import { SaveCredentialsResponse } from '../common/gemini-protocol';
 import { FileKeyStore, KeyStore } from './key-store';
 import { resolveVertexLocation } from './gemini/gemini-client';
@@ -116,6 +117,50 @@ export class GoogleMediaCredentialsService {
             return { project };
         }
         throw Object.assign(new Error('Google media credentials are not configured'), { status: 401 });
+    }
+
+    /**
+     * Auth options for Google Cloud Storage: a service-account file or GOOGLE_SERVICE_ACCOUNT_JSON
+     * first (both carry a private key, required to mint v4 signed URLs), falling back to application
+     * default credentials with GOOGLE_CLOUD_PROJECT (signing then needs the IAM signBlob role on a
+     * metadata-attached service account, e.g. Cloud Run/GCE).
+     */
+    private resolveStorageOptions(): StorageOptions {
+        const keyFile = this.findServiceAccountPath();
+        if (keyFile) {
+            return { keyFilename: keyFile };
+        }
+
+        if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+            try {
+                let raw = typeof process.env.GOOGLE_SERVICE_ACCOUNT_JSON === 'string'
+                    ? process.env.GOOGLE_SERVICE_ACCOUNT_JSON.trim()
+                    : process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+                if (typeof raw === 'string') {
+                    if ((raw.startsWith("'") && raw.endsWith("'")) || (raw.startsWith('"') && raw.endsWith('"'))) {
+                        raw = raw.slice(1, -1);
+                    }
+                    raw = raw.replace(/\\\\\"/g, '"');
+                }
+                const credentials = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                if (credentials?.private_key) {
+                    credentials.private_key = credentials.private_key.replace(/\\n/g, '\n');
+                }
+                if (credentials?.project_id) {
+                    return { credentials, projectId: credentials.project_id };
+                }
+            } catch {
+                // Ignore parse errors; fall through to ADC below.
+            }
+        }
+
+        const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
+        return projectId ? { projectId } : {};
+    }
+
+    /** Google Cloud Storage client for reading the private texture-library bucket and minting signed URLs. */
+    createStorageClient(): Storage {
+        return new Storage(this.resolveStorageOptions());
     }
 
     async saveApiKey(apiKey: string): Promise<SaveCredentialsResponse> {
