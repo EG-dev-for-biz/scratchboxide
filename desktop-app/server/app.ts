@@ -485,15 +485,16 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
         // This checkout's outputs are swept into the store in the background (files already seen are not hashed
         // again), so what was built before the store existed outlives the checkout too.
         if (process.env.SCRATCHBOX_TEST !== '1' && process.env.SCRATCHBOX_ASSET_STORE_SWEEP !== '0') {
-            const publicRoot = possiblePublicRoots.find(root => fs.existsSync(root));
-            const buildRoot = [process.cwd(), path.resolve(process.cwd(), '..')].find(root => fs.existsSync(path.join(root, 'build'))) ?? process.cwd();
-            const sweeps: Array<[string, string]> = [
-                ...(publicRoot ? [[path.join(publicRoot, 'models'), '/models'] as [string, string]] : []),
-                [path.join(buildRoot, 'build', '3d-python'), '/build/3d-python'],
-                [path.join(buildRoot, 'build', 'generated-images'), '/build/generated-images']
-            ];
+            // every directory the mounts above serve (the server's cwd is desktop-app, whose public/ has no models)
+            const sweeps = new Map<string, string>();
+            for (const pRoot of possiblePublicRoots) sweeps.set(path.join(pRoot, 'models'), '/models');
+            for (const root of [process.cwd(), path.resolve(process.cwd(), '..')]) {
+                sweeps.set(path.resolve(root, 'build', '3d-python'), '/build/3d-python');
+                sweeps.set(path.resolve(root, 'build', 'generated-images'), '/build/generated-images');
+            }
             setTimeout(async () => {
                 for (const [dir, prefix] of sweeps) {
+                    if (!fs.existsSync(dir)) continue;
                     try {
                         // <checkout>/public/models and <checkout>/build/<x>: the checkout is two levels up
                         const r = await assetStore.backfill(dir, prefix, { origin: 'backfill', workspace: path.resolve(dir, '..', '..') });
