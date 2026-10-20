@@ -26,12 +26,14 @@ import { buildMassing, massingSpecText, type FaceSweepItem, type Massing, type O
 import { writeMassingClayGlb, writeMassingTexturedGlb, type FaceTexture, type TexelSource } from './massing-glb';
 import { readFaceOrtho, runMassing, type MassingNode, type MassingRun } from './native-massing';
 import { baseLegend, fillNearest, medianColour, SRC, textureFromOrtho } from './face-textures';
+import { facadeMaterialsEnabled } from '../facade-material-evidence';
 
 /** Below this share of its texels covered by the tile, a face is filled with one median colour. */
 export const LOW_COVERAGE = 0.35;
 import type { SolarRoofSegment } from './solar-roof';
 
-export const PIPELINE_E_VERSION = 'pipeline-e/v1';
+/** The stage version; the material channels (massing-materials.ts) change every E layer's textured twin. */
+export const PIPELINE_E_VERSION = `pipeline-e/v1${facadeMaterialsEnabled() ? '+mat1' : ''}`;
 
 /** SCRATCHBOX_STAGED_PIPELINE=e turns pipeline E on (off by default). */
 export function stagedPipelineE(env: NodeJS.ProcessEnv = process.env): boolean {

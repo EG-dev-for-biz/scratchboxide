@@ -13,6 +13,11 @@
  * pack the faces' textures, and the tile's own photos for the scanned residual). Every material of the twin carries a
  * confidence texture (R provenance index, G weight, B ladder rung, A produced), so the viewport keeps the photo material and
  * can shade texels by where they came from.
+ *
+ * With the material channels on (facadeMaterialsEnabled, massing-materials.ts), a page whose faces hold glass (the panes of
+ * E's openings, kept where their texels are darker than their wall) also gets a metallicRoughness texture (G roughness,
+ * B metalness) and the viewer's material parameters (extras.sbMaterial, the texture pass's contract: R glass weight, so
+ * the viewport's reflection probe and environment gate apply), with the material sources and per-opening decisions.
  */
 
 import { TEXTURE_LADDER_RUNGS } from '../../../../common/spatial/texture-pass-contracts';
@@ -20,7 +25,9 @@ import type { ProvenanceRecord, StagedNodeExtras } from '../../../../common/spat
 import { assembleGlb } from '../glb-bytes';
 import { encodePng } from '../png-encode';
 import { CONFIDENCE_CHANNELS, writeStagedGlb, type StagedGlbNode } from '../staged-glb-writer';
+import { facadeMaterialsEnabled } from '../facade-material-evidence';
 import type { MassingFace, MassingNode } from './native-massing';
+import { MASSING_MATERIAL_PARAMS_CHANNELS, massingMaterials, roughnessOfParams, type MassingMaterialResult } from './massing-materials';
 
 /** One face's texture: RGBA (A 255 = produced) and, per texel, an index into the legend (255 = none). */
 export interface FaceTexture { width: number; height: number; rgba: Uint8Array; source: Uint8Array }
@@ -29,13 +36,13 @@ export interface FaceTexture { width: number; height: number; rgba: Uint8Array; 
 /** A texel source of the provenance legend; an enhanced wall's own entry also carries its alignment numbers (reported, not gated). */
 export interface TexelSource { source: string; label: string; method: string; rung: number; weight: number; chamferPx?: number; lostShare?: number }
 
-export interface PackedPage { width: number; height: number; rgba: Uint8Array; conf: Uint8Array }
+export interface PackedPage { width: number; height: number; rgba: Uint8Array; conf: Uint8Array; /** Material parameters (massing-materials.ts), when any face on the page has them. */ params?: Uint8Array }
 export interface Packing { pages: PackedPage[]; place: Map<number, { page: number; x: number; y: number; scale: number }> }
 
 const GUTTER = 2;
 
 /** Shelf packing of the face textures into pages of at most `maxSide` (faces larger than a page are scaled down). */
-export function packFaces(textures: Map<number, FaceTexture>, legend: TexelSource[], maxSide = 4096): Packing {
+export function packFaces(textures: Map<number, FaceTexture>, legend: TexelSource[], maxSide = 4096, params?: Map<number, Uint8Array>): Packing {
     const items = [...textures.entries()].map(([face, t]) => {
         const scale = Math.min(1, (maxSide - 2 * GUTTER) / Math.max(t.width, t.height));
         return { face, t, scale, w: Math.max(1, Math.round(t.width * scale)), h: Math.max(1, Math.round(t.height * scale)) };
@@ -64,6 +71,8 @@ export function packFaces(textures: Map<number, FaceTexture>, legend: TexelSourc
     for (const it of items) {
         const pl = place.get(it.face)!;
         const page = pages[pl.page];
+        const fp = params?.get(it.face);
+        if (fp && !page.params) { page.params = new Uint8Array(page.width * page.height * 4); for (let i = 3; i < page.params.length; i += 4) page.params[i] = 255; }
         // nearest resample into place, the gutter repeating the edge texels
         for (let y = -GUTTER; y < it.h + GUTTER; y++) for (let x = -GUTTER; x < it.w + GUTTER; x++) {
             const sx = Math.min(it.t.width - 1, Math.max(0, Math.floor(((x + 0.5) / it.w) * it.t.width)));
@@ -77,6 +86,7 @@ export function packFaces(textures: Map<number, FaceTexture>, legend: TexelSourc
             const L = legend[src];
             if (L) { page.conf[di * 4] = src; page.conf[di * 4 + 1] = Math.round(255 * L.weight); page.conf[di * 4 + 2] = L.rung; page.conf[di * 4 + 3] = 255; }
             else { page.conf[di * 4 + 2] = TEXTURE_LADDER_RUNGS.length - 1; }
+            if (fp) page.params!.set(fp.subarray(si * 4, si * 4 + 4), di * 4);
         }
     }
     return { pages, place };
@@ -98,6 +108,8 @@ export interface MassingGlbInput {
     tileImages: Map<number, { bytes: Uint8Array; mimeType: string }>;
     /** The legend index the tile photo (residual) counts as. */
     tileLegendIndex: number;
+    /** Write the material channels (massing-materials.ts); default facadeMaterialsEnabled(). */
+    materials?: boolean;
 }
 
 function nodeExtras(input: MassingGlbInput, node: MassingNode, order: number, count: number): StagedNodeExtras {
@@ -117,8 +129,14 @@ export function writeMassingClayGlb(input: MassingGlbInput): Buffer {
 }
 
 /** The textured twin: same nodes and positions, TEXCOORD_0, page and tile-photo materials with confidence textures. */
-export function writeMassingTexturedGlb(input: MassingGlbInput): { glb: Buffer; packing: Packing; shares: number[] } {
-    const packing = packFaces(input.textures, input.legend);
+export function writeMassingTexturedGlb(input: MassingGlbInput): { glb: Buffer; packing: Packing; shares: number[]; materials?: MassingMaterialResult } {
+    const mat = (input.materials ?? facadeMaterialsEnabled()) ? massingMaterials({
+        nodes: input.nodes, faces: input.faces, textures: input.textures,
+        labelOf: n => input.provenanceOf(n).label, confidenceOf: n => input.provenanceOf(n).confidence ?? 0.5
+    }) : undefined;
+    // only faces that hold glass carry parameters (the rest would be the wall default everywhere)
+    const withGlass = mat ? new Map([...mat.params].filter(([f]) => mat.regions.some(r => r.face === f && r.accepted))) : undefined;
+    const packing = packFaces(input.textures, input.legend, 4096, withGlass?.size ? withGlass : undefined);
     const chunks: Buffer[] = [];
     let binLength = 0;
     const bufferViews: any[] = [], accessors: any[] = [], meshes: any[] = [], images: any[] = [], textures: any[] = [], materials: any[] = [];  // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -139,6 +157,26 @@ export function writeMassingTexturedGlb(input: MassingGlbInput): { glb: Buffer; 
     const pageMaterial: number[] = packing.pages.map((p, k) => {
         const albedo = addTexture(new Uint8Array(encodePng(p.width, p.height, Buffer.from(p.rgba), 4)), 'image/png', `page_${k}_albedo`);
         const conf = addTexture(new Uint8Array(encodePng(p.width, p.height, Buffer.from(p.conf), 4)), 'image/png', `page_${k}_confidence`);
+        if (p.params && mat) {
+            // glTF metallicRoughness: G roughness, B metalness (texture times factor 1)
+            const N = p.width * p.height, mr = new Uint8Array(N * 3);
+            for (let i = 0; i < N; i++) { mr[i * 3 + 1] = roughnessOfParams(p.params, i); mr[i * 3 + 2] = p.params[i * 4 + 2]; }
+            const mrTex = addTexture(new Uint8Array(encodePng(p.width, p.height, Buffer.from(mr), 3)), 'image/png', `page_${k}_metallic_roughness`);
+            const params = addTexture(new Uint8Array(encodePng(p.width, p.height, Buffer.from(p.params), 4)), 'image/png', `page_${k}_material`);
+            materials.push({
+                name: `MassingPage${k}`, doubleSided: true,
+                pbrMetallicRoughness: { baseColorTexture: { index: albedo, texCoord: 0 }, metallicFactor: 1, roughnessFactor: 1, metallicRoughnessTexture: { index: mrTex, texCoord: 0 } },
+                extras: {
+                    sbTexture: { confidenceTexture: conf, confidenceChannels: CONFIDENCE_CHANNELS },
+                    sbMaterial: {
+                        schema: 'scratchbox.staged-material/1', paramsTexture: params, paramsChannels: MASSING_MATERIAL_PARAMS_CHANNELS, provenanceIndices: [],
+                        materialSources: [...mat.sources.map(s => ({ ...s })), { source: 'pipeline-e-wall-default', label: 'assumed', method: 'every texel not read as glass: one masonry roughness (0.85), dielectric; not measured', roughness: 0.85, metalness: 0, texels: null }],
+                        summary: { totals: mat.totals }
+                    }
+                }
+            });
+            return materials.length - 1;
+        }
         materials.push({ name: `MassingPage${k}`, doubleSided: true, pbrMetallicRoughness: { baseColorTexture: { index: albedo, texCoord: 0 }, metallicFactor: 0, roughnessFactor: 0.85 }, extras: { sbTexture: { confidenceTexture: conf, confidenceChannels: CONFIDENCE_CHANNELS } } });
         return materials.length - 1;
     });
@@ -201,5 +239,5 @@ export function writeMassingTexturedGlb(input: MassingGlbInput): { glb: Buffer; 
         samplers: [{ magFilter: 9729, minFilter: 9987, wrapS: 33071, wrapT: 33071 }],
         accessors, bufferViews, buffers: [{ byteLength: binLength }]
     };
-    return { glb: assembleGlb(json, new Uint8Array(Buffer.concat(chunks))), packing, shares: texelCount.map(c => c / total) };
+    return { glb: assembleGlb(json, new Uint8Array(Buffer.concat(chunks))), packing, shares: texelCount.map(c => c / total), ...(mat ? { materials: mat } : {}) };
 }

@@ -148,6 +148,37 @@ describe('facade material reading: glass', () => {
         expect(r.provenanceIndices).toEqual([c.provenanceIndex]);
     });
 
+    it('end to end: the reading written into the twin gives glass texels low roughness and masonry texels the wall value', async () => {
+        const { writeStagedGlb, writeTexturedTwinGlb } = await import('../src/node/3d-engine/staged-location/staged-glb-writer');
+        const { buildUvAtlas } = await import('../src/node/3d-engine/staged-location/texture-uv');
+        const { materialParamsImage, WALL_ROUGHNESS } = await import('../src/node/3d-engine/staged-location/facade-materials');
+        const { parseGlb } = await import('./helpers/clay-glb-render');
+        const { decodePng } = await import('./helpers/png-decode');
+        const clay = writeStagedGlb([{ name: 'wall', positions: new Float32Array([0, 0, 0, 4, 0, 0, 4, 4, 0, 0, 0, 0, 4, 4, 0, 0, 4, 0]) }]);
+        const atlas = await buildUvAtlas({ layerKey: 'l2', clayGlb: clay, densityTexelsPerMeter: 10, maxSide: 256, islandNormalToleranceDeg: 30, surfaces: [] });
+        const win = (x: number, y: number) => x > 1.5 && x < 2.5 && y > 1.5 && y < 3;
+        const vs = [view('panoA', [1, 2, 8], 500, 480, 480, () => 128), view('panoB', [3, 2, 8], 500, 480, 480, () => 128), view('panoC', [2, 2, 9], 500, 480, 480, () => 128)];
+        const planes = photoPlanes(atlas, win);
+        const r = readFacadeMaterials({ atlas, planes, views: vs, evidence: evidence(vs.map((v, k) => viewMask(v, k, win))), delit: false });
+        expect(r.record.totals.accepted).toBeGreaterThan(0);
+        const { glb } = writeTexturedTwinGlb({ clayGlb: clay, atlas, planes: r.planes, roughness: r.roughness, metalness: r.metalness, material: { params: materialParamsImage(r), photoAlbedo: r.photoAlbedo, provenanceIndices: r.provenanceIndices } });
+        const { json, bin } = parseGlb(glb);
+        const mat = json.materials[json.materials.length - 1];
+        const imageOf = (tex: number) => { const im = json.images[json.textures[tex].source]; const v = json.bufferViews[im.bufferView]; return decodePng(bin.subarray(v.byteOffset ?? 0, (v.byteOffset ?? 0) + v.byteLength)); };
+        const mr = imageOf(mat.pbrMetallicRoughness.metallicRoughnessTexture.index), pr = imageOf(mat.extras.sbMaterial.paramsTexture);
+        let glassN = 0, wallN = 0;
+        for (let i = 0; i < atlas.width * atlas.height; i++) {
+            if (!atlas.texels.covered[i] || atlas.texels.gutter[i]) continue;
+            const x = atlas.texels.position[i * 3], y = atlas.texels.position[i * 3 + 1];
+            const g = mr.pixels[i * mr.channels + 1], b = mr.pixels[i * mr.channels + 2], w = pr.pixels[i * pr.channels];
+            if (r.glass[i]) { glassN++; expect(win(x, y)).toBe(true); expect(g).toBeLessThanOrEqual(Math.round(GLASS_ROUGHNESS * 255) + 1); expect(w).toBeGreaterThan(0); }
+            else if (!win(x, y)) { wallN++; expect(g).toBe(Math.round(WALL_ROUGHNESS * 255)); expect(w).toBe(0); }
+            expect(b).toBe(0); // dielectric everywhere
+        }
+        expect(glassN).toBeGreaterThan(20);
+        expect(wallN).toBeGreaterThan(200);
+    }, 300_000);
+
     it('rejects a window only one pano marks, and leaves the photo', () => {
         const planes = photoPlanes(atlas, inWin);
         const ev = evidence([viewMask(views[0], 0, inWin), viewMask(views[1], 1, () => false)]);
