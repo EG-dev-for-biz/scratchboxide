@@ -1277,8 +1277,8 @@ const server = http.createServer((req, res) => {
                 try {
                     const { NativePythonRunnerService } = require('../packages/core/dist/node/3d-engine/native-python-runner-service');
                     const pythonExe = path.resolve(__dirname, '../.venv/bin/python');
-                    const moduleDir = path.resolve(__dirname, '../packages/core/src/native/3d-engine/scratchbox');
-                    runner = new NativePythonRunnerService(pythonExe, moduleDir);
+                    // The runner puts packages/core/src/python (the sb package) and the native build dir on PYTHONPATH itself.
+                    runner = new NativePythonRunnerService(pythonExe);
                 } catch (loadErr) {
                     throw new Error('NativePythonRunnerService failed to load: ' + loadErr.message);
                 }
