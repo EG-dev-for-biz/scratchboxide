@@ -818,6 +818,25 @@ export interface TreesGlbRootExtras {
     };
     /** Present when the trees were textured from the tree texture library (their sbTree.texture names the entries). */
     textures?: { schema: string; index: string; woodUv: string; chosenBy: string };
+    /** Present when some trees draw their mid level as crown cards (TreeCrownCardsExtras). */
+    crownCards?: TreeCrownCardsExtras;
+}
+
+/**
+ * The crown cards' atlas (scratchbox.crown-cards/1): a tree's mid level may be large cards over its crown, each a quad
+ * (library mesh `meshes[k]`, atlas cell k, TEXCOORD_0 = ((col + s) / cols, (row + t) / rows)) showing a spray of leaves.
+ * `cells[k]` lists cell k's leaves as [u, v, angle, length, pick]: an ellipse centred (u, v) in the cell's [0, 1]^2, its
+ * long axis at `angle` (rad from +s), `length` long and length x `clayLeafAspect` wide in clay; textured, the leaf cell's
+ * image drawn along the same axis at the clay ellipse's area; `pick` in [0, 1) chooses the image and shade. Drawn in order.
+ */
+export interface TreeCrownCardsExtras {
+    schema: 'scratchbox.crown-cards/1';
+    meshes: string[];
+    cols: number;
+    rows: number;
+    clayLeafAspect: number;
+    leaf: string;
+    cells: Array<Array<[number, number, number, number, number]>>;
 }
 
 // =============================================================================
@@ -1826,7 +1845,12 @@ const DEFINITIONS = {
             }),
             leafCard: obj(['widthRatio', 'uv', 'leafAttribute'], { widthRatio: { type: 'number', exclusiveMinimum: 0 }, uv: STR, leafAttribute: STR })
         }),
-        textures: obj(['schema', 'index', 'woodUv', 'chosenBy'], { schema: STR, index: STR, woodUv: STR, chosenBy: STR })
+        textures: obj(['schema', 'index', 'woodUv', 'chosenBy'], { schema: STR, index: STR, woodUv: STR, chosenBy: STR }),
+        crownCards: obj(['schema', 'meshes', 'cols', 'rows', 'clayLeafAspect', 'leaf', 'cells'], {
+            schema: { const: 'scratchbox.crown-cards/1' }, meshes: arr({ type: 'string', minLength: 1 }, { minItems: 1 }),
+            cols: { type: 'integer', minimum: 1 }, rows: { type: 'integer', minimum: 1 }, clayLeafAspect: { type: 'number', exclusiveMinimum: 0 }, leaf: STR,
+            cells: arr(arr(arr(NUM, { minItems: 5, maxItems: 5 })), { minItems: 1 })
+        })
     }),
     vertexProvenance: obj(['schema', 'attributes', 'vertices'], {
         schema: { const: 'scratchbox.vertex-provenance/1' }, attributes: arr(STR), vertices: NONNEG_INT,

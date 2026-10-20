@@ -52,9 +52,15 @@ function disposeMaterial(mat: THREE.Material | THREE.Material[] | null | undefin
 export function disposeObject3DDeep(root: THREE.Object3D | null | undefined): void {
     if (!root) return;
     const seen = new Set<object>();
-    // the model's own reflection probe (the facade material reading's glass): owned by this model, not the scene
-    const own = root.userData?.sbFacadeEnv as THREE.Texture | undefined;
-    if (own?.isTexture) { own.dispose(); delete root.userData.sbFacadeEnv; }
+    // the model's own reflection probes (the facade material reading's glass, the place reflections): owned by this model,
+    // not the scene; a probe's texture belongs to a render target (reflectionProbe.ts), freed with it
+    for (const key of ['sbFacadeEnv', 'sbPlaceEnv']) {
+        const own = root.userData?.[key] as THREE.Texture | undefined;
+        if (!own?.isTexture) continue;
+        const target = own.userData?.sbProbeTarget as THREE.WebGLRenderTarget | undefined;
+        if (target) target.dispose(); else own.dispose();
+        delete root.userData[key];
+    }
     root.traverse(obj => {
         const mesh = obj as THREE.Mesh;
         if (mesh.geometry && !seen.has(mesh.geometry) && typeof mesh.geometry.dispose === 'function') {

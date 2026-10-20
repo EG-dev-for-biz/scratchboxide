@@ -9,13 +9,19 @@
 
 
 import * as THREE from 'three';
-import type { TreeLodExtras, TreeNodeExtras, TreesGlbRootExtras } from '../../../../../common/spatial/staged-location-contracts';
+import type { TreeCrownCardsExtras, TreeLodExtras, TreeNodeExtras, TreesGlbRootExtras } from '../../../../../common/spatial/staged-location-contracts';
 import {
-    DEFAULT_LEAF_STRETCH, MAX_LEAF_CELLS, validateTreeTextureIndex, type TreeBarkTextureEntry, type TreeLeafTextureEntry, type TreeTextureIndex
+    DEFAULT_TREE_TEXTURE_OPTIONS, MAX_LEAF_CELLS, validateTreeTextureIndex, type TreeBarkTextureEntry, type TreeLeafTextureEntry, type TreeTextureIndex, type TreeTextureOptions
 } from '../../../../../common/spatial/tree-texture-library';
+import { texturedLeafPaint, type AtlasPixels } from '../../../../../common/spatial/tree-crown-card-atlas';
 import { setTreeLodTexturedMaterial } from '../clayRenderMode';
 import { setPerMeshAttribute } from './treeCrownShading';
 import { crownSlotOf } from './treeLodMath';
+import { CARD_ALPHA_MIP, CROWN_CARD_ATLAS_PX, CROWN_CARD_MIP_SCALE, bakeCrownCardAtlas, clayLeafPaint, crownCardTexture, crownCardsOf, markCrownCardShader } from './treeCrownCards';
+
+// shared with the photo-match evaluator's software renderer (common): the options' defaults, the card painter, the atlas pixels
+export { DEFAULT_TREE_TEXTURE_OPTIONS, type LeafSlotFactors, type TreeTextureOptions } from '../../../../../common/spatial/tree-texture-library';
+export { texturedLeafPaint, type AtlasPixels } from '../../../../../common/spatial/tree-crown-card-atlas';
 
 /**
  * Textured mode for the staged trees: the surfaces of the tree texture library (assets/textures/trees, index.json) on the
@@ -28,6 +34,9 @@ import { crownSlotOf } from './treeLodMath';
  *   fragment stage cuts the leaf out with alpha to coverage. The colour is tinted to the tree's measured crown colour (a
  *   per-mesh attribute, the tint the writer chose) with a small variation per leaf and per cluster, and a cheap backlight
  *   term lets sunlight through thin leaves seen against it. Stalks and sub-shoots are opaque and tinted.
+ * - Crown cards (the mid level's cut-out cards, treeCrownCards.ts): a card atlas baked from the chosen leaf set's cells by
+ *   the GLB's card layout (each leaf its pick's image, at the clay leaf's area), tinted like the leaves, varied per card,
+ *   with the leaves' sunlight-through term; the clay mask stands in until the leaf atlas has loaded.
  * - The far level's leaf masses: the measured crown colour (the writer's massColourLinear) with gentle noise.
  * - Wood and twigs: the chosen bark's maps, in UVs the writer laid out in the bark's real-world tiles, tinted lightly.
  *
@@ -43,37 +52,6 @@ export const TREE_TEXTURE_BASE_URL = '/assets/textures/trees/';
 export const TREE_TINT_ATTRIBUTE = 'sbTreeTint';
 /** Per-mesh attribute of a leaf mesh: x the card zoom, y the alpha gain of its level's detail slot (TreeTextureOptions). */
 export const TREE_CARD_ATTRIBUTE = 'sbTreeCard';
-
-/** A factor per detail slot: near, near-mid, mid, far (crownSlotOf). */
-export type LeafSlotFactors = [number, number, number, number];
-
-export interface TreeTextureOptions {
-    /** Variation of a leaf's colour around the tree's tint (0 none). */
-    leafVariation: number;
-    /** Strength of the sunlight seen through a leaf lit from behind. */
-    translucency: number;
-    /** Amplitude of the far masses' colour noise. */
-    massNoise: number;
-    /** How much wider than its atlas aspect a narrow leaf may be drawn (tree-texture-library.ts DEFAULT_LEAF_STRETCH). */
-    leafStretch: number;
-    /** How much a leaf's alpha is raised per mip level of the opacity map it samples (keeps distant leaves from eroding). */
-    alphaMipScale: number;
-    /** Longest side of a leaf atlas on the GPU (the library's files are 2K; 1K keeps a leaf a few hundred texels long). */
-    leafAtlasPx: number;
-    /**
-     * Card zoom per detail slot: the leaf image drawn this many times larger on its card, about the card's centre (the card
-     * crops it). A cut-out leaf covers only part of its card (its cell's fill, 0.6-0.7), and the coarser levels' cards are
-     * larger and coarser (a kite at the mid level), so from the mid distances a textured crown read thinner than a clay
-     * one of the same cards; zooming the leaf in fills more of each card there, where a single leaf's outline is a few
-     * pixels. 1 draws the leaf as it is (the near level).
-     */
-    cardZoom: LeafSlotFactors;
-    /** Alpha gain per detail slot: the leaf's alpha (after the mip lift) times this, so its soft rim stays in the cut at a distance. */
-    alphaGain: LeafSlotFactors;
-}
-
-export const DEFAULT_TREE_TEXTURE_OPTIONS: Readonly<TreeTextureOptions> = Object.freeze({ leafVariation: 0.18, translucency: 0.45, massNoise: 0.16, leafStretch: DEFAULT_LEAF_STRETCH, alphaMipScale: 0.4, leafAtlasPx: 1024,
-    cardZoom: [1, 1.15, 1.3, 1.3] as LeafSlotFactors, alphaGain: [1, 1.1, 1.25, 1.25] as LeafSlotFactors });
 
 export const LEAF_VERTEX_PARS = `
 attribute vec2 _leaf;
@@ -219,7 +197,11 @@ const replaceOrThrow = (src: string, find: string, add: string, what: string): s
  * a bark costs fewer GPU textures: `alphaUrl` (a leaf's opacity into the alpha of its colour), `aoUrl` (a bark's ambient
  * occlusion into R beside its roughness in G, three's ORM layout). `maxPx`: the longest side uploaded.
  */
-export interface TextureRequest { url: string; colour: boolean; alphaUrl?: string; aoUrl?: string; maxPx?: number }
+export interface TextureRequest {
+    url: string; colour: boolean; alphaUrl?: string; aoUrl?: string; maxPx?: number;
+    /** Called once a packed texture's pixels are in (RGBA, row 0 at v = 0), e.g. to bake the crown cards from a leaf atlas. */
+    onReady?: (pixels: AtlasPixels) => void;
+}
 export type TextureLoad = (req: TextureRequest) => THREE.Texture;
 
 const loadImage = (url: string): Promise<HTMLImageElement> => new Promise((resolve, reject) => {
@@ -271,6 +253,7 @@ export const defaultTextureLoad: TextureLoad = (() => {
             }
             tex.image = { data: out, width: w, height: h } as unknown as typeof tex.image;
             tex.needsUpdate = true;
+            req.onReady?.({ data: out, width: w, height: h });
         }).catch(err => console.warn('[tree textures]', (err as Error).message));
         return tex;
     };
@@ -279,11 +262,19 @@ export const defaultTextureLoad: TextureLoad = (() => {
 /** A tree surface material of the library: what kind of surface it is, for diagnostics. */
 export type TreeSurface = 'leaves' | 'bark' | 'masses' | (string & {});
 
-function leafMaterial(e: TreeLeafTextureEntry, url: (f: string) => string, load: TextureLoad, o: TreeTextureOptions): THREE.MeshStandardMaterial {
+/** A leaf atlas's pixels once loaded: the bakes waiting for them run then (or at once when they are in). */
+class AtlasReady {
+    pixels: AtlasPixels | undefined;
+    private readonly waiters: Array<(p: AtlasPixels) => void> = [];
+    set(p: AtlasPixels): void { this.pixels = p; for (const w of this.waiters.splice(0)) w(p); }
+    then(fn: (p: AtlasPixels) => void): void { if (this.pixels) fn(this.pixels); else this.waiters.push(fn); }
+}
+
+function leafMaterial(e: TreeLeafTextureEntry, url: (f: string) => string, load: TextureLoad, o: TreeTextureOptions, ready: AtlasReady): THREE.MeshStandardMaterial {
     // colour with the opacity in its alpha (one texture), and the normal map; a leaf's roughness is near constant, so it
     // is a number, not a texture
     const mat = new THREE.MeshStandardMaterial({
-        map: load({ url: url(e.maps.color), colour: true, alphaUrl: url(e.maps.opacity), maxPx: o.leafAtlasPx }),
+        map: load({ url: url(e.maps.color), colour: true, alphaUrl: url(e.maps.opacity), maxPx: o.leafAtlasPx, onReady: p => ready.set(p) }),
         normalMap: e.maps.normal ? load({ url: url(e.maps.normal), colour: false }) : null,
         roughness: 0.6, metalness: 0, side: THREE.DoubleSide, alphaTest: 0.5, alphaToCoverage: true
     });
@@ -312,6 +303,64 @@ function leafMaterial(e: TreeLeafTextureEntry, url: (f: string) => string, load:
         f = replaceOrThrow(f, '#include <map_fragment>', LEAF_FRAGMENT_COLOR, 'leaf fragment');
         f = replaceOrThrow(f, '#include <alphamap_fragment>', LEAF_FRAGMENT_ALPHA, 'leaf fragment');
         f = replaceOrThrow(f, '#include <lights_fragment_end>', LEAF_FRAGMENT_TRANSLUCENCY, 'leaf fragment');
+        shader.fragmentShader = f;
+    };
+    return mat;
+}
+
+export const CARD_VERTEX_PARS = `
+attribute vec4 ${TREE_TINT_ATTRIBUTE};
+uniform float uSbLeafVariation;
+varying vec3 vSbTint;
+`;
+/** After uv_vertex: the tree's tint, varied per card (the instance's place). */
+export const CARD_VERTEX_MAIN = `
+{
+    float sbJ = 0.5;
+#ifdef USE_INSTANCING
+    sbJ = fract( sin( dot( floor( instanceMatrix[ 3 ].xyz * 64.0 ), vec3( 12.9898, 78.233, 37.719 ) ) ) * 43758.5453 );
+#endif
+    vSbTint = ${TREE_TINT_ATTRIBUTE}.rgb * ( 1.0 + uSbLeafVariation * ( sbJ - 0.5 ) );
+}
+`;
+export const CARD_FRAGMENT_PARS = `
+uniform float uSbTranslucency;
+uniform float uSbCardMipScale;
+varying vec3 vSbTint;
+`;
+/** After lights_fragment_end: sunlight through the leaves of a card lit from behind (as the leaves' term). */
+export const CARD_FRAGMENT_TRANSLUCENCY = `
+#if NUM_DIR_LIGHTS > 0
+{
+    float sbBack = max( 0.0, dot( - normal, directionalLights[ 0 ].direction ) );
+    reflectedLight.directDiffuse += diffuseColor.rgb * directionalLights[ 0 ].color * ( sbBack * uSbTranslucency );
+}
+#endif
+`;
+
+function crownCardMaterial(e: TreeLeafTextureEntry, cards: TreeCrownCardsExtras, ready: AtlasReady, o: TreeTextureOptions): THREE.MeshStandardMaterial {
+    // until the leaf atlas is in, the clay cut-out in the leaf set's mean colour
+    const mean = e.colour.meanLinearRgb.map(c => Math.round(255 * Math.pow(Math.min(1, Math.max(0, c)), 1 / 2.2)));
+    const placeholder = bakeCrownCardAtlas(cards, CROWN_CARD_ATLAS_PX, clayLeafPaint(cards));
+    for (let i = 0; i < placeholder.length; i += 4) { placeholder[i] = mean[0]; placeholder[i + 1] = mean[1]; placeholder[i + 2] = mean[2]; }
+    const map = crownCardTexture(placeholder, CROWN_CARD_ATLAS_PX, true);
+    ready.then(px => {
+        map.image = { data: bakeCrownCardAtlas(cards, CROWN_CARD_ATLAS_PX, texturedLeafPaint(e, px, cards.clayLeafAspect)), width: CROWN_CARD_ATLAS_PX, height: CROWN_CARD_ATLAS_PX } as unknown as typeof map.image;
+        map.needsUpdate = true;
+    });
+    const mat = new THREE.MeshStandardMaterial({ map, roughness: 0.6, metalness: 0, side: THREE.DoubleSide, alphaTest: 0.5, alphaToCoverage: false });
+    const uniforms = { uSbLeafVariation: { value: o.leafVariation }, uSbTranslucency: { value: o.translucency }, uSbCardMipScale: { value: CROWN_CARD_MIP_SCALE } };
+    mat.name = `sb-tree-crown-cards-${e.id}`;
+    mat.userData = { sbTreeSurface: 'crown-cards' as TreeSurface, sbTreeTextureEntry: e.id, sbTreeUniforms: uniforms };
+    mat.customProgramCacheKey = () => 'sbTreeCrownCards/1';
+    mat.onBeforeCompile = shader => {
+        Object.assign(shader.uniforms, uniforms);
+        markCrownCardShader(shader);
+        shader.vertexShader = replaceOrThrow(replaceOrThrow(shader.vertexShader, '#include <common>', CARD_VERTEX_PARS, 'card vertex'), '#include <uv_vertex>', CARD_VERTEX_MAIN, 'card vertex');
+        let f = replaceOrThrow(shader.fragmentShader, '#include <common>', CARD_FRAGMENT_PARS, 'card fragment');
+        f = replaceOrThrow(f, '#include <map_fragment>', 'diffuseColor.rgb *= vSbTint;', 'card fragment');
+        f = replaceOrThrow(f, '#include <alphamap_fragment>', CARD_ALPHA_MIP, 'card fragment');
+        f = replaceOrThrow(f, '#include <lights_fragment_end>', CARD_FRAGMENT_TRANSLUCENCY, 'card fragment');
         shader.fragmentShader = f;
     };
     return mat;
@@ -349,6 +398,8 @@ function barkMaterial(e: TreeBarkTextureEntry, url: (f: string) => string, load:
 /** The library's materials: one per entry, built once, textures shared. */
 export class TreeTextureLibrary {
     private readonly leaves = new Map<string, THREE.MeshStandardMaterial>();
+    private readonly atlases = new Map<string, AtlasReady>();
+    private readonly cards = new Map<string, THREE.MeshStandardMaterial>();
     private readonly bark = new Map<string, THREE.MeshStandardMaterial>();
     readonly masses: THREE.MeshStandardMaterial;
     readonly options: TreeTextureOptions;
@@ -368,8 +419,25 @@ export class TreeTextureLibrary {
         if (!m) {
             const e = this.index.leaves.find(x => x.id === id);
             if (!e) return undefined;
-            this.leaves.set(id, m = leafMaterial(e, this.url, this.load, this.options));
+            this.leaves.set(id, m = leafMaterial(e, this.url, this.load, this.options, this.atlasOf(id)));
         }
+        return m;
+    }
+
+    private atlasOf(id: string): AtlasReady {
+        let a = this.atlases.get(id);
+        if (!a) this.atlases.set(id, a = new AtlasReady());
+        return a;
+    }
+
+    /** The crown-card material of a leaf entry for a card layout (its atlas baked once the entry's leaf atlas has loaded). */
+    crownCardMaterial(id: string, cards: TreeCrownCardsExtras): THREE.MeshStandardMaterial | undefined {
+        const e = this.index.leaves.find(x => x.id === id);
+        if (!e) return undefined;
+        this.leafMaterial(id);                          // loads the leaf atlas the cards are baked from
+        const key = `${id}|${JSON.stringify([cards.cols, cards.rows, cards.clayLeafAspect, cards.cells])}`;
+        let m = this.cards.get(key);
+        if (!m) this.cards.set(key, m = crownCardMaterial(e, cards, this.atlasOf(id), this.options));
         return m;
     }
 
@@ -403,6 +471,8 @@ export interface TreeTextureStats {
     woodMeshes: number;
     twigMeshes: number;
     massMeshes: number;
+    /** Crown-card meshes (the mid level's cut-out cards) dressed in their leaf set's card atlas. */
+    cardMeshes: number;
     /** Trees whose extras name an entry the library does not hold (they keep the loader's material). */
     unknownEntries: number;
 }
@@ -453,7 +523,7 @@ function clusterOf(m: THREE.Object3D): string | undefined {
  * library) keep the loader's material. Returns what it dressed.
  */
 export function applyTreeTextures(root: THREE.Object3D, lib: TreeTextureLibrary): TreeTextureStats {
-    const stats: TreeTextureStats = { trees: 0, leafMeshes: 0, woodMeshes: 0, twigMeshes: 0, massMeshes: 0, unknownEntries: 0 };
+    const stats: TreeTextureStats = { trees: 0, leafMeshes: 0, woodMeshes: 0, twigMeshes: 0, massMeshes: 0, cardMeshes: 0, unknownEntries: 0 };
     let rootExtras: TreesGlbRootExtras | undefined;
     root.traverseAncestors(a => { rootExtras ??= a.userData?.sbTrees as TreesGlbRootExtras | undefined; });
     rootExtras ??= root.userData?.sbTrees as TreesGlbRootExtras | undefined;
@@ -461,6 +531,8 @@ export function applyTreeTextures(root: THREE.Object3D, lib: TreeTextureLibrary)
     const cardWidth = rootExtras?.clusterLibrary?.leafCard?.widthRatio;
     if (!rootExtras?.textures || !(typeof cardWidth === 'number' && cardWidth > 0)) return stats;
     const leafVariants = new Set((rootExtras.clusterLibrary.variants ?? []).filter(v => v.leavesLevel0 > 0 || (v.leavesNearMid ?? 0) > 0 || v.leavesLevel1 > 0).map(v => v.mesh));
+    const cards = crownCardsOf(rootExtras);
+    const cardMeshes = new Set(cards?.meshes ?? []);
     const trees: THREE.Object3D[] = [];
     root.traverse(o => { if ((o.userData as { sbTree?: TreeNodeExtras }).sbTree?.texture) trees.push(o); });
     for (const node of trees) {
@@ -477,6 +549,14 @@ export function applyTreeTextures(root: THREE.Object3D, lib: TreeTextureLibrary)
             m.userData.sbTreeLoaderMaterial ??= (m.userData.sbClayOriginalMaterial ?? m.userData.sbLodBase ?? m.material) as THREE.Material;
             if ((m as THREE.InstancedMesh).isInstancedMesh) {
                 const cluster = clusterOf(m);
+                if (cards && cluster && cardMeshes.has(cluster)) {
+                    const mat = hasUv ? lib.crownCardMaterial(tex.leaves.entry, cards) : undefined;
+                    if (!mat) return;
+                    setPerMeshAttribute(m, 'sbTreeTint', [...tex.leaves.tint, 1]);
+                    setTreeLodTexturedMaterial(m, mat);
+                    stats.cardMeshes++;
+                    return;
+                }
                 if (cluster && leafVariants.has(cluster)) {
                     if (!hasUv || !g.getAttribute('_leaf')) return;
                     setPerMeshAttribute(m, 'sbTreeTint', [...tex.leaves.tint, cardWidth]);

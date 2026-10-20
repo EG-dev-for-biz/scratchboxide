@@ -18,9 +18,11 @@ import { kelvinToRGB } from './kelvin';
 import {
     computeDiurnalLightingProfile,
     getDiurnalLightingState,
+    skyLightColorHex,
     getPresetLightingState
 } from './diurnal-lighting';
 import { getSunVectorFromAngles } from './solar-position';
+import { buildPhysicalSkyLut } from './physical-sky';
 import { cloudShellUniformArrays, cloudShellWindSpeeds, MAX_CLOUD_SHELL_LAYERS, resolveCloudShellLayers } from './cloud-shell-layers';
 import { MissingInputError } from '../../../../common/errors/pipeline-errors';
 
@@ -54,6 +56,12 @@ uniform float uCloudCoverage;
 uniform float uCloudDensity;
 uniform float uCloudAltitude;
 uniform float uTime;
+
+// Physical sky (physical-sky.ts): radiance over (azimuth from the sun / pi, sqrt(elevation / 90°)), scaled so its
+// light on a level surface equals the scene's sky light. uPhysicalSkyWeight fades to the night palette below -6°.
+uniform sampler2D uSkyLut;
+uniform float uSkyScale;
+uniform float uPhysicalSkyWeight;
 
 // Shell cloud decks (CloudShellLayer), highest first. A: base, thickness, coverage, optical depth.
 // B: feature size, elongation, heading (rad), HG g. C: albedo rgb, shell count.
@@ -303,6 +311,15 @@ vec3 compositeCloudShells(vec3 sky, vec3 rayDir, float cosViewSun, vec3 ambient)
     return sky;
 }
 
+vec3 physicalSkyRadiance(vec3 dir) {
+    vec2 flatSun = uSunDirection.xz;
+    vec2 flatDir = dir.xz;
+    float relAz = (length(flatSun) > 1e-4 && length(flatDir) > 1e-4) ? acos(clamp(dot(normalize(flatSun), normalize(flatDir)), -1.0, 1.0)) : 1.5707963;
+    float el = asin(clamp(dir.y, 0.0, 1.0));
+    vec2 uv = vec2(relAz / 3.14159265, sqrt(el / 1.5707963));
+    return texture2D(uSkyLut, uv).rgb * uSkyScale;
+}
+
 void main() {
     vec3 rayDir = normalize(vWorldPosition);
     float cosViewSun = dot(rayDir, uSunDirection);
@@ -347,10 +364,23 @@ void main() {
 
     // Soft vertical sky gradient
     float skyGradient = pow(1.0 - max(0.0, upFactor), 2.2);
+    // The palette was authored as display colours (the dome used to skip tone mapping); convert to scene-referred
+    // values that display the same through ACES: sRGB to linear, over ACES's slope near black (~0.172).
+    zenithColor = pow(max(zenithColor, 0.0), vec3(2.2)) / 0.172;
+    horizonColor = pow(max(horizonColor, 0.0), vec3(2.2)) / 0.172;
     vec3 skyColor = mix(zenithColor, horizonColor, skyGradient);
 
-    // Low-sun directional horizon glow
-    if (sunH > -0.05 && sunH < 0.28) {
+    // Physical sky: replaces the palette (and its zenith/horizon colours, which light the clouds) while the sun is
+    // within 6° below the horizon; deeper night keeps the palette.
+    if (uPhysicalSkyWeight > 0.0) {
+        vec3 side = normalize(vec3(-uSunDirection.z, 0.0, uSunDirection.x) + vec3(1e-4, 0.0, 0.0));
+        zenithColor = mix(zenithColor, physicalSkyRadiance(vec3(0.0, 1.0, 0.0)), uPhysicalSkyWeight);
+        horizonColor = mix(horizonColor, physicalSkyRadiance(normalize(side + vec3(0.0, 0.05, 0.0))), uPhysicalSkyWeight);
+        skyColor = mix(skyColor, physicalSkyRadiance(rayDir), uPhysicalSkyWeight);
+    }
+
+    // Low-sun directional horizon glow (the physical sky has its own)
+    if (uPhysicalSkyWeight < 1.0 && sunH > -0.05 && sunH < 0.28) {
         float sunGlow = pow(max(0.0, cosViewSun), 6.0) * pow(1.0 - max(0.0, upFactor), 2.0);
         skyColor += uSunColor * sunGlow * 0.4;
     }
@@ -368,7 +398,9 @@ void main() {
         float softGlare = pow(max(0.0, cosViewSun), 128.0) * 1.2 + pow(max(0.0, cosViewSun), 16.0) * 0.25;
 
         vec3 directSunRadiance = uSunColor * uSunIntensity * sunVisibility;
-        vec3 physicalSun = (sunDisc * 12.0 + softGlare + miePhase * uMieCoefficient * 25.0) * directSunRadiance;
+        // The physical sky already holds the aureole; the palette sky draws its own glare.
+        float glare = (softGlare + miePhase * uMieCoefficient * 25.0) * (1.0 - uPhysicalSkyWeight);
+        vec3 physicalSun = (sunDisc * 12.0 + glare) * directSunRadiance;
 
         skyColor += physicalSun;
     }
@@ -494,6 +526,9 @@ void main() {
     }
 
     gl_FragColor = vec4(skyColor, 1.0);
+    // Scene-referred like every other material: the renderer's tone mapping and output colour space apply here too.
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
 }
 `;
 
@@ -567,7 +602,8 @@ export function createAtmosphericSkyDome(
         ? config.sunAzimuth
         : (isSunset ? 260.0 : (timedSun ? timedSun.sunAzimuth : 180.0));
 
-    const beamOptions = { turbidity: config.turbidity };
+    // The lighting assumes the same cloud cover the dome draws.
+    const beamOptions = { turbidity: config.turbidity, cloudCoverage: config.cloudCoverage ?? (config.volumetricClouds === true ? 0.35 : 0) };
     let diurnalProfile = timedSun ?? computeDiurnalLightingProfile(initialElev, beamOptions);
     let sunDirection = getSunVectorFromAngles(initialElev, initialAzim);
     const effectiveSunColor = directSunColor(diurnalProfile, config, isSunset);
@@ -600,7 +636,38 @@ export function createAtmosphericSkyDome(
 
         uIsNight: { value: diurnalProfile.isNight },
         uIsGoldenHour: { value: diurnalProfile.isGoldenHour || isSunset },
-        uIsTwilight: { value: diurnalProfile.isTwilight }
+        uIsTwilight: { value: diurnalProfile.isTwilight },
+
+        uSkyLut: { value: null as THREE.DataTexture | null },
+        uSkyScale: { value: 0 },
+        uPhysicalSkyWeight: { value: 0 }
+    };
+
+    // The physical sky for the current sun, scaled so the dome lights a level surface as the scene's sky light does.
+    let skyLutTexture: THREE.DataTexture | undefined;
+    const applyPhysicalSky = (elevDeg: number) => {
+        const weight = THREE.MathUtils.smoothstep(elevDeg, -10, -6);
+        uniforms.uPhysicalSkyWeight.value = weight;
+        if (weight <= 0) return;
+        const lut = buildPhysicalSkyLut({ sunElevationDeg: elevDeg, turbidity: config.turbidity ?? diurnalProfile.turbidity ?? 2 });
+        const W = lut.azimuthResolution, H = lut.elevationResolution;
+        const rgba = new Float32Array(W * H * 4);
+        for (let i = 0; i < W * H; i++) { rgba[i * 4] = lut.data[i * 3]; rgba[i * 4 + 1] = lut.data[i * 3 + 1]; rgba[i * 4 + 2] = lut.data[i * 3 + 2]; rgba[i * 4 + 3] = 1; }
+        if (!skyLutTexture || skyLutTexture.image.width !== W || skyLutTexture.image.height !== H) {
+            skyLutTexture?.dispose();
+            skyLutTexture = new THREE.DataTexture(rgba, W, H, THREE.RGBAFormat, THREE.FloatType);
+            skyLutTexture.magFilter = THREE.LinearFilter;
+            skyLutTexture.minFilter = THREE.LinearFilter;
+            skyLutTexture.wrapS = THREE.ClampToEdgeWrapping;
+            skyLutTexture.wrapT = THREE.ClampToEdgeWrapping;
+        } else {
+            (skyLutTexture.image.data as Float32Array).set(rgba);
+        }
+        skyLutTexture.needsUpdate = true;
+        uniforms.uSkyLut.value = skyLutTexture;
+        const e = lut.horizontalIrradiance;
+        const skyLightLevel = diurnalProfile.skyLightIntensity * hemiLight.color.r * 0.2126 + diurnalProfile.skyLightIntensity * hemiLight.color.g * 0.7152 + diurnalProfile.skyLightIntensity * hemiLight.color.b * 0.0722;
+        uniforms.uSkyScale.value = skyLightLevel / Math.max(1e-12, 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2]);
     };
 
     const applyCloudLayers = (layers: unknown) => {
@@ -644,12 +711,13 @@ export function createAtmosphericSkyDome(
 
     // Dynamic Hemisphere Sky & Ground Ambient Bounce Light
     const hemiLight = new THREE.HemisphereLight(
-        diurnalProfile.isGoldenHour ? 0xfdba74 : (diurnalProfile.isNight ? 0x1a243d : 0xe0f2fe),
+        skyLightColorHex(diurnalProfile),
         groundBounceColor(diurnalProfile, initialElev),
         diurnalProfile.skyLightIntensity
     );
     hemiLight.name = 'AtmosphericHemisphereLight';
     scene.add(hemiLight);
+    applyPhysicalSky(initialElev);
 
     // Physical Directional Sunlight
     const sunLight = new THREE.DirectionalLight(
@@ -691,8 +759,9 @@ export function createAtmosphericSkyDome(
         sunLight.castShadow = diurnalProfile.castShadows;
 
         hemiLight.intensity = diurnalProfile.skyLightIntensity;
-        hemiLight.color.set(diurnalProfile.isGoldenHour ? 0xfdba74 : (diurnalProfile.isNight ? 0x1a243d : 0xe0f2fe));
+        hemiLight.color.set(skyLightColorHex(diurnalProfile));
         hemiLight.groundColor.copy(groundBounceColor(diurnalProfile, elevDeg));
+        applyPhysicalSky(elevDeg);
     };
 
     return {
@@ -728,6 +797,7 @@ export function createAtmosphericSkyDome(
             scene.remove(sunLight);
             skyGeo.dispose();
             skyMat.dispose();
+            skyLutTexture?.dispose();
             sunGeo.dispose();
             sunMat.dispose();
         }

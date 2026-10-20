@@ -135,7 +135,8 @@ import { liveTilesAnchor, syncTilesLayer } from './scene3d/syncTilesLayer';
 import { sceneAsksForLiveTiles } from './scene3d/liveTilesAnchor';
 import { groundDatumBadge, projectRoutePoint } from './scene3d/geoAnchorLabels';
 import type { TilesLayerInput } from './scene3d/syncTilesLayer';
-import { drawsProceduralBiomeTerrain, syncAtmosphere } from './scene3d/syncAtmosphere';
+import { classifyAtmosphere, drawsProceduralBiomeTerrain, syncAtmosphere } from './scene3d/syncAtmosphere';
+import { PlaceReflections, placeReflectionsEnabled } from './scene3d/placeReflections';
 import type { AtmosphereInput } from './scene3d/syncAtmosphere';
 import { classifySceneContent, drawableModelKind, hasNonFallbackObjectContent, syncSceneContent, syncWasmMesh, undrawableSceneObjects } from './scene3d/syncSceneContent';
 import { ViewportNotice, resolveViewportNotice } from './scene3d/ViewportNotice';
@@ -183,7 +184,7 @@ import type { SceneBudgetTelemetry } from './scene3d/lightingRigs';
 import { useStagedBuild } from './scene3d/stagedBuild/useStagedBuild';
 import { readStagedBuild, type StagedSceneData } from './scene3d/stagedBuild/stagedBuildState';
 import { mergeStagedParts, mergeStagedPartsEnabled } from './scene3d/stagedBuild/mergeStagedParts';
-import { carryMaterialMode, carryTwinObjects } from './scene3d/stagedBuild/texturedTwins';
+import { carryStagedChoice, carryTwinObjects, type StagedMaterialModeFields } from './scene3d/stagedBuild/texturedTwins';
 import { prepareTexturedTwinModel } from './scene3d/stagedBuild/texturedTwinModel';
 import { refreshFacadeReflections } from './scene3d/stagedBuild/facadeMaterialLook';
 
@@ -1038,7 +1039,9 @@ function generatedHeroObjectId(scene: Scene3DData): string | undefined {
     return (scene.objects || []).find(o => o.content?.metadata?.role === 'hero')?.id;
 }
 
-function mergeExternalSceneData(prev: Scene3DData, data: Scene3DData): Scene3DData {
+function mergeExternalSceneData(prev: Scene3DData, streamed: Scene3DData): Scene3DData {
+    // a clay/textured choice made on the open scene (materialMode, renderMode) holds over a later commit of the same run
+    const data = carryStagedChoice(prev as StagedMaterialModeFields, streamed as Scene3DData & StagedMaterialModeFields);
     const hasNewPython = data.pythonGenerator && data.pythonGenerator.sourceCode !== prev.pythonGenerator?.sourceCode;
     const hasNewCpp = data.cppGenerator && data.cppGenerator.sourceCode !== prev.cppGenerator?.sourceCode;
     const hasNewObjects = data.objects && data.objects !== prev.objects;
@@ -1068,8 +1071,6 @@ function mergeExternalSceneData(prev: Scene3DData, data: Scene3DData): Scene3DDa
             : prev.cppGenerator,
         // textured twins the staged-build view added are not in the agent's objects[]: they stay while their layer does
         objects: carryTwinObjects(prev.objects, data.objects) ?? prev.objects,
-        // a clay/textured choice made on the open scene holds over a later commit of the same run that does not set one
-        ...(hasNewStaged ? { stagedBuild: carryMaterialMode(readStagedBuild(prev), readStagedBuild(data)) } : {}),
         customMeshes: data.customMeshes ?? prev.customMeshes
     };
 }
@@ -1333,6 +1334,11 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         return () => { delete (window as any).__SB_SET_TREE_LOD__; };
     }, [mutateSceneData]);
 
+    // A render mode the scene data changes in the viewport (the staged overlay's clay/textured toggle) is drawn too.
+    React.useEffect(() => {
+        if (sceneData.renderMode) setRenderMode(sceneData.renderMode);
+    }, [sceneData.renderMode]);
+
     // Sync external data prop updates into sceneData
     React.useEffect(() => {
         if (!data) return;
@@ -1589,7 +1595,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             // from words in the title (that rebuilt keyword templates next to, or instead of, the real objects).
             const effectiveWorldBranch = data.worldBranch;
 
-            setSceneData({
+            // A later commit of a running staged build keeps the clay/textured choice made on the open scene.
+            const synced = carryStagedChoice(sceneDataRef.current as StagedMaterialModeFields, {
                 // Carry every field the data holds (splatUrl, vectorRoadmap, groundTileMode, ...); dropping them
                 // left splat scenes without their splat and made a populated scene look empty.
                 ...data,
@@ -1611,13 +1618,21 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 geoAnchor: data.geoAnchor,
                 droneRoute: data.droneRoute,
                 renderMode: data.renderMode
-            });
+            } as Scene3DData & StagedMaterialModeFields);
+            setSceneData(synced);
 
             if (effectiveWorldBranch) setWorldBranch(effectiveWorldBranch);
-            if (data.renderMode) setRenderMode(data.renderMode);
+            if (synced.renderMode) setRenderMode(synced.renderMode);
             if (data.clayPreset) {
-                if (threeSceneRef.current) {
-                    TileClayProcessor.applyClayMaterial(threeSceneRef.current, data.clayPreset as any);
+                const liveScene = threeSceneRef.current;
+                if (liveScene) {
+                    // The preset is the staged place's clay look. An object standing there (a loaded model that is not an
+                    // environment layer) keeps its own materials: this pass replaces materials for good, while the clay
+                    // render mode swaps them reversibly (applyClayRenderMode).
+                    for (const child of liveScene.children) {
+                        if (child.name.startsWith(EXTERNAL_OBJECT_ROOT_PREFIX) && !child.userData.sbEnvironment) continue;
+                        TileClayProcessor.applyClayMaterial(child, data.clayPreset as any);
+                    }
                 }
             }
             if (data.cameraMode) setCameraMode(data.cameraMode);
@@ -1778,6 +1793,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     // ---------------------------------------------------------
     const stackRef = React.useRef<RendererStack | null>(null);
     const atmosphereRef = React.useRef<AtmosphereHandle | null>(null);
+    // reflections made from the place itself for objects at real places (placeReflections.ts)
+    const placeReflectionsRef = React.useRef<PlaceReflections | null>(null);
     const tilesHandleRef = React.useRef<TilesLayerHandle | null>(null);
     const contentRef = React.useRef<SceneContentHandle | null>(null);
     const wasmHandleRef = React.useRef<WasmMeshHandle | null>(null);
@@ -2175,6 +2192,30 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
         renderFrameRef.current = renderFrame;
         (window as any).__SB_3D_RENDER_FRAME__ = renderFrame;
+        // Reflections made from the place (scenes at real places): a probe per object standing there, re-rendered when the
+        // scene changes materially. Receivers: loaded models that are neither environment layers nor staged-build layers
+        // (or their textured twins), and the generated root.
+        const placeReflections = new PlaceReflections({
+            renderer, scene, camera,
+            receivers: () => {
+                const layers = (sceneDataRef.current as { stagedBuild?: { layers?: Array<{ objectId: string }> } } | undefined)?.stagedBuild?.layers ?? [];
+                const layerIds = new Set(layers.map(l => l.objectId));
+                const out: THREE.Object3D[] = [];
+                externalObjectsMapRef.current.forEach((root, id) => {
+                    if (!root.parent || root.userData.sbEnvironment) return;
+                    if (layerIds.has(id) || layerIds.has(id.replace(/~tex$/, ''))) return;
+                    out.push(root);
+                });
+                const generated = scene.getObjectByName(GENERATED_ROOT_NAME);
+                if (generated?.parent) out.push(generated);
+                return out;
+            },
+            overlays: () => [transformGizmoGroupRef.current, selectionBoxRef.current, brushCursorMeshRef.current, stack.gridHelper],
+            // the facade glass probe shares the capture and is re-rendered with the place's probes
+            refreshOthers: () => { refreshFacadeReflections(renderer, scene, externalObjectsMapRef.current.values()); }
+        });
+        placeReflectionsRef.current = placeReflections;
+        (window as any).__SB_PLACE_REFLECTIONS__ = placeReflections;
         // dev-only cost probe (opt-in: ?sbViewportCost=1 or localStorage sb.viewportCost = 1): the frame's triangles, draw calls,
         // memory and GPU time split by layer, trees by level (viewportCost.ts)
         if (viewportCostProbeEnabled()) {
@@ -2370,6 +2411,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 // 12.9 Tree levels of detail: per-tree level, dither and culling for loaded trees GLBs (before the render).
                 updateTreeLods(now);
 
+                // 12.95 Place reflections: re-rendered only once a material change in the scene has settled (placeReflections.ts).
+                placeReflections.tick(now);
+
                 // 13. Gaussian Splat viewer camera sync & depth sort
                 if (splatViewerRef.current && typeof splatViewerRef.current.updateCamera === 'function') {
                     splatViewerRef.current.updateCamera(camera);
@@ -2426,6 +2470,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             externalObjectsMapRef.current.clear();
             activeSplatMeshesRef.current.clear();
             renderFrameRef.current = null;
+            placeReflections.dispose();
+            placeReflectionsRef.current = null;
             opticsChain.dispose();
             opticsChainRef.current = null;
             focusController.dispose();
@@ -2526,6 +2572,11 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             createProceduralBiomeTerrain
         });
         atmosphereRef.current = handle;
+        const placeProbes = placeReflectionsRef.current;
+        if (placeProbes) {
+            placeProbes.setActive(placeReflectionsEnabled() && classifyAtmosphere(atmosphereInputRef.current).placeReflections);
+            placeProbes.invalidate();
+        }
         skyDomeModuleRef.current = handle.skyDomeModule;
         aerialPerspectiveRef.current = handle.aerialPerspective;
         terrainCloudShadowsRef.current = handle.terrainCloudShadows;
@@ -3156,6 +3207,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     // An explicit material on the object wins over the clay default.
                     syncObjectMaterial(model, latestDef(obj).material, renderModeRef.current === 'clay');
                     currentMap.set(obj.id, model);
+                    placeReflectionsRef.current?.invalidate();
                     setStatus(obj.id, { phase: 'ready', loaded: 0, total: 0 });
 
                     if (attach) {

@@ -399,7 +399,11 @@ export function buildMassing(inp: MassingInputs): Massing {
 // the native spec
 // ------------------------------------------------------------------------------------------------
 
-export interface SweepItem { id: string; confidence: number; provenance: string; profile: Array<[number, number]>; faces: string[] }
+export interface SweepItem {
+    id: string; confidence: number; provenance: string; profile: Array<[number, number]>; faces: string[];
+    /** The profile's heights are above each wall's own top (a parapet on a sloping or stepped roof), not absolute y. */
+    relativeToTop?: boolean;
+}
 export interface OpeningItem { id: string; face: string; s0: number; s1: number; t0: number; t1: number; depth: number; scanned: boolean; confidence: number; provenance: string }
 /**
  * A profile swept along one axis of a face's own frame (scratchbox_staged_massing.hpp FaceSweepSpec): axis 0 along s with the
@@ -432,7 +436,7 @@ export function massingSpecText(m: Pick<Massing, 'parts' | 'meshes'>, opts: {
         for (const [x, y, z] of mesh.vertices) L.push(`v ${n6(x)} ${n6(y)} ${n6(z)}`);
         for (let i = 0; i + 2 < mesh.indices.length; i += 3) L.push(`t ${mesh.indices[i]} ${mesh.indices[i + 1]} ${mesh.indices[i + 2]}`);
     }
-    for (const s of opts.sweeps ?? []) L.push(`sweep ${tok(s.id)} ${n6(s.confidence)} ${tok(s.provenance)} ${s.profile.length} ${s.profile.map(([o, y]) => `${n6(o)} ${n6(y)}`).join(' ')} ${s.faces.length} ${s.faces.map(tok).join(' ')}`);
+    for (const s of opts.sweeps ?? []) L.push(`sweep ${tok(s.id)} ${n6(s.confidence)} ${tok(s.provenance)} ${s.profile.length} ${s.profile.map(([o, y]) => `${n6(o)} ${n6(y)}`).join(' ')} ${s.faces.length} ${s.faces.map(tok).join(' ')}${s.relativeToTop ? ' top' : ''}`);
     for (const w of opts.faceSweeps ?? []) L.push(`facesweep ${tok(w.id)} ${n6(w.confidence)} ${tok(w.provenance)} ${tok(w.face)} ${w.axis} ${w.profile.length} ${w.profile.map(([o, c]) => `${n6(o)} ${n6(c)}`).join(' ')} ${w.placements.length} ${w.placements.map(q => q.map(n6).join(' ')).join(' ')}`);
     for (const o of opts.openings ?? []) L.push(`opening ${tok(o.id)} ${tok(o.face)} ${n6(o.s0)} ${n6(o.s1)} ${n6(o.t0)} ${n6(o.t1)} ${n6(o.depth)} ${o.scanned ? 1 : 0} ${n6(o.confidence)} ${tok(o.provenance)}`);
     return L.join('\n') + '\n';

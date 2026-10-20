@@ -24,6 +24,7 @@
  */
 
 import * as THREE from 'three';
+import { ReflectionProbeRenderer } from '../reflectionProbe';
 
 interface SbMaterialExtras {
     paramsTexture?: number;
@@ -186,14 +187,12 @@ export function updateFacadeReflections(renderer: THREE.WebGLRenderer, scene: TH
     if (box.isEmpty()) return undefined;
     const centre = box.getCenter(new THREE.Vector3()), half = box.getSize(new THREE.Vector3()).multiplyScalar(0.5);
     const near = Math.max(half.x, half.y, half.z) + 0.5;
-    const target = new THREE.WebGLCubeRenderTarget(size, { type: THREE.HalfFloatType });
-    const cam = new THREE.CubeCamera(near, Math.max(near * 50, 5000), target);
-    cam.position.copy(centre);
-    scene.add(cam);
-    const pmrem = new THREE.PMREMGenerator(renderer);
+    // the shared probe capture (reflectionProbe.ts): directions where nothing was drawn see its labelled fallback sky
+    const probe = new ReflectionProbeRenderer(renderer, size);
     try {
-        cam.update(renderer, scene);
-        const env = pmrem.fromCubemap(target.texture).texture;
+        const target = probe.capture(scene, { position: centre, near, far: Math.max(near * 50, 5000) });
+        const env = target.texture;
+        env.userData.sbProbeTarget = target;
         for (const m of mats) { m.envMap = env; m.envMapIntensity = 1; m.needsUpdate = true; }
         // the viewport swaps a mesh's material for its reveal and render-mode looks (clones made before this probe existed)
         // and restores it after: whichever material carrying the reading is drawn gets the probe
@@ -203,20 +202,25 @@ export function updateFacadeReflections(renderer: THREE.WebGLRenderer, scene: TH
             mesh.userData.sbFacadeEnvHook = true;
             const prior = mesh.onBeforeRender;
             mesh.onBeforeRender = function (...args) {
-                const probe = model.userData[ENV_KEY] as THREE.Texture | undefined;
+                const probeEnv = model.userData[ENV_KEY] as THREE.Texture | undefined;
                 for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
-                    if (probe && hasFacadeMaterial(m) && (m as THREE.MeshStandardMaterial).envMap !== probe) { (m as THREE.MeshStandardMaterial).envMap = probe; m.needsUpdate = true; }
+                    if (probeEnv && hasFacadeMaterial(m) && (m as THREE.MeshStandardMaterial).envMap !== probeEnv) { (m as THREE.MeshStandardMaterial).envMap = probeEnv; m.needsUpdate = true; }
                 }
                 return prior.apply(this, args);
             };
         });
-        previous?.dispose();
+        disposeFacadeEnv(previous);
         return env;
     } finally {
-        scene.remove(cam);
-        target.dispose();
-        pmrem.dispose();
+        probe.dispose();
     }
+}
+
+/** Frees a facade probe environment (its render target, when it has one). */
+export function disposeFacadeEnv(env: THREE.Texture | undefined): void {
+    if (!env) return;
+    const target = env.userData?.sbProbeTarget as THREE.WebGLRenderTarget | undefined;
+    if (target) target.dispose(); else env.dispose();
 }
 
 const ENV_KEY = 'sbFacadeEnv';

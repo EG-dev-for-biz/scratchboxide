@@ -27,8 +27,11 @@ import { compareLayers, isStageTerminal } from './revealScheduler';
  */
 export type StagedSceneData = Scene3DData & {
     stagedBuild?: StagedBuildState;
-    /** How the viewer asked to see the staged build (outside stagedBuild, which the server owns): provenance shading on or off. */
-    stagedBuildView?: { provenance?: boolean };
+    /**
+     * How the viewer asked to see the staged build (outside stagedBuild, which the server owns): provenance shading on or
+     * off, and the render mode a clay choice replaced (withStagedMaterialMode puts it back for textured).
+     */
+    stagedBuildView?: { provenance?: boolean; renderModeBeforeClay?: string };
 };
 
 export function readStagedBuild(data: Scene3DData | undefined | null): StagedBuildState | undefined {
