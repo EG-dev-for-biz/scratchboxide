@@ -48,6 +48,14 @@ export interface StagedRebuilder {
         Promise<{ runId: string; layers: Array<{ url: string }> }>;
 }
 
+export interface RecoveryStartOptions {
+    /**
+     * A staged request to rebuild from when a lost file has no recipe (files made before the store existed): the scene
+     * still knows its place, so the viewport offers to rebuild the location from it.
+     */
+    fallbackStaged?: { request: unknown };
+}
+
 export interface AssetRecoveryOptions {
     workspaceRoot: string;
     rebuildStaged?: StagedRebuilder;
@@ -78,7 +86,7 @@ export class AssetRecoveryService {
     }
 
     /** Starts a recovery of `paths` and returns the job at once; its items settle as it runs. */
-    start(paths: string[]): RecoveryJob {
+    start(paths: string[], opts: RecoveryStartOptions = {}): RecoveryJob {
         const items: RecoveryItem[] = [];
         for (const raw of paths) {
             let normalized: string;
@@ -93,7 +101,7 @@ export class AssetRecoveryService {
         const job: RecoveryJob = { id: crypto.randomBytes(6).toString('hex'), status: 'running', items, message: 'Looking for the files', startedAtMs: this.now() };
         const abort = new AbortController();
         this.jobs.set(job.id, { job, abort });
-        this.run(job, abort.signal).catch(err => {
+        this.run(job, abort.signal, opts).catch(err => {
             for (const item of job.items) if (item.outcome === 'pending') { item.outcome = 'failed'; item.detail = (err as Error).message; }
             job.message = `Recovery failed: ${(err as Error).message}`;
         }).finally(() => {
@@ -120,7 +128,7 @@ export class AssetRecoveryService {
         return entry.job;
     }
 
-    private async run(job: RecoveryJob, signal: AbortSignal): Promise<void> {
+    private async run(job: RecoveryJob, signal: AbortSignal, opts: RecoveryStartOptions): Promise<void> {
         // 1. the store
         for (const item of job.items) {
             if (item.outcome !== 'pending') continue;
@@ -131,18 +139,28 @@ export class AssetRecoveryService {
         }
         // 2. recipes, grouped so one lost run is rebuilt once
         const groups = new Map<string, { recipe: { id: string; kind: string; body: unknown }; items: RecoveryItem[] }>();
+        // a staged file with no recipe of its own is rebuilt from the scene's place when the caller gives it
+        const fallback = opts.fallbackStaged && this.options.rebuildStaged
+            ? { recipe: { id: 'fallback:staged', kind: 'staged-location', body: { request: opts.fallbackStaged.request } }, items: [] as RecoveryItem[] }
+            : undefined;
+        const withoutRecipe = (item: RecoveryItem, detail: string) => {
+            if (fallback && layerNameKey(item.path)) {
+                fallback.items.push(item);
+                return;
+            }
+            item.outcome = 'unrecoverable';
+            item.detail = detail;
+        };
         for (const item of job.items) {
             if (item.outcome !== 'pending') continue;
             const record = this.store.record(item.path);
             if (!record) {
-                item.outcome = 'unrecoverable';
-                item.detail = 'this file was never recorded in the asset store, so there is no recipe to rebuild it from';
+                withoutRecipe(item, 'this file was never recorded in the asset store, so there is no recipe to rebuild it from');
                 continue;
             }
             const recipe = record.recipeId ? this.store.recipe(record.recipeId) : undefined;
             if (!recipe) {
-                item.outcome = 'unrecoverable';
-                item.detail = `recorded from ${record.origin} without a recipe; ask the chat to make it again`;
+                withoutRecipe(item, `recorded from ${record.origin} without a recipe; ask the chat to make it again`);
                 continue;
             }
             if (recipe.kind !== 'staged-location' || !this.options.rebuildStaged) {
@@ -154,6 +172,7 @@ export class AssetRecoveryService {
             group.items.push(item);
             groups.set(recipe.id, group);
         }
+        if (fallback?.items.length) groups.set(fallback.recipe.id, fallback);
         let index = 0;
         for (const group of groups.values()) {
             if (signal.aborted) return;
@@ -192,7 +211,7 @@ export class AssetRecoveryService {
                         item.detail = `run ${result.runId} published no file for this layer (${[...urls].map(u => path.posix.basename(u)).join(', ') || 'nothing'})`;
                         continue;
                     }
-                    this.store.alias(item.path, replacement, { origin: 'recovery', rebuilt: true, workspace: this.options.workspaceRoot });
+                    this.store.alias(item.path, replacement, { origin: 'recovery', rebuilt: true, workspace: this.options.workspaceRoot, recipeId: `staged:${result.runId}` });
                     item.outcome = 'rebuilt';
                     item.detail = `rebuilt by run ${result.runId} as ${path.posix.basename(replacement)}`;
                 }

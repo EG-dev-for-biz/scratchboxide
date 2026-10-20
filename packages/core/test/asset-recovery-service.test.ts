@@ -132,4 +132,29 @@ describe('AssetRecoveryService', () => {
         expect(store.record('/models/elsewhere_l4_22222222.glb')?.rebuilt).toBe(false);
         store.close();
     });
+
+    it('rebuilds files that have no recipe from the scene\'s own place when the caller gives it', async () => {
+        const store = new DurableAssetStore(path.join(HOME, 'home-d'));
+        const seen: unknown[] = [];
+        const rebuild: StagedRebuilder = async (req) => {
+            seen.push(req);
+            store.putFile(writeFile(glbBytes(700, 4)), { servedPath: '/models/washington_square_iso_l3a_aaaaaaaa.glb', origin: 'staged-location', recipeId: 'staged:aaaaaaaa' });
+            return { runId: 'aaaaaaaa', layers: [{ url: '/models/washington_square_iso_l3a_aaaaaaaa.glb' }] };
+        };
+        const service = new AssetRecoveryService(store, { workspaceRoot: HOME, rebuildStaged: rebuild });
+        const request = { query: 'Washington Square Arch, New York', isolate: true, trees: true };
+        // never recorded (made before the store); one path is not a staged layer name and stays unrecoverable
+        const job = await settled(service, service.start(['/models/washington_square_iso_l3a_8001dfec.glb', '/models/hand_made.glb'], { fallbackStaged: { request } }).id);
+        expect(seen).toEqual([request]);
+        expect(job.items.map(i => i.outcome)).toEqual(['rebuilt', 'unrecoverable']);
+        const rebuilt = store.lookup('/models/washington_square_iso_l3a_8001dfec.glb')!;
+        expect(rebuilt.rebuilt).toBe(true);
+        expect(rebuilt.recipeId).toBe('staged:aaaaaaaa');
+        expect(fs.readFileSync(rebuilt.file)).toEqual(glbBytes(700, 4));
+        // without the fallback the same path is simply unrecoverable
+        const plain = await settled(service, service.start(['/models/other_iso_l2_bbbbbbbb.glb']).id);
+        expect(plain.items[0]).toMatchObject({ outcome: 'unrecoverable' });
+        expect(seen).toHaveLength(1);
+        store.close();
+    });
 });

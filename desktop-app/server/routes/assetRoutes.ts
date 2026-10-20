@@ -48,7 +48,16 @@ export function createAssetRouter(store: DurableAssetStore, recovery: AssetRecov
             res.status(400).json({ success: false, error: `at most ${MAX_RECOVERY_PATHS} paths per recovery` });
             return;
         }
-        res.json({ success: true, job: recovery.start(paths) });
+        const fallback = req.body?.fallbackStagedRequest;
+        let opts: { fallbackStaged?: { request: unknown } } = {};
+        if (fallback !== undefined) {
+            if (!fallback || typeof fallback !== 'object' || typeof fallback.query !== 'string' || !fallback.query.trim()) {
+                res.status(400).json({ success: false, error: 'fallbackStagedRequest needs a query (the place to rebuild)' });
+                return;
+            }
+            opts = { fallbackStaged: { request: { ...fallback, query: fallback.query.trim(), isolate: fallback.isolate === true, trees: fallback.trees !== false } } };
+        }
+        res.json({ success: true, job: recovery.start(paths, opts) });
     });
 
     router.get('/recover/:id', (req: Request, res: Response) => {
