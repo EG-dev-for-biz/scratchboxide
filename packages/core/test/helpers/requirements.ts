@@ -24,7 +24,9 @@
 
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
+import { FileKeyStore, defaultCredentialsPath } from '../../src/node/key-store';
 
 export const REPO_ROOT = path.resolve(__dirname, '../../../..');
 
@@ -216,6 +218,51 @@ export function requireEnv(names: string | readonly string[], purpose?: string):
     const missing = list.filter(n => !process.env[n]);
     if (missing.length === 0) return { ok: true, reason: '' };
     return { ok: false, reason: `env ${missing.join(', ')} not set${purpose ? ` (${purpose})` : ''}` };
+}
+
+/**
+ * Requires Google generative-AI credentials where the app's GeminiClient discovers them
+ * (`initAuth` / `resolveApiKey` in src/node/gemini/gemini-client.ts): an API key in the environment,
+ * a service account (inline `GOOGLE_SERVICE_ACCOUNT_JSON` or a service-account.json at one of its
+ * well-known paths), a key in the encrypted store `~/.scratchbox/credentials.json`, or a secrets.json.
+ * Suites that talk to Google models skip on this so a clean CI runner (no credentials) never fails
+ * on them and never bills anything. gemini-client itself is not imported here: it would pull the
+ * Google SDKs into every suite that imports this helper.
+ */
+export function requireGoogleCredentials(purpose?: string): Requirement {
+    const apiKeyEnv = ['GEMINI_API_KEY', 'GOOGLE_AI_API_KEY', 'GOOGLE_GENAI_API_KEY', 'GOOGLE_API_KEY'];
+    const hasKey = (k: unknown): boolean => typeof k === 'string' && k.trim().length > 0;
+    let ok = apiKeyEnv.some(n => hasKey(process.env[n])) || hasKey(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+    if (!ok) {
+        const serviceAccounts = [
+            process.env.GOOGLE_APPLICATION_CREDENTIALS,
+            process.env.GEMINI_SERVICE_ACCOUNT_PATH,
+            path.join(os.homedir(), '.scratchbox/service-account.json'),
+            path.join(os.homedir(), '.scratchbox-ide/service-account.json'),
+            path.join(process.cwd(), 'service-account.json'),
+            path.join(process.cwd(), '.scratchbox-ide/service-account.json'),
+            path.join(process.cwd(), '.scratchbox/service-account.json')
+        ].filter((p): p is string => typeof p === 'string' && p.length > 0);
+        ok = serviceAccounts.some(p => fs.existsSync(p));
+    }
+    if (!ok) {
+        try {
+            // KEY_STORE_SERVICE / KEY_STORE_GEMINI_ACCOUNT in gemini-client.ts
+            ok = hasKey(new FileKeyStore({ filePath: defaultCredentialsPath() }).getPasswordSync('scratchbox-ide.google-genai', 'api-key'));
+        } catch { /* unreadable store counts as no credentials */ }
+    }
+    if (!ok) {
+        for (const p of [path.join(process.cwd(), 'secrets.json'), path.join(os.homedir(), '.scratchbox/secrets.json'), path.join(os.homedir(), '.scratchbox-ide/config.json')]) {
+            try {
+                const sec = JSON.parse(fs.readFileSync(p, 'utf-8'));
+                if ([...apiKeyEnv, 'apiKey'].some(n => hasKey(sec?.[n]))) { ok = true; break; }
+            } catch { /* absent or unreadable */ }
+        }
+    }
+    return {
+        ok,
+        reason: ok ? '' : `no Google credentials (set GEMINI_API_KEY / GOOGLE_API_KEY, GOOGLE_APPLICATION_CREDENTIALS, or save a key with the app's credentials dialog)${purpose ? ` (${purpose})` : ''}`
+    };
 }
 
 /** Requires at least one of the listed environment variables to be set. */
