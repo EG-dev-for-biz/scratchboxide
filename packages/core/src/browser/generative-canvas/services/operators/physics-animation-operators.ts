@@ -14,8 +14,8 @@ export const PHYSICS_ANIMATION_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_add_physics',
         category: 'physics_animation',
-        description: 'Configures rigid body collider physics on an object. Dynamic bodies fall under gravity and bounce/settle against the ground plane every frame in the Scene3D viewport render loop (linear motion + ground contact only — no body-to-body collision or rotational dynamics); static bodies never move; kinematic bodies are unaffected by gravity and are expected to be driven externally (e.g. by sb_insert_keyframe).',
-        execute: (ctx, params: { objectId: string; bodyType?: RigidBodyType; mass?: number; friction?: number; restitution?: number; colliderShape?: ColliderShape }) => {
+        description: 'Configures rigid body collider physics on an object. Dynamic bodies simulate full rigid body dynamics: gravity, body-to-body collision (sphere–sphere, box–box, sphere–box), impulse-based velocity resolution with friction and restitution, rotational dynamics (angular velocity + quaternion integration), Baumgarte positional correction, and ground-plane contact. Static bodies never move but participate in collision response. Kinematic bodies are driven externally via sb_insert_keyframe. Optional initialVelocity and angularVelocity seed the simulation on first tick.',
+        execute: (ctx, params: { objectId: string; bodyType?: RigidBodyType; mass?: number; friction?: number; restitution?: number; colliderShape?: ColliderShape; inertiaTensor?: number; initialVelocity?: [number, number, number]; angularVelocity?: [number, number, number] }) => {
             const found = ctx.findObject(params.objectId);
             if (!found) throw new Error(`Object with id '${params.objectId}' not found.`);
 
@@ -24,11 +24,33 @@ export const PHYSICS_ANIMATION_OPERATORS: OperatorDefinition[] = [
                 mass: params.mass !== undefined ? params.mass : 1.0,
                 friction: params.friction !== undefined ? params.friction : 0.5,
                 restitution: params.restitution !== undefined ? params.restitution : 0.5,
-                colliderShape: params.colliderShape || 'box'
+                colliderShape: params.colliderShape || 'box',
+                ...(params.inertiaTensor !== undefined && { inertiaTensor: params.inertiaTensor }),
+                ...(params.initialVelocity  !== undefined && { initialVelocity: params.initialVelocity }),
+                ...(params.angularVelocity  !== undefined && { angularVelocity: params.angularVelocity }),
             };
             found.object.physics = physics;
 
             return { objectId: params.objectId, physics };
+        }
+    },
+    {
+        name: 'sb_apply_impulse',
+        category: 'physics_animation',
+        description: 'Applies an instantaneous linear impulse (in world-space N·s) to a dynamic physics body, immediately changing its velocity. Use to throw, launch, or knock objects at runtime. Optionally applies an angular impulse (torque impulse) to spin the body.',
+        execute: (ctx, params: { objectId: string; impulse: [number, number, number]; angularImpulse?: [number, number, number] }) => {
+            const found = ctx.findObject(params.objectId);
+            if (!found) throw new Error(`Object with id '${params.objectId}' not found.`);
+            if (!found.object.physics || found.object.physics.bodyType !== 'dynamic') {
+                throw new Error(`sb_apply_impulse: object '${params.objectId}' must have dynamic physics.`);
+            }
+            const mass = found.object.physics.mass > 0 ? found.object.physics.mass : 1;
+            // Store pending impulse on the physics config so the runtime can consume it next tick
+            const pending = (found.object.physics as PhysicsBodyConfig & { _pendingImpulse?: [number,number,number]; _pendingAngularImpulse?: [number,number,number] });
+            const [ix, iy, iz] = params.impulse;
+            pending._pendingImpulse = [ix / mass, iy / mass, iz / mass]; // convert to Δv
+            if (params.angularImpulse) pending._pendingAngularImpulse = params.angularImpulse;
+            return { objectId: params.objectId, impulse: params.impulse };
         }
     },
     {
