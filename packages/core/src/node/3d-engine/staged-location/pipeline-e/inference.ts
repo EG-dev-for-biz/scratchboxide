@@ -573,6 +573,10 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
             }
             return k;
         };
+        // the wall's own polygon in its ortho frame (the native tool's mask), when it wrote one of the frame's size
+        const insideOf = (f: MassingFace): Uint8Array | undefined => {
+            try { const b = fs.readFileSync(path.join(run.dir, `face_${f.index}.inside`)); return b.length === f.width * f.height ? new Uint8Array(b) : undefined; } catch { return undefined; }
+        };
         const enhanceOne = async (f: MassingFace, unseen = false) => {
             const tex = textures.get(f.index)!;
             const use = new Uint8Array(tex.width * tex.height);
@@ -594,7 +598,7 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
                 client: input.enhance!.client, models: input.enhance!.models, locationName: input.enhance!.locationName, ...(refTex ? { reference: refTex } : {}), source: ENH,
                 guards, ...(input.enhance!.cacheDir ? { cacheDir: input.enhance!.cacheDir } : {}), ...(sv ? { streetView: sv, streetViewSource: sourceForPano(sv.view.panoId) } : {}), ...(noSv ? { noStreetView: noSv } : {}),
                 ...(chain ? { counter: visionFacadeCounter(chain) } : {}), ...(input.signal ? { signal: input.signal } : {}),
-                ...(unseen ? { unseen: { source: UNSEEN, ...(familyLab ? { familyLab } : {}) } } : {})
+                ...(unseen ? { unseen: { source: UNSEEN, ...(familyLab ? { familyLab } : {}), ...(insideOf(f) ? { inside: insideOf(f)! } : {}) } } : {})
             });
             enhanced.push({ ...r, ...(ref ? { referenceFace: ref.index } : {}), plate: undefined, guarded: undefined, labels: undefined, grid: undefined } as EnhanceWallRecord);
             enhStep.proposed++;

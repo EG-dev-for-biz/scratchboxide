@@ -272,11 +272,14 @@ export function enhanceGuards(env: NodeJS.ProcessEnv = process.env): boolean {
     return env.SCRATCHBOX_STAGED_ENHANCE_GUARDS !== '0';
 }
 
-/** The share of the texels the tile does not cover that a plate left flat mid-grey (each channel within 4 of 128). */
-export function unseenGreyShare(plate: Uint8Array, use: Uint8Array, N: number): number {
+/**
+ * The share of the texels the tile does not cover (inside the wall's polygon when `inside` is given: the frame's corners
+ * outside a gable or a stepped wall are not the wall) that a plate left flat mid-grey (each channel within 4 of 128).
+ */
+export function unseenGreyShare(plate: Uint8Array, use: Uint8Array, N: number, inside?: Uint8Array): number {
     let n = 0, grey = 0;
     for (let i = 0; i < N; i++) {
-        if (use[i]) continue;
+        if (use[i] || (inside && !inside[i])) continue;
         n++;
         if (Math.abs(plate[i * 4] - 128) <= 4 && Math.abs(plate[i * 4 + 1] - 128) <= 4 && Math.abs(plate[i * 4 + 2] - 128) <= 4) grey++;
     }
@@ -347,7 +350,7 @@ export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Arra
      * and labelled `source` when accepted; `familyLab` is the building's median facade colour (CIELAB), the colour family
      * checked when the tile covers too little of the wall to have one.
      */
-    unseen?: { source: number; familyLab?: [number, number, number] };
+    unseen?: { source: number; familyLab?: [number, number, number]; inside?: Uint8Array };
 
     /**
      * Where answers are kept, keyed by everything the model is sent (models, prompt, images): the same wall with the same
@@ -412,7 +415,7 @@ export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Arra
     const idg = identityGate(t.rgba, g.aligned, t.width, t.height, use, { askedAspect: padded.width / padded.height, answeredAspect: dec.width / dec.height, chamferPx: g.chamferPx, lostShare: g.lostShare, counts, ...(grossNotMeasured ? { grossNotMeasured } : {}), ...(colourAgainst ? { colourAgainst } : {}) });
     // an unseen wall's plate must draw the unseen part, not leave it grey
     if (unseen) {
-        const grey = unseenGreyShare(g.aligned, use, N);
+        const grey = unseenGreyShare(g.aligned, use, N, unseen.inside);
         if (grey > UNSEEN_MAX_GREY_SHARE) { idg.passed = false; idg.why = `${idg.why}; ${(100 * grey).toFixed(0)}% of the unseen part left flat mid-grey (more than ${100 * UNSEEN_MAX_GREY_SHARE}%)`; }
     }
     const why0 = `${unseen ? `a wall the tile hardly sees (${(100 * coveredShare).toFixed(0)}% covered), drawn as it continues (${TEXTURE_PLATE_UNSEEN_PROMPT_ID}); ` : ''}corrective warp ${g.dx}, ${g.dy} px, scale ${g.scale.toFixed(3)}; ${idg.why}`;

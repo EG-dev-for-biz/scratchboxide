@@ -282,6 +282,13 @@ describe('walls the tile hardly sees, drawn in enhanced mode', () => {
         const grey = new Uint8Array(W * H * 4);
         for (let i = 0; i < W * H; i++) grey.set(use[i] ? t.rgba.subarray(i * 4, i * 4 + 4) : [128, 128, 128, 255], i * 4);
         expect(unseenGreyShare(grey, use, W * H)).toBeGreaterThan(0.99);
+        // texels outside the wall's polygon (a gable's corners) are not counted
+        const inside = new Uint8Array(W * H).fill(1);
+        for (let i = 0; i < W * H; i++) if (!use[i] && (i % W) < 300) inside[i] = 0;
+        const half = grey.slice();
+        for (let i = 0; i < W * H; i++) if (inside[i] && !use[i]) half.set([150, 90, 70, 255], i * 4);
+        expect(unseenGreyShare(half, use, W * H)).toBeGreaterThan(0.7);
+        expect(unseenGreyShare(half, use, W * H, inside)).toBe(0);
         const before = t.source.slice();
         const r = await enhanceWall(faceOf(9, W, H, PX, { coverage: 0.03 }), t, use, { client: async q => ({ bytes: answer(grey, q), modelUsed: 'fake-lite' }), models: ['fake-lite'], locationName: 'X', source: 3, unseen: { source: 11, familyLab } });
         expect(r.accepted).toBe(false);
