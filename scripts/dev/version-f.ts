@@ -3,12 +3,13 @@
  * tile used only as a reference (packages/core/src/node/3d-engine/staged-location/version-f/version-f.ts).
  *
  *   SCRATCHBOX_REPLAY_DIR=<rec> node -r ts-node/register -r ./scripts/dev/staged-replay.ts scripts/dev/version-f.ts \
- *       <pipelineEDir> "<place>" <outDir> [--runs <staged_location/runs dir>] [--reading <params.json>] [--rounds 3]
+ *       <pipelineEDir> "<place>" <outDir> [--runs <staged_location/runs dir>] [--reading <params.json>] [--rounds 3] [--legacy]
  *   (ts-node options as in staged-replay.ts)
  *
  * <pipelineEDir> is the E build's `.scratchbox/cache/staged_location/pipeline_e/<key>` (massing.json and native/spec.txt
  * give the massing, the photo tile and the isolated scan). With --runs, the Street View photos that build already used (its
  * ownership note's panos, answered from the replay recordings) are shown to the reader; no other pano is fetched.
+ * --legacy builds round 1's program exactly (no arch heads, bands of openings or per-wall storeys; the parapet kept on any gain).
  * Writes <outDir>/version_f.json and the layer GLBs (version_f_clay.glb, version_f_textured.glb).
  */
 import * as fs from 'fs';
@@ -76,6 +77,7 @@ async function visionChain(): Promise<Json> {
         ...(readingFile ? { reading: JSON.parse(fs.readFileSync(readingFile, 'utf8')) } : { chain: await visionChain() }),
         streetViewPhotos: streetViewPhotos(path.basename(eDir), arg('--runs'), process.env.SCRATCHBOX_REPLAY_DIR),
         rounds: Number(arg('--rounds') ?? 3),
+        ...(process.argv.includes('--legacy') ? { legacy: true } : {}),
         onProgress: (m: string) => console.log('[f]', m)
     });
     fs.writeFileSync(path.join(outDir, 'version_f.json'), JSON.stringify({ place, eDir, ...res, wallClockMs: Date.now() - t0 }, null, 1));

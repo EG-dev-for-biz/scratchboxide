@@ -21,7 +21,7 @@ import { describe, expect, it } from 'vitest';
 import { massingSpecText, type Massing } from '../src/node/3d-engine/staged-location/pipeline-e/massing-spec';
 import { runMassing, type MassingFace } from '../src/node/3d-engine/staged-location/pipeline-e/native-massing';
 import { DEFAULT_PARAMETERS, parseFacadeParameters, storeyLines, facadeParametersPrompt, type BuildingParameters } from '../src/node/3d-engine/staged-location/version-f/facade-parameters';
-import { facadeProgram, chains, wallLoops, LABEL, type ProgramInput } from '../src/node/3d-engine/staged-location/version-f/facade-program';
+import { facadeProgram, chains, wallLoops, archHalfWidth, openingRects, LABEL, type ProgramInput } from '../src/node/3d-engine/staged-location/version-f/facade-program';
 import { comparisonCameras, compareSilhouette, nodesToSoup, programWallOffset, renderedWallOffset, soupBounds, wallEvidence, type WallTile } from '../src/node/3d-engine/staged-location/version-f/render-compare';
 import { adjustParameters } from '../src/node/3d-engine/staged-location/version-f/adjust';
 import { versionFProvenance, VERSION_F_NATIVE_PARAMS } from '../src/node/3d-engine/staged-location/version-f/version-f';
@@ -212,4 +212,74 @@ describe('version F generator (native solid builder, residual off)', () => {
         expect(Math.abs(res.params.groundStoreyM - 4.4)).toBeLessThan(0.25);
         expect(Math.abs(res.params.upperStoreysM[0] - 3.0)).toBeLessThan(0.1);
     }, 60_000);
+});
+
+describe('version F round 2: shape vocabulary (continuous)', () => {
+    it('parses arch heads, bands of openings and per-wall storeys; round 1 replies keep their defaults', () => {
+        const { params: p } = parseFacadeParameters(JSON.stringify({
+            groundStoreyM: 5, upperStoreysM: [4], window: { widthM: 1.2, heightM: 3, sillM: 0.5, archRiseRatio: 1, apexSharpness: 3 },
+            facadeBands: [{ bottomM: 9, topM: 17, opening: { widthM: 3, heightM: 6.5, sillM: 0.4, archRiseRatio: 0.5 }, bayGroup: 2.4, storeyGroup: 2 }, { bottomM: 3, topM: 3.5 }],
+            wallStoreys: [{ picture: 2, groundStoreyM: 7, upperStoreysM: [3.8] }, { picture: 3 }]
+        }));
+        expect(p.window.archRiseRatio).toBe(1);
+        expect(p.window.apexSharpness).toBe(1);                 // clamped to the equilateral pointed arch
+        expect(p.facadeBands).toHaveLength(1);                  // a band under 1 m is dropped
+        expect(p.facadeBands[0].bayGroup).toBeCloseTo(2.4, 6);  // a count read as a number
+        expect(p.wallStoreys).toEqual([{ picture: 2, groundStoreyM: 7, upperStoreysM: [3.8] }]);
+        const old = parseFacadeParameters('{"groundStoreyM": 4}').params;
+        expect(old.window.archRiseRatio).toBe(0);
+        expect(old.facadeBands).toEqual([]);
+    });
+
+    it('draws arch heads as stepped slices whose widths follow a round or pointed curve, a flat head as one rectangle', () => {
+        expect(archHalfWidth(0, 0)).toBeCloseTo(1, 6);
+        expect(archHalfWidth(1, 0)).toBeCloseTo(0, 6);
+        expect(archHalfWidth(0.5, 0)).toBeCloseTo(Math.sqrt(0.75), 6);          // a semicircle
+        expect(archHalfWidth(0.5, 1)).toBeLessThan(archHalfWidth(0.5, 0));      // pointed: narrower at mid-rise
+        expect(openingRects({ archRiseRatio: 0 }, 0, 2, 0, 3)).toEqual([[0, 2, 0, 3]]);
+        const r = openingRects({ archRiseRatio: 1, apexSharpness: 0 }, 0, 2, 0, 3);
+        expect(r[0]).toEqual([0, 2, 0, 2]);                                      // body to the springing (rise = half-width 1 m)
+        expect(r.length).toBeGreaterThan(4);
+        for (let k = 2; k < r.length; k++) expect(r[k][1] - r[k][0]).toBeLessThanOrEqual(r[k - 1][1] - r[k - 1][0] + 1e-9);
+        expect(r[r.length - 1][3]).toBeCloseTo(3, 6);
+        const pointed = openingRects({ archRiseRatio: 1.5, apexSharpness: 1 }, 0, 2, 0, 4);
+        expect(pointed[pointed.length - 1][1] - pointed[pointed.length - 1][0]).toBeLessThan(r[r.length - 1][1] - r[r.length - 1][0] + 0.2);
+    });
+
+    it('groups bays and storeys inside a band into arcade openings, and moves one wall\'s storeys on its own', async () => {
+        const faces = await baseFaces();
+        const south = faces.find(f => f.part === 'main' && f.normal[2] > 0.9)!, east = faces.find(f => f.part === 'main' && f.normal[0] > 0.9)!;
+        const params: BuildingParameters = { ...PARAMS, cornice: { thicknessM: 0, projectionM: 0 }, facadeBands: [{ bottomM: 6.5, topM: 13.5, opening: { widthM: 4.2, heightM: 5, sillM: 0.3, recessM: 0.3, archRiseRatio: 1 }, bayGroup: 2, storeyGroup: 2 }], wallStoreys: [{ picture: 1, faceKey: east.key, groundStoreyM: 6, upperStoreysM: [3] }] };
+        const prog = facadeProgram({ faces, parts: MASSING.parts, groundY: 0, params });
+        const main = prog.openings.filter(o => o.face === south.key && !/_h\d+$/.test(o.id));
+        // storeys 0 and 4 one per bay (7 + 7); the band from 7 m: one arched opening per two bays (3 pairs) per two storeys (7 and 13 -> only 7 fits)
+        expect(main.filter(o => o.t0 > 7).length).toBe(3);
+        expect(main.filter(o => o.t0 > 7).every(o => o.s1 - o.s0 > 4)).toBe(true);
+        expect(prog.openings.some(o => o.face === south.key && /_h\d+$/.test(o.id))).toBe(true);
+        // the east wall's ground storey is 6 m: its first upper openings start above 6 m, the building's at 4 m
+        const eastUpper = prog.openings.filter(o => o.face === east.key && o.t0 > 1).map(o => o.t0);
+        expect(Math.min(...eastUpper)).toBeGreaterThan(6);
+        expect(Math.min(...main.filter(o => o.t0 > 1).map(o => o.t0))).toBeLessThan(5);
+        // round 1's program ignores all of it
+        const legacy = facadeProgram({ faces, parts: MASSING.parts, groundY: 0, params, legacy: true });
+        expect(legacy.openings.some(o => /_h\d+$/.test(o.id))).toBe(false);
+    });
+
+    it('keeps a raised volume that straddles two parts on the part under most of it, inside that roof', async () => {
+        const faces = await baseFaces();
+        // top-down map 0.1 m from (-10, -14), 36 x 16 m; heights 16 m on the main block, NaN elsewhere
+        const W = 360, H = 160, height = new Float32Array(W * H).fill(NaN);
+        for (let r = 0; r < H; r++) for (let c = 0; c < W; c++) { const x = -10 + (c + 0.5) * 0.1, z = -14 + (r + 0.5) * 0.1; if (x > 0 && x < 24 && z < 0 && z > -12) height[r * W + c] = 16; }
+        const td = { x0: -10, z0: -14, pixel: 0.1, width: W, rows: H, height };
+        // a box from x = -3 to 9 (a quarter over the low wing), z = -10 to -2
+        const box: [number, number, number, number] = [Math.round((7 / 36) * 1000), Math.round((4 / 16) * 1000), Math.round((19 / 36) * 1000), Math.round((12 / 16) * 1000)];
+        const params = { ...PARAMS, rooftopVolumes: [{ box, heightM: 2 }] };
+        const now = facadeProgram({ faces, parts: MASSING.parts, groundY: 0, params, topdown: td });
+        const was = facadeProgram({ faces, parts: MASSING.parts, groundY: 0, params, topdown: td, legacy: true });
+        expect(now.volumeParts).toHaveLength(1);
+        const v = now.parts.find(p => p.id === now.volumeParts[0])!;
+        expect(Math.min(...v.loops[0].map(q => q[0]))).toBeGreaterThan(0.3);   // inside the main block
+        expect(v.topY).toBeCloseTo(16, 6);                                      // the scan's height there
+        expect(was.volumeParts.length).toBeLessThanOrEqual(now.volumeParts.length);
+    });
 });

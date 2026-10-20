@@ -33,7 +33,7 @@ const clone = (p: BuildingParameters): BuildingParameters => JSON.parse(JSON.str
 interface Knob { name: string; get: (p: BuildingParameters) => number; set: (p: BuildingParameters, v: number) => void; step: number; lo: number; hi: number; enabled?: (p: BuildingParameters) => boolean }
 
 /** The global knobs, each a continuous dimension with its starting step and bounds. */
-export function knobs(): Knob[] {
+export function knobs(params?: BuildingParameters, shapes = false): Knob[] {
     const B = PARAMETER_BOUNDS;
     const k = (name: string, get: Knob['get'], set: Knob['set'], step: number, [lo, hi]: readonly [number, number], enabled?: Knob['enabled']): Knob => ({ name, get, set, step, lo, hi, ...(enabled ? { enabled } : {}) });
     return [
@@ -51,7 +51,21 @@ export function knobs(): Knob[] {
         k('cornice.projectionM', p => p.cornice.projectionM, (p, v) => { p.cornice.projectionM = v; }, 0.15, B.projectionM, p => p.cornice.thicknessM > 0.05),
         k('plinth.heightM', p => p.plinth.heightM, (p, v) => { p.plinth.heightM = v; }, 0.2, B.plinthHeightM, p => p.plinth.projectionM > 0.01),
         k('piers.widthM', p => p.piers.widthM, (p, v) => { p.piers.widthM = v; }, 0.1, B.pierWidthM, p => p.piers.projectionM >= 0.03),
-        k('piers.projectionM', p => p.piers.projectionM, (p, v) => { p.piers.projectionM = v; }, 0.05, B.projectionM, p => p.piers.widthM >= 0.1)
+        k('piers.projectionM', p => p.piers.projectionM, (p, v) => { p.piers.projectionM = v; }, 0.05, B.projectionM, p => p.piers.widthM >= 0.1),
+        // round 2: the heads' shape and each band's openings, all continuous
+        ...(shapes ? [
+            k('window.archRiseRatio', p => p.window.archRiseRatio ?? 0, (p, v) => { p.window.archRiseRatio = v; }, 0.25, B.archRiseRatio),
+            k('window.apexSharpness', p => p.window.apexSharpness ?? 0, (p, v) => { p.window.apexSharpness = v; }, 0.25, B.apexSharpness, p => (p.window.archRiseRatio ?? 0) > 0.2),
+            k('groundOpening.archRiseRatio', p => p.groundOpening.archRiseRatio ?? 0, (p, v) => { p.groundOpening.archRiseRatio = v; }, 0.25, B.archRiseRatio),
+            ...(params?.facadeBands ?? []).flatMap((_, i) => [
+                k(`band${i}.widthM`, p => p.facadeBands[i].opening.widthM, (p, v) => { p.facadeBands[i].opening.widthM = v; }, 0.25, B.openingWidthM),
+                k(`band${i}.heightM`, p => p.facadeBands[i].opening.heightM, (p, v) => { p.facadeBands[i].opening.heightM = v; }, 0.3, B.openingHeightM),
+                k(`band${i}.sillM`, p => p.facadeBands[i].opening.sillM, (p, v) => { p.facadeBands[i].opening.sillM = v; }, 0.2, B.sillM),
+                k(`band${i}.archRiseRatio`, p => p.facadeBands[i].opening.archRiseRatio ?? 0, (p, v) => { p.facadeBands[i].opening.archRiseRatio = v; }, 0.25, B.archRiseRatio),
+                k(`band${i}.apexSharpness`, p => p.facadeBands[i].opening.apexSharpness ?? 0, (p, v) => { p.facadeBands[i].opening.apexSharpness = v; }, 0.25, B.apexSharpness, p => (p.facadeBands[i].opening.archRiseRatio ?? 0) > 0.2),
+                k(`band${i}.bottomM`, p => p.facadeBands[i].bottomM, (p, v) => { p.facadeBands[i].bottomM = v; }, 0.5, [0, 400])
+            ])
+        ] : [])
     ];
 }
 
@@ -79,7 +93,7 @@ export function evaluate(base: ProgramInput, params: BuildingParameters, perWall
  * lattice's pitch and phase, that wall alone compared; (c) `rounds` rounds of coordinate steps on every knob and again on
  * each wall's pitch and phase, the step halved each round. A change is kept only when it lowers the objective.
  */
-export function adjustParameters(base: ProgramInput, evidence: WallEvidence[], inside: Map<number, Uint8Array>, rounds = 3): AdjustResult {
+export function adjustParameters(base: ProgramInput, evidence: WallEvidence[], inside: Map<number, Uint8Array>, rounds = 3, options: { shapes?: boolean } = {}): AdjustResult {
     const t0 = Date.now();
     let params = clone(base.params);
     const perWall = new Map<number, WallLatticeAdjust>();
@@ -124,11 +138,23 @@ export function adjustParameters(base: ProgramInput, evidence: WallEvidence[], i
             }
             if (bestA.pitchScale !== 1 || bestA.phaseM !== 0) { perWall.set(fi, bestA); changed.push(`wall ${fi} pitch x${bestA.pitchScale.toFixed(2)} phase ${bestA.phaseM.toFixed(2)} m`); }
         }
+        // round 2: each seen wall's own storey lines (a double-height ground floor, a penthouse), that wall alone compared
+        if (options.shapes) for (const e of evidence) {
+            const fi = e.tile.face.index, own = [e];
+            const a0 = perWall.get(fi) ?? { pitchScale: 1, phaseM: 0 };
+            let best = a0, bestJ = ev(params, perWall, own).objective;
+            for (let sh = -1.5; sh <= 1.5001; sh += 0.25) for (let sc = 0.9; sc <= 1.1001; sc += 0.025) {
+                const a = { ...a0, storeyShiftM: sh, storeyScale: sc };
+                const j = ev(params, new Map(perWall).set(fi, a), own).objective;
+                if (j < bestJ - 2e-3) { bestJ = j; best = a; }
+            }
+            if (best !== a0) { perWall.set(fi, best); changed.push(`wall ${fi} storeys ${(best.storeyShiftM ?? 0) >= 0 ? '+' : ''}${(best.storeyShiftM ?? 0).toFixed(2)} m x${(best.storeyScale ?? 1).toFixed(3)}`); }
+        }
         cur = ev(params, perWall);
         out.push({ round: 2, objective: cur.objective, windowNcc: cur.windowNcc, depthMaeM: cur.depthMaeM, changed });
     }
     // (c) coordinate rounds
-    const K = knobs();
+    const K = knobs(params, !!options.shapes);
     for (let r = 1; r <= rounds; r++) {
         const changed: string[] = [];
         const scale = Math.pow(0.5, r - 1);

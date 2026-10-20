@@ -30,7 +30,7 @@ import { inLoops, roofAt } from '../pipeline-e/massing-spec';
 import type { MassingFace } from '../pipeline-e/native-massing';
 import { bandProfile, parapetProfile } from '../pipeline-e/band-infer';
 import { eavePlanes } from '../pipeline-e/roof-infer';
-import { storeyLines, type BuildingParameters } from './facade-parameters';
+import { storeyLines, type BuildingParameters, type OpeningParameters } from './facade-parameters';
 
 /** A wall at or above this share of tile coverage counts as seen (pipeline E's LOW_COVERAGE). */
 export const SEEN_COVERAGE = 0.35;
@@ -43,7 +43,11 @@ export const OPENING_CLEARANCE_M = 0.15;
 export const LABEL = { inferred: 'photo-inferred', generated: 'generated', vector: 'vector-modelled', measured: 'measured' } as const;
 
 /** Per wall (face index) adjustments of the bay lattice. */
-export interface WallLatticeAdjust { pitchScale: number; phaseM: number }
+export interface WallLatticeAdjust {
+    pitchScale: number; phaseM: number;
+    /** Round 2: the wall's storey lines moved up (m) and its upper storeys scaled. */
+    storeyShiftM?: number; storeyScale?: number;
+}
 
 export interface TopDown { x0: number; z0: number; pixel: number; width: number; rows: number; height: Float32Array }
 
@@ -57,6 +61,8 @@ export interface ProgramInput {
     perWall?: Map<number, WallLatticeAdjust>;
     /** The scan seen from above (the native top-down height map): eave and ridge heights, raised volumes' heights. */
     topdown?: TopDown;
+    /** Round 1's program exactly (no arch heads, bands of openings, per-wall storeys or the volume placement fix). */
+    legacy?: boolean;
 }
 
 export interface WallPlan { face: number; key: string; seen: boolean; bays: number; pitchM: number; centres: number[]; openings: number; abuttedShare: number }
@@ -114,30 +120,85 @@ export function bayCentres(f: Pick<MassingFace, 'sMin' | 'sMax'>, p: Pick<Buildi
     return { centres: Array.from({ length: n }, (_, i) => start + i * pitch), pitch };
 }
 
-/** The openings of one wall: storeys x bays, clipped to the wall, none against a neighbour. */
+/**
+ * The half-width (share of the opening's half-width) of an arch head at `u` (0 at the springing, 1 at the apex): two arcs
+ * whose centres lie `sharpness` half-widths apart from the axis (0: one centre, a semicircle; 1: an equilateral pointed
+ * arch), the curve then scaled to the read rise (under one half-width: a flattened, segment-like head).
+ */
+export function archHalfWidth(u: number, sharpness: number): number {
+    const d = Math.max(0, Math.min(1, sharpness)), R = 1 + d, H = Math.sqrt(R * R - d * d);
+    const y = Math.max(0, Math.min(1, u)) * H;
+    return Math.max(0, Math.sqrt(Math.max(0, R * R - y * y)) - d);
+}
+
+/**
+ * One opening as the native tool's rectangles: the body up to the springing, then the head as stacked slices (about `sliceM`
+ * each, at most 8; a modelled volume's facet takes openings no lower than 0.15 m) whose widths follow archHalfWidth: normal relief only, the reveal stepped in plan.
+ */
+export function openingRects(o: Pick<OpeningParameters, 'archRiseRatio' | 'apexSharpness'>, s0: number, s1: number, t0: number, t1: number, sliceM = 0.1): Array<[number, number, number, number]> {
+    const hw = (s1 - s0) / 2, c = (s0 + s1) / 2;
+    const rise = Math.min((o.archRiseRatio ?? 0) * hw, 0.6 * (t1 - t0));
+    if (rise < 0.08) return [[s0, s1, t0, t1]];
+    const spring = t1 - rise;
+    const out: Array<[number, number, number, number]> = [[s0, s1, t0, spring]];
+    const k = Math.max(2, Math.min(8, Math.ceil(rise / sliceM)));
+    for (let j = 0; j < k; j++) {
+        const w = hw * archHalfWidth((j + 0.5) / k, o.apexSharpness ?? 0);
+        if (w < 0.04) break;
+        out.push([c - w, c + w, spring + (rise * j) / k, spring + (rise * (j + 1)) / k]);
+    }
+    return out;
+}
+
+/** The wall's storey lines (absolute y): its own read storeys where it has them, then its adjustment. */
+export function wallStoreyLines(inp: ProgramInput, f: MassingFace): number[] {
+    const p = inp.params;
+    const own = inp.legacy ? undefined : (p.wallStoreys ?? []).find(w => w.faceKey === f.key);
+    const adj = inp.perWall?.get(f.index);
+    const g = (own ?? p).groundStoreyM + (adj?.storeyShiftM ?? 0), up = (own ?? p).upperStoreysM.map(x => x * (adj?.storeyScale ?? 1));
+    return storeyLines({ groundStoreyM: Math.max(2, g), upperStoreysM: up }, maxTop(f) - inp.groundY).map(y => inp.groundY + y);
+}
+
+/** The openings of one wall: storeys x bays (grouped in the facade's bands), clipped to the wall, none against a neighbour. */
 export function wallOpenings(inp: ProgramInput, f: MassingFace, seen: boolean): { openings: OpeningItem[]; plan: WallPlan } {
     const p = inp.params;
     const { centres, pitch } = bayCentres(f, p, inp.perWall?.get(f.index));
     const out: OpeningItem[] = [];
     const prov = seen ? LABEL.inferred : LABEL.generated;
     const conf = Math.max(0.05, Math.min(1, p.confidence * (seen ? 1 : 0.6)));
-    const lines = storeyLines(p, maxTop(f) - inp.groundY).map(y => inp.groundY + y);
-    let abutted = 0, tried = 0;
+    const lines = inp.legacy ? storeyLines(p, maxTop(f) - inp.groundY).map(y => inp.groundY + y) : wallStoreyLines(inp, f);
+    const bands = inp.legacy ? [] : (p.facadeBands ?? []);
+    let abutted = 0, tried = 0, families = 0;
+    const bandOf = (y: number) => bands.find(b => y >= b.bottomM - 0.3 && y < b.topM - 0.5);
     lines.forEach((floor, k) => {
-        const o = k === 0 ? p.groundOpening : p.window;
+        const band = bandOf(floor - inp.groundY);
+        // the storeys of a band are grouped from its first storey; a storey inside a group (not its first) places nothing
+        if (band) {
+            const first = lines.findIndex(y => bandOf(y - inp.groundY) === band);
+            const sg = Math.max(1, Math.round(band.storeyGroup));
+            if ((k - first) % sg !== 0) return;
+        }
+        const o = band ? band.opening : k === 0 ? p.groundOpening : p.window;
         const t0 = floor + o.sillM, t1 = t0 + o.heightM;
         if (t0 < bottomAbs(f) + 0.05) return;
-        centres.forEach((c, b) => {
+        const bg = band ? Math.max(1, Math.round(band.bayGroup)) : 1;
+        const groups: number[] = [];
+        if (bg > 1 && centres.length >= bg) for (let b = 0; b + bg <= centres.length; b += bg) groups.push(centres.slice(b, b + bg).reduce((a, x) => a + x, 0) / bg);
+        else groups.push(...centres);
+        groups.forEach((c, b) => {
             const s0 = Math.max(f.sMin + OPENING_CLEARANCE_M, c - o.widthM / 2), s1 = Math.min(f.sMax - OPENING_CLEARANCE_M, c + o.widthM / 2);
             if (s1 - s0 < 0.6 * o.widthM) return;
             const top = Math.min(topAbsAt(f, s0), topAbsAt(f, s1)) - OPENING_CLEARANCE_M - (p.cornice.thicknessM > 0 ? p.cornice.thicknessM : 0);
             if (t1 > top) return;
             tried++;
             if (abutment(inp, f, s0, s1) > t0 - 0.3) { abutted++; return; }
-            out.push({ id: `f${f.index}_${k}_${b}`, face: f.key, s0, s1, t0: t0 - oy(f), t1: t1 - oy(f), depth: o.recessM, scanned: false, confidence: conf, provenance: prov });
+            families++;
+            const id = `f${f.index}_${k}_${b}`;
+            const rects = inp.legacy ? [[s0, s1, t0, t1] as [number, number, number, number]] : openingRects(o, s0, s1, t0, t1, f.wall ? 0.1 : 0.18);
+            rects.forEach(([a0, a1, b0, b1], j) => out.push({ id: j ? `${id}_h${j}` : id, face: f.key, s0: a0, s1: a1, t0: b0 - oy(f), t1: b1 - oy(f), depth: o.recessM, scanned: false, confidence: conf, provenance: prov }));
         });
     });
-    return { openings: out, plan: { face: f.index, key: f.key, seen, bays: centres.length, pitchM: pitch, centres, openings: out.length, abuttedShare: tried ? abutted / tried : 0 } };
+    return { openings: out, plan: { face: f.index, key: f.key, seen, bays: centres.length, pitchM: pitch, centres, openings: families, abuttedShare: tried ? abutted / tried : 0 } };
 }
 
 /** A wall's plan endpoints (y = 0). */
@@ -237,9 +298,9 @@ export function facadeProgram(inp: ProgramInput): FacadeProgram {
     const sweeps: SweepItem[] = [];
     const conf = Math.max(0.05, Math.min(1, p.confidence));
     const notAbutted = (f: MassingFace, y: number) => abutment(inp, f, f.sMin, f.sMax) < y;
-    const addSweep = (id: string, run: MassingFace[], profile: Array<[number, number]>) => {
+    const addSweep = (id: string, run: MassingFace[], profile: Array<[number, number]>, relativeToTop = false) => {
         const { provenance } = sweepLabel(run);
-        sweeps.push({ id, confidence: provenance === LABEL.inferred ? conf : conf * 0.6, provenance, profile, faces: run.map(f => f.key) });
+        sweeps.push({ id, confidence: provenance === LABEL.inferred ? conf : conf * 0.6, provenance, profile, faces: run.map(f => f.key), ...(relativeToTop ? { relativeToTop: true } : {}) });
     };
     loops.forEach((loop, li) => {
         // bands at their heights
@@ -262,7 +323,7 @@ export function facadeProgram(inp: ProgramInput): FacadeProgram {
             chains(loop, f => same(f) && top - f.tBottom >= Math.max(2, 2 * p.cornice.thicknessM)).forEach((run, ri) => {
                 const id = `${li}_${String(top).replace('.', 'p')}_${ri}`;
                 if (p.cornice.thicknessM > 0.05 && p.cornice.projectionM > 0.02) addSweep(`cornice_${id}`, run, bandProfile(top - p.cornice.thicknessM, top, p.cornice.projectionM));
-                if (p.parapet.heightM > 0.1) addSweep(`parapet_${id}`, run, parapetProfile(top, p.parapet.heightM, PARAPET_THICKNESS_M));
+                if (p.parapet.heightM > 0.1) addSweep(`parapet_${id}`, run, parapetProfile(p.parapet.heightM, PARAPET_THICKNESS_M), true);
             });
         }
     });
@@ -311,14 +372,28 @@ export function facadeProgram(inp: ProgramInput): FacadeProgram {
             let x0 = td.x0 + (v.box[0] / 1000) * td.width * td.pixel, x1 = td.x0 + (v.box[2] / 1000) * td.width * td.pixel;
             let z0 = td.z0 + (v.box[1] / 1000) * td.rows * td.pixel, z1 = td.z0 + (v.box[3] / 1000) * td.rows * td.pixel;
             if (x1 - x0 < 0.8 || z1 - z0 < 0.8) return;
-            const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
-            const host = parts.find(q => inLoops(cx, cz, q.loops));
+            let cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+            let host = parts.find(q => inLoops(cx, cz, q.loops));
+            if (!inp.legacy) {
+                // the part under most of the box hosts it, and it shrinks towards the middle of what lies on that part
+                const counts = new Map<MassingPart, { n: number; sx: number; sz: number }>();
+                for (let i = 0; i < 12; i++) for (let j = 0; j < 12; j++) {
+                    const x = x0 + ((i + 0.5) / 12) * (x1 - x0), z = z0 + ((j + 0.5) / 12) * (z1 - z0);
+                    const q = parts.find(pp => !volumeParts.includes(pp.id) && inLoops(x, z, pp.loops));
+                    if (!q) continue;
+                    const c = counts.get(q) ?? { n: 0, sx: 0, sz: 0 };
+                    c.n++; c.sx += x; c.sz += z; counts.set(q, c);
+                }
+                const best = [...counts.entries()].sort((a, b) => b[1].n - a[1].n)[0];
+                if (best) { host = best[0]; cx = best[1].sx / best[1].n; cz = best[1].sz / best[1].n; }
+            }
             if (!host) return;
+            const hostPart = host;
             // a raised volume stands on its host's roof: shrunk about its centre until it lies 0.4 m inside the host's plan
             // (a box reaching past the walls would cut them, the native tool trimming a wall to what stands outside it)
             const insideHost = (a: number, b: number, c: number, d: number) => {
                 for (let i = 0; i <= 4; i++) for (const [x, z] of [[a + (c - a) * i / 4, b], [a + (c - a) * i / 4, d], [a, b + (d - b) * i / 4], [c, b + (d - b) * i / 4]]) {
-                    for (const [ox, oz] of [[0.4, 0], [-0.4, 0], [0, 0.4], [0, -0.4]]) if (!inLoops(x + ox, z + oz, host.loops)) return false;
+                    for (const [ox, oz] of [[0.4, 0], [-0.4, 0], [0, 0.4], [0, -0.4]]) if (!inLoops(x + ox, z + oz, hostPart.loops)) return false;
                 }
                 return true;
             };
@@ -327,7 +402,7 @@ export function facadeProgram(inp: ProgramInput): FacadeProgram {
             if (k2 <= 0.2) { notes.push(`raised volume ${k} dropped: it does not fit inside the roof it stands on`); return; }
             x0 = cx - (cx - x0) * k2; x1 = cx + (x1 - cx) * k2; z0 = cz - (cz - z0) * k2; z1 = cz + (z1 - cz) * k2;
             if (x1 - x0 < 0.8 || z1 - z0 < 0.8) return;
-            const roof = roofAt(host, cx, cz);
+            const roof = roofAt(hostPart, cx, cz);
             const scanTop = medianTopIn(td, x0, z0, x1, z1);
             const topY = Number.isFinite(scanTop) && scanTop - roof >= 0.5 ? scanTop : roof + v.heightM;
             const id = `f-volume-${k}`;

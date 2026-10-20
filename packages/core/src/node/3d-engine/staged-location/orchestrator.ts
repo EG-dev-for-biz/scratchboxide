@@ -141,6 +141,7 @@ import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSIO
 import type { MassingRun } from './pipeline-e/native-massing';
 import { mslToTileY, type SolarRoof } from './pipeline-e/solar-roof';
 import { runInferenceE, type InferenceOutcome, type StepRecord } from './pipeline-e/inference';
+import { runVersionFEnhanced, stagedGeometryF } from './version-f/f2';
 import { gateDecision, photoMatchGate, pipelineERelief, runReliefStage, GENERATED_LABEL, MEASURED_AVERAGED_LABEL, RELIEF_GATE_JUDGE, RELIEF_PARAMS, RELIEF_VERSION, type PhotoGateResult, type ReliefOutcome } from './pipeline-e/relief';
 import { crownsFromStrip } from './pipeline-e/occluders';
 import { enhanceGuards, enhanceModels, genAiPlateClient, stagedEnhance, ENHANCE_STREET_VIEWS } from './pipeline-e/enhance';
@@ -176,7 +177,8 @@ export const STAGES = {
     // the facades' grammars read from the tile photo (three readings per facade, concurrently), gated, and the relief run
     // again with the accepted ones; pipeline E's inference runs here too, and in its enhanced mode (the default within E) also a registered
     // Street View survey (about 3 min, alongside the readings) and up to 8 redraws (about 2.5 min)
-    grammar: { order: 2, title: 'Facade grammar', budgetMs: 420_000 },
+    // version F (experiment, SCRATCHBOX_STAGED_GEOMETRY=f) reads, adjusts and redraws in this slot: a longer limit
+    grammar: { order: 2, title: 'Facade grammar', budgetMs: (process.env.SCRATCHBOX_STAGED_GEOMETRY ?? '').trim().toLowerCase() === 'f' ? 900_000 : 420_000 },
     // pipeline E: measured relief on the clean massing (the scan averaged along what repeats), then the photo-match gate
     relief: { order: 2, title: 'Measured relief', budgetMs: 480_000 },
     fit: { order: 3, title: 'Scan-fitted rebuild', budgetMs: 30_000 },
@@ -2329,21 +2331,25 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         return got.views;
                     } : undefined;
                     const enhance = deps.textures?.enhance;
-                    const out = await runInferenceE({
+                    const inferenceInput: Parameters<typeof runInferenceE>[0] = {
                         massing: r.massing, run: r.run!, textures: r.textures!, tilePath: strip ? strip.devegetatedGlb : extraction.texturedGlb, isolateGlb: e.refined.rawClayGlb!,
                         dir: path.join(cache.dir, 'pipeline_e', e.key.slice(0, 24), 'inference'), stage: 'grammar', stageKey: e.key,
                         ...(chain ? { chain } : {}), ...(streetViews ? { streetViews } : {}), structureMesh, crowns,
                         ...(enhance ? { inpaint: { client: enhance, models: [LIGHTING_MODEL_LITE] } } : {}),
                         ...(enhanceOn && visionAvailable ? { enhance: { client: genAiPlateClient(visionAvailable.client), models: enhanceModels(), locationName: placeValue!.formattedAddress, guards: enhanceGuards(), cacheDir: path.join(cache.dir, 'enhance_plates'), ...(guideViews ? { streetViews: guideViews } : {}) } } : {}),
                         solar: [], anchor: structure!.seed, signal: io.signal, onProgress: m => io.progress(m)
-                    });
+                    };
+                    // version F (experiment, SCRATCHBOX_STAGED_GEOMETRY=f): its procedural geometry in place of E's inference, E's enhanced texturing on it
+                    const out = stagedGeometryF() && visionAvailable
+                        ? await runVersionFEnhanced({ ...inferenceInput, place: placeValue!.formattedAddress, genai: visionAvailable.client })
+                        : await runInferenceE(inferenceInput);
                     cache.writeRunNote(runId, 'pipeline_e_inference', { steps: out.steps, timingsMs: out.timingsMs });
                     recordResidualAudit('grammar', out.run, enhanceOn ? 'enhanced layer' : 'inferred layer');
                     const kept = out.steps.filter(s => s.accepted > 0);
                     const conf = Math.max(0.05, Math.min(1, ...out.grammars.map(g => g.confidence), 0.75));
                     const key8 = e.key.slice(0, 8);
                     // the enhanced layer is published under its own name: it never replaces the plain inferred one
-                    const suffix = enhanceOn ? 'enhanced' : 'inferred';
+                    const suffix = stagedGeometryF() && visionAvailable ? 'versionf' : enhanceOn ? 'enhanced' : 'inferred';
                     const pubClay = cache.publishFile(out.files.clayGlb, `${base}_massing_${key8}_${suffix}.glb`);
                     const pubTex = cache.publishFile(out.files.texturedGlb, `${base}_massing_${key8}_${suffix}_tex.glb`);
                     const enh = out.enhanced;

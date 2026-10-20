@@ -38,8 +38,8 @@ import { massingSpecText, type Massing, type MassingPart } from '../pipeline-e/m
 import { readFaceOrtho, runMassing, faceToPixel, type MassingFace, type MassingNode, type MassingRun } from '../pipeline-e/native-massing';
 import { MASSING_PARAMS, plainTextures, writeMassingLayer, type MassingLayerFiles } from '../pipeline-e/pipeline-e';
 import type { TexelSource } from '../pipeline-e/massing-glb';
-import { facadeParametersPrompt, parseFacadeParameters, FACADE_PARAMETERS_PROMPT_ID, type BuildingParameters, type ReadingPictureNote } from './facade-parameters';
-import { facadeProgram, LABEL, SEEN_COVERAGE, type FacadeProgram, type ProgramInput, type TopDown } from './facade-program';
+import { facadeParametersPrompt, parseFacadeParameters, FACADE_PARAMETERS_PROMPT_ID, FACADE_PARAMETERS_PROMPT_ID_V2, type BuildingParameters, type ReadingPictureNote } from './facade-parameters';
+import { facadeProgram, LABEL, SEEN_COVERAGE, type FacadeProgram, type ProgramInput, type TopDown, type WallLatticeAdjust } from './facade-program';
 import { compareSilhouette, compareWall, comparisonCameras, downsampleWallTile, nodesToSoup, renderedWallOffset, soupBounds, summariseWalls, wallEvidence, wallTileFromOrtho, type SilhouetteCompare, type WallCompare, type WallEvidence } from './render-compare';
 import { adjustParameters, type AdjustRound } from './adjust';
 
@@ -50,7 +50,7 @@ export const ADJUST_PIXEL_M = 0.15;
 /** The native tool's parameters for F: pipeline E's, with the scan residual (and its ground apron) off. */
 export const VERSION_F_NATIVE_PARAMS: Record<string, number> = { ...MASSING_PARAMS, residual: 0, sections: 0 };
 
-export interface StreetViewPhoto { bytes: Uint8Array; caption: string }
+export interface StreetViewPhoto { bytes: Uint8Array; caption: string; mimeType?: string }
 
 export interface VersionFInput {
     place: string;
@@ -74,7 +74,7 @@ export interface VersionFResult {
     files: MassingLayerFiles;
     reading: { params: BuildingParameters; defaulted: string[]; model?: string; promptId: string; pictures: ReadingPictureNote[]; raw?: string };
     adjusted: BuildingParameters;
-    perWall: Array<{ face: number; pitchScale: number; phaseM: number }>;
+    perWall: Array<{ face: number; pitchScale: number; phaseM: number; storeyShiftM?: number; storeyScale?: number }>;
     program: Pick<FacadeProgram, 'notes' | 'walls' | 'pitchedParts' | 'volumeParts'> & { openings: number; sweeps: number; faceSweeps: number; rejectedOpenings: number; rejectedSweeps: number };
     before: CheckNumbers;
     after: CheckNumbers;
@@ -166,12 +166,15 @@ function lookAt(eye: [number, number, number], target: [number, number, number],
 }
 
 /** Step 1: the pictures and the one reading. */
-async function read(input: VersionFInput, run0: MassingRun, tile: TileTriangles, groundY: number, dir: string): Promise<VersionFResult['reading']> {
+async function read(input: VersionFInput, run0: MassingRun, tile: TileTriangles, groundY: number, dir: string, shapes = false): Promise<VersionFResult['reading']> {
     const pictures: ReadingPictureNote[] = [];
+    /** The face key of each picture (by position), for walls; undefined for the others. */
+    const wallKeys: Array<string | undefined> = [];
     const parts: Array<{ inlineData: { mimeType: string; data: string } }> = [];
     const add = (png: Buffer | Uint8Array, mime: string, note: ReadingPictureNote, file: string) => {
         parts.push({ inlineData: { mimeType: mime, data: Buffer.from(png).toString('base64') } });
         pictures.push(note);
+        wallKeys.push(undefined);
         fs.writeFileSync(path.join(dir, file), png);
     };
     const td = run0.report.topdown;
@@ -183,6 +186,7 @@ async function read(input: VersionFInput, run0: MassingRun, tile: TileTriangles,
         const r = wallWithRuler(o.rgba, f, groundY);
         const az = ((Math.atan2(f.normal[0], -f.normal[2]) * 180) / Math.PI + 360) % 360;
         add(r.png, 'image/png', { role: 'wall', caption: `An orthographic picture of one wall (facing compass ${az.toFixed(0)} deg), ${(f.sMax - f.sMin).toFixed(1)} m wide, from ${(f.tBottom - groundY).toFixed(1)} m to ${(f.tMax - groundY).toFixed(1)} m above the street, ruler at the left; grey is where the scan has no photo.` }, `read_wall_${f.index}.png`);
+        wallKeys[wallKeys.length - 1] = f.key;
     }
     // two obliques of the photo tile towards the two largest seen walls
     const all = nodesToSoup(run0.nodes);
@@ -196,20 +200,22 @@ async function read(input: VersionFInput, run0: MassingRun, tile: TileTriangles,
         const r = renderTriangles([tile], cam, { supersample: 1 });
         add(encodePng(r.width, r.height, r.rgba, 4), 'image/png', { role: 'oblique', caption: 'An oblique view of the photogrammetric tile (the building in the middle, its street around it), looking down at about 35 deg.' }, `read_oblique_${f.index}.png`);
     }
-    (input.streetViewPhotos ?? []).slice(0, 2).forEach((p, k) => add(p.bytes, 'image/jpeg', { role: 'street view', caption: p.caption }, `read_streetview_${k}.jpg`));
-    const prompt = facadeParametersPrompt(input.place, pictures);
+    (input.streetViewPhotos ?? []).slice(0, 2).forEach((p, k) => add(p.bytes, p.mimeType ?? 'image/jpeg', { role: 'street view', caption: p.caption }, `read_streetview_${k}.${p.mimeType === 'image/png' ? 'png' : 'jpg'}`));
+    const prompt = facadeParametersPrompt(input.place, pictures, { shapes });
     fs.writeFileSync(path.join(dir, 'read_prompt.txt'), prompt);
-    if (input.reading) return { params: input.reading, defaulted: [], promptId: FACADE_PARAMETERS_PROMPT_ID, pictures };
+    if (input.reading) return { params: { ...input.reading, facadeBands: input.reading.facadeBands ?? [], wallStoreys: input.reading.wallStoreys ?? [] }, defaulted: [], promptId: FACADE_PARAMETERS_PROMPT_ID, pictures };
     if (!input.chain) throw new Error('version F needs a vision model to read the parameters (none configured)');
     const r = await input.chain.generate({ contents: [{ role: 'user', parts: [...parts, { text: prompt }] }], config: { responseMimeType: 'application/json', temperature: 0 } }, { stage: 'grammar' });
     const text = r.response.candidates?.[0]?.content?.parts?.map(q => q.text ?? '').join('') ?? '';
     const parsed = parseFacadeParameters(text);
     r.remember();
-    return { ...parsed, model: r.model, promptId: FACADE_PARAMETERS_PROMPT_ID, pictures, raw: text };
+    // a wall's own storeys name the picture they were read from: tie them to that wall
+    parsed.params.wallStoreys = parsed.params.wallStoreys.map(w => ({ ...w, ...(wallKeys[w.picture - 1] ? { faceKey: wallKeys[w.picture - 1] } : {}) })).filter(w => w.faceKey);
+    return { ...parsed, model: r.model, promptId: shapes ? FACADE_PARAMETERS_PROMPT_ID_V2 : FACADE_PARAMETERS_PROMPT_ID, pictures, raw: text };
 }
 
 /** Render-compare of one built solid. */
-function check(run: MassingRun, isoSoup: Float32Array, evidence: WallEvidence[]): CheckNumbers {
+export function check(run: MassingRun, isoSoup: Float32Array, evidence: WallEvidence[]): CheckNumbers {
     const model = nodesToSoup(run.nodes);
     const cams = comparisonCameras(soupBounds(isoSoup));
     const silhouettes = cams.map(c => compareSilhouette(c.id, model, isoSoup, c.cam));
@@ -250,31 +256,55 @@ export function versionFProvenance(node: Pick<MassingNode, 'kind' | 'name' | 'pr
     };
 }
 
-/** Runs version F for one building. */
-export async function runVersionF(input: VersionFInput): Promise<VersionFResult> {
+/** What planning version F needs beyond the input: the first massing run (its orthos are the walls' reference frames). */
+export interface VersionFPlanInput extends VersionFInput {
+    run0: MassingRun;
+    /** Round 1's program exactly (legacy program, parapet kept on any gain). */
+    legacy?: boolean;
+}
+
+export interface VersionFPlan {
+    reading: VersionFResult['reading'];
+    params: BuildingParameters;
+    perWall: Map<number, WallLatticeAdjust>;
+    prog: FacadeProgram;
+    runB: MassingRun;
+    before: CheckNumbers;
+    after: CheckNumbers;
+    rounds: AdjustRound[];
+    silhouetteRound: NonNullable<VersionFResult['silhouetteRound']>;
+    ctx: { pitchedParts: Set<string>; volumeParts: Set<string>; partHeightSource: Map<string, string>; iou: number };
+    evidence: WallEvidence[];
+    base: ProgramInput;
+    groundY: number;
+    timingsMs: Record<string, number>;
+}
+
+/** A silhouette change must raise the obliques' and top view's mean IoU by this much to replace the read parapet. */
+export const MIN_SILHOUETTE_GAIN = 0.01;
+
+/** Steps 1-4: read, generate, check, adjust; the final solid (bake on). No textures. */
+export async function planVersionF(input: VersionFPlanInput): Promise<VersionFPlan> {
     const T: Record<string, number> = {};
     const progress = input.onProgress ?? (() => undefined);
+    const run0 = input.run0;
     fs.mkdirSync(input.outDir, { recursive: true });
     const groundY = Math.min(...input.massing.parts.map(p => p.baseY), ...input.massing.meshes.flatMap(m => m.vertices.map(v => v[1])));
     let t = Date.now();
-    progress('version F: the measured massing and the tile\'s orthographic cameras');
-    const run0 = await build(input, input.massing.parts, {}, path.join(input.outDir, 'native0'), { topdown: 1 });
-    T.massing = Date.now() - t;
-    t = Date.now();
     const tile = readTileTriangles(fs.readFileSync(input.tilePath));
     const iso = readTileTriangles(fs.readFileSync(input.isolateGlb));
     T.load = Date.now() - t;
     t = Date.now();
     progress('version F: reading the facade system');
-    const reading = await read(input, run0, tile, groundY, input.outDir);
+    const reading = await read(input, run0, tile, groundY, input.outDir, !input.legacy);
     T.read = Date.now() - t;
     const td0 = run0.report.topdown;
     let topdown: TopDown | undefined;
     if (td0) { const b = fs.readFileSync(path.join(run0.dir, td0.height)); topdown = { x0: td0.x0, z0: td0.z0, pixel: td0.pixel, width: td0.width, rows: td0.rows, height: new Float32Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)) }; }
-    const base: ProgramInput = { faces: run0.report.faces, parts: input.massing.parts, groundY, params: reading.params, neighbourTop: neighbourTopFn(tile, run0.report.faces, groundY), ...(topdown ? { topdown } : {}) };
-    // the seen walls' evidence and the plain wall masks
+    const base: ProgramInput = { faces: run0.report.faces, parts: input.massing.parts, groundY, params: reading.params, neighbourTop: neighbourTopFn(tile, run0.report.faces, groundY), ...(topdown ? { topdown } : {}), ...(input.legacy ? { legacy: true } : {}) };
+    // the seen walls' evidence and the plain wall masks (the first run's scan residual, when it has one, is not the massing)
     t = Date.now();
-    const baseSoup = nodesToSoup(run0.nodes);
+    const baseSoup = nodesToSoup(run0.nodes, n => n.kind !== 'residual');
     const evidence: WallEvidence[] = [], coarseEvidence: WallEvidence[] = [];
     const inside = new Map<number, Uint8Array>();
     for (const f of run0.report.faces) {
@@ -302,15 +332,15 @@ export async function runVersionF(input: VersionFInput): Promise<VersionFResult>
     T.check = Date.now() - t;
     t = Date.now();
     progress('version F: adjusting the parameters against the tile');
-    const adj = adjustParameters(base, coarseEvidence, inside, input.rounds ?? 3);
+    const adj = adjustParameters(base, coarseEvidence, inside, input.rounds ?? 3, { shapes: !input.legacy });
     let params = adj.params;
-    // the silhouette round: the parapet height against the obliques and the top view, with real builds
-    let silhouetteRound: VersionFResult['silhouetteRound'];
+    // the silhouette round: the parapet height against the obliques and the top view, with real builds; round 2 keeps the read
+    // height unless another raises the mean IoU by MIN_SILHOUETTE_GAIN (round 1 took any gain: a 2 m parapet for 0.001)
+    let silhouetteRound: VersionFPlan['silhouetteRound'];
     {
         const h = params.parapet.heightM;
         const tries = [...new Set([h, h + 0.5, Math.max(0, h - 0.5)].map(v => Math.round(v * 100) / 100))];
         const tried: Array<{ parapetM: number; silhouetteIou: number }> = [];
-        let best = h, bestIou = -1;
         for (const v of tries) {
             const pv = { ...params, parapet: { heightM: v } };
             const pr = facadeProgram({ ...base, params: pv, perWall: adj.perWall });
@@ -319,22 +349,69 @@ export async function runVersionF(input: VersionFInput): Promise<VersionFResult>
             const cams = comparisonCameras(soupBounds(isoSoup));
             const iou = cams.map(c => compareSilhouette(c.id, model, isoSoup, c.cam).iou).reduce((a, x) => a + x, 0) / cams.length;
             tried.push({ parapetM: v, silhouetteIou: iou });
-            if (iou > bestIou + 1e-4) { bestIou = iou; best = v; }
             fs.rmSync(rr.dir, { recursive: true, force: true });
         }
-        params = { ...params, parapet: { heightM: best } };
-        silhouetteRound = { tried, kept: best };
+        const read0 = tried.find(x => x.parapetM === Math.round(h * 100) / 100)!;
+        let best = read0;
+        for (const x of tried) if (x.silhouetteIou > best.silhouetteIou + (input.legacy ? 1e-4 : MIN_SILHOUETTE_GAIN)) best = x;
+        params = { ...params, parapet: { heightM: best.parapetM } };
+        silhouetteRound = { tried, kept: best.parapetM };
     }
     T.adjust = Date.now() - t;
     t = Date.now();
-    progress('version F: the adjusted building, textured from the tile photo');
+    progress('version F: the adjusted building');
     const prog = facadeProgram({ ...base, params, perWall: adj.perWall });
     const runB = await build(input, prog.parts, prog, path.join(input.outDir, 'native'), { topdown: 0 });
     T.generateFinal = Date.now() - t;
     t = Date.now();
     const after = check(runB, isoSoup, evidence);
     T.checkFinal = Date.now() - t;
+    fs.rmSync(runA.dir, { recursive: true, force: true });
+    const ctx = { pitchedParts: new Set(prog.pitchedParts), volumeParts: new Set(prog.volumeParts), partHeightSource: new Map(prog.parts.map(p => [p.id, String(p.heightSource)])), iou: input.massing.check.iou };
+    return { reading, params, perWall: adj.perWall, prog, runB, before, after, rounds: adj.rounds, silhouetteRound, ctx, evidence, base, groundY, timingsMs: T };
+}
+
+/**
+ * The structure guide of one wall for the image model: the planned model's surface in the wall's own frame (mid grey wall,
+ * dark openings, light projecting bands and piers, black outside the wall), PNG.
+ */
+export function structureGuidePng(plan: Pick<VersionFPlan, 'runB'>, f: MassingFace): { png: Buffer; offset: Float32Array } {
+    const off = renderedWallOffset(nodesToSoup(plan.runB.nodes), f);
+    const rgb = new Uint8Array(f.width * f.height * 3);
+    for (let i = 0; i < off.length; i++) {
+        const v = off[i];
+        const g = !Number.isFinite(v) ? 0 : v < -0.05 ? 45 : v > 0.05 ? 215 : 140;
+        rgb[i * 3] = rgb[i * 3 + 1] = rgb[i * 3 + 2] = g;
+    }
+    return { png: encodePng(f.width, f.height, rgb, 3), offset: off };
+}
+
+/** Summary numbers of a plan and its final solid. */
+export function planSummary(plan: VersionFPlan): Pick<VersionFResult, 'adjusted' | 'perWall' | 'program' | 'before' | 'after' | 'rounds' | 'silhouetteRound' | 'nodes'> {
+    const byLabel: Record<string, number> = {};
+    let vertices = 0, triangles = 0;
+    for (const n of plan.runB.nodes) { const l = versionFProvenance(n, plan.ctx).label; byLabel[l] = (byLabel[l] ?? 0) + 1; vertices += n.positions.length / 3; triangles += n.indices.length / 3; }
+    const prog = plan.prog;
+    return {
+        adjusted: plan.params, perWall: [...plan.perWall].map(([face, a]) => ({ face, pitchScale: a.pitchScale, phaseM: a.phaseM, ...(a.storeyShiftM !== undefined ? { storeyShiftM: a.storeyShiftM } : {}), ...(a.storeyScale !== undefined ? { storeyScale: a.storeyScale } : {}) })),
+        program: { notes: prog.notes, walls: prog.walls, pitchedParts: prog.pitchedParts, volumeParts: prog.volumeParts, openings: prog.openings.length, sweeps: prog.sweeps.length, faceSweeps: prog.faceSweeps.length, rejectedOpenings: plan.runB.report.rejectedOpenings.length, rejectedSweeps: plan.runB.report.rejectedSweeps.length },
+        before: plan.before, after: plan.after, rounds: plan.rounds, silhouetteRound: plan.silhouetteRound,
+        nodes: { total: plan.runB.nodes.length, byLabel, residual: plan.runB.nodes.filter(n => n.kind === 'residual').length, vertices, triangles }
+    };
+}
+
+/** Runs version F for one building with option (a) textures (the dev driver; round 1's F, or `legacy`). */
+export async function runVersionF(input: VersionFInput & { legacy?: boolean }): Promise<VersionFResult> {
+    const progress = input.onProgress ?? (() => undefined);
+    fs.mkdirSync(input.outDir, { recursive: true });
+    let t = Date.now();
+    progress('version F: the measured massing and the tile\'s orthographic cameras');
+    const run0 = await build(input, input.massing.parts, {}, path.join(input.outDir, 'native0'), { topdown: 1 });
+    const massingMs = Date.now() - t;
+    const plan = await planVersionF({ ...input, run0 });
+    const T: Record<string, number> = { massing: massingMs, ...plan.timingsMs };
     t = Date.now();
+    const { runB, prog, params } = plan;
     const { textures, legend } = plainTextures(runB);
     const READ = legend.length;
     const legendF: TexelSource[] = [...legend, { source: 'version-f-read-colour', label: LABEL.generated, method: 'a wall the tile hardly sees: the wall colour the vision reading gave, the read glazing colour in its openings', rung: 3, weight: 0.1 }];
@@ -349,21 +426,8 @@ export async function runVersionF(input: VersionFInput): Promise<VersionFResult>
             for (let y = Math.max(0, Math.round(ya)); y < Math.min(tx.height, Math.round(yb)); y++) for (let x = Math.max(0, Math.round(xa)); x < Math.min(tx.width, Math.round(xb)); x++) { const i = y * tx.width + x; tx.rgba[i * 4] = glassRgb[0]; tx.rgba[i * 4 + 1] = glassRgb[1]; tx.rgba[i * 4 + 2] = glassRgb[2]; }
         }
     }
-    const ctx = { pitchedParts: new Set(prog.pitchedParts), volumeParts: new Set(prog.volumeParts), partHeightSource: new Map(prog.parts.map(p => [p.id, String(p.heightSource)])), iou: input.massing.check.iou };
-    const files = writeMassingLayer(runB, input.massing, textures, legendF, input.outDir, 'remesh', VERSION_F_ID, 'version_f', n => versionFProvenance(n, ctx));
+    const files = writeMassingLayer(runB, input.massing, textures, legendF, input.outDir, 'remesh', VERSION_F_ID, 'version_f', n => versionFProvenance(n, plan.ctx));
     T.texture = Date.now() - t;
-    const byLabel: Record<string, number> = {};
-    let vertices = 0, triangles = 0;
-    for (const n of runB.nodes) { const l = versionFProvenance(n, ctx).label; byLabel[l] = (byLabel[l] ?? 0) + 1; vertices += n.positions.length / 3; triangles += n.indices.length / 3; }
-    // the first run (the massing and its orthos: the walls' reference frames) is kept for inspection; the untextured trial goes
-    fs.rmSync(runA.dir, { recursive: true, force: true });
     T.total = Object.values(T).reduce((a, x) => a + x, 0);
-    return {
-        files, reading, adjusted: params, perWall: [...adj.perWall].map(([face, a]) => ({ face, ...a })),
-        program: { notes: prog.notes, walls: prog.walls, pitchedParts: prog.pitchedParts, volumeParts: prog.volumeParts, openings: prog.openings.length, sweeps: prog.sweeps.length, faceSweeps: prog.faceSweeps.length, rejectedOpenings: runB.report.rejectedOpenings.length, rejectedSweeps: runB.report.rejectedSweeps.length },
-        before, after, rounds: adj.rounds, silhouetteRound,
-        nodes: { total: runB.nodes.length, byLabel, residual: runB.nodes.filter(n => n.kind === 'residual').length, vertices, triangles },
-        timingsMs: T
-    };
+    return { files, reading: plan.reading, ...planSummary(plan), timingsMs: T };
 }
-

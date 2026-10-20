@@ -28,7 +28,24 @@ export interface OpeningParameters {
     sillM: number;
     /** How far the glazing sits behind the wall face (m). */
     recessM: number;
+    /**
+     * The head's rise over the half-width (0 a flat head; under 1 segmental; 1 semicircular; above 1 stilted). The opening's
+     * height includes the head.
+     */
+    archRiseRatio?: number;
+    /** 0 a round (or segmental) head, rising to 1 for an equilateral pointed head: the two arcs' centres move apart. */
+    apexSharpness?: number;
 }
+
+/**
+ * A horizontal band of the facade with its own openings: from `bottomM` to `topM` above the street, openings of `opening`'s
+ * size; each spans `bayGroup` bays (an arcade opening over paired bays) and repeats every `storeyGroup` storeys (an arch
+ * over two or three storeys). Both are counts read as numbers (rounded where they place openings).
+ */
+export interface FacadeBand { bottomM: number; topM: number; opening: OpeningParameters; bayGroup: number; storeyGroup: number }
+
+/** One wall's own storeys (a double-height ground floor, a penthouse), keyed by the wall picture it was read from. */
+export interface WallStoreys { picture: number; faceKey?: string; groundStoreyM: number; upperStoreysM: number[] }
 
 export interface BandParameters {
     /** Height of the band's centre above the ground (m). */
@@ -57,6 +74,10 @@ export interface BuildingParameters {
     edgeMarginM: number;
     window: OpeningParameters;
     groundOpening: OpeningParameters;
+    /** Bands of the facade whose openings differ from `window` (arcades, arched storeys); empty when one family holds. */
+    facadeBands: FacadeBand[];
+    /** Walls whose storeys differ from the building's (by the picture they were read from). */
+    wallStoreys: WallStoreys[];
     plinth: { heightM: number; projectionM: number };
     bands: BandParameters[];
     cornice: { thicknessM: number; projectionM: number };
@@ -87,13 +108,17 @@ export const PARAMETER_BOUNDS = {
     parapetM: [0, 4],
     pierWidthM: [0, 3],
     pitchDeg: [0, 75],
-    rooftopHeightM: [0.5, 30]
+    rooftopHeightM: [0.5, 30],
+    archRiseRatio: [0, 2],
+    apexSharpness: [0, 1],
+    groupCount: [1, 6]
 } as const;
 
 export const DEFAULT_PARAMETERS: BuildingParameters = {
     groundStoreyM: 4.2, upperStoreysM: [3.4], bayWidthM: 3.2, edgeMarginM: 0.8,
     window: { widthM: 1.3, heightM: 2.0, sillM: 0.9, recessM: 0.2 },
     groundOpening: { widthM: 2.4, heightM: 3.2, sillM: 0.3, recessM: 0.25 },
+    facadeBands: [], wallStoreys: [],
     plinth: { heightM: 0, projectionM: 0 }, bands: [], cornice: { thicknessM: 0, projectionM: 0 }, parapet: { heightM: 0 },
     piers: { widthM: 0, projectionM: 0 }, roof: { pitchDeg: 0, ridgeAzimuthDeg: 0, hipped: false }, rooftopVolumes: [],
     materials: { wall: { linearRgb: [0.25, 0.22, 0.2], roughness: 0.85 }, trim: { linearRgb: [0.4, 0.38, 0.35], roughness: 0.7 }, glazing: { linearRgb: [0.03, 0.035, 0.04], roughness: 0.1 } },
@@ -109,9 +134,15 @@ export interface ReadingPictureNote {
 }
 
 export const FACADE_PARAMETERS_PROMPT_ID = 'version-f/facade-parameters/v1';
+export const FACADE_PARAMETERS_PROMPT_ID_V2 = 'version-f/facade-parameters/v2';
 
 /** The reading prompt for the pictures described by `pictures` (in the order they are sent). */
-export function facadeParametersPrompt(place: string, pictures: ReadingPictureNote[]): string {
+export function facadeParametersPrompt(place: string, pictures: ReadingPictureNote[], options: { shapes?: boolean } = {}): string {
+    const shapes = options.shapes ? [
+        '- every opening ("window", "groundOpening" and each band\'s "opening") also has "archRiseRatio" (the head\'s rise over half the opening\'s width: 0 flat, about 0.3-0.6 segmental, 1 semicircular) and "apexSharpness" (0 round, up to 1 for an equilateral pointed arch); the opening\'s heightM includes its head;',
+        '- "facadeBands": horizontal zones whose openings differ from "window" (an arcade over two or three storeys, an arched top storey, a double-height ground floor): [{"bottomM","topM" (above the street),"opening":{...},"bayGroup" (how many bays one opening spans, 1 = one per bay),"storeyGroup" (how many storeys one opening spans)}];',
+        '- "wallStoreys": walls (by their picture number) whose storeys differ from the rest: [{"picture":2,"groundStoreyM","upperStoreysM":[...]}];'
+    ] : [];
     return [
         `You are measuring the building "${place}" so it can be rebuilt procedurally from numbers. ${pictures.length} pictures follow, in this order:`,
         ...pictures.map((p, i) => `  ${i + 1}. ${p.caption}`),
@@ -126,6 +157,7 @@ export function facadeParametersPrompt(place: string, pictures: ReadingPictureNo
         '- "roof": {"pitchDeg" (0 flat),"ridgeAzimuthDeg" (compass direction of the ridge, 0 north-south, 90 east-west),"hipped" (true when the ends slope too)};',
         '- "rooftopVolumes": raised blocks on the roof (bulkheads, plant rooms, towers) [{"box":[x0,y0,x1,y1] in per-mille of picture 1 (x right, y down),"heightM" above the roof}];',
         '- "materials": {"wall","trim","glazing"} each {"linearRgb":[r,g,b] linear 0..1 albedo (not sRGB),"roughness":0..1};',
+        ...shapes,
         '- "features": short free-text notes on anything the numbers cannot hold (arches, ornament, columns\' shape, signs, fire escapes, irregular bays), as many as you see;',
         '- "confidence": 0..100.',
         'Measure what the pictures show for this building only; do not invent storeys or bays that are not there.',
@@ -142,7 +174,9 @@ function opening(j: unknown, d: OpeningParameters): OpeningParameters {
         widthM: clamp(num(o.widthM) ?? d.widthM, PARAMETER_BOUNDS.openingWidthM),
         heightM: clamp(num(o.heightM) ?? d.heightM, PARAMETER_BOUNDS.openingHeightM),
         sillM: clamp(num(o.sillM) ?? d.sillM, PARAMETER_BOUNDS.sillM),
-        recessM: clamp(num(o.recessM) ?? d.recessM, PARAMETER_BOUNDS.recessM)
+        recessM: clamp(num(o.recessM) ?? d.recessM, PARAMETER_BOUNDS.recessM),
+        archRiseRatio: clamp(num(o.archRiseRatio) ?? d.archRiseRatio ?? 0, PARAMETER_BOUNDS.archRiseRatio),
+        apexSharpness: clamp(num(o.apexSharpness) ?? d.apexSharpness ?? 0, PARAMETER_BOUNDS.apexSharpness)
     };
 }
 
@@ -184,6 +218,20 @@ export function parseFacadeParameters(text: string): { params: BuildingParameter
         if (Math.abs(x1 - x0) < 2 || Math.abs(y1 - y0) < 2) continue;
         vols.push({ box: [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)], heightM: clamp(h, PARAMETER_BOUNDS.rooftopHeightM) });
     }
+    const facadeBands: FacadeBand[] = [];
+    for (const e of (Array.isArray(j.facadeBands) ? j.facadeBands : []).map(obj)) {
+        const b0 = num(e.bottomM), b1 = num(e.topM);
+        if (b0 === undefined || b1 === undefined || b1 - b0 < 1) continue;
+        facadeBands.push({ bottomM: Math.max(0, b0), topM: b1, opening: opening(e.opening, d.window), bayGroup: clamp(num(e.bayGroup) ?? 1, PARAMETER_BOUNDS.groupCount), storeyGroup: clamp(num(e.storeyGroup) ?? 1, PARAMETER_BOUNDS.groupCount) });
+    }
+    facadeBands.sort((a, b) => a.bottomM - b.bottomM);
+    const wallStoreys: WallStoreys[] = [];
+    for (const e of (Array.isArray(j.wallStoreys) ? j.wallStoreys : []).map(obj)) {
+        const pic = num(e.picture), g = num(e.groundStoreyM);
+        const up = (Array.isArray(e.upperStoreysM) ? e.upperStoreysM : []).map(num).filter((v): v is number => v !== undefined && v > 0).map(v => clamp(v, PARAMETER_BOUNDS.storeyM));
+        if (pic === undefined || g === undefined || !up.length) continue;
+        wallStoreys.push({ picture: Math.round(pic), groundStoreyM: clamp(g, PARAMETER_BOUNDS.storeyM), upperStoreysM: up.slice(0, 80) });
+    }
     const roof = obj(j.roof), plinth = obj(j.plinth), cornice = obj(j.cornice), parapet = obj(j.parapet), piers = obj(j.piers), mat = obj(j.materials);
     const conf = num(j.confidence);
     const params: BuildingParameters = {
@@ -193,6 +241,8 @@ export function parseFacadeParameters(text: string): { params: BuildingParameter
         edgeMarginM: clamp(pick('edgeMarginM', num(j.edgeMarginM), d.edgeMarginM), PARAMETER_BOUNDS.edgeMarginM),
         window: opening(j.window, d.window),
         groundOpening: opening(j.groundOpening, d.groundOpening),
+        facadeBands: facadeBands.slice(0, 12),
+        wallStoreys: wallStoreys.slice(0, 12),
         plinth: { heightM: clamp(num(plinth.heightM) ?? 0, PARAMETER_BOUNDS.plinthHeightM), projectionM: clamp(num(plinth.projectionM) ?? 0, PARAMETER_BOUNDS.projectionM) },
         bands,
         cornice: { thicknessM: clamp(num(cornice.thicknessM) ?? 0, [0, PARAMETER_BOUNDS.bandThicknessM[1]]), projectionM: clamp(num(cornice.projectionM) ?? 0, PARAMETER_BOUNDS.projectionM) },

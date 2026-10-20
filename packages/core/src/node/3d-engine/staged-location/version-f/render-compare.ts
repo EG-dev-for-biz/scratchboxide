@@ -310,7 +310,7 @@ export function programWallOffset(f: MassingFace, openings: OpeningItem[], sweep
         }
     };
     for (const o of openings) if (o.face === f.key) rect(o.s0, o.s1, o.t0, o.t1, -o.depth, false);
-    for (const sw of sweeps) if (sw.faces.includes(f.key)) {
+    for (const sw of sweeps) if (sw.faces.includes(f.key) && !sw.relativeToTop) {
         const ys = sw.profile.map(q => q[1]), proj = Math.max(...sw.profile.map(q => q[0]));
         if (proj > 0) rect(f.sMin, f.sMax, Math.min(...ys), Math.max(...ys), Math.min(0.8, proj), true);
     }
