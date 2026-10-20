@@ -45,6 +45,8 @@ import * as path from 'path';
 import { validateContract, type CanopyMask, type StripRoi } from '../../common/spatial/staged-location-contracts';
 import { resolveWithinRoot } from '../security/path-guard';
 import { buildNativeIfStale } from './native-build';
+import { implausibleLayerBounds } from './layer-bounds-guard';
+import { glbWorldBounds } from './part-connectivity';
 
 /** Continuous strip parameters (metres, ratios); every one maps to a CLI flag of the same name in kebab case. */
 export interface TileVegetationStripParams {
@@ -315,6 +317,8 @@ export interface TileVegetationPlantResult {
     ms: number;
     cacheKey: string;
     published?: { path: string; url: string; backup?: string };
+    /** Set when the cached entry under this key was refused (its bounds are physically impossible) and rebuilt: why. */
+    rebuiltStaleCache?: string;
 }
 
 export type TileVegetationErrorCode =
@@ -676,7 +680,7 @@ export class TileVegetationService {
         if (textureIndex) sha256File(textureIndex, hash);
         hash.update('\0').update(JSON.stringify({ ...keyParams, ...budget, seed: req.seed.toLowerCase(), quantize, reveal }));
         const key = hash.digest('hex');
-        const res = await this.cached(key, ['trees.glb', 'stats.json'], async (dir, signal) => {
+        const plantOnce = () => this.cached(key, ['trees.glb', 'stats.json'], async (dir, signal) => {
             // the stage key in the GLB's root extras is this cache key: the same bytes in every run that reuses them
             const args = ['plant', '--crowns', crowns, '--out', path.join(dir, 'trees.glb'), '--stats', path.join(dir, 'stats.json'),
                 ...('triangleBudget' in budget ? ['--triangle-budget', String(budget.triangleBudget)] : ['--scene-triangle-cap', String(budget.sceneTriangleCap)]),
@@ -693,7 +697,19 @@ export class TileVegetationService {
             ms: 0,
             cacheKey: key
         }), req.signal);
-        const out: TileVegetationPlantResult = { ...res, ms: 0 };
+        let res = await plantOnce();
+        // a trees GLB whose bounds no real place can have would poison everything that stands on or near it (placement
+        // reads it as covering every spot): a cached one is a stale or corrupt entry and is rebuilt once; a fresh one is refused
+        let problem = treesGlbBoundsProblem(res.treesGlb);
+        let rebuiltStaleCache: string | undefined;
+        if (problem && res.cached) {
+            rebuiltStaleCache = `the cached trees ${key.slice(0, 8)} were rebuilt because ${problem}`;
+            fs.rmSync(path.join(this.cacheDir, key), { recursive: true, force: true });
+            res = await plantOnce();
+            problem = treesGlbBoundsProblem(res.treesGlb);
+        }
+        if (problem) throw new TileVegetationError('plant_failed', `the planted trees were refused because ${problem}${rebuiltStaleCache ? ' (also after rebuilding the cached entry)' : ''}`);
+        const out: TileVegetationPlantResult = { ...res, ms: 0, ...(rebuiltStaleCache ? { rebuiltStaleCache } : {}) };
         if (publishTarget) out.published = this.publish(res.treesGlb, publishTarget);
         out.ms = Date.now() - t0;
         return out;
@@ -720,6 +736,15 @@ export class TileVegetationService {
         const publicDir = resolveWithinRoot(this.workspaceRoot, 'public');
         return { path: path.relative(this.workspaceRoot, target), url: '/' + path.relative(publicDir, target).split(path.sep).join('/'), ...(backup ? { backup } : {}) };
     }
+}
+
+/**
+ * Why a trees GLB cannot be staged (its world bounds, instances included, are physically impossible), or undefined. A
+ * GLB with no triangles (every crown kept as scanned: only its LINES rings) has nothing to judge.
+ */
+export function treesGlbBoundsProblem(file: string): string | undefined {
+    const bounds = glbWorldBounds(fs.readFileSync(file));
+    return bounds ? implausibleLayerBounds(bounds) : undefined;
 }
 
 const services = new Map<string, TileVegetationService>();
