@@ -1,7 +1,7 @@
 # Durable asset store: files outlive the checkout, missing ones come back
 
 **Date:** 2026-10-20
-**Status:** Verified (stages 1 and 2 live in an isolated instance; the rebuild path verified with a fake rebuilder in tests, not yet with a real staged run)
+**Status:** Verified (stages 1–3 live in an isolated instance; the rebuild path verified with a fake rebuilder in tests, not yet with a real staged run)
 
 ## Why
 
@@ -56,14 +56,28 @@ scene on 2026-10-20). The user asked for the app to fetch data as needed and to 
   recipes and aliasing, sweep memo, two instances on one database), `asset-recovery-service.test.ts` (4: restore /
   rebuild / unrecoverable in one job, cancel, a rebuild that published nothing), `staged-stage-cache.test.ts` still green.
 
+### Stage 3: the project change log (`project-artifact-store.ts`, `project-graph-diff.ts`)
+
+- Every `POST /workspace/project-artifacts` still writes `<workspace>/.scratchbox/project-artifacts.json`, and now also
+  keeps the graph in the `projects` table (keyed by project id and checkout) and appends the changes since the last save
+  to the project's log: `artifact.created / revised / archived / restored / linked / unlinked / selected`, each with the
+  artifact id, kind and title, the revision number, content hash, command id and author, never a payload.
+- A load with no file in the checkout reads the database: this checkout's copy, else the newest copy from any checkout
+  (logged as `project.restored` with where it came from). A file the database has never seen is imported once
+  (`project.imported`).
+- `GET /workspace/project-artifacts/log?projectId=&limit=` and `GET /workspace/project-artifacts/list`.
+- Live: two saves through the API on the 3100 instance gave `artifact.created` (document "Live log check", revision 1,
+  author Eli) and `artifact.revised` (revision 2) above the `project.imported` entry of the checkout's existing file.
+- Tests: `project-artifact-store-durable.test.ts` (4: the diff names changes without payloads; a save is logged and a
+  checkout without the file gets the project back and keeps logging; a legacy file is imported once; the file-only mode).
+
 ## Not yet
 
 - A real staged rebuild end to end: run a location in the app, remove its files and blobs, reload. (The fake-rebuilder
   test covers the aliasing; the real run uses the chat's own dependencies and credentials.)
 - Files made before the store existed have no recipe: they are restored only if a copy was swept in. The Washington
   Square models are gone for good; the scene must be staged again.
-- Stage 3, the project change log on the same database (`events` already records asset changes; the project graph
-  still lives in `<checkout>/desktop-app/.scratchbox/project-artifacts.json`).
+- A view of the project log in the app (today it is the API only).
 
 ## Candidate tool/service ideas
 
