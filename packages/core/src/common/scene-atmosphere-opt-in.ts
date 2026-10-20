@@ -47,9 +47,15 @@ export function sceneOptsIntoAtmosphere(scene: Partial<Scene3DData> | undefined)
         || scene.environment?.skybox === 'sky';
 }
 
-/** Scene3DPrimitive renders clay unless the scene names another mode. */
+/**
+ * The render mode of a scene that names none: textured, each surface with its own material (user decision
+ * 2026-10-19: textured by default, clay on request). Scene3DPrimitive opens in it.
+ */
+export const DEFAULT_SCENE_RENDER_MODE = 'pbr' as const;
+
+/** Whether Scene3DPrimitive renders the scene in clay: only when the scene names that mode. */
 export function sceneRendersClay(scene: Partial<Scene3DData> | undefined): boolean {
-    return (scene?.renderMode ?? 'clay') === 'clay';
+    return (scene?.renderMode ?? DEFAULT_SCENE_RENDER_MODE) === 'clay';
 }
 
 /**

@@ -108,7 +108,8 @@ describe.skipIf(!stagedChrome.ok)('staged viewport: a textured twin that arrives
 
     test('the late, inside-out l4 twin is fully present and shows its own colour, not the body behind it', async () => {
         const first = fixtureState([L('l2'), L('l3a'), L('l3b', textured('l3b', red)), L('l4')], { runState: 'running', running: ['textures'] });
-        await page.eval(`sbHarness.mount(${JSON.stringify(stagedSceneData(first))})`);
+        // opened in clay (the viewer's saved choice; textured is the default); the later commit carries no mode, so the toggle's holds
+        await page.eval(`sbHarness.mount(${JSON.stringify(stagedSceneData({ ...first, materialMode: 'clay' }))})`);
         await page.waitFor('sbHarness.ready()');
         for (const l of ['l3b', 'l4'] as const) await page.waitFor(`sbHarness.attached(${JSON.stringify(objectIdOf(l))})`, 30_000, `${l} attached`);
         await stepUntil('l4 revealed', async () => (await phase(objectIdOf('l4')))?.phase === 'revealed');

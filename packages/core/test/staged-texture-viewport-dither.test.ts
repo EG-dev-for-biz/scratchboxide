@@ -107,7 +107,8 @@ describe.skipIf(!stagedChrome.ok)('staged viewport: the clay <-> textured crossf
 
     test('after a degraded finish, a live run, Stop, back to clay and to textures again, provenance on and off', async () => {
         const state = fixtureState([L('l1'), L('l2', textured('l2', green))], { runState: 'finished', stageStatus: { detail: 'degraded' }, degradations: [] });
-        await page.eval(`sbHarness.mount(${JSON.stringify(stagedSceneData(state))})`);
+        // opened in clay (the viewer's saved choice; textured is the default), so the overlay's toggle drives every switch
+        await page.eval(`sbHarness.mount(${JSON.stringify(stagedSceneData({ ...state, materialMode: 'clay' }))})`);
         await page.waitFor('sbHarness.ready()');
         await page.waitFor(`sbHarness.attached(${JSON.stringify(L2())})`, 30_000, 'l2 attached');
         await stepUntil('l2 revealed', async () => (await phase(L2()))?.phase === 'revealed');
@@ -158,7 +159,7 @@ describe.skipIf(!stagedChrome.ok)('staged viewport: the clay <-> textured crossf
     test('"Show replaced layers" never ghosts the clay copy a swap hid (the live stipple), and still ghosts what a layer replaced', async () => {
         // l2 alone (its tiles are not in this scene), so nothing in view is a replaced layer: any ghost is the swap's copy
         const state = fixtureState([L('l2', textured('l2', green))], { runState: 'finished', stageStatus: { detail: 'degraded' }, degradations: [] });
-        await page.eval(`sbHarness.mount(${JSON.stringify(stagedSceneData(state))})`);
+        await page.eval(`sbHarness.mount(${JSON.stringify(stagedSceneData({ ...state, materialMode: 'clay' }))})`);
         await page.waitFor('sbHarness.ready()');
         await page.waitFor(`sbHarness.attached(${JSON.stringify(L2())})`, 30_000, 'l2 attached');
         await stepUntil('l2 revealed', async () => (await phase(L2()))?.phase === 'revealed');

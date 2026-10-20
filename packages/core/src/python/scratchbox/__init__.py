@@ -161,7 +161,7 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
         _orig_append(self, target)
         return self
 
-    def _mesh_merge(self, other):
+    def _mesh_merge(self, other) -> "scratchbox_native.geometry.Mesh":
         return _mesh_append(self, other)
 
     def _mesh_rotate_x(self, angle_deg):
@@ -191,7 +191,7 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
         self._mesh_tag_name = str(tag_name)
         return self
 
-    def _mesh_get_tag(self):
+    def _mesh_get_tag(self) -> str:
         return getattr(self, "_mesh_tag_name", getattr(self, "name", ""))
 
     _Mesh.tag = _mesh_tag
@@ -335,7 +335,7 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
         _NativeMesh = getattr(_native.geometry, "ScratchboxMesh", None)
 
     if _NativeMesh is not None:
-        def _mesh_align_to_terrain(self, terrain, offset_z=0.2):
+        def _mesh_align_to_terrain(self, terrain, offset_z=0.2) -> "scratchbox_native.geometry.Mesh":
             min_x, max_x = 1e9, -1e9
             min_z, max_z = 1e9, -1e9
             min_y = 1e9
@@ -446,7 +446,7 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
                 self.displace_along_normals(freq, amp)
             return self
 
-        def _mesh_subtract(self, other):
+        def _mesh_subtract(self, other) -> "scratchbox_native.geometry.Mesh":
             if other is None:
                 return self
             b_self = getattr(self, "bounds", None)
@@ -559,7 +559,7 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
                 solver.solve(0)
             return self
 
-        def _mesh_ground_on(self, target, clearance=0.0):
+        def _mesh_ground_on(self, target, clearance=0.0) -> "scratchbox_native.geometry.Mesh":
             if _native and hasattr(_native, "composer") and hasattr(_native.composer, "SpatialConstraintSolver"):
                 solver = _native.composer.SpatialConstraintSolver()
                 solver.register_mesh("self", self)
@@ -642,7 +642,7 @@ if _native is not None and hasattr(_native, "geometry"):
         raise RuntimeError("Native create_cylinder not available")
     _geom.create_cylinder = create_cylinder
 
-    def create_cone(radius=1.0, height=2.0, segments=24, color=None, material=None, **kwargs):
+    def create_cone(radius=1.0, height=2.0, segments=24, color=None, material=None, **kwargs) -> "scratchbox_native.geometry.Mesh":
         return create_cylinder(radius_top=0.0, radius_bottom=radius, height=height, segments=segments, color=color, material=material, **kwargs)
     _geom.create_cone = create_cone
 
@@ -848,7 +848,7 @@ if _native is not None and hasattr(_native, "geometry"):
         raise RuntimeError("Native create_loft not available")
     _geom.create_loft = create_loft
 
-    def create_form(bounds=(1.0, 1.0, 1.0), curvature=0.0, bevel=0.02, axis_of_revolution=None, crown=0.25, slope=0.3, center_dip=0.0, color=None, material=None, **kwargs):
+    def create_form(bounds=(1.0, 1.0, 1.0), curvature=0.0, bevel=0.02, axis_of_revolution=None, crown=0.25, slope=0.3, center_dip=0.0, color=None, material=None, **kwargs) -> "scratchbox_native.geometry.Mesh":
         """Universal ADA Form Generator: Maps physical continuous parameters to the optimal 3D geometry engine."""
         b = _to_vec3(bounds)
         c, mat = _resolve_color_and_material(color, material)
@@ -872,7 +872,7 @@ if _native is not None and hasattr(_native, "geometry"):
             return create_envelope(bounds=b, crown=cr, slope=sl, center_dip=dip, grid=(gx, gz), color=c, material=mat)
     _geom.create_form = create_form
 
-    def create_catenary_cable(start=(0, 0, 0), end=(10, 0, 0), sag=1.2, radius=0.03, segments=16, color=None, **kwargs):
+    def create_catenary_cable(start=(0, 0, 0), end=(10, 0, 0), sag=1.2, radius=0.03, segments=16, color=None, **kwargs) -> "scratchbox_native.geometry.Mesh":
         """Constructs a catenary hanging curve cable between two 3D anchor points."""
         sx, sy, sz = _to_point3(start)
         ex, ey, ez = _to_point3(end)
@@ -930,7 +930,7 @@ class _LayoutModule:
             self.extents = (float(extents[0]), float(extents[1]), float(extents[2])) if isinstance(extents, (tuple, list)) else (10.0, 10.0, 10.0)
             self.center = (float(center[0]), float(center[1]), float(center[2])) if isinstance(center, (tuple, list)) else (0.0, 0.0, 0.0)
 
-        def get_socket(self, target: Any):
+        def get_socket(self, target: Any) -> "scratchbox_native.math.Vec3":
             cx, cy, cz = self.center
             ex, ey, ez = self.extents
             hx, hy, hz = ex * 0.5, ey * 0.5, ez * 0.5
@@ -1041,7 +1041,7 @@ def create_building(
     bake_curvature_ao: bool = True,
     name: str = "ProceduralBuilding",
     **kwargs
-) -> Any:
+) -> "scratchbox_native.geometry.Mesh":
     """
     Constructs multi-story procedural architecture with rhythmic fenestration,
     recessed reveals, continuous compound curvature manifolds, and modeled roofs.
@@ -1132,7 +1132,7 @@ def create_curved_building(
     bake_curvature_ao: bool = True,
     name: str = "CurvedBuilding",
     **kwargs
-) -> Any:
+) -> "scratchbox_native.geometry.Mesh":
     """
     Constructs a sculptural curved building using superelliptic floorplate lofts,
     continuous elevation scaling (taper/bulge), and automatic curvature-coupled AO.
@@ -1165,7 +1165,7 @@ def create_tower(
     bake_curvature_ao: bool = True,
     name: str = "TwistingTower",
     **kwargs
-) -> Any:
+) -> "scratchbox_native.geometry.Mesh":
     """
     Constructs a soaring parametric skyscraper tower with continuous helical twist,
     entasis taper, and surface-normal recessed fenestration bays.
@@ -1203,7 +1203,7 @@ def create_tree(
     material: Any = None,
     name: str = "SpaceColonizationTree",
     **kwargs
-) -> Any:
+) -> "scratchbox_native.geometry.Mesh":
     """
     Synthesizes botanical trees and vegetation adhering to Runions space colonization.
     """
@@ -1252,7 +1252,7 @@ def create_ivy(
     material: Any = None,
     name: str = "IvyGrowth",
     **kwargs
-) -> Any:
+) -> "scratchbox_native.geometry.Mesh":
     """
     Grows obstacle-clinging ivy vines from root across the obstacle AABB [obstacle_min, obstacle_max].
     """
@@ -1356,7 +1356,7 @@ if _native is not None and hasattr(_native, "io"):
 
     _orig_export_glb_bytes = getattr(_native.io, "export_glb_bytes", None) if _native and hasattr(_native, "io") else None
 
-    def export_glb(arg1, arg2=None):
+    def export_glb(arg1, arg2=None) -> bytes:
         if arg2 is None and not isinstance(arg1, str):
             target = arg1
             if isinstance(target, (list, tuple)):

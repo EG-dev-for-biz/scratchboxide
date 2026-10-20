@@ -19,7 +19,7 @@ import { validateContract, type StagedBuildState, type StagedLayer, type StagedT
 import { TEXTURE_LADDER_RUNGS } from '../src/common/spatial/texture-pass-contracts';
 import { stepRevealSchedule, type LayerLoadState, type RevealSchedule } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/revealScheduler';
 import {
-    INITIAL_SWITCH, MATERIAL_SWAP_REVEAL_MS, carryTwinObjects, deriveMaterialLayers, isMaterialSwapLayer, modelIdOf, nextSwitch, parseSwapId, twinObjectFor, twinObjectId,
+    DEFAULT_MATERIAL_MODE, INITIAL_SWITCH, MATERIAL_SWAP_REVEAL_MS, carryMaterialMode, carryTwinObjects, deriveMaterialLayers, isMaterialSwapLayer, modelIdOf, nextSwitch, parseSwapId, twinObjectFor, twinObjectId,
     type EngagedTwin, type MaterialSwitch
 } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/texturedTwins';
 import { TEXTURE_RUNG_COLORS, textureRungLegendRows } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/provenanceShading';
@@ -39,11 +39,14 @@ const twin = (l: FixtureLayerId, extra: Partial<StagedTexturedVariant> = {}): St
     confidenceChannels: 'R = index, G = weight, B = rung, A = produced', builtAtMs: 1, cached: false, ...extra
 });
 
+/** A viewer who chose clay before anything was textured (the default, DEFAULT_MATERIAL_MODE, is textured). */
+const CLAY: MaterialSwitch = INITIAL_SWITCH;
+
 const L2 = objectIdOf('l2'), L1 = objectIdOf('l1'), L5 = objectIdOf('l5');
 
 /** Drives the real scheduler over the derived state, with models (by object id) ready as the test says. */
 class Viewport {
-    sw: MaterialSwitch = INITIAL_SWITCH;
+    sw: MaterialSwitch = CLAY;
     engaged = new Map<string, EngagedTwin>();
     schedule: RevealSchedule | undefined;
     models = new Set<string>();
@@ -68,16 +71,16 @@ class Viewport {
 }
 
 describe('textured twins: which objects load and how they crossfade', () => {
-    test('clay (the default) adds nothing: the scheduler sees the build state itself, no twin object', () => {
+    test('clay (on request) adds nothing: the scheduler sees the build state itself, no twin object', () => {
         const state = fixtureState([layer('l1'), layer('l2', { textured: twin('l2') })]);
-        const d = deriveMaterialLayers(state, INITIAL_SWITCH, new Map());
+        const d = deriveMaterialLayers(state, CLAY, new Map());
         expect(d.state).toBe(state);
         expect(d.twins).toEqual([]);
     });
 
     test('textured: one swap layer per layer with a twin, from its clay, on the twin model; layers without a twin stay as they are', () => {
         const state = fixtureState([layer('l1'), layer('l2', { textured: twin('l2') }), layer('l5')]);
-        const sw = nextSwitch(INITIAL_SWITCH, 'textured');
+        const sw = nextSwitch(CLAY, 'textured');
         const d = deriveMaterialLayers(state, sw, new Map());
         expect(d.twins.map(l => l.objectId)).toEqual([L2]);
         const tex = d.state.layers.find(l => l.objectId === `${L2}~tex#1`)!;
@@ -98,16 +101,58 @@ describe('textured twins: which objects load and how they crossfade', () => {
         expect(d.owner.get(`${L2}~tex#1`)).toBe(`${L2}~tex#1`);
     });
 
+    test('textured is the default: clay reveals first, then the twin the texture pass commits crossfades in on its own', () => {
+        expect(DEFAULT_MATERIAL_MODE).toBe('textured');
+        expect(nextSwitch(INITIAL_SWITCH, DEFAULT_MATERIAL_MODE)).toEqual({ mode: 'textured', epoch: 1 });
+        // the build commits clay first (no twin yet): nothing to swap, the clay reveals as before
+        const v = new Viewport(fixtureState([layer('l1'), layer('l2')]));
+        v.sw = nextSwitch(INITIAL_SWITCH, DEFAULT_MATERIAL_MODE);
+        v.models.add(L1); v.models.add(L2);
+        let s = v.step();
+        for (let i = 0; i < 40; i++) s = v.step(100);
+        expect(s.f(L2)!.phase).toBe('revealed');
+        expect(s.d.twins).toEqual([]);
+        // the texture stage commits l2's twin: it is engaged at once, with no switch, and crossfades over the clay
+        v.state = fixtureState([layer('l1'), layer('l2', { textured: twin('l2') })]);
+        s = v.step(16);
+        const T = `${L2}~tex#1`;
+        expect(s.d.twins.map(l => l.objectId)).toEqual([L2]);
+        expect(s.f(T)!.phase).toBe('loading');
+        expect(s.f(L2)!.hidden).toBe(false);
+        v.models.add(twinObjectId(L2));
+        s = v.step(16);
+        expect(s.f(T)!.phase).toBe('revealing');
+        expect(s.f(T)!.overSource).toBe(true);
+        s = v.step(MATERIAL_SWAP_REVEAL_MS + 50);
+        expect(s.f(T)!.phase).toBe('revealed');
+        expect(s.f(L2)!.hidden).toBe(true);
+        // the viewer's clay choice crossfades back and holds
+        v.mode('clay');
+        s = v.step(16);
+        s = v.step(MATERIAL_SWAP_REVEAL_MS + 50);
+        expect(s.f(`${L2}~clay#2`)!.phase).toBe('revealed');
+        expect(s.f(T)!.hidden).toBe(true);
+    });
+
+    test('a clay choice made on the open scene holds over a later commit of the same run, not over a new run', () => {
+        const prev = { ...fixtureState([layer('l1')]), materialMode: 'clay' };
+        const later = fixtureState([layer('l1'), layer('l2', { textured: twin('l2') })]);
+        expect(carryMaterialMode(prev, later)!.materialMode).toBe('clay');
+        expect(carryMaterialMode(prev, { ...later, materialMode: 'textured' })!.materialMode).toBe('textured');   // a new request wins
+        expect(carryMaterialMode(prev, { ...later, runId: 'another-run' })!.materialMode).toBeUndefined();
+        expect(carryMaterialMode(undefined, later)).toBe(later);
+    });
+
     test('a layer another layer replaces (and a retired one) gets no twin', () => {
         const state = fixtureState([layer('l1', { textured: twin('l1') }), layer('l2'), layer('l3a'), layer('l3b', { textured: twin('l3b'), supersedes: [L2] }), layer('l5', { textured: twin('l5'), retired: true })]);
-        const d = deriveMaterialLayers(state, nextSwitch(INITIAL_SWITCH, 'textured'), new Map());
+        const d = deriveMaterialLayers(state, nextSwitch(CLAY, 'textured'), new Map());
         expect(d.twins.map(l => l.layer)).toEqual(['l3b']);
     });
 
     test('a refit that later replaces an engaged layer also replaces its swap layers', () => {
         const base = [layer('l1'), layer('l2', { textured: twin('l2') })];
         const engaged = new Map<string, EngagedTwin>();
-        const sw = nextSwitch(INITIAL_SWITCH, 'textured');
+        const sw = nextSwitch(CLAY, 'textured');
         deriveMaterialLayers(fixtureState(base), sw, engaged);
         expect(engaged.has(L2)).toBe(true);
         // l3b (supersedes l2) arrives: l2 is no longer eligible, its twin goes
@@ -234,7 +279,7 @@ describe('overlay words and legend', () => {
     test('the materials line: mode, layers shown, the pass in progress, layers whose textures failed to load', () => {
         const state = { ...fixtureState([layer('l1'), layer('l2', { textured: twin('l2') }), layer('l5')]), texturePass: { status: 'running' as const, layersDone: 1, layersTotal: 3, message: 'baking street view' } };
         expect(validateContract('StagedBuildState', state)).toEqual([]);
-        const sw = nextSwitch(INITIAL_SWITCH, 'textured');
+        const sw = nextSwitch(CLAY, 'textured');
         const d = deriveMaterialLayers(state, sw, new Map());
         const frame = { layers: [{ objectId: `${L2}~tex#1`, phase: 'revealing' }, { objectId: L1, phase: 'revealed' }], animating: true, pending: false } as never;
         const m = materialsSummary(state, frame, sw, d);
@@ -243,7 +288,7 @@ describe('overlay words and legend', () => {
         expect(materialsSentence(state, m)).toBe('Real textures on 1 of 1 layer (photo-inferred, labelled per texel); the rest stay clay. texture pass running: 1 of 3 layers · baking street view; each layer switches as its textures arrive.');
         const failed = materialsSummary(state, { layers: [{ objectId: `${L2}~tex#1`, phase: 'loading', loadFailed: true }], animating: false, pending: false } as never, sw, d);
         expect(materialsSentence(state, failed)).toMatch(/textures of Remeshed scan could not be loaded, so it stays clay\.$/);
-        expect(materialsSentence(state, materialsSummary(state, undefined, INITIAL_SWITCH, undefined))).toMatch(/^Clay\. Real textures ready for 1 layer/);
+        expect(materialsSentence(state, materialsSummary(state, undefined, CLAY, undefined))).toMatch(/^Clay\. Real textures ready for 1 layer/);
     });
 });
 
@@ -267,7 +312,9 @@ describe('staged_location_material_mode (tool) and sb_set_staged_material_mode (
     test('the tool is declared in the Google 3D Tiles pack and returns the active scene with only the mode changed', async () => {
         expect(GOOGLE_3D_TILES_TOOL_DECLARATIONS.some(d => d.name === 'staged_location_material_mode')).toBe(true);
         expect(typeof google3DTilesHandlers.staged_location_material_mode).toBe('function');
-        expect(STAGED_MATERIAL_MODE_DECLARATION.description).toMatch(/Clay is the default/);
+        expect(STAGED_MATERIAL_MODE_DECLARATION.description).toMatch(/Textured is the default: clay shows first/);
+        expect(STAGED_MATERIAL_MODE_DECLARATION.description).toMatch(/"clay" shows the whole build in studio clay and stays/);
+        expect(STAGED_MATERIAL_MODE_DECLARATION.description).toContain('"Show clay"');
         expect(STAGED_MATERIAL_MODE_DECLARATION.description).toMatch(/photo-inferred/);
         expect(STAGED_MATERIAL_MODE_DECLARATION.parameters!.properties!.mode.enum).toEqual(['textured', 'clay']);
         const state = { ...fixtureState([layer('l1'), layer('l2', { textured: twin('l2') }), layer('l5')]), texturePass: { status: 'running' as const, layersDone: 1, layersTotal: 2 } };

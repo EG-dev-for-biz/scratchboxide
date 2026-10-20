@@ -17,6 +17,8 @@
  *   "occluder"?: "geometry.glb",                              // the full tile mesh: what stands in front hides every arm alike
  *   "context"?: { "glb": "textured.glb", "cut": "raw_clay.glb" | ["raw_clay.glb", "removed_trees.glb"] },  // in context: every arm drawn in the same street (below)
  *   "clay"?: true,                                            // also every arm in uniform clay from the same pose, judged for shape only
+ *   "specular"?: true,                                        // also a fixed street-canyon environment's specular reflection by each
+ *                                                             //   arm's glTF roughness/metalness (photo-match-eval.ts); default off
  *   "treeLod"?: false                                         // trees GLBs: default true = one level per tree per view, as the viewport
  * }                                                           //   chooses it, leaves expanded; false = every level drawn at once
  * A trees GLB (the tree LOD contract) in an arm is drawn per view as the viewport would show it from that pose: one level per tree by
@@ -86,7 +88,7 @@ async function main(): Promise<void> {
     const exclude = new Set<string>(m.excludePanos ?? []);
     // arms, loaded once
     const arms = m.arms.map((a: Json) => {
-        let layers = a.glbs.map((g: string) => pm.loadArmLayer(fs.readFileSync(g), { treeLod: m.treeLod !== false }));
+        let layers = a.glbs.map((g: string) => pm.loadArmLayer(fs.readFileSync(g), { treeLod: m.treeLod !== false, pbr: !!m.specular }));
         if (a.keepNear) { const ref = readTileTriangles(fs.readFileSync(a.keepNear)); layers = layers.map((l: Json) => (l.fixed ? { fixed: keepNear(l.fixed, ref) } : l)); }
         const tris = layers.reduce((s: number, l: Json) => s + pm.armLayerTriangles(l), 0);
         const treeLayers = layers.filter((l: Json) => l.trees).length;
@@ -119,7 +121,7 @@ async function main(): Promise<void> {
             const t = forView[i].trees;
             if (t.length) treeChoices[a.id] = t.map((x: Json) => ({ atLevel: x.atLevel, drawnTriangles: x.drawnTriangles, allLevelTriangles: x.allLevelTriangles, trees: x.trees }));
         });
-        const renders = arms.map((a: Json, i: number) => ({ arm: a, r: pm.renderTriangles(forView[i].meshes, camera, { ...(occluderDepth ? { occluderDepth } : {}), ...(context ? { context } : {}) }) }));
+        const renders = arms.map((a: Json, i: number) => ({ arm: a, r: pm.renderTriangles(forView[i].meshes, camera, { ...(occluderDepth ? { occluderDepth } : {}), ...(context ? { context } : {}), ...(m.specular ? { specular: true } : {}) }) }));
         const maskSrc = renders.find((x: Json) => x.arm.id === (m.maskArm ?? arms[0].id))!.r;
         const mask = pm.coverageMask(maskSrc);
         const perceptual: Json = {};

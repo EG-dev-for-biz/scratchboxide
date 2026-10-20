@@ -24,7 +24,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import type { StagedLayer } from '../src/common/spatial/staged-location-contracts';
-import { MIN_PARTS, mergeStagedParts, mergedPartsOf, partAtTriangle, setPartVisibility, stagedPartOfHit } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/mergeStagedParts';
+import { MAX_PARTS_PER_MESH, MIN_PARTS, mergeStagedParts, mergedPartsOf, partAtTriangle, setPartVisibility, stagedPartOfHit } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/mergeStagedParts';
 import { buildStagedFixture, fixtureLayer, fixtureState, glbCounts, objectIdOf, type FixtureLayerId, type StagedFixtureGlbs } from './helpers/staged-glb-fixture';
 import { openStagedPage, serveFixture, stagedChrome, type StagedPage } from './helpers/staged-build-chrome';
 import { stagedSceneData } from './helpers/staged-build-scene';
@@ -37,7 +37,7 @@ const SHOTS = path.join(REPO_ROOT, 'test-results', 'screenshots', 'viewport_chea
 const STEP = 16;
 
 /** A pipeline E hero cached by an earlier staged build on this machine (this worktree's cache, or a sibling worktree's). */
-function findEHero(): { dir: string } | undefined {
+function findEHero(): { dir: string; from: string } | undefined {
     const roots = [REPO_ROOT, path.resolve(REPO_ROOT, '..', '..', '..')];
     const caches: string[] = [];
     for (const r of roots) {
@@ -55,7 +55,7 @@ function findEHero(): { dir: string } | undefined {
                 const work = path.join(REPO_ROOT, 'test-results', 'staged-build', 'e-hero');
                 fs.mkdirSync(work, { recursive: true });
                 for (const f of need) fs.copyFileSync(path.join(dir, f), path.join(work, path.basename(f)));
-                return { dir: work };
+                return { dir: work, from: dir };
             }
         }
     }
@@ -88,16 +88,34 @@ function nodeTriangles(root: THREE.Object3D): Map<string, NodeTris> {
     return out;
 }
 
-async function checkMerge(buf: Buffer, what: string): Promise<{ before: number; after: number; parts: number; triangles: number; picked: number }> {
-    const original = nodeTriangles(await parse(buf));
-    const root = await parse(buf);
+/** The vertex layout a part is drawn with (names, sizes, types; not whether it is indexed: that merges either way). */
+function layoutOf(g: THREE.BufferGeometry): string {
+    return Object.keys(g.attributes).sort().map(k => { const a = g.attributes[k] as THREE.BufferAttribute; return `${k}:${a.itemSize}:${a.normalized}:${a.array.constructor.name}`; }).join('|');
+}
+
+/**
+ * Merges what `load` makes and checks it: as few meshes as the merge can make (one per material and vertex layout, split
+ * every MAX_PARTS_PER_MESH parts, the per-part uniform arrays' room), every part's triangles the same floats in the same
+ * order, the range table and picking naming each part.
+ */
+async function checkMerge(load: () => Promise<THREE.Object3D>, what: string): Promise<{ before: number; after: number; expected: number; parts: number; triangles: number; picked: number }> {
+    const original = nodeTriangles(await load());
+    const root = await load();
+    const groups = new Map<string, number>();
+    root.traverse(o => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) return;
+        const key = `${(m.material as THREE.Material).uuid}#${layoutOf(m.geometry as THREE.BufferGeometry)}`;
+        groups.set(key, (groups.get(key) ?? 0) + 1);
+    });
+    const expected = [...groups.values()].reduce((s, n) => s + Math.ceil(n / MAX_PARTS_PER_MESH), 0);
     const report = mergeStagedParts(root);
     expect(report, `${what} is eligible`).toBeDefined();
     const merged: THREE.Mesh[] = [];
     root.traverse(o => { if ((o as THREE.Mesh).isMesh) merged.push(o as THREE.Mesh); });
-    const materials = new Set(merged.map(m => (m.material as THREE.Material).uuid));
-    expect(merged.length, `${what}: one mesh per material`).toBe(materials.size);
-    expect(merged.every(m => mergedPartsOf(m))).toBe(true);
+    expect(merged.length, `${what}: one mesh per material and layout (${[...groups.values()].join(', ')} parts), ${MAX_PARTS_PER_MESH} parts each at most`).toBe(expected);
+    expect(merged.every(m => mergedPartsOf(m) && mergedPartsOf(m)!.parts.length <= MAX_PARTS_PER_MESH)).toBe(true);
+    expect(merged.every(m => (m.geometry as THREE.BufferGeometry).index), `${what}: merged meshes are indexed`).toBe(true);
     let parts = 0, triangles = 0, picked = 0;
     const v = new THREE.Vector3();
     root.updateMatrixWorld(true);
@@ -141,13 +159,13 @@ async function checkMerge(buf: Buffer, what: string): Promise<{ before: number; 
     }
     expect(parts).toBe(original.size);
     expect(triangles).toBe([...original.values()].reduce((s, n) => s + n.tris.length / 9, 0));
-    return { before: original.size, after: merged.length, parts, triangles, picked };
+    return { before: original.size, after: merged.length, expected, parts, triangles, picked };
 }
 
 describe('merging a staged layer per material keeps every part', () => {
     test('synthetic tiles and fitted body layers: same triangles per part, ranges map back, rays name the part', async () => {
         for (const l of ['l1', 'l3b'] as const) {
-            const r = await checkMerge(fixture.glbs[l], l);
+            const r = await checkMerge(() => parse(fixture.glbs[l]), l);
             expect(r.after).toBe(1);
             expect(r.parts).toBeGreaterThanOrEqual(MIN_PARTS);
             expect(r.picked / r.parts, `${l}: picked ${r.picked} of ${r.parts}`).toBeGreaterThanOrEqual(0.9);
@@ -166,15 +184,45 @@ describe('merging a staged layer per material keeps every part', () => {
         expect(mergeStagedParts(await parse(fixture.glbs.l5))).toBeUndefined();
     });
 
-    test.skipIf(!eHero)('a real pipeline E hero (clay relief and enhanced layers): 94 meshes become one, nothing lost', async () => {
+    test('parts with and without an index merge into one indexed mesh; parts past the uniform room start a second mesh', async () => {
+        const material = new THREE.MeshStandardMaterial();
+        const build = (n: number) => async () => {
+            const root = new THREE.Group();
+            const staged = new THREE.Group();
+            root.add(staged);
+            for (let i = 0; i < n; i++) {
+                const box = new THREE.BoxGeometry(1, 1 + i * 0.01, 1);
+                box.deleteAttribute('uv');
+                box.clearGroups();
+                const m = new THREE.Mesh(i % 2 ? box.toNonIndexed() : box, material);
+                m.name = `part${i}`;
+                m.position.set(i * 1.5, 0, 0);
+                m.userData = { sb: { schema: 'scratchbox.staged-node/2', provenance: { label: i % 3 ? 'measured' : 'generated' } } };
+                staged.add(m);
+            }
+            return root;
+        };
+        const mixed = await checkMerge(build(12), 'indexed and non-indexed');
+        expect(mixed.after).toBe(1);
+        const many = await checkMerge(build(MAX_PARTS_PER_MESH + 5), 'past the uniform room');
+        expect(many.after).toBe(2);
+        expect(many.picked).toBe(many.parts);
+    });
+
+    test.skipIf(!eHero)('a real pipeline E hero (clay relief and enhanced layers): its many parts become a mesh or two, nothing lost', async () => {
+        const found: Record<string, unknown> = {};
         for (const f of ['massing_relief_clay.glb', 'massing_enhanced_clay.glb']) {
             const buf = fs.readFileSync(path.join(eHero!.dir, f));
-            const r = await checkMerge(buf, f);
+            const r = await checkMerge(() => parse(buf), f);
+            found[f] = { from: eHero!.from, ...r };
             expect(r.before).toBe(glbCounts(buf).nodes - 1);    // every node but the root container
-            expect(r.after).toBe(1);
+            // one material and layout in a pipeline E hero: ceil(parts / MAX_PARTS_PER_MESH) meshes
+            expect(r.after).toBe(Math.ceil(r.parts / MAX_PARTS_PER_MESH));
             expect(r.triangles).toBe(glbCounts(buf).triangles);
             expect(r.picked / r.parts, `${f}: picked ${r.picked} of ${r.parts}`).toBeGreaterThanOrEqual(0.9);
         }
+        fs.mkdirSync(SHOTS, { recursive: true });
+        fs.writeFileSync(path.join(SHOTS, 'merge_ehero_geometry.json'), JSON.stringify(found, null, 2));
     });
 });
 

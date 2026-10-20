@@ -27,6 +27,14 @@
  * its street in a lighter clay, under a raised key light behind the camera, and the judge scores shape only (massing,
  * openings, surface relief): geometry changes that the photo texture hides (measured relief, reveals) can be scored there.
  *
+ * Specular (`specular` in renderTriangles, the manifest's `"specular": true`, off by default): the neutral light above stays
+ * the diffuse term, and every surface also reflects one fixed environment (a street canyon: dark street below the horizon,
+ * facades of the far side up to ~14 degrees, a sky gradient above) through a Schlick Fresnel term with F0 = 0.04 for a
+ * dielectric (the albedo for a metal), blurred towards the environment's irradiance by roughness squared. A rough wall
+ * (roughness 0.85 to 1) changes by a few percent; glass (0.05) shows the street and the sky as a window does. Roughness and
+ * metalness come from each arm's glTF material (factors and metallicRoughness texture; loadArmLayer `pbr`), so an arm
+ * without material channels is drawn by the same term at its own factors: the same light for every arm.
+ *
  * Trees (`loadArmLayer`, `armMeshesForView`, tree-lod-view.ts): a trees GLB of the tree LOD contract holds every level of every
  * tree and instanced leaves the viewport resolves at run time; with `treeLod` (on by default) each view draws one level per tree,
  * chosen by the viewport's rule for that camera (on-screen size and place in the frame), with its leaf instances expanded.
@@ -158,6 +166,8 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
      * over an ambient share, so relief shows as shading: soffits darker, reveals' sides apart. No texture is sampled.
      */
     clay?: boolean | { albedo?: Vec3; contextAlbedo?: Vec3 };
+    /** Add the fixed environment's specular reflection (see the file comment); ignored with `clay`. */
+    specular?: boolean;
 } = {}): ArmRender {
     const t0 = Date.now();
     const ss = Math.max(1, Math.round(options.supersample ?? 2));
@@ -248,7 +258,7 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
     const bgLin = bg.map(c => SRGB8_TO_LINEAR[c]);
     const outW = camera.width, outH = camera.height;
     const acc = new Float64Array(outW * outH * 3), cov = new Float32Array(outW * outH);
-    const col = new Float64Array(3);
+    const col = new Float64Array(3), envSample = new Float64Array(3);
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
         const i = y * W + x;
         const o = (Math.floor(y / ss) * outW + Math.floor(x / ss));
@@ -277,6 +287,7 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
         }
         // the neutral light: ambient plus a headlight on the facet normal
         const xc = (x + 0.5 - cx) / fx, yc = -(y + 0.5 - cy) / fy;
+        const spec = options.specular && !clay;
         const dx = right[0] * xc + up[0] * yc + fwd[0], dy = right[1] * xc + up[1] * yc + fwd[1], dz = right[2] * xc + up[2] * yc + fwd[2];
         const dl = Math.hypot(dx, dy, dz);
         const n = t * 3;
@@ -290,6 +301,23 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
         } else {
             shade = amb + (1 - amb) * Math.abs(nv);
         }
+        if (spec) {
+            const { roughness, metalness } = pbrAt(m, t, bu[i], bv[i]);
+            // the normal turned towards the camera, the mirror direction of the view ray about it
+            const sgn = nv > 0 ? -1 : 1;
+            const Nx = sgn * m.normals[n], Ny = sgn * m.normals[n + 1], Nz = sgn * m.normals[n + 2];
+            const ux = dx / dl, uy = dy / dl, uz = dz / dl;
+            const dn = ux * Nx + uy * Ny + uz * Nz, cosV = Math.max(0, -dn);
+            specularEnvironment(ux - 2 * dn * Nx, uy - 2 * dn * Ny, uz - 2 * dn * Nz, Ny, roughness, envSample);
+            const fw = Math.pow(1 - cosV, 5);
+            for (let c = 0; c < 3; c++) {
+                const f0 = 0.04 * (1 - metalness) + col[c] * metalness;
+                const F = f0 + (Math.max(1 - roughness, f0) - f0) * fw;
+                acc[o * 3 + c] += col[c] * shade * (1 - metalness) * (1 - F) + F * envSample[c];
+            }
+            if (mi < armMeshes) cov[o] += 1;
+            continue;
+        }
         acc[o * 3] += col[0] * shade; acc[o * 3 + 1] += col[1] * shade; acc[o * 3 + 2] += col[2] * shade;
         if (mi < armMeshes) cov[o] += 1;
     }
@@ -300,6 +328,56 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
         cov[o] /= k;
     }
     return { width: outW, height: outH, rgba, coverage: cov, triangles: drawn, ms: Date.now() - t0 };
+}
+
+/** The fixed environment of the specular term (linear RGB): the street below the horizon, the far side's facades, the sky. */
+export const PHOTO_MATCH_ENVIRONMENT: { ground: Vec3; facades: Vec3; horizon: Vec3; zenith: Vec3; facadeTopRad: number } = {
+    ground: [0.09, 0.09, 0.085], facades: [0.2, 0.2, 0.21], horizon: [0.72, 0.77, 0.84], zenith: [0.3, 0.45, 0.75], facadeTopRad: 0.25
+};
+
+function environmentAt(ry: number, out: Float64Array): void {
+    const E = PHOTO_MATCH_ENVIRONMENT;
+    const e = Math.asin(Math.max(-1, Math.min(1, ry)));
+    if (e < 0) { out[0] = E.ground[0]; out[1] = E.ground[1]; out[2] = E.ground[2]; return; }
+    if (e < E.facadeTopRad) {
+        // the far side's facades, giving way to the sky over their last few degrees
+        const k = Math.max(0, (e - 0.8 * E.facadeTopRad) / (0.2 * E.facadeTopRad));
+        for (let c = 0; c < 3; c++) out[c] = E.facades[c] * (1 - k) + E.horizon[c] * k;
+        return;
+    }
+    const k = Math.min(1, (e - E.facadeTopRad) / (Math.PI / 2 - E.facadeTopRad));
+    for (let c = 0; c < 3; c++) out[c] = E.horizon[c] * (1 - Math.sqrt(k)) + E.zenith[c] * Math.sqrt(k);
+}
+
+const envTmp = new Float64Array(3);
+/** The environment seen along (rx, ry, rz), blurred towards its irradiance at a normal with up component `ny` by roughness squared. */
+function specularEnvironment(_rx: number, ry: number, _rz: number, ny: number, roughness: number, out: Float64Array): void {
+    environmentAt(ry, out);
+    const E = PHOTO_MATCH_ENVIRONMENT;
+    // irradiance: the lower hemisphere's street and facades against the upper's sky, by how far the normal looks up
+    const up = 0.5 + 0.5 * ny;
+    const w = Math.min(1, roughness * roughness);
+    for (let c = 0; c < 3; c++) {
+        envTmp[c] = (0.5 * (E.ground[c] + E.facades[c])) * (1 - up) + (0.5 * (E.horizon[c] + E.zenith[c]) * 0.7 + 0.3 * E.facades[c]) * up;
+        out[c] = out[c] * (1 - w) + envTmp[c] * w;
+    }
+}
+
+/** Roughness and metalness of triangle `t` at (u, v): its material's factors times its texture (nearest), or 1 and 0. */
+function pbrAt(m: TileTriangles, t: number, u: number, v: number): { roughness: number; metalness: number } {
+    const k = m.pbr?.material[t] ?? -1;
+    if (k < 0) return { roughness: 1, metalness: 0 };
+    const mat = m.pbr!.materials[k];
+    let r = mat.roughnessFactor, me = mat.metallicFactor;
+    const map = mat.map;
+    if (map) {
+        let fu = u - (map.repeatS ? Math.floor(u) : 0), fv = v - (map.repeatT ? Math.floor(v) : 0);
+        fu = Math.min(1, Math.max(0, fu)); fv = Math.min(1, Math.max(0, fv));
+        const px = Math.min(map.width - 1, Math.floor(fu * map.width)), py = Math.min(map.height - 1, Math.floor(fv * map.height));
+        r *= map.roughness[py * map.width + px] / 255;
+        me *= map.metalness[py * map.width + px] / 255;
+    }
+    return { roughness: Math.max(0.02, Math.min(1, r)), metalness: Math.max(0, Math.min(1, me)) };
 }
 
 // =============================================================================
@@ -313,12 +391,12 @@ export interface ArmLayer { fixed?: TileTriangles; trees?: TreesLodGlb }
  * Reads one arm GLB. With `treeLod` (default true) a trees GLB of the tree LOD contract is kept for per-view level selection;
  * with `treeLod: false`, or for any other GLB, its triangles are fixed (a trees GLB then draws every level at once).
  */
-export function loadArmLayer(glb: Uint8Array, options: { treeLod?: boolean } = {}): ArmLayer {
+export function loadArmLayer(glb: Uint8Array, options: { treeLod?: boolean; pbr?: boolean } = {}): ArmLayer {
     if (options.treeLod !== false) {
         const trees = readTreesLodGlb(glb);
         if (trees) return { trees };
     }
-    return { fixed: readTileTriangles(glb) };
+    return { fixed: readTileTriangles(glb, options.pbr ? { pbr: true } : {}) };
 }
 
 /** Triangles a layer holds before view selection (a trees layer: every level). */

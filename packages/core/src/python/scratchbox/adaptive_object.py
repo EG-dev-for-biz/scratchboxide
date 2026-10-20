@@ -437,7 +437,7 @@ def sweep_curve_profile(
     twist_deg: float = 0.0,
     radial_modulation: Optional[Dict[str, float]] = None,
     color: Tuple[float, float, float, float] = CLAY_BASE
-) -> Any:
+) -> "scratchbox_native.geometry.Mesh":
     """
     Operator 1: SE(3) Lie Group Curve Sweep (Pillar 11).
     Sweeps a 2D cross-section P(u, v) along 3D carrier curve C(t) using Rotation-Minimizing Frames (RMF).
@@ -543,7 +543,7 @@ def revolve_harmonic_solid(
     harmonic_depth_ratio: float = 0.2,
     helix_pitch_meters: float = 0.0,
     color: Tuple[float, float, float, float] = CLAY_BASE
-) -> Any:
+) -> "scratchbox_native.geometry.Mesh":
     """
     Operator 2: Harmonic Solid of Revolution (Pillar 11).
     Revolves a 2D meridian curve r(z) around a 3D axis with continuous radial harmonic lobes
@@ -600,7 +600,7 @@ def replicate_metric_array(
     pitch_meters: float = 0.1,
     seed_geometry: Any = None,
     color: Tuple[float, float, float, float] = CLAY_BASE
-) -> Any:
+) -> "scratchbox_native.geometry.Mesh":
     """
     Operator 3: Affine Metric Replicator (Pillar 11).
     Copies seed_geometry, any mesh built around the origin, to points at metric pitch p:

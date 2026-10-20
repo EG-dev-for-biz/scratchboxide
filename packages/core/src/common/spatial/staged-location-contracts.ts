@@ -1920,10 +1920,43 @@ const DEFINITIONS = {
         stage: STR, reasonCode: { type: 'string', minLength: 1 }, reason: { type: 'string', minLength: 1 },
         layerKey: STR, fromRung: NONNEG_INT, toRung: NONNEG_INT, texelShare: ref('unit')
     }),
+    fitPair: obj(['chamferPx', 'gradNcc'], { chamferPx: NUM_OR_NULL, gradNcc: NUM_OR_NULL }),
+    facadeMaterialRegion: obj(['id', 'mapIndex', 'label', 'texels', 'areaM2', 'fields', 'decidedBy', 'accepted', 'confidence', 'reason', 'evidence'], {
+        id: STR, mapIndex: NONNEG_INT, nodeName: STR, label: { type: 'string', minLength: 1 }, texels: NONNEG_INT, areaM2: ref('nonneg'),
+        fields: obj(['glassFraction', 'transmissiveLikelihood', 'roughness', 'metalness', 'albedoLinear', 'delit'], {
+            glassFraction: ref('unit'), transmissiveLikelihood: ref('unit'), roughness: ref('unit'), metalness: ref('unit'), albedoLinear: ref('vec3'), delit: BOOL,
+            coursePitchM: ref('nonneg'), jointWidthM: ref('nonneg')
+        }),
+        decidedBy: { type: 'string', minLength: 1 }, accepted: BOOL, confidence: ref('unit'), reason: STR,
+        evidence: obj(['panosSeeing', 'panosMarking', 'panoIds', 'tileReadShare', 'tileMarkedShare'], {
+            panosSeeing: NONNEG_INT, panosMarking: NONNEG_INT, panoIds: arr(STR), tileReadShare: ref('unit'), tileMarkedShare: NUM_OR_NULL,
+            lattice: obj(['neighbours', 'darker', 'uniform'], { neighbours: NONNEG_INT, darker: BOOL, uniform: BOOL })
+        })
+    }),
+    facadeMaterialRecord: obj(['target', 'regions', 'courses', 'coursesRejected', 'totals', 'sources', 'timingsMs'], {
+        target: STR, regions: arr(ref('facadeMaterialRegion')),
+        courses: arr(obj(['id', 'mapIndices', 'pitchM', 'jointWidthM', 'jointDepthM', 'phaseM', 'decidedBy', 'panos', 'confidence'], {
+            id: STR, mapIndices: arr(NONNEG_INT), pitchM: ref('nonneg'), jointWidthM: ref('nonneg'), jointDepthM: ref('nonneg'), phaseM: NUM, decidedBy: STR,
+            panos: arr(obj(['panoId', 'pitchM', 'prominence', 'jointWidthM', 'phaseM'], { panoId: STR, pitchM: ref('nonneg'), prominence: ref('nonneg'), jointWidthM: ref('nonneg'), phaseM: NUM })),
+            tile: obj(['pitchM', 'prominence'], { pitchM: ref('nonneg'), prominence: ref('nonneg') }), confidence: ref('unit')
+        })),
+        coursesRejected: arr(obj(['mapIndex', 'reason'], { mapIndex: NONNEG_INT, reason: STR })),
+        totals: obj(['glassTexels', 'glassShare', 'candidates', 'accepted', 'rejected', 'byDecider', 'courseTexels'], {
+            glassTexels: NONNEG_INT, glassShare: ref('unit'), candidates: NONNEG_INT, accepted: NONNEG_INT, rejected: NONNEG_INT, byDecider: numberMap, courseTexels: NONNEG_INT
+        }),
+        loo: obj(['wallBefore', 'wallAfter', 'panos', 'kept', 'reason'], {
+            wallBefore: ref('fitPair'), wallAfter: ref('fitPair'), glassBefore: ref('fitPair'), glassAfter: ref('fitPair'), panos: NONNEG_INT, kept: BOOL, reason: STR
+        }),
+        sources: obj(['views', 'viewMasks', 'tileFaces', 'unavailable', 'models', 'calls', 'failedCalls', 'gatherMs'], {
+            views: NONNEG_INT, viewMasks: NONNEG_INT, tileFaces: NONNEG_INT, unavailable: arr(STR), models: arr(STR), calls: NONNEG_INT, failedCalls: NONNEG_INT, gatherMs: ref('nonneg')
+        }),
+        timingsMs: numberMap
+    }),
     TextureLayerBundle: obj(['layerKey', 'maps', 'uv', 'provenance', 'ladderRung', 'confidence'], {
         layerKey: { type: 'string', minLength: 1 },
         maps: obj(['albedo'], { albedo: STR, normal: STR, roughness: STR }),
         photoTier: ref('photoTierLayerRecord'),
+        materials: ref('facadeMaterialRecord'),
         uv: arr(ref('surfaceUvMap')), provenance: arr(ref('texelProvenance'), { minItems: 1 }),
         ladderRung: NONNEG_INT, rungReason: STR, confidence: { type: 'string', minLength: 1 },
         fit: obj(['chamferPx', 'clayChamferPx', 'gradNcc', 'scoredViews', 'heldOutShare', 'widthPx', 'views'], {

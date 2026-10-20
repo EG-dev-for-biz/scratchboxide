@@ -140,8 +140,8 @@ export interface TileVegetationPlantParams {
     stationSpacing?: number;
     /**
      * Distances (m from the camera) at which a viewport changes a tree's level: near up to lodNearPerHeight x its height (1,
-     * 12-30 m, at most lodNearMax), near-mid up to lodNearMidPerHeight x its height (3, 25-60 m, at most lodNearMidMax), mid
-     * up to lodFarPerHeight x its height (4, 60-140 m, at most lodFarMax), far beyond, dithered over lodFade (6 m) or more.
+     * 12-30 m, at most lodNearMax), near-mid up to lodNearMidPerHeight x its height (6, 25-100 m, at most lodNearMidMax), mid
+     * up to lodFarPerHeight x its height (8, 60-140 m, at most lodFarMax), far beyond, dithered over lodFade (6 m) or more.
      */
     lodNearPerHeight?: number;
     /** The far level's wood (trunk and main limbs): clamp(farWoodTrianglesPerHeight x tree height, farWoodMinTriangles, farWoodMaxTriangles) triangles (24, 160, 600). */

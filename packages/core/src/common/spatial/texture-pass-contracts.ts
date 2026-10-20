@@ -103,6 +103,83 @@ export interface PhotoTierLayerRecord {
     ms: number;
 }
 
+// =============================================================================
+// Facade material reading (facade-materials.ts): continuous fields per region, open labels
+// =============================================================================
+
+/** Which source decided a region (diagnostic; nothing branches on it). */
+export type MaterialDecider = 'street-view' | 'tiles' | 'both' | 'none' | (string & {});
+
+export interface FacadeMaterialFields {
+    /** Share of the region's texels read as the described surface (glass). */
+    glassFraction: number;
+    /** Likelihood the surface transmits and reflects like glass, 0..1 (the region's confidence when accepted, 0 otherwise). */
+    transmissiveLikelihood: number;
+    roughness: number;
+    metalness: number;
+    /** Linear base colour written (glass: the measured interior; wall: the photo's mean, untouched). */
+    albedoLinear: Vec3;
+    /** Whether the albedo is de-lit (a measured sun was available to the projection); false = the photo as lit. */
+    delit: boolean;
+    coursePitchM?: number;
+    jointWidthM?: number;
+}
+
+export interface FacadeMaterialRegion {
+    id: string;
+    mapIndex: number;
+    nodeName?: string;
+    /** Diagnostic label, open: 'glass' | 'wall' | ... */
+    label: 'glass' | 'wall' | (string & {});
+    texels: number;
+    areaM2: number;
+    fields: FacadeMaterialFields;
+    decidedBy: MaterialDecider;
+    accepted: boolean;
+    confidence: number;
+    reason: string;
+    evidence: {
+        panosSeeing: number; panosMarking: number; panoIds: string[];
+        tileReadShare: number; tileMarkedShare: number | null;
+        /** Tile-only regions: like regions in a row or column on the face, and darker/more uniform than the face's wall. */
+        lattice?: { neighbours: number; darker: boolean; uniform: boolean };
+    };
+}
+
+export interface CourseReading {
+    id: string;
+    mapIndices: number[];
+    pitchM: number;
+    jointWidthM: number;
+    /** Not measurable from photos: drawn at half the joint width (a tooled joint), labelled. */
+    jointDepthM: number;
+    /** World height of a joint centre (the pattern repeats every pitch from it). */
+    phaseM: number;
+    decidedBy: MaterialDecider;
+    panos: Array<{ panoId: string; pitchM: number; prominence: number; jointWidthM: number; phaseM: number }>;
+    tile?: { pitchM: number; prominence: number };
+    confidence: number;
+}
+
+export interface FacadeMaterialRecord {
+    target: string;
+    /** Regions the reading wrote (glass) and every rejected candidate, plus one wall entry per surface map. */
+    regions: FacadeMaterialRegion[];
+    courses: CourseReading[];
+    /** Map indices whose walls were measured for coursing and found no agreeing pitch, with the reason. */
+    coursesRejected: Array<{ mapIndex: number; reason: string }>;
+    totals: {
+        glassTexels: number; glassShare: number; candidates: number; accepted: number; rejected: number;
+        byDecider: Record<string, number>;
+        courseTexels: number;
+    };
+    /** Held-out fit of the walls (texels not read as glass), before and after the reading (leave one pano out), when measured. */
+    loo?: { wallBefore: { chamferPx: number | null; gradNcc: number | null }; wallAfter: { chamferPx: number | null; gradNcc: number | null }; glassBefore?: { chamferPx: number | null; gradNcc: number | null }; glassAfter?: { chamferPx: number | null; gradNcc: number | null }; panos: number; kept: boolean; reason: string };
+    sources: { views: number; viewMasks: number; tileFaces: number; unavailable: string[]; models: string[]; calls: number; failedCalls: number; gatherMs: number };
+    timingsMs: Record<string, number>;
+}
+
+
 /** Degrade ladder of the texture pass (design section 8). Index = rung; lower is better. */
 export const TEXTURE_LADDER_RUNGS = [
     'street-view multi-view blend',
@@ -147,6 +224,8 @@ export interface TextureLayerBundle {
     confidence: string;
     /** Held-out fit of the textured layer against the Street View photos (texture-fit-metric.ts); absent when no view scored. */
     fit?: TextureLayerFit;
+    /** The facade material reading (glass, coursing) on this layer; absent when it did not run (it is opt-in). */
+    materials?: FacadeMaterialRecord;
 }
 
 /**

@@ -353,10 +353,13 @@ export function textureRungColor(rung: number): string {
  * Legend rows for the per-texel rung shading of textured layers: one row per rung (TEXTURE_LADDER_RUNGS names), with
  * the share of texels when the run measured it.
  */
-export function textureRungLegendRows(shares?: readonly number[]): LegendRow[] {
-    return TEXTURE_LADDER_RUNGS.map((name, i) => {
-        const share = shares?.[i];
-        const pct = share !== undefined && Number.isFinite(share) ? ` (${share > 0 && share < 0.005 ? '<1' : Math.round(share * 100)}% of texels)` : '';
-        return { key: `rung:${i}`, label: name, color: textureRungColor(i), pattern: 'solid', text: `${name}${pct}` };
-    });
+export function textureRungLegendRows(shares?: readonly number[], materialShare?: number): LegendRow[] {
+    const pctOf = (share: number | undefined) => share !== undefined && Number.isFinite(share) ? ` (${share > 0 && share < 0.005 ? '<1' : Math.round(share * 100)}% of texels)` : '';
+    const rows: LegendRow[] = TEXTURE_LADDER_RUNGS.map((name, i) => ({ key: `rung:${i}`, label: name, color: textureRungColor(i), pattern: 'solid', text: `${name}${pctOf(shares?.[i])}` }));
+    // the facade material reading's texels (glass), striped over their rung, as strong as their confidence
+    if (materialShare !== undefined) rows.push({ key: 'material-reading', label: 'photo-inferred', color: MATERIAL_READING_STRIPE_COLOR, pattern: 'stripes', text: `glass read from the photos (photo-inferred; stripes over the rung, stronger with confidence)${pctOf(materialShare)}`, indent: true });
+    return rows;
 }
+
+/** Stripe colour of texels the facade material reading wrote (revealMaterial.ts MATERIAL_READING_COLOR). */
+export const MATERIAL_READING_STRIPE_COLOR = '#0072B2';

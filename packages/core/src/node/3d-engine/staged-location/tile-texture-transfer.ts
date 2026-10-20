@@ -89,6 +89,17 @@ export interface TileTriangles {
     /** Linear RGB baseColorFactor of untextured primitives, 3 floats per triangle. */
     flatLinear: Float32Array;
     textures: TileTexture[];
+    /**
+     * With readTileTriangles(glb, { pbr: true }): each triangle's glTF metallic-roughness material (index into `materials`,
+     * -1 = none: drawn as roughness 1, dielectric). Selections and copies of the soup may drop it (it is optional).
+     */
+    pbr?: { material: Int32Array; materials: TilePbrMaterial[] };
+}
+
+/** A glTF material's metallic-roughness: the factors and, when present, its texture's G (roughness) and B (metalness) bytes. */
+export interface TilePbrMaterial {
+    roughnessFactor: number; metallicFactor: number;
+    map?: { width: number; height: number; roughness: Uint8Array; metalness: Uint8Array; repeatS: boolean; repeatT: boolean };
 }
 
 const COMPONENT_SIZE: Record<number, number> = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 };
@@ -176,10 +187,35 @@ export interface TaggedTileTriangles extends TileTriangles { node: Int32Array }
  * EXT_mesh_gpu_instancing draws its mesh once per instance (the instance's TRS inside the node's frame), as glTF 2.0
  * specifies, and never once at the node itself. `nodeTags` also returns the node of each triangle.
  */
-export function readTileTriangles(glb: Uint8Array): TileTriangles;
-export function readTileTriangles(glb: Uint8Array, options: { nodeTags: true }): TaggedTileTriangles;
-export function readTileTriangles(glb: Uint8Array, options: { nodeTags?: boolean } = {}): TileTriangles | TaggedTileTriangles {
+export function readTileTriangles(glb: Uint8Array, options?: { pbr?: boolean }): TileTriangles;
+export function readTileTriangles(glb: Uint8Array, options: { nodeTags: true; pbr?: boolean }): TaggedTileTriangles;
+export function readTileTriangles(glb: Uint8Array, options: { nodeTags?: boolean; pbr?: boolean } = {}): TileTriangles | TaggedTileTriangles {
     const { json, bin } = readGlbChunks(glb);
+    // the metallic-roughness of each material (options.pbr): factors (glTF defaults 1, 1) and the texture's G and B
+    const pbrMaterials: TilePbrMaterial[] = [];
+    const pbrOfMaterial = new Map<number, number>();
+    const pbrFor = (mi: number | undefined): number => {
+        if (!options.pbr || mi === undefined || !json.materials?.[mi]) return -1;
+        const known = pbrOfMaterial.get(mi);
+        if (known !== undefined) return known;
+        const p = json.materials[mi].pbrMetallicRoughness ?? {};
+        const entry: TilePbrMaterial = { roughnessFactor: p.roughnessFactor ?? 1, metallicFactor: p.metallicFactor ?? 1 };
+        const ti = p.metallicRoughnessTexture?.index;
+        const tex = ti !== undefined ? json.textures?.[ti] : undefined;
+        const image = tex !== undefined ? json.images?.[tex.source] : undefined;
+        if (image?.bufferView !== undefined) {
+            const view = json.bufferViews[image.bufferView];
+            const img = decodeImageInMemory(bin.subarray(view.byteOffset || 0, (view.byteOffset || 0) + view.byteLength));
+            const n = img.width * img.height, roughness = new Uint8Array(n), metalness = new Uint8Array(n);
+            for (let i = 0; i < n; i++) { roughness[i] = img.rgba[i * 4 + 1]; metalness[i] = img.rgba[i * 4 + 2]; }
+            const sampler = tex.sampler !== undefined ? json.samplers?.[tex.sampler] : undefined;
+            entry.map = { width: img.width, height: img.height, roughness, metalness, repeatS: (sampler?.wrapS ?? 10497) !== 33071, repeatT: (sampler?.wrapT ?? 10497) !== 33071 };
+        }
+        pbrMaterials.push(entry);
+        pbrOfMaterial.set(mi, pbrMaterials.length - 1);
+        return pbrMaterials.length - 1;
+    };
+    const pbrIdx: number[] = [];
 
     const textures: TileTexture[] = [];
     const textureOfGltfTexture = new Map<number, number>();
@@ -233,6 +269,7 @@ export function readTileTriangles(glb: Uint8Array, options: { nodeTags?: boolean
                 const texInfo = pbr?.baseColorTexture;
                 const ti = hasUv && texInfo && (texInfo.texCoord ?? 0) === 0 ? textureFor(texInfo.index) : -1;
                 const f = pbr?.baseColorFactor || [1, 1, 1, 1];
+                const pm = pbrFor(prim.material);
                 // an untextured surface's colour is the base colour factor times its vertex colours (COLOR_0, glTF 2.0
                 // 3.9.2), e.g. SB-Veggie's bark and leaves; averaged over the triangle's corners
                 const C = ti < 0 && prim.attributes.COLOR_0 !== undefined ? accessor(prim.attributes.COLOR_0) : undefined;
@@ -261,6 +298,7 @@ export function readTileTriangles(glb: Uint8Array, options: { nodeTags?: boolean
                         nrm.push(nx, ny, nz);
                         texIdx.push(ti);
                         tag.push(nodeIndex);
+                        if (options.pbr) pbrIdx.push(pm);
                         if (C) for (let k = 0; k < 3; k++) flat.push(f[k] * (C[a * cw + k] + C[b * cw + k] + C[c * cw + k]) / 3);
                         else flat.push(f[0], f[1], f[2]);
                     }
@@ -274,7 +312,8 @@ export function readTileTriangles(glb: Uint8Array, options: { nodeTags?: boolean
     for (const r of roots) visit(r, IDENTITY);
     const out: TileTriangles = {
         positions: Float32Array.from(pos), uvs: Float32Array.from(uv), normals: Float32Array.from(nrm),
-        texture: Int32Array.from(texIdx), flatLinear: Float32Array.from(flat), textures
+        texture: Int32Array.from(texIdx), flatLinear: Float32Array.from(flat), textures,
+        ...(options.pbr ? { pbr: { material: Int32Array.from(pbrIdx), materials: pbrMaterials } } : {})
     };
     return options.nodeTags ? { ...out, node: Int32Array.from(tag) } : out;
 }

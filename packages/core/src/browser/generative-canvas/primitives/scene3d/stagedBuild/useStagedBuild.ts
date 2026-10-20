@@ -23,9 +23,10 @@
  * over 3 M vertices. The overlay refreshes on its own (a small store), so a running stage's clock never re-renders the
  * whole viewport.
  *
- * Clay or textured (texturedTwins.ts): a layer with a textured twin keeps its clay model; in textured mode the twin is
- * added as a second scene object and swapped in by the same reveal (a crossfade, material only), and back again. The
- * scene's stagedBuild.materialMode is the model's request; the overlay's toggle overrides it until the next request.
+ * Clay or textured (texturedTwins.ts): a layer with a textured twin keeps its clay model; in textured mode (the default)
+ * the twin is added as a second scene object and swapped in by the same reveal (a crossfade, material only), and back
+ * again. The scene's stagedBuild.materialMode is the model's request or the viewer's choice: the overlay's toggle writes
+ * it to the scene (saved with it, so a clay choice survives a reload).
  */
 
 import * as React from 'react';
@@ -46,11 +47,12 @@ import { placeDegradations, type Placement, type PlacementRoot } from './degrada
 import { nodeProgress, nodeRevealWindow, stepRevealSchedule, type LayerLoadState, type LayerRevealFrame, type RevealFrame, type RevealSchedule } from './revealScheduler';
 import { REVEAL_ATTRIBUTE, StagedMaterialRegistry, installRenderGuard, type MeshStagedLook, type PartLook } from './revealMaterial';
 import { mergedPartsOf } from './mergeStagedParts';
+import { FACADE_MATERIAL_SOURCE } from './facadeMaterialLook';
 import { TEXTURE_RUNG_COLORS, classUniforms, legendRows, patternCode, provenanceBackground, resolveLegend, shadingClasses, styleFor, textureRungLegendRows, uncertaintyCoverage, type LegendStyle } from './provenanceShading';
 import { EVICT_AFTER_MS, evictionCandidates, evictionEnabled, sameSet, stepEviction } from './layerEviction';
 import { isInterrupted, isRunSettled, stageEventsFor, streamedProgress, subscribeStageEvents, withStreamedEvents, type StageProgress } from './stagedBuildState';
 import {
-    INITIAL_SWITCH, deriveMaterialLayers, isMaterialSwapLayer, materialModeOf, modelIdOf, nextSwitch, parseSwapId, twinObjectFor, twinObjectId, twinSourceOf,
+    DEFAULT_MATERIAL_MODE, INITIAL_SWITCH, deriveMaterialLayers, isMaterialSwapLayer, materialModeOf, modelIdOf, nextSwitch, parseSwapId, twinObjectFor, twinObjectId, twinSourceOf,
     type DerivedMaterialState, type EngagedTwin, type MaterialMode, type MaterialSwitch
 } from './texturedTwins';
 
@@ -399,16 +401,17 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
     const [reducedMotion, setReducedMotion] = React.useState(prefersReducedMotion);
     const [announcement, setAnnouncement] = React.useState('');
 
-    // Clay or textured. The scene's request (stagedBuild.materialMode, set by staged_location_material_mode) holds until
-    // the overlay's toggle overrides it; a new request from the scene drops the override. A state streamed later without
-    // the field keeps the last request.
+    // Clay or textured. The scene's request (stagedBuild.materialMode, set by staged_location_material_mode or the
+    // overlay's toggle) holds; textured when there is none. The toggle shows its choice at once (userMode) and writes it
+    // to the scene; a new request from the scene drops the local one. A state streamed later without the field keeps
+    // the last request.
     const sceneMode = materialModeOf(state?.materialMode);
     const lastSceneMode = React.useRef<{ runId?: string; mode?: MaterialMode }>({});
     if (lastSceneMode.current.runId !== runId) lastSceneMode.current = { runId };
     if (sceneMode) lastSceneMode.current.mode = sceneMode;
     const [userMode, setUserMode] = React.useState<MaterialMode | undefined>(undefined);
     React.useEffect(() => { if (sceneMode) setUserMode(undefined); }, [sceneMode, runId]);
-    const wantedMode: MaterialMode = userMode ?? lastSceneMode.current.mode ?? 'clay';
+    const wantedMode: MaterialMode = userMode ?? lastSceneMode.current.mode ?? DEFAULT_MATERIAL_MODE;
     const twinRef = React.useRef<{ runId?: string; sw: MaterialSwitch; engaged: Map<string, EngagedTwin>; seen: boolean; mountEpoch: number }>({ sw: INITIAL_SWITCH, engaged: new Map(), seen: false, mountEpoch: 0 });
     if (twinRef.current.runId !== runId) twinRef.current = { runId, sw: INITIAL_SWITCH, engaged: new Map(), seen: false, mountEpoch: 0 };
     twinRef.current.sw = nextSwitch(twinRef.current.sw, wantedMode);
@@ -834,8 +837,16 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
             // swap reveals are reported by the materials line, not as build notes
             layers: (frame?.layers ?? []).filter(l => !isMaterialSwapLayer(l)),
             materials,
-            onToggleMaterials: () => setUserMode(materials.mode === 'textured' ? 'clay' : 'textured'),
-            rungLegend: provenanceOn && materials.mode === 'textured' && materials.shown > 0 ? textureRungLegendRows(materials.rungShares) : undefined,
+            onToggleMaterials: () => {
+                const mode: MaterialMode = materials.mode === 'textured' ? 'clay' : 'textured';
+                setUserMode(mode);
+                // saved with the scene (a view choice, not an undoable edit), so it holds across reloads and later commits
+                mutateSceneData(prev => {
+                    const sb = (prev as Scene3DData & { stagedBuild?: StagedBuildState }).stagedBuild;
+                    return sb ? { ...prev, stagedBuild: { ...sb, materialMode: mode } } as Scene3DData : prev;
+                }, { operator: 'sb_set_staged_material_mode', params: { mode } }, { history: false });
+            },
+            rungLegend: provenanceOn && materials.mode === 'textured' && materials.shown > 0 ? textureRungLegendRows(materials.rungShares, materials.materialShare) : undefined,
             progress: progress as Map<string, StageProgress>,
             nowMs: performance.now(),
             wallNowMs: Date.now(),
@@ -857,7 +868,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
             bottomInsetPx,
             skipNote
         });
-    }, [legendFor, provenanceOn, showReplaced, highlight, announcement, progress, onPromptAction, pageLoadedAtMs, effective, sw, derived]);
+    }, [legendFor, provenanceOn, showReplaced, highlight, announcement, progress, onPromptAction, pageLoadedAtMs, effective, sw, derived, mutateSceneData]);
 
     const overlay = React.useCallback((o: { bottomInsetPx: number }) => {
         if (!live.current.state) return null;
@@ -888,5 +899,9 @@ export function materialsSummary(state: StagedBuildState, frame: RevealFrame | u
             rungShares = TEXTURE_RUNG_COLORS.map((_, i) => ls.reduce((a, l) => a + (l.textured!.rungShares[i] ?? 0) * Math.max(1, l.textured!.bytes), 0) / w);
         }
     }
-    return { mode: sw.mode, available, engaged, shown, failedLayerIds: failed, ...(state.texturePass ? { pass: state.texturePass } : {}), ...(rungShares ? { rungShares } : {}) };
+    // texels the facade material reading wrote (its provenance entries' coverage), weighted like the rungs
+    const read = state.layers.filter(l => !l.retired && l.textured?.provenance?.some(p => p.source === FACADE_MATERIAL_SOURCE));
+    const rw = state.layers.filter(l => !l.retired && l.textured).reduce((a, l) => a + Math.max(1, l.textured!.bytes), 0);
+    const materialShare = read.length && rw ? read.reduce((a, l) => a + l.textured!.provenance.filter(p => p.source === FACADE_MATERIAL_SOURCE).reduce((x, p) => x + p.coverage, 0) * Math.max(1, l.textured!.bytes), 0) / rw : undefined;
+    return { mode: sw.mode, available, engaged, shown, failedLayerIds: failed, ...(state.texturePass ? { pass: state.texturePass } : {}), ...(rungShares ? { rungShares } : {}), ...(materialShare !== undefined ? { materialShare } : {}) };
 }

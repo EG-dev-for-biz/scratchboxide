@@ -13,7 +13,7 @@ import { StageCache } from '../src/node/3d-engine/staged-location/stage-cache';
 import { validateContract, type StageEvent } from '../src/common/spatial/staged-location-contracts';
 import { TEXTURE_LADDER_RUNGS } from '../src/common/spatial/texture-pass-contracts';
 import type { CanvasArtifact } from '../src/browser/generative-canvas/canvas-types';
-import { SHOW_TEXTURES_PILL } from '../src/node/3d-engine/staged-location/staged-summary';
+import { SHOW_CLAY_PILL, SHOW_TEXTURES_PILL } from '../src/node/3d-engine/staged-location/staged-summary';
 import { TEXTURE_PASS_VERSION } from '../src/node/3d-engine/staged-location/texture-pass';
 import { parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { encodePng } from '../src/node/texture-processing';
@@ -180,8 +180,10 @@ describe('the texture stage of the staged location build', () => {
         expect(rec.degradations.some(d => d.reasonCode === 'no_street_view')).toBe(true);
         expect(rec.degradations.some(d => d.reasonCode === 'enhance_not_run')).toBe(true);
         expect(rec.timingsMs.total).toBeGreaterThan(0);
-        expect(result.summary).toContain(SHOW_TEXTURES_PILL);
-        expect(result.summary).toMatch(/Real textures are ready for [l0-9a-z, ]+ and [l0-9a-z]+ \(shown in clay until the user picks textures\)/);
+        // textured by default: the viewport crossfades to the twins on its own, and the pill offers the clay view instead
+        expect(result.summary).toContain(SHOW_CLAY_PILL);
+        expect(result.summary).not.toContain(SHOW_TEXTURES_PILL);
+        expect(result.summary).toMatch(/Real textures are ready for [l0-9a-z, ]+ and [l0-9a-z]+ \(the viewport crossfades from the clay to them on its own\)/);
         const texels = textured.map((l: any) => ({ shares: l.textured.rungShares }));
         const pct = Math.round((sb.texturePass.rungShares[2]) * 1000) / 10;
         expect(result.summary).toContain(`${pct}% ${TEXTURE_LADDER_RUNGS[2]}`);
@@ -250,6 +252,7 @@ describe('the texture stage of the staged location build', () => {
         expect(d).toMatchObject({ reasonCode: 'texture_pass_failed', fellTo: 'studio grey clay' });
         expect(result.texturePass).toBeUndefined();
         expect(result.summary).not.toContain(SHOW_TEXTURES_PILL);
+        expect(result.summary).not.toContain(SHOW_CLAY_PILL);
         const sb = (result.artifact as any).data.stagedBuild;
         expect(sb.layers.some((l: any) => l.layer === 'l3b')).toBe(true);
         expect(sb.layers.every((l: any) => !l.textured)).toBe(true);
