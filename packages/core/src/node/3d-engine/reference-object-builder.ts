@@ -579,7 +579,8 @@ export function objectBuildSpecPatchJsonSchema(options: { materials: boolean }):
 /**
  * A patch reply merged into `base` by part id: a part with a known id replaces that part where it stands, a new id is
  * added at the end, removePartIds drops parts, and boundingMeters, expectedBodies and observations replace the base's
- * when given. A reply that is a complete spec merges the same way (every part replaced). Returns the problems when
+ * when given (an id both removed and given is replaced; removing an id the spec lacks changes nothing). A reply that is
+ * a complete spec merges the same way (every part replaced). Returns the problems when
  * the reply is not a patch; the merged spec is checked by the validator afterwards like any other.
  */
 export function applySpecPatch(base: ObjectBuildSpec, patch: unknown): { spec?: ObjectBuildSpec; problems: string[] } {
@@ -591,12 +592,12 @@ export function applySpecPatch(base: ObjectBuildSpec, patch: unknown): { spec?: 
     if (!Array.isArray(remove) || remove.some(id => typeof id !== 'string')) problems.push('removePartIds must be a list of part ids');
     const removing = new Set(Array.isArray(remove) ? remove.filter((id): id is string => typeof id === 'string') : []);
     const known = new Set(base.parts.map(part => part.id));
-    for (const id of removing) if (!known.has(id)) problems.push(`removePartIds: "${id}" does not name a part of the current spec`);
     const replacing = new Map<string, ObjectBuildSpec['parts'][number]>();
     p.parts.forEach((part, i) => {
         const id = (part as { id?: unknown } | null)?.id;
         if (!part || typeof part !== 'object' || typeof id !== 'string') { problems.push(`parts[${i}] must be a part object with an id`); return; }
-        if (removing.has(id)) problems.push(`part "${id}" is both changed and listed in removePartIds`);
+        // A part both removed and given is replaced by the one given; removing an id the spec does not have changes nothing.
+        removing.delete(id);
         if (replacing.has(id)) problems.push(`part "${id}" is given more than once`);
         replacing.set(id, part as ObjectBuildSpec['parts'][number]);
     });

@@ -234,14 +234,19 @@ describe('applySpecPatch', () => {
         expect(base.parts[1].label).toBe('arm');
     });
 
+    it('replaces a part that is both removed and given, and ignores removing an id the spec lacks', () => {
+        const base = baseSpec();
+        const { spec, problems } = applySpecPatch(base, { parts: [{ ...base.parts[1], label: 'new arm' }], removePartIds: ['arm', 'ghost'] });
+        expect(problems).toEqual([]);
+        expect(spec!.parts.map(p => p.label)).toEqual(['body', 'new arm', 'arms', 'rings']);
+    });
+
     it('names what is wrong with a reply that is not a usable patch', () => {
         const base = baseSpec();
         expect(applySpecPatch(base, 'x').problems).toEqual(['the reply must be a JSON object with a parts list']);
         expect(applySpecPatch(base, {}).problems).toEqual(['the reply needs a parts list (empty when no part changes)']);
-        expect(applySpecPatch(base, { parts: [{ id: 'arm' }], removePartIds: ['arm', 'ghost'] }).problems).toEqual([
-            'removePartIds: "ghost" does not name a part of the current spec',
-            'part "arm" is both changed and listed in removePartIds'
-        ]);
+        expect(applySpecPatch(base, { parts: [{ id: 'arm' }, { id: 'arm' }] }).problems).toEqual(['part "arm" is given more than once']);
+        expect(applySpecPatch(base, { parts: [], removePartIds: 'arm' }).problems).toEqual(['removePartIds must be a list of part ids']);
         expect(applySpecPatch(base, { parts: [{ label: 'no id' }] }).problems).toEqual(['parts[0] must be a part object with an id']);
     });
 });
