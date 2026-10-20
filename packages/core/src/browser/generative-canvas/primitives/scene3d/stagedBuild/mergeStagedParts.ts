@@ -22,7 +22,12 @@
  *
  * Merged only when every mesh is a plain triangle mesh of a staged node (extras.sb, scratchbox.staged-node/2), none
  * carries per-vertex reveal timing (`_reveal`, `_disp`: their items stagger within the node) and there are at least
- * MIN_PARTS of them. Positions and normals are baked into the parent's frame, so the pixels are the same. Opt out with
+ * MIN_PARTS of them. Positions and normals are baked into the parent's frame, so the pixels are the same. Parts drawn with
+ * and without an index merge together (a non-indexed part gets the identity index: same triangles, same order), and the
+ * merged mesh is always indexed, so hiding a part can collapse its triangles. Parts whose vertex attributes differ are not
+ * padded to one layout (a missing COLOR_0, uv or normal has no stand-in that draws the same under every material), so they
+ * stay one mesh per material and layout. A material with more than MAX_PARTS_PER_MESH parts is split into that many parts
+ * per mesh (the per-part uniform arrays). Opt out with
  * `?sbMergeParts=0` or `localStorage['sb.mergeStagedParts'] = '0'` (before/after comparisons).
  */
 
@@ -203,7 +208,7 @@ export function mergeStagedParts(root: THREE.Object3D): MergeReport | undefined 
     const containerOf = (c: Candidate): THREE.Object3D => (c.node === c.mesh ? c.mesh.parent! : c.node.parent ?? root);
     const groups = new Map<string, Candidate[]>();
     for (const c of candidates) {
-        const key = [(c.mesh.material as THREE.Material).uuid, attributeSignature(c.mesh.geometry as THREE.BufferGeometry), !!(c.mesh.geometry as THREE.BufferGeometry).index,
+        const key = [(c.mesh.material as THREE.Material).uuid, attributeSignature(c.mesh.geometry as THREE.BufferGeometry),
             c.mesh.castShadow, c.mesh.receiveShadow, c.mesh.frustumCulled, c.mesh.renderOrder, !!c.mesh.userData.sbKeepAuthoredMaterial, containerOf(c).uuid].join('#');
         (groups.get(key) ?? groups.set(key, []).get(key)!).push(c);
     }
@@ -225,8 +230,10 @@ export function mergeStagedParts(root: THREE.Object3D): MergeReport | undefined 
                 local.multiplyMatrices(inverse, c.mesh.matrixWorld);
                 if (!isIdentity(local)) baked.applyMatrix4(local);
                 const count = baked.getAttribute('position').count;
+                // every part indexed (mergeGeometries needs all or none; setPartVisibility needs the index)
+                if (!baked.index) baked.setIndex(Array.from({ length: count - (count % 3) }, (_, i) => i));
                 baked.setAttribute(PART_ATTRIBUTE, new THREE.BufferAttribute(new Float32Array(count).fill(k), 1));
-                const triCount = Math.floor((baked.index ? baked.index.count : count) / 3);
+                const triCount = Math.floor(baked.index!.count / 3);
                 parts.push({ index: k, name: c.node.name, sb: c.sb, triStart: tri, triCount, vertStart: vert, vertCount: count });
                 tri += triCount; vert += count;
                 geoms.push(baked);
