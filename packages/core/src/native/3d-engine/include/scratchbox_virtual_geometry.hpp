@@ -34,17 +34,26 @@
  * that has received levels [top .. L] can render a complete surface by treating level L as leaves,
  * so the model is visible after the first few kilobytes and sharpens as the stream arrives.
  *
- * Layout (little-endian, 4-byte words), version 2:
- *   header (128 bytes)          see writeSbvg (word 24: skipped non-triangle primitives)
+ * File vertices are wedges (position, normal, uv) and every triangle carries its glTF material
+ * index, so a renderer can texture any cut. Positions stay welded through the DAG, and a collapse
+ * runs along a UV seam or material border only when every chart at the moving vertex continues to
+ * the target through the collapsed edge (LockedSimplifier::chartTargets), never across one: seams
+ * never crack and no triangle ever straddles two materials or two charts.
+ *
+ * Layout (little-endian, 4-byte words), version 3:
+ *   header (128 bytes)          see writeSbvg (word 24: skipped non-triangle primitives,
+ *                               word 25: dropped degenerate triangles, word 26: glTF material count)
  *   level table                 levelCount * 16 words, coarsest level first; the block's byte
  *                               offset and length are 64-bit (lo, hi word pairs at words 9-10 and
  *                               11-12), so files past 4 GiB are addressable. Version 1 used 12-word
  *                               rows with 32-bit offsets at words 9 and 10.
  *   level blocks (16-byte aligned), each:
  *     clusters   clusterCount * 32 words  (see writeSbvg for the record layout)
- *     vertices   vertexCount * 6 f32      (position xyz relative to origin, normal xyz)
+ *     vertices   vertexCount * 8 f32      (position xyz relative to origin, normal xyz, uv; 6 f32
+ *                                          without uv in version 2)
  *     refs       refCount u32             (global vertex index per cluster-local vertex)
  *     triangles  triCount u32             (cluster-local i0 | i1 << 8 | i2 << 16)
+ *     materials  triCount u32             (glTF material index or 0xFFFFFFFF; version 3 only)
  */
 
 #include <algorithm>
@@ -67,10 +76,12 @@ constexpr uint32_t kMaxClusterVertices = 128;
 constexpr uint32_t kMaxClusterTriangles = 128;
 constexpr uint32_t kGroupSize = 8;
 constexpr uint32_t kSbvgMagic = 0x47564253; // 'SBVG'
-constexpr uint32_t kSbvgVersion = 2;
+constexpr uint32_t kSbvgVersion = 3;
 constexpr uint32_t kSbvgHeaderBytes = 128;
 constexpr uint32_t kSbvgLevelWords = 16;
 constexpr uint32_t kSbvgClusterWords = 32;
+/** position xyz, normal xyz, uv (version 3; version 2 had no uv). */
+constexpr uint32_t kSbvgVertexFloats = 8;
 constexpr float kRootParentError = 3.0e38f;
 /** Node instances a glTF scene graph may expand to (shared children are visited once per parent). */
 constexpr uint64_t kMaxNodeInstances = 1u << 20;
@@ -266,9 +277,24 @@ private:
 // GLB scene loading (all triangle primitives, node world transforms applied)
 // ============================================================================
 
+/** Material id of a triangle whose primitive names no glTF material. */
+constexpr uint32_t kNoMaterial = 0xFFFFFFFFu;
+
+struct F2 {
+    float x{0}, y{0};
+    F2() = default;
+    F2(float x_, float y_) : x(x_), y(y_) {}
+};
+
 struct SourceMesh {
     std::vector<F3> positions;
+    /** TEXCOORD_0 per vertex; (0, 0) for primitives without one. */
+    std::vector<F2> uvs;
     std::vector<uint32_t> indices;
+    /** glTF material index per triangle, or kNoMaterial. */
+    std::vector<uint32_t> triMaterial;
+    /** Length of the glTF materials array. */
+    uint32_t materialCount{0};
     uint32_t skippedPrimitives{0}; // primitives without a surface (points / lines) or without POSITION
 };
 
@@ -376,6 +402,7 @@ public:
         }
 
         GlbSceneLoader loader(root, bin, binLen);
+        loader.out_.materialCount = static_cast<uint32_t>(root["materials"].size());
         loader.walk();
         return std::move(loader.out_);
     }
@@ -507,6 +534,40 @@ private:
                 out_.positions.emplace_back(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
             }
 
+            // TEXCOORD_0: float, or normalized u16 / u8 as glTF allows; (0, 0) without one.
+            std::vector<F2> uvs(count);
+            const Json& uvIdx = prim["attributes"]["TEXCOORD_0"];
+            if (!uvIdx.isNull()) {
+                const Json& uvAcc = root_["accessors"][index(uvIdx)];
+                if (uvAcc["type"].str != "VEC2") throw GlbFormatError("glTF TEXCOORD_0 must be VEC2");
+                int64_t ct = uvAcc["componentType"].asInt(0);
+                size_t es = ct == 5126 ? 8 : ct == 5123 ? 4 : ct == 5121 ? 2 : 0;
+                if (es == 0) throw GlbFormatError("glTF TEXCOORD_0 must be float32, u16 or u8");
+                size_t ustride = 0, ucount = 0;
+                const uint8_t* usrc = accessorData(uvAcc, es, ustride, ucount);
+                if (ucount != count) throw GlbFormatError("glTF TEXCOORD_0 count differs from POSITION count");
+                for (size_t i = 0; i < count; ++i) {
+                    const uint8_t* e = usrc + i * ustride;
+                    if (es == 8) {
+                        float uv[2];
+                        std::memcpy(uv, e, 8);
+                        uvs[i] = F2(uv[0], uv[1]);
+                    } else if (es == 4) {
+                        uint16_t uv[2];
+                        std::memcpy(uv, e, 4);
+                        uvs[i] = F2(uv[0] / 65535.0f, uv[1] / 65535.0f);
+                    } else {
+                        uvs[i] = F2(e[0] / 255.0f, e[1] / 255.0f);
+                    }
+                    if (!std::isfinite(uvs[i].x) || !std::isfinite(uvs[i].y)) throw GlbFormatError("glTF TEXCOORD_0 has non-finite values");
+                }
+            }
+            out_.uvs.insert(out_.uvs.end(), uvs.begin(), uvs.end());
+
+            const Json& matIdx = prim["material"];
+            const uint32_t material = matIdx.isNull() ? kNoMaterial : static_cast<uint32_t>(index(matIdx));
+            if (material != kNoMaterial && material >= out_.materialCount) throw GlbFormatError("glTF primitive material index out of range");
+
             // Vertex sequence the primitive mode is applied to.
             std::vector<uint32_t> seq;
             const Json& idx = prim["indices"];
@@ -555,6 +616,7 @@ private:
                 throw GlbFormatError("GLB scene has more than " + std::to_string(kMaxSourceTriangles) + " triangles after instancing");
             }
             out_.indices.insert(out_.indices.end(), tri.begin(), tri.end());
+            out_.triMaterial.insert(out_.triMaterial.end(), tri.size() / 3, material);
         }
     }
 };
@@ -563,10 +625,33 @@ private:
 // Welded mesh
 // ============================================================================
 
+/** Bit pattern of a float with -0 folded into +0, for exact-match keys. */
+inline uint32_t floatBits(float f) {
+    if (f == 0.0f) f = 0.0f;
+    uint32_t u;
+    std::memcpy(&u, &f, 4);
+    return u;
+}
+
+inline bool sameUv(const F2& a, const F2& b) {
+    return floatBits(a.x) == floatBits(b.x) && floatBits(a.y) == floatBits(b.y);
+}
+
+/**
+ * Vertices weld by exact position, so the mesh is watertight for clustering and simplification.
+ * A triangle corner keeps its own uv (cornerUv) and every triangle its glTF material: UV seams and
+ * material borders are attributes on the position mesh, not splits in it. Normals are area-weighted
+ * per position.
+ */
 struct WeldedMesh {
     std::vector<F3> positions;   // relative to origin
     std::vector<F3> normals;
     std::vector<uint32_t> indices;
+    /** uv per triangle corner, parallel to indices. */
+    std::vector<F2> cornerUv;
+    /** Material per triangle (indices / 3): glTF material index or kNoMaterial. */
+    std::vector<uint32_t> triMaterial;
+    uint32_t materialCount{0};
     std::array<double, 3> origin{0, 0, 0};
     F3 aabbMin, aabbMax;         // relative to origin
     uint32_t sourceTriangles{0};
@@ -576,7 +661,9 @@ struct WeldedMesh {
 inline WeldedMesh weld(const SourceMesh& src) {
     WeldedMesh out;
     out.sourceTriangles = static_cast<uint32_t>(src.indices.size() / 3);
+    out.materialCount = src.materialCount;
     if (src.positions.empty() || src.indices.empty()) throw std::runtime_error("GLB contains no triangles");
+    if (src.uvs.size() != src.positions.size() || src.triMaterial.size() != src.indices.size() / 3) throw std::runtime_error("source mesh attributes do not match its vertices and triangles");
 
     struct Key {
         uint32_t x, y, z;
@@ -590,12 +677,6 @@ inline WeldedMesh weld(const SourceMesh& src) {
             return static_cast<size_t>(h ^ (h >> 31));
         }
     };
-    auto bits = [](float f) {
-        if (f == 0.0f) f = 0.0f; // fold -0 into +0
-        uint32_t u;
-        std::memcpy(&u, &f, 4);
-        return u;
-    };
 
     std::unordered_map<Key, uint32_t, KeyHash> map;
     map.reserve(src.positions.size());
@@ -605,7 +686,7 @@ inline WeldedMesh weld(const SourceMesh& src) {
     for (size_t i = 0; i < src.positions.size(); ++i) {
         const F3& p = src.positions[i];
         if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) throw std::runtime_error("GLB has non-finite vertex positions");
-        Key k{bits(p.x), bits(p.y), bits(p.z)};
+        Key k{floatBits(p.x), floatBits(p.y), floatBits(p.z)};
         auto it = map.find(k);
         if (it == map.end()) {
             uint32_t id = static_cast<uint32_t>(welded.size());
@@ -633,6 +714,8 @@ inline WeldedMesh weld(const SourceMesh& src) {
 
     out.normals.assign(welded.size(), F3(0, 0, 0));
     out.indices.reserve(src.indices.size());
+    out.cornerUv.reserve(src.indices.size());
+    out.triMaterial.reserve(src.indices.size() / 3);
     for (size_t t = 0; t + 2 < src.indices.size(); t += 3) {
         uint32_t a = remap[src.indices[t]], b = remap[src.indices[t + 1]], c = remap[src.indices[t + 2]];
         if (a == b || b == c || a == c) { out.droppedDegenerate++; continue; }
@@ -641,6 +724,8 @@ inline WeldedMesh weld(const SourceMesh& src) {
         out.indices.push_back(a);
         out.indices.push_back(b);
         out.indices.push_back(c);
+        for (int k = 0; k < 3; ++k) out.cornerUv.push_back(src.uvs[src.indices[t + k]]);
+        out.triMaterial.push_back(src.triMaterial[t / 3]);
         out.normals[a] += n;
         out.normals[b] += n;
         out.normals[c] += n;
@@ -744,9 +829,17 @@ private:
 // Clusters
 // ============================================================================
 
+/** A cluster-local vertex: a global position vertex with the uv its triangles use there. */
+struct Wedge {
+    uint32_t vertex{0};
+    F2 uv;
+};
+
 struct Cluster {
-    std::vector<uint32_t> vertices;     // global vertex ids
-    std::vector<uint8_t> localTris;     // 3 local indices per triangle
+    std::vector<Wedge> wedges;          // cluster-local vertex table (at most kMaxClusterVertices)
+    std::vector<uint32_t> vertices;     // distinct global position ids the wedges use
+    std::vector<uint8_t> localTris;     // 3 wedge indices per triangle
+    std::vector<uint32_t> triMaterial;  // material per triangle
     Sphere bounds;                      // culling sphere
     F3 coneAxis{0, 0, 1};
     float coneCutoff{1.0f};             // 1 = never cone-culled
@@ -758,7 +851,8 @@ struct Cluster {
     uint32_t group{0};
 
     uint32_t triangleCount() const { return static_cast<uint32_t>(localTris.size() / 3); }
-    uint32_t globalIndex(size_t corner) const { return vertices[localTris[corner]]; }
+    uint32_t globalIndex(size_t corner) const { return wedges[localTris[corner]].vertex; }
+    const F2& cornerUv(size_t corner) const { return wedges[localTris[corner]].uv; }
 };
 
 inline void computeClusterBounds(Cluster& c, const WeldedMesh& mesh) {
@@ -796,11 +890,31 @@ inline void computeClusterBounds(Cluster& c, const WeldedMesh& mesh) {
  * piece runs out of neighbours it absorbs the nearest unused triangle if it lies within the
  * cluster's own extent (so small disconnected pieces share clusters instead of making slivers).
  */
-inline std::vector<Cluster> buildClusters(const std::vector<uint32_t>& tris, const WeldedMesh& mesh,
-                                          uint32_t maxVerts = kMaxClusterVertices, uint32_t maxTris = kMaxClusterTriangles) {
+/** Key of a wedge within one clusterization: a compact position id and the exact uv. */
+struct WedgeKey {
+    uint32_t vertex, u, v;
+    bool operator==(const WedgeKey& o) const { return vertex == o.vertex && u == o.u && v == o.v; }
+};
+struct WedgeKeyHash {
+    size_t operator()(const WedgeKey& k) const {
+        uint64_t h = k.vertex * 0x9E3779B97F4A7C15ull;
+        h ^= (k.u + 0x7F4A7C15ull + (h << 6) + (h >> 2)) * 0xBF58476D1CE4E5B9ull;
+        h ^= (k.v + 0x94D049BBull + (h << 6) + (h >> 2)) * 0x94D049BB133111EBull;
+        return static_cast<size_t>(h ^ (h >> 31));
+    }
+};
+inline WedgeKey wedgeKey(uint32_t vertex, const F2& uv) { return WedgeKey{vertex, floatBits(uv.x), floatBits(uv.y)}; }
+
+/**
+ * Clusters grow across shared positions; their vertex tables are wedges, so a seam vertex used
+ * with two uvs takes two of the kMaxClusterVertices slots.
+ */
+inline std::vector<Cluster> buildClusters(const std::vector<uint32_t>& tris, const std::vector<F2>& cornerUv, const std::vector<uint32_t>& triMaterials,
+                                          const WeldedMesh& mesh, uint32_t maxVerts = kMaxClusterVertices, uint32_t maxTris = kMaxClusterTriangles) {
     std::vector<Cluster> clusters;
     const uint32_t triCount = static_cast<uint32_t>(tris.size() / 3);
     if (triCount == 0) return clusters;
+    if (triMaterials.size() != triCount || cornerUv.size() != tris.size()) throw std::runtime_error("one material per triangle and one uv per corner are required");
 
     // Compact vertex ids for this triangle set.
     std::unordered_map<uint32_t, uint32_t> toLocal;
@@ -843,7 +957,8 @@ inline std::vector<Cluster> buildClusters(const std::vector<uint32_t>& tris, con
 
     PointGrid grid(centroids);
     std::vector<uint8_t> used(triCount, 0);
-    std::vector<int32_t> slot(vcount, -1); // local vertex -> index in current cluster
+    std::vector<uint8_t> seen(vcount, 0);                          // local position in the current cluster
+    std::unordered_map<WedgeKey, uint32_t, WedgeKeyHash> wedgeSlot; // wedge -> index in the current cluster
     F3 lastCentroid = centroids[0];
 
     while (grid.aliveCount() > 0) {
@@ -857,19 +972,31 @@ inline std::vector<Cluster> buildClusters(const std::vector<uint32_t>& tris, con
         uint32_t members = 0;
         F3 cmin(std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
         F3 cmax = cmin * -1.0f;
+        wedgeSlot.clear();
 
         auto addTri = [&](uint32_t t) {
             used[t] = 1;
             grid.remove(t);
             for (uint32_t k = 0; k < 3; ++k) {
                 uint32_t v = localTri[t * 3 + k];
-                if (slot[v] < 0) {
-                    slot[v] = static_cast<int32_t>(clusterLocalVerts.size());
+                if (!seen[v]) {
+                    seen[v] = 1;
                     clusterLocalVerts.push_back(v);
                     for (uint32_t e = start[v]; e < start[v + 1]; ++e) if (!used[adj[e]]) candidates.push_back(adj[e]);
                 }
-                c.localTris.push_back(static_cast<uint8_t>(slot[v]));
+                const F2& uv = cornerUv[t * 3 + k];
+                auto it = wedgeSlot.find(wedgeKey(v, uv));
+                uint32_t slot;
+                if (it == wedgeSlot.end()) {
+                    slot = static_cast<uint32_t>(c.wedges.size());
+                    wedgeSlot.emplace(wedgeKey(v, uv), slot);
+                    c.wedges.push_back(Wedge{localToGlobal[v], uv});
+                } else {
+                    slot = it->second;
+                }
+                c.localTris.push_back(static_cast<uint8_t>(slot));
             }
+            c.triMaterial.push_back(triMaterials[t]);
             centroidSum += centroids[t];
             members++;
             cmin = fmin3(cmin, centroids[t]);
@@ -877,7 +1004,9 @@ inline std::vector<Cluster> buildClusters(const std::vector<uint32_t>& tris, con
         };
         auto newVerts = [&](uint32_t t) {
             uint32_t n = 0;
-            for (uint32_t k = 0; k < 3; ++k) if (slot[localTri[t * 3 + k]] < 0) n++;
+            for (uint32_t k = 0; k < 3; ++k) {
+                if (!wedgeSlot.count(wedgeKey(localTri[t * 3 + k], cornerUv[t * 3 + k]))) n++;
+            }
             return n;
         };
 
@@ -891,14 +1020,14 @@ inline std::vector<Cluster> buildClusters(const std::vector<uint32_t>& tris, con
                 uint32_t t = candidates[k];
                 if (used[t]) { candidates[k] = candidates.back(); candidates.pop_back(); continue; }
                 uint32_t nv = newVerts(t);
-                if (clusterLocalVerts.size() + nv <= maxVerts) {
+                if (c.wedges.size() + nv <= maxVerts) {
                     float score = static_cast<float>(nv) + length(centroids[t] - centroid) / (extent + meanEdge);
                     if (score < bestScore) { bestScore = score; best = t; }
                 }
                 ++k;
             }
             if (best == UINT32_MAX) {
-                if (clusterLocalVerts.size() + 3 > maxVerts) break;
+                if (c.wedges.size() + 3 > maxVerts) break;
                 best = grid.nearest(centroid, std::max(extent, meanEdge * 2.0f));
                 if (best == UINT32_MAX) break;
             }
@@ -907,7 +1036,7 @@ inline std::vector<Cluster> buildClusters(const std::vector<uint32_t>& tris, con
 
         for (uint32_t v : clusterLocalVerts) {
             c.vertices.push_back(localToGlobal[v]);
-            slot[v] = -1;
+            seen[v] = 0;
         }
         computeClusterBounds(c, mesh);
         lastCentroid = centroidSum * (1.0f / members);
@@ -921,20 +1050,28 @@ inline std::vector<Cluster> buildClusters(const std::vector<uint32_t>& tris, con
 // ============================================================================
 
 struct SimplifyResult {
-    std::vector<uint32_t> tris;  // global vertex ids
-    float error{0};              // max RMS plane distance (sqrt of normalized quadric cost) over performed collapses
+    std::vector<uint32_t> tris;      // global vertex ids
+    std::vector<F2> cornerUv;        // per corner of the surviving triangles
+    std::vector<uint32_t> materials; // per surviving triangle
+    float error{0};                  // max RMS plane distance (sqrt of normalized quadric cost) over performed collapses
 };
 
 class LockedSimplifier {
 public:
     /**
-     * Simplifies `tris` (global ids into mesh.positions) toward targetTris. Vertices with
-     * locked(global) == true never move. Collapses only move a vertex onto an existing neighbour,
-     * so output vertices are a subset of the input vertices.
+     * Simplifies `tris` (global ids into mesh.positions, a uv per corner, a material per triangle)
+     * toward targetTris. Vertices with locked(global) == true never move. Collapses only move a vertex
+     * onto an existing neighbour, so output vertices are a subset of the input vertices, and a
+     * surviving triangle keeps its material.
+     *
+     * UV seams and material borders are kept: a vertex collapses onto a neighbour only when every
+     * surviving triangle at it can take its uv at the target from a removed triangle of the same
+     * material and the same uv chart (so collapses run along a seam or border, never across one).
      */
     template <typename LockedFn>
-    static SimplifyResult simplify(const std::vector<uint32_t>& tris, const WeldedMesh& mesh, uint32_t targetTris, LockedFn locked) {
-        LockedSimplifier s(tris, mesh);
+    static SimplifyResult simplify(const std::vector<uint32_t>& tris, const std::vector<F2>& cornerUv, const std::vector<uint32_t>& materials,
+                                   const WeldedMesh& mesh, uint32_t targetTris, LockedFn locked) {
+        LockedSimplifier s(tris, cornerUv, materials, mesh);
         for (uint32_t v = 0; v < s.globalOf_.size(); ++v) s.locked_[v] = locked(s.globalOf_[v]) ? 1 : 0;
         s.run(targetTris);
         return s.result();
@@ -980,6 +1117,8 @@ private:
     const WeldedMesh& mesh_;
     std::vector<uint32_t> globalOf_;
     std::vector<std::array<uint32_t, 3>> tri_;
+    std::vector<std::array<F2, 3>> uv_;
+    std::vector<uint32_t> triMaterial_;
     std::vector<uint8_t> triAlive_;
     std::vector<std::vector<uint32_t>> vtris_;
     std::vector<Quadric> q_;
@@ -990,7 +1129,10 @@ private:
     uint32_t liveTris_{0};
     double maxCost_{0};
 
-    LockedSimplifier(const std::vector<uint32_t>& tris, const WeldedMesh& mesh) : mesh_(mesh) {
+    LockedSimplifier(const std::vector<uint32_t>& tris, const std::vector<F2>& cornerUv, const std::vector<uint32_t>& materials, const WeldedMesh& mesh)
+        : mesh_(mesh), triMaterial_(materials) {
+        if (materials.size() != tris.size() / 3 || cornerUv.size() != tris.size()) throw std::runtime_error("one material per triangle and one uv per corner are required");
+        for (size_t i = 0; i + 2 < cornerUv.size(); i += 3) uv_.push_back({cornerUv[i], cornerUv[i + 1], cornerUv[i + 2]});
         std::unordered_map<uint32_t, uint32_t> toLocal;
         toLocal.reserve(tris.size());
         auto local = [&](uint32_t g) {
@@ -1095,6 +1237,43 @@ private:
             if (l1 <= 1e-12f * std::max(l0, 1e-12f)) return false;
             if (dot(n0, n1) < 0.25f * l0 * l1) return false;
         }
+        return chartTargets(from, to, false);
+    }
+
+    /**
+     * The removed triangles on edge (from, to) pair each uv chart at `from` with its uv at `to`. Every
+     * surviving triangle at `from` must find the pair of its material and chart; with `apply`, its
+     * corner takes that uv. False when a chart or material at `from` does not continue to `to`.
+     */
+    bool chartTargets(uint32_t from, uint32_t to, bool apply) {
+        struct Pair {
+            uint32_t material;
+            F2 uvFrom, uvTo;
+        };
+        std::vector<Pair> pairs;
+        for (uint32_t t : vtris_[from]) {
+            if (!triAlive_[t]) continue;
+            const auto& tr = tri_[t];
+            int kf = -1, kt = -1;
+            for (int k = 0; k < 3; ++k) {
+                if (tr[k] == from) kf = k;
+                if (tr[k] == to) kt = k;
+            }
+            if (kt < 0) continue;
+            pairs.push_back({triMaterial_[t], uv_[t][kf], uv_[t][kt]});
+        }
+        for (uint32_t t : vtris_[from]) {
+            if (!triAlive_[t]) continue;
+            const auto& tr = tri_[t];
+            if (tr[0] == to || tr[1] == to || tr[2] == to) continue;
+            const int kf = tr[0] == from ? 0 : tr[1] == from ? 1 : 2;
+            const Pair* match = nullptr;
+            for (const Pair& p : pairs) {
+                if (p.material == triMaterial_[t] && sameUv(p.uvFrom, uv_[t][kf])) { match = &p; break; }
+            }
+            if (!match) return false;
+            if (apply) uv_[t][kf] = match->uvTo;
+        }
         return true;
     }
 
@@ -1113,6 +1292,7 @@ private:
             if (version_[c.from] != c.vFrom || version_[c.to] != c.vTo) continue;
             if (!collapseIsValid(c.from, c.to)) continue;
 
+            chartTargets(c.from, c.to, true);
             for (uint32_t t : vtris_[c.from]) {
                 if (!triAlive_[t]) continue;
                 auto& tr = tri_[t];
@@ -1149,6 +1329,8 @@ private:
         for (uint32_t t = 0; t < tri_.size(); ++t) {
             if (!triAlive_[t]) continue;
             for (uint32_t v : tri_[t]) r.tris.push_back(globalOf_[v]);
+            for (const F2& uv : uv_[t]) r.cornerUv.push_back(uv);
+            r.materials.push_back(triMaterial_[t]);
         }
         r.error = static_cast<float>(std::sqrt(maxCost_));
         return r;
@@ -1257,7 +1439,7 @@ inline ClusterDag buildClusterDag(WeldedMesh mesh, uint32_t maxLevels = 24) {
     dag.mesh = std::move(mesh);
     const WeldedMesh& m = dag.mesh;
 
-    dag.clusters = buildClusters(m.indices, m);
+    dag.clusters = buildClusters(m.indices, m.cornerUv, m.triMaterial, m);
     std::vector<uint32_t> current(dag.clusters.size());
     for (uint32_t i = 0; i < current.size(); ++i) {
         Cluster& c = dag.clusters[i];
@@ -1301,30 +1483,40 @@ inline ClusterDag buildClusterDag(WeldedMesh mesh, uint32_t maxLevels = 24) {
         LevelStats stats{level + 1, 0, 0, static_cast<uint32_t>(groups.size()), 0, 0};
         uint64_t nextTriangles = 0;
         for (const auto& group : groups) {
-            std::vector<uint32_t> tris;
+            std::vector<uint32_t> tris, materials;
+            std::vector<F2> uvs;
             std::vector<Sphere> spheres;
             float childError = 0;
             for (uint32_t id : group) {
                 const Cluster& c = dag.clusters[id];
-                for (size_t k = 0; k < c.localTris.size(); ++k) tris.push_back(c.globalIndex(k));
+                for (size_t k = 0; k < c.localTris.size(); ++k) {
+                    tris.push_back(c.globalIndex(k));
+                    uvs.push_back(c.cornerUv(k));
+                }
+                materials.insert(materials.end(), c.triMaterial.begin(), c.triMaterial.end());
                 spheres.push_back(c.selfLod);
                 childError = std::max(childError, c.selfError);
             }
             const uint64_t groupTris = tris.size() / 3;
-            SimplifyResult simp = LockedSimplifier::simplify(tris, m, static_cast<uint32_t>(groupTris / 2), [&](uint32_t v) { return shared.count(v) > 0; });
+            SimplifyResult simp = LockedSimplifier::simplify(tris, uvs, materials, m, static_cast<uint32_t>(groupTris / 2), [&](uint32_t v) { return shared.count(v) > 0; });
 
-            std::vector<uint32_t> parentTris;
+            std::vector<uint32_t> parentTris, parentMaterials;
+            std::vector<F2> parentUvs;
             float groupError = childError;
             if (uint64_t(simp.tris.size() / 3) > groupTris * 85 / 100) {
                 // Locked borders left too little to remove: carry the group up unchanged so every
                 // level still covers the whole surface (the next level groups it differently).
                 parentTris = std::move(tris);
+                parentUvs = std::move(uvs);
+                parentMaterials = std::move(materials);
                 stats.stuckGroups++;
             } else {
                 parentTris = std::move(simp.tris);
+                parentUvs = std::move(simp.cornerUv);
+                parentMaterials = std::move(simp.materials);
                 groupError = childError + simp.error;
             }
-            GroupResult r{group, mergeSpheres(spheres), groupError, buildClusters(parentTris, m)};
+            GroupResult r{group, mergeSpheres(spheres), groupError, buildClusters(parentTris, parentUvs, parentMaterials, m)};
             for (const auto& p : r.parents) nextTriangles += p.triangleCount();
             results.push_back(std::move(r));
         }
@@ -1392,7 +1584,9 @@ inline SbvgSummary writeSbvg(const ClusterDag& dag, const std::string& path, uin
     std::vector<std::vector<uint32_t>> byLevel(dag.levelCount);
     for (uint32_t i = 0; i < dag.clusters.size(); ++i) byLevel[dag.clusters[i].level].push_back(i);
 
-    std::vector<uint32_t> newIndex(m.positions.size(), UINT32_MAX);
+    // File vertices are wedges, shared across clusters and levels by (position, uv).
+    std::unordered_map<WedgeKey, uint32_t, WedgeKeyHash> newIndex;
+    newIndex.reserve(m.positions.size());
     std::vector<uint32_t> words(kSbvgHeaderBytes / 4 + dag.levelCount * kSbvgLevelWords, 0);
     auto putF = [](std::vector<uint32_t>& w, size_t at, float f) { std::memcpy(&w[at], &f, 4); };
 
@@ -1406,12 +1600,13 @@ inline SbvgSummary writeSbvg(const ClusterDag& dag, const std::string& path, uin
         size_t blockStart = words.size() + body.size();
 
         std::vector<uint32_t> clusterWords(ids.size() * kSbvgClusterWords, 0);
-        std::vector<uint32_t> newVerts, refs, tris;
+        std::vector<Wedge> newVerts;
+        std::vector<uint32_t> refs, tris, materials;
         for (size_t i = 0; i < ids.size(); ++i) {
             const Cluster& c = dag.clusters[ids[i]];
             uint32_t* w = &clusterWords[i * kSbvgClusterWords];
             w[0] = sbvgU32(refBase + refs.size(), "vertex reference count");
-            w[1] = static_cast<uint32_t>(c.vertices.size());
+            w[1] = static_cast<uint32_t>(c.wedges.size());
             w[2] = sbvgU32(triBase + tris.size(), "triangle count");
             w[3] = c.triangleCount();
             w[4] = c.level;
@@ -1422,31 +1617,40 @@ inline SbvgSummary writeSbvg(const ClusterDag& dag, const std::string& path, uin
             std::memcpy(w + 8, f, sizeof(f));
             float pf[] = {c.parentLod.center.x, c.parentLod.center.y, c.parentLod.center.z, c.parentLod.radius, c.parentError};
             std::memcpy(w + 24, pf, sizeof(pf));
-            for (uint32_t v : c.vertices) {
-                if (newIndex[v] == UINT32_MAX) {
-                    newIndex[v] = sbvgU32(vertexBase + newVerts.size(), "vertex count");
-                    newVerts.push_back(v);
+            for (const Wedge& wd : c.wedges) {
+                const WedgeKey key = wedgeKey(wd.vertex, wd.uv);
+                auto it = newIndex.find(key);
+                uint32_t id;
+                if (it == newIndex.end()) {
+                    id = sbvgU32(vertexBase + newVerts.size(), "vertex count");
+                    newIndex.emplace(key, id);
+                    newVerts.push_back(wd);
+                } else {
+                    id = it->second;
                 }
-                refs.push_back(newIndex[v]);
+                refs.push_back(id);
             }
             for (size_t t = 0; t < c.localTris.size(); t += 3) {
                 tris.push_back(uint32_t(c.localTris[t]) | (uint32_t(c.localTris[t + 1]) << 8) | (uint32_t(c.localTris[t + 2]) << 16));
+                materials.push_back(c.triMaterial[t / 3]);
             }
             sum.triangleCount += c.triangleCount();
             if (c.level == 0) sum.leafTriangleCount += c.triangleCount();
         }
 
         body.insert(body.end(), clusterWords.begin(), clusterWords.end());
-        for (uint32_t v : newVerts) {
-            const F3& p = m.positions[v];
-            const F3& n = m.normals[v];
-            float f[6] = {p.x, p.y, p.z, n.x, n.y, n.z};
-            uint32_t u[6];
+        for (const Wedge& wd : newVerts) {
+            const F3& p = m.positions[wd.vertex];
+            const F3& n = m.normals[wd.vertex];
+            const F2& uv = wd.uv;
+            float f[kSbvgVertexFloats] = {p.x, p.y, p.z, n.x, n.y, n.z, uv.x, uv.y};
+            uint32_t u[kSbvgVertexFloats];
             std::memcpy(u, f, sizeof(f));
-            body.insert(body.end(), u, u + 6);
+            body.insert(body.end(), u, u + kSbvgVertexFloats);
         }
         body.insert(body.end(), refs.begin(), refs.end());
         body.insert(body.end(), tris.begin(), tris.end());
+        body.insert(body.end(), materials.begin(), materials.end());
         size_t blockEnd = words.size() + body.size();
 
         uint32_t* row = &words[kSbvgHeaderBytes / 4 + levelRow * kSbvgLevelWords];
@@ -1485,6 +1689,7 @@ inline SbvgSummary writeSbvg(const ClusterDag& dag, const std::string& path, uin
     std::memcpy(&words[18], m.origin.data(), 24);
     words[24] = skippedPrimitives;
     words[25] = m.droppedDegenerate;
+    words[26] = m.materialCount;
 
     std::ofstream f(path, std::ios::binary);
     if (!f) throw std::runtime_error("cannot write " + path);

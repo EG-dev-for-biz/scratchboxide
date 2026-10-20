@@ -218,7 +218,7 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsOut
     }
     let packed = triangles[c.triOffset + tri];
     let local = (packed >> ((vi % 3u) * 8u)) & 0xffu;
-    let v = refs[c.refOffset + local] * 6u;
+    let v = refs[c.refOffset + local] * 8u; // position, normal, uv (SBVG_VERTEX_FLOATS)
     let p = vec3<f32>(vertices[v], vertices[v + 1u], vertices[v + 2u]);
     out.position = frame.viewProj * vec4<f32>(p, 1.0);
     out.normal = vec3<f32>(vertices[v + 3u], vertices[v + 4u], vertices[v + 5u]);
@@ -506,7 +506,7 @@ export class VirtualGeometryRenderer {
 
     private uploadLevel(header: SbvgHeader, index: number, file: Uint8Array) {
         const level = header.levels[index];
-        const parts = splitSbvgLevelBlock(level, file.subarray(level.byteOffset, level.byteOffset + level.byteLength));
+        const parts = splitSbvgLevelBlock(level, file.subarray(level.byteOffset, level.byteOffset + level.byteLength), header.version);
         const q = this.device.queue;
         const write = (buffer: any, offsetBytes: number, data: Uint8Array) => {
             if (data.byteLength > 0) q.writeBuffer(buffer, offsetBytes, data.buffer, data.byteOffset, data.byteLength);

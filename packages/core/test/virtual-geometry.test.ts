@@ -36,7 +36,7 @@ import { NativeCppCompilerService } from '../src/node/3d-engine/native-compiler-
 import { virtualGeometryHandlers } from '../src/node/gemini/tools/virtual-geometry-tools';
 import { resolveWithinRoot } from '../src/node/security/path-guard';
 import {
-    parseSbvgHeader, splitSbvgLevelBlock, SBVG_CLUSTER_WORDS, SBVG_HEADER_BYTES, SBVG_LEVEL_WORDS, SBVG_V1_LEVEL_WORDS, SBVG_VERSION, type SbvgHeader
+    parseSbvgHeader, splitSbvgLevelBlock, SBVG_CLUSTER_WORDS, SBVG_HEADER_BYTES, SBVG_LEVEL_WORDS, SBVG_V1_LEVEL_WORDS, SBVG_VERSION, SBVG_VERTEX_FLOATS, SBVG_NO_MATERIAL, type SbvgHeader
 } from '../src/browser/generative-canvas/services/virtual-geometry/sbvg-format';
 import { clusterSelected, projectedLodError, type ClusterSelectionParams } from '../src/browser/generative-canvas/services/virtual-geometry/cluster-selection';
 import { virtualGeometryLoadPlan } from '../src/browser/generative-canvas/services/virtual-geometry/viewport-source';
@@ -47,7 +47,7 @@ const INCLUDE_DIR = path.join(REPO_ROOT, 'packages/core/src/native/3d-engine/inc
 
 const clang = requireBinary(process.env.CXX || 'clang++', 'install clang++ (C++20)');
 /** sha256 of the .sbvg the builder writes for the determinism fixture (bumpySphere(60, 120) at [10, 2, -3]). */
-const DETERMINISTIC_FIXTURE_SHA256 = 'f8c08a71af49b963616d6665f6b3c8391be7adfbaedf449b8241c7bc167c6ffd';
+const DETERMINISTIC_FIXTURE_SHA256 = 'd4c4184c07d842e03e83dbacc0fb8cd70ace134f9090148142dacf58086a060e';
 const SCREENSHOTS = path.join(REPO_ROOT, 'test-results', 'screenshots');
 const ARCH_GLB = 'deploy/cloud-run/spatial-separator/assets/arch_constantine_sb_archi.glb';
 
@@ -169,11 +169,12 @@ function readFile(file: Buffer) {
     const bytes = new Uint8Array(file.buffer, file.byteOffset, file.byteLength);
     const header = parseSbvgHeader(bytes);
     const clusters: ClusterRec[] = [];
-    const vertices = new Float32Array(header.vertexCount * 6);
+    const vertices = new Float32Array(header.vertexCount * SBVG_VERTEX_FLOATS);
     const refs = new Uint32Array(header.refCount);
     const tris = new Uint32Array(header.triangleCount);
+    const materials = new Uint32Array(header.triangleCount);
     for (const level of header.levels) {
-        const parts = splitSbvgLevelBlock(level, bytes.subarray(level.byteOffset, level.byteOffset + level.byteLength));
+        const parts = splitSbvgLevelBlock(level, bytes.subarray(level.byteOffset, level.byteOffset + level.byteLength), header.version);
         const cu = new Uint32Array(parts.clusters.slice().buffer);
         const cf = new Float32Array(parts.clusters.slice().buffer);
         for (let i = 0; i < level.clusterCount; i++) {
@@ -184,9 +185,10 @@ function readFile(file: Buffer) {
                 parent: Array.from(cf.subarray(w + 24, w + 28)), parentError: cf[w + 28]
             });
         }
-        vertices.set(new Float32Array(parts.vertices.slice().buffer), level.vertexStart * 6);
+        vertices.set(new Float32Array(parts.vertices.slice().buffer), level.vertexStart * SBVG_VERTEX_FLOATS);
         refs.set(new Uint32Array(parts.refs.slice().buffer), level.refStart);
         tris.set(new Uint32Array(parts.triangles.slice().buffer), level.triangleStart);
+        if (parts.materials.byteLength) materials.set(new Uint32Array(parts.materials.slice().buffer), level.triangleStart);
     }
     const triangleVertices = (c: ClusterRec) => {
         const out: Array<[number, number, number]> = [];
@@ -196,7 +198,7 @@ function readFile(file: Buffer) {
         }
         return out;
     };
-    return { header, clusters, vertices, refs, tris, triangleVertices };
+    return { header, clusters, vertices, refs, tris, materials, triangleVertices };
 }
 
 /** Undirected edges used by a number of triangles other than 2 (0 for a closed manifold surface). */
@@ -480,7 +482,7 @@ describe.skipIf(!clang.ok)(withReason('Virtual geometry builder (C++20 cluster L
         expect(file.header.leafTriangleCount).toBe(32);
         const leafTris = file.clusters.filter(c => c.level === 0).flatMap(c => file.triangleVertices(c));
         for (const [a, b, c] of leafTris) {
-            const p = (v: number) => [file.vertices[v * 6], file.vertices[v * 6 + 1], file.vertices[v * 6 + 2]];
+            const p = (v: number) => [file.vertices[v * SBVG_VERTEX_FLOATS], file.vertices[v * SBVG_VERTEX_FLOATS + 1], file.vertices[v * SBVG_VERTEX_FLOATS + 2]];
             const [pa, pb, pc] = [p(a), p(b), p(c)];
             const ny = (pb[2] - pa[2]) * (pc[0] - pa[0]) - (pb[0] - pa[0]) * (pc[2] - pa[2]);
             expect(ny).toBeGreaterThan(0); // counter-clockwise seen from +Y
@@ -492,9 +494,14 @@ describe.skipIf(!clang.ok)(withReason('Virtual geometry builder (C++20 cluster L
         expect(tool.resultPayload.artifact.data.virtualGeometry.buildStats.skippedPrimitives).toBe(1);
     });
 
-    it('writes format version 2 with 64-bit block offsets; reads version 1; refuses unknown versions clearly', () => {
-        expect(SBVG_VERSION).toBe(2);
-        expect(sphere.header.version).toBe(2);
+    it('writes format version 3 with uvs and materials; reads versions 1 and 2; refuses unknown versions clearly', () => {
+        expect(SBVG_VERSION).toBe(3);
+        expect(sphere.header.version).toBe(3);
+        expect(sphere.header.materialCount).toBe(0);
+        // No glTF material on the fixture: every triangle says so, and the uv slots are present (zero).
+        expect(sphere.materials.length).toBe(sphere.header.triangleCount);
+        expect(sphere.materials.every(m => m === SBVG_NO_MATERIAL)).toBe(true);
+        expect(sphere.vertices.length).toBe(sphere.header.vertexCount * 8);
         // A one-level header whose block sits past 4 GiB (hi word set): read as a 64-bit offset.
         const v2 = Buffer.alloc(SBVG_HEADER_BYTES + SBVG_LEVEL_WORDS * 4);
         v2.writeUInt32LE(0x47564253, 0); v2.writeUInt32LE(2, 4); v2.writeUInt32LE(v2.length, 8); v2.writeUInt32LE(1, 12);
@@ -517,9 +524,9 @@ describe.skipIf(!clang.ok)(withReason('Virtual geometry builder (C++20 cluster L
         expect(h1.levels[0]).toMatchObject({ byteOffset: v1.length, byteLength: 128 });
         expect(h1.skippedPrimitives).toBe(0);
 
-        const v3 = Buffer.from(v2);
-        v3.writeUInt32LE(3, 4);
-        expect(() => parseSbvgHeader(new Uint8Array(v3))).toThrow(/unsupported version 3.*rebuild/);
+        const v4 = Buffer.from(v2);
+        v4.writeUInt32LE(4, 4);
+        expect(() => parseSbvgHeader(new Uint8Array(v4))).toThrow(/unsupported version 4.*rebuild/);
     });
 
     it('is deterministic: the same fixture always gives the same bytes (no FMA contraction, total-order heap ties)', async () => {
