@@ -249,13 +249,13 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 
 ### 7. Optical Resection & Edge Alignment (`spatial-tools.ts`)
 - `geobox_resect_image_location`: Full autonomous 6-DOF photograph-to-tile resection.
-- `geobox_resect_camera_pose`: Resects camera position and attitude.
+- `geobox_resect_camera_pose`: Deprecated hidden alias of `geobox_resect_image_location` (since 2026-10-20; remove after one release).
 - `geobox_harmonize_location_lighting`: De-lights photogrammetry and matches photograph atmosphere.
 - `geobox_optimize_edge_alignment`: Same as `spatial_closed_loop_edge_align`.
 - `spatial_solve_pnp`: Analytical DLT + Levenberg-Marquardt pose solver.
 - `spatial_match_features_2d_3d`: 2D-to-3D keypoint matcher.
 - `spatial_closed_loop_edge_align` / `geobox_closed_loop_edge_align`: Refines a camera pose so a given model (`glbPath`) lines up with a given photograph (`imagePath`), from a required `initialPose`; reports edge correlation before/after, the mean edge distance in pixels, the renders made and why it stopped. It yields between renders, stops on the chat's Stop, and has bounded limits (`maxIterations` 1-50, `analysisMaxSide` 32-640, `timeBudgetSeconds` 5-240, default 120).
-- `spatial_resect_image_location`: High-level resection alias.
+- `spatial_resect_image_location`: Deprecated hidden alias of `geobox_resect_image_location` (since 2026-10-20; remove after one release).
 - `optics_configure_lens_distortion`: Configures Brown-Conrady coefficients.
 - `optics_export_lens_distortion`: Exports lens profiles to OpenCV/Nuke format.
 
