@@ -35,6 +35,8 @@ export interface MassingFace {
     normal: V3; axisS: V3; axisT: V3; origin: V3;
     sMin: number; sMax: number; tMin: number; tMax: number; tBottom: number; area: number;
     pixel: number; orthoSMin: number; orthoTMax: number; width: number; height: number; coverage: number;
+    /** Where the slab the texture was baked through is centred along the normal, metres (0: the face's plane; set when the plane's slab saw too little and the tile's photo surface lies off it). */
+    textureOffsetM?: number;
     openings: string[];
     top: Array<[number, number]>;
 }

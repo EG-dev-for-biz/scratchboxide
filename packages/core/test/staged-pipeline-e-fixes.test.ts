@@ -133,6 +133,32 @@ describe('the ortho bake leaves surfaces without a photo uncovered (native)', ()
     });
 });
 
+describe('a wall off the scanned facade is baked about the photo surface (native)', () => {
+    it('finds the tile\'s photo surface 3 m in front of an unsnapped wall and bakes through a slab there, reporting the offset', async () => {
+        const dir = tmp();
+        const W = 64, H = 64, img = new Uint8Array(W * H * 4);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) img.set([60, 180, 70, 255], (y * W + x) * 4);
+        // the scan's south facade stands at z = 3 while the massing's wall is at z = 0 (snapping off, as for a modelled volume)
+        const p = [[0, 0, 3], [12, 0, 3], [12, 9, 3], [0, 9, 3]], uv = [[0, 1], [1, 1], [1, 0], [0, 0]];
+        const pos: number[] = [], st: number[] = [], rf: number[] = [], nrm: number[] = [];
+        p.forEach((q, k) => { pos.push(...q); st.push(...uv[k]); rf.push(-2); nrm.push(0, 0, 1); });
+        const node: MassingNode = { name: 'scan', kind: 'residual', provenance: 'as-scanned', confidence: null, positions: new Float32Array(pos), normals: new Float32Array(nrm), ref: new Int32Array(rf), st: new Float32Array(st), indices: new Uint32Array([0, 1, 2, 0, 2, 3]) };
+        const tile = path.join(dir, 'tile.glb');
+        fs.writeFileSync(tile, writeMassingTexturedGlb({ nodes: [node], faces: [], stage: 'test', stageKey: 'k', provenanceOf: () => ({ label: 'as-scanned', measuredGeometry: true, method: 'synthetic', sources: [] }), textures: new Map(), legend: [], tileImages: new Map([[0, { bytes: new Uint8Array(encodePng(W, H, Buffer.from(img), 4)), mimeType: 'image/png' }]]), tileLegendIndex: 0 }).glb);
+        const m = { parts: [{ id: 'p', baseY: 0, topY: 9, loops: [[[0, 0], [12, 0], [12, -9], [0, -9]] as Array<[number, number]>], planes: [], heightSource: 'vector', heights: {} }], meshes: [] };
+        const r = await runMassing(massingSpecText(m, { outDir: path.join(dir, 'out'), tile, isolate: tile, params: { pixel: 0.1, snapMaxM: 0, sections: 0 } }), path.join(dir, 'out'));
+        const south = r.report.faces.find(f => f.wall && f.normal[2] > 0.9)!;
+        expect(south.coverage).toBeGreaterThan(0.85);
+        expect(south.textureOffsetM).toBeGreaterThan(2.7);
+        expect(south.textureOffsetM).toBeLessThan(3.3);
+        const o = readFaceOrtho(r.dir, south)!;
+        shot('reslab_offset_south_face.png', o.width, o.height, o.rgba);
+        // off: the plane's own slab sees nothing
+        const r0 = await runMassing(massingSpecText(m, { outDir: path.join(dir, 'out0'), tile, isolate: tile, params: { pixel: 0.1, snapMaxM: 0, sections: 0, reslabReach: 0 } }), path.join(dir, 'out0'));
+        expect(r0.report.faces.find(f => f.wall && f.normal[2] > 0.9)!.coverage).toBeLessThan(0.05);
+    });
+});
+
 /** A face record for a W x H ortho at PX metres per pixel, facing +z at z = 0, s along +x, t up. */
 function faceOf(index: number, W: number, H: number, PX: number, extra: Partial<MassingFace> = {}): MassingFace {
     return {

@@ -114,6 +114,12 @@ struct Spec {
     double snapMaxM{2.0}, snapMinSupport{0.15};
     double residualProud{0.6}, residualCut{0.6}, residualClear{1.5}, residualOpen{2.0}, residualMinArea{2.0}, apronHeight{0.8}, attachReach{1.5};
     double maxFaceSide{3000};
+    /**
+     * A wall the slab hardly sees (coverage under reslabBelow) is baked again about the depth where the tile's photo surface
+     * facing it lies (the projected-area mode within +-reslabReach of its plane), when that covers more: a modelled volume
+     * is moved as a whole, so one of its walls can stand a few metres off the facade the scan measures. 0 turns it off.
+     */
+    double reslabBelow{0.35}, reslabReach{4.0};
     bool bake{true}, residual{true}, sections{true}, topdown{true};
     std::vector<Part> parts;
     std::vector<MeshSolid> meshes;
@@ -143,6 +149,8 @@ struct Face {
     double pixel{0}, orthoSMin{0}, orthoTMax{0};
     int width{0}, height{0};
     double coverage{0};
+    /** Where the slab the texture was baked through is centred along the normal (0: the face's own plane). */
+    double textureOffset{0};
     V3 at(double s, double t) const { return origin + axisS * s + axisT * t; }
     void st(const V3& p, double& s, double& t) const { V3 d = p - origin; s = d.dot(axisS); t = d.dot(axisT); }
 };
@@ -1557,6 +1565,49 @@ private:
         }
     }
 
+    /**
+     * The depth along a wall's normal (metres from its plane) where the tile's photo surface facing it lies: the mode of the
+     * projected area of the photo triangles facing out of it, over its (s, t) extent, within +-reach, in a 1.5 m window
+     * (bins of 0.25 m). NaN when nothing faces it there.
+     */
+    double photoSurfaceDepth(const Face& f, double reach) const {
+        const double bin = 0.25;
+        const int nb = static_cast<int>(std::ceil(2 * reach / bin));
+        std::vector<double> hist(static_cast<size_t>(nb), 0.0);
+        V3 c0 = f.at(f.sMin, f.tMin), c1 = f.at(f.sMax, f.tMax);
+        V3 bl{std::min(c0.x, c1.x), std::min(c0.y, c1.y), std::min(c0.z, c1.z)}, bh{std::max(c0.x, c1.x), std::max(c0.y, c1.y), std::max(c0.z, c1.z)};
+        for (const V3& q : {f.at(f.sMin, f.tMin) + f.n * reach, f.at(f.sMax, f.tMax) + f.n * reach, f.at(f.sMin, f.tMin) - f.n * reach, f.at(f.sMax, f.tMax) - f.n * reach}) {
+            bl = {std::min(bl.x, q.x), std::min(bl.y, q.y), std::min(bl.z, q.z)}; bh = {std::max(bh.x, q.x), std::max(bh.y, q.y), std::max(bh.z, q.z)};
+        }
+        double total = 0;
+        for (uint32_t t : tile_.query(bl, bh)) {
+            double facing = tile_.n[t].dot(f.n);
+            if (facing < 0.5 || !tile_.hasPhoto(t)) continue;
+            V3 m = (tile_.p[3 * t] + tile_.p[3 * t + 1] + tile_.p[3 * t + 2]) * (1.0 / 3.0);
+            double s, tt;
+            f.st(m, s, tt);
+            if (s < f.sMin || s > f.sMax || tt < f.tMin || tt > f.tMax) continue;
+            double h = (m - f.origin).dot(f.n);
+            if (h < -reach || h >= reach) continue;
+            double w = tile_.area[t] * facing;
+            hist[static_cast<size_t>(std::clamp(static_cast<int>((h + reach) / bin), 0, nb - 1))] += w;
+            total += w;
+        }
+        if (total <= 0) return std::numeric_limits<double>::quiet_NaN();
+        const int win = static_cast<int>(std::round(1.5 / bin));
+        double best = -1;
+        int at = 0;
+        for (int k = 0; k + win <= nb; ++k) {
+            double sum = 0;
+            for (int j = k; j < k + win; ++j) sum += hist[static_cast<size_t>(j)];
+            if (sum > best) { best = sum; at = k; }
+        }
+        // the window's area-weighted mean depth
+        double sw = 0, sh = 0;
+        for (int j = at; j < at + win; ++j) { sw += hist[static_cast<size_t>(j)]; sh += hist[static_cast<size_t>(j)] * (-reach + (j + 0.5) * bin); }
+        return sw > 0 ? sh / sw : std::numeric_limits<double>::quiet_NaN();
+    }
+
     void bake() {
         // image frames
         for (auto& f : faces_) {
@@ -1589,6 +1640,21 @@ private:
                 size_t covered = 0;
                 for (size_t i = 0; i < N; ++i) covered += cov[i];
                 f.coverage = static_cast<double>(covered) / static_cast<double>(N);
+                if (!up && std::abs(f.n.y) < 0.5 && spec_.reslabReach > 0 && f.coverage < spec_.reslabBelow) {
+                    double c = photoSurfaceDepth(f, spec_.reslabReach);
+                    if (std::isfinite(c) && (c < -spec_.slabBack + 0.5 || c > spec_.slabFront - 0.3)) {
+                        std::vector<float> z2(N, -1e30f);
+                        std::vector<uint8_t> rgb2(N * 3, 0), cov2(N, 0);
+                        rasterFace(f, c - spec_.slabBack, c + spec_.slabFront, true, z2, &rgb2, &cov2);
+                        size_t covered2 = 0;
+                        for (size_t i = 0; i < N; ++i) covered2 += cov2[i];
+                        if (covered2 > covered + N / 20) {
+                            z.swap(z2); rgb.swap(rgb2); cov.swap(cov2);
+                            f.coverage = static_cast<double>(covered2) / static_cast<double>(N);
+                            f.textureOffset = c;
+                        }
+                    }
+                }
                 texture::ImageBuffer img(f.width, f.height, 4, 0);
                 for (size_t i = 0; i < N; ++i) {
                     for (int c = 0; c < 3; ++c) img.data[i * 4 + c] = cov[i] ? rgb[i * 3 + c] : 128;
@@ -1814,7 +1880,7 @@ private:
                << ",\"axisT\":" << v3(f.axisT) << ",\"origin\":" << v3(f.origin) << ",\"sMin\":" << detail::fmt(f.sMin) << ",\"sMax\":" << detail::fmt(f.sMax)
                << ",\"tMin\":" << detail::fmt(f.tMin) << ",\"tMax\":" << detail::fmt(f.tMax) << ",\"tBottom\":" << detail::fmt(f.tBottom) << ",\"area\":" << detail::fmt(f.area)
                << ",\"pixel\":" << detail::fmt(f.pixel) << ",\"orthoSMin\":" << detail::fmt(f.orthoSMin) << ",\"orthoTMax\":" << detail::fmt(f.orthoTMax)
-               << ",\"width\":" << f.width << ",\"height\":" << f.height << ",\"coverage\":" << detail::fmt(f.coverage) << ",\"openings\":[";
+               << ",\"width\":" << f.width << ",\"height\":" << f.height << ",\"coverage\":" << detail::fmt(f.coverage) << ",\"textureOffsetM\":" << detail::fmt(f.textureOffset) << ",\"openings\":[";
             for (size_t k = 0; k < f.openings.size(); ++k) js << (k ? "," : "") << detail::jstr(spec_.openings[static_cast<size_t>(f.openings[k])].id);
             js << "],\"top\":[";
             for (size_t k = 0; k < f.top.size(); ++k) js << (k ? "," : "") << "[" << detail::fmt(f.top[k].first) << "," << detail::fmt(f.top[k].second) << "]";
@@ -1904,6 +1970,8 @@ inline Spec readSpec(std::istream& in) {
             else if (name == "apronHeight") s.apronHeight = v;
             else if (name == "attachReach") s.attachReach = v;
             else if (name == "maxFaceSide") s.maxFaceSide = v;
+            else if (name == "reslabBelow") s.reslabBelow = v;
+            else if (name == "reslabReach") s.reslabReach = v;
             else if (name == "bake") s.bake = v != 0;
             else if (name == "residual") s.residual = v != 0;
             else if (name == "sections") s.sections = v != 0;

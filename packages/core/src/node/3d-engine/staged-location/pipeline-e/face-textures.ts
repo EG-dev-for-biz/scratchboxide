@@ -24,7 +24,7 @@ export const SRC = { tileOrtho: 0, nearestFill: 1, facadeMedian: 2 } as const;
 
 export function baseLegend(): TexelSource[] {
     return [
-        { source: 'tile-ortho', label: 'as-scanned', method: 'the photo tile rendered orthographically through a thin slab about the face (the outermost surface facing out of it)', rung: rung('tile photo transfer'), weight: 0.5 },
+        { source: 'tile-ortho', label: 'as-scanned', method: 'the photo tile rendered orthographically through a thin slab about the face (the outermost surface facing out of it); on a wall the slab about its plane hardly sees, through the same slab about the depth where the tile\'s photo surface facing it lies, up to 4 m off (the face\'s textureOffsetM)', rung: rung('tile photo transfer'), weight: 0.5 },
         { source: 'nearest-observed', label: 'filled', method: 'a texel the tile does not cover on this face, given the colour of the nearest texel it does', rung: rung('measured palette colour'), weight: 0.15 },
         { source: 'facade-median', label: 'filled', method: "a face the tile does not see at all (against a neighbour, inside the block), given the building's median facade colour", rung: rung('measured palette colour'), weight: 0.05 }
     ];

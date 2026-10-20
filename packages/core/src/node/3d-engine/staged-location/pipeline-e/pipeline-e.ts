@@ -45,7 +45,8 @@ export function pipelineEInference(env: NodeJS.ProcessEnv = process.env): boolea
 /** The native tool's parameters for E (the defaults of scratchbox_staged_massing.hpp, said here so they are in the key). */
 export const MASSING_PARAMS = {
     pixel: 0.05, slabBack: 1.5, slabFront: 0.8, protrusionReach: 2.5, snapMaxM: 4.0, snapMinSupport: 0.15,
-    residualProud: 0.6, residualCut: 0.6, residualClear: 1.5, residualOpen: 2.0, residualMinArea: 2.0, apronHeight: 0.8, attachReach: 1.5
+    residualProud: 0.6, residualCut: 0.6, residualClear: 1.5, residualOpen: 2.0, residualMinArea: 2.0, apronHeight: 0.8, attachReach: 1.5,
+    reslabBelow: 0.35, reslabReach: 4.0
 };
 
 export interface MassingStageInput {
