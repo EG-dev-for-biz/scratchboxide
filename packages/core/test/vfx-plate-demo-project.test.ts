@@ -61,8 +61,8 @@ describe('VFX Plate Anti-Drift Demo Project Integration Suite', () => {
     });
 
     describe('Project JSON Manifest Validation', () => {
-        it('validates projects/vfx_plate_anti_drift_demo.scratchbox.json against timeline schema', () => {
-            const projectPath = path.resolve(__dirname, '../../../projects/vfx_plate_anti_drift_demo.scratchbox.json');
+        it('validates public/projects/vfx_plate_anti_drift_demo.scratchbox.json against timeline schema', () => {
+            const projectPath = path.resolve(__dirname, '../../../public/projects/vfx_plate_anti_drift_demo.scratchbox.json');
             expect(fs.existsSync(projectPath)).toBe(true);
 
             const content = fs.readFileSync(projectPath, 'utf8');
@@ -84,7 +84,7 @@ describe('VFX Plate Anti-Drift Demo Project Integration Suite', () => {
         });
 
         it.skipIf(!demoMedia.ok)(withReason('resolves the project plate video and CG monolith inpaint asset on disk', demoMedia), () => {
-            const projectPath = path.resolve(__dirname, '../../../projects/vfx_plate_anti_drift_demo.scratchbox.json');
+            const projectPath = path.resolve(__dirname, '../../../public/projects/vfx_plate_anti_drift_demo.scratchbox.json');
             const tl: VideoTimelineData = JSON.parse(fs.readFileSync(projectPath, 'utf8')).timeline;
             const plateElement = tl.tracks[0].elements[0];
 
