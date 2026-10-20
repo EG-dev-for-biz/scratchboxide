@@ -364,6 +364,10 @@ void main() {
 
     // Soft vertical sky gradient
     float skyGradient = pow(1.0 - max(0.0, upFactor), 2.2);
+    // The palette was authored as display colours (the dome used to skip tone mapping); convert to scene-referred
+    // values that display the same through ACES: sRGB to linear, over ACES's slope near black (~0.172).
+    zenithColor = pow(max(zenithColor, 0.0), vec3(2.2)) / 0.172;
+    horizonColor = pow(max(horizonColor, 0.0), vec3(2.2)) / 0.172;
     vec3 skyColor = mix(zenithColor, horizonColor, skyGradient);
 
     // Physical sky: replaces the palette (and its zenith/horizon colours, which light the clouds) while the sun is
@@ -522,6 +526,9 @@ void main() {
     }
 
     gl_FragColor = vec4(skyColor, 1.0);
+    // Scene-referred like every other material: the renderer's tone mapping and output colour space apply here too.
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
 }
 `;
 
