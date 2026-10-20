@@ -161,6 +161,7 @@ import type { SetCameraLensParams } from '../services/operators/lighting-camera-
 import { keepsStoredPose, lensCommands, liveViewMatches, runCameraCommands, withLivePose, type CameraCommand, type Vec3 } from './scene3d/cameraSettings';
 import { syncObjectMaterial } from './scene3d/materialOverride';
 import { TreeLodController, findShadowCamera, formatTreeLodStats, type TreeLodFrame } from './scene3d/treeLod/TreeLodController';
+import { countSceneTriangles, type SceneTriangleShare } from './scene3d/treeLod/sceneTriangleShare';
 import { createViewportCostProbe, viewportCostProbeEnabled } from './scene3d/viewportCost';
 import { applyTreeTextures, loadTreeTextureLibrary } from './scene3d/treeLod/treeTextureMaterials';
 import { disposeObject3DDeep, releaseObject3D } from './scene3d/disposeObject';
@@ -2104,6 +2105,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         // Scene data's treeCrownShading and treeLod are passed on when they change (so a controller's own setting holds until then).
         let appliedTreeLodView: Scene3DData['treeLod'] | null = null;
         let lastTreeFrame: TreeLodFrame | undefined;
+        let lastSceneShare: SceneTriangleShare | undefined;
         const treeLodControllers = (): TreeLodController[] => {
             const out: TreeLodController[] = [];
             externalObjectsMapRef.current.forEach(model => {
@@ -2135,22 +2137,28 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     ? { focalLengthMm: dofPlan.focalLengthMm, apertureFStop: dofPlan.apertureFStop, focusM, focusPoint: focus?.centre ?? null, focusObject: focus?.object ?? null, maxBlurRadiusPx: Math.max(4, MAX_BLUR_RADIUS_FRAME_FRACTION * heightPx * overscan) }
                     : null
             };
-            lastTreeFrame = frame;
+            // One triangle budget for the frame (cheap form): what everything but the trees draws (buildings, context, hero,
+            // ground; main and shadow pass) is reserved first, and each trees GLB fits into what the ones before it left.
+            const share = countSceneTriangles(stack.scene, camera, { shadowCamera, skip: o => !!o.userData?.sbTreeLod });
+            lastSceneShare = share;
+            let reserved = share.main + share.shadow;
+            lastTreeFrame = { ...frame, reservedTriangles: reserved };
             for (const lod of lods) {
                 if (crownShadingChanged) lod.setCrownShading(crownShading);
                 if (viewChanged) lod.setView(treeLodView);
-                lod.update(camera, shadowCamera, frame);
+                const st = lod.update(camera, shadowCamera, { ...frame, reservedTriangles: reserved });
+                reserved += st.estimatedTriangles + st.estimatedShadowTriangles;
             }
             if (treeLodView?.statsOverlay && now - treeStatsShownAt > 250) {
                 treeStatsShownAt = now;
-                setTreeLodStatsLine(formatTreeLodStats(lods.map(l => l.stats)));
+                setTreeLodStatsLine(formatTreeLodStats(lods.map(l => l.stats), share));
             } else if (!treeLodView?.statsOverlay && treeStatsShownAt !== 0) {
                 treeStatsShownAt = 0;
                 setTreeLodStatsLine(null);
             }
         };
         // debug hook: the controllers, the last frame they were given, and one level update outside the animation loop
-        (window as any).__SB_TREE_LOD__ = { controllers: treeLodControllers, lastFrame: () => lastTreeFrame, update: () => updateTreeLods(performance.now()) };
+        (window as any).__SB_TREE_LOD__ = { controllers: treeLodControllers, lastFrame: () => lastTreeFrame, sceneShare: () => lastSceneShare, update: () => updateTreeLods(performance.now()) };
 
         renderFrameRef.current = renderFrame;
         (window as any).__SB_3D_RENDER_FRAME__ = renderFrame;

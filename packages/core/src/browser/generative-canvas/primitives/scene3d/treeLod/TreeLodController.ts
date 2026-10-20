@@ -108,6 +108,12 @@ export interface TreeLodFrame {
     overscan?: number;
     /** Depth of field as drawn (null/undefined: none). */
     dof?: { focalLengthMm: number; apertureFStop: number; focusM: number; focusPoint?: THREE.Vector3 | null; focusObject?: THREE.Object3D | null; maxBlurRadiusPx?: number } | null;
+    /**
+     * Triangles the rest of the frame draws (buildings, context, the hero, other trees GLBs; main pass plus shadow pass),
+     * taken off `triangleBudget` before the trees are fitted to it: the scene shares one budget, so trees give up levels
+     * when the city is heavy. Nothing else is ever demoted for it (the hero and the focus object keep full detail).
+     */
+    reservedTriangles?: number;
 }
 
 /** Why a tree has its level in the last frame. */
@@ -146,6 +152,10 @@ export interface TreeLodStats {
     newVariants: number;
     /** Trees the budget held a level below where their distance puts them. */
     demotedTrees: number;
+    /** The one triangle budget of the frame, what the rest of the scene took of it, and what was left for these trees. */
+    triangleBudget: number;
+    reservedTriangles: number;
+    treeBudget: number;
     /** Levels chosen by on-screen size (false: metre bands). */
     screenSpace: boolean;
     /** Trees demoted for depth-of-field blur, and trees kept from it as the focus (or spanning the plane of focus). */
@@ -250,7 +260,7 @@ export class TreeLodController {
     private readonly tmp = new THREE.Vector3();
     readonly stats: TreeLodStats = {
         trees: 0, visibleTrees: 0, culledTrees: 0, atLevel: [0, 0, 0, 0], fading: 0, estimatedTriangles: 0, estimatedShadowTriangles: 0, shadowOnlyTrees: 0, commits: 0, deferredCommits: 0, newVariants: 0,
-        demotedTrees: 0, screenSpace: true, blurDemotedTrees: 0, focusProtectedTrees: 0, fovealCentreNdc: [0, 0], frameHeightPx: 0, fovDeg: 0,
+        demotedTrees: 0, triangleBudget: 0, reservedTriangles: 0, treeBudget: 0, screenSpace: true, blurDemotedTrees: 0, focusProtectedTrees: 0, fovealCentreNdc: [0, 0], frameHeightPx: 0, fovDeg: 0,
         updateMs: 0, crownTrees: 0, crownLeafMeshes: 0, crownLobeTrees: 0, crownLobeMeshes: 0, crownLobeFallbackMeshes: 0
     };
     private view: TreeLodViewOptions;
@@ -607,23 +617,41 @@ export class TreeLodController {
             const e = t.snap ? target : stepEdges(t.edges, target, maxStep);
             return (t.inMain ? submitted(e, t) : 0) + shadowCost(e, t);
         };
+        // what a target costs once the tree is there (see the second pass below)
+        const headingCost = (target: LodEdges, t: TreeState): number => (t.inMain ? submitted(target, t) : 0) + shadowCost(target, t);
         let total = 0;
         for (const t of visible) { t.target = baseTarget(t); total += costOf(t.target, t); }
         s.demotedTrees = 0;
-        if (this.forced === undefined && total > this.opts.triangleBudget) {
-            const order = [...visible].sort((a, b) => a.importance - b.importance);
-            for (let pass = 0; pass < n - 1 && total > this.opts.triangleBudget; pass++) {
+        // one budget for the whole frame: what the rest of the scene draws comes off it first
+        const reserved = finite(frame?.reservedTriangles) && frame!.reservedTriangles! > 0 ? frame!.reservedTriangles! : 0;
+        const budget = Math.max(0, this.opts.triangleBudget - reserved);
+        s.triangleBudget = this.opts.triangleBudget; s.reservedTriangles = reserved; s.treeBudget = budget;
+        const order = this.forced === undefined && total > budget ? [...visible].sort((a, b) => a.importance - b.importance) : [];
+        /** Demotes the least important trees one level a pass until `cost` of the targets fits, as `total` says. */
+        const demote = (cost: (e: LodEdges, t: TreeState) => number, sum: number): number => {
+            for (let pass = 0; pass < n - 1 && sum > budget; pass++) {
                 for (const t of order) {
+                    // the focus tree (or one spanning the plane of focus) keeps its level whatever the budget
+                    if (t.reason.focusProtected) continue;
                     const e = t.target;
                     const finest = finestLevel(e);
                     if (finest >= n - 1) continue;                                // already wholly the far level
                     const coarser = edgesNoFinerThan(e, finest + 1);
-                    const gain = costOf(e, t) - costOf(coarser, t);
+                    const gain = cost(e, t) - cost(coarser, t);
                     if (gain <= 0) continue;
-                    t.target = coarser; total -= gain; s.demotedTrees++; t.reason.budgetDemotions++;
-                    if (total <= this.opts.triangleBudget) break;
+                    t.target = coarser; sum -= gain; s.demotedTrees++; t.reason.budgetDemotions++;
+                    if (sum <= budget) break;
                 }
             }
+            return sum;
+        };
+        if (order.length > 0) {
+            total = demote(costOf, total);
+            // Second pass, on the destinations: a demotion from a settled level starts a crossfade that draws both levels for
+            // `fadeSeconds`, so by this frame's cost it looks like a loss, and a squeeze on settled trees (the scene's share growing
+            // as buildings come into view) would never be met. When this frame's cost is still over, the targets themselves are
+            // fitted to the budget, so the trees settle inside it once their dissolves end.
+            if (total > budget) demote(headingCost, visible.reduce((a, t) => a + headingCost(t.target, t), 0));
         }
         for (const t of visible) {
             const target = t.target;
@@ -742,7 +770,7 @@ export class TreeLodController {
 }
 
 /** One stats line for the viewport overlay: what the controllers drew in the last frame and why trees left their size's level. */
-export function formatTreeLodStats(all: readonly TreeLodStats[]): string {
+export function formatTreeLodStats(all: readonly TreeLodStats[], scene?: { main: number; shadow: number }): string {
     const sum = (f: (s: TreeLodStats) => number) => all.reduce((a, s) => a + f(s), 0);
     const m = (x: number) => (x >= 1e6 ? `${(x / 1e6).toFixed(2)}M` : x >= 1e3 ? `${(x / 1e3).toFixed(1)}k` : `${Math.round(x)}`);
     const s0 = all[0];
@@ -751,6 +779,8 @@ export function formatTreeLodStats(all: readonly TreeLodStats[]): string {
         `trees ${sum(s => s.trees)}  seen ${sum(s => s.visibleTrees)}  shadow-only ${sum(s => s.shadowOnlyTrees)}  culled ${sum(s => s.culledTrees)}`,
         `near ${sum(s => s.atLevel[0])}  near-mid ${sum(s => s.atLevel[1])}  mid ${sum(s => s.atLevel[2])}  far ${sum(s => s.atLevel[3])}  fading ${sum(s => s.fading)}`,
         `tri ${m(sum(s => s.estimatedTriangles))} + shadow ${m(sum(s => s.estimatedShadowTriangles))}  budget-demoted ${sum(s => s.demotedTrees)}  blur-demoted ${sum(s => s.blurDemotedTrees)}  in focus ${sum(s => s.focusProtectedTrees)}`,
+        // the one budget split: the rest of the scene (buildings, context, hero) first, the trees in what is left
+        `budget ${m(s0.triangleBudget)} = scene ${m(scene ? scene.main : 0)} + shadow ${m(scene ? scene.shadow : 0)} + trees ${m(sum(s => s.estimatedTriangles + s.estimatedShadowTriangles))} (trees may use ${m(Math.max(0, s0.triangleBudget - (scene ? scene.main + scene.shadow : 0)))})`,
         `${mode}  fovea (${s0.fovealCentreNdc[0].toFixed(2)}, ${s0.fovealCentreNdc[1].toFixed(2)})  update ${sum(s => s.updateMs).toFixed(2)} ms`
     ].join('\n');
 }
