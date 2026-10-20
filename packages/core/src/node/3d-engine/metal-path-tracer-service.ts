@@ -17,9 +17,12 @@
  * MetalPathTracerError, and probe() says why.
  */
 
-import { execFile } from 'child_process';
+import { ChildProcess, execFile, spawn } from 'child_process';
+import { EventEmitter } from 'events';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
+import * as readline from 'readline';
 import { NativeCppCompilerService } from './native-compiler-service';
 import { compileNativeCached, defaultNativeFlags } from './native-build-cache';
 
@@ -79,8 +82,10 @@ export interface MetalPathTraceRequest {
     lod?: { thresholdPx?: number; near?: number; finestLevel?: number };
     /** Default: the neutral studio dome. */
     lighting?: MetalPathTraceSunLighting | MetalPathTraceStudioLighting;
-    /** One uniform material (linear RGB albedo); default is the studio clay. */
+    /** One uniform material (linear RGB albedo); default is the studio clay. Ignored when `materials` is given. */
     material?: { albedo?: [number, number, number]; roughness?: number; metallic?: number };
+    /** Shade with the materials and textures of the GLB the .sbvg (version 3) was built from, by the material ids it carries. */
+    materials?: { glbPath: string };
     denoise?: boolean;
     exposureEv?: number;
     camera?: MetalPathTraceCamera | MetalPathTraceAutoCamera;
@@ -111,6 +116,16 @@ export interface MetalPathTraceStats {
     meanLinearLuminance: number;
     exposureEv: number;
     denoised: boolean;
+    materials: {
+        source: 'glb' | 'uniform';
+        glbPath: string;
+        count: number;
+        images: number;
+        imagesDecoded: number;
+        /** Decoded images uploaded to the GPU (0 on the cpu backend). */
+        texturesUploaded: number;
+        loadMs: number;
+    };
     material: { albedo: [number, number, number]; roughness: number; metallic: number };
     sun: { elevationDeg: number; azimuthDeg: number };
     camera: { position: [number, number, number]; target: [number, number, number]; up: [number, number, number]; verticalFovDeg: number };
@@ -124,6 +139,200 @@ export interface MetalPathTraceResult {
     stats: MetalPathTraceStats;
     compileMs: number;
     executionMs: number;
+}
+
+export interface MetalPathTraceSessionOpen {
+    sbvgPath: string;
+    /** The GLB the .sbvg was built from, for its materials and textures; without it every triangle is `material`. */
+    glbPath?: string;
+    lighting?: MetalPathTraceSunLighting | MetalPathTraceStudioLighting;
+    material?: { albedo?: [number, number, number]; roughness?: number; metallic?: number };
+}
+
+export interface MetalPathTraceView {
+    width: number;
+    height: number;
+    camera: MetalPathTraceCamera;
+    lod?: { thresholdPx?: number; near?: number; finestLevel?: number };
+    maxBounces?: number;
+    clampIndirect?: number;
+    seed?: number;
+    /** Samples per pixel the frame accumulates to (default 256). */
+    targetSpp?: number;
+    /** Fixed exposure; by default the first frame's auto exposure is kept for the view. */
+    exposureEv?: number;
+}
+
+export interface MetalPathTraceOpened {
+    device: string;
+    file: { clusters: number; levels: number; vertices: number; leafTriangles: number; materialCount: number; aabbMin: [number, number, number]; aabbMax: [number, number, number] };
+    materials: { source: 'glb' | 'uniform'; count: number; images: number; imagesDecoded: number; texturesUploaded: number };
+    openMs: number;
+}
+
+export interface MetalPathTraceViewStarted {
+    seq: number;
+    width: number;
+    height: number;
+    cut: { clusters: number; triangles: number; thresholdPx: number; rebuilt: boolean; cutMs: number; accelerationBuildMs: number };
+    lighting: 'sky' | 'studio';
+    targetSpp: number;
+}
+
+export interface MetalPathTraceFrame {
+    seq: number;
+    spp: number;
+    rays: number;
+    gpuMs: number;
+    width: number;
+    height: number;
+    coverage: number;
+    exposureEv: number;
+    /** 8-bit RGBA, width * height * 4 bytes, display-ready. */
+    path: string;
+    done: boolean;
+}
+
+/**
+ * A resident tracer process (sbvg_pathtracer --serve). Events from the helper arrive as 'frame',
+ * 'view', 'error' and 'exit' on the emitter; the latest frame's metadata is kept for polling.
+ */
+export class MetalPathTraceSession extends EventEmitter {
+    private child: ChildProcess | null = null;
+    private pending: Array<{ event: string; resolve: (v: any) => void; reject: (e: Error) => void }> = [];
+    private latest: MetalPathTraceFrame | null = null;
+    private view: MetalPathTraceViewStarted | null = null;
+    private exited: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+    private stderr = '';
+    readonly openedAt = Date.now();
+    lastUsed = Date.now();
+    opened: MetalPathTraceOpened | null = null;
+
+    constructor(private readonly binary: string, readonly dir: string) {
+        super();
+    }
+
+    get alive(): boolean {
+        return this.child !== null && this.exited === null;
+    }
+
+    /** Metadata of the newest frame the helper wrote (its bytes are at `path`). */
+    latestFrame(): MetalPathTraceFrame | null {
+        return this.latest;
+    }
+
+    currentView(): MetalPathTraceViewStarted | null {
+        return this.view;
+    }
+
+    /** The newest frame's pixels, re-read from the frame file; null before the first frame. */
+    readFrame(): { meta: MetalPathTraceFrame; rgba: Buffer } | null {
+        const meta = this.latest;
+        if (!meta) return null;
+        let rgba: Buffer;
+        try {
+            rgba = fs.readFileSync(meta.path);
+        } catch {
+            return null;
+        }
+        if (rgba.length !== meta.width * meta.height * 4) return null;
+        return { meta, rgba };
+    }
+
+    async start(): Promise<void> {
+        fs.mkdirSync(this.dir, { recursive: true });
+        const child = spawn(this.binary, ['--serve', this.dir], { stdio: ['pipe', 'pipe', 'pipe'] });
+        this.child = child;
+        child.stderr!.on('data', (chunk: Buffer) => { this.stderr = (this.stderr + chunk.toString()).slice(-4000); });
+        const lines = readline.createInterface({ input: child.stdout! });
+        lines.on('line', line => this.onLine(line));
+        child.on('exit', (code, signal) => {
+            this.exited = { code, signal };
+            const err = new MetalPathTracerError(`path tracer process exited (${signal ?? code})`, this.stderr.trim());
+            for (const p of this.pending.splice(0)) p.reject(err);
+            this.emit('exit', this.exited);
+        });
+        child.on('error', err => {
+            for (const p of this.pending.splice(0)) p.reject(new MetalPathTracerError('path tracer process failed', err.message));
+        });
+        await this.expect('ready');
+    }
+
+    async open(request: MetalPathTraceSessionOpen): Promise<MetalPathTraceOpened> {
+        const opened = await this.command({
+            op: 'open',
+            sbvgPath: path.resolve(request.sbvgPath),
+            ...(request.glbPath ? { glbPath: path.resolve(request.glbPath) } : {}),
+            ...(request.lighting ? { lighting: request.lighting } : {}),
+            ...(request.material ? { material: request.material } : {})
+        }, 'opened');
+        this.opened = opened;
+        return opened;
+    }
+
+    /** Starts a progressive frame for the view; earlier frames of this session are superseded. */
+    async setView(view: MetalPathTraceView): Promise<MetalPathTraceViewStarted> {
+        this.lastUsed = Date.now();
+        return this.command({ op: 'view', ...view }, 'view');
+    }
+
+    close(): void {
+        if (!this.child || this.exited) return;
+        try {
+            this.child.stdin!.write('{"op":"close"}\n');
+            this.child.stdin!.end();
+        } catch { /* already gone */ }
+        const child = this.child;
+        setTimeout(() => { if (!this.exited) child.kill('SIGKILL'); }, 2000).unref();
+    }
+
+    private onLine(line: string) {
+        let msg: any;
+        try {
+            msg = JSON.parse(line);
+        } catch {
+            return;
+        }
+        const event = msg?.event;
+        if (event === 'frame') {
+            if (this.view && msg.seq === this.view.seq) {
+                this.latest = msg as MetalPathTraceFrame;
+                this.emit('frame', this.latest);
+            }
+            return;
+        }
+        if (event === 'error') {
+            const err = new MetalPathTracerError(String(msg.message ?? 'path tracer error'));
+            const p = this.pending.shift();
+            if (p) p.reject(err);
+            else this.emit('error', err);
+            if (msg.fatal) this.close();
+            return;
+        }
+        // Recorded here, before any await: a small frame's events can share the stdout chunk with the reply.
+        if (event === 'view') {
+            this.view = msg as MetalPathTraceViewStarted;
+            this.latest = null;
+        } else if (event === 'opened') {
+            this.opened = msg as MetalPathTraceOpened;
+        }
+        const p = this.pending.shift();
+        if (p) {
+            if (p.event === event) p.resolve(msg);
+            else p.reject(new MetalPathTracerError(`expected ${p.event} from the path tracer, got ${event}`));
+        }
+    }
+
+    private expect(event: string): Promise<any> {
+        return new Promise((resolve, reject) => this.pending.push({ event, resolve, reject }));
+    }
+
+    private command(cmd: Record<string, unknown>, reply: string): Promise<any> {
+        if (!this.alive) return Promise.reject(new MetalPathTracerError('path tracer process is not running', this.stderr.trim()));
+        const result = this.expect(reply);
+        this.child!.stdin!.write(JSON.stringify(cmd) + '\n');
+        return result;
+    }
 }
 
 export class MetalPathTracerError extends Error {
@@ -214,6 +423,10 @@ export class MetalPathTracerService {
         if (request.lod) config.lod = request.lod;
         if (request.lighting) config.lighting = request.lighting;
         if (request.material) config.material = request.material;
+        if (request.materials) {
+            if (!fs.existsSync(request.materials.glbPath)) throw new MetalPathTracerError(`materials GLB not found: ${request.materials.glbPath}`);
+            config.materials = { glbPath: path.resolve(request.materials.glbPath) };
+        }
         if (request.camera) config.camera = request.camera;
         if (request.exposureEv !== undefined) config.exposure = request.exposureEv;
         const configPath = path.join(request.outputDir, 'render_config.json');
@@ -236,6 +449,23 @@ export class MetalPathTracerService {
             compileMs: this.compileMs,
             executionMs
         };
+    }
+
+    /**
+     * Starts a resident tracer process for progressive rendering: open a file once, then set views as the
+     * camera moves and read the latest frame. Frames are written by the helper to a file in `dir`
+     * (default: a fresh temp dir) and read back here.
+     */
+    async openSession(request: MetalPathTraceSessionOpen, options: { dir?: string } = {}): Promise<MetalPathTraceSession> {
+        if (process.platform !== 'darwin') throw new MetalPathTracerError('Metal path tracing runs on macOS only');
+        if (!request.sbvgPath || !fs.existsSync(request.sbvgPath)) throw new MetalPathTracerError(`sbvg file not found: ${request.sbvgPath}`);
+        if (request.glbPath && !fs.existsSync(request.glbPath)) throw new MetalPathTracerError(`materials GLB not found: ${request.glbPath}`);
+        const binary = await this.ensureBinary();
+        const dir = options.dir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'sb-pathtrace-'));
+        const session = new MetalPathTraceSession(binary, dir);
+        await session.start();
+        await session.open(request);
+        return session;
     }
 
     private ensureBinary(): Promise<string> {

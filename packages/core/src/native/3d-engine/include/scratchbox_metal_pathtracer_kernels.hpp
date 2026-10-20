@@ -12,12 +12,15 @@
 
 /**
  * Metal Shading Language source of the GPU path tracer, compiled at run time by
- * scratchbox_metal_pathtracer.hpp. It is a port of render::PathTracer::tracePath (scratchbox_pathtracer.hpp)
- * over Metal's hardware ray intersector: same camera, same PCG32 sample stream per pixel, same GGX
- * metallic-roughness BSDF, same solar next-event estimation, sky dome, haze and Russian roulette, so a
- * GPU render and a CPU render of the same geometry agree to sampling noise. Change the two together.
+ * scratchbox_metal_pathtracer.hpp. It is a port of render::PathTracer::tracePath and ::shade
+ * (scratchbox_pathtracer.hpp) over Metal's hardware ray intersector: same camera, same PCG32 sample
+ * stream per pixel, same glTF metallic-roughness materials (bilinear texture reads with the glTF wrap
+ * modes, sRGB decode for colour maps only, tangents from uv derivatives), same GGX BSDF, solar
+ * next-event estimation, sky dome, haze and Russian roulette, so a GPU render and a CPU render of the
+ * same geometry agree to sampling noise. Change the two together.
  *
  * The structs below are mirrored by the C++ side as plain 4-byte scalars so both agree on layout.
+ * Textures are bindless: a buffer of Metal resource ids, one per decoded glTF image.
  */
 
 #include <cstdint>
@@ -40,7 +43,11 @@ struct Uniforms {
     float sunIrradiance[3]{0, 0, 0}, limbDarkening{0.6f};
     float hazeExtinction[3]{0, 0, 0}, pad0{0};
     float albedo[3]{0.5f, 0.5f, 0.5f}, pad1{0};
-    uint32_t seedLo{0}, seedHi{0}, pad2{0}, pad3{0};
+    uint32_t seedLo{0}, seedHi{0};
+    /** 0: one uniform material (albedo, roughness, metallic above); 1: the material table and per-triangle ids. */
+    uint32_t useMaterials{0};
+    /** Index of the default material record, used by triangles without a glTF material. */
+    uint32_t defaultMaterial{0};
 };
 static_assert(sizeof(Uniforms) == 4 * 56, "Uniforms must stay a flat array of 4-byte scalars");
 
@@ -64,8 +71,21 @@ static_assert(sizeof(PixelState) == 80, "PixelState layout is shared with the Me
 struct Vertex {
     float position[3];
     float normal[3];
+    float uv[2];
 };
-static_assert(sizeof(Vertex) == 24, "Vertex layout is shared with the acceleration structure descriptor");
+static_assert(sizeof(Vertex) == 32, "Vertex layout is shared with the acceleration structure descriptor");
+
+/** One glTF metallic-roughness material (gltf::SceneMaterial); image fields index the texture table, -1 for none. */
+struct MaterialRecord {
+    float baseColor[4]{1, 1, 1, 1};
+    float metallic{1.0f}, roughness{1.0f}, normalScale{1.0f}, occlusionStrength{1.0f};
+    float emissive[3]{0, 0, 0};
+    int32_t baseColorImage{-1};
+    int32_t wrapS{10497}, wrapT{10497}, normalImage{-1}, normalWrapS{10497};
+    int32_t normalWrapT{10497}, mrImage{-1}, mrWrapS{10497}, mrWrapT{10497};
+    int32_t occlusionImage{-1}, pad0{0}, pad1{0}, pad2{0};
+};
+static_assert(sizeof(MaterialRecord) == 96, "MaterialRecord layout is shared with the Metal kernels");
 
 inline const char* const kKernelSource = R"METAL(
 #include <metal_stdlib>
@@ -75,6 +95,7 @@ using namespace metal::raytracing;
 
 constant float kPi = 3.14159265358979323846f;
 constant float kRayEpsilon = 2e-3f;
+constant uint kNoMaterial = 0xFFFFFFFFu;
 
 struct Uniforms {
     uint width, height, maxBounces, lighting;
@@ -91,7 +112,7 @@ struct Uniforms {
     float sunIrradiance[3], limbDarkening;
     float hazeExtinction[3], pad0;
     float albedo[3], pad1;
-    uint seedLo, seedHi, pad2, pad3;
+    uint seedLo, seedHi, useMaterials, defaultMaterial;
 };
 
 struct PixelState {
@@ -112,10 +133,26 @@ struct PixelState {
 struct Vertex {
     float position[3];
     float normal[3];
+    float uv[2];
+};
+
+struct MaterialRecord {
+    float baseColor[4];
+    float metallic, roughness, normalScale, occlusionStrength;
+    float emissive[3];
+    int baseColorImage;
+    int wrapS, wrapT, normalImage, normalWrapS;
+    int normalWrapT, mrImage, mrWrapS, mrWrapT;
+    int occlusionImage, pad0, pad1, pad2;
+};
+
+struct TextureRef {
+    texture2d<float> tex;
 };
 
 inline float3 f3(constant float* a) { return float3(a[0], a[1], a[2]); }
 inline float3 f3(device const float* a) { return float3(a[0], a[1], a[2]); }
+inline float2 f2(device const float* a) { return float2(a[0], a[1]); }
 inline float luminance(float3 c) { return 0.2126f * c.x + 0.7152f * c.y + 0.0722f * c.z; }
 inline float maxComponent(float3 v) { return max(v.x, max(v.y, v.z)); }
 inline bool finite3(float3 v) { return isfinite(v.x) && isfinite(v.y) && isfinite(v.z); }
@@ -164,6 +201,46 @@ inline void orthonormalBasis(float3 n, thread float3& t, thread float3& b) {
     float c = n.x * n.y * a;
     t = float3(1.0f + sign * n.x * n.x * a, sign * c, -sign * n.x);
     b = float3(c, sign + n.y * n.y * a, -n.y);
+}
+
+// ---- Textures (port of detail::sampleTexture: glTF wrap modes, bilinear in the decoded space) ---
+inline int wrapCoordinate(int i, int n, int mode) {
+    if (mode == 33071) return clamp(i, 0, n - 1);
+    if (mode == 33648) {
+        int period = 2 * n;
+        int m = ((i % period) + period) % period;
+        return m < n ? m : period - 1 - m;
+    }
+    return ((i % n) + n) % n;
+}
+
+inline float srgbDecode(float encoded) {
+    float v = clamp(encoded, 0.0f, 1.0f);
+    return v <= 0.04045f ? v / 12.92f : pow((v + 0.055f) / 1.055f, 2.4f);
+}
+
+inline float3 sampleTexture(texture2d<float> img, float2 uv, int wrapS, int wrapT, bool srgb) {
+    int w = (int)img.get_width(), h = (int)img.get_height();
+    if (w <= 0 || h <= 0) return float3(1.0f);
+    float fx = clamp(uv.x, -1e5f, 1e5f) * (float)w - 0.5f;
+    float fy = clamp(uv.y, -1e5f, 1e5f) * (float)h - 0.5f;
+    if (!isfinite(fx) || !isfinite(fy)) return float3(0.0f);
+    float x0f = floor(fx), y0f = floor(fy);
+    float tx = fx - x0f, ty = fy - y0f;
+    int x0 = (int)x0f, y0 = (int)y0f;
+    int xa = wrapCoordinate(x0, w, wrapS), xb = wrapCoordinate(x0 + 1, w, wrapS);
+    int ya = wrapCoordinate(y0, h, wrapT), yb = wrapCoordinate(y0 + 1, h, wrapT);
+    float3 c00 = img.read(uint2(xa, ya)).rgb, c10 = img.read(uint2(xb, ya)).rgb;
+    float3 c01 = img.read(uint2(xa, yb)).rgb, c11 = img.read(uint2(xb, yb)).rgb;
+    if (srgb) {
+        c00 = float3(srgbDecode(c00.x), srgbDecode(c00.y), srgbDecode(c00.z));
+        c10 = float3(srgbDecode(c10.x), srgbDecode(c10.y), srgbDecode(c10.z));
+        c01 = float3(srgbDecode(c01.x), srgbDecode(c01.y), srgbDecode(c01.z));
+        c11 = float3(srgbDecode(c11.x), srgbDecode(c11.y), srgbDecode(c11.z));
+    }
+    float3 top = c00 * (1.0f - tx) + c10 * tx;
+    float3 bottom = c01 * (1.0f - tx) + c11 * tx;
+    return top * (1.0f - ty) + bottom * ty;
 }
 
 // ---- Sky (port of sky::PhysicalSky lookups) --------------------------------------------------
@@ -328,25 +405,76 @@ inline bool bsdfSample(thread const Bsdf& s, thread Pcg32& rng, thread float3& w
     return finite3(weight);
 }
 
-// ---- Surface and path (port of PathTracer::shade / tracePath for a uniform material) -----------
+// ---- Surface (port of PathTracer::shade) -----------------------------------------------------
 struct Surface {
     float3 position;
     float3 geometricNormal;
     float3 shadingNormal;
+    float3 baseColor;
+    float3 emission;
+    float metallic;
+    float roughness;
 };
 
-inline Surface shade(device const Vertex* verts, device const uint* idx, uint tri, float2 bary, float3 origin, float3 dir, float t) {
+inline Surface shade(constant Uniforms& u, device const Vertex* verts, device const uint* idx, device const uint* triMaterials,
+                     device const MaterialRecord* materials, device const TextureRef* textures,
+                     uint tri, float2 bary, float3 origin, float3 dir, float t) {
     uint i0 = idx[tri * 3], i1 = idx[tri * 3 + 1], i2 = idx[tri * 3 + 2];
     float3 p0 = f3(verts[i0].position), p1 = f3(verts[i1].position), p2 = f3(verts[i2].position);
     float3 n0 = f3(verts[i0].normal), n1 = f3(verts[i1].normal), n2 = f3(verts[i2].normal);
-    float u = bary.x, v = bary.y, w = 1.0f - u - v;
+    float bu = bary.x, bv = bary.y, bw = 1.0f - bu - bv;
     Surface s;
     s.position = origin + dir * t;
-    float3 interpolated = normalize(n0 * w + n1 * u + n2 * v);
+    float3 interpolated = normalize(n0 * bw + n1 * bu + n2 * bv);
     float3 ng = normalize(cross(p1 - p0, p2 - p0));
     if (!(lengthSquared(ng) >= 0.5f)) ng = interpolated;
     s.geometricNormal = ng;
     s.shadingNormal = lengthSquared(interpolated) > 0.5f ? interpolated : ng;
+    s.emission = float3(0.0f);
+    if (u.useMaterials == 0u) {
+        s.baseColor = f3(u.albedo);
+        s.metallic = u.metallic;
+        s.roughness = u.roughness;
+    } else {
+        uint matId = triMaterials[tri];
+        if (matId == kNoMaterial) matId = u.defaultMaterial;
+        device const MaterialRecord& m = materials[matId];
+        float2 uv0 = f2(verts[i0].uv), uv1 = f2(verts[i1].uv), uv2 = f2(verts[i2].uv);
+        float2 uv = uv0 * bw + uv1 * bu + uv2 * bv;
+        float3 base = float3(m.baseColor[0], m.baseColor[1], m.baseColor[2]);
+        if (m.baseColorImage >= 0) base = base * sampleTexture(textures[m.baseColorImage].tex, uv, m.wrapS, m.wrapT, true);
+        s.metallic = clamp(m.metallic, 0.0f, 1.0f);
+        s.roughness = clamp(m.roughness, 0.02f, 1.0f);
+        s.emission = f3(m.emissive);
+        if (m.mrImage >= 0) {
+            float3 mr = sampleTexture(textures[m.mrImage].tex, uv, m.mrWrapS, m.mrWrapT, false);
+            s.roughness = clamp(s.roughness * mr.y, 0.02f, 1.0f);
+            s.metallic = clamp(s.metallic * mr.z, 0.0f, 1.0f);
+        }
+        if (m.occlusionImage >= 0) {
+            float3 occ = sampleTexture(textures[m.occlusionImage].tex, uv, 10497, 10497, false);
+            float ao = 1.0f + m.occlusionStrength * (occ.x - 1.0f);
+            base = base * clamp(ao, 0.05f, 1.0f);
+        }
+        if (m.normalImage >= 0) {
+            float3 ns = sampleTexture(textures[m.normalImage].tex, uv, m.normalWrapS, m.normalWrapT, false);
+            float3 tanNormal = normalize(float3((2.0f * ns.x - 1.0f) * m.normalScale, (2.0f * ns.y - 1.0f) * m.normalScale, 2.0f * ns.z - 1.0f));
+            float3 N = s.shadingNormal;
+            // The cut carries no tangents: derive one from the uv derivatives, as the CPU tracer does.
+            float3 dp1 = p1 - p0, dp2 = p2 - p0;
+            float2 duv1 = uv1 - uv0, duv2 = uv2 - uv0;
+            float det = duv1.x * duv2.y - duv2.x * duv1.y;
+            float3 T;
+            if (abs(det) > 1e-7f) T = normalize((dp1 * duv2.y - dp2 * duv1.y) * (1.0f / det));
+            else T = normalize(cross(abs(N.y) < 0.99f ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f), N));
+            T = normalize(T - N * dot(N, T));
+            if (lengthSquared(T) > 0.5f) {
+                float3 B = cross(N, T);
+                s.shadingNormal = normalize(T * tanNormal.x + B * tanNormal.y + N * tanNormal.z);
+            }
+        }
+        s.baseColor = base;
+    }
     float3 wo = -dir;
     if (dot(s.geometricNormal, wo) < 0.0f) s.geometricNormal = -s.geometricNormal;
     if (dot(s.shadingNormal, s.geometricNormal) < 0.0f) s.shadingNormal = -s.shadingNormal;
@@ -372,7 +500,8 @@ struct PathResult {
 
 inline PathResult tracePath(float3 origin, float3 dir, thread Pcg32& rng, constant Uniforms& u,
                             device const Vertex* verts, device const uint* idx, device const float* lut,
-                            primitive_acceleration_structure accel, thread uint& rays) {
+                            primitive_acceleration_structure accel, device const uint* triMaterials,
+                            device const MaterialRecord* materials, device const TextureRef* textures, thread uint& rays) {
     PathResult result;
     result.radiance = float3(0.0f);
     result.albedo = float3(0.0f);
@@ -382,7 +511,6 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Pcg32& rng, consta
     float3 radiance = float3(0.0f);
     float3 throughput = float3(1.0f);
     const bool sky = u.lighting == 1u;
-    const float3 albedo = f3(u.albedo);
 
     intersector<triangle_data> closest;
     closest.assume_geometry_type(geometry_type::triangle);
@@ -402,10 +530,10 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Pcg32& rng, consta
             accumulate(radiance, throughput * skyLight, bounce, u.clampIndirect);
             break;
         }
-        Surface surface = shade(verts, idx, hit.primitive_id, hit.triangle_barycentric_coord, origin, dir, hit.distance);
+        Surface surface = shade(u, verts, idx, triMaterials, materials, textures, hit.primitive_id, hit.triangle_barycentric_coord, origin, dir, hit.distance);
         if (bounce == 0) {
             result.hitGeometry = true;
-            result.albedo = albedo;
+            result.albedo = surface.baseColor;
             result.normal = surface.shadingNormal;
             result.depth = hit.distance;
         }
@@ -415,9 +543,10 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Pcg32& rng, consta
             accumulate(radiance, throughput * (horizonRadiance(u, lut, dir) * (float3(1.0f) - transmittance)), bounce, u.clampIndirect);
             throughput = throughput * transmittance;
         }
+        radiance += throughput * surface.emission;
 
         const float3 wo = -dir;
-        Bsdf bsdf = makeBsdf(surface.shadingNormal, albedo, u.metallic, u.roughness, wo);
+        Bsdf bsdf = makeBsdf(surface.shadingNormal, surface.baseColor, surface.metallic, surface.roughness, wo);
         if (sky && u.sunVisible != 0u) {
             float s1 = pcgFloat(rng);
             float s2 = pcgFloat(rng);
@@ -467,6 +596,8 @@ kernel void pt_init(device PixelState* pixels [[buffer(0)]], constant Uniforms& 
 kernel void pt_sample(device PixelState* pixels [[buffer(0)]], constant Uniforms& u [[buffer(1)]],
                       device const Vertex* verts [[buffer(2)]], device const uint* idx [[buffer(3)]],
                       device const float* lut [[buffer(4)]], primitive_acceleration_structure accel [[buffer(5)]],
+                      device const uint* triMaterials [[buffer(6)]], device const MaterialRecord* materials [[buffer(7)]],
+                      device const TextureRef* textures [[buffer(8)]],
                       uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= u.width || gid.y >= u.height) return;
     uint pixel = gid.y * u.width + gid.x;
@@ -489,7 +620,7 @@ kernel void pt_sample(device PixelState* pixels [[buffer(0)]], constant Uniforms
         dir = normalize(focusPoint - origin);
     }
     uint rays = 0u;
-    PathResult s = tracePath(origin, dir, rng, u, verts, idx, lut, accel, rays);
+    PathResult s = tracePath(origin, dir, rng, u, verts, idx, lut, accel, triMaterials, materials, textures, rays);
     p->rays += rays;
     p->rngState = rng.state;
     p->rngInc = rng.inc;

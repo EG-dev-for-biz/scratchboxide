@@ -43,9 +43,38 @@ Furnace (unit sphere, uniform unit dome, albedo 1, roughness 1, metallic 0, 8 bo
 - Metal's `triangle_barycentric_coord` is (u, v) for vertices 1 and 2, the same convention as the CPU Moller-Trumbore hit, so normals interpolate identically.
 - Command buffers hold 4 sample passes: enough to amortise submission, short enough for the GPU watchdog at 1280x720x4 bounces.
 
+## Phase 2 (2026-10-20): materials in `.sbvg` version 3, real materials in the tracer
+
+**Format.** File vertices are now wedges (position, normal, uv; 8 floats) and every level block ends with one glTF material index per triangle (`0xFFFFFFFF` for none); header word 26 is the glTF material count. Readers (C++ `scratchbox_sbvg_reader.hpp`, TS `sbvg-format.ts`, the WebGPU renderer) still read versions 1 and 2, repacking old vertices with uv (0, 0).
+
+**Seams.** The first attempt welded vertices by (position, uv) and locked every seam and material-border vertex. On the Flatiron tile that doubled the vertex count (229,748 positions, 498,620 wedges: Google tiles chart their textures per short triangle run) and the DAG collapsed from 5 levels to 2. The rule that shipped instead: positions stay welded through the whole DAG, a uv lives on each triangle corner, and a collapse is allowed only when every surviving triangle at the moving vertex can take its uv at the target from a removed triangle of the same material and the same chart (`LockedSimplifier::chartTargets`), so collapses run *along* seams and borders, never across them. Seams cannot crack (positions are shared) and no triangle ever straddles two charts or materials.
+
+**Cost of exact seams on photogrammetry.** Flatiron: level 1 keeps 206,764 of 403,385 triangles (174 of 914 groups stuck), level 2 keeps 158,074 (538 of 988 stuck), then the DAG stops: 3 levels, 14,030 clusters, where the position-only build had 5 levels. The 1 px cut for the test camera is 329,205 triangles (was 209,713). Deeper LOD on such data needs re-textured coarse levels (a new atlas per level), which is follow-up work; the synthetic sphere still builds 9 levels.
+
+**Tracer.** `shade()` on the GPU is a port of the CPU `PathTracer::shade`: base colour factor and texture (bilinear with the glTF wrap modes, sRGB-decoded), metallic-roughness and occlusion maps read linear, normal maps with tangents derived from the uv derivatives, emission; textures are bindless (a buffer of Metal resource ids, one per decoded image; 209 for Flatiron). The CPU tracer sampled its data maps (metallic-roughness, occlusion, normal) through the sRGB decode too; that was a bug, fixed in `scratchbox_pathtracer.hpp` (`sampleTexture(..., srgb)`), and the GPU matches the fixed behaviour.
+
+| Flatiron, textured, 1280x720, 64 spp, cut 329,205 tris | Rays | Render | Rays/s | Mean luminance |
+| :--- | :--- | :--- | :--- | :--- |
+| Metal (M1 Ultra), 209 textures | 126,657,960 | 0.953 s | 133.0 M | 0.0278386 |
+| CPU reference | 126,658,041 | 4.373 s | 29.0 M | 0.0278389 |
+
+Agreement: mean ratio 0.99999; 8x8-block mean relative difference 0.040%; 19 of 14,400 blocks over 2% (sunlit high-contrast edges where the intersectors' tie-breaks differ). The always-available test fixture is a checkerboard-textured sphere (GLB with TEXCOORD_0, a PNG and a sampler), compared GPU vs CPU the same way and against clay.
+
+## Phase 3 (2026-10-20): the path-traced view in the app
+
+**Resident helper.** `sbvg_pathtracer --serve <dir>` keeps the GPU tracer alive: JSON commands on stdin (`open` a file and its GLB's materials, `view` with the camera, size, LOD threshold and target spp, `close`), JSON events on stdout (`opened`, `view`, `frame`). `MetalPathTracer` gained a progressive API (`beginFrame` / `samplePasses` / `readback`); the helper samples 1, 2 then 4 passes per batch and writes the display-ready 8-bit RGBA frame (AgX, the first frame's auto exposure held for the view) to `<dir>/frame.rgba` by atomic rename at most every 40 ms. The LOD cut and acceleration structure are rebuilt only when the eye moves more than a tenth of the scene radius or the LOD parameters change. Frames travel as a file in the page cache read by the server, not shared memory proper.
+
+**Server.** `MetalPathTraceSession` (spawn, line protocol, latest-frame bookkeeping) in `metal-path-tracer-service.ts`; `/3d/path-trace` (`open` by served `.sbvg` URL and workspace GLB path, `view`, `frame?after=<seq>.<spp>` answering 204 until a newer frame exists, `close`; idle sessions reaped after 10 min). The frame headers must be listed in `Access-Control-Expose-Headers`: the page runs on another origin in development and the browser hides them otherwise, which silently rejected every frame on the first live try.
+
+**Viewport.** A "Path traced" toggle (and a "Studio / Sun" toggle beside it) on `VirtualGeometryViewport`, persisted as `virtualGeometry.pathTrace`. On, it opens a session for the loaded `.sbvg` and source GLB, pauses the WebGPU loop, follows the orbit camera (`VirtualGeometryRenderer.getView()`, debounced 80 ms), polls frames every 50 ms and draws the newest over the WebGPU canvas; the HUD shows device, spp, resolution, measured rays/s, the cut and the materials. Off, it closes the session and resumes WebGPU.
+
+**Live evidence** (isolated instance `scratchbox-metal-pt`, ports 3310/3311/3312, Flatiron opened through the agent's `virtual_geometry_open_glb`): session opened with 209 materials and 209 textures; the 615x713 view cut 251,218 triangles in 4,676 clusters and reached 256 spp in about 3 s at 216 M rays/s (studio dome) and 190 M rays/s (sun); an orbit drag restarted accumulation (seen at 140 of 256 spp on the new view); a wheel zoom rebuilt the cut (238,888 triangles); toggling off closed the session. Console clean throughout. Tests: `metal-path-tracer.test.ts` (resident session: frames accumulate, a small move keeps the cut, a bad view is refused without killing the process) and `desktop-app/test/path-trace-routes.test.ts` (URL validation, a session through the standalone server).
+
+**Not done.** Frames are noisy at low spp (Phase 4 denoises); the cut rebuild (~100 ms for 240k triangles) is synchronous in the helper, so a long drag across the scene stalls frames briefly each tenth of a radius; the resolution is capped at 1280 wide.
+
 ## Next (plan)
 
-- Phase 2: `.sbvg` version 3 with UVs and per-triangle material ids; the simplifier keeps material borders and UV seams as it keeps group borders.
-- Phase 3: a resident helper process driven by the Electron app, frames through shared memory into the `VirtualGeometryViewport`, a "Path traced" toggle.
+- Phase 4: the a-trous denoiser on the GPU and temporal reuse across camera moves.
+- Re-textured coarse levels for charted photogrammetry, so the DAG regains its depth without crossing seams.
 - Phase 4: the a-trous denoiser on the GPU and temporal reuse.
 - Rays: rasterize the camera hit with the existing WebGPU cluster pass; coarser cuts for bounce and shadow rays; any-hit shadow rays (done); merged per-chunk acceleration structures; better samplers; MetalFX upscale.

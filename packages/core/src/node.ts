@@ -251,7 +251,13 @@ export {
 export {
     MetalPathTracerService,
     MetalPathTracerError,
+    MetalPathTraceSession,
     readLinearColor,
+    MetalPathTraceSessionOpen,
+    MetalPathTraceView,
+    MetalPathTraceOpened,
+    MetalPathTraceViewStarted,
+    MetalPathTraceFrame,
     MetalDeviceInfo,
     MetalPathTraceCamera,
     MetalPathTraceAutoCamera,

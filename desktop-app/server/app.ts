@@ -46,6 +46,7 @@ import {
     SubagentPoolService,
     NativeCppCompilerService,
     getVirtualGeometryBuildService,
+    MetalPathTracerService,
     virtualGeometryServeDir,
     VIRTUAL_GEOMETRY_URL_PREFIX,
     HeadlessVideoCompositorService,
@@ -65,6 +66,7 @@ import { createMemoriesRouter } from './routes/memoriesRoutes';
 import { createWorkspaceRouter, createGitRouter } from './routes/workspaceRoutes';
 import { createCppRouter } from './routes/cppRoutes';
 import { createVirtualGeometryRouter } from './routes/virtualGeometryRoutes';
+import { createPathTraceRouter } from './routes/pathTraceRoutes';
 import { createTileRefineRouter } from './routes/tileRefineRoutes';
 import { createTextureRouter } from './routes/textureRoutes';
 import { createMediaRouter, createVideoRouter } from './routes/mediaVideoRoutes';
@@ -630,6 +632,7 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     app.use('/compiler', cppRouter);
     app.use('/3d/tiles', createTileRefineRouter(routeContext));
     app.use('/3d/virtual-geometry', createVirtualGeometryRouter(getVirtualGeometryBuildService(), routeContext));
+    app.use('/3d/path-trace', createPathTraceRouter(new MetalPathTracerService(), routeContext));
 
     // 5. Media & Video Compositor Endpoints
     const mediaRouter = createMediaRouter({
