@@ -130,15 +130,18 @@ Captured from [Camera Framing & Movement] on an ARRI Alexa Mini LF with [Lens sp
 ```
 
 ### Direct Tool Execution via `generate_image`:
-When generating visual storyboard frames, invoke `generate_image`:
-- `Prompt`: The descriptive Nano Banana 2.1 prompt (with 4K cinematic clarity, physical imperfections, and zero overlaid typography).
-- `AspectRatio`: `'21:9'` (preferred for ultrawide anamorphic presentations) or `'16:9'` (standard cinematic widescreen).
-- `ImageName`: `storyboard_frame_01_opening`, `storyboard_frame_02_product_reveal`, etc.
+When generating visual storyboard frames, call the in-app tool `generate_image` once per frame:
+- `prompt` (required): the descriptive Nano Banana 2.1 prompt (4K cinematic clarity, physical imperfections, zero overlaid typography).
+- `aspectRatio`: `"21:9"` (ultrawide anamorphic presentations) or `"16:9"` (standard cinematic widescreen).
+- `name`: the file-name stem, e.g. `storyboard_frame_01_opening`, `storyboard_frame_02_product_reveal`.
+- `referenceImages` (optional): paths or URLs of earlier frames, the product or the cast, to keep identity consistent across the sequence.
+- `count`: 1 unless the user asked for alternates (each image is a separate billed call).
 
-Then embed the generated artifact into the treatment markdown:
+The result gives each image's file `path`, the app `url` it is served at, the model that answered (`modelUsed`, with `modelNote` explaining any fallback) and `provenance: "generated"`. Embed the returned `url` in the treatment markdown and in your reply:
 ```markdown
-![Frame 1: Opening Hook](/Users/.../storyboard_frame_01_opening.png)
+![Frame 1: Opening Hook](/build/generated-images/storyboard_frame_01_opening_1760950000000.png)
 ```
+If the tool fails (no image model or credential available), say so and leave the frame as its prompt; never paste a placeholder image.
 Comprehensive prompt guide: [Nano Banana Storyboard Guide](./references/nano_banana_storyboard_guide.md).
 
 ### Presentation Deck Compilation:

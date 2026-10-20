@@ -39,10 +39,6 @@ const NOT_TOOLS: Record<string, string> = {
  * Listed so new drift fails at once; an entry that no longer drifts fails too, so the list stays exact.
  */
 const KNOWN_DRIFT: Record<string, string[]> = {
-    '.agents/skills/directors-treatment/SKILL.md': ['generate_image'],
-    '.agents/skills/directors-treatment/README.md': ['generate_image'],
-    '.agents/skills/directors-treatment/references/nano_banana_storyboard_guide.md': ['generate_image'],
-    '.agents/skills/directors-treatment/references/treatment_template_13_sections.md': ['generate_image'],
     '.agents/skills/geo-camera-matchmove-pipeline/SKILL.md': ['adaptive_matchmove_render_blockout'],
 };
 

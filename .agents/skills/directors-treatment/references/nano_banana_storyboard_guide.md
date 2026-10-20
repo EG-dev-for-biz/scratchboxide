@@ -11,7 +11,7 @@ Nano Banana 2.1 (Google's Gemini 3.1 Flash Image architecture) replaces legacy d
 1. **Natural Language Cinematography**: No disjointed comma-separated tag soup (`photorealistic, 8k, unreal engine 5`). Nano Banana 2.1 understands directorial grammar, lighting falloff, lens distortion, and emotional staging.
 2. **Native Text & Typography Rendering**: Nano Banana 2.1 can cleanly render on-screen titles, packaging typography, and storefront signage when enclosed in double quotes (e.g., `"VELOCITY"` in bold geometric sans-serif).
 3. **Multi-Reference Consistency**: Supports character and product identity locking across shot-by-shot storyboard sequences.
-4. **Direct Execution in Antigravity**: Prompts can be directly rendered into high-resolution visual artifacts using the built-in `generate_image` tool with `AspectRatio: '16:9'`.
+4. **Direct Execution in Scratchbox**: Prompts are rendered into real image files with the in-app `generate_image` tool (`prompt`, `aspectRatio: "16:9"`, `name`), which returns each file's path and served URL and names the model that answered.
 
 ---
 
@@ -53,24 +53,26 @@ When the shot calls for hero product packaging or title cards:
 
 ---
 
-## 4. Antigravity Tool Integration (`generate_image`)
+## 4. Scratchbox Tool Integration (`generate_image`)
 
-When writing the treatment or visualizing frames for the agency pitch, you can generate the actual image artifacts directly:
+When writing the treatment or visualizing frames for the agency pitch, generate the actual image files with the in-app tool, one call per frame:
 
 ```json
 {
-  "Prompt": "A photorealistic cinematic film still of a solitary runner paused at dawn on a wet coastal asphalt road, steam rising from their breath. Backlit by a low golden sun with deep cobalt blue shadow tones (#1A2B4C) and subtle warm gold rim light (#F2A900). Low-angle 50mm prime shot on 35mm film stock, shallow depth of field, sharp water droplets on pavement. 16:9 cinematic widescreen.",
-  "ImageName": "storyboard_frame_01_dawn_run",
-  "AspectRatio": "16:9",
-  "toolSummary": "Generate opening storyboard frame",
-  "toolAction": "Generating storyboard frame"
+  "prompt": "A photorealistic cinematic film still of a solitary runner paused at dawn on a wet coastal asphalt road, steam rising from their breath. Backlit by a low golden sun with deep cobalt blue shadow tones (#1A2B4C) and subtle warm gold rim light (#F2A900). Low-angle 50mm prime shot on 35mm film stock, shallow depth of field, sharp water droplets on pavement. 16:9 cinematic widescreen.",
+  "name": "storyboard_frame_01_dawn_run",
+  "aspectRatio": "16:9"
 }
 ```
 
-Then embed the generated artifact directly into Markdown:
+For identity across frames, pass earlier frames or the product plate in `referenceImages` (workspace paths, URLs or data URIs). The result lists each image with its `path`, served `url`, `modelUsed` and a `modelNote` naming the model that answered and why any earlier one was skipped; every image carries `provenance: "generated"`.
+
+Then embed the returned `url` directly into Markdown:
 ```markdown
-![Frame 1: Dawn Awakening](/Users/.../storyboard_frame_01_dawn_run.png)
+![Frame 1: Dawn Awakening](/build/generated-images/storyboard_frame_01_dawn_run_1760950000000.png)
 ```
+
+The tool fails with an error, and writes no file, when no image model or credential is available: say so instead of substituting a placeholder.
 
 ---
 

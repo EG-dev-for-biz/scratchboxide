@@ -7,5 +7,5 @@ This Antigravity skill writes and refines commercial director's treatments in Pa
 * **Transcript Insight Synthesis**: Mines unspoken agency anxieties, director cadences, and client subtext from the Call Transcript.
 * **13 Mandatory ALL CAPS Sections**: Enforces the complete 13-section treatment structure in proper order.
 * **Strict Negative Constraints**: Zero rhetorical questions (`?`), no "Picture This", no amplifying words (`very`, `revolutionary`, etc.), no comparative language (`better than`, `superior`).
-* **Nano Banana 2.1 Storyboard Artwork**: Uses Google's Gemini 3.1 Flash Image architecture (Nano Banana 2.1) and Antigravity's `generate_image` tool (`AspectRatio: '16:9'`) to generate cinematic storyboard frames.
+* **Nano Banana 2.1 Storyboard Artwork**: Uses Google's Gemini 3.1 Flash Image architecture (Nano Banana 2.1) through the in-app `generate_image` tool (`prompt`, `aspectRatio: "16:9"`, `name`) to generate cinematic storyboard frames, returned as served image URLs labelled `generated`.
 * **Automated Linter**: Includes `scripts/treatment_linter.py` to audit any treatment for 100% compliance.

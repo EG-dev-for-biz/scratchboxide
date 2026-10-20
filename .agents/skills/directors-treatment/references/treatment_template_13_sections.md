@@ -99,8 +99,8 @@ Include Nano Banana 2.1 Storyboard Artwork Prompts for key frames, followed by e
 ```text
 A photorealistic cinematic film still of [Subject and Action] in [Setting]. [Lighting and Extracted Brand Colors: #[HEX]]. Captured from [Camera Framing] on an ARRI Alexa Mini LF with [Lens]. Tactile atmospheric haze, rich textures, 16:9 cinematic widescreen.
 ```
-*(Optionally execute `generate_image` with AspectRatio: '16:9' and embed generated artifact:)*
-`![Scene 1 Storyboard Frame](/path/to/generated_storyboard_frame_01.png)`
+*(Optionally call `generate_image` with `prompt`, `aspectRatio: "16:9"` and `name: "storyboard_frame_01"`, then embed the `url` it returns:)*
+`![Scene 1 Storyboard Frame](/build/generated-images/storyboard_frame_01_<timestamp>.png)`
 
 ---
 
