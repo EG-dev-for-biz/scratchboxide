@@ -25,6 +25,7 @@ import {
 import { GoogleMediaCredentialsService } from '../../google-media-credentials-service';
 import { generateImageWithModels } from '../../google-media-generation-service';
 import { readImageDimensions, sniffImageFormat } from '../../image-codec-ffmpeg';
+import { defaultDurableAssetStore } from '../../asset-store/durable-asset-store';
 import type { ToolDeclaration, ToolHandler } from './types';
 
 const TOOL = 'nano_banana_apply_color_palette';
@@ -397,11 +398,25 @@ export const imageGenerationHandlers: Record<string, ToolHandler> = {
             const ext = extensionFor(answer.mimeType);
             const filePath = path.join(outputDir, `${stem}${count > 1 ? `_${index + 1}` : ''}${ext}`);
             await fs.writeFile(filePath, answer.data);
+            const servedUrl = servedGeneratedImageUrl(filePath);
+            // the durable copy outside this checkout, with the prompt as its recipe (asset-store)
+            if (servedUrl) {
+                try {
+                    const store = defaultDurableAssetStore();
+                    if (store) {
+                        const recipeId = `generate_image:${stem}`;
+                        store.putRecipe({ id: recipeId, kind: 'generate_image', workspace: ctx?.workspaceRoot, body: { prompt, aspectRatio, count, referenceImages: references, models, name: asString(args.name).trim() || undefined } });
+                        store.putFile(filePath, { servedPath: servedUrl, origin: 'generate_image', workspace: ctx?.workspaceRoot, recipeId, mime: answer.mimeType });
+                    }
+                } catch (err) {
+                    console.warn(`[generate_image] ${servedUrl} was written but not recorded in the asset store: ${(err as Error).message}`);
+                }
+            }
             const dims = readImageDimensions(answer.data);
             images.push({
                 index: index + 1,
                 path: filePath,
-                url: servedGeneratedImageUrl(filePath),
+                url: servedUrl,
                 mimeType: answer.mimeType,
                 ...(dims ? { width: dims.width, height: dims.height } : {}),
                 byteLength: answer.data.length,

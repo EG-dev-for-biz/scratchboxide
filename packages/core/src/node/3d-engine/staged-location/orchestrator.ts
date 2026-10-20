@@ -985,6 +985,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     // call whose first token is late is sent once more (VisionModelChainOptions.hedgeAfterMs)
     const chainExtras = (id: StageId) => ({ hedgeAfterMs: VISION_HEDGE_AFTER_MS, ...(bypass(id) ? {} : { replyCache: stagedReplyCache(cache) }) });
     const runId = deps.newRunId?.() ?? crypto.randomBytes(4).toString('hex');
+    cache.activeRunId = runId;
     // main-thread blocks over the whole run, kept as a run note (event-loop-stats.ts)
     let runningStages: () => string[] = () => [];
     const blockTracer = runBlockTracer(() => runningStages());
