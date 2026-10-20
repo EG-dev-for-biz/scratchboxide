@@ -36,8 +36,10 @@ export interface SkyRealismScore {
     failed: SkyRealismMetric[];
     /** Measured on the photo but not on the render, or vice versa. */
     notComparable: Array<{ metric: SkyRealismMetric; reason: string }>;
+    /** Direct:diffuse horizontal irradiance on each side, for the sign of the error. */
+    directDiffuse?: { photo: number; render: number };
     /** Per-sample detail for diagnosis: ln(render/photo) and Δuv. */
-    samples: Array<{ elevationDeg: number; relAzimuthDeg: number; logLuminanceError: number; deltaUv: number }>;
+    samples: Array<{ elevationDeg: number; relAzimuthDeg: number; logLuminanceError: number; deltaUv: number; du: number; dv: number }>;
 }
 
 function uv(x: number, y: number): [number, number] {
@@ -59,12 +61,14 @@ function linearRgbToXy(r: number, g: number, b: number) {
 /** Scores a render (its panorama measurement and scene lights) against a photo's measurement. */
 export function scoreSkyRealism(photo: SkyMeasurement, render: SkyMeasurement, lights: DomeLights, sunElevationDeg: number | undefined): SkyRealismScore {
     const metrics: Partial<Record<SkyRealismMetric, number>> = {};
+    let directDiffuse: SkyRealismScore['directDiffuse'];
     const notComparable: SkyRealismScore['notComparable'] = [];
     const samples: SkyRealismScore['samples'] = [];
     for (const p of photo.samples) {
         const r = render.samples.find(s => s.elevationDeg === p.elevationDeg && s.relAzimuthDeg === p.relAzimuthDeg);
         if (!r || !(p.relLuminance > 0) || !(r.relLuminance > 0)) continue;
-        samples.push({ elevationDeg: p.elevationDeg, relAzimuthDeg: p.relAzimuthDeg, logLuminanceError: Math.log(r.relLuminance / p.relLuminance), deltaUv: deltaUv(p, r) });
+        const [pu, pv] = uv(p.x, p.y), [ru, rv] = uv(r.x, r.y);
+        samples.push({ elevationDeg: p.elevationDeg, relAzimuthDeg: p.relAzimuthDeg, logLuminanceError: Math.log(r.relLuminance / p.relLuminance), deltaUv: deltaUv(p, r), du: ru - pu, dv: rv - pv });
     }
     if (samples.length >= 5) {
         metrics.gradientLogRms = Math.sqrt(samples.reduce((s, x) => s + x.logLuminanceError ** 2, 0) / samples.length);
@@ -81,6 +85,7 @@ export function scoreSkyRealism(photo: SkyMeasurement, render: SkyMeasurement, l
             const photoRatio = (photo.sun.discToSkyRatio * sinEl) / photo.skyIrradianceRatio;
             const renderRatio = (lights.sunIntensity * sinEl) / Math.max(1e-6, lights.hemiIntensity * lights.hemiSkyLuminance);
             metrics.directDiffuseLogError = Math.abs(Math.log(renderRatio / photoRatio));
+            directDiffuse = { photo: photoRatio, render: renderRatio };
         } else {
             notComparable.push({ metric: 'sunColorDeltaUv', reason: 'the photo shows a sun disc but the scene has no sun light' });
         }
@@ -91,5 +96,5 @@ export function scoreSkyRealism(photo: SkyMeasurement, render: SkyMeasurement, l
 
     const passed: SkyRealismMetric[] = [], failed: SkyRealismMetric[] = [];
     for (const [k, v] of Object.entries(metrics) as Array<[SkyRealismMetric, number]>) (v <= SKY_REALISM_TOLERANCES[k] ? passed : failed).push(k);
-    return { metrics, passed, failed, notComparable, samples };
+    return { metrics, passed, failed, notComparable, samples, directDiffuse };
 }

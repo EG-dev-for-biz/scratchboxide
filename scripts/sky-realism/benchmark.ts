@@ -8,7 +8,8 @@
  *   { id, file? | polyhavenId?, timeOfDay?, weather?, coords?: [lat, lng], capturedLocalUnix?, utcOffsetHours?, minSampleElevationDeg? }
  * Poly Haven references are fetched once at 2K into ~/.cache/scratchbox/sky-references. Their date_taken is local
  * camera time; utcOffsetHours is set only where it was calibrated (South African captures: UTC+2, checked against the
- * measured sun disc of 20 references).
+ * measured sun disc of 20 references). whiteBalanceKelvin is Poly Haven's recorded white balance: the render is
+ * adapted to it (Bradford, blackbody white to D65) before comparing, as the camera adapted the photo.
  * The sun comes from the disc in the photo; with none visible, from the NOAA ephemeris when the capture time and its
  * UTC offset are known; otherwise the reference is skipped and listed with the reason. Nothing is assumed.
  *
@@ -18,7 +19,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { readHdrEquirect, measureEquirectSky, luminance, EquirectImage, SkyMeasurement } from '../../packages/core/src/node/atmosphere-benchmark/equirect-sky';
+import { readHdrEquirect, measureEquirectSky, EquirectImage, SkyMeasurement, whiteBalanceMatrix, applyColorMatrix } from '../../packages/core/src/node/atmosphere-benchmark/equirect-sky';
+import { integrateSpectrum, planckRadiance } from '../../packages/core/src/browser/generative-canvas/services/atmosphere/spectral-sun';
 import { renderSkyDomeEquirects } from '../../packages/core/src/node/atmosphere-benchmark/sky-dome-equirect-renderer';
 import { scoreSkyRealism, SKY_REALISM_TOLERANCES, SkyRealismScore } from '../../packages/core/src/node/atmosphere-benchmark/sky-realism-score';
 import { calculateNOAASolarPosition } from '../../packages/core/src/browser/generative-canvas/services/atmosphere/solar-position';
@@ -35,6 +37,8 @@ interface Reference {
     capturedLocalUnix?: number;
     utcOffsetHours?: number;
     minSampleElevationDeg?: number;
+    /** The camera white balance the photo was processed at; the render gets the same adaptation before comparing. */
+    whiteBalanceKelvin?: number;
 }
 
 function arg(name: string, fallback?: string): string {
@@ -133,7 +137,12 @@ async function main() {
     const strips: Array<{ sunEl: number; px: Uint8Array }> = [];
     const rows: Array<{ id: string; timeOfDay?: string; weather?: string; sunElevationDeg: number; sunSource: string; note?: string; score: SkyRealismScore; image: string }> = [];
     jobs.forEach((job, i) => {
-        const { image, lights } = renders[i];
+        // Process the render as the photographer's camera did: the same white balance.
+        const wb = job.ref.whiteBalanceKelvin !== undefined
+            ? whiteBalanceMatrix(integrateSpectrum(l => planckRadiance(l, job.ref.whiteBalanceKelvin!)))
+            : undefined;
+        const image = wb ? applyColorMatrix(renders[i].image, wb) : renders[i].image;
+        const lights = wb ? { ...renders[i].lights, sunColor: ([0, 1, 2].map(r => wb[r][0] * renders[i].lights.sunColor[0] + wb[r][1] * renders[i].lights.sunColor[1] + wb[r][2] * renders[i].lights.sunColor[2]) as [number, number, number]) } : renders[i].lights;
         const renderMeasured = job.measured.sun
             ? measureEquirectSky(image, { knownSun: { elevationDeg: job.sunEl, imageAzimuthDeg: 180 }, minSampleElevationDeg: job.ref.minSampleElevationDeg })
             : measureEquirectSky(image, { sunMayBeUp: false, minSampleElevationDeg: job.ref.minSampleElevationDeg });
