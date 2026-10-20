@@ -186,7 +186,8 @@ async function runUnifiedStylingAuditTests() {
             } else if (templateMatch) {
                 classString = templateMatch[1];
             } else if (jsxMatch) {
-                classString = jsxMatch[1];
+                // A JSX expression (`a ?? 'sb-x …'`, `cond ? 'sb-y' : 'sb-z'`): read the class names inside its string literals.
+                classString = jsxMatch[1].replace(/['"]/g, ' ');
             }
             
             // Extract all static tokens from classString (ignoring ${...} expressions)

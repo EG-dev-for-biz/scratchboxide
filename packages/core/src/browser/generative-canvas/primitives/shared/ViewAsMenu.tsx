@@ -69,7 +69,7 @@ export const ViewAsMenu: React.FC<ViewAsMenuProps> = ({ currentType, onSelect, t
                                 setOpen(false);
                                 onSelect(targetType);
                             }}
-                            className="w-full text-left px-3 py-1.5 hover:bg-white/10 hover:text-white transition-colors"
+                            className="sb-dropdown-item w-full text-left px-3 py-1.5 hover:bg-white/10 hover:text-white transition-colors"
                         >
                             {PRIMITIVE_TYPE_LABELS[targetType] ?? targetType}
                         </button>
