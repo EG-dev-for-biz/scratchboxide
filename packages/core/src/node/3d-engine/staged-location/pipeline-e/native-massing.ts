@@ -20,6 +20,7 @@ import * as path from 'path';
 import { compileNativeCached, defaultNativeFlags, NativeBuildError, placeCachedBinary } from '../../native-build-cache';
 import { findTileRefineRepoRoot } from '../../tile-refine-service';
 import { decodeImageInMemory } from '../tile-texture-transfer';
+import type { ResidualAuditResult } from '../residual-audit';
 
 export type V3 = [number, number, number];
 
@@ -75,7 +76,11 @@ export interface MassingReport {
     timingsMs: Record<string, number>;
 }
 
-export interface MassingRun { dir: string; report: MassingReport; nodes: MassingNode[]; ms: number; binary: { path: string; built: boolean; buildMs?: number } }
+export interface MassingRun {
+    dir: string; report: MassingReport; nodes: MassingNode[]; ms: number; binary: { path: string; built: boolean; buildMs?: number };
+    /** The residual audit (residual-audit-e.ts) applied to `nodes`, or why it could not run. */
+    audit?: ResidualAuditResult | { error: string };
+}
 
 const CLI_SOURCE = path.join('scripts', 'staged_massing.cpp');
 const INCLUDE_DIR = path.join('packages', 'core', 'src', 'native', '3d-engine', 'include');
