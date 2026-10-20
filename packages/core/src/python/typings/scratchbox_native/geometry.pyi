@@ -66,6 +66,9 @@ class Mesh:
 
     def set_color(self, color: scratchbox_native.math.Vec4) -> Mesh: ...
 
+    def multiply_vertex_colors(self, factor: scratchbox_native.math.Vec4) -> Mesh:
+        """Multiply every vertex colour (COLOR_0) component-wise, keeping per-vertex variation such as AO"""
+
     def set_material(self, mat) -> Mesh: ...
 
     def apply_material(self, mat) -> Mesh: ...
