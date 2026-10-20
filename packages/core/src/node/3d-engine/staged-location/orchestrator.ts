@@ -138,6 +138,7 @@ import type { EnhanceModelClient } from './texture-enhance';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { fetchFootprints, type FootprintSource } from './facade-footprints';
 import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, massingProvenance, type MassingStageResult } from './pipeline-e/pipeline-e';
+import type { MassingRun } from './pipeline-e/native-massing';
 import { mslToTileY, type SolarRoof } from './pipeline-e/solar-roof';
 import { runInferenceE, type InferenceOutcome, type StepRecord } from './pipeline-e/inference';
 import { gateDecision, photoMatchGate, pipelineERelief, runReliefStage, GENERATED_LABEL, MEASURED_AVERAGED_LABEL, RELIEF_GATE_JUDGE, RELIEF_PARAMS, RELIEF_VERSION, type PhotoGateResult, type ReliefOutcome } from './pipeline-e/relief';
@@ -1981,6 +1982,30 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         let remeshRequest: TileRefineRequest | undefined;
         type RemeshValue = { refined?: TileRefineResult; flattened?: ScanFitFlattenResult; groundLayerId: string; groundFile: string; committed: boolean };
         let eState: { stage: MassingStageResult; refined: TileRefineResult; layer: StagedLayer; key: string; ms: number } | undefined;
+        /** The residual audit of one pipeline E native run, into the build notes (and a degradation when it failed or left clusters unsure). */
+        const recordResidualAudit = (stage: StageId, massingRun: MassingRun, layerName: string): string => {
+            const a = massingRun.audit;
+            if (!a) return 'residual audit: nothing to audit';
+            if ('error' in a) {
+                run.degrade(record(stage, 'residual_audit_failed', {
+                    part: { description: `the scanned residual of the ${layerName}` }, intended: 'leftover scan clusters measured and judged: scan artefacts removed, real objects kept and listed',
+                    fellTo: 'the residual as the massing tool kept it, unaudited (artefacts may show)', provenanceAfter: PROVENANCE.asScanned,
+                    reason: `the residual audit could not run (${a.error})`, transient: false, runId, now: now(), suffix: layerName.replace(/\W+/g, '_')
+                }));
+                return `residual audit failed (${a.error})`;
+            }
+            cache.writeRunNote(runId, `residual_audit_${layerName.replace(/\W+/g, '_')}`, { counts: a.counts, notes: a.notes, candidates: a.candidates, clusters: a.clusters.map(c => ({ id: c.id, verdict: c.verdict, confidence: c.confidence, reason: c.reason, types: c.feature.types, areaM2: c.areaM2, lo: c.lo, hi: c.hi, scores: c.scores })) });
+            run.note(PROVENANCE.asScanned, `${layerName}: ${a.notes.slice(0, 6).join(' | ')}`);
+            if (a.counts.unsure > 0) {
+                const uns = a.clusters.filter(c => c.verdict === 'unsure').sort((p, q) => q.areaM2 - p.areaM2);
+                run.degrade(record(stage, 'residual_unsure', {
+                    part: { description: `${uns.length} leftover scan cluster${uns.length === 1 ? '' : 's'} of the ${layerName}` }, intended: 'every leftover scan cluster judged a real object or a scan artefact by its measures',
+                    fellTo: 'kept as scanned and labelled unsure (provenance as-scanned:unsure)', provenanceAfter: PROVENANCE.asScanned,
+                    reason: `the measures did not decide: ${uns.slice(0, 3).map(c => `cluster ${c.id}, ${Math.round(c.areaM2)} m2: ${c.reason}`).join(' / ')}`, transient: false, runId, now: now(), suffix: layerName.replace(/\W+/g, '_')
+                }));
+            }
+            return a.notes[0];
+        };
         /** Pipeline E's massing (step 1-3): the committed clean layer, or undefined (the reason recorded) for the current pipeline. */
         const runPipelineE = async (io: StageIO): Promise<StageResult<RemeshValue> | undefined> => {
             const t0 = now();
@@ -2033,7 +2058,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const l1 = run.state.layers.find(l => l.layer === 'l1')!;
                 const counts = layerCounts(r.files.clayGlb);
                 const residual = r.run.report.residual;
-                const note = `pipeline E massing: ${r.massing.parts.length} extruded parts, ${r.massing.meshes.length} modelled volumes; plan IoU with the scan ${c.iou}, roof ${c.heightErrMedianM} m off (median); ${solarNote}; walls moved onto the scanned facade: ${r.run.report.snap.filter(x => x.applied).length} of ${r.run.report.snap.length}; scanned residual kept: ${residual.proud} proud and ${residual.cut} cut-in triangles in ${residual.clusters.length} clusters, ${residual.apron} ground apron`;
+                const auditLine = recordResidualAudit('remesh', r.run, 'massing layer');
+                const note = `pipeline E massing: ${r.massing.parts.length} extruded parts, ${r.massing.meshes.length} modelled volumes; plan IoU with the scan ${c.iou}, roof ${c.heightErrMedianM} m off (median); ${solarNote}; walls moved onto the scanned facade: ${r.run.report.snap.filter(x => x.applied).length} of ${r.run.report.snap.length}; scanned residual: ${residual.proud} proud and ${residual.cut} cut-in triangles in ${residual.clusters.length} clusters, ${residual.apron} ground apron; ${auditLine}`;
                 const legend = r.legend!;
                 const layer: StagedLayer = {
                     objectId: layerObjectId(key, 'l2'), stage: 'remesh', layer: 'l2', order: STAGES.remesh.order, url: pubClay.url, bytes: pubClay.bytes,
@@ -2312,6 +2338,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         solar: [], anchor: structure!.seed, signal: io.signal, onProgress: m => io.progress(m)
                     });
                     cache.writeRunNote(runId, 'pipeline_e_inference', { steps: out.steps, timingsMs: out.timingsMs });
+                    recordResidualAudit('grammar', out.run, enhanceOn ? 'enhanced layer' : 'inferred layer');
                     const kept = out.steps.filter(s => s.accepted > 0);
                     const conf = Math.max(0.05, Math.min(1, ...out.grammars.map(g => g.confidence), 0.75));
                     const key8 = e.key.slice(0, 8);
@@ -2383,6 +2410,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const depths = kept.map(f => `${f.role}: ${f.depthM.toFixed(2)} +- ${f.seM.toFixed(2)} m`).slice(0, 12).join('; ');
                     const describe = `measured: bands ${c.bands.accepted} of ${c.bands.proposed} kept, vertical elements ${c.verticals.accepted} of ${c.verticals.proposed}, window reveals ${c.reveals.accepted} of ${c.reveals.proposed}, projections beside openings ${c.projections.accepted} of ${c.projections.proposed} (gate: depth >= ${RELIEF_PARAMS.k} standard errors and >= ${RELIEF_PARAMS.minDepth} m, from >= ${RELIEF_PARAMS.minBlocks} blocks of ${RELIEF_PARAMS.block} m or >= ${RELIEF_PARAMS.minOpenings} openings)` +
                         (gen ? (realDataView ? `; generated typical profiles not used (the real-data view shows real sources only)` : `; generated (typical profiles in the scan's evidence bounds): bands ${gen.counts.bands.built}, window reveals ${gen.counts.reveals.built}`) : '');
+                    recordResidualAudit('relief', out.run, 'relief layer');
                     cache.writeRunNote(runId, 'pipeline_e_relief', { counts: c, features: out.geometry.features, generated: gen ? { counts: gen.counts, features: gen.geometry.features.filter(f => f.label === GENERATED_LABEL) } : undefined, replacedSweeps: out.geometry.replacedSweeps, maps: out.maps, timingsMs: out.timingsMs });
                     if (!builtMeasured && !builtGenerated) return { status: 'degraded', value: { outcome: { counts: c } }, source: `measured relief: nothing stood out of the scan significantly (${describe})`, reason: 'no measured feature passed its gate' };
                     // the layer gate: the layer it refines, the measured layer, and the measured layer with the generated

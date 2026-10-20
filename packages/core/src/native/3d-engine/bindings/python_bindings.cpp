@@ -399,6 +399,12 @@ NB_MODULE(scratchbox_native, m) {
             self.setColor(color);
             return self;
         }, "color"_a)
+        .def("multiply_vertex_colors", [](ScratchboxMesh& self, const Vec4& factor) -> ScratchboxMesh& {
+            for (auto& v : self.vertices) {
+                v.color = Vec4(v.color.x * factor.x, v.color.y * factor.y, v.color.z * factor.z, v.color.w * factor.w);
+            }
+            return self;
+        }, "factor"_a, "Multiply every vertex colour (COLOR_0) component-wise, keeping per-vertex variation such as AO")
         .def_rw("material", &ScratchboxMesh::material)
         .def("set_material", [](ScratchboxMesh& self, const PbrMaterial& mat) -> ScratchboxMesh& {
             self.material = mat;
@@ -1536,7 +1542,8 @@ NB_MODULE(scratchbox_native, m) {
             Vec3 rotP = rotateY(v.position, facingRad);
             Vec3 rotN = rotateY(v.normal, facingRad);
             Vec3 worldP = rotP + Vec3(position.x, groundPlacementY, position.z);
-            outMesh.vertices.push_back(Vertex{worldP, rotN, v.uv, clayTone});
+            // The material carries the clay tone; COLOR_0 stays white so the colour is applied once.
+            outMesh.vertices.push_back(Vertex{worldP, rotN, v.uv, Vec4(1.0f, 1.0f, 1.0f, 1.0f)});
         }
         outMesh.indices = figure.indices;
         outMesh.recomputeBounds();

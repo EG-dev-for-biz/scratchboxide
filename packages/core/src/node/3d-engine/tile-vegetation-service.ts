@@ -177,13 +177,19 @@ export interface TileVegetationPlantParams {
 export const SCENE_TREE_TRIANGLE_CAP = 1_500_000;
 
 /**
- * What the trees may draw, as opposed to what they store (SCENE_TREE_TRIANGLE_CAP above, which bounds each tree's wood, shared
- * by every level, and the blob tree the far masses are fitted to; the far level written is that wood under the masses, so a little over it). Trees are written at four levels, and a viewport draws one per tree
- * by its distance, so a frame draws far fewer triangles than the file holds: at most this many in a park view, in
- * total and per level. stats.lodFrames measures it on the written trees (camera poses on a grid over the location, an
- * 80 degree view, every tree within 8 m).
+ * What the trees would draw in a park view with no budget, as opposed to what they store (SCENE_TREE_TRIANGLE_CAP above, which
+ * bounds each tree's wood, shared by every level, and the blob tree the far masses are fitted to). Trees are written at four
+ * levels and a viewport draws one per tree by its distance; stats.lodFrames measures that frame on the written trees (camera
+ * poses on a grid over the location, an 80 degree view, metre bands, no budget). This is a ceiling on that estimate, so a
+ * level that grows or a band that reaches farther shows up here.
+ *
+ * It is not what a frame draws: the viewport's triangle budget (DEFAULT_TREE_TRIANGLE_BUDGET in common/spatial/tree-lod-math.ts,
+ * shared with the buildings) caps the frame, and trees give up levels, least important first, to fit. Measured with the
+ * near-mid band at 6 x tree height (25-100 m) and the mid band at 8 x (60-140 m), Washington Square (591 trees): median
+ * 1.66 M, p95 10.5 M, max 16.7 M; the synthetic park of location-clay-pipeline.test.ts (372 trees): median 9.8 M, p95
+ * 12.9 M, max 14.4 M, and a max of 44 M with both bands twice as long.
  */
-export const SCENE_TREE_DRAWN_TRIANGLES_PER_FRAME = 10_000_000;
+export const SCENE_TREE_DRAWN_TRIANGLES_PER_FRAME = 20_000_000;
 export const SCENE_TREE_DRAWN_TRIANGLES_PER_LEVEL = { level0: 5_000_000, level1: 4_000_000, level2: 3_000_000 } as const;
 
 export interface TileVegetationStripRequest {

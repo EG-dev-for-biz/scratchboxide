@@ -15,6 +15,8 @@
  * offset from the previous vertex, the first from (0, 0, 0).
  */
 
+import { sbFeatureFromGoogle, type SbFeature } from '../../common/spatial/sb-feature-types';
+
 export const TILE_GRID = 4096;
 const EARTH_RADIUS_M = 6378137;
 
@@ -22,7 +24,7 @@ export interface FeatureTileJson {
     x: number;
     y: number;
     zoom: number;
-    features?: Array<{ types?: string[]; geometry?: any; labels?: any[] }>;
+    features?: Array<{ types?: string[]; geometry?: any; labels?: any[]; placeId?: string; displayName?: string }>;
 }
 
 export interface DecodedPolygon {
@@ -73,6 +75,8 @@ export interface DecodedFeatureTile {
     roads: DecodedLine[];
     pois: Array<{ id: string; type: 'Point'; point: [number, number]; properties: Record<string, any> }>;
     modeledVolumes: DecodedModeledVolume[];
+    /** Every feature of the tile in the sb-feature/1 model, carried unchanged: Google's types and geometry blocks as received (tile grid units). */
+    features: SbFeature[];
 }
 
 /** Ground width of a Web Mercator tile at a latitude (meters). */
@@ -138,7 +142,7 @@ export function stripsToTriangles(strips: Array<{ vertexIndices?: number[] }>): 
 const hasType = (types: string[] | undefined, re: RegExp) => (types || []).some(t => re.test(t));
 
 export function decodeFeatureTile(tile: FeatureTileJson, idPrefix = `${tile.zoom}/${tile.x}/${tile.y}`): DecodedFeatureTile {
-    const out: DecodedFeatureTile = { buildings: [], buildingFootprints2D: [], landuse: [], water: [], roads: [], pois: [], modeledVolumes: [] };
+    const out: DecodedFeatureTile = { buildings: [], buildingFootprints2D: [], landuse: [], water: [], roads: [], pois: [], modeledVolumes: [], features: [] };
     const centre = gridToLngLat(tile, TILE_GRID / 2, TILE_GRID / 2);
     const unit = gridUnitMeters(centre[1], tile.zoom);
 
@@ -150,6 +154,7 @@ export function decodeFeatureTile(tile: FeatureTileJson, idPrefix = `${tile.zoom
         const isRoad = hasType(types, /ROAD|HIGHWAY|STREET/);
         const isLanduse = hasType(types, /NATURAL|LAND_COVER|PARK|VEGETATION|CROPS|URBAN_AREA/);
         const properties = { types };
+        out.features.push(sbFeatureFromGoogle(feature, `${idPrefix}/f${fi}`, tile));
 
         const polygonOf = (area: any, id: string, extra: Record<string, any>): DecodedPolygon | undefined => {
             const xs = cumulative(area?.vertexOffsets?.xOffsets), ys = cumulative(area?.vertexOffsets?.yOffsets);

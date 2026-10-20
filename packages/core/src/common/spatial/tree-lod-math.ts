@@ -221,6 +221,16 @@ export function dominantLevel(e: LodEdges): number {
 // The view options and the level a view gives a tree
 // ---------------------------------------------------------------------------------------------------------------
 
+/**
+ * Triangles a viewport frame may draw (main pass plus shadow pass) before trees give up levels, the rest of the scene
+ * (buildings, context, hero) taken off it first. The viewport's TreeLodController default; a scene's `treeLod.triangleBudget`
+ * overrides it, and the viewport lowers it at run time while the GPU frame time stays over its target (adaptiveTreeBudget.ts).
+ * 14 M: on Washington Square (591 trees, four levels) on an Apple M1 Ultra the worst measured view stays near 9 ms of GPU time
+ * (p95 under 13 ms) at 8, 10, 12 and 14 M alike, while at 8 M the street views lose most mid-distance crowns to far blobs
+ * (docs/processes/tree_budget_tune.md).
+ */
+export const DEFAULT_TREE_TRIANGLE_BUDGET = 14_000_000;
+
 /** How the camera's view chooses the levels. Every field is continuous except the on/off switches. */
 export interface TreeLodViewOptions {
     /** On-screen size: bands as pixel thresholds at the reference lens. `enabled: false` = metre bands (the old behaviour). */

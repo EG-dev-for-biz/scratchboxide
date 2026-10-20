@@ -95,8 +95,8 @@ struct Part {
 
 struct MeshSolid { std::string id, provenance; std::vector<V3> v; std::vector<uint32_t> tri; };
 
-/** A profile (outward offset, height above nothing: absolute y) swept along walls; faces are wall keys in loop order. */
-struct SweepSpec { std::string id, provenance; double confidence{0}; std::vector<std::pair<double, double>> profile; std::vector<std::string> faces; };
+/** A profile (outward offset, height: absolute y, or above each wall's own top with relativeToTop) swept along walls (wall keys, any order; split walls resolve to their pieces). */
+struct SweepSpec { std::string id, provenance; double confidence{0}; std::vector<std::pair<double, double>> profile; std::vector<std::string> faces; bool relativeToTop{false}; };
 
 struct OpeningSpec { std::string id, face, provenance; double s0{0}, s1{0}, t0{0}, t1{0}, depth{0}, confidence{0}; bool scanned{false}; };
 
@@ -1230,40 +1230,80 @@ private:
     }
 
     /** A profile swept along consecutive walls (mitred), capped at the chain's ends. */
-    void emitSweep(const SweepSpec& sw) {
-        std::vector<const Face*> chain;
-        std::vector<size_t> chainIdx;
-        for (const auto& key : sw.faces) for (size_t i = 0; i < faces_.size(); ++i) if (faces_[i].key == key && faces_[i].wall) { chain.push_back(&faces_[i]); chainIdx.push_back(i); break; }
-        if (chain.empty() || sw.profile.size() < 2) { rejectedSweeps_.push_back(sw.id); return; }
-        // path points (plan) and their mitre vectors; closed when the last wall ends where the first begins
-        std::vector<V3> pts;
-        std::vector<V3> nrm;
-        for (const Face* f : chain) {
-            V3 a = f->at(f->sMin, 0), b = f->at(f->sMax, 0);
-            a.y = 0; b.y = 0;
-            if (pts.empty()) pts.push_back(a);
-            pts.push_back(b);
-            nrm.push_back(V3{f->n.x, 0, f->n.z}.unit());
+    /** The walls a sweep's face key names: the wall itself or, when the wall was split since the key was read (another part's corner on it), its pieces "key:k". */
+    std::vector<size_t> wallsForKey(const std::string& key) const {
+        for (size_t i = 0; i < faces_.size(); ++i) if (faces_[i].wall && faces_[i].key == key) return {i};
+        std::vector<size_t> out;
+        for (size_t i = 0; i < faces_.size(); ++i) {
+            const std::string& k = faces_[i].key;
+            if (faces_[i].wall && k.size() > key.size() + 1 && k.compare(0, key.size(), key) == 0 && k[key.size()] == ':') out.push_back(i);
         }
-        bool closed = (pts.front() - pts.back()).len() < 0.05 && chain.size() > 2;
-        const size_t S = nrm.size();
-        auto mitre = [&](size_t i) -> V3 {  // at path point i
-            if (closed && (i == 0 || i == S)) { V3 n1 = nrm[S - 1], n2 = nrm[0]; return (n1 + n2) * (1.0 / std::max(0.2, 1 + n1.dot(n2))); }
-            if (i == 0) return nrm[0];
-            if (i == S) return nrm[S - 1];
-            V3 n1 = nrm[i - 1], n2 = nrm[i];
-            return (n1 + n2) * (1.0 / std::max(0.2, 1 + n1.dot(n2)));
-        };
+        return out;
+    }
+
+    /** The wall's top (its roof envelope polyline) at s. */
+    static double faceTopAt(const Face& f, double s) {
+        if (f.top.empty()) return f.tMax;
+        if (s <= f.top.front().first) return f.top.front().second;
+        for (size_t i = 1; i < f.top.size(); ++i) {
+            const auto& a = f.top[i - 1];
+            const auto& b = f.top[i];
+            if (s <= b.first) return b.first - a.first > 1e-12 ? a.second + (b.second - a.second) * (s - a.first) / (b.first - a.first) : b.second;
+        }
+        return f.top.back().second;
+    }
+
+    /**
+     * A profile swept along walls. The walls are joined into runs where one ends where the next begins (in plan, 5 cm), in
+     * whatever order the keys came: a key that names nothing is skipped and the walls either side of it are NOT joined
+     * across the gap, so a missing or split wall never becomes a straight span across the plan. Each run is mitred at its
+     * corners and capped at its ends (closed when it comes round to its start). With `relativeToTop` the profile's heights
+     * are above the wall's own top at each point (a parapet on a sloping or stepped roof), else absolute.
+     */
+    void emitSweep(const SweepSpec& sw) {
+        std::vector<size_t> walls;
+        for (const auto& key : sw.faces) {
+            auto found = wallsForKey(key);
+            if (found.empty()) notes_.push_back("sweep " + sw.id + ": no wall " + key + " (skipped; the walls either side are not joined across it)");
+            for (size_t i : found) if (std::find(walls.begin(), walls.end(), i) == walls.end()) walls.push_back(i);
+        }
+        if (walls.empty() || sw.profile.size() < 2) { rejectedSweeps_.push_back(sw.id); return; }
+        auto plan = [&](size_t i, bool end) { const Face& f = faces_[i]; V3 q = f.at(end ? f.sMax : f.sMin, 0); q.y = 0; return q; };
+        const double joinTol = 0.05;
+        // runs of walls joined end to start
+        std::vector<std::vector<size_t>> runs;
+        std::vector<uint8_t> used(walls.size(), 0);
+        for (size_t left = walls.size(); left > 0;) {
+            // a run starts at a wall no unused wall leads into (else, a loop, at the first unused)
+            size_t start = walls.size();
+            for (size_t k = 0; k < walls.size() && start == walls.size(); ++k) {
+                if (used[k]) continue;
+                bool fed = false;
+                for (size_t j = 0; j < walls.size() && !fed; ++j) if (j != k && !used[j] && (plan(walls[j], true) - plan(walls[k], false)).len() < joinTol) fed = true;
+                if (!fed) start = k;
+            }
+            if (start == walls.size()) for (size_t k = 0; k < walls.size(); ++k) if (!used[k]) { start = k; break; }
+            std::vector<size_t> run{walls[start]};
+            used[start] = 1;
+            --left;
+            for (bool grew = true; grew && left > 0;) {
+                grew = false;
+                for (size_t j = 0; j < walls.size(); ++j) if (!used[j] && (plan(walls[j], false) - plan(run.back(), true)).len() < joinTol) { run.push_back(walls[j]); used[j] = 1; --left; grew = true; break; }
+            }
+            runs.push_back(std::move(run));
+        }
+        if (runs.size() > 1) notes_.push_back("sweep " + sw.id + ": " + std::to_string(runs.size()) + " separate runs (walls that do not meet)");
         OutNode node;
         node.name = "sweep:" + sw.id;
         node.kind = "sweep";
         node.provenance = sw.provenance;
         node.confidence = sw.confidence;
-        auto vert = [&](const V3& p, const V3& n, size_t seg) {
+        const auto& prof = sw.profile;
+        auto vert = [&](const V3& p, const V3& n, size_t fi) {
             OutVertex v;
             v.p = p; v.n = n;
-            const Face& f = faces_[chainIdx[seg]];
-            v.face = static_cast<int>(chainIdx[seg]);
+            const Face& f = faces_[fi];
+            v.face = static_cast<int>(fi);
             double s, t;
             f.st(p, s, t);
             v.s = std::clamp(s, f.sMin, f.sMax);
@@ -1271,36 +1311,64 @@ private:
             node.idx.push_back(static_cast<uint32_t>(node.v.size()));
             node.v.push_back(v);
         };
-        const auto& prof = sw.profile;
-        for (size_t seg = 0; seg < S; ++seg) {
-            V3 m0 = mitre(seg), m1 = mitre(seg + 1);
-            for (size_t k = 0; k + 1 < prof.size(); ++k) {
-                double o0 = prof[k].first, y0 = prof[k].second, o1 = prof[k + 1].first, y1 = prof[k + 1].second;
-                V3 a = pts[seg] + m0 * o0, b = pts[seg + 1] + m1 * o0, c = pts[seg + 1] + m1 * o1, d = pts[seg] + m0 * o1;
-                a.y = y0; b.y = y0; c.y = y1; d.y = y1;
-                // the profile segment's outward normal: perpendicular to it in the (wall normal, up) plane
-                V3 n = (nrm[seg] * (y1 - y0) + V3{0, 1, 0} * (o0 - o1)).unit();
-                bool flip = (b - a).cross(c - a).dot(n) < 0;
-                V3 q[4] = {a, b, c, d};
-                int order[6] = {0, 1, 2, 0, 2, 3};
-                for (int j = 0; j < 6; ++j) vert(q[order[flip ? 5 - j : j]], n, seg);
+        for (const auto& run : runs) {
+            // the run's path: per wall its ends and, for a profile on the wall's top, the breaks of the top between them
+            struct Seg { V3 a, b; double topA{0}, topB{0}; V3 n; size_t face{0}; };
+            std::vector<Seg> segs;
+            for (size_t fi : run) {
+                const Face& f = faces_[fi];
+                std::vector<double> ss{f.sMin};
+                if (sw.relativeToTop) for (const auto& q : f.top) if (q.first > f.sMin + 1e-6 && q.first < f.sMax - 1e-6) ss.push_back(q.first);
+                ss.push_back(f.sMax);
+                V3 n = V3{f.n.x, 0, f.n.z}.unit();
+                for (size_t k = 0; k + 1 < ss.size(); ++k) {
+                    Seg g;
+                    g.a = f.at(ss[k], 0); g.a.y = 0;
+                    g.b = f.at(ss[k + 1], 0); g.b.y = 0;
+                    g.topA = sw.relativeToTop ? faceTopAt(f, ss[k]) : 0;
+                    g.topB = sw.relativeToTop ? faceTopAt(f, ss[k + 1]) : 0;
+                    g.n = n;
+                    g.face = fi;
+                    if ((g.b - g.a).len() > 1e-6) segs.push_back(g);
+                }
             }
-        }
-        if (!closed) {
-            // caps: the profile polygon (fan) at both ends
+            if (segs.empty()) continue;
+            const size_t S = segs.size();
+            const bool closed = run.size() > 2 && (segs.back().b - segs.front().a).len() < joinTol;
+            auto join = [](const V3& n1, const V3& n2) { return (n1 + n2) * (1.0 / std::max(0.2, 1 + n1.dot(n2))); };
+            auto mitreStart = [&](size_t i) { return i > 0 ? join(segs[i - 1].n, segs[i].n) : closed ? join(segs[S - 1].n, segs[0].n) : segs[0].n; };
+            auto mitreEnd = [&](size_t i) { return i + 1 < S ? join(segs[i].n, segs[i + 1].n) : closed ? join(segs[S - 1].n, segs[0].n) : segs[S - 1].n; };
+            for (size_t i = 0; i < S; ++i) {
+                const Seg& g = segs[i];
+                V3 m0 = mitreStart(i), m1 = mitreEnd(i);
+                for (size_t k = 0; k + 1 < prof.size(); ++k) {
+                    double o0 = prof[k].first, y0 = prof[k].second, o1 = prof[k + 1].first, y1 = prof[k + 1].second;
+                    V3 a = g.a + m0 * o0, b = g.b + m1 * o0, c = g.b + m1 * o1, d = g.a + m0 * o1;
+                    a.y = g.topA + y0; b.y = g.topB + y0; c.y = g.topB + y1; d.y = g.topA + y1;
+                    // the profile segment's outward normal: perpendicular to it in the (wall normal, up) plane
+                    V3 n = (g.n * (y1 - y0) + V3{0, 1, 0} * (o0 - o1)).unit();
+                    bool flip = (b - a).cross(c - a).dot(n) < 0;
+                    V3 q[4] = {a, b, c, d};
+                    int order[6] = {0, 1, 2, 0, 2, 3};
+                    for (int j = 0; j < 6; ++j) vert(q[order[flip ? 5 - j : j]], n, g.face);
+                }
+            }
+            if (closed) continue;
+            // caps: the profile polygon (fan) at both ends of the run
             for (int end = 0; end < 2; ++end) {
-                size_t pi = end == 0 ? 0 : S;
-                size_t seg = end == 0 ? 0 : S - 1;
-                V3 m = mitre(pi);
-                V3 along = (end == 0 ? (pts[1] - pts[0]) : (pts[S] - pts[S - 1])).unit() * (end == 0 ? -1.0 : 1.0);
+                const Seg& g = end == 0 ? segs.front() : segs.back();
+                V3 m = end == 0 ? mitreStart(0) : mitreEnd(S - 1);
+                V3 p0 = end == 0 ? g.a : g.b;
+                double top = end == 0 ? g.topA : g.topB;
+                V3 along = (g.b - g.a).unit() * (end == 0 ? -1.0 : 1.0);
                 std::vector<V3> ring;
-                for (const auto& pr : prof) { V3 p = pts[pi] + m * pr.first; p.y = pr.second; ring.push_back(p); }
+                for (const auto& pr : prof) { V3 p = p0 + m * pr.first; p.y = top + pr.second; ring.push_back(p); }
                 for (size_t k = 1; k + 1 < ring.size(); ++k) {
                     V3 a = ring[0], b = ring[k], c = ring[k + 1];
                     bool flip = (b - a).cross(c - a).dot(along) < 0;
-                    vert(a, along, seg);
-                    vert(flip ? c : b, along, seg);
-                    vert(flip ? b : c, along, seg);
+                    vert(a, along, g.face);
+                    vert(flip ? c : b, along, g.face);
+                    vert(flip ? b : c, along, g.face);
                 }
             }
         }
@@ -1996,7 +2064,7 @@ private:
  *   tile <glb> | isolate <glb> | out <dir> | param <name> <value>
  *   part <id> <baseY> <topY> <provenance>          then: loop <n> x z ... (first outer), plane <a> <b> <c> <tag>
  *   mesh <id> <nv> <nt> <provenance>               then: v x y z (nv lines), t i j k (nt lines)
- *   sweep <id> <confidence> <provenance> <np> o y ... <nf> <face> ...
+ *   sweep <id> <confidence> <provenance> <np> o y ... <nf> <face> ... [top]   (top: y is above each wall's own top)
  *   opening <id> <face> <s0> <s1> <t0> <t1> <depth> <scanned 0|1> <confidence> <provenance>
  *   facesweep <id> <confidence> <provenance> <face> <axis 0|1> <np> o c ... <nplace> a0 a1 dc ...
  */
@@ -2092,7 +2160,12 @@ inline Spec readSpec(std::istream& in) {
             for (size_t i = 0; i < np; ++i) { double o, y; ls >> o >> y; w.profile.push_back({o, y}); }
             ls >> nf;
             for (size_t i = 0; i < nf; ++i) { std::string f; ls >> f; w.faces.push_back(f); }
-            if (!ls) fail("sweep needs id confidence provenance np (o y)... nf face...");
+            if (!ls) fail("sweep needs id confidence provenance np (o y)... nf face... [top]");
+            std::string flag;
+            if (ls >> flag) {
+                if (flag != "top") fail("sweep: unknown trailing token " + flag + " (only \"top\": heights above each wall's top)");
+                w.relativeToTop = true;
+            }
             s.sweeps.push_back(std::move(w));
         } else if (k == "opening") {
             OpeningSpec o;

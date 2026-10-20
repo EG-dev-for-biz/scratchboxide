@@ -150,7 +150,7 @@ describe('TreeLodController shares one budget with the rest of the scene', () =>
 
     it('the stats overlay names the split: the one budget, the scene and its shadow, the trees and what they may use', () => {
         const stats = { trees: 2, visibleTrees: 2, culledTrees: 0, atLevel: [0, 1, 1, 0] as [number, number, number, number], fading: 0, estimatedTriangles: 2_500_000, estimatedShadowTriangles: 500_000, shadowOnlyTrees: 0,
-            commits: 0, deferredCommits: 0, newVariants: 0, demotedTrees: 3, triangleBudget: 8_000_000, reservedTriangles: 1_550_000, treeBudget: 6_450_000, screenSpace: true, blurDemotedTrees: 0, focusProtectedTrees: 0,
+            commits: 0, deferredCommits: 0, newVariants: 0, demotedTrees: 3, budgetDeferredStarts: 0, still: false, settledTrees: 0, budgetScale: 1, triangleBudget: 8_000_000, reservedTriangles: 1_550_000, treeBudget: 6_450_000, screenSpace: true, blurDemotedTrees: 0, focusProtectedTrees: 0,
             fovealCentreNdc: [0, 0] as [number, number], frameHeightPx: 943, fovDeg: 53.1, updateMs: 0.4, crownTrees: 0, crownLeafMeshes: 0, crownLobeTrees: 0, crownLobeMeshes: 0, crownLobeFallbackMeshes: 0 };
         const line = formatTreeLodStats([stats], { main: 1_250_000, shadow: 300_000 });
         expect(line).toContain('budget 8.00M = scene 1.25M + shadow 300.0k + trees 3.00M (trees may use 6.45M)');
