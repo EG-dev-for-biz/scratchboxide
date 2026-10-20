@@ -249,6 +249,19 @@ export {
     DisplacementResult
 } from './node/3d-engine/native-displacement-service';
 export {
+    MetalPathTracerService,
+    MetalPathTracerError,
+    readLinearColor,
+    MetalDeviceInfo,
+    MetalPathTraceCamera,
+    MetalPathTraceAutoCamera,
+    MetalPathTraceSunLighting,
+    MetalPathTraceStudioLighting,
+    MetalPathTraceRequest,
+    MetalPathTraceStats,
+    MetalPathTraceResult
+} from './node/3d-engine/metal-path-tracer-service';
+export {
     ColmapReconstructionService,
     ColmapCameraModel,
     ColmapGlbOptions,
