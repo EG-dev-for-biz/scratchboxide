@@ -262,13 +262,15 @@ describe('textures chosen per tree (plant)', () => {
         expect(stats.woodMeshes).toBe(CROWNS.length * 4);    // the wood of every level
         expect(stats.twigMeshes).toBeGreaterThan(0);
         expect(stats.massMeshes).toBe(CROWNS.length);
+        // the mid level's crown cards wear their leaf set's card atlas
+        expect(stats.cardMeshes).toBeGreaterThan(0);
         expect(stats.unknownEntries).toBe(0);
         const meshes: THREE.Mesh[] = [];
         root.traverse(o => { if ((o as THREE.Mesh).isMesh && o.userData.sbTreeLodMesh) meshes.push(o as THREE.Mesh); });
         // every tree mesh wears a library surface outside clay, with its tint as a per-mesh attribute
         for (const m of meshes) {
             const base = m.userData.sbLodBase as THREE.Material;
-            expect(base.userData.sbTreeSurface).toMatch(/leaves|bark|masses/);
+            expect(base.userData.sbTreeSurface).toMatch(/leaves|bark|masses|crown-cards/);
             expect((m.geometry as THREE.BufferGeometry).getAttribute('sbTreeTint')).toBeDefined();
         }
         const leafMesh = meshes.find(m => (m.userData.sbLodBase as THREE.Material).userData.sbTreeSurface === 'leaves')!;
@@ -303,10 +305,16 @@ describe('textures chosen per tree (plant)', () => {
         const mass = meshes.find(m => (m.userData.sbLodBase as THREE.Material).userData.sbTreeSurface === 'masses')!;
         expect(compiled(mass.userData.sbLodBase).fragmentShader).toContain(TINT_FRAGMENT_COLOR.trim().slice(0, 30));
         // clay: every tree mesh wears the one shared tree clay; back to textured, each its library surface again
+        // (a crown card wears the same clay surface cut out by its leaves)
+        const clayOf = (m: THREE.Mesh) => (m.userData.sbTreeClay as THREE.Material | undefined) ?? sharedTreeClayMaterial();
         applyClayRenderMode([root], true);
-        for (const m of meshes) { expect(m.material).toBe(sharedTreeClayMaterial()); expect(m.userData.sbLodBase).toBe(sharedTreeClayMaterial()); }
+        for (const m of meshes) { expect(m.material).toBe(clayOf(m)); expect(m.userData.sbLodBase).toBe(clayOf(m)); }
+        const cardClay = meshes.map(m => m.userData.sbTreeClay as THREE.MeshStandardMaterial | undefined).find(Boolean)!;
+        expect(cardClay.color.getHex()).toBe(sharedTreeClayMaterial().color.getHex());
+        expect(cardClay.roughness).toBe(sharedTreeClayMaterial().roughness);
+        expect(cardClay.alphaMap).toBeTruthy();
         applyClayRenderMode([root], false);
-        for (const m of meshes) expect((m.userData.sbLodBase as THREE.Material).userData.sbTreeSurface).toMatch(/leaves|bark|masses/);
+        for (const m of meshes) expect((m.userData.sbLodBase as THREE.Material).userData.sbTreeSurface).toMatch(/leaves|bark|masses|crown-cards/);
         // textures applied while clay is on wait for clay to be turned off
         const root2 = (await new GLTFLoader().parseAsync(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer, '')).scene;
         new TreeLodController(root2);
@@ -314,8 +322,8 @@ describe('textures chosen per tree (plant)', () => {
         applyTreeTextures(root2, lib);
         const meshes2: THREE.Mesh[] = [];
         root2.traverse(o => { if ((o as THREE.Mesh).isMesh && o.userData.sbTreeLodMesh) meshes2.push(o as THREE.Mesh); });
-        for (const m of meshes2) expect(m.material).toBe(sharedTreeClayMaterial());
+        for (const m of meshes2) expect(m.material).toBe((m.userData.sbTreeClay as THREE.Material | undefined) ?? sharedTreeClayMaterial());
         applyClayRenderMode([root2], false);
-        for (const m of meshes2) expect((m.userData.sbLodBase as THREE.Material).userData.sbTreeSurface).toMatch(/leaves|bark|masses/);
+        for (const m of meshes2) expect((m.userData.sbLodBase as THREE.Material).userData.sbTreeSurface).toMatch(/leaves|bark|masses|crown-cards/);
     }, 120_000);
 });
