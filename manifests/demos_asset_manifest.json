@@ -514,18 +514,6 @@
       ]
     },
     {
-      "path": "public/models/san_marco_360.spz",
-      "category": "compressed_splat",
-      "extension": ".spz",
-      "sizeBytes": 3106850,
-      "hydrationStrategy": "procedural_spz",
-      "usedByDemos": [],
-      "mirrors": [
-        "https://storage.googleapis.com/scratchbox-demo-assets/models/san_marco_360.spz",
-        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/san_marco_360.spz"
-      ]
-    },
-    {
       "path": "public/models/shibuya_cyber.splat",
       "category": "gaussian_splat",
       "extension": ".splat",
