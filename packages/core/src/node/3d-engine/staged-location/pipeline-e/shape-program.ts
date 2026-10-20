@@ -355,7 +355,15 @@ export function applyHandles(prog: ShapeProgram, handles: Array<Array<[number, n
         if (e.prism) {
             const o = resolveOutline(e.prism.outline, measuredOutline);
             const u0 = Math.min(...o.map(q => q[0])), u1 = Math.max(...o.map(q => q[0])), v0 = Math.min(...o.map(q => q[1])), v1 = Math.max(...o.map(q => q[1]));
-            const polygon = o.map(q => { const tu = (q[0] - u0) / Math.max(1e-6, u1 - u0), tv = (q[1] - v0) / Math.max(1e-6, v1 - v0); return [q[0] + h[0] * (1 - tu) + h[1] * tu, q[1] + h[2] * (1 - tv) + h[3] * tv] as UV; });
+            // as the native outline: the moved sides never cross (each extent keeps 0.3 m, or what it had when less)
+            const extent = (lo: number, hi: number, dlo: number, dhi: number): [number, number] => {
+                let a = lo + dlo, b = hi + dhi;
+                const minW = Math.min(0.3, hi - lo);
+                if (b - a < minW) { const m = (a + b) / 2; a = m - minW / 2; b = m + minW / 2; }
+                return [a, b];
+            };
+            const [nu0, nu1] = extent(u0, u1, h[0], h[1]), [nv0, nv1] = extent(v0, v1, h[2], h[3]);
+            const polygon = o.map(q => [u1 - u0 > 1e-6 ? nu0 + ((q[0] - u0) / (u1 - u0)) * (nu1 - nu0) : q[0] + h[0], v1 - v0 > 1e-6 ? nv0 + ((q[1] - v0) / (v1 - v0)) * (nv1 - nv0) : q[1] + h[2]] as UV);
             return { ...e, prism: { ...e.prism, outline: { polygon }, baseM: h[4], topM: Math.max(h[5], h[4] + 0.5), roofRiseM: h[6] }, ...(repeat ? { repeat } : {}) };
         }
         if (e.revolve) {

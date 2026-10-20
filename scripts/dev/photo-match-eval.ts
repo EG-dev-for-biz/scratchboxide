@@ -110,7 +110,8 @@ async function main(): Promise<void> {
     }
     const occluder = !context && m.occluder ? sceneToRenderMesh(readGlbScene(m.occluder)) : undefined;
     const visTarget = m.visibility ? sceneToRenderMesh(readGlbScene(m.visibility.target)) : undefined;
-    const visOccluders = m.visibility ? (m.visibility.occluders as string[]).map(g => sceneToRenderMesh(readGlbScene(g))) : [];
+    // an occluder GLB with no triangles (a place whose strip removed no tree) occludes nothing
+    const visOccluders = m.visibility ? (m.visibility.occluders as string[]).flatMap(g => { try { return [sceneToRenderMesh(readGlbScene(g))]; } catch (err) { console.log(`[photo-match] visibility occluder ${g} not read (${String(err).slice(0, 80)}): nothing occludes from it`); return []; } }) : [];
     const chain = noJudge ? undefined : await judgeClient();
     const report: Json = { place: m.place, slug: m.slug, inContext: !!m.context, arms: arms.map((a: Json) => ({ id: a.id, label: a.label, glbs: a.glbs, triangles: a.tris })), views: [] };
     for (const v of m.views) {

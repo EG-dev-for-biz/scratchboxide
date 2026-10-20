@@ -828,10 +828,19 @@ inline std::vector<P2> prismOutline(const Element& e) {
     double u0 = 1e300, u1 = -1e300, v0 = 1e300, v1 = -1e300;
     for (const auto& p : e.outline) { u0 = std::min(u0, p.u); u1 = std::max(u1, p.u); v0 = std::min(v0, p.v); v1 = std::max(v1, p.v); }
     const double du = std::max(1e-6, u1 - u0), dv = std::max(1e-6, v1 - v0);
+    // the moved sides never cross: each extent keeps at least 0.3 m (or what it had, when less)
+    auto extent = [](double lo, double hi, double dlo, double dhi, double& nlo, double& nhi) {
+        nlo = lo + dlo; nhi = hi + dhi;
+        const double minW = std::min(0.3, hi - lo);
+        if (nhi - nlo < minW) { const double m = 0.5 * (nlo + nhi); nlo = m - 0.5 * minW; nhi = m + 0.5 * minW; }
+    };
+    double nu0, nu1, nv0, nv1;
+    extent(u0, u1, e.h[PR_MINU].value, e.h[PR_MAXU].value, nu0, nu1);
+    extent(v0, v1, e.h[PR_MINV].value, e.h[PR_MAXV].value, nv0, nv1);
     std::vector<P2> o;
     for (const auto& p : e.outline) {
         const double tu = (p.u - u0) / du, tv = (p.v - v0) / dv;
-        o.push_back({p.u + e.h[PR_MINU].value * (1 - tu) + e.h[PR_MAXU].value * tu, p.v + e.h[PR_MINV].value * (1 - tv) + e.h[PR_MAXV].value * tv});
+        o.push_back({u1 - u0 > 1e-6 ? nu0 + tu * (nu1 - nu0) : p.u + e.h[PR_MINU].value, v1 - v0 > 1e-6 ? nv0 + tv * (nv1 - nv0) : p.v + e.h[PR_MINV].value});
     }
     return o;
 }

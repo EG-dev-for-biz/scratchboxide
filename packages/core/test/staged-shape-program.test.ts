@@ -143,6 +143,34 @@ const TRUTH: ShapeProgram = {
     ]
 };
 
+describe('fit handles keep every element', () => {
+    it('never lets a prism\'s sides cross or its height vanish, nor a band', async () => {
+        const dir = tmp();
+        const prog: ShapeProgram = { elements: [
+            { label: 'thin', prism: { outline: { rect: { centerU: 0, centerV: 0, lengthU: 10, widthV: 1 } }, baseM: 5, topM: 8 } },
+            { label: 'band', relief: { targetElement: 0, fromM: 6, toM: 7, outM: 0.3 } }
+        ] };
+        // handles pushed past each other: the v sides cross by 2 m, the top below the base, the band inverted
+        const handles = [elementHandles(prog.elements[0], false), elementHandles(prog.elements[1], false)];
+        handles[0][2].value = 1.5; handles[0][3].value = -1.5; handles[0][5].value = 4;
+        handles[1][1].value = 5;
+        const scan: ScanTargets = { dir, frame: { ox: 0, oz: 0, theta: 0, groundY: 0 }, grid: { u0: 0, v0: 0, cell: 1, nu: 0, nv: 0 }, cameras: [], buildingH: 10 };
+        const text = programSpecText(prog, { outDir: dir, measuredOutline: [], scan, fit: null, handles }).split('\n').filter(l => !l.startsWith('target_height')).join('\n');
+        await runShapeTool(text, dir);
+        const g = JSON.parse(fs.readFileSync(path.join(dir, 'geometry.json'), 'utf8'));
+        expect(g.parts.length).toBe(2);
+        const loop = g.parts[0].loops[0] as Array<[number, number]>;
+        const zs = loop.map(p => p[1]);
+        expect(Math.max(...zs) - Math.min(...zs)).toBeCloseTo(0.3, 3);
+        expect(g.parts[0].topY - g.parts[0].baseY).toBeCloseTo(0.5, 3);
+        expect(g.parts[1].topY - g.parts[1].baseY).toBeCloseTo(0.1, 3);
+        const { program } = applyHandles(prog, handles.map(hs => hs.map(h => [h.value, h.value] as [number, number])), handles.map(hs => hs.map(() => true)), []);
+        const vs = program.elements[0].prism!.outline.polygon!.map(q => q[1]);
+        expect(Math.max(...vs) - Math.min(...vs)).toBeCloseTo(0.3, 3);
+        expect(program.elements[0].prism!.topM).toBeCloseTo(5.5, 3);
+    }, 60_000);
+});
+
 describe('height-map tiers and the fit (native, synthetic scan)', () => {
     it('finds the tower and body tiers, then fits a perturbed program back to the scan', async () => {
         const dir = tmp();

@@ -37,12 +37,15 @@ import { checkMassing, inLoops, ringArea, type Massing, type MassingMesh, type M
 import { SHAPE_PROGRAM_TOKEN, SHAPE_TIERS_TOKEN } from './pipeline-e';
 import { applyHandles, elementHandles, ensureShapeBinary, programSpecText, readF32, readU8, runShapeTool, SHAPE_PROGRAM_JSON_SCHEMA, validateProgram, type ParameterRecord, type ScanTargets, type ShapeProgram, type UV } from './shape-program';
 
-export const SHAPE_STAGE_VERSION = 'shape-program/v3';
+export const SHAPE_STAGE_VERSION = 'shape-program/v5';
 /** Thinking budget of the program call: under 1,024 tokens is LOW on Gemini 4. */
 export const SHAPE_THINKING_BUDGET = 512;
 /** A fit leaving more than this silhouette disagreement (1 - IoU, mean of the views) or height error (share of the building's height) asks for one correction. */
 export const CORRECTION_SILHOUETTE = 0.12;
 export const CORRECTION_HEIGHT = 0.08;
+/** One program call's time limit and its output limit. */
+export const SHAPE_CALL_TIMEOUT_MS = 120_000;
+export const SHAPE_MAX_OUTPUT_TOKENS = 12_000;
 
 /** The vision call (a VisionModelChain). */
 export type ShapeVisionClient = Pick<VisionModelChain<string>, 'generate'>;
@@ -378,7 +381,12 @@ export async function runShapeStage(input: ShapeStageInput): Promise<ShapeStageR
     const bounds = { minU: extent.u[0], maxU: extent.u[1], minV: extent.v[0], maxV: extent.v[1], maxH: extent.maxH };
     const ask = async (parts: unknown[], stage: string) => {
         const t0 = Date.now();
-        const r = await input.vision!.generate({ contents: [{ role: 'user', parts: parts as Json }], config: { responseMimeType: 'application/json', responseJsonSchema: SHAPE_PROGRAM_JSON_SCHEMA, temperature: 0.2 } }, { stage, thinkingBudget: SHAPE_THINKING_BUDGET });
+        // a call that has not answered in SHAPE_CALL_TIMEOUT_MS is given up (a stalled stream held a build past its stage limit)
+        let timer: NodeJS.Timeout | undefined;
+        const r = await Promise.race([
+            input.vision!.generate({ contents: [{ role: 'user', parts: parts as Json }], config: { responseMimeType: 'application/json', responseJsonSchema: SHAPE_PROGRAM_JSON_SCHEMA, temperature: 0.2, maxOutputTokens: SHAPE_MAX_OUTPUT_TOKENS } }, { stage, thinkingBudget: SHAPE_THINKING_BUDGET }),
+            new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`the ${stage} call did not answer within ${SHAPE_CALL_TIMEOUT_MS / 1000} s`)), SHAPE_CALL_TIMEOUT_MS); })
+        ]).finally(() => clearTimeout(timer));
         const text = textOf(r);
         let raw: unknown;
         try { raw = JSON.parse(text); } catch { throw new Error(`the ${stage} answer is not JSON: ${text.slice(0, 200)}`); }
@@ -433,7 +441,11 @@ export async function runShapeStage(input: ShapeStageInput): Promise<ShapeStageR
     files.program = path.join(input.outDir, 'program.json');
     // ---- 5. the massing
     const geom = JSON.parse(fs.readFileSync(path.join(best.dir, 'geometry.json'), 'utf8'));
-    const parts: MassingPart[] = (geom.parts as Json[]).map((p: Json) => ({ id: p.id, baseY: p.baseY, topY: p.topY, loops: p.loops, planes: (p.planes as Json[]).map((q: Json, k: number) => ({ a: q.a, b: q.b, c: q.c, tag: `program:${p.id}:${k}` })), heightSource: 'shape-program', heights: {}, provenance: SHAPE_PROGRAM_TOKEN }));
+    // a part the native kernel cannot close (a degenerate plan: under 0.05 m^2, or a non-finite number) is left out and said
+    const usable = (p: Json) => JSON.stringify(p).indexOf('null') < 0 && p.loops.every((l: Vec2[]) => Math.abs(ringArea(l)) >= 0.05);
+    const dropped = (geom.parts as Json[]).filter(p => !usable(p)).map((p: Json) => p.id);
+    if (dropped.length) notes.push(`degenerate program parts left out: ${dropped.join(', ')}`);
+    const parts: MassingPart[] = (geom.parts as Json[]).filter(usable).map((p: Json) => ({ id: p.id, baseY: p.baseY, topY: p.topY, loops: p.loops, planes: (p.planes as Json[]).map((q: Json, k: number) => ({ a: q.a, b: q.b, c: q.c, tag: `program:${p.id}:${k}` })), heightSource: 'shape-program', heights: {}, provenance: SHAPE_PROGRAM_TOKEN }));
     const meshes: MassingMesh[] = (geom.meshes as Json[]).filter((m: Json) => m.indices.length >= 12).map((m: Json) => ({ id: `program_${m.id}`, vertices: m.vertices, indices: m.indices, provenance: SHAPE_PROGRAM_TOKEN }));
     const check = { ...checkMassing(parts, meshes, checkInputs), ok: parts.length + meshes.length > 0 };
     const measuredCount = best.parameters.filter(p => p.provenance === 'measured').length;
