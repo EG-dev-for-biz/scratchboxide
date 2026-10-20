@@ -39,6 +39,7 @@ import { ViewportHistoryButtons } from './scene3d/ViewportHistoryButtons';
 import type { HistoryEditMeta } from './scene3d/useViewportHistory';
 import { ObjectEditCapture, createGeometrySwapEdit } from '../services/viewport-history-deltas';
 import { attachHistoryShortcuts } from '../services/viewport-history';
+import { assetRecoveryClient, recoverableAssetPath, type AssetRecoveryState } from '../services/asset-recovery-client';
 import {
     TransformGizmoEngine,
     computeAxisTranslation,
@@ -946,6 +947,8 @@ interface ExternalLoadStatus {
     /** 0 when the server sends no Content-Length. */
     total: number;
     error?: string;
+    /** The file was rebuilt from its recipe after the original was lost (asset recovery). */
+    rebuilt?: boolean;
 }
 
 /** Request URL for an objects[] durableUri: bare '/<file>.glb' paths are served from /models/. */
@@ -973,7 +976,8 @@ function isVisibleForGroundMode(obj: Media4DObject, groundTileMode: GroundTileMo
 }
 
 const formatLoadStatus = (status: ExternalLoadStatus | undefined): string => {
-    if (!status || status.phase === 'ready') return '';
+    if (!status) return '';
+    if (status.phase === 'ready') return status.rebuilt ? 'rebuilt' : '';
     if (status.phase === 'error') return '!';
     if (status.phase === 'parse') return 'parsing';
     if (status.total > 0) return `${Math.min(99, Math.floor((status.loaded / status.total) * 100))}%`;
@@ -1167,6 +1171,26 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const [externalLoadStatus, setExternalLoadStatus] = React.useState<Record<string, ExternalLoadStatus>>({});
     // Bumped to re-run the loader for objects whose last load failed (nothing else changes then).
     const [externalLoadRetryNonce, setExternalLoadRetryNonce] = React.useState(0);
+    // Files that failed to load are recovered automatically (restored from the asset store or rebuilt from their
+    // recipe, asset-recovery-client.ts); the job's progress shows over the viewport and the files load again when it ends.
+    const [assetRecovery, setAssetRecovery] = React.useState<AssetRecoveryState>(() => assetRecoveryClient.getState());
+    React.useEffect(() => assetRecoveryClient.subscribe(setAssetRecovery), []);
+    const rebuiltAssetPathsRef = React.useRef(new Set<string>());
+    const handledRecoveryJobRef = React.useRef<string | undefined>(undefined);
+    const [recoveryNoticeJobId, setRecoveryNoticeJobId] = React.useState<string | undefined>(undefined);
+    React.useEffect(() => {
+        const job = assetRecovery.job;
+        if (!job) return;
+        setRecoveryNoticeJobId(job.id);
+        if (job.status === 'running' || handledRecoveryJobRef.current === job.id) return;
+        handledRecoveryJobRef.current = job.id;
+        const recovered = job.items.filter(i => i.outcome === 'restored' || i.outcome === 'rebuilt');
+        for (const item of recovered) if (item.outcome === 'rebuilt') rebuiltAssetPathsRef.current.add(item.path);
+        if (recovered.length > 0) setExternalLoadRetryNonce(n => n + 1);
+        // the summary stays a while, then clears (a running job replaces it at once)
+        const t = setTimeout(() => setRecoveryNoticeJobId(current => (current === job.id ? undefined : current)), 12_000);
+        return () => clearTimeout(t);
+    }, [assetRecovery]);
     /**
      * Superseded staged layers the staged-build hook released (layerEviction.ts): the loader keeps them unloaded (their
      * scene objects, URL and metadata, stay) until the hook needs them again, then loads them like any object.
@@ -3009,6 +3033,15 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         };
         const setStatus = (id: string, status: ExternalLoadStatus) =>
             setExternalLoadStatus(prev => ({ ...prev, [id]: status }));
+        /** A served file that failed to load is recovered once (restored from the asset store or rebuilt from its recipe). */
+        const requestRecovery = (loadUri: string) => {
+            const servedPath = recoverableAssetPath(loadUri);
+            if (servedPath && !assetRecoveryClient.outcomeOf(servedPath)) assetRecoveryClient.request([servedPath]);
+        };
+        const readyStatus = (loadUri: string): ExternalLoadStatus => {
+            const servedPath = recoverableAssetPath(loadUri);
+            return { phase: 'ready', loaded: 0, total: 0, ...(servedPath && rebuiltAssetPathsRef.current.has(servedPath) ? { rebuilt: true } : {}) };
+        };
         /**
          * What a model's pose derives from: its authored transform and the ground it was seated on.
          * A ground-mode switch swaps the surface under a snapped hero (tiles torn down or replaced), so
@@ -3136,12 +3169,13 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     if (isActiveNow(def)) liveScene.add(splatMesh);
                     currentMap.set(obj.id, splatMesh);
                     activeSplatMeshesRef.current.set(obj.id, splatMesh);
-                    setStatus(obj.id, { phase: 'ready', loaded: 0, total: 0 });
+                    setStatus(obj.id, readyStatus(uri));
                     refreshEntities();
                     if (splatMesh.parent) autoFrameIfNeeded();
                 }).catch(err => {
                     if (settlePending()) setStatus(obj.id, { phase: 'error', loaded: 0, total: 0, error: String(err?.message ?? err) });
                     console.warn(`[External Splat Loader Error] Failed to load ${uri}:`, err);
+                    requestRecovery(uri);
                 });
                 return;
             }
@@ -3217,7 +3251,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     syncObjectMaterial(model, latestDef(obj).material, renderModeRef.current === 'clay');
                     currentMap.set(obj.id, model);
                     placeReflectionsRef.current?.invalidate();
-                    setStatus(obj.id, { phase: 'ready', loaded: 0, total: 0 });
+                    setStatus(obj.id, readyStatus(uri));
 
                     if (attach) {
                         settleOnGround(model, def, liveScene);
@@ -3261,6 +3295,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 (err) => {
                     if (settlePending()) setStatus(obj.id, { phase: 'error', loaded: 0, total: 0, error: String((err as any)?.message ?? err) });
                     console.warn(`[External Model Loader Error] Failed to load ${uri}:`, err);
+                    requestRecovery(uri);
                 }
             );
         });
@@ -3890,10 +3925,20 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const objectLoadErrors = React.useMemo(() => {
         const declared = new Set((sceneData.objects || []).map(o => o.id));
         if (sceneData.splatUrl) declared.add('primary-location-splat');
+        // a file whose recovery is running is not reported as failed while it may still come back
+        const job = assetRecovery.job;
+        const recovering = new Set(job && job.status === 'running' ? job.items.filter(i => i.outcome === 'pending').map(i => i.path) : []);
+        const servedPathOf = (id: string): string | undefined => {
+            const raw = (sceneData.objects || []).find(o => o.id === id)?.content?.durableUri ?? (id === 'primary-location-splat' ? sceneData.splatUrl : undefined);
+            return raw ? recoverableAssetPath(resolveExternalModelUri(raw)) : undefined;
+        };
         return Object.entries(externalLoadStatus)
-            .filter(([id, st]) => st.phase === 'error' && declared.has(id))
-            .map(([id, st]) => ({ id, error: st.error || 'the file could not be loaded' }));
-    }, [externalLoadStatus, sceneData.objects, sceneData.splatUrl]);
+            .filter(([id, st]) => st.phase === 'error' && declared.has(id) && !recovering.has(servedPathOf(id) ?? ''))
+            .map(([id, st]) => {
+                const outcome = assetRecoveryClient.outcomeOf(servedPathOf(id) ?? '');
+                return { id, error: outcome && outcome.outcome !== 'restored' && outcome.outcome !== 'rebuilt' ? `${st.error || 'the file could not be loaded'}; ${outcome.detail || 'recovery failed'}` : st.error || 'the file could not be loaded' };
+            });
+    }, [externalLoadStatus, sceneData.objects, sceneData.splatUrl, assetRecovery]);
     const drawsBiomeTerrain = drawsProceduralBiomeTerrain({ renderMode, terrainBiomes: sceneData.features?.terrainBiomes, hasGeoCoordinates, has3DTiles });
     const viewportNotices = React.useMemo(() => resolveViewportNotice({
         webglError,
@@ -3903,8 +3948,15 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         hasAuxiliaryContent: !!sceneData.vectorRoadmap?.groundBlueprint || wantsWasmMesh || drawsBiomeTerrain,
         objectLoadErrors,
         undrawableObjects,
-        opticsIssues
-    }), [webglError, currentGeneratorError, tilesError, sceneContentKind, sceneData.vectorRoadmap?.groundBlueprint, wantsWasmMesh, drawsBiomeTerrain, objectLoadErrors, undrawableObjects, opticsIssues]);
+        opticsIssues,
+        assetRecovery: assetRecovery.job && assetRecovery.job.id === recoveryNoticeJobId ? {
+            running: assetRecovery.job.status === 'running',
+            message: assetRecovery.job.message,
+            fraction: assetRecovery.job.fraction,
+            files: assetRecovery.job.items.length,
+            onCancel: () => { void assetRecoveryClient.cancel(); }
+        } : undefined
+    }), [webglError, currentGeneratorError, tilesError, sceneContentKind, sceneData.vectorRoadmap?.groundBlueprint, wantsWasmMesh, drawsBiomeTerrain, objectLoadErrors, undrawableObjects, opticsIssues, assetRecovery, recoveryNoticeJobId]);
 
     const handleExportGlb = React.useCallback(async () => {
         if (!threeSceneRef.current) return;

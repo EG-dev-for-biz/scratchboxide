@@ -14,6 +14,11 @@ import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs-extra';
 import { assertWorkspaceRoot, PathTraversalError } from '../../packages/core/src/node/security/path-guard';
+import { defaultDurableAssetStore } from '../../packages/core/src/node/asset-store/durable-asset-store';
+import { AssetRecoveryService } from '../../packages/core/src/node/asset-store/asset-recovery-service';
+import { rebuildStagedForRecovery } from '../../packages/core/src/node/3d-engine/staged-location/staged-rebuild';
+import { stagedWorkspaceRoot } from '../../packages/core/src/node/3d-engine/staged-location/stage-cache';
+import { createAssetRouter } from './routes/assetRoutes';
 import { FileKeyStore } from '../../packages/core/src/node/key-store';
 import { KEY_STORE_SERVICE, KEY_STORE_GEMINI_ACCOUNT } from '../../packages/core/src/node/gemini/gemini-client';
 import { preferSavedMapsKey } from '../../packages/core/src/node/spatial/maps-key-settings';
@@ -270,6 +275,9 @@ const SSE_QUERY_TOKEN_ROUTES = new Set<string>(['/workspace/events/file-change']
  */
 const PROTECTED_PREFIXES = ['/gemini', '/workspace', '/media', '/api', '/3d', '/compiler', '/git', '/memories', '/video'];
 
+/** Served paths the durable asset store answers for when the checkout's own copy is missing. */
+const ASSET_STORE_SERVED_PREFIXES = ['/models/', '/build/3d-python/', '/build/generated-images/', '/renders/', '/datasets/', '/splats/'];
+
 /** Methods that only read; anything else always requires the token. */
 const SAFE_METHODS = new Set(['GET', 'HEAD']);
 
@@ -458,6 +466,51 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     // Built virtual geometry (.sbvg) files, named by their source GLB's content hash.
     app.use(VIRTUAL_GEOMETRY_URL_PREFIX, express.static(virtualGeometryServeDir(), { immutable: true, maxAge: '1y' }));
 
+    // The durable asset store (~/.scratchbox/assets, asset-store): every file published to the paths above is also
+    // kept there by content hash. After the static mounts, so a file present in this checkout is served from disk and a
+    // missing one (another checkout's build, a deleted worktree, a cleaned build directory) is served from the store.
+    const assetStore = defaultDurableAssetStore();
+    if (assetStore) {
+        app.use((req: Request, res: Response, next: NextFunction) => {
+            if ((req.method !== 'GET' && req.method !== 'HEAD') || !ASSET_STORE_SERVED_PREFIXES.some(p => req.path.startsWith(p))) {
+                next();
+                return;
+            }
+            const found = assetStore.lookup(req.path);
+            if (!found) {
+                next();
+                return;
+            }
+            res.setHeader('X-Scratchbox-Asset-Store', found.rebuilt ? 'rebuilt' : 'stored');
+            res.sendFile(found.file, { headers: { 'Content-Type': found.mime ?? 'application/octet-stream' }, dotfiles: 'allow' }, err => {
+                if (err) next(err);
+            });
+        });
+        // This checkout's outputs are swept into the store in the background (files already seen are not hashed
+        // again), so what was built before the store existed outlives the checkout too.
+        if (process.env.SCRATCHBOX_TEST !== '1' && process.env.SCRATCHBOX_ASSET_STORE_SWEEP !== '0') {
+            // every directory the mounts above serve (the server's cwd is desktop-app, whose public/ has no models)
+            const sweeps = new Map<string, string>();
+            for (const pRoot of possiblePublicRoots) sweeps.set(path.join(pRoot, 'models'), '/models');
+            for (const root of [process.cwd(), path.resolve(process.cwd(), '..')]) {
+                sweeps.set(path.resolve(root, 'build', '3d-python'), '/build/3d-python');
+                sweeps.set(path.resolve(root, 'build', 'generated-images'), '/build/generated-images');
+            }
+            setTimeout(async () => {
+                for (const [dir, prefix] of sweeps) {
+                    if (!fs.existsSync(dir)) continue;
+                    try {
+                        // <checkout>/public/models and <checkout>/build/<x>: the checkout is two levels up
+                        const r = await assetStore.backfill(dir, prefix, { origin: 'backfill', workspace: path.resolve(dir, '..', '..') });
+                        if (r.added || r.failed.length) console.log(`[asset-store] ${prefix}: ${r.added} file(s) recorded, ${r.unchanged} unchanged${r.failed.length ? `, ${r.failed.length} failed (${r.failed[0].error})` : ''}`);
+                    } catch (err) {
+                        console.warn(`[asset-store] sweep of ${dir} failed: ${(err as Error).message}`);
+                    }
+                }
+            }, 5000).unref();
+        }
+    }
+
     // Trigger asynchronous background asset hydration for showcase demos. Not under the test runner
     // (vitest sets SCRATCHBOX_TEST=1): it would write offline placeholder assets into public/, which
     // then make asset-gated tests run against stand-ins instead of skipping.
@@ -596,6 +649,10 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     app.use('/api/3d/tiles', createTileCleanupRouter(tileCleanupService, routeContext));
     app.use('/api/3d/cleanup-tiles', createTileCleanupRouter(tileCleanupService, routeContext));
     app.use('/api/3d/pbr', createPbrRouter());
+    // the durable asset store's API: lookups, the change log, and recovery of missing files (restored or rebuilt)
+    if (assetStore) {
+        app.use('/api/assets', createAssetRouter(assetStore, new AssetRecoveryService(assetStore, { workspaceRoot: stagedWorkspaceRoot(), rebuildStaged: rebuildStagedForRecovery })));
+    }
 
     // Survey Synthesis API
     const surveyWorkspaceRoot = process.cwd();
