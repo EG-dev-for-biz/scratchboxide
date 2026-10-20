@@ -46,6 +46,7 @@ import { placeDegradations, type Placement, type PlacementRoot } from './degrada
 import { nodeProgress, nodeRevealWindow, stepRevealSchedule, type LayerLoadState, type LayerRevealFrame, type RevealFrame, type RevealSchedule } from './revealScheduler';
 import { REVEAL_ATTRIBUTE, StagedMaterialRegistry, installRenderGuard, type MeshStagedLook } from './revealMaterial';
 import { TEXTURE_RUNG_COLORS, classUniforms, legendRows, patternCode, provenanceBackground, resolveLegend, shadingClasses, styleFor, textureRungLegendRows, uncertaintyCoverage, type LegendStyle } from './provenanceShading';
+import { EVICT_AFTER_MS, evictionCandidates, sameSet, stepEviction } from './layerEviction';
 import { isInterrupted, isRunSettled, stageEventsFor, streamedProgress, subscribeStageEvents, withStreamedEvents, type StageProgress } from './stagedBuildState';
 import {
     INITIAL_SWITCH, deriveMaterialLayers, isMaterialSwapLayer, materialModeOf, modelIdOf, nextSwitch, parseSwapId, twinObjectFor, twinObjectId, twinSourceOf,
@@ -94,6 +95,11 @@ export interface UseStagedBuildOptions {
     sceneObjects?: readonly Media4DObject[];
     /** The scene's view request beside stagedBuild (staged_location_material_mode's provenance flag). */
     view?: { provenance?: boolean };
+    /**
+     * Superseded layers whose models the viewport should release (layerEviction.ts), each time the set changes. The loader
+     * leaves these unloaded until they leave the set (an opt-in view needs them again), then loads them from their URL.
+     */
+    onEvictedChange?: (objectIds: ReadonlySet<string>) => void;
 }
 
 export interface StagedBuildHandle {
@@ -342,7 +348,7 @@ const OverlayHost: React.FC<{ store: OverlayStore; render: (frame: RevealFrame |
 };
 
 export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
-    const { state, stackRef, objectRootsRef, loadStatus, mutateSceneData, onPromptAction, overriddenIds, sceneObjects, view } = opts;
+    const { state, stackRef, objectRootsRef, loadStatus, mutateSceneData, onPromptAction, overriddenIds, sceneObjects, view, onEvictedChange } = opts;
     const runId = state?.runId;
     const pageLoadedAtMs = React.useRef(typeof performance !== 'undefined' ? performance.timeOrigin : 0).current;
 
@@ -482,6 +488,28 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
     }
     const store = storeRef.current;
 
+    /** Superseded layers released by the loader (reported ready to the scheduler: they stay revealed and hidden). */
+    const evictedRef = React.useRef<ReadonlySet<string>>(new Set());
+    const evictSinceRef = React.useRef(new Map<string, number>());
+    const onEvictedRef = React.useRef(onEvictedChange);
+    onEvictedRef.current = onEvictedChange;
+    /** Sets the evicted layers: their meshes leave the registry and the node table, and the viewport is told. */
+    const setEvicted = React.useCallback((next: ReadonlySet<string>) => {
+        if (sameSet(next, evictedRef.current)) return;
+        const gone = [...next].filter(id => !evictedRef.current.has(id));
+        evictedRef.current = next;
+        if (gone.length > 0) {
+            const meshes = new Set<THREE.Object3D>();
+            for (const id of gone) {
+                const info = rootsRef.current.get(id);
+                if (info) for (const n of info.nodes) for (const m of n.meshes) meshes.add(m);
+                rootsRef.current.delete(id);
+            }
+            if (meshes.size > 0) registryRef.current.prune(m => !meshes.has(m));
+        }
+        onEvictedRef.current?.(next);
+    }, []);
+
     // A new run starts from a clean slate.
     React.useEffect(() => {
         scheduleRef.current = undefined;
@@ -495,7 +523,9 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         setShowReplaced(false);
         setHighlight(undefined);
         lastStatuses.current.clear();
-    }, [runId]);
+        evictSinceRef.current.clear();
+        setEvicted(new Set());
+    }, [runId, setEvicted]);
 
     // The scene's provenance request (staged_location_material_mode's provenance flag), applied when it changes.
     const requestedProvenance = view?.provenance;
@@ -565,7 +595,8 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
             const root = objectRootsRef.current.get(model);
             const attached = !!root && !!root.parent;
             const sidecar = layer.reveal.orderUrl ? sidecarFor(layer.reveal.orderUrl) : undefined;
-            const ready = attached && (!sidecar || sidecar.status !== 'loading');
+            // an evicted layer is released on purpose: it stays ready (revealed, hidden under what replaced it)
+            const ready = evictedRef.current.has(model) || (attached && (!sidecar || sidecar.status !== 'loading'));
             if (ready && !readyAtRef.current.has(layer.objectId)) readyAtRef.current.set(layer.objectId, t0);
             if (!ready) readyAtRef.current.delete(layer.objectId);
             loads[layer.objectId] = { ready, readyAtMs: readyAtRef.current.get(layer.objectId), failed: L.loadStatus[model]?.phase === 'error' };
@@ -675,6 +706,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         // The last frame was computed for the previous state: until the guard computes one for this state, assume work.
         if (frameRef.current && (frameRef.current.layers.length !== stagedState.layers.length || frameRef.current.layers.some(x => !stagedState.layers.some(l => l.objectId === x.objectId)))) frameRef.current = undefined;
         let raf = 0;
+        let evictTimer: ReturnType<typeof setTimeout> | undefined;
         let lastOverlay = 0;
         let lastSig = '';
         let lastHighlightOn = false;
@@ -714,12 +746,25 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
                 store.skipNote = statsRef.current.skipReason;
                 store.notify();
             }
-            if (needsGuard || running || !f) raf = requestAnimationFrame(tick);
+            // Superseded layers: released once hidden for a while, loaded again as soon as an opt-in view needs them.
+            if (f && L.state) {
+                const candidates = evictionCandidates({ state: L.state, frame: f, engaged: twinRef.current.engaged, showReplaced: L.showReplaced, replaying: L.replaying });
+                const { evict, nextCheckMs } = stepEviction(candidates, evictSinceRef.current, now, EVICT_AFTER_MS);
+                // a layer leaves the evicted set as soon as it stops being a candidate; one joins only after its delay
+                const next = new Set([...evictedRef.current].filter(id => candidates.has(id)));
+                for (const id of evict) next.add(id);
+                setEvicted(next);
+                if (nextCheckMs !== undefined && evictTimer === undefined) {
+                    evictTimer = setTimeout(() => { evictTimer = undefined; if (!raf) tick(); }, Math.max(16, nextCheckMs - now));
+                }
+            }
+            if (needsGuard || running || !f) raf = requestAnimationFrame(loop);
         };
+        const loop = () => { raf = 0; tick(); };
         // Synchronously: a layer the loader attaches before the next animation frame must already meet the guard.
         tick();
-        return () => cancelAnimationFrame(raf);
-    }, [stagedState, provenanceOn, showReplaced, replayEpoch, highlight, onFrame, stackRef, store, pageLoadedAtMs]);
+        return () => { cancelAnimationFrame(raf); if (evictTimer !== undefined) clearTimeout(evictTimer); };
+    }, [stagedState, provenanceOn, showReplaced, replaying, replayEpoch, highlight, onFrame, stackRef, store, pageLoadedAtMs, setEvicted]);
 
     // Off for good on unmount: the guard, the staged materials, the background.
     React.useEffect(() => () => {

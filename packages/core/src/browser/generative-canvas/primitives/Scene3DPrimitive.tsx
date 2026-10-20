@@ -1155,6 +1155,13 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const [externalLoadStatus, setExternalLoadStatus] = React.useState<Record<string, ExternalLoadStatus>>({});
     // Bumped to re-run the loader for objects whose last load failed (nothing else changes then).
     const [externalLoadRetryNonce, setExternalLoadRetryNonce] = React.useState(0);
+    /**
+     * Superseded staged layers the staged-build hook released (layerEviction.ts): the loader keeps them unloaded (their
+     * scene objects, URL and metadata, stay) until the hook needs them again, then loads them like any object.
+     */
+    const [evictedLayerIds, setEvictedLayerIds] = React.useState<ReadonlySet<string>>(() => new Set());
+    const evictedLayerIdsRef = useLatest(evictedLayerIds);
+    const evictedLayersKey = React.useMemo(() => [...evictedLayerIds].sort().join(','), [evictedLayerIds]);
     // Object id -> URL of the request in flight; survives StrictMode / HMR effect re-runs so a model
     // is never fetched and parsed twice, while a changed URL for the same id still starts a new load.
     const pendingExternalLoadsRef = React.useRef<Map<string, string>>(new Map());
@@ -1934,8 +1941,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         if (sceneData.splatUrl) {
             objs.push({ id: '__primary_splat__', uri: sceneData.splatUrl, type: 'gaussian-splat', space: undefined, source: 'splatUrl', variantSet: undefined, prefetch: false });
         }
-        return JSON.stringify({ objs, splatOptions: sceneData.splatOptions, effectiveGroundTileMode, activeVariants: activeVariantIds, retry: externalLoadRetryNonce, generatorGlbFile });
-    }, [sceneData.objects, sceneData.splatUrl, sceneData.splatOptions, effectiveGroundTileMode, activeVariantIds, externalLoadRetryNonce, generatorGlbFile]);
+        return JSON.stringify({ objs, splatOptions: sceneData.splatOptions, effectiveGroundTileMode, activeVariants: activeVariantIds, retry: externalLoadRetryNonce, generatorGlbFile, evicted: evictedLayersKey });
+    }, [sceneData.objects, sceneData.splatUrl, sceneData.splatOptions, effectiveGroundTileMode, activeVariantIds, externalLoadRetryNonce, generatorGlbFile, evictedLayersKey]);
 
     // ---- 1. Renderer stack, overlays, controls and the render loop (mount once) ----
     React.useEffect(() => {
@@ -2154,7 +2161,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 renderer, scene, camera,
                 renderFrame: () => { updateTreeLods(performance.now()); renderFrame(); },
                 layers: () => (sceneDataRef.current as { stagedBuild?: { layers?: Array<{ objectId: string; stage?: string; layer?: string; buildingId?: string; retired?: boolean }> } } | undefined)?.stagedBuild?.layers ?? [],
-                layerRoots: () => externalObjectsMapRef.current
+                layerRoots: () => externalObjectsMapRef.current,
+                evicted: () => evictedLayerIdsRef.current
             });
         }
 
@@ -2980,6 +2988,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             // The same reading the notices and the mount use (drawableModelKind), so nothing counted as drawable is skipped here.
             const modelKind = drawableModelKind(uri, obj.content?.type);
             if (!modelKind) return;
+            // a superseded staged layer the staged build released: unloaded (released below) until it is needed again
+            if (evictedLayerIdsRef.current.has(obj.id)) return;
             const isSplat = modelKind === 'splat';
             activeIds.add(obj.id);
 
@@ -3221,7 +3231,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     // ---- 5d. Staged location builds: each committed layer revealed in its real build order, overlay, provenance ----
     const staged = useStagedBuild({
         state: readStagedBuild(sceneData), overriddenIds: materialOverriddenIds, stackRef, objectRootsRef: externalObjectsMapRef, loadStatus: externalLoadStatus, mutateSceneData, onPromptAction,
-        sceneObjects: sceneData.objects, view: (sceneData as StagedSceneData).stagedBuildView
+        sceneObjects: sceneData.objects, view: (sceneData as StagedSceneData).stagedBuildView, onEvictedChange: setEvictedLayerIds
     });
 
     // ---- 6. Custom meshes from schema (id-diffed, updated in place) ---------------

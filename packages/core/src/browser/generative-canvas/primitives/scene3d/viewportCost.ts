@@ -42,6 +42,8 @@ export interface ViewportCostBreakdown {
     camera: { position: [number, number, number]; fovDeg: number; focalMm: number; aspect: number };
     drawingBuffer: [number, number];
     jsHeapMB?: number;
+    /** Superseded staged layers whose models are released (they load again when a view needs them). */
+    evictedLayers: string[];
 }
 
 export interface ViewportCostMeasure { method: 'gpu-timer-query' | 'wall-with-readback'; frames: number; meanMs: number; p50Ms: number; p95Ms: number; hidden: string[] }
@@ -68,6 +70,8 @@ export interface ViewportCostDeps {
     /** The staged build's layers and the loaded roots by objectId. */
     layers: () => LayerLike[];
     layerRoots: () => Map<string, THREE.Object3D>;
+    /** Staged layers released while superseded (layerEviction.ts). */
+    evicted?: () => ReadonlySet<string>;
 }
 
 const SENSOR_HEIGHT_MM = 24;
@@ -185,6 +189,7 @@ export function createViewportCostProbe(d: ViewportCostDeps) {
             rendererInfo: { calls: info.render.calls, triangles: info.render.triangles, geometries: info.memory.geometries, textures: info.memory.textures, programs: info.programs?.length ?? 0 },
             camera: { position: cam.position.toArray() as [number, number, number], fovDeg: fov, focalMm: fov ? SENSOR_HEIGHT_MM / (2 * Math.tan(THREE.MathUtils.degToRad(fov) / 2)) : 0, aspect: cam.aspect },
             drawingBuffer: [size.x, size.y],
+            evictedLayers: [...(d.evicted?.() ?? [])],
             ...(mem ? { jsHeapMB: Math.round(mem.usedJSHeapSize / 1048576) } : {})
         };
     }
