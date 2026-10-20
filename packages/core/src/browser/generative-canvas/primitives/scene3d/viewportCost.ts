@@ -10,7 +10,7 @@
 /**
  * Dev-only viewport cost probe: what the drawn frame costs, split by what it draws. Opt in with `?sbViewportCost=1` in the
  * page URL or `localStorage['sb.viewportCost'] = '1'`; the viewport then exposes `window.__SB_VIEWPORT_COST__`:
- *  - `breakdown()`: per group (a staged layer by stage, layer and building, its nodes split by their own stage; the trees by
+ *  - `breakdown()`: per group (a staged layer by stage, layer and building, its nodes split by their own stage and provenance; the trees by
  *    their current level; anything else by its top-level object), the meshes, draw calls and triangles the main pass submits
  *    this frame (visible, inside the camera frustum; an instanced mesh is one call of `count` instances), and the GPU memory
  *    of their geometry and textures (unique buffers, mip chain counted as 4/3);
@@ -91,18 +91,19 @@ function textureBytes(t: THREE.Texture): number {
 
 /** The group a mesh belongs to: trees by level, staged layers by layer and node stage, else its top-level object. */
 function groupKeyOf(mesh: THREE.Object3D, rootToLayer: Map<THREE.Object3D, LayerLike>, scene: THREE.Scene): string {
-    let lodGate: string | undefined, nodeStage: string | undefined, layer: LayerLike | undefined, top: THREE.Object3D = mesh;
+    let lodGate: string | undefined, nodeStage: string | undefined, nodeLabel: string | undefined, layer: LayerLike | undefined, top: THREE.Object3D = mesh;
     for (let p: THREE.Object3D | null = mesh; p && p !== scene; p = p.parent) {
         if (!lodGate && p.name.startsWith('sb-lod-gate-')) lodGate = p.name.slice('sb-lod-gate-'.length);
-        const sb = (p.userData as { sb?: { schema?: string; stage?: string } })?.sb;
-        if (!nodeStage && sb?.schema === 'scratchbox.staged-node/2' && sb.stage) nodeStage = sb.stage;
+        const sb = (p.userData as { sb?: { schema?: string; stage?: string; provenance?: { label?: string } } })?.sb;
+        if (!nodeStage && sb?.schema === 'scratchbox.staged-node/2' && sb.stage) { nodeStage = sb.stage; nodeLabel = sb.provenance?.label; }
         if (!layer) layer = rootToLayer.get(p);
         top = p;
     }
     if (lodGate !== undefined) return `trees/level ${lodGate}`;
     if (layer) {
         const base = `${layer.stage ?? '?'}:${layer.layer ?? '?'}${layer.buildingId ? `#${layer.buildingId}` : ''}${layer.role ? `(${layer.role})` : ''}`;
-        return nodeStage && nodeStage !== layer.stage ? `${base}/${nodeStage}` : base;
+        // inside a layer: the node's own stage when it differs, and its provenance (vector massing, measured or generated relief, scan residual)
+        return `${base}${nodeStage && nodeStage !== layer.stage ? `/${nodeStage}` : ''}${nodeLabel ? `/${nodeLabel}` : ''}`;
     }
     return `other/${top.name || top.type}`;
 }
