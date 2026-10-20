@@ -206,7 +206,7 @@ export const VirtualGeometryViewport: React.FC<VirtualGeometryViewportProps> = (
                     />
                     <span style={{ minWidth: 48, fontVariantNumeric: 'tabular-nums' }}>{threshold < 1 ? threshold.toFixed(2) : threshold.toFixed(1)} px</span>
                 </label>
-                <button type="button" style={styles.chip} onClick={() => rendererRef.current?.frameModel()}>
+                <button type="button" className="sb-btn sb-btn-ghost sb-btn-xs" style={styles.chip} onClick={() => rendererRef.current?.frameModel()}>
                     Frame
                 </button>
             </div>

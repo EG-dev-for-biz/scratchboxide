@@ -166,6 +166,12 @@ async function runUnifiedStylingAuditTests() {
             .replace(/`(?:\\[\s\S]|[^`\\])*`/g, literal => literal.includes('<button') ? '``' : literal)
             .replace(/^[ \t]*\/\/.*$/gm, line => line.includes('<button') ? '' : line)
             .replace(/\/(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n[])*<button(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n[])*\/[dgimsuy]*/g, '/(?:)/');
+        // Module-level string constants (e.g. `const CHIP = 'sb-cam-chip'`) used inside className
+        // templates resolve to their literal, so a class held in a constant is audited, not missed.
+        const stringConstants = new Map<string, string>();
+        for (const m of content.matchAll(/^const ([A-Z_][A-Z0-9_]*)\s*=\s*['"]([^'"]*)['"];/gm)) {
+            stringConstants.set(m[1], m[2]);
+        }
         for (const buttonAttributes of extractButtonAttributes(content)) {
             totalButtonsFound++;
             
@@ -184,7 +190,9 @@ async function runUnifiedStylingAuditTests() {
             }
             
             // Extract all static tokens from classString (ignoring ${...} expressions)
-            const cleanedTokens = classString.replace(/\$\{[^}]+\}/g, ' ').trim().split(/\s+/).filter(Boolean);
+            const cleanedTokens = classString
+                .replace(/\$\{\s*([A-Z_][A-Z0-9_]*)\s*\}/g, (whole, name: string) => stringConstants.get(name) ?? whole)
+                .replace(/\$\{[^}]+\}/g, ' ').trim().split(/\s+/).filter(Boolean);
             
             // All buttons should have a recognized button class name starting with sb-
             // The design-system rule: every button carries at least one `sb-*` class.
