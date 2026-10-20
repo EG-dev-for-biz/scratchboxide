@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import {
     createAtmosphericSkyDome,
     createAerialPerspectiveEffect,
@@ -75,7 +76,17 @@ export interface AtmosphereClassification {
     biomeType: string;
     backgroundHex: number;
     effectiveAtmosphericScattering?: any;
+    /**
+     * Whether authored materials get neutral studio reflections (an image-based light of a plain grey room, never drawn
+     * as the background): without one, metals reflect nothing and render near black, and glass shows no highlights.
+     * Off in clay mode, under an atmosphere sky (it lights the scene itself), in directed dark or space scenes, and at
+     * real places (3D tiles or geo coordinates).
+     */
+    studioReflections: boolean;
 }
+
+/** environmentIntensity of the studio reflections: under the studio rig's key light, so diffuse surfaces stay as lit. */
+export const STUDIO_REFLECTION_INTENSITY = 0.6;
 
 export const CLAY_GREY_HEX = 0xb0b8c4;
 
@@ -171,7 +182,9 @@ export function classifyAtmosphere(input: AtmosphereInput): AtmosphereClassifica
         ? (typeof atmoConfig === 'object' ? atmoConfig : { enabled: true })
         : undefined;
 
-    return { hasAtmosphere, isSkySkybox, isSunset, hasGodRays, hasBiomes, biomeType, backgroundHex, effectiveAtmosphericScattering };
+    const studioReflections = !isClayMode && !hasAtmosphere && !isDirectedDarkOrBlack && !input.has3DTiles && !input.hasGeoCoordinates;
+
+    return { hasAtmosphere, isSkySkybox, isSunset, hasGodRays, hasBiomes, biomeType, backgroundHex, effectiveAtmosphericScattering, studioReflections };
 }
 
 /**
@@ -459,6 +472,18 @@ export function syncAtmosphere(
         }
     }
 
+    // Neutral studio reflections for authored materials (metal, glass, clearcoat); never the background.
+    let studioEnvironment: THREE.Texture | null = null;
+    if (cls.studioReflections && typeof (stack.renderer as { getContext?: unknown })?.getContext === 'function') {
+        const pmrem = new THREE.PMREMGenerator(stack.renderer);
+        const room = new RoomEnvironment();
+        studioEnvironment = pmrem.fromScene(room, 0.04).texture;
+        room.dispose();
+        pmrem.dispose();
+        scene.environment = studioEnvironment;
+        scene.environmentIntensity = STUDIO_REFLECTION_INTENSITY;
+    }
+
     // Galaxy starfield only for explicit space or night environments
     const isSpaceOrNight = input.skybox === 'space-stars' || input.skybox === 'space' || input.worldBranch === 'earth/space' || input.worldBranch === 'space';
     if (isSpaceOrNight) {
@@ -484,6 +509,10 @@ export function syncAtmosphere(
             terrainBiome?.dispose?.();
             if (starsMesh) removeAndDispose(scene, starsMesh);
             for (const obj of owned) removeAndDispose(scene, obj);
+            if (studioEnvironment) {
+                if (scene.environment === studioEnvironment) scene.environment = null;
+                studioEnvironment.dispose();
+            }
             scene.fog = null;
         }
     };

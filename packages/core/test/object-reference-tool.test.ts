@@ -29,7 +29,10 @@ import { glbToTriangleSoup, mergeTriangleSoups } from '../src/node/3d-engine/par
 import { renderReviewViews } from '../src/node/3d-engine/visual-review';
 import { REFERENCE_IMAGE_MODEL, buildObjectFromSpec, schemaInstruction, type ChatModelSource, type GenerateContentClient } from '../src/node/3d-engine/reference-object-builder';
 import { activeObjectBuildContext } from '../src/node/gemini/prompt-builder';
-import { OBJECT_BUILD_SPEC_JSON_SCHEMA, type ObjectBuildSpec } from '../src/common/spatial/object-build-spec';
+import { OBJECT_BUILD_SPEC_JSON_SCHEMA, objectBuildSpecJsonSchema, type ObjectBuildSpec, type PartMaterial } from '../src/common/spatial/object-build-spec';
+
+/** The spec schema a build with materials states (the default); a clay build states OBJECT_BUILD_SPEC_JSON_SCHEMA. */
+const SPEC_SCHEMA = objectBuildSpecJsonSchema({ materials: true });
 import { NativePythonRunnerService, type PythonExecutionResult } from '../src/node/3d-engine/native-python-runner-service';
 import { HeadlessMeshSilhouetteRenderer } from '../src/node/spatial/HeadlessMeshSilhouetteRenderer';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
@@ -56,14 +59,17 @@ const revolve = (meridian: Array<[number, number]>, over: Record<string, unknown
     axisOrigin: [0, 0, 0], axisDirection: [0, 1, 0], meridian, smoothing: 0, lobeCount: 0, lobeDepthRatio: 0, helixPitchMeters: 0, ...over
 }) as any;
 
+/** A part material as the vision model writes it (linear RGB factors). */
+const GLAZE: PartMaterial = { description: 'satin blue glaze', baseColor: [0.05, 0.12, 0.4], roughness: 0.35, metalness: 0, transmission: 0 };
+
 const VASE: ObjectBuildSpec = {
     subject: 'fluted vase with a knob',
     observations: ['tall fluted body', 'small knob on top'],
     boundingMeters: [0.36, 0.66, 0.36],
     expectedBodies: 1,
     parts: [
-        { id: 'vase', label: 'vase', revolve: revolve([[0, 0], [0, 0.12], [0.2, 0.18], [0.45, 0.1], [0.6, 0.14]], { smoothing: 0.8, lobeCount: 10, lobeDepthRatio: 0.15, helixPitchMeters: 0.9 }) },
-        { id: 'knob', label: 'knob', parentId: 'vase', attach: { u: 1, angleDeg: 0, normalOffsetMeters: -0.01 }, revolve: revolve([[-0.02, 0], [-0.02, 0.03], [0.04, 0.025], [0.06, 0]]) }
+        { id: 'vase', label: 'vase', material: GLAZE, revolve: revolve([[0, 0], [0, 0.12], [0.2, 0.18], [0.45, 0.1], [0.6, 0.14]], { smoothing: 0.8, lobeCount: 10, lobeDepthRatio: 0.15, helixPitchMeters: 0.9 }) },
+        { id: 'knob', label: 'knob', material: GLAZE, parentId: 'vase', attach: { u: 1, angleDeg: 0, normalOffsetMeters: -0.01 }, revolve: revolve([[-0.02, 0], [-0.02, 0.03], [0.04, 0.025], [0.06, 0]]) }
     ]
 };
 
@@ -72,7 +78,7 @@ const DETACHED: ObjectBuildSpec = {
     ...VASE,
     parts: [
         VASE.parts[0],
-        { id: 'loose', label: 'loose knob', revolve: revolve([[0, 0], [0, 0.05], [0.1, 0]], { axisOrigin: [0.8, 0.2, 0] }) }
+        { id: 'loose', label: 'loose knob', material: GLAZE, revolve: revolve([[0, 0], [0, 0.05], [0.1, 0]], { axisOrigin: [0.8, 0.2, 0] }) }
     ]
 };
 
@@ -86,28 +92,28 @@ const LIFTED_CHILD: ObjectBuildSpec = {
 /** Passes the validator; only the interpreter sees that the outline revolves into nothing. */
 const FLAT_COIN: ObjectBuildSpec = {
     subject: 'coin', observations: [], boundingMeters: [0.03, 0.002, 0.03], expectedBodies: 1,
-    parts: [{ id: 'coin', label: 'coin', revolve: revolve([[0, 0], [0, 0.015]]) }]
+    parts: [{ id: 'coin', label: 'coin', material: GLAZE, revolve: revolve([[0, 0], [0, 0.015]]) }]
 };
 
 /** A horizontal disc whose id names a wheel: nothing may read the id and demand it stand upright. */
 const ROULETTE: ObjectBuildSpec = {
     subject: 'roulette wheel', observations: ['flat spinning wheel on a spindle'], boundingMeters: [0.8, 0.16, 0.8], expectedBodies: 1,
     parts: [
-        { id: 'wheel', label: 'wheel', revolve: revolve([[0, 0], [0, 0.4], [0.05, 0.4], [0.08, 0.3], [0.08, 0]]) },
-        { id: 'spindle', label: 'spindle', parentId: 'wheel', attach: { u: 1, angleDeg: 0, normalOffsetMeters: -0.005 }, revolve: revolve([[-0.01, 0], [-0.01, 0.02], [0.06, 0.015], [0.08, 0]]) }
+        { id: 'wheel', label: 'wheel', material: GLAZE, revolve: revolve([[0, 0], [0, 0.4], [0.05, 0.4], [0.08, 0.3], [0.08, 0]]) },
+        { id: 'spindle', label: 'spindle', material: GLAZE, parentId: 'wheel', attach: { u: 1, angleDeg: 0, normalOffsetMeters: -0.005 }, revolve: revolve([[-0.01, 0], [-0.01, 0.02], [0.06, 0.015], [0.08, 0]]) }
     ]
 };
 
 /** A drum 2 m across and 0.45 m tall: its rim is a metre from its base centre. */
 const DRUM: ObjectBuildSpec = {
     subject: 'wide low drum', observations: ['low round drum'], boundingMeters: [2, 0.45, 2], expectedBodies: 1,
-    parts: [{ id: 'drum', label: 'drum', revolve: revolve([[0, 0], [0, 1.0], [0.45, 1.0], [0.45, 0]]) }]
+    parts: [{ id: 'drum', label: 'drum', material: GLAZE, revolve: revolve([[0, 0], [0, 1.0], [0.45, 1.0], [0.45, 0]]) }]
 };
 
 /** A pillar 1.6 m across and 10 m tall. */
 const PILLAR: ObjectBuildSpec = {
     subject: 'tall pillar', observations: ['plain round pillar'], boundingMeters: [1.6, 10, 1.6], expectedBodies: 1,
-    parts: [{ id: 'pillar', label: 'pillar', revolve: revolve([[0, 0], [0, 0.8], [10, 0.8], [10, 0]]) }]
+    parts: [{ id: 'pillar', label: 'pillar', material: GLAZE, revolve: revolve([[0, 0], [0, 0.8], [10, 0.8], [10, 0]]) }]
 };
 
 const NO_DIFFERENCES = '{"differences": []}';
@@ -140,7 +146,7 @@ function fakeClient(opts: {
                     return next(call);
                 }
                 // Spec requests carry the spec schema; comparisons carry the differences schema.
-                const isSpec = askedText(call).includes(schemaInstruction(OBJECT_BUILD_SPEC_JSON_SCHEMA));
+                const isSpec = askedText(call).includes(schemaInstruction(SPEC_SCHEMA)) || askedText(call).includes(schemaInstruction(OBJECT_BUILD_SPEC_JSON_SCHEMA));
                 if (!isSpec && opts.comparisonError) throw opts.comparisonError;
                 const queue = isSpec ? specs : diffs;
                 const text = queue.length > 1 ? queue.shift()! : (queue[0] ?? (isSpec ? '' : NO_DIFFERENCES));
@@ -151,7 +157,7 @@ function fakeClient(opts: {
 }
 
 const askedText = (call: Call) => (call.contents as any[]).flatMap(c => c.parts || []).map((p: any) => p.text || '').join('\n');
-const isSpecCall = (call: Call) => !call.config?.responseModalities && askedText(call).includes(schemaInstruction(OBJECT_BUILD_SPEC_JSON_SCHEMA));
+const isSpecCall = (call: Call) => !call.config?.responseModalities && (askedText(call).includes(schemaInstruction(SPEC_SCHEMA)) || askedText(call).includes(schemaInstruction(OBJECT_BUILD_SPEC_JSON_SCHEMA)));
 const isComparisonCall = (call: Call) => !call.config?.responseModalities && !isSpecCall(call);
 
 function imageResponse(): any {
@@ -474,7 +480,7 @@ describe('build_3d_object_from_reference', () => {
         expect(client.calls[1].config.responseJsonSchema).toBeUndefined();
         const visionParts = client.calls[1].contents[0].parts;
         expect(visionParts[0].inlineData.mimeType).toBe('image/png');
-        expect(visionParts[visionParts.length - 1].text).toBe(schemaInstruction(OBJECT_BUILD_SPEC_JSON_SCHEMA));
+        expect(visionParts[visionParts.length - 1].text).toBe(schemaInstruction(SPEC_SCHEMA));
     });
 
     it('gives a spec only the interpreter rejects the same corrective re-ask, quoting its problem', async () => {
@@ -594,7 +600,7 @@ describe('build_3d_object_from_reference', () => {
         expect(deleted).toEqual(['files/ref-1']);
     }, 180_000);
 
-    it('builds a clay 3d-scene from the spec without any image in the payload or on disk', async () => {
+    it('builds a 3d-scene with per-part materials from the spec without any image in the payload or on disk', async () => {
         const watched = [path.join(REPO_ROOT, 'build'), path.join(REPO_ROOT, 'public'), path.join(REPO_ROOT, '.scratchbox'), TMP];
         const before = filesIn(watched);
         const client = fakeClient({ specs: [JSON.stringify(VASE)], differences: ['{"differences": [{"problem": "the knob is slightly taller", "confidence": "low"}]}'] });
@@ -603,9 +609,33 @@ describe('build_3d_object_from_reference', () => {
 
         const artifact = out.resultPayload.artifact as any;
         expect(artifact.type).toBe('3d-scene');
-        expect(artifact.data.renderMode).toBe('clay');
+        // Textured by default: the viewport shows the authored materials.
+        expect(artifact.data.renderMode).toBe('pbr');
+        expect(artifact.data.clayPreset).toBeUndefined();
         expect(artifact.data.environment).toEqual({ skybox: 'studio', lighting: 'studio', ground: false });
-        expect(artifact.data.pythonGenerator.sourceCode).toContain('sb.object_spec.build(SPEC)');
+        expect(artifact.data.pythonGenerator.sourceCode).toContain('sb.object_spec.build(SPEC))');
+        // The reference was asked for in colour, the spec read with the material block, and labelled as inferred.
+        const imagePrompt = JSON.stringify(client.calls.find(c => c.config?.responseModalities)!.contents);
+        expect(imagePrompt).toContain('real colours and materials');
+        expect(imagePrompt).not.toContain('untextured');
+        expect(askedText(client.calls.find(isSpecCall)!)).toContain('LINEAR RGB');
+        expect(artifact.data.objectBuild.clay).toBe(false);
+        expect(artifact.data.objectBuild.materials).toMatchObject({ label: 'generated' });
+        expect(artifact.data.objectBuild.materials.note).toContain('inferred from a generated picture, not measured');
+        expect(out.summaryResult).toContain('with a material per part');
+        expect(out.summaryResult).toContain('vase "satin blue glaze" (metalness 0, roughness 0.35)');
+        // The GLB carries each part's factors and their provenance.
+        const glbJson = (() => {
+            const glb = fs.readFileSync(String(out.resultPayload.glbPath));
+            return JSON.parse(glb.toString('utf8', 20, 20 + glb.readUInt32LE(12)));
+        })();
+        for (const mesh of glbJson.meshes) {
+            const mat = glbJson.materials[mesh.primitives[0].material];
+            expect(mat.pbrMetallicRoughness.baseColorFactor.slice(0, 3).map((v: number) => +v.toFixed(4))).toEqual([0.05, 0.12, 0.4]);
+            expect(mat.pbrMetallicRoughness.roughnessFactor).toBeCloseTo(0.35, 5);
+            expect(mat.extras.scratchbox).toEqual({ partId: mesh.name, provenance: 'generated', description: 'satin blue glaze' });
+        }
+        expect(glbJson.asset.extras.scratchbox.materialProvenance.label).toBe('generated');
         expect(artifact.data.objects[0].content.durableUri).toMatch(/^\/models\/.+\.glb$/);
         expect(fs.existsSync(String(out.resultPayload.glbPath))).toBe(true);
         const build = artifact.data.objectBuild;
@@ -645,6 +675,61 @@ describe('build_3d_object_from_reference', () => {
         expect(holdsReference).toEqual([]);
         expect(written.filter(file => file.startsWith(TMP) && IMAGE_EXT.test(file))).toEqual([]);
         expect(written.some(file => file.startsWith(MODELS_DIR) && file.endsWith('.glb'))).toBe(true);
+    }, 180_000);
+
+    it('a clay request draws a clay reference, reads no materials and shows every part in clay', async () => {
+        const plain: ObjectBuildSpec = { ...VASE, parts: VASE.parts.map(({ material: _m, ...p }) => p) };
+        const client = fakeClient({ specs: [JSON.stringify(plain)] });
+        const out = await handlerWith(client).run({ request: 'a fluted vase with a knob on top, in clay', clay: true });
+        expect(out.status, String(out.resultPayload.error)).toBe('completed');
+        const imagePrompt = JSON.stringify(client.calls.find(c => c.config?.responseModalities)!.contents);
+        expect(imagePrompt).toContain('uniform mid-grey clay');
+        const specCall = client.calls.find(isSpecCall)!;
+        expect(askedText(specCall)).toContain(schemaInstruction(OBJECT_BUILD_SPEC_JSON_SCHEMA));
+        expect(askedText(specCall)).not.toContain('LINEAR RGB');
+        const artifact = out.resultPayload.artifact as any;
+        expect(artifact.data.renderMode).toBe('clay');
+        expect(artifact.data.clayPreset).toBe('studio-grey');
+        expect(artifact.data.pythonGenerator.sourceCode).toContain('sb.object_spec.build(SPEC, clay=True)');
+        expect(artifact.data.objectBuild).toMatchObject({ clay: true, materials: { label: 'clay' } });
+        expect(artifact.data.objects[0].content.metadata.objectBuild.clay).toBe(true);
+        expect(out.summaryResult).toContain('as native clay geometry');
+        expect(out.summaryResult).toContain('Every part is studio clay, as asked.');
+        const glb = fs.readFileSync(String(out.resultPayload.glbPath));
+        const json = JSON.parse(glb.toString('utf8', 20, 20 + glb.readUInt32LE(12)));
+        for (const mat of json.materials) {
+            expect(mat.pbrMetallicRoughness.baseColorFactor).toEqual([0.55, 0.57, 0.6, 1]);
+            expect(mat.extras.scratchbox.provenance).toBe('clay');
+        }
+    }, 180_000);
+
+    it('asks again when a part has no material or a factor is out of range, quoting each problem', async () => {
+        const noMaterial = { ...VASE, parts: [{ ...VASE.parts[0], material: undefined }, VASE.parts[1]] };
+        const outOfRange = { ...VASE, parts: [VASE.parts[0], { ...VASE.parts[1], material: { ...GLAZE, roughness: 1.4 } }] };
+        const client = fakeClient({ specs: [JSON.stringify(noMaterial), JSON.stringify(outOfRange)] });
+        const { run, pythonRuns } = handlerWith(client);
+        const out = await run({ request: 'a fluted vase with a knob on top' });
+        expect(out.status).toBe('failed');
+        expect(out.resultPayload.stage).toBe('build-spec');
+        expect(pythonRuns).toHaveLength(0);
+        const reask = askedText(client.calls.filter(isSpecCall)[1]);
+        expect(reask).toContain('part "vase": material is required');
+        expect(String(out.resultPayload.error)).toContain('part "knob": material.roughness must be between 0 and 1');
+    }, 180_000);
+
+    it('a given spec keeps its materials, labelled as given; clay: true rebuilds it in clay', async () => {
+        const { run } = handlerWith(undefined);
+        const textured = await run({ request: 'the vase', specJson: JSON.stringify(VASE) });
+        expect(textured.status, String(textured.resultPayload.error)).toBe('completed');
+        expect((textured.resultPayload.artifact as any).data.renderMode).toBe('pbr');
+        expect(textured.resultPayload.materials).toMatchObject({ label: 'as-given' });
+        const clayed = await run({ request: 'the vase in clay', specJson: JSON.stringify(VASE), clay: true });
+        expect(clayed.status, String(clayed.resultPayload.error)).toBe('completed');
+        expect((clayed.resultPayload.artifact as any).data.renderMode).toBe('clay');
+        expect(clayed.resultPayload).toMatchObject({ clay: true, materials: { label: 'clay' } });
+        const bad = await run({ request: 'the vase', specJson: JSON.stringify(VASE), clay: 'yes' });
+        expect(bad.status).toBe('failed');
+        expect(String(bad.resultPayload.error)).toBe('clay must be true or false.');
     }, 180_000);
 
     it('runs no label-based orientation check: a flat disc whose id is "wheel" is accepted in one pass', async () => {
