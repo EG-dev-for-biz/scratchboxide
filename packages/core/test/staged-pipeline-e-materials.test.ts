@@ -22,6 +22,11 @@ import { writeMassingTexturedGlb, type FaceTexture, type MassingGlbInput, type T
 import { GLASS_MAX_LUMA_RATIO, massingMaterials } from '../src/node/3d-engine/staged-location/pipeline-e/massing-materials';
 import type { MassingFace, MassingNode } from '../src/node/3d-engine/staged-location/pipeline-e/native-massing';
 import { GLASS_ROUGHNESS, WALL_ROUGHNESS } from '../src/node/3d-engine/staged-location/facade-materials';
+import { readTileTriangles } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
+import { composeGrid, renderTriangles } from '../src/node/3d-engine/staged-location/photo-match-eval';
+import type { PinholeCamera } from '../src/common/spatial/texture-pass-contracts';
+import * as fs from 'fs';
+import * as path from 'path';
 import { parseGlb } from './helpers/clay-glb-render';
 import { decodePng } from './helpers/png-decode';
 
@@ -147,5 +152,32 @@ describe('pipeline E material channels', () => {
         const { mat } = pageImages(off.glb);
         expect(mat.pbrMetallicRoughness.metallicRoughnessTexture).toBeUndefined();
         expect(writeMassingTexturedGlb({ ...input, materials: false }).glb.equals(off.glb)).toBe(true);
+    });
+
+    it('the photo-match renderer sees it: with the specular term the glass pane reflects, the wall hardly changes', () => {
+        const { input } = scene(40);
+        const glb = writeMassingTexturedGlb({ ...input, materials: true }).glb;
+        const tris = readTileTriangles(glb, { pbr: true });
+        expect(tris.pbr?.materials.some(m => m.map)).toBe(true);
+        // a street-level camera 6 m out, 1.6 m up, looking up and across at the wall (z = 0, facing +z)
+        const W = 240, H = 180, f = W / 2 / Math.tan((60 * Math.PI) / 360);
+        const eye: [number, number, number] = [1.5, 1.6, 6];
+        const target = [4, 3, 0], fw = target.map((v, k) => v - eye[k]);
+        const fl = Math.hypot(fw[0], fw[1], fw[2]);
+        const fwd = fw.map(v => v / fl) as [number, number, number];
+        const r0 = [fwd[2], 0, -fwd[0]], rl = Math.hypot(r0[0], r0[2]);
+        const right = [-r0[0] / rl, 0, -r0[2] / rl] as [number, number, number];
+        const up = [right[1] * fwd[2] - right[2] * fwd[1], right[2] * fwd[0] - right[0] * fwd[2], right[0] * fwd[1] - right[1] * fwd[0]] as [number, number, number];
+        const cam: PinholeCamera = { eye, right, up, fwd, fx: f, fy: f, cx: W / 2, cy: H / 2, width: W, height: H };
+        const plain = renderTriangles([tris], cam), spec = renderTriangles([tris], cam, { specular: true });
+        // project a world point to the pixel
+        const pix = (p: number[]) => { const d = p.map((v, k) => v - eye[k]); const z = d[0] * fwd[0] + d[1] * fwd[1] + d[2] * fwd[2]; return [Math.floor(W / 2 + (f * (d[0] * right[0] + d[1] * right[1] + d[2] * right[2])) / z), Math.floor(H / 2 - (f * (d[0] * up[0] + d[1] * up[1] + d[2] * up[2])) / z)]; };
+        const lum = (r: { rgba: Uint8Array; width: number }, [x, y]: number[]) => { const i = (y * r.width + x) * 4; return 0.2126 * r.rgba[i] + 0.7152 * r.rgba[i + 1] + 0.0722 * r.rgba[i + 2]; };
+        const pane = pix([4, 3, -0.15]), wall = pix([1, 1, 0]);
+        expect(lum(spec, pane) - lum(plain, pane)).toBeGreaterThan(8);
+        expect(Math.abs(lum(spec, wall) - lum(plain, wall))).toBeLessThan(6);
+        const dir = path.resolve(__dirname, '../../../test-results/screenshots/facade_materials_merge');
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'pipeline_e_materials_specular_eval.png'), composeGrid([{ image: plain, label: 'NO SPECULAR' }, { image: spec, label: 'SPECULAR (GLASS PANE)' }], { tileWidth: 360, columns: 2, title: 'E pane glass in the photo-match renderer' }));
     });
 });
