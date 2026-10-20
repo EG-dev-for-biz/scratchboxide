@@ -79,8 +79,10 @@ export interface MetalPathTraceRequest {
     lod?: { thresholdPx?: number; near?: number; finestLevel?: number };
     /** Default: the neutral studio dome. */
     lighting?: MetalPathTraceSunLighting | MetalPathTraceStudioLighting;
-    /** One uniform material (linear RGB albedo); default is the studio clay. */
+    /** One uniform material (linear RGB albedo); default is the studio clay. Ignored when `materials` is given. */
     material?: { albedo?: [number, number, number]; roughness?: number; metallic?: number };
+    /** Shade with the materials and textures of the GLB the .sbvg (version 3) was built from, by the material ids it carries. */
+    materials?: { glbPath: string };
     denoise?: boolean;
     exposureEv?: number;
     camera?: MetalPathTraceCamera | MetalPathTraceAutoCamera;
@@ -111,6 +113,16 @@ export interface MetalPathTraceStats {
     meanLinearLuminance: number;
     exposureEv: number;
     denoised: boolean;
+    materials: {
+        source: 'glb' | 'uniform';
+        glbPath: string;
+        count: number;
+        images: number;
+        imagesDecoded: number;
+        /** Decoded images uploaded to the GPU (0 on the cpu backend). */
+        texturesUploaded: number;
+        loadMs: number;
+    };
     material: { albedo: [number, number, number]; roughness: number; metallic: number };
     sun: { elevationDeg: number; azimuthDeg: number };
     camera: { position: [number, number, number]; target: [number, number, number]; up: [number, number, number]; verticalFovDeg: number };
@@ -214,6 +226,10 @@ export class MetalPathTracerService {
         if (request.lod) config.lod = request.lod;
         if (request.lighting) config.lighting = request.lighting;
         if (request.material) config.material = request.material;
+        if (request.materials) {
+            if (!fs.existsSync(request.materials.glbPath)) throw new MetalPathTracerError(`materials GLB not found: ${request.materials.glbPath}`);
+            config.materials = { glbPath: path.resolve(request.materials.glbPath) };
+        }
         if (request.camera) config.camera = request.camera;
         if (request.exposureEv !== undefined) config.exposure = request.exposureEv;
         const configPath = path.join(request.outputDir, 'render_config.json');

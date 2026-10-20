@@ -43,9 +43,26 @@ Furnace (unit sphere, uniform unit dome, albedo 1, roughness 1, metallic 0, 8 bo
 - Metal's `triangle_barycentric_coord` is (u, v) for vertices 1 and 2, the same convention as the CPU Moller-Trumbore hit, so normals interpolate identically.
 - Command buffers hold 4 sample passes: enough to amortise submission, short enough for the GPU watchdog at 1280x720x4 bounces.
 
+## Phase 2 (2026-10-20): materials in `.sbvg` version 3, real materials in the tracer
+
+**Format.** File vertices are now wedges (position, normal, uv; 8 floats) and every level block ends with one glTF material index per triangle (`0xFFFFFFFF` for none); header word 26 is the glTF material count. Readers (C++ `scratchbox_sbvg_reader.hpp`, TS `sbvg-format.ts`, the WebGPU renderer) still read versions 1 and 2, repacking old vertices with uv (0, 0).
+
+**Seams.** The first attempt welded vertices by (position, uv) and locked every seam and material-border vertex. On the Flatiron tile that doubled the vertex count (229,748 positions, 498,620 wedges: Google tiles chart their textures per short triangle run) and the DAG collapsed from 5 levels to 2. The rule that shipped instead: positions stay welded through the whole DAG, a uv lives on each triangle corner, and a collapse is allowed only when every surviving triangle at the moving vertex can take its uv at the target from a removed triangle of the same material and the same chart (`LockedSimplifier::chartTargets`), so collapses run *along* seams and borders, never across them. Seams cannot crack (positions are shared) and no triangle ever straddles two charts or materials.
+
+**Cost of exact seams on photogrammetry.** Flatiron: level 1 keeps 206,764 of 403,385 triangles (174 of 914 groups stuck), level 2 keeps 158,074 (538 of 988 stuck), then the DAG stops: 3 levels, 14,030 clusters, where the position-only build had 5 levels. The 1 px cut for the test camera is 329,205 triangles (was 209,713). Deeper LOD on such data needs re-textured coarse levels (a new atlas per level), which is follow-up work; the synthetic sphere still builds 9 levels.
+
+**Tracer.** `shade()` on the GPU is a port of the CPU `PathTracer::shade`: base colour factor and texture (bilinear with the glTF wrap modes, sRGB-decoded), metallic-roughness and occlusion maps read linear, normal maps with tangents derived from the uv derivatives, emission; textures are bindless (a buffer of Metal resource ids, one per decoded image; 209 for Flatiron). The CPU tracer sampled its data maps (metallic-roughness, occlusion, normal) through the sRGB decode too; that was a bug, fixed in `scratchbox_pathtracer.hpp` (`sampleTexture(..., srgb)`), and the GPU matches the fixed behaviour.
+
+| Flatiron, textured, 1280x720, 64 spp, cut 329,205 tris | Rays | Render | Rays/s | Mean luminance |
+| :--- | :--- | :--- | :--- | :--- |
+| Metal (M1 Ultra), 209 textures | 126,657,960 | 0.953 s | 133.0 M | 0.0278386 |
+| CPU reference | 126,658,041 | 4.373 s | 29.0 M | 0.0278389 |
+
+Agreement: mean ratio 0.99999; 8x8-block mean relative difference 0.040%; 19 of 14,400 blocks over 2% (sunlit high-contrast edges where the intersectors' tie-breaks differ). The always-available test fixture is a checkerboard-textured sphere (GLB with TEXCOORD_0, a PNG and a sampler), compared GPU vs CPU the same way and against clay.
+
 ## Next (plan)
 
-- Phase 2: `.sbvg` version 3 with UVs and per-triangle material ids; the simplifier keeps material borders and UV seams as it keeps group borders.
 - Phase 3: a resident helper process driven by the Electron app, frames through shared memory into the `VirtualGeometryViewport`, a "Path traced" toggle.
+- Re-textured coarse levels for charted photogrammetry, so the DAG regains its depth without crossing seams.
 - Phase 4: the a-trous denoiser on the GPU and temporal reuse.
 - Rays: rasterize the camera hit with the existing WebGPU cluster pass; coarser cuts for bounce and shadow rays; any-hit shadow rays (done); merged per-chunk acceleration structures; better samplers; MetalFX upscale.

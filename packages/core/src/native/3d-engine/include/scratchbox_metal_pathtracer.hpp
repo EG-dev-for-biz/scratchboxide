@@ -12,8 +12,10 @@
 
 /**
  * GPU path tracer on Metal's hardware ray intersector (Objective-C++: include from a .mm translation
- * unit). Geometry is a flat triangle list; the kernels in scratchbox_metal_pathtracer_kernels.hpp are
- * compiled at run time, so no shader toolchain is needed on the machine.
+ * unit). Geometry is a flat triangle list with a material id per triangle; materials and textures
+ * come from a glTF scene (gltf::GltfScene) or one uniform material. The kernels in
+ * scratchbox_metal_pathtracer_kernels.hpp are compiled at run time, so no shader toolchain is needed
+ * on the machine.
  *
  * Every sample pass is one compute dispatch that adds to a per-pixel accumulation buffer, so a render
  * can be read back after any number of samples. Render time is the GPU's own (sum of the command
@@ -29,6 +31,7 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 
+#include "scratchbox_gltf_scene.hpp"
 #include "scratchbox_metal_pathtracer_kernels.hpp"
 #include "scratchbox_pathtracer.hpp"
 #include "scratchbox_sky.hpp"
@@ -80,6 +83,7 @@ struct Lighting {
     const sky::PhysicalSky* sky{nullptr};
 };
 
+/** One material for every triangle (the studio clay by default). */
 struct Material {
     Vec3 albedo{0.716f, 0.672f, 0.610f};
     float roughness{0.82f};
@@ -106,18 +110,34 @@ public:
             initPso_ = makePipeline(library, "pt_init");
             samplePso_ = makePipeline(library, "pt_sample");
             deviceName_ = device_.name.UTF8String;
+            // Bound when a render uses one uniform material; the kernel never reads them then.
+            static const uint32_t zero = 0;
+            static const MaterialRecord defaultRecord{};
+            static const uint64_t noTexture = 0;
+            emptyMaterialIds_ = [device_ newBufferWithBytes:&zero length:sizeof(zero) options:MTLResourceStorageModeShared];
+            emptyMaterials_ = [device_ newBufferWithBytes:&defaultRecord length:sizeof(defaultRecord) options:MTLResourceStorageModeShared];
+            emptyTextures_ = [device_ newBufferWithBytes:&noTexture length:sizeof(noTexture) options:MTLResourceStorageModeShared];
         }
     }
 
     const std::string& deviceName() const { return deviceName_; }
     double accelerationBuildMs() const { return accelerationBuildMs_; }
     uint32_t triangleCount() const { return triangleCount_; }
+    uint32_t textureCount() const { return static_cast<uint32_t>(textures_.size()); }
+    uint32_t materialCount() const { return materialCount_; }
+    uint64_t textureBytes() const { return textureBytes_; }
 
-    /** Uploads `vertices` (position xyz, normal xyz per vertex) and `indices` (3 per triangle) and builds the acceleration structure. */
-    void setGeometry(const std::vector<float>& vertices, const std::vector<uint32_t>& indices) {
-        if (vertices.size() % 6 != 0) throw Error("vertex buffer is not 6 floats per vertex");
+    /**
+     * Uploads `vertices` (position xyz, normal xyz, uv per vertex), `indices` (3 per triangle) and
+     * `triMaterials` (a glTF material index or vgeo::kNoMaterial per triangle) and builds the
+     * acceleration structure.
+     */
+    void setGeometry(const std::vector<float>& vertices, const std::vector<uint32_t>& indices, const std::vector<uint32_t>& triMaterials) {
+        constexpr size_t floats = sizeof(Vertex) / sizeof(float);
+        if (vertices.size() % floats != 0) throw Error("vertex buffer is not 8 floats per vertex");
         if (indices.size() % 3 != 0 || indices.empty()) throw Error("index buffer is not 3 indices per triangle");
-        const uint32_t vertexCount = static_cast<uint32_t>(vertices.size() / 6);
+        if (triMaterials.size() != indices.size() / 3) throw Error("one material id per triangle is required");
+        const uint32_t vertexCount = static_cast<uint32_t>(vertices.size() / floats);
         for (uint32_t i : indices) {
             if (i >= vertexCount) throw Error("index past the vertex buffer");
         }
@@ -125,7 +145,9 @@ public:
             auto start = std::chrono::steady_clock::now();
             vertexBuffer_ = [device_ newBufferWithBytes:vertices.data() length:vertices.size() * sizeof(float) options:MTLResourceStorageModeShared];
             indexBuffer_ = [device_ newBufferWithBytes:indices.data() length:indices.size() * sizeof(uint32_t) options:MTLResourceStorageModeShared];
+            materialIdBuffer_ = [device_ newBufferWithBytes:triMaterials.data() length:triMaterials.size() * sizeof(uint32_t) options:MTLResourceStorageModeShared];
             triangleCount_ = static_cast<uint32_t>(indices.size() / 3);
+            triMaterials_ = triMaterials;
 
             MTLAccelerationStructureTriangleGeometryDescriptor* geometry = [MTLAccelerationStructureTriangleGeometryDescriptor descriptor];
             geometry.vertexBuffer = vertexBuffer_;
@@ -153,14 +175,111 @@ public:
     }
 
     /**
-     * Renders `settings.samplesPerPixel` samples of every pixel. `camera` is in the geometry's coordinates.
-     * The result follows render::PathTracer::render's conventions (scene-linear radiance, guide buffers,
-     * variance, NaN and ray counts); renderMs is GPU time.
+     * Uploads the scene's materials and decoded images. Material ids in the geometry index
+     * `scene.materials`; a default material is appended for triangles without one. Images that
+     * failed to decode are left out, and the materials that name them render with their factors.
      */
-    render::RenderOutput render(const render::CameraSpec& camera, const Lighting& lighting, const Material& material,
-                                const render::RenderSettings& settings) {
+    void setMaterials(const gltf::GltfScene& scene) {
+        @autoreleasepool {
+            textures_.clear();
+            textureBytes_ = 0;
+            std::vector<int32_t> textureOf(scene.images.size(), -1);
+            std::vector<uint64_t> refs;
+            for (size_t i = 0; i < scene.images.size(); ++i) {
+                const gltf::SceneImage& image = scene.images[i];
+                if (!image.decoded || image.pixels.width <= 0 || image.pixels.height <= 0) continue;
+                const texture::ImageBuffer& px = image.pixels;
+                std::vector<uint8_t> rgba(static_cast<size_t>(px.width) * px.height * 4);
+                for (size_t p = 0; p < static_cast<size_t>(px.width) * px.height; ++p) {
+                    const uint8_t* src = px.data.data() + p * px.channels;
+                    uint8_t* dst = rgba.data() + p * 4;
+                    if (px.channels >= 3) {
+                        dst[0] = src[0];
+                        dst[1] = src[1];
+                        dst[2] = src[2];
+                    } else {
+                        dst[0] = dst[1] = dst[2] = src[0];
+                    }
+                    dst[3] = 255;
+                }
+                // Stored as given; colour maps are sRGB-decoded in the kernel, data maps are not.
+                MTLTextureDescriptor* desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                                                               width:static_cast<NSUInteger>(px.width)
+                                                                                              height:static_cast<NSUInteger>(px.height)
+                                                                                           mipmapped:NO];
+                desc.usage = MTLTextureUsageShaderRead;
+                desc.storageMode = MTLStorageModeShared;
+                id<MTLTexture> texture = [device_ newTextureWithDescriptor:desc];
+                if (!texture) throw Error("could not allocate a texture");
+                [texture replaceRegion:MTLRegionMake2D(0, 0, static_cast<NSUInteger>(px.width), static_cast<NSUInteger>(px.height))
+                           mipmapLevel:0
+                             withBytes:rgba.data()
+                           bytesPerRow:static_cast<NSUInteger>(px.width) * 4];
+                textureOf[i] = static_cast<int32_t>(textures_.size());
+                textures_.push_back(texture);
+                MTLResourceID rid = texture.gpuResourceID;
+                uint64_t bits;
+                static_assert(sizeof(rid) == sizeof(bits), "MTLResourceID is 8 bytes");
+                std::memcpy(&bits, &rid, sizeof(bits));
+                refs.push_back(bits);
+                textureBytes_ += rgba.size();
+            }
+            if (refs.empty()) refs.push_back(0);
+
+            std::vector<MaterialRecord> records;
+            records.reserve(scene.materials.size() + 1);
+            auto imageRef = [&](int image) { return image >= 0 && image < static_cast<int>(textureOf.size()) ? textureOf[static_cast<size_t>(image)] : -1; };
+            for (const gltf::SceneMaterial& m : scene.materials) {
+                MaterialRecord r;
+                r.baseColor[0] = m.baseColorFactor.x;
+                r.baseColor[1] = m.baseColorFactor.y;
+                r.baseColor[2] = m.baseColorFactor.z;
+                r.baseColor[3] = m.baseColorFactor.w;
+                r.metallic = m.metallicFactor;
+                r.roughness = m.roughnessFactor;
+                r.normalScale = m.normalScale;
+                r.occlusionStrength = m.occlusionStrength;
+                r.emissive[0] = m.emissiveFactor.x;
+                r.emissive[1] = m.emissiveFactor.y;
+                r.emissive[2] = m.emissiveFactor.z;
+                r.baseColorImage = imageRef(m.baseColorImage);
+                r.wrapS = m.wrapS;
+                r.wrapT = m.wrapT;
+                r.normalImage = imageRef(m.normalImage);
+                r.normalWrapS = m.normalWrapS;
+                r.normalWrapT = m.normalWrapT;
+                r.mrImage = imageRef(m.metallicRoughnessImage);
+                r.mrWrapS = m.mrWrapS;
+                r.mrWrapT = m.mrWrapT;
+                r.occlusionImage = imageRef(m.occlusionImage);
+                records.push_back(r);
+            }
+            defaultMaterial_ = static_cast<uint32_t>(records.size());
+            records.push_back(MaterialRecord{});
+            materialCount_ = static_cast<uint32_t>(scene.materials.size());
+            materialBuffer_ = [device_ newBufferWithBytes:records.data() length:records.size() * sizeof(MaterialRecord) options:MTLResourceStorageModeShared];
+            textureRefBuffer_ = [device_ newBufferWithBytes:refs.data() length:refs.size() * sizeof(uint64_t) options:MTLResourceStorageModeShared];
+            if (!materialBuffer_ || !textureRefBuffer_) throw Error("could not allocate the material buffers");
+            hasMaterials_ = true;
+        }
+    }
+
+    /**
+     * Renders `settings.samplesPerPixel` samples of every pixel. `camera` is in the geometry's coordinates.
+     * With `uniformMaterial`, every triangle takes that material; without it, the materials given to
+     * setMaterials shade the triangles by their ids. The result follows render::PathTracer::render's
+     * conventions (scene-linear radiance, guide buffers, variance, NaN and ray counts); renderMs is GPU time.
+     */
+    render::RenderOutput render(const render::CameraSpec& camera, const Lighting& lighting, const render::RenderSettings& settings,
+                                const Material* uniformMaterial) {
         if (!accel_) throw Error("setGeometry was not called");
         if (lighting.mode == Lighting::Mode::Sky && !lighting.sky) throw Error("Sky lighting needs a PhysicalSky");
+        if (!uniformMaterial && !hasMaterials_) throw Error("setMaterials was not called and no uniform material was given");
+        if (!uniformMaterial) {
+            for (uint32_t id : triMaterials_) {
+                if (id != 0xFFFFFFFFu && id >= materialCount_) throw Error("a triangle names a material the scene does not have");
+            }
+        }
         const int w = std::max(1, settings.width);
         const int h = std::max(1, settings.height);
         const int spp = std::max(1, settings.samplesPerPixel);
@@ -184,9 +303,15 @@ public:
         u.aspect = static_cast<float>(w) / static_cast<float>(h);
         u.apertureRadius = camera.apertureRadius;
         u.focusDistance = camera.focusDistance > 0.0f ? camera.focusDistance : (camera.target - camera.position).length();
-        put(u.albedo, material.albedo);
-        u.roughness = std::clamp(material.roughness, 0.02f, 1.0f);
-        u.metallic = std::clamp(material.metallic, 0.0f, 1.0f);
+        if (uniformMaterial) {
+            u.useMaterials = 0;
+            put(u.albedo, uniformMaterial->albedo);
+            u.roughness = std::clamp(uniformMaterial->roughness, 0.02f, 1.0f);
+            u.metallic = std::clamp(uniformMaterial->metallic, 0.0f, 1.0f);
+        } else {
+            u.useMaterials = 1;
+            u.defaultMaterial = defaultMaterial_;
+        }
         const uint64_t seed = render::detail::splitmix64(settings.seed);
         u.seedLo = static_cast<uint32_t>(seed & 0xFFFFFFFFull);
         u.seedHi = static_cast<uint32_t>(seed >> 32);
@@ -224,6 +349,9 @@ public:
             id<MTLBuffer> uniforms = [device_ newBufferWithBytes:&u length:sizeof(Uniforms) options:MTLResourceStorageModeShared];
             id<MTLBuffer> lutBuffer = [device_ newBufferWithBytes:lut.data() length:lut.size() * sizeof(float) options:MTLResourceStorageModeShared];
             if (!pixels || !uniforms || !lutBuffer) throw Error("could not allocate render buffers");
+            id<MTLBuffer> materialIds = uniformMaterial ? emptyMaterialIds_ : materialIdBuffer_;
+            id<MTLBuffer> materials = uniformMaterial ? emptyMaterials_ : materialBuffer_;
+            id<MTLBuffer> textureRefs = uniformMaterial ? emptyTextures_ : textureRefBuffer_;
 
             const MTLSize grid = MTLSizeMake(static_cast<NSUInteger>(w), static_cast<NSUInteger>(h), 1);
             const MTLSize group = MTLSizeMake(8, 8, 1);
@@ -257,6 +385,12 @@ public:
                     [encoder setBuffer:indexBuffer_ offset:0 atIndex:3];
                     [encoder setBuffer:lutBuffer offset:0 atIndex:4];
                     [encoder setAccelerationStructure:accel_ atBufferIndex:5];
+                    [encoder setBuffer:materialIds offset:0 atIndex:6];
+                    [encoder setBuffer:materials offset:0 atIndex:7];
+                    [encoder setBuffer:textureRefs offset:0 atIndex:8];
+                    if (!uniformMaterial) {
+                        for (id<MTLTexture> texture : textures_) [encoder useResource:texture usage:MTLResourceUsageRead];
+                    }
                     [encoder dispatchThreads:grid threadsPerThreadgroup:group];
                     [encoder endEncoding];
                 }
@@ -319,10 +453,22 @@ private:
     id<MTLComputePipelineState> samplePso_{nil};
     id<MTLBuffer> vertexBuffer_{nil};
     id<MTLBuffer> indexBuffer_{nil};
+    id<MTLBuffer> materialIdBuffer_{nil};
+    id<MTLBuffer> materialBuffer_{nil};
+    id<MTLBuffer> textureRefBuffer_{nil};
+    id<MTLBuffer> emptyMaterialIds_{nil};
+    id<MTLBuffer> emptyMaterials_{nil};
+    id<MTLBuffer> emptyTextures_{nil};
     id<MTLAccelerationStructure> accel_{nil};
+    std::vector<id<MTLTexture>> textures_;
+    std::vector<uint32_t> triMaterials_;
     std::string deviceName_;
     double accelerationBuildMs_{0.0};
     uint32_t triangleCount_{0};
+    uint32_t materialCount_{0};
+    uint32_t defaultMaterial_{0};
+    uint64_t textureBytes_{0};
+    bool hasMaterials_{false};
 };
 
 } // namespace metalpt

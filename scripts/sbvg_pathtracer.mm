@@ -80,6 +80,19 @@ bool writeBytes(const std::filesystem::path& path, const void* data, size_t size
     return file.good();
 }
 
+/** Length of a GLB's glTF materials array (gltf::GltfScene appends a default material, so its count cannot say). */
+uint32_t glbMaterialCount(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) throw std::runtime_error("cannot open GLB: " + path);
+    uint32_t header[5];
+    if (!f.read(reinterpret_cast<char*>(header), sizeof(header)) || header[0] != 0x46546C67u || header[4] != 0x4E4F534Au) throw std::runtime_error("not a GLB file: " + path);
+    std::string json(header[3], '\0');
+    if (!f.read(json.data(), static_cast<std::streamsize>(json.size()))) throw std::runtime_error("truncated GLB: " + path);
+    io::GlbJsonParser parser(json.data(), json.size());
+    const Json root = parser.parse();
+    return static_cast<uint32_t>(root["materials"].arr.size());
+}
+
 int probe() {
     try {
         metalpt::DeviceInfo info = metalpt::probeDevice();
@@ -92,19 +105,30 @@ int probe() {
     }
 }
 
-/** The LOD cut as a glTF scene for render::PathTracer: one uniform material, vertices relative to the file origin. */
-gltf::GltfScene sceneFromCut(const sbvg::File& file, const sbvg::Cut& cut) {
+/**
+ * The LOD cut as a glTF scene for render::PathTracer, vertices relative to the file origin. With a
+ * `source` scene its materials and images are taken over (a default material appended for triangles
+ * without one); otherwise one default material, for the uniform clay path.
+ */
+gltf::GltfScene sceneFromCut(const sbvg::File& file, const sbvg::Cut& cut, gltf::GltfScene* source) {
     gltf::GltfScene scene;
     scene.ok = true;
     scene.mesh.name = "sbvg_cut";
     const uint32_t vertexCount = file.vertexCount();
     for (uint32_t i = 0; i < vertexCount; ++i) {
-        const float* v = file.vertices.data() + static_cast<size_t>(i) * 6;
-        scene.mesh.addVertex(geometry::Vertex(Vec3(v[0], v[1], v[2]), Vec3(v[3], v[4], v[5])));
+        const float* v = file.vertices.data() + static_cast<size_t>(i) * vgeo::kSbvgVertexFloats;
+        // No tangent (zero): the tracer derives one from the uv derivatives.
+        scene.mesh.addVertex(geometry::Vertex(Vec3(v[0], v[1], v[2]), Vec3(v[3], v[4], v[5]), math::Vec2(v[6], v[7]), math::Vec4(1, 1, 1, 1), math::Vec4(0, 0, 0, 1)));
     }
     scene.mesh.indices = cut.indices;
-    scene.triangleMaterial.assign(cut.triangleCount(), 0);
+    if (source) {
+        scene.materials = source->materials;
+        scene.images = std::move(source->images);
+    }
+    const uint32_t defaultMaterial = static_cast<uint32_t>(scene.materials.size());
     scene.materials.push_back(gltf::SceneMaterial{});
+    scene.triangleMaterial.reserve(cut.triangleCount());
+    for (uint32_t id : cut.materials) scene.triangleMaterial.push_back(source && id != vgeo::kNoMaterial ? id : defaultMaterial);
     scene.bounds = scene.mesh.bounds;
     scene.primitiveCount = 1;
     scene.nodeCount = 1;
@@ -221,28 +245,51 @@ int main(int argc, char** argv) {
             lighting.studioRadiance = vec3Or(lightingConfig["studio"]["radiance"], Vec3(1, 1, 1));
         }
 
+        // Materials: the source GLB's (by the ids the .sbvg carries), or one uniform material.
         metalpt::Material material;
         const Json& materialConfig = config["material"];
         material.albedo = vec3Or(materialConfig["albedo"], material.albedo);
         material.roughness = numberOr(materialConfig["roughness"], material.roughness);
         material.metallic = numberOr(materialConfig["metallic"], material.metallic);
+        const std::string materialsGlb = config["materials"]["glbPath"].asString("");
+        const bool sceneMaterials = !materialsGlb.empty();
+        gltf::GltfScene source;
+        size_t imagesDecoded = 0;
+        double materialsLoadMs = 0.0;
+        if (sceneMaterials) {
+            if (file.version < 3) throw std::runtime_error("this .sbvg carries no material ids (version " + std::to_string(file.version) + "); rebuild it from its GLB");
+            const auto loadStart = std::chrono::steady_clock::now();
+            source = gltf::GlbSceneReader::readFile(materialsGlb);
+            if (!source.ok) throw std::runtime_error("failed to load materials from " + materialsGlb + ": " + source.error);
+            materialsLoadMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - loadStart).count();
+            const uint32_t glbMaterials = glbMaterialCount(materialsGlb);
+            if (glbMaterials != file.materialCount) {
+                throw std::runtime_error("the .sbvg was built from a GLB with " + std::to_string(file.materialCount) + " materials; " + materialsGlb + " has " + std::to_string(glbMaterials));
+            }
+            for (const auto& image : source.images) if (image.decoded) ++imagesDecoded;
+        }
 
         render::RenderOutput out;
         std::string deviceName = "cpu";
         double accelerationBuildMs = 0.0;
+        uint32_t texturesUploaded = 0;
         if (backend == "metal") {
             metalpt::MetalPathTracer tracer;
-            tracer.setGeometry(file.vertices, cut.indices);
+            tracer.setGeometry(file.vertices, cut.indices, cut.materials);
+            if (sceneMaterials) {
+                tracer.setMaterials(source);
+                texturesUploaded = tracer.textureCount();
+            }
             deviceName = tracer.deviceName();
             accelerationBuildMs = tracer.accelerationBuildMs();
-            out = tracer.render(camera, lighting, material, settings);
+            out = tracer.render(camera, lighting, settings, sceneMaterials ? nullptr : &material);
         } else {
             if (lighting.mode != metalpt::Lighting::Mode::Sky) throw std::runtime_error("backend \"cpu\" (render::PathTracer) needs config.lighting.sun");
-            const gltf::GltfScene scene = sceneFromCut(file, cut);
+            const gltf::GltfScene scene = sceneFromCut(file, cut, sceneMaterials ? &source : nullptr);
             const auto buildStart = std::chrono::steady_clock::now();
             render::PathTracer tracer(scene, false);
             accelerationBuildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - buildStart).count();
-            tracer.setClayMaterial(material.albedo, material.roughness, material.metallic);
+            if (!sceneMaterials) tracer.setClayMaterial(material.albedo, material.roughness, material.metallic);
             out = tracer.render(camera, *physicalSky, settings);
         }
 
@@ -296,6 +343,9 @@ int main(int argc, char** argv) {
               << "  \"meanLinearLuminance\": " << meanLuminance << ",\n"
               << "  \"exposureEv\": " << exposureEv << ",\n"
               << "  \"denoised\": " << (denoise ? "true" : "false") << ",\n"
+              << "  \"materials\": { \"source\": " << jsonString(sceneMaterials ? "glb" : "uniform") << ", \"glbPath\": " << jsonString(materialsGlb)
+              << ", \"count\": " << (sceneMaterials ? source.materials.size() : 1) << ", \"images\": " << source.images.size() << ", \"imagesDecoded\": " << imagesDecoded
+              << ", \"texturesUploaded\": " << texturesUploaded << ", \"loadMs\": " << materialsLoadMs << " },\n"
               << "  \"material\": { \"albedo\": " << jsonVec(material.albedo) << ", \"roughness\": " << material.roughness << ", \"metallic\": " << material.metallic << " },\n"
               << "  \"sun\": { \"elevationDeg\": " << elevationDeg << ", \"azimuthDeg\": " << azimuthDeg << " },\n"
               << "  \"camera\": { \"position\": " << jsonVec(camera.position) << ", \"target\": " << jsonVec(camera.target)

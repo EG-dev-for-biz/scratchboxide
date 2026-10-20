@@ -154,8 +154,8 @@ inline int wrapCoordinate(int i, int n, int mode) {
     return ((i % n) + n) % n;
 }
 
-/** Bilinear lookup of an sRGB-encoded texture, filtered in linear space. */
-inline Vec3 sampleTextureLinear(const texture::ImageBuffer& img, const Vec2& uv, int wrapS, int wrapT) {
+/** Bilinear texture lookup; `srgb` decodes the texels to linear first (colour maps), else they are read as stored (data maps). */
+inline Vec3 sampleTexture(const texture::ImageBuffer& img, const Vec2& uv, int wrapS, int wrapT, bool srgb) {
     if (img.width <= 0 || img.height <= 0) return Vec3(1, 1, 1);
     const auto& lut = srgbToLinearTable();
     float fx = std::clamp(uv.x, -1e5f, 1e5f) * img.width - 0.5f;
@@ -166,15 +166,21 @@ inline Vec3 sampleTextureLinear(const texture::ImageBuffer& img, const Vec2& uv,
     int x0 = static_cast<int>(x0f), y0 = static_cast<int>(y0f);
     int xa = wrapCoordinate(x0, img.width, wrapS), xb = wrapCoordinate(x0 + 1, img.width, wrapS);
     int ya = wrapCoordinate(y0, img.height, wrapT), yb = wrapCoordinate(y0 + 1, img.height, wrapT);
+    auto decode = [&](uint8_t v) { return srgb ? lut[v] : static_cast<float>(v) * (1.0f / 255.0f); };
     auto fetch = [&](int x, int y) {
         size_t idx = (static_cast<size_t>(y) * img.width + x) * img.channels;
-        if (img.channels >= 3) return Vec3(lut[img.data[idx]], lut[img.data[idx + 1]], lut[img.data[idx + 2]]);
-        float v = lut[img.data[idx]];
+        if (img.channels >= 3) return Vec3(decode(img.data[idx]), decode(img.data[idx + 1]), decode(img.data[idx + 2]));
+        float v = decode(img.data[idx]);
         return Vec3(v, v, v);
     };
     Vec3 top = fetch(xa, ya) * (1.0f - tx) + fetch(xb, ya) * tx;
     Vec3 bottom = fetch(xa, yb) * (1.0f - tx) + fetch(xb, yb) * tx;
     return top * (1.0f - ty) + bottom * ty;
+}
+
+/** Bilinear lookup of an sRGB-encoded colour texture, filtered in linear space. */
+inline Vec3 sampleTextureLinear(const texture::ImageBuffer& img, const Vec2& uv, int wrapS, int wrapT) {
+    return sampleTexture(img, uv, wrapS, wrapT, true);
 }
 
 struct SurfacePoint {
@@ -583,7 +589,8 @@ private:
             if (mat.metallicRoughnessImage >= 0 && mat.metallicRoughnessImage < static_cast<int>(scene_.images.size())) {
                 const auto& mrImg = scene_.images[static_cast<size_t>(mat.metallicRoughnessImage)];
                 if (mrImg.decoded) {
-                    Vec3 mrSample = detail::sampleTextureLinear(mrImg.pixels, uv, mat.mrWrapS, mat.mrWrapT);
+                    // Data maps are stored linear: no sRGB decode.
+                    Vec3 mrSample = detail::sampleTexture(mrImg.pixels, uv, mat.mrWrapS, mat.mrWrapT, false);
                     s.roughness = std::clamp(s.roughness * mrSample.y, 0.02f, 1.0f); // Green = Roughness
                     s.metallic = std::clamp(s.metallic * mrSample.z, 0.0f, 1.0f);   // Blue = Metalness
                 }
@@ -593,7 +600,7 @@ private:
             if (mat.occlusionImage >= 0 && mat.occlusionImage < static_cast<int>(scene_.images.size())) {
                 const auto& occImg = scene_.images[static_cast<size_t>(mat.occlusionImage)];
                 if (occImg.decoded) {
-                    Vec3 occSample = detail::sampleTextureLinear(occImg.pixels, uv, 10497, 10497);
+                    Vec3 occSample = detail::sampleTexture(occImg.pixels, uv, 10497, 10497, false);
                     float ao = 1.0f + mat.occlusionStrength * (occSample.x - 1.0f); // Red = Occlusion
                     s.baseColor = s.baseColor * std::clamp(ao, 0.05f, 1.0f);
                 }
@@ -603,7 +610,7 @@ private:
             if (mat.normalImage >= 0 && mat.normalImage < static_cast<int>(scene_.images.size())) {
                 const auto& nImg = scene_.images[static_cast<size_t>(mat.normalImage)];
                 if (nImg.decoded) {
-                    Vec3 nSample = detail::sampleTextureLinear(nImg.pixels, uv, mat.normalWrapS, mat.normalWrapT);
+                    Vec3 nSample = detail::sampleTexture(nImg.pixels, uv, mat.normalWrapS, mat.normalWrapT, false);
                     Vec3 tanNormal(
                         (2.0f * nSample.x - 1.0f) * mat.normalScale,
                         (2.0f * nSample.y - 1.0f) * mat.normalScale,
