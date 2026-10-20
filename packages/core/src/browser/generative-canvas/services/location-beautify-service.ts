@@ -498,6 +498,11 @@ export function buildBeautifyPrompt(options: BeautifyPromptOptions): string {
 export const TEXTURE_PLATE_PROMPT_ID = 'texture-plate/v1';
 /** The same prompt with a street-level photograph of the wall as an extra reference (TexturePlatePromptOptions.withStreetView). */
 export const TEXTURE_PLATE_STREET_VIEW_PROMPT_ID = 'texture-plate/v1+street-view';
+/**
+ * The variant for a wall the scan hardly sees (TexturePlatePromptOptions.unseen): its flat mid-grey areas are this same wall
+ * hidden from the scan (behind trees, against a neighbour), drawn as the wall continues instead of kept grey.
+ */
+export const TEXTURE_PLATE_UNSEEN_PROMPT_ID = 'texture-plate/v1+unseen';
 
 export interface TexturePlatePromptOptions {
     locationName: string;
@@ -520,6 +525,12 @@ export interface TexturePlatePromptOptions {
      * details and keeps the first image's geometry.
      */
     withStreetView?: boolean;
+    /**
+     * True for a wall the scan hardly sees: its flat mid-grey areas are not outside the wall but parts of it the scan could
+     * not see; the model draws them as the same wall continuing (materials and rhythm from the visible parts and the
+     * reference), with nothing that no image shows (no signs, lettering or features).
+     */
+    unseen?: boolean;
 }
 
 /**
@@ -528,7 +539,7 @@ export interface TexturePlatePromptOptions {
  * no photographic effects. buildBeautifyPrompt's own template is unchanged.
  */
 export function buildTexturePlatePrompt(o: TexturePlatePromptOptions): string {
-    return `Transform this orthographic texture plate of one wall of ${o.locationName} (a flat, straight-on elevation of the facade, ${o.widthM.toFixed(1)} m wide and ${o.heightM.toFixed(1)} m tall, resampled from a photorealistic 3D tiles scan) into a clean, photorealistic texture plate of the same facade. CRITICAL RULES — non-negotiable: (1) It stays a flat orthographic elevation: no perspective change, no camera tilt, no depth of field, no haze. (2) Keep every window, door, edge and opening exactly where it is, at the same size. ${o.preserveClause} (3) Do not invent or add windows, doors, signs, ornament or features that are not visible in the plate; flat mid-grey areas are outside the scan and stay flat mid-grey. (4) Give it crisp, realistic materials and architectural detail: the brick, stone, mortar joints, cornices, window frames and glazing that the plate shows, sharp and free of scan blur and smears. (5) Light it evenly, as under a bright overcast sky: diffuse light, no cast shadows, no sun hot spots. Answer with the full plate at ${o.widthPx} x ${o.heightPx} px.${o.withReference ? ' The second image is the adjacent wall of the same building, already finished: match its materials, colours and level of detail across the corner, but take every window, edge and opening from the first image only.' : ''}${o.withStreetView ? ` The ${o.withReference ? 'third' : 'second'} image is a street-level photograph of this same wall, resampled onto the first image's frame (same size and position; grey where the photograph does not show the wall): it shows what the lower part of this facade actually looks like. Follow it for the real details there (materials, openings, what is and is not at street level), and do not draw anything at street level that the photograph does not show; keep the geometry of the first image: every window, edge and opening stays where the first image has it, at the same size.` : ''}`;
+    return `Transform this orthographic texture plate of one wall of ${o.locationName} (a flat, straight-on elevation of the facade, ${o.widthM.toFixed(1)} m wide and ${o.heightM.toFixed(1)} m tall, resampled from a photorealistic 3D tiles scan) into a clean, photorealistic texture plate of the same facade. CRITICAL RULES — non-negotiable: (1) It stays a flat orthographic elevation: no perspective change, no camera tilt, no depth of field, no haze. (2) Keep every window, door, edge and opening exactly where it is, at the same size. ${o.preserveClause} ${o.unseen ? '(3) The flat mid-grey areas are parts of this same wall that the scan could not see (hidden behind trees or against a neighbour): fill every one of them as this wall continues, with the same materials, colours, storey lines and window rhythm as the visible parts of the plate and the reference image; keep what the plate does show where it is; do not add signs, lettering, ornament or any feature that no image shows, and leave nothing mid-grey.' : '(3) Do not invent or add windows, doors, signs, ornament or features that are not visible in the plate; flat mid-grey areas are outside the scan and stay flat mid-grey.'} (4) Give it crisp, realistic materials and architectural detail: the brick, stone, mortar joints, cornices, window frames and glazing that the plate shows, sharp and free of scan blur and smears. (5) Light it evenly, as under a bright overcast sky: diffuse light, no cast shadows, no sun hot spots. Answer with the full plate at ${o.widthPx} x ${o.heightPx} px.${o.withReference ? ' The second image is the adjacent wall of the same building, already finished: match its materials, colours and level of detail across the corner, but take every window, edge and opening from the first image only.' : ''}${o.withStreetView ? ` The ${o.withReference ? 'third' : 'second'} image is a street-level photograph of this same wall, resampled onto the first image's frame (same size and position; grey where the photograph does not show the wall): it shows what the lower part of this facade actually looks like. Follow it for the real details there (materials, openings, what is and is not at street level), and do not draw anything at street level that the photograph does not show; keep the geometry of the first image: every window, edge and opening stays where the first image has it, at the same size.` : ''}`;
 }
 
 export interface StationBeautifyContext {

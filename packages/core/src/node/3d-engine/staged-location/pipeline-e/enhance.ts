@@ -28,7 +28,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { LIGHTING_MODEL_LITE, LIGHTING_PROMPTS } from '../texture-lighting';
-import { buildTexturePlatePrompt, TEXTURE_PLATE_PROMPT_ID, TEXTURE_PLATE_STREET_VIEW_PROMPT_ID } from '../../../../browser/generative-canvas/services/location-beautify-service';
+import { buildTexturePlatePrompt, TEXTURE_PLATE_PROMPT_ID, TEXTURE_PLATE_STREET_VIEW_PROMPT_ID, TEXTURE_PLATE_UNSEEN_PROMPT_ID } from '../../../../browser/generative-canvas/services/location-beautify-service';
 import { edgeMap, exactDistanceTransform } from '../../../spatial/StreetViewStage3Metrics';
 import { decodeImageInMemory, type RgbaImage8 } from '../tile-texture-transfer';
 import { padToModelAspect, resizeRgba } from '../texture-enhance';
@@ -50,6 +50,22 @@ export const LOST_EDGE_M = 0.3;
 export const MIN_ENHANCE_AREA_M2 = 60;
 /** Survey views enhanced mode fetches (one wide view per face first, then more per face), each with a street-level view of the same pano. */
 export const ENHANCE_STREET_VIEWS = 5;
+/**
+ * Walls the tile hardly sees (coverage under LOW_COVERAGE: behind trees, against a neighbour) are drawn in enhanced mode
+ * too (the realism-first directive: generated detail is the default where no source covers a surface), at most this many,
+ * after the walls the tile sees, each with a finished wall as its reference.
+ */
+export const MAX_UNSEEN_WALLS = 4;
+/** An unseen wall is drawn only when at least this share of it faces open air (not another part of the solid). */
+export const MIN_UNSEEN_EXPOSED_SHARE = 0.5;
+/** Below this share of a wall's texels covered by the tile, the plate is not aligned to it (too little to align on). */
+export const UNSEEN_MIN_ALIGN_SHARE = 0.1;
+/** Below this share covered, the storeys and bays are not counted on the tile. */
+export const UNSEEN_MIN_COUNT_SHARE = 0.25;
+/** Below this share covered, the plate's colour family is checked against the building's median facade colour. */
+export const UNSEEN_MIN_COLOUR_SHARE = 0.05;
+/** An unseen wall's plate that leaves more than this share of the unseen texels flat mid-grey is refused. */
+export const UNSEEN_MAX_GREY_SHARE = 0.1;
 /** Walls redrawn at once after the first (each references a finished wall). */
 export const ENHANCE_CONCURRENCY = 3;
 
@@ -256,6 +272,17 @@ export function enhanceGuards(env: NodeJS.ProcessEnv = process.env): boolean {
     return env.SCRATCHBOX_STAGED_ENHANCE_GUARDS !== '0';
 }
 
+/** The share of the texels the tile does not cover that a plate left flat mid-grey (each channel within 4 of 128). */
+export function unseenGreyShare(plate: Uint8Array, use: Uint8Array, N: number): number {
+    let n = 0, grey = 0;
+    for (let i = 0; i < N; i++) {
+        if (use[i]) continue;
+        n++;
+        if (Math.abs(plate[i * 4] - 128) <= 4 && Math.abs(plate[i * 4 + 1] - 128) <= 4 && Math.abs(plate[i * 4 + 2] - 128) <= 4) grey++;
+    }
+    return n ? grey / n : 0;
+}
+
 /** The walls worth enhancing, in plan-loop order (so each has its finished neighbour as the reference). */
 export function enhanceOrder(faces: MassingFace[], textures: Map<number, FaceTexture>, minCoverage: number): MassingFace[] {
     return faces.filter(f => f.kind === 'wall' && f.width > 0 && textures.has(f.index) && f.area >= MIN_ENHANCE_AREA_M2 && f.coverage >= minCoverage)
@@ -315,6 +342,12 @@ export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Arra
     photoCheckOnly?: boolean;
     /** Reads storey and bay counts of the tile and of the plate (plate-identity.ts); without it the counts are not checked. */
     counter?: FacadeCounter;
+    /**
+     * A wall the tile hardly sees: its uncovered texels are sent mid-grey with the unseen prompt (drawn as the wall continues)
+     * and labelled `source` when accepted; `familyLab` is the building's median facade colour (CIELAB), the colour family
+     * checked when the tile covers too little of the wall to have one.
+     */
+    unseen?: { source: number; familyLab?: [number, number, number] };
 
     /**
      * Where answers are kept, keyed by everything the model is sent (models, prompt, images): the same wall with the same
@@ -329,10 +362,17 @@ export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Arra
     const guide = !!sv && !opts.photoCheckOnly;
     const scale = Math.min(1, ENHANCE_MAX_SIDE / Math.max(t.width, t.height));
     const sw = Math.max(16, Math.round(t.width * scale)), sh = Math.max(16, Math.round(t.height * scale));
-    const small: RgbaImage8 = resizeRgba({ width: t.width, height: t.height, rgba: t.rgba }, sw, sh);
+    const N = t.width * t.height;
+    let coveredN = 0;
+    for (let i = 0; i < N; i++) if (use[i]) coveredN++;
+    const coveredShare = N ? coveredN / N : 0;
+    const unseen = opts.unseen;
+    // an unseen wall goes to the model with what the tile does not cover in flat mid-grey, to be drawn as the wall continues
+    const sent = unseen ? (() => { const g = t.rgba.slice(); for (let i = 0; i < N; i++) if (!use[i]) { g[i * 4] = 128; g[i * 4 + 1] = 128; g[i * 4 + 2] = 128; g[i * 4 + 3] = 255; } return g; })() : t.rgba;
+    const small: RgbaImage8 = resizeRgba({ width: t.width, height: t.height, rgba: sent }, sw, sh);
     const { padded, offset } = padToModelAspect(small);
     const ref = opts.reference ? (() => { const rs = Math.min(1, 768 / Math.max(opts.reference.width, opts.reference.height)); const r = resizeRgba({ width: opts.reference.width, height: opts.reference.height, rgba: opts.reference.rgba }, Math.max(8, Math.round(opts.reference.width * rs)), Math.max(8, Math.round(opts.reference.height * rs))); return new Uint8Array(encodePng(r.width, r.height, Buffer.from(r.rgba), 4)); })() : undefined;
-    const prompt = buildTexturePlatePrompt({ locationName: opts.locationName, widthM: t.width * f.pixel, heightM: t.height * f.pixel, widthPx: padded.width, heightPx: padded.height, preserveClause: preserveClause(padded.width, padded.height), withReference: !!ref, ...(guide ? { withStreetView: true } : {}) });
+    const prompt = buildTexturePlatePrompt({ locationName: opts.locationName, widthM: t.width * f.pixel, heightM: t.height * f.pixel, widthPx: padded.width, heightPx: padded.height, preserveClause: preserveClause(padded.width, padded.height), withReference: !!ref, ...(guide ? { withStreetView: true } : {}), ...(unseen ? { unseen: true } : {}) });
     const svRec: EnhanceStreetViewRecord | undefined = sv ? { ...(guide ? {} : { checkOnly: true }), panoId: sv.view.panoId, method: sv.view.registration?.method ?? 'nominal', bandCover: Math.round(sv.rect.bandCover * 1000) / 1000, pxPerM: Math.round(sv.rect.pxPerM * 10) / 10 } : undefined;
     const base = { face: f.index, key: f.key, ...(svRec ? { streetView: svRec } : {}), ...(guards && !sv && opts.noStreetView ? { noStreetView: opts.noStreetView } : {}) };
     let answer: PlateAnswer;
@@ -351,9 +391,14 @@ export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Arra
     const inner = new Uint8Array(sw * sh * 4);
     for (let y = 0; y < sh; y++) inner.set(full.rgba.subarray(((offset[1] + y) * full.width + offset[0]) * 4, ((offset[1] + y) * full.width + offset[0] + sw) * 4), y * sw * 4);
     const back = resizeRgba({ width: sw, height: sh, rgba: inner }, t.width, t.height).rgba;
-    const g = alignPlate(t.rgba, back, t.width, t.height, use, f.pixel);
+    // too little of an unseen wall is covered to align the answer on: it is taken as answered, and the gate says so
+    const alignable = !unseen || coveredShare >= UNSEEN_MIN_ALIGN_SHARE;
+    const g: AlignResult = alignable ? alignPlate(t.rgba, back, t.width, t.height, use, f.pixel)
+        : { dx: 0, dy: 0, scale: 1, chamferPx: 0, lostShare: 0, accepted: true, why: 'not aligned', aligned: back };
+    const grossNotMeasured = alignable ? undefined : `the tile covers ${(100 * coveredShare).toFixed(0)}% of the wall, under ${100 * UNSEEN_MIN_ALIGN_SHARE}%: too little to align on`;
     let counts: { tile?: FacadeCounts; plate?: FacadeCounts; unread?: string } | undefined;
-    if (opts.counter) {
+    if (unseen && coveredShare < UNSEEN_MIN_COUNT_SHARE) counts = { unread: `the tile covers ${(100 * coveredShare).toFixed(0)}% of the wall: its storeys and bays cannot be counted on it` };
+    else if (opts.counter) {
         // the tile as sent and the aligned plate at the same size, counted together
         const plateSmall = resizeRgba({ width: t.width, height: t.height, rgba: g.aligned }, sw, sh);
         try {
@@ -363,8 +408,14 @@ export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Arra
             counts = { unread: `the count could not be read: ${(err as Error).message.slice(0, 120)}` };
         }
     } else counts = { unread: 'no vision model to count with' };
-    const idg = identityGate(t.rgba, g.aligned, t.width, t.height, use, { askedAspect: padded.width / padded.height, answeredAspect: dec.width / dec.height, chamferPx: g.chamferPx, lostShare: g.lostShare, counts });
-    const why0 = `corrective warp ${g.dx}, ${g.dy} px, scale ${g.scale.toFixed(3)}; ${idg.why}`;
+    const colourAgainst = unseen?.familyLab && coveredShare < UNSEEN_MIN_COLOUR_SHARE ? unseen.familyLab : undefined;
+    const idg = identityGate(t.rgba, g.aligned, t.width, t.height, use, { askedAspect: padded.width / padded.height, answeredAspect: dec.width / dec.height, chamferPx: g.chamferPx, lostShare: g.lostShare, counts, ...(grossNotMeasured ? { grossNotMeasured } : {}), ...(colourAgainst ? { colourAgainst } : {}) });
+    // an unseen wall's plate must draw the unseen part, not leave it grey
+    if (unseen) {
+        const grey = unseenGreyShare(g.aligned, use, N);
+        if (grey > UNSEEN_MAX_GREY_SHARE) { idg.passed = false; idg.why = `${idg.why}; ${(100 * grey).toFixed(0)}% of the unseen part left flat mid-grey (more than ${100 * UNSEEN_MAX_GREY_SHARE}%)`; }
+    }
+    const why0 = `${unseen ? `a wall the tile hardly sees (${(100 * coveredShare).toFixed(0)}% covered), drawn as it continues (${TEXTURE_PLATE_UNSEEN_PROMPT_ID}); ` : ''}corrective warp ${g.dx}, ${g.dy} px, scale ${g.scale.toFixed(3)}; ${idg.why}`;
     const rec = { ...base, accepted: idg.passed, why: idg.passed ? why0 : `not the same wall: ${why0}`, model: answer.modelUsed, chamferPx: g.chamferPx, lostShare: g.lostShare, identity: identityRecord(idg), ms: Date.now() - t0, plate: g.aligned };
     if (!idg.passed && guide && opts.retryWithoutPhoto !== false) {
         // the photo pulled the redraw away from the wall: one more redraw without it; the tile check and the check against the
@@ -386,9 +437,9 @@ export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Arra
     const src = guide && opts.streetViewSource !== undefined ? opts.streetViewSource : opts.source;
     for (let i = 0; i < t.width * t.height; i++) {
         t.rgba[i * 4] = out[i * 4]; t.rgba[i * 4 + 1] = out[i * 4 + 1]; t.rgba[i * 4 + 2] = out[i * 4 + 2]; t.rgba[i * 4 + 3] = 255;
-        if (!weight || weight[i] < 0.5) t.source[i] = src;
+        if (!weight || weight[i] < 0.5) t.source[i] = unseen && !use[i] ? unseen.source : src;
     }
     return { ...rec, ...extra, ms: Date.now() - t0 };
 }
 
-export { TEXTURE_PLATE_PROMPT_ID, TEXTURE_PLATE_STREET_VIEW_PROMPT_ID };
+export { TEXTURE_PLATE_PROMPT_ID, TEXTURE_PLATE_STREET_VIEW_PROMPT_ID, TEXTURE_PLATE_UNSEEN_PROMPT_ID };

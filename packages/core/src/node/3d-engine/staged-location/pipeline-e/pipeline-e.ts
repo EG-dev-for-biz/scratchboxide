@@ -77,6 +77,8 @@ export interface MassingStageResult {
 /** The provenance record of a node of E's layer (open labels). */
 export function massingProvenance(node: Pick<MassingNode, 'kind' | 'provenance' | 'confidence'>, massing: Pick<Massing, 'check'>): ProvenanceRecord {
     if (node.kind === 'residual') return { label: 'as-scanned', measuredGeometry: true, method: 'scan triangles the clean massing does not explain (clearly proud of it, cut into it, or the ground apron), kept with their tile photo', sources: [{ kind: 'tile-extraction', id: 'isolate' }] };
+    // openings cut from an enhanced plate's lattice (or read from a plate and checked on the tile): drawn by an image model
+    if (node.provenance === 'generated') return { label: 'generated', measuredGeometry: false, confidence: Math.max(0, Math.min(1, node.confidence ?? 0.5)), method: `pipeline E enhanced mode: ${node.kind} cut where an AI-enhanced wall plate shows it (the plate's own lattice, its lines fitted to the plate's edges); no window grammar of the scan placed it`, sources: [{ kind: 'stage-output', id: 'pipeline-e-enhance' }] };
     if (node.provenance === 'photo-inferred' || (node.kind === 'roof' && node.provenance.includes('photo-inferred'))) return { label: 'photo-inferred', measuredGeometry: false, confidence: Math.max(0, Math.min(1, node.confidence ?? 0.5)), method: `pipeline E inference: ${node.kind} read from the tile's photo and kept where the scan agrees`, sources: [{ kind: 'stage-output', id: 'pipeline-e-inference' }] };
     return {
         label: 'vector-massing', measuredGeometry: false, confidence: Math.max(0, Math.min(1, massing.check.iou)),
