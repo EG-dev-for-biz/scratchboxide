@@ -112,7 +112,7 @@ function sanitizeDescriptor(raw: any, fallback: ContinuousMaterialDescriptor): C
 export const PBR_MATERIAL_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'pbr_synthesize_material',
-        description: 'Synthesizes procedural PBR texture maps (albedo, tangent normal, packed ORM, height; plus separate roughness / metallic / AO for MaterialX and USDZ) from a continuous 20-float material descriptor, in the native C++20 kernel (scratchbox_pbr_manifold.hpp) compiled with clang++. There is no fallback synthesizer: if the kernel cannot compile or run, the call fails with that error. Timings in the result are measured. With targetMeshPath the maps are applied to the mesh by per-triangle box projection and the textured GLB is written.',
+        description: 'Synthesizes procedural PBR texture maps (albedo, tangent normal, packed ORM, height; plus separate roughness / metallic / AO for MaterialX and USDZ) from a continuous 20-float material descriptor, in the native C++20 kernel (scratchbox_pbr_manifold.hpp) compiled with clang++. There is no fallback synthesizer: if the kernel cannot compile or run, the call fails with that error. Timings in the result are measured. With targetMeshPath the maps are applied to the mesh by per-triangle box projection and the textured GLB is written. Use it when the user asks for procedural texture maps; it is not a follow-up to offer after a 3D build (the maps come out as uniform procedural noise), where material values are changed with sb_set_material_pbr or by rebuilding with adjusted materials.',
         parameters: {
             type: 'OBJECT',
             properties: {
