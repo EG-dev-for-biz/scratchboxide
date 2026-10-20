@@ -820,8 +820,10 @@ private:
             Face* host = nullptr;
             double shift = 0;
             for (auto& f : faces_) {
-                if (!f.wall) continue;
+                // an extruded wall, or a vertical facet of a modelled volume (its own triangles, cut round the openings)
+                if (!f.wall && !(f.kind == "wall" && !f.meshTris.empty())) continue;
                 if (f.key == o.face) { host = &f; shift = 0; break; }
+                if (!f.wall) continue;
                 if (f.key.size() <= o.face.size() || f.key.compare(0, o.face.size(), o.face) != 0 || f.key[o.face.size()] != ':') continue;
                 const Part* part = nullptr;
                 for (const auto& pp : spec_.parts) if (pp.id == f.part) part = &pp;
@@ -1048,8 +1050,28 @@ private:
             }
             return -1e300;
         };
-        bool ok = o.s1 > o.s0 + 0.05 && o.t1 > o.t0 + 0.05 && o.s0 > f.sMin + 0.02 && o.s1 < f.sMax - 0.02 && o.t0 > f.tBottom + (o.scanned ? -1e9 : 0.02) &&
-                  o.t1 < std::min(topAt(o.s0), topAt(o.s1)) - 0.05;
+        bool ok;
+        if (!f.meshTris.empty()) {
+            // a modelled volume's facet: the rectangle (inset 5 cm) inside the facet's own triangles at its corners, edge
+            // midpoints and centre
+            auto inFacet = [&](double s, double t) {
+                for (size_t q = 0; q + 2 < f.meshTris.size(); q += 3) {
+                    double s0, t0, s1, t1, s2, t2;
+                    f.st(f.meshTris[q], s0, t0); f.st(f.meshTris[q + 1], s1, t1); f.st(f.meshTris[q + 2], s2, t2);
+                    double d = (s1 - s0) * (t2 - t0) - (s2 - s0) * (t1 - t0);
+                    if (std::abs(d) < 1e-12) continue;
+                    double u = ((s - s0) * (t2 - t0) - (s2 - s0) * (t - t0)) / d, v = ((s1 - s0) * (t - t0) - (s - s0) * (t1 - t0)) / d;
+                    if (u >= -1e-9 && v >= -1e-9 && u + v <= 1 + 1e-9) return true;
+                }
+                return false;
+            };
+            const double a0 = o.s0 + 0.05, a1 = o.s1 - 0.05, b0 = o.t0 + 0.05, b1 = o.t1 - 0.05;
+            ok = o.s1 > o.s0 + 0.15 && o.t1 > o.t0 + 0.15;
+            for (double s : {a0, 0.5 * (a0 + a1), a1}) for (double t : {b0, 0.5 * (b0 + b1), b1}) if (ok && !inFacet(s, t)) ok = false;
+        } else {
+            ok = o.s1 > o.s0 + 0.05 && o.t1 > o.t0 + 0.05 && o.s0 > f.sMin + 0.02 && o.s1 < f.sMax - 0.02 && o.t0 > f.tBottom + (o.scanned ? -1e9 : 0.02) &&
+                 o.t1 < std::min(topAt(o.s0), topAt(o.s1)) - 0.05;
+        }
         for (int other : f.openings) {
             const auto& p = spec_.openings[static_cast<size_t>(other)];
             if (o.s0 < p.s1 && p.s0 < o.s1 && o.t0 < p.t1 && p.t0 < o.t1) ok = false;
@@ -1067,7 +1089,48 @@ private:
         out.clear();
         auto put = [&](double s, double t) { out.push_back({f.at(s, t), {s, t}}); };
         if (!f.meshTris.empty()) {
-            for (const auto& q : f.meshTris) { double s, t; f.st(q, s, t); out.push_back({q, {s, t}}); }
+            if (f.openings.empty()) {
+                for (const auto& q : f.meshTris) { double s, t; f.st(q, s, t); out.push_back({q, {s, t}}); }
+                return;
+            }
+            // the facet's triangles minus the openings' rectangles, in its (s, t): each convex piece split by a rectangle into
+            // the parts left, right, below and above it (half-plane clips), then fanned
+            using Poly = std::vector<std::pair<double, double>>;
+            auto clip = [](const Poly& P, int axis, double v, bool keepBelow) {
+                Poly out;
+                for (size_t i = 0; i < P.size(); ++i) {
+                    const auto& a = P[i];
+                    const auto& b = P[(i + 1) % P.size()];
+                    double da = (axis == 0 ? a.first : a.second) - v, db = (axis == 0 ? b.first : b.second) - v;
+                    if (keepBelow) { da = -da; db = -db; }
+                    if (da >= 0) out.push_back(a);
+                    if ((da >= 0) != (db >= 0)) { double u = da / (da - db); out.push_back({a.first + u * (b.first - a.first), a.second + u * (b.second - a.second)}); }
+                }
+                return out;
+            };
+            std::vector<Poly> pieces;
+            for (size_t q = 0; q + 2 < f.meshTris.size(); q += 3) {
+                Poly P;
+                for (int k = 0; k < 3; ++k) { double s, t; f.st(f.meshTris[q + static_cast<size_t>(k)], s, t); P.push_back({s, t}); }
+                pieces.push_back(P);
+            }
+            for (int oi : f.openings) {
+                const auto& o = spec_.openings[static_cast<size_t>(oi)];
+                std::vector<Poly> next;
+                for (const auto& P : pieces) {
+                    auto keep = [&](const Poly& R) { if (R.size() >= 3) next.push_back(R); };
+                    keep(clip(P, 0, o.s0, true));                                         // s <= s0
+                    keep(clip(P, 0, o.s1, false));                                        // s >= s1
+                    Poly mid = clip(clip(P, 0, o.s0, false), 0, o.s1, true);              // s0 <= s <= s1
+                    if (mid.size() >= 3) { keep(clip(mid, 1, o.t0, true)); keep(clip(mid, 1, o.t1, false)); }
+                }
+                pieces.swap(next);
+            }
+            for (const auto& P : pieces) for (size_t k = 1; k + 1 < P.size(); ++k) {
+                double area = (P[k].first - P[0].first) * (P[k + 1].second - P[0].second) - (P[k + 1].first - P[0].first) * (P[k].second - P[0].second);
+                if (std::abs(area) < 1e-10) continue;
+                put(P[0].first, P[0].second); put(P[k].first, P[k].second); put(P[k + 1].first, P[k + 1].second);
+            }
             return;
         }
         if (f.wall) {

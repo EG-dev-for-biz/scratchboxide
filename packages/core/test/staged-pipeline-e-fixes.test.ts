@@ -159,6 +159,51 @@ describe('a wall off the scanned facade is baked about the photo surface (native
     });
 });
 
+describe('openings in a modelled volume\'s facets (native)', () => {
+    it('cuts a window into a facet of a modelled volume, which only extruded walls took before', async () => {
+        const dir = tmp();
+        const W = 32, H = 32, img = new Uint8Array(W * H * 4).fill(200);
+        const tile = path.join(dir, 'tile.glb');
+        const scan: MassingNode = { name: 'scan', kind: 'residual', provenance: 'as-scanned', confidence: null, positions: new Float32Array([0, 0, 0, 1, 0, 0, 1, 0, -1]), normals: new Float32Array(9), ref: new Int32Array([-2, -2, -2]), st: new Float32Array(6), indices: new Uint32Array([0, 1, 2]) };
+        fs.writeFileSync(tile, writeMassingTexturedGlb({ nodes: [scan], faces: [], stage: 'test', stageKey: 'k', provenanceOf: () => ({ label: 'as-scanned', measuredGeometry: true, method: 'synthetic', sources: [] }), textures: new Map(), legend: [], tileImages: new Map([[0, { bytes: new Uint8Array(encodePng(W, H, Buffer.from(img), 4)), mimeType: 'image/png' }]]), tileLegendIndex: 0 }).glb);
+        // a 12 x 9 x 8 m volume, its south facet (normal +z) at z = 0, given as Google gives volumes (both windings)
+        const box = doubledBox(0, 12, 0, 9, -8, 0, 0);
+        const vol = singleSided({ id: 'v', vertices: box.v, indices: box.i });
+        const m = { parts: [], meshes: [vol] };
+        const run0 = await runMassing(massingSpecText(m, { outDir: path.join(dir, 'a'), tile, isolate: tile, params: { pixel: 0.1, snapMaxM: 0, sections: 0, topdown: 0 } }), path.join(dir, 'a'));
+        const south = run0.report.faces.find(f => f.kind === 'wall' && f.normal[2] > 0.9)!;
+        expect(south.wall).toBe(false); // a facet, not an extruded wall
+        const area = (r: typeof run0, key: string) => {
+            const n = r.nodes.find(x => x.name === key)!;
+            let a = 0;
+            for (let i = 0; i < n.indices.length; i += 3) {
+                const [p, q, w] = [0, 1, 2].map(k => [0, 1, 2].map(c => n.positions[n.indices[i + k] * 3 + c]));
+                const u = [q[0] - p[0], q[1] - p[1], q[2] - p[2]], v = [w[0] - p[0], w[1] - p[1], w[2] - p[2]];
+                a += 0.5 * Math.hypot(u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]);
+            }
+            return a;
+        };
+        expect(area(run0, south.key)).toBeCloseTo(108, 3);
+        // a 2 x 1.5 m window in the middle of the facet, and one that does not fit (beyond its top)
+        const sMid = 0.5 * (south.sMin + south.sMax), tMid = 0.5 * (south.tMin + south.tMax);
+        const openings = [
+            { id: 'w0', face: south.key, s0: sMid - 1, s1: sMid + 1, t0: tMid - 0.75, t1: tMid + 0.75, depth: 0.2, scanned: false, confidence: 0.6, provenance: 'generated' },
+            { id: 'w1', face: south.key, s0: sMid - 1, s1: sMid + 1, t0: south.tMax - 0.5, t1: south.tMax + 1, depth: 0.2, scanned: false, confidence: 0.6, provenance: 'generated' }
+        ];
+        const run1 = await runMassing(massingSpecText(m, { outDir: path.join(dir, 'b'), tile, isolate: tile, openings, params: { pixel: 0.1, snapMaxM: 0, sections: 0, topdown: 0 } }), path.join(dir, 'b'));
+        expect(run1.report.rejectedOpenings).toEqual(['w1']);
+        expect(area(run1, south.key)).toBeCloseTo(108 - 3, 3);
+        const rec = run1.nodes.find(n => n.name === 'opening:w0')!;
+        expect(rec.kind).toBe('opening');
+        expect(rec.provenance).toBe('generated');
+        expect(rec.indices.length).toBe(30); // back, sill, head and two jambs
+        // the solid stays closed: the recess replaces the hole
+        const f1 = run1.report.faces.find(f => f.key === south.key)!;
+        const o = readFaceOrtho(run1.dir, f1)!;
+        shot('facet_window_cut.png', o.width, o.height, o.rgba);
+    });
+});
+
 /** A face record for a W x H ortho at PX metres per pixel, facing +z at z = 0, s along +x, t up. */
 function faceOf(index: number, W: number, H: number, PX: number, extra: Partial<MassingFace> = {}): MassingFace {
     return {

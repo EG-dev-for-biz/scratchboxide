@@ -361,7 +361,14 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
     const run2 = await runNativeMassing({ parts: allParts, meshes: massing.meshes }, { tilePath: input.tilePath, isolateGlb: input.isolateGlb, dir: path.join(input.dir, 'native2'), sweeps, openings, params: { snapMaxM: 0, sections: 0, topdown: 0 }, ...(input.signal ? { signal: input.signal } : {}) });
     timingsMs.native2 = now() - t;
     const rejectedOpenings = new Set(run2.report.rejectedOpenings);
-    if (rejectedOpenings.size) winStep.notes.push(`${rejectedOpenings.size} openings did not fit inside their wall and were left out`);
+    if (rejectedOpenings.size) {
+        // a modelled volume's facets are not extruded walls: the native tool cuts openings only into extruded walls
+        const facetKeys = new Set(faces.filter(f => !f.wall).map(f => f.key));
+        const onFacets = openings.filter(o => rejectedOpenings.has(o.id) && facetKeys.has(o.face)).length;
+        const misfit = rejectedOpenings.size - onFacets;
+        if (onFacets) winStep.notes.push(`${onFacets} openings lie on facets of a modelled volume, which the native tool does not cut openings into (only extruded walls): left out, the wall stays flat`);
+        if (misfit) winStep.notes.push(`${misfit} openings did not fit inside their wall and were left out`);
+    }
     if (run2.report.rejectedSweeps.length) bandStep.notes.push(`${run2.report.rejectedSweeps.length} sweeps found no wall and were left out`);
 
     // ------------------------------------------------------------------ textures: (g) masks, (d) bays, fill, (e) straighten, (f) colour
@@ -698,10 +705,12 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
         // labelled generated; walls the tile hardly sees are not cut (nothing real says where their openings are)
         const latOpStep = rec('enhance-plate-openings');
         const cutWalls = new Set<number>([...grammars.map(g => g.facadeId), ...extra.map(o => Number(/^plate_(\d+)_/.exec(o.id)?.[1] ?? NaN))]);
-        const want = [...plates.entries()].filter(([fi, pl]) => !pl.unseen && !cutWalls.has(fi));
+        const facetWalls = [...plates.keys()].filter(fi => !faces[fi].wall && !plates.get(fi)!.unseen && !cutWalls.has(fi));
+        if (facetWalls.length) latOpStep.notes.push(`walls ${facetWalls.join(', ')}: facets of a modelled volume, which the native tool does not cut openings into: not read`);
+        const want = [...plates.entries()].filter(([fi, pl]) => !pl.unseen && !cutWalls.has(fi) && faces[fi].wall);
         const skippedUnseen = [...plates.entries()].filter(([, pl]) => pl.unseen).map(([fi]) => fi);
         if (skippedUnseen.length) latOpStep.notes.push(`walls ${skippedUnseen.join(', ')}: drawn where the tile does not see them; not cut (nothing real places their openings)`);
-        if (!want.length) latOpStep.skipped = plates.size ? 'every enhanced wall the tile sees already has openings carved from a grammar that passed' : 'no wall was enhanced';
+        if (!want.length) latOpStep.skipped = plates.size ? 'no enhanced extruded wall the tile sees is without openings carved from a grammar that passed' : 'no wall was enhanced';
         else if (!chain) latOpStep.skipped = noVision;
         else if (now() - tRead > PLATE_GRAMMAR_LATEST_MS) latOpStep.skipped = `no time left in the stage (${Math.round((now() - tRead) / 1000)} s spent; the plates' lattice is read only before ${PLATE_GRAMMAR_LATEST_MS / 1000} s)`;
         else {
