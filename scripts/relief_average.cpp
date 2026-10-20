@@ -111,7 +111,7 @@ int main(int argc, char** argv) {
                 else if (name == "margin") p.margin = v; else if (name == "shift") p.shift = v;
                 else if (name == "slabLo") p.slabLo = v; else if (name == "slabHi") p.slabHi = v; else if (name == "clampGuard") p.clampGuard = v;
                 else if (name == "maxVerticalShare") p.maxVerticalShare = v; else if (name == "fullLength") p.fullLength = v;
-                else if (name == "detrendWindow") p.detrendWindow = v; else if (name == "maxDepth") p.maxDepth = v;
+                else if (name == "detrendWindow") p.detrendWindow = v; else if (name == "maxDepth") p.maxDepth = v; else if (name == "minWidth") p.minWidth = v;
                 else throw std::runtime_error("unknown param " + name);
             } else if (kw == "face") {
                 FaceJob f;

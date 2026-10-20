@@ -73,6 +73,8 @@ struct Params {
     double shift{0.15};
     /** Samples at the slab's limits are clamp hits, not surface: excluded. */
     double slabLo{-1.5}, slabHi{2.5}, clampGuard{0.06};
+    /** Least width across a line feature (metres): narrower is below what the scan resolves (about its triangle size). */
+    double minWidth{0.15};
     /** Least share of a block that must be valid for the block to be a sample. */
     double blockValid{0.3};
     /** A vertical run may cover at most this share of the face width (wider is the wall itself). */
@@ -415,7 +417,7 @@ inline std::vector<LineFeature> lineFeatures(const Field& f, int along, double b
         else if (!(lf.depth >= p.k * lf.se)) lf.why += "; not significant (under k SE)";
         else if (lf.blocks < p.minBlocks) lf.why += "; too few blocks";
         else if (lf.agree < p.consistency) lf.why += "; not consistent along its length";
-        else if (runLines < 2) lf.why += "; a single line";
+        else if (runLines * f.pixel < p.minWidth - 1e-9) lf.why += "; narrower than the scan resolves";
         else if (along == 1 && (lf.l1 - lf.l0 + 1) > p.maxVerticalShare * f.W) lf.why += "; wider than half the face (the wall itself, not an element on it)";
         else lf.accepted = true;
         out.push_back(std::move(lf));
@@ -626,8 +628,11 @@ inline UnitResult averageUnit(const Field& f, double base, const std::vector<Ope
         const int mid = rows ? mx + W / 2 : my + H / 2;
         int a0 = mid, a1 = mid;
         if (!ok[static_cast<size_t>(mid)]) { out.a0 = 0; out.a1 = 0; if (out.accepted) { out.accepted = false; out.why += "; not continuous across the opening"; } return; }
-        while (a0 - 1 >= 0 && ok[static_cast<size_t>(a0 - 1)]) --a0;
-        while (a1 + 1 < along && ok[static_cast<size_t>(a1 + 1)]) ++a1;
+        // grow across gaps of up to 0.15 m (an averaged texel is still noisy)
+        const int gap = std::max(1, static_cast<int>(std::lround(0.15 / f.pixel)));
+        auto okAt = [&](int a) { return a >= 0 && a < along && ok[static_cast<size_t>(a)]; };
+        for (bool grew = true; grew;) { grew = false; for (int g = 1; g <= gap; ++g) if (okAt(a0 - g)) { a0 -= g; grew = true; break; } }
+        for (bool grew = true; grew;) { grew = false; for (int g = 1; g <= gap; ++g) if (okAt(a1 + g)) { a1 += g; grew = true; break; } }
         // relative to the start edge (x0 for rows; for columns, the top edge in pixels is y0: t1) and the end edge
         const int M = rows ? mx : my, Wn = rows ? W : H;
         out.a0 = (a0 - M) * f.pixel;               // metres from the start edge (negative: beyond it)
