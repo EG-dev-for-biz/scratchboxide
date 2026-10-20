@@ -90,6 +90,7 @@ static void usage() {
         "                              a value other than the recorded one is refused)\n"
         "    --coverage-fill 0|1 (1) --coverage-leaf-area-index V (4.6) --coverage-max-fill-share V (0.8)   fill each crown toward 1 - exp(-0.5 LAI leafiness)\n"
         "    --mid-area-gain V --near-mid-area-gain V   leaf area of the mid / near-mid clusters as a multiple of the near level's\n"
+        "    --crown-correction PATH   photo-inferred crown widths and bases (scratchbox.crown-correction/1), applied before growing\n"
         "    --crown-cards 0|1 (1) --crown-card-side-per-reach V (2) --crown-card-coverage-share V (1)   the mid level as large leaf-spray cards\n"
         "                                    (side V cluster reaches) placed until they cover V x what the mid clusters would\n"
         "    --threads N\n";
@@ -413,6 +414,25 @@ static int runPlant(const Args& a) {
         P.textureIndex = a.has("texture-index-label") ? a.str("texture-index-label") : a.str("texture-index");
     }
 
+    if (a.has("crown-correction")) {
+        // photo-inferred crown corrections (scratchbox.crown-correction/1, tree-crown-photo-check.ts): each listed crown's
+        // width and base, applied before it is grown
+        const auto cb = readFileBytes(a.str("crown-correction"));
+        const io::GlbJsonValue cdoc = json::parse(std::string(cb.begin(), cb.end()));
+        if (cdoc.type != io::GlbJsonValue::Object || cdoc["schema"].asString() != "scratchbox.crown-correction/1" || cdoc["trees"].type != io::GlbJsonValue::Object) {
+            throw VegetationError("bad_input", "--crown-correction is not a scratchbox.crown-correction/1 document with a trees object");
+        }
+        P.crownCorrectionMethod = cdoc["method"].type == io::GlbJsonValue::String ? cdoc["method"].asString() : std::string("photo-inferred");
+        for (const auto& [id, e] : cdoc["trees"].obj) {
+            CrownCorrection k;
+            k.widthScale = e["widthScale"].type == io::GlbJsonValue::Number ? e["widthScale"].num : 1.0;
+            k.crownBaseRatio = e["crownBaseRatio"].type == io::GlbJsonValue::Number ? e["crownBaseRatio"].num : std::numeric_limits<double>::quiet_NaN();
+            k.source = e["source"].type == io::GlbJsonValue::String ? e["source"].asString() : std::string("photo");
+            if (!(k.widthScale > 0)) throw VegetationError("bad_input", "--crown-correction: crown " + id + " has a widthScale that is not > 0");
+            P.crownCorrections[std::stoi(id)] = k;
+        }
+    }
+
     const auto bytes = readFileBytes(a.str("crowns"));
     const std::string text(bytes.begin(), bytes.end());
     const io::GlbJsonValue doc = json::parse(text);
@@ -525,13 +545,16 @@ static int runPlant(const Args& a) {
           << ", \"stop\": " << json::str(t.colonisation.stop) << ", \"trunkSeekSteps\": " << t.colonisation.trunkSeekSteps << "}"
           << ", \"bounds\": [[" << json::num(lo.x) << "," << json::num(lo.y) << "," << json::num(lo.z) << "],[" << json::num(hi.x) << "," << json::num(hi.y) << "," << json::num(hi.z) << "]]"
           << ", \"seed\": " << t.seed << ", \"crownBaseRatio\": " << json::num(t.crownBaseRatio);
+        if (t.hasCorrection) s << ", \"crownCorrection\": {\"widthScale\": " << json::num(t.correction.widthScale) << ", \"crownBaseRatio\": "
+                               << (std::isfinite(t.correction.crownBaseRatio) ? json::num(t.correction.crownBaseRatio) : std::string("null")) << ", \"source\": " << json::str(t.correction.source) << ", \"provenance\": \"photo-inferred\"}";
+        if (!t.correctionDropped.empty()) s << ", \"crownCorrectionDropped\": " << json::str(t.correctionDropped);
         if (t.hasLod) {
             const auto& L = t.lod;
             auto lvl = [&](const tree_lod::LeafLevelMeasure& m, size_t drawn) {
                 double sMax = 0, sMin = 1e9;
                 size_t over = 0;
                 for (int k = 0; k < 16; ++k) {
-                    const double rr = (*t.crown)["sectorRadii"][static_cast<size_t>(k)].num;
+                    const double rr = (*t.crown)["sectorRadii"][static_cast<size_t>(k)].num * (t.hasCorrection ? t.correction.widthScale : 1.0);
                     if (rr <= 0) continue;
                     const double ratio = m.spread[static_cast<size_t>(k)] / rr;
                     sMax = std::max(sMax, ratio); sMin = std::min(sMin, ratio);
