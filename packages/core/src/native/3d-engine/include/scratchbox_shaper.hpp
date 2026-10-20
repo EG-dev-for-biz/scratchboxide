@@ -685,6 +685,196 @@ public:
     }
 };
 
+class Replicator3D {
+public:
+    /**
+     * Repeats a seed mesh at a continuous pitch along a carrier curve (bolt circles on a
+     * closed loop, louvres, teeth, treads), oriented by rotation-minimizing frames so each
+     * instance follows the carrier's local tangent/normal/binormal rather than staying
+     * axis-aligned. The seed's local +Z maps to the carrier tangent, +X to the frame normal,
+     * +Y to the binormal.
+     *
+     * fitToLength spaces instances evenly from the curve's start to its end (so the last
+     * instance always lands exactly at the end); otherwise instances step at a fixed pitch
+     * from the start and may leave a remainder gap. mergeDistance welds coincident vertices
+     * between neighboring instances (the artifact naive per-instance duplication produces at
+     * a shared seam, e.g. adjoining tread teeth) — 0 disables welding.
+     */
+    static ScratchboxMesh alongCurve(
+        const ScratchboxMesh& seed,
+        const std::vector<Vec3>& curve,
+        float pitch,
+        float mergeDistance = 0.0f,
+        bool fitToLength = true
+    ) {
+        ScratchboxMesh out("replicated_mesh");
+        if (curve.size() < 2 || pitch <= 1e-6f || seed.vertices.empty()) return out;
+
+        std::vector<float> cum(curve.size(), 0.0f);
+        for (size_t i = 1; i < curve.size(); ++i) cum[i] = cum[i - 1] + (curve[i] - curve[i - 1]).length();
+        float total = cum.back();
+        if (total < 1e-6f) return out;
+
+        int count = std::max(1, fitToLength
+            ? static_cast<int>(std::lround(total / pitch)) + 1
+            : static_cast<int>(std::floor(total / pitch)) + 1);
+        std::vector<float> arcLens(static_cast<size_t>(count));
+        for (int i = 0; i < count; ++i) {
+            arcLens[static_cast<size_t>(i)] = fitToLength
+                ? (count > 1 ? total * static_cast<float>(i) / static_cast<float>(count - 1) : 0.0f)
+                : std::min(total, pitch * static_cast<float>(i));
+        }
+
+        // An augmented curve carrying every original vertex plus every exact instance
+        // position, inserted at its true arc-length place, so one rotation-minimizing-frame
+        // pass gives correctly propagated frames at the instance points directly, instead of
+        // re-deriving curvature locally at each one (which is what produces per-instance twist).
+        std::vector<Vec3> augmented;
+        std::vector<int> instanceFrame(static_cast<size_t>(count), -1);
+        augmented.push_back(curve[0]);
+        size_t ai = 0;
+        auto stampAt = [&](float arc) {
+            while (ai < arcLens.size() && arcLens[ai] <= arc + 1e-5f) {
+                instanceFrame[ai] = static_cast<int>(augmented.size()) - 1;
+                ++ai;
+            }
+        };
+        stampAt(cum[0]);
+        for (size_t i = 1; i < curve.size(); ++i) {
+            float segStart = cum[i - 1], segEnd = cum[i];
+            while (ai < arcLens.size() && arcLens[ai] < segEnd - 1e-5f) {
+                float t = (arcLens[ai] - segStart) / std::max(1e-9f, segEnd - segStart);
+                augmented.push_back(curve[i - 1] + (curve[i] - curve[i - 1]) * t);
+                instanceFrame[ai] = static_cast<int>(augmented.size()) - 1;
+                ++ai;
+            }
+            augmented.push_back(curve[i]);
+            stampAt(segEnd);
+        }
+        while (ai < arcLens.size()) { instanceFrame[ai] = static_cast<int>(augmented.size()) - 1; ++ai; }
+
+        std::vector<Sweep3D::Frame> frames = Sweep3D::rotationMinimizingFrames(augmented);
+
+        for (int i = 0; i < count; ++i) {
+            int fi = instanceFrame[static_cast<size_t>(i)];
+            if (fi < 0 || static_cast<size_t>(fi) >= frames.size()) continue;
+            const Sweep3D::Frame& f = frames[static_cast<size_t>(fi)];
+
+            ScratchboxMesh instance = seed;
+            for (auto& v : instance.vertices) {
+                Vec3 local = v.position;
+                v.position = f.origin + f.normal * local.x + f.binormal * local.y + f.tangent * local.z;
+                Vec3 n = f.normal * v.normal.x + f.binormal * v.normal.y + f.tangent * v.normal.z;
+                v.normal = n.length() > 1e-8f ? n.normalized() : v.normal;
+                Vec3 tanXyz(v.tangent.x, v.tangent.y, v.tangent.z);
+                Vec3 t = f.normal * tanXyz.x + f.binormal * tanXyz.y + f.tangent * tanXyz.z;
+                if (t.length() > 1e-8f) { t = t.normalized(); v.tangent = Vec4(t.x, t.y, t.z, v.tangent.w); }
+            }
+            instance.recomputeBounds();
+            out.append(instance);
+        }
+
+        if (mergeDistance > 1e-9f) weldCoincidentVertices(out, mergeDistance);
+        out.recomputeBounds();
+        return out;
+    }
+
+    /**
+     * Repeats a seed mesh over a flat lattice: pitchU/pitchV spacing, countU x countV
+     * instances, with alternating rows offset by rowOffsetU (brick-style bonding) when
+     * alternateRows is set. originNormal/originTangent/originBinormal place the lattice
+     * plane in world space (defaults: XZ plane, Y up). mergeDistance welds coincident
+     * vertices between neighboring instances, as in alongCurve.
+     */
+    static ScratchboxMesh onGrid(
+        const ScratchboxMesh& seed,
+        int countU, int countV,
+        float pitchU, float pitchV,
+        float rowOffsetU = 0.0f,
+        bool alternateRows = false,
+        float mergeDistance = 0.0f,
+        const Vec3& origin = Vec3(0, 0, 0),
+        const Vec3& axisU = Vec3(1, 0, 0),
+        const Vec3& axisV = Vec3(0, 0, 1)
+    ) {
+        ScratchboxMesh out("replicated_grid_mesh");
+        if (countU < 1 || countV < 1 || seed.vertices.empty()) return out;
+
+        for (int j = 0; j < countV; ++j) {
+            float rowShift = (alternateRows && (j % 2 != 0)) ? rowOffsetU : 0.0f;
+            for (int i = 0; i < countU; ++i) {
+                Vec3 offset = origin + axisU * (static_cast<float>(i) * pitchU + rowShift) + axisV * (static_cast<float>(j) * pitchV);
+                ScratchboxMesh instance = seed;
+                for (auto& v : instance.vertices) v.position += offset;
+                instance.recomputeBounds();
+                out.append(instance);
+            }
+        }
+
+        if (mergeDistance > 1e-9f) weldCoincidentVertices(out, mergeDistance);
+        out.recomputeBounds();
+        return out;
+    }
+
+private:
+    /**
+     * Merge-by-distance: welds vertices within epsilon of each other (the artifact naive
+     * per-instance duplication leaves at a shared seam between adjoining replicated copies),
+     * via a uniform spatial hash so it stays near-linear instead of all-pairs.
+     */
+    static void weldCoincidentVertices(ScratchboxMesh& mesh, float epsilon) {
+        if (mesh.vertices.empty()) return;
+        float cell = std::max(epsilon, 1e-6f);
+        auto keyOf = [&](const Vec3& p) {
+            return std::array<int64_t, 3>{
+                static_cast<int64_t>(std::floor(p.x / cell)),
+                static_cast<int64_t>(std::floor(p.y / cell)),
+                static_cast<int64_t>(std::floor(p.z / cell))
+            };
+        };
+        std::map<std::array<int64_t, 3>, std::vector<uint32_t>> grid;
+        for (uint32_t i = 0; i < mesh.vertices.size(); ++i) grid[keyOf(mesh.vertices[i].position)].push_back(i);
+
+        std::vector<uint32_t> remap(mesh.vertices.size());
+        std::vector<uint8_t> resolved(mesh.vertices.size(), 0);
+        float eps2 = epsilon * epsilon;
+
+        for (uint32_t i = 0; i < mesh.vertices.size(); ++i) {
+            if (resolved[i]) continue;
+            remap[i] = i;
+            resolved[i] = 1;
+            auto k = keyOf(mesh.vertices[i].position);
+            for (int64_t dx = -1; dx <= 1; ++dx)
+            for (int64_t dy = -1; dy <= 1; ++dy)
+            for (int64_t dz = -1; dz <= 1; ++dz) {
+                auto it = grid.find({k[0] + dx, k[1] + dy, k[2] + dz});
+                if (it == grid.end()) continue;
+                for (uint32_t j : it->second) {
+                    if (resolved[j] || j <= i) continue;
+                    if ((mesh.vertices[j].position - mesh.vertices[i].position).lengthSq() <= eps2) {
+                        remap[j] = i;
+                        resolved[j] = 1;
+                    }
+                }
+            }
+        }
+
+        std::vector<uint32_t> newIndexOf(mesh.vertices.size(), std::numeric_limits<uint32_t>::max());
+        std::vector<Vertex> newVerts;
+        newVerts.reserve(mesh.vertices.size());
+        for (uint32_t i = 0; i < mesh.vertices.size(); ++i) {
+            uint32_t root = remap[i];
+            if (newIndexOf[root] == std::numeric_limits<uint32_t>::max()) {
+                newIndexOf[root] = static_cast<uint32_t>(newVerts.size());
+                newVerts.push_back(mesh.vertices[root]);
+            }
+            newIndexOf[i] = newIndexOf[root];
+        }
+        for (auto& idx : mesh.indices) idx = newIndexOf[idx];
+        mesh.vertices = std::move(newVerts);
+    }
+};
+
 class Lathe3D {
 public:
     /**
