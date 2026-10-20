@@ -189,6 +189,12 @@ export interface AtmosphericSkyDomeModule {
     sunLight: THREE.DirectionalLight;
     sunDirection: THREE.Vector3;
     diurnalProfile: DiurnalLightingProfile;
+    /**
+     * Keeps the sky around the view: centres the dome and sun disc on the camera and scales them to just inside its far
+     * plane, so the dome's edge is never seen however far the camera pulls back (a sky is at infinity). The sun light is
+     * not moved: its shadows stay fitted to the content.
+     */
+    followCamera?: (camera: THREE.Camera) => void;
     update: (time: number, delta: number) => void;
     setSunCoordinates: (elevationDeg: number, azimuthDeg: number) => void;
     setTimeOfDay: (timeHours: number, lat: number, lng: number) => void;

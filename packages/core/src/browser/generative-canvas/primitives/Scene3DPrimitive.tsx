@@ -2317,6 +2317,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
                 // 1–2. Sky dome, cloud shadows, aerial perspective, god rays
                 skyDomeModuleRef.current?.update?.(t, deltaSec);
+                skyDomeModuleRef.current?.followCamera?.(camera);
                 terrainCloudShadowsRef.current?.update(t, skyDomeModuleRef.current?.sunDirection);
                 aerialPerspectiveRef.current?.update(t, deltaSec);
                 godRaysRef.current?.update?.(t, deltaSec);
@@ -2499,6 +2500,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         const handle = syncTilesLayer(stack, tilesInputRef.current, {
             onLayerReady: (tilesLayer, terrainManager) => {
                 tilesRendererRef.current = tilesLayer;
+                // tiles light up (and take the sun's shadows) only while the scene has an atmosphere sun
+                (tilesLayer as any).setLit?.(classifyAtmosphere(atmosphereInputRef.current).isSkySkybox);
                 terrainManagerRef.current = terrainManager;
             },
             onError: message => setTilesError(message),
@@ -2576,6 +2579,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             createProceduralBiomeTerrain
         });
         atmosphereRef.current = handle;
+        // Google's tiles are unlit as delivered: lit while the atmosphere's sun is on, their own photo look otherwise
+        (tilesRendererRef.current as any)?.setLit?.(classifyAtmosphere(atmosphereInputRef.current).isSkySkybox);
         const placeProbes = placeReflectionsRef.current;
         if (placeProbes) {
             placeProbes.setActive(placeReflectionsEnabled() && classifyAtmosphere(atmosphereInputRef.current).placeReflections);

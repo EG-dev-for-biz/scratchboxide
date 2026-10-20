@@ -239,6 +239,9 @@ function createStarfield(scene: THREE.Scene): THREE.Points {
     return stars;
 }
 
+/** The least reach of the sun's shadows over live 3D Tiles, metres (a street and the buildings on both sides). */
+export const TILES_SUN_SHADOW_RADIUS_M = 150;
+
 /**
  * The atmospheric sun's shadow camera sized to the content: an orthographic box of half-width `radius` around the scene's
  * centre, the light placed along the sun direction outside it, and a map fine enough for that extent (the three.js default
@@ -346,9 +349,11 @@ export function syncAtmosphere(
             ? input.atmosphericScattering
             : {};
         // the shadow reach: the config's own (atmosphere_configure_scene sizes it to the scene), else the content's radius
-        const shadowRadius = typeof atmoConfig.sunShadowRadiusMeters === 'number' && atmoConfig.sunShadowRadiusMeters > 0
+        const configured = typeof atmoConfig.sunShadowRadiusMeters === 'number' && atmoConfig.sunShadowRadiusMeters > 0
             ? atmoConfig.sunShadowRadiusMeters
             : Math.max(30, input.contentRadiusMeters ?? (isLargeScale ? 300 : 30));
+        // over live 3D Tiles the shadows fall on the street around the camera, not only on the scene's own objects
+        const shadowRadius = input.has3DTiles ? Math.max(configured, TILES_SUN_SHADOW_RADIUS_M) : configured;
         // the dome encloses the camera's orbit around content of that size (the stand-off camera sits a few radii out)
         skyDomeModule = createAtmosphericSkyDome(scene, isSunset, atmoConfig, { sphereRadius: Math.max(280, shadowRadius * 8) });
         skyDomeObject = skyDomeModule.skyDome;

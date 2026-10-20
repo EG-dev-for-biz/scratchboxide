@@ -32,7 +32,8 @@ varying vec3 vNormal;
 
 void main() {
     vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-    vWorldPosition = worldPosition.xyz;
+    // the view direction from the dome's own centre (the dome follows the camera), not from the scene origin
+    vWorldPosition = worldPosition.xyz - (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
     vNormal = normalize(normalMatrix * normal);
     gl_Position = projectionMatrix * viewMatrix * worldPosition;
 }
@@ -778,7 +779,8 @@ export function createAtmosphericSkyDome(
         (sunMesh.material as THREE.MeshBasicMaterial).color.copy(effSun);
         (sunMesh.material as THREE.MeshBasicMaterial).opacity = diurnalProfile.isNight ? 0.0 : 0.95;
 
-        sunLight.position.copy(sunMesh.position);
+        // the light's own position along the sun direction (the disc may sit around the camera; see followCamera)
+        sunLight.position.copy(sunDirection).multiplyScalar(sunDistance);
         sunLight.color.copy(effSun);
         sunLight.intensity = diurnalProfile.sunIntensity;
         sunLight.castShadow = diurnalProfile.castShadows;
@@ -802,6 +804,14 @@ export function createAtmosphericSkyDome(
         },
         update: (time: number, _delta: number) => {
             uniforms.uTime.value = time;
+        },
+        followCamera: (camera: THREE.Camera) => {
+            const far = (camera as THREE.PerspectiveCamera).far;
+            const scale = Number.isFinite(far) && far > 0 ? (far * 0.9) / radius : 1;
+            skyDome.position.copy(camera.position);
+            skyDome.scale.setScalar(scale);
+            sunMesh.position.copy(camera.position).addScaledVector(sunDirection, sunDistance * scale);
+            sunMesh.scale.setScalar(scale);
         },
         setSunCoordinates: (elevDeg: number, azimDeg: number) => {
             applySolarState(elevDeg, azimDeg);
