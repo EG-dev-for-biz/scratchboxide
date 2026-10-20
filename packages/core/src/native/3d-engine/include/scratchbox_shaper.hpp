@@ -573,6 +573,118 @@ public:
     }
 };
 
+class Sweep3D {
+public:
+    struct Frame {
+        Vec3 origin;
+        Vec3 tangent;
+        Vec3 normal;    // first transverse axis
+        Vec3 binormal;  // second transverse axis (tangent x normal)
+    };
+
+    /**
+     * Rotation-minimizing frames along a polyline carrier curve, via the double
+     * reflection method (Wang, Jüttler, Zheng, Liu — "Computation of Rotation
+     * Minimizing Frames", ACM TOG 2008). Unlike a per-segment Frenet or
+     * Gram-Schmidt frame, the transverse axes are propagated from the previous
+     * frame rather than re-derived from local curvature, so they don't flip or
+     * spin at inflection points, straight runs, or near-parallel tangents —
+     * the artifact a naive per-segment frame produces when sweeping a profile
+     * along a general carrier curve (limbs, hoses, struts, coils).
+     */
+    static std::vector<Frame> rotationMinimizingFrames(
+        const std::vector<Vec3>& curve,
+        Vec3 initialNormalHint = Vec3(0, 1, 0)
+    ) {
+        std::vector<Frame> frames;
+        size_t n = curve.size();
+        if (n < 2) return frames;
+        frames.resize(n);
+
+        std::vector<Vec3> tangent(n);
+        for (size_t i = 0; i < n; ++i) {
+            Vec3 dir = (i + 1 < n ? curve[i + 1] : curve[i]) - (i > 0 ? curve[i - 1] : curve[i]);
+            tangent[i] = dir.length() > 1e-8f ? dir.normalized() : Vec3(0, 0, 1);
+        }
+
+        // Seed frame 0: orthogonalize the hint normal against the tangent.
+        Vec3 t0 = tangent[0];
+        Vec3 hint = initialNormalHint;
+        if (std::abs(hint.normalized().dot(t0)) > 0.999f) {
+            hint = (std::abs(t0.y) < 0.9f) ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
+        }
+        Vec3 n0 = (hint - t0 * t0.dot(hint)).normalized();
+        frames[0] = { curve[0], t0, n0, t0.cross(n0).normalized() };
+
+        for (size_t i = 0; i + 1 < n; ++i) {
+            const Frame& Fi = frames[i];
+            Vec3 v1 = curve[i + 1] - curve[i];
+            float c1 = v1.dot(v1);
+
+            Vec3 rL = Fi.normal;
+            Vec3 tL = Fi.tangent;
+            if (c1 > 1e-12f) {
+                rL = Fi.normal - v1 * (2.0f / c1 * v1.dot(Fi.normal));
+                tL = Fi.tangent - v1 * (2.0f / c1 * v1.dot(Fi.tangent));
+            }
+
+            Vec3 tNext = tangent[i + 1];
+            Vec3 v2 = tNext - tL;
+            float c2 = v2.dot(v2);
+
+            Vec3 rNext = rL;
+            if (c2 > 1e-12f) {
+                rNext = rL - v2 * (2.0f / c2 * v2.dot(rL));
+            }
+            rNext = (rNext - tNext * tNext.dot(rNext)).normalized();
+
+            frames[i + 1] = { curve[i + 1], tNext, rNext, tNext.cross(rNext).normalized() };
+        }
+
+        return frames;
+    }
+
+    /**
+     * Sweeps a 2D profile along an arbitrary carrier curve using rotation-minimizing
+     * frames, with optional continuous twist (radians, end-to-end) and non-uniform
+     * scale (end-to-end lerp). Produces slices consumable directly by Loft3D::skin.
+     */
+    static ScratchboxMesh sweep(
+        const std::vector<Vec3>& curve,
+        const std::vector<Vec2>& profile,
+        float totalTwistRad = 0.0f,
+        float startScale = 1.0f,
+        float endScale = 1.0f,
+        bool closeEnds = true,
+        const Vec4& color = {0.8f, 0.85f, 0.9f, 1.0f}
+    ) {
+        if (curve.size() < 2 || profile.size() < 3) return ScratchboxMesh("swept_mesh");
+
+        std::vector<Frame> frames = rotationMinimizingFrames(curve);
+        std::vector<std::vector<Vec3>> slices(frames.size());
+
+        for (size_t i = 0; i < frames.size(); ++i) {
+            float t = static_cast<float>(i) / static_cast<float>(frames.size() - 1);
+            float twist = t * totalTwistRad;
+            float scale = startScale + (endScale - startScale) * t;
+            float cosA = std::cos(twist);
+            float sinA = std::sin(twist);
+
+            const Frame& f = frames[i];
+            slices[i].reserve(profile.size());
+            for (const Vec2& p : profile) {
+                float x = (p.x * cosA - p.y * sinA) * scale;
+                float y = (p.x * sinA + p.y * cosA) * scale;
+                slices[i].push_back(f.origin + f.normal * x + f.binormal * y);
+            }
+        }
+
+        ScratchboxMesh mesh = Loft3D::skin(slices, closeEnds, color);
+        mesh.name = "swept_mesh";
+        return mesh;
+    }
+};
+
 class Lathe3D {
 public:
     /**
