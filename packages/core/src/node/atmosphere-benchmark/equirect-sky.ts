@@ -273,3 +273,34 @@ export function measureEquirectSky(img: EquirectImage, opts: MeasureOptions = {}
         skyIrradianceRatio: E / refY
     };
 }
+
+const SRGB_TO_XYZ = [[0.4124, 0.3576, 0.1805], [0.2126, 0.7152, 0.0722], [0.0193, 0.1192, 0.9505]];
+const XYZ_TO_SRGB = [[3.2404542, -1.5371385, -0.4985314], [-0.9692660, 1.8760108, 0.0415560], [0.0556434, -0.2040259, 1.0572252]];
+const BRADFORD = [[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]];
+const BRADFORD_INV = [[0.9869929, -0.1470543, 0.1599627], [0.4323053, 0.5183603, 0.0492912], [-0.0085287, 0.0400428, 0.9684867]];
+const mul = (m: number[][], v: number[]) => [0, 1, 2].map(r => m[r][0] * v[0] + m[r][1] * v[1] + m[r][2] * v[2]);
+const mm = (a: number[][], b: number[][]) => [0, 1, 2].map(r => [0, 1, 2].map(c => a[r][0] * b[0][c] + a[r][1] * b[1][c] + a[r][2] * b[2][c]));
+
+/**
+ * The linear-sRGB matrix a camera white-balanced to `kelvin` applies: Bradford adaptation that maps a blackbody at
+ * that temperature to the D65 white of sRGB. `whiteXyz` is that blackbody's XYZ (any scale).
+ */
+export function whiteBalanceMatrix(whiteXyz: [number, number, number]): number[][] {
+    const d65 = [0.95047, 1, 1.08883];
+    const src = mul(BRADFORD, whiteXyz.map(v => v / whiteXyz[1]));
+    const dst = mul(BRADFORD, d65);
+    const diag = [[dst[0] / src[0], 0, 0], [0, dst[1] / src[1], 0], [0, 0, dst[2] / src[2]]];
+    return mm(XYZ_TO_SRGB, mm(BRADFORD_INV, mm(diag, mm(BRADFORD, SRGB_TO_XYZ))));
+}
+
+/** Applies a linear-sRGB 3x3 matrix to every pixel (a new image). */
+export function applyColorMatrix(img: EquirectImage, m: number[][]): EquirectImage {
+    const rgb = new Float32Array(img.rgb.length);
+    for (let i = 0; i < rgb.length; i += 3) {
+        const r = img.rgb[i], g = img.rgb[i + 1], b = img.rgb[i + 2];
+        rgb[i] = m[0][0] * r + m[0][1] * g + m[0][2] * b;
+        rgb[i + 1] = m[1][0] * r + m[1][1] * g + m[1][2] * b;
+        rgb[i + 2] = m[2][0] * r + m[2][1] * g + m[2][2] * b;
+    }
+    return { width: img.width, height: img.height, rgb };
+}
