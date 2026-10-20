@@ -321,6 +321,31 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
         expect(gpu.stats.raysPerSecond).toBeGreaterThan(cpu.stats.raysPerSecond);
     });
 
+    it('denoises on the GPU exactly as the CPU a-trous filter does', async ctx => {
+        if (!device.raytracing) return ctx.skip();
+        const res = await service.render({
+            sbvgPath: texturedSbvg, outputDir: path.join(tmp, 'denoise'), width: 320, height: 240, samplesPerPixel: 8, maxBounces: 4, seed: 9,
+            lighting: sunLighting, camera: sphereCamera, materials: { glbPath: texturedGlb }, denoise: true, denoiseCheck: true
+        });
+        expect(res.stats.denoised).toBe(true);
+        expect(res.stats.denoiseBackend).toBe('metal');
+        expect(res.stats.denoiseMs).toBeGreaterThan(0);
+        const gpu = readLinearColor(res, 'denoised'), cpu = readLinearColor(res, 'denoisedCpu'), raw = readLinearColor(res, 'color');
+        let maxRel = 0, sumRel = 0, changed = 0;
+        for (let i = 0; i < gpu.length; i++) {
+            expect(Number.isFinite(gpu[i])).toBe(true);
+            const rel = Math.abs(gpu[i] - cpu[i]) / Math.max(Math.abs(cpu[i]), 1e-3);
+            maxRel = Math.max(maxRel, rel);
+            sumRel += rel;
+            if (Math.abs(gpu[i] - raw[i]) > 1e-6) changed++;
+        }
+        // Same algorithm on the same raw frame: differences are float rounding (measured 1.8e-5 max).
+        expect(maxRel).toBeLessThan(1e-3);
+        expect(sumRel / gpu.length).toBeLessThan(1e-5);
+        // And it did filter: most geometry samples moved.
+        expect(changed).toBeGreaterThan(0.2 * gpu.length);
+    });
+
     it('runs a resident session: frames accumulate for a view, a new view restarts them, close ends the process', async ctx => {
         if (!device.raytracing) return ctx.skip();
         const session = await service.openSession({ sbvgPath: texturedSbvg, glbPath: texturedGlb, lighting: sunLighting }, { dir: path.join(tmp, 'session') });
@@ -349,7 +374,8 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
             const read = session.readFrame();
             expect(read).not.toBeNull();
             expect(read!.rgba.length).toBe(160 * 120 * 4);
-            expect(read!.meta).toMatchObject({ seq: 1, spp: 12, done: true });
+            expect(read!.meta).toMatchObject({ seq: 1, spp: 12, done: true, denoised: true, historyPixels: 0 });
+            expect(read!.meta.denoiseMs).toBeGreaterThan(0);
             // Display-ready pixels: opaque, and the lit sphere is not all one value.
             let alphaOk = true, distinct = new Set<number>();
             for (let i = 0; i < read!.rgba.length; i += 4) {
@@ -364,11 +390,22 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
             expect(moved.seq).toBe(2);
             expect(moved.cut.rebuilt).toBe(false);
             expect(session.latestFrame()).toBeNull();
-            await new Promise<void>((resolve, reject) => {
+            const first = await new Promise<any>((resolve, reject) => {
                 const timer = setTimeout(() => reject(new Error('no frame after the camera move')), 20_000);
-                session.on('frame', f => { if (f.seq === 2) { clearTimeout(timer); resolve(); } });
+                session.on('frame', f => { if (f.seq === 2) { clearTimeout(timer); resolve(f); } });
             });
             expect(session.latestFrame()!.seq).toBe(2);
+            // Temporal reuse: after a tiny move most of the sphere's pixels take the previous view's illumination.
+            const geometryPixels = Math.round(0.52 * 160 * 120);
+            expect(first.historyPixels).toBeGreaterThan(0.6 * geometryPixels);
+            expect(first.historyPixels).toBeLessThanOrEqual(160 * 120);
+            // Without temporal reuse nothing is taken over.
+            const plain = await session.setView({ ...view, camera: { ...sphereCamera, position: [0.04, 0.5, 4] }, temporal: false });
+            const plainFrame = await new Promise<any>((resolve, reject) => {
+                const timer = setTimeout(() => reject(new Error('no frame without temporal reuse')), 20_000);
+                session.on('frame', f => { if (f.seq === plain.seq) { clearTimeout(timer); resolve(f); } });
+            });
+            expect(plainFrame.historyPixels).toBe(0);
             // A view with a bad size is refused without killing the session.
             await expect(session.setView({ ...view, width: 2 })).rejects.toThrow(/between 8 and 8192/);
             expect(session.alive).toBe(true);

@@ -142,7 +142,10 @@ export function createPathTraceRouter(service: MetalPathTracerService, ctx: Rout
             'Content-Type': 'application/octet-stream',
             'Cache-Control': 'no-store',
             // The page runs on another origin in development; without this the browser hides the frame headers.
-            'Access-Control-Expose-Headers': 'X-Frame-Seq, X-Frame-Spp, X-Frame-Rays, X-Frame-Gpu-Ms, X-Frame-Width, X-Frame-Height, X-Frame-Done',
+            'Access-Control-Expose-Headers': 'X-Frame-Seq, X-Frame-Spp, X-Frame-Rays, X-Frame-Gpu-Ms, X-Frame-Width, X-Frame-Height, X-Frame-Done, X-Frame-Denoised, X-Frame-Denoise-Ms, X-Frame-History',
+            'X-Frame-Denoised': read.meta.denoised ? '1' : '0',
+            'X-Frame-Denoise-Ms': Number(read.meta.denoiseMs ?? 0).toFixed(3),
+            'X-Frame-History': String(read.meta.historyPixels ?? 0),
             'X-Frame-Seq': String(read.meta.seq),
             'X-Frame-Spp': String(read.meta.spp),
             'X-Frame-Rays': String(read.meta.rays),

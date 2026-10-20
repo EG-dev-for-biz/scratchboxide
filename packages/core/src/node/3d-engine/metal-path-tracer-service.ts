@@ -86,7 +86,10 @@ export interface MetalPathTraceRequest {
     material?: { albedo?: [number, number, number]; roughness?: number; metallic?: number };
     /** Shade with the materials and textures of the GLB the .sbvg (version 3) was built from, by the material ids it carries. */
     materials?: { glbPath: string };
+    /** Filter the render (GPU a-trous on the metal backend, the CPU filter on the cpu backend). */
     denoise?: boolean;
+    /** With denoise on the metal backend, also run the CPU filter on the same raw frame and write denoised_cpu.f32. */
+    denoiseCheck?: boolean;
     exposureEv?: number;
     camera?: MetalPathTraceCamera | MetalPathTraceAutoCamera;
     timeoutMs?: number;
@@ -116,6 +119,9 @@ export interface MetalPathTraceStats {
     meanLinearLuminance: number;
     exposureEv: number;
     denoised: boolean;
+    denoiseBackend: 'metal' | 'cpu' | 'none';
+    /** GPU time (metal) or wall time (cpu) of the filter, in ms. */
+    denoiseMs: number;
     materials: {
         source: 'glb' | 'uniform';
         glbPath: string;
@@ -135,6 +141,10 @@ export interface MetalPathTraceResult {
     beautyPngPath: string;
     /** float32 scene-linear RGB per pixel, row-major (readLinearColor). */
     colorF32Path: string;
+    /** The denoised image in the same layout; present when the request asked to denoise. */
+    denoisedF32Path?: string;
+    /** The CPU filter's output on the same raw frame; present with denoiseCheck on the metal backend. */
+    denoisedCpuF32Path?: string;
     statsJsonPath: string;
     stats: MetalPathTraceStats;
     compileMs: number;
@@ -161,6 +171,10 @@ export interface MetalPathTraceView {
     targetSpp?: number;
     /** Fixed exposure; by default the first frame's auto exposure is kept for the view. */
     exposureEv?: number;
+    /** Filter every frame with the GPU a-trous denoiser (default true). */
+    denoise?: boolean;
+    /** Reproject the previous view's denoised illumination into this one (default true; needs denoise). */
+    temporal?: boolean;
 }
 
 export interface MetalPathTraceOpened {
@@ -190,6 +204,11 @@ export interface MetalPathTraceFrame {
     exposureEv: number;
     /** 8-bit RGBA, width * height * 4 bytes, display-ready. */
     path: string;
+    denoised: boolean;
+    /** GPU time of the denoiser for this frame, in ms. */
+    denoiseMs: number;
+    /** Pixels that took illumination from the previous view's history. */
+    historyPixels: number;
     done: boolean;
 }
 
@@ -364,9 +383,11 @@ function run(binary: string, args: string[], timeoutMs: number): Promise<{ stdou
     });
 }
 
-/** The scene-linear RGB image a render wrote (stats.width x stats.height, 3 floats per pixel). */
-export function readLinearColor(result: MetalPathTraceResult): Float32Array {
-    const bytes = fs.readFileSync(result.colorF32Path);
+/** The scene-linear RGB image a render wrote (stats.width x stats.height, 3 floats per pixel); `which` picks the raw, denoised or CPU-denoised file. */
+export function readLinearColor(result: MetalPathTraceResult, which: 'color' | 'denoised' | 'denoisedCpu' = 'color'): Float32Array {
+    const file = which === 'color' ? result.colorF32Path : which === 'denoised' ? result.denoisedF32Path : result.denoisedCpuF32Path;
+    if (!file) throw new MetalPathTracerError(`the render wrote no ${which} image`);
+    const bytes = fs.readFileSync(file);
     const expected = result.stats.width * result.stats.height * 3 * 4;
     if (bytes.length !== expected) throw new MetalPathTracerError('color.f32 has the wrong size', `${bytes.length} bytes, expected ${expected}`);
     return new Float32Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length));
@@ -418,7 +439,8 @@ export class MetalPathTracerService {
             clampIndirect: request.clampIndirect ?? 10,
             seed: request.seed ?? 1,
             threads: request.threads ?? 0,
-            denoise: request.denoise ?? false
+            denoise: request.denoise ?? false,
+            denoiseCheck: request.denoiseCheck ?? false
         };
         if (request.lod) config.lod = request.lod;
         if (request.lighting) config.lighting = request.lighting;
@@ -441,9 +463,13 @@ export class MetalPathTracerService {
         }
         const statsJsonPath = path.join(request.outputDir, 'stats.json');
         const stats = JSON.parse(fs.readFileSync(statsJsonPath, 'utf8')) as MetalPathTraceStats;
+        const denoisedPath = path.join(request.outputDir, 'denoised.f32');
+        const denoisedCpuPath = path.join(request.outputDir, 'denoised_cpu.f32');
         return {
             beautyPngPath: path.join(request.outputDir, 'beauty.png'),
             colorF32Path: path.join(request.outputDir, 'color.f32'),
+            ...(fs.existsSync(denoisedPath) ? { denoisedF32Path: denoisedPath } : {}),
+            ...(fs.existsSync(denoisedCpuPath) ? { denoisedCpuF32Path: denoisedCpuPath } : {}),
             statsJsonPath,
             stats,
             compileMs: this.compileMs,
