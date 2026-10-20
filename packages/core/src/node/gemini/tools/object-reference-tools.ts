@@ -55,6 +55,7 @@ import {
 import { glbToTriangleSoup, glbToTriangleSoupAsync, runInSlices, runToEnd, type GlbInstanceMode, type TriangleSoup } from '../../3d-engine/part-connectivity';
 import { implausibleLayerBounds } from '../../3d-engine/layer-bounds-guard';
 import { errorMessage } from '../gemini-client';
+import { materialModeOf, withStagedMaterialMode, type StagedMaterialModeFields } from '../../../browser/generative-canvas/primitives/scene3d/stagedBuild/texturedTwins';
 import { OBJECT_BUILD_SOURCE, type BuiltObjectRecord, type ObjectBuildSpec, type Vec3 } from '../../../common/spatial/object-build-spec';
 
 export const OBJECT_REFERENCE_TOOL_DECLARATIONS: ToolDeclaration[] = [
@@ -75,7 +76,7 @@ export const OBJECT_REFERENCE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 clay: {
                     type: 'BOOLEAN',
-                    description: 'True only when the user asked for clay (grey, untextured, a blockout or a shape study): every part is studio clay, no materials are read and the scene shows clay. Omit it otherwise: the object gets its materials and the scene shows them.'
+                    description: 'True only when the user asked for clay (grey, untextured, a blockout or a shape study): every part is studio clay, no materials are read and the scene shows clay. Omit it otherwise: the object gets its materials and the scene shows them, except that a clay view chosen on the active scene it is added to stays (staged_location_material_mode with mode "textured" shows the materials when the user asks for them).'
                 },
                 specJson: {
                     type: 'STRING',
@@ -1234,30 +1235,37 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
             const summaryLine = `Native ${clay ? 'clay ' : ''}build: ${checks.vertexCount.toLocaleString()} vertices, ${built.spec.parts.length} parts${clay ? '' : ', a material per part'}.`;
 
             let artifact: Record<string, unknown>;
+            /** The object has its materials but the reused scene keeps the clay view the user chose. */
+            let shownInClayView = false;
             if (staged && placement && site) {
                 const tileData = (staged.artifact.data || {}) as Record<string, unknown>;
                 const base: Vec3 = [placement.sceneX, placement.surfaceYMeters, placement.sceneZ];
                 const title = keptBuilt.length ? `${[...keptBuilt.map(o => String(o.content?.metadata?.description || o.id)), subject].join(', ')} at ${place}` : `${subject} at ${place}`;
                 // A clay request shows clay. Otherwise the object's materials show ('pbr'; the staged clay tiles keep their
-                // own look), unless a reused scene already shows another non-clay mode, which it keeps.
-                const reusedMode = staged.reused && typeof tileData.renderMode === 'string' && tileData.renderMode !== 'clay' ? tileData.renderMode : undefined;
-                const renderMode = clay ? 'clay' : reusedMode ?? 'pbr';
+                // own look), unless a reused scene already shows another non-clay mode (or did before a clay view), which
+                // it keeps. A clay view the user chose on the reused scene (staged_location_material_mode or the overlay)
+                // stays: the object is built with its materials, shown in clay, and textured shows them.
+                const reusedShown = tileData.renderMode === 'clay' ? (tileData.stagedBuildView as StagedMaterialModeFields['stagedBuildView'])?.renderModeBeforeClay : tileData.renderMode;
+                const reusedMode = staged.reused && typeof reusedShown === 'string' && reusedShown !== 'clay' ? reusedShown : undefined;
+                const keepsClayView = staged.reused && materialModeOf((tileData.stagedBuild as { materialMode?: unknown } | undefined)?.materialMode) === 'clay';
+                const sceneData: Record<string, unknown> & StagedMaterialModeFields = {
+                    ...tileData,
+                    title,
+                    subtitle: summaryLine,
+                    renderMode: clay ? 'clay' : reusedMode ?? 'pbr',
+                    cameraMode: 'orbit',
+                    camera: frameCamera(checks.builtBoundingMeters, base, placement.yawDeg),
+                    objects: [...site.kept, heroObject],
+                    pythonGenerator,
+                    objectBuild
+                };
+                shownInClayView = keepsClayView && !clay;
                 artifact = {
                     ...staged.artifact,
                     id: `artifact-3d-${Date.now()}`,
                     title,
                     summary: `${summaryLine} Staged on ${tiles} at ${place}.`,
-                    data: {
-                        ...tileData,
-                        title,
-                        subtitle: summaryLine,
-                        renderMode,
-                        cameraMode: 'orbit',
-                        camera: frameCamera(checks.builtBoundingMeters, base, placement.yawDeg),
-                        objects: [...site.kept, heroObject],
-                        pythonGenerator,
-                        objectBuild
-                    }
+                    data: keepsClayView ? withStagedMaterialMode(sceneData, 'clay') : sceneData
                 };
             } else {
                 artifact = {
@@ -1299,7 +1307,8 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                     site.replaced ? `It replaces ${named(site.replaced)}.` : '',
                     keptBuilt.length ? `Kept ${keptBuilt.length === 1 ? 'the object' : `the ${keptBuilt.length} objects`} built there earlier: ${keptBuilt.map(named).join(', ')}.` : '',
                     site.notReused ? `The active scene's staging there could not be reused (${site.notReused.reason}), so the place was staged afresh and the objects built there earlier are not in this scene: ${site.notReused.objects.map(named).join(', ')}.` : '',
-                    site.otherLocation ? `The active scene's objects were built at location "${site.otherLocation}", a different location from "${location}", so this is a new scene without them (pass that same location, or addToActiveScene: true, to add to that scene).` : ''
+                    site.otherLocation ? `The active scene's objects were built at location "${site.otherLocation}", a different location from "${location}", so this is a new scene without them (pass that same location, or addToActiveScene: true, to add to that scene).` : '',
+                    shownInClayView ? 'The scene keeps the clay view chosen on it (scene render mode: clay), so the object is shown in clay; its materials are built and staged_location_material_mode with mode "textured" shows them.' : ''
                 ].filter(Boolean).join(' ')
                 : clay ? 'Shown in a studio grey clay void.' : 'Shown in a neutral studio void with its materials (the viewport\'s PBR mode).';
             const editLine = staged && placement

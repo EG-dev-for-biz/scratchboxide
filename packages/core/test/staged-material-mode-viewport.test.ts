@@ -21,10 +21,12 @@ import * as path from 'path';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import type { Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 import { runStagedMaterialModeTool } from '../src/node/gemini/tools/staged-material-mode-tool';
+import { composeStagedArtifact } from '../src/node/3d-engine/staged-location/staged-artifact';
 import { buildStagedFixture, fixtureLayer, fixtureState, objectIdOf, type FixtureLayerId, type StagedFixtureGlbs } from './helpers/staged-glb-fixture';
 import { openStagedPage, serveFixture, stagedChrome, type StagedPage } from './helpers/staged-build-chrome';
 import { stagedSceneData } from './helpers/staged-build-scene';
 import { rewriteGlbJson, writeFixtureGlb, type FixtureMesh } from './helpers/mesh-glb-fixtures';
+type Vec3 = [number, number, number];
 import { REPO_ROOT } from './helpers/requirements';
 
 const SHOTS = path.join(REPO_ROOT, 'test-results', 'screenshots', 'staged_material_mode');
@@ -148,4 +150,69 @@ describe.skipIf(!stagedChrome.ok)('staged place with an object: clay from chat a
         await page.screenshot('5_overlay_clay_reloaded');
         expect(page.consoleErrors().filter(e => !/favicon/.test(e))).toEqual([]);
     }, 180_000);
+
+    test('a running build\'s later commit (renderMode clay, no material mode) keeps the choice made on the open scene', async () => {
+        const runStart = placeScene();
+        (runStart.stagedBuild as Record<string, unknown>).runState = 'running';
+        await open(runStart);
+        // the server's next commit of the same run: composeStagedArtifact over the scene the run started from, with one
+        // more layer (the fixture is at no real place, so the anchor it requires is left out of the mounted scene)
+        const nextCommit = (): Record<string, unknown> => {
+            const state = fixtureState([L('l1'), L('l2'), L('l3a')]);
+            const layerMeta = Object.fromEntries(state.layers.map(l => [l.objectId, { source: 'Google3DTilesClay', resolvedAddress: 'fixture arch' }]));
+            const commit = composeStagedArtifact({
+                state, layerMeta, camera: { ...(runStart.camera as { position: Vec3; target: Vec3 }), fov: 60 }, geoAnchor: { lat: 0, lng: 0 },
+                activeScene: { id: 'scene-stg-test', type: '3d-scene', title: 'chrome sphere at a place', version: 1, data: runStart } as never,
+                summary: 'later commit', version: 2
+            });
+            const { geoAnchor: _anchor, ...data } = commit.data as Record<string, unknown>;
+            expect([data.renderMode, (data.stagedBuild as { materialMode?: string }).materialMode]).toEqual(['clay', undefined]);
+            return data;
+        };
+        const commitAndSettle = async (data: Record<string, unknown>) => {
+            await page.eval(`sbHarness.update(${JSON.stringify(data)})`);
+            await page.waitFor(`sbHarness.attached(${JSON.stringify(objectIdOf('l3a'))})`, 30_000, 'the new layer attached');
+            await page.step(120, STEP);
+        };
+
+        // clay from the overlay, then textured again from chat (with no textured twins the overlay offers no way back):
+        // the object shows its chrome
+        const fromChat = async (mode: 'clay' | 'textured', data: Scene3DData): Promise<Scene3DData> => {
+            const active = { id: 'scene-stg-test', type: '3d-scene', title: 'chrome sphere at a place', version: 5, data };
+            const out = await runStagedMaterialModeTool({ mode }, { request: { activeArtifact: active } } as never);
+            const saved = (out.resultPayload.artifact as { data: Scene3DData }).data;
+            await page.eval(`sbHarness.update(${JSON.stringify(saved)})`);
+            await page.step(4, STEP);
+            return saved;
+        };
+        await page.eval(`sbHarness.click('[data-testid="sb-staged-materials-toggle"]')`);
+        await page.step(4, STEP);
+        const clayed = await page.eval<Scene3DData>('sbHarness.lastUpdate()');
+        expect([clayed.renderMode, clayed.stagedBuild?.materialMode]).toEqual(['clay', 'clay']);
+        const chosen = await fromChat('textured', clayed);
+        expect([chosen.renderMode, chosen.stagedBuild?.materialMode]).toEqual(['pbr', 'textured']);
+        expect((await heroLook()).every(m => !m.clay && m.metalness === 1)).toBe(true);
+
+        // the run commits again: the textured choice holds (it was reset to clay before)
+        await commitAndSettle(nextCommit());
+        const afterCommit = await heroLook();
+        expect(afterCommit.length).toBeGreaterThan(0);
+        expect(afterCommit.every(m => !m.clay && m.metalness === 1), 'the object keeps its chrome over the commit').toBe(true);
+        expect(await toggleText()).toBe('Show clay');
+        await page.screenshot('6_textured_kept_over_commit');
+
+        // a clay choice holds over a commit too, and still remembers the object's mode: textured brings the chrome back
+        await page.eval(`sbHarness.click('[data-testid="sb-staged-materials-toggle"]')`);
+        await page.step(4, STEP);
+        await commitAndSettle(nextCommit());
+        expect((await heroLook()).every(m => m.clay), 'still clay over the commit').toBe(true);
+        await page.screenshot('7_clay_kept_over_commit');
+        // the scene the overlay saved: clay, remembering the object's mode
+        const kept = await page.eval<Scene3DData>('sbHarness.lastUpdate()');
+        expect(kept).toMatchObject({ renderMode: 'clay', stagedBuildView: { renderModeBeforeClay: 'pbr' } });
+        const back = await fromChat('textured', kept);
+        expect([back.renderMode, back.stagedBuild?.materialMode]).toEqual(['pbr', 'textured']);
+        expect((await heroLook()).every(m => !m.clay && m.metalness === 1)).toBe(true);
+        expect(page.consoleErrors().filter(e => !/favicon/.test(e))).toEqual([]);
+    }, 240_000);
 });

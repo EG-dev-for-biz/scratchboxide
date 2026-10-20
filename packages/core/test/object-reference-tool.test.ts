@@ -24,6 +24,7 @@ import * as path from 'path';
 import * as THREE from 'three';
 import { createObjectReferenceHandlers, OBJECT_REFERENCE_TOOL_DECLARATIONS, SurfaceSampler, yawForHeading } from '../src/node/gemini/tools/object-reference-tools';
 import { generatorFileIsObject } from '../src/browser/generative-canvas/primitives/Scene3DPrimitive';
+import { withStagedMaterialMode } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/texturedTwins';
 import { TerrainManager } from '../src/browser/generative-canvas/services/TerrainManager';
 import { glbToTriangleSoup, mergeTriangleSoups } from '../src/node/3d-engine/part-connectivity';
 import { renderReviewViews } from '../src/node/3d-engine/visual-review';
@@ -1623,6 +1624,50 @@ describe('build_3d_object_from_reference', () => {
         expect(stageArgs).toHaveLength(1);
         const noPlace = await run({ request: 'a vase', addToActiveScene: true }, onScene(tilesOnly));
         expect(String(noPlace.resultPayload.error)).toContain('addToActiveScene adds the object to the place the active scene shows');
+    }, 180_000);
+
+    it('a follow-up build keeps the clay view the user chose on the scene, with the object\'s materials built', async () => {
+        const staging = stagedScene(writeStagedTiles(), writeStagedTrees());
+        const tilesOnly = JSON.parse(JSON.stringify((await staging({}, ctx())).resultPayload.artifact));
+        Object.assign(tilesOnly.data.objects[0].content.metadata, { resolvedAddress: 'Washington Square, New York, NY 10012, USA', remeshed: true });
+        const { run } = handlerWith(undefined);
+        const onScene = (artifact: any): ToolContext => ({ ...ctx(), request: { ...ctx().request, activeArtifact: artifact } as any });
+        const add = (artifact: any, clay?: boolean) => run({ request: 'the vase', specJson: JSON.stringify(VASE), location: 'Washington Square Park', placement: { eastMeters: 12, northMeters: 8, headingDeg: 90 }, addToActiveScene: true, ...(clay ? { clay } : {}) }, onScene(artifact));
+        const staged = { runId: 'run-1', materialMode: undefined as string | undefined };
+        const withState = (data: Record<string, unknown>) => ({ ...tilesOnly, data: { ...tilesOnly.data, ...data } });
+
+        // no choice made: the place's own clay is not a clay view, the object shows its materials
+        const plain = await add(withState({ stagedBuild: staged }));
+        expect(plain.status, String(plain.resultPayload.error)).toBe('completed');
+        expect((plain.resultPayload.artifact as any).data.renderMode).toBe('pbr');
+        expect(plain.summaryResult).not.toContain('keeps the clay view');
+
+        // the user chose clay on the place alone (the place was already clay: nothing to remember)
+        const clayed = await add(withState({ renderMode: 'clay', stagedBuild: { ...staged, materialMode: 'clay' } }));
+        expect(clayed.status, String(clayed.resultPayload.error)).toBe('completed');
+        const data = (clayed.resultPayload.artifact as any).data;
+        expect(data).toMatchObject({ renderMode: 'clay', stagedBuild: { materialMode: 'clay' }, stagedBuildView: { renderModeBeforeClay: 'pbr' } });
+        // the view is clay, the build is not: every part has its material
+        expect(clayed.resultPayload).toMatchObject({ materials: { label: 'as-given' } });
+        expect(clayed.resultPayload.clay).toBe(false);
+        expect(data.objectBuild.clay).toBeFalsy();
+        expect(clayed.summaryResult).toContain('The scene keeps the clay view chosen on it (scene render mode: clay)');
+        // textured then shows the object's materials
+        expect(withStagedMaterialMode(data, 'textured')).toMatchObject({ renderMode: 'pbr', stagedBuild: { materialMode: 'textured' } });
+
+        // a clay view chosen over another mode (an object scene shown 'shaded') remembers that mode
+        const shaded = await add(withState({ renderMode: 'clay', stagedBuild: { ...staged, materialMode: 'clay' }, stagedBuildView: { renderModeBeforeClay: 'shaded', provenance: true } }));
+        expect((shaded.resultPayload.artifact as any).data).toMatchObject({ renderMode: 'clay', stagedBuildView: { renderModeBeforeClay: 'shaded', provenance: true } });
+
+        // a textured choice stays textured
+        const textured = await add(withState({ renderMode: 'pbr', stagedBuild: { ...staged, materialMode: 'textured' } }));
+        expect((textured.resultPayload.artifact as any).data).toMatchObject({ renderMode: 'pbr', stagedBuild: { materialMode: 'textured' } });
+
+        // clay: true is still a clay build
+        const clayBuild = await add(withState({ renderMode: 'clay', stagedBuild: { ...staged, materialMode: 'clay' } }), true);
+        expect((clayBuild.resultPayload.artifact as any).data.renderMode).toBe('clay');
+        expect(clayBuild.resultPayload).toMatchObject({ clay: true, materials: { label: 'clay' } });
+        expect(clayBuild.summaryResult).not.toContain('keeps the clay view');
     }, 180_000);
 
     it('reports a stop while staging or placing as a stop', async () => {

@@ -184,7 +184,7 @@ import type { SceneBudgetTelemetry } from './scene3d/lightingRigs';
 import { useStagedBuild } from './scene3d/stagedBuild/useStagedBuild';
 import { readStagedBuild, type StagedSceneData } from './scene3d/stagedBuild/stagedBuildState';
 import { mergeStagedParts, mergeStagedPartsEnabled } from './scene3d/stagedBuild/mergeStagedParts';
-import { carryMaterialMode, carryTwinObjects } from './scene3d/stagedBuild/texturedTwins';
+import { carryStagedChoice, carryTwinObjects, type StagedMaterialModeFields } from './scene3d/stagedBuild/texturedTwins';
 import { prepareTexturedTwinModel } from './scene3d/stagedBuild/texturedTwinModel';
 import { refreshFacadeReflections } from './scene3d/stagedBuild/facadeMaterialLook';
 
@@ -1039,7 +1039,9 @@ function generatedHeroObjectId(scene: Scene3DData): string | undefined {
     return (scene.objects || []).find(o => o.content?.metadata?.role === 'hero')?.id;
 }
 
-function mergeExternalSceneData(prev: Scene3DData, data: Scene3DData): Scene3DData {
+function mergeExternalSceneData(prev: Scene3DData, streamed: Scene3DData): Scene3DData {
+    // a clay/textured choice made on the open scene (materialMode, renderMode) holds over a later commit of the same run
+    const data = carryStagedChoice(prev as StagedMaterialModeFields, streamed as Scene3DData & StagedMaterialModeFields);
     const hasNewPython = data.pythonGenerator && data.pythonGenerator.sourceCode !== prev.pythonGenerator?.sourceCode;
     const hasNewCpp = data.cppGenerator && data.cppGenerator.sourceCode !== prev.cppGenerator?.sourceCode;
     const hasNewObjects = data.objects && data.objects !== prev.objects;
@@ -1069,8 +1071,6 @@ function mergeExternalSceneData(prev: Scene3DData, data: Scene3DData): Scene3DDa
             : prev.cppGenerator,
         // textured twins the staged-build view added are not in the agent's objects[]: they stay while their layer does
         objects: carryTwinObjects(prev.objects, data.objects) ?? prev.objects,
-        // a clay/textured choice made on the open scene holds over a later commit of the same run that does not set one
-        ...(hasNewStaged ? { stagedBuild: carryMaterialMode(readStagedBuild(prev), readStagedBuild(data)) } : {}),
         customMeshes: data.customMeshes ?? prev.customMeshes
     };
 }
@@ -1595,7 +1595,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             // from words in the title (that rebuilt keyword templates next to, or instead of, the real objects).
             const effectiveWorldBranch = data.worldBranch;
 
-            setSceneData({
+            // A later commit of a running staged build keeps the clay/textured choice made on the open scene.
+            const synced = carryStagedChoice(sceneDataRef.current as StagedMaterialModeFields, {
                 // Carry every field the data holds (splatUrl, vectorRoadmap, groundTileMode, ...); dropping them
                 // left splat scenes without their splat and made a populated scene look empty.
                 ...data,
@@ -1617,10 +1618,11 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 geoAnchor: data.geoAnchor,
                 droneRoute: data.droneRoute,
                 renderMode: data.renderMode
-            });
+            } as Scene3DData & StagedMaterialModeFields);
+            setSceneData(synced);
 
             if (effectiveWorldBranch) setWorldBranch(effectiveWorldBranch);
-            if (data.renderMode) setRenderMode(data.renderMode);
+            if (synced.renderMode) setRenderMode(synced.renderMode);
             if (data.clayPreset) {
                 const liveScene = threeSceneRef.current;
                 if (liveScene) {

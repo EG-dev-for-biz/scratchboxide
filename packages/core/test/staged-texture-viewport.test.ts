@@ -19,7 +19,7 @@ import { validateContract, type StagedBuildState, type StagedLayer, type StagedT
 import { TEXTURE_LADDER_RUNGS } from '../src/common/spatial/texture-pass-contracts';
 import { stepRevealSchedule, type LayerLoadState, type RevealSchedule } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/revealScheduler';
 import {
-    DEFAULT_MATERIAL_MODE, INITIAL_SWITCH, MATERIAL_SWAP_REVEAL_MS, carryMaterialMode, carryTwinObjects, deriveMaterialLayers, isMaterialSwapLayer, modelIdOf, nextSwitch, parseSwapId, twinObjectFor, twinObjectId, withStagedMaterialMode,
+    DEFAULT_MATERIAL_MODE, INITIAL_SWITCH, MATERIAL_SWAP_REVEAL_MS, carryMaterialMode, carryStagedChoice, carryTwinObjects, deriveMaterialLayers, isMaterialSwapLayer, modelIdOf, nextSwitch, parseSwapId, twinObjectFor, twinObjectId, withStagedMaterialMode,
     type EngagedTwin, type MaterialSwitch
 } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/texturedTwins';
 import { TEXTURE_RUNG_COLORS, textureRungLegendRows } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/provenanceShading';
@@ -141,6 +141,33 @@ describe('textured twins: which objects load and how they crossfade', () => {
         expect(carryMaterialMode(prev, { ...later, materialMode: 'textured' })!.materialMode).toBe('textured');   // a new request wins
         expect(carryMaterialMode(prev, { ...later, runId: 'another-run' })!.materialMode).toBeUndefined();
         expect(carryMaterialMode(undefined, later)).toBe(later);
+    });
+
+    test('a later commit of a running build keeps the choice with its render mode (an object at the place stays textured)', () => {
+        const run = fixtureState([layer('l1')]);
+        // the commit composeStagedArtifact streams: renderMode 'clay', no material mode
+        const commit = { renderMode: 'clay', stagedBuild: fixtureState([layer('l1'), layer('l2', { textured: twin('l2') })]) };
+        // an object at the place, clayed then made textured again on the open scene
+        const clayed = withStagedMaterialMode({ renderMode: 'pbr', stagedBuild: run }, 'clay');
+        const textured = withStagedMaterialMode(clayed, 'textured');
+        expect(carryStagedChoice(textured, commit)).toMatchObject({ renderMode: 'pbr', stagedBuild: { materialMode: 'textured', layers: commit.stagedBuild.layers } });
+        expect(carryStagedChoice(textured, commit)).not.toHaveProperty('stagedBuildView');
+        // a clay choice keeps the mode it replaced, so textured still restores the object's materials after the commit
+        const keptClay = carryStagedChoice(clayed, commit);
+        expect(keptClay).toMatchObject({ renderMode: 'clay', stagedBuild: { materialMode: 'clay' }, stagedBuildView: { renderModeBeforeClay: 'pbr' } });
+        expect(withStagedMaterialMode(keptClay, 'textured').renderMode).toBe('pbr');
+        // a textured choice on a scene with no render mode: the commit's 'clay' is not taken
+        expect(carryStagedChoice(withStagedMaterialMode({ stagedBuild: run }, 'textured'), commit)).not.toHaveProperty('renderMode');
+        // a streamed renderModeBeforeClay is the run start's, not the open scene's
+        expect(carryStagedChoice(textured, { ...commit, stagedBuildView: { provenance: true, renderModeBeforeClay: 'shaded' } }).stagedBuildView).toEqual({ provenance: true });
+        // no choice, a new request, another run, or the same state: the commit as streamed
+        expect(carryStagedChoice({ renderMode: 'pbr', stagedBuild: run }, commit)).toBe(commit);
+        const request = { ...commit, stagedBuild: { ...commit.stagedBuild, materialMode: 'clay' } };
+        expect(carryStagedChoice(textured, request)).toBe(request);
+        const other = { ...commit, stagedBuild: { ...commit.stagedBuild, runId: 'another-run' } };
+        expect(carryStagedChoice(textured, other)).toBe(other);
+        expect(carryStagedChoice(textured, textured)).toBe(textured);
+        expect(carryStagedChoice(undefined, commit)).toBe(commit);
     });
 
     test('a layer another layer replaces (and a retired one) gets no twin', () => {

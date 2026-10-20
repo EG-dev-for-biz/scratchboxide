@@ -45,10 +45,13 @@
 * `staged-texture-viewport.test.ts`: operator and tool now assert the render mode. New tests cover an object at a place (the tool and the overlay helper write the same fields) and the remember/restore rule.
 * Also passing: every `staged-texture-viewport*` suite, `staged-material-edit`, `place-reflections`, `first-pass-baseline`, `staged-summary`, `object-reference-tool`, `staged-layer-eviction` (13 files, 125 tests). `npm run typecheck`, `npm run lint` (0 errors), `npm run lint:primitives` pass.
 
-## 5. Left open
+## 5. Closed later (2026-10-19)
 
-* A later commit of a **running** staged build always carries `renderMode: 'clay'` (`composeStagedArtifact`). The viewport's props sync applies it, and `carryMaterialMode` carries only `materialMode`. A textured choice made mid-run on an object scene can therefore be reset to clay by the next commit. It was not seen live (object builds at a place commit once).
-* A follow-up object build at a place in clay picks its own render mode (`object-reference-tools.ts`: `clay ? 'clay' : 'pbr'`), so a clay view chosen before "add a bench" is not kept for the new build.
+Both gaps this section listed are closed:
+
+* **A running build's later commits.** `composeStagedArtifact` still sends `renderMode: 'clay'` and no material mode on every commit. `carryStagedChoice` (`texturedTwins.ts`) now carries the open scene's choice for the same run as one unit: `stagedBuild.materialMode`, `renderMode` and `stagedBuildView.renderModeBeforeClay`. Both viewport paths use it: the external merge (`mergeExternalSceneData`) and the props sync in `Scene3DPrimitive`, which used to overwrite the merge with the commit as sent. A choice from a new request, another run, or no choice leaves the commit unchanged.
+* **Follow-up object builds at a place.** `build_3d_object_from_reference`, on a reused scene whose `stagedBuild.materialMode` is `clay`, keeps the clay view (`withStagedMaterialMode`, remembering `pbr`, or the mode the view replaced, for textured). The object is still built with its materials (`clay` there means a build without materials, and stays off), and the summary says the scene keeps the clay view and that `staged_location_material_mode` textured shows the materials.
+* **Tests:** `staged-texture-viewport.test.ts` (`carryStagedChoice` rules), `object-reference-tool.test.ts` (a follow-up build keeps a chosen clay view, a textured one, a remembered `shaded`, and `clay: true`), and `staged-material-mode-viewport.test.ts` (headless real viewport: a real `composeStagedArtifact` commit of the same run keeps a textured choice on the chrome sphere, and a clay choice; it fails without the viewport change). Screenshots `6_textured_kept_over_commit.png`, `7_clay_kept_over_commit.png`. Not checked live in the app.
 
 ## 6. Candidate Tool/Service Ideas
 

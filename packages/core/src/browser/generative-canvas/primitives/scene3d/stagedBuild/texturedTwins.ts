@@ -145,6 +145,25 @@ export function carryMaterialMode<S extends { runId?: string; materialMode?: str
 }
 
 /**
+ * A scene streamed later from a running staged build (composeStagedArtifact always sends renderMode 'clay' and no
+ * material mode) keeps the clay/textured choice made on the open scene for the same run: stagedBuild.materialMode
+ * (carryMaterialMode) together with the renderMode and stagedBuildView.renderModeBeforeClay withStagedMaterialMode
+ * wrote with it, so a textured choice on a place with an object standing there is not reset to clay by the next commit.
+ * Without such a choice, or for another run, the streamed scene comes back unchanged.
+ */
+export function carryStagedChoice<D extends StagedMaterialModeFields>(prev: StagedMaterialModeFields | undefined, next: D): D {
+    const stagedBuild = carryMaterialMode(prev?.stagedBuild as { runId?: string; materialMode?: string } | undefined, next.stagedBuild as { runId?: string; materialMode?: string } | undefined);
+    if (!prev || !stagedBuild || stagedBuild === next.stagedBuild) return next;
+    const view = { ...next.stagedBuildView };
+    delete view.renderModeBeforeClay;
+    const before = prev.stagedBuildView?.renderModeBeforeClay;
+    const out = { ...next, stagedBuild };
+    if (prev.renderMode !== undefined) out.renderMode = prev.renderMode; else delete out.renderMode;
+    if (next.stagedBuildView || before !== undefined) out.stagedBuildView = { ...view, ...(before !== undefined ? { renderModeBeforeClay: before } : {}) };
+    return out;
+}
+
+/**
  * Twins the viewport added keep their place when an agent update replaces objects[] (the stream does not know them),
  * as long as their clay layer is still in it; otherwise every streamed commit would unload and reload them.
  */
