@@ -22,6 +22,18 @@ function districtVideos(galleryPath: string, ids: string[]): string[] {
   }
 }
 
+/** Repo-relative paths of a district's QA keyframe stills, read from the tracked gallery HTML. */
+function districtKeyframes(galleryPath: string, id: string): string[] {
+  try {
+    const html = fs.readFileSync(galleryPath, 'utf8');
+    const data = JSON.parse(html.match(/const evaluationsData = (\[.*?\]);/s)![1]);
+    const dist = data.find((d: any) => d.id === id);
+    return dist ? dist.qaKeyframes.map((kf: any) => `public/${kf.src}`) : [];
+  } catch {
+    return [];
+  }
+}
+
 describe('Gallery Pipeline Asset Integrity & Isolation', () => {
   const publicDir = path.resolve(__dirname, '../../../public');
   const galleryPath = path.join(publicDir, 's4d_multi_gallery.html');
@@ -111,8 +123,14 @@ describe('Gallery Pipeline Asset Integrity & Isolation', () => {
 
     expect(plazaDist.qaKeyframes.length).toBe(6);
     plazaDist.qaKeyframes.forEach((kf: any) => {
-      expect(fs.existsSync(path.join(publicDir, kf.src))).toBe(true);
+      expect(kf.src).toMatch(/^images\/plaza_comparison_4k_keyframe_/);
     });
+  });
+
+  // The keyframe stills are demo media (removed from the repo on 2026-10-20); they are checked only where present.
+  const plazaKeyframes = requireAssets(districtKeyframes(galleryPath, 's4d_plaza_hotel_01'));
+  it.skipIf(!plazaKeyframes.ok)(withReason('Plaza Hotel NYC district keyframe stills exist on disk', plazaKeyframes), () => {
+    for (const p of districtKeyframes(galleryPath, 's4d_plaza_hotel_01')) expect(fs.existsSync(path.resolve(__dirname, '../../..', p))).toBe(true);
   });
 
   it.skipIf(!plazaVideos.ok)(withReason('Plaza Hotel NYC district references existing, non-empty videos', plazaVideos), () => {
