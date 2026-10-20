@@ -10,6 +10,8 @@
 import { PRIMITIVE_TYPES, normalizePrimitiveType, type CanvasArtifact, type ArtifactData, type Scene3DData } from '../../../browser/generative-canvas/canvas-types';
 import { UNTITLED_DOCUMENT_TITLE, modelDocumentSections, modelSandboxFiles, normalizeModelVideoTimeline } from '../artifact-synthesis';
 import { NativePythonRunnerService } from '../../3d-engine/native-python-runner-service';
+import { formatSbApiErrors, sbTypeCheckMetadata, typeCheckSbScript } from '../../3d-engine/sb-script-typecheck';
+import { SB_API_VERSION } from '../../3d-engine/sb-api.generated';
 import { NativeCppCompilerService } from '../../3d-engine/native-compiler-service';
 import { DirectDispatchOperatorEngine, type BatchCommand } from '../../../browser/generative-canvas/services/direct-dispatch-operator-engine';
 import * as fs from 'fs';
@@ -297,7 +299,23 @@ export const canvasHandlers: Record<string, ToolHandler> = {
             let pythonGlbBase64 = p.pythonGenerator?.glbBase64 || p.glbBase64;
             let pythonGlbPath = p.pythonGenerator?.glbPath || p.glbPath;
 
+            let typeCheckMeta: ReturnType<typeof sbTypeCheckMetadata> | undefined;
             if (pythonScript && !pythonGlbBase64) {
+                // Checked against the generated scratchbox stubs first: calls to names the API does not have go back
+                // to the model without running; a check that could not finish lets the script run (logged).
+                const typeCheck = await typeCheckSbScript(pythonScript);
+                typeCheckMeta = sbTypeCheckMetadata(typeCheck);
+                if (typeCheck.status === 'rejected') {
+                    const error = `The scene's Python script was not run. ${formatSbApiErrors(typeCheck.errors)}`;
+                    return {
+                        status: 'failed',
+                        resultPayload: { success: false, error, apiErrors: typeCheck.errors, typeCheck: typeCheckMeta },
+                        summaryResult: `Failed: the scene's Python script calls ${typeCheck.errors.length} name(s) or argument(s) the scratchbox API does not have. ${typeCheck.errors.slice(0, 3).map(e => `line ${e.line}: ${e.message}`).join('; ')}`
+                    };
+                }
+                if (typeCheck.status !== 'passed') {
+                    console.warn(`[mount_canvas_primitive] scratchbox type check ${typeCheck.status} after ${typeCheck.durationMs}ms; running unchecked: ${typeCheck.note}`);
+                }
                 // The script is the scene's geometry: if it does not produce a model, nothing is mounted.
                 let res: Awaited<ReturnType<NativePythonRunnerService['runScript']>>;
                 try {
@@ -338,7 +356,8 @@ export const canvasHandlers: Record<string, ToolHandler> = {
                 sourceCode: pythonScript || p.pythonGenerator?.sourceCode || '',
                 glbBase64: pythonGlbBase64,
                 glbPath: pythonGlbPath,
-                lastCompiledTimeMs: Date.now()
+                lastCompiledTimeMs: Date.now(),
+                ...(typeCheckMeta ? { sbApiVersion: SB_API_VERSION, typeCheck: typeCheckMeta } : {})
             } : p.pythonGenerator;
 
             const cppGen = (cppGlbBase64 || cppSource) ? {

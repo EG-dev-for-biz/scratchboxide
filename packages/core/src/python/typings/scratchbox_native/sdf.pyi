@@ -1,0 +1,53 @@
+"""Signed distance field primitives, smooth CSG booleans, and domain deformations"""
+
+import scratchbox_native.math
+
+__all__ = ['op_bend', 'op_intersection', 'op_repeat', 'op_smooth_intersection', 'op_smooth_subtraction', 'op_smooth_union', 'op_subtraction', 'op_twist', 'op_union', 'sd_box', 'sd_capsule', 'sd_cylinder', 'sd_gyroid', 'sd_round_box', 'sd_sphere', 'sd_torus']
+
+
+def op_bend(p: scratchbox_native.math.Vec3, k: float) -> scratchbox_native.math.Vec3: ...
+
+
+def op_intersection(d1: float, d2: float) -> float: ...
+
+
+def op_repeat(p: scratchbox_native.math.Vec3, c: scratchbox_native.math.Vec3) -> scratchbox_native.math.Vec3: ...
+
+
+def op_smooth_intersection(d1: float, d2: float, k: float = 0.2) -> float: ...
+
+
+def op_smooth_subtraction(d1: float, d2: float, k: float = 0.2) -> float: ...
+
+
+def op_smooth_union(d1: float, d2: float, k: float = 0.2) -> float: ...
+
+
+def op_subtraction(d1: float, d2: float) -> float: ...
+
+
+def op_twist(p: scratchbox_native.math.Vec3, k: float) -> scratchbox_native.math.Vec3: ...
+
+
+def op_union(d1: float, d2: float) -> float: ...
+
+
+def sd_box(p: scratchbox_native.math.Vec3, b: scratchbox_native.math.Vec3) -> float: ...
+
+
+def sd_capsule(p: scratchbox_native.math.Vec3, a: scratchbox_native.math.Vec3, b: scratchbox_native.math.Vec3, radius: float) -> float: ...
+
+
+def sd_cylinder(p: scratchbox_native.math.Vec3, radius: float, height: float) -> float: ...
+
+
+def sd_gyroid(p: scratchbox_native.math.Vec3, scale: float = 1.0, thickness: float = 0.1) -> float: ...
+
+
+def sd_round_box(p: scratchbox_native.math.Vec3, b: scratchbox_native.math.Vec3, r: float) -> float: ...
+
+
+def sd_sphere(p: scratchbox_native.math.Vec3, radius: float) -> float: ...
+
+
+def sd_torus(p: scratchbox_native.math.Vec3, major_radius: float, minor_radius: float) -> float: ...
