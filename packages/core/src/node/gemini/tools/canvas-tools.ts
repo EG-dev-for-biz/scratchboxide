@@ -18,7 +18,7 @@ import { glbToTriangleSoup } from '../../3d-engine/part-connectivity';
 import { measureGlbBase64MeshCounts } from '../../../common/glb-mesh-counts';
 import { auditModelAgainstRequest, callVisionModel } from '../../3d-engine/visual-review';
 import type { ToolDeclaration, ToolHandler } from './types';
-import { applyClayFirstPassBaseline, keepOpenSceneRenderMode } from '../scene3d-clay-baseline';
+import { applyFirstPassBaseline, firstPassRenderMode, keepOpenSceneRenderMode } from '../scene3d-first-pass-baseline';
 import { isDrawableSceneObject, undrawableSceneObjects } from '../../../browser/generative-canvas/primitives/scene3d/syncSceneContent';
 import { liveTilesAnchorProblem, sceneAsksForLiveTiles } from '../../../browser/generative-canvas/primitives/scene3d/liveTilesAnchor';
 
@@ -357,7 +357,7 @@ export const canvasHandlers: Record<string, ToolHandler> = {
 
             // Everything comes from the payload: no prompt synthesizer supplies a camera, lighting, render
             // settings, meshes, scripts, an anchor or splat files. Unset fields take the viewport's neutral studio
-            // defaults and the clay baseline below.
+            // defaults and the first-pass baseline below.
             payload = {
                 ...p,
                 title,
@@ -369,10 +369,11 @@ export const canvasHandlers: Record<string, ToolHandler> = {
                 pythonGenerator: pyGenerator
             };
             const active3D = _ctx?.request?.activeArtifact?.type === '3d-scene' ? _ctx.request.activeArtifact.data as any : undefined;
-            // A first scene is clay; with a scene open, the open render mode carries unless the payload sets one.
+            // A first scene opens textured (clay when the user asked for it); with a scene open, the open render mode
+            // carries unless the payload sets one.
             payload = active3D
                 ? keepOpenSceneRenderMode(payload as any, active3D.renderMode)
-                : applyClayFirstPassBaseline(payload as any, prompt);
+                : applyFirstPassBaseline(payload as any, prompt);
 
             // Objects the viewport would skip (internal:plane, an image, an .obj) would be reported as mounted while
             // nothing of them is drawn. Every object here is one the model sent, so the app's own placeholder URIs
@@ -504,10 +505,10 @@ export const canvasHandlers: Record<string, ToolHandler> = {
         const activeArtifact = _ctx?.request?.activeArtifact;
         const currentData: Scene3DData = (activeArtifact && activeArtifact.type === '3d-scene' && activeArtifact.data)
             ? (activeArtifact.data as Scene3DData)
-            // With no scene open, operators start from an empty first pass: grey clay in a studio, like every first scene.
+            // With no scene open, operators start from an empty first pass in a studio, like every first scene.
             : {
                 title: '3D Scene',
-                renderMode: 'clay',
+                renderMode: firstPassRenderMode(_ctx?.request?.prompt),
                 environment: { skybox: 'studio', lighting: 'studio' },
                 customMeshes: [],
                 objects: []

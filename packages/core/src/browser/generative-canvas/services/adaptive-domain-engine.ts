@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { DEFAULT_SCENE_RENDER_MODE } from '../../../common/scene-atmosphere-opt-in';
 import type {
     KanbanBoardData,
     KanbanColumn,
@@ -644,7 +645,7 @@ export function synthesizeAdaptive3DScene(
         subtitle: 'Nothing has been built in this scene yet.',
         worldBranch: `spatial/${subject.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}`,
         sceneType: 'adaptive',
-        renderMode: 'clay',
+        renderMode: DEFAULT_SCENE_RENDER_MODE,
         cameraMode: 'orbit',
         camera: { position: [6, 4, 8], target: [0, 1, 0], fov: 45 },
         environment: { skybox: 'studio', lighting: 'studio', ground: false },
