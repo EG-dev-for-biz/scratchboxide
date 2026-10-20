@@ -17,16 +17,22 @@
  *      credentials. Unless the build is clay, every sweep and revolve part also gets a material: continuous factors
  *      (linear RGB base colour, roughness, metalness, transmission, ior, clearcoat, emission) read from the generated
  *      reference, so they are inferred from a generated image, not measured; the result and the GLB say so.
- *      A spec the validator or the interpreter cannot build, or whose build runs past its time limit,
- *      gets one corrective re-ask quoting every problem, then the call fails.
+ *      Child geometry that does not start at its attach point is moved there (a translation, recorded in the pass)
+ *      instead of a re-ask. A spec the validator or the interpreter cannot build, or whose build runs past its time
+ *      limit, gets one corrective re-ask quoting every problem, answered with only the parts that change (a patch
+ *      merged by part id), then the call fails.
  *   3. Build: sb.object_spec.build(spec) runs in the native Python engine and writes a GLB, within BUILD_TIMEOUT_MS
  *      (a run past it is stopped and reported as having run out of time). The time limit starts once the engine's
  *      native module is ready: a rebuild after an engine change is waited for first, and a failed one is its own
  *      stage ('engine'), never blamed on the spec.
  *   4. Checks: every part the spec lists is built and touches its parent, the piece count equals expectedBodies, and
- *      the vision model compares a clay render with the reference. The contact analysis runs in slices, so the
- *      server keeps answering and a stop ends it. Problems and high-confidence differences go back
- *      for up to two revision passes. The result is the last build that passed every check; a revision that fails
+ *      the vision model compares a clay render with the reference; unless the build is clay it also compares a render
+ *      of the build in its materials (material-preview-render) and lists surface differences per part as corrected
+ *      factors. Both comparisons run together, while the contact analysis does (in slices, so the server keeps
+ *      answering and a stop ends it). Problems, high-confidence differences and applicable material corrections
+ *      go back for up to two revision passes: a revision replies with only the parts it changes, the material
+ *      corrections already applied to the spec it is given; a pass whose only problems are material corrections
+ *      is rebuilt natively with them, with no model call for the spec. Every stage is timed (result.timings). The result is the last build that passed every check; a revision that fails
  *      is reported as such, and differences still present are listed verbatim. A comparison that cannot be had
  *      (a malformed answer twice, or a model error) leaves that pass measured but not compared, and the result says
  *      so; it never discards a build that passed every check. A build that never passed every check is rejected,
@@ -42,10 +48,14 @@ import * as fs from 'fs';
 import type { Content, GenerateContentParameters, GenerateContentResponse, Part } from '@google/genai';
 import {
     buildObjectSpecScript,
+    normalizeChildOrigins,
     objectBuildSpecJsonSchema,
     partsWithoutMaterial,
     validateObjectBuildSpec,
+    validatePartMaterial,
+    PART_MATERIAL_JSON_SCHEMA,
     type ObjectBuildSpec,
+    type PartMaterial,
     type Vec3
 } from '../../common/spatial/object-build-spec';
 import { classifyMediaGenerationError } from '../../common/media-generation-protocol';
@@ -63,6 +73,7 @@ import {
     type TriangleSoup
 } from './part-connectivity';
 import { renderReviewViews } from './visual-review';
+import { materialPreviewMeshes, renderMaterialPreview } from './material-preview-render';
 import { downscaleForVision } from '../vision-image-downscale';
 
 /** Nano Banana Lite. The only model the reference image is ever requested from. */
@@ -149,12 +160,54 @@ export interface ReferenceObjectBuilderDeps {
      * runPython is not injected, and to nothing when it is.
      */
     prepareEngine?: () => Promise<string | null>;
+    /**
+     * How corrective re-asks and revisions reply: true (the default) asks for only the parts that change (a spec
+     * patch, merged here by part id), false for the complete spec every time. The model writes its output at a fixed
+     * rate, so a patch of a few parts comes back several times faster than the whole spec.
+     */
+    patchReplies?: boolean;
 }
 
 export interface ReferenceDifference {
     partId?: string;
     problem: string;
     confidence: 'high' | 'low';
+}
+
+/** The material factors a correction may set (the description is the model's words and is not corrected). */
+export type MaterialFactors = Partial<Omit<PartMaterial, 'description'>>;
+
+/**
+ * A surface the vision model saw differ between the reference and a render of the build in its materials, with the
+ * factors it should have instead (only the ones that differ, as continuous values).
+ */
+export interface MaterialDifference {
+    partId: string;
+    problem: string;
+    confidence: 'high' | 'low';
+    correction: MaterialFactors;
+}
+
+/** A high-confidence material correction applied to the spec for the next pass. */
+export interface AppliedMaterialCorrection {
+    partId: string;
+    problem: string;
+    /** The factors as they were and as they were set. */
+    from: MaterialFactors;
+    to: MaterialFactors;
+}
+
+/** The comparison of one pass's material render with the reference. */
+export interface MaterialCheck {
+    pass: number;
+    /** Every difference listed, high and low confidence. */
+    differences: MaterialDifference[];
+    /** High-confidence corrections that were applied to the spec for the next pass (empty on the last pass or when none apply). */
+    applied: AppliedMaterialCorrection[];
+    /** High-confidence corrections that could not be applied, with why (an unknown part, a factor out of range, no change). */
+    notApplied: Array<{ partId: string; reason: string }>;
+    /** Why the comparison could not be had, when it could not (the pass is then not material-checked). */
+    error?: string;
 }
 
 /** What one listed part produced in the GLB. */
@@ -193,14 +246,19 @@ export interface ObjectBuildChecks {
 
 export interface ObjectBuildPass {
     pass: number;
-    /** reference: the first pass from the reference; revision: a pass that fixes problems; spec: a spec rebuilt as given. */
-    source: 'reference' | 'revision' | 'spec';
+    /**
+     * reference: the first pass from the reference; revision: a pass that fixes problems; material: a pass that only
+     * applies material corrections (same geometry, no model call for the spec); spec: a spec rebuilt as given.
+     */
+    source: 'reference' | 'revision' | 'material' | 'spec';
     /** 'built' when the pass produced a checked build; 'failed' when its spec could not be built or checked. */
     outcome: 'built' | 'failed';
     /** Spec requests the pass took: 1, or 2 when the first answer needed the corrective re-ask. */
     specRequests?: number;
     /** The problems quoted back in the corrective re-ask, when there was one. */
     correctedProblems?: string[];
+    /** Child parts whose geometry was moved to start at its attach point instead of a re-ask, one note each. */
+    normalizedChildren?: string[];
     vertexCount?: number;
     triangleCount?: number;
     partsBuilt?: number;
@@ -213,6 +271,12 @@ export interface ObjectBuildPass {
     highConfidenceDifferences?: number;
     /** Why the clay render of this pass could not be compared with the reference, when it could not. */
     comparisonError?: string;
+    /** High-confidence material differences the material render showed (not set for a clay build). */
+    materialDifferences?: number;
+    /** Material corrections this pass's comparison applied to the spec for the next pass. */
+    materialCorrections?: number;
+    /** Why this pass's material render could not be compared with the reference, when it could not. */
+    materialComparisonError?: string;
     /** Problems sent back to the vision model after this pass; empty when nothing was left to fix. */
     problems?: string[];
     /** Why the pass failed, when it did. */
@@ -277,8 +341,69 @@ export interface ReferenceObjectBuildResult {
     checks: ObjectBuildChecks;
     /** High-confidence differences still present in the returned build, as the vision model wrote them (none known when comparisonFailed is set). */
     remainingDifferences: ReferenceDifference[];
+    /** The material comparison of every checked pass, in order (empty for a clay build). */
+    materialChecks: MaterialCheck[];
+    /** High-confidence material differences still present in the returned build (none known when its comparison failed). */
+    remainingMaterialDifferences: MaterialDifference[];
     /** Other problems still present in the returned build (such as its size disagreeing with boundingMeters). */
     openProblems: string[];
+    /** How long each stage took, in the order the stages finished. */
+    timings: BuildStageTiming[];
+    /** Wall time of the whole build. */
+    totalMs: number;
+}
+
+/**
+ * One measured stage of a build, in the order it finished. `startMs` is from the start of the build; model calls also
+ * carry the token counts the API reported. Stages of one pass can overlap (the comparison runs while the contact
+ * analysis does), so the stages' times do not add up to the wall time.
+ */
+export interface BuildStageTiming {
+    /** What ran (a label for the record; nothing branches on it). */
+    stage: 'reference-image' | 'reference-prep' | 'spec-read' | 'spec-correction' | 'engine' | 'native-build' | 'measure'
+        | 'render' | 'shape-compare' | 'material-compare' | (string & {});
+    pass: number;
+    startMs: number;
+    ms: number;
+    model?: string;
+    promptTokens?: number;
+    outputTokens?: number;
+    thoughtTokens?: number;
+    /** Length of the reply text, for model calls. */
+    outputChars?: number;
+}
+
+/** Records how long each stage of one build takes. */
+export class BuildStageClock {
+    readonly timings: BuildStageTiming[] = [];
+    /** The pass the stages being timed belong to (passes run one after another). */
+    pass = 1;
+    private readonly t0: number;
+    constructor(private readonly now: () => number = Date.now) {
+        this.t0 = now();
+    }
+    get elapsedMs(): number {
+        return this.now() - this.t0;
+    }
+    /** Times `work` as `stage` of the current pass; `extra` adds fields from its result. */
+    async time<T>(stage: BuildStageTiming['stage'], work: () => Promise<T> | T, extra?: (value: T) => Partial<BuildStageTiming>): Promise<T> {
+        const pass = this.pass;
+        const started = this.now();
+        const value = await work();
+        this.timings.push({ stage, pass, startMs: started - this.t0, ms: this.now() - started, ...(extra ? extra(value) : {}) });
+        return value;
+    }
+}
+
+/** The token counts a model answer reports, as timing fields. */
+function usageTiming(response: GenerateContentResponse | undefined): Partial<BuildStageTiming> {
+    const u = response?.usageMetadata;
+    if (!u) return {};
+    return {
+        ...(u.promptTokenCount !== undefined ? { promptTokens: u.promptTokenCount } : {}),
+        ...(u.candidatesTokenCount !== undefined ? { outputTokens: u.candidatesTokenCount } : {}),
+        ...(u.thoughtsTokenCount !== undefined ? { thoughtTokens: u.thoughtsTokenCount } : {})
+    };
 }
 
 interface ReferenceImage {
@@ -397,20 +522,30 @@ export function buildSpecPrompt(request: string, dimensionsHintMeters?: Vec3, op
     ].join('\n');
 }
 
+/** The spec without its material blocks: what the shape comparison needs to know. */
+function shapeOnly(spec: ObjectBuildSpec): ObjectBuildSpec {
+    return { ...spec, parts: spec.parts.map(({ material: _m, ...part }) => part) };
+}
+
 export function buildComparisonPrompt(request: string, spec: ObjectBuildSpec): string {
     return [
         `Image 1 is the reference picture of: ${request}`,
         'Image 2 is an untextured clay render of the 3D model built from the spec below, seen from a similar three-quarter view.',
         'Compare shapes only, not colour, material, lighting or background. List clear differences: missing or extra parts, wrong counts, wrong proportions, sizes or positions, parts that are detached, crossing or pointing the wrong way. Give the spec part id when one applies.',
         'confidence is exactly "high" or "low": "high" only when a difference is unmistakable, otherwise "low". Reply with an empty list when the shapes match.',
-        `Spec:\n${JSON.stringify(spec)}`
+        `Spec:\n${JSON.stringify(shapeOnly(spec))}`
     ].join('\n');
 }
 
-export function buildRevisionPrompt(request: string, spec: ObjectBuildSpec, problems: string[], dimensionsHintMeters?: Vec3, options: { materials?: boolean } = {}): string {
+/** How a patch reply is written, for the revision and correction prompts. */
+const PATCH_REPLY_RULES = 'Reply with only what changes, as JSON matching the schema: in parts, each part you add or change, complete (it replaces the part with the same id; a new id adds a part); in removePartIds, the ids of parts to drop; boundingMeters, expectedBodies or observations only when they change. Parts you leave out stay exactly as they are.';
+
+export function buildRevisionPrompt(request: string, spec: ObjectBuildSpec, problems: string[], dimensionsHintMeters?: Vec3, options: { materials?: boolean; patch?: boolean } = {}): string {
     return [
         `Image 1 is the reference picture of: ${request}. Image 2 is a clay render of the current build.`,
-        'Return the complete corrected build spec as JSON matching the schema, following the conventions below. Fix every problem listed and keep the parts that are right unchanged.',
+        options.patch
+            ? `Correct the current build spec, following the conventions below: fix every problem listed and keep the parts that are right unchanged. ${PATCH_REPLY_RULES}`
+            : 'Return the complete corrected build spec as JSON matching the schema, following the conventions below. Fix every problem listed and keep the parts that are right unchanged.',
         '',
         specConventions(dimensionsHintMeters, options),
         '',
@@ -420,8 +555,62 @@ export function buildRevisionPrompt(request: string, spec: ObjectBuildSpec, prob
     ].join('\n');
 }
 
-export function buildCorrectionPrompt(errors: string[]): string {
-    return `That build spec cannot be built:\n${errors.map(e => `- ${e}`).join('\n')}\nReply with the complete corrected spec as JSON matching the schema.`;
+export function buildCorrectionPrompt(errors: string[], options: { patch?: boolean } = {}): string {
+    return `That build spec cannot be built:\n${errors.map(e => `- ${e}`).join('\n')}\n${options.patch ? `Correct it. ${PATCH_REPLY_RULES}` : 'Reply with the complete corrected spec as JSON matching the schema.'}`;
+}
+
+/** The schema of a patch reply: the parts that change (the spec's own part schema), the ids to drop, and the top-level fields that change. */
+export function objectBuildSpecPatchJsonSchema(options: { materials: boolean }): Record<string, unknown> {
+    const full = objectBuildSpecJsonSchema(options) as { properties: Record<string, any> };
+    return {
+        type: 'object',
+        properties: {
+            parts: { ...full.properties.parts, minItems: 0, description: 'Parts added or changed, each complete; a part replaces the part with the same id.' },
+            removePartIds: { type: 'array', items: { type: 'string' }, description: 'Ids of parts to drop.' },
+            boundingMeters: full.properties.boundingMeters,
+            expectedBodies: full.properties.expectedBodies,
+            observations: full.properties.observations
+        },
+        required: ['parts'],
+        propertyOrdering: ['observations', 'boundingMeters', 'expectedBodies', 'removePartIds', 'parts']
+    };
+}
+
+/**
+ * A patch reply merged into `base` by part id: a part with a known id replaces that part where it stands, a new id is
+ * added at the end, removePartIds drops parts, and boundingMeters, expectedBodies and observations replace the base's
+ * when given. A reply that is a complete spec merges the same way (every part replaced). Returns the problems when
+ * the reply is not a patch; the merged spec is checked by the validator afterwards like any other.
+ */
+export function applySpecPatch(base: ObjectBuildSpec, patch: unknown): { spec?: ObjectBuildSpec; problems: string[] } {
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return { problems: ['the reply must be a JSON object with a parts list'] };
+    const p = patch as Record<string, unknown>;
+    if (!Array.isArray(p.parts)) return { problems: ['the reply needs a parts list (empty when no part changes)'] };
+    const problems: string[] = [];
+    const remove = p.removePartIds === undefined ? [] : p.removePartIds;
+    if (!Array.isArray(remove) || remove.some(id => typeof id !== 'string')) problems.push('removePartIds must be a list of part ids');
+    const removing = new Set(Array.isArray(remove) ? remove.filter((id): id is string => typeof id === 'string') : []);
+    const known = new Set(base.parts.map(part => part.id));
+    for (const id of removing) if (!known.has(id)) problems.push(`removePartIds: "${id}" does not name a part of the current spec`);
+    const replacing = new Map<string, ObjectBuildSpec['parts'][number]>();
+    p.parts.forEach((part, i) => {
+        const id = (part as { id?: unknown } | null)?.id;
+        if (!part || typeof part !== 'object' || typeof id !== 'string') { problems.push(`parts[${i}] must be a part object with an id`); return; }
+        if (removing.has(id)) problems.push(`part "${id}" is both changed and listed in removePartIds`);
+        if (replacing.has(id)) problems.push(`part "${id}" is given more than once`);
+        replacing.set(id, part as ObjectBuildSpec['parts'][number]);
+    });
+    if (problems.length) return { problems };
+    const parts = base.parts.filter(part => !removing.has(part.id)).map(part => replacing.get(part.id) ?? part);
+    for (const [id, part] of replacing) if (!known.has(id)) parts.push(part);
+    const spec: ObjectBuildSpec = {
+        ...base,
+        ...(p.boundingMeters !== undefined ? { boundingMeters: p.boundingMeters as Vec3 } : {}),
+        ...(p.expectedBodies !== undefined ? { expectedBodies: p.expectedBodies as number } : {}),
+        ...(p.observations !== undefined ? { observations: p.observations as string[] } : {}),
+        parts
+    };
+    return { spec, problems: [] };
 }
 
 function buildComparisonCorrectionPrompt(error: string): string {
@@ -550,7 +739,9 @@ class VisionModel {
         private readonly candidates: string[],
         readonly source: 'request' | 'chat-default',
         deps: ReferenceObjectBuilderDeps,
-        signal?: AbortSignal
+        signal?: AbortSignal,
+        /** Where this build's stage times are recorded. */
+        readonly clock: BuildStageClock = new BuildStageClock()
     ) {
         this.chain = new VisionModelChain<ObjectBuildStage>({
             client,
@@ -611,18 +802,21 @@ interface JsonReply {
     parseError?: string;
 }
 
+/** The timing label of a model call: what it is for. */
+type CallLabel = BuildStageTiming['stage'];
+
 /**
  * A JSON answer from the vision model, parsed. JSON mode with the schema in the prompt: Vertex refused
  * responseJsonSchema with the spec schema on the chat model (400 INVALID_ARGUMENT, verified live), so the schema is
  * stated in the request and every reply is checked here instead.
  */
-async function callJson(vision: VisionModel, contents: Content[], schema: Record<string, unknown>, stage: ObjectBuildStage, signal?: AbortSignal, thinkingBudget?: number): Promise<JsonReply> {
+async function callJson(vision: VisionModel, contents: Content[], schema: Record<string, unknown>, stage: ObjectBuildStage, label: CallLabel, signal?: AbortSignal, thinkingBudget?: number): Promise<JsonReply> {
     const last = contents[contents.length - 1];
     const withSchema: Content[] = [...contents.slice(0, -1), { ...last, parts: [...(last.parts || []), { text: schemaInstruction(schema) }] }];
-    const response = await vision.generate({
+    const response = await vision.clock.time(label, () => vision.generate({
         contents: withSchema,
         config: { responseMimeType: 'application/json', temperature: 0.2, abortSignal: signal }
-    }, stage, thinkingBudget);
+    }, stage, thinkingBudget), r => ({ model: vision.current, ...usageTiming(r), outputChars: responseText(r).length }));
     const blocked = response.promptFeedback?.blockReason;
     if (blocked) throw new ReferenceObjectBuildError(stage, `${vision.current} refused the request (${blocked}).`, { model: vision.current });
     const text = responseText(response);
@@ -664,19 +858,174 @@ async function compareToReference(
         role: 'user',
         parts: [referencePart(reference), imagePart(render, 'image/png'), { text: buildComparisonPrompt(request, spec) }]
     }];
-    const first = await callJson(vision, contents, DIFFERENCES_JSON_SCHEMA, 'checks', signal);
+    const first = await callJson(vision, contents, DIFFERENCES_JSON_SCHEMA, 'checks', 'shape-compare', signal);
     const parsed = parseDifferences(first);
     if (parsed.differences) return parsed.differences;
     const again = await callJson(vision, [
         ...contents,
         { role: 'model', parts: [{ text: first.text }] },
         { role: 'user', parts: [{ text: buildComparisonCorrectionPrompt(parsed.error!) }] }
-    ], DIFFERENCES_JSON_SCHEMA, 'checks', signal);
+    ], DIFFERENCES_JSON_SCHEMA, 'checks', 'shape-compare', signal);
     const reparsed = parseDifferences(again);
     if (reparsed.differences) return reparsed.differences;
     throw new ReferenceObjectBuildError('checks',
         `${vision.current} did not return a usable comparison of the build with the reference after one correction: ${reparsed.error}`,
         { model: vision.current });
+}
+
+/** The parts' current materials, one line each, as the material comparison is told them. */
+function describePartMaterials(spec: ObjectBuildSpec): string {
+    return spec.parts.filter(p => p.sweep || p.revolve).map(p => {
+        const { description: _d, ...factors } = p.material ?? {};
+        return `- ${p.id} (${p.label}): ${p.material ? JSON.stringify(factors) : 'no material (studio clay)'}`;
+    }).join('\n');
+}
+
+export function buildMaterialComparisonPrompt(request: string, spec: ObjectBuildSpec): string {
+    return [
+        `Image 1 is the reference picture of: ${request}`,
+        'Image 2 is a render of the 3D model built from it, each part in the material listed below, on the same plain #808080 backdrop under neutral white studio light, from a similar three-quarter view. The renderer is simple: it shows base colour, roughness, metalness, see-through transmission, clearcoat and glow, but no texture maps, printed patterns, wear, dirt, shadows or refraction, and the shapes may differ from the reference.',
+        'Compare the surface of each part only: not shape, size, position, count, patterns, fine detail, wear or lighting. List a part when its surface clearly differs from the same part in the reference: a wrong colour or brightness, matte where it should be glossy or the reverse, metal where it should not be or the reverse, opaque where it should be see-through or the reverse, glowing where it should not or the reverse.',
+        'For each, give partId (one of the ids below), the problem in a few words, and a correction holding only the factors that should change, at their corrected values: baseColor LINEAR RGB 0..1 (an sRGB channel v/255 is about (v/255)^2.2 linear; for a metal, its tint), roughness 0 mirror .. 1 chalky, metalness 1 only for bare metal, transmission 0 opaque .. about 0.9-1 clear, ior, clearcoat 0..1, emissive LINEAR RGB with emissiveStrength for a glow.',
+        'confidence is exactly "high" or "low": "high" only when the difference is unmistakable, otherwise "low". Reply with an empty list when the surfaces match.',
+        `Parts and their current materials:\n${describePartMaterials(spec)}`
+    ].join('\n');
+}
+
+const MATERIAL_CORRECTION_PROPERTIES: Record<string, unknown> = Object.fromEntries(
+    Object.entries((PART_MATERIAL_JSON_SCHEMA.properties as Record<string, unknown>)).filter(([k]) => k !== 'description'));
+
+const MATERIAL_DIFFERENCES_JSON_SCHEMA: Record<string, unknown> = {
+    type: 'object',
+    properties: {
+        differences: {
+            type: 'array',
+            items: {
+                type: 'object',
+                properties: {
+                    partId: { type: 'string' },
+                    problem: { type: 'string' },
+                    confidence: { type: 'string', enum: ['high', 'low'] },
+                    correction: { type: 'object', properties: MATERIAL_CORRECTION_PROPERTIES }
+                },
+                required: ['partId', 'problem', 'confidence', 'correction']
+            }
+        }
+    },
+    required: ['differences']
+};
+
+const MATERIAL_FACTOR_KEYS = ['baseColor', 'roughness', 'metalness', 'transmission', 'ior', 'clearcoat', 'emissive', 'emissiveStrength'] as const;
+
+function parseMaterialDifferences(reply: JsonReply): { differences?: MaterialDifference[]; error?: string } {
+    if (reply.parseError) return { error: reply.parseError };
+    const list = (reply.value as { differences?: unknown })?.differences;
+    if (!Array.isArray(list)) return { error: 'the reply has no differences list' };
+    const differences: MaterialDifference[] = [];
+    for (const d of list as any[]) {
+        if (!d || typeof d.partId !== 'string' || !d.partId || typeof d.problem !== 'string' || !d.problem.trim()
+            || (d.confidence !== 'high' && d.confidence !== 'low') || (d.correction !== undefined && (typeof d.correction !== 'object' || d.correction === null || Array.isArray(d.correction)))) {
+            return { error: `entry ${JSON.stringify(d).slice(0, 200)} needs a partId, a problem string, confidence "high" or "low" and a correction object` };
+        }
+        const correction: MaterialFactors = {};
+        for (const key of MATERIAL_FACTOR_KEYS) {
+            if (d.correction?.[key] !== undefined && d.correction[key] !== null) (correction as Record<string, unknown>)[key] = d.correction[key];
+        }
+        differences.push({ partId: d.partId, problem: d.problem, confidence: d.confidence, correction });
+    }
+    return { differences };
+}
+
+/** Asks for the material comparison; a malformed answer gets one corrective re-ask, then the comparison fails. */
+async function compareMaterialsToReference(
+    vision: VisionModel,
+    request: string,
+    reference: ReferenceImage,
+    render: Buffer,
+    spec: ObjectBuildSpec,
+    signal?: AbortSignal
+): Promise<MaterialDifference[]> {
+    const contents: Content[] = [{
+        role: 'user',
+        parts: [referencePart(reference), imagePart(render, 'image/png'), { text: buildMaterialComparisonPrompt(request, spec) }]
+    }];
+    const first = await callJson(vision, contents, MATERIAL_DIFFERENCES_JSON_SCHEMA, 'checks', 'material-compare', signal);
+    const parsed = parseMaterialDifferences(first);
+    if (parsed.differences) return parsed.differences;
+    const again = await callJson(vision, [
+        ...contents,
+        { role: 'model', parts: [{ text: first.text }] },
+        { role: 'user', parts: [{ text: `That comparison cannot be used: ${parsed.error}\nReply again with JSON matching the schema: each difference has partId, a problem string, confidence exactly "high" or "low" and a correction object.` }] }
+    ], MATERIAL_DIFFERENCES_JSON_SCHEMA, 'checks', 'material-compare', signal);
+    const reparsed = parseMaterialDifferences(again);
+    if (reparsed.differences) return reparsed.differences;
+    throw new ReferenceObjectBuildError('checks',
+        `${vision.current} did not return a usable material comparison of the build with the reference after one correction: ${reparsed.error}`,
+        { model: vision.current });
+}
+
+const sameFactor = (a: unknown, b: unknown): boolean => Array.isArray(a) && Array.isArray(b)
+    ? a.length === b.length && a.every((v, i) => Math.abs(Number(v) - Number(b[i])) < 1e-3)
+    : typeof a === 'number' && typeof b === 'number' ? Math.abs(a - b) < 1e-3 : a === b;
+
+/**
+ * The spec with every high-confidence material correction applied, each checked against the factor ranges (a
+ * correction that names no material-bearing part, leaves a factor out of range or changes nothing is not applied,
+ * and says why). Returns undefined for the spec when nothing was applied.
+ */
+export function applyMaterialCorrections(spec: ObjectBuildSpec, differences: MaterialDifference[]): {
+    spec?: ObjectBuildSpec;
+    applied: AppliedMaterialCorrection[];
+    notApplied: Array<{ partId: string; reason: string }>;
+} {
+    const applied: AppliedMaterialCorrection[] = [];
+    const notApplied: Array<{ partId: string; reason: string }> = [];
+    const parts = spec.parts.map(p => ({ ...p }));
+    for (const d of differences.filter(x => x.confidence === 'high')) {
+        const part = parts.find(p => p.id === d.partId);
+        if (!part || !(part.sweep || part.revolve)) {
+            notApplied.push({ partId: d.partId, reason: 'no sweep or revolve part has this id' });
+            continue;
+        }
+        const current: PartMaterial = part.material ?? { baseColor: [0.55, 0.57, 0.6], roughness: 0.85, metalness: 0, transmission: 0 };
+        const changed = (Object.keys(d.correction) as Array<keyof MaterialFactors>).filter(k => !sameFactor(d.correction[k], current[k]));
+        if (changed.length === 0) {
+            notApplied.push({ partId: d.partId, reason: 'the correction changes no factor' });
+            continue;
+        }
+        const next = { ...current, ...Object.fromEntries(changed.map(k => [k, d.correction[k]])) } as PartMaterial;
+        // a glow needs its colour: a strength without emissive takes the base colour
+        if (next.emissiveStrength !== undefined && next.emissiveStrength > 0 && !next.emissive) next.emissive = next.baseColor;
+        const errors: string[] = [];
+        validatePartMaterial(next, `part "${d.partId}"`, errors);
+        if (errors.length) {
+            notApplied.push({ partId: d.partId, reason: errors.join('; ') });
+            continue;
+        }
+        applied.push({
+            partId: d.partId,
+            problem: d.problem,
+            from: Object.fromEntries(changed.map(k => [k, current[k]])) as MaterialFactors,
+            to: Object.fromEntries(changed.map(k => [k, next[k]])) as MaterialFactors
+        });
+        part.material = next;
+    }
+    return { ...(applied.length ? { spec: { ...spec, parts } } : {}), applied, notApplied };
+}
+
+/** The returned pass's own corrections were never built (no later pass is the result): recorded as not applied. */
+function unbuiltCorrections(check: MaterialCheck): MaterialCheck {
+    if (check.applied.length === 0) return check;
+    return {
+        ...check,
+        applied: [],
+        notApplied: [...check.notApplied, ...check.applied.map(a => ({ partId: a.partId, reason: `not built: no later pass was kept to apply it (${a.problem})` }))]
+    };
+}
+
+/** How an applied material correction is told to the model in a revision (the spec it is given already has it). */
+function materialCorrectionNote(c: AppliedMaterialCorrection): string {
+    return `Part "${c.partId}" surface: ${c.problem}. Already corrected in the current spec (${Object.entries(c.to).map(([k, v]) => `${k} ${JSON.stringify(v)}`).join(', ')}); keep that material.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -755,11 +1104,12 @@ async function runBuild(
     deps: ReferenceObjectBuilderDeps,
     signal?: AbortSignal,
     reportProgress?: (message: string) => void,
-    clay = false
+    clay = false,
+    clock: BuildStageClock = new BuildStageClock()
 ): Promise<NativeBuild | RejectedBuild> {
     throwIfAborted(signal, 'build');
     const sourceCode = buildObjectSpecScript(spec, { clay });
-    await prepareEngine(deps, signal, reportProgress);
+    await clock.time('engine', () => prepareEngine(deps, signal, reportProgress));
     throwIfAborted(signal, 'build');
     const runPython = deps.runPython ?? ((script: string, options: PythonExecutionOptions) => NativePythonRunnerService.getInstance().runScript(script, options));
     const timeoutMs = deps.buildTimeoutMs ?? BUILD_TIMEOUT_MS;
@@ -771,7 +1121,7 @@ async function runBuild(
     const started = Date.now();
     let result: PythonExecutionResult;
     try {
-        result = await runPython(sourceCode, { timeoutMs: timeoutMs + 30_000, ...(deps.outputDir ? { outputDir: deps.outputDir } : {}), signal: runSignal });
+        result = await clock.time('native-build', () => runPython(sourceCode, { timeoutMs: timeoutMs + 30_000, ...(deps.outputDir ? { outputDir: deps.outputDir } : {}), signal: runSignal }));
     } finally {
         clearTimeout(timer);
     }
@@ -798,12 +1148,15 @@ interface BuildableSpec {
     build: NativeBuild;
     specRequests: number;
     correctedProblems?: string[];
+    /** Child parts moved to start at their attach points (normalizeChildOrigins), one note each. */
+    normalized?: string[];
 }
 
 /**
- * Asks for a spec and builds it. Problems the validator or the interpreter finds get one corrective re-ask that
- * quotes all of them; a spec that still cannot be built fails (build-spec for validator problems, build for the
- * interpreter's).
+ * Asks for a spec and builds it. With `base`, the first reply is a patch on it (a revision); without, a complete spec.
+ * Problems the validator or the interpreter finds get one corrective re-ask that quotes all of them, answered with a
+ * patch on the spec that failed when patch replies are on (a reply that was not a spec at all gets a complete re-ask);
+ * a spec that still cannot be built fails (build-spec for validator problems, build for the interpreter's).
  */
 async function requestBuildableSpec(
     vision: VisionModel,
@@ -811,31 +1164,53 @@ async function requestBuildableSpec(
     deps: ReferenceObjectBuilderDeps,
     signal?: AbortSignal,
     reportProgress?: (message: string) => void,
-    clay = false
+    clay = false,
+    base?: ObjectBuildSpec
 ): Promise<BuildableSpec> {
-    const schema = objectBuildSpecJsonSchema({ materials: !clay });
-    type Attempt = { build?: NativeBuild; spec?: ObjectBuildSpec; problems: string[]; from: 'build-spec' | 'build'; timedOut?: boolean };
-    const attempt = async (reply: JsonReply): Promise<Attempt> => {
-        const errors = reply.parseError ? [reply.parseError] : validateObjectBuildSpec(reply.value, { requireMaterials: !clay });
-        if (errors.length) return { problems: errors, from: 'build-spec' };
-        const spec = reply.value as ObjectBuildSpec;
-        const built = await runBuild(spec, deps, signal, reportProgress, clay);
-        if ('specProblems' in built) return { problems: built.specProblems, from: 'build', ...(built.timedOut ? { timedOut: true } : {}) };
-        return { build: built, spec, problems: [], from: 'build' };
+    const fullSchema = objectBuildSpecJsonSchema({ materials: !clay });
+    const patchSchema = objectBuildSpecPatchJsonSchema({ materials: !clay });
+    const patching = deps.patchReplies !== false;
+    type Attempt = { build?: NativeBuild; spec?: ObjectBuildSpec; candidate?: ObjectBuildSpec; problems: string[]; from: 'build-spec' | 'build'; timedOut?: boolean; normalized?: string[] };
+    const attempt = async (reply: JsonReply, patchOn?: ObjectBuildSpec): Promise<Attempt> => {
+        if (reply.parseError) return { problems: [reply.parseError], from: 'build-spec' };
+        let value: unknown = reply.value;
+        if (patchOn) {
+            const merged = applySpecPatch(patchOn, reply.value);
+            if (!merged.spec) return { problems: merged.problems, from: 'build-spec', candidate: patchOn };
+            value = merged.spec;
+        }
+        // Child geometry that does not start at its attach point is moved there (a translation, recorded), rather
+        // than sent back for a whole corrective re-ask.
+        const normalized = normalizeChildOrigins(value);
+        value = normalized.value;
+        const moved = normalized.notes.length ? { normalized: normalized.notes } : {};
+        // A reply that has a parts list can be patched in a correction even when it is not valid yet.
+        const candidate = value && typeof value === 'object' && Array.isArray((value as { parts?: unknown }).parts) ? value as ObjectBuildSpec : undefined;
+        const errors = validateObjectBuildSpec(value, { requireMaterials: !clay });
+        if (errors.length) return { problems: errors, from: 'build-spec', ...(candidate ? { candidate } : {}), ...moved };
+        const spec = value as ObjectBuildSpec;
+        const built = await runBuild(spec, deps, signal, reportProgress, clay, vision.clock);
+        if ('specProblems' in built) return { problems: built.specProblems, from: 'build', candidate: spec, ...(built.timedOut ? { timedOut: true } : {}), ...moved };
+        return { build: built, spec, problems: [], from: 'build', ...moved };
     };
     const finder = (a: Attempt) => a.timedOut ? 'the build ran out of time' : a.from === 'build' ? 'the interpreter found' : 'the validator found';
 
-    const first = await callJson(vision, contents, schema, 'build-spec', signal, SPEC_READ_THINKING_BUDGET);
-    const one = await attempt(first);
-    if (one.build && one.spec) return { spec: one.spec, build: one.build, specRequests: 1 };
+    const patchFirst = patching && base !== undefined;
+    const first = await callJson(vision, contents, patchFirst ? patchSchema : fullSchema, 'build-spec', 'spec-read', signal, SPEC_READ_THINKING_BUDGET);
+    const one = await attempt(first, patchFirst ? base : undefined);
+    if (one.build && one.spec) return { spec: one.spec, build: one.build, specRequests: 1, ...(one.normalized ? { normalized: one.normalized } : {}) };
 
+    const patchFix = patching && one.candidate !== undefined;
     const corrected = await callJson(vision, [
         ...contents,
         { role: 'model', parts: [{ text: first.text }] },
-        { role: 'user', parts: [{ text: buildCorrectionPrompt(one.problems) }] }
-    ], schema, 'build-spec', signal, SPEC_READ_THINKING_BUDGET);
-    const two = await attempt(corrected);
-    if (two.build && two.spec) return { spec: two.spec, build: two.build, specRequests: 2, correctedProblems: one.problems };
+        { role: 'user', parts: [{ text: buildCorrectionPrompt(one.problems, { patch: patchFix }) }] }
+    ], patchFix ? patchSchema : fullSchema, 'build-spec', 'spec-correction', signal, SPEC_READ_THINKING_BUDGET);
+    const two = await attempt(corrected, patchFix ? one.candidate : undefined);
+    if (two.build && two.spec) {
+        const normalized = [...(one.normalized ?? []), ...(two.normalized ?? [])];
+        return { spec: two.spec, build: two.build, specRequests: 2, correctedProblems: one.problems, ...(normalized.length ? { normalized } : {}) };
+    }
     const errors = two.problems;
     throw new ReferenceObjectBuildError(two.from,
         `${vision.current} did not produce a buildable spec after one correction (${finder(two)}: ${errors.slice(0, 8).join('; ')}${errors.length > 8 ? `; and ${errors.length - 8} more` : ''})`,
@@ -881,8 +1256,12 @@ const yieldToEventLoop = () => new Promise<void>(resolve => setImmediate(resolve
 export async function measureBuild(
     spec: ObjectBuildSpec,
     glb: Buffer,
-    options: { signal?: AbortSignal; /** Called with the merged soup before the connectivity analysis starts. */ onSoup?: (soup: TriangleSoup) => void } = {}
-): Promise<Omit<ObjectBuildChecks, 'differences'> & { soup: TriangleSoup; partBounds: PartBounds }> {
+    options: {
+        signal?: AbortSignal;
+        /** Called with the merged soup and each part's mesh (by part id) before the connectivity analysis starts. */
+        onSoup?: (soup: TriangleSoup, meshes: Map<string, TriangleSoup>) => void;
+    } = {}
+): Promise<Omit<ObjectBuildChecks, 'differences'> & { soup: TriangleSoup; meshes: Map<string, TriangleSoup>; partBounds: PartBounds }> {
     throwIfAborted(options.signal, 'checks');
     let named: Map<string, TriangleSoup> | null;
     try {
@@ -903,7 +1282,8 @@ export async function measureBuild(
         triangleRange.set(id, [first, first + s.indices.length / 3]);
         first += s.indices.length / 3;
     }
-    options.onSoup?.(soup);
+    const meshMap = new Map(meshes);
+    options.onSoup?.(soup, meshMap);
     await yieldToEventLoop();
     let whole: PartConnectivityReport;
     try {
@@ -942,6 +1322,7 @@ export async function measureBuild(
     const partBounds: PartBounds = new Map(meshes.map(([id, s]) => [id, soupBounds(s)]));
     return {
         soup,
+        meshes: meshMap,
         partBounds,
         vertexCount: soup.positions.length / 3,
         triangleCount: soup.indices.length / 3,
@@ -973,16 +1354,64 @@ interface CheckedPass {
     render: Buffer;
     checks: ObjectBuildChecks;
     partBounds: PartBounds;
+    /** Each part's mesh, by part id (a material-only pass re-renders these with the corrected materials). */
+    meshes: Map<string, TriangleSoup>;
     /** What is left to fix after this pass (empty when nothing is). */
     problems: string[];
     /** Why the comparison with the reference could not be had; the pass is then measured but not compared. */
     comparisonError?: string;
+    /** The comparison of the material render with the reference (a build that is not clay). */
+    material?: MaterialCheck;
+    /** The spec with this pass's material corrections applied, when any were. */
+    materialFixedSpec?: ObjectBuildSpec;
+}
+
+/** Times a synchronous render as a 'render' stage of the current pass. */
+function timedRender<T>(clock: BuildStageClock, stage: BuildStageTiming['stage'], work: () => T): T {
+    const started = Date.now();
+    const value = work();
+    clock.timings.push({ stage, pass: clock.pass, startMs: clock.elapsedMs - (Date.now() - started), ms: Date.now() - started });
+    return value;
 }
 
 /**
- * Measures a pass and compares its clay render with the reference. A comparison that cannot be had leaves the pass
- * measured but not compared (its differences unknown), so a build that passed every check is never thrown away for
- * it; a stop still ends the build.
+ * Renders the build in its materials and asks the vision model for the material differences from the reference;
+ * the high-confidence corrections are applied to a copy of the spec. A comparison that cannot be had is recorded as
+ * such (the pass is then not material-checked); a stop is rethrown.
+ */
+async function checkMaterials(
+    pass: number,
+    spec: ObjectBuildSpec,
+    meshes: Map<string, TriangleSoup>,
+    input: ReferenceObjectBuildRequest,
+    vision: VisionModel,
+    reference: ReferenceImage,
+    signal: AbortSignal
+): Promise<{ check: MaterialCheck; fixedSpec?: ObjectBuildSpec; error?: unknown }> {
+    try {
+        const byId = new Map(spec.parts.map(p => [p.id, p]));
+        const render = timedRender(vision.clock, 'material-render', () => renderMaterialPreview(
+            materialPreviewMeshes(meshes, id => byId.get(id)?.material), THREE_QUARTER_VIEW[0], 512));
+        const differences = await compareMaterialsToReference(vision, input.request, reference, render, spec, signal);
+        const fixed = applyMaterialCorrections(spec, differences);
+        return { check: { pass, differences, applied: fixed.applied, notApplied: fixed.notApplied }, ...(fixed.spec ? { fixedSpec: fixed.spec } : {}) };
+    } catch (error) {
+        return { check: { pass, differences: [], applied: [], notApplied: [], error: errorMessage(error) }, error };
+    }
+}
+
+/** A material comparison that failed for a stop (or a fault that is not the builder's own) ends the build. */
+function rethrowMaterialStop(result: { error?: unknown }, signal?: AbortSignal): void {
+    const err = result.error;
+    if (err === undefined) return;
+    if (!(err instanceof ReferenceObjectBuildError) || err.details.aborted || signal?.aborted) throw err;
+}
+
+/**
+ * Measures a pass and compares its clay render with the reference and, unless the build is clay, its material render
+ * too (the two comparisons run together, while the contact analysis runs). A comparison that cannot be had leaves the
+ * pass measured but not compared on that count (its differences unknown), so a build that passed every check is never
+ * thrown away for it; a stop still ends the build.
  */
 async function checkBuild(
     pass: number,
@@ -990,32 +1419,35 @@ async function checkBuild(
     build: NativeBuild,
     input: ReferenceObjectBuildRequest,
     vision: VisionModel,
-    reference: ReferenceImage
+    reference: ReferenceImage,
+    clay = false
 ): Promise<CheckedPass> {
     input.reportProgress?.(`Checking pass ${pass}: every part built and attached, and comparing it with the reference`);
-    // The comparison needs only the clay render, which needs only the merged soup: it starts as soon as the soup is
-    // read back and runs while the connectivity analysis does. A measuring failure stops the comparison.
+    // The comparisons need only the renders, which need only the read-back meshes: they start as soon as the meshes
+    // are read and run while the connectivity analysis does. A measuring failure stops them.
     const compareStop = new AbortController();
     const compareSignal = input.signal ? AbortSignal.any([input.signal, compareStop.signal]) : compareStop.signal;
     let render: Buffer | undefined;
     let comparing: Promise<{ differences: ReferenceDifference[]; error?: unknown }> | undefined;
-    const startComparison = (soup: TriangleSoup) => {
-        render = renderReviewViews(soup, 512, { views: THREE_QUARTER_VIEW })[0].png;
+    let materialComparing: Promise<Awaited<ReturnType<typeof checkMaterials>>> | undefined;
+    const startComparison = (soup: TriangleSoup, meshes: Map<string, TriangleSoup>) => {
+        render = timedRender(vision.clock, 'render', () => renderReviewViews(soup, 512, { views: THREE_QUARTER_VIEW })[0].png);
         comparing = compareToReference(vision, input.request, reference, render, spec, compareSignal)
             .then(differences => ({ differences }), error => ({ differences: [], error }));
+        if (!clay) materialComparing = checkMaterials(pass, spec, meshes, input, vision, reference, compareSignal);
     };
     let measuredBuild: Awaited<ReturnType<typeof measureBuild>>;
     try {
-        measuredBuild = await measureBuild(spec, build.glb, { signal: input.signal, onSoup: startComparison });
+        measuredBuild = await vision.clock.time('measure', () => measureBuild(spec, build.glb, { signal: input.signal, onSoup: startComparison }));
     } catch (err) {
         compareStop.abort();
-        await comparing;
+        await Promise.all([comparing, materialComparing]);
         throw err;
     }
-    const { soup, partBounds, ...measured } = measuredBuild;
+    const { soup, meshes, partBounds, ...measured } = measuredBuild;
     throwIfAborted(input.signal, 'checks');
-    if (!comparing) startComparison(soup);
-    const compared = await comparing!;
+    if (!comparing) startComparison(soup, meshes);
+    const [compared, materials] = await Promise.all([comparing!, materialComparing]);
     let differences: ReferenceDifference[] = compared.differences;
     let comparisonError: string | undefined;
     if (compared.error !== undefined) {
@@ -1024,11 +1456,57 @@ async function checkBuild(
         comparisonError = err.message;
         differences = [];
     }
+    if (materials) rethrowMaterialStop(materials, input.signal);
     const checks: ObjectBuildChecks = { ...measured, differences };
     return {
-        pass, spec, build, render: render!, checks, partBounds,
+        pass, spec, build, render: render!, checks, partBounds, meshes,
         problems: describeProblems(checks, spec, partBounds),
-        ...(comparisonError ? { comparisonError } : {})
+        ...(comparisonError ? { comparisonError } : {}),
+        ...(materials ? { material: materials.check } : {}),
+        ...(materials?.fixedSpec ? { materialFixedSpec: materials.fixedSpec } : {})
+    };
+}
+
+/**
+ * A pass that only applies the previous pass's material corrections: the geometry is unchanged, so the spec is rebuilt
+ * natively (for the GLB) while the corrected materials are rendered on the previous pass's meshes and compared with
+ * the reference again. The structural checks and the shape comparison carry over from the previous pass.
+ */
+async function materialOnlyPass(
+    pass: number,
+    previous: CheckedPass,
+    spec: ObjectBuildSpec,
+    input: ReferenceObjectBuildRequest,
+    vision: VisionModel,
+    reference: ReferenceImage,
+    deps: ReferenceObjectBuilderDeps
+): Promise<CheckedPass> {
+    input.reportProgress?.(`Pass ${pass}: applying ${previous.material?.applied.length ?? 0} material correction(s) and checking them against the reference`);
+    const compareStop = new AbortController();
+    const compareSignal = input.signal ? AbortSignal.any([input.signal, compareStop.signal]) : compareStop.signal;
+    const materialComparing = checkMaterials(pass, spec, previous.meshes, input, vision, reference, compareSignal);
+    let built: NativeBuild | RejectedBuild;
+    try {
+        built = await runBuild(spec, deps, input.signal, input.reportProgress, false, vision.clock);
+    } catch (err) {
+        compareStop.abort();
+        await materialComparing;
+        throw err;
+    }
+    if ('specProblems' in built) {
+        compareStop.abort();
+        await materialComparing;
+        throw new ReferenceObjectBuildError('build', `The material corrections could not be built: ${built.specProblems.join('; ')}`, { errors: built.specProblems });
+    }
+    const materials = await materialComparing;
+    rethrowMaterialStop(materials, input.signal);
+    return {
+        ...previous,
+        pass,
+        spec,
+        build: built,
+        material: materials.check,
+        ...(materials.fixedSpec ? { materialFixedSpec: materials.fixedSpec } : { materialFixedSpec: undefined })
     };
 }
 
@@ -1080,14 +1558,16 @@ export function describeProblems(checks: ObjectBuildChecks, spec: ObjectBuildSpe
     return problems;
 }
 
-function passRecord(checked: CheckedPass, source: ObjectBuildPass['source'], requested: BuildableSpec): ObjectBuildPass {
+function passRecord(checked: CheckedPass, source: ObjectBuildPass['source'], requested?: BuildableSpec): ObjectBuildPass {
     const c = checked.checks;
+    const m = checked.material;
     return {
         pass: checked.pass,
         source,
         outcome: 'built',
-        specRequests: requested.specRequests,
-        ...(requested.correctedProblems ? { correctedProblems: requested.correctedProblems } : {}),
+        ...(requested ? { specRequests: requested.specRequests } : {}),
+        ...(requested?.correctedProblems ? { correctedProblems: requested.correctedProblems } : {}),
+        ...(requested?.normalized ? { normalizedChildren: requested.normalized } : {}),
         vertexCount: c.vertexCount,
         triangleCount: c.triangleCount,
         partsBuilt: c.parts.filter(p => p.built).length,
@@ -1099,6 +1579,8 @@ function passRecord(checked: CheckedPass, source: ObjectBuildPass['source'], req
         ...(checked.comparisonError
             ? { comparisonError: checked.comparisonError }
             : { highConfidenceDifferences: c.differences.filter(d => d.confidence === 'high').length }),
+        ...(m?.error ? { materialComparisonError: m.error } : {}),
+        ...(m && !m.error ? { materialDifferences: m.differences.filter(d => d.confidence === 'high').length, materialCorrections: m.applied.length } : {}),
         problems: checked.problems,
         buildMs: checked.build.buildMs
     };
@@ -1237,14 +1719,16 @@ export async function buildObjectFromReference(
     if (!client) throw new ReferenceObjectBuildError('credentials', 'No Google API key or service account configured');
     const backend: ReferenceObjectBuildResult['backend'] = client.vertexai === true ? 'vertex' : client.vertexai === false ? 'api-key' : 'injected';
     const progress = input.reportProgress ?? (() => undefined);
-    const vision = new VisionModel(client, candidates, requestedModel ? 'request' : 'chat-default', deps, input.signal);
+    const clock = new BuildStageClock();
+    const vision = new VisionModel(client, candidates, requestedModel ? 'request' : 'chat-default', deps, input.signal, clock);
 
     progress(`Drawing an internal reference with ${REFERENCE_IMAGE_MODEL}`, 0.05);
     const clay = input.clay === true;
-    let generated: { image: ReferenceImage; answered: string } | undefined = await generateReferenceImage(client, input.request, deps, input.signal, clay);
+    let generated: { image: ReferenceImage; answered: string } | undefined = await clock.time('reference-image',
+        () => generateReferenceImage(client, input.request, deps, input.signal, clay), g => ({ model: g.answered }));
     let uploadedName: string | undefined;
     try {
-        const prepared = await prepareReferenceForReading(client as FilesCapableClient, generated.image, input.signal);
+        const prepared = await clock.time('reference-prep', () => prepareReferenceForReading(client as FilesCapableClient, generated!.image, input.signal));
         uploadedName = prepared.uploadedName;
         const reference = prepared.reference;
         const imageModel: ModelUse = { requested: REFERENCE_IMAGE_MODEL, answered: generated.answered };
@@ -1254,27 +1738,41 @@ export async function buildObjectFromReference(
             role: 'user',
             parts: [referencePart(reference), { text: buildSpecPrompt(input.request, input.dimensionsHintMeters, { materials: !clay }) }]
         }], deps, input.signal, progress, clay);
-        let current = await checkBuild(1, firstSpec.spec, firstSpec.build, input, vision, reference);
+        let current = await checkBuild(1, firstSpec.spec, firstSpec.build, input, vision, reference, clay);
         const passes: ObjectBuildPass[] = [passRecord(current, 'reference', firstSpec)];
         const checkedPasses = new Map<number, CheckedPass>([[1, current]]);
         let accepted: CheckedPass | undefined = passedEveryCheck(current.checks) ? current : undefined;
         let revisionFailed: RevisionFailure | undefined;
 
-        for (let revision = 1; revision <= MAX_REVISION_PASSES && current.problems.length > 0; revision++) {
+        // A pass with shape or structural problems gets a revision from the vision model (its material corrections
+        // already applied to the spec it is given); a pass whose only problems are material corrections gets a
+        // material-only pass: the corrected spec rebuilt, no model call for the spec.
+        for (let revision = 1; revision <= MAX_REVISION_PASSES && (current.problems.length > 0 || current.materialFixedSpec); revision++) {
             throwIfAborted(input.signal, 'build-spec');
             const pass = revision + 1;
-            const count = current.problems.length;
-            progress(`Revision ${revision}: fixing ${count} problem${count === 1 ? '' : 's'}`, 0.35 + 0.25 * revision);
+            clock.pass = pass;
+            const fixes = current.material?.applied ?? [];
             try {
+                if (current.problems.length === 0 && current.materialFixedSpec) {
+                    progress(`Revision ${revision}: correcting ${fixes.length} part material${fixes.length === 1 ? '' : 's'}`, 0.35 + 0.25 * revision);
+                    const checked = await materialOnlyPass(pass, current, current.materialFixedSpec, input, vision, reference, deps);
+                    passes.push(passRecord(checked, 'material'));
+                    checkedPasses.set(pass, checked);
+                    current = checked;
+                    if (passedEveryCheck(checked.checks)) accepted = checked;
+                    continue;
+                }
+                const count = current.problems.length + fixes.length;
+                progress(`Revision ${revision}: fixing ${count} problem${count === 1 ? '' : 's'}`, 0.35 + 0.25 * revision);
                 const revised = await requestBuildableSpec(vision, [{
                     role: 'user',
                     parts: [
                         referencePart(reference),
                         imagePart(current.render, 'image/png'),
-                        { text: buildRevisionPrompt(input.request, current.spec, current.problems, input.dimensionsHintMeters, { materials: !clay }) }
+                        { text: buildRevisionPrompt(input.request, current.materialFixedSpec ?? current.spec, [...current.problems, ...fixes.map(materialCorrectionNote)], input.dimensionsHintMeters, { materials: !clay, patch: deps.patchReplies !== false }) }
                     ]
-                }], deps, input.signal, progress, clay);
-                const checked = await checkBuild(pass, revised.spec, revised.build, input, vision, reference);
+                }], deps, input.signal, progress, clay, current.materialFixedSpec ?? current.spec);
+                const checked = await checkBuild(pass, revised.spec, revised.build, input, vision, reference, clay);
                 passes.push(passRecord(checked, 'revision', revised));
                 checkedPasses.set(pass, checked);
                 current = checked;
@@ -1303,7 +1801,7 @@ export async function buildObjectFromReference(
             const why = revisionFailed ? `revision pass ${revisionFailed.pass} failed (${revisionFailed.reason}); ` : '';
             throw new ReferenceObjectBuildError('checks',
                 `No build passed every check, so nothing was mounted: ${why}pass ${current.pass} still has these problems: ${current.problems.join(' ')}`,
-                { passes, lastPass: last, connectivity: current.checks.connectivity, missingParts: current.checks.missingParts, detachedParts: current.checks.detachedParts, spec: current.spec });
+                { passes, lastPass: last, connectivity: current.checks.connectivity, missingParts: current.checks.missingParts, detachedParts: current.checks.detachedParts, spec: current.spec, timings: clock.timings, totalMs: clock.elapsedMs });
         }
         // The returned pass could not be compared: say so, and which differences it was asked to fix are unchecked.
         const comparisonFailed: ComparisonFailure | undefined = accepted.comparisonError
@@ -1332,10 +1830,16 @@ export async function buildObjectFromReference(
             ...(comparisonFailed ? { comparisonFailed } : {}),
             checks: accepted.checks,
             remainingDifferences: accepted.checks.differences.filter(d => d.confidence === 'high'),
+            materialChecks: [...checkedPasses.values()].filter(c => c.pass <= accepted!.pass && c.material).map(c => c.pass === accepted!.pass ? unbuiltCorrections(c.material!) : c.material!),
+            remainingMaterialDifferences: (accepted.material?.differences ?? []).filter(d => d.confidence === 'high'),
+            timings: clock.timings,
+            totalMs: clock.elapsedMs,
             openProblems: accepted.problems.filter(p => !accepted!.checks.differences.some(d => d.confidence === 'high' && differenceProblem(d) === p))
         };
     } catch (err) {
-        throw vision.annotate(err);
+        const annotated = vision.annotate(err);
+        if (annotated instanceof ReferenceObjectBuildError && !annotated.details.timings) Object.assign(annotated.details, { timings: clock.timings, totalMs: clock.elapsedMs });
+        throw annotated;
     } finally {
         // The reference lived in memory (and, on the Gemini API, as an uploaded file for this build's calls); drop
         // both so nothing outlives the call.
