@@ -356,7 +356,7 @@ export function applyHandles(prog: ShapeProgram, handles: Array<Array<[number, n
             const o = resolveOutline(e.prism.outline, measuredOutline);
             const u0 = Math.min(...o.map(q => q[0])), u1 = Math.max(...o.map(q => q[0])), v0 = Math.min(...o.map(q => q[1])), v1 = Math.max(...o.map(q => q[1]));
             const polygon = o.map(q => { const tu = (q[0] - u0) / Math.max(1e-6, u1 - u0), tv = (q[1] - v0) / Math.max(1e-6, v1 - v0); return [q[0] + h[0] * (1 - tu) + h[1] * tu, q[1] + h[2] * (1 - tv) + h[3] * tv] as UV; });
-            return { ...e, prism: { ...e.prism, outline: { polygon }, baseM: h[4], topM: h[5], roofRiseM: h[6] }, ...(repeat ? { repeat } : {}) };
+            return { ...e, prism: { ...e.prism, outline: { polygon }, baseM: h[4], topM: Math.max(h[5], h[4] + 0.5), roofRiseM: h[6] }, ...(repeat ? { repeat } : {}) };
         }
         if (e.revolve) {
             const r = e.revolve;
@@ -367,7 +367,7 @@ export function applyHandles(prog: ShapeProgram, handles: Array<Array<[number, n
             const c = [0, 1, 2].map(k => s.path.reduce((acc, q) => acc + q[k], 0) / s.path.length);
             return { ...e, sweep: { ...s, path: s.path.map(q => [c[0] + (q[0] - c[0]) * h[3] + h[0], c[1] + (q[1] - c[1]) * h[3] + h[1], c[2] + (q[2] - c[2]) * h[3] + h[2]] as [number, number, number]), profile: s.profile.map(q => [q[0] * h[4], q[1] * h[4], q[2] ?? 0]) }, ...(repeat ? { repeat } : {}) };
         }
-        return { ...e, relief: { ...e.relief!, fromM: h[0], toM: h[1], outM: h[2] }, ...(repeat ? { repeat } : {}) };
+        return { ...e, relief: { ...e.relief!, fromM: h[0], toM: Math.max(h[1], h[0] + 0.1), outM: Math.max(0.02, h[2]) }, ...(repeat ? { repeat } : {}) };
     });
     return { program: { ...prog, elements }, parameters };
 }

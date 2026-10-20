@@ -82,7 +82,7 @@ void runScan(std::istream& in, std::ostream& out) {
     for (size_t v = 0; v < R.cams.size(); ++v) { sd::writeRaw(dir + "/v" + std::to_string(v) + ".depth.f32", R.depth[v]); sd::writeRaw(dir + "/v" + std::to_string(v) + ".shade.u8", R.shade[v]); }
     std::ofstream js(dir + "/scan.json");
     const Grid& g = R.grid;
-    js << "{\"frame\":{\"ox\":" << sd::fmt(R.frame.ox) << ",\"oz\":" << sd::fmt(R.frame.oz) << ",\"theta\":" << sd::fmt(R.frame.theta) << ",\"groundY\":" << sd::fmt(R.frame.groundY) << ",\"directionSupport\":" << sd::fmt(R.thetaSupport) << "}";
+    js << "{\"frame\":{\"ox\":" << sd::fmt(R.frame.ox) << ",\"oz\":" << sd::fmt(R.frame.oz) << ",\"theta\":" << sd::fmt(R.frame.theta) << ",\"groundY\":" << sd::fmt(R.frame.groundY) << ",\"directionSupport\":" << sd::fmt(R.thetaSupport) << ",\"directionSource\":" << sd::jstr(R.directionSource) << "}";
     js << ",\"grid\":{\"u0\":" << sd::fmt(g.u0) << ",\"v0\":" << sd::fmt(g.v0) << ",\"cell\":" << sd::fmt(g.cell) << ",\"nu\":" << g.nu << ",\"nv\":" << g.nv << "}";
     js << ",\"classes\":{\"total\":" << R.triTotal << ",\"building\":{\"triangles\":" << R.triBuilding << ",\"areaM2\":" << sd::fmt(R.areaBuilding) << "},\"ground\":{\"triangles\":" << R.triGround << ",\"areaM2\":" << sd::fmt(R.areaGround)
        << "},\"tree\":{\"triangles\":" << R.triTree << ",\"areaM2\":" << sd::fmt(R.areaTree) << ",\"byCrown\":[";

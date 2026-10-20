@@ -37,7 +37,7 @@ import { checkMassing, inLoops, ringArea, type Massing, type MassingMesh, type M
 import { SHAPE_PROGRAM_TOKEN, SHAPE_TIERS_TOKEN } from './pipeline-e';
 import { applyHandles, elementHandles, ensureShapeBinary, programSpecText, readF32, readU8, runShapeTool, SHAPE_PROGRAM_JSON_SCHEMA, validateProgram, type ParameterRecord, type ScanTargets, type ShapeProgram, type UV } from './shape-program';
 
-export const SHAPE_STAGE_VERSION = 'shape-program/v2';
+export const SHAPE_STAGE_VERSION = 'shape-program/v3';
 /** Thinking budget of the program call: under 1,024 tokens is LOW on Gemini 4. */
 export const SHAPE_THINKING_BUDGET = 512;
 /** A fit leaving more than this silhouette disagreement (1 - IoU, mean of the views) or height error (share of the building's height) asks for one correction. */

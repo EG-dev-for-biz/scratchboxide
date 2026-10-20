@@ -476,6 +476,7 @@ struct ScanResult {
     std::string outlineSource;
     double thetaSupport{0};
     P3 boxLo, boxHi;               // the building cells' box (frame)
+    std::string directionSource;
     std::vector<std::string> notes;
     std::vector<std::pair<std::string, double>> timings;
 };
@@ -541,30 +542,58 @@ inline ScanResult analyseScan(const std::string& isolate, double groundY, const 
     R.timings.push_back(lap("classify"));
     if (bld.size() < 8) throw std::runtime_error("the tree-free scan holds only " + std::to_string(bld.size()) + " building triangles");
     // --- dominant wall direction: area-weighted azimuth histogram mod 90 degrees (0.5 degree bins, smoothed)
-    std::vector<double> hist(180, 0.0);
+    // candidate directions: the mode of the scan's vertical walls' azimuths and of the vector footprint's edges (each mod
+    // 90 degrees); the one whose frame boxes the roof most tightly (percentile box area) wins
+    auto modeOf = [](const std::vector<double>& hist, double& support) {
+        size_t best = 0; double bv = -1;
+        for (size_t k = 0; k < 180; ++k) {
+            double s2 = 0;
+            for (int d = -3; d <= 3; ++d) s2 += hist[(k + 180 + d) % 180] * std::exp(-0.5 * d * d / 2.0);
+            if (s2 > bv) { bv = s2; best = k; }
+        }
+        double sw = 0, sa = 0;  // refine: circular mean (mod 90) around the peak
+        for (int d = -6; d <= 6; ++d) { size_t k = (best + 180 + d) % 180; double a = (k + 0.5) * 0.5 * PI / 180 * 4; sw += hist[k] * std::cos(a); sa += hist[k] * std::sin(a); }
+        double tot = std::accumulate(hist.begin(), hist.end(), 0.0);
+        support = tot > 0 ? bv / tot : 0;
+        return std::atan2(sa, sw) / 4;
+    };
+    std::vector<double> histW(180, 0.0), histF(180, 0.0);
     double cxs = 0, czs = 0, aw = 0;
+    std::vector<std::array<double, 2>> roofPts;
     for (const auto& tr : bld) {
         P3 n = cross(tr[1] - tr[0], tr[2] - tr[0]);
         double area = 0.5 * len(n);
         n = unit(n);
         P3 cen = (tr[0] + tr[1] + tr[2]) * (1.0 / 3);
         cxs += cen.x * area; czs += cen.z * area; aw += area;
-        if (std::abs(n.y) > 0.3) continue;
-        double az = std::atan2(n.z, n.x) * 180 / PI;  // the wall's direction is its normal's +- 90: same mod 90
-        az = std::fmod(az + 720.0, 90.0);
-        hist[static_cast<size_t>(std::min(179.0, az * 2))] += area;
+        if (std::abs(n.y) > 0.5 && cen.y > groundY + P.minBuildingH) roofPts.push_back({cen.x, cen.z});
+        if (std::abs(n.y) > 0.1) continue;
+        double az = std::fmod(std::atan2(n.z, n.x) * 180 / PI + 720.0, 90.0);  // a wall's direction is its normal's +- 90
+        histW[static_cast<size_t>(std::min(179.0, az * 2))] += area;
     }
-    size_t best = 0; double bv = -1;
-    for (size_t k = 0; k < 180; ++k) {
-        double s = 0;
-        for (int d = -3; d <= 3; ++d) s += hist[(k + 180 + d) % 180] * std::exp(-0.5 * d * d / 2.0);
-        if (s > bv) { bv = s; best = k; }
+    for (const auto& l : footprintXZ) for (size_t i = 0; i < l.size(); ++i) {
+        const P2 &a = l[i], &b = l[(i + 1) % l.size()];
+        double el = std::hypot(b.u - a.u, b.v - a.v);
+        if (el < 0.5) continue;
+        double az = std::fmod(std::atan2(b.v - a.v, b.u - a.u) * 180 / PI + 720.0, 90.0);
+        histF[static_cast<size_t>(std::min(179.0, az * 2))] += el;
     }
-    double sw = 0, sa = 0;  // refine: circular mean (mod 90) around the peak
-    for (int d = -6; d <= 6; ++d) { size_t k = (best + 180 + d) % 180; double a = (k + 0.5) * 0.5 * PI / 180 * 4; sw += hist[k] * std::cos(a); sa += hist[k] * std::sin(a); }
-    double theta = std::atan2(sa, sw) / 4;  // radians, mod pi/2
-    double tot = std::accumulate(hist.begin(), hist.end(), 0.0);
-    R.thetaSupport = tot > 0 ? bv / tot : 0;
+    double supW = 0, supF = 0;
+    const double thW = modeOf(histW, supW), thF = footprintXZ.empty() ? thW : modeOf(histF, supF);
+    auto boxArea = [&](double th) {
+        if (roofPts.size() < 10) return 0.0;
+        std::vector<double> us, vs;
+        for (const auto& p : roofPts) { us.push_back(std::cos(th) * p[0] + std::sin(th) * p[1]); vs.push_back(-std::sin(th) * p[0] + std::cos(th) * p[1]); }
+        std::sort(us.begin(), us.end()); std::sort(vs.begin(), vs.end());
+        auto q = [](const std::vector<double>& x, double f) { return x[std::min(x.size() - 1, static_cast<size_t>(f * x.size()))]; };
+        return (q(us, 0.99) - q(us, 0.01)) * (q(vs, 0.99) - q(vs, 0.01));
+    };
+    const double aW = boxArea(thW), aF = boxArea(thF);
+    const bool useF = !footprintXZ.empty() && aF < aW;
+    double theta = useF ? thF : thW;
+    R.thetaSupport = useF ? supF : supW;
+    R.directionSource = useF ? "the vector footprint's edges" : "the scan's vertical walls";
+    R.notes.push_back("direction: walls " + detail::fmt(thW * 180 / PI) + " deg (roof box " + detail::fmt(aW) + " m^2), footprint " + (footprintXZ.empty() ? std::string("none") : detail::fmt(thF * 180 / PI) + " deg (roof box " + detail::fmt(aF) + " m^2)"));
     R.frame = {cxs / aw, czs / aw, theta, groundY};
     R.timings.push_back(lap("direction"));
     // --- building soup in the frame, grid over it
@@ -1003,17 +1032,16 @@ inline Soup buildProgram(const Program& prog, std::vector<PrismOut>* prisms = nu
                 auto o = prismOutline(e);
                 for (auto& p : o) { p.u += shift.x; p.v += shift.z; }
                 double base = e.h[PR_BASE].value + shift.y;
-                Element sh = e; sh.h[PR_TOP].value += shift.y;
+                // a fit never removes an element: the solid keeps at least half a metre of height
+                Element sh = e; sh.h[PR_TOP].value = std::max(e.h[PR_TOP].value, e.h[PR_BASE].value + 0.5) + shift.y;
                 auto planes = prismPlanes(sh, o);
-                if (e.h[PR_TOP].value <= e.h[PR_BASE].value + 0.05) continue;
                 emitPrism(o, base, planes, id, s);
                 if (prisms) prisms->push_back({id, o, base, planes});
             } else if (e.op == 1) emitRevolve(e, shift, id, s);
             else if (e.op == 2) emitSweep(e, shift, id, s);
             else if (e.op == 3 && e.target >= 0 && e.target < static_cast<int>(prog.elems.size()) && prog.elems[static_cast<size_t>(e.target)].op == 0) {
                 const Element& tg = prog.elems[static_cast<size_t>(e.target)];
-                double from = e.h[RL_FROM].value + shift.y, to = e.h[RL_TO].value + shift.y, out = e.h[RL_OUT].value;
-                if (to <= from + 0.02 || out <= 0.005) continue;
+                double from = e.h[RL_FROM].value + shift.y, to = std::max(e.h[RL_TO].value, e.h[RL_FROM].value + 0.1) + shift.y, out = std::max(0.02, e.h[RL_OUT].value);
                 auto o = detail::offsetRing(prismOutline(tg), out);
                 std::vector<std::array<double, 3>> flat{{to, 0, 0}};
                 emitPrism(o, from, flat, id, s);
