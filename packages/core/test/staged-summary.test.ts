@@ -19,7 +19,7 @@ import {
     SUMMARY_FORBIDDEN_ADJECTIVES,
     type DegradationRecord
 } from '../src/common/spatial/staged-location-contracts';
-import { stagedBuildContext, stagedDigest, summarizeStagedBuild, type StagedSummaryInput } from '../src/node/3d-engine/staged-location/staged-summary';
+import { SHOW_CLAY_PILL, SHOW_TEXTURES_PILL, stagedBuildContext, stagedDigest, summarizeStagedBuild, type StagedSummaryInput } from '../src/node/3d-engine/staged-location/staged-summary';
 import { correction, ornamentSpec, RUN_ID, stagedBuildState, stagedLocationResult, visionModelUse } from './helpers/staged-location-fixtures';
 
 function input(over: Partial<StagedSummaryInput> = {}): StagedSummaryInput {
@@ -287,5 +287,20 @@ describe('the headline follows the layers on screen, not the stage status alone'
         expect(summarizeStagedBuild(some).summary).toContain('The photo reading kept 5 elements; 2 were built and are in the scene, 3 were not');
         // all built: no extra sentence
         expect(summarizeStagedBuild(base).summary).not.toContain('The photo reading kept');
+    });
+
+    it('textured by default: the textures sentence says the viewport crossfades to them and the pill offers clay; a clay choice offers textures', () => {
+        const textures = { shares: [0.6, 0.3, 0.1, 0, 0, 0], views: 3, modelsUsed: [], layers: ['l2', 'l3b'], totalMs: 90_000 };
+        const shown = summarizeStagedBuild(input({ textures })).summary;
+        expect(shown).toContain('the viewport crossfades from the clay to them on its own');
+        expect(shown).toContain(SHOW_CLAY_PILL);
+        expect(shown).not.toContain(SHOW_TEXTURES_PILL);
+        const clay = { kept: [{ objectId: 'k', layer: 'l3b', source: 'scan_fit', textured: true }], removed: [], otherObjectsKept: 0, materialMode: 'clay' };
+        const chosen = summarizeStagedBuild(input({ textures, activeScene: clay })).summary;
+        expect(chosen).toContain('shown in clay, as the user chose');
+        expect(chosen).toContain('1 of them has real textures, shown in clay');
+        expect(chosen).toContain(SHOW_TEXTURES_PILL);
+        expect(chosen).not.toContain(SHOW_CLAY_PILL);
+        expect(summarizeStagedBuild(input()).summary).not.toContain(SHOW_CLAY_PILL);
     });
 });
