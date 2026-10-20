@@ -282,6 +282,10 @@ describe('photo_match_evaluate tool', () => {
         expect([...collectPanoIds({ a: { panoId: 'P1' }, b: [{ panoIds: ['P2', 'P3'] }], c: 'sv:P4:90:0:60', d: { panoId: '' } })].sort()).toEqual(['P1', 'P2', 'P3', 'P4']);
         const vis = visibleStagedLayers(staged.scene.data.stagedBuild);
         expect(vis.map(l => l.layer)).toEqual(['l2']);
+        // the trees layer only on request (the evaluator then draws one level per tree per view)
+        const withTrees = { layers: [...staged.scene.data.stagedBuild.layers, { objectId: 't', stage: 'trees', layer: 'l5', order: 9, url: '/models/t.glb', counts: { triangles: 10 } } as any] };
+        expect(visibleStagedLayers(withTrees).map(l => l.layer)).toEqual(['l2']);
+        expect(visibleStagedLayers(withTrees, { trees: true }).map(l => l.layer)).toEqual(['l2', 'l5']);
     });
 
     it('evaluates the open staged scene in context against held-out views, never one the build used', async () => {

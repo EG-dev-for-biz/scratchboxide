@@ -21,7 +21,11 @@
  *  3. every arm is rendered from exactly each pose, in its street (the photo-textured tile with the target cut out, the same
  *     for every arm), and judged blind against the photo with reshuffled orders; pixel metrics are secondary;
  *  4. the clay arm (on unless clay: false): every arm rendered again from the same poses in one uniform clay, its street in a
- *     lighter clay, judged blind for shape only, so a geometry change the photo texture hides (relief, reveals) is scored.
+ *     lighter clay, judged blind for shape only, so a geometry change the photo texture hides (relief, reveals) is scored;
+ *  5. trees (on unless trees: false): a run's regrown SB-Veggie trees are drawn as the viewport would draw them from each pose,
+ *     one level per tree by on-screen size and place in the frame with the leaf instances expanded (photo-match-eval.ts
+ *     loadArmLayer / armMeshesForView), and the scanned trees the strip measured are cut from the street, so the photo's trees
+ *     are compared with the regrown ones and not drawn twice.
  * No view that cannot be found or registered is ever scored: those end the call with a typed error.
  */
 
@@ -31,11 +35,12 @@ import * as path from 'path';
 import type { ToolContext, ToolDeclaration, ToolHandler, ToolHandlerOutcome } from '../types';
 import type { StagedBuildState, StagedLayer, Vec3 } from '../../../../common/spatial/staged-location-contracts';
 import {
-    aggregateRuns, composeGrid, coverageMask, judgeView, judgeViewClay, perceptualScores, renderPng, renderTriangles, JUDGE_CRITERIA,
-    type ArmRender, type CriterionStat, type JudgeClient, type JudgeCriterion, type JudgeRun, type PerceptualScores
+    aggregateRuns, armLayerTriangles, armMeshesForView, composeGrid, coverageMask, judgeView, judgeViewClay, loadArmLayer, perceptualScores, renderPng, renderTriangles, JUDGE_CRITERIA,
+    type ArmLayer, type ArmRender, type CriterionStat, type JudgeClient, type JudgeCriterion, type JudgeRun, type PerceptualScores
 } from '../../../3d-engine/staged-location/photo-match-eval';
 import { readTileTriangles, decodeImageInMemory, type TileTriangles } from '../../../3d-engine/staged-location/tile-texture-transfer';
 import { castCamera } from '../../../3d-engine/staged-location/survey-casting';
+import { isTreesLodJson } from '../../../3d-engine/staged-location/tree-lod-view';
 import { bearingDeg, discoverPanos, fetchViews, type PanoCandidate, type SelectedView, type StreetViewEvidenceDeps } from '../../../3d-engine/staged-location/streetview-evidence';
 import { EDGE_MAX_RESIDUAL_PX, type HeldImage } from '../../../3d-engine/staged-location/pano-edge-registration';
 import { runPanoRegistrationOffThread } from '../../../3d-engine/staged-location/pano-registration-run';
@@ -102,6 +107,7 @@ export const PHOTO_MATCH_EVALUATE_DECLARATION: ToolDeclaration = {
             judgeModel: { type: 'STRING', description: `Vision model asked first (default ${PHOTO_MATCH_DEFAULT_JUDGE}; the chat's fallbacks follow).` },
             runs: { type: 'NUMBER', description: `Blind judgements per view, each with the order reshuffled (default ${PHOTO_MATCH_DEFAULT_RUNS}).` },
             clay: { type: 'BOOLEAN', description: 'Also judge every build rendered in uniform clay (no texture) from the same poses, for shape only (default true; one more judge call per view and run).' },
+            trees: { type: 'BOOLEAN', description: 'Draw a run\'s regrown trees as the viewport shows them from each pose (one level of detail per tree, leaves expanded) and cut the scanned trees they replace out of the street (default true). False leaves the trees layer out and the scanned trees in the street.' },
             baseline: { type: 'BOOLEAN', description: 'Also render the raw scan as downloaded (cut to the target) as a reference arm (default true when the tile is known).' },
             place: { type: 'STRING', description: 'The place as named to the judge (default: the run\'s resolved address).' },
             excludePanoIds: { type: 'ARRAY', items: { type: 'STRING' }, description: 'Panos the build used that the records do not show (GLB builds made elsewhere): never held out.' }
@@ -197,6 +203,8 @@ interface Reference {
     tileGeometry: string;
     /** The isolated raw scan of the target (the cut), when the build isolated one. */
     isolate?: string;
+    /** The scanned trees the run's strip measured and removed (tile_vegetation removed_trees.glb), cut from the street when trees are drawn. */
+    removedTrees?: string;
     source: string;
 }
 
@@ -247,11 +255,14 @@ function glbJson(file: string): unknown {
     }
 }
 
-/** The layers a staged scene shows: not retired, not superseded, not the raw tiles or the trees, not empty, not kept from another run. */
-export function visibleStagedLayers(state: Pick<StagedBuildState, 'layers'>): StagedLayer[] {
+/**
+ * The layers a staged scene shows: not retired, not superseded, not the raw tiles, not empty, not kept from another run; the
+ * trees only with `trees` (their GLB holds every level of detail, so a caller drawing it must pick one level per tree per view).
+ */
+export function visibleStagedLayers(state: Pick<StagedBuildState, 'layers'>, options: { trees?: boolean } = {}): StagedLayer[] {
     const live = state.layers.filter(l => !l.retired);
     const superseded = new Set(live.flatMap(l => l.supersedes ?? []));
-    return live.filter(l => !superseded.has(l.objectId) && l.stage !== 'tiles' && l.stage !== 'trees' && (l.counts?.triangles ?? 0) > 0 && !l.keptFrom);
+    return live.filter(l => !superseded.has(l.objectId) && l.stage !== 'tiles' && (options.trees || l.stage !== 'trees') && (l.counts?.triangles ?? 0) > 0 && !l.keptFrom);
 }
 
 class BuildResolver {
@@ -299,11 +310,15 @@ class BuildResolver {
         if (!place) throw new PhotoMatchError('missing_reference_tile', `Staged run ${rec.runId} records no place coordinates.`);
         const remesh = this.stageValue<{ clay?: string }>('remesh', rec.keys?.remesh);
         const iso = remesh?.value.clay ? path.join(path.dirname(remesh.value.clay), 'raw_clay.glb') : undefined;
+        // the strip's cache entry (tile-vegetation-service.ts): its removed_trees.glb is what the regrown trees replace
+        const stripKey = rec.keys?.['trees-measure'];
+        const removed = stripKey && /^[0-9a-f]{16,}$/.test(stripKey) ? path.join(this.root, '.scratchbox', 'cache', 'tile_vegetation', stripKey, 'removed_trees.glb') : undefined;
         return {
             origin: { lat: place.lat, lng: place.lng, heightMeters: tiles.value.originEllipsoidalHeightM },
             place: rec.place?.formattedAddress ?? rec.request?.query ?? `${place.lat.toFixed(6)}, ${place.lng.toFixed(6)}`,
             tileTextured: textured, tileGeometry: geometry,
             ...(iso && fs.existsSync(iso) ? { isolate: iso } : {}),
+            ...(removed && fs.existsSync(removed) ? { removedTrees: removed } : {}),
             source: `staged run ${rec.runId}`
         };
     }
@@ -335,11 +350,11 @@ class BuildResolver {
     }
 
     /** The layers of a run: from the open scene when it is that run's (textured twins where they exist), else unknown. */
-    runLayers(rec: RunRecordLike): { glbs: string[]; layers: Array<{ layer: string; textured: boolean }> } {
+    runLayers(rec: RunRecordLike, trees = false): { glbs: string[]; layers: Array<{ layer: string; textured: boolean }> } {
         if (this.active?.runId !== rec.runId) {
             throw new PhotoMatchError('run_layers_unknown', `Staged run ${rec.runId} is not the open scene, so which of its layers are shown is not known here. Open that scene, or pass its GLBs (arms[].glbs with runId).`);
         }
-        const vis = visibleStagedLayers(this.active);
+        const vis = visibleStagedLayers(this.active, { trees });
         if (!vis.length) throw new PhotoMatchError('no_build', `The open staged scene (run ${rec.runId}) shows no layer with triangles yet.`);
         return {
             glbs: vis.map(l => this.file(l.textured?.url ?? l.url, `layer ${l.layer}`)),
@@ -537,6 +552,8 @@ export interface PhotoMatchViewResult {
     clayJudge?: { stats: Record<string, { shape: CriterionStat }>; notes: Record<string, string[]>; model: string };
     clayJudgeError?: string;
     pixel: Record<string, PerceptualScores>;
+    /** Per arm with a trees layer: trees drawn at each level from this pose, and triangles drawn against every level's. */
+    trees?: Record<string, { atLevel: number[]; drawnTriangles: number; allLevelTriangles: number }>;
 }
 
 const DEFAULT_RUN_CONCURRENCY = 2;
@@ -574,6 +591,7 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     const nRuns = intArg(args.runs, PHOTO_MATCH_DEFAULT_RUNS, 1, PHOTO_MATCH_MAX_RUNS);
     const wantContext = args.inContext !== false;
     const wantClay = args.clay !== false;
+    const wantTrees = args.trees !== false;
     const judgeModel = typeof args.judgeModel === 'string' && args.judgeModel.trim() ? args.judgeModel.trim() : PHOTO_MATCH_DEFAULT_JUDGE;
     const root = deps.stagedRoot();
     const builds = new BuildResolver(root, ctx.workspaceRoot || root, active);
@@ -591,7 +609,7 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
                 throw new PhotoMatchError('frame_mismatch', `arm ${spec.id} (run ${spec.runId}) is in the frame of ${r.origin.lat}, ${r.origin.lng}, not ${ref.origin.lat}, ${ref.origin.lng}: arms must share one tile frame.`);
             }
             builds.noteRunPanos(rec);
-            const layers = spec.glbs ? { glbs: spec.glbs.map(g => builds.file(g, `arm ${spec.id} GLB`)), layers: undefined } : builds.runLayers(rec);
+            const layers = spec.glbs ? { glbs: spec.glbs.map(g => builds.file(g, `arm ${spec.id} GLB`)), layers: undefined } : builds.runLayers(rec, wantTrees);
             arms.push({ id: spec.id, label: spec.label, glbs: layers.glbs, runId: spec.runId, ...(layers.layers ? { layers: layers.layers } : {}) });
         } else {
             arms.push({ id: spec.id, label: spec.label, glbs: spec.glbs!.map(g => builds.file(g, `arm ${spec.id} GLB`)) });
@@ -625,7 +643,8 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     // ---------------- held-out views ----------------
     progress('finding Street View panos near the structure that the build never used', 0.02);
     const contextMesh = sceneToRenderMesh(readGlbScene(ref.tileGeometry));
-    const targetMesh = sceneToRenderMesh((ref.isolate ? [ref.isolate] : arms.find(a => !a.baseline)!.glbs).flatMap(f => readGlbScene(f)));
+    // the structure: the isolate, else the first build's layers without its trees (a trees GLB holds every level)
+    const targetMesh = sceneToRenderMesh((ref.isolate ? [ref.isolate] : arms.find(a => !a.baseline)!.glbs.filter(f => !isTreesLodJson(glbJson(f)))).flatMap(f => readGlbScene(f)));
     const structure = structureOf(targetMesh);
     const panos = await deps.discover(ref.origin, { x: structure.cx, z: structure.cz }, builds.cache.dir, signal);
     stopIfAborted(signal);
@@ -666,18 +685,29 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     // ---------------- arms, context ----------------
     progress(`loading ${arms.length} arms`, 0.22);
     const loaded = arms.map(a => {
-        let meshes = a.glbs.map(g => readTileTriangles(fs.readFileSync(g)));
-        if (a.keepNear) { const cut = readTileTriangles(fs.readFileSync(a.keepNear)); meshes = meshes.map(t => keepNearTriangles(t, cut)); }
-        return { ...a, meshes, triangles: meshes.reduce((s, t) => s + t.texture.length, 0) };
+        // a trees GLB (tree LOD contract) is kept for per-view level selection when trees are drawn; any other GLB is fixed
+        let parts: ArmLayer[] = a.glbs.map(g => loadArmLayer(fs.readFileSync(g), { treeLod: wantTrees }));
+        if (a.keepNear) { const cut = readTileTriangles(fs.readFileSync(a.keepNear)); parts = parts.map(l => (l.fixed ? { fixed: keepNearTriangles(l.fixed, cut) } : l)); }
+        return { ...a, parts, treeLayers: parts.filter(l => l.trees).length, triangles: parts.reduce((s, l) => s + armLayerTriangles(l), 0) };
     });
     for (const a of loaded) if (!a.triangles) throw new PhotoMatchError('no_build', `arm ${a.id} has no triangles${a.keepNear ? ' near the isolated target' : ''}.`);
+    const drawsTrees = loaded.some(a => a.treeLayers > 0);
     let context: TileTriangles[] | undefined;
     let contextNote: string;
     if (wantContext && ref.isolate) {
         const full = readTileTriangles(fs.readFileSync(ref.tileTextured));
-        const cut = keepNearTriangles(full, readTileTriangles(fs.readFileSync(ref.isolate)), 0.01, true);
+        let cut = keepNearTriangles(full, readTileTriangles(fs.readFileSync(ref.isolate)), 0.01, true);
+        const target = full.texture.length - cut.texture.length;
+        // the regrown trees replace the scanned ones the strip measured: those leave the street too, or the photo's trees stand twice
+        let treesCut = 0;
+        if (drawsTrees && ref.removedTrees) {
+            const before = cut.texture.length;
+            cut = keepNearTriangles(cut, readTileTriangles(fs.readFileSync(ref.removedTrees)), 0.01, true);
+            treesCut = before - cut.texture.length;
+        }
         context = [cut];
-        contextNote = `in context: every arm drawn in the photo-textured tile with the target's own ${full.texture.length - cut.texture.length} triangles cut out (${cut.texture.length} kept), the same street for every arm`;
+        contextNote = `in context: every arm drawn in the photo-textured tile with the target's own ${target} triangles cut out${treesCut ? ` and the ${treesCut} triangles of the scanned trees the regrown trees replace` : ''} (${cut.texture.length} kept), the same street for every arm`
+            + (drawsTrees && !ref.removedTrees ? '; the scanned trees stay in the street (the run records no strip to cut them by)' : '');
     } else {
         contextNote = wantContext
             ? 'not in context: the build isolated no single structure, so there is no target to cut out of the tile; each arm is drawn alone with the tile mesh hiding what stands in front'
@@ -702,15 +732,24 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         const camera = castCamera({ eye: v.eye, headingDeg: v.headingDeg, pitchDeg: v.pitchDeg, fovDeg: v.fovDeg, widthPx: img.width, heightPx: img.height, ...(reg.correction ? { correction: reg.correction } : {}) });
         const occluderDepth = occluder ? renderFrameDepth(occluder, camera) : undefined;
         const renders: Array<{ id: string; label: string; r: ArmRender }> = [];
-        for (const a of loaded) {
-            renders.push({ id: a.id, label: a.label, r: renderTriangles(a.meshes, camera, { ...(occluderDepth ? { occluderDepth } : {}), ...(context ? { context } : {}) }) });
+        // each arm as the viewport would draw it from this pose (one level per tree)
+        const forView = loaded.map(a => armMeshesForView(a.parts, camera));
+        const treeLevels: Record<string, { atLevel: number[]; drawnTriangles: number; allLevelTriangles: number }> = {};
+        loaded.forEach((a, i) => {
+            const t = forView[i].trees;
+            if (t.length) treeLevels[a.id] = { atLevel: t.reduce((acc, x) => acc.map((n, k) => n + (x.atLevel[k] ?? 0)), new Array(Math.max(...t.map(x => x.atLevel.length))).fill(0)), drawnTriangles: t.reduce((n, x) => n + x.drawnTriangles, 0), allLevelTriangles: t.reduce((n, x) => n + x.allLevelTriangles, 0) };
+        });
+        for (let i = 0; i < loaded.length; i++) {
+            const a = loaded[i];
+            renders.push({ id: a.id, label: a.label, r: renderTriangles(forView[i].meshes, camera, { ...(occluderDepth ? { occluderDepth } : {}), ...(context ? { context } : {}) }) });
             await yieldLoop();
         }
         // the clay arm: the same pose, occluders and street, every arm (and its street) untextured
         const clayRenders: Array<{ id: string; label: string; r: ArmRender }> = [];
         if (wantClay) {
-            for (const a of loaded) {
-                clayRenders.push({ id: a.id, label: a.label, r: renderTriangles(a.meshes, camera, { clay: true, ...(occluderDepth ? { occluderDepth } : {}), ...(context ? { context } : {}) }) });
+            for (let i = 0; i < loaded.length; i++) {
+                const a = loaded[i];
+                clayRenders.push({ id: a.id, label: a.label, r: renderTriangles(forView[i].meshes, camera, { clay: true, ...(occluderDepth ? { occluderDepth } : {}), ...(context ? { context } : {}) }) });
                 await yieldLoop();
             }
         }
@@ -733,7 +772,8 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
             view: {
                 id: viewId, panoId: v.panoId, ...(v.date ? { date: v.date } : {}), distanceM: v.distanceM, headingDeg: v.headingDeg, pitchDeg: v.pitchDeg, fovDeg: v.fovDeg,
                 size: [img.width, img.height], edgeResidualPx: reg.edgeResidualPx, maskPixels: mask.reduce((s, m) => s + m, 0), grid: path.join(outDir, `grid_${viewId}.png`), renders: files, pixel,
-                ...(wantClay ? { clayRenders: clayFiles, clayGrid: path.join(outDir, `grid_${viewId}_clay.png`) } : {})
+                ...(wantClay ? { clayRenders: clayFiles, clayGrid: path.join(outDir, `grid_${viewId}_clay.png`) } : {}),
+                ...(Object.keys(treeLevels).length ? { trees: treeLevels } : {})
             },
             photoBytes: im.bytes, mime: im.mimeType || 'image/jpeg', photo, renders, clayRenders
         });
@@ -855,7 +895,8 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         context: contextNote,
         judgeModel: judgeModelUse,
         runsPerView: nRuns,
-        arms: loaded.map(a => ({ id: a.id, label: a.label, triangles: a.triangles, glbs: a.glbs, ...(a.runId ? { runId: a.runId } : {}), ...(a.layers ? { layers: a.layers } : {}), ...(a.baseline ? { baseline: true } : {}) })),
+        trees: wantTrees ? (drawsTrees ? 'regrown trees drawn one level per tree per view, as the viewport chooses it; scanned trees cut from the street' + (ref.removedTrees ? '' : ' (none recorded: they stay)') : 'no arm has a trees layer') : 'off: no trees layer drawn',
+        arms: loaded.map(a => ({ id: a.id, label: a.label, triangles: a.triangles, glbs: a.glbs, ...(a.treeLayers ? { treeLayers: a.treeLayers } : {}), ...(a.runId ? { runId: a.runId } : {}), ...(a.layers ? { layers: a.layers } : {}), ...(a.baseline ? { baseline: true } : {}) })),
         scores,
         clay: wantClay,
         ...(wantClay ? { clayScores, clayJudged: clayScored.length, clayGrids: views.map(v => v.clayGrid).filter((g): g is string => !!g) } : {}),

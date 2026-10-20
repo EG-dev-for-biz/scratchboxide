@@ -18,9 +18,9 @@ import {
     setCrownShadingUniforms, supportsCrownShading, type CrownShadingInput, type CrownShadingOptions
 } from './treeCrownShading';
 import {
-    FADE_STEPS, crownSlotOf, blurDemotionLevels, demoteEdges, edgesAtLevel, edgesNoFinerThan, finestLevel, fovealRadius, fovealWeight, hysteresisDistanceRelative, levelRange, pixelThresholds,
-    projectedHeightPx, quantiseRange, screenEquivalentDistance, stepEdges, targetEdges,
-    type BlurDemotionParams, type FovealParams, type LodBand, type LodEdges, type ScreenSizeParams
+    DEFAULT_TREE_LOD_VIEW, FADE_STEPS, crownSlotOf, blurDemotionLevels, demoteEdges, dominantLevel, edgesAtLevel, edgesNoFinerThan, finestLevel, fovealWeight, hysteresisDistanceRelative,
+    levelRange, pixelThresholds, projectedHeightPx, quantiseRange, resolveTreeLodView, screenEquivalentDistance, sphereFovealRadius, stepEdges, targetEdges,
+    type LodBand, type LodEdges, type TreeLodViewInput, type TreeLodViewOptions
 } from './treeLodMath';
 import { circleOfConfusionPx } from '../viewportOptics';
 
@@ -95,49 +95,10 @@ export interface TreeLodOptions {
     view?: TreeLodViewInput;
 }
 
-/** How the camera's view chooses the levels. Every field is continuous except the on/off switches. */
-export interface TreeLodViewOptions {
-    /** On-screen size: bands as pixel thresholds at the reference lens. `enabled: false` = metre bands (the old behaviour). */
-    screen: ScreenSizeParams & { enabled: boolean; hysteresisShare: number };
-    /** Detail toward the centre of the view. */
-    foveal: FovealParams & { enabled: boolean; followFocus: boolean };
-    /**
-     * Depth-of-field demotion (radius in px of the drawn blur). The continuous demotion is held at whole levels with a dead band
-     * of `levelHysteresis` levels, so a blurred tree settles on one level instead of dithering between two (which draws both);
-     * a change of whole level still crossfades at the usual rate.
-     */
-    blur: BlurDemotionParams & { enabled: boolean; levelHysteresis: number };
-    /** Tint each level (near green, near-mid yellow, mid orange, far red) to see the levels in the viewport. */
-    debugTint: boolean;
-}
-
-export type TreeLodViewInput = {
-    screen?: Partial<TreeLodViewOptions['screen']>; foveal?: Partial<TreeLodViewOptions['foveal']>; blur?: Partial<TreeLodViewOptions['blur']>;
-    debugTint?: boolean; triangleBudget?: number;
-};
-
-export const DEFAULT_TREE_LOD_VIEW: Readonly<TreeLodViewOptions> = {
-    screen: { enabled: true, referenceFovDeg: 45, referenceHeightPx: 1080, resolutionExponent: 0, hysteresisShare: 0.03 },
-    foveal: { enabled: true, centreWeight: 2, edgeWeight: 0.55, centreRadius: 0.2, edgeRadius: 1, curve: 1, verticalWeight: 0.5, followFocus: true },
-    blur: { enabled: true, startPx: 1.5, fullPx: 6, maxLevels: 2, levelHysteresis: 0.15 },
-    debugTint: false
-};
+/** The view options (common/spatial/tree-lod-math.ts, shared with the photo-match evaluator's still-frame tree render). */
+export { DEFAULT_TREE_LOD_VIEW, resolveTreeLodView, type TreeLodViewInput, type TreeLodViewOptions };
 
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
-function mergeFinite<T extends object>(base: T, over: Partial<T> | undefined): T {
-    const out = { ...base } as Record<string, unknown>;
-    if (over) for (const [k, v] of Object.entries(over)) if (k in out && (typeof out[k] === 'boolean' ? typeof v === 'boolean' : finite(v))) out[k] = v;
-    return out as T;
-}
-
-/** The view options from a partial override of the defaults (values of the wrong type are ignored). */
-export function resolveTreeLodView(input: TreeLodViewInput | undefined | null): TreeLodViewOptions {
-    const d = DEFAULT_TREE_LOD_VIEW;
-    return {
-        screen: mergeFinite(d.screen, input?.screen), foveal: mergeFinite(d.foveal, input?.foveal), blur: mergeFinite(d.blur, input?.blur),
-        debugTint: typeof input?.debugTint === 'boolean' ? input.debugTint : d.debugTint
-    };
-}
 
 /** What the viewport knows about the frame beyond the camera. */
 export interface TreeLodFrame {
@@ -244,14 +205,7 @@ const triangleCountOf = (m: THREE.Mesh): number => {
 const TINTS = [0x3fbf4a, 0xd9d23a, 0xe8892c, 0xd8433b];
 
 /** The level that casts a tree's shadow: the one with the largest share of the hash (the farther level on a tie). */
-const castingLevel = (e: LodEdges): number => {
-    let best = e.length, bestShare = -1;
-    for (let k = e.length; k >= 0; k--) {
-        const [lo, hi] = levelRange(e, k);
-        if (hi - lo > bestShare + 1e-9) { best = k; bestShare = hi - lo; }
-    }
-    return best;
-};
+const castingLevel = dominantLevel;
 
 /** The crown-shading detail slot of a level (treeLodMath.ts crownSlotOf). */
 export { crownSlotOf };
@@ -592,12 +546,8 @@ export class TreeLodController {
                 this.ndc.set(sphere.center.x, sphere.center.y, sphere.center.z, 1).applyMatrix4(this.pv);
                 // the part of the tree nearest the foveal centre counts: its sphere's projected half-size is taken off each axis, so a
                 // large near tree reaching toward the centre is not treated as an edge tree
-                let rad = v.foveal.edgeRadius;
-                if (this.ndc.w > 1e-6) {
-                    const halfY = sphere.radius / (Math.max(this.ndc.w, sphere.radius) * Math.tan(THREE.MathUtils.degToRad(fovDeg) / 2));
-                    const halfX = halfY / Math.max(1e-6, persp!.aspect);
-                    rad = fovealRadius(Math.max(0, Math.abs(this.ndc.x / this.ndc.w - cx) - halfX), Math.max(0, Math.abs(this.ndc.y / this.ndc.w - cy) - halfY), v.foveal.verticalWeight);
-                }
+                const nw = this.ndc.w;
+                const rad = sphereFovealRadius(nw > 1e-6 ? this.ndc.x / nw : 0, nw > 1e-6 ? this.ndc.y / nw : 0, nw, sphere.radius, fovDeg, persp!.aspect, [cx, cy], v.foveal.verticalWeight, v.foveal.edgeRadius);
                 w = fovealWeight(t.inMain ? rad : Math.max(rad, v.foveal.edgeRadius), v.foveal);
             }
             const dEq = screen ? screenEquivalentDistance(t.dist, fovDeg, heightPx, w, v.screen) : t.dist;

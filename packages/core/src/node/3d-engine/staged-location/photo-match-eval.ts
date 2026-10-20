@@ -27,6 +27,11 @@
  * its street in a lighter clay, under a raised key light behind the camera, and the judge scores shape only (massing,
  * openings, surface relief): geometry changes that the photo texture hides (measured relief, reveals) can be scored there.
  *
+ * Trees (`loadArmLayer`, `armMeshesForView`, tree-lod-view.ts): a trees GLB of the tree LOD contract holds every level of every
+ * tree and instanced leaves the viewport resolves at run time; with `treeLod` (on by default) each view draws one level per tree,
+ * chosen by the viewport's rule for that camera (on-screen size and place in the frame), with its leaf instances expanded.
+ * `treeLod: false` draws every level at once (the old behaviour, for comparison).
+ *
  * Nothing here knows a place or a pipeline; the arms are whatever GLBs the caller names. The photos must not have been used
  * to texture or register any arm: the caller holds them out (the bake-off driver checks the pano ids).
  */
@@ -38,7 +43,9 @@ import { distanceTransform, gaussianBlur } from '../../spatial/StreetViewPoseReg
 import { chamferMean, FIT_CHAMFER_TRUNCATION_PX, reducedLuminance, structuralEdges } from './texture-fit-metric';
 import { deltaE00, linearToLab } from './texel-exposure';
 import { encodePng } from './png-encode';
-import type { TileTriangles } from './tile-texture-transfer';
+import { readTileTriangles, type TileTriangles } from './tile-texture-transfer';
+import { readTreesLodGlb, treesForView, type TreesForView, type TreesLodGlb } from './tree-lod-view';
+import type { TreeLodViewInput } from '../../../common/spatial/tree-lod-math';
 
 // =============================================================================
 // Rendering
@@ -293,6 +300,40 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
         cov[o] /= k;
     }
     return { width: outW, height: outH, rgba, coverage: cov, triangles: drawn, ms: Date.now() - t0 };
+}
+
+// =============================================================================
+// Arm layers: fixed triangles, or trees resolved per view
+// =============================================================================
+
+/** One GLB of an arm: its triangles as drawn from every pose, or a trees GLB whose level per tree follows each view. */
+export interface ArmLayer { fixed?: TileTriangles; trees?: TreesLodGlb }
+
+/**
+ * Reads one arm GLB. With `treeLod` (default true) a trees GLB of the tree LOD contract is kept for per-view level selection;
+ * with `treeLod: false`, or for any other GLB, its triangles are fixed (a trees GLB then draws every level at once).
+ */
+export function loadArmLayer(glb: Uint8Array, options: { treeLod?: boolean } = {}): ArmLayer {
+    if (options.treeLod !== false) {
+        const trees = readTreesLodGlb(glb);
+        if (trees) return { trees };
+    }
+    return { fixed: readTileTriangles(glb) };
+}
+
+/** Triangles a layer holds before view selection (a trees layer: every level). */
+export function armLayerTriangles(l: ArmLayer): number {
+    return l.fixed ? l.fixed.texture.length : l.trees ? l.trees.all.texture.length : 0;
+}
+
+/** The meshes of an arm's layers as the viewport would draw them from `camera`, and what each trees layer chose. */
+export function armMeshesForView(layers: ArmLayer[], camera: PinholeCamera, view?: TreeLodViewInput | null): { meshes: TileTriangles[]; trees: TreesForView[] } {
+    const meshes: TileTriangles[] = [], trees: TreesForView[] = [];
+    for (const l of layers) {
+        if (l.fixed) meshes.push(l.fixed);
+        else if (l.trees) { const t = treesForView(l.trees, camera, view); trees.push(t); meshes.push(t.triangles); }
+    }
+    return { meshes, trees };
 }
 
 // =============================================================================

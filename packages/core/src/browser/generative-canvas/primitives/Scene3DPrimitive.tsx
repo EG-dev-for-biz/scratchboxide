@@ -161,6 +161,7 @@ import type { SetCameraLensParams } from '../services/operators/lighting-camera-
 import { keepsStoredPose, lensCommands, liveViewMatches, runCameraCommands, withLivePose, type CameraCommand, type Vec3 } from './scene3d/cameraSettings';
 import { syncObjectMaterial } from './scene3d/materialOverride';
 import { TreeLodController, findShadowCamera, formatTreeLodStats, type TreeLodFrame } from './scene3d/treeLod/TreeLodController';
+import { createViewportCostProbe, viewportCostProbeEnabled } from './scene3d/viewportCost';
 import { applyTreeTextures, loadTreeTextureLibrary } from './scene3d/treeLod/treeTextureMaterials';
 import { disposeObject3DDeep, releaseObject3D } from './scene3d/disposeObject';
 import {
@@ -2146,6 +2147,16 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
         renderFrameRef.current = renderFrame;
         (window as any).__SB_3D_RENDER_FRAME__ = renderFrame;
+        // dev-only cost probe (opt-in: ?sbViewportCost=1 or localStorage sb.viewportCost = 1): the frame's triangles, draw calls,
+        // memory and GPU time split by layer, trees by level (viewportCost.ts)
+        if (viewportCostProbeEnabled()) {
+            (window as any).__SB_VIEWPORT_COST__ = createViewportCostProbe({
+                renderer, scene, camera,
+                renderFrame: () => { updateTreeLods(performance.now()); renderFrame(); },
+                layers: () => (sceneDataRef.current as { stagedBuild?: { layers?: Array<{ objectId: string; stage?: string; layer?: string; buildingId?: string; retired?: boolean }> } } | undefined)?.stagedBuild?.layers ?? [],
+                layerRoots: () => externalObjectsMapRef.current
+            });
+        }
 
         // The focus reticle: a DOM overlay over the canvas (the AF area, or the tracked point), never drawn into the
         // frame, so canvas captures and exports never contain it.
