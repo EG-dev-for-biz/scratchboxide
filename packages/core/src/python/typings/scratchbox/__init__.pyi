@@ -133,9 +133,9 @@ class PbrMaterial(metaclass=_PbrMeta):
     @roughness.setter
     def roughness(self, value: float) -> None: ...
 
-    def set_base_color(self, color: scratchbox_native.math.Vec4) -> None: ...
+    def set_base_color(self, color) -> None: ...
 
-    def set_color(self, color: scratchbox_native.math.Vec4) -> None: ...
+    def set_color(self, color) -> None: ...
 
     @staticmethod
     def stone_limestone() -> scratchbox_native.geometry.PbrMaterial: ...
@@ -257,9 +257,9 @@ class PbrMaterialWrapper:
     @roughness.setter
     def roughness(self, value: float) -> None: ...
 
-    def set_base_color(self, color: scratchbox_native.math.Vec4) -> None: ...
+    def set_base_color(self, color) -> None: ...
 
-    def set_color(self, color: scratchbox_native.math.Vec4) -> None: ...
+    def set_color(self, color) -> None: ...
 
     @staticmethod
     def stone_limestone() -> scratchbox_native.geometry.PbrMaterial: ...
@@ -578,10 +578,14 @@ class _ArchitectureModule:
     def generate_peripteral_temple(archetype: str = 'roman_peripteral', order: scratchbox_native.RomanOrder = ..., footprint_length: float = 42.0, footprint_width: float = 24.0, column_count_x: int = 8, column_count_y: int = 14, column_height: float = 7.5, plinth_height: float = 1.4, seed: int = 1337) -> scratchbox_native.geometry.Mesh:
         """Construct an authentic Vitruvian classical temple with peripteral colonnade and gable roof"""
 
+    def __setattr__(self, name: str, value: typing.Any, /) -> None: ...
+
 
 class _ConstantsModule:
     @property
     def OUTPUT_GLB_PATH(self): ...
+
+    def __setattr__(self, name: str, value: typing.Any, /) -> None: ...
 
 
 class _GeospatialModule:
@@ -592,12 +596,16 @@ class _GeospatialModule:
         google_3d_tiles_get_clay tool, and one object standing at a place from build_3d_object_from_reference.
         """
 
+    def __setattr__(self, name: str, value: typing.Any, /) -> None: ...
+
 
 class _LayoutModule:
     class BoundingVolume:
         def __init__(self, extents=(10.0, 10.0, 10.0), center=(0.0, 0.0, 0.0)) -> None: ...
 
         def get_socket(self, target: typing.Any) -> scratchbox_native.math.Vec3: ...
+
+        def __setattr__(self, name: str, value: typing.Any, /) -> None: ...
 
         extents: typing.Any
         center: typing.Any
@@ -619,6 +627,8 @@ class _LayoutModule:
         Returns a list of ContactAuditViolation (empty when fully certified).
         """
 
+    def __setattr__(self, name: str, value: typing.Any, /) -> None: ...
+
 
 class _NatureModule:
     PlantPreset = scratchbox.plant.PlantPreset
@@ -637,6 +647,8 @@ class _NatureModule:
     def generate_tree(config: scratchbox_native.nature.SpaceColonizationConfig) -> scratchbox_native.geometry.Mesh:
         """Generate a realistic botanical tree using Runions space colonization"""
 
+    def __setattr__(self, name: str, value: typing.Any, /) -> None: ...
+
 
 class _PbrModule:
     @property
@@ -646,6 +658,8 @@ class _PbrModule:
     def ProceduralMaterial(self): ...
 
     def __getattr__(self, name): ...
+
+    def __setattr__(self, name: str, value: typing.Any, /) -> None: ...
 
 
 class _ValidationModule:
@@ -659,6 +673,8 @@ class _ValidationModule:
           2. Compound Curvature Invariant: Checks normal variance on primary hulls to flag
              primitive box stacking.
         """
+
+    def __setattr__(self, name: str, value: typing.Any, /) -> None: ...
 
 
 class _human_namespace:

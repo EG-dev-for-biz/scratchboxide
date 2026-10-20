@@ -167,6 +167,7 @@ export function extractGlbAabb(glbBuffer: Buffer): GlbAabbBounds | null {
  */
 export const PYTHON_3D_API_REFERENCE = `${SB_API_CORE_SUMMARY}
 Usage notes:
+- A parameter or property typed Vec2/Vec3/Vec4 (sb.math) takes that object, never a tuple or list: the native bindings convert nothing, so write color=sb.math.Vec4(r, g, b, a), not color=(r, g, b, a). Factories listed without types (sb.create_*, sb.PbrMaterial(base_color=...)) accept tuples.
 - Mesh methods modify the mesh in place (and return it). vertex_count, triangle_count and bounds (with .min and .max) are properties, read without parentheses.
 - Reading geometry back: get_positions_flat returns float32 xyz as bytes; wrap it with Python's array module, typecode "f". Subdivision rounds and shrinks shapes and deformers move vertices, so measure positions after deforming instead of assuming the original sizes. Call weld_vertices() before subdividing boxes, whose faces arrive unwelded and crack apart otherwise.
 - Assemblies (legs, rungs, frames, struts, rails): compute the joint points first, then build each member between two joints with sb.sweep_curve_profile(path=[start, end], profile_dimensions=(r, r)). Take a connecting member's ends from points on the members it joins (a rung from lerp(top_a, foot_a, t) to lerp(top_b, foot_b, t)) so it attaches by construction; run member ends slightly into what they join. Do not place parts by rotating them about the origin and guessing offsets. Every result is checked: parts that touch nothing are listed in structuralIssues, and you must fix them.

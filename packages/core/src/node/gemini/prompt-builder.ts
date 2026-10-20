@@ -577,7 +577,7 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
 
 THE sb API (generated from the engine's type stubs by scripts/gen_sb_stubs.py, so it matches the running module; every script is type-checked against the same stubs before it runs):
 ${SB_API_SUMMARY}
-Notes the signatures do not carry: mesh.rotate_x/y/z take DEGREES (\`mesh.rotate_z(90.0)\`); \`mesh.bounds.min\` / \`.max\` are Vec3 (.x .y .z); \`sb.PbrMaterial(name, base_color=(r, g, b, a) or "#hex", roughness=, metallic=, emissive=, emissive_intensity=, clearcoat=, ior=)\` takes keywords, and \`sb.PbrMaterial.<preset>()\` answers any material name with plausible values.
+Notes the signatures do not carry: a parameter or property typed Vec2/Vec3/Vec4 takes \`sb.math.Vec3(...)\` / \`sb.math.Vec4(...)\`, never a tuple (the native bindings convert nothing; \`color=(1, 0, 0, 1)\` there fails), while the untyped factories (sb.create_*, \`sb.PbrMaterial(base_color=...)\`) accept tuples; mesh.rotate_x/y/z take DEGREES (\`mesh.rotate_z(90.0)\`); \`mesh.bounds.min\` / \`.max\` are Vec3 (.x .y .z); \`sb.PbrMaterial(name, base_color=(r, g, b, a) or "#hex", roughness=, metallic=, emissive=, emissive_intensity=, clearcoat=, ior=)\` takes keywords, and \`sb.PbrMaterial.<preset>()\` answers any material name with plausible values.
 
 FORM-DRIVEN CONSTRUCTION (choose the operator by the geometric form, not by stacking primitives):
 - Surfaces of revolution (towers, columns, vessels, domes, nozzles, turned parts): describe the WHOLE silhouette as one profile of (radius, height) pairs and revolve it once, so plinth, taper, flares and cap stay one continuous surface:

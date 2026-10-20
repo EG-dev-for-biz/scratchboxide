@@ -64,6 +64,8 @@ class Structure:
     def __getattr__(self, name: str) -> typing.Any:
         """Transparently delegate any mesh methods to self.mesh."""
 
+    def __setattr__(self, name: str, value: typing.Any, /) -> None: ...
+
     mesh: typing.Any
     archetype: typing.Any
     footprint_length: typing.Any

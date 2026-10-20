@@ -404,7 +404,7 @@ describe('mount_canvas_primitive mounts what the model sent or fails', () => {
             success: false, exitCode: 1, stdout: '', executionTimeMs: 12,
             stderr: 'Traceback (most recent call last):\n  File "scene.py", line 3, in <module>\nAttributeError: module \'scratchbox\' has no attribute \'make_tube\''
         });
-        const res: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: '3d-scene', title: 'Telescope', payload: { script: 'import scratchbox as sb\nsb.make_tube()' } }, ctx);
+        const res: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: '3d-scene', title: 'Telescope', payload: { script: 'import scratchbox as sb\nsb.create_box(1.0, 1.0, 1.0)' } }, ctx);
         expect(res.status).toBe('failed');
         expect(res.resultPayload.success).toBe(false);
         expect(res.resultPayload.error).toContain("has no attribute 'make_tube'");

@@ -104,6 +104,8 @@ class World:
         downloads cubic faces, and projects them into a 2:1 ERP equirectangular panorama.
         """
 
+    def __setattr__(self, name: str, value: typing.Any, /) -> None: ...
+
     units: typing.Any
     terrains: typing.Any
     structures: typing.Any

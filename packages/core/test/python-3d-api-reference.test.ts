@@ -5,7 +5,9 @@ import { PYTHON_3D_API_REFERENCE } from '../src/node/gemini/tools/python-3d-tool
 // The reference is what the model codes against; a stale name turns straight into failed tool calls. The listing part
 // is generated from the stubs (sb-stubs.test.ts checks it against the module); this checks the hand-written usage notes too.
 test('every API name in the execute_3d_python_script reference exists in the scratchbox package', async () => {
-    const sbNames = [...new Set(PYTHON_3D_API_REFERENCE.match(/\bsb\.[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*/g) || [])];
+    // names, not patterns: "sb.create_*" in the notes stands for the factory family
+    const sbNames = [...new Set([...PYTHON_3D_API_REFERENCE.matchAll(/\bsb\.[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*/g)]
+        .filter(m => PYTHON_3D_API_REFERENCE[(m.index ?? 0) + m[0].length] !== '*').map(m => m[0]))];
     const notes = PYTHON_3D_API_REFERENCE.slice(PYTHON_3D_API_REFERENCE.indexOf('Usage notes:'));
     const meshNames = [...new Set([...notes.matchAll(/\b(weld_vertices|get_positions_flat|translate|scale|append|vertex_count|triangle_count|bounds)\b/g)].map(m => m[1]))];
 

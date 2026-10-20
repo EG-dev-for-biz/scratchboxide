@@ -55,6 +55,9 @@ describe('scratchbox stub generator', () => {
         expect(init).toMatch(/^class _LayoutModule:/m);
         // everything public is re-exported
         expect(init).toMatch(/^__all__ = \[.*'create_box'.*'geometry'.*\]$/m);
+        // instances that take new attributes say so (nanobind dynamic_attr), the others do not
+        expect(geometry).toMatch(/class Mesh:[\s\S]*?def __setattr__\(self, name: str, value: typing\.Any, \/\) -> None/);
+        expect(fresh.get('scratchbox_native/math.pyi')).not.toContain('__setattr__');
         // attributes a Python class sets on self are attributes too
         expect(fresh.get('scratchbox/human.pyi')).toMatch(/^    height: typing\.Any$/m);
     });

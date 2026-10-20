@@ -13,7 +13,8 @@
  *
  * Only diagnostics that mean the script calls something the API does not have block the run: an unknown attribute of
  * a scratchbox class or module, an unknown import from the package, wrong argument names or counts, calling a
- * non-callable. Everything else pyright reports (argument types, Optional narrowing, third-party stubs, inference
+ * non-callable, and a plain Python value (tuple, list, number) passed where a scratchbox class is required (the native
+ * bindings convert nothing implicitly, so that call always fails). Everything else pyright reports (argument types, Optional narrowing, third-party stubs, inference
  * limits) is counted and ignored, so valid scripts run. A check that cannot finish (time limit, no basedpyright)
  * fails open: the script runs and the result says the check did not happen; it is never reported as passed.
  */
@@ -25,7 +26,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { resolveRepoPython } from '../process/repo-python';
 import { sbStubsDir } from './sb-stubs';
-import { SB_API_INDEX, SB_API_VERSION } from './sb-api.generated';
+import { SB_API_CLASS_PATHS, SB_API_INDEX, SB_API_VERSION } from './sb-api.generated';
 
 /** About 2 s: a cold basedpyright run on a scene script takes ~0.5 s. */
 export const SB_TYPECHECK_TIMEOUT_MS = 2000;
@@ -39,6 +40,8 @@ export interface SbApiError {
     source: string;
     /** Names in the same class or module close to the unknown one. */
     suggestions?: string[];
+    /** How to fix it, when the diagnostic implies one (a plain value where a scratchbox class is required). */
+    hint?: string;
 }
 
 export interface SbTypeCheckResult {
@@ -97,6 +100,48 @@ export function suggestNames(wanted: string, candidates: readonly string[]): str
 }
 
 /**
+ * When `valueType` is a plain Python value (tuple, list, number, str) and `targetType` admits only scratchbox classes
+ * (and None), the path of the class to construct instead; else undefined. The native bindings register no implicit
+ * conversions, so such a value always fails at runtime ("incompatible function arguments").
+ */
+function plainValueForSbClass(valueType: string, targetType: string): string | undefined {
+    const targets = targetType.split('|').map(t => t.trim());
+    if (!/^(tuple|list|dict|set|str|int|float|bool|bytes)\b/.test(valueType)) return undefined;
+    if (!targets.some(isStubClass) || !targets.every(t => t === 'None' || isStubClass(t))) return undefined;
+    const cls = targets.find(isStubClass)!;
+    return SB_API_CLASS_PATHS[cls] ?? cls;
+}
+
+/**
+ * Whether the script itself guards against the name being absent, so a missing name does not fail the run:
+ * hasattr(x, "name") / getattr(x, "name", default) anywhere in the script, or the line sits in a try block whose
+ * handlers catch AttributeError, Exception or everything. pyright does not narrow on these.
+ */
+export function guardedAgainstMissing(lines: string[], lineIndex: number, name: string | undefined): boolean {
+    const text = lines.join('\n');
+    if (name && new RegExp(`\\b(?:hasattr|getattr)\\s*\\([^)]*?['"]${name}['"]`).test(text)) return true;
+    const indentOf = (l: string) => l.length - l.trimStart().length;
+    let indent = indentOf(lines[lineIndex] ?? '');
+    for (let i = lineIndex - 1; i >= 0 && indent > 0; i--) {
+        const l = lines[i];
+        if (!l.trim() || l.trimStart().startsWith('#')) continue;
+        const ind = indentOf(l);
+        if (ind >= indent) continue;
+        indent = ind;
+        if (/^\s*try\s*:/.test(l)) {
+            for (let j = i + 1; j < lines.length; j++) {
+                const h = lines[j];
+                if (!h.trim()) continue;
+                if (indentOf(h) < ind) break;
+                if (indentOf(h) === ind && !/^\s*(except|else|finally)\b/.test(h)) break;
+                if (indentOf(h) === ind && /^\s*except\s*(:|\(?[^:]*\b(AttributeError|Exception|BaseException|TypeError)\b)/.test(h)) return true;
+            }
+        }
+    }
+    return false;
+}
+
+/**
  * The diagnostics that block a run, with "did you mean" hints. `lines` is the script split into lines; the rest of
  * the diagnostics are only counted.
  */
@@ -110,21 +155,45 @@ export function classifySbDiagnostics(diagnostics: PyrightDiagnostic[], lines: s
         const source = (lines[line] ?? '').trim();
         let blocking = false;
         let suggestions: string[] | undefined;
+        let hint: string | undefined;
         if (d.rule === 'reportAttributeAccessIssue') {
             const unknownAttr = /Attribute "(\w+)" is unknown/.exec(d.message);
             const cls = /(?:access|assign to) attribute "\w+" for class "(?:type\[)?(\w+)\*?\]?"/.exec(d.message);
             const mod = /"(\w+)" is not a known attribute of module "([\w.]+)"/.exec(d.message);
             const imp = /"(\w+)" is unknown import symbol/.exec(d.message);
-            if (unknownAttr && cls && isStubClass(cls[1])) {
+            const assigned = /"([^"]+)" is not assignable to (?:type )?"([^"]+)"/.exec(d.message);
+            // reading an attribute the script itself sets (classes whose instances take new attributes, like Mesh)
+            const setByScript = unknownAttr && /Cannot access attribute/.test(d.message) && new RegExp(`\\.${unknownAttr[1]}\\s*=(?!=)`).test(lines.join('\n'));
+            if (unknownAttr && cls && isStubClass(cls[1]) && !setByScript) {
                 blocking = true;
                 suggestions = suggestNames(unknownAttr[1], SB_API_INDEX[cls[1]] ?? []);
+            } else if (assigned && cls && isStubClass(cls[1]) && /assign to attribute/.test(d.message)) {
+                // mat.base_color = (r, g, b, a): the native property setter takes a Vec4, never a tuple
+                const fix = plainValueForSbClass(assigned[1], assigned[2]);
+                if (fix) {
+                    blocking = true;
+                    hint = `assign a ${fix}(...) instead of a ${assigned[1].split('[')[0]}`;
+                }
             } else if (mod && OWN_ROOTS.some(r => mod[2] === r || mod[2].startsWith(`${r}.`))) {
                 blocking = true;
                 suggestions = suggestNames(mod[1], SB_API_INDEX[mod[2]] ?? []);
+                // a class that exists, reached by the wrong path (sb.Vec3 for sb.math.Vec3)
+                const path = SB_API_CLASS_PATHS[mod[1]];
+                if (path) hint = `it is ${path}`;
             } else if (imp && /\bscratchbox/.test(source)) {
                 blocking = true;
                 const from = /from\s+([\w.]+)\s+import/.exec(source)?.[1];
                 suggestions = from ? suggestNames(imp[1], SB_API_INDEX[from] ?? []) : undefined;
+            }
+        } else if (d.rule === 'reportArgumentType') {
+            // A plain Python value (tuple, list, number, str) where a scratchbox class is required: the native bindings
+            // register no implicit conversions, so the call fails at runtime ("incompatible function arguments").
+            // Other type mismatches do not block.
+            const m = /Argument of type "([^"]+)" cannot be assigned to parameter "(\w+)" of type "([^"]+)"/.exec(d.message);
+            const fix = m ? plainValueForSbClass(m[1], m[3]) : undefined;
+            if (m && fix) {
+                blocking = true;
+                hint = `construct a ${fix}(...) for "${m[2]}" instead of passing a ${m[1].split('[')[0]}`;
             }
         } else if (d.rule === 'reportCallIssue') {
             // names and counts, not types: "No overloads ..." also covers type mismatches, so it does not block
@@ -133,8 +202,12 @@ export function classifySbDiagnostics(diagnostics: PyrightDiagnostic[], lines: s
             const name = /Import "([\w.]+)" could not be resolved/.exec(d.message)?.[1] ?? '';
             blocking = OWN_ROOTS.some(r => name === r || name.startsWith(`${r}.`));
         }
+        if (blocking && d.rule !== 'reportMissingImports') {
+            const missing = /"(\w+)" is (?:not a known attribute|unknown import symbol)|Attribute "(\w+)" is unknown/.exec(d.message);
+            if (guardedAgainstMissing(lines, line, missing?.[1] ?? missing?.[2])) blocking = false;
+        }
         if (blocking) {
-            errors.push({ line: line + 1, column: d.range.start.character + 1, rule: d.rule ?? '', message, source, ...(suggestions?.length ? { suggestions } : {}) });
+            errors.push({ line: line + 1, column: d.range.start.character + 1, rule: d.rule ?? '', message, source, ...(suggestions?.length ? { suggestions } : {}), ...(hint ? { hint } : {}) });
         } else {
             ignored++;
         }
@@ -145,7 +218,7 @@ export function classifySbDiagnostics(diagnostics: PyrightDiagnostic[], lines: s
 /** The errors as the model sees them in the tool result: one line each, with the offending source and hints. */
 export function formatSbApiErrors(errors: SbApiError[], apiVersion = SB_API_VERSION): string {
     const shown = errors.slice(0, 12).map(e =>
-        `line ${e.line}: ${e.message}${e.suggestions?.length ? ` (did you mean: ${e.suggestions.join(', ')}?)` : ''}  |  ${e.source.slice(0, 120)}`);
+        `line ${e.line}: ${e.message}${e.suggestions?.length ? ` (did you mean: ${e.suggestions.join(', ')}?)` : ''}${e.hint ? ` (${e.hint})` : ''}  |  ${e.source.slice(0, 120)}`);
     const more = errors.length > shown.length ? `\n(+${errors.length - shown.length} more)` : '';
     return `The script uses ${errors.length === 1 ? 'a name or argument' : 'names or arguments'} the scratchbox API does not have ` +
         `(type check against the generated stubs, API ${apiVersion}); it was not run. Fix ${errors.length === 1 ? 'this line' : 'these lines'} ` +

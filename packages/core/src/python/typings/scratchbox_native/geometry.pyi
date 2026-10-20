@@ -140,6 +140,8 @@ class Mesh:
 
     def ground_on(self, target, clearance=0.0) -> Mesh: ...
 
+    def __setattr__(self, name: str, value: typing.Any, /) -> None: ...
+
 PbrMaterial = scratchbox.PbrMaterial
 
 class Vertex:

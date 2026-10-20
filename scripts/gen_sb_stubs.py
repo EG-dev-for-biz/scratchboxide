@@ -157,6 +157,19 @@ class ModuleModel:
     imports: set[str] = field(default_factory=set)
 
 
+def accepts_new_attributes(cls: type) -> bool:
+    """Whether instances of `cls` take attributes the class does not declare (they have a __dict__)."""
+    if issubclass(cls, enum.Enum):
+        return False
+    if type(cls).__name__ == "nb_type":
+        return getattr(cls, "__dictoffset__", 0) != 0
+    if any("__slots__" in vars(k) for k in cls.__mro__ if k is not object):
+        return False
+    if any("__new__" in vars(k) for k in cls.__mro__ if k is not object):
+        return False
+    return getattr(cls, "__dictoffset__", 0) != 0
+
+
 def instance_attributes(cls: type) -> list[str]:
     """Names a Python class's own methods assign on their first parameter (`self.x = ...`, `self.x: T = ...`)."""
     if type(cls).__name__ == "nb_type":
@@ -205,11 +218,15 @@ class Analyzer:
         import scratchbox  # noqa: F401  (applies the package's runtime patches to scratchbox_native)
 
         self.replaced_native: dict[int, Any] = {}
+        # the other direction: a class that copied a native callable before the patch (the PbrMaterial facade copies
+        # the native class's attributes) describes the replacement, which is what its instances run
+        self.replacement_of: dict[int, Any] = {}
         for c in containers:
             for k, v in list(vars(c).items()):
                 orig = pristine.get((id(c), k))
                 if orig is not None and v is not orig and inspect.isfunction(v):
                     self.replaced_native.setdefault(id(v), orig)
+                    self.replacement_of.setdefault(id(orig), v)
 
         self.root = sys.modules[ROOT_PACKAGE]
         self.modules: dict[str, types.ModuleType] = {}
@@ -461,6 +478,12 @@ class Analyzer:
             m = self.class_member(cls, attr, value, current, imports, f"{qualname}.{attr}")
             if m:
                 model.members.append(m)
+        # instances that take new attributes (a nanobind class with dynamic_attr, a Python class without __slots__):
+        # assigning an undeclared name works at runtime, so the stub must allow it. A Python class that overrides
+        # __new__ may hand back another type (the PbrMaterial facade returns native objects), so it is not assumed.
+        if accepts_new_attributes(cls) and "__setattr__" not in cls.__dict__:
+            imports.add("typing")
+            model.members.append(Member("__setattr__", "method", [Signature("(self, name: str, value: typing.Any, /)", "None")]))
         # attributes a Python class's methods assign on self (self.height = ...): not in the class __dict__, but real
         known = {m.name for m in model.members} | {a for k in cls.__mro__[1:] for a in vars(k)}
         for name in instance_attributes(cls):
@@ -471,6 +494,8 @@ class Analyzer:
 
     def class_member(self, cls: type, attr: str, value: Any, current: str, imports: set[str], qual: str) -> Member | None:
         dunder = attr.startswith("__") and attr.endswith("__")
+        if id(value) in self.replacement_of:
+            value = self.replacement_of[id(value)]
         if isinstance(value, property):
             fget = value.fget
             vtype = None
@@ -946,9 +971,10 @@ def compact_type(text: str | None) -> str:
 MAX_SUMMARY_PARAMS = 8
 
 
-def compact_params(params: str, max_params: int = MAX_SUMMARY_PARAMS) -> str:
-    """`(self, radius: float = 1.0, *, segments: int = 24)` -> `(radius=1.0, *, segments=24)`: names and defaults
-    only (the stubs carry the types), at most MAX_SUMMARY_PARAMS parameters."""
+def compact_params(params: str, max_params: int = MAX_SUMMARY_PARAMS, keep_types: frozenset[str] = frozenset()) -> str:
+    """`(self, radius: float = 1.0, color: Vec4 = ...)` -> `(radius=1.0, color: Vec4=...)`: names and defaults, and the
+    type only where it names one of `keep_types` (the stubs' own classes): a plain tuple there fails at runtime, so the
+    reader must see that a Vec4 is wanted. At most `max_params` parameters."""
     try:
         fn = ast.parse(f"def f{params}: ...").body[0]
     except SyntaxError:
@@ -957,16 +983,22 @@ def compact_params(params: str, max_params: int = MAX_SUMMARY_PARAMS) -> str:
     out: list[str] = []
     positional = a.posonlyargs + a.args
     defaults = [None] * (len(positional) - len(a.defaults)) + list(a.defaults)
+    def typed(arg: ast.arg) -> str:
+        if arg.annotation is None or not keep_types:
+            return arg.arg
+        ann = compact_type(ast.unparse(arg.annotation))
+        return f"{arg.arg}: {ann}" if set(re.findall(r"[A-Za-z_]\w*", ann)) & keep_types else arg.arg
+
     for i, (arg, d) in enumerate(zip(positional, defaults)):
         if i == 0 and arg.arg in ("self", "cls"):
             continue
-        out.append(arg.arg + (f"={ast.unparse(d)}" if d is not None else ""))
+        out.append(typed(arg) + (f"={ast.unparse(d)}" if d is not None else ""))
     if a.vararg:
         out.append(f"*{a.vararg.arg}")
     elif a.kwonlyargs:
         out.append("*")
     for arg, d in zip(a.kwonlyargs, a.kw_defaults):
-        out.append(arg.arg + (f"={ast.unparse(d)}" if d is not None else ""))
+        out.append(typed(arg) + (f"={ast.unparse(d)}" if d is not None else ""))
     if a.kwarg:
         out.append(f"**{a.kwarg.arg}")
     if len(out) > max_params:
@@ -989,6 +1021,7 @@ def summary_entries(models: dict[str, ModuleModel], max_params: int = MAX_SUMMAR
     for name, model in models.items():
         index(model.members, name, "")
 
+    class_names = frozenset(c.name for c in classes.values() if not c.name.startswith("_"))
     # module-level aliases of classes (geometry.PbrMaterial = scratchbox.PbrMaterial, sb.Scene = World)
     aliases: dict[str, str] = {}
     for name, model in models.items():
@@ -1011,7 +1044,7 @@ def summary_entries(models: dict[str, ModuleModel], max_params: int = MAX_SUMMAR
     def sig_line(prefix: str, name: str, s: Signature, doc_fallback: str | None) -> str:
         doc = first_doc_line(s.doc or doc_fallback)
         ret = f" -> {compact_type(s.returns)}" if s.returns and s.returns != "None" else ""
-        return f"  {prefix}{name}{compact_params(s.params, max_params)}{ret}" + (f"  # {doc}" if doc else "")
+        return f"  {prefix}{name}{compact_params(s.params, max_params, class_names)}{ret}" + (f"  # {doc}" if doc else "")
 
     def callable_lines(m: Member, prefix: str) -> list[str]:
         return [sig_line(prefix, m.name, s, m.doc) for s in m.sigs[:2]]
@@ -1169,12 +1202,55 @@ def api_index(models: dict[str, ModuleModel]) -> dict[str, list[str]]:
             if m.cls:
                 visit_class(m.cls)
 
+    by_path: dict[str, ClassModel] = {}
     for name, model in models.items():
         index.setdefault(name, set()).update(m.name for m in model.members if not m.name.startswith("_"))
         for m in model.members:
             if m.cls:
                 visit_class(m.cls)
+                by_path[f"{name}.{m.cls.name}"] = m.cls
+    # a class aliased under another name (sb.Scene = World): pyright reports it under the alias, so index it there too
+    for name, model in models.items():
+        for m in model.members:
+            if m.kind == "alias" and m.target and not m.name.startswith("_"):
+                target = m.target if "." in m.target else f"{name}.{m.target}"
+                seen = 0
+                while target not in by_path and seen < 5:
+                    mod, _, leaf = target.rpartition(".")
+                    nxt = next((x.target for x in models[mod].members if x.name == leaf and x.kind == "alias" and x.target), None) if mod in models else None
+                    if not nxt:
+                        break
+                    target = nxt if "." in nxt else f"{mod}.{nxt}"
+                    seen += 1
+                if target in by_path and m.name != by_path[target].name:
+                    index.setdefault(m.name, set()).update(index[by_path[target].name])
     return {k: sorted(v) for k, v in index.items()}
+
+
+def class_paths(models: dict[str, ModuleModel]) -> dict[str, str]:
+    """Each public class's shortest path from `sb` (sb.Scene for World, sb.math.Vec4, sb.geometry.Mesh)."""
+    paths: dict[str, str] = {}
+
+    def offer(short: str, path: str) -> None:
+        if short not in paths or len(path) < len(paths[short]):
+            paths[short] = path
+
+    root = models[ROOT_PACKAGE]
+    for m in root.members:
+        if m.kind == "module" and m.target in models:
+            for sm in models[m.target].members:
+                if sm.kind == "class" and sm.cls and not sm.name.startswith("_"):
+                    offer(sm.name, f"sb.{m.name}.{sm.name}")
+        if m.kind == "class" and m.cls and not m.name.startswith("_"):
+            offer(m.name, f"sb.{m.name}")
+    # sb-level aliases (sb.Scene = World, sb.PbrMaterial) also name the class they alias
+    for m in root.members:
+        if m.kind == "alias" and m.target and not m.name.startswith("_"):
+            leaf = m.target.rsplit(".", 1)[-1]
+            if leaf in paths:
+                offer(leaf, f"sb.{m.name}")
+                offer(m.name, f"sb.{m.name}")
+    return paths
 
 
 def ts_string(text: str) -> str:
@@ -1227,7 +1303,9 @@ def main() -> int:
         f"export const SB_API_CORE_SUMMARY = {ts_string(core)};\n\n"
         "/** Names each module and class of the stubs defines (classes by their short name), for the type-check gate's\n"
         " *  \"did you mean\" hints and to tell scratchbox types from others in a diagnostic. */\n"
-        f"export const SB_API_INDEX: Record<string, readonly string[]> = {json.dumps(api_index(models), indent=4, sort_keys=True)};\n"
+        f"export const SB_API_INDEX: Record<string, readonly string[]> = {json.dumps(api_index(models), indent=4, sort_keys=True)};\n\n"
+        "/** Where a script reaches each public class (short name -> sb.<path>), for fix hints such as \"construct a sb.math.Vec4\". */\n"
+        f"export const SB_API_CLASS_PATHS: Record<string, string> = {json.dumps(class_paths(models), indent=4, sort_keys=True)};\n"
     )
     os.makedirs(os.path.dirname(os.path.abspath(args.summary_ts)), exist_ok=True)
     with open(args.summary_ts, "w", encoding="utf-8") as fh:

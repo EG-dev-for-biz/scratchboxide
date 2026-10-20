@@ -42,6 +42,8 @@ class Terrain:
     def __getattr__(self, name: str) -> typing.Any:
         """Transparently delegate any mesh methods (e.g. translate, scale) to self.mesh."""
 
+    def __setattr__(self, name: str, value: typing.Any, /) -> None: ...
+
     extents: typing.Any
     archetype: typing.Any
     domain_warp_scale: typing.Any

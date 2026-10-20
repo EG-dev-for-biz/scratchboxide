@@ -16,6 +16,8 @@ class Armature:
 
     def get_bone(self, name: str) -> typing.Optional[PoseBone]: ...
 
+    def __setattr__(self, name: str, value: typing.Any, /) -> None: ...
+
     bones: typing.Any
     pose: typing.Any
 
@@ -39,6 +41,8 @@ class Human:
 
     def __repr__(self) -> str: ...
 
+    def __setattr__(self, name: str, value: typing.Any, /) -> None: ...
+
     role: typing.Any
     height: typing.Any
     gender_beta: typing.Any
@@ -57,6 +61,8 @@ class PoseBone:
 
     def __repr__(self) -> str: ...
 
+    def __setattr__(self, name: str, value: typing.Any, /) -> None: ...
+
     name: typing.Any
     rotation_euler: typing.Any
     rotation_quaternion: typing.Any
@@ -72,6 +78,8 @@ class PrincipledBsdfMaterial:
     def __init__(self): ...
 
     def set_melanin(self, melanin_fraction: float, pheomelanin_ratio: float = 0.2): ...
+
+    def __setattr__(self, name: str, value: typing.Any, /) -> None: ...
 
     base_color: typing.Any
     melanin_fraction: typing.Any
@@ -93,6 +101,8 @@ class ShapeKeyBlock:
 
     def __repr__(self) -> str: ...
 
+    def __setattr__(self, name: str, value: typing.Any, /) -> None: ...
+
     name: typing.Any
     value: typing.Any
 
@@ -106,6 +116,8 @@ class ShapeKeys:
     def __setitem__(self, key: str, val: typing.Union[float, ShapeKeyBlock]): ...
 
     def get(self, key: str, default: typing.Optional[ShapeKeyBlock] = None) -> typing.Optional[ShapeKeyBlock]: ...
+
+    def __setattr__(self, name: str, value: typing.Any, /) -> None: ...
 
     key_blocks: typing.Any
 
@@ -131,6 +143,8 @@ class StudioHuman:
         """Evaluates the deformed and morphed mesh using native C++20 engine."""
 
     def __repr__(self) -> str: ...
+
+    def __setattr__(self, name: str, value: typing.Any, /) -> None: ...
 
     name: typing.Any
     height: typing.Any
