@@ -15,6 +15,10 @@ import * as path from 'path';
 import * as fs from 'fs-extra';
 import { assertWorkspaceRoot, PathTraversalError } from '../../packages/core/src/node/security/path-guard';
 import { defaultDurableAssetStore } from '../../packages/core/src/node/asset-store/durable-asset-store';
+import { AssetRecoveryService } from '../../packages/core/src/node/asset-store/asset-recovery-service';
+import { rebuildStagedForRecovery } from '../../packages/core/src/node/3d-engine/staged-location/staged-rebuild';
+import { stagedWorkspaceRoot } from '../../packages/core/src/node/3d-engine/staged-location/stage-cache';
+import { createAssetRouter } from './routes/assetRoutes';
 import { FileKeyStore } from '../../packages/core/src/node/key-store';
 import { KEY_STORE_SERVICE, KEY_STORE_GEMINI_ACCOUNT } from '../../packages/core/src/node/gemini/gemini-client';
 import { preferSavedMapsKey } from '../../packages/core/src/node/spatial/maps-key-settings';
@@ -645,6 +649,10 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     app.use('/api/3d/tiles', createTileCleanupRouter(tileCleanupService, routeContext));
     app.use('/api/3d/cleanup-tiles', createTileCleanupRouter(tileCleanupService, routeContext));
     app.use('/api/3d/pbr', createPbrRouter());
+    // the durable asset store's API: lookups, the change log, and recovery of missing files (restored or rebuilt)
+    if (assetStore) {
+        app.use('/api/assets', createAssetRouter(assetStore, new AssetRecoveryService(assetStore, { workspaceRoot: stagedWorkspaceRoot(), rebuildStaged: rebuildStagedForRecovery })));
+    }
 
     // Survey Synthesis API
     const surveyWorkspaceRoot = process.cwd();
