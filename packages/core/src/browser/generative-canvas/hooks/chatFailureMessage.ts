@@ -52,7 +52,7 @@ export function describeChatFailure(kind: ChatFailureKind, raw: string, httpStat
     if (kind === 'server') {
         if (httpStatus === 401) {
             return {
-                text: `⚠️ **The Scratchbox server rejected the request**\n\nThe app's access token was not accepted (${raw}). Restart the app to get a new one.`,
+                text: `⚠️ **The Scratchbox server rejected the request**\n\nThe app's access token was not accepted (${raw}). In a browser, open the link the server printed when it started (it ends in \`?token=…\`): a page opened without it, or with the token from an earlier start, is rejected. In the desktop app, restart the app.`,
                 toast: 'Server rejected the request'
             };
         }
