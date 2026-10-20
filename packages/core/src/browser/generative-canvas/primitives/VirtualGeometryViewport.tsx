@@ -44,6 +44,10 @@ interface PathTraceStatus {
     width: number;
     height: number;
     materials: string;
+    denoised: boolean;
+    denoiseMs: number;
+    /** Pixels whose illumination came from the previous view (temporal reuse). */
+    historyPixels: number;
     message?: string;
 }
 
@@ -226,7 +230,7 @@ export const VirtualGeometryViewport: React.FC<VirtualGeometryViewportProps> = (
             return json;
         };
         const show = (patch: Partial<PathTraceStatus>) => {
-            status = { ...(status ?? { device: '', triangles: 0, clusters: 0, spp: 0, targetSpp, rays: 0, gpuMs: 0, width: 0, height: 0, materials: '' }), ...patch };
+            status = { ...(status ?? { device: '', triangles: 0, clusters: 0, spp: 0, targetSpp, rays: 0, gpuMs: 0, width: 0, height: 0, materials: '', denoised: false, denoiseMs: 0, historyPixels: 0 }), ...patch };
             setPtStatus(status);
         };
 
@@ -295,7 +299,11 @@ export const VirtualGeometryViewport: React.FC<VirtualGeometryViewportProps> = (
                 lastFrameTag = `${seq}.${spp}`;
                 done = res.headers.get('X-Frame-Done') === '1';
                 draw(rgba, width, height);
-                show({ spp, rays: Number(res.headers.get('X-Frame-Rays')), gpuMs: Number(res.headers.get('X-Frame-Gpu-Ms')), width, height });
+                show({
+                    spp, rays: Number(res.headers.get('X-Frame-Rays')), gpuMs: Number(res.headers.get('X-Frame-Gpu-Ms')), width, height,
+                    denoised: res.headers.get('X-Frame-Denoised') === '1', denoiseMs: Number(res.headers.get('X-Frame-Denoise-Ms') ?? 0),
+                    historyPixels: Number(res.headers.get('X-Frame-History') ?? 0)
+                });
             } catch (err: any) {
                 if (!cancelled) show({ message: err?.message ?? String(err) });
             }
@@ -428,6 +436,7 @@ export const VirtualGeometryViewport: React.FC<VirtualGeometryViewportProps> = (
                         <>
                             <div>{ptStatus.spp} of {ptStatus.targetSpp} spp · {ptStatus.width}×{ptStatus.height}{ptStatus.gpuMs > 0 ? ` · ${(ptStatus.rays / ptStatus.gpuMs / 1000).toFixed(1)} M rays/s` : ''}</div>
                             <div>Cut: {fmt(ptStatus.triangles)} triangles in {fmt(ptStatus.clusters)} clusters · {ptStatus.materials}</div>
+                            <div>{ptStatus.denoised ? `Denoised on the GPU in ${ptStatus.denoiseMs.toFixed(1)} ms` : 'Raw samples'}{ptStatus.historyPixels > 0 ? ` · ${fmt(ptStatus.historyPixels)} px reused from the last view` : ''}</div>
                         </>
                     )}
                 </div>

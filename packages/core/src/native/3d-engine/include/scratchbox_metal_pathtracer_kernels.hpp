@@ -87,6 +87,43 @@ struct MaterialRecord {
 };
 static_assert(sizeof(MaterialRecord) == 96, "MaterialRecord layout is shared with the Metal kernels");
 
+/** Denoiser settings and the two views temporal reuse reprojects between (mirrors denoise::DenoiseSettings). */
+struct DenoiseUniforms {
+    uint32_t width{0}, height{0}, spp{1}, step{1};
+    float sigmaNormal{128.0f}, sigmaDepth{1.0f}, sigmaLuminance{4.0f}, albedoFloor{1e-3f};
+    /** 1 when the history buffer holds a previous view to reproject from. */
+    uint32_t useHistory{0}, historyCap{32}, prevWidth{0}, prevHeight{0};
+    float camPos[3]{0, 0, 0}, tanHalf{1.0f};
+    float forward[3]{0, 0, -1}, aspect{1.0f};
+    float right[3]{1, 0, 0}, pad0{0};
+    float up[3]{0, 1, 0}, pad1{0};
+    float prevCamPos[3]{0, 0, 0}, prevTanHalf{1.0f};
+    float prevForward[3]{0, 0, -1}, prevAspect{1.0f};
+    float prevRight[3]{1, 0, 0}, pad2{0};
+    float prevUp[3]{0, 1, 0}, pad3{0};
+};
+static_assert(sizeof(DenoiseUniforms) == 4 * 44, "DenoiseUniforms must stay a flat array of 4-byte scalars");
+
+/** Demodulated illumination and guides of one pixel, the a-trous working set. */
+struct DenoisePixel {
+    float illum[3];
+    float variance;
+    float normal[3];
+    float depth;
+    float gradX, gradY;
+    uint32_t mask, pad;
+};
+static_assert(sizeof(DenoisePixel) == 48, "DenoisePixel layout is shared with the Metal kernels");
+
+/** What a view leaves for the next one: its combined illumination, how many samples it stands for, and where it was. */
+struct HistoryPixel {
+    float illum[3];
+    float samples;
+    float normal[3];
+    float depth;
+};
+static_assert(sizeof(HistoryPixel) == 32, "HistoryPixel layout is shared with the Metal kernels");
+
 inline const char* const kKernelSource = R"METAL(
 #include <metal_stdlib>
 #include <metal_raytracing>
@@ -638,6 +675,236 @@ kernel void pt_sample(device PixelState* pixels [[buffer(0)]], constant Uniforms
         p->normal[0] += s.normal.x; p->normal[1] += s.normal.y; p->normal[2] += s.normal.z;
         p->depth += s.depth;
     }
+}
+)METAL";
+
+/**
+ * Port of denoise::denoiseATrous (scratchbox_denoise.hpp) plus temporal reuse: dn_prepare demodulates the
+ * frame's mean colour by its albedo, folds in the previous view's reprojected illumination, and writes the
+ * guides; dn_blur and dn_atrous are one filter iteration (variance blur, then the edge-avoiding 5x5 tap at
+ * the iteration's step); dn_finish remodulates and keeps the history for the next view.
+ */
+inline const char* const kDenoiseKernelSource = R"METAL(
+struct DenoiseUniforms {
+    uint width, height, spp, step;
+    float sigmaNormal, sigmaDepth, sigmaLuminance, albedoFloor;
+    uint useHistory, historyCap, prevWidth, prevHeight;
+    float camPos[3], tanHalf;
+    float forward[3], aspect;
+    float right[3], pad0;
+    float up[3], pad1;
+    float prevCamPos[3], prevTanHalf;
+    float prevForward[3], prevAspect;
+    float prevRight[3], pad2;
+    float prevUp[3], pad3;
+};
+
+struct DenoisePixel {
+    float illum[3];
+    float variance;
+    float normal[3];
+    float depth;
+    float gradX, gradY;
+    uint mask, pad;
+};
+
+struct HistoryPixel {
+    float illum[3];
+    float samples;
+    float normal[3];
+    float depth;
+};
+
+inline float3 dnAlbedo(device const PixelState& p, float floorValue) {
+    float inv = p.hits > 0u ? 1.0f / (float)p.hits : 0.0f;
+    return max(float3(p.albedo[0], p.albedo[1], p.albedo[2]) * inv, float3(floorValue));
+}
+
+inline bool dnMask(device const PixelState& p, uint spp) { return p.hits * 2u >= spp; }
+
+inline float dnDepth(device const PixelState& p) { return p.hits > 0u ? p.depth / (float)p.hits : 0.0f; }
+
+inline float normalWeight(float cosine, float sigma) {
+    float x = max(cosine, 0.0f);
+    if (sigma == 128.0f) {
+        for (int i = 0; i < 7; ++i) x *= x;
+        return x;
+    }
+    return pow(x, sigma);
+}
+
+/** Camera ray through the centre of pixel (x, y) of the current view. */
+inline float3 dnRayDir(constant DenoiseUniforms& u, uint x, uint y) {
+    float sx = ((float)x + 0.5f) / (float)u.width;
+    float sy = ((float)y + 0.5f) / (float)u.height;
+    return normalize(f3(u.forward) + f3(u.right) * ((2.0f * sx - 1.0f) * u.tanHalf * u.aspect) + f3(u.up) * ((1.0f - 2.0f * sy) * u.tanHalf));
+}
+
+kernel void dn_prepare(device const PixelState* pixels [[buffer(0)]], constant DenoiseUniforms& u [[buffer(1)]],
+                       device DenoisePixel* out [[buffer(2)]], device const HistoryPixel* history [[buffer(3)]],
+                       device uint* historyHits [[buffer(4)]], uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= u.width || gid.y >= u.height) return;
+    uint i = gid.y * u.width + gid.x;
+    device const PixelState& p = pixels[i];
+    DenoisePixel d;
+    float3 nsum = float3(p.normal[0], p.normal[1], p.normal[2]);
+    float3 n = dot(nsum, nsum) > 0.0f ? normalize(nsum) : float3(0.0f);
+    d.normal[0] = n.x; d.normal[1] = n.y; d.normal[2] = n.z;
+    d.mask = dnMask(p, u.spp) ? 1u : 0u;
+    d.pad = 0u;
+    d.gradX = 0.0f; d.gradY = 0.0f;
+    d.depth = dnDepth(p);
+    const float inv = 1.0f / (float)max(u.spp, 1u);
+    float3 color = float3(p.color[0], p.color[1], p.color[2]) * inv;
+    if (d.mask == 0u) {
+        d.illum[0] = 0.0f; d.illum[1] = 0.0f; d.illum[2] = 0.0f;
+        d.variance = 0.0f;
+        out[i] = d;
+        return;
+    }
+    float3 a = dnAlbedo(p, u.albedoFloor);
+    float3 illum = color / a;
+    float la = max(luminance(a), u.albedoFloor);
+    float mean = p.lum * inv;
+    float var = max(0.0f, p.lumSq * inv - mean * mean) * inv;
+    float variance = max(var, 0.0f) / (la * la);
+    float samples = (float)u.spp;
+
+    // Temporal reuse: the previous view's illumination at this surface point, when it saw the same surface.
+    if (u.useHistory != 0u && u.prevWidth > 0u && u.prevHeight > 0u) {
+        float3 world = f3(u.camPos) + dnRayDir(u, gid.x, gid.y) * d.depth;
+        float3 v = world - f3(u.prevCamPos);
+        float z = dot(v, f3(u.prevForward));
+        if (z > 1e-4f) {
+            float ndcX = dot(v, f3(u.prevRight)) / (z * u.prevTanHalf * u.prevAspect);
+            float ndcY = dot(v, f3(u.prevUp)) / (z * u.prevTanHalf);
+            float px = (ndcX + 1.0f) * 0.5f * (float)u.prevWidth;
+            float py = (1.0f - ndcY) * 0.5f * (float)u.prevHeight;
+            if (px >= 0.0f && py >= 0.0f && px < (float)u.prevWidth && py < (float)u.prevHeight) {
+                uint hi = (uint)py * u.prevWidth + (uint)px;
+                device const HistoryPixel& h = history[hi];
+                float dist = length(v);
+                float3 hn = float3(h.normal[0], h.normal[1], h.normal[2]);
+                if (h.samples > 0.0f && abs(h.depth - dist) <= 0.02f * max(dist, 1e-3f) && dot(hn, n) > 0.8f) {
+                    float hs = min(h.samples, (float)u.historyCap);
+                    float3 hillum = float3(h.illum[0], h.illum[1], h.illum[2]);
+                    float wc = samples / (samples + hs);
+                    illum = hillum * (1.0f - wc) + illum * wc;
+                    variance = variance * wc * wc;
+                    samples = samples + hs;
+                    historyHits[i] = 1u;
+                }
+            }
+        }
+    }
+    d.illum[0] = illum.x; d.illum[1] = illum.y; d.illum[2] = illum.z;
+    d.variance = variance;
+    // The sample count rides in pad for dn_finish to carry into the next history.
+    d.pad = as_type<uint>(samples);
+    out[i] = d;
+}
+
+kernel void dn_gradients(device DenoisePixel* px [[buffer(0)]], constant DenoiseUniforms& u [[buffer(1)]],
+                         uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= u.width || gid.y >= u.height) return;
+    uint i = gid.y * u.width + gid.x;
+    if (px[i].mask == 0u) return;
+    float z = px[i].depth;
+    auto depthAt = [&](int x, int y) {
+        if (x < 0 || y < 0 || x >= (int)u.width || y >= (int)u.height) return z;
+        uint q = (uint)y * u.width + (uint)x;
+        return px[q].mask != 0u ? px[q].depth : z;
+    };
+    int x = (int)gid.x, y = (int)gid.y;
+    px[i].gradX = min(abs(depthAt(x + 1, y) - z), abs(z - depthAt(x - 1, y)));
+    px[i].gradY = min(abs(depthAt(x, y + 1) - z), abs(z - depthAt(x, y - 1)));
+}
+
+kernel void dn_blur(device const DenoisePixel* px [[buffer(0)]], constant DenoiseUniforms& u [[buffer(1)]],
+                    device float* blurred [[buffer(2)]], uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= u.width || gid.y >= u.height) return;
+    uint i = gid.y * u.width + gid.x;
+    if (px[i].mask == 0u) { blurred[i] = px[i].variance; return; }
+    const float gauss3[3] = {0.25f, 0.5f, 0.25f};
+    float sum = 0.0f, weight = 0.0f;
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            int qx = (int)gid.x + dx, qy = (int)gid.y + dy;
+            if (qx < 0 || qy < 0 || qx >= (int)u.width || qy >= (int)u.height) continue;
+            uint q = (uint)qy * u.width + (uint)qx;
+            if (px[q].mask == 0u) continue;
+            float k = gauss3[dx + 1] * gauss3[dy + 1];
+            sum += px[q].variance * k;
+            weight += k;
+        }
+    }
+    blurred[i] = weight > 0.0f ? sum / weight : px[i].variance;
+}
+
+kernel void dn_atrous(device const DenoisePixel* src [[buffer(0)]], constant DenoiseUniforms& u [[buffer(1)]],
+                      device const float* blurred [[buffer(2)]], device DenoisePixel* dst [[buffer(3)]],
+                      uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= u.width || gid.y >= u.height) return;
+    uint p = gid.y * u.width + gid.x;
+    DenoisePixel d = src[p];
+    if (d.mask == 0u) { dst[p] = d; return; }
+    const float kernel5[5] = {1.0f / 16.0f, 1.0f / 4.0f, 3.0f / 8.0f, 1.0f / 4.0f, 1.0f / 16.0f};
+    const int step = (int)u.step;
+    const float3 ip = float3(d.illum[0], d.illum[1], d.illum[2]);
+    const float lp = luminance(ip);
+    const float zp = d.depth;
+    const float3 np = float3(d.normal[0], d.normal[1], d.normal[2]);
+    const float sigmaL = u.sigmaLuminance * sqrt(blurred[p]) + 1e-4f;
+    float3 sumColor = float3(0.0f);
+    float sumWeight = 0.0f, sumVariance = 0.0f;
+    for (int ky = -2; ky <= 2; ++ky) {
+        for (int kx = -2; kx <= 2; ++kx) {
+            int qx = (int)gid.x + kx * step, qy = (int)gid.y + ky * step;
+            if (qx < 0 || qy < 0 || qx >= (int)u.width || qy >= (int)u.height) continue;
+            uint q = (uint)qy * u.width + (uint)qx;
+            device const DenoisePixel& s = src[q];
+            if (s.mask == 0u) continue;
+            float wgt = kernel5[kx + 2] * kernel5[ky + 2];
+            float3 iq = float3(s.illum[0], s.illum[1], s.illum[2]);
+            if (q != p) {
+                float wn = normalWeight(dot(np, float3(s.normal[0], s.normal[1], s.normal[2])), u.sigmaNormal);
+                float expectedDz = d.gradX * abs((float)(kx * step)) + d.gradY * abs((float)(ky * step));
+                float wz = exp(-abs(zp - s.depth) / (u.sigmaDepth * expectedDz + 1e-3f * max(zp, 1.0f)));
+                float wl = exp(-abs(lp - luminance(iq)) / sigmaL);
+                wgt *= wn * wz * wl;
+            }
+            sumColor += iq * wgt;
+            sumWeight += wgt;
+            sumVariance += s.variance * wgt * wgt;
+        }
+    }
+    float3 o = sumColor / sumWeight;
+    d.illum[0] = o.x; d.illum[1] = o.y; d.illum[2] = o.z;
+    d.variance = sumVariance / (sumWeight * sumWeight);
+    dst[p] = d;
+}
+
+/** Remodulates by albedo into `color` (3 floats per pixel; background keeps the mean colour) and records the history. */
+kernel void dn_finish(device const PixelState* pixels [[buffer(0)]], constant DenoiseUniforms& u [[buffer(1)]],
+                      device const DenoisePixel* px [[buffer(2)]], device float* color [[buffer(3)]],
+                      device HistoryPixel* history [[buffer(4)]], uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= u.width || gid.y >= u.height) return;
+    uint i = gid.y * u.width + gid.x;
+    device const PixelState& p = pixels[i];
+    const float inv = 1.0f / (float)max(u.spp, 1u);
+    float3 c = float3(p.color[0], p.color[1], p.color[2]) * inv;
+    HistoryPixel h;
+    h.samples = 0.0f;
+    h.depth = px[i].depth;
+    h.normal[0] = px[i].normal[0]; h.normal[1] = px[i].normal[1]; h.normal[2] = px[i].normal[2];
+    h.illum[0] = px[i].illum[0]; h.illum[1] = px[i].illum[1]; h.illum[2] = px[i].illum[2];
+    if (px[i].mask != 0u) {
+        float3 a = dnAlbedo(p, u.albedoFloor);
+        c = float3(px[i].illum[0], px[i].illum[1], px[i].illum[2]) * a;
+        h.samples = as_type<float>(px[i].pad);
+    }
+    color[i * 3] = c.x; color[i * 3 + 1] = c.y; color[i * 3 + 2] = c.z;
+    history[i] = h;
 }
 )METAL";
 

@@ -83,6 +83,25 @@ struct Lighting {
     const sky::PhysicalSky* sky{nullptr};
 };
 
+/** Filter settings (denoise::DenoiseSettings) plus temporal reuse. */
+struct DenoiseOptions {
+    int iterations{5};
+    float sigmaNormal{128.0f};
+    float sigmaDepth{1.0f};
+    float sigmaLuminance{4.0f};
+    /** Reproject the committed history of the previous view into this frame before filtering. */
+    bool temporal{false};
+    /** Most samples a history pixel may stand for, so stale history gives way to new samples. */
+    int historyCap{32};
+};
+
+/** A camera as the kernels see it, kept per frame so a later view can reproject into it. */
+struct ViewBasis {
+    Vec3 position, forward, right, up;
+    float tanHalf{1.0f}, aspect{1.0f};
+    int width{0}, height{0};
+};
+
 /** One material for every triangle (the studio clay by default). */
 struct Material {
     Vec3 albedo{0.716f, 0.672f, 0.610f};
@@ -105,10 +124,16 @@ public:
             options.fastMathEnabled = NO;
 #pragma clang diagnostic pop
             NSError* error = nil;
-            id<MTLLibrary> library = [device_ newLibraryWithSource:[NSString stringWithUTF8String:kKernelSource] options:options error:&error];
+            const std::string source = std::string(kKernelSource) + kDenoiseKernelSource;
+            id<MTLLibrary> library = [device_ newLibraryWithSource:[NSString stringWithUTF8String:source.c_str()] options:options error:&error];
             if (!library) throw Error(std::string("Metal kernel compilation failed: ") + (error ? error.localizedDescription.UTF8String : "unknown error"));
             initPso_ = makePipeline(library, "pt_init");
             samplePso_ = makePipeline(library, "pt_sample");
+            dnPreparePso_ = makePipeline(library, "dn_prepare");
+            dnGradientsPso_ = makePipeline(library, "dn_gradients");
+            dnBlurPso_ = makePipeline(library, "dn_blur");
+            dnAtrousPso_ = makePipeline(library, "dn_atrous");
+            dnFinishPso_ = makePipeline(library, "dn_finish");
             deviceName_ = device_.name.UTF8String;
             // Bound when a render uses one uniform material; the kernel never reads them then.
             static const uint32_t zero = 0;
@@ -318,6 +343,8 @@ public:
         put(u.up, up);
         u.tanHalf = std::tan(0.5f * camera.verticalFovDeg * math::DEG_TO_RAD);
         u.aspect = static_cast<float>(w) / static_cast<float>(h);
+        frameView_ = ViewBasis{camera.position, forward, right, up, u.tanHalf, u.aspect, w, h};
+        historyOutFresh_ = false;
         u.apertureRadius = camera.apertureRadius;
         u.focusDistance = camera.focusDistance > 0.0f ? camera.focusDistance : (camera.target - camera.position).length();
         if (uniformMaterial) {
@@ -455,7 +482,121 @@ public:
         return out;
     }
 
+    /**
+     * Denoises the current frame on the GPU (the a-trous filter of scratchbox_denoise.hpp) and returns the
+     * scene-linear colour. With `temporal`, the previous view's history (commitHistory) is reprojected into
+     * this view first and the result is kept for the next commit. denoiseGpuMs() is the filter's GPU time.
+     */
+    std::vector<Vec3> denoise(const DenoiseOptions& options) {
+        if (!framePixels_) throw Error("beginFrame was not called");
+        const int w = frameWidth_, h = frameHeight_;
+        const size_t n = static_cast<size_t>(w) * h;
+        @autoreleasepool {
+            ensureDenoiseBuffers(n);
+            DenoiseUniforms u;
+            u.width = static_cast<uint32_t>(w);
+            u.height = static_cast<uint32_t>(h);
+            u.spp = static_cast<uint32_t>(std::max(1, frameSpp_));
+            u.sigmaNormal = options.sigmaNormal;
+            u.sigmaDepth = options.sigmaDepth;
+            u.sigmaLuminance = options.sigmaLuminance;
+            u.historyCap = static_cast<uint32_t>(std::max(1, options.historyCap));
+            put(u.camPos, frameView_.position);
+            put(u.forward, frameView_.forward);
+            put(u.right, frameView_.right);
+            put(u.up, frameView_.up);
+            u.tanHalf = frameView_.tanHalf;
+            u.aspect = frameView_.aspect;
+            const bool useHistory = options.temporal && historyValid_ && historyBuffer_;
+            u.useHistory = useHistory ? 1 : 0;
+            if (useHistory) {
+                u.prevWidth = static_cast<uint32_t>(historyView_.width);
+                u.prevHeight = static_cast<uint32_t>(historyView_.height);
+                put(u.prevCamPos, historyView_.position);
+                put(u.prevForward, historyView_.forward);
+                put(u.prevRight, historyView_.right);
+                put(u.prevUp, historyView_.up);
+                u.prevTanHalf = historyView_.tanHalf;
+                u.prevAspect = historyView_.aspect;
+            }
+            std::memset(historyHits_.contents, 0, n * sizeof(uint32_t));
+            id<MTLBuffer> history = useHistory ? historyBuffer_ : historyOut_;
+            const MTLSize grid = MTLSizeMake(static_cast<NSUInteger>(w), static_cast<NSUInteger>(h), 1);
+            const MTLSize group = MTLSizeMake(8, 8, 1);
+            id<MTLCommandBuffer> commands = [queue_ commandBuffer];
+            auto dispatch = [&](id<MTLComputePipelineState> pso, std::vector<id<MTLBuffer>> buffers, const DenoiseUniforms& uniforms) {
+                id<MTLComputeCommandEncoder> encoder = [commands computeCommandEncoder];
+                [encoder setComputePipelineState:pso];
+                for (NSUInteger k = 0; k < buffers.size(); ++k) {
+                    if (k == 1) [encoder setBytes:&uniforms length:sizeof(DenoiseUniforms) atIndex:1];
+                    else [encoder setBuffer:buffers[k] offset:0 atIndex:k];
+                }
+                [encoder dispatchThreads:grid threadsPerThreadgroup:group];
+                [encoder endEncoding];
+            };
+            dispatch(dnPreparePso_, {framePixels_, nil, dnA_, history, historyHits_}, u);
+            dispatch(dnGradientsPso_, {dnA_, nil}, u);
+            id<MTLBuffer> src = dnA_, dst = dnB_;
+            for (int iteration = 0; iteration < std::max(0, options.iterations); ++iteration) {
+                u.step = 1u << iteration;
+                dispatch(dnBlurPso_, {src, nil, dnBlurred_}, u);
+                dispatch(dnAtrousPso_, {src, nil, dnBlurred_, dst}, u);
+                std::swap(src, dst);
+            }
+            dispatch(dnFinishPso_, {framePixels_, nil, src, dnColor_, historyOut_}, u);
+            [commands commit];
+            [commands waitUntilCompleted];
+            if (commands.error) throw Error(std::string("GPU denoise failed: ") + commands.error.localizedDescription.UTF8String);
+            denoiseGpuSeconds_ = commands.GPUEndTime - commands.GPUStartTime;
+            historyOutFresh_ = true;
+            historyPixels_ = 0;
+            const uint32_t* hits = static_cast<const uint32_t*>(historyHits_.contents);
+            for (size_t i = 0; i < n; ++i) historyPixels_ += hits[i];
+            std::vector<Vec3> out(n);
+            const float* c = static_cast<const float*>(dnColor_.contents);
+            for (size_t i = 0; i < n; ++i) out[i] = Vec3(c[i * 3], c[i * 3 + 1], c[i * 3 + 2]);
+            return out;
+        }
+    }
+
+    /** GPU time of the last denoise, in ms. */
+    double denoiseGpuMs() const { return denoiseGpuSeconds_ * 1000.0; }
+    /** Pixels of the last denoise that took illumination from the previous view. */
+    uint32_t historyPixels() const { return historyPixels_; }
+
+    /** Keeps the last denoised frame as the history the next view reprojects from (needs a denoise of this frame). */
+    void commitHistory() {
+        if (!historyOutFresh_ || !historyOut_) {
+            historyValid_ = false;
+            return;
+        }
+        std::swap(historyBuffer_, historyOut_);
+        historyView_ = frameView_;
+        historyValid_ = true;
+        historyOutFresh_ = false;
+    }
+
+    void clearHistory() { historyValid_ = false; }
+
 private:
+    void ensureDenoiseBuffers(size_t n) {
+        if (dnCapacity_ != n || !dnA_) {
+            dnA_ = [device_ newBufferWithLength:n * sizeof(DenoisePixel) options:MTLResourceStorageModeShared];
+            dnB_ = [device_ newBufferWithLength:n * sizeof(DenoisePixel) options:MTLResourceStorageModeShared];
+            dnBlurred_ = [device_ newBufferWithLength:n * sizeof(float) options:MTLResourceStorageModeShared];
+            dnColor_ = [device_ newBufferWithLength:n * 3 * sizeof(float) options:MTLResourceStorageModeShared];
+            historyHits_ = [device_ newBufferWithLength:n * sizeof(uint32_t) options:MTLResourceStorageModeShared];
+            if (!dnA_ || !dnB_ || !dnBlurred_ || !dnColor_ || !historyHits_) throw Error("could not allocate denoise buffers");
+            dnCapacity_ = n;
+        }
+        // commitHistory swaps this with the history buffer, which may be nil or of the previous view's size;
+        // the committed history keeps its own size (dn_prepare reprojects by the previous view's dimensions).
+        if (!historyOut_ || historyOut_.length != n * sizeof(HistoryPixel)) {
+            historyOut_ = [device_ newBufferWithLength:n * sizeof(HistoryPixel) options:MTLResourceStorageModeShared];
+            if (!historyOut_) throw Error("could not allocate the history buffer");
+        }
+    }
+
     void submit(id<MTLCommandBuffer> commands) {
         [commands commit];
         [commands waitUntilCompleted];
@@ -482,6 +623,25 @@ private:
     id<MTLCommandQueue> queue_{nil};
     id<MTLComputePipelineState> initPso_{nil};
     id<MTLComputePipelineState> samplePso_{nil};
+    id<MTLComputePipelineState> dnPreparePso_{nil};
+    id<MTLComputePipelineState> dnGradientsPso_{nil};
+    id<MTLComputePipelineState> dnBlurPso_{nil};
+    id<MTLComputePipelineState> dnAtrousPso_{nil};
+    id<MTLComputePipelineState> dnFinishPso_{nil};
+    id<MTLBuffer> dnA_{nil};
+    id<MTLBuffer> dnB_{nil};
+    id<MTLBuffer> dnBlurred_{nil};
+    id<MTLBuffer> dnColor_{nil};
+    id<MTLBuffer> historyOut_{nil};
+    id<MTLBuffer> historyBuffer_{nil};
+    id<MTLBuffer> historyHits_{nil};
+    size_t dnCapacity_{0};
+    ViewBasis frameView_;
+    ViewBasis historyView_;
+    bool historyValid_{false};
+    bool historyOutFresh_{false};
+    double denoiseGpuSeconds_{0.0};
+    uint32_t historyPixels_{0};
     id<MTLBuffer> vertexBuffer_{nil};
     id<MTLBuffer> indexBuffer_{nil};
     id<MTLBuffer> materialIdBuffer_{nil};

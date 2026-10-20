@@ -310,8 +310,10 @@ int renderOnce(const std::string& configPath) {
         std::string deviceName = "cpu";
         double accelerationBuildMs = 0.0;
         uint32_t texturesUploaded = 0;
+        std::unique_ptr<metalpt::MetalPathTracer> metalTracer;
         if (backend == "metal") {
-            metalpt::MetalPathTracer tracer;
+            metalTracer = std::make_unique<metalpt::MetalPathTracer>();
+            metalpt::MetalPathTracer& tracer = *metalTracer;
             tracer.setGeometry(file.vertices, cut.indices, cut.materials);
             if (sceneMaterials) {
                 tracer.setMaterials(source.scene);
@@ -332,7 +334,33 @@ int renderOnce(const std::string& configPath) {
 
         std::vector<Vec3> beauty = out.color;
         const bool denoise = boolOr(config["denoise"], false);
-        if (denoise) beauty = denoise::denoiseATrous(out.color, out.guides);
+        double denoiseMs = 0.0;
+        std::string denoiseBackend = "none";
+        if (denoise) {
+            if (backend == "metal") {
+                denoiseBackend = "metal";
+                beauty = metalTracer->denoise(metalpt::DenoiseOptions{});
+                denoiseMs = metalTracer->denoiseGpuMs();
+                if (boolOr(config["denoiseCheck"], false)) {
+                    // The CPU filter on the same raw frame, for the parity test.
+                    const auto cpuStart = std::chrono::steady_clock::now();
+                    const std::vector<Vec3> cpu = denoise::denoiseATrous(out.color, out.guides);
+                    const double cpuMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cpuStart).count();
+                    std::vector<float> raw(cpu.size() * 3);
+                    for (size_t i = 0; i < cpu.size(); ++i) { raw[i * 3] = cpu[i].x; raw[i * 3 + 1] = cpu[i].y; raw[i * 3 + 2] = cpu[i].z; }
+                    if (!writeBytes(std::filesystem::path(outputDir) / "denoised_cpu.f32", raw.data(), raw.size() * sizeof(float))) throw std::runtime_error("failed to write denoised_cpu.f32");
+                    std::cout << "[TELEMETRY] denoiseCheck cpuMs=" << cpuMs << " gpuMs=" << denoiseMs << std::endl;
+                }
+            } else {
+                denoiseBackend = "cpu";
+                const auto cpuStart = std::chrono::steady_clock::now();
+                beauty = denoise::denoiseATrous(out.color, out.guides);
+                denoiseMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cpuStart).count();
+            }
+            std::vector<float> raw(beauty.size() * 3);
+            for (size_t i = 0; i < beauty.size(); ++i) { raw[i * 3] = beauty[i].x; raw[i * 3 + 1] = beauty[i].y; raw[i * 3 + 2] = beauty[i].z; }
+            if (!writeBytes(std::filesystem::path(outputDir) / "denoised.f32", raw.data(), raw.size() * sizeof(float))) throw std::runtime_error("failed to write denoised.f32");
+        }
         const Json& exposureConfig = config["exposure"];
         const float exposureEv = exposureConfig.type == Json::Number ? static_cast<float>(exposureConfig.num) : view::autoExposureEv(beauty);
         const texture::ImageBuffer beautyImage = view::toDisplayImage(beauty, out.width, out.height, exposureEv, view::AgxLook::Base);
@@ -380,6 +408,8 @@ int renderOnce(const std::string& configPath) {
               << "  \"meanLinearLuminance\": " << meanLuminance << ",\n"
               << "  \"exposureEv\": " << exposureEv << ",\n"
               << "  \"denoised\": " << (denoise ? "true" : "false") << ",\n"
+              << "  \"denoiseBackend\": " << jsonString(denoiseBackend) << ",\n"
+              << "  \"denoiseMs\": " << denoiseMs << ",\n"
               << "  \"materials\": { \"source\": " << jsonString(sceneMaterials ? "glb" : "uniform") << ", \"glbPath\": " << jsonString(materialsGlb)
               << ", \"count\": " << (sceneMaterials ? source.scene.materials.size() : 1) << ", \"images\": " << source.scene.images.size() << ", \"imagesDecoded\": " << source.imagesDecoded
               << ", \"texturesUploaded\": " << texturesUploaded << ", \"loadMs\": " << source.loadMs << " },\n"
@@ -471,6 +501,8 @@ private:
     float exposureEv_{0.0f};
     bool exposureFixed_{false};
     bool exposureSet_{false};
+    bool denoise_{true};
+    bool temporal_{true};
     std::chrono::steady_clock::time_point lastWrite_;
 
     bool frameActive() const { return frameActive_ && tracer_ && tracer_->samplesPerPixel() < targetSpp_; }
@@ -616,6 +648,11 @@ private:
         settings_.clampIndirect = numberOr(cmd["clampIndirect"], 10.0f);
         settings_.seed = static_cast<uint32_t>(numberOr(cmd["seed"], 1));
         targetSpp_ = std::max(1, static_cast<int>(numberOr(cmd["targetSpp"], 256)));
+        denoise_ = boolOr(cmd["denoise"], true);
+        temporal_ = boolOr(cmd["temporal"], true);
+        // The frame just left becomes the history this view reprojects from (when it was denoised).
+        if (temporal_) tracer_->commitHistory();
+        else tracer_->clearHistory();
         exposureFixed_ = cmd["exposureEv"].type == Json::Number;
         exposureEv_ = exposureFixed_ ? static_cast<float>(cmd["exposureEv"].num) : 0.0f;
         exposureSet_ = exposureFixed_;
@@ -651,11 +688,21 @@ private:
 
     void writeFrame() {
         const render::RenderOutput out = tracer_->readback();
+        std::vector<Vec3> color = out.color;
+        double denoiseMs = 0.0;
+        uint32_t historyPixels = 0;
+        if (denoise_) {
+            metalpt::DenoiseOptions options;
+            options.temporal = temporal_;
+            color = tracer_->denoise(options);
+            denoiseMs = tracer_->denoiseGpuMs();
+            historyPixels = tracer_->historyPixels();
+        }
         if (!exposureSet_) {
-            exposureEv_ = view::autoExposureEv(out.color);
+            exposureEv_ = view::autoExposureEv(color);
             exposureSet_ = true;
         }
-        const texture::ImageBuffer image = view::toDisplayImage(out.color, out.width, out.height, exposureEv_, view::AgxLook::Base);
+        const texture::ImageBuffer image = view::toDisplayImage(color, out.width, out.height, exposureEv_, view::AgxLook::Base);
         std::vector<uint8_t> rgba(static_cast<size_t>(out.width) * out.height * 4);
         for (size_t p = 0; p < static_cast<size_t>(out.width) * out.height; ++p) {
             const uint8_t* src = image.data.data() + p * image.channels;
@@ -674,6 +721,7 @@ private:
         s << "{\"event\":\"frame\",\"seq\":" << seq_ << ",\"spp\":" << tracer_->samplesPerPixel() << ",\"rays\":" << out.rays
           << ",\"gpuMs\":" << tracer_->frameGpuMs() << ",\"width\":" << out.width << ",\"height\":" << out.height
           << ",\"coverage\":" << out.geometryCoverage << ",\"exposureEv\":" << exposureEv_ << ",\"path\":" << jsonString(final.string())
+          << ",\"denoised\":" << (denoise_ ? "true" : "false") << ",\"denoiseMs\":" << denoiseMs << ",\"historyPixels\":" << historyPixels
           << ",\"done\":" << (tracer_->samplesPerPixel() >= targetSpp_ ? "true" : "false") << "}";
         emit(s.str());
     }

@@ -72,9 +72,19 @@ Agreement: mean ratio 0.99999; 8x8-block mean relative difference 0.040%; 19 of 
 
 **Not done.** Frames are noisy at low spp (Phase 4 denoises); the cut rebuild (~100 ms for 240k triangles) is synchronous in the helper, so a long drag across the scene stalls frames briefly each tenth of a radius; the resolution is capped at 1280 wide.
 
+## Phase 4 (2026-10-20): GPU denoising and temporal reuse
+
+**Denoiser.** `denoise::denoiseATrous` ported to Metal compute (`kDenoiseKernelSource`: `dn_prepare`, `dn_gradients`, `dn_blur`, `dn_atrous` per iteration, `dn_finish`), reading the accumulation buffer directly (mean colour, albedo, normal, depth, luminance variance, geometry mask) and remodulating by albedo at the end. `MetalPathTracer::denoise()` runs it on the current frame. Checked against the CPU filter on the same raw frame (`denoiseCheck` writes `denoised_cpu.f32`): Flatiron 640x360 at 16 spp, max relative difference 1.8e-5, mean 2e-7, no block over 2%: the same algorithm to float rounding. 2.5 ms on the GPU vs 23 ms on the CPU (20 threads). The test pins max relative difference < 1e-3.
+
+**Temporal reuse.** On each view change the helper commits the last denoised frame as history (`commitHistory`: illumination, samples it stands for, depth, normal, and the view). `dn_prepare` projects each new pixel's hit point into the previous view, takes that history pixel when its depth agrees within 2% and its normal within 37°, and combines it with the new samples as a weighted mean (history capped at 32 samples, so stale light fades), scaling the variance down accordingly; `dn_finish` writes the next history. Measured in resident mode on Flatiron 640x360: identical camera 43,536-45,278 of ~50,500 geometry pixels reused at 1 spp; after a 12 m sideways move 43,536; after a 60 m move 39,412; with `temporal: false` 0. The viewport HUD reports "Denoised on the GPU in N ms · M px reused from the last view".
+
+**Live** (isolated instance, Flatiron through the agent): the toggle shows the denoised frame from the first sample on; a drag restarts at the new view with most pixels reused, so the image never falls back to raw noise; console clean. A bug found on the way: the history buffer swap left the output buffer nil after the first commit, so the second move reused nothing until the allocator was taught to replace it.
+
+**Honest limits.** The temporal blend trusts history that passes the depth/normal test, so lighting that changes between views (the Sun toggle) lingers up to the 32-sample cap before fading; disocclusions show the raw-sample noise until the filter catches up; the helper's cut rebuild is still synchronous.
+
 ## Next (plan)
 
-- Phase 4: the a-trous denoiser on the GPU and temporal reuse across camera moves.
+- Ray-cost work against the Phase 1 baseline: rasterized primary hit, coarser cuts for bounce rays, merged acceleration structures, better samplers, MetalFX upscale.
 - Re-textured coarse levels for charted photogrammetry, so the DAG regains its depth without crossing seams.
 - Phase 4: the a-trous denoiser on the GPU and temporal reuse.
 - Rays: rasterize the camera hit with the existing WebGPU cluster pass; coarser cuts for bounce and shadow rays; any-hit shadow rays (done); merged per-chunk acceleration structures; better samplers; MetalFX upscale.
