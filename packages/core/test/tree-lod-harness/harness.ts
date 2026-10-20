@@ -138,11 +138,14 @@ function shot(opts: { level: 0 | 1 | 2 | 3 | null; distM: number; lift: number; 
     return { ...imageStats(), triangles: info.triangles, calls: info.calls, stats: { ...lod!.stats } };
 }
 
-/** A frame in the middle of a handover: the hero at `distM` with a filtered distance already there (snap), edges as the distance sets them. */
+/**
+ * A frame in the middle of a handover: the hero at `distM` with a filtered distance already there (snap), edges as the distance
+ * sets them. The camera creeps (1 cm a frame) so it is not at rest: a camera at rest settles every tree on one level.
+ */
 function transitionShot(distM: number, lift: number, fov: number): Record<string, unknown> {
     lod!.forceLevel(null);
-    heroView(distM, lift, fov);
-    clock += 5000; for (let i = 0; i < 3; i++) frame();
+    clock += 5000;
+    for (let i = 1; i <= 3; i++) { heroView(distM + 0.01 * i, lift, fov); frame(); }
     return { ...imageStats(), triangles: renderer.info.render.triangles, stats: { ...lod!.stats } };
 }
 

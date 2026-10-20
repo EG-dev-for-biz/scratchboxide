@@ -14,13 +14,10 @@ describe('Zero Building Clipping & Atomic Building Integrity', () => {
       const agentsMdPath = path.resolve(__dirname, '../../../AGENTS.md');
       const content = fs.readFileSync(agentsMdPath, 'utf8');
 
-      expect(content).toContain('### Rule: Zero Building Clipping During Tile Extraction & Ingestion (Atomic Building Integrity)');
-      expect(content).toContain('Atomic Architectural Entity Invariant (Zero-Cut Extraction)');
-      expect(content).toContain('Unbounded Vertical Skyward Extent');
-      expect(content).toContain('Boundary Dilation & Connected Component Expansion');
-      expect(content).toContain('Multi-Tier Zenith & Horizon Frustum Encompassment');
-      expect(content).toContain('Unified Multi-District Contiguous Tile Streaming');
-      expect(content).toContain('Automated Verification & Rejection Gate');
+      // The rule is stated once in AGENTS.md (§5); the behaviour itself is checked by the extraction tests below.
+      expect(content).toContain('**Atomic building integrity.** No extraction boundary, slice or frustum may cut through a building.');
+      expect(content).toContain('The vertical extent is unbounded upward.');
+      expect(content).toContain('Grow the boundary to whole connected structures and natural clearings.');
     });
 
     it('should have Ingestion Quality Standards codified in google-3d-tiles-ingestion SKILL.md', () => {

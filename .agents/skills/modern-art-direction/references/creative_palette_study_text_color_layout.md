@@ -250,26 +250,3 @@ To ensure that choices are **never arbitrary**, use this decision matrix to pair
 | **Sustainable Living / Health** | `contemporary-humanist` (Fraunces + Albert) | `scandi-celadon` or `sonoran-dune` | Asymmetric Duo $\rightarrow$ Bento Grid $\rightarrow$ Sovereign Void |
 | **Venture / Private Equity** | `forensic-dispatch` (Source Serif + Jakarta) | `prussian-chalk` (Light) or `travertine-sun` | Monograph Index $\rightarrow$ Telemetry Matrix $\rightarrow$ Asymmetric Duo |
 | **Media / Sports / Velocity** | `compressed-poster` (Oswald + Jakarta) | `cadmium-bone` or `nordic-amber` | Scale-Collision Rupture $\rightarrow$ Full-Bleed 21:9 $\rightarrow$ Contact Sheet |
-
----
-
-# Part 5: Practical Implementation Guide in Code
-
-When authoring presentations via `md_to_slides_compiler.mjs`, invoke these systems directly via YAML frontmatter:
-
-```yaml
----
-title: "THE HYPERSONIC MANIFESTO"
-subtitle: "Kinetic Geometry Across Superformed Alloys"
-brand: "AEROSPACE MONOGRAPH"
-ratio: "21:9"
-font_pairing: "aerospace-telemetry"
-color: "06B6D4"
-palette: "liquid-mercury"
-theme: "dark"
-bleed: "full"
-kicker: "MONOGRAPH 08 // AERODYNAMICS"
----
-```
-
-When you specify `font_pairing: "aerospace-telemetry"` and `palette: "liquid-mercury"`, the compiler automatically binds the display, body, and monospace font faces, generates the exact 60-30-8-2 color harmonies, builds the matching directional optical scrim, and locks the 21:9 ultrawide geometry.

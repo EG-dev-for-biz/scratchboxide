@@ -62,6 +62,8 @@ import {
     PBR_MATERIAL_TOOL_DECLARATIONS, pbrMaterialHandlers,
     LOCAL_SF3D_TOOL_DECLARATIONS, localSf3DHandlers,
     TURNAROUND_TOOL_DECLARATIONS, turnaroundHandlers,
+    NANO_BANANA_TOOL_DECLARATIONS, nanoBananaHandlers,
+    IMAGE_GENERATION_TOOL_DECLARATIONS, imageGenerationHandlers,
     type ToolDeclaration,
     type ToolHandler,
     type ToolContext,
@@ -92,6 +94,8 @@ const STANDALONE_PACKS: Array<[ToolDeclaration[], Record<string, ToolHandler>]> 
     [PBR_MATERIAL_TOOL_DECLARATIONS, pbrMaterialHandlers],
     [LOCAL_SF3D_TOOL_DECLARATIONS, localSf3DHandlers],
     [TURNAROUND_TOOL_DECLARATIONS, turnaroundHandlers],
+    [NANO_BANANA_TOOL_DECLARATIONS, nanoBananaHandlers],
+    [IMAGE_GENERATION_TOOL_DECLARATIONS, imageGenerationHandlers],
 ];
 
 const allDeclarations: ToolDeclaration[] = [];

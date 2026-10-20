@@ -27,13 +27,14 @@ import { writeMassingClayGlb, writeMassingTexturedGlb, type FaceTexture, type Te
 import { readFaceOrtho, runMassing, type MassingNode, type MassingRun } from './native-massing';
 import { baseLegend, fillNearest, medianColour, SRC, textureFromOrtho } from './face-textures';
 import { facadeMaterialsEnabled } from '../facade-material-evidence';
+import { auditMassingRun, UNSURE_PROVENANCE } from './residual-audit-e';
 
 /** Below this share of its texels covered by the tile, a face is filled with one median colour. */
 export const LOW_COVERAGE = 0.35;
 import type { SolarRoofSegment } from './solar-roof';
 
 /** The stage version; the material channels (massing-materials.ts) change every E layer's textured twin. */
-export const PIPELINE_E_VERSION = `pipeline-e/v1${facadeMaterialsEnabled() ? '+mat1' : ''}`;
+export const PIPELINE_E_VERSION = `pipeline-e/v2${facadeMaterialsEnabled() ? '+mat1' : ''}`;
 
 /** SCRATCHBOX_STAGED_PIPELINE=e turns pipeline E on (off by default). */
 export function stagedPipelineE(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -79,7 +80,13 @@ export interface MassingStageResult {
 
 /** The provenance record of a node of E's layer (open labels). */
 export function massingProvenance(node: Pick<MassingNode, 'kind' | 'provenance' | 'confidence'>, massing: Pick<Massing, 'check'>): ProvenanceRecord {
-    if (node.kind === 'residual') return { label: 'as-scanned', measuredGeometry: true, method: 'scan triangles the clean massing does not explain (clearly proud of it, cut into it, or the ground apron), kept with their tile photo', sources: [{ kind: 'tile-extraction', id: 'isolate' }] };
+    if (node.kind === 'residual') {
+        const unsure = node.provenance === UNSURE_PROVENANCE;
+        return {
+            label: 'as-scanned', measuredGeometry: true, method: 'scan triangles the clean massing does not explain (clearly proud of it, cut into it, or the ground apron), kept with their tile photo', sources: [{ kind: 'tile-extraction', id: 'isolate' }],
+            ...(unsure ? { note: 'residual audit: unsure (neither a real object nor a scan artefact by its measures); kept as scanned, labelled' } : {})
+        };
+    }
     // openings cut from an enhanced plate's lattice (or read from a plate and checked on the tile): drawn by an image model
     if (node.provenance === 'generated') return { label: 'generated', measuredGeometry: false, confidence: Math.max(0, Math.min(1, node.confidence ?? 0.5)), method: `pipeline E enhanced mode: ${node.kind} cut where an AI-enhanced wall plate shows it (the plate's own lattice, its lines fitted to the plate's edges); no window grammar of the scan placed it`, sources: [{ kind: 'stage-output', id: 'pipeline-e-enhance' }] };
     if (node.provenance === 'photo-inferred' || (node.kind === 'roof' && node.provenance.includes('photo-inferred'))) return { label: 'photo-inferred', measuredGeometry: false, confidence: Math.max(0, Math.min(1, node.confidence ?? 0.5)), method: `pipeline E inference: ${node.kind} read from the tile's photo and kept where the scan agrees`, sources: [{ kind: 'stage-output', id: 'pipeline-e-inference' }] };
@@ -91,9 +98,24 @@ export function massingProvenance(node: Pick<MassingNode, 'kind' | 'provenance' 
 }
 
 /** Runs the native tool on the massing (and, when given, the inferred openings and sweeps). */
-export async function runNativeMassing(m: Pick<Massing, 'parts' | 'meshes'>, opts: { tilePath: string; isolateGlb: string; dir: string; sweeps?: SweepItem[]; openings?: OpeningItem[]; faceSweeps?: FaceSweepItem[]; params?: Record<string, number>; signal?: AbortSignal }): Promise<MassingRun> {
-    const text = massingSpecText(m, { outDir: opts.dir, tile: opts.tilePath, isolate: opts.isolateGlb, params: { ...MASSING_PARAMS, ...(opts.params ?? {}) }, sweeps: opts.sweeps, openings: opts.openings, faceSweeps: opts.faceSweeps });
-    return runMassing(text, opts.dir, { signal: opts.signal });
+/**
+ * Runs the native tool on the massing (and, when given, the inferred openings and sweeps), then the residual audit on its
+ * residual (residual-audit-e.ts): scan artefacts removed, unsure clusters labelled, real objects kept as scanned. An audit
+ * that fails leaves the residual as the native tool kept it, with the error on `run.audit`.
+ */
+export async function runNativeMassing(m: Pick<Massing, 'parts' | 'meshes'>, opts: { tilePath: string; isolateGlb: string; dir: string; sweeps?: SweepItem[]; openings?: OpeningItem[]; faceSweeps?: FaceSweepItem[]; params?: Record<string, number>; signal?: AbortSignal; groundY?: number; audit?: boolean }): Promise<MassingRun> {
+    const params = { ...MASSING_PARAMS, ...(opts.params ?? {}) } as Record<string, number>;
+    const text = massingSpecText(m, { outDir: opts.dir, tile: opts.tilePath, isolate: opts.isolateGlb, params, sweeps: opts.sweeps, openings: opts.openings, faceSweeps: opts.faceSweeps });
+    const run = await runMassing(text, opts.dir, { signal: opts.signal });
+    if (opts.audit !== false && params.residual !== 0 && run.nodes.some(n => n.kind === 'residual')) {
+        try {
+            run.audit = await auditMassingRun(run, { ...(opts.groundY !== undefined ? { groundY: opts.groundY } : {}), ...(opts.signal ? { signal: opts.signal } : {}) });
+        } catch (err) {
+            if (opts.signal?.aborted) throw err;
+            run.audit = { error: err instanceof Error ? err.message : String(err) };
+        }
+    }
+    return run;
 }
 
 /** The plain face textures: each face's ortho, the uncovered texels filled from the nearest covered, unseen faces the median. */
@@ -145,7 +167,7 @@ export async function runMassingStage(input: MassingStageInput, stage = 'remesh'
     fs.writeFileSync(path.join(input.outDir, 'massing.json'), JSON.stringify(massing, null, 1));
     if (!massing.check.ok) return { massing, timingsMs };
     t = Date.now();
-    const run = await runNativeMassing(massing, { tilePath: input.tilePath, isolateGlb: input.isolateGlb, dir: path.join(input.outDir, 'native'), ...(input.signal ? { signal: input.signal } : {}) });
+    const run = await runNativeMassing(massing, { tilePath: input.tilePath, isolateGlb: input.isolateGlb, dir: path.join(input.outDir, 'native'), groundY: input.groundY, ...(input.signal ? { signal: input.signal } : {}) });
     timingsMs.native = Date.now() - t;
     t = Date.now();
     const { textures, legend } = plainTextures(run);

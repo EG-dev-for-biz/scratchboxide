@@ -10,6 +10,7 @@
 import type { IOperatorContext, OperatorDefinition } from './types';
 import type { Scene3DData } from '../../canvas-types';
 import { readStagedBuild, type StagedSceneData } from '../../primitives/scene3d/stagedBuild/stagedBuildState';
+import { withStagedMaterialMode } from '../../primitives/scene3d/stagedBuild/texturedTwins';
 import { resolveOverrideColor } from '../../primitives/scene3d/overrideColor';
 import {
     TileClayProcessor,
@@ -39,6 +40,8 @@ export const PBR_PRESETS: Record<string, any> = {
 /** What switching a staged build between clay and its textured twins did (sb_set_staged_material_mode). */
 export interface StagedMaterialModeResult {
     mode: 'clay' | 'textured';
+    /** The scene's render mode after the switch (clay for a clay view, so an object at the place is clay too). */
+    renderMode?: string;
     provenance?: boolean;
     /** Layers in the scene with a textured twin (they switch; the rest stay clay). */
     texturedLayers: number;
@@ -47,9 +50,12 @@ export interface StagedMaterialModeResult {
 }
 
 /**
- * Sets how a staged location build is shown: stagedBuild.materialMode ('clay' | 'textured') and, optionally, the
- * provenance view (stagedBuildView.provenance). Scene data only: no layer, object or geometry is touched; the viewport
- * loads each layer's textured twin and crossfades to it (or back), and layers without one stay clay. Mutates `data`.
+ * Sets how a staged location build is shown: stagedBuild.materialMode ('clay' | 'textured'), the matching scene
+ * renderMode (withStagedMaterialMode: clay is renderMode 'clay', so an object standing at the place is clay too, and
+ * textured puts back the mode clay replaced) and,
+ * optionally, the provenance view (stagedBuildView.provenance). Scene data only: no layer, object or geometry is touched;
+ * the viewport loads each layer's textured twin and crossfades to it (or back), and layers without one stay clay. The
+ * overlay's toggle writes the same fields, so both choices are saved alike. Mutates `data`.
  */
 export function applyStagedMaterialMode(data: Scene3DData, params: { mode?: unknown; provenance?: unknown }): StagedMaterialModeResult {
     const mode = params.mode;
@@ -58,12 +64,16 @@ export function applyStagedMaterialMode(data: Scene3DData, params: { mode?: unkn
     const staged = readStagedBuild(data);
     if (!staged) throw new Error('The active scene is not a staged location build (no stagedBuild): stage a place with google_3d_tiles_get_clay first.');
     const scene = data as StagedSceneData;
-    scene.stagedBuild = { ...staged, materialMode: mode };
+    const next = withStagedMaterialMode(scene, mode);
+    scene.stagedBuild = next.stagedBuild;
+    if (next.renderMode !== undefined) scene.renderMode = next.renderMode as Scene3DData['renderMode'];
+    if (next.stagedBuildView !== undefined) scene.stagedBuildView = next.stagedBuildView;
     if (typeof params.provenance === 'boolean') scene.stagedBuildView = { ...(scene.stagedBuildView ?? {}), provenance: params.provenance };
     const live = staged.layers.filter(l => !l.retired);
     const tp = staged.texturePass;
     return {
         mode,
+        ...(scene.renderMode !== undefined ? { renderMode: scene.renderMode } : {}),
         ...(typeof params.provenance === 'boolean' ? { provenance: params.provenance } : {}),
         texturedLayers: live.filter(l => l.textured).length,
         layers: live.length,

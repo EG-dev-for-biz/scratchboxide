@@ -96,7 +96,11 @@ export function bandProfile(t0: number, t1: number, depth: number): Array<[numbe
     return [[0, t0], [depth, t0 + slope], [depth, t1], [0, t1]];
 }
 
-/** A parapet's profile: the wall continued up, a coping, the inner face back down. */
-export function parapetProfile(topY: number, height: number, thickness: number): Array<[number, number]> {
-    return [[0, topY], [0, topY + height], [-thickness, topY + height], [-thickness, topY]];
+/**
+ * A parapet's profile: the wall continued up, a coping, the inner face back down. Heights are above the wall's own top
+ * (sweep it with `relativeToTop`): a part's `topY` is only a cap over its roof planes, and a parapet drawn at it stood
+ * metres above a roof whose planes sit lower (488 Broadway: 34.3 m against a roof at 24-26 m).
+ */
+export function parapetProfile(height: number, thickness: number): Array<[number, number]> {
+    return [[0, 0], [0, height], [-thickness, height], [-thickness, 0]];
 }

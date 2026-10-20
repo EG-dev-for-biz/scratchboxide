@@ -57,6 +57,8 @@
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <queue>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -220,6 +222,36 @@ struct LodParams {
     double shellInsetPerReach{0.45};
     double coverageCellPerLeaf{0.6};
     double textureLeafStretch{2.0};              // the viewer's leaf stretch (tree-texture-library.ts DEFAULT_LEAF_STRETCH), for the cut-out estimate
+    // Crown cards: the mid level drawn as a few large cards over the crown instead of the mid clusters (tens of thousands
+    // of triangles a tree). A card is one quad (2 triangles) showing a dense spray of leaves, a cell of the shared card
+    // atlas (CrownCardLayout: crownCardCols x crownCardRows cells, each crownCardLeaves leaves within crownCardRadius of
+    // the cell's centre in cell units, denser toward it as radius ~ u^crownCardCentreBias, each crownCardLeafLength long
+    // (+-20%), pointing outward within crownCardLeafSpreadRad; the spray's outline lobed, crownCardLobes lobes dipping
+    // crownCardLobeDepth). A card's side is crownCardSidePerReach cluster reaches,
+    // within [crownCardMinM, crownCardMaxM], so a tree's card count follows its crown's area. Cards stand at the placed
+    // clusters (crownCardCandidates of them a tree, or crownCardCandidatesPerStation of its clusters when more), facing the reference crown's outward normal or tilted from it
+    // by crownCardTiltRad (four ways), and are chosen greedily (each next card the one covering the most of the crown not
+    // yet covered, in coverage views of crownCardSelectCellsPerSide cells per card side) until the projected coverage the
+    // mid clusters would give, times crownCardCoverageShare, is reached; at most crownCardMaxPerArea x the reference
+    // ellipsoid's area / side^2 cards. The cut-out masks are measured at crownCardMaskPx pixels a cell.
+    bool crownCards{true};
+    double crownCardSidePerReach{2.0};
+    double crownCardMinM{0.8}, crownCardMaxM{2.6};
+    double crownCardCoverageShare{1.0};
+    double crownCardMaxPerArea{5.0};
+    double crownCardTiltRad{0.6};
+    int crownCardCandidates{240};               // candidate places a tree, at least; ...
+    double crownCardCandidatesPerStation{0.5};  // ... or this share of its placed clusters, when more
+    double crownCardSelectCellsPerSide{8};
+    int crownCardCols{2}, crownCardRows{2};
+    int crownCardLeaves{300};
+    double crownCardRadius{0.40};
+    double crownCardCentreBias{0.6};
+    double crownCardLeafLength{0.09};
+    double crownCardLeafSpreadRad{0.9};
+    int crownCardLobes{3};                      // lobes of a cell's outline (cells alternate this and one more)
+    double crownCardLobeDepth{0.35};            // how far the outline dips between lobes (share of crownCardRadius)
+    int crownCardMaskPx{128};
     // The season cue a crown's measured colour gives (tile_vegetation crowns.json colour): leafiness rises from 0 to 1 as
     // the share of its cells that pass the green-vegetation test rises from seasonGreenBare to seasonGreenFull; with no
     // judged cells, as the mean's chroma rises from seasonChromaBare to seasonChromaFull, weighted by how green its hue is
@@ -275,12 +307,129 @@ struct ClusterVariant {
     bool terminal{true};
 };
 
+/**
+ * The crown cards' atlas: cols x rows cells, each a spray of leaves on a card. A leaf is an ellipse centred (u, v) in the
+ * card's own square ([0, 1]^2, s across, t up), its long axis at `angle` (rad from +s), `length` long (card units) and
+ * length x the drawn leaf's aspect wide; `pick` in [0, 1) chooses its leaf image and shade where a viewer textures it.
+ * A viewer bakes the card atlas from this list (the leaf library's cells, or plain ellipses in clay), so what is measured
+ * here is what it draws.
+ */
+struct CrownCardLayout {
+    struct Leaf { float u{0.5f}, v{0.5f}, angle{0}, length{0.1f}, pick{0}; };
+    int cols{2}, rows{2};
+    std::vector<std::vector<Leaf>> cells;
+    int cellCount() const { return cols * rows; }
+};
+
+/** A card cell's cut-out at px x px (row t, column s): 1 where a leaf covers it. */
+struct CardMask {
+    int px{0};
+    std::vector<uint8_t> bits;                   // cells x px x px
+    bool at(int cell, double s, double t) const {
+        if (px <= 0) return true;
+        const int i = std::clamp(static_cast<int>(s * px), 0, px - 1), j = std::clamp(static_cast<int>(t * px), 0, px - 1);
+        return bits[(static_cast<size_t>(cell) * static_cast<size_t>(px) + static_cast<size_t>(j)) * static_cast<size_t>(px) + static_cast<size_t>(i)] != 0;
+    }
+    /** Share of a cell's square its leaves cover. */
+    double fill(int cell) const {
+        if (px <= 0) return 1.0;
+        size_t n = 0;
+        const size_t off = static_cast<size_t>(cell) * static_cast<size_t>(px) * static_cast<size_t>(px);
+        for (size_t k = 0; k < static_cast<size_t>(px) * static_cast<size_t>(px); ++k) n += bits[off + k];
+        return static_cast<double>(n) / (static_cast<double>(px) * px);
+    }
+};
+
 struct ClusterLibrary {
     LodParams params;
     std::vector<ClusterVariant> variants;
     std::vector<LibraryMesh> twigs;      // unit tubes, one per taper (LodParams::twigTapers)
+    std::vector<LibraryMesh> cards;      // the crown cards: a unit quad in z = 0 facing +z, one per atlas cell (empty: no crown cards)
+    CrownCardLayout cardLayout;
+    CardMask cardMask;                   // the cells cut out with plain ellipses of the blade's width ratio (clay)
     size_t twigTriangles() const { return twigs.empty() ? 0 : twigs.front().triangles(); }
 };
+
+/** The card atlas the parameters describe (deterministic: a hash of the cell and the leaf). */
+inline CrownCardLayout buildCrownCardLayout(const LodParams& P) {
+    CrownCardLayout L;
+    L.cols = std::max(1, P.crownCardCols);
+    L.rows = std::max(1, P.crownCardRows);
+    const uint64_t seed = 0xC4A2DCA2D5ull;
+    const double R = std::clamp(P.crownCardRadius, 0.05, 0.5);
+    for (int c = 0; c < L.cellCount(); ++c) {
+        std::vector<std::pair<double, CrownCardLayout::Leaf>> leaves;
+        const double lobes = std::max(1, P.crownCardLobes + c % 2), phase = 2 * M_PI * hashUnit(seed, static_cast<uint64_t>(c), 0xF00Dull);
+        for (int i = 0; i < std::max(1, P.crownCardLeaves); ++i) {
+            const double a = hashUnit(seed, static_cast<uint64_t>(c), static_cast<uint64_t>(5 * i));
+            const double b = hashUnit(seed, static_cast<uint64_t>(c), static_cast<uint64_t>(5 * i + 1));
+            const double h = hashUnit(seed, static_cast<uint64_t>(c), static_cast<uint64_t>(5 * i + 2));
+            const double g = hashUnit(seed, static_cast<uint64_t>(c), static_cast<uint64_t>(5 * i + 3));
+            const double th = 2 * M_PI * b;
+            // the spray's outline: lobed, so a card does not read as a disc (crownCardLobes lobes, crownCardLobeDepth deep)
+            const double lobe = 1.0 - std::clamp(P.crownCardLobeDepth, 0.0, 0.9) * (0.5 + 0.5 * std::cos(lobes * th + phase));
+            const double r = R * lobe * std::pow(a, std::max(0.05, P.crownCardCentreBias));
+            CrownCardLayout::Leaf lf;
+            lf.u = static_cast<float>(0.5 + r * std::cos(th));
+            lf.v = static_cast<float>(0.5 + r * std::sin(th));
+            lf.angle = static_cast<float>(th + P.crownCardLeafSpreadRad * (2 * h - 1));
+            lf.length = static_cast<float>(P.crownCardLeafLength * (0.8 + 0.4 * g));
+            lf.pick = static_cast<float>(hashUnit(seed, static_cast<uint64_t>(c), static_cast<uint64_t>(5 * i + 4)));
+            leaves.push_back({r, lf});
+        }
+        // outer leaves first: a viewer draws them in this order, so the dense centre lies on top
+        std::stable_sort(leaves.begin(), leaves.end(), [](const auto& x, const auto& y) { return x.first > y.first; });
+        std::vector<CrownCardLayout::Leaf> cell;
+        for (const auto& l : leaves) cell.push_back(l.second);
+        L.cells.push_back(std::move(cell));
+    }
+    return L;
+}
+
+/**
+ * The cut-out of every cell at px x px: each leaf an ellipse `length` long and `length` x `aspect` wide, both axes scaled by
+ * sqrt(areaScale) (a textured leaf drawn at the clay leaf's area: areaScale = clay aspect / its aspect; a plain ellipse: 1).
+ */
+inline CardMask rasterizeCardMask(const CrownCardLayout& L, double aspect, double areaScale, int px) {
+    CardMask m;
+    m.px = std::max(8, px);
+    const size_t P2 = static_cast<size_t>(m.px) * static_cast<size_t>(m.px);
+    m.bits.assign(static_cast<size_t>(L.cellCount()) * P2, 0);
+    const double k = std::sqrt(std::max(1e-6, areaScale));
+    for (int c = 0; c < L.cellCount() && c < static_cast<int>(L.cells.size()); ++c) {
+        for (const auto& lf : L.cells[static_cast<size_t>(c)]) {
+            const double a = 0.5 * lf.length * k, b = 0.5 * lf.length * std::max(0.02, aspect) * k;
+            const double ca = std::cos(lf.angle), sa = std::sin(lf.angle), ext = std::max(a, b);
+            const int i0 = std::max(0, static_cast<int>(std::floor((lf.u - ext) * m.px))), i1 = std::min(m.px - 1, static_cast<int>(std::ceil((lf.u + ext) * m.px)));
+            const int j0 = std::max(0, static_cast<int>(std::floor((lf.v - ext) * m.px))), j1 = std::min(m.px - 1, static_cast<int>(std::ceil((lf.v + ext) * m.px)));
+            for (int j = j0; j <= j1; ++j) {
+                for (int i = i0; i <= i1; ++i) {
+                    const double ds = (i + 0.5) / m.px - lf.u, dt = (j + 0.5) / m.px - lf.v;
+                    const double x = (ds * ca + dt * sa) / a, y = (-ds * sa + dt * ca) / b;
+                    if (x * x + y * y <= 1.0) m.bits[static_cast<size_t>(c) * P2 + static_cast<size_t>(j) * static_cast<size_t>(m.px) + static_cast<size_t>(i)] = 1;
+                }
+            }
+        }
+    }
+    return m;
+}
+
+/** A crown card's mesh for atlas cell `cell`: a unit quad in z = 0 facing +z, its TEXCOORD_0 in that cell of the atlas. */
+inline LibraryMesh buildCrownCard(const CrownCardLayout& L, int cell, const std::string& name) {
+    LibraryMesh m;
+    m.name = name;
+    const float cx = static_cast<float>(cell % L.cols), cy = static_cast<float>(cell / L.cols);
+    const float st[4][2] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+    for (const auto& p : st) {
+        m.positions.push_back(Vec3(p[0] - 0.5f, p[1] - 0.5f, 0));
+        m.normals.push_back(Vec3(0, 0, 1));
+        m.uvs.push_back(Vec2((cx + p[0]) / static_cast<float>(L.cols), (cy + p[1]) / static_cast<float>(L.rows)));
+    }
+    m.indices = {0, 1, 2, 0, 2, 3};
+    m.leaves = cell < static_cast<int>(L.cells.size()) ? static_cast<int>(L.cells[static_cast<size_t>(cell)].size()) : 0;
+    m.reach = 0.5 * std::sqrt(2.0);
+    return m;
+}
 
 namespace detail {
 
@@ -433,6 +582,11 @@ inline ClusterLibrary buildClusterLibrary(const LodParams& P) {
         }
     }
     for (size_t k = 0; k < P.twigTapers.size(); ++k) lib.twigs.push_back(buildTwigTube(P.twigSides, P.twigTapers[k], "sb_veggie_twig_" + std::to_string(k)));
+    if (P.crownCards) {
+        lib.cardLayout = buildCrownCardLayout(P);
+        lib.cardMask = rasterizeCardMask(lib.cardLayout, P.morphology.blade.widthRatio, 1.0, P.crownCardMaskPx);
+        for (int c = 0; c < lib.cardLayout.cellCount(); ++c) lib.cards.push_back(buildCrownCard(lib.cardLayout, c, "sb_crown_card_" + std::to_string(c)));
+    }
     return lib;
 }
 
@@ -697,6 +851,59 @@ struct CoverageViews {
         }
     }
 
+    /**
+     * One crown card (the quad `c` in order (0,0) (1,0) (1,1) (0,1) of its cell) in view `v`, cut out by cell `maskCell` of `mask`:
+     * with `set` it covers those pixels; either way it returns how many pixels of the ellipsoid's silhouette it newly covers.
+     */
+    size_t card(View& v, const Vec3 (&c)[4], const CardMask& mask, int maskCell, bool set) {
+        static const double st[4][2] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+        size_t gained = 0;
+        const int tri[2][3] = {{0, 1, 2}, {0, 2, 3}};
+        for (const auto& T : tri) {
+            double px[3], py[3];
+            for (int k = 0; k < 3; ++k) {
+                px[k] = (v.ax.dot(c[T[k]]) - v.x0) / cell - 0.5;
+                py[k] = (v.ay.dot(c[T[k]]) - v.y0) / cell - 0.5;
+            }
+            const double area = (px[1] - px[0]) * (py[2] - py[0]) - (py[1] - py[0]) * (px[2] - px[0]);
+            if (std::abs(area) < 1e-12) continue;
+            const int i0 = std::max(0, static_cast<int>(std::ceil(std::min({px[0], px[1], px[2]})))), i1 = std::min(v.w - 1, static_cast<int>(std::floor(std::max({px[0], px[1], px[2]}))));
+            const int j0 = std::max(0, static_cast<int>(std::ceil(std::min({py[0], py[1], py[2]})))), j1 = std::min(v.h - 1, static_cast<int>(std::floor(std::max({py[0], py[1], py[2]}))));
+            const double ia = 1.0 / area;
+            for (int j = j0; j <= j1; ++j) {
+                for (int i = i0; i <= i1; ++i) {
+                    const double w0 = ((px[1] - i) * (py[2] - j) - (py[1] - j) * (px[2] - i)) * ia;
+                    const double w1 = ((px[2] - i) * (py[0] - j) - (py[2] - j) * (px[0] - i)) * ia;
+                    const double w2 = 1.0 - w0 - w1;
+                    if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+                    const size_t at = static_cast<size_t>(j) * static_cast<size_t>(v.w) + static_cast<size_t>(i);
+                    if (v.covered[at]) continue;
+                    const double s = w0 * st[T[0]][0] + w1 * st[T[1]][0] + w2 * st[T[2]][0];
+                    const double t = w0 * st[T[0]][1] + w1 * st[T[1]][1] + w2 * st[T[2]][1];
+                    if (!mask.at(maskCell, s, t)) continue;
+                    gained += v.ell[at];
+                    if (set) { v.covered[at] = 1; v.covEll += v.ell[at]; v.covHull += v.hull[at]; }
+                }
+            }
+        }
+        return gained;
+    }
+
+    /** A placed card's corners (unit quad scaled by in.s, rotated by in.q, at in.t). */
+    static void cardCorners(const Instance& in, Vec3 (&c)[4]) {
+        static const float q[4][2] = {{-0.5f, -0.5f}, {0.5f, -0.5f}, {0.5f, 0.5f}, {-0.5f, 0.5f}};
+        for (int k = 0; k < 4; ++k) c[k] = in.t + in.q.rotate(Vec3(q[k][0] * in.s.x, q[k][1] * in.s.y, 0));
+    }
+
+    /** Covers what one placed card covers in every view (set), or counts what it would newly cover. */
+    size_t addCard(const Instance& in, const CardMask& mask, int maskCell, bool set = true) {
+        Vec3 c[4];
+        cardCorners(in, c);
+        size_t n = 0;
+        for (auto& v : views) n += card(v, c, mask, maskCell, set);
+        return n;
+    }
+
     /** Covers what the blades of one placed library mesh cover, in every view. */
     void add(const LibraryMesh& m, const Instance& in, const Cutout* cut = nullptr) {
         if (m.bladeTri.empty()) return;
@@ -808,8 +1015,10 @@ struct CoverageReport {
     double leafiness{1}, target{0}, cellM{0};
     int views{0};
     CoverageLevel level0Before;                  // the near level before the fill
-    CoverageLevel level0, nearMid, mid;          // solid leaves (clay), after the fill
+    CoverageLevel level0, nearMid, mid;          // solid leaves (clay), after the fill; `mid` is what the mid level draws (its crown cards when it has them)
     CoverageLevel level0Cutout, midCutout;       // cut out as the chosen leaf texture is (only with textures)
+    CoverageLevel midClusters, midClustersCutout; // the mid clusters (what the mid level drew before crown cards; the cards' target)
+    double cardTarget{0};                        // the projected coverage the crown cards were placed toward
     size_t fillStations{0};
     CrownEllipsoid reference;                    // the measured crown the shares are of (surface samples and footprint ring)
 };
@@ -842,11 +1051,18 @@ struct TreeLod {
     float twigRadiusMinM{0}, twigRadiusMedianM{0}, twigRadiusMaxM{0};   // of the pruned segments drawn as twigs (the radius they start at)
     LeafLevelMeasure level0, level1, nearMid;
     CoverageReport coverage;
-    double msWood{0}, msTwigs{0}, msStations{0}, msRepair{0}, msFill{0}, msMeasure{0};   // where the build's time went
+    // the mid level's crown cards (LodParams crownCards*), per library card (atlas cell); when there are any the mid level
+    // draws them instead of the mid clusters
+    std::vector<std::vector<Instance>> cards;
+    double cardSideM{0};
+    size_t cardCandidates{0};
+    size_t cardCount() const { size_t n = 0; for (const auto& c : cards) n += c.size(); return n; }
+    bool midCards() const { return cardCount() > 0; }
+    double msWood{0}, msTwigs{0}, msStations{0}, msRepair{0}, msFill{0}, msMeasure{0}, msCards{0};   // where the build's time went
     std::string error;
     /** Triangles drawn at the near level / the mid level / the near-mid level (wood, twigs and clusters, instances expanded). */
     size_t drawnLevel0() const { return woodTriangles + twigTriangles + level0.clusterTriangles; }
-    size_t drawnLevel1() const { return woodTriangles + level1.clusterTriangles; }
+    size_t drawnLevel1() const { return woodTriangles + (midCards() ? 2 * cardCount() : level1.clusterTriangles); }
     size_t drawnNearMid() const { return woodTriangles + nearMid.clusterTriangles; }
     /** Triangles of the far level given its blob leaf masses: the trunk and main limbs and the masses. */
     size_t drawnFar(size_t blobTriangles) const { return farWoodTriangles + blobTriangles; }
@@ -1001,6 +1217,117 @@ struct ReachTracker {
         }
     }
 };
+
+
+/** Area of an ellipsoid (Knud Thomsen's approximation, within about 1%). */
+inline double ellipsoidArea(const CrownEllipsoid& e) {
+    const double p = 1.6075, a = std::pow(e.radii[0], p), b = std::pow(e.radii[1], p), c = std::pow(e.radii[2], p);
+    return 4.0 * M_PI * std::pow((a * b + a * c + b * c) / 3.0, 1.0 / p);
+}
+
+/** The outward normal of an ellipsoid's level set through p (its gradient); straight up at the centre. */
+inline Vec3 ellipsoidNormal(const CrownEllipsoid& e, const Vec3& p) {
+    const double cy = std::cos(e.yawRad), sy = std::sin(e.yawRad);
+    const Vec3 axes[3] = {Vec3(static_cast<float>(cy), 0, static_cast<float>(sy)), Vec3(0, 1, 0), Vec3(static_cast<float>(-sy), 0, static_cast<float>(cy))};
+    const Vec3 d = p - e.centre;
+    Vec3 g(0, 0, 0);
+    for (int k = 0; k < 3; ++k) g += axes[k] * static_cast<float>(d.dot(axes[k]) / std::max(1e-6, e.radii[static_cast<size_t>(k)] * e.radii[static_cast<size_t>(k)]));
+    return g.lengthSquared() > 1e-12f ? g.normalized() : Vec3(0, 1, 0);
+}
+
+/**
+ * The card atlas's cut-out as a textured leaf covers it. A viewer draws each textured leaf at the area of the clay one (its
+ * box scaled so `fill` of it covers what the clay ellipse covers: crownCardTexturedScale), so the textured cut-out is an
+ * ellipse of the chosen leaf's aspect with the clay leaf's area.
+ */
+inline CardMask texturedCardMask(const ClusterLibrary& lib, double fill, double aspect) {
+    (void)fill;
+    const double clay = std::max(0.02, static_cast<double>(lib.params.morphology.blade.widthRatio));
+    const double a = aspect > 0 ? aspect : clay;
+    return rasterizeCardMask(lib.cardLayout, a, clay / a, lib.params.crownCardMaskPx);
+}
+
+/**
+ * The mid level's crown cards of a tree (LodParams crownCards*): cards of side clamp(crownCardSidePerReach x reachM) at the
+ * placed clusters' leaf centres, facing the reference crown's outward normal or tilted from it, chosen greedily (lazily:
+ * a card's gain only falls as others are placed) by the crown silhouette each newly covers, in coarse views, until the mid
+ * clusters' coverage (times crownCardCoverageShare) is reached in `fine` (the tree's coverage views, left covered by the
+ * cards). `refPts` are the reference's points (the views' hull).
+ */
+inline void placeCrownCards(TreeLod& T, const TreeLodInput& in, const ClusterLibrary& lib, double reachM, CoverageViews& fine, const std::vector<Vec3>& refPts) {
+    const LodParams& P = lib.params;
+    const CrownEllipsoid& ref = T.coverage.reference;
+    const int cells = static_cast<int>(lib.cards.size());
+    T.cards.assign(lib.cards.size(), {});
+    if (cells <= 0) return;
+    const double side = std::clamp(P.crownCardSidePerReach * reachM, P.crownCardMinM, std::max(P.crownCardMinM, P.crownCardMaxM));
+    T.cardSideM = side;
+    const double target = std::clamp(P.crownCardCoverageShare * T.coverage.midClusters.meanEllipsoid, 0.0, 1.0);
+    T.coverage.cardTarget = target;
+    const size_t cap = std::max<size_t>(8, static_cast<size_t>(std::ceil(std::max(0.0, P.crownCardMaxPerArea) * ellipsoidArea(ref) / (side * side))));
+    // candidates: the leaf centres of the placed clusters (their mid meshes), evenly thinned, with their growth order
+    std::vector<std::pair<Vec3, float>> at;
+    for (size_t k = 0; k < T.clusters.size() && k < lib.variants.size(); ++k)
+        for (const auto& c : T.clusters[k]) at.push_back({transformPoint(c.t, c.q, c.s, lib.variants[k].level1.bladeCentre), c.order});
+    if (at.empty()) return;
+    const size_t want = std::max<size_t>(static_cast<size_t>(std::max(1, P.crownCardCandidates)), static_cast<size_t>(std::ceil(std::max(0.0, P.crownCardCandidatesPerStation) * static_cast<double>(at.size()))));
+    const double stride = std::max(1.0, static_cast<double>(at.size()) / static_cast<double>(want));
+    const Vec3 up(0, 1, 0);
+    std::vector<Instance> cand;
+    std::vector<int> candCell;
+    for (double f = 0; f < static_cast<double>(at.size()); f += stride) {
+        const size_t i = static_cast<size_t>(f);
+        const Vec3 p = at[i].first;
+        const Vec3 n0 = ellipsoidNormal(ref, p);
+        Vec3 t1 = up.cross(n0);
+        t1 = t1.lengthSquared() < 1e-6f ? Vec3(1, 0, 0) : t1.normalized();
+        const Vec3 t2 = n0.cross(t1).normalized();
+        for (int o = 0; o < 5; ++o) {
+            Vec3 n = n0;
+            if (o > 0) n = Quat::fromAxisAngle(o <= 2 ? t1 : t2, static_cast<float>((o % 2 ? 1.0 : -1.0) * P.crownCardTiltRad)).rotate(n0).normalized();
+            const float roll = static_cast<float>(2 * M_PI * hashUnit(in.seed, 0xCA2Dull + i, static_cast<uint64_t>(o)));
+            Instance c;
+            c.t = p;
+            c.q = (Quat::fromAxisAngle(n, roll) * frameAlong(n, up)).normalized();
+            c.s = Vec3(static_cast<float>(side), static_cast<float>(side), static_cast<float>(side));
+            c.order = at[i].second;
+            cand.push_back(c);
+            candCell.push_back(std::min(cells - 1, static_cast<int>(hashUnit(in.seed, 0xCE11ull + i, static_cast<uint64_t>(o)) * cells)));
+        }
+    }
+    T.cardCandidates = cand.size();
+    CoverageViews sel;
+    sel.init(ref, refPts, std::max(fine.cell, side / std::max(2.0, P.crownCardSelectCellsPerSide)));
+    // lazy greedy: (gain, candidate, cards placed when the gain was measured)
+    std::priority_queue<std::tuple<size_t, size_t, size_t>> pq;
+    for (size_t c = 0; c < cand.size(); ++c) {
+        const size_t g = sel.addCard(cand[c], lib.cardMask, candCell[c], false);
+        if (g > 0) pq.push({g, std::numeric_limits<size_t>::max() - c, 0});
+    }
+    size_t placed = 0;
+    double targetSel = target;
+    fine.clearCovered();
+    for (int pass = 0; pass < 6; ++pass) {
+        while (!pq.empty() && placed < cap && sel.level().meanEllipsoid < targetSel) {
+            const auto [g, key, stamp] = pq.top();
+            pq.pop();
+            const size_t c = std::numeric_limits<size_t>::max() - key;
+            if (stamp != placed) {
+                const size_t g2 = sel.addCard(cand[c], lib.cardMask, candCell[c], false);
+                if (g2 > 0) pq.push({g2, key, placed});
+                continue;
+            }
+            sel.addCard(cand[c], lib.cardMask, candCell[c], true);
+            fine.addCard(cand[c], lib.cardMask, candCell[c], true);
+            T.cards[static_cast<size_t>(candCell[c])].push_back(cand[c]);
+            ++placed;
+        }
+        // the coarse views stop near the target; the tree's own views decide
+        const double got = fine.level().meanEllipsoid;
+        if (got >= target - 0.005 || pq.empty() || placed >= cap) break;
+        targetSel = std::min(1.0, sel.level().meanEllipsoid + (target - got) + 0.003);
+    }
+}
 
 } // namespace detail
 
@@ -1467,13 +1794,26 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
         auto mid = [](const ClusterVariant& v) -> const LibraryMesh& { return v.level1; };
         T.coverage.level0 = levelOf(near, nullptr);
         T.coverage.nearMid = levelOf(nearMid, nullptr);
-        T.coverage.mid = levelOf(mid, nullptr);
+        T.coverage.mid = T.coverage.midClusters = levelOf(mid, nullptr);
         if (in.cutoutFill > 0) {
             T.coverage.level0Cutout = levelOf(near, &cut);
-            T.coverage.midCutout = levelOf(mid, &cut);
+            T.coverage.midCutout = T.coverage.midClustersCutout = levelOf(mid, &cut);
         }
     }
-    T.msMeasure = msSince(tPhase);
+    T.msMeasure = msSince(tPhase); tPhase = Clock::now();
+    if (P.crownCards && !lib.cards.empty() && T.coverage.measured && T.coverage.midClusters.meanEllipsoid > 0) {
+        detail::placeCrownCards(T, in, lib, meanReach * baseScale, cov, refPts);
+        if (T.midCards()) {
+            T.coverage.mid = cov.level();            // the views hold what the cards cover
+            if (in.cutoutFill > 0) {
+                const CardMask tex = detail::texturedCardMask(lib, in.cutoutFill, in.cutoutAspect);
+                cov.clearCovered();
+                for (size_t k = 0; k < T.cards.size(); ++k) for (const auto& c : T.cards[k]) cov.addCard(c, tex, static_cast<int>(k));
+                T.coverage.midCutout = cov.level();
+            }
+        }
+    }
+    T.msCards = msSince(tPhase);
 }
 
 /** The crown ellipsoid of a tree's level-0 leaves: the hull points of each placed cluster, in the tree's frame. */

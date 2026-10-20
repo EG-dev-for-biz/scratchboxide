@@ -45,6 +45,8 @@ import * as path from 'path';
 import { validateContract, type CanopyMask, type StripRoi } from '../../common/spatial/staged-location-contracts';
 import { resolveWithinRoot } from '../security/path-guard';
 import { buildNativeIfStale } from './native-build';
+import { implausibleLayerBounds } from './layer-bounds-guard';
+import { glbWorldBounds } from './part-connectivity';
 
 /** Continuous strip parameters (metres, ratios); every one maps to a CLI flag of the same name in kebab case. */
 export interface TileVegetationStripParams {
@@ -177,13 +179,19 @@ export interface TileVegetationPlantParams {
 export const SCENE_TREE_TRIANGLE_CAP = 1_500_000;
 
 /**
- * What the trees may draw, as opposed to what they store (SCENE_TREE_TRIANGLE_CAP above, which bounds each tree's wood, shared
- * by every level, and the blob tree the far masses are fitted to; the far level written is that wood under the masses, so a little over it). Trees are written at four levels, and a viewport draws one per tree
- * by its distance, so a frame draws far fewer triangles than the file holds: at most this many in a park view, in
- * total and per level. stats.lodFrames measures it on the written trees (camera poses on a grid over the location, an
- * 80 degree view, every tree within 8 m).
+ * What the trees would draw in a park view with no budget, as opposed to what they store (SCENE_TREE_TRIANGLE_CAP above, which
+ * bounds each tree's wood, shared by every level, and the blob tree the far masses are fitted to). Trees are written at four
+ * levels and a viewport draws one per tree by its distance; stats.lodFrames measures that frame on the written trees (camera
+ * poses on a grid over the location, an 80 degree view, metre bands, no budget). This is a ceiling on that estimate, so a
+ * level that grows or a band that reaches farther shows up here.
+ *
+ * It is not what a frame draws: the viewport's triangle budget (DEFAULT_TREE_TRIANGLE_BUDGET in common/spatial/tree-lod-math.ts,
+ * shared with the buildings) caps the frame, and trees give up levels, least important first, to fit. Measured with the
+ * near-mid band at 6 x tree height (25-100 m) and the mid band at 8 x (60-140 m), Washington Square (591 trees): median
+ * 1.66 M, p95 10.5 M, max 16.7 M; the synthetic park of location-clay-pipeline.test.ts (372 trees): median 9.8 M, p95
+ * 12.9 M, max 14.4 M, and a max of 44 M with both bands twice as long.
  */
-export const SCENE_TREE_DRAWN_TRIANGLES_PER_FRAME = 10_000_000;
+export const SCENE_TREE_DRAWN_TRIANGLES_PER_FRAME = 20_000_000;
 export const SCENE_TREE_DRAWN_TRIANGLES_PER_LEVEL = { level0: 5_000_000, level1: 4_000_000, level2: 3_000_000 } as const;
 
 export interface TileVegetationStripRequest {
@@ -250,6 +258,12 @@ export interface TileVegetationPlantRequest {
     textures?: boolean;
     /** Copy the trees GLB to public/models/<publishAs> (a plain *.glb name). */
     publishAs?: string;
+    /**
+     * Photo-inferred crown corrections (scratchbox.crown-correction/1, tree-crown-photo-check.ts): each crown's width and
+     * base, applied before it is grown. Absent: the correction recorded for these crowns (by the sha256 of crowns.json, under
+     * .scratchbox/cache/crown_correction/) when there is one; false: none.
+     */
+    crownCorrectionPath?: string | false;
     threads?: number;
     timeoutMs?: number;
     /** Stops this request (it rejects with an AbortError); the native run is killed once no request waits on it. */
@@ -309,6 +323,15 @@ export interface TileVegetationPlantResult {
     ms: number;
     cacheKey: string;
     published?: { path: string; url: string; backup?: string };
+    /** Set when the cached entry under this key was refused (its bounds are physically impossible) and rebuilt: why. */
+    rebuiltStaleCache?: string;
+    /** The photo-inferred crown correction the trees were grown with (absent: none). */
+    crownCorrection?: { path: string; provenance: 'photo-inferred'; trees: number; fromPhotos: number; median?: { widthScale: number; crownBaseRatio: number } };
+}
+
+/** Where the crown correction measured for a crowns.json (by its sha256) is kept in a workspace. */
+export function crownCorrectionPathFor(workspaceRoot: string, crownsSha256: string): string {
+    return path.join(workspaceRoot, '.scratchbox', 'cache', 'crown_correction', `${crownsSha256}.json`);
 }
 
 export type TileVegetationErrorCode =
@@ -656,6 +679,13 @@ export class TileVegetationService {
         const bin = await this.ensureBinary();
         const hash = crypto.createHash('sha256').update(CACHE_VERSION).update('\0plant\0').update(this.hashBinary(bin)).update('\0');
         sha256File(crowns, hash);
+        let correction: string | undefined;
+        if (typeof req.crownCorrectionPath === 'string') correction = this.resolveInput(req.crownCorrectionPath, 'crownCorrectionPath', '.json');
+        else if (req.crownCorrectionPath !== false) {
+            const recorded = crownCorrectionPathFor(this.workspaceRoot, fileSha256(crowns));
+            if (fs.existsSync(recorded)) correction = recorded;
+        }
+        if (correction) { hash.update('\0correction\0'); sha256File(correction, hash); }
         hash.update('\0');
         if (support) sha256File(support, hash);
         hash.update('\0');
@@ -670,13 +700,14 @@ export class TileVegetationService {
         if (textureIndex) sha256File(textureIndex, hash);
         hash.update('\0').update(JSON.stringify({ ...keyParams, ...budget, seed: req.seed.toLowerCase(), quantize, reveal }));
         const key = hash.digest('hex');
-        const res = await this.cached(key, ['trees.glb', 'stats.json'], async (dir, signal) => {
+        const plantOnce = () => this.cached(key, ['trees.glb', 'stats.json'], async (dir, signal) => {
             // the stage key in the GLB's root extras is this cache key: the same bytes in every run that reuses them
             const args = ['plant', '--crowns', crowns, '--out', path.join(dir, 'trees.glb'), '--stats', path.join(dir, 'stats.json'),
                 ...('triangleBudget' in budget ? ['--triangle-budget', String(budget.triangleBudget)] : ['--scene-triangle-cap', String(budget.sceneTriangleCap)]),
                 '--seed', req.seed, '--quantize', quantize ? '1' : '0', '--reveal', reveal ? '1' : '0', '--stage-key', key, ...flags];
             if (support) args.push('--support-mesh', support);
             if (ground) args.push('--ground-mesh', ground);
+            if (correction) args.push('--crown-correction', correction);
             if (textureIndex) args.push('--texture-index', textureIndex, '--texture-index-label', TREE_TEXTURE_INDEX);
             if (req.threads !== undefined) args.push('--threads', String(req.threads));
             await runFile(bin, args, timeoutMs, signal);
@@ -687,7 +718,28 @@ export class TileVegetationService {
             ms: 0,
             cacheKey: key
         }), req.signal);
-        const out: TileVegetationPlantResult = { ...res, ms: 0 };
+        let res = await plantOnce();
+        // a trees GLB whose bounds no real place can have would poison everything that stands on or near it (placement
+        // reads it as covering every spot): a cached one is a stale or corrupt entry and is rebuilt once; a fresh one is refused
+        let problem = treesGlbBoundsProblem(res.treesGlb);
+        let rebuiltStaleCache: string | undefined;
+        if (problem && res.cached) {
+            rebuiltStaleCache = `the cached trees ${key.slice(0, 8)} were rebuilt because ${problem}`;
+            fs.rmSync(path.join(this.cacheDir, key), { recursive: true, force: true });
+            res = await plantOnce();
+            problem = treesGlbBoundsProblem(res.treesGlb);
+        }
+        if (problem) throw new TileVegetationError('plant_failed', `the planted trees were refused because ${problem}${rebuiltStaleCache ? ' (also after rebuilding the cached entry)' : ''}`);
+        const out: TileVegetationPlantResult = { ...res, ms: 0, ...(rebuiltStaleCache ? { rebuiltStaleCache } : {}) };
+        if (correction) {
+            const doc = JSON.parse(fs.readFileSync(correction, 'utf8')) as { median?: { widthScale: number; crownBaseRatio: number } };
+            const per = Array.isArray(res.stats.perTree) ? res.stats.perTree as Array<{ crownCorrection?: { source?: string } }> : [];
+            const applied = per.filter(t => t.crownCorrection);
+            out.crownCorrection = {
+                path: correction, provenance: 'photo-inferred', trees: applied.length, fromPhotos: applied.filter(t => t.crownCorrection!.source === 'photo').length,
+                ...(doc.median ? { median: { widthScale: doc.median.widthScale, crownBaseRatio: doc.median.crownBaseRatio } } : {})
+            };
+        }
         if (publishTarget) out.published = this.publish(res.treesGlb, publishTarget);
         out.ms = Date.now() - t0;
         return out;
@@ -714,6 +766,15 @@ export class TileVegetationService {
         const publicDir = resolveWithinRoot(this.workspaceRoot, 'public');
         return { path: path.relative(this.workspaceRoot, target), url: '/' + path.relative(publicDir, target).split(path.sep).join('/'), ...(backup ? { backup } : {}) };
     }
+}
+
+/**
+ * Why a trees GLB cannot be staged (its world bounds, instances included, are physically impossible), or undefined. A
+ * GLB with no triangles (every crown kept as scanned: only its LINES rings) has nothing to judge.
+ */
+export function treesGlbBoundsProblem(file: string): string | undefined {
+    const bounds = glbWorldBounds(fs.readFileSync(file));
+    return bounds ? implausibleLayerBounds(bounds) : undefined;
 }
 
 const services = new Map<string, TileVegetationService>();

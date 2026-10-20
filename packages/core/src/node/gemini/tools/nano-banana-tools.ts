@@ -14,8 +14,14 @@ import {
 } from '../../../browser/generative-canvas/services/nano-banana-color-service';
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import { MediaModelUnavailableError, MissingInputError } from '../../../common/errors/pipeline-errors';
-import { IMAGE_MODEL_PRIORITY, resolveRequestedModels } from '../../../common/media-generation-protocol';
+import { InvalidInputError, MediaModelUnavailableError, MissingInputError } from '../../../common/errors/pipeline-errors';
+import {
+    IMAGE_MODEL_ALIASES,
+    IMAGE_MODEL_ASPECT_RATIOS,
+    IMAGE_MODEL_PRIORITY,
+    resolveRequestedModels,
+    type SkippedMediaModel
+} from '../../../common/media-generation-protocol';
 import { GoogleMediaCredentialsService } from '../../google-media-credentials-service';
 import { generateImageWithModels } from '../../google-media-generation-service';
 import { readImageDimensions, sniffImageFormat } from '../../image-codec-ffmpeg';
@@ -23,8 +29,17 @@ import type { ToolDeclaration, ToolHandler } from './types';
 
 const TOOL = 'nano_banana_apply_color_palette';
 
-/** Reads the target image: a data URI, an http(s) URL, or a file path (relative paths resolve against the workspace). */
-async function loadTargetImage(ref: string, workspaceRoot: string | undefined, signal?: AbortSignal): Promise<{ data: Buffer; mimeType: string; localPath?: string }> {
+/**
+ * Reads an input image for an image-model call: a data URI, an http(s) URL, or a file path (relative paths resolve
+ * against the workspace). `tool` and `arg` name the caller in the error when the image cannot be read.
+ */
+async function loadInputImage(
+    ref: string,
+    workspaceRoot: string | undefined,
+    signal: AbortSignal | undefined,
+    tool: string,
+    arg: string
+): Promise<{ data: Buffer; mimeType: string; localPath?: string }> {
     const dataUri = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(ref);
     let data: Buffer;
     let localPath: string | undefined;
@@ -35,18 +50,23 @@ async function loadTargetImage(ref: string, workspaceRoot: string | undefined, s
         try {
             res = await fetch(ref, { signal });
         } catch (err) {
-            throw new MissingInputError(TOOL, 'targetImageUrl', `could not download ${ref} (${(err as Error).message})`);
+            throw new MissingInputError(tool, arg, `could not download ${ref} (${(err as Error).message})`);
         }
-        if (!res.ok) throw new MissingInputError(TOOL, 'targetImageUrl', `downloading ${ref} answered HTTP ${res.status}`);
+        if (!res.ok) throw new MissingInputError(tool, arg, `downloading ${ref} answered HTTP ${res.status}`);
         data = Buffer.from(await res.arrayBuffer());
     } else {
         localPath = path.isAbsolute(ref) ? ref : path.resolve(workspaceRoot || process.cwd(), ref);
-        if (!(await fs.pathExists(localPath))) throw new MissingInputError(TOOL, 'targetImageUrl', `no file at ${localPath}`);
+        if (!(await fs.pathExists(localPath))) throw new MissingInputError(tool, arg, `no file at ${localPath}`);
         data = await fs.readFile(localPath);
     }
     const format = sniffImageFormat(data);
-    if (format === 'unknown') throw new MissingInputError(TOOL, 'targetImageUrl', `${ref.slice(0, 80)} is not a JPEG, PNG or WebP image`);
+    if (format === 'unknown') throw new MissingInputError(tool, arg, `${ref.slice(0, 80)} is not a JPEG, PNG or WebP image`);
     return { data, mimeType: `image/${format}`, localPath };
+}
+
+/** The palette tool's target image. */
+function loadTargetImage(ref: string, workspaceRoot: string | undefined, signal?: AbortSignal): Promise<{ data: Buffer; mimeType: string; localPath?: string }> {
+    return loadInputImage(ref, workspaceRoot, signal, TOOL, 'targetImageUrl');
 }
 
 function extensionFor(mimeType: string): string {
@@ -201,6 +221,228 @@ export const nanoBananaHandlers: Record<string, ToolHandler> = {
                 aspectRatio
             },
             summaryResult: `Recolored ${targetImageUrl} to the palette (${palette.primaryTones.length} base and ${palette.accentTones.length} accent tones) with ${answer.modelUsed} -> ${outputPath}. ${answer.modelNote}`
+        };
+    }
+};
+
+// ----------------------------------------------------------------------
+// generate_image: pictures from a prompt (storyboard frames, concept art, references, edits of a given image)
+// ----------------------------------------------------------------------
+
+const GENERATE_IMAGE = 'generate_image';
+
+/** The most images one call makes; each is its own billed model call. */
+export const GENERATE_IMAGE_MAX_COUNT = 4;
+
+/** Where generate_image writes by default, under the repository root: gitignored (`build/`) and served by the app. */
+export const GENERATED_IMAGES_DIR = 'build/generated-images';
+
+/** The URL prefix the app serves GENERATED_IMAGES_DIR at (desktop-app/server/app.ts; the Vite dev server proxies /build). */
+export const GENERATED_IMAGES_ROUTE = '/build/generated-images/';
+
+/** The Nano Banana Lite model id: faster and cheaper than the default list, used when the caller asks for speed. */
+export const FAST_IMAGE_MODEL = IMAGE_MODEL_ALIASES['nano-banana-lite'];
+
+/** The repository root: the nearest ancestor of this module that holds packages/core and a package.json (as the Python runner finds it). */
+export function resolveRepoRoot(): string {
+    let cur = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
+    while (cur && cur !== path.dirname(cur)) {
+        if (fs.existsSync(path.join(cur, 'packages/core')) && fs.existsSync(path.join(cur, 'package.json'))) {
+            return cur;
+        }
+        cur = path.dirname(cur);
+    }
+    return process.cwd();
+}
+
+/**
+ * The URL the app serves an image file at, when the file is inside GENERATED_IMAGES_DIR (any depth). Undefined for a
+ * file written anywhere else: the app has no route for it, and the result says so instead of inventing a URL.
+ */
+export function servedGeneratedImageUrl(filePath: string, repoRoot: string = resolveRepoRoot()): string | undefined {
+    const dir = path.resolve(repoRoot, GENERATED_IMAGES_DIR);
+    const rel = path.relative(dir, path.resolve(filePath));
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return undefined;
+    return GENERATED_IMAGES_ROUTE + rel.split(path.sep).map(encodeURIComponent).join('/');
+}
+
+/** A file-name stem from the caller's name or the prompt's first words: ASCII letters, digits and underscores only. */
+function imageFileStem(name: string | undefined, prompt: string): string {
+    const source = (name || prompt.split(/\s+/).slice(0, 6).join(' ')).toLowerCase();
+    const stem = source.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60);
+    return stem || 'image';
+}
+
+function asStringList(val: unknown): string[] {
+    if (typeof val === 'string') return val.trim() ? [val.trim()] : [];
+    if (Array.isArray(val)) return val.filter((v): v is string => typeof v === 'string' && v.trim().length > 0).map(v => v.trim());
+    return [];
+}
+
+/** A generated image, as the tool reports it. */
+export interface GeneratedImageRecord {
+    index: number;
+    path: string;
+    /** The app URL to show it at; absent when the file is outside the served generated-images folder. */
+    url?: string;
+    mimeType: string;
+    width?: number;
+    height?: number;
+    byteLength: number;
+    modelUsed: string;
+    modelVersion?: string;
+    skippedModels: SkippedMediaModel[];
+    modelNote: string;
+}
+
+export const IMAGE_GENERATION_TOOL_DECLARATIONS: ToolDeclaration[] = [
+    {
+        name: GENERATE_IMAGE,
+        description: 'Makes one or more pictures from a text prompt with a Google image model (Nano Banana by default): storyboard frames, concept art, reference plates, illustrations for a document, or an edit of given reference images (pass them in referenceImages and describe the change). Each image is written as a real file and the result gives its path and the app URL to show it at (put ![title](url) in your reply or in a markdown-document image section). The result names the model and credential that answered and why any earlier model was skipped; every image is labelled provenance "generated". It fails with an error, and writes nothing, when no image model or credential is available. Each image is a separate billed call: make only the images the user asked for.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                prompt: {
+                    type: 'STRING',
+                    description: 'What the picture shows, in full sentences: subject, setting, light, framing, lens, textures, mood, and any exact text in double quotes. For an edit, describe the change to make to the reference images.'
+                },
+                aspectRatio: {
+                    type: 'STRING',
+                    description: `Output aspect ratio: one of ${IMAGE_MODEL_ASPECT_RATIOS.map(([label]) => label).join(', ')}. Default 16:9. Any other value is an error (the models accept only these).`
+                },
+                referenceImages: {
+                    type: 'ARRAY',
+                    items: { type: 'STRING' },
+                    description: 'Optional images the model sees with the prompt: workspace file paths (relative to the workspace), absolute paths, http(s) URLs or data URIs. Use them to edit a picture or to keep a character, product or style consistent across frames.'
+                },
+                model: {
+                    type: 'STRING',
+                    description: 'Optional image model id (or product name: nano-banana-2, nano-banana-pro, nano-banana-lite). When given, only that model is used. Default: the standard image models in order, gemini-3.1-flash-image first, moving to the next only when a model is not served; the result says which one answered.'
+                },
+                fast: {
+                    type: 'BOOLEAN',
+                    description: 'When true and no model is given, ask Nano Banana Lite (gemini-3.1-flash-lite-image) first for speed over quality, then the standard models.'
+                },
+                count: {
+                    type: 'NUMBER',
+                    description: `How many pictures to make from the prompt (1 to ${GENERATE_IMAGE_MAX_COUNT}; default 1). Each is a separate model call.`
+                },
+                name: {
+                    type: 'STRING',
+                    description: 'Optional file-name stem, e.g. "storyboard_frame_01_opening". Default: the first words of the prompt. A timestamp and, for several images, an index are appended.'
+                },
+                outputDir: {
+                    type: 'STRING',
+                    description: `Optional folder to write into (relative paths resolve against the workspace). Default: the app's generated-images folder (${GENERATED_IMAGES_DIR} under the repository), the only folder the app serves at a URL.`
+                }
+            },
+            required: ['prompt']
+        }
+    }
+];
+
+export const imageGenerationHandlers: Record<string, ToolHandler> = {
+    [GENERATE_IMAGE]: async (args, ctx) => {
+        const prompt = asString(args.prompt).trim();
+        if (!prompt) throw new MissingInputError(GENERATE_IMAGE, 'prompt', 'describe the picture to make');
+
+        const aspectRatio = asString(args.aspectRatio).trim() || '16:9';
+        if (!IMAGE_MODEL_ASPECT_RATIOS.some(([label]) => label === aspectRatio)) {
+            throw new InvalidInputError(GENERATE_IMAGE, 'aspectRatio', `"${aspectRatio}" is not one the image models accept; use one of ${IMAGE_MODEL_ASPECT_RATIOS.map(([label]) => label).join(', ')}`);
+        }
+
+        const rawCount = args.count === undefined || args.count === null || args.count === '' ? 1 : Number(args.count);
+        if (!Number.isInteger(rawCount) || rawCount < 1 || rawCount > GENERATE_IMAGE_MAX_COUNT) {
+            throw new InvalidInputError(GENERATE_IMAGE, 'count', `give a whole number from 1 to ${GENERATE_IMAGE_MAX_COUNT} (got ${String(args.count)})`);
+        }
+        const count = rawCount;
+
+        const references = asStringList(args.referenceImages);
+        const referenceParts: Array<{ inlineData: { data: string; mimeType: string } }> = [];
+        for (const ref of references) {
+            const image = await loadInputImage(ref, ctx?.workspaceRoot, ctx?.signal, GENERATE_IMAGE, 'referenceImages');
+            referenceParts.push({ inlineData: { data: image.data.toString('base64'), mimeType: image.mimeType } });
+        }
+
+        const requestedModel = asString(args.model).trim() || undefined;
+        const models = requestedModel
+            ? resolveRequestedModels(requestedModel, IMAGE_MODEL_PRIORITY)
+            : resolveRequestedModels(undefined, asBoolean(args.fast, false) ? [FAST_IMAGE_MODEL, ...IMAGE_MODEL_PRIORITY] : IMAGE_MODEL_PRIORITY);
+
+        const requestedDir = asString(args.outputDir).trim();
+        const outputDir = requestedDir
+            ? (path.isAbsolute(requestedDir) ? requestedDir : path.resolve(ctx?.workspaceRoot || process.cwd(), requestedDir))
+            : path.resolve(resolveRepoRoot(), GENERATED_IMAGES_DIR);
+
+        let client: any;
+        try {
+            client = await new GoogleMediaCredentialsService().createClient();
+        } catch (err) {
+            throw new MediaModelUnavailableError(models[0], `Google media credentials are not available (${(err as Error)?.message || err})`);
+        }
+        const credential: 'vertex-ai' | 'api-key' = client?.vertexai ? 'vertex-ai' : 'api-key';
+
+        const stem = `${imageFileStem(asString(args.name).trim() || undefined, prompt)}_${Date.now()}`;
+        const contents = [{ text: prompt }, ...referenceParts];
+        const images: GeneratedImageRecord[] = [];
+        await fs.ensureDir(outputDir);
+        for (let index = 0; index < count; index++) {
+            ctx?.reportProgress?.(count > 1 ? `Generating image ${index + 1} of ${count}` : 'Generating image', index / count);
+            const answer = await generateImageWithModels(client, {
+                models,
+                contents,
+                imageConfig: { aspectRatio },
+                signal: ctx?.signal
+            });
+            const ext = extensionFor(answer.mimeType);
+            const filePath = path.join(outputDir, `${stem}${count > 1 ? `_${index + 1}` : ''}${ext}`);
+            await fs.writeFile(filePath, answer.data);
+            const dims = readImageDimensions(answer.data);
+            images.push({
+                index: index + 1,
+                path: filePath,
+                url: servedGeneratedImageUrl(filePath),
+                mimeType: answer.mimeType,
+                ...(dims ? { width: dims.width, height: dims.height } : {}),
+                byteLength: answer.data.length,
+                modelUsed: answer.modelUsed,
+                ...(answer.modelVersion ? { modelVersion: answer.modelVersion } : {}),
+                skippedModels: answer.skippedModels,
+                modelNote: answer.modelNote
+            });
+        }
+
+        const modelsUsed = Array.from(new Set(images.map(i => i.modelUsed)));
+        const first = images[0];
+        const markdown = images
+            .map(i => (i.url ? `![${asString(args.name).trim() || prompt.slice(0, 60)}${count > 1 ? ` (${i.index})` : ''}](${i.url})` : ''))
+            .filter(Boolean)
+            .join('\n');
+        const unservedNote = images.some(i => !i.url)
+            ? ` ${images.filter(i => !i.url).length} file(s) are outside ${GENERATED_IMAGES_DIR}, so the app has no URL for them; use the paths.`
+            : '';
+        const summary = `Generated ${images.length} image${images.length === 1 ? '' : 's'} (${aspectRatio}) with ${modelsUsed.join(', ')} via ${credential} -> ${images.map(i => i.path).join(', ')}. ${first.modelNote}${unservedNote}`;
+
+        return {
+            resultPayload: {
+                success: true,
+                provenance: 'generated',
+                prompt,
+                aspectRatio,
+                count: images.length,
+                referenceImages: references,
+                requestedModels: models,
+                modelUsed: first.modelUsed,
+                modelsUsed,
+                credential,
+                skippedModels: first.skippedModels,
+                modelNote: first.modelNote,
+                outputDir,
+                images,
+                markdown,
+                summary
+            },
+            summaryResult: summary
         };
     }
 };

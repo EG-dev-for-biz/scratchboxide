@@ -88,15 +88,16 @@ Extracts camera optical pose, heading, tilt, and field-of-view from an anchor fr
 }
 ```
 
-### 2. `adaptive_matchmove_solve_spline`
+### 2. `adaptive_matchmove_synthesize_trajectory`
 Fits a continuous, nadir-safe $C^2$ Catmull-Rom spline through resected camera keyframes, enforcing smooth heading/pitch interpolation and gimbal-lock protection.
 ```json
 {
-  "name": "adaptive_matchmove_solve_spline",
+  "name": "adaptive_matchmove_synthesize_trajectory",
   "args": {
-    "keyframeIds": ["kf_0", "kf_mid", "kf_end"],
-    "targetFps": 30,
-    "totalDurationSec": 5.0
+    "milestones": [ /* the calibrated keyframe states from adaptive_matchmove_resect_keyframe */ ],
+    "fps": 30,
+    "totalFrames": 150,
+    "durationSec": 5.0
   }
 }
 ```

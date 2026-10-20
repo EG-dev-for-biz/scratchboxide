@@ -221,7 +221,7 @@ export class GeoBoxPrecisionResectionService {
         if (!query) {
             const cameraOnly = request.knownCoords || request.cameraOpticalCenter;
             throw new MissingInputError(
-                'geobox_resect_camera_pose',
+                'geobox_resect_image_location',
                 'targetCoords, targetLandmarkName or promptHint',
                 cameraOnly
                     ? 'only the camera position was given: what the photo shows (the target) is needed too; the ground under the camera is not assumed to be it'
@@ -261,7 +261,7 @@ export class GeoBoxPrecisionResectionService {
      * model to the photograph and reports what it measured.
      */
     public async resectCameraPose(request: GeoBoxResectionRequest): Promise<GeoBoxResectionResult> {
-        const tool = 'geobox_resect_camera_pose';
+        const tool = 'geobox_resect_image_location';
         // 1. Resolve geodetic coordinates (Zero presets: throws if not resolvable)
         const geo = await this.resolveGeodeticCoordinates(request);
         const targetCoords = geo.targetCoords;

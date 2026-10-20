@@ -48,6 +48,9 @@ const CENTRE_AS_METRES = { foveal: { enabled: false } };
 
 const clock = (): { now: () => number; tick: (ms?: number) => void } => { let t = 1000; return { now: () => t, tick: (ms = 16.7) => { t += ms; } }; };
 
+/** The distance crossfade as it stands (a still camera would settle each tree on one level: tree-lod-settle-budget.test.ts). */
+const CONTINUOUS = { settleAfterStillSeconds: 0 };
+
 describe('TreeLodController on the contract fixture', () => {
     it('adopts every tree, gates its four levels and keeps the loader\'s wood and cluster meshes', async () => {
         const root = await loadFixture(3);
@@ -69,7 +72,7 @@ describe('TreeLodController on the contract fixture', () => {
     it('shows one pure level inside each band and splits the hash between two levels across an overlap', async () => {
         const root = await loadFixture(1);
         const c = clock();
-        const lod = new TreeLodController(root, { view: CENTRE_AS_METRES, now: c.now });
+        const lod = new TreeLodController(root, { view: CENTRE_AS_METRES, now: c.now, ...CONTINUOUS });
         const tree = treeNodes(root)[0];
         lod.update(cameraAt(tree, 20)); expect(lod.stateOf(0)).toEqual(['full', 'off', 'off', 'off']);
         lod.forceLevel(null); c.tick(5000);
@@ -118,7 +121,7 @@ describe('TreeLodController on the contract fixture', () => {
     it('does not retarget when the camera shakes inside the dead band', async () => {
         const root = await loadFixture(1);
         const c = clock();
-        const lod = new TreeLodController(root, { view: CENTRE_AS_METRES, now: c.now, hysteresisM: 2 });
+        const lod = new TreeLodController(root, { view: CENTRE_AS_METRES, now: c.now, hysteresisM: 2, ...CONTINUOUS });
         const tree = treeNodes(root)[0];
         for (let i = 0; i < 40; i++) { c.tick(); lod.update(cameraAt(tree, 55)); }
         const settled = lod.edgesOf(0);
@@ -259,7 +262,7 @@ describe('TreeLodController: triangle estimates and old three-level files', () =
     it('estimates what it submits: every level with a share counts in full, and a pure level its own triangles', async () => {
         const root = await loadFixture(1);
         const c = clock();
-        const lod = new TreeLodController(root, { view: CENTRE_AS_METRES, now: c.now });
+        const lod = new TreeLodController(root, { view: CENTRE_AS_METRES, now: c.now, ...CONTINUOUS });
         const tree = treeNodes(root)[0];
         // the fixture's levels: 12, 9, 6, 4 wood triangles, plus 2 cluster nodes x instances x 1 triangle at levels 0-2 (3, 2, 2 instances)
         const expected = [12 + 2 * 3, 9 + 2 * 2, 6 + 2 * 2, 4];

@@ -537,7 +537,43 @@ struct CrownShape {
     double stemX{0}, stemZ{0}, supportY{0}, areaM2{0};
     std::array<double, 16> sectorRadii{};
     std::vector<Vec3> samples;
+    // a crown base ratio given for this crown (a photo-inferred correction, CrownCorrection): used as is, instead of the
+    // growth's ratio varied by its seeded spread; NaN: none given
+    double crownBaseRatio{std::numeric_limits<double>::quiet_NaN()};
 };
+
+/**
+ * A correction of one measured crown's size from photos (scratchbox.crown-correction/1, written by the Street View crown
+ * check, tree-crown-photo-check.ts): the tiles see a crown from above, so its top is measured but its width (where canopies
+ * touch, the split between crowns) and its base (under the canopy) are not. widthScale scales the crown horizontally about
+ * its centre (its surface samples' centroid); crownBaseRatio places its base at that share of its height. Provenance
+ * photo-inferred; `source` says whether the tree's own photos gave it or the district median did.
+ */
+struct CrownCorrection {
+    double widthScale{1.0};
+    double crownBaseRatio{std::numeric_limits<double>::quiet_NaN()};
+    std::string source;
+};
+
+/** Applies a crown correction to a measured crown: samples and sector radii about the crown's centre, area by the square. */
+inline void applyCrownCorrection(CrownShape& c, const CrownCorrection& k) {
+    const double s = std::clamp(k.widthScale, 0.25, 4.0);
+    if (std::abs(s - 1.0) > 1e-9 && !c.samples.empty()) {
+        double cx = 0, cz = 0;
+        for (const auto& p : c.samples) { cx += p.x; cz += p.z; }
+        cx /= static_cast<double>(c.samples.size());
+        cz /= static_cast<double>(c.samples.size());
+        for (auto& p : c.samples) {
+            p.x = static_cast<float>(cx + (p.x - cx) * s);
+            p.z = static_cast<float>(cz + (p.z - cz) * s);
+        }
+        c.apex.x = static_cast<float>(cx + (c.apex.x - cx) * s);
+        c.apex.z = static_cast<float>(cz + (c.apex.z - cz) * s);
+        for (auto& r : c.sectorRadii) r *= s;
+        c.areaM2 *= s * s;
+    }
+    if (std::isfinite(k.crownBaseRatio)) c.crownBaseRatio = std::clamp(k.crownBaseRatio, 0.0, 0.95);
+}
 
 /** One crown regrown: the skeleton, how it was grown, and whether it fills the measured crown (and if not, why not). */
 struct CrownGrowth {
@@ -615,7 +651,8 @@ inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, 
     const double support = c.supportY;
     const double H = std::max(0.5, static_cast<double>(c.apex.y) - support);
     g.heightAboveSupport = H;
-    g.crownBaseRatio = std::clamp(G.crownBaseRatio + G.crownBaseSpread * (2.0 * detail::hashUnit(g.seed, 9001, 1) - 1.0), 0.0, 0.9999);
+    g.crownBaseRatio = std::isfinite(c.crownBaseRatio) ? c.crownBaseRatio
+                                                       : std::clamp(G.crownBaseRatio + G.crownBaseSpread * (2.0 * detail::hashUnit(g.seed, 9001, 1) - 1.0), 0.0, 0.9999);
     g.crownBaseY = support + g.crownBaseRatio * H;
     g.trunkRadius = G.trunkRadiusPerHeight * H;
     double radius = 0;
@@ -833,13 +870,17 @@ struct PlantParams {
     std::shared_ptr<const tree_textures::Library> textures;
     std::string textureIndex;        // where the library was read from, as given (written to the root extras)
     tree_textures::ChoiceParams textureChoice;
+    // Photo-inferred crown corrections by crown id (CrownCorrection), applied to each crown before it is grown; empty: none.
+    std::unordered_map<int, CrownCorrection> crownCorrections;
+    std::string crownCorrectionMethod;   // how they were made (written into each corrected tree's extras)
 };
 
 /** The triangles a crown's size asks for (see PlantParams::trianglesPerCrownM2), never fewer than minTrianglesPerTree. */
 inline size_t crownTriangleTarget(const CrownShape& c, const PlantParams& P) {
     double r = 0;
     for (double v : c.sectorRadii) r += v / 16.0;
-    const double depth = std::max(0.0, (1.0 - P.growth.crownBaseRatio) * (static_cast<double>(c.apex.y) - c.supportY));
+    const double baseRatio = std::isfinite(c.crownBaseRatio) ? c.crownBaseRatio : P.growth.crownBaseRatio;
+    const double depth = std::max(0.0, (1.0 - baseRatio) * (static_cast<double>(c.apex.y) - c.supportY));
     const double envelope = std::max(0.0, c.areaM2) + 2.0 * M_PI * r * depth;
     return static_cast<size_t>(std::max(P.minTrianglesPerTree, std::ceil(P.trianglesPerCrownM2 * envelope)));
 }
@@ -3910,6 +3951,10 @@ struct PlantedTree {
     bool hasTextures{false};
     tree_textures::TreeAppearance look;
     tree_textures::Choice textures;
+    // the photo-inferred correction its crown was grown with (hasCorrection false: the measured crown as is)
+    bool hasCorrection{false};
+    CrownCorrection correction;
+    std::string correctionDropped;   // why a correction given for it was not applied (empty: none given, or applied)
 };
 
 struct PlantResult {
@@ -4006,14 +4051,25 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
     }
     const size_t n = chosen.size();
     std::vector<CrownShape> shapes(n);
-    for (size_t i = 0; i < n; ++i) shapes[i] = crownShapeFromJson(*chosen[i]);
+    for (size_t i = 0; i < n; ++i) {
+        shapes[i] = crownShapeFromJson(*chosen[i]);
+        const auto k = P.crownCorrections.find(shapes[i].id);
+        if (k != P.crownCorrections.end()) applyCrownCorrection(shapes[i], k->second);
+    }
 
     // grow every tree first: its own budget depends on what its leaf masses need
     std::vector<CrownGrowth> grown(n);
-    std::vector<std::string> errors(n);
+    std::vector<std::string> errors(n), droppedCorrection(n);
     detail::forEachIndex(n, P.threads, [&](size_t i) {
         try {
             grown[i] = growCrown(shapes[i], P.growth, sampleSpacing);
+            if (!grown[i].ok() && P.crownCorrections.count(shapes[i].id)) {
+                // the corrected crown does not regrow: the measured one (the crown strip regrew) is grown instead, and the
+                // correction is dropped for it (reported)
+                CrownShape measured = crownShapeFromJson(*chosen[i]);
+                CrownGrowth g = growCrown(measured, P.growth, sampleSpacing);
+                if (g.ok()) { droppedCorrection[i] = grown[i].failure; shapes[i] = std::move(measured); grown[i] = std::move(g); }
+            }
             if (!grown[i].ok()) errors[i] = "crown " + std::to_string(shapes[i].id) + ": " + grown[i].failure + " (colonisation: " + grown[i].colonisationSummary + ")";
         } catch (const std::exception& e) {
             errors[i] = "crown " + std::to_string(shapes[i].id) + ": " + e.what();
@@ -4135,6 +4191,10 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
             tr.reachRadius = g.reachRadius;
             tr.colonisation = g.colonisation;
             tr.crownBaseRatio = g.crownBaseRatio;
+            if (const auto k = P.crownCorrections.find(tr.crownId); k != P.crownCorrections.end()) {
+                if (droppedCorrection[i].empty()) { tr.hasCorrection = true; tr.correction = k->second; }
+                else tr.correctionDropped = "the corrected crown did not regrow (" + droppedCorrection[i] + "); grown as measured";
+            }
             // the far level: the shipped blob tree; a bare request (psiSeason < 1) gives the leaf masses a share of their budget
             // in proportion to the season
             MeshedCrown m = meshCrown(g, tr.budget, 1.0 - (1.0 - P.woodShare) * psi, P.reveal ? &tr.growth : nullptr);
@@ -4345,6 +4405,12 @@ inline std::string treeExtrasMembers(const PlantedTree& tr, const PlantParams& P
        << ",\"crownSurfaceReached\":" << json::num(tr.leaves.share()) << ",\"crownSurfaceSamples\":" << tr.leaves.samples
        << ",\"reachM\":" << json::num(tr.reachRadius) << ",\"leavesBelowApexM\":" << json::num(static_cast<double>(c["apex"][1].num) - tr.leaves.topY)
        << ",\"grownSurfaceReached\":" << json::num(tr.grownShare);
+    if (tr.hasCorrection) {
+        ex << ",\"crownCorrection\":{\"widthScale\":" << json::num(tr.correction.widthScale) << ",\"crownBaseRatio\":"
+           << (std::isfinite(tr.correction.crownBaseRatio) ? json::num(tr.correction.crownBaseRatio) : std::string("null"))
+           << ",\"source\":" << json::str(tr.correction.source) << ",\"provenance\":\"photo-inferred\",\"method\":" << json::str(P.crownCorrectionMethod) << "}";
+    }
+    if (!tr.correctionDropped.empty()) ex << ",\"crownCorrectionDropped\":" << json::str(tr.correctionDropped);
     if (!tr.shortOfCrown.empty()) ex << ",\"shortOfCrown\":" << json::str(tr.shortOfCrown);
     if (tr.groundChecked) {
         ex << ",\"groundGapM\":";
@@ -4369,10 +4435,17 @@ inline std::string coverageJson(const tree_lod::CoverageReport& c) {
                     ",\"views\":" + std::to_string(c.views) + ",\"cellM\":" + json::num(c.cellM) + ",\"fillStations\":" + std::to_string(c.fillStations);
     if (c.measured) {
         o += ",\"level0Before\":" + lv(c.level0Before) + ",\"level0\":" + lv(c.level0) + ",\"nearMid\":" + lv(c.nearMid) + ",\"mid\":" + lv(c.mid);
+        if (c.cardTarget > 0) o += ",\"midClusters\":" + lv(c.midClusters) + ",\"cardTarget\":" + json::num(c.cardTarget);
         if (c.level0Cutout.meanEllipsoid > 0 || c.midCutout.meanEllipsoid > 0)
-            o += ",\"cutout\":{\"level0\":" + lv(c.level0Cutout) + ",\"mid\":" + lv(c.midCutout) + "}";
+            o += ",\"cutout\":{\"level0\":" + lv(c.level0Cutout) + ",\"mid\":" + lv(c.midCutout) + (c.cardTarget > 0 ? ",\"midClusters\":" + lv(c.midClustersCutout) : std::string()) + "}";
     }
     return o + ",\"of\":\"the share of the measured crown (an ellipsoid fitted to its surface samples and footprint) the leaves cover, seen from outside, the mean over the views\"}";
+}
+
+/** A tree's crown cards (the mid level when it has them): how many, their side, the candidates they were chosen from (and the time, stats only: a GLB holds no timings). */
+inline std::string crownCardsJson(const tree_lod::TreeLod& L, bool withTime = false) {
+    return "{\"cards\":" + std::to_string(L.cardCount()) + ",\"triangles\":" + std::to_string(2 * L.cardCount()) + ",\"sideM\":" + json::num(L.cardSideM) +
+           ",\"candidates\":" + std::to_string(L.cardCandidates) + (withTime ? ",\"ms\":" + json::num(L.msCards) : std::string()) + "}";
 }
 
 /** `,"colour":{...}` of a tree's extras: its crown's colour as the tile's photo shows it (crowns.json), or nothing. */
@@ -4548,10 +4621,19 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
                     n.instances.push_back(std::move(si));
                 };
                 sameAs(c1, "_lod1_c", v.nearMid.name);
-                sameAs(c2, "_lod2_c", v.level1.name);
+                if (!L.midCards()) sameAs(c2, "_lod2_c", v.level1.name);
                 l0.children.push_back(std::move(c0));
                 l1.children.push_back(std::move(c1));
-                l2.children.push_back(std::move(c2));
+                if (!L.midCards()) l2.children.push_back(std::move(c2));
+            }
+            // the mid level's crown cards (when the tree has them, in place of the mid clusters): one node per atlas cell
+            for (size_t k = 0; k < L.cards.size() && k < lib.cards.size(); ++k) {
+                if (L.cards[k].empty()) continue;
+                staged_glb::StagedNode cn;
+                cn.name = base + "_lod2_card" + std::to_string(k);
+                cn.extrasJson = clusterExtras(lib.cards[k].name, 0xCA4Dull + k);
+                cn.instances.push_back(instancesOf(L.cards[k], lib.cards[k].name));
+                l2.children.push_back(std::move(cn));
             }
             const bool instanced0 = !l0.children.empty(), instanced1 = !l1.children.empty(), instanced2 = !l2.children.empty();
             l0.extrasJson = lodExtras(0, 0.0, d0 + 0.5 * fade, fade, L.drawnLevel0(), instanced0);
@@ -4590,7 +4672,8 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
                          ",\"level0\":" + levelJson(L.level0, L.drawnLevel0()) + ",\"nearMid\":" + levelJson(L.nearMid, L.drawnNearMid()) + ",\"level1\":" + levelJson(L.level1, L.drawnLevel1()) +
                          ",\"far\":{\"woodTriangles\":" + std::to_string(L.farWoodTriangles) + ",\"woodPrunedBelowRadiusM\":" + json::num(L.farWoodPrunedBelowRadiusM) +
                          ",\"drawnTriangles\":" + std::to_string(L.drawnFar(tr.foliage.indices.size() / 3)) + "}" +
-                         ",\"fillStations\":" + std::to_string(L.coverage.fillStations) + ",\"coverage\":" + detail::coverageJson(L.coverage) + "}";
+                         ",\"fillStations\":" + std::to_string(L.coverage.fillStations) + (L.midCards() ? ",\"crownCards\":" + detail::crownCardsJson(L) : std::string()) +
+                         ",\"coverage\":" + detail::coverageJson(L.coverage) + "}";
             // the crown envelope of the delivered leaves (tree node frame = the tile frame): a viewer shades the leaves with its normals
             std::string crownJson;
             const tree_lod::CrownEllipsoid ce = tree_lod::crownOfLeaves(L, lib);
@@ -4624,6 +4707,10 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
         sb.provenance.measuredGeometry = true;
         sb.provenance.method = "SB-Veggie space colonisation grown into the crown measured in the photo tiles: stem, crown extent and height measured, branching grown inside the measured crown" +
                                std::string(tr.hasLod ? "; leaves are instanced SB-Veggie clusters placed on that branching, not measured" : "");
+        if (tr.hasCorrection) {
+            sb.provenance.method += "; crown width (x" + detail::fixed(tr.correction.widthScale, 2) + ") and crown base photo-inferred from Street View (" + tr.correction.source + ")";
+            sb.provenance.sources.push_back({"photo-inferred", "crown-correction-" + std::to_string(tr.crownId), "the crown's width and base read from registered Street View photos (scratchbox.crown-correction/1)"});
+        }
         sb.provenance.sources.push_back({"tile-extraction", "crown-" + std::to_string(tr.crownId), "the crown tile_vegetation strip measured (crowns.json)"});
         sb.provenance.note = "trunk stands at " + detail::fixed(c["supportY"].num, 2) + " m (" + c["supportSource"].asString() + ")" +
                              (c["supportMovedM"].type == io::GlbJsonValue::Number ? "; stood " + detail::fixed(std::abs(c["supportMovedM"].num), 2) + " m " + (c["supportMovedM"].num < 0 ? "lower" : "higher") + " onto the ground rebuilt under its stem" : std::string());
@@ -4725,10 +4812,31 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
             opt.library.push_back(libMesh(tw));
             variants += "," + std::string("{\"mesh\":") + json::str(tw.name) + ",\"leavesLevel0\":0,\"leavesNearMid\":0,\"leavesLevel1\":0}";
         }
+        // the crown cards (the mid level's leaves where a tree has them): leaf meshes of the mid level only
+        bool anyCards = false;
+        for (const auto& t : R.trees) if (t.hasLod && t.lod.midCards()) { anyCards = true; break; }
+        std::string cardsJson;
+        if (anyCards) {
+            std::string names, cells;
+            for (const auto& c : lib.cards) {
+                opt.library.push_back(libMesh(c));
+                variants += "," + std::string("{\"mesh\":") + json::str(c.name) + ",\"leavesLevel0\":0,\"leavesNearMid\":0,\"leavesLevel1\":" + std::to_string(c.leaves) + "}";
+                names += (names.empty() ? "" : ",") + json::str(c.name);
+            }
+            for (const auto& cell : lib.cardLayout.cells) {
+                std::string leaves;
+                for (const auto& lf : cell) leaves += (leaves.empty() ? "" : ",") + std::string("[") + json::num(lf.u) + "," + json::num(lf.v) + "," + json::num(lf.angle) + "," + json::num(lf.length) + "," + json::num(lf.pick) + "]";
+                cells += (cells.empty() ? "" : ",") + std::string("[") + leaves + "]";
+            }
+            cardsJson = ",\"crownCards\":{\"schema\":\"scratchbox.crown-cards/1\",\"meshes\":[" + names + "],\"cols\":" + std::to_string(lib.cardLayout.cols) + ",\"rows\":" + std::to_string(lib.cardLayout.rows) +
+                        ",\"clayLeafAspect\":" + json::num(lib.params.morphology.blade.widthRatio) +
+                        ",\"leaf\":\"[u, v, angle, length, pick]: an ellipse centred (u, v) in the card's cell ([0, 1]^2, s across, t up; TEXCOORD_0 = ((col + s) / cols, (row + t) / rows)), its long axis at angle (rad from +s), length long, length x aspect wide (clay: clayLeafAspect); textured, the leaf cell's image is drawn in a box along the same axis with the cell's own aspect, scaled so the cell's fill covers the clay ellipse's area (box length = length x sqrt((pi / 4) x clayLeafAspect / (fill x aspect))); pick in [0, 1) chooses its leaf image and shade; drawn in list order\"" +
+                        ",\"cells\":[" + cells + "]}";
+        }
         members += ",\"sbTrees\":{\"schema\":\"scratchbox.trees-lod/3\",\"psiSeason\":" + json::num(std::clamp(P.psiSeason, 0.0, 1.0)) + ",\"clusterLibrary\":{\"variants\":[" + variants +
                    "],\"leafSizeModel\":{\"sizeRatioToCrownHeight\":" + json::num(lib.params.leafSizeRatioToCrownHeight) + ",\"minM\":" + json::num(lib.params.leafMinM) + ",\"maxM\":" + json::num(lib.params.leafMaxM) + "}" +
                    // a leaf card's TEXCOORD_0 (u = 0.5 + across / length, v = along / length): its outline's box is widthRatio wide
-                   ",\"leafCard\":{\"widthRatio\":" + json::num(lib.params.morphology.blade.widthRatio) + ",\"uv\":\"TEXCOORD_0: u = 0.5 + across / blade length, v = along / blade length (base 0)\",\"leafAttribute\":\"_LEAF: x atlas pick in [0, 1), y 1 on a blade, 0 on a stalk or shoot\"}}" +
+                   ",\"leafCard\":{\"widthRatio\":" + json::num(lib.params.morphology.blade.widthRatio) + ",\"uv\":\"TEXCOORD_0: u = 0.5 + across / blade length, v = along / blade length (base 0)\",\"leafAttribute\":\"_LEAF: x atlas pick in [0, 1), y 1 on a blade, 0 on a stalk or shoot\"}}" + cardsJson +
                    (P.textures ? ",\"textures\":{\"schema\":" + json::str(P.textures->schema) + ",\"index\":" + json::str(P.textureIndex) +
                                  ",\"woodUv\":\"TEXCOORD_0 in the chosen bark's tiles: u around (whole tiles), v along the path from the root\",\"chosenBy\":\"appearance: measured crown colour, leaf size from the tree's height and crown, bark relief from its size\"}"
                                : std::string()) + "}";

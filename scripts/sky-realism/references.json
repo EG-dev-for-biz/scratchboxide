@@ -1,0 +1,694 @@
+[
+ {
+  "id": "aristea_wreck_puresky",
+  "timeOfDay": "midday",
+  "weather": "partly_cloudy",
+  "coords": [
+   -30.345199,
+   17.278928
+  ],
+  "capturedLocalUnix": 1504006800,
+  "utcOffsetHours": 2,
+  "polyhavenId": "aristea_wreck_puresky",
+  "whiteBalanceKelvin": 5400
+ },
+ {
+  "id": "autumn_field_puresky",
+  "timeOfDay": "afternoon",
+  "weather": "clear",
+  "capturedLocalUnix": 1697032560,
+  "polyhavenId": "autumn_field_puresky",
+  "whiteBalanceKelvin": 5450
+ },
+ {
+  "id": "belfast_sunset_puresky",
+  "timeOfDay": "sunset",
+  "weather": "partly_cloudy",
+  "coords": [
+   -25.687944,
+   30.113194
+  ],
+  "capturedLocalUnix": 1622654820,
+  "utcOffsetHours": 2,
+  "polyhavenId": "belfast_sunset_puresky"
+ },
+ {
+  "id": "citrus_orchard_puresky",
+  "timeOfDay": "sunrise",
+  "weather": "partly_cloudy",
+  "coords": [
+   -25.483763,
+   27.763756
+  ],
+  "capturedLocalUnix": 1708842240,
+  "utcOffsetHours": 2,
+  "polyhavenId": "citrus_orchard_puresky",
+  "whiteBalanceKelvin": 5539
+ },
+ {
+  "id": "citrus_orchard_road_puresky",
+  "timeOfDay": "sunrise",
+  "weather": "partly_cloudy",
+  "coords": [
+   -25.482239,
+   27.7642
+  ],
+  "capturedLocalUnix": 1708841580,
+  "utcOffsetHours": 2,
+  "polyhavenId": "citrus_orchard_road_puresky",
+  "whiteBalanceKelvin": 5539
+ },
+ {
+  "id": "drackenstein_quarry_puresky",
+  "timeOfDay": "sunset",
+  "weather": "partly_cloudy",
+  "coords": [
+   48.548582,
+   9.657288
+  ],
+  "capturedLocalUnix": 1641135720,
+  "polyhavenId": "drackenstein_quarry_puresky"
+ },
+ {
+  "id": "drakensberg_solitary_mountain_puresky",
+  "timeOfDay": "afternoon",
+  "weather": "clear",
+  "coords": [
+   -28.94226,
+   29.32537
+  ],
+  "capturedLocalUnix": 1652610420,
+  "utcOffsetHours": 2,
+  "polyhavenId": "drakensberg_solitary_mountain_puresky",
+  "whiteBalanceKelvin": 5313
+ },
+ {
+  "id": "evening_road_01_puresky",
+  "timeOfDay": "sunset",
+  "weather": "partly_cloudy",
+  "capturedLocalUnix": 1565544540,
+  "polyhavenId": "evening_road_01_puresky",
+  "whiteBalanceKelvin": 5400
+ },
+ {
+  "id": "farm_field_puresky",
+  "timeOfDay": "midday",
+  "weather": "partly_cloudy",
+  "coords": [
+   -23.565487,
+   30.031894
+  ],
+  "capturedLocalUnix": 1666448580,
+  "utcOffsetHours": 2,
+  "polyhavenId": "farm_field_puresky",
+  "whiteBalanceKelvin": 5313
+ },
+ {
+  "id": "hilly_terrain_01_puresky",
+  "timeOfDay": "sunset",
+  "weather": "partly_cloudy",
+  "capturedLocalUnix": 1559070960,
+  "polyhavenId": "hilly_terrain_01_puresky"
+ },
+ {
+  "id": "industrial_sunset_02_puresky",
+  "timeOfDay": "sunset",
+  "weather": "partly_cloudy",
+  "capturedLocalUnix": 1559161260,
+  "polyhavenId": "industrial_sunset_02_puresky"
+ },
+ {
+  "id": "industrial_sunset_puresky",
+  "timeOfDay": "sunset",
+  "weather": "partly_cloudy",
+  "capturedLocalUnix": 1553708760,
+  "polyhavenId": "industrial_sunset_puresky"
+ },
+ {
+  "id": "kloofendal_28d_misty_puresky",
+  "timeOfDay": "morning",
+  "weather": "fog",
+  "coords": [
+   -26.123391,
+   27.883609
+  ],
+  "capturedLocalUnix": 1686130440,
+  "utcOffsetHours": 2,
+  "polyhavenId": "kloofendal_28d_misty_puresky",
+  "whiteBalanceKelvin": 5313
+ },
+ {
+  "id": "kloofendal_38d_partly_cloudy_puresky",
+  "timeOfDay": "midday",
+  "weather": "partly_cloudy",
+  "coords": [
+   -26.14066228,
+   27.89984354
+  ],
+  "capturedLocalUnix": 1607096400,
+  "utcOffsetHours": 2,
+  "polyhavenId": "kloofendal_38d_partly_cloudy_puresky",
+  "whiteBalanceKelvin": 5319
+ },
+ {
+  "id": "kloofendal_43d_clear_puresky",
+  "timeOfDay": "midday",
+  "weather": "clear",
+  "coords": [
+   -26.123391,
+   27.883609
+  ],
+  "capturedLocalUnix": 1684320360,
+  "utcOffsetHours": 2,
+  "polyhavenId": "kloofendal_43d_clear_puresky",
+  "whiteBalanceKelvin": 5313
+ },
+ {
+  "id": "kloofendal_48d_partly_cloudy_puresky",
+  "timeOfDay": "midday",
+  "weather": "partly_cloudy",
+  "coords": [
+   -26.14066228,
+   27.89984354
+  ],
+  "capturedLocalUnix": 1553262240,
+  "utcOffsetHours": 2,
+  "polyhavenId": "kloofendal_48d_partly_cloudy_puresky",
+  "whiteBalanceKelvin": 5400
+ },
+ {
+  "id": "kloofendal_misty_morning_puresky",
+  "timeOfDay": "morning",
+  "weather": "fog",
+  "coords": [
+   -26.123391,
+   27.883609
+  ],
+  "capturedLocalUnix": 1686126000,
+  "utcOffsetHours": 2,
+  "polyhavenId": "kloofendal_misty_morning_puresky",
+  "whiteBalanceKelvin": 5313
+ },
+ {
+  "id": "kloofendal_overcast_puresky",
+  "timeOfDay": "afternoon",
+  "weather": "overcast",
+  "coords": [
+   -26.123391,
+   27.883609
+  ],
+  "capturedLocalUnix": 1684342680,
+  "utcOffsetHours": 2,
+  "polyhavenId": "kloofendal_overcast_puresky",
+  "whiteBalanceKelvin": 5303
+ },
+ {
+  "id": "kloppenheim_01_puresky",
+  "timeOfDay": "sunset",
+  "weather": "overcast",
+  "coords": [
+   -25.654156,
+   30.161901
+  ],
+  "capturedLocalUnix": 1572627540,
+  "utcOffsetHours": 2,
+  "polyhavenId": "kloppenheim_01_puresky"
+ },
+ {
+  "id": "kloppenheim_02_puresky",
+  "timeOfDay": "night",
+  "weather": "clear",
+  "coords": [
+   -25.654156,
+   30.161901
+  ],
+  "capturedLocalUnix": 1572728220,
+  "utcOffsetHours": 2,
+  "polyhavenId": "kloppenheim_02_puresky",
+  "whiteBalanceKelvin": 3776
+ },
+ {
+  "id": "kloppenheim_03_puresky",
+  "timeOfDay": "midday",
+  "weather": "partly_cloudy",
+  "coords": [
+   -25.6542194,
+   30.16192135
+  ],
+  "capturedLocalUnix": 1572698940,
+  "utcOffsetHours": 2,
+  "polyhavenId": "kloppenheim_03_puresky"
+ },
+ {
+  "id": "kloppenheim_05_puresky",
+  "timeOfDay": "midday",
+  "weather": "partly_cloudy",
+  "coords": [
+   -25.6542194,
+   30.16192135
+  ],
+  "capturedLocalUnix": 1572780120,
+  "utcOffsetHours": 2,
+  "polyhavenId": "kloppenheim_05_puresky",
+  "whiteBalanceKelvin": 5319
+ },
+ {
+  "id": "kloppenheim_06_puresky",
+  "timeOfDay": "sunset",
+  "weather": "partly_cloudy",
+  "coords": [
+   -25.648383,
+   30.151945
+  ],
+  "capturedLocalUnix": 1572799620,
+  "utcOffsetHours": 2,
+  "polyhavenId": "kloppenheim_06_puresky",
+  "whiteBalanceKelvin": 5319
+ },
+ {
+  "id": "kloppenheim_07_puresky",
+  "timeOfDay": "night",
+  "weather": "overcast",
+  "coords": [
+   -25.654156,
+   30.161901
+  ],
+  "capturedLocalUnix": 1572811560,
+  "utcOffsetHours": 2,
+  "polyhavenId": "kloppenheim_07_puresky",
+  "whiteBalanceKelvin": 3776
+ },
+ {
+  "id": "lonely_road_afternoon_puresky",
+  "timeOfDay": "afternoon",
+  "weather": "clear",
+  "coords": [
+   -28.046333,
+   26.603583
+  ],
+  "capturedLocalUnix": 1699638660,
+  "utcOffsetHours": 2,
+  "polyhavenId": "lonely_road_afternoon_puresky",
+  "whiteBalanceKelvin": 5539
+ },
+ {
+  "id": "mpumalanga_veld_puresky",
+  "timeOfDay": "sunset",
+  "weather": "clear",
+  "coords": [
+   -24.889112,
+   30.876935
+  ],
+  "capturedLocalUnix": 1443279960,
+  "utcOffsetHours": 2,
+  "polyhavenId": "mpumalanga_veld_puresky"
+ },
+ {
+  "id": "mud_road_puresky",
+  "timeOfDay": "midday",
+  "weather": "overcast",
+  "capturedLocalUnix": 1455619320,
+  "polyhavenId": "mud_road_puresky"
+ },
+ {
+  "id": "overcast_soil_puresky",
+  "timeOfDay": "afternoon",
+  "weather": "overcast",
+  "capturedLocalUnix": 1697731980,
+  "polyhavenId": "overcast_soil_puresky",
+  "whiteBalanceKelvin": 6900
+ },
+ {
+  "id": "pizzo_pernice_puresky",
+  "timeOfDay": "midday",
+  "weather": "clear",
+  "coords": [
+   45.995926,
+   8.51848
+  ],
+  "capturedLocalUnix": 1650113100,
+  "polyhavenId": "pizzo_pernice_puresky"
+ },
+ {
+  "id": "quarry_01_puresky",
+  "timeOfDay": "sunset",
+  "weather": "clear",
+  "capturedLocalUnix": 1560793380,
+  "polyhavenId": "quarry_01_puresky"
+ },
+ {
+  "id": "quarry_04_puresky",
+  "timeOfDay": "sunset",
+  "weather": "partly_cloudy",
+  "capturedLocalUnix": 1557084600,
+  "polyhavenId": "quarry_04_puresky"
+ },
+ {
+  "id": "qwantani_afternoon_puresky",
+  "timeOfDay": "afternoon",
+  "weather": "clear",
+  "coords": [
+   -28.48533209827116,
+   29.012639559934758
+  ],
+  "capturedLocalUnix": 1724249040,
+  "utcOffsetHours": 2,
+  "polyhavenId": "qwantani_afternoon_puresky",
+  "whiteBalanceKelvin": 5313
+ },
+ {
+  "id": "qwantani_dawn_puresky",
+  "timeOfDay": "sunrise",
+  "weather": "clear",
+  "coords": [
+   -28.48533209827116,
+   29.012639559934758
+  ],
+  "capturedLocalUnix": 1724048880,
+  "utcOffsetHours": 2,
+  "polyhavenId": "qwantani_dawn_puresky",
+  "whiteBalanceKelvin": 5303
+ },
+ {
+  "id": "qwantani_dusk_1_puresky",
+  "timeOfDay": "dusk",
+  "weather": "partly_cloudy",
+  "coords": [
+   -28.48533209827116,
+   29.012639559934758
+  ],
+  "capturedLocalUnix": 1724348820,
+  "utcOffsetHours": 2,
+  "polyhavenId": "qwantani_dusk_1_puresky",
+  "whiteBalanceKelvin": 5303
+ },
+ {
+  "id": "qwantani_dusk_2_puresky",
+  "timeOfDay": "dusk",
+  "weather": "partly_cloudy",
+  "coords": [
+   -28.48533209827116,
+   29.012639559934758
+  ],
+  "capturedLocalUnix": 1724349960,
+  "utcOffsetHours": 2,
+  "polyhavenId": "qwantani_dusk_2_puresky",
+  "whiteBalanceKelvin": 5303
+ },
+ {
+  "id": "qwantani_late_afternoon_puresky",
+  "timeOfDay": "afternoon",
+  "weather": "clear",
+  "coords": [
+   -28.48533209827116,
+   29.012639559934758
+  ],
+  "capturedLocalUnix": 1723997040,
+  "utcOffsetHours": 2,
+  "polyhavenId": "qwantani_late_afternoon_puresky",
+  "whiteBalanceKelvin": 5313
+ },
+ {
+  "id": "qwantani_mid_morning_puresky",
+  "timeOfDay": "afternoon",
+  "weather": "clear",
+  "coords": [
+   -28.48533209827116,
+   29.012639559934758
+  ],
+  "capturedLocalUnix": 1724148300,
+  "utcOffsetHours": 2,
+  "polyhavenId": "qwantani_mid_morning_puresky",
+  "whiteBalanceKelvin": 5313
+ },
+ {
+  "id": "qwantani_moon_noon_puresky",
+  "timeOfDay": "night",
+  "weather": "clear",
+  "coords": [
+   -28.48533209827116,
+   29.012639559934758
+  ],
+  "capturedLocalUnix": 1724015160,
+  "utcOffsetHours": 2,
+  "polyhavenId": "qwantani_moon_noon_puresky",
+  "whiteBalanceKelvin": 4339
+ },
+ {
+  "id": "qwantani_moonrise_puresky",
+  "timeOfDay": "night",
+  "weather": "clear",
+  "coords": [
+   -28.48533209827116,
+   29.012639559934758
+  ],
+  "capturedLocalUnix": 1724182860,
+  "utcOffsetHours": 2,
+  "polyhavenId": "qwantani_moonrise_puresky",
+  "whiteBalanceKelvin": 4088
+ },
+ {
+  "id": "qwantani_morning_puresky",
+  "timeOfDay": "morning",
+  "weather": "clear",
+  "coords": [
+   -28.48533209827116,
+   29.012639559934758
+  ],
+  "capturedLocalUnix": 1724141340,
+  "utcOffsetHours": 2,
+  "polyhavenId": "qwantani_morning_puresky",
+  "whiteBalanceKelvin": 5313
+ },
+ {
+  "id": "qwantani_night_puresky",
+  "timeOfDay": "night",
+  "weather": "clear",
+  "coords": [
+   -28.48533209827116,
+   29.012639559934758
+  ],
+  "capturedLocalUnix": 1724352180,
+  "utcOffsetHours": 2,
+  "polyhavenId": "qwantani_night_puresky",
+  "whiteBalanceKelvin": 4901
+ },
+ {
+  "id": "qwantani_noon_puresky",
+  "timeOfDay": "midday",
+  "weather": "clear",
+  "coords": [
+   -28.48533209827116,
+   29.012639559934758
+  ],
+  "capturedLocalUnix": 1724242680,
+  "utcOffsetHours": 2,
+  "polyhavenId": "qwantani_noon_puresky",
+  "whiteBalanceKelvin": 5313
+ },
+ {
+  "id": "qwantani_puresky",
+  "timeOfDay": "afternoon",
+  "weather": "clear",
+  "coords": [
+   -28.48536987,
+   29.01268416
+  ],
+  "capturedLocalUnix": 1556803080,
+  "utcOffsetHours": 2,
+  "polyhavenId": "qwantani_puresky",
+  "whiteBalanceKelvin": 5400
+ },
+ {
+  "id": "qwantani_sunrise_puresky",
+  "timeOfDay": "sunrise",
+  "weather": "clear",
+  "coords": [
+   -28.48533209827116,
+   29.012639559934758
+  ],
+  "capturedLocalUnix": 1724049780,
+  "utcOffsetHours": 2,
+  "polyhavenId": "qwantani_sunrise_puresky",
+  "whiteBalanceKelvin": 5303
+ },
+ {
+  "id": "qwantani_sunset_puresky",
+  "timeOfDay": "sunset",
+  "weather": "partly_cloudy",
+  "coords": [
+   -28.48533209827116,
+   29.012639559934758
+  ],
+  "capturedLocalUnix": 1724000940,
+  "utcOffsetHours": 2,
+  "polyhavenId": "qwantani_sunset_puresky",
+  "whiteBalanceKelvin": 5303
+ },
+ {
+  "id": "rocky_ridge_puresky",
+  "timeOfDay": "sunset",
+  "weather": "partly_cloudy",
+  "coords": [
+   -26.145263,
+   27.967626
+  ],
+  "capturedLocalUnix": 1436108760,
+  "utcOffsetHours": 2,
+  "polyhavenId": "rocky_ridge_puresky"
+ },
+ {
+  "id": "rosendal_park_sunset_puresky",
+  "timeOfDay": "sunset",
+  "weather": "clear",
+  "coords": [
+   -28.506456,
+   27.9373
+  ],
+  "capturedLocalUnix": 1691863560,
+  "utcOffsetHours": 2,
+  "polyhavenId": "rosendal_park_sunset_puresky",
+  "whiteBalanceKelvin": 5539
+ },
+ {
+  "id": "rustig_koppie_puresky",
+  "timeOfDay": "morning",
+  "weather": "partly_cloudy",
+  "coords": [
+   -25.795704,
+   27.6427
+  ],
+  "capturedLocalUnix": 1498290060,
+  "utcOffsetHours": 2,
+  "polyhavenId": "rustig_koppie_puresky"
+ },
+ {
+  "id": "scythian_tombs_puresky",
+  "timeOfDay": "sunset",
+  "weather": "partly_cloudy",
+  "coords": [
+   50.799222,
+   33.583327
+  ],
+  "capturedLocalUnix": 1665331920,
+  "polyhavenId": "scythian_tombs_puresky",
+  "whiteBalanceKelvin": 6000
+ },
+ {
+  "id": "snow_field_2_puresky",
+  "timeOfDay": "afternoon",
+  "weather": "overcast",
+  "coords": [
+   50.862231,
+   34.740651
+  ],
+  "capturedLocalUnix": 1644407520,
+  "polyhavenId": "snow_field_2_puresky",
+  "whiteBalanceKelvin": 6350
+ },
+ {
+  "id": "snow_field_puresky",
+  "timeOfDay": "afternoon",
+  "weather": "overcast",
+  "coords": [
+   50.85733,
+   34.920377
+  ],
+  "capturedLocalUnix": 1643211060,
+  "polyhavenId": "snow_field_puresky",
+  "whiteBalanceKelvin": 6900
+ },
+ {
+  "id": "sunflowers_puresky",
+  "timeOfDay": "midday",
+  "weather": "partly_cloudy",
+  "capturedLocalUnix": 1564992720,
+  "polyhavenId": "sunflowers_puresky",
+  "whiteBalanceKelvin": 6550
+ },
+ {
+  "id": "syferfontein_0d_clear_puresky",
+  "timeOfDay": "sunset",
+  "weather": "clear",
+  "coords": [
+   -26.3588,
+   27.7549
+  ],
+  "capturedLocalUnix": 1534004160,
+  "utcOffsetHours": 2,
+  "polyhavenId": "syferfontein_0d_clear_puresky",
+  "whiteBalanceKelvin": 5400
+ },
+ {
+  "id": "syferfontein_18d_clear_puresky",
+  "timeOfDay": "afternoon",
+  "weather": "clear",
+  "coords": [
+   -26.3588,
+   27.7549
+  ],
+  "capturedLocalUnix": 1532268840,
+  "utcOffsetHours": 2,
+  "polyhavenId": "syferfontein_18d_clear_puresky",
+  "whiteBalanceKelvin": 5400
+ },
+ {
+  "id": "syferfontein_1d_clear_puresky",
+  "timeOfDay": "sunset",
+  "weather": "clear",
+  "coords": [
+   -26.35881089,
+   27.75494503
+  ],
+  "capturedLocalUnix": 1533938400,
+  "utcOffsetHours": 2,
+  "polyhavenId": "syferfontein_1d_clear_puresky",
+  "whiteBalanceKelvin": 5400
+ },
+ {
+  "id": "syferfontein_6d_clear_puresky",
+  "timeOfDay": "sunset",
+  "weather": "clear",
+  "coords": [
+   -26.3588,
+   27.7549
+  ],
+  "capturedLocalUnix": 1534001280,
+  "utcOffsetHours": 2,
+  "polyhavenId": "syferfontein_6d_clear_puresky",
+  "whiteBalanceKelvin": 5400
+ },
+ {
+  "id": "table_mountain_1_puresky",
+  "timeOfDay": "sunset",
+  "weather": "partly_cloudy",
+  "coords": [
+   -33.958547,
+   18.405612
+  ],
+  "capturedLocalUnix": 1464964200,
+  "utcOffsetHours": 2,
+  "polyhavenId": "table_mountain_1_puresky",
+  "whiteBalanceKelvin": 5400
+ },
+ {
+  "id": "table_mountain_2_puresky",
+  "timeOfDay": "sunset",
+  "weather": "partly_cloudy",
+  "coords": [
+   -33.958997,
+   18.404364
+  ],
+  "capturedLocalUnix": 1464966120,
+  "utcOffsetHours": 2,
+  "polyhavenId": "table_mountain_2_puresky",
+  "whiteBalanceKelvin": 5400
+ },
+ {
+  "id": "wasteland_clouds_puresky",
+  "timeOfDay": "sunset",
+  "weather": "partly_cloudy",
+  "capturedLocalUnix": 1554914160,
+  "polyhavenId": "wasteland_clouds_puresky"
+ }
+]

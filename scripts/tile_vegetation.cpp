@@ -90,6 +90,9 @@ static void usage() {
         "                              a value other than the recorded one is refused)\n"
         "    --coverage-fill 0|1 (1) --coverage-leaf-area-index V (4.6) --coverage-max-fill-share V (0.8)   fill each crown toward 1 - exp(-0.5 LAI leafiness)\n"
         "    --mid-area-gain V --near-mid-area-gain V   leaf area of the mid / near-mid clusters as a multiple of the near level's\n"
+        "    --crown-correction PATH   photo-inferred crown widths and bases (scratchbox.crown-correction/1), applied before growing\n"
+        "    --crown-cards 0|1 (1) --crown-card-side-per-reach V (2) --crown-card-coverage-share V (1)   the mid level as large leaf-spray cards\n"
+        "                                    (side V cluster reaches) placed until they cover V x what the mid clusters would\n"
         "    --threads N\n";
 }
 
@@ -379,6 +382,10 @@ static int runPlant(const Args& a) {
     P.treeLod.coverageLeafAreaIndex = a.num("coverage-leaf-area-index", P.treeLod.coverageLeafAreaIndex);
     P.treeLod.coverageMaxFillShare = a.num("coverage-max-fill-share", P.treeLod.coverageMaxFillShare);
     P.treeLod.level1AreaGain = a.num("mid-area-gain", P.treeLod.level1AreaGain);
+    P.treeLod.crownCards = a.num("crown-cards", P.treeLod.crownCards ? 1 : 0) != 0;
+    P.treeLod.crownCardSidePerReach = a.num("crown-card-side-per-reach", P.treeLod.crownCardSidePerReach);
+    P.treeLod.crownCardCoverageShare = a.num("crown-card-coverage-share", P.treeLod.crownCardCoverageShare);
+    if (!(P.treeLod.crownCardSidePerReach > 0) || !(P.treeLod.crownCardCoverageShare > 0)) throw VegetationError("bad_request", "--crown-card-side-per-reach and --crown-card-coverage-share must be > 0");
     P.treeLod.nearMidAreaGain = a.num("near-mid-area-gain", P.treeLod.nearMidAreaGain);
     if (P.treeLod.coverageLeafAreaIndex < 0 || P.treeLod.coverageMaxFillShare < 0) throw VegetationError("bad_request", "--coverage-leaf-area-index and --coverage-max-fill-share must be >= 0");
     if (!(P.treeLod.level1AreaGain > 0) || !(P.treeLod.nearMidAreaGain > 0)) throw VegetationError("bad_request", "--mid-area-gain and --near-mid-area-gain must be > 0");
@@ -405,6 +412,25 @@ static int runPlant(const Args& a) {
             throw VegetationError("bad_input", std::string("--texture-index: ") + e.what());
         }
         P.textureIndex = a.has("texture-index-label") ? a.str("texture-index-label") : a.str("texture-index");
+    }
+
+    if (a.has("crown-correction")) {
+        // photo-inferred crown corrections (scratchbox.crown-correction/1, tree-crown-photo-check.ts): each listed crown's
+        // width and base, applied before it is grown
+        const auto cb = readFileBytes(a.str("crown-correction"));
+        const io::GlbJsonValue cdoc = json::parse(std::string(cb.begin(), cb.end()));
+        if (cdoc.type != io::GlbJsonValue::Object || cdoc["schema"].asString() != "scratchbox.crown-correction/1" || cdoc["trees"].type != io::GlbJsonValue::Object) {
+            throw VegetationError("bad_input", "--crown-correction is not a scratchbox.crown-correction/1 document with a trees object");
+        }
+        P.crownCorrectionMethod = cdoc["method"].type == io::GlbJsonValue::String ? cdoc["method"].asString() : std::string("photo-inferred");
+        for (const auto& [id, e] : cdoc["trees"].obj) {
+            CrownCorrection k;
+            k.widthScale = e["widthScale"].type == io::GlbJsonValue::Number ? e["widthScale"].num : 1.0;
+            k.crownBaseRatio = e["crownBaseRatio"].type == io::GlbJsonValue::Number ? e["crownBaseRatio"].num : std::numeric_limits<double>::quiet_NaN();
+            k.source = e["source"].type == io::GlbJsonValue::String ? e["source"].asString() : std::string("photo");
+            if (!(k.widthScale > 0)) throw VegetationError("bad_input", "--crown-correction: crown " + id + " has a widthScale that is not > 0");
+            P.crownCorrections[std::stoi(id)] = k;
+        }
     }
 
     const auto bytes = readFileBytes(a.str("crowns"));
@@ -519,13 +545,16 @@ static int runPlant(const Args& a) {
           << ", \"stop\": " << json::str(t.colonisation.stop) << ", \"trunkSeekSteps\": " << t.colonisation.trunkSeekSteps << "}"
           << ", \"bounds\": [[" << json::num(lo.x) << "," << json::num(lo.y) << "," << json::num(lo.z) << "],[" << json::num(hi.x) << "," << json::num(hi.y) << "," << json::num(hi.z) << "]]"
           << ", \"seed\": " << t.seed << ", \"crownBaseRatio\": " << json::num(t.crownBaseRatio);
+        if (t.hasCorrection) s << ", \"crownCorrection\": {\"widthScale\": " << json::num(t.correction.widthScale) << ", \"crownBaseRatio\": "
+                               << (std::isfinite(t.correction.crownBaseRatio) ? json::num(t.correction.crownBaseRatio) : std::string("null")) << ", \"source\": " << json::str(t.correction.source) << ", \"provenance\": \"photo-inferred\"}";
+        if (!t.correctionDropped.empty()) s << ", \"crownCorrectionDropped\": " << json::str(t.correctionDropped);
         if (t.hasLod) {
             const auto& L = t.lod;
             auto lvl = [&](const tree_lod::LeafLevelMeasure& m, size_t drawn) {
                 double sMax = 0, sMin = 1e9;
                 size_t over = 0;
                 for (int k = 0; k < 16; ++k) {
-                    const double rr = (*t.crown)["sectorRadii"][static_cast<size_t>(k)].num;
+                    const double rr = (*t.crown)["sectorRadii"][static_cast<size_t>(k)].num * (t.hasCorrection ? t.correction.widthScale : 1.0);
                     if (rr <= 0) continue;
                     const double ratio = m.spread[static_cast<size_t>(k)] / rr;
                     sMax = std::max(sMax, ratio); sMin = std::min(sMin, ratio);
@@ -542,7 +571,8 @@ static int runPlant(const Args& a) {
               << ", \"unfit\": " << L.unfit << ", \"inset\": " << L.inset << ", \"outsideCrown\": " << L.outsideCrown << ", \"prunedBelowRadiusM\": " << json::num(L.prunedBelowRadiusM) << ", \"skeletonNodes\": " << t.report.skeletonNodes << ", \"twigs\": " << L.twigCount() << ", \"twigRadiusMinM\": " << json::num(L.twigRadiusMinM) << ", \"twigRadiusMedianM\": " << json::num(L.twigRadiusMedianM) << ", \"twigRadiusMaxM\": " << json::num(L.twigRadiusMaxM) << ", \"woodTriangles\": " << L.woodTriangles
               << ", \"level0\": " << lvl(L.level0, L.drawnLevel0()) << ", \"nearMid\": " << lvl(L.nearMid, L.drawnNearMid()) << ", \"level1\": " << lvl(L.level1, L.drawnLevel1()) << ", \"level2Triangles\": " << L.drawnFar(t.foliage.indices.size() / 3) << ", \"farWoodTriangles\": " << L.farWoodTriangles << ", \"farWoodPrunedBelowRadiusM\": " << json::num(L.farWoodPrunedBelowRadiusM)
               << ", \"ms\": " << json::num(t.lodMs) << ", \"msWood\": " << json::num(L.msWood) << ", \"msTwigs\": " << json::num(L.msTwigs) << ", \"msStations\": " << json::num(L.msStations)
-              << ", \"msRepair\": " << json::num(L.msRepair) << ", \"msFill\": " << json::num(L.msFill) << ", \"msMeasure\": " << json::num(L.msMeasure)
+              << ", \"msRepair\": " << json::num(L.msRepair) << ", \"msFill\": " << json::num(L.msFill) << ", \"msMeasure\": " << json::num(L.msMeasure) << ", \"msCards\": " << json::num(L.msCards)
+              << (L.midCards() ? ", \"crownCards\": " + detail::crownCardsJson(L, true) : std::string())
               << ", \"coverage\": " << detail::coverageJson(L.coverage) << "}";
         }
         s << "}";

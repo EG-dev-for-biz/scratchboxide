@@ -81,7 +81,7 @@ describe('cloud shell decks: validation and packing', () => {
 describe('cloud shell decks in the sky dome', () => {
     it('the dome shader composites the decks before the volumetric layer', () => {
         const shells = ATMOSPHERE_FRAGMENT_SHADER.indexOf('skyColor = compositeCloudShells(');
-        const cumulus = ATMOSPHERE_FRAGMENT_SHADER.indexOf('--- 3. TRUE 3D VOLUMETRIC');
+        const cumulus = ATMOSPHERE_FRAGMENT_SHADER.indexOf('--- 3. VOLUMETRIC CUMULUS');
         expect(shells).toBeGreaterThan(0);
         expect(shells).toBeLessThan(cumulus);
     });

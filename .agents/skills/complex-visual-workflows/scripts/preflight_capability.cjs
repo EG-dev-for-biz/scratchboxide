@@ -76,7 +76,7 @@ function analyzeVisualPrompt(prompt) {
 
   if (isVideo) {
     nativeTools.push('adaptive_matchmove_resect_keyframe');
-    nativeTools.push('adaptive_matchmove_solve_spline');
+    nativeTools.push('adaptive_matchmove_synthesize_trajectory');
     nativeTools.push('video-timeline canvas primitive (HeadlessVideoEditorService)');
     nativeTools.push('atmosphere_configure_scene / atmosphere_harmonize_location_3d');
     cliCommands.push('sbox matchmove reference.mp4 --landmark "<landmark>" --render-mode textured --resolution 4k');
@@ -84,7 +84,7 @@ function analyzeVisualPrompt(prompt) {
   }
 
   if (isImagery) {
-    nativeTools.push('build_beautify_prompt (AI Beautify Location Pipeline)');
+    nativeTools.push('survey_beautify_station / spatial_ai_render_scene (AI Beautify Location Pipeline; the template is applied inside them)');
     nativeTools.push('generate_multi_angle_turnaround (Dual-Anchor Orbit Engine)');
     nativeTools.push('algorithmic_uv_rewrap (0.000 px drift, Sobel joint deepening)');
     nativeTools.push('pbr_material_synthesize (continuous biophysical R^20 manifold)');

@@ -189,6 +189,8 @@ export interface LocationClayTrees {
     crownsJson: string;
     /** Not observed by a scan, so set by ratios and reported as inferred. */
     inferred: Record<string, number>;
+    /** The photo-inferred crown correction the trees were grown with (Street View crown widths and bases), when one was recorded for these crowns. */
+    crownCorrection?: TileVegetationPlantResult['crownCorrection'];
     strip: {
         removedTriangles?: number;
         capTriangles?: number;
@@ -477,6 +479,7 @@ export function summarizeTrees(
     };
     if (planted) {
         trees.count = Number(planted.stats.trees ?? 0);
+        if (planted.crownCorrection) trees.crownCorrection = planted.crownCorrection;
         trees.triangles = Number(planted.stats.triangles ?? 0);
         trees.triangleBudget = Number(planted.stats.triangleBudget ?? 0);
         if (typeof planted.stats.triangleBudgetSource === 'string') trees.triangleBudgetSource = planted.stats.triangleBudgetSource;

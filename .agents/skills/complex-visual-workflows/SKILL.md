@@ -63,12 +63,13 @@ Every visual task executed in Scratchbox IDE must strictly obey six foundational
 - **The Alien Planet Test (Zero Closed Taxonomies)**: Never design closed enums (e.g. `type Domain = 'arctic' | 'desert'`). All structures, biomes, and extraterrestrial forms must be expressible via continuous physical parameter manifolds ($R^N$).
 - **No Regex Noun Dictionaries**: Spatial intent is recognized through dimensional verbs of fabrication (`build`, `model`, `construct`, `sculpt`, `extrude`, `assemble`, `render`), never exhaustive lists of human artifacts.
 
-### 3. Universal First-Request 3D Staging Invariant
-- **When Location is Described in Initial Prompt**: Return the scene staged at that authentic location by default using **Google 3D Tiles Studio Grey Clay** (`google_3d_tiles_get_clay`, `location: "..."`, or `stage_3d_vector_world`). Model the hero object in 18% Grey Clay right on the real-world corridor. **Never build fake procedural asphalt boxes or lollipop trees**.
-- **When NO Location is Described First**: Model the hero object in **18% Studio Grey Clay** (`sb.PbrMaterial.clay()`, roughness 0.85, metalness 0.0, color `[0.55, 0.57, 0.60]`) in a **3D Stage Void** (`environment: { skybox: 'studio', lighting: 'studio', ground: false }`).
-- **Separation of Staging & Environments from Textures & Materials**: Present two distinct, dedicated follow-up sections via interactive chat pills:
-  1. *Section 1: Staging & Environments* (Google 3D Tiles Clay, Vector World Roadway, Environmental Plinth, Solar Ephemeris).
-  2. *Section 2: Textures & Materials* (PBR clearcoat/metal, 2DGS planar surfels, 3DGS radiance fields, Algorithmic UV micro-textures).
+### 3. Universal First-Request 3D Staging Invariant (Textured by Default, Clay on Request)
+- **Textured by default**: new objects and places open with their own materials (see AGENTS.md "Textured by Default, Clay on Request" and `docs/processes/textured_by_default_clay_on_request.md`). Studio grey clay (`sb.PbrMaterial.clay()`, roughness 0.85, metalness 0.0, color `[0.55, 0.57, 0.60]`) only when the user asks for it.
+- **When Location is Described in Initial Prompt**: Return the scene staged at that authentic location (`google_3d_tiles_get_clay` staged build: clay massing first, crossfading to its real textures; or `stage_3d_vector_world`), with the hero object right on the real-world corridor. **Never build fake procedural asphalt boxes or lollipop trees**.
+- **When NO Location is Described First**: Build the hero object with its materials in a **3D Stage Void** (`environment: { skybox: 'studio', lighting: 'studio', ground: false }`).
+- **Separation of Staging & Environments from Views & Material Refinement**: Present two distinct, dedicated follow-up sections via interactive chat pills:
+  1. *Section 1: Staging & Environments* (real-world place via Google 3D Tiles, Vector World Roadway, Environmental Plinth or cyclorama, Atmosphere & Solar Ephemeris, studio void).
+  2. *Section 2: Views & Material Refinement* (a clay view for reviewing the shape; material values such as colour, roughness and metalness changed with `sb_set_material_pbr` or by rebuilding with adjusted materials; 2DGS planar surfels; 3DGS splats). Offer `pbr_synthesize_material` only when the user asks for procedural texture maps (its maps come out as uniform procedural noise).
 
 ### 4. The 70-20-10 Geometric Form Hierarchy
 - **70% Primary Edifice / Silhouette**: Sculpted compound curvature, stance, non-linear deformers (taper, twist, bend, bulge, FFD lattices).
@@ -201,16 +202,16 @@ Transforms coarse 3D tile captures into photographic-grade imagery by constructi
 ### Runbook A: Concept $\rightarrow$ Hero 3D Asset $\rightarrow$ Location Staging
 1. **Pre-flight Check**: Run [preflight_capability.cjs](./scripts/preflight_capability.cjs) to confirm Tier 1 viability and identify whether a real-world location is requested.
 2. **Procedural Geometry Generation**:
-   - If no location given: Author Python procedural script using `import scratchbox as sb` enforcing 70-20-10 form hierarchy in **18% Studio Grey Clay**. Stream binary `.glb` to canvas.
-   - If location given: Retrieve Google 3D Tiles in Studio Grey Clay (`google_3d_tiles_get_clay`) or Vector World (`stage_3d_vector_world`), and model hero asset placed directly on the terrain/corridor.
+   - If no location given: Author Python procedural script using `import scratchbox as sb` enforcing 70-20-10 form hierarchy with the asset's own materials (studio grey clay only when the user asks for clay). Stream binary `.glb` to canvas.
+   - If location given: Stage the place (`google_3d_tiles_get_clay` staged build, clay first then its real textures) or Vector World (`stage_3d_vector_world`), and model hero asset placed directly on the terrain/corridor.
 3. **Interactive Follow-up Pills**:
    - Provide Section 1 (Staging & Environments: Google 3D Tiles, Vector World, Studio Cyclorama, Solar Ephemeris).
-   - Provide Section 2 (Textures & Materials: PBR Clearcoat, 2DGS Planar Surfels, Algorithmic UV Rewrap).
+   - Provide Section 2 (Views & Material Refinement: Clay View, material values via `sb_set_material_pbr` or a rebuild with adjusted materials, 2DGS Planar Surfels, 3DGS Splats; `pbr_synthesize_material` only when procedural texture maps are asked for).
 4. **Mechanical Asset Verification**: Run [verify_visual_asset.cjs](./scripts/verify_visual_asset.cjs) to verify vertex count ($\ge 5,000$ for props, $\ge 25,000$ for scenes).
 
 ### Runbook B: Reference Video $\rightarrow$ Matchmove $\rightarrow$ 3D Blockout $\rightarrow$ Omni Video $\rightarrow$ 50/50 QA
 1. **Probe Reference Video**: Extract framerate, resolution, and duration with `ffprobe`.
-2. **Resect Keyframes & Solve Spline**: Run `adaptive_matchmove_resect_keyframe` and `adaptive_matchmove_solve_spline` to fit continuous $C^2$ spline.
+2. **Resect Keyframes & Solve Spline**: Run `adaptive_matchmove_resect_keyframe` and `adaptive_matchmove_synthesize_trajectory` to fit continuous $C^2$ spline.
 3. **Render 4K 3D Tiles Blockout**: Execute `sbox matchmove reference.mp4 --landmark "<name>" --render-mode textured --resolution 4k` to produce `<VIDEO_REF_0>`.
 4. **Synthesize Omni 1.1 Video**: Format Omni prompt conditioned on `<VIDEO_REF_0>` with timestamped shot blocks and zero-cut enforcement.
 5. **Compile 50/50 Comparison**: Run FFmpeg `hstack` to produce side-by-side synchronized split verification video.

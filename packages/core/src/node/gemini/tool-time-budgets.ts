@@ -56,6 +56,8 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
     // One block extraction, a structure pick per building, the tree strip, the per-triangle split and one GLB pair per
     // building; with the mask vote, a render, vision outlines and an isolate per building.
     location_split_block: { maxMs: 45 * MIN, idleMs: 15 * MIN },
+    // The first call compiles the native audit binary (up to 10 min); an audit itself takes well under a minute per layer.
+    location_residual_audit: { maxMs: 15 * MIN },
     // Native cluster LOD build: about 2 s per 170k triangles, longer for multi-million-triangle scans.
     virtual_geometry_open_glb: { maxMs: 12 * MIN },
     // Several serial image-model calls each.
