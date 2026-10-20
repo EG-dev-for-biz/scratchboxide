@@ -128,6 +128,7 @@ import { buildSwitchLocationPills, switchLocationMarkdown } from '../../../commo
 import { summarizeStagedBuild, type StagedSummaryInput } from './staged-summary';
 import { palettesFromSurvey, photoTierEnabled, textureLayer, TEXTURE_PASS_VERSION, type TextureLayerOutcome } from './texture-pass';
 import { prepareTextureSources, type TextureSourcesInput } from './texture-sources';
+import { maskTemporaryInViews, textureTemporaryEnabled, visionTemporaryChecker, TEMPORARY_CHECK_VERSION } from './temporary-structures';
 import { objectSegmenter, ownViews, OWNERSHIP_VERSION, type OwnershipSegmenter } from './streetview-ownership';
 import { correctViewsLighting, lightingModels, lightingPromptVariant, textureArmOptions, LIGHTING_MODEL_LITE, type LightingCorrectedView } from './texture-lighting';
 import { TextureWorkerPool, textureWorkersEnabled } from './texture-worker-pool';
@@ -140,8 +141,9 @@ import { mslToTileY, type SolarRoof } from './pipeline-e/solar-roof';
 import { runInferenceE, type InferenceOutcome, type StepRecord } from './pipeline-e/inference';
 import { gateDecision, photoMatchGate, pipelineERelief, runReliefStage, GENERATED_LABEL, MEASURED_AVERAGED_LABEL, RELIEF_GATE_JUDGE, RELIEF_PARAMS, RELIEF_VERSION, type PhotoGateResult, type ReliefOutcome } from './pipeline-e/relief';
 import { crownsFromStrip } from './pipeline-e/occluders';
-import { enhanceModels, genAiPlateClient, stagedEnhance } from './pipeline-e/enhance';
+import { enhanceGuards, enhanceModels, genAiPlateClient, stagedEnhance, ENHANCE_STREET_VIEWS } from './pipeline-e/enhance';
 import { projectionViewsFromEvidence } from './texture-pass';
+import { registeredSurveyViews } from './streetview-registered-views';
 import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
 import { facadeGrammarEnabled, grammarFileText, runFacadeGrammarPass, FACADE_GRAMMAR_GATE_VERSION, FACADE_GRAMMAR_PROMPT_VERSION, type GrammarFacadeOutcome } from './facade-grammar';
 import { TEXTURE_LADDER_RUNGS, type TexturePassDegradation, type TexturePassRecord, type TextureLayerBundle } from '../../../common/spatial/texture-pass-contracts';
@@ -170,8 +172,9 @@ export const STAGES = {
     'trees-measure': { order: -1, title: 'Measuring the trees', budgetMs: 300_000 },
     remesh: { order: 2, title: 'Remeshed scan', budgetMs: 300_000 },
     // the facades' grammars read from the tile photo (three readings per facade, concurrently), gated, and the relief run
-    // again with the accepted ones
-    grammar: { order: 2, title: 'Facade grammar', budgetMs: 300_000 },
+    // again with the accepted ones; pipeline E's inference runs here too, and in its enhanced mode (the default within E) also a registered
+    // Street View survey (about 3 min, alongside the readings) and up to 8 redraws (about 2.5 min)
+    grammar: { order: 2, title: 'Facade grammar', budgetMs: 420_000 },
     // pipeline E: measured relief on the clean massing (the scan averaged along what repeats), then the photo-match gate
     relief: { order: 2, title: 'Measured relief', budgetMs: 480_000 },
     fit: { order: 3, title: 'Scan-fitted rebuild', budgetMs: 30_000 },
@@ -235,8 +238,9 @@ export interface StagedLocationRequest {
     /** The place already resolved (a 'Switch location' choice): used as given, the query is not geocoded. */
     place?: ResolvedPlace;
     /**
-     * Pipeline E's enhanced mode (opt-in, also SCRATCHBOX_STAGED_ENHANCE=1): each large wall's texture redrawn once by an
-     * image model, kept only where it keeps the tile's edges; labelled generated.
+     * Pipeline E's enhanced appearance (the default within pipeline E; false, or SCRATCHBOX_STAGED_ENHANCE=0, is the real-data
+     * view): each large wall's texture redrawn once by an image model, kept only where it keeps the tile's edges and erases
+     * or contradicts nothing distinct; labelled generated.
      */
     enhance?: boolean;
 }
@@ -1651,6 +1655,19 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         cache.writeRunNote(runId, 'texture_ownership', { ms: now() - to, records: own.records });
                         io.progress(`textures: the structure was cut out of ${kept} of ${own.records.length} Street View photos; ${own.records.length - kept} photos vouch for no pixel (${own.records.find(r => r.status === 'refused')?.reason ?? 'none'})`);
                     }
+                    // temporary structures (SCRATCHBOX_TEXTURE_TEMPORARY=1, or legacy SCRATCHBOX_SURVEY_TEMPORARY=1, only): what the vision model outlines as temporary in front of
+                    // the structure (scaffolding, netting, ...) is taken out of each view's ownership mask, an occluder for the bake
+                    let temporaryKey: string | undefined;
+                    if (views.length && textureTemporaryEnabled() && visionAvailable) {
+                        const tt = now();
+                        const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: io.signal, ...chainExtras('textures'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
+                        const tmp = await maskTemporaryInViews({ views, check: visionTemporaryChecker(chain), target: request.query, signal: io.signal, onProgress: m => io.progress(`textures: ${m}`) });
+                        views = tmp.views;
+                        temporaryKey = `sv-temporary/${TEMPORARY_CHECK_VERSION}:${sha256Bytes(Buffer.from(JSON.stringify(tmp.records.map(r => [r.panoId, r.flagged, r.maskedPixels]))))}`;
+                        cache.writeRunNote(runId, 'texture_temporary', { ms: now() - tt, records: tmp.records });
+                        const flagged = tmp.records.filter(r => r.flagged);
+                        io.progress(`textures: ${flagged.length} of ${tmp.records.length} Street View photos show something temporary in front of the structure${flagged.length ? ` (${flagged.map(r => r.description).filter(Boolean).slice(0, 3).join('; ')}); those regions texture nothing` : ''}`);
+                    }
                     const viewsUnavailable = arm.streetView === 'off' ? 'Street View is turned off for this build (SCRATCHBOX_TEXTURE_STREET_VIEW=off, an experiment arm)' : images.length ? (views.length ? undefined : `none of the ${images.length} grounding images decoded (${failures[0] ?? ''})`)
                         : evidence ? `the Street View stage ${evidence.status === 'skipped' ? 'was skipped' : 'returned no image'}` : (visionAvailable ? 'the Street View stage did not run' : 'no vision model is configured, so no Street View close-ups were fetched');
                     const palette = palettesFromSurvey(run.state.materialHints?.faces);
@@ -1705,7 +1722,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const textureOne = async (target: typeof targets[number]) => {
                         handled.add(target.layer.objectId);
                         const clay = fs.readFileSync(target.file);
-                        const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), wideHeld.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048, surfacesKey(target.surfaces), ...(!(rebuildOut.refit ?? rebuildOut.fit) && views.length ? ['no-fit-held-out-gate/2'] : []), ...(lightingClient ? [`light:${lightingModelIds.join(',')}:${lightingPromptVariant()}:${lightingViews?.length ?? 0}`] : []), ...(arm.key ? [arm.key] : []), ...(ownershipKey ? [ownershipKey] : []));
+                        const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), wideHeld.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048, surfacesKey(target.surfaces), ...(!(rebuildOut.refit ?? rebuildOut.fit) && views.length ? ['no-fit-held-out-gate/2'] : []), ...(lightingClient ? [`light:${lightingModelIds.join(',')}:${lightingPromptVariant()}:${lightingViews?.length ?? 0}`] : []), ...(arm.key ? [arm.key] : []), ...(ownershipKey ? [ownershipKey] : []), ...(temporaryKey ? [temporaryKey] : []));
                         const entry = await cache.run<Omit<TextureLayerOutcome, 'glb'>>('textures', key, async dir => {
                             const bake = (bakeViews: typeof views, bakeUnavailable: string | undefined) => (texturePool ? texturePool.textureLayer.bind(texturePool) : textureLayer)({ layerKey: target.layer.layer, clayGlb: clay, ...(target.surfaces?.length ? { surfaces: target.surfaces } : {}) }, {
                                 views: bakeViews, ...(wideViews.length ? { photoTierViews: wideViews } : {}), ...(photoTierEnabled() ? { photoTier: true } : {}), ...(bakeUnavailable ? { viewsUnavailable: bakeUnavailable } : {}), occluder, ...(context.indices.length ? { context } : {}), observedSurface: TEXTURE_OBSERVED_SURFACE, poseEdgeGuardShare: TEXTURE_POSE_EDGE_GUARD_SHARE,
@@ -2236,14 +2253,33 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         return own.views;
                     } : undefined;
                     const crowns = strip ? crownsFromStrip(JSON.parse(fs.readFileSync(strip.crownsJson, 'utf8'))) : [];
-                    const enhanceOn = request.enhance === true || stagedEnhance();
+                    const enhanceOn = request.enhance ?? stagedEnhance();
+                    // enhanced mode's own Street View survey: the views registered against the tile mesh (edges, then jointly) and
+                    // cut out, so each wall's redraw is guided by and checked against a photo whose pose holds (plate-streetview.ts)
+                    const guideViews = enhanceOn && enhanceGuards() && !missingCredentials(sv) && segmenter ? async () => {
+                        const found = await discoverOnce();
+                        const usable = found.panos.filter(p => !sv.refusedPanos?.has(p.panoId));
+                        io.progress('pipeline E: enhanced mode: surveying the facades with Street View (registered views)');
+                        const got = await registeredSurveyViews({
+                            site: { structure: structure!, ground: t.ground!, unmaskedTop: t.unmaskedTop ?? t.ground!.top }, panos: usable, maxViews: ENHANCE_STREET_VIEWS, streetLevel: true,
+                            sv: { ...sv, refusedPanos: sv.refusedPanos ?? new Map<string, string>() }, tileMeshFiles: [extraction.geometryGlb], structureMesh,
+                            context: sceneToRenderMesh(readGlbScene(extraction.geometryGlb)), segment: segmenter, ...(visionAvailable ? { target: request.query } : {}),
+                            signal: io.signal, onProgress: m => io.progress(`pipeline E: enhanced mode: ${m}`)
+                        });
+                        if (got.images.length) run.state.attribution = [...new Set([...run.state.attribution, 'Street View ©Google'])];
+                        cache.writeRunNote(runId, 'pipeline_e_enhance_streetview', {
+                            views: got.views.map(v => ({ panoId: v.panoId, faceId: v.faceId, registration: v.registration, ownership: v.ownership?.status, iou: v.ownership?.iou, ownedPixels: v.ownerMask?.reduce((a, x) => a + (x ? 1 : 0), 0) ?? 0 })),
+                            refusals: got.refusals, failures: got.failures, registrationError: got.registrationError, ms: got.ms
+                        });
+                        return got.views;
+                    } : undefined;
                     const enhance = deps.textures?.enhance;
                     const out = await runInferenceE({
                         massing: r.massing, run: r.run!, textures: r.textures!, tilePath: strip ? strip.devegetatedGlb : extraction.texturedGlb, isolateGlb: e.refined.rawClayGlb!,
                         dir: path.join(cache.dir, 'pipeline_e', e.key.slice(0, 24), 'inference'), stage: 'grammar', stageKey: e.key,
                         ...(chain ? { chain } : {}), ...(streetViews ? { streetViews } : {}), structureMesh, crowns,
                         ...(enhance ? { inpaint: { client: enhance, models: [LIGHTING_MODEL_LITE] } } : {}),
-                        ...(enhanceOn && visionAvailable ? { enhance: { client: genAiPlateClient(visionAvailable.client), models: enhanceModels(), locationName: placeValue!.formattedAddress } } : {}),
+                        ...(enhanceOn && visionAvailable ? { enhance: { client: genAiPlateClient(visionAvailable.client), models: enhanceModels(), locationName: placeValue!.formattedAddress, guards: enhanceGuards(), cacheDir: path.join(cache.dir, 'enhance_plates'), ...(guideViews ? { streetViews: guideViews } : {}) } } : {}),
                         solar: [], anchor: structure!.seed, signal: io.signal, onProgress: m => io.progress(m)
                     });
                     cache.writeRunNote(runId, 'pipeline_e_inference', { steps: out.steps, timingsMs: out.timingsMs });
@@ -2255,7 +2291,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const pubClay = cache.publishFile(out.files.clayGlb, `${base}_massing_${key8}_${suffix}.glb`);
                     const pubTex = cache.publishFile(out.files.texturedGlb, `${base}_massing_${key8}_${suffix}_tex.glb`);
                     const enh = out.enhanced;
-                    const enhNote = enhanceOn ? `; enhanced mode (opt-in) was used: ${enh.filter(x => x.accepted).length} of ${enh.length} walls redrawn by ${enhanceModels().join(', ')} and kept (labelled generated, "AI-enhanced from tile"), ${enh.filter(x => !x.accepted).length} rejected by the alignment gate and keep the tile texture${visionAvailable ? '' : ' (no image model: nothing was enhanced)'}` : '';
+                    const enhNote = enhanceOn ? `; enhanced mode (the default within pipeline E; SCRATCHBOX_STAGED_ENHANCE=0 or the real-data view turns it off) was used: ${enh.filter(x => x.accepted).length} of ${enh.length} walls redrawn by ${enhanceModels().join(', ')} and kept (labelled generated, "AI-enhanced from tile"), ${enh.filter(x => !x.accepted).length} rejected (identity gate or region audit) and keep the tile texture; edge chamfer per wall ${enh.filter(x => x.chamferPx !== undefined).map(x => `${x.face} ${x.chamferPx} px / ${Math.round(100 * (x.lostShare ?? 0))}% lost`).join(', ') || 'none'} (reported, not gated)${visionAvailable ? '' : ' (no image model: nothing was enhanced)'}` : '';
                     const describe = out.steps.map(s => `${s.step}: ${s.skipped ? `skipped (${s.skipped})` : `${s.accepted} of ${s.proposed} kept`}`).join('; ') + enhNote;
                     const layer: StagedLayer = {
                         objectId: layerObjectId(e.key, 'l2g'), stage: 'grammar', layer: 'l2g', order: STAGES.grammar.order, url: pubClay.url, bytes: pubClay.bytes,
@@ -2264,7 +2300,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [e.layer.objectId] }, cached: false, builtAtMs: now(), counts: layerCounts(out.files.clayGlb),
                         textured: {
                             url: pubTex.url, bytes: pubTex.bytes, ladderRung: out.files.texturedShares.findIndex((_, k, a) => a.slice(k + 1).reduce((x, y) => x + y, 0) <= 0.1),
-                            rungShares: out.files.texturedShares, provenance: out.legend.map(x => ({ source: x.source, label: x.label, method: x.method, coverage: 0 })),
+                            rungShares: out.files.texturedShares, provenance: out.legend.map(x => ({ source: x.source, label: x.label, method: x.method, coverage: 0, ...(x.chamferPx !== undefined ? { chamferPx: x.chamferPx } : {}), ...(x.lostShare !== undefined ? { lostShare: x.lostShare } : {}) })),
                             confidenceChannels: 'R = index into provenance[], G = weight 0..255, B = ladder rung (TEXTURE_LADDER_RUNGS), A = 255 where a stage produced the texel', builtAtMs: now(), cached: false
                         }
                     };
@@ -2311,11 +2347,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const c = out.counts;
                     const gen = out.generated;
                     const builtMeasured = out.geometry.features.some(f => f.built);
-                    const builtGenerated = !!gen && gen.geometry.features.some(f => f.label === GENERATED_LABEL && f.built);
+                    // the real-data view (enhanced mode off) shows real sources only: measured relief, never the generated typical profiles
+                    const realDataView = !(request.enhance ?? stagedEnhance());
+                    const builtGenerated = !realDataView && !!gen && gen.geometry.features.some(f => f.label === GENERATED_LABEL && f.built);
                     const kept = out.geometry.features.filter(f => f.built);
                     const depths = kept.map(f => `${f.role}: ${f.depthM.toFixed(2)} +- ${f.seM.toFixed(2)} m`).slice(0, 12).join('; ');
                     const describe = `measured: bands ${c.bands.accepted} of ${c.bands.proposed} kept, vertical elements ${c.verticals.accepted} of ${c.verticals.proposed}, window reveals ${c.reveals.accepted} of ${c.reveals.proposed}, projections beside openings ${c.projections.accepted} of ${c.projections.proposed} (gate: depth >= ${RELIEF_PARAMS.k} standard errors and >= ${RELIEF_PARAMS.minDepth} m, from >= ${RELIEF_PARAMS.minBlocks} blocks of ${RELIEF_PARAMS.block} m or >= ${RELIEF_PARAMS.minOpenings} openings)` +
-                        (gen ? `; generated (typical profiles in the scan's evidence bounds): bands ${gen.counts.bands.built}, window reveals ${gen.counts.reveals.built}` : '');
+                        (gen ? (realDataView ? `; generated typical profiles not used (the real-data view shows real sources only)` : `; generated (typical profiles in the scan's evidence bounds): bands ${gen.counts.bands.built}, window reveals ${gen.counts.reveals.built}`) : '');
                     cache.writeRunNote(runId, 'pipeline_e_relief', { counts: c, features: out.geometry.features, generated: gen ? { counts: gen.counts, features: gen.geometry.features.filter(f => f.label === GENERATED_LABEL) } : undefined, replacedSweeps: out.geometry.replacedSweeps, maps: out.maps, timingsMs: out.timingsMs });
                     if (!builtMeasured && !builtGenerated) return { status: 'degraded', value: { outcome: { counts: c } }, source: `measured relief: nothing stood out of the scan significantly (${describe})`, reason: 'no measured feature passed its gate' };
                     // the layer gate: the layer it refines, the measured layer, and the measured layer with the generated
@@ -2367,7 +2405,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [baseLayer.objectId] }, cached: false, builtAtMs: now(), counts: layerCounts(files.clayGlb),
                         textured: {
                             url: pubTex.url, bytes: pubTex.bytes, ladderRung: files.texturedShares.findIndex((_, k, a) => a.slice(k + 1).reduce((x, y) => x + y, 0) <= 0.1),
-                            rungShares: files.texturedShares, provenance: (inf?.out.legend ?? r.legend!).map(x => ({ source: x.source, label: x.label, method: x.method, coverage: 0 })),
+                            rungShares: files.texturedShares, provenance: (inf?.out.legend ?? r.legend!).map(x => ({ source: x.source, label: x.label, method: x.method, coverage: 0, ...(x.chamferPx !== undefined ? { chamferPx: x.chamferPx } : {}), ...(x.lostShare !== undefined ? { lostShare: x.lostShare } : {}) })),
                             confidenceChannels: 'R = index into provenance[], G = weight 0..255, B = ladder rung (TEXTURE_LADDER_RUNGS), A = 255 where a stage produced the texel', builtAtMs: now(), cached: false
                         }
                     };

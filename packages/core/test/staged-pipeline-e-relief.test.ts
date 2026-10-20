@@ -138,7 +138,7 @@ function profilePlot(rows: Float32Array, face: { orthoTMax: number; pixel: numbe
         const t = face.orthoTMax - (r + 0.5) * face.pixel;
         if (t < tMin || t > tMax) continue;
         const m = rows[r * 3] , se = rows[r * 3 + 1];
-        if (Number.isFinite(m)) { if (Number.isFinite(se)) for (let x = Math.max(0, X(m - K_SIGMA * se)); x <= Math.min(w - 1, X(m + K_SIGMA * se)); x++) put(x, Y(t), [170, 200, 240]); put(X(m), Y(t), [20, 70, 200]); put(X(m) + 1, Y(t), [20, 70, 200]); }
+        if (Number.isFinite(m)) { if (Number.isFinite(se) && se < 1) for (let x = Math.max(0, X(m - K_SIGMA * se)), x1 = Math.min(w - 1, X(m + K_SIGMA * se)); x <= x1; x++) put(x, Y(t), [170, 200, 240]); put(X(m), Y(t), [20, 70, 200]); put(X(m) + 1, Y(t), [20, 70, 200]); }
         put(X(Math.max(...[2.5, 6.5, 10.5, 12.0].map(s => truth(s, t)))), Y(t), [0, 0, 0]);
     }
     void base;

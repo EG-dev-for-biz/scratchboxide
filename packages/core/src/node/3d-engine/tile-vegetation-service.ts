@@ -138,10 +138,20 @@ export interface TileVegetationPlantParams {
     shellDepthPerHeight?: number;
     /** Distance between leaf clusters / cluster reach (0.5). */
     stationSpacing?: number;
-    /** Distances (m from the camera) at which a viewport changes a tree's level: level 0 up to lodNearPerHeight x its height (1, at most lodNearMax 30 m), level 1 up to lodFarPerHeight x its height (4, at most lodFarMax 140 m), dithered over lodFade (6 m). */
+    /**
+     * Distances (m from the camera) at which a viewport changes a tree's level: near up to lodNearPerHeight x its height (1,
+     * 12-30 m, at most lodNearMax), near-mid up to lodNearMidPerHeight x its height (3, 25-60 m, at most lodNearMidMax), mid
+     * up to lodFarPerHeight x its height (4, 60-140 m, at most lodFarMax), far beyond, dithered over lodFade (6 m) or more.
+     */
     lodNearPerHeight?: number;
+    /** The far level's wood (trunk and main limbs): clamp(farWoodTrianglesPerHeight x tree height, farWoodMinTriangles, farWoodMaxTriangles) triangles (24, 160, 600). */
+    farWoodTrianglesPerHeight?: number;
+    farWoodMinTriangles?: number;
+    farWoodMaxTriangles?: number;
+    lodNearMidPerHeight?: number;
     lodFarPerHeight?: number;
     lodNearMax?: number;
+    lodNearMidMax?: number;
     lodFarMax?: number;
     lodFade?: number;
     supportTolerance?: number;
@@ -157,7 +167,7 @@ export interface TileVegetationPlantParams {
  * budgets are scaled down to fit under this cap, what the leaf masses need first (never below the per-tree minimum of
  * 120). 1.5 million triangles: the trees model is written as positions, normals and 32-bit indices, about 33 bytes a
  * triangle (Central Park at a 250 m radius: 1,043 trees, 1.43 million budgeted triangles, 47 MB for the budgeted blob
- * trees; the written far level, which is that wood under the leaf masses of the blob trees, holds about 2.2 million, and
+ * trees; the written far level, the trunk and main limbs under the leaf masses of the blob trees, holds less, and
  * the near levels instance their leaves, so the file is larger than that figure), so at the cap the budgeted trees stay near
  * 50 MB, about the size of the photo-textured extraction of a 250 m radius it was measured in (41 MB there); with the
  * remeshed tile (0.1-1 million triangles) the scene stays under about 2.5 million triangles, which a WebGL viewport draws
@@ -168,7 +178,7 @@ export const SCENE_TREE_TRIANGLE_CAP = 1_500_000;
 
 /**
  * What the trees may draw, as opposed to what they store (SCENE_TREE_TRIANGLE_CAP above, which bounds each tree's wood, shared
- * by every level, and the blob tree the far masses are fitted to; the far level written is that wood under the masses, so a little over it). Trees are written at three levels, and a viewport draws one per tree
+ * by every level, and the blob tree the far masses are fitted to; the far level written is that wood under the masses, so a little over it). Trees are written at four levels, and a viewport draws one per tree
  * by its distance, so a frame draws far fewer triangles than the file holds: at most this many in a park view, in
  * total and per level. stats.lodFrames measures it on the written trees (camera poses on a grid over the location, an
  * 80 degree view, every tree within 8 m).
@@ -232,6 +242,12 @@ export interface TileVegetationPlantRequest {
     quantize?: boolean;
     /** Write each tree's growth order on its vertices as `_REVEAL` (default true); off, the same meshes without it. */
     reveal?: boolean;
+    /**
+     * Choose each tree's leaf set and bark from the tree texture library (assets/textures/trees/index.json) by appearance,
+     * give its wood UVs in the bark's tiles and record the choice in its extras (default true; ignored when the checkout has
+     * no library).
+     */
+    textures?: boolean;
     /** Copy the trees GLB to public/models/<publishAs> (a plain *.glb name). */
     publishAs?: string;
     threads?: number;
@@ -322,6 +338,15 @@ const BINARY = path.join('build', '3d-native', 'tile_vegetation');
 const CACHE_VERSION = 'tile_vegetation/v5';
 const PUBLISH_FILE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}\.glb$/;
 const KNOWN_CODES = new Set<TileVegetationErrorCode>(['bad_request', 'not_found', 'timeout', 'failed', 'build_failed', 'bad_input', 'texture_decode', 'no_photo_texture', 'budget_too_small', 'budget_exceeded', 'plant_failed', 'io']);
+
+/** The tree texture library's descriptor index, relative to the checkout (see scratchbox_tree_textures.hpp). */
+export const TREE_TEXTURE_INDEX = path.join('assets', 'textures', 'trees', 'index.json');
+
+/** The tree texture library's index in a checkout, or undefined when it has none. */
+export function treeTextureIndexPath(repoRoot: string): string | undefined {
+    const file = path.join(repoRoot, TREE_TEXTURE_INDEX);
+    return fs.existsSync(file) ? file : undefined;
+}
 
 /** The checkout that holds scripts/tile_vegetation.cpp: walks up from this file, then from cwd. */
 export function findTileVegetationRepoRoot(): string {
@@ -639,6 +664,10 @@ export class TileVegetationService {
         if (req.reveal !== undefined && typeof req.reveal !== 'boolean') throw new TileVegetationError('bad_request', 'reveal must be a boolean');
         const quantize = req.quantize ?? true;
         const reveal = req.reveal ?? true;
+        if (req.textures !== undefined && typeof req.textures !== 'boolean') throw new TileVegetationError('bad_request', 'textures must be a boolean');
+        const textureIndex = req.textures === false ? undefined : treeTextureIndexPath(this.repoRoot);
+        hash.update('\0');
+        if (textureIndex) sha256File(textureIndex, hash);
         hash.update('\0').update(JSON.stringify({ ...keyParams, ...budget, seed: req.seed.toLowerCase(), quantize, reveal }));
         const key = hash.digest('hex');
         const res = await this.cached(key, ['trees.glb', 'stats.json'], async (dir, signal) => {
@@ -648,6 +677,7 @@ export class TileVegetationService {
                 '--seed', req.seed, '--quantize', quantize ? '1' : '0', '--reveal', reveal ? '1' : '0', '--stage-key', key, ...flags];
             if (support) args.push('--support-mesh', support);
             if (ground) args.push('--ground-mesh', ground);
+            if (textureIndex) args.push('--texture-index', textureIndex, '--texture-index-label', TREE_TEXTURE_INDEX);
             if (req.threads !== undefined) args.push('--threads', String(req.threads));
             await runFile(bin, args, timeoutMs, signal);
         }, (dir, cached) => ({

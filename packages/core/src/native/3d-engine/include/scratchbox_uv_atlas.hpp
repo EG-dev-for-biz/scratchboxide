@@ -44,6 +44,11 @@ struct Params {
     double minIslandAreaM2 = 0.05;
     /** Overlap-eviction rounds before an overlapping triangle is made its own island. */
     int maxEvictionRounds = 8;
+    /**
+     * False skips the orthographic overlap check: islands are pure normal clusters and may overlap in their projection
+     * (for a caller that re-parameterizes them, e.g. scratchbox_uv_rewrap.hpp, and checks overlaps itself).
+     */
+    bool evictOverlaps = true;
 };
 
 struct Island {
@@ -345,7 +350,7 @@ inline Result buildIslands(const float* positions, uint32_t vertexCount, const u
         for (size_t i = 0; i < count; ++i) {
             if (members[i].empty()) continue;
             frames[i] = frameOf(i);
-            checkIsland(i, frames[i], last);
+            if (params.evictOverlaps) checkIsland(i, frames[i], last);
         }
         out.evictionRounds = static_cast<uint32_t>(round + 1);
         if (evicted.empty()) break;

@@ -122,6 +122,7 @@ export default defineConfig(({ mode }) => {
         '/tiles': apiProxy(),
         '/renders': apiProxy(),
         '/textures': apiProxy(),
+        '/assets/textures': apiProxy(),
         '/extracted_textures': apiProxy(),
         '/datasets': apiProxy(),
         '/real_3d_tiles_captures': apiProxy(),

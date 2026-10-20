@@ -734,29 +734,90 @@ export interface StagedGlbRootExtras { sb: { schema: 'scratchbox.staged-glb/2'; 
 // Tree LOD structure of the trees GLB (SB-Veggie)
 // =============================================================================
 
-/** Detail level of one tree: 0 near (instanced leaf clusters), 1 mid (same cluster positions, fewer larger leaves), 2 far (blob masses). */
-export type TreeLodLevel = 0 | 1 | 2;
+/**
+ * Detail level of one tree. Schema trees-lod/3 (four levels): 0 near (instanced leaf clusters, twigs), 1 near-mid (same cluster
+ * positions, a share of the leaves with the near outline, each larger; no twigs), 2 mid (same positions, fewer larger leaves
+ * as cards), 3 far (blob masses over the trunk and main limbs only, a few hundred triangles of wood, so holes a viewer opens
+ * in the masses show structure). Schema trees-lod/2 (still read) is the same four levels with level 0's whole wood under
+ * the far masses; schema trees-lod/1 (three levels, still read): 0 near, 1 mid, 2 far.
+ */
+export type TreeLodLevel = 0 | 1 | 2 | 3;
+
+/** Number of levels a trees GLB of the given root schema carries. */
+export const treesLodLevelCount = (schema: string | undefined): number => (schema === 'scratchbox.trees-lod/1' ? 3 : 4);
 
 /** Node extras `sbLod` of each of the three children of a tree node. Distances are metres from the camera; fadeM is the dither band. */
-export interface TreeLodExtras { level: TreeLodLevel; minDistM: number; maxDistM: number; fadeM: number; triangles: number; instanced: boolean }
+export interface TreeLodExtras {
+    level: TreeLodLevel; minDistM: number; maxDistM: number; fadeM: number; triangles: number; instanced: boolean;
+    /** Indices of this level node's own primitives that are leaves (the far level: the blob masses after the wood). */
+    foliagePrimitives?: number[];
+}
 
-/** Node extras `sbCluster` of an EXT_mesh_gpu_instancing leaf-cluster node (a child of a level-0/1 node): which shared mesh it instances and its hash seed for the dither. */
+/** Node extras `sbCluster` of an EXT_mesh_gpu_instancing leaf-cluster node (a child of a level node other than the far one): which shared mesh it instances and its hash seed for the dither. */
 export interface TreeClusterExtras { clusterMesh: string; hashSeed: number }
 
 /** Leaf blade length (m) = clamp(sizeRatio * crownHeightM, minM, maxM). Continuous, so it scales with the tree. */
 export interface TreeLeafSizeModel { sizeRatioToCrownHeight: number; minM: number; maxM: number }
 
-/** One shared cluster mesh: how many leaves it holds at level 0 and level 1. */
-export interface TreeClusterVariant { mesh: string; leavesLevel0: number; leavesLevel1: number }
+/** One shared cluster mesh: how many leaves it holds at the near level (leavesLevel0), the near-mid level (trees-lod/2) and the mid level (leavesLevel1). */
+export interface TreeClusterVariant { mesh: string; leavesLevel0: number; leavesNearMid?: number; leavesLevel1: number }
 
-/** Node extras `sbTree` of each tree node. Carries no species or measured claim for leaves. */
-export interface TreeNodeExtras { id: number; hashSeed: number; label: string }
+/**
+ * The crown envelope of a tree's delivered leaves, in the tree node's frame: an ellipsoid with semi-axes `radii`
+ * ([0] horizontal at `yawRad` from +x toward +z, [1] vertical, [2] the other horizontal). A viewer shades the leaves
+ * with its normals so the crown reads as one soft volume. `leanM` is the centre's horizontal offset from the stem.
+ * `lobes` (optional): the crown as a smooth union of spheres [x, y, z, radius] (same frame), blended by a smooth minimum
+ * of radius `lobeBlendM`; a viewer shades with its gradient instead of the ellipsoid's, so the crown keeps its lobes.
+ */
+export interface TreeCrownExtras {
+    centre: [number, number, number]; radii: [number, number, number]; yawRad: number; leanM: [number, number]; points: number; fittedTo: string;
+    lobes?: Array<[number, number, number, number]>; lobeBlendM?: number;
+}
+
+/**
+ * A tree's crown colour as the tile's photo shows it (measured): the linear sRGB mean and standard deviation of the photo
+ * over the crown's footprint cells (the darkest and brightest tenth by luminance left out), and the season cues it
+ * implies: the share of its cells whose chroma passes the vegetation test (green leaf cover), the mean's hue (degrees,
+ * 0 red, 120 green) and chroma (0 grey .. 1 saturated). greenShare is null where no cell's chroma could be judged.
+ */
+export interface TreeColourExtras {
+    meanLinearRgb: [number, number, number]; spreadLinearRgb: [number, number, number]; samples: number;
+    season: { greenShare: number | null; hueDeg: number; chroma: number };
+    provenance: 'measured'; source: string;
+}
+
+/**
+ * The surface textures chosen for a tree from the tree texture library (assets/textures/trees/index.json), by appearance:
+ * the leaf set nearest its measured crown colour and a leaf length in proportion to its size, the bark whose relief is
+ * nearest one that grows with its size. Tints multiply the textures' linear colour. Entries are library ids, never
+ * species or categories. colourProvenance says what colour the leaves were chosen by: the tree's own measured crown colour,
+ * the median of its planting's measured crowns ('neighbours'), or the library's leaf-on prior ('prior').
+ */
+export interface TreeTextureExtras {
+    leaves: { entry: string; tint: [number, number, number]; leafLengthM: number; targetLeafLengthM: number; cost: number; provenance: 'library' };
+    bark: {
+        entry: string; tint: [number, number, number]; tileM: [number, number]; reliefIndex: number; targetReliefIndex: number; sizeShare: number;
+        cost: number; provenance: 'library';
+    };
+    /** The far level's leaf masses: the chosen leaves' mean linear colour under the tint. */
+    massColourLinear: [number, number, number];
+    colourProvenance: 'measured' | 'neighbours' | 'prior' | 'none';
+}
+
+/** Node extras `sbTree` of each tree node. Carries no species or measured claim for leaves (its crown colour is measured from the photo). */
+export interface TreeNodeExtras { id: number; hashSeed: number; label: string; crown?: TreeCrownExtras; colour?: TreeColourExtras; texture?: TreeTextureExtras }
 
 /** Root extras `sbTrees` of the trees GLB. psiSeason 0..1 scales leaf density (0 bare winter, 1 full summer). */
 export interface TreesGlbRootExtras {
-    schema: 'scratchbox.trees-lod/1';
+    schema: 'scratchbox.trees-lod/1' | 'scratchbox.trees-lod/2' | 'scratchbox.trees-lod/3';
     psiSeason: number;
-    clusterLibrary: { variants: TreeClusterVariant[]; leafSizeModel: TreeLeafSizeModel };
+    clusterLibrary: {
+        variants: TreeClusterVariant[]; leafSizeModel: TreeLeafSizeModel;
+        /** The leaf cards' texture coordinates (TEXCOORD_0, by blade length) and `_LEAF` attribute; widthRatio is the outline's width over its length. */
+        leafCard?: { widthRatio: number; uv: string; leafAttribute: string };
+    };
+    /** Present when the trees were textured from the tree texture library (their sbTree.texture names the entries). */
+    textures?: { schema: string; index: string; woodUv: string; chosenBy: string };
 }
 
 // =============================================================================
@@ -835,8 +896,11 @@ export interface StagedTexturedVariant {
     ladderRung: number;
     /** Share of the layer's atlas texels per rung, indexed like TEXTURE_LADDER_RUNGS (sums to 1). */
     rungShares: number[];
-    /** The provenance entries of the layer's texels (labels and sources are open strings). */
-    provenance: Array<{ source: string; label: string; method: string; panoIds?: string[]; coverage: number }>;
+    /**
+     * The provenance entries of the layer's texels (labels and sources are open strings). An AI-enhanced wall's entry also
+     * carries its plate's alignment to the tile (symmetric edge chamfer in pixels, share of the tile's edges lost), reported.
+     */
+    provenance: Array<{ source: string; label: string; method: string; panoIds?: string[]; coverage: number; chamferPx?: number; lostShare?: number }>;
     /** What the confidence image's channels mean. */
     confidenceChannels: string;
     builtAtMs: number;
@@ -1723,19 +1787,46 @@ const DEFINITIONS = {
         }
     },
     treeLodExtras: obj(['level', 'minDistM', 'maxDistM', 'fadeM', 'triangles', 'instanced'], {
-        level: { type: 'integer', minimum: 0, maximum: 2 }, minDistM: ref('nonneg'), maxDistM: ref('nonneg'), fadeM: ref('nonneg'),
-        triangles: NONNEG_INT, instanced: BOOL
+        level: { type: 'integer', minimum: 0, maximum: 3 }, minDistM: ref('nonneg'), maxDistM: ref('nonneg'), fadeM: ref('nonneg'),
+        triangles: NONNEG_INT, instanced: BOOL, foliagePrimitives: arr(NONNEG_INT)
     }),
     treeClusterExtras: obj(['clusterMesh', 'hashSeed'], { clusterMesh: { type: 'string', minLength: 1 }, hashSeed: NONNEG_INT }),
-    treeNodeExtras: obj(['id', 'hashSeed', 'label'], { id: NONNEG_INT, hashSeed: NONNEG_INT, label: { type: 'string', minLength: 1 } }),
+    treeNodeExtras: obj(['id', 'hashSeed', 'label'], {
+        id: NONNEG_INT, hashSeed: NONNEG_INT, label: { type: 'string', minLength: 1 },
+        crown: obj(['centre', 'radii', 'yawRad', 'leanM', 'points', 'fittedTo'], {
+            centre: ref('vec3'), radii: arr({ type: 'number', exclusiveMinimum: 0 }, { minItems: 3, maxItems: 3 }), yawRad: NUM,
+            leanM: arr(NUM, { minItems: 2, maxItems: 2 }), points: NONNEG_INT, fittedTo: STR,
+            lobes: arr(arr(NUM, { minItems: 4, maxItems: 4 }), { minItems: 1, maxItems: 16 }), lobeBlendM: { type: 'number', exclusiveMinimum: 0 }
+        }),
+        colour: obj(['meanLinearRgb', 'spreadLinearRgb', 'samples', 'season', 'provenance', 'source'], {
+            meanLinearRgb: arr(ref('nonneg'), { minItems: 3, maxItems: 3 }), spreadLinearRgb: arr(ref('nonneg'), { minItems: 3, maxItems: 3 }), samples: NONNEG_INT,
+            season: obj(['greenShare', 'hueDeg', 'chroma'], { greenShare: { oneOf: [ref('unit'), { type: 'null' }] }, hueDeg: { type: 'number', minimum: 0, maximum: 360 }, chroma: ref('unit') }),
+            provenance: { const: 'measured' }, source: STR
+        }),
+        texture: obj(['leaves', 'bark', 'massColourLinear', 'colourProvenance'], {
+            leaves: obj(['entry', 'tint', 'leafLengthM', 'targetLeafLengthM', 'cost', 'provenance'], {
+                entry: { type: 'string', minLength: 1 }, tint: arr(ref('nonneg'), { minItems: 3, maxItems: 3 }), leafLengthM: { type: 'number', exclusiveMinimum: 0 },
+                targetLeafLengthM: { type: 'number', exclusiveMinimum: 0 }, cost: ref('nonneg'), provenance: { const: 'library' }
+            }),
+            bark: obj(['entry', 'tint', 'tileM', 'reliefIndex', 'targetReliefIndex', 'sizeShare', 'cost', 'provenance'], {
+                entry: { type: 'string', minLength: 1 }, tint: arr(ref('nonneg'), { minItems: 3, maxItems: 3 }),
+                tileM: arr({ type: 'number', exclusiveMinimum: 0 }, { minItems: 2, maxItems: 2 }), reliefIndex: ref('nonneg'), targetReliefIndex: ref('nonneg'),
+                sizeShare: ref('unit'), cost: ref('nonneg'), provenance: { const: 'library' }
+            }),
+            massColourLinear: arr(ref('nonneg'), { minItems: 3, maxItems: 3 }),
+            colourProvenance: { enum: ['measured', 'neighbours', 'prior', 'none'] }
+        })
+    }),
     TreesGlbRootExtras: obj(['schema', 'psiSeason', 'clusterLibrary'], {
-        schema: { const: 'scratchbox.trees-lod/1' }, psiSeason: ref('unit'),
+        schema: { enum: ['scratchbox.trees-lod/1', 'scratchbox.trees-lod/2', 'scratchbox.trees-lod/3'] }, psiSeason: ref('unit'),
         clusterLibrary: obj(['variants', 'leafSizeModel'], {
-            variants: arr(obj(['mesh', 'leavesLevel0', 'leavesLevel1'], { mesh: { type: 'string', minLength: 1 }, leavesLevel0: NONNEG_INT, leavesLevel1: NONNEG_INT }), { minItems: 1 }),
+            variants: arr(obj(['mesh', 'leavesLevel0', 'leavesLevel1'], { mesh: { type: 'string', minLength: 1 }, leavesLevel0: NONNEG_INT, leavesNearMid: NONNEG_INT, leavesLevel1: NONNEG_INT }), { minItems: 1 }),
             leafSizeModel: obj(['sizeRatioToCrownHeight', 'minM', 'maxM'], {
                 sizeRatioToCrownHeight: ref('nonneg'), minM: { type: 'number', exclusiveMinimum: 0 }, maxM: { type: 'number', exclusiveMinimum: 0 }
-            })
-        })
+            }),
+            leafCard: obj(['widthRatio', 'uv', 'leafAttribute'], { widthRatio: { type: 'number', exclusiveMinimum: 0 }, uv: STR, leafAttribute: STR })
+        }),
+        textures: obj(['schema', 'index', 'woodUv', 'chosenBy'], { schema: STR, index: STR, woodUv: STR, chosenBy: STR })
     }),
     vertexProvenance: obj(['schema', 'attributes', 'vertices'], {
         schema: { const: 'scratchbox.vertex-provenance/1' }, attributes: arr(STR), vertices: NONNEG_INT,
@@ -1805,7 +1896,7 @@ const DEFINITIONS = {
     // texture pass (texture-pass-contracts.ts): labels and sources are open strings, nothing branches on them
     texelProvenance: obj(['source', 'label', 'method', 'coverage'], {
         source: { type: 'string', minLength: 1 }, label: { type: 'string', minLength: 1 }, method: STR,
-        panoIds: arr(STR), captureDates: arr(STR), coverage: ref('unit')
+        panoIds: arr(STR), captureDates: arr(STR), coverage: ref('unit'), chamferPx: NUM, lostShare: ref('unit')
     }),
     photoTierFitScores: obj(['pixels'], {
         pixels: NONNEG_INT, geoChamferMedianPx: PHOTO_TIER_NUM, geoChamferMeanPx: PHOTO_TIER_NUM, heldOutGradNcc: PHOTO_TIER_NUM, heldOutChamferMedianPx: PHOTO_TIER_NUM,
@@ -2194,8 +2285,10 @@ export function validateContract(name: StagedSchemaName, value: unknown): string
 
 /**
  * Validates the JSON chunk of a trees GLB against the LOD structure: root extras `sbTrees`; every node with extras `sbTree`
- * has exactly three children tagged `sbLod` with levels 0, 1, 2 (distance bands in order, level 2 not instanced); instanced
- * children carry EXT_mesh_gpu_instancing and `sbCluster` naming a variant of the cluster library; no leaf node claims "measured".
+ * has exactly one child tagged `sbLod` per level (four for schema trees-lod/3 and /2, three for trees-lod/1), the levels' distance
+ * bands in order with no gap between neighbours, the far (last) level not instanced; instanced children carry
+ * EXT_mesh_gpu_instancing and `sbCluster` naming a variant of the cluster library; no leaf node claims "measured"; a crown's
+ * lobes have positive radii and come with their blend radius.
  * Returns one message per problem; [] means valid.
  */
 export function validateTreesGlbJson(gltf: any): string[] {
@@ -2203,6 +2296,8 @@ export function validateTreesGlbJson(gltf: any): string[] {
     const nodes: any[] = Array.isArray(gltf?.nodes) ? gltf.nodes : [];
     const rootExtras = gltf?.extras?.sbTrees;
     for (const m of validateContract('TreesGlbRootExtras', rootExtras)) out.push(m.replace(/^TreesGlbRootExtras/, 'extras.sbTrees'));
+    const levelCount = treesLodLevelCount(rootExtras?.schema);
+    const far = levelCount - 1;
     const variants = new Set<string>(Array.isArray(rootExtras?.clusterLibrary?.variants) ? rootExtras.clusterLibrary.variants.map((v: any) => v?.mesh) : []);
     const used: string[] = Array.isArray(gltf?.extensionsUsed) ? gltf.extensionsUsed : [];
     const trees = nodes.map((n, i) => ({ n, i })).filter(({ n }) => n?.extras?.sbTree !== undefined);
@@ -2210,8 +2305,13 @@ export function validateTreesGlbJson(gltf: any): string[] {
     for (const { n, i } of trees) {
         const at = `nodes[${i}]`;
         for (const m of validateContract('treeNodeExtras', n.extras.sbTree)) out.push(m.replace(/^treeNodeExtras/, `${at}.extras.sbTree`));
+        const crown = n.extras.sbTree?.crown;
+        if (crown?.lobes !== undefined) {
+            if (!(typeof crown.lobeBlendM === 'number' && crown.lobeBlendM > 0)) out.push(`${at}.extras.sbTree.crown: lobes need a positive lobeBlendM`);
+            if (Array.isArray(crown.lobes) && crown.lobes.some((l: any) => !(Array.isArray(l) && l[3] > 0))) out.push(`${at}.extras.sbTree.crown.lobes: every lobe has a positive radius`);
+        }
         const kids: number[] = Array.isArray(n.children) ? n.children : [];
-        if (kids.length !== 3) { out.push(`${at}: a tree has exactly 3 child nodes, has ${kids.length}`); continue; }
+        if (kids.length !== levelCount) { out.push(`${at}: a tree has exactly ${levelCount} child nodes, has ${kids.length}`); continue; }
         const lods = new Map<number, TreeLodExtras>();
         kids.forEach(k => {
             const c = nodes[k], kat = `nodes[${k}]`;
@@ -2219,10 +2319,11 @@ export function validateTreesGlbJson(gltf: any): string[] {
             const errs = validateContract('treeLodExtras', c.extras?.sbLod);
             if (errs.length) { errs.forEach(m => out.push(m.replace(/^treeLodExtras/, `${kat}.extras.sbLod`))); return; }
             const lod = c.extras.sbLod as TreeLodExtras;
+            if (lod.level > far) { out.push(`${kat}.extras.sbLod: level ${lod.level} past the far level ${far} of ${rootExtras?.schema ?? 'the schema'}`); return; }
             if (lods.has(lod.level)) out.push(`${kat}: tree has two level-${lod.level} children`);
             lods.set(lod.level, lod);
             if (lod.minDistM > lod.maxDistM) out.push(`${kat}.extras.sbLod: minDistM ${lod.minDistM} exceeds maxDistM ${lod.maxDistM}`);
-            if (lod.level === 2 && lod.instanced) out.push(`${kat}.extras.sbLod: level 2 is the shipped blob masses and is not instanced`);
+            if (lod.level === far && lod.instanced) out.push(`${kat}.extras.sbLod: level ${far} is the shipped blob masses and is not instanced`);
             // a level node holds the wood mesh; its leaf clusters are child nodes that instance one shared cluster mesh
             const clusters: number[] = Array.isArray(c.children) ? c.children : [];
             if (c.extensions?.EXT_mesh_gpu_instancing !== undefined) out.push(`${kat}: instancing belongs on its leaf-cluster child nodes`);
@@ -2238,12 +2339,14 @@ export function validateTreesGlbJson(gltf: any): string[] {
                 if (!ce.length && !variants.has(cn.extras.sbCluster.clusterMesh)) out.push(`${cat}.extras.sbCluster.clusterMesh: "${cn.extras.sbCluster.clusterMesh}" is not a variant of the cluster library`);
                 if (/measured/i.test(JSON.stringify(cn.extras))) out.push(`${cat}: leaf clusters carry no "measured" claim`);
             }
-            if (lod.level < 2 && /measured/i.test(JSON.stringify(c.extras))) out.push(`${kat}: leaf levels carry no "measured" claim`);
+            if (lod.level < far && /measured/i.test(JSON.stringify(c.extras))) out.push(`${kat}: leaf levels carry no "measured" claim`);
         });
-        for (const lv of [0, 1, 2]) if (!lods.has(lv)) out.push(`${at}: missing level-${lv} child`);
-        const [l0, l1, l2] = [lods.get(0), lods.get(1), lods.get(2)];
-        if (l0 && l1 && l1.minDistM > l0.maxDistM) out.push(`${at}: gap between level 0 (to ${l0.maxDistM} m) and level 1 (from ${l1.minDistM} m)`);
-        if (l1 && l2 && l2.minDistM > l1.maxDistM) out.push(`${at}: gap between level 1 (to ${l1.maxDistM} m) and level 2 (from ${l2.minDistM} m)`);
+        for (let lv = 0; lv < levelCount; lv++) if (!lods.has(lv)) out.push(`${at}: missing level-${lv} child`);
+        for (let lv = 0; lv + 1 < levelCount; lv++) {
+            const a = lods.get(lv), b = lods.get(lv + 1);
+            if (a && b && b.minDistM > a.maxDistM) out.push(`${at}: gap between level ${lv} (to ${a.maxDistM} m) and level ${lv + 1} (from ${b.minDistM} m)`);
+            if (a && b && b.minDistM < a.minDistM) out.push(`${at}: level ${lv + 1} starts (${b.minDistM} m) before level ${lv} (${a.minDistM} m)`);
+        }
     }
     return out;
 }

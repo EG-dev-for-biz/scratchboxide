@@ -112,6 +112,10 @@ describe('WebXR Geospatial Agent Tools & Capability Resolution', () => {
         expect(originPayload.alignmentState.isAligned).toBe(true);
         expect(originPayload.alignmentState.calibrationSource).toBe('anchor-origin');
         expect(originPayload.alignmentState.headingOffsetDeg).toBeCloseTo(15.0, 4);
+        // the alignment is returned, not held by any XR session: the result says so
+        expect(originPayload.applied).toBe(false);
+        expect(originOutcome.exec.summaryResult).toMatch(/^NOT applied: computed only\. WebXR geospatial alignment via anchor-origin mode/);
+        expect(originOutcome.exec.summaryResult).toMatch(/webxr_geospatial_align_coordinates/);
 
         // 2. Sensors mode
         const sensorsOutcome = await registry.dispatch(

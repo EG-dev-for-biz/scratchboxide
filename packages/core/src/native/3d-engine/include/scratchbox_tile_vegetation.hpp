@@ -58,6 +58,7 @@
 #include "scratchbox_nature.hpp"
 #include "scratchbox_staged_glb.hpp"
 #include "scratchbox_tree_lod.hpp"
+#include "scratchbox_tree_textures.hpp"
 #include "scratchbox_texture.hpp"
 #include <algorithm>
 #include <array>
@@ -808,19 +809,30 @@ struct PlantParams {
     std::string stageKey;
     // each tree's growth order on its vertices (`_REVEAL`); off, the meshes are the same and carry no attribute
     bool reveal{true};
-    // Level of detail (scratchbox_tree_lod.hpp): every tree is written at three levels on its one skeleton, 0 near (wood with
-    // the whole budget, twigs and leaf clusters instanced), 1 mid (the same cluster positions, fewer larger leaves), 2 far (the
-    // blob masses meshCrown builds, whose budget decides what strip removes). Off, a tree is the blob level alone.
+    // Level of detail (scratchbox_tree_lod.hpp): every tree is written at four levels on its one skeleton, 0 near (wood with
+    // the whole budget, twigs and leaf clusters instanced), 1 near-mid (the same wood without twigs, the same cluster positions,
+    // a share of the leaves with the near outline, each larger), 2 mid (the same cluster positions, fewer larger leaves as
+    // cards), 3 far (the blob masses meshCrown builds, whose budget decides what strip removes). Off, a tree is the blob level alone.
     bool lod{true};
     double psiSeason{1.0};           // 0 bare .. 1 full summer: scales leaf density at every level
     tree_lod::LodParams treeLod;     // leaf size, cluster and station parameters (psiSeason is copied in)
-    // The distances (m from the camera) at which a viewport changes level, per tree: level 0 up to lodNearPerHeight x its
-    // height (within [lodNearMinM, lodNearMaxM]), level 1 up to lodFarPerHeight x its height (within [lodFarMinM, lodFarMaxM]),
-    // level 2 beyond; fadeM is the width of the band over which two levels dither into each other.
+    // The distances (m from the camera) at which a viewport changes level, per tree, each a multiple of its height within a
+    // range: near up to lodNearPerHeight x height (within [lodNearMinM, lodNearMaxM]), near-mid up to lodNearMidPerHeight x
+    // height (within [lodNearMidMinM, lodNearMidMaxM]), mid up to lodFarPerHeight x height (within [lodFarMinM, lodFarMaxM]),
+    // far beyond. A leaf is about 3-4 px wide on a 1,000 px focal length at the near edge (12-30 m for 8-14 cm blades), the
+    // near-mid blades (about 1.7 x longer) at the near-mid edge; past that the mid cards and the far masses read the same.
+    // fadeM is the width of the band over which two levels dither into each other.
     double lodNearPerHeight{1.0}, lodNearMinM{12.0}, lodNearMaxM{30.0};
+    double lodNearMidPerHeight{3.0}, lodNearMidMinM{25.0}, lodNearMidMaxM{60.0};
     double lodFarPerHeight{4.0}, lodFarMinM{60.0}, lodFarMaxM{140.0};
     double lodFadeM{6.0};
-    double lodFarFadeShare{0.25};    // the level 1 to 2 handover dissolves over this share of its distance (at least lodFadeM)
+    double lodNearMidFadeShare{0.2}; // the near-mid to mid handover dissolves over this share of its distance (at least lodFadeM)
+    double lodFarFadeShare{0.25};    // the mid to far handover dissolves over this share of its distance (at least lodFadeM)
+    // The tree texture library (scratchbox_tree_textures.hpp; null: none): each tree's leaf set and bark are chosen from it
+    // by appearance, its wood carries UVs in the chosen bark's tiles, and the choice and tints are in its extras.
+    std::shared_ptr<const tree_textures::Library> textures;
+    std::string textureIndex;        // where the library was read from, as given (written to the root extras)
+    tree_textures::ChoiceParams textureChoice;
 };
 
 /** The triangles a crown's size asks for (see PlantParams::trianglesPerCrownM2), never fewer than minTrianglesPerTree. */
@@ -854,6 +866,25 @@ struct FoliageReach {
 };
 
 namespace detail {
+
+/**
+ * The height cluster a tree stands on, from the heights of the surfaces around it sorted ascending (clusters split where
+ * two neighbouring heights differ by more than `step`): the lowest cluster that holds at least a quarter of them, else
+ * (when they spread over more clusters than that, none holding a quarter) the largest, the lowest of equals. Returns
+ * [first index, count]; the count is 0 only when there are no heights.
+ */
+inline std::pair<size_t, size_t> supportCluster(const std::vector<float>& sortedY, double step) {
+    size_t quarterLo = 0, quarterN = 0, bigLo = 0, bigN = 0, lo = 0;
+    for (size_t i = 1; i <= sortedY.size(); ++i) {
+        if (i == sortedY.size() || sortedY[i] - sortedY[i - 1] > step) {
+            const size_t n = i - lo;
+            if (quarterN == 0 && 4 * n >= sortedY.size()) { quarterN = n; quarterLo = lo; }
+            if (n > bigN) { bigN = n; bigLo = lo; }
+            lo = i;
+        }
+    }
+    return quarterN > 0 ? std::pair<size_t, size_t>{quarterLo, quarterN} : std::pair<size_t, size_t>{bigLo, bigN};
+}
 
 /** Distance from p to triangle abc (closest point). */
 inline double pointTriangleDistance(const Vec3& p, const Vec3& a, const Vec3& b, const Vec3& c) { return tree_lod::pointTriangleDistance(p, a, b, c); }
@@ -985,6 +1016,7 @@ struct StripParams {
     double cell{0.5};                // surface model cell (m)
     double terrainCell{4.0};         // terrain model cell (m)
     double terrainRadius{40.0};      // terrain opening radius (m)
+    double crownColourTrim{0.1};     // a crown's colour leaves out this share of its darkest and of its brightest cells
     double exgMin{0.06};             // normalised excess green a vegetation triangle must exceed
     double exgrMin{-0.2};            // ExG - ExR a vegetation triangle must exceed (a weak guard against red-dominated hues)
     double darkGuard{0.06};          // mean texture value (0..1) below which chroma is not judged
@@ -1096,6 +1128,12 @@ struct CrownRecord {
     std::array<double, 16> sectorRadii{};
     std::vector<Vec3> samples;
     int cells{0};
+    // the crown's colour in the tile's photo (measureCrownColour): linear sRGB mean and spread of its trimmed cells, and
+    // the season cues (share of green cells, hue and chroma of the mean)
+    bool colourKnown{false};
+    std::array<double, 3> colourMean{}, colourSpread{};
+    size_t colourSamples{0}, colourCells{0};
+    double greenShare{std::numeric_limits<double>::quiet_NaN()}, hueDeg{0}, chroma{0};
     bool hasGeodetic{false};
     TileFrame::Geodetic apexGeo{}, stemGeo{};
     // the regrowth check (trees and not_regrowable crowns): how much of the measured surface the regrown leaves reach
@@ -1296,6 +1334,7 @@ private:
     std::vector<Vec3> centroid, normal;
     std::vector<float> area;
     std::vector<float> exg, exgr;      // NaN where chroma is not judged
+    std::vector<std::array<float, 3>> triRgb;  // the photo's mean colour over the triangle (linear sRGB; NaN where untextured)
     std::vector<uint8_t> chromaVeg;
     std::vector<float> dispersion;
     std::vector<uint8_t> surface;      // face of a large planar segment
@@ -1476,6 +1515,7 @@ private:
     void measureChroma() {
         exg.assign(T, std::numeric_limits<float>::quiet_NaN());
         exgr.assign(T, std::numeric_limits<float>::quiet_NaN());
+        triRgb.assign(T, {std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f});
         chromaVeg.assign(T, 0);
         veg.assign(T, 0);
         std::atomic<size_t> textured{0}, green{0};
@@ -1499,6 +1539,11 @@ private:
                     double rgb[3];
                     detail::sampleTexture(mat, img, uv, rgb);
                     for (int k = 0; k < 3; ++k) s[k] += rgb[k] / 7.0;
+                }
+                {
+                    // the triangle's colour, decoded to linear light (the photo is sRGB-encoded)
+                    auto lin = [](double c) { return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4); };
+                    triRgb[t] = {static_cast<float>(lin(s[0])), static_cast<float>(lin(s[1])), static_cast<float>(lin(s[2]))};
                 }
                 const double sum = s[0] + s[1] + s[2];
                 if (sum / 3.0 < P.darkGuard) continue;
@@ -1703,6 +1748,51 @@ private:
     std::vector<int> edgeDist;       // per cell: distance (cells, 4-connected) from the extraction's outer edge
 
     double windowRadius(double h) const { return std::clamp(P.windowBase + P.windowSlope * h, P.windowMin, P.windowMax); }
+
+    /**
+     * The crown's colour in the tile's photo: the colours (linear sRGB) of the top triangles over its footprint cells, the
+     * darkest and brightest crownColourTrim of them by luminance left out (deep shadow, glints), their mean and standard
+     * deviation; and the season cues they imply: the share of its cells whose chroma passes the vegetation test (green
+     * leaf cover), the mean's hue and chroma.
+     */
+    void measureCrownColour(const CrownWork& w, CrownRecord& rec) const {
+        const auto& g = surf.top;
+        std::vector<std::array<float, 3>> cols;
+        size_t green = 0, judged = 0;
+        for (size_t c : w.cells) {
+            const int t = surf.topTriangle[c];
+            if (t < 0 || std::isnan(triRgb[static_cast<size_t>(t)][0])) continue;
+            cols.push_back(triRgb[static_cast<size_t>(t)]);
+            if (!std::isnan(exg[static_cast<size_t>(t)])) { ++judged; green += chromaVeg[static_cast<size_t>(t)] ? 1 : 0; }
+        }
+        (void)g;
+        if (cols.size() < 3) return;
+        auto Y = [](const std::array<float, 3>& c) { return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+        std::sort(cols.begin(), cols.end(), [&](const auto& a, const auto& b) { return Y(a) < Y(b); });
+        const size_t cut = static_cast<size_t>(std::floor(P.crownColourTrim * static_cast<double>(cols.size())));
+        const size_t lo = std::min(cut, cols.size() / 2 - 1), hi = cols.size() - lo;
+        double m[3] = {0, 0, 0}, v[3] = {0, 0, 0};
+        for (size_t i = lo; i < hi; ++i) for (int k = 0; k < 3; ++k) m[k] += cols[i][static_cast<size_t>(k)];
+        const double n = static_cast<double>(hi - lo);
+        for (int k = 0; k < 3; ++k) m[k] /= n;
+        for (size_t i = lo; i < hi; ++i) for (int k = 0; k < 3; ++k) v[k] += (cols[i][static_cast<size_t>(k)] - m[k]) * (cols[i][static_cast<size_t>(k)] - m[k]);
+        rec.colourKnown = true;
+        for (int k = 0; k < 3; ++k) { rec.colourMean[static_cast<size_t>(k)] = m[k]; rec.colourSpread[static_cast<size_t>(k)] = std::sqrt(v[k] / n); }
+        rec.colourSamples = hi - lo;
+        rec.colourCells = cols.size();
+        rec.greenShare = judged ? static_cast<double>(green) / static_cast<double>(judged) : std::numeric_limits<double>::quiet_NaN();
+        // hue (degrees, 0 red, 120 green) and chroma of the mean, in linear light
+        const double mx = std::max({m[0], m[1], m[2]}), mn = std::min({m[0], m[1], m[2]}), d = mx - mn;
+        double h = 0;
+        if (d > 1e-9) {
+            if (mx == m[0]) h = 60.0 * std::fmod((m[1] - m[2]) / d, 6.0);
+            else if (mx == m[1]) h = 60.0 * ((m[2] - m[0]) / d + 2.0);
+            else h = 60.0 * ((m[0] - m[1]) / d + 4.0);
+            if (h < 0) h += 360.0;
+        }
+        rec.hueDeg = h;
+        rec.chroma = mx > 1e-9 ? d / mx : 0.0;
+    }
 
     void segmentCrowns() {
         const auto& g = surf.top;
@@ -2152,13 +2242,9 @@ private:
             // height clusters of the surrounding surfaces; the tree stands on the lowest one that holds at least a quarter
             // of them (a street tree under an awning or beside a kiosk stands on the street; a roof garden sees only roof)
             std::sort(samples.begin(), samples.end(), [](const SupportSample& a, const SupportSample& b) { return a.y < b.y; });
-            size_t bestLo = 0, bestN = 0, lo = 0;
-            for (size_t i = 1; i <= samples.size(); ++i) {
-                if (i == samples.size() || samples[i].y - samples[i - 1].y > P.supportStep) {
-                    if (bestN == 0 && 4 * (i - lo) >= samples.size()) { bestN = i - lo; bestLo = lo; }
-                    lo = i;
-                }
-            }
+            std::vector<float> ys(samples.size());
+            for (size_t i = 0; i < samples.size(); ++i) ys[i] = samples[i].y;
+            const auto [bestLo, bestN] = detail::supportCluster(ys, P.supportStep);
             // That surface may slope (a hillside, a street on a grade). Its gradient is the median gradient of the planar
             // surfaces the samples lie on, whatever the grade: steps between level surfaces (curbs, stairs, a raised plaza
             // within supportStep) have no gradient themselves, so they do not tilt it. (Calling a surface level whenever
@@ -2185,6 +2271,7 @@ private:
             rec.supportSource = "surrounding_surface";
         }
         // sector radii (16 sectors around the stem) and voxel samples of the crown surface
+        measureCrownColour(w, rec);
         rec.sectorRadii.fill(0.0);
         std::unordered_map<uint64_t, std::pair<Vec3, int>> vox;
         for (size_t c : w.cells) {
@@ -3700,6 +3787,13 @@ inline std::string crownsJson(const StripResult& r, const StripParams& P) {
             // kept as scanned, its side over rebuilt ground closed down to it: not in the scan
             s << ",\"keptSkirt\":{\"areaM2\":" << json::num(c.keptSkirtAreaM2) << ",\"topY\":" << json::num(c.keptSkirtTopY) << ",\"bottomY\":" << json::num(c.keptSkirtBottomY) << "}";
         }
+        if (c.colourKnown) {
+            // measured in the tile's photo (linear sRGB): see measureCrownColour
+            s << ",\"colour\":{\"meanLinearRgb\":[" << json::num(c.colourMean[0]) << "," << json::num(c.colourMean[1]) << "," << json::num(c.colourMean[2])
+              << "],\"spreadLinearRgb\":[" << json::num(c.colourSpread[0]) << "," << json::num(c.colourSpread[1]) << "," << json::num(c.colourSpread[2])
+              << "],\"samples\":" << c.colourSamples << ",\"cells\":" << c.colourCells << ",\"greenShare\":" << json::num(c.greenShare)
+              << ",\"hueDeg\":" << json::num(c.hueDeg) << ",\"chroma\":" << json::num(c.chroma) << "}";
+        }
         s << ",\"samples\":[";
         for (size_t k = 0; k < c.samples.size(); ++k) s << (k ? "," : "") << v3(c.samples[k]);
         s << "]}";
@@ -3812,6 +3906,10 @@ struct PlantedTree {
     double groundGapM{std::numeric_limits<double>::quiet_NaN()};  // trunk base minus the nearest ground-mesh surface at its stem (NaN: none there)
     bool offGround{false};           // ... further than groundTolerance from it, or no surface there
     const io::GlbJsonValue* crown{nullptr};
+    // the textures chosen for it from PlantParams::textures (hasTextures false without a library)
+    bool hasTextures{false};
+    tree_textures::TreeAppearance look;
+    tree_textures::Choice textures;
 };
 
 struct PlantResult {
@@ -3998,6 +4096,27 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
     lodParams.morphology = P.growth.morphology;
     if (P.lod) R.library = std::make_shared<tree_lod::ClusterLibrary>(tree_lod::buildClusterLibrary(lodParams));
     const double psi = std::clamp(P.psiSeason, 0.0, 1.0);
+    // a tree whose crown has no measured colour is chosen by its neighbours' (the median of the measured crowns of this
+    // planting, per channel), else by the library's leaf-on prior
+    tree_textures::MeasuredColour fallbackColour;
+    if (P.textures) {
+        std::array<std::vector<double>, 3> ch;
+        for (const auto* c : chosen) {
+            const auto& col = (*c)["colour"]["meanLinearRgb"];
+            if (col.type == io::GlbJsonValue::Array && col.arr.size() == 3 && col[0].type == io::GlbJsonValue::Number) for (size_t k = 0; k < 3; ++k) ch[k].push_back(std::max(0.0, col[k].num));
+        }
+        fallbackColour.known = true;
+        if (!ch[0].empty()) {
+            fallbackColour.source = "neighbours";
+            for (size_t k = 0; k < 3; ++k) {
+                std::nth_element(ch[k].begin(), ch[k].begin() + static_cast<std::ptrdiff_t>(ch[k].size() / 2), ch[k].end());
+                fallbackColour.meanLinear[k] = ch[k][ch[k].size() / 2];
+            }
+        } else {
+            fallbackColour.source = "prior";
+            fallbackColour.meanLinear = tree_textures::leafOnPrior(*P.textures);
+        }
+    }
     detail::forEachIndex(n, P.threads, [&](size_t i) {
         PlantedTree& tr = R.trees[i];
         try {
@@ -4027,6 +4146,26 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
                 return;
             }
             if (psi >= 1.0) tr.shortOfCrown = m.shortfall(g, shapes[i], P.growth.minSurfaceReached, tr.budget);
+            if (P.textures) {
+                // its textures, by appearance: the crown's colour in the tile's photo, its size
+                const auto& cj = *chosen[i];
+                tr.look.seed = tree_lod::mix64(static_cast<uint64_t>(g.seed) ^ 0x7E87u);
+                tr.look.heightM = g.heightAboveSupport;
+                tr.look.trunkRadiusM = g.trunkRadius;
+                double rs = 0;
+                for (double r : shapes[i].sectorRadii) rs += r / 16.0;
+                tr.look.crownRadiusM = rs;
+                const auto& col = cj["colour"]["meanLinearRgb"];
+                if (col.type == io::GlbJsonValue::Array && col.arr.size() == 3 && col[0].type == io::GlbJsonValue::Number) {
+                    tr.look.colour.known = true;
+                    tr.look.colour.source = "measured";
+                    for (size_t k = 0; k < 3; ++k) tr.look.colour.meanLinear[k] = std::max(0.0, col[k].num);
+                } else {
+                    tr.look.colour = fallbackColour;
+                }
+                tr.textures = tree_textures::choose(*P.textures, tr.look, P.textureChoice);
+                tr.hasTextures = true;
+            }
             if (P.lod) {
                 tree_lod::TreeLodInput in;
                 in.cfg = &g.cfg;
@@ -4041,6 +4180,19 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
                 in.heightAboveSupport = g.heightAboveSupport;
                 in.seed = g.seed;
                 in.woodBudget = tr.budget;
+                {
+                    // the crown's season cue: its measured colour (the share of green cells, else the mean's hue and chroma)
+                    const auto& col = (*chosen[i])["colour"];
+                    const auto num = [&](const char* k) { return col.type == io::GlbJsonValue::Object && col[k].type == io::GlbJsonValue::Number ? col[k].num : std::numeric_limits<double>::quiet_NaN(); };
+                    in.leafiness = tree_lod::seasonLeafiness(lodParams, num("greenShare"), num("hueDeg"), num("chroma"));
+                }
+                if (tr.hasTextures) {
+                    in.cutoutFill = P.textures->leaves[tr.textures.leaf].fill;
+                    in.cutoutAspect = P.textures->leaves[tr.textures.leaf].leafWidthM / std::max(1e-6, P.textures->leaves[tr.textures.leaf].leafLengthM);
+                    const auto& bark = P.textures->bark[tr.textures.bark];
+                    in.barkTileAroundM = static_cast<float>(bark.tileAroundM);
+                    in.barkTileAlongM = static_cast<float>(bark.tileAlongM);
+                }
                 const auto tLod = std::chrono::steady_clock::now();
                 tree_lod::buildTreeLod(tr.lod, in, *R.library);
                 tr.lodMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tLod).count();
@@ -4081,8 +4233,11 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
     return R;
 }
 
-/** Where a viewport changes a tree's level (m from the camera): level 0 up to d0, level 1 up to d1, level 2 beyond, dithered over `fade`. */
-struct LodBands { double d0{0}, d1{0}, fade{0}, fade1{0}; };
+/**
+ * Where a viewport changes a tree's level (m from the camera): near up to d0, near-mid up to dNearMid, mid up to d1, far
+ * beyond; each handover dithers over its own band (fade, fadeNearMid, fade1), centred on its distance.
+ */
+struct LodBands { double d0{0}, dNearMid{0}, d1{0}, fade{0}, fadeNearMid{0}, fade1{0}; };
 
 inline LodBands lodBandsFor(double heightM, const PlantParams& P) {
     LodBands b;
@@ -4090,7 +4245,11 @@ inline LodBands lodBandsFor(double heightM, const PlantParams& P) {
     // the far handover swaps leaves for solid masses and a viewer sees the whole crown change: it dissolves over a wider band, a share of the distance
     b.fade1 = std::max(P.lodFadeM, P.lodFarFadeShare * std::clamp(P.lodFarPerHeight * heightM, P.lodFarMinM, P.lodFarMaxM));
     b.d0 = std::clamp(P.lodNearPerHeight * heightM, P.lodNearMinM, P.lodNearMaxM);
-    b.d1 = std::max(b.d0 + P.lodFadeM, std::clamp(P.lodFarPerHeight * heightM, P.lodFarMinM, P.lodFarMaxM));
+    const double nearMid = std::clamp(P.lodNearMidPerHeight * heightM, P.lodNearMidMinM, P.lodNearMidMaxM);
+    b.fadeNearMid = std::max(P.lodFadeM, P.lodNearMidFadeShare * nearMid);
+    // room for the near-mid band between the two others: its handovers never overlap theirs
+    b.d1 = std::max(b.d0 + 0.5 * b.fade + b.fadeNearMid + 0.5 * b.fade1, std::clamp(P.lodFarPerHeight * heightM, P.lodFarMinM, P.lodFarMaxM));
+    b.dNearMid = std::clamp(nearMid, b.d0 + 0.5 * (b.fade + b.fadeNearMid), b.d1 - 0.5 * (b.fadeNearMid + b.fade1));
     return b;
 }
 
@@ -4099,18 +4258,19 @@ struct LodFrameEstimate {
     size_t poses{0};
     double median{0}, p95{0}, max{0};                // an 80 degree view; every tree within 8 m is in it
     double allAroundMedian{0}, allAroundMax{0};      // no view culling (a bound, not a frame)
-    double allLevel0{0}, allLevel1{0}, allLevel2{0}; // triangles when every tree is at that level
-    std::array<size_t, 3> worstTreesPerLevel{};
+    double allLevel0{0}, allLevel1{0}, allLevel2{0}; // triangles when every tree is at the near / mid / far level
+    double allNearMid{0};                            // ... at the near-mid level
+    std::array<size_t, 4> worstTreesPerLevel{};      // near, near-mid, mid, far (the GLB's level order)
 };
 
 /**
  * Estimates what a park view draws: camera poses every `gridM` metres over the trees' bounds, 8 headings each, every tree
  * at the level its distance calls for (the middle of the dither band), and only the trees within 40 degrees of the heading
- * (or 8 m) counted. Drawn triangles are those of the level (wood, twigs and clusters at level 0 and 1, wood and blob leaf
- * masses at level 2), instances expanded.
+ * (or 8 m) counted. Drawn triangles are those of the level (wood, twigs and clusters at the near level, wood and clusters at
+ * the near-mid and mid levels, wood and blob leaf masses at the far level), instances expanded.
  */
 inline LodFrameEstimate estimateLodFrames(const PlantResult& R, const PlantParams& P, double gridM = 30.0) {
-    struct T { double x, z; LodBands b; std::array<double, 3> tri; };
+    struct T { double x, z; LodBands b; std::array<double, 4> tri; };
     std::vector<T> trees;
     for (const auto& tr : R.trees) {
         if (!tr.hasLod) continue;
@@ -4118,20 +4278,20 @@ inline LodFrameEstimate estimateLodFrames(const PlantResult& R, const PlantParam
         t.x = (*tr.crown)["stem"][0].num;
         t.z = (*tr.crown)["stem"][1].num;
         t.b = lodBandsFor(tr.heightAboveSupport, P);
-        t.tri = {static_cast<double>(tr.lod.drawnLevel0()), static_cast<double>(tr.lod.drawnLevel1()), static_cast<double>(tr.lod.woodTriangles + tr.foliage.indices.size() / 3)};
+        t.tri = {static_cast<double>(tr.lod.drawnLevel0()), static_cast<double>(tr.lod.drawnNearMid()), static_cast<double>(tr.lod.drawnLevel1()), static_cast<double>(tr.lod.drawnFar(tr.foliage.indices.size() / 3))};
         trees.push_back(t);
     }
     LodFrameEstimate E;
     if (trees.empty()) return E;
     double x0 = 1e30, x1 = -1e30, z0 = 1e30, z1 = -1e30;
-    for (const auto& t : trees) { x0 = std::min(x0, t.x); x1 = std::max(x1, t.x); z0 = std::min(z0, t.z); z1 = std::max(z1, t.z); E.allLevel0 += t.tri[0]; E.allLevel1 += t.tri[1]; E.allLevel2 += t.tri[2]; }
-    auto levelAt = [](const LodBands& b, double d) { return d < b.d0 ? 0 : (d < b.d1 ? 1 : 2); };
+    for (const auto& t : trees) { x0 = std::min(x0, t.x); x1 = std::max(x1, t.x); z0 = std::min(z0, t.z); z1 = std::max(z1, t.z); E.allLevel0 += t.tri[0]; E.allNearMid += t.tri[1]; E.allLevel1 += t.tri[2]; E.allLevel2 += t.tri[3]; }
+    auto levelAt = [](const LodBands& b, double d) { return d < b.d0 ? 0 : d < b.dNearMid ? 1 : d < b.d1 ? 2 : 3; };
     std::vector<double> frames, around;
     for (double x = x0; x <= x1 + 1e-9; x += gridM) {
         for (double z = z0; z <= z1 + 1e-9; z += gridM) {
             double all = 0;
             std::array<double, 8> byHeading{};
-            std::array<std::array<size_t, 3>, 8> cnt{};
+            std::array<std::array<size_t, 4>, 8> cnt{};
             for (const auto& t : trees) {
                 const double d = std::hypot(t.x - x, t.z - z);
                 const int lv = levelAt(t.b, d);
@@ -4193,11 +4353,49 @@ inline std::string treeExtrasMembers(const PlantedTree& tr, const PlantParams& P
     // `triangles` is the budgeted blob tree (what `triangleBudget` bounds); with levels the far level the file holds is the
     // delivered wood (given the whole budget, by the near levels) under the same blob masses: `farLevelTriangles`
     ex << ",\"triangles\":" << (tr.wood.indices.size() + tr.foliage.indices.size()) / 3 << ",\"triangleBudget\":" << tr.budget << ",\"ownBudget\":" << tr.ownBudget;
-    if (tr.hasLod) ex << ",\"farLevelTriangles\":" << tr.lod.woodTriangles + tr.foliage.indices.size() / 3 << ",\"deliveredWoodTriangles\":" << tr.lod.woodTriangles;
+    if (tr.hasLod) ex << ",\"farLevelTriangles\":" << tr.lod.drawnFar(tr.foliage.indices.size() / 3) << ",\"deliveredWoodTriangles\":" << tr.lod.woodTriangles << ",\"farWoodTriangles\":" << tr.lod.farWoodTriangles;
     ex << ",\"woodTriangles\":" << tr.report.woodTriangles << ",\"foliageTriangles\":" << tr.report.foliageTriangles
        << ",\"foliageClumps\":" << tr.report.foliageClumps << ",\"surfaceMasses\":" << tr.report.surfaceMasses << ",\"surfaceMassesNeeded\":" << tr.report.surfaceMassesNeeded
        << ",\"seed\":" << tr.seed;
     return ex.str();
+}
+
+/** The projected coverage of a tree's leaves (tree_lod::CoverageReport) as a JSON object. */
+inline std::string coverageJson(const tree_lod::CoverageReport& c) {
+    auto lv = [](const tree_lod::CoverageLevel& l) {
+        return "{\"mean\":" + json::num(l.meanEllipsoid) + ",\"min\":" + json::num(l.minEllipsoid) + ",\"meanHull\":" + json::num(l.meanHull) + "}";
+    };
+    std::string o = "{\"measured\":" + std::string(c.measured ? "true" : "false") + ",\"leafiness\":" + json::num(c.leafiness) + ",\"target\":" + json::num(c.target) +
+                    ",\"views\":" + std::to_string(c.views) + ",\"cellM\":" + json::num(c.cellM) + ",\"fillStations\":" + std::to_string(c.fillStations);
+    if (c.measured) {
+        o += ",\"level0Before\":" + lv(c.level0Before) + ",\"level0\":" + lv(c.level0) + ",\"nearMid\":" + lv(c.nearMid) + ",\"mid\":" + lv(c.mid);
+        if (c.level0Cutout.meanEllipsoid > 0 || c.midCutout.meanEllipsoid > 0)
+            o += ",\"cutout\":{\"level0\":" + lv(c.level0Cutout) + ",\"mid\":" + lv(c.midCutout) + "}";
+    }
+    return o + ",\"of\":\"the share of the measured crown (an ellipsoid fitted to its surface samples and footprint) the leaves cover, seen from outside, the mean over the views\"}";
+}
+
+/** `,"colour":{...}` of a tree's extras: its crown's colour as the tile's photo shows it (crowns.json), or nothing. */
+inline std::string treeColourMembers(const io::GlbJsonValue& crown) {
+    const auto& c = crown["colour"];
+    if (c.type != io::GlbJsonValue::Object || c["meanLinearRgb"].arr.size() != 3) return std::string();
+    std::string season = ",\"season\":{\"greenShare\":" + json::write(c["greenShare"]) + ",\"hueDeg\":" + json::write(c["hueDeg"]) + ",\"chroma\":" + json::write(c["chroma"]) + "}";
+    return ",\"colour\":{\"meanLinearRgb\":" + json::write(c["meanLinearRgb"]) + ",\"spreadLinearRgb\":" + json::write(c["spreadLinearRgb"]) +
+           ",\"samples\":" + json::write(c["samples"]) + season + ",\"provenance\":\"measured\",\"source\":\"the tile's photo texture over the crown's footprint\"}";
+}
+
+/** `,"texture":{...}` of a tree's extras: the leaf set and bark chosen for it, their tints, and why. */
+inline std::string treeTextureMembers(const PlantedTree& tr, const tree_textures::Library& lib) {
+    const auto& t = tr.textures;
+    auto rgb = [](const tree_textures::RGB& c) { return "[" + json::num(c[0]) + "," + json::num(c[1]) + "," + json::num(c[2]) + "]"; };
+    const auto& L = lib.leaves[t.leaf];
+    const auto& B = lib.bark[t.bark];
+    return ",\"texture\":{\"leaves\":{\"entry\":" + json::str(L.id) + ",\"tint\":" + rgb(t.leafTint) + ",\"leafLengthM\":" + json::num(L.leafLengthM) +
+           ",\"targetLeafLengthM\":" + json::num(t.targetLeafLengthM) + ",\"cost\":" + json::num(t.leafCost) + ",\"provenance\":\"library\"}" +
+           ",\"bark\":{\"entry\":" + json::str(B.id) + ",\"tint\":" + rgb(t.barkTint) + ",\"tileM\":[" + json::num(B.tileAroundM) + "," + json::num(B.tileAlongM) + "]" +
+           ",\"reliefIndex\":" + json::num(B.reliefIndex) + ",\"targetReliefIndex\":" + json::num(t.targetRelief) + ",\"sizeShare\":" + json::num(t.sizeShare) +
+           ",\"cost\":" + json::num(t.barkCost) + ",\"provenance\":\"library\"}" +
+           ",\"massColourLinear\":" + rgb(t.massColourLinear) + ",\"colourProvenance\":" + json::str(t.colourSource) + "}";
 }
 
 /** A crown kept as scanned: its status says so, and it has a measured footprint to outline. */
@@ -4212,11 +4410,13 @@ inline bool keptAsScanned(const io::GlbJsonValue& c) {
  * The trees layer of a staged location build (stage "trees"): one node per planted tree and one LINES ring per crown
  * kept as scanned, in the tile frame, studio clay.
  *
- * With PlantParams::lod (the default) a tree node holds no mesh: it has three child nodes, the levels of detail (extras.sbLod,
+ * With PlantParams::lod (the default) a tree node holds no mesh: it has four child nodes, the levels of detail (extras.sbLod,
  * the contract's TreeLodExtras): level 0 holds the wood (the whole triangle budget) and, as child nodes instancing library
- * meshes (EXT_mesh_gpu_instancing, positions in the level's quantisation frame), its pruned twigs and leaf clusters; level 1
- * shares the wood mesh and instances the same cluster positions with fewer larger leaves (its instance data is level 0's);
- * level 2 holds the same wood (its primitive reuses level 0's accessors) and the blob leaf masses meshCrown builds. The library
+ * meshes (EXT_mesh_gpu_instancing, positions in the level's quantisation frame), its pruned twigs and leaf clusters; levels 1
+ * (near-mid: a share of the leaves with the near outline, each larger) and 2 (mid: fewer larger leaves as cards) share the
+ * wood mesh, draw no twigs and instance the same cluster positions (their instance data is level 0's); level 3 holds its
+ * own wood, the trunk and main limbs only (tree_lod::farWoodBudgetFor, a few hundred triangles; schema trees-lod/3; a
+ * trees-lod/2 file's level 3 reused level 0's whole wood), and the blob leaf masses meshCrown builds. The library
  * (the cluster meshes, the twig tubes) and psiSeason are in the root extras `sbTrees`. Without levels a tree node holds its wood
  * and foliage primitives (the foliage last). Either way it holds its measurements as extras, and
  * extras.sb (StagedNodeExtras): provenance "grown to the measured crown" (stem, crown extent and height measured from
@@ -4276,9 +4476,9 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
                 triangles += m->indices.size() / 3;
             }
         } else {
-            // levels: the wood (written once, shared by levels 0, 1 and 2) and the level-2 leaf masses
-            vertices = tr.lod.wood.vertices.size() + tr.foliage.vertices.size();
-            triangles = tr.lod.woodTriangles + tr.foliage.indices.size() / 3;
+            // levels: the wood (written once, shared by levels 0, 1 and 2), the far level's trunk and limbs and its leaf masses
+            vertices = tr.lod.wood.vertices.size() + tr.lod.farWood.vertices.size() + tr.foliage.vertices.size();
+            triangles = tr.lod.woodTriangles + tr.lod.drawnFar(tr.foliage.indices.size() / 3);
         }
         std::string lodMembers;
         if (levels) {
@@ -4287,10 +4487,10 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
             const std::string base = node.name;
             const double H = tr.heightAboveSupport;
             const LodBands bands = lodBandsFor(H, P);
-            const double d0 = bands.d0, d1 = bands.d1, fade = bands.fade, fade1 = bands.fade1;
-            auto lodExtras = [&](int level, double lo, double hi, size_t tris, bool instanced) {
+            const double d0 = bands.d0, dNM = bands.dNearMid, d1 = bands.d1, fade = bands.fade, fadeNM = bands.fadeNearMid, fade1 = bands.fade1;
+            auto lodExtras = [&](int level, double lo, double hi, double fadeM, size_t tris, bool instanced, const std::string& more = std::string()) {
                 return "{\"sbLod\":{\"level\":" + std::to_string(level) + ",\"minDistM\":" + json::num(std::max(0.0, lo)) + ",\"maxDistM\":" + json::num(hi) +
-                       ",\"fadeM\":" + json::num(level == 0 ? fade : fade1) + ",\"triangles\":" + std::to_string(tris) + ",\"instanced\":" + (instanced ? "true" : "false") + "}}";
+                       ",\"fadeM\":" + json::num(fadeM) + ",\"triangles\":" + std::to_string(tris) + ",\"instanced\":" + (instanced ? "true" : "false") + more + "}}";
             };
             auto instancesOf = [&](const std::vector<tree_lod::Instance>& in, const std::string& mesh) {
                 staged_glb::StagedInstances si;
@@ -4307,13 +4507,22 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
             auto clusterExtras = [&](const std::string& variant, uint64_t salt) {
                 return "{\"sbCluster\":{\"clusterMesh\":" + json::str(variant) + ",\"hashSeed\":" + std::to_string(static_cast<uint32_t>(tree_lod::mix64(tr.seed ^ salt) & 0xFFFFFFFFull)) + "}}";
             };
-            staged_glb::StagedNode l0, l1, l2;
+            // l1 is the near-mid level, l2 the mid level (L.level1), l3 the far level
+            staged_glb::StagedNode l0, l1, l2, l3;
             l0.name = base + "_lod0";
             l1.name = base + "_lod1";
             l2.name = base + "_lod2";
+            l3.name = base + "_lod3";
             l0.primitives.push_back(primitiveOf(L.wood, L.woodGrowth));
-            l0.frameGroup = l2.frameGroup = base;
+            if (tr.hasTextures && L.wood.uvs.size() == L.wood.vertices.size()) {
+                // the wood in the chosen bark's tiles (u around, v along the path from the root)
+                auto& uv = l0.primitives.back().uvs;
+                uv.reserve(L.wood.uvs.size());
+                for (const auto& t : L.wood.uvs) uv.push_back({t.x, t.y});
+            }
+            l0.frameGroup = l3.frameGroup = base;
             l1.meshFrom = l0.name;
+            l2.meshFrom = l0.name;
             for (size_t k = 0; k < L.twigs.size(); ++k) {
                 if (L.twigs[k].empty()) continue;
                 staged_glb::StagedNode tw;
@@ -4325,43 +4534,86 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
             for (size_t k = 0; k < L.clusters.size(); ++k) {
                 if (L.clusters[k].empty()) continue;
                 const auto& v = lib.variants[k];
-                staged_glb::StagedNode c0, c1;
+                staged_glb::StagedNode c0, c1, c2;
                 c0.name = base + "_lod0_c" + std::to_string(k);
                 c0.extrasJson = clusterExtras(v.name, 0xC100ull + k);
                 c0.instances.push_back(instancesOf(L.clusters[k], v.level0.name));
-                c1.name = base + "_lod1_c" + std::to_string(k);
-                c1.extrasJson = clusterExtras(v.name, 0xC100ull + k);
-                staged_glb::StagedInstances s1;
-                s1.libraryMesh = v.level1.name;
-                s1.sameDataAs = c0.name;
-                c1.instances.push_back(std::move(s1));
+                // the near-mid and mid clusters instance the same positions (the same hash seed, so a crossfade hands each cluster over whole)
+                auto sameAs = [&](staged_glb::StagedNode& n, const std::string& level, const std::string& mesh) {
+                    n.name = base + level + std::to_string(k);
+                    n.extrasJson = clusterExtras(v.name, 0xC100ull + k);
+                    staged_glb::StagedInstances si;
+                    si.libraryMesh = mesh;
+                    si.sameDataAs = c0.name;
+                    n.instances.push_back(std::move(si));
+                };
+                sameAs(c1, "_lod1_c", v.nearMid.name);
+                sameAs(c2, "_lod2_c", v.level1.name);
                 l0.children.push_back(std::move(c0));
                 l1.children.push_back(std::move(c1));
+                l2.children.push_back(std::move(c2));
             }
-            const bool instanced0 = !l0.children.empty(), instanced1 = !l1.children.empty();
-            l0.extrasJson = lodExtras(0, 0.0, d0 + 0.5 * fade, L.drawnLevel0(), instanced0);
-            l1.extrasJson = lodExtras(1, d0 - 0.5 * fade, d1 + 0.5 * fade1, L.drawnLevel1(), instanced1);
-            // level 2: the same wood (written once, in the level-0 node), and the blob masses meshCrown builds on the same skeleton
-            {
-                staged_glb::StagedPrimitive woodRef;
+            const bool instanced0 = !l0.children.empty(), instanced1 = !l1.children.empty(), instanced2 = !l2.children.empty();
+            l0.extrasJson = lodExtras(0, 0.0, d0 + 0.5 * fade, fade, L.drawnLevel0(), instanced0);
+            l1.extrasJson = lodExtras(1, d0 - 0.5 * fade, dNM + 0.5 * fadeNM, fadeNM, L.drawnNearMid(), instanced1);
+            l2.extrasJson = lodExtras(2, dNM - 0.5 * fadeNM, d1 + 0.5 * fade1, fade1, L.drawnLevel1(), instanced2);
+            // level 3: its own wood, the trunk and main limbs (a few hundred triangles; a viewer shows them through the holes it opens
+            // in the masses), and the blob masses meshCrown builds on the same skeleton
+            size_t level3Wood = L.farWoodTriangles;
+            if (!L.farWood.indices.empty()) {
+                l3.primitives.push_back(primitiveOf(L.farWood, L.farWoodGrowth));
+                if (tr.hasTextures && L.farWood.uvs.size() == L.farWood.vertices.size()) {
+                    auto& uv = l3.primitives.back().uvs;
+                    for (const auto& t : L.farWood.uvs) uv.push_back({t.x, t.y});
+                }
+            } else {
+                staged_glb::StagedPrimitive woodRef;     // no far wood (never expected: the trunk is always kept): level 0's wood
                 woodRef.reuseNode = l0.name;
                 woodRef.reuseIndex = 0;
-                l2.primitives.push_back(std::move(woodRef));
-                if (!tr.foliage.indices.empty()) l2.primitives.push_back(primitiveOf(tr.foliage, tr.growth.foliage));
+                l3.primitives.push_back(std::move(woodRef));
+                level3Wood = L.woodTriangles;
             }
-            const size_t level2Triangles = L.woodTriangles + tr.foliage.indices.size() / 3;
-            l2.extrasJson = lodExtras(2, d1 - 0.5 * fade1, 1.0e6, level2Triangles, false);
+            if (!tr.foliage.indices.empty()) l3.primitives.push_back(primitiveOf(tr.foliage, tr.growth.foliage));
+            const size_t level3Triangles = level3Wood + tr.foliage.indices.size() / 3;
+            // which of the level-3 primitives are leaves (the wood is primitive 0): a viewer shades only these with the crown
+            l3.extrasJson = lodExtras(3, d1 - 0.5 * fade1, 1.0e6, fade1, level3Triangles, false, tr.foliage.indices.empty() ? std::string() : std::string(",\"foliagePrimitives\":[1]"));
             node.children.push_back(std::move(l0));
             node.children.push_back(std::move(l1));
             node.children.push_back(std::move(l2));
+            node.children.push_back(std::move(l3));
             auto levelJson = [&](const tree_lod::LeafLevelMeasure& m, size_t drawn) {
                 return "{\"leaves\":" + std::to_string(m.leaves) + ",\"drawnTriangles\":" + std::to_string(drawn) + ",\"crownSurfaceReached\":" + json::num(m.share()) +
                        ",\"crownSurfaceWithin1m\":" + json::num(m.strictShare()) + ",\"leavesBelowApexM\":" + json::num(static_cast<double>((*tr.crown)["apex"][1].num) - m.topY) + "}";
             };
             lodMembers = ",\"lod\":{\"leafLengthM\":" + json::num(L.leafLengthM) + ",\"stations\":" + std::to_string(L.stations) + ",\"repairStations\":" + std::to_string(L.repairStations) +
                          ",\"twigs\":" + std::to_string(L.twigCount()) + ",\"woodTriangles\":" + std::to_string(L.woodTriangles) +
-                         ",\"level0\":" + levelJson(L.level0, L.drawnLevel0()) + ",\"level1\":" + levelJson(L.level1, L.drawnLevel1()) + "}";
-            lodMembers += ",\"sbTree\":{\"id\":" + std::to_string(tr.crownId) + ",\"hashSeed\":" + std::to_string(tr.seed) + ",\"label\":\"grown to the measured crown\"}";
+                         ",\"level0\":" + levelJson(L.level0, L.drawnLevel0()) + ",\"nearMid\":" + levelJson(L.nearMid, L.drawnNearMid()) + ",\"level1\":" + levelJson(L.level1, L.drawnLevel1()) +
+                         ",\"far\":{\"woodTriangles\":" + std::to_string(L.farWoodTriangles) + ",\"woodPrunedBelowRadiusM\":" + json::num(L.farWoodPrunedBelowRadiusM) +
+                         ",\"drawnTriangles\":" + std::to_string(L.drawnFar(tr.foliage.indices.size() / 3)) + "}" +
+                         ",\"fillStations\":" + std::to_string(L.coverage.fillStations) + ",\"coverage\":" + detail::coverageJson(L.coverage) + "}";
+            // the crown envelope of the delivered leaves (tree node frame = the tile frame): a viewer shades the leaves with its normals
+            std::string crownJson;
+            const tree_lod::CrownEllipsoid ce = tree_lod::crownOfLeaves(L, lib);
+            if (ce.valid()) {
+                const auto& stem = (*tr.crown)["stem"];
+                const double sx = stem.arr.size() == 2 ? stem[0].num : static_cast<double>(ce.centre.x), sz = stem.arr.size() == 2 ? stem[1].num : static_cast<double>(ce.centre.z);
+                crownJson = ",\"crown\":{\"centre\":[" + json::num(ce.centre.x) + "," + json::num(ce.centre.y) + "," + json::num(ce.centre.z) + "],\"radii\":[" + json::num(ce.radii[0]) + "," +
+                            json::num(ce.radii[1]) + "," + json::num(ce.radii[2]) + "],\"yawRad\":" + json::num(ce.yawRad) + ",\"leanM\":[" + json::num(ce.centre.x - sx) + "," + json::num(ce.centre.z - sz) +
+                            "],\"points\":" + std::to_string(ce.points) + ",\"fittedTo\":\"leaf clusters\"";
+                // the crown's lobes (a smooth union of spheres) when the clusters give any: a viewer shades with them instead of the ellipsoid
+                const tree_lod::CrownLobes lobes = tree_lod::crownLobesOfLeaves(L, lib);
+                if (lobes.valid()) {
+                    crownJson += ",\"lobes\":[";
+                    for (size_t li = 0; li < lobes.lobes.size(); ++li) {
+                        const auto& lb = lobes.lobes[li];
+                        crownJson += std::string(li ? "," : "") + "[" + json::num(lb[0]) + "," + json::num(lb[1]) + "," + json::num(lb[2]) + "," + json::num(lb[3]) + "]";
+                    }
+                    crownJson += "],\"lobeBlendM\":" + json::num(lobes.blendM);
+                }
+                crownJson += "}";
+            }
+            lodMembers += ",\"sbTree\":{\"id\":" + std::to_string(tr.crownId) + ",\"hashSeed\":" + std::to_string(tr.seed) + ",\"label\":\"grown to the measured crown\"" + crownJson +
+                          detail::treeColourMembers(*tr.crown) + (tr.hasTextures ? detail::treeTextureMembers(tr, *P.textures) : std::string()) + "}";
         } else {
             node.primitives = std::move(blobPrims);
         }
@@ -4444,7 +4696,7 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
     }
     if (crownsDoc.has("label") && crownsDoc["label"].type == io::GlbJsonValue::String) members += "\"label\":" + json::write(crownsDoc["label"]) + ",";
     size_t farTotal = 0;
-    for (const auto& t : R.trees) farTotal += t.hasLod ? t.lod.woodTriangles + t.foliage.indices.size() / 3 : (t.wood.indices.size() + t.foliage.indices.size()) / 3;
+    for (const auto& t : R.trees) farTotal += t.hasLod ? t.lod.drawnFar(t.foliage.indices.size() / 3) : (t.wood.indices.size() + t.foliage.indices.size()) / 3;
     members += "\"sbVeggie\":{\"trees\":" + std::to_string(R.trees.size()) + ",\"triangles\":" + std::to_string(R.triangles) + (R.library ? ",\"farLevelTriangles\":" + std::to_string(farTotal) : std::string()) +
                ",\"triangleBudget\":" + std::to_string(static_cast<size_t>(R.triangleBudget)) + ",\"shortOfCrown\":" + std::to_string(R.shortOfCrown) +
                (R.groundChecked ? ",\"offGround\":" + std::to_string(R.offGround) : std::string()) + ",\"keptAsScannedRings\":" + std::to_string(rings.size()) +
@@ -4458,20 +4710,28 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
             lm.primitive.positions = m.positions;
             lm.primitive.normals = m.normals;
             lm.primitive.indices = m.indices;
+            if (m.uvs.size() == m.positions.size()) for (const auto& t : m.uvs) lm.primitive.uvs.push_back({t.x, t.y});
+            if (m.leaf.size() == m.positions.size()) lm.primitive.leaf = m.leaf;
             return lm;
         };
         std::string variants;
         for (const auto& v : lib.variants) {
             opt.library.push_back(libMesh(v.level0));
             opt.library.push_back(libMesh(v.level1));
-            variants += (variants.empty() ? "" : ",") + std::string("{\"mesh\":") + json::str(v.name) + ",\"leavesLevel0\":" + std::to_string(v.level0.leaves) + ",\"leavesLevel1\":" + std::to_string(v.level1.leaves) + "}";
+            opt.library.push_back(libMesh(v.nearMid));
+            variants += (variants.empty() ? "" : ",") + std::string("{\"mesh\":") + json::str(v.name) + ",\"leavesLevel0\":" + std::to_string(v.level0.leaves) + ",\"leavesNearMid\":" + std::to_string(v.nearMid.leaves) + ",\"leavesLevel1\":" + std::to_string(v.level1.leaves) + "}";
         }
         for (const auto& tw : lib.twigs) {
             opt.library.push_back(libMesh(tw));
-            variants += "," + std::string("{\"mesh\":") + json::str(tw.name) + ",\"leavesLevel0\":0,\"leavesLevel1\":0}";
+            variants += "," + std::string("{\"mesh\":") + json::str(tw.name) + ",\"leavesLevel0\":0,\"leavesNearMid\":0,\"leavesLevel1\":0}";
         }
-        members += ",\"sbTrees\":{\"schema\":\"scratchbox.trees-lod/1\",\"psiSeason\":" + json::num(std::clamp(P.psiSeason, 0.0, 1.0)) + ",\"clusterLibrary\":{\"variants\":[" + variants +
-                   "],\"leafSizeModel\":{\"sizeRatioToCrownHeight\":" + json::num(lib.params.leafSizeRatioToCrownHeight) + ",\"minM\":" + json::num(lib.params.leafMinM) + ",\"maxM\":" + json::num(lib.params.leafMaxM) + "}}}";
+        members += ",\"sbTrees\":{\"schema\":\"scratchbox.trees-lod/3\",\"psiSeason\":" + json::num(std::clamp(P.psiSeason, 0.0, 1.0)) + ",\"clusterLibrary\":{\"variants\":[" + variants +
+                   "],\"leafSizeModel\":{\"sizeRatioToCrownHeight\":" + json::num(lib.params.leafSizeRatioToCrownHeight) + ",\"minM\":" + json::num(lib.params.leafMinM) + ",\"maxM\":" + json::num(lib.params.leafMaxM) + "}" +
+                   // a leaf card's TEXCOORD_0 (u = 0.5 + across / length, v = along / length): its outline's box is widthRatio wide
+                   ",\"leafCard\":{\"widthRatio\":" + json::num(lib.params.morphology.blade.widthRatio) + ",\"uv\":\"TEXCOORD_0: u = 0.5 + across / blade length, v = along / blade length (base 0)\",\"leafAttribute\":\"_LEAF: x atlas pick in [0, 1), y 1 on a blade, 0 on a stalk or shoot\"}}" +
+                   (P.textures ? ",\"textures\":{\"schema\":" + json::str(P.textures->schema) + ",\"index\":" + json::str(P.textureIndex) +
+                                 ",\"woodUv\":\"TEXCOORD_0 in the chosen bark's tiles: u around (whole tiles), v along the path from the root\",\"chosenBy\":\"appearance: measured crown colour, leaf size from the tree's height and crown, bark relief from its size\"}"
+                               : std::string()) + "}";
     }
     opt.generator = "Scratchbox SB-Veggie (space colonisation, tile_vegetation plant)";
     opt.rootName = "sb_veggie_trees";

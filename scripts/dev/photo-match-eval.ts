@@ -15,8 +15,10 @@
  *          or { ..., "pose": { "panoId", "eye", "headingDeg", "pitchDeg", "fovDeg", "widthPx", "heightPx", "correction"? } }],
  *   "arms": [{ "id": "A", "label": "A raw tile", "glbs": ["a.glb"], "keepNear"?: "iso.glb" }],
  *   "occluder"?: "geometry.glb",                              // the full tile mesh: what stands in front hides every arm alike
- *   "context"?: { "glb": "textured.glb", "cut": "raw_clay.glb" | ["raw_clay.glb", "removed_trees.glb"] }  // in context: every arm drawn in the same street (below)
+ *   "context"?: { "glb": "textured.glb", "cut": "raw_clay.glb" | ["raw_clay.glb", "removed_trees.glb"] },  // in context: every arm drawn in the same street (below)
+ *   "clay"?: true                                             // also every arm in uniform clay from the same pose, judged for shape only
  * }
+ * With `clay`, each view also gets `<id>_<arm>_clay.png`, a clay grid `<slug>_<view>_clay.png` and `clayJudge` (shape only).
  * With `context`, every arm is rendered in its place: the photo-textured tile with the target's own triangles (those within
  * 1 cm of `cut`'s, the isolate tile_refine wrote) taken out, identical for every arm, drawn and depth-tested with the arm and lit
  * the same. Each arm replaces only the target, so the judge compares a street with a street. `occluder` is not used then (the
@@ -123,10 +125,25 @@ async function main(): Promise<void> {
             image: r, label: arm.label,
             sublabel: judge ? `JUDGE ${judge.stats[arm.id].overall.mean.toFixed(1)} +- ${judge.stats[arm.id].overall.sd.toFixed(1)}  SSIM ${perceptual[arm.id].ssim ?? '-'}` : `SSIM ${perceptual[arm.id].ssim ?? '-'} EDGE ${perceptual[arm.id].edgeChamferPx ?? '-'}`
         }))];
+        let clayJudge: Json;
+        let clayGrid: string | undefined;
+        if (m.clay) {
+            const clayRenders = arms.map((a: Json) => ({ arm: a, r: pm.renderTriangles(a.meshes, camera, { clay: true, ...(occluderDepth ? { occluderDepth } : {}), ...(context ? { context } : {}) }) }));
+            for (const { arm, r } of clayRenders) fs.writeFileSync(path.join(outDir, `${v.id}_${arm.id}_clay.png`), pm.renderPng(r));
+            if (chain) {
+                const runs = await pm.judgeViewClay({ client: chain, place: m.place, photo: { bytes, mimeType: 'image/jpeg' }, renders: clayRenders.map((x: Json) => ({ armId: x.arm.id, png: pm.renderPng(x.r) })), repeats: m.repeats ?? 3, seed: `${m.slug}:${v.id}:clay` });
+                const agg = pm.aggregateRuns(runs, arms.map((a: Json) => a.id));
+                clayJudge = { runs, stats: Object.fromEntries(arms.map((a: Json) => [a.id, { shape: agg[a.id].shape }])) };
+            }
+            clayGrid = path.join(gridDir, `${m.slug}_${v.id}_clay.png`);
+            fs.writeFileSync(clayGrid, pm.composeGrid([{ image: photo, label: `REAL PHOTO ${v.label ?? ''}`, sublabel: (v.panoId ?? v.pose?.panoId ?? '').slice(0, 10) }, ...clayRenders.map(({ arm, r }: Json) => ({
+                image: r, label: `${arm.label} CLAY`, sublabel: clayJudge ? `SHAPE ${clayJudge.stats[arm.id].shape.mean.toFixed(1)} +- ${clayJudge.stats[arm.id].shape.sd.toFixed(1)}` : 'NOT JUDGED'
+            }))], { tileWidth: 560, columns: Math.min(4, arms.length + 1), title: `${m.place} - ${v.label ?? v.id} - CLAY, SHAPE ONLY` }));
+        }
         const grid = path.join(gridDir, `${m.slug}_${v.id}.png`);
         fs.writeFileSync(grid, pm.composeGrid(tiles, { tileWidth: 560, columns: Math.min(4, tiles.length), title: `${m.place} - ${v.label ?? v.id}${context ? ' - IN CONTEXT' : ''}` }));
-        report.views.push({ id: v.id, label: v.label, panoId: v.panoId ?? v.pose?.panoId, size: [img.width, img.height], maskPixels: mask.reduce((s: number, x: number) => s + x, 0), perceptual, ...(judge ? { judge } : {}), grid, renderMs: Object.fromEntries(renders.map((x: Json) => [x.arm.id, x.r.ms])) });
-        console.log(`[photo-match] ${m.slug} ${v.id}: ${arms.map((a: Json) => `${a.id} ${judge ? judge.stats[a.id].overall.mean : '-'} (ssim ${perceptual[a.id].ssim}, edge ${perceptual[a.id].edgeChamferPx}, dE ${perceptual[a.id].colourDeltaE}, cov ${perceptual[a.id].coverage})`).join(' | ')} -> ${grid}`);
+        report.views.push({ id: v.id, label: v.label, panoId: v.panoId ?? v.pose?.panoId, size: [img.width, img.height], maskPixels: mask.reduce((s: number, x: number) => s + x, 0), perceptual, ...(judge ? { judge } : {}), ...(clayJudge ? { clayJudge } : {}), ...(clayGrid ? { clayGrid } : {}), grid, renderMs: Object.fromEntries(renders.map((x: Json) => [x.arm.id, x.r.ms])) });
+        console.log(`[photo-match] ${m.slug} ${v.id}: ${arms.map((a: Json) => `${a.id} ${judge ? judge.stats[a.id].overall.mean : '-'}${clayJudge ? ` clay ${clayJudge.stats[a.id].shape.mean}` : ''} (ssim ${perceptual[a.id].ssim}, edge ${perceptual[a.id].edgeChamferPx}, dE ${perceptual[a.id].colourDeltaE}, cov ${perceptual[a.id].coverage})`).join(' | ')} -> ${grid}`);
         fs.writeFileSync(path.join(outDir, 'report.json'), JSON.stringify(report, null, 1));
     }
     if (chain) report.judgeModel = { requested: chain.requested, answered: chain.answeredModel, skipped: chain.skipped };

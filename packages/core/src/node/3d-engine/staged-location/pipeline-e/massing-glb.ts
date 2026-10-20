@@ -26,7 +26,8 @@ import type { MassingFace, MassingNode } from './native-massing';
 export interface FaceTexture { width: number; height: number; rgba: Uint8Array; source: Uint8Array }
 
 /** Where a texel came from (open strings), with the ladder rung it counts as. */
-export interface TexelSource { source: string; label: string; method: string; rung: number; weight: number }
+/** A texel source of the provenance legend; an enhanced wall's own entry also carries its alignment numbers (reported, not gated). */
+export interface TexelSource { source: string; label: string; method: string; rung: number; weight: number; chamferPx?: number; lostShare?: number }
 
 export interface PackedPage { width: number; height: number; rgba: Uint8Array; conf: Uint8Array }
 export interface Packing { pages: PackedPage[]; place: Map<number, { page: number; x: number; y: number; scale: number }> }

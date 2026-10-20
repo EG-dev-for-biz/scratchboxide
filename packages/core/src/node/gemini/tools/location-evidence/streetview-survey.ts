@@ -35,17 +35,14 @@ import * as path from 'path';
 import { scanToGeodetic, buildGroundModel, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../../spatial/StreetViewSurveyPlanner';
 import { groundingPitchForElevation, type GroundingAspectRatio } from '../../../spatial/StreetViewGroundingImageService';
 import {
-    groundingFocalPx, groundingHorizontalFovDeg, projectToFrame, readGlbScene, sceneToRenderMesh, type FrameCamera, type PoseCorrection
+    groundingFocalPx, groundingHorizontalFovDeg, projectToFrame, readGlbScene, renderFrameDepth, sceneToRenderMesh, type FrameCamera, type PoseCorrection
 } from '../../../spatial/StreetViewPoseRegistrar';
 import type { RenderMesh3D } from '../../../spatial/HeadlessMeshSilhouetteRenderer';
 import { castCamera } from '../../../3d-engine/staged-location/survey-casting';
 import {
-    discoverPanos, facadeGeometry, fetchViews, knownRefusals, missingCredentials, type EvidenceImage, type PanoCandidate, type StreetViewEvidenceDeps
+    discoverPanos, facadeGeometry, knownRefusals, missingCredentials, type StreetViewEvidenceDeps
 } from '../../../3d-engine/staged-location/streetview-evidence';
-import {
-    footprintSurveyFaces, selectSurveyViews, surveyCandidates, surveyViewFor, SURVEY_IMAGE_TIMEOUT_MS, SURVEY_REFUSAL_RETRIES,
-    type SurveyFaceTarget, type SurveyView
-} from '../../../3d-engine/staged-location/face-survey';
+import type { SurveyFaceTarget, SurveyView } from '../../../3d-engine/staged-location/face-survey';
 import { pointHidden } from '../../../3d-engine/staged-location/evidence-aim';
 import { runPanoRegistrationOffThread, type PanoRegistrationJob, type PanoRegistrationOutcome } from '../../../3d-engine/staged-location/pano-registration-run';
 import { EDGE_REG_MAX_WIDTH_PX, type HeldImage } from '../../../3d-engine/staged-location/pano-edge-registration';
@@ -58,8 +55,20 @@ import { evidenceLookup } from '../../../3d-engine/staged-location/vector-footpr
 import { EXTRACTION_TTL_MS, GEOCODE_TTL_MS, type ResolvedPlace, type StagedExtraction, type StagedLocationDeps } from '../../../3d-engine/staged-location/orchestrator';
 import { stageKey, stagedWorkspaceRoot } from '../../../3d-engine/staged-location/stage-cache';
 import { createStagedLocationDeps } from '../../../3d-engine/staged-location/staged-location-tool';
+import {
+    describeTemporary, replaceTemporaryViews, surveyTemporaryDefault, temporaryCandidates, temporaryMask, visionTemporaryChecker, TEMPORARY_DILATE_SHARE, TEMPORARY_ENV_FLAG, TEMPORARY_ON_FACE_MIN_SHARE,
+    type TemporaryChecker, type TemporaryKept, type TemporaryReading, type TemporaryReplacement, type TemporarySwap
+} from '../../../3d-engine/staged-location/temporary-structures';
+import { VisionModelChain } from '../../vision-model-chain';
+import { stagedReplyCache } from '../../../3d-engine/staged-location/stage-cache';
+import { VISION_HEDGE_AFTER_MS } from '../../../3d-engine/staged-location/orchestrator';
 import type { Vec3 } from '../../../../common/spatial/staged-location-contracts';
 import type { ToolDeclaration, ToolHandler, ToolResultPayload } from '../types';
+import {
+    FACE_MATCH_TOLERANCE_DEG, facesToCover, fetchWithRefusalRetry, planSurveyViews, structureFaces, type SurveyFetchFailure, type SurveyRefusal
+} from '../../../3d-engine/staged-location/streetview-registered-views';
+
+export { FACE_MATCH_TOLERANCE_DEG, facesToCover, fetchWithRefusalRetry, planSurveyViews, structureFaces, type SurveyFetchFailure, type SurveyRefusal };
 
 const DEG = Math.PI / 180;
 
@@ -68,8 +77,8 @@ export const STREETVIEW_SURVEY_TOOL_NAME = 'streetview_survey';
 export const STREETVIEW_SURVEY_DEFAULT_VIEWS = 4;
 /** Most views one call fetches (each is one grounding request, and the registration's time grows with them). */
 export const STREETVIEW_SURVEY_MAX_VIEWS = 12;
-/** A requested face heading is matched to the structure's nearest facade within this angle. */
-export const FACE_MATCH_TOLERANCE_DEG = 45;
+/** A pixel of the structure lies on a face when its surface normal is within this angle of the face's outward direction. */
+export const FACE_NORMAL_TOLERANCE_DEG = 40;
 /** Where the images go, under the workspace: the folder `streetview_grounding_image` writes to. */
 export const STREETVIEW_IMAGE_DIR = path.join('build', 'streetview-grounding');
 
@@ -124,8 +133,6 @@ export interface SurveySite {
     structureMeshSource: 'given' | 'scan-crop' | (string & {});
 }
 
-export interface SurveyRefusal { faceId: string; panoId: string; error: string; replacedBy?: string }
-export interface SurveyFetchFailure { faceId: string; panoId: string; error: string; transient: boolean }
 
 export interface StreetViewSurveyOptions {
     maxViews?: number;
@@ -135,6 +142,13 @@ export interface StreetViewSurveyOptions {
     ownershipMasks?: boolean;
     /** What the structure is, in words: the segmenter then finds it by what it is and cuts out occluders too. */
     target?: string;
+    /**
+     * Ask the vision model whether anything temporary covers or stands in front of the structure in each view, replace a
+     * flagged view by a clear capture of the same face from another month when one exists (else keep and flag it), and
+     * write the flagged regions as masks (temporary-structures.ts). Needs `deps.temporary`. Off unless set here; the
+     * streetview_survey tool sets it to true by default (surveyTemporaryDefault).
+     */
+    checkTemporary?: boolean;
     /** Absolute folder the images and masks are written to. */
     outDir: string;
     /** Paths in the result are relative to this. */
@@ -147,6 +161,8 @@ export interface StreetViewSurveyDeps {
     segmenter?: OwnershipSegmenter;
     /** The edge + joint registration (default: runPanoRegistrationOffThread). */
     register?: (job: PanoRegistrationJob, opts: { signal?: AbortSignal; log?: (m: string) => void }) => Promise<PanoRegistrationOutcome>;
+    /** The temporary-structure question (default with the tool: the vision model chain, visionTemporaryChecker). */
+    temporary?: TemporaryChecker;
     signal?: AbortSignal;
     onProgress?: (message: string) => void;
 }
@@ -218,7 +234,29 @@ export interface SurveyedViewResult {
         occluderMaskPath?: string;
         ownerPixels?: number;
         occluderPixels?: number;
+        /** With checkTemporary: pixels of the flagged temporary regions taken out of the owner mask and added to the occluder mask. */
+        temporaryPixels?: number;
     };
+    /** With checkTemporary: does anything temporary cover or stand in front of the structure in this view (the vision model's answer). */
+    temporary?: SurveyedTemporary;
+}
+
+export interface SurveyedTemporary {
+    present: boolean;
+    confidence: number;
+    /** Free text from the model (what and where); never branched on. */
+    description: string;
+    /** Outlines in image pixels at the delivered size, [x, y]. */
+    regions: TemporaryReading['regions'];
+    /** Share of the photo the outside of the building occupies (the model's estimate), when given. */
+    buildingShare?: number;
+    /** present with confidence at least TEMPORARY_MIN_CONFIDENCE. */
+    flagged: boolean;
+    /** PNG, 255 = a flagged temporary region (grown a little): treat as an occluder. Only for a flagged view with regions. */
+    maskPath?: string;
+    model?: string;
+    /** The question failed: the view is unchecked, not clear. */
+    error?: string;
 }
 
 export interface FaceCoverage {
@@ -234,6 +272,13 @@ export interface FaceCoverage {
     bestViewIndex?: number;
     /** Why no view was aimed at this face (the planner's reason). */
     skipped?: string;
+    /**
+     * With checkTemporary: `flaggedViews` are the flagged views that see this face with at least TEMPORARY_ON_FACE_MIN_SHARE
+     * of their outlines on it (a flagged view without an outline counts for its own face); `free` is true when every view that
+     * sees the face was checked and none is flagged here, false when one is, null when none is but some could not be checked.
+     * `bestViewFree` is the same for the face's best view alone (the view a texture of the face leans on most).
+     */
+    temporary?: { free: boolean | null; bestViewFree: boolean | null; flaggedViews: number[]; uncheckedViews: number[] };
 }
 
 export interface StreetViewSurveyResult {
@@ -244,6 +289,22 @@ export interface StreetViewSurveyResult {
     unmatchedFaceHeadingsDeg: Array<{ headingDeg: number; reason: string }>;
     discovery: { panosFound: number; metadataCalls: number; cachedCalls: number; rejectedNotGoogle: number; rejectedRefused: number };
     registration: { frames: number; panos: number; edge?: string; joint?: { chosen: string; reason: string }; error?: string };
+    /** With checkTemporary: what was flagged, swapped and kept, in one summary line and in detail. */
+    temporary?: {
+        summary: string;
+        checked: number;
+        flagged: number;
+        unchecked: number;
+        swaps: Array<TemporarySwap & { fromImagePath?: string; fromMaskPath?: string }>;
+        kept: TemporaryKept[];
+        /** Flagged views whose outlines lie off their own face (another side seen obliquely): not replaced. */
+        offFace: TemporaryReplacement['offFace'];
+        refusals: TemporaryReplacement['refusals'];
+        cost: TemporaryReplacement['cost'];
+        model?: string;
+        /** The check could not run (no vision model): nothing was checked. */
+        unavailable?: string;
+    };
     elapsedMs: number;
 }
 
@@ -253,106 +314,7 @@ export interface StreetViewSurveyResult {
 
 const r3 = (v: number) => Math.round(v * 1000) / 1000;
 const r6 = (v: number) => Math.round(v * 1e6) / 1e6;
-const angleBetween = (a: number, b: number) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
 
-/**
- * Every facade of the structure as a survey face. footprintSurveyFaces keeps the first four (the staged survey's budget);
- * a structure whose outline has more sides (a corner lot, a chamfered block) would lose faces that way, so the faces are
- * taken four headings at a time through it and all kept.
- */
-export function structureFaces(structure: StructurePickResult): SurveyFaceTarget[] {
-    const out: SurveyFaceTarget[] = [];
-    for (let k = 0; k < structure.facadeHeadingsDeg.length; k += 4) out.push(...footprintSurveyFaces({ ...structure, facadeHeadingsDeg: structure.facadeHeadingsDeg.slice(k, k + 4) }));
-    return out;
-}
-
-/** The structure's faces to cover: those nearest each requested heading (within FACE_MATCH_TOLERANCE_DEG), else all. */
-export function facesToCover(all: SurveyFaceTarget[], headingsDeg?: number[]): { faces: SurveyFaceTarget[]; unmatched: Array<{ headingDeg: number; reason: string }> } {
-    if (!headingsDeg?.length) return { faces: all, unmatched: [] };
-    const picked = new Set<string>();
-    const unmatched: Array<{ headingDeg: number; reason: string }> = [];
-    for (const h of headingsDeg) {
-        const best = [...all].sort((a, b) => angleBetween(a.headingDeg, h) - angleBetween(b.headingDeg, h))[0];
-        if (best && angleBetween(best.headingDeg, h) <= FACE_MATCH_TOLERANCE_DEG) picked.add(best.faceId);
-        else unmatched.push({ headingDeg: h, reason: `no facade of the structure faces within ${FACE_MATCH_TOLERANCE_DEG}° of ${Math.round(h)}° (its facades face ${all.map(f => `${Math.round(f.headingDeg)}°`).join(', ') || 'nowhere measurable'})` });
-    }
-    return { faces: all.filter(f => picked.has(f.faceId)), unmatched };
-}
-
-/**
- * The views: the staged survey's one wide view per face (selectSurveyViews), then, while more are asked for, each face's
- * next best pano in turn (the faces with the fewest candidates first), never a pano twice.
- */
-export function planSurveyViews(
-    panos: PanoCandidate[], faces: SurveyFaceTarget[], site: Pick<SurveySite, 'structure' | 'ground' | 'unmaskedTop'>, maxViews: number
-): { views: SurveyView[]; skipped: Array<{ faceId: string; headingDeg: number; reason: string }>; candidates: ReturnType<typeof surveyCandidates> } {
-    const base = selectSurveyViews(panos, faces, site.structure, site.ground, site.unmaskedTop, maxViews);
-    const candidates = surveyCandidates(panos, faces, site.structure, site.ground, site.unmaskedTop);
-    const views = [...base.views];
-    const used = new Set(views.map(v => v.panoId));
-    const order = [...faces].sort((a, b) => candidates.get(a.faceId)!.length - candidates.get(b.faceId)!.length || a.headingDeg - b.headingDeg);
-    for (let added = true; added && views.length < maxViews;) {
-        added = false;
-        for (const face of order) {
-            if (views.length >= maxViews) break;
-            const next = candidates.get(face.faceId)!.find(c => !used.has(c.pano.panoId));
-            if (!next) continue;
-            used.add(next.pano.panoId);
-            views.push(surveyViewFor(face, next));
-            added = true;
-        }
-    }
-    // a face skipped only because the staged survey's budget of four was spent, but given a view here, is not skipped; one
-    // still without a view says so in this call's terms
-    const skipped = base.skipped.filter(s => !views.some(v => v.faceId === s.faceId))
-        .map(s => (/image budget/.test(s.reason) ? { ...s, reason: `the ${maxViews} view${maxViews === 1 ? '' : 's'} asked for went to other faces first (the faces with the fewest panoramas choose first)` } : s));
-    return { views, skipped, candidates };
-}
-
-/**
- * Fetches the views through the grounding service; a pano the API refuses (403, "not published or eligible") is recorded
- * and the face's next eligible pano asked instead, up to SURVEY_REFUSAL_RETRIES rounds (runFaceSurvey's rule).
- */
-export async function fetchWithRefusalRetry(
-    plan: { views: SurveyView[]; candidates: ReturnType<typeof surveyCandidates> }, faces: SurveyFaceTarget[], deps: StreetViewEvidenceDeps, signal?: AbortSignal,
-    onProgress?: (m: string) => void
-): Promise<{ images: EvidenceImage[]; refusals: SurveyRefusal[]; failures: SurveyFetchFailure[]; views: SurveyView[] }> {
-    const refusedBefore = knownRefusals(deps);
-    const faceOf = new Map(faces.map(f => [f.faceId, f]));
-    let views = plan.views;
-    const first = await fetchViews(views, deps, signal, SURVEY_IMAGE_TIMEOUT_MS);
-    const images: EvidenceImage[] = [...first.images];
-    const refusals: SurveyRefusal[] = [];
-    const notFetched: typeof first.failures = [];
-    let pending = first.failures;
-    for (let round = 0; round < SURVEY_REFUSAL_RETRIES && pending.length; round++) {
-        if (signal?.aborted) break;
-        notFetched.push(...pending.filter(f => !f.refused));
-        const used = new Set(views.map(v => v.panoId));
-        const retry: SurveyView[] = [];
-        for (const f of pending.filter(x => x.refused)) {
-            const old = f.view as SurveyView;
-            const next = (plan.candidates.get(old.faceId) ?? []).find(c => !used.has(c.pano.panoId) && !deps.refusedPanos?.has(c.pano.panoId) && !refusedBefore.has(c.pano.panoId));
-            refusals.push({ faceId: old.faceId, panoId: old.panoId, error: f.error, ...(next ? { replacedBy: next.pano.panoId } : {}) });
-            if (!next) { notFetched.push(f); continue; }
-            used.add(next.pano.panoId);
-            const view = surveyViewFor(faceOf.get(old.faceId)!, next);
-            views = views.map(v => (v === old ? view : v));
-            retry.push(view);
-        }
-        pending = [];
-        if (!retry.length) break;
-        onProgress?.(`the grounding API refused ${retry.length} pano${retry.length === 1 ? '' : 's'}; asking the next eligible one`);
-        const again = await fetchViews(retry, deps, signal, SURVEY_IMAGE_TIMEOUT_MS);
-        images.push(...again.images);
-        pending = again.failures;
-    }
-    notFetched.push(...pending);
-    // a refused view that found no replacement is in notFetched and in refusals; report it once, as a refusal
-    const failures = notFetched.filter(f => !(f.refused && refusals.some(r => r.panoId === f.view.panoId)))
-        .map(f => ({ faceId: (f.view as SurveyView).faceId, panoId: f.view.panoId, error: f.error, transient: f.transient }));
-    return { images, refusals, failures, views };
-}
 
 /** Heading, elevation (up positive) and roll of a camera basis. */
 export function cameraAngles(cam: Pick<FrameCamera, 'fwd' | 'up' | 'right'>): { headingDeg: number; elevationDeg: number; rollDeg: number } {
@@ -413,6 +375,33 @@ export function faceCoverage(
     });
 }
 
+/**
+ * Share of a mask's pixels on the structure that lie on `face`: where the structure mesh is the nearest structure surface
+ * in the view and its normal there (from the depth's neighbours) points within FACE_NORMAL_TOLERANCE_DEG of the face's
+ * outward direction, horizontally. A pixel where the structure is not in the view does not count. 0 when no pixel does.
+ */
+export function regionShareOnFace(face: SurveyFaceTarget, cam: FrameCamera, mask: Uint8Array, structure: RenderMesh3D): number {
+    const W = cam.width, H = cam.height, d = renderFrameDepth(structure, cam);
+    const has = (i: number) => Number.isFinite(d[i]) && d[i] < 1e8;
+    const point = (x: number, y: number, i: number): Vec3 => {
+        const u = (x + 0.5 - cam.cx) / cam.fx, w = (y + 0.5 - cam.cy) / cam.fy;
+        return [0, 1, 2].map(k => cam.eye[k] + d[i] * (cam.fwd[k] + u * cam.right[k] - w * cam.up[k])) as Vec3;
+    };
+    const cosTol = Math.cos(FACE_NORMAL_TOLERANCE_DEG * DEG), s = 2;
+    let n = 0, on = 0;
+    for (let y = s; y < H - s; y++) for (let x = s; x < W - s; x++) {
+        const i = y * W + x;
+        if (!mask[i] || !has(i) || !has(i + s) || !has(i - s) || !has(i + s * W) || !has(i - s * W)) continue;
+        n++;
+        const a = point(x + s, y, i + s), b = point(x - s, y, i - s), c = point(x, y + s, i + s * W), e = point(x, y - s, i - s * W);
+        const t1 = [a[0] - b[0], a[1] - b[1], a[2] - b[2]], t2 = [c[0] - e[0], c[1] - e[1], c[2] - e[2]];
+        const nx = t1[1] * t2[2] - t1[2] * t2[1], nz = t1[0] * t2[1] - t1[1] * t2[0];
+        const l = Math.hypot(nx, nz);
+        if (l > 0 && Math.abs(nx * face.outward[0] + nz * face.outward[2]) / l >= cosTol) on++;
+    }
+    return n ? on / n : 0;
+}
+
 /** The file name `streetview_grounding_image` gives an image (heading, the API's pitch and fov, rounded). */
 export function groundingImageFileName(panoId: string, headingDeg: number, apiPitchDeg: number, fovDeg: number, mimeType: string): string {
     const ext = mimeType.includes('png') ? 'png' : 'jpg';
@@ -461,10 +450,35 @@ export async function runStreetViewSurvey(site: SurveySite, options: StreetViewS
             { panosFound: found.panos.length, refusals: got.refusals, fetchFailures: got.failures });
     }
 
+    // temporary structures: a flagged view is replaced by a clear capture of the same face from another month when one exists
+    let tmp: TemporaryReplacement | undefined;
+    let tmpUnavailable: string | undefined;
+    if (options.checkTemporary) {
+        if (!deps.temporary) tmpUnavailable = 'no vision model is configured, so no view was checked for temporary structures';
+        else {
+            // the panos the discovery thinned out (an older capture beside a newer one) are candidates for the replacement
+            const pool = [...panos, ...(found.superseded ?? []).filter(p => !refused.has(p.panoId))];
+            const alt = temporaryCandidates(pool, faces, site);
+            tmp = await replaceTemporaryViews({
+                images: got.images, faces, candidatesFor: f => alt.get(f.faceId) ?? [], streetView: sv, check: deps.temporary, target: options.target ?? site.label,
+                refused: new Set([...refused.keys(), ...got.refusals.map(r => r.panoId)]), ...(deps.signal ? { signal: deps.signal } : {}), onProgress: progress,
+                // at the nominal pose (good to about 2 m and 2°; the outlines are coarse too): the share of the outlines on the face
+                regionOnFace: (im, reading) => {
+                    const v = im.view as SurveyView, face = faces.find(f => f.faceId === v.faceId);
+                    if (!face) return 1;
+                    const cam = castCamera({ eye: v.eye, headingDeg: v.headingDeg, pitchDeg: v.pitchDeg, fovDeg: v.fovDeg, widthPx: im.widthPx, heightPx: im.heightPx });
+                    return regionShareOnFace(face, cam, temporaryMask(reading.regions, im.widthPx, im.heightPx), site.structureMesh);
+                }
+            });
+            if (deps.signal?.aborted) throw deps.signal.reason ?? new Error('stopped');
+        }
+    }
+    const fetched = tmp?.images ?? got.images;
+
     // registration: edges, then jointly, against the full tile mesh (the evidence stage's job, no prior, no box pairs)
     let reg: PanoRegistrationOutcome | undefined;
     let regError: string | undefined;
-    const held: HeldImage[] = got.images.map(im => ({ id: im.id, bytes: im.bytes, widthPx: im.widthPx, heightPx: im.heightPx, view: im.view }));
+    const held: HeldImage[] = fetched.map(im => ({ id: im.id, bytes: im.bytes, widthPx: im.widthPx, heightPx: im.heightPx, view: im.view }));
     try {
         reg = await (deps.register ?? runPanoRegistrationOffThread)({ images: held, meshFiles: site.tileMeshFiles, correspondences: [], faces: [] }, { signal: deps.signal, log: progress });
     } catch (err) {
@@ -476,7 +490,7 @@ export async function runStreetViewSurvey(site: SurveySite, options: StreetViewS
 
     fs.mkdirSync(options.outDir, { recursive: true });
     const rel = (p: string) => path.relative(options.workspaceRoot, p);
-    const views: SurveyedViewResult[] = got.images.map((im, index) => {
+    const views: SurveyedViewResult[] = fetched.map((im, index) => {
         const v = im.view as SurveyView;
         const correction: PoseCorrection | undefined = registration?.corrections.get(v.panoId);
         const cam = castCamera({ eye: v.eye, headingDeg: v.headingDeg, pitchDeg: v.pitchDeg, fovDeg: v.fovDeg, widthPx: im.widthPx, heightPx: im.heightPx, ...(correction ? { correction } : {}) });
@@ -542,16 +556,51 @@ export async function runStreetViewSurvey(site: SurveySite, options: StreetViewS
         };
     });
 
+    // the temporary readings, and the flagged regions as masks (an occluder for the texture pass)
+    const maskDir = path.join(options.outDir, 'masks');
+    const temporaryMasks = new Map<number, Uint8Array>();
+    const tmpDilate = (W: number, H: number) => Math.max(2, Math.round(TEMPORARY_DILATE_SHARE * Math.max(W, H)));
+    const writeTemporary = (reading: TemporaryReading, W: number, H: number, stem: string): { record: SurveyedTemporary; mask?: Uint8Array } => {
+        let mask: Uint8Array | undefined, maskPath: string | undefined;
+        if (reading.flagged && reading.regions.length) {
+            mask = temporaryMask(reading.regions, W, H, tmpDilate(W, H));
+            const file = path.join(maskDir, `${stem}_temporary.png`);
+            writeMask(file, mask, W, H);
+            maskPath = rel(file);
+        }
+        return {
+            record: { present: reading.present, confidence: reading.confidence, description: reading.description, regions: reading.regions, ...(reading.buildingShare !== undefined ? { buildingShare: reading.buildingShare } : {}), flagged: reading.flagged,
+                ...(maskPath ? { maskPath } : {}), ...(reading.model ? { model: reading.model } : {}), ...(reading.error ? { error: reading.error } : {}) },
+            ...(mask ? { mask } : {})
+        };
+    };
+    const swapsOut: NonNullable<StreetViewSurveyResult['temporary']>['swaps'] = [];
+    if (tmp) {
+        views.forEach((view, k) => {
+            const w = writeTemporary(tmp!.readings[k], view.widthPx, view.heightPx, path.basename(view.imagePath).replace(/\.[a-z]+$/i, ''));
+            view.temporary = w.record;
+            if (w.mask) temporaryMasks.set(k, w.mask);
+        });
+        // the views swapped out: their image and mask written too, so the swap can be seen
+        tmp.swaps.forEach((s, k) => {
+            const old = tmp!.replaced[k];
+            const v = old.image.view as SurveyView;
+            const file = path.join(options.outDir, groundingImageFileName(v.panoId, v.headingDeg, groundingPitchForElevation(v.pitchDeg), v.fovDeg, old.image.mimeType));
+            fs.writeFileSync(file, old.image.bytes);
+            const w = writeTemporary(old.reading, old.image.widthPx, old.image.heightPx, path.basename(file).replace(/\.[a-z]+$/i, ''));
+            swapsOut.push({ ...s, fromImagePath: rel(file), ...(w.record.maskPath ? { fromMaskPath: w.record.maskPath } : {}) });
+        });
+    }
+
     // ownership and occluder masks (the texture pass's step), optional
     const owners = new Map<number, Uint8Array>();
     if (options.ownershipMasks) {
         progress(`cutting the structure out of ${views.length} view${views.length === 1 ? '' : 's'}`);
-        const pviews = got.images.map(im => projectionViewFromRegistered({
+        const pviews = fetched.map(im => projectionViewFromRegistered({
             view: { panoId: im.view.panoId, eye: im.view.eye, headingDeg: im.view.headingDeg, pitchDeg: im.view.pitchDeg, fovDeg: im.view.fovDeg, widthPx: im.widthPx, heightPx: im.heightPx },
             jpeg: im.bytes, ...(registration ? { registration } : {}), ...(im.view.date ? { captureDate: im.view.date } : {})
         }));
         const context = sceneToRenderMesh(site.tileMeshFiles.filter(f => fs.existsSync(f)).flatMap(f => readGlbScene(f)));
-        const maskDir = path.join(options.outDir, 'masks');
         const masks = new Map<number, { owner: Uint8Array; occluders: Uint8Array }>();
         const own = await ownViews({
             views: pviews, structure: site.structureMesh, ...(context.indices.length ? { context } : {}), segment: deps.segmenter ?? objectSegmenter(),
@@ -562,10 +611,17 @@ export async function runStreetViewSurvey(site: SurveySite, options: StreetViewS
             const stem = path.basename(view.imagePath).replace(/\.[a-z]+$/i, '');
             const m = masks.get(k);
             if (rec.status === 'segmented' && m) {
+                // a flagged temporary region is an occluder: out of the owner mask, into the occluder mask
+                const tm = temporaryMasks.get(k);
+                let temporaryPixels: number | undefined;
+                if (tm) {
+                    temporaryPixels = 0;
+                    for (let i = 0; i < tm.length; i++) if (tm[i]) { if (m.owner[i]) { m.owner[i] = 0; temporaryPixels++; } m.occluders[i] = 1; }
+                }
                 const ownerFile = path.join(maskDir, `${stem}_owner.png`), occFile = path.join(maskDir, `${stem}_occluders.png`);
                 const ownerPixels = writeMask(ownerFile, m.owner, W, H), occluderPixels = writeMask(occFile, m.occluders, W, H);
                 owners.set(k, m.owner);
-                view.ownership = { status: rec.status, ...(rec.iou !== undefined ? { iou: rec.iou } : {}), ownerMaskPath: rel(ownerFile), occluderMaskPath: rel(occFile), ownerPixels, occluderPixels };
+                view.ownership = { status: rec.status, ...(rec.iou !== undefined ? { iou: rec.iou } : {}), ownerMaskPath: rel(ownerFile), occluderMaskPath: rel(occFile), ownerPixels, occluderPixels, ...(temporaryPixels !== undefined ? { temporaryPixels } : {}) };
             } else {
                 view.ownership = { status: rec.status, ...(rec.reason ? { reason: rec.reason } : {}), ...(rec.iou !== undefined ? { iou: rec.iou } : {}) };
             }
@@ -575,12 +631,33 @@ export async function runStreetViewSurvey(site: SurveySite, options: StreetViewS
     const requested = new Set(faces.map(f => f.faceId));
     const cams = views.map(v => ({
         index: v.index,
-        cam: castCamera({ ...(got.images[v.index].view), widthPx: v.widthPx, heightPx: v.heightPx, ...(registration?.corrections.get(v.panoId) ? { correction: registration.corrections.get(v.panoId)! } : {}) }),
+        cam: castCamera({ ...(fetched[v.index].view), widthPx: v.widthPx, heightPx: v.heightPx, ...(registration?.corrections.get(v.panoId) ? { correction: registration.corrections.get(v.panoId)! } : {}) }),
         ...(owners.has(v.index) ? { owner: owners.get(v.index)! } : {})
     }));
     const coverage = faceCoverage(allFaces, requested, cams, site, plan.skipped);
+    if (tmp) {
+        for (const c of coverage) {
+            const face = allFaces.find(f => f.faceId === c.faceId)!;
+            const flaggedViews = c.views.filter(v => {
+                const t = views[v.index].temporary;
+                if (!t?.flagged) return false;
+                if (!t.regions.length) return views[v.index].faceId === c.faceId;
+                return regionShareOnFace(face, cams[v.index].cam, temporaryMask(t.regions, views[v.index].widthPx, views[v.index].heightPx), site.structureMesh) >= TEMPORARY_ON_FACE_MIN_SHARE;
+            }).map(v => v.index);
+            const uncheckedViews = c.views.filter(v => views[v.index].temporary?.error).map(v => v.index);
+            const best = c.bestViewIndex;
+            c.temporary = {
+                free: flaggedViews.length ? false : uncheckedViews.length || !c.views.length ? null : true,
+                bestViewFree: best === undefined || uncheckedViews.includes(best) ? null : !flaggedViews.includes(best), flaggedViews, uncheckedViews
+            };
+        }
+    }
+    const temporary: StreetViewSurveyResult['temporary'] = tmp ? {
+        summary: describeTemporary(tmp), checked: tmp.readings.filter(r => !r.error).length, flagged: tmp.readings.filter(r => r.flagged).length, unchecked: tmp.readings.filter(r => r.error).length,
+        swaps: swapsOut, kept: tmp.kept, offFace: tmp.offFace, refusals: tmp.refusals, cost: tmp.cost, ...(tmp.readings.find(r => r.model)?.model ? { model: tmp.readings.find(r => r.model)!.model } : {})
+    } : tmpUnavailable ? { summary: tmpUnavailable, checked: 0, flagged: 0, unchecked: views.length, swaps: [], kept: [], offFace: [], refusals: [], cost: { images: 0, questions: 0 }, unavailable: tmpUnavailable } : undefined;
     return {
-        views, refusals: got.refusals, fetchFailures: got.failures, coverage, unmatchedFaceHeadingsDeg: unmatched, discovery,
+        views, refusals: got.refusals, fetchFailures: got.failures, coverage, unmatchedFaceHeadingsDeg: unmatched, discovery, ...(temporary ? { temporary } : {}),
         registration: {
             frames: reg?.frames ?? 0, panos: reg?.panos ?? 0,
             ...(reg?.edge ? { edge: `${reg.edge.panos.filter(p => p.chosen === 'edges').length} of ${reg.edge.panos.length} panos took their edge pose` } : {}),
@@ -713,7 +790,9 @@ export const STREETVIEW_SURVEY_DECLARATION: ToolDeclaration = {
         'against the Google 3D Tiles mesh (silhouette/edge registration, then jointly across views), and returns per view the pano id, capture month, the registered ' +
         'camera (position in the tile frame and as lat/lng, heading, elevation, the API pitch where POSITIVE looks down, roll, and pinhole intrinsics with ' +
         'fx = fy = 960 / tan(fov / 2) at full size), the registration method and residual, and the image path; plus refusals and coverage per face. Optionally cuts the ' +
-        'structure out of each view (ownership mask) with what stands in front of it (occluder mask). Uses the same caches as google_3d_tiles_get_clay, so a place already ' +
+        'structure out of each view (ownership mask) with what stands in front of it (occluder mask). By default also asks, per view, whether anything temporary ' +
+        '(scaffolding, netting, a sidewalk shed, ...) covers the structure, swaps a flagged view for a clear capture of the same face from another month when one ' +
+        'exists, and masks the flagged regions (checkTemporary: false skips it). Uses the same caches as google_3d_tiles_get_clay, so a place already ' +
         'built is not downloaded again. Images are saved exactly as the API returned them under build/streetview-grounding/.',
     parameters: {
         type: 'OBJECT',
@@ -724,7 +803,8 @@ export const STREETVIEW_SURVEY_DECLARATION: ToolDeclaration = {
             structureGlbPath: { type: 'STRING', description: 'Optional GLB of the structure in the staged tile frame of the same place (as google_3d_tiles_get_clay writes it). Without it the structure is isolated from the 3D Tiles here.' },
             maxViews: { type: 'NUMBER', description: `Most views to fetch (default ${STREETVIEW_SURVEY_DEFAULT_VIEWS}, at most ${STREETVIEW_SURVEY_MAX_VIEWS}): one wide view per face first, then more views of the faces in turn from other panoramas.` },
             faceHeadingsDeg: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Outward compass headings (degrees clockwise from north) of the faces to cover, e.g. [270] for the west face. Default: every facade of the structure.' },
-            ownershipMasks: { type: 'BOOLEAN', description: 'Also cut the structure out of each view and write its ownership and occluder masks (PNG, 255 = the structure / what stands in front of it). Default false.' }
+            ownershipMasks: { type: 'BOOLEAN', description: 'Also cut the structure out of each view and write its ownership and occluder masks (PNG, 255 = the structure / what stands in front of it). Default false.' },
+            checkTemporary: { type: 'BOOLEAN', description: `Also ask the vision model, per view, whether anything temporary (scaffolding, netting, a crane, a sidewalk shed, barriers, construction equipment, an event structure, or anything else temporary) covers or stands in front of the structure. A face whose view shows one gets a clear capture of the same face from another month when one exists (the swap is reported: face, old and new pano and month, reason); otherwise the view is kept and flagged. Returns per view temporary { present, confidence, description, regions (image polygons) } and a mask of the regions (an occluder for texturing), per face whether its coverage is temporary-free, and a one-line summary. Default true (one vision call per view); pass false to skip it (${TEMPORARY_ENV_FLAG}=0 makes false the default).` }
         }
     }
 };
@@ -752,24 +832,31 @@ export const streetviewSurveyHandler: ToolHandler = async (args, ctx) => {
     const site = await prepareSurveySite({ ...(query ? { query } : {}), ...(hasCoords ? { lat, lng } : {}), ...(structureGlbPath ? { structureGlbPath } : {}) }, stagedDeps, { signal: ctx.signal, onProgress: report });
     const vision = stagedDeps.vision && 'client' in stagedDeps.vision ? stagedDeps.vision : undefined;
     const ownership = args.ownershipMasks === true;
+    const checkTemporary = typeof args.checkTemporary === 'boolean' ? args.checkTemporary : surveyTemporaryDefault();
     const result = await runStreetViewSurvey(site, {
         maxViews: typeof args.maxViews === 'number' ? args.maxViews : undefined,
         faceHeadingsDeg: asNumbers(args.faceHeadingsDeg),
         ownershipMasks: ownership,
         // with a vision model the segmenter finds the structure by what it is (and cuts out occluders), as the texture pass does
-        ...(ownership && vision ? { target: query || site.label } : {}),
+        ...((ownership || checkTemporary) && vision ? { target: query || site.label } : {}),
+        checkTemporary,
         outDir: path.join(ctx.workspaceRoot, STREETVIEW_IMAGE_DIR),
         workspaceRoot: ctx.workspaceRoot
     }, {
         streetView: { ...sv, refusedPanos: sv.refusedPanos ?? new Map<string, string>() },
         ...(ownership ? { segmenter: objectSegmenter(vision ? { modelSource: { getGenAIClient: async () => vision.client, getModelCandidates: () => vision.candidates } } : {}) } : {}),
+        // the temporary-structure question: the staged vision chain, its usable replies recorded in the staged cache
+        ...(checkTemporary && vision ? {
+            temporary: visionTemporaryChecker(new VisionModelChain<string>({ client: vision.client, candidates: vision.candidates, signal: ctx.signal, hedgeAfterMs: VISION_HEDGE_AFTER_MS, replyCache: stagedReplyCache(stagedDeps.cache) }))
+        } : {}),
         signal: ctx.signal, onProgress: report
     });
     const registered = result.views.filter(v => v.registration.method !== 'nominal').length;
     const covered = result.coverage.filter(c => c.requested);
     const summary = `Street View survey of ${site.label}: ${result.views.length} view${result.views.length === 1 ? '' : 's'} (© Google), ${registered} registered against the 3D Tiles` +
         `${result.refusals.length ? `, ${result.refusals.length} pano${result.refusals.length === 1 ? '' : 's'} refused by the grounding API` : ''}; ` +
-        `faces covered: ${covered.map(c => `${Math.round(c.headingDeg)}° ${Math.round(c.coveredFraction * 100)}%`).join(', ')}. Images in ${STREETVIEW_IMAGE_DIR}/.`;
+        `faces covered: ${covered.map(c => `${Math.round(c.headingDeg)}° ${Math.round(c.coveredFraction * 100)}%${c.temporary && c.views.length ? (c.temporary.free === true ? ' (temporary-free)' : c.temporary.free === false ? ' (temporary structure)' : ' (temporary: unchecked)') : ''}`).join(', ')}.` +
+        `${result.temporary ? ` Temporary structures: ${result.temporary.summary}.` : ''} Images in ${STREETVIEW_IMAGE_DIR}/.`;
     return {
         resultPayload: {
             success: true,

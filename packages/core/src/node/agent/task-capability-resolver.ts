@@ -95,7 +95,7 @@ export class TaskCapabilityResolver {
 
         // 3D & XR (Adaptive Domain Architecture: Physical/Spatial Synthesis & Dimensional Representations)
         // 1. Explicit 3D representations, rendering engines, and geospatial/optical formats:
-        const hasExplicit3DTerms = /3d|mesh|geometry|sdf|marching\s*cubes|terrain|biome|glb|gltf|three\.js|webgl|c\+\+|clang|polygon|voxel|photorealistic\s*3d\s*tiles|cesium|quad\s*remesh|utdra|uldra|tile|void\s*carv|bridge\s*void|underpass|webxr|geospatial\s*anchor|arcore|resect(?:ion)?|geobox|image\s*location|optical\s*center|edge\s*overlap|sub-?pixel|solvepnp|pnp|feature\s*match|point\s*correspondence|lens\s*distortion|barrel\s*distortion|pincushion|chromatic\s*aberration|optical\s*lens|lens\s*shader|anamorphic\s*squeeze|atmosphere|lighting|rayleigh|mie|scattering|turbidity|sky\s*dome|aerial\s*perspective|god\s*rays|diurnal|kelvin|cloud\s*shadow|uv|unwrap|rewrap|pbr|cavitation|texture\s*atlas|splat|gaussian|3dgs|radiance\s*field|blender|\b(?:stage|staging|plinth|pedestal|cyclorama|curved\s*cove|hero\s*staging|vector\s*world|vector\s*tile|population\s*staging)\b/i.test(lower);
+        const hasExplicit3DTerms = /3d|mesh|geometry|sdf|marching\s*cubes|terrain|biome|glb|gltf|three\.js|webgl|c\+\+|clang|polygon|voxel|photorealistic\s*3d\s*tiles|cesium|quad\s*remesh|utdra|uldra|tile|void\s*carv|bridge\s*void|underpass|webxr|geospatial\s*anchor|arcore|resect(?:ion)?|geobox|image\s*location|optical\s*center|edge\s*overlap|sub-?pixel|solvepnp|pnp|feature\s*match|point\s*correspondence|lens\s*distortion|barrel\s*distortion|pincushion|depth\s*of\s*field|bokeh|chromatic\s*aberration|optical\s*lens|lens\s*shader|anamorphic\s*squeeze|atmosphere|lighting|rayleigh|mie|scattering|turbidity|sky\s*dome|aerial\s*perspective|god\s*rays|diurnal|kelvin|cloud\s*shadow|uv|unwrap|rewrap|pbr|cavitation|texture\s*atlas|splat|gaussian|3dgs|radiance\s*field|blender|\b(?:stage|staging|plinth|pedestal|cyclorama|curved\s*cove|hero\s*staging|vector\s*world|vector\s*tile|population\s*staging)\b/i.test(lower);
 
         if (hasExplicit3DTerms) {
             return '3d';
@@ -462,20 +462,18 @@ export class TaskCapabilityResolver {
             } else if (/algorithmic\s*uv|unwrap[\s\w-]{0,30}rewrap|rewrap[\s\w-]{0,30}unwrap|uv\s*(?:unwrap|re-?wrap|parameteriz|atlas\s*pack|maxrects)|cavitation\s*pore|calcite\s*strata|pbr\s*material\s*decompos|conformal\s*reparameteriz/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'cpp-3d-engine';
-                nativeCapabilities.push('Algorithmic UV Unwrap & Rewrap Engine (AlgorithmicUvEngine)');
-                nativeCapabilities.push('Native C++20 Astro UV Acceleration (scratchbox_uv_engine.hpp)');
-                nativeCapabilities.push('MaxRects BSSF Atlas Bin Packing with 90° Chart Rotation (85-92% Fill Density)');
-                nativeCapabilities.push('Continuous 2D-to-3D Inverse Barycentric Projection & Analytical Cavitation Synthesis');
-                nativeCapabilities.push('Photometric De-Lighting & True PBR Material Suite Decomposition');
-                nativeCapabilities.push('Preserve-100-Lock (0.000 mm Vertex Drift) & Conformal Reparameterization Modes');
-                nativeCapabilities.push('In-App Agent Tools: algorithmic_uv_unwrap_rewrap, pbr_material_decompose, atlas_maxrects_pack');
-                rationale = 'Native C++20 Algorithmic UV Unwrap & Rewrap Engine performs analytical travertine micro-cavitation, calcite bedding strata, MaxRects high-efficiency chart packing, and PBR material suite decomposition with 100% vertex/UV lock option.';
+                nativeCapabilities.push('UV unwrap: normal-clustered charts, per-chart distortion measured (angle stretch and area ratio), LSCM conformal re-parameterization where the orthographic projection distorts, splitting where neither passes; never overlapping (AlgorithmicUvEngine mode \'unwrap\', scratchbox_uv_rewrap.hpp)');
+                nativeCapabilities.push('Atlas packing per material at a requested texel density or atlas size, with gutters and 90° chart rotation (skyline packer)');
+                nativeCapabilities.push('Texture rewrap (mode \'rewrap\'): every texture of a material rebaked into the new atlas from the old UVs (exact barycentric transfer, bilinear, gutter dilation), normal maps converted between tangent frames, TANGENT rewritten; or baked from another mesh by nearest surface (transferSourceGlbPath)');
+                nativeCapabilities.push('Mode \'preserve-100-lock\': UVs untouched; normal / ORM maps estimated from the baseColor pixels and optional albedo de-lighting');
+                nativeCapabilities.push('In-App Agent Tools: algorithmic_uv_unwrap_rewrap, uv_analyze_texel_density, pbr_material_decompose, atlas_maxrects_pack');
+                rationale = 'AlgorithmicUvEngine unwraps a GLB into new non-overlapping UV charts (orthographic or LSCM per chart by measured distortion), packs them per material at one texel density, and on rewrap rebakes every texture into the new atlas; it reports chart counts, distortion, texel-density uniformity, utilisation, and each texture rebaked or not rebaked with the reason.';
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'AlgorithmicUvEngine.processGlb or algorithmic_uv_unwrap_rewrap tool',
                     targetTool: 'algorithmic_uv_unwrap_rewrap',
                     targetService: 'AlgorithmicUvEngine',
-                    details: 'Invoke algorithmic_uv_unwrap_rewrap to enhance 3D model textures and stream binary .glb into 3d-scene primitive.'
+                    details: 'Invoke algorithmic_uv_unwrap_rewrap with mode \'unwrap\' (new UV set, textures untouched) or \'rewrap\' (new UVs and every texture rebaked) and load the output .glb into the 3d-scene primitive.'
                 };
             } else if (/(?:recolor|re-color|grade|re-?grade|texture\s*atlas|material\s*harmoniz|pbr)[\s\w-]{0,40}(?:3d\s*tile|glb|model|photometry|photogrammetr)|(?:3d\s*tile|glb|texture\s*atlas)[\s\w-]{0,40}(?:recolor|re-color|grade|re-?grade|palette|foliage\s*protect|pbr)/i.test(lower)) {
                 canSolveNatively = true;
@@ -525,21 +523,34 @@ export class TaskCapabilityResolver {
                     targetService: 'WebXRGeospatialAnchorBridge',
                     details: 'Use webxr_geospatial_align_coordinates, webxr_geospatial_calibrate, or webxr_geospatial_project_vectors to synchronize geodetic anchors and render into WebXR viewport.'
                 };
+            } else if (/depth\s*of\s*field|bokeh|\bf\/\d|rack\s*focus|shallow\s*focus/i.test(lower)) {
+                canSolveNatively = true;
+                primaryNativeEngine = 'threejs-webgl';
+                nativeCapabilities.push('Thin-lens depth of field in the 3D viewport (CinematicBokehPass via ViewportOpticsChain, circle of confusion from focal length, f-number and focus)');
+                nativeCapabilities.push('configure_physical_camera Gemini Agent Tool (FOV from sensor and focal length; focus distance or a tracked focus object; anamorphic oval bokeh)');
+                rationale = 'configure_physical_camera puts the lens on the open scene\'s camera (camera.lens): the viewport draws thin-lens depth of field from the focal length, f-number and focus distance or focus object, and the result says applied: true.';
+                suggestedNativeAction = {
+                    primitiveType: '3d-scene',
+                    serviceOrTool: 'configure_physical_camera tool & ViewportOpticsChain',
+                    targetTool: 'configure_physical_camera',
+                    targetService: 'CinematicBokehPass',
+                    details: 'Call configure_physical_camera with focalLengthMm, apertureFStop and a focus: focusDistanceMeters (manual), focusMode "auto" (continuous autofocus on the centre of the frame, autoFocusAreaFraction, focusPullSeconds), a focusPoint on an object, or a focusObjectId; the viewport draws the depth of field.'
+                };
             } else if (/lens\s*shader|optical\s*(?:distortion|effect|lens)|lens\s*distortion(?:\s*shader|\s*pass)?|brown-?conrady\s*(?:shader|pass|distortion)|chromatic\s*aberration|barrel\s*distortion|pincushion\s*distortion|anamorphic\s*squeeze/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'threejs-webgl';
-                nativeCapabilities.push('LensDistortionEffect & BrownConradyLensDistortionPass (Three.js WebGL post-processing)');
+                nativeCapabilities.push('LensDistortionEffect & BrownConradyLensDistortionPass, drawn by the 3D viewport (ViewportOpticsChain, with overscan and distortion-aware picking)');
                 nativeCapabilities.push('LENS_DISTORTION_SHADER (GLSL Brown-Conrady radial/tangential & chromatic dispersion)');
                 nativeCapabilities.push('Analytical Brown-Conrady CPU projection (computeBrownConradyUV)');
                 nativeCapabilities.push('Lens archetype presets (LENS_OPTICAL_PRESETS) & focal calibration');
                 nativeCapabilities.push('optics_configure_lens_distortion Gemini Agent Tool');
-                rationale = 'Native LensDistortionEffect applies hardware-accelerated Brown-Conrady lens distortion, chromatic dispersion, and optical presets directly via Three.js WebGL post-processing and analytical CPU routines.';
+                rationale = 'optics_configure_lens_distortion writes Brown-Conrady coefficients (normalized camera coordinates) into the open scene\'s camera.lens through sb_set_camera_lens; the 3D viewport draws them as a lens-distortion pass and the result says applied: true. It also returns overscan, sampled UV displacement and, on request, the GLSL.';
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'LensDistortionEffect & optics_configure_lens_distortion tool',
                     targetTool: 'optics_configure_lens_distortion',
                     targetService: 'LensDistortionEffect',
-                    details: 'Instantiate LensDistortionEffect, apply optical profile or calculate focal coefficients, and chain into post-processing pipeline.'
+                    details: 'Call optics_configure_lens_distortion with customParams (k1, k2, k3, p1, p2), a presetId or a focalLengthMm; the viewport draws the distortion on the open scene.'
                 };
             } else if (/geobox|resection|optical\s*center|camera\s*resection|edge\s*overlap|sub-?pixel\s*(?:edge|alignment)|brown-?conrady|image\s*location|localize\s*photo|solvepnp|pnp|2d-to-3d|feature\s*match|pose\s*estimation/i.test(lower)) {
                 canSolveNatively = true;

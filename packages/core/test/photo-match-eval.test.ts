@@ -19,10 +19,11 @@ import { describe, expect, it } from 'vitest';
 import type { PinholeCamera } from '../src/common/spatial/texture-pass-contracts';
 import { SRGB8_TO_LINEAR } from '../src/common/spatial/photogrammetric-delight';
 import {
-    aggregateRuns, composeGrid, coverageMask, judgeView, parseJudgeReply, perceptualScores, PHOTO_MATCH_BACKGROUND, renderPng, renderTriangles, seededShuffle,
-    type JudgeClient
+    aggregateRuns, clayJudgePrompt, composeGrid, coverageMask, judgePrompt, judgeView, judgeViewClay, parseClayJudgeReply, parseJudgeReply, perceptualScores, PHOTO_MATCH_BACKGROUND, PHOTO_MATCH_CLAY,
+    renderPng, renderTriangles, seededShuffle, type JudgeClient
 } from '../src/node/3d-engine/staged-location/photo-match-eval';
-import type { TileTriangles } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
+import { readTileTriangles, type TileTriangles } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
+import { assembleGlb } from '../src/node/3d-engine/staged-location/glb-bytes';
 
 const SHOTS = path.resolve(__dirname, '../../../test-results/screenshots/photo_match');
 
@@ -181,8 +182,111 @@ describe('photo-match evaluator', () => {
         expect(parseJudgeReply('{"renders":[{"image":1,"shape":11,"materials":6,"detail":7,"errors":8,"overall":9}]}', 1).problems.length).toBe(1);
         expect(parseJudgeReply('{"renders":[]}', 2).problems).toEqual(['no entry for image 1', 'no entry for image 2']);
         expect(parseJudgeReply('not json', 1).problems).toEqual(['the reply is not JSON']);
+        // realism and identity are read when present, checked like the rest, and not required of older replies
+        const both = parseJudgeReply('{"renders":[{"image":1,"shape":5,"materials":6,"detail":7,"errors":8,"overall":9,"realism":4,"identity":8}]}', 1);
+        expect(both.problems).toEqual([]);
+        expect([both.scores[0].realism, both.scores[0].identity]).toEqual([4, 8]);
+        expect(ok.scores[0].realism).toBeUndefined();
+        expect(parseJudgeReply('{"renders":[{"image":1,"shape":5,"materials":6,"detail":7,"errors":8,"overall":9,"realism":0,"identity":8}]}', 1).problems.length).toBe(1);
+        expect(judgePrompt('X', 2).closing).toMatch(/- realism: [^\n]*real photograph/);
+        expect(judgePrompt('X', 2).closing).toMatch(/- identity: would someone who knows this place recognise it/);
+        expect(aggregateRuns([{ order: ['a'], scores: { a: { shape: 1, materials: 1, detail: 1, errors: 1, overall: 1 } }, notes: {}, model: 'm' }], ['a']).a.realism.mean).toBeNaN();
         const a = seededShuffle(['A', 'B', 'C', 'D'], 'x#0'), b = seededShuffle(['A', 'B', 'C', 'D'], 'x#0');
         expect(a).toEqual(b);
         expect([...a].sort()).toEqual(['A', 'B', 'C', 'D']);
+    });
+
+    // ------------------------------------------------------------------ the clay arm
+    /** A horizontal slab (a band's soffit, facing down) at height y between depths z0 and z1, spanning [x0, x1]. */
+    function soffit(y: number, z0: number, z1: number, x0: number, x1: number): TileTriangles {
+        const P = [x0, y, z0, x1, y, z0, x1, y, z1, x0, y, z0, x1, y, z1, x0, y, z1];
+        return { positions: Float32Array.from(P), uvs: new Float32Array(12), normals: Float32Array.from([0, -1, 0, 0, -1, 0]), texture: Int32Array.from([-1, -1]), flatLinear: Float32Array.from([0.8, 0.1, 0.1, 0.8, 0.1, 0.1]), textures: [] };
+    }
+
+    it('renders the clay arm untextured: textures do not show, relief does, the street in a lighter clay, the coverage the arm\'s', () => {
+        const cam = camera(160, 120);
+        const a = renderTriangles([wall(10, -3, 3, -2, 2, stripes(64, red, cream))], cam, { clay: true });
+        const b = renderTriangles([wall(10, -3, 3, -2, 2, stripes(64, [40, 40, 200], [10, 200, 10]))], cam, { clay: true });
+        // two textures, one geometry: the clay renders are identical, and the wall is one flat tone
+        expect(Buffer.from(a.rgba).equals(Buffer.from(b.rgba))).toBe(true);
+        const row = Array.from({ length: 60 }, (_, k) => px(a, 50 + k, 60));
+        expect(new Set(row.map(c => c.join(','))).size).toBe(1);
+        expect(row[0][0]).toBeLessThan(PHOTO_MATCH_CLAY.albedo[0] + 1);
+        expect(row[0][0]).toBeGreaterThan(PHOTO_MATCH_CLAY.albedo[0] * 0.5);
+        // the background is the clay sky, not the textured renders' grey
+        px(a, 5, 5).forEach((c, k) => expect(Math.abs(c - PHOTO_MATCH_CLAY.background[k])).toBeLessThanOrEqual(1));
+        // relief: a band's soffit 1 m above the eye, projecting 2 m from the wall, reads darker than the wall face
+        const band = renderTriangles([wall(10, -3, 3, -2, 2, stripes(64, red, cream)), soffit(1, 8, 10, -3, 3)], cam, { clay: true });
+        const yBand = Math.round(cam.cy - cam.fy * 1 / 9);
+        expect(px(band, 80, yBand)[0]).toBeLessThan(px(band, 80, 60)[0] - 20);
+        // and the street around the arm is the lighter clay, drawn but not counted
+        const context = [wall(12, -20, 20, -20, 20, stripes(16, [20, 160, 40], [20, 160, 40]))];
+        const inCtx = renderTriangles([wall(10, -3, 3, -2, 2, stripes(64, red, cream))], cam, { clay: true, context });
+        expect(px(inCtx, 5, 5)[0]).toBeGreaterThan(px(inCtx, 80, 60)[0] + 30);
+        expect(inCtx.coverage[5 * 160 + 5]).toBe(0);
+        expect(inCtx.coverage[60 * 160 + 80]).toBe(1);
+        fs.mkdirSync(SHOTS, { recursive: true });
+        const tex = renderTriangles([wall(10, -3, 3, -2, 2, stripes(64, red, cream)), soffit(1, 8, 10, -3, 3)], cam);
+        fs.writeFileSync(path.join(SHOTS, 'photo_match_clay_arm.png'), composeGrid([{ image: tex, label: 'TEXTURED' }, { image: band, label: 'CLAY WITH BAND' }, { image: inCtx, label: 'CLAY IN CONTEXT' }], { tileWidth: 320, columns: 3 }));
+    });
+
+    it('judges the clay renders blind for shape only, and reads that reply strictly', async () => {
+        const cam = camera(96, 72);
+        const right = renderTriangles([wall(10, -3, 3, -2, 2, stripes(32, red, cream))], cam, { clay: true });
+        const wrong = renderTriangles([wall(10, -3, 3, -2, 0.5, stripes(32, red, cream))], cam, { clay: true });
+        const pngs: Record<string, string> = { right: renderPng(right).toString('base64'), wrong: renderPng(wrong).toString('base64') };
+        const prompts: string[] = [];
+        const client: JudgeClient = {
+            async generate(params) {
+                prompts.push(params.contents[0].parts.map(p => p.text ?? '').join(' '));
+                const imgs = params.contents[0].parts.filter(p => p.inlineData).slice(1).map(p => p.inlineData!.data);
+                const renders = imgs.map((d, k) => ({ image: k + 1, shape: d === pngs.right ? 8 : 3, note: d === pngs.right ? 'right' : 'wrong' }));
+                return { model: 'fake-judge', response: { candidates: [{ content: { parts: [{ text: JSON.stringify({ renders }) }] }, finishReason: 'STOP' }] } };
+            }
+        };
+        const runs = await judgeViewClay({ client, place: 'a test wall', photo: { bytes: renderPng(right), mimeType: 'image/png' }, renders: [{ armId: 'right', png: renderPng(right) }, { armId: 'wrong', png: renderPng(wrong) }], repeats: 3, seed: 'clay' });
+        expect(runs).toHaveLength(3);
+        for (const r of runs) { expect(r.scores.right).toEqual({ shape: 8 }); expect(r.scores.wrong).toEqual({ shape: 3 }); expect(r.notes.right).toBe('right'); }
+        expect(prompts.every(p => /untextured grey clay/.test(p) && /one criterion/.test(p) && /- shape: /.test(p) && !/- materials:/.test(p))).toBe(true);
+        const stats = aggregateRuns(runs, ['right', 'wrong']);
+        expect(stats.right.shape).toEqual({ mean: 8, sd: 0, min: 8, max: 8 });
+        expect(stats.right.overall.mean).toBeNaN();
+        // the clay reply needs shape in 1-10 and nothing else
+        expect(parseClayJudgeReply('{"renders":[{"image":1,"shape":6,"note":"x"}]}', 1)).toEqual({ scores: [{ shape: 6, note: 'x' }], problems: [] });
+        expect(parseClayJudgeReply('{"renders":[{"image":1,"overall":6}]}', 1).problems).toEqual(['image 1: shape is undefined']);
+        expect(parseClayJudgeReply('{"renders":[{"image":1,"shape":0}]}', 1).problems.length).toBe(1);
+        expect(clayJudgePrompt('X', 2).closing).toMatch(/surface relief/);
+        // a reply the textured parser needs (five criteria) is not asked of the clay judge, and vice versa
+        expect(parseJudgeReply('{"renders":[{"image":1,"shape":6}]}', 1).problems.length).toBe(1);
+        const textured = await judgeView({ client: { async generate() { return { model: 'm', response: { candidates: [{ content: { parts: [{ text: '{"renders":[{"image":1,"shape":5,"materials":5,"detail":5,"errors":5,"overall":5}]}' }] } }] } }; } }, place: 'x', photo: { bytes: renderPng(right), mimeType: 'image/png' }, renders: [{ armId: 'a', png: renderPng(right) }], repeats: 1, seed: 's' });
+        expect(textured[0].scores.a.overall).toBe(5);
+    });
+
+    it('reads vertex colours on untextured surfaces (SB-Veggie trees): the base colour factor times COLOR_0', () => {
+        // one triangle, clay base colour, its corners green (float RGB) and one blue (normalized RGBA ubyte)
+        const P = Float32Array.from([0, 0, 5, 1, 0, 5, 0, 1, 5]);
+        const C = Float32Array.from([0, 1, 0, 0, 1, 0, 0, 1, 0]);
+        const C2 = Uint8Array.from([0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255]);
+        const bin = Buffer.concat([Buffer.from(P.buffer), Buffer.from(C.buffer), Buffer.from(C2)]);
+        const json = {
+            asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0, 1] }], nodes: [{ mesh: 0 }, { mesh: 1 }],
+            meshes: [{ primitives: [{ attributes: { POSITION: 0, COLOR_0: 1 }, material: 0 }] }, { primitives: [{ attributes: { POSITION: 0, COLOR_0: 2 }, material: 0 }] }],
+            materials: [{ pbrMetallicRoughness: { baseColorFactor: [0.5, 0.6, 0.7, 1] } }],
+            accessors: [
+                { bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 5], max: [1, 1, 5] },
+                { bufferView: 1, componentType: 5126, count: 3, type: 'VEC3' },
+                { bufferView: 2, componentType: 5121, normalized: true, count: 3, type: 'VEC4' }
+            ],
+            bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: 36 }, { buffer: 0, byteOffset: 36, byteLength: 36 }, { buffer: 0, byteOffset: 72, byteLength: 12 }],
+            buffers: [{ byteLength: bin.length }]
+        };
+        const t = readTileTriangles(assembleGlb(json, bin));
+        expect(t.texture.length).toBe(2);
+        expect(Array.from(t.flatLinear.subarray(0, 3)).map(v => Math.round(v * 100) / 100)).toEqual([0, 0.6, 0]);
+        expect(Array.from(t.flatLinear.subarray(3, 6)).map(v => Math.round(v * 100) / 100)).toEqual([0, 0, 0.7]);
+        // and the renders show it (the trees no longer come out as clay-grey blobs in the textured arm)
+        const r = renderTriangles([t], camera(64, 48, 60));
+        const c = px(r, 34, 22);
+        expect(c[2]).toBeGreaterThan(c[0] + 40);
     });
 });

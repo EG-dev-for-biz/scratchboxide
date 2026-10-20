@@ -1,0 +1,2488 @@
+{
+ "schema": "scratchbox.tree-textures/1",
+ "about": "Surface textures for staged trees, chosen per tree by appearance (measured crown colour, leaf size, trunk size) and tinted to measured colour. Entries are described by continuous quantities only; the appearance text is for a model to read and is never branched on.",
+ "conventions": {
+  "colour": "meanLinearRgb / spreadLinearRgb: mean and standard deviation of linear sRGB (Rec. 709 primaries, D65) over the opaque pixels (leaves) or all pixels (bark); meanLab / spreadLab: CIELAB (D65) of the same pixels; meanLuminance: Rec. 709 Y.",
+  "uv": "UV origin at the bottom-left of the image, v up (a texture loaded with flipY). A leaf cell maps leaf-local (s across, t along; base at t = 0) to uv = origin + t * along + s * across, s and t in [0, 1]; the blade starts at the stalk's attachment (the stalk itself is outside the cell).",
+  "leafSize": "Estimated: an atlas's longer side is taken to span 0.40 m (the leaves' sizes relative to each other are as scanned; the absolute scale is an estimate from typical leaf proportions).",
+  "barkSize": "Estimated: a bark scan's shorter side is taken to span 0.50 m (the smooth scan shows the trunk's curvature across its width, about one trunk diameter). x runs around the trunk, y along it.",
+  "barkRelief": "displacementRange: robust range (2.5-97.5 %) of the displacement map high-passed at 4 cm (the trunk's own curvature removed), in the map's normalised units; normalSlopeMean: mean slope |n_xy| / n_z of the normal map; reliefIndex = displacementRange x normalSlopeMean (0 smooth .. about 0.5 deeply furrowed); ridgeSpacingM: dominant period across the trunk (1.5-25 cm) of the high-passed displacement; furrowDepthM: estimated as normalSlopeMean x ridgeSpacingM / 4 (a triangular ridge profile).",
+  "coverage": "coverage: opaque share of the whole atlas; leaf.fill: median share of a leaf cell's box the leaf covers."
+ },
+ "leaves": [
+  {
+   "id": "leaves_01",
+   "maps": {
+    "color": "leaves/leaves_01/color.jpg",
+    "opacity": "leaves/leaves_01/opacity.png",
+    "normal": "leaves/leaves_01/normal.jpg",
+    "roughness": "leaves/leaves_01/roughness.jpg"
+   },
+   "pixels": [
+    4096,
+    4096
+   ],
+   "realSizeM": [
+    0.4,
+    0.4
+   ],
+   "colour": {
+    "meanLinearRgb": [
+     0.0616,
+     0.1308,
+     0.0086
+    ],
+    "spreadLinearRgb": [
+     0.0532,
+     0.0589,
+     0.0174
+    ],
+    "meanLab": [
+     38.19,
+     -24.87,
+     38.49
+    ],
+    "spreadLab": [
+     6.82,
+     3.19,
+     5.92
+    ],
+    "meanLuminance": 0.1073
+   },
+   "leaf": {
+    "lengthM": 0.1163,
+    "widthM": 0.0916,
+    "lengthRangeM": [
+     0.1082,
+     0.127
+    ],
+    "aspect": 0.788,
+    "fill": 0.71
+   },
+   "coverage": 0.2989,
+   "atlas": {
+    "layout": "one cell per leaf",
+    "cells": [
+     {
+      "origin": [
+       0.10838,
+       0.6495
+      ],
+      "along": [
+       0.0064,
+       0.28805
+      ],
+      "across": [
+       0.23005,
+       -0.00511
+      ],
+      "lengthM": 0.1152,
+      "widthM": 0.092,
+      "fill": 0.711,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.37347,
+       0.62853
+      ],
+      "along": [
+       0.00286,
+       0.31737
+      ],
+      "across": [
+       0.24639,
+       -0.00222
+      ],
+      "lengthM": 0.127,
+      "widthM": 0.0986,
+      "fill": 0.703,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.645,
+       0.63365
+      ],
+      "along": [
+       0.003,
+       0.2931
+      ],
+      "across": [
+       0.26085,
+       -0.00267
+      ],
+      "lengthM": 0.1172,
+      "widthM": 0.1043,
+      "fill": 0.733,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.12319,
+       0.17632
+      ],
+      "along": [
+       0.00762,
+       0.28842
+      ],
+      "across": [
+       0.22795,
+       -0.00602
+      ],
+      "lengthM": 0.1154,
+      "widthM": 0.0912,
+      "fill": 0.709,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.40129,
+       0.16444
+      ],
+      "along": [
+       0.03621,
+       0.29102
+      ],
+      "across": [
+       0.21491,
+       -0.02674
+      ],
+      "lengthM": 0.1173,
+      "widthM": 0.0866,
+      "fill": 0.724,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.66787,
+       0.18228
+      ],
+      "along": [
+       0.02408,
+       0.2694
+      ],
+      "across": [
+       0.22686,
+       -0.02028
+      ],
+      "lengthM": 0.1082,
+      "widthM": 0.0911,
+      "fill": 0.699,
+      "stalkSeen": true
+     }
+    ]
+   },
+   "appearance": "Broad heart-shaped leaves with long thin stalks; deep saturated green, smooth margins, glossy.",
+   "provenance": "library"
+  },
+  {
+   "id": "leaves_02",
+   "maps": {
+    "color": "leaves/leaves_02/color.jpg",
+    "opacity": "leaves/leaves_02/opacity.png",
+    "normal": "leaves/leaves_02/normal.jpg",
+    "roughness": "leaves/leaves_02/roughness.jpg"
+   },
+   "pixels": [
+    4096,
+    4096
+   ],
+   "realSizeM": [
+    0.4,
+    0.4
+   ],
+   "colour": {
+    "meanLinearRgb": [
+     0.1762,
+     0.3056,
+     0.0593
+    ],
+    "spreadLinearRgb": [
+     0.0401,
+     0.0468,
+     0.0218
+    ],
+    "meanLab": [
+     57.85,
+     -25.67,
+     38.86
+    ],
+    "spreadLab": [
+     4.0,
+     2.91,
+     3.78
+    ],
+    "meanLuminance": 0.2603
+   },
+   "leaf": {
+    "lengthM": 0.1139,
+    "widthM": 0.0896,
+    "lengthRangeM": [
+     0.1054,
+     0.1223
+    ],
+    "aspect": 0.787,
+    "fill": 0.706
+   },
+   "coverage": 0.4156,
+   "atlas": {
+    "layout": "one cell per leaf",
+    "cells": [
+     {
+      "origin": [
+       0.02279,
+       0.71357
+      ],
+      "along": [
+       0.06054,
+       0.29023
+      ],
+      "across": [
+       0.23244,
+       -0.04849
+      ],
+      "lengthM": 0.1186,
+      "widthM": 0.095,
+      "fill": 0.706,
+      "stalkSeen": false
+     },
+     {
+      "origin": [
+       0.3894,
+       0.705
+      ],
+      "along": [
+       0.00355,
+       0.28219
+      ],
+      "across": [
+       0.2188,
+       -0.00275
+      ],
+      "lengthM": 0.1129,
+      "widthM": 0.0875,
+      "fill": 0.693,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.73473,
+       0.68107
+      ],
+      "along": [
+       -0.02493,
+       0.28856
+      ],
+      "across": [
+       0.22477,
+       0.01942
+      ],
+      "lengthM": 0.1159,
+      "widthM": 0.0902,
+      "fill": 0.704,
+      "stalkSeen": false
+     },
+     {
+      "origin": [
+       0.03699,
+       0.38408
+      ],
+      "along": [
+       0.04355,
+       0.2756
+      ],
+      "across": [
+       0.2216,
+       -0.03501
+      ],
+      "lengthM": 0.1116,
+      "widthM": 0.0897,
+      "fill": 0.714,
+      "stalkSeen": false
+     },
+     {
+      "origin": [
+       0.39657,
+       0.35268
+      ],
+      "along": [
+       -0.01406,
+       0.28451
+      ],
+      "across": [
+       0.22382,
+       0.01106
+      ],
+      "lengthM": 0.1139,
+      "widthM": 0.0896,
+      "fill": 0.708,
+      "stalkSeen": false
+     },
+     {
+      "origin": [
+       0.71987,
+       0.34467
+      ],
+      "along": [
+       -0.00149,
+       0.30569
+      ],
+      "across": [
+       0.22273,
+       0.00109
+      ],
+      "lengthM": 0.1223,
+      "widthM": 0.0891,
+      "fill": 0.737,
+      "stalkSeen": false
+     },
+     {
+      "origin": [
+       0.03165,
+       0.04386
+      ],
+      "along": [
+       0.0457,
+       0.29383
+      ],
+      "across": [
+       0.21941,
+       -0.03412
+      ],
+      "lengthM": 0.1189,
+      "widthM": 0.0888,
+      "fill": 0.695,
+      "stalkSeen": false
+     },
+     {
+      "origin": [
+       0.38682,
+       0.02078
+      ],
+      "along": [
+       -0.006,
+       0.26342
+      ],
+      "across": [
+       0.23052,
+       0.00525
+      ],
+      "lengthM": 0.1054,
+      "widthM": 0.0922,
+      "fill": 0.773,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.71785,
+       0.04272
+      ],
+      "along": [
+       0.02606,
+       0.28097
+      ],
+      "across": [
+       0.21084,
+       -0.01956
+      ],
+      "lengthM": 0.1129,
+      "widthM": 0.0847,
+      "fill": 0.664,
+      "stalkSeen": true
+     }
+    ]
+   },
+   "appearance": "Rounded oval leaves with straight parallel veins and lightly wavy margins; mid green, matte.",
+   "provenance": "library"
+  },
+  {
+   "id": "leaves_03",
+   "maps": {
+    "color": "leaves/leaves_03/color.jpg",
+    "opacity": "leaves/leaves_03/opacity.png",
+    "normal": "leaves/leaves_03/normal.jpg",
+    "roughness": "leaves/leaves_03/roughness.jpg"
+   },
+   "pixels": [
+    8192,
+    8192
+   ],
+   "realSizeM": [
+    0.4,
+    0.4
+   ],
+   "colour": {
+    "meanLinearRgb": [
+     0.2318,
+     0.3816,
+     0.0641
+    ],
+    "spreadLinearRgb": [
+     0.0976,
+     0.0844,
+     0.0456
+    ],
+    "meanLab": [
+     63.31,
+     -27.08,
+     44.47
+    ],
+    "spreadLab": [
+     7.08,
+     7.95,
+     8.89
+    ],
+    "meanLuminance": 0.3268
+   },
+   "leaf": {
+    "lengthM": 0.1538,
+    "widthM": 0.0726,
+    "lengthRangeM": [
+     0.1352,
+     0.1566
+    ],
+    "aspect": 0.472,
+    "fill": 0.704
+   },
+   "coverage": 0.2881,
+   "atlas": {
+    "layout": "one cell per leaf",
+    "cells": [
+     {
+      "origin": [
+       0.09708,
+       0.61117
+      ],
+      "along": [
+       0.00923,
+       0.35505
+      ],
+      "across": [
+       0.18094,
+       -0.0047
+      ],
+      "lengthM": 0.1421,
+      "widthM": 0.0724,
+      "fill": 0.711,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.40274,
+       0.57267
+      ],
+      "along": [
+       0.00765,
+       0.38766
+      ],
+      "across": [
+       0.18197,
+       -0.00359
+      ],
+      "lengthM": 0.1551,
+      "widthM": 0.0728,
+      "fill": 0.681,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.72649,
+       0.61021
+      ],
+      "along": [
+       0.02798,
+       0.33695
+      ],
+      "across": [
+       0.16099,
+       -0.01337
+      ],
+      "lengthM": 0.1352,
+      "widthM": 0.0646,
+      "fill": 0.691,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.06618,
+       0.07193
+      ],
+      "along": [
+       0.00457,
+       0.39149
+      ],
+      "across": [
+       0.18358,
+       -0.00214
+      ],
+      "lengthM": 0.1566,
+      "widthM": 0.0734,
+      "fill": 0.74,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.40923,
+       0.07227
+      ],
+      "along": [
+       0.00644,
+       0.38852
+      ],
+      "across": [
+       0.17451,
+       -0.00289
+      ],
+      "lengthM": 0.1554,
+      "widthM": 0.0698,
+      "fill": 0.747,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.70511,
+       0.09067
+      ],
+      "along": [
+       0.01682,
+       0.38096
+      ],
+      "across": [
+       0.18712,
+       -0.00826
+      ],
+      "lengthM": 0.1525,
+      "widthM": 0.0749,
+      "fill": 0.697,
+      "stalkSeen": true
+     }
+    ]
+   },
+   "appearance": "Elliptic leaves with smooth margins and a pale midrib; mid green with a few yellowed and spotted leaves.",
+   "provenance": "library"
+  },
+  {
+   "id": "leaves_04",
+   "maps": {
+    "color": "leaves/leaves_04/color.jpg",
+    "opacity": "leaves/leaves_04/opacity.png",
+    "normal": "leaves/leaves_04/normal.jpg",
+    "roughness": "leaves/leaves_04/roughness.jpg"
+   },
+   "pixels": [
+    8192,
+    8192
+   ],
+   "realSizeM": [
+    0.4,
+    0.4
+   ],
+   "colour": {
+    "meanLinearRgb": [
+     0.272,
+     0.4173,
+     0.0864
+    ],
+    "spreadLinearRgb": [
+     0.0448,
+     0.0524,
+     0.0426
+    ],
+    "meanLab": [
+     66.54,
+     -25.17,
+     43.16
+    ],
+    "spreadLab": [
+     3.8,
+     3.0,
+     6.0
+    ],
+    "meanLuminance": 0.3625
+   },
+   "leaf": {
+    "lengthM": 0.1436,
+    "widthM": 0.0867,
+    "lengthRangeM": [
+     0.1384,
+     0.1484
+    ],
+    "aspect": 0.604,
+    "fill": 0.676
+   },
+   "coverage": 0.3231,
+   "atlas": {
+    "layout": "one cell per leaf",
+    "cells": [
+     {
+      "origin": [
+       0.37772,
+       0.5773
+      ],
+      "along": [
+       0.02043,
+       0.37034
+      ],
+      "across": [
+       0.22878,
+       -0.01262
+      ],
+      "lengthM": 0.1484,
+      "widthM": 0.0916,
+      "fill": 0.658,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.72222,
+       0.579
+      ],
+      "along": [
+       0.01795,
+       0.3456
+      ],
+      "across": [
+       0.20737,
+       -0.01077
+      ],
+      "lengthM": 0.1384,
+      "widthM": 0.0831,
+      "fill": 0.687,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.06564,
+       0.55959
+      ],
+      "along": [
+       -0.00826,
+       0.36118
+      ],
+      "across": [
+       0.19109,
+       0.00437
+      ],
+      "lengthM": 0.1445,
+      "widthM": 0.0765,
+      "fill": 0.681,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.07092,
+       0.06669
+      ],
+      "along": [
+       -0.01573,
+       0.35277
+      ],
+      "across": [
+       0.23331,
+       0.0104
+      ],
+      "lengthM": 0.1412,
+      "widthM": 0.0934,
+      "fill": 0.672,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.41383,
+       0.08351
+      ],
+      "along": [
+       -0.01005,
+       0.37
+      ],
+      "across": [
+       0.22298,
+       0.00606
+      ],
+      "lengthM": 0.1481,
+      "widthM": 0.0892,
+      "fill": 0.698,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.7453,
+       0.07855
+      ],
+      "along": [
+       -0.04177,
+       0.35422
+      ],
+      "across": [
+       0.20886,
+       0.02463
+      ],
+      "lengthM": 0.1427,
+      "widthM": 0.0841,
+      "fill": 0.642,
+      "stalkSeen": true
+     }
+    ]
+   },
+   "appearance": "Ovate leaves with finely toothed margins and a pointed tip; light fresh green, young-looking.",
+   "provenance": "library"
+  },
+  {
+   "id": "leaves_05",
+   "maps": {
+    "color": "leaves/leaves_05/color.jpg",
+    "opacity": "leaves/leaves_05/opacity.png",
+    "normal": "leaves/leaves_05/normal.jpg",
+    "roughness": "leaves/leaves_05/roughness.jpg"
+   },
+   "pixels": [
+    8192,
+    8192
+   ],
+   "realSizeM": [
+    0.4,
+    0.4
+   ],
+   "colour": {
+    "meanLinearRgb": [
+     0.3017,
+     0.452,
+     0.0729
+    ],
+    "spreadLinearRgb": [
+     0.0524,
+     0.0651,
+     0.0338
+    ],
+    "meanLab": [
+     68.72,
+     -26.08,
+     48.76
+    ],
+    "spreadLab": [
+     4.35,
+     3.24,
+     5.17
+    ],
+    "meanLuminance": 0.3927
+   },
+   "leaf": {
+    "lengthM": 0.145,
+    "widthM": 0.0989,
+    "lengthRangeM": [
+     0.1426,
+     0.1611
+    ],
+    "aspect": 0.682,
+    "fill": 0.615
+   },
+   "coverage": 0.3321,
+   "atlas": {
+    "layout": "one cell per leaf",
+    "cells": [
+     {
+      "origin": [
+       0.33022,
+       0.59663
+      ],
+      "along": [
+       0.01379,
+       0.36053
+      ],
+      "across": [
+       0.25433,
+       -0.00973
+      ],
+      "lengthM": 0.1443,
+      "widthM": 0.1018,
+      "fill": 0.607,
+      "stalkSeen": false
+     },
+     {
+      "origin": [
+       0.70487,
+       0.56283
+      ],
+      "along": [
+       -0.07001,
+       0.34966
+      ],
+      "across": [
+       0.25838,
+       0.05174
+      ],
+      "lengthM": 0.1426,
+      "widthM": 0.1054,
+      "fill": 0.556,
+      "stalkSeen": false
+     },
+     {
+      "origin": [
+       0.05754,
+       0.55781
+      ],
+      "along": [
+       -0.01799,
+       0.40224
+      ],
+      "across": [
+       0.21857,
+       0.00977
+      ],
+      "lengthM": 0.1611,
+      "widthM": 0.0875,
+      "fill": 0.624,
+      "stalkSeen": false
+     },
+     {
+      "origin": [
+       0.03629,
+       0.07594
+      ],
+      "along": [
+       0.00057,
+       0.36425
+      ],
+      "across": [
+       0.2812,
+       -0.00044
+      ],
+      "lengthM": 0.1457,
+      "widthM": 0.1125,
+      "fill": 0.564,
+      "stalkSeen": false
+     },
+     {
+      "origin": [
+       0.37678,
+       0.07329
+      ],
+      "along": [
+       0.01229,
+       0.35997
+      ],
+      "across": [
+       0.24008,
+       -0.0082
+      ],
+      "lengthM": 0.1441,
+      "widthM": 0.0961,
+      "fill": 0.632,
+      "stalkSeen": false
+     },
+     {
+      "origin": [
+       0.69134,
+       0.05561
+      ],
+      "along": [
+       -0.0018,
+       0.3763
+      ],
+      "across": [
+       0.22851,
+       0.00109
+      ],
+      "lengthM": 0.1505,
+      "widthM": 0.0914,
+      "fill": 0.632,
+      "stalkSeen": false
+     }
+    ]
+   },
+   "appearance": "Deeply rounded-lobed leaves with wavy outlines and short stalks; pale yellow-green.",
+   "provenance": "library"
+  },
+  {
+   "id": "leaves_06",
+   "maps": {
+    "color": "leaves/leaves_06/color.jpg",
+    "opacity": "leaves/leaves_06/opacity.png",
+    "normal": "leaves/leaves_06/normal.jpg",
+    "roughness": "leaves/leaves_06/roughness.jpg"
+   },
+   "pixels": [
+    8192,
+    8192
+   ],
+   "realSizeM": [
+    0.4,
+    0.4
+   ],
+   "colour": {
+    "meanLinearRgb": [
+     0.1814,
+     0.3381,
+     0.0188
+    ],
+    "spreadLinearRgb": [
+     0.0797,
+     0.091,
+     0.0132
+    ],
+    "meanLab": [
+     59.41,
+     -30.94,
+     54.28
+    ],
+    "spreadLab": [
+     6.98,
+     6.48,
+     4.73
+    ],
+    "meanLuminance": 0.2818
+   },
+   "leaf": {
+    "lengthM": 0.1124,
+    "widthM": 0.1206,
+    "lengthRangeM": [
+     0.0999,
+     0.1243
+    ],
+    "aspect": 1.073,
+    "fill": 0.667
+   },
+   "coverage": 0.2349,
+   "atlas": {
+    "layout": "one cell per leaf",
+    "cells": [
+     {
+      "origin": [
+       0.09183,
+       0.64812
+      ],
+      "along": [
+       -0.00741,
+       0.27261
+      ],
+      "across": [
+       0.3514,
+       0.00955
+      ],
+      "lengthM": 0.1091,
+      "widthM": 0.1406,
+      "fill": 0.689,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.59281,
+       0.68525
+      ],
+      "along": [
+       0.01771,
+       0.24923
+      ],
+      "across": [
+       0.27963,
+       -0.01987
+      ],
+      "lengthM": 0.0999,
+      "widthM": 0.1121,
+      "fill": 0.677,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.11917,
+       0.15051
+      ],
+      "along": [
+       -0.05041,
+       0.30665
+      ],
+      "across": [
+       0.3186,
+       0.05238
+      ],
+      "lengthM": 0.1243,
+      "widthM": 0.1292,
+      "fill": 0.657,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.61399,
+       0.18356
+      ],
+      "along": [
+       0.00755,
+       0.28923
+      ],
+      "across": [
+       0.24904,
+       -0.0065
+      ],
+      "lengthM": 0.1157,
+      "widthM": 0.0997,
+      "fill": 0.639,
+      "stalkSeen": true
+     }
+    ]
+   },
+   "appearance": "Large palmate leaves with five pointed lobes and long stalks; bright green with pale veins.",
+   "provenance": "library"
+  },
+  {
+   "id": "leaves_07",
+   "maps": {
+    "color": "leaves/leaves_07/color.jpg",
+    "opacity": "leaves/leaves_07/opacity.png",
+    "normal": "leaves/leaves_07/normal.jpg",
+    "roughness": "leaves/leaves_07/roughness.jpg"
+   },
+   "pixels": [
+    8192,
+    4096
+   ],
+   "realSizeM": [
+    0.4,
+    0.2
+   ],
+   "colour": {
+    "meanLinearRgb": [
+     0.219,
+     0.2795,
+     0.0136
+    ],
+    "spreadLinearRgb": [
+     0.0668,
+     0.09,
+     0.0105
+    ],
+    "meanLab": [
+     55.63,
+     -19.29,
+     52.91
+    ],
+    "spreadLab": [
+     9.74,
+     6.94,
+     8.5
+    ],
+    "meanLuminance": 0.2474
+   },
+   "leaf": {
+    "lengthM": 0.1273,
+    "widthM": 0.0336,
+    "lengthRangeM": [
+     0.0823,
+     0.1516
+    ],
+    "aspect": 0.264,
+    "fill": 0.686
+   },
+   "coverage": 0.2164,
+   "atlas": {
+    "layout": "one cell per leaf",
+    "cells": [
+     {
+      "origin": [
+       0.41385,
+       0.84501
+      ],
+      "along": [
+       0.00112,
+       -0.66991
+      ],
+      "across": [
+       -0.08506,
+       -0.00057
+      ],
+      "lengthM": 0.134,
+      "widthM": 0.034,
+      "fill": 0.692,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.58178,
+       0.82551
+      ],
+      "along": [
+       0.00881,
+       -0.65578
+      ],
+      "across": [
+       -0.08732,
+       -0.00469
+      ],
+      "lengthM": 0.1312,
+      "widthM": 0.0349,
+      "fill": 0.679,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.95567,
+       0.8792
+      ],
+      "along": [
+       -0.0033,
+       -0.75784
+      ],
+      "across": [
+       -0.08962,
+       0.00156
+      ],
+      "lengthM": 0.1516,
+      "widthM": 0.0358,
+      "fill": 0.717,
+      "stalkSeen": false
+     },
+     {
+      "origin": [
+       0.77317,
+       0.80517
+      ],
+      "along": [
+       -0.00191,
+       -0.61713
+      ],
+      "across": [
+       -0.08308,
+       0.00103
+      ],
+      "lengthM": 0.1234,
+      "widthM": 0.0332,
+      "fill": 0.724,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.04928,
+       0.30714
+      ],
+      "along": [
+       -0.00912,
+       0.41108
+      ],
+      "across": [
+       0.07032,
+       0.00624
+      ],
+      "lengthM": 0.0823,
+      "widthM": 0.0282,
+      "fill": 0.681,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.18765,
+       0.22448
+      ],
+      "along": [
+       0.00371,
+       0.58582
+      ],
+      "across": [
+       0.07342,
+       -0.00186
+      ],
+      "lengthM": 0.1172,
+      "widthM": 0.0294,
+      "fill": 0.649,
+      "stalkSeen": false
+     }
+    ]
+   },
+   "appearance": "Long narrow lance-shaped leaves tapering to a point; yellow-green with dark speckles.",
+   "provenance": "library"
+  },
+  {
+   "id": "leaves_08",
+   "maps": {
+    "color": "leaves/leaves_08/color.jpg",
+    "opacity": "leaves/leaves_08/opacity.png",
+    "normal": "leaves/leaves_08/normal.jpg",
+    "roughness": "leaves/leaves_08/roughness.jpg"
+   },
+   "pixels": [
+    8192,
+    8192
+   ],
+   "realSizeM": [
+    0.4,
+    0.4
+   ],
+   "colour": {
+    "meanLinearRgb": [
+     0.0667,
+     0.1555,
+     0.0377
+    ],
+    "spreadLinearRgb": [
+     0.0343,
+     0.0571,
+     0.0221
+    ],
+    "meanLab": [
+     41.63,
+     -24.01,
+     26.5
+    ],
+    "spreadLab": [
+     6.98,
+     6.46,
+     8.66
+    ],
+    "meanLuminance": 0.1281
+   },
+   "leaf": {
+    "lengthM": 0.3427,
+    "widthM": 0.1236,
+    "lengthRangeM": [
+     0.3286,
+     0.3568
+    ],
+    "aspect": 0.361,
+    "fill": 0.368
+   },
+   "coverage": 0.2282,
+   "atlas": {
+    "layout": "one cell per leaf",
+    "cells": [
+     {
+      "origin": [
+       0.90662,
+       0.40247
+      ],
+      "along": [
+       -0.82098,
+       -0.029
+      ],
+      "across": [
+       -0.01026,
+       0.29042
+      ],
+      "lengthM": 0.3286,
+      "widthM": 0.1162,
+      "fill": 0.381,
+      "stalkSeen": false
+     },
+     {
+      "origin": [
+       0.93958,
+       0.06639
+      ],
+      "along": [
+       -0.88995,
+       -0.06014
+      ],
+      "across": [
+       -0.02207,
+       0.32657
+      ],
+      "lengthM": 0.3568,
+      "widthM": 0.1309,
+      "fill": 0.355,
+      "stalkSeen": false
+     }
+    ]
+   },
+   "appearance": "Flat sprays of tiny overlapping scale-like needles on a central stem; dark blue-green, feathery.",
+   "provenance": "library"
+  },
+  {
+   "id": "leaves_09",
+   "maps": {
+    "color": "leaves/leaves_09/color.jpg",
+    "opacity": "leaves/leaves_09/opacity.png",
+    "normal": "leaves/leaves_09/normal.jpg",
+    "roughness": "leaves/leaves_09/roughness.jpg"
+   },
+   "pixels": [
+    8192,
+    8192
+   ],
+   "realSizeM": [
+    0.4,
+    0.4
+   ],
+   "colour": {
+    "meanLinearRgb": [
+     0.428,
+     0.2889,
+     0.0122
+    ],
+    "spreadLinearRgb": [
+     0.2057,
+     0.1457,
+     0.0167
+    ],
+    "meanLab": [
+     59.55,
+     0.8,
+     57.94
+    ],
+    "spreadLab": [
+     12.6,
+     20.35,
+     15.01
+    ],
+    "meanLuminance": 0.2985
+   },
+   "leaf": {
+    "lengthM": 0.0733,
+    "widthM": 0.0807,
+    "lengthRangeM": [
+     0.066,
+     0.0803
+    ],
+    "aspect": 1.101,
+    "fill": 0.644
+   },
+   "coverage": 0.2307,
+   "atlas": {
+    "layout": "one cell per leaf",
+    "cells": [
+     {
+      "origin": [
+       0.06047,
+       0.79052
+      ],
+      "along": [
+       0.0032,
+       0.17879
+      ],
+      "across": [
+       0.2211,
+       -0.00396
+      ],
+      "lengthM": 0.0715,
+      "widthM": 0.0885,
+      "fill": 0.644,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.39282,
+       0.7723
+      ],
+      "along": [
+       0.00057,
+       0.1895
+      ],
+      "across": [
+       0.22258,
+       -0.00067
+      ],
+      "lengthM": 0.0758,
+      "widthM": 0.089,
+      "fill": 0.635,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.75319,
+       0.75223
+      ],
+      "along": [
+       -0.01973,
+       0.18209
+      ],
+      "across": [
+       0.19158,
+       0.02076
+      ],
+      "lengthM": 0.0733,
+      "widthM": 0.0771,
+      "fill": 0.644,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.05671,
+       0.44744
+      ],
+      "along": [
+       -0.00204,
+       0.18642
+      ],
+      "across": [
+       0.23339,
+       0.00256
+      ],
+      "lengthM": 0.0746,
+      "widthM": 0.0934,
+      "fill": 0.627,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.3951,
+       0.44613
+      ],
+      "along": [
+       0.01047,
+       0.1979
+      ],
+      "across": [
+       0.19816,
+       -0.01048
+      ],
+      "lengthM": 0.0793,
+      "widthM": 0.0794,
+      "fill": 0.65,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.73567,
+       0.4369
+      ],
+      "along": [
+       -0.01618,
+       0.20012
+      ],
+      "across": [
+       0.21357,
+       0.01726
+      ],
+      "lengthM": 0.0803,
+      "widthM": 0.0857,
+      "fill": 0.667,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.06359,
+       0.15695
+      ],
+      "along": [
+       0.03237,
+       0.16709
+      ],
+      "across": [
+       0.19805,
+       -0.03837
+      ],
+      "lengthM": 0.0681,
+      "widthM": 0.0807,
+      "fill": 0.646,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.41224,
+       0.15585
+      ],
+      "along": [
+       0.01134,
+       0.16466
+      ],
+      "across": [
+       0.19506,
+       -0.01343
+      ],
+      "lengthM": 0.066,
+      "widthM": 0.0782,
+      "fill": 0.628,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.75172,
+       0.14162
+      ],
+      "along": [
+       -0.01144,
+       0.17248
+      ],
+      "across": [
+       0.19231,
+       0.01275
+      ],
+      "lengthM": 0.0691,
+      "widthM": 0.0771,
+      "fill": 0.662,
+      "stalkSeen": true
+     }
+    ]
+   },
+   "appearance": "Palmate pointed-lobed leaves turning in autumn: a mix of green, yellow, orange and red blotches.",
+   "provenance": "library"
+  },
+  {
+   "id": "leaves_10",
+   "maps": {
+    "color": "leaves/leaves_10/color.jpg",
+    "opacity": "leaves/leaves_10/opacity.png",
+    "normal": "leaves/leaves_10/normal.jpg",
+    "roughness": "leaves/leaves_10/roughness.jpg"
+   },
+   "pixels": [
+    8192,
+    8192
+   ],
+   "realSizeM": [
+    0.4,
+    0.4
+   ],
+   "colour": {
+    "meanLinearRgb": [
+     0.8955,
+     0.6057,
+     0.022
+    ],
+    "spreadLinearRgb": [
+     0.1422,
+     0.1565,
+     0.0462
+    ],
+    "meanLab": [
+     82.49,
+     -0.17,
+     78.22
+    ],
+    "spreadLab": [
+     8.55,
+     7.06,
+     11.62
+    ],
+    "meanLuminance": 0.6252
+   },
+   "leaf": {
+    "lengthM": 0.1432,
+    "widthM": 0.0703,
+    "lengthRangeM": [
+     0.1389,
+     0.1516
+    ],
+    "aspect": 0.491,
+    "fill": 0.703
+   },
+   "coverage": 0.2675,
+   "atlas": {
+    "layout": "one cell per leaf",
+    "cells": [
+     {
+      "origin": [
+       0.10418,
+       0.88363
+      ],
+      "along": [
+       0.37891,
+       -0.00079
+      ],
+      "across": [
+       -0.00036,
+       -0.17199
+      ],
+      "lengthM": 0.1516,
+      "widthM": 0.0688,
+      "fill": 0.709,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.57179,
+       0.8931
+      ],
+      "along": [
+       0.375,
+       -8e-05
+      ],
+      "across": [
+       -4e-05,
+       -0.17969
+      ],
+      "lengthM": 0.15,
+      "widthM": 0.0719,
+      "fill": 0.698,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.08384,
+       0.5478
+      ],
+      "along": [
+       0.36616,
+       0.03217
+      ],
+      "across": [
+       0.01654,
+       -0.18824
+      ],
+      "lengthM": 0.147,
+      "widthM": 0.0756,
+      "fill": 0.694,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.57325,
+       0.55138
+      ],
+      "along": [
+       0.34668,
+       0.03425
+      ],
+      "across": [
+       0.01787,
+       -0.18085
+      ],
+      "lengthM": 0.1393,
+      "widthM": 0.0727,
+      "fill": 0.683,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.1322,
+       0.24268
+      ],
+      "along": [
+       0.347,
+       0.028
+      ],
+      "across": [
+       0.01203,
+       -0.14917
+      ],
+      "lengthM": 0.1393,
+      "widthM": 0.0599,
+      "fill": 0.744,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.58745,
+       0.24326
+      ],
+      "along": [
+       0.34698,
+       0.01412
+      ],
+      "across": [
+       0.00612,
+       -0.15046
+      ],
+      "lengthM": 0.1389,
+      "widthM": 0.0602,
+      "fill": 0.714,
+      "stalkSeen": true
+     }
+    ]
+   },
+   "appearance": "Elongated oval leaves with toothed margins; uniform bright autumn yellow.",
+   "provenance": "library"
+  },
+  {
+   "id": "leaves_11",
+   "maps": {
+    "color": "leaves/leaves_11/color.jpg",
+    "opacity": "leaves/leaves_11/opacity.png",
+    "normal": "leaves/leaves_11/normal.jpg",
+    "roughness": "leaves/leaves_11/roughness.jpg"
+   },
+   "pixels": [
+    8192,
+    8192
+   ],
+   "realSizeM": [
+    0.4,
+    0.4
+   ],
+   "colour": {
+    "meanLinearRgb": [
+     0.3125,
+     0.1349,
+     0.1047
+    ],
+    "spreadLinearRgb": [
+     0.1309,
+     0.0699,
+     0.056
+    ],
+    "meanLab": [
+     46.72,
+     18.74,
+     14.47
+    ],
+    "spreadLab": [
+     10.19,
+     7.94,
+     7.29
+    ],
+    "meanLuminance": 0.1705
+   },
+   "leaf": {
+    "lengthM": 0.1564,
+    "widthM": 0.1167,
+    "lengthRangeM": [
+     0.1442,
+     0.1565
+    ],
+    "aspect": 0.746,
+    "fill": 0.692
+   },
+   "coverage": 0.3425,
+   "atlas": {
+    "layout": "one cell per leaf",
+    "cells": [
+     {
+      "origin": [
+       0.01063,
+       0.58736
+      ],
+      "along": [
+       0.04175,
+       0.3889
+      ],
+      "across": [
+       0.28999,
+       -0.03113
+      ],
+      "lengthM": 0.1565,
+      "widthM": 0.1167,
+      "fill": 0.692,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.36254,
+       0.58883
+      ],
+      "along": [
+       0.01761,
+       0.39072
+      ],
+      "across": [
+       0.24027,
+       -0.01083
+      ],
+      "lengthM": 0.1564,
+      "widthM": 0.0962,
+      "fill": 0.69,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.65432,
+       0.58095
+      ],
+      "along": [
+       0.00331,
+       0.36059
+      ],
+      "across": [
+       0.29554,
+       -0.00271
+      ],
+      "lengthM": 0.1442,
+      "widthM": 0.1182,
+      "fill": 0.723,
+      "stalkSeen": true
+     }
+    ]
+   },
+   "appearance": "Broad oval leaves with strong straight veins; dusky red to purple-brown, autumn or dark-leaved.",
+   "provenance": "library"
+  },
+  {
+   "id": "leaves_12",
+   "maps": {
+    "color": "leaves/leaves_12/color.jpg",
+    "opacity": "leaves/leaves_12/opacity.png",
+    "normal": "leaves/leaves_12/normal.jpg",
+    "roughness": "leaves/leaves_12/roughness.jpg"
+   },
+   "pixels": [
+    8192,
+    8192
+   ],
+   "realSizeM": [
+    0.4,
+    0.4
+   ],
+   "colour": {
+    "meanLinearRgb": [
+     0.3934,
+     0.1545,
+     0.0654
+    ],
+    "spreadLinearRgb": [
+     0.1602,
+     0.0831,
+     0.0372
+    ],
+    "meanLab": [
+     49.77,
+     19.99,
+     29.88
+    ],
+    "spreadLab": [
+     11.61,
+     5.01,
+     7.16
+    ],
+    "meanLuminance": 0.1989
+   },
+   "leaf": {
+    "lengthM": 0.066,
+    "widthM": 0.0377,
+    "lengthRangeM": [
+     0.0551,
+     0.0746
+    ],
+    "aspect": 0.572,
+    "fill": 0.481
+   },
+   "coverage": 0.1582,
+   "atlas": {
+    "layout": "one cell per leaf",
+    "cells": [
+     {
+      "origin": [
+       0.20982,
+       0.81659
+      ],
+      "along": [
+       -0.18573,
+       0.01767
+      ],
+      "across": [
+       0.01114,
+       0.11701
+      ],
+      "lengthM": 0.0746,
+      "widthM": 0.047,
+      "fill": 0.484,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.46237,
+       0.81498
+      ],
+      "along": [
+       -0.18542,
+       -0.01169
+      ],
+      "across": [
+       -0.00752,
+       0.11918
+      ],
+      "lengthM": 0.0743,
+      "widthM": 0.0478,
+      "fill": 0.478,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.68752,
+       0.80443
+      ],
+      "along": [
+       -0.15888,
+       0.00375
+      ],
+      "across": [
+       0.00283,
+       0.11987
+      ],
+      "lengthM": 0.0636,
+      "widthM": 0.048,
+      "fill": 0.473,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.92706,
+       0.8076
+      ],
+      "along": [
+       -0.15993,
+       0.0068
+      ],
+      "across": [
+       0.00504,
+       0.11845
+      ],
+      "lengthM": 0.064,
+      "widthM": 0.0474,
+      "fill": 0.471,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.68431,
+       0.56726
+      ],
+      "along": [
+       -0.16895,
+       -0.00073
+      ],
+      "across": [
+       -0.00047,
+       0.11038
+      ],
+      "lengthM": 0.0676,
+      "widthM": 0.0442,
+      "fill": 0.527,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.92892,
+       0.5555
+      ],
+      "along": [
+       -0.16899,
+       0.00669
+      ],
+      "across": [
+       0.0043,
+       0.10865
+      ],
+      "lengthM": 0.0676,
+      "widthM": 0.0435,
+      "fill": 0.525,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.18526,
+       0.33973
+      ],
+      "along": [
+       -0.13795,
+       -0.02131
+      ],
+      "across": [
+       -0.01418,
+       0.09179
+      ],
+      "lengthM": 0.0558,
+      "widthM": 0.0372,
+      "fill": 0.55,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.44288,
+       0.32668
+      ],
+      "along": [
+       -0.1709,
+       -3e-05
+      ],
+      "across": [
+       -2e-05,
+       0.09473
+      ],
+      "lengthM": 0.0684,
+      "widthM": 0.0379,
+      "fill": 0.437,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.69835,
+       0.3447
+      ],
+      "along": [
+       -0.16758,
+       -0.01661
+      ],
+      "across": [
+       -0.00924,
+       0.09323
+      ],
+      "lengthM": 0.0674,
+      "widthM": 0.0375,
+      "fill": 0.433,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.93437,
+       0.32484
+      ],
+      "along": [
+       -0.15728,
+       0.00238
+      ],
+      "across": [
+       0.00137,
+       0.0904
+      ],
+      "lengthM": 0.0629,
+      "widthM": 0.0362,
+      "fill": 0.476,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.18665,
+       0.07599
+      ],
+      "along": [
+       -0.15817,
+       0.0013
+      ],
+      "across": [
+       0.00074,
+       0.09005
+      ],
+      "lengthM": 0.0633,
+      "widthM": 0.036,
+      "fill": 0.476,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.42798,
+       0.07823
+      ],
+      "along": [
+       -0.13764,
+       0.00069
+      ],
+      "across": [
+       0.00046,
+       0.09292
+      ],
+      "lengthM": 0.0551,
+      "widthM": 0.0372,
+      "fill": 0.555,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.68663,
+       0.07429
+      ],
+      "along": [
+       -0.1647,
+       0.00795
+      ],
+      "across": [
+       0.00441,
+       0.09123
+      ],
+      "lengthM": 0.066,
+      "widthM": 0.0365,
+      "fill": 0.563,
+      "stalkSeen": true
+     },
+     {
+      "origin": [
+       0.92796,
+       0.07103
+      ],
+      "along": [
+       -0.16468,
+       0.01231
+      ],
+      "across": [
+       0.00701,
+       0.09372
+      ],
+      "lengthM": 0.0661,
+      "widthM": 0.0376,
+      "fill": 0.554,
+      "stalkSeen": true
+     }
+    ]
+   },
+   "appearance": "Small deeply lobed leaves with bristle-tipped points; dry tan to rust brown, late autumn.",
+   "provenance": "library"
+  }
+ ],
+ "bark": [
+  {
+   "id": "bark_01",
+   "maps": {
+    "color": "bark/bark_01/color.jpg",
+    "normal": "bark/bark_01/normal.jpg",
+    "roughness": "bark/bark_01/roughness.jpg",
+    "ao": "bark/bark_01/ao.jpg"
+   },
+   "pixels": [
+    8192,
+    4096
+   ],
+   "realSizeM": [
+    1.0,
+    0.5
+   ],
+   "colour": {
+    "meanLinearRgb": [
+     0.0912,
+     0.0965,
+     0.0583
+    ],
+    "spreadLinearRgb": [
+     0.0201,
+     0.0174,
+     0.0167
+    ],
+    "meanLab": [
+     36.28,
+     -4.8,
+     11.07
+    ],
+    "spreadLab": [
+     3.29,
+     1.47,
+     4.44
+    ],
+    "meanLuminance": 0.0926
+   },
+   "bark": {
+    "displacementRange": 0.2243,
+    "normalSlopeMean": 0.1056,
+    "reliefIndex": 0.0237,
+    "furrowDepthM": 0.0044,
+    "ridgeSpacingM": 0.1667
+   },
+   "appearance": "Very smooth thin bark, olive grey-green with a faint sheen and small horizontal lenticel scars; young or thin-barked trunk.",
+   "provenance": "library"
+  },
+  {
+   "id": "bark_02",
+   "maps": {
+    "color": "bark/bark_02/color.jpg",
+    "normal": "bark/bark_02/normal.jpg",
+    "roughness": "bark/bark_02/roughness.jpg"
+   },
+   "pixels": [
+    8192,
+    8192
+   ],
+   "realSizeM": [
+    0.5,
+    0.5
+   ],
+   "colour": {
+    "meanLinearRgb": [
+     0.2783,
+     0.2667,
+     0.1618
+    ],
+    "spreadLinearRgb": [
+     0.0457,
+     0.0431,
+     0.0417
+    ],
+    "meanLab": [
+     57.96,
+     -4.09,
+     16.3
+    ],
+    "spreadLab": [
+     4.1,
+     1.16,
+     3.61
+    ],
+    "meanLuminance": 0.2616
+   },
+   "bark": {
+    "displacementRange": 0.1877,
+    "normalSlopeMean": 0.2206,
+    "reliefIndex": 0.0414,
+    "furrowDepthM": 0.0092,
+    "ridgeSpacingM": 0.1667
+   },
+   "appearance": "Smooth pale grey bark with shallow flaking patches and faint green tinge; young trunk.",
+   "provenance": "library"
+  },
+  {
+   "id": "bark_03",
+   "maps": {
+    "color": "bark/bark_03/color.jpg",
+    "normal": "bark/bark_03/normal.jpg",
+    "roughness": "bark/bark_03/roughness.jpg",
+    "ao": "bark/bark_03/ao.jpg"
+   },
+   "pixels": [
+    8192,
+    8192
+   ],
+   "realSizeM": [
+    0.5,
+    0.5
+   ],
+   "colour": {
+    "meanLinearRgb": [
+     0.617,
+     0.6048,
+     0.4255
+    ],
+    "spreadLinearRgb": [
+     0.1237,
+     0.1224,
+     0.1373
+    ],
+    "meanLab": [
+     81.03,
+     -4.56,
+     15.86
+    ],
+    "spreadLab": [
+     7.05,
+     1.55,
+     4.97
+    ],
+    "meanLuminance": 0.5944
+   },
+   "bark": {
+    "displacementRange": 0.1542,
+    "normalSlopeMean": 0.4174,
+    "reliefIndex": 0.0643,
+    "furrowDepthM": 0.0052,
+    "ridgeSpacingM": 0.05
+   },
+   "appearance": "Smooth bark peeling in large irregular plates: cream, pale olive and grey camouflage patches.",
+   "provenance": "library"
+  },
+  {
+   "id": "bark_04",
+   "maps": {
+    "color": "bark/bark_04/color.jpg",
+    "normal": "bark/bark_04/normal.jpg",
+    "roughness": "bark/bark_04/roughness.jpg",
+    "ao": "bark/bark_04/ao.jpg"
+   },
+   "pixels": [
+    8192,
+    8192
+   ],
+   "realSizeM": [
+    0.5,
+    0.5
+   ],
+   "colour": {
+    "meanLinearRgb": [
+     0.3058,
+     0.2822,
+     0.2555
+    ],
+    "spreadLinearRgb": [
+     0.122,
+     0.1209,
+     0.126
+    ],
+    "meanLab": [
+     58.84,
+     1.04,
+     4.88
+    ],
+    "spreadLab": [
+     10.8,
+     3.23,
+     6.89
+    ],
+    "meanLuminance": 0.2853
+   },
+   "bark": {
+    "displacementRange": 0.3617,
+    "normalSlopeMean": 0.4429,
+    "reliefIndex": 0.1602,
+    "furrowDepthM": 0.0079,
+    "ridgeSpacingM": 0.0714
+   },
+   "appearance": "Rough grey bark with fine cracks, blue-grey lichen and small orange lichen spots.",
+   "provenance": "library"
+  },
+  {
+   "id": "bark_05",
+   "maps": {
+    "color": "bark/bark_05/color.jpg",
+    "normal": "bark/bark_05/normal.jpg",
+    "roughness": "bark/bark_05/roughness.jpg",
+    "ao": "bark/bark_05/ao.jpg"
+   },
+   "pixels": [
+    8192,
+    8192
+   ],
+   "realSizeM": [
+    0.5,
+    0.5
+   ],
+   "colour": {
+    "meanLinearRgb": [
+     0.2016,
+     0.1409,
+     0.0875
+    ],
+    "spreadLinearRgb": [
+     0.0823,
+     0.061,
+     0.0452
+    ],
+    "meanLab": [
+     44.52,
+     4.17,
+     15.2
+    ],
+    "spreadLab": [
+     8.22,
+     4.66,
+     5.76
+    ],
+    "meanLuminance": 0.1499
+   },
+   "bark": {
+    "displacementRange": 0.1511,
+    "normalSlopeMean": 0.1332,
+    "reliefIndex": 0.0201,
+    "furrowDepthM": 0.0008,
+    "ridgeSpacingM": 0.0227
+   },
+   "appearance": "Reddish-brown bark in fine vertical strips and shallow ridges; medium texture.",
+   "provenance": "library"
+  },
+  {
+   "id": "bark_06",
+   "maps": {
+    "color": "bark/bark_06/color.jpg",
+    "normal": "bark/bark_06/normal.jpg",
+    "roughness": "bark/bark_06/roughness.jpg",
+    "ao": "bark/bark_06/ao.jpg"
+   },
+   "pixels": [
+    4096,
+    4096
+   ],
+   "realSizeM": [
+    0.5,
+    0.5
+   ],
+   "colour": {
+    "meanLinearRgb": [
+     0.2204,
+     0.1845,
+     0.1239
+    ],
+    "spreadLinearRgb": [
+     0.0674,
+     0.0642,
+     0.0536
+    ],
+    "meanLab": [
+     49.46,
+     0.57,
+     13.19
+    ],
+    "spreadLab": [
+     8.12,
+     1.7,
+     2.55
+    ],
+    "meanLuminance": 0.1878
+   },
+   "bark": {
+    "displacementRange": 0.4186,
+    "normalSlopeMean": 0.8515,
+    "reliefIndex": 0.3564,
+    "furrowDepthM": 0.0133,
+    "ridgeSpacingM": 0.0625
+   },
+   "appearance": "Light grey-brown bark with dense interlacing shallow vertical furrows; mature but not deeply fissured.",
+   "provenance": "library"
+  },
+  {
+   "id": "bark_07",
+   "maps": {
+    "color": "bark/bark_07/color.jpg",
+    "normal": "bark/bark_07/normal.jpg",
+    "roughness": "bark/bark_07/roughness.jpg",
+    "ao": "bark/bark_07/ao.jpg"
+   },
+   "pixels": [
+    8192,
+    8192
+   ],
+   "realSizeM": [
+    0.5,
+    0.5
+   ],
+   "colour": {
+    "meanLinearRgb": [
+     0.333,
+     0.2835,
+     0.2511
+    ],
+    "spreadLinearRgb": [
+     0.1319,
+     0.1215,
+     0.1195
+    ],
+    "meanLab": [
+     59.2,
+     2.82,
+     6.08
+    ],
+    "spreadLab": [
+     11.7,
+     1.77,
+     3.33
+    ],
+    "meanLuminance": 0.2917
+   },
+   "bark": {
+    "displacementRange": 0.5179,
+    "normalSlopeMean": 0.7597,
+    "reliefIndex": 0.3934,
+    "furrowDepthM": 0.0119,
+    "ridgeSpacingM": 0.0625
+   },
+   "appearance": "Grey bark broken into raised irregular plates with pinkish-buff fresh bark between; mature.",
+   "provenance": "library"
+  },
+  {
+   "id": "bark_08",
+   "maps": {
+    "color": "bark/bark_08/color.jpg",
+    "normal": "bark/bark_08/normal.jpg",
+    "roughness": "bark/bark_08/roughness.jpg"
+   },
+   "pixels": [
+    2048,
+    4096
+   ],
+   "realSizeM": [
+    0.5,
+    1.0
+   ],
+   "colour": {
+    "meanLinearRgb": [
+     0.2296,
+     0.2216,
+     0.2039
+    ],
+    "spreadLinearRgb": [
+     0.1358,
+     0.1316,
+     0.1417
+    ],
+    "meanLab": [
+     50.53,
+     -0.48,
+     4.06
+    ],
+    "spreadLab": [
+     16.62,
+     2.07,
+     4.44
+    ],
+    "meanLuminance": 0.222
+   },
+   "bark": {
+    "displacementRange": 0.9038,
+    "normalSlopeMean": 0.455,
+    "reliefIndex": 0.4112,
+    "furrowDepthM": 0.0063,
+    "ridgeSpacingM": 0.0556
+   },
+   "appearance": "Deeply furrowed grey bark with thick blocky vertical ridges and dark fissures; old, large trunk.",
+   "provenance": "library"
+  }
+ ]
+}

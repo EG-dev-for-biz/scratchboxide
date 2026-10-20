@@ -243,8 +243,10 @@ describe('Brown-Conrady Optical Lens Distortion Shader Engine & API', () => {
             );
 
             expect(outcome.exec.status).toBe('completed');
-            expect(outcome.exec.summaryResult).toContain('Configured Brown-Conrady lens distortion');
+            expect(outcome.exec.summaryResult).toMatch(/^NOT applied: computed only. Brown-Conrady lens distortion k1 /);
             const payload = outcome.resultPayload as any;
+            expect(payload.applied).toBe(false);
+            expect(payload.notApplied).toMatch(/no 3D scene is open/);
             expect(payload.config).toBeDefined();
             expect(payload.distortedSamples).toHaveLength(3);
             expect(payload.distortedSamples[0].distortedUv[0]).toBeCloseTo(0.5, 5);
@@ -290,7 +292,10 @@ describe('Brown-Conrady Optical Lens Distortion Shader Engine & API', () => {
             );
             expect(outcome.exec.status).toBe('completed');
             const payload = outcome.resultPayload as any;
-            expect(payload.config).toEqual({ k1: -0.05 });
+            // explicit coefficients are in normalized camera coordinates; config is the same lens in frame-height
+            // units of the viewport's default 45 degree frame: k1' = k1 (2 tan(22.5 deg))^2
+            expect(payload.sceneDistortion).toEqual({ k1: -0.05, k2: 0, k3: 0, p1: 0, p2: 0 });
+            expect(payload.config.k1).toBeCloseTo(-0.05 * (2 * Math.tan(Math.PI / 8)) ** 2, 10);
             // Barrel distortion pulls an off-centre sample toward the optical centre
             expect(payload.distortedSamples[0].distortedUv[0]).toBeLessThan(0.9);
         });

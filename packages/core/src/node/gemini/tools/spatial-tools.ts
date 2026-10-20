@@ -99,6 +99,11 @@ import type { ToolContext, ToolDeclaration, ToolHandler, ToolHandlerOutcome, Too
 import { STAGED_MATERIAL_MODE_DECLARATION, STAGED_MATERIAL_MODE_TOOL, runStagedMaterialModeTool } from './staged-material-mode-tool';
 import { anchorOffset, offsetObjects, partitionActiveScene } from '../../3d-engine/staged-location/kept-structure';
 import { applySunToScene } from './atmosphere-tools';
+import type { CanvasArtifact, Scene3DData, SceneCameraLens } from '../../../browser/generative-canvas/canvas-types';
+import { autoFocusAreaOf, effectiveFocusMode, focusPullSecondsOf } from '../../../browser/generative-canvas/primitives/scene3d/viewportFocus';
+import { DirectDispatchOperatorEngine } from '../../../browser/generative-canvas/services/direct-dispatch-operator-engine';
+import { cameraToFrameCoefficients } from '../../../browser/generative-canvas/primitives/scene3d/viewportOptics';
+import { DEFAULT_CAMERA_FOV_DEG } from '../../../browser/generative-canvas/primitives/scene3d/createRendererStack';
 
 /** Street View grounding service shared by calls, so its project-number lookup runs once per process. */
 let streetViewGroundingService: StreetViewGroundingImageService | undefined;
@@ -214,7 +219,7 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 enhance: {
                     type: 'BOOLEAN',
-                    description: 'Enhanced textures (default false; only when the user asks for cleaner or more detailed textures and accepts AI-drawn detail): with the vector-massing pipeline (SCRATCHBOX_STAGED_PIPELINE=e), each large wall is redrawn once by an image model from its tile photo, kept only where its windows and edges stay in place, and labelled generated ("AI-enhanced from tile"); the result says how many walls were enhanced or rejected.'
+                    description: 'Enhanced appearance (default true with the vector-massing pipeline, SCRATCHBOX_STAGED_PIPELINE=e): each large wall is redrawn once by an image model from its tile photo, guided by a registered Street View photo of the wall where one shows it, kept only where its windows and edges stay in place and nothing distinct (a fire escape, a storefront, signage, the colour) is erased or contradicted, and labelled generated ("AI-enhanced from tile"); the result says how many walls were enhanced or rejected. Pass false for the real-data view (tile photo and real sources only), e.g. when the user asks for the real data.'
                 },
                 atomicBuildingIntegrity: {
                     type: 'BOOLEAN',
@@ -3251,7 +3256,7 @@ export const WEBXR_GEOSPATIAL_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'webxr_geospatial_calibrate',
-        description: 'Calibrate geodetic-to-WebXR coordinate alignment via anchor origin, autonomous sensor fusion (device GPS + compass heading + WebXR viewer pose), or optical manual pin to eliminate GPS drift.',
+        description: 'Computes a geodetic-to-WebXR coordinate alignment (heading offset, translation, alignment matrix) via anchor origin, sensor fusion (device GPS + compass heading + WebXR viewer pose), or optical manual pin. Computed only (applied: false): no XR session holds it; pass its headingOffsetDeg and translationOffset to webxr_geospatial_align_coordinates to use it.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -3538,6 +3543,8 @@ export const webxrGeospatialHandlers: Record<string, ToolHandler> = {
         return {
             resultPayload: {
                 success: true,
+                applied: false,
+                notApplied: 'no WebXR session holds this alignment; it is returned for webxr_geospatial_align_coordinates (headingOffsetDeg, translationOffset) or a running XR session to use',
                 mode,
                 originAnchor,
                 alignmentState: {
@@ -3548,7 +3555,7 @@ export const webxrGeospatialHandlers: Record<string, ToolHandler> = {
                     matrixElements: state.alignmentMatrix.elements
                 }
             },
-            summaryResult: `Calibrated WebXR geospatial alignment via ${mode} mode (source: ${state.calibrationSource}, heading offset: ${state.headingOffsetDeg.toFixed(2)}°, translation: [${state.translationOffset[0].toFixed(2)}, ${state.translationOffset[1].toFixed(2)}, ${state.translationOffset[2].toFixed(2)}]).`
+            summaryResult: `NOT applied: computed only. WebXR geospatial alignment via ${mode} mode (source: ${state.calibrationSource}, heading offset ${state.headingOffsetDeg.toFixed(2)}°, translation [${state.translationOffset[0].toFixed(2)}, ${state.translationOffset[1].toFixed(2)}, ${state.translationOffset[2].toFixed(2)}]). No WebXR session holds it: the server runs no XR session and this alignment is not stored anywhere; to use it, pass headingOffsetDeg and translationOffset to webxr_geospatial_align_coordinates, or load it into the WebXRGeospatialAnchorBridge of a running XR session.`
         };
     },
 
@@ -4122,7 +4129,7 @@ export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
 export const OPTICS_LENS_DISTORTION_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'optics_configure_lens_distortion',
-        description: 'Configures Brown-Conrady and VFX optical lens distortion shader parameters from an explicit lens (a presetId, a focalLengthMm, or customParams coefficients), calculates overscan margin, evaluates UV coordinate displacement, or outputs production GLSL shader code. One of presetId, focalLengthMm or customParams is required; no lens is assumed.',
+        description: 'Puts Brown-Conrady lens distortion on the open 3D scene\'s camera (sb_set_camera_lens): the viewport draws it as a lens-distortion pass, so straight lines bend (k1 < 0 barrel, k1 > 0 pincushion), with the overscan it needs and picking that follows the bent image. The lens comes from an explicit presetId, a focalLengthMm estimate, or customParams coefficients (k1, k2, k3, p1, p2 in normalized camera coordinates x = X/Z, the OpenCV convention). The result says applied: true and returns the updated scene; with no 3D scene (or no camera pose, or mode undistort/stmap, which process plates) it says NOT applied: computed only. Also returns overscan margin, UV samples and, on request, the GLSL. One of presetId, focalLengthMm or customParams is required; no lens is assumed.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -4145,7 +4152,7 @@ export const OPTICS_LENS_DISTORTION_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 customParams: {
                     type: 'OBJECT',
-                    description: 'Explicit parameters (k1, k2, k3, k4, p1, p2, opticalCenter, chromaticAberration, anamorphicSqueeze). Override the preset / focal-length values; on their own they must include at least one of k1..k4, p1, p2.',
+                    description: 'Explicit parameters: k1, k2, k3, p1, p2 in normalized camera coordinates (x = X/Z; k4 is not drawn), chromaticAberration, anamorphicSqueeze, opticalCenter. Override the preset / focal-length values; on their own they must include at least one of k1..k3, p1, p2.',
                     properties: {
                         k1: { type: 'NUMBER' },
                         k2: { type: 'NUMBER' },
@@ -4243,65 +4250,70 @@ function requireKnownLensPreset(tool: string, presetId: unknown): LensDistortion
 }
 
 export const opticsLensDistortionHandlers: Record<string, ToolHandler> = {
-    optics_configure_lens_distortion: async (args, _ctx) => {
+    optics_configure_lens_distortion: async (args, ctx) => {
         const TOOL = 'optics_configure_lens_distortion';
-        let config: LensDistortionConfig;
+        const active = ctx?.request?.activeArtifact;
+        const sceneData = active?.type === '3d-scene' && active.data ? active.data as Scene3DData : undefined;
+        const sceneFov = sceneData?.camera && typeof sceneData.camera.fov === 'number' && sceneData.camera.fov > 0 && sceneData.camera.fov < 180
+            ? sceneData.camera.fov : (sceneData?.camera ? DEFAULT_CAMERA_FOV_DEG : undefined);
 
+        // The base lens. Presets and focal-length estimates are in LensDistortionEffect's frame-height units for that
+        // lens's own frame (35 mm-equivalent focal length on a 24 mm-high frame unless the scene lens names its sensor);
+        // they are converted to normalized camera coordinates, the frame the scene stores and the spatial services use.
+        let config: LensDistortionConfig;
+        let baseFrameScale: number | undefined; // s = frame height / focal length of the frame the base values are in
+        let baseSource: string;
         const preset = requireKnownLensPreset(TOOL, args.presetId);
         if (preset) {
             config = preset;
+            baseFrameScale = 24 / LENS_OPTICAL_PRESETS[args.presetId as string].focalLengthMm;
+            baseSource = `preset ${args.presetId}`;
         } else if (typeof args.focalLengthMm === 'number' && Number.isFinite(args.focalLengthMm) && args.focalLengthMm > 0) {
             config = calculateBrownConradyFromFocalLength(args.focalLengthMm);
+            baseFrameScale = (sceneData?.camera?.lens?.sensorHeightMm ?? 24) / args.focalLengthMm;
+            baseSource = `estimate for a ${args.focalLengthMm} mm lens`;
         } else if (hasLensCoefficients(args.customParams)) {
             config = {};
+            baseSource = 'explicit coefficients';
         } else {
             throw new MissingInputError(TOOL, 'a lens: presetId, focalLengthMm, or customParams with distortion coefficients', 'no default lens is assumed');
         }
+        const frameToCamera = (c: LensDistortionConfig, s: number) => {
+            const s2 = s * s;
+            return { k1: (c.k1 ?? 0) / s2, k2: (c.k2 ?? 0) / (s2 * s2), k3: (c.k3 ?? 0) / (s2 * s2 * s2), p1: (c.p1 ?? 0) / s, p2: (c.p2 ?? 0) / s };
+        };
+        const cameraCoefficients = baseFrameScale !== undefined ? frameToCamera(config, baseFrameScale) : { k1: 0, k2: 0, k3: 0, p1: 0, p2: 0 };
 
-        if (args.customParams && typeof args.customParams === 'object') {
-            const cp = args.customParams as Record<string, any>;
-            if (typeof cp.k1 === 'number') config.k1 = cp.k1;
-            if (typeof cp.k2 === 'number') config.k2 = cp.k2;
-            if (typeof cp.k3 === 'number') config.k3 = cp.k3;
-            if (typeof cp.k4 === 'number') config.k4 = cp.k4;
-            if (typeof cp.p1 === 'number') config.p1 = cp.p1;
-            if (typeof cp.p2 === 'number') config.p2 = cp.p2;
-            if (Array.isArray(cp.opticalCenter) && cp.opticalCenter.length === 2) {
-                config.opticalCenter = [cp.opticalCenter[0], cp.opticalCenter[1]];
-            }
-            if (typeof cp.chromaticAberration === 'number') config.chromaticAberration = cp.chromaticAberration;
-            if (typeof cp.anamorphicSqueeze === 'number') config.anamorphicSqueeze = cp.anamorphicSqueeze;
+        // customParams coefficients are in normalized camera coordinates (OpenCV, x = X/Z); the rest are frame values
+        const cp = (args.customParams && typeof args.customParams === 'object' ? args.customParams : {}) as Record<string, any>;
+        for (const k of ['k1', 'k2', 'k3', 'p1', 'p2'] as const) {
+            if (typeof cp[k] === 'number' && Number.isFinite(cp[k])) cameraCoefficients[k] = cp[k];
         }
+        if (Array.isArray(cp.opticalCenter) && cp.opticalCenter.length === 2) config.opticalCenter = [cp.opticalCenter[0], cp.opticalCenter[1]];
+        if (typeof cp.chromaticAberration === 'number') config.chromaticAberration = cp.chromaticAberration;
+        if (typeof cp.anamorphicSqueeze === 'number') config.anamorphicSqueeze = cp.anamorphicSqueeze;
+        const k4Ignored = typeof cp.k4 === 'number' && cp.k4 !== 0;
+        if (typeof args.mode === 'string') config.mode = args.mode as any;
+        if (typeof args.edgeMode === 'string') config.edgeMode = args.edgeMode as any;
+        if (typeof args.filterQuality === 'string') config.filterQuality = args.filterQuality as any;
 
-        if (typeof args.mode === 'string') {
-            config.mode = args.mode as any;
-        }
-        if (typeof args.edgeMode === 'string') {
-            config.edgeMode = args.edgeMode as any;
-        }
-        if (typeof args.filterQuality === 'string') {
-            config.filterQuality = args.filterQuality as any;
-        }
+        // The frame the samples, overscan and GLSL values describe: the open scene's, else the base lens's own frame,
+        // else the viewport's default field of view.
+        const frameFovDeg = sceneFov ?? (baseFrameScale !== undefined ? 2 * Math.atan(baseFrameScale / 2) * 180 / Math.PI : DEFAULT_CAMERA_FOV_DEG);
+        const frame = cameraToFrameCoefficients(cameraCoefficients, frameFovDeg);
+        config = { ...config, k1: frame.k1, k2: frame.k2, k3: frame.k3, k4: 0, p1: frame.p1, p2: frame.p2 };
+        for (const k of ['k3', 'k4', 'p1', 'p2'] as const) if (config[k] === 0) delete config[k];
+        if (config.k2 === 0 && baseFrameScale === undefined && cp.k2 === undefined) delete config.k2;
 
         const aspectRatio = typeof args.aspectRatio === 'number' ? args.aspectRatio : 16 / 9;
         const distortedSamples: Array<{ uv: [number, number]; distortedUv: [number, number] }> = [];
-
         if (Array.isArray(args.sampleUvs)) {
             for (const sample of args.sampleUvs) {
                 if (Array.isArray(sample) && sample.length >= 2) {
                     const uv: [number, number] = [sample[0], sample[1]];
                     const distorted = computeBrownConradyUV(
                         uv,
-                        {
-                            k1: config.k1 ?? 0,
-                            k2: config.k2 ?? 0,
-                            k3: config.k3 ?? 0,
-                            k4: config.k4 ?? 0,
-                            p1: config.p1 ?? 0,
-                            p2: config.p2 ?? 0,
-                            opticalCenter: config.opticalCenter as [number, number],
-                            anamorphicSqueeze: config.anamorphicSqueeze ?? 1.0
-                        },
+                        { k1: frame.k1, k2: frame.k2, k3: frame.k3, k4: 0, p1: frame.p1, p2: frame.p2, opticalCenter: config.opticalCenter as [number, number], anamorphicSqueeze: config.anamorphicSqueeze ?? 1.0 },
                         aspectRatio
                     );
                     distortedSamples.push({ uv, distortedUv: distorted });
@@ -4309,44 +4321,70 @@ export const opticsLensDistortionHandlers: Record<string, ToolHandler> = {
             }
         }
 
-        // Calculate overscan margin for production frame padding
+        // Overscan margin for production frame padding
         const overscanMargin = LensDistortionEffect.calculateOverscanMargin(
-            {
-                k1: config.k1 ?? 0,
-                k2: config.k2 ?? 0,
-                k3: config.k3 ?? 0,
-                k4: config.k4 ?? 0,
-                p1: config.p1 ?? 0,
-                p2: config.p2 ?? 0,
-                anamorphicSqueeze: config.anamorphicSqueeze ?? 1.0,
-                opticalCenter: config.opticalCenter as [number, number]
-            },
+            { k1: frame.k1, k2: frame.k2, k3: frame.k3, k4: 0, p1: frame.p1, p2: frame.p2, anamorphicSqueeze: config.anamorphicSqueeze ?? 1.0, opticalCenter: config.opticalCenter as [number, number] },
             aspectRatio,
             config.mode === 'undistort' ? 'undistort' : 'redistort'
         );
 
         const result: Record<string, any> = {
             config,
+            frameFovDeg: Number(frameFovDeg.toFixed(3)),
+            sceneDistortion: { ...cameraCoefficients, ...(typeof config.chromaticAberration === 'number' ? { chromaticAberration: config.chromaticAberration } : {}) },
+            coefficientFrame: `sceneDistortion is in normalized camera coordinates (x = X/Z, y = Y/Z; base from the ${baseSource}${baseFrameScale !== undefined ? `, converted from its ${(2 * Math.atan(baseFrameScale / 2) * 180 / Math.PI).toFixed(1)}° frame` : ''}); config, samples and overscan are in frame-height units of a ${frameFovDeg.toFixed(1)}° vertical field of view`,
             aspectRatio,
             overscanMargin,
-            overscanResolutionHint: {
-                widthFactor: 1.0 + overscanMargin * 2,
-                heightFactor: 1.0 + overscanMargin * 2
-            },
+            overscanResolutionHint: { widthFactor: 1.0 + overscanMargin * 2, heightFactor: 1.0 + overscanMargin * 2 },
             distortedSamples: distortedSamples.length > 0 ? distortedSamples : undefined,
             availablePresets: Object.keys(LENS_OPTICAL_PRESETS)
         };
-
         if (args.includeGlslShader === true) {
-            result.shader = {
-                vertexShader: LENS_DISTORTION_SHADER.vertexShader,
-                fragmentShader: LENS_DISTORTION_SHADER.fragmentShader
-            };
+            result.shader = { vertexShader: LENS_DISTORTION_SHADER.vertexShader, fragmentShader: LENS_DISTORTION_SHADER.fragmentShader };
         }
+        const kText = `k1 ${cameraCoefficients.k1.toFixed(4)}, k2 ${cameraCoefficients.k2.toFixed(4)}${cameraCoefficients.k3 ? `, k3 ${cameraCoefficients.k3.toFixed(5)}` : ''}${cameraCoefficients.p1 || cameraCoefficients.p2 ? `, p1 ${cameraCoefficients.p1.toFixed(5)}, p2 ${cameraCoefficients.p2.toFixed(5)}` : ''}`;
+        const computedText = `Brown-Conrady lens distortion ${kText} (normalized camera coordinates), mode ${config.mode ?? 'redistort'}, overscan margin ${(overscanMargin * 100).toFixed(1)}%, ${distortedSamples.length} sampled points`;
 
+        const notApplied = (why: string) => ({
+            resultPayload: { ...result, applied: false, notApplied: why } as unknown as ToolResultPayload,
+            summaryResult: `NOT applied: computed only. ${computedText}. ${why}.`
+        });
+        if (!active || !sceneData) return notApplied('no 3D scene is open, so no viewport changed');
+        if (!sceneData.camera || !Array.isArray(sceneData.camera.position)) return notApplied(`the scene "${active.title || active.id}" has no camera pose to put the lens on (frame it with sb_set_camera first)`);
+        if (config.mode && config.mode !== 'redistort') {
+            return notApplied(`mode "${config.mode}" processes a camera plate; the viewport renders a pinhole image and draws the lens as a redistort pass only`);
+        }
+        const engine = new DirectDispatchOperatorEngine(JSON.parse(JSON.stringify(sceneData)) as Scene3DData);
+        const lensParams: Record<string, unknown> = { distortion: result.sceneDistortion };
+        if (typeof config.anamorphicSqueeze === 'number' && config.anamorphicSqueeze !== (sceneData.camera.lens?.anamorphicSqueeze ?? 1)) lensParams.anamorphicSqueeze = config.anamorphicSqueeze;
+        const res = engine.dispatch('sb_set_camera_lens', lensParams);
+        if (!res.success) return notApplied(res.error || 'sb_set_camera_lens failed');
+        const lensIssues = ((res.data as { issues?: string[] })?.issues) ?? [];
+        const notAppliedParts = [
+            ...lensIssues,
+            ...(Array.isArray(config.opticalCenter) && (config.opticalCenter[0] !== 0.5 || config.opticalCenter[1] !== 0.5) ? ['the off-centre optical centre: the viewport distorts about the frame centre'] : []),
+            ...(args.edgeMode !== undefined ? ['edgeMode: the viewport renders overscan so the distorted frame has no edges to fill'] : []),
+            ...(args.filterQuality !== undefined ? ['filterQuality: the viewport pass samples bilinearly'] : []),
+            ...(k4Ignored ? ['k4: the viewport lens model stops at k3'] : [])
+        ];
+        const artifact = {
+            ...active,
+            data: engine.getSceneData(),
+            summary: `Lens distortion applied: ${kText}.`,
+            version: ((active as { version?: number }).version || 1) + 1
+        } as CanvasArtifact;
         return {
-            resultPayload: result as unknown as ToolResultPayload,
-            summaryResult: `Configured Brown-Conrady lens distortion (k1: ${config.k1?.toFixed(4)}, k2: ${config.k2?.toFixed(4)}, mode: ${config.mode ?? 'redistort'}, overscanMargin: ${(overscanMargin * 100).toFixed(1)}%) with ${distortedSamples.length} sampled points.`
+            resultPayload: {
+                ...result,
+                success: true,
+                applied: true,
+                appliedTo: active.id,
+                operators: ['sb_set_camera_lens'],
+                passes: (res.data as { passes?: string[] })?.passes,
+                ...(notAppliedParts.length ? { notAppliedParts } : {}),
+                artifact
+            } as unknown as ToolResultPayload,
+            summaryResult: `Applied to the active 3D scene "${active.title || active.id}": ${computedText}. The viewport now draws it as a lens-distortion pass (straight lines bend, ${cameraCoefficients.k1 < 0 ? 'barrel' : cameraCoefficients.k1 > 0 ? 'pincushion' : 'tangential'}), rendering the overscan it needs; picking follows the bent image.${notAppliedParts.length ? ` NOT applied: ${notAppliedParts.join('; ')}.` : ''}`
         };
     },
 
@@ -4543,7 +4581,7 @@ export const poseDepthHandlers: Record<string, ToolHandler> = {
 export const PHYSICAL_CAMERA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'configure_physical_camera',
-        description: 'Configures real-world physical camera optical parameters (sensor format, focal length, aperture f-stop, anamorphic squeeze, focus distance) and computes exact optical frustum FOV, Zeiss hyperfocal distance, depth of field limits, and circle of confusion blur diameters.',
+        description: 'Puts a real-world lens on the open 3D scene\'s camera: sets the viewport\'s vertical field of view from the focal length and sensor height, and stores the lens (sb_set_camera_lens) so the viewport draws thin-lens depth of field: blur from the circle of confusion of the focal length, f-number and focus, with oval bokeh for an anamorphic squeeze. Focus modes (the same ones as the viewport camera panel, kept in sync both ways): manual (focusDistanceMeters); auto (focusMode "auto": continuous autofocus on the nearest surface in a centred AF area of autoFocusAreaFraction of the frame height, gliding with the focusPullSeconds time constant; sky holds the last focus); track (focusPoint: a surface point locked to an object via objectId plus localPosition or worldPosition, or a fixed world point without objectId; or focusObjectId for a whole object), re-measured every frame as the camera or object moves. Also computes the frustum, hyperfocal distance and depth-of-field limits. The result says applied: true and returns the updated scene; with no 3D scene (or no camera pose) it says NOT applied and changes nothing. Computed only: the horizontal field of view and the anamorphic desqueeze of the frame (the viewport keeps its own aspect ratio); without a focus, no blur is drawn.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -4572,7 +4610,7 @@ export const PHYSICAL_CAMERA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 focalLengthMm: {
                     type: 'NUMBER',
-                    description: 'Lens focal length in millimeters (e.g. 24, 35, 50, 85, 135).'
+                    description: 'Lens focal length in millimeters, any positive value: 8 mm ultra-wide (about 113° vertical / 132° horizontal on full frame) through 200 mm telephoto (about 7° vertical) and beyond (e.g. 8, 14, 24, 35, 50, 85, 135, 200).'
                 },
                 apertureFStop: {
                     type: 'NUMBER',
@@ -4580,7 +4618,32 @@ export const PHYSICAL_CAMERA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 focusDistanceMeters: {
                     type: 'NUMBER',
-                    description: 'Subject optical plane distance from camera in meters.'
+                    description: 'Distance of the plane of focus from the camera, along the view axis, in meters.'
+                },
+                focusObjectId: {
+                    type: 'STRING',
+                    description: 'Track focus on this whole scene object (a customMesh or object id/name, or a viewport node name): the viewport measures its bounding-box centre\'s depth as the camera moves. Used when focusDistanceMeters is not given.'
+                },
+                focusMode: {
+                    type: 'STRING',
+                    description: 'How the camera focuses: "manual" (focusDistanceMeters), "auto" (continuous autofocus on the centre of the frame), or "track" (needs focusPoint or focusObjectId; implied by them). Giving only focusDistanceMeters switches to manual.'
+                },
+                autoFocusAreaFraction: {
+                    type: 'NUMBER',
+                    description: 'Auto focus: side of the centred square AF area as a fraction of the frame height, in (0, 1] (default 0.1).'
+                },
+                focusPullSeconds: {
+                    type: 'NUMBER',
+                    description: 'Auto focus: focus-pull time constant in seconds, >= 0 (default 0.3; 0 snaps). The focus glides in dioptres toward the measured depth.'
+                },
+                focusPoint: {
+                    type: 'OBJECT',
+                    description: 'Track focus on a surface point: objectId (customMesh / object id or viewport node name) plus localPosition [x, y, z] in its local frame, or worldPosition [x, y, z] (converted with the object\'s transform). Without objectId, worldPosition is a fixed world point.',
+                    properties: {
+                        objectId: { type: 'STRING', description: 'The object the point is attached to.' },
+                        localPosition: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'The point in the object\'s local frame.' },
+                        worldPosition: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'The point in world coordinates (metres).' }
+                    }
                 },
                 anamorphicRatio: {
                     type: 'NUMBER',
@@ -4641,13 +4704,52 @@ export const PHYSICAL_CAMERA_TOOL_DECLARATIONS: ToolDeclaration[] = [
 ];
 
 export const physicalCameraHandlers: Record<string, ToolHandler> = {
-    async configure_physical_camera(args) {
+    async configure_physical_camera(args, ctx) {
         const focalLengthMm = Number(args.focalLengthMm ?? 50);
         const apertureFStop = Number(args.apertureFStop ?? 2.8);
-        const focusDistanceMeters = args.focusDistanceMeters !== undefined ? Number(args.focusDistanceMeters) : 5.0;
+        if (!(Number.isFinite(focalLengthMm) && focalLengthMm > 0) || !(Number.isFinite(apertureFStop) && apertureFStop > 0)) {
+            return {
+                status: 'failed' as const,
+                resultPayload: { success: false, applied: false, error: `focalLengthMm and apertureFStop must be positive numbers (got ${String(args.focalLengthMm)}, ${String(args.apertureFStop)})` } as unknown as ToolResultPayload,
+                summaryResult: `NOT applied: focalLengthMm and apertureFStop must be positive numbers (got ${String(args.focalLengthMm)}, ${String(args.apertureFStop)}).`
+            };
+        }
+        const focusGiven = args.focusDistanceMeters !== undefined && args.focusDistanceMeters !== null;
+        const focusObjectId = typeof args.focusObjectId === 'string' && args.focusObjectId.trim() ? args.focusObjectId.trim() : undefined;
+        const focusMode = typeof args.focusMode === 'string' && args.focusMode.trim() ? args.focusMode.trim() : undefined;
+        const fp = args.focusPoint && typeof args.focusPoint === 'object' ? args.focusPoint as { objectId?: unknown; localPosition?: unknown; worldPosition?: unknown } : undefined;
+        const vec3 = (v: unknown): [number, number, number] | undefined => Array.isArray(v) && v.length === 3 ? v.map(Number) as [number, number, number] : undefined;
+        const focusPoint = fp ? {
+            ...(typeof fp.objectId === 'string' && fp.objectId.trim() ? { objectId: fp.objectId.trim() } : {}),
+            ...(vec3(fp.localPosition) ? { localPosition: vec3(fp.localPosition) } : {}),
+            ...(vec3(fp.worldPosition) ? { worldPosition: vec3(fp.worldPosition) } : {})
+        } : undefined;
+        const autoFocusAreaFraction = args.autoFocusAreaFraction !== undefined && args.autoFocusAreaFraction !== null ? Number(args.autoFocusAreaFraction) : undefined;
+        const focusPullSeconds = args.focusPullSeconds !== undefined && args.focusPullSeconds !== null ? Number(args.focusPullSeconds) : undefined;
+        const autoFocus = focusMode === 'auto';
         const sensorFormat = (args.sensorFormat as SensorFormatPreset) ?? 'full_frame_35mm';
         const anamorphicRatio = args.anamorphicRatio !== undefined ? Number(args.anamorphicRatio) : 1.0;
         const enableDepthOfField = args.enableDepthOfField !== undefined ? Boolean(args.enableDepthOfField) : true;
+
+        const active = ctx?.request?.activeArtifact;
+        const sceneData = active?.type === '3d-scene' && active.data ? active.data as Scene3DData : undefined;
+
+        // A focus object in the scene data gives the computed limits a distance: its depth along the camera's view axis.
+        let focusObjectDepth: number | undefined;
+        let focusObjectKnown = false;
+        if (focusObjectId && sceneData) {
+            const mesh = (sceneData.customMeshes || []).find(m => m.id === focusObjectId || m.name === focusObjectId);
+            const obj = (sceneData.objects || []).find(o => o.id === focusObjectId);
+            const p = mesh?.position ?? (obj?.space?.spatial3d ? [obj.space.spatial3d.x, obj.space.spatial3d.y, obj.space.spatial3d.z] : undefined);
+            focusObjectKnown = !!(mesh || obj);
+            const cam = sceneData.camera;
+            if (p && cam && Array.isArray(cam.position) && Array.isArray(cam.target)) {
+                const f = [cam.target[0] - cam.position[0], cam.target[1] - cam.position[1], cam.target[2] - cam.position[2]];
+                const len = Math.hypot(f[0], f[1], f[2]);
+                if (len > 0) focusObjectDepth = ((p[0] - cam.position[0]) * f[0] + (p[1] - cam.position[1]) * f[1] + (p[2] - cam.position[2]) * f[2]) / len;
+            }
+        }
+        const focusDistanceMeters = focusGiven ? Number(args.focusDistanceMeters) : focusObjectDepth;
 
         const config: PhysicalCameraConfig = {
             sensorFormatPreset: sensorFormat,
@@ -4661,29 +4763,23 @@ export const physicalCameraHandlers: Record<string, ToolHandler> = {
         };
 
         const frustum = PhysicalCameraModel.calculateFrustum(config);
-        const hyperfocal = PhysicalCameraModel.calculateHyperfocalDistance(
-            focalLengthMm,
-            apertureFStop,
-            frustum.sensorDimensions.diagonalMm
-        );
-        const dof = PhysicalCameraModel.calculateDepthOfField(
-            focalLengthMm,
-            apertureFStop,
-            focusDistanceMeters,
-            frustum.sensorDimensions.diagonalMm
-        );
+        const hyperfocal = PhysicalCameraModel.calculateHyperfocalDistance(focalLengthMm, apertureFStop, frustum.sensorDimensions.diagonalMm);
+        // auto focus and a tracked point move the plane of focus: no fixed limits to report
+        const dof = focusDistanceMeters !== undefined && focusDistanceMeters > 0 && !autoFocus && !focusPoint
+            ? PhysicalCameraModel.calculateDepthOfField(focalLengthMm, apertureFStop, focusDistanceMeters, frustum.sensorDimensions.diagonalMm)
+            : undefined;
 
-        return {
-            resultPayload: {
-                config,
-                frustum: {
-                    verticalFovDeg: Number(frustum.verticalFovDeg.toFixed(2)),
-                    horizontalFovDeg: Number(frustum.horizontalFovDeg.toFixed(2)),
-                    diagonalFovDeg: Number(frustum.diagonalFovDeg.toFixed(2)),
-                    aspectRatio: Number(frustum.aspectRatio.toFixed(3)),
-                    sensorDimensions: frustum.sensorDimensions
-                },
-                hyperfocalDistanceMeters: Number(hyperfocal.toFixed(3)),
+        const computed = {
+            config,
+            frustum: {
+                verticalFovDeg: Number(frustum.verticalFovDeg.toFixed(2)),
+                horizontalFovDeg: Number(frustum.horizontalFovDeg.toFixed(2)),
+                diagonalFovDeg: Number(frustum.diagonalFovDeg.toFixed(2)),
+                aspectRatio: Number(frustum.aspectRatio.toFixed(3)),
+                sensorDimensions: frustum.sensorDimensions
+            },
+            hyperfocalDistanceMeters: Number(hyperfocal.toFixed(3)),
+            ...(dof ? {
                 depthOfField: {
                     nearFocusLimitMeters: Number(dof.nearFocusLimitMeters.toFixed(3)),
                     farFocusLimitMeters: Number(dof.farFocusLimitMeters.toFixed(3)),
@@ -4691,8 +4787,97 @@ export const physicalCameraHandlers: Record<string, ToolHandler> = {
                     hyperfocalDistanceMeters: Number(dof.hyperfocalDistanceMeters.toFixed(3)),
                     isInfinitelyDeep: dof.isInfinitelyDeep
                 }
+            } : {})
+        };
+        const lensText = `${focalLengthMm} mm, f/${apertureFStop}, ${sensorFormat}: vertical FOV ${frustum.verticalFovDeg.toFixed(1)}° (horizontal ${frustum.horizontalFovDeg.toFixed(1)}° on the sensor's ${frustum.aspectRatio.toFixed(2)}:1)`;
+        const focusText = autoFocus
+            ? `auto focus on the centre of the frame (AF area ${(((autoFocusAreaFraction ?? 0.1)) * 100).toFixed(0)} % of the frame height, ${(focusPullSeconds ?? 0.3)} s focus pull${focusGiven ? `, starting at ${focusDistanceMeters!.toFixed(1)} m` : ''})`
+            : focusPoint
+            ? `focus tracking the point ${JSON.stringify(focusPoint.localPosition ?? focusPoint.worldPosition)} ${focusPoint.localPosition ? 'local to' : 'in world coordinates'}${focusPoint.objectId ? ` '${focusPoint.objectId}'` : ''}`
+            : focusGiven
+            ? `focus ${focusDistanceMeters!.toFixed(1)} m`
+            : focusObjectId
+                ? `focus on '${focusObjectId}'${focusObjectDepth !== undefined ? ` (${focusObjectDepth.toFixed(1)} m from the camera now)` : ''}`
+                : 'no focus distance or focus object given';
+        const dofText = dof
+            ? `${focusText}, sharp from ${dof.nearFocusLimitMeters.toFixed(2)} m to ${dof.isInfinitelyDeep ? '∞' : dof.farFocusLimitMeters.toFixed(2) + ' m'}`
+            : focusText;
+        const notApplied = (why: string) => ({
+            status: 'failed' as const,
+            resultPayload: { success: false, applied: false, notApplied: why, ...computed } as unknown as ToolResultPayload,
+            summaryResult: `NOT applied: computed only. ${why}. Computed: ${lensText}; ${dofText}.`
+        });
+        if (!active || !sceneData) return notApplied('no 3D scene is open, so no camera changed');
+        if (!sceneData.camera || !Array.isArray(sceneData.camera.position)) return notApplied(`the scene "${active.title || active.id}" has no camera pose to put the lens on (frame it with sb_set_camera first)`);
+        const fov = Number(frustum.verticalFovDeg.toFixed(3));
+        if (!(fov > 0 && fov < 180)) return notApplied(`the computed vertical field of view ${fov}° is not a usable camera FOV`);
+        if (focusGiven && !(focusDistanceMeters! > focalLengthMm / 1000)) return notApplied(`the focus distance ${focusDistanceMeters} m is inside the ${focalLengthMm} mm focal length`);
+        if (focusPoint && focusObjectId) return notApplied('give focusPoint or focusObjectId, not both');
+
+        const engine = new DirectDispatchOperatorEngine(JSON.parse(JSON.stringify(sceneData)) as Scene3DData);
+        const res = engine.dispatch('sb_set_camera', { fov });
+        if (!res.success) return notApplied(res.error || 'sb_set_camera failed');
+        const hasFocus = focusGiven || !!focusObjectId || !!focusPoint || autoFocus;
+        const lensRes = engine.dispatch('sb_set_camera_lens', {
+            focalLengthMm,
+            sensorWidthMm: frustum.sensorDimensions.widthMm,
+            sensorHeightMm: frustum.sensorDimensions.heightMm,
+            apertureFStop,
+            ...(focusGiven ? { focusDistanceMeters } : {}),
+            ...(focusObjectId && (!focusGiven || focusMode === 'track') ? { focusObjectId } : {}),
+            ...(focusPoint ? { focusPoint } : {}),
+            ...(focusMode ? { focusMode } : {}),
+            ...(autoFocusAreaFraction !== undefined ? { autoFocusAreaFraction } : {}),
+            ...(focusPullSeconds !== undefined ? { focusPullSeconds } : {}),
+            anamorphicSqueeze: anamorphicRatio > 0 ? anamorphicRatio : 1,
+            depthOfField: enableDepthOfField
+        });
+        if (!lensRes.success) return notApplied(lensRes.error || 'sb_set_camera_lens failed');
+        const passes = ((lensRes.data as { passes?: string[] })?.passes) ?? [];
+        const dofDrawn = passes.includes('depth-of-field');
+        const lensIssues = (((lensRes.data as { issues?: string[] })?.issues) ?? []).filter(i => !/^depth of field needs/.test(i));
+        const resultLens = (lensRes.data as { lens?: SceneCameraLens | null })?.lens ?? undefined;
+        const focus = {
+            mode: effectiveFocusMode(resultLens),
+            ...(resultLens?.focusDistanceMeters !== undefined ? { focusDistanceMeters: resultLens.focusDistanceMeters } : {}),
+            ...(resultLens?.focusObjectId ? { focusObjectId: resultLens.focusObjectId } : {}),
+            ...(resultLens?.focusPoint ? { focusPoint: resultLens.focusPoint } : {}),
+            ...(effectiveFocusMode(resultLens) === 'auto' ? { autoFocusAreaFraction: autoFocusAreaOf(resultLens), focusPullSeconds: focusPullSecondsOf(resultLens) } : {})
+        };
+        const keptFocusNote = !focusGiven && !focusObjectId && !focusPoint && !focusMode && focus.mode !== 'manual'
+            ? ` The camera keeps its ${focus.mode} focus.`
+            : '';
+
+        const notAppliedParts = [
+            ...lensIssues,
+            ...(!enableDepthOfField ? ['depth of field: enableDepthOfField is false (the lens values are stored, no blur is drawn)'] : []),
+            ...(enableDepthOfField && !hasFocus && !dofDrawn ? ['depth of field: no focus distance, focus mode, point or object was given, so no plane of focus exists to blur around'] : []),
+            ...(anamorphicRatio !== 1 ? [`the ${anamorphicRatio}x anamorphic desqueeze of the frame: the viewport keeps its own aspect ratio (the squeeze shapes the bokeh and any lens distortion)`] : []),
+            'the horizontal field of view: the viewport\'s width follows its panel, not the sensor aspect'
+        ];
+        const focusNote = focusObjectId && !focusGiven && !focusObjectKnown
+            ? ` '${focusObjectId}' is not a customMesh or object in the scene data; the viewport looks for a node by that name and draws no depth of field if it finds none.`
+            : '';
+        const artifact = {
+            ...active,
+            data: engine.getSceneData(),
+            summary: `Camera lens applied: ${focalLengthMm} mm f/${apertureFStop} on ${sensorFormat} (vertical FOV ${fov.toFixed(1)}°)${dofDrawn ? `, depth of field (${focusText})` : ''}.`,
+            version: ((active as { version?: number }).version || 1) + 1
+        } as CanvasArtifact;
+        return {
+            resultPayload: {
+                success: true,
+                applied: true,
+                appliedTo: active.id,
+                operators: ['sb_set_camera', 'sb_set_camera_lens'],
+                appliedFovDeg: fov,
+                passes,
+                focus,
+                ...computed,
+                notAppliedParts,
+                artifact
             } as unknown as ToolResultPayload,
-            summaryResult: `Configured physical camera (${focalLengthMm}mm, f/${apertureFStop}, ${sensorFormat}): Vertical FOV ${frustum.verticalFovDeg.toFixed(1)}°, Focus ${focusDistanceMeters.toFixed(1)}m, Sharp DoF: [${dof.nearFocusLimitMeters.toFixed(2)}m - ${dof.isInfinitelyDeep ? '∞' : dof.farFocusLimitMeters.toFixed(2) + 'm'}].`
+            summaryResult: `Applied to the active 3D scene "${active.title || active.id}": ${lensText}; the viewport camera's vertical FOV is now ${fov.toFixed(1)}° (was ${sceneData.camera.fov ?? 'unset, 45'}°)${dofDrawn ? `; the viewport draws thin-lens depth of field (${dofText}${anamorphicRatio !== 1 ? `, ${anamorphicRatio}x oval bokeh` : ''})` : ''}.${focusNote}${keptFocusNote} Computed only, NOT applied: ${notAppliedParts.join('; ')}.`
         };
     },
 

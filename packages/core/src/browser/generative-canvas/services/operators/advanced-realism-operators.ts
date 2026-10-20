@@ -22,7 +22,7 @@ import {
     applyNormalBevel,
     applyBurleySubsurfaceScattering
 } from '../headless-realism-service';
-import { CINEMATIC_RIGS, computeSceneBudgetTelemetry } from '../../primitives/scene3d/lightingRigs';
+import { CINEMATIC_RIGS, computeSceneBudgetTelemetry, isSceneLightingRig } from '../../primitives/scene3d/lightingRigs';
 
 /**
  * Runs `edit` on a copy of the mesh's geometry and swaps the copy in, so the viewport timeline can undo the edit by
@@ -141,6 +141,8 @@ export const ADVANCED_REALISM_OPERATORS: OperatorDefinition[] = [
             if (!rigDef) throw new Error(`sb_setup_lighting_rig: no rig '${rigKey}' (rigs: ${Object.keys(CINEMATIC_RIGS).join(', ')}).`);
             if (!scene.environment) scene.environment = {};
             scene.environment.cinematicRig = rigDef.name;
+            // a preset replaces an explicit rig written earlier (sb_set_explicit_lighting_rig)
+            delete scene.environment.lightingRig;
             if (params.kelvin !== undefined) scene.environment.lightingKelvin = params.kelvin;
             return {
                 rig: rigDef.name,
@@ -149,6 +151,34 @@ export const ADVANCED_REALISM_OPERATORS: OperatorDefinition[] = [
                 lightsConfigured: rigDef.lights.length,
                 lightingKelvin: scene.environment.lightingKelvin
             };
+        }
+    },
+    {
+        name: 'sb_set_explicit_lighting_rig',
+        category: 'lighting_camera',
+        description: 'Writes an explicit light rig into the scene (environment.lightingRig, named by environment.cinematicRig): { name, label, description, ambientColor, ambientIntensity, origin?, lights: [{ name, type: directional|point|spot, position (relative to origin), direction?, kelvin? | color?, intensity, range?, innerConeAngle?, outerConeAngle?, castShadow? }] }. The viewport builds these lights in place of the studio rig, scaled with the content. A sun/sky atmosphere the scene draws would replace the rig, so it is switched off (enabled: false, its settings kept) and reported.',
+        execute: (ctx, params: { rig?: unknown }) => {
+            if (!isSceneLightingRig(params.rig)) {
+                throw new Error('sb_set_explicit_lighting_rig: rig needs a name and at least one light with type (directional, point or spot), a position [x, y, z] and a finite intensity >= 0. Nothing was changed.');
+            }
+            const scene = ctx.getSceneData();
+            if (!scene.environment) scene.environment = {};
+            scene.environment.cinematicRig = params.rig.name;
+            scene.environment.lightingRig = JSON.parse(JSON.stringify(params.rig));
+            // the rig's lights carry their own colour temperatures
+            delete scene.environment.lightingKelvin;
+            const switchedOff: string[] = [];
+            const atm = scene.features?.atmosphericScattering;
+            if (atm === true || (typeof atm === 'object' && atm !== null && atm.enabled !== false)) {
+                scene.features = { ...(scene.features ?? {}), atmosphericScattering: { ...(typeof atm === 'object' ? atm : {}), enabled: false } };
+                switchedOff.push('features.atmosphericScattering');
+            }
+            const loose = scene as { atmosphere?: unknown };
+            if (loose.atmosphere === true || (typeof loose.atmosphere === 'object' && loose.atmosphere !== null && (loose.atmosphere as { enabled?: unknown }).enabled !== false)) {
+                loose.atmosphere = { ...(typeof loose.atmosphere === 'object' ? loose.atmosphere as object : {}), enabled: false };
+                switchedOff.push('atmosphere');
+            }
+            return { rig: params.rig.name, lightsConfigured: params.rig.lights.length, atmosphereSwitchedOff: switchedOff };
         }
     },
     {

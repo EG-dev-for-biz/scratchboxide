@@ -42,7 +42,7 @@ export function linearToSrgb8(v: number): number {
     return Math.round(255 * (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055));
 }
 
-function project(cam: PinholeCamera, p: [number, number, number]): { u: number; v: number; z: number } | undefined {
+export function project(cam: PinholeCamera, p: [number, number, number]): { u: number; v: number; z: number } | undefined {
     const d = [p[0] - cam.eye[0], p[1] - cam.eye[1], p[2] - cam.eye[2]];
     const z = d[0] * cam.fwd[0] + d[1] * cam.fwd[1] + d[2] * cam.fwd[2];
     if (z < 0.5) return undefined;

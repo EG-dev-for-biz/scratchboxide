@@ -19,7 +19,9 @@
  *     frame and the tile mesh does not hide most of it; the images come through the grounding API and are posed against the
  *     full tile mesh by edge registration; a view is used only when its edge residual locks (at most 5 px, lower than the start);
  *  3. every arm is rendered from exactly each pose, in its street (the photo-textured tile with the target cut out, the same
- *     for every arm), and judged blind against the photo with reshuffled orders; pixel metrics are secondary.
+ *     for every arm), and judged blind against the photo with reshuffled orders; pixel metrics are secondary;
+ *  4. the clay arm (on unless clay: false): every arm rendered again from the same poses in one uniform clay, its street in a
+ *     lighter clay, judged blind for shape only, so a geometry change the photo texture hides (relief, reveals) is scored.
  * No view that cannot be found or registered is ever scored: those end the call with a typed error.
  */
 
@@ -29,7 +31,7 @@ import * as path from 'path';
 import type { ToolContext, ToolDeclaration, ToolHandler, ToolHandlerOutcome } from '../types';
 import type { StagedBuildState, StagedLayer, Vec3 } from '../../../../common/spatial/staged-location-contracts';
 import {
-    aggregateRuns, composeGrid, coverageMask, judgeView, perceptualScores, renderPng, renderTriangles, JUDGE_CRITERIA,
+    aggregateRuns, composeGrid, coverageMask, judgeView, judgeViewClay, perceptualScores, renderPng, renderTriangles, JUDGE_CRITERIA,
     type ArmRender, type CriterionStat, type JudgeClient, type JudgeCriterion, type JudgeRun, type PerceptualScores
 } from '../../../3d-engine/staged-location/photo-match-eval';
 import { readTileTriangles, decodeImageInMemory, type TileTriangles } from '../../../3d-engine/staged-location/tile-texture-transfer';
@@ -63,8 +65,10 @@ export const PHOTO_MATCH_EVALUATE_DECLARATION: ToolDeclaration = {
         'Use it to check a location build (google_3d_tiles_get_clay, tile_refine output, any GLB in the tile frame) BEFORE telling the user it looks right or that one version is better than another. ' +
         'It picks held-out Street View views near the structure (never a pano any build used: it checks), registers each against the tile mesh (a view that does not lock is not used), ' +
         'renders every build from exactly those camera poses in its street, and has a vision model score the renders blind against each photo (shuffled and unlabelled, several runs) ' +
-        'on shape, materials, detail, errors (10 = nothing wrong or invented) and overall, 1-10. Returns per-view and mean scores per criterion with their spread across runs and views, ' +
+        'on shape, materials, detail, errors (10 = nothing wrong or invented), overall, realism (looks like a real photograph) and identity (recognisably this place), 1-10. Returns per-view and mean scores per criterion with their spread across runs and views, ' +
         'pixel metrics (SSIM, edge chamfer, colour difference: secondary, they do not rank builds reliably), the grid images (photo beside each render) and a short summary. ' +
+        'By default it also renders every build in uniform untextured clay from the same poses and has the judge score shape only (massing, openings, surface relief) against the photo: ' +
+        'clayScores, clay grids; use them to compare geometry changes (relief, reveals, massing) that the photo texture hides. ' +
         'With no build named it evaluates the open staged scene. Compare versions by passing arms. Scores are relative judgements, not measurements: report the spread, and say when the views are few. ' +
         'Fails with a typed error (no scores) when no held-out view can be found or registered. Takes a few minutes (Street View fetch, registration, several judge calls per view).',
     parameters: {
@@ -97,6 +101,7 @@ export const PHOTO_MATCH_EVALUATE_DECLARATION: ToolDeclaration = {
             inContext: { type: 'BOOLEAN', description: 'Render each build inside the photo-textured tile with only the target cut out, the same street for every build (default true). False renders it alone on grey with the tile as an occluder.' },
             judgeModel: { type: 'STRING', description: `Vision model asked first (default ${PHOTO_MATCH_DEFAULT_JUDGE}; the chat's fallbacks follow).` },
             runs: { type: 'NUMBER', description: `Blind judgements per view, each with the order reshuffled (default ${PHOTO_MATCH_DEFAULT_RUNS}).` },
+            clay: { type: 'BOOLEAN', description: 'Also judge every build rendered in uniform clay (no texture) from the same poses, for shape only (default true; one more judge call per view and run).' },
             baseline: { type: 'BOOLEAN', description: 'Also render the raw scan as downloaded (cut to the target) as a reference arm (default true when the tile is known).' },
             place: { type: 'STRING', description: 'The place as named to the judge (default: the run\'s resolved address).' },
             excludePanoIds: { type: 'ARRAY', items: { type: 'STRING' }, description: 'Panos the build used that the records do not show (GLB builds made elsewhere): never held out.' }
@@ -526,6 +531,11 @@ export interface PhotoMatchViewResult {
     renders: Record<string, string>;
     judge?: { stats: Record<string, Record<JudgeCriterion, CriterionStat>>; notes: Record<string, string[]>; model: string };
     judgeError?: string;
+    /** The clay arm: each arm's untextured render from this pose, its grid, and the shape-only judgement. */
+    clayRenders?: Record<string, string>;
+    clayGrid?: string;
+    clayJudge?: { stats: Record<string, { shape: CriterionStat }>; notes: Record<string, string[]>; model: string };
+    clayJudgeError?: string;
     pixel: Record<string, PerceptualScores>;
 }
 
@@ -563,6 +573,7 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     const nViews = intArg(args.views, PHOTO_MATCH_DEFAULT_VIEWS, 1, PHOTO_MATCH_MAX_VIEWS);
     const nRuns = intArg(args.runs, PHOTO_MATCH_DEFAULT_RUNS, 1, PHOTO_MATCH_MAX_RUNS);
     const wantContext = args.inContext !== false;
+    const wantClay = args.clay !== false;
     const judgeModel = typeof args.judgeModel === 'string' && args.judgeModel.trim() ? args.judgeModel.trim() : PHOTO_MATCH_DEFAULT_JUDGE;
     const root = deps.stagedRoot();
     const builds = new BuildResolver(root, ctx.workspaceRoot || root, active);
@@ -680,7 +691,7 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     const maskArm = loaded.find(a => a.baseline)?.id ?? loaded[0].id;
 
     // ---------------- renders and pixel metrics ----------------
-    const prepared: Array<{ view: PhotoMatchViewResult; photoBytes: Buffer; mime: string; photo: { width: number; height: number; rgba: Uint8Array }; renders: Array<{ id: string; label: string; r: ArmRender }> }> = [];
+    const prepared: Array<{ view: PhotoMatchViewResult; photoBytes: Buffer; mime: string; photo: { width: number; height: number; rgba: Uint8Array }; renders: Array<{ id: string; label: string; r: ArmRender }>; clayRenders: Array<{ id: string; label: string; r: ArmRender }> }> = [];
     for (let k = 0; k < chosen.length; k++) {
         stopIfAborted(signal);
         const { im, reg } = chosen[k];
@@ -695,6 +706,14 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
             renders.push({ id: a.id, label: a.label, r: renderTriangles(a.meshes, camera, { ...(occluderDepth ? { occluderDepth } : {}), ...(context ? { context } : {}) }) });
             await yieldLoop();
         }
+        // the clay arm: the same pose, occluders and street, every arm (and its street) untextured
+        const clayRenders: Array<{ id: string; label: string; r: ArmRender }> = [];
+        if (wantClay) {
+            for (const a of loaded) {
+                clayRenders.push({ id: a.id, label: a.label, r: renderTriangles(a.meshes, camera, { clay: true, ...(occluderDepth ? { occluderDepth } : {}), ...(context ? { context } : {}) }) });
+                await yieldLoop();
+            }
+        }
         const mask = coverageMask(renders.find(x => x.id === maskArm)!.r);
         const pixel: Record<string, PerceptualScores> = {};
         const files: Record<string, string> = {};
@@ -705,17 +724,23 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
             fs.writeFileSync(files[x.id], renderPng(x.r));
             await yieldLoop();
         }
+        const clayFiles: Record<string, string> = {};
+        for (const x of clayRenders) {
+            clayFiles[x.id] = path.join(outDir, `${viewId}_${x.id}_clay.png`);
+            fs.writeFileSync(clayFiles[x.id], renderPng(x.r));
+        }
         prepared.push({
             view: {
                 id: viewId, panoId: v.panoId, ...(v.date ? { date: v.date } : {}), distanceM: v.distanceM, headingDeg: v.headingDeg, pitchDeg: v.pitchDeg, fovDeg: v.fovDeg,
-                size: [img.width, img.height], edgeResidualPx: reg.edgeResidualPx, maskPixels: mask.reduce((s, m) => s + m, 0), grid: path.join(outDir, `grid_${viewId}.png`), renders: files, pixel
+                size: [img.width, img.height], edgeResidualPx: reg.edgeResidualPx, maskPixels: mask.reduce((s, m) => s + m, 0), grid: path.join(outDir, `grid_${viewId}.png`), renders: files, pixel,
+                ...(wantClay ? { clayRenders: clayFiles, clayGrid: path.join(outDir, `grid_${viewId}_clay.png`) } : {})
             },
-            photoBytes: im.bytes, mime: im.mimeType || 'image/jpeg', photo, renders
+            photoBytes: im.bytes, mime: im.mimeType || 'image/jpeg', photo, renders, clayRenders
         });
     }
 
     // ---------------- blind judging ----------------
-    progress(`judging ${prepared.length} views blind, ${nRuns} reshuffled runs each`, 0.5);
+    progress(`judging ${prepared.length} views blind, ${nRuns} reshuffled runs each${wantClay ? ', textured and in clay (shape only)' : ''}`, 0.5);
     const judge = await deps.judge(judgeModel, signal);
     let judged = 0;
     await mapLimit(prepared, DEFAULT_RUN_CONCURRENCY, async p => {
@@ -731,6 +756,22 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         } catch (err) {
             if (signal?.aborted) throw new PhotoMatchError('stopped', 'The evaluation was stopped.');
             p.view.judgeError = (err as Error).message;
+        }
+        if (p.clayRenders.length) {
+            stopIfAborted(signal);
+            try {
+                const runs = await judgeViewClay({
+                    client: judge, place: ref!.place, photo: { bytes: p.photoBytes, mimeType: p.mime },
+                    renders: p.clayRenders.map(x => ({ armId: x.id, png: renderPng(x.r) })), repeats: nRuns, seed: `${evalId}:${p.view.id}:clay`
+                });
+                const notes: Record<string, string[]> = {};
+                for (const run of runs) for (const [id, n] of Object.entries(run.notes)) (notes[id] ??= []).push(n);
+                const agg = aggregateRuns(runs, loaded.map(a => a.id));
+                p.view.clayJudge = { stats: Object.fromEntries(loaded.map(a => [a.id, { shape: agg[a.id].shape }])), notes, model: runs[runs.length - 1]?.model ?? '' };
+            } catch (err) {
+                if (signal?.aborted) throw new PhotoMatchError('stopped', 'The evaluation was stopped.');
+                p.view.clayJudgeError = (err as Error).message;
+            }
         }
         judged++;
         progress(`judged ${judged} of ${prepared.length} views`, 0.5 + 0.45 * (judged / prepared.length));
@@ -748,6 +789,13 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
             return { image: x.r, label: x.label, sublabel: s ? `JUDGE ${s.mean.toFixed(1)} +- ${s.sd.toFixed(1)}  SSIM ${ssim ?? '-'}` : `NOT JUDGED  SSIM ${ssim ?? '-'}` };
         })];
         fs.writeFileSync(p.view.grid, composeGrid(tiles, { tileWidth: 560, columns: Math.min(4, tiles.length), title: `${ref.place} - ${p.view.id}${context ? ' - IN CONTEXT' : ''}` }));
+        if (p.view.clayGrid) {
+            const clayTiles = [tiles[0], ...p.clayRenders.map(x => {
+                const s = p.view.clayJudge?.stats[x.id]?.shape;
+                return { image: x.r, label: `${x.label} CLAY`, sublabel: s ? `SHAPE ${s.mean.toFixed(1)} +- ${s.sd.toFixed(1)}` : 'NOT JUDGED' };
+            })];
+            fs.writeFileSync(p.view.clayGrid, composeGrid(clayTiles, { tileWidth: 560, columns: Math.min(4, clayTiles.length), title: `${ref.place} - ${p.view.id} - CLAY, SHAPE ONLY` }));
+        }
     }
 
     // ---------------- aggregation ----------------
@@ -758,7 +806,7 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         for (const c of JUDGE_CRITERIA) {
             const per = scored.map(p => p.view.judge!.stats[a.id]?.[c]).filter((x): x is CriterionStat => !!x && Number.isFinite(x.mean));
             const means = per.map(x => x.mean);
-            const mean = means.reduce((t, x) => t + x, 0) / Math.max(1, means.length);
+            const mean = means.length ? means.reduce((t, x) => t + x, 0) / means.length : NaN;
             s[c] = {
                 mean: r2(mean),
                 runSd: r2(per.reduce((t, x) => t + x.sd, 0) / Math.max(1, per.length)),
@@ -767,6 +815,22 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
             };
         }
         scores[a.id] = s;
+    }
+    // the clay arm: shape only, over the views the clay judge scored
+    const clayScored = prepared.filter(p => p.view.clayJudge);
+    const clayScores: Record<string, { shape: ArmScore['shape'] }> = {};
+    if (clayScored.length) {
+        for (const a of loaded) {
+            const means = clayScored.map(p => p.view.clayJudge!.stats[a.id]?.shape).filter((x): x is CriterionStat => !!x && Number.isFinite(x.mean));
+            const m = means.map(x => x.mean);
+            const mean = m.length ? m.reduce((t, x) => t + x, 0) / m.length : NaN;
+            clayScores[a.id] = {
+                shape: {
+                    mean: r2(mean), runSd: r2(means.reduce((t, x) => t + x.sd, 0) / Math.max(1, means.length)),
+                    viewSd: r2(Math.sqrt(m.reduce((t, x) => t + (x - mean) ** 2, 0) / Math.max(1, m.length))), min: m.length ? r2(Math.min(...m)) : NaN, max: m.length ? r2(Math.max(...m)) : NaN
+                }
+            };
+        }
     }
     const pixelMean: Record<string, { coverage: number | null; ssim: number | null; edgeChamferPx: number | null; colourDeltaE: number | null }> = {};
     for (const a of loaded) {
@@ -778,7 +842,8 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     }
 
     const judgeModelUse = { requested: judge.requested ?? judgeModel, answered: judge.answeredModel ?? scored[0].view.judge!.model, skipped: judge.skipped ?? [] };
-    const summary = summarize({ ref, loaded, scores, views, scored: scored.length, nRuns, judgeModelUse, contextNote: context ? 'in context' : 'not in context', unregistered: unregistered.length, usedPanos: builds.used.size });
+    const summary = summarize({ ref, loaded, scores, views, scored: scored.length, nRuns, judgeModelUse, contextNote: context ? 'in context' : 'not in context', unregistered: unregistered.length, usedPanos: builds.used.size })
+        + (wantClay ? clayLine(loaded, clayScores, clayScored.length, prepared.length) : '');
     const report = {
         status: 'success',
         evalId,
@@ -792,6 +857,8 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         runsPerView: nRuns,
         arms: loaded.map(a => ({ id: a.id, label: a.label, triangles: a.triangles, glbs: a.glbs, ...(a.runId ? { runId: a.runId } : {}), ...(a.layers ? { layers: a.layers } : {}), ...(a.baseline ? { baseline: true } : {}) })),
         scores,
+        clay: wantClay,
+        ...(wantClay ? { clayScores, clayJudged: clayScored.length, clayGrids: views.map(v => v.clayGrid).filter((g): g is string => !!g) } : {}),
         pixelMetrics: { note: 'Secondary: inside the target mask (the raw scan\'s coverage when the baseline is on). They do not rank builds the way the judge does.', mean: pixelMean },
         views: views.map(v => ({ ...v, renders: v.renders })),
         grids: views.map(v => v.grid),
@@ -814,6 +881,13 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     return report;
 }
 
+/** The clay arm's line of the summary: shape only, untextured. */
+function clayLine(loaded: Array<{ id: string; label: string }>, clayScores: Record<string, { shape: ArmScore['shape'] }>, judged: number, views: number): string {
+    if (!judged) return ` Clay (shape only): the judge returned no usable clay scores for any of the ${views} views.`;
+    const ranked = [...loaded].sort((a, b) => clayScores[b.id].shape.mean - clayScores[a.id].shape.mean);
+    return ` Clay, untextured, shape only (${judged} of ${views} views): ${ranked.map(a => `${a.label} [${a.id}] shape ${clayScores[a.id].shape.mean.toFixed(1)} (runs ±${clayScores[a.id].shape.runSd.toFixed(1)})`).join('; ')}.`;
+}
+
 function summarize(input: {
     ref: Reference; loaded: Array<{ id: string; label: string; baseline?: boolean }>; scores: Record<string, ArmScore>; views: PhotoMatchViewResult[]; scored: number; nRuns: number;
     judgeModelUse: { requested: string; answered: string }; contextNote: string; unregistered: number; usedPanos: number;
@@ -821,7 +895,7 @@ function summarize(input: {
     const { loaded, scores, scored, nRuns } = input;
     const line = (a: { id: string; label: string }) => {
         const s = scores[a.id];
-        return `${a.label} [${a.id}]: overall ${s.overall.mean.toFixed(1)} (runs ±${s.overall.runSd.toFixed(1)}, views ${s.overall.min.toFixed(1)}-${s.overall.max.toFixed(1)}); shape ${s.shape.mean.toFixed(1)}, materials ${s.materials.mean.toFixed(1)}, detail ${s.detail.mean.toFixed(1)}, errors ${s.errors.mean.toFixed(1)}`;
+        return `${a.label} [${a.id}]: overall ${s.overall.mean.toFixed(1)} (runs ±${s.overall.runSd.toFixed(1)}, views ${s.overall.min.toFixed(1)}-${s.overall.max.toFixed(1)}); shape ${s.shape.mean.toFixed(1)}, materials ${s.materials.mean.toFixed(1)}, detail ${s.detail.mean.toFixed(1)}, errors ${s.errors.mean.toFixed(1)}${Number.isFinite(s.realism?.mean) ? `; realism ${s.realism.mean.toFixed(1)}` : ''}${Number.isFinite(s.identity?.mean) ? `, identity ${s.identity.mean.toFixed(1)}` : ''}`;
     };
     const ranked = [...loaded].sort((a, b) => scores[b.id].overall.mean - scores[a.id].overall.mean);
     const top = ranked[0], second = ranked[1];

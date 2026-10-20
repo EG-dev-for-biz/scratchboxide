@@ -20,3 +20,16 @@ export * from './AtmosphereService';
 export * from './AtmosphereImageEstimationService';
 export * from './LocationObjectLightingService';
 export * from './sky-photometry';
+export {
+    spectralSun,
+    spectralBeamTransmittance,
+    extraterrestrialSolarIrradiance,
+    blackbodyLinearRgbSpectral,
+    correlatedColorTemperature,
+    cieColorMatching,
+    kastenYoungAirMass,
+    ozoneAbsorption
+} from './spectral-sun';
+export type { SpectralSun, SpectralSunOptions } from './spectral-sun';
+export { resolveCloudShellLayers, MAX_CLOUD_SHELL_LAYERS, MAX_SHELLS_PER_LAYER } from './cloud-shell-layers';
+export type { PackedCloudShellLayer } from './cloud-shell-layers';

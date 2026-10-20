@@ -46,7 +46,7 @@ export interface StagedGlbRead {
     nodes: StagedNodeRead[];
     byName: (name: string) => StagedNodeRead;
     /** A tree node's level child (0 near, 1 mid, 2 far), or undefined for a tree without levels. */
-    level: (tree: StagedNodeRead, level: 0 | 1 | 2) => StagedNodeRead | undefined;
+    level: (tree: StagedNodeRead, level: number) => StagedNodeRead | undefined;
 }
 
 export function readStagedGlb(file: string): StagedGlbRead {
@@ -66,7 +66,7 @@ export function readStagedGlb(file: string): StagedGlbRead {
     });
     return {
         json, bin, root: json.extras, nodes,
-        level: (tree: StagedNodeRead, level: 0 | 1 | 2) => tree.children.map(i => nodes[i]).find(c => c.extras?.sbLod?.level === level),
+        level: (tree: StagedNodeRead, level: number) => tree.children.map(i => nodes[i]).find(c => c.extras?.sbLod?.level === level),
         byName: (name: string) => {
             const n = nodes.find(x => x.name === name);
             if (!n) throw new Error(`no node named ${name} in ${file}: ${nodes.map(x => x.name).join(', ')}`);
