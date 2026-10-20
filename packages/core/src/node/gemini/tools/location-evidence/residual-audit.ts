@@ -30,6 +30,7 @@ import { readNodes, type MassingReport, type MassingRun } from '../../../3d-engi
 import { auditMassingRun } from '../../../3d-engine/staged-location/pipeline-e/residual-audit-e';
 import { auditResidual, cleanGlbBytes, writeAuditResult, type ResidualAuditResult } from '../../../3d-engine/staged-location/residual-audit';
 import { parseGlbNodes } from '../../../3d-engine/staged-location/glb-nodes';
+import { stagedWorkspaceRoot } from '../../../3d-engine/staged-location/stage-cache';
 
 export const RESIDUAL_AUDIT_TOOL_NAME = 'location_residual_audit';
 
@@ -43,10 +44,12 @@ const LAYER_RUNS = [path.join('relief', 'native'), path.join('inference', 'nativ
 
 const isRunDir = (d: string) => fs.existsSync(path.join(d, 'report.json')) && fs.existsSync(path.join(d, 'mesh.bin'));
 
-/** The pipeline E build directory of a staged run (through its remesh key). */
-export function buildDirOfRun(workspaceRoot: string, runId: string): string {
+/** The pipeline E build directory of a staged run (through its remesh key), looked up under each root in turn. */
+export function buildDirOfRun(roots: string[], runId: string): string {
+    if (!/^[0-9a-f]{8}$/.test(runId)) throw new ResidualAuditToolError('no_input', `runId "${runId}" is not a staged run id (8 hex digits)`);
+    const workspaceRoot = roots.find(r => fs.existsSync(path.join(r, STAGED_CACHE, 'runs', runId, 'stages.json')));
+    if (!workspaceRoot) throw new ResidualAuditToolError('not_found', `no staged run ${runId} under ${roots.join(' or ')}`);
     const stages = path.join(workspaceRoot, STAGED_CACHE, 'runs', runId, 'stages.json');
-    if (!fs.existsSync(stages)) throw new ResidualAuditToolError('not_found', `no staged run ${runId} in this workspace (${stages})`);
     const key = JSON.parse(fs.readFileSync(stages, 'utf8'))?.keys?.remesh as string | undefined;
     const dir = key ? path.join(workspaceRoot, STAGED_CACHE, 'pipeline_e', key.slice(0, 24)) : '';
     if (!key || !fs.existsSync(dir)) throw new ResidualAuditToolError('not_found', `staged run ${runId} has no pipeline E build (remesh key ${key ?? 'missing'}); the audit reads pipeline E builds`);
@@ -91,8 +94,17 @@ const isResidualNode = (n: { name: string; extras?: unknown }) => /^residual/i.t
 
 export interface ResidualAuditToolRequest { runId?: string; buildDir?: string; glbPath?: string; massingGlbPath?: string; groundY?: number; writeCleanGlb?: boolean; outputDir?: string; allLayers?: boolean }
 
-export async function runResidualAuditTool(req: ResidualAuditToolRequest, workspaceRoot: string): Promise<{ summary: string; payload: Record<string, unknown> }> {
-    const within = (p: string) => (path.isAbsolute(p) ? p : path.join(workspaceRoot, p));
+/**
+ * Paths resolve against the staged builds' root (the repo, where the staged cache and public/models live) and then the
+ * chat's workspace; a /models/... URL is a published layer GLB.
+ */
+export async function runResidualAuditTool(req: ResidualAuditToolRequest, workspaceRoot: string, stagedRoot = stagedWorkspaceRoot()): Promise<{ summary: string; payload: Record<string, unknown> }> {
+    const roots = [...new Set([stagedRoot, workspaceRoot].filter(Boolean))];
+    const within = (p: string) => {
+        if (/^\/models\//.test(p)) return path.join(stagedRoot, 'public', p.slice(1));
+        if (path.isAbsolute(p)) return p;
+        return roots.map(r => path.join(r, p)).find(f => fs.existsSync(f)) ?? path.join(roots[0], p);
+    };
     if (req.glbPath) {
         const glbPath = within(req.glbPath);
         if (!fs.existsSync(glbPath)) throw new ResidualAuditToolError('not_found', `no GLB at ${glbPath}`);
@@ -107,8 +119,8 @@ export async function runResidualAuditTool(req: ResidualAuditToolRequest, worksp
         if (req.writeCleanGlb) { const f = path.join(outDir, `${path.basename(glbPath, '.glb')}_audited.glb`); fs.writeFileSync(f, cleanGlbBytes(fs.readFileSync(glbPath), r).glb); cleaned.push(f); }
         return describe([{ layer: path.basename(glbPath), result: r, json: path.join(outDir, 'residual_audit.json'), cleaned }], 'glb (no photo agreement: the GLB mode measures geometry only)');
     }
-    const buildDir = req.runId ? buildDirOfRun(workspaceRoot, req.runId) : req.buildDir ? within(req.buildDir) : undefined;
-    if (!buildDir) throw new ResidualAuditToolError('no_input', 'give runId, buildDir or glbPath');
+    const buildDir = req.runId ? buildDirOfRun(roots, req.runId) : req.buildDir ? within(req.buildDir) : undefined;
+    if (!buildDir) throw new ResidualAuditToolError('no_input', 'give runId, buildDir or glbPath (or open a staged build in the viewport)');
     if (!fs.existsSync(buildDir)) throw new ResidualAuditToolError('not_found', `no build at ${buildDir}`);
     const runs = runDirsOf(buildDir);
     if (!runs.length) throw new ResidualAuditToolError('not_found', `${buildDir} holds no pipeline E native run (report.json and mesh.bin)`);
@@ -159,9 +171,9 @@ export const RESIDUAL_AUDIT_TOOL_DECLARATION: ToolDeclaration = {
     parameters: {
         type: 'OBJECT',
         properties: {
-            runId: { type: 'STRING', description: 'A staged-location run id (as in .scratchbox/cache/staged_location/runs/<id>); its pipeline E build is audited.' },
+            runId: { type: 'STRING', description: 'A staged-location run id (8 hex digits, as in .scratchbox/cache/staged_location/runs/<id>); its pipeline E build is audited. Default: the staged build open in the viewport.' },
             buildDir: { type: 'STRING', description: 'A pipeline E build directory (.scratchbox/cache/staged_location/pipeline_e/<key>) or one native run inside it (report.json + mesh.bin). Relative paths are from the workspace.' },
-            glbPath: { type: 'STRING', description: 'Instead of a build: a GLB whose residual nodes are named residual... (or labelled as-scanned); the other nodes are the massing unless massingGlbPath is given.' },
+            glbPath: { type: 'STRING', description: 'Instead of a build: a GLB (path or /models/... URL) whose residual nodes are named residual... (or labelled as-scanned); the other nodes are the massing unless massingGlbPath is given.' },
             massingGlbPath: { type: 'STRING', description: 'With glbPath: the clean massing as its own GLB.' },
             groundY: { type: 'NUMBER', description: 'Ground height in the build frame (default: the massing\'s lowest base).' },
             writeCleanGlb: { type: 'BOOLEAN', description: 'Also write a copy of the layer GLB(s) with the scan artefacts removed (provenance labels kept).' },
@@ -174,8 +186,10 @@ export const RESIDUAL_AUDIT_TOOL_DECLARATION: ToolDeclaration = {
 export const residualAuditHandler: ToolHandler = async (args, ctx): Promise<ToolHandlerOutcome> => {
     const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
     try {
+        const active = ctx.request?.activeArtifact?.type === '3d-scene' ? (ctx.request.activeArtifact.data as { stagedBuild?: { runId?: string } } | undefined)?.stagedBuild : undefined;
+        const runId = str(args.runId) ?? (!str(args.buildDir) && !str(args.glbPath) ? active?.runId : undefined);
         const r = await runResidualAuditTool({
-            runId: str(args.runId), buildDir: str(args.buildDir), glbPath: str(args.glbPath), massingGlbPath: str(args.massingGlbPath),
+            runId, buildDir: str(args.buildDir), glbPath: str(args.glbPath), massingGlbPath: str(args.massingGlbPath),
             ...(typeof args.groundY === 'number' && Number.isFinite(args.groundY) ? { groundY: args.groundY } : {}),
             writeCleanGlb: args.writeCleanGlb === true, allLayers: args.allLayers === true, outputDir: str(args.outputDir)
         }, ctx.workspaceRoot);
