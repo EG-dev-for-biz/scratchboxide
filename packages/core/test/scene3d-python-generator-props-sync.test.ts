@@ -37,12 +37,18 @@ describe('Scene3DPrimitive props -> state projection keeps Python-generated GLBs
         expect(init).not.toContain('sourceCode');
     });
 
-    it('every whole-object setSceneData({...}) projection from props carries pythonGenerator', () => {
-        const re = /setSceneData\(\{(?:\s*\/\/[^\n]*\n)*\s*\.\.\.data,\s*\n\s*title:\s*data\.title/g;
+    it('every whole-object projection from props (the object built from `...data` that setSceneData receives) carries pythonGenerator', () => {
+        // The projection is the object literal that spreads the props' data and sets its title. It is passed to
+        // setSceneData directly, or first through carryStagedChoice (the clay/textured choice held over a running
+        // staged build's later commits), so the match starts at the literal, not at the call around it.
+        const re = /\{(?:\s*\/\/[^\n]*\n)*\s*\.\.\.data,\s*\n\s*title:\s*data\.title/g;
         let m: RegExpExecArray | null;
         let count = 0;
         while ((m = re.exec(source)) !== null) {
-            const obj = sliceBalanced(source, source.indexOf('{', m.index));
+            const obj = sliceBalanced(source, m.index);
+            // what is built here is what setSceneData gets
+            const after = source.slice(m.index + obj.length, m.index + obj.length + 400);
+            expect(after).toMatch(/setSceneData\(/);
             expect(obj).toMatch(/pythonGenerator:\s*data\.pythonGenerator/);
             count++;
         }
