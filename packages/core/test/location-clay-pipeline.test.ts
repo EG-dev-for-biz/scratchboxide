@@ -105,8 +105,14 @@ describe('runLocationClayPipeline', () => {
         expect(r.trees!.inferred).toMatchObject({ crownBaseRatio: 0.35, trunkRadiusPerHeight: 0.016 });
         const published = path.join(root, 'public', 'models', 'district_sbveggie_trees.glb');
         const trees = readGlbTriangles(fs.readFileSync(published));
-        // the budgeted tiers: every tree's blob leaf masses and wood within its budget; the file's far level shares the wood the near levels hold whole
-        expect(trees.indices.length / 3).toBe(trees.nodeRanges.reduce((n, t) => n + t.extras.lod.woodTriangles + t.extras.foliageTriangles, 0));
+        // the far level the file holds (trees-lod/3, 9806e8fb): each tree's own far wood (trunk and main limbs, lighter than
+        // the whole wood the near levels share) under its blob leaf masses
+        expect(trees.indices.length / 3).toBe(trees.nodeRanges.reduce((n, t) => n + t.extras.lod.far.woodTriangles + t.extras.foliageTriangles, 0));
+        for (const t of trees.nodeRanges) {
+            expect(t.triangleCount).toBe(t.extras.farLevelTriangles);
+            expect(t.extras.lod.far.woodTriangles).toBeGreaterThan(0);
+            expect(t.extras.lod.far.woodTriangles).toBeLessThan(t.extras.lod.woodTriangles);
+        }
         // three trees draw far less than a park (the ceiling itself is checked on a park-scale plant below)
         expect(r.trees!.drawnPerFrame!.maxTriangles).toBeGreaterThan(0);
         expect(r.trees!.drawnPerFrame!.maxTriangles).toBeLessThanOrEqual(SCENE_TREE_DRAWN_TRIANGLES_PER_FRAME);
