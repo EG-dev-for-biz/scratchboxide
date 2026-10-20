@@ -12,7 +12,7 @@
  * ratio or a chromaticity difference, so neither image's exposure matters. Tolerances are the benchmark's pass marks.
  */
 
-import type { SkyMeasurement } from './equirect-sky';
+import type { SkyMeasurement, CloudMeasurement } from './equirect-sky';
 import type { DomeLights } from './sky-dome-equirect-renderer';
 
 export const SKY_REALISM_TOLERANCES = {
@@ -30,7 +30,16 @@ export const SKY_REALISM_TOLERANCES = {
      * |ln| of the error in how bright the sky backdrop is next to the sun: the reference patch's radiance over the
      * direct-normal irradiance (photo disc; scene sun light). Catches a backdrop too dark or too bright for the scene.
      */
-    skyBrightnessLogError: 0.35
+    skyBrightnessLogError: 0.35,
+    /** |render - photo| cloud fraction, with the render asked for the photo's fraction (does coverage mean coverage). */
+    cloudFractionError: 0.1,
+    /**
+     * RMS of ln(render/photo) over the 10th/50th/90th percentile cloud luminance per unit of direct-normal sun
+     * (clouds lit right whatever the clear sky does; the sky has its own measure).
+     */
+    cloudBrightnessLogRms: 0.35,
+    /** |ln| of the error in how much brighter clouds are within 30° of the sun than elsewhere. */
+    cloudTowardSunLogError: 0.4
 };
 
 export type SkyRealismMetric = keyof typeof SKY_REALISM_TOLERANCES;
@@ -43,6 +52,10 @@ export interface SkyRealismScore {
     notComparable: Array<{ metric: SkyRealismMetric; reason: string }>;
     /** Direct:diffuse horizontal irradiance on each side, for the sign of the error. */
     directDiffuse?: { photo: number; render: number };
+    /** Direct-normal sun luminance on each side, in each image's units (scales the cloud luminances). */
+    cloudSun?: { photo?: number; render?: number };
+    /** Cloud measurements on each side (when compared). */
+    clouds?: { photo: CloudMeasurement; render: CloudMeasurement };
     /** Sky reference radiance per unit direct-normal irradiance (1/sr) on each side. */
     skyBrightness?: { photo: number; render: number };
     /** Per-sample detail for diagnosis: ln(render/photo) and Δuv. */
@@ -110,4 +123,22 @@ export function scoreSkyRealism(photo: SkyMeasurement, render: SkyMeasurement, l
     const passed: SkyRealismMetric[] = [], failed: SkyRealismMetric[] = [];
     for (const [k, v] of Object.entries(metrics) as Array<[SkyRealismMetric, number]>) (v <= SKY_REALISM_TOLERANCES[k] ? passed : failed).push(k);
     return { metrics, passed, failed, notComparable, samples, directDiffuse, skyBrightness };
+}
+
+/** Adds the cloud measures to a score, when the photo has enough cloud (>= 5% of the sky) to compare. */
+export function scoreClouds(score: SkyRealismScore, photo: CloudMeasurement, render: CloudMeasurement, photoSun?: number, renderSun?: number): void {
+    if (photo.fraction < 0.05) return;
+    const add = (k: SkyRealismMetric, v: number | undefined, why: string) => {
+        if (v === undefined || !Number.isFinite(v)) { score.notComparable.push({ metric: k, reason: why }); return; }
+        score.metrics[k] = v;
+        (v <= SKY_REALISM_TOLERANCES[k] ? score.passed : score.failed).push(k);
+    };
+    add('cloudFractionError', Math.abs(render.fraction - photo.fraction), 'no cloud measurement');
+    // Per unit sun: luminance relative to the clear sky, times clear sky, over the direct-normal irradiance.
+    const perSun = (c: CloudMeasurement, sun: number | undefined) => c.cloudLuminance && sun ? c.cloudLuminance.map(v => (v * c.clearSkyLuminance) / sun) : undefined;
+    const pc = perSun(photo, photoSun), rc = perSun(render, renderSun);
+    add('cloudBrightnessLogRms', pc && rc ? Math.sqrt(pc.reduce((s, p, i) => s + Math.log(rc[i] / p) ** 2, 0) / 3) : undefined,
+        !photoSun ? 'the photo\'s sun is dimmed by cloud (direct below diffuse), so brightness per unit sun is undefined' : render.cloudLuminance ? 'the photo has too little cloud to rank' : 'the render has no cloud');
+    add('cloudTowardSunLogError', photo.towardSunRatio && render.towardSunRatio ? Math.abs(Math.log(render.towardSunRatio / photo.towardSunRatio)) : undefined, 'too little cloud near or away from the sun');
+    score.clouds = { photo, render };
 }

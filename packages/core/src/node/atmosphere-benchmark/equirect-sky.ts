@@ -304,3 +304,58 @@ export function applyColorMatrix(img: EquirectImage, m: number[][]): EquirectIma
     }
     return { width: img.width, height: img.height, rgb };
 }
+
+export interface CloudMeasurement {
+    /** Solid-angle fraction of the sky between 15° and 85° (beyond 6° of the sun) that is cloud. */
+    fraction: number;
+    /** Median luminance of the clear sky in that band, the scale the cloud luminances are given in. */
+    clearSkyLuminance: number;
+    /** 10th / 50th / 90th percentile cloud luminance over the clear-sky median (bases, bodies, lit tops). */
+    cloudLuminance?: [number, number, number];
+    /** Median cloud luminance within 30° of the sun over the median elsewhere (bright edges toward the sun). */
+    towardSunRatio?: number;
+}
+
+function uvOf(r: number, g: number, b: number): [number, number] {
+    const { x, y } = rgbToXy(r, g, b);
+    const d = -2 * x + 12 * y + 3;
+    return [(4 * x) / d, (6 * y) / d];
+}
+const D65_UV = (() => { const x = 0.3127, y = 0.329, d = -2 * x + 12 * y + 3; return [(4 * x) / d, (6 * y) / d] as [number, number]; })();
+
+/**
+ * Clouds in a daytime sky: pixels no bluer than white (u, v within 0.008 / 0.016 below D65; clear sky lies well below),
+ * weighted by solid angle. Compare a photo and a render only after both share a white balance.
+ */
+export function measureClouds(img: EquirectImage, sun?: { elevationDeg: number; imageAzimuthDeg: number }): CloudMeasurement {
+    const { width: W, height: H, rgb } = img;
+    const cloudY: number[] = [], clearY: number[] = [], nearSun: number[] = [], awaySun: number[] = [];
+    let cloudW = 0, totalW = 0;
+    for (let j = 0; j < H / 2; j++) {
+        const e = pixelElevation(img, j);
+        if (e < 15 || e > 85) continue;
+        const w = Math.cos(e * DEG);
+        for (let i = 0; i < W; i++) {
+            const dSun = sun ? angularDistanceDeg(e, pixelAzimuth(img, i), sun.elevationDeg, sun.imageAzimuthDeg) : 180;
+            if (dSun < 6) continue;
+            const k = (j * W + i) * 3;
+            const Y = luminance(rgb[k], rgb[k + 1], rgb[k + 2]);
+            if (!(Y > 0)) continue;
+            const [u, v] = uvOf(rgb[k], rgb[k + 1], rgb[k + 2]);
+            // Cloud is white or warmer (sunlit at a low sun it turns orange); clear sky is distinctly bluer than white.
+            const neutral = u > D65_UV[0] - 0.008 && v > D65_UV[1] - 0.016;
+            totalW += w;
+            if (neutral) { cloudW += w; cloudY.push(Y); (dSun < 30 ? nearSun : awaySun).push(Y); }
+            else clearY.push(Y);
+        }
+    }
+    const median = (a: number[]) => { if (!a.length) return NaN; const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+    const clear = median(clearY);
+    const out: CloudMeasurement = { fraction: totalW ? cloudW / totalW : 0, clearSkyLuminance: clear };
+    if (cloudY.length > 50 && Number.isFinite(clear)) {
+        const s = [...cloudY].sort((x, y) => x - y);
+        out.cloudLuminance = [s[Math.floor(s.length * 0.1)] / clear, s[Math.floor(s.length * 0.5)] / clear, s[Math.floor(s.length * 0.9)] / clear];
+        if (nearSun.length > 30 && awaySun.length > 30) out.towardSunRatio = median(nearSun) / median(awaySun);
+    }
+    return out;
+}

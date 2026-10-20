@@ -19,10 +19,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { readHdrEquirect, measureEquirectSky, EquirectImage, SkyMeasurement, whiteBalanceMatrix, applyColorMatrix } from '../../packages/core/src/node/atmosphere-benchmark/equirect-sky';
+import { readHdrEquirect, measureEquirectSky, measureClouds, EquirectImage, SkyMeasurement, CloudMeasurement, whiteBalanceMatrix, applyColorMatrix } from '../../packages/core/src/node/atmosphere-benchmark/equirect-sky';
 import { integrateSpectrum, planckRadiance } from '../../packages/core/src/browser/generative-canvas/services/atmosphere/spectral-sun';
 import { renderSkyDomeEquirects } from '../../packages/core/src/node/atmosphere-benchmark/sky-dome-equirect-renderer';
-import { scoreSkyRealism, SKY_REALISM_TOLERANCES, SkyRealismScore } from '../../packages/core/src/node/atmosphere-benchmark/sky-realism-score';
+import { scoreSkyRealism, scoreClouds, SKY_REALISM_TOLERANCES, SkyRealismScore } from '../../packages/core/src/node/atmosphere-benchmark/sky-realism-score';
 import { calculateNOAASolarPosition } from '../../packages/core/src/browser/generative-canvas/services/atmosphere/solar-position';
 import { encodePng } from '../../packages/core/src/node/3d-engine/staged-location/png-encode';
 import type { AtmosphericScatteringConfig } from '../../packages/core/src/browser/generative-canvas/services/atmosphere/atmosphere-types';
@@ -67,16 +67,19 @@ async function referenceFile(ref: Reference): Promise<string> {
 }
 
 /** The scene configuration the app would build for this sky: the measured sun, and cloud cover when the photo has cloud. */
-function configFor(ref: Reference, sunElevationDeg: number, measured: SkyMeasurement): { config: AtmosphericScatteringConfig; note?: string } {
+function configFor(ref: Reference, sunElevationDeg: number, clouds: CloudMeasurement | undefined): { config: AtmosphericScatteringConfig; note?: string } {
     const config: AtmosphericScatteringConfig = { sunElevation: sunElevationDeg, sunAzimuth: 180 };
     if (ref.weather === 'overcast' || ref.weather === 'rain') {
         Object.assign(config, { volumetricClouds: true, cloudCoverage: 0.95 });
         return { config, note: 'overcast drawn as volumetric cover 0.95' };
     }
+    if (clouds && clouds.fraction >= 0.05) {
+        Object.assign(config, { volumetricClouds: true, cloudCoverage: Math.min(0.95, clouds.fraction) });
+        return { config, note: `volumetric cover ${clouds.fraction.toFixed(2)} (the photo's measured cloud fraction)` };
+    }
     if (ref.weather === 'partly_cloudy') {
-        const cover = measured.neutralBrightFraction ?? 0.4;
-        Object.assign(config, { volumetricClouds: true, cloudCoverage: Math.max(0.05, cover) });
-        return { config, note: measured.neutralBrightFraction !== undefined ? `volumetric cover ${cover.toFixed(2)} (measured)` : 'volumetric cover 0.4 (not measurable at this sun)' };
+        Object.assign(config, { volumetricClouds: true, cloudCoverage: 0.4 });
+        return { config, note: 'volumetric cover 0.4 (cloud not measurable at this sun)' };
     }
     if (ref.weather === 'fog') return { config, note: 'fog: the sky dome has no fog layer; drawn clear' };
     return { config };
@@ -112,7 +115,7 @@ async function main() {
     const out = arg('out');
     fs.mkdirSync(out, { recursive: true });
 
-    type Job = { ref: Reference; photo: EquirectImage; measured: SkyMeasurement; sunEl: number; sunSource: string; config: AtmosphericScatteringConfig; note?: string };
+    type Job = { ref: Reference; photo: EquirectImage; measured: SkyMeasurement; clouds?: CloudMeasurement; sunEl: number; sunSource: string; config: AtmosphericScatteringConfig; note?: string };
     const jobs: Job[] = [];
     const skipped: Array<{ id: string; reason: string }> = [];
     for (const ref of manifest) {
@@ -126,8 +129,10 @@ async function main() {
             sunSource = `NOAA at ${utc.toISOString()}`;
         }
         if (sunEl === undefined) { skipped.push({ id: ref.id, reason: 'no sun disc and no capture time with a known UTC offset' }); continue; }
-        const { config, note } = configFor(ref, sunEl, measured);
-        jobs.push({ ref, photo: downsample(photo, 512, 256), measured, sunEl, sunSource, config, note });
+        // Clouds are measured on daytime skies with the sun at least 10° up (neutral-colour classification).
+        const clouds = measured.sun && sunEl >= 10 ? measureClouds(photo, measured.sun) : undefined;
+        const { config, note } = configFor(ref, sunEl, clouds);
+        jobs.push({ ref, photo: downsample(photo, 512, 256), measured, clouds, sunEl, sunSource, config, note });
     }
 
     const t0 = Date.now();
@@ -147,6 +152,15 @@ async function main() {
             ? measureEquirectSky(image, { knownSun: { elevationDeg: job.sunEl, imageAzimuthDeg: 180 }, minSampleElevationDeg: job.ref.minSampleElevationDeg })
             : measureEquirectSky(image, { sunMayBeUp: false, minSampleElevationDeg: job.ref.minSampleElevationDeg });
         const score = scoreSkyRealism(job.measured, renderMeasured, lights, job.sunEl);
+        if (job.clouds) {
+            // Cloud brightness is scaled by the sun, which only works where the photo's sun shines clear (direct beam
+            // at least the diffuse sky); a disc dimmed by cloud leaves that measure not comparable, with the reason.
+            const sunClear = (score.directDiffuse?.photo ?? 0) >= 1;
+            const photoSun = job.measured.sun && sunClear ? job.measured.sun.discToSkyRatio * job.measured.referenceLuminance : undefined;
+            const renderSun = lights.sunIntensity * (0.2126 * lights.sunColor[0] + 0.7152 * lights.sunColor[1] + 0.0722 * lights.sunColor[2]);
+            scoreClouds(score, job.clouds, measureClouds(image, { elevationDeg: job.sunEl, imageAzimuthDeg: 180 }), photoSun, renderSun);
+            score.cloudSun = { photo: photoSun, render: renderSun };
+        }
         const W = 512, H = 128, px = new Uint8Array(W * 2 * H * 3);
         toneMapSky(job.photo, job.measured.referenceLuminance, px, W * 2 * 3, 0);
         toneMapSky(image, renderMeasured.referenceLuminance, px, W * 2 * 3, W);
