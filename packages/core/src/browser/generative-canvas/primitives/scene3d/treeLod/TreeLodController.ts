@@ -18,7 +18,7 @@ import {
     setCrownShadingUniforms, supportsCrownShading, type CrownShadingInput, type CrownShadingOptions
 } from './treeCrownShading';
 import {
-    DEFAULT_TREE_LOD_VIEW, FADE_STEPS, crownSlotOf, blurDemotionLevels, demoteEdges, dominantLevel, edgesAtLevel, edgesNoFinerThan, finestLevel, fovealWeight, hysteresisDistanceRelative,
+    DEFAULT_TREE_LOD_VIEW, DEFAULT_TREE_TRIANGLE_BUDGET, FADE_STEPS, crownSlotOf, blurDemotionLevels, demoteEdges, dominantLevel, edgesAtLevel, edgesNoFinerThan, finestLevel, fovealWeight, hysteresisDistanceRelative,
     levelRange, pixelThresholds, projectedHeightPx, quantiseRange, resolveTreeLodView, screenEquivalentDistance, sphereFovealRadius, stepEdges, targetEdges,
     type LodBand, type LodEdges, type TreeLodViewInput, type TreeLodViewOptions
 } from './treeLodMath';
@@ -40,8 +40,12 @@ import { circleOfConfusionPx } from '../viewportOptics';
  * wears the plain material; a level in a crossfade wears a quantised dither variant of it (treeLodFade.ts).
  *
  * Work is bounded per frame: at most `maxCommitsPerFrame` trees change their drawn state (most important first, the rest
- * keep their previous state one more frame) and `maxNewVariantsPerFrame` material variants are made; when the estimated
- * triangles (main pass and shadow pass) exceed `triangleBudget` the least important trees give up a level first.
+ * keep their previous state one more frame) and `maxNewVariantsPerFrame` material variants are made; when the triangles the
+ * trees are heading for (main pass and shadow pass) exceed `triangleBudget` the least important trees give up a level first,
+ * and while dissolves in flight would overshoot it the least important trees wait to start theirs.
+ *
+ * A still camera finishes its dissolves: once it has not moved for `settleAfterStillSeconds`, every tree inside a band overlap
+ * crossfades to its dominant level and holds it (with a dead band), so a still frame shows no dither.
  *
  * What the camera sees decides the level (TreeLodViewOptions, on by default; `screen.enabled: false` goes back to metre
  * bands for comparison):
@@ -85,8 +89,22 @@ export interface TreeLodOptions {
     maxCommitsPerFrame?: number;
     /** Material variants that may be created in one frame (each compiles a program the first time). */
     maxNewVariantsPerFrame?: number;
-    /** Drawn triangles per frame the estimate may reach before levels are pushed farther away. */
+    /** Drawn triangles per frame the estimate may reach before levels are pushed farther away (default DEFAULT_TREE_TRIANGLE_BUDGET). */
     triangleBudget?: number;
+    /**
+     * Seconds the camera must hold still before every tree in a distance crossfade settles on its dominant level (a short timed
+     * crossfade), so a still frame shows no dither; the tree keeps that level while the camera moves until its own share of the
+     * distance crossfade falls below `settleReleaseShare`. 0 turns settling off (trees stay mid-dissolve inside a band overlap).
+     */
+    settleAfterStillSeconds?: number;
+    /** Share of the distance crossfade a settled level must keep to be held (dead band against flicker). */
+    settleReleaseShare?: number;
+    /**
+     * How far (share of the trees' budget) the triangles drawn while crossfades are in flight (both levels of a dissolving tree)
+     * may exceed the budget before the least important trees wait to start a dissolve to a finer level (demotions never wait). With
+     * no dissolve running, the most important one always starts.
+     */
+    inFlightOvershoot?: number;
     /** Clock in ms, replaceable in tests. */
     now?: () => number;
     /** Crown shading of the leaves (defaults in treeCrownShading.ts DEFAULT_CROWN_SHADING, per detail slot near / near-mid / mid / far). */
@@ -114,6 +132,11 @@ export interface TreeLodFrame {
      * when the city is heavy. Nothing else is ever demoted for it (the hero and the focus object keep full detail).
      */
     reservedTriangles?: number;
+    /**
+     * Share (0..1] of `triangleBudget` in force this frame: the viewport lowers it when the GPU frame time stays over its target
+     * (adaptiveTreeBudget.ts) and raises it back slowly. 1 when omitted.
+     */
+    budgetScale?: number;
 }
 
 /** Why a tree has its level in the last frame. */
@@ -150,10 +173,17 @@ export interface TreeLodStats {
     commits: number;
     deferredCommits: number;
     newVariants: number;
-    /** Trees the budget held a level below where their distance puts them. */
+    /** Trees the budget held at least one level below where their distance puts them. */
     demotedTrees: number;
+    /** Trees whose dissolve the budget let wait this frame, so the levels drawn in flight stay near the budget. */
+    budgetDeferredStarts: number;
+    /** The camera has held still for `settleAfterStillSeconds`, and the trees holding a settled whole level. */
+    still: boolean;
+    settledTrees: number;
     /** The one triangle budget of the frame, what the rest of the scene took of it, and what was left for these trees. */
     triangleBudget: number;
+    /** The share of the configured budget in force (below 1 when the viewport lowered it for GPU time). */
+    budgetScale: number;
     reservedTriangles: number;
     treeBudget: number;
     /** Levels chosen by on-screen size (false: metre bands). */
@@ -194,6 +224,13 @@ interface TreeState {
     snap: boolean;
     culled: boolean;
     target: LodEdges;
+    /** This frame's target before the budget. */
+    base: LodEdges;
+    /** The whole level a still camera settled this tree on (undefined: follows the distance crossfade). */
+    held: number | undefined;
+    /** Budget demotions of the previous frame (the budget's hysteresis), and whether this frame's dissolve waits. */
+    prevDemotions: number;
+    deferStart: boolean;
     inMain: boolean;
     inShadow: boolean;
     castLevel: number;
@@ -245,6 +282,40 @@ const keyOf = (r: [number, number]): string => {
     return q === null ? 'off' : q === 'full' ? 'full' : `${q[0]}-${q[1]}`;
 };
 
+/** Whether the camera moved between two frames' signatures (world matrix 16, projection 16, frame height). */
+function cameraMoved(a: readonly number[], b: readonly number[]): boolean {
+    for (let i = 0; i < 16; i++) {
+        const tol = i >= 12 && i <= 14 ? 1e-3 : 1e-5;                  // translation (m), rotation and scale
+        if (Math.abs(a[i] - b[i]) > tol) return true;
+    }
+    for (let i = 16; i < 32; i++) if (Math.abs(a[i] - b[i]) > 1e-6 * Math.max(1, Math.abs(a[i]))) return true;
+    return a[32] !== b[32];
+}
+
+/** Whether edges put the tree wholly at one level. */
+const isWhole = (e: LodEdges): boolean => e.every(x => x <= 1e-9 || x >= 1 - 1e-9);
+/** Edges with the finest level given up `k` times (each time its share goes to the next coarser level). */
+function coarserBy(e: LodEdges, k: number): LodEdges {
+    let out = e;
+    for (let i = 0; i < k && finestLevel(out) < out.length; i++) out = edgesNoFinerThan(out, finestLevel(out) + 1);
+    return out;
+}
+const sameEdges = (a: LodEdges, b: LodEdges): boolean => a.every((x, k) => Math.abs(x - b[k]) <= 1e-9);
+
+/** Share of the hash a level draws. */
+const shareOf = (e: LodEdges, level: number): number => { const [lo, hi] = levelRange(e, level); return Math.max(0, hi - lo); };
+
+/** How near a tie (share either side of a half) a held level may be and still be kept when the camera comes to rest. */
+const SETTLE_TIE_SHARE = 0.1;
+
+/** Held-down trees the order step (3) may consider per frame. */
+const MAX_BUDGET_SWAPS = 32;
+
+/** Importance ratio a tree the budget left whole keeps over one it held down (so two trees of near-equal importance do not swap every frame). */
+const BUDGET_STICKINESS = 0.1;
+/** Room (share of the budget) that must be left before a tree the budget held down takes a level back. */
+const BUDGET_RELEASE_MARGIN = 0.02;
+
 export class TreeLodController {
     readonly psiSeason: number | undefined;
     private readonly trees: TreeState[] = [];
@@ -260,7 +331,7 @@ export class TreeLodController {
     private readonly tmp = new THREE.Vector3();
     readonly stats: TreeLodStats = {
         trees: 0, visibleTrees: 0, culledTrees: 0, atLevel: [0, 0, 0, 0], fading: 0, estimatedTriangles: 0, estimatedShadowTriangles: 0, shadowOnlyTrees: 0, commits: 0, deferredCommits: 0, newVariants: 0,
-        demotedTrees: 0, triangleBudget: 0, reservedTriangles: 0, treeBudget: 0, screenSpace: true, blurDemotedTrees: 0, focusProtectedTrees: 0, fovealCentreNdc: [0, 0], frameHeightPx: 0, fovDeg: 0,
+        demotedTrees: 0, budgetDeferredStarts: 0, still: false, settledTrees: 0, triangleBudget: 0, budgetScale: 1, reservedTriangles: 0, treeBudget: 0, screenSpace: true, blurDemotedTrees: 0, focusProtectedTrees: 0, fovealCentreNdc: [0, 0], frameHeightPx: 0, fovDeg: 0,
         updateMs: 0, crownTrees: 0, crownLeafMeshes: 0, crownLobeTrees: 0, crownLobeMeshes: 0, crownLobeFallbackMeshes: 0
     };
     private view: TreeLodViewOptions;
@@ -273,13 +344,19 @@ export class TreeLodController {
     private crownKey = '';
     private readonly crownVariants = new Map<THREE.Material, THREE.Material>();
     private readonly leafVariantNames: Set<string>;
+    /** The camera of the last frame (world matrix, projection, frame height) and when it last moved, for settling at a still camera. */
+    private camSig: number[] | null = null;
+    private movedAtMs = -Infinity;
+    private wasStill = false;
 
     /** Finds the trees under `root` (a loaded trees GLB scene) and puts a gate above each level node. Returns nothing to do when there are none. */
     constructor(readonly root: THREE.Object3D, options: TreeLodOptions = {}) {
         this.opts = {
             hysteresisM: options.hysteresisM ?? 2, fadeSeconds: options.fadeSeconds ?? 0.35,
             maxCommitsPerFrame: options.maxCommitsPerFrame ?? 400, maxNewVariantsPerFrame: options.maxNewVariantsPerFrame ?? 6,
-            triangleBudget: options.triangleBudget ?? 8_000_000,
+            triangleBudget: options.triangleBudget ?? DEFAULT_TREE_TRIANGLE_BUDGET,
+            settleAfterStillSeconds: options.settleAfterStillSeconds ?? 0.5, settleReleaseShare: options.settleReleaseShare ?? 0.25,
+            inFlightOvershoot: options.inFlightOvershoot ?? 0.1,
             now: options.now ?? (() => performance.now())
         };
         this.view = resolveTreeLodView(options.view);
@@ -454,7 +531,7 @@ export class TreeLodController {
                 thresholdsPx: [], blurRadiusPx: 0, blurDemotion: 0, blurLevelsApplied: 0, focusProtected: false, budgetDemotions: 0, level: n - 1
             },
             importance: 0, blurLevels: 0,
-            filteredD: undefined, edges: edgesAtLevel(n - 1, n), snap: true, culled: false, target: edgesAtLevel(n - 1, n), inMain: true, inShadow: false, castLevel: -1, dist: 0, want: new Array(n).fill('off')
+            filteredD: undefined, edges: edgesAtLevel(n - 1, n), snap: true, culled: false, target: edgesAtLevel(n - 1, n), base: edgesAtLevel(n - 1, n), held: undefined, prevDemotions: 0, deferStart: false, inMain: true, inShadow: false, castLevel: -1, dist: 0, want: new Array(n).fill('off')
         };
     }
 
@@ -524,7 +601,18 @@ export class TreeLodController {
             this.ndc.set(dof.focusPoint.x, dof.focusPoint.y, dof.focusPoint.z, 1).applyMatrix4(this.pv);
             if (this.ndc.w > 1e-6) { cx = Math.max(-1, Math.min(1, this.ndc.x / this.ndc.w)); cy = Math.max(-1, Math.min(1, this.ndc.y / this.ndc.w)); }
         }
+        // Still camera: nothing in the view moved since the last frame (1 mm, about 0.0006 degrees, the lens and the frame height).
+        const sig = [...camera.matrixWorld.elements, ...proj.elements, heightPx];
+        if (!this.camSig || cameraMoved(this.camSig, sig)) this.movedAtMs = t0;
+        this.camSig = sig;
+        const settleMs = this.opts.settleAfterStillSeconds * 1000;
+        const still = settleMs > 0 && this.forced === undefined && t0 - this.movedAtMs >= settleMs;
+        // the frame the camera comes to rest: every settled level is checked against the new view (a level held through a move
+        // may no longer be the tree's dominant one)
+        const stillOnset = still && !this.wasStill;
+        this.wasStill = still;
         const s = this.stats;
+        s.still = still; s.settledTrees = 0; s.budgetDeferredStarts = 0;
         s.visibleTrees = 0; s.culledTrees = 0; s.shadowOnlyTrees = 0; s.estimatedShadowTriangles = 0; s.atLevel = [0, 0, 0, 0]; s.fading = 0; s.estimatedTriangles = 0; s.commits = 0; s.deferredCommits = 0; s.newVariants = 0;
         s.screenSpace = screen; s.blurDemotedTrees = 0; s.focusProtectedTrees = 0; s.fovealCentreNdc = [cx, cy]; s.frameHeightPx = heightPx; s.fovDeg = fovDeg;
         const dirty: TreeState[] = [];
@@ -539,9 +627,11 @@ export class TreeLodController {
             t.inMain = this.frustum.intersectsSphere(sphere);
             t.inShadow = !!shadowFrustum && shadowFrustum.intersectsSphere(sphere);
             const r = t.reason;
+            t.prevDemotions = r.budgetDemotions;
             r.budgetDemotions = 0;
+            t.deferStart = false;
             if (!t.inMain && !t.inShadow) {
-                t.culled = true; t.snap = true;
+                t.culled = true; t.snap = true; t.held = undefined; t.prevDemotions = 0;
                 if (t.node.visible) t.node.visible = false;
                 r.inView = false; r.culled = true; r.importance = 0; r.blurRadiusPx = 0; r.blurDemotion = 0; r.blurLevelsApplied = 0; r.focusProtected = false;
                 s.culledTrees++;
@@ -594,16 +684,26 @@ export class TreeLodController {
         s.visibleTrees = visible.reduce((n, t) => n + (t.inMain ? 1 : 0), 0);
         s.shadowOnlyTrees = visible.length - s.visibleTrees;
         s.culledTrees = this.trees.length - visible.length;
-        // Budget, on where the trees are heading (not where the dissolves have got to): when the levels the targets submit (and cast
-        // into the shadow map) exceed `triangleBudget`, the least important trees (projected height x foveal weight) give up a level
-        // first (near to near-mid, near-mid to mid, mid to far), one level a pass over at most as many passes as there are levels below
-        // the far one, until they fit. A tree only the shadow camera sees goes before any the camera sees.
+        // Levels: each tree's target from its (filtered) distance, blur and shadow-only role, settled on a whole level once the camera
+        // holds still; then the budget on where the trees are heading (see below).
         const n = this.levelCount;
+        const settle = settleMs > 0 && this.forced === undefined;
         const baseTarget = (t: TreeState): LodEdges => {
             let e: LodEdges = this.forced === undefined ? targetEdges(t.filteredD!, t.bands) : edgesAtLevel(Math.min(this.forced, n - 1), n);
             if (this.forced === undefined && t.blurLevels > 0) e = demoteEdges(e, t.blurLevels);
             // a tree only the shadow camera sees never wears a leaf-heavy level (near, near-mid): its shadow does not need the small leaves
-            return t.inMain ? e : edgesNoFinerThan(e, Math.max(0, n - 2));
+            if (!t.inMain) e = edgesNoFinerThan(e, Math.max(0, n - 2));
+            if (!settle) { t.held = undefined; return e; }
+            // Settling: a tree inside a band overlap shares the hash between two levels for as long as it stays there (continuous in
+            // distance, so a moving camera never pops). Once the camera has held still, each such tree crossfades to its dominant
+            // level and keeps it, moving or not, until that level's own share of the distance crossfade drops below the release
+            // share: a dead band, so a level a still camera settled on does not flicker back and forth. When the camera comes to rest
+            // again, a held level that has fallen below the dominant one (by more than a near tie) gives way to it.
+            if (t.held !== undefined && shareOf(e, t.held) < this.opts.settleReleaseShare) t.held = undefined;
+            // at rest again: a held level that is no longer the dominant one gives way to it, unless the two are near a tie
+            if (t.held !== undefined && stillOnset && shareOf(e, t.held) < 0.5 - SETTLE_TIE_SHARE) t.held = undefined;
+            if (t.held === undefined && still) t.held = dominantLevel(e);
+            return t.held === undefined ? e : edgesAtLevel(t.held, n);
         };
         const submitted = (e: LodEdges, t: TreeState): number => {
             let tri = 0;
@@ -612,49 +712,115 @@ export class TreeLodController {
         };
         // what the shadow pass draws of a tree: its casting level, in full (the depth pass has no dither)
         const shadowCost = (e: LodEdges, t: TreeState): number => (t.inShadow ? t.levels[castingLevel(e)].triangles : 0);
-        // what a target costs this frame: the edges it moves the tree to (a crossfade in flight draws both of its levels)
-        const costOf = (target: LodEdges, t: TreeState): number => {
-            const e = t.snap ? target : stepEdges(t.edges, target, maxStep);
-            return (t.inMain ? submitted(e, t) : 0) + shadowCost(e, t);
-        };
-        // what a target costs once the tree is there (see the second pass below)
+        // what a target costs once the tree is there: its levels with a share, and its casting level in the shadow pass
         const headingCost = (target: LodEdges, t: TreeState): number => (t.inMain ? submitted(target, t) : 0) + shadowCost(target, t);
-        let total = 0;
-        for (const t of visible) { t.target = baseTarget(t); total += costOf(t.target, t); }
-        s.demotedTrees = 0;
+        // what this frame draws on the way there (a crossfade in flight draws both of its levels)
+        const inFlightCost = (target: LodEdges, t: TreeState): number => headingCost(t.snap ? target : stepEdges(t.edges, target, maxStep), t);
+        for (const t of visible) { t.base = baseTarget(t); if (t.held !== undefined && t.inMain) s.settledTrees++; }
         // one budget for the whole frame: what the rest of the scene draws comes off it first
         const reserved = finite(frame?.reservedTriangles) && frame!.reservedTriangles! > 0 ? frame!.reservedTriangles! : 0;
-        const budget = Math.max(0, this.opts.triangleBudget - reserved);
-        s.triangleBudget = this.opts.triangleBudget; s.reservedTriangles = reserved; s.treeBudget = budget;
-        const order = this.forced === undefined && total > budget ? [...visible].sort((a, b) => a.importance - b.importance) : [];
-        /** Demotes the least important trees one level a pass until `cost` of the targets fits, as `total` says. */
-        const demote = (cost: (e: LodEdges, t: TreeState) => number, sum: number): number => {
-            for (let pass = 0; pass < n - 1 && sum > budget; pass++) {
-                for (const t of order) {
-                    // the focus tree (or one spanning the plane of focus) keeps its level whatever the budget
-                    if (t.reason.focusProtected) continue;
-                    const e = t.target;
-                    const finest = finestLevel(e);
-                    if (finest >= n - 1) continue;                                // already wholly the far level
-                    const coarser = edgesNoFinerThan(e, finest + 1);
-                    const gain = cost(e, t) - cost(coarser, t);
-                    if (gain <= 0) continue;
-                    t.target = coarser; sum -= gain; s.demotedTrees++; t.reason.budgetDemotions++;
-                    if (sum <= budget) break;
+        const scale = finite(frame?.budgetScale) && frame!.budgetScale! > 0 ? Math.min(1, frame!.budgetScale!) : 1;
+        const frameBudget = this.opts.triangleBudget * scale;
+        const budget = Math.max(0, frameBudget - reserved);
+        s.triangleBudget = frameBudget; s.budgetScale = scale; s.reservedTriangles = reserved; s.treeBudget = budget;
+        // Budget on the destinations, not on this frame's in-flight cost: judged by the in-flight cost a tree's promotion counted
+        // both of its levels and a settled tree's demotion looked like a loss, so the nearest trees were held back while less
+        // important ones kept their levels. Importance is the projected height x foveal weight; a tree only the shadow camera sees
+        // ranks below any the camera sees. The fit starts from where each tree was held last frame and changes only what it must:
+        //  1. over the budget: the least important trees give up a level first (near to near-mid, near-mid to mid, mid to far), one
+        //     level a pass, until the levels fit;
+        //  2. room under the budget less a release margin: held-down trees take levels back, most important first, wherever the
+        //     level still fits (the last demotion of a pass can free far more than was missing);
+        //  3. order: a held-down tree more important than a tree keeping a finer level (beyond the stickiness ratio) takes a level
+        //     back from the least important such trees when that fits within the release margin.
+        // The margin and the stickiness are the hysteresis: at a still camera the fit is the same every frame, and a turning camera
+        // moves a tree only once its need or its importance has really changed.
+        const budgetOn = this.forced === undefined;
+        const limit = budgetOn ? budget : Infinity;
+        const release = limit * (1 - BUDGET_RELEASE_MARGIN);
+        const demotable = (t: TreeState): boolean => !t.reason.focusProtected && finestLevel(t.target) < n - 1;
+        const demoteGain = (t: TreeState): number => headingCost(t.target, t) - headingCost(edgesNoFinerThan(t.target, finestLevel(t.target) + 1), t);
+        const demoteOnce = (t: TreeState): number => {
+            const coarser = edgesNoFinerThan(t.target, finestLevel(t.target) + 1);
+            const gain = headingCost(t.target, t) - headingCost(coarser, t);
+            t.target = coarser; t.reason.budgetDemotions++;
+            return gain;
+        };
+        const promoteExtra = (t: TreeState): number => headingCost(coarserBy(t.base, t.reason.budgetDemotions - 1), t) - headingCost(t.target, t);
+        const promoteOnce = (t: TreeState): void => { t.target = coarserBy(t.base, t.reason.budgetDemotions - 1); t.reason.budgetDemotions--; };
+        let total = 0;
+        for (const t of visible) {
+            t.target = t.base; t.reason.budgetDemotions = 0;
+            // where the budget held it last frame (the focus tree is never held)
+            if (budgetOn) for (let k = 0; k < t.prevDemotions && demotable(t); k++) demoteOnce(t);
+            total += headingCost(t.target, t);
+        }
+        if (budgetOn && (total > limit || visible.some(t => t.reason.budgetDemotions > 0))) {
+            const rank = (t: TreeState): number => t.importance * (t.prevDemotions > 0 ? 1 : 1 + BUDGET_STICKINESS);
+            const asc = [...visible].sort((a, b) => rank(a) - rank(b));
+            // 1. over: the least important give up a level a pass
+            for (let pass = 0; pass < n - 1 && total > limit; pass++) {
+                for (const t of asc) {
+                    if (!demotable(t) || demoteGain(t) <= 0) continue;
+                    total -= demoteOnce(t);
+                    if (total <= limit) break;
                 }
             }
-            return sum;
-        };
-        if (order.length > 0) {
-            total = demote(costOf, total);
-            // Second pass, on the destinations: a demotion from a settled level starts a crossfade that draws both levels for
-            // `fadeSeconds`, so by this frame's cost it looks like a loss, and a squeeze on settled trees (the scene's share growing
-            // as buildings come into view) would never be met. When this frame's cost is still over, the targets themselves are
-            // fitted to the budget, so the trees settle inside it once their dissolves end.
-            if (total > budget) demote(headingCost, visible.reduce((a, t) => a + headingCost(t.target, t), 0));
+            // 2. room: levels back, most important first, within the release margin
+            for (let changed = total < release; changed;) {
+                changed = false;
+                for (let k = asc.length - 1; k >= 0; k--) {
+                    const t = asc[k];
+                    if (t.reason.budgetDemotions <= 0) continue;
+                    const extra = promoteExtra(t);
+                    if (total + extra > release) continue;
+                    promoteOnce(t); total += extra; changed = true;
+                }
+            }
+            // 3. order: the most important held-down trees take a level from clearly less important ones when that fits
+            const held = visible.filter(t => t.reason.budgetDemotions > 0).sort((a, b) => b.importance - a.importance);
+            for (let h = 0; h < Math.min(held.length, MAX_BUDGET_SWAPS); h++) {
+                const a = held[h];
+                if (a.reason.budgetDemotions <= 0) continue;
+                const extra = promoteExtra(a);
+                const picks: TreeState[] = [];
+                let freed = 0;
+                for (const b of asc) {
+                    if (b.importance * (1 + BUDGET_STICKINESS) >= a.importance) break;
+                    if (b === a || !demotable(b)) continue;
+                    const g = demoteGain(b);
+                    if (g <= 0) continue;
+                    picks.push(b); freed += g;
+                    if (total - freed + extra <= release) break;
+                }
+                if (total - freed + extra > release) break;                    // no room for this one; less important ones have fewer donors
+                if (!picks.length) continue;                                   // room without a donor is step 2's, within the release margin
+                for (const b of picks) total -= demoteOnce(b);
+                promoteOnce(a); total += extra;
+            }
+        }
+        s.demotedTrees = visible.reduce((a, t) => a + (t.reason.budgetDemotions > 0 ? 1 : 0), 0);
+        // In flight: a dissolve draws both of its levels. When what this frame draws would exceed the budget by more than the
+        // overshoot share, the least important trees still wholly at one level wait to start a dissolve to a finer level (they
+        // keep what they draw now). When no dissolve is running the most important one starts whatever it costs, so the levels always get there,
+        // one dissolve after another.
+        if (budgetOn) {
+            let inFlight = visible.reduce((a, t) => a + inFlightCost(t.target, t), 0);
+            const cap = budget * (1 + Math.max(0, this.opts.inFlightOvershoot));
+            if (inFlight > cap) {
+                // promotions only: a demotion lowers what the tree heads for, so it never waits
+                const starts = visible.filter(t => !t.snap && isWhole(t.edges) && !sameEdges(t.edges, t.target) && headingCost(t.target, t) > headingCost(t.edges, t)).sort((a, b) => a.importance - b.importance);
+                const running = visible.some(t => !isWhole(t.edges));
+                for (let k = 0; k < starts.length && inFlight > cap; k++) {
+                    if (k === starts.length - 1 && !running) break;
+                    const t = starts[k];
+                    const saved = inFlightCost(t.target, t) - headingCost(t.edges, t);
+                    if (saved > 0) { t.deferStart = true; inFlight -= saved; s.budgetDeferredStarts++; }
+                }
+            }
         }
         for (const t of visible) {
-            const target = t.target;
+            const target = t.deferStart ? t.edges : t.target;
             t.edges = t.snap ? target : stepEdges(t.edges, target, maxStep);
             t.snap = false;
             let changed = false;
@@ -777,10 +943,10 @@ export function formatTreeLodStats(all: readonly TreeLodStats[], scene?: { main:
     const mode = s0.screenSpace ? `screen ${s0.fovDeg.toFixed(1)}° ${Math.round(s0.frameHeightPx)}px` : 'metre bands';
     return [
         `trees ${sum(s => s.trees)}  seen ${sum(s => s.visibleTrees)}  shadow-only ${sum(s => s.shadowOnlyTrees)}  culled ${sum(s => s.culledTrees)}`,
-        `near ${sum(s => s.atLevel[0])}  near-mid ${sum(s => s.atLevel[1])}  mid ${sum(s => s.atLevel[2])}  far ${sum(s => s.atLevel[3])}  fading ${sum(s => s.fading)}`,
-        `tri ${m(sum(s => s.estimatedTriangles))} + shadow ${m(sum(s => s.estimatedShadowTriangles))}  budget-demoted ${sum(s => s.demotedTrees)}  blur-demoted ${sum(s => s.blurDemotedTrees)}  in focus ${sum(s => s.focusProtectedTrees)}`,
+        `near ${sum(s => s.atLevel[0])}  near-mid ${sum(s => s.atLevel[1])}  mid ${sum(s => s.atLevel[2])}  far ${sum(s => s.atLevel[3])}  fading ${sum(s => s.fading)}${s0.still ? `  still: settled ${sum(s => s.settledTrees)}` : ''}`,
+        `tri ${m(sum(s => s.estimatedTriangles))} + shadow ${m(sum(s => s.estimatedShadowTriangles))}  budget-demoted ${sum(s => s.demotedTrees)}${sum(s => s.budgetDeferredStarts) ? ` (waiting ${sum(s => s.budgetDeferredStarts)})` : ''}  blur-demoted ${sum(s => s.blurDemotedTrees)}  in focus ${sum(s => s.focusProtectedTrees)}`,
         // the one budget split: the rest of the scene (buildings, context, hero) first, the trees in what is left
-        `budget ${m(s0.triangleBudget)} = scene ${m(scene ? scene.main : 0)} + shadow ${m(scene ? scene.shadow : 0)} + trees ${m(sum(s => s.estimatedTriangles + s.estimatedShadowTriangles))} (trees may use ${m(Math.max(0, s0.triangleBudget - (scene ? scene.main + scene.shadow : 0)))})`,
+        `budget ${m(s0.triangleBudget)}${s0.budgetScale < 1 ? ` (GPU-adapted x${s0.budgetScale.toFixed(2)})` : ''} = scene ${m(scene ? scene.main : 0)} + shadow ${m(scene ? scene.shadow : 0)} + trees ${m(sum(s => s.estimatedTriangles + s.estimatedShadowTriangles))} (trees may use ${m(Math.max(0, s0.triangleBudget - (scene ? scene.main + scene.shadow : 0)))})`,
         `${mode}  fovea (${s0.fovealCentreNdc[0].toFixed(2)}, ${s0.fovealCentreNdc[1].toFixed(2)})  update ${sum(s => s.updateMs).toFixed(2)} ms`
     ].join('\n');
 }

@@ -221,6 +221,13 @@ export function dominantLevel(e: LodEdges): number {
 // The view options and the level a view gives a tree
 // ---------------------------------------------------------------------------------------------------------------
 
+/**
+ * Triangles a viewport frame may draw (main pass plus shadow pass) before trees give up levels, the rest of the scene
+ * (buildings, context, hero) taken off it first. The viewport's TreeLodController default; a scene's `treeLod.triangleBudget`
+ * overrides it.
+ */
+export const DEFAULT_TREE_TRIANGLE_BUDGET = 8_000_000;
+
 /** How the camera's view chooses the levels. Every field is continuous except the on/off switches. */
 export interface TreeLodViewOptions {
     /** On-screen size: bands as pixel thresholds at the reference lens. `enabled: false` = metre bands (the old behaviour). */
