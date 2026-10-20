@@ -282,9 +282,9 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `mesh_apply_deformers`: Applies explicit taper, twist, bend, shear, bulge, sculpt, FFD lattice, subdivide, repair and weathering operations to a given GLB; positions and sizes are fractions of the mesh's measured bounding box. A GLB with node transforms, instanced meshes, non-triangle primitives, encodings the native reader cannot decode, several materials or textures is refused, because the reader uses raw vertex positions and the writer writes one material and no textures (the UTDRA tools refuse such tiles too); the output keeps the input's own material. (`mesh_reshape_via_prompt` and its keyword parser, and the tile restructure tools with their closed style/primitive taxonomy, are removed.)
 
 ### 11. VFX, Video & Prompt Formatting (`vfx-video-tools.ts`)
-- `build_beautify_prompt`: Verbatim AI Beautify prompt template.
-- `build_neutral_performer_prompt`: Symmetrical A-pose flat studio prompt builder.
-- `build_frame_motivated_performer_prompt`: `<FIRST_FRAME>` syntax builder.
+- `build_beautify_prompt`: Deprecated hidden tool (since 2026-10-20; remove after one release): `survey_beautify_station`, `survey_beautify_to_splats`, `survey_beautify_to_texture` and `spatial_ai_render_scene` apply the AI Beautify template themselves.
+- `build_neutral_performer_prompt`: Deprecated hidden tool (since 2026-10-20; remove after one release); the template is `buildNeutralPerformerPrompt`. No in-app tool generates performer images or video.
+- `build_frame_motivated_performer_prompt`: Deprecated hidden tool (since 2026-10-20; remove after one release); the template is `buildFrameMotivatedPerformerVideoPrompt`. No in-app tool generates performer video.
 - `vfx_ffmpeg_quick_edit`: Fast trimming and concatenation.
 - `vfx_ffmpeg_extract_frames`: Extracts PNG keyframes.
 - `vfx_ffmpeg_split_screen`: Compiles synchronized side-by-side comparisons.

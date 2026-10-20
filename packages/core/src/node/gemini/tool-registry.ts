@@ -45,6 +45,7 @@ import {
     utdraHandlers,
     VFX_VIDEO_TOOL_DECLARATIONS,
     vfxVideoHandlers,
+    PROMPT_TEMPLATE_TOOL_NAMES,
     AI_BEAUTIFY_TOOL_DECLARATIONS,
     aiBeautifyHandlers,
     ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS,
@@ -126,10 +127,12 @@ export interface ToolRegistrationOptions {
 
 /**
  * Deprecated tool names: registered so saved scripts and chats still dispatch them, but not offered to the model
- * (hidden since 2026-10-20; remove after one release). Each one's description names the tool to call instead.
+ * (hidden since 2026-10-20; remove after one release). Each one's description says what replaces it: the kept
+ * tool for an alias, or the generation path that now applies a prompt template itself.
  */
 export const DEPRECATED_TOOL_ALIASES: ReadonlySet<string> = new Set<string>([
-    ...GEOBOX_RESECTION_ALIAS_TOOL_NAMES
+    ...GEOBOX_RESECTION_ALIAS_TOOL_NAMES,
+    ...PROMPT_TEMPLATE_TOOL_NAMES
 ]);
 
 /** Registration options for a declaration: hidden when its name is a deprecated alias. */
@@ -650,7 +653,7 @@ export function createDefaultToolRegistry(): ToolRegistry {
         registry.register(decl.name, decl, adaptiveMatchmoveHandlers[decl.name], 'workspace');
     }
     for (const decl of VFX_VIDEO_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, vfxVideoHandlers[decl.name], 'workspace');
+        registry.register(decl.name, decl, vfxVideoHandlers[decl.name], 'workspace', offeredUnlessDeprecated(decl.name));
     }
     for (const decl of NANO_BANANA_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, nanoBananaHandlers[decl.name], 'workspace');

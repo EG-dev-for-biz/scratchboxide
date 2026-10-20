@@ -1,7 +1,7 @@
 # Tool consolidation plan (step 3)
 
 **Date:** 2026-10-20
-**Status:** Plan; nothing renamed yet
+**Status:** Steps 1 and 2 done on 2026-10-20 (branch `tool-aliases-templates`); steps 3-6 not started
 
 ## Inventory (live registry, `createDefaultToolRegistry()`)
 
@@ -92,3 +92,26 @@ The `directors-treatment` skill tells the model to make storyboard frames with `
   - `instruction-tool-drift`, after updating skills and the system prompt in the same commit;
   - each pack's own tests.
 - **Check the in-app agent live.** One chat per merged family (operate-scratchbox skill) confirms the model picks the merged tool and its mode correctly.
+
+## Done: steps 1 and 2 (2026-10-20)
+
+### Step 1: resection aliases hidden
+
+- `geobox_resect_image_location` is the one offered name. `geobox_resect_camera_pose` and `spatial_resect_image_location` stay registered (`createDefaultToolRegistry`, `offeredByDefault: false` through `DEPRECATED_TOOL_ALIASES` in `tool-registry.ts`) so saved scripts and chats still dispatch them to the same handler; `declarations()` and `declarationsForPacks()` both leave hidden tools out. Their descriptions start `DEPRECATED alias of geobox_resect_image_location (hidden since 2026-10-20; remove after one release)`.
+- The kept name replaces the aliases in the system prompt (`prompt-builder.ts`), the `image-location-resection` skill, `lighting_match_image_to_location`'s description, `GeoBoxPrecisionResectionService`'s error names and the API ledger. The capability resolver already named the kept tool.
+- Test: `tool-deprecated-aliases.test.ts` (hidden by group and by pack; alias dispatch gives the kept handler's result; one error text from every name).
+
+### Step 2: prompt-template tools folded into generation
+
+Real call sites found:
+
+| Path | Where the template is applied | Status |
+|---|---|---|
+| Survey beautify (`survey_beautify_station`, `survey_beautify_to_splats`, `survey_beautify_to_texture`) | `BeautifyStationService.beautify` -> `buildStationBeautifyPrompt` -> `buildBeautifyPrompt` | Already applied; now proven at the network boundary |
+| Mesh render restyle / AI Beautify of a render (`spatial_ai_render_scene`, and `SceneKeyframeVideoService`, `MeshAiTextureBakingService` through `renderAiBeautyFrame`) | `NativeAiRenderEngineService.buildMeshRenderRestylePrompt` was a hand-copied variant of the no-place template; it now calls `buildClayRenderBeautifyPrompt` (new, in `location-beautify-service.ts`), which `buildBlockoutNanoBananaPrompt`'s no-coordinates branch also reads. One template, two readers. | Wired |
+| Performer video / image capture | None exists. No tool or service in the app generates performer images or video; `buildNeutralPerformerPrompt` and `buildFrameMotivatedPerformerVideoPrompt` are read only by the two template tools, and `VideoTo4DPerformerPipelineService.frameMotivatedInput` (which only records metadata) is passed by nothing in production. | Nothing to wire; the functions stay |
+
+- `build_beautify_prompt`, `build_neutral_performer_prompt` and `build_frame_motivated_performer_prompt` are registered but hidden (`PROMPT_TEMPLATE_TOOL_NAMES` in `vfx-video-tools.ts`, added to `DEPRECATED_TOOL_ALIASES`), with `DEPRECATED (hidden since 2026-10-20; remove after one release)` descriptions. The capability resolver, the `ai-beautify-location-pipeline` and `google-omni-prompting-and-formatting` skills, `preflight_capability.cjs` and the ledger now point at the generating tools (beautify) or the functions (performer).
+- The performer decision is reversible in one line (drop the two names from `PROMPT_TEMPLATE_TOOL_NAMES`) if the user wants the model to keep writing those prompts for runs outside the app.
+- **MCP:** `scratchbox-mcp-server.ts` and `scratchbox-mcp.ts` expose `VFX_VIDEO_TOOL_DECLARATIONS` directly, so the three still appear as `mcp__scratchbox__build_*` to external clients (Claude Code sessions use them). Left as is: an external client has no generation step to fold them into.
+- Test: `beautify-template-in-generation.test.ts` stands a fake GenAI client at `client.models.generateContent` under the real `GoogleMediaGenerationService` and asserts the exact prompt text the mesh render restyle and the survey beautify send.

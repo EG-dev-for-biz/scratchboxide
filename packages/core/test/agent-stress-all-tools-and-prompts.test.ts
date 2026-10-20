@@ -187,7 +187,7 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
                 },
                 {
                     prompt: 'Build video timeline and audit with visual critic',
-                    expected: ['vfx_visual_critic_audit', 'build_beautify_prompt']
+                    expected: ['vfx_visual_critic_audit', 'vfx_composite_timeline']
                 }
             ];
 

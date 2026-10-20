@@ -12,6 +12,7 @@ import { CameraPose6DOF } from './SubPixelEdgeAlignmentOptimizer';
 import { encodePng } from '../texture-processing';
 import { createDefaultStationImageGenerator, describeStationImageSource, toStationImageAnswer, StationImageGenerator } from './BeautifyStationService';
 import { nearestImageAspectRatio } from '../../common/media-generation-protocol';
+import { buildClayRenderBeautifyPrompt } from '../../browser/generative-canvas/services/location-beautify-service';
 
 export interface RenderPasses {
     width: number;
@@ -29,17 +30,13 @@ export interface NativeAiRenderEngineServiceOptions {
 }
 
 /**
- * The restyle prompt for a render of a mesh: the subject the caller describes, the frame's aspect ratio and the
- * framing rules. A mesh render has no place, heading or coordinates, so the prompt names none (it is not a
- * photograph of a real location, and must not be told it is one).
+ * The restyle prompt for a render of a mesh: the AI Beautify clay-render template (buildClayRenderBeautifyPrompt)
+ * with the subject the caller describes, the frame's aspect ratio and the framing rules. A mesh render has no
+ * place, heading or coordinates, so the prompt names none (it is not a photograph of a real location, and must
+ * not be told it is one).
  */
 export function buildMeshRenderRestylePrompt(subject: string, aspectRatio: string, styleSuffix = ''): string {
-    return `Transform this 3D clay rendering into a photorealistic image of: ${subject}. `
-        + `CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly ${aspectRatio} aspect ratio, matching the reference image canvas. `
-        + '(2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. '
-        + '(3) Every part of the subject must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. '
-        + '(4) Do not invent or add objects or features that are not visible in the reference. '
-        + `Add realistic materials, surface texture, lighting and fine detail.${styleSuffix}`;
+    return buildClayRenderBeautifyPrompt({ subject, aspectRatio, styleSuffix });
 }
 
 export class NativeAiRenderEngineService {

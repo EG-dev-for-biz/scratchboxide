@@ -143,7 +143,7 @@ describe('Neutral Performer Studio Prompt Pipeline (Prompt Neutrality Contract)'
         expect(preset.negativePrompt).toContain('room');
     });
 
-    it('executes build_neutral_performer_prompt via the default Gemini tool registry', async () => {
+    it('executes the deprecated hidden build_neutral_performer_prompt via the default Gemini tool registry', async () => {
         const registry = createDefaultToolRegistry();
         const outcome = await registry.dispatch(
             'build_neutral_performer_prompt',
@@ -186,6 +186,7 @@ describe('Neutral Performer Studio Prompt Pipeline (Prompt Neutrality Contract)'
         expect(resolution.tier1Assessment.nativeCapabilitiesUsed).toContain(
             'Neutral Performer Studio Prompt Pipeline (buildNeutralPerformerPrompt)'
         );
-        expect(resolution.tier1Assessment.suggestedNativeAction?.serviceOrTool).toContain('build_neutral_performer_prompt');
+        expect(resolution.tier1Assessment.suggestedNativeAction?.serviceOrTool).toContain('buildNeutralPerformerPrompt');
+        expect(resolution.tier1Assessment.suggestedNativeAction?.targetTool).toBeUndefined();
     });
 });
