@@ -17,10 +17,12 @@ import {
     OBJECT_BUILD_SPEC_JSON_SCHEMA,
     buildObjectSpecScript,
     countInstances,
+    normalizeChildOrigins,
     toPythonLiteral,
     validateObjectBuildSpec,
     type ObjectBuildSpec
 } from '../src/common/spatial/object-build-spec';
+import { applySpecPatch } from '../src/node/3d-engine/reference-object-builder';
 
 const revolve = (over: Record<string, unknown> = {}) => ({
     axisOrigin: [0, 0, 0], axisDirection: [0, 1, 0], meridian: [[0, 0], [0, 0.2], [1, 0.2], [1, 0]],
@@ -185,5 +187,61 @@ describe('build script', () => {
         expect(script).toContain(JSON.stringify(spec.subject));
         expect(toPythonLiteral(null)).toBe('None');
         expect(() => toPythonLiteral(NaN)).toThrow();
+    });
+});
+
+describe('normalizeChildOrigins', () => {
+    it('moves child geometry to start at its attach point, leaves roots and valid children alone, and says what moved', () => {
+        const spec = withPart(s => {
+            s.parts[1].sweep.controlPoints = [[0.1, 0.2, 0], [0.6, -0.3, 0]];
+            s.parts.push({ id: 'cap', label: 'cap', parentId: 'body', attach: { u: 1, angleDeg: 0, normalOffsetMeters: 0 }, revolve: revolve({ axisOrigin: [0, 0.5, 0], meridian: [[0.2, 0], [0.2, 0.1], [0.3, 0]] }) });
+            s.parts[0].revolve.axisOrigin = [0, 0.1, 0];
+        });
+        const { value, notes } = normalizeChildOrigins(spec);
+        const parts = (value as any).parts;
+        expect(parts[1].sweep.controlPoints).toEqual([[0, 0, 0], [0.5, -0.5, 0]]);
+        expect(parts[4].revolve.axisOrigin).toEqual([0, 0, 0]);
+        expect(parts[4].revolve.meridian).toEqual([[0, 0], [0, 0.1], [0.09999999999999998, 0]]);
+        // a root keeps its absolute axisOrigin
+        expect(parts[0].revolve.axisOrigin).toEqual([0, 0.1, 0]);
+        expect(notes).toEqual([
+            'part "arm": control points shifted by [-0.1, -0.2, 0] m so the sweep starts at its attach point',
+            'part "cap": axisOrigin [0, 0.5, 0] set to [0, 0, 0] so the revolve\'s axis passes through its attach point',
+            'part "cap": meridian shifted -0.2 m along the axis so it reaches its attach point'
+        ]);
+        expect(validateObjectBuildSpec(value)).toEqual([]);
+        // the input is not changed, and a spec that needs nothing comes back as it is
+        expect((spec as any).parts[1].sweep.controlPoints[0]).toEqual([0.1, 0.2, 0]);
+        const clean = baseSpec();
+        expect(normalizeChildOrigins(clean)).toEqual({ value: clean, notes: [] });
+        expect(normalizeChildOrigins('not a spec')).toEqual({ value: 'not a spec', notes: [] });
+    });
+});
+
+describe('applySpecPatch', () => {
+    it('replaces parts by id in place, adds new ids, drops removed ones, and takes changed top-level fields', () => {
+        const base = baseSpec();
+        const { spec, problems } = applySpecPatch(base, {
+            parts: [{ ...base.parts[1], label: 'long arm' }, { id: 'knob', label: 'knob', parentId: 'body', attach: { u: 1, angleDeg: 0, normalOffsetMeters: 0 }, revolve: revolve() }],
+            removePartIds: ['rings'],
+            expectedBodies: 1,
+            boundingMeters: [1, 1.4, 1]
+        });
+        expect(problems).toEqual([]);
+        expect(spec!.parts.map(p => [p.id, p.label])).toEqual([['body', 'body'], ['arm', 'long arm'], ['arms', 'arms'], ['knob', 'knob']]);
+        expect(spec!.boundingMeters).toEqual([1, 1.4, 1]);
+        expect(spec!.subject).toBe('lamp');
+        expect(base.parts[1].label).toBe('arm');
+    });
+
+    it('names what is wrong with a reply that is not a usable patch', () => {
+        const base = baseSpec();
+        expect(applySpecPatch(base, 'x').problems).toEqual(['the reply must be a JSON object with a parts list']);
+        expect(applySpecPatch(base, {}).problems).toEqual(['the reply needs a parts list (empty when no part changes)']);
+        expect(applySpecPatch(base, { parts: [{ id: 'arm' }], removePartIds: ['arm', 'ghost'] }).problems).toEqual([
+            'removePartIds: "ghost" does not name a part of the current spec',
+            'part "arm" is both changed and listed in removePartIds'
+        ]);
+        expect(applySpecPatch(base, { parts: [{ label: 'no id' }] }).problems).toEqual(['parts[0] must be a part object with an id']);
     });
 });
