@@ -23,6 +23,7 @@ import { TileExtractionError } from '../src/common/errors/pipeline-errors';
 import { SCENE_TREE_DRAWN_TRIANGLES_PER_FRAME, SCENE_TREE_TRIANGLE_CAP, TileVegetationService, type TileVegetationPlantRequest, type TileVegetationStripRequest } from '../src/node/3d-engine/tile-vegetation-service';
 import { TileRefineService, type TileRefineRequest, type TileRefineResult } from '../src/node/3d-engine/tile-refine-service';
 import { buildSyntheticTile, type SyntheticTileSpec } from './helpers/synthetic-textured-tile';
+import { DEFAULT_TREE_TRIANGLE_BUDGET } from '../src/common/spatial/tree-lod-math';
 import { readGlbTriangles } from './helpers/clay-glb-render';
 
 const REPO = fs.realpathSync(path.resolve(__dirname, '../../..'));
@@ -106,6 +107,8 @@ describe('runLocationClayPipeline', () => {
         const trees = readGlbTriangles(fs.readFileSync(published));
         // the budgeted tiers: every tree's blob leaf masses and wood within its budget; the file's far level shares the wood the near levels hold whole
         expect(trees.indices.length / 3).toBe(trees.nodeRanges.reduce((n, t) => n + t.extras.lod.woodTriangles + t.extras.foliageTriangles, 0));
+        // three trees draw far less than a park (the ceiling itself is checked on a park-scale plant below)
+        expect(r.trees!.drawnPerFrame!.maxTriangles).toBeGreaterThan(0);
         expect(r.trees!.drawnPerFrame!.maxTriangles).toBeLessThanOrEqual(SCENE_TREE_DRAWN_TRIANGLES_PER_FRAME);
         expect(r.trees!.levelTriangles!.level1).toBeLessThan(r.trees!.levelTriangles!.level0);
         expect(trees.nodeRanges).toHaveLength(3);
@@ -528,3 +531,59 @@ function shiftPatch(file: string, dx: number, dz: number): string {
     fs.writeFileSync(out, Buffer.concat([header, jh, jsonBuf, bh, bin]));
     return out;
 }
+
+/**
+ * A measured crown as the strip writes it: a disc of surface samples at 0.7 m spacing under a rounded top (the shape
+ * tile-vegetation-lod.test.ts uses), standing on flat ground.
+ */
+function parkCrown(id: number, stem: [number, number], apexY: number, radius: number) {
+    const samples: Array<[number, number, number]> = [];
+    const n = Math.ceil(radius / 0.7);
+    for (let i = -n; i <= n; i++) for (let k = -n; k <= n; k++) {
+        const dx = i * 0.7, dz = k * 0.7, d = Math.hypot(dx, dz);
+        if (d <= radius) samples.push([stem[0] + dx, apexY - 0.45 * apexY * (d / radius) ** 2, stem[1] + dz]);
+    }
+    return {
+        id, status: 'tree', reachesBoundary: false, apex: [stem[0], apexY, stem[1]], stem, supportY: 0, supportSource: 'given', terrainY: 0,
+        apexAboveSupport: apexY, areaM2: Math.PI * radius * radius, sectorRadii: new Array(16).fill(radius), samples
+    };
+}
+
+describe('SCENE_TREE_DRAWN_TRIANGLES_PER_FRAME on a park', () => {
+    // A park like Washington Square's planting: about 380 trees on a jittered 12.5 m grid over 250 x 250 m, 9-24 m tall,
+    // crowns 3.5-7.5 m in radius, planted under the scene's cap as the pipeline plants them.
+    function writePark(file: string): number {
+        let seed = 12345;
+        const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+        const crowns: unknown[] = [];
+        for (let gx = 0; gx < 20; gx++) for (let gz = 0; gz < 20; gz++) {
+            if (rnd() < 0.06) continue;                                      // a few gaps, as paths and lawns leave
+            const h = 9 + 15 * rnd();
+            crowns.push(parkCrown(crowns.length, [-125 + gx * 12.5 + 3 * (rnd() - 0.5), -125 + gz * 12.5 + 3 * (rnd() - 0.5)], h, Math.min(7.5, 3.5 + 0.22 * h * rnd() + 1.5)));
+        }
+        fs.writeFileSync(file, JSON.stringify({ version: 1, frame: { frame: 'x = east, y = up, z = south (metres)' }, params: { sampleSpacing: 0.7 }, crowns }));
+        return crowns.length;
+    }
+
+    it('holds the unbudgeted frame estimate of a park-scale planting, which reaches the viewport budget, and catches bands that reach farther', async () => {
+        const count = writePark(path.join(root, 'park_crowns.json'));
+        expect(count).toBeGreaterThan(350);
+        const park = await vegetation.plant({ crownsPath: 'park_crowns.json', sceneTriangleCap: SCENE_TREE_TRIANGLE_CAP, seed: '9a7c' });
+        const f = park.stats.lodFrames;
+        expect(park.stats.trees).toBe(count);
+        // park scale (measured: median 9.8 M, p95 12.9 M, max 14.4 M): views that reach the viewport's budget, and a p95 within
+        // reach of the ceiling, so a level that grows or a band that reaches farther crosses it
+        expect(f.max).toBeGreaterThan(0.8 * DEFAULT_TREE_TRIANGLE_BUDGET);
+        expect(f.p95).toBeGreaterThan(0.5 * SCENE_TREE_DRAWN_TRIANGLES_PER_FRAME);
+        expect(f.max, `lodFrames ${JSON.stringify({ median: f.median, p95: f.p95, max: f.max })}`).toBeLessThanOrEqual(SCENE_TREE_DRAWN_TRIANGLES_PER_FRAME);
+        // the same park with the near-mid and mid levels reaching twice as far breaks the ceiling: the check is live
+        const longer = await vegetation.plant({ crownsPath: 'park_crowns.json', sceneTriangleCap: SCENE_TREE_TRIANGLE_CAP, seed: '9a7c', params: { lodNearMidPerHeight: 12, lodNearMidMax: 200, lodFarPerHeight: 16, lodFarMax: 280 } });
+        expect(longer.stats.lodFrames.max).toBeGreaterThan(SCENE_TREE_DRAWN_TRIANGLES_PER_FRAME);
+        // the measurements, for the record (test-results/ is git-ignored)
+        const out = path.join(REPO, 'test-results', 'screenshots', 'tree_budget_tune');
+        fs.mkdirSync(out, { recursive: true });
+        const pick = (x: any) => ({ trees: x.trees, poses: x.lodFrames.poses, median: x.lodFrames.median, p95: x.lodFrames.p95, max: x.lodFrames.max });
+        fs.writeFileSync(path.join(out, 'park_lodframes.json'), JSON.stringify({ ceiling: SCENE_TREE_DRAWN_TRIANGLES_PER_FRAME, viewportBudget: DEFAULT_TREE_TRIANGLE_BUDGET, park: pick(park.stats), longerBands: pick(longer.stats) }, null, 1));
+    }, 600_000);
+});
+
