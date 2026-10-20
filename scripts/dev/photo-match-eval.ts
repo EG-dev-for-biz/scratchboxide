@@ -17,8 +17,14 @@
  *   "occluder"?: "geometry.glb",                              // the full tile mesh: what stands in front hides every arm alike
  *   "context"?: { "glb": "textured.glb", "cut": "raw_clay.glb" | ["raw_clay.glb", "removed_trees.glb"] },  // in context: every arm drawn in the same street (below)
  *   "clay"?: true,                                            // also every arm in uniform clay from the same pose, judged for shape only
- *   "treeLod"?: false                                         // trees GLBs: default true = one level per tree per view, as the viewport
- * }                                                           //   chooses it, leaves expanded; false = every level drawn at once
+ *   "treeLod"?: false,                                        // trees GLBs: default true = one level per tree per view, as the viewport
+ *                                                             //   chooses it, leaves expanded; false = every level drawn at once
+ *   "visibility"?: { "target": "iso.glb", "occluders": ["removed_trees.glb"] }  // building-visibility weight per view (below)
+ * }
+ * With `visibility`, each view reports `visibility`: `target`, the share of the view's pixels the mask arm covers (the target
+ * as the context leaves it visible), and `visible`, the share of those pixels not hidden by the occluders (e.g. the scanned
+ * trees the context leaves out): a pixel is hidden when an occluder's depth lies 0.5 m or more in front of the target's
+ * (`target` is the isolate's own clay, so the depth is the target's). Aggregates weight each view by `visible`.
  * A trees GLB (the tree LOD contract) in an arm is drawn per view as the viewport would show it from that pose: one level per tree by
  * on-screen size and place in the frame (tree-lod-view.ts), its instanced leaves expanded. The report's view entries carry each
  * arm's tree choices (`trees`: trees per level, triangles drawn against every level's).
@@ -103,6 +109,8 @@ async function main(): Promise<void> {
         console.log(`[photo-match] context: ${cut.texture.length} of ${full.texture.length} tile triangles (the target cut out)`);
     }
     const occluder = !context && m.occluder ? sceneToRenderMesh(readGlbScene(m.occluder)) : undefined;
+    const visTarget = m.visibility ? sceneToRenderMesh(readGlbScene(m.visibility.target)) : undefined;
+    const visOccluders = m.visibility ? (m.visibility.occluders as string[]).map(g => sceneToRenderMesh(readGlbScene(g))) : [];
     const chain = noJudge ? undefined : await judgeClient();
     const report: Json = { place: m.place, slug: m.slug, inContext: !!m.context, arms: arms.map((a: Json) => ({ id: a.id, label: a.label, glbs: a.glbs, triangles: a.tris })), views: [] };
     for (const v of m.views) {
@@ -122,6 +130,19 @@ async function main(): Promise<void> {
         const renders = arms.map((a: Json, i: number) => ({ arm: a, r: pm.renderTriangles(forView[i].meshes, camera, { ...(occluderDepth ? { occluderDepth } : {}), ...(context ? { context } : {}) }) }));
         const maskSrc = renders.find((x: Json) => x.arm.id === (m.maskArm ?? arms[0].id))!.r;
         const mask = pm.coverageMask(maskSrc);
+        let visibility: Json;
+        if (visTarget) {
+            const td = renderFrameDepth(visTarget, camera);
+            const od = visOccluders.map((o: Json) => renderFrameDepth(o, camera));
+            let tgt = 0, vis = 0;
+            for (let i = 0; i < mask.length; i++) {
+                if (!mask[i]) continue;
+                tgt++;
+                const z = td[i];
+                if (!od.some((d: Float32Array) => Number.isFinite(d[i]) && d[i] > 0 && (!Number.isFinite(z) || d[i] < z - 0.5))) vis++;
+            }
+            visibility = { target: Math.round((tgt / mask.length) * 1e4) / 1e4, visible: Math.round((vis / mask.length) * 1e4) / 1e4 };
+        }
         const perceptual: Json = {};
         for (const { arm, r } of renders) {
             perceptual[arm.id] = pm.perceptualScores(photo, r, mask);
@@ -153,7 +174,7 @@ async function main(): Promise<void> {
         }
         const grid = path.join(gridDir, `${m.slug}_${v.id}.png`);
         fs.writeFileSync(grid, pm.composeGrid(tiles, { tileWidth: 560, columns: Math.min(4, tiles.length), title: `${m.place} - ${v.label ?? v.id}${context ? ' - IN CONTEXT' : ''}` }));
-        report.views.push({ id: v.id, label: v.label, panoId: v.panoId ?? v.pose?.panoId, size: [img.width, img.height], maskPixels: mask.reduce((s: number, x: number) => s + x, 0), perceptual, ...(judge ? { judge } : {}), ...(clayJudge ? { clayJudge } : {}), ...(clayGrid ? { clayGrid } : {}), ...(Object.keys(treeChoices).length ? { trees: treeChoices } : {}), grid, renderMs: Object.fromEntries(renders.map((x: Json) => [x.arm.id, x.r.ms])) });
+        report.views.push({ id: v.id, label: v.label, panoId: v.panoId ?? v.pose?.panoId, size: [img.width, img.height], maskPixels: mask.reduce((s: number, x: number) => s + x, 0), ...(visibility ? { visibility } : {}), perceptual, ...(judge ? { judge } : {}), ...(clayJudge ? { clayJudge } : {}), ...(clayGrid ? { clayGrid } : {}), ...(Object.keys(treeChoices).length ? { trees: treeChoices } : {}), grid, renderMs: Object.fromEntries(renders.map((x: Json) => [x.arm.id, x.r.ms])) });
         console.log(`[photo-match] ${m.slug} ${v.id}: ${arms.map((a: Json) => `${a.id} ${judge ? judge.stats[a.id].overall.mean : '-'}${clayJudge ? ` clay ${clayJudge.stats[a.id].shape.mean}` : ''} (ssim ${perceptual[a.id].ssim}, edge ${perceptual[a.id].edgeChamferPx}, dE ${perceptual[a.id].colourDeltaE}, cov ${perceptual[a.id].coverage})`).join(' | ')} -> ${grid}`);
         fs.writeFileSync(path.join(outDir, 'report.json'), JSON.stringify(report, null, 1));
     }

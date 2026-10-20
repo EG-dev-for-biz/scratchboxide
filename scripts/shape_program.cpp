@@ -90,7 +90,7 @@ void runScan(std::istream& in, std::ostream& out) {
         bool first = true;
         for (const auto& kv : R.treeByCrown) { js << (first ? "" : ",") << "{\"crown\":" << kv.first << ",\"triangles\":" << kv.second.first << ",\"areaM2\":" << sd::fmt(kv.second.second) << "}"; first = false; }
     }
-    js << "]},\"treeInsideFootprintKept\":{\"triangles\":" << R.triTreeKept << ",\"areaM2\":" << sd::fmt(R.areaTreeKept) << "}}";
+    js << "]},\"treeInsideFootprintKept\":{\"triangles\":" << R.triTreeKept << ",\"areaM2\":" << sd::fmt(R.areaTreeKept) << "},\"buildingOutsideOutline\":{\"triangles\":" << R.triOutsideOutline << "}}";
     js << ",\"footprintAgreement\":" << sd::fmt(R.footprintAgreement) << ",\"outlineSource\":" << sd::jstr(R.outlineSource);
     js << ",\"levels\":[";
     for (size_t i = 0; i < R.modes.size(); ++i) js << (i ? "," : "") << "{\"h\":" << sd::fmt(R.modes[i].first) << ",\"areaM2\":" << sd::fmt(R.modes[i].second) << "}";

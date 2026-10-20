@@ -2004,7 +2004,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const shapeT0 = now();
                     const shapeVision = visionAvailable ? new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...chainExtras('remesh'), ...(deps.sleep ? { sleep: deps.sleep } : {}) }) : undefined;
                     const sr = await runShapeStage({
-                        mode: shapeMode, isolateGlb: refined.rawClayGlb, groundY: picked.pick.groundY, footprintLoops: shapeFootprint.flatMap(b => b.parts.flat()),
+                        mode: shapeMode, isolateGlb: refined.rawClayGlb, groundY: picked.pick.groundY, footprintLoops: shapeFootprint.flatMap(b => (b.extruded?.length ? b.extruded.flatMap(p => p.loops) : b.parts.flat())),
                         ...(strip ? { crownsJson: strip.crownsJson, removedTreesGlb: strip.removedTreesGlb } : {}), scanTop, cells: picked.pick.cells, place: placeValue!.formattedAddress || request.query,
                         ...(shapeVision ? { vision: shapeVision } : {}), outDir: path.join(dir, 'shape'), signal: io.signal
                     });

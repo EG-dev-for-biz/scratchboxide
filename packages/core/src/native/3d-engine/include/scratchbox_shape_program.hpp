@@ -469,7 +469,7 @@ struct ScanResult {
     std::vector<TierOut> tiers;
     std::vector<std::pair<double, double>> modes;  // (height above the street, up-facing area)
     std::vector<std::vector<P2>> outlineUV;        // the building's outline loops (frame)
-    size_t triTotal{0}, triBuilding{0}, triGround{0}, triTree{0}, triTreeKept{0};
+    size_t triTotal{0}, triBuilding{0}, triGround{0}, triTree{0}, triTreeKept{0}, triOutsideOutline{0};
     double areaBuilding{0}, areaGround{0}, areaTree{0}, areaTreeKept{0};
     std::map<int, std::pair<size_t, double>> treeByCrown;
     double footprintAgreement{-1};
@@ -487,7 +487,7 @@ struct ScanParams {
     double footprintDilate{2.0};     // the vector footprint, grown by this, bounds the height map where the two agree
     double agreeShare{0.5};          // share of the footprint's cells the height map must cover to agree
     double modeBandwidth{0.25};      // mean-shift kernel of the tier levels (m)
-    double modeMerge{1.2};           // levels closer than this are one (m)
+    double modeMerge{1.5};           // levels closer than this are one (m)
     double minTierArea{6.0};         // a level, or a tier region, needs this much area (m^2)
     double minTierShare{0.02};       // ... or this share of the building's plan, whichever is larger
     int maxTiers{6};
@@ -507,10 +507,10 @@ inline ScanResult analyseScan(const std::string& isolate, double groundY, const 
     const auto& vs = sc.mesh.vertices;
     const auto& ix = sc.mesh.indices;
     R.triTotal = ix.size() / 3;
+    // the union of the footprint's loops (Google's parts can be triangles repeated with both windings: even-odd would cancel)
     auto inFootprint = [&](double x, double z) {
-        bool in = false;
-        for (const auto& l : footprintXZ) if (l.size() >= 3 && detail::inRing(x, z, l)) in = !in;
-        return in;
+        for (const auto& l : footprintXZ) if (l.size() >= 3 && detail::inRing(x, z, l)) return true;
+        return false;
     };
     // --- classify: ground, tree, building
     std::vector<std::array<P3, 3>> bld;
@@ -621,6 +621,24 @@ inline ScanResult analyseScan(const std::string& isolate, double groundY, const 
     const double planArea = maskCells * g.cell * g.cell;
     if (planArea < 4.0) throw std::runtime_error("no part of the tree-free scan stands " + std::to_string(P.minBuildingH) + " m above the street");
     R.outlineUV = traceLoops(closeOpen(R.mask, g, std::max(1, static_cast<int>(std::round(P.cleanRadius / g.cell)))), g, P.simplifyTol, P.squareDeg);
+    // the building is what stands over its cells (grown by a metre): fragments of the isolate outside it (fences, ground
+    // skirts, a neighbour's edge) leave the fit's targets and the views
+    {
+        auto grown = morph(R.mask, g, std::max(1, static_cast<int>(std::round(1.0 / g.cell))), true);
+        Soup kept;
+        size_t dropped = 0;
+        for (size_t t = 0; t < R.building.size(); ++t) {
+            P3 cen = (R.building.p[3 * t] + R.building.p[3 * t + 1] + R.building.p[3 * t + 2]) * (1.0 / 3);
+            int i = static_cast<int>(std::floor((cen.x - g.u0) / g.cell)), j = static_cast<int>(std::floor((cen.z - g.v0) / g.cell));
+            if (i >= 0 && j >= 0 && i < g.nu && j < g.nv && grown[static_cast<size_t>(j) * g.nu + i]) kept.tri(R.building.p[3 * t], R.building.p[3 * t + 1], R.building.p[3 * t + 2], 0);
+            else dropped++;
+        }
+        R.triOutsideOutline = dropped;
+        R.building = std::move(kept);
+        std::vector<float> hClean;
+        rasterTop(R.building, g, hClean);
+        R.height = std::move(hClean);
+    }
     // --- tier levels: modes of the up-facing area and of the cell heights (mean shift), merged
     const double minArea = std::max(P.minTierArea, P.minTierShare * planArea);
     struct Item { double y, w; };
@@ -883,7 +901,7 @@ inline void emitRevolve(const Element& e, P3 shift, int ei, Soup& s) {
         std::vector<P3> ring;
         const double z = base + shift.y + pr.u * sz, tw = e.twistDeg * PI / 180 * (pr.u / zmax);
         for (int k = 0; k < seg; ++k) {
-            double th = 2 * PI * k / seg + tw;
+            double th = 2 * PI * (k + 0.5) / seg + tw;  // a flat side (not a corner) faces each frame axis
             double r = std::max(0.0, pr.v * sr * (1 + e.lobeAmp * std::cos(e.lobes * (th - tw))));
             ring.push_back({cu + r * std::cos(th), z, cv + r * std::sin(th)});
         }

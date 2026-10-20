@@ -35,9 +35,9 @@ import { readTileTriangles } from '../tile-texture-transfer';
 import type { VisionModelChain } from '../../../gemini/vision-model-chain';
 import { checkMassing, inLoops, ringArea, type Massing, type MassingMesh, type MassingPart } from './massing-spec';
 import { SHAPE_PROGRAM_TOKEN, SHAPE_TIERS_TOKEN } from './pipeline-e';
-import { applyHandles, elementHandles, programSpecText, readF32, readU8, runShapeTool, SHAPE_PROGRAM_JSON_SCHEMA, validateProgram, type ParameterRecord, type ScanTargets, type ShapeProgram, type UV } from './shape-program';
+import { applyHandles, elementHandles, ensureShapeBinary, programSpecText, readF32, readU8, runShapeTool, SHAPE_PROGRAM_JSON_SCHEMA, validateProgram, type ParameterRecord, type ScanTargets, type ShapeProgram, type UV } from './shape-program';
 
-export const SHAPE_STAGE_VERSION = 'shape-program/v1';
+export const SHAPE_STAGE_VERSION = 'shape-program/v2';
 /** Thinking budget of the program call: under 1,024 tokens is LOW on Gemini 4. */
 export const SHAPE_THINKING_BUDGET = 512;
 /** A fit leaving more than this silhouette disagreement (1 - IoU, mean of the views) or height error (share of the building's height) asks for one correction. */
@@ -315,6 +315,9 @@ export async function runShapeStage(input: ShapeStageInput): Promise<ShapeStageR
     timingsMs.treeMeasure = Date.now() - t;
     // ---- 2. the native scan analysis (tree split, frame, height grid, tiers, views)
     t = Date.now();
+    await ensureShapeBinary();
+    timingsMs.nativeBinaryCheck = Date.now() - t;
+    t = Date.now();
     const scanDir = path.join(input.outDir, 'scan');
     const spec = ['mode scan', `out ${scanDir}`, `isolate ${input.isolateGlb}`, `ground ${input.groundY}`, ...fpLoops.map(l => `footprint ${l.length} ${l.map(p => `${p[0]} ${p[1]}`).join(' ')}`), ...trees.crownLines].join('\n') + '\n';
     const scanRun = await runShapeTool(spec, scanDir, { ...(input.signal ? { signal: input.signal } : {}) });
@@ -326,6 +329,7 @@ export async function runShapeStage(input: ShapeStageInput): Promise<ShapeStageR
     fs.writeFileSync(path.join(input.outDir, 'trees.json'), JSON.stringify(trees.report, null, 1));
     files.trees = path.join(input.outDir, 'trees.json');
     // the tree-removal mask (top-down): building height grey, removed tree triangles green (inside the footprint: red), crowns outlined
+    t = Date.now();
     {
         const g = scan.grid, fr = scan.frame;
         const toUV = (x: number, z: number): UV => { const c = Math.cos(fr.theta), s = Math.sin(fr.theta), dx = x - fr.ox, dz = z - fr.oz; return [c * dx + s * dz, -s * dx + c * dz]; };
@@ -346,6 +350,7 @@ export async function runShapeStage(input: ShapeStageInput): Promise<ShapeStageR
         files.treeMask = path.join(input.outDir, 'tree_mask.png');
         fs.writeFileSync(files.treeMask, cv.png());
     }
+    timingsMs.treeMaskImage = Date.now() - t;
     const checkInputs = { groundY: input.groundY, scanTop: input.scanTop, cells: input.cells };
     const scanRecord = { frame: scan.frame, grid: scan.grid, levels: scan.levels, tiers: scan.tiers.map(x => ({ baseY: x.baseY, topY: x.topY, areaM2: x.areaM2, loops: x.loops.length })), footprintAgreement: scan.footprintAgreement, outlineSource: scan.outlineSource, notes: scan.notes, timingsMs: scan.timingsMs };
     notes.push(`outline: ${scan.outlineSource}${scan.footprintAgreement !== null && scan.footprintAgreement >= 0 ? ` (the height map covers ${Math.round(scan.footprintAgreement * 100)}% of the vector footprint)` : ''}`);
