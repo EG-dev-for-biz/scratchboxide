@@ -32,6 +32,9 @@ export const LOW_COVERAGE = 0.35;
 import type { SolarRoofSegment } from './solar-roof';
 
 export const PIPELINE_E_VERSION = 'pipeline-e/v1';
+/** Provenance tokens of the shape program trial's parts (passed through the native tool to the nodes). */
+export const SHAPE_TIERS_TOKEN = 'shape-tiers-measured';
+export const SHAPE_PROGRAM_TOKEN = 'shape-program-inferred';
 
 /** SCRATCHBOX_STAGED_PIPELINE=e turns pipeline E on (off by default). */
 export function stagedPipelineE(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -61,6 +64,8 @@ export interface MassingStageInput {
     solar?: Array<SolarRoofSegment & { x: number; z: number; y: number }>;
     outDir: string;
     signal?: AbortSignal;
+    /** A massing made elsewhere (the shape program trial): used instead of the vector massing, with its own check. */
+    massing?: Massing;
 }
 
 export interface MassingLayerFiles { clayGlb: string; texturedGlb: string; texturedShares: number[] }
@@ -80,6 +85,10 @@ export function massingProvenance(node: Pick<MassingNode, 'kind' | 'provenance' 
     if (node.kind === 'residual') return { label: 'as-scanned', measuredGeometry: true, method: 'scan triangles the clean massing does not explain (clearly proud of it, cut into it, or the ground apron), kept with their tile photo', sources: [{ kind: 'tile-extraction', id: 'isolate' }] };
     // openings cut from an enhanced plate's lattice (or read from a plate and checked on the tile): drawn by an image model
     if (node.provenance === 'generated') return { label: 'generated', measuredGeometry: false, confidence: Math.max(0, Math.min(1, node.confidence ?? 0.5)), method: `pipeline E enhanced mode: ${node.kind} cut where an AI-enhanced wall plate shows it (the plate's own lattice, its lines fitted to the plate's edges); no window grammar of the scan placed it`, sources: [{ kind: 'stage-output', id: 'pipeline-e-enhance' }] };
+    // the shape program trial (shape-stage.ts): height-map tiers are measured; a program's structure is read by a vision
+    // model from the tree-free scan, its numbers fitted to the scan (the parameters and their labels in the stage's note)
+    if (node.provenance === SHAPE_TIERS_TOKEN) return { label: 'measured', measuredGeometry: true, confidence: 0.8, method: 'shape program trial: stacked extrusions at the tree-free scan\'s tier heights (height-map modes), outlines traced from its height map and squared to the dominant wall directions', sources: [{ kind: 'tile-extraction', id: 'isolate' }] };
+    if (node.provenance === SHAPE_PROGRAM_TOKEN) return { label: 'photo-inferred', measuredGeometry: false, confidence: 0.6, method: 'shape program trial: the structure read by a vision model from a contact sheet of the tree-free scan (one call, structured output), as continuous geometric operators; every numeric handle fitted to the scan\'s height map and oblique silhouettes (measured)', sources: [{ kind: 'tile-extraction', id: 'isolate' }, { kind: 'stage-output', id: 'shape-program' }] };
     if (node.provenance === 'photo-inferred' || (node.kind === 'roof' && node.provenance.includes('photo-inferred'))) return { label: 'photo-inferred', measuredGeometry: false, confidence: Math.max(0, Math.min(1, node.confidence ?? 0.5)), method: `pipeline E inference: ${node.kind} read from the tile's photo and kept where the scan agrees`, sources: [{ kind: 'stage-output', id: 'pipeline-e-inference' }] };
     return {
         label: 'vector-massing', measuredGeometry: false, confidence: Math.max(0, Math.min(1, massing.check.iou)),
@@ -137,7 +146,7 @@ export function writeMassingLayer(run: MassingRun, massing: Pick<Massing, 'check
 export async function runMassingStage(input: MassingStageInput, stage = 'remesh', stageKey = 'pipeline-e'): Promise<MassingStageResult> {
     const timingsMs: Record<string, number> = {};
     let t = Date.now();
-    const massing = buildMassing({ buildings: input.buildings, groundY: input.groundY, scanTop: input.scanTop, cells: input.cells, ...(input.solar ? { solar: input.solar } : {}) });
+    const massing = input.massing ?? buildMassing({ buildings: input.buildings, groundY: input.groundY, scanTop: input.scanTop, cells: input.cells, ...(input.solar ? { solar: input.solar } : {}) });
     timingsMs.massing = Date.now() - t;
     fs.mkdirSync(input.outDir, { recursive: true });
     fs.writeFileSync(path.join(input.outDir, 'massing.json'), JSON.stringify(massing, null, 1));

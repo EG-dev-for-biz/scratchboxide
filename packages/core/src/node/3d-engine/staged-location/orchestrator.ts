@@ -142,6 +142,8 @@ import { runInferenceE, type InferenceOutcome, type StepRecord } from './pipelin
 import { gateDecision, photoMatchGate, pipelineERelief, runReliefStage, GENERATED_LABEL, MEASURED_AVERAGED_LABEL, RELIEF_GATE_JUDGE, RELIEF_PARAMS, RELIEF_VERSION, type PhotoGateResult, type ReliefOutcome } from './pipeline-e/relief';
 import { crownsFromStrip } from './pipeline-e/occluders';
 import { enhanceGuards, enhanceModels, genAiPlateClient, stagedEnhance, ENHANCE_STREET_VIEWS } from './pipeline-e/enhance';
+import { stagedShapeProgram } from './pipeline-e/shape-program';
+import { runShapeStage, SHAPE_STAGE_VERSION } from './pipeline-e/shape-stage';
 import { projectionViewsFromEvidence } from './texture-pass';
 import { registeredSurveyViews } from './streetview-registered-views';
 import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
@@ -1164,7 +1166,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // building's vector footprint, else the current pipeline runs and the reason is recorded
         const pipelineE = stagedPipelineE() && request.isolate;
         const eBuildings = structure?.vectorFootprint?.used && t.vector ? t.vector.raster.buildings.filter(b => structure.vectorFootprint!.featureIds.includes(b.id)) : [];
-        const eWhyNot = !pipelineE ? undefined : !isolateMode ? 'the structure could not be isolated' : !eBuildings.length ? `the structure's footprint did not come from Google vector data (${structure?.vectorFootprint?.reason ?? 'no vector footprint at the place'})` : undefined;
+        // the shape program trial (SCRATCHBOX_STAGED_SHAPE_PROGRAM) shapes from the tree-free scan: a vector footprint only
+        // bounds the height map where the two agree, so a footprint that disagrees (or none) does not send the build back
+        const shapeMode = pipelineE ? stagedShapeProgram() : undefined;
+        const shapeFootprint = t.vector && structure?.vectorFootprint?.featureIds?.length ? t.vector.raster.buildings.filter(b => structure.vectorFootprint!.featureIds.includes(b.id)) : [];
+        const eWhyNot = !pipelineE ? undefined : !isolateMode ? 'the structure could not be isolated' : !eBuildings.length && !shapeMode ? `the structure's footprint did not come from Google vector data (${structure?.vectorFootprint?.reason ?? 'no vector footprint at the place'})` : undefined;
         const eEligible = pipelineE && !eWhyNot;
         const startSurvey = (): void => {
         if (isolateMode && visionForSurvey) {
@@ -1987,12 +1993,26 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         solarNote = `${solar.length} Solar roof facets (imagery ${sr.imageryQuality ?? '?'}, ${sr.imageryDate ?? 'date unknown'})`;
                     } catch (err) { solarNote = `no Solar roof facets (${errorMessage(err)})`; }
                 }
-                const key = stageKey(PIPELINE_E_VERSION, refined.cacheKey, sha256File(tilePath).slice(0, 16), sha256Bytes(Buffer.from(JSON.stringify({ eBuildings, solar }))));
+                const key = stageKey(PIPELINE_E_VERSION, refined.cacheKey, sha256File(tilePath).slice(0, 16), sha256Bytes(Buffer.from(JSON.stringify({ eBuildings, solar }))), ...(shapeMode ? [SHAPE_STAGE_VERSION, shapeMode, request.query.trim()] : []));
                 const dir = path.join(cache.dir, 'pipeline_e', key.slice(0, 24));
                 io.progress('pipeline E: the clean massing, its orthos and the scanned residual');
                 const ground = picked.ground;
                 const scanTop = (x: number, z: number) => { const i = ground.cellIndex(x, z); return i < 0 ? NaN : ground.top[i]; };
-                const r = await runMassingStage({ tilePath, isolateGlb: refined.rawClayGlb, buildings: eBuildings, groundY: picked.pick.groundY, scanTop, cells: picked.pick.cells, solar, outDir: dir, signal: io.signal }, 'remesh', key);
+                let shapeMassing: MassingStageResult['massing'] | undefined;
+                if (shapeMode) {
+                    io.progress(`shape program trial (${shapeMode}): trees out, the height map${shapeMode === 'program' ? ', the program and its fit' : ''}`);
+                    const shapeT0 = now();
+                    const shapeVision = visionAvailable ? new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...chainExtras('remesh'), ...(deps.sleep ? { sleep: deps.sleep } : {}) }) : undefined;
+                    const sr = await runShapeStage({
+                        mode: shapeMode, isolateGlb: refined.rawClayGlb, groundY: picked.pick.groundY, footprintLoops: shapeFootprint.flatMap(b => b.parts.flat()),
+                        ...(strip ? { crownsJson: strip.crownsJson, removedTreesGlb: strip.removedTreesGlb } : {}), scanTop, cells: picked.pick.cells, place: placeValue!.formattedAddress || request.query,
+                        ...(shapeVision ? { vision: shapeVision } : {}), outDir: path.join(dir, 'shape'), signal: io.signal
+                    });
+                    shapeMassing = sr.massing;
+                    cache.writeRunNote(runId, 'shape_program', { mode: shapeMode, ms: now() - shapeT0, timingsMs: sr.timingsMs, notes: sr.notes, trees: sr.trees, scan: sr.scan, files: sr.files, check: sr.massing.check, parts: sr.massing.parts.length, meshes: sr.massing.meshes.length, ...(sr.program ? { program: { model: sr.program.model, elements: sr.program.validated.elements.length, problems: sr.program.problems, parameters: sr.program.parameters, fit: sr.program.fit, correction: sr.program.correction } } : {}) });
+                    io.progress(`shape program trial: ${sr.notes.join('; ')}`);
+                }
+                const r = await runMassingStage({ tilePath, isolateGlb: refined.rawClayGlb, buildings: eBuildings, groundY: picked.pick.groundY, scanTop, cells: picked.pick.cells, solar, outDir: dir, signal: io.signal, ...(shapeMassing ? { massing: shapeMassing } : {}) }, 'remesh', key);
                 cache.writeRunNote(runId, 'pipeline_e', { check: r.massing.check, solar: r.massing.solar, solarNote, notes: r.massing.notes, timingsMs: r.timingsMs, native: r.run ? { timingsMs: r.run.report.timingsMs, snap: r.run.report.snap, residual: r.run.report.residual, faces: r.run.report.faces.length } : undefined });
                 const c = r.massing.check;
                 if (!c.ok || !r.run || !r.files) return fallBack('pipeline_e_fallback', `${c.reason ?? 'the massing could not be built'} (plan IoU ${c.iou}, roof ${c.heightErrMedianM} m off the scan, median; ${c.heightErrP90M} m at the 90th percentile)`);
