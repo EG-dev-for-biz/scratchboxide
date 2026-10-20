@@ -216,6 +216,17 @@ export function createWorkspaceRouter(services: WorkspaceRouterServices, ctx: Ro
         }
     });
 
+    // the project's change log (asset-store): what was created, revised, linked or selected, by whom, per save
+    router.get('/project-artifacts/log', (req: Request, res: Response) => {
+        const projectId = (req.query.projectId as string) || 'default-project';
+        const limit = Math.max(1, Math.min(2000, Number(req.query.limit) || 200));
+        res.json({ success: true, projectId, events: artifactStore.changeLog(projectId, limit) });
+    });
+
+    router.get('/project-artifacts/list', (_req: Request, res: Response) => {
+        res.json({ success: true, projects: artifactStore.listProjects() });
+    });
+
     router.post('/project-artifacts', async (req: Request, res: Response) => {
         try {
             const { workspaceRoot, graph } = req.body || {};

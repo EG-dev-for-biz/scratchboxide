@@ -128,7 +128,26 @@ CREATE TABLE IF NOT EXISTS scanned (
     mtime_ms INTEGER NOT NULL,
     sha256 TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS projects (
+    project_id TEXT NOT NULL,
+    workspace TEXT NOT NULL,
+    graph TEXT NOT NULL,
+    artifacts INTEGER NOT NULL,
+    revisions INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (project_id, workspace)
+);
 `;
+
+/** A project graph as kept in the database: the whole graph JSON, keyed by project and the checkout that saved it. */
+export interface ProjectRow {
+    projectId: string;
+    workspace: string;
+    graph: string;
+    artifacts: number;
+    revisions: number;
+    updatedAtMs: number;
+}
 
 export class AssetDb {
     readonly file: string;
@@ -238,10 +257,38 @@ export class AssetDb {
             .run(file, bytes, Math.floor(mtimeMs), sha256);
     }
 
+    upsertProject(row: Omit<ProjectRow, 'updatedAtMs'> & { updatedAtMs?: number }): void {
+        this.stmt('INSERT INTO projects (project_id, workspace, graph, artifacts, revisions, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?) '
+            + 'ON CONFLICT(project_id, workspace) DO UPDATE SET graph = excluded.graph, artifacts = excluded.artifacts, revisions = excluded.revisions, updated_at_ms = excluded.updated_at_ms')
+            .run(row.projectId, row.workspace, row.graph, row.artifacts, row.revisions, row.updatedAtMs ?? Date.now());
+    }
+
+    project(projectId: string, workspace: string): ProjectRow | undefined {
+        const r = this.stmt('SELECT project_id AS projectId, workspace, graph, artifacts, revisions, updated_at_ms AS updatedAtMs FROM projects WHERE project_id = ? AND workspace = ?')
+            .get(projectId, workspace) as Record<string, unknown> | undefined;
+        return r ? toProject(r) : undefined;
+    }
+
+    /** The most recently saved copy of a project from any checkout. */
+    latestProject(projectId: string): ProjectRow | undefined {
+        const r = this.stmt('SELECT project_id AS projectId, workspace, graph, artifacts, revisions, updated_at_ms AS updatedAtMs FROM projects WHERE project_id = ? ORDER BY updated_at_ms DESC LIMIT 1')
+            .get(projectId) as Record<string, unknown> | undefined;
+        return r ? toProject(r) : undefined;
+    }
+
+    listProjects(): Array<Omit<ProjectRow, 'graph'>> {
+        const rows = this.stmt('SELECT project_id AS projectId, workspace, artifacts, revisions, updated_at_ms AS updatedAtMs FROM projects ORDER BY updated_at_ms DESC').all() as Record<string, unknown>[];
+        return rows.map(r => ({ projectId: r.projectId as string, workspace: r.workspace as string, artifacts: Number(r.artifacts), revisions: Number(r.revisions), updatedAtMs: Number(r.updatedAtMs) }));
+    }
+
     close(): void {
         this.statements.clear();
         this.db.close();
     }
+}
+
+function toProject(r: Record<string, unknown>): ProjectRow {
+    return { projectId: r.projectId as string, workspace: r.workspace as string, graph: r.graph as string, artifacts: Number(r.artifacts), revisions: Number(r.revisions), updatedAtMs: Number(r.updatedAtMs) };
 }
 
 function toServed(r: Record<string, unknown>): ServedRow {
