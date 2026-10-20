@@ -29,6 +29,17 @@ export interface SceneTriangleShare {
     meshes: number;
 }
 
+/** Off with `?sbSharedTreeBudget=0` or `localStorage['sb.sharedTreeBudget'] = '0'` (the trees then have the whole budget, as before). */
+export function sharedTreeBudgetEnabled(): boolean {
+    try {
+        if (typeof window === 'undefined') return true;
+        if (/[?&]sbSharedTreeBudget=0\b/.test(window.location?.search ?? '')) return false;
+        return window.localStorage?.getItem('sb.sharedTreeBudget') !== '0';
+    } catch {
+        return true;
+    }
+}
+
 const frustum = new THREE.Frustum();
 const shadowFrustum = new THREE.Frustum();
 const pv = new THREE.Matrix4();

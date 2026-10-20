@@ -24,6 +24,17 @@ import type { StagedBuildState, StagedLayer } from '../../../../../common/spatia
 import type { LayerRevealFrame } from './revealScheduler';
 import { isMaterialSwapLayer } from './texturedTwins';
 
+/** Off with `?sbEvictSuperseded=0` or `localStorage['sb.evictSuperseded'] = '0'` (before/after measurements). */
+export function evictionEnabled(): boolean {
+    try {
+        if (typeof window === 'undefined') return true;
+        if (/[?&]sbEvictSuperseded=0\b/.test(window.location?.search ?? '')) return false;
+        return window.localStorage?.getItem('sb.evictSuperseded') !== '0';
+    } catch {
+        return true;
+    }
+}
+
 /** How long a superseded layer stays hidden before its model is freed. */
 export const EVICT_AFTER_MS = 2000;
 

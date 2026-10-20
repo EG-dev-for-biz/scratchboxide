@@ -161,7 +161,7 @@ import type { SetCameraLensParams } from '../services/operators/lighting-camera-
 import { keepsStoredPose, lensCommands, liveViewMatches, runCameraCommands, withLivePose, type CameraCommand, type Vec3 } from './scene3d/cameraSettings';
 import { syncObjectMaterial } from './scene3d/materialOverride';
 import { TreeLodController, findShadowCamera, formatTreeLodStats, type TreeLodFrame } from './scene3d/treeLod/TreeLodController';
-import { countSceneTriangles, type SceneTriangleShare } from './scene3d/treeLod/sceneTriangleShare';
+import { countSceneTriangles, sharedTreeBudgetEnabled, type SceneTriangleShare } from './scene3d/treeLod/sceneTriangleShare';
 import { createViewportCostProbe, viewportCostProbeEnabled } from './scene3d/viewportCost';
 import { applyTreeTextures, loadTreeTextureLibrary } from './scene3d/treeLod/treeTextureMaterials';
 import { disposeObject3DDeep, releaseObject3D } from './scene3d/disposeObject';
@@ -2140,7 +2140,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             };
             // One triangle budget for the frame (cheap form): what everything but the trees draws (buildings, context, hero,
             // ground; main and shadow pass) is reserved first, and each trees GLB fits into what the ones before it left.
-            const share = countSceneTriangles(stack.scene, camera, { shadowCamera, skip: o => !!o.userData?.sbTreeLod });
+            const share = sharedTreeBudgetEnabled() ? countSceneTriangles(stack.scene, camera, { shadowCamera, skip: o => !!o.userData?.sbTreeLod }) : { main: 0, shadow: 0, meshes: 0 };
             lastSceneShare = share;
             let reserved = share.main + share.shadow;
             lastTreeFrame = { ...frame, reservedTriangles: reserved };

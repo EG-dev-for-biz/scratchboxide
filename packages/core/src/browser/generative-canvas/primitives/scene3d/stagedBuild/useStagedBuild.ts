@@ -47,7 +47,7 @@ import { nodeProgress, nodeRevealWindow, stepRevealSchedule, type LayerLoadState
 import { REVEAL_ATTRIBUTE, StagedMaterialRegistry, installRenderGuard, type MeshStagedLook, type PartLook } from './revealMaterial';
 import { mergedPartsOf } from './mergeStagedParts';
 import { TEXTURE_RUNG_COLORS, classUniforms, legendRows, patternCode, provenanceBackground, resolveLegend, shadingClasses, styleFor, textureRungLegendRows, uncertaintyCoverage, type LegendStyle } from './provenanceShading';
-import { EVICT_AFTER_MS, evictionCandidates, sameSet, stepEviction } from './layerEviction';
+import { EVICT_AFTER_MS, evictionCandidates, evictionEnabled, sameSet, stepEviction } from './layerEviction';
 import { isInterrupted, isRunSettled, stageEventsFor, streamedProgress, subscribeStageEvents, withStreamedEvents, type StageProgress } from './stagedBuildState';
 import {
     INITIAL_SWITCH, deriveMaterialLayers, isMaterialSwapLayer, materialModeOf, modelIdOf, nextSwitch, parseSwapId, twinObjectFor, twinObjectId, twinSourceOf,
@@ -789,7 +789,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
             }
             // Superseded layers: released once hidden for a while, loaded again as soon as an opt-in view needs them.
             if (f && L.state) {
-                const candidates = evictionCandidates({ state: L.state, frame: f, engaged: twinRef.current.engaged, showReplaced: L.showReplaced, replaying: L.replaying });
+                const candidates = evictionEnabled() ? evictionCandidates({ state: L.state, frame: f, engaged: twinRef.current.engaged, showReplaced: L.showReplaced, replaying: L.replaying }) : new Set<string>();
                 const { evict, nextCheckMs } = stepEviction(candidates, evictSinceRef.current, now, EVICT_AFTER_MS);
                 // a layer leaves the evicted set as soon as it stops being a candidate; one joins only after its delay
                 const next = new Set([...evictedRef.current].filter(id => candidates.has(id)));
