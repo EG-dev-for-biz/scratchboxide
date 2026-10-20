@@ -450,6 +450,12 @@ struct TileSource {
         uint32_t mat = t < scene.triangleMaterial.size() ? scene.triangleMaterial[t] : 0;
         return mat < scene.materials.size() ? scene.materials[mat].baseColorImage : -1;
     }
+    /** Whether triangle t carries a photo (a decoded base-colour image). The tile's own triangles all do; surfaces a stage
+     *  added without one (the vegetation strip's caps and skirts where trees were taken out) do not, and are not a photo. */
+    bool hasPhoto(size_t t) const {
+        int img = imageOf(t);
+        return img >= 0 && img < static_cast<int>(scene.images.size()) && scene.images[static_cast<size_t>(img)].decoded;
+    }
 };
 
 /** The closed solid's triangles with a vertical-ray grid (inside test) and a 3D grid (distance). */
@@ -1505,6 +1511,9 @@ private:
         auto cand = tile_.query(bl, bh);
         for (uint32_t t : cand) {
             if (tile_.n[t].dot(f.n) < 0.05) continue;  // facing into the face
+            // a surface with no photo (the strip's flat caps and skirts where trees stood) is not the facade's photo: its
+            // texels stay uncovered and are filled downstream, labelled, instead of baking a flat clay patch as "as scanned"
+            if (colour && !tile_.hasPhoto(t)) continue;
             double xs[3], ys[3], hs[3];
             bool in = true;
             for (int k = 0; k < 3 && in; ++k) {
