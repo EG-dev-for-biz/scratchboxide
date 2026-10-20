@@ -689,6 +689,12 @@ class Lathe3D {
 public:
     /**
      * Revolve a 2D profile curve around an axis to produce a watertight manifold.
+     *
+     * A full 2*PI sweep welds the seam ring (reuses the first ring's vertices
+     * instead of duplicating a coincident one at the end) so smooth normals
+     * blend across it instead of leaving a visible shading seam. A partial
+     * sweep instead caps both open ends with a fan of the profile polyline, so
+     * "watertight" holds for any totalAngleRad, not just the full circle.
      */
     static ScratchboxMesh revolve(
         const std::vector<Vec2>& profilePoints,
@@ -700,7 +706,10 @@ public:
         if (profilePoints.size() < 2 || radialSegments < 3) return mesh;
 
         size_t pts = profilePoints.size();
-        for (int s = 0; s <= radialSegments; ++s) {
+        bool isFullSweep = std::abs(totalAngleRad - TWO_PI) < 1e-4f;
+        int ringCount = isFullSweep ? radialSegments : (radialSegments + 1);
+
+        for (int s = 0; s < ringCount; ++s) {
             float u = static_cast<float>(s) / radialSegments;
             float angle = u * totalAngleRad;
             float cosA = std::cos(angle);
@@ -718,8 +727,8 @@ public:
         }
 
         for (int s = 0; s < radialSegments; ++s) {
-            uint32_t s0 = static_cast<uint32_t>(s * pts);
-            uint32_t s1 = static_cast<uint32_t>((s + 1) * pts);
+            uint32_t s0 = static_cast<uint32_t>((s % ringCount) * pts);
+            uint32_t s1 = static_cast<uint32_t>(((s + 1) % ringCount) * pts);
 
             for (size_t p = 0; p + 1 < pts; ++p) {
                 uint32_t i0 = s0 + static_cast<uint32_t>(p);
@@ -730,6 +739,20 @@ public:
                 mesh.addTriangle(i0, i1, i2);
                 mesh.addTriangle(i0, i2, i3);
             }
+        }
+
+        if (!isFullSweep) {
+            // Fan-cap the profile polyline at each open end (angle = 0 and angle = totalAngleRad).
+            auto capFan = [&](int ring, bool flip) {
+                uint32_t base = static_cast<uint32_t>(ring * pts);
+                for (size_t p = 1; p + 1 < pts; ++p) {
+                    uint32_t i0 = base, i1 = base + static_cast<uint32_t>(p), i2 = base + static_cast<uint32_t>(p + 1);
+                    if (flip) mesh.addTriangle(i0, i2, i1);
+                    else mesh.addTriangle(i0, i1, i2);
+                }
+            };
+            capFan(0, true);
+            capFan(ringCount - 1, false);
         }
 
         mesh.recomputeSmoothNormals();
