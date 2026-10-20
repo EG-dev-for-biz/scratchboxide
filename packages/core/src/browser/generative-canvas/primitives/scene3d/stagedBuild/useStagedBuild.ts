@@ -26,7 +26,8 @@
  * Clay or textured (texturedTwins.ts): a layer with a textured twin keeps its clay model; in textured mode (the default)
  * the twin is added as a second scene object and swapped in by the same reveal (a crossfade, material only), and back
  * again. The scene's stagedBuild.materialMode is the model's request or the viewer's choice: the overlay's toggle writes
- * it to the scene (saved with it, so a clay choice survives a reload).
+ * it to the scene with the matching renderMode, as staged_location_material_mode does (saved with it, so a clay choice
+ * survives a reload).
  */
 
 import * as React from 'react';
@@ -52,7 +53,7 @@ import { TEXTURE_RUNG_COLORS, classUniforms, legendRows, patternCode, provenance
 import { EVICT_AFTER_MS, evictionCandidates, evictionEnabled, sameSet, stepEviction } from './layerEviction';
 import { isInterrupted, isRunSettled, stageEventsFor, streamedProgress, subscribeStageEvents, withStreamedEvents, type StageProgress } from './stagedBuildState';
 import {
-    DEFAULT_MATERIAL_MODE, INITIAL_SWITCH, deriveMaterialLayers, isMaterialSwapLayer, materialModeOf, modelIdOf, nextSwitch, parseSwapId, twinObjectFor, twinObjectId, twinSourceOf,
+    DEFAULT_MATERIAL_MODE, INITIAL_SWITCH, deriveMaterialLayers, isMaterialSwapLayer, materialModeOf, modelIdOf, nextSwitch, parseSwapId, twinObjectFor, twinObjectId, twinSourceOf, withStagedMaterialMode,
     type DerivedMaterialState, type EngagedTwin, type MaterialMode, type MaterialSwitch
 } from './texturedTwins';
 
@@ -841,10 +842,9 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
                 const mode: MaterialMode = materials.mode === 'textured' ? 'clay' : 'textured';
                 setUserMode(mode);
                 // saved with the scene (a view choice, not an undoable edit), so it holds across reloads and later commits
-                mutateSceneData(prev => {
-                    const sb = (prev as Scene3DData & { stagedBuild?: StagedBuildState }).stagedBuild;
-                    return sb ? { ...prev, stagedBuild: { ...sb, materialMode: mode } } as Scene3DData : prev;
-                }, { operator: 'sb_set_staged_material_mode', params: { mode } }, { history: false });
+                // and written exactly as staged_location_material_mode writes it (materialMode and the matching renderMode)
+                mutateSceneData(prev => withStagedMaterialMode(prev as Scene3DData & { stagedBuild?: StagedBuildState }, mode),
+                    { operator: 'sb_set_staged_material_mode', params: { mode } }, { history: false });
             },
             rungLegend: provenanceOn && materials.mode === 'textured' && materials.shown > 0 ? textureRungLegendRows(materials.rungShares, materials.materialShare) : undefined,
             progress: progress as Map<string, StageProgress>,

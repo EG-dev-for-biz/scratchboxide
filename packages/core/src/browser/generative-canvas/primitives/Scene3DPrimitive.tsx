@@ -1334,6 +1334,11 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         return () => { delete (window as any).__SB_SET_TREE_LOD__; };
     }, [mutateSceneData]);
 
+    // A render mode the scene data changes in the viewport (the staged overlay's clay/textured toggle) is drawn too.
+    React.useEffect(() => {
+        if (sceneData.renderMode) setRenderMode(sceneData.renderMode);
+    }, [sceneData.renderMode]);
+
     // Sync external data prop updates into sceneData
     React.useEffect(() => {
         if (!data) return;

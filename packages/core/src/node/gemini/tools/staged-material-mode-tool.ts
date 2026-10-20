@@ -10,8 +10,11 @@
 /**
  * staged_location_material_mode: shows the active staged location build in studio clay or with its photo-inferred
  * textures (texture pass design §9). Part of the Google 3D Tiles pack (spatial-tools.ts). It runs the canvas operator
- * sb_set_staged_material_mode on the active scene, which sets stagedBuild.materialMode (and stagedBuildView.provenance)
- * and nothing else: the viewport loads each layer's textured twin and crossfades to it, layers without one stay clay.
+ * sb_set_staged_material_mode on the active scene, which sets stagedBuild.materialMode, the matching scene renderMode
+ * (clay is renderMode 'clay', so an object built at the place is clay too; textured puts back the mode clay replaced)
+ * and stagedBuildView.provenance, and nothing
+ * else: the viewport loads each layer's textured twin and crossfades to it, layers without one stay clay. The overlay's
+ * toggle writes the same fields, so a choice made either way is saved with the scene and survives a reload.
  */
 
 import type { CanvasArtifact, Scene3DData } from '../../../browser/generative-canvas/canvas-types';
@@ -27,7 +30,7 @@ export const STAGED_MATERIAL_MODE_DECLARATION: ToolDeclaration = {
     description:
         'Switch the active staged location build (the scene google_3d_tiles_get_clay staged) between studio clay and real textures. ' +
         'Textured is the default: clay shows first and each layer crossfades to its textured twin from the background texture pass as it arrives, ' +
-        'and layers without one stay clay. "clay" shows the whole build in studio clay and stays until "textured" is asked for again. The textures are photo-inferred (projected from Street View and the Google 3D Tiles photos, then measured palette colour or generated PBR where no photo saw a surface), ' +
+        'and layers without one stay clay. "clay" shows the whole scene in studio clay (the staged layers and any object built at the place: it sets the scene render mode to clay) and stays, across reloads, until "textured" is asked for again; "textured" puts back the render mode the clay view replaced (pbr for an object built at the place). The textures are photo-inferred (projected from Street View and the Google 3D Tiles photos, then measured palette colour or generated PBR where no photo saw a surface), ' +
         'and every texel is labelled with where it came from; provenance: true shades the textured layers by that source per texel, with a legend. ' +
         'If the texture pass is still running, each layer switches as its textures arrive; nothing waits. Changes no geometry and starts no new build. ' +
         'Use it when the user asks to see the build in clay (for example the "Show clay" suggestion) or the real textures again ("Show real textures"), not to stage a new place.',
@@ -79,6 +82,8 @@ export async function runStagedMaterialModeTool(args: Record<string, unknown>, c
         summary = `Showing photo-inferred textures on ${res.texturedLayers} of ${res.layers} layers (labelled per texel); the rest stay clay.${rungSummary(staged)}`
             + (passing ? ` The texture pass is still running (${tp!.layersDone} of ${tp!.layersTotal} layers); the others switch as their textures arrive.` : '');
     }
+    // The scene's render mode moves with the choice (clay clays an object standing at the place too); said as it is.
+    if (res.renderMode !== undefined) summary += ` Scene render mode: ${res.renderMode}.`;
     if (res.provenance !== undefined) summary += res.provenance ? ' Provenance shading is on.' : ' Provenance shading is off.';
     const artifact: CanvasArtifact = {
         ...active,

@@ -56,6 +56,36 @@ export function materialModeOf(value: unknown): MaterialMode | undefined {
     return value === 'textured' || value === 'clay' ? value : undefined;
 }
 
+/** The scene fields a clay/textured choice on a staged build writes (withStagedMaterialMode). */
+export interface StagedMaterialModeFields {
+    renderMode?: string;
+    stagedBuild?: { materialMode?: string };
+    /** The viewer's view of the staged build; renderModeBeforeClay is the render mode a clay choice replaced. */
+    stagedBuildView?: { provenance?: boolean; renderModeBeforeClay?: string };
+}
+
+/**
+ * A staged scene shown in clay or textured: stagedBuild.materialMode and the matching renderMode. The staged layers
+ * follow materialMode, but everything else in the scene (an object built at the place, trees, the generated root)
+ * follows renderMode, so a clay view is renderMode 'clay'; the mode it replaced is kept in stagedBuildView and textured
+ * puts it back (a place staged on its own stays 'clay', an object built there gets its 'pbr' again). What the overlay's
+ * toggle and staged_location_material_mode (sb_set_staged_material_mode) both write, so either choice is saved with the
+ * scene the same way and survives a reload. A scene without a staged build comes back unchanged.
+ */
+export function withStagedMaterialMode<D extends StagedMaterialModeFields>(data: D, mode: MaterialMode): D {
+    if (!data.stagedBuild) return data;
+    const { renderModeBeforeClay, ...view } = data.stagedBuildView ?? {};
+    const stagedBuild = { ...data.stagedBuild, materialMode: mode };
+    if (mode === 'clay') {
+        const before = data.renderMode === 'clay' ? renderModeBeforeClay : data.renderMode;
+        return { ...data, stagedBuild, renderMode: 'clay', stagedBuildView: { ...view, ...(before !== undefined ? { renderModeBeforeClay: before } : {}) } };
+    }
+    const renderMode = data.renderMode === 'clay' && renderModeBeforeClay !== undefined ? renderModeBeforeClay : data.renderMode;
+    const out = { ...data, stagedBuild, ...(renderMode !== undefined ? { renderMode } : {}) };
+    if (data.stagedBuildView) out.stagedBuildView = view;
+    return out;
+}
+
 export function nextSwitch(prev: MaterialSwitch, mode: MaterialMode): MaterialSwitch {
     return prev.mode === mode ? prev : { mode, epoch: prev.epoch + 1 };
 }
