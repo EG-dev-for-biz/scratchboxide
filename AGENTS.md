@@ -117,38 +117,42 @@ When initializing 3D viewports, canvas scenes, lighting, or atmosphere:
 3. **Explicit Opt-In Gate**:
    - Atmospheric scattering, diurnal solar ephemeris, depth fog, and volumetric clouds are only instantiated when the prompt or schema contract explicitly opts into them (`/sky|atmosphere|clouds?|sunset|dusk|dawn|weather/i`). God rays are not an atmosphere opt-in: asking for them places a light emitter in the scene that the rays stream from.
 
-### Rule: Universal First-Request 3D Staging Invariant (Grey Clay Void, Explicit Location Grounding & Follow-up Suggestions)
-When the user requests a 3D scene, model, vehicle, structure, or object:
+### Rule: Universal First-Request 3D Staging Invariant (Textured by Default, Clay on Request, Explicit Location Grounding & Follow-up Suggestions)
+When the user requests a 3D scene, model, vehicle, structure, or object (user decision 2026-10-19: textured by default, clay on request):
 1. **Explicit Location in Initial Prompt Invariant (Mandatory Location Staging)**:
    - If the user explicitly describes a real-world location in their initial prompt (e.g., "build a 3d scene of race car in central park", "F1 car in Monaco", "basketball court at Venice Beach"):
-   - The scene MUST be returned **staged at that authentic real-world location** by default using Google 3D Tiles Studio Grey Clay (`google_3d_tiles_get_clay` / `execute_3d_python_script({ location: "..." })` / `stage_3d_vector_world`).
-   - The hero object must be modeled in **18% Studio Grey Clay** with rich 70-20-10 anatomical form and placed right on the real-world terrain/corridor.
+   - The scene MUST be returned **staged at that authentic real-world location** by default using the staged Google 3D Tiles build (`google_3d_tiles_get_clay` / `build_3d_object_from_reference({ location, placement })` / `stage_3d_vector_world`).
+   - The hero object is modelled with rich 70-20-10 form, carries its own authored materials, and stands right on the real-world terrain/corridor.
    - **Strict Prohibition on Synthetic Ground Plinths or Procedural Lollipop Trees**: Agents must NEVER write Python code to build synthetic asphalt slabs, fake terrain boxes, or procedural lollipop trees in an empty void when an authentic real-world location is specified. Let the geospatial engine extract the real-world 3D tiles!
-   - Follow-up suggestions for initial prompts with locations proceed directly to: 1. Lighting & Solar Ephemeris for that location, 2. Textures & PBR Materials.
-2. **Hero Objects in Grey Clay Void by Default (When NO Location is Described First)**:
-   - When NO real-world geographic location is described in the initial prompt, always construct Hero Objects in **18% Studio Grey Clay** (`sb.PbrMaterial.clay()`, `roughness: 0.85, metalness: 0.0, color: [0.55, 0.57, 0.60]` or `renderMode: 'clay'`).
-   - Stage the hero object in a **3D stage void** (`environment: { skybox: 'studio', lighting: 'studio', ground: false }`) with simple flat/studio default lighting (neutral key + ambient fill, standard 3D CAD/DCC default).
+   - Follow-up suggestions for initial prompts with locations proceed directly to: 1. Lighting & Solar Ephemeris for that location, 2. Views & Material Refinement (a clay view of the shape, material tuning).
+2. **Textured by Default (Authored Materials)**:
+   - Scenes open textured: `renderMode: 'pbr'` (the viewport default when a scene names no mode), showing the materials the model, the script or the engine authored (`sb.PbrMaterial`, per-part materials, photo-inferred textures). The first-pass baseline (`applyFirstPassBaseline`, `packages/core/src/node/gemini/scene3d-first-pass-baseline.ts`) keeps material features and strips only uninvited atmosphere.
+   - When NO real-world geographic location is described in the initial prompt, stage the hero object in a **3D stage void** (`environment: { skybox: 'studio', lighting: 'studio', ground: false }`) with simple flat/studio default lighting (neutral key + ambient fill, standard 3D CAD/DCC default).
    - **Native Procedural Generation Only by Default**: Rely strictly on Scratchbox native procedural generation (Python / C++20 engine). Do not invoke external neural diffusion models (Trellis/TripoSR) unless explicitly asked.
-3. **Pure Location Exception (Google 3D Tiles Clay Mode)**:
+3. **Clay on Request, and Where Clay Is the Output**:
+   - **18% Studio Grey Clay** (`renderMode: 'clay'`, `sb.PbrMaterial.clay()`, `roughness: 0.85, metalness: 0.0, color: [0.55, 0.57, 0.60]`) is used when the user asks for it (clay, untextured, a greybox or massing study, a shape review). An explicit clay choice persists across follow-ups and reloads until the user asks for textures again (`keepOpenSceneRenderMode`, the staged build's saved `stagedBuild.materialMode`).
+   - **Clay while textures are not yet available**: a staged location shows its clay layers first (instant), then crossfades each layer to its textured twin automatically when the background texture pass commits it (pipeline E's textured twin likewise), unless the user chose clay. The overlay toggle and the `staged_location_material_mode` tool switch between "Show clay" and "Show real textures".
+   - **Ground-truth and conditioning outputs stay clay**: the Clay Blockout Runner and `<VIDEO_REF_0>` conditioning (`google_3d_tiles_clay_blockout_runner`), the `_clay` tile tools when called for clay massing (e.g. `google_3d_tiles_get_clay` with `remesh: false`), survey-station clay renders that precede AI Beautify, the location evidence tools, and shape-review views.
+4. **Pure Location (Google 3D Tiles)**:
    - If the user's first request is ONLY a real-world location without a hero object (e.g., "Eiffel Tower", "San Francisco", "Monaco GP circuit") and that location can be created with Google Map Tiles:
-   - Return a **clay style 3D map tile object** (`getGoogle3DTilesClay` / `clayPreset: 'studio-grey'`), capturing authentic real-world metropolitan massing without photogrammetric texture noise.
-4. **Deep Multi-Step Procedural Construction**:
+   - Return the staged build (`google_3d_tiles_get_clay`): the remeshed massing appears in clay at once and crossfades to its real textures as they arrive, recognisably the real place (see "Realism First, Anchored to the Place"). Use `google_3d_tiles_get_full_texture` when the user asks for the raw photo tiles.
+5. **Deep Multi-Step Procedural Construction**:
    - Spend considerable effort and a large amount of procedural steps to construct the initial request.
    - Enforce the **70-20-10 geometric form hierarchy**:
      - **70% Primary Edifice / Silhouette**: Sculpted compound curvature, proportional stance, non-linear deformers (taper, twist, bend, bulge, FFD).
      - **20% Secondary Articulated Assemblies**: Discrete sub-parts (splitters, diffusers, multi-element chassis, hollow-spoke wheel rims, brake discs/calipers, cockpit framework, air intakes).
      - **10% Tertiary Micro-Detail**: Panel shut lines, hex grilles, hood louvers, quad exhaust tips, mechanical fasteners, chamfers.
    - Never output toy boxes or hasty single-primitive representations.
-5. **Separation of Staging & Environments from Textures & Materials (Mandatory Sequence)**:
-   - Initial 3D assets in a void must present two distinct, dedicated follow-up sections presented directly in chat via interactive pill buttons:
-     - **Section 1: Staging & Environments (Spatial Grounding & Scale First)**:
-       - Spatial grounding, real-world scale, and environment must be resolved in clay *before* final texturing.
-       - **Real-World Geographic Staging**: If the asset has a real-world context (e.g. Venice Beach, Monaco GP, High Line NYC), suggest placing it into authentic real-world coordinates using **Google 3D Tiles Clay** (`getGoogle3DTilesClay`) or **3D Vector World Staging** (`stage_3d_vector_world` with `heroStaging` at latitude/longitude, populating surrounding road networks, parcels, buildings, trees, and sidewalks).
+6. **Separation of Staging & Environments from Views & Material Refinement (Follow-ups)**:
+   - Initial 3D assets must present two distinct, dedicated follow-up sections presented directly in chat via interactive pill buttons:
+     - **Section 1: Staging & Environments (Spatial Grounding & Scale)**:
+       - **Real-World Geographic Staging**: If the asset has a real-world context (e.g. Venice Beach, Monaco GP, High Line NYC), suggest placing it into authentic real-world coordinates using the staged Google 3D Tiles build (`google_3d_tiles_get_clay`) or **3D Vector World Staging** (`stage_3d_vector_world` with `heroStaging` at latitude/longitude, populating surrounding road networks, parcels, buildings, trees, and sidewalks).
        - **Studio & Environmental Plinths**: For standalone hero assets, offer an environmental plinth: curved infinity cyclorama cove, beveled-curb asphalt road plinth, oceanfront concrete pad, or architectural plaza pedestal.
        - **Atmosphere & Solar Ephemeris**: Diurnal solar angles via NOAA ephemeris and crepuscular Rayleigh/Mie scattering (`atmosphere_harmonize_location_3d`).
        - **Studio Void**: Clean CAD/DCC spatial void (`ground: false`, neutral key/fill).
-     - **Section 2: Textures & Materials (Multi-Method Texturing Engine)**:
-       - The user can select their preferred texturing and surface synthesis method from the Scratchbox codebase:
+     - **Section 2: Views & Material Refinement (Multi-Method Surface Engine)**:
+       - **Clay View**: Show the build in studio grey clay to review the shape (and back to textures).
+       - The user can refine surfaces with their preferred method from the Scratchbox codebase:
          - **PBR (Physically Based Rendering)**: Deep metallic automotive clearcoat, carbon fiber weave, brushed aluminum, tinted dielectric glass, thin-wall subsurface scattering (SSS), procedural wear, and micro-roughness (`sb.PbrMaterial`).
          - **2DGS (2D Gaussian Splatting / Planar Surfels)**: High-performance 2D planar surfels (`SURFACE_2DGS_PLANAR_SURFEL` via `scratchbox_depth_to_gaussian.hpp` and `Calibrated3DGSReconstructionService`), squashing Gaussian ellipsoids to near-zero thickness along the surface normal for razor-sharp geometric boundary fidelity with zero floating splatter.
          - **3DGS (3D Gaussian Radiance Fields & Forward Splats)**: Volumetric radiance field synthesis, analytical fur/hair/groom forward splatting (`scratchbox_hair.hpp`, `scratchbox_spz.hpp`, `AnalyticalGroomSplatService`), or multi-angle photogrammetric Gaussian splats.
