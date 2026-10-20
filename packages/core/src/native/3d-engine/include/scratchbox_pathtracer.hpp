@@ -64,6 +64,7 @@ struct RenderOutput {
     std::vector<Vec3> color;  // scene-linear radiance, before exposure
     denoise::GuideBuffers guides;
     size_t nanSamples{0};
+    size_t rays{0};  // closest-hit and shadow rays traced
     double renderMs{0.0};
     float geometryCoverage{0.0f};
 };
@@ -400,9 +401,10 @@ public:
         std::atomic<int> nextTile{0};
         std::atomic<size_t> nanSamples{0};
         std::atomic<size_t> coveredPixels{0};
+        std::atomic<size_t> rays{0};
 
         auto worker = [&]() {
-            size_t localNan = 0, localCovered = 0;
+            size_t localNan = 0, localCovered = 0, localRays = 0;
             for (int tile = nextTile++; tile < totalTiles; tile = nextTile++) {
                 const int x0 = (tile % tilesX) * tileSize;
                 const int y0 = (tile / tilesX) * tileSize;
@@ -424,7 +426,7 @@ public:
                                 origin = camPos + (right * lens.x + upv * lens.y) * worldCamera.apertureRadius;
                                 dir = (focusPoint - origin).normalized();
                             }
-                            PathSample sample = tracePath(origin, dir, rng, frame);
+                            PathSample sample = tracePath(origin, dir, rng, frame, localRays);
                             if (!detail::isFinite(sample.radiance)) {
                                 ++localNan;
                                 continue;
@@ -456,6 +458,7 @@ public:
             }
             nanSamples += localNan;
             coveredPixels += localCovered;
+            rays += localRays;
         };
 
         unsigned threadCount = settings.threads > 0 ? static_cast<unsigned>(settings.threads)
@@ -465,6 +468,7 @@ public:
         for (auto& t : pool) t.join();
 
         out.nanSamples = nanSamples.load();
+        out.rays = rays.load();
         out.geometryCoverage = static_cast<float>(coveredPixels.load()) / static_cast<float>(n);
         out.renderMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
         return out;
@@ -652,13 +656,14 @@ private:
         radiance += contribution;
     }
 
-    PathSample tracePath(Vec3 origin, Vec3 dir, detail::Pcg32& rng, const Frame& frame) const {
+    PathSample tracePath(Vec3 origin, Vec3 dir, detail::Pcg32& rng, const Frame& frame, size_t& rayCount) const {
         const sky::PhysicalSky& sky = *frame.sky;
         const RenderSettings& settings = *frame.settings;
         PathSample result;
         Vec3 radiance(0, 0, 0);
         Vec3 throughput(1, 1, 1);
         for (int bounce = 0;; ++bounce) {
+            ++rayCount;
             Hit hit = intersect(origin, dir);
             if (!hit.valid) {
                 Vec3 skyLight = sky.skyRadiance(dir);
@@ -692,6 +697,7 @@ private:
                 float cosShading = surface.shadingNormal.dot(wi);
                 if (cosShading > 0.0f && surface.geometricNormal.dot(wi) > 0.0f) {
                     Ray shadowRay(surface.position + surface.geometricNormal * detail::kRayEpsilon, wi);
+                    ++rayCount;
                     if (!bvh_.raycastAny(shadowRay, 1e9f)) {
                         accumulate(radiance, throughput * bsdf.eval(wi) * frame.sunIrradiance * cosShading, bounce, settings.clampIndirect);
                     }
