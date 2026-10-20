@@ -26,7 +26,7 @@
 
 import * as THREE from 'three';
 import { PART_ATTRIBUTE, mergedPartsOf, setPartVisibility } from './mergeStagedParts';
-import { DEGRADED_OUTLINE_COLOR, PROVENANCE_BACKGROUND, TEXTURE_RUNG_COLORS, VERTEX_ATTRIBUTE, STRIPE_COVERAGE, STRIPE_PERIOD_PX, hexToRgb01, vertexClassGlsl } from './provenanceShading';
+import { MATERIAL_READING_STRIPE_COLOR, DEGRADED_OUTLINE_COLOR, PROVENANCE_BACKGROUND, TEXTURE_RUNG_COLORS, VERTEX_ATTRIBUTE, STRIPE_COVERAGE, STRIPE_PERIOD_PX, hexToRgb01, vertexClassGlsl } from './provenanceShading';
 
 /** Stamp on every material the guard installs; its value says which variant. */
 const STAMP = 'sbStagedPatch';
@@ -47,6 +47,15 @@ export type StagedMaterialKind = 'reveal' | 'provenance' | 'rungs';
  * set by prepareTexturedTwinModel (texturedTwinModel.ts) from the material's extras.sbTexture.confidenceTexture.
  */
 export const CONFIDENCE_MAP_KEY = 'sbConfidenceMap';
+
+/** Stripe colour of texels the facade material reading wrote, in the rung (provenance) view. */
+export const MATERIAL_READING_COLOR = MATERIAL_READING_STRIPE_COLOR;
+
+/** The provenance indices of the facade material reading's entries on a twin material (extras.sbMaterial), at most 4. */
+export function materialProvenanceIndices(m: THREE.Material | undefined): number[] {
+    const v = (m?.userData as { sbMaterial?: { provenanceIndices?: unknown } } | undefined)?.sbMaterial?.provenanceIndices;
+    return Array.isArray(v) ? v.filter((x): x is number => Number.isInteger(x) && x >= 0 && x < 255).slice(0, 4) : [];
+}
 
 export function confidenceMapOf(m: THREE.Material | undefined): THREE.Texture | undefined {
     const t = m?.userData?.[CONFIDENCE_MAP_KEY] as THREE.Texture | undefined;
@@ -106,6 +115,8 @@ interface StagedUniforms {
     /** Merged parts (mergeStagedParts.ts): per part (fade, presence, mark, pattern code) and (provenance colour, pattern coverage). */
     uSbPartA?: { value: THREE.Vector4[] };
     uSbPartB?: { value: THREE.Vector4[] };
+    uSbMatIdx?: { value: THREE.Vector4 };
+    uSbMatColor?: { value: THREE.Color };
 }
 
 const BASE = new WeakMap<THREE.Material, THREE.Material>();
@@ -196,6 +207,10 @@ const VERTEX_BODY = `
 const FRAGMENT_DECL = `
 #ifdef SB_RUNGS
 uniform vec3 uSbRungColor[SB_RUNG_COUNT];
+#endif
+#ifdef SB_MAT_STRIPES
+uniform vec4 uSbMatIdx;
+uniform vec3 uSbMatColor;
 #endif
 uniform float uSbProgress;
 uniform float uSbFade;
@@ -303,6 +318,14 @@ const FRAGMENT_RUNGS = `
         int sbRung = int( clamp( floor( sbConf.b * 255.0 + 0.5 ), 0.0, float( SB_RUNG_COUNT - 1 ) ) );
         if ( sbConf.a < 0.5 ) sbRung = SB_RUNG_COUNT - 1;
         diffuseColor.rgb = uSbRungColor[ sbRung ];
+#ifdef SB_MAT_STRIPES
+        // texels the facade material reading wrote (photo-inferred glass): stripes over the rung, as strong as their confidence
+        float sbIdx = floor( sbConf.r * 255.0 + 0.5 );
+        if ( sbConf.a > 0.5 && ( sbIdx == uSbMatIdx.x || sbIdx == uSbMatIdx.y || sbIdx == uSbMatIdx.z || sbIdx == uSbMatIdx.w ) ) {
+            float sbS = mod( gl_FragCoord.x + gl_FragCoord.y, 8.0 ) < 4.0 ? 1.0 : 0.0;
+            diffuseColor.rgb = mix( diffuseColor.rgb, uSbMatColor, sbS * ( 0.4 + 0.6 * sbConf.g ) );
+        }
+#endif
     }
 #else
 #include <map_fragment>
@@ -385,13 +408,19 @@ export function createStagedMaterial(mesh: THREE.Mesh | THREE.LineSegments, base
     if (confidence) {
         uniforms.uSbRungColor = { value: TEXTURE_RUNG_COLORS.map(c => new THREE.Color(c)) };
         defs.defines = { ...(defs.defines ?? {}), SB_RUNGS: '', SB_RUNG_COUNT: TEXTURE_RUNG_COLORS.length };
+        const matIdx = materialProvenanceIndices(base);
+        if (matIdx.length) {
+            uniforms.uSbMatIdx = { value: new THREE.Vector4(matIdx[0] ?? -1, matIdx[1] ?? -1, matIdx[2] ?? -1, matIdx[3] ?? -1) };
+            uniforms.uSbMatColor = { value: new THREE.Color(MATERIAL_READING_COLOR) };
+            defs.defines = { ...(defs.defines ?? {}), SB_MAT_STRIPES: '' };
+        }
     } else if (kind === 'rungs' && !isLine) {
         // no confidence texture on this surface (a primitive the pass did not texture): the clay rung, flat
         (mat as THREE.MeshStandardMaterial).color.set(TEXTURE_RUNG_COLORS[TEXTURE_RUNG_COLORS.length - 1]);
         defs.defines = { ...(defs.defines ?? {}), SB_RUNG_FLAT: '' };
     }
     mat.onBeforeCompile = shader => injectShader(shader, uniforms);
-    const cacheKey = `sb-staged-v3:${kind}:${provenanceClasses}:${withReveal ? 'r' : 's'}:${confidence ? 'c' : ''}:${partCount}`;
+    const cacheKey = `sb-staged-v3:${kind}:${provenanceClasses}:${withReveal ? 'r' : 's'}:${confidence ? 'c' : ''}${defs.defines && 'SB_MAT_STRIPES' in defs.defines ? 'm' : ''}:${partCount}`;
     mat.customProgramCacheKey = () => cacheKey;
     mat.userData = { ...(kind === 'reveal' ? mat.userData : {}), [STAMP]: kind, [REVEAL_VARIANT]: withReveal, ...(kind === 'reveal' && base.userData?.[CLAY_FLAG] ? { [CLAY_FLAG]: true } : {}) };
     mat.needsUpdate = true;

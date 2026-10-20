@@ -127,6 +127,7 @@ import {
 import { buildSwitchLocationPills, switchLocationMarkdown } from '../../../common/spatial/switch-location';
 import { summarizeStagedBuild, type StagedSummaryInput } from './staged-summary';
 import { palettesFromSurvey, photoTierEnabled, textureLayer, TEXTURE_PASS_VERSION, type TextureLayerOutcome } from './texture-pass';
+import { facadeMaterialsEnabled, gatherMaterialEvidence, scanFacePlanes, segmenterTool, type MaterialEvidence, type SegmentImage } from './facade-material-evidence';
 import { prepareTextureSources, type TextureSourcesInput } from './texture-sources';
 import { maskTemporaryInViews, textureTemporaryEnabled, visionTemporaryChecker, TEMPORARY_CHECK_VERSION } from './temporary-structures';
 import { objectSegmenter, ownViews, OWNERSHIP_VERSION, type OwnershipSegmenter } from './streetview-ownership';
@@ -322,6 +323,8 @@ export interface StagedLocationDeps {
          * ObjectSegmenterService (MediaPipe interactive + GrabCut). false = no ownership check (SCRATCHBOX_TEXTURE_OWNERSHIP=0 too).
          */
         segmenter?: OwnershipSegmenter | false;
+        /** The facade material reading's segmenter (default: vfx_segment_subject's ObjectSegmenterService); used only with SCRATCHBOX_FACADE_MATERIALS=1. */
+        segment?: SegmentImage;
     };
     now?: () => number;
     newRunId?: () => string;
@@ -1706,6 +1709,29 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             lightingUnavailable = `the lighting correction of the Street View photos failed (${errorMessage(err)})`;
                         }
                     }
+                    // the facade material reading's evidence (opt-in): masks from the Street View views and the tile's fitted faces,
+                    // gathered once for every layer
+                    let materials: MaterialEvidence | undefined;
+                    let materialsUnavailable: string | undefined;
+                    if (facadeMaterialsEnabled()) {
+                        if (!visionAvailable && !deps.textures?.segment) materialsUnavailable = 'no vision model is configured to segment the photos';
+                        else {
+                            const tm = now();
+                            try {
+                                materials = await gatherMaterialEvidence({
+                                    // the fitted faces; a layer set without a fit is read on the scan's own planar faces
+                                    views, surfaces: fitSurfaces().length ? fitSurfaces() : occluder ? scanFacePlanes(occluder) : [], ...(tile ? { tile } : {}), segment: deps.textures?.segment ?? segmenterTool(), signal: io.signal,
+                                    onProgress: m => io.progress(`textures: ${m}`)
+                                });
+                                io.progress(`textures: facade material masks: ${materials.views.length} Street View views, ${materials.surfaces.length} tile faces, ${materials.calls} segmentation calls (${materials.failedCalls} failed) in ${((now() - tm) / 1000).toFixed(1)} s`);
+                                if (!materials.views.length && !materials.surfaces.length) { materialsUnavailable = `no mask was read (${materials.unavailable.join('; ') || 'no source'})`; materials = undefined; }
+                            } catch (err) {
+                                if (isAbort(err) || io.signal.aborted) throw err;
+                                materialsUnavailable = `the masks could not be gathered (${errorMessage(err)})`;
+                            }
+                        }
+                    }
+                    const materialsKey = materials ? sha256Bytes(Buffer.concat([...materials.views.map(v => Buffer.from(v.mask)), ...materials.surfaces.map(f => Buffer.from(f.mask))])) : facadeMaterialsEnabled() ? 'materials-unavailable' : 'materials-off';
                     const outcomes: Array<{ layer: StagedLayer; out: Omit<TextureLayerOutcome, 'glb' | 'measureLoo'>; url: string; bytes: number; cached: boolean; builtAtMs: number; surfaces: string; late: boolean }> = [];
                     // leave-one-pano-out fits, run once every layer is textured (TextureLayerOutcome.measureLoo)
                     const looJobs = new Map<string, NonNullable<TextureLayerOutcome['measureLoo']>>();
@@ -1722,10 +1748,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const textureOne = async (target: typeof targets[number]) => {
                         handled.add(target.layer.objectId);
                         const clay = fs.readFileSync(target.file);
-                        const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), wideHeld.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048, surfacesKey(target.surfaces), ...(!(rebuildOut.refit ?? rebuildOut.fit) && views.length ? ['no-fit-held-out-gate/2'] : []), ...(lightingClient ? [`light:${lightingModelIds.join(',')}:${lightingPromptVariant()}:${lightingViews?.length ?? 0}`] : []), ...(arm.key ? [arm.key] : []), ...(ownershipKey ? [ownershipKey] : []), ...(temporaryKey ? [temporaryKey] : []));
+                        const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), wideHeld.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048, surfacesKey(target.surfaces), ...(!(rebuildOut.refit ?? rebuildOut.fit) && views.length ? ['no-fit-held-out-gate/2'] : []), ...(lightingClient ? [`light:${lightingModelIds.join(',')}:${lightingPromptVariant()}:${lightingViews?.length ?? 0}`] : []), ...(arm.key ? [arm.key] : []), ...(ownershipKey ? [ownershipKey] : []), ...(temporaryKey ? [temporaryKey] : []), materialsKey);
                         const entry = await cache.run<Omit<TextureLayerOutcome, 'glb'>>('textures', key, async dir => {
                             const bake = (bakeViews: typeof views, bakeUnavailable: string | undefined) => (texturePool ? texturePool.textureLayer.bind(texturePool) : textureLayer)({ layerKey: target.layer.layer, clayGlb: clay, ...(target.surfaces?.length ? { surfaces: target.surfaces } : {}) }, {
-                                views: bakeViews, ...(wideViews.length ? { photoTierViews: wideViews } : {}), ...(photoTierEnabled() ? { photoTier: true } : {}), ...(bakeUnavailable ? { viewsUnavailable: bakeUnavailable } : {}), occluder, ...(context.indices.length ? { context } : {}), observedSurface: TEXTURE_OBSERVED_SURFACE, poseEdgeGuardShare: TEXTURE_POSE_EDGE_GUARD_SHARE,
+                                views: bakeViews, ...(wideViews.length ? { photoTierViews: wideViews } : {}), ...(photoTierEnabled() ? { photoTier: true } : {}), ...(bakeUnavailable ? { viewsUnavailable: bakeUnavailable } : {}), occluder,
+                                ...(materials ? { materials } : {}), ...(materialsUnavailable ? { materialsUnavailable } : {}), ...(context.indices.length ? { context } : {}), observedSurface: TEXTURE_OBSERVED_SURFACE, poseEdgeGuardShare: TEXTURE_POSE_EDGE_GUARD_SHARE,
                                 delight: { latitude: run.geoAnchor.lat, longitude: run.geoAnchor.lng },
                                 ...(tile ? { tile } : {}), ...(tileUnavailable ? { tileUnavailable } : {}),
                                 ...(residual !== undefined ? { registrationResidualM: residual } : {}),
@@ -1818,8 +1845,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             if (left < 10_000) { io.progress(`textures: ${o.layer.layer}: no time left in the stage for the leave-one-pano-out fit`); continue; }
                             const tl = now();
                             try {
-                                const loo = await job(Math.min(LOO_BUDGET_MS, left));
-                                o.out = { ...o.out, bundle: { ...o.out.bundle, fit: { ...o.out.bundle.fit!, loo } }, timingsMs: { ...o.out.timingsMs, fitLoo: now() - tl } };
+                                const { materials: materialsLoo, ...loo } = await job(Math.min(LOO_BUDGET_MS, left));
+                                const materials = o.out.bundle.materials && materialsLoo ? { ...o.out.bundle.materials, loo: materialsLoo } : o.out.bundle.materials;
+                                o.out = { ...o.out, bundle: { ...o.out.bundle, fit: { ...o.out.bundle.fit!, loo }, ...(materials ? { materials } : {}) }, ...(materials ? { materials } : {}), timingsMs: { ...o.out.timingsMs, fitLoo: now() - tl } };
+                                if (materialsLoo) io.progress(`textures: ${o.layer.layer}: facade materials, walls' held-out fit before ${materialsLoo.wallBefore.chamferPx ?? 'n/a'} px / NCC ${materialsLoo.wallBefore.gradNcc ?? 'n/a'}, after ${materialsLoo.wallAfter.chamferPx ?? 'n/a'} px / NCC ${materialsLoo.wallAfter.gradNcc ?? 'n/a'} (${materialsLoo.reason})`);
                                 io.progress(`textures: ${o.layer.layer}: leave-one-pano-out fit over ${loo.panos} panos${loo.sampled ? ` (sampled: ${loo.panos} of ${loo.panosTotal})` : ''}: texture edge chamfer ${loo.chamferPx ?? 'n/a'} px, gradient NCC ${loo.gradNcc ?? 'n/a'}${loo.skipped ? ` (${loo.skipped} panos past the budget)` : ''}`);
                             } catch (err) {
                                 if (isAbort(err) || io.signal.aborted) throw err;
@@ -1882,7 +1911,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     for (const o of outcomes) for (const [kk, v] of Object.entries(o.out.timingsMs)) timingsMs[`${o.layer.layer}.${kk}`] = v;
                     const record: TexturePassRecord = { passVersion: TEXTURE_PASS_VERSION, layers, degradations: passDegradations, timingsMs };
                     // the held-out fit per layer, kept with the run so rounds can be compared on the same measure
-                    cache.writeRunNote(runId, 'texture_fit', outcomes.map(o => ({ layer: o.layer.layer, fit: o.out.bundle.fit ?? null, sourceSeam: o.out.sourceSeam ?? null, maskedFill: o.out.maskedFill ?? null, inpaint: o.out.inpaint ?? null, lighting: o.out.lighting ?? null, projection: o.out.projection ? { outputSeam: o.out.projection.outputSeam, context: o.out.projection.context, alignment: o.out.projection.alignment && { nccBefore: o.out.projection.alignment.nccBefore, nccAfter: o.out.projection.alignment.nccAfter }, poseRefine: o.out.projection.poseRefine } : null, rungShares: o.out.rungShares, timingsMs: o.out.timingsMs })));
+                    cache.writeRunNote(runId, 'texture_fit', outcomes.map(o => ({ layer: o.layer.layer, fit: o.out.bundle.fit ?? null, ...(o.out.bundle.materials ? { materials: o.out.bundle.materials } : {}), sourceSeam: o.out.sourceSeam ?? null, maskedFill: o.out.maskedFill ?? null, inpaint: o.out.inpaint ?? null, lighting: o.out.lighting ?? null, projection: o.out.projection ? { outputSeam: o.out.projection.outputSeam, context: o.out.projection.context, alignment: o.out.projection.alignment && { nccBefore: o.out.projection.alignment.nccBefore, nccAfter: o.out.projection.alignment.nccAfter }, poseRefine: o.out.projection.poseRefine } : null, rungShares: o.out.rungShares, timingsMs: o.out.timingsMs })));
                     const shares = weightedShares(outcomes.map(o => ({ shares: o.out.rungShares, texels: o.out.atlasTexels })));
                     run.state.texturePass = { status: 'committed', layersDone: outcomes.length, layersTotal: targets.length, rungShares: shares.map(x => round(x, 4)), message: 'textures ready' };
                     textureValue = {

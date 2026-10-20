@@ -26,7 +26,7 @@
  * mean over the views that scored. Generic: no threshold names a place.
  */
 
-import type { BakedTexturePlanes, DecodedImage, DepthMap, PinholeCamera, UvAtlas } from '../../../common/spatial/texture-pass-contracts';
+import type { BakedTexturePlanes, DecodedImage, DepthMap, FacadeMaterialRecord, PinholeCamera, UvAtlas } from '../../../common/spatial/texture-pass-contracts';
 import { detectLineSegments, distanceTransform, gaussianBlur, sobel } from '../../spatial/StreetViewPoseRegistrar';
 
 /** Scoring width (px): structural edges survive, course joints blur out (the registration's scale, 900 px, halved for speed). */
@@ -54,6 +54,8 @@ export interface LayerFitInput {
     /** At most this many views score (the ones that see most of the layer). Default 24. */
     maxViews?: number;
     signal?: AbortSignal;
+    /** Score only these texels (1 = scored); the others take part in visibility like the view's own (the material reading's wall/glass split). */
+    scoreTexels?: Uint8Array;
     /** Diagnostic: each scored view's render, photo and edge maps at the scoring width (for overlays). */
     debug?: (d: { panoId: string; w: number; h: number; render: Float32Array; held: Uint8Array; photo: Float32Array; renderEdges: Uint8Array; photoEdges: Uint8Array; clayEdges: Uint8Array }) => void;
 }
@@ -96,6 +98,8 @@ export interface LooFit {
     /** Panos with views on the layer; when the judged ones are fewer (the cap, or the time budget) the fit is a sample of them. */
     panosTotal?: number; sampled?: boolean;
     perPano: Array<{ panoId: string; pixels: number; chamferPx: number | null; gradNcc: number | null; ms?: number }>;
+    /** The facade material reading's walls/glass fit before and after it, on the same bakes (texture-pass.ts materialLoo). */
+    materials?: FacadeMaterialRecord['loo'];
 }
 
 /** Budget of the leave-one-pano-out re-bakes per layer, and the most panos it judges by (the ones with most views first). */
@@ -286,7 +290,7 @@ function renderLayer(input: LayerFitInput, view: FitScoreView, cam: PinholeCamer
         if (zs < z[i] - (0.25 + 0.02 * z[i])) { texel[i] = -1; z[i] = Infinity; continue; }
         lum[i] = SRGB_LUM(planes.albedo[t * 4], planes.albedo[t * 4 + 1], planes.albedo[t * 4 + 2]);
         const e = planes.confidence.data[t * 4];
-        if (ownEntry[e]) own++; else { held[i] = 1; if (photoEntry[e]) heldPhoto[i] = 1; }
+        if (ownEntry[e] || (input.scoreTexels && !input.scoreTexels[t])) own++; else { held[i] = 1; if (photoEntry[e]) heldPhoto[i] = 1; }
     }
     return { w: W, h: H, z, texel, held, heldPhoto, lum, own, scan };
 }

@@ -16,6 +16,7 @@
 
 import * as THREE from 'three';
 import { CONFIDENCE_MAP_KEY } from './revealMaterial';
+import { prepareFacadeMaterials } from './facadeMaterialLook';
 
 /** Mirrors the flag applyClayRenderMode (clayRenderMode.ts) skips: the surface keeps its authored material. */
 export const KEEP_AUTHORED_MATERIAL_KEY = 'sbKeepAuthoredMaterial';
@@ -54,8 +55,10 @@ export function prepareTexturedTwinModel(gltf: GltfLike): Promise<number> {
         if (textured) mesh.userData[KEEP_AUTHORED_MATERIAL_KEY] = true;
     });
     const parser = gltf.parser;
-    if (byIndex.size === 0 || !parser) return Promise.resolve(0);
-    return Promise.all([...byIndex].map(async ([idx, mats]) => {
+    // the facade material reading (glass, coursing) on the same surfaces, when the twin carries it
+    const facade = prepareFacadeMaterials(gltf).catch(() => 0);
+    if (byIndex.size === 0 || !parser) return facade.then(() => 0);
+    return facade.then(() => Promise.all([...byIndex].map(async ([idx, mats]) => {
         try {
             const tex = await parser.getDependency('texture', idx) as THREE.Texture;
             tex.colorSpace = THREE.NoColorSpace;
@@ -69,5 +72,5 @@ export function prepareTexturedTwinModel(gltf: GltfLike): Promise<number> {
             console.warn(`[staged textures] confidence texture ${idx} did not load:`, err);
             return 0;
         }
-    })).then(counts => counts.reduce((a, b) => a + b, 0));
+    }))).then(counts => counts.reduce((a, b) => a + b, 0));
 }

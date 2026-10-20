@@ -161,7 +161,24 @@ export interface TexturedTwinOptions extends TexturedTwinInput {
     normal?: Uint8Array;
     /** Roughness 0..255, one byte per texel. */
     roughness?: Uint8Array;
+    /** Metalness 0..255, one byte per texel (written with the roughness, glTF metallicRoughness B). */
+    metalness?: Uint8Array;
+    /**
+     * The facade material reading (facade-materials.ts): per-texel parameters for the viewer (RGBA: R glass weight, G coursing
+     * index + 1, B metalness, A 255), the projected photo the reading replaced (the fallback, RGBA), the coursing profiles
+     * (kernel output, RGB) with each reading's pitch and phase, and the reading's provenance entries.
+     */
+    material?: {
+        params: Uint8Array;
+        photoAlbedo?: Uint8Array;
+        courses?: { image: { width: number; height: number; rgb: Uint8Array }; readings: Array<{ pitchM: number; phaseM: number; jointWidthM: number; jointDepthM: number }> };
+        provenanceIndices: number[];
+        summary?: Record<string, unknown>;
+    };
 }
+
+/** What the material parameters image's channels mean (written beside it in the GLB). */
+export const MATERIAL_PARAMS_CHANNELS = 'R = glass weight 0..255 (the region confidence), G = index + 1 into courses[] (0 = no coursing read), B = metalness 0..255, A = 255';
 
 /** What the confidence image's channels mean (written beside it in the GLB). */
 export const CONFIDENCE_CHANNELS = 'R = index into provenance[], G = weight 0..255, B = ladder rung (TEXTURE_LADDER_RUNGS), A = 255 where a stage produced the texel';
@@ -210,6 +227,8 @@ export function writeTexturedTwinGlb(input: TexturedTwinOptions): { glb: Buffer;
     if (planes.albedo.length !== N * 4 || planes.confidence.data.length !== N * 4) throw new Error('the baked planes are not RGBA8 of the atlas size');
     if (input.normal && input.normal.length !== N * 3 && input.normal.length !== N * 4) throw new Error('the normal map is not RGB or RGBA of the atlas size');
     if (input.roughness && input.roughness.length !== N) throw new Error('the roughness map is not one byte per atlas texel');
+    if (input.metalness && input.metalness.length !== N) throw new Error('the metalness map is not one byte per atlas texel');
+    if (input.material && input.material.params.length !== N * 4) throw new Error('the material parameters are not RGBA of the atlas size');
 
     const clay = parseGlbBytes(clayGlb);
     const json = JSON.parse(JSON.stringify(clay.json));
@@ -270,8 +289,15 @@ export function writeTexturedTwinGlb(input: TexturedTwinOptions): { glb: Buffer;
     if (input.normal) images.push({ name: `${planes.layerKey}_normal`, png: encodePng(W, H, input.normal.length === N * 4 ? dropAlpha(input.normal, N) : input.normal, 3) });
     if (input.roughness) {
         const mr = new Uint8Array(N * 3);
-        for (let i = 0; i < N; i++) mr[i * 3 + 1] = input.roughness[i];   // glTF metallicRoughness: G = roughness, B = metalness (0)
+        // glTF metallicRoughness: G = roughness, B = metalness
+        for (let i = 0; i < N; i++) { mr[i * 3 + 1] = input.roughness[i]; mr[i * 3 + 2] = input.metalness ? input.metalness[i] : 0; }
         images.push({ name: `${planes.layerKey}_roughness`, png: encodePng(W, H, mr, 3) });
+    }
+    if (input.material) {
+        images.push({ name: `${planes.layerKey}_material`, png: encodePng(W, H, input.material.params, 4) });
+        if (input.material.photoAlbedo) images.push({ name: `${planes.layerKey}_photo`, png: encodePng(W, H, dropAlpha(bleedGutter(atlas, { ...planes, albedo: input.material.photoAlbedo }), N), 3) });
+        const c = input.material.courses;
+        if (c) images.push({ name: `${planes.layerKey}_courses`, png: encodePng(c.image.width, c.image.height, c.image.rgb, 3) });
     }
     json.images = json.images ?? [];
     json.samplers = json.samplers ?? [];
@@ -294,12 +320,21 @@ export function writeTexturedTwinGlb(input: TexturedTwinOptions): { glb: Buffer;
         doubleSided: true,
         pbrMetallicRoughness: {
             baseColorTexture: { index: textureOf.albedo, texCoord: 0 },
-            metallicFactor: 0,
+            metallicFactor: textureOf.roughness !== undefined && input.metalness ? 1 : 0,
             roughnessFactor: textureOf.roughness !== undefined ? 1 : 0.85,
             ...(textureOf.roughness !== undefined ? { metallicRoughnessTexture: { index: textureOf.roughness, texCoord: 0 } } : {})
         },
         ...(textureOf.normal !== undefined ? { normalTexture: { index: textureOf.normal, texCoord: 0 } } : {}),
-        extras: { sbTexture: { confidenceTexture: textureOf.confidence, confidenceChannels: CONFIDENCE_CHANNELS } }
+        extras: {
+            sbTexture: { confidenceTexture: textureOf.confidence, confidenceChannels: CONFIDENCE_CHANNELS },
+            ...(input.material ? { sbMaterial: {
+                schema: 'scratchbox.staged-material/1', paramsTexture: textureOf.material, paramsChannels: MATERIAL_PARAMS_CHANNELS,
+                ...(textureOf.photo !== undefined ? { photoFallbackTexture: textureOf.photo } : {}),
+                ...(textureOf.courses !== undefined && input.material.courses ? { courseTexture: textureOf.courses, courses: input.material.courses.readings } : {}),
+                provenanceIndices: input.material.provenanceIndices,
+                ...(input.material.summary ? { summary: input.material.summary } : {})
+            } } : {})
+        }
     });
     const texturedMaterial = json.materials.length - 1;
 

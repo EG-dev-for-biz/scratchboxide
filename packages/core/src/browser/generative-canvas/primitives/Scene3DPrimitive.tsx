@@ -184,6 +184,7 @@ import { readStagedBuild, type StagedSceneData } from './scene3d/stagedBuild/sta
 import { mergeStagedParts, mergeStagedPartsEnabled } from './scene3d/stagedBuild/mergeStagedParts';
 import { carryTwinObjects } from './scene3d/stagedBuild/texturedTwins';
 import { prepareTexturedTwinModel } from './scene3d/stagedBuild/texturedTwinModel';
+import { refreshFacadeReflections } from './scene3d/stagedBuild/facadeMaterialLook';
 
 // Aircraft helpers live in services/mesh/aircraft.ts (single source of truth, shared with the
 // transformer engine's sandbox template); re-exported here to keep the public API stable.
@@ -3122,7 +3123,13 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                             .catch(err => console.warn('[Scene3D] tree textures not applied:', (err as Error).message));
                     }
                     // A staged layer's textured twin keeps its photo material under the clay pass, and its confidence texture is loaded.
-                    void prepareTexturedTwinModel(gltf);
+                    void prepareTexturedTwinModel(gltf).then(() => {
+                        // the facade material reading's glass reflects the scene: render its probe once the textures are in,
+                        // and again for the other twins (this layer is now part of what they see)
+                        const stack = stackRef.current;
+                        if (!stack || !model.parent) return;
+                        try { refreshFacadeReflections(stack.renderer, stack.scene, currentMap.values()); } catch (err) { console.warn('[staged textures] the glass reflection probe failed:', err); }
+                    });
                     // A staged layer of many small parts (a pipeline E hero) draws one mesh per material; each vertex keeps its part
                     // (provenance, ids) for the staged build, the provenance view and picking (mergeStagedParts.ts).
                     if (!lod.hasTrees && mergeStagedPartsEnabled()) {

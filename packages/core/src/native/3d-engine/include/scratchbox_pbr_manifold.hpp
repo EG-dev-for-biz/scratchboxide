@@ -71,6 +71,16 @@ struct ContinuousMaterialDescriptor {
 
     // Cavity occlusion
     float aoStrength{1.0f};                 // Ambient occlusion intensity multiplier [0..2]
+
+    // Structured coursing (measured masonry): courses of height coursePitchM separated by bed joints of width jointWidthM
+    // recessed by jointDepthM; head joints every unitLengthM along the course, offset by bondOffset of a unit per course.
+    // coursePitchM = 0 leaves the pattern off (the noise field alone). All continuous: they lerp like every other field.
+    float coursePitchM{0.0f};               // Course pitch, metres (0 = no coursing)
+    float jointWidthM{0.0f};                // Joint width, metres
+    float jointDepthM{0.0f};                // Joint recess, metres
+    float unitLengthM{0.0f};                // Unit length along the course, metres (0 = bed joints only)
+    float bondOffset{0.5f};                 // Head-joint offset per course, fraction of a unit [0..1]
+    float tileExtentM{1.0f};                // Metric span of the synthesized tile (u and v) when coursing is on
 };
 
 /**
@@ -105,6 +115,13 @@ inline ContinuousMaterialDescriptor lerp(
     res.anisotropyStrength = a.anisotropyStrength * invT + b.anisotropyStrength * clampedT;
     res.anisotropyAngleRad = a.anisotropyAngleRad * invT + b.anisotropyAngleRad * clampedT;
     res.aoStrength = a.aoStrength * invT + b.aoStrength * clampedT;
+
+    res.coursePitchM = a.coursePitchM * invT + b.coursePitchM * clampedT;
+    res.jointWidthM = a.jointWidthM * invT + b.jointWidthM * clampedT;
+    res.jointDepthM = a.jointDepthM * invT + b.jointDepthM * clampedT;
+    res.unitLengthM = a.unitLengthM * invT + b.unitLengthM * clampedT;
+    res.bondOffset = a.bondOffset * invT + b.bondOffset * clampedT;
+    res.tileExtentM = a.tileExtentM * invT + b.tileExtentM * clampedT;
 
     return res;
 }
@@ -144,6 +161,12 @@ inline ContinuousMaterialDescriptor blend(
     res.anisotropyStrength = 0.0f;
     res.anisotropyAngleRad = 0.0f;
     res.aoStrength = 0.0f;
+    res.coursePitchM = 0.0f;
+    res.jointWidthM = 0.0f;
+    res.jointDepthM = 0.0f;
+    res.unitLengthM = 0.0f;
+    res.bondOffset = 0.0f;
+    res.tileExtentM = 0.0f;
 
     for (const auto& wd : weightedDescriptors) {
         float w = std::max(0.0f, wd.second) / totalWeight;
@@ -165,6 +188,12 @@ inline ContinuousMaterialDescriptor blend(
         res.anisotropyStrength += d.anisotropyStrength * w;
         res.anisotropyAngleRad += d.anisotropyAngleRad * w;
         res.aoStrength += d.aoStrength * w;
+        res.coursePitchM += d.coursePitchM * w;
+        res.jointWidthM += d.jointWidthM * w;
+        res.jointDepthM += d.jointDepthM * w;
+        res.unitLengthM += d.unitLengthM * w;
+        res.bondOffset += d.bondOffset * w;
+        res.tileExtentM += d.tileExtentM * w;
     }
 
     return res;
@@ -244,6 +273,68 @@ inline ContinuousMaterialDescriptor getAnchorManifoldPoint(uint32_t anchorId) {
 }
 
 /**
+ * Recess (metres, >= 0) of a joint at distance `distM` from its centre line: a tooled (concave) joint of full width
+ * `widthM` and depth `depthM`, smoothly meeting the face at the joint's edge. 0 outside the joint.
+ */
+inline float courseJointRecess(float distM, float widthM, float depthM) {
+    const float half = 0.5f * std::max(1e-5f, widthM);
+    const float d = std::abs(distM);
+    if (d >= half || depthM <= 0.0f) return 0.0f;
+    const float t = d / half;                       // 0 at the centre, 1 at the edge
+    return depthM * (1.0f - t * t) * (1.0f - t * t);  // C1 at the edge, round at the centre
+}
+
+/**
+ * Height (metres, 0 = the unit's face, negative in a joint) of the structured coursing at metric position (sM along the
+ * course, yM up the wall). Bed joints are centred on yM = k * coursePitchM; head joints (when unitLengthM > 0) on
+ * sM = (j + course * bondOffset) * unitLengthM. Purely continuous in every field.
+ */
+inline float courseHeightAt(const ContinuousMaterialDescriptor& d, float sM, float yM) {
+    if (d.coursePitchM <= 0.0f) return 0.0f;
+    const float p = d.coursePitchM;
+    const float course = std::floor(yM / p + 0.5f);
+    const float bedDist = yM - course * p;
+    float recess = courseJointRecess(bedDist, d.jointWidthM, d.jointDepthM);
+    if (d.unitLengthM > 0.0f) {
+        const float row = std::floor(yM / p);
+        const float sh = sM / d.unitLengthM - row * d.bondOffset;
+        const float headDist = (sh - std::floor(sh + 0.5f)) * d.unitLengthM;
+        recess = std::max(recess, courseJointRecess(headDist, d.jointWidthM, d.jointDepthM));
+    }
+    return -recess;
+}
+
+/**
+ * One course of the structured pattern as a tangent-space normal profile: `rows` samples over one pitch, row 0 at a bed
+ * joint's centre (yM = 0), bed joints only (head joints vary along the course and are not in a 1-D profile). Each sample
+ * is (nx, ny, nz) with +x along the course, +y up the wall, +z out of it, and the height (metres) beside it. The analytic
+ * derivative of courseHeightAt, so the relief is exactly the measured pitch and joint width.
+ */
+inline void bakeCourseNormalProfile(const ContinuousMaterialDescriptor& d, int rows, std::vector<float>& normals, std::vector<float>& heights) {
+    normals.assign(static_cast<size_t>(rows) * 3, 0.0f);
+    heights.assign(static_cast<size_t>(rows), 0.0f);
+    if (d.coursePitchM <= 0.0f || rows <= 0) {
+        for (int i = 0; i < rows; ++i) normals[i * 3 + 2] = 1.0f;
+        return;
+    }
+    const float p = d.coursePitchM;
+    const float h = p / static_cast<float>(rows);
+    ContinuousMaterialDescriptor bed = d;
+    bed.unitLengthM = 0.0f;
+    for (int i = 0; i < rows; ++i) {
+        float y = (static_cast<float>(i) + 0.5f) * h;
+        if (y > 0.5f * p) y -= p;                    // centred on the joint at row 0
+        const float eps = std::max(1e-5f, 0.05f * h);
+        const float dh = (courseHeightAt(bed, 0.0f, y + eps) - courseHeightAt(bed, 0.0f, y - eps)) / (2.0f * eps);
+        const float len = std::sqrt(dh * dh + 1.0f);
+        normals[i * 3 + 0] = 0.0f;
+        normals[i * 3 + 1] = -dh / len;
+        normals[i * 3 + 2] = 1.0f / len;
+        heights[i] = courseHeightAt(bed, 0.0f, y);
+    }
+}
+
+/**
  * Parallel procedural synthesis of complete PBR texture pack directly from
  * a ContinuousMaterialDescriptor. Executes on native C++20 worker threads.
  */
@@ -309,6 +400,14 @@ inline PbrTextureSet synthesizeManifoldPbrParallel(
                     float creviceRaw = std::clamp(std::abs(fbm - 0.5f) * 2.0f, 0.0f, 1.0f);
                     float fissureCrevice = (creviceRaw * creviceRaw) * (1.0f + 0.2f * (1.0f - creviceRaw));
                     float hVal = baseH - desc.fissureDepth * (1.0f - fissureCrevice) + desc.microPorosity * 0.12f * (grain - 0.5f);
+                    if (desc.coursePitchM > 0.0f) {
+                        // structured coursing: the joints at the given pitch and width carry the relief; the noise only the
+                        // unit faces' tooth (scaled down so it never reads as a joint)
+                        const float recess = -courseHeightAt(desc, u * desc.tileExtentM, v * desc.tileExtentM);
+                        const float depth = std::max(1e-5f, desc.jointDepthM);
+                        fissureCrevice = 1.0f - std::clamp(recess / depth, 0.0f, 1.0f);
+                        hVal = 0.75f + 0.05f * (baseH - 0.5f) + desc.microPorosity * 0.04f * (grain - 0.5f) - 0.5f * (1.0f - fissureCrevice);
+                    }
                     hVal = std::clamp(hVal, 0.0f, 1.0f);
 
                     // Albedo synthesis
