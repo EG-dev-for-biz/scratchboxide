@@ -26,11 +26,11 @@ export const STAGED_MATERIAL_MODE_DECLARATION: ToolDeclaration = {
     name: STAGED_MATERIAL_MODE_TOOL,
     description:
         'Switch the active staged location build (the scene google_3d_tiles_get_clay staged) between studio clay and real textures. ' +
-        'Clay is the default and stays the first result; "textured" crossfades each layer that has a textured twin from the background texture pass to it, ' +
-        'and layers without one stay clay. The textures are photo-inferred (projected from Street View and the Google 3D Tiles photos, then measured palette colour or generated PBR where no photo saw a surface), ' +
+        'Textured is the default: clay shows first and each layer crossfades to its textured twin from the background texture pass as it arrives, ' +
+        'and layers without one stay clay. "clay" shows the whole build in studio clay and stays until "textured" is asked for again. The textures are photo-inferred (projected from Street View and the Google 3D Tiles photos, then measured palette colour or generated PBR where no photo saw a surface), ' +
         'and every texel is labelled with where it came from; provenance: true shades the textured layers by that source per texel, with a legend. ' +
         'If the texture pass is still running, each layer switches as its textures arrive; nothing waits. Changes no geometry and starts no new build. ' +
-        'Use it when the user asks to see the real textures or the clay again (for example the "Show real textures" suggestion), not to stage a new place.',
+        'Use it when the user asks to see the build in clay (for example the "Show clay" suggestion) or the real textures again ("Show real textures"), not to stage a new place.',
     parameters: {
         type: 'OBJECT',
         properties: {

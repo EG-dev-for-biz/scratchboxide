@@ -148,9 +148,9 @@ describe('trees at four levels', () => {
             // bands: each handover centred on lodBandsFor's distance, neighbours overlapping (no gap), handovers in order
             const H = t.extras.heightAboveSupportM as number;
             const b = levels.map((n: any) => n.extras.sbLod);
-            // lodBandsFor's defaults: near 1.0 H in [12, 30], near-mid 3.0 H in [25, 60], mid 4.0 H in [60, 140], fades 6 m, 0.2 and 0.25 of their distance
+            // lodBandsFor's defaults: near 1.0 H in [12, 30], near-mid 6.0 H in [25, 100], mid 8.0 H in [60, 140], fades 6 m, 0.2 and 0.25 of their distance
             const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
-            const d0 = clamp(H, 12, 30), nm = clamp(3 * H, 25, 60), far = clamp(4 * H, 60, 140);
+            const d0 = clamp(H, 12, 30), nm = clamp(6 * H, 25, 100), far = clamp(8 * H, 60, 140);
             const fadeNM = Math.max(6, 0.2 * nm), fade1 = Math.max(6, 0.25 * far);
             const d1 = Math.max(d0 + 3 + fadeNM + 0.5 * fade1, far), dNM = clamp(nm, d0 + 0.5 * (6 + fadeNM), d1 - 0.5 * (fadeNM + fade1));
             expect((b[0].maxDistM + b[1].minDistM) / 2).toBeCloseTo(d0, 2);

@@ -19,6 +19,7 @@ import type { WorkspaceConfigService } from '../workspace-config-service';
 import { isReadOnlyMode } from './tool-permissions';
 import { OBJECT_BUILD_SOURCE, type BuiltObjectRecord } from '../../common/spatial/object-build-spec';
 import { stagedBuildContext } from '../3d-engine/staged-location/staged-summary';
+import { SB_API_SUMMARY } from '../3d-engine/sb-api.generated';
 
 /** Workspace-intelligence services the system instruction draws context from. */
 export interface PromptContextServices {
@@ -277,7 +278,7 @@ export const CANVAS_PRIMITIVES_SPECIFICATION = `
    - Data structure (Scene3DData): {
        "title": string (what the scene shows),
        "subtitle": string (optional),
-       "renderMode": "clay" | "pbr" | "shaded" | "solid" | "wireframe" (a first scene is "clay"),
+       "renderMode": "clay" | "pbr" | "shaded" | "solid" | "wireframe" (a first scene is "pbr", textured with its materials; "clay" only when the user asks for clay or an untextured shape view),
        "cameraMode": "orbit" | "fps",
        "camera": { "position": [x, y, z], "target": [x, y, z], "fov": 45 } (optional: the viewport frames the models itself),
        "environment": { "skybox": "studio", "lighting": "studio", "ground": false } (the neutral studio; sky, sun and atmosphere only when the user asks for them),
@@ -408,14 +409,14 @@ export const SPATIAL_INTENT_POLICY = `
 
 ### 3D REQUESTS: CHOOSE THE TOOL BY WHAT IS ASKED FOR
 Decide from the meaning of the request, not from particular words, which case applies, then call that tool:
-- One specific object or an abstract form (a single prop, vehicle, creature, character, piece of furniture, sculpture or artifact) with no real place: call build_3d_object_from_reference with the request in the user's words plus any details from the conversation (and dimensionsHintMeters when they give a size). It draws an internal reference, reads it into a build spec and builds that one object natively in clay.
+- One specific object or an abstract form (a single prop, vehicle, creature, character, piece of furniture, sculpture or artifact) with no real place: call build_3d_object_from_reference with the request in the user's words plus any details from the conversation (and dimensionsHintMeters when they give a size). It draws an internal reference, reads it into a build spec and builds that one object natively.
 - An imagined environment, a landscape, or a scene of several objects (anything that is neither one object nor a real place): write an sb Python script and run it with execute_3d_python_script. Call read_sb_script_guide before writing the script unless its rules ("WRITING SB PYTHON SCRIPTS") are already in these instructions.
-- A real-world place (landmark, building, street, district, address or coordinates) and nothing else to build: call google_3d_tiles_get_clay with the place as query. It geocodes the place with Google Places and returns its Google 3D Tiles remeshed in studio grey clay, with the trees measured in the tiles regrown in place as SB-Veggie clay trees (pass trees: false only when the user asks for no trees); tell the user the address it resolved and what its result says it contains, nothing more. Pass isolate: true when the user wants one building or structure rather than the area around it, and radiusMeters when they give an extent. Use google_3d_tiles_get_full_texture only when they ask for photo texture.
+- A real-world place (landmark, building, street, district, address or coordinates) and nothing else to build: call google_3d_tiles_get_clay with the place as query. It geocodes the place with Google Places and stages its Google 3D Tiles remeshed, with the trees measured in the tiles regrown in place as SB-Veggie trees; the clay massing shows first and the viewport crossfades to the real textures on its own as the background texture pass finishes them (pass trees: false only when the user asks for no trees); tell the user the address it resolved and what its result says it contains, nothing more. Pass isolate: true when the user wants one building or structure rather than the area around it, and radiusMeters when they give an extent. Use google_3d_tiles_get_full_texture only when they ask for photo texture.
 - One object at a real-world place: call build_3d_object_from_reference with location set to the place and placement set to where the object stands relative to the place's geocoded anchor (metres east and north of it, and the compass heading its front faces), worked out from what the user said, such as in front of an entrance or across a square. The anchor is often the middle of a building, so an object meant to stand beside it needs an offset. When the active scene already shows that place (google_3d_tiles_get_clay staged it, or objects were built there), pass addToActiveScene: true so the object joins that scene instead of the place being staged again.
 - Several objects at a real-world place: call build_3d_object_from_reference once per object, each with the same location and its own placement. While the active scene is an object build staged at that location, each call adds its object beside the objects already there. Leave room for each object's whole size: a placement under a tree crown or on top of another object fails before anything is built, and an object that would pass through a crown, a trunk, another object or a wall fails after its build; both name spots where it fits, and the second returns the spec to rebuild there with specJson.
 Never supply coordinates from memory: pass the place name or address (or coordinates the user gave) and let the tool geocode it. Do not build real places with scripts.
 To change an object that build_3d_object_from_reference built (its shape or size, or a base or plinth under it, added as parts), call build_3d_object_from_reference again with specJson set to that object's spec with the change made, and, when it stands at a place, with the same location and placement (or a new placement to move it) and replaceObjectId set to its id; that rebuilds the spec as given, keeps it where it stood, and draws no new reference. A scene a script built is changed by running the edited script with execute_3d_python_script, which opens the result as a new scene.
-New objects and places start in studio grey clay with studio lighting and no ground. After building one, offer follow-ups in two groups instead of doing them: staging and environments (a real-world place, a plinth or cyclorama, atmosphere and sun position, or the studio void), then textures and materials (PBR, 2DGS surfels, 3DGS splats, algorithmic micro-texture).
+New objects and places are textured by default (their own materials; a staged place shows clay first and crossfades to its real textures when they are ready) with studio lighting and no ground. Use studio grey clay only when the user asks for it (renderMode "clay", the staged build's "Show clay", or a clay-only tool such as the clay blockout runner); a clay choice stays until the user asks for textures again. After building one, offer follow-ups in two groups instead of doing them: staging and environments (a real-world place, a plinth or cyclorama, atmosphere and sun position, or the studio void), then views and material refinement (a clay view for reviewing the shape, PBR material tuning, 2DGS surfels, 3DGS splats, algorithmic micro-texture).
 When one of these tools fails, report its error; do not substitute another tool's output.`;
 
 /**
@@ -574,31 +575,9 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
 
 - OPEN ARCHITECTURAL INVARIANT: For indoor and pavilion scenes (dojos, shrines, arenas, workshops, laboratories), NEVER enclose the scene in an opaque closed 6-sided solid cube where interior props are hidden. Model open-air or cutaway structures (open entrance/colonnades/timber posts) so that interior training floors, equipment, and structural trusses remain 100% visible to the orbit camera.
 
-Direct Primitive & Procedural Helpers on \`sb\`:
-- \`sb.layout.BoundingVolume(extents=(w, h, d), center=(x, y, z))\` -> \`.get_socket("ground" | "crown" | "left" | "right" | "bow" | "stern")\`
-- \`sb.geometry.create_wheel(radius=0.35, width=0.30, rim_radius=..., ground=True, axis="lateral")\` -> authentic tire, recessed alloy rim, brake rotor, hub nut, grounded upright
-- \`sb.geometry.create_wheel_assembly(track_width=1.6, wheelbase=3.2, wheel_radius=0.35, tire_width=0.30, suspension="double_wishbone")\` -> spawns upright grounded wheel pairs with wishbone linkages
-- \`sb.geometry.create_lofted_hull(stations=[{"z":..., "width":..., "height":..., "y":..., "m":2.8}], profile="superellipse", close_ends=True)\` -> continuous compound curvature monocoque / fuselage / hull
-- \`sb.geometry.create_cambered_foil(span=1.8, chord=0.45, camber=0.04, thickness=0.05, angle_of_attack_deg=-4.0, endplates=True)\` -> aerodynamic wings & downforce elements
-- \`sb.geometry.create_revolving_component(radius, length, axis="lateral"|"vertical"|"longitudinal", profile="cylinder"|"beveled"|"fluted")\` -> functional revolving solids aligned to motion axes
-- \`sb.validation.validate_scene(scene, auto_heal=True)\` -> audits rolling orientations and compound curvature, auto-healing flat pancake wheels
-- \`sb.create_cylinder(radius=..., height=..., segments=...)\`
-- \`sb.create_cone(radius=..., height=..., segments=...)\`
-- \`sb.create_box(width=..., height=..., depth=...)\`
-- \`sb.create_sphere(radius=..., rings=..., sectors=...)\`
-- \`sb.create_plane(width=..., height=..., seg_x=..., seg_y=...)\`
-- \`sb.geometry.create_catenary_cable(start=(x,y,z), end=(x,y,z), sag=..., radius=...)\`
-- \`sb.create_building(width=..., depth=..., floors=..., curvature=0.0..1.0, superellipse_exponent=2.4, twist_degrees=..., taper=..., bulge=..., roof='flat'|'hip'|'mansard'|'gable'|'dome'|'vault', bake_curvature_ao=True)\`
-- \`sb.create_curved_building(width=..., depth=..., floors=..., curvature=0.85, superellipse_exponent=2.4, twist_degrees=..., taper=..., bulge=..., roof='dome')\`
-- \`sb.create_tower(width=..., depth=..., floors=12, twist_degrees=45.0, taper=0.7, bulge=0.08, roof='flat')\`
-- \`sb.create_tree(attractor_count=..., crown_center=(x, y, z), crown_extents=(ex, ey, ez))\`
-- \`mesh.taper(factor=..., axis=0|1|2)\`, \`mesh.twist(angle_deg=..., axis=0|1|2)\`, \`mesh.bend(angle_deg=..., radius=...)\`, \`mesh.bulge(center=..., radius=..., strength=...)\`, \`mesh.displace(freq=..., amp=...)\`
-- \`mesh.translate(x, y, z)\`, \`mesh.rotate_x(deg)\`, \`mesh.rotate_y(deg)\`, \`mesh.rotate_z(deg)\` (Note: Native rotations take **DEGREES**, e.g. \`mesh.rotate_z(90.0)\`), \`mesh.scale(s)\`
-- \`mesh.compute_curvature_ao(intensity=0.7)\`
-- \`mesh.snap_to(target, face="top", clearance=0.0, offset=(0, 0, 0))\`, \`mesh.ground_on(target, clearance=0.0)\`, \`sb.layout.resolve_constraints(meshes, relations, terrain=None)\`
-- \`mesh.bounds.min\` / \`mesh.bounds.max\` / \`mesh.bounds.center\` / \`mesh.bounds.size\` (each has .x .y .z)
-- \`mesh.taubin_smooth(iterations=10)\`, \`mesh.isotropic_remesh(target_edge_length=0.25)\`, \`mesh.decimate(ratio=0.5)\`, \`mesh.fill_holes()\`, \`mesh.clean()\`
-- \`sb.pbr.PbrMaterial(base_color="#hex", roughness=0.3, metalness=0.8, emissive="#hex", emissive_intensity=1.0)\`
+THE sb API (generated from the engine's type stubs by scripts/gen_sb_stubs.py, so it matches the running module; every script is type-checked against the same stubs before it runs):
+${SB_API_SUMMARY}
+Notes the signatures do not carry: a parameter or property typed Vec2/Vec3/Vec4 takes \`sb.math.Vec3(...)\` / \`sb.math.Vec4(...)\`, never a tuple (the native bindings convert nothing; \`color=(1, 0, 0, 1)\` there fails), while the untyped factories (sb.create_*, \`sb.PbrMaterial(base_color=...)\`) accept tuples; mesh.rotate_x/y/z take DEGREES (\`mesh.rotate_z(90.0)\`); \`mesh.bounds.min\` / \`.max\` are Vec3 (.x .y .z); \`sb.PbrMaterial(name, base_color=(r, g, b, a) or "#hex", roughness=, metallic=, emissive=, emissive_intensity=, clearcoat=, ior=)\` takes keywords, and \`sb.PbrMaterial.<preset>()\` answers any material name with plausible values.
 
 FORM-DRIVEN CONSTRUCTION (choose the operator by the geometric form, not by stacking primitives):
 - Surfaces of revolution (towers, columns, vessels, domes, nozzles, turned parts): describe the WHOLE silhouette as one profile of (radius, height) pairs and revolve it once, so plinth, taper, flares and cap stay one continuous surface:
@@ -940,7 +919,7 @@ export function buildContents(request: GeminiGenerateRequest): Content[] {
 1. If the user asks to stage or change the active scene, work on it. If they ask for a new object or place, start a new scene instead of adding to this one, except an object at the real place this scene shows: build_3d_object_from_reference with that location, a placement and addToActiveScene: true adds it to this scene (no new staging).
 2. For a real-world place, call google_3d_tiles_get_clay, or google_3d_tiles_get_full_texture when the user asks for photo texture. Pass stageIntoActiveScene: true only when staging the active scene there; without it the tiles open as a new scene. Pass radiusMeters when the user gives an extent. To build an object at a place, call build_3d_object_from_reference with location and placement.
 3. To stage the active scene's object on an environmental plinth (cyclorama cove, road plinth, concrete pad, plaza pedestal): when build_3d_object_from_reference built it, add the plinth as parts of that object's spec and rebuild it with build_3d_object_from_reference (specJson). When a script built the scene (its pythonGenerator holds the script), write one script that builds that geometry again from the script plus the plinth and run it with execute_3d_python_script, which opens it as a new scene. Neither tool can load a mesh it did not build (an imported, scanned or generated model): say so instead of rebuilding a different object.
-4. Do not replace the scene with a Markdown document unless the user asks for a document, and offer further steps (such as materials and textures) as follow-ups.]`;
+4. Do not replace the scene with a Markdown document unless the user asks for a document, and offer further steps (such as a clay view or material refinement) as follow-ups.]`;
     }
 
     if (request.activeArtifact) {

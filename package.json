@@ -28,6 +28,7 @@
     "typecheck": "tsc --noEmit -p packages/core && tsc --noEmit -p packages/cli && tsc --noEmit -p desktop-app && tsc --noEmit -p desktop-app/tsconfig.electron.json",
     "lint": "node scripts/lint_no_js_primitives.js && eslint packages/core/src desktop-app/src desktop-app/server desktop-app/electron --report-unused-disable-directives",
     "lint:primitives": "node scripts/lint_no_js_primitives.js",
+    "stubs:sb": "vite-node scripts/gen-sb-stubs.ts",
     "docs:mcp": "node scripts/generate_mcp_docs.mjs",
     "docs:mcp:live": "node scripts/generate_mcp_docs.mjs --live",
     "docs:mcp:check": "node scripts/generate_mcp_docs.mjs --check",

@@ -182,7 +182,7 @@ import type { SceneBudgetTelemetry } from './scene3d/lightingRigs';
 import { useStagedBuild } from './scene3d/stagedBuild/useStagedBuild';
 import { readStagedBuild, type StagedSceneData } from './scene3d/stagedBuild/stagedBuildState';
 import { mergeStagedParts, mergeStagedPartsEnabled } from './scene3d/stagedBuild/mergeStagedParts';
-import { carryTwinObjects } from './scene3d/stagedBuild/texturedTwins';
+import { carryMaterialMode, carryTwinObjects } from './scene3d/stagedBuild/texturedTwins';
 import { prepareTexturedTwinModel } from './scene3d/stagedBuild/texturedTwinModel';
 import { refreshFacadeReflections } from './scene3d/stagedBuild/facadeMaterialLook';
 
@@ -642,6 +642,7 @@ import { NativeSpatialBridge } from '../../../common/spatial/NativeSpatialBridge
 import { loadServedGeneratorGlb } from '../../../common/strip-embedded-glb';
 import { PhotorealGaussianSplatMesh } from '../services/spatial/PhotorealGaussianSplatMesh';
 import { EWA_CUTOFF_SIGMA, EWA_SPLAT_GLSL } from '../../../common/spatial/splat-ewa-projection';
+import { DEFAULT_SCENE_RENDER_MODE } from '../../../common/scene-atmosphere-opt-in';
 
 // ==========================================
 // Pluggable Splat Representation (ISplatViewer)
@@ -1066,6 +1067,8 @@ function mergeExternalSceneData(prev: Scene3DData, data: Scene3DData): Scene3DDa
             : prev.cppGenerator,
         // textured twins the staged-build view added are not in the agent's objects[]: they stay while their layer does
         objects: carryTwinObjects(prev.objects, data.objects) ?? prev.objects,
+        // a clay/textured choice made on the open scene holds over a later commit of the same run that does not set one
+        ...(hasNewStaged ? { stagedBuild: carryMaterialMode(readStagedBuild(prev), readStagedBuild(data)) } : {}),
         customMeshes: data.customMeshes ?? prev.customMeshes
     };
 }
@@ -1104,8 +1107,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         })()
     }));
 
-    // Rendering options: Default strictly to Studio Grey Clay mode
-    const [renderMode, setRenderMode] = React.useState<Scene3DRenderMode>(data?.renderMode || 'clay');
+    // Rendering options: a scene that names no mode is textured (each surface's own material); clay only when asked for
+    const [renderMode, setRenderMode] = React.useState<Scene3DRenderMode>(data?.renderMode || DEFAULT_SCENE_RENDER_MODE);
     const renderModeRef = useLatest(renderMode);
     const [cameraMode, setCameraMode] = React.useState<'orbit' | 'fps'>('orbit');
     const [worldBranch, setWorldBranch] = React.useState<string>(data?.worldBranch || 'earth/main');

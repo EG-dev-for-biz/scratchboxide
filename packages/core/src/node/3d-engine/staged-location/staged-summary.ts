@@ -46,6 +46,13 @@ export interface StagedSummaryInput extends Omit<StagedLocationResult, 'digest' 
 
 /** The chat pill that switches the staged layers to their textured twins (the tool staged_location_material_mode). */
 export const SHOW_TEXTURES_PILL = '- [Show real textures](prompt:Show%20real%20textures%20on%20the%20staged%20build)';
+/** The chat pill that switches the staged layers back to studio clay (the same tool), offered while they show textured. */
+export const SHOW_CLAY_PILL = '- [Show clay](prompt:Show%20the%20staged%20build%20in%20clay)';
+
+/** Whether the staged build shows clay: only when clay was chosen (textured by default, clay on request). */
+function showsClay(input: StagedSummaryInput): boolean {
+    return input.activeScene?.materialMode === 'clay';
+}
 
 /** "1,234". */
 const n = (v: number) => Math.round(v).toLocaleString('en-US');
@@ -329,14 +336,14 @@ export function gateSentence(input: StagedSummaryInput): string {
 function upperFirst(s: string): string { return s ? s[0].toUpperCase() + s.slice(1) : s; }
 function lowerFirst(s: string): string { return s && /^[A-Z][a-z]/.test(s) ? s[0].toLowerCase() + s.slice(1) : s; }
 
-/** Rule "textures": what the texture pass made, rung by rung as measured; clay stays the default view. */
+/** Rule "textures": what the texture pass made, rung by rung as measured; the viewport crossfades to it unless clay was chosen. */
 export function texturesSentence(input: StagedSummaryInput): string {
     const t = input.textures;
     if (!t) return '';
     const pct = (x: number) => `${Math.round(x * 1000) / 10}%`;
     const rungs = t.shares.map((x, r) => (x > 0 ? `${pct(x)} ${TEXTURE_LADDER_RUNGS[r]}` : '')).filter(Boolean).join(', ');
     const sources = [t.views ? `${t.views} registered Street View view${t.views === 1 ? '' : 's'}` : `no Street View view (${t.viewsUnavailable ?? 'none'})`, t.tileUnavailable ? `no tile photo (${t.tileUnavailable})` : 'the Google tile photo'].join(' and ');
-    return `Real textures are ready for ${t.layers.length > 1 ? `${t.layers.slice(0, -1).join(', ')} and ${t.layers[t.layers.length - 1]}` : t.layers[0]} (shown in clay until the user picks textures), made from ${sources} in ${s1(t.totalMs)}: ${rungs} of the texels.`
+    return `Real textures are ready for ${t.layers.length > 1 ? `${t.layers.slice(0, -1).join(', ')} and ${t.layers[t.layers.length - 1]}` : t.layers[0]} (${showsClay(input) ? 'shown in clay, as the user chose, until they ask for textures' : 'the viewport crossfades from the clay to them on its own'}), made from ${sources} in ${s1(t.totalMs)}: ${rungs} of the texels.`
         + `${t.modelsUsed.length ? ` The tile transfer was sharpened by ${t.modelsUsed.join(', ')} where it passed the edge gate.` : ''}`
         + ` Photo-derived texture is photo-inferred (labelled per texel); generated PBR is not available, so texels no photo reaches keep the measured palette colour.`;
 }
@@ -352,7 +359,7 @@ export function activeSceneSentence(input: StagedSummaryInput): string {
     if (a.kept.length) {
         const textured = a.kept.filter(k => k.textured).length;
         const layers = a.kept.map(k => k.layer ?? k.objectId).join(', ');
-        const shown = textured ? `; ${textured} of them ${textured === 1 ? 'has' : 'have'} real textures${a.materialMode === 'textured' ? ', shown textured' : ', shown in clay'}` : '';
+        const shown = textured ? `; ${textured} of them ${textured === 1 ? 'has' : 'have'} real textures${a.materialMode === 'clay' ? ', shown in clay' : ', shown textured'}` : '';
         const moved = a.offsetM && a.offsetM.some(v => Math.abs(v) >= 0.005) ? `, moved ${a.offsetM.map(v => v.toFixed(2)).join(', ')} m (east, up, south) into this extraction's frame` : '';
         parts.push(`Staged into the active scene: KEPT the earlier structure rebuild${a.keptFromRunId ? ` of run ${a.keptFromRunId}` : ''} (${a.kept.length} layer${a.kept.length === 1 ? '' : 's'}: ${layers}${shown})${moved}`);
         const cut = a.footprintHidden?.layers.filter(l => l.removedTriangles > 0) ?? [];
@@ -393,9 +400,9 @@ export function summarizeStagedBuild(input: StagedSummaryInput): { digest: strin
     const switchBlock = input.switchLocation
         ? `\n\nSwitch location: other places Google found for this text. Put these lines in your reply unchanged, as they are pill buttons the user can click to redo the build at that place:\n${input.switchLocation}`
         : '';
-    const texturesBlock = input.textures
-        ? `\n\nTextures & Materials: put this line in your reply unchanged, it is a pill button the user can click to see the real textures (clay stays until then):\n${SHOW_TEXTURES_PILL}`
-        : '';
+    const texturesBlock = !input.textures ? '' : showsClay(input)
+        ? `\n\nViews & Materials: put this line in your reply unchanged, it is a pill button the user can click to see the real textures (the clay they chose stays until then):\n${SHOW_TEXTURES_PILL}`
+        : `\n\nViews & Materials: put this line in your reply unchanged, it is a pill button the user can click to see the build in studio clay instead of its real textures:\n${SHOW_CLAY_PILL}`;
     return { digest: stagedDigest(input), summary: sentences.join(' ') + texturesBlock + switchBlock };
 }
 

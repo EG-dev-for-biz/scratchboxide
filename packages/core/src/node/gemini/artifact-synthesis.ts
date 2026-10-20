@@ -24,7 +24,7 @@ import { normalizePrimitiveType } from '../../browser/generative-canvas/canvas-t
 import { isTimestampArtifactId } from '../../common/project-artifact-graph-protocol';
 import type { VideoTimelineData } from '../../browser/generative-canvas/services/video/videoTypes';
 import { NativePythonRunnerService } from '../3d-engine/native-python-runner-service';
-import { applyClayFirstPassBaseline } from './scene3d-clay-baseline';
+import { applyFirstPassBaseline } from './scene3d-first-pass-baseline';
 
 type CustomMesh = NonNullable<Scene3DData['customMeshes']>[number];
 
@@ -584,7 +584,7 @@ function modelAuthoredScene(prompt: string, request: GeminiGenerateRequest, titl
     const pick = <K extends keyof Scene3DData>(key: K): Scene3DData[K] | undefined => (sent(key) ? data[key] : open?.[key]) ?? undefined;
 
     // Features merge key by key: the model's keys over the open scene's. Sky and atmosphere come only from these
-    // (and, on a first pass, the AGENTS.md opt-in gate in applyClayFirstPassBaseline strips any the prompt did not ask for).
+    // (and, on a first pass, the AGENTS.md opt-in gate in applyFirstPassBaseline strips any the prompt did not ask for).
     const features: NonNullable<Scene3DData['features']> = { ...(open?.features || {}), ...(data.features || {}) };
 
     // A generator the model sends replaces the open scene's generators, of either engine.
@@ -652,9 +652,9 @@ function modelAuthoredScene(prompt: string, request: GeminiGenerateRequest, titl
         cppGenerator,
         pythonGenerator
     };
-    // A first pass is grey clay in a studio (user decision; AGENTS.md). A follow-up keeps the open scene's render
-    // mode unless the model's data sets one: leaving clay is the model's call, not a colour word in the prompt.
-    return open ? scene : applyClayFirstPassBaseline(scene, prompt);
+    // A first pass opens textured in a studio, or in clay when the user asked for clay (user decision; AGENTS.md). A
+    // follow-up keeps the open scene's render mode unless the model's data sets one, so an explicit clay choice persists.
+    return open ? scene : applyFirstPassBaseline(scene, prompt);
 }
 
 /**

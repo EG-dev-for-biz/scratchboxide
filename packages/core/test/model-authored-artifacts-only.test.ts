@@ -85,7 +85,8 @@ describe('parseOrSynthesizeArtifact builds only what the model wrote, in every m
         expect(scene.geoAnchor).toBeUndefined();
         expect(scene.camera).toBeUndefined();
         expect(scene.objects).toEqual([]);
-        expect(scene.renderMode).toBe('clay');
+        // textured by default (user decision 2026-10-19); clay only on request
+        expect(scene.renderMode).toBe('pbr');
     });
 
     it('takes a video timeline\'s tracks from the model only', () => {
@@ -198,13 +199,17 @@ describe('a 3d-scene envelope with a scene open updates that scene; no prompt wo
         expect((changed.data as Scene3DData).renderMode).toBe('pbr');
     });
 
-    it('a first scene is clay in a studio whatever colour words the prompt has', () => {
+    it('a first scene is textured in a studio whatever colour words the prompt has; clay when the user asks for clay', () => {
         for (const prompt of ['build the Blue Mosque in Istanbul', 'build the Hagia Sophia in Istanbul', 'build a red double-decker bus', 'build a double-decker bus']) {
-            const art = parseOrSynthesizeArtifact(prompt, reply({ renderMode: 'pbr', objects: [HERO] }), { prompt } as any, [])!;
-            const scene = art.data as Scene3DData;
-            expect(scene.renderMode, prompt).toBe('clay');
-            expect(scene.environment, prompt).toMatchObject({ lighting: 'studio', skybox: 'studio' });
+            for (const sent of [{ renderMode: 'pbr' }, {}]) {
+                const art = parseOrSynthesizeArtifact(prompt, reply({ ...sent, objects: [HERO] }), { prompt } as any, [])!;
+                const scene = art.data as Scene3DData;
+                expect(scene.renderMode, prompt).toBe('pbr');
+                expect(scene.environment, prompt).toMatchObject({ lighting: 'studio', skybox: 'studio' });
+            }
         }
+        const clay = parseOrSynthesizeArtifact('build a double-decker bus in clay', reply({ renderMode: 'pbr', objects: [HERO] }), { prompt: 'build a double-decker bus in clay' } as any, [])!;
+        expect((clay.data as Scene3DData).renderMode).toBe('clay');
     });
 
     it('adds no atmosphere the model did not send, even when the prompt names one', () => {
@@ -239,7 +244,8 @@ describe('the model starts a new artifact by saying so, never by prompt wording'
         expect(d.droneRoute).toBeUndefined();
         expect(d.timeline).toBeUndefined();
         expect(d.pythonGenerator?.sourceCode).toBe(teapot.pythonGenerator.sourceCode);
-        expect(d.renderMode).toBe('clay');
+        // a new scene opens textured (the open Paris scene's clay is not carried into it)
+        expect(d.renderMode).toBe('pbr');
     };
 
     it('an envelope with "newArtifact": true is a new scene: nothing of the open place is kept', () => {
@@ -325,7 +331,7 @@ describe('a <scratchboxPrimitive> tag is read exactly like a {type, data} envelo
         expect({ ...a!, createdAt: '', id: '' }).toEqual({ ...b!, createdAt: '', id: '' });
     };
 
-    it('a first scene in the tag is a clay first pass: the model\'s pbr, sky, atmosphere and materials are dropped', () => {
+    it('a first scene in the tag is a textured first pass: the model\'s materials stay, its sky and atmosphere are dropped', () => {
         const prompt = 'build a red bus';
         const data = {
             renderMode: 'pbr', environment: { skybox: 'realistic-sky', lighting: 'golden-hour' },
@@ -333,10 +339,10 @@ describe('a <scratchboxPrimitive> tag is read exactly like a {type, data} envelo
         };
         const viaTag = parseOrSynthesizeArtifact(prompt, tag('3d-scene', data), { prompt } as any, [])!;
         const scene = viaTag.data as Scene3DData;
-        expect(scene.renderMode).toBe('clay');
+        expect(scene.renderMode).toBe('pbr');
         expect(scene.environment).toMatchObject({ skybox: 'studio', lighting: 'studio' });
         expect(scene.features?.atmosphericScattering).toBeUndefined();
-        expect(scene.features?.pbrMaterials).toBeUndefined();
+        expect(scene.features?.pbrMaterials).toBe(true);
         expect(scene.pythonGenerator?.sourceCode).toBe(GEN.sourceCode);
         sameData(viaTag, parseOrSynthesizeArtifact(prompt, json({ type: '3d-scene', title: 'Bus', data }), { prompt } as any, []));
     });
@@ -404,7 +410,7 @@ describe('mount_canvas_primitive mounts what the model sent or fails', () => {
             success: false, exitCode: 1, stdout: '', executionTimeMs: 12,
             stderr: 'Traceback (most recent call last):\n  File "scene.py", line 3, in <module>\nAttributeError: module \'scratchbox\' has no attribute \'make_tube\''
         });
-        const res: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: '3d-scene', title: 'Telescope', payload: { script: 'import scratchbox as sb\nsb.make_tube()' } }, ctx);
+        const res: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: '3d-scene', title: 'Telescope', payload: { script: 'import scratchbox as sb\nsb.create_box(1.0, 1.0, 1.0)' } }, ctx);
         expect(res.status).toBe('failed');
         expect(res.resultPayload.success).toBe(false);
         expect(res.resultPayload.error).toContain("has no attribute 'make_tube'");
@@ -441,11 +447,13 @@ describe('mount_canvas_primitive mounts what the model sent or fails', () => {
         expect(scene.environment).toMatchObject({ skybox: 'studio', lighting: 'studio' });
     });
 
-    it('mounts the first scene in clay whatever colour words the prompt has, and keeps an open scene\'s mode', async () => {
+    it('mounts the first scene textured whatever colour words the prompt has, in clay when asked, and keeps an open scene\'s mode', async () => {
         for (const prompt of ['build the Blue Mosque in Istanbul', 'build the Hagia Sophia in Istanbul', 'build a red double-decker bus', 'build a double-decker bus']) {
             const res: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: '3d-scene', title: 'X', payload: { renderMode: 'pbr', cppGenerator: { glbBase64: 'Z2xURg==' } } }, { request: { prompt, chatHistory: [] } } as any);
-            expect(res.resultPayload.artifact.data.renderMode, prompt).toBe('clay');
+            expect(res.resultPayload.artifact.data.renderMode, prompt).toBe('pbr');
         }
+        const asked: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: '3d-scene', title: 'X', payload: { cppGenerator: { glbBase64: 'Z2xURg==' } } }, { request: { prompt: 'build a red double-decker bus in clay', chatHistory: [] } } as any);
+        expect(asked.resultPayload.artifact.data.renderMode).toBe('clay');
         const openClay = { id: 'o', type: '3d-scene', data: { renderMode: 'clay' } };
         const kept: any = await canvasHandlers.mount_canvas_primitive({ primitiveType: '3d-scene', title: 'X', payload: { cppGenerator: { glbBase64: 'Z2xURg==' } } }, { request: { prompt: 'make the bus red', activeArtifact: openClay, chatHistory: [] } } as any);
         expect(kept.resultPayload.artifact.data.renderMode).toBe('clay');
@@ -528,9 +536,11 @@ describe('mount_canvas_primitive mounts what the model sent or fails', () => {
         }
     });
 
-    it('operators dispatched with no scene open start from a clay first pass', async () => {
+    it('operators dispatched with no scene open start from a textured first pass (clay when asked)', async () => {
         const res: any = await canvasHandlers.scene_3d_dispatch_operators({ commands: [] }, { request: { prompt: 'add a key light' } } as any);
-        expect(res.resultPayload.artifact.data.renderMode).toBe('clay');
+        expect(res.resultPayload.artifact.data.renderMode).toBe('pbr');
+        const clay: any = await canvasHandlers.scene_3d_dispatch_operators({ commands: [] }, { request: { prompt: 'add a key light, keep it in clay' } } as any);
+        expect(clay.resultPayload.artifact.data.renderMode).toBe('clay');
         expect(res.resultPayload.artifact.data.environment).toMatchObject({ skybox: 'studio', lighting: 'studio' });
     });
 

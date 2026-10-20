@@ -8,7 +8,8 @@
  ********************************************************************************/
 
 /**
- * Clay → real textures → texture provenance → clay in the REAL viewport (headless Chrome, real WebGL, the real
+ * Clay (when chosen) → real textures → texture provenance → clay, and the textured default (clay first, then the twin
+ * crossfades in on its own), in the REAL viewport (headless Chrome, real WebGL, the real
  * Scene3DPrimitive loader and staged-build hook). The remeshed layer of the synthetic arch fixture gets a textured twin
  * built by the real texture-pass writers (buildUvAtlas + writeTexturedTwinGlb) from synthetic baked planes: a brick and
  * sandstone albedo, and a confidence plane whose rung (B) changes in five height bands. The overlay's own buttons drive
@@ -117,9 +118,10 @@ describe.skipIf(!stagedChrome.ok)('staged build: clay, real textures, texture pr
         throw new Error(`never: ${what}`);
     }
 
-    test('clay first; the overlay switches to the textured twin (crossfade), shows rungs per texel, and back to clay', async () => {
+    test('clay when chosen; the overlay switches to the textured twin (crossfade), shows rungs per texel, and back to clay', async () => {
         const rungShares = [0.2, 0.2, 0.2, 0.2, 0.2, 0];
-        const state = fixtureState([L('l1'), L('l2', { textured: { url: `/models/${L2()}.textured.glb`, bytes: twinGlb.length, ladderRung: 4, rungShares, provenance: [{ source: 'synthetic-test', label: 'generated', method: 'test', coverage: 1 }], confidenceChannels: 'R index, G weight, B rung, A produced', builtAtMs: 1, cached: false } })], { runState: 'finished' });
+        // the viewer chose clay (saved with the scene): the twin is not shown until they ask for textures
+        const state = { ...fixtureState([L('l1'), L('l2', { textured: { url: `/models/${L2()}.textured.glb`, bytes: twinGlb.length, ladderRung: 4, rungShares, provenance: [{ source: 'synthetic-test', label: 'generated', method: 'test', coverage: 1 }], confidenceChannels: 'R index, G weight, B rung, A produced', builtAtMs: 1, cached: false } })], { runState: 'finished' }), materialMode: 'clay' as const };
         await page.eval(`sbHarness.mount(${JSON.stringify(stagedSceneData(state))})`);
         await page.waitFor('sbHarness.ready()');
         for (const l of ['l1', 'l2'] as const) await page.waitFor(`sbHarness.attached(${JSON.stringify(objectIdOf(l))})`, 30_000, `${l} attached`);
@@ -127,7 +129,7 @@ describe.skipIf(!stagedChrome.ok)('staged build: clay, real textures, texture pr
         await page.step(4, STEP);
         await page.eval(`sbHarness.setCameraView([0, 7, 0], { theta: 0.5, phi: 1.1, distance: 34 })`);
         await page.step(2, STEP);
-        // clay is the default first result: the twin is not even loaded
+        // clay was chosen: the twin is not even loaded
         expect(await page.eval<boolean>(`sbHarness.attached(${JSON.stringify(`${L2()}~tex`)})`)).toBe(false);
         expect(await page.eval<string>(`sbHarness.text('[data-testid="sb-staged-materials-toggle"]')`)).toBe('Show real textures');
         expect(await page.eval<string>(`sbHarness.text('[data-testid="sb-staged-texture-status"]')`)).toMatch(/^Clay\. Real textures ready for 1 layer/);
@@ -150,6 +152,8 @@ describe.skipIf(!stagedChrome.ok)('staged build: clay, real textures, texture pr
         expect((await page.eval<{ hidden: boolean } | null>(`sbHarness.layer(${JSON.stringify(L2())})`))!.hidden, 'the clay is hidden under its twin').toBe(true);
         expect(await page.eval<string>(`sbHarness.text('[data-testid="sb-staged-materials-toggle"]')`)).toBe('Show clay');
         expect(await page.eval<string>(`sbHarness.text('[data-testid="sb-staged-texture-status"]')`)).toMatch(/^Real textures on 1 of 1 layer \(photo-inferred, labelled per texel\)/);
+        // the toggle saved the choice with the scene
+        expect(await page.eval<string | undefined>(`sbHarness.lastUpdate()?.stagedBuild?.materialMode`)).toBe('textured');
         // the twin is the same geometry, placed where the clay is: equal world bounds, mesh by mesh name
         const bounds = await page.eval<Array<Record<string, number[]>>>(`(() => {
             const box = id => { const r = window.__SB_3D_EXTERNAL_OBJECTS__.get(id); r.updateMatrixWorld(true); const out = {};
@@ -193,6 +197,56 @@ describe.skipIf(!stagedChrome.ok)('staged build: clay, real textures, texture pr
         expect(Math.max(...back.mean.map((c, i) => Math.abs(c - clay.mean[i])))).toBeLessThan(6);
         expect((await page.eval<{ hidden: boolean } | null>(`sbHarness.layer(${JSON.stringify(`${L2()}~tex#1`)})`))!.hidden).toBe(true);
         expect(await page.eval<string>(`sbHarness.text('[data-testid="sb-staged-materials-toggle"]')`)).toBe('Show real textures');
+        expect(await page.eval<string | undefined>(`sbHarness.lastUpdate()?.stagedBuild?.materialMode`)).toBe('clay');
+        // reopened from what was saved: the clay choice holds, the twin is not loaded again
+        const saved = await page.eval<Record<string, unknown>>(`sbHarness.lastUpdate()`);
+        await page.eval(`sbHarness.mount(${JSON.stringify({ ...saved, objects: (saved.objects as Array<{ id: string }>).filter(o => !o.id.endsWith('~tex')) })})`);
+        await page.waitFor('sbHarness.ready()');
+        await page.waitFor(`sbHarness.attached(${JSON.stringify(L2())})`, 30_000, 'l2 attached after reopening');
+        await stepUntil('l2 revealed after reopening', async () => (await page.eval<{ phase: string } | null>(`sbHarness.layer(${JSON.stringify(L2())})`))?.phase === 'revealed');
+        await page.step(8, STEP);
+        expect(await page.eval<boolean>(`sbHarness.attached(${JSON.stringify(`${L2()}~tex`)})`)).toBe(false);
+        expect(await page.eval<string>(`sbHarness.text('[data-testid="sb-staged-materials-toggle"]')`)).toBe('Show real textures');
+        expect(page.consoleErrors().filter(e => !/favicon/.test(e))).toEqual([]);
+    }, 240_000);
+
+    test('textured by default: clay reveals first, then the twin crossfades in on its own; "Show clay" goes back', async () => {
+        const textured = { url: `/models/${L2()}.textured.glb`, bytes: twinGlb.length, ladderRung: 4, rungShares: [0.2, 0.2, 0.2, 0.2, 0.2, 0], provenance: [{ source: 'synthetic-test', label: 'generated', method: 'test', coverage: 1 }], confidenceChannels: 'R index, G weight, B rung, A produced', builtAtMs: 1, cached: false };
+        // a live run: the clay layers commit first, without a material mode
+        const live = fixtureState([L('l1'), L('l2')], { runState: 'running' });
+        await page.eval(`sbHarness.mount(${JSON.stringify(stagedSceneData(live))})`);
+        await page.waitFor('sbHarness.ready()');
+        for (const l of ['l1', 'l2'] as const) await page.waitFor(`sbHarness.attached(${JSON.stringify(objectIdOf(l))})`, 30_000, `${l} attached`);
+        await stepUntil('l2 revealed', async () => (await page.eval<{ phase: string } | null>(`sbHarness.layer(${JSON.stringify(L2())})`))?.phase === 'revealed');
+        await page.eval(`sbHarness.setCameraView([0, 7, 0], { theta: 0.5, phi: 1.1, distance: 34 })`);
+        await page.step(4, STEP);
+        const clay = await stats();
+        await page.screenshot('staged_texture_viewport_8_default_clay_first');
+        expect(clay.warm / clay.model, 'the first result is clay').toBeLessThan(0.02);
+        // the texture stage commits l2's twin: no click, the viewport crossfades to it
+        await page.eval(`sbHarness.update(${JSON.stringify(stagedSceneData(fixtureState([L('l1'), L('l2', { textured })], { runState: 'finished' })))})`);
+        await page.step(1, STEP);
+        await page.waitFor(`sbHarness.attached(${JSON.stringify(`${L2()}~tex`)})`, 30_000, 'twin attached');
+        await stepUntil('the twin revealed', async () => (await swapFrame(1, 'tex'))?.phase === 'revealed');
+        await page.step(4, STEP);
+        const tex = await stats();
+        await page.screenshot('staged_texture_viewport_9_default_textured');
+        expect(tex.warm / tex.model, 'textured on its own').toBeGreaterThan(0.6);
+        expect(await page.eval<string>(`sbHarness.text('[data-testid="sb-staged-materials-toggle"]')`)).toBe('Show clay');
+        // "Show clay": the clay crossfades back and the choice is saved
+        await page.eval(`sbHarness.click('[data-testid="sb-staged-materials-toggle"]')`);
+        await page.step(1, STEP);
+        await stepUntil('clay back', async () => (await swapFrame(2, 'clay'))?.phase === 'revealed');
+        await page.step(4, STEP);
+        const back = await stats();
+        await page.screenshot('staged_texture_viewport_10_default_show_clay');
+        expect(back.warm / back.model).toBeLessThan(0.02);
+        expect(await page.eval<string | undefined>(`sbHarness.lastUpdate()?.stagedBuild?.materialMode`)).toBe('clay');
+        // a later commit of the same run without a mode keeps the clay choice
+        await page.eval(`sbHarness.update(${JSON.stringify(stagedSceneData(fixtureState([L('l1'), L('l2', { textured })], { runState: 'finished' })))})`);
+        await page.step(8, STEP);
+        expect(await page.eval<string>(`sbHarness.text('[data-testid="sb-staged-materials-toggle"]')`)).toBe('Show real textures');
+        expect((await page.eval<{ hidden: boolean } | null>(`sbHarness.layer(${JSON.stringify(`${L2()}~tex#1`)})`))!.hidden).toBe(true);
         expect(page.consoleErrors().filter(e => !/favicon/.test(e))).toEqual([]);
     }, 240_000);
 
