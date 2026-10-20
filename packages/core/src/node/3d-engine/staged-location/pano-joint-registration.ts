@@ -343,6 +343,18 @@ export function heldOutPoseFit(frames: Prepared[], mesh: RenderMesh3D, corrs: Ma
     return { chamferPx: wmean(v => v.chamferPx), clayChamferPx: wmean(v => v.clayChamferPx), gradNcc: wmean(v => v.gradNcc), ...(outline ? { outlinePx: on ? r3(os / on) : null } : {}), views, ms: Date.now() - t0 };
 }
 
+/**
+ * The held-out fit (heldOutPoseFit, held-out cells only) of the wide frames of `frames` under `corrs`, each pano's rotations
+ * stated about its first wide frame's heading (as the edge registration states them).
+ */
+export function heldOutFitOfFrames(frames: EdgeRegFrame[], mesh: RenderMesh3D, corrs: Map<string, PoseCorrection>, widthPx: number = JOINT_METRIC_WIDTH_PX): PoseFit {
+    const wide = frames.filter(f => f.view.fovDeg >= EDGE_REG_MIN_FOV_DEG);
+    const ref = new Map<string, number>();
+    for (const f of wide) if (!ref.has(f.view.panoId)) ref.set(f.view.panoId, f.view.headingDeg);
+    const stated = new Map([...corrs].map(([id, c]) => [id, { ...c, referenceHeadingDeg: c.referenceHeadingDeg ?? ref.get(id) }]));
+    return heldOutPoseFit(wide.map(f => prepare(f, widthPx, stated.get(f.view.panoId)?.referenceHeadingDeg ?? ref.get(f.view.panoId)!)), mesh, stated, undefined, X => !trainCell(X));
+}
+
 /** Whether held-out fit `c` is better than `b` (see ACCEPT_*): better on one measure, not worse past the tolerance on the other. */
 export function fitIsBetter(c: PoseFit, b: PoseFit): boolean {
     if (c.chamferPx === null || c.gradNcc === null) return false;

@@ -17,10 +17,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
-import { renderFrameDepth, renderRegistrationOverlay, ZERO_CORRECTION, type FrameCamera, type PoseCorrection, type RgbaImage } from '../src/node/spatial/StreetViewPoseRegistrar';
+import { groundingHorizontalFovDeg, renderFrameDepth, renderRegistrationOverlay, ZERO_CORRECTION, type FrameCamera, type PoseCorrection, type RgbaImage } from '../src/node/spatial/StreetViewPoseRegistrar';
 import type { RenderMesh3D } from '../src/node/spatial/HeadlessMeshSilhouetteRenderer';
 import { castCamera } from '../src/node/3d-engine/staged-location/survey-casting';
-import { registerPanosByEdges, type EdgeRegFrame } from '../src/node/3d-engine/staged-location/pano-edge-registration';
+import { edgeRegistrar, registerPanosByEdges, type EdgeRegFrame } from '../src/node/3d-engine/staged-location/pano-edge-registration';
 import type { Registration, RegView } from '../src/node/3d-engine/staged-location/pano-registration';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 
@@ -163,5 +163,35 @@ describe('geometric pano registration (pano-edge-registration)', () => {
         const f = frames[0];
         const overlay = renderRegistrationOverlay(f.image, renderFrameDepth(mesh, castCamera(f.view)), renderFrameDepth(mesh, castCamera({ ...f.view, correction: r.registration.corrections.get('panoA') })));
         fs.writeFileSync(path.join(out, 'staged_location_edge_registration_coursing.png'), encodePng(W, H, overlay, 4));
+    }, 120_000);
+
+    it('polish only: a start inside the basin is refined without the grid or the multi-start, at a fraction of the evaluations', () => {
+        const mesh = facade();
+        const truth: PoseCorrection = { ...ZERO_CORRECTION, dx: 0.6, dy: 0.3, dyawDeg: 0.8 };
+        const v = view('panoA', [-3, 1.7, 20], 8);
+        const image = photo(mesh, v, truth);
+        const reg = edgeRegistrar(mesh);
+        const input = {
+            panoId: 'panoA', nominalEye: v.eye as [number, number, number],
+            frames: [{ key: 'panoA', image, headingDeg: v.headingDeg, pitchDeg: v.pitchDeg, fovDeg: groundingHorizontalFovDeg(v.fovDeg, W, H) }]
+        };
+        // a seed 0.2 m / 0.3 deg from the truth
+        const start: PoseCorrection = { ...truth, dx: truth.dx + 0.2, dyawDeg: truth.dyawDeg - 0.3, referenceHeadingDeg: v.headingDeg };
+        const polished = reg.registerPano({ ...input, initialCorrection: start, polishOnly: { maxEvals: 120 } });
+        const local = reg.registerPano({ ...input, initialCorrection: start });
+        expect(polished.evaluations.search).toBeLessThanOrEqual(3 * 120);
+        expect(local.evaluations.search).toBeGreaterThan(3 * polished.evaluations.search);
+        expect(Number.isNaN(polished.cost.coarse)).toBe(true);
+        // the polish lands where the full local search lands (one frame leaves lateral shift and yaw traded against each other,
+        // so the truth is checked on the height, which the frame pins)
+        for (const k of ['dx', 'dy', 'dz'] as const) expect(Math.abs(polished.correction[k] - local.correction[k])).toBeLessThan(0.1);
+        for (const k of ['dyawDeg', 'dpitchDeg', 'drollDeg'] as const) expect(Math.abs(polished.correction[k] - local.correction[k])).toBeLessThan(0.1);
+        expect(Math.abs(polished.correction.dy - truth.dy)).toBeLessThan(0.1);
+
+        const out = path.resolve(__dirname, '../../../test-results/screenshots');
+        fs.mkdirSync(out, { recursive: true });
+        const cam = (c: PoseCorrection) => castCamera({ ...v, correction: { ...c, referenceHeadingDeg: v.headingDeg } });
+        const overlay = renderRegistrationOverlay(image, renderFrameDepth(mesh, cam(start)), renderFrameDepth(mesh, cam(polished.correction)));
+        fs.writeFileSync(path.join(out, 'staged_location_edge_registration_polish_only.png'), encodePng(W, H, overlay, 4));
     }, 120_000);
 });
