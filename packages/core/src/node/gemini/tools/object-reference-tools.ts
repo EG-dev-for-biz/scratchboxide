@@ -52,7 +52,8 @@ import {
     type SpecObjectBuildResult,
     type VisionModelUse
 } from '../../3d-engine/reference-object-builder';
-import { glbToTriangleSoup, glbToTriangleSoupAsync, runInSlices, runToEnd, type TriangleSoup } from '../../3d-engine/part-connectivity';
+import { glbToTriangleSoup, glbToTriangleSoupAsync, runInSlices, runToEnd, type GlbInstanceMode, type TriangleSoup } from '../../3d-engine/part-connectivity';
+import { implausibleLayerBounds } from '../../3d-engine/layer-bounds-guard';
 import { errorMessage } from '../gemini-client';
 import { OBJECT_BUILD_SOURCE, type BuiltObjectRecord, type ObjectBuildSpec, type Vec3 } from '../../../common/spatial/object-build-spec';
 
@@ -392,8 +393,8 @@ export class SurfaceSampler {
         private readonly nz: number,
         private readonly start: Uint32Array,
         private readonly tris: Uint32Array,
-        /** Extent of the placed model in x and z. */
-        readonly bounds: { minX: number; maxX: number; minZ: number; maxZ: number }
+        /** Extent of the placed model in x and z, and in height. */
+        readonly bounds: { minX: number; maxX: number; minZ: number; maxZ: number; minY: number; maxY: number }
     ) {}
 
     /** Memory the sampler holds, in bytes. */
@@ -411,7 +412,7 @@ export class SurfaceSampler {
             if (Number.isFinite(minY)) lift -= minY;
         }
         const p = new Float32Array(soup.positions.length);
-        let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+        let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity, minY = Infinity, maxY = -Infinity;
         for (let i = 0; i < p.length; i += 3) {
             const x = soup.positions[i], y = soup.positions[i + 1], z = soup.positions[i + 2];
             p[i] = c * x + s * z + place.x;
@@ -419,10 +420,11 @@ export class SurfaceSampler {
             p[i + 2] = -s * x + c * z + place.z;
             minX = Math.min(minX, p[i]); maxX = Math.max(maxX, p[i]);
             minZ = Math.min(minZ, p[i + 2]); maxZ = Math.max(maxZ, p[i + 2]);
+            minY = Math.min(minY, p[i + 1]); maxY = Math.max(maxY, p[i + 1]);
             if (i % (TRIANGLES_PER_YIELD * 3) === 0) yield;
         }
         const triCount = soup.indices.length / 3;
-        if (triCount === 0) return new SurfaceSampler(p, soup.indices, 0, 0, 1, 0, 0, new Uint32Array(1), new Uint32Array(0), { minX: 0, maxX: 0, minZ: 0, maxZ: 0 });
+        if (triCount === 0) return new SurfaceSampler(p, soup.indices, 0, 0, 1, 0, 0, new Uint32Array(1), new Uint32Array(0), { minX: 0, maxX: 0, minZ: 0, maxZ: 0, minY: 0, maxY: 0 });
         const n = Math.min(256, Math.max(1, Math.ceil(Math.sqrt(triCount / 2))));
         const cell = Math.max(maxX - minX, maxZ - minZ, 1e-6) / n;
         const nx = Math.max(1, Math.ceil((maxX - minX) / cell) + 1), nz = Math.max(1, Math.ceil((maxZ - minZ) / cell) + 1);
@@ -447,7 +449,7 @@ export class SurfaceSampler {
             for (let j = z0; j <= z1; j++) for (let i = x0; i <= x1; i++) tris[fill[j * nx + i]++] = t;
             if (t % TRIANGLES_PER_YIELD === TRIANGLES_PER_YIELD - 1) yield;
         }
-        return new SurfaceSampler(p, soup.indices, minX, minZ, cell, nx, nz, start, tris, { minX, maxX, minZ, maxZ });
+        return new SurfaceSampler(p, soup.indices, minX, minZ, cell, nx, nz, start, tris, { minX, maxX, minZ, maxZ, minY, maxY });
     }
 
     /** The soup placed as `place` says. */
@@ -465,8 +467,8 @@ export class SurfaceSampler {
         return soup ? SurfaceSampler.fromSoup(soup, place) : undefined;
     }
 
-    /** Reads and bins the GLB in slices. */
-    static async fromGlbAsync(glb: Buffer, place: SamplerPlace, options: { signal?: AbortSignal; abortError?: () => Error } = {}): Promise<SurfaceSampler | undefined> {
+    /** Reads and bins the GLB in slices; `instances` as glbToTriangleSoup takes it. */
+    static async fromGlbAsync(glb: Buffer, place: SamplerPlace, options: { signal?: AbortSignal; abortError?: () => Error; instances?: GlbInstanceMode } = {}): Promise<SurfaceSampler | undefined> {
         const soup = await glbToTriangleSoupAsync(glb, { colors: false, ...options });
         return soup ? SurfaceSampler.fromSoupAsync(soup, place, options) : undefined;
     }
@@ -527,16 +529,16 @@ class PlacementStoppedError extends Error {
 const SAMPLER_CACHE_BYTES = 384 * 1024 * 1024;
 const samplerCache = new Map<string, SurfaceSampler>();
 
-async function cachedSampler(file: string, place: SamplerPlace, signal: AbortSignal | undefined): Promise<SurfaceSampler | undefined> {
+async function cachedSampler(file: string, place: SamplerPlace, signal: AbortSignal | undefined, instances: GlbInstanceMode): Promise<SurfaceSampler | undefined> {
     const stat = await fs.promises.stat(file);
-    const key = JSON.stringify([path.resolve(file), stat.mtimeMs, stat.size, place.x, place.y, place.z, place.yawDeg, !!place.seatBase]);
+    const key = JSON.stringify([path.resolve(file), stat.mtimeMs, stat.size, place.x, place.y, place.z, place.yawDeg, !!place.seatBase, instances]);
     const hit = samplerCache.get(key);
     if (hit) {
         samplerCache.delete(key);
         samplerCache.set(key, hit);
         return hit;
     }
-    const sampler = await SurfaceSampler.fromGlbAsync(await fs.promises.readFile(file), place, { signal, abortError: () => new PlacementStoppedError() });
+    const sampler = await SurfaceSampler.fromGlbAsync(await fs.promises.readFile(file), place, { signal, abortError: () => new PlacementStoppedError(), instances });
     if (!sampler) return undefined;
     samplerCache.set(key, sampler);
     let bytes = [...samplerCache.values()].reduce((n, s) => n + s.byteSize, 0);
@@ -576,8 +578,17 @@ async function loadSurfaces(objects: any[], modelsDirs: string[], signal: AbortS
         if (signal?.aborted) throw new PlacementStoppedError();
         const file = modelFile(glbUriOf(o), modelsDirs);
         if (!file) throw new PlacementError(`could not read the staged model ${glbUriOf(o)} to place the object (looked in ${modelsDirs.join(', ')})`);
-        const sampler = await cachedSampler(file, place, signal);
+        // a trees layer's instanced leaf clusters lie inside its far level's crown masses, which are read; expanding every
+        // leaf of a district would take millions of triangles for no change in what covers a spot
+        const sampler = await cachedSampler(file, place, signal, o?.content?.metadata?.vegetation === true ? 'skip' : 'expand');
         if (!sampler) throw new PlacementError(`the staged model ${glbUriOf(o)} is not a readable GLB`);
+        // a layer no real place can have would otherwise read as covering every spot (or none): refuse it, saying why
+        const b = sampler.bounds;
+        const impossible = implausibleLayerBounds({ min: [b.minX, b.minY, b.minZ], max: [b.maxX, b.maxY, b.maxZ] });
+        if (impossible) {
+            throw new PlacementError(`${describeLayer(o)} cannot be placed against: ${impossible}, so it is broken and was not used. Stage the place again to rebuild it` +
+                `${o?.content?.metadata?.vegetation === true ? ', or stage it with trees: false' : ''}.`);
+        }
         return { object: o, ground: isGroundLayer(o), sampler };
     };
     const seatedByViewport = (o: any) => !isEnvironmentLayer(o) && !hasRecordedSeat(o);
