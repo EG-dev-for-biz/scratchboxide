@@ -20,6 +20,12 @@
  *   relief     grooves or beads along curves on another part's surface
  * Labels are diagnostic text and nothing branches on them. A child part attaches by parameter on its
  * parent's evaluated surface, so connections hold by construction instead of by guessed coordinates.
+ *
+ * A sweep or revolve part may carry a `material`: its surface as continuous physical factors (linear RGB albedo,
+ * roughness, metalness, transmission, index of refraction, clearcoat, emission). There is no material type or
+ * preset: glass, brushed steel, enamel paint and an alien seed husk are all points in the same factor space, and
+ * `description` is diagnostic text that nothing reads. The interpreter writes these factors into each part's glTF
+ * material (factors only, no texture maps); a clay build ignores them and gives every part studio clay.
  */
 
 export type Vec3 = [number, number, number];
@@ -97,9 +103,44 @@ export interface ReliefOperator {
     sharpness: number;
 }
 
+/**
+ * A part's surface as physical factors, the glTF 2.0 metallic-roughness model plus the clearcoat, transmission, ior
+ * and emissive_strength extensions. All colours are linear RGB in 0..1 (not sRGB: an sRGB value v/255 is about
+ * (v/255)^2.2 linear).
+ */
+export interface PartMaterial {
+    /** Linear RGB albedo of a dielectric, or specular colour of a metal, 0..1 each. */
+    baseColor: Vec3;
+    /** 0 mirror-smooth .. 1 fully diffuse. */
+    roughness: number;
+    /** 0 dielectric .. 1 bare metal. */
+    metalness: number;
+    /** 0 opaque .. 1 fully see-through (light passes through the surface, tinted by baseColor). */
+    transmission: number;
+    /** Index of refraction, 1..3 (glTF default 1.5). */
+    ior?: number;
+    /** Strength of a clear lacquer layer over the surface, 0..1. */
+    clearcoat?: number;
+    /** Linear RGB colour the surface emits, 0..1 each. */
+    emissive?: Vec3;
+    /** Multiplier on `emissive` (glTF KHR_materials_emissive_strength), 0..MATERIAL_LIMITS.maxEmissiveStrength. */
+    emissiveStrength?: number;
+    /** What the surface looks like, in words (diagnostic only; nothing reads it). */
+    description?: string;
+}
+
+/** Ranges every material factor is validated against. */
+export const MATERIAL_LIMITS = {
+    minIor: 1,
+    maxIor: 3,
+    maxEmissiveStrength: 100
+} as const;
+
 export interface ObjectPartSpec {
     id: string;
     label: string;
+    /** Surface factors of a sweep or revolve part (and its replicated and mirrored copies). */
+    material?: PartMaterial;
     parentId?: string;
     attach?: PartAttachment;
     /** Also emit this part (and what is attached to it) reflected across the plane through the origin with this normal. */
@@ -171,10 +212,54 @@ const tuple = (size: number, description: string): Record<string, unknown> => ({
 });
 const vec3 = (description: string) => tuple(3, description);
 
+const unit = (description: string) => num(description, 0, 1);
+const rgb = (description: string): Record<string, unknown> => ({ ...tuple(3, description), items: { type: 'number', minimum: 0, maximum: 1 } });
+
+/** The material block of a part, as stated to the vision model. */
+export const PART_MATERIAL_JSON_SCHEMA: Record<string, unknown> = {
+    type: 'object',
+    description: 'The surface of this sweep or revolve part as physical factors read from the picture (also used by its copies). Not for replicate or relief parts.',
+    properties: {
+        description: { type: 'string', description: 'The surface in a few words, e.g. "gloss red enamel paint" (diagnostic only).' },
+        baseColor: rgb('LINEAR RGB 0..1 of the surface colour (for a metal, its tint), not sRGB: convert each sRGB channel v/255 to about (v/255)^2.2.'),
+        roughness: unit('0 mirror-smooth, 0.3 satin, 0.6 matte, 1 chalky.'),
+        metalness: unit('1 for bare metal, 0 for everything else (paint, plastic, glass, stone, wood, organic tissue).'),
+        transmission: unit('How much light passes through: 0 opaque, about 0.9-1 for clear glass, clear liquid or transparent plastic.'),
+        ior: num('Index of refraction: about 1.33 water, 1.45-1.55 glass and plastics, 2.4 diamond. Omit for the 1.5 default.', MATERIAL_LIMITS.minIor, MATERIAL_LIMITS.maxIor),
+        clearcoat: unit('Clear lacquer over the surface: 1 for glossy car paint or varnish, else omit or 0.'),
+        emissive: rgb('Only for surfaces that glow: the LINEAR RGB colour they emit.'),
+        emissiveStrength: num('Only with emissive: brightness multiplier (1 a dim glow, 5-20 a bright lamp).', 0, MATERIAL_LIMITS.maxEmissiveStrength)
+    },
+    required: ['baseColor', 'roughness', 'metalness', 'transmission'],
+    propertyOrdering: ['description', 'baseColor', 'roughness', 'metalness', 'transmission', 'ior', 'clearcoat', 'emissive', 'emissiveStrength']
+};
+
 /**
  * The spec's schema as given to the vision model (kept to the JSON Schema subset Gemini understands). Rules a
  * schema cannot state, such as "exactly one operator block per part", are enforced by `validateObjectBuildSpec`.
+ * With `materials: false` (a clay build) parts have no material block to fill.
  */
+export function objectBuildSpecJsonSchema(options: { materials: boolean }): Record<string, unknown> {
+    const base = OBJECT_BUILD_SPEC_JSON_SCHEMA as any;
+    if (!options.materials) return base;
+    const items = base.properties.parts.items;
+    return {
+        ...base,
+        properties: {
+            ...base.properties,
+            parts: {
+                ...base.properties.parts,
+                items: {
+                    ...items,
+                    properties: { ...items.properties, material: PART_MATERIAL_JSON_SCHEMA },
+                    propertyOrdering: [...items.propertyOrdering, 'material']
+                }
+            }
+        }
+    };
+}
+
+/** The spec's schema without material blocks (geometry only); objectBuildSpecJsonSchema adds them. */
 export const OBJECT_BUILD_SPEC_JSON_SCHEMA: Record<string, unknown> = {
     type: 'object',
     properties: {
@@ -335,7 +420,7 @@ function given(v: unknown): boolean {
  * Checks a spec against the contract the interpreter relies on. Returns every problem found, each naming the
  * field, so a model can correct them in one pass. An empty list means the spec can be built.
  */
-export function validateObjectBuildSpec(input: unknown): string[] {
+export function validateObjectBuildSpec(input: unknown, options: { requireMaterials?: boolean } = {}): string[] {
     const errors: string[] = [];
     if (!isRecord(input)) return ['spec must be a JSON object'];
     const spec = input;
@@ -391,6 +476,16 @@ export function validateObjectBuildSpec(input: unknown): string[] {
         }
         if (given(raw.mirrorPlaneNormal) && !isNonZeroVec3(raw.mirrorPlaneNormal)) {
             errors.push(`${where}: mirrorPlaneNormal must be a non-zero [x, y, z] vector`);
+        }
+        const geometric = present.length === 1 && (present[0] === 'sweep' || present[0] === 'revolve');
+        if (given(raw.material)) {
+            if (present.length === 1 && !geometric) {
+                errors.push(`${where}: a ${present[0]} part has no surface of its own, so it cannot have a material; give the material to the part it ${present[0] === 'replicate' ? 'copies' : 'cuts into'}`);
+            } else {
+                validatePartMaterial(raw.material, where, errors);
+            }
+        } else if (options.requireMaterials && geometric) {
+            errors.push(`${where}: material is required: read this part's surface (baseColor, roughness, metalness, transmission) from the picture`);
         }
     });
 
@@ -498,6 +593,39 @@ function isNonZeroVec3(v: unknown): v is Vec3 {
 
 function isPair(v: unknown): v is [number, number] {
     return Array.isArray(v) && v.length === 2 && v.every(isFiniteNumber);
+}
+
+/** Checks one material block against the factor ranges; every problem is named. */
+export function validatePartMaterial(material: unknown, where: string, errors: string[]): void {
+    if (!isRecord(material)) {
+        errors.push(`${where}: material must be an object`);
+        return;
+    }
+    const m = material;
+    const inUnit = (v: unknown) => isFiniteNumber(v) && v >= 0 && v <= 1;
+    const isRgb = (v: unknown) => Array.isArray(v) && v.length === 3 && v.every(inUnit);
+    if (!isRgb(m.baseColor)) errors.push(`${where}: material.baseColor must be [r, g, b] linear RGB, each between 0 and 1`);
+    for (const key of ['roughness', 'metalness', 'transmission'] as const) {
+        if (!inUnit(m[key])) errors.push(`${where}: material.${key} must be between 0 and 1`);
+    }
+    if (given(m.ior) && (!isFiniteNumber(m.ior) || m.ior < MATERIAL_LIMITS.minIor || m.ior > MATERIAL_LIMITS.maxIor)) {
+        errors.push(`${where}: material.ior must be between ${MATERIAL_LIMITS.minIor} and ${MATERIAL_LIMITS.maxIor}`);
+    }
+    if (given(m.clearcoat) && !inUnit(m.clearcoat)) errors.push(`${where}: material.clearcoat must be between 0 and 1`);
+    if (given(m.emissive) && !isRgb(m.emissive)) errors.push(`${where}: material.emissive must be [r, g, b] linear RGB, each between 0 and 1`);
+    if (given(m.emissiveStrength)) {
+        if (!isFiniteNumber(m.emissiveStrength) || m.emissiveStrength < 0 || m.emissiveStrength > MATERIAL_LIMITS.maxEmissiveStrength) {
+            errors.push(`${where}: material.emissiveStrength must be between 0 and ${MATERIAL_LIMITS.maxEmissiveStrength}`);
+        } else if (!given(m.emissive)) {
+            errors.push(`${where}: material.emissiveStrength needs material.emissive (the colour it multiplies)`);
+        }
+    }
+    if (given(m.description) && typeof m.description !== 'string') errors.push(`${where}: material.description must be a string`);
+}
+
+/** Sweep and revolve parts with no material: a non-clay build gives them studio clay and says which they are. */
+export function partsWithoutMaterial(spec: ObjectBuildSpec): string[] {
+    return spec.parts.filter(p => (p.sweep || p.revolve) && !p.material).map(p => p.id);
 }
 
 function validateSweep(
@@ -772,15 +900,18 @@ export function toPythonLiteral(value: unknown, indent = 0): string {
  * The build script stored with the scene (data.pythonGenerator.sourceCode): running it rebuilds the object from SPEC.
  * The object is changed through build_3d_object_from_reference with the edited spec, which keeps it at its place.
  */
-export function buildObjectSpecScript(spec: ObjectBuildSpec): string {
+export function buildObjectSpecScript(spec: ObjectBuildSpec, options: { clay?: boolean } = {}): string {
     return [
         '# Built by build_3d_object_from_reference from SPEC (metres, +Y up). To change the object, pass the edited',
         '# spec to build_3d_object_from_reference as specJson (with its location and placement when it stands at a place).',
+        options.clay
+            ? '# clay=True: every part is studio clay; any material in SPEC is ignored.'
+            : '# Each part\'s material factors become its glTF material; a part without one is studio clay.',
         'import scratchbox as sb',
         '',
         `SPEC = ${toPythonLiteral(spec)}`,
         '',
-        'sb.io.write_glb(OUTPUT_GLB_PATH, sb.object_spec.build(SPEC))',
+        `sb.io.write_glb(OUTPUT_GLB_PATH, sb.object_spec.build(SPEC${options.clay ? ', clay=True' : ''}))`,
         ''
     ].join('\n');
 }

@@ -302,6 +302,10 @@ NB_MODULE(scratchbox_native, m) {
             [](const PbrMaterial& self) { return self.emissiveStrength; },
             [](PbrMaterial& self, float val) { self.emissiveStrength = val; })
         .def_rw("clearcoat", &PbrMaterial::clearcoatFactor)
+        .def_rw("clearcoat_roughness", &PbrMaterial::clearcoatRoughnessFactor)
+        .def_rw("transmission", &PbrMaterial::transmissionFactor)
+        .def_rw("thickness", &PbrMaterial::thicknessFactor)
+        .def_rw("double_sided", &PbrMaterial::doubleSided)
         .def_rw("ior", &PbrMaterial::ior)
         .def("set_base_color", [](PbrMaterial& self, const Vec4& c) { self.baseColorFactor = c; }, "color"_a)
         .def("set_color", [](PbrMaterial& self, const Vec4& c) { self.baseColorFactor = c; }, "color"_a)
