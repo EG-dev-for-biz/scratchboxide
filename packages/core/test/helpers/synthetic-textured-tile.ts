@@ -31,9 +31,16 @@ export interface SyntheticCurtain { x0: number; z0: number; x1: number; z1: numb
  */
 export interface SyntheticBuilding { x0: number; z0: number; x1: number; z1: number; height: number; roofBump?: { x: number; z: number; height: number; radius: number }; hollow?: boolean }
 
+/** A street: a carriageway `halfWidth` either side of the centreline, sunk `kerb` below the ground around it; an optional raised median along it. */
+export interface SyntheticRoad { x0: number; z0: number; x1: number; z1: number; halfWidth: number; kerb: number; median?: { halfWidth: number } }
+
 export interface SyntheticTileSpec {
     /** Ground covers [-halfSize, halfSize] in x and z. */
     halfSize: number;
+    /** Streets sunk into the ground by their kerb height, in their own (dark) texture. */
+    roads?: SyntheticRoad[];
+    /** Paint lane lines into the street texture: a dashed white line along x at z = 0 (5 m on, 5 m off) and a solid one along z at x = 0, 10, 20... */
+    roadMarkings?: boolean;
     /** Ground grid spacing (m). */
     spacing: number;
     trees: SyntheticTree[];
@@ -58,6 +65,7 @@ export const GROUND_RGB: [number, number, number] = [124, 122, 118];
 export const FACADE_RGB: [number, number, number] = [168, 150, 128];
 /** Shadowed drape: neither green nor dark enough to be left unjudged. */
 export const DRAPE_RGB: [number, number, number] = [92, 88, 84];
+export const ROAD_RGB: [number, number, number] = [64, 62, 66];
 
 function hash(a: number, b: number, c: number): number {
     let h = (Math.imul(a | 0, 73856093) ^ Math.imul(b | 0, 19349663) ^ Math.imul(c | 0, 83492791)) >>> 0;
@@ -66,14 +74,16 @@ function hash(a: number, b: number, c: number): number {
     return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
-function texture(rgb: [number, number, number], seed: number): Buffer {
+function texture(rgb: [number, number, number], seed: number, markings = false): Buffer {
     const W = 32, H = 32;
     const px = Buffer.alloc(W * H * 4);
     for (let y = 0; y < H; y++) {
         for (let x = 0; x < W; x++) {
             const n = (hash(x, y, seed) - 0.5) * 16;
             const o = (y * W + x) * 4;
-            for (let c = 0; c < 3; c++) px[o + c] = Math.max(0, Math.min(255, Math.round(rgb[c] + n)));
+            // the UVs are world x 0.1, so one texel is 0.3125 m: row 0 lies along z = 0 (mod 10 m), column 0 along x = 0 (mod 10 m)
+            const line = markings && ((y === 0 && x < 16) || x === 0);
+            for (let c = 0; c < 3; c++) px[o + c] = line ? 240 : Math.max(0, Math.min(255, Math.round(rgb[c] + n)));
             px[o + 3] = 255;
         }
     }
@@ -136,7 +146,24 @@ export function buildSyntheticTile(spec: SyntheticTileSpec): Buffer {
     const foliage: Prim = { pos: [], uv: [], idx: [] };
     const facade: Prim = { pos: [], uv: [], idx: [] };
     const drape: Prim = { pos: [], uv: [], idx: [] };
+    const road: Prim = { pos: [], uv: [], idx: [] };
     const b = spec.building;
+    // a point's street: on a carriageway (not a median) it is sunk by the kerb
+    const roadAt = (x: number, z: number): { carriageway: boolean; sunk: number } => {
+        let carriageway = false, sunk = 0;
+        for (const r of spec.roads ?? []) {
+            const dx = r.x1 - r.x0, dz = r.z1 - r.z0, len = Math.hypot(dx, dz);
+            if (len < 1e-6) continue;
+            const t = ((x - r.x0) * dx + (z - r.z0) * dz) / (len * len);
+            if (t < 0 || t > 1) continue;
+            const off = Math.abs((x - r.x0) * (-dz / len) + (z - r.z0) * (dx / len));
+            if (off > r.halfWidth) continue;
+            if (r.median && off <= r.median.halfWidth) continue;
+            carriageway = true;
+            sunk = Math.max(sunk, r.kerb);
+        }
+        return { carriageway, sunk };
+    };
     const inBuilding = (x: number, z: number) => !!b && !b.hollow && x > b.x0 - 1e-6 && x < b.x1 + 1e-6 && z > b.z0 - 1e-6 && z < b.z1 + 1e-6;
 
     // ground + canopy heightfield
@@ -148,7 +175,7 @@ export function buildSyntheticTile(spec: SyntheticTileSpec): Buffer {
             let h = 0;
             for (const t of spec.trees) h = Math.max(h, crownHeight(t, x, z), hemHeight(t, x, z));
             if (h > 0.4) h += (hash(i, k, 7) - 0.5) * 0.7; // rough canopy surface
-            H[i].push(Math.max(0, h));
+            H[i].push(h > 0.4 ? Math.max(0, h) : -roadAt(x, z).sunk);
         }
     }
     const slope = spec.slope ?? 0;
@@ -167,7 +194,7 @@ export function buildSyntheticTile(spec: SyntheticTileSpec): Buffer {
             const hs = [H[i][k], H[i + 1][k], H[i][k + 1], H[i + 1][k + 1]];
             const cx = x0 + s / 2, cz = z0 + s / 2;
             const inCrown = spec.trees.some(t => Math.hypot(cx - t.x, cz - t.z) < t.radius);
-            const p = Math.max(...hs) > 0.5 ? (inCrown ? foliage : drape) : ground;
+            const p = Math.max(...hs) > 0.5 ? (inCrown ? foliage : drape) : roadAt(cx, cz).carriageway ? road : ground;
             const a = vid(p, x0 + jx(i, k), hs[0], z0 + jz(i, k)), bb = vid(p, x1 + jx(i + 1, k), hs[1], z0 + jz(i + 1, k));
             const c = vid(p, x0 + jx(i, k + 1), hs[2], z1 + jz(i, k + 1)), d = vid(p, x1 + jx(i + 1, k + 1), hs[3], z1 + jz(i + 1, k + 1));
             // up-facing winding: (a, c, b) and (b, c, d) in the x-east / z-south frame
@@ -244,12 +271,12 @@ export function buildSyntheticTile(spec: SyntheticTileSpec): Buffer {
     const materials: any[] = [];
     const meshes: any[] = [];
     const nodes: any[] = [{ name: 'district', children: [] as number[] }];
-    const prims: Array<[Prim, [number, number, number], number]> = [[ground, spec.groundRgb ?? GROUND_RGB, 1], [foliage, FOLIAGE_RGB, 2], [facade, FACADE_RGB, 3], [drape, DRAPE_RGB, 4]];
+    const prims: Array<[Prim, [number, number, number], number]> = [[ground, spec.groundRgb ?? GROUND_RGB, 1], [foliage, FOLIAGE_RGB, 2], [facade, FACADE_RGB, 3], [drape, DRAPE_RGB, 4], [road, ROAD_RGB, 5]];
     for (const [p, rgb, seed] of prims) {
         if (!p.idx.length) continue;
         let material: number | undefined;
         if (!spec.untextured) {
-            const png = spec.corruptTexture && rgb === FOLIAGE_RGB ? Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(40, 0x5a)]) : texture(rgb, seed);
+            const png = spec.corruptTexture && rgb === FOLIAGE_RGB ? Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(40, 0x5a)]) : texture(rgb, seed, !!spec.roadMarkings && p === road);
             images.push({ bufferView: addView(png), mimeType: 'image/png' });
             textures.push({ source: images.length - 1, sampler: 0 });
             materials.push({ pbrMetallicRoughness: { baseColorTexture: { index: textures.length - 1 }, metallicFactor: 0, roughnessFactor: 1 }, extensions: { KHR_materials_unlit: {} } });

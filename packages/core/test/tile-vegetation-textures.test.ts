@@ -163,12 +163,14 @@ describe('textures chosen per tree (plant)', () => {
         // a yellow crown gets a yellower set than a green one (red over green of the chosen set's mean)
         const ratio = (id: string) => { const e = INDEX.leaves.find(x => x.id === id)!.colour.meanLinearRgb; return e[0] / e[1]; };
         expect(ratio(byId.get(1)!.leaves.entry)).toBeGreaterThan(ratio(byId.get(0)!.leaves.entry) + 0.3);
-        // the tint takes the chosen set's mean most of the way to the measured chromaticity
+        // the tint takes the chosen set's mean to the measured crown colour itself: the leaves read as the scan's blob
         for (const c of CROWNS.filter(c => c.colour)) {
             const t = byId.get(c.id)!;
             const e = INDEX.leaves.find(x => x.id === t.leaves.entry)!.colour.meanLinearRgb;
             const tinted = e.map((v, k) => v * t.leaves.tint[k]);
-            expect(dist(chroma(tinted), chroma(c.colour!.meanLinearRgb))).toBeLessThan(dist(chroma(e), chroma(c.colour!.meanLinearRgb)) + 1e-9);
+            tinted.forEach((v, k) => expect(v, `crown ${c.id} channel ${k}`).toBeCloseTo(c.colour!.meanLinearRgb[k], 3));
+            t.massColourLinear.forEach((v, k) => expect(v, `crown ${c.id} masses ${k}`).toBeCloseTo(c.colour!.meanLinearRgb[k], 3));
+            expect(dist(chroma(tinted), chroma(c.colour!.meanLinearRgb))).toBeLessThan(1e-3);
         }
         // bark: the old large tree's target relief and chosen relief exceed the young small tree's
         const young = byId.get(4)!.bark, old = byId.get(5)!.bark;

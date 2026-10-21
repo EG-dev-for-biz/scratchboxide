@@ -277,8 +277,12 @@ describe('tile_vegetation plant (SB-Veggie, space colonisation)', () => {
             const ex = range.extras;
             const crown = crowns.find(c => c.id === ex.crownId);
             expect(crown.status).toBe('tree');
-            expect(ex.inferred.trunkRadiusPerHeight).toBe(0.016);
-            expect(Math.abs(ex.inferred.crownBaseRatio - 0.35)).toBeLessThanOrEqual(0.1 + 1e-9);   // 0.35 varied by the crown's seeded spread
+            // the proportions it grew with are its species entry's (the one nearest its measurements), varied by the crown's seeded spread
+            const grown = ex.sbTree.species.grownWith;
+            expect(ex.inferred.trunkRadiusPerHeight).toBe(grown.trunkRadiusPerHeight);
+            expect(ex.inferred.crownBaseRatio).toBeCloseTo(grown.crownBaseRatio, 8);
+            expect(ex.inferred.trunkRadiusPerHeight).toBeGreaterThan(0.005);
+            expect(ex.inferred.crownBaseRatio).toBeLessThan(0.95);
             expect(ex.triangles).toBeLessThanOrEqual(ex.triangleBudget);
             let minY = Infinity, maxY = -Infinity, maxR = 0;
             for (let i = range.firstTriangle * 3; i < (range.firstTriangle + range.triangleCount) * 3; i++) {

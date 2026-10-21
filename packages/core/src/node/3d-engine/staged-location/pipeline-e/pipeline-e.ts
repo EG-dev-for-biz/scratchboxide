@@ -28,6 +28,7 @@ import { readFaceOrtho, runMassing, type MassingNode, type MassingRun } from './
 import { baseLegend, fillNearest, medianColour, SRC, textureFromOrtho } from './face-textures';
 import { facadeMaterialsEnabled } from '../facade-material-evidence';
 import { auditMassingRun, UNSURE_PROVENANCE } from './residual-audit-e';
+import { delightTileImageBytes } from './residual-tile-delight';
 
 /** Below this share of its texels covered by the tile, a face is filled with one median colour. */
 export const LOW_COVERAGE = 0.35;
@@ -39,9 +40,16 @@ export const PIPELINE_E_VERSION = `pipeline-e/v2${facadeMaterialsEnabled() ? '+m
 export const SHAPE_TIERS_TOKEN = 'shape-tiers-measured';
 export const SHAPE_PROGRAM_TOKEN = 'shape-program-inferred';
 
-/** SCRATCHBOX_STAGED_PIPELINE=e turns pipeline E on (off by default). */
+/**
+ * On by default for an isolated structure (2026-10-21, the round-3 bake-off: E-enhanced scored highest of every arm on
+ * the places it reached, and a massing or roof gate failure already falls back to the current pipeline with the reason
+ * recorded, so turning this on changes nothing on a building E cannot handle). SCRATCHBOX_STAGED_PIPELINE=d (or 0) goes
+ * back to the current pipeline; =e is still accepted, now a no-op. District builds never read this (orchestrator.ts
+ * gates pipeline E on request.isolate).
+ */
 export function stagedPipelineE(env: NodeJS.ProcessEnv = process.env): boolean {
-    return (env.SCRATCHBOX_STAGED_PIPELINE ?? '').trim().toLowerCase() === 'e';
+    const v = (env.SCRATCHBOX_STAGED_PIPELINE ?? '').trim().toLowerCase();
+    return v !== 'd' && v !== '0';
 }
 /** SCRATCHBOX_STAGED_PIPELINE_E_INFERENCE=0: pipeline E without its inferred steps (the bake-off's E-minus-inference arm). */
 export function pipelineEInference(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -150,10 +158,12 @@ export function plainTextures(run: MassingRun): { textures: Map<number, FaceText
 
 /** Writes the clay layer and its textured twin into `dir`. */
 export function writeMassingLayer(run: MassingRun, massing: Pick<Massing, 'check'>, textures: Map<number, FaceTexture>, legend: TexelSource[], dir: string, stage: string, stageKey: string, name = 'massing', provenanceOf?: (n: MassingNode) => ProvenanceRecord | undefined): MassingLayerFiles {
+    // de-lit (residual-tile-delight.ts): every other texel in the scene is de-lit on its way in, but a residual
+    // ("as-scanned") cluster renders straight off this shared image, its own native UV, nothing else touching it
     const tileImages = new Map<number, { bytes: Uint8Array; mimeType: string }>();
     for (const im of run.report.images) {
         const f = path.join(run.dir, im.file);
-        if (fs.existsSync(f)) tileImages.set(im.image, { bytes: fs.readFileSync(f), mimeType: im.mimeType || 'image/jpeg' });
+        if (fs.existsSync(f)) tileImages.set(im.image, { bytes: delightTileImageBytes(fs.readFileSync(f)), mimeType: 'image/png' });
     }
     const input = {
         nodes: run.nodes, faces: run.report.faces, stage, stageKey, textures, legend, tileImages, tileLegendIndex: 0,

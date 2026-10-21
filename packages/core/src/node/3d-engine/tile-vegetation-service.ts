@@ -205,6 +205,8 @@ export interface TileVegetationStripRequest {
     roi?: StripRoi;
     /** Also write a top-down PNG of the measurement. */
     topDown?: boolean;
+    /** Regrow each crown with the tree species library (assets/vegetation/species/index.json; default true; ignored when the checkout has none). */
+    species?: boolean;
     /** Hex seed (1-16 digits) the trees are regrown with to decide which to remove; default the tile's sha256 (16 hex digits), as plant is seeded by the pipeline. */
     seed?: string;
     threads?: number;
@@ -256,6 +258,12 @@ export interface TileVegetationPlantRequest {
      * no library).
      */
     textures?: boolean;
+    /**
+     * Grow each crown with the proportions of the tree species library entry nearest its measurements
+     * (assets/vegetation/species/index.json; default true; ignored when the checkout has no library). Must match the
+     * strip that measured the crowns: plant refuses a crowns.json measured with another library (bad_request).
+     */
+    species?: boolean;
     /** Copy the trees GLB to public/models/<publishAs> (a plain *.glb name). */
     publishAs?: string;
     /**
@@ -368,6 +376,15 @@ export const TREE_TEXTURE_INDEX = path.join('assets', 'textures', 'trees', 'inde
 /** The tree texture library's index in a checkout, or undefined when it has none. */
 export function treeTextureIndexPath(repoRoot: string): string | undefined {
     const file = path.join(repoRoot, TREE_TEXTURE_INDEX);
+    return fs.existsSync(file) ? file : undefined;
+}
+
+/** The tree species library's index, relative to the checkout (see scratchbox_tree_species.hpp). */
+export const TREE_SPECIES_INDEX = path.join('assets', 'vegetation', 'species', 'index.json');
+
+/** The tree species library's index in a checkout, or undefined when it has none. */
+export function treeSpeciesIndexPath(repoRoot: string): string | undefined {
+    const file = path.join(repoRoot, TREE_SPECIES_INDEX);
     return fs.existsSync(file) ? file : undefined;
 }
 
@@ -603,8 +620,13 @@ export class TileVegetationService {
         if (req.seed !== undefined && (typeof req.seed !== 'string' || !/^[0-9a-fA-F]{1,16}$/.test(req.seed))) throw new TileVegetationError('bad_request', 'seed must be 1-16 hex digits');
         const seed = (req.seed ?? tileSha256.slice(0, 16)).toLowerCase();
         const roi = req.roi === undefined ? undefined : checkRoi(req.roi);
-        const key = crypto.createHash('sha256').update(CACHE_VERSION).update('\0strip\0').update(this.hashBinary(bin)).update('\0')
-            .update(tileSha256).update('\0').update(JSON.stringify({ ...keyParams, topDown: !!req.topDown, seed, ...(roi ? { roi: roi.polygon, ...(roi.keep ? { keep: roi.keep } : {}) } : {}) })).digest('hex');
+        if (req.species !== undefined && typeof req.species !== 'boolean') throw new TileVegetationError('bad_request', 'species must be a boolean');
+        const speciesIndex = req.species === false ? undefined : treeSpeciesIndexPath(this.repoRoot);
+        const hash = crypto.createHash('sha256').update(CACHE_VERSION).update('\0strip\0').update(this.hashBinary(bin)).update('\0')
+            .update(tileSha256).update('\0').update(JSON.stringify({ ...keyParams, topDown: !!req.topDown, seed, ...(roi ? { roi: roi.polygon, ...(roi.keep ? { keep: roi.keep } : {}) } : {}) }));
+        hash.update('\0species\0');
+        if (speciesIndex) sha256File(speciesIndex, hash);
+        const key = hash.digest('hex');
         const outputs = ['devegetated.glb', 'removed_trees.glb', 'crowns.json', 'stats.json', ...(req.topDown ? ['topdown.png'] : [])];
         const res = await this.cached(key, outputs, async (dir, signal) => {
             const args = ['strip', '--input', input, '--out', path.join(dir, 'devegetated.glb'), '--removed-out', path.join(dir, 'removed_trees.glb'),
@@ -614,6 +636,7 @@ export class TileVegetationService {
                 args.push('--roi-json', path.join(dir, 'roi.json'));
             }
             if (req.topDown) args.push('--topdown', path.join(dir, 'topdown.png'));
+            if (speciesIndex) args.push('--species-index', speciesIndex, '--species-index-label', TREE_SPECIES_INDEX);
             if (req.threads !== undefined) args.push('--threads', String(req.threads));
             await runFile(bin, args, timeoutMs, signal);
         }, (dir, cached) => ({
@@ -698,6 +721,10 @@ export class TileVegetationService {
         const textureIndex = req.textures === false ? undefined : treeTextureIndexPath(this.repoRoot);
         hash.update('\0');
         if (textureIndex) sha256File(textureIndex, hash);
+        if (req.species !== undefined && typeof req.species !== 'boolean') throw new TileVegetationError('bad_request', 'species must be a boolean');
+        const speciesIndex = req.species === false ? undefined : treeSpeciesIndexPath(this.repoRoot);
+        hash.update('\0species\0');
+        if (speciesIndex) sha256File(speciesIndex, hash);
         hash.update('\0').update(JSON.stringify({ ...keyParams, ...budget, seed: req.seed.toLowerCase(), quantize, reveal }));
         const key = hash.digest('hex');
         const plantOnce = () => this.cached(key, ['trees.glb', 'stats.json'], async (dir, signal) => {
@@ -709,6 +736,7 @@ export class TileVegetationService {
             if (ground) args.push('--ground-mesh', ground);
             if (correction) args.push('--crown-correction', correction);
             if (textureIndex) args.push('--texture-index', textureIndex, '--texture-index-label', TREE_TEXTURE_INDEX);
+            if (speciesIndex) args.push('--species-index', speciesIndex, '--species-index-label', TREE_SPECIES_INDEX);
             if (req.threads !== undefined) args.push('--threads', String(req.threads));
             await runFile(bin, args, timeoutMs, signal);
         }, (dir, cached) => ({

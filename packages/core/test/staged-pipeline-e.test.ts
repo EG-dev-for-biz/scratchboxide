@@ -46,10 +46,13 @@ function volume(nodes: MassingNode[]): number {
 }
 
 describe('pipeline E flag', () => {
-    it('is off unless SCRATCHBOX_STAGED_PIPELINE=e', () => {
-        expect(stagedPipelineE({} as NodeJS.ProcessEnv)).toBe(false);
-        expect(stagedPipelineE({ SCRATCHBOX_STAGED_PIPELINE: 'd' } as NodeJS.ProcessEnv)).toBe(false);
+    it('is on by default (an isolated structure); SCRATCHBOX_STAGED_PIPELINE=d (or 0) goes back to the current pipeline', () => {
+        expect(stagedPipelineE({} as NodeJS.ProcessEnv)).toBe(true);
+        expect(stagedPipelineE({ SCRATCHBOX_STAGED_PIPELINE: 'e' } as NodeJS.ProcessEnv)).toBe(true);
         expect(stagedPipelineE({ SCRATCHBOX_STAGED_PIPELINE: 'E' } as NodeJS.ProcessEnv)).toBe(true);
+        expect(stagedPipelineE({ SCRATCHBOX_STAGED_PIPELINE: 'd' } as NodeJS.ProcessEnv)).toBe(false);
+        expect(stagedPipelineE({ SCRATCHBOX_STAGED_PIPELINE: 'D' } as NodeJS.ProcessEnv)).toBe(false);
+        expect(stagedPipelineE({ SCRATCHBOX_STAGED_PIPELINE: '0' } as NodeJS.ProcessEnv)).toBe(false);
     });
 });
 

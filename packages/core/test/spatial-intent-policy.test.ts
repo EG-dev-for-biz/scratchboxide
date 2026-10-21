@@ -171,7 +171,8 @@ describe('3D intent policy', () => {
     it('says a place comes back remeshed with its measured trees, clay first then its real textures, and reports only what the result contains', () => {
         // google_3d_tiles_get_clay remeshes the tiles and regrows the trees measured in them (trees defaults to true);
         // a tile with no measurable canopy has none, so the model reports the result rather than promising trees.
-        expect(SPATIAL_INTENT_POLICY).toMatch(/A real-world place[^\n]*remeshed, with the trees measured in the tiles regrown in place as SB-Veggie trees; the clay massing shows first and the viewport crossfades to the real textures on its own/);
+        // SB-Roadie road resurfacing is shelved (2026-10-21): a staged place's streets stay the scanned tiles for now
+        expect(SPATIAL_INTENT_POLICY).toMatch(/A real-world place[^\n]*remeshed, with the trees measured in the tiles regrown in place as SB-Veggie trees \(its streets stay the scanned tiles for now: SB-Roadie road resurfacing is shelved\); the clay massing shows first and the viewport crossfades to the real textures on its own/);
         expect(SPATIAL_INTENT_POLICY).toContain('pass trees: false only when the user asks for no trees');
         // textured by default, clay on request; the follow-ups offer a clay view and material refinement, not "add textures"
         expect(SPATIAL_INTENT_POLICY).toContain('New objects and places are textured by default');

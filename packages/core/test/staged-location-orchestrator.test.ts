@@ -95,6 +95,37 @@ describe('a district', () => {
         expect(second.result.stages.find(x => x.stage === 'terrain')).toMatchObject({ status: 'skipped', reason: expect.stringMatching(/Elevation API/) });
     });
 
+    it('SB-Roadie is shelved: the roads stage is skipped even with Google road centrelines, and no road layer is built', async () => {
+        const s = setup(PARK, {}, { vectorEvidence: async () => ({ buildings: [], water: [], roads: [[[-25, 0], [25, 0]], [[0, -25], [0, 25]]], tiles: 1, zoom: 17 }) });
+        const { result } = await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: false }, s.deps, s.ctx);
+        expect(validateContract('StagedLocationResult', result)).toEqual([]);
+        expect(result.stages.find(x => x.stage === 'roads')).toMatchObject({ status: 'skipped', reason: expect.stringMatching(/shelved/) });
+        const sb = (result.artifact as any).data.stagedBuild;
+        expect(sb.layers.some((l: any) => l.layer === 'l1r')).toBe(false);
+        expect(statusOf(s.events, 'textures').pop()).toBe('committed');
+    });
+
+    it('with SCRATCHBOX_STAGED_ROADS=1, the streets are measured on the scan; a flat scan shows no kerb, so nothing is resurfaced and the stage says so', async () => {
+        const prev = process.env.SCRATCHBOX_STAGED_ROADS;
+        process.env.SCRATCHBOX_STAGED_ROADS = '1';
+        try {
+            const s = setup(PARK, {}, { vectorEvidence: async () => ({ buildings: [], water: [], roads: [[[-25, 0], [25, 0]], [[0, -25], [0, 25]]], tiles: 1, zoom: 17 }) });
+            const { result } = await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: false }, s.deps, s.ctx);
+            expect(validateContract('StagedLocationResult', result)).toEqual([]);
+            // conservative: the flat synthetic ground steps up at no kerb, so no street is built rather than a guessed width
+            expect(result.stages.find(x => x.stage === 'roads')).toMatchObject({ status: 'skipped', reason: expect.stringMatching(/both kerbs/) });
+            const sb = (result.artifact as any).data.stagedBuild;
+            expect(sb.layers.some((l: any) => l.layer === 'l1r')).toBe(false);
+            expect(statusOf(s.events, 'textures').pop()).toBe('committed');
+
+            const none = setup(PARK);
+            const second = await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: false }, none.deps, none.ctx);
+            expect(second.result.stages.find(x => x.stage === 'roads')).toMatchObject({ status: 'skipped', reason: expect.stringMatching(/vector data/) });
+        } finally {
+            if (prev === undefined) delete process.env.SCRATCHBOX_STAGED_ROADS; else process.env.SCRATCHBOX_STAGED_ROADS = prev;
+        }
+    });
+
     it('commits tiles, remesh and trees in order, each commit carrying the scene with one id and one camera', async () => {
         const s = setup(PARK);
         const { result, compat } = await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: true }, s.deps, s.ctx);
@@ -862,7 +893,9 @@ describe('the call settles before it returns or throws', () => {
         expect(evidence.source).toContain("aimed at the structure's facades (no fit was accepted): they texture the remeshed scan");
         // what reads the images (vision, correction, detail) stays skipped: there is no fit to place detail on
         for (const id of ['vision', 'detail']) expect(result.stages.find(x => x.stage === id)).toMatchObject({ status: 'skipped', reason: 'there is no accepted fit to place detail on' });
-        expect(result.degradations.map(d => d.reasonCode)).toEqual(['canopy_not_masked', 'fit_rejected']);
+        // pipeline E is on by default for an isolated structure, but the arch has no usable vector footprint, so it falls
+        // back to the current pipeline (the same one this test exercises) and records why
+        expect(result.degradations.map(d => d.reasonCode)).toEqual(['canopy_not_masked', 'pipeline_e_fallback', 'fit_rejected']);
         // none of the three false statements: a 60 s limit, a run deadline, detail read from the tile photos
         const everything = JSON.stringify(result);
         expect(everything).not.toMatch(/run_deadline|time limit|60 s|tile photos only|read from the tile photos/);

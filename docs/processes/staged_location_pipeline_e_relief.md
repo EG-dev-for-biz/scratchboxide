@@ -1,7 +1,7 @@
 # Staged Location Builds: Pipeline E Measured Relief (averaging the scan along repeats)
 
-> **Recorded:** 2026-10-19
-> **Status:** Verified behind pipeline E's flag (`SCRATCHBOX_STAGED_PIPELINE=e`; the relief stage is on whenever E runs, `SCRATCHBOX_STAGED_PIPELINE_E_RELIEF=0` turns it off). Branch `version-e-relief`, not merged to main.
+> **Recorded:** 2026-10-19. **Updated 2026-10-21:** on main; pipeline E (and so relief) is now on by default for an isolated structure.
+> **Status:** Verified. The relief stage is on whenever pipeline E runs (`SCRATCHBOX_STAGED_PIPELINE_E_RELIEF=0` turns it off on its own).
 > **Tags:** `operate-scratchbox` `staged-build` `pipeline-e` `relief` `measured` `photo-match`
 > **Target Domain:** Real-world 3D locations (`google_3d_tiles_get_clay`, `isolate: true`)
 

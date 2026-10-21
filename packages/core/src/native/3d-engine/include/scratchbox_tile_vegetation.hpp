@@ -58,6 +58,7 @@
 #include "scratchbox_nature.hpp"
 #include "scratchbox_staged_glb.hpp"
 #include "scratchbox_tree_lod.hpp"
+#include "scratchbox_tree_species.hpp"
 #include "scratchbox_tree_textures.hpp"
 #include "scratchbox_texture.hpp"
 #include <algorithm>
@@ -516,6 +517,11 @@ inline size_t delaunayFlips(const std::vector<Vec3>& p, std::vector<uint32_t>& t
 struct GrowthParams {
     double crownBaseRatio{0.35};        // crown base = support + ratio * (apex - support): not observed, inferred
     double trunkRadiusPerHeight{0.016}; // trunk radius = ratio * height: not observed, inferred
+    // The caller gave crownBaseRatio (or trunkRadiusPerHeight) itself, so a matched species entry's own ratio does not
+    // override it (growCrownAttempt): a caller that asks for a crown base past what any real tree can fill is asking to
+    // see that failure, not to have species quietly substitute a ratio that fills it.
+    bool crownBaseRatioExplicit{false};
+    bool trunkRadiusPerHeightExplicit{false};
     double shellDepth{0.8};             // share of each surface sample's height above the crown base the crown fills
     double minSurfaceReached{0.9};      // share of the measured crown surface the regrown tree's leaves must reach
     uint64_t seed{0};                   // mixed with each crown id
@@ -528,6 +534,13 @@ struct GrowthParams {
     // it between limbs), internodeLengthM the step along a shoot (0: from the tree's height); the rest (leaf distribution,
     // divergence, blade outline) shapes the leaf clusters plant writes.
     sb_veggie::SbVeggieMorphology morphology;
+    // The tree species library (scratchbox_tree_species.hpp; null: none): each crown grows with the proportions of the
+    // entry nearest its measurements (crown base, trunk radius, stems, scaffold limbs and their angle, the leader's
+    // momentum, the leaf the textures are chosen by) instead of the ratios above; a crown far from every entry grows
+    // with them. strip and plant must use the same library (crowns.json records which).
+    std::shared_ptr<const tree_species::Library> species;
+    std::string speciesIndex;           // where the library was read from, as given (recorded in crowns.json and the trees' root extras)
+    tree_species::ChoiceParams speciesChoice;
 };
 
 /** A measured crown, as crowns.json carries it (strip writes these values at full precision, so plant reads them back exactly). */
@@ -540,6 +553,9 @@ struct CrownShape {
     // a crown base ratio given for this crown (a photo-inferred correction, CrownCorrection): used as is, instead of the
     // growth's ratio varied by its seeded spread; NaN: none given
     double crownBaseRatio{std::numeric_limits<double>::quiet_NaN()};
+    // its colour in the tile's photo (measured; the species choice reads its hue), when strip measured one
+    bool colourKnown{false};
+    std::array<double, 3> colourMean{};
 };
 
 /**
@@ -580,7 +596,13 @@ struct CrownGrowth {
     uint32_t seed{0};
     double heightAboveSupport{0}, crownBaseY{0}, trunkRadius{0};
     double crownBaseRatio{0};           // this crown's (the ratio varied by the seeded spread)
+    double trunkRadiusPerHeight{0};     // the ratio its trunk radius came from (the species entry's, else the growth's)
     double attractorSpacing{0};         // voxel of the attractor cloud (m)
+    // the species entry it grew with (GrowthParams::species): hasSpecies false without a library; species.matched false
+    // when the crown is far from every entry (grown with the growth's own ratios, the measurements still recorded)
+    bool hasSpecies{false};
+    tree_species::Choice species;
+    int stems{1};                       // stems leaving the ground (more than one: grown as a shrub)
     nature::SpaceColonizationConfig cfg;
     std::vector<nature::ColonizationNode> skeleton;
     nature::ColonizationReport colonisation;
@@ -625,6 +647,26 @@ inline std::string fixed(double v, int digits) {
     return s.str();
 }
 
+/**
+ * `,"species":{...}` of a crown (crowns.json) or a tree (its extras): the crown's measured descriptors, the species entry
+ * chosen by them (none when the crown is far from every entry) and the proportions it grew with. Nothing without a library.
+ */
+inline std::string crownSpeciesMembers(bool hasSpecies, const tree_species::Choice& ch, int stems, double crownBaseRatio, double trunkRadiusPerHeight, const GrowthParams& G) {
+    if (!hasSpecies || !G.species) return std::string();
+    const auto& d = ch.measured;
+    std::string o = ",\"species\":{\"measured\":{\"heightM\":" + json::num(d.heightM) + ",\"meanRadiusM\":" + json::num(d.meanRadiusM) + ",\"aspect\":" + json::num(d.aspect) +
+                    ",\"topShare\":" + json::num(d.topShare) + ",\"depthM\":" + json::num(d.depthM) + ",\"samples\":" + std::to_string(d.samples) +
+                    (d.colourKnown ? ",\"hueDeg\":" + json::num(d.hueDeg) + ",\"saturation\":" + json::num(d.saturation) : std::string()) + ",\"provenance\":\"measured\"}";
+    if (ch.matched) {
+        const auto& e = G.species->entries[ch.entry];
+        o += ",\"entry\":" + json::str(e.id) + ",\"label\":" + json::str(e.label) + ",\"cost\":" + json::num(ch.cost) + ",\"provenance\":\"library\"";
+    } else {
+        o += ",\"entry\":null,\"cost\":" + json::num(ch.cost) + ",\"provenance\":\"unmatched\"";
+    }
+    return o + ",\"grownWith\":{\"stems\":" + std::to_string(stems) + ",\"crownBaseRatio\":" + json::num(crownBaseRatio) + ",\"trunkRadiusPerHeight\":" + json::num(trunkRadiusPerHeight) + "}}";
+}
+
+
 } // namespace detail
 
 /**
@@ -651,10 +693,30 @@ inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, 
     const double support = c.supportY;
     const double H = std::max(0.5, static_cast<double>(c.apex.y) - support);
     g.heightAboveSupport = H;
+    // the proportions it grows with: the growth's ratios, or the species entry nearest its measurements (the choice is
+    // seeded by the crown alone, so every attempt grows the same species)
+    double baseRatio = G.crownBaseRatio, trunkPerHeight = G.trunkRadiusPerHeight;
+    double apical = G.morphology.apicalDominance, branchAngle = G.morphology.branchAngleMeanRad;
+    int scaffold = 0;
+    if (G.species) {
+        const auto d = tree_species::describeCrown(c.apex, support, c.sectorRadii, c.samples, c.colourKnown ? &c.colourMean : nullptr, G.speciesChoice);
+        g.hasSpecies = true;
+        g.species = tree_species::choose(*G.species, d, detail::crownSeed(G.seed, c.id), G.speciesChoice);
+        if (g.species.matched) {
+            const auto& e = G.species->entries[g.species.entry];
+            if (!G.crownBaseRatioExplicit) baseRatio = e.crownBaseRatio;
+            if (!G.trunkRadiusPerHeightExplicit) trunkPerHeight = e.trunkRadiusPerHeight;
+            apical = e.apicalDominance;
+            branchAngle = e.branchAngleRad;
+            scaffold = e.scaffoldBranches;
+            g.stems = e.stems;
+        }
+    }
     g.crownBaseRatio = std::isfinite(c.crownBaseRatio) ? c.crownBaseRatio
-                                                       : std::clamp(G.crownBaseRatio + G.crownBaseSpread * (2.0 * detail::hashUnit(g.seed, 9001, 1) - 1.0), 0.0, 0.9999);
+                                                       : std::clamp(baseRatio + G.crownBaseSpread * (2.0 * detail::hashUnit(g.seed, 9001, 1) - 1.0), 0.0, 0.9999);
     g.crownBaseY = support + g.crownBaseRatio * H;
-    g.trunkRadius = G.trunkRadiusPerHeight * H;
+    g.trunkRadiusPerHeight = trunkPerHeight;
+    g.trunkRadius = trunkPerHeight * H;
     double radius = 0;
     for (double r : c.sectorRadii) radius += r / 16.0;
     const double spacing = sampleSpacing > 0 ? sampleSpacing : 0.7;
@@ -711,10 +773,13 @@ inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, 
     cfg.branchStepLength = static_cast<float>(step);
     cfg.trunkLeanToward = c.apex;
     cfg.trunkLeanShare = static_cast<float>(G.trunkLeanShare);
-    cfg.scaffoldBranchCount = 2 + static_cast<int>(std::floor(detail::hashUnit(g.seed, 9002, 1) * 3.0));
-    cfg.scaffoldAngleFromLeaderRad = G.morphology.branchAngleMeanRad + static_cast<float>(G.morphology.branchAngleSpreadRad * (2.0 * detail::hashUnit(g.seed, 9003, 1) - 1.0));
+    cfg.scaffoldBranchCount = scaffold > 0 ? scaffold : 2 + static_cast<int>(std::floor(detail::hashUnit(g.seed, 9002, 1) * 3.0));
+    cfg.scaffoldAngleFromLeaderRad = static_cast<float>(branchAngle) + static_cast<float>(G.morphology.branchAngleSpreadRad * (2.0 * detail::hashUnit(g.seed, 9003, 1) - 1.0));
     cfg.scaffoldAngleSpreadRad = 0.5f * G.morphology.branchAngleSpreadRad;
-    cfg.growthMomentumFactor = 0.76f * G.morphology.apicalDominance;
+    cfg.growthMomentumFactor = 0.76f * static_cast<float>(apical);
+    // stems from the ground: the trunk forks just above the root collar and the scaffold limbs are the stems
+    cfg.isShrub = g.stems > 1;
+    if (cfg.isShrub) cfg.scaffoldBranchCount = std::max(cfg.scaffoldBranchCount, g.stems);
     // A node that reaches an attractor (comes within the kill reach, 1.25 x the kill radius, of it) must still see the
     // attractors next to that one: the gap between neighbouring attractors (the link) plus the kill reach. With the
     // link alone, a branch that reached an attractor could lose sight of the ones beyond it and colonisation stop with
@@ -815,6 +880,11 @@ inline CrownShape crownShapeFromJson(const io::GlbJsonValue& c) {
     for (size_t k = 0; k < 16 && k < radii.size(); ++k) s.sectorRadii[k] = radii[k].num;
     s.samples.reserve(c["samples"].arr.size());
     for (const auto& v : c["samples"].arr) s.samples.push_back(Vec3(static_cast<float>(v[0].num), static_cast<float>(v[1].num), static_cast<float>(v[2].num)));
+    const auto& col = c["colour"]["meanLinearRgb"];
+    if (col.type == io::GlbJsonValue::Array && col.arr.size() == 3 && col[0].type == io::GlbJsonValue::Number) {
+        s.colourKnown = true;
+        for (size_t k = 0; k < 3; ++k) s.colourMean[k] = std::max(0.0, col[k].num);
+    }
     return s;
 }
 
@@ -1182,6 +1252,11 @@ struct CrownRecord {
     double regrowthSurfaceShare{0}, regrowthReachM{0}, regrowthLeafTopY{0};
     size_t regrowthSurfaceSamples{0}, regrowthSurfaceReached{0};
     std::string regrowthFailureCode, regrowthFailure, regrowthColonisation;
+    // the species entry the regrowth chose by the crown's measurements (GrowthParams::species), and the proportions it grew with
+    bool hasSpecies{false};
+    tree_species::Choice species;
+    int regrowthStems{1};
+    double regrowthCrownBaseRatio{0}, regrowthTrunkRadiusPerHeight{0};
     // ... and the tree meshed within its own budget (crownOwnBudget): what its delivered leaf masses reach
     bool regrowthMeshed{false};
     size_t regrowthBudget{0}, regrowthLeafMasses{0}, regrowthSurfaceMasses{0}, regrowthSurfaceMassesNeeded{0}, regrowthLeavesReached{0};
@@ -2060,8 +2135,15 @@ private:
             shape.areaM2 = rec.areaM2;
             shape.sectorRadii = rec.sectorRadii;
             shape.samples = rec.samples;
+            shape.colourKnown = rec.colourKnown;
+            shape.colourMean = rec.colourMean;
             const CrownGrowth g = growCrown(shape, P.growth, P.sampleSpacing);
             rec.regrowthChecked = true;
+            rec.hasSpecies = g.hasSpecies;
+            rec.species = g.species;
+            rec.regrowthStems = g.stems;
+            rec.regrowthCrownBaseRatio = g.crownBaseRatio;
+            rec.regrowthTrunkRadiusPerHeight = g.trunkRadiusPerHeight;
             rec.regrowthSurfaceSamples = g.surfaceSamples;
             rec.regrowthSurfaceReached = g.surfaceReached;
             rec.regrowthSurfaceShare = g.surfaceShare();
@@ -2734,6 +2816,8 @@ private:
         shape.areaM2 = rec.areaM2;
         shape.sectorRadii = rec.sectorRadii;
         shape.samples = rec.samples;
+        shape.colourKnown = rec.colourKnown;
+        shape.colourMean = rec.colourMean;
         const CrownGrowth g = growCrown(shape, P.growth, P.sampleSpacing);
         if (!g.ok()) return false;
         PlantParams sizing;
@@ -3774,11 +3858,16 @@ inline std::string crownsJson(const StripResult& r, const StripParams& P) {
     char seedHex[17];
     std::snprintf(seedHex, sizeof(seedHex), "%016llx", static_cast<unsigned long long>(P.growth.seed));
     s << "\"growth\":{\"seed\":" << json::str(seedHex) << ",\"crownBaseRatio\":" << json::numPrecise(P.growth.crownBaseRatio)
-      << ",\"trunkRadiusPerHeight\":" << json::numPrecise(P.growth.trunkRadiusPerHeight) << ",\"shellDepth\":" << json::numPrecise(P.growth.shellDepth)
+      << ",\"crownBaseRatioExplicit\":" << (P.growth.crownBaseRatioExplicit ? "true" : "false")
+      << ",\"trunkRadiusPerHeight\":" << json::numPrecise(P.growth.trunkRadiusPerHeight)
+      << ",\"trunkRadiusPerHeightExplicit\":" << (P.growth.trunkRadiusPerHeightExplicit ? "true" : "false") << ",\"shellDepth\":" << json::numPrecise(P.growth.shellDepth)
       << ",\"minSurfaceReached\":" << json::numPrecise(P.growth.minSurfaceReached) << ",\"crownBaseSpread\":" << json::numPrecise(P.growth.crownBaseSpread)
       << ",\"branchAngleSpreadRad\":" << json::num(std::stod(detail::fixed(P.growth.morphology.branchAngleSpreadRad, 6))) << ",\"trunkLeanShare\":" << json::numPrecise(P.growth.trunkLeanShare)
       << ",\"apicalDominance\":" << json::num(std::stod(detail::fixed(P.growth.morphology.apicalDominance, 6))) << ",\"branchAngleMeanRad\":" << json::num(std::stod(detail::fixed(P.growth.morphology.branchAngleMeanRad, 6)))
-      << ",\"internodeLengthM\":" << json::num(std::stod(detail::fixed(P.growth.morphology.internodeLengthM, 6))) << "},\n\"crowns\":[";
+      << ",\"internodeLengthM\":" << json::num(std::stod(detail::fixed(P.growth.morphology.internodeLengthM, 6))) << "},\n";
+    // the species library the crowns were grown with (plant must grow them with the same one)
+    if (P.growth.species) s << "\"species\":{\"schema\":" << json::str(P.growth.species->schema) << ",\"index\":" << json::str(P.growth.speciesIndex) << ",\"entries\":" << P.growth.species->entries.size() << "},\n";
+    s << "\"crowns\":[";
     for (size_t i = 0; i < r.crowns.size(); ++i) {
         const auto& c = r.crowns[i];
         s << (i ? ",\n" : "\n") << "{\"id\":" << c.id << ",\"status\":" << json::str(c.status) << ",\"reachesBoundary\":" << (c.reachesBoundary ? "true" : "false") << ",\"apex\":" << v3(c.apex)
@@ -3835,6 +3924,7 @@ inline std::string crownsJson(const StripResult& r, const StripParams& P) {
               << "],\"samples\":" << c.colourSamples << ",\"cells\":" << c.colourCells << ",\"greenShare\":" << json::num(c.greenShare)
               << ",\"hueDeg\":" << json::num(c.hueDeg) << ",\"chroma\":" << json::num(c.chroma) << "}";
         }
+        if (c.regrowthChecked) s << detail::crownSpeciesMembers(c.hasSpecies, c.species, c.regrowthStems, c.regrowthCrownBaseRatio, c.regrowthTrunkRadiusPerHeight, P.growth);
         s << ",\"samples\":[";
         for (size_t k = 0; k < c.samples.size(); ++k) s << (k ? "," : "") << v3(c.samples[k]);
         s << "]}";
@@ -3938,6 +4028,7 @@ struct PlantedTree {
     bool hasLod{false};
     double lodMs{0};                 // wall time building levels 0 and 1
     double crownBaseRatio{0};        // this crown's (growth.crownBaseRatio varied by its seeded spread)
+    double trunkRadiusPerHeight{0};  // the ratio its trunk radius came from (the species entry's, else the growth's)
     double heightAboveSupport{0}, crownBaseY{0}, trunkRadius{0};
     double grownShare{0}, reachRadius{0};  // the grown skeleton's leaf nodes: share of the measured surface within reach
     FoliageReach leaves;             // the delivered leaf masses: what they reach of the measured surface, and how high
@@ -3951,6 +4042,10 @@ struct PlantedTree {
     bool hasTextures{false};
     tree_textures::TreeAppearance look;
     tree_textures::Choice textures;
+    // the species entry it grew with (GrowthParams::species; hasSpecies false without a library) and its stems
+    bool hasSpecies{false};
+    tree_species::Choice species;
+    int stems{1};
     // the photo-inferred correction its crown was grown with (hasCorrection false: the measured crown as is)
     bool hasCorrection{false};
     CrownCorrection correction;
@@ -4191,6 +4286,10 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
             tr.reachRadius = g.reachRadius;
             tr.colonisation = g.colonisation;
             tr.crownBaseRatio = g.crownBaseRatio;
+            tr.trunkRadiusPerHeight = g.trunkRadiusPerHeight;
+            tr.hasSpecies = g.hasSpecies;
+            tr.species = g.species;
+            tr.stems = g.stems;
             if (const auto k = P.crownCorrections.find(tr.crownId); k != P.crownCorrections.end()) {
                 if (droppedCorrection[i].empty()) { tr.hasCorrection = true; tr.correction = k->second; }
                 else tr.correctionDropped = "the corrected crown did not regrow (" + droppedCorrection[i] + "); grown as measured";
@@ -4215,6 +4314,8 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
                 double rs = 0;
                 for (double r : shapes[i].sectorRadii) rs += r / 16.0;
                 tr.look.crownRadiusM = rs;
+                // the species entry's leaf (or frond) is what the leaf set is chosen by; unmatched, a length from the tree's size
+                if (g.hasSpecies && g.species.matched) tr.look.leafLengthHintM = P.growth.species->entries[g.species.entry].leafLengthM;
                 const auto& col = cj["colour"]["meanLinearRgb"];
                 if (col.type == io::GlbJsonValue::Array && col.arr.size() == 3 && col[0].type == io::GlbJsonValue::Number) {
                     tr.look.colour.known = true;
@@ -4398,7 +4499,7 @@ inline std::string treeExtrasMembers(const PlantedTree& tr, const PlantParams& P
        << ",\"heightAboveSupportM\":" << json::num(tr.heightAboveSupport) << ",\"crownAreaM2\":" << json::num(c["areaM2"].num)
        << ",\"sectorRadiiM\":" << json::write(c["sectorRadii"]);
     ex << ",\"inferred\":{\"crownBaseY\":" << json::num(tr.crownBaseY) << ",\"crownBaseRatio\":" << json::numPrecise(tr.crownBaseRatio)
-       << ",\"trunkRadiusM\":" << json::num(tr.trunkRadius) << ",\"trunkRadiusPerHeight\":" << json::num(P.growth.trunkRadiusPerHeight) << "}"
+       << ",\"trunkRadiusM\":" << json::num(tr.trunkRadius) << ",\"trunkRadiusPerHeight\":" << json::num(tr.trunkRadiusPerHeight) << "}"
        // measured on the delivered leaf masses (this mesh): the share of the crown's surface samples above its crown
        // base inside one or within reachM of one, and how far their top lies below the apex; grownSurfaceReached is
        // the same share for the grown skeleton's leaf nodes
@@ -4455,6 +4556,10 @@ inline std::string treeColourMembers(const io::GlbJsonValue& crown) {
     std::string season = ",\"season\":{\"greenShare\":" + json::write(c["greenShare"]) + ",\"hueDeg\":" + json::write(c["hueDeg"]) + ",\"chroma\":" + json::write(c["chroma"]) + "}";
     return ",\"colour\":{\"meanLinearRgb\":" + json::write(c["meanLinearRgb"]) + ",\"spreadLinearRgb\":" + json::write(c["spreadLinearRgb"]) +
            ",\"samples\":" + json::write(c["samples"]) + season + ",\"provenance\":\"measured\",\"source\":\"the tile's photo texture over the crown's footprint\"}";
+}
+
+inline std::string treeSpeciesMembers(const PlantedTree& tr, const GrowthParams& G) {
+    return crownSpeciesMembers(tr.hasSpecies, tr.species, tr.stems, tr.crownBaseRatio, tr.trunkRadiusPerHeight, G);
 }
 
 /** `,"texture":{...}` of a tree's extras: the leaf set and bark chosen for it, their tints, and why. */
@@ -4696,7 +4801,8 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
                 crownJson += "}";
             }
             lodMembers += ",\"sbTree\":{\"id\":" + std::to_string(tr.crownId) + ",\"hashSeed\":" + std::to_string(tr.seed) + ",\"label\":\"grown to the measured crown\"" + crownJson +
-                          detail::treeColourMembers(*tr.crown) + (tr.hasTextures ? detail::treeTextureMembers(tr, *P.textures) : std::string()) + "}";
+                          detail::treeColourMembers(*tr.crown) + (tr.hasTextures ? detail::treeTextureMembers(tr, *P.textures) : std::string()) +
+                          detail::treeSpeciesMembers(tr, P.growth) + "}";
         } else {
             node.primitives = std::move(blobPrims);
         }
@@ -4714,7 +4820,7 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
         sb.provenance.sources.push_back({"tile-extraction", "crown-" + std::to_string(tr.crownId), "the crown tile_vegetation strip measured (crowns.json)"});
         sb.provenance.note = "trunk stands at " + detail::fixed(c["supportY"].num, 2) + " m (" + c["supportSource"].asString() + ")" +
                              (c["supportMovedM"].type == io::GlbJsonValue::Number ? "; stood " + detail::fixed(std::abs(c["supportMovedM"].num), 2) + " m " + (c["supportMovedM"].num < 0 ? "lower" : "higher") + " onto the ground rebuilt under its stem" : std::string());
-        sb.provenance.inferred = {{"crownBaseRatio", tr.crownBaseRatio}, {"trunkRadiusPerHeight", P.growth.trunkRadiusPerHeight}, {"crownBaseY", tr.crownBaseY}, {"trunkRadiusM", tr.trunkRadius}};
+        sb.provenance.inferred = {{"crownBaseRatio", tr.crownBaseRatio}, {"trunkRadiusPerHeight", tr.trunkRadiusPerHeight}, {"crownBaseY", tr.crownBaseY}, {"trunkRadiusM", tr.trunkRadius}};
         if (tr.hasLod) sb.provenance.inferred.push_back({"leafLengthM", tr.lod.leafLengthM});
         sb.buildOrder = static_cast<long long>(rank);
         sb.buildCount = static_cast<long long>(buildCount);
@@ -4839,7 +4945,10 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
                    ",\"leafCard\":{\"widthRatio\":" + json::num(lib.params.morphology.blade.widthRatio) + ",\"uv\":\"TEXCOORD_0: u = 0.5 + across / blade length, v = along / blade length (base 0)\",\"leafAttribute\":\"_LEAF: x atlas pick in [0, 1), y 1 on a blade, 0 on a stalk or shoot\"}}" + cardsJson +
                    (P.textures ? ",\"textures\":{\"schema\":" + json::str(P.textures->schema) + ",\"index\":" + json::str(P.textureIndex) +
                                  ",\"woodUv\":\"TEXCOORD_0 in the chosen bark's tiles: u around (whole tiles), v along the path from the root\",\"chosenBy\":\"appearance: measured crown colour, leaf size from the tree's height and crown, bark relief from its size\"}"
-                               : std::string()) + "}";
+                               : std::string()) +
+                   (P.growth.species ? ",\"species\":{\"schema\":" + json::str(P.growth.species->schema) + ",\"index\":" + json::str(P.growth.speciesIndex) +
+                                       ",\"chosenBy\":\"the crown's measurements: height, crown radius over height, the share of its surface near the apex, its photo hue\"}"
+                                     : std::string()) + "}";
     }
     opt.generator = "Scratchbox SB-Veggie (space colonisation, tile_vegetation plant)";
     opt.rootName = "sb_veggie_trees";

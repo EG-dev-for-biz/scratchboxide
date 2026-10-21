@@ -37,6 +37,8 @@ export interface StagedGlbNode {
     normals?: Float32Array;
     /** Extra per-vertex float attributes (scalar), by glTF attribute name ("_FOO"). */
     attributes?: Record<string, Float32Array>;
+    /** TEXCOORD_0, 2 per vertex: the node is drawn with the options' texture (glTF convention: (0, 0) the image's top left). */
+    uv?: Float32Array;
     /** Node extras (StagedNodeExtras for staged layers). */
     extras?: unknown;
 }
@@ -48,6 +50,8 @@ export interface StagedGlbOptions {
     assetExtras?: Record<string, unknown>;
     copyright?: string;
     generator?: string;
+    /** One embedded base-colour texture for the nodes that carry `uv` (JPEG or PNG bytes). */
+    texture?: { bytes: Uint8Array; mimeType: 'image/jpeg' | 'image/png' };
 }
 
 function pad4(buf: Buffer, fill = 0): Buffer {
@@ -79,6 +83,7 @@ export function writeStagedGlb(nodes: StagedGlbNode[], options: StagedGlbOptions
     const accessors: any[] = [];
     const meshes: any[] = [];
     const gltfNodes: any[] = [{ name: 'staged', children: [] as number[], ...(options.rootExtras ? { extras: options.rootExtras } : {}) }];
+    let textured = false;
     const addView = (data: Buffer, target?: number): number => {
         bufferViews.push({ buffer: 0, byteOffset: binLength, byteLength: data.length, ...(target ? { target } : {}) });
         const padded = pad4(data);
@@ -106,8 +111,15 @@ export function writeStagedGlb(nodes: StagedGlbNode[], options: StagedGlbOptions
             accessors.push({ bufferView: addView(f32(values), 34962), componentType: 5126, count, type: 'SCALAR' });
             attributes[name] = accessors.length - 1;
         }
+        if (node.uv) {
+            if (node.uv.length !== count * 2) throw new Error(`staged GLB: ${node.uv.length / 2} UVs for ${count} vertices`);
+            if (!options.texture) throw new Error('staged GLB: a node carries UVs but no texture was given');
+            accessors.push({ bufferView: addView(f32(node.uv), 34962), componentType: 5126, count, type: 'VEC2' });
+            attributes.TEXCOORD_0 = accessors.length - 1;
+            textured = true;
+        }
         accessors.push({ bufferView: addView(Buffer.from(indices.buffer, indices.byteOffset, indices.byteLength), 34963), componentType: 5125, count: indices.length, type: 'SCALAR' });
-        meshes.push({ primitives: [{ attributes, indices: accessors.length - 1, mode: 4, material: 0 }] });
+        meshes.push({ primitives: [{ attributes, indices: accessors.length - 1, mode: 4, material: node.uv ? 1 : 0 }] });
         gltfNodes.push({ name: node.name ?? `node_${meshes.length - 1}`, mesh: meshes.length - 1, ...(node.extras !== undefined ? { extras: node.extras } : {}) });
         gltfNodes[0].children.push(gltfNodes.length - 1);
     }
@@ -121,7 +133,15 @@ export function writeStagedGlb(nodes: StagedGlbNode[], options: StagedGlbOptions
         scenes: [{ nodes: [0] }],
         nodes: gltfNodes,
         meshes,
-        materials: [{ name: 'StudioGreyClay', pbrMetallicRoughness: { baseColorFactor: [0.55, 0.57, 0.6, 1], metallicFactor: 0, roughnessFactor: 0.85 } }],
+        materials: [
+            { name: 'StudioGreyClay', pbrMetallicRoughness: { baseColorFactor: [0.55, 0.57, 0.6, 1], metallicFactor: 0, roughnessFactor: 0.85 } },
+            ...(textured ? [{ name: 'PhotoTextured', pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicFactor: 0, roughnessFactor: 0.9 } }] : [])
+        ],
+        ...(textured ? {
+            images: [{ bufferView: addView(Buffer.from(options.texture!.bytes)), mimeType: options.texture!.mimeType }],
+            samplers: [{ magFilter: 9729, minFilter: 9987, wrapS: 33071, wrapT: 33071 }],
+            textures: [{ source: 0, sampler: 0 }]
+        } : {}),
         accessors,
         bufferViews,
         buffers: [{ byteLength: binLength }]
