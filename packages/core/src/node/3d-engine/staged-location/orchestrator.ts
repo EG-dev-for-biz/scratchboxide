@@ -2402,7 +2402,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             void Promise.allSettled([texturesPromise, lateTexturesPromise]).then(() => { loopDelay.disable(); texturePool?.close(); });
         };
 
-        if (structure && !deps.textures?.disabled && textureWorkersEnabled() && !stagedPipelineE()) {
+        if (structure && !deps.textures?.disabled && textureWorkersEnabled() && !eEligible) {
             earlyTexturePool = new TextureWorkerPool();
             earlyTexturePool.warm().catch(() => undefined);
         }

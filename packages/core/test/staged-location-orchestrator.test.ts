@@ -893,7 +893,9 @@ describe('the call settles before it returns or throws', () => {
         expect(evidence.source).toContain("aimed at the structure's facades (no fit was accepted): they texture the remeshed scan");
         // what reads the images (vision, correction, detail) stays skipped: there is no fit to place detail on
         for (const id of ['vision', 'detail']) expect(result.stages.find(x => x.stage === id)).toMatchObject({ status: 'skipped', reason: 'there is no accepted fit to place detail on' });
-        expect(result.degradations.map(d => d.reasonCode)).toEqual(['canopy_not_masked', 'fit_rejected']);
+        // pipeline E is on by default for an isolated structure, but the arch has no usable vector footprint, so it falls
+        // back to the current pipeline (the same one this test exercises) and records why
+        expect(result.degradations.map(d => d.reasonCode)).toEqual(['canopy_not_masked', 'pipeline_e_fallback', 'fit_rejected']);
         // none of the three false statements: a 60 s limit, a run deadline, detail read from the tile photos
         const everything = JSON.stringify(result);
         expect(everything).not.toMatch(/run_deadline|time limit|60 s|tile photos only|read from the tile photos/);

@@ -1,7 +1,7 @@
 # Staged Location Builds: Pipeline E (clean vector massing, ortho textures, verified inference, opt-in enhanced mode)
 
-> **Recorded:** 2026-10-19
-> **Status:** Verified behind a flag (`SCRATCHBOX_STAGED_PIPELINE=e`, off by default). Within pipeline E enhanced appearance is the default since round 4 (realism-first directive); the real-data view is `enhance: false` or `SCRATCHBOX_STAGED_ENHANCE=0`. Since round 5 enhanced mode uses Nano Banana Lite behind an identity gate (section 7). Not on main: for the user's review.
+> **Recorded:** 2026-10-19. **Updated 2026-10-21:** on by default for an isolated structure (`SCRATCHBOX_STAGED_PIPELINE=d` or `0` goes back to the current pipeline; `=e` is still accepted, now a no-op). District builds are unaffected (gated on `request.isolate`); a building pipeline E cannot handle (no usable vector footprint, or the massing/roof gate fails) falls back to the current pipeline automatically and a `pipeline_e_fallback` degradation records why.
+> **Status:** Verified behind a flag. Within pipeline E enhanced appearance is the default since round 4 (realism-first directive); the real-data view is `enhance: false` or `SCRATCHBOX_STAGED_ENHANCE=0`. Since round 5 enhanced mode uses Nano Banana Lite behind an identity gate (section 7).
 > **Tags:** `operate-scratchbox` `staged-build` `pipeline-e` `google-vector-data` `solar-api` `facade-grammar` `photo-match` `provenance`
 > **Target Domain:** Real-world 3D locations (`google_3d_tiles_get_clay`, `isolate: true`)
 

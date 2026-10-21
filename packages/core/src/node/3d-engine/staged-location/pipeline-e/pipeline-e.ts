@@ -39,9 +39,16 @@ export const PIPELINE_E_VERSION = `pipeline-e/v2${facadeMaterialsEnabled() ? '+m
 export const SHAPE_TIERS_TOKEN = 'shape-tiers-measured';
 export const SHAPE_PROGRAM_TOKEN = 'shape-program-inferred';
 
-/** SCRATCHBOX_STAGED_PIPELINE=e turns pipeline E on (off by default). */
+/**
+ * On by default for an isolated structure (2026-10-21, the round-3 bake-off: E-enhanced scored highest of every arm on
+ * the places it reached, and a massing or roof gate failure already falls back to the current pipeline with the reason
+ * recorded, so turning this on changes nothing on a building E cannot handle). SCRATCHBOX_STAGED_PIPELINE=d (or 0) goes
+ * back to the current pipeline; =e is still accepted, now a no-op. District builds never read this (orchestrator.ts
+ * gates pipeline E on request.isolate).
+ */
 export function stagedPipelineE(env: NodeJS.ProcessEnv = process.env): boolean {
-    return (env.SCRATCHBOX_STAGED_PIPELINE ?? '').trim().toLowerCase() === 'e';
+    const v = (env.SCRATCHBOX_STAGED_PIPELINE ?? '').trim().toLowerCase();
+    return v !== 'd' && v !== '0';
 }
 /** SCRATCHBOX_STAGED_PIPELINE_E_INFERENCE=0: pipeline E without its inferred steps (the bake-off's E-minus-inference arm). */
 export function pipelineEInference(env: NodeJS.ProcessEnv = process.env): boolean {
