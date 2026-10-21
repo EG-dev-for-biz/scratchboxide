@@ -420,8 +420,12 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
         if (!tex || f.kind !== 'wall') continue;
         const N = tex.width * tex.height;
         const mask = new Uint8Array(N);
-        // uncovered on a face the tile sees (a hole in it): an occluder took its surface
-        if (f.coverage >= LOW_COVERAGE) for (let i = 0; i < N; i++) if (tex.source[i] !== SRC.tileOrtho) { mask[i] = 1; uncoveredTexels++; }
+        // uncovered on a face the tile sees (a hole in it): an occluder took its surface. A repeat-filled texel
+        // (SRC.repeatFill, face-texture-repeat.ts) is not real tile-ortho either, but it is already a gated resample of
+        // this same face's own real texels at a confirmed pitch - trusted enough not to be re-masked and handed to the
+        // occluder fill (other-facade copy, bay average, or Nano Banana inpainting) below it in the trust order; it is
+        // still excluded from `clean` just below, so it is never read back as a measured texel by grammar or bay fit.
+        if (f.coverage >= LOW_COVERAGE) for (let i = 0; i < N; i++) if (tex.source[i] !== SRC.tileOrtho && tex.source[i] !== SRC.repeatFill) { mask[i] = 1; uncoveredTexels++; }
         const cm = crownMask(f, input.crowns ?? []);
         for (let i = 0; i < N; i++) if (cm.mask[i] && !mask[i]) { mask[i] = 1; crownTexels++; }
         if (cm.crowns.length) occStep.notes.push(`wall ${f.index}: ${cm.crowns.length} tree crowns stand in front of it`);

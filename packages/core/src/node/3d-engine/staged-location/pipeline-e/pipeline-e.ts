@@ -26,6 +26,7 @@ import { buildMassing, massingSpecText, type FaceSweepItem, type Massing, type O
 import { writeMassingClayGlb, writeMassingTexturedGlb, type FaceTexture, type TexelSource } from './massing-glb';
 import { readFaceOrtho, runMassing, type MassingNode, type MassingRun } from './native-massing';
 import { baseLegend, fillNearest, medianColour, SRC, textureFromOrtho } from './face-textures';
+import { repeatFillFace } from './face-texture-repeat';
 import { facadeMaterialsEnabled } from '../facade-material-evidence';
 import { auditMassingRun, UNSURE_PROVENANCE } from './residual-audit-e';
 import { delightTileImageBytes } from './residual-tile-delight';
@@ -159,6 +160,14 @@ export function plainTextures(run: MassingRun): { textures: Map<number, FaceText
         if (!f.width || f.kind === 'base') continue;
         const o = readFaceOrtho(run.dir, f);
         if (o) textures.set(f.index, textureFromOrtho(o, f.pixel));
+    }
+    // between the real tile-ortho texels and the nearest-texel/facade-median smear: where a face's real texels show a
+    // gated same-plane repeat (texture-repeat.ts, ported onto this ladder by face-texture-repeat.ts), fill the rest of
+    // that face from them at the detected pitch instead of dropping straight to the smear. A face with no gated axis
+    // is left untouched here and falls through to the branches below exactly as before this rung existed.
+    for (const [index, t] of textures) {
+        const face = run.report.faces.find(f => f.index === index);
+        repeatFillFace(t, face?.pixel || 0.05);
     }
     const walls = run.report.faces.filter(f => f.kind === 'wall').map(f => textures.get(f.index)).filter((t): t is FaceTexture => !!t);
     const median = medianColour(walls) ?? medianColour([...textures.values()]) ?? [150, 150, 150];
