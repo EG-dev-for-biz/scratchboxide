@@ -102,6 +102,11 @@ export interface MetalPathTraceRequest {
          * candidates per pass, neighbours merged per pass, and whether the reservoir persists across passes.
          */
         restir?: boolean; restirCandidates?: number; restirSpatial?: number; restirTemporal?: boolean;
+        /**
+         * Visibility-guided sky sampling at the first hit (sun lighting only; unbiased by MIS; measured as a loss per
+         * unit of GPU time, kept for the bench): histogram tile size in pixels, its bands x sectors, samples per hit.
+         */
+        guidedSky?: boolean; guideTile?: number; guideBands?: number; guideSectors?: number; guideSamples?: number;
     };
     exposureEv?: number;
     camera?: MetalPathTraceCamera | MetalPathTraceAutoCamera;
@@ -140,6 +145,11 @@ export interface MetalPathTraceStats {
         restir: boolean;
         restirCandidates: number;
         restirSpatial: number;
+        guidedSky: boolean;
+        guideTile: number;
+        guideBands: number;
+        guideSectors: number;
+        guideSamples: number;
         bounceCut: { thresholdPx: number; clusters: number; triangles: number; accelerationBuildMs: number };
     };
     denoiseBackend: 'metal' | 'cpu' | 'none';

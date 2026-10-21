@@ -131,6 +131,7 @@ public:
             initPso_ = makePipeline(library, "pt_init");
             samplePso_ = makePipeline(library, "pt_sample");
             restirSpatialPso_ = makePipeline(library, "restir_spatial");
+            guideCommitPso_ = makePipeline(library, "guide_commit");
             dnPreparePso_ = makePipeline(library, "dn_prepare");
             dnGradientsPso_ = makePipeline(library, "dn_gradients");
             dnBlurPso_ = makePipeline(library, "dn_blur");
@@ -246,6 +247,20 @@ public:
      * same facing and depth) are merged in between passes, and the chosen direction is shaded with one
      * visibility ray. Sky lighting only (`lighting.sun`); the sun keeps its own shadow ray.
      */
+    /**
+     * Visibility-guided sky sampling at the first hit: each pixel learns, over the frame's passes, which of 32
+     * world-space directions reach the sky, draws one sky sample per hit from that histogram (times the cosine)
+     * and combines it with the BSDF ray by the balance heuristic. Unbiased; sky lighting only.
+     */
+    void setGuidedSky(bool enabled, uint32_t tile = 8, uint32_t bands = 4, uint32_t sectors = 8, uint32_t samples = 1) {
+        guided_ = enabled;
+        guideSamples_ = std::max<uint32_t>(1, samples);
+        guideTile_ = std::max<uint32_t>(1, tile);
+        guideBands_ = std::max<uint32_t>(1, bands);
+        guideSectors_ = std::max<uint32_t>(1, sectors);
+        if (guideBands_ * guideSectors_ > kGuideMaxBins) throw Error("the visibility histogram may have at most 1024 bins");
+    }
+
     void setRestir(bool enabled, uint32_t candidates = 8, uint32_t spatial = 3, bool temporal = true) {
         restir_ = enabled;
         restirTemporal_ = temporal;
@@ -481,6 +496,11 @@ public:
         u.restir = restir_ && lighting.mode == Lighting::Mode::Sky ? (restirTemporal_ ? 1 : 2) : 0;
         u.restirCandidates = restirCandidates_;
         u.restirSpatial = restirSpatial_;
+        u.guided = guided_ && lighting.mode == Lighting::Mode::Sky ? 1 : 0;
+        u.guideTile = guideTile_;
+        u.guideBands = guideBands_;
+        u.guideSectors = guideSectors_;
+        u.guideSamples = guideSamples_;
 
         std::vector<float> lut(3, 0.0f);
         if (lighting.mode == Lighting::Mode::Sky) {
@@ -523,8 +543,19 @@ public:
             } else {
                 reservoirA_ = reservoirB_ = surfaces_ = surfacesB_ = nil;
             }
-            if (!dummyRestir_) dummyRestir_ = [device_ newBufferWithLength:64 options:MTLResourceStorageModePrivate];
+            if (!dummyRestir_) dummyRestir_ = [device_ newBufferWithLength:2 * kGuideMaxBins * sizeof(uint32_t) options:MTLResourceStorageModePrivate];
             frameRestir_ = u.restir != 0;
+            frameGuided_ = u.guided != 0;
+            if (frameGuided_) {
+                const size_t tilesX = (static_cast<size_t>(w) + guideTile_ - 1) / guideTile_;
+                const size_t tilesY = (static_cast<size_t>(h) + guideTile_ - 1) / guideTile_;
+                guideWords_ = static_cast<uint32_t>(tilesX * tilesY * 2 * guideBands_ * guideSectors_);
+                guideHistograms_ = [device_ newBufferWithLength:guideWords_ * sizeof(uint32_t) options:MTLResourceStorageModePrivate];
+                guidePending_ = [device_ newBufferWithLength:guideWords_ * sizeof(uint32_t) options:MTLResourceStorageModePrivate];
+                if (!guideHistograms_ || !guidePending_) throw Error("could not allocate the visibility histograms");
+            } else {
+                guideHistograms_ = guidePending_ = nil;
+            }
             frameUniform_ = uniformMaterial != nullptr;
             frameWidth_ = w;
             frameHeight_ = h;
@@ -542,6 +573,8 @@ public:
             [encoder setBuffer:(frameRestir_ ? surfaces_ : dummyRestir_) offset:0 atIndex:3];
             [encoder setBuffer:(frameRestir_ ? reservoirB_ : dummyRestir_) offset:0 atIndex:4];
             [encoder setBuffer:(frameRestir_ ? surfacesB_ : dummyRestir_) offset:0 atIndex:5];
+            [encoder setBuffer:(frameGuided_ ? guideHistograms_ : dummyRestir_) offset:0 atIndex:6];
+            [encoder setBuffer:(frameGuided_ ? guidePending_ : dummyRestir_) offset:0 atIndex:7];
             [encoder dispatchThreads:MTLSizeMake(static_cast<NSUInteger>(w), static_cast<NSUInteger>(h), 1) threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
             [encoder endEncoding];
             submit(commands);
@@ -581,11 +614,22 @@ public:
                 [encoder setBuffer:(frameRestir_ ? surfaces_ : dummyRestir_) offset:0 atIndex:15];
                 [encoder setBuffer:(frameRestir_ ? reservoirB_ : dummyRestir_) offset:0 atIndex:16];
                 [encoder setBuffer:(frameRestir_ ? surfacesB_ : dummyRestir_) offset:0 atIndex:17];
+                [encoder setBuffer:(frameGuided_ ? guideHistograms_ : dummyRestir_) offset:0 atIndex:18];
+                [encoder setBuffer:(frameGuided_ ? guidePending_ : dummyRestir_) offset:0 atIndex:19];
                 if (!frameUniform_) {
                     for (id<MTLTexture> texture : textures_) [encoder useResource:texture usage:MTLResourceUsageRead];
                 }
                 [encoder dispatchThreads:grid threadsPerThreadgroup:group];
                 [encoder endEncoding];
+                if (frameGuided_) {
+                    id<MTLComputeCommandEncoder> commit = [commands computeCommandEncoder];
+                    [commit setComputePipelineState:guideCommitPso_];
+                    [commit setBuffer:guideHistograms_ offset:0 atIndex:0];
+                    [commit setBuffer:guidePending_ offset:0 atIndex:1];
+                    [commit setBytes:&guideWords_ length:sizeof(guideWords_) atIndex:2];
+                    [commit dispatchThreads:MTLSizeMake(guideWords_, 1, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
+                    [commit endEncoding];
+                }
                 if (frameRestir_ && !restirTemporal_) {
                     // Fresh mode merges neighbours inside the pass from the previous pass's buffers: swap both pairs.
                     std::swap(reservoirA_, reservoirB_);
@@ -890,6 +934,16 @@ private:
     id<MTLBuffer> surfacesB_{nil};
     id<MTLBuffer> dummyRestir_{nil};
     bool frameRestir_{false};
+    bool frameGuided_{false};
+    bool guided_{false};
+    uint32_t guideTile_{8};
+    uint32_t guideBands_{4};
+    uint32_t guideSectors_{8};
+    uint32_t guideSamples_{1};
+    uint32_t guideWords_{0};
+    id<MTLComputePipelineState> guideCommitPso_{nil};
+    id<MTLBuffer> guideHistograms_{nil};
+    id<MTLBuffer> guidePending_{nil};
     bool restir_{false};
     bool restirTemporal_{true};
     uint32_t restirCandidates_{8};

@@ -67,8 +67,21 @@ struct Uniforms {
     uint32_t restir{0};
     /** Sky directions proposed per pixel per pass, and neighbours combined by the spatial pass. */
     uint32_t restirCandidates{8}, restirSpatial{3};
+    /**
+     * 1: one sky sample per first hit is drawn from the pixel's visibility histogram (buffer 18: 32 equal-area
+     * world-space bins of shadow-ray outcomes, learned over the passes) and combined with the BSDF ray by MIS.
+     */
+    uint32_t guided{0};
+    /** Pixels per side of the tile that shares one histogram (1: per pixel). */
+    uint32_t guideTile{8};
+    /** Histogram resolution: bands of equal solid angle in elevation times sectors of azimuth (at most kGuideMaxBins). */
+    uint32_t guideBands{4}, guideSectors{8};
+    /** Guided sky samples per first hit (multi-sample MIS against the one BSDF ray). */
+    uint32_t guideSamples{1};
+    uint32_t pad11{0}, pad12{0}, pad13{0};
 };
-static_assert(sizeof(Uniforms) == 4 * 64, "Uniforms must stay a flat array of 4-byte scalars");
+static_assert(sizeof(Uniforms) == 4 * 72, "Uniforms must stay a flat array of 4-byte scalars");
+constexpr uint32_t kGuideMaxBins = 1024;
 
 /** One pixel's ReSTIR reservoir over sky directions: the chosen direction, its target value and the resampling weights. */
 struct Reservoir {
@@ -241,6 +254,8 @@ struct Uniforms {
     float bounceErrorPerDistance;
     uint sampler, usePrimaryRaster;
     uint bounceShadowRays, restir, restirCandidates, restirSpatial;
+    uint guided, guideTile, guideBands, guideSectors;
+    uint guideSamples, pad11, pad12, pad13;
 };
 
 struct RasterUniforms {
@@ -870,11 +885,92 @@ inline float3 restirSkyLighting(constant Uniforms& u, device const float* lut, t
     return estimate;
 }
 
+// ---- Visibility-guided sky sampling at the first hit ----------------------------------------------
+// Each tile of pixels keeps equal-area world-space bins (bands by direction.y times azimuth sectors) of
+// how many rays it sent that way and how many reached the sky (tries, then hits, as counters updated
+// atomically). Guided directions are drawn in proportion to the estimated visibility times the cosine
+// at the bin centre; the BSDF ray stays as the other strategy and the two are combined by the balance
+// heuristic with the weights a sample was drawn with, so the estimate is unbiased whatever the
+// histogram says, and the histogram only decides how fast it converges. Bin weights are recomputed on
+// demand (only their sum is kept) so a fine histogram costs no thread memory.
+struct GuideFrame {
+    /** The committed counters a pass reads (frozen for the pass) and the pending ones it adds to. */
+    device const uint* hist;
+    device atomic_uint* pending;
+    uint bands, sectors, bins;
+    float3 n;
+    float sum;
+    float binSolidAngle;
+};
+
+inline uint guideBin(thread const GuideFrame& g, float3 d) {
+    uint band = min((uint)((clamp(d.y, -1.0f, 1.0f) + 1.0f) * 0.5f * (float)g.bands), g.bands - 1u);
+    float phi = atan2(d.z, d.x);
+    if (phi < 0.0f) phi += 2.0f * kPi;
+    uint sector = min((uint)(phi / (2.0f * kPi) * (float)g.sectors), g.sectors - 1u);
+    return band * g.sectors + sector;
+}
+
+inline float3 guideDirection(thread const GuideFrame& g, uint bin, float u2, float u3) {
+    float y = -1.0f + ((float)(bin / g.sectors) + u2) * (2.0f / (float)g.bands);
+    float phi = ((float)(bin % g.sectors) + u3) * (2.0f * kPi / (float)g.sectors);
+    float r = sqrt(max(0.0f, 1.0f - y * y));
+    return float3(r * cos(phi), y, r * sin(phi));
+}
+
+/** Estimated chance that a ray into a bin reaches the sky, from its counters. */
+inline float guideVisibility(uint tries, uint hits) {
+    return ((float)hits + 0.5f) / ((float)tries + 1.0f);
+}
+
+inline void guideRecord(thread const GuideFrame& g, uint bin, bool reachedSky) {
+    atomic_fetch_add_explicit(g.pending + bin, 1u, memory_order_relaxed);
+    if (reachedSky) atomic_fetch_add_explicit(g.pending + g.bins + bin, 1u, memory_order_relaxed);
+}
+
+inline float guideWeight(thread const GuideFrame& g, uint bin) {
+    float cosine = dot(g.n, guideDirection(g, bin, 0.5f, 0.5f));
+    if (cosine <= 0.0f) return 0.0f;
+    return cosine * guideVisibility(g.hist[bin], g.hist[g.bins + bin]);
+}
+
+inline GuideFrame guideBegin(constant Uniforms& u, device const uint* hist, device atomic_uint* pending, float3 n) {
+    GuideFrame g;
+    g.hist = hist;
+    g.pending = pending;
+    g.bands = max(u.guideBands, 1u);
+    g.sectors = max(u.guideSectors, 1u);
+    g.bins = g.bands * g.sectors;
+    g.n = n;
+    g.binSolidAngle = 4.0f * kPi / (float)g.bins;
+    g.sum = 0.0f;
+    for (uint b = 0u; b < g.bins; ++b) g.sum += guideWeight(g, b);
+    return g;
+}
+
+inline float guidePdf(thread const GuideFrame& g, float3 d) {
+    if (g.sum <= 0.0f) return 0.0f;
+    return guideWeight(g, guideBin(g, d)) / (g.sum * g.binSolidAngle);
+}
+
+inline float3 guideSample(thread const GuideFrame& g, float u1, float u2, float u3, thread float& pdf) {
+    float pick = u1 * g.sum, acc = 0.0f, w = 0.0f;
+    uint bin = g.bins - 1u;
+    for (uint b = 0u; b < g.bins; ++b) {
+        w = guideWeight(g, b);
+        acc += w;
+        if (pick < acc) { bin = b; break; }
+    }
+    pdf = w / (g.sum * g.binSolidAngle);
+    return guideDirection(g, bin, u2, u3);
+}
+
 inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, constant Uniforms& u,
                             device const Vertex* verts, device const float* lut, Geometry primary, Geometry bounceGeo,
                             device const MaterialRecord* materials, device const TextureRef* textures, uint visibleTriangle, thread uint& rays,
                             device Reservoir* reservoir, device PrimarySurface* primarySurface,
-                            device const Reservoir* prevReservoirs, device const PrimarySurface* prevSurfaces, uint2 gid) {
+                            device const Reservoir* prevReservoirs, device const PrimarySurface* prevSurfaces, uint2 gid,
+                            device const uint* guideHist, device atomic_uint* guidePending) {
     PathResult result;
     result.radiance = float3(0.0f);
     result.albedo = float3(0.0f);
@@ -887,6 +983,11 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
     const bool restir = u.restir != 0u && sky;
     // With ReSTIR the first hit's sky light is resampled, so its BSDF ray must not count the sky again.
     bool skyCountedByRestir = false;
+    // With guiding, the first hit's BSDF ray shares the sky with the guided sample by MIS and teaches the histogram.
+    const bool guided = u.guided != 0u && sky && !restir;
+    bool guideActive = false;
+    GuideFrame guide;
+    float firstBsdfPdf = 0.0f;
 
     intersector<triangle_data> closest;
     closest.assume_geometry_type(geometry_type::triangle);
@@ -925,9 +1026,16 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
             float3 skyLight = sky ? skyRadiance(u, lut, dir) : f3(u.studioRadiance);
             if (sky && bounce == 0) skyLight += sunDiscRadiance(u, dir);
             if (bounce == 1u && skyCountedByRestir) skyLight = float3(0.0f);
+            if (bounce == 1u && guideActive) {
+                // Balance heuristic against the guided strategy for this direction; the ray reached the sky.
+                float pg = guidePdf(guide, dir);
+                skyLight = skyLight * (firstBsdfPdf / max(firstBsdfPdf + (float)max(u.guideSamples, 1u) * pg, 1e-12f));
+                guideRecord(guide, guideBin(guide, dir), true);
+            }
             accumulate(radiance, throughput * skyLight, bounce, u.clampIndirect);
             break;
         }
+        if (bounce == 1u && guideActive) guideRecord(guide, guideBin(guide, dir), false);
         Surface surface = shade(u, verts, geo.idx, geo.triMaterials, materials, textures, hit.primitive_id, hit.triangle_barycentric_coord, origin, dir, hit.distance);
         if (bounce == 0) {
             result.hitGeometry = true;
@@ -982,10 +1090,38 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
             radiance += throughput * restirSkyLighting(u, lut, smp, bsdf, surface, primary, any, reservoir, prevReservoirs, prevSurfaces, gid, hit.distance, rays);
             skyCountedByRestir = true;
         }
+        if (guided && bounce == 0u) {
+            guide = guideBegin(u, guideHist, guidePending, surface.shadingNormal);
+            if (guide.sum > 0.0f) {
+                guideActive = true;
+                const uint K = max(u.guideSamples, 1u);
+                for (uint k = 0u; k < K; ++k) {
+                    float pg;
+                    float3 wi = guideSample(guide, pcgFloat(smp.rng), pcgFloat(smp.rng), pcgFloat(smp.rng), pg);
+                    float cosShading = dot(surface.shadingNormal, wi);
+                    if (pg > 0.0f && cosShading > 0.0f && dot(surface.geometricNormal, wi) > 0.0f) {
+                        float3 f = bsdfEval(bsdf, wi) * cosShading;
+                        if (maxComponent(f) > 0.0f) {
+                            ++rays;
+                            ray shadow(surface.position + surface.geometricNormal * kRayEpsilon, wi, 1e-4f, 1e9f);
+                            intersection_result<triangle_data> blocker = any.intersect(shadow, primary.accel);
+                            const bool reachedSky = blocker.type == intersection_type::none;
+                            if (reachedSky) {
+                                // Multi-sample balance heuristic: K guided samples against one BSDF sample.
+                                float pb = bsdfPdf(bsdf, wi);
+                                radiance += throughput * f * skyRadiance(u, lut, wi) * (1.0f / ((float)K * pg + pb));
+                            }
+                            guideRecord(guide, guideBin(guide, wi), reachedSky);
+                        }
+                    }
+                }
+            }
+        }
 
         if (bounce >= u.maxBounces) break;
         float3 wi, weight;
         if (!bsdfSample(bsdf, smp, wi, weight) || dot(surface.geometricNormal, wi) <= 0.0f) break;
+        if (bounce == 0u && guideActive) firstBsdfPdf = bsdfPdf(bsdf, wi);
         throughput = throughput * weight;
         if (bounce >= 2) {
             float q = min(0.95f, maxComponent(throughput));
@@ -1022,9 +1158,20 @@ fragment uint vis_fragment(VisVertexOut in [[stage_in]], uint primitiveId [[prim
 kernel void pt_init(device PixelState* pixels [[buffer(0)]], constant Uniforms& u [[buffer(1)]],
                     device Reservoir* reservoirs [[buffer(2)]], device PrimarySurface* surfaces [[buffer(3)]],
                     device Reservoir* reservoirsB [[buffer(4)]], device PrimarySurface* surfacesB [[buffer(5)]],
+                    device uint* guideHistograms [[buffer(6)]], device uint* guidePending [[buffer(7)]],
                     uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= u.width || gid.y >= u.height) return;
     uint pixel = gid.y * u.width + gid.x;
+    if (u.guided != 0u) {
+        // The first pixel of each tile clears the tile's counters.
+        uint tile = max(u.guideTile, 1u);
+        if (gid.x % tile == 0u && gid.y % tile == 0u) {
+            uint tilesX = (u.width + tile - 1u) / tile;
+            uint words = 2u * max(u.guideBands, 1u) * max(u.guideSectors, 1u);
+            uint base = ((gid.y / tile) * tilesX + gid.x / tile) * words;
+            for (uint b = 0u; b < words; ++b) { guideHistograms[base + b] = 0u; guidePending[base + b] = 0u; }
+        }
+    }
     if (u.restir != 0u) {
         Reservoir r;
         r.dir[0] = 0.0f; r.dir[1] = 1.0f; r.dir[2] = 0.0f;
@@ -1056,11 +1203,18 @@ kernel void pt_sample(device PixelState* pixels [[buffer(0)]], constant Uniforms
                       device const uint* sobol [[buffer(13)]],
                       device Reservoir* reservoirs [[buffer(14)]], device PrimarySurface* surfaces [[buffer(15)]],
                       device const Reservoir* prevReservoirs [[buffer(16)]], device const PrimarySurface* prevSurfaces [[buffer(17)]],
+                      device const uint* guideHistograms [[buffer(18)]], device atomic_uint* guidePending [[buffer(19)]],
                       uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= u.width || gid.y >= u.height) return;
     uint pixel = gid.y * u.width + gid.x;
     device PixelState* p = pixels + pixel;
     if (u.restir != 0u) surfaces[pixel].valid = 0u;
+    uint guideIndex = 0u;
+    if (u.guided != 0u) {
+        uint tile = max(u.guideTile, 1u);
+        uint tilesX = (u.width + tile - 1u) / tile;
+        guideIndex = ((gid.y / tile) * tilesX + gid.x / tile) * (2u * max(u.guideBands, 1u) * max(u.guideSectors, 1u));
+    }
     Sampler smp;
     smp.mode = u.sampler;
     smp.rng.state = p->rngState;
@@ -1089,7 +1243,8 @@ kernel void pt_sample(device PixelState* pixels [[buffer(0)]], constant Uniforms
     }
     uint rays = 0u;
     PathResult s = tracePath(origin, dir, smp, u, verts, lut, primary, bounceGeo, materials, textures, visibleTriangle, rays,
-                             reservoirs + pixel, surfaces + pixel, prevReservoirs, prevSurfaces, gid);
+                             reservoirs + pixel, surfaces + pixel, prevReservoirs, prevSurfaces, gid,
+                             guideHistograms + guideIndex, guidePending + guideIndex);
     p->rays += rays;
     p->rngState = smp.rng.state;
     p->rngInc = smp.rng.inc;
@@ -1107,6 +1262,14 @@ kernel void pt_sample(device PixelState* pixels [[buffer(0)]], constant Uniforms
         p->normal[0] += s.normal.x; p->normal[1] += s.normal.y; p->normal[2] += s.normal.z;
         p->depth += s.depth;
     }
+}
+
+/** Between passes: the outcomes a pass recorded join the committed histograms, so the next pass reads a frozen guide. */
+kernel void guide_commit(device uint* hist [[buffer(0)]], device uint* pending [[buffer(1)]], constant uint& words [[buffer(2)]],
+                         uint id [[thread_position_in_grid]]) {
+    if (id >= words) return;
+    hist[id] += pending[id];
+    pending[id] = 0u;
 }
 
 /**

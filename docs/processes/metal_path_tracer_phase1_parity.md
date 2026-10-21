@@ -207,10 +207,42 @@ The bias is the same as on the 7-level DAG although those levels went from 9-44 
 
 **Why it loses here.** Resampling only helps where the target function tracks the integrand: for a sun+sky scene whose sun is sampled separately, the sky LUT is smooth and the cosine term is already in the proposal, so 32 candidates are no better than 8 (the target is nearly flat). The noise that is left is visibility, which the target cannot see. Temporal reuse with visibility reuse converges on *visible* directions and goes 1.2% dark, the known bias of that variant, and correlates successive passes so the RMSE stalls; spatial reuse goes 1.6-2.6% bright (a neighbour's W already encodes its visibility, so re-weighting it here over-counts visible directions), and the unbiased fix costs one visibility ray per neighbour, which is the budget the method was meant to save. At 1 spp, the game regime, it is a wash (6.02e-3 vs 5.96e-3) for 30% more GPU time. **Rejected**; the flags stay in the helper and in the bench's sampler table for the record.
 
-**What would address the visibility term:** sampling sky directions from a per-pixel visibility estimate learned over the passes (a small hemisphere histogram of shadow-ray outcomes), combined with BSDF sampling by MIS so it stays unbiased: path guiding for the first hit. That targets the term the measurements say is left.
+**What would address the visibility term:** sampling sky directions from a per-pixel visibility estimate learned over the passes (a small hemisphere histogram of shadow-ray outcomes), combined with BSDF sampling by MIS so it stays unbiased: path guiding for the first hit. That targets the term the measurements say is left. (Phase 10 built it and found the attribution above was wrong: see below.)
+
+## Phase 10 (2026-10-20): visibility-guided sky sampling, and where the noise really is
+
+**What was built** (`optimizations.guidedSky`, off by default; `guideTile`, `guideBands`, `guideSectors`, `guideSamples`; kernels `guideBegin/guideSample/guidePdf` and `guide_commit`, buffers 18-19): each tile of pixels keeps equal-area world-space bins (bands by direction.y times azimuth sectors) counting rays sent that way and rays that reached the sky. At the first hit one sky direction is drawn in proportion to estimated visibility times the cosine at the bin centre and shaded with a visibility ray; the BSDF ray is the other strategy and the two combine by the balance heuristic with the pdfs the samples were drawn with, so the estimate is unbiased whatever the histogram says. Bin weights are recomputed on demand (only their sum is kept) so a 1024-bin histogram costs no thread memory. Outcomes go to a pending buffer committed between passes: the first version updated the counters atomically during the pass, so the pdf a thread sampled with and the pdf it weighted with could differ, a bias of 1% at 8 spp that shrank with samples; frozen per pass it is 0.9998-1.0000.
+
+**Measured** (bench shot, RMSE vs 1024 spp, mean ratio 1.0000 throughout):
+
+| variant | 8 spp | 32 spp | GPU ms at 32 |
+| :-- | --: | --: | --: |
+| Sobol | 1.370e-3 | 6.28e-4 | 539-577 |
+| guided, per pixel, 4x8 bins | 1.323e-3 | 5.93e-4 | 837 |
+| guided, 8 px tiles, 4x8 bins | 1.314e-3 | 5.88e-4 | 817 |
+| guided, 8 px tiles, 8x16 bins | **1.306e-3** | **5.82e-4** | 1004 |
+| guided, 16x16 and 32x32 bins | 1.307e-3 / 1.310e-3 | 5.82e-4 | 1200 / 2242 |
+| guided, 8x16, 4 and 16 sky samples per hit | 1.273e-3 / 1.255e-3 | - | - |
+
+Unbiased and 4-7% better per sample, for 35-75% more GPU time: a loss per unit of time, so Sobol stays the default. **Rejected as a default; kept behind its flag.**
+
+**The decomposition, corrected.** Phase 9 read "95% of the noise is first-hit lighting" off the `maxBounces: 1` transport, but that transport also contains the sun's shadow ray at the *second* hit, i.e. one bounce of indirect sunlight. Separating the terms on the same shot (Sobol, 8 spp, each against its own 1024 spp reference):
+
+| transport | textured RMSE (mean 0.027) | clay RMSE (mean 0.041-0.049) |
+| :-- | --: | --: |
+| camera ray + sun at the first hit (`maxBounces: 0`) | 8.40e-4 | 1.61e-3 |
+| + sky at the first hit, haze, and sun at the second hit (`maxBounces: 1`) | 1.308e-3 | 4.36e-3 |
+| full (4 bounces) | 1.370e-3 | - |
+| sky only, sun below the horizon, `maxBounces: 1`: Sobol / guided / 16 guided samples | - | 2.94e-5 / 2.35e-5 / 0.99e-5 |
+
+Three readings. (1) The camera+sun term is 38% of the variance and is *not* texture aliasing: on flat clay it is relatively larger (3.9% of the mean vs 3.3%), so it is sub-pixel geometry, facets with different normals and sun-shadow edges inside a pixel, at the 1 px cut of a scanned tile. (2) On a pure sky the guide does what it should: 20% less error per sample, 3x less with 16 samples. (3) Under sun, 16 guided sky samples per hit move the `maxBounces: 1` error by only 11% (clay: 1.7%), so the large remainder is the **one-bounce sunlight**: the BSDF ray lands on a sunlit or a shadowed wall, a binary of high contrast. That is the term left after primary visibility, and no sky sampler reaches it. The sky itself is a small share in a sunlit scene (dark photogrammetry albedo, bright sun).
+
+**Where that leaves the "exceed gaming" question.** Per-sample gains at the first hit are exhausted (Sobol took them; ReSTIR DI and guiding are measured losses per unit time). The remaining noise is (a) sub-pixel geometry under the sun and (b) one-bounce sunlight. (a) is prefiltering: render from a coarser re-textured cut (Phase 8 made the 2-4 px cuts faithful) so a pixel sees one facet, and measure the agreement/noise trade. (b) is the domain of ReSTIR GI (reservoirs over *secondary hit points* with their outgoing radiance, reused spatially) and of radiance caching; a guide over "where are the sunlit surfaces" is the same idea in guiding form. Both act on the bounce ray, not the sky ray, and that is where the next measurement belongs.
 
 ## Next (plan)
 
-- Visibility-guided sky sampling at the first hit (per-pixel hemisphere histogram + MIS); metallic-roughness atlases; a quad-aware pairing to lift the 81% paired share.
+- One-bounce sunlight: ReSTIR GI over secondary hits (spatial reuse of hit points with their outgoing radiance, Jacobian-corrected) measured against Sobol on the bench shot; or sunlit-surface guiding of the first bounce.
+- Sub-pixel geometry: render from the 2 px re-textured cut and measure noise vs agreement with the 0.5 px cut.
+- Metallic-roughness atlases; a quad-aware pairing to lift the 81% paired share.
 - Phase 4: the a-trous denoiser on the GPU and temporal reuse.
 - Rays: rasterize the camera hit with the existing WebGPU cluster pass; coarser cuts for bounce and shadow rays; any-hit shadow rays (done); merged per-chunk acceleration structures; better samplers; MetalFX upscale.

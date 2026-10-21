@@ -126,7 +126,9 @@ if (process.env.BENCH_SAMPLERS === '1') {
         // ReSTIR over sky directions at the first hit (measured and rejected: see docs/processes/metal_path_tracer_phase1_parity.md).
         'sobol+restir-temporal': { sampler: 'sobol', restir: true, restirCandidates: 8, restirSpatial: 3 },
         'sobol+restir-fresh': { sampler: 'sobol', restir: true, restirTemporal: false, restirCandidates: 8, restirSpatial: 0 },
-        'sobol+restir-fresh-spatial': { sampler: 'sobol', restir: true, restirTemporal: false, restirCandidates: 8, restirSpatial: 3 }
+        'sobol+restir-fresh-spatial': { sampler: 'sobol', restir: true, restirTemporal: false, restirCandidates: 8, restirSpatial: 3 },
+        // Visibility-guided sky sampling with MIS (unbiased; measured: a few percent per sample, a loss per unit of GPU time).
+        'sobol+guided-sky': { sampler: 'sobol', guidedSky: true, guideTile: 8, guideBands: 8, guideSectors: 16 }
     };
     const mean = a => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i]; return s / a.length; };
     for (const [name, optimizations] of Object.entries(SAMPLERS)) {
