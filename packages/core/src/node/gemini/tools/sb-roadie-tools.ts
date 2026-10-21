@@ -139,7 +139,7 @@ export const sbRoadieHandlers: Record<string, ToolHandler> = {
         const stripKey = place.stripKey;
         const stripDir = stripKey ? (() => { const dir = path.join(stagedWorkspaceRoot(), '.scratchbox', 'cache', 'tile_vegetation', stripKey); return fs.existsSync(path.join(dir, 'devegetated.glb')) ? dir : undefined; })() : undefined;
         const tileForRoads = stripDir ? path.join(stripDir, 'devegetated.glb') : extraction.texturedGlb;
-        const key = stageKey('roads/v3', place.tilesKey, stripKey ?? 'scan', crypto.createHash('sha256').update(JSON.stringify(centrelines)).digest('hex').slice(0, 16), covered.toFixed(1), P.liftM, P.kerbRiseM, P.defaultHalfWidthM, P.stationM, texelM);
+        const key = stageKey('roads/v4', place.tilesKey, stripKey ?? 'scan', crypto.createHash('sha256').update(JSON.stringify(centrelines)).digest('hex').slice(0, 16), covered.toFixed(1), P.liftM, P.kerbRiseM, P.defaultHalfWidthM, P.stationM, texelM);
         const key8 = key.slice(0, 8);
         const base = `${data.stagedBuild.place.resolvedAddress.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'place'}`;
         type Value = { stats: ReturnType<typeof buildRoadMesh>['stats']; measuredKerbShare: number; photo: { width: number; height: number; texelM: number } };

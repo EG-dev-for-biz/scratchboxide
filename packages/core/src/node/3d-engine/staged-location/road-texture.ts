@@ -16,8 +16,9 @@
  * median over several car lengths keeps what repeats along the road (the tarmac, the painted lines) and drops what does
  * not (cars, shadows, patches). The lane markings are then read as the across-road rows that stay brighter than the
  * tarmac in that median (narrow, a line's width) and redrawn crisp at their measured positions in their measured
- * colour, solid or dashed as the photo shows along the road (the dash length and gap measured). Everything else is the
- * measured tarmac. The sidewalks and kerbs take their measured mean colour. The result is one atlas, one band per run.
+ * colour, solid or dashed as the photo shows along the road (the dash length, gap and phase measured). Everything else
+ * is redrawn tarmac: the measured colour with a fine grain, the slow tone along the road the cleaned strip shows, and a
+ * darker gutter along the kerbs. The sidewalks and kerbs take their measured mean colour. One atlas, one band per run.
  *
  * Labels: the tarmac and marking colours and the marking positions are measured from the photo; the lines themselves
  * are redrawn (vector-modelled). Crossings and lettering do not repeat along the road and are not kept.
@@ -250,16 +251,24 @@ export function synthesizeRoadTextures(roads: RoadSurface[], photo: TopDownPhoto
             }
         }
         const sidewalkRgb: [number, number, number] = side[0].length ? [median(side[0]), median(side[1]), median(side[2])] : [tarmacRgb[0] * 1.25, tarmacRgb[1] * 1.25, tarmacRgb[2] * 1.2];
-        // paint the band: the cleaned strip with the marking rows filled from their neighbours, then the lines redrawn
-        const markRows = new Set<number>();
-        for (const m of markings) { const c0 = Math.round(m.acrossShare * rows), hw = Math.ceil(m.widthM / (p.width / rows) / 2); for (let k = c0 - hw; k <= c0 + hw; k++) if (k >= 0 && k < rows) markRows.add(k); }
+        // paint the band: the tarmac redrawn in its measured colour with a fine grain and a slow along-road tone (the wear the
+        // cleaned strip shows, followed loosely), a darker gutter along the kerbs, then the lines redrawn
+        const gutterRows = Math.max(1, Math.round(0.4 / (p.width / rows)));
+        const hash = (a: number, b: number) => { let h = (a * 374761393 + b * 668265263 + 1013904223) >>> 0; h = (h ^ (h >>> 13)) * 1274126177 >>> 0; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+        // the along-road tone: the cleaned strip's luminance in the middle rows relative to the tarmac, smoothed, kept within a few percent
+        const tone = new Float32Array(cols);
+        for (let c = 0; c < cols; c++) {
+            const vals: number[] = [];
+            for (let k = Math.floor(rows * 0.3); k < Math.ceil(rows * 0.7); k++) { const i = k * cols + c; if (clean[0][i] === clean[0][i]) vals.push(lum(clean[0][i], clean[1][i], clean[2][i])); }
+            tone[c] = vals.length ? Math.max(0.92, Math.min(1.08, median(vals) / Math.max(0.02, tarmacLum))) : 1;
+        }
         for (let k = 0; k < rows; k++) {
-            let src = k;
-            if (markRows.has(k)) { let d = 1; while (d < rows && markRows.has(src)) { src = k - d >= 0 && !markRows.has(k - d) ? k - d : k + d < rows ? k + d : src; d++; } }
+            const gutter = k < gutterRows || k >= rows - gutterRows ? 0.88 : 1;
             for (let c = 0; c < cols; c++) {
-                const i = src * cols + c, o = ((row0 + k) * width + c) * 4;
-                const ok = clean[0][i] === clean[0][i];
-                rgba[o] = ok ? clean[0][i] : tarmacRgb[0]; rgba[o + 1] = ok ? clean[1][i] : tarmacRgb[1]; rgba[o + 2] = ok ? clean[2][i] : tarmacRgb[2]; rgba[o + 3] = 255;
+                const o = ((row0 + k) * width + c) * 4;
+                const grain = 1 + (hash(c + row0 * 7, k) - 0.5) * 0.08;
+                const f = gutter * grain * tone[c];
+                rgba[o] = Math.max(0, Math.min(255, tarmacRgb[0] * f)); rgba[o + 1] = Math.max(0, Math.min(255, tarmacRgb[1] * f)); rgba[o + 2] = Math.max(0, Math.min(255, tarmacRgb[2] * f)); rgba[o + 3] = 255;
             }
         }
         for (const m of markings) {

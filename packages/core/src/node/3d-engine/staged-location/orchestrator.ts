@@ -2455,7 +2455,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 id: 'roads',
                 run: async io => {
                     const tileForRoads = strip ? strip.devegetatedGlb : extraction.texturedGlb;
-                    const key = stageKey('roads/v3', t.key, strip ? strip.cacheKey : 'scan', crypto.createHash('sha256').update(JSON.stringify(centrelines)).digest('hex').slice(0, 16), covered.toFixed(1), ROAD_SURFACE_PARAMS.liftM);
+                    const key = stageKey('roads/v4', t.key, strip ? strip.cacheKey : 'scan', crypto.createHash('sha256').update(JSON.stringify(centrelines)).digest('hex').slice(0, 16), covered.toFixed(1), ROAD_SURFACE_PARAMS.liftM);
                     run.keys.roads = key;
                     const key8 = key.slice(0, 8);
                     const entry = await cache.run<RoadStageValue>('roads', key, async dir => {
