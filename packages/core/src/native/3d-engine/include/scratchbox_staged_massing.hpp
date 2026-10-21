@@ -1771,7 +1771,12 @@ private:
                 size_t covered = 0;
                 for (size_t i = 0; i < N; ++i) covered += cov[i];
                 f.coverage = static_cast<double>(covered) / static_cast<double>(N);
-                if (!up && std::abs(f.n.y) < 0.5 && spec_.reslabReach > 0 && f.coverage < spec_.reslabBelow) {
+                // the retry applies to every face that got the narrow wall window (not just near-vertical ones): a
+                // shallow-to-medium roof slope (f.n.y in (0.25, 0.7], a dormer or mansard) or a steep soffit
+                // (f.n.y < -0.5) is still rastered with the wall window above, and can miss the real photo surface by
+                // just as much as a wall can; the retry's own gate (the result must cover more than the original) is
+                // unchanged, so a face this doesn't help simply keeps its first raster, same as before
+                if (!up && spec_.reslabReach > 0 && f.coverage < spec_.reslabBelow) {
                     double c = photoSurfaceDepth(f, spec_.reslabReach);
                     if (std::isfinite(c) && (c < -spec_.slabBack + 0.5 || c > spec_.slabFront - 0.3)) {
                         std::vector<float> z2(N, -1e30f);

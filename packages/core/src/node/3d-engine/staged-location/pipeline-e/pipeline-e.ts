@@ -33,6 +33,15 @@ import { RESIDUAL_SHAPE_TOKEN } from './residual-shape-fit';
 
 /** Below this share of its texels covered by the tile, a face is filled with one median colour. */
 export const LOW_COVERAGE = 0.35;
+/**
+ * Below this share, a face is taken as hardly seeing the tile at all (a party wall, the inside of the block) and filled
+ * with one flat colour. Above it (and below LOW_COVERAGE, which a different, unrelated use of this module reads to
+ * decide whether a wall is eligible for enhanced mode's "unseen" continuation drawing — inference.ts), fillNearest's
+ * finer, spatially-varying breadth-first fill is used instead, the same as a well-covered face already gets: a face at,
+ * say, 20% coverage has real photo detail over a fifth of it, and flattening the whole face to one colour discarded
+ * that real detail outside a narrow near-zero-coverage band, not just the genuinely blind cases the comment describes.
+ */
+export const FACE_HARDLY_SEEN_SHARE = 0.02;
 import type { SolarRoofSegment } from './solar-roof';
 
 /** The stage version; the material channels (massing-materials.ts) change every E layer's textured twin. */
@@ -155,9 +164,11 @@ export function plainTextures(run: MassingRun): { textures: Map<number, FaceText
     const median = medianColour(walls) ?? medianColour([...textures.values()]) ?? [150, 150, 150];
     for (const [index, t] of textures) {
         const face = run.report.faces.find(f => f.index === index);
-        // a face the tile hardly sees (a party wall, the inside of the block) takes one flat colour, not a smear of a few texels
-        if ((face?.coverage ?? 0) < LOW_COVERAGE) {
-            const own = (face?.coverage ?? 0) >= 0.02 ? medianColour([t]) : undefined;
+        // a face the tile hardly sees at all (a party wall, the inside of the block) takes one flat colour, not a smear
+        // of a few texels; anything with more real coverage than that keeps its real detail, filled in the gaps same as
+        // a well-covered face (fillNearest), not flattened over it
+        if ((face?.coverage ?? 0) < FACE_HARDLY_SEEN_SHARE) {
+            const own = (face?.coverage ?? 0) > 0 ? medianColour([t]) : undefined;
             for (let i = 0; i < t.width * t.height; i++) if (t.source[i] === 255) { t.rgba.set(own ?? median, i * 4); t.rgba[i * 4 + 3] = 255; t.source[i] = SRC.facadeMedian; }
         } else fillNearest(t, undefined, median);
     }
