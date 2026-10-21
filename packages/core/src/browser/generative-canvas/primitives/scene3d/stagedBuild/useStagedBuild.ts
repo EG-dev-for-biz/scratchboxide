@@ -346,8 +346,8 @@ export function lookFor(f: LayerRevealFrame, n: NodeInfo, ctx: LookContext): Mes
         reveal = { progress: 1, stagger, fade: 1, presence };
     }
     const rungs = ctx.provenanceOn && !ctx.overridden ? ctx.rungs : undefined;
-    // the sweep runs over what is drawn as itself: not over a ghost, nor a layer still arriving per vertex (its band would cut off)
-    const work = ctx.work && !ctx.ghost && !ctx.overridden && (f.phase === 'revealed' || (f.phase === 'revealing' && !n.perVertex)) ? ctx.work : undefined;
+    // the sweep runs over what is drawn as itself: a revealed layer, never a ghost or a layer still arriving (that has its own motion)
+    const work = ctx.work && !ctx.ghost && !ctx.overridden && f.phase === 'revealed' ? ctx.work : undefined;
     const shaded = ctx.provenanceOn && !ctx.overridden && !rungs;
     const mark = !ctx.overridden && ((!!ctx.highlightOn && n.degradationIds.includes(ctx.highlightOn)) || (ctx.provenanceOn && n.degradationIds.length > 0));
     let provenance: MeshStagedLook['provenance'];
@@ -723,7 +723,8 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         let drawn = 0;
         stats.ghosts = 0;
         const highlightOn = L.highlight && L.highlight.untilMs > Date.now() ? L.highlight.id : undefined;
-        const work = workSweepFor(st, L.progress, infos.filter(([f]) => !f.hidden && f.phase !== 'retired').map(([, i]) => i.bounds), t0, L.reducedMotion, pageLoadedAtMs);
+        // the sweep fills the waits: while a layer reveals or crossfades, that motion is the progress shown
+        const work = frame.animating ? undefined : workSweepFor(st, L.progress, infos.filter(([f]) => !f.hidden && f.phase !== 'retired').map(([, i]) => i.bounds), t0, L.reducedMotion, pageLoadedAtMs);
         for (const [f, info] of infos) {
             const ghost = ghostOf(f, L.showReplaced, twinRef.current.engaged);
             if (ghost) stats.ghosts++;

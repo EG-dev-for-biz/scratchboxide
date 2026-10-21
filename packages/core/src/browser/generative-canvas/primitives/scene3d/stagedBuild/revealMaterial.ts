@@ -579,6 +579,7 @@ export function partArrays(looks: readonly PartLook[]): { look: MeshStagedLook; 
     let any = false, fading = false, overSource = false, noDisp = false;
     let prov: MeshStagedLook['provenance'];
     let rungs: MeshStagedLook['rungs'];
+    let work: MeshStagedLook['work'];
     for (const l of looks) {
         if (!l || l === 'hide' || l === 'conceal') { a.push([1, 1, 0, 0]); b.push([PART_GREY.r, PART_GREY.g, PART_GREY.b, 0]); continue; }
         any = true;
@@ -600,15 +601,18 @@ export function partArrays(looks: readonly PartLook[]): { look: MeshStagedLook; 
             b.push([PART_GREY.r, PART_GREY.g, PART_GREY.b, 0]);
         }
         if (l.rungs) rungs ??= l.rungs;
+        // the work sweep is one band over the whole scene: any part's is the mesh's
+        if (l.work) work ??= l.work;
     }
     if (!any) return null;
     const look: MeshStagedLook = {
         ...(fading || overSource ? { reveal: { progress: 1, stagger: 0, fade: 1, presence: 1, ...(overSource ? { overSource: true } : {}), ...(noDisp ? { noDisp: true } : {}) } } : {}),
         ...(prov ? { provenance: prov } : {}),
-        ...(rungs && !prov ? { rungs } : {})
+        ...(rungs && !prov ? { rungs } : {}),
+        ...(work ? { work } : {})
     };
     // a mark-only frame (a highlighted part, nothing else staged) still needs a staged material for the per-part mark
-    if (!look.reveal && !look.provenance && !look.rungs) look.reveal = { progress: 1, stagger: 0, fade: 1, presence: 1 };
+    if (!look.reveal && !look.provenance && !look.rungs && !look.work) look.reveal = { progress: 1, stagger: 0, fade: 1, presence: 1 };
     return { look, a, b, fading };
 }
 
@@ -735,6 +739,16 @@ export class StagedMaterialRegistry {
         const created = this.apply(mesh, arrays.look, opts);
         const mat = mesh.material as THREE.Material;
         const u = isStagedMaterial(mat) ? UNIFORMS.get(mat) : undefined;
+        if (u) {
+            const w = arrays.look.work;
+            u.uSbWork.value = w ? 1 : 0;
+            if (w) {
+                u.uSbWorkPhase.value = w.phase;
+                u.uSbWorkFill.value = w.fill;
+                u.uSbWorkRange.value.set(w.minY, w.maxY);
+                u.uSbWorkColor.value.copy(w.color);
+            }
+        }
         if (u?.uSbPartA && u.uSbPartB) {
             const n = Math.min(u.uSbPartA.value.length, arrays.a.length);
             for (let i = 0; i < n; i++) { u.uSbPartA.value[i].fromArray(arrays.a[i]); u.uSbPartB.value[i].fromArray(arrays.b[i]); }
