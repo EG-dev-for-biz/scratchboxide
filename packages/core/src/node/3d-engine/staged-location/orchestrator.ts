@@ -169,6 +169,8 @@ const NO_EVIDENCE_COST: EvidenceCost = { metadataCalls: 0, cachedCalls: 0, image
 // stages
 // ----------------------------------------------------------------------------------------------------------------
 
+/** The ownership vote's outlines are waited for this long; a view not outlined by then is left out of the vote. */
+export const OWNERSHIP_VOTE_WINDOW_MS = 60_000;
 /** The focused run readings get at most this long after the wide reading (and less when the wide reading ran long). */
 export const VISION_RUNS_ALLOWANCE_MS = 120_000;
 /** What the vision stage keeps back from its limit: the merge, the cache write and the records after the readings. */
@@ -1211,6 +1213,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (!run.state.layers.some(l => l.layer === 'l1')) {
                         const note = `${sel.buildings.length} buildings within ${Math.round(radiusM)} m from Google's vector data${left ? `; ${left}` : ''}; ${baseNote('street')}; shown until the 3D Tiles arrive`;
                         const l0 = layerOf(entry.published[0], 'l0', entry.value.counts, note, entry.builtAtMs, entry.cached, []);
+                        // the scene's place until the tiles give their own anchor (the viewport reads lat 0, lng 0 as no place)
+                        if (!run.state.layers.length) run.geoAnchor = { lat: place.lat, lng: place.lng, ...(typeof place.elevation === 'number' ? { elevation: place.elevation } : {}) };
                         if (!run.camera) {
                             const bounds = glbBounds(path.join(entry.dir, 'vector_massing.glb'));
                             if (bounds) run.camera = vectorCamera(bounds, sel.buildings, request.isolate, radiusM, elevations && ground0 !== undefined ? elevations.slice(1).map(e => e - ground0) : undefined);
@@ -2714,8 +2718,18 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         io.progress('rendering views of the structure for the ownership vote');
                         const views = await timed('ownershipViews', () => deps.refine.renderOwnershipViews!({ tilePath: v.tilePath, isolate: true, anchor: { x: structure!.seed.x, z: structure!.seed.z }, ...(v.isolatePick ? { isolatePick: v.isolatePick } : {}) }));
                         masksDir = path.join(views.dir, `masks_${crypto.createHash('sha256').update(request.query.trim()).digest('hex').slice(0, 16)}`);
-                        const chain = new VisionModelChain<string>({ client: visionAvailable!.client, candidates: visionAvailable!.candidates, signal: ctx.signal, ...chainExtras('remesh'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
-                        seg = await timed('ownershipVision', () => segmentOwnershipViews({ viewsDir: views.dir, masksDir, target: request.query.trim(), chain, concurrency: 6, onProgress: m => io.progress(m) }));
+                        // the views not outlined within OWNERSHIP_VOTE_WINDOW_MS are left out (their triangles keep the geometric rules):
+                        // one late call (live: 299 s) must not hold the build's finish
+                        const cut = new AbortController();
+                        const cutTimer = setTimeout(() => cut.abort(Object.assign(new Error(`not outlined within the vote's ${Math.round(OWNERSHIP_VOTE_WINDOW_MS / 1000)} s`), { name: 'TimeoutError' })), OWNERSHIP_VOTE_WINDOW_MS);
+                        const chain = new VisionModelChain<string>({ client: visionAvailable!.client, candidates: visionAvailable!.candidates, signal: ctx.signal ? AbortSignal.any([ctx.signal, cut.signal]) : cut.signal, ...chainExtras('remesh'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
+                        try {
+                            seg = await timed('ownershipVision', () => segmentOwnershipViews({ viewsDir: views.dir, masksDir, target: request.query.trim(), chain, concurrency: 6, onProgress: m => io.progress(m) }));
+                        } finally {
+                            clearTimeout(cutTimer);
+                        }
+                        if (ctx.signal?.aborted) throw abortError();
+                        if (cut.signal.aborted) io.progress(`ownership vote: ${seg.masks} of ${seg.views} views outlined within ${Math.round(OWNERSHIP_VOTE_WINDOW_MS / 1000)} s; the others are left out`);
                         if (seg.masks < 2) throw new Error(`only ${seg.masks} of ${seg.views} views got a usable outline (${seg.skipped.slice(0, 3).map(x => `${x.view}: ${x.reason}`).join('; ')})`);
                     } catch (err) {
                         if (isAbort(err) || io.signal.aborted) throw err;
@@ -2770,7 +2784,15 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         status: 'committed', value: { material: true, refined: voted, request: votedRequest, isolateOk: true, layer }, layers: [layer], breakdownMs: msBy, cached: voted.cached,
                         source: `the vote moved ${moved} (at least ${Math.round(OWNERSHIP_MATERIAL_SHARE * 100)}%): the voted remesh replaces the first isolate and the rebuild runs again on it`
                     };
-                }
+                },
+                // the vote never fails the build: the geometric isolate stands, and says why
+                degrade: async err => ({
+                    status: 'degraded', value: { material: false, request: v.request, isolateOk }, source: 'the geometric isolate stands', reason: `the ownership vote did not finish (${errorMessage(err)}); the geometric isolate stands`,
+                    degradations: [run.degrade(record('ownership', 'ownership_vote_unavailable', {
+                        part: { description: 'what belongs to the structure' }, intended: 'object ownership by multi-view mask voting', fellTo: 'the structure as the geometric rules isolate it (footprint and connectivity)',
+                        provenanceAfter: PROVENANCE.remeshed, reason: `the ownership vote did not finish (${errorMessage(err)}); the geometric isolate stands`, cause: err, transient: true, runId, now: now()
+                    }))]
+                })
             });
             return r.status === 'stopped' ? undefined : r.value;
         };
