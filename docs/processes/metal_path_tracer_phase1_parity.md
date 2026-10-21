@@ -257,9 +257,33 @@ The loose bound converges slower than Sobol (8 to 32 spp: 1.7x instead of 2.2x) 
 
 **Standing conclusion after Phases 9-11.** Three per-sample techniques (ReSTIR DI, visibility-guided sky sampling, ReSTIR GI) are each implemented, unbiased or measured to 0.1%, and each a loss per unit of GPU time on this scene; Sobol with the a-trous denoiser and MetalFX stays the configuration. The measured structure of the noise says the next lever is geometric: render from the 2 px re-textured cut so a pixel sees one facet and neighbours see each other, which addresses the 38% primary term *and* feeds every reuse method. Measure it first; only then re-run the GI variant on it.
 
+## Phase 12 (2026-10-21): the coarser cut, where ReSTIR GI's pool really goes, and a free 10%
+
+**Coarser cuts do not buy noise.** Each cut rendered to its own 1024 spp reference (noise) and compared with the 0.5 px cut's reference (fidelity), bench shot, Sobol:
+
+| cut | triangles | fidelity vs 0.5 px: RMSE / 8x8 block mean | Sobol RMSE 8 spp / 32 spp |
+| :-- | --: | :-- | --: |
+| 0.5 px | 257,981 | - | 1.399e-3 / 6.42e-4 |
+| 1 px | 195,163 | 2.24e-3 / 1.50% | 1.370e-3 / 6.28e-4 |
+| 2 px | 132,193 | 2.95e-3 / 2.22% | 1.356e-3 / 6.24e-4 |
+| 4 px | 87,364 | 4.67e-3 / 4.58% | 1.334e-3 / 6.15e-4 |
+
+A third of the triangles (4 px) lowers the noise by 5% and costs 4.6% in block fidelity; ReSTIR GI on the 2 px cut gains exactly what it gained on the 1 px cut (1.277e-3 / 1.248e-3 at 8 spp for 3 / 8 neighbours, bias -0.1%) with the same number of extra visibility rays. So the Phase 10-11 hypothesis that sub-pixel facets hold the primary noise and starve reuse is wrong, and the cut stays at 1 px.
+
+**Where the pool goes.** A counter of resampled candidates per first hit (`optimizations.giMeanCandidates` in the stats, kept) and a diagnostic build counting rejections: with 8 neighbours the mean reservoir holds 1.78 candidates over all samples, 3.4 over samples that hit; of the neighbour lookups, 26% find a pixel with no sample, 16% fail the 25° normal test (loosening it to 60° changes nothing), 1% the depth test and 2% the reconnection. The 26% were the surprise: **21% of first-hit samples end before continuing** (`bsdfSample` fails or the direction is below the geometric surface), so a fifth of all paths carry no sky and no bounce light at all. Bending shading normals to within 30° of the geometric normal does not change that count (790k vs 815k of 3.8 M), so it is not the smoothed normals of `weld()`; 87% of the dead samples had chosen the GGX lobe, which at a roughness near 1 reflects below the horizon most of the time. Fresnel-weighted lobe selection with a 0.1 floor picked that lobe for a tenth of all samples on rough dielectrics.
+
+**Lobe selection by directional albedo (adopted).** `makeBsdf` (Metal) and `MetallicRoughnessBsdf` (CPU) now choose the specular lobe in proportion to its directional albedo (Lazarov's fit of the GGX environment BRDF), floor 0.02. Any mixture weight leaves the estimator unbiased, so the existing references stay valid and the gain is direct:
+
+| | 1 spp | 8 spp | 32 spp | mean ratio | rays (32) |
+| :-- | --: | --: | --: | --: | --: |
+| Sobol, Fresnel-weighted lobes | 5.96e-3 | 1.370e-3 | 6.28e-4 | 1.0000 | 63.6 M |
+| Sobol, albedo-weighted lobes | **5.87e-3** | **1.312e-3** | **5.66e-4** | 1.0000 | 66.2 M |
+
+4% less error at 8 spp and 10% at 32 for 4% more rays (more paths continue), dead first-hit samples 21% to 13% (the rest are the rough lobe's own lost energy, a property of single-scattering GGX), and GPU and CPU still agree to 0.04% in block means. The one change in Phases 9-12 that is a win per unit of time, and it cost nothing. Remaining known term of this kind: a multiple-scattering GGX (Kulla-Conty energy compensation) would return the lost energy of rough lobes; it changes the images, so it is a model decision, not a sampling one.
+
 ## Next (plan)
 
-- Sub-pixel geometry: render from the 2 px re-textured cut and measure noise vs agreement with the 0.5 px cut; re-run `sobol+restir-gi` on that cut.
+- Multiple-scattering GGX energy compensation (model change, images get slightly brighter on rough surfaces; measure against footage, not against the current reference).
 - Metallic-roughness atlases; a quad-aware pairing to lift the 81% paired share.
 - Phase 4: the a-trous denoiser on the GPU and temporal reuse.
 - Rays: rasterize the camera hit with the existing WebGPU cluster pass; coarser cuts for bounce and shadow rays; any-hit shadow rays (done); merged per-chunk acceleration structures; better samplers; MetalFX upscale.

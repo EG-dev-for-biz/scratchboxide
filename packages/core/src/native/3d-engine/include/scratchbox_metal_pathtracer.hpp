@@ -701,6 +701,7 @@ public:
         const PixelState* state = static_cast<const PixelState*>(framePixels_.contents);
         const float inv = 1.0f / static_cast<float>(spp);
         size_t covered = 0;
+        uint64_t giCandidates = 0;
         for (size_t i = 0; i < n; ++i) {
             const PixelState& p = state[i];
             out.color[i] = Vec3(p.color[0], p.color[1], p.color[2]) * inv;
@@ -708,6 +709,7 @@ public:
             out.guides.variance[i] = static_cast<float>(std::max(0.0, static_cast<double>(p.lumSq) / spp - mean * mean) / spp);
             out.rays += p.rays;
             out.nanSamples += p.nan;
+            giCandidates += p.pad;
             if (p.hits * 2 >= static_cast<uint32_t>(spp)) {
                 out.guides.geometryMask[i] = 1;
                 out.guides.albedo[i] = Vec3(p.albedo[0], p.albedo[1], p.albedo[2]) / static_cast<float>(p.hits);
@@ -718,8 +720,12 @@ public:
         }
         out.geometryCoverage = static_cast<float>(covered) / static_cast<float>(n);
         out.renderMs = frameGpuSeconds_ * 1000.0;
+        giMeanCandidates_ = frameGi_ ? static_cast<double>(giCandidates) / (static_cast<double>(n) * spp) : 0.0;
         return out;
     }
+
+    /** ReSTIR GI: mean samples resampled per first hit (the path's own plus accepted neighbours) over the last readback. */
+    double giMeanCandidates() const { return giMeanCandidates_; }
 
     /**
      * Denoises the current frame on the GPU (the a-trous filter of scratchbox_denoise.hpp) and returns the
@@ -970,6 +976,7 @@ private:
     uint32_t guideWords_{0};
     bool restirGi_{false};
     bool frameGi_{false};
+    mutable double giMeanCandidates_{0.0};
     uint32_t giSpatial_{3};
     id<MTLBuffer> giA_{nil};
     id<MTLBuffer> giB_{nil};

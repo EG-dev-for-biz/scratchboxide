@@ -467,7 +467,7 @@ int renderOnce(const std::string& configPath) {
               << "  \"optimizations\": { \"accelFastBuild\": " << (accelFastBuild ? "true" : "false") << ", \"sampler\": " << jsonString(samplerName)
               << ", \"primaryRaster\": " << (primaryRaster ? "true" : "false") << ", \"rasterMs\": " << (metalTracer ? metalTracer->rasterMs() : 0.0)
               << ", \"restir\": " << (restir ? "true" : "false") << ", \"restirCandidates\": " << restirCandidates << ", \"restirSpatial\": " << restirSpatial
-              << ", \"guidedSky\": " << (guidedSky ? "true" : "false") << ", \"guideTile\": " << guideTile << ", \"guideBands\": " << guideBands << ", \"guideSectors\": " << guideSectors << ", \"guideSamples\": " << guideSamples << ", \"restirGi\": " << (restirGi ? "true" : "false") << ", \"giSpatial\": " << giSpatial
+              << ", \"guidedSky\": " << (guidedSky ? "true" : "false") << ", \"guideTile\": " << guideTile << ", \"guideBands\": " << guideBands << ", \"guideSectors\": " << guideSectors << ", \"guideSamples\": " << guideSamples << ", \"restirGi\": " << (restirGi ? "true" : "false") << ", \"giSpatial\": " << giSpatial << ", \"giMeanCandidates\": " << (metalTracer ? metalTracer->giMeanCandidates() : 0.0)
               << ", \"bounceCut\": { \"thresholdPx\": " << bounceThresholdPx << ", \"clusters\": " << bounceCut.clusterIds.size() << ", \"triangles\": " << bounceCut.triangleCount()
               << ", \"accelerationBuildMs\": " << (metalTracer ? metalTracer->bounceBuildMs() : 0.0) << " } },\n"
               << "  \"rays\": " << out.rays << ",\n"

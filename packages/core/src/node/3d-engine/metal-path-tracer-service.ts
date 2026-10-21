@@ -154,6 +154,8 @@ export interface MetalPathTraceStats {
         guideSamples: number;
         restirGi: boolean;
         giSpatial: number;
+        /** ReSTIR GI: mean samples resampled per first hit (own plus accepted neighbours); 0 when off. */
+        giMeanCandidates: number;
         bounceCut: { thresholdPx: number; clusters: number; triangles: number; accelerationBuildMs: number };
     };
     denoiseBackend: 'metal' | 'cpu' | 'none';
