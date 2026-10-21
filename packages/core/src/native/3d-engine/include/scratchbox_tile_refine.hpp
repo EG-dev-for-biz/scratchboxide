@@ -44,6 +44,7 @@
 #include "scratchbox_photometric_relief.hpp"
 #include "scratchbox_png.hpp"
 #include "scratchbox_scan_rectifier.hpp"
+#include "scratchbox_tile_seam_weld.hpp"
 #include "scratchbox_texture.hpp"
 
 #include <algorithm>
@@ -150,6 +151,13 @@ struct TileRefineParams {
     bool relief{true};
     double creaseAngleDeg{30.0};
     VisibilityParams vis;
+    // Tile-chunk seam weld (scratchbox_tile_seam_weld.hpp): closes real gaps between adjacent tile
+    // chunks and drops the slivers that collapse out of them, before anything else -- isolation, the
+    // raw clay write, or scan_rectifier's own D4 orientation vote -- reads a wall plane or direction
+    // out of this scan. On by default; off turns the pass-through behaviour back to exactly what it
+    // was before this file existed (no weld, no drop).
+    bool seamWeldEnabled{true};
+    tile_seam_weld::TileSeamWeldParams seamWeld;
     scan_rectifier::ScanRectifierParams rect;
     photometric_relief::ReliefParams reliefParams;
     // Isolate: keep only the structure under the anchor plus a ground apron, then run every later stage on that subset.
@@ -763,11 +771,37 @@ private:
         scene = gltf::GlbSceneReader::readFile(input);
         if (!scene.ok) { res.error = "failed to read " + input + ": " + scene.error; return res; }
         if (scene.mesh.indices.size() < 3) { res.error = "scan has no triangles"; return res; }
-        adoptSceneGeometry();
         lap("load");
+
+        // 1a. tile-chunk seam weld (scratchbox_tile_seam_weld.hpp): the scan as loaded, before isolation,
+        // the raw clay write or scan_rectifier ever see it, so the wall-direction vote and the wall-plane
+        // fit downstream (scan_fit.hpp, which reads rawClayPath -- written below, before rectify runs --
+        // never sees scan_rectifier at all) both see tile chunks that are actually stitched.
+        tile_seam_weld::TileSeamWeldResult seamWeldResult;
+        if (P.seamWeldEnabled) {
+            seamWeldResult = tile_seam_weld::TileSeamWeld::weldAndMarkSlivers(scene.mesh, P.seamWeld);
+            if (seamWeldResult.ok) {
+                tile_seam_weld::TileSeamWeld::compactDropped(scene.mesh, seamWeldResult.keepTriangle, {&scene.triangleMaterial});
+            }
+        }
+        adoptSceneGeometry();
+        lap("seam_weld");
 
         js << "  \"input\": {\"path\": \"" << jsonEscape(input) << "\", \"vertices\": " << V << ", \"triangles\": " << F << ", \"images\": " << scene.images.size()
            << ", \"materials\": " << scene.materials.size() << ", \"boundsMin\": " << vec(bbMin) << ", \"boundsMax\": " << vec(bbMax) << "},\n";
+        if (P.seamWeldEnabled && seamWeldResult.ok) {
+            const auto& sw = seamWeldResult.stats;
+            js << "  \"seamWeld\": {\"pieces\": " << sw.pieceCount << ", \"boundaryVerts\": " << sw.boundaryVerts
+               << ", \"contactsFound\": " << sw.contactsFound << ", \"vertsWelded\": " << sw.vertsWelded
+               << ", \"trianglesDropped\": " << sw.trianglesDropped << ", \"meanWeldDisplacementM\": " << num(sw.meanWeldDisplacementM)
+               << ", \"maxWeldDisplacementM\": " << num(sw.maxWeldDisplacementM) << ", \"gapHistogram\": [";
+            for (size_t k = 0; k < sw.gapHistogram.size(); ++k) js << (k ? ", " : "") << sw.gapHistogram[k];
+            js << "]},\n";
+        } else if (!P.seamWeldEnabled) {
+            js << "  \"seamWeld\": {\"enabled\": false},\n";
+        } else {
+            js << "  \"seamWeld\": {\"error\": \"" << jsonEscape(seamWeldResult.error) << "\"},\n";
+        }
 
         // 1b. isolate the structure under the anchor (every later stage sees only that subset)
         if (P.isolate) {
@@ -3362,6 +3396,12 @@ private:
         for (size_t i = 0; i < 6; ++i) js << (i ? "," : "") << S.gapHistogramBefore[i];
         js << "], \"seamGapHistogramAfter\": [";
         for (size_t i = 0; i < 6; ++i) js << (i ? "," : "") << S.gapHistogramAfter[i];
+        js << "], \"families\": [";
+        // D4 orientation-family vote, straight from the rectifier's own stats: a direct, measured
+        // check of whether the seam weld pre-pass (which runs before D4) changed the vote the
+        // wall-direction estimate downstream inherits.
+        for (size_t i = 0; i < S.families.size(); ++i)
+            js << (i ? ", " : "") << "{\"azimuthDeg\": " << num(S.families[i].azimuthDeg) << ", \"weight\": " << num(S.families[i].weight) << "}";
         js << "], \"hero\": " << heroJson << "},\n";
         js << "  \"roi\": {\"enabled\": " << (roiEnabled ? "true" : "false") << ", \"wholeIsolatedStructure\": " << (P.isolate ? "true" : "false") << ", \"fromFootprint\": " << (S.heroFound ? "true" : "false") << ", \"minX\": " << num(roiMinX)
            << ", \"maxX\": " << num(roiMaxX) << ", \"minZ\": " << num(roiMinZ) << ", \"maxZ\": " << num(roiMaxZ) << "},\n";
