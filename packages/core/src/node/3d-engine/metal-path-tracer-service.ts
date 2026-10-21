@@ -95,7 +95,14 @@ export interface MetalPathTraceRequest {
      * lowers the error per sample; `bounceThresholdPx`, `primaryRaster` and `accelFastBuild` are kept for
      * measurement and were found slower or biased on photogrammetry.
      */
-    optimizations?: { sampler?: 'pcg' | 'sobol'; bounceThresholdPx?: number; primaryRaster?: boolean; accelFastBuild?: boolean };
+    optimizations?: {
+        sampler?: 'pcg' | 'sobol'; bounceThresholdPx?: number; primaryRaster?: boolean; accelFastBuild?: boolean;
+        /**
+         * ReSTIR over sky directions at the first hit (sun lighting only; measured and rejected, kept for the bench):
+         * candidates per pass, neighbours merged per pass, and whether the reservoir persists across passes.
+         */
+        restir?: boolean; restirCandidates?: number; restirSpatial?: number; restirTemporal?: boolean;
+    };
     exposureEv?: number;
     camera?: MetalPathTraceCamera | MetalPathTraceAutoCamera;
     timeoutMs?: number;
@@ -130,6 +137,9 @@ export interface MetalPathTraceStats {
         sampler: 'pcg' | 'sobol';
         primaryRaster: boolean;
         rasterMs: number;
+        restir: boolean;
+        restirCandidates: number;
+        restirSpatial: number;
         bounceCut: { thresholdPx: number; clusters: number; triangles: number; accelerationBuildMs: number };
     };
     denoiseBackend: 'metal' | 'cpu' | 'none';
