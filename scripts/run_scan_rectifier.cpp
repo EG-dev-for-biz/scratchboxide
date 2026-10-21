@@ -51,7 +51,10 @@ static void usage() {
         "                --normal-agree-deg D (15)  --aabb-grow M (1.0)  --max-snap-induced M (0.25)\n"
         "                --split-min-step M (0.15)  --split-min-separation F (0.75)  --no-level-split\n"
         "                --local-orient-radius M (45)  --local-orient-sigma M (15)  --family-lock-deg D (0.3)\n"
-        "  snapping:     --tau-wall M (0.5)  --tau-roof M (0.4)  --tau-corner M (0.7)  --support-grow M (0.7)\n"
+        "  inclined:     --no-inclined-regions  --min-inclined-area M2 (10)  --inclined-az-snap-deg D (3)\n"
+        "                --pitch-snap-deg D (3)  --pitch-consensus-radius M (30)  --pitch-window-deg D (4)\n"
+        "                --inclined-max-explained F (0.5)\n"
+        "  snapping:     --tau-wall M (0.5)  --tau-roof M (0.4)  --tau-inclined M (0.4)  --tau-corner M (0.7)  --support-grow M (0.7)\n"
         "                --full-strength F (0.6)  --max-disp M (0.75)  --dead-band M (0.05)  --foreign-snap  --no-snap\n"
         "  tiers:        --tier-roof-tol M (0.4)  --tier-parapet-tol M (0.3)  --tier-min-area M2 (20)  --no-tiers\n"
         "                --tier-bandwidth M (0.06)  --tier-merge M (0.12)\n"
@@ -203,6 +206,14 @@ int main(int argc, char** argv) {
         else if (a == "--plumb-snap-deg") p.plumbSnapDeg = num("--plumb-snap-deg");
         else if (a == "--min-wall-area") p.minWallArea = num("--min-wall-area");
         else if (a == "--min-roof-area") p.minRoofArea = num("--min-roof-area");
+        else if (a == "--no-inclined-regions") p.inclinedRegions = false;
+        else if (a == "--min-inclined-area") p.minInclinedArea = num("--min-inclined-area");
+        else if (a == "--inclined-az-snap-deg") p.inclinedAzimuthSnapDeg = num("--inclined-az-snap-deg");
+        else if (a == "--pitch-snap-deg") p.pitchSnapDeg = num("--pitch-snap-deg");
+        else if (a == "--pitch-consensus-radius") p.pitchConsensusRadius = num("--pitch-consensus-radius");
+        else if (a == "--pitch-window-deg") p.pitchConsensusWindowDeg = num("--pitch-window-deg");
+        else if (a == "--tau-inclined") p.tauInclined = num("--tau-inclined");
+        else if (a == "--inclined-max-explained") p.inclinedMaxExplainedShare = num("--inclined-max-explained");
         else if (a == "--max-rms") p.maxRegionRms = num("--max-rms");
         else if (a == "--normal-agree-deg") p.normalAgreementDeg = num("--normal-agree-deg");
         else if (a == "--aabb-grow") p.regionAabbGrow = num("--aabb-grow");
