@@ -47,7 +47,8 @@ import { enhanceOrder, enhanceWall, ENHANCE_CONCURRENCY, MAX_UNSEEN_WALLS, MIN_E
 import { exposedShare, solidGrid } from './exposure';
 import { labPlanes } from './plate-audit';
 import { medianColour } from './face-textures';
-import { bestStreetViewForWall, rectifiedReference, type GuideView } from './plate-streetview';
+import { bestStreetViewForWall, rectifiedReference, streetBandTop, type GuideView } from './plate-streetview';
+import { applyStreetViewTexels, type StreetViewTexelRecord } from './street-view-texels';
 import { visionFacadeCounter } from './plate-identity';
 import { refitLatticeToPlate, plateLatticeOpenings } from './plate-lattice';
 import type { AuditedCluster } from '../residual-audit';
@@ -103,6 +104,8 @@ export interface InferenceOutcome {
     occluderMasks: Map<number, Uint8Array>;
     /** The Street View photos the colour step had (with their registered cameras), when it had any. */
     streetViews?: ProjectionView[];
+    /** Real Street View texels written on the walls (street-view-texels.ts), per wall. */
+    streetViewTexels?: StreetViewTexelRecord[];
 }
 
 /** Legend entries the inference adds after the base ones (face-textures.ts). */
@@ -521,6 +524,8 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
     const colStep = rec('colour');
     const colour: ColourResult[] = [];
     let svViews: ProjectionView[] | undefined;
+    /** The registered views the enhanced redraws were guided by, for the texel step below. */
+    let guideAll: GuideView[] = [];
     if (!svRead) colStep.skipped = input.streetViews ? 'no massing mesh to check visibility against' : 'no Street View source';
     else {
         const views = await svRead;
@@ -590,6 +595,7 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
             if (got instanceof Error) noGuide = `the Street View survey failed (${got.message.slice(0, 160)})`;
             else {
                 guide = input.structureMesh ? got.map(v => ({ ...v, depth: renderFrameDepth(input.structureMesh!, v.camera as never) })) : got;
+                guideAll = guide;
                 const reg = guide.filter(v => v.registration && v.registration.method !== 'nominal').length, owned = guide.filter(v => v.ownerMask?.some(x => x)).length;
                 enhStep.notes.push(`Street View guidance: ${guide.length} photos, ${reg} with a registered pose, ${owned} with owned pixels${guide.length ? ` (${guide.map(v => `${v.panoId} ${v.registration?.method ?? 'nominal'}`).join(', ')})` : ''}`);
                 if (!guide.length) noGuide = 'no Street View photo of the structure';
@@ -788,6 +794,56 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
         timingsMs.enhance = now() - t;
     }
 
+    // ------------------------------------------------------------------ (h) real Street View texels on the walls
+    // (street-view-texels.ts): once the plates are decided, each wall takes the registered, owned photo where it sees the wall
+    // sharper than the tile ortho; labelled photo-inferred. Before this step no Street View pixel reached a texel in pipeline E.
+    t = now();
+    const svtStep = rec('street-view-texels');
+    const streetViewTexels: StreetViewTexelRecord[] = [];
+    {
+        const pool = new Map<string, GuideView>();
+        const add = (v: ProjectionView & { registration?: GuideView['registration']; depth?: Float32Array }) => {
+            const k = `${v.panoId}:${v.camera.fx.toFixed(1)}:${v.camera.eye.map(x => x.toFixed(2)).join(',')}:${v.camera.fwd.map(x => x.toFixed(4)).join(',')}`;
+            if (!pool.has(k)) pool.set(k, v.depth || !input.structureMesh ? v : { ...v, depth: renderFrameDepth(input.structureMesh, v.camera as never) });
+        };
+        for (const v of guideAll) add(v);
+        for (const v of svViews ?? []) add(v as GuideView);
+        const views = [...pool.values()];
+        if (!views.length) svtStep.skipped = input.enhance?.streetViews || input.streetViews ? 'no Street View photo of the structure' : 'no Street View source';
+        else {
+            for (const f of faces) {
+                const tex = textures.get(f.index);
+                if (!tex || f.kind !== 'wall' || !f.width) continue;
+                const use = new Uint8Array(tex.width * tex.height);
+                for (let i = 0; i < use.length; i++) use[i] = tex.source[i] !== 255 && tex.source[i] !== SRC.nearestFill && tex.source[i] !== SRC.facadeMedian ? 1 : 0;
+                const before = tex.rgba.slice();
+                const r = applyStreetViewTexels(f, tex, use, views, legend, streetBandTop(f));
+                streetViewTexels.push(r);
+                if (r.texels) {
+                    // diagnostics: the wall before | after | where the photo texels went (white: two photos agree)
+                    try {
+                        const svIdx = new Set(legend.map((l, k) => (l.source === 'street-view-rectified' || l.source === 'street-view-rectified-multi' ? k : -1)).filter(k => k >= 0));
+                        const Wd = tex.width, Hd = tex.height, OW = 3 * Wd + 16, rgb = new Uint8Array(OW * Hd * 3);
+                        for (let y = 0; y < Hd; y++) for (let x = 0; x < Wd; x++) {
+                            const i = y * Wd + x;
+                            rgb.set(before.subarray(i * 4, i * 4 + 3), (y * OW + x) * 3);
+                            rgb.set(tex.rgba.subarray(i * 4, i * 4 + 3), (y * OW + Wd + 8 + x) * 3);
+                            const v = svIdx.has(tex.source[i]) ? (legend[tex.source[i]].source === 'street-view-rectified-multi' ? 255 : 170) : 40;
+                            rgb.set([v, v, v], (y * OW + 2 * Wd + 16 + x) * 3);
+                        }
+                        fs.writeFileSync(path.join(input.dir, `wall_${f.index}_street_view_texels.png`), encodePng(OW, Hd, Buffer.from(rgb), 3));
+                    } catch { /* diagnostics only */ }
+                }
+                svtStep.proposed++;
+                if (r.texels) svtStep.accepted++; else svtStep.rejected++;
+                svtStep.notes.push(`wall ${f.index}: ${r.texels ? 'Street View texels' : 'no Street View texel'}: ${r.why}`);
+            }
+            if (!svtStep.proposed) svtStep.skipped = 'no wall to texture';
+        }
+    }
+    svtStep.ms = now() - t;
+    timingsMs.streetViewTexels = svtStep.ms;
+
     // ------------------------------------------------------------------ the layer
     t = now();
     const tex2 = new Map<number, FaceTexture>();
@@ -800,7 +856,7 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
     }
     const files = writeMassingLayer(runOut, massing, tex2, legend, input.dir, input.stage, input.stageKey, input.enhance ? 'massing_enhanced' : 'massing_inferred');
     timingsMs.glb = now() - t;
-    fs.writeFileSync(path.join(input.dir, 'inference.json'), JSON.stringify({ steps, enhanced, latticeRefits, roof: roofDecisions, grammars: grammarOutcomes.map(o => ({ facadeId: o.facadeId, accepted: o.accepted, reason: o.reason })), colour, straightened: straightened.map(s => ({ ...s, texture: undefined })), timingsMs }, null, 1));
+    fs.writeFileSync(path.join(input.dir, 'inference.json'), JSON.stringify({ steps, enhanced, latticeRefits, roof: roofDecisions, grammars: grammarOutcomes.map(o => ({ facadeId: o.facadeId, accepted: o.accepted, reason: o.reason })), colour, straightened: straightened.map(s => ({ ...s, texture: undefined })), streetViewTexels, timingsMs }, null, 1));
     // the overlays: each wall's final texture beside its plain one (diagnostics)
     try {
         for (const g of grammars) {
@@ -814,7 +870,7 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
             fs.writeFileSync(path.join(input.dir, `wall_${f.index}_before_after.png`), encodePng(W, H, Buffer.from(rgb), 3));
         }
     } catch { /* diagnostics only */ }
-    return { files, run: runOut, steps, legend, grammars, timingsMs, enhanced, build: { parts: allParts, sweeps, openings: [...openings, ...enhancedOpenings] }, textures: tex2, occluderMasks: masks, ...(svViews ? { streetViews: svViews } : {}) };
+    return { files, run: runOut, steps, legend, grammars, timingsMs, enhanced, build: { parts: allParts, sweeps, openings: [...openings, ...enhancedOpenings] }, textures: tex2, occluderMasks: masks, ...(svViews ? { streetViews: svViews } : {}), streetViewTexels };
 }
 
 /** Recessed openings of a grammar on a wall: the recess the scan's ortho depth measures (inside against the frame), else 0.12 m. */
