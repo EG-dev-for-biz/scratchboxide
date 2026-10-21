@@ -575,14 +575,25 @@ export function requireLocation(tool: string, latitude: number | undefined, long
 }
 
 /**
+ * The colour temperature the direct sun actually uses this frame: the config's own explicit choice, else a
+ * phase-appropriate default. Shared by directSunColor and the ambient/ground bounce colours below, so a chosen or
+ * requested kelvin warms or cools every light in the scene together, not the direct sun alone.
+ */
+function effectiveSunKelvin(profile: { isNight: boolean }, config: AtmosphericScatteringConfig, warm: boolean): number {
+    return config.kelvinTemperature || (warm ? 3200 : (profile.isNight ? 12000 : 6500));
+}
+
+/**
  * The hemisphere light's ground colour by day: light bounced off the ground, the profile's ground albedo times the
  * irradiance reaching the ground (the sun on a level surface plus the sky) relative to the sky light the hemisphere is
  * scaled by. A navy ground colour (the old daytime value) lit every wall from below in blue and left clay scenes dark.
- * Golden hour and night keep their own tints.
+ * Golden hour and night keep their own tints, warmed or cooled by `kelvin` the same way directSunColor's phase tint
+ * is, so a chosen colour temperature reaches the bounce light too, not just the direct sun.
  */
-export function groundBounceColor(profile: { isGoldenHour: boolean; isNight: boolean; sunIntensity: number; skyLightIntensity: number; groundAlbedoLinear?: number[] }, elevationDeg: number): THREE.Color {
-    if (profile.isGoldenHour) return new THREE.Color(0x431407);
-    if (profile.isNight) return new THREE.Color(0x050811);
+export function groundBounceColor(profile: { isGoldenHour: boolean; isNight: boolean; sunIntensity: number; skyLightIntensity: number; groundAlbedoLinear?: number[] }, elevationDeg: number, kelvin?: number): THREE.Color {
+    const warmed = (hex: number) => kelvin === undefined ? new THREE.Color(hex) : new THREE.Color(hex).multiply(kelvinToRGB(kelvin));
+    if (profile.isGoldenHour) return warmed(0x431407);
+    if (profile.isNight) return warmed(0x050811);
     const albedo = profile.groundAlbedoLinear ?? [0.18, 0.18, 0.18];
     const level = Math.max(0, Math.sin((elevationDeg * Math.PI) / 180));
     const gain = (profile.sunIntensity * level + profile.skyLightIntensity) / Math.max(1e-3, profile.skyLightIntensity);
@@ -599,7 +610,7 @@ export function directSunColor(profile: DiurnalLightingProfile, config: Atmosphe
         const [r, g, b] = profile.sunLinearRgb;
         return new THREE.Color().setRGB(r, g, b, THREE.LinearSRGBColorSpace);
     }
-    const kelvin = config.kelvinTemperature || (warm ? 3200 : (profile.isNight ? 12000 : 6500));
+    const kelvin = effectiveSunKelvin(profile, config, warm);
     const tint = new THREE.Color(
         profile.isGoldenHour
             ? '#ffb355'
@@ -883,10 +894,13 @@ export function createAtmosphericSkyDome(
     }, glareStrength);
     scene.add(sunGlare.mesh);
 
-    // Dynamic Hemisphere Sky & Ground Ambient Bounce Light
+    // Dynamic Hemisphere Sky & Ground Ambient Bounce Light. Warmed or cooled by the same kelvin as the direct sun
+    // (effectiveSunKelvin), so a chosen colour temperature reaches ambient-lit and shadowed surfaces too, not just
+    // the ones the sun hits directly.
+    const initialHemiKelvin = effectiveSunKelvin(diurnalProfile, config, diurnalProfile.isGoldenHour);
     const hemiLight = new THREE.HemisphereLight(
-        skyLightColorHex(diurnalProfile),
-        groundBounceColor(diurnalProfile, initialElev),
+        new THREE.Color(skyLightColorHex(diurnalProfile)).multiply(kelvinToRGB(initialHemiKelvin)),
+        groundBounceColor(diurnalProfile, initialElev, initialHemiKelvin),
         diurnalProfile.skyLightIntensity
     );
     hemiLight.name = 'AtmosphericHemisphereLight';
@@ -933,9 +947,10 @@ export function createAtmosphericSkyDome(
         sunLight.intensity = diurnalProfile.sunIntensity;
         sunLight.castShadow = diurnalProfile.castShadows;
 
+        const hemiKelvin = effectiveSunKelvin(diurnalProfile, config, diurnalProfile.isGoldenHour);
         hemiLight.intensity = diurnalProfile.skyLightIntensity;
-        hemiLight.color.set(skyLightColorHex(diurnalProfile));
-        hemiLight.groundColor.copy(groundBounceColor(diurnalProfile, elevDeg));
+        hemiLight.color.set(new THREE.Color(skyLightColorHex(diurnalProfile)).multiply(kelvinToRGB(hemiKelvin)));
+        hemiLight.groundColor.copy(groundBounceColor(diurnalProfile, elevDeg, hemiKelvin));
         applyPhysicalSky(elevDeg);
     };
 
