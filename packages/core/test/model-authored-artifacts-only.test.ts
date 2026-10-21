@@ -308,9 +308,12 @@ describe('the model starts a new artifact by saying so, never by prompt wording'
         } finally {
             (globalThis as any).fetch = savedFetch;
         }
+        // The rule is per request, so it goes with the request (after the cacheable system instruction and tools).
+        const requestText = (b: any) => (b.contents[b.contents.length - 1]?.parts || []).map((p: any) => p.text).join('');
         const systemText = (b: any) => (b.systemInstruction?.parts || []).map((p: any) => p.text).join('');
-        expect(systemText(bodies[0])).toContain(openArtifactUpdateRule(paris)!);
-        expect(systemText(bodies[1])).not.toContain('OPEN ARTIFACT:');
+        expect(requestText(bodies[0])).toContain(openArtifactUpdateRule(paris)!);
+        expect(systemText(bodies[0])).toBe(systemText(bodies[1]));
+        expect(requestText(bodies[1])).not.toContain('OPEN ARTIFACT:');
     });
 });
 

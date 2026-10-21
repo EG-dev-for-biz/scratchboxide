@@ -1,4 +1,5 @@
 import { test } from 'vitest';
+import { availableToolNames } from '../src/node/gemini/tool-catalog';
 import * as assert from 'node:assert';
 import * as fs from 'fs-extra';
 import * as os from 'node:os';
@@ -195,8 +196,10 @@ test('default registry executes workspace file tools against a temp workspace', 
         const tools = buildToolDeclarations({ prompt: 'edit this file and project it via lens', enableGoogleSearch: false }, registry, []);
         const fnDecls = tools?.find(t => 'functionDeclarations' in t);
         assert.ok(fnDecls && 'functionDeclarations' in fnDecls);
-        const names = fnDecls.functionDeclarations.map(d => d.name);
-        assert.ok(names.includes('workspace_read_file') && names.includes('lens_project') && !names.includes('browser_navigate'));
+        // Entry tools are declared; lens and browser tools are loadable by name (tool-catalog.ts), declared only when switched on.
+        const names = availableToolNames(tools);
+        assert.ok(names.declared.includes('workspace_read_file') && names.loadable.includes('lens_project') && !names.declared.includes('browser_navigate'));
+        assert.ok(availableToolNames(buildToolDeclarations({ prompt: 'x', enableLensTools: true }, registry, [])).declared.includes('lens_project'));
         assert.strictEqual(buildToolDeclarations({ prompt: 'hello', enableGoogleSearch: false, enableWorkspaceTools: false }, registry, []), undefined);
     } finally {
         await fs.remove(root);

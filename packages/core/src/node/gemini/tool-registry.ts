@@ -11,12 +11,12 @@ import { isReadOnlyMode, PARENT_ONLY_TOOLS, READ_ONLY_TOOLS } from './tool-permi
 import type { GeminiGenerateRequest } from '../../common/gemini-protocol';
 import type { McpExecutionState } from '../../browser/generative-canvas/canvas-types';
 import { errorMessage } from './gemini-client';
+import { createLoadToolsHandler, ENTRY_TOOL_NAMES, LOAD_TOOLS_NAME, loadToolsDeclaration, toolOfferMode, type ToolOfferMode } from './tool-catalog';
 
 // Re-export all tool types, schemas, declarations, and handlers from domain modules
 export * from './tools';
 export * from './domain-tool-packs';
 import {
-    resolveDomainToolPacks,
     coerceToolArguments,
     ALL_TOOL_PACKS,
     type ToolPackName
@@ -121,10 +121,16 @@ interface ToolRegistration {
     handler: ToolHandler;
     /** False for tools that run only when a request names them; they stay dispatchable but are not offered by group. */
     offeredByDefault: boolean;
+    loadableWhenNamed?: boolean;
 }
 
 export interface ToolRegistrationOptions {
     offeredByDefault?: boolean;
+    /**
+     * For a tool not offered by default: list it in load_tools anyway, marked as used only when the user names it
+     * (the model decides by meaning whether the request names it; tool-catalog.ts).
+     */
+    loadableWhenNamed?: boolean;
 }
 
 /**
@@ -380,7 +386,7 @@ export class ToolRegistry {
     private fallback?: ToolFallbackHandler;
 
     register(name: string, declaration: ToolDeclaration, handler: ToolHandler, group: ToolGroup = inferToolGroup(name), options: ToolRegistrationOptions = {}): this {
-        this.tools.set(name, { name, group, declaration: { ...declaration, name }, handler, offeredByDefault: options.offeredByDefault !== false });
+        this.tools.set(name, { name, group, declaration: { ...declaration, name }, handler, offeredByDefault: options.offeredByDefault !== false, loadableWhenNamed: options.loadableWhenNamed === true });
         return this;
     }
 
@@ -410,6 +416,14 @@ export class ToolRegistry {
         const wanted = groups ? new Set(groups) : undefined;
         return Array.from(this.tools.values())
             .filter(t => t.offeredByDefault && (!wanted || wanted.has(t.group)))
+            .map(t => sanitizeToolDeclaration(t.declaration));
+    }
+
+    /** Declarations of tools not offered by default that load_tools lists for when the user names them. */
+    namedOnlyDeclarations(groups?: ToolGroup[]): ToolDeclaration[] {
+        const wanted = groups ? new Set(groups) : undefined;
+        return Array.from(this.tools.values())
+            .filter(t => !t.offeredByDefault && t.loadableWhenNamed && (!wanted || wanted.has(t.group)))
             .map(t => sanitizeToolDeclaration(t.declaration));
     }
 
@@ -513,114 +527,80 @@ export class ToolRegistry {
 // ----------------------------------------------------------------------
 
 /**
- * Decide which tool groups a request needs and assemble the Vertex `tools` payload
- * (Google Search grounding, code execution, and function declarations).
+ * The Vertex `tools` payload for a request: Google Search grounding, code execution when asked for, and the function
+ * declarations. Which declarations go out is decided by the request's switches (mode, enableWorkspaceTools,
+ * enableLensTools, enableBrowserTools, toolPacks, attached MCP tools) and the tools loaded so far, never by words in
+ * the prompt (AGENTS.md ADA 1.2). In catalog mode (tool-catalog.ts) the entry set and load_tools come first, in a
+ * fixed order, so they are a stable prefix the prompt cache reuses; loaded tools follow in the order they were loaded.
  */
 export function buildToolDeclarations(
     request: GeminiGenerateRequest,
     registry: ToolRegistry,
-    mcpDeclarations: ToolDeclaration[] = []
+    mcpDeclarations: ToolDeclaration[] = [],
+    mode: ToolOfferMode = toolOfferMode()
 ): GeminiToolConfig[] | undefined {
-    // 1. Pre-flight Capability Resolution & Domain Tool Packs
-    const { packs, capabilityResolution } = resolveDomainToolPacks({
-        prompt: request.prompt,
-        mode: request.mode,
-        domainHint: (request as any).domainHint,
-        activeArtifact: request.activeArtifact,
-        enableWorkspaceTools: request.enableWorkspaceTools,
-        enableBrowserTools: request.enableBrowserTools,
-        enableLensTools: request.enableLensTools,
-        requestedPacks: (request as any).toolPacks,
-        agent: request.agent
-    });
-
-    const isBrowserNeeded = !!(request.enableBrowserTools || request.agent ||
-        packs.includes('browser') ||
-        (request.prompt && /browse|click|navigate|page|web|url|http|localhost/i.test(request.prompt)));
-
-    const isLensNeeded = request.enableLensTools !== false && (
-        request.enableLensTools === true ||
-        packs.includes('lens') ||
-        !!(request.prompt && /lens|unproject|lens_project|lens_sync|codebase_lens/i.test(request.prompt))
-    );
-
-    const isWorkspaceNeeded = request.enableWorkspaceTools !== false && (
-        request.enableWorkspaceTools === true ||
-        request.mode === 'agent' ||
-        request.mode === 'plan' ||
-        request.mode === 'ask' ||
-        !!request.agent ||
-        capabilityResolution?.canSolveNatively === true ||
-        capabilityResolution?.taskDomain === '3d' ||
-        capabilityResolution?.taskDomain === 'vfx' ||
-        capabilityResolution?.taskDomain === 'code' ||
-        packs.includes('core_workspace') ||
-        packs.includes('geospatial_3d') ||
-        packs.includes('mesh_surface') ||
-        packs.includes('vfx_video') ||
-        !!(request.prompt && /workspace|file|edit|patch|sandbox|compile|diagnostic|symbol|semantic|search|3d|tile|photorealistic|satellite|geodetic|landmark|coordinates|address|utdra|uldra|decomposition|rectif|beautif|nano.banana|color\s*match|grade\s*match|color\s*transfer|palette|recolor|omni|atmosphere|diurnal|ephemeris|scattering|god_ray|cloud_shadow|aerial_perspective|turbidity|reshape|deform|taper|twist|bend|bulge|sculpt|lattice|neural|diffusion|matchmove|spline|botanical|avatar|4dgs|performer/i.test(request.prompt))
-    );
-
-    let functionDeclarations: ToolDeclaration[];
-
-    // If explicit toolPacks are provided on the request, prioritize the focused pack declarations
-    if ((request as any).toolPacks && Array.isArray((request as any).toolPacks) && (request as any).toolPacks.length > 0) {
-        functionDeclarations = registry.declarationsForPacks((request as any).toolPacks);
-    } else {
-        const groups: ToolGroup[] = [];
-        if (isWorkspaceNeeded) groups.push('workspace');
-        if (isLensNeeded) groups.push('lens');
-        if (isBrowserNeeded) groups.push('browser');
-
-        functionDeclarations = groups.length > 0 ? registry.declarations(groups) : [];
+    const workspaceAllowed = request.enableWorkspaceTools !== false;
+    const lensOn = request.enableLensTools === true;
+    const browserOn = request.enableBrowserTools === true || !!request.agent;
+    // With workspace tools allowed, lens and browser tools are available unless switched off (offered whole when
+    // switched on, else loadable); without them, only a group that is switched on is offered.
+    const groups: ToolGroup[] = [];
+    if (workspaceAllowed) groups.push('workspace');
+    if (lensOn || (workspaceAllowed && request.enableLensTools !== false)) groups.push('lens');
+    if (browserOn || (workspaceAllowed && request.enableBrowserTools !== false)) groups.push('browser');
+    // Tools the switches allow, in registration order.
+    let allowed: ToolDeclaration[] = registry.declarations(groups);
+    if (Array.isArray(request.toolPacks) && request.toolPacks.length > 0) {
+        allowed = registry.declarationsForPacks(request.toolPacks);
     }
-
-    const allFunctionDeclarations: ToolDeclaration[] = [
-        ...functionDeclarations,
-        ...mcpDeclarations
-    ];
-
-    // Guarantee that if capability resolution identified a specific targetTool, it is included
-    if (capabilityResolution?.suggestedNativeAction?.targetTool) {
-        const targetToolName = capabilityResolution.suggestedNativeAction.targetTool;
-        if (!allFunctionDeclarations.some(d => d.name === targetToolName)) {
-            const decl = registry.get(targetToolName)?.declaration;
-            if (decl) {
-                allFunctionDeclarations.push(sanitizeToolDeclaration(decl));
-            }
-        }
-    }
-
-    // Scratchbox Canvas Architecture: Ensure declarative canvas mounting is accessible for visual primitive synthesis
-    const isCanvasNeeded = request.enableWorkspaceTools !== false && (
-        isWorkspaceNeeded ||
-        !!(request.prompt && /3d|scene|world|model|asteroid|flight|plane|spatial|terrain|mesh|sandbox|app\b|component|widget|calculator|preview|landing\s*page|doc\b|document|spec\b|proposal|paper|essay|report|board|kanban|graph\b|flow\b|pipeline|diagram|dashboard|canvas|mount/i.test(request.prompt))
-    );
-
-    if (isCanvasNeeded && !allFunctionDeclarations.some(d => d.name === 'mount_canvas_primitive')) {
-        const canvasDecl = registry.declarations().find(d => d.name === 'mount_canvas_primitive');
-        if (canvasDecl) {
-            allFunctionDeclarations.push(canvasDecl);
-        }
-    }
-
     // Plan and Ask may only use tools that cannot change anything (enforced again at execution).
     // A subagent reports back to its parent agent, so it gets no user-facing or delegation tools.
-    const offeredDeclarations = (isReadOnlyMode(request.mode)
-        ? allFunctionDeclarations.filter(d => READ_ONLY_TOOLS.has(d.name))
-        : allFunctionDeclarations
-    ).filter(d => !request.isSubagentRun || !PARENT_ONLY_TOOLS.has(d.name));
+    const permitted = (d: Pick<ToolDeclaration, 'name'>) =>
+        (!isReadOnlyMode(request.mode) || READ_ONLY_TOOLS.has(d.name)) && (!request.isSubagentRun || !PARENT_ONLY_TOOLS.has(d.name));
+    allowed = allowed.filter(permitted);
+
+    let offered: ToolDeclaration[];
+    if (mode === 'all' || (Array.isArray(request.toolPacks) && request.toolPacks.length > 0)) {
+        // Every allowed tool (named packs are an explicit choice, offered whole).
+        // As before 2026-10-20: every allowed tool, except that lens and browser tools need their switch on.
+        offered = allowed.filter(d => {
+            const group = registry.get(d.name)?.group;
+            if (group === 'lens') return lensOn;
+            if (group === 'browser') return browserOn;
+            return true;
+        });
+    } else {
+        // Explicitly switched-on groups are offered whole; the rest of the allowed tools are listed in load_tools.
+        const upfront = (d: ToolDeclaration) => {
+            const group = registry.get(d.name)?.group;
+            return (group === 'lens' && lensOn) || (group === 'browser' && browserOn);
+        };
+        const byName = new Map(allowed.map(d => [d.name, d]));
+        const entry = ENTRY_TOOL_NAMES.filter(n => n !== LOAD_TOOLS_NAME).map(n => byName.get(n)).filter((d): d is ToolDeclaration => !!d);
+        const entryNames = new Set(entry.map(d => d.name));
+        const switchedOn = allowed.filter(d => !entryNames.has(d.name) && upfront(d));
+        const offeredNames = new Set([...entryNames, ...switchedOn.map(d => d.name)]);
+        const namedOnly = request.toolPacks?.length ? [] : registry.namedOnlyDeclarations(groups).filter(permitted);
+        const catalog = [...allowed.filter(d => !offeredNames.has(d.name)), ...namedOnly.map(d => ({ ...d, description: `Only when the user names it: ${d.description || ''}` }))];
+        const loadableByName = new Map(namedOnly.map(d => [d.name, d]));
+        const loaded = [...new Set(request.loadedTools || [])].map(n => byName.get(n) ?? loadableByName.get(n)).filter((d): d is ToolDeclaration => !!d && !offeredNames.has(d.name));
+        offered = [...entry, ...switchedOn];
+        if (catalog.length > 0 && registry.has(LOAD_TOOLS_NAME) && permitted({ name: LOAD_TOOLS_NAME })) {
+            offered.push(loadToolsDeclaration(catalog));
+        }
+        offered.push(...loaded);
+    }
+    const allFunctionDeclarations: ToolDeclaration[] = [...offered, ...mcpDeclarations];
 
     const tools: GeminiToolConfig[] = [];
     if (request.enableGoogleSearch !== false || request.requireGoogleSearch) {
         tools.push({ googleSearch: {} });
     }
-    const is3DSceneRequest = /build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|mesh\s*shaping|sculpt|flower|garden|plant|flora|botan|procedural|scratchbox|blender|building|plaza|architecture/i.test(request.prompt || '');
-    if (request.enableCodeExecution && !is3DSceneRequest) {
+    if (request.enableCodeExecution) {
         tools.push({ codeExecution: {} });
     }
-    if (offeredDeclarations.length > 0) {
-        tools.push({ functionDeclarations: offeredDeclarations });
+    if (allFunctionDeclarations.length > 0) {
+        tools.push({ functionDeclarations: allFunctionDeclarations });
     }
 
     return tools.length > 0 ? tools : undefined;
@@ -731,7 +711,7 @@ export function createDefaultToolRegistry(): ToolRegistry {
         registry.register(decl.name, decl, pbrMaterialHandlers[decl.name], 'workspace');
     }
     for (const decl of LOCAL_SF3D_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, localSf3DHandlers[decl.name], 'workspace', { offeredByDefault: LOCAL_SF3D_OFFERED_BY_DEFAULT });
+        registry.register(decl.name, decl, localSf3DHandlers[decl.name], 'workspace', { offeredByDefault: LOCAL_SF3D_OFFERED_BY_DEFAULT, loadableWhenNamed: true });
     }
     for (const decl of TURNAROUND_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, turnaroundHandlers[decl.name], 'workspace');
@@ -742,5 +722,7 @@ export function createDefaultToolRegistry(): ToolRegistry {
     for (const decl of BROWSER_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, browserHandlers[decl.name], 'browser');
     }
+    // Not offered as itself: buildToolDeclarations builds its declaration (the catalog) per request.
+    registry.register(LOAD_TOOLS_NAME, loadToolsDeclaration([]), createLoadToolsHandler(name => registry.has(name) && name !== LOAD_TOOLS_NAME), 'workspace', { offeredByDefault: false });
     return registry;
 }

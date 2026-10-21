@@ -35,7 +35,7 @@ export interface ChatTurnShape {
     toolBytes: number;
     /** JSON size of the contents (history, the request and its context). */
     contentsBytes: number;
-    /** The explicit context cache the call referenced, if any. */
+    /** The explicit context caches the call referenced, as "<model>:<cache id>" separated by spaces. */
     cachedContent?: string;
 }
 
@@ -87,6 +87,16 @@ export class ChatTurnTimer {
     functionCall(name: string): void {
         if (this.record.firstFunctionCallMs === undefined) this.record.firstFunctionCallMs = this.elapsed();
         this.record.functionCalls.push(name);
+    }
+
+    /** `name` undefined: the cache was refused and the call went without it. */
+    cacheUsed(model: string, name: string | undefined): void {
+        const others = (this.record.cachedContent || '').split(' ').filter(e => e && !e.startsWith(`${model}:`));
+        this.record.cachedContent = [...others, ...(name ? [`${model}:${name.split('/').pop()}`] : [])].join(' ') || undefined;
+    }
+
+    routed(note: string): void {
+        this.record.routedBy = note;
     }
 
     toolStarted(): void {
