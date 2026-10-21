@@ -81,6 +81,27 @@ describe('applyFirstPassBaseline (textured by default, clay on request)', () => 
         expect(applyFirstPassBaseline({ ...modelAuthoredScene(), renderMode: 'clay' }, 'show only the shape of it').renderMode).toBe('clay');
     });
 
+    it('gives a first-pass camera continuous autofocus and a narrow depth of field by default', () => {
+        const src = { ...modelAuthoredScene(), camera: { position: [0, 2, 8] as [number, number, number], target: [0, 1, 0] as [number, number, number] } };
+        const out = applyFirstPassBaseline(src, 'ferarri on road');
+        expect(out.camera.lens).toEqual({ depthOfField: true, focusMode: 'auto', apertureFStop: 2.8 });
+        // position and target themselves are untouched
+        expect(out.camera.position).toEqual(src.camera.position);
+        expect(out.camera.target).toEqual(src.camera.target);
+    });
+
+    it('keeps a model-authored lens unchanged (no default forced over it)', () => {
+        const lens = { depthOfField: false, focusMode: 'manual' as const, focusDistanceMeters: 12 };
+        const src = { ...modelAuthoredScene(), camera: { position: [0, 2, 8] as [number, number, number], target: [0, 1, 0] as [number, number, number], lens } };
+        const out = applyFirstPassBaseline(src, 'ferarri on road');
+        expect(out.camera.lens).toEqual(lens);
+    });
+
+    it('adds no camera field when the model sent none (a scene with no camera stays that way)', () => {
+        const out = applyFirstPassBaseline(modelAuthoredScene(), 'ferarri on road');
+        expect(out.camera).toBeUndefined();
+    });
+
     it('colour or material words never decide the render mode', () => {
         for (const prompt of ['build the Blue Mosque in Istanbul', 'build a red double-decker bus', 'a sports car with glossy PBR materials', 'Green Park, London']) {
             expect(userAsksForClay(prompt), prompt).toBe(false);

@@ -82,7 +82,8 @@ export function planViewportOptics(lens: SceneCameraLens | undefined | null): Vi
     }
 
     if (lens.depthOfField !== false) {
-        // auto focus and a tracked point are measured by the viewport (viewportFocus.ts): no stored distance needed
+        // auto focus, a tracked point, and manual focus with nothing stored yet are all measured by the viewport
+        // (viewportFocus.ts): no stored distance is required before depth of field can draw
         const measured = lensMeasuresFocus(lens);
         const wantsDof = lens.apertureFStop !== undefined || lens.focusDistanceMeters !== undefined || lens.focusObjectId !== undefined || measured;
         const hasFocus = finitePositive(lens.focusDistanceMeters) || (typeof lens.focusObjectId === 'string' && lens.focusObjectId.length > 0) || measured;

@@ -208,10 +208,14 @@ describe('the optics passes exist only when the scene lens configures them', () 
         expect(planViewportOptics({}).passes).toEqual([]);
         expect(planViewportOptics({ distortion: { k1: 0, k2: 0 } }).passes).toEqual([]);
         expect(planViewportOptics({ focalLengthMm: 50, sensorHeightMm: 24 }).passes).toEqual([]);
-        // DoF values but no focus: nothing drawn, and the plan says why
+        // DoF values but no stored focus: drawn anyway, from a live autofocus read (manual never blocks on an unset distance)
         const noFocus = planViewportOptics({ focalLengthMm: 50, apertureFStop: 2 });
-        expect(noFocus.passes).toEqual([]);
-        expect(noFocus.issues[0]).toMatch(/focus distance or focus object/);
+        expect(noFocus.passes).toEqual(['depth-of-field', 'output']);
+        expect(noFocus.issues).toEqual([]);
+        // an explicit track mode with nothing to track is the one case that still has nothing to measure
+        const unresolvedTrack = planViewportOptics({ focalLengthMm: 50, apertureFStop: 2, focusMode: 'track' });
+        expect(unresolvedTrack.passes).toEqual([]);
+        expect(unresolvedTrack.issues[0]).toMatch(/focus distance or focus object/);
         expect(planViewportOptics({ focalLengthMm: 50, apertureFStop: 2, focusDistanceMeters: 4, depthOfField: false }).passes).toEqual([]);
     });
 
