@@ -270,8 +270,10 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
         };
         const gpu = await service.render({ ...common, outputDir: path.join(tmp, 'checker_gpu'), backend: 'metal' });
         const cpu = await service.render({ ...common, outputDir: path.join(tmp, 'checker_cpu'), backend: 'cpu' });
-        expect(gpu.stats.materials).toMatchObject({ source: 'glb', count: 1, images: 1, imagesDecoded: 1, texturesUploaded: 1 });
-        expect(cpu.stats.materials).toMatchObject({ source: 'glb', count: 1, imagesDecoded: 1, texturesUploaded: 0 });
+        // One glTF material and texture, plus an atlas per re-textured level; the cpu backend uploads nothing.
+        expect(gpu.stats.materials).toMatchObject({ source: 'glb', count: 1, images: 1 + gpu.stats.file.atlases, imagesDecoded: 1 + gpu.stats.file.atlases, texturesUploaded: 1 + gpu.stats.file.atlases });
+        expect(gpu.stats.materials.atlasMaterials).toBe(gpu.stats.file.atlases);
+        expect(cpu.stats.materials).toMatchObject({ source: 'glb', count: 1, texturesUploaded: 0 });
         expect(gpu.stats.file.leafTriangles).toBeGreaterThan(8000);
         expect(Math.abs(gpu.stats.rays - cpu.stats.rays) / cpu.stats.rays).toBeLessThan(0.005);
         const agreement = compareLinear(gpu, cpu);
@@ -366,12 +368,46 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
         expect(Math.abs(sobol64.stats.meanLinearLuminance / reference.stats.meanLinearLuminance - 1)).toBeLessThan(0.01);
     });
 
+    it('coarse levels carry their own baked atlases and render the checkerboard without the fine geometry', async ctx => {
+        if (!device.raytracing) return ctx.skip();
+        const common = {
+            sbvgPath: texturedSbvg, width: 320, height: 240, samplesPerPixel: 32, maxBounces: 4, seed: 5, lighting: sunLighting, camera: sphereCamera,
+            materials: { glbPath: texturedGlb }
+        };
+        const fine = await service.render({ ...common, outputDir: path.join(tmp, 'atlas_fine'), lod: { thresholdPx: 1, finestLevel: 0 } });
+        const coarse = await service.render({ ...common, outputDir: path.join(tmp, 'atlas_coarse'), lod: { thresholdPx: 1, finestLevel: 3 } });
+        // The re-textured file: one glTF material, one atlas material per coarse level, one PNG each, all uploaded.
+        expect(fine.stats.file.atlases).toBeGreaterThanOrEqual(5);
+        expect(fine.stats.materials.count).toBe(1);
+        expect(fine.stats.materials.imagesDecoded).toBe(1 + fine.stats.file.atlases);
+        expect(fine.stats.materials.texturesUploaded).toBe(1 + fine.stats.file.atlases);
+        expect(coarse.stats.cut.triangles).toBeLessThan(0.5 * fine.stats.cut.triangles);
+        // Level 3 of the sphere is a few thousand triangles with a 3 cm error: the baked checkerboard agrees with
+        // the full-detail render to a few percent in block means (silhouettes move, the texture does not).
+        const agreement = compareLinear(coarse, fine);
+        expect(Math.abs(agreement.meanRatio - 1)).toBeLessThan(0.02);
+        expect(agreement.blockMeanRelDiff).toBeLessThan(0.08);
+        // And it is the checkerboard, not clay: hue varies across the sphere as in the fine render.
+        const c = readLinearColor(coarse), f = readLinearColor(fine);
+        let coarseDiffers = 0, fineDiffers = 0, n = 0;
+        for (let i = 0; i < c.length; i += 3) {
+            if (c[i] === 1 && c[i + 1] === 1) continue;
+            n++;
+            if (Math.abs(c[i] / Math.max(c[i + 2], 1e-6) - 1) > 0.5) coarseDiffers++;
+            if (Math.abs(f[i] / Math.max(f[i + 2], 1e-6) - 1) > 0.5) fineDiffers++;
+        }
+        expect(coarseDiffers / n).toBeGreaterThan(0.5 * (fineDiffers / n));
+    });
+
     it('runs a resident session: frames accumulate for a view, a new view restarts them, close ends the process', async ctx => {
         if (!device.raytracing) return ctx.skip();
         const session = await service.openSession({ sbvgPath: texturedSbvg, glbPath: texturedGlb, lighting: sunLighting }, { dir: path.join(tmp, 'session') });
         try {
             expect(session.alive).toBe(true);
-            expect(session.opened).toMatchObject({ device: device.device, materials: { source: 'glb', count: 1, texturesUploaded: 1 } });
+            expect(session.opened).toMatchObject({ device: device.device, materials: { source: 'glb', count: 1 } });
+            // The glTF texture plus one atlas per re-textured level.
+            expect(session.opened!.materials.texturesUploaded).toBe(1 + session.opened!.file.atlases);
+            expect(session.opened!.file.atlases).toBeGreaterThanOrEqual(5);
             expect(session.opened!.file.leafTriangles).toBeGreaterThan(8000);
             expect(session.latestFrame()).toBeNull();
 

@@ -15,10 +15,12 @@
 
 export const SBVG_MAGIC = 0x47564253; // 'SBVG'
 /**
- * Version the builder writes. Version 3 vertices carry a uv and every level block ends with one
- * material index per triangle; version 2 has 64-bit level block offsets; versions 1 and 2 are still read.
+ * Version the builder writes. Version 4 ends with an atlas table naming the PNGs of the re-textured
+ * coarse levels (one material each, appended after the glTF materials); version 3 vertices carry a uv
+ * and every level block ends with one material index per triangle; version 2 has 64-bit level block
+ * offsets; versions 1 to 3 are still read.
  */
-export const SBVG_VERSION = 3;
+export const SBVG_VERSION = 4;
 export const SBVG_HEADER_BYTES = 128;
 export const SBVG_LEVEL_WORDS = 16;
 /** Level row size of version 1 files (32-bit block offset and length at words 9 and 10). */
@@ -70,6 +72,8 @@ export interface SbvgHeader {
     droppedDegenerate: number;
     /** Length of the source glTF's materials array; 0 before version 3. */
     materialCount: number;
+    /** Re-textured coarse levels with an atlas PNG next to the file; 0 before version 4. */
+    atlasCount: number;
     maxClusterVertices: number;
     maxClusterTriangles: number;
     aabbMin: [number, number, number];
@@ -98,8 +102,8 @@ export function parseSbvgHeader(bytes: Uint8Array): SbvgHeader {
     const f = (word: number) => view.getFloat32(word * 4, true);
     if (u(0) !== SBVG_MAGIC) throw new SbvgFormatError('sbvg: bad magic (not a virtual geometry file)');
     const version = u(1);
-    if (version !== 1 && version !== 2 && version !== 3) {
-        throw new SbvgFormatError(`sbvg: unsupported version ${version} (this reader handles 1 to 3); rebuild the file from its GLB`);
+    if (version < 1 || version > 4) {
+        throw new SbvgFormatError(`sbvg: unsupported version ${version} (this reader handles 1 to 4); rebuild the file from its GLB`);
     }
     const vertexBytes = sbvgFileVertexFloats(version) * 4;
     const materialBytesPerTriangle = version >= 3 ? 4 : 0;
@@ -132,6 +136,8 @@ export function parseSbvgHeader(bytes: Uint8Array): SbvgHeader {
         fileBytes = Math.max(fileBytes, level.byteOffset + level.byteLength);
         levels.push(level);
     }
+    // Version 4 appends the atlas table after the level blocks; the header says where the file ends.
+    if (version >= 4) fileBytes = Math.max(fileBytes, u64(30));
     return {
         version,
         headerBytes,
@@ -145,6 +151,7 @@ export function parseSbvgHeader(bytes: Uint8Array): SbvgHeader {
         skippedPrimitives: version === 1 ? 0 : u(24),
         droppedDegenerate: version === 1 ? 0 : u(25),
         materialCount: version >= 3 ? u(26) : 0,
+        atlasCount: version >= 4 ? u(27) : 0,
         maxClusterVertices: u(10),
         maxClusterTriangles: u(11),
         aabbMin: [f(12), f(13), f(14)],

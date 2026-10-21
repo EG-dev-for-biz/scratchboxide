@@ -109,7 +109,7 @@ export interface MetalPathTraceStats {
     samplesPerPixel: number;
     maxBounces: number;
     lighting: 'sky' | 'studio';
-    file: { clusters: number; levels: number; vertices: number; leafTriangles: number };
+    file: { clusters: number; levels: number; vertices: number; leafTriangles: number; atlases: number };
     cut: { clusters: number; triangles: number; thresholdPx: number; finestLevel: number };
     /** Closest-hit and shadow rays traced, counted by the kernels. */
     rays: number;
@@ -138,7 +138,10 @@ export interface MetalPathTraceStats {
     materials: {
         source: 'glb' | 'uniform';
         glbPath: string;
+        /** glTF materials of the GLB. */
         count: number;
+        /** Materials appended for the file's re-textured coarse levels, one atlas PNG each. */
+        atlasMaterials: number;
         images: number;
         imagesDecoded: number;
         /** Decoded images uploaded to the GPU (0 on the cpu backend). */
@@ -196,8 +199,8 @@ export interface MetalPathTraceView {
 
 export interface MetalPathTraceOpened {
     device: string;
-    file: { clusters: number; levels: number; vertices: number; leafTriangles: number; materialCount: number; aabbMin: [number, number, number]; aabbMax: [number, number, number] };
-    materials: { source: 'glb' | 'uniform'; count: number; images: number; imagesDecoded: number; texturesUploaded: number };
+    file: { clusters: number; levels: number; vertices: number; leafTriangles: number; materialCount: number; atlases: number; aabbMin: [number, number, number]; aabbMax: [number, number, number] };
+    materials: { source: 'glb' | 'uniform'; count: number; atlasMaterials: number; images: number; imagesDecoded: number; texturesUploaded: number };
     openMs: number;
 }
 

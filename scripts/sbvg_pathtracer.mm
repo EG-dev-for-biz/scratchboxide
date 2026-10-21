@@ -24,6 +24,7 @@
 #include "scratchbox_io.hpp"
 #include "scratchbox_metal_pathtracer.hpp"
 #include "scratchbox_pathtracer.hpp"
+#include "scratchbox_png.hpp"
 #include "scratchbox_sbvg_reader.hpp"
 #include "scratchbox_sky.hpp"
 #include "scratchbox_texture.hpp"
@@ -205,6 +206,28 @@ MaterialSource loadMaterials(const std::string& glbPath, const sbvg::File& file)
     if (glbMaterials != file.materialCount) {
         throw std::runtime_error("the .sbvg was built from a GLB with " + std::to_string(file.materialCount) + " materials; " + glbPath + " has " + std::to_string(glbMaterials));
     }
+    // gltf::GlbSceneReader appends a default material when a primitive has none; the atlas materials
+    // must sit exactly at materialCount, materialCount + 1, ... as the file's triangles name them.
+    source.scene.materials.resize(file.materialCount);
+    for (const sbvg::Atlas& atlas : file.atlases) {
+        std::ifstream in(atlas.imagePath, std::ios::binary);
+        if (!in) throw std::runtime_error("atlas of level " + std::to_string(atlas.level) + " is missing: " + atlas.imagePath);
+        std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        png::DecodeResult decoded = png::decode(bytes.data(), bytes.size(), png::OutputFormat::Rgb);
+        if (!decoded.ok) throw std::runtime_error("atlas of level " + std::to_string(atlas.level) + " failed to decode: " + decoded.error);
+        gltf::SceneImage image;
+        image.mimeType = "image/png";
+        image.decoded = true;
+        image.pixels = std::move(decoded.image);
+        source.scene.images.push_back(std::move(image));
+        gltf::SceneMaterial material;
+        material.baseColorImage = static_cast<int>(source.scene.images.size() - 1);
+        material.wrapS = 33071;
+        material.wrapT = 33071;
+        material.metallicFactor = atlas.metallic;
+        material.roughnessFactor = atlas.roughness;
+        source.scene.materials.push_back(material);
+    }
     for (const auto& image : source.scene.images) if (image.decoded) ++source.imagesDecoded;
     return source;
 }
@@ -325,6 +348,7 @@ int renderOnce(const std::string& configPath) {
             tracer.setPreferFastBuild(accelFastBuild);
             tracer.setSampler(samplerName == "sobol" ? 1 : 0);
             tracer.setPrimaryRaster(primaryRaster);
+            tracer.setBounceShadowRays(boolOr(opt["bounceShadowRays"], true));
             tracer.setGeometry(file.vertices, cut.indices, cut.materials);
             if (bounceThresholdPx > 0.0f) {
                 sbvg::CutParams bounceParams = cutParams;
@@ -411,7 +435,7 @@ int renderOnce(const std::string& configPath) {
               << "  \"maxBounces\": " << settings.maxBounces << ",\n"
               << "  \"lighting\": " << jsonString(lighting.lighting.mode == metalpt::Lighting::Mode::Sky ? "sky" : "studio") << ",\n"
               << "  \"file\": { \"clusters\": " << file.clusters.size() << ", \"levels\": " << file.levelCount
-              << ", \"vertices\": " << file.vertexCount() << ", \"leafTriangles\": " << file.leafTriangleCount << " },\n"
+              << ", \"vertices\": " << file.vertexCount() << ", \"leafTriangles\": " << file.leafTriangleCount << ", \"atlases\": " << file.atlases.size() << " },\n"
               << "  \"cut\": { \"clusters\": " << cut.clusterIds.size() << ", \"triangles\": " << cut.triangleCount()
               << ", \"thresholdPx\": " << cutParams.thresholdPx << ", \"finestLevel\": " << cutParams.finestLevel << " },\n"
               << "  \"optimizations\": { \"accelFastBuild\": " << (accelFastBuild ? "true" : "false") << ", \"sampler\": " << jsonString(samplerName)
@@ -433,7 +457,8 @@ int renderOnce(const std::string& configPath) {
               << "  \"denoiseBackend\": " << jsonString(denoiseBackend) << ",\n"
               << "  \"denoiseMs\": " << denoiseMs << ",\n"
               << "  \"materials\": { \"source\": " << jsonString(sceneMaterials ? "glb" : "uniform") << ", \"glbPath\": " << jsonString(materialsGlb)
-              << ", \"count\": " << (sceneMaterials ? source.scene.materials.size() : 1) << ", \"images\": " << source.scene.images.size() << ", \"imagesDecoded\": " << source.imagesDecoded
+              << ", \"count\": " << (sceneMaterials ? file.materialCount : 1) << ", \"atlasMaterials\": " << (sceneMaterials ? file.atlases.size() : 0)
+              << ", \"images\": " << source.scene.images.size() << ", \"imagesDecoded\": " << source.imagesDecoded
               << ", \"texturesUploaded\": " << texturesUploaded << ", \"loadMs\": " << source.loadMs << " },\n"
               << "  \"material\": { \"albedo\": " << jsonVec(material.albedo) << ", \"roughness\": " << material.roughness << ", \"metallic\": " << material.metallic << " },\n"
               << "  \"sun\": { \"elevationDeg\": " << lighting.elevationDeg << ", \"azimuthDeg\": " << lighting.azimuthDeg << " },\n"
@@ -605,9 +630,10 @@ private:
         s.precision(9);
         s << "{\"event\":\"opened\",\"device\":" << jsonString(tracer_->deviceName())
           << ",\"file\":{\"clusters\":" << file_.clusters.size() << ",\"levels\":" << file_.levelCount << ",\"vertices\":" << file_.vertexCount()
-          << ",\"leafTriangles\":" << file_.leafTriangleCount << ",\"materialCount\":" << file_.materialCount
+          << ",\"leafTriangles\":" << file_.leafTriangleCount << ",\"materialCount\":" << file_.materialCount << ",\"atlases\":" << file_.atlases.size()
           << ",\"aabbMin\":" << jsonVec(bounds_.min) << ",\"aabbMax\":" << jsonVec(bounds_.max) << "}"
           << ",\"materials\":{\"source\":" << jsonString(sceneMaterials_ ? "glb" : "uniform") << ",\"count\":" << (sceneMaterials_ ? file_.materialCount : 1)
+          << ",\"atlasMaterials\":" << (sceneMaterials_ ? file_.atlases.size() : 0)
           << ",\"images\":" << source_.scene.images.size() << ",\"imagesDecoded\":" << source_.imagesDecoded << ",\"texturesUploaded\":" << tracer_->textureCount() << "}"
           << ",\"openMs\":" << ms << "}";
         emit(s.str());

@@ -40,9 +40,15 @@
  * the target through the collapsed edge (LockedSimplifier::chartTargets), never across one: seams
  * never crack and no triangle ever straddles two materials or two charts.
  *
- * Layout (little-endian, 4-byte words), version 3:
+ * Coarse levels may be re-textured (RetextureOptions): their simplification then crosses seams and
+ * borders, and each such level has one material of its own, appended after the glTF materials, whose
+ * base colour is an atlas PNG written next to the file (atlas table at the end, version 4).
+ *
+ * Layout (little-endian, 4-byte words), version 4:
  *   header (128 bytes)          see writeSbvg (word 24: skipped non-triangle primitives,
- *                               word 25: dropped degenerate triangles, word 26: glTF material count)
+ *                               word 25: dropped degenerate triangles, word 26: glTF material count,
+ *                               word 27: atlas count, words 28-29: atlas table byte offset,
+ *                               words 30-31: file bytes)
  *   level table                 levelCount * 16 words, coarsest level first; the block's byte
  *                               offset and length are 64-bit (lo, hi word pairs at words 9-10 and
  *                               11-12), so files past 4 GiB are addressable. Version 1 used 12-word
@@ -53,15 +59,21 @@
  *                                          without uv in version 2)
  *     refs       refCount u32             (global vertex index per cluster-local vertex)
  *     triangles  triCount u32             (cluster-local i0 | i1 << 8 | i2 << 16)
- *     materials  triCount u32             (glTF material index or 0xFFFFFFFF; version 3 only)
+ *     materials  triCount u32             (glTF material index, a level atlas material, or 0xFFFFFFFF; version 3+)
+ *   atlas table (version 4), per atlas: level, material id, width, height, metallic f32, roughness f32,
+ *                               name length, name bytes padded to 4
  */
 
+#include "scratchbox_texture.hpp"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <queue>
 #include <stdexcept>
@@ -76,7 +88,7 @@ constexpr uint32_t kMaxClusterVertices = 128;
 constexpr uint32_t kMaxClusterTriangles = 128;
 constexpr uint32_t kGroupSize = 8;
 constexpr uint32_t kSbvgMagic = 0x47564253; // 'SBVG'
-constexpr uint32_t kSbvgVersion = 3;
+constexpr uint32_t kSbvgVersion = 4;
 constexpr uint32_t kSbvgHeaderBytes = 128;
 constexpr uint32_t kSbvgLevelWords = 16;
 constexpr uint32_t kSbvgClusterWords = 32;
@@ -739,6 +751,100 @@ inline WeldedMesh weld(const SourceMesh& src) {
 }
 
 // ============================================================================
+// Re-texturing of coarse levels (implemented in scratchbox_lod_retexture.hpp)
+// ============================================================================
+
+/** An 8-bit sRGB RGB atlas. */
+struct AtlasImage {
+    uint32_t width{0};
+    uint32_t height{0};
+    std::vector<uint8_t> rgb;
+
+    /** Bilinear, clamped lookup, decoded to linear RGB. */
+    F3 sampleLinear(const F2& uv) const {
+        if (width == 0 || height == 0) return F3(1, 1, 1);
+        const float fx = std::clamp(uv.x, 0.0f, 1.0f) * width - 0.5f;
+        const float fy = std::clamp(uv.y, 0.0f, 1.0f) * height - 0.5f;
+        const float x0f = std::floor(fx), y0f = std::floor(fy);
+        const float tx = fx - x0f, ty = fy - y0f;
+        const int x0 = static_cast<int>(x0f), y0 = static_cast<int>(y0f);
+        auto decode = [](uint8_t v) {
+            const float e = v / 255.0f;
+            return e <= 0.04045f ? e / 12.92f : std::pow((e + 0.055f) / 1.055f, 2.4f);
+        };
+        auto fetch = [&](int x, int y) {
+            x = std::clamp(x, 0, static_cast<int>(width) - 1);
+            y = std::clamp(y, 0, static_cast<int>(height) - 1);
+            const uint8_t* p = rgb.data() + (static_cast<size_t>(y) * width + x) * 3;
+            return F3(decode(p[0]), decode(p[1]), decode(p[2]));
+        };
+        const F3 top = fetch(x0, y0) * (1.0f - tx) + fetch(x0 + 1, y0) * tx;
+        const F3 bottom = fetch(x0, y0 + 1) * (1.0f - tx) + fetch(x0 + 1, y0 + 1) * tx;
+        return top * (1.0f - ty) + bottom * ty;
+    }
+};
+
+/** Linear RGB albedo of a source material at a uv. */
+using SourceSampler = std::function<F3(uint32_t material, const F2& uv)>;
+
+/** The finer surface a group of coarse triangles was simplified from. */
+struct SourceSet {
+    std::vector<uint32_t> tris;      // 3 global position ids per triangle
+    std::vector<F2> cornerUv;        // per corner
+    std::vector<uint32_t> materials; // per triangle
+};
+
+struct BakeRequest {
+    const WeldedMesh* mesh{nullptr};
+    std::vector<uint32_t> coarseTris;   // 3 global position ids per triangle
+    std::vector<uint32_t> groupOfTri;   // group index per coarse triangle
+    std::vector<SourceSet> sources;     // per group
+    std::vector<float> groupError;      // per group: how far the coarse surface may sit from its source
+    SourceSampler sample;
+    /** Finest texel worth baking, in world units. */
+    float minTexelWorld{0.05f};
+    uint32_t maxAtlasSize{8192};
+};
+
+struct BakeResult {
+    AtlasImage atlas;
+    std::vector<F2> cornerUv;   // per coarse corner
+    uint32_t cells{0};
+    uint64_t texels{0};
+    /** Average texel size in world units after fitting the size cap. */
+    float texelWorld{0.0f};
+    /** Texels whose normal projection met no source triangle and took the nearest source point instead. */
+    uint32_t missed{0};
+};
+
+/**
+ * Re-texture every coarse level: its simplification then ignores UV seams and material borders and
+ * its triangles get uvs into a baked atlas of their own (one material per level, appended after the
+ * glTF materials). `bake` is retex::bakeAtlas; `sampleLevel0` reads the glTF materials.
+ */
+struct RetextureOptions {
+    SourceSampler sampleLevel0;
+    std::function<BakeResult(const BakeRequest&)> bake;
+    /** metallic, roughness per glTF material; the level materials take the area-dominant one's. */
+    std::vector<std::array<float, 2>> materialFactors;
+    float minTexelWorld{0.05f};
+    uint32_t maxAtlasSize{8192};
+};
+
+struct LevelAtlas {
+    uint32_t level{0};
+    uint32_t materialId{0};
+    AtlasImage image;
+    uint32_t cells{0};
+    uint64_t texels{0};
+    float texelWorld{0.0f};
+    uint32_t missed{0};
+    double bakeMs{0.0};
+    float metallic{1.0f};
+    float roughness{1.0f};
+};
+
+// ============================================================================
 // Uniform grid for nearest-unused-point queries
 // ============================================================================
 
@@ -1070,8 +1176,9 @@ public:
      */
     template <typename LockedFn>
     static SimplifyResult simplify(const std::vector<uint32_t>& tris, const std::vector<F2>& cornerUv, const std::vector<uint32_t>& materials,
-                                   const WeldedMesh& mesh, uint32_t targetTris, LockedFn locked) {
+                                   const WeldedMesh& mesh, uint32_t targetTris, LockedFn locked, bool keepCharts = true) {
         LockedSimplifier s(tris, cornerUv, materials, mesh);
+        s.keepCharts_ = keepCharts;
         for (uint32_t v = 0; v < s.globalOf_.size(); ++v) s.locked_[v] = locked(s.globalOf_[v]) ? 1 : 0;
         s.run(targetTris);
         return s.result();
@@ -1125,6 +1232,7 @@ private:
     std::vector<uint8_t> locked_;
     std::vector<uint8_t> alive_;
     std::vector<uint32_t> version_;
+    bool keepCharts_{true};
     std::priority_queue<Candidate, std::vector<Candidate>, std::greater<Candidate>> heap_;
     uint32_t liveTris_{0};
     double maxCost_{0};
@@ -1237,7 +1345,8 @@ private:
             if (l1 <= 1e-12f * std::max(l0, 1e-12f)) return false;
             if (dot(n0, n1) < 0.25f * l0 * l1) return false;
         }
-        return chartTargets(from, to, false);
+        // A re-textured level gets fresh uvs, so its collapses may cross seams and material borders.
+        return !keepCharts_ || chartTargets(from, to, false);
     }
 
     /**
@@ -1292,7 +1401,7 @@ private:
             if (version_[c.from] != c.vFrom || version_[c.to] != c.vTo) continue;
             if (!collapseIsValid(c.from, c.to)) continue;
 
-            chartTargets(c.from, c.to, true);
+            if (keepCharts_) chartTargets(c.from, c.to, true);
             for (uint32_t t : vtris_[c.from]) {
                 if (!triAlive_[t]) continue;
                 auto& tr = tri_[t];
@@ -1355,6 +1464,8 @@ struct ClusterDag {
     std::vector<Cluster> clusters;
     std::vector<LevelStats> levels;
     uint32_t levelCount{0};
+    /** One baked atlas per re-textured level (levels 1 and up), in level order. */
+    std::vector<LevelAtlas> atlases;
 };
 
 inline Sphere mergeSpheres(const std::vector<Sphere>& spheres) {
@@ -1434,10 +1545,32 @@ inline std::vector<std::vector<uint32_t>> partitionGroups(const std::vector<uint
     return groups;
 }
 
-inline ClusterDag buildClusterDag(WeldedMesh mesh, uint32_t maxLevels = 24) {
+inline ClusterDag buildClusterDag(WeldedMesh mesh, uint32_t maxLevels = 24, const RetextureOptions* retex = nullptr) {
     ClusterDag dag;
     dag.mesh = std::move(mesh);
     const WeldedMesh& m = dag.mesh;
+    const bool retexture = retex != nullptr && retex->bake && retex->sampleLevel0 && m.materialCount > 0;
+
+    // The level materials take the metallic and roughness of the material covering the most area.
+    float dominantMetallic = 1.0f, dominantRoughness = 1.0f;
+    if (retexture) {
+        std::unordered_map<uint32_t, double> areaOf;
+        for (size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+            const F3& a = m.positions[m.indices[t]];
+            const F3& b = m.positions[m.indices[t + 1]];
+            const F3& c = m.positions[m.indices[t + 2]];
+            areaOf[m.triMaterial[t / 3]] += 0.5 * length(cross(b - a, c - a));
+        }
+        uint32_t dominant = kNoMaterial;
+        double best = -1.0;
+        for (const auto& kv : areaOf) {
+            if (kv.second > best) { best = kv.second; dominant = kv.first; }
+        }
+        if (dominant != kNoMaterial && dominant < retex->materialFactors.size()) {
+            dominantMetallic = retex->materialFactors[dominant][0];
+            dominantRoughness = retex->materialFactors[dominant][1];
+        }
+    }
 
     dag.clusters = buildClusters(m.indices, m.cornerUv, m.triMaterial, m);
     std::vector<uint32_t> current(dag.clusters.size());
@@ -1478,6 +1611,10 @@ inline ClusterDag buildClusterDag(WeldedMesh mesh, uint32_t maxLevels = 24) {
             Sphere sphere;
             float error;
             std::vector<Cluster> parents;
+            // Until the parents are clustered: the group's coarse triangles and what they came from.
+            std::vector<uint32_t> parentTris, parentMaterials;
+            std::vector<F2> parentUvs;
+            SourceSet source;
         };
         std::vector<GroupResult> results;
         LevelStats stats{level + 1, 0, 0, static_cast<uint32_t>(groups.size()), 0, 0};
@@ -1498,32 +1635,82 @@ inline ClusterDag buildClusterDag(WeldedMesh mesh, uint32_t maxLevels = 24) {
                 childError = std::max(childError, c.selfError);
             }
             const uint64_t groupTris = tris.size() / 3;
-            SimplifyResult simp = LockedSimplifier::simplify(tris, uvs, materials, m, static_cast<uint32_t>(groupTris / 2), [&](uint32_t v) { return shared.count(v) > 0; });
+            SimplifyResult simp = LockedSimplifier::simplify(tris, uvs, materials, m, static_cast<uint32_t>(groupTris / 2),
+                                                             [&](uint32_t v) { return shared.count(v) > 0; }, !retexture);
 
-            std::vector<uint32_t> parentTris, parentMaterials;
-            std::vector<F2> parentUvs;
-            float groupError = childError;
+            GroupResult r;
+            r.members = group;
+            r.sphere = mergeSpheres(spheres);
+            r.error = childError;
+            if (retexture) r.source = SourceSet{tris, uvs, materials};
             if (uint64_t(simp.tris.size() / 3) > groupTris * 85 / 100) {
                 // Locked borders left too little to remove: carry the group up unchanged so every
                 // level still covers the whole surface (the next level groups it differently).
-                parentTris = std::move(tris);
-                parentUvs = std::move(uvs);
-                parentMaterials = std::move(materials);
+                r.parentTris = std::move(tris);
+                r.parentUvs = std::move(uvs);
+                r.parentMaterials = std::move(materials);
                 stats.stuckGroups++;
             } else {
-                parentTris = std::move(simp.tris);
-                parentUvs = std::move(simp.cornerUv);
-                parentMaterials = std::move(simp.materials);
-                groupError = childError + simp.error;
+                r.parentTris = std::move(simp.tris);
+                r.parentUvs = std::move(simp.cornerUv);
+                r.parentMaterials = std::move(simp.materials);
+                r.error = childError + simp.error;
             }
-            GroupResult r{group, mergeSpheres(spheres), groupError, buildClusters(parentTris, parentUvs, parentMaterials, m)};
-            for (const auto& p : r.parents) nextTriangles += p.triangleCount();
+            nextTriangles += r.parentTris.size() / 3;
             results.push_back(std::move(r));
         }
 
         // A level that removes almost nothing would only duplicate the one below: stop instead.
         if (!levelReducesEnough(nextTriangles, levelTriangles(current))) break;
         stats.triangles = static_cast<uint32_t>(nextTriangles);
+
+        if (retexture) {
+            // The level's atlas: every coarse triangle baked from its group's source surface.
+            const auto bakeStart = std::chrono::steady_clock::now();
+            BakeRequest request;
+            request.mesh = &m;
+            request.minTexelWorld = retex->minTexelWorld;
+            request.maxAtlasSize = retex->maxAtlasSize;
+            for (uint32_t g = 0; g < results.size(); ++g) {
+                GroupResult& r = results[g];
+                request.coarseTris.insert(request.coarseTris.end(), r.parentTris.begin(), r.parentTris.end());
+                request.groupOfTri.insert(request.groupOfTri.end(), r.parentTris.size() / 3, g);
+                request.sources.push_back(std::move(r.source));
+                request.groupError.push_back(r.error);
+            }
+            if (level == 0) {
+                request.sample = retex->sampleLevel0;
+            } else {
+                const AtlasImage* previous = &dag.atlases.back().image;
+                request.sample = [previous](uint32_t, const F2& uv) { return previous->sampleLinear(uv); };
+            }
+            BakeResult baked = retex->bake(request);
+            LevelAtlas atlas;
+            atlas.level = level + 1;
+            atlas.materialId = m.materialCount + static_cast<uint32_t>(dag.atlases.size());
+            atlas.image = std::move(baked.atlas);
+            atlas.cells = baked.cells;
+            atlas.texels = baked.texels;
+            atlas.texelWorld = baked.texelWorld;
+            atlas.missed = baked.missed;
+            atlas.metallic = dominantMetallic;
+            atlas.roughness = dominantRoughness;
+            atlas.bakeMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - bakeStart).count();
+            size_t corner = 0;
+            for (GroupResult& r : results) {
+                const size_t corners = r.parentTris.size();
+                r.parentUvs.assign(baked.cornerUv.begin() + static_cast<std::ptrdiff_t>(corner), baked.cornerUv.begin() + static_cast<std::ptrdiff_t>(corner + corners));
+                r.parentMaterials.assign(corners / 3, atlas.materialId);
+                corner += corners;
+            }
+            dag.atlases.push_back(std::move(atlas));
+        }
+        for (GroupResult& r : results) {
+            r.parents = buildClusters(r.parentTris, r.parentUvs, r.parentMaterials, m);
+            r.parentTris.clear();
+            r.parentUvs.clear();
+            r.parentMaterials.clear();
+        }
 
         std::vector<uint32_t> next;
         for (auto& r : results) {
@@ -1566,7 +1753,15 @@ struct SbvgSummary {
     uint64_t leafTriangleCount{0};
     uint32_t levelCount{0};
     uint64_t fileBytes{0};
+    uint32_t atlasCount{0};
+    /** Bytes of the atlas PNGs written next to the file. */
+    uint64_t atlasBytes{0};
 };
+
+/** Name of the PNG holding a level's atlas, next to the .sbvg: `<stem>.atlas<level>.png`. */
+inline std::string atlasFileName(const std::string& stem, uint32_t level) {
+    return stem + ".atlas" + std::to_string(level) + ".png";
+}
 
 /** Element count or index stored in a 32-bit field; throws instead of wrapping. */
 inline uint32_t sbvgU32(uint64_t v, const char* what) {
@@ -1579,7 +1774,12 @@ inline void putU64(uint32_t* w, uint64_t v) {
     w[1] = static_cast<uint32_t>(v >> 32);
 }
 
-inline SbvgSummary writeSbvg(const ClusterDag& dag, const std::string& path, uint32_t skippedPrimitives = 0) {
+/**
+ * Writes the file and its atlas PNGs (named `<atlasStem>.atlas<level>.png` in the file's directory;
+ * the stem defaults to the file's own, and a caller that writes to a temporary name passes the final one).
+ */
+inline SbvgSummary writeSbvg(const ClusterDag& dag, const std::string& path, uint32_t skippedPrimitives = 0, std::string atlasStem = "") {
+    if (atlasStem.empty()) atlasStem = std::filesystem::path(path).stem().string();
     const WeldedMesh& m = dag.mesh;
     std::vector<std::vector<uint32_t>> byLevel(dag.levelCount);
     for (uint32_t i = 0; i < dag.clusters.size(); ++i) byLevel[dag.clusters[i].level].push_back(i);
@@ -1691,6 +1891,39 @@ inline SbvgSummary writeSbvg(const ClusterDag& dag, const std::string& path, uin
     words[25] = m.droppedDegenerate;
     words[26] = m.materialCount;
 
+    // Atlas table (version 4): one row per re-textured level, naming the PNG next to the file.
+    while ((words.size() + body.size()) % 4) body.push_back(0);
+    const uint64_t tableOffset = uint64_t(words.size() + body.size()) * 4;
+    const std::filesystem::path dir = std::filesystem::path(path).parent_path();
+    for (const LevelAtlas& atlas : dag.atlases) {
+        const std::string name = atlasFileName(atlasStem, atlas.level);
+        texture::ImageBuffer image(static_cast<int>(atlas.image.width), static_cast<int>(atlas.image.height), 3);
+        image.data = atlas.image.rgb;
+        const std::vector<uint8_t> png = texture::encodePng(image);
+        std::ofstream pf(dir / name, std::ios::binary);
+        if (!pf) throw std::runtime_error("cannot write " + (dir / name).string());
+        pf.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+        if (!pf) throw std::runtime_error("failed writing " + (dir / name).string());
+        sum.atlasBytes += png.size();
+        body.push_back(atlas.level);
+        body.push_back(atlas.materialId);
+        body.push_back(atlas.image.width);
+        body.push_back(atlas.image.height);
+        uint32_t bits;
+        std::memcpy(&bits, &atlas.metallic, 4);
+        body.push_back(bits);
+        std::memcpy(&bits, &atlas.roughness, 4);
+        body.push_back(bits);
+        body.push_back(static_cast<uint32_t>(name.size()));
+        const size_t nameWords = (name.size() + 3) / 4;
+        const size_t at = body.size();
+        body.resize(at + nameWords, 0);
+        std::memcpy(body.data() + at, name.data(), name.size());
+    }
+    words[27] = static_cast<uint32_t>(dag.atlases.size());
+    putU64(&words[28], tableOffset);
+    putU64(&words[30], uint64_t(words.size() + body.size()) * 4);
+
     std::ofstream f(path, std::ios::binary);
     if (!f) throw std::runtime_error("cannot write " + path);
     f.write(reinterpret_cast<const char*>(words.data()), static_cast<std::streamsize>(words.size() * 4));
@@ -1701,6 +1934,7 @@ inline SbvgSummary writeSbvg(const ClusterDag& dag, const std::string& path, uin
     sum.clusterCount = static_cast<uint32_t>(clusterBase);
     sum.levelCount = dag.levelCount;
     sum.fileBytes = (words.size() + body.size()) * 4ull;
+    sum.atlasCount = static_cast<uint32_t>(dag.atlases.size());
     return sum;
 }
 

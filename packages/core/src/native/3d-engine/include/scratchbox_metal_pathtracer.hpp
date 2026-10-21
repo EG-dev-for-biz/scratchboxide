@@ -233,6 +233,8 @@ public:
     }
 
     void clearBounceGeometry() { bounceAccel_ = nil; }
+    /** Whether shadow rays trace the bounce geometry too (default) or stay on the primary cut. */
+    void setBounceShadowRays(bool enabled) { bounceShadowRays_ = enabled; }
 
     /** 0: PCG32 per pixel (the CPU tracer's stream); 1: per-pixel Owen-scrambled Sobol. */
     void setSampler(uint32_t sampler) { sampler_ = sampler; }
@@ -459,6 +461,7 @@ public:
         u.seedHi = static_cast<uint32_t>(seed >> 32);
         u.useBounceAccel = bounceAccel_ ? 1 : 0;
         u.bounceErrorPerDistance = bounceAccel_ ? bounceErrorPerDistance_ : 0.0f;
+        u.bounceShadowRays = bounceShadowRays_ ? 1 : 0;
         u.sampler = sampler_;
         u.usePrimaryRaster = primaryRaster_ ? 1 : 0;
 
@@ -860,6 +863,7 @@ private:
     uint32_t bounceTriangleCount_{0};
     double bounceBuildMs_{0.0};
     float bounceErrorPerDistance_{0.0f};
+    bool bounceShadowRays_{true};
     bool preferFastBuild_{false};
     uint32_t sampler_{0};
     id<MTLBuffer> sobolBuffer_{nil};

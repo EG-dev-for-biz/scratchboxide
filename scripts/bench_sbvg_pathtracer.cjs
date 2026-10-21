@@ -41,6 +41,9 @@ const VARIANTS = {
     'bounce-cut-4px': { optimizations: { bounceThresholdPx: 4 } },
     'bounce-cut-8px': { optimizations: { bounceThresholdPx: 8 } },
     'bounce-cut-16px': { optimizations: { bounceThresholdPx: 16 } },
+    'gi-cut-4px': { optimizations: { bounceThresholdPx: 4, bounceShadowRays: false } },
+    'gi-cut-8px': { optimizations: { bounceThresholdPx: 8, bounceShadowRays: false } },
+    'gi-cut-16px': { optimizations: { bounceThresholdPx: 16, bounceShadowRays: false } },
     'primary-raster': { optimizations: { primaryRaster: true } },
     'all-speed': { optimizations: { primaryRaster: true, bounceThresholdPx: 8 } }
 };

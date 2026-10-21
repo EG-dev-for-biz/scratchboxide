@@ -99,8 +99,30 @@ Two samplers were measured and thrown away on the way: Halton with higher primes
 
 **What this means for the viewport:** the honest wins are fewer samples for the same error (Sobol) and fewer pixels (MetalFX), not faster rays; on an M1 Ultra the hardware intersector already spends only ~20% of its rays on primaries and has no cheaper geometry to trace against until the DAG's coarse levels are re-textured.
 
+## Phase 6 (2026-10-20): re-textured coarse levels (`.sbvg` version 4)
+
+**What.** When the GLB has materials, every coarse level is simplified without regard to UV seams or material borders (only group borders stay locked) and gets an atlas of its own (`scratchbox_lod_retexture.hpp`): each coarse triangle takes a square cell (sized by its area at a texel tied to the level's error, never finer than the source textures' median texel, atlas capped at 4096 wide), and every texel is baked by projecting back along the coarse normal onto the surface the triangle was simplified from (two rays from either side through the point; the nearest source point as fallback) and sampling that surface's albedo: the glTF textures for level 1, the previous level's atlas above. Each level becomes one material appended after the glTF materials (base colour = the atlas PNG written next to the file, metallic and roughness of the area-dominant glTF material); the file's atlas table (header words 27-31) names them, and both readers, the helper (Metal and CPU reference) and the build service's cache (atlas PNGs live and die with their file) know version 4.
+
+**Flatiron** (403,385 triangles, 209 textures), builder 9.6 s on 20 threads:
+
+| | before | re-textured |
+| :-- | --: | --: |
+| DAG levels | 3 | 7 |
+| level 1 / 2 / 3 triangles | 206,764 / 158,074 / - | 201,680 / 106,233 / 67,846 |
+| coarsest level triangles | 158,074 | 43,401 |
+| 1 px cut for the test camera | 329,205 | 216,035 |
+| frame at 64 spp | 0.95 s | 0.96 s (fewer triangles, same rays) |
+| atlases | - | 6 levels, 4096x3076 down to 1024x690, 84 MB of PNG |
+| file | 28 MB | 85 MB (per-cell uvs: three wedges per coarse triangle) |
+
+Level 1 bakes 12.4 M texels at a 0.29 m texel in 0.9 s with 4% of texels falling back to the nearest-point search; the checker sphere goes from 9 to 10 levels with a 512x145 level-1 atlas, and a render from level 3 up (1,182 triangles instead of 2,719) keeps the checkerboard and agrees with full detail to 3.4% in block means. Rendering Flatiron from level 2 up (106k triangles) differs from full detail by 20% in block means from the test camera: that level carries up to 10 m of error and is meant for far views.
+
+**Coarser bounce cut, re-measured on the re-textured DAG:** 8 px cut, shadows and bounces on it: 8.4% block bias; bounce light only, shadows on the fine cut: 1.9% (16 px: 2.6%), with local maxima of 150-1300%, whether rays start past the error along their own direction or along the surface normal. Re-texturing fixed what the coarse levels look like, not where they are: the remaining bias is geometric, so the coarse bounce cut stays rejected for correctness and the flags stay in the harness.
+
+**Costs and limits.** Per-triangle cells triple the coarse levels' vertex count and make the file 3x larger; cells of a few texels show the gutter's clamped colours as a fuzz along edges at the coarsest levels; the bake only carries base colour (no normal or metallic-roughness maps on coarse levels); groups the simplifier cannot reduce by 15% are still carried up unchanged, which is what stops the DAG at 7 levels (300 of 450 groups stuck at level 5).
+
 ## Next (plan)
 
-- Re-textured coarse levels for charted photogrammetry, so the DAG regains its depth without crossing seams; that is also what would make a coarser bounce cut usable.
+- Share cell edges between neighbouring triangles (quads) to halve the atlas and the wedge count; bake normal maps into the atlases; a group-merging step for stuck groups so the DAG continues past level 7.
 - Phase 4: the a-trous denoiser on the GPU and temporal reuse.
 - Rays: rasterize the camera hit with the existing WebGPU cluster pass; coarser cuts for bounce and shadow rays; any-hit shadow rays (done); merged per-chunk acceleration structures; better samplers; MetalFX upscale.

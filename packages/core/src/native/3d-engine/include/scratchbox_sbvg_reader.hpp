@@ -24,6 +24,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -48,6 +49,18 @@ struct ClusterRecord {
     float parentError{vgeo::kRootParentError};
 };
 
+/** A re-textured level's atlas: a material appended after the glTF materials whose base colour is the PNG. */
+struct Atlas {
+    uint32_t level{0};
+    uint32_t materialId{0};
+    uint32_t width{0};
+    uint32_t height{0};
+    float metallic{1.0f};
+    float roughness{1.0f};
+    /** Resolved next to the .sbvg. */
+    std::string imagePath;
+};
+
 struct File {
     uint32_t version{0};
     uint32_t levelCount{0};
@@ -57,6 +70,8 @@ struct File {
     uint32_t droppedDegenerate{0};
     /** Length of the source glTF's materials array (0 in version 2 files). */
     uint32_t materialCount{0};
+    /** Version 4: one per re-textured level, in material id order (materialCount, materialCount + 1, ...). */
+    std::vector<Atlas> atlases;
     float aabbMin[3]{0, 0, 0};
     float aabbMax[3]{0, 0, 0};
     /** World position the stored vertices are relative to. */
@@ -96,8 +111,8 @@ inline File readFile(const std::string& path) {
     if (word(0) != vgeo::kSbvgMagic) throw FormatError(path + ": not an .sbvg file");
     File file;
     file.version = word(1);
-    if (file.version != 2 && file.version != 3) {
-        throw FormatError(path + ": .sbvg version " + std::to_string(file.version) + " (this reader handles versions 2 and 3)");
+    if (file.version < 2 || file.version > 4) {
+        throw FormatError(path + ": .sbvg version " + std::to_string(file.version) + " (this reader handles versions 2 to 4)");
     }
     const uint32_t fileVertexFloats = file.version >= 3 ? vgeo::kSbvgVertexFloats : 6;
     const bool hasMaterials = file.version >= 3;
@@ -171,6 +186,35 @@ inline File readFile(const std::string& path) {
     if (file.clusters.size() != clusterCount || file.vertexCount() != vertexCount || file.refs.size() != refCount || file.tris.size() != triCount) {
         throw FormatError(path + ": header counts do not match the level blocks");
     }
+    if (file.version >= 4) {
+        const uint32_t atlasCount = word(27);
+        const uint64_t tableOffset = uint64_t(word(28)) | (uint64_t(word(29)) << 32);
+        const uint64_t fileBytes = uint64_t(word(30)) | (uint64_t(word(31)) << 32);
+        if (fileBytes != bytes.size() || tableOffset % 4 != 0 || tableOffset > bytes.size()) throw FormatError(path + ": atlas table is out of place");
+        size_t w = tableOffset / 4;
+        const std::string dir = std::filesystem::path(path).parent_path().string();
+        for (uint32_t a = 0; a < atlasCount; ++a) {
+            if ((w + 7) * 4 > bytes.size()) throw FormatError(path + ": atlas table is truncated");
+            Atlas atlas;
+            atlas.level = word(w);
+            atlas.materialId = word(w + 1);
+            atlas.width = word(w + 2);
+            atlas.height = word(w + 3);
+            atlas.metallic = fword(w + 4);
+            atlas.roughness = fword(w + 5);
+            const uint32_t nameLen = word(w + 6);
+            w += 7;
+            const size_t nameWords = (nameLen + 3) / 4;
+            if ((w + nameWords) * 4 > bytes.size() || nameLen > 1024) throw FormatError(path + ": atlas name is truncated");
+            const std::string name(reinterpret_cast<const char*>(bytes.data() + w * 4), nameLen);
+            if (name.find('/') != std::string::npos || name.find('\\') != std::string::npos || name.find("..") != std::string::npos) throw FormatError(path + ": atlas name leaves the directory");
+            atlas.imagePath = (std::filesystem::path(dir) / name).string();
+            if (atlas.materialId != file.materialCount + a) throw FormatError(path + ": atlas material ids are not consecutive");
+            file.atlases.push_back(atlas);
+            w += nameWords;
+        }
+    }
+    const uint32_t materialLimit = file.materialCount + static_cast<uint32_t>(file.atlases.size());
     for (const ClusterRecord& c : file.clusters) {
         if (uint64_t(c.refBase) + c.refCount > file.refs.size() || uint64_t(c.triBase) + c.triCount > file.tris.size()) throw FormatError(path + ": cluster references past the end of the file");
         for (uint32_t r = 0; r < c.refCount; ++r) {
@@ -180,7 +224,7 @@ inline File readFile(const std::string& path) {
             const uint32_t packed = file.tris[c.triBase + t];
             if ((packed & 0xFF) >= c.refCount || ((packed >> 8) & 0xFF) >= c.refCount || ((packed >> 16) & 0xFF) >= c.refCount) throw FormatError(path + ": triangle corner past its cluster's vertices");
             const uint32_t material = file.materials[c.triBase + t];
-            if (material != vgeo::kNoMaterial && material >= file.materialCount) throw FormatError(path + ": triangle material past the material count");
+            if (material != vgeo::kNoMaterial && material >= materialLimit) throw FormatError(path + ": triangle material past the material count");
         }
     }
     return file;

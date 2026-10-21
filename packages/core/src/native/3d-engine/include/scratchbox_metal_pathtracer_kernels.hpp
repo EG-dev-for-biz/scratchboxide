@@ -58,8 +58,11 @@ struct Uniforms {
     uint32_t sampler{0};
     /** 1: the first hit comes from the visibility texture (rasterized triangle id) when the jittered ray still meets that triangle. */
     uint32_t usePrimaryRaster{0};
+    /** With useBounceAccel: 1 traces shadow rays against the bounce geometry too, 0 keeps them on the primary cut. */
+    uint32_t bounceShadowRays{1};
+    uint32_t pad5{0}, pad6{0}, pad7{0};
 };
-static_assert(sizeof(Uniforms) == 4 * 60, "Uniforms must stay a flat array of 4-byte scalars");
+static_assert(sizeof(Uniforms) == 4 * 64, "Uniforms must stay a flat array of 4-byte scalars");
 
 /**
  * Sobol direction vectors (32 words per dimension, first digit in the high bit) for `dims` dimensions:
@@ -210,6 +213,7 @@ struct Uniforms {
     uint useBounceAccel;
     float bounceErrorPerDistance;
     uint sampler, usePrimaryRaster;
+    uint bounceShadowRays, pad5, pad6, pad7;
 };
 
 struct RasterUniforms {
@@ -787,8 +791,10 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
         const float3 wo = -dir;
         Bsdf bsdf = makeBsdf(surface.shadingNormal, surface.baseColor, surface.metallic, surface.roughness, wo);
         // Distance from the camera path so far, which bounds how far the bounce cut's surface may sit from this one.
+        // Rays into the coarse geometry start that far out along the normal, not along their own direction:
+        // a grazing ray would otherwise skip a long way across the surface and through nearby walls.
         const float hitDistance = length(surface.position - f3(u.camPos));
-        const float coarseOffset = u.useBounceAccel != 0u ? max(1e-4f, 2.0f * u.bounceErrorPerDistance * hitDistance) : 1e-4f;
+        const float coarseOffset = u.useBounceAccel != 0u ? max(kRayEpsilon, u.bounceErrorPerDistance * hitDistance) : kRayEpsilon;
         if (sky && u.sunVisible != 0u) {
             float s1 = nextSample(smp);
             float s2 = nextSample(smp);
@@ -796,8 +802,9 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
             float cosShading = dot(surface.shadingNormal, wi);
             if (cosShading > 0.0f && dot(surface.geometricNormal, wi) > 0.0f) {
                 ++rays;
-                const Geometry shadowGeo = u.useBounceAccel != 0u ? bounceGeo : primary;
-                ray shadow(surface.position + surface.geometricNormal * kRayEpsilon, wi, coarseOffset, 1e9f);
+                const bool coarseShadow = u.useBounceAccel != 0u && u.bounceShadowRays != 0u;
+                const Geometry shadowGeo = coarseShadow ? bounceGeo : primary;
+                ray shadow(surface.position + surface.geometricNormal * (coarseShadow ? coarseOffset : kRayEpsilon), wi, 1e-4f, 1e9f);
                 intersection_result<triangle_data> blocker = any.intersect(shadow, shadowGeo.accel);
                 if (blocker.type == intersection_type::none) {
                     accumulate(radiance, throughput * bsdfEval(bsdf, wi) * f3(u.sunIrradiance) * cosShading, bounce, u.clampIndirect);
@@ -814,9 +821,9 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
             if (q <= 0.0f || nextSample(smp) > q) break;
             throughput = throughput / q;
         }
-        origin = surface.position + surface.geometricNormal * kRayEpsilon;
+        origin = surface.position + surface.geometricNormal * coarseOffset;
         dir = wi;
-        rayStart = coarseOffset;
+        rayStart = 1e-4f;
     }
     result.radiance = radiance;
     return result;
