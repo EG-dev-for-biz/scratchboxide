@@ -533,6 +533,11 @@ struct GrowthParams {
     bool trunkRadiusPerHeightExplicit{false};
     double shellDepth{0.8};             // share of each surface sample's height above the crown base the crown fills
     double minSurfaceReached{0.9};      // share of the measured crown surface the regrown tree's leaves must reach
+    // Buildings win over trees: a crown is grown no closer than this to the scanned walls it met (CrownShape::walls,
+    // measured by strip): attractors and surface samples behind a wall's plane or within this of it are left out, so the
+    // regrown crown stands off the facade instead of filling the building (m; 0: no clipping). 1 m: a leaf cluster's reach,
+    // measured on a crown pressed to a wall (0.5 m left 0.12 % of its triangles 0.32 m into the building; 1 m none).
+    double wallClearance{1.0};
     uint64_t seed{0};                   // mixed with each crown id
     // Seeded per crown (a hash of seed and crown id: the same crown grows the same tree, no two alike):
     double crownBaseSpread{0.10};       // the crown base ratio varies by +/- this, so trunks do not all fork at the same relative height
@@ -552,6 +557,17 @@ struct GrowthParams {
     tree_species::ChoiceParams speciesChoice;
 };
 
+/**
+ * A scanned wall a crown met (strip: kept wall triangles the crown's removed triangles touched, clustered by plane):
+ * a point on it, its outward normal (towards the crown) and its area. The crown is regrown on the crown's side of it.
+ */
+struct CrownWall {
+    Vec3 point, normal;
+    Vec3 tangent;                 // unit, horizontal, in the wall's plane
+    double halfAlongM{0}, halfUpM{0};  // the wall's extent about `point` along the tangent and up (half widths)
+    double areaM2{0};
+};
+
 /** A measured crown, as crowns.json carries it (strip writes these values at full precision, so plant reads them back exactly). */
 struct CrownShape {
     int id{0};
@@ -565,6 +581,7 @@ struct CrownShape {
     // its colour in the tile's photo (measured; the species choice reads its hue), when strip measured one
     bool colourKnown{false};
     std::array<double, 3> colourMean{};
+    std::vector<CrownWall> walls;   // the scanned walls it met (GrowthParams::wallClearance keeps the regrown crown off them)
 };
 
 /**
@@ -624,6 +641,12 @@ struct CrownGrowth {
     std::string colonisationSummary;    // how colonisation went, in words (attractors reached, iterations, why it stopped)
     std::vector<Vec3> surface;          // the measured surface samples above the crown base (what the leaves must reach)
     size_t surfaceMassesNeeded{0};      // leaf masses the meshing needs to bring all of it it can within reachRadius
+    // buildings win over trees (GrowthParams::wallClearance): walls the crown was kept off, and the attractors and
+    // surface samples that lay behind them or within the clearance, left out of the growth
+    size_t wallsClipped{0}, attractorsClipped{0}, attractorsTotal{0}, surfaceClipped{0};
+    // the height the leaves must reach: the measured apex, or, when the clip took the surface samples at the apex (the
+    // crown's top lay against the wall), the top of the surface samples that remain
+    double apexTargetY{0};
     bool ok() const { return failure.empty(); }
     double surfaceShare() const { return surfaceSamples ? static_cast<double>(surfaceReached) / static_cast<double>(surfaceSamples) : 0.0; }
 };
@@ -757,6 +780,34 @@ inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, 
             addAttractor(s.x + jx, y + jy, s.z + jz);
         }
     }
+    g.attractorsTotal = attractors.size();
+    if (G.wallClearance > 0 && !c.walls.empty()) {
+        // buildings win over trees: nothing of the crown is grown behind a scanned wall it met, or within the clearance of
+        // it, over the wall's own extent (grown by the clearance): a low garden wall or a short return clips what stands
+        // against it, not the whole crown
+        auto behind = [&](const Vec3& q) {
+            for (const auto& w : c.walls) {
+                const Vec3 d = q - w.point;
+                if (static_cast<double>(d.dot(w.normal)) >= G.wallClearance) continue;
+                if (std::abs(static_cast<double>(d.dot(w.tangent))) > w.halfAlongM + G.wallClearance) continue;
+                if (std::abs(static_cast<double>(d.y)) > w.halfUpM + G.wallClearance) continue;
+                return true;
+            }
+            return false;
+        };
+        std::vector<Vec3> keptA, keptS;
+        for (const auto& a : attractors) { if (behind(a)) ++g.attractorsClipped; else keptA.push_back(a); }
+        for (const auto& v : surface) { if (behind(v)) ++g.surfaceClipped; else keptS.push_back(v); }
+        if (g.attractorsClipped || g.surfaceClipped) g.wallsClipped = c.walls.size();
+        attractors.swap(keptA);
+        surface.swap(keptS);
+    }
+    g.apexTargetY = c.apex.y;
+    if (g.surfaceClipped && !surface.empty()) {
+        double top = -std::numeric_limits<double>::infinity();
+        for (const auto& v : surface) top = std::max(top, static_cast<double>(v.y));
+        g.apexTargetY = std::min(g.apexTargetY, top);
+    }
     g.surfaceSamples = surface.size();
     if (attractors.size() < 3) {
         g.failureCode = "no_crown_above_base";
@@ -846,14 +897,14 @@ inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, 
     g.surface = std::move(surface);
     cfg.foliageSurface = g.surface;
     cfg.foliageSurfaceReach = static_cast<float>(g.reachRadius);
-    cfg.foliageTop = c.apex.y;
+    cfg.foliageTop = static_cast<float>(g.apexTargetY);
     g.surfaceMassesNeeded = nature::SpaceColonizationTreeGenerator::surfaceMassesNeeded(cfg, g.skeleton);
     if (g.surfaceShare() < G.minSurfaceReached) {
         g.failureCode = "crown_not_reached";
         g.failure = "the regrown tree's leaves reach " + detail::fixed(100.0 * g.surfaceShare(), 0) + "% of its measured crown surface (" +
                     std::to_string(g.surfaceReached) + " of " + std::to_string(g.surfaceSamples) + " samples within " + detail::fixed(g.reachRadius, 1) +
                     " m; " + detail::fixed(100.0 * G.minSurfaceReached, 0) + "% needed)";
-    } else if (g.leafTopY + g.reachRadius < static_cast<double>(c.apex.y)) {
+    } else if (g.leafTopY + g.reachRadius < g.apexTargetY) {
         g.failureCode = "apex_not_reached";
         g.failure = "the regrown tree's leaves reach " + detail::fixed(g.leafTopY - support, 1) + " m above its ground, short of its measured " +
                     detail::fixed(H, 1) + " m";
@@ -893,6 +944,17 @@ inline CrownShape crownShapeFromJson(const io::GlbJsonValue& c) {
     if (col.type == io::GlbJsonValue::Array && col.arr.size() == 3 && col[0].type == io::GlbJsonValue::Number) {
         s.colourKnown = true;
         for (size_t k = 0; k < 3; ++k) s.colourMean[k] = std::max(0.0, col[k].num);
+    }
+    for (const auto& w : c["walls"].arr) {
+        if (w["point"].arr.size() != 3 || w["normal"].arr.size() != 3 || w["tangent"].arr.size() != 3) continue;
+        CrownWall cw;
+        cw.point = Vec3(static_cast<float>(w["point"][0].num), static_cast<float>(w["point"][1].num), static_cast<float>(w["point"][2].num));
+        cw.normal = Vec3(static_cast<float>(w["normal"][0].num), static_cast<float>(w["normal"][1].num), static_cast<float>(w["normal"][2].num));
+        cw.tangent = Vec3(static_cast<float>(w["tangent"][0].num), static_cast<float>(w["tangent"][1].num), static_cast<float>(w["tangent"][2].num));
+        cw.halfAlongM = w["halfAlongM"].asFloat(0.0f);
+        cw.halfUpM = w["halfUpM"].asFloat(0.0f);
+        cw.areaM2 = w["areaM2"].asFloat(0.0f);
+        s.walls.push_back(cw);
     }
     return s;
 }
@@ -1115,9 +1177,10 @@ struct MeshedCrown {
               << "% of its measured crown surface (" << reach.reached << " of " << reach.samples << " samples within " << detail::fixed(g.reachRadius, 1) << " m; "
               << detail::fixed(100.0 * minSurfaceReached, 0) << "% needed; " << report.surfaceMasses << " of the " << report.surfaceMassesNeeded
               << " masses that reach it fit)";
-        } else if (reach.topY + g.reachRadius < static_cast<double>(c.apex.y)) {
+        } else if (reach.topY + g.reachRadius < g.apexTargetY) {
             m << "within its budget of " << budget << " triangles its leaves reach " << detail::fixed(reach.topY - c.supportY, 1) << " m above its ground, "
-              << detail::fixed(static_cast<double>(c.apex.y) - reach.topY, 1) << " m short of its measured " << detail::fixed(static_cast<double>(c.apex.y) - c.supportY, 1) << " m";
+              << detail::fixed(g.apexTargetY - reach.topY, 1) << " m short of its measured " << detail::fixed(g.apexTargetY - c.supportY, 1) << " m"
+              << (g.surfaceClipped ? " (the crown's top against the wall left out)" : "");
         }
         return m.str();
     }
@@ -1219,6 +1282,11 @@ struct StripParams {
     bool skirtDropBacked{true};
     double skirtBackedReach{0.4};    // m
     double skirtBackedShare{0.5};
+    // Buildings win over trees: a triangle the removal would take that lies on a kept building surface (within
+    // facadeGuard of the plane of a kept wall or level surface it touches, facing like it, |cos| at least facadeGuardCos)
+    // is building, whatever the classifier called it, and stays; the cut stops at the facade. 0: off.
+    double facadeGuard{0.15};
+    double facadeGuardCos{0.9};      // (walls only: level surfaces are measured, not put back; see guardBuildings)
     double seamGap{1.0};             // hole boundaries broken by an open tile seam are joined across gaps up to this (m)
     double sampleSpacing{0.7};       // voxel size of the crown surface samples (m)
     GrowthParams growth;             // how each tree crown is regrown before anything is removed (see growCrown)
@@ -1297,6 +1365,7 @@ struct CrownRecord {
     bool regrowthMeshed{false};
     size_t regrowthBudget{0}, regrowthLeafMasses{0}, regrowthSurfaceMasses{0}, regrowthSurfaceMassesNeeded{0}, regrowthLeavesReached{0};
     double regrowthLeavesShare{0}, regrowthLeavesTopY{0};
+    std::vector<CrownWall> walls;    // the scanned walls its removed triangles touched (measureCrownWalls); plant keeps the regrown crown off them
     // a crown kept as scanned beside removed trees: its side over their rebuilt ground, closed down to it (skirt triangles
     // hung on its canopy, not in the scan)
     double keptSkirtAreaM2{0}, keptSkirtTopY{-std::numeric_limits<double>::infinity()}, keptSkirtBottomY{std::numeric_limits<double>::infinity()};
@@ -1335,6 +1404,17 @@ struct StripStats {
     size_t fillPngBytes{0};
     double fillGeneratedColourRgb[3]{0, 0, 0};   // the colour of pieces with no real neighbour (sRGB 0..1)
     std::vector<FillDegradation> fillDegradations;
+    // Buildings win over trees (guardBuildings): triangles the removal took that lie on a kept building surface (on a
+    // wall, on a level surface), before and after the guard put them back, what it put back, and the removed triangles
+    // that only meet a kept surface along an edge (the crease where a crown meets a wall, roof or anything else: crown, not
+    // building; counted so the join is visible)
+    struct GuardCounts { size_t onWalls{0}, onLevelSurfaces{0}; };
+    GuardCounts guardBefore, guardAfter;
+    double guardM{0}, guardCos{0};
+    size_t guardKeptAsBuilding{0};
+    double guardKeptAsBuildingM2{0};
+    size_t creaseOnWalls{0}, creaseOnLevelSurfaces{0}, creaseOnOther{0};
+    size_t crownsWithWalls{0}, crownWalls{0};  // crowns whose removed triangles touched scanned walls, and the walls measured (CrownRecord::walls)
     double canopyTakenWithTreesM2{0}; // canopy outside the tree crowns removed with them (their drape, fragments): not replanted
     size_t fragmentsTaken{0};        // pieces of a tree's scan left hanging in the air beside its removal, taken with it
     double fragmentAreaTakenM2{0};
@@ -1578,6 +1658,7 @@ private:
         lap("regrowth");
         removeAndCapOnGround();
         lap("remove_and_cap");
+        measureCrownWalls();
         buildFill();
         lap("fill");
         writeDevegetated();
@@ -2710,7 +2791,11 @@ private:
     std::vector<uint8_t> drapeFace;
     /** Triangles standing on the caller's structure cells (P.keep): architecture whatever their shape or colour. */
     std::vector<uint8_t> keepTri;
-    bool isArchitecture(size_t t) const { return (keepTri.size() == T && keepTri[t]) || (surface[t] && !chromaVeg[t] && !(drapeFace.size() == T && drapeFace[t])); }
+    std::vector<uint8_t> keptAsBuilding;  // per triangle: the removal would have taken it, guardBuildings kept it as building (kept across passes)
+    std::vector<uint32_t> guardSeed;      // per guarded triangle: the scanned building triangle whose plane it was measured against
+    bool isArchitecture(size_t t) const {
+        return (keepTri.size() == T && keepTri[t]) || (keptAsBuilding.size() == T && keptAsBuilding[t]) || (surface[t] && !chromaVeg[t] && !(drapeFace.size() == T && drapeFace[t]));
+    }
 
     /** Marks the triangles whose centroid stands on a P.keep cell (once; the mesh does not change between passes). */
     void markKeep() {
@@ -3225,6 +3310,7 @@ private:
             }
         }
         takeFloatingFragments();
+        guardBuildings();
         for (size_t t = 0; t < T; ++t) if (removedBy[t] >= 0) ++R.stats.removedTriangles;
         for (size_t c = 0; c < N; ++c) {
             if (!canopy[c] || surf.topTriangle[c] < 0 || removedBy[static_cast<size_t>(surf.topTriangle[c])] < 0) continue;
@@ -3296,6 +3382,174 @@ private:
                 R.stats.fragmentAreaTakenM2 += pieceArea;
             }
             if (taken == 0) break;
+        }
+    }
+
+    // ---------------------------------------------------------------- buildings win over trees
+    /** 0: a kept wall, 1: a kept level surface (both building), 2: another kept not-vegetation surface, -1: kept vegetation or removed. */
+    int keptSurfaceCategory(size_t k) const {
+        if (removedBy[k] >= 0 || veg[k]) return -1;
+        if (isArchitecture(k)) return std::abs(normal[k].y) < 0.7f ? 0 : 1;
+        return 2;
+    }
+
+    /** Whether removed triangle t lies on the surface of kept triangle k: within facadeGuard of its plane, facing like it. */
+    bool onKeptSurface(size_t t, size_t k) const {
+        if (std::abs(static_cast<double>(normal[t].dot(normal[k]))) < P.facadeGuardCos) return false;
+        return std::abs(static_cast<double>((centroid[t] - centroid[k]).dot(normal[k]))) <= P.facadeGuard;
+    }
+
+    /**
+     * Buildings win over trees: a triangle the removal took that lies on a kept wall it touches (across a welded edge,
+     * within facadeGuard of the wall's plane, facing like it) is facade whatever the classifier called it, and is put
+     * back; the wave runs along the facade from the kept wall into the cut, so the cut stops at the facade and the scan's
+     * own wall stays. Level surfaces are measured (removedOnBuilding) but not put back: the drape hem a crown lays on the
+     * paving around it, and a crown top beside a flat roof, are the crown's, and the ground under a removed tree is
+     * rebuilt from the surfaces around it.
+     */
+    void guardBuildings() {
+        auto& st = R.stats;
+        if (keptAsBuilding.size() != T) { keptAsBuilding.assign(T, 0); guardSeed.assign(T, 0); }
+        st.guardM = P.facadeGuard;
+        st.guardCos = P.facadeGuardCos;
+        // every triangle put back is measured against the plane of a scanned building triangle (the seed the wave started
+        // from), never against a neighbour already put back: the wave cannot creep over a rounded crown
+        auto seedOf = [&](uint32_t k) { return keptAsBuilding[k] ? guardSeed[k] : k; };
+        auto countOn = [&](StripStats::GuardCounts& out) {
+            out = {};
+            for (size_t t = 0; t < T; ++t) {
+                if (removedBy[t] < 0) continue;
+                int best = -1;
+                for (uint32_t e = adjStart[t]; e < adjStart[t + 1]; ++e) {
+                    const uint32_t k = adj[e];
+                    const int cat = keptSurfaceCategory(k);
+                    if (cat < 0 || cat > 1 || !onKeptSurface(t, seedOf(k))) continue;
+                    best = best < 0 ? cat : std::min(best, cat);
+                }
+                if (best == 0) ++out.onWalls;
+                else if (best == 1) ++out.onLevelSurfaces;
+            }
+        };
+        countOn(st.guardBefore);
+        if (P.facadeGuard > 0) {
+            std::vector<uint32_t> queue;
+            for (size_t t = 0; t < T; ++t) {
+                if (removedBy[t] < 0) continue;
+                for (uint32_t e = adjStart[t]; e < adjStart[t + 1]; ++e) {
+                    if (keptSurfaceCategory(adj[e]) == 0) { queue.push_back(static_cast<uint32_t>(t)); break; }
+                }
+            }
+            while (!queue.empty()) {
+                const uint32_t t = queue.back();
+                queue.pop_back();
+                if (removedBy[t] < 0) continue;
+                bool building = false;
+                for (uint32_t e = adjStart[t]; e < adjStart[t + 1] && !building; ++e) {
+                    const uint32_t k = adj[e];
+                    if (keptSurfaceCategory(k) != 0) continue;
+                    const uint32_t seed = seedOf(k);
+                    if (onKeptSurface(t, seed)) { building = true; guardSeed[t] = seed; }
+                }
+                if (!building) continue;
+                removedBy[t] = -1;
+                keptAsBuilding[t] = 1;
+                veg[t] = 0;
+                for (uint32_t e = adjStart[t]; e < adjStart[t + 1]; ++e) if (removedBy[adj[e]] >= 0) queue.push_back(adj[e]);
+            }
+        }
+        countOn(st.guardAfter);
+        // what the guard holds as building over every pass (a triangle put back stays building in the passes after)
+        st.guardKeptAsBuilding = 0;
+        st.guardKeptAsBuildingM2 = 0;
+        for (size_t t = 0; t < T; ++t) if (keptAsBuilding[t]) { ++st.guardKeptAsBuilding; st.guardKeptAsBuildingM2 += static_cast<double>(area[t]); }
+        st.creaseOnWalls = st.creaseOnLevelSurfaces = st.creaseOnOther = 0;
+        for (size_t t = 0; t < T; ++t) {
+            if (removedBy[t] < 0) continue;
+            int best = -1;
+            for (uint32_t e = adjStart[t]; e < adjStart[t + 1]; ++e) {
+                const int cat = keptSurfaceCategory(adj[e]);
+                if (cat >= 0) best = best < 0 ? cat : std::min(best, cat);
+            }
+            if (best == 0) ++st.creaseOnWalls;
+            else if (best == 1) ++st.creaseOnLevelSurfaces;
+            else if (best == 2) ++st.creaseOnOther;
+        }
+    }
+
+    /**
+     * The scanned walls each removed crown touched: kept wall triangles across a welded edge from its removed triangles,
+     * clustered by plane (normals within 25 degrees, within 0.5 m of the plane), each an area-weighted point and normal
+     * turned towards the crown. Written to crowns.json (CrownRecord::walls); plant grows the tree on the crown's side.
+     */
+    void measureCrownWalls() {
+        auto& st = R.stats;
+        st.crownsWithWalls = st.crownWalls = 0;
+        for (auto& c : R.crowns) c.walls.clear();
+        struct Cluster { Vec3 pointSum, normalSum; double area{0}; Vec3 seedPoint, seedNormal; std::vector<uint32_t> tris; };
+        std::unordered_map<int, std::vector<Cluster>> byCrown;
+        std::unordered_map<int, std::pair<Vec3, size_t>> crownCentre;  // sum of removed centroids, count
+        std::vector<uint8_t> seen(T, 0);
+        for (size_t t = 0; t < T; ++t) {
+            const int m = removedBy[t];
+            if (m < 0) continue;
+            auto& cc = crownCentre[m];
+            cc.first = cc.first + centroid[t];
+            ++cc.second;
+            for (uint32_t e = adjStart[t]; e < adjStart[t + 1]; ++e) {
+                const uint32_t k = adj[e];
+                if (seen[k] || keptSurfaceCategory(k) != 0) continue;
+                seen[k] = 1;
+                auto& clusters = byCrown[m];
+                Cluster* home = nullptr;
+                for (auto& cl : clusters) {
+                    if (std::abs(static_cast<double>(normal[k].dot(cl.seedNormal))) < 0.9) continue;
+                    if (std::abs(static_cast<double>((centroid[k] - cl.seedPoint).dot(cl.seedNormal))) > 0.5) continue;
+                    home = &cl;
+                    break;
+                }
+                if (!home) { clusters.push_back({}); home = &clusters.back(); home->seedPoint = centroid[k]; home->seedNormal = normal[k]; }
+                const Vec3 n = normal[k].dot(home->seedNormal) < 0 ? normal[k] * -1.0f : normal[k];
+                home->pointSum = home->pointSum + centroid[k] * area[k];
+                home->normalSum = home->normalSum + n * area[k];
+                home->area += static_cast<double>(area[k]);
+                home->tris.push_back(k);
+            }
+        }
+        for (auto& [m, clusters] : byCrown) {
+            const int ri = m >= 0 && static_cast<size_t>(m) < work.size() ? work[static_cast<size_t>(m)].recordIndex : -1;
+            if (ri < 0) continue;
+            auto& rec = R.crowns[static_cast<size_t>(ri)];
+            const auto& cc = crownCentre[m];
+            const Vec3 crown = cc.second ? cc.first * (1.0f / static_cast<float>(cc.second)) : Vec3(0, 0, 0);
+            for (const auto& cl : clusters) {
+                if (cl.area < 1.0) continue;
+                CrownWall w;
+                w.point = cl.pointSum * (1.0f / static_cast<float>(cl.area));
+                const float len = cl.normalSum.length();
+                if (len < 1e-9f) continue;
+                w.normal = cl.normalSum / len;
+                // turned towards the crown: the regrown tree lives on the crown's side of the wall
+                if ((crown - w.point).dot(w.normal) < 0) w.normal = w.normal * -1.0f;
+                w.areaM2 = cl.area;
+                // its extent: the wall triangles' corners along the horizontal tangent and up, about the point
+                Vec3 tg(-w.normal.z, 0.0f, w.normal.x);
+                const float tl = tg.length();
+                w.tangent = tl > 1e-6f ? tg / tl : Vec3(1, 0, 0);
+                double uLo = 1e30, uHi = -1e30, yLo = 1e30, yHi = -1e30;
+                for (uint32_t k : cl.tris) {
+                    for (int j = 0; j < 3; ++j) {
+                        const Vec3 d = pos[idx[3 * k + static_cast<size_t>(j)]] - w.point;
+                        const double u = d.dot(w.tangent);
+                        uLo = std::min(uLo, u); uHi = std::max(uHi, u); yLo = std::min(yLo, static_cast<double>(d.y)); yHi = std::max(yHi, static_cast<double>(d.y));
+                    }
+                }
+                // re-centre the point on the extent so the half widths are symmetric
+                w.point = w.point + w.tangent * static_cast<float>(0.5 * (uLo + uHi)) + Vec3(0.0f, static_cast<float>(0.5 * (yLo + yHi)), 0.0f);
+                w.halfAlongM = 0.5 * (uHi - uLo);
+                w.halfUpM = 0.5 * (yHi - yLo);
+                rec.walls.push_back(w);
+            }
+            if (!rec.walls.empty()) { ++st.crownsWithWalls; st.crownWalls += rec.walls.size(); }
         }
     }
 
@@ -4601,6 +4855,19 @@ inline std::string crownsJson(const StripResult& r, const StripParams& P) {
             // kept as scanned, its side over rebuilt ground closed down to it: not in the scan
             s << ",\"keptSkirt\":{\"areaM2\":" << json::num(c.keptSkirtAreaM2) << ",\"topY\":" << json::num(c.keptSkirtTopY) << ",\"bottomY\":" << json::num(c.keptSkirtBottomY) << "}";
         }
+        if (!c.walls.empty()) {
+            // the scanned walls the removed crown touched (measured: kept wall triangles beside its removed triangles,
+            // by plane): plant grows the tree on the crown's side of each
+            s << ",\"walls\":[";
+            for (size_t w = 0; w < c.walls.size(); ++w) {
+                const auto& cw = c.walls[w];
+                s << (w ? "," : "") << "{\"point\":[" << json::num(cw.point.x) << "," << json::num(cw.point.y) << "," << json::num(cw.point.z) << "],\"normal\":["
+                  << json::num(cw.normal.x) << "," << json::num(cw.normal.y) << "," << json::num(cw.normal.z) << "],\"tangent\":["
+                  << json::num(cw.tangent.x) << "," << json::num(cw.tangent.y) << "," << json::num(cw.tangent.z) << "],\"halfAlongM\":" << json::num(cw.halfAlongM)
+                  << ",\"halfUpM\":" << json::num(cw.halfUpM) << ",\"areaM2\":" << json::num(cw.areaM2) << "}";
+            }
+            s << "]";
+        }
         if (c.colourKnown) {
             // measured in the tile's photo (linear sRGB): see measureCrownColour
             s << ",\"colour\":{\"meanLinearRgb\":[" << json::num(c.colourMean[0]) << "," << json::num(c.colourMean[1]) << "," << json::num(c.colourMean[2])
@@ -4663,6 +4930,12 @@ inline std::string stripStatsJson(const StripResult& r) {
         }
         s << "]},\n";
     }
+    s << "  \"buildingGuard\": {\"facadeGuardM\": " << json::num(st.guardM) << ", \"facadeGuardCos\": " << json::num(st.guardCos)
+      << ", \"removedOnBuilding\": {\"before\": {\"onWalls\": " << st.guardBefore.onWalls << ", \"onLevelSurfaces\": " << st.guardBefore.onLevelSurfaces
+      << "}, \"after\": {\"onWalls\": " << st.guardAfter.onWalls << ", \"onLevelSurfaces\": " << st.guardAfter.onLevelSurfaces << "}}"
+      << ", \"keptAsBuilding\": {\"count\": " << st.guardKeptAsBuilding << ", \"areaM2\": " << json::num(st.guardKeptAsBuildingM2) << "}"
+      << ", \"removedMeetingAlongEdge\": {\"onWalls\": " << st.creaseOnWalls << ", \"onLevelSurfaces\": " << st.creaseOnLevelSurfaces << ", \"onOther\": " << st.creaseOnOther << "}"
+      << ", \"crownsWithWalls\": " << st.crownsWithWalls << ", \"crownWalls\": " << st.crownWalls << "},\n";
     s << "  \"drape\": {\"sheets\": " << st.drapeSheets << ", \"sheetAreaM2\": " << json::num(st.drapeSheetAreaM2) << ", \"canopyTakenWithTreesM2\": " << json::num(st.canopyTakenWithTreesM2)
       << ", \"fragmentsTaken\": " << st.fragmentsTaken << ", \"fragmentAreaTakenM2\": " << json::num(st.fragmentAreaTakenM2) << "},\n";
     s << "  \"canopyAreaM2\": " << json::num(st.canopyAreaM2) << ",\n  \"treeCanopyAreaM2\": " << json::num(st.treeCanopyAreaM2) << ",\n";
@@ -4753,6 +5026,9 @@ struct PlantedTree {
     bool groundChecked{false};
     double groundGapM{std::numeric_limits<double>::quiet_NaN()};  // trunk base minus the nearest ground-mesh surface at its stem (NaN: none there)
     bool offGround{false};           // ... further than groundTolerance from it, or no surface there
+    // buildings win over trees: the scanned walls the crown was kept off, and the attractors and surface samples left out
+    size_t wallsClipped{0}, attractorsClipped{0}, attractorsTotal{0}, surfaceClipped{0};
+    std::string keptOffWallsShort;   // ... and why the tree grown off the wall does not fill the crown measured against it (empty: it does)
     const io::GlbJsonValue* crown{nullptr};
     // the textures chosen for it from PlantParams::textures (hasTextures false without a library)
     bool hasTextures{false};
@@ -4781,6 +5057,8 @@ struct PlantResult {
     size_t shortOfCrown{0};          // trees whose delivered leaves do not fill their crown within their budget
     bool groundChecked{false};
     size_t offGround{0};             // trees whose trunk base is not on the ground mesh (within groundTolerance)
+    size_t clippedAtWalls{0};        // trees whose crown was kept off a scanned wall (GrowthParams::wallClearance)
+    size_t attractorsClipped{0}, attractorsAtClippedCrowns{0};
     double ms{0};
 };
 
@@ -4870,10 +5148,17 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
 
     // grow every tree first: its own budget depends on what its leaf masses need
     std::vector<CrownGrowth> grown(n);
-    std::vector<std::string> errors(n), droppedCorrection(n);
+    std::vector<std::string> errors(n), droppedCorrection(n), clippedShort(n);
     detail::forEachIndex(n, P.threads, [&](size_t i) {
         try {
             grown[i] = growCrown(shapes[i], P.growth, sampleSpacing);
+            if (!grown[i].ok() && grown[i].wallsClipped && (grown[i].failureCode == "crown_not_reached" || grown[i].failureCode == "apex_not_reached")) {
+                // buildings win over trees: a crown kept off a scanned wall grows as far as the clearance lets it; that it
+                // does not fill the crown the scan measured against the wall is reported, not refused
+                clippedShort[i] = grown[i].failure;
+                grown[i].failure.clear();
+                grown[i].failureCode.clear();
+            }
             if (!grown[i].ok() && P.crownCorrections.count(shapes[i].id)) {
                 // the corrected crown does not regrow: the measured one (the crown strip regrew) is grown instead, and the
                 // correction is dropped for it (reported)
@@ -5000,6 +5285,11 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
             tr.trunkRadius = g.trunkRadius;
             tr.grownShare = g.surfaceShare();
             tr.reachRadius = g.reachRadius;
+            tr.wallsClipped = g.wallsClipped;
+            tr.attractorsClipped = g.attractorsClipped;
+            tr.attractorsTotal = g.attractorsTotal;
+            tr.surfaceClipped = g.surfaceClipped;
+            tr.keptOffWallsShort = clippedShort[i];
             tr.colonisation = g.colonisation;
             tr.crownBaseRatio = g.crownBaseRatio;
             tr.trunkRadiusPerHeight = g.trunkRadiusPerHeight;
@@ -5103,6 +5393,7 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
         R.triangles += (tr.wood.indices.size() + tr.foliage.indices.size()) / 3;
         R.shortOfCrown += tr.shortOfCrown.empty() ? 0 : 1;
         R.offGround += tr.offGround ? 1 : 0;
+        if (tr.wallsClipped) { ++R.clippedAtWalls; R.attractorsClipped += tr.attractorsClipped; R.attractorsAtClippedCrowns += tr.attractorsTotal; }
     }
     R.groundChecked = ground.p != nullptr;
     if (static_cast<double>(R.triangles) > total) throw VegetationError("budget_exceeded", "trees used " + std::to_string(R.triangles) + " triangles, over the budget of " + std::to_string(static_cast<size_t>(total)));
@@ -5246,6 +5537,10 @@ inline std::string treeExtrasMembers(const PlantedTree& tr, const PlantParams& P
     if (tr.groundChecked) {
         ex << ",\"groundGapM\":";
         if (std::isfinite(tr.groundGapM)) ex << json::num(tr.groundGapM); else ex << "null";
+    }
+    if (tr.wallsClipped) {
+        ex << ",\"keptOffWalls\":{\"walls\":" << tr.wallsClipped << ",\"attractorsClipped\":" << tr.attractorsClipped << ",\"attractorsTotal\":" << tr.attractorsTotal
+           << ",\"surfaceSamplesClipped\":" << tr.surfaceClipped << (tr.keptOffWallsShort.empty() ? std::string() : ",\"short\":" + json::str(tr.keptOffWallsShort)) << "}";
     }
     // `triangles` is the budgeted blob tree (what `triangleBudget` bounds); with levels the far level the file holds is the
     // delivered wood (given the whole budget, by the near levels) under the same blob masses: `farLevelTriangles`
@@ -5624,6 +5919,7 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
     members += "\"sbVeggie\":{\"trees\":" + std::to_string(R.trees.size()) + ",\"triangles\":" + std::to_string(R.triangles) + (R.library ? ",\"farLevelTriangles\":" + std::to_string(farTotal) : std::string()) +
                ",\"triangleBudget\":" + std::to_string(static_cast<size_t>(R.triangleBudget)) + ",\"shortOfCrown\":" + std::to_string(R.shortOfCrown) +
                (R.groundChecked ? ",\"offGround\":" + std::to_string(R.offGround) : std::string()) + ",\"keptAsScannedRings\":" + std::to_string(rings.size()) +
+               ",\"keptOffWalls\":{\"trees\":" + std::to_string(R.clippedAtWalls) + ",\"attractorsClipped\":" + std::to_string(R.attractorsClipped) + ",\"attractorsAtClippedCrowns\":" + std::to_string(R.attractorsAtClippedCrowns) + "}" +
                ",\"generator\":\"space colonisation\"}";
     staged_glb::WriteOptions opt;
     if (R.library) {

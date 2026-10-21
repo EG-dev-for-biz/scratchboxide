@@ -107,6 +107,13 @@ export interface TileVegetationStripParams {
     skirtDropBacked?: number;
     skirtBackedReach?: number;
     skirtBackedShare?: number;
+    /**
+     * Buildings win over trees: a triangle the removal would take that lies on a kept wall it touches (within facadeGuard
+     * (0.15 m) of the wall's plane, facing like it, |cos| at least facadeGuardCos (0.9)) is facade whatever the classifier
+     * called it and stays; the cut stops at the facade (stats.buildingGuard). 0: off.
+     */
+    facadeGuard?: number;
+    facadeGuardCos?: number;
     /** How each tree crown is regrown before anything is removed (plant grows them again with the same). */
     crownBaseRatio?: number;
     trunkRadiusPerHeight?: number;
@@ -117,6 +124,12 @@ export interface TileVegetationStripParams {
     trunkLean?: number;
     /** Share of a crown's measured surface the regrown leaves must reach for it to be removed and rebuilt (0.9). */
     minSurfaceReached?: number;
+    /**
+     * Buildings win over trees: the regrown crown is kept this far (1 m: a leaf cluster's reach) off the scanned walls the crown met (crowns.json
+     * `walls`, measured by strip): attractors and surface samples behind a wall or within the clearance are left out of
+     * the growth (stats.keptOffWalls, per tree keptOffWalls). 0: no clipping.
+     */
+    wallClearance?: number;
     /** Share of a crown's measured surface that may hang more than supportStep below its support before that support is not its ground (0.1). */
     maxCrownBelowSupport?: number;
     /**
@@ -153,6 +166,8 @@ export interface TileVegetationPlantParams {
     minSurfaceReached?: number;
     /** 1 (default): every tree is written at three levels (near: instanced leaf clusters, mid: fewer larger leaves, far: blob masses); 0: the far level alone. */
     lod?: number;
+    /** Buildings win over trees: the regrown crown is kept this far (1 m) off the scanned walls the crown met (crowns.json `walls`); 0: no clipping. */
+    wallClearance?: number;
     /** 0 bare .. 1 full summer (default 1): scales leaf density at every level. */
     psiSeason?: number;
     /** Blade length = clamp(leafSizeRatio x crown height, leafMin, leafMax) metres (0.0065, 0.08, 0.14). */

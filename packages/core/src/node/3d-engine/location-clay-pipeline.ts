@@ -242,7 +242,22 @@ export interface LocationClayTrees {
             cap: StripFillKindSummary; skirt: StripFillKindSummary;
             generated: Array<{ kind: string; areaM2: number; reason: string }>;
         };
+        /**
+         * Buildings win over trees: triangles the removal took that lay on a kept wall or level surface, before and after
+         * the guard put the wall ones back (after.onWalls is 0 when the guard is on), what it put back, the removed
+         * triangles that meet a kept surface only along an edge (the crease where a crown meets a wall, roof or anything
+         * else), and the scanned walls measured for the crowns that touched them (plant keeps the regrown crowns off them).
+         */
+        buildingGuard?: {
+            facadeGuardM: number;
+            removedOnBuilding: { before: { onWalls: number; onLevelSurfaces: number }; after: { onWalls: number; onLevelSurfaces: number } };
+            keptAsBuilding: { count: number; areaM2: number };
+            removedMeetingAlongEdge: { onWalls: number; onLevelSurfaces: number; onOther: number };
+            crownsWithWalls: number; crownWalls: number;
+        };
     };
+    /** Buildings win over trees: trees whose regrown crown was kept off a scanned wall, and the share of their attractors left out (plant). */
+    keptOffWalls?: { trees: number; attractorsClipped: number; attractorsAtClippedCrowns: number; crownIds: number[] };
     ms: { strip: number; plant: number };
 }
 
@@ -467,6 +482,18 @@ function skirtDecisionsSummary(d: Record<string, any>): NonNullable<LocationClay
     return out;
 }
 
+/** strip's buildingGuard stats, numbers only. */
+function buildingGuardSummary(g: Record<string, any>): NonNullable<LocationClayTrees['strip']['buildingGuard']> {
+    const pair = (v: any) => ({ onWalls: Number(v?.onWalls ?? 0), onLevelSurfaces: Number(v?.onLevelSurfaces ?? 0) });
+    return {
+        facadeGuardM: Number(g.facadeGuardM ?? 0),
+        removedOnBuilding: { before: pair(g.removedOnBuilding?.before), after: pair(g.removedOnBuilding?.after) },
+        keptAsBuilding: { count: Number(g.keptAsBuilding?.count ?? 0), areaM2: Number(g.keptAsBuilding?.areaM2 ?? 0) },
+        removedMeetingAlongEdge: { ...pair(g.removedMeetingAlongEdge), onOther: Number(g.removedMeetingAlongEdge?.onOther ?? 0) },
+        crownsWithWalls: Number(g.crownsWithWalls ?? 0), crownWalls: Number(g.crownWalls ?? 0)
+    };
+}
+
 /** strip's fill stats: each kind's coverage and texel sources, and the pieces that had to be generated, with their reasons. */
 export function stripFillSummary(f: Record<string, any>): NonNullable<LocationClayTrees['strip']['fill']> {
     const kind = (k: Record<string, any> | undefined): StripFillKindSummary => {
@@ -547,7 +574,8 @@ export function summarizeTrees(
             skirtMaxHeightM: st.skirts?.maxHeightByHangM,
             capMaxRiseM: st.holes?.capMaxRiseM,
             ...(st.skirtDecisions ? { skirtDecisions: skirtDecisionsSummary(st.skirtDecisions) } : {}),
-            ...(st.fill ? { fill: stripFillSummary(st.fill) } : {})
+            ...(st.fill ? { fill: stripFillSummary(st.fill) } : {}),
+            ...(st.buildingGuard ? { buildingGuard: buildingGuardSummary(st.buildingGuard) } : {})
         },
         ms: { strip: opts.stripMs, plant: opts.plantMs ?? 0 }
     };
@@ -576,6 +604,13 @@ export function summarizeTrees(
             trees.measured -= trees.notOnStructure;
         }
         trees.inferred = planted.stats.inferred ?? {};
+        const kow = planted.stats.keptOffWalls;
+        if (kow && typeof kow === 'object') {
+            trees.keptOffWalls = {
+                trees: Number(kow.trees ?? 0), attractorsClipped: Number(kow.attractorsClipped ?? 0), attractorsAtClippedCrowns: Number(kow.attractorsAtClippedCrowns ?? 0),
+                crownIds: (Array.isArray(kow.perTree) ? kow.perTree : []).map((t: any) => Number(t.crownId))
+            };
+        }
         trees.shortOfCrown = (Array.isArray(planted.stats.shortOfCrown) ? planted.stats.shortOfCrown : []).map((t: any) => ({
             crownId: Number(t.crownId), crownSurfaceReached: Number(t.crownSurfaceReached), budget: Number(t.budget), reason: String(t.reason)
         }));

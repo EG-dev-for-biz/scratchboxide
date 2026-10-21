@@ -69,6 +69,8 @@ static void usage() {
         "    --fill-surface-tol M (0.35) --fill-normal-cos V (0.6) --fill-confidence-scale M (3: carried this far a texel's confidence is 1/e)\n"
         "    --skirt-drop-backed 0|1 (1: a skirt on a wall or roof edge is not built where the scan has the wall behind it)\n"
         "    --skirt-backed-reach M (0.4) --skirt-backed-share V (0.5)\n"
+        "    --facade-guard M (0.15) --facade-guard-cos V (0.9): buildings win over trees: a triangle the removal would take that lies on a kept\n"
+        "      wall or level surface it touches (within this of its plane, facing like it) is building and stays; the cut stops at the facade (0: off)\n"
         "    regrowth (white apex: a tree the regrown tree does not fill, kept as scanned):\n"
         "    --seed HEX (0) --crown-base-ratio V (0.35) --trunk-radius-per-height V (0.016) --shell-depth V (0.8) --min-surface-reached V (0.9)\n"
         "    --species-index PATH      the tree species library (assets/vegetation/species/index.json): each crown regrown with the\n"
@@ -97,6 +99,7 @@ static void usage() {
         "    --species-index PATH      the tree species library crowns.json was measured with (refused when it names another)\n"
         "    --species-index-label S   how the root extras name the library (default: the path given)\n"
         "    --crown-base-ratio V --trunk-radius-per-height V --shell-depth V --min-surface-reached V\n"
+        "    --wall-clearance M (1): buildings win over trees: the regrown crown is kept this far off the scanned walls the crown met (crowns.json walls; 0: off)\n"
         "                              (default: what crowns.json recorded as its growth, else 0.35, 0.016, 0.8, 0.9;\n"
         "                              a value other than the recorded one is refused)\n"
         "    --coverage-fill 0|1 (1) --coverage-leaf-area-index V (4.6) --coverage-max-fill-share V (0.8)   fill each crown toward 1 - exp(-0.5 LAI leafiness)\n"
@@ -164,6 +167,8 @@ static void readGrowthFlags(const Args& a, GrowthParams& G) {
     if (a.has("crown-base-ratio")) { G.crownBaseRatio = a.num("crown-base-ratio", G.crownBaseRatio); G.crownBaseRatioExplicit = true; }
     if (a.has("trunk-radius-per-height")) { G.trunkRadiusPerHeight = a.num("trunk-radius-per-height", G.trunkRadiusPerHeight); G.trunkRadiusPerHeightExplicit = true; }
     G.shellDepth = a.num("shell-depth", G.shellDepth);
+    G.wallClearance = a.num("wall-clearance", G.wallClearance);
+    if (G.wallClearance < 0) throw VegetationError("bad_request", "--wall-clearance must be >= 0");
     G.minSurfaceReached = a.num("min-surface-reached", G.minSurfaceReached);
     G.crownBaseSpread = a.num("crown-base-spread", G.crownBaseSpread);
     G.morphology.branchAngleSpreadRad = static_cast<float>(a.num("branch-angle-spread", G.morphology.branchAngleSpreadRad));
@@ -310,6 +315,9 @@ static StripParams readStripParams(const Args& a) {
     P.skirtDropBacked = a.has("skirt-drop-backed") ? a.str("skirt-drop-backed") == "1" : P.skirtDropBacked;
     P.skirtBackedReach = a.num("skirt-backed-reach", P.skirtBackedReach);
     P.skirtBackedShare = a.num("skirt-backed-share", P.skirtBackedShare);
+    P.facadeGuard = a.num("facade-guard", P.facadeGuard);
+    P.facadeGuardCos = a.num("facade-guard-cos", P.facadeGuardCos);
+    if (P.facadeGuard < 0 || P.facadeGuardCos < 0 || P.facadeGuardCos > 1) throw VegetationError("bad_request", "--facade-guard must be >= 0 and --facade-guard-cos in [0, 1]");
     if (!(P.fillTexel > 0) || !(P.fillContext > 0) || !(P.fillSurfaceTol > 0) || !(P.fillConfidenceScale > 0) || !(P.skirtBackedReach > 0)) throw VegetationError("bad_request", "--fill-texel, --fill-context, --fill-surface-tol, --fill-confidence-scale and --skirt-backed-reach must be > 0");
     if (P.fillNormalCos < 0 || P.fillNormalCos > 1 || P.skirtBackedShare < 0 || P.skirtBackedShare > 1) throw VegetationError("bad_request", "--fill-normal-cos and --skirt-backed-share must be in [0, 1]");
     if (P.fillAtlasMaxPx < 256 || P.fillAtlasMaxPx > 16384) throw VegetationError("bad_request", "--fill-atlas-max-px must be in [256, 16384]");
@@ -584,6 +592,18 @@ static int runPlant(const Args& a) {
         }
         s << "]";
     }
+    // buildings win over trees: trees whose regrown crown was kept off the scanned walls the crown met (crowns.json walls)
+    s << ",\n  \"wallClearance\": " << json::num(P.growth.wallClearance) << ",\n  \"keptOffWalls\": {\"trees\": " << r.clippedAtWalls << ", \"attractorsClipped\": " << r.attractorsClipped
+      << ", \"attractorsAtClippedCrowns\": " << r.attractorsAtClippedCrowns << ", \"perTree\": [";
+    {
+        size_t k = 0;
+        for (const auto& t : r.trees) {
+            if (!t.wallsClipped) continue;
+            s << (k++ ? ", " : "") << "{\"crownId\": " << t.crownId << ", \"walls\": " << t.wallsClipped << ", \"attractorsClipped\": " << t.attractorsClipped << ", \"attractorsTotal\": " << t.attractorsTotal
+              << ", \"surfaceSamplesClipped\": " << t.surfaceClipped << (t.keptOffWallsShort.empty() ? std::string() : ", \"short\": " + json::str(t.keptOffWallsShort)) << "}";
+        }
+    }
+    s << "]}";
     s << ",\n  \"perTree\": [";
     for (size_t i = 0; i < r.trees.size(); ++i) {
         const auto& t = r.trees[i];

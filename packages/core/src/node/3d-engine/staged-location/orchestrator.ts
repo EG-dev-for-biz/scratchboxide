@@ -880,6 +880,11 @@ export function remeshNote(stats: Record<string, any>, vertexText: string, strip
             const dropped = sum('dropped'), shortened = sum('shortened');
             if (dropped.count || shortened.count) parts.push(`${dropped.count ? `${dropped.count} closing walls (${Math.round(dropped.area)} m²) were not built` : ''}${dropped.count && shortened.count ? ' and ' : ''}${shortened.count ? `${shortened.count} were cut down (${Math.round(shortened.area)} m² off)` : ''} where the scan has the real wall behind them`);
         }
+        const guard = strip?.buildingGuard;
+        if (guard) {
+            const kept = Number(guard.keptAsBuilding?.count ?? 0), after = Number(guard.removedOnBuilding?.after?.onWalls ?? 0);
+            parts.push(`buildings win over trees: ${kept ? `${kept} scan triangles (${Math.round(Number(guard.keptAsBuilding?.areaM2 ?? 0))} m²) the tree cut would have taken lie on scanned walls and were kept as facade; ` : ''}${after === 0 ? 'no removed triangle lies on a scanned wall' : `${after} removed triangles still lie on scanned walls`}`);
+        }
     }
     if (vertexText) parts.push(vertexText);
     return parts.join('; ');

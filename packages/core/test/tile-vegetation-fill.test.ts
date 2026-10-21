@@ -295,6 +295,65 @@ describe('a skirt on a wall is kept off the real wall', () => {
         expect(B.strip.stats.fill.skirt.meanConfidence).toBeGreaterThan(0.2);
     });
 
+    it('buildings win over trees: the wall\'s scan triangles survive the strip unchanged, and no removed triangle lies on a wall', () => {
+        for (const o of [A, B]) {
+            const raw = readTileTriangles(new Uint8Array(fs.readFileSync(path.join(work, o === A ? 'scanned_wall' : 'hidden_wall', 'tile.glb'))));
+            const key = (P: Float32Array, t: number) => Array.from(P.subarray(t * 9, t * 9 + 9)).map(v => v.toFixed(2)).join(',');
+            const onWall = (P: Float32Array, t: number) => Math.abs(P[t * 9] - BUILDING.x0) < 0.01 && Math.abs(P[t * 9 + 3] - BUILDING.x0) < 0.01 && Math.abs(P[t * 9 + 6] - BUILDING.x0) < 0.01;
+            const before = new Set<string>();
+            for (let t = 0; t < raw.texture.length; t++) if (onWall(raw.positions, t)) before.add(key(raw.positions, t));
+            const after = new Set<string>();
+            for (const [name, ts] of o.byNode) {
+                if (!name.startsWith('tile_')) continue;
+                for (const t of ts) if (onWall(o.tris.positions, t)) after.add(key(o.tris.positions, t));
+            }
+            expect(before.size).toBeGreaterThan(100);
+            for (const k of before) expect(after.has(k)).toBe(true);
+            expect(after.size).toBe(before.size);
+            const g = o.strip.stats.buildingGuard;
+            expect(g.facadeGuardM).toBeGreaterThan(0);
+            expect(g.removedOnBuilding.after.onWalls).toBe(0);
+            // the crown pressed to the wall met it: the scanned wall is measured for plant
+            expect(g.crownsWithWalls).toBeGreaterThanOrEqual(1);
+            const crowns = JSON.parse(fs.readFileSync(o.strip.crownsJson, 'utf8')).crowns as any[];
+            const pressed = crowns.find(c => c.status === 'tree' && Math.hypot(c.stem[0] - PRESSED.x, c.stem[1] - PRESSED.z) < 2.5);
+            expect(pressed.walls.length).toBeGreaterThanOrEqual(1);
+            // facing the crown (towards -x), standing on the wall plane
+            expect(pressed.walls[0].normal[0]).toBeLessThan(-0.9);
+            expect(Math.abs(pressed.walls[0].point[0] - BUILDING.x0)).toBeLessThan(0.3);
+        }
+    });
+
+    it('buildings win over trees: the planted crown is kept off the wall', async () => {
+        const dir = path.join(work, 'scanned_wall');
+        const svc = new TileVegetationService({ workspaceRoot: dir, repoRoot: REPO });
+        const crownsPath = A.strip.crownsJson;
+        const penetration = (glb: Buffer) => {
+            const t = readTileTriangles(new Uint8Array(glb));
+            let inside = 0, deepest = 0, pressedTris = 0;
+            for (let i = 0; i < t.texture.length; i++) {
+                const P = t.positions, cx = (P[i * 9] + P[i * 9 + 3] + P[i * 9 + 6]) / 3, cy = (P[i * 9 + 1] + P[i * 9 + 4] + P[i * 9 + 7]) / 3, cz = (P[i * 9 + 2] + P[i * 9 + 5] + P[i * 9 + 8]) / 3;
+                if (Math.hypot(cx - PRESSED.x, cz - PRESSED.z) > PRESSED.radius + 2) continue;
+                pressedTris++;
+                if (cx > BUILDING.x0 && cz > BUILDING.z0 && cz < BUILDING.z1 && cy > 0 && cy < BUILDING.height) { inside++; deepest = Math.max(deepest, cx - BUILDING.x0); }
+            }
+            return { share: inside / Math.max(1, pressedTris), deepest, pressedTris };
+        };
+        const clipped = await svc.plant({ crownsPath, triangleBudget: 60000, seed: 'abc', params: { lod: 0 } });
+        const whole = await svc.plant({ crownsPath, triangleBudget: 60000, seed: 'abc', params: { lod: 0, wallClearance: 0 } });
+        const pc = penetration(fs.readFileSync(clipped.treesGlb)), pw = penetration(fs.readFileSync(whole.treesGlb));
+        console.log(`[fill-test] crown against the wall: inside the building ${(pc.share * 100).toFixed(2)}% of its triangles (deepest ${pc.deepest.toFixed(2)} m) clipped, ${(pw.share * 100).toFixed(2)}% (deepest ${pw.deepest.toFixed(2)} m) unclipped`);
+        expect(pc.pressedTris).toBeGreaterThan(100);
+        expect(clipped.stats.keptOffWalls.trees).toBeGreaterThanOrEqual(1);
+        expect(clipped.stats.keptOffWalls.attractorsClipped).toBeGreaterThan(0);
+        expect(whole.stats.keptOffWalls.trees).toBe(0);
+        // measured (species library): at the default 1 m clearance none of its triangles inside; at 0.5 m 0.12 % (deepest
+        // 0.32 m, a leaf cluster's reach past its attractors); unclipped 0.4 %, deepest 0.52 m
+        expect(pc.share).toBeLessThan(0.001);
+        expect(pc.deepest).toBeLessThan(0.3);
+        expect(pw.share).toBeGreaterThan(pc.share);
+    }, 600_000);
+
     it('with the wall test off every skirt is built whole', async () => {
         const whole = await run(work, 'scanned_wall_whole', 3, { skirtDropBacked: 0 });
         const d = whole.strip.stats.skirtDecisions;
