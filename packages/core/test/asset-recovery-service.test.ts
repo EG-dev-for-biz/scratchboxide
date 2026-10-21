@@ -42,9 +42,13 @@ const settled = async (service: AssetRecoveryService, id: string) => {
 describe('layerNameKey', () => {
     it('is the same for one layer across runs and differs between layers and twins', () => {
         expect(layerNameKey('/models/wsp_l2_deadbeef.glb')).toBe(layerNameKey('/models/wsp_l2_c0ffee00.glb'));
-        expect(layerNameKey('/models/wsp_massing_deadbeef_tex.glb')).toBe('wsp_massing|_tex.glb');
+        // the same layer asked for with different words for the place (the query's slug differs)
+        expect(layerNameKey('/models/washington_square_arch_new_york_iso_l3a_8001dfec.glb')).toBe(layerNameKey('/models/washington_square_arch_washington_square_iso_l3a_3d3558f0.glb'));
+        expect(layerNameKey('/models/wsp_l2_tex_b5d2fd5b.glb')).toBe('l2_tex|.glb');
+        expect(layerNameKey('/models/wsp_l2_tex_b5d2fd5b.glb')).not.toBe(layerNameKey('/models/wsp_l3b_tex_7c99ed91.glb'));
+        expect(layerNameKey('/models/wsp_massing_deadbeef_tex.glb')).toBe('massing|_tex.glb');
         expect(layerNameKey('/models/wsp_massing_deadbeef_tex.glb')).not.toBe(layerNameKey('/models/wsp_massing_deadbeef.glb'));
-        expect(layerNameKey('/models/wsp_tiles_deadbeef.order.json')).toBe('wsp_tiles|.order.json');
+        expect(layerNameKey('/models/wsp_tiles_deadbeef.order.json')).toBe('tiles|.order.json');
         expect(layerNameKey('/models/plain.glb')).toBeUndefined();
     });
 });

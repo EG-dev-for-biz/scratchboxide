@@ -65,8 +65,10 @@ export interface AssetRecoveryOptions {
 }
 
 /**
- * The part of a published file name that is the same across runs: a staged file is <base>_<key8><rest> (the key is the
- * stage cache key's first 8 hex digits), so two files of the same layer from different runs share base and rest.
+ * The part of a published file name that names its layer: a staged file is <slug>_<layer>_<key8><rest> (the slug is
+ * the query's words, the key the stage cache key's first 8 hex digits), so two files of the same layer from different
+ * runs share layer and rest even when the runs were asked for with different words for the place. A textured twin
+ * keeps its "tex" token with the layer (l2_tex, massing_tex).
  */
 export function layerNameKey(servedPath: string): string | undefined {
     const name = path.posix.basename(servedPath);
@@ -74,7 +76,10 @@ export function layerNameKey(servedPath: string): string | undefined {
     const stem = name.slice(0, name.length - ext.length);
     const m = /^(.*)_([0-9a-f]{8})(.*)$/.exec(stem);
     if (!m) return undefined;
-    return `${m[1]}|${m[3]}${ext}`;
+    const tokens = m[1].split('_');
+    const last = tokens[tokens.length - 1];
+    const layer = last === 'tex' && tokens.length >= 2 ? `${tokens[tokens.length - 2]}_tex` : last;
+    return `${layer}|${m[3]}${ext}`;
 }
 
 export class AssetRecoveryService {
