@@ -21,13 +21,14 @@ import { delightLinearPlane, linearToSrgb255, PHOTOGRAMMETRIC_DELIGHT, SRGB8_TO_
 const rung = (name: (typeof TEXTURE_LADDER_RUNGS)[number]) => TEXTURE_LADDER_RUNGS.indexOf(name);
 
 /** Legend indices (TexelSource order); further entries are appended by the inference steps. */
-export const SRC = { tileOrtho: 0, nearestFill: 1, facadeMedian: 2 } as const;
+export const SRC = { tileOrtho: 0, nearestFill: 1, facadeMedian: 2, repeatFill: 3 } as const;
 
 export function baseLegend(): TexelSource[] {
     return [
         { source: 'tile-ortho', label: 'as-scanned', method: 'the photo tile rendered orthographically through a thin slab about the face (the outermost surface facing out of it); on a wall the slab about its plane hardly sees, through the same slab about the depth where the tile\'s photo surface facing it lies, up to 4 m off (the face\'s textureOffsetM)', rung: rung('tile photo transfer'), weight: 0.5 },
         { source: 'nearest-observed', label: 'filled', method: 'a texel the tile does not cover on this face, given the colour of the nearest texel it does', rung: rung('measured palette colour'), weight: 0.15 },
-        { source: 'facade-median', label: 'filled', method: "a face the tile does not see at all (against a neighbour, inside the block), given the building's median facade colour", rung: rung('measured palette colour'), weight: 0.05 }
+        { source: 'facade-median', label: 'filled', method: "a face the tile does not see at all (against a neighbour, inside the block), given the building's median facade colour", rung: rung('measured palette colour'), weight: 0.05 },
+        { source: 'texture-repeat-inference', label: 'inferred-repeat', method: 'same-plane texels resampled from the real tile-ortho texels at a detected, gated horizontal and/or vertical repeat pitch (texture-repeat.ts; row and/or column trimmed-mean lightness profile, lagged NCC >= its NCC_GATE, phase amplitude >= K_SIGMA standard errors of the noise over >= MIN_REPEATS repeats), before the nearest-texel/facade-median smear', rung: rung('repeated same-plane fill'), weight: 0.3 }
     ];
 }
 

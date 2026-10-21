@@ -36,8 +36,12 @@ export type TexelSource =
     | 'street-view-projection' | 'tile-photo-transfer' | 'tile-photo-enhanced' | 'measured-palette' | 'generated-pbr'
     | (string & {});
 
-/** 'photo-inferred' for anything derived from a real photo; 'generated' only for texels with no real data. */
-export type TexelLabel = 'photo-inferred' | 'generated' | (string & {});
+/**
+ * 'photo-inferred' for anything derived from a real photo; 'generated' only for texels with no real data; 'inferred-repeat'
+ * (texture-repeat.ts) for a texel copied from real same-plane texels at a gated repeat's matching phase: not a direct
+ * observation of that spot ('photo-inferred' would overclaim), and not invented ('generated' would underclaim).
+ */
+export type TexelLabel = 'photo-inferred' | 'generated' | 'inferred-repeat' | (string & {});
 
 export interface TexelProvenance {
     source: TexelSource;
@@ -180,11 +184,19 @@ export interface FacadeMaterialRecord {
 }
 
 
-/** Degrade ladder of the texture pass (design section 8). Index = rung; lower is better. */
+/**
+ * Degrade ladder of the texture pass (design section 8). Index = rung; lower is better.
+ *
+ * 'repeated same-plane fill' (rung 3, docs/processes/texture_repeat_inference.md, texture-repeat.ts): where a facade
+ * plane's real texels (rungs 0-2) show a gated horizontal and/or vertical repeat, the rest of that plane is resampled
+ * from them at the detected pitch instead of dropping straight to the flat palette. It sits strictly between the
+ * real-photo rungs and the flat-palette rung: never above a real photo rung, never trusted as a donor for another fill.
+ */
 export const TEXTURE_LADDER_RUNGS = [
     'street-view multi-view blend',
     'street-view single view',
     'tile photo transfer',
+    'repeated same-plane fill',
     'measured palette colour',
     'generated tileable PBR',
     'clay'

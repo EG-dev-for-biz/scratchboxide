@@ -1,0 +1,180 @@
+# Process: Texture pass — a repeated same-plane fill rung between the real-photo rungs and the flat palette
+
+> **Recorded:** 2026-10-21 (section 8 added 2026-10-21, branch `texture-repeat-pipeline-e`)
+> **Status:** Verified (unit level and live on both texture-pass.ts and pipeline E; the rung fires live on pipeline E at 488 Broadway — see section 8)
+> **Tags:** `operate-scratchbox`, `staged-build`, `texture-pass`, `pipeline-e`, `degrade-ladder`, `provenance`, `jefferson-market`, `haughwout`, `cast-iron-facade`
+> **Target Domain:** Real-world 3D locations (staged-location texture pass, `packages/core/src/node/3d-engine/staged-location/texture-pass.ts`, and pipeline E's own ladder, `packages/core/src/node/3d-engine/staged-location/pipeline-e/face-textures.ts`)
+
+---
+
+## 1. Session Context
+
+* **What prompted this session:** the staged-location texture pass (`texture-pass.ts`) degrades straight from the real-photo rungs (Street View projection, tile-photo transfer) to a flat measured-palette colour whenever a texel has no real coverage. The user's standing rule ("Texture inference order 2026-10-18") says unobserved texture should be filled from real data first — measured symmetry, then repetition, then patch synthesis, with generative fill only as a last, strictly gated rung. That order already exists for geometry (the relief-averaging stage, `pipeline-e/relief.ts`), but had never been built for colour/albedo in `texture-pass.ts`'s ladder. This session adds the repetition rung.
+* **Instance used:** a dedicated worktree instance, web port `3200`, API port `3201`, tools port `3202` (a now-removed `scratchbox-texture-repeat-inference` entry in `.claude/launch.json`), with `SCRATCHBOX_STAGED_PIPELINE=d` set for part of the session (see section 4 on why).
+* **Scope tested:** `detectPlaneRepeats`/`repeatFill` in the new `packages/core/src/node/3d-engine/staged-location/texture-repeat.ts`, wired into `textureLayer()` in `texture-pass.ts` as ladder rung 3; the renumbered `TEXTURE_LADDER_RUNGS` (7 entries) and its downstream consumers (viewport legend colours, orchestrator summaries, masked-fill diagnostics).
+
+---
+
+## 2. What was built
+
+* **New rung, `'repeated same-plane fill'`,** inserted at index 3 of `TEXTURE_LADDER_RUNGS` (`packages/core/src/common/spatial/texture-pass-contracts.ts`), between `'tile photo transfer'` (2) and `'measured palette colour'` (now 4). `TEXTURE_RUNG_CLAY` and every dynamic `.indexOf(...)`/`.length` consumer renumber themselves automatically; the two literal constants in `texture-pass.ts` (`RUNG_PALETTE`, `RUNG_GENERATED_PBR`) are now derived with `TEXTURE_LADDER_RUNGS.indexOf(...)` instead of hardcoded, plus the new `RUNG_REPEATED`.
+* **Detection (`detectPlaneRepeats`, `texture-repeat.ts`):** for each UV map (one chart or island = one plane), builds a trimmed-mean Lab-lightness profile per atlas row (vertical/"band" axis) and per column (horizontal/"bay" axis), using only *real* texels — rung 0-2 (Street View or tile-photo transfer), never a texel this same rung or the palette/clay rungs produced, so a fill is never built on top of another fill. For each axis it searches candidate pitches between 0.3 m and 8 m, keeping the one with the highest lagged normalized cross-correlation (NCC), and gates it on three thresholds that mirror `pipeline-e/relief.ts`'s measured-feature gate:
+  - **`NCC_GATE = 0.55`** — the lagged correlation must clear this (relief.ts has no direct analogue; this is this file's "it correlates" gate).
+  - **`MIN_REPEATS = 3`** — at least 3 independent repeats of the candidate pitch must fit in the real-covered run (mirrors relief.ts's `MIN_BLOCKS = 6`, halved because here one "block" is already a full pitch, not a sub-sample of one).
+  - **`K_SIGMA = 3`** — the phase-folded amplitude (max − min of the trimmed per-phase means) must clear `K_SIGMA` standard errors of the profile's noise floor, the *same* K and the same trimmed-mean/standard-error machinery `relief.ts` uses (`RELIEF_PARAMS.trim = 0.2`, matched here as `TRIM = 0.2`) to decide a measured feature is real and not noise.
+  - Below `MIN_BIN_SAMPLES = 4` real texels, a row/column bin is a gap, not a zero; below `MIN_BIN_SAMPLES * MIN_REPEATS` valid bins total, the axis is refused outright (too little real data to read a profile at all).
+  Any axis that fails any gate is refused with a one-line, human-readable reason (`AxisRefusal`), exactly like `relief.ts`'s own degrade-with-a-reason pattern.
+* **Fill (`repeatFill`):** for a plane with at least one gated axis, every texel the real rungs left uncovered (and that the palette/clay rungs would otherwise take) is filled with the **trimmed mean, in linear RGB, of the real texels at the same phase** (`(x − x0) mod pitchPx` and/or `(y − y0) mod pitchPx`), searched up to `DONOR_SEARCH_PERIODS = 8` periods either way. A trimmed mean across every real repeat at that phase was chosen over a single nearest-phase sample so one occluded or noisy repeat cannot dominate, and over averaging every phase (which would blur the pattern away) because only the matching phase is averaged. A texel with fewer than `MIN_DONORS = 2` real samples at its phase is left uncovered, exactly as before (it falls through to the palette rung).
+* **Provenance label:** `'inferred-repeat'`, a new value on the already-open `TexelLabel` type (`'photo-inferred' | 'generated' | 'inferred-repeat' | (string & {})`). Neither existing label fits: `'photo-inferred'` would overclaim (that exact spot was never observed), `'generated'` would underclaim (nothing here is invented — every value is copied from a real, same-plane photo-derived texel at a position the gated pitch says should match). Source `'texture-repeat-inference'`. Each filled texel carries a confidence derived from the axis's NCC margin above `NCC_GATE` and the donor count, capped at 0.85 (never as confident as a direct observation).
+* **Wiring:** `textureLayer()` in `texture-pass.ts` now runs `detectPlaneRepeats` + `repeatFill` right after the tile-photo-transfer rung (D) and its optional model enhancement, and before the measured-palette fill (rung 4, the old rung 3). A degradation entry (`stage: 'repeat-fill', reasonCode: 'repeat_not_detected'`) is recorded per plane that was gated out, carrying the real per-axis reasons, exactly like every other rung's degrade path.
+* **Documentation kept in step:** the ladder's doc comment in `texture-pass-contracts.ts` and the stage-by-stage comment at the top of `texture-pass.ts` both describe the new rung at its real position; `provenanceShading.ts`'s `TEXTURE_RUNG_COLORS` (Okabe-Ito, colour-vision-deficiency-safe) gained a 7th colour (`#F0E442`, Okabe-Ito yellow) at the same index.
+
+---
+
+## 3. What was tested & what worked (Verified)
+
+* **Unit tests (`packages/core/test/texture-repeat-inference.test.ts`, 7 tests, all passing):**
+  - A synthetic 24×60-texel plane with a true 10-row (1 m) square-wave band pattern and five rows of texels deliberately dropped (simulating photos that never covered them): `detectPlaneRepeats` finds the row pitch exactly (10 px), with NCC ≥ `NCC_GATE` and repeats ≥ `MIN_REPEATS`; `repeatFill` fills every dropped texel within 2/255 of the true banded value, labelled `'inferred-repeat'`, rung = the new index, confidence > 0, and the layer's coverage sums to 1 for the dropped texels.
+  - Never overwrites texels the real rungs already coloured (idempotent on a fully-covered plane).
+  - Never uses an already-repeat-filled texel as a donor for a neighbour (`MAX_DONOR_RUNG = 2` enforced), so a fill can never compound on another fill.
+  - A synthetic, pseudo-random (non-periodic) 24×60 plane — the Jefferson Market cautionary case, reproduced synthetically — refuses on every axis with a stated reason, and `repeatFill` writes nothing: the degradation `reasonCode: 'repeat_not_detected'` fires and the plane falls straight to the palette rung, exactly as the ladder did before this change.
+  - Too few real samples per row (below `MIN_BIN_SAMPLES`) refuses rather than reading a profile from noise.
+  - Gate-constant sanity check: `K_SIGMA === 3` (matches `relief.ts`), `MIN_REPEATS >= 3`, `NCC_GATE > 0.5`, `MIN_DONORS >= 2`, `MAX_DONOR_RUNG === 2`.
+  - sRGB↔linear round-trip stays within 1/255 (the averaging machinery the fill depends on).
+* **Existing ladder tests updated and passing** (`staged-texture-pass-ladder.test.ts`, `texture-pass-contracts.test.ts`, `texture-pass-fusion-sigma.test.ts`, `staged-texture-viewport.test.ts`, `staged-texture-viewport-render.test.ts`, `staged-texture-orchestrator.test.ts`): the rung-index literals that shifted (palette 3→4, generated-PBR 4→5) were updated in place; tests that already used named constants (`TEXTURE_RUNG_CLAY`, `TEXTURE_LADDER_RUNGS.indexOf(...)`) needed no change and renumbered themselves correctly.
+* **`npm run typecheck`** (packages/core, cli, desktop-app, electron tsconfig): clean for every package this change touches. (desktop-app/electron reports pre-existing `Cannot find module 'electron'` errors unrelated to this change — present identically on origin/main in this worktree, not introduced here.)
+* **`npm run lint` / `npm run lint:primitives`:** clean (`lint:primitives` passes; `eslint` on every changed file reports nothing).
+* **Live, in the app, isolated single-building build (cast-iron SoHo facade, 72-76 Greene Street):** with `SCRATCHBOX_STAGED_PIPELINE=d` (pipeline E off, forcing the legacy fit+evidence+`texture-pass.ts` path — see note below), the build committed "Real textures" and "Real textures of later layers" through the real `textureLayer()` path. The published layer (`l2`) carries `rungShares` of length 7 (`[0, 0, 0.8095, 0, 0, 0, 0.1905]`): 80.95% tile-photo-transfer, 19.05% clay, **0% repeated-fill**. This building had no Street View coverage at all ("no Google Street View panorama looks at any face of the structure") and its scan-fitted rebuild failed its own gates ("fit→scan rms 12.7 cm > 6.0 cm"), so its UV atlas is island-unwrapped rather than chart-planar — my row/column axes are only meaningful on a fitted planar chart, so the gate correctly found nothing trustworthy to fill rather than reading garbage axes on an island atlas. This is the honest outcome, not a bug: it proves the wiring runs end-to-end on real production data without crashing and refuses rather than fabricates when the plane isn't the kind of surface the detector can trust. Evidence: `test-results/screenshots/texture_repeat_inference/72_76_greene_street_cast_iron_facade_textured.jpg` and `.../72_76_greene_street_staged_run.json` (full API response).
+* **Live, in the app, isolated single-building build (Jefferson Market Library, the stated cautionary case):** same configuration. "Facade grammar degraded" with explicit plausibility warnings (storey heights and opening sizes outside physical bounds — exactly the kind of irregular Gothic facade the grammar and this rung must both refuse rather than impose a repeat on). The published layer's `rungShares`: `[0, 0, 0.6688, 0, 0, 0, 0.3312]` — **0% repeated-fill**, 66.88% tile-photo-transfer, 33.12% clay. Confirms, on the actual named cautionary building, that the new rung does not fire where the facade is irregular. Evidence: `test-results/screenshots/texture_repeat_inference/jefferson_market_library_irregular_facade_textured.jpg` and `.../jefferson_market_staged_run.json`.
+
+---
+
+## 4. What was not fully reached
+
+* **A live case where the new rung actually fires (> 0% of a layer) was not found within this session.** Reaching it needs a confluence this session's two live buildings didn't have: a structure whose scan-fitted rebuild *passes* its gates (so the UV atlas uses a fitted, axis-aligned planar chart, which is what makes "row = height, column = width" a meaningful assumption) *and* has Street View or tile-photo coverage over only part of a genuinely periodic plane. Both buildings tried here failed the fit gate outright (common for ornate or small footprints — see the exact gate numbers above) and fell back to the island-unwrapped remeshed scan, which my axis assumption is not built for (and correctly does not try to use, since islands are not packed with a stable real-world row/column direction). The unit tests cover the firing case rigorously on a synthetic chart-plane atlas (section 3); a live firing case is flagged below as a follow-up.
+* **Only an isolated, non-"pipeline E" build reaches `texture-pass.ts` for a single structure.** The orchestrator (`packages/core/src/node/3d-engine/staged-location/orchestrator.ts`) runs the grammar-based "pipeline E" massing/relief path by default for any isolated structure with a vector footprint (`stagedPipelineE() && request.isolate`); its own analogous texture step is `pipeline-e/face-textures.ts` + `pipeline-e/massing-glb.ts` (tile-ortho + nearest-fill + facade-median), not `texture-pass.ts`. This session's first live attempt (no `SCRATCHBOX_STAGED_PIPELINE` override) confirmed this: it ran pipeline E's grammar/relief stages for ~5 minutes and never touched `texture-pass.ts` at all. Setting `SCRATCHBOX_STAGED_PIPELINE=d` for the rest of the session forced the legacy path so the new rung's wiring could be exercised live.
+
+---
+
+## 5. Pipeline E gap (by design, not fixed here)
+
+`pipeline-e/face-textures.ts`'s own, simpler ladder (`tile-ortho` → `nearest-observed` → `facade-median`, see `SRC` in that file) has no repetition-based fill either, and today's default build path for an isolated structure with a vector footprint goes through it, not `texture-pass.ts`. This file was in scope to edit (it is not one of `streetview-value`'s owned files), but wiring a periodicity-based fill into it would mean touching its tightly-coupled caller, `pipeline-e/orchestrator.ts`, which another agent (branch `streetview-value`) owns for this work cycle. Per this session's scope, that file was left untouched; the gap is flagged here as a named follow-up rather than silently left unmentioned. A future session should either port `detectPlaneRepeats`/`repeatFill` (the same gates, same statistics) to operate on `face-textures.ts`'s simpler per-face texture buffers, or confirm with whoever owns `pipeline-e/orchestrator.ts` next that this is in scope before touching it.
+
+---
+
+## 6. Candidate Tool/Service Ideas
+
+* **A staged-build launch override for the legacy (non-pipeline-E) path from the chat UI, not just an env var.** This session needed `SCRATCHBOX_STAGED_PIPELINE=d` set on the whole dev-server process to reach `texture-pass.ts` for an isolated structure at all; there's no way to ask for it per-request from the chat. A per-request flag (or a chat-visible toggle) would make this kind of ladder-rung verification much faster to set up without restarting the server.
+* **A `staged-runs/:id` summary endpoint that surfaces per-plane `texture-repeat` degradations directly**, rather than only the aggregate `TexturePassRecord.degradations` (which isn't published to `stagedBuild` at all — only `rungShares`/`provenance` make it to the client). Confirming *why* a specific plane's repeat detection refused currently requires reading server stdout or re-running the pass with instrumentation; a structured per-layer degradation list in the published artifact would make this kind of live audit much quicker.
+
+---
+
+## 7. Reproduction Steps
+
+1. `cd .claude/worktrees/texture-repeat-inference` (branch `texture-repeat-inference`).
+2. Add a `.claude/launch.json` entry on free ports with `SCRATCHBOX_STAGED_PIPELINE=d` in its `runtimeArgs` (forces the legacy fit+evidence+`texture-pass.ts` path for isolated structures instead of pipeline E).
+3. `preview_start` that entry, open the token URL.
+4. Prompt: "Stage the isolated cast-iron facade at 72-76 Greene Street, SoHo, New York in 3D with real textures from Street View and the tile photos." (or Jefferson Market Library, Greenwich Village, for the refusal case).
+5. Wait for "Real textures committed"; fetch `GET /gemini/staged-runs/<runId>` with header `x-scratchbox-token: <token>`, read `run.artifact.data.stagedBuild.layers[].textured.rungShares` (index 3 is the new rung) and `.provenance`.
+6. Remove the launch entry and any `secrets.json` symlink when done.
+
+---
+
+## 8. Follow-up session (2026-10-21, branch `texture-repeat-pipeline-e`): ported onto pipeline E, and a live-firing case found
+
+This session closed the two gaps section 4-5 left open: pipeline E (the actual default build path for an isolated
+structure, `request.isolate` with a vector footprint) had no repetition rung at all in its own, simpler texture ladder,
+and no live case had yet been found where the rung actually fires on real data (>0% of a layer).
+
+### 8.1 The port onto pipeline E's ladder
+
+`packages/core/src/node/3d-engine/staged-location/pipeline-e/face-texture-repeat.ts` is new: it wraps one pipeline-E
+`FaceTexture` (face-textures.ts's `textureFromOrtho` output - one face's own axis-aligned ortho render, width x height,
+never an atlas island) as a degenerate single-map `UvAtlas` + `BakedTexturePlanes`, so `detectPlaneRepeats`/`repeatFill`
+(`texture-repeat.ts`, section 2's gates: `NCC_GATE`, `MIN_REPEATS`, `K_SIGMA`, trimmed-mean) run completely unchanged -
+reused, not reimplemented. `repeatFillFace(t, pixelM)` is called from `plainTextures()`
+(`pipeline-e/pipeline-e.ts`), inserted exactly between `textureFromOrtho` (the real tile-ortho texels) and
+`fillNearest`/the facade-median flattening - the same trust position texture-pass.ts's ladder uses. A new `SRC.repeatFill`
+(index 3) and a fourth `baseLegend()` entry (`source: 'texture-repeat-inference'`, `label: 'inferred-repeat'`,
+`rung: TEXTURE_LADDER_RUNGS.indexOf('repeated same-plane fill')`) carry it through `inference.ts`'s legend, downstream
+`inferenceLegend()` entries renumbering themselves automatically (nothing hardcodes legend indices; grepped and
+confirmed).
+
+**Why a pipeline-E `FaceTexture` turned out to be a better fit than texture-pass.ts's `UvAtlas` for this rung:**
+texture-pass.ts's atlas is a scan-fitted rebuild's UV map, which is island-unwrapped whenever the fit gate fails (the
+"Greene Street" case, section 3) - exactly the common case for ordinary buildings, since the fit gate is strict. A
+pipeline-E `FaceTexture` is never unwrapped at all: it is rendered straight off one face's own (s, t) frame by the
+native massing tool, so "row = one direction along the face, column = the other" is always a meaningful axis, whether
+or not the structure's scan-fit would have passed. This sidesteps the island-atlas blocker entirely rather than fixing
+it.
+
+**Compatibility with the rest of `inference.ts` (feature guard, grammar, relief, Street View colour):** a repeat-filled
+texel is written with `SRC.repeatFill`, never `SRC.tileOrtho`, so it is automatically excluded from every place
+`inference.ts` already gates on `tex.source[i] === SRC.tileOrtho` as "measured" - the facade grammar's `clean` set
+(line ~436), the bay-average and Street-View colour-pairing `use` masks (lines ~547, ~626) - so a repeat-fill can never
+be read back as ground truth by those steps, matching the existing feature-guard's own standard (never let an inferred
+texel contradict or stand in for a measured one). One surgical compatibility fix was needed: the occluder-mask step
+(line ~424) previously masked *any* non-tile-ortho texel as "an occluder took this surface" and routed it to
+other-facade copy, bay-average or Nano Banana inpainting; left unchanged, that would have silently thrown away this
+rung's fill the moment `inference.ts` ran (a few seconds after `plainTextures()` produced it) and overwritten it with a
+lower-trust fallback. The condition now also excludes `SRC.repeatFill`, so a gated repeat-fill is trusted enough not to
+be re-masked, while staying excluded from `clean` (never promoted to "measured"). No other call site needed a change.
+
+### 8.2 The live-firing case: 488 Broadway (the Haughwout Building), pipeline E
+
+Live, in the app, isolated single-building build, same reproduction steps as section 7 but with `SCRATCHBOX_STAGED_PIPELINE`
+left unset (pipeline E, the default) instead of forced to `d`:
+
+* Prompt: "Stage the isolated cast-iron facade at the Haughwout Building, 488 Broadway, SoHo, New York in 3D with real
+  textures from Street View and the tile photos."
+* **The massing passed its fit gate** (unlike 72-76 Greene Street and Jefferson Market on the legacy path): pipeline E's
+  own vector-massing + native-tool remesh succeeded in 0.9-4.9 s, producing `l2` (the `plainTextures()` output this
+  session's rung runs inside), then the slower `l2g` (grammar) and `l2r` (relief) refinement layers.
+* **The new rung fired, nonzero, on all three layers:**
+  - `l2` (remesh, `plainTextures()`'s own output): `rungShares = [0, 0, 0.6151, 0.0773, 0.3076, 0, 0]` - index 3
+    (`'repeated same-plane fill'`) is **7.73%** of this layer's texels.
+  - `l2g` (grammar) and `l2r` (relief): `rungShares[3] = 0.0415` (**4.15%**) each - the fill survives `inference.ts`'s
+    occluder-mask step (section 8.1's compatibility fix) and is still present, unpromoted, after the facade grammar and
+    relief stages run.
+  - Directly inspecting `l2r`'s published albedo/confidence texture pages (extracted from the GLB) confirms the
+    `rungShares` number against the raw per-texel data: 54,606 of 1,315,005 produced texels carry rung index 3 (4.15%,
+    matching `rungShares[3]` exactly). Highlighting those texels in magenta on the albedo page shows them sitting at the
+    top of the main Broadway facade (the upper storeys/roofline the tile ortho's thin slab does not reach) and across a
+    whole side face the tile barely covers at all - both filled from the clearly periodic repeating cast-iron arch
+    pattern the tile *did* capture lower on the same wall, not invented.
+  - Evidence: `test-results/screenshots/texture_repeat_pipeline_e/haughwout_488_broadway_pipeline_e_repeatfill_highlighted.png`
+    (magenta = this rung's texels), `..._albedo.png` (the plain page for comparison), and
+    `..._staged_run.json` (the full `GET /gemini/staged-runs/<id>` response with the `rungShares`/`provenance` above).
+
+### 8.3 texture-pass.ts on the same building: still correctly refuses (no regression)
+
+The same building, same prompt, with `SCRATCHBOX_STAGED_PIPELINE=d` (forcing the legacy texture-pass.ts path this
+session did not touch): the massing's fit gate failed again (`fit degraded`, same mechanism as section 3's two
+buildings), so the ladder ran on the island-unwrapped scan rebuild. `rungShares[3] = 0` on both `l2` and `l2g`
+(`rungShares = [0, 0, 0.9204, 0, 0, 0, 0.0796]` and `[0, 0, 0.9162, 0, 0, 0, 0.0838]`) - the rung correctly found
+nothing it could trust to fill on this atlas shape, exactly as on 72-76 Greene Street and Jefferson Market. This
+session made no change to `texture-repeat.ts` or `texture-pass.ts`, so this is confirmation of no regression, not new
+work; evidence: `test-results/screenshots/texture_repeat_pipeline_e/haughwout_488_broadway_texture_pass_d_staged_run.json`.
+A live-firing case on texture-pass.ts itself still needs a structure whose scan-fit passes (section 4's open follow-up);
+none of the three cast-iron SoHo buildings tried across both sessions (Greene Street, Jefferson Market, Haughwout) has
+had one.
+
+### 8.4 Tests and checks
+
+New: `packages/core/test/pipeline-e-face-texture-repeat.test.ts` (4 tests, synthetic `FaceTexture`s, no network): fills
+a genuinely periodic face's dropped rows labelled `SRC.repeatFill`, matching the expected texel count exactly; refuses
+on a synthetic non-periodic face (the Jefferson Market shape, reproduced as a `FaceTexture`) with a
+`repeat_not_detected` degradation and leaves the gap open; never touches an already-covered texel (idempotent); and
+`RUNG_REPEATED` is derived from (never hardcoded against) `TEXTURE_LADDER_RUNGS`. All pass.
+
+Existing tests: every pipeline-E test file (`staged-pipeline-e*.test.ts`, `pipeline-e-face-textures-delight.test.ts`,
+`street-view-texels.test.ts`) and every texture-pass ladder test from section 3 (15 files, 121 tests total) still pass
+unchanged - the legend-index renumbering this session's `baseLegend()` change causes is picked up automatically by
+every call site (`legend.length`, `.indexOf(...)`, `.findIndex(...)`; grepped, no hardcoded legend indices found).
+`npm run typecheck` (all four tsconfigs) and `npm run lint` / `lint:primitives` are clean.
+
+### 8.5 Merge decision
+
+Both halves of the stated bar are met: a genuine live-firing case on pipeline E (section 8.2, with screenshots and
+`rungShares`), and texture-pass.ts still refusing exactly where it refused before (section 8.3, no regression). Branch
+`texture-repeat-pipeline-e` was fast-forward merged into `main` on this basis.

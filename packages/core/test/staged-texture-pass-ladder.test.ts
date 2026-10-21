@@ -104,16 +104,17 @@ describe('texture pass ladder (one layer)', () => {
         expect(out.bundle.provenance.find(p => p.coverage > 0.5)!.source).toBe('tile-photo-transfer');
     });
 
-    it('no Street View, no tile: the flat measured palette colour (rung 3); generated PBR is recorded as not available', async () => {
+    it('no Street View, no tile: the flat measured palette colour (rung 4); generated PBR is recorded as not available', async () => {
         const c = clayFacade();
         const out = await textureLayer({ layerKey: 'l3b', clayGlb: c.glb, surfaces: c.surfaces }, sources({ views: [], tile: undefined, tileUnavailable: 'tile fetch failed (HTTP 503)' }));
         checkTwin(out.glb);
         checkLabels(out);
-        expect(out.rungShares[3]).toBeCloseTo(1, 6);
-        expect(out.rungShares[4]).toBe(0); // the generated rung is never used
+        expect(out.rungShares[3]).toBe(0); // no real texels exist to detect a repeat from
+        expect(out.rungShares[4]).toBeCloseTo(1, 6);
+        expect(out.rungShares[5]).toBe(0); // the generated rung is never used
         expect(out.degradations.find(x => x.reasonCode === 'no_tile_photo')!.reason).toContain('HTTP 503');
         const pbr = out.degradations.find(x => x.reasonCode === 'generated_pbr_not_available')!;
-        expect(pbr).toMatchObject({ fromRung: 4, toRung: 3 });
+        expect(pbr).toMatchObject({ fromRung: 5, toRung: 4 });
         expect(pbr.texelShare).toBeCloseTo(1, 6);
         expect(pbr.reason).toMatch(/pbr_synthesize_material is not used/);
         // the colour is the measured palette's top colour of the face it looks toward 
@@ -122,7 +123,7 @@ describe('texture pass ladder (one layer)', () => {
         expect(p.coverage).toBeCloseTo(1, 6);
     });
 
-    it('no source at all: clay (rung 5), labelled clay, never invented', async () => {
+    it('no source at all: clay (the floor rung), labelled clay, never invented', async () => {
         const c = clayFacade();
         const out = await textureLayer({ layerKey: 'l3b', clayGlb: c.glb, surfaces: c.surfaces }, sources({ views: [], tile: undefined, palette: [] }));
         checkTwin(out.glb);
