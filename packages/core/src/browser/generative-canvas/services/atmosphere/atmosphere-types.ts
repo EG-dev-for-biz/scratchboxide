@@ -232,6 +232,8 @@ export interface VolumetricGodRaysModule {
     setSunPosition: (pos: THREE.Vector3) => void;
     setColor: (color: number | string) => void;
     setIntensity: (intensity: number) => void;
+    /** Share of the sun a cloud currently leaves visible (0-1); dims and diffuses the rays, same signal as SunGlare. */
+    setCloudVisibility: (visibility: number) => void;
     dispose: () => void;
 }
 

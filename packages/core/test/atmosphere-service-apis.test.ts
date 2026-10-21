@@ -117,11 +117,37 @@ describe('Atmospheric Capabilities First-Class APIs', () => {
             expect(scene.children.includes(godRays.group)).toBe(false);
         });
 
+        it('a cloud in front of the sun dims and diffuses the rays, composed with (not replacing) the configured intensity', () => {
+            const scene = new THREE.Scene();
+            const godRays = new VolumetricGodRays(scene, new THREE.Vector3(50, 70, 50), false, { intensity: 0.4 });
+            expect(godRays.rayMaterial.uniforms.uIntensity.value).toBe(0.4);
+
+            // a thick cloud (SunGlare's cloudVisibility 0.2) dims the rays to a fifth of the configured intensity
+            godRays.setCloudVisibility(0.2);
+            expect(godRays.rayMaterial.uniforms.uIntensity.value).toBeCloseTo(0.08, 6);
+
+            // the cloud clears: back to the full configured intensity
+            godRays.setCloudVisibility(1);
+            expect(godRays.rayMaterial.uniforms.uIntensity.value).toBeCloseTo(0.4, 6);
+
+            // changing the configured intensity while a cloud still covers the sun keeps it dimmed by the same share
+            godRays.setCloudVisibility(0.5);
+            godRays.setIntensity(0.6);
+            expect(godRays.rayMaterial.uniforms.uIntensity.value).toBeCloseTo(0.3, 6);
+
+            // out of range visibility is clamped, never inverted or amplified
+            godRays.setCloudVisibility(-1);
+            expect(godRays.rayMaterial.uniforms.uIntensity.value).toBeCloseTo(0, 6);
+            godRays.setCloudVisibility(5);
+            expect(godRays.rayMaterial.uniforms.uIntensity.value).toBeCloseTo(0.6, 6);
+        });
+
         it('createVolumetricGodRays factory conforms to expected module interface', () => {
             const scene = new THREE.Scene();
             const mod = createVolumetricGodRays(scene, new THREE.Vector3(10, 20, 10), true);
             expect(mod.group).toBeDefined();
             mod.update(1.0, 0.016);
+            mod.setCloudVisibility(0.5);
             mod.dispose();
         });
     });
