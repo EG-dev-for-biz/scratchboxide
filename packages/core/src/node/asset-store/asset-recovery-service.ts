@@ -145,12 +145,16 @@ export class AssetRecoveryService {
         // 2. recipes, grouped so one lost run is rebuilt once
         const groups = new Map<string, { recipe: { id: string; kind: string; body: unknown }; items: RecoveryItem[] }>();
         // a staged file with no recipe of its own is rebuilt from the scene's place when the caller gives it
-        const fallback = opts.fallbackStaged && this.options.rebuildStaged
-            ? { recipe: { id: 'fallback:staged', kind: 'staged-location', body: { request: opts.fallbackStaged.request } }, items: [] as RecoveryItem[] }
-            : undefined;
+        // an isolated structure and its district are two runs: a file name with "_iso" came from the isolated one
+        const fallbackRequest = opts.fallbackStaged && this.options.rebuildStaged ? opts.fallbackStaged.request as Record<string, unknown> : undefined;
+        const fallbackGroup = (isolate: boolean) => ({
+            recipe: { id: `fallback:staged:${isolate ? 'isolated' : 'district'}`, kind: 'staged-location', body: { request: { ...fallbackRequest, isolate } } },
+            items: [] as RecoveryItem[]
+        });
+        const fallbacks = fallbackRequest ? { isolated: fallbackGroup(true), district: fallbackGroup(false) } : undefined;
         const withoutRecipe = (item: RecoveryItem, detail: string) => {
-            if (fallback && layerNameKey(item.path)) {
-                fallback.items.push(item);
+            if (fallbacks && layerNameKey(item.path)) {
+                (/_iso_/.test(path.posix.basename(item.path)) ? fallbacks.isolated : fallbacks.district).items.push(item);
                 return;
             }
             item.outcome = 'unrecoverable';
@@ -177,7 +181,9 @@ export class AssetRecoveryService {
             group.items.push(item);
             groups.set(recipe.id, group);
         }
-        if (fallback?.items.length) groups.set(fallback.recipe.id, fallback);
+        for (const group of fallbacks ? [fallbacks.isolated, fallbacks.district] : []) {
+            if (group.items.length) groups.set(group.recipe.id, group);
+        }
         let index = 0;
         for (const group of groups.values()) {
             if (signal.aborted) return;
@@ -198,7 +204,9 @@ export class AssetRecoveryService {
                 });
                 const produced = new Map<string, string>();
                 const urls = new Set<string>([...result.layers.map(l => l.url), ...(result.runId ? this.store.servedByRecipe(`staged:${result.runId}`).map(s => s.path) : [])]);
-                for (const url of urls) {
+                // the run's own files first; then files other runs published at the same place (a twin the background
+                // texture pass published after an earlier run ended), newest first
+                for (const url of [...urls, ...this.publishedAtSamePlace(request, result.runId)]) {
                     const key = layerNameKey(url);
                     if (key && !produced.has(key)) produced.set(key, url);
                 }
@@ -235,8 +243,48 @@ export class AssetRecoveryService {
         job.fraction = 1;
     }
 
+    /**
+     * Served paths of every staged run recorded at the same place as `request` (within 60 m; or the same query text when
+     * neither has coordinates), newest run first, excluding `runId`. Only paths whose bytes are present.
+     */
+    private publishedAtSamePlace(request: unknown, runId: string): string[] {
+        const want = placeOf(request);
+        const out: string[] = [];
+        for (const recipe of this.store.db.recipesOfKind('staged-location')) {
+            if (recipe.id === `staged:${runId}` || recipe.id.startsWith('fallback:')) continue;
+            const body = recipe.body as { request?: unknown; place?: unknown } | undefined;
+            const theirs = placeOf(body?.place) ?? placeOf(body?.request);
+            if (!samePlace(want, theirs)) continue;
+            for (const row of this.store.servedByRecipe(recipe.id)) {
+                if (this.store.lookup(row.path)) out.push(row.path);
+            }
+        }
+        return out;
+    }
+
     private forgetLater(id: string): void {
         const t = setTimeout(() => this.jobs.delete(id), this.options.keepFinishedMs ?? 10 * 60_000);
         (t as { unref?: () => void }).unref?.();
     }
+}
+
+interface PlaceKey { lat?: number; lng?: number; query?: string }
+
+function placeOf(value: unknown): PlaceKey | undefined {
+    if (!value || typeof value !== 'object') return undefined;
+    const v = value as { lat?: unknown; lng?: unknown; query?: unknown; place?: { lat?: unknown; lng?: unknown } };
+    const lat = Number(v.place?.lat ?? v.lat), lng = Number(v.place?.lng ?? v.lng);
+    const query = typeof v.query === 'string' ? v.query.trim().toLowerCase() : undefined;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || (lat === 0 && lng === 0)) return query ? { query } : undefined;
+    return { lat, lng, ...(query ? { query } : {}) };
+}
+
+function samePlace(a: PlaceKey | undefined, b: PlaceKey | undefined): boolean {
+    if (!a || !b) return false;
+    if (a.lat !== undefined && b.lat !== undefined && a.lng !== undefined && b.lng !== undefined) {
+        const dLat = (a.lat - b.lat) * 111_320;
+        const dLng = (a.lng - b.lng) * 111_320 * Math.cos((a.lat * Math.PI) / 180);
+        return Math.hypot(dLat, dLng) <= 60;
+    }
+    return !!a.query && a.query === b.query;
 }

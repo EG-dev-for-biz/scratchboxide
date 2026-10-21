@@ -161,4 +161,43 @@ describe('AssetRecoveryService', () => {
         expect(seen).toHaveLength(1);
         store.close();
     });
+
+    it('splits a fallback into the isolated structure and its district, and takes twins an earlier run published at the same place', async () => {
+        const store = new DurableAssetStore(path.join(HOME, 'home-e'));
+        const place = { lat: 40.73122, lng: -73.99709, formattedAddress: 'Washington Square Arch, New York' };
+        // an earlier rebuild at the same place: its background texture pass published the l3b twin after it ended
+        store.putRecipe({ id: 'staged:0f5545a7', kind: 'staged-location', body: { runId: '0f5545a7', request: { query: 'Washington Square Arch', isolate: true, trees: true }, place } });
+        store.putFile(writeFile(glbBytes(300, 5)), { servedPath: '/models/wsa_washington_square_iso_l3b_tex_7c99ed91.glb', origin: 'staged-location', recipeId: 'staged:0f5545a7' });
+        // a run somewhere else with the same layer name must never be taken
+        store.putRecipe({ id: 'staged:99999999', kind: 'staged-location', body: { runId: '99999999', request: { query: 'Shibuya', isolate: true, trees: true }, place: { lat: 35.6595, lng: 139.7005, formattedAddress: 'Shibuya' } } });
+        store.putFile(writeFile(glbBytes(300, 6)), { servedPath: '/models/shibuya_iso_l4_tex_11111111.glb', origin: 'staged-location', recipeId: 'staged:99999999' });
+
+        const runs: Array<{ isolate: boolean }> = [];
+        const rebuild: StagedRebuilder = async (req) => {
+            const r = req as { isolate: boolean };
+            runs.push({ isolate: r.isolate });
+            if (r.isolate) {
+                store.putFile(writeFile(glbBytes(500, 7)), { servedPath: '/models/wsa_washington_square_iso_l3b_cccccccc.glb', origin: 'staged-location', recipeId: 'staged:cccccccc' });
+                return { runId: 'cccccccc', layers: [{ url: '/models/wsa_washington_square_iso_l3b_cccccccc.glb' }] };
+            }
+            store.putFile(writeFile(glbBytes(900, 8)), { servedPath: '/models/wsa_washington_square_trees_dddddddd.glb', origin: 'staged-location', recipeId: 'staged:dddddddd' });
+            return { runId: 'dddddddd', layers: [{ url: '/models/wsa_washington_square_trees_dddddddd.glb' }] };
+        };
+        const service = new AssetRecoveryService(store, { workspaceRoot: HOME, rebuildStaged: rebuild });
+        const request = { query: 'Washington Square Arch, Washington Square N, New York', isolate: true, trees: true, place };
+        const job = await settled(service, service.start([
+            '/models/wsa_new_york_iso_l3b_8001dfec.glb', '/models/wsa_new_york_iso_l3b_tex_4bf1832d.glb',
+            '/models/wsa_new_york_iso_l4_tex_7af8a944.glb', '/models/wsa_washington_square_trees_df7ce2bb.glb'
+        ], { fallbackStaged: { request } }).id);
+        expect(runs).toEqual([{ isolate: true }, { isolate: false }]);
+        expect(job.items.map(i => [i.path.split('/').pop(), i.outcome])).toEqual([
+            ['wsa_new_york_iso_l3b_8001dfec.glb', 'rebuilt'],
+            ['wsa_new_york_iso_l3b_tex_4bf1832d.glb', 'rebuilt'],
+            ['wsa_new_york_iso_l4_tex_7af8a944.glb', 'failed'],
+            ['wsa_washington_square_trees_df7ce2bb.glb', 'rebuilt']
+        ]);
+        expect(fs.readFileSync(store.lookup('/models/wsa_new_york_iso_l3b_tex_4bf1832d.glb')!.file)).toEqual(glbBytes(300, 5));
+        expect(fs.readFileSync(store.lookup('/models/wsa_washington_square_trees_df7ce2bb.glb')!.file)).toEqual(glbBytes(900, 8));
+        store.close();
+    });
 });
