@@ -150,11 +150,12 @@ import { recordStageTimeline } from './stage-timeline';
 import type { EnhanceModelClient } from './texture-enhance';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { fetchFootprints, type FootprintSource } from './facade-footprints';
-import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, massingProvenance, type MassingStageResult } from './pipeline-e/pipeline-e';
+import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, massingProvenance, type MassingLayerFiles, type MassingStageResult } from './pipeline-e/pipeline-e';
 import type { MassingRun } from './pipeline-e/native-massing';
 import { mslToTileY, type SolarRoof } from './pipeline-e/solar-roof';
 import { runInferenceE, type InferenceOutcome, type StepRecord } from './pipeline-e/inference';
 import { runVersionFEnhanced, stagedGeometryF } from './version-f/f2';
+import { runVersionF3, versionFRound } from './version-f/f3';
 import { gateDecision, photoMatchGate, pipelineERelief, runReliefStage, GENERATED_LABEL, MEASURED_AVERAGED_LABEL, RELIEF_GATE_JUDGE, RELIEF_PARAMS, RELIEF_VERSION, type PhotoGateResult, type ReliefOutcome } from './pipeline-e/relief';
 import { crownsFromStrip } from './pipeline-e/occluders';
 import { enhanceGuards, enhanceModels, genAiPlateClient, stagedEnhance, ENHANCE_STREET_VIEWS } from './pipeline-e/enhance';
@@ -3007,15 +3008,37 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         ...(enhanceOn && visionAvailable ? { enhance: { client: genAiPlateClient(visionAvailable.client), models: enhanceModels(), locationName: placeValue!.formattedAddress, guards: enhanceGuards(), cacheDir: path.join(cache.dir, 'enhance_plates'), ...(guideViews ? { streetViews: guideViews } : {}) } } : {}),
                         solar: [], anchor: structure!.seed, signal: io.signal, onProgress: m => io.progress(m)
                     };
-                    // version F (experiment, SCRATCHBOX_STAGED_GEOMETRY=f): its procedural geometry in place of E's inference, E's enhanced texturing on it
+                    // version F (experiment, SCRATCHBOX_STAGED_GEOMETRY=f): its procedural geometry in place of E's inference, E's enhanced
+                    // texturing on it; round 3 (f3.ts) by default, SCRATCHBOX_VERSION_F_ROUND=2 for round 2 (f2.ts)
+                    const key8 = e.key.slice(0, 8);
+                    let earlyLayers = 0;
+                    // round 3 hands the layer over as it exists: the clay shape right after the adjustment, the textured twin as
+                    // walls are redrawn; each is the same l2g object, replaced in place (the final commit below replaces it last)
+                    const onEarlyLayer = (files: MassingLayerFiles, phase: 'shape' | 'textures' | 'final', note: string) => {
+                        if (phase === 'final' || io.signal.aborted) return;
+                        earlyLayers++;
+                        const pubClayE = cache.publishFile(files.clayGlb, `${base}_massing_${key8}_versionf_${phase}${earlyLayers}.glb`);
+                        const pubTexE = cache.publishFile(files.texturedGlb, `${base}_massing_${key8}_versionf_${phase}${earlyLayers}_tex.glb`);
+                        const early: StagedLayer = {
+                            objectId: layerObjectId(e.key, 'l2g'), stage: 'grammar', layer: 'l2g', order: STAGES.grammar.order, url: pubClayE.url, bytes: pubClayE.bytes,
+                            provenance: { label: PROVENANCE.photoInferred, measuredGeometry: false, confidence: 0.5, method: 'version F round 3: the procedural shape (read per wall, adjusted natively against the tile); its walls are being redrawn', sources: [{ kind: 'stage-output', id: `version-f/v3:${key8}` }], note },
+                            provenanceLabels: ['vector-modelled', PROVENANCE.photoInferred, 'generated'], supersedes: [e.layer.objectId], revealAfter: [e.layer.objectId],
+                            reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [e.layer.objectId] }, cached: false, builtAtMs: now(), counts: layerCounts(files.clayGlb),
+                            textured: { url: pubTexE.url, bytes: pubTexE.bytes, ladderRung: files.texturedShares.findIndex((_, k, a) => a.slice(k + 1).reduce((x, y) => x + y, 0) <= 0.1), rungShares: files.texturedShares, provenance: [], confidenceChannels: 'R = index into provenance[], G = weight 0..255, B = ladder rung (TEXTURE_LADDER_RUNGS), A = 255 where a stage produced the texel', builtAtMs: now(), cached: false }
+                        };
+                        run.commit(early, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, extra: { pipeline: 'e' } });
+                        run.emit('grammar', 'running', { message: `version F: ${phase === 'shape' ? 'the clay shape is in' : 'textures streamed'} (${note})`, layers: [early] }, true);
+                    };
+                    const roofClusters = (r.run!.audit && !('error' in r.run!.audit) ? r.run!.audit.clusters : []).filter(c => c.verdict === 'real-object' && c.lo[1] >= Math.min(...r.massing.parts.map(p => p.topY)) - 1).map(c => ({ lo: c.lo, hi: c.hi }));
                     const out = stagedGeometryF() && visionAvailable
-                        ? await runVersionFEnhanced({ ...inferenceInput, place: placeValue!.formattedAddress, genai: visionAvailable.client })
+                        ? versionFRound() === 2
+                            ? await runVersionFEnhanced({ ...inferenceInput, place: placeValue!.formattedAddress, genai: visionAvailable.client })
+                            : await runVersionF3({ ...inferenceInput, place: placeValue!.formattedAddress, genai: visionAvailable.client, onLayer: onEarlyLayer, roofClusters })
                         : await runInferenceE(inferenceInput);
                     cache.writeRunNote(runId, 'pipeline_e_inference', { steps: out.steps, timingsMs: out.timingsMs });
                     recordResidualAudit('grammar', out.run, enhanceOn ? 'enhanced layer' : 'inferred layer');
                     const kept = out.steps.filter(s => s.accepted > 0);
                     const conf = Math.max(0.05, Math.min(1, ...out.grammars.map(g => g.confidence), 0.75));
-                    const key8 = e.key.slice(0, 8);
                     // the enhanced layer is published under its own name: it never replaces the plain inferred one
                     const suffix = stagedGeometryF() && visionAvailable ? 'versionf' : enhanceOn ? 'enhanced' : 'inferred';
                     const pubClay = cache.publishFile(out.files.clayGlb, `${base}_massing_${key8}_${suffix}.glb`);

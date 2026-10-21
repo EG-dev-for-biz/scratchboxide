@@ -38,10 +38,12 @@ import { massingSpecText, type Massing, type MassingPart } from '../pipeline-e/m
 import { readFaceOrtho, runMassing, faceToPixel, type MassingFace, type MassingNode, type MassingRun } from '../pipeline-e/native-massing';
 import { MASSING_PARAMS, plainTextures, writeMassingLayer, type MassingLayerFiles } from '../pipeline-e/pipeline-e';
 import type { TexelSource } from '../pipeline-e/massing-glb';
-import { facadeParametersPrompt, parseFacadeParameters, FACADE_PARAMETERS_PROMPT_ID, FACADE_PARAMETERS_PROMPT_ID_V2, type BuildingParameters, type ReadingPictureNote } from './facade-parameters';
+import { facadeParametersPrompt, parseFacadeParameters, FACADE_PARAMETERS_PROMPT_ID, FACADE_PARAMETERS_PROMPT_ID_V2, FACADE_PARAMETERS_PROMPT_ID_V3, type BuildingParameters, type ReadFeature, type ReadingPictureNote, type WallStoreys } from './facade-parameters';
 import { facadeProgram, LABEL, SEEN_COVERAGE, type FacadeProgram, type ProgramInput, type TopDown, type WallLatticeAdjust } from './facade-program';
 import { compareSilhouette, compareWall, comparisonCameras, downsampleWallTile, nodesToSoup, renderedWallOffset, soupBounds, summariseWalls, wallEvidence, wallTileFromOrtho, type SilhouetteCompare, type WallCompare, type WallEvidence } from './render-compare';
-import { adjustParameters, type AdjustRound } from './adjust';
+import { adjustParameters, adjustParametersNative, refineWallsNative, type AdjustRound } from './adjust';
+import { NativeCompare } from './native-compare';
+import { bestStreetViewForWall, type GuideView } from '../pipeline-e/plate-streetview';
 
 export const VERSION_F_ID = 'version-f/v1';
 /** The adjustment's comparison pixel (m). */
@@ -70,9 +72,12 @@ export interface VersionFInput {
 
 export interface CheckNumbers { silhouettes: SilhouetteCompare[]; walls: WallCompare[]; summary: { silhouetteIou: number; topIou: number; obliqueDepthMedianM: number; windowNcc: number; edgeDistM: number; wallDepthMaeM: number; wallDepthWithin015: number; seenWalls: number } }
 
+/** Round 3: one wall's own reading (its call, in parallel with the others'). */
+export interface WallReadingNote { face: number; key: string; areaM2: number; model?: string; ms: number; defaulted: string[]; failed?: string; raw?: string; features: number }
+
 export interface VersionFResult {
     files: MassingLayerFiles;
-    reading: { params: BuildingParameters; defaulted: string[]; model?: string; promptId: string; pictures: ReadingPictureNote[]; raw?: string };
+    reading: { params: BuildingParameters; defaulted: string[]; model?: string; promptId: string; pictures: ReadingPictureNote[]; raw?: string; walls?: WallReadingNote[] };
     adjusted: BuildingParameters;
     perWall: Array<{ face: number; pitchScale: number; phaseM: number; storeyShiftM?: number; storeyScale?: number }>;
     program: Pick<FacadeProgram, 'notes' | 'walls' | 'pitchedParts' | 'volumeParts'> & { openings: number; sweeps: number; faceSweeps: number; rejectedOpenings: number; rejectedSweeps: number };
@@ -430,4 +435,251 @@ export async function runVersionF(input: VersionFInput & { legacy?: boolean }): 
     T.texture = Date.now() - t;
     T.total = Object.values(T).reduce((a, x) => a + x, 0);
     return { files, reading: plan.reading, ...planSummary(plan), timingsMs: T };
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Round 3
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** The seen walls the reading and the adjustment work on (the same rule as the evidence's). */
+export function readableWalls(run0: MassingRun, maxWalls = 6): MassingFace[] {
+    return run0.report.faces.filter(f => f.kind === 'wall' && f.width > 0 && f.coverage >= 0.5 && f.area >= 30).sort((a, b) => b.area - a.area).slice(0, maxWalls);
+}
+
+/**
+ * Round 3, step 1: one reading per seen wall, every call at once. Each call shows the scan from above, THAT wall through
+ * its orthographic camera with the ruler, the two obliques and the Street View photos, and asks for the wall's own numbers
+ * and must-keep features. The building's parameters are the largest wall's; every other wall keeps its own storeys, bays,
+ * families and bands (`wallStoreys`), and the features of every wall are tied to it. A wall whose reading fails keeps the
+ * building's numbers, and the note says so; the reading fails only when no wall could be read.
+ */
+export async function readPerWall(input: VersionFInput, run0: MassingRun, tile: TileTriangles, groundY: number, dir: string): Promise<VersionFResult['reading']> {
+    const shared: Array<{ part: { inlineData: { mimeType: string; data: string } }; note: ReadingPictureNote }> = [];
+    const addShared = (png: Buffer | Uint8Array, mime: string, note: ReadingPictureNote, file: string) => {
+        shared.push({ part: { inlineData: { mimeType: mime, data: Buffer.from(png).toString('base64') } }, note });
+        fs.writeFileSync(path.join(dir, file), png);
+    };
+    const td = run0.report.topdown;
+    if (td) addShared(fs.readFileSync(path.join(run0.dir, td.image)), 'image/png', { role: 'top-down', caption: `The building's scan seen straight down (north up), ${(td.width * td.pixel).toFixed(1)} m wide and ${(td.rows * td.pixel).toFixed(1)} m tall; grey is outside the scan.` }, 'read_topdown.png');
+    const walls = readableWalls(run0);
+    const all = nodesToSoup(run0.nodes);
+    const b = soupBounds(all);
+    const c: [number, number, number] = [(b.lo[0] + b.hi[0]) / 2, (b.lo[1] + b.hi[1]) / 2, (b.lo[2] + b.hi[2]) / 2];
+    const radius = Math.hypot(b.hi[0] - b.lo[0], b.hi[1] - b.lo[1], b.hi[2] - b.lo[2]) / 2;
+    const obliques: typeof shared = [];
+    for (const f of walls.slice(0, 2)) {
+        const d = radius * 2.2;
+        const eye: [number, number, number] = [c[0] + f.normal[0] * d * 0.8, c[1] + d * 0.6, c[2] + f.normal[2] * d * 0.8];
+        const r = renderTriangles([tile], lookAt(eye, c, 768, 576, 50), { supersample: 1 });
+        const png = encodePng(r.width, r.height, r.rgba, 4);
+        fs.writeFileSync(path.join(dir, `read_oblique_${f.index}.png`), png);
+        obliques.push({ part: { inlineData: { mimeType: 'image/png', data: Buffer.from(png).toString('base64') } }, note: { role: 'oblique', caption: 'An oblique view of the photogrammetric tile (the building in the middle, its street around it), looking down at about 35 deg.' } });
+    }
+    const photos: typeof shared = (input.streetViewPhotos ?? []).slice(0, 2).map((p, k) => {
+        fs.writeFileSync(path.join(dir, `read_streetview_${k}.${p.mimeType === 'image/png' ? 'png' : 'jpg'}`), p.bytes);
+        return { part: { inlineData: { mimeType: p.mimeType ?? 'image/jpeg', data: Buffer.from(p.bytes).toString('base64') } }, note: { role: 'street view', caption: p.caption } };
+    });
+    if (input.reading) {
+        const params = { ...input.reading, facadeBands: input.reading.facadeBands ?? [], wallStoreys: input.reading.wallStoreys ?? [], featureRegions: input.reading.featureRegions ?? [] };
+        return { params, defaulted: [], promptId: FACADE_PARAMETERS_PROMPT_ID_V3, pictures: shared.map(x => x.note) };
+    }
+    if (!input.chain) throw new Error('version F needs a vision model to read the parameters (none configured)');
+    if (!walls.length) throw new Error('version F: no wall of the massing is seen well enough to read (coverage under 0.5 or under 30 m2)');
+    const chain = input.chain;
+    const one = async (f: MassingFace): Promise<{ f: MassingFace; parsed?: ReturnType<typeof parseFacadeParameters>; model?: string; raw?: string; failed?: string; ms: number; pictures: ReadingPictureNote[] }> => {
+        const t0 = Date.now();
+        const o = readFaceOrtho(run0.dir, f);
+        if (!o) return { f, failed: 'no orthographic picture of the wall', ms: 0, pictures: [] };
+        const r = wallWithRuler(o.rgba, f, groundY);
+        fs.writeFileSync(path.join(dir, `read_wall_${f.index}.png`), r.png);
+        const az = ((Math.atan2(f.normal[0], -f.normal[2]) * 180) / Math.PI + 360) % 360;
+        const wallPic = { part: { inlineData: { mimeType: 'image/png', data: r.png.toString('base64') } }, note: { role: 'wall', caption: `An orthographic picture of THIS wall (facing compass ${az.toFixed(0)} deg), ${(f.sMax - f.sMin).toFixed(1)} m wide, from ${(f.tBottom - groundY).toFixed(1)} m to ${(f.tMax - groundY).toFixed(1)} m above the street, ruler at the left; grey is where the scan has no photo.` } };
+        const pics = [...shared, wallPic, ...obliques, ...photos];
+        const wallPicture = shared.length + 1;
+        const prompt = facadeParametersPrompt(input.place, pics.map(x => x.note), { shapes: true, wall: { picture: wallPicture } });
+        fs.writeFileSync(path.join(dir, `read_prompt_wall_${f.index}.txt`), prompt);
+        try {
+            const res = await chain.generate({ contents: [{ role: 'user', parts: [...pics.map(x => x.part), { text: prompt }] }], config: { responseMimeType: 'application/json', temperature: 0 } }, { stage: 'grammar' });
+            const text = res.response.candidates?.[0]?.content?.parts?.map(q => q.text ?? '').join('') ?? '';
+            const parsed = parseFacadeParameters(text);
+            res.remember();
+            // everything read on the wall picture is this wall's
+            parsed.params.wallStoreys = parsed.params.wallStoreys.filter(w => w.picture === wallPicture).map(w => ({ ...w, faceKey: f.key }));
+            parsed.params.featureRegions = (parsed.params.featureRegions ?? []).filter(x => x.picture === wallPicture).map(x => ({ ...x, faceKey: f.key }));
+            return { f, parsed, model: res.model, raw: text, ms: Date.now() - t0, pictures: pics.map(x => x.note) };
+        } catch (err) {
+            return { f, failed: (err as Error).message.slice(0, 200), ms: Date.now() - t0, pictures: pics.map(x => x.note) };
+        }
+    };
+    const results = await Promise.all(walls.map(one));
+    const ok = results.filter(r => r.parsed);
+    if (!ok.length) throw new Error(`version F: no wall could be read (${results.map(r => `wall ${r.f.index}: ${r.failed}`).join('; ')})`);
+    const main = ok[0];
+    const params: BuildingParameters = JSON.parse(JSON.stringify(main.parsed!.params));
+    const toOwn = (r: typeof ok[number]): WallStoreys => {
+        const p = r.parsed!.params;
+        const own = p.wallStoreys[0];
+        return { picture: 2, faceKey: r.f.key, groundStoreyM: own?.groundStoreyM ?? p.groundStoreyM, upperStoreysM: own?.upperStoreysM ?? p.upperStoreysM, bayWidthM: own?.bayWidthM ?? p.bayWidthM, edgeMarginM: own?.edgeMarginM ?? p.edgeMarginM, window: own?.window ?? p.window, groundOpening: own?.groundOpening ?? p.groundOpening, facadeBands: own?.facadeBands ?? p.facadeBands };
+    };
+    // the largest wall's own entry is the building's numbers: no entry for it; every other read wall keeps its own
+    params.wallStoreys = ok.slice(1).map(toOwn);
+    const features: ReadFeature[] = [];
+    for (const r of ok) features.push(...(r.parsed!.params.featureRegions ?? []));
+    params.featureRegions = features;
+    params.features = [...new Set(ok.flatMap(r => r.parsed!.params.features))].slice(0, 24);
+    // raised volumes: the main reading's, plus another wall's that overlap none of them
+    for (const r of ok.slice(1)) for (const v of r.parsed!.params.rooftopVolumes) {
+        const overlaps = params.rooftopVolumes.some(u => Math.min(u.box[2], v.box[2]) - Math.max(u.box[0], v.box[0]) > 0 && Math.min(u.box[3], v.box[3]) - Math.max(u.box[1], v.box[1]) > 0);
+        if (!overlaps && params.rooftopVolumes.length < 16) params.rooftopVolumes.push(v);
+    }
+    const wallsNote: WallReadingNote[] = results.map(r => ({ face: r.f.index, key: r.f.key, areaM2: Math.round(r.f.area), ...(r.model ? { model: r.model } : {}), ms: r.ms, defaulted: r.parsed?.defaulted ?? [], ...(r.failed ? { failed: r.failed } : {}), ...(r.raw ? { raw: r.raw } : {}), features: r.parsed?.params.featureRegions?.length ?? 0 }));
+    return { params, defaulted: main.parsed!.defaulted, model: main.model, promptId: FACADE_PARAMETERS_PROMPT_ID_V3, pictures: main.pictures, raw: main.raw, walls: wallsNote };
+}
+
+export interface VersionFPlan3 extends VersionFPlan {
+    adjustNative: { ms: number; evaluations: number; batches: number; sentJobs: number; keptJobs: number };
+    /** The coarse evidence (the adjustment's) per seen wall, kept for the Street View refinement. */
+    coarse: WallEvidence[];
+    inside: Map<number, Uint8Array>;
+}
+
+/** Round 3: read per wall at once, generate, check, adjust on the native kernel; the final solid. No textures. */
+export async function planVersionF3(input: VersionFPlanInput & { roofClusters?: ProgramInput['roofClusters'] }): Promise<VersionFPlan3> {
+    const T: Record<string, number> = {};
+    const progress = input.onProgress ?? (() => undefined);
+    const run0 = input.run0;
+    fs.mkdirSync(input.outDir, { recursive: true });
+    const groundY = Math.min(...input.massing.parts.map(p => p.baseY), ...input.massing.meshes.flatMap(m => m.vertices.map(v => v[1])));
+    let t = Date.now();
+    const tile = readTileTriangles(fs.readFileSync(input.tilePath));
+    const iso = readTileTriangles(fs.readFileSync(input.isolateGlb));
+    T.load = Date.now() - t;
+    t = Date.now();
+    progress('version F: reading each seen wall (all at once)');
+    const reading = await readPerWall(input, run0, tile, groundY, input.outDir);
+    T.read = Date.now() - t;
+    const td0 = run0.report.topdown;
+    let topdown: TopDown | undefined;
+    if (td0) { const b = fs.readFileSync(path.join(run0.dir, td0.height)); topdown = { x0: td0.x0, z0: td0.z0, pixel: td0.pixel, width: td0.width, rows: td0.rows, height: new Float32Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)) }; }
+    const base: ProgramInput = { faces: run0.report.faces, parts: input.massing.parts, groundY, params: reading.params, neighbourTop: neighbourTopFn(tile, run0.report.faces, groundY), ...(topdown ? { topdown } : {}), ...(input.roofClusters?.length ? { roofClusters: input.roofClusters } : {}) };
+    t = Date.now();
+    const baseSoup = nodesToSoup(run0.nodes, n => n.kind !== 'residual');
+    const evidence: WallEvidence[] = [], coarseEvidence: WallEvidence[] = [];
+    const inside = new Map<number, Uint8Array>();
+    for (const f of run0.report.faces) {
+        if (f.kind !== 'wall' || !f.width || f.coverage < 0.5 || f.area < 30) continue;
+        if (base.neighbourTop && base.neighbourTop(f, (f.sMin + f.sMax) / 2) > (f.tBottom + f.tMax) / 2) continue;
+        const o = readFaceOrtho(run0.dir, f);
+        if (!o) continue;
+        const full = wallTileFromOrtho(f, o.rgba, o.depth);
+        evidence.push(wallEvidence(full));
+        const coarse = downsampleWallTile(full, Math.max(1, Math.round(ADJUST_PIXEL_M / f.pixel)));
+        coarseEvidence.push(wallEvidence(coarse));
+        const off = renderedWallOffset(baseSoup, coarse.face);
+        inside.set(f.index, Uint8Array.from(off, v => (Number.isFinite(v) ? 1 : 0)));
+    }
+    T.evidence = Date.now() - t;
+    t = Date.now();
+    progress('version F: generating the building from the read parameters');
+    const prog0 = facadeProgram(base);
+    const runA = await build(input, prog0.parts, prog0, path.join(input.outDir, 'native_before'), { bake: 0, topdown: 0 });
+    T.generate = Date.now() - t;
+    t = Date.now();
+    const isoSoup = iso.positions;
+    const before = check(runA, isoSoup, evidence);
+    T.check = Date.now() - t;
+    t = Date.now();
+    progress('version F: adjusting the parameters against the tile (native, every wall at once)');
+    const compare = await NativeCompare.open(path.join(input.outDir, 'compare'), coarseEvidence, inside);
+    let adj;
+    try { adj = await adjustParametersNative(base, coarseEvidence, compare, input.rounds ?? 3, { shapes: true, onProgress: m => progress(`version F: ${m}`) }); } finally { compare.close(); }
+    let params = adj.params;
+    const silhouetteRound = await silhouetteParapet(input, base, params, adj.perWall, isoSoup);
+    params = { ...params, parapet: { heightM: silhouetteRound.kept } };
+    T.adjust = Date.now() - t;
+    t = Date.now();
+    progress('version F: the adjusted building');
+    const prog = facadeProgram({ ...base, params, perWall: adj.perWall });
+    const runB = await build(input, prog.parts, prog, path.join(input.outDir, 'native'), { topdown: 0 });
+    T.generateFinal = Date.now() - t;
+    t = Date.now();
+    const after = check(runB, isoSoup, evidence);
+    T.checkFinal = Date.now() - t;
+    fs.rmSync(runA.dir, { recursive: true, force: true });
+    const ctx = { pitchedParts: new Set(prog.pitchedParts), volumeParts: new Set(prog.volumeParts), partHeightSource: new Map(prog.parts.map(p => [p.id, String(p.heightSource)])), iou: input.massing.check.iou };
+    return { reading, params, perWall: adj.perWall, prog, runB, before, after, rounds: adj.rounds, silhouetteRound, ctx, evidence, base, groundY, timingsMs: T, adjustNative: { ms: adj.ms, evaluations: adj.evaluations, batches: adj.batches, sentJobs: adj.sentJobs, keptJobs: adj.keptJobs }, coarse: coarseEvidence, inside };
+}
+
+/** The silhouette round: the parapet height against the obliques and the top view, with real builds (round 2's rule). */
+async function silhouetteParapet(input: VersionFInput, base: ProgramInput, params: BuildingParameters, perWall: Map<number, WallLatticeAdjust>, isoSoup: Float32Array): Promise<NonNullable<VersionFResult['silhouetteRound']>> {
+    const h = params.parapet.heightM;
+    const tries = [...new Set([h, h + 0.5, Math.max(0, h - 0.5)].map(v => Math.round(v * 100) / 100))];
+    const cams = comparisonCameras(soupBounds(isoSoup));
+    // the three builds at once (independent)
+    const tried = await Promise.all(tries.map(async v => {
+        const pr = facadeProgram({ ...base, params: { ...params, parapet: { heightM: v } }, perWall });
+        const rr = await build(input, pr.parts, pr, path.join(input.outDir, `native_parapet_${v}`), { bake: 0, topdown: 0 });
+        const model = nodesToSoup(rr.nodes);
+        const iou = cams.map(c => compareSilhouette(c.id, model, isoSoup, c.cam).iou).reduce((a, x) => a + x, 0) / cams.length;
+        fs.rmSync(rr.dir, { recursive: true, force: true });
+        return { parapetM: v, silhouetteIou: iou };
+    }));
+    const read0 = tried.find(x => x.parapetM === Math.round(h * 100) / 100)!;
+    let best = read0;
+    for (const x of tried) if (x.silhouetteIou > best.silhouetteIou + MIN_SILHOUETTE_GAIN) best = x;
+    return { tried, kept: best.parapetM };
+}
+
+export interface StreetViewRefinement {
+    walls: Array<{ face: number; panoId: string; bandCover: number; pxPerM: number; validShare: number; moved?: string; before?: number; after?: number }>;
+    rebuilt: boolean;
+    ms: number;
+}
+
+/**
+ * Round 3, step 8: where a registered Street View photo covers a seen wall, its rectified crop replaces the tile photo as the
+ * wall's luminance evidence (the depth stays the tile's) and that wall's lattice and storeys are searched again on it; the
+ * solid is rebuilt when any wall moved. The plan is updated in place (perWall, prog, runB, after).
+ */
+export async function refineWithStreetView(input: VersionFInput, plan: VersionFPlan3, guide: GuideView[], isoSoup: Float32Array, onProgress?: (m: string) => void): Promise<StreetViewRefinement> {
+    const t0 = Date.now();
+    const out: StreetViewRefinement = { walls: [], rebuilt: false, ms: 0 };
+    const evidence: WallEvidence[] = [];
+    const inside = new Map<number, Uint8Array>();
+    for (const ev of plan.coarse) {
+        const f = plan.evidence.find(e => e.tile.face.index === ev.tile.face.index)?.tile.face;
+        if (!f) continue;
+        const best = bestStreetViewForWall(f, guide);
+        if (!best.view || !best.rect) continue;
+        // the full-resolution luma: the photo where it shows the wall, the tile elsewhere; then the adjustment's coarse pixel
+        const n = f.width * f.height, luma = new Float32Array(n);
+        let valid = 0;
+        const fullEv = plan.evidence.find(e => e.tile.face.index === f.index)!;
+        for (let i = 0; i < n; i++) {
+            if (best.rect.valid[i]) { luma[i] = 0.2126 * best.rect.rgba[i * 4] + 0.7152 * best.rect.rgba[i * 4 + 1] + 0.0722 * best.rect.rgba[i * 4 + 2]; valid++; }
+            else luma[i] = fullEv.tile.luma[i];
+        }
+        const coarse = downsampleWallTile({ face: f, luma, depth: fullEv.tile.depth }, Math.max(1, Math.round(ADJUST_PIXEL_M / f.pixel)));
+        evidence.push(wallEvidence(coarse));
+        inside.set(f.index, plan.inside.get(f.index)!);
+        out.walls.push({ face: f.index, panoId: best.view.panoId, bandCover: Math.round(best.rect.bandCover * 1000) / 1000, pxPerM: Math.round(best.rect.pxPerM * 10) / 10, validShare: Math.round((valid / n) * 1000) / 1000 });
+    }
+    if (!evidence.length) { out.ms = Date.now() - t0; return out; }
+    onProgress?.(`version F: ${evidence.length} walls' lattices searched again on their Street View crops`);
+    const compare = await NativeCompare.open(path.join(input.outDir, 'compare_sv'), evidence, inside);
+    let ref;
+    try { ref = await refineWallsNative(plan.base, plan.params, plan.perWall, evidence, compare); } finally { compare.close(); }
+    for (const m of ref.moved) { const w = out.walls.find(x => x.face === m.face); if (w) { w.moved = m.what; w.before = Math.round(m.before * 1000) / 1000; w.after = Math.round(m.after * 1000) / 1000; } }
+    if (ref.moved.length) {
+        plan.perWall = ref.perWall;
+        plan.prog = facadeProgram({ ...plan.base, params: plan.params, perWall: plan.perWall });
+        const old = plan.runB.dir;
+        plan.runB = await build(input, plan.prog.parts, plan.prog, path.join(input.outDir, 'native_sv'), { topdown: 0 });
+        plan.after = check(plan.runB, isoSoup, plan.evidence);
+        plan.ctx = { ...plan.ctx, pitchedParts: new Set(plan.prog.pitchedParts), volumeParts: new Set(plan.prog.volumeParts), partHeightSource: new Map(plan.prog.parts.map(p => [p.id, String(p.heightSource)])) };
+        fs.rmSync(old, { recursive: true, force: true });
+        out.rebuilt = true;
+    }
+    out.ms = Date.now() - t0;
+    return out;
 }
