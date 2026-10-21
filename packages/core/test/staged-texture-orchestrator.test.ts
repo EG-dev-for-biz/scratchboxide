@@ -258,10 +258,17 @@ describe('the texture stage of the staged location build', () => {
         expect(sb.layers.every((l: any) => !l.textured)).toBe(true);
     });
 
-    it('a district (no isolated structure) skips the texture pass and says why', async () => {
+    it('a district (no isolated structure) gets the scan\'s own photogrammetric textures as the remesh\'s textured twin', async () => {
         const s = setup();
         const { result } = await runStagedLocation({ query: 'Washington Square', isolate: false, radiusM: 30, trees: false }, s.deps, s.ctx);
-        expect(result.stages.find(x => x.stage === 'textures')).toMatchObject({ status: 'skipped', reason: 'the texture pass runs on an isolated structure' });
+        expect(validateContract('StagedLocationResult', result)).toEqual([]);
+        expect(result.stages.find(x => x.stage === 'textures')).toMatchObject({ status: 'committed' });
+        const sb = (result.artifact as any).data.stagedBuild;
+        const l2 = sb.layers.find((l: any) => l.layer === 'l2');
+        expect(l2.textured).toMatchObject({ ladderRung: TEXTURE_LADDER_RUNGS.indexOf('tile photo transfer'), provenance: [{ source: 'tile-extraction', coverage: 1 }] });
+        expect(l2.textured.url).toMatch(/_l2_tex_[0-9a-f]{8}\.glb$/);
+        expect(sb.texturePass).toMatchObject({ status: 'committed', layersDone: 1, layersTotal: 1 });
+        expect(result.summary).toContain(SHOW_CLAY_PILL);
     });
 });
 

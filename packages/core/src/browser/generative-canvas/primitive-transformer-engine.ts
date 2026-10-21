@@ -1657,6 +1657,68 @@ function buildGlbMeshNodes(scene: Scene3DData): { nodes: GraphNode[]; edges: Gra
     return { nodes, edges };
 }
 
+/**
+ * Builds a real, chronologically-ordered DAG of a scene's edit history from
+ * `Scene3DData.operatorStack` — one node per operator call actually dispatched
+ * through `DirectDispatchOperatorEngine` (`sb_translate`, `sb_set_material_pbr`,
+ * etc.), chained op[i] -> op[i+1] in true execution order, with a secondary
+ * edge from the mesh node each operator targeted (when `resolveMeshNodeId` can
+ * find one) to the first operator that touched it.
+ *
+ * This is deliberately NOT a synthesis-time DAG: `execute_3d_python_script`
+ * (the dominant real scene-generation path) never dispatches through the
+ * operator engine, so `operatorStack` is empty for a freshly generated scene —
+ * it only starts filling once a scene is interactively edited afterward. A
+ * scene with no edit history simply produces no operator nodes, same "show
+ * zero real things rather than fabricate placeholders" rule as the rest of
+ * this file. Read-only for now: `parameters.readOnly: true` means
+ * `morphNodeGraphToScene3D`'s write-back loop (keyed on a `mesh-` id prefix)
+ * naturally skips these `op-` nodes — replaying an edited history entry would
+ * need a real undo/redo-aware re-execution model, out of scope here.
+ */
+function buildOperatorHistoryNodes(scene: Scene3DData, resolveMeshNodeId: (objectId: string) => string | undefined): { nodes: GraphNode[]; edges: GraphEdge[] } | undefined {
+    const stack = scene.operatorStack;
+    if (!Array.isArray(stack) || stack.length === 0) return undefined;
+
+    const opNodeId = (idx: number) => `op-${idx}`;
+    const objectIdOf = (entry: NonNullable<Scene3DData['operatorStack']>[number]): string | undefined =>
+        typeof entry.params?.objectId === 'string' ? entry.params.objectId
+            : typeof entry.params?.materialId === 'string' ? entry.params.materialId
+                : undefined;
+
+    const nodes: GraphNode[] = stack.map((entry, idx) => {
+        const objectId = objectIdOf(entry);
+        return {
+            id: opNodeId(idx),
+            label: entry.operator,
+            subtitle: objectId ? `on ${objectId}` : 'scene-level',
+            category: 'process',
+            color: 'purple',
+            status: 'completed',
+            x: 1320,
+            y: 60 + idx * 110,
+            parameters: { operator: entry.operator, params: entry.params, timestamp: entry.timestamp, objectId, readOnly: true }
+        };
+    });
+
+    const edges: GraphEdge[] = [];
+    for (let i = 1; i < nodes.length; i++) {
+        edges.push({ id: `e-op-${i - 1}-${i}`, source: opNodeId(i - 1), target: opNodeId(i), style: 'animated', color: 'purple' });
+    }
+    const linkedMeshes = new Set<string>();
+    stack.forEach((entry, idx) => {
+        const objectId = objectIdOf(entry);
+        if (!objectId || linkedMeshes.has(objectId)) return;
+        const meshNodeId = resolveMeshNodeId(objectId);
+        if (meshNodeId) {
+            edges.push({ id: `e-mesh-${objectId}-op-${idx}`, source: meshNodeId, target: opNodeId(idx), style: 'dashed', color: 'purple' });
+            linkedMeshes.add(objectId);
+        }
+    });
+
+    return { nodes, edges };
+}
+
 export function morphScene3DToNodeGraph(scene: Scene3DData): NodeGraphData {
     const title = scene?.title ? `${scene.title} — Scene Graph` : '3D Scene Graph';
     const meshes = Array.isArray(scene?.customMeshes) ? scene.customMeshes : [];
@@ -1740,21 +1802,28 @@ export function morphScene3DToNodeGraph(scene: Scene3DData): NodeGraphData {
     if (meshes.length === 0) {
         const glbMeshes = buildGlbMeshNodes(scene);
         if (glbMeshes) {
+            const opHistory = buildOperatorHistoryNodes(scene, () => undefined);
+            const subtitle = `${glbMeshes.nodes.length} mesh node${glbMeshes.nodes.length === 1 ? '' : 's'} read from the compiled .glb (view-only — not backed by customMeshes)`
+                + (opHistory ? `, ${opHistory.nodes.length} edit${opHistory.nodes.length === 1 ? '' : 's'} in history (view-only)` : '');
             return {
                 title,
-                subtitle: `${glbMeshes.nodes.length} mesh node${glbMeshes.nodes.length === 1 ? '' : 's'} read from the compiled .glb (view-only — not backed by customMeshes)`,
-                nodes: [camNode, envNode, ...glbMeshes.nodes, renderNode],
-                edges: [edges[0], ...glbMeshes.edges],
+                subtitle,
+                nodes: [camNode, envNode, ...glbMeshes.nodes, renderNode, ...(opHistory?.nodes ?? [])],
+                edges: [edges[0], ...glbMeshes.edges, ...(opHistory?.edges ?? [])],
                 sourceArtifact: { type: '3d-scene', data: scene }
             };
         }
     }
 
+    const opHistory = buildOperatorHistoryNodes(scene, objectId => meshIds.has(objectId) ? meshNodeId(objectId) : undefined);
+    const subtitle = `${meshes.length} mesh node${meshes.length === 1 ? '' : 's'} projected from the live scene`
+        + (opHistory ? `, ${opHistory.nodes.length} edit${opHistory.nodes.length === 1 ? '' : 's'} in history (view-only)` : '');
+
     return {
         title,
-        subtitle: `${meshes.length} mesh node${meshes.length === 1 ? '' : 's'} projected from the live scene`,
-        nodes: [camNode, envNode, ...meshNodes, renderNode],
-        edges,
+        subtitle,
+        nodes: [camNode, envNode, ...meshNodes, renderNode, ...(opHistory?.nodes ?? [])],
+        edges: [...edges, ...(opHistory?.edges ?? [])],
         sourceArtifact: { type: '3d-scene', data: scene }
     };
 }

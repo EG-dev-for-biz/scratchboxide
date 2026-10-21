@@ -351,6 +351,10 @@ int renderOnce(const std::string& configPath) {
         const std::string samplerName = opt["sampler"].asString("pcg");
         if (samplerName != "pcg" && samplerName != "sobol") throw std::runtime_error("optimizations.sampler must be \"pcg\" or \"sobol\"");
         const bool primaryRaster = boolOr(opt["primaryRaster"], false);
+        const bool restir = boolOr(opt["restir"], false);
+        const int restirCandidates = static_cast<int>(numberOr(opt["restirCandidates"], 8));
+        const int restirSpatial = static_cast<int>(numberOr(opt["restirSpatial"], 3));
+        if (restirCandidates < 1 || restirSpatial < 0) throw std::runtime_error("optimizations.restirCandidates must be at least 1 and restirSpatial at least 0");
         sbvg::Cut bounceCut;
         if (backend == "metal") {
             metalTracer = std::make_unique<metalpt::MetalPathTracer>();
@@ -359,6 +363,7 @@ int renderOnce(const std::string& configPath) {
             tracer.setSampler(samplerName == "sobol" ? 1 : 0);
             tracer.setPrimaryRaster(primaryRaster);
             tracer.setBounceShadowRays(boolOr(opt["bounceShadowRays"], true));
+            tracer.setRestir(restir, static_cast<uint32_t>(restirCandidates), static_cast<uint32_t>(restirSpatial), boolOr(opt["restirTemporal"], true));
             tracer.setGeometry(file.vertices, cut.indices, cut.materials);
             if (bounceThresholdPx > 0.0f) {
                 sbvg::CutParams bounceParams = cutParams;
@@ -450,6 +455,7 @@ int renderOnce(const std::string& configPath) {
               << ", \"thresholdPx\": " << cutParams.thresholdPx << ", \"finestLevel\": " << cutParams.finestLevel << " },\n"
               << "  \"optimizations\": { \"accelFastBuild\": " << (accelFastBuild ? "true" : "false") << ", \"sampler\": " << jsonString(samplerName)
               << ", \"primaryRaster\": " << (primaryRaster ? "true" : "false") << ", \"rasterMs\": " << (metalTracer ? metalTracer->rasterMs() : 0.0)
+              << ", \"restir\": " << (restir ? "true" : "false") << ", \"restirCandidates\": " << restirCandidates << ", \"restirSpatial\": " << restirSpatial
               << ", \"bounceCut\": { \"thresholdPx\": " << bounceThresholdPx << ", \"clusters\": " << bounceCut.clusterIds.size() << ", \"triangles\": " << bounceCut.triangleCount()
               << ", \"accelerationBuildMs\": " << (metalTracer ? metalTracer->bounceBuildMs() : 0.0) << " } },\n"
               << "  \"rays\": " << out.rays << ",\n"

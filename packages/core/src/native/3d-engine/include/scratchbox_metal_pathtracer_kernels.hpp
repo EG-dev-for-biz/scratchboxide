@@ -60,9 +60,36 @@ struct Uniforms {
     uint32_t usePrimaryRaster{0};
     /** With useBounceAccel: 1 traces shadow rays against the bounce geometry too, 0 keeps them on the primary cut. */
     uint32_t bounceShadowRays{1};
-    uint32_t pad5{0}, pad6{0}, pad7{0};
+    /**
+     * Sky lighting at the first hit from a per-pixel ReSTIR reservoir (buffers 14-15) instead of the BSDF path:
+     * 1 keeps the reservoir across the frame's passes (temporal reuse), 2 starts it fresh every pass.
+     */
+    uint32_t restir{0};
+    /** Sky directions proposed per pixel per pass, and neighbours combined by the spatial pass. */
+    uint32_t restirCandidates{8}, restirSpatial{3};
 };
 static_assert(sizeof(Uniforms) == 4 * 64, "Uniforms must stay a flat array of 4-byte scalars");
+
+/** One pixel's ReSTIR reservoir over sky directions: the chosen direction, its target value and the resampling weights. */
+struct Reservoir {
+    float dir[3];
+    float wSum;
+    float W;
+    float pHat;
+    uint32_t M;
+    uint32_t pad;
+};
+static_assert(sizeof(Reservoir) == 32, "Reservoir layout is shared with the kernels");
+
+/** The first hit of a pixel's latest sample, kept so the spatial pass can re-evaluate a neighbour's direction here. */
+struct PrimarySurface {
+    float position[3], depth;
+    float shadingNormal[3], metallic;
+    float baseColor[3], roughness;
+    float geometricNormal[3];
+    uint32_t valid;
+};
+static_assert(sizeof(PrimarySurface) == 64, "PrimarySurface layout is shared with the kernels");
 
 /**
  * Sobol direction vectors (32 words per dimension, first digit in the high bit) for `dims` dimensions:
@@ -213,7 +240,7 @@ struct Uniforms {
     uint useBounceAccel;
     float bounceErrorPerDistance;
     uint sampler, usePrimaryRaster;
-    uint bounceShadowRays, pad5, pad6, pad7;
+    uint bounceShadowRays, restir, restirCandidates, restirSpatial;
 };
 
 struct RasterUniforms {
@@ -221,6 +248,23 @@ struct RasterUniforms {
     float forward[3], aspect;
     float right[3], nearZ;
     float up[3], farZ;
+};
+
+struct Reservoir {
+    float dir[3];
+    float wSum;
+    float W;
+    float pHat;
+    uint M;
+    uint pad;
+};
+
+struct PrimarySurface {
+    float position[3], depth;
+    float shadingNormal[3], metallic;
+    float baseColor[3], roughness;
+    float geometricNormal[3];
+    uint valid;
 };
 
 struct PixelState {
@@ -260,6 +304,7 @@ struct TextureRef {
 
 inline float3 f3(constant float* a) { return float3(a[0], a[1], a[2]); }
 inline float3 f3(device const float* a) { return float3(a[0], a[1], a[2]); }
+inline float3 f3(thread const float* a) { return float3(a[0], a[1], a[2]); }
 inline float2 f2(device const float* a) { return float2(a[0], a[1]); }
 inline float luminance(float3 c) { return 0.2126f * c.x + 0.7152f * c.y + 0.0722f * c.z; }
 inline float maxComponent(float3 v) { return max(v.x, max(v.y, v.z)); }
@@ -721,9 +766,115 @@ inline bool intersectTriangle(device const Vertex* verts, device const uint* idx
     return t > 1e-4f;
 }
 
+// ---- ReSTIR over sky directions at the first hit ----------------------------------------------
+/** Resampling keeps at most this many candidates' worth of history per pixel, so a reservoir still adapts. */
+constant uint kRestirHistoryFactor = 20u;
+
+/** The target function: luminance of the sky lit, cosine-weighted BSDF response in direction wi at this surface. */
+inline float restirTarget(constant Uniforms& u, device const float* lut, thread const Bsdf& bsdf, float3 geometricNormal, float3 wi) {
+    float cosShading = dot(bsdf.n, wi);
+    if (cosShading <= 0.0f || dot(geometricNormal, wi) <= 0.0f) return 0.0f;
+    return luminance(bsdfEval(bsdf, wi) * skyRadiance(u, lut, wi) * cosShading);
+}
+
+inline void restirClamp(thread Reservoir& r, uint maxM) {
+    if (r.M > maxM) {
+        r.wSum *= (float)maxM / (float)r.M;
+        r.M = maxM;
+    }
+}
+
+/**
+ * Proposes sky directions for the first hit, resamples them into the pixel's reservoir (kept across passes),
+ * and shades the chosen one with a visibility ray. An occluded choice is dropped from the reservoir so it
+ * does not spread to neighbours (visibility reuse). Returns the sky radiance estimate for this pass.
+ */
+inline float3 restirSkyLighting(constant Uniforms& u, device const float* lut, thread Sampler& smp, thread const Bsdf& bsdf,
+                                thread const Surface& surface, Geometry shadowGeo, thread intersector<triangle_data>& any,
+                                device Reservoir* reservoir, device const Reservoir* prevReservoirs, device const PrimarySurface* prevSurfaces,
+                                uint2 gid, float depth, thread uint& rays) {
+    Reservoir r = *reservoir;
+    if (u.restir == 2u) {
+        // Fresh per pass: resampling within the pass and across neighbours' previous pass, so passes stay independent.
+        r.wSum = 0.0f; r.W = 0.0f; r.pHat = 0.0f; r.M = 0u;
+    }
+    float3 chosen = f3(r.dir);
+    // Candidates draw from the pixel's PCG stream, not the Sobol dimensions the path's bounces use.
+    for (uint c = 0u; c < u.restirCandidates; ++c) {
+        float u1 = pcgFloat(smp.rng);
+        float u2 = pcgFloat(smp.rng);
+        float rr = sqrt(u1), phi = 2.0f * kPi * u2;
+        float3 l = float3(rr * cos(phi), rr * sin(phi), sqrt(max(0.0f, 1.0f - u1)));
+        float pdf = l.z / kPi;
+        float3 wi = toWorld(bsdf, l);
+        float pHat = pdf > 1e-8f ? restirTarget(u, lut, bsdf, surface.geometricNormal, wi) : 0.0f;
+        float w = pdf > 1e-8f ? pHat / pdf : 0.0f;
+        r.wSum += w;
+        r.M += 1u;
+        if (w > 0.0f && pcgFloat(smp.rng) * r.wSum < w) {
+            chosen = wi;
+            r.pHat = pHat;
+        }
+    }
+    if (u.restir == 2u && u.restirSpatial > 0u) {
+        // Neighbours' reservoirs from the previous pass, re-evaluated at this surface.
+        const float radius = 16.0f;
+        for (uint k = 0u; k < u.restirSpatial; ++k) {
+            float2 d = concentricDisk(pcgFloat(smp.rng), pcgFloat(smp.rng)) * radius;
+            int qx = (int)gid.x + (int)round(d.x), qy = (int)gid.y + (int)round(d.y);
+            if (qx < 0 || qy < 0 || qx >= (int)u.width || qy >= (int)u.height) continue;
+            uint q = (uint)qy * u.width + (uint)qx;
+            PrimarySurface sq = prevSurfaces[q];
+            if (sq.valid == 0u) continue;
+            if (dot(f3(sq.shadingNormal), bsdf.n) < 0.9f) continue;
+            if (abs(sq.depth - depth) > 0.1f * max(depth, 1e-3f)) continue;
+            Reservoir nr = prevReservoirs[q];
+            if (nr.M == 0u || nr.W <= 0.0f) continue;
+            float3 wi = f3(nr.dir);
+            float pHatHere = restirTarget(u, lut, bsdf, surface.geometricNormal, wi);
+            float w = pHatHere * nr.W * (float)nr.M;
+            r.wSum += w;
+            r.M += nr.M;
+            if (w > 0.0f && pcgFloat(smp.rng) * r.wSum < w) {
+                chosen = wi;
+                r.pHat = pHatHere;
+            }
+        }
+    }
+    restirClamp(r, kRestirHistoryFactor * max(u.restirCandidates, 1u));
+    r.W = r.pHat > 0.0f ? r.wSum / ((float)r.M * r.pHat) : 0.0f;
+    float3 estimate = float3(0.0f);
+    if (r.W > 0.0f) {
+        // Re-evaluate at this pass's surface: the chosen direction may come from a neighbour or an earlier pass.
+        float cosShading = dot(bsdf.n, chosen);
+        float3 f = restirTarget(u, lut, bsdf, surface.geometricNormal, chosen) > 0.0f ? bsdfEval(bsdf, chosen) * skyRadiance(u, lut, chosen) * cosShading : float3(0.0f);
+        if (maxComponent(f) > 0.0f) {
+            ++rays;
+            ray shadow(surface.position + surface.geometricNormal * kRayEpsilon, chosen, 1e-4f, 1e9f);
+            intersection_result<triangle_data> blocker = any.intersect(shadow, shadowGeo.accel);
+            if (blocker.type == intersection_type::none) {
+                estimate = f * r.W;
+            } else {
+                r.W = 0.0f;
+                r.wSum = 0.0f;
+                r.pHat = 0.0f;
+            }
+        } else {
+            r.W = 0.0f;
+            r.wSum = 0.0f;
+            r.pHat = 0.0f;
+        }
+    }
+    r.dir[0] = chosen.x; r.dir[1] = chosen.y; r.dir[2] = chosen.z;
+    *reservoir = r;
+    return estimate;
+}
+
 inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, constant Uniforms& u,
                             device const Vertex* verts, device const float* lut, Geometry primary, Geometry bounceGeo,
-                            device const MaterialRecord* materials, device const TextureRef* textures, uint visibleTriangle, thread uint& rays) {
+                            device const MaterialRecord* materials, device const TextureRef* textures, uint visibleTriangle, thread uint& rays,
+                            device Reservoir* reservoir, device PrimarySurface* primarySurface,
+                            device const Reservoir* prevReservoirs, device const PrimarySurface* prevSurfaces, uint2 gid) {
     PathResult result;
     result.radiance = float3(0.0f);
     result.albedo = float3(0.0f);
@@ -733,6 +884,9 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
     float3 radiance = float3(0.0f);
     float3 throughput = float3(1.0f);
     const bool sky = u.lighting == 1u;
+    const bool restir = u.restir != 0u && sky;
+    // With ReSTIR the first hit's sky light is resampled, so its BSDF ray must not count the sky again.
+    bool skyCountedByRestir = false;
 
     intersector<triangle_data> closest;
     closest.assume_geometry_type(geometry_type::triangle);
@@ -770,6 +924,7 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
         if (hit.type == intersection_type::none) {
             float3 skyLight = sky ? skyRadiance(u, lut, dir) : f3(u.studioRadiance);
             if (sky && bounce == 0) skyLight += sunDiscRadiance(u, dir);
+            if (bounce == 1u && skyCountedByRestir) skyLight = float3(0.0f);
             accumulate(radiance, throughput * skyLight, bounce, u.clampIndirect);
             break;
         }
@@ -779,6 +934,18 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
             result.albedo = surface.baseColor;
             result.normal = surface.shadingNormal;
             result.depth = hit.distance;
+            if (restir) {
+                PrimarySurface ps;
+                ps.position[0] = surface.position.x; ps.position[1] = surface.position.y; ps.position[2] = surface.position.z;
+                ps.depth = hit.distance;
+                ps.shadingNormal[0] = surface.shadingNormal.x; ps.shadingNormal[1] = surface.shadingNormal.y; ps.shadingNormal[2] = surface.shadingNormal.z;
+                ps.metallic = surface.metallic;
+                ps.baseColor[0] = surface.baseColor.x; ps.baseColor[1] = surface.baseColor.y; ps.baseColor[2] = surface.baseColor.z;
+                ps.roughness = surface.roughness;
+                ps.geometricNormal[0] = surface.geometricNormal.x; ps.geometricNormal[1] = surface.geometricNormal.y; ps.geometricNormal[2] = surface.geometricNormal.z;
+                ps.valid = 1u;
+                *primarySurface = ps;
+            }
         }
         if (sky) {
             float3 opticalDepth = f3(u.hazeExtinction) * hit.distance;
@@ -810,6 +977,10 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
                     accumulate(radiance, throughput * bsdfEval(bsdf, wi) * f3(u.sunIrradiance) * cosShading, bounce, u.clampIndirect);
                 }
             }
+        }
+        if (restir && bounce == 0u) {
+            radiance += throughput * restirSkyLighting(u, lut, smp, bsdf, surface, primary, any, reservoir, prevReservoirs, prevSurfaces, gid, hit.distance, rays);
+            skyCountedByRestir = true;
         }
 
         if (bounce >= u.maxBounces) break;
@@ -849,9 +1020,20 @@ fragment uint vis_fragment(VisVertexOut in [[stage_in]], uint primitiveId [[prim
 }
 
 kernel void pt_init(device PixelState* pixels [[buffer(0)]], constant Uniforms& u [[buffer(1)]],
+                    device Reservoir* reservoirs [[buffer(2)]], device PrimarySurface* surfaces [[buffer(3)]],
+                    device Reservoir* reservoirsB [[buffer(4)]], device PrimarySurface* surfacesB [[buffer(5)]],
                     uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= u.width || gid.y >= u.height) return;
     uint pixel = gid.y * u.width + gid.x;
+    if (u.restir != 0u) {
+        Reservoir r;
+        r.dir[0] = 0.0f; r.dir[1] = 1.0f; r.dir[2] = 0.0f;
+        r.wSum = 0.0f; r.W = 0.0f; r.pHat = 0.0f; r.M = 0u; r.pad = 0u;
+        reservoirs[pixel] = r;
+        reservoirsB[pixel] = r;
+        surfaces[pixel].valid = 0u;
+        surfacesB[pixel].valid = 0u;
+    }
     ulong seed = ((ulong)u.seedHi << 32) | (ulong)u.seedLo;
     Pcg32 rng = pcgSeed(seed, (ulong)pixel);
     PixelState p;
@@ -872,10 +1054,13 @@ kernel void pt_sample(device PixelState* pixels [[buffer(0)]], constant Uniforms
                       device const uint* bounceMaterials [[buffer(11)]],
                       texture2d<uint, access::read> visibility [[texture(0)]], constant PassUniforms& pass [[buffer(12)]],
                       device const uint* sobol [[buffer(13)]],
+                      device Reservoir* reservoirs [[buffer(14)]], device PrimarySurface* surfaces [[buffer(15)]],
+                      device const Reservoir* prevReservoirs [[buffer(16)]], device const PrimarySurface* prevSurfaces [[buffer(17)]],
                       uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= u.width || gid.y >= u.height) return;
     uint pixel = gid.y * u.width + gid.x;
     device PixelState* p = pixels + pixel;
+    if (u.restir != 0u) surfaces[pixel].valid = 0u;
     Sampler smp;
     smp.mode = u.sampler;
     smp.rng.state = p->rngState;
@@ -903,7 +1088,8 @@ kernel void pt_sample(device PixelState* pixels [[buffer(0)]], constant Uniforms
         dir = normalize(focusPoint - origin);
     }
     uint rays = 0u;
-    PathResult s = tracePath(origin, dir, smp, u, verts, lut, primary, bounceGeo, materials, textures, visibleTriangle, rays);
+    PathResult s = tracePath(origin, dir, smp, u, verts, lut, primary, bounceGeo, materials, textures, visibleTriangle, rays,
+                             reservoirs + pixel, surfaces + pixel, prevReservoirs, prevSurfaces, gid);
     p->rays += rays;
     p->rngState = smp.rng.state;
     p->rngInc = smp.rng.inc;
@@ -921,6 +1107,54 @@ kernel void pt_sample(device PixelState* pixels [[buffer(0)]], constant Uniforms
         p->normal[0] += s.normal.x; p->normal[1] += s.normal.y; p->normal[2] += s.normal.z;
         p->depth += s.depth;
     }
+}
+
+/**
+ * ReSTIR spatial pass: each pixel's reservoir takes in those of a few random neighbours whose first hit
+ * faces the same way at a similar depth, re-evaluating the neighbour's direction at this pixel's surface.
+ * Runs between sample passes; the next pass shades the combined choice.
+ */
+kernel void restir_spatial(device const Reservoir* in [[buffer(0)]], device Reservoir* out [[buffer(1)]],
+                           device const PrimarySurface* surfaces [[buffer(2)]], constant Uniforms& u [[buffer(3)]],
+                           device const float* lut [[buffer(4)]], constant PassUniforms& pass [[buffer(5)]],
+                           uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= u.width || gid.y >= u.height) return;
+    uint pixel = gid.y * u.width + gid.x;
+    Reservoir r = in[pixel];
+    PrimarySurface s = surfaces[pixel];
+    if (s.valid == 0u || u.restirSpatial == 0u) { out[pixel] = r; return; }
+    float3 position = f3(s.position), n = f3(s.shadingNormal), ng = f3(s.geometricNormal);
+    float3 wo = normalize(f3(u.camPos) - position);
+    Bsdf bsdf = makeBsdf(n, f3(s.baseColor), s.metallic, s.roughness, wo);
+    Pcg32 rng = pcgSeed(((ulong)u.seedHi << 32) | (ulong)u.seedLo, ((ulong)pixel << 20) ^ (ulong)(pass.sampleIndex * 7919u + 1u));
+    const float radius = 16.0f;
+    float3 chosen = f3(r.dir);
+    for (uint k = 0u; k < u.restirSpatial; ++k) {
+        float2 d = concentricDisk(pcgFloat(rng), pcgFloat(rng)) * radius;
+        int qx = (int)gid.x + (int)round(d.x), qy = (int)gid.y + (int)round(d.y);
+        if (qx < 0 || qy < 0 || qx >= (int)u.width || qy >= (int)u.height) continue;
+        uint q = (uint)qy * u.width + (uint)qx;
+        if (q == pixel) continue;
+        PrimarySurface sq = surfaces[q];
+        if (sq.valid == 0u) continue;
+        if (dot(f3(sq.shadingNormal), n) < 0.9f) continue;
+        if (abs(sq.depth - s.depth) > 0.1f * max(s.depth, 1e-3f)) continue;
+        Reservoir nr = in[q];
+        if (nr.M == 0u) continue;
+        float3 wi = f3(nr.dir);
+        float pHatHere = nr.W > 0.0f ? restirTarget(u, lut, bsdf, ng, wi) : 0.0f;
+        float w = pHatHere * nr.W * (float)nr.M;
+        r.wSum += w;
+        r.M += nr.M;
+        if (w > 0.0f && pcgFloat(rng) * r.wSum < w) {
+            chosen = wi;
+            r.pHat = pHatHere;
+        }
+    }
+    restirClamp(r, kRestirHistoryFactor * max(u.restirCandidates, 1u));
+    r.W = r.pHat > 0.0f ? r.wSum / ((float)r.M * r.pHat) : 0.0f;
+    r.dir[0] = chosen.x; r.dir[1] = chosen.y; r.dir[2] = chosen.z;
+    out[pixel] = r;
 }
 )METAL";
 

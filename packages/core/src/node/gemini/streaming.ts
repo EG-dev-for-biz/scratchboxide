@@ -1124,7 +1124,8 @@ export class StreamingEngine {
         try {
             const outcome = await Promise.race([work, stopped]);
             if (outcome === 'aborted') {
-                controller.abort(createAbortError());
+                // the reason travels: a tool that outlives a dropped connection tells it from the user's Stop
+                controller.abort(signal?.reason instanceof Error ? signal.reason : createAbortError());
                 throw createAbortError();
             }
             if (outcome === 'max' || outcome === 'idle') {

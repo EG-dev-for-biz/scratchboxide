@@ -51,7 +51,10 @@ import { mergedPartsOf } from './mergeStagedParts';
 import { FACADE_MATERIAL_SOURCE } from './facadeMaterialLook';
 import { TEXTURE_RUNG_COLORS, classUniforms, hexToRgb01, legendRows, patternCode, provenanceBackground, resolveLegend, shadingClasses, styleFor, textureRungLegendRows, uncertaintyCoverage, type LegendStyle } from './provenanceShading';
 import { EVICT_AFTER_MS, evictionCandidates, evictionEnabled, sameSet, stepEviction } from './layerEviction';
-import { isInterrupted, isRunSettled, stageEventsFor, streamedProgress, subscribeStageEvents, withStreamedEvents, type StageProgress } from './stagedBuildState';
+import { isInterrupted, isRunSettled, publishStageEvent, stageEventsFor, streamedProgress, subscribeStageEvents, withStreamedEvents, type StageProgress } from './stagedBuildState';
+import { followStagedRunShared } from './stagedRunClient';
+import { readStagedBuild } from './stagedBuildState';
+import type { CanvasArtifact } from '../../../canvas-types';
 import {
     DEFAULT_MATERIAL_MODE, INITIAL_SWITCH, deriveMaterialLayers, isMaterialSwapLayer, materialModeOf, modelIdOf, nextSwitch, parseSwapId, twinObjectFor, twinObjectId, twinSourceOf, withStagedMaterialMode,
     type DerivedMaterialState, type EngagedTwin, type MaterialMode, type MaterialSwitch
@@ -412,6 +415,49 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
     const { state, stackRef, objectRootsRef, loadStatus, mutateSceneData, onPromptAction, overriddenIds, sceneObjects, view, onEvictedChange } = opts;
     const runId = state?.runId;
     const pageLoadedAtMs = React.useRef(typeof performance !== 'undefined' ? performance.timeOrigin : 0).current;
+
+    // Re-attach: a run the scene shows as running or interrupted may still be live on the server (the page reloaded, or
+    // the chat stream ended while it ran). Its further events and artifacts are applied from the server's run registry,
+    // so a build never depends on the page that started it; a server that does not know the run leaves the scene as it
+    // is, and the overlay offers Resume.
+    const liveRunId = state?.runId;
+    const liveRunState = state?.runState;
+    React.useEffect(() => {
+        const runId = liveRunId;
+        if (!runId || (liveRunState !== 'running' && liveRunState !== 'interrupted')) return;
+        const known = stageEventsFor(runId);
+        const applyArtifact = (artifact: CanvasArtifact | undefined) => {
+            if (!artifact || artifact.type !== '3d-scene') return;
+            const incoming = readStagedBuild(artifact.data as Scene3DData);
+            if (!incoming || incoming.runId !== runId) return;
+            mutateSceneData(prev => {
+                const current = readStagedBuild(prev);
+                // the chat stream may have applied the same or a newer artifact already
+                if (current && current.runId === runId && current.updatedAtMs >= incoming.updatedAtMs && current.runState === incoming.runState) return prev;
+                return { ...(artifact.data as Scene3DData) };
+            }, { operator: 'sb_staged_run_reattach', params: { runId } }, { history: false });
+        };
+        const stopFollowing = followStagedRunShared(runId, {
+            onEvents: (events, artifact, snapshot) => {
+                for (const e of events) publishStageEvent(e);
+                applyArtifact(artifact);
+                if (snapshot.status === 'running') {
+                    // the server says the run is live: the page stops showing it as interrupted
+                    mutateSceneData(prev => {
+                        const current = readStagedBuild(prev);
+                        if (!current || current.runId !== runId) return prev;
+                        if (current.runState === 'running' && current.updatedAtMs >= pageLoadedAtMs) return prev;
+                        return { ...prev, stagedBuild: { ...current, runState: 'running', updatedAtMs: Date.now() } } as Scene3DData;
+                    }, { operator: 'sb_staged_run_reattach', params: { runId } }, { history: false });
+                }
+            },
+            onEnd: (status, snapshot) => {
+                if (status === 'unknown') return;
+                applyArtifact(snapshot?.artifact);
+            }
+        }, { after: known.length ? known[known.length - 1].seq : undefined });
+        return stopFollowing;
+    }, [liveRunId, liveRunState, mutateSceneData, pageLoadedAtMs]);
 
     const [events, setEvents] = React.useState<readonly StageEvent[]>(() => (runId ? stageEventsFor(runId) : []));
     React.useEffect(() => {
@@ -891,6 +937,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
             showReplaced,
             onToggleShowReplaced: () => setShowReplaced(v => !v),
             onReplay: () => { setReplaying(true); setReplayEpoch(e => e + 1); },
+            ...(onPromptAction ? { onResume: () => onPromptAction(`Resume the staged build of ${st.place.query}: call google_3d_tiles_get_clay with ${JSON.stringify({ query: st.place.query, resumeRunId: st.runId })}`) } : {}),
             onRetry: (d: DegradationRecord) => {
                 if (!d.retry) return;
                 const title = st.stages.find(s => s.stage === d.stage)?.title || d.stage;

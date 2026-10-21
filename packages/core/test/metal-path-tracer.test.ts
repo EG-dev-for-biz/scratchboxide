@@ -375,6 +375,15 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
         // Unbiased: more samples bring it to the reference, not to a different image.
         expect(err(sobol64)).toBeLessThan(0.5 * err(sobol8));
         expect(Math.abs(sobol64.stats.meanLinearLuminance / reference.stats.meanLinearLuminance - 1)).toBeLessThan(0.01);
+
+        // ReSTIR over sky directions (kept as a measured rejection): the fresh-per-pass mode is a different unbiased
+        // estimator of the same image, converging to the reference like the plain sampler does.
+        const restir64 = await service.render({ ...common, outputDir: path.join(tmp, 'restir64'), samplesPerPixel: 64,
+            optimizations: { sampler: 'sobol', restir: true, restirTemporal: false, restirCandidates: 8, restirSpatial: 0 } });
+        expect(restir64.stats.optimizations).toMatchObject({ restir: true, restirCandidates: 8, restirSpatial: 0 });
+        expect(restir64.stats.rays).toBeGreaterThan(sobol64.stats.rays); // one visibility ray per first hit
+        expect(Math.abs(restir64.stats.meanLinearLuminance / reference.stats.meanLinearLuminance - 1)).toBeLessThan(0.01);
+        expect(err(restir64)).toBeLessThan(0.6 * err(sobol8));
     });
 
     it('coarse levels carry their own baked atlases and render the checkerboard without the fine geometry', async ctx => {

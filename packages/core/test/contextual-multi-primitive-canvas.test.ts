@@ -242,8 +242,16 @@ async function runContextualPrimitiveTests() {
     const meshNodes = graphFrom3D.nodes.filter(n => n.id.startsWith('mesh-'));
     assert.strictEqual(meshNodes.length, expectedMeshCount,
         'Node graph should contain exactly one node per scene mesh, not a fixed placeholder count');
-    assert.strictEqual(graphFrom3D.nodes.length, expectedMeshCount + 3,
-        'Node graph should be mesh nodes plus camera/environment/renderer scaffold only');
+    // Plus camera/environment/renderer scaffold, plus one real node per
+    // operatorStack entry (synthesizeContextual3DScene dispatches operators
+    // internally while building the scene, so this is real edit history, not
+    // a placeholder — see operator-history-dag.test.ts).
+    const expectedOpCount = sceneData1.operatorStack?.length ?? 0;
+    const opNodes = graphFrom3D.nodes.filter(n => n.id.startsWith('op-'));
+    assert.strictEqual(opNodes.length, expectedOpCount,
+        'Node graph should contain exactly one node per real operatorStack entry');
+    assert.strictEqual(graphFrom3D.nodes.length, expectedMeshCount + 3 + expectedOpCount,
+        'Node graph should be mesh nodes plus camera/environment/renderer scaffold plus real operator-history nodes only');
     const firstMesh = sceneData1.customMeshes![0];
     const firstMeshNode = graphFrom3D.nodes.find(n => n.id === `mesh-${firstMesh.id}`);
     assert.ok(firstMeshNode, 'Each scene mesh should produce a corresponding graph node by id');
