@@ -30,6 +30,7 @@
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#import <MetalFX/MetalFX.h>
 
 #include "scratchbox_gltf_scene.hpp"
 #include "scratchbox_metal_pathtracer_kernels.hpp"
@@ -134,6 +135,23 @@ public:
             dnBlurPso_ = makePipeline(library, "dn_blur");
             dnAtrousPso_ = makePipeline(library, "dn_atrous");
             dnFinishPso_ = makePipeline(library, "dn_finish");
+            {
+                MTLRenderPipelineDescriptor* desc = [MTLRenderPipelineDescriptor new];
+                desc.vertexFunction = [library newFunctionWithName:@"vis_vertex"];
+                desc.fragmentFunction = [library newFunctionWithName:@"vis_fragment"];
+                desc.colorAttachments[0].pixelFormat = MTLPixelFormatR32Uint;
+                desc.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+                NSError* rasterError = nil;
+                visPso_ = [device_ newRenderPipelineStateWithDescriptor:desc error:&rasterError];
+                if (!visPso_) throw Error(std::string("visibility pipeline creation failed: ") + (rasterError ? rasterError.localizedDescription.UTF8String : "unknown error"));
+                MTLDepthStencilDescriptor* depth = [MTLDepthStencilDescriptor new];
+                depth.depthCompareFunction = MTLCompareFunctionLess;
+                depth.depthWriteEnabled = YES;
+                visDepthState_ = [device_ newDepthStencilStateWithDescriptor:depth];
+                MTLTextureDescriptor* dummy = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR32Uint width:1 height:1 mipmapped:NO];
+                dummy.usage = MTLTextureUsageShaderRead;
+                dummyVisibility_ = [device_ newTextureWithDescriptor:dummy];
+            }
             deviceName_ = device_.name.UTF8String;
             // Bound when a render uses one uniform material; the kernel never reads them then.
             static const uint32_t zero = 0;
@@ -142,6 +160,9 @@ public:
             emptyMaterialIds_ = [device_ newBufferWithBytes:&zero length:sizeof(zero) options:MTLResourceStorageModeShared];
             emptyMaterials_ = [device_ newBufferWithBytes:&defaultRecord length:sizeof(defaultRecord) options:MTLResourceStorageModeShared];
             emptyTextures_ = [device_ newBufferWithBytes:&noTexture length:sizeof(noTexture) options:MTLResourceStorageModeShared];
+            const std::vector<uint32_t> sobol = sobolDirectionVectors(64);
+            sobolDims_ = static_cast<uint32_t>(sobol.size() / 32);
+            sobolBuffer_ = [device_ newBufferWithBytes:sobol.data() length:sobol.size() * sizeof(uint32_t) options:MTLResourceStorageModeShared];
         }
     }
 
@@ -167,37 +188,114 @@ public:
             if (i >= vertexCount) throw Error("index past the vertex buffer");
         }
         @autoreleasepool {
-            auto start = std::chrono::steady_clock::now();
             vertexBuffer_ = [device_ newBufferWithBytes:vertices.data() length:vertices.size() * sizeof(float) options:MTLResourceStorageModeShared];
-            indexBuffer_ = [device_ newBufferWithBytes:indices.data() length:indices.size() * sizeof(uint32_t) options:MTLResourceStorageModeShared];
-            materialIdBuffer_ = [device_ newBufferWithBytes:triMaterials.data() length:triMaterials.size() * sizeof(uint32_t) options:MTLResourceStorageModeShared];
             triangleCount_ = static_cast<uint32_t>(indices.size() / 3);
+            boundsMin_ = Vec3(vertices[0], vertices[1], vertices[2]);
+            boundsMax_ = boundsMin_;
+            for (size_t v = 0; v < vertexCount; ++v) {
+                const float* p = vertices.data() + v * floats;
+                boundsMin_ = Vec3(std::min(boundsMin_.x, p[0]), std::min(boundsMin_.y, p[1]), std::min(boundsMin_.z, p[2]));
+                boundsMax_ = Vec3(std::max(boundsMax_.x, p[0]), std::max(boundsMax_.y, p[1]), std::max(boundsMax_.z, p[2]));
+            }
             triMaterials_ = triMaterials;
-
-            MTLAccelerationStructureTriangleGeometryDescriptor* geometry = [MTLAccelerationStructureTriangleGeometryDescriptor descriptor];
-            geometry.vertexBuffer = vertexBuffer_;
-            geometry.vertexStride = sizeof(Vertex);
-            geometry.vertexFormat = MTLAttributeFormatFloat3;
-            geometry.indexBuffer = indexBuffer_;
-            geometry.indexType = MTLIndexTypeUInt32;
-            geometry.triangleCount = triangleCount_;
-            geometry.opaque = YES;
-            MTLPrimitiveAccelerationStructureDescriptor* descriptor = [MTLPrimitiveAccelerationStructureDescriptor descriptor];
-            descriptor.geometryDescriptors = @[geometry];
-            MTLAccelerationStructureSizes sizes = [device_ accelerationStructureSizesWithDescriptor:descriptor];
-            accel_ = [device_ newAccelerationStructureWithSize:sizes.accelerationStructureSize];
-            id<MTLBuffer> scratch = [device_ newBufferWithLength:sizes.buildScratchBufferSize options:MTLResourceStorageModePrivate];
-            if (!accel_ || !scratch) throw Error("could not allocate the acceleration structure");
-            id<MTLCommandBuffer> commands = [queue_ commandBuffer];
-            id<MTLAccelerationStructureCommandEncoder> encoder = [commands accelerationStructureCommandEncoder];
-            [encoder buildAccelerationStructure:accel_ descriptor:descriptor scratchBuffer:scratch scratchBufferOffset:0];
-            [encoder endEncoding];
-            [commands commit];
-            [commands waitUntilCompleted];
-            if (commands.error) throw Error(std::string("acceleration structure build failed: ") + commands.error.localizedDescription.UTF8String);
-            accelerationBuildMs_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            Built b = buildAccel(indices, triMaterials);
+            indexBuffer_ = b.indices;
+            materialIdBuffer_ = b.materials;
+            accel_ = b.accel;
+            accelerationBuildMs_ = b.buildMs;
+            bounceAccel_ = nil;
         }
     }
+
+    /**
+     * A second, coarser triangle list over the same vertices that bounce and shadow rays trace instead
+     * of the primary cut. `errorPerDistance` is the cut's screen-space threshold divided by the LOD scale:
+     * its surface may sit that far (per unit of distance from the camera) from the primary one, and
+     * secondary rays start twice that far out so they do not hit the coarse surface they left.
+     */
+    void setBounceGeometry(const std::vector<uint32_t>& indices, const std::vector<uint32_t>& triMaterials, float errorPerDistance) {
+        if (!vertexBuffer_) throw Error("setGeometry must come before setBounceGeometry");
+        if (indices.size() % 3 != 0 || indices.empty()) throw Error("bounce index buffer is not 3 indices per triangle");
+        if (triMaterials.size() != indices.size() / 3) throw Error("one material id per bounce triangle is required");
+        const uint32_t vertexCount = static_cast<uint32_t>(vertexBuffer_.length / sizeof(Vertex));
+        for (uint32_t i : indices) {
+            if (i >= vertexCount) throw Error("bounce index past the vertex buffer");
+        }
+        @autoreleasepool {
+            Built b = buildAccel(indices, triMaterials);
+            bounceIndexBuffer_ = b.indices;
+            bounceMaterialIdBuffer_ = b.materials;
+            bounceAccel_ = b.accel;
+            bounceBuildMs_ = b.buildMs;
+            bounceTriangleCount_ = static_cast<uint32_t>(indices.size() / 3);
+            bounceErrorPerDistance_ = std::max(0.0f, errorPerDistance);
+        }
+    }
+
+    void clearBounceGeometry() { bounceAccel_ = nil; }
+
+    /** 0: PCG32 per pixel (the CPU tracer's stream); 1: per-pixel Owen-scrambled Sobol. */
+    void setSampler(uint32_t sampler) { sampler_ = sampler; }
+
+    /**
+     * Rasterize the primary cut once per frame into a visibility texture (triangle id per pixel centre);
+     * each sample's jittered camera ray then meets that triangle directly and only edge pixels trace.
+     */
+    void setPrimaryRaster(bool enabled) { primaryRaster_ = enabled; }
+    /** GPU time of the visibility pass of the current frame, in ms (counted in frameGpuMs too). */
+    double rasterMs() const { return rasterSeconds_ * 1000.0; }
+
+    /**
+     * Upscales a display-ready 8-bit RGBA image with MetalFX's spatial scaler (perceptual mode, so the
+     * input is the tonemapped frame). upscaleGpuMs() is the scaler's GPU time.
+     */
+    std::vector<uint8_t> upscaleRgba(const std::vector<uint8_t>& rgba, int width, int height, int outWidth, int outHeight) {
+        if (rgba.size() != static_cast<size_t>(width) * height * 4) throw Error("upscale input is not width * height * 4 bytes");
+        if (outWidth < width || outHeight < height) throw Error("MetalFX spatial scaling only enlarges");
+        @autoreleasepool {
+            if (!scaler_ || scaler_.inputWidth != static_cast<NSUInteger>(width) || scaler_.inputHeight != static_cast<NSUInteger>(height)
+                || scaler_.outputWidth != static_cast<NSUInteger>(outWidth) || scaler_.outputHeight != static_cast<NSUInteger>(outHeight)) {
+                MTLFXSpatialScalerDescriptor* desc = [MTLFXSpatialScalerDescriptor new];
+                desc.colorTextureFormat = MTLPixelFormatRGBA8Unorm;
+                desc.outputTextureFormat = MTLPixelFormatRGBA8Unorm;
+                desc.inputWidth = static_cast<NSUInteger>(width);
+                desc.inputHeight = static_cast<NSUInteger>(height);
+                desc.outputWidth = static_cast<NSUInteger>(outWidth);
+                desc.outputHeight = static_cast<NSUInteger>(outHeight);
+                desc.colorProcessingMode = MTLFXSpatialScalerColorProcessingModePerceptual;
+                scaler_ = [desc newSpatialScalerWithDevice:device_];
+                if (!scaler_) throw Error("MetalFX spatial scaler is not available on this device");
+                MTLTextureDescriptor* in = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:desc.inputWidth height:desc.inputHeight mipmapped:NO];
+                in.usage = MTLTextureUsageShaderRead;
+                in.storageMode = MTLStorageModeShared;
+                scaleIn_ = [device_ newTextureWithDescriptor:in];
+                MTLTextureDescriptor* out = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:desc.outputWidth height:desc.outputHeight mipmapped:NO];
+                out.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderWrite | MTLTextureUsageShaderRead;
+                out.storageMode = MTLStorageModeShared;
+                scaleOut_ = [device_ newTextureWithDescriptor:out];
+                if (!scaleIn_ || !scaleOut_) throw Error("could not allocate the upscale textures");
+            }
+            [scaleIn_ replaceRegion:MTLRegionMake2D(0, 0, static_cast<NSUInteger>(width), static_cast<NSUInteger>(height)) mipmapLevel:0 withBytes:rgba.data() bytesPerRow:static_cast<NSUInteger>(width) * 4];
+            scaler_.colorTexture = scaleIn_;
+            scaler_.outputTexture = scaleOut_;
+            id<MTLCommandBuffer> commands = [queue_ commandBuffer];
+            [scaler_ encodeToCommandBuffer:commands];
+            [commands commit];
+            [commands waitUntilCompleted];
+            if (commands.error) throw Error(std::string("MetalFX upscale failed: ") + commands.error.localizedDescription.UTF8String);
+            upscaleSeconds_ = commands.GPUEndTime - commands.GPUStartTime;
+            std::vector<uint8_t> out(static_cast<size_t>(outWidth) * outHeight * 4);
+            [scaleOut_ getBytes:out.data() bytesPerRow:static_cast<NSUInteger>(outWidth) * 4 fromRegion:MTLRegionMake2D(0, 0, static_cast<NSUInteger>(outWidth), static_cast<NSUInteger>(outHeight)) mipmapLevel:0];
+            return out;
+        }
+    }
+
+    double upscaleGpuMs() const { return upscaleSeconds_ * 1000.0; }
+    uint32_t bounceTriangleCount() const { return bounceAccel_ ? bounceTriangleCount_ : 0; }
+    double bounceBuildMs() const { return bounceAccel_ ? bounceBuildMs_ : 0.0; }
+
+    /** Build acceleration structures for a fast build rather than fast traversal (MTLAccelerationStructureUsagePreferFastBuild). */
+    void setPreferFastBuild(bool fast) { preferFastBuild_ = fast; }
 
     /**
      * Uploads the scene's materials and decoded images. Material ids in the geometry index
@@ -359,6 +457,10 @@ public:
         const uint64_t seed = render::detail::splitmix64(settings.seed);
         u.seedLo = static_cast<uint32_t>(seed & 0xFFFFFFFFull);
         u.seedHi = static_cast<uint32_t>(seed >> 32);
+        u.useBounceAccel = bounceAccel_ ? 1 : 0;
+        u.bounceErrorPerDistance = bounceAccel_ ? bounceErrorPerDistance_ : 0.0f;
+        u.sampler = sampler_;
+        u.usePrimaryRaster = primaryRaster_ ? 1 : 0;
 
         std::vector<float> lut(3, 0.0f);
         if (lighting.mode == Lighting::Mode::Sky) {
@@ -397,6 +499,8 @@ public:
             frameHeight_ = h;
             frameSpp_ = 0;
             frameGpuSeconds_ = 0.0;
+            rasterSeconds_ = 0.0;
+            if (primaryRaster_) rasterVisibility();
 
             id<MTLCommandBuffer> commands = [queue_ commandBuffer];
             id<MTLComputeCommandEncoder> encoder = [commands computeCommandEncoder];
@@ -431,6 +535,13 @@ public:
                 [encoder setBuffer:materialIds offset:0 atIndex:6];
                 [encoder setBuffer:materials offset:0 atIndex:7];
                 [encoder setBuffer:textureRefs offset:0 atIndex:8];
+                [encoder setAccelerationStructure:(bounceAccel_ ? bounceAccel_ : accel_) atBufferIndex:9];
+                [encoder setBuffer:(bounceAccel_ ? bounceIndexBuffer_ : indexBuffer_) offset:0 atIndex:10];
+                [encoder setBuffer:(bounceAccel_ ? bounceMaterialIdBuffer_ : materialIdBuffer_) offset:0 atIndex:11];
+                [encoder setTexture:(primaryRaster_ && visibility_ ? visibility_ : dummyVisibility_) atIndex:0];
+                const uint32_t pass[4] = {static_cast<uint32_t>(frameSpp_ + k), sobolDims_, 0, 0};
+                [encoder setBytes:pass length:sizeof(pass) atIndex:12];
+                [encoder setBuffer:sobolBuffer_ offset:0 atIndex:13];
                 if (!frameUniform_) {
                     for (id<MTLTexture> texture : textures_) [encoder useResource:texture usage:MTLResourceUsageRead];
                 }
@@ -579,6 +690,98 @@ public:
     void clearHistory() { historyValid_ = false; }
 
 private:
+    void rasterVisibility() {
+        const int w = frameWidth_, h = frameHeight_;
+        if (!visibility_ || visibility_.width != static_cast<NSUInteger>(w) || visibility_.height != static_cast<NSUInteger>(h)) {
+            MTLTextureDescriptor* vis = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR32Uint width:static_cast<NSUInteger>(w) height:static_cast<NSUInteger>(h) mipmapped:NO];
+            vis.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+            vis.storageMode = MTLStorageModePrivate;
+            visibility_ = [device_ newTextureWithDescriptor:vis];
+            MTLTextureDescriptor* depth = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float width:static_cast<NSUInteger>(w) height:static_cast<NSUInteger>(h) mipmapped:NO];
+            depth.usage = MTLTextureUsageRenderTarget;
+            depth.storageMode = MTLStorageModePrivate;
+            visDepth_ = [device_ newTextureWithDescriptor:depth];
+            if (!visibility_ || !visDepth_) throw Error("could not allocate the visibility textures");
+        }
+        RasterUniforms r;
+        put(r.camPos, frameView_.position);
+        put(r.forward, frameView_.forward);
+        put(r.right, frameView_.right);
+        put(r.up, frameView_.up);
+        r.tanHalf = frameView_.tanHalf;
+        r.aspect = frameView_.aspect;
+        float farZ = 0.0f;
+        for (int corner = 0; corner < 8; ++corner) {
+            Vec3 c(corner & 1 ? boundsMax_.x : boundsMin_.x, corner & 2 ? boundsMax_.y : boundsMin_.y, corner & 4 ? boundsMax_.z : boundsMin_.z);
+            farZ = std::max(farZ, (c - frameView_.position).dot(frameView_.forward));
+        }
+        r.far = std::max(farZ * 1.05f, 1.0f);
+        r.near = std::max(r.far * 2e-5f, 1e-3f);
+
+        MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
+        pass.colorAttachments[0].texture = visibility_;
+        pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+        pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+        pass.colorAttachments[0].clearColor = MTLClearColorMake(4294967295.0, 0, 0, 0);
+        pass.depthAttachment.texture = visDepth_;
+        pass.depthAttachment.loadAction = MTLLoadActionClear;
+        pass.depthAttachment.storeAction = MTLStoreActionDontCare;
+        pass.depthAttachment.clearDepth = 1.0;
+        id<MTLCommandBuffer> commands = [queue_ commandBuffer];
+        id<MTLRenderCommandEncoder> encoder = [commands renderCommandEncoderWithDescriptor:pass];
+        [encoder setRenderPipelineState:visPso_];
+        [encoder setDepthStencilState:visDepthState_];
+        [encoder setCullMode:MTLCullModeNone];
+        [encoder setVertexBuffer:vertexBuffer_ offset:0 atIndex:0];
+        [encoder setVertexBuffer:indexBuffer_ offset:0 atIndex:1];
+        [encoder setVertexBytes:&r length:sizeof(r) atIndex:2];
+        [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:static_cast<NSUInteger>(triangleCount_) * 3];
+        [encoder endEncoding];
+        [commands commit];
+        [commands waitUntilCompleted];
+        if (commands.error) throw Error(std::string("visibility pass failed: ") + commands.error.localizedDescription.UTF8String);
+        rasterSeconds_ = commands.GPUEndTime - commands.GPUStartTime;
+        frameGpuSeconds_ += rasterSeconds_;
+    }
+
+    struct Built {
+        id<MTLBuffer> indices;
+        id<MTLBuffer> materials;
+        id<MTLAccelerationStructure> accel;
+        double buildMs{0.0};
+    };
+
+    Built buildAccel(const std::vector<uint32_t>& indices, const std::vector<uint32_t>& triMaterials) {
+        auto start = std::chrono::steady_clock::now();
+        Built b;
+        b.indices = [device_ newBufferWithBytes:indices.data() length:indices.size() * sizeof(uint32_t) options:MTLResourceStorageModeShared];
+        b.materials = [device_ newBufferWithBytes:triMaterials.data() length:triMaterials.size() * sizeof(uint32_t) options:MTLResourceStorageModeShared];
+        MTLAccelerationStructureTriangleGeometryDescriptor* geometry = [MTLAccelerationStructureTriangleGeometryDescriptor descriptor];
+        geometry.vertexBuffer = vertexBuffer_;
+        geometry.vertexStride = sizeof(Vertex);
+        geometry.vertexFormat = MTLAttributeFormatFloat3;
+        geometry.indexBuffer = b.indices;
+        geometry.indexType = MTLIndexTypeUInt32;
+        geometry.triangleCount = static_cast<NSUInteger>(indices.size() / 3);
+        geometry.opaque = YES;
+        MTLPrimitiveAccelerationStructureDescriptor* descriptor = [MTLPrimitiveAccelerationStructureDescriptor descriptor];
+        descriptor.geometryDescriptors = @[geometry];
+        descriptor.usage = preferFastBuild_ ? MTLAccelerationStructureUsagePreferFastBuild : MTLAccelerationStructureUsageNone;
+        MTLAccelerationStructureSizes sizes = [device_ accelerationStructureSizesWithDescriptor:descriptor];
+        b.accel = [device_ newAccelerationStructureWithSize:sizes.accelerationStructureSize];
+        id<MTLBuffer> scratch = [device_ newBufferWithLength:sizes.buildScratchBufferSize options:MTLResourceStorageModePrivate];
+        if (!b.indices || !b.materials || !b.accel || !scratch) throw Error("could not allocate the acceleration structure");
+        id<MTLCommandBuffer> commands = [queue_ commandBuffer];
+        id<MTLAccelerationStructureCommandEncoder> encoder = [commands accelerationStructureCommandEncoder];
+        [encoder buildAccelerationStructure:b.accel descriptor:descriptor scratchBuffer:scratch scratchBufferOffset:0];
+        [encoder endEncoding];
+        [commands commit];
+        [commands waitUntilCompleted];
+        if (commands.error) throw Error(std::string("acceleration structure build failed: ") + commands.error.localizedDescription.UTF8String);
+        b.buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        return b;
+    }
+
     void ensureDenoiseBuffers(size_t n) {
         if (dnCapacity_ != n || !dnA_) {
             dnA_ = [device_ newBufferWithLength:n * sizeof(DenoisePixel) options:MTLResourceStorageModeShared];
@@ -651,6 +854,28 @@ private:
     id<MTLBuffer> emptyMaterials_{nil};
     id<MTLBuffer> emptyTextures_{nil};
     id<MTLAccelerationStructure> accel_{nil};
+    id<MTLAccelerationStructure> bounceAccel_{nil};
+    id<MTLBuffer> bounceIndexBuffer_{nil};
+    id<MTLBuffer> bounceMaterialIdBuffer_{nil};
+    uint32_t bounceTriangleCount_{0};
+    double bounceBuildMs_{0.0};
+    float bounceErrorPerDistance_{0.0f};
+    bool preferFastBuild_{false};
+    uint32_t sampler_{0};
+    id<MTLBuffer> sobolBuffer_{nil};
+    uint32_t sobolDims_{0};
+    bool primaryRaster_{false};
+    id<MTLRenderPipelineState> visPso_{nil};
+    id<MTLDepthStencilState> visDepthState_{nil};
+    id<MTLTexture> visibility_{nil};
+    id<MTLTexture> visDepth_{nil};
+    id<MTLTexture> dummyVisibility_{nil};
+    Vec3 boundsMin_, boundsMax_;
+    double rasterSeconds_{0.0};
+    id<MTLFXSpatialScaler> scaler_{nil};
+    id<MTLTexture> scaleIn_{nil};
+    id<MTLTexture> scaleOut_{nil};
+    double upscaleSeconds_{0.0};
     id<MTLBuffer> framePixels_{nil};
     id<MTLBuffer> frameUniforms_{nil};
     id<MTLBuffer> frameLut_{nil};

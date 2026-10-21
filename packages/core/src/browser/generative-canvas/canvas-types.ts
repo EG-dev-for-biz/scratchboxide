@@ -1149,6 +1149,8 @@ export interface Scene3DData {
             sun?: { elevationDeg: number; azimuthDeg: number };
             /** Samples per pixel a view accumulates to (default 256). */
             targetSpp?: number;
+            /** Trace at this fraction of the view size (0.25 to 1, default 1) and let MetalFX scale the frame up. */
+            renderScale?: number;
         };
         buildStats?: {
             sourceTriangles: number;
