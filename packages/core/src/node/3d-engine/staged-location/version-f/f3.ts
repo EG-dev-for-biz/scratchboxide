@@ -297,6 +297,6 @@ export async function runVersionF3(input: F3Input): Promise<F3Outcome> {
     };
     timingsMs.total = now() - t00;
     timingsMs.streamed = streamed;
-    fs.writeFileSync(path.join(input.dir, 'version_f3.json'), JSON.stringify({ ...outcome, files: main.files, run: undefined, textures: undefined, occluderMasks: undefined, legend: undefined, redraw: enhanced.map(r => ({ ...r, samples: r.samples.map(s => ({ ...s, lattice: s.lattice ? { ...s.lattice } : undefined })) })) }, null, 1));
+    fs.writeFileSync(path.join(input.dir, 'version_f3.json'), JSON.stringify({ ...outcome, files: main.files, run: undefined, textures: undefined, occluderMasks: undefined, legend: undefined, redraw: enhanced.map(r => ({ ...r, samples: r.samples.map(s => ({ ...s, lattice: s.lattice ? { ...s.lattice, profiles: undefined } : undefined })) })) }, null, 1));
     return outcome;
 }

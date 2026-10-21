@@ -14,8 +14,10 @@
  *     STRONG_FIT_NCC after adjustment), the plate's storeys and bays are read against F's planned lattice instead of
  *     asking a vision model to count them (plate-identity.ts visionFacadeCounter, one call per plate). The plate's darkness
  *     (where it is darker than the wall round it, as render-compare.ts reads the tile) is correlated with F's openings
- *     (the lattice NCC), and its row and column profiles are read along F's storey rows and bay columns: a planned storey
- *     the plate shows no darker row for is missing, a dark row in a gap between storeys is an extra one; bays likewise.
+ *     (the lattice NCC; a redraw often lights the glazing the tile shows dark, so the better of the signed correlation and
+ *     the correlation with the absolute deviation counts), and its row and column profiles (the mean absolute deviation
+ *     from the local wall tone, sign-free) are read along F's storey rows and bay columns: a planned storey the plate
+ *     shows no contrasting row for is missing, a contrasting row in a gap between storeys is an extra one; bays likewise.
  *     The pass rule is the vision count's (COUNT_TOLERANCE of the planned count, always within one) plus the lattice NCC
  *     at least LATTICE_NCC_SHARE of the tile's own NCC against F. A weak-fit wall keeps the vision count.
  *   - **Must-keep features** (`featureGuard`): the features the reading listed on the wall (open type codes as labels,
@@ -42,8 +44,9 @@ export const STRONG_FIT_NCC = 0.25;
 export const LATTICE_NCC_SHARE = 0.6;
 /** ... and at least this on its own. */
 export const MIN_LATTICE_NCC = 0.15;
-/** A planned storey (bay) is shown when its row (column) darkness exceeds the neighbouring gaps' by this (luma units). */
-export const PROFILE_MARGIN = 3;
+/** A planned storey (bay) is shown when its row (column) contrast exceeds the neighbouring gaps' by this share (the local mean's blur spills into the gaps) plus PROFILE_MARGIN_ABS luma units. */
+export const PROFILE_MARGIN = 0.15;
+export const PROFILE_MARGIN_ABS = 1;
 /** A gap whose darkness reaches this share of the typical shown row's is an extra storey (bay) the plate added. */
 export const EXTRA_PROFILE_SHARE = 0.8;
 /** A must-keep feature region keeps its structure when the plate's band-pass correlates with the tile's (or the photo's) at least this. */
@@ -66,6 +69,8 @@ export interface LatticeCheck {
     bays: ProfileCount;
     passed: boolean;
     why: string;
+    /** The profiles read (diagnostics): planned opening share and the plate's contrast per row and per column. */
+    profiles?: { rowOpen: number[]; rowDark: number[]; colOpen: number[]; colDark: number[] };
 }
 
 /** Maximal runs of `on`. */
@@ -97,11 +102,12 @@ export function profileCount(open: Float32Array, dark: Float32Array): ProfileCou
     const shownLevels: number[] = [];
     bands.forEach(([a, b], k) => {
         const prevEnd = k ? bands[k - 1][1] : 0, nextStart = k + 1 < planned ? bands[k + 1][0] : dark.length;
-        const gaps = [mean(prevEnd, a), mean(b, nextStart)].filter(Number.isFinite);
+        // a gap under 3 lines (the picture's border, a storey line cut by the frame) says nothing about the wall between storeys
+        const gaps = [[prevEnd, a], [b, nextStart]].filter(([x, y]) => y - x >= 3).map(([x, y]) => mean(x, y)).filter(Number.isFinite);
         const own = mean(a, b);
         if (!Number.isFinite(own)) return;
         const around = gaps.length ? gaps.reduce((s, v) => s + v, 0) / gaps.length : 0;
-        if (own > around + PROFILE_MARGIN) { shown++; shownLevels.push(own); }
+        if (own > around * (1 + PROFILE_MARGIN) + PROFILE_MARGIN_ABS) { shown++; shownLevels.push(own); }
     });
     const level = shownLevels.length ? shownLevels.reduce((s, v) => s + v, 0) / shownLevels.length : Infinity;
     let extra = 0;
@@ -129,7 +135,11 @@ export function latticeIdentity(plate: Uint8Array, f: MassingFace, use: Uint8Arr
     for (let i = 0; i < n; i++) luma[i] = use[i] && Number.isFinite(planned[i]) ? 0.2126 * plate[i * 4] + 0.7152 * plate[i * 4 + 1] + 0.0722 * plate[i * 4 + 2] : NaN;
     const tile: WallTile = { face: f, luma, depth };
     const ev = wallEvidence(tile);
-    const latticeNcc = compareWall(ev, planned).windowNcc;
+    const signed = compareWall(ev, planned).windowNcc;
+    const absDark = new Float32Array(ev.dark.length);
+    for (let i = 0; i < absDark.length; i++) absDark[i] = Number.isFinite(ev.dark[i]) ? Math.abs(ev.dark[i]) : NaN;
+    const unsigned = compareWall({ ...ev, dark: absDark }, planned).windowNcc;
+    const latticeNcc = Math.max(signed, unsigned);
     // profiles: planned opening share and the plate's positive darkness per row and per column
     const rowOpen = new Float32Array(H), rowDark = new Float32Array(H), colOpen = new Float32Array(W), colDark = new Float32Array(W);
     const rowN = new Int32Array(H), colN = new Int32Array(W), rowD = new Int32Array(H), colD = new Int32Array(W);
@@ -138,8 +148,8 @@ export function latticeIdentity(plate: Uint8Array, f: MassingFace, use: Uint8Arr
         if (!Number.isFinite(planned[i])) continue;
         const o = planned[i] < -0.05 ? 1 : 0;
         rowOpen[y] += o; rowN[y]++; colOpen[x] += o; colN[x]++;
-        const d = ev.dark[i];
-        if (Number.isFinite(d)) { const v = Math.max(0, d); rowDark[y] += v; rowD[y]++; colDark[x] += v; colD[x]++; }
+        const d = absDark[i];
+        if (Number.isFinite(d)) { rowDark[y] += d; rowD[y]++; colDark[x] += d; colD[x]++; }
     }
     for (let y = 0; y < H; y++) { rowOpen[y] = rowN[y] ? rowOpen[y] / rowN[y] : 0; rowDark[y] = rowD[y] ? rowDark[y] / rowD[y] : NaN; }
     for (let x = 0; x < W; x++) { colOpen[x] = colN[x] ? colOpen[x] / colN[x] : 0; colDark[x] = colD[x] ? colDark[x] / colD[x] : NaN; }
@@ -147,7 +157,7 @@ export function latticeIdentity(plate: Uint8Array, f: MassingFace, use: Uint8Arr
     const nccOk = latticeNcc >= Math.max(MIN_LATTICE_NCC, LATTICE_NCC_SHARE * tileNcc);
     const passed = nccOk && storeys.passed && bays.passed;
     const say = (k: string, c: ProfileCount) => `${k}: ${c.planned} planned, ${c.shown} shown on the plate, ${c.extra} extra${c.passed ? '' : ' (not the same wall)'}`;
-    return { latticeNcc, tileNcc, storeys, bays, passed, why: `lattice NCC of the plate with F's openings ${latticeNcc.toFixed(3)} (the tile's ${tileNcc.toFixed(3)}; needs ${Math.max(MIN_LATTICE_NCC, LATTICE_NCC_SHARE * tileNcc).toFixed(3)})${nccOk ? '' : ': the plate does not show F\'s lattice'}; ${say('storeys', storeys)}; ${say('bays', bays)}` };
+    return { latticeNcc, tileNcc, storeys, bays, passed, profiles: { rowOpen: [...rowOpen].map(v => Math.round(v * 100) / 100), rowDark: [...rowDark].map(v => Math.round(v * 10) / 10), colOpen: [...colOpen].map(v => Math.round(v * 100) / 100), colDark: [...colDark].map(v => Math.round(v * 10) / 10) }, why: `lattice NCC of the plate with F's openings ${latticeNcc.toFixed(3)} (signed ${signed.toFixed(3)}, unsigned ${unsigned.toFixed(3)}; the tile's ${tileNcc.toFixed(3)}; needs ${Math.max(MIN_LATTICE_NCC, LATTICE_NCC_SHARE * tileNcc).toFixed(3)})${nccOk ? '' : ': the plate does not show F\'s lattice'}; ${say('storeys', storeys)}; ${say('bays', bays)}` };
 }
 
 export interface FeatureRegionPx { label: string; types: string[]; confidence: number; x0: number; y0: number; x1: number; y1: number }
